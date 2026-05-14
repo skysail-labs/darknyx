@@ -37,6 +37,12 @@ function filled(len: number, v: number): Uint8Array {
   return b;
 }
 
+// v6 default mints for tests that don't care about the specific values.
+// The cross-env parity test (`[hash_cross_env_parity]`) overrides these to
+// match the Rust fixed vector exactly (0xC4 / 0xC5).
+const DEFAULT_QUOTE_MINT = filled(32, 0xC0);
+const DEFAULT_BASE_MINT = filled(32, 0xC1);
+
 describe("Phase 5 — settle-builder: canonicalPayloadHash", () => {
   it("[hash_deterministic] identical payloads hash to the same 32 bytes", () => {
     const p = exactFillPayload({
@@ -49,6 +55,8 @@ describe("Phase 5 — settle-builder: canonicalPayloadHash", () => {
       nullifierB: filled(32, 0xEB),
       orderIdA: filled(16, 0x01),
       orderIdB: filled(16, 0x02),
+      quoteMint: DEFAULT_QUOTE_MINT,
+      baseMint: DEFAULT_BASE_MINT,
       baseAmount: 100n,
       quoteAmount: 5_000n,
     });
@@ -69,6 +77,8 @@ describe("Phase 5 — settle-builder: canonicalPayloadHash", () => {
       nullifierB: filled(32, 0xEB),
       orderIdA: filled(16, 0x01),
       orderIdB: filled(16, 0x02),
+      quoteMint: DEFAULT_QUOTE_MINT,
+      baseMint: DEFAULT_BASE_MINT,
       baseAmount: 100n,
       quoteAmount: 5_000n,
     });
@@ -92,12 +102,14 @@ describe("Phase 5 — settle-builder: canonicalPayloadHash", () => {
       nullifierB: filled(32, 0xEB),
       orderIdA: filled(16, 0x01),
       orderIdB: filled(16, 0x02),
+      quoteMint: DEFAULT_QUOTE_MINT,
+      baseMint: DEFAULT_BASE_MINT,
       baseAmount: 100n,
       quoteAmount: 5_000n,
     });
     const want = new Uint8Array(
       createHash("sha256")
-        .update(Buffer.from("nyx-match-v5"))
+        .update(Buffer.from("nyx-match-v6"))
         .update(p.matchId)
         .update(p.noteAcommitment)
         .update(p.noteBcommitment)
@@ -110,6 +122,8 @@ describe("Phase 5 — settle-builder: canonicalPayloadHash", () => {
         .update(p.nullifierB)
         .update(p.orderIdA)
         .update(p.orderIdB)
+        .update(p.quoteMint)
+        .update(p.baseMint)
         .update(u64LE(p.baseAmount))
         .update(u64LE(p.quoteAmount))
         .update(u64LE(p.buyerChangeAmt))
@@ -189,6 +203,8 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       nullifierB: filled(32, 0xEB),
       orderIdA: filled(16, 0x01),
       orderIdB: filled(16, 0x02),
+      quoteMint: DEFAULT_QUOTE_MINT,
+      baseMint: DEFAULT_BASE_MINT,
       baseAmount: 100n,
       quoteAmount: 5_000n,
     });
@@ -220,6 +236,8 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       nullifierB: filled(32, 6),
       orderIdA: filled(16, 7),
       orderIdB: filled(16, 8),
+      quoteMint: DEFAULT_QUOTE_MINT,
+      baseMint: DEFAULT_BASE_MINT,
       baseAmount: 0n,
       quoteAmount: 0n,
     });
@@ -246,6 +264,8 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       nullifierB: filled(32, 6),
       orderIdA: filled(16, 7),
       orderIdB: filled(16, 8),
+      quoteMint: DEFAULT_QUOTE_MINT,
+      baseMint: DEFAULT_BASE_MINT,
       baseAmount: 0n,
       quoteAmount: 0n,
     });
@@ -254,16 +274,17 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       teeAuthority: tee.publicKey,
       payload,
     });
-    // Payload =
-    //   9 * 32  (noteA + noteB + noteC + noteD + noteE + noteF + nullA + nullB + noteFee)
+    // v6 payload =
+    //  11 * 32  (noteA + noteB + noteC + noteD + noteE + noteF + nullA + nullB + noteFee
+    //            + quoteMint + baseMint)
     //   5 * 16  (matchId + oidA + oidB + buyerRelockOid + sellerRelockOid)
-    //   10 * 8  (base, quote, buyerChange, sellerChange, buyerFee, sellerFee,
-    //           buyerRelockExpiry, sellerRelockExpiry, price, batchSlot)
-    //  = 288 + 80 + 80 = 448.
-    // Plus 8-byte Anchor discriminator = 456.
+    //  10 *  8  (base, quote, buyerChange, sellerChange, buyerFee, sellerFee,
+    //            buyerRelockExpiry, sellerRelockExpiry, price, batchSlot)
+    //  = 352 + 80 + 80 = 512.
+    // Plus 8-byte Anchor discriminator = 520.
     const payloadBytes = serializePayload(payload);
-    expect(payloadBytes.length).toBe(32 * 9 + 16 * 5 + 8 * 10);
-    expect(payloadBytes.length).toBe(448);
+    expect(payloadBytes.length).toBe(32 * 11 + 16 * 5 + 8 * 10);
+    expect(payloadBytes.length).toBe(512);
     expect(ix.data.length).toBe(8 + payloadBytes.length);
   });
 
@@ -278,6 +299,8 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       nullifierB: filled(32, 0),
       orderIdA: filled(16, 1),
       orderIdB: filled(16, 2),
+      quoteMint: DEFAULT_QUOTE_MINT,
+      baseMint: DEFAULT_BASE_MINT,
       baseAmount: 100n,
       quoteAmount: 5_000n,
     });
@@ -302,6 +325,8 @@ describe("Phase 5 — settle-builder: cross-environment parity", () => {
    * find the divergence.
    */
   it("[hash_cross_env_parity] identical fixed-input hash in TS and Rust", () => {
+    // Mints overridden to 0xC4 / 0xC5 to match the Rust fixed vector exactly
+    // (see programs/vault/src/instructions/tee_forced_settle.rs::tests).
     const p = exactFillPayload({
       matchId: filled(16, 0x11),
       noteAcommitment: filled(32, 0xA1),
@@ -312,13 +337,15 @@ describe("Phase 5 — settle-builder: cross-environment parity", () => {
       nullifierB: filled(32, 0xEB),
       orderIdA: filled(16, 0x01),
       orderIdB: filled(16, 0x02),
+      quoteMint: filled(32, 0xC4),
+      baseMint: filled(32, 0xC5),
       baseAmount: 100n,
       quoteAmount: 5_000n,
     });
     const expected = new Uint8Array([
-      0x03, 0x88, 0xE8, 0x01, 0x83, 0x01, 0x59, 0x29, 0x83, 0xB8, 0x6C, 0xBC, 0x2F, 0xB7,
-      0x96, 0x76, 0x57, 0x6C, 0x04, 0xC1, 0xA4, 0xB8, 0xAD, 0x79, 0x26, 0x15, 0xCA, 0x63,
-      0xFC, 0xE7, 0x1F, 0x92,
+      0x8E, 0x53, 0xB8, 0x36, 0x62, 0xB1, 0x8B, 0xEA, 0x73, 0x77, 0x48, 0x2C, 0xC1, 0xA7,
+      0xD1, 0x82, 0x2F, 0xFB, 0x8C, 0x7C, 0xD8, 0x32, 0xB8, 0x21, 0xB1, 0x8D, 0xB0, 0x36,
+      0x8B, 0x31, 0x5F, 0x31,
     ]);
     expect(canonicalPayloadHash(p)).toEqual(expected);
   });
@@ -336,6 +363,8 @@ describe("Phase 5 — settle-builder: partial-fill + fee variants", () => {
       nullifierB: filled(32, 0xED),
       orderIdA: filled(16, 3),
       orderIdB: filled(16, 4),
+      quoteMint: DEFAULT_QUOTE_MINT,
+      baseMint: DEFAULT_BASE_MINT,
       baseAmount: 10n,
       quoteAmount: 50n,
     });
@@ -360,6 +389,8 @@ describe("Phase 5 — settle-builder: partial-fill + fee variants", () => {
       nullifierB: filled(32, 0xEF),
       orderIdA: filled(16, 5),
       orderIdB: filled(16, 6),
+      quoteMint: DEFAULT_QUOTE_MINT,
+      baseMint: DEFAULT_BASE_MINT,
       baseAmount: 100n,
       quoteAmount: 100n,
     });

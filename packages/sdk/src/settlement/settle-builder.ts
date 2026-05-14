@@ -43,7 +43,7 @@ export { RELOCK_ORDER_ID_NONE };
 /** All-zero 32-byte commitment (= "field not used" e.g. no change note). */
 export const ZERO_COMMITMENT = new Uint8Array(32);
 
-/** Byte-for-byte shape of `tee_forced_settle::MatchResultPayload`. */
+/** Byte-for-byte shape of `tee_forced_settle::MatchResultPayload` (v6). */
 export interface MatchResultPayload {
   matchId: Uint8Array;              // [u8; 16]
   noteAcommitment: Uint8Array;      // [u8; 32]
@@ -56,6 +56,10 @@ export interface MatchResultPayload {
   nullifierB: Uint8Array;
   orderIdA: Uint8Array;             // [u8; 16]
   orderIdB: Uint8Array;
+  /** v6: SPL mint of the quote side (`note_a` / `note_e`). 32 bytes. */
+  quoteMint: Uint8Array;
+  /** v6: SPL mint of the base side (`note_b` / `note_f`). 32 bytes. */
+  baseMint: Uint8Array;
   baseAmount: bigint;
   quoteAmount: bigint;
   buyerChangeAmt: bigint;
@@ -111,6 +115,8 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     fixed(p.nullifierB, 32),
     fixed(p.orderIdA, 16),
     fixed(p.orderIdB, 16),
+    fixed(p.quoteMint, 32),
+    fixed(p.baseMint, 32),
     u64LE(p.baseAmount),
     u64LE(p.quoteAmount),
     u64LE(p.buyerChangeAmt),
@@ -138,7 +144,9 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
  */
 export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   const h = createHash("sha256");
-  h.update(Buffer.from("nyx-match-v5"));
+  // v6: domain tag bumped because the payload now carries quote_mint + base_mint
+  // (hashed between order_id_b and base_amount).
+  h.update(Buffer.from("nyx-match-v6"));
   h.update(fixed(p.matchId, 16));
   h.update(fixed(p.noteAcommitment, 32));
   h.update(fixed(p.noteBcommitment, 32));
@@ -151,6 +159,8 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   h.update(fixed(p.nullifierB, 32));
   h.update(fixed(p.orderIdA, 16));
   h.update(fixed(p.orderIdB, 16));
+  h.update(fixed(p.quoteMint, 32));
+  h.update(fixed(p.baseMint, 32));
   h.update(u64LE(p.baseAmount));
   h.update(u64LE(p.quoteAmount));
   h.update(u64LE(p.buyerChangeAmt));
@@ -304,6 +314,10 @@ export function exactFillPayload(args: {
   nullifierB: Uint8Array;
   orderIdA: Uint8Array;
   orderIdB: Uint8Array;
+  /** v6 required: SPL mint of the quote side. */
+  quoteMint: Uint8Array;
+  /** v6 required: SPL mint of the base side. */
+  baseMint: Uint8Array;
   baseAmount: bigint;
   quoteAmount: bigint;
   clearingPrice?: bigint;
@@ -321,6 +335,8 @@ export function exactFillPayload(args: {
     nullifierB: args.nullifierB,
     orderIdA: args.orderIdA,
     orderIdB: args.orderIdB,
+    quoteMint: args.quoteMint,
+    baseMint: args.baseMint,
     baseAmount: args.baseAmount,
     quoteAmount: args.quoteAmount,
     buyerChangeAmt: 0n,

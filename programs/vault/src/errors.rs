@@ -43,6 +43,8 @@ pub enum VaultError {
     TeeKeyNotRegistered,
     #[msg("Input note commitment not locked for the claimed order")]
     NoteNotLockedForOrder,
+    #[msg("Lock token_mint does not match payload quote_mint/base_mint")]
+    MintMismatch,
 
     // ---- Arithmetic / overflow ----
     #[msg("Arithmetic overflow")]

@@ -71,6 +71,7 @@ build_circuit() {
 
 build_circuit valid_wallet_create
 build_circuit valid_spend
+build_circuit valid_input
 
 echo ""
 echo "All circuits built. Artifacts in $BUILD_DIR/"

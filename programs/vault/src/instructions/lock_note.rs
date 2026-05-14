@@ -1,13 +1,46 @@
 use crate::errors::VaultError;
 use crate::state::*;
+use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_input::*, Groth16Proof};
 use anchor_lang::prelude::*;
 use core::mem::size_of;
 
+/// Split a 32-byte Solana pubkey into [lo_u128_be32, hi_u128_be32] — each
+/// encoded as 32 BE bytes (left-padded). Matches `darkpool-crypto`'s
+/// `pubkey_to_fr_pair`, which is what the VALID_INPUT circuit expects.
+fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
+    let mut lo = [0u8; 32];
+    lo[16..32].copy_from_slice(&pk[16..32]);
+    let mut hi = [0u8; 32];
+    hi[16..32].copy_from_slice(&pk[0..16]);
+    [lo, hi]
+}
+
+fn u64_be32(v: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[24..32].copy_from_slice(&v.to_be_bytes());
+    out
+}
+
 #[derive(Accounts)]
-#[instruction(note_commitment: [u8; 32], order_id: [u8; 16], expiry_slot: u64, amount: u64)]
+#[instruction(
+    note_commitment: [u8; 32],
+    order_id: [u8; 16],
+    expiry_slot: u64,
+    amount: u64,
+    token_mint: Pubkey,
+    merkle_root: [u8; 32],
+    proof: Groth16Proof,
+)]
 pub struct LockNote<'info> {
     /// The TEE-operated relayer. We enforce that `tee_authority.key()` ==
     /// `vault_config.tee_pubkey` so only the registered TEE can lock notes.
+    ///
+    /// NOTE: even with the registered key gate, the TEE could previously
+    /// "lock" any 32-byte commitment whether or not it actually existed in
+    /// the Merkle tree, with any amount it wanted (see §4.1 of the v2
+    /// migration brief). The VALID_INPUT proof closes that hole — the TEE
+    /// now must relay a user-generated ZK proof attesting that the
+    /// commitment exists in the tree with the declared (mint, amount).
     #[account(mut)]
     pub tee_authority: Signer<'info>,
 
@@ -35,19 +68,61 @@ pub fn lock_note_handler(
     order_id: [u8; 16],
     expiry_slot: u64,
     amount: u64,
+    token_mint: Pubkey,
+    merkle_root: [u8; 32],
+    proof: Groth16Proof,
 ) -> Result<()> {
-    let cfg = ctx.accounts.vault_config.load()?;
-    require!(
-        ctx.accounts.tee_authority.key() == cfg.tee_pubkey,
-        VaultError::Unauthorized
-    );
-
     let clock = Clock::get()?;
+
+    // TEE-authority gate + Merkle-root recency check.
+    {
+        let cfg = ctx.accounts.vault_config.load()?;
+        require!(
+            ctx.accounts.tee_authority.key() == cfg.tee_pubkey,
+            VaultError::Unauthorized
+        );
+        // The proof was generated against `merkle_root`; that root must still
+        // be in the recent 32-root ring. Same recency policy as `withdraw`.
+        require!(cfg.contains_root(&merkle_root), VaultError::StaleMerkleRoot);
+    }
+
     require!(expiry_slot > clock.slot, VaultError::InvalidExpirySlot);
+    // v2 hardening: cap how far in the future the lock can sit. The vault's
+    // `withdraw` rejects while a NoteLock exists, even an expired one, so the
+    // lock window is also the censorship window. See `MAX_LOCK_TTL_SLOTS`.
+    require!(
+        expiry_slot <= clock.slot.saturating_add(MAX_LOCK_TTL_SLOTS),
+        VaultError::InvalidExpirySlot
+    );
     require!(amount > 0, VaultError::ZeroAmount);
 
+    // VALID_INPUT public inputs, in the order declared by the circom
+    // `component main { public [merkleRoot, noteCommitment, tokenMint, amount] }`.
+    // `tokenMint[2]` expands as two entries (`lo`, `hi`) — five total.
+    let mint_bytes = token_mint.to_bytes();
+    let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
+    let public_inputs: [[u8; 32]; 5] = [
+        merkle_root,
+        note_commitment,
+        mint_lo,
+        mint_hi,
+        u64_be32(amount),
+    ];
+
+    let vk = make_vk(
+        &VALID_INPUT_ALPHA_G1,
+        &VALID_INPUT_BETA_G2,
+        &VALID_INPUT_GAMMA_G2,
+        &VALID_INPUT_DELTA_G2,
+        &VALID_INPUT_IC,
+    );
+    verify_groth16_proof::<5>(&vk, &proof, &public_inputs)?;
+
+    // Proof verified — every field of the lock is now cryptographically bound
+    // to a real Merkle leaf owned by the proof generator. Write the lock.
     let lock = &mut ctx.accounts.note_lock.load_init()?;
     lock.note_commitment = note_commitment;
+    lock.token_mint = token_mint;
     lock.order_id = order_id;
     lock.expiry_slot = expiry_slot;
     lock.locked_by = ctx.accounts.tee_authority.key();
@@ -57,6 +132,7 @@ pub fn lock_note_handler(
 
     emit!(NoteLocked {
         note_commitment,
+        token_mint,
         order_id,
         expiry_slot,
         amount,
@@ -67,6 +143,7 @@ pub fn lock_note_handler(
 #[event]
 pub struct NoteLocked {
     pub note_commitment: [u8; 32],
+    pub token_mint: Pubkey,
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
     pub amount: u64,

@@ -8,6 +8,13 @@ pub const MERKLE_DEPTH: u8 = 20;
 /// DoS'd by a racing deposit.
 pub const ROOT_HISTORY_SIZE: usize = 32;
 
+/// Hard ceiling on how far in the future a `NoteLock`'s `expiry_slot` may
+/// sit. ~216_000 slots ≈ 24h at 400ms slots. Prevents a malicious TEE from
+/// effectively burning a note by locking it for `u64::MAX` slots (the
+/// `withdraw` ix refuses while a lock exists, even an expired one, until
+/// `release_lock` is called — so the lock window is the censorship window).
+pub const MAX_LOCK_TTL_SLOTS: u64 = 216_000;
+
 /// Global vault configuration + append-only Merkle tree header + root history.
 #[account(zero_copy)]
 pub struct VaultConfig {
@@ -99,9 +106,17 @@ impl ConsumedNoteEntry {
 ///     asset the note carries). Captured at `lock_note` time so
 ///     `tee_forced_settle` can enforce the conservation-law equality
 ///     `note.amount == trade_leg + change_leg` before ever writing state.
+///
+/// v2 additions (on-chain hardening — see `tee_v2_status_and_migration_brief.md`):
+///   - `token_mint` is the SPL mint that the locked note carries. Set by
+///     `lock_note` from the public inputs of the VALID_INPUT proof (so it is
+///     cryptographically bound to the on-chain Merkle leaf — a malicious TEE
+///     cannot lie about the mint). Used by `tee_forced_settle` for per-mint
+///     conservation checks.
 #[account(zero_copy)]
 pub struct NoteLock {
     pub note_commitment: [u8; 32],
+    pub token_mint: Pubkey,
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
     pub locked_by: Pubkey, // the TEE key that locked
