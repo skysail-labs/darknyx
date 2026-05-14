@@ -340,8 +340,34 @@ export interface BuildLockNoteParams {
   orderId: Uint8Array;
   expirySlot: bigint;
   amount: bigint;
+  /**
+   * v2: SPL mint of the note being locked. Bound cryptographically to the
+   * Merkle leaf by the VALID_INPUT proof — the TEE cannot misrepresent it.
+   */
+  tokenMint: PublicKey;
+  /**
+   * v2: the Merkle root the VALID_INPUT proof was generated against. Must be
+   * in `vault_config`'s recent-roots ring at lock time (same recency policy
+   * as `withdraw`).
+   */
+  merkleRoot: Uint8Array;
+  /** v2: VALID_INPUT Groth16 proof. */
+  proof: Groth16OnChainProof;
 }
 
+/**
+ * v2 wire format (matches `programs/vault/src/instructions/lock_note.rs`):
+ *
+ *   data = disc(8) || note_commitment(32) || order_id(16) || expiry_slot(u64 LE)
+ *        || amount(u64 LE) || token_mint(32) || merkle_root(32)
+ *        || pi_a(64) || pi_b(128) || pi_c(64)
+ *
+ *   accounts:
+ *     [0] tee_authority   (signer, mut)
+ *     [1] vault_config    (ro — handler reads tee_pubkey + checks root ring)
+ *     [2] note_lock       (init, mut)
+ *     [3] system_program  (ro)
+ */
 export function buildLockNoteInstruction(
   p: BuildLockNoteParams,
 ): TransactionInstruction {
@@ -356,6 +382,9 @@ export function buildLockNoteInstruction(
     new Uint8Array(p.orderId),
     u64LE(p.expirySlot),
     u64LE(p.amount),
+    p.tokenMint.toBytes(),
+    fixed32(p.merkleRoot),
+    serializeProof(p.proof),
   );
   return new TransactionInstruction({
     programId: p.programId,
