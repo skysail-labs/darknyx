@@ -7,6 +7,7 @@ pub mod reset_merkle_tree;
 pub mod rotate_root_key;
 pub mod set_protocol_config;
 pub mod tee_forced_settle;
+pub mod verify_valid_create;
 pub mod withdraw;
 
 // Re-export every item from each instruction module, including the hidden
@@ -21,4 +22,5 @@ pub use reset_merkle_tree::*;
 pub use rotate_root_key::*;
 pub use set_protocol_config::*;
 pub use tee_forced_settle::*;
+pub use verify_valid_create::*;
 pub use withdraw::*;

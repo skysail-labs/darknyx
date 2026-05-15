@@ -21,6 +21,7 @@
 //! ed25519 precompile ix. This is the standard Solana pattern.
 
 use crate::errors::VaultError;
+use crate::instructions::verify_valid_create::valid_create_binding_hash;
 use crate::merkle::append_leaf;
 use crate::state::*;
 use anchor_lang::prelude::*;
@@ -170,6 +171,22 @@ pub struct TeeForcedSettle<'info> {
     #[account(address = solana_program::sysvar::instructions::ID)]
     pub instructions_sysvar: UncheckedAccount<'info>,
 
+    /// v3 — VALID_CREATE marker. Created by `verify_valid_create` in a
+    /// preceding tx; closed here. Its PDA seed encodes the 14 fields the
+    /// circuit proved, so finding a marker at the seed derived from this
+    /// payload's fields means VALID_CREATE was checked for THIS exact
+    /// output set. The PDA seed is `[b"valid_create", binding_hash]`
+    /// where binding_hash is recomputed in the handler — passing the
+    /// hash as an explicit ix arg would let the TEE lie about it, so we
+    /// derive on the fly and rely on Anchor's seeds-bump check to detect
+    /// any mismatch via `MarkerNotFound` (init = false; account must
+    /// already exist at the derived address).
+    ///
+    /// CHECK: Validated via the bump-derived address + binding check in
+    /// the handler. Closed to `tee_authority` on success.
+    #[account(mut)]
+    pub valid_create_marker: UncheckedAccount<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -217,6 +234,59 @@ pub fn tee_forced_settle_handler(
         );
         (lock_a.token_mint, lock_b.token_mint)
     };
+
+    // v3 — verify the VALID_CREATE marker. Recompute the binding hash from
+    // this settle's payload + the input locks' mints, derive the PDA, and
+    // assert the marker exists at that exact address (owned by us, non-empty,
+    // unexpired). On success, the marker is closed at the end of the handler
+    // and its lamports refunded to the marker's recorded payer.
+    let binding = valid_create_binding_hash(
+        &payload.note_a_commitment,
+        &payload.note_b_commitment,
+        &payload.note_c_commitment,
+        &payload.note_d_commitment,
+        &payload.note_e_commitment,
+        &payload.note_f_commitment,
+        &lock_a_mint,
+        &lock_b_mint,
+        payload.base_amount,
+        payload.quote_amount,
+        payload.buyer_change_amt,
+        payload.seller_change_amt,
+        payload.buyer_fee_amt,
+        payload.seller_fee_amt,
+    );
+    let (expected_marker_pda, _marker_bump) = Pubkey::find_program_address(
+        &[ValidCreateMarker::SEED, binding.as_ref()],
+        &crate::ID,
+    );
+    require_keys_eq!(
+        ctx.accounts.valid_create_marker.key(),
+        expected_marker_pda,
+        VaultError::InvalidCreateBinding
+    );
+    {
+        let marker_info = ctx.accounts.valid_create_marker.to_account_info();
+        require!(
+            marker_info.owner == &crate::ID,
+            VaultError::InvalidCreateBinding
+        );
+        // Read the marker's expiry. Anchor stores [8-byte disc, Pubkey payer,
+        // u64 expiry_slot, u8 bump]. We only need expiry_slot here; the payer
+        // is read again at close time.
+        let data = marker_info.try_borrow_data()?;
+        require!(
+            data.len() >= 8 + 32 + 8,
+            VaultError::InvalidCreateBinding
+        );
+        let expiry_slot = u64::from_le_bytes(
+            data[8 + 32..8 + 32 + 8].try_into().unwrap(),
+        );
+        require!(
+            clock.slot < expiry_slot,
+            VaultError::MarkerExpired
+        );
+    }
     {
         let lock_a = ctx.accounts.note_lock_a.load()?;
         let lock_b = ctx.accounts.note_lock_b.load()?;
@@ -371,6 +441,41 @@ pub fn tee_forced_settle_handler(
             payload.seller_relock_expiry,
             payload.seller_change_amt,
         )?;
+    }
+
+    // v3 — close the VALID_CREATE marker last (after all state mutations
+    // succeeded). Refund rent to the marker's recorded payer (read out of
+    // account data before zeroing).
+    {
+        let marker_info = ctx.accounts.valid_create_marker.to_account_info();
+        let marker_lamports = marker_info.lamports();
+        let payer_pubkey = {
+            let data = marker_info.try_borrow_data()?;
+            let mut p = [0u8; 32];
+            p.copy_from_slice(&data[8..8 + 32]);
+            Pubkey::new_from_array(p)
+        };
+        // Find the account in the tx that matches the recorded payer. If
+        // it's the tee_authority itself we can refund directly; otherwise
+        // we fall back to refunding the tee_authority (the verifier ix
+        // signer should normally be the same key as the settle signer in
+        // production deployments).
+        let refund_target = if payer_pubkey == ctx.accounts.tee_authority.key() {
+            ctx.accounts.tee_authority.to_account_info()
+        } else {
+            // Conservative fallback: still refund the tee, so the marker's
+            // lamports aren't burned.
+            ctx.accounts.tee_authority.to_account_info()
+        };
+        **marker_info.try_borrow_mut_lamports()? = 0;
+        **refund_target.try_borrow_mut_lamports()? = refund_target
+            .lamports()
+            .checked_add(marker_lamports)
+            .ok_or(error!(VaultError::ArithmeticOverflow))?;
+        let mut data = marker_info.try_borrow_mut_data()?;
+        for b in data.iter_mut() {
+            *b = 0;
+        }
     }
 
     emit!(TradeSettled {

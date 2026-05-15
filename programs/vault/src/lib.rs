@@ -30,6 +30,7 @@ pub use instructions::reset_merkle_tree;
 pub use instructions::rotate_root_key;
 pub use instructions::set_protocol_config;
 pub use instructions::tee_forced_settle;
+pub use instructions::verify_valid_create;
 pub use instructions::withdraw;
 
 use instructions::*;
@@ -130,6 +131,50 @@ pub mod vault {
             ctx,
             protocol_owner_commitment,
             fee_rate_bps,
+        )
+    }
+
+    /// v3 — verify a VALID_CREATE Groth16 proof and write a marker PDA
+    /// that the subsequent `tee_forced_settle` ix will consume. Lands as a
+    /// separate tx (the settle tx is already near the 1232-byte cap).
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_valid_create(
+        ctx: Context<VerifyValidCreate>,
+        note_a_commitment: [u8; 32],
+        note_b_commitment: [u8; 32],
+        note_c_commitment: [u8; 32],
+        note_d_commitment: [u8; 32],
+        note_e_commitment: [u8; 32],
+        note_f_commitment: [u8; 32],
+        quote_mint: Pubkey,
+        base_mint: Pubkey,
+        base_amount: u64,
+        quote_amount: u64,
+        buyer_change_amt: u64,
+        seller_change_amt: u64,
+        buyer_fee_amt: u64,
+        seller_fee_amt: u64,
+        expiry_slot: u64,
+        proof: Groth16Proof,
+    ) -> Result<()> {
+        verify_valid_create::verify_valid_create_handler(
+            ctx,
+            note_a_commitment,
+            note_b_commitment,
+            note_c_commitment,
+            note_d_commitment,
+            note_e_commitment,
+            note_f_commitment,
+            quote_mint,
+            base_mint,
+            base_amount,
+            quote_amount,
+            buyer_change_amt,
+            seller_change_amt,
+            buyer_fee_amt,
+            seller_fee_amt,
+            expiry_slot,
+            proof,
         )
     }
 

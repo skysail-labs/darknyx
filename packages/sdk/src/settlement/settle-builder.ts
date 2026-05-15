@@ -29,6 +29,7 @@ import {
   consumedNotePda,
   noteLockPda,
   nullifierEntryPda,
+  validCreateMarkerPda,
   vaultConfigPda,
 } from "../idl/vault-client.js";
 
@@ -227,6 +228,13 @@ export interface BuildSettleIxParams {
   /** The TEE authority (signer — must equal vault_config.tee_pubkey). */
   teeAuthority: PublicKey;
   payload: MatchResultPayload;
+  /**
+   * v3: quote-side mint of the match (= lock_a.token_mint). Required to
+   * derive the `ValidCreateMarker` PDA the on-chain handler reads.
+   */
+  quoteMint: PublicKey;
+  /** v3: base-side mint of the match (= lock_b.token_mint). */
+  baseMint: PublicKey;
 }
 
 /**
@@ -264,6 +272,26 @@ export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
   const [lockE] = noteLockPda(p.programId, p.payload.noteEcommitment);
   const [lockF] = noteLockPda(p.programId, p.payload.noteFcommitment);
 
+  // v3: derive the VALID_CREATE marker the on-chain handler will look up.
+  // Must match `valid_create_binding_hash` in the vault program exactly.
+  const binding = validCreateBindingHash({
+    noteA: p.payload.noteAcommitment,
+    noteB: p.payload.noteBcommitment,
+    noteC: p.payload.noteCcommitment,
+    noteD: p.payload.noteDcommitment,
+    noteE: p.payload.noteEcommitment,
+    noteF: p.payload.noteFcommitment,
+    quoteMint: p.quoteMint.toBytes(),
+    baseMint: p.baseMint.toBytes(),
+    baseAmount: p.payload.baseAmount,
+    quoteAmount: p.payload.quoteAmount,
+    buyerChangeAmt: p.payload.buyerChangeAmt,
+    sellerChangeAmt: p.payload.sellerChangeAmt,
+    buyerFeeAmt: p.payload.buyerFeeAmt,
+    sellerFeeAmt: p.payload.sellerFeeAmt,
+  });
+  const [marker] = validCreateMarkerPda(p.programId, binding);
+
   const data = cat(
     anchorDiscriminator("tee_forced_settle"),
     serializePayload(p.payload),
@@ -283,10 +311,50 @@ export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
       { pubkey: lockE, isSigner: false, isWritable: true },
       { pubkey: lockF, isSigner: false, isWritable: true },
       { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: marker, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(data),
   });
+}
+
+/**
+ * Recompute the canonical VALID_CREATE binding hash. Must match
+ * `valid_create_binding_hash` in `programs/vault/src/instructions/verify_valid_create.rs`.
+ */
+export function validCreateBindingHash(args: {
+  noteA: Uint8Array;
+  noteB: Uint8Array;
+  noteC: Uint8Array;
+  noteD: Uint8Array;
+  noteE: Uint8Array;
+  noteF: Uint8Array;
+  quoteMint: Uint8Array;
+  baseMint: Uint8Array;
+  baseAmount: bigint;
+  quoteAmount: bigint;
+  buyerChangeAmt: bigint;
+  sellerChangeAmt: bigint;
+  buyerFeeAmt: bigint;
+  sellerFeeAmt: bigint;
+}): Uint8Array {
+  const h = createHash("sha256");
+  h.update(Buffer.from("nyx-create-bind-v1"));
+  h.update(fixed(args.noteA, 32));
+  h.update(fixed(args.noteB, 32));
+  h.update(fixed(args.noteC, 32));
+  h.update(fixed(args.noteD, 32));
+  h.update(fixed(args.noteE, 32));
+  h.update(fixed(args.noteF, 32));
+  h.update(fixed(args.quoteMint, 32));
+  h.update(fixed(args.baseMint, 32));
+  h.update(u64LE(args.baseAmount));
+  h.update(u64LE(args.quoteAmount));
+  h.update(u64LE(args.buyerChangeAmt));
+  h.update(u64LE(args.sellerChangeAmt));
+  h.update(u64LE(args.buyerFeeAmt));
+  h.update(u64LE(args.sellerFeeAmt));
+  return new Uint8Array(h.digest());
 }
 
 // ---------- Convenience helpers ----------

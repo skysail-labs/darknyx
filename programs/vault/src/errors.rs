@@ -47,6 +47,12 @@ pub enum VaultError {
     InsufficientOutstanding,
     #[msg("Outstanding live-notes counter has diverged from the on-chain SPL balance — vault is over-claimed")]
     SolvencyInvariantViolated,
+    #[msg("VALID_CREATE binding hash claimed by caller does not match the hash recomputed on-chain")]
+    InvalidCreateBinding,
+    #[msg("VALID_CREATE marker expiry is invalid (must be in the future and within MAX_CREATE_MARKER_TTL_SLOTS)")]
+    InvalidMarkerExpiry,
+    #[msg("VALID_CREATE marker has expired")]
+    MarkerExpired,
 
     // ---- Arithmetic / overflow ----
     #[msg("Arithmetic overflow")]

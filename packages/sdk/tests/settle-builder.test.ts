@@ -196,16 +196,19 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       programId: PROGRAM_ID,
       teeAuthority: tee.publicKey,
       payload,
+      quoteMint: new PublicKey(filled(32, 0xC0)),
+      baseMint: new PublicKey(filled(32, 0xC1)),
     });
 
     expect(ix.programId.toBase58()).toBe(PROGRAM_ID.toBase58());
-    expect(ix.keys.length).toBe(12);
+    // v3: 12 accounts + the new ValidCreateMarker = 13.
+    expect(ix.keys.length).toBe(13);
     expect(ix.keys[0].pubkey.toBase58()).toBe(tee.publicKey.toBase58());
     expect(ix.keys[0].isSigner).toBe(true);
     expect(ix.keys[10].pubkey.toBase58()).toBe(
       SYSVAR_INSTRUCTIONS_PUBKEY.toBase58(),
     );
-    // tee_authority + all PDAs (2..9) + sysvar + system = 12.
+    // tee_authority + all PDAs (2..9) + sysvar + marker + system = 13.
   });
 
   it("[settle_anchor_discriminator_present] data starts with sha256('global:tee_forced_settle')[..8]", () => {
@@ -227,6 +230,8 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       programId: PROGRAM_ID,
       teeAuthority: tee.publicKey,
       payload,
+      quoteMint: new PublicKey(filled(32, 0xC0)),
+      baseMint: new PublicKey(filled(32, 0xC1)),
     });
     const expectedDisc = new Uint8Array(
       createHash("sha256").update("global:tee_forced_settle").digest(),
@@ -253,6 +258,8 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       programId: PROGRAM_ID,
       teeAuthority: tee.publicKey,
       payload,
+      quoteMint: new PublicKey(filled(32, 0xC0)),
+      baseMint: new PublicKey(filled(32, 0xC1)),
     });
     // Payload =
     //   9 * 32  (noteA + noteB + noteC + noteD + noteE + noteF + nullA + nullB + noteFee)

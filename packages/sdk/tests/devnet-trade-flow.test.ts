@@ -78,6 +78,7 @@ import {
   buildCreateWalletInstruction,
   buildDepositInstruction,
   buildLockNoteInstruction,
+  buildVerifyValidCreateInstruction,
   buildWithdrawInstruction,
   vaultConfigPda,
   walletEntryPda,
@@ -97,12 +98,14 @@ import {
   buildSettleIx,
   canonicalPayloadHash,
   exactFillPayload,
+  validCreateBindingHash,
   type MatchResultPayload,
 } from "../src/settlement/settle-builder.js";
 
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
+import { proveValidCreate } from "./helpers/valid-create-prover.js";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -886,6 +889,100 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
       );
       txline("lock_note(note_a) + lock_note(note_b)", lockSig);
 
+      // v3: VALID_CREATE proof binds outputs to the correct input owners.
+      // Must land BEFORE settle — the settle ix's marker account constraint
+      // fails otherwise.
+      const ZERO_32 = new Uint8Array(32);
+      const vcCommonArgs = {
+        noteA: alice.depositNote!.commitment,
+        noteB: bob.depositNote!.commitment,
+        noteC: noteCcommitment,
+        noteD: noteDcommitment,
+        noteE: ZERO_32,
+        noteF: ZERO_32,
+        quoteMint: quoteMint.toBytes(),
+        baseMint: baseMint.toBytes(),
+        baseAmount: BASE_AMT,
+        quoteAmount: QUOTE_AMT,
+        buyerChangeAmt: 0n,
+        sellerChangeAmt: 0n,
+        buyerFeeAmt: BUYER_FEE,
+        sellerFeeAmt: SELLER_FEE,
+      };
+      const validCreate = await proveValidCreate({
+        repoRoot: REPO_ROOT,
+        quoteMint: quoteMint.toBytes(),
+        baseMint: baseMint.toBytes(),
+        inputA: {
+          ownerCommit: alice.ownerCommit,
+          amount: alice.depositNote!.amount,
+          nonce: alice.depositNote!.nonce,
+          blindingR: alice.depositNote!.blindingR,
+        },
+        inputAcommitmentBE: alice.depositNote!.commitment,
+        inputB: {
+          ownerCommit: bob.ownerCommit,
+          amount: bob.depositNote!.amount,
+          nonce: bob.depositNote!.nonce,
+          blindingR: bob.depositNote!.blindingR,
+        },
+        inputBcommitmentBE: bob.depositNote!.commitment,
+        outputC: {
+          ownerCommit: alice.ownerCommit,
+          amount: BASE_AMT,
+          nonce: be32ToBigInt(noteCnonce),
+          blindingR: be32ToBigInt(noteCblind),
+        },
+        outputCcommitmentBE: noteCcommitment,
+        outputD: {
+          ownerCommit: bob.ownerCommit,
+          amount: QUOTE_AMT,
+          nonce: be32ToBigInt(noteDnonce),
+          blindingR: be32ToBigInt(noteDblind),
+        },
+        outputDcommitmentBE: noteDcommitment,
+        outputE: undefined,
+        outputEcommitmentBE: ZERO_32,
+        outputF: undefined,
+        outputFcommitmentBE: ZERO_32,
+        baseAmount: BASE_AMT,
+        quoteAmount: QUOTE_AMT,
+        buyerChangeAmt: 0n,
+        sellerChangeAmt: 0n,
+        buyerFeeAmt: BUYER_FEE,
+        sellerFeeAmt: SELLER_FEE,
+      });
+      const binding = validCreateBindingHash(vcCommonArgs);
+      const markerExpiry = BigInt((await connection.getSlot("confirmed")) + 200);
+      const verifyTx = new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+        buildVerifyValidCreateInstruction({
+          programId: vaultProgramId,
+          payer: teeKeypair.publicKey,
+          bindingHash: binding,
+          noteAcommitment: alice.depositNote!.commitment,
+          noteBcommitment: bob.depositNote!.commitment,
+          noteCcommitment,
+          noteDcommitment,
+          noteEcommitment: ZERO_32,
+          noteFcommitment: ZERO_32,
+          quoteMint,
+          baseMint,
+          baseAmount: BASE_AMT,
+          quoteAmount: QUOTE_AMT,
+          buyerChangeAmt: 0n,
+          sellerChangeAmt: 0n,
+          buyerFeeAmt: BUYER_FEE,
+          sellerFeeAmt: SELLER_FEE,
+          expirySlot: markerExpiry,
+          proof: validCreate.proof,
+        }),
+      );
+      const verifySig = await sendAndConfirmTransaction(
+        connection, verifyTx, [teeKeypair], { commitment: "confirmed" },
+      );
+      txline("verify_valid_create", verifySig);
+
       const settleTx = new Transaction().add(
         ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
         buildEd25519VerifyIx({
@@ -897,6 +994,8 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
           programId: vaultProgramId,
           teeAuthority: teeKeypair.publicKey,
           payload,
+          quoteMint,
+          baseMint,
         }),
       );
       const settleSig = await sendAndConfirmTransaction(
