@@ -11,6 +11,7 @@ export const NULLIFIER_SEED = enc("nullifier");
 export const CONSUMED_NOTE_SEED = enc("consumed_note");
 export const NOTE_LOCK_SEED = enc("note_lock");
 export const VAULT_TOKEN_SEED = enc("vault_token");
+export const OUTSTANDING_MINT_SEED = enc("outstanding_mint");
 
 export const DARK_CLOB_SEED = enc("dark_clob");
 export const MATCHING_CONFIG_SEED = enc("matching_config");

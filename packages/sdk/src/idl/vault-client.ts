@@ -25,7 +25,7 @@
 import { PublicKey, TransactionInstruction, SystemProgram } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 
-import { VAULT_CONFIG_SEED, WALLET_SEED, NULLIFIER_SEED, NOTE_LOCK_SEED, CONSUMED_NOTE_SEED, VAULT_TOKEN_SEED } from "./seeds.js";
+import { VAULT_CONFIG_SEED, WALLET_SEED, NULLIFIER_SEED, NOTE_LOCK_SEED, CONSUMED_NOTE_SEED, VAULT_TOKEN_SEED, OUTSTANDING_MINT_SEED } from "./seeds.js";
 
 /** On-chain portion of a Groth16 proof — the three curve points. */
 export interface Groth16OnChainProof {
@@ -123,6 +123,16 @@ export function vaultTokenAccountPda(
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [VAULT_TOKEN_SEED, mint.toBuffer()],
+    programId,
+  );
+}
+
+export function outstandingMintPda(
+  programId: PublicKey,
+  mint: PublicKey,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [OUTSTANDING_MINT_SEED, mint.toBuffer()],
     programId,
   );
 }
@@ -284,6 +294,7 @@ export interface BuildDepositParams {
 export function buildDepositInstruction(p: BuildDepositParams): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
+  const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
 
   const data = cat(
     anchorDiscriminator("deposit"),
@@ -304,6 +315,7 @@ export function buildDepositInstruction(p: BuildDepositParams): TransactionInstr
       { pubkey: p.tokenMint, isSigner: false, isWritable: false },
       { pubkey: p.depositorTokenAccount, isSigner: false, isWritable: true },
       { pubkey: vaultTokenAcct, isSigner: false, isWritable: true },
+      { pubkey: outstandingMint, isSigner: false, isWritable: true },
       { pubkey: p.tokenProgramId, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: rentSysvar, isSigner: false, isWritable: false },
@@ -404,6 +416,7 @@ export function buildWithdrawInstruction(p: BuildWithdrawParams): TransactionIns
   const [consumedNote] = consumedNotePda(p.programId, p.noteCommitment);
   const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
   const [nullifierEntry] = nullifierEntryPda(p.programId, p.nullifier);
+  const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
 
   const data = cat(
     anchorDiscriminator("withdraw"),
@@ -425,6 +438,7 @@ export function buildWithdrawInstruction(p: BuildWithdrawParams): TransactionIns
       { pubkey: consumedNote, isSigner: false, isWritable: false },
       { pubkey: noteLock, isSigner: false, isWritable: false },
       { pubkey: nullifierEntry, isSigner: false, isWritable: true },
+      { pubkey: outstandingMint, isSigner: false, isWritable: true },
       { pubkey: p.tokenProgramId, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],

@@ -39,6 +39,17 @@ pub struct Deposit<'info> {
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
 
+    /// v2 — per-mint outstanding-notes counter. Lazy-init on first deposit
+    /// of each mint, mirrors the lifecycle of `vault_token_account`.
+    #[account(
+        init_if_needed,
+        payer = depositor,
+        space = OutstandingMint::SPACE,
+        seeds = [OutstandingMint::SEED, token_mint.key().as_ref()],
+        bump,
+    )]
+    pub outstanding_mint: Account<'info, OutstandingMint>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -77,10 +88,34 @@ pub fn deposit_handler(
     )
     .map_err(|_| error!(VaultError::MalformedPublicInputs))?;
 
-    // Append into Merkle tree.
-    let cfg = &mut ctx.accounts.vault_config.load_mut()?;
-    let leaf_index = cfg.leaf_count;
-    let new_root = append_leaf(cfg, commitment)?;
+    // Append into Merkle tree. Scoped so the RefMut on vault_config is
+    // released before we touch the other ctx.accounts borrows below.
+    let (leaf_index, new_root) = {
+        let cfg = &mut ctx.accounts.vault_config.load_mut()?;
+        let leaf_index = cfg.leaf_count;
+        let new_root = append_leaf(cfg, commitment)?;
+        (leaf_index, new_root)
+    };
+
+    // v2 — bump the per-mint outstanding counter. `init_if_needed` may have
+    // just freshly created the account (mint == Pubkey::default()), so set
+    // the descriptor fields idempotently before incrementing.
+    let om = &mut ctx.accounts.outstanding_mint;
+    om.mint = ctx.accounts.token_mint.key();
+    om.bump = ctx.bumps.outstanding_mint;
+    om.outstanding = om
+        .outstanding
+        .checked_add(amount)
+        .ok_or(error!(VaultError::ArithmeticOverflow))?;
+
+    // Solvency invariant: outstanding can never exceed the SPL pool. After
+    // a deposit, both sides incremented by `amount`, so this is tight.
+    // Re-read the SPL account because the `transfer_checked` CPI mutated it.
+    ctx.accounts.vault_token_account.reload()?;
+    require!(
+        om.outstanding <= ctx.accounts.vault_token_account.amount,
+        VaultError::SolvencyInvariantViolated
+    );
 
     emit!(NoteCreated {
         leaf_index,

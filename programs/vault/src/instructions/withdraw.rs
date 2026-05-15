@@ -81,6 +81,16 @@ pub struct Withdraw<'info> {
     )]
     pub nullifier_entry: AccountLoader<'info, NullifierEntry>,
 
+    /// v2 — per-mint outstanding-notes counter for this token. MUST exist
+    /// (i.e. deposit() must have been called for this mint at least once,
+    /// or there's nothing to withdraw).
+    #[account(
+        mut,
+        seeds = [OutstandingMint::SEED, token_mint.key().as_ref()],
+        bump = outstanding_mint.bump,
+    )]
+    pub outstanding_mint: Account<'info, OutstandingMint>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
@@ -143,12 +153,22 @@ pub fn withdraw_handler(
     );
     verify_groth16_proof::<5>(&vk, &proof, &public_inputs)?;
 
+    // ----- v2 solvency check (must come BEFORE state mutation) -----
+    require!(
+        ctx.accounts.outstanding_mint.outstanding >= amount,
+        VaultError::InsufficientOutstanding
+    );
+
     // ----- Mark nullifier as spent -----
     let n = &mut ctx.accounts.nullifier_entry.load_init()?;
     n.nullifier = nullifier;
     n.spent_slot = Clock::get()?.slot;
     n.bump = ctx.bumps.nullifier_entry;
     n._padding = [0u8; 7];
+
+    // ----- Decrement outstanding counter -----
+    // Subtract is safe because of the InsufficientOutstanding check above.
+    ctx.accounts.outstanding_mint.outstanding -= amount;
 
     // ----- Transfer tokens out -----
     let bump = ctx.accounts.vault_config.load()?.bump;
@@ -170,6 +190,14 @@ pub fn withdraw_handler(
         amount,
         ctx.accounts.token_mint.decimals,
     )?;
+
+    // Solvency invariant check (both counters dropped by `amount`).
+    ctx.accounts.vault_token_account.reload()?;
+    require!(
+        ctx.accounts.outstanding_mint.outstanding
+            <= ctx.accounts.vault_token_account.amount,
+        VaultError::SolvencyInvariantViolated
+    );
 
     emit!(Withdrawn {
         nullifier,

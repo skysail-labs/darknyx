@@ -129,6 +129,41 @@ impl NoteLock {
     pub const SEED: &'static [u8] = b"note_lock";
 }
 
+/// v2 — per-mint live-note accounting (the "outstanding" counter).
+///
+/// Tracks Σ amount across every live note (deposited but not withdrawn,
+/// minus any consumed via TEE-forced settlement). One PDA per SPL mint,
+/// initialized lazily on first deposit of that mint.
+///
+/// Invariant maintained by `deposit` and `withdraw`:
+///   `outstanding <= vault_token_account.amount`  (the on-chain SPL balance)
+///
+/// `tee_forced_settle` does not change `outstanding` — settlement is
+/// mint-conservation-preserving (Σ inputs per mint == Σ outputs per mint,
+/// enforced by the existing per-side conservation law).
+///
+/// Catches both directions of fraud cleanly:
+///   - Malicious TEE creating output notes with a fake mint: withdraw will
+///     hit `InsufficientOutstanding` for that mint before reaching the SPL
+///     transfer-out (vs. silently failing the SPL transfer when the vault
+///     happens to have funds in that mint from another user's deposit).
+///   - Off-by-one accounting bug: the assertion at the end of every
+///     deposit/withdraw catches divergence between this counter and the
+///     real SPL balance.
+#[account]
+#[derive(Default)]
+pub struct OutstandingMint {
+    pub mint: Pubkey,
+    pub outstanding: u64,
+    pub bump: u8,
+}
+
+impl OutstandingMint {
+    pub const SEED: &'static [u8] = b"outstanding_mint";
+    /// 8 disc + 32 mint + 8 outstanding + 1 bump.
+    pub const SPACE: usize = 8 + 32 + 8 + 1;
+}
+
 impl VaultConfig {
     /// Check whether a Merkle root appears in the recent-roots ring buffer.
     pub fn contains_root(&self, root: &[u8; 32]) -> bool {
