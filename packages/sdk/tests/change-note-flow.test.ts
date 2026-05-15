@@ -115,6 +115,7 @@ import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { proveValidCreate } from "./helpers/valid-create-prover.js";
+import { sendSettleV0 } from "./helpers/settle-v0.js";
 import { validCreateBindingHash } from "../src/settlement/settle-builder.js";
 import { buildVerifyValidCreateInstruction } from "../src/idl/vault-client.js";
 import {
@@ -503,6 +504,8 @@ interface Fixture {
   protocolOwnerCommitment: Uint8Array;
   protocolFeeBps: number;
   tree: MerkleShadow;
+  /** v3 settle Address Lookup Table from devnet-setup. Undefined for legacy configs. */
+  settleLookupTable?: PublicKey;
 }
 
 function requireEnv(k: string): string {
@@ -550,6 +553,9 @@ async function bootstrap(): Promise<Fixture> {
     ),
     protocolFeeBps: cfg.protocol.feeRateBps,
     tree,
+    settleLookupTable: cfg.settleLookupTable
+      ? new PublicKey(cfg.settleLookupTable)
+      : undefined,
   };
 }
 
@@ -1235,23 +1241,31 @@ maybeDescribe(
         }
 
         await timer.time("Ed25519 + tee_forced_settle", "L1", async () => {
-          const settleTx = new Transaction().add(
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-            buildEd25519VerifyIx({
-              teePubkey: fx.teeKeypair.publicKey.toBytes(),
-              signature: teeSig, message: msg,
-            }),
-            buildSettleIx({
-              programId: fx.vaultProgramId,
-              teeAuthority: fx.teeKeypair.publicKey,
-              payload,
-              quoteMint: fx.quoteMint, baseMint: fx.baseMint,
-            }),
-          );
-          const settleSig = await sendAndConfirmTransaction(
-            fx.l1, settleTx, [fx.teeKeypair], { commitment: "confirmed" },
-          );
-          txline("Ed25519 + tee_forced_settle", settleSig);
+          // v3: with-change-note variant — same tx-size pressure as Test B
+          // (lock_e and lock_f no longer dedupe because note_e is non-zero).
+          // Route through the v0/ALT helper.
+          if (!fx.settleLookupTable) {
+            throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+          }
+          const settleSig = await sendSettleV0({
+            connection: fx.l1,
+            signer: fx.teeKeypair,
+            altPubkey: fx.settleLookupTable,
+            instructions: [
+              ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+              buildEd25519VerifyIx({
+                teePubkey: fx.teeKeypair.publicKey.toBytes(),
+                signature: teeSig, message: msg,
+              }),
+              buildSettleIx({
+                programId: fx.vaultProgramId,
+                teeAuthority: fx.teeKeypair.publicKey,
+                payload,
+                quoteMint: fx.quoteMint, baseMint: fx.baseMint,
+              }),
+            ],
+          });
+          txline("Ed25519 + tee_forced_settle (v0)", settleSig);
         });
 
         // Append tree leaves in the SAME order tee_forced_settle appended:
@@ -1725,23 +1739,32 @@ maybeDescribe(
         }
 
         await timer.time("Ed25519 + tee_forced_settle (with re-lock)", "L1", async () => {
-          const settleTx = new Transaction().add(
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-            buildEd25519VerifyIx({
-              teePubkey: fx.teeKeypair.publicKey.toBytes(),
-              signature: teeSig, message: msg,
-            }),
-            buildSettleIx({
-              programId: fx.vaultProgramId,
-              teeAuthority: fx.teeKeypair.publicKey,
-              payload,
-              quoteMint: fx.quoteMint, baseMint: fx.baseMint,
-            }),
-          );
-          const settleSig = await sendAndConfirmTransaction(
-            fx.l1, settleTx, [fx.teeKeypair], { commitment: "confirmed" },
-          );
-          txline("Ed25519 + tee_forced_settle (re-lock active)", settleSig);
+          // v3: with-relock settle was 1243/1232 as a legacy tx. Send as v0
+          // with the ALT in e2e-config so the three static accounts
+          // (vault_config, sysvar, system_program) collapse to 1-byte
+          // indices, freeing ~60 bytes.
+          if (!fx.settleLookupTable) {
+            throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+          }
+          const settleSig = await sendSettleV0({
+            connection: fx.l1,
+            signer: fx.teeKeypair,
+            altPubkey: fx.settleLookupTable,
+            instructions: [
+              ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+              buildEd25519VerifyIx({
+                teePubkey: fx.teeKeypair.publicKey.toBytes(),
+                signature: teeSig, message: msg,
+              }),
+              buildSettleIx({
+                programId: fx.vaultProgramId,
+                teeAuthority: fx.teeKeypair.publicKey,
+                payload,
+                quoteMint: fx.quoteMint, baseMint: fx.baseMint,
+              }),
+            ],
+          });
+          txline("Ed25519 + tee_forced_settle (re-lock active, v0)", settleSig);
         });
 
         // Append leaves: note_c, note_d, note_e, note_fee.
@@ -2588,24 +2611,30 @@ maybeDescribe(
           }
 
           await timer.time("Ed25519 + tee_forced_settle", "L1", async () => {
-            const tx = new Transaction().add(
-              ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-              buildEd25519VerifyIx({
-                teePubkey: fx.teeKeypair.publicKey.toBytes(),
-                signature: teeSig,
-                message: msg,
-              }),
-              buildSettleIx({
-                programId: fx.vaultProgramId,
-                teeAuthority: fx.teeKeypair.publicKey,
-                payload,
-                quoteMint: fx.quoteMint, baseMint: fx.baseMint,
-              }),
-            );
-            const sig = await sendAndConfirmTransaction(
-              fx.l1, tx, [fx.teeKeypair], { commitment: "confirmed" },
-            );
-            txline("Ed25519 + tee_forced_settle", sig);
+            // v3 v0/ALT path — keeps every settle uniform across tests.
+            if (!fx.settleLookupTable) {
+              throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+            }
+            const sig = await sendSettleV0({
+              connection: fx.l1,
+              signer: fx.teeKeypair,
+              altPubkey: fx.settleLookupTable,
+              instructions: [
+                ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+                buildEd25519VerifyIx({
+                  teePubkey: fx.teeKeypair.publicKey.toBytes(),
+                  signature: teeSig,
+                  message: msg,
+                }),
+                buildSettleIx({
+                  programId: fx.vaultProgramId,
+                  teeAuthority: fx.teeKeypair.publicKey,
+                  payload,
+                  quoteMint: fx.quoteMint, baseMint: fx.baseMint,
+                }),
+              ],
+            });
+            txline("Ed25519 + tee_forced_settle (v0)", sig);
           });
 
           await fx.tree.append(noteCcommitment);

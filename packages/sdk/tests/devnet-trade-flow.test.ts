@@ -106,6 +106,7 @@ import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { proveValidCreate } from "./helpers/valid-create-prover.js";
+import { sendSettleV0 } from "./helpers/settle-v0.js";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -983,25 +984,29 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
       );
       txline("verify_valid_create", verifySig);
 
-      const settleTx = new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        buildEd25519VerifyIx({
-          teePubkey: teeKeypair.publicKey.toBytes(),
-          signature: sig,
-          message: msg,
-        }),
-        buildSettleIx({
-          programId: vaultProgramId,
-          teeAuthority: teeKeypair.publicKey,
-          payload,
-          quoteMint,
-          baseMint,
-        }),
-      );
-      const settleSig = await sendAndConfirmTransaction(
-        connection, settleTx, [teeKeypair],
-        { commitment: "confirmed" },
-      );
+      if (!cfg.settleLookupTable) {
+        throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+      }
+      const settleSig = await sendSettleV0({
+        connection,
+        signer: teeKeypair,
+        altPubkey: new PublicKey(cfg.settleLookupTable),
+        instructions: [
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          buildEd25519VerifyIx({
+            teePubkey: teeKeypair.publicKey.toBytes(),
+            signature: sig,
+            message: msg,
+          }),
+          buildSettleIx({
+            programId: vaultProgramId,
+            teeAuthority: teeKeypair.publicKey,
+            payload,
+            quoteMint,
+            baseMint,
+          }),
+        ],
+      });
       txline("Ed25519 + tee_forced_settle", settleSig);
 
       // Shadow tree: note_c, note_d, note_fee are appended in that order by

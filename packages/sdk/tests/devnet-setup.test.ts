@@ -50,9 +50,11 @@ import {
   getMinimumBalanceForRentExemptMint,
 } from "@solana/spl-token";
 import {
+  AddressLookupTableProgram,
   Connection,
   Keypair,
   PublicKey,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   SystemProgram,
   Transaction,
   sendAndConfirmTransaction,
@@ -198,6 +200,17 @@ export interface E2EConfig {
   darkClobPda: string;
   matchingConfigPda: string;
   batchResultsPda: string;
+  /**
+   * v3 — Address Lookup Table that hoists the three static accounts
+   * (vault_config, instructions_sysvar, system_program) out of the settle
+   * tx's account-keys list. Saves ~60 bytes on every settle vs. legacy txs,
+   * which buys headroom for the VALID_CREATE marker + future expansion.
+   *
+   * Optional: callers can still send a legacy settle tx when the marker
+   * fits; the v0 wrapper is preferred for change-note / re-lock paths
+   * where the tx is at the edge of the 1232-byte cap.
+   */
+  settleLookupTable?: string;
   createdAt: string;
 }
 
@@ -444,7 +457,42 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       tx("init_market", imSig);
 
       // ────────────────────────────────────────────────────────────────────
-      step(5, "Persist config to .devnet/e2e-config.json");
+      step(5, "Create Address Lookup Table for settle txs (v3 size relief)");
+      // ────────────────────────────────────────────────────────────────────
+      // Hoist the three accounts that appear in EVERY settle tx and never
+      // change: vault_config, instructions sysvar, system program. The
+      // address-lookup-table compresses each from 32 bytes (in the keys
+      // list) to 1 byte (an index into the ALT), saving ~60 bytes net
+      // after the ALT pubkey overhead.
+      const slot = await connection.getSlot("confirmed");
+      const [createAltIx, settleLookupTable] =
+        AddressLookupTableProgram.createLookupTable({
+          authority: admin.publicKey,
+          payer: admin.publicKey,
+          recentSlot: slot,
+        });
+      const extendAltIx = AddressLookupTableProgram.extendLookupTable({
+        payer: admin.publicKey,
+        authority: admin.publicKey,
+        lookupTable: settleLookupTable,
+        addresses: [vaultPda, SYSVAR_INSTRUCTIONS_PUBKEY, SystemProgram.programId],
+      });
+      const altTx = new Transaction().add(createAltIx, extendAltIx);
+      const altSig = await sendAndConfirmTransaction(connection, altTx, [admin], {
+        commitment: "confirmed",
+      });
+      tx("createLookupTable + extendLookupTable", altSig);
+      bullet(`settle ALT: ${settleLookupTable.toBase58()}`);
+      // Solana requires a fresh ALT to be at least one slot old before it
+      // can be referenced by a tx. Block briefly so the test that runs
+      // immediately after setup doesn't hit "ALT not found".
+      const altReadySlot = await connection.getSlot("confirmed");
+      while ((await connection.getSlot("confirmed")) <= altReadySlot) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
+      // ────────────────────────────────────────────────────────────────────
+      step(6, "Persist config to .devnet/e2e-config.json");
       // ────────────────────────────────────────────────────────────────────
       const cfg: E2EConfig = {
         l1RpcUrl: L1_RPC_URL,
@@ -477,6 +525,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         darkClobPda: clob.toBase58(),
         matchingConfigPda: mcfg.toBase58(),
         batchResultsPda: breq.toBase58(),
+        settleLookupTable: settleLookupTable.toBase58(),
         createdAt: new Date().toISOString(),
       };
       saveConfig(cfg);

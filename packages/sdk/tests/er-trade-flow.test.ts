@@ -108,6 +108,7 @@ import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { proveValidCreate } from "./helpers/valid-create-prover.js";
+import { sendSettleV0 } from "./helpers/settle-v0.js";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -909,23 +910,28 @@ maybeDescribe(
         );
         txline("verify_valid_create", verifySig);
 
-        const settleTx = new Transaction().add(
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          buildEd25519VerifyIx({
-            teePubkey: teeKeypair.publicKey.toBytes(),
-            signature: teeSig, message: msg,
-          }),
-          buildSettleIx({
-            programId: vaultProgramId,
-            teeAuthority: teeKeypair.publicKey,
-            payload,
-            quoteMint, baseMint,
-          }),
-        );
-        const settleSig = await sendAndConfirmTransaction(
-          l1, settleTx, [teeKeypair], { commitment: "confirmed" },
-        );
-        txline("Ed25519 + tee_forced_settle", settleSig);
+        if (!cfg.settleLookupTable) {
+          throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+        }
+        const settleSig = await sendSettleV0({
+          connection: l1,
+          signer: teeKeypair,
+          altPubkey: new PublicKey(cfg.settleLookupTable),
+          instructions: [
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+            buildEd25519VerifyIx({
+              teePubkey: teeKeypair.publicKey.toBytes(),
+              signature: teeSig, message: msg,
+            }),
+            buildSettleIx({
+              programId: vaultProgramId,
+              teeAuthority: teeKeypair.publicKey,
+              payload,
+              quoteMint, baseMint,
+            }),
+          ],
+        });
+        txline("Ed25519 + tee_forced_settle (v0)", settleSig);
 
         await tree.append(noteCcommitment);
         alice.tradeNote = {
