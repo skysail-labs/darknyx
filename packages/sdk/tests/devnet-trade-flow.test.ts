@@ -801,8 +801,6 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
         nullifierB: nullB,
         orderIdA: aliceOrderId,
         orderIdB: bobOrderId,
-        quoteMint: quoteMint.toBytes(),
-        baseMint: baseMint.toBytes(),
         baseAmount: BASE_AMT,
         quoteAmount: QUOTE_AMT,
       });

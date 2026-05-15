@@ -89,11 +89,11 @@ const PER_BASE_URL = (
 ).replace(/\/$/, "");
 const VAULT_PROGRAM_ID = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
-    "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY",
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 const ME_PROGRAM_ID = new PublicKey(
   process.env.MATCHING_ENGINE_PROGRAM_ID ??
-    "DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH",
+    "6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe",
 );
 
 function loadKeypair(relPath: string): Keypair {

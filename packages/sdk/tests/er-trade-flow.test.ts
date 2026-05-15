@@ -740,8 +740,6 @@ maybeDescribe(
           noteCcommitment, noteDcommitment,
           nullifierA: nullA, nullifierB: nullB,
           orderIdA: aliceOrderId, orderIdB: bobOrderId,
-          quoteMint: quoteMint.toBytes(),
-          baseMint: baseMint.toBytes(),
           baseAmount: BASE_AMT, quoteAmount: QUOTE_AMT,
         });
         payload.buyerFeeAmt = BUYER_FEE;

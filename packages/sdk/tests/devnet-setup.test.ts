@@ -88,11 +88,11 @@ const L1_RPC_URL =
   process.env.L1_RPC_URL ?? "https://api.devnet.solana.com";
 const VAULT_PROGRAM_ID = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
-    "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY",
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 const ME_PROGRAM_ID = new PublicKey(
   process.env.MATCHING_ENGINE_PROGRAM_ID ??
-    "DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH",
+    "6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe",
 );
 // Pyth SOL/USD devnet feed. init_market only persists this; it's read by run_batch.
 const PYTH_ACCOUNT = new PublicKey(

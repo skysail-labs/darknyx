@@ -25,7 +25,7 @@ import { DarkPoolClient } from "../src/client.js";
 import { anchorDiscriminator } from "../src/idl/vault-client.js";
 import type { IDarkPoolZkProverSuite, SpendInputs } from "../src/zk/prover-suite.js";
 
-const PROGRAM_ID = new PublicKey("ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY");
+const PROGRAM_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 class FakeProverSuite implements IDarkPoolZkProverSuite {
   public capturedSpendInputs: SpendInputs[] = [];

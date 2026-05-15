@@ -43,8 +43,6 @@ pub enum VaultError {
     TeeKeyNotRegistered,
     #[msg("Input note commitment not locked for the claimed order")]
     NoteNotLockedForOrder,
-    #[msg("Lock token_mint does not match payload quote_mint/base_mint")]
-    MintMismatch,
     #[msg("Outstanding live-notes counter for this mint is less than the withdraw amount")]
     InsufficientOutstanding,
     #[msg("Outstanding live-notes counter has diverged from the on-chain SPL balance — vault is over-claimed")]

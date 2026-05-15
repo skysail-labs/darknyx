@@ -24,7 +24,7 @@ import { DarkPoolClient } from "../src/client.js";
 import { UnimplementedProverSuite } from "../src/zk/prover-suite.js";
 import { anchorDiscriminator, vaultConfigPda } from "../src/idl/vault-client.js";
 
-const PROGRAM_ID = new PublicKey("ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY");
+const PROGRAM_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 /** Build a VaultConfig-shaped buffer with `leafCount` at offset 104. */
 function fakeVaultConfigData(leafCount: bigint): Buffer {

@@ -52,13 +52,6 @@ pub struct MatchResultPayload {
     pub nullifier_b: [u8; 32],
     pub order_id_a: [u8; 16],
     pub order_id_b: [u8; 16],
-    /// v6: SPL mint of the QUOTE side (the mint of `note_a` / `note_e`).
-    /// Cross-checked against `note_lock_a.token_mint`, which itself is bound
-    /// via the VALID_INPUT proof at lock time — so the TEE cannot misrepresent
-    /// which mint `note_a` carries.
-    pub quote_mint: Pubkey,
-    /// v6: SPL mint of the BASE side (the mint of `note_b` / `note_f`).
-    pub base_mint: Pubkey,
     pub base_amount: u64,
     pub quote_amount: u64,
     pub buyer_change_amt: u64,
@@ -205,11 +198,12 @@ pub fn tee_forced_settle_handler(
         &tee_pubkey,
         &canonical_payload_hash(&payload),
     )?;
-    // Capture the mints of the two input locks. Needed below to (a) propagate
+    // Capture the mints of the two input locks. Needed below to propagate
     // into change-note relock PDAs (note_e inherits lock_a's mint, note_f
-    // inherits lock_b's mint), and (b) — once per-mint conservation lands in
-    // v6 of MatchResultPayload — assert lock.token_mint matches the
-    // payload's declared quote_mint / base_mint.
+    // inherits lock_b's mint). The lock's `token_mint` is cryptographically
+    // pinned to the Merkle leaf via VALID_INPUT at lock time, so the chain
+    // can rely on it as the authoritative source of mint identity — no need
+    // to also carry it in the payload (saves 64 bytes / settle tx).
     let (lock_a_mint, lock_b_mint) = {
         let lock_a = ctx.accounts.note_lock_a.load()?;
         let lock_b = ctx.accounts.note_lock_b.load()?;
@@ -220,21 +214,6 @@ pub fn tee_forced_settle_handler(
         require!(
             lock_b.order_id == payload.order_id_b,
             VaultError::NoteNotLockedForOrder
-        );
-        // v6: input-mint binding. The locks' mints are bound to real Merkle
-        // leaves via VALID_INPUT, so this assertion makes the payload's
-        // declared quote_mint / base_mint provably honest for the input side.
-        // (Output-side note_c/d/e/f mints still rely on TEE honesty until
-        // VALID_CREATE ships — see spec §7.5.)
-        require_keys_eq!(
-            lock_a.token_mint,
-            payload.quote_mint,
-            VaultError::MintMismatch
-        );
-        require_keys_eq!(
-            lock_b.token_mint,
-            payload.base_mint,
-            VaultError::MintMismatch
         );
         (lock_a.token_mint, lock_b.token_mint)
     };
@@ -517,12 +496,12 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     let seller_relock_exp = p.seller_relock_expiry.to_le_bytes();
     let price = p.clearing_price.to_le_bytes();
     let slot = p.batch_slot.to_le_bytes();
-    let quote_mint = p.quote_mint.to_bytes();
-    let base_mint = p.base_mint.to_bytes();
-    // v6 tag — bumped from v5 because the payload now carries
-    // `quote_mint` + `base_mint`. The SDK's settle-builder.ts must match.
+    // Domain tag stays at "nyx-match-v5" — the wire-hashed field set hasn't
+    // changed from v5. (The v2 protocol changes — VALID_INPUT at lock, the
+    // mint in NoteLock, the max-TTL bound, the outstanding-counter — all
+    // live outside the canonical settle payload.)
     hashv(&[
-        b"nyx-match-v6",
+        b"nyx-match-v5",
         p.match_id.as_ref(),
         p.note_a_commitment.as_ref(),
         p.note_b_commitment.as_ref(),
@@ -535,8 +514,6 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         p.nullifier_b.as_ref(),
         p.order_id_a.as_ref(),
         p.order_id_b.as_ref(),
-        &quote_mint,
-        &base_mint,
         &base,
         &quote,
         &buyer_change,
@@ -646,10 +623,9 @@ mod tests {
     /// catch it at compile time.
     #[test]
     fn canonical_payload_hash_fixed_vector() {
-        // v6 fixture. Two new pubkey-shaped fields (`quote_mint`, `base_mint`)
-        // hashed between order_id_b and base_amount. Domain tag bumped to
-        // `b"nyx-match-v6"`. Keep in sync with the SDK side
-        // (packages/sdk/tests/settle-builder.test.ts).
+        // v5 fixture restored — the v2 protocol bump did NOT change the
+        // canonical-hashed field set. Mints flow through NoteLock.token_mint
+        // (bound by VALID_INPUT) rather than the payload itself.
         let p = MatchResultPayload {
             match_id: [0x11u8; 16],
             note_a_commitment: [0xA1u8; 32],
@@ -662,8 +638,6 @@ mod tests {
             nullifier_b: [0xEBu8; 32],
             order_id_a: [0x01u8; 16],
             order_id_b: [0x02u8; 16],
-            quote_mint: Pubkey::new_from_array([0xC4u8; 32]),
-            base_mint: Pubkey::new_from_array([0xC5u8; 32]),
             base_amount: 100,
             quote_amount: 5_000,
             buyer_change_amt: 0,
@@ -679,13 +653,10 @@ mod tests {
             batch_slot: 0,
         };
         let hash = canonical_payload_hash(&p);
-        // The v6 expected hash is filled in after first compile — run
-        //   cargo test -p vault canonical_payload_hash_fixed_vector
-        // and copy the printed value here.
         let expected: [u8; 32] = [
-            0x8E, 0x53, 0xB8, 0x36, 0x62, 0xB1, 0x8B, 0xEA, 0x73, 0x77, 0x48, 0x2C, 0xC1, 0xA7,
-            0xD1, 0x82, 0x2F, 0xFB, 0x8C, 0x7C, 0xD8, 0x32, 0xB8, 0x21, 0xB1, 0x8D, 0xB0, 0x36,
-            0x8B, 0x31, 0x5F, 0x31,
+            0x03, 0x88, 0xE8, 0x01, 0x83, 0x01, 0x59, 0x29, 0x83, 0xB8, 0x6C, 0xBC, 0x2F, 0xB7,
+            0x96, 0x76, 0x57, 0x6C, 0x04, 0xC1, 0xA4, 0xB8, 0xAD, 0x79, 0x26, 0x15, 0xCA, 0x63,
+            0xFC, 0xE7, 0x1F, 0x92,
         ];
         if hash != expected {
             panic!(

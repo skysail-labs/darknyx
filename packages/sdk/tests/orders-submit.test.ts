@@ -38,10 +38,10 @@ import type {
 import { startMockTeeServer, type MockTeeServerHandle } from "./mocks/mock-tee-server.js";
 
 const VAULT_PROGRAM_ID = new PublicKey(
-  "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY",
+  "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 const ME_PROGRAM_ID = new PublicKey(
-  "DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH",
+  "6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe",
 );
 
 function makeAccountInfoProvider(

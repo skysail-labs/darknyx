@@ -1084,8 +1084,6 @@ maybeDescribe(
           noteCcommitment, noteDcommitment,
           nullifierA: nullA, nullifierB: nullB,
           orderIdA: aliceOrderId, orderIdB: bobOrderId,
-          quoteMint: fx.quoteMint.toBytes(),
-          baseMint: fx.baseMint.toBytes(),
           baseAmount: MATCH_BASE, quoteAmount: MATCH_QUOTE,
         });
         payload.buyerChangeAmt = ALICE_CHANGE;
@@ -1507,8 +1505,6 @@ maybeDescribe(
           noteCcommitment, noteDcommitment,
           nullifierA: nullA, nullifierB: nullB,
           orderIdA: aliceOrderId, orderIdB: bobOrderId,
-          quoteMint: fx.quoteMint.toBytes(),
-          baseMint: fx.baseMint.toBytes(),
           baseAmount: MATCHED_BASE, quoteAmount: MATCHED_QUOTE,
         });
         payload.buyerChangeAmt = ALICE_CHANGE;
@@ -2318,8 +2314,6 @@ maybeDescribe(
             nullifierB: nullB,
             orderIdA: aliceOrderId,
             orderIdB: bobOrderId,
-            quoteMint: fx.quoteMint.toBytes(),
-            baseMint: fx.baseMint.toBytes(),
             baseAmount: BASE_AMT,
             quoteAmount: QUOTE_AMT,
           });

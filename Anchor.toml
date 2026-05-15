@@ -3,12 +3,12 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-vault = "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY"
-matching_engine = "DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH"
+vault = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"
+matching_engine = "6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe"
 
 [programs.devnet]
-vault = "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY"
-matching_engine = "DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH"
+vault = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"
+matching_engine = "6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe"
 
 [registry]
 url = "https://api.apr.dev"

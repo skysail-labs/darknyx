@@ -49,7 +49,7 @@ pub use instructions::undelegate_market;
 
 use instructions::*;
 
-declare_id!("DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH");
+declare_id!("6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe");
 
 #[ephemeral]
 #[program]
