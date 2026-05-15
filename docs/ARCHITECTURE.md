@@ -1,7 +1,16 @@
 # Nyx Darkpool — Architecture
 
-This document is the deep dive. For a quick look (TL;DR + deployed
-addresses + 3-step quickstart) see the top-level [`README.md`](../README.md).
+This document is the system-level overview. For a **cryptographer's deep
+dive** — key model, all four ZK circuits, lifecycle walkthrough,
+settlement mechanics — see [`CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md). For a
+quick look (TL;DR + deployed addresses + 3-step quickstart) see the
+top-level [`README.md`](../README.md).
+
+> **Currency**: this document reflects the `nyx-v2-onchain-hardening`
+> branch (v2 + v3 hardenings: VALID_INPUT, VALID_CREATE, marker PDA,
+> outstanding[mint] counter, v0/ALT settle migration). The legacy v1
+> deployment on `main` lives at the program IDs noted at the bottom of
+> this file.
 
 ---
 
@@ -38,14 +47,17 @@ addresses + 3-step quickstart) see the top-level [`README.md`](../README.md).
              ▼
        BatchResults snapshot lands back on L1
              │
-             │ TEE signs canonical payload, atomic L1 tx
+             │ TEE signs canonical payload, THREE atomic L1 txs
              ▼
    ┌────────────────────────┐
-   │  vault::lock_note ×2   │
-   │  vault::tee_forced_    │   ── appends note_c (BASE buyer)
-   │       settle           │      + note_d (QUOTE seller)
-   └─────────┬──────────────┘      + note_fee (protocol)
-             │
+   │  vault::lock_note ×2   │   ── VALID_INPUT proof per side    (v2)
+   │  vault::verify_valid_  │   ── VALID_CREATE proof + marker   (v3 NEW)
+   │       create           │
+   │  vault::tee_forced_    │   ── Ed25519 + marker check
+   │       settle  (v0+ALT) │      + appends note_c (BASE buyer)
+   └─────────┬──────────────┘      + note_d (QUOTE seller)
+             │                     + note_e/f (change, if partial fill)
+             │                     + note_fee (protocol, on flush)
              │ withdraw (L1, VALID_SPEND proof)
              ▼
        SPL tokens released to the user wallet
@@ -70,21 +82,28 @@ nyx-monorepo/
 │   │   ├── src/
 │   │   │   ├── lib.rs                 # #[program] entrypoints
 │   │   │   ├── state.rs               # VaultConfig, WalletEntry, NullifierEntry,
-│   │   │   │                          # ConsumedNoteEntry, NoteLock zero-copy PDAs
+│   │   │   │                          # ConsumedNoteEntry, NoteLock (v2: + token_mint),
+│   │   │   │                          # OutstandingMint (v2), ValidCreateMarker (v3)
 │   │   │   ├── merkle.rs              # Incremental Poseidon Merkle tree (depth 20)
 │   │   │   ├── errors.rs
 │   │   │   ├── instructions/
 │   │   │   │   ├── initialize.rs              # Create the global VaultConfig singleton
 │   │   │   │   ├── create_wallet.rs           # VALID_WALLET_CREATE Groth16 → WalletEntry
-│   │   │   │   ├── deposit.rs                 # Pull SPL → append note commitment
-│   │   │   │   ├── lock_note.rs               # TEE-only: pin a note to an order_id
+│   │   │   │   ├── deposit.rs                 # Pull SPL → append note + outstanding[mint]++
+│   │   │   │   ├── lock_note.rs               # TEE-only, VALID_INPUT-gated (v2)
 │   │   │   │   ├── release_lock.rs            # Release expired note locks
-│   │   │   │   ├── tee_forced_settle.rs       # Ed25519-verified atomic settlement
-│   │   │   │   ├── withdraw.rs                # VALID_SPEND Groth16 → SPL transfer out
+│   │   │   │   ├── verify_valid_create.rs     # v3: VALID_CREATE Groth16 → ValidCreateMarker PDA
+│   │   │   │   ├── tee_forced_settle.rs       # Ed25519 + marker check + atomic settlement
+│   │   │   │   ├── withdraw.rs                # VALID_SPEND Groth16 → outstanding[mint]-- → SPL out
 │   │   │   │   ├── set_protocol_config.rs     # Admin: rotate protocol-owner / fee bps
 │   │   │   │   ├── rotate_root_key.rs         # PER root-key rotation
 │   │   │   │   └── reset_merkle_tree.rs       # DEVNET-ONLY: tree wipe for tests
 │   │   │   └── zk/                            # Embedded Groth16 verifier-key consts
+│   │   │       ├── verifier.rs                # groth16-solana wrapper
+│   │   │       ├── vk_valid_wallet_create.rs
+│   │   │       ├── vk_valid_spend.rs
+│   │   │       ├── vk_valid_input.rs          # v2 NEW
+│   │   │       └── vk_valid_create.rs         # v3 NEW
 │   │   └── tests/                             # litesvm integration tests
 │   │
 │   └── matching_engine/                       # CLOB + ER session driver
@@ -130,7 +149,9 @@ nyx-monorepo/
 │
 ├── circuits/                                  # Circom 2 zero-knowledge circuits
 │   ├── valid_wallet_create/circuit.circom     # Proves knowledge of (sk, vk, r0..r2) for Wallet PDA
-│   ├── valid_spend/circuit.circom             # Proves note ownership + Merkle inclusion + nullifier
+│   ├── valid_spend/circuit.circom             # Proves note ownership + Merkle inclusion + nullifier (withdraw)
+│   ├── valid_input/circuit.circom             # v2: same as VALID_SPEND minus nullifier (lock_note)
+│   ├── valid_create/circuit.circom            # v3: TEE outputs addressed to correct input owners
 │   └── build/                                 # Compiled .wasm + .zkey (gitignored, generated)
 │
 ├── packages/
@@ -252,17 +273,35 @@ pattern](https://docs.magicblock.gg/developers/cookbook):
    without re-delegation).
 
 5. **L1 settlement**: the TEE builds a `MatchResultPayload`, signs the
-   canonical hash, and submits two atomic L1 txs:
-   - `lock_note(note_a) + lock_note(note_b)` (allocates the
-     `NoteLock` PDAs that pin the buyer's + seller's deposit notes)
-   - `Ed25519 verify + tee_forced_settle` (consumes the locked notes,
-     appends `note_c` (BASE buyer) + `note_d` (QUOTE seller) + a
-     protocol fee leaf to the Merkle tree)
+   canonical hash, and submits **three atomic L1 txs** (in this order):
+   - **Tx A — lock**: `lock_note(note_a) + lock_note(note_b)`. Each
+     `lock_note` ix is gated by a `VALID_INPUT` Groth16 proof (v2) that
+     binds (commitment, mint, amount) to a real Merkle leaf owned by
+     the order submitter. Allocates `NoteLock` PDAs.
+   - **Tx B — verify** (v3 NEW): `verify_valid_create` verifies a
+     `VALID_CREATE` Groth16 proof attesting the output notes were
+     constructed correctly. Allocates a `ValidCreateMarker` PDA seeded
+     by `SHA256(domain_tag ‖ 14 bound values)` with a short TTL.
+   - **Tx C — settle**: `Ed25519 precompile + tee_forced_settle`. The
+     settle ix recomputes the binding hash from its own view of the
+     payload + lock mints, asserts the marker exists at the expected
+     PDA address, consumes the locked notes, appends note_c
+     (BASE buyer) + note_d (QUOTE seller) + optional note_e/f (change
+     notes) + optional fee leaf, atomically re-locks change notes for
+     continuing orders, and closes the marker. Sent as a
+     **VersionedTransaction with an Address Lookup Table** that hoists
+     `vault_config`, sysvar instructions, and system_program out of the
+     keys list — saves ~60 bytes vs. legacy, needed to fit the marker
+     account under the 1232-byte cap.
 
-   Splitting into two txs is necessary because the combined tx exceeds
-   Solana's 1232-byte tx cap. Privacy is unaffected — `lock_note` only
-   references the note commitment, the deposit amount, and an order
-   ID. Both fields were already public on L1 from the `deposit` ix.
+   Splitting into three txs is necessary because the combined tx with
+   embedded proofs would be ~2200 bytes — way over Solana's 1232-byte
+   cap. Atomicity across the three is enforced by account dependencies:
+   settle's account list requires `NoteLock` PDAs (from Tx A) and the
+   `ValidCreateMarker` PDA (from Tx B) to exist. A failure or absence of
+   either upstream tx makes settle abort. See
+   [`CRYPTOGRAPHY.md` §9](../CRYPTOGRAPHY.md#9-settlement-mechanics)
+   for the full size analysis and ALT-construction details.
 
 ---
 
@@ -283,25 +322,52 @@ time:
 - `NullifierEntry` (seed `nullifier`) — VALID_SPEND-consumed notes.
 - `ConsumedNoteEntry` (seed `consumed_note`) — TEE-settle-consumed notes.
 - `NoteLock` (seed `note_lock`) — TEE pin between match and settle.
+  Carries `token_mint` (v2) so the chain knows the mint of each input.
+- `OutstandingMint` (seed `outstanding_mint`, v2) — per-mint live-notes
+  counter, one PDA per SPL mint. Maintains the solvency invariant
+  `outstanding ≤ vault_token_account.amount`.
+- `ValidCreateMarker` (seed `valid_create`, v3) — proof-of-verification
+  written by `verify_valid_create`, consumed by `tee_forced_settle`.
+  Seeded by the 32-byte binding hash so its existence at a given seed
+  cryptographically attests that VALID_CREATE was checked for that
+  specific (commitments, mints, amounts) tuple.
 
-**Settlement.** `tee_forced_settle` is the heart of Phase-5. It walks the
-transaction's instruction list via `sysvar::instructions::load_instruction_at_checked`,
-finds the `Ed25519Program` precompile ix, asserts that
-`pubkey == VaultConfig.tee_pubkey` and that
-`msg == canonical_payload_hash(payload)` (SHA-256 over a domain tag
-`b"nyx-match-v5"` + a fixed-order serialisation of every field of the
-payload), and only then proceeds to:
-1. Verify the buyer's and seller's `NoteLock` PDAs match `note_a_commit`
-   / `note_b_commit` and have not expired.
-2. Allocate two `ConsumedNoteEntry` PDAs (idempotency lock — a second
+**Settlement.** `tee_forced_settle` is the heart of the protocol. It walks
+the transaction's instruction list via
+`sysvar::instructions::load_instruction_at_checked`, finds the
+`Ed25519Program` precompile ix, asserts that `pubkey == VaultConfig.tee_pubkey`
+and that `msg == canonical_payload_hash(payload)` (SHA-256 over a domain
+tag `b"nyx-match-v5"` + a fixed-order serialisation of every payload
+field), and only then proceeds to:
+
+1. Verify the buyer's and seller's `NoteLock` PDAs match
+   `note_a_commit` / `note_b_commit` and have not expired. Capture their
+   `token_mint` for use below (v2).
+2. **VALID_CREATE marker check (v3)**: recompute
+   `binding_hash = SHA256(b"nyx-create-bind-v1" ‖ 14 fields)` from the
+   payload + lock mints; derive the expected PDA address; assert the
+   supplied marker account is at that address, owned by us, and not
+   expired.
+3. Allocate two `ConsumedNoteEntry` PDAs (idempotency lock — a second
    identical match cannot replay).
-3. Enforce the per-leg conservation law
-   `note.amount == trade_leg + change_leg + fee_leg` *exactly* before
-   writing state.
-4. Append `note_c` (BASE → buyer's owner_commitment), `note_d`
-   (QUOTE → seller's owner_commitment), and `note_fee`
-   (proportional cut → `protocol_owner_commitment`) to the Merkle tree.
-5. Emit `Settled { match_id, … }`.
+4. Enforce the per-leg conservation law
+   `lock.amount == trade_leg + change_leg + fee_leg` *exactly* via
+   `u64::checked_add` before writing state.
+5. Append up to five output leaves: `note_c` (BASE → buyer's
+   owner_commitment), `note_d` (QUOTE → seller's owner_commitment),
+   optional `note_e` (buyer's change in QUOTE), optional `note_f`
+   (seller's change in BASE), and optional `note_fee` (protocol fee).
+6. Atomically allocate fresh `NoteLock` PDAs for change notes when the
+   payload requests a re-lock (partial-fill continuation).
+7. Close the `ValidCreateMarker` PDA, refunding rent to its recorded payer.
+8. Emit `TradeSettled { match_id, new_root, … }`.
+
+**Solvency invariant (v2)**: at the end of every `deposit` and
+`withdraw`, the handler reloads `vault_token_account` and asserts
+`outstanding_mint.outstanding ≤ vault_token_account.amount`.
+`tee_forced_settle` doesn't touch the counter directly because
+settlement is mint-conservation-preserving (the per-side conservation
+law ensures Σ inputs = Σ outputs per mint).
 
 ### `programs/matching_engine` — CLOB + ER glue
 
@@ -373,23 +439,32 @@ key is known.
 
 ### `circuits/` — zero-knowledge proofs
 
-Two Groth16 circuits, both pre-compiled to `.wasm` (witness gen) +
-`.zkey` (proving key) by `scripts/build-circuits.sh`:
+Four Groth16 circuits, all pre-compiled to `.wasm` (witness gen) +
+`.zkey` (proving key) by `scripts/build-circuits.sh`. For detailed
+constraints + public/private input shapes see
+[`CRYPTOGRAPHY.md` §7](../CRYPTOGRAPHY.md#7-the-five-zk-circuits).
 
-- **VALID_WALLET_CREATE**: proves "I know `(root_pubkey_lo, root_pubkey_hi,
-  s, v, r0, r1, r2)` such that the user-commitment chain (above) yields
-  `user_commitment`." **One** public input: `user_commitment` (a single
-  32-byte BN254 Fr element — Poseidon output is always in-field).
+- **VALID_WALLET_CREATE** — 1 public input, ~250 constraints. Binds a
+  `user_commitment` to (root, spending, viewing) keys at `create_wallet`.
 
-- **VALID_SPEND**: proves "I know `(s, r_owner, nonce, blinding_r,
-  merkle_path[20], merkle_indices[20])` such that
-  `owner_commitment = Poseidon2(s, r_owner)`,
-  `note = Poseidon6(mint_lo, mint_hi, amount, owner_commitment, nonce, blinding_r)`,
-  `note` is in the Merkle tree at `merkle_root`, and
-  `nullifier == Poseidon2(s, note)`." **Five** public inputs in this
-  order: `(merkle_root, nullifier, mint_lo, mint_hi, amount)`. Only the
-  mint is split as `[lo, hi]` because a Solana pubkey is 256 bits;
-  `merkle_root` and `nullifier` are Poseidon outputs (single Fr each).
+- **VALID_SPEND** — 5 public inputs `(merkle_root, nullifier, mint_lo,
+  mint_hi, amount)`, ~7000 constraints. Proves note ownership + Merkle
+  inclusion + correct nullifier derivation at `withdraw`.
+
+- **VALID_INPUT** (v2 NEW) — 5 public inputs `(merkle_root,
+  note_commitment, mint_lo, mint_hi, amount)`, 5500 constraints.
+  Essentially VALID_SPEND minus the nullifier, exposing the commitment
+  publicly so the `lock_note` ix's PDA seed matches. Used at lock time
+  to prove the locked note is real and owned by the prover.
+
+- **VALID_CREATE** (v3 NEW) — 16 public inputs (6 commitments + 2 mints
+  split + 6 amounts), 2148 constraints. Proves the TEE constructed
+  output notes correctly: `note_c` is BASE mint addressed to the
+  buyer's `owner_commitment` (= the owner from note_a), `note_d` is
+  QUOTE addressed to the seller, change notes have the right mint and
+  the right owner, conservation holds per-side. Conditional change
+  notes encoded via `IsZero` selectors. Used at the new
+  `verify_valid_create` ix before settle.
 
 The verifier keys are baked into the on-chain `vault` program at
 `programs/vault/src/zk/vk_*.rs` (regenerated from the snarkjs JSON via
@@ -433,10 +508,10 @@ A complete trade in the privacy-fix flow (from a fresh user to settled
 balances). Each row is one transaction. Cluster column is L1 (Solana
 mainnet/devnet) or ER (MagicBlock Ephemeral Rollup).
 
-| #     | Cluster | Instruction(s)                                                             | Who signs                      | Privacy property                                            |
+| #     | Cluster | Instruction(s)                                                             | Who signs                      | Privacy / soundness property                                            |
 |-------|---------|----------------------------------------------------------------------------|--------------------------------|-------------------------------------------------------------|
 | 1     | L1      | `vault::create_wallet` (with VALID_WALLET_CREATE proof)                   | user payer                     | links `user_commitment` to a Solana payer; identity-only.   |
-| 2     | L1      | `vault::deposit`                                                           | user payer                     | reveals deposit amount + mint (necessarily — it's an SPL transfer). |
+| 2     | L1      | `vault::deposit`                                                           | user payer                     | reveals deposit amount + mint; bumps `outstanding[mint]` (v2). |
 | 3a    | L1      | `matching_engine::init_pending_order_slot`                                 | user trading_key               | empty PDA, **zero order intent**.                           |
 | 3b    | L1      | `matching_engine::delegate_pending_order`                                  | funder + user trading_key      | hand slot to ER validator.                                  |
 | 4     | L1      | `matching_engine::delegate_dark_clob` + delegate_matching_config + delegate_batch_results | admin                | hand market PDAs to ER (one-time per market).             |
@@ -444,9 +519,10 @@ mainnet/devnet) or ER (MagicBlock Ephemeral Rollup).
 | 6     | **ER**  | `matching_engine::run_batch` (operator-driven, periodic)                  | TEE / operator                 | match all delegated slots in the rollup.                    |
 | 7     | **ER**  | `matching_engine::undelegate_market`                                      | TEE / operator                 | commits BatchResults back to L1 + returns ownership.        |
 | 8     | L1      | poll: `BatchResults` PDA owner = matching_engine                          | none                           | confirm L1 commit landed.                                    |
-| 9a    | L1      | `vault::lock_note(note_a)` + `vault::lock_note(note_b)`                   | TEE                            | references commitments already public from deposit.         |
-| 9b    | L1      | `Ed25519` precompile + `vault::tee_forced_settle`                         | TEE                            | atomic note_a/b consume + note_c/d/fee append.              |
-| 10    | L1      | `vault::withdraw` (with VALID_SPEND proof)                                | recipient                      | spends a note, reveals amount + mint + recipient ATA.       |
+| 9a    | L1      | `vault::lock_note(note_a)` + `vault::lock_note(note_b)` (Tx A — legacy)   | TEE                            | v2: each ix carries a **VALID_INPUT** proof binding (commitment, mint, amount) to a real Merkle leaf. TEE cannot phantom-lock. |
+| 9b    | L1      | `vault::verify_valid_create` (Tx B — legacy, v3 NEW)                      | any payer (proof is the auth)  | v3: **VALID_CREATE** proof attesting outputs are correctly addressed/minted. Writes `ValidCreateMarker` PDA. |
+| 9c    | L1      | `Ed25519` precompile + `vault::tee_forced_settle` (Tx C — **v0+ALT**)     | TEE                            | atomic consume+append. Recomputes binding hash, consumes marker, enforces conservation. v0/ALT needed to fit under the 1232-byte cap. |
+| 10    | L1      | `vault::withdraw` (with VALID_SPEND proof)                                | recipient                      | spends a note, reveals amount + mint + recipient ATA; decrements `outstanding[mint]` (v2). |
 
 In the running tests, steps 3a/3b happen once per persona ever (slot
 PDAs are reused), step 4 happens once per market ever, and step 5 is
@@ -463,9 +539,11 @@ the hot-path ER tx that users hit.
 | `VaultConfig`        | `["vault_config"]`                                   | Singleton — Merkle tree + TEE pubkey   |
 | `WalletEntry`        | `["wallet", commitment]`                             | One per registered user commitment     |
 | `NullifierEntry`     | `["nullifier", nullifier]`                           | One per VALID_SPEND-consumed note      |
-| `ConsumedNoteEntry`  | `["consumed_note", note_commitment, match_id]`       | One per TEE-settled note               |
-| `NoteLock`           | `["note_lock", note_commitment]`                     | TEE pin between match and settle       |
-| Vault token ATA      | `["vault_token", mint]`                              | Per-mint custody account               |
+| `ConsumedNoteEntry`  | `["consumed_note", note_commitment]`                 | One per TEE-settled note (settlement replay guard) |
+| `NoteLock`           | `["note_lock", note_commitment]`                     | TEE pin between match and settle. Carries `token_mint` (v2). |
+| `OutstandingMint`    | `["outstanding_mint", mint]`                         | v2: per-mint live-notes counter (Tier-1 solvency invariant) |
+| `ValidCreateMarker`  | `["valid_create", binding_hash]`                     | v3: written by `verify_valid_create`, consumed by `tee_forced_settle`. Seed encodes the 14 bound values. |
+| Vault token ATA      | `["vault_token", mint]`                              | Per-mint SPL custody account           |
 
 ### Matching engine PDAs
 
@@ -484,16 +562,20 @@ the hot-path ER tx that users hit.
 | Primitive        | Choice                                                    | Where                                                  |
 |------------------|-----------------------------------------------------------|--------------------------------------------------------|
 | Curve            | BN254 (alt_bn128)                                          | Groth16 verifier on-chain, snarkjs prover off-chain    |
-| Hash (in-circuit)| Poseidon2 over BN254 Fr                                    | Note commitments, nullifiers, Merkle, user commitments |
-| Hash (ambient)   | SHA-256 / SHA3                                             | Inclusion commitment, key derivation, payload hash     |
-| Signature        | Ed25519 (Solana Ed25519 precompile)                        | TEE attestation in `tee_forced_settle`                 |
+| Hash (in-circuit)| Poseidon over BN254 Fr (arities 2, 3, 6)                   | Note commitments, nullifiers, Merkle, user commitments |
+| Hash (ambient)   | SHA-256                                                    | Canonical payload hash, VALID_CREATE binding hash      |
+| Key derivation   | HKDF-SHA256 (spending, root, trading) + KMAC256 (viewing, per-note blinding) | Master-seed → all four keys + note blinding |
+| Signature        | Ed25519 (Solana Ed25519 precompile)                        | TEE attestation in `tee_forced_settle`, trading-key on `submit_order` |
 | KEM              | None — direct payload to TEE via PER session              | (planned: TLS+attestation channel)                     |
-| ZK proof system  | Groth16                                                    | VALID_WALLET_CREATE, VALID_SPEND                       |
-| Merkle tree      | Incremental Poseidon, depth 20, 32-root ring buffer       | `vault::merkle.rs`                                     |
+| ZK proof system  | Groth16                                                    | VALID_WALLET_CREATE, VALID_SPEND, VALID_INPUT (v2), VALID_CREATE (v3) |
+| Merkle tree      | Incremental Poseidon2, depth 20, 32-root ring buffer       | `vault::merkle.rs`                                     |
 
 The on-chain Groth16 verifier is `groth16-solana` v0.2.0 (the alt_bn128
-syscall path). Both circuits use the same Powers-of-Tau ceremony file
-(downloaded by `scripts/download-ptau.sh`).
+syscall path). All four circuits use the same Powers-of-Tau ceremony
+file (`powersOfTau28_hez_final_16.ptau`, downloaded by
+`scripts/download-ptau.sh` — **NOT yet SHA-pinned**) and the same
+deterministic dev contribution. Real Phase-2 MPC required before
+mainnet.
 
 ---
 
@@ -503,61 +585,122 @@ What the system protects against:
 
 - **Front-running on L1** of unmatched orders (their intent is in the
   ER, not on L1).
-- **Replay of TEE-signed settlements** — `consumed_note` PDAs lock both
-  legs. A second identical `tee_forced_settle` collides at PDA
+- **Replay of TEE-signed settlements** — `ConsumedNoteEntry` PDAs lock
+  both legs. A second identical `tee_forced_settle` collides at PDA
   allocation.
 - **Withdrawals without ownership proof** — VALID_SPEND requires
-  knowledge of the spending key; `nullifier` PDAs prevent double-spend.
+  knowledge of the spending key; `NullifierEntry` PDAs prevent double-spend.
 - **Conservation violations** — `tee_forced_settle` enforces
-  `note.amount == trade_leg + change_leg + fee_leg` *exactly* before
-  state mutation; the TEE cannot "create" tokens.
+  `lock.amount == trade_leg + change_leg + fee_leg` *exactly* via
+  `u64::checked_add` before state mutation; the TEE cannot "create" tokens.
 - **Mismatched canonical hashes** — the `Ed25519` precompile message
   must equal `canonical_payload_hash(payload)`; a TEE that signs a
   different message than the on-chain payload is rejected.
+- **TEE phantom-locking a note that doesn't exist (v2)** — `lock_note`
+  requires a `VALID_INPUT` Groth16 proof binding (commitment, mint,
+  amount) to a real Merkle leaf owned by the order submitter.
+- **TEE forever-locking a note as censorship (v2)** — `lock_note`
+  rejects `expiry_slot > clock.slot + MAX_LOCK_TTL_SLOTS` (~24h).
+- **TEE misrouting output legs / mis-minting outputs (v3)** —
+  `tee_forced_settle` requires a `ValidCreateMarker` PDA at a seed
+  derived from the recomputed binding hash. The marker exists only if
+  `verify_valid_create` verified a VALID_CREATE proof binding all
+  output notes to the correct input owners with the correct mints.
+- **Vault over-claim by phantom-mint outputs (v2)** — per-mint
+  `outstanding[mint]` counter; `withdraw` rejects with
+  `InsufficientOutstanding` before SPL transfer if the counter is
+  below the requested amount.
 
 What the system explicitly does **not** yet protect against (see
 "What is NOT yet shipped" below):
 
-- A compromised TEE host (privacy-fix is in place, but the TEE is a
-  software keypair, not a real attested enclave yet).
+- A compromised TEE host — `tee_pubkey` is still a software Ed25519
+  keypair, not a hardware-attested enclave measurement.
+- **TEE clearing at a manipulated price** — `VALID_PRICE` (spec §7.6)
+  is not implemented. Today the only price guard is a Pyth-band
+  circuit breaker inside `run_batch`, which is itself TEE-controlled.
 - Aggregate trade-level analysis after `BatchResults` commits — the
   match volume and price are public.
 - Network-level traffic analysis of who is connecting to the ER RPC
   (mitigated by the PER JWT session manager but not eliminated).
+- Trusted-setup soundness — the four circuits use a deterministic dev
+  contribution, recoverable from the build script. Mainnet requires a
+  real Phase-2 MPC.
 
 ---
 
 ## What is NOT yet shipped
 
-The privacy fix closes the biggest open item ("submit_order leaks
-intent on L1"). Remaining backlog (mirrored in
-`scripts/dev-commands.md` §13):
+v2 + v3 closed the biggest open items from the original brief
+(phantom-locking, forever-locking, output misrouting, mint mis-claiming).
+Sorted roughly by cryptographic impact remaining:
 
-1. **Real TDX/SEV TEE + remote attestation** (Phase 6). The TEE is
+1. **`VALID_PRICE` circuit (spec §7.6)** — A compromised TEE can clear
+   at any price inside the Pyth circuit-breaker tolerance. Without
+   `VALID_PRICE`, the clearing price is bound to nothing except the
+   conservation law. The on-chain mitigation today (`run_batch`'s
+   TWAP check) is TEE-controlled. `VALID_PRICE` would move the check
+   into a Groth16 proof verified at settle time alongside VALID_CREATE.
+
+2. **Real Phase-2 ceremony** — All four shipped Groth16 circuits use a
+   deterministic dev contribution. The toxic waste is therefore
+   *recoverable from the build script* (`echo "nyx-phase1-dev-contribution-$name"`
+   passed as entropy). Real MPC with ≥ 3 independent contributors and
+   publicly verifiable transcripts required before mainnet. The PTAU
+   file is also not yet SHA-pinned.
+
+3. **Real TDX/SEV TEE + remote attestation** (Phase 6). The TEE is
    currently a local Ed25519 keypair acting as the signing authority.
    Production deploys must pin the key inside an attested enclave.
-2. **Browser prover** (`WebProverSuite`) replacing the snarkjs
+   Also need a `rotate_tee_pubkey` ix gated by attestation quote
+   verification.
+
+4. **Browser prover** (`WebProverSuite`) replacing the snarkjs
    shell-out. Today the SDK shells out to
    `node_modules/snarkjs/build/cli.cjs`, which is fine on a server but
    unwieldy in a wallet extension.
-3. **Partial-fill + re-lock scenario** exercised end-to-end on devnet.
-   The on-chain code paths exist (and 2 of the 12 `run_batch` tests
-   cover it in litesvm) but no devnet test currently drives the
-   collateral rotation across two batches.
-4. **`undelegate_pending_order`** — let users release a slot back to L1
+
+5. **Indexer service** — see `apps/demo/ARCHITECTURE.md` for the
+   "no-indexer tax." A production indexer (Geyser/Helius webhook +
+   postgres + witness API) would eliminate ~40% of the dapp's
+   complexity (Merkle replay, pending-slot probing, BatchResults ring
+   scanning, etc.).
+
+6. **`undelegate_pending_order`** — let users release a slot back to L1
    to refund rent. Today slots stay delegated forever.
-5. **Emergency `force_undelegate_on_l1`** admin ix (pressure valve if
+
+7. **Emergency `force_undelegate_on_l1`** admin ix (pressure valve if
    the ER is down).
-6. **Real protocol-owner keypair** for fee withdrawal. Fee notes
+
+8. **Real protocol-owner keypair** for fee withdrawal. Fee notes
    accumulate but can't be spent until a real protocol-owner key is
-   wired in.
-7. **Continuous ER ↔ L1 commit scheduler** inside the TEE loop. Today
+   wired in. `change-note-flow` Test E exercises this under a synthetic
+   commitment.
+
+9. **Continuous ER ↔ L1 commit scheduler** inside the TEE loop. Today
    the test commits manually via `undelegate_market`. Production wants
    `commit_market_state` (keeps delegation) every N slots so settlement
    can pick up matches without a full undelegate cycle.
-8. **Oracle refresh inside long-running ER sessions** — Pyth Pull-v2
-   accounts are clone-at-open today.
-9. **PER JWT session manager** wired into the ER trade-flow test —
-   the on-chain privacy property is independent of this, but the
-   network-side anonymity-set requires JWT-gated ingress to be
-   effective.
+
+10. **Oracle refresh inside long-running ER sessions** — Pyth Pull-v2
+    accounts are clone-at-open today.
+
+11. **PER JWT session manager** wired into the ER trade-flow test —
+    the on-chain privacy property is independent of this, but the
+    network-side anonymity-set requires JWT-gated ingress to be
+    effective.
+
+12. **Self-trade prevention** in `run_batch` — cheap to add (check
+    same `user_commitment`), more about anti-leakage than soundness.
+
+---
+
+## Deployed program IDs
+
+| Branch | vault | matching_engine |
+|---|---|---|
+| **`nyx-v2-onchain-hardening`** (v3 — described in this doc) | `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` | `6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe` |
+| `main` (legacy v1 — hackathon demo) | `ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY` | `DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH` |
+
+The two deployments coexist on devnet at different addresses, so the
+live demo on `main` is unaffected by the v2/v3 work.
