@@ -113,6 +113,7 @@ import {
 
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
+import { proveValidInput } from "./helpers/valid-input-prover.js";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -1083,6 +1084,8 @@ maybeDescribe(
           noteCcommitment, noteDcommitment,
           nullifierA: nullA, nullifierB: nullB,
           orderIdA: aliceOrderId, orderIdB: bobOrderId,
+          quoteMint: fx.quoteMint.toBytes(),
+          baseMint: fx.baseMint.toBytes(),
           baseAmount: MATCH_BASE, quoteAmount: MATCH_QUOTE,
         });
         payload.buyerChangeAmt = ALICE_CHANGE;
@@ -1097,9 +1100,42 @@ maybeDescribe(
 
         // ── Step 12: lock_note ×2 on L1 + Ed25519 + tee_forced_settle
         step(12, "lock_note ×2 (L1) then Ed25519 + tee_forced_settle (L1)");
+
+        // v2: per-side VALID_INPUT proofs gating lock_note.
+        const aliceWitness1 = await tree.witness(alice.depositNote!.leafIndex);
+        const aliceVI1 = await proveValidInput({
+          repoRoot: REPO_ROOT,
+          spendingKey: alice.spendingKey,
+          ownerCommitmentBlinding: alice.ownerBlinding,
+          nonce: alice.depositNote!.nonce,
+          blindingR: alice.depositNote!.blindingR,
+          tokenMint: alice.depositNote!.mint.toBytes(),
+          amount: alice.depositNote!.amount,
+          merkleRootBE: aliceWitness1.root,
+          merkleWitness: {
+            pathElements: aliceWitness1.siblings.map(be32ToBigInt),
+            pathIndices: aliceWitness1.indices,
+          },
+        });
+        const bobWitness1 = await tree.witness(bob.depositNote!.leafIndex);
+        const bobVI1 = await proveValidInput({
+          repoRoot: REPO_ROOT,
+          spendingKey: bob.spendingKey,
+          ownerCommitmentBlinding: bob.ownerBlinding,
+          nonce: bob.depositNote!.nonce,
+          blindingR: bob.depositNote!.blindingR,
+          tokenMint: bob.depositNote!.mint.toBytes(),
+          amount: bob.depositNote!.amount,
+          merkleRootBE: bobWitness1.root,
+          merkleWitness: {
+            pathElements: bobWitness1.siblings.map(be32ToBigInt),
+            pathIndices: bobWitness1.indices,
+          },
+        });
+
         await timer.time("lock_note ×2", "L1", async () => {
           const lockTx = new Transaction().add(
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
             buildLockNoteInstruction({
               programId: fx.vaultProgramId,
               teeAuthority: fx.teeKeypair.publicKey,
@@ -1107,6 +1143,9 @@ maybeDescribe(
               orderId: aliceOrderId,
               expirySlot: expiry,
               amount: ALICE_DEPOSIT,
+              tokenMint: alice.depositNote!.mint,
+              merkleRoot: aliceWitness1.root,
+              proof: aliceVI1.proof,
             }),
             buildLockNoteInstruction({
               programId: fx.vaultProgramId,
@@ -1115,6 +1154,9 @@ maybeDescribe(
               orderId: bobOrderId,
               expirySlot: expiry,
               amount: BOB_DEPOSIT,
+              tokenMint: bob.depositNote!.mint,
+              merkleRoot: bobWitness1.root,
+              proof: bobVI1.proof,
             }),
           );
           const lockSig = await sendAndConfirmTransaction(
@@ -1465,6 +1507,8 @@ maybeDescribe(
           noteCcommitment, noteDcommitment,
           nullifierA: nullA, nullifierB: nullB,
           orderIdA: aliceOrderId, orderIdB: bobOrderId,
+          quoteMint: fx.quoteMint.toBytes(),
+          baseMint: fx.baseMint.toBytes(),
           baseAmount: MATCHED_BASE, quoteAmount: MATCHED_QUOTE,
         });
         payload.buyerChangeAmt = ALICE_CHANGE;
@@ -1483,9 +1527,42 @@ maybeDescribe(
 
         // ── lock_note + settle
         step(12, "lock_note ×2 (L1) then Ed25519 + tee_forced_settle (L1, with re-lock)");
+
+        // v2: per-side VALID_INPUT proofs gating lock_note.
+        const aliceWitness2 = await tree.witness(alice.depositNote!.leafIndex);
+        const aliceVI2 = await proveValidInput({
+          repoRoot: REPO_ROOT,
+          spendingKey: alice.spendingKey,
+          ownerCommitmentBlinding: alice.ownerBlinding,
+          nonce: alice.depositNote!.nonce,
+          blindingR: alice.depositNote!.blindingR,
+          tokenMint: alice.depositNote!.mint.toBytes(),
+          amount: alice.depositNote!.amount,
+          merkleRootBE: aliceWitness2.root,
+          merkleWitness: {
+            pathElements: aliceWitness2.siblings.map(be32ToBigInt),
+            pathIndices: aliceWitness2.indices,
+          },
+        });
+        const bobWitness2 = await tree.witness(bob.depositNote!.leafIndex);
+        const bobVI2 = await proveValidInput({
+          repoRoot: REPO_ROOT,
+          spendingKey: bob.spendingKey,
+          ownerCommitmentBlinding: bob.ownerBlinding,
+          nonce: bob.depositNote!.nonce,
+          blindingR: bob.depositNote!.blindingR,
+          tokenMint: bob.depositNote!.mint.toBytes(),
+          amount: bob.depositNote!.amount,
+          merkleRootBE: bobWitness2.root,
+          merkleWitness: {
+            pathElements: bobWitness2.siblings.map(be32ToBigInt),
+            pathIndices: bobWitness2.indices,
+          },
+        });
+
         await timer.time("lock_note ×2", "L1", async () => {
           const lockTx = new Transaction().add(
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
             buildLockNoteInstruction({
               programId: fx.vaultProgramId,
               teeAuthority: fx.teeKeypair.publicKey,
@@ -1493,6 +1570,9 @@ maybeDescribe(
               orderId: aliceOrderId,
               expirySlot: expiry,
               amount: ALICE_DEPOSIT,
+              tokenMint: alice.depositNote!.mint,
+              merkleRoot: aliceWitness2.root,
+              proof: aliceVI2.proof,
             }),
             buildLockNoteInstruction({
               programId: fx.vaultProgramId,
@@ -1501,6 +1581,9 @@ maybeDescribe(
               orderId: bobOrderId,
               expirySlot: expiry,
               amount: BOB_DEPOSIT,
+              tokenMint: bob.depositNote!.mint,
+              merkleRoot: bobWitness2.root,
+              proof: bobVI2.proof,
             }),
           );
           const lockSig = await sendAndConfirmTransaction(
@@ -2235,6 +2318,8 @@ maybeDescribe(
             nullifierB: nullB,
             orderIdA: aliceOrderId,
             orderIdB: bobOrderId,
+            quoteMint: fx.quoteMint.toBytes(),
+            baseMint: fx.baseMint.toBytes(),
             baseAmount: BASE_AMT,
             quoteAmount: QUOTE_AMT,
           });
@@ -2245,9 +2330,41 @@ maybeDescribe(
           const msg = canonicalPayloadHash(payload);
           const teeSig = teeSign(fx.teeKeypair, msg);
 
+          // v2: per-side VALID_INPUT proofs gating lock_note.
+          const aliceWitness3 = await tree.witness(alice.depositNote!.leafIndex);
+          const aliceVI3 = await proveValidInput({
+            repoRoot: REPO_ROOT,
+            spendingKey: alice.spendingKey,
+            ownerCommitmentBlinding: alice.ownerBlinding,
+            nonce: alice.depositNote!.nonce,
+            blindingR: alice.depositNote!.blindingR,
+            tokenMint: alice.depositNote!.mint.toBytes(),
+            amount: alice.depositNote!.amount,
+            merkleRootBE: aliceWitness3.root,
+            merkleWitness: {
+              pathElements: aliceWitness3.siblings.map(be32ToBigInt),
+              pathIndices: aliceWitness3.indices,
+            },
+          });
+          const bobWitness3 = await tree.witness(bob.depositNote!.leafIndex);
+          const bobVI3 = await proveValidInput({
+            repoRoot: REPO_ROOT,
+            spendingKey: bob.spendingKey,
+            ownerCommitmentBlinding: bob.ownerBlinding,
+            nonce: bob.depositNote!.nonce,
+            blindingR: bob.depositNote!.blindingR,
+            tokenMint: bob.depositNote!.mint.toBytes(),
+            amount: bob.depositNote!.amount,
+            merkleRootBE: bobWitness3.root,
+            merkleWitness: {
+              pathElements: bobWitness3.siblings.map(be32ToBigInt),
+              pathIndices: bobWitness3.indices,
+            },
+          });
+
           await timer.time("lock_note ×2", "L1", async () => {
             const tx = new Transaction().add(
-              ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+              ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
               buildLockNoteInstruction({
                 programId: fx.vaultProgramId,
                 teeAuthority: fx.teeKeypair.publicKey,
@@ -2255,6 +2372,9 @@ maybeDescribe(
                 orderId: aliceOrderId,
                 expirySlot: expiry,
                 amount: ALICE_DEPOSIT,
+                tokenMint: alice.depositNote!.mint,
+                merkleRoot: aliceWitness3.root,
+                proof: aliceVI3.proof,
               }),
               buildLockNoteInstruction({
                 programId: fx.vaultProgramId,
@@ -2263,6 +2383,9 @@ maybeDescribe(
                 orderId: bobOrderId,
                 expirySlot: expiry,
                 amount: BOB_DEPOSIT,
+                tokenMint: bob.depositNote!.mint,
+                merkleRoot: bobWitness3.root,
+                proof: bobVI3.proof,
               }),
             );
             const sig = await sendAndConfirmTransaction(

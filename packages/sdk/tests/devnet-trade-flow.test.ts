@@ -102,6 +102,7 @@ import {
 
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
+import { proveValidInput } from "./helpers/valid-input-prover.js";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -800,6 +801,8 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
         nullifierB: nullB,
         orderIdA: aliceOrderId,
         orderIdB: bobOrderId,
+        quoteMint: quoteMint.toBytes(),
+        baseMint: baseMint.toBytes(),
         baseAmount: BASE_AMT,
         quoteAmount: QUOTE_AMT,
       });
@@ -822,8 +825,40 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
           "then Ed25519 + tee_forced_settle). Privacy unaffected: lock_note " +
           "only references note commitments + amounts already public on L1.",
       );
+      // v2: per-side VALID_INPUT proofs gating lock_note.
+      const aliceWitness = await tree.witness(alice.depositNote!.leafIndex);
+      const aliceVI = await proveValidInput({
+        repoRoot: REPO_ROOT,
+        spendingKey: alice.spendingKey,
+        ownerCommitmentBlinding: alice.ownerBlinding,
+        nonce: alice.depositNote!.nonce,
+        blindingR: alice.depositNote!.blindingR,
+        tokenMint: alice.depositNote!.mint.toBytes(),
+        amount: alice.depositNote!.amount,
+        merkleRootBE: aliceWitness.root,
+        merkleWitness: {
+          pathElements: aliceWitness.siblings.map(be32ToBigInt),
+          pathIndices: aliceWitness.indices,
+        },
+      });
+      const bobWitness = await tree.witness(bob.depositNote!.leafIndex);
+      const bobVI = await proveValidInput({
+        repoRoot: REPO_ROOT,
+        spendingKey: bob.spendingKey,
+        ownerCommitmentBlinding: bob.ownerBlinding,
+        nonce: bob.depositNote!.nonce,
+        blindingR: bob.depositNote!.blindingR,
+        tokenMint: bob.depositNote!.mint.toBytes(),
+        amount: bob.depositNote!.amount,
+        merkleRootBE: bobWitness.root,
+        merkleWitness: {
+          pathElements: bobWitness.siblings.map(be32ToBigInt),
+          pathIndices: bobWitness.indices,
+        },
+      });
+
       const lockTx = new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }),
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
         buildLockNoteInstruction({
           programId: vaultProgramId,
           teeAuthority: teeKeypair.publicKey,
@@ -831,6 +866,9 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
           orderId: aliceOrderId,
           expirySlot: expiry,
           amount: ALICE_DEPOSIT,
+          tokenMint: alice.depositNote!.mint,
+          merkleRoot: aliceWitness.root,
+          proof: aliceVI.proof,
         }),
         buildLockNoteInstruction({
           programId: vaultProgramId,
@@ -839,6 +877,9 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
           orderId: bobOrderId,
           expirySlot: expiry,
           amount: BOB_DEPOSIT,
+          tokenMint: bob.depositNote!.mint,
+          merkleRoot: bobWitness.root,
+          proof: bobVI.proof,
         }),
       );
       const lockSig = await sendAndConfirmTransaction(
