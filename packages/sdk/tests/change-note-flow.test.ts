@@ -354,6 +354,7 @@ function decodePendingOrder(data: Uint8Array): PendingOrderView {
 
 interface NoteLockView {
   noteCommitment: Uint8Array;
+  tokenMint: Uint8Array;
   orderId: Uint8Array;
   expirySlot: bigint;
   lockedBy: Uint8Array;
@@ -361,19 +362,22 @@ interface NoteLockView {
   bump: number;
 }
 
+// v2 layout: noteCommitment(32) + tokenMint(32) + orderId(16) + expirySlot(8)
+// + lockedBy(32) + amount(8) + bump(1) + padding(7) = 136 bytes (+8 disc).
 function decodeNoteLock(data: Uint8Array): NoteLockView {
-  if (data.length < 8 + 32 + 16 + 8 + 32 + 8 + 1) {
+  if (data.length < 8 + 32 + 32 + 16 + 8 + 32 + 8 + 1) {
     throw new Error(`NoteLock data too short: ${data.length}`);
   }
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
   let off = 8;
   const noteCommitment = data.slice(off, off + 32); off += 32;
+  const tokenMint = data.slice(off, off + 32); off += 32;
   const orderId = data.slice(off, off + 16); off += 16;
   const expirySlot = dv.getBigUint64(off, true); off += 8;
   const lockedBy = data.slice(off, off + 32); off += 32;
   const amount = dv.getBigUint64(off, true); off += 8;
   const bump = data[off];
-  return { noteCommitment, orderId, expirySlot, lockedBy, amount, bump };
+  return { noteCommitment, tokenMint, orderId, expirySlot, lockedBy, amount, bump };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1100,7 +1104,7 @@ maybeDescribe(
         step(12, "lock_note ×2 (L1) then Ed25519 + tee_forced_settle (L1)");
 
         // v2: per-side VALID_INPUT proofs gating lock_note.
-        const aliceWitness1 = await tree.witness(alice.depositNote!.leafIndex);
+        const aliceWitness1 = await fx.tree.witness(alice.depositNote!.leafIndex);
         const aliceVI1 = await proveValidInput({
           repoRoot: REPO_ROOT,
           spendingKey: alice.spendingKey,
@@ -1115,7 +1119,7 @@ maybeDescribe(
             pathIndices: aliceWitness1.indices,
           },
         });
-        const bobWitness1 = await tree.witness(bob.depositNote!.leafIndex);
+        const bobWitness1 = await fx.tree.witness(bob.depositNote!.leafIndex);
         const bobVI1 = await proveValidInput({
           repoRoot: REPO_ROOT,
           spendingKey: bob.spendingKey,
@@ -1525,7 +1529,7 @@ maybeDescribe(
         step(12, "lock_note ×2 (L1) then Ed25519 + tee_forced_settle (L1, with re-lock)");
 
         // v2: per-side VALID_INPUT proofs gating lock_note.
-        const aliceWitness2 = await tree.witness(alice.depositNote!.leafIndex);
+        const aliceWitness2 = await fx.tree.witness(alice.depositNote!.leafIndex);
         const aliceVI2 = await proveValidInput({
           repoRoot: REPO_ROOT,
           spendingKey: alice.spendingKey,
@@ -1540,7 +1544,7 @@ maybeDescribe(
             pathIndices: aliceWitness2.indices,
           },
         });
-        const bobWitness2 = await tree.witness(bob.depositNote!.leafIndex);
+        const bobWitness2 = await fx.tree.witness(bob.depositNote!.leafIndex);
         const bobVI2 = await proveValidInput({
           repoRoot: REPO_ROOT,
           spendingKey: bob.spendingKey,
@@ -2325,7 +2329,7 @@ maybeDescribe(
           const teeSig = teeSign(fx.teeKeypair, msg);
 
           // v2: per-side VALID_INPUT proofs gating lock_note.
-          const aliceWitness3 = await tree.witness(alice.depositNote!.leafIndex);
+          const aliceWitness3 = await fx.tree.witness(alice.depositNote!.leafIndex);
           const aliceVI3 = await proveValidInput({
             repoRoot: REPO_ROOT,
             spendingKey: alice.spendingKey,
@@ -2340,7 +2344,7 @@ maybeDescribe(
               pathIndices: aliceWitness3.indices,
             },
           });
-          const bobWitness3 = await tree.witness(bob.depositNote!.leafIndex);
+          const bobWitness3 = await fx.tree.witness(bob.depositNote!.leafIndex);
           const bobVI3 = await proveValidInput({
             repoRoot: REPO_ROOT,
             spendingKey: bob.spendingKey,
