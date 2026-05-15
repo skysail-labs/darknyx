@@ -114,6 +114,9 @@ import {
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
+import { proveValidCreate } from "./helpers/valid-create-prover.js";
+import { validCreateBindingHash } from "../src/settlement/settle-builder.js";
+import { buildVerifyValidCreateInstruction } from "../src/idl/vault-client.js";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -1167,6 +1170,70 @@ maybeDescribe(
           txline("lock_note(note_a) + lock_note(note_b)", lockSig);
         });
 
+        // v3: VALID_CREATE proof — buyer-change present, no seller-change.
+        {
+          const ZERO_32 = new Uint8Array(32);
+          const vcArgs = {
+            noteA: alice.depositNote!.commitment,
+            noteB: bob.depositNote!.commitment,
+            noteC: noteCcommitment,
+            noteD: noteDcommitment,
+            noteE: noteEcommitment,
+            noteF: ZERO_32,
+            quoteMint: fx.quoteMint.toBytes(),
+            baseMint: fx.baseMint.toBytes(),
+            baseAmount: MATCH_BASE,
+            quoteAmount: MATCH_QUOTE,
+            buyerChangeAmt: ALICE_CHANGE,
+            sellerChangeAmt: 0n,
+            buyerFeeAmt: BUYER_FEE,
+            sellerFeeAmt: SELLER_FEE,
+          };
+          const validCreate = await proveValidCreate({
+            repoRoot: REPO_ROOT,
+            quoteMint: fx.quoteMint.toBytes(),
+            baseMint: fx.baseMint.toBytes(),
+            inputA: { ownerCommit: alice.ownerCommit, amount: alice.depositNote!.amount,
+                      nonce: alice.depositNote!.nonce, blindingR: alice.depositNote!.blindingR },
+            inputAcommitmentBE: alice.depositNote!.commitment,
+            inputB: { ownerCommit: bob.ownerCommit, amount: bob.depositNote!.amount,
+                      nonce: bob.depositNote!.nonce, blindingR: bob.depositNote!.blindingR },
+            inputBcommitmentBE: bob.depositNote!.commitment,
+            outputC: { ownerCommit: alice.ownerCommit, amount: MATCH_BASE,
+                       nonce: be32ToBigInt(noteCnonce), blindingR: be32ToBigInt(noteCblind) },
+            outputCcommitmentBE: noteCcommitment,
+            outputD: { ownerCommit: bob.ownerCommit, amount: MATCH_QUOTE,
+                       nonce: be32ToBigInt(noteDnonce), blindingR: be32ToBigInt(noteDblind) },
+            outputDcommitmentBE: noteDcommitment,
+            outputE: { ownerCommit: alice.ownerCommit, amount: ALICE_CHANGE,
+                       nonce: be32ToBigInt(noteEnonce), blindingR: be32ToBigInt(noteEblind) },
+            outputEcommitmentBE: noteEcommitment,
+            outputF: undefined, outputFcommitmentBE: ZERO_32,
+            baseAmount: MATCH_BASE, quoteAmount: MATCH_QUOTE,
+            buyerChangeAmt: ALICE_CHANGE, sellerChangeAmt: 0n,
+            buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
+          });
+          const binding = validCreateBindingHash(vcArgs);
+          const markerExpiry = BigInt((await fx.l1.getSlot("confirmed")) + 200);
+          const verifyTx = new Transaction().add(
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+            buildVerifyValidCreateInstruction({
+              programId: fx.vaultProgramId, payer: fx.teeKeypair.publicKey,
+              bindingHash: binding,
+              noteAcommitment: alice.depositNote!.commitment,
+              noteBcommitment: bob.depositNote!.commitment,
+              noteCcommitment, noteDcommitment,
+              noteEcommitment, noteFcommitment: ZERO_32,
+              quoteMint: fx.quoteMint, baseMint: fx.baseMint,
+              baseAmount: MATCH_BASE, quoteAmount: MATCH_QUOTE,
+              buyerChangeAmt: ALICE_CHANGE, sellerChangeAmt: 0n,
+              buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
+              expirySlot: markerExpiry, proof: validCreate.proof,
+            }),
+          );
+          await sendAndConfirmTransaction(fx.l1, verifyTx, [fx.teeKeypair], { commitment: "confirmed" });
+        }
+
         await timer.time("Ed25519 + tee_forced_settle", "L1", async () => {
           const settleTx = new Transaction().add(
             ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -1178,6 +1245,7 @@ maybeDescribe(
               programId: fx.vaultProgramId,
               teeAuthority: fx.teeKeypair.publicKey,
               payload,
+              quoteMint: fx.quoteMint, baseMint: fx.baseMint,
             }),
           );
           const settleSig = await sendAndConfirmTransaction(
@@ -1592,6 +1660,70 @@ maybeDescribe(
           txline("lock_note(note_a) + lock_note(note_b)", lockSig);
         });
 
+        // v3: VALID_CREATE proof — Test B has buyer-change + re-lock active.
+        {
+          const ZERO_32 = new Uint8Array(32);
+          const vcArgs = {
+            noteA: alice.depositNote!.commitment,
+            noteB: bob.depositNote!.commitment,
+            noteC: noteCcommitment,
+            noteD: noteDcommitment,
+            noteE: noteEcommitment,
+            noteF: ZERO_32,
+            quoteMint: fx.quoteMint.toBytes(),
+            baseMint: fx.baseMint.toBytes(),
+            baseAmount: MATCHED_BASE,
+            quoteAmount: MATCHED_QUOTE,
+            buyerChangeAmt: ALICE_CHANGE,
+            sellerChangeAmt: 0n,
+            buyerFeeAmt: BUYER_FEE,
+            sellerFeeAmt: SELLER_FEE,
+          };
+          const validCreate = await proveValidCreate({
+            repoRoot: REPO_ROOT,
+            quoteMint: fx.quoteMint.toBytes(),
+            baseMint: fx.baseMint.toBytes(),
+            inputA: { ownerCommit: alice.ownerCommit, amount: alice.depositNote!.amount,
+                      nonce: alice.depositNote!.nonce, blindingR: alice.depositNote!.blindingR },
+            inputAcommitmentBE: alice.depositNote!.commitment,
+            inputB: { ownerCommit: bob.ownerCommit, amount: bob.depositNote!.amount,
+                      nonce: bob.depositNote!.nonce, blindingR: bob.depositNote!.blindingR },
+            inputBcommitmentBE: bob.depositNote!.commitment,
+            outputC: { ownerCommit: alice.ownerCommit, amount: MATCHED_BASE,
+                       nonce: be32ToBigInt(noteCnonce), blindingR: be32ToBigInt(noteCblind) },
+            outputCcommitmentBE: noteCcommitment,
+            outputD: { ownerCommit: bob.ownerCommit, amount: MATCHED_QUOTE,
+                       nonce: be32ToBigInt(noteDnonce), blindingR: be32ToBigInt(noteDblind) },
+            outputDcommitmentBE: noteDcommitment,
+            outputE: { ownerCommit: alice.ownerCommit, amount: ALICE_CHANGE,
+                       nonce: be32ToBigInt(noteEnonce), blindingR: be32ToBigInt(noteEblind) },
+            outputEcommitmentBE: noteEcommitment,
+            outputF: undefined, outputFcommitmentBE: ZERO_32,
+            baseAmount: MATCHED_BASE, quoteAmount: MATCHED_QUOTE,
+            buyerChangeAmt: ALICE_CHANGE, sellerChangeAmt: 0n,
+            buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
+          });
+          const binding = validCreateBindingHash(vcArgs);
+          const markerExpiry = BigInt((await fx.l1.getSlot("confirmed")) + 200);
+          const verifyTx = new Transaction().add(
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+            buildVerifyValidCreateInstruction({
+              programId: fx.vaultProgramId, payer: fx.teeKeypair.publicKey,
+              bindingHash: binding,
+              noteAcommitment: alice.depositNote!.commitment,
+              noteBcommitment: bob.depositNote!.commitment,
+              noteCcommitment, noteDcommitment,
+              noteEcommitment, noteFcommitment: ZERO_32,
+              quoteMint: fx.quoteMint, baseMint: fx.baseMint,
+              baseAmount: MATCHED_BASE, quoteAmount: MATCHED_QUOTE,
+              buyerChangeAmt: ALICE_CHANGE, sellerChangeAmt: 0n,
+              buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
+              expirySlot: markerExpiry, proof: validCreate.proof,
+            }),
+          );
+          await sendAndConfirmTransaction(fx.l1, verifyTx, [fx.teeKeypair], { commitment: "confirmed" });
+        }
+
         await timer.time("Ed25519 + tee_forced_settle (with re-lock)", "L1", async () => {
           const settleTx = new Transaction().add(
             ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -1603,6 +1735,7 @@ maybeDescribe(
               programId: fx.vaultProgramId,
               teeAuthority: fx.teeKeypair.publicKey,
               payload,
+              quoteMint: fx.quoteMint, baseMint: fx.baseMint,
             }),
           );
           const settleSig = await sendAndConfirmTransaction(
@@ -2392,6 +2525,68 @@ maybeDescribe(
             txline("lock_note(note_a) + lock_note(note_b)", sig);
           });
 
+          // v3: VALID_CREATE — Test E is exact fill, no change.
+          {
+            const ZERO_32 = new Uint8Array(32);
+            const vcArgs = {
+              noteA: alice.depositNote!.commitment,
+              noteB: bob.depositNote!.commitment,
+              noteC: noteCcommitment,
+              noteD: noteDcommitment,
+              noteE: ZERO_32,
+              noteF: ZERO_32,
+              quoteMint: fx.quoteMint.toBytes(),
+              baseMint: fx.baseMint.toBytes(),
+              baseAmount: BASE_AMT,
+              quoteAmount: QUOTE_AMT,
+              buyerChangeAmt: 0n,
+              sellerChangeAmt: 0n,
+              buyerFeeAmt: BUYER_FEE,
+              sellerFeeAmt: SELLER_FEE,
+            };
+            const validCreate = await proveValidCreate({
+              repoRoot: REPO_ROOT,
+              quoteMint: fx.quoteMint.toBytes(),
+              baseMint: fx.baseMint.toBytes(),
+              inputA: { ownerCommit: alice.ownerCommit, amount: alice.depositNote!.amount,
+                        nonce: alice.depositNote!.nonce, blindingR: alice.depositNote!.blindingR },
+              inputAcommitmentBE: alice.depositNote!.commitment,
+              inputB: { ownerCommit: bob.ownerCommit, amount: bob.depositNote!.amount,
+                        nonce: bob.depositNote!.nonce, blindingR: bob.depositNote!.blindingR },
+              inputBcommitmentBE: bob.depositNote!.commitment,
+              outputC: { ownerCommit: alice.ownerCommit, amount: BASE_AMT,
+                         nonce: be32ToBigInt(noteCnonce), blindingR: be32ToBigInt(noteCblind) },
+              outputCcommitmentBE: noteCcommitment,
+              outputD: { ownerCommit: bob.ownerCommit, amount: QUOTE_AMT,
+                         nonce: be32ToBigInt(noteDnonce), blindingR: be32ToBigInt(noteDblind) },
+              outputDcommitmentBE: noteDcommitment,
+              outputE: undefined, outputEcommitmentBE: ZERO_32,
+              outputF: undefined, outputFcommitmentBE: ZERO_32,
+              baseAmount: BASE_AMT, quoteAmount: QUOTE_AMT,
+              buyerChangeAmt: 0n, sellerChangeAmt: 0n,
+              buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
+            });
+            const binding = validCreateBindingHash(vcArgs);
+            const markerExpiry = BigInt((await fx.l1.getSlot("confirmed")) + 200);
+            const verifyTx = new Transaction().add(
+              ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+              buildVerifyValidCreateInstruction({
+                programId: fx.vaultProgramId, payer: fx.teeKeypair.publicKey,
+                bindingHash: binding,
+                noteAcommitment: alice.depositNote!.commitment,
+                noteBcommitment: bob.depositNote!.commitment,
+                noteCcommitment, noteDcommitment,
+                noteEcommitment: ZERO_32, noteFcommitment: ZERO_32,
+                quoteMint: fx.quoteMint, baseMint: fx.baseMint,
+                baseAmount: BASE_AMT, quoteAmount: QUOTE_AMT,
+                buyerChangeAmt: 0n, sellerChangeAmt: 0n,
+                buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
+                expirySlot: markerExpiry, proof: validCreate.proof,
+              }),
+            );
+            await sendAndConfirmTransaction(fx.l1, verifyTx, [fx.teeKeypair], { commitment: "confirmed" });
+          }
+
           await timer.time("Ed25519 + tee_forced_settle", "L1", async () => {
             const tx = new Transaction().add(
               ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -2404,6 +2599,7 @@ maybeDescribe(
                 programId: fx.vaultProgramId,
                 teeAuthority: fx.teeKeypair.publicKey,
                 payload,
+                quoteMint: fx.quoteMint, baseMint: fx.baseMint,
               }),
             );
             const sig = await sendAndConfirmTransaction(
