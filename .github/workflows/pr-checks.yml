@@ -211,14 +211,17 @@ jobs:
       - name: npm ci (root, with workspaces)
         run: npm ci
 
-      # Artifacts were uploaded with workspace-relative paths
-      # (`target/debug/examples/...` and `circuits/build/...`), so
-      # downloading without a `path:` arg restores them to the exact
-      # location the tests expect, relative to the repo root.
+      # upload-artifact@v4 strips the least-common-directory from the
+      # uploaded paths (so the zip contains bare filenames /
+      # leaf-relative paths, NOT the full `target/debug/examples/...`
+      # or `circuits/build/...` prefixes). Re-anchor on download with
+      # an explicit `path:` so the binaries and circuit artefacts land
+      # where the tests expect them.
       - name: Download Rust example binaries
         uses: actions/download-artifact@v4
         with:
           name: darkpool-crypto-examples
+          path: target/debug/examples
 
       - name: Make example binaries executable
         run: chmod +x target/debug/examples/*
@@ -227,6 +230,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: circuit-build
+          path: circuits/build
 
       # Run the entire SDK suite. With the circuit artefacts now in
       # place, the prover tests (`valid-input-prover`, `valid-create-prover`,
