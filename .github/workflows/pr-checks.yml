@@ -1,0 +1,161 @@
+# Phase 1 PR gate — fast, deterministic checks on the on-chain ZK custody
+# layer + the SDK primitives that mirror it.
+#
+# Scope (per the CI plan):
+#   - Rust: workspace `cargo fmt --check`, `cargo clippy -D warnings`,
+#     unit tests for `darkpool-crypto`, `vault` (lib), `matching_engine` (lib).
+#   - SDK: parity tests (TS ↔ Rust byte equality, requires Rust example
+#     binaries from the rust job), and the transport / wire-format unit
+#     tests in `packages/sdk/tests/`.
+#
+# Out of scope for Phase 1 (covered by later phases):
+#   - Circuit build + the snarkjs prover smoke tests (Phase 2).
+#   - VK-consistency check (`parse-vk-to-rust.js` round-trip) (Phase 2).
+#   - `programs/vault/tests/` litesvm integration tests (Phase 3 — they
+#     need built circuits).
+#   - `cargo build-sbf` (Phase 4 — informational only on PRs).
+#   - Env-gated devnet/ER/CN end-to-end tests (auto-skipped without
+#     `RUN_*=1`; promoted to a nightly cron in Phase 4).
+#
+# Required-for-merge status check: the aggregator `pr-checks success`.
+# Configure branch protection on `main` (and `nyx-v2-onchain-hardening`
+# until merged) to require it.
+
+name: pr-checks
+
+on:
+  pull_request:
+    branches: [main, nyx-v2-onchain-hardening]
+  push:
+    branches: [main, nyx-v2-onchain-hardening]
+
+# When a PR is force-pushed, kill the in-flight run for that ref to save
+# minutes. Push-to-main runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: Rust — fmt, clippy, unit tests, examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to match rust-toolchain.toml. Bump both together.
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + target/
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pr-checks-rust
+          # Don't cache target/ subdirs we'll wipe between steps.
+          cache-on-failure: true
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (workspace, all targets)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Library unit tests only. Integration tests under `programs/vault/tests/`
+      # need the circuit artefacts (they shell out to snarkjs) — promoted in
+      # Phase 3.
+      - name: darkpool-crypto unit tests
+        run: cargo test -p darkpool-crypto --lib
+
+      - name: vault lib unit tests
+        # Includes `canonical_payload_hash_fixed_vector` (TEE-signed hash
+        # byte-stability) and `test_id` (program-ID sanity).
+        run: cargo test -p vault --lib
+
+      - name: matching_engine lib unit tests
+        # Required for now; will be re-scoped when the TEE refactor lands.
+        run: cargo test -p matching_engine --lib
+
+      # SDK parity tests shell out to these helper binaries via spawnSync.
+      # They cross-validate TS Poseidon / note-commitment / nullifier /
+      # user-commitment / key-derivation against the canonical Rust impl.
+      - name: Build darkpool-crypto example binaries
+        run: cargo build -p darkpool-crypto --examples
+
+      - name: Upload example binaries for the sdk job
+        uses: actions/upload-artifact@v4
+        with:
+          name: darkpool-crypto-examples
+          path: |
+            target/debug/examples/poseidon-hash
+            target/debug/examples/user-commitment
+            target/debug/examples/note-commitment
+            target/debug/examples/nullifier
+            target/debug/examples/derive-keys
+          if-no-files-found: error
+          retention-days: 1
+
+  sdk:
+    name: SDK — parity + transport (vitest)
+    runs-on: ubuntu-latest
+    needs: rust
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: npm ci (root, with workspaces)
+        run: npm ci
+
+      - name: Download Rust example binaries from the rust job
+        uses: actions/download-artifact@v4
+        with:
+          name: darkpool-crypto-examples
+          path: target/debug/examples/
+
+      - name: Make example binaries executable
+        run: chmod +x target/debug/examples/*
+
+      # Run the entire SDK suite. Tests that need circuit artefacts
+      # (`valid-input-prover.test.ts`, `valid-create-prover.test.ts`,
+      # `snarkjs-prover.test.ts`) skip themselves via `existsSync(wasm)`
+      # guards — they'll appear as skipped in Phase 1, and switch to
+      # running once Phase 2 adds the circuit-build job. Env-gated devnet
+      # / ER / change-note flows skip themselves via the `RUN_*` env
+      # variables that we deliberately don't set.
+      - name: vitest run (parity, transport, prover-skipped, devnet-skipped)
+        run: node node_modules/vitest/vitest.mjs run --root packages/sdk
+
+  # ------------------------------------------------------------------
+  # Aggregator. Branch protection should require ONLY this status check.
+  # The individual job results are visible in the PR UI for debugging.
+  # ------------------------------------------------------------------
+  ci-success:
+    name: pr-checks success
+    needs: [rust, sdk]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Verify all required jobs passed
+        if: ${{ needs.rust.result != 'success' || needs.sdk.result != 'success' }}
+        run: |
+          echo "rust: ${{ needs.rust.result }}"
+          echo "sdk:  ${{ needs.sdk.result }}"
+          echo "::error::One or more required jobs failed."
+          exit 1
+      - name: All required checks passed
+        run: echo "Phase 1 gate satisfied."
