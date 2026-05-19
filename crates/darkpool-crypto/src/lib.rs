@@ -20,11 +20,11 @@
 
 pub mod errors;
 pub mod field;
+#[cfg(not(target_os = "solana"))]
+pub mod keys;
 pub mod note;
 pub mod nullifier;
 pub mod poseidon;
-#[cfg(not(target_os = "solana"))]
-pub mod keys;
 #[cfg(not(target_os = "solana"))]
 pub mod user_commitment;
 #[cfg(not(target_os = "solana"))]

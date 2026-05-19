@@ -37,9 +37,7 @@ fn ensure_slot(h: &mut Harness, market: &solana_address::Address, slot_idx: u8) 
         Message::new(&[ix], Some(&trader_pk)),
         h.svm.latest_blockhash(),
     );
-    h.svm
-        .send_transaction(tx)
-        .expect("init_pending_order_slot");
+    h.svm.send_transaction(tx).expect("init_pending_order_slot");
 }
 
 fn happy_args(
@@ -161,8 +159,7 @@ fn test_notional_exceeds_note_value_rejected() {
     let err = run_submit(&mut h, args).expect_err("over-notional must reject");
     let logs = err.meta.logs.join("\n");
     assert!(
-        logs.to_lowercase().contains("notionalexceeds")
-            || logs.to_lowercase().contains("notional"),
+        logs.to_lowercase().contains("notionalexceeds") || logs.to_lowercase().contains("notional"),
         "expected NotionalExceedsNoteValue, got:\n{logs}"
     );
 }
@@ -179,8 +176,7 @@ fn test_expiry_in_past_rejected() {
     let err = run_submit(&mut h, args).expect_err("past expiry must reject");
     let logs = err.meta.logs.join("\n");
     assert!(
-        logs.to_lowercase().contains("expiryinpast")
-            || logs.to_lowercase().contains("expiry"),
+        logs.to_lowercase().contains("expiryinpast") || logs.to_lowercase().contains("expiry"),
         "expected ExpiryInPast, got:\n{logs}"
     );
 }

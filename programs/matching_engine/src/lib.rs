@@ -56,10 +56,7 @@ declare_id!("6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe");
 pub mod matching_engine {
     use super::*;
 
-    pub fn init_market(
-        ctx: Context<InitMarket>,
-        args: init_market::InitMarketArgs,
-    ) -> Result<()> {
+    pub fn init_market(ctx: Context<InitMarket>, args: init_market::InitMarketArgs) -> Result<()> {
         init_market::init_market_handler(ctx, args)
     }
 
@@ -99,11 +96,7 @@ pub mod matching_engine {
         submit_order::submit_order_handler(ctx, args)
     }
 
-    pub fn cancel_order(
-        ctx: Context<CancelOrder>,
-        market: Pubkey,
-        slot_idx: u8,
-    ) -> Result<()> {
+    pub fn cancel_order(ctx: Context<CancelOrder>, market: Pubkey, slot_idx: u8) -> Result<()> {
         cancel_order::cancel_order_handler(ctx, market, slot_idx)
     }
 

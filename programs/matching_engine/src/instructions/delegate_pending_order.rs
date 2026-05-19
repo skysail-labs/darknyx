@@ -48,10 +48,7 @@ pub fn delegate_pending_order_handler(
         trading_key.as_ref(),
         core::slice::from_ref(&slot_idx),
     ];
-    ctx.accounts.delegate_pda(
-        &ctx.accounts.payer,
-        seed_refs,
-        DelegateConfig::default(),
-    )?;
+    ctx.accounts
+        .delegate_pda(&ctx.accounts.payer, seed_refs, DelegateConfig::default())?;
     Ok(())
 }

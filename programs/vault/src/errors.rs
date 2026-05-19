@@ -47,7 +47,9 @@ pub enum VaultError {
     InsufficientOutstanding,
     #[msg("Outstanding live-notes counter has diverged from the on-chain SPL balance — vault is over-claimed")]
     SolvencyInvariantViolated,
-    #[msg("VALID_CREATE binding hash claimed by caller does not match the hash recomputed on-chain")]
+    #[msg(
+        "VALID_CREATE binding hash claimed by caller does not match the hash recomputed on-chain"
+    )]
     InvalidCreateBinding,
     #[msg("VALID_CREATE marker expiry is invalid (must be in the future and within MAX_CREATE_MARKER_TTL_SLOTS)")]
     InvalidMarkerExpiry,
@@ -67,7 +69,9 @@ pub enum VaultError {
     // ---- Phase 5: change-note settlement ----
     #[msg("Conservation law violated: note.amount != trade_leg + change_leg + fee_leg")]
     ConservationViolation,
-    #[msg("Change-note commitment inconsistent with change amount (one is zero, the other is not)")]
+    #[msg(
+        "Change-note commitment inconsistent with change amount (one is zero, the other is not)"
+    )]
     ChangeNoteInconsistent,
     #[msg("Re-lock requested but no change-note commitment was provided for that side")]
     RelockRequiresChangeNote,

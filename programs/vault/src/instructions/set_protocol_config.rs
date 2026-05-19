@@ -35,10 +35,7 @@ pub fn set_protocol_config_handler(
     protocol_owner_commitment: [u8; 32],
     fee_rate_bps: u16,
 ) -> Result<()> {
-    require!(
-        fee_rate_bps <= MAX_FEE_RATE_BPS,
-        VaultError::InvalidFeeRate
-    );
+    require!(fee_rate_bps <= MAX_FEE_RATE_BPS, VaultError::InvalidFeeRate);
 
     let mut cfg = ctx.accounts.vault_config.load_mut()?;
     require!(

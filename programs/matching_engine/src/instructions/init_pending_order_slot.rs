@@ -11,9 +11,7 @@ use anchor_lang::prelude::*;
 use core::mem::size_of;
 
 use crate::errors::MatchingError;
-use crate::state::{
-    PendingOrder, MAX_PENDING_SLOTS_PER_USER, PENDING_STATUS_EMPTY,
-};
+use crate::state::{PendingOrder, MAX_PENDING_SLOTS_PER_USER, PENDING_STATUS_EMPTY};
 
 #[derive(Accounts)]
 #[instruction(market: Pubkey, slot_idx: u8)]

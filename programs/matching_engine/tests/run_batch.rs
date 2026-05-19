@@ -27,13 +27,7 @@ fn seed_pendings(
 }
 
 /// Build a PendingSeed with auto-incremented synthetic trading_key.
-fn pseed(
-    idx: u8,
-    side: u8,
-    price: u64,
-    amount: u64,
-    expiry: u64,
-) -> PendingSeed {
+fn pseed(idx: u8, side: u8, price: u64, amount: u64, expiry: u64) -> PendingSeed {
     let mut tk = [0u8; 32];
     tk[1..9].copy_from_slice(&(idx as u64).to_le_bytes());
     let mut s = make_pending_seed(tk, 0, side, price, amount, expiry);
@@ -217,7 +211,7 @@ fn test_expired_orders_drained() {
     h.update_mock_oracle(100);
 
     let seeds = vec![
-        pseed(0, 0, 100, 5, 5),         // expires at slot 5
+        pseed(0, 0, 100, 5, 5), // expires at slot 5
         pseed(1, 1, 100, 5, 1_000_000),
     ];
     let pdas = seed_pendings(&mut h, &market, &seeds);
@@ -324,12 +318,18 @@ fn test_market_state_isolated() {
     let pdas_a = seed_pendings(
         &mut h,
         &market_a,
-        &[pseed(0, 0, 100, 5, 1_000_000), pseed(1, 1, 100, 5, 1_000_000)],
+        &[
+            pseed(0, 0, 100, 5, 1_000_000),
+            pseed(1, 1, 100, 5, 1_000_000),
+        ],
     );
     let pdas_b = seed_pendings(
         &mut h,
         &market_b,
-        &[pseed(0, 0, 100, 5, 1_000_000), pseed(1, 0, 100, 5, 1_000_000)],
+        &[
+            pseed(0, 0, 100, 5, 1_000_000),
+            pseed(1, 0, 100, 5, 1_000_000),
+        ],
     );
 
     let ix_a = build_run_batch_ix(&h, &market_a, &h.tee, &pdas_a);
@@ -497,7 +497,10 @@ fn test_run_batch_rejects_non_tee_signer() {
     let pdas = seed_pendings(
         &mut h,
         &market,
-        &[pseed(0, 0, 100, 5, 1_000_000), pseed(1, 1, 100, 5, 1_000_000)],
+        &[
+            pseed(0, 0, 100, 5, 1_000_000),
+            pseed(1, 1, 100, 5, 1_000_000),
+        ],
     );
 
     let intruder = Keypair::new();
@@ -505,7 +508,10 @@ fn test_run_batch_rejects_non_tee_signer() {
     let ix = build_run_batch_ix(&h, &market, &intruder, &pdas);
     let tx = Transaction::new(
         &[&intruder],
-        Message::new(&[compute_budget_ix(1_400_000), ix], Some(&intruder.pubkey())),
+        Message::new(
+            &[compute_budget_ix(1_400_000), ix],
+            Some(&intruder.pubkey()),
+        ),
         h.svm.latest_blockhash(),
     );
     let err = h

@@ -1,0 +1,9 @@
+# Workspace-wide Clippy configuration.
+#
+# Bumping `too-many-arguments-threshold` from the default 7 to 20 because
+# Anchor's `#[program]` macro generates per-instruction handler signatures
+# with one argument per ix field — the vault's `verify_valid_create` ix
+# has 16 (six commitments + two mints + six amounts + expiry + proof). A
+# per-function `#[allow]` doesn't propagate through `#[program]`'s
+# code-generation, so we relax the threshold globally.
+too-many-arguments-threshold = 20

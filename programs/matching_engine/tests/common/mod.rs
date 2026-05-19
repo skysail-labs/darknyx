@@ -370,8 +370,7 @@ impl Harness {
         slot_idx: u8,
         trader: &Keypair,
     ) -> Instruction {
-        let (slot_pda, _) =
-            pending_order_pda(&self.me_id, market, &trader.pubkey(), slot_idx);
+        let (slot_pda, _) = pending_order_pda(&self.me_id, market, &trader.pubkey(), slot_idx);
 
         let mut data = anchor_disc("init_pending_order_slot").to_vec();
         data.extend_from_slice(&market.to_bytes());
@@ -593,14 +592,13 @@ pub const ORDER_RECORD_SIZE: usize = 8    // seq_no
     + 1   // side
     + 1   // status
     + 1   // order_type
-    + 5;  // padding
+    + 5; // padding
 
 pub const DARK_CLOB_CAPACITY: usize = 45;
 
 /// Full DarkCLOB data size (no Anchor disc).
 /// Layout: 32 market + 8 next_seq + 8 order_count + orders + 1 bump + 7 pad
-pub const DARK_CLOB_DATA_SIZE: usize =
-    32 + 8 + 8 + ORDER_RECORD_SIZE * DARK_CLOB_CAPACITY + 1 + 7;
+pub const DARK_CLOB_DATA_SIZE: usize = 32 + 8 + 8 + ORDER_RECORD_SIZE * DARK_CLOB_CAPACITY + 1 + 7;
 
 /// Encode a single OrderRecord as its zero-copy bytes (side-safe).
 #[derive(Clone, Copy, Debug)]
@@ -694,8 +692,7 @@ pub fn seed_dark_clob(h: &mut Harness, market: &Pubkey, seeds: &[OrderSeed]) {
     // Write order_count.
     acct.data[8 + 32 + 8..8 + 32 + 8 + 8].copy_from_slice(&active_count.to_le_bytes());
     // Bump next_seq forward.
-    let existing_next =
-        u64::from_le_bytes(acct.data[8 + 32..8 + 32 + 8].try_into().unwrap());
+    let existing_next = u64::from_le_bytes(acct.data[8 + 32..8 + 32 + 8].try_into().unwrap());
     let next_seq = existing_next.max(max_seq);
     acct.data[8 + 32..8 + 32 + 8].copy_from_slice(&next_seq.to_le_bytes());
 
@@ -709,8 +706,8 @@ pub fn seed_dark_clob(h: &mut Harness, market: &Pubkey, seeds: &[OrderSeed]) {
 pub fn compute_budget_ix(cu: u32) -> Instruction {
     // ComputeBudget program id (hardcoded Solana builtin).
     let program_id = Pubkey::from([
-        3, 6, 70, 111, 229, 33, 23, 50, 255, 236, 173, 186, 114, 195, 155, 231, 188, 140, 229,
-        187, 197, 247, 18, 107, 44, 67, 155, 58, 64, 0, 0, 0,
+        3, 6, 70, 111, 229, 33, 23, 50, 255, 236, 173, 186, 114, 195, 155, 231, 188, 140, 229, 187,
+        197, 247, 18, 107, 44, 67, 155, 58, 64, 0, 0, 0,
     ]);
     // Discriminator 0x02 = SetComputeUnitLimit.
     let mut data = vec![0x02u8];
@@ -787,10 +784,7 @@ pub struct BatchResultsView {
 
 pub fn read_batch_results(h: &Harness, market: &Pubkey) -> BatchResultsView {
     let (pda, _) = batch_results_pda(&h.me_id, market);
-    let acct = h
-        .svm
-        .get_account(&pda)
-        .expect("batch_results must exist");
+    let acct = h.svm.get_account(&pda).expect("batch_results must exist");
     // Layout: 8 disc + 32 market + 32 last_inclusion_root + 8 last_batch_slot
     //       + 8 last_match_count + 8 last_clearing_price + 8 last_pyth_twap
     //       + 1 cb_tripped + 7 pad + ...
@@ -826,8 +820,7 @@ pub fn read_order_status(h: &Harness, market: &Pubkey, slot: usize) -> u8 {
     // status byte within an OrderRecord (Phase 5): 9 u64s + 4×32B + 16B + side+status.
     //   9×8 (u64s: seq/arr/exp/price/amt/minfill/note_amount/total_qty/filled_qty)
     //   + 32 tk + 32 collateral + 32 user_commit + 32 oic + 16 oid + 1 side + 1 status
-    let off = 8 + 32 + 8 + 8 + slot * ORDER_RECORD_SIZE
-        + 8 * 9 + 32 * 4 + 16 + 1;
+    let off = 8 + 32 + 8 + 8 + slot * ORDER_RECORD_SIZE + 8 * 9 + 32 * 4 + 16 + 1;
     acct.data[off]
 }
 
@@ -870,7 +863,7 @@ pub fn make_seed(
         order_inclusion_commitment: oic,
         order_id,
         side,
-        status: 1, // ACTIVE
+        status: 1,     // ACTIVE
         order_type: 0, // LIMIT
     }
 }
@@ -1010,8 +1003,8 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
 pub fn ed25519_program_id() -> Pubkey {
     // base58 decode of "Ed25519SigVerify111111111111111111111111111".
     Pubkey::from([
-        3, 125, 70, 214, 124, 147, 251, 190, 18, 249, 66, 143, 131, 141, 64, 255, 5, 112, 116,
-        73, 39, 244, 138, 100, 252, 202, 112, 68, 128, 0, 0, 0,
+        3, 125, 70, 214, 124, 147, 251, 190, 18, 249, 66, 143, 131, 141, 64, 255, 5, 112, 116, 73,
+        39, 244, 138, 100, 252, 202, 112, 68, 128, 0, 0, 0,
     ])
 }
 
@@ -1027,7 +1020,11 @@ pub fn ed25519_program_id() -> Pubkey {
 ///   2  message_data_size
 ///   2  message_instruction_index = 0xFFFF
 /// Then inline: pubkey (32) || signature (64) || message (N).
-pub fn build_ed25519_verify_ix(pubkey: &[u8; 32], signature: &[u8; 64], message: &[u8]) -> Instruction {
+pub fn build_ed25519_verify_ix(
+    pubkey: &[u8; 32],
+    signature: &[u8; 64],
+    message: &[u8],
+) -> Instruction {
     let header_len: u16 = 16;
     let pk_off: u16 = header_len;
     let sig_off: u16 = pk_off + 32;
@@ -1132,7 +1129,7 @@ pub mod vault_layout {
         + 32 * MERKLE_DEPTH   // zero subtree roots
         + 32 * MERKLE_DEPTH   // right path
         + 1        // roots_head (u8)
-        + 1;       // bump (u8)
+        + 1; // bump (u8)
 }
 
 /// Overwrite `protocol_owner_commitment` + `fee_rate_bps` directly in the
@@ -1223,10 +1220,7 @@ pub fn build_settle_ix(h: &Harness, payload: &MatchResultPayload) -> Instruction
 
 /// One-shot: sign payload with TEE, build (ed25519_verify + tee_forced_settle)
 /// message, wrap in a Transaction.
-pub fn build_settle_tx(
-    h: &Harness,
-    payload: &MatchResultPayload,
-) -> Transaction {
+pub fn build_settle_tx(h: &Harness, payload: &MatchResultPayload) -> Transaction {
     let msg_hash = canonical_payload_hash(payload);
     let sig = h.tee.sign_message(&msg_hash);
     let mut sig_bytes = [0u8; 64];
@@ -1243,4 +1237,3 @@ pub fn build_settle_tx(
         h.svm.latest_blockhash(),
     )
 }
-

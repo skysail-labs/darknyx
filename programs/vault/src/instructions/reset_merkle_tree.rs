@@ -39,7 +39,11 @@ pub struct ResetMerkleTree<'info> {
 
 pub fn reset_merkle_tree_handler(ctx: Context<ResetMerkleTree>) -> Result<()> {
     let cfg = &mut ctx.accounts.vault_config.load_mut()?;
-    require_keys_eq!(ctx.accounts.admin.key(), cfg.admin, VaultError::Unauthorized);
+    require_keys_eq!(
+        ctx.accounts.admin.key(),
+        cfg.admin,
+        VaultError::Unauthorized
+    );
 
     cfg.leaf_count = 0;
     cfg.right_path = [[0u8; 32]; MERKLE_DEPTH as usize];

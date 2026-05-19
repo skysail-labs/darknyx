@@ -134,13 +134,17 @@ pub fn derive_master_viewing_key(seed: &MasterSeed) -> Result<Fr, CryptoError> {
 
 /// Derive an Ed25519 Trading Key at a given rotation offset.
 /// offset = 0 for the first trading key; rotate by incrementing.
-pub fn derive_trading_key_at_offset(seed: &MasterSeed, offset: u64) -> Result<SigningKey, CryptoError> {
+pub fn derive_trading_key_at_offset(
+    seed: &MasterSeed,
+    offset: u64,
+) -> Result<SigningKey, CryptoError> {
     let hk = Hkdf::<Sha256>::new(None, seed.as_bytes());
     let mut info = Vec::with_capacity(INFO_TRADING.len() + 8);
     info.extend_from_slice(INFO_TRADING);
     info.extend_from_slice(&offset.to_le_bytes());
     let mut okm = [0u8; 32];
-    hk.expand(&info, &mut okm).map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
+    hk.expand(&info, &mut okm)
+        .map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
     // Ed25519 accepts any 32-byte secret.
     let secret: SecretKey = okm;
     Ok(SigningKey::from_bytes(&secret))
@@ -152,7 +156,8 @@ pub fn derive_trading_key_at_offset(seed: &MasterSeed, offset: u64) -> Result<Si
 pub fn derive_root_key(seed: &MasterSeed) -> Result<SigningKey, CryptoError> {
     let hk = Hkdf::<Sha256>::new(None, seed.as_bytes());
     let mut okm = [0u8; 32];
-    hk.expand(INFO_ROOT, &mut okm).map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
+    hk.expand(INFO_ROOT, &mut okm)
+        .map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
     Ok(SigningKey::from_bytes(&okm))
 }
 
@@ -171,7 +176,8 @@ pub fn derive_blinding_factor(seed: &MasterSeed, counter: u64) -> Fr {
 fn hkdf_expand_64(ikm: &[u8], info: &[u8]) -> Result<[u8; 64], CryptoError> {
     let hk = Hkdf::<Sha256>::new(None, ikm);
     let mut okm = [0u8; 64];
-    hk.expand(info, &mut okm).map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
+    hk.expand(info, &mut okm)
+        .map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
     Ok(okm)
 }
 

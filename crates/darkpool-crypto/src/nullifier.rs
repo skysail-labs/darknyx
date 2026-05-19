@@ -19,7 +19,10 @@ pub const NULLIFIER_BYTES: usize = 32;
 pub type Nullifier = [u8; NULLIFIER_BYTES];
 
 /// Compute the nullifier for a note given the spending key.
-pub fn nullifier(spending_key: &Fr, note_commitment: &NoteCommitment) -> Result<Nullifier, CryptoError> {
+pub fn nullifier(
+    spending_key: &Fr,
+    note_commitment: &NoteCommitment,
+) -> Result<Nullifier, CryptoError> {
     let c_fr = fr_from_be_bytes(note_commitment)?;
     let h = poseidon_hash(&[*spending_key, c_fr])?;
     Ok(fr_to_be_bytes(&h))

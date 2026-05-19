@@ -28,10 +28,7 @@ pub fn delegate_batch_results_handler(
     market: Pubkey,
 ) -> Result<()> {
     let seed_refs: &[&[u8]] = &[crate::state::BatchResults::SEED, market.as_ref()];
-    ctx.accounts.delegate_pda(
-        &ctx.accounts.payer,
-        seed_refs,
-        DelegateConfig::default(),
-    )?;
+    ctx.accounts
+        .delegate_pda(&ctx.accounts.payer, seed_refs, DelegateConfig::default())?;
     Ok(())
 }

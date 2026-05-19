@@ -46,8 +46,8 @@ impl DarkCLOB {
     }
 
     pub fn find_by_order_id(&self, trading_key: &Pubkey, order_id: &[u8; 16]) -> Option<usize> {
-        self.orders.iter().position(|o| {
-            o.status != 0 && o.trading_key == *trading_key && o.order_id == *order_id
-        })
+        self.orders
+            .iter()
+            .position(|o| o.status != 0 && o.trading_key == *trading_key && o.order_id == *order_id)
     }
 }

@@ -30,10 +30,10 @@ use crate::errors::MatchingError;
 use crate::state::batch_results::BATCH_RESULTS_CAPACITY;
 use crate::state::pyth::read_oracle_price;
 use crate::state::{
-    change_note, BatchResults, MatchResult, MatchingConfig, PendingOrder, PENDING_SIDE_ASK,
-    PENDING_SIDE_BID, PENDING_STATUS_CANCELLED, PENDING_STATUS_EXPIRED, PENDING_STATUS_MATCHED,
-    PENDING_STATUS_PENDING, PENDING_TYPE_FOK, PENDING_TYPE_IOC, MATCH_RESULT_STATUS_FILLED,
-    RELOCK_ORDER_ID_NONE,
+    change_note, BatchResults, MatchResult, MatchingConfig, PendingOrder,
+    MATCH_RESULT_STATUS_FILLED, PENDING_SIDE_ASK, PENDING_SIDE_BID, PENDING_STATUS_CANCELLED,
+    PENDING_STATUS_EXPIRED, PENDING_STATUS_MATCHED, PENDING_STATUS_PENDING, PENDING_TYPE_FOK,
+    PENDING_TYPE_IOC, RELOCK_ORDER_ID_NONE,
 };
 use darkpool_crypto::note::commitment_from_fields;
 
@@ -532,12 +532,10 @@ fn generate_matches<'info>(
 
         let b_remaining_after = bids[bi].amount.saturating_sub(crossable);
         let a_remaining_after = asks[ai].amount.saturating_sub(crossable);
-        let buyer_relock = b_remaining_after > 0
-            && bids[bi].order_type == 0
-            && buyer_change_amt > 0;
-        let seller_relock = a_remaining_after > 0
-            && asks[ai].order_type == 0
-            && seller_change_amt > 0;
+        let buyer_relock =
+            b_remaining_after > 0 && bids[bi].order_type == 0 && buyer_change_amt > 0;
+        let seller_relock =
+            a_remaining_after > 0 && asks[ai].order_type == 0 && seller_change_amt > 0;
 
         let (buyer_relock_order_id, buyer_relock_expiry) = if buyer_relock {
             (bids[bi].order_id, bids[bi].expiry_slot)

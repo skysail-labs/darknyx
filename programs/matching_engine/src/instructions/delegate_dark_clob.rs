@@ -26,10 +26,7 @@ pub fn delegate_dark_clob_handler(ctx: Context<DelegateDarkClob>, market: Pubkey
     // MagicBlock default-picks a validator. For production we'll want the
     // admin to pass a preferred validator; plumb it through the args when
     // the governance story lands.
-    ctx.accounts.delegate_pda(
-        &ctx.accounts.payer,
-        seed_refs,
-        DelegateConfig::default(),
-    )?;
+    ctx.accounts
+        .delegate_pda(&ctx.accounts.payer, seed_refs, DelegateConfig::default())?;
     Ok(())
 }

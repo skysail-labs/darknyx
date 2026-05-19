@@ -39,8 +39,8 @@ use solana_program::hash::hashv;
 use crate::errors::MatchingError;
 use crate::state::{
     PendingOrder, PENDING_SIDE_ASK, PENDING_SIDE_BID, PENDING_STATUS_CANCELLED,
-    PENDING_STATUS_EMPTY, PENDING_STATUS_EXPIRED, PENDING_STATUS_MATCHED,
-    PENDING_STATUS_PENDING, PENDING_TYPE_FOK, PENDING_TYPE_IOC, PENDING_TYPE_LIMIT,
+    PENDING_STATUS_EMPTY, PENDING_STATUS_EXPIRED, PENDING_STATUS_MATCHED, PENDING_STATUS_PENDING,
+    PENDING_TYPE_FOK, PENDING_TYPE_IOC, PENDING_TYPE_LIMIT,
 };
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug)]
@@ -97,10 +97,7 @@ pub struct SubmitOrder<'info> {
     pub pending_order: AccountLoader<'info, PendingOrder>,
 }
 
-pub fn submit_order_handler(
-    ctx: Context<SubmitOrder>,
-    args: SubmitOrderArgs,
-) -> Result<()> {
+pub fn submit_order_handler(ctx: Context<SubmitOrder>, args: SubmitOrderArgs) -> Result<()> {
     // --- Parameter validation ---
     require!(
         args.side == PENDING_SIDE_BID || args.side == PENDING_SIDE_ASK,
@@ -165,11 +162,8 @@ pub fn submit_order_handler(
     };
 
     // --- Inclusion commitment (anchored at submit time) ---
-    let inclusion_commitment = compute_inclusion_commitment(
-        now,
-        &args.note_commitment,
-        &ctx.accounts.trading_key.key(),
-    );
+    let inclusion_commitment =
+        compute_inclusion_commitment(now, &args.note_commitment, &ctx.accounts.trading_key.key());
 
     // --- Write the order intent into the delegated slot ---
     {
@@ -213,12 +207,7 @@ pub fn compute_inclusion_commitment(
     trading_key: &Pubkey,
 ) -> [u8; 32] {
     let slot_bytes = arrival_slot.to_le_bytes();
-    hashv(&[
-        &slot_bytes[..],
-        &note_commitment[..],
-        trading_key.as_ref(),
-    ])
-    .to_bytes()
+    hashv(&[&slot_bytes[..], &note_commitment[..], trading_key.as_ref()]).to_bytes()
 }
 
 #[event]

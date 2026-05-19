@@ -194,8 +194,7 @@ pub fn withdraw_handler(
     // Solvency invariant check (both counters dropped by `amount`).
     ctx.accounts.vault_token_account.reload()?;
     require!(
-        ctx.accounts.outstanding_mint.outstanding
-            <= ctx.accounts.vault_token_account.amount,
+        ctx.accounts.outstanding_mint.outstanding <= ctx.accounts.vault_token_account.amount,
         VaultError::SolvencyInvariantViolated
     );
 

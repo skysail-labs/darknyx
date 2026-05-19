@@ -256,10 +256,8 @@ pub fn tee_forced_settle_handler(
         payload.buyer_fee_amt,
         payload.seller_fee_amt,
     );
-    let (expected_marker_pda, _marker_bump) = Pubkey::find_program_address(
-        &[ValidCreateMarker::SEED, binding.as_ref()],
-        &crate::ID,
-    );
+    let (expected_marker_pda, _marker_bump) =
+        Pubkey::find_program_address(&[ValidCreateMarker::SEED, binding.as_ref()], &crate::ID);
     require_keys_eq!(
         ctx.accounts.valid_create_marker.key(),
         expected_marker_pda,
@@ -275,17 +273,9 @@ pub fn tee_forced_settle_handler(
         // u64 expiry_slot, u8 bump]. We only need expiry_slot here; the payer
         // is read again at close time.
         let data = marker_info.try_borrow_data()?;
-        require!(
-            data.len() >= 8 + 32 + 8,
-            VaultError::InvalidCreateBinding
-        );
-        let expiry_slot = u64::from_le_bytes(
-            data[8 + 32..8 + 32 + 8].try_into().unwrap(),
-        );
-        require!(
-            clock.slot < expiry_slot,
-            VaultError::MarkerExpired
-        );
+        require!(data.len() >= 8 + 32 + 8, VaultError::InvalidCreateBinding);
+        let expiry_slot = u64::from_le_bytes(data[8 + 32..8 + 32 + 8].try_into().unwrap());
+        require!(clock.slot < expiry_slot, VaultError::MarkerExpired);
     }
     {
         let lock_a = ctx.accounts.note_lock_a.load()?;
@@ -668,8 +658,8 @@ pub fn verify_tee_signature(
     };
 
     let ai = instructions_sysvar.to_account_info();
-    let current_ix_idx = load_current_index_checked(&ai)
-        .map_err(|_| error!(VaultError::InvalidTeeSignature))?;
+    let current_ix_idx =
+        load_current_index_checked(&ai).map_err(|_| error!(VaultError::InvalidTeeSignature))?;
 
     // Walk every instruction in the tx except ourselves, looking for a
     // single Ed25519Program precompile entry with matching (pk, msg).
@@ -764,10 +754,7 @@ mod tests {
             0xFC, 0xE7, 0x1F, 0x92,
         ];
         if hash != expected {
-            panic!(
-                "canonical_payload_hash drifted — got {:02X?}",
-                hash
-            );
+            panic!("canonical_payload_hash drifted — got {:02X?}", hash);
         }
     }
 }

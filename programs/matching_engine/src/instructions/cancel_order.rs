@@ -11,9 +11,7 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::MatchingError;
-use crate::state::{
-    PendingOrder, PENDING_STATUS_CANCELLED, PENDING_STATUS_PENDING,
-};
+use crate::state::{PendingOrder, PENDING_STATUS_CANCELLED, PENDING_STATUS_PENDING};
 
 #[derive(Accounts)]
 #[instruction(market: Pubkey, slot_idx: u8)]
@@ -34,11 +32,7 @@ pub struct CancelOrder<'info> {
     pub pending_order: AccountLoader<'info, PendingOrder>,
 }
 
-pub fn cancel_order_handler(
-    ctx: Context<CancelOrder>,
-    market: Pubkey,
-    slot_idx: u8,
-) -> Result<()> {
+pub fn cancel_order_handler(ctx: Context<CancelOrder>, market: Pubkey, slot_idx: u8) -> Result<()> {
     let order_id;
     {
         let slot = ctx.accounts.pending_order.load()?;
@@ -47,10 +41,7 @@ pub fn cancel_order_handler(
             MatchingError::UnauthorizedTradingKey
         );
         require!(slot.market == market, MatchingError::MarketMismatch);
-        require!(
-            slot.slot_idx == slot_idx,
-            MatchingError::InvalidPendingSlot
-        );
+        require!(slot.slot_idx == slot_idx, MatchingError::InvalidPendingSlot);
         require!(
             slot.status == PENDING_STATUS_PENDING,
             MatchingError::OrderNotFound

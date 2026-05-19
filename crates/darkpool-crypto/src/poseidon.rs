@@ -20,12 +20,7 @@ use solana_poseidon::{hashv, Endianness, Parameters};
 ///
 /// Supported arities: 1..=12 (light-poseidon / BN254 Poseidon spec).
 pub fn poseidon_hash(inputs: &[Fr]) -> Result<Fr, CryptoError> {
-    let bytes = poseidon_hash_bytes(
-        &inputs
-            .iter()
-            .map(fr_to_be_bytes)
-            .collect::<Vec<_>>(),
-    )?;
+    let bytes = poseidon_hash_bytes(&inputs.iter().map(fr_to_be_bytes).collect::<Vec<_>>())?;
     fr_from_be_bytes(&bytes)
 }
 
@@ -42,13 +37,14 @@ pub fn poseidon_hash_bytes(inputs: &[[u8; FR_BYTES]]) -> Result<[u8; FR_BYTES], 
 
     #[cfg(not(target_os = "solana"))]
     {
-    let mut hasher = Poseidon::<Fr>::new_circom(inputs.len())
-        .map_err(|e| CryptoError::Poseidon(format!("init (arity {}): {:?}", inputs.len(), e)))?;
-    let input_refs: Vec<&[u8]> = inputs.iter().map(|b| b.as_slice()).collect();
-    let out = hasher
-        .hash_bytes_be(&input_refs)
-        .map_err(|e| CryptoError::Poseidon(format!("hash: {:?}", e)))?;
-    Ok(out)
+        let mut hasher = Poseidon::<Fr>::new_circom(inputs.len()).map_err(|e| {
+            CryptoError::Poseidon(format!("init (arity {}): {:?}", inputs.len(), e))
+        })?;
+        let input_refs: Vec<&[u8]> = inputs.iter().map(|b| b.as_slice()).collect();
+        let out = hasher
+            .hash_bytes_be(&input_refs)
+            .map_err(|e| CryptoError::Poseidon(format!("hash: {:?}", e)))?;
+        Ok(out)
     }
 }
 
