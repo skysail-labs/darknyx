@@ -584,9 +584,7 @@ pub fn verify_tee_signature(
     expected_pubkey: &Pubkey,
     expected_msg: &[u8; 32],
 ) -> Result<()> {
-    use solana_program::sysvar::instructions::{
-        load_instruction_at_checked,
-    };
+    use solana_program::sysvar::instructions::load_instruction_at_checked;
 
     let ai = instructions_sysvar.to_account_info();
     // The sysvar data starts with a u16 instruction count at offset 0.
@@ -595,7 +593,8 @@ pub fn verify_tee_signature(
     // Previous code used `current_ix_idx + 8` which silently skipped the
     // precompile if it was placed > 8 slots after the settle ix.
     let total_ix_count: usize = {
-        let data = ai.try_borrow_data()
+        let data = ai
+            .try_borrow_data()
             .map_err(|_| error!(VaultError::InvalidTeeSignature))?;
         if data.len() < 2 {
             return Err(error!(VaultError::InvalidTeeSignature));
@@ -700,10 +699,7 @@ mod tests {
             0xFC, 0xE7, 0x1F, 0x92,
         ];
         if hash != expected {
-            panic!(
-                "canonical_payload_hash drifted — got {:02X?}",
-                hash
-            );
+            panic!("canonical_payload_hash drifted — got {:02X?}", hash);
         }
     }
 }

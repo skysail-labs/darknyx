@@ -87,7 +87,15 @@ pub fn commitment_from_fields(
     let nonce_fr = fr_from_be_bytes(nonce)?;
     let blinding_fr = fr_from_be_bytes(blinding_r)?;
 
-    let inputs: [Fr; 7] = [Fr::from(DOMAIN_NOTE), mint_lo, mint_hi, amount_fr, owner_fr, nonce_fr, blinding_fr];
+    let inputs: [Fr; 7] = [
+        Fr::from(DOMAIN_NOTE),
+        mint_lo,
+        mint_hi,
+        amount_fr,
+        owner_fr,
+        nonce_fr,
+        blinding_fr,
+    ];
     let h = poseidon_hash(&inputs)?;
     Ok(fr_to_be_bytes(&h))
 }

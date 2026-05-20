@@ -45,20 +45,20 @@ pub struct UserCommitmentInputs {
 }
 
 // Domain tag constants — must match circuit.circom DOMAIN_* literals exactly.
-const DOMAIN_ROOT:  u64 = 10;
+const DOMAIN_ROOT: u64 = 10;
 const DOMAIN_SPEND: u64 = 11;
-const DOMAIN_VIEW:  u64 = 12;
-const DOMAIN_LEAF:  u64 = 13;
-const DOMAIN_TOP:   u64 = 14;
+const DOMAIN_VIEW: u64 = 12;
+const DOMAIN_LEAF: u64 = 13;
+const DOMAIN_TOP: u64 = 14;
 
 /// Compute the 32-byte User Commitment (big-endian).
 pub fn user_commitment_from_keys(inputs: &UserCommitmentInputs) -> Result<Fr, CryptoError> {
     let [root_lo, root_hi] = pubkey_to_fr_pair(&inputs.root_key_pubkey);
 
-    let root_hash  = poseidon_hash(&[Fr::from(DOMAIN_ROOT),  root_lo, root_hi, inputs.r0])?;
+    let root_hash = poseidon_hash(&[Fr::from(DOMAIN_ROOT), root_lo, root_hi, inputs.r0])?;
     let spend_hash = poseidon_hash(&[Fr::from(DOMAIN_SPEND), inputs.spending_key, inputs.r1])?;
-    let view_hash  = poseidon_hash(&[Fr::from(DOMAIN_VIEW),  inputs.viewing_key, inputs.r2])?;
-    let leaf_pair  = poseidon_hash(&[Fr::from(DOMAIN_LEAF),  root_hash, spend_hash])?;
+    let view_hash = poseidon_hash(&[Fr::from(DOMAIN_VIEW), inputs.viewing_key, inputs.r2])?;
+    let leaf_pair = poseidon_hash(&[Fr::from(DOMAIN_LEAF), root_hash, spend_hash])?;
     poseidon_hash(&[Fr::from(DOMAIN_TOP), leaf_pair, view_hash])
 }
 

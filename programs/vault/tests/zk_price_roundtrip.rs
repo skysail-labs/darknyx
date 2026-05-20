@@ -77,7 +77,13 @@ fn negate_g1(point: &[u8; 64]) -> [u8; 64] {
     let mut borrow: i16 = 0;
     for i in (0..32).rev() {
         let diff = P[i] as i16 - point[32 + i] as i16 - borrow;
-        out[32 + i] = if diff < 0 { borrow = 1; (diff + 256) as u8 } else { borrow = 0; diff as u8 };
+        out[32 + i] = if diff < 0 {
+            borrow = 1;
+            (diff + 256) as u8
+        } else {
+            borrow = 0;
+            diff as u8
+        };
     }
     out
 }
@@ -130,8 +136,11 @@ fn valid_price_roundtrip() {
         } else {
             let mut s = String::new();
             for (i, limb) in n.iter().rev().enumerate() {
-                if i == 0 { s.push_str(&limb.to_string()); }
-                else { s.push_str(&format!("{:09}", limb)); }
+                if i == 0 {
+                    s.push_str(&limb.to_string());
+                } else {
+                    s.push_str(&format!("{:09}", limb));
+                }
             }
             s
         }
@@ -166,7 +175,11 @@ fn valid_price_roundtrip() {
     let pi_a = groth16_g1_bytes(&proof_json["pi_a"]);
     let pi_b = groth16_g2_bytes(&proof_json["pi_b"]);
     let pi_c = groth16_g1_bytes(&proof_json["pi_c"]);
-    let proof = Groth16Proof { pi_a: negate_g1(&pi_a), pi_b, pi_c };
+    let proof = Groth16Proof {
+        pi_a: negate_g1(&pi_a),
+        pi_b,
+        pi_c,
+    };
 
     // Wire order (circuit.sym): wire 1 = price_commitment, wire 2 = batch_slot
     let batch_slot_be32 = {

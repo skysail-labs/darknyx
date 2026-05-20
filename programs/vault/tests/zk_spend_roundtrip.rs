@@ -202,8 +202,7 @@ fn valid_spend_roundtrip() {
     );
 
     // nullifier = Poseidon3(DOMAIN_NULL=3, spendingKey, noteCommitment)
-    let nullifier =
-        poseidon_hash(&[Fr::from(3u64), spending_key, note_commitment]).unwrap();
+    let nullifier = poseidon_hash(&[Fr::from(3u64), spending_key, note_commitment]).unwrap();
 
     // ----- Write snarkjs input.json -----
     let tmp = std::env::temp_dir().join("nyx_spend_roundtrip");
