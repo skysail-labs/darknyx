@@ -57,9 +57,51 @@ env:
   # code without poisoning third-party builds.
 
 jobs:
+  # ------------------------------------------------------------------
+  # Fast path: detect which parts of the tree changed. Downstream jobs
+  # use `needs.changes.outputs.*` to decide whether to run or skip.
+  # On push-to-base (not a PR), always run everything.
+  # ------------------------------------------------------------------
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      circuits: ${{ steps.filter.outputs.circuits }}
+      sdk: ${{ steps.filter.outputs.sdk }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'programs/**'
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+            circuits:
+              - 'circuits/**'
+              - 'scripts/ci-build-circuits.sh'
+              - 'package.json'
+              - 'package-lock.json'
+            sdk:
+              - 'packages/sdk/**'
+              - 'package.json'
+              - 'package-lock.json'
+
   rust:
     name: Rust — fmt, clippy, unit tests, examples
     runs-on: ubuntu-latest
+    needs: [changes]
+    # Always run on push to base branches; skip on PRs that touch nothing Rust.
+    if: >-
+      github.event_name == 'push' ||
+      needs.changes.outputs.rust == 'true'
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -127,6 +169,11 @@ jobs:
   circuits:
     name: Circuits — circom + snarkjs build
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      github.event_name == 'push' ||
+      needs.changes.outputs.circuits == 'true' ||
+      needs.changes.outputs.rust == 'true'
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -185,7 +232,16 @@ jobs:
   sdk:
     name: SDK — parity + transport + provers (vitest)
     runs-on: ubuntu-latest
-    needs: [rust, circuits]
+    needs: [changes, rust, circuits]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.sdk == 'true' ||
+        needs.changes.outputs.rust == 'true' ||
+        needs.changes.outputs.circuits == 'true'
+      ) &&
+      needs.rust.result != 'failure' &&
+      needs.circuits.result != 'failure'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -205,17 +261,22 @@ jobs:
       # or `circuits/build/...` prefixes). Re-anchor on download with
       # an explicit `path:` so the binaries and circuit artefacts land
       # where the tests expect them.
+      # These artifacts may not exist when the upstream job was skipped
+      # (e.g. SDK-only change). The prover / parity tests self-skip via
+      # RUN_* env checks when wasm/zkey/binaries are absent.
       - name: Download Rust example binaries
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: darkpool-crypto-examples
           path: target/debug/examples
 
       - name: Make example binaries executable
-        run: chmod +x target/debug/examples/*
+        run: chmod +x target/debug/examples/* 2>/dev/null || true
 
       - name: Download circuit build artefacts
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: circuit-build
           path: circuits/build
@@ -295,6 +356,10 @@ jobs:
   sbf-build:
     name: SBF — cargo build-sbf
     runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      github.event_name == 'push' ||
+      needs.changes.outputs.rust == 'true'
     timeout-minutes: 25
     env:
       # Match the developer's local Agave install. v2.x bundles
@@ -334,7 +399,11 @@ jobs:
           # Separate key from the host-rust job: build-sbf writes
           # intermediates under target/sbf-solana-solana/ and the
           # registry shape diverges enough that sharing slows both.
+          # Include a source hash so the cache busts when programs/ or
+          # crates/ change — without this the key never busts and stale
+          # .so files can pass CI after a code change.
           shared-key: pr-checks-sbf
+          key: pr-checks-sbf-${{ hashFiles('programs/**/*.rs', 'crates/**/*.rs', 'Cargo.lock') }}
           cache-on-failure: true
 
       # Empirically, `cargo build-sbf` at the workspace root only emits a
@@ -385,7 +454,13 @@ jobs:
   vault-zk:
     name: Vault ZK — host round-trips + Merkle invariants
     runs-on: ubuntu-latest
-    needs: [circuits]
+    needs: [changes, circuits]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.rust == 'true' ||
+        needs.changes.outputs.circuits == 'true'
+      ) && needs.circuits.result != 'failure'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -433,7 +508,15 @@ jobs:
   vault-litesvm:
     name: Vault LiteSVM — registration + governance
     runs-on: ubuntu-latest
-    needs: [sbf-build, circuits]
+    needs: [changes, sbf-build, circuits]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.rust == 'true' ||
+        needs.changes.outputs.circuits == 'true'
+      ) &&
+      needs['sbf-build'].result != 'failure' &&
+      needs.circuits.result != 'failure'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -485,7 +568,12 @@ jobs:
   matching-engine-litesvm:
     name: Matching engine LiteSVM — settle + order book
     runs-on: ubuntu-latest
-    needs: [sbf-build]
+    needs: [changes, sbf-build]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.rust == 'true'
+      ) && needs['sbf-build'].result != 'failure'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -521,6 +609,7 @@ jobs:
   ci-success:
     name: pr-checks success
     needs:
+      - changes
       - rust
       - circuits
       - sdk
@@ -533,16 +622,19 @@ jobs:
     if: always()
     steps:
       - name: Verify all required jobs passed
+        # 'skipped' is acceptable — it means the paths filter determined
+        # that job was not relevant to this change. 'failure' and
+        # 'cancelled' are hard failures.
         if: >-
           ${{
-            needs.rust.result != 'success' ||
-            needs.circuits.result != 'success' ||
-            needs.sdk.result != 'success' ||
+            (needs.rust.result != 'success' && needs.rust.result != 'skipped') ||
+            (needs.circuits.result != 'success' && needs.circuits.result != 'skipped') ||
+            (needs.sdk.result != 'success' && needs.sdk.result != 'skipped') ||
             needs.consistency.result != 'success' ||
-            needs['sbf-build'].result != 'success' ||
-            needs['vault-zk'].result != 'success' ||
-            needs['vault-litesvm'].result != 'success' ||
-            needs['matching-engine-litesvm'].result != 'success'
+            (needs['sbf-build'].result != 'success' && needs['sbf-build'].result != 'skipped') ||
+            (needs['vault-zk'].result != 'success' && needs['vault-zk'].result != 'skipped') ||
+            (needs['vault-litesvm'].result != 'success' && needs['vault-litesvm'].result != 'skipped') ||
+            (needs['matching-engine-litesvm'].result != 'success' && needs['matching-engine-litesvm'].result != 'skipped')
           }}
         run: |
           echo "rust:                     ${{ needs.rust.result }}"
