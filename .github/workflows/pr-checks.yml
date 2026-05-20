@@ -349,8 +349,30 @@ jobs:
           shared-key: pr-checks-sbf
           cache-on-failure: true
 
-      - name: cargo build-sbf (vault + matching_engine)
-        run: cargo build-sbf
+      # Empirically, `cargo build-sbf` at the workspace root only emits a
+      # full .so for one program — the other gets an 896-byte stub. The
+      # workaround the project's own deploy-devnet.sh recommends is to
+      # invoke build-sbf per-program with an explicit manifest path. Do
+      # that here so the artefact downstream litesvm jobs consume holds
+      # two real binaries.
+      - name: cargo build-sbf — vault
+        run: cargo build-sbf --manifest-path programs/vault/Cargo.toml
+
+      - name: cargo build-sbf — matching_engine
+        run: cargo build-sbf --manifest-path programs/matching_engine/Cargo.toml
+
+      - name: Sanity-check .so sizes (must be > 100 KB each)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for so in target/deploy/vault.so target/deploy/matching_engine.so; do
+            sz=$(stat -c%s "$so" 2>/dev/null || stat -f%z "$so")
+            echo "$so: $sz bytes"
+            if [[ "$sz" -lt 102400 ]]; then
+              echo "::error file=$so::expected a real Solana program (>100 KB); got a stub ($sz bytes). cargo build-sbf likely emitted only the most-recent program."
+              exit 1
+            fi
+          done
 
       - name: Upload program .so files for litesvm jobs
         uses: actions/upload-artifact@v4
