@@ -78,29 +78,25 @@ template ValidInput(merkleDepth) {
     signal input merklePath[merkleDepth];
     signal input merkleIndices[merkleDepth];
 
-    // Constraint: owner_commitment = Poseidon2(spendingKey, ownerCommitmentBlinding)
-    // This is the ownership constraint — only someone who knows `spendingKey`
-    // can produce a witness that satisfies this when paired with a given
-    // owner_commitment. Without this constraint, anyone who watched the
-    // depositor's `deposit` tx (which reveals owner_commitment, nonce,
-    // blinding_r in cleartext) could lock that note.
-    component ownerHash = Poseidon(2);
-    ownerHash.inputs[0] <== spendingKey;
-    ownerHash.inputs[1] <== ownerCommitmentBlinding;
+    // owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, ownerCommitmentBlinding)
+    // Domain tag matches crates/darkpool-crypto/src/note.rs::DOMAIN_OWNER.
+    component ownerHash = Poseidon(3);
+    ownerHash.inputs[0] <== 1;   // DOMAIN_OWNER
+    ownerHash.inputs[1] <== spendingKey;
+    ownerHash.inputs[2] <== ownerCommitmentBlinding;
     signal ownerCommitment;
     ownerCommitment <== ownerHash.out;
 
-    // Constraint: the public noteCommitment must equal the Poseidon hash of
-    // the declared (mint, amount, owner, nonce, blinding) tuple. This pins
-    // mint and amount cryptographically — the on-chain handler can trust the
-    // public inputs to be the *real* values of the note.
-    component noteHash = Poseidon(6);
-    noteHash.inputs[0] <== tokenMint[0];
-    noteHash.inputs[1] <== tokenMint[1];
-    noteHash.inputs[2] <== amount;
-    noteHash.inputs[3] <== ownerCommitment;
-    noteHash.inputs[4] <== nonce;
-    noteHash.inputs[5] <== blindingR;
+    // noteCommitment = Poseidon7(DOMAIN_NOTE=2, mint_lo, mint_hi, amount, owner, nonce, blinding)
+    // Domain tag matches crates/darkpool-crypto/src/note.rs::DOMAIN_NOTE.
+    component noteHash = Poseidon(7);
+    noteHash.inputs[0] <== 2;   // DOMAIN_NOTE
+    noteHash.inputs[1] <== tokenMint[0];
+    noteHash.inputs[2] <== tokenMint[1];
+    noteHash.inputs[3] <== amount;
+    noteHash.inputs[4] <== ownerCommitment;
+    noteHash.inputs[5] <== nonce;
+    noteHash.inputs[6] <== blindingR;
     noteCommitment === noteHash.out;
 
     // Constraint: note is in the Merkle tree at merkleRoot.
