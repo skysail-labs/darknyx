@@ -191,4 +191,12 @@ pub mod vault {
     pub fn reset_merkle_tree(ctx: Context<ResetMerkleTree>) -> Result<()> {
         reset_merkle_tree::reset_merkle_tree_handler(ctx)
     }
+
+    /// One-shot migration: realloc `VaultConfig` to the current Rust
+    /// struct size. Run once per devnet deployment whenever a layout
+    /// change (e.g. `ROOT_HISTORY_SIZE` bump) makes the existing PDA
+    /// shorter than `size_of::<VaultConfig>()`. Admin-gated.
+    pub fn realloc_vault_config(ctx: Context<ReallocVaultConfig>) -> Result<()> {
+        realloc_vault_config::realloc_vault_config_handler(ctx)
+    }
 }
