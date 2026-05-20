@@ -1250,7 +1250,7 @@ pub fn vault_protocol_owner(h: &Harness) -> [u8; 32] {
 ///   32 admin + 32 tee_pubkey + 32 root_key
 ///   8  leaf_count
 ///   32 current_root
-///   32 * 32  roots
+///   32 * 64  roots
 ///   32 * 20  zero_subtree_roots
 ///   32 * 20  right_path
 ///   1  roots_head (u8)
@@ -1259,7 +1259,7 @@ pub fn vault_protocol_owner(h: &Harness) -> [u8; 32] {
 ///   2  fee_rate_bps (u16)
 ///   4  _padding
 pub mod vault_layout {
-    pub const ROOT_HISTORY_SIZE: usize = 32;
+    pub const ROOT_HISTORY_SIZE: usize = 64;
     pub const MERKLE_DEPTH: usize = 20;
     pub const PROTOCOL_OWNER_OFFSET: usize = 8
         + 32 * 3   // admin + tee + root
