@@ -1,15 +1,13 @@
 /**
  * Cross-environment parity for the Nullifier formula.
  *
- * Formula (must match `circuits/valid_spend/circuit.circom` lines 97-101):
+ * Formula (must match `circuits/valid_spend/circuit.circom`):
  *
- *   nullifier = Poseidon2( spending_key_fr, note_commitment_fr )
+ *   nullifier = Poseidon3( DOMAIN_NULL=3, spending_key_fr, note_commitment_fr )
  *
- * NOTE: some legacy docs describe the nullifier as `Poseidon(spending_key,
- * leaf_index)`. That is wrong — both the live circuit and the Rust/TS
- * implementations bind to the note commitment itself. This test pins the
- * correct formula in place; any drift from the circuit will fail here before
- * it has a chance to fail a real settlement.
+ * Domain tag prevents second-preimage collisions with owner_commitment (DOMAIN_OWNER=1)
+ * and note_commitment (DOMAIN_NOTE=2). This test pins the correct formula in place;
+ * any drift from the circuit will fail here before it has a chance to fail a real settlement.
  *
  * Sibling: `note-commitment-parity.test.ts`.
  */

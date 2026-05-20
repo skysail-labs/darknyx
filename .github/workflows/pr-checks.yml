@@ -160,26 +160,14 @@ jobs:
           cd /tmp/circom
           cargo install --path circom --locked
 
-      # PTAU is ~72 MB and never changes. Cache aggressively.
-      - name: Cache PTAU file
-        id: cache-ptau
-        uses: actions/cache@v4
-        with:
-          path: scripts/ptau/powersOfTau28_hez_final_16.ptau
-          key: ptau-hez-final-16
-
-      - name: Download PTAU (cache miss only)
-        if: steps.cache-ptau.outputs.cache-hit != 'true'
-        run: bash scripts/download-ptau.sh
-
-      # Build all four circuits via the project's existing script. The
-      # snarkjs dev contribution is non-deterministic across runs (we
-      # do not rebuild the deterministic invariant here — that lands in
-      # Phase 3's litesvm checks), so we always rebuild from scratch.
-      # Build is ~30s for all four, so caching isn't worth the
-      # complexity.
-      - name: Build circuits (circom + snarkjs ceremony)
-        run: bash scripts/build-circuits.sh
+      # Compile wasm from source; use committed circuit_final.zkey files.
+      # groth16 setup is non-deterministic, so we never re-run the ceremony
+      # in CI. The committed zkeys were generated locally with `zkey beacon`
+      # and match the Rust VK constants in programs/vault/src/zk/vk_*.rs.
+      # To update after a circuit change: run build-circuits.sh locally,
+      # regenerate Rust VKs with parse-vk-to-rust.js, commit both.
+      - name: Build circuits (wasm only; zkeys from repo)
+        run: bash scripts/ci-build-circuits.sh
 
       # Upload the build output for the sdk job. Only the artefacts the
       # prover tests actually consume: `.wasm` and `.zkey`. We don't
@@ -430,6 +418,7 @@ jobs:
           cargo test -p vault \
             --test zk_roundtrip \
             --test zk_spend_roundtrip \
+            --test zk_price_roundtrip \
             --test merkle_host \
             -- --nocapture
 

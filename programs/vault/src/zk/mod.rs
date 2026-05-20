@@ -7,6 +7,7 @@
 pub mod verifier;
 pub mod vk_valid_create;
 pub mod vk_valid_input;
+pub mod vk_valid_price;
 pub mod vk_valid_spend;
 pub mod vk_valid_wallet_create;
 

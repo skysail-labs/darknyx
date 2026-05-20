@@ -1,16 +1,15 @@
 //! Cross-environment VALID_SPEND round-trip.
 //!
-//! This is the most important single test in Phase 1 per Section 22.4 of the spec
-//! ("CRITICAL COMPATIBILITY CHECK"). It exercises:
+//! This is the most important single test in Phase 1. It exercises:
 //!
-//!   1. Merkle-tree construction in Rust (via our `append_leaf`) producing the
-//!      same root the circom `MerkleTreeChecker` verifies.
-//!   2. Note commitment derivation (Poseidon6) matching the circuit.
-//!   3. Owner commitment derivation (Poseidon2) matching the circuit.
-//!   4. Nullifier derivation (Poseidon2) matching the circuit.
-//!   5. snarkjs Groth16 proof generation.
-//!   6. `groth16-solana` verification producing `Ok(())` (the exact code that
-//!      runs on-chain).
+//!   1. Merkle-tree construction in Rust (via `append_leaf`) producing the same
+//!      root the circom `MerkleTreeChecker` verifies.
+//!   2. Owner commitment: Poseidon3(DOMAIN_OWNER=1, sk, r_owner)
+//!   3. Note commitment: Poseidon7(DOMAIN_NOTE=2, mint_lo, mint_hi, amt, owner, nonce, r)
+//!   4. Nullifier:       Poseidon3(DOMAIN_NULL=3,  sk, noteCommitment)
+//!   5. noteCommitment is the 6th public input/output (index 5).
+//!   6. snarkjs Groth16 proof generation.
+//!   7. `groth16-solana` verification producing `Ok(())`.
 //!
 //! If this test passes, the entire Phase 1 ZK pipeline is sound.
 
@@ -171,11 +170,15 @@ fn valid_spend_roundtrip() {
 
     let spending_key = fr_from_uniform_bytes(&[0x41u8; 32]);
     let owner_commit_blinding = fr_from_uniform_bytes(&[0x42u8; 32]);
-    let owner_commitment = poseidon_hash(&[spending_key, owner_commit_blinding]).unwrap();
+    // owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, r_owner)
+    let owner_commitment =
+        poseidon_hash(&[Fr::from(1u64), spending_key, owner_commit_blinding]).unwrap();
     let nonce = fr_from_uniform_bytes(&[0x43u8; 32]);
     let blinding_r = fr_from_uniform_bytes(&[0x44u8; 32]);
 
+    // note_commitment = Poseidon7(DOMAIN_NOTE=2, mint_lo, mint_hi, amount, owner, nonce, r)
     let note_commitment = poseidon_hash(&[
+        Fr::from(2u64),
         mint_lo,
         mint_hi,
         amount_fr,
@@ -198,8 +201,8 @@ fn valid_spend_roundtrip() {
          indicates our Merkle algorithm diverges from expected"
     );
 
-    // ----- Nullifier -----
-    let nullifier = poseidon_hash(&[spending_key, note_commitment]).unwrap();
+    // nullifier = Poseidon3(DOMAIN_NULL=3, spendingKey, noteCommitment)
+    let nullifier = poseidon_hash(&[Fr::from(3u64), spending_key, note_commitment]).unwrap();
 
     // ----- Write snarkjs input.json -----
     let tmp = std::env::temp_dir().join("nyx_spend_roundtrip");
@@ -281,17 +284,27 @@ fn valid_spend_roundtrip() {
         pi_c,
     };
 
-    // Public inputs: [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount]
-    let public_inputs: [[u8; 32]; 5] = [
+    // Public signal wire order (from circuit.sym — circom places outputs before inputs):
+    //   wire 1: noteCommitment  (signal output — appears first)
+    //   wire 2: merkleRoot
+    //   wire 3: nullifier
+    //   wire 4: tokenMint[0]
+    //   wire 5: tokenMint[1]
+    //   wire 6: amount
+    // groth16-solana IC array: IC[0] is the constant term, IC[i] corresponds to wire i.
+    // public.json from snarkjs lists them in this same wire-index order.
+    let amount_be32 = {
+        let mut b = [0u8; 32];
+        b[24..32].copy_from_slice(&amount_u64.to_be_bytes());
+        b
+    };
+    let public_inputs: [[u8; 32]; 6] = [
+        note_commitment_bytes,
         witness_root,
         fr_to_be_bytes(&nullifier),
         fr_to_be_bytes(&mint_lo),
         fr_to_be_bytes(&mint_hi),
-        {
-            let mut b = [0u8; 32];
-            b[24..32].copy_from_slice(&amount_u64.to_be_bytes());
-            b
-        },
+        amount_be32,
     ];
 
     let vk = make_vk(
@@ -301,26 +314,32 @@ fn valid_spend_roundtrip() {
         &VALID_SPEND_DELTA_G2,
         &VALID_SPEND_IC,
     );
-    verify_groth16_proof::<5>(&vk, &proof, &public_inputs)
+    verify_groth16_proof::<6>(&vk, &proof, &public_inputs)
         .expect("VALID_SPEND proof verification failed");
 
     // ----- Negative: mutated proof must be rejected (ZK soundness) -----
     let mut tampered = proof.clone();
     tampered.pi_c[0] ^= 0x01;
-    let res = verify_groth16_proof::<5>(&vk, &tampered, &public_inputs);
+    let res = verify_groth16_proof::<6>(&vk, &tampered, &public_inputs);
     assert!(res.is_err(), "mutated proof must not verify");
 
-    // ----- Negative: wrong public input (amount) must be rejected -----
+    // ----- Negative: wrong public input (amount, index 5) must be rejected -----
     let mut bad_inputs = public_inputs;
-    bad_inputs[4][31] ^= 0x01;
-    let res2 = verify_groth16_proof::<5>(&vk, &proof, &bad_inputs);
-    assert!(res2.is_err(), "mutated public input must not verify");
+    bad_inputs[5][31] ^= 0x01;
+    let res2 = verify_groth16_proof::<6>(&vk, &proof, &bad_inputs);
+    assert!(res2.is_err(), "mutated amount must not verify");
 
-    // ----- Negative: stale Merkle root must be rejected -----
+    // ----- Negative: stale Merkle root (index 1) must be rejected -----
     let mut stale_inputs = public_inputs;
-    stale_inputs[0][0] ^= 0x01;
-    let res3 = verify_groth16_proof::<5>(&vk, &proof, &stale_inputs);
+    stale_inputs[1][0] ^= 0x01;
+    let res3 = verify_groth16_proof::<6>(&vk, &proof, &stale_inputs);
     assert!(res3.is_err(), "stale Merkle root must not verify");
+
+    // ----- Negative: wrong note_commitment (index 0) must be rejected -----
+    let mut bad_nc = public_inputs;
+    bad_nc[0][0] ^= 0x01;
+    let res4 = verify_groth16_proof::<6>(&vk, &proof, &bad_nc);
+    assert!(res4.is_err(), "tampered note_commitment must not verify");
 }
 
 // ----- Same proof parsing helpers as zk_roundtrip.rs -----

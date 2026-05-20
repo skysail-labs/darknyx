@@ -2,13 +2,14 @@
 //!
 //! Formula (must be byte-identical across Rust, circom, on-chain):
 //!
+//! DOMAIN_NULL=3 is prepended to prevent second-preimage collisions with
+//! owner_commitment (DOMAIN_OWNER=1) and note_commitment (DOMAIN_NOTE=2).
+//!
 //! ```text
-//!     nullifier = Poseidon2( spending_key_fr, note_commitment_fr )
+//!     nullifier = Poseidon3( DOMAIN_NULL=3, spending_key_fr, note_commitment_fr )
 //! ```
 //!
-//! The spending key is a BN254 field element; the note commitment is also a
-//! field element. Only the note owner (who knows the spending key) can compute
-//! this value.
+//! Only the note owner (who knows the spending key) can compute this value.
 
 use crate::errors::CryptoError;
 use crate::field::{fr_from_be_bytes, fr_to_be_bytes, Fr};
@@ -18,13 +19,15 @@ use crate::poseidon::poseidon_hash;
 pub const NULLIFIER_BYTES: usize = 32;
 pub type Nullifier = [u8; NULLIFIER_BYTES];
 
+const DOMAIN_NULL: u64 = 3;
+
 /// Compute the nullifier for a note given the spending key.
 pub fn nullifier(
     spending_key: &Fr,
     note_commitment: &NoteCommitment,
 ) -> Result<Nullifier, CryptoError> {
     let c_fr = fr_from_be_bytes(note_commitment)?;
-    let h = poseidon_hash(&[*spending_key, c_fr])?;
+    let h = poseidon_hash(&[Fr::from(DOMAIN_NULL), *spending_key, c_fr])?;
     Ok(fr_to_be_bytes(&h))
 }
 

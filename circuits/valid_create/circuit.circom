@@ -88,25 +88,27 @@ template ValidCreate() {
     //     The chain already knows note_a_commitment is in the Merkle tree
     //     (via lock_note's VALID_INPUT proof). This circuit chains to that.
     // -----------------------------------------------------------------------
-    component hashA = Poseidon(6);
-    hashA.inputs[0] <== quote_mint[0];
-    hashA.inputs[1] <== quote_mint[1];
-    hashA.inputs[2] <== a_amount;
-    hashA.inputs[3] <== a_owner_commit;
-    hashA.inputs[4] <== a_nonce;
-    hashA.inputs[5] <== a_blinding;
+    component hashA = Poseidon(7);
+    hashA.inputs[0] <== 2;   // DOMAIN_NOTE
+    hashA.inputs[1] <== quote_mint[0];
+    hashA.inputs[2] <== quote_mint[1];
+    hashA.inputs[3] <== a_amount;
+    hashA.inputs[4] <== a_owner_commit;
+    hashA.inputs[5] <== a_nonce;
+    hashA.inputs[6] <== a_blinding;
     note_a_commitment === hashA.out;
 
     // -----------------------------------------------------------------------
     // (2) Same for note_b on the seller side.
     // -----------------------------------------------------------------------
-    component hashB = Poseidon(6);
-    hashB.inputs[0] <== base_mint[0];
-    hashB.inputs[1] <== base_mint[1];
-    hashB.inputs[2] <== b_amount;
-    hashB.inputs[3] <== b_owner_commit;
-    hashB.inputs[4] <== b_nonce;
-    hashB.inputs[5] <== b_blinding;
+    component hashB = Poseidon(7);
+    hashB.inputs[0] <== 2;   // DOMAIN_NOTE
+    hashB.inputs[1] <== base_mint[0];
+    hashB.inputs[2] <== base_mint[1];
+    hashB.inputs[3] <== b_amount;
+    hashB.inputs[4] <== b_owner_commit;
+    hashB.inputs[5] <== b_nonce;
+    hashB.inputs[6] <== b_blinding;
     note_b_commitment === hashB.out;
 
     // -----------------------------------------------------------------------
@@ -126,26 +128,28 @@ template ValidCreate() {
     //     hashA to equal the value used in note_a. The TEE can't lie about
     //     who note_c goes to.
     // -----------------------------------------------------------------------
-    component hashC = Poseidon(6);
-    hashC.inputs[0] <== base_mint[0];
-    hashC.inputs[1] <== base_mint[1];
-    hashC.inputs[2] <== base_amount;
-    hashC.inputs[3] <== a_owner_commit;
-    hashC.inputs[4] <== c_nonce;
-    hashC.inputs[5] <== c_blinding;
+    component hashC = Poseidon(7);
+    hashC.inputs[0] <== 2;   // DOMAIN_NOTE
+    hashC.inputs[1] <== base_mint[0];
+    hashC.inputs[2] <== base_mint[1];
+    hashC.inputs[3] <== base_amount;
+    hashC.inputs[4] <== a_owner_commit;
+    hashC.inputs[5] <== c_nonce;
+    hashC.inputs[6] <== c_blinding;
     note_c_commitment === hashC.out;
 
     // -----------------------------------------------------------------------
     // (5) note_d: seller's TRADE leg. In QUOTE mint, amount = quote_amount,
     //     addressed to the SELLER (b_owner_commit).
     // -----------------------------------------------------------------------
-    component hashD = Poseidon(6);
-    hashD.inputs[0] <== quote_mint[0];
-    hashD.inputs[1] <== quote_mint[1];
-    hashD.inputs[2] <== quote_amount;
-    hashD.inputs[3] <== b_owner_commit;
-    hashD.inputs[4] <== d_nonce;
-    hashD.inputs[5] <== d_blinding;
+    component hashD = Poseidon(7);
+    hashD.inputs[0] <== 2;   // DOMAIN_NOTE
+    hashD.inputs[1] <== quote_mint[0];
+    hashD.inputs[2] <== quote_mint[1];
+    hashD.inputs[3] <== quote_amount;
+    hashD.inputs[4] <== b_owner_commit;
+    hashD.inputs[5] <== d_nonce;
+    hashD.inputs[6] <== d_blinding;
     note_d_commitment === hashD.out;
 
     // -----------------------------------------------------------------------
@@ -166,13 +170,14 @@ template ValidCreate() {
     component buyerChangeIsZero = IsZero();
     buyerChangeIsZero.in <== buyer_change_amt;
 
-    component hashE = Poseidon(6);
-    hashE.inputs[0] <== quote_mint[0];
-    hashE.inputs[1] <== quote_mint[1];
-    hashE.inputs[2] <== buyer_change_amt;
-    hashE.inputs[3] <== a_owner_commit;
-    hashE.inputs[4] <== e_nonce;
-    hashE.inputs[5] <== e_blinding;
+    component hashE = Poseidon(7);
+    hashE.inputs[0] <== 2;   // DOMAIN_NOTE
+    hashE.inputs[1] <== quote_mint[0];
+    hashE.inputs[2] <== quote_mint[1];
+    hashE.inputs[3] <== buyer_change_amt;
+    hashE.inputs[4] <== a_owner_commit;
+    hashE.inputs[5] <== e_nonce;
+    hashE.inputs[6] <== e_blinding;
 
     signal expectedNoteE;
     expectedNoteE <== (1 - buyerChangeIsZero.out) * hashE.out;
@@ -185,13 +190,14 @@ template ValidCreate() {
     component sellerChangeIsZero = IsZero();
     sellerChangeIsZero.in <== seller_change_amt;
 
-    component hashF = Poseidon(6);
-    hashF.inputs[0] <== base_mint[0];
-    hashF.inputs[1] <== base_mint[1];
-    hashF.inputs[2] <== seller_change_amt;
-    hashF.inputs[3] <== b_owner_commit;
-    hashF.inputs[4] <== f_nonce;
-    hashF.inputs[5] <== f_blinding;
+    component hashF = Poseidon(7);
+    hashF.inputs[0] <== 2;   // DOMAIN_NOTE
+    hashF.inputs[1] <== base_mint[0];
+    hashF.inputs[2] <== base_mint[1];
+    hashF.inputs[3] <== seller_change_amt;
+    hashF.inputs[4] <== b_owner_commit;
+    hashF.inputs[5] <== f_nonce;
+    hashF.inputs[6] <== f_blinding;
 
     signal expectedNoteF;
     expectedNoteF <== (1 - sellerChangeIsZero.out) * hashF.out;

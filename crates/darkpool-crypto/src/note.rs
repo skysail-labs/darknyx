@@ -2,12 +2,17 @@
 //!
 //! Note commitment formula (must be byte-identical across Rust, circom, on-chain):
 //!
+//! Domain tag DOMAIN_NOTE=2 is prepended as the first Poseidon input to prevent
+//! second-preimage collisions with the owner-commitment and nullifier Poseidon
+//! uses (which use DOMAIN_OWNER=1 and DOMAIN_NULL=3 respectively).
+//!
 //! ```text
-//!     C(note) = Poseidon6(
+//!     C(note) = Poseidon7(
+//!         DOMAIN_NOTE=2,        // domain separation tag
 //!         token_mint_lo_u128,   // Solana pubkey low 128 bits
 //!         token_mint_hi_u128,   // Solana pubkey high 128 bits
 //!         amount_u64,
-//!         owner_commitment_fr,
+//!         owner_commitment_fr,  // = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
 //!         nonce_fr,
 //!         blinding_r_fr,
 //!     )
@@ -57,6 +62,16 @@ impl Note {
 /// Compute a note commitment directly from its field components. Useful for
 /// the vault program, which does not need to hold a full `Note` struct in
 /// account state.
+const DOMAIN_OWNER: u64 = 1;
+const DOMAIN_NOTE: u64 = 2;
+
+/// Compute the owner commitment: Poseidon3(DOMAIN_OWNER, spending_key, r_owner).
+/// This is the value stored inside each note and constrained by VALID_SPEND.
+pub fn owner_commitment(spending_key: &Fr, r_owner: &Fr) -> Result<[u8; 32], CryptoError> {
+    let h = poseidon_hash(&[Fr::from(DOMAIN_OWNER), *spending_key, *r_owner])?;
+    Ok(fr_to_be_bytes(&h))
+}
+
 pub fn commitment_from_fields(
     token_mint: &[u8; 32],
     amount: u64,
@@ -72,7 +87,15 @@ pub fn commitment_from_fields(
     let nonce_fr = fr_from_be_bytes(nonce)?;
     let blinding_fr = fr_from_be_bytes(blinding_r)?;
 
-    let inputs: [Fr; 6] = [mint_lo, mint_hi, amount_fr, owner_fr, nonce_fr, blinding_fr];
+    let inputs: [Fr; 7] = [
+        Fr::from(DOMAIN_NOTE),
+        mint_lo,
+        mint_hi,
+        amount_fr,
+        owner_fr,
+        nonce_fr,
+        blinding_fr,
+    ];
     let h = poseidon_hash(&inputs)?;
     Ok(fr_to_be_bytes(&h))
 }

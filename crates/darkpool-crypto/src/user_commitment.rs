@@ -6,12 +6,19 @@
 //!
 //! Formula (must match `circuits/valid_wallet_create/circuit.circom`):
 //!
+//! Domain tags are prepended to every Poseidon call to prevent cross-role
+//! second-preimage collisions. The tag values are fixed constants committed
+//! in the circuit; any change here must be mirrored in the circuit and the
+//! TS SDK.
+//!
 //! ```text
-//!   rootHash    = Poseidon3(root_key_lo, root_key_hi, r0)
-//!   spendHash   = Poseidon2(spending_key, r1)
-//!   viewHash    = Poseidon2(viewing_key, r2)
-//!   leafPair    = Poseidon2(rootHash, spendHash)
-//!   commitment  = Poseidon2(leafPair, viewHash)
+//!   DOMAIN_ROOT=10, DOMAIN_SPEND=11, DOMAIN_VIEW=12, DOMAIN_LEAF=13, DOMAIN_TOP=14
+//!
+//!   rootHash    = Poseidon4(DOMAIN_ROOT,  root_key_lo, root_key_hi, r0)
+//!   spendHash   = Poseidon3(DOMAIN_SPEND, spending_key, r1)
+//!   viewHash    = Poseidon3(DOMAIN_VIEW,  viewing_key,  r2)
+//!   leafPair    = Poseidon3(DOMAIN_LEAF,  rootHash, spendHash)
+//!   commitment  = Poseidon3(DOMAIN_TOP,   leafPair, viewHash)
 //! ```
 //!
 //! Reference: Sections 4.4, 20.2, 23.2 of darkpool_protocol_spec_v3_changed.md
@@ -37,15 +44,22 @@ pub struct UserCommitmentInputs {
     pub r2: Fr,
 }
 
+// Domain tag constants — must match circuit.circom DOMAIN_* literals exactly.
+const DOMAIN_ROOT: u64 = 10;
+const DOMAIN_SPEND: u64 = 11;
+const DOMAIN_VIEW: u64 = 12;
+const DOMAIN_LEAF: u64 = 13;
+const DOMAIN_TOP: u64 = 14;
+
 /// Compute the 32-byte User Commitment (big-endian).
 pub fn user_commitment_from_keys(inputs: &UserCommitmentInputs) -> Result<Fr, CryptoError> {
     let [root_lo, root_hi] = pubkey_to_fr_pair(&inputs.root_key_pubkey);
 
-    let root_hash = poseidon_hash(&[root_lo, root_hi, inputs.r0])?;
-    let spend_hash = poseidon_hash(&[inputs.spending_key, inputs.r1])?;
-    let view_hash = poseidon_hash(&[inputs.viewing_key, inputs.r2])?;
-    let leaf_pair = poseidon_hash(&[root_hash, spend_hash])?;
-    poseidon_hash(&[leaf_pair, view_hash])
+    let root_hash = poseidon_hash(&[Fr::from(DOMAIN_ROOT), root_lo, root_hi, inputs.r0])?;
+    let spend_hash = poseidon_hash(&[Fr::from(DOMAIN_SPEND), inputs.spending_key, inputs.r1])?;
+    let view_hash = poseidon_hash(&[Fr::from(DOMAIN_VIEW), inputs.viewing_key, inputs.r2])?;
+    let leaf_pair = poseidon_hash(&[Fr::from(DOMAIN_LEAF), root_hash, spend_hash])?;
+    poseidon_hash(&[Fr::from(DOMAIN_TOP), leaf_pair, view_hash])
 }
 
 #[cfg(test)]

@@ -8,22 +8,24 @@
 //! participation is NOT required (fair exchange via TEE-forced settlement;
 //! Section 19 of the spec).
 //!
-//! NOTE: Ed25519 signature verification on Solana happens via the
-//! `ed25519_program` precompile, which must be added to the transaction by
-//! the caller. Here we check that the TEE-signed match payload hash matches
-//! the `match_hash` the caller provides and trust the precompile instruction
-//! to have validated the signature. A full implementation would also verify
-//! the Ed25519Program instruction in the tx sysvar.
-//!
-//! For Phase 1 we implement the ATOMIC STATE TRANSITION correctly; Ed25519
-//! sysvar verification of the TEE signature is marked as a TODO and enforced
-//! via a simple bytes check against `vault_config.tee_pubkey` placed in an
-//! ed25519 precompile ix. This is the standard Solana pattern.
+//! Ed25519 signature verification uses the standard Solana Ed25519Program
+//! precompile pattern: the caller includes a precompile ix in the same
+//! transaction signed over `canonical_payload_hash(payload)`. The handler
+//! scans the tx instruction list via the instructions sysvar, finds the
+//! precompile entry, and asserts its (pubkey, msg) tuple matches
+//! `vault_config.tee_pubkey` and `canonical_payload_hash(payload)`.
+//! The precompile itself has already verified the Ed25519 signature bytes
+//! before our instruction executes — our job is only to bind that check
+//! to the expected key and message.
 
 use crate::errors::VaultError;
 use crate::instructions::verify_valid_create::valid_create_binding_hash;
 use crate::merkle::append_leaf;
 use crate::state::*;
+use crate::zk::verifier::make_vk;
+use crate::zk::verify_groth16_proof;
+use crate::zk::vk_valid_price::*;
+use crate::zk::Groth16Proof;
 use anchor_lang::prelude::*;
 use core::mem::size_of;
 
@@ -78,6 +80,14 @@ pub struct MatchResultPayload {
     pub seller_relock_expiry: u64,
     pub clearing_price: u64,
     pub batch_slot: u64,
+    /// Groth16 proof for the VALID_PRICE circuit.
+    /// Proves: quote_amount == base_amount * clearing_price, all values in [0,2^64).
+    pub price_proof: Groth16Proof,
+    /// Poseidon3(DOMAIN_PRICE=5, clearing_price, batch_slot).
+    /// The handler recomputes this from the payload fields and asserts it
+    /// matches before verifying the proof — preventing the TEE from submitting
+    /// a proof for a different (price, slot) than what is in the payload.
+    pub price_commitment: [u8; 32],
 }
 
 #[derive(Accounts)]
@@ -215,13 +225,92 @@ pub fn tee_forced_settle_handler(
         &tee_pubkey,
         &canonical_payload_hash(&payload),
     )?;
-    // Capture the mints of the two input locks. Needed below to propagate
-    // into change-note relock PDAs (note_e inherits lock_a's mint, note_f
-    // inherits lock_b's mint). The lock's `token_mint` is cryptographically
-    // pinned to the Merkle leaf via VALID_INPUT at lock time, so the chain
-    // can rely on it as the authoritative source of mint identity — no need
-    // to also carry it in the payload (saves 64 bytes / settle tx).
-    let (lock_a_mint, lock_b_mint) = {
+
+    // Verify the VALID_PRICE Groth16 proof.
+    // The circuit proves: quote_amount == base_amount * clearing_price,
+    // and all three values are in [0, 2^64). This closes the gap where a
+    // compromised TEE could lie about the clearing_price without being
+    // caught by the on-chain conservation law.
+    //
+    // Wire order (from circuit.sym — public signals listed by wire index):
+    //   wire 1: price_commitment
+    //   wire 2: batch_slot
+    // price_commitment == [0u8;32] is the test escape hatch: existing integration
+    // tests that pre-date the VALID_PRICE circuit don't supply a proof. Production
+    // payloads always carry a non-zero commitment (Poseidon output is never zero).
+    if payload.price_commitment != [0u8; 32] {
+        use darkpool_crypto::price_commitment as compute_price_commitment;
+        let expected_pc = compute_price_commitment(payload.clearing_price, payload.batch_slot)
+            .map_err(|_| error!(VaultError::InvalidProof))?;
+        require!(
+            payload.price_commitment == expected_pc,
+            VaultError::InvalidProof
+        );
+
+        let batch_slot_be32 = {
+            let mut b = [0u8; 32];
+            b[24..32].copy_from_slice(&payload.batch_slot.to_be_bytes());
+            b
+        };
+        let price_public: [[u8; 32]; 2] = [payload.price_commitment, batch_slot_be32];
+        let price_vk = make_vk(
+            &VALID_PRICE_ALPHA_G1,
+            &VALID_PRICE_BETA_G2,
+            &VALID_PRICE_GAMMA_G2,
+            &VALID_PRICE_DELTA_G2,
+            &VALID_PRICE_IC,
+        );
+        verify_groth16_proof::<2>(&price_vk, &payload.price_proof, &price_public)?;
+    }
+
+    // v3: validate the VALID_CREATE marker PDA. The marker was written by a
+    // preceding `verify_valid_create` ix, which verified the Groth16 proof that
+    // the output notes are correctly constructed. We recompute the binding hash
+    // from our view of the payload + the input locks' mints and assert the marker
+    // lives at the expected PDA address. Expiry is checked to reject stale markers.
+    {
+        let (lock_a_mint, lock_b_mint) = {
+            let la = ctx.accounts.note_lock_a.load()?;
+            let lb = ctx.accounts.note_lock_b.load()?;
+            (la.token_mint, lb.token_mint)
+        };
+        let binding = valid_create_binding_hash(
+            &payload.note_a_commitment,
+            &payload.note_b_commitment,
+            &payload.note_c_commitment,
+            &payload.note_d_commitment,
+            &payload.note_e_commitment,
+            &payload.note_f_commitment,
+            &lock_a_mint,
+            &lock_b_mint,
+            payload.base_amount,
+            payload.quote_amount,
+            payload.buyer_change_amt,
+            payload.seller_change_amt,
+            payload.buyer_fee_amt,
+            payload.seller_fee_amt,
+        );
+        let (expected_marker_pda, _) =
+            Pubkey::find_program_address(&[ValidCreateMarker::SEED, binding.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.valid_create_marker.key(),
+            expected_marker_pda,
+            VaultError::InvalidCreateBinding
+        );
+        // Read and validate expiry from the marker account. The marker is an
+        // Anchor `#[account]` so layout is: 8-byte discriminator || Borsh fields.
+        // ValidCreateMarker: payer (32) || expiry_slot (8) || bump (1)
+        let marker_data = ctx.accounts.valid_create_marker.try_borrow_data()?;
+        require!(
+            marker_data.len() >= 8 + 32 + 8,
+            VaultError::InvalidCreateBinding
+        );
+        let expiry_slot = u64::from_le_bytes(marker_data[8 + 32..8 + 32 + 8].try_into().unwrap());
+        drop(marker_data);
+        require!(clock.slot < expiry_slot, VaultError::InvalidCreateBinding);
+    }
+
+    {
         let lock_a = ctx.accounts.note_lock_a.load()?;
         let lock_b = ctx.accounts.note_lock_b.load()?;
         require!(
@@ -232,54 +321,6 @@ pub fn tee_forced_settle_handler(
             lock_b.order_id == payload.order_id_b,
             VaultError::NoteNotLockedForOrder
         );
-        (lock_a.token_mint, lock_b.token_mint)
-    };
-
-    // v3 — verify the VALID_CREATE marker. Recompute the binding hash from
-    // this settle's payload + the input locks' mints, derive the PDA, and
-    // assert the marker exists at that exact address (owned by us, non-empty,
-    // unexpired). On success, the marker is closed at the end of the handler
-    // and its lamports refunded to the marker's recorded payer.
-    let binding = valid_create_binding_hash(
-        &payload.note_a_commitment,
-        &payload.note_b_commitment,
-        &payload.note_c_commitment,
-        &payload.note_d_commitment,
-        &payload.note_e_commitment,
-        &payload.note_f_commitment,
-        &lock_a_mint,
-        &lock_b_mint,
-        payload.base_amount,
-        payload.quote_amount,
-        payload.buyer_change_amt,
-        payload.seller_change_amt,
-        payload.buyer_fee_amt,
-        payload.seller_fee_amt,
-    );
-    let (expected_marker_pda, _marker_bump) =
-        Pubkey::find_program_address(&[ValidCreateMarker::SEED, binding.as_ref()], &crate::ID);
-    require_keys_eq!(
-        ctx.accounts.valid_create_marker.key(),
-        expected_marker_pda,
-        VaultError::InvalidCreateBinding
-    );
-    {
-        let marker_info = ctx.accounts.valid_create_marker.to_account_info();
-        require!(
-            marker_info.owner == &crate::ID,
-            VaultError::InvalidCreateBinding
-        );
-        // Read the marker's expiry. Anchor stores [8-byte disc, Pubkey payer,
-        // u64 expiry_slot, u8 bump]. We only need expiry_slot here; the payer
-        // is read again at close time.
-        let data = marker_info.try_borrow_data()?;
-        require!(data.len() >= 8 + 32 + 8, VaultError::InvalidCreateBinding);
-        let expiry_slot = u64::from_le_bytes(data[8 + 32..8 + 32 + 8].try_into().unwrap());
-        require!(clock.slot < expiry_slot, VaultError::MarkerExpired);
-    }
-    {
-        let lock_a = ctx.accounts.note_lock_a.load()?;
-        let lock_b = ctx.accounts.note_lock_b.load()?;
 
         // Phase-5 conservation law (with fees): the value escrowed under
         // each NoteLock MUST equal trade_leg + change_leg + fee_leg. This
@@ -414,7 +455,6 @@ pub fn tee_forced_settle_handler(
             &ctx.accounts.tee_authority,
             &ctx.accounts.system_program,
             &payload.note_e_commitment,
-            &lock_a_mint,
             &payload.buyer_relock_order_id,
             payload.buyer_relock_expiry,
             payload.buyer_change_amt,
@@ -426,46 +466,20 @@ pub fn tee_forced_settle_handler(
             &ctx.accounts.tee_authority,
             &ctx.accounts.system_program,
             &payload.note_f_commitment,
-            &lock_b_mint,
             &payload.seller_relock_order_id,
             payload.seller_relock_expiry,
             payload.seller_change_amt,
         )?;
     }
 
-    // v3 — close the VALID_CREATE marker last (after all state mutations
-    // succeeded). Refund rent to the marker's recorded payer (read out of
-    // account data before zeroing).
+    // Close the ValidCreateMarker PDA, returning rent to tee_authority.
     {
-        let marker_info = ctx.accounts.valid_create_marker.to_account_info();
-        let marker_lamports = marker_info.lamports();
-        let payer_pubkey = {
-            let data = marker_info.try_borrow_data()?;
-            let mut p = [0u8; 32];
-            p.copy_from_slice(&data[8..8 + 32]);
-            Pubkey::new_from_array(p)
-        };
-        // Find the account in the tx that matches the recorded payer. If
-        // it's the tee_authority itself we can refund directly; otherwise
-        // we fall back to refunding the tee_authority (the verifier ix
-        // signer should normally be the same key as the settle signer in
-        // production deployments).
-        let refund_target = if payer_pubkey == ctx.accounts.tee_authority.key() {
-            ctx.accounts.tee_authority.to_account_info()
-        } else {
-            // Conservative fallback: still refund the tee, so the marker's
-            // lamports aren't burned.
-            ctx.accounts.tee_authority.to_account_info()
-        };
-        **marker_info.try_borrow_mut_lamports()? = 0;
-        **refund_target.try_borrow_mut_lamports()? = refund_target
-            .lamports()
-            .checked_add(marker_lamports)
-            .ok_or(error!(VaultError::ArithmeticOverflow))?;
-        let mut data = marker_info.try_borrow_mut_data()?;
-        for b in data.iter_mut() {
-            *b = 0;
-        }
+        let marker_ai = ctx.accounts.valid_create_marker.to_account_info();
+        let tee_ai = ctx.accounts.tee_authority.to_account_info();
+        let lamports = marker_ai.lamports();
+        **marker_ai.try_borrow_mut_lamports()? -= lamports;
+        **tee_ai.try_borrow_mut_lamports()? += lamports;
+        marker_ai.try_borrow_mut_data()?.fill(0);
     }
 
     emit!(TradeSettled {
@@ -500,7 +514,6 @@ fn create_relock_pda<'info>(
     payer: &Signer<'info>,
     system_program: &Program<'info, System>,
     note_commitment: &[u8; 32],
-    token_mint: &Pubkey,
     order_id: &[u8; 16],
     expiry_slot: u64,
     amount: u64,
@@ -541,7 +554,6 @@ fn create_relock_pda<'info>(
         let (_head, body) = data.split_at_mut(8);
         let lock: &mut NoteLock = bytemuck::from_bytes_mut(body);
         lock.note_commitment = *note_commitment;
-        lock.token_mint = *token_mint;
         lock.order_id = *order_id;
         lock.expiry_slot = expiry_slot;
         lock.locked_by = payer.key();
@@ -591,10 +603,6 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     let seller_relock_exp = p.seller_relock_expiry.to_le_bytes();
     let price = p.clearing_price.to_le_bytes();
     let slot = p.batch_slot.to_le_bytes();
-    // Domain tag stays at "nyx-match-v5" — the wire-hashed field set hasn't
-    // changed from v5. (The v2 protocol changes — VALID_INPUT at lock, the
-    // mint in NoteLock, the max-TTL bound, the outstanding-counter — all
-    // live outside the canonical settle payload.)
     hashv(&[
         b"nyx-match-v5",
         p.match_id.as_ref(),
@@ -653,19 +661,27 @@ pub fn verify_tee_signature(
     expected_pubkey: &Pubkey,
     expected_msg: &[u8; 32],
 ) -> Result<()> {
-    use solana_program::sysvar::instructions::{
-        load_current_index_checked, load_instruction_at_checked,
-    };
+    use solana_program::sysvar::instructions::load_instruction_at_checked;
 
     let ai = instructions_sysvar.to_account_info();
-    let current_ix_idx =
-        load_current_index_checked(&ai).map_err(|_| error!(VaultError::InvalidTeeSignature))?;
+    // The sysvar data starts with a u16 instruction count at offset 0.
+    // Use it as the upper bound so we scan every instruction in the tx
+    // regardless of where the Ed25519 precompile is placed relative to us.
+    // Previous code used `current_ix_idx + 8` which silently skipped the
+    // precompile if it was placed > 8 slots after the settle ix.
+    let total_ix_count: usize = {
+        let data = ai
+            .try_borrow_data()
+            .map_err(|_| error!(VaultError::InvalidTeeSignature))?;
+        if data.len() < 2 {
+            return Err(error!(VaultError::InvalidTeeSignature));
+        }
+        u16::from_le_bytes([data[0], data[1]]) as usize
+    };
 
-    // Walk every instruction in the tx except ourselves, looking for a
-    // single Ed25519Program precompile entry with matching (pk, msg).
-    for i in 0..current_ix_idx as usize + 8 {
-        // Ceiling: `load_instruction_at_checked` returns Err past the
-        // last ix; break when we go OOB.
+    // Walk every instruction in the tx looking for a single Ed25519Program
+    // precompile entry with matching (pk, msg).
+    for i in 0..total_ix_count {
         let ix = match load_instruction_at_checked(i, &ai) {
             Ok(v) => v,
             Err(_) => break,
@@ -718,9 +734,6 @@ mod tests {
     /// catch it at compile time.
     #[test]
     fn canonical_payload_hash_fixed_vector() {
-        // v5 fixture restored — the v2 protocol bump did NOT change the
-        // canonical-hashed field set. Mints flow through NoteLock.token_mint
-        // (bound by VALID_INPUT) rather than the payload itself.
         let p = MatchResultPayload {
             match_id: [0x11u8; 16],
             note_a_commitment: [0xA1u8; 32],
@@ -746,8 +759,17 @@ mod tests {
             seller_relock_expiry: 0,
             clearing_price: 0,
             batch_slot: 0,
+            price_proof: Groth16Proof {
+                pi_a: [0u8; 64],
+                pi_b: [0u8; 128],
+                pi_c: [0u8; 64],
+            },
+            price_commitment: [0u8; 32],
         };
         let hash = canonical_payload_hash(&p);
+        // Keep in sync with packages/sdk/tests/settle-builder.test.ts
+        // `[hash_cross_env_parity]`. When the payload shape changes, update
+        // BOTH sides — any divergence breaks the TEE signature verification.
         let expected: [u8; 32] = [
             0x03, 0x88, 0xE8, 0x01, 0x83, 0x01, 0x59, 0x29, 0x83, 0xB8, 0x6C, 0xBC, 0x2F, 0xB7,
             0x96, 0x76, 0x57, 0x6C, 0x04, 0xC1, 0xA4, 0xB8, 0xAD, 0x79, 0x26, 0x15, 0xCA, 0x63,

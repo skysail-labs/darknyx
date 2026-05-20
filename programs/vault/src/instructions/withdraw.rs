@@ -139,10 +139,29 @@ pub fn withdraw_handler(
     );
 
     // ----- Verify ZK proof -----
-    // VALID_SPEND public inputs: [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount]
+    // VALID_SPEND public signals (in circuit declaration order):
+    //   [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, noteCommitment]
+    //
+    // Wire order matches circuit.sym (circom places outputs before inputs):
+    //   wire 1: noteCommitment (signal output — first in IC sum)
+    //   wire 2: merkleRoot
+    //   wire 3: nullifier
+    //   wire 4: tokenMint[0]
+    //   wire 5: tokenMint[1]
+    //   wire 6: amount
+    // Binding noteCommitment as wire 1 prevents the "arbitrary note_commitment
+    // bypass" attack where a caller supplies an un-nullified commitment while
+    // submitting a proof for a different, already-nullified note.
     let mint_bytes = ctx.accounts.token_mint.key().to_bytes();
     let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
-    let public_inputs: [[u8; 32]; 5] = [merkle_root, nullifier, mint_lo, mint_hi, u64_be32(amount)];
+    let public_inputs: [[u8; 32]; 6] = [
+        note_commitment,
+        merkle_root,
+        nullifier,
+        mint_lo,
+        mint_hi,
+        u64_be32(amount),
+    ];
 
     let vk = make_vk(
         &VALID_SPEND_ALPHA_G1,
@@ -151,7 +170,7 @@ pub fn withdraw_handler(
         &VALID_SPEND_DELTA_G2,
         &VALID_SPEND_IC,
     );
-    verify_groth16_proof::<5>(&vk, &proof, &public_inputs)?;
+    verify_groth16_proof::<6>(&vk, &proof, &public_inputs)?;
 
     // ----- v2 solvency check (must come BEFORE state mutation) -----
     require!(
