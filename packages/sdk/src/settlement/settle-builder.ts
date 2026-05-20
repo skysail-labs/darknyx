@@ -44,6 +44,20 @@ export { RELOCK_ORDER_ID_NONE };
 /** All-zero 32-byte commitment (= "field not used" e.g. no change note). */
 export const ZERO_COMMITMENT = new Uint8Array(32);
 
+/** Groth16 proof bytes in the flat layout the on-chain verifier expects. */
+export interface Groth16Proof {
+  piA: Uint8Array;   // 64 bytes
+  piB: Uint8Array;   // 128 bytes
+  piC: Uint8Array;   // 64 bytes
+}
+
+/** Zero proof — used as the `price_commitment == [0;32]` escape hatch. */
+export const ZERO_PROOF: Groth16Proof = {
+  piA: new Uint8Array(64),
+  piB: new Uint8Array(128),
+  piC: new Uint8Array(64),
+};
+
 /** Byte-for-byte shape of `tee_forced_settle::MatchResultPayload`. */
 export interface MatchResultPayload {
   matchId: Uint8Array;              // [u8; 16]
@@ -70,6 +84,11 @@ export interface MatchResultPayload {
   sellerRelockExpiry: bigint;
   clearingPrice: bigint;
   batchSlot: bigint;
+  /** Groth16 proof for VALID_PRICE circuit. Use ZERO_PROOF to skip verification
+   *  (only valid when priceCommitment is also all-zero). */
+  priceProof: Groth16Proof;
+  /** Poseidon3(DOMAIN_PRICE=5, clearingPrice, batchSlot). All-zero = skip. */
+  priceCommitment: Uint8Array;      // [u8; 32]
 }
 
 // ---------- Borsh serialisation ----------
@@ -125,6 +144,13 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     u64LE(p.sellerRelockExpiry),
     u64LE(p.clearingPrice),
     u64LE(p.batchSlot),
+    // VALID_PRICE proof (piA=64 + piB=128 + piC=64 = 256 bytes) + 32-byte
+    // priceCommitment. Use ZERO_PROOF + ZERO_COMMITMENT to skip on-chain
+    // verification (guard: skip iff priceCommitment == [0;32]).
+    fixed(p.priceProof.piA, 64),
+    fixed(p.priceProof.piB, 128),
+    fixed(p.priceProof.piC, 64),
+    fixed(p.priceCommitment, 32),
   );
 }
 
@@ -255,7 +281,8 @@ export interface BuildSettleIxParams {
  *   8  note_lock_e       (mut — may be unused when no re-lock; seed derived from note_e_commitment)
  *   9  note_lock_f       (mut — same for seller)
  *  10  instructions_sysvar
- *  11  system_program
+ *  11  valid_create_marker (mut — closed to tee_authority on success)
+ *  12  system_program
  */
 export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
   const [vaultConfig] = vaultConfigPda(p.programId);
@@ -402,5 +429,7 @@ export function exactFillPayload(args: {
     sellerRelockExpiry: 0n,
     clearingPrice: args.clearingPrice ?? 0n,
     batchSlot: args.batchSlot ?? 0n,
+    priceProof: ZERO_PROOF,
+    priceCommitment: ZERO_COMMITMENT,
   };
 }

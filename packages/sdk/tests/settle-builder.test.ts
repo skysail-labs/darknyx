@@ -262,15 +262,17 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       baseMint: new PublicKey(filled(32, 0xC1)),
     });
     // Payload =
-    //   9 * 32  (noteA + noteB + noteC + noteD + noteE + noteF + nullA + nullB + noteFee)
+    //   9 * 32  (noteA..noteF + nullA + nullB + noteFee)
     //   5 * 16  (matchId + oidA + oidB + buyerRelockOid + sellerRelockOid)
     //  10 *  8  (base, quote, buyerChange, sellerChange, buyerFee, sellerFee,
     //            buyerRelockExpiry, sellerRelockExpiry, price, batchSlot)
-    //  = 288 + 80 + 80 = 448.
-    // Plus 8-byte Anchor discriminator = 456.
+    // + 256     (priceProof: piA=64 + piB=128 + piC=64)
+    // +  32     (priceCommitment)
+    //  = 288 + 80 + 80 + 256 + 32 = 736.
+    // Plus 8-byte Anchor discriminator = 744.
     const payloadBytes = serializePayload(payload);
-    expect(payloadBytes.length).toBe(32 * 9 + 16 * 5 + 8 * 10);
-    expect(payloadBytes.length).toBe(448);
+    expect(payloadBytes.length).toBe(32 * 9 + 16 * 5 + 8 * 10 + 256 + 32);
+    expect(payloadBytes.length).toBe(736);
     expect(ix.data.length).toBe(8 + payloadBytes.length);
   });
 
