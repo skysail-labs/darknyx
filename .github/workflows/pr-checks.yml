@@ -309,7 +309,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      SOLANA_CLI_VERSION: v2.1.4
+      # Match the developer's local Agave install. v2.x bundles
+      # Cargo 1.79.0, which cannot parse manifests that declare
+      # edition = "2024" — and at least one transitive dep
+      # (toml_parser 1.1.2+spec-1.1.0, pulled in by the Solana
+      # SDK toml stack) now uses that edition. v3.1.x bundles
+      # platform-tools v1.52 with rustc/cargo 1.89.0.
+      SOLANA_CLI_VERSION: v3.1.12
     steps:
       - uses: actions/checkout@v4
 
