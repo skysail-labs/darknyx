@@ -15,8 +15,11 @@ use solana_transaction::Transaction;
 pub type Pubkey = Address;
 pub const SYSTEM_PROGRAM_ID: Pubkey = solana_system_interface::program::ID;
 
-pub const VAULT_PROGRAM_ID: &str = "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY";
-pub const ME_PROGRAM_ID: &str = "DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH";
+// Must match `declare_id!` in the respective lib.rs files. LiteSVM's
+// `add_program_from_file` reads the declared id baked into the ELF and
+// rejects loads under a different id with InvalidAccountData.
+pub const VAULT_PROGRAM_ID: &str = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
+pub const ME_PROGRAM_ID: &str = "6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe";
 
 pub fn repo_root() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -164,6 +167,12 @@ pub struct Harness {
     pub root: Keypair,
     pub trader: Keypair,
     pub pyth_account: Pubkey,
+    /// Dummy SPL mint used by `seed_note_lock` to populate `NoteLock.token_mint`
+    /// (the v2 addition that binds locked notes to a specific mint). Both
+    /// sides of every settle test use this single mint — the on-chain handler
+    /// accepts same-mint settles (the conservation laws still hold), and no
+    /// existing test exercises distinct base/quote mints.
+    pub test_mint: Pubkey,
 }
 
 impl Harness {
@@ -226,6 +235,12 @@ impl Harness {
         let pyth_account = Keypair::new().pubkey();
         Self::write_mock_oracle(&mut svm, &pyth_account, 150);
 
+        // v2: NoteLock now carries token_mint. A fresh dummy keypair is fine
+        // for tests — the on-chain handler only uses it for the VALID_CREATE
+        // binding-hash recomputation and per-mint conservation, both of which
+        // are byte-equality checks the test harness mirrors.
+        let test_mint = Keypair::new().pubkey();
+
         Self {
             svm,
             vault_id,
@@ -235,6 +250,7 @@ impl Harness {
             root,
             trader,
             pyth_account,
+            test_mint,
         }
     }
 
@@ -1065,16 +1081,21 @@ pub fn seed_note_lock(
 ) {
     use solana_account::Account as SolAccount;
     let (pda, bump) = note_lock_pda(&h.vault_id, note_commitment);
-    // Layout: 8 disc + 32 commit + 16 order_id + 8 expiry + 32 locked_by
-    //       + 8 amount + 1 bump + 7 pad = 112 bytes.
-    let mut data = vec![0u8; 112];
+    // v2 layout: 8 disc + 32 commit + 32 token_mint + 16 order_id + 8 expiry
+    //          + 32 locked_by + 8 amount + 1 bump + 7 pad = 144 bytes.
+    // token_mint sits between note_commitment and order_id (matches
+    // `vault::state::NoteLock` exactly; keep in sync if NoteLock ever moves
+    // fields). Uses `h.test_mint` so seed_valid_create_marker / build_settle_ix
+    // compute a consistent binding hash from the same mint.
+    let mut data = vec![0u8; 144];
     data[0..8].copy_from_slice(&anchor_acct_disc("NoteLock"));
     data[8..40].copy_from_slice(note_commitment);
-    data[40..56].copy_from_slice(order_id);
-    data[56..64].copy_from_slice(&expiry_slot.to_le_bytes());
-    data[64..96].copy_from_slice(&h.tee.pubkey().to_bytes());
-    data[96..104].copy_from_slice(&amount.to_le_bytes());
-    data[104] = bump;
+    data[40..72].copy_from_slice(&h.test_mint.to_bytes());
+    data[72..88].copy_from_slice(order_id);
+    data[88..96].copy_from_slice(&expiry_slot.to_le_bytes());
+    data[96..128].copy_from_slice(&h.tee.pubkey().to_bytes());
+    data[128..136].copy_from_slice(&amount.to_le_bytes());
+    data[136] = bump;
     let acct = SolAccount {
         lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
         data,
@@ -1083,6 +1104,115 @@ pub fn seed_note_lock(
         rent_epoch: 0,
     };
     h.svm.set_account(pda, acct).unwrap();
+}
+
+/// Read the `token_mint` field back out of a seeded `NoteLock` PDA. Mirrors
+/// the on-chain handler's `lock_a_mint = lock_a.token_mint` access so the
+/// VALID_CREATE binding-hash recomputation in `build_settle_ix` sees the
+/// same bytes the program will.
+pub fn read_note_lock_mint(h: &Harness, note_commitment: &[u8; 32]) -> Pubkey {
+    let (pda, _) = note_lock_pda(&h.vault_id, note_commitment);
+    let acct = h.svm.get_account(&pda).expect("note_lock not seeded");
+    let mut mint = [0u8; 32];
+    mint.copy_from_slice(&acct.data[40..72]);
+    Pubkey::from(mint)
+}
+
+/// v3 — pre-seed a `ValidCreateMarker` PDA so `tee_forced_settle` finds one
+/// at the binding-hash-derived address. In production the marker is created
+/// by the preceding `verify_valid_create` ix (which checks a VALID_CREATE
+/// Groth16 proof); for litesvm tests we synthesise it directly with a
+/// far-future expiry — bypassing the proof check is intentional, the marker
+/// path is what `vault-litesvm`'s `user_commitment_registration` exercises.
+///
+/// Layout (matches `vault::state::ValidCreateMarker` — keep in sync):
+///   8 disc + 32 payer + 8 expiry_slot + 1 bump = 49 bytes
+pub fn seed_valid_create_marker(h: &mut Harness, payload: &MatchResultPayload) {
+    use solana_account::Account as SolAccount;
+    use vault::instructions::verify_valid_create::valid_create_binding_hash;
+
+    // Bridge: the test harness aliases `Pubkey = Address` (split Solana SDK),
+    // while the vault crate's binding-hash function takes the Anchor/Solana
+    // SDK `Pubkey`. Both are [u8;32] under the hood, so go through `to_bytes()`.
+    use anchor_lang::prelude::Pubkey as AnchorPubkey;
+    let lock_a_mint = read_note_lock_mint(h, &payload.note_a_commitment);
+    let lock_b_mint = read_note_lock_mint(h, &payload.note_b_commitment);
+    let lock_a_mint_v = AnchorPubkey::new_from_array(lock_a_mint.to_bytes());
+    let lock_b_mint_v = AnchorPubkey::new_from_array(lock_b_mint.to_bytes());
+    let binding = valid_create_binding_hash(
+        &payload.note_a_commitment,
+        &payload.note_b_commitment,
+        &payload.note_c_commitment,
+        &payload.note_d_commitment,
+        &payload.note_e_commitment,
+        &payload.note_f_commitment,
+        &lock_a_mint_v,
+        &lock_b_mint_v,
+        payload.base_amount,
+        payload.quote_amount,
+        payload.buyer_change_amt,
+        payload.seller_change_amt,
+        payload.buyer_fee_amt,
+        payload.seller_fee_amt,
+    );
+    let (pda, bump) =
+        Pubkey::find_program_address(&[VALID_CREATE_MARKER_SEED, &binding], &h.vault_id);
+
+    let mut data = vec![0u8; 49];
+    data[0..8].copy_from_slice(&anchor_acct_disc("ValidCreateMarker"));
+    // payer (refund target on close)
+    data[8..40].copy_from_slice(&h.tee.pubkey().to_bytes());
+
+    // Far-future expiry — the marker should be consumed by the next settle.
+    // `MAX_CREATE_MARKER_TTL_SLOTS` only applies at verify_valid_create time
+    // (which we skip), so the settle-side check is just `slot <= expiry`.
+    let expiry_slot: u64 = u64::MAX / 2;
+    data[40..48].copy_from_slice(&expiry_slot.to_le_bytes());
+    data[48] = bump;
+
+    let acct = SolAccount {
+        lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
+        data,
+        owner: h.vault_id,
+        executable: false,
+        rent_epoch: 0,
+    };
+    h.svm.set_account(pda, acct).unwrap();
+}
+
+/// Mirrors `vault::state::ValidCreateMarker::SEED`. Hard-coded rather than
+/// imported to avoid pulling more of the vault crate into the test surface.
+const VALID_CREATE_MARKER_SEED: &[u8] = b"valid_create";
+
+/// Same derivation `build_settle_ix` uses, exposed so tests that want to
+/// inspect / assert on the marker PDA can find it.
+pub fn valid_create_marker_pda(h: &Harness, payload: &MatchResultPayload) -> (Pubkey, u8) {
+    use vault::instructions::verify_valid_create::valid_create_binding_hash;
+    // Bridge: the test harness aliases `Pubkey = Address` (split Solana SDK),
+    // while the vault crate's binding-hash function takes the Anchor/Solana
+    // SDK `Pubkey`. Both are [u8;32] under the hood, so go through `to_bytes()`.
+    use anchor_lang::prelude::Pubkey as AnchorPubkey;
+    let lock_a_mint = read_note_lock_mint(h, &payload.note_a_commitment);
+    let lock_b_mint = read_note_lock_mint(h, &payload.note_b_commitment);
+    let lock_a_mint_v = AnchorPubkey::new_from_array(lock_a_mint.to_bytes());
+    let lock_b_mint_v = AnchorPubkey::new_from_array(lock_b_mint.to_bytes());
+    let binding = valid_create_binding_hash(
+        &payload.note_a_commitment,
+        &payload.note_b_commitment,
+        &payload.note_c_commitment,
+        &payload.note_d_commitment,
+        &payload.note_e_commitment,
+        &payload.note_f_commitment,
+        &lock_a_mint_v,
+        &lock_b_mint_v,
+        payload.base_amount,
+        payload.quote_amount,
+        payload.buyer_change_amt,
+        payload.seller_change_amt,
+        payload.buyer_fee_amt,
+        payload.seller_fee_amt,
+    );
+    Pubkey::find_program_address(&[VALID_CREATE_MARKER_SEED, &binding], &h.vault_id)
 }
 
 /// Read the current leaf_count out of VaultConfig.
@@ -1195,6 +1325,13 @@ pub fn build_settle_ix(h: &Harness, payload: &MatchResultPayload) -> Instruction
         33, 86, 117, 165, 219, 186, 203, 95, 8, 0, 0, 0,
     ]);
 
+    // v3 — VALID_CREATE marker. The on-chain TeeForcedSettle expects it
+    // between `note_lock_f` and `instructions_sysvar`; the address is the
+    // PDA at `[b"valid_create", binding_hash]` and the marker must already
+    // exist (seeded via `seed_valid_create_marker` in the test setup, or
+    // via a preceding `verify_valid_create` ix in production).
+    let (marker_pda, _) = valid_create_marker_pda(h, payload);
+
     let mut data = anchor_disc("tee_forced_settle").to_vec();
     payload.serialize(&mut data).unwrap();
 
@@ -1212,6 +1349,7 @@ pub fn build_settle_ix(h: &Harness, payload: &MatchResultPayload) -> Instruction
             AccountMeta::new(lock_e, false),
             AccountMeta::new(lock_f, false),
             AccountMeta::new_readonly(instructions_sysvar, false),
+            AccountMeta::new(marker_pda, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],
         data,
