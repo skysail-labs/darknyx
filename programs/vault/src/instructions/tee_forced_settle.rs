@@ -19,6 +19,7 @@
 //! to the expected key and message.
 
 use crate::errors::VaultError;
+use crate::instructions::verify_valid_create::valid_create_binding_hash;
 use crate::merkle::append_leaf;
 use crate::state::*;
 use crate::zk::verifier::make_vk;
@@ -180,6 +181,22 @@ pub struct TeeForcedSettle<'info> {
     #[account(address = solana_program::sysvar::instructions::ID)]
     pub instructions_sysvar: UncheckedAccount<'info>,
 
+    /// v3 — VALID_CREATE marker. Created by `verify_valid_create` in a
+    /// preceding tx; closed here. Its PDA seed encodes the 14 fields the
+    /// circuit proved, so finding a marker at the seed derived from this
+    /// payload's fields means VALID_CREATE was checked for THIS exact
+    /// output set. The PDA seed is `[b"valid_create", binding_hash]`
+    /// where binding_hash is recomputed in the handler — passing the
+    /// hash as an explicit ix arg would let the TEE lie about it, so we
+    /// derive on the fly and rely on Anchor's seeds-bump check to detect
+    /// any mismatch via `MarkerNotFound` (init = false; account must
+    /// already exist at the derived address).
+    ///
+    /// CHECK: Validated via the bump-derived address + binding check in
+    /// the handler. Closed to `tee_authority` on success.
+    #[account(mut)]
+    pub valid_create_marker: UncheckedAccount<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -244,6 +261,53 @@ pub fn tee_forced_settle_handler(
             &VALID_PRICE_IC,
         );
         verify_groth16_proof::<2>(&price_vk, &payload.price_proof, &price_public)?;
+    }
+
+    // v3: validate the VALID_CREATE marker PDA. The marker was written by a
+    // preceding `verify_valid_create` ix, which verified the Groth16 proof that
+    // the output notes are correctly constructed. We recompute the binding hash
+    // from our view of the payload + the input locks' mints and assert the marker
+    // lives at the expected PDA address. Expiry is checked to reject stale markers.
+    {
+        let (lock_a_mint, lock_b_mint) = {
+            let la = ctx.accounts.note_lock_a.load()?;
+            let lb = ctx.accounts.note_lock_b.load()?;
+            (la.token_mint, lb.token_mint)
+        };
+        let binding = valid_create_binding_hash(
+            &payload.note_a_commitment,
+            &payload.note_b_commitment,
+            &payload.note_c_commitment,
+            &payload.note_d_commitment,
+            &payload.note_e_commitment,
+            &payload.note_f_commitment,
+            &lock_a_mint,
+            &lock_b_mint,
+            payload.base_amount,
+            payload.quote_amount,
+            payload.buyer_change_amt,
+            payload.seller_change_amt,
+            payload.buyer_fee_amt,
+            payload.seller_fee_amt,
+        );
+        let (expected_marker_pda, _) =
+            Pubkey::find_program_address(&[ValidCreateMarker::SEED, binding.as_ref()], &crate::ID);
+        require_keys_eq!(
+            ctx.accounts.valid_create_marker.key(),
+            expected_marker_pda,
+            VaultError::InvalidCreateBinding
+        );
+        // Read and validate expiry from the marker account. The marker is an
+        // Anchor `#[account]` so layout is: 8-byte discriminator || Borsh fields.
+        // ValidCreateMarker: payer (32) || expiry_slot (8) || bump (1)
+        let marker_data = ctx.accounts.valid_create_marker.try_borrow_data()?;
+        require!(
+            marker_data.len() >= 8 + 32 + 8,
+            VaultError::InvalidCreateBinding
+        );
+        let expiry_slot = u64::from_le_bytes(marker_data[8 + 32..8 + 32 + 8].try_into().unwrap());
+        drop(marker_data);
+        require!(clock.slot < expiry_slot, VaultError::InvalidCreateBinding);
     }
 
     {
@@ -406,6 +470,16 @@ pub fn tee_forced_settle_handler(
             payload.seller_relock_expiry,
             payload.seller_change_amt,
         )?;
+    }
+
+    // Close the ValidCreateMarker PDA, returning rent to tee_authority.
+    {
+        let marker_ai = ctx.accounts.valid_create_marker.to_account_info();
+        let tee_ai = ctx.accounts.tee_authority.to_account_info();
+        let lamports = marker_ai.lamports();
+        **marker_ai.try_borrow_mut_lamports()? -= lamports;
+        **tee_ai.try_borrow_mut_lamports()? += lamports;
+        marker_ai.try_borrow_mut_data()?.fill(0);
     }
 
     emit!(TradeSettled {
