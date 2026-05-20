@@ -98,12 +98,13 @@ fn valid_wallet_create_roundtrip() {
     let r1 = fr_from_uniform_bytes(&[2u8; 32]);
     let r2 = fr_from_uniform_bytes(&[3u8; 32]);
 
-    // Compute user commitment off-chain (same function the circuit constrains).
-    let root_hash = poseidon_hash(&[rk_lo, rk_hi, r0]).unwrap();
-    let spending_hash = poseidon_hash(&[spending_key, r1]).unwrap();
-    let viewing_hash = poseidon_hash(&[viewing_key, r2]).unwrap();
-    let leaf_root = poseidon_hash(&[root_hash, spending_hash]).unwrap();
-    let user_commitment = poseidon_hash(&[leaf_root, viewing_hash]).unwrap();
+    // Compute user commitment off-chain (must match the circuit exactly).
+    // DOMAIN_ROOT=10, DOMAIN_SPEND=11, DOMAIN_VIEW=12, DOMAIN_LEAF=13, DOMAIN_TOP=14
+    let root_hash = poseidon_hash(&[Fr::from(10u64), rk_lo, rk_hi, r0]).unwrap();
+    let spending_hash = poseidon_hash(&[Fr::from(11u64), spending_key, r1]).unwrap();
+    let viewing_hash = poseidon_hash(&[Fr::from(12u64), viewing_key, r2]).unwrap();
+    let leaf_root = poseidon_hash(&[Fr::from(13u64), root_hash, spending_hash]).unwrap();
+    let user_commitment = poseidon_hash(&[Fr::from(14u64), leaf_root, viewing_hash]).unwrap();
 
     // Write input.json for snarkjs (all values decimal strings).
     let tmp = std::env::temp_dir().join("nyx_wc_roundtrip");

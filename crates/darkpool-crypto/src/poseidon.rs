@@ -75,10 +75,10 @@ mod tests {
     }
 
     #[test]
-    fn poseidon_6_arity_matches_note_commitment_use() {
-        // Note commitment uses arity 6 in the circuit (tokenMint[lo], tokenMint[hi],
-        // amount, ownerCommitment, nonce, blindingR). Make sure we can do arity 6.
-        let inputs = (0..6).map(|i| Fr::from((i + 1) as u64)).collect::<Vec<_>>();
+    fn poseidon_7_arity_matches_note_commitment_use() {
+        // Note commitment uses arity 7: domain_tag + tokenMint[lo] + tokenMint[hi]
+        // + amount + ownerCommitment + nonce + blindingR.
+        let inputs = (0..7).map(|i| Fr::from((i + 1) as u64)).collect::<Vec<_>>();
         let h = poseidon_hash(&inputs).unwrap();
         assert_ne!(h, Fr::zero());
     }

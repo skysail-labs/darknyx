@@ -8,6 +8,11 @@
  * We use circomlibjs — the JavaScript counterpart of circomlib — which the
  * snarkjs/circom stack uses internally. It is byte-compatible with light-poseidon
  * when both are run with BN254 + CIRCOM parameters.
+ *
+ * Domain tags (must match circuit.circom and crates/darkpool-crypto exactly):
+ *   DOMAIN_OWNER = 1n  — owner_commitment = Poseidon3(1, spendingKey, r_owner)
+ *   DOMAIN_NOTE  = 2n  — noteCommitment   = Poseidon7(2, mint_lo, mint_hi, amount, owner, nonce, r)
+ *   DOMAIN_NULL  = 3n  — nullifier        = Poseidon3(3, spendingKey, noteCommitment)
  */
 
 import { buildPoseidon } from "circomlibjs";
@@ -54,23 +59,31 @@ export interface Note {
   blindingR: bigint;
 }
 
-/** Compute the 32-byte BE note commitment. */
-export async function noteCommitment(note: Note): Promise<Uint8Array> {
-  const [lo, hi] = pubkeyToFrPair(note.tokenMint);
-  return poseidonHashBytesBE([lo, hi, note.amount, note.ownerCommitment, note.nonce, note.blindingR]);
-}
+// Domain tags — must match circuits/valid_spend/circuit.circom and
+// crates/darkpool-crypto/src/{note,nullifier}.rs exactly.
+const DOMAIN_OWNER = 1n;
+const DOMAIN_NOTE  = 2n;
+const DOMAIN_NULL  = 3n;
 
+/** Compute owner_commitment = Poseidon3(DOMAIN_OWNER, spendingKey, r_owner). */
 export async function ownerCommitment(spendingKey: bigint, blinding: bigint): Promise<bigint> {
   const p = await getPoseidon();
-  const packed = p([spendingKey, blinding]);
+  const packed = p([DOMAIN_OWNER, spendingKey, blinding]);
   return p.F.toObject(packed);
 }
 
+/** Compute the 32-byte BE note commitment = Poseidon7(DOMAIN_NOTE, mint_lo, mint_hi, amount, ownerCommit, nonce, blindingR). */
+export async function noteCommitment(note: Note): Promise<Uint8Array> {
+  const [lo, hi] = pubkeyToFrPair(note.tokenMint);
+  return poseidonHashBytesBE([DOMAIN_NOTE, lo, hi, note.amount, note.ownerCommitment, note.nonce, note.blindingR]);
+}
+
+/** Compute nullifier = Poseidon3(DOMAIN_NULL, spendingKey, noteCommitmentBigint). */
 export async function nullifier(spendingKey: bigint, commitmentBE: Uint8Array): Promise<Uint8Array> {
   if (commitmentBE.length !== 32) throw new Error("commitment must be 32 bytes");
   let cBig = 0n;
   for (const b of commitmentBE) cBig = (cBig << 8n) | BigInt(b);
   const p = await getPoseidon();
-  const packed = p([spendingKey, cBig]);
+  const packed = p([DOMAIN_NULL, spendingKey, cBig]);
   return bn254ToBE32(p.F.toObject(packed));
 }

@@ -5,12 +5,15 @@
  * byte-identical output to both the Rust helper and the circom
  * `valid_wallet_create` circuit.
  *
- * Formula (Section 4.4 + 23.2):
- *   rootHash    = Poseidon3(root_lo, root_hi, r0)
- *   spendHash   = Poseidon2(spending_key, r1)
- *   viewHash    = Poseidon2(viewing_key, r2)
- *   leafPair    = Poseidon2(rootHash, spendHash)
- *   commitment  = Poseidon2(leafPair, viewHash)
+ * Formula (must match circuits/valid_wallet_create/circuit.circom):
+ *   Domain tags prevent cross-role second-preimage collisions:
+ *   DOMAIN_ROOT=10, DOMAIN_SPEND=11, DOMAIN_VIEW=12, DOMAIN_LEAF=13, DOMAIN_TOP=14
+ *
+ *   rootHash    = Poseidon4(DOMAIN_ROOT,  root_lo, root_hi, r0)
+ *   spendHash   = Poseidon3(DOMAIN_SPEND, spending_key, r1)
+ *   viewHash    = Poseidon3(DOMAIN_VIEW,  viewing_key,  r2)
+ *   leafPair    = Poseidon3(DOMAIN_LEAF,  rootHash, spendHash)
+ *   commitment  = Poseidon3(DOMAIN_TOP,   leafPair, viewHash)
  */
 
 import { buildPoseidon } from "circomlibjs";
@@ -52,6 +55,14 @@ export interface UserCommitmentInputs {
  * `test_commitment_excludes_trading_key` — you cannot accidentally include the
  * trading key in the commitment.
  */
+// Domain tags — must match circuits/valid_wallet_create/circuit.circom
+// and crates/darkpool-crypto/src/user_commitment.rs exactly.
+const DOMAIN_ROOT  = 10n;
+const DOMAIN_SPEND = 11n;
+const DOMAIN_VIEW  = 12n;
+const DOMAIN_LEAF  = 13n;
+const DOMAIN_TOP   = 14n;
+
 export async function userCommitmentFromKeys(
   inputs: UserCommitmentInputs,
 ): Promise<Uint8Array> {
@@ -61,10 +72,10 @@ export async function userCommitmentFromKeys(
   const [rootLo, rootHi] = pubkeyToFrPair(inputs.rootKeyPubkey);
   const p = await getPoseidon();
 
-  const rootHash = p.F.toObject(p([rootLo, rootHi, inputs.r0]));
-  const spendHash = p.F.toObject(p([inputs.spendingKey, inputs.r1]));
-  const viewHash = p.F.toObject(p([inputs.viewingKey, inputs.r2]));
-  const leafPair = p.F.toObject(p([rootHash, spendHash]));
-  const commitment = p.F.toObject(p([leafPair, viewHash]));
+  const rootHash  = p.F.toObject(p([DOMAIN_ROOT,  rootLo, rootHi, inputs.r0]));
+  const spendHash = p.F.toObject(p([DOMAIN_SPEND, inputs.spendingKey, inputs.r1]));
+  const viewHash  = p.F.toObject(p([DOMAIN_VIEW,  inputs.viewingKey, inputs.r2]));
+  const leafPair  = p.F.toObject(p([DOMAIN_LEAF,  rootHash, spendHash]));
+  const commitment = p.F.toObject(p([DOMAIN_TOP,  leafPair, viewHash]));
   return bn254ToBE32(commitment);
 }

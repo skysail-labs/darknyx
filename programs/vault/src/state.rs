@@ -6,7 +6,13 @@ pub const MERKLE_DEPTH: u8 = 20;
 /// Number of historical Merkle roots the vault tracks. A withdrawal's proof
 /// may reference any of the last N roots so that a legitimate user isn't
 /// DoS'd by a racing deposit.
-pub const ROOT_HISTORY_SIZE: usize = 32;
+///
+/// 32 roots × ~400 ms/slot ≈ ~13 seconds of root freshness — far too short
+/// under load (multiple deposits per slot burn the buffer faster). 64 roots
+/// gives ~26 seconds, which comfortably covers proof generation even on slow
+/// client hardware. The on-chain cost is 64 × 32 = 2 048 extra bytes in the
+/// zero-copy VaultConfig account — negligible.
+pub const ROOT_HISTORY_SIZE: usize = 64;
 
 /// Hard ceiling on how far in the future a `NoteLock`'s `expiry_slot` may
 /// sit. ~216_000 slots ≈ 24h at 400ms slots. Prevents a malicious TEE from

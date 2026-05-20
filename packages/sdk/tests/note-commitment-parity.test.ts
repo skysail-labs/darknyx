@@ -1,13 +1,14 @@
 /**
  * Cross-environment parity for the Note Commitment formula.
  *
- * Formula (must match `circuits/valid_spend/circuit.circom` lines 78-86):
+ * Formula (must match `circuits/valid_spend/circuit.circom`):
  *
- *   noteCommitment = Poseidon6(
+ *   noteCommitment = Poseidon7(
+ *     DOMAIN_NOTE=2,        // domain separation tag
  *     token_mint_lo_u128,
  *     token_mint_hi_u128,
  *     amount_u64,
- *     owner_commitment_fr,
+ *     owner_commitment_fr,  // = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
  *     nonce_fr,
  *     blinding_r_fr,
  *   )

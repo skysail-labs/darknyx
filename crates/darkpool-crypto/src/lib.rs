@@ -25,6 +25,7 @@ pub mod keys;
 pub mod note;
 pub mod nullifier;
 pub mod poseidon;
+pub mod price_commitment;
 #[cfg(not(target_os = "solana"))]
 pub mod user_commitment;
 #[cfg(not(target_os = "solana"))]
@@ -39,6 +40,7 @@ pub use keys::{
 };
 pub use note::{Note, NoteCommitment, NOTE_COMMITMENT_BYTES};
 pub use nullifier::{nullifier, Nullifier, NULLIFIER_BYTES};
+pub use price_commitment::price_commitment;
 pub use poseidon::{poseidon_hash, poseidon_hash_bytes};
 #[cfg(not(target_os = "solana"))]
 pub use user_commitment::{user_commitment_from_keys, UserCommitmentInputs};
