@@ -917,6 +917,12 @@ pub struct MatchResultPayload {
     pub seller_relock_expiry: u64,
     pub clearing_price: u64,
     pub batch_slot: u64,
+    /// Groth16Proof bytes: pi_a[64] + pi_b[128] + pi_c[64] = 256 bytes.
+    pub price_proof_pi_a: [u8; 64],
+    pub price_proof_pi_b: [u8; 128],
+    pub price_proof_pi_c: [u8; 64],
+    /// Poseidon3(5, clearing_price, batch_slot). Zero = skip price ZK check.
+    pub price_commitment: [u8; 32],
 }
 
 /// Sentinel used by on-chain code.
@@ -974,6 +980,10 @@ impl MatchResultPayload {
             seller_relock_expiry: 0,
             clearing_price: 0,
             batch_slot: 0,
+            price_proof_pi_a: [0u8; 64],
+            price_proof_pi_b: [0u8; 128],
+            price_proof_pi_c: [0u8; 64],
+            price_commitment: [0u8; 32],
         }
     }
 }
