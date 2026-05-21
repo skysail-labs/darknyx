@@ -115,7 +115,3 @@ the **authoritative** description of the live system is in
 `programs/` and `packages/sdk/src/`.
 
 ---
-
-## License
-
-Apache-2.0.
