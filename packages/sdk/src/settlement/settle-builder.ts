@@ -30,6 +30,7 @@ import {
   noteLockPda,
   nullifierEntryPda,
   validCreateMarkerPda,
+  validPriceMarkerPda,
   vaultConfigPda,
 } from "../idl/vault-client.js";
 
@@ -51,7 +52,9 @@ export interface Groth16Proof {
   piC: Uint8Array;   // 64 bytes
 }
 
-/** Zero proof — used as the `price_commitment == [0;32]` escape hatch. */
+/** All-zero Groth16 proof. Kept as a public export for callers (tests) that
+ *  build placeholder proof structures; the settle ix no longer carries a
+ *  proof inline (v3.1 split it into the `verify_valid_price` ix). */
 export const ZERO_PROOF: Groth16Proof = {
   piA: new Uint8Array(64),
   piB: new Uint8Array(128),
@@ -84,11 +87,13 @@ export interface MatchResultPayload {
   sellerRelockExpiry: bigint;
   clearingPrice: bigint;
   batchSlot: bigint;
-  /** Groth16 proof for VALID_PRICE circuit. Use ZERO_PROOF to skip verification
-   *  (only valid when priceCommitment is also all-zero). */
-  priceProof: Groth16Proof;
-  /** Poseidon3(DOMAIN_PRICE=5, clearingPrice, batchSlot). All-zero = skip. */
-  priceCommitment: Uint8Array;      // [u8; 32]
+  // v3.1: `priceProof` and `priceCommitment` are no longer in the settle
+  // payload. The VALID_PRICE Groth16 proof now lives in a preceding
+  // `verify_valid_price` ix that writes a marker PDA at
+  // `[b"valid_price", priceCommitment]`. The on-chain settle handler
+  // recomputes the commitment from (clearingPrice, batchSlot) and
+  // asserts the marker PDA exists. Build the prep ix via
+  // `buildVerifyValidPriceIx` and submit it before the settle tx.
 }
 
 // ---------- Borsh serialisation ----------
@@ -144,13 +149,10 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     u64LE(p.sellerRelockExpiry),
     u64LE(p.clearingPrice),
     u64LE(p.batchSlot),
-    // VALID_PRICE proof (piA=64 + piB=128 + piC=64 = 256 bytes) + 32-byte
-    // priceCommitment. Use ZERO_PROOF + ZERO_COMMITMENT to skip on-chain
-    // verification (guard: skip iff priceCommitment == [0;32]).
-    fixed(p.priceProof.piA, 64),
-    fixed(p.priceProof.piB, 128),
-    fixed(p.priceProof.piC, 64),
-    fixed(p.priceCommitment, 32),
+    // v3.1: priceProof + priceCommitment removed from the payload (the
+    // Groth16 proof is verified by a preceding `verify_valid_price` ix
+    // that writes a marker PDA; the settle handler recomputes
+    // priceCommitment from clearingPrice + batchSlot and reads the marker).
   );
 }
 
@@ -261,6 +263,15 @@ export interface BuildSettleIxParams {
   quoteMint: PublicKey;
   /** v3: base-side mint of the match (= lock_b.token_mint). */
   baseMint: PublicKey;
+  /**
+   * v3.1: 32-byte Poseidon3(DOMAIN_PRICE=5, clearingPrice, batchSlot).
+   * Used to derive the `ValidPriceMarker` PDA the on-chain handler
+   * looks up (the same value was the seed of the marker written by
+   * the preceding `verify_valid_price` ix). The caller can compute
+   * it via `priceCommitment(payload.clearingPrice, payload.batchSlot)`
+   * from `packages/sdk/src/zk/price-commitment.ts`.
+   */
+  priceCommitment: Uint8Array;
 }
 
 /**
@@ -317,7 +328,11 @@ export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
     buyerFeeAmt: p.payload.buyerFeeAmt,
     sellerFeeAmt: p.payload.sellerFeeAmt,
   });
-  const [marker] = validCreateMarkerPda(p.programId, binding);
+  const [createMarker] = validCreateMarkerPda(p.programId, binding);
+  // v3.1: VALID_PRICE marker derived from the priceCommitment caller
+  // supplies. Handler recomputes the same commitment from the payload
+  // and asserts this PDA is at the expected address.
+  const [priceMarker] = validPriceMarkerPda(p.programId, p.priceCommitment);
 
   const data = cat(
     anchorDiscriminator("tee_forced_settle"),
@@ -338,7 +353,8 @@ export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
       { pubkey: lockE, isSigner: false, isWritable: true },
       { pubkey: lockF, isSigner: false, isWritable: true },
       { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
-      { pubkey: marker, isSigner: false, isWritable: true },
+      { pubkey: createMarker, isSigner: false, isWritable: true },
+      { pubkey: priceMarker, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(data),
@@ -427,9 +443,24 @@ export function exactFillPayload(args: {
     buyerRelockExpiry: 0n,
     sellerRelockOrderId: RELOCK_ORDER_ID_NONE,
     sellerRelockExpiry: 0n,
-    clearingPrice: args.clearingPrice ?? 0n,
+    // v3.1: default clearingPrice from the leg ratio. The VALID_PRICE
+    // circuit asserts `quoteAmount === baseAmount * clearingPrice` exactly,
+    // so for any explicit-fill match this is forced. Tests that need a
+    // different price (e.g. asserting the circuit catches mismatches)
+    // pass `clearingPrice` explicitly.
+    clearingPrice: args.clearingPrice ?? (
+      args.baseAmount === 0n
+        ? 0n
+        : args.quoteAmount % args.baseAmount === 0n
+          ? args.quoteAmount / args.baseAmount
+          : (() => {
+              throw new Error(
+                `exactFillPayload: quoteAmount (${args.quoteAmount}) ` +
+                  `is not an exact multiple of baseAmount (${args.baseAmount}); ` +
+                  `pass an explicit clearingPrice to override`,
+              );
+            })()
+    ),
     batchSlot: args.batchSlot ?? 0n,
-    priceProof: ZERO_PROOF,
-    priceCommitment: ZERO_COMMITMENT,
   };
 }

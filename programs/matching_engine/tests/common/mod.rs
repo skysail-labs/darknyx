@@ -917,12 +917,11 @@ pub struct MatchResultPayload {
     pub seller_relock_expiry: u64,
     pub clearing_price: u64,
     pub batch_slot: u64,
-    /// Groth16Proof bytes: pi_a[64] + pi_b[128] + pi_c[64] = 256 bytes.
-    pub price_proof_pi_a: [u8; 64],
-    pub price_proof_pi_b: [u8; 128],
-    pub price_proof_pi_c: [u8; 64],
-    /// Poseidon3(5, clearing_price, batch_slot). Zero = skip price ZK check.
-    pub price_commitment: [u8; 32],
+    // v3.1: price_proof + price_commitment were removed from the payload.
+    // The VALID_PRICE proof now lives in a preceding `verify_valid_price`
+    // ix that writes a marker PDA at [b"valid_price", price_commitment].
+    // The settle handler recomputes price_commitment from
+    // (clearing_price, batch_slot) and checks the marker exists.
 }
 
 /// Sentinel used by on-chain code.
@@ -980,10 +979,6 @@ impl MatchResultPayload {
             seller_relock_expiry: 0,
             clearing_price: 0,
             batch_slot: 0,
-            price_proof_pi_a: [0u8; 64],
-            price_proof_pi_b: [0u8; 128],
-            price_proof_pi_c: [0u8; 64],
-            price_commitment: [0u8; 32],
         }
     }
 }
@@ -1194,6 +1189,54 @@ pub fn seed_valid_create_marker(h: &mut Harness, payload: &MatchResultPayload) {
 /// imported to avoid pulling more of the vault crate into the test surface.
 const VALID_CREATE_MARKER_SEED: &[u8] = b"valid_create";
 
+/// Mirrors `vault::state::ValidPriceMarker::SEED`.
+const VALID_PRICE_MARKER_SEED: &[u8] = b"valid_price";
+
+/// v3.1 — pre-seed a `ValidPriceMarker` PDA so `tee_forced_settle` finds
+/// one at the price-commitment-derived address. In production the marker
+/// is created by the preceding `verify_valid_price` ix (which verifies a
+/// VALID_PRICE Groth16 proof); the litesvm harness bypasses the proof
+/// check the same way `seed_valid_create_marker` does — settle handler
+/// behaviour is what these tests care about, not the prover orchestration.
+///
+/// Layout (matches `vault::state::ValidPriceMarker`):
+///   8 disc + 32 payer + 8 expiry_slot + 1 bump = 49 bytes
+pub fn seed_valid_price_marker(h: &mut Harness, payload: &MatchResultPayload) {
+    use darkpool_crypto::price_commitment as compute_price_commitment;
+    use solana_account::Account as SolAccount;
+
+    let pc = compute_price_commitment(payload.clearing_price, payload.batch_slot)
+        .expect("price_commitment");
+    let (pda, bump) = Pubkey::find_program_address(&[VALID_PRICE_MARKER_SEED, &pc], &h.vault_id);
+
+    let mut data = vec![0u8; 49];
+    data[0..8].copy_from_slice(&anchor_acct_disc("ValidPriceMarker"));
+    // payer (refund target on close)
+    data[8..40].copy_from_slice(&h.tee.pubkey().to_bytes());
+
+    // Far-future expiry — same reasoning as seed_valid_create_marker.
+    let expiry_slot: u64 = u64::MAX / 2;
+    data[40..48].copy_from_slice(&expiry_slot.to_le_bytes());
+    data[48] = bump;
+
+    let acct = SolAccount {
+        lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
+        data,
+        owner: h.vault_id,
+        executable: false,
+        rent_epoch: 0,
+    };
+    h.svm.set_account(pda, acct).unwrap();
+}
+
+/// Same derivation `build_settle_ix` uses for the price marker.
+pub fn valid_price_marker_pda(h: &Harness, payload: &MatchResultPayload) -> (Pubkey, u8) {
+    use darkpool_crypto::price_commitment as compute_price_commitment;
+    let pc = compute_price_commitment(payload.clearing_price, payload.batch_slot)
+        .expect("price_commitment");
+    Pubkey::find_program_address(&[VALID_PRICE_MARKER_SEED, &pc], &h.vault_id)
+}
+
 /// Same derivation `build_settle_ix` uses, exposed so tests that want to
 /// inspect / assert on the marker PDA can find it.
 pub fn valid_create_marker_pda(h: &Harness, payload: &MatchResultPayload) -> (Pubkey, u8) {
@@ -1336,11 +1379,16 @@ pub fn build_settle_ix(h: &Harness, payload: &MatchResultPayload) -> Instruction
     ]);
 
     // v3 — VALID_CREATE marker. The on-chain TeeForcedSettle expects it
-    // between `note_lock_f` and `instructions_sysvar`; the address is the
-    // PDA at `[b"valid_create", binding_hash]` and the marker must already
-    // exist (seeded via `seed_valid_create_marker` in the test setup, or
-    // via a preceding `verify_valid_create` ix in production).
-    let (marker_pda, _) = valid_create_marker_pda(h, payload);
+    // between `instructions_sysvar` and `valid_price_marker`; the address is
+    // the PDA at `[b"valid_create", binding_hash]` and the marker must
+    // already exist (seeded via `seed_valid_create_marker` in test setup,
+    // or via a preceding `verify_valid_create` ix in production).
+    let (create_marker_pda, _) = valid_create_marker_pda(h, payload);
+
+    // v3.1 — VALID_PRICE marker. PDA at `[b"valid_price", price_commitment]`,
+    // must already exist (seeded via `seed_valid_price_marker` or written
+    // by a preceding `verify_valid_price` ix).
+    let (price_marker_pda, _) = valid_price_marker_pda(h, payload);
 
     let mut data = anchor_disc("tee_forced_settle").to_vec();
     payload.serialize(&mut data).unwrap();
@@ -1359,7 +1407,8 @@ pub fn build_settle_ix(h: &Harness, payload: &MatchResultPayload) -> Instruction
             AccountMeta::new(lock_e, false),
             AccountMeta::new(lock_f, false),
             AccountMeta::new_readonly(instructions_sysvar, false),
-            AccountMeta::new(marker_pda, false),
+            AccountMeta::new(create_marker_pda, false),
+            AccountMeta::new(price_marker_pda, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],
         data,

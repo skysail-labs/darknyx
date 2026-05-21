@@ -178,6 +178,28 @@ pub mod vault {
         )
     }
 
+    /// v3.1 — verify the VALID_PRICE Groth16 proof + write a marker PDA.
+    /// `tee_forced_settle` later asserts the marker exists at the PDA
+    /// derived from its own view of (clearing_price, batch_slot).
+    /// See instructions/verify_valid_price.rs for the design rationale
+    /// (splits the ~300-byte proof out of the settle ix to fit under
+    /// the 1232-byte tx cap).
+    pub fn verify_valid_price(
+        ctx: Context<VerifyValidPrice>,
+        price_commitment: [u8; 32],
+        batch_slot: u64,
+        expiry_slot: u64,
+        proof: Groth16Proof,
+    ) -> Result<()> {
+        verify_valid_price::verify_valid_price_handler(
+            ctx,
+            price_commitment,
+            batch_slot,
+            expiry_slot,
+            proof,
+        )
+    }
+
     /// Atomic TEE-forced settlement.
     pub fn tee_forced_settle(
         ctx: Context<TeeForcedSettle>,

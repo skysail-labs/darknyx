@@ -39,6 +39,7 @@ fn test_exact_fill_no_change_note() {
     );
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("exact-fill settle");
@@ -83,6 +84,7 @@ fn test_partial_fill_change_note() {
     p.note_e_commitment = fr_safe(0x02, 0xE2);
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("partial-fill settle");
@@ -121,6 +123,7 @@ fn test_both_sides_partial_two_change_notes() {
     p.note_f_commitment = fr_safe(0x03, 0xF3);
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("two-change settle");
@@ -161,6 +164,7 @@ fn test_conservation_violation_rejects() {
 
     let before = vault_leaf_count(&h);
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let err = h.svm.send_transaction(tx).expect_err("must reject");
     let logs = err.meta.logs.join("\n").to_lowercase();
@@ -200,6 +204,7 @@ fn test_change_note_inconsistent_rejects() {
     // note_e_commitment stays [0;32] — inconsistent.
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let err = h.svm.send_transaction(tx).expect_err("must reject");
     let logs = err.meta.logs.join("\n").to_lowercase();
@@ -237,6 +242,7 @@ fn test_nullifier_double_spend_rejected() {
     );
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     h.svm.send_transaction(tx).expect("first settle");
     assert!(nullifier_exists(&h, &[0x3A; 32]));
@@ -264,6 +270,7 @@ fn test_nullifier_double_spend_rejected() {
     p2.batch_slot = 1;
     h.svm.expire_blockhash();
     seed_valid_create_marker(&mut h, &p2);
+    seed_valid_price_marker(&mut h, &p2);
     let tx2 = build_settle_tx(&h, &p2);
     let err = h
         .svm
@@ -305,6 +312,7 @@ fn test_wrong_order_id_rejected() {
     p.note_e_commitment = fr_safe(0x08, 0xE8);
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let err = h.svm.send_transaction(tx).expect_err("wrong order_id");
     let logs = err.meta.logs.join("\n").to_lowercase();
@@ -347,6 +355,7 @@ fn test_partial_fill_relocks_change_note() {
     p.buyer_relock_expiry = 2_000_000;
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     h.svm.send_transaction(tx).expect("relock settle");
 
@@ -385,6 +394,7 @@ fn test_relock_without_change_note_returns_error() {
     p.buyer_relock_expiry = 2_000_000;
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let err = h.svm.send_transaction(tx).expect_err("must reject");
     let logs = err.meta.logs.join("\n").to_lowercase();
@@ -423,6 +433,7 @@ fn test_tee_sig_verified_via_ed25519_precompile() {
 
     // Build the settle ix WITHOUT the precompile.
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let settle_ix = build_settle_ix(&h, &p);
     let tx = solana_transaction::Transaction::new(
         &[&h.tee],
@@ -473,6 +484,7 @@ fn test_tee_sig_wrong_key_rejected() {
     sig_bytes.copy_from_slice(sig.as_ref());
     let ed_ix = build_ed25519_verify_ix(&attacker.pubkey().to_bytes(), &sig_bytes, &msg_hash);
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let settle_ix = build_settle_ix(&h, &p);
     let tx = solana_transaction::Transaction::new(
         &[&h.tee],
@@ -520,6 +532,7 @@ fn test_tee_sig_wrong_msg_rejected() {
     sig_bytes.copy_from_slice(sig.as_ref());
     let ed_ix = build_ed25519_verify_ix(&h.tee.pubkey().to_bytes(), &sig_bytes, &bogus_msg);
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let settle_ix = build_settle_ix(&h, &p);
     let tx = solana_transaction::Transaction::new(
         &[&h.tee],
@@ -570,6 +583,7 @@ fn test_fee_note_appended() {
     p.note_fee_commitment = fr_safe(0x0E, 0x88);
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("fee settle");
@@ -603,6 +617,7 @@ fn test_zero_fee_no_note_created() {
     // fee fields are all zero; note_fee_commitment stays [0;32].
 
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("zero-fee settle");
@@ -641,6 +656,7 @@ fn test_fee_note_without_protocol_owner_rejected() {
 
     let before = vault_leaf_count(&h);
     seed_valid_create_marker(&mut h, &p);
+    seed_valid_price_marker(&mut h, &p);
     let tx = build_settle_tx(&h, &p);
     let err = h.svm.send_transaction(tx).expect_err("must reject");
     let logs = err.meta.logs.join("\n").to_lowercase();

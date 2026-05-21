@@ -55,6 +55,12 @@ pub enum VaultError {
     InvalidMarkerExpiry,
     #[msg("VALID_CREATE marker has expired")]
     MarkerExpired,
+    #[msg(
+        "VALID_PRICE binding hash claimed by caller does not match the marker PDA derived on-chain"
+    )]
+    InvalidPriceBinding,
+    #[msg("VALID_PRICE marker has expired")]
+    PriceMarkerExpired,
 
     // ---- Arithmetic / overflow ----
     #[msg("Arithmetic overflow")]

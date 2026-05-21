@@ -198,11 +198,15 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       payload,
       quoteMint: new PublicKey(filled(32, 0xC0)),
       baseMint: new PublicKey(filled(32, 0xC1)),
+      // v3.1: priceCommitment derives the ValidPriceMarker PDA. The unit
+      // tests don't exercise the marker; a fixed sentinel keeps the
+      // expected account list deterministic.
+      priceCommitment: filled(32, 0xC2),
     });
 
     expect(ix.programId.toBase58()).toBe(PROGRAM_ID.toBase58());
-    // v3: 12 accounts + the new ValidCreateMarker = 13.
-    expect(ix.keys.length).toBe(13);
+    // v3.1: 12 base accounts + ValidCreateMarker + ValidPriceMarker = 14.
+    expect(ix.keys.length).toBe(14);
     expect(ix.keys[0].pubkey.toBase58()).toBe(tee.publicKey.toBase58());
     expect(ix.keys[0].isSigner).toBe(true);
     expect(ix.keys[10].pubkey.toBase58()).toBe(
@@ -232,6 +236,10 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       payload,
       quoteMint: new PublicKey(filled(32, 0xC0)),
       baseMint: new PublicKey(filled(32, 0xC1)),
+      // v3.1: priceCommitment derives the ValidPriceMarker PDA. The unit
+      // tests don't exercise the marker; a fixed sentinel keeps the
+      // expected account list deterministic.
+      priceCommitment: filled(32, 0xC2),
     });
     const expectedDisc = new Uint8Array(
       createHash("sha256").update("global:tee_forced_settle").digest(),
@@ -260,6 +268,10 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       payload,
       quoteMint: new PublicKey(filled(32, 0xC0)),
       baseMint: new PublicKey(filled(32, 0xC1)),
+      // v3.1: priceCommitment derives the ValidPriceMarker PDA. The unit
+      // tests don't exercise the marker; a fixed sentinel keeps the
+      // expected account list deterministic.
+      priceCommitment: filled(32, 0xC2),
     });
     // Payload =
     //   9 * 32  (noteA..noteF + nullA + nullB + noteFee)

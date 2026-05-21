@@ -116,6 +116,7 @@ import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { proveValidCreate } from "./helpers/valid-create-prover.js";
 import { sendSettleV0 } from "./helpers/settle-v0.js";
+import { landVerifyValidPrice } from "./helpers/verify-valid-price.js";
 import { validCreateBindingHash } from "../src/settlement/settle-builder.js";
 import { buildVerifyValidCreateInstruction } from "../src/idl/vault-client.js";
 import {
@@ -1240,6 +1241,17 @@ maybeDescribe(
           await sendAndConfirmTransaction(fx.l1, verifyTx, [fx.teeKeypair], { commitment: "confirmed" });
         }
 
+        // v3.1: land VALID_PRICE proof in its own tx (creates the
+        // ValidPriceMarker PDA the settle handler reads).
+        const priceMarker = await landVerifyValidPrice({
+          connection: fx.l1,
+          vaultProgramId: fx.vaultProgramId,
+          teeKeypair: fx.teeKeypair,
+          payload,
+          repoRoot: REPO_ROOT,
+        });
+        txline("verify_valid_price", priceMarker.txSig);
+
         await timer.time("Ed25519 + tee_forced_settle", "L1", async () => {
           // v3: with-change-note variant — same tx-size pressure as Test B
           // (lock_e and lock_f no longer dedupe because note_e is non-zero).
@@ -1262,6 +1274,7 @@ maybeDescribe(
                 teeAuthority: fx.teeKeypair.publicKey,
                 payload,
                 quoteMint: fx.quoteMint, baseMint: fx.baseMint,
+                priceCommitment: priceMarker.priceCommitment,
               }),
             ],
           });
@@ -1738,6 +1751,15 @@ maybeDescribe(
           await sendAndConfirmTransaction(fx.l1, verifyTx, [fx.teeKeypair], { commitment: "confirmed" });
         }
 
+        const priceMarker = await landVerifyValidPrice({
+          connection: fx.l1,
+          vaultProgramId: fx.vaultProgramId,
+          teeKeypair: fx.teeKeypair,
+          payload,
+          repoRoot: REPO_ROOT,
+        });
+        txline("verify_valid_price", priceMarker.txSig);
+
         await timer.time("Ed25519 + tee_forced_settle (with re-lock)", "L1", async () => {
           // v3: with-relock settle was 1243/1232 as a legacy tx. Send as v0
           // with the ALT in e2e-config so the three static accounts
@@ -1761,6 +1783,7 @@ maybeDescribe(
                 teeAuthority: fx.teeKeypair.publicKey,
                 payload,
                 quoteMint: fx.quoteMint, baseMint: fx.baseMint,
+                priceCommitment: priceMarker.priceCommitment,
               }),
             ],
           });
@@ -2610,6 +2633,15 @@ maybeDescribe(
             await sendAndConfirmTransaction(fx.l1, verifyTx, [fx.teeKeypair], { commitment: "confirmed" });
           }
 
+          const priceMarker = await landVerifyValidPrice({
+            connection: fx.l1,
+            vaultProgramId: fx.vaultProgramId,
+            teeKeypair: fx.teeKeypair,
+            payload,
+            repoRoot: REPO_ROOT,
+          });
+          txline("verify_valid_price", priceMarker.txSig);
+
           await timer.time("Ed25519 + tee_forced_settle", "L1", async () => {
             // v3 v0/ALT path — keeps every settle uniform across tests.
             if (!fx.settleLookupTable) {
@@ -2631,6 +2663,7 @@ maybeDescribe(
                   teeAuthority: fx.teeKeypair.publicKey,
                   payload,
                   quoteMint: fx.quoteMint, baseMint: fx.baseMint,
+                  priceCommitment: priceMarker.priceCommitment,
                 }),
               ],
             });

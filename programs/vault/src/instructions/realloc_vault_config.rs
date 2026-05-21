@@ -87,6 +87,10 @@ pub struct ReallocVaultConfig<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// `needless_range_loop`: the loops below index into a slice of `data` AND
+// into `zero_subtree_roots` simultaneously, so the iterator form would be
+// less readable than the explicit index.
+#[allow(clippy::needless_range_loop)]
 pub fn realloc_vault_config_handler(ctx: Context<ReallocVaultConfig>) -> Result<()> {
     let info = ctx.accounts.vault_config.to_account_info();
     let mut data = info.try_borrow_mut_data()?;
@@ -108,8 +112,7 @@ pub fn realloc_vault_config_handler(ctx: Context<ReallocVaultConfig>) -> Result<
         VaultError::Unauthorized,
     );
 
-    let (_pda, canonical_bump) =
-        Pubkey::find_program_address(&[VaultConfig::SEED], &crate::ID);
+    let (_pda, canonical_bump) = Pubkey::find_program_address(&[VaultConfig::SEED], &crate::ID);
 
     // Idempotency: if the canonical bump byte already sits at the NEW
     // offset, this migration has already run. Doing it again would
@@ -134,7 +137,8 @@ pub fn realloc_vault_config_handler(ctx: Context<ReallocVaultConfig>) -> Result<
         let start = OLD_ZERO_ROOTS_OFFSET + i * 32;
         zero_subtree_roots[i].copy_from_slice(&data[start..start + 32]);
     }
-    protocol_owner.copy_from_slice(&data[OLD_PROTOCOL_OWNER_OFFSET..OLD_PROTOCOL_OWNER_OFFSET + 32]);
+    protocol_owner
+        .copy_from_slice(&data[OLD_PROTOCOL_OWNER_OFFSET..OLD_PROTOCOL_OWNER_OFFSET + 32]);
     fee_rate.copy_from_slice(&data[OLD_FEE_RATE_OFFSET..OLD_FEE_RATE_OFFSET + 2]);
 
     // Reset the entire payload, then write fields into NEW offsets.

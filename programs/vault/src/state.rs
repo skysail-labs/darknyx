@@ -204,6 +204,35 @@ impl ValidCreateMarker {
 /// caller plenty of slop without letting stale markers gum up devnet.
 pub const MAX_CREATE_MARKER_TTL_SLOTS: u64 = 300; // ~2 min at 400ms slots.
 
+/// v3 — VALID_PRICE marker. Written by `verify_valid_price` (which
+/// checks a Groth16 proof that `quote_amount == base_amount * clearing_price`
+/// for some private `clearing_price` bound to a specific batch via
+/// `price_commitment = Poseidon3(DOMAIN_PRICE, clearing_price, batch_slot)`).
+/// Read by `tee_forced_settle` (which recomputes the same commitment from
+/// its view of the payload and asserts the marker is at the matching PDA).
+///
+/// Same lifecycle as `ValidCreateMarker`: created by the verify ix, closed
+/// by the immediately-following settle ix, lamports refunded to `payer`.
+#[account]
+#[derive(Default)]
+pub struct ValidPriceMarker {
+    /// Refund target on close.
+    pub payer: Pubkey,
+    /// Slot past which this marker is stale and may be released.
+    pub expiry_slot: u64,
+    pub bump: u8,
+}
+
+impl ValidPriceMarker {
+    pub const SEED: &'static [u8] = b"valid_price";
+    /// 8 disc + 32 payer + 8 expiry + 1 bump.
+    pub const SPACE: usize = 8 + 32 + 8 + 1;
+}
+
+/// Same hard ceiling as `MAX_CREATE_MARKER_TTL_SLOTS`. Both markers share
+/// the same intended consume-by-next-settle lifecycle.
+pub const MAX_PRICE_MARKER_TTL_SLOTS: u64 = 300; // ~2 min at 400ms slots.
+
 impl VaultConfig {
     /// Check whether a Merkle root appears in the recent-roots ring buffer.
     pub fn contains_root(&self, root: &[u8; 32]) -> bool {

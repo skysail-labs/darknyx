@@ -22,10 +22,6 @@ use crate::errors::VaultError;
 use crate::instructions::verify_valid_create::valid_create_binding_hash;
 use crate::merkle::append_leaf;
 use crate::state::*;
-use crate::zk::verifier::make_vk;
-use crate::zk::verify_groth16_proof;
-use crate::zk::vk_valid_price::*;
-use crate::zk::Groth16Proof;
 use anchor_lang::prelude::*;
 use core::mem::size_of;
 
@@ -80,14 +76,14 @@ pub struct MatchResultPayload {
     pub seller_relock_expiry: u64,
     pub clearing_price: u64,
     pub batch_slot: u64,
-    /// Groth16 proof for the VALID_PRICE circuit.
-    /// Proves: quote_amount == base_amount * clearing_price, all values in [0,2^64).
-    pub price_proof: Groth16Proof,
-    /// Poseidon3(DOMAIN_PRICE=5, clearing_price, batch_slot).
-    /// The handler recomputes this from the payload fields and asserts it
-    /// matches before verifying the proof — preventing the TEE from submitting
-    /// a proof for a different (price, slot) than what is in the payload.
-    pub price_commitment: [u8; 32],
+    // v3.1 note: `price_proof` and `price_commitment` previously lived
+    // here. They have been factored out into a preceding `verify_valid_price`
+    // ix that writes a `ValidPriceMarker` PDA. This handler recomputes
+    // `Poseidon3(DOMAIN_PRICE, clearing_price, batch_slot)` from the two
+    // u64 fields above and asserts the marker PDA exists at that address.
+    // canonical_payload_hash is unchanged (it never included price_proof
+    // or price_commitment), so existing TEE signatures and the
+    // `nyx-match-v5` domain tag remain valid.
 }
 
 #[derive(Accounts)]
@@ -197,6 +193,18 @@ pub struct TeeForcedSettle<'info> {
     #[account(mut)]
     pub valid_create_marker: UncheckedAccount<'info>,
 
+    /// v3.1 — VALID_PRICE marker. Created by `verify_valid_price` in a
+    /// preceding tx; closed here. Its PDA seed is the `price_commitment`
+    /// itself (= `Poseidon3(DOMAIN_PRICE, clearing_price, batch_slot)`).
+    /// The handler recomputes that commitment from the payload's two
+    /// u64 fields and asserts this account is at the derived address.
+    /// init = false; account must already exist.
+    ///
+    /// CHECK: Validated via the binding check in the handler. Closed
+    /// to `tee_authority` on success.
+    #[account(mut)]
+    pub valid_price_marker: UncheckedAccount<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -226,41 +234,44 @@ pub fn tee_forced_settle_handler(
         &canonical_payload_hash(&payload),
     )?;
 
-    // Verify the VALID_PRICE Groth16 proof.
-    // The circuit proves: quote_amount == base_amount * clearing_price,
-    // and all three values are in [0, 2^64). This closes the gap where a
-    // compromised TEE could lie about the clearing_price without being
-    // caught by the on-chain conservation law.
+    // v3.1: validate the VALID_PRICE marker PDA. The marker was written
+    // by a preceding `verify_valid_price` ix, which verified the Groth16
+    // proof that quote_amount == base_amount * clearing_price (with a
+    // private clearing_price bound to this (price, batch_slot) via
+    // price_commitment = Poseidon3(DOMAIN_PRICE, clearing_price, batch_slot)).
     //
-    // Wire order (from circuit.sym — public signals listed by wire index):
-    //   wire 1: price_commitment
-    //   wire 2: batch_slot
-    // price_commitment == [0u8;32] is the test escape hatch: existing integration
-    // tests that pre-date the VALID_PRICE circuit don't supply a proof. Production
-    // payloads always carry a non-zero commitment (Poseidon output is never zero).
-    if payload.price_commitment != [0u8; 32] {
+    // We recompute the same commitment from payload.clearing_price +
+    // payload.batch_slot, derive the marker PDA, assert this account is
+    // at that exact address, and check it's non-expired. The marker is
+    // closed at the end of the handler and lamports refunded to its
+    // recorded payer (mirroring the VALID_CREATE marker lifecycle).
+    {
         use darkpool_crypto::price_commitment as compute_price_commitment;
         let expected_pc = compute_price_commitment(payload.clearing_price, payload.batch_slot)
-            .map_err(|_| error!(VaultError::InvalidProof))?;
-        require!(
-            payload.price_commitment == expected_pc,
-            VaultError::InvalidProof
-        );
+            .map_err(|_| error!(VaultError::InvalidPriceBinding))?;
 
-        let batch_slot_be32 = {
-            let mut b = [0u8; 32];
-            b[24..32].copy_from_slice(&payload.batch_slot.to_be_bytes());
-            b
-        };
-        let price_public: [[u8; 32]; 2] = [payload.price_commitment, batch_slot_be32];
-        let price_vk = make_vk(
-            &VALID_PRICE_ALPHA_G1,
-            &VALID_PRICE_BETA_G2,
-            &VALID_PRICE_GAMMA_G2,
-            &VALID_PRICE_DELTA_G2,
-            &VALID_PRICE_IC,
+        let (expected_marker_pda, _) = Pubkey::find_program_address(
+            &[ValidPriceMarker::SEED, expected_pc.as_ref()],
+            &crate::ID,
         );
-        verify_groth16_proof::<2>(&price_vk, &payload.price_proof, &price_public)?;
+        require_keys_eq!(
+            ctx.accounts.valid_price_marker.key(),
+            expected_marker_pda,
+            VaultError::InvalidPriceBinding
+        );
+        let marker_info = ctx.accounts.valid_price_marker.to_account_info();
+        require!(
+            marker_info.owner == &crate::ID,
+            VaultError::InvalidPriceBinding
+        );
+        let marker_data = marker_info.try_borrow_data()?;
+        require!(
+            marker_data.len() >= 8 + 32 + 8,
+            VaultError::InvalidPriceBinding
+        );
+        let expiry_slot = u64::from_le_bytes(marker_data[8 + 32..8 + 32 + 8].try_into().unwrap());
+        drop(marker_data);
+        require!(clock.slot < expiry_slot, VaultError::PriceMarkerExpired);
     }
 
     // v3: validate the VALID_CREATE marker PDA. The marker was written by a
@@ -475,6 +486,16 @@ pub fn tee_forced_settle_handler(
     // Close the ValidCreateMarker PDA, returning rent to tee_authority.
     {
         let marker_ai = ctx.accounts.valid_create_marker.to_account_info();
+        let tee_ai = ctx.accounts.tee_authority.to_account_info();
+        let lamports = marker_ai.lamports();
+        **marker_ai.try_borrow_mut_lamports()? -= lamports;
+        **tee_ai.try_borrow_mut_lamports()? += lamports;
+        marker_ai.try_borrow_mut_data()?.fill(0);
+    }
+
+    // v3.1: same close for the ValidPriceMarker PDA.
+    {
+        let marker_ai = ctx.accounts.valid_price_marker.to_account_info();
         let tee_ai = ctx.accounts.tee_authority.to_account_info();
         let lamports = marker_ai.lamports();
         **marker_ai.try_borrow_mut_lamports()? -= lamports;
@@ -759,12 +780,6 @@ mod tests {
             seller_relock_expiry: 0,
             clearing_price: 0,
             batch_slot: 0,
-            price_proof: Groth16Proof {
-                pi_a: [0u8; 64],
-                pi_b: [0u8; 128],
-                pi_c: [0u8; 64],
-            },
-            price_commitment: [0u8; 32],
         };
         let hash = canonical_payload_hash(&p);
         // Keep in sync with packages/sdk/tests/settle-builder.test.ts

@@ -109,6 +109,7 @@ import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { proveValidCreate } from "./helpers/valid-create-prover.js";
 import { sendSettleV0 } from "./helpers/settle-v0.js";
+import { landVerifyValidPrice } from "./helpers/verify-valid-price.js";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -910,6 +911,15 @@ maybeDescribe(
         );
         txline("verify_valid_create", verifySig);
 
+        const priceMarker = await landVerifyValidPrice({
+          connection: l1,
+          vaultProgramId,
+          teeKeypair,
+          payload,
+          repoRoot: REPO_ROOT,
+        });
+        txline("verify_valid_price", priceMarker.txSig);
+
         if (!cfg.settleLookupTable) {
           throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
         }
@@ -928,6 +938,7 @@ maybeDescribe(
               teeAuthority: teeKeypair.publicKey,
               payload,
               quoteMint, baseMint,
+              priceCommitment: priceMarker.priceCommitment,
             }),
           ],
         });
