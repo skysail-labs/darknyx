@@ -1,11 +1,17 @@
-# Phase 4 — nightly devnet E2E.
+# Devnet E2E runner — fires on three triggers:
+#
+#   1. Nightly cron at 03:00 UTC (catches overnight regressions).
+#   2. workflow_dispatch (manual button in the Actions UI; supports
+#      `run_partial_fill` + `skip_er` toggles).
+#   3. PR comment `/test-devnet` from a repo owner / member / collaborator.
+#      Supports the same toggles as flags: `/test-devnet --partial-fill --skip-er`.
 #
 # Runs the env-gated devnet / ER / CN / PER SDK flows against the
-# already-deployed programs on Solana devnet. This is INFORMATIONAL
-# — it does NOT gate PRs. The point is to catch the class of
-# regressions that only surface when wire format meets a real RPC:
-# tx size, blockhash freshness, account-existence races, PER
-# rollups, etc.
+# already-deployed programs on Solana devnet. INFORMATIONAL — it does
+# NOT gate PRs (no branch-protection coupling). The point is to catch
+# the class of regressions that only surface when wire format meets a
+# real RPC: tx size, blockhash freshness, account-existence races,
+# PER rollups, etc.
 #
 # Scope:
 #   - devnet-setup.test.ts             (RUN_DEVNET_E2E=1)
@@ -13,14 +19,15 @@
 #   - change-note-flow.test.ts         (RUN_CN_E2E=1)
 #   - er-trade-flow.test.ts            (RUN_ER_E2E=1)
 #   - orders-submit.devnet.test.ts     (RUN_PER_TESTS=1)
-#   - partial-fill block in devnet-trade-flow (opt-in via dispatch input)
+#   - partial-fill block in devnet-trade-flow (opt-in via flag)
 #
 # Out of scope:
 #   - cargo build-sbf / program deploy. The workflow assumes the
 #     `Anchor.toml` program IDs are already deployed on devnet and
 #     does NOT redeploy from CI (would require upgrade authority and
 #     risk replacing a live demo). Use scripts/deploy-devnet.sh
-#     locally to roll a new version.
+#     locally to roll a new version BEFORE testing a PR that changes
+#     on-chain code.
 #
 # Required secrets (set via `gh secret set ...` or the repo UI):
 #   DEVNET_ADMIN_KEYPAIR           — JSON array body of admin.json
@@ -50,24 +57,149 @@ on:
         description: 'Skip the ER (Ephemeral Rollup) tests — useful when MagicBlock devnet is flaky'
         type: boolean
         default: false
+  issue_comment:
+    # PRs are issues in GitHub's data model, so this also fires on PR
+    # comments. The `preflight` job below filters down to the
+    # `/test-devnet` ones from members/collaborators.
+    types: [created]
 
-# At most one nightly run in flight. Don't cancel — we want each
-# scheduled run to complete (or fail clearly) on its own.
+# Concurrency strategy:
+#   - Scheduled / dispatched runs cluster on the workflow name.
+#   - PR-comment runs cluster per-PR so different PRs can be tested
+#     in parallel, but a second `/test-devnet` on the same PR while
+#     the first is still running is dropped (cancel-in-progress=true
+#     for comment runs).
 concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'issue_comment' }}
 
 permissions:
   contents: read
+  # `issues: write` covers reactions on comments (PRs are issues).
+  # `pull-requests: write` covers posting the result comment back.
+  issues: write
+  pull-requests: write
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # ------------------------------------------------------------------
+  # Gate + resolve. For comment triggers, this job filters down to
+  # `/test-devnet` posts from authorised users and resolves the PR's
+  # head SHA; downstream jobs check that SHA out. For scheduled +
+  # dispatch triggers, this job just passes through the standard
+  # github.ref / github.sha.
+  # ------------------------------------------------------------------
+  preflight:
+    name: preflight (gate + resolve ref)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    # Comment triggers must:
+    #   1. Be on a pull request (not a plain issue).
+    #   2. Have a body that starts with `/test-devnet`.
+    #   3. Come from a user with write access — OWNER, MEMBER, or
+    #      COLLABORATOR. (CONTRIBUTOR is *not* the same as collaborator;
+    #      a CONTRIBUTOR is someone who has merged a commit, no
+    #      ongoing write access. We reject them to keep arbitrary
+    #      community comments from spending devnet SOL.)
+    # Schedule + dispatch always pass.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (
+        github.event.issue.pull_request != null &&
+        startsWith(github.event.comment.body, '/test-devnet') &&
+        contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      run_partial_fill: ${{ steps.resolve.outputs.run_partial_fill }}
+      skip_er: ${{ steps.resolve.outputs.skip_er }}
+    steps:
+      # Acknowledge the comment immediately with a 🚀 reaction so the
+      # commenter sees confirmation before the (long) test run starts.
+      - name: React to comment with 🚀
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X POST -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content='rocket'
+
+      # Resolve the target ref + parse flags. The comment body is
+      # passed through an env var (NOT YAML-interpolated into the
+      # script) to avoid shell-injection from arbitrary comment text.
+      - name: Resolve target ref + flags
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == 'issue_comment' ]]; then
+            pr_number='${{ github.event.issue.number }}'
+            data=$(gh pr view "$pr_number" \
+              --repo "${{ github.repository }}" \
+              --json headRefName,headRefOid)
+            head_ref=$(echo "$data" | jq -r '.headRefName')
+            head_sha=$(echo "$data" | jq -r '.headRefOid')
+            echo "ref=$head_ref"        >> "$GITHUB_OUTPUT"
+            echo "sha=$head_sha"        >> "$GITHUB_OUTPUT"
+            echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+
+            # Flag parsing — supports `/test-devnet`, `/test-devnet --partial-fill`,
+            # `/test-devnet --skip-er`, `/test-devnet --partial-fill --skip-er`.
+            run_partial_fill=0
+            skip_er=0
+            if grep -qE -- '(^|[[:space:]])--partial-fill([[:space:]]|$)' <<< "$COMMENT_BODY"; then
+              run_partial_fill=1
+            fi
+            if grep -qE -- '(^|[[:space:]])--skip-er([[:space:]]|$)' <<< "$COMMENT_BODY"; then
+              skip_er=1
+            fi
+            echo "run_partial_fill=$run_partial_fill" >> "$GITHUB_OUTPUT"
+            echo "skip_er=$skip_er"                   >> "$GITHUB_OUTPUT"
+          else
+            # schedule or workflow_dispatch
+            echo "ref=${{ github.ref }}"  >> "$GITHUB_OUTPUT"
+            echo "sha=${{ github.sha }}"  >> "$GITHUB_OUTPUT"
+            echo "pr_number="             >> "$GITHUB_OUTPUT"
+            echo "run_partial_fill=${{ inputs.run_partial_fill && '1' || '0' }}" >> "$GITHUB_OUTPUT"
+            echo "skip_er=${{ inputs.skip_er && '1' || '0' }}"                   >> "$GITHUB_OUTPUT"
+          fi
+
+      # Tell the PR author the run is starting so they can find it
+      # without digging through the Actions tab.
+      - name: Acknowledge on PR
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ steps.resolve.outputs.ref }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+          PARTIAL: ${{ steps.resolve.outputs.run_partial_fill }}
+          SKIP_ER: ${{ steps.resolve.outputs.skip_er }}
+        run: |
+          set -euo pipefail
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh pr comment '${{ github.event.issue.number }}' \
+            --repo "${{ github.repository }}" \
+            --body "🚀 \`/test-devnet\` ack'd — running devnet E2E against \`$REF\` @ \`${SHA:0:7}\`. Flags: partial_fill=$PARTIAL skip_er=$SKIP_ER. [Watch the run]($run_url)."
+
+  # ------------------------------------------------------------------
+  # The actual devnet E2E run. Same recipe as before, plus:
+  #   - Checks out the resolved SHA (the PR's head when triggered by
+  #     comment; otherwise github.sha).
+  #   - Reads RUN_* gates from preflight outputs instead of `inputs.*`
+  #     (so the same job body services all three trigger types).
+  # ------------------------------------------------------------------
   devnet:
     name: devnet E2E (env-gated)
     runs-on: ubuntu-latest
+    needs: [preflight]
     timeout-minutes: 35
     env:
       L1_RPC_URL: https://api.devnet.solana.com
@@ -76,15 +208,19 @@ jobs:
       TEE_AUTHORITY_KEYPAIR: .devnet/keypairs/tee_authority.json
       ROOT_KEY_KEYPAIR: .devnet/keypairs/root_key.json
       TRADER_KEYPAIR: .devnet/keypairs/trader.json
-      # Default the four RUN_* gates on. `workflow_dispatch` inputs
-      # can disable ER and enable the partial-fill add-on.
+      # Default the four RUN_* gates on. The preflight job's outputs
+      # decide whether ER is skipped and partial-fill is enabled.
       RUN_DEVNET_E2E: '1'
       RUN_CN_E2E: '1'
       RUN_PER_TESTS: '1'
-      RUN_ER_E2E: ${{ inputs.skip_er && '0' || '1' }}
-      RUN_DEVNET_PARTIAL_FILL: ${{ inputs.run_partial_fill && '1' || '0' }}
+      RUN_ER_E2E: ${{ needs.preflight.outputs.skip_er == '1' && '0' || '1' }}
+      RUN_DEVNET_PARTIAL_FILL: ${{ needs.preflight.outputs.run_partial_fill }}
     steps:
+      # For issue_comment, github.ref is the default branch — we need
+      # the PR's head SHA explicitly. preflight resolved it for us.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
 
       # ----- Materialise the four keypair secrets onto disk -----
       # Each secret holds the JSON array body of a Solana keypair file
@@ -247,3 +383,35 @@ jobs:
       - name: Wipe materialised keypairs
         if: always()
         run: rm -rf .devnet/
+
+  # ------------------------------------------------------------------
+  # Result notifier. Only fires for comment-triggered runs. Posts a
+  # ✅ / ❌ / ⚠️ comment back on the PR with a link to the run.
+  # `if: always()` so we still notify on failure / cancellation; the
+  # preflight check ensures pr_number is populated.
+  # ------------------------------------------------------------------
+  notify:
+    name: notify PR
+    needs: [preflight, devnet]
+    if: always() && github.event_name == 'issue_comment' && needs.preflight.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Comment result back on PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.devnet.result }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
+          REF: ${{ needs.preflight.outputs.ref }}
+          SHA: ${{ needs.preflight.outputs.sha }}
+        run: |
+          set -euo pipefail
+          case "$RESULT" in
+            success)   emoji='✅'  ;;
+            cancelled) emoji='⚠️' ;;
+            *)         emoji='❌'  ;;
+          esac
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh pr comment "$PR_NUMBER" \
+            --repo "${{ github.repository }}" \
+            --body "$emoji devnet E2E **$RESULT** for \`$REF\` @ \`${SHA:0:7}\`. [Full logs]($run_url)."
