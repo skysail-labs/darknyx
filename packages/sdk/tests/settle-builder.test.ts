@@ -273,18 +273,17 @@ describe("Phase 5 — settle-builder: buildSettleIx", () => {
       // expected account list deterministic.
       priceCommitment: filled(32, 0xC2),
     });
-    // Payload =
+    // v3.1 payload (priceProof + priceCommitment factored out into the
+    // preceding verify_valid_price ix):
     //   9 * 32  (noteA..noteF + nullA + nullB + noteFee)
     //   5 * 16  (matchId + oidA + oidB + buyerRelockOid + sellerRelockOid)
     //  10 *  8  (base, quote, buyerChange, sellerChange, buyerFee, sellerFee,
     //            buyerRelockExpiry, sellerRelockExpiry, price, batchSlot)
-    // + 256     (priceProof: piA=64 + piB=128 + piC=64)
-    // +  32     (priceCommitment)
-    //  = 288 + 80 + 80 + 256 + 32 = 736.
-    // Plus 8-byte Anchor discriminator = 744.
+    //  = 288 + 80 + 80 = 448.
+    // Plus 8-byte Anchor discriminator = 456 total in ix.data.
     const payloadBytes = serializePayload(payload);
-    expect(payloadBytes.length).toBe(32 * 9 + 16 * 5 + 8 * 10 + 256 + 32);
-    expect(payloadBytes.length).toBe(736);
+    expect(payloadBytes.length).toBe(32 * 9 + 16 * 5 + 8 * 10);
+    expect(payloadBytes.length).toBe(448);
     expect(ix.data.length).toBe(8 + payloadBytes.length);
   });
 
@@ -335,6 +334,13 @@ describe("Phase 5 — settle-builder: cross-environment parity", () => {
       orderIdB: filled(16, 0x02),
       baseAmount: 100n,
       quoteAmount: 5_000n,
+      // Match the Rust `canonical_payload_hash_fixed_vector` test (in
+      // programs/vault/src/instructions/tee_forced_settle.rs), which uses
+      // clearing_price = 0 + batch_slot = 0. Without this override
+      // exactFillPayload's v3.1 auto-derive would set clearingPrice =
+      // 5000/100 = 50 and the hashes would diverge.
+      clearingPrice: 0n,
+      batchSlot: 0n,
     });
     const expected = new Uint8Array([
       0x03, 0x88, 0xE8, 0x01, 0x83, 0x01, 0x59, 0x29, 0x83, 0xB8, 0x6C, 0xBC, 0x2F, 0xB7,
