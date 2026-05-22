@@ -233,6 +233,41 @@ impl ValidPriceMarker {
 /// the same intended consume-by-next-settle lifecycle.
 pub const MAX_PRICE_MARKER_TTL_SLOTS: u64 = 300; // ~2 min at 400ms slots.
 
+/// v3.5 — BATCH validity marker. Written by `verify_match_batch` after
+/// it verifies a single Groth16 proof attesting VALID_CREATE +
+/// VALID_PRICE for ALL N matches in a batch. The proof's one public
+/// input is a Merkle root over the per-slot leaves; the marker's PDA
+/// is seeded by that same root. `tee_forced_settle` then takes a
+/// Merkle inclusion proof per match, recomputes the leaf from the
+/// settle payload, walks up to the root, and asserts the marker
+/// exists at the derived PDA.
+///
+/// Replaces the per-match `ValidCreateMarker` + `ValidPriceMarker`
+/// pair: one verify_match_batch tx covers an entire batch instead of
+/// 2 × N marker-creating txs. Same TTL semantics + close-on-consume
+/// lifecycle.
+#[account]
+#[derive(Default)]
+pub struct BatchValidityMarker {
+    /// Refund target on close.
+    pub payer: Pubkey,
+    /// Slot past which this marker is stale and may be released.
+    pub expiry_slot: u64,
+    pub bump: u8,
+}
+
+impl BatchValidityMarker {
+    pub const SEED: &'static [u8] = b"batch_validity";
+    /// 8 disc + 32 payer + 8 expiry + 1 bump.
+    pub const SPACE: usize = 8 + 32 + 8 + 1;
+}
+
+/// Same 300-slot (~2 min) ceiling as the per-match markers. A batch
+/// marker is meant to be consumed by the N settle txs that follow it
+/// in the same matcher cycle; longer TTL just lets stale state pile
+/// up if a settle goes missing.
+pub const MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS: u64 = 300;
+
 impl VaultConfig {
     /// Check whether a Merkle root appears in the recent-roots ring buffer.
     pub fn contains_root(&self, root: &[u8; 32]) -> bool {

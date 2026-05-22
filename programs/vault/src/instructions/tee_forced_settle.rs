@@ -530,7 +530,7 @@ pub fn tee_forced_settle_handler(
 /// `release_lock` will look up. Returns an error if the account is
 /// non-empty (a prior lock still exists for this commitment).
 #[allow(clippy::too_many_arguments)]
-fn create_relock_pda<'info>(
+pub(crate) fn create_relock_pda<'info>(
     note_lock_ai: &UncheckedAccount<'info>,
     payer: &Signer<'info>,
     system_program: &Program<'info, System>,

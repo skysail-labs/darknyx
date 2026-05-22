@@ -14,15 +14,19 @@
  * as scaling-validation steps and fast unit-test instances.
  *
  * Leaf-hash layout — MUST match `template MatchSlot()` in
- * `circuits/templates/match_batch.circom`:
+ * `circuits/templates/match_batch.circom`. Arities capped at 12
+ * (= light-poseidon's MAX_X5_LEN-1, so the on-chain handler can
+ * re-derive this hash via solana_poseidon::hashv).
  *
- *   h1 = Poseidon16(DOMAIN_LEAF_INNER=20,
- *                   note_a, note_b, note_c, note_d, note_e, note_f,
- *                   qm_lo, qm_hi, bm_lo, bm_hi,
- *                   base_amount, quote_amount,
- *                   buyer_change_amt, seller_change_amt, buyer_fee_amt)
- *   leaf = Poseidon5(DOMAIN_LEAF_TOP=21, h1,
- *                    seller_fee_amt, clearing_price, batch_slot)
+ *   h1   = Poseidon12(DOMAIN_LEAF_INNER=20,
+ *                     note_a, note_b, note_c, note_d, note_e, note_f,
+ *                     qm_lo, qm_hi, bm_lo, bm_hi,
+ *                     base_amount)
+ *   leaf = Poseidon9 (DOMAIN_LEAF_TOP=21, h1,
+ *                     quote_amount,
+ *                     buyer_change_amt, seller_change_amt,
+ *                     buyer_fee_amt, seller_fee_amt,
+ *                     clearing_price, batch_slot)
  *
  * Internal Merkle-tree node (also matches the circuit):
  *   parent = Poseidon3(DOMAIN_BATCH_ROOT=22, left, right)
@@ -149,10 +153,6 @@ export async function computeBatchLeaf(slot: MatchSlotWitness): Promise<Uint8Arr
       bLo,
       bHi,
       slot.baseAmount,
-      slot.quoteAmount,
-      slot.buyerChangeAmt,
-      slot.sellerChangeAmt,
-      slot.buyerFeeAmt,
     ]),
   );
 
@@ -160,6 +160,10 @@ export async function computeBatchLeaf(slot: MatchSlotWitness): Promise<Uint8Arr
     p([
       DOMAIN_LEAF_TOP,
       h1,
+      slot.quoteAmount,
+      slot.buyerChangeAmt,
+      slot.sellerChangeAmt,
+      slot.buyerFeeAmt,
       slot.sellerFeeAmt,
       slot.clearingPrice,
       slot.batchSlot,
@@ -193,51 +197,54 @@ export async function computeBatchRoot(leaves: Uint8Array[]): Promise<Uint8Array
 
 /**
  * Build the Merkle inclusion path for `index` against the N-leaf tree.
- * Returns the sibling at each level (depth = log2(N) entries). The on-chain
- * settle handler walks this same path to verify a single match against the
- * batch root.
+ * Returns:
+ *   - `siblings`: the sibling hash at each level (depth = log2(N) entries).
+ *     siblings[0] is the leaf-level sibling; siblings[depth-1] is the root's
+ *     sibling (its peer at the level just below root).
+ *   - `indices[i]`: 0 if the current node is the LEFT child at level i, 1
+ *     if it's the RIGHT child. The on-chain handler uses this to know
+ *     which way to combine each sibling.
+ *
+ * Internal-node hashes are computed level-by-level so siblings ABOVE the
+ * leaf level are real hashes (previous versions of this helper used dummy
+ * values, which would have made the returned siblings beyond depth-1 wrong).
+ *
+ * The on-chain settle handler walks this same path to verify a single match
+ * against the batch root committed in the BatchValidityMarker PDA.
  */
-export function merkleInclusionPath(
+export async function merkleInclusionPath(
   leaves: Uint8Array[],
   index: number,
-): { siblings: Uint8Array[]; indices: number[] } {
+): Promise<{ siblings: Uint8Array[]; indices: number[] }> {
   if (leaves.length === 0 || (leaves.length & (leaves.length - 1)) !== 0) {
     throw new Error("merkleInclusionPath: N must be a power of 2");
   }
   if (index < 0 || index >= leaves.length) {
     throw new Error(`merkleInclusionPath: index ${index} out of range`);
   }
+  const p = await getPoseidon();
   const siblings: Uint8Array[] = [];
   const indices: number[] = [];
-  // Walk the tree level-by-level; track each step's sibling and direction.
-  // This must mirror the circuit's tree-building order.
-  // We rebuild internal nodes here (it's cheap; N ≤ 16).
-  // For inclusion we don't actually need the internal-node values
-  // themselves — we just need the right SIBLING at each level.
-  // Trick: regenerate the level array via the same hashing chain, but
-  // we only need the SIBLINGS, not the parent values themselves.
-  // The cleanest approach: synchronously rebuild via reduce + capture siblings.
-  // Doing that requires a sync hash, which Poseidon isn't here.
-  // So we rebuild via async loop in computeBatchRoot-style, capturing siblings.
-  // This is unused at proof-gen time — the prover only needs the root — but
-  // we expose it as a utility for the on-chain settle path.
+
   let currentLevel: Uint8Array[] = leaves;
   let currentIndex = index;
   while (currentLevel.length > 1) {
     const siblingIndex = currentIndex ^ 1;
     siblings.push(currentLevel[siblingIndex]);
-    indices.push(currentIndex & 1); // 0 = left child, 1 = right child
-    // Build next level (no hashing required — we only need positional
-    // structure for the next iteration's sibling lookup, but actually
-    // we do need to hash to continue tracking which pair is which).
-    // Since the inclusion path only needs siblings at each level and
-    // the level "above" doesn't affect the sibling LOCATIONS at lower
-    // levels, we just halve the array virtually. But the parent
-    // values are needed when *verifying* the path — not building it.
-    // For building, we can just halve the array length:
-    const next: Uint8Array[] = new Array(currentLevel.length / 2);
-    for (let i = 0; i < next.length; i++) {
-      next[i] = currentLevel[2 * i]; // dummy — only structure matters here
+    indices.push(currentIndex & 1);
+
+    // Hash adjacent pairs to compute the next level. Must use the same
+    // domain-tagged Poseidon3 the circuit's MerkleRoot template uses.
+    const next: Uint8Array[] = [];
+    for (let i = 0; i < currentLevel.length; i += 2) {
+      const parent = p.F.toObject(
+        p([
+          DOMAIN_BATCH_ROOT,
+          bigintFromBE32(currentLevel[i]),
+          bigintFromBE32(currentLevel[i + 1]),
+        ]),
+      );
+      next.push(bn254ToBE32(parent));
     }
     currentLevel = next;
     currentIndex = currentIndex >> 1;

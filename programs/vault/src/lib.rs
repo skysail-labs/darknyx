@@ -30,6 +30,8 @@ pub use instructions::reset_merkle_tree;
 pub use instructions::rotate_root_key;
 pub use instructions::set_protocol_config;
 pub use instructions::tee_forced_settle;
+pub use instructions::tee_forced_settle_batched;
+pub use instructions::verify_match_batch;
 pub use instructions::verify_valid_create;
 pub use instructions::withdraw;
 
@@ -178,6 +180,23 @@ pub mod vault {
         )
     }
 
+    /// v3.5 — verify a single Groth16 attesting VALID_CREATE +
+    /// VALID_PRICE for ALL N matches in a batch. Writes a
+    /// BatchValidityMarker PDA seeded by the proof's public input
+    /// (the Merkle root over per-slot leaves). The N tee_forced_settle
+    /// txs that follow each carry a Merkle inclusion proof against
+    /// this marker. See instructions/verify_match_batch.rs for the
+    /// design rationale (replaces 2 × N per-match marker txs with
+    /// one batch-level marker).
+    pub fn verify_match_batch(
+        ctx: Context<VerifyMatchBatch>,
+        merkle_root: [u8; 32],
+        expiry_slot: u64,
+        proof: Groth16Proof,
+    ) -> Result<()> {
+        verify_match_batch::verify_match_batch_handler(ctx, merkle_root, expiry_slot, proof)
+    }
+
     /// v3.1 — verify the VALID_PRICE Groth16 proof + write a marker PDA.
     /// `tee_forced_settle` later asserts the marker exists at the PDA
     /// derived from its own view of (clearing_price, batch_slot).
@@ -206,6 +225,26 @@ pub mod vault {
         payload: MatchResultPayload,
     ) -> Result<()> {
         tee_forced_settle::tee_forced_settle_handler(ctx, payload)
+    }
+
+    /// v3.5 — atomic TEE-forced settlement, batched-marker variant.
+    /// Identical semantics to `tee_forced_settle` but reads ONE
+    /// BatchValidityMarker (seeded by the Merkle root of up to 16
+    /// per-slot leaves) instead of two per-match markers. Coexists
+    /// with the per-match ix during the v3.5 cutover window; matcher
+    /// chooses which path to take per batch.
+    pub fn tee_forced_settle_batched(
+        ctx: Context<TeeForcedSettleBatched>,
+        payload: MatchResultPayload,
+        match_index: u8,
+        merkle_proof: [[u8; 32]; 4],
+    ) -> Result<()> {
+        tee_forced_settle_batched::tee_forced_settle_batched_handler(
+            ctx,
+            payload,
+            match_index,
+            merkle_proof,
+        )
     }
 
     /// DEV-NET-ONLY: reset the Merkle tree to empty. Admin-gated. See

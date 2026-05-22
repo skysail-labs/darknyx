@@ -5,6 +5,7 @@
 //! any circuit change.
 
 pub mod verifier;
+pub mod vk_match_batch_n16;
 pub mod vk_valid_create;
 pub mod vk_valid_input;
 pub mod vk_valid_price;

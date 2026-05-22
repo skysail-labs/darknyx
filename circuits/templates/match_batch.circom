@@ -197,23 +197,29 @@ template MatchSlot() {
     quote_amount === base_amount * clearing_price;
 
     // ─────────────────────────────────────────────────────────────────
-    // LEAF HASH — one Poseidon16 + one Poseidon5.
+    // LEAF HASH — Poseidon12 + Poseidon9.
     //
-    //   h1   = Poseidon16(DOMAIN_LEAF_INNER,
+    // Why this arity, not bigger: solana_poseidon (via light-poseidon)
+    // caps at width 13, i.e. max nInputs = 12. The on-chain handler
+    // re-derives this exact hash from the settle payload to look up
+    // the BatchValidityMarker PDA, so the in-circuit arities have to
+    // stay ≤ 12 for parity.
+    //
+    //   h1   = Poseidon12(DOMAIN_LEAF_INNER,
     //                     note_a, note_b, note_c, note_d, note_e, note_f,
     //                     qm_lo, qm_hi, bm_lo, bm_hi,
-    //                     base_amount, quote_amount,
+    //                     base_amount)
+    //   leaf = Poseidon9 (DOMAIN_LEAF_TOP, h1,
+    //                     quote_amount,
     //                     buyer_change, seller_change,
-    //                     buyer_fee)
-    //   leaf = Poseidon5 (DOMAIN_LEAF_TOP, h1,
-    //                     seller_fee, clearing_price, batch_slot)
+    //                     buyer_fee, seller_fee,
+    //                     clearing_price, batch_slot)
     //
-    // Eighteen bound data fields across the two hashes; this matches
-    // what the on-chain `tee_forced_settle` handler will re-derive
-    // from the settle payload.
+    // Eighteen data fields bound across the two hashes (11 in h1,
+    // 7 in the top hash).
     // ─────────────────────────────────────────────────────────────────
 
-    component leafH1 = Poseidon(16);
+    component leafH1 = Poseidon(12);
     leafH1.inputs[0]  <== 20;   // DOMAIN_LEAF_INNER
     leafH1.inputs[1]  <== note_a_commitment;
     leafH1.inputs[2]  <== note_b_commitment;
@@ -226,17 +232,17 @@ template MatchSlot() {
     leafH1.inputs[9]  <== base_mint_lo;
     leafH1.inputs[10] <== base_mint_hi;
     leafH1.inputs[11] <== base_amount;
-    leafH1.inputs[12] <== quote_amount;
-    leafH1.inputs[13] <== buyer_change_amt;
-    leafH1.inputs[14] <== seller_change_amt;
-    leafH1.inputs[15] <== buyer_fee_amt;
 
-    component leafTop = Poseidon(5);
+    component leafTop = Poseidon(9);
     leafTop.inputs[0] <== 21;   // DOMAIN_LEAF_TOP
     leafTop.inputs[1] <== leafH1.out;
-    leafTop.inputs[2] <== seller_fee_amt;
-    leafTop.inputs[3] <== clearing_price;
-    leafTop.inputs[4] <== batch_slot;
+    leafTop.inputs[2] <== quote_amount;
+    leafTop.inputs[3] <== buyer_change_amt;
+    leafTop.inputs[4] <== seller_change_amt;
+    leafTop.inputs[5] <== buyer_fee_amt;
+    leafTop.inputs[6] <== seller_fee_amt;
+    leafTop.inputs[7] <== clearing_price;
+    leafTop.inputs[8] <== batch_slot;
 
     leaf <== leafTop.out;
 }
