@@ -13,36 +13,56 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 // instantiate `MatchBatch(N)` at their chosen size. The same MatchSlot
 // body services every batch size — only the Merkle tree depth changes.
 //
-// Constraint budget (approx, per slot, post-optimisation):
-//   - VALID_CREATE constraints (6 Poseidon7 + IsZero gates + conservation)
-//                                      ~2,100
+// Constraint budget (measured on the N=16 instantiation —
+// `circuits/match_batch_n16/`):
+//   - VALID_CREATE constraints (6 Poseidon7 note hashes + IsZero
+//     selectors + per-leg conservation)             ~2,100
 //   - VALID_PRICE  constraints (3 Num2Bits(64), one mul check)
-//                                      ~ 200
-//   - Leaf hash    (Poseidon16 + Poseidon5)
-//                                      ~ 940
-//   ──────────────────────────────────────
-//   Per slot total                     ~3,240
-//   N=16 batch (16 × 3,240) + Merkle (15 × Poseidon3 ~ 264 each)
-//                                      ~55,800
-//   Fits PTAU-16's 65,536 cap with ~10k margin.
+//                                                   ~  200
+//   - Leaf hash    (Poseidon(12) + Poseidon(9), see §7.6 of
+//     CRYPTOGRAPHY.md for the field ordering)       ~  930
+//   ──────────────────────────────────────────────────────
+//   Per slot total (dominated by VALID_PRICE 64-bit decomp) ~ 10 k
+//   N=16 batch + Merkle (15 internal nodes × Poseidon3) ≈ 163 k
 //
-// Optimisation note (vs. the v3.5-N=2 prototype landed in f1e671b):
-//   The earlier leaf hash chained three Poseidon7s + one Poseidon4
-//   = ~1,443 constraints/slot. This version uses one Poseidon16 + one
-//   Poseidon5 = ~940 constraints/slot. We also drop `price_commitment`
-//   from both the leaf and the VALID_PRICE circuit body: the
-//   (clearing_price, batch_slot) pair the leaf now binds directly is
-//   strictly more useful than the Poseidon3-derived price_commitment
-//   (the on-chain handler has both in the payload either way), and we
-//   save another Poseidon3 (~264) per slot by dropping the
-//   `price_commitment === Poseidon3(5, clearing_price, batch_slot)`
-//   binding constraint.
+// Setup requirements by N:
+//   - N=2  / N=4   → pot16 (`powersOfTau28_hez_final_16.ptau`,
+//                    2^16 cap) is sufficient. Used by
+//                    `match-batch-prototype.test.ts` only.
+//   - N=16         → **pot18 required** (`powersOfTau28_hez_final_18.ptau`,
+//                    ~288 MB, 2^18 cap) — total constraints
+//                    (162,947) exceed the pot16 ceiling.
+//                    `scripts/download-ptau.sh` fetches both files
+//                    automatically; the build script picks the right
+//                    one per circuit instantiation.
 //
-// Domain tags (must stay in sync with the TS prover helper):
+// Leaf-hash arity rationale (NOT a single Poseidon hash):
+//   The on-chain Poseidon implementation is `light-poseidon`, which
+//   caps Poseidon arity at 12 inputs (its `MAX_X5_LEN = 13` limit).
+//   The leaf binds 19 fields, so it has to be split. Splitting as
+//   Poseidon(12) feeding into Poseidon(9) — exactly 12 + (8 leaf
+//   fields + 1 domain tag) = 12 + 9 inputs — fits inside the cap
+//   while keeping the constraint cost ~930/slot. DO NOT collapse
+//   this to a single Poseidon(N>12); it will compile fine but the
+//   on-chain `compute_match_leaf` (which mirrors this construction
+//   verbatim) will fail at runtime inside light-poseidon.
+//
+// Why `price_commitment` is not bound here (changed from f1e671b):
+//   The (clearing_price, batch_slot) pair is folded directly into
+//   the top-stage Poseidon(9) instead of via a separate
+//   Poseidon3-derived `price_commitment`. The on-chain handler has
+//   both fields in the payload already, so the indirection just
+//   cost a per-slot Poseidon3 (~264 constraints) and added a
+//   binding check the verifier doesn't need.
+//
+// Domain tags (must stay in sync with the TS prover helper in
+// `packages/sdk/tests/helpers/match-batch-prover.ts` AND with the
+// on-chain leaf walker in
+// `programs/vault/src/instructions/tee_forced_settle_batched.rs`):
 //   DOMAIN_NOTE       =  2   (note commitment Poseidon7, existing)
-//   DOMAIN_LEAF_INNER = 20   (Poseidon16 inside leaf)
-//   DOMAIN_LEAF_TOP   = 21   (Poseidon5 outer leaf)
-//   DOMAIN_BATCH_ROOT = 22   (Merkle internal node)
+//   DOMAIN_LEAF_INNER = 20   (Poseidon(12) inner stage of leaf)
+//   DOMAIN_LEAF_TOP   = 21   (Poseidon(9) outer stage of leaf)
+//   DOMAIN_BATCH_ROOT = 22   (Merkle internal node, Poseidon(3))
 
 // ----------------------------------------------------------------------------
 // MatchSlot — per-slot constraints + leaf hash. Output: `leaf`.
