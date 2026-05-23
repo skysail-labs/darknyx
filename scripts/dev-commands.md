@@ -3,7 +3,7 @@
 All commands assume your working directory is the repo root:
 
 ```sh
-cd /Users/arnabnandi/nyx-monorepo
+cd /path/to/repo/root
 ```
 
 Organisation:

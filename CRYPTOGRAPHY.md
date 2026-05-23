@@ -493,7 +493,7 @@ The depth is enforced consistently in:
 
 ---
 
-## 7. The five ZK circuits
+## 7. The six ZK circuits
 
 Six Groth16 circuits ship; the v3.5 batched-validity circuit
 (`VALID_MATCH_BATCH`) subsumes VALID_CREATE + VALID_PRICE for an

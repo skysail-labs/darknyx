@@ -87,7 +87,7 @@ By domain, additionally:
 ## 2. The unbreakable build/deploy/validate cycle
 
 Everything in this section runs from the repo root
-(`/Users/arnabnandi/nyx-monorepo`). The order matters — skipping a
+. The order matters — skipping a
 step breaks downstream steps in ways that look unrelated.
 
 ### 2.1 One-time host setup (per workstation)
