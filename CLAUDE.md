@@ -408,6 +408,34 @@ If your PR touches anything load-bearing (circuit, vault ix, marker
 PDA, settle handler, anchor accounts), gate it through
 `/test-devnet --batched` before merging.
 
+> **GitHub gotcha — `/test-devnet` silently does nothing if the
+> workflow isn't on `main`.** GitHub Actions only triggers
+> `issue_comment` workflows from the workflow file present on the
+> **default branch**, not on the feature branch. If
+> `.github/workflows/nightly-devnet.yml` exists on your feature
+> branch but not yet on `main`, posting `/test-devnet` on a PR
+> generates **no run, no error, no log** — looks exactly like the
+> comment was ignored.
+>
+> To verify: `git show main:.github/workflows/nightly-devnet.yml`
+> — if that errors with `fatal: path '...' exists on disk, but
+> not in 'main'`, you're hitting this. Fix options:
+>
+> 1. **Long term:** land a small PR onto `main` that contains
+>    only `.github/workflows/nightly-devnet.yml`. Once it's on
+>    `main`, every subsequent PR (including the feature one) gets
+>    `/test-devnet` for free.
+> 2. **Right now:** use `workflow_dispatch` from the Actions UI
+>    (the "Run workflow" button on the nightly-devnet workflow
+>    page lets you pick any branch + flip the `batched`/`skip_er`/
+>    `run_partial_fill` toggles). Or via CLI:
+>    ```sh
+>    gh workflow run nightly-devnet.yml --ref <branch> \
+>      -f batched=true -f skip_er=false -f run_partial_fill=false
+>    ```
+>
+> Documented at <https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#issue_comment>.
+
 ---
 
 ## 4. Touching circuits — the failure mode that's bitten us
