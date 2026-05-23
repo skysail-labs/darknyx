@@ -755,7 +755,7 @@ naming convention:
   - `match-batch-prover.ts` — v3.5 batched Groth16 helper
   - `valid-{input,create,price}-prover.ts` — per-circuit prover wrappers
   - `verify-valid-price.ts`, `verify-match-batch.ts` — land-the-verify-tx helpers
-  - `batched-settle.ts` — **v3.5 4-step `settleViaBatched` helper** (verify_match_batch → Merkle path → per-batch ALT → settle_batched → close)
+  - `batched-settle.ts` — **v3.5 5-step `settleViaBatched` helper** (verify_match_batch → Merkle path → per-batch ALT → settle_batched → close) + the production-shape sibling `settleBatchViaBatched` that takes N≤16 matches and fires the settles concurrently. Existing tests use the single-match form; the multi-match form is dormant until a production matcher imports it (see dev-commands.md §11B.6).
   - `settle-v0.ts` — v0 tx sender that stacks ALTs
   - `snarkjs-prover.ts` — shell-out to `node_modules/.bin/snarkjs`
 * `devnet-*.test.ts` / `er-*.test.ts` / `change-note-*.test.ts` —

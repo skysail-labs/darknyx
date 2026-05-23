@@ -776,6 +776,49 @@ cargo test -p matching_engine --test tee_forced_settle_batched
 Gated in CI via the `matching-engine-litesvm` job in
 `pr-checks.yml`.
 
+### 11B.6 Production-matcher helper (multi-match per batch)
+
+`tests/helpers/batched-settle.ts` exports two helpers:
+
+* **`settleViaBatched({ realSlot, payload, teeSig, canonicalHash, … })`**
+  — the helper every existing devnet test uses. ONE real match per
+  batch, padded to N=16 with dummies by the prover. Five steps:
+  verify_match_batch → Merkle path → per-batch ALT → settle_batched
+  → close_marker. Wall-clock: ~24 s on free-tier Helius (4 confirms
+  × ~6 s).
+* **`settleBatchViaBatched({ matches: BatchMatchInput[], … })`** —
+  intended for production matchers that have ≤ 16 real matches per
+  batch. Same five steps but lifts all N matches into a single
+  invocation: ONE verify covers the whole batch, ONE ALT carries
+  every real match's `note_lock_a/b/e/f` (deduped) + the marker, N
+  settles fire CONCURRENTLY via `Promise.all`, ONE close at the
+  end. The settles still serialise on-chain (they all take `mut` on
+  `VaultConfig`), but the RPC confirm-latencies overlap rather than
+  stack — wall-clock at N=16 drops from ~(N+3)×T to ~4×T where T is
+  per-tx confirm latency.
+
+  Not exercised by any current test (every test scenario is N=1);
+  the helper is here so a real matcher can import it without
+  re-implementing the same pattern. The on-chain side of the
+  multi-match-per-marker invariant is gated by the litesvm
+  regression test at
+  `programs/matching_engine/tests/tee_forced_settle_batched.rs::
+  test_two_matches_share_one_marker`.
+
+  ```ts
+  import { settleBatchViaBatched, type BatchMatchInput } from
+      "./helpers/batched-settle.js";
+
+  const matches: BatchMatchInput[] = produceMatchesFromRunBatch(...);
+  const result = await settleBatchViaBatched({
+    connection, vaultProgramId, teeKeypair,
+    matches,                          // 1..16 entries
+    settleLookupTable, repoRoot,
+    onTx: (label, sig) => log(label, sig),
+  });
+  // result.settleTxSigs has length === matches.length, in match-index order
+  ```
+
 ---
 
 ## 12. Troubleshooting common failures

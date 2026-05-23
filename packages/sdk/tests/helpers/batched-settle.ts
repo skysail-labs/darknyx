@@ -226,3 +226,282 @@ export async function settleViaBatched(
     batchAlt,
   };
 }
+
+// ===========================================================================
+// v3.5 — multi-match production helper
+// ===========================================================================
+//
+// `settleViaBatched` (above) does one real match per call and is what every
+// existing devnet test uses. This sibling helper, `settleBatchViaBatched`,
+// is the production-matcher shape: ONE verify, ONE ALT (containing every
+// real match's derivable PDAs), N settles fired CONCURRENTLY via Promise.all,
+// ONE close. For N=16 real matches per batch, this turns ~16 × per-tx
+// confirm-latency into ~1 × per-tx confirm-latency.
+//
+// Why the parallel-settle step works: all N settles take `mut` on
+// `VaultConfig`, so Solana's runtime serialises them at block-inclusion
+// time (one settle per slot). But each tx is an INDEPENDENT RPC
+// `sendTransaction` call — the polls for `confirmed` overlap. Wall-clock
+// is the time for the leader to land all N in consecutive slots, not
+// N × the per-tx confirm latency.
+//
+// Why this isn't exercised by the current tests: they all have N=1 real
+// match per batch, so `Promise.all([oneItem])` collapses to `await
+// oneItem`. The helper is here so a production matcher can import it as
+// is once it actually has multi-match batches; in the meantime, see
+// `programs/matching_engine/tests/tee_forced_settle_batched.rs::
+// test_two_matches_share_one_marker` for the on-chain side of the
+// invariant this helper relies on (one marker covers all N matches).
+
+export interface BatchMatchInput {
+  /** Per-slot witness for one real match. */
+  realSlot: MatchSlotWitness;
+  /** Payload for this match — must canonically hash to `canonicalHash`. */
+  payload: MatchResultPayload;
+  /** TEE Ed25519 signature over `canonicalHash`. */
+  teeSig: Uint8Array;
+  /** SHA-256 canonical payload hash — what the TEE signed. */
+  canonicalHash: Uint8Array;
+}
+
+export interface SettleBatchViaBatchedParams {
+  connection: Connection;
+  vaultProgramId: PublicKey;
+  /** TEE authority — signs every settle + the marker close. */
+  teeKeypair: Keypair;
+  /** 1..16 real matches. Order matters: index i in this array is
+   *  `match_index = i` on-chain (slot i in the Merkle tree). The
+   *  helper pads to N=16 internally via `landVerifyMatchBatch`. */
+  matches: BatchMatchInput[];
+  /** The static settle ALT created by devnet-setup. */
+  settleLookupTable: PublicKey;
+  repoRoot: string;
+  /** Optional per-step tx-signature logger. */
+  onTx?: (label: string, signature: string) => void;
+}
+
+export interface SettleBatchViaBatchedResult {
+  /** Tx signature of the verify_match_batch tx (1 per batch). */
+  verifyTxSig: string;
+  /** Tx signatures of the ALT-create + ALT-extend(s). For matches.length
+   *  ≤ ~7 this is one tx; for N=16 it's 2-3 because Solana's
+   *  per-extend tx-size cap forces chunking. */
+  altSetupTxSigs: string[];
+  /** Tx signatures of the N settles, in match-index order. */
+  settleTxSigs: string[];
+  /** Tx signature of the close_batch_validity_marker tx (1 per batch). */
+  closeTxSig: string;
+  /** Pubkey of the per-batch ALT. */
+  batchAlt: PublicKey;
+}
+
+/**
+ * Production-matcher settle: lands a whole batch of up to 16 matches
+ * through the v3.5 batched path, amortising verify + ALT + close
+ * across all of them and firing the N per-match settles concurrently.
+ *
+ * Wall-clock model (assuming RPC confirm latency T):
+ *   sequential — verify (T) + ALT setup (T × ceil(addr/28)) +
+ *     N × settle (N × T) + close (T)  ≈ (N + 3) × T
+ *   parallel   — verify (T) + ALT setup (T × ceil(addr/28)) +
+ *     max(settle_i for i in 0..N) (~T) + close (T)  ≈ 4 × T
+ *
+ * At N=16, that's ~19T vs ~4T — a ~5× reduction in critical-path
+ * latency. The settles still serialise on-chain (VaultConfig mut
+ * contention), so on-chain throughput is unchanged; only off-chain
+ * orchestration latency improves.
+ */
+export async function settleBatchViaBatched(
+  p: SettleBatchViaBatchedParams,
+): Promise<SettleBatchViaBatchedResult> {
+  if (p.matches.length === 0) {
+    throw new Error("settleBatchViaBatched: matches must be non-empty");
+  }
+  if (p.matches.length > 16) {
+    throw new Error(
+      `settleBatchViaBatched: at most 16 matches per batch (got ${p.matches.length}); the on-chain handler walks a depth-4 Merkle path that's hardcoded for N=16`,
+    );
+  }
+  const log = (label: string, sig: string) => {
+    if (p.onTx) p.onTx(label, sig);
+  };
+
+  // ─── Step 1: prove + verify_match_batch (covers all N at once) ───
+  const batchResult = await landVerifyMatchBatch({
+    connection: p.connection,
+    vaultProgramId: p.vaultProgramId,
+    teeKeypair: p.teeKeypair,
+    realSlots: p.matches.map((m) => m.realSlot),
+    repoRoot: p.repoRoot,
+  });
+  log("verify_match_batch", batchResult.txSig);
+
+  // ─── Step 2: per-match Merkle inclusion paths ────────────────────
+  const inclusions = await Promise.all(
+    p.matches.map((_, i) => merkleInclusionPath(batchResult.leaves, i)),
+  );
+  for (let i = 0; i < inclusions.length; i++) {
+    if (inclusions[i].siblings.length !== 4) {
+      throw new Error(
+        `settleBatchViaBatched: expected depth-4 inclusion path at match ${i}, got ${inclusions[i].siblings.length}`,
+      );
+    }
+  }
+
+  // ─── Step 3: collect derivable PDAs into the per-batch ALT ───────
+  // 4 lock PDAs per match (a, b, e, f) + 1 shared marker.
+  // Dedup because exact-fill matches collapse note_lock_e/f to the
+  // same zero-commitment PDA — Anchor's ALT extend rejects duplicate
+  // pubkeys.
+  const [batchMarker] = batchValidityMarkerPda(
+    p.vaultProgramId,
+    batchResult.merkleRoot,
+  );
+  const altAddrsRaw: PublicKey[] = [];
+  for (const m of p.matches) {
+    altAddrsRaw.push(noteLockPda(p.vaultProgramId, m.payload.noteAcommitment)[0]);
+    altAddrsRaw.push(noteLockPda(p.vaultProgramId, m.payload.noteBcommitment)[0]);
+    altAddrsRaw.push(
+      noteLockPda(p.vaultProgramId, m.payload.noteEcommitment ?? ZERO_32)[0],
+    );
+    altAddrsRaw.push(
+      noteLockPda(p.vaultProgramId, m.payload.noteFcommitment ?? ZERO_32)[0],
+    );
+  }
+  altAddrsRaw.push(batchMarker);
+  const seen = new Set<string>();
+  const altAddrs: PublicKey[] = [];
+  for (const a of altAddrsRaw) {
+    const k = a.toBase58();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    altAddrs.push(a);
+  }
+
+  // Solana caps `extendLookupTable` ix data by tx-size. ~28 addresses
+  // when combined with `createLookupTable` in the same tx; ~30 in a
+  // standalone extend. Conservative chunks of 28 keep us under
+  // 1232 bytes either way.
+  const EXTEND_CHUNK = 28;
+  const blockhashCtx = await p.connection.getLatestBlockhashAndContext("confirmed");
+  const slotForAlt = blockhashCtx.context.slot;
+  const [createAltIx, batchAlt] = AddressLookupTableProgram.createLookupTable({
+    authority: p.teeKeypair.publicKey,
+    payer: p.teeKeypair.publicKey,
+    recentSlot: slotForAlt,
+  });
+
+  const altSetupTxSigs: string[] = [];
+
+  // First tx: create + first extend chunk.
+  const firstChunk = altAddrs.slice(0, EXTEND_CHUNK);
+  const firstExtendIx = AddressLookupTableProgram.extendLookupTable({
+    payer: p.teeKeypair.publicKey,
+    authority: p.teeKeypair.publicKey,
+    lookupTable: batchAlt,
+    addresses: firstChunk,
+  });
+  const firstTx = new Transaction().add(createAltIx, firstExtendIx);
+  altSetupTxSigs.push(
+    await sendAndConfirmTransaction(
+      p.connection,
+      firstTx,
+      [p.teeKeypair],
+      { commitment: "confirmed" },
+    ),
+  );
+  log(`per-batch ALT ${batchAlt.toBase58().slice(0, 8)}… create+extend[0]`, altSetupTxSigs[0]);
+
+  // Subsequent extends, if the address list overflowed.
+  for (let off = EXTEND_CHUNK; off < altAddrs.length; off += EXTEND_CHUNK) {
+    const chunk = altAddrs.slice(off, off + EXTEND_CHUNK);
+    const extendTx = new Transaction().add(
+      AddressLookupTableProgram.extendLookupTable({
+        payer: p.teeKeypair.publicKey,
+        authority: p.teeKeypair.publicKey,
+        lookupTable: batchAlt,
+        addresses: chunk,
+      }),
+    );
+    const sig = await sendAndConfirmTransaction(
+      p.connection,
+      extendTx,
+      [p.teeKeypair],
+      { commitment: "confirmed" },
+    );
+    altSetupTxSigs.push(sig);
+    log(`per-batch ALT extend[${altSetupTxSigs.length - 1}]`, sig);
+  }
+
+  // Wait one slot so the ALT is usable in v0 txs.
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const now = await p.connection.getSlot("confirmed");
+    if (now > slotForAlt) break;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  // ─── Step 4: fire N settles concurrently ─────────────────────────
+  // Each tx is independent at the RPC layer. The Solana runtime
+  // serialises them at block-inclusion time (VaultConfig mut), but
+  // the *RPC round-trips* overlap rather than stack — turning
+  // N × confirm_latency into max(times) ≈ 1 × confirm_latency for
+  // the whole set.
+  const settleTxSigs = await Promise.all(
+    p.matches.map(async (m, i) => {
+      const sig = await sendSettleV0({
+        connection: p.connection,
+        signer: p.teeKeypair,
+        altPubkey: p.settleLookupTable,
+        extraAltPubkeys: [batchAlt],
+        instructions: [
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          buildEd25519VerifyIx({
+            teePubkey: p.teeKeypair.publicKey.toBytes(),
+            signature: m.teeSig,
+            message: m.canonicalHash,
+          }),
+          buildSettleBatchedIx({
+            programId: p.vaultProgramId,
+            teeAuthority: p.teeKeypair.publicKey,
+            payload: m.payload,
+            matchIndex: i,
+            merkleProof: [
+              inclusions[i].siblings[0],
+              inclusions[i].siblings[1],
+              inclusions[i].siblings[2],
+              inclusions[i].siblings[3],
+            ],
+            merkleRoot: batchResult.merkleRoot,
+          }),
+        ],
+      });
+      log(`tee_forced_settle_batched[match=${i}]`, sig);
+      return sig;
+    }),
+  );
+
+  // ─── Step 5: close the marker once for the whole batch ───────────
+  const closeTx = new Transaction().add(
+    buildCloseBatchValidityMarkerIx({
+      programId: p.vaultProgramId,
+      authority: p.teeKeypair.publicKey,
+      payer: p.teeKeypair.publicKey,
+      merkleRoot: batchResult.merkleRoot,
+    }),
+  );
+  const closeTxSig = await sendAndConfirmTransaction(
+    p.connection,
+    closeTx,
+    [p.teeKeypair],
+    { commitment: "confirmed" },
+  );
+  log("close_batch_validity_marker", closeTxSig);
+
+  return {
+    verifyTxSig: batchResult.txSig,
+    altSetupTxSigs,
+    settleTxSigs,
+    closeTxSig,
+    batchAlt,
+  };
+}
