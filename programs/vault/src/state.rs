@@ -170,68 +170,10 @@ impl OutstandingMint {
     pub const SPACE: usize = 8 + 32 + 8 + 1;
 }
 
-/// v3 — VALID_CREATE proof attestation marker.
-///
-/// Created by `verify_valid_create` after a successful Groth16 check. The
-/// PDA seed is `[b"valid_create", binding_hash]` where `binding_hash` is
-/// a SHA-256 over the 14 fields the circuit attested to (6 commitments + 2
-/// mints + 6 amounts). `tee_forced_settle` recomputes the same hash from
-/// its payload + the input locks' mints and reads this PDA to prove the
-/// TEE produced a valid VALID_CREATE before settling.
-///
-/// `expiry_slot` lets stale markers be reclaimed (markers are intended to
-/// be consumed by the very next settle tx — see `MAX_CREATE_MARKER_TTL_SLOTS`).
-#[account]
-#[derive(Default)]
-pub struct ValidCreateMarker {
-    /// The 32-byte payer who funded this marker's rent. Refund target on close.
-    pub payer: Pubkey,
-    /// Slot past which this marker is considered stale and may be released.
-    pub expiry_slot: u64,
-    pub bump: u8,
-}
-
-impl ValidCreateMarker {
-    pub const SEED: &'static [u8] = b"valid_create";
-    /// 8 disc + 32 payer + 8 expiry + 1 bump.
-    pub const SPACE: usize = 8 + 32 + 8 + 1;
-}
-
-/// Hard ceiling on how far into the future a `ValidCreateMarker` may sit.
-/// The marker is meant to be consumed by the immediately-following settle
-/// tx — anything beyond a couple of minutes is almost certainly abandoned
-/// state from a TEE that failed to land its settle. Tuned to leave the
-/// caller plenty of slop without letting stale markers gum up devnet.
-pub const MAX_CREATE_MARKER_TTL_SLOTS: u64 = 300; // ~2 min at 400ms slots.
-
-/// v3 — VALID_PRICE marker. Written by `verify_valid_price` (which
-/// checks a Groth16 proof that `quote_amount == base_amount * clearing_price`
-/// for some private `clearing_price` bound to a specific batch via
-/// `price_commitment = Poseidon3(DOMAIN_PRICE, clearing_price, batch_slot)`).
-/// Read by `tee_forced_settle` (which recomputes the same commitment from
-/// its view of the payload and asserts the marker is at the matching PDA).
-///
-/// Same lifecycle as `ValidCreateMarker`: created by the verify ix, closed
-/// by the immediately-following settle ix, lamports refunded to `payer`.
-#[account]
-#[derive(Default)]
-pub struct ValidPriceMarker {
-    /// Refund target on close.
-    pub payer: Pubkey,
-    /// Slot past which this marker is stale and may be released.
-    pub expiry_slot: u64,
-    pub bump: u8,
-}
-
-impl ValidPriceMarker {
-    pub const SEED: &'static [u8] = b"valid_price";
-    /// 8 disc + 32 payer + 8 expiry + 1 bump.
-    pub const SPACE: usize = 8 + 32 + 8 + 1;
-}
-
-/// Same hard ceiling as `MAX_CREATE_MARKER_TTL_SLOTS`. Both markers share
-/// the same intended consume-by-next-settle lifecycle.
-pub const MAX_PRICE_MARKER_TTL_SLOTS: u64 = 300; // ~2 min at 400ms slots.
+// v3.1 `ValidCreateMarker` + `ValidPriceMarker` + their TTL consts lived
+// here. Removed in Phase 1c-hard once `verify_match_batch` subsumed both
+// per-match proofs into one batched Groth16 + a single
+// `BatchValidityMarker` keyed by the batch's Merkle root.
 
 /// v3.5 — BATCH validity marker. Written by `verify_match_batch` after
 /// it verifies a single Groth16 proof attesting VALID_CREATE +

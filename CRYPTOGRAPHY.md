@@ -1289,7 +1289,7 @@ settle with a different set.
   when the prover tries to assign note_c to a different owner_commit than
   note_a's
 - `tests/change-note-flow.test.ts` Test A + B + E all exercise this ix
-  against real devnet (drop `USE_BATCHED_PROOF=1` to take the v3.1
+  against real devnet (drop `USE_BATCHED_PROOF` to take the v3.1
   path; the same tests also cover the v3.5 batched path)
 
 #### v3.1 — `verify_valid_price`
@@ -2136,9 +2136,9 @@ match-per-marker + `close_batch_validity_marker` lifecycle**
 | File | Gate | What it does |
 |---|---|---|
 | `devnet-setup.test.ts` | `RUN_DEVNET_E2E=1` | Creates two SPL mints, runs `initialize` + `set_protocol_config` + `init_market` + `init_mock_oracle`, creates the v3 ALT, writes `.devnet/e2e-config.json` |
-| `devnet-trade-flow.test.ts` | `RUN_DEVNET_E2E=1` (+ optional `USE_BATCHED_PROOF=1`) | Pure-L1 trade flow: deposit → match → lock → (v3.1: verify_valid_create + verify_valid_price + settle) OR (v3.5: verify_match_batch + settle_batched + close) → withdraw |
-| `er-trade-flow.test.ts` | `RUN_ER_E2E=1` (+ optional `USE_BATCHED_PROOF=1`) | Full ER round-trip: delegate market PDAs → submit_order in ER → run_batch in ER → undelegate → settle on L1 (v3.1 or v3.5) |
-| `change-note-flow.test.ts` | `RUN_CN_E2E=1` (+ optional `USE_BATCHED_PROOF=1`) | 5 scenarios exercising change notes + atomic re-lock + privacy regression + multi-batch continuation + protocol-owner fee withdrawal — all support the batched-path toggle |
+| `devnet-trade-flow.test.ts` | `RUN_DEVNET_E2E=1` | Pure-L1 trade flow: deposit → match → lock → (v3.1: verify_valid_create + verify_valid_price + settle) OR (v3.5: verify_match_batch + settle_batched + close) → withdraw |
+| `er-trade-flow.test.ts` | `RUN_ER_E2E=1` | Full ER round-trip: delegate market PDAs → submit_order in ER → run_batch in ER → undelegate → settle on L1 (v3.1 or v3.5) |
+| `change-note-flow.test.ts` | `RUN_CN_E2E=1` | 5 scenarios exercising change notes + atomic re-lock + privacy regression + multi-batch continuation + protocol-owner fee withdrawal — all support the batched-path toggle |
 | `orders-submit.devnet.test.ts` | `RUN_DEVNET_E2E=1` | 8 cases against real ER endpoint |
 
 ### What's tested where, summary
@@ -2164,21 +2164,11 @@ end-to-end.
 
 Sorted roughly by cryptographic impact:
 
-1. **Phase 1c-hard cutover** — v3.5 currently ships as a *soft*
-   cutover. The legacy v3.1 ixs (`verify_valid_create`,
-   `verify_valid_price`, `tee_forced_settle`) remain callable
-   alongside the new batched ixs and are marked `@deprecated v3.5` in
-   the SDK. After a confidence window:
-   - Delete the legacy ixs from the vault program + their `lib.rs`
-     entrypoints + their VK consts (`vk_valid_create.rs`,
-     `vk_valid_price.rs`).
-   - Delete the SDK's `buildSettleIx` + `buildVerifyValidCreateInstruction`
-     + `buildVerifyValidPriceInstruction`.
-   - Delete the `else { ... v3.1 path ... }` branches in the devnet
-     test files.
-
-   Checklist + soft-vs-hard tradeoffs in
-   [`docs/v3.5-migration.md`](docs/v3.5-migration.md).
+1. ~~**Phase 1c-hard cutover**~~ — DONE. v3.5 is the only on-chain
+   settle path; v3.1's `verify_valid_create`, `verify_valid_price`,
+   per-match `tee_forced_settle`, their state structs / VK consts /
+   circom circuits, and the SDK builders that targeted them have all
+   been removed. See [`docs/v3.5-migration.md`](docs/v3.5-migration.md).
 
 2. **Real Phase-2 ceremony** — All six shipped Groth16 circuits use a
    deterministic dev contribution
@@ -2341,19 +2331,19 @@ RUN_DEVNET_E2E=1 \
 #    Drop the env var to run the v3.1 legacy path instead — both work
 #    against the same deployed programs during the soft-cutover window.
 
-RUN_DEVNET_E2E=1 USE_BATCHED_PROOF=1 \
+RUN_DEVNET_E2E=1 \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
   node node_modules/vitest/vitest.mjs run \
     --root packages/sdk \
     tests/devnet-trade-flow.test.ts
 
-RUN_ER_E2E=1 USE_BATCHED_PROOF=1 \
+RUN_ER_E2E=1 \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
   node node_modules/vitest/vitest.mjs run \
     --root packages/sdk \
     tests/er-trade-flow.test.ts
 
-RUN_CN_E2E=1 USE_BATCHED_PROOF=1 \
+RUN_CN_E2E=1 \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
   node node_modules/vitest/vitest.mjs run \
     --root packages/sdk \

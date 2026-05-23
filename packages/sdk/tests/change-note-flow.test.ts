@@ -101,7 +101,6 @@ import {
 } from "../src/idl/er-client.js";
 import {
   buildEd25519VerifyIx,
-  buildSettleIx,
   canonicalPayloadHash,
   exactFillPayload,
   type MatchResultPayload,
@@ -114,14 +113,10 @@ import {
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
-import { proveValidCreate } from "./helpers/valid-create-prover.js";
 import { sendSettleV0 } from "./helpers/settle-v0.js";
-import { landVerifyValidPrice } from "./helpers/verify-valid-price.js";
 import { settleViaBatched } from "./helpers/batched-settle.js";
 import { type MatchSlotWitness } from "./helpers/match-batch-prover.js";
 
-import { validCreateBindingHash } from "../src/settlement/settle-builder.js";
-import { buildVerifyValidCreateInstruction } from "../src/idl/vault-client.js";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -146,14 +141,6 @@ import type { E2EConfig } from "./devnet-setup.test.js";
 dotenvConfig({ path: resolve(__dirname, "../.env.devnet") });
 
 const RUN = process.env.RUN_CN_E2E === "1";
-
-/** v3.5 — set `USE_BATCHED_PROOF=1` in the env (or in `.env.devnet`)
- *  to route settles through `verify_match_batch` +
- *  `tee_forced_settle_batched`. Both paths produce identical state
- *  transitions; downstream assertions (tree appends, withdraws,
- *  balances) don't care which one ran. Evaluated AFTER dotenvConfig
- *  so `.env.devnet` can drive the toggle. */
-const USE_BATCHED_PROOF = process.env.USE_BATCHED_PROOF === "1";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -1188,7 +1175,6 @@ maybeDescribe(
           txline("lock_note(note_a) + lock_note(note_b)", lockSig);
         });
 
-        if (USE_BATCHED_PROOF) {
           // ── v3.5 batched path — single Groth16 attests VALID_CREATE +
           // VALID_PRICE for the whole batch (here padded to N=16 with
           // dummy slots), then a single tee_forced_settle_batched per
@@ -1245,111 +1231,6 @@ maybeDescribe(
               onTx: txline,
             });
           });
-        } else {
-        // v3: VALID_CREATE proof — buyer-change present, no seller-change.
-        {
-          const ZERO_32 = new Uint8Array(32);
-          const vcArgs = {
-            noteA: alice.depositNote!.commitment,
-            noteB: bob.depositNote!.commitment,
-            noteC: noteCcommitment,
-            noteD: noteDcommitment,
-            noteE: noteEcommitment,
-            noteF: ZERO_32,
-            quoteMint: fx.quoteMint.toBytes(),
-            baseMint: fx.baseMint.toBytes(),
-            baseAmount: MATCH_BASE,
-            quoteAmount: MATCH_QUOTE,
-            buyerChangeAmt: ALICE_CHANGE,
-            sellerChangeAmt: 0n,
-            buyerFeeAmt: BUYER_FEE,
-            sellerFeeAmt: SELLER_FEE,
-          };
-          const validCreate = await proveValidCreate({
-            repoRoot: REPO_ROOT,
-            quoteMint: fx.quoteMint.toBytes(),
-            baseMint: fx.baseMint.toBytes(),
-            inputA: { ownerCommit: alice.ownerCommit, amount: alice.depositNote!.amount,
-                      nonce: alice.depositNote!.nonce, blindingR: alice.depositNote!.blindingR },
-            inputAcommitmentBE: alice.depositNote!.commitment,
-            inputB: { ownerCommit: bob.ownerCommit, amount: bob.depositNote!.amount,
-                      nonce: bob.depositNote!.nonce, blindingR: bob.depositNote!.blindingR },
-            inputBcommitmentBE: bob.depositNote!.commitment,
-            outputC: { ownerCommit: alice.ownerCommit, amount: MATCH_BASE,
-                       nonce: be32ToBigInt(noteCnonce), blindingR: be32ToBigInt(noteCblind) },
-            outputCcommitmentBE: noteCcommitment,
-            outputD: { ownerCommit: bob.ownerCommit, amount: MATCH_QUOTE,
-                       nonce: be32ToBigInt(noteDnonce), blindingR: be32ToBigInt(noteDblind) },
-            outputDcommitmentBE: noteDcommitment,
-            outputE: { ownerCommit: alice.ownerCommit, amount: ALICE_CHANGE,
-                       nonce: be32ToBigInt(noteEnonce), blindingR: be32ToBigInt(noteEblind) },
-            outputEcommitmentBE: noteEcommitment,
-            outputF: undefined, outputFcommitmentBE: ZERO_32,
-            baseAmount: MATCH_BASE, quoteAmount: MATCH_QUOTE,
-            buyerChangeAmt: ALICE_CHANGE, sellerChangeAmt: 0n,
-            buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
-          });
-          const binding = validCreateBindingHash(vcArgs);
-          const markerExpiry = BigInt((await fx.l1.getSlot("confirmed")) + 200);
-          const verifyTx = new Transaction().add(
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
-            buildVerifyValidCreateInstruction({
-              programId: fx.vaultProgramId, payer: fx.teeKeypair.publicKey,
-              bindingHash: binding,
-              noteAcommitment: alice.depositNote!.commitment,
-              noteBcommitment: bob.depositNote!.commitment,
-              noteCcommitment, noteDcommitment,
-              noteEcommitment, noteFcommitment: ZERO_32,
-              quoteMint: fx.quoteMint, baseMint: fx.baseMint,
-              baseAmount: MATCH_BASE, quoteAmount: MATCH_QUOTE,
-              buyerChangeAmt: ALICE_CHANGE, sellerChangeAmt: 0n,
-              buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
-              expirySlot: markerExpiry, proof: validCreate.proof,
-            }),
-          );
-          await sendAndConfirmTransaction(fx.l1, verifyTx, [fx.teeKeypair], { commitment: "confirmed" });
-        }
-
-        // v3.1: land VALID_PRICE proof in its own tx (creates the
-        // ValidPriceMarker PDA the settle handler reads).
-        const priceMarker = await landVerifyValidPrice({
-          connection: fx.l1,
-          vaultProgramId: fx.vaultProgramId,
-          teeKeypair: fx.teeKeypair,
-          payload,
-          repoRoot: REPO_ROOT,
-        });
-        txline("verify_valid_price", priceMarker.txSig);
-
-        await timer.time("Ed25519 + tee_forced_settle", "L1", async () => {
-          // v3: with-change-note variant — same tx-size pressure as Test B
-          // (lock_e and lock_f no longer dedupe because note_e is non-zero).
-          // Route through the v0/ALT helper.
-          if (!fx.settleLookupTable) {
-            throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
-          }
-          const settleSig = await sendSettleV0({
-            connection: fx.l1,
-            signer: fx.teeKeypair,
-            altPubkey: fx.settleLookupTable,
-            instructions: [
-              ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-              buildEd25519VerifyIx({
-                teePubkey: fx.teeKeypair.publicKey.toBytes(),
-                signature: teeSig, message: msg,
-              }),
-              buildSettleIx({
-                programId: fx.vaultProgramId,
-                teeAuthority: fx.teeKeypair.publicKey,
-                payload,
-                quoteMint: fx.quoteMint, baseMint: fx.baseMint,
-                priceCommitment: priceMarker.priceCommitment,
-              }),
-            ],
-          });
-          txline("Ed25519 + tee_forced_settle (v0)", settleSig);
-        });
-        }
 
         // Append tree leaves in the SAME order tee_forced_settle appended:
         // note_c, note_d, note_e (since change>0), note_fee (since fee>0).
@@ -1757,7 +1638,6 @@ maybeDescribe(
           txline("lock_note(note_a) + lock_note(note_b)", lockSig);
         });
 
-        if (USE_BATCHED_PROOF) {
           // ── v3.5 batched path — re-lock variant: payload still carries
           // buyer change + fee, and the settle handler still atomically
           // re-locks note_e against the remaining open buyer order.
@@ -1813,110 +1693,6 @@ maybeDescribe(
               onTx: txline,
             });
           });
-        } else {
-        // v3: VALID_CREATE proof — Test B has buyer-change + re-lock active.
-        {
-          const ZERO_32 = new Uint8Array(32);
-          const vcArgs = {
-            noteA: alice.depositNote!.commitment,
-            noteB: bob.depositNote!.commitment,
-            noteC: noteCcommitment,
-            noteD: noteDcommitment,
-            noteE: noteEcommitment,
-            noteF: ZERO_32,
-            quoteMint: fx.quoteMint.toBytes(),
-            baseMint: fx.baseMint.toBytes(),
-            baseAmount: MATCHED_BASE,
-            quoteAmount: MATCHED_QUOTE,
-            buyerChangeAmt: ALICE_CHANGE,
-            sellerChangeAmt: 0n,
-            buyerFeeAmt: BUYER_FEE,
-            sellerFeeAmt: SELLER_FEE,
-          };
-          const validCreate = await proveValidCreate({
-            repoRoot: REPO_ROOT,
-            quoteMint: fx.quoteMint.toBytes(),
-            baseMint: fx.baseMint.toBytes(),
-            inputA: { ownerCommit: alice.ownerCommit, amount: alice.depositNote!.amount,
-                      nonce: alice.depositNote!.nonce, blindingR: alice.depositNote!.blindingR },
-            inputAcommitmentBE: alice.depositNote!.commitment,
-            inputB: { ownerCommit: bob.ownerCommit, amount: bob.depositNote!.amount,
-                      nonce: bob.depositNote!.nonce, blindingR: bob.depositNote!.blindingR },
-            inputBcommitmentBE: bob.depositNote!.commitment,
-            outputC: { ownerCommit: alice.ownerCommit, amount: MATCHED_BASE,
-                       nonce: be32ToBigInt(noteCnonce), blindingR: be32ToBigInt(noteCblind) },
-            outputCcommitmentBE: noteCcommitment,
-            outputD: { ownerCommit: bob.ownerCommit, amount: MATCHED_QUOTE,
-                       nonce: be32ToBigInt(noteDnonce), blindingR: be32ToBigInt(noteDblind) },
-            outputDcommitmentBE: noteDcommitment,
-            outputE: { ownerCommit: alice.ownerCommit, amount: ALICE_CHANGE,
-                       nonce: be32ToBigInt(noteEnonce), blindingR: be32ToBigInt(noteEblind) },
-            outputEcommitmentBE: noteEcommitment,
-            outputF: undefined, outputFcommitmentBE: ZERO_32,
-            baseAmount: MATCHED_BASE, quoteAmount: MATCHED_QUOTE,
-            buyerChangeAmt: ALICE_CHANGE, sellerChangeAmt: 0n,
-            buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
-          });
-          const binding = validCreateBindingHash(vcArgs);
-          const markerExpiry = BigInt((await fx.l1.getSlot("confirmed")) + 200);
-          const verifyTx = new Transaction().add(
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
-            buildVerifyValidCreateInstruction({
-              programId: fx.vaultProgramId, payer: fx.teeKeypair.publicKey,
-              bindingHash: binding,
-              noteAcommitment: alice.depositNote!.commitment,
-              noteBcommitment: bob.depositNote!.commitment,
-              noteCcommitment, noteDcommitment,
-              noteEcommitment, noteFcommitment: ZERO_32,
-              quoteMint: fx.quoteMint, baseMint: fx.baseMint,
-              baseAmount: MATCHED_BASE, quoteAmount: MATCHED_QUOTE,
-              buyerChangeAmt: ALICE_CHANGE, sellerChangeAmt: 0n,
-              buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
-              expirySlot: markerExpiry, proof: validCreate.proof,
-            }),
-          );
-          await sendAndConfirmTransaction(fx.l1, verifyTx, [fx.teeKeypair], { commitment: "confirmed" });
-        }
-
-        const priceMarker = await landVerifyValidPrice({
-          connection: fx.l1,
-          vaultProgramId: fx.vaultProgramId,
-          teeKeypair: fx.teeKeypair,
-          payload,
-          repoRoot: REPO_ROOT,
-        });
-        txline("verify_valid_price", priceMarker.txSig);
-
-        await timer.time("Ed25519 + tee_forced_settle (with re-lock)", "L1", async () => {
-          // v3: with-relock settle was 1243/1232 as a legacy tx. Send as v0
-          // with the ALT in e2e-config so the three static accounts
-          // (vault_config, sysvar, system_program) collapse to 1-byte
-          // indices, freeing ~60 bytes.
-          if (!fx.settleLookupTable) {
-            throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
-          }
-          const settleSig = await sendSettleV0({
-            connection: fx.l1,
-            signer: fx.teeKeypair,
-            altPubkey: fx.settleLookupTable,
-            instructions: [
-              ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-              buildEd25519VerifyIx({
-                teePubkey: fx.teeKeypair.publicKey.toBytes(),
-                signature: teeSig, message: msg,
-              }),
-              buildSettleIx({
-                programId: fx.vaultProgramId,
-                teeAuthority: fx.teeKeypair.publicKey,
-                payload,
-                quoteMint: fx.quoteMint, baseMint: fx.baseMint,
-                priceCommitment: priceMarker.priceCommitment,
-              }),
-            ],
-          });
-          txline("Ed25519 + tee_forced_settle (re-lock active, v0)", settleSig);
-        });
-        }
 
         // Append leaves: note_c, note_d, note_e, note_fee.
         await fx.tree.append(noteCcommitment);
@@ -2699,7 +2475,6 @@ maybeDescribe(
             txline("lock_note(note_a) + lock_note(note_b)", sig);
           });
 
-          if (USE_BATCHED_PROOF) {
             // ── v3.5 batched path — exact-fill variant (no change notes).
             // Real protocol owner is set; the fee leaf is appended at the
             // end. Drives the same batched flow as the trade-flow test.
@@ -2755,106 +2530,6 @@ maybeDescribe(
                 onTx: txline,
               });
             });
-          } else {
-          // v3: VALID_CREATE — Test E is exact fill, no change.
-          {
-            const ZERO_32 = new Uint8Array(32);
-            const vcArgs = {
-              noteA: alice.depositNote!.commitment,
-              noteB: bob.depositNote!.commitment,
-              noteC: noteCcommitment,
-              noteD: noteDcommitment,
-              noteE: ZERO_32,
-              noteF: ZERO_32,
-              quoteMint: fx.quoteMint.toBytes(),
-              baseMint: fx.baseMint.toBytes(),
-              baseAmount: BASE_AMT,
-              quoteAmount: QUOTE_AMT,
-              buyerChangeAmt: 0n,
-              sellerChangeAmt: 0n,
-              buyerFeeAmt: BUYER_FEE,
-              sellerFeeAmt: SELLER_FEE,
-            };
-            const validCreate = await proveValidCreate({
-              repoRoot: REPO_ROOT,
-              quoteMint: fx.quoteMint.toBytes(),
-              baseMint: fx.baseMint.toBytes(),
-              inputA: { ownerCommit: alice.ownerCommit, amount: alice.depositNote!.amount,
-                        nonce: alice.depositNote!.nonce, blindingR: alice.depositNote!.blindingR },
-              inputAcommitmentBE: alice.depositNote!.commitment,
-              inputB: { ownerCommit: bob.ownerCommit, amount: bob.depositNote!.amount,
-                        nonce: bob.depositNote!.nonce, blindingR: bob.depositNote!.blindingR },
-              inputBcommitmentBE: bob.depositNote!.commitment,
-              outputC: { ownerCommit: alice.ownerCommit, amount: BASE_AMT,
-                         nonce: be32ToBigInt(noteCnonce), blindingR: be32ToBigInt(noteCblind) },
-              outputCcommitmentBE: noteCcommitment,
-              outputD: { ownerCommit: bob.ownerCommit, amount: QUOTE_AMT,
-                         nonce: be32ToBigInt(noteDnonce), blindingR: be32ToBigInt(noteDblind) },
-              outputDcommitmentBE: noteDcommitment,
-              outputE: undefined, outputEcommitmentBE: ZERO_32,
-              outputF: undefined, outputFcommitmentBE: ZERO_32,
-              baseAmount: BASE_AMT, quoteAmount: QUOTE_AMT,
-              buyerChangeAmt: 0n, sellerChangeAmt: 0n,
-              buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
-            });
-            const binding = validCreateBindingHash(vcArgs);
-            const markerExpiry = BigInt((await fx.l1.getSlot("confirmed")) + 200);
-            const verifyTx = new Transaction().add(
-              ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
-              buildVerifyValidCreateInstruction({
-                programId: fx.vaultProgramId, payer: fx.teeKeypair.publicKey,
-                bindingHash: binding,
-                noteAcommitment: alice.depositNote!.commitment,
-                noteBcommitment: bob.depositNote!.commitment,
-                noteCcommitment, noteDcommitment,
-                noteEcommitment: ZERO_32, noteFcommitment: ZERO_32,
-                quoteMint: fx.quoteMint, baseMint: fx.baseMint,
-                baseAmount: BASE_AMT, quoteAmount: QUOTE_AMT,
-                buyerChangeAmt: 0n, sellerChangeAmt: 0n,
-                buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
-                expirySlot: markerExpiry, proof: validCreate.proof,
-              }),
-            );
-            await sendAndConfirmTransaction(fx.l1, verifyTx, [fx.teeKeypair], { commitment: "confirmed" });
-          }
-
-          const priceMarker = await landVerifyValidPrice({
-            connection: fx.l1,
-            vaultProgramId: fx.vaultProgramId,
-            teeKeypair: fx.teeKeypair,
-            payload,
-            repoRoot: REPO_ROOT,
-          });
-          txline("verify_valid_price", priceMarker.txSig);
-
-          await timer.time("Ed25519 + tee_forced_settle", "L1", async () => {
-            // v3 v0/ALT path — keeps every settle uniform across tests.
-            if (!fx.settleLookupTable) {
-              throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
-            }
-            const sig = await sendSettleV0({
-              connection: fx.l1,
-              signer: fx.teeKeypair,
-              altPubkey: fx.settleLookupTable,
-              instructions: [
-                ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-                buildEd25519VerifyIx({
-                  teePubkey: fx.teeKeypair.publicKey.toBytes(),
-                  signature: teeSig,
-                  message: msg,
-                }),
-                buildSettleIx({
-                  programId: fx.vaultProgramId,
-                  teeAuthority: fx.teeKeypair.publicKey,
-                  payload,
-                  quoteMint: fx.quoteMint, baseMint: fx.baseMint,
-                  priceCommitment: priceMarker.priceCommitment,
-                }),
-              ],
-            });
-            txline("Ed25519 + tee_forced_settle (v0)", sig);
-          });
-          }
 
           await fx.tree.append(noteCcommitment);
           await fx.tree.append(noteDcommitment);

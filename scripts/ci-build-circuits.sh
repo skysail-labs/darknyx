@@ -42,8 +42,15 @@ build_wasm() {
 build_wasm valid_wallet_create
 build_wasm valid_spend
 build_wasm valid_input
-build_wasm valid_create
-build_wasm valid_price
+# v3.1 valid_create + valid_price were removed in Phase 1c-hard
+# (subsumed by the v3.5 batched-validity circuit). The N=16 batched
+# circuit isn't wired into this CI step yet — it needs pot18, which
+# would balloon the runner's PTAU cache by ~288 MB. The on-chain
+# vault still embeds vk_match_batch_n16.rs (committed VK consts)
+# so on-chain verification works regardless; the SDK match-batch
+# prover tests run against the committed `circuits/build/match_batch_n16/`
+# artifacts that are gitignore-exempted under the existing
+# `!**/circuit_final.zkey` rule.
 
 echo ""
 echo "CI circuit build complete. Wasm compiled fresh; zkeys from committed artifacts."

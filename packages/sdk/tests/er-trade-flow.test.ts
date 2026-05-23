@@ -70,7 +70,6 @@ import {
 import {
   buildCreateWalletInstruction,
   buildDepositInstruction,
-  buildVerifyValidCreateInstruction,
   buildWithdrawInstruction,
   vaultConfigPda,
   walletEntryPda,
@@ -97,19 +96,15 @@ import {
 } from "../src/idl/vault-client.js";
 import {
   buildEd25519VerifyIx,
-  buildSettleIx,
   canonicalPayloadHash,
   exactFillPayload,
-  validCreateBindingHash,
   type MatchResultPayload,
 } from "../src/settlement/settle-builder.js";
 
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
-import { proveValidCreate } from "./helpers/valid-create-prover.js";
 import { sendSettleV0 } from "./helpers/settle-v0.js";
-import { landVerifyValidPrice } from "./helpers/verify-valid-price.js";
 import { settleViaBatched } from "./helpers/batched-settle.js";
 import { type MatchSlotWitness } from "./helpers/match-batch-prover.js";
 
@@ -135,14 +130,6 @@ import type { E2EConfig } from "./devnet-setup.test.js";
 dotenvConfig({ path: resolve(__dirname, "../.env.devnet") });
 
 const RUN = process.env.RUN_ER_E2E === "1";
-
-/** v3.5 — set `USE_BATCHED_PROOF=1` in the env (or in `.env.devnet`)
- *  to route the settle through `verify_match_batch` +
- *  `tee_forced_settle_batched`. Default (unset) retains the v3.1
- *  per-match `verify_valid_create` + `verify_valid_price` +
- *  `tee_forced_settle` flow for parity / regression coverage.
- *  Evaluated AFTER dotenvConfig so `.env.devnet` can drive the toggle. */
-const USE_BATCHED_PROOF = process.env.USE_BATCHED_PROOF === "1";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -845,7 +832,6 @@ maybeDescribe(
         );
         txline("lock_note(note_a) + lock_note(note_b)", lockSig);
 
-        if (USE_BATCHED_PROOF) {
           // ── v3.5 batched path — exact-fill ER trade. One Groth16 attests
           // VALID_CREATE + VALID_PRICE for the (padded) batch, then a
           // single tee_forced_settle_batched lands the single real match.
@@ -899,117 +885,6 @@ maybeDescribe(
             repoRoot: REPO_ROOT,
             onTx: txline,
           });
-        } else {
-        // v3: VALID_CREATE proof must land before settle.
-        const ZERO_32 = new Uint8Array(32);
-        const vcArgs = {
-          noteA: alice.depositNote!.commitment,
-          noteB: bob.depositNote!.commitment,
-          noteC: noteCcommitment,
-          noteD: noteDcommitment,
-          noteE: ZERO_32,
-          noteF: ZERO_32,
-          quoteMint: quoteMint.toBytes(),
-          baseMint: baseMint.toBytes(),
-          baseAmount: BASE_AMT,
-          quoteAmount: QUOTE_AMT,
-          buyerChangeAmt: 0n,
-          sellerChangeAmt: 0n,
-          buyerFeeAmt: BUYER_FEE,
-          sellerFeeAmt: SELLER_FEE,
-        };
-        const validCreate = await proveValidCreate({
-          repoRoot: REPO_ROOT,
-          quoteMint: quoteMint.toBytes(),
-          baseMint: baseMint.toBytes(),
-          inputA: {
-            ownerCommit: alice.ownerCommit,
-            amount: alice.depositNote!.amount,
-            nonce: alice.depositNote!.nonce,
-            blindingR: alice.depositNote!.blindingR,
-          },
-          inputAcommitmentBE: alice.depositNote!.commitment,
-          inputB: {
-            ownerCommit: bob.ownerCommit,
-            amount: bob.depositNote!.amount,
-            nonce: bob.depositNote!.nonce,
-            blindingR: bob.depositNote!.blindingR,
-          },
-          inputBcommitmentBE: bob.depositNote!.commitment,
-          outputC: {
-            ownerCommit: alice.ownerCommit, amount: BASE_AMT,
-            nonce: be32ToBigInt(noteCnonce), blindingR: be32ToBigInt(noteCblind),
-          },
-          outputCcommitmentBE: noteCcommitment,
-          outputD: {
-            ownerCommit: bob.ownerCommit, amount: QUOTE_AMT,
-            nonce: be32ToBigInt(noteDnonce), blindingR: be32ToBigInt(noteDblind),
-          },
-          outputDcommitmentBE: noteDcommitment,
-          outputE: undefined, outputEcommitmentBE: ZERO_32,
-          outputF: undefined, outputFcommitmentBE: ZERO_32,
-          baseAmount: BASE_AMT, quoteAmount: QUOTE_AMT,
-          buyerChangeAmt: 0n, sellerChangeAmt: 0n,
-          buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
-        });
-        const binding = validCreateBindingHash(vcArgs);
-        const markerExpiry = BigInt((await l1.getSlot("confirmed")) + 200);
-        const verifyTx = new Transaction().add(
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
-          buildVerifyValidCreateInstruction({
-            programId: vaultProgramId,
-            payer: teeKeypair.publicKey,
-            bindingHash: binding,
-            noteAcommitment: alice.depositNote!.commitment,
-            noteBcommitment: bob.depositNote!.commitment,
-            noteCcommitment, noteDcommitment,
-            noteEcommitment: ZERO_32, noteFcommitment: ZERO_32,
-            quoteMint, baseMint,
-            baseAmount: BASE_AMT, quoteAmount: QUOTE_AMT,
-            buyerChangeAmt: 0n, sellerChangeAmt: 0n,
-            buyerFeeAmt: BUYER_FEE, sellerFeeAmt: SELLER_FEE,
-            expirySlot: markerExpiry,
-            proof: validCreate.proof,
-          }),
-        );
-        const verifySig = await sendAndConfirmTransaction(
-          l1, verifyTx, [teeKeypair], { commitment: "confirmed" },
-        );
-        txline("verify_valid_create", verifySig);
-
-        const priceMarker = await landVerifyValidPrice({
-          connection: l1,
-          vaultProgramId,
-          teeKeypair,
-          payload,
-          repoRoot: REPO_ROOT,
-        });
-        txline("verify_valid_price", priceMarker.txSig);
-
-        if (!cfg.settleLookupTable) {
-          throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
-        }
-        const settleSig = await sendSettleV0({
-          connection: l1,
-          signer: teeKeypair,
-          altPubkey: new PublicKey(cfg.settleLookupTable),
-          instructions: [
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-            buildEd25519VerifyIx({
-              teePubkey: teeKeypair.publicKey.toBytes(),
-              signature: teeSig, message: msg,
-            }),
-            buildSettleIx({
-              programId: vaultProgramId,
-              teeAuthority: teeKeypair.publicKey,
-              payload,
-              quoteMint, baseMint,
-              priceCommitment: priceMarker.priceCommitment,
-            }),
-          ],
-        });
-        txline("Ed25519 + tee_forced_settle (v0)", settleSig);
-        }
 
         await tree.append(noteCcommitment);
         alice.tradeNote = {

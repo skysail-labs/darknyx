@@ -35,11 +35,13 @@ Currency: the live branch is `nyx-v2-onchain-hardening` through the
 | v3.1 | VALID_PRICE proof + `ValidPriceMarker` PDA + v0 tx + ALT migration |
 | v3.5 (current) | VALID_MATCH_BATCH (N=16) + `BatchValidityMarker` (1:N) + `tee_forced_settle_batched` + `close_batch_validity_marker` |
 
-v3.5 ships under a **soft cutover** — the v3.1 ixs are still callable
-and marked `@deprecated v3.5` in the SDK. Both paths run against the
-same deployed programs. **Do not remove the v3.1 path** without
-explicit user direction (Phase 1c-hard checklist in
-`docs/v3.5-migration.md`).
+**Phase 1c-hard is DONE.** v3.5 is the only on-chain settle path —
+`verify_valid_create`, `verify_valid_price`, the per-match
+`tee_forced_settle`, their `ValidCreateMarker` / `ValidPriceMarker`
+state, the matching VK consts + circom circuits, and the SDK
+builders that targeted them have all been removed. The detailed
+do-not-resurrect list is in [§10](#10-phase-1c-hard-cutover--done-v35-is-the-only-settle-path).
+The migration log is in `docs/v3.5-migration.md`.
 
 ---
 
@@ -180,27 +182,28 @@ Other symptoms that you need to re-run setup:
 
 ```sh
 # Pure-L1 happy path (~50 s)
-RUN_DEVNET_E2E=1 USE_BATCHED_PROOF=1 FUNDER_KEYPAIR=~/.config/solana/id.json \
+RUN_DEVNET_E2E=1 FUNDER_KEYPAIR=~/.config/solana/id.json \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
   ROOT_KEY_KEYPAIR=.devnet/keypairs/root_key.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-trade-flow.test.ts )
 
 # Change-note edge cases (~3 min, 5 scenarios A/B/C/D/E)
-RUN_CN_E2E=1 USE_BATCHED_PROOF=1 FUNDER_KEYPAIR=~/.config/solana/id.json \
+RUN_CN_E2E=1 FUNDER_KEYPAIR=~/.config/solana/id.json \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/change-note-flow.test.ts )
 
 # Ephemeral-rollup hidden-order path
-RUN_ER_E2E=1 USE_BATCHED_PROOF=1 FUNDER_KEYPAIR=~/.config/solana/id.json \
+RUN_ER_E2E=1 FUNDER_KEYPAIR=~/.config/solana/id.json \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/er-trade-flow.test.ts )
 ```
 
-Drop `USE_BATCHED_PROOF=1` to validate the v3.1 legacy path instead.
-Both must continue to pass during the soft-cutover window.
+The `USE_BATCHED_PROOF` env var no longer exists — every devnet
+test takes the v3.5 batched path unconditionally after Phase
+1c-hard.
 
 ### 2.6 The "everything green" pre-PR checklist (no devnet needed)
 
@@ -261,12 +264,64 @@ connectivity).
       stays under 1232 B including the worst-case change-note variant
 - [ ] If a PDA / seed was added: SDK `seeds.ts` + `*Pda()` helpers
       mirror it (§7.3)
+- [ ] **If ANY file was deleted (Rust test, circuit, vault ix, SDK
+      module): grep for stale references in `.github/workflows/` and
+      `scripts/` BEFORE pushing.** See [§2.7](#27-deletion-checklist--things-the-workspace-gate-doesnt-catch).
 - [ ] If new files reference cross-doc paths: `find` / read-check
       every referenced path exists
 - [ ] Commit signed with `git commit -s` and amended with the
       `Co-Authored-By` trailer (§11)
 - [ ] If anything load-bearing changed: gated through
       `/test-devnet --batched` on the PR before merge (§3.7)
+
+### 2.7 Deletion checklist — things the workspace gate doesn't catch
+
+**The single most-likely-to-burn-CI mistake in this repo is deleting
+a file and not noticing that something OUTSIDE the cargo/npm file
+tree still references it by name.**
+
+`cargo test --workspace` (in §2.6) auto-discovers tests from the
+filesystem. It runs whatever exists; it does NOT error on "missing
+test target." But `cargo test --test <name>` (which CI uses to
+control which tests run per job) errors hard with
+`error: no test target named '<name>'`. Same for circom — the local
+`scripts/build-circuits.sh` and the CI `scripts/ci-build-circuits.sh`
+have their own hard-coded circuit lists. Same for the GitHub
+workflow YAMLs that hard-code job-specific test selections.
+
+Whenever you delete a file under `programs/*/tests/`, `circuits/`,
+`packages/sdk/tests/helpers/`, or `programs/vault/src/instructions/`,
+run this BEFORE pushing:
+
+```sh
+# Replace <name> with the deleted file's basename, e.g.
+# zk_price_roundtrip, valid_create, verify_valid_create.
+NAME=<name>
+grep -nE "$NAME" \
+    .github/workflows/*.yml \
+    .github/workflows/*.yaml \
+    scripts/*.sh \
+    scripts/*.md \
+    || echo "no stale references in CI / scripts"
+```
+
+If anything matches, the workflow / script needs updating in the
+SAME commit as the deletion. Two real incidents:
+
+* CI Failure #1 (after the Phase 1c-hard commit):
+  `scripts/ci-build-circuits.sh` still listed `build_wasm valid_create`
+  + `build_wasm valid_price`. `cargo test --workspace` didn't catch
+  it because the script lives outside cargo's purview. Fix lived in
+  a separate follow-up commit; could have been folded into the
+  deletion commit.
+* CI Failure #2 (right after):
+  `pr-checks.yml`'s `vault-zk` job ran
+  `cargo test -p vault --test zk_price_roundtrip` after that test
+  file was deleted. Cargo errors with `no test target named …`. Same
+  root cause: the workflow YAML wasn't on the deletion radar.
+
+The §2.6 pre-PR gate is necessary but not sufficient. **A deletion
+without a CI-reference audit is one CI run away from breaking.**
 
 ---
 
@@ -393,9 +448,8 @@ test` / `vitest run`:
 | `change-note-flow.test.ts` | `RUN_CN_E2E=1` | 5 cases: change notes, partial fill + re-lock, privacy regression, multi-batch continuation, real protocol-fee withdraw |
 | `orders-submit.devnet.test.ts` | `RUN_DEVNET_E2E=1` | submit_order against the real ER RPC |
 
-Append `USE_BATCHED_PROOF=1` to any of these to route the settle
-through the v3.5 batched path instead of the v3.1 per-match path.
-**Both paths must continue to pass during the soft-cutover window.**
+All four devnet flows always take the v3.5 batched path now —
+Phase 1c-hard removed the v3.1 alternative.
 
 ### 3.7 CI workflows
 
@@ -561,11 +615,10 @@ right at the edge:
 | Tx | Size | Headroom |
 |---|---|---|
 | lock_note ×2 (Tx A) | ~1050 B | ~180 B |
-| verify_match_batch (v3.5 Tx B) | ~640 B | comfortable |
-| verify_valid_create + verify_valid_price (v3.1 Tx B) | ~720 + ~400 B | each comfortable |
-| tee_forced_settle (v3.1, v0 + 1 ALT) | ~1120 B | **~110 B** |
-| tee_forced_settle_batched (v3.5, v0 + 2 ALTs) | ~1130 B | **~100 B** |
-| close_batch_validity_marker | ~250 B | comfortable |
+| verify_match_batch (Tx B) | ~640 B | comfortable |
+| per-batch ALT create+extend (Tx C) | ~250 B | comfortable |
+| tee_forced_settle_batched (Tx D, v0 + 2 ALTs) | ~1130 B | **~100 B** |
+| close_batch_validity_marker (Tx E, once per batch) | ~250 B | comfortable |
 
 Anything that adds bytes to the settle path — a new account, an
 extra ix parameter, a longer payload field — risks pushing the
@@ -622,10 +675,9 @@ proofs don't verify.
 | Nullifier | `crates/darkpool-crypto/src/nullifier.rs` | `packages/sdk/src/utxo/nullifier.ts` | `nullifier-parity.test.ts` |
 | Key derivation chain | `crates/darkpool-crypto/src/keys.rs` | `packages/sdk/src/keys/key-generators.ts` | `keys-parity.test.ts` |
 | User commitment | `crates/darkpool-crypto/src/user_commitment.rs` | `packages/sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |
-| Canonical payload hash | `programs/vault/src/instructions/tee_forced_settle.rs::canonical_payload_hash` | `packages/sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | `tests::canonical_payload_hash_fixed_vector` (Rust unit) + `settle-builder.test.ts::hash_cross_env_parity` (TS) |
-| VALID_CREATE binding hash | `programs/vault/src/instructions/verify_valid_create.rs::valid_create_binding_hash` | `packages/sdk/src/settlement/settle-builder.ts::validCreateBindingHash` | exercised by every change-note devnet flow |
-| Match leaf hash (v3.5) | `programs/vault/src/instructions/tee_forced_settle_batched.rs::compute_match_leaf` (now `pub fn`) | `packages/sdk/tests/helpers/match-batch-prover.ts::computeBatchLeaf` | `match-batch-prototype.test.ts` includes a leaf-byte parity assert |
-| MatchResultPayload Borsh shape | `vault::instructions::tee_forced_settle::MatchResultPayload` (24 fields, 448 bytes) | `packages/sdk/src/settlement/settle-builder.ts::serializePayload` | `settle-builder.test.ts::settle_payload_serialization_size` |
+| Canonical payload hash | `programs/vault/src/instructions/tee_forced_settle.rs::canonical_payload_hash` (shared file, NOT a v3.1-only handler — see §10) | `packages/sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | `tests::canonical_payload_hash_fixed_vector` (Rust unit) + `settle-builder-batched.test.ts` (TS) |
+| Match leaf hash (v3.5) | `programs/vault/src/instructions/tee_forced_settle_batched.rs::compute_match_leaf` (`pub fn`) | `packages/sdk/tests/helpers/match-batch-prover.ts::computeBatchLeaf` | `match-batch-prototype.test.ts` includes a leaf-byte parity assert |
+| MatchResultPayload Borsh shape | `vault::instructions::tee_forced_settle::MatchResultPayload` (24 fields, 448 bytes) | `packages/sdk/src/settlement/settle-builder.ts::serializePayload` | `settle-builder-batched.test.ts::settle_batched_payload_relock_passthrough` |
 | Anchor discriminator (`sha256("global:<name>")[..8]`) | derived by Anchor macros from the fn name | `packages/sdk/src/idl/vault-client.ts::anchorDiscriminator` | every `*-transport.test.ts` |
 
 ### 6.2 BN254 Fr safety (the silent killer)
@@ -719,6 +771,8 @@ spells out the rule. Don't remove it.
 | You did | Failure surface | Fix |
 |---|---|---|
 | Committed without running `cargo fmt` | pr-checks `rust` job fails immediately at `cargo fmt --all -- --check` | Run `cargo fmt --all` locally, commit the diff. See [§2.6 pre-PR checklist](#26-the-everything-green-pre-pr-checklist-no-devnet-needed) — this is exactly what that gate exists to catch |
+| Deleted a Rust test file (`programs/*/tests/<name>.rs`) | pr-checks fails at `cargo test -p <crate> --test <name>` with `error: no test target named '<name>'`. Local `cargo test --workspace` did NOT catch this. | Grep the workflow YAMLs for the deleted basename + remove the `--test <name>` line in the same commit. See [§2.7](#27-deletion-checklist--things-the-workspace-gate-doesnt-catch) |
+| Deleted a circom circuit | pr-checks `circuits` job fails at `scripts/ci-build-circuits.sh` with `Input file does not exist: …/circuit.circom`. Local `cargo test` / `vitest run` did NOT catch this because the script lives outside cargo/npm. | Update BOTH `scripts/build-circuits.sh` (local dev) AND `scripts/ci-build-circuits.sh` (CI, wasm-only) — they have separate hard-coded circuit lists. See [§2.7](#27-deletion-checklist--things-the-workspace-gate-doesnt-catch) |
 | Changed a Poseidon arity / domain tag in Rust only | Parity test fails (`poseidon-parity.test.ts`) | Mirror the change in `packages/sdk/src/zk/poseidon.ts` |
 | Changed a Poseidon arity / domain tag in TS only | Devnet flow fails with `InvalidProof` or `InvalidBatchBinding` | Mirror the change in `crates/darkpool-crypto/src/poseidon.rs` AND in any on-chain handler that hashes these inputs |
 | Changed a circom circuit | Devnet flow fails with `InvalidProof (6000)` | Re-run `bash scripts/build-circuits.sh`; commit the regenerated `.zkey` + `vk_*.rs` in the same commit; redeploy |
@@ -768,31 +822,57 @@ When adding a new test:
    `*-transport` / `*-builder` pattern — no network, fast.
 2. If it's prover-related, add a `helpers/<name>-prover.ts` (if it
    doesn't exist) + a `<name>-prover.test.ts`.
-3. If it's a devnet flow, **always add the `USE_BATCHED_PROOF=1` gate**
-   so the test runs on both v3.1 and v3.5 paths. See
-   `devnet-trade-flow.test.ts` for the pattern (an `if (USE_BATCHED_PROOF) { settleViaBatched(...) } else { ...v3.1... }` block at every settle site).
+3. If it's a devnet flow, drive the settle through
+   `settleViaBatched(...)` (one real match) or
+   `settleBatchViaBatched(...)` (≤ 16 real matches per batch). See
+   `devnet-trade-flow.test.ts` for the canonical pattern. There's
+   no longer an environment toggle — v3.5 is the only path.
 
 ---
 
-## 10. Soft-cutover discipline (v3.1 + v3.5 coexist)
+## 10. Phase 1c-hard cutover — DONE; v3.5 is the only settle path
 
-During the cutover window:
+The soft-cutover rule that used to live here ("do not remove the
+v3.1 path") was retired when Phase 1c-hard landed. v3.5 is now the
+only on-chain settle path. The following are GONE — do not try to
+re-import them, do not write code that assumes they exist:
 
-* **Do not delete** `verify_valid_create.rs`, `verify_valid_price.rs`,
-  `tee_forced_settle.rs`. They're called by the v3.1 fallback in
-  every devnet test and by the live demo on `main`.
-* **Do not delete** `buildSettleIx`, `buildVerifyValidCreateInstruction`,
-  `buildVerifyValidPriceInstruction` from the SDK. They're marked
-  `@deprecated v3.5` for documentation, not for removal.
-* **Do not delete** the `else { ... v3.1 path ... }` branches in the
-  three devnet test files (`devnet-trade-flow`, `er-trade-flow`,
-  `change-note-flow`). They keep the legacy path gated.
-* **Do not delete** `vk_valid_create.rs` / `vk_valid_price.rs`. The
-  v3.1 ixs reference them.
+* Vault ixs: `verify_valid_create`, `verify_valid_price`,
+  `tee_forced_settle` (the v3.1 per-match one). `tee_forced_settle.rs`
+  still exists as a SHARED file holding `MatchResultPayload`,
+  `canonical_payload_hash`, `verify_tee_signature`,
+  `create_relock_pda`, and `TradeSettled` — these are reused by
+  `tee_forced_settle_batched`.
+* Vault state: `ValidCreateMarker`, `ValidPriceMarker`,
+  `MAX_CREATE_MARKER_TTL_SLOTS`, `MAX_PRICE_MARKER_TTL_SLOTS`.
+* Vault VK consts: `vk_valid_create.rs`, `vk_valid_price.rs`.
+* Circuits: `circuits/valid_create/`, `circuits/valid_price/`.
+* SDK builders: `buildSettleIx`, `buildVerifyValidCreateInstruction`,
+  `buildVerifyValidPriceInstruction`, `validCreateMarkerPda`,
+  `validPriceMarkerPda`, `validCreateBindingHash`.
+* SDK helper-test files: `tests/helpers/valid-create-prover.ts`,
+  `tests/helpers/valid-price-prover.ts`,
+  `tests/helpers/verify-valid-price.ts`.
+* SDK test files: `tests/settle-builder.test.ts` (12 v3.1
+  wire-format tests), `tests/valid-create-prover.test.ts` (3 v3.1
+  prover tests).
+* The `USE_BATCHED_PROOF` env-var gate — every devnet test now
+  takes the batched path unconditionally. `nightly-devnet.yml`
+  still has a `batched` workflow input + `--batched` PR-comment
+  flag, but they're vestigial and can be removed when the workflow
+  is next touched.
 
-When the user explicitly authorises Phase 1c-hard cutover, follow
-the deletion checklist in
-[`docs/v3.5-migration.md`](docs/v3.5-migration.md).
+What remains shared by the batched path (so don't try to "clean
+these up" either):
+
+* `MatchResultPayload` Borsh struct + `canonical_payload_hash` —
+  identical to v3.1 by design (the TEE signature format didn't
+  change).
+* `create_relock_pda` — called by `tee_forced_settle_batched` to
+  allocate fresh `NoteLock` PDAs for change notes.
+* The static settle ALT created at devnet-setup time (`vault_config`,
+  `instructions_sysvar`, `system_program`). Still needed; v3.5
+  stacks a per-batch ALT on top.
 
 ---
 
