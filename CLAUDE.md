@@ -408,31 +408,58 @@ If your PR touches anything load-bearing (circuit, vault ix, marker
 PDA, settle handler, anchor accounts), gate it through
 `/test-devnet --batched` before merging.
 
-> **GitHub gotcha — `/test-devnet` silently does nothing if the
-> workflow isn't on `main`.** GitHub Actions only triggers
-> `issue_comment` workflows from the workflow file present on the
-> **default branch**, not on the feature branch. If
-> `.github/workflows/nightly-devnet.yml` exists on your feature
-> branch but not yet on `main`, posting `/test-devnet` on a PR
-> generates **no run, no error, no log** — looks exactly like the
-> comment was ignored.
+> **GitHub gotcha — `/test-devnet` silently does nothing unless
+> the workflow file is on the repo's *default* branch.** GitHub
+> Actions reads `issue_comment` workflows ONLY from the workflow
+> file on whatever branch is currently configured as the repo's
+> default (Settings → Branches → "Default branch"). It does NOT
+> matter which branch the PR is against; it does NOT matter which
+> branch the comment came from. Only the default-branch copy of
+> the workflow file is loaded for `issue_comment` events. Posting
+> `/test-devnet` when that copy is missing yields **no run, no
+> error, no log** — looks exactly like the comment was ignored.
 >
-> To verify: `git show main:.github/workflows/nightly-devnet.yml`
-> — if that errors with `fatal: path '...' exists on disk, but
-> not in 'main'`, you're hitting this. Fix options:
+> **This repo's setup:** PRs route into `nyx-v2-onchain-hardening`
+> (the active integration branch), but `main` is preserved as the
+> v1 hackathon-submission snapshot. If `main` is still the default
+> branch and the workflow file lives only on
+> `nyx-v2-onchain-hardening`, every `/test-devnet` comment fails
+> silently.
 >
-> 1. **Long term:** land a small PR onto `main` that contains
->    only `.github/workflows/nightly-devnet.yml`. Once it's on
->    `main`, every subsequent PR (including the feature one) gets
->    `/test-devnet` for free.
-> 2. **Right now:** use `workflow_dispatch` from the Actions UI
->    (the "Run workflow" button on the nightly-devnet workflow
->    page lets you pick any branch + flip the `batched`/`skip_er`/
->    `run_partial_fill` toggles). Or via CLI:
+> **To verify locally:**
+> ```sh
+> # What's the default branch on origin?
+> git remote show origin | grep 'HEAD branch'
+> # Does the default branch have the workflow file?
+> git show $(git remote show origin | sed -n 's/^.*HEAD branch: //p'):.github/workflows/nightly-devnet.yml | head -1
+> #   → ok if a normal first line prints; failing if you see
+> #     `fatal: path '...' exists on disk, but not in '<branch>'`
+> ```
+>
+> **Fix options (pick one):**
+>
+> 1. **Recommended for this repo:** flip the default branch to
+>    `nyx-v2-onchain-hardening` so the workflow file (which
+>    already lives there) becomes the one GitHub reads.
 >    ```sh
->    gh workflow run nightly-devnet.yml --ref <branch> \
+>    gh repo edit Nyx-Privacy/nyx --default-branch nyx-v2-onchain-hardening
+>    ```
+>    `main` stays intact — it just stops being the default. The
+>    workflow's preflight job already handles cross-branch PR
+>    head SHAs correctly, so `/test-devnet` on any PR (against
+>    any base branch) will check out the PR's head and run.
+> 2. **No repo-settings change:** use `workflow_dispatch`. The
+>    Actions UI "Run workflow" button (or `gh workflow run`)
+>    can fire the workflow against any branch without the
+>    default-branch constraint.
+>    ```sh
+>    gh workflow run nightly-devnet.yml --ref <pr-branch> \
 >      -f batched=true -f skip_er=false -f run_partial_fill=false
 >    ```
+> 3. **If you really want `/test-devnet` from `main`:** land a
+>    tiny PR onto `main` containing just
+>    `.github/workflows/nightly-devnet.yml`. Heavier-touch but
+>    keeps `main` as default.
 >
 > Documented at <https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#issue_comment>.
 
