@@ -202,26 +202,71 @@ RUN_ER_E2E=1 USE_BATCHED_PROOF=1 FUNDER_KEYPAIR=~/.config/solana/id.json \
 Drop `USE_BATCHED_PROOF=1` to validate the v3.1 legacy path instead.
 Both must continue to pass during the soft-cutover window.
 
-### 2.6 The "everything green" pre-commit gate (no devnet needed)
+### 2.6 The "everything green" pre-PR checklist (no devnet needed)
 
-Run this before every commit (the same set CI runs on every PR — if
-it passes here, CI will pass too):
+**Run every line below before pushing or opening a PR.** This is the
+same set CI runs on every PR via `.github/workflows/pr-checks.yml` —
+if it passes here, CI will pass. If you skip any line, CI will
+block on something dumb (the most common skip is `cargo fmt`).
 
 ```sh
 set -e
+
+# 1. Formatter — CI's pr-checks/rust job runs this with -- --check
+#    and fails the whole pipeline on a single un-reformatted line.
+#    Run WITHOUT --check locally to fix in place; the verify line
+#    underneath will exit non-zero if anything was left to do.
+cargo fmt --all
+cargo fmt --all -- --check
+
+# 2. BPF builds (required by litesvm tests + by deploy)
 cargo build-sbf --manifest-path programs/vault/Cargo.toml
 cargo build-sbf --manifest-path programs/matching_engine/Cargo.toml
+
+# 3. Host-side example binaries (parity tests shell out to them)
 cargo build --examples -p darkpool-crypto
+
+# 4. Clippy — workspace, all targets, no warnings tolerated
 cargo clippy --workspace --all-targets -- -D warnings
+
+# 5. Rust tests — workspace unit + litesvm integration
 cargo test --workspace
+
+# 6. TS typecheck (separate from vitest — vitest doesn't fail on
+#    missing types by default)
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit
-( cd packages/sdk && ../../node_modules/.bin/vitest run )    # ~110 pass, 17 env-skipped
-echo "ALL GREEN"
+
+# 7. SDK suite — devnet/ER/CN tests auto-skip without RUN_* env vars
+( cd packages/sdk && ../../node_modules/.bin/vitest run )
+
+echo "ALL GREEN — safe to push"
 ```
 
 Expected: ~82 Rust workspace tests + 110 SDK tests pass; 17 env-gated
 SDK tests skip (they need `RUN_DEVNET_E2E=1` etc. + devnet
 connectivity).
+
+#### Pre-PR mini-checklist (read once per PR)
+
+- [ ] `cargo fmt --all` ran and the verify (`-- --check`) is clean
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` is clean
+- [ ] `cargo test --workspace` passes
+- [ ] `./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit` passes
+- [ ] `vitest run --root packages/sdk` passes (≈ 110 / 17 skipped)
+- [ ] If a circom circuit / Poseidon arity / leaf-hash / canonical-hash
+      shape changed: see [§4](#4-touching-circuits-the-failure-mode-thats-bitten-us)
+      — regenerated zkey + vk_*.rs are committed in the same commit
+- [ ] If a settle ix's account list or ix data changed: see
+      [§5](#5-the-1232-byte-transaction-size-budget) — measured tx size
+      stays under 1232 B including the worst-case change-note variant
+- [ ] If a PDA / seed was added: SDK `seeds.ts` + `*Pda()` helpers
+      mirror it (§7.3)
+- [ ] If new files reference cross-doc paths: `find` / read-check
+      every referenced path exists
+- [ ] Commit signed with `git commit -s` and amended with the
+      `Co-Authored-By` trailer (§11)
+- [ ] If anything load-bearing changed: gated through
+      `/test-devnet --batched` on the PR before merge (§3.7)
 
 ---
 
@@ -618,6 +663,7 @@ spells out the rule. Don't remove it.
 
 | You did | Failure surface | Fix |
 |---|---|---|
+| Committed without running `cargo fmt` | pr-checks `rust` job fails immediately at `cargo fmt --all -- --check` | Run `cargo fmt --all` locally, commit the diff. See [§2.6 pre-PR checklist](#26-the-everything-green-pre-pr-checklist-no-devnet-needed) — this is exactly what that gate exists to catch |
 | Changed a Poseidon arity / domain tag in Rust only | Parity test fails (`poseidon-parity.test.ts`) | Mirror the change in `packages/sdk/src/zk/poseidon.ts` |
 | Changed a Poseidon arity / domain tag in TS only | Devnet flow fails with `InvalidProof` or `InvalidBatchBinding` | Mirror the change in `crates/darkpool-crypto/src/poseidon.rs` AND in any on-chain handler that hashes these inputs |
 | Changed a circom circuit | Devnet flow fails with `InvalidProof (6000)` | Re-run `bash scripts/build-circuits.sh`; commit the regenerated `.zkey` + `vk_*.rs` in the same commit; redeploy |

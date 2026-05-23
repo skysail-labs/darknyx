@@ -1448,7 +1448,10 @@ pub const BATCH_VALIDITY_MARKER_SEED: &[u8] = b"batch_validity";
 const DOMAIN_BATCH_ROOT: u64 = 22;
 
 pub fn batch_validity_marker_pda(h: &Harness, merkle_root: &[u8; 32]) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[BATCH_VALIDITY_MARKER_SEED, merkle_root.as_ref()], &h.vault_id)
+    Pubkey::find_program_address(
+        &[BATCH_VALIDITY_MARKER_SEED, merkle_root.as_ref()],
+        &h.vault_id,
+    )
 }
 
 /// Pre-seed a `BatchValidityMarker` PDA so `tee_forced_settle_batched`
@@ -1573,8 +1576,8 @@ pub fn build_merkle_root_and_path_n16(
         *sibling_slot = current[sibling_idx];
         let mut next = Vec::with_capacity(current.len() / 2);
         for pair in current.chunks_exact(2) {
-            let hashed = poseidon_hash_bytes(&[domain_be, pair[0], pair[1]])
-                .expect("poseidon_hash_bytes");
+            let hashed =
+                poseidon_hash_bytes(&[domain_be, pair[0], pair[1]]).expect("poseidon_hash_bytes");
             next.push(hashed);
         }
         current = next;
