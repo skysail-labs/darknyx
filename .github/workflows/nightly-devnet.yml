@@ -2,16 +2,17 @@
 #
 #   1. Nightly cron at 03:00 UTC (catches overnight regressions).
 #   2. workflow_dispatch (manual button in the Actions UI; supports
-#      `run_partial_fill` + `skip_er` + `batched` toggles).
+#      `run_partial_fill` + `skip_er` toggles).
 #   3. PR comment `/test-devnet` from a repo owner / member / collaborator.
 #      Supports the same toggles as flags:
-#      `/test-devnet --partial-fill --skip-er --batched`.
+#      `/test-devnet --partial-fill --skip-er`.
 #
-# `--batched` (or `batched: true` from the dispatch UI) routes every
-# settle through the v3.5 `verify_match_batch` + `tee_forced_settle_batched`
-# path by setting `USE_BATCHED_PROOF=1`. Default (off) keeps the v3.1
-# per-match path so cron nights stay fast and the legacy ixs continue to
-# get gated.
+# Phase 1c-hard note: the `batched` workflow_dispatch input + the
+# `--batched` PR-comment flag (which used to set USE_BATCHED_PROOF=1)
+# are vestigial. v3.5 is the only on-chain settle path now; every
+# devnet flow takes it unconditionally. The flag is kept to avoid
+# breaking old `/test-devnet --batched` comments, but it no longer
+# toggles anything.
 #
 # Runs the env-gated devnet / ER / CN / PER SDK flows against the
 # already-deployed programs on Solana devnet. INFORMATIONAL — it does
@@ -65,7 +66,7 @@ on:
         type: boolean
         default: false
       batched:
-        description: 'Route every settle through the v3.5 batched path (USE_BATCHED_PROOF=1)'
+        description: '(vestigial post-Phase 1c-hard — v3.5 is now the only path)'
         type: boolean
         default: false
   issue_comment:
@@ -238,12 +239,11 @@ jobs:
       RUN_PER_TESTS: '1'
       RUN_ER_E2E: ${{ needs.preflight.outputs.skip_er == '1' && '0' || '1' }}
       RUN_DEVNET_PARTIAL_FILL: ${{ needs.preflight.outputs.run_partial_fill }}
-      # v3.5 batched-validity path. Off by default so the legacy
-      # per-match `verify_valid_create` + `verify_valid_price` +
-      # `tee_forced_settle` triplet stays exercised by cron. Flip on
-      # via `/test-devnet --batched` to gate v3.5 against the same
-      # scenarios.
-      USE_BATCHED_PROOF: ${{ needs.preflight.outputs.batched }}
+      # Phase 1c-hard removed the v3.1 fallback — every devnet test
+      # now takes the v3.5 batched path unconditionally. The
+      # `--batched` flag + workflow_dispatch `batched` input are
+      # vestigial; left in place so old `/test-devnet --batched`
+      # comments don't error, but they no longer toggle anything.
     steps:
       # For issue_comment, github.ref is the default branch — we need
       # the PR's head SHA explicitly. preflight resolved it for us.
@@ -403,9 +403,7 @@ jobs:
       # vitest invocation is identical to pr-checks. The previously
       # auto-skipped devnet/ER/CN/PER blocks now execute.
       - name: vitest run (devnet flows enabled)
-        run: |
-          echo "USE_BATCHED_PROOF=${USE_BATCHED_PROOF:-0} (v3.5 batched path: ${USE_BATCHED_PROOF:-0})"
-          node node_modules/vitest/vitest.mjs run --root packages/sdk
+        run: node node_modules/vitest/vitest.mjs run --root packages/sdk
 
       # ----- Cleanup -----
       # Belt-and-braces: the runner is ephemeral, but explicitly wipe
