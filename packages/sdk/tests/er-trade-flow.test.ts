@@ -113,11 +113,6 @@ import { landVerifyValidPrice } from "./helpers/verify-valid-price.js";
 import { settleViaBatched } from "./helpers/batched-settle.js";
 import { type MatchSlotWitness } from "./helpers/match-batch-prover.js";
 
-/** v3.5 — set `USE_BATCHED_PROOF=1` in the env to route the settle through
- *  `verify_match_batch` + `tee_forced_settle_batched`. Default (unset)
- *  retains the v3.1 per-match `verify_valid_create` + `verify_valid_price`
- *  + `tee_forced_settle` flow for parity / regression coverage. */
-const USE_BATCHED_PROOF = process.env.USE_BATCHED_PROOF === "1";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -140,6 +135,14 @@ import type { E2EConfig } from "./devnet-setup.test.js";
 dotenvConfig({ path: resolve(__dirname, "../.env.devnet") });
 
 const RUN = process.env.RUN_ER_E2E === "1";
+
+/** v3.5 — set `USE_BATCHED_PROOF=1` in the env (or in `.env.devnet`)
+ *  to route the settle through `verify_match_batch` +
+ *  `tee_forced_settle_batched`. Default (unset) retains the v3.1
+ *  per-match `verify_valid_create` + `verify_valid_price` +
+ *  `tee_forced_settle` flow for parity / regression coverage.
+ *  Evaluated AFTER dotenvConfig so `.env.devnet` can drive the toggle. */
+const USE_BATCHED_PROOF = process.env.USE_BATCHED_PROOF === "1";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
