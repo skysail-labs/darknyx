@@ -117,6 +117,14 @@ import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { proveValidCreate } from "./helpers/valid-create-prover.js";
 import { sendSettleV0 } from "./helpers/settle-v0.js";
 import { landVerifyValidPrice } from "./helpers/verify-valid-price.js";
+import { settleViaBatched } from "./helpers/batched-settle.js";
+import { type MatchSlotWitness } from "./helpers/match-batch-prover.js";
+
+/** v3.5 — set `USE_BATCHED_PROOF=1` in the env to route settles
+ *  through `verify_match_batch` + `tee_forced_settle_batched`. Both
+ *  paths produce identical state transitions; downstream assertions
+ *  (tree appends, withdraws, balances) don't care which one ran. */
+const USE_BATCHED_PROOF = process.env.USE_BATCHED_PROOF === "1";
 import { validCreateBindingHash } from "../src/settlement/settle-builder.js";
 import { buildVerifyValidCreateInstruction } from "../src/idl/vault-client.js";
 import {
@@ -1177,6 +1185,64 @@ maybeDescribe(
           txline("lock_note(note_a) + lock_note(note_b)", lockSig);
         });
 
+        if (USE_BATCHED_PROOF) {
+          // ── v3.5 batched path — single Groth16 attests VALID_CREATE +
+          // VALID_PRICE for the whole batch (here padded to N=16 with
+          // dummy slots), then a single tee_forced_settle_batched per
+          // real match. Exercises the with-change-note edge case.
+          if (!fx.settleLookupTable) {
+            throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+          }
+          await timer.time("v3.5 batched settle (with change note)", "L1", async () => {
+            const ZERO_32 = new Uint8Array(32);
+            const realSlot: MatchSlotWitness = {
+              noteAcommitment: alice.depositNote!.commitment,
+              noteBcommitment: bob.depositNote!.commitment,
+              noteCcommitment,
+              noteDcommitment,
+              noteEcommitment,
+              noteFcommitment: ZERO_32,
+              quoteMint: fx.quoteMint.toBytes(),
+              baseMint: fx.baseMint.toBytes(),
+              baseAmount: MATCH_BASE,
+              quoteAmount: MATCH_QUOTE,
+              buyerChangeAmt: ALICE_CHANGE,
+              sellerChangeAmt: 0n,
+              buyerFeeAmt: BUYER_FEE,
+              sellerFeeAmt: SELLER_FEE,
+              batchSlot: payload.batchSlot,
+              aOwnerCommit: alice.ownerCommit,
+              bOwnerCommit: bob.ownerCommit,
+              aAmount: alice.depositNote!.amount,
+              bAmount: bob.depositNote!.amount,
+              aNonce: alice.depositNote!.nonce,
+              aBlinding: alice.depositNote!.blindingR,
+              bNonce: bob.depositNote!.nonce,
+              bBlinding: bob.depositNote!.blindingR,
+              cNonce: be32ToBigInt(noteCnonce),
+              cBlinding: be32ToBigInt(noteCblind),
+              dNonce: be32ToBigInt(noteDnonce),
+              dBlinding: be32ToBigInt(noteDblind),
+              eNonce: be32ToBigInt(noteEnonce),
+              eBlinding: be32ToBigInt(noteEblind),
+              fNonce: 0n,
+              fBlinding: 0n,
+              clearingPrice: MATCH_QUOTE / MATCH_BASE,
+            };
+            await settleViaBatched({
+              connection: fx.l1,
+              vaultProgramId: fx.vaultProgramId,
+              teeKeypair: fx.teeKeypair,
+              realSlot,
+              payload,
+              teeSig,
+              canonicalHash: msg,
+              settleLookupTable: fx.settleLookupTable!,
+              repoRoot: REPO_ROOT,
+              onTx: txline,
+            });
+          });
+        } else {
         // v3: VALID_CREATE proof — buyer-change present, no seller-change.
         {
           const ZERO_32 = new Uint8Array(32);
@@ -1280,6 +1346,7 @@ maybeDescribe(
           });
           txline("Ed25519 + tee_forced_settle (v0)", settleSig);
         });
+        }
 
         // Append tree leaves in the SAME order tee_forced_settle appended:
         // note_c, note_d, note_e (since change>0), note_fee (since fee>0).
@@ -1687,6 +1754,63 @@ maybeDescribe(
           txline("lock_note(note_a) + lock_note(note_b)", lockSig);
         });
 
+        if (USE_BATCHED_PROOF) {
+          // ── v3.5 batched path — re-lock variant: payload still carries
+          // buyer change + fee, and the settle handler still atomically
+          // re-locks note_e against the remaining open buyer order.
+          if (!fx.settleLookupTable) {
+            throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+          }
+          await timer.time("v3.5 batched settle (with re-lock)", "L1", async () => {
+            const ZERO_32 = new Uint8Array(32);
+            const realSlot: MatchSlotWitness = {
+              noteAcommitment: alice.depositNote!.commitment,
+              noteBcommitment: bob.depositNote!.commitment,
+              noteCcommitment,
+              noteDcommitment,
+              noteEcommitment,
+              noteFcommitment: ZERO_32,
+              quoteMint: fx.quoteMint.toBytes(),
+              baseMint: fx.baseMint.toBytes(),
+              baseAmount: MATCHED_BASE,
+              quoteAmount: MATCHED_QUOTE,
+              buyerChangeAmt: ALICE_CHANGE,
+              sellerChangeAmt: 0n,
+              buyerFeeAmt: BUYER_FEE,
+              sellerFeeAmt: SELLER_FEE,
+              batchSlot: payload.batchSlot,
+              aOwnerCommit: alice.ownerCommit,
+              bOwnerCommit: bob.ownerCommit,
+              aAmount: alice.depositNote!.amount,
+              bAmount: bob.depositNote!.amount,
+              aNonce: alice.depositNote!.nonce,
+              aBlinding: alice.depositNote!.blindingR,
+              bNonce: bob.depositNote!.nonce,
+              bBlinding: bob.depositNote!.blindingR,
+              cNonce: be32ToBigInt(noteCnonce),
+              cBlinding: be32ToBigInt(noteCblind),
+              dNonce: be32ToBigInt(noteDnonce),
+              dBlinding: be32ToBigInt(noteDblind),
+              eNonce: be32ToBigInt(noteEnonce),
+              eBlinding: be32ToBigInt(noteEblind),
+              fNonce: 0n,
+              fBlinding: 0n,
+              clearingPrice: MATCHED_QUOTE / MATCHED_BASE,
+            };
+            await settleViaBatched({
+              connection: fx.l1,
+              vaultProgramId: fx.vaultProgramId,
+              teeKeypair: fx.teeKeypair,
+              realSlot,
+              payload,
+              teeSig,
+              canonicalHash: msg,
+              settleLookupTable: fx.settleLookupTable!,
+              repoRoot: REPO_ROOT,
+              onTx: txline,
+            });
+          });
+        } else {
         // v3: VALID_CREATE proof — Test B has buyer-change + re-lock active.
         {
           const ZERO_32 = new Uint8Array(32);
@@ -1789,6 +1913,7 @@ maybeDescribe(
           });
           txline("Ed25519 + tee_forced_settle (re-lock active, v0)", settleSig);
         });
+        }
 
         // Append leaves: note_c, note_d, note_e, note_fee.
         await fx.tree.append(noteCcommitment);
@@ -2571,6 +2696,63 @@ maybeDescribe(
             txline("lock_note(note_a) + lock_note(note_b)", sig);
           });
 
+          if (USE_BATCHED_PROOF) {
+            // ── v3.5 batched path — exact-fill variant (no change notes).
+            // Real protocol owner is set; the fee leaf is appended at the
+            // end. Drives the same batched flow as the trade-flow test.
+            if (!fx.settleLookupTable) {
+              throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+            }
+            await timer.time("v3.5 batched settle (exact fill)", "L1", async () => {
+              const ZERO_32 = new Uint8Array(32);
+              const realSlot: MatchSlotWitness = {
+                noteAcommitment: alice.depositNote!.commitment,
+                noteBcommitment: bob.depositNote!.commitment,
+                noteCcommitment,
+                noteDcommitment,
+                noteEcommitment: ZERO_32,
+                noteFcommitment: ZERO_32,
+                quoteMint: fx.quoteMint.toBytes(),
+                baseMint: fx.baseMint.toBytes(),
+                baseAmount: BASE_AMT,
+                quoteAmount: QUOTE_AMT,
+                buyerChangeAmt: 0n,
+                sellerChangeAmt: 0n,
+                buyerFeeAmt: BUYER_FEE,
+                sellerFeeAmt: SELLER_FEE,
+                batchSlot: payload.batchSlot,
+                aOwnerCommit: alice.ownerCommit,
+                bOwnerCommit: bob.ownerCommit,
+                aAmount: alice.depositNote!.amount,
+                bAmount: bob.depositNote!.amount,
+                aNonce: alice.depositNote!.nonce,
+                aBlinding: alice.depositNote!.blindingR,
+                bNonce: bob.depositNote!.nonce,
+                bBlinding: bob.depositNote!.blindingR,
+                cNonce: be32ToBigInt(noteCnonce),
+                cBlinding: be32ToBigInt(noteCblind),
+                dNonce: be32ToBigInt(noteDnonce),
+                dBlinding: be32ToBigInt(noteDblind),
+                eNonce: 0n,
+                eBlinding: 0n,
+                fNonce: 0n,
+                fBlinding: 0n,
+                clearingPrice: QUOTE_AMT / BASE_AMT,
+              };
+              await settleViaBatched({
+                connection: fx.l1,
+                vaultProgramId: fx.vaultProgramId,
+                teeKeypair: fx.teeKeypair,
+                realSlot,
+                payload,
+                teeSig,
+                canonicalHash: msg,
+                settleLookupTable: fx.settleLookupTable!,
+                repoRoot: REPO_ROOT,
+                onTx: txline,
+              });
+            });
+          } else {
           // v3: VALID_CREATE — Test E is exact fill, no change.
           {
             const ZERO_32 = new Uint8Array(32);
@@ -2669,6 +2851,7 @@ maybeDescribe(
             });
             txline("Ed25519 + tee_forced_settle (v0)", sig);
           });
+          }
 
           await fx.tree.append(noteCcommitment);
           await fx.tree.append(noteDcommitment);

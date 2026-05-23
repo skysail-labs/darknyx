@@ -112,11 +112,8 @@ import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { proveValidCreate } from "./helpers/valid-create-prover.js";
 import { sendSettleV0 } from "./helpers/settle-v0.js";
 import { landVerifyValidPrice } from "./helpers/verify-valid-price.js";
-import { landVerifyMatchBatch } from "./helpers/verify-match-batch.js";
-import {
-  merkleInclusionPath,
-  type MatchSlotWitness,
-} from "./helpers/match-batch-prover.js";
+import { settleViaBatched } from "./helpers/batched-settle.js";
+import { type MatchSlotWitness } from "./helpers/match-batch-prover.js";
 
 /** v3.5 — set `USE_BATCHED_PROOF=1` in the env to route the settle through
  *  `verify_match_batch` + `tee_forced_settle_batched` instead of the
@@ -1018,94 +1015,18 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
           clearingPrice: QUOTE_AMT / BASE_AMT,
         };
 
-        const batchResult = await landVerifyMatchBatch({
+        await settleViaBatched({
           connection,
           vaultProgramId,
           teeKeypair,
-          realSlots: [realSlot],
+          realSlot,
+          payload,
+          teeSig: sig,
+          canonicalHash: msg,
+          settleLookupTable: new PublicKey(cfg.settleLookupTable),
           repoRoot: REPO_ROOT,
+          onTx: txline,
         });
-        txline("verify_match_batch", batchResult.txSig);
-
-        const inclusion = await merkleInclusionPath(batchResult.leaves, 0);
-        if (inclusion.siblings.length !== 4) {
-          throw new Error(`expected depth-4 inclusion path, got ${inclusion.siblings.length}`);
-        }
-
-        // ── Per-batch ALT extension ───────────────────────────────────
-        // The batched settle tx adds 129 bytes vs per-match (1 byte
-        // match_index + 4×32 byte Merkle proof) — enough to push it
-        // past the 1232-byte cap even on the existing 3-entry settle
-        // ALT. Spin up a new ALT pre-loaded with the derivable
-        // per-batch accounts (note_lock_a/b/e/f + batch_validity_marker)
-        // so each saves 31 bytes via single-byte ALT index lookup
-        // (~155 bytes total, comfortable headroom).
-        substep("create per-batch ALT (5 derived accounts)");
-        const [lockAPda] = noteLockPda(vaultProgramId, alice.depositNote!.commitment);
-        const [lockBPda] = noteLockPda(vaultProgramId, bob.depositNote!.commitment);
-        const [lockEPda] = noteLockPda(vaultProgramId, ZERO_32);
-        const [lockFPda] = noteLockPda(vaultProgramId, ZERO_32);
-        const [batchMarkerPda] = batchValidityMarkerPda(
-          vaultProgramId,
-          batchResult.merkleRoot,
-        );
-        const slotForAlt = await connection.getSlot("confirmed");
-        const [createAltIx, batchAlt] = AddressLookupTableProgram.createLookupTable({
-          authority: teeKeypair.publicKey,
-          payer: teeKeypair.publicKey,
-          recentSlot: slotForAlt,
-        });
-        const extendAltIx = AddressLookupTableProgram.extendLookupTable({
-          payer: teeKeypair.publicKey,
-          authority: teeKeypair.publicKey,
-          lookupTable: batchAlt,
-          addresses: [lockAPda, lockBPda, lockEPda, lockFPda, batchMarkerPda],
-        });
-        const altTx = new Transaction().add(createAltIx, extendAltIx);
-        const altSig = await sendAndConfirmTransaction(
-          connection,
-          altTx,
-          [teeKeypair],
-          { commitment: "confirmed" },
-        );
-        txline(`per-batch ALT ${batchAlt.toBase58().slice(0, 8)}…`, altSig);
-
-        // Solana requires the ALT to be at least 1 slot old before use.
-        // Wait for the chain to advance past the create slot.
-        for (let attempt = 0; attempt < 30; attempt++) {
-          const now = await connection.getSlot("confirmed");
-          if (now > slotForAlt) break;
-          await new Promise((r) => setTimeout(r, 400));
-        }
-
-        const settleSig = await sendSettleV0({
-          connection,
-          signer: teeKeypair,
-          altPubkey: new PublicKey(cfg.settleLookupTable),
-          extraAltPubkeys: [batchAlt],
-          instructions: [
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-            buildEd25519VerifyIx({
-              teePubkey: teeKeypair.publicKey.toBytes(),
-              signature: sig,
-              message: msg,
-            }),
-            buildSettleBatchedIx({
-              programId: vaultProgramId,
-              teeAuthority: teeKeypair.publicKey,
-              payload,
-              matchIndex: 0,
-              merkleProof: [
-                inclusion.siblings[0],
-                inclusion.siblings[1],
-                inclusion.siblings[2],
-                inclusion.siblings[3],
-              ],
-              merkleRoot: batchResult.merkleRoot,
-            }),
-          ],
-        });
-        txline("Ed25519 + tee_forced_settle_batched", settleSig);
       } else {
         // ── v3.1 per-match path (default) ─────────────────────────────
         const binding = validCreateBindingHash(vcCommonArgs);
