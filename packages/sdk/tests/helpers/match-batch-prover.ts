@@ -131,6 +131,87 @@ function pubkeyToFrPair(pk: Uint8Array): [bigint, bigint] {
 }
 
 /**
+ * Build a fully-valid all-zero slot. Used to pad a batch up to the
+ * next-supported N when the matcher produced fewer than N real
+ * matches. Every per-slot constraint trivially holds:
+ *
+ *   - All Poseidon7 note openings collapse to
+ *     `Poseidon7(2, 0, 0, 0, 0, 0, 0)`, so note_a/b/c/d all equal
+ *     this same dummy hash (note_e/f stay zero because the IsZero
+ *     gates short-circuit them when buyer/seller_change_amt == 0).
+ *   - Conservation: a_amount = 0 = 0 + 0 + 0. Same for b.
+ *   - VALID_PRICE: 0 = 0 * 0. Range checks pass (0 is u64-valid).
+ *
+ * Two dummy slots in the same batch produce IDENTICAL leaves — the
+ * Merkle root still uniquely commits to the batch as a whole (the
+ * one real-match slot makes the root distinct from any other batch),
+ * so this is safe.
+ */
+export async function dummySlot(): Promise<MatchSlotWitness> {
+  const p = await getPoseidon();
+  // Poseidon7(DOMAIN_NOTE=2, mint_lo=0, mint_hi=0, amount=0,
+  //           owner_commit=0, nonce=0, blinding=0)
+  const dummyNote = bn254ToBE32(
+    p.F.toObject(p([2n, 0n, 0n, 0n, 0n, 0n, 0n])),
+  );
+  const zero32 = new Uint8Array(32);
+  return {
+    noteAcommitment: dummyNote,
+    noteBcommitment: dummyNote,
+    noteCcommitment: dummyNote,
+    noteDcommitment: dummyNote,
+    noteEcommitment: zero32,
+    noteFcommitment: zero32,
+    quoteMint: zero32,
+    baseMint: zero32,
+    baseAmount: 0n,
+    quoteAmount: 0n,
+    buyerChangeAmt: 0n,
+    sellerChangeAmt: 0n,
+    buyerFeeAmt: 0n,
+    sellerFeeAmt: 0n,
+    batchSlot: 0n,
+    aOwnerCommit: 0n,
+    bOwnerCommit: 0n,
+    aAmount: 0n,
+    bAmount: 0n,
+    aNonce: 0n,
+    aBlinding: 0n,
+    bNonce: 0n,
+    bBlinding: 0n,
+    cNonce: 0n,
+    cBlinding: 0n,
+    dNonce: 0n,
+    dBlinding: 0n,
+    eNonce: 0n,
+    eBlinding: 0n,
+    fNonce: 0n,
+    fBlinding: 0n,
+    clearingPrice: 0n,
+  };
+}
+
+/**
+ * Pad an array of slots to exactly N entries using dummy slots. Used by
+ * the devnet test driver when the matcher has fewer than N=16 real
+ * matches in a batch but still needs the on-chain N=16 verifier to
+ * accept the proof.
+ */
+export async function padBatch(
+  realSlots: MatchSlotWitness[],
+  N: BatchSize,
+): Promise<MatchSlotWitness[]> {
+  if (realSlots.length > N) {
+    throw new Error(`padBatch: have ${realSlots.length} slots, N=${N}`);
+  }
+  if (realSlots.length === N) return realSlots;
+  const dummy = await dummySlot();
+  const padded = [...realSlots];
+  while (padded.length < N) padded.push(dummy);
+  return padded;
+}
+
+/**
  * Compute the per-slot leaf hash. MUST match `template MatchSlot()` in the
  * circuit exactly — divergence here breaks Merkle inclusion on-chain.
  */

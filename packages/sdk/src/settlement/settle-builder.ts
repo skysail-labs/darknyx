@@ -26,6 +26,7 @@ import {
 
 import {
   anchorDiscriminator,
+  batchValidityMarkerPda,
   consumedNotePda,
   noteLockPda,
   nullifierEntryPda,
@@ -355,6 +356,112 @@ export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
       { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
       { pubkey: createMarker, isSigner: false, isWritable: true },
       { pubkey: priceMarker, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// v3.5 — tee_forced_settle_batched
+// ---------------------------------------------------------------------------
+
+export interface BuildSettleBatchedIxParams {
+  programId: PublicKey;
+  /** TEE authority — signer, must equal vault_config.tee_pubkey. */
+  teeAuthority: PublicKey;
+  payload: MatchResultPayload;
+  /** Match's position in the batch (0..15). Bits select left/right at each
+   *  Merkle level (bit 0 = leaf-level direction, bit 3 = level-3). */
+  matchIndex: number;
+  /** Sibling hashes at each of the 4 levels (leaf-level → root-level pair). */
+  merkleProof: [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
+  /** Merkle root the batch committed to. Used to derive the
+   *  BatchValidityMarker PDA address; the on-chain handler re-derives the
+   *  same root from leaf + proof and asserts the PDA is at that address. */
+  merkleRoot: Uint8Array;
+}
+
+/**
+ * Build the `tee_forced_settle_batched` Anchor ix. The caller must also
+ * prepend a valid Ed25519Program precompile ix signing
+ * `canonicalPayloadHash(payload)` with `teeAuthority` for the on-chain
+ * verification to succeed.
+ *
+ * Accounts order MUST match `TeeForcedSettleBatched<'info>`:
+ *   0  tee_authority           (mut, signer)
+ *   1  vault_config            (mut)
+ *   2  note_lock_a             (mut, close)
+ *   3  note_lock_b             (mut, close)
+ *   4  consumed_a              (init)
+ *   5  consumed_b              (init)
+ *   6  nullifier_a_entry       (init)
+ *   7  nullifier_b_entry       (init)
+ *   8  note_lock_e             (mut — relock; dummy when no buyer change)
+ *   9  note_lock_f             (mut — relock; dummy when no seller change)
+ *  10  instructions_sysvar
+ *  11  batch_validity_marker   (mut — closed to tee_authority on success)
+ *  12  system_program
+ *
+ * Single batch marker replaces the per-match `valid_create_marker` +
+ * `valid_price_marker` of the v3.1 path.
+ */
+export function buildSettleBatchedIx(
+  p: BuildSettleBatchedIxParams,
+): TransactionInstruction {
+  if (p.matchIndex < 0 || p.matchIndex > 15) {
+    throw new Error(`buildSettleBatchedIx: matchIndex (${p.matchIndex}) out of range [0,15]`);
+  }
+  if (p.merkleProof.length !== 4) {
+    throw new Error("buildSettleBatchedIx: merkleProof must have exactly 4 siblings");
+  }
+  for (let i = 0; i < 4; i++) {
+    if (p.merkleProof[i].length !== 32) {
+      throw new Error(`buildSettleBatchedIx: merkleProof[${i}] must be 32 bytes`);
+    }
+  }
+  if (p.merkleRoot.length !== 32) {
+    throw new Error("buildSettleBatchedIx: merkleRoot must be 32 bytes");
+  }
+
+  const [vaultConfig] = vaultConfigPda(p.programId);
+  const [lockA] = noteLockPda(p.programId, p.payload.noteAcommitment);
+  const [lockB] = noteLockPda(p.programId, p.payload.noteBcommitment);
+  const [consumedA] = consumedNotePda(p.programId, p.payload.noteAcommitment);
+  const [consumedB] = consumedNotePda(p.programId, p.payload.noteBcommitment);
+  const [nullA] = nullifierEntryPda(p.programId, p.payload.nullifierA);
+  const [nullB] = nullifierEntryPda(p.programId, p.payload.nullifierB);
+  const [lockE] = noteLockPda(p.programId, p.payload.noteEcommitment);
+  const [lockF] = noteLockPda(p.programId, p.payload.noteFcommitment);
+  const [batchMarker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
+
+  // ix data = anchor disc + payload (Borsh) + match_index (u8) + 4 × 32 sibling bytes.
+  // Anchor's [[u8; 32]; 4] is encoded as 128 contiguous bytes (no length prefix).
+  const siblingsConcat = cat(...p.merkleProof);
+  const matchIndexByte = new Uint8Array([p.matchIndex & 0xff]);
+
+  const data = cat(
+    anchorDiscriminator("tee_forced_settle_batched"),
+    serializePayload(p.payload),
+    matchIndexByte,
+    siblingsConcat,
+  );
+
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.teeAuthority, isSigner: true, isWritable: true },
+      { pubkey: vaultConfig, isSigner: false, isWritable: true },
+      { pubkey: lockA, isSigner: false, isWritable: true },
+      { pubkey: lockB, isSigner: false, isWritable: true },
+      { pubkey: consumedA, isSigner: false, isWritable: true },
+      { pubkey: consumedB, isSigner: false, isWritable: true },
+      { pubkey: nullA, isSigner: false, isWritable: true },
+      { pubkey: nullB, isSigner: false, isWritable: true },
+      { pubkey: lockE, isSigner: false, isWritable: true },
+      { pubkey: lockF, isSigner: false, isWritable: true },
+      { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: batchMarker, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(data),

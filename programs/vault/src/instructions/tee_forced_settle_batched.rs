@@ -37,21 +37,42 @@ use crate::instructions::tee_forced_settle::{
 use crate::merkle::append_leaf;
 use crate::state::*;
 use anchor_lang::prelude::*;
-use ark_bn254::Fr;
 use core::mem::size_of;
-use light_poseidon::{Poseidon, PoseidonBytesHasher};
 
-/// Generic Poseidon-BN254X5 over `inputs.len()` field elements. Wraps the
-/// `light_poseidon` pure-Rust path used elsewhere in this crate
-/// (`merkle::poseidon2`). Inputs are expected as 32-byte big-endian field
-/// element encodings — same convention as `solana_poseidon::hashv` with
-/// `Endianness::BigEndian`, so on-chain + off-chain bytes are identical.
+// Target-gated Poseidon imports — `programs/vault/Cargo.toml` makes
+// `light-poseidon` available only on host builds and `solana-poseidon`
+// only on the SBF (`target_os = "solana"`) build. Same pattern as
+// `merkle.rs::poseidon2`.
+#[cfg(not(target_os = "solana"))]
+use ark_bn254::Fr;
+#[cfg(not(target_os = "solana"))]
+use light_poseidon::{Poseidon, PoseidonBytesHasher};
+#[cfg(target_os = "solana")]
+use solana_poseidon::{hashv as solana_poseidon_hashv, Endianness, Parameters};
+
+/// Generic Poseidon-BN254X5 over `inputs.len()` field elements. Inputs
+/// are 32-byte big-endian field-element encodings.
+///
+/// On SBF (`target_os = "solana"`) this routes through the
+/// `solana_poseidon` syscall wrapper — fast, supports widths up to 13
+/// (= nInputs ≤ 12, matching `light_poseidon`'s MAX_X5_LEN).
+/// On host this uses the pure-Rust `light_poseidon` path. Both produce
+/// byte-identical outputs.
 fn poseidon_n(inputs: &[&[u8]]) -> Result<[u8; 32]> {
-    let mut hasher = Poseidon::<Fr>::new_circom(inputs.len())
-        .map_err(|_| error!(VaultError::InvalidBatchBinding))?;
-    hasher
-        .hash_bytes_be(inputs)
-        .map_err(|_| error!(VaultError::InvalidBatchBinding))
+    #[cfg(target_os = "solana")]
+    {
+        return solana_poseidon_hashv(Parameters::Bn254X5, Endianness::BigEndian, inputs)
+            .map(|h| h.to_bytes())
+            .map_err(|_| error!(VaultError::InvalidBatchBinding));
+    }
+    #[cfg(not(target_os = "solana"))]
+    {
+        let mut hasher = Poseidon::<Fr>::new_circom(inputs.len())
+            .map_err(|_| error!(VaultError::InvalidBatchBinding))?;
+        hasher
+            .hash_bytes_be(inputs)
+            .map_err(|_| error!(VaultError::InvalidBatchBinding))
+    }
 }
 
 // ----------------------------------------------------------------------------

@@ -51,6 +51,7 @@ import {
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
+  AddressLookupTableProgram,
   ComputeBudgetProgram,
   Connection,
   Keypair,
@@ -80,6 +81,8 @@ import {
   buildLockNoteInstruction,
   buildVerifyValidCreateInstruction,
   buildWithdrawInstruction,
+  batchValidityMarkerPda,
+  noteLockPda,
   vaultConfigPda,
   walletEntryPda,
 } from "../src/idl/vault-client.js";
@@ -96,6 +99,7 @@ import {
 import {
   buildEd25519VerifyIx,
   buildSettleIx,
+  buildSettleBatchedIx,
   canonicalPayloadHash,
   exactFillPayload,
   validCreateBindingHash,
@@ -108,6 +112,18 @@ import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { proveValidCreate } from "./helpers/valid-create-prover.js";
 import { sendSettleV0 } from "./helpers/settle-v0.js";
 import { landVerifyValidPrice } from "./helpers/verify-valid-price.js";
+import { landVerifyMatchBatch } from "./helpers/verify-match-batch.js";
+import {
+  merkleInclusionPath,
+  type MatchSlotWitness,
+} from "./helpers/match-batch-prover.js";
+
+/** v3.5 — set `USE_BATCHED_PROOF=1` in the env to route the settle through
+ *  `verify_match_batch` + `tee_forced_settle_batched` instead of the
+ *  per-match `verify_valid_create` + `verify_valid_price` + `tee_forced_settle`
+ *  trio. Both paths produce identical state transitions; the assertions
+ *  later in the test don't care which path was taken. */
+const USE_BATCHED_PROOF = process.env.USE_BATCHED_PROOF === "1";
 import {
   be32ToBigInt,
   be32ToDec,
@@ -954,71 +970,207 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
         buyerFeeAmt: BUYER_FEE,
         sellerFeeAmt: SELLER_FEE,
       });
-      const binding = validCreateBindingHash(vcCommonArgs);
-      const markerExpiry = BigInt((await connection.getSlot("confirmed")) + 200);
-      const verifyTx = new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
-        buildVerifyValidCreateInstruction({
-          programId: vaultProgramId,
-          payer: teeKeypair.publicKey,
-          bindingHash: binding,
+      if (!cfg.settleLookupTable) {
+        throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+      }
+
+      if (USE_BATCHED_PROOF) {
+        // ── v3.5 batched path ─────────────────────────────────────────
+        // One Groth16 attesting VALID_CREATE + VALID_PRICE for the WHOLE
+        // batch, then a single tee_forced_settle_batched per match. The
+        // matcher only produced one real match in this test scenario, so
+        // we pad the batch to N=16 with dummy slots (handled by
+        // landVerifyMatchBatch).
+        substep("v3.5 batched flow — N=16 proof + Merkle inclusion for slot 0");
+
+        const realSlot: MatchSlotWitness = {
           noteAcommitment: alice.depositNote!.commitment,
           noteBcommitment: bob.depositNote!.commitment,
           noteCcommitment,
           noteDcommitment,
           noteEcommitment: ZERO_32,
           noteFcommitment: ZERO_32,
-          quoteMint,
-          baseMint,
+          quoteMint: quoteMint.toBytes(),
+          baseMint: baseMint.toBytes(),
           baseAmount: BASE_AMT,
           quoteAmount: QUOTE_AMT,
           buyerChangeAmt: 0n,
           sellerChangeAmt: 0n,
           buyerFeeAmt: BUYER_FEE,
           sellerFeeAmt: SELLER_FEE,
-          expirySlot: markerExpiry,
-          proof: validCreate.proof,
-        }),
-      );
-      const verifySig = await sendAndConfirmTransaction(
-        connection, verifyTx, [teeKeypair], { commitment: "confirmed" },
-      );
-      txline("verify_valid_create", verifySig);
+          batchSlot: payload.batchSlot,
+          aOwnerCommit: alice.ownerCommit,
+          bOwnerCommit: bob.ownerCommit,
+          aAmount: alice.depositNote!.amount,
+          bAmount: bob.depositNote!.amount,
+          aNonce: alice.depositNote!.nonce,
+          aBlinding: alice.depositNote!.blindingR,
+          bNonce: bob.depositNote!.nonce,
+          bBlinding: bob.depositNote!.blindingR,
+          cNonce: be32ToBigInt(noteCnonce),
+          cBlinding: be32ToBigInt(noteCblind),
+          dNonce: be32ToBigInt(noteDnonce),
+          dBlinding: be32ToBigInt(noteDblind),
+          eNonce: 0n,
+          eBlinding: 0n,
+          fNonce: 0n,
+          fBlinding: 0n,
+          clearingPrice: QUOTE_AMT / BASE_AMT,
+        };
 
-      const priceMarker = await landVerifyValidPrice({
-        connection,
-        vaultProgramId,
-        teeKeypair,
-        payload,
-        repoRoot: REPO_ROOT,
-      });
-      txline("verify_valid_price", priceMarker.txSig);
+        const batchResult = await landVerifyMatchBatch({
+          connection,
+          vaultProgramId,
+          teeKeypair,
+          realSlots: [realSlot],
+          repoRoot: REPO_ROOT,
+        });
+        txline("verify_match_batch", batchResult.txSig);
 
-      if (!cfg.settleLookupTable) {
-        throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
-      }
-      const settleSig = await sendSettleV0({
-        connection,
-        signer: teeKeypair,
-        altPubkey: new PublicKey(cfg.settleLookupTable),
-        instructions: [
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          buildEd25519VerifyIx({
-            teePubkey: teeKeypair.publicKey.toBytes(),
-            signature: sig,
-            message: msg,
-          }),
-          buildSettleIx({
+        const inclusion = await merkleInclusionPath(batchResult.leaves, 0);
+        if (inclusion.siblings.length !== 4) {
+          throw new Error(`expected depth-4 inclusion path, got ${inclusion.siblings.length}`);
+        }
+
+        // ── Per-batch ALT extension ───────────────────────────────────
+        // The batched settle tx adds 129 bytes vs per-match (1 byte
+        // match_index + 4×32 byte Merkle proof) — enough to push it
+        // past the 1232-byte cap even on the existing 3-entry settle
+        // ALT. Spin up a new ALT pre-loaded with the derivable
+        // per-batch accounts (note_lock_a/b/e/f + batch_validity_marker)
+        // so each saves 31 bytes via single-byte ALT index lookup
+        // (~155 bytes total, comfortable headroom).
+        substep("create per-batch ALT (5 derived accounts)");
+        const [lockAPda] = noteLockPda(vaultProgramId, alice.depositNote!.commitment);
+        const [lockBPda] = noteLockPda(vaultProgramId, bob.depositNote!.commitment);
+        const [lockEPda] = noteLockPda(vaultProgramId, ZERO_32);
+        const [lockFPda] = noteLockPda(vaultProgramId, ZERO_32);
+        const [batchMarkerPda] = batchValidityMarkerPda(
+          vaultProgramId,
+          batchResult.merkleRoot,
+        );
+        const slotForAlt = await connection.getSlot("confirmed");
+        const [createAltIx, batchAlt] = AddressLookupTableProgram.createLookupTable({
+          authority: teeKeypair.publicKey,
+          payer: teeKeypair.publicKey,
+          recentSlot: slotForAlt,
+        });
+        const extendAltIx = AddressLookupTableProgram.extendLookupTable({
+          payer: teeKeypair.publicKey,
+          authority: teeKeypair.publicKey,
+          lookupTable: batchAlt,
+          addresses: [lockAPda, lockBPda, lockEPda, lockFPda, batchMarkerPda],
+        });
+        const altTx = new Transaction().add(createAltIx, extendAltIx);
+        const altSig = await sendAndConfirmTransaction(
+          connection,
+          altTx,
+          [teeKeypair],
+          { commitment: "confirmed" },
+        );
+        txline(`per-batch ALT ${batchAlt.toBase58().slice(0, 8)}…`, altSig);
+
+        // Solana requires the ALT to be at least 1 slot old before use.
+        // Wait for the chain to advance past the create slot.
+        for (let attempt = 0; attempt < 30; attempt++) {
+          const now = await connection.getSlot("confirmed");
+          if (now > slotForAlt) break;
+          await new Promise((r) => setTimeout(r, 400));
+        }
+
+        const settleSig = await sendSettleV0({
+          connection,
+          signer: teeKeypair,
+          altPubkey: new PublicKey(cfg.settleLookupTable),
+          extraAltPubkeys: [batchAlt],
+          instructions: [
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+            buildEd25519VerifyIx({
+              teePubkey: teeKeypair.publicKey.toBytes(),
+              signature: sig,
+              message: msg,
+            }),
+            buildSettleBatchedIx({
+              programId: vaultProgramId,
+              teeAuthority: teeKeypair.publicKey,
+              payload,
+              matchIndex: 0,
+              merkleProof: [
+                inclusion.siblings[0],
+                inclusion.siblings[1],
+                inclusion.siblings[2],
+                inclusion.siblings[3],
+              ],
+              merkleRoot: batchResult.merkleRoot,
+            }),
+          ],
+        });
+        txline("Ed25519 + tee_forced_settle_batched", settleSig);
+      } else {
+        // ── v3.1 per-match path (default) ─────────────────────────────
+        const binding = validCreateBindingHash(vcCommonArgs);
+        const markerExpiry = BigInt((await connection.getSlot("confirmed")) + 200);
+        const verifyTx = new Transaction().add(
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 600_000 }),
+          buildVerifyValidCreateInstruction({
             programId: vaultProgramId,
-            teeAuthority: teeKeypair.publicKey,
-            payload,
+            payer: teeKeypair.publicKey,
+            bindingHash: binding,
+            noteAcommitment: alice.depositNote!.commitment,
+            noteBcommitment: bob.depositNote!.commitment,
+            noteCcommitment,
+            noteDcommitment,
+            noteEcommitment: ZERO_32,
+            noteFcommitment: ZERO_32,
             quoteMint,
             baseMint,
-            priceCommitment: priceMarker.priceCommitment,
+            baseAmount: BASE_AMT,
+            quoteAmount: QUOTE_AMT,
+            buyerChangeAmt: 0n,
+            sellerChangeAmt: 0n,
+            buyerFeeAmt: BUYER_FEE,
+            sellerFeeAmt: SELLER_FEE,
+            expirySlot: markerExpiry,
+            proof: validCreate.proof,
           }),
-        ],
-      });
-      txline("Ed25519 + tee_forced_settle", settleSig);
+        );
+        const verifySig = await sendAndConfirmTransaction(
+          connection, verifyTx, [teeKeypair], { commitment: "confirmed" },
+        );
+        txline("verify_valid_create", verifySig);
+
+        const priceMarker = await landVerifyValidPrice({
+          connection,
+          vaultProgramId,
+          teeKeypair,
+          payload,
+          repoRoot: REPO_ROOT,
+        });
+        txline("verify_valid_price", priceMarker.txSig);
+
+        const settleSig = await sendSettleV0({
+          connection,
+          signer: teeKeypair,
+          altPubkey: new PublicKey(cfg.settleLookupTable),
+          instructions: [
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+            buildEd25519VerifyIx({
+              teePubkey: teeKeypair.publicKey.toBytes(),
+              signature: sig,
+              message: msg,
+            }),
+            buildSettleIx({
+              programId: vaultProgramId,
+              teeAuthority: teeKeypair.publicKey,
+              payload,
+              quoteMint,
+              baseMint,
+              priceCommitment: priceMarker.priceCommitment,
+            }),
+          ],
+        });
+        txline("Ed25519 + tee_forced_settle", settleSig);
+      }
 
       // Shadow tree: note_c, note_d, note_fee are appended in that order by
       // the on-chain tee_forced_settle (matching its append sequence).
