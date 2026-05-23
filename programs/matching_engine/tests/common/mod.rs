@@ -1123,151 +1123,6 @@ pub fn read_note_lock_mint(h: &Harness, note_commitment: &[u8; 32]) -> Pubkey {
     Pubkey::from(mint)
 }
 
-/// v3 — pre-seed a `ValidCreateMarker` PDA so `tee_forced_settle` finds one
-/// at the binding-hash-derived address. In production the marker is created
-/// by the preceding `verify_valid_create` ix (which checks a VALID_CREATE
-/// Groth16 proof); for litesvm tests we synthesise it directly with a
-/// far-future expiry — bypassing the proof check is intentional, the marker
-/// path is what `vault-litesvm`'s `user_commitment_registration` exercises.
-///
-/// Layout (matches `vault::state::ValidCreateMarker` — keep in sync):
-///   8 disc + 32 payer + 8 expiry_slot + 1 bump = 49 bytes
-pub fn seed_valid_create_marker(h: &mut Harness, payload: &MatchResultPayload) {
-    use solana_account::Account as SolAccount;
-    use vault::instructions::verify_valid_create::valid_create_binding_hash;
-
-    // Bridge: the test harness aliases `Pubkey = Address` (split Solana SDK),
-    // while the vault crate's binding-hash function takes the Anchor/Solana
-    // SDK `Pubkey`. Both are [u8;32] under the hood, so go through `to_bytes()`.
-    use anchor_lang::prelude::Pubkey as AnchorPubkey;
-    let lock_a_mint = read_note_lock_mint(h, &payload.note_a_commitment);
-    let lock_b_mint = read_note_lock_mint(h, &payload.note_b_commitment);
-    let lock_a_mint_v = AnchorPubkey::new_from_array(lock_a_mint.to_bytes());
-    let lock_b_mint_v = AnchorPubkey::new_from_array(lock_b_mint.to_bytes());
-    let binding = valid_create_binding_hash(
-        &payload.note_a_commitment,
-        &payload.note_b_commitment,
-        &payload.note_c_commitment,
-        &payload.note_d_commitment,
-        &payload.note_e_commitment,
-        &payload.note_f_commitment,
-        &lock_a_mint_v,
-        &lock_b_mint_v,
-        payload.base_amount,
-        payload.quote_amount,
-        payload.buyer_change_amt,
-        payload.seller_change_amt,
-        payload.buyer_fee_amt,
-        payload.seller_fee_amt,
-    );
-    let (pda, bump) =
-        Pubkey::find_program_address(&[VALID_CREATE_MARKER_SEED, &binding], &h.vault_id);
-
-    let mut data = vec![0u8; 49];
-    data[0..8].copy_from_slice(&anchor_acct_disc("ValidCreateMarker"));
-    // payer (refund target on close)
-    data[8..40].copy_from_slice(&h.tee.pubkey().to_bytes());
-
-    // Far-future expiry — the marker should be consumed by the next settle.
-    // `MAX_CREATE_MARKER_TTL_SLOTS` only applies at verify_valid_create time
-    // (which we skip), so the settle-side check is just `slot <= expiry`.
-    let expiry_slot: u64 = u64::MAX / 2;
-    data[40..48].copy_from_slice(&expiry_slot.to_le_bytes());
-    data[48] = bump;
-
-    let acct = SolAccount {
-        lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
-        data,
-        owner: h.vault_id,
-        executable: false,
-        rent_epoch: 0,
-    };
-    h.svm.set_account(pda, acct).unwrap();
-}
-
-/// Mirrors `vault::state::ValidCreateMarker::SEED`. Hard-coded rather than
-/// imported to avoid pulling more of the vault crate into the test surface.
-const VALID_CREATE_MARKER_SEED: &[u8] = b"valid_create";
-
-/// Mirrors `vault::state::ValidPriceMarker::SEED`.
-const VALID_PRICE_MARKER_SEED: &[u8] = b"valid_price";
-
-/// v3.1 — pre-seed a `ValidPriceMarker` PDA so `tee_forced_settle` finds
-/// one at the price-commitment-derived address. In production the marker
-/// is created by the preceding `verify_valid_price` ix (which verifies a
-/// VALID_PRICE Groth16 proof); the litesvm harness bypasses the proof
-/// check the same way `seed_valid_create_marker` does — settle handler
-/// behaviour is what these tests care about, not the prover orchestration.
-///
-/// Layout (matches `vault::state::ValidPriceMarker`):
-///   8 disc + 32 payer + 8 expiry_slot + 1 bump = 49 bytes
-pub fn seed_valid_price_marker(h: &mut Harness, payload: &MatchResultPayload) {
-    use darkpool_crypto::price_commitment as compute_price_commitment;
-    use solana_account::Account as SolAccount;
-
-    let pc = compute_price_commitment(payload.clearing_price, payload.batch_slot)
-        .expect("price_commitment");
-    let (pda, bump) = Pubkey::find_program_address(&[VALID_PRICE_MARKER_SEED, &pc], &h.vault_id);
-
-    let mut data = vec![0u8; 49];
-    data[0..8].copy_from_slice(&anchor_acct_disc("ValidPriceMarker"));
-    // payer (refund target on close)
-    data[8..40].copy_from_slice(&h.tee.pubkey().to_bytes());
-
-    // Far-future expiry — same reasoning as seed_valid_create_marker.
-    let expiry_slot: u64 = u64::MAX / 2;
-    data[40..48].copy_from_slice(&expiry_slot.to_le_bytes());
-    data[48] = bump;
-
-    let acct = SolAccount {
-        lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
-        data,
-        owner: h.vault_id,
-        executable: false,
-        rent_epoch: 0,
-    };
-    h.svm.set_account(pda, acct).unwrap();
-}
-
-/// Same derivation `build_settle_ix` uses for the price marker.
-pub fn valid_price_marker_pda(h: &Harness, payload: &MatchResultPayload) -> (Pubkey, u8) {
-    use darkpool_crypto::price_commitment as compute_price_commitment;
-    let pc = compute_price_commitment(payload.clearing_price, payload.batch_slot)
-        .expect("price_commitment");
-    Pubkey::find_program_address(&[VALID_PRICE_MARKER_SEED, &pc], &h.vault_id)
-}
-
-/// Same derivation `build_settle_ix` uses, exposed so tests that want to
-/// inspect / assert on the marker PDA can find it.
-pub fn valid_create_marker_pda(h: &Harness, payload: &MatchResultPayload) -> (Pubkey, u8) {
-    use vault::instructions::verify_valid_create::valid_create_binding_hash;
-    // Bridge: the test harness aliases `Pubkey = Address` (split Solana SDK),
-    // while the vault crate's binding-hash function takes the Anchor/Solana
-    // SDK `Pubkey`. Both are [u8;32] under the hood, so go through `to_bytes()`.
-    use anchor_lang::prelude::Pubkey as AnchorPubkey;
-    let lock_a_mint = read_note_lock_mint(h, &payload.note_a_commitment);
-    let lock_b_mint = read_note_lock_mint(h, &payload.note_b_commitment);
-    let lock_a_mint_v = AnchorPubkey::new_from_array(lock_a_mint.to_bytes());
-    let lock_b_mint_v = AnchorPubkey::new_from_array(lock_b_mint.to_bytes());
-    let binding = valid_create_binding_hash(
-        &payload.note_a_commitment,
-        &payload.note_b_commitment,
-        &payload.note_c_commitment,
-        &payload.note_d_commitment,
-        &payload.note_e_commitment,
-        &payload.note_f_commitment,
-        &lock_a_mint_v,
-        &lock_b_mint_v,
-        payload.base_amount,
-        payload.quote_amount,
-        payload.buyer_change_amt,
-        payload.seller_change_amt,
-        payload.buyer_fee_amt,
-        payload.seller_fee_amt,
-    );
-    Pubkey::find_program_address(&[VALID_CREATE_MARKER_SEED, &binding], &h.vault_id)
-}
-
 /// Read the current leaf_count out of VaultConfig.
 pub fn vault_leaf_count(h: &Harness) -> u64 {
     let (pda, _) = vault_config_pda(&h.vault_id);
@@ -1353,86 +1208,6 @@ pub fn note_lock_exists(h: &Harness, note_commitment: &[u8; 32]) -> bool {
         .get_account(&pda)
         .map(|a| !a.data.is_empty() && a.lamports > 0)
         .unwrap_or(false)
-}
-
-/// Build the accounts list + data for tee_forced_settle.
-/// Requires: vault initialised, note_lock_a/b seeded for the input notes.
-pub fn build_settle_ix(h: &Harness, payload: &MatchResultPayload) -> Instruction {
-    let (vault_pda, _) = vault_config_pda(&h.vault_id);
-    let (lock_a, _) = note_lock_pda(&h.vault_id, &payload.note_a_commitment);
-    let (lock_b, _) = note_lock_pda(&h.vault_id, &payload.note_b_commitment);
-    let (consumed_a, _) = consumed_note_pda(&h.vault_id, &payload.note_a_commitment);
-    let (consumed_b, _) = consumed_note_pda(&h.vault_id, &payload.note_b_commitment);
-    let (null_a, _) = nullifier_pda(&h.vault_id, &payload.nullifier_a);
-    let (null_b, _) = nullifier_pda(&h.vault_id, &payload.nullifier_b);
-
-    // Re-lock PDAs: always supply a writable account at the expected seed
-    // (zero commitment → use a dummy derivation so the handler still sees
-    // a writable account it ignores).
-    let (lock_e, _) = note_lock_pda(&h.vault_id, &payload.note_e_commitment);
-    let (lock_f, _) = note_lock_pda(&h.vault_id, &payload.note_f_commitment);
-
-    let instructions_sysvar: Pubkey = Pubkey::from([
-        // Sysvar1nstructions1111111111111111111111111
-        6, 167, 213, 23, 24, 123, 209, 102, 53, 218, 212, 4, 85, 253, 194, 192, 193, 36, 198, 143,
-        33, 86, 117, 165, 219, 186, 203, 95, 8, 0, 0, 0,
-    ]);
-
-    // v3 — VALID_CREATE marker. The on-chain TeeForcedSettle expects it
-    // between `instructions_sysvar` and `valid_price_marker`; the address is
-    // the PDA at `[b"valid_create", binding_hash]` and the marker must
-    // already exist (seeded via `seed_valid_create_marker` in test setup,
-    // or via a preceding `verify_valid_create` ix in production).
-    let (create_marker_pda, _) = valid_create_marker_pda(h, payload);
-
-    // v3.1 — VALID_PRICE marker. PDA at `[b"valid_price", price_commitment]`,
-    // must already exist (seeded via `seed_valid_price_marker` or written
-    // by a preceding `verify_valid_price` ix).
-    let (price_marker_pda, _) = valid_price_marker_pda(h, payload);
-
-    let mut data = anchor_disc("tee_forced_settle").to_vec();
-    payload.serialize(&mut data).unwrap();
-
-    Instruction {
-        program_id: h.vault_id,
-        accounts: vec![
-            AccountMeta::new(h.tee.pubkey(), true),
-            AccountMeta::new(vault_pda, false),
-            AccountMeta::new(lock_a, false),
-            AccountMeta::new(lock_b, false),
-            AccountMeta::new(consumed_a, false),
-            AccountMeta::new(consumed_b, false),
-            AccountMeta::new(null_a, false),
-            AccountMeta::new(null_b, false),
-            AccountMeta::new(lock_e, false),
-            AccountMeta::new(lock_f, false),
-            AccountMeta::new_readonly(instructions_sysvar, false),
-            AccountMeta::new(create_marker_pda, false),
-            AccountMeta::new(price_marker_pda, false),
-            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
-        ],
-        data,
-    }
-}
-
-/// One-shot: sign payload with TEE, build (ed25519_verify + tee_forced_settle)
-/// message, wrap in a Transaction.
-pub fn build_settle_tx(h: &Harness, payload: &MatchResultPayload) -> Transaction {
-    let msg_hash = canonical_payload_hash(payload);
-    let sig = h.tee.sign_message(&msg_hash);
-    let mut sig_bytes = [0u8; 64];
-    sig_bytes.copy_from_slice(sig.as_ref());
-    let tee_pk = h.tee.pubkey().to_bytes();
-    let ed_ix = build_ed25519_verify_ix(&tee_pk, &sig_bytes, &msg_hash);
-    let settle_ix = build_settle_ix(h, payload);
-    Transaction::new(
-        &[&h.tee],
-        Message::new(
-            &[compute_budget_ix(1_400_000), ed_ix, settle_ix],
-            Some(&h.tee.pubkey()),
-        ),
-        h.svm.latest_blockhash(),
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1670,6 +1445,45 @@ pub fn build_settle_batched_tx(
         ),
         h.svm.latest_blockhash(),
     )
+}
+
+/// One-shot: compute the v3.5 leaf + Merkle root for a single-match
+/// "batch" (slot 0, all other slots zero-padded), seed the
+/// `BatchValidityMarker` PDA at far-future expiry, and return a
+/// ready-to-send (compute_budget + ed25519 + tee_forced_settle_batched)
+/// tx. The migrated `settle.rs` scenarios use this to keep each
+/// happy-path test a one-liner; failure-path tests that need a
+/// custom precompile call [`seed_marker_and_build_settle_batched_ix`]
+/// instead and build their own tx.
+pub fn seed_marker_and_build_settle_batched_tx(
+    h: &mut Harness,
+    p: &MatchResultPayload,
+) -> Transaction {
+    let mint = read_note_lock_mint(h, &p.note_a_commitment);
+    let leaf = compute_match_leaf_for(p, &mint, &mint);
+    let mut leaves = [[0u8; 32]; 16];
+    leaves[0] = leaf;
+    let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
+    seed_batch_validity_marker(h, &root, u64::MAX / 2);
+    build_settle_batched_tx(h, p, 0, &proof, &root)
+}
+
+/// Companion to [`seed_marker_and_build_settle_batched_tx`] — returns
+/// just the settle ix. Caller is responsible for the Ed25519
+/// precompile + the `Transaction::new` wrapping. Tests that need to
+/// strip the precompile, use a different signing key, or sign a
+/// bogus message use this variant.
+pub fn seed_marker_and_build_settle_batched_ix(
+    h: &mut Harness,
+    p: &MatchResultPayload,
+) -> Instruction {
+    let mint = read_note_lock_mint(h, &p.note_a_commitment);
+    let leaf = compute_match_leaf_for(p, &mint, &mint);
+    let mut leaves = [[0u8; 32]; 16];
+    leaves[0] = leaf;
+    let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
+    seed_batch_validity_marker(h, &root, u64::MAX / 2);
+    build_settle_batched_ix(h, p, 0, &proof, &root)
 }
 
 /// Build a `close_batch_validity_marker` ix.

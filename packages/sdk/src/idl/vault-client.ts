@@ -25,7 +25,7 @@
 import { PublicKey, TransactionInstruction, SystemProgram } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 
-import { VAULT_CONFIG_SEED, WALLET_SEED, NULLIFIER_SEED, NOTE_LOCK_SEED, CONSUMED_NOTE_SEED, VAULT_TOKEN_SEED, OUTSTANDING_MINT_SEED, VALID_CREATE_MARKER_SEED, VALID_PRICE_MARKER_SEED, BATCH_VALIDITY_MARKER_SEED } from "./seeds.js";
+import { VAULT_CONFIG_SEED, WALLET_SEED, NULLIFIER_SEED, NOTE_LOCK_SEED, CONSUMED_NOTE_SEED, VAULT_TOKEN_SEED, OUTSTANDING_MINT_SEED, BATCH_VALIDITY_MARKER_SEED } from "./seeds.js";
 
 /** On-chain portion of a Groth16 proof — the three curve points. */
 export interface Groth16OnChainProof {
@@ -137,33 +137,11 @@ export function outstandingMintPda(
   );
 }
 
-export function validCreateMarkerPda(
-  programId: PublicKey,
-  bindingHash: Uint8Array,
-): [PublicKey, number] {
-  if (bindingHash.length !== 32) throw new Error("bindingHash must be 32 bytes");
-  return PublicKey.findProgramAddressSync(
-    [VALID_CREATE_MARKER_SEED, bindingHash],
-    programId,
-  );
-}
-
-/**
- * v3.1 — VALID_PRICE marker PDA. Seed is the 32-byte priceCommitment
- * (= Poseidon3(DOMAIN_PRICE=5, clearingPrice, batchSlot)). Created by
- * `verify_valid_price` and consumed by `tee_forced_settle`.
- */
-export function validPriceMarkerPda(
-  programId: PublicKey,
-  priceCommitment: Uint8Array,
-): [PublicKey, number] {
-  if (priceCommitment.length !== 32)
-    throw new Error("priceCommitment must be 32 bytes");
-  return PublicKey.findProgramAddressSync(
-    [VALID_PRICE_MARKER_SEED, priceCommitment],
-    programId,
-  );
-}
+// v3.1 `validCreateMarkerPda` + `validPriceMarkerPda` lived here.
+// Removed in Phase 1c-hard along with their per-match builders /
+// markers / verify ixs. The v3.5 batched flow uses
+// `batchValidityMarkerPda` (below), one PDA per batch keyed by Merkle
+// root rather than per-match binding hash.
 
 /**
  * v3.5 — BatchValidityMarker PDA. Seed is the Merkle root committed by
@@ -490,134 +468,6 @@ export function buildWithdrawInstruction(p: BuildWithdrawParams): TransactionIns
   });
 }
 
-// ---------------------------------------------------------------------------
-// v3 — verify_valid_create. Lands in its own tx before the settle.
-// ---------------------------------------------------------------------------
-
-export interface BuildVerifyValidCreateParams {
-  programId: PublicKey;
-  /** Anyone can pay rent / submit the proof. Authorization is the proof itself. */
-  payer: PublicKey;
-  /** 32-byte SHA-256 binding hash that derives the marker PDA. */
-  bindingHash: Uint8Array;
-
-  // The 14 fields the circuit attested to — must agree with the proof's public
-  // inputs AND with the bindingHash computation.
-  noteAcommitment: Uint8Array;
-  noteBcommitment: Uint8Array;
-  noteCcommitment: Uint8Array;
-  noteDcommitment: Uint8Array;
-  noteEcommitment: Uint8Array;
-  noteFcommitment: Uint8Array;
-  quoteMint: PublicKey;
-  baseMint: PublicKey;
-  baseAmount: bigint;
-  quoteAmount: bigint;
-  buyerChangeAmt: bigint;
-  sellerChangeAmt: bigint;
-  buyerFeeAmt: bigint;
-  sellerFeeAmt: bigint;
-
-  /** Slot past which the marker becomes claimable as stale. */
-  expirySlot: bigint;
-
-  proof: Groth16OnChainProof;
-}
-
-/**
- * @deprecated v3.5: superseded by `buildVerifyMatchBatchInstruction`,
- * which writes ONE `BatchValidityMarker` covering up to N=16 matches
- * instead of two per-match markers. Kept exported through the v3.5
- * confidence window; scheduled for removal in Phase 1c-hard. See
- * `docs/v3.5-migration.md`.
- */
-export function buildVerifyValidCreateInstruction(
-  p: BuildVerifyValidCreateParams,
-): TransactionInstruction {
-  const [marker] = validCreateMarkerPda(p.programId, p.bindingHash);
-
-  const data = cat(
-    anchorDiscriminator("verify_valid_create"),
-    fixed32(p.noteAcommitment),
-    fixed32(p.noteBcommitment),
-    fixed32(p.noteCcommitment),
-    fixed32(p.noteDcommitment),
-    fixed32(p.noteEcommitment),
-    fixed32(p.noteFcommitment),
-    p.quoteMint.toBytes(),
-    p.baseMint.toBytes(),
-    u64LE(p.baseAmount),
-    u64LE(p.quoteAmount),
-    u64LE(p.buyerChangeAmt),
-    u64LE(p.sellerChangeAmt),
-    u64LE(p.buyerFeeAmt),
-    u64LE(p.sellerFeeAmt),
-    u64LE(p.expirySlot),
-    serializeProof(p.proof),
-  );
-
-  return new TransactionInstruction({
-    programId: p.programId,
-    keys: [
-      { pubkey: p.payer, isSigner: true, isWritable: true },
-      { pubkey: marker, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.from(data),
-  });
-}
-
-// ---------------------------------------------------------------------------
-// v3.1 — verify_valid_price. Lands in its own tx before the settle.
-// Splits the VALID_PRICE Groth16 proof (~256 bytes) out of the settle ix
-// so the settle tx stays under the 1232-byte cap.
-// ---------------------------------------------------------------------------
-
-export interface BuildVerifyValidPriceParams {
-  programId: PublicKey;
-  /** Anyone can pay rent / submit the proof. Authorization is the proof itself. */
-  payer: PublicKey;
-  /** Poseidon3(DOMAIN_PRICE=5, clearingPrice, batchSlot). Doubles as the
-   *  marker PDA's seed (the on-chain handler recomputes this same value
-   *  from the settle payload's clearingPrice + batchSlot). */
-  priceCommitment: Uint8Array;
-  /** Batch slot — circuit's second public input. */
-  batchSlot: bigint;
-  /** Slot past which the marker becomes claimable as stale. */
-  expirySlot: bigint;
-  proof: Groth16OnChainProof;
-}
-
-/**
- * @deprecated v3.5: superseded by `buildVerifyMatchBatchInstruction`.
- * See `docs/v3.5-migration.md`.
- */
-export function buildVerifyValidPriceInstruction(
-  p: BuildVerifyValidPriceParams,
-): TransactionInstruction {
-  if (p.priceCommitment.length !== 32) {
-    throw new Error("priceCommitment must be 32 bytes");
-  }
-  const [marker] = validPriceMarkerPda(p.programId, p.priceCommitment);
-
-  const data = cat(
-    anchorDiscriminator("verify_valid_price"),
-    fixed32(p.priceCommitment),
-    u64LE(p.batchSlot),
-    u64LE(p.expirySlot),
-    serializeProof(p.proof),
-  );
-
-  return new TransactionInstruction({
-    programId: p.programId,
-    keys: [
-      { pubkey: p.payer, isSigner: true, isWritable: true },
-      { pubkey: marker, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.from(data),
-  });
-}
 
 // ---------------------------------------------------------------------------
 // v3.5 — verify_match_batch. Lands in its own tx before the N (≤ 16)

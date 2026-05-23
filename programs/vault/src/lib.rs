@@ -33,7 +33,6 @@ pub use instructions::set_protocol_config;
 pub use instructions::tee_forced_settle;
 pub use instructions::tee_forced_settle_batched;
 pub use instructions::verify_match_batch;
-pub use instructions::verify_valid_create;
 pub use instructions::withdraw;
 
 use instructions::*;
@@ -137,58 +136,15 @@ pub mod vault {
         )
     }
 
-    /// v3 — verify a VALID_CREATE Groth16 proof and write a marker PDA
-    /// that the subsequent `tee_forced_settle` ix will consume. Lands as a
-    /// separate tx (the settle tx is already near the 1232-byte cap).
-    #[allow(clippy::too_many_arguments)]
-    pub fn verify_valid_create(
-        ctx: Context<VerifyValidCreate>,
-        note_a_commitment: [u8; 32],
-        note_b_commitment: [u8; 32],
-        note_c_commitment: [u8; 32],
-        note_d_commitment: [u8; 32],
-        note_e_commitment: [u8; 32],
-        note_f_commitment: [u8; 32],
-        quote_mint: Pubkey,
-        base_mint: Pubkey,
-        base_amount: u64,
-        quote_amount: u64,
-        buyer_change_amt: u64,
-        seller_change_amt: u64,
-        buyer_fee_amt: u64,
-        seller_fee_amt: u64,
-        expiry_slot: u64,
-        proof: Groth16Proof,
-    ) -> Result<()> {
-        verify_valid_create::verify_valid_create_handler(
-            ctx,
-            note_a_commitment,
-            note_b_commitment,
-            note_c_commitment,
-            note_d_commitment,
-            note_e_commitment,
-            note_f_commitment,
-            quote_mint,
-            base_mint,
-            base_amount,
-            quote_amount,
-            buyer_change_amt,
-            seller_change_amt,
-            buyer_fee_amt,
-            seller_fee_amt,
-            expiry_slot,
-            proof,
-        )
-    }
-
     /// v3.5 — verify a single Groth16 attesting VALID_CREATE +
     /// VALID_PRICE for ALL N matches in a batch. Writes a
-    /// BatchValidityMarker PDA seeded by the proof's public input
-    /// (the Merkle root over per-slot leaves). The N tee_forced_settle
-    /// txs that follow each carry a Merkle inclusion proof against
-    /// this marker. See instructions/verify_match_batch.rs for the
-    /// design rationale (replaces 2 × N per-match marker txs with
-    /// one batch-level marker).
+    /// `BatchValidityMarker` PDA seeded by the proof's public input
+    /// (the Merkle root over per-slot leaves). The N
+    /// `tee_forced_settle_batched` txs that follow each carry a
+    /// Merkle inclusion proof against this marker. See
+    /// `instructions/verify_match_batch.rs`. Subsumes the legacy v3.1
+    /// `verify_valid_create` + `verify_valid_price` ix pair, which
+    /// were removed in Phase 1c-hard.
     pub fn verify_match_batch(
         ctx: Context<VerifyMatchBatch>,
         merkle_root: [u8; 32],
@@ -198,42 +154,12 @@ pub mod vault {
         verify_match_batch::verify_match_batch_handler(ctx, merkle_root, expiry_slot, proof)
     }
 
-    /// v3.1 — verify the VALID_PRICE Groth16 proof + write a marker PDA.
-    /// `tee_forced_settle` later asserts the marker exists at the PDA
-    /// derived from its own view of (clearing_price, batch_slot).
-    /// See instructions/verify_valid_price.rs for the design rationale
-    /// (splits the ~300-byte proof out of the settle ix to fit under
-    /// the 1232-byte tx cap).
-    pub fn verify_valid_price(
-        ctx: Context<VerifyValidPrice>,
-        price_commitment: [u8; 32],
-        batch_slot: u64,
-        expiry_slot: u64,
-        proof: Groth16Proof,
-    ) -> Result<()> {
-        verify_valid_price::verify_valid_price_handler(
-            ctx,
-            price_commitment,
-            batch_slot,
-            expiry_slot,
-            proof,
-        )
-    }
-
-    /// Atomic TEE-forced settlement.
-    pub fn tee_forced_settle(
-        ctx: Context<TeeForcedSettle>,
-        payload: MatchResultPayload,
-    ) -> Result<()> {
-        tee_forced_settle::tee_forced_settle_handler(ctx, payload)
-    }
-
-    /// v3.5 — atomic TEE-forced settlement, batched-marker variant.
-    /// Identical semantics to `tee_forced_settle` but reads ONE
-    /// BatchValidityMarker (seeded by the Merkle root of up to 16
-    /// per-slot leaves) instead of two per-match markers. Coexists
-    /// with the per-match ix during the v3.5 cutover window; matcher
-    /// chooses which path to take per batch.
+    /// v3.5 — atomic TEE-forced settlement. Reads the batch's
+    /// `BatchValidityMarker` (one per batch, keyed by Merkle root)
+    /// and walks a depth-4 Merkle inclusion path to bind this
+    /// specific match to it. The legacy v3.1 `tee_forced_settle` ix
+    /// + its `ValidCreateMarker` / `ValidPriceMarker` per-match
+    /// dependencies were removed in Phase 1c-hard.
     pub fn tee_forced_settle_batched(
         ctx: Context<TeeForcedSettleBatched>,
         payload: MatchResultPayload,

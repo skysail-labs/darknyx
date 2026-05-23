@@ -12,8 +12,9 @@ export const CONSUMED_NOTE_SEED = enc("consumed_note");
 export const NOTE_LOCK_SEED = enc("note_lock");
 export const VAULT_TOKEN_SEED = enc("vault_token");
 export const OUTSTANDING_MINT_SEED = enc("outstanding_mint");
-export const VALID_CREATE_MARKER_SEED = enc("valid_create");
-export const VALID_PRICE_MARKER_SEED = enc("valid_price");
+// v3.1 `valid_create` + `valid_price` per-match seeds were removed in
+// Phase 1c-hard. Both markers got subsumed by a single
+// `BatchValidityMarker` (one per batch, keyed by Merkle root).
 export const BATCH_VALIDITY_MARKER_SEED = enc("batch_validity");
 
 export const DARK_CLOB_SEED = enc("dark_clob");

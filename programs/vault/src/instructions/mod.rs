@@ -11,8 +11,6 @@ pub mod set_protocol_config;
 pub mod tee_forced_settle;
 pub mod tee_forced_settle_batched;
 pub mod verify_match_batch;
-pub mod verify_valid_create;
-pub mod verify_valid_price;
 pub mod withdraw;
 
 // Re-export every item from each instruction module, including the hidden
@@ -31,6 +29,4 @@ pub use set_protocol_config::*;
 pub use tee_forced_settle::*;
 pub use tee_forced_settle_batched::*;
 pub use verify_match_batch::*;
-pub use verify_valid_create::*;
-pub use verify_valid_price::*;
 pub use withdraw::*;

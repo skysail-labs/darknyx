@@ -17,8 +17,8 @@ use solana_signer::Signer;
 fn test_exact_fill_no_change_note() {
     let mut h = Harness::setup();
 
-    let note_a = [0xA1u8; 32];
-    let note_b = [0xB1u8; 32];
+    let note_a = fr_safe(0xA1, 0x01);
+    let note_b = fr_safe(0xB1, 0x01);
     let order_id_a = [1u8; 16];
     let order_id_b = [2u8; 16];
     seed_note_lock(&mut h, &note_a, &order_id_a, 1_000_000, 5_000); // quote
@@ -38,9 +38,7 @@ fn test_exact_fill_no_change_note() {
         5_000,
     );
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("exact-fill settle");
 
@@ -59,8 +57,8 @@ fn test_exact_fill_no_change_note() {
 fn test_partial_fill_change_note() {
     let mut h = Harness::setup();
 
-    let note_a = [0xA2u8; 32]; // buyer: 100 USDC note used for 50 USDC trade
-    let note_b = [0xB2u8; 32];
+    let note_a = fr_safe(0xA2, 0x01); // buyer: 100 USDC note used for 50 USDC trade
+    let note_b = fr_safe(0xB2, 0x01);
     let order_id_a = [3u8; 16];
     let order_id_b = [4u8; 16];
     seed_note_lock(&mut h, &note_a, &order_id_a, 1_000_000, 100);
@@ -83,9 +81,7 @@ fn test_partial_fill_change_note() {
     p.buyer_change_amt = 50;
     p.note_e_commitment = fr_safe(0x02, 0xE2);
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("partial-fill settle");
 
@@ -97,8 +93,8 @@ fn test_partial_fill_change_note() {
 fn test_both_sides_partial_two_change_notes() {
     let mut h = Harness::setup();
 
-    let note_a = [0xA3u8; 32];
-    let note_b = [0xB3u8; 32];
+    let note_a = fr_safe(0xA3, 0x01);
+    let note_b = fr_safe(0xB3, 0x01);
     let order_id_a = [5u8; 16];
     let order_id_b = [6u8; 16];
     seed_note_lock(&mut h, &note_a, &order_id_a, 1_000_000, 100);
@@ -122,9 +118,7 @@ fn test_both_sides_partial_two_change_notes() {
     p.note_e_commitment = fr_safe(0x03, 0xE3);
     p.note_f_commitment = fr_safe(0x03, 0xF3);
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("two-change settle");
 
@@ -138,8 +132,8 @@ fn test_both_sides_partial_two_change_notes() {
 fn test_conservation_violation_rejects() {
     let mut h = Harness::setup();
 
-    let note_a = [0xA4u8; 32];
-    let note_b = [0xB4u8; 32];
+    let note_a = fr_safe(0xA4, 0x01);
+    let note_b = fr_safe(0xB4, 0x01);
     let order_id_a = [7u8; 16];
     let order_id_b = [8u8; 16];
     seed_note_lock(&mut h, &note_a, &order_id_a, 1_000_000, 100);
@@ -163,9 +157,7 @@ fn test_conservation_violation_rejects() {
     p.note_e_commitment = fr_safe(0x04, 0xE4);
 
     let before = vault_leaf_count(&h);
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let err = h.svm.send_transaction(tx).expect_err("must reject");
     let logs = err.meta.logs.join("\n").to_lowercase();
     assert!(
@@ -182,8 +174,8 @@ fn test_change_note_inconsistent_rejects() {
     // buyer_change_amt > 0 but note_e_commitment == [0;32]
     let mut h = Harness::setup();
 
-    let note_a = [0xA5u8; 32];
-    let note_b = [0xB5u8; 32];
+    let note_a = fr_safe(0xA5, 0x01);
+    let note_b = fr_safe(0xB5, 0x01);
     seed_note_lock(&mut h, &note_a, &[9u8; 16], 1_000_000, 100);
     seed_note_lock(&mut h, &note_b, &[10u8; 16], 1_000_000, 10);
 
@@ -203,9 +195,7 @@ fn test_change_note_inconsistent_rejects() {
     p.buyer_change_amt = 50;
     // note_e_commitment stays [0;32] — inconsistent.
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let err = h.svm.send_transaction(tx).expect_err("must reject");
     let logs = err.meta.logs.join("\n").to_lowercase();
     assert!(
@@ -220,8 +210,8 @@ fn test_change_note_inconsistent_rejects() {
 fn test_nullifier_double_spend_rejected() {
     let mut h = Harness::setup();
 
-    let note_a = [0xA6u8; 32];
-    let note_b = [0xB6u8; 32];
+    let note_a = fr_safe(0xA6, 0x01);
+    let note_b = fr_safe(0xB6, 0x01);
     let order_id_a = [11u8; 16];
     let order_id_b = [12u8; 16];
     seed_note_lock(&mut h, &note_a, &order_id_a, 1_000_000, 5_000);
@@ -241,16 +231,14 @@ fn test_nullifier_double_spend_rejected() {
         5_000,
     );
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     h.svm.send_transaction(tx).expect("first settle");
     assert!(nullifier_exists(&h, &[0x3A; 32]));
 
     // Second settlement with the same nullifiers (even via fresh notes/locks)
     // must fail on the init of the already-existing nullifier PDA.
-    let note_a2 = [0xA7u8; 32];
-    let note_b2 = [0xB7u8; 32];
+    let note_a2 = fr_safe(0xA7, 0x01);
+    let note_b2 = fr_safe(0xB7, 0x01);
     seed_note_lock(&mut h, &note_a2, &[13u8; 16], 1_000_000, 5_000);
     seed_note_lock(&mut h, &note_b2, &[14u8; 16], 1_000_000, 100);
 
@@ -269,9 +257,7 @@ fn test_nullifier_double_spend_rejected() {
     );
     p2.batch_slot = 1;
     h.svm.expire_blockhash();
-    seed_valid_create_marker(&mut h, &p2);
-    seed_valid_price_marker(&mut h, &p2);
-    let tx2 = build_settle_tx(&h, &p2);
+    let tx2 = seed_marker_and_build_settle_batched_tx(&mut h, &p2);
     let err = h
         .svm
         .send_transaction(tx2)
@@ -290,8 +276,8 @@ fn test_nullifier_double_spend_rejected() {
 #[test]
 fn test_wrong_order_id_rejected() {
     let mut h = Harness::setup();
-    let note_a = [0xA8u8; 32];
-    let note_b = [0xB8u8; 32];
+    let note_a = fr_safe(0xA8, 0x01);
+    let note_b = fr_safe(0xB8, 0x01);
     seed_note_lock(&mut h, &note_a, &[0x01; 16], 1_000_000, 100);
     seed_note_lock(&mut h, &note_b, &[0x02; 16], 1_000_000, 10);
 
@@ -311,9 +297,7 @@ fn test_wrong_order_id_rejected() {
     p.buyer_change_amt = 50;
     p.note_e_commitment = fr_safe(0x08, 0xE8);
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let err = h.svm.send_transaction(tx).expect_err("wrong order_id");
     let logs = err.meta.logs.join("\n").to_lowercase();
     assert!(
@@ -328,8 +312,8 @@ fn test_wrong_order_id_rejected() {
 fn test_partial_fill_relocks_change_note() {
     let mut h = Harness::setup();
 
-    let note_a = [0xA9u8; 32];
-    let note_b = [0xB9u8; 32];
+    let note_a = fr_safe(0xA9, 0x01);
+    let note_b = fr_safe(0xB9, 0x01);
     let order_id_a = [15u8; 16];
     let order_id_b = [16u8; 16];
     seed_note_lock(&mut h, &note_a, &order_id_a, 1_000_000, 100);
@@ -354,9 +338,7 @@ fn test_partial_fill_relocks_change_note() {
     p.buyer_relock_order_id = order_id_a; // relock same order
     p.buyer_relock_expiry = 2_000_000;
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     h.svm.send_transaction(tx).expect("relock settle");
 
     // New NoteLock PDA must exist for the change-note commitment.
@@ -369,8 +351,8 @@ fn test_partial_fill_relocks_change_note() {
 #[test]
 fn test_relock_without_change_note_returns_error() {
     let mut h = Harness::setup();
-    let note_a = [0xAAu8; 32];
-    let note_b = [0xBAu8; 32];
+    let note_a = fr_safe(0xAA, 0x01);
+    let note_b = fr_safe(0xBA, 0x01);
     seed_note_lock(&mut h, &note_a, &[17u8; 16], 1_000_000, 50);
     seed_note_lock(&mut h, &note_b, &[18u8; 16], 1_000_000, 10);
 
@@ -393,9 +375,7 @@ fn test_relock_without_change_note_returns_error() {
     p.buyer_relock_order_id = [17u8; 16];
     p.buyer_relock_expiry = 2_000_000;
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let err = h.svm.send_transaction(tx).expect_err("must reject");
     let logs = err.meta.logs.join("\n").to_lowercase();
     assert!(
@@ -412,8 +392,8 @@ fn test_tee_sig_verified_via_ed25519_precompile() {
     // precompile is REQUIRED: strip it and the settle must fail.
     let mut h = Harness::setup();
 
-    let note_a = [0xAB; 32];
-    let note_b = [0xBB; 32];
+    let note_a = fr_safe(0xAB, 0x01);
+    let note_b = fr_safe(0xBB, 0x01);
     seed_note_lock(&mut h, &note_a, &[19u8; 16], 1_000_000, 5_000);
     seed_note_lock(&mut h, &note_b, &[20u8; 16], 1_000_000, 100);
 
@@ -432,9 +412,7 @@ fn test_tee_sig_verified_via_ed25519_precompile() {
     );
 
     // Build the settle ix WITHOUT the precompile.
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let settle_ix = build_settle_ix(&h, &p);
+    let settle_ix = seed_marker_and_build_settle_batched_ix(&mut h, &p);
     let tx = solana_transaction::Transaction::new(
         &[&h.tee],
         solana_message::Message::new(
@@ -455,8 +433,8 @@ fn test_tee_sig_verified_via_ed25519_precompile() {
 fn test_tee_sig_wrong_key_rejected() {
     let mut h = Harness::setup();
 
-    let note_a = [0xAC; 32];
-    let note_b = [0xBC; 32];
+    let note_a = fr_safe(0xAC, 0x01);
+    let note_b = fr_safe(0xBC, 0x01);
     seed_note_lock(&mut h, &note_a, &[21u8; 16], 1_000_000, 5_000);
     seed_note_lock(&mut h, &note_b, &[22u8; 16], 1_000_000, 100);
 
@@ -483,9 +461,7 @@ fn test_tee_sig_wrong_key_rejected() {
     let mut sig_bytes = [0u8; 64];
     sig_bytes.copy_from_slice(sig.as_ref());
     let ed_ix = build_ed25519_verify_ix(&attacker.pubkey().to_bytes(), &sig_bytes, &msg_hash);
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let settle_ix = build_settle_ix(&h, &p);
+    let settle_ix = seed_marker_and_build_settle_batched_ix(&mut h, &p);
     let tx = solana_transaction::Transaction::new(
         &[&h.tee],
         solana_message::Message::new(
@@ -506,8 +482,8 @@ fn test_tee_sig_wrong_key_rejected() {
 fn test_tee_sig_wrong_msg_rejected() {
     let mut h = Harness::setup();
 
-    let note_a = [0xAD; 32];
-    let note_b = [0xBD; 32];
+    let note_a = fr_safe(0xAD, 0x01);
+    let note_b = fr_safe(0xBD, 0x01);
     seed_note_lock(&mut h, &note_a, &[23u8; 16], 1_000_000, 5_000);
     seed_note_lock(&mut h, &note_b, &[24u8; 16], 1_000_000, 100);
 
@@ -531,9 +507,7 @@ fn test_tee_sig_wrong_msg_rejected() {
     let mut sig_bytes = [0u8; 64];
     sig_bytes.copy_from_slice(sig.as_ref());
     let ed_ix = build_ed25519_verify_ix(&h.tee.pubkey().to_bytes(), &sig_bytes, &bogus_msg);
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let settle_ix = build_settle_ix(&h, &p);
+    let settle_ix = seed_marker_and_build_settle_batched_ix(&mut h, &p);
     let tx = solana_transaction::Transaction::new(
         &[&h.tee],
         solana_message::Message::new(
@@ -560,8 +534,8 @@ fn test_fee_note_appended() {
     // is allowed.
     set_vault_fee_config(&mut h, [0x77u8; 32], 30);
 
-    let note_a = [0xAE; 32];
-    let note_b = [0xBE; 32];
+    let note_a = fr_safe(0xAE, 0x01);
+    let note_b = fr_safe(0xBE, 0x01);
     seed_note_lock(&mut h, &note_a, &[25u8; 16], 1_000_000, 115); // quote=100 + fee=15
     seed_note_lock(&mut h, &note_b, &[26u8; 16], 1_000_000, 103); // base=100 + fee=3
 
@@ -582,9 +556,7 @@ fn test_fee_note_appended() {
     p.seller_fee_amt = 3;
     p.note_fee_commitment = fr_safe(0x0E, 0x88);
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("fee settle");
 
@@ -596,8 +568,8 @@ fn test_fee_note_appended() {
 fn test_zero_fee_no_note_created() {
     let mut h = Harness::setup();
 
-    let note_a = [0xAF; 32];
-    let note_b = [0xBF; 32];
+    let note_a = fr_safe(0xAF, 0x01);
+    let note_b = fr_safe(0xBF, 0x01);
     seed_note_lock(&mut h, &note_a, &[27u8; 16], 1_000_000, 100);
     seed_note_lock(&mut h, &note_b, &[28u8; 16], 1_000_000, 100);
 
@@ -616,9 +588,7 @@ fn test_zero_fee_no_note_created() {
     );
     // fee fields are all zero; note_fee_commitment stays [0;32].
 
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("zero-fee settle");
 
@@ -632,8 +602,8 @@ fn test_fee_note_without_protocol_owner_rejected() {
     // note_fee_commitment must be rejected as ProtocolOwnerUnset.
     let mut h = Harness::setup();
 
-    let note_a = [0xA1; 32];
-    let note_b = [0xB1; 32];
+    let note_a = fr_safe(0xA1, 0x01);
+    let note_b = fr_safe(0xB1, 0x01);
     seed_note_lock(&mut h, &note_a, &[29u8; 16], 1_000_000, 115);
     seed_note_lock(&mut h, &note_b, &[30u8; 16], 1_000_000, 103);
 
@@ -655,9 +625,7 @@ fn test_fee_note_without_protocol_owner_rejected() {
     p.note_fee_commitment = fr_safe(0x10, 0x99);
 
     let before = vault_leaf_count(&h);
-    seed_valid_create_marker(&mut h, &p);
-    seed_valid_price_marker(&mut h, &p);
-    let tx = build_settle_tx(&h, &p);
+    let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let err = h.svm.send_transaction(tx).expect_err("must reject");
     let logs = err.meta.logs.join("\n").to_lowercase();
     assert!(

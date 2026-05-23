@@ -30,8 +30,6 @@ import {
   consumedNotePda,
   noteLockPda,
   nullifierEntryPda,
-  validCreateMarkerPda,
-  validPriceMarkerPda,
   vaultConfigPda,
 } from "../idl/vault-client.js";
 
@@ -249,125 +247,6 @@ export function buildEd25519VerifyIx(params: {
   });
 }
 
-// ---------- tee_forced_settle ix builder ----------
-
-export interface BuildSettleIxParams {
-  /** vault program id. */
-  programId: PublicKey;
-  /** The TEE authority (signer — must equal vault_config.tee_pubkey). */
-  teeAuthority: PublicKey;
-  payload: MatchResultPayload;
-  /**
-   * v3: quote-side mint of the match (= lock_a.token_mint). Required to
-   * derive the `ValidCreateMarker` PDA the on-chain handler reads.
-   */
-  quoteMint: PublicKey;
-  /** v3: base-side mint of the match (= lock_b.token_mint). */
-  baseMint: PublicKey;
-  /**
-   * v3.1: 32-byte Poseidon3(DOMAIN_PRICE=5, clearingPrice, batchSlot).
-   * Used to derive the `ValidPriceMarker` PDA the on-chain handler
-   * looks up (the same value was the seed of the marker written by
-   * the preceding `verify_valid_price` ix). The caller can compute
-   * it via `priceCommitment(payload.clearingPrice, payload.batchSlot)`
-   * from `packages/sdk/src/zk/price-commitment.ts`.
-   */
-  priceCommitment: Uint8Array;
-}
-
-/**
- * Build the `tee_forced_settle` Anchor ix. The caller must also prepend a
- * valid Ed25519Program precompile ix signing
- * `canonicalPayloadHash(payload)` with `teeAuthority` for the on-chain
- * verification to succeed.
- *
- * Accounts order MUST match `TeeForcedSettle<'info>`:
- *   0  tee_authority     (mut, signer)
- *   1  vault_config      (mut)
- *   2  note_lock_a       (mut, close)
- *   3  note_lock_b       (mut, close)
- *   4  consumed_a        (init)
- *   5  consumed_b        (init)
- *   6  nullifier_a_entry (init)
- *   7  nullifier_b_entry (init)
- *   8  note_lock_e       (mut — may be unused when no re-lock; seed derived from note_e_commitment)
- *   9  note_lock_f       (mut — same for seller)
- *  10  instructions_sysvar
- *  11  valid_create_marker (mut — closed to tee_authority on success)
- *  12  system_program
- */
-/**
- * @deprecated v3.5: superseded by `buildSettleBatchedIx`, which reads
- * one `BatchValidityMarker` and a Merkle inclusion proof instead of
- * two per-match markers. Both paths produce identical state
- * transitions. Kept through the v3.5 confidence window; scheduled
- * for removal in Phase 1c-hard. See `docs/v3.5-migration.md`.
- */
-export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
-  const [vaultConfig] = vaultConfigPda(p.programId);
-  const [lockA] = noteLockPda(p.programId, p.payload.noteAcommitment);
-  const [lockB] = noteLockPda(p.programId, p.payload.noteBcommitment);
-  const [consumedA] = consumedNotePda(p.programId, p.payload.noteAcommitment);
-  const [consumedB] = consumedNotePda(p.programId, p.payload.noteBcommitment);
-  const [nullA] = nullifierEntryPda(p.programId, p.payload.nullifierA);
-  const [nullB] = nullifierEntryPda(p.programId, p.payload.nullifierB);
-  // The note-lock accounts for note_e/note_f are always required; the
-  // handler inspects them only when the corresponding relock is active.
-  // We always seed them from the change-note commitments so the seeds
-  // line up when relock IS active; when not, the handler ignores them.
-  const [lockE] = noteLockPda(p.programId, p.payload.noteEcommitment);
-  const [lockF] = noteLockPda(p.programId, p.payload.noteFcommitment);
-
-  // v3: derive the VALID_CREATE marker the on-chain handler will look up.
-  // Must match `valid_create_binding_hash` in the vault program exactly.
-  const binding = validCreateBindingHash({
-    noteA: p.payload.noteAcommitment,
-    noteB: p.payload.noteBcommitment,
-    noteC: p.payload.noteCcommitment,
-    noteD: p.payload.noteDcommitment,
-    noteE: p.payload.noteEcommitment,
-    noteF: p.payload.noteFcommitment,
-    quoteMint: p.quoteMint.toBytes(),
-    baseMint: p.baseMint.toBytes(),
-    baseAmount: p.payload.baseAmount,
-    quoteAmount: p.payload.quoteAmount,
-    buyerChangeAmt: p.payload.buyerChangeAmt,
-    sellerChangeAmt: p.payload.sellerChangeAmt,
-    buyerFeeAmt: p.payload.buyerFeeAmt,
-    sellerFeeAmt: p.payload.sellerFeeAmt,
-  });
-  const [createMarker] = validCreateMarkerPda(p.programId, binding);
-  // v3.1: VALID_PRICE marker derived from the priceCommitment caller
-  // supplies. Handler recomputes the same commitment from the payload
-  // and asserts this PDA is at the expected address.
-  const [priceMarker] = validPriceMarkerPda(p.programId, p.priceCommitment);
-
-  const data = cat(
-    anchorDiscriminator("tee_forced_settle"),
-    serializePayload(p.payload),
-  );
-
-  return new TransactionInstruction({
-    programId: p.programId,
-    keys: [
-      { pubkey: p.teeAuthority, isSigner: true, isWritable: true },
-      { pubkey: vaultConfig, isSigner: false, isWritable: true },
-      { pubkey: lockA, isSigner: false, isWritable: true },
-      { pubkey: lockB, isSigner: false, isWritable: true },
-      { pubkey: consumedA, isSigner: false, isWritable: true },
-      { pubkey: consumedB, isSigner: false, isWritable: true },
-      { pubkey: nullA, isSigner: false, isWritable: true },
-      { pubkey: nullB, isSigner: false, isWritable: true },
-      { pubkey: lockE, isSigner: false, isWritable: true },
-      { pubkey: lockF, isSigner: false, isWritable: true },
-      { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
-      { pubkey: createMarker, isSigner: false, isWritable: true },
-      { pubkey: priceMarker, isSigner: false, isWritable: true },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    ],
-    data: Buffer.from(data),
-  });
-}
 
 // ---------------------------------------------------------------------------
 // v3.5 — tee_forced_settle_batched
@@ -532,44 +411,6 @@ export function buildCloseBatchValidityMarkerIx(
   });
 }
 
-/**
- * Recompute the canonical VALID_CREATE binding hash. Must match
- * `valid_create_binding_hash` in `programs/vault/src/instructions/verify_valid_create.rs`.
- */
-export function validCreateBindingHash(args: {
-  noteA: Uint8Array;
-  noteB: Uint8Array;
-  noteC: Uint8Array;
-  noteD: Uint8Array;
-  noteE: Uint8Array;
-  noteF: Uint8Array;
-  quoteMint: Uint8Array;
-  baseMint: Uint8Array;
-  baseAmount: bigint;
-  quoteAmount: bigint;
-  buyerChangeAmt: bigint;
-  sellerChangeAmt: bigint;
-  buyerFeeAmt: bigint;
-  sellerFeeAmt: bigint;
-}): Uint8Array {
-  const h = createHash("sha256");
-  h.update(Buffer.from("nyx-create-bind-v1"));
-  h.update(fixed(args.noteA, 32));
-  h.update(fixed(args.noteB, 32));
-  h.update(fixed(args.noteC, 32));
-  h.update(fixed(args.noteD, 32));
-  h.update(fixed(args.noteE, 32));
-  h.update(fixed(args.noteF, 32));
-  h.update(fixed(args.quoteMint, 32));
-  h.update(fixed(args.baseMint, 32));
-  h.update(u64LE(args.baseAmount));
-  h.update(u64LE(args.quoteAmount));
-  h.update(u64LE(args.buyerChangeAmt));
-  h.update(u64LE(args.sellerChangeAmt));
-  h.update(u64LE(args.buyerFeeAmt));
-  h.update(u64LE(args.sellerFeeAmt));
-  return new Uint8Array(h.digest());
-}
 
 // ---------- Convenience helpers ----------
 

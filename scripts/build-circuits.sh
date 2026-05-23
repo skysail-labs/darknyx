@@ -83,8 +83,11 @@ build_circuit() {
 build_circuit valid_wallet_create
 build_circuit valid_spend
 build_circuit valid_input
-build_circuit valid_create
-build_circuit valid_price
+# v3.1 valid_create + valid_price circuits were removed in Phase 1c-hard.
+# They've been subsumed by the v3.5 batched-validity circuit (see
+# circuits/match_batch_n*). The N=16 instantiation requires pot18 and is
+# built/setup manually for now (no entry here); add it to this list once
+# the build script learns to pick the right PTAU per-circuit.
 
 echo ""
 echo "All circuits built. Artifacts in $BUILD_DIR/"

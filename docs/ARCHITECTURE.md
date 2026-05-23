@@ -18,18 +18,22 @@ top-level [`README.md`](../README.md).
 > * **v3.1** — `VALID_PRICE` proof + `ValidPriceMarker` PDA so the
 >   clearing price is bound by a Groth16, not a TEE-controlled Pyth
 >   check. v0-transaction + ALT migration for the settle tx.
-> * **v3.5 (latest)** — one batched `VALID_MATCH_BATCH` proof attests
+> * **v3.5 (current)** — one batched `VALID_MATCH_BATCH` proof attests
 >   VALID_CREATE + VALID_PRICE for ALL matches in a batch (N ≤ 16) at
 >   once. `verify_match_batch` writes one `BatchValidityMarker` PDA
 >   per batch (keyed by Merkle root); `tee_forced_settle_batched`
->   walks a depth-4 inclusion proof against it; `close_batch_validity_marker`
->   reclaims rent after the last settle. Coexists with the v3.1
->   per-match ixs during a soft-cutover window — matchers opt in per
->   batch via the SDK flag (`USE_BATCHED_PROOF=1` env on the test
->   side, `buildSettleBatchedIx` on the production side).
+>   walks a depth-4 inclusion proof against it;
+>   `close_batch_validity_marker` reclaims rent after the last settle.
+>   **Phase 1c-hard is DONE** — the v3.1 per-match ixs
+>   (`verify_valid_create`, `verify_valid_price`, `tee_forced_settle`),
+>   their state structs / VK consts / circom circuits, and the SDK
+>   builders that targeted them have all been removed. Production
+>   matchers use `buildSettleBatchedIx`; multi-match batches use the
+>   `settleBatchViaBatched` helper. See `docs/v3.5-migration.md`.
 >
 > The legacy v1 deployment on `main` lives at the program IDs noted
-> at the bottom of this file.
+> at the bottom of this file (untouched by the v2/v3/v3.5 work — its
+> own program IDs differ).
 
 ---
 
@@ -313,14 +317,14 @@ pattern](https://docs.magicblock.gg/developers/cookbook):
    `BatchResults` PDA, and rotates collateral on partially-filled
    slots' `collateral_note`.
 
-4. **ER → L1**: `undelegate_market` — CPIs
+3. **ER → L1**: `undelegate_market` — CPIs
    `ScheduleCommitAndUndelegate` on the magic program. MagicBlock
    commits the new `DarkCLOB` / `MatchingConfig` / `BatchResults` state
    back to L1 and returns ownership of those PDAs to `matching_engine`.
    PendingOrder slots stay delegated (so future batches can match
    without re-delegation).
 
-5. **L1 settlement**: the TEE builds a `MatchResultPayload`, signs the
+4. **L1 settlement**: the TEE builds a `MatchResultPayload`, signs the
    canonical hash, and lands a sequence of atomic L1 txs. There are
    two coexisting paths during the soft-cutover window:
 
@@ -451,7 +455,7 @@ field), and only then proceed to:
    (seller's change in BASE), and optional `note_fee` (protocol fee).
 6. Atomically allocate fresh `NoteLock` PDAs for change notes when the
    payload requests a re-lock (partial-fill continuation).
-7. **Marker lifecycle** (path-dependent):
+6. **Marker lifecycle** (path-dependent):
    * **v3.5 batched**: do NOT close the marker. The marker is keyed by
      the batch's Merkle root, identical across all matches in the
      batch; closing here would brick every subsequent match. The
@@ -784,15 +788,7 @@ brief (phantom-locking, forever-locking, output misrouting, mint
 mis-claiming, price manipulation, per-match verify overhead). Sorted
 roughly by cryptographic impact remaining:
 
-1. **Phase 1c-hard cutover** — v3.5 currently ships as a *soft*
-   cutover: the v3.1 ixs (`verify_valid_create`, `verify_valid_price`,
-   `tee_forced_settle`) coexist with the v3.5 ixs and are marked
-   `@deprecated v3.5` in the SDK. After a confidence window the
-   legacy ixs should be removed on-chain + the `else` branches in
-   the devnet tests should be deleted. See
-   [`docs/v3.5-migration.md`](v3.5-migration.md) for the checklist.
-
-2. **Real Phase-2 ceremony** — All six shipped Groth16 circuits use a
+1. **Real Phase-2 ceremony** — All four shipped Groth16 circuits use a
    deterministic dev contribution. The toxic waste is therefore
    *recoverable from the build script* (`echo "nyx-phase1-dev-contribution-$name"`
    passed as entropy). Real MPC with ≥ 3 independent contributors and
@@ -804,48 +800,48 @@ roughly by cryptographic impact remaining:
    beacon string) so CI can rebuild the same VK consts from source —
    useful during development but does NOT replace a real ceremony.
 
-3. **Real TDX/SEV TEE + remote attestation** (Phase 6). The TEE is
+2. **Real TDX/SEV TEE + remote attestation** (Phase 6). The TEE is
    currently a local Ed25519 keypair acting as the signing authority.
    Production deploys must pin the key inside an attested enclave.
    Also need a `rotate_tee_pubkey` ix gated by attestation quote
    verification.
 
-4. **Browser prover** (`WebProverSuite`) replacing the snarkjs
+3. **Browser prover** (`WebProverSuite`) replacing the snarkjs
    shell-out. Today the SDK shells out to
    `node_modules/snarkjs/build/cli.cjs`, which is fine on a server but
    unwieldy in a wallet extension.
 
-5. **Indexer service** — see `apps/demo/ARCHITECTURE.md` for the
+4. **Indexer service** — see `apps/demo/ARCHITECTURE.md` for the
    "no-indexer tax." A production indexer (Geyser/Helius webhook +
    postgres + witness API) would eliminate ~40% of the dapp's
    complexity (Merkle replay, pending-slot probing, BatchResults ring
    scanning, etc.).
 
-6. **`undelegate_pending_order`** — let users release a slot back to L1
+5. **`undelegate_pending_order`** — let users release a slot back to L1
    to refund rent. Today slots stay delegated forever.
 
-7. **Emergency `force_undelegate_on_l1`** admin ix (pressure valve if
+6. **Emergency `force_undelegate_on_l1`** admin ix (pressure valve if
    the ER is down).
 
-8. **Real protocol-owner keypair** for fee withdrawal. Fee notes
+7. **Real protocol-owner keypair** for fee withdrawal. Fee notes
    accumulate but can't be spent until a real protocol-owner key is
    wired in. `change-note-flow` Test E exercises this under a synthetic
    commitment.
 
-9. **Continuous ER ↔ L1 commit scheduler** inside the TEE loop. Today
+8. **Continuous ER ↔ L1 commit scheduler** inside the TEE loop. Today
    the test commits manually via `undelegate_market`. Production wants
    `commit_market_state` (keeps delegation) every N slots so settlement
    can pick up matches without a full undelegate cycle.
 
-10. **Oracle refresh inside long-running ER sessions** — Pyth Pull-v2
+9. **Oracle refresh inside long-running ER sessions** — Pyth Pull-v2
     accounts are clone-at-open today.
 
-11. **PER JWT session manager** wired into the ER trade-flow test —
+10. **PER JWT session manager** wired into the ER trade-flow test —
     the on-chain privacy property is independent of this, but the
     network-side anonymity-set requires JWT-gated ingress to be
     effective.
 
-12. **Self-trade prevention** in `run_batch` — cheap to add (check
+11. **Self-trade prevention** in `run_batch` — cheap to add (check
     same `user_commitment`), more about anti-leakage than soundness.
 
 ---
@@ -912,7 +908,7 @@ the hood).
 
 ```sh
 # L1-only happy path
-RUN_DEVNET_E2E=1 USE_BATCHED_PROOF=1 \
+RUN_DEVNET_E2E=1 \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
   ROOT_KEY_KEYPAIR=.devnet/keypairs/root_key.json \
@@ -920,14 +916,14 @@ RUN_DEVNET_E2E=1 USE_BATCHED_PROOF=1 \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-trade-flow.test.ts )
 
 # Change-note / partial-fill / multi-batch / real-fee-withdraw
-RUN_CN_E2E=1 USE_BATCHED_PROOF=1 \
+RUN_CN_E2E=1 \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/change-note-flow.test.ts )
 
 # Ephemeral-Rollup hidden-order-intent path
-RUN_ER_E2E=1 USE_BATCHED_PROOF=1 \
+RUN_ER_E2E=1 \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
@@ -939,7 +935,7 @@ match → lock → `verify_match_batch` → `tee_forced_settle_batched` →
 `close_batch_validity_marker` → withdraw) and prints per-step
 timings + explorer links for every landed tx.
 
-Dropping `USE_BATCHED_PROOF=1` falls back to the v3.1 legacy path
+Dropping `USE_BATCHED_PROOF` falls back to the v3.1 legacy path
 (per-match `verify_valid_create` + `verify_valid_price` +
 `tee_forced_settle`). Both paths run against the same deployed
 programs — pick per matcher.
@@ -959,7 +955,7 @@ Two GitHub-Actions workflows:
   `/test-devnet`. Default invocation exercises the v3.1 path so the
   legacy ixs keep getting coverage during cutover; appending
   `--batched` (`/test-devnet --batched`) exports
-  `USE_BATCHED_PROOF=1` for the whole job and gates v3.5 instead.
+  `USE_BATCHED_PROOF` for the whole job and gates v3.5 instead.
   Combine with `--partial-fill` / `--skip-er` as needed.
 
 ### 6. Production matcher checklist

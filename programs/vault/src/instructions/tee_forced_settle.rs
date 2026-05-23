@@ -1,38 +1,30 @@
-//! DEPRECATED v3.5: superseded by `tee_forced_settle_batched`, which
-//! reads ONE BatchValidityMarker (the upstream `verify_match_batch`
-//! writes it after attesting up to N=16 matches in one Groth16 proof)
-//! instead of the two per-match `ValidCreateMarker` + `ValidPriceMarker`
-//! this handler consumes. Both paths produce identical state
-//! transitions; the batched path is ~10x cheaper per match at scale.
-//! Kept on-chain through the v3.5 confidence window; scheduled for
-//! removal in Phase 1c-hard. See `docs/v3.5-migration.md`.
+//! Shared settlement infrastructure. The v3.1 per-match
+//! `tee_forced_settle` handler + its `TeeForcedSettle<'info>` Accounts
+//! struct used to live here; both were deleted in Phase 1c-hard once
+//! `verify_match_batch` + `tee_forced_settle_batched` took over every
+//! settle path on-chain and every test was migrated to the batched
+//! flow.
 //!
-//! TEE-forced atomic settlement.
+//! What stays here is the SHARED settlement infrastructure that the
+//! v3.5 batched handler depends on:
+//! * `MatchResultPayload` (the Borsh struct the TEE signs and every
+//!   settle ix carries),
+//! * `canonical_payload_hash` (the SHA-256 over the payload that the
+//!   TEE actually signs; cross-language byte-identical with the TS
+//!   `canonicalPayloadHash`),
+//! * `verify_tee_signature` (the Ed25519-precompile-inspection helper
+//!   the batched handler reuses verbatim),
+//! * `create_relock_pda` (allocates a fresh `NoteLock` for a
+//!   continuing-order change note — used during atomic re-lock by
+//!   `tee_forced_settle_batched`),
+//! * `TradeSettled` (the event the batched handler emits).
 //!
-//! The TEE produces a signed `match_result` authorising:
-//!   - consumption of note_a and note_b (input notes)
-//!   - creation of note_c and note_d (output notes, commitments supplied)
-//!
-//! The vault program executes all state transitions atomically. User
-//! participation is NOT required (fair exchange via TEE-forced settlement;
-//! Section 19 of the spec).
-//!
-//! Ed25519 signature verification uses the standard Solana Ed25519Program
-//! precompile pattern: the caller includes a precompile ix in the same
-//! transaction signed over `canonical_payload_hash(payload)`. The handler
-//! scans the tx instruction list via the instructions sysvar, finds the
-//! precompile entry, and asserts its (pubkey, msg) tuple matches
-//! `vault_config.tee_pubkey` and `canonical_payload_hash(payload)`.
-//! The precompile itself has already verified the Ed25519 signature bytes
-//! before our instruction executes — our job is only to bind that check
-//! to the expected key and message.
+//! When this file empties out further (e.g. the TradeSettled event
+//! moves elsewhere), rename it to something like `settlement_shared.rs`.
 
 use crate::errors::VaultError;
-use crate::instructions::verify_valid_create::valid_create_binding_hash;
-use crate::merkle::append_leaf;
 use crate::state::*;
 use anchor_lang::prelude::*;
-use core::mem::size_of;
 
 /// Phase-5 MatchResultPayload — extended with change-note commitments and
 /// input-note values so the vault can verify the conservation law before
@@ -95,443 +87,21 @@ pub struct MatchResultPayload {
     // `nyx-match-v5` domain tag remain valid.
 }
 
-#[derive(Accounts)]
-#[instruction(payload: MatchResultPayload)]
-pub struct TeeForcedSettle<'info> {
-    #[account(mut)]
-    pub tee_authority: Signer<'info>,
-
-    #[account(
-        mut,
-        seeds = [VaultConfig::SEED],
-        bump,
-    )]
-    pub vault_config: AccountLoader<'info, VaultConfig>,
-
-    // --- locks for input notes ---
-    #[account(
-        mut,
-        seeds = [NoteLock::SEED, payload.note_a_commitment.as_ref()],
-        bump,
-        close = tee_authority,
-    )]
-    pub note_lock_a: AccountLoader<'info, NoteLock>,
-
-    #[account(
-        mut,
-        seeds = [NoteLock::SEED, payload.note_b_commitment.as_ref()],
-        bump,
-        close = tee_authority,
-    )]
-    pub note_lock_b: AccountLoader<'info, NoteLock>,
-
-    // --- consumed-note markers (must NOT already exist -> init) ---
-    #[account(
-        init,
-        payer = tee_authority,
-        space = 8 + size_of::<ConsumedNoteEntry>(),
-        seeds = [ConsumedNoteEntry::SEED, payload.note_a_commitment.as_ref()],
-        bump,
-    )]
-    pub consumed_a: AccountLoader<'info, ConsumedNoteEntry>,
-
-    #[account(
-        init,
-        payer = tee_authority,
-        space = 8 + size_of::<ConsumedNoteEntry>(),
-        seeds = [ConsumedNoteEntry::SEED, payload.note_b_commitment.as_ref()],
-        bump,
-    )]
-    pub consumed_b: AccountLoader<'info, ConsumedNoteEntry>,
-
-    // --- nullifier entries (must NOT already exist -> init) ---
-    #[account(
-        init,
-        payer = tee_authority,
-        space = 8 + size_of::<NullifierEntry>(),
-        seeds = [NullifierEntry::SEED, payload.nullifier_a.as_ref()],
-        bump,
-    )]
-    pub nullifier_a_entry: AccountLoader<'info, NullifierEntry>,
-
-    #[account(
-        init,
-        payer = tee_authority,
-        space = 8 + size_of::<NullifierEntry>(),
-        seeds = [NullifierEntry::SEED, payload.nullifier_b.as_ref()],
-        bump,
-    )]
-    pub nullifier_b_entry: AccountLoader<'info, NullifierEntry>,
-
-    /// Phase-5 re-lock PDA for the buyer's change note. Created manually
-    /// by the handler iff `payload.buyer_relock_order_id != NONE`; else
-    /// the caller may pass any dummy writable account — the handler
-    /// never touches it. The handler enforces the seed derivation
-    /// `[NoteLock::SEED, payload.note_e_commitment]` when it *does* use
-    /// this account.
-    /// CHECK: Seeds validated in handler when re-lock is requested.
-    #[account(mut)]
-    pub note_lock_e: UncheckedAccount<'info>,
-
-    /// Same as `note_lock_e`, for the seller.
-    /// CHECK: Seeds validated in handler when re-lock is requested.
-    #[account(mut)]
-    pub note_lock_f: UncheckedAccount<'info>,
-
-    /// Phase-5: Instructions sysvar. The handler inspects this account to
-    /// prove the tx includes a valid Ed25519Program precompile ix signed
-    /// by `vault_config.tee_pubkey` over `SHA-256(MatchResultPayload)`.
-    /// The sysvar address is hard-coded — Anchor enforces it.
-    /// CHECK: Address validated via `address = sysvar_id()`.
-    #[account(address = solana_program::sysvar::instructions::ID)]
-    pub instructions_sysvar: UncheckedAccount<'info>,
-
-    /// v3 — VALID_CREATE marker. Created by `verify_valid_create` in a
-    /// preceding tx; closed here. Its PDA seed encodes the 14 fields the
-    /// circuit proved, so finding a marker at the seed derived from this
-    /// payload's fields means VALID_CREATE was checked for THIS exact
-    /// output set. The PDA seed is `[b"valid_create", binding_hash]`
-    /// where binding_hash is recomputed in the handler — passing the
-    /// hash as an explicit ix arg would let the TEE lie about it, so we
-    /// derive on the fly and rely on Anchor's seeds-bump check to detect
-    /// any mismatch via `MarkerNotFound` (init = false; account must
-    /// already exist at the derived address).
-    ///
-    /// CHECK: Validated via the bump-derived address + binding check in
-    /// the handler. Closed to `tee_authority` on success.
-    #[account(mut)]
-    pub valid_create_marker: UncheckedAccount<'info>,
-
-    /// v3.1 — VALID_PRICE marker. Created by `verify_valid_price` in a
-    /// preceding tx; closed here. Its PDA seed is the `price_commitment`
-    /// itself (= `Poseidon3(DOMAIN_PRICE, clearing_price, batch_slot)`).
-    /// The handler recomputes that commitment from the payload's two
-    /// u64 fields and asserts this account is at the derived address.
-    /// init = false; account must already exist.
-    ///
-    /// CHECK: Validated via the binding check in the handler. Closed
-    /// to `tee_authority` on success.
-    #[account(mut)]
-    pub valid_price_marker: UncheckedAccount<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-pub fn tee_forced_settle_handler(
-    ctx: Context<TeeForcedSettle>,
-    payload: MatchResultPayload,
-) -> Result<()> {
-    let clock = Clock::get()?;
-    let tee_pubkey = {
-        let cfg = ctx.accounts.vault_config.load()?;
-        require!(
-            ctx.accounts.tee_authority.key() == cfg.tee_pubkey,
-            VaultError::Unauthorized
-        );
-        cfg.tee_pubkey
-    };
-
-    // Phase-5: verify the TEE's Ed25519 signature over the canonical
-    // payload hash via the Solana Ed25519Program precompile. We search
-    // the transaction's instructions for a matching precompile ix and
-    // assert its (pubkey, msg) tuple. The precompile already checked the
-    // signature bytes for us — our job is to bind that check to our
-    // expected key + message.
-    verify_tee_signature(
-        &ctx.accounts.instructions_sysvar,
-        &tee_pubkey,
-        &canonical_payload_hash(&payload),
-    )?;
-
-    // v3.1: validate the VALID_PRICE marker PDA. The marker was written
-    // by a preceding `verify_valid_price` ix, which verified the Groth16
-    // proof that quote_amount == base_amount * clearing_price (with a
-    // private clearing_price bound to this (price, batch_slot) via
-    // price_commitment = Poseidon3(DOMAIN_PRICE, clearing_price, batch_slot)).
-    //
-    // We recompute the same commitment from payload.clearing_price +
-    // payload.batch_slot, derive the marker PDA, assert this account is
-    // at that exact address, and check it's non-expired. The marker is
-    // closed at the end of the handler and lamports refunded to its
-    // recorded payer (mirroring the VALID_CREATE marker lifecycle).
-    {
-        use darkpool_crypto::price_commitment as compute_price_commitment;
-        let expected_pc = compute_price_commitment(payload.clearing_price, payload.batch_slot)
-            .map_err(|_| error!(VaultError::InvalidPriceBinding))?;
-
-        let (expected_marker_pda, _) = Pubkey::find_program_address(
-            &[ValidPriceMarker::SEED, expected_pc.as_ref()],
-            &crate::ID,
-        );
-        require_keys_eq!(
-            ctx.accounts.valid_price_marker.key(),
-            expected_marker_pda,
-            VaultError::InvalidPriceBinding
-        );
-        let marker_info = ctx.accounts.valid_price_marker.to_account_info();
-        require!(
-            marker_info.owner == &crate::ID,
-            VaultError::InvalidPriceBinding
-        );
-        let marker_data = marker_info.try_borrow_data()?;
-        require!(
-            marker_data.len() >= 8 + 32 + 8,
-            VaultError::InvalidPriceBinding
-        );
-        let expiry_slot = u64::from_le_bytes(marker_data[8 + 32..8 + 32 + 8].try_into().unwrap());
-        drop(marker_data);
-        require!(clock.slot < expiry_slot, VaultError::PriceMarkerExpired);
-    }
-
-    // v3: validate the VALID_CREATE marker PDA. The marker was written by a
-    // preceding `verify_valid_create` ix, which verified the Groth16 proof that
-    // the output notes are correctly constructed. We recompute the binding hash
-    // from our view of the payload + the input locks' mints and assert the marker
-    // lives at the expected PDA address. Expiry is checked to reject stale markers.
-    {
-        let (lock_a_mint, lock_b_mint) = {
-            let la = ctx.accounts.note_lock_a.load()?;
-            let lb = ctx.accounts.note_lock_b.load()?;
-            (la.token_mint, lb.token_mint)
-        };
-        let binding = valid_create_binding_hash(
-            &payload.note_a_commitment,
-            &payload.note_b_commitment,
-            &payload.note_c_commitment,
-            &payload.note_d_commitment,
-            &payload.note_e_commitment,
-            &payload.note_f_commitment,
-            &lock_a_mint,
-            &lock_b_mint,
-            payload.base_amount,
-            payload.quote_amount,
-            payload.buyer_change_amt,
-            payload.seller_change_amt,
-            payload.buyer_fee_amt,
-            payload.seller_fee_amt,
-        );
-        let (expected_marker_pda, _) =
-            Pubkey::find_program_address(&[ValidCreateMarker::SEED, binding.as_ref()], &crate::ID);
-        require_keys_eq!(
-            ctx.accounts.valid_create_marker.key(),
-            expected_marker_pda,
-            VaultError::InvalidCreateBinding
-        );
-        // Read and validate expiry from the marker account. The marker is an
-        // Anchor `#[account]` so layout is: 8-byte discriminator || Borsh fields.
-        // ValidCreateMarker: payer (32) || expiry_slot (8) || bump (1)
-        let marker_data = ctx.accounts.valid_create_marker.try_borrow_data()?;
-        require!(
-            marker_data.len() >= 8 + 32 + 8,
-            VaultError::InvalidCreateBinding
-        );
-        let expiry_slot = u64::from_le_bytes(marker_data[8 + 32..8 + 32 + 8].try_into().unwrap());
-        drop(marker_data);
-        require!(clock.slot < expiry_slot, VaultError::InvalidCreateBinding);
-    }
-
-    {
-        let lock_a = ctx.accounts.note_lock_a.load()?;
-        let lock_b = ctx.accounts.note_lock_b.load()?;
-        require!(
-            lock_a.order_id == payload.order_id_a,
-            VaultError::NoteNotLockedForOrder
-        );
-        require!(
-            lock_b.order_id == payload.order_id_b,
-            VaultError::NoteNotLockedForOrder
-        );
-
-        // Phase-5 conservation law (with fees): the value escrowed under
-        // each NoteLock MUST equal trade_leg + change_leg + fee_leg. This
-        // check runs BEFORE any state mutation so a malicious TEE cannot
-        // settle an inconsistent payload.
-        //   buyer  (note_a is quote): lock_a.amount == quote_amount + buyer_change_amt + buyer_fee_amt
-        //   seller (note_b is base):  lock_b.amount == base_amount  + seller_change_amt + seller_fee_amt
-        let expected_a = payload
-            .quote_amount
-            .checked_add(payload.buyer_change_amt)
-            .and_then(|v| v.checked_add(payload.buyer_fee_amt))
-            .ok_or(error!(VaultError::ArithmeticOverflow))?;
-        require!(
-            lock_a.amount == expected_a,
-            VaultError::ConservationViolation
-        );
-        let expected_b = payload
-            .base_amount
-            .checked_add(payload.seller_change_amt)
-            .and_then(|v| v.checked_add(payload.seller_fee_amt))
-            .ok_or(error!(VaultError::ArithmeticOverflow))?;
-        require!(
-            lock_b.amount == expected_b,
-            VaultError::ConservationViolation
-        );
-
-        // A non-zero change amount MUST be accompanied by a non-zero
-        // commitment, and vice-versa — otherwise the TEE could steal funds
-        // by declaring change but never appending the leaf, or append a
-        // commitment out of thin air.
-        let has_e = payload.note_e_commitment != [0u8; 32];
-        let has_f = payload.note_f_commitment != [0u8; 32];
-        require!(
-            has_e == (payload.buyer_change_amt > 0),
-            VaultError::ChangeNoteInconsistent
-        );
-        require!(
-            has_f == (payload.seller_change_amt > 0),
-            VaultError::ChangeNoteInconsistent
-        );
-
-        // Re-lock requires a change note. You can't relock a note that
-        // doesn't exist — the TEE would be conjuring collateral from air.
-        if payload.buyer_relock_order_id != [0u8; 16] {
-            require!(has_e, VaultError::RelockRequiresChangeNote);
-        }
-        if payload.seller_relock_order_id != [0u8; 16] {
-            require!(has_f, VaultError::RelockRequiresChangeNote);
-        }
-    }
-
-    // Lock sanity — already enforced by the Accounts constraints (order_id match).
-    // Both lock PDAs are closed via `close = tee_authority` automatically.
-
-    // Mark consumed notes.
-    let ca = &mut ctx.accounts.consumed_a.load_init()?;
-    ca.note_commitment = payload.note_a_commitment;
-    ca.match_id = payload.match_id;
-    ca.consumed_slot = clock.slot;
-    ca.bump = ctx.bumps.consumed_a;
-    ca._padding = [0u8; 7];
-
-    let cb = &mut ctx.accounts.consumed_b.load_init()?;
-    cb.note_commitment = payload.note_b_commitment;
-    cb.match_id = payload.match_id;
-    cb.consumed_slot = clock.slot;
-    cb.bump = ctx.bumps.consumed_b;
-    cb._padding = [0u8; 7];
-
-    // Mark nullifiers spent.
-    let na = &mut ctx.accounts.nullifier_a_entry.load_init()?;
-    na.nullifier = payload.nullifier_a;
-    na.spent_slot = clock.slot;
-    na.bump = ctx.bumps.nullifier_a_entry;
-    na._padding = [0u8; 7];
-
-    let nb = &mut ctx.accounts.nullifier_b_entry.load_init()?;
-    nb.nullifier = payload.nullifier_b;
-    nb.spent_slot = clock.slot;
-    nb.bump = ctx.bumps.nullifier_b_entry;
-    nb._padding = [0u8; 7];
-
-    // Append output note commitments to Merkle tree. Order:
-    //   note_c (trade leg to buyer), note_d (trade leg to seller),
-    //   note_e (buyer change, if any), note_f (seller change, if any),
-    //   note_fee (batch fee note, if any).
-    // The `u64::MAX` sentinel means "no leaf was inserted for this slot".
-    let cfg = &mut ctx.accounts.vault_config.load_mut()?;
-    let leaf_c = cfg.leaf_count;
-    let _ = append_leaf(cfg, payload.note_c_commitment)?;
-    let leaf_d = cfg.leaf_count;
-    let mut new_root = append_leaf(cfg, payload.note_d_commitment)?;
-
-    let leaf_e = if payload.note_e_commitment != [0u8; 32] {
-        let idx = cfg.leaf_count;
-        new_root = append_leaf(cfg, payload.note_e_commitment)?;
-        idx
-    } else {
-        u64::MAX
-    };
-    let leaf_f = if payload.note_f_commitment != [0u8; 32] {
-        let idx = cfg.leaf_count;
-        new_root = append_leaf(cfg, payload.note_f_commitment)?;
-        idx
-    } else {
-        u64::MAX
-    };
-
-    // Phase-5: flush the per-batch protocol fee note, if any. Distinct
-    // from the change notes because it's owned by the protocol_owner —
-    // the same append machinery applies. Consistency check: caller must
-    // actually have set `protocol_owner_commitment` — else fee accrual
-    // was paused upstream and we should reject a supplied fee note.
-    let leaf_fee = if payload.note_fee_commitment != [0u8; 32] {
-        require!(
-            cfg.protocol_owner_commitment != [0u8; 32],
-            VaultError::ProtocolOwnerUnset
-        );
-        let idx = cfg.leaf_count;
-        new_root = append_leaf(cfg, payload.note_fee_commitment)?;
-        idx
-    } else {
-        u64::MAX
-    };
-
-    // Phase-5: atomic re-lock of change notes against continuing orders.
-    // Done LAST so a re-lock failure (e.g., insufficient lamports on
-    // `tee_authority`) rolls back every preceding state change.
-    if payload.buyer_relock_order_id != [0u8; 16] {
-        create_relock_pda(
-            &ctx.accounts.note_lock_e,
-            &ctx.accounts.tee_authority,
-            &ctx.accounts.system_program,
-            &payload.note_e_commitment,
-            &payload.buyer_relock_order_id,
-            payload.buyer_relock_expiry,
-            payload.buyer_change_amt,
-        )?;
-    }
-    if payload.seller_relock_order_id != [0u8; 16] {
-        create_relock_pda(
-            &ctx.accounts.note_lock_f,
-            &ctx.accounts.tee_authority,
-            &ctx.accounts.system_program,
-            &payload.note_f_commitment,
-            &payload.seller_relock_order_id,
-            payload.seller_relock_expiry,
-            payload.seller_change_amt,
-        )?;
-    }
-
-    // Close the ValidCreateMarker PDA, returning rent to tee_authority.
-    {
-        let marker_ai = ctx.accounts.valid_create_marker.to_account_info();
-        let tee_ai = ctx.accounts.tee_authority.to_account_info();
-        let lamports = marker_ai.lamports();
-        **marker_ai.try_borrow_mut_lamports()? -= lamports;
-        **tee_ai.try_borrow_mut_lamports()? += lamports;
-        marker_ai.try_borrow_mut_data()?.fill(0);
-    }
-
-    // v3.1: same close for the ValidPriceMarker PDA.
-    {
-        let marker_ai = ctx.accounts.valid_price_marker.to_account_info();
-        let tee_ai = ctx.accounts.tee_authority.to_account_info();
-        let lamports = marker_ai.lamports();
-        **marker_ai.try_borrow_mut_lamports()? -= lamports;
-        **tee_ai.try_borrow_mut_lamports()? += lamports;
-        marker_ai.try_borrow_mut_data()?.fill(0);
-    }
-
-    emit!(TradeSettled {
-        match_id: payload.match_id,
-        clearing_price: payload.clearing_price,
-        base_amount: payload.base_amount,
-        quote_amount: payload.quote_amount,
-        buyer_change_amt: payload.buyer_change_amt,
-        seller_change_amt: payload.seller_change_amt,
-        buyer_fee_amt: payload.buyer_fee_amt,
-        seller_fee_amt: payload.seller_fee_amt,
-        note_c_leaf: leaf_c,
-        note_d_leaf: leaf_d,
-        note_e_leaf: leaf_e,
-        note_f_leaf: leaf_f,
-        note_fee_leaf: leaf_fee,
-        buyer_relock_active: payload.buyer_relock_order_id != [0u8; 16],
-        seller_relock_active: payload.seller_relock_order_id != [0u8; 16],
-        new_root,
-    });
-    Ok(())
-}
+// ---------------------------------------------------------------------------
+// v3.1 per-match handler + its Accounts struct lived here. Deleted in
+// Phase 1c-hard (see `docs/v3.5-migration.md`). The on-chain settle
+// path is now `tee_forced_settle_batched` — one Groth16 covers the
+// whole batch via `verify_match_batch`, then a single ix consumes the
+// matched locks + appends leaves + re-locks change notes against a
+// Merkle inclusion proof rooted at the batched marker. See
+// `programs/vault/src/instructions/tee_forced_settle_batched.rs`.
+//
+// What stays in THIS file is the shared infrastructure the batched
+// handler depends on: `MatchResultPayload` + `canonical_payload_hash`
+// + `create_relock_pda` + `verify_tee_signature` + `TradeSettled`.
+// When this file shrinks further we can rename it
+// `settlement_shared.rs`.
+// ---------------------------------------------------------------------------
 
 /// Manually create a NoteLock PDA so the settlement tx can atomically
 /// re-lock a change note against the continuing order. The seeds MUST be
