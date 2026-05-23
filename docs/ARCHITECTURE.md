@@ -707,7 +707,7 @@ the hot-path ER tx that users hit.
 The on-chain Groth16 verifier is `groth16-solana` v0.2.0 (the alt_bn128
 syscall path). All four circuits use the same Powers-of-Tau ceremony
 file (`powersOfTau28_hez_final_16.ptau`, downloaded by
-`scripts/download-ptau.sh` — **NOT yet SHA-pinned**) and the same
+`scripts/download-ptau.sh` — pot16 + pot18 SHA-256-pinned since 2026-05-24) and the same
 deterministic dev contribution. Real Phase-2 MPC required before
 mainnet.
 
@@ -793,7 +793,9 @@ roughly by cryptographic impact remaining:
    *recoverable from the build script* (`echo "nyx-phase1-dev-contribution-$name"`
    passed as entropy). Real MPC with ≥ 3 independent contributors and
    publicly verifiable transcripts required before mainnet. Both PTAU
-   files (pot16 + pot18) are not yet SHA-pinned.
+   files (pot16 + pot18) are SHA-256-pinned in `scripts/download-ptau.sh`
+   since 2026-05-24 — but they're still the *public Hermez ceremony*,
+   not a project-specific MPC. Mainnet needs the latter.
 
    v3.5 batched zkeys are generated deterministically via
    `zkey beacon 0102…1f20 10` (10 contribution rounds with a fixed

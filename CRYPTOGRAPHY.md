@@ -2177,10 +2177,11 @@ Sorted roughly by cryptographic impact:
    toxic waste is therefore *recoverable from the build script*. This
    is fine for devnet but a hard mainnet blocker. Need a real MPC
    with ≥ 3 independent contributors and publicly verifiable
-   transcripts. Additionally, both PTAU files
-   (`powersOfTau28_hez_final_16.ptau` + `_18.ptau`) are downloaded
-   from Hermez without SHA-256 pinning — pin them to known hashes
-   before mainnet.
+   transcripts. The PTAU files
+   (`powersOfTau28_hez_final_16.ptau` + `_18.ptau`) ARE SHA-256-pinned
+   in `scripts/download-ptau.sh` since 2026-05-24; that closes the
+   supply-chain hole at download time but doesn't replace the
+   need for a project-specific phase-2 MPC at mainnet.
 
 3. **Real TEE attestation** — `vault_config.tee_pubkey` is just a software
    Ed25519 key. Production wants the key bound to attested enclave code
