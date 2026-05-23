@@ -20,6 +20,7 @@ Organisation:
 - §10 Devnet E2E — L1-only happy-path (setup + trade flow)
 - §11 Devnet E2E — ER (MagicBlock Ephemeral Rollup) cycle
 - §11A Devnet E2E — change-note + partial-fill scenarios
+- §11B v3.5 batched-validity toggle (`USE_BATCHED_PROOF`)
 - §12 Troubleshooting common failures
 
 ---
@@ -184,7 +185,7 @@ Expected counts (Phase 5 + ER wiring):
 | Layer                  | Count                               |
 |------------------------|-------------------------------------|
 | Rust workspace tests   | 82 total (27 crypto + merkle + ZK + Phase-4 + Phase-5 settle + set_protocol_config + reset_merkle_tree + submit_order + run_batch) |
-| TS SDK unit tests      | 75 passing / 12 skipped (devnet / ER gated) |
+| TS SDK unit tests      | 106 passing / 17 skipped (devnet / ER / change-note / PER auto-skip via `RUN_*` env gates; includes 11-test v3.5 `settle-builder-batched.test.ts` + the N=2/N=4/N=16 `match-batch-prototype.test.ts` sanity suite) |
 
 ---
 
@@ -381,6 +382,11 @@ Final assertion: Alice's BASE balance == 50, Bob's QUOTE == 5000.
 The partial-fill scenario is documented in the same file (second
 describe block) but gated on `RUN_DEVNET_PARTIAL_FILL=1`.
 
+> v3.5 settle path: prepend `USE_BATCHED_PROOF=1` to route the settle
+> through `verify_match_batch` + `tee_forced_settle_batched` instead of
+> the legacy per-match `verify_valid_create` + `verify_valid_price` +
+> `tee_forced_settle` triplet. See §11B.
+
 ---
 
 ## 11. Devnet E2E — ER (MagicBlock Ephemeral Rollup) cycle
@@ -436,6 +442,10 @@ RUN_ER_E2E=1 \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/er-trade-flow.test.ts )
 ```
+
+> v3.5 settle path: prepend `USE_BATCHED_PROOF=1` to route step 12 through
+> `verify_match_batch` + `tee_forced_settle_batched`. Steps 1–11 are
+> unchanged. See §11B.
 
 ### 11.3 The 13 steps, with cluster routing
 
@@ -535,6 +545,10 @@ RUN_CN_E2E=1 \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/change-note-flow.test.ts )
 ```
 
+> v3.5 settle path: prepend `USE_BATCHED_PROOF=1` to route every settle
+> (Tests A, B, E) through `verify_match_batch` +
+> `tee_forced_settle_batched`. See §11B.
+
 ### 11A.4 Run a single scenario
 
 Vitest matches by `it()` name with `-t`:
@@ -609,6 +623,112 @@ RUN_CN_E2E=1 \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/change-note-flow.test.ts -t "real protocol-owner fee withdrawal" )
+```
+
+---
+
+## 11B. v3.5 batched-validity toggle (`USE_BATCHED_PROOF`)
+
+v3.5 collapses the per-match `verify_valid_create` + `verify_valid_price`
++ `tee_forced_settle` triplet into one `verify_match_batch` Groth16
+(attesting VALID_CREATE + VALID_PRICE for the whole batch at once) plus
+one `tee_forced_settle_batched` per match. Setting `USE_BATCHED_PROOF=1`
+in any of the devnet test invocations routes the settle through that
+batched path instead of the legacy per-match flow. Default (unset)
+keeps the v3.1 flow so the legacy ixs continue to be gated.
+
+### 11B.1 What changes when the toggle is on
+
+| Phase             | Default (v3.1)                                          | `USE_BATCHED_PROOF=1` (v3.5)                                                |
+|-------------------|---------------------------------------------------------|------------------------------------------------------------------------------|
+| Pre-settle ix #1  | `verify_valid_create` (per match)                       | `verify_match_batch` (one Groth16 for the entire N=16-padded batch)         |
+| Pre-settle ix #2  | `verify_valid_price` (per match, writes marker PDA)     | (subsumed; batched verifier writes a single `BatchValidityMarker` PDA)      |
+| Per-batch ALT     | not needed                                              | created with 5 derived PDAs (lock_a/b/e/f + batch_marker) per settle        |
+| Settle ix         | `tee_forced_settle` (reads `ValidCreateMarker` + `ValidPriceMarker`) | `tee_forced_settle_batched` (reads `BatchValidityMarker` + walks 4-level Merkle inclusion path) |
+| Padding semantics | none                                                    | helper auto-pads to N=16 with dummy slots; the test still runs one real match |
+
+The settle tx grows by ~155 bytes for the Merkle proof + match_index;
+the per-batch ALT recovers that headroom by collapsing 5 derived PDAs
+into 1-byte ALT indices. Net result: settle tx ~1130 B (well under the
+1232 B cap).
+
+### 11B.2 Local runs — flip the toggle
+
+Trade-flow (L1 happy-path):
+
+```sh
+RUN_DEVNET_E2E=1 USE_BATCHED_PROOF=1 \
+  ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+  TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
+  ROOT_KEY_KEYPAIR=.devnet/keypairs/root_key.json \
+  FUNDER_KEYPAIR=~/.config/solana/id.json \
+  ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-trade-flow.test.ts )
+```
+
+Change-note (all 5 scenarios — A/B/C/D/E):
+
+```sh
+RUN_CN_E2E=1 USE_BATCHED_PROOF=1 \
+  ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+  TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
+  FUNDER_KEYPAIR=~/.config/solana/id.json \
+  ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/change-note-flow.test.ts )
+```
+
+ER trade flow:
+
+```sh
+RUN_ER_E2E=1 USE_BATCHED_PROOF=1 \
+  ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+  TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
+  FUNDER_KEYPAIR=~/.config/solana/id.json \
+  ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/er-trade-flow.test.ts )
+```
+
+Re-run `devnet-setup.test.ts` first if the shadow tree diverges from
+on-chain (§8.2 — same precondition as the default path).
+
+### 11B.3 CI gate — `/test-devnet --batched`
+
+The `.github/workflows/nightly-devnet.yml` workflow accepts a
+`--batched` flag on `/test-devnet` PR comments (and a matching
+`batched` toggle in the `workflow_dispatch` UI). When set, the
+workflow exports `USE_BATCHED_PROOF=1` for the entire devnet job.
+
+```text
+/test-devnet --batched                    # v3.5 only
+/test-devnet --batched --partial-fill     # v3.5 + partial-fill block
+/test-devnet --batched --skip-er          # v3.5, ER tests skipped
+```
+
+Cron + plain `/test-devnet` stay on the default v3.1 path so the
+legacy ixs continue to receive coverage during the soft-cutover
+window. Gate v3.5 explicitly by running `/test-devnet --batched`
+when reviewing a PR that touches the batched flow.
+
+### 11B.4 Builder-side unit tests (no devnet)
+
+`tests/settle-builder-batched.test.ts` mirrors
+`tests/settle-builder.test.ts` for the v3.5 builder
+(`buildSettleBatchedIx`). It runs on every PR via the `sdk` job in
+`pr-checks.yml` and covers:
+
+- Anchor account ordering (13 accounts, `batch_validity_marker` at
+  slot 11).
+- `tee_forced_settle_batched` discriminator on `ix.data[..8]`.
+- Total `ix.data` length = 8 + 448 + 1 + 128 = 585 bytes.
+- Merkle siblings encoded contiguously (Anchor `[[u8; 32]; 4]` — no
+  Borsh length prefix).
+- `match_index` byte placement + boundary validation `[0, 15]`.
+- `BatchValidityMarker` PDA derivation
+  (`[b"batch_validity", merkleRoot]`).
+- `note_lock_e / note_lock_f` collapse to the ZERO-commitment lock
+  on exact-fill, and to distinct locks on change-note variants.
+- Relock metadata round-trips through the Borsh payload region.
+
+```sh
+# Local run (pure TS, no RPC):
+( cd packages/sdk && ../../node_modules/.bin/vitest run tests/settle-builder-batched.test.ts )
 ```
 
 ---
