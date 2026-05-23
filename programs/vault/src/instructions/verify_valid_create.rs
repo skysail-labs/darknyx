@@ -1,3 +1,10 @@
+//! DEPRECATED v3.5: superseded by `verify_match_batch`, which inlines
+//! these same VALID_CREATE constraints into a single batched Groth16
+//! proof covering up to N=16 matches. Kept on-chain for backwards
+//! compatibility during the v3.5 confidence window; scheduled for
+//! removal in Phase 1c-hard. See `docs/v3.5-migration.md` for the
+//! retirement plan and migration timing.
+//!
 //! v3 — VALID_CREATE proof verification.
 //!
 //! The TEE (or any relayer) lands this ix BEFORE `tee_forced_settle`. It

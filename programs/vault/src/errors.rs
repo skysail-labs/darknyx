@@ -61,6 +61,14 @@ pub enum VaultError {
     InvalidPriceBinding,
     #[msg("VALID_PRICE marker has expired")]
     PriceMarkerExpired,
+    #[msg(
+        "Batched-validity Merkle inclusion failed: leaf does not walk up to the marker PDA's seed"
+    )]
+    InvalidBatchBinding,
+    #[msg("BatchValidityMarker has expired")]
+    BatchValidityMarkerExpired,
+    #[msg("BatchValidityMarker has not yet expired — only the original payer can close it before expiry")]
+    BatchValidityMarkerNotExpired,
 
     // ---- Arithmetic / overflow ----
     #[msg("Arithmetic overflow")]

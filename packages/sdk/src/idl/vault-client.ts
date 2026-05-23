@@ -25,7 +25,7 @@
 import { PublicKey, TransactionInstruction, SystemProgram } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 
-import { VAULT_CONFIG_SEED, WALLET_SEED, NULLIFIER_SEED, NOTE_LOCK_SEED, CONSUMED_NOTE_SEED, VAULT_TOKEN_SEED, OUTSTANDING_MINT_SEED, VALID_CREATE_MARKER_SEED, VALID_PRICE_MARKER_SEED } from "./seeds.js";
+import { VAULT_CONFIG_SEED, WALLET_SEED, NULLIFIER_SEED, NOTE_LOCK_SEED, CONSUMED_NOTE_SEED, VAULT_TOKEN_SEED, OUTSTANDING_MINT_SEED, VALID_CREATE_MARKER_SEED, VALID_PRICE_MARKER_SEED, BATCH_VALIDITY_MARKER_SEED } from "./seeds.js";
 
 /** On-chain portion of a Groth16 proof — the three curve points. */
 export interface Groth16OnChainProof {
@@ -161,6 +161,22 @@ export function validPriceMarkerPda(
     throw new Error("priceCommitment must be 32 bytes");
   return PublicKey.findProgramAddressSync(
     [VALID_PRICE_MARKER_SEED, priceCommitment],
+    programId,
+  );
+}
+
+/**
+ * v3.5 — BatchValidityMarker PDA. Seed is the Merkle root committed by
+ * the verify_match_batch proof's single public input. Created by
+ * `verify_match_batch` and consumed by `tee_forced_settle_batched`.
+ */
+export function batchValidityMarkerPda(
+  programId: PublicKey,
+  merkleRoot: Uint8Array,
+): [PublicKey, number] {
+  if (merkleRoot.length !== 32) throw new Error("merkleRoot must be 32 bytes");
+  return PublicKey.findProgramAddressSync(
+    [BATCH_VALIDITY_MARKER_SEED, merkleRoot],
     programId,
   );
 }
@@ -508,6 +524,13 @@ export interface BuildVerifyValidCreateParams {
   proof: Groth16OnChainProof;
 }
 
+/**
+ * @deprecated v3.5: superseded by `buildVerifyMatchBatchInstruction`,
+ * which writes ONE `BatchValidityMarker` covering up to N=16 matches
+ * instead of two per-match markers. Kept exported through the v3.5
+ * confidence window; scheduled for removal in Phase 1c-hard. See
+ * `docs/v3.5-migration.md`.
+ */
 export function buildVerifyValidCreateInstruction(
   p: BuildVerifyValidCreateParams,
 ): TransactionInstruction {
@@ -565,6 +588,10 @@ export interface BuildVerifyValidPriceParams {
   proof: Groth16OnChainProof;
 }
 
+/**
+ * @deprecated v3.5: superseded by `buildVerifyMatchBatchInstruction`.
+ * See `docs/v3.5-migration.md`.
+ */
 export function buildVerifyValidPriceInstruction(
   p: BuildVerifyValidPriceParams,
 ): TransactionInstruction {
@@ -577,6 +604,52 @@ export function buildVerifyValidPriceInstruction(
     anchorDiscriminator("verify_valid_price"),
     fixed32(p.priceCommitment),
     u64LE(p.batchSlot),
+    u64LE(p.expirySlot),
+    serializeProof(p.proof),
+  );
+
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.payer, isSigner: true, isWritable: true },
+      { pubkey: marker, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// v3.5 — verify_match_batch. Lands in its own tx before the N (≤ 16)
+// tee_forced_settle_batched txs in a batch. One Groth16 attesting both
+// VALID_CREATE + VALID_PRICE for every match in the batch; the proof's
+// single public input (a Merkle root over per-slot leaves) becomes the
+// BatchValidityMarker PDA's seed. The settle txs that follow each
+// supply a Merkle inclusion path against this marker.
+// ---------------------------------------------------------------------------
+
+export interface BuildVerifyMatchBatchParams {
+  programId: PublicKey;
+  /** Anyone can pay rent / submit the proof. Authorization is the proof itself. */
+  payer: PublicKey;
+  /** Merkle root over the N=16 per-slot leaves — the proof's one public input. */
+  merkleRoot: Uint8Array;
+  /** Slot past which the marker becomes claimable as stale. */
+  expirySlot: bigint;
+  proof: Groth16OnChainProof;
+}
+
+export function buildVerifyMatchBatchInstruction(
+  p: BuildVerifyMatchBatchParams,
+): TransactionInstruction {
+  if (p.merkleRoot.length !== 32) {
+    throw new Error("merkleRoot must be 32 bytes");
+  }
+  const [marker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
+
+  const data = cat(
+    anchorDiscriminator("verify_match_batch"),
+    fixed32(p.merkleRoot),
     u64LE(p.expirySlot),
     serializeProof(p.proof),
   );

@@ -36,6 +36,11 @@ export interface SendSettleV0Params {
   altPubkey: PublicKey;
   /** Compute-budget + ed25519 precompile + buildSettleIx, in that order. */
   instructions: TransactionInstruction[];
+  /** v3.5 — optional extra ALTs to stack on top of the primary one.
+   *  Useful for the batched settle path: the per-batch ALT holds the
+   *  derived note_lock_a/b/e/f + batch_validity_marker so the settle
+   *  tx fits under the 1232-byte cap. */
+  extraAltPubkeys?: PublicKey[];
 }
 
 export async function sendSettleV0(p: SendSettleV0Params): Promise<string> {
@@ -49,12 +54,23 @@ export async function sendSettleV0(p: SendSettleV0Params): Promise<string> {
     );
   }
 
+  const altAccounts = [lookup.value];
+  for (const extraPubkey of p.extraAltPubkeys ?? []) {
+    const extra = await p.connection.getAddressLookupTable(extraPubkey, {
+      commitment: "confirmed",
+    });
+    if (!extra.value) {
+      throw new Error(`extra ALT ${extraPubkey.toBase58()} not found`);
+    }
+    altAccounts.push(extra.value);
+  }
+
   const { blockhash } = await p.connection.getLatestBlockhash("confirmed");
   const messageV0 = new TransactionMessage({
     payerKey: p.signer.publicKey,
     recentBlockhash: blockhash,
     instructions: p.instructions,
-  }).compileToV0Message([lookup.value]);
+  }).compileToV0Message(altAccounts);
 
   const tx = new VersionedTransaction(messageV0);
   tx.sign([p.signer]);

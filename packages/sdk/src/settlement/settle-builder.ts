@@ -26,6 +26,7 @@ import {
 
 import {
   anchorDiscriminator,
+  batchValidityMarkerPda,
   consumedNotePda,
   noteLockPda,
   nullifierEntryPda,
@@ -295,6 +296,13 @@ export interface BuildSettleIxParams {
  *  11  valid_create_marker (mut — closed to tee_authority on success)
  *  12  system_program
  */
+/**
+ * @deprecated v3.5: superseded by `buildSettleBatchedIx`, which reads
+ * one `BatchValidityMarker` and a Merkle inclusion proof instead of
+ * two per-match markers. Both paths produce identical state
+ * transitions. Kept through the v3.5 confidence window; scheduled
+ * for removal in Phase 1c-hard. See `docs/v3.5-migration.md`.
+ */
 export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
   const [vaultConfig] = vaultConfigPda(p.programId);
   const [lockA] = noteLockPda(p.programId, p.payload.noteAcommitment);
@@ -356,6 +364,169 @@ export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
       { pubkey: createMarker, isSigner: false, isWritable: true },
       { pubkey: priceMarker, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// v3.5 — tee_forced_settle_batched
+// ---------------------------------------------------------------------------
+
+export interface BuildSettleBatchedIxParams {
+  programId: PublicKey;
+  /** TEE authority — signer, must equal vault_config.tee_pubkey. */
+  teeAuthority: PublicKey;
+  payload: MatchResultPayload;
+  /** Match's position in the batch (0..15). Bits select left/right at each
+   *  Merkle level (bit 0 = leaf-level direction, bit 3 = level-3). */
+  matchIndex: number;
+  /** Sibling hashes at each of the 4 levels (leaf-level → root-level pair). */
+  merkleProof: [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
+  /** Merkle root the batch committed to. Used to derive the
+   *  BatchValidityMarker PDA address; the on-chain handler re-derives the
+   *  same root from leaf + proof and asserts the PDA is at that address. */
+  merkleRoot: Uint8Array;
+}
+
+/**
+ * Build the `tee_forced_settle_batched` Anchor ix. The caller must also
+ * prepend a valid Ed25519Program precompile ix signing
+ * `canonicalPayloadHash(payload)` with `teeAuthority` for the on-chain
+ * verification to succeed.
+ *
+ * Accounts order MUST match `TeeForcedSettleBatched<'info>`:
+ *   0  tee_authority           (mut, signer)
+ *   1  vault_config            (mut)
+ *   2  note_lock_a             (mut, close)
+ *   3  note_lock_b             (mut, close)
+ *   4  consumed_a              (init)
+ *   5  consumed_b              (init)
+ *   6  nullifier_a_entry       (init)
+ *   7  nullifier_b_entry       (init)
+ *   8  note_lock_e             (mut — relock; dummy when no buyer change)
+ *   9  note_lock_f             (mut — relock; dummy when no seller change)
+ *  10  instructions_sysvar
+ *  11  batch_validity_marker   (mut — closed to tee_authority on success)
+ *  12  system_program
+ *
+ * Single batch marker replaces the per-match `valid_create_marker` +
+ * `valid_price_marker` of the v3.1 path.
+ */
+export function buildSettleBatchedIx(
+  p: BuildSettleBatchedIxParams,
+): TransactionInstruction {
+  if (p.matchIndex < 0 || p.matchIndex > 15) {
+    throw new Error(`buildSettleBatchedIx: matchIndex (${p.matchIndex}) out of range [0,15]`);
+  }
+  if (p.merkleProof.length !== 4) {
+    throw new Error("buildSettleBatchedIx: merkleProof must have exactly 4 siblings");
+  }
+  for (let i = 0; i < 4; i++) {
+    if (p.merkleProof[i].length !== 32) {
+      throw new Error(`buildSettleBatchedIx: merkleProof[${i}] must be 32 bytes`);
+    }
+  }
+  if (p.merkleRoot.length !== 32) {
+    throw new Error("buildSettleBatchedIx: merkleRoot must be 32 bytes");
+  }
+
+  const [vaultConfig] = vaultConfigPda(p.programId);
+  const [lockA] = noteLockPda(p.programId, p.payload.noteAcommitment);
+  const [lockB] = noteLockPda(p.programId, p.payload.noteBcommitment);
+  const [consumedA] = consumedNotePda(p.programId, p.payload.noteAcommitment);
+  const [consumedB] = consumedNotePda(p.programId, p.payload.noteBcommitment);
+  const [nullA] = nullifierEntryPda(p.programId, p.payload.nullifierA);
+  const [nullB] = nullifierEntryPda(p.programId, p.payload.nullifierB);
+  const [lockE] = noteLockPda(p.programId, p.payload.noteEcommitment);
+  const [lockF] = noteLockPda(p.programId, p.payload.noteFcommitment);
+  const [batchMarker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
+
+  // ix data = anchor disc + payload (Borsh) + match_index (u8) + 4 × 32 sibling bytes.
+  // Anchor's [[u8; 32]; 4] is encoded as 128 contiguous bytes (no length prefix).
+  const siblingsConcat = cat(...p.merkleProof);
+  const matchIndexByte = new Uint8Array([p.matchIndex & 0xff]);
+
+  const data = cat(
+    anchorDiscriminator("tee_forced_settle_batched"),
+    serializePayload(p.payload),
+    matchIndexByte,
+    siblingsConcat,
+  );
+
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.teeAuthority, isSigner: true, isWritable: true },
+      { pubkey: vaultConfig, isSigner: false, isWritable: true },
+      { pubkey: lockA, isSigner: false, isWritable: true },
+      { pubkey: lockB, isSigner: false, isWritable: true },
+      { pubkey: consumedA, isSigner: false, isWritable: true },
+      { pubkey: consumedB, isSigner: false, isWritable: true },
+      { pubkey: nullA, isSigner: false, isWritable: true },
+      { pubkey: nullB, isSigner: false, isWritable: true },
+      { pubkey: lockE, isSigner: false, isWritable: true },
+      { pubkey: lockF, isSigner: false, isWritable: true },
+      { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+      { pubkey: batchMarker, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// v3.5 — close_batch_validity_marker
+// ---------------------------------------------------------------------------
+
+export interface BuildCloseBatchValidityMarkerIxParams {
+  programId: PublicKey;
+  /** Caller. Either equals `marker.payer` (close-anytime) or any
+   *  signer if the marker has already passed `expiry_slot`. */
+  authority: PublicKey;
+  /** Refund target — MUST equal `marker.payer` recorded by
+   *  `verify_match_batch`. Anchor's `has_one = payer` check on the
+   *  marker enforces this. For the matcher's standard fast-path
+   *  (close immediately after the last settle in the batch), pass
+   *  the same key as `authority`. */
+  payer: PublicKey;
+  /** The batch's Merkle root — seeds the marker PDA. */
+  merkleRoot: Uint8Array;
+}
+
+/**
+ * Build the `close_batch_validity_marker` Anchor ix. Caller should
+ * land this once per batch, after the last `tee_forced_settle_batched`
+ * succeeds; the ix refunds the marker's rent (~49 bytes worth) to
+ * `marker.payer`.
+ *
+ * Accounts order MUST match `CloseBatchValidityMarker<'info>`:
+ *   0  authority   (signer)
+ *   1  payer       (mut — refund recipient; must equal marker.payer)
+ *   2  marker      (mut, close = payer)
+ */
+export function buildCloseBatchValidityMarkerIx(
+  p: BuildCloseBatchValidityMarkerIxParams,
+): TransactionInstruction {
+  if (p.merkleRoot.length !== 32) {
+    throw new Error(
+      "buildCloseBatchValidityMarkerIx: merkleRoot must be 32 bytes",
+    );
+  }
+  const [marker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
+
+  // Anchor ix data: 8-byte discriminator + 32-byte merkle_root arg.
+  const data = cat(
+    anchorDiscriminator("close_batch_validity_marker"),
+    p.merkleRoot,
+  );
+
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.authority, isSigner: true, isWritable: false },
+      { pubkey: p.payer, isSigner: false, isWritable: true },
+      { pubkey: marker, isSigner: false, isWritable: true },
     ],
     data: Buffer.from(data),
   });

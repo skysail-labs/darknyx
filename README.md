@@ -99,7 +99,7 @@ To run the live devnet ER trade flow, see
 | Document                                                       | Read it for…                                                |
 |----------------------------------------------------------------|-------------------------------------------------------------|
 | **[`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md)**                       | Cryptographic walkthrough — key model, four ZK circuits, lifecycle, settlement mechanics. **Start here if you care about the crypto.** |
-| **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**             | System overview — every component, PDA, flow, threat model  |
+| **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**             | System overview: every component, PDA, flow, threat model  |
 | **[`DeepWiki`](https://deepwiki.com/skysail-labs/darknyx)**    | Indexed, code-linked walkthrough of the repo                |
 | **[`scripts/dev-commands.md`](scripts/dev-commands.md)**       | Master command cheat-sheet — build, test, deploy, troubleshoot |
 | `tee_v2_status_and_migration_brief.md`                         | Snapshot of the v1 → v2 audit + migration plan              |

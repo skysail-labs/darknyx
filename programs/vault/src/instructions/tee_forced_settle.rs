@@ -1,3 +1,12 @@
+//! DEPRECATED v3.5: superseded by `tee_forced_settle_batched`, which
+//! reads ONE BatchValidityMarker (the upstream `verify_match_batch`
+//! writes it after attesting up to N=16 matches in one Groth16 proof)
+//! instead of the two per-match `ValidCreateMarker` + `ValidPriceMarker`
+//! this handler consumes. Both paths produce identical state
+//! transitions; the batched path is ~10x cheaper per match at scale.
+//! Kept on-chain through the v3.5 confidence window; scheduled for
+//! removal in Phase 1c-hard. See `docs/v3.5-migration.md`.
+//!
 //! TEE-forced atomic settlement.
 //!
 //! The TEE produces a signed `match_result` authorising:
@@ -530,7 +539,7 @@ pub fn tee_forced_settle_handler(
 /// `release_lock` will look up. Returns an error if the account is
 /// non-empty (a prior lock still exists for this commitment).
 #[allow(clippy::too_many_arguments)]
-fn create_relock_pda<'info>(
+pub(crate) fn create_relock_pda<'info>(
     note_lock_ai: &UncheckedAccount<'info>,
     payer: &Signer<'info>,
     system_program: &Program<'info, System>,

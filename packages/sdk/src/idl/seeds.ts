@@ -14,6 +14,7 @@ export const VAULT_TOKEN_SEED = enc("vault_token");
 export const OUTSTANDING_MINT_SEED = enc("outstanding_mint");
 export const VALID_CREATE_MARKER_SEED = enc("valid_create");
 export const VALID_PRICE_MARKER_SEED = enc("valid_price");
+export const BATCH_VALIDITY_MARKER_SEED = enc("batch_validity");
 
 export const DARK_CLOB_SEED = enc("dark_clob");
 export const MATCHING_CONFIG_SEED = enc("matching_config");

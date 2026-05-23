@@ -110,6 +110,9 @@ import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { proveValidCreate } from "./helpers/valid-create-prover.js";
 import { sendSettleV0 } from "./helpers/settle-v0.js";
 import { landVerifyValidPrice } from "./helpers/verify-valid-price.js";
+import { settleViaBatched } from "./helpers/batched-settle.js";
+import { type MatchSlotWitness } from "./helpers/match-batch-prover.js";
+
 import {
   be32ToBigInt,
   be32ToDec,
@@ -132,6 +135,14 @@ import type { E2EConfig } from "./devnet-setup.test.js";
 dotenvConfig({ path: resolve(__dirname, "../.env.devnet") });
 
 const RUN = process.env.RUN_ER_E2E === "1";
+
+/** v3.5 — set `USE_BATCHED_PROOF=1` in the env (or in `.env.devnet`)
+ *  to route the settle through `verify_match_batch` +
+ *  `tee_forced_settle_batched`. Default (unset) retains the v3.1
+ *  per-match `verify_valid_create` + `verify_valid_price` +
+ *  `tee_forced_settle` flow for parity / regression coverage.
+ *  Evaluated AFTER dotenvConfig so `.env.devnet` can drive the toggle. */
+const USE_BATCHED_PROOF = process.env.USE_BATCHED_PROOF === "1";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -834,6 +845,61 @@ maybeDescribe(
         );
         txline("lock_note(note_a) + lock_note(note_b)", lockSig);
 
+        if (USE_BATCHED_PROOF) {
+          // ── v3.5 batched path — exact-fill ER trade. One Groth16 attests
+          // VALID_CREATE + VALID_PRICE for the (padded) batch, then a
+          // single tee_forced_settle_batched lands the single real match.
+          if (!cfg.settleLookupTable) {
+            throw new Error("e2e-config.json missing settleLookupTable — rerun devnet-setup");
+          }
+          const ZERO_32 = new Uint8Array(32);
+          const realSlot: MatchSlotWitness = {
+            noteAcommitment: alice.depositNote!.commitment,
+            noteBcommitment: bob.depositNote!.commitment,
+            noteCcommitment,
+            noteDcommitment,
+            noteEcommitment: ZERO_32,
+            noteFcommitment: ZERO_32,
+            quoteMint: quoteMint.toBytes(),
+            baseMint: baseMint.toBytes(),
+            baseAmount: BASE_AMT,
+            quoteAmount: QUOTE_AMT,
+            buyerChangeAmt: 0n,
+            sellerChangeAmt: 0n,
+            buyerFeeAmt: BUYER_FEE,
+            sellerFeeAmt: SELLER_FEE,
+            batchSlot: payload.batchSlot,
+            aOwnerCommit: alice.ownerCommit,
+            bOwnerCommit: bob.ownerCommit,
+            aAmount: alice.depositNote!.amount,
+            bAmount: bob.depositNote!.amount,
+            aNonce: alice.depositNote!.nonce,
+            aBlinding: alice.depositNote!.blindingR,
+            bNonce: bob.depositNote!.nonce,
+            bBlinding: bob.depositNote!.blindingR,
+            cNonce: be32ToBigInt(noteCnonce),
+            cBlinding: be32ToBigInt(noteCblind),
+            dNonce: be32ToBigInt(noteDnonce),
+            dBlinding: be32ToBigInt(noteDblind),
+            eNonce: 0n,
+            eBlinding: 0n,
+            fNonce: 0n,
+            fBlinding: 0n,
+            clearingPrice: QUOTE_AMT / BASE_AMT,
+          };
+          await settleViaBatched({
+            connection: l1,
+            vaultProgramId,
+            teeKeypair,
+            realSlot,
+            payload,
+            teeSig,
+            canonicalHash: msg,
+            settleLookupTable: new PublicKey(cfg.settleLookupTable),
+            repoRoot: REPO_ROOT,
+            onTx: txline,
+          });
+        } else {
         // v3: VALID_CREATE proof must land before settle.
         const ZERO_32 = new Uint8Array(32);
         const vcArgs = {
@@ -943,6 +1009,7 @@ maybeDescribe(
           ],
         });
         txline("Ed25519 + tee_forced_settle (v0)", settleSig);
+        }
 
         await tree.append(noteCcommitment);
         alice.tradeNote = {
