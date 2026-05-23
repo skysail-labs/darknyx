@@ -264,12 +264,64 @@ connectivity).
       stays under 1232 B including the worst-case change-note variant
 - [ ] If a PDA / seed was added: SDK `seeds.ts` + `*Pda()` helpers
       mirror it (§7.3)
+- [ ] **If ANY file was deleted (Rust test, circuit, vault ix, SDK
+      module): grep for stale references in `.github/workflows/` and
+      `scripts/` BEFORE pushing.** See [§2.7](#27-deletion-checklist--things-the-workspace-gate-doesnt-catch).
 - [ ] If new files reference cross-doc paths: `find` / read-check
       every referenced path exists
 - [ ] Commit signed with `git commit -s` and amended with the
       `Co-Authored-By` trailer (§11)
 - [ ] If anything load-bearing changed: gated through
       `/test-devnet --batched` on the PR before merge (§3.7)
+
+### 2.7 Deletion checklist — things the workspace gate doesn't catch
+
+**The single most-likely-to-burn-CI mistake in this repo is deleting
+a file and not noticing that something OUTSIDE the cargo/npm file
+tree still references it by name.**
+
+`cargo test --workspace` (in §2.6) auto-discovers tests from the
+filesystem. It runs whatever exists; it does NOT error on "missing
+test target." But `cargo test --test <name>` (which CI uses to
+control which tests run per job) errors hard with
+`error: no test target named '<name>'`. Same for circom — the local
+`scripts/build-circuits.sh` and the CI `scripts/ci-build-circuits.sh`
+have their own hard-coded circuit lists. Same for the GitHub
+workflow YAMLs that hard-code job-specific test selections.
+
+Whenever you delete a file under `programs/*/tests/`, `circuits/`,
+`packages/sdk/tests/helpers/`, or `programs/vault/src/instructions/`,
+run this BEFORE pushing:
+
+```sh
+# Replace <name> with the deleted file's basename, e.g.
+# zk_price_roundtrip, valid_create, verify_valid_create.
+NAME=<name>
+grep -nE "$NAME" \
+    .github/workflows/*.yml \
+    .github/workflows/*.yaml \
+    scripts/*.sh \
+    scripts/*.md \
+    || echo "no stale references in CI / scripts"
+```
+
+If anything matches, the workflow / script needs updating in the
+SAME commit as the deletion. Two real incidents:
+
+* CI Failure #1 (after the Phase 1c-hard commit):
+  `scripts/ci-build-circuits.sh` still listed `build_wasm valid_create`
+  + `build_wasm valid_price`. `cargo test --workspace` didn't catch
+  it because the script lives outside cargo's purview. Fix lived in
+  a separate follow-up commit; could have been folded into the
+  deletion commit.
+* CI Failure #2 (right after):
+  `pr-checks.yml`'s `vault-zk` job ran
+  `cargo test -p vault --test zk_price_roundtrip` after that test
+  file was deleted. Cargo errors with `no test target named …`. Same
+  root cause: the workflow YAML wasn't on the deletion radar.
+
+The §2.6 pre-PR gate is necessary but not sufficient. **A deletion
+without a CI-reference audit is one CI run away from breaking.**
 
 ---
 
@@ -719,6 +771,8 @@ spells out the rule. Don't remove it.
 | You did | Failure surface | Fix |
 |---|---|---|
 | Committed without running `cargo fmt` | pr-checks `rust` job fails immediately at `cargo fmt --all -- --check` | Run `cargo fmt --all` locally, commit the diff. See [§2.6 pre-PR checklist](#26-the-everything-green-pre-pr-checklist-no-devnet-needed) — this is exactly what that gate exists to catch |
+| Deleted a Rust test file (`programs/*/tests/<name>.rs`) | pr-checks fails at `cargo test -p <crate> --test <name>` with `error: no test target named '<name>'`. Local `cargo test --workspace` did NOT catch this. | Grep the workflow YAMLs for the deleted basename + remove the `--test <name>` line in the same commit. See [§2.7](#27-deletion-checklist--things-the-workspace-gate-doesnt-catch) |
+| Deleted a circom circuit | pr-checks `circuits` job fails at `scripts/ci-build-circuits.sh` with `Input file does not exist: …/circuit.circom`. Local `cargo test` / `vitest run` did NOT catch this because the script lives outside cargo/npm. | Update BOTH `scripts/build-circuits.sh` (local dev) AND `scripts/ci-build-circuits.sh` (CI, wasm-only) — they have separate hard-coded circuit lists. See [§2.7](#27-deletion-checklist--things-the-workspace-gate-doesnt-catch) |
 | Changed a Poseidon arity / domain tag in Rust only | Parity test fails (`poseidon-parity.test.ts`) | Mirror the change in `packages/sdk/src/zk/poseidon.ts` |
 | Changed a Poseidon arity / domain tag in TS only | Devnet flow fails with `InvalidProof` or `InvalidBatchBinding` | Mirror the change in `crates/darkpool-crypto/src/poseidon.rs` AND in any on-chain handler that hashes these inputs |
 | Changed a circom circuit | Devnet flow fails with `InvalidProof (6000)` | Re-run `bash scripts/build-circuits.sh`; commit the regenerated `.zkey` + `vk_*.rs` in the same commit; redeploy |
