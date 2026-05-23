@@ -296,6 +296,13 @@ export interface BuildSettleIxParams {
  *  11  valid_create_marker (mut — closed to tee_authority on success)
  *  12  system_program
  */
+/**
+ * @deprecated v3.5: superseded by `buildSettleBatchedIx`, which reads
+ * one `BatchValidityMarker` and a Merkle inclusion proof instead of
+ * two per-match markers. Both paths produce identical state
+ * transitions. Kept through the v3.5 confidence window; scheduled
+ * for removal in Phase 1c-hard. See `docs/v3.5-migration.md`.
+ */
 export function buildSettleIx(p: BuildSettleIxParams): TransactionInstruction {
   const [vaultConfig] = vaultConfigPda(p.programId);
   const [lockA] = noteLockPda(p.programId, p.payload.noteAcommitment);

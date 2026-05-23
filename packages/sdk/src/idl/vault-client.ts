@@ -524,6 +524,13 @@ export interface BuildVerifyValidCreateParams {
   proof: Groth16OnChainProof;
 }
 
+/**
+ * @deprecated v3.5: superseded by `buildVerifyMatchBatchInstruction`,
+ * which writes ONE `BatchValidityMarker` covering up to N=16 matches
+ * instead of two per-match markers. Kept exported through the v3.5
+ * confidence window; scheduled for removal in Phase 1c-hard. See
+ * `docs/v3.5-migration.md`.
+ */
 export function buildVerifyValidCreateInstruction(
   p: BuildVerifyValidCreateParams,
 ): TransactionInstruction {
@@ -581,6 +588,10 @@ export interface BuildVerifyValidPriceParams {
   proof: Groth16OnChainProof;
 }
 
+/**
+ * @deprecated v3.5: superseded by `buildVerifyMatchBatchInstruction`.
+ * See `docs/v3.5-migration.md`.
+ */
 export function buildVerifyValidPriceInstruction(
   p: BuildVerifyValidPriceParams,
 ): TransactionInstruction {
