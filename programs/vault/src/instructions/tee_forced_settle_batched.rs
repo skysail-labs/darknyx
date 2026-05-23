@@ -277,8 +277,16 @@ pub struct TeeForcedSettleBatched<'info> {
     /// Marker must already exist (written by an upstream
     /// `verify_match_batch` ix) and be unexpired.
     ///
-    /// CHECK: Validated via the binding check in the handler. Closed
-    /// to `tee_authority` on success.
+    /// One marker covers ALL matches in the batch (it's keyed by the
+    /// batch's Merkle root, which is identical across every match
+    /// position), so this handler does NOT close it — closing here
+    /// would brick every subsequent match in the same batch. The
+    /// marker is left open and may be reclaimed by a follow-up
+    /// cleanup ix once the batch is fully settled.
+    ///
+    /// CHECK: Validated via the binding check in the handler (PDA
+    /// address recomputed from `[SEED, merkle_root]`; existence +
+    /// expiry asserted before any state mutation).
     #[account(mut)]
     pub batch_validity_marker: UncheckedAccount<'info>,
 
@@ -503,16 +511,15 @@ pub fn tee_forced_settle_batched_handler(
         )?;
     }
 
-    // Close the BatchValidityMarker PDA — single marker now, where the
-    // per-match flow closed two.
-    {
-        let marker_ai = ctx.accounts.batch_validity_marker.to_account_info();
-        let tee_ai = ctx.accounts.tee_authority.to_account_info();
-        let lamports = marker_ai.lamports();
-        **marker_ai.try_borrow_mut_lamports()? -= lamports;
-        **tee_ai.try_borrow_mut_lamports()? += lamports;
-        marker_ai.try_borrow_mut_data()?.fill(0);
-    }
+    // DO NOT close `batch_validity_marker` here. It's a single PDA
+    // keyed by the batch's Merkle root and shared across every match
+    // in the batch — closing it after match 0 would brick matches
+    // 1..N-1 because the existence check at the top of the handler
+    // would see `lamports() == 0`. The marker carries an
+    // `expiry_slot` so an unclosed-but-expired marker can't be
+    // reused; the small rent (~49 bytes) is reclaimable by a future
+    // `close_batch_validity_marker` admin/cleanup ix once the
+    // matcher knows the batch is fully settled.
 
     emit!(TradeSettled {
         match_id: payload.match_id,
