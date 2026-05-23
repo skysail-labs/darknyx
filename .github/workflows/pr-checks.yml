@@ -598,6 +598,7 @@ jobs:
             --test settle \
             --test run_batch \
             --test submit_order \
+            --test tee_forced_settle_batched \
             -- --nocapture
 
   # ------------------------------------------------------------------

@@ -475,6 +475,63 @@ export function buildSettleBatchedIx(
   });
 }
 
+// ---------------------------------------------------------------------------
+// v3.5 — close_batch_validity_marker
+// ---------------------------------------------------------------------------
+
+export interface BuildCloseBatchValidityMarkerIxParams {
+  programId: PublicKey;
+  /** Caller. Either equals `marker.payer` (close-anytime) or any
+   *  signer if the marker has already passed `expiry_slot`. */
+  authority: PublicKey;
+  /** Refund target — MUST equal `marker.payer` recorded by
+   *  `verify_match_batch`. Anchor's `has_one = payer` check on the
+   *  marker enforces this. For the matcher's standard fast-path
+   *  (close immediately after the last settle in the batch), pass
+   *  the same key as `authority`. */
+  payer: PublicKey;
+  /** The batch's Merkle root — seeds the marker PDA. */
+  merkleRoot: Uint8Array;
+}
+
+/**
+ * Build the `close_batch_validity_marker` Anchor ix. Caller should
+ * land this once per batch, after the last `tee_forced_settle_batched`
+ * succeeds; the ix refunds the marker's rent (~49 bytes worth) to
+ * `marker.payer`.
+ *
+ * Accounts order MUST match `CloseBatchValidityMarker<'info>`:
+ *   0  authority   (signer)
+ *   1  payer       (mut — refund recipient; must equal marker.payer)
+ *   2  marker      (mut, close = payer)
+ */
+export function buildCloseBatchValidityMarkerIx(
+  p: BuildCloseBatchValidityMarkerIxParams,
+): TransactionInstruction {
+  if (p.merkleRoot.length !== 32) {
+    throw new Error(
+      "buildCloseBatchValidityMarkerIx: merkleRoot must be 32 bytes",
+    );
+  }
+  const [marker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
+
+  // Anchor ix data: 8-byte discriminator + 32-byte merkle_root arg.
+  const data = cat(
+    anchorDiscriminator("close_batch_validity_marker"),
+    p.merkleRoot,
+  );
+
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.authority, isSigner: true, isWritable: false },
+      { pubkey: p.payer, isSigner: false, isWritable: true },
+      { pubkey: marker, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
 /**
  * Recompute the canonical VALID_CREATE binding hash. Must match
  * `valid_create_binding_hash` in `programs/vault/src/instructions/verify_valid_create.rs`.

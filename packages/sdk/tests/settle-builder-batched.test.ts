@@ -39,6 +39,7 @@ import {
 import {
   RELOCK_ORDER_ID_NONE,
   ZERO_COMMITMENT,
+  buildCloseBatchValidityMarkerIx,
   buildSettleBatchedIx,
   exactFillPayload,
   serializePayload,
@@ -341,6 +342,91 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(() =>
       buildSettleBatchedIx({ ...base, merkleRoot: filled(33, 0xF0) }),
     ).toThrow(/merkleRoot.*32 bytes/);
+  });
+
+  it("[close_marker_accounts_layout] account ordering: authority, payer, marker", () => {
+    const tee = Keypair.generate();
+    const merkleRoot = filled(32, 0x55);
+    const ix = buildCloseBatchValidityMarkerIx({
+      programId: PROGRAM_ID,
+      authority: tee.publicKey,
+      payer: tee.publicKey,
+      merkleRoot,
+    });
+    expect(ix.programId.toBase58()).toBe(PROGRAM_ID.toBase58());
+    expect(ix.keys.length).toBe(3);
+
+    // 0: authority — signer, non-writable (no rent flows here).
+    expect(ix.keys[0].pubkey.toBase58()).toBe(tee.publicKey.toBase58());
+    expect(ix.keys[0].isSigner).toBe(true);
+    expect(ix.keys[0].isWritable).toBe(false);
+
+    // 1: payer — refund recipient (mut). Marker's `has_one = payer`
+    // enforces `payer == marker.payer`.
+    expect(ix.keys[1].pubkey.toBase58()).toBe(tee.publicKey.toBase58());
+    expect(ix.keys[1].isSigner).toBe(false);
+    expect(ix.keys[1].isWritable).toBe(true);
+
+    // 2: marker PDA, derived from [b"batch_validity", merkleRoot].
+    const [expectedMarker] = batchValidityMarkerPda(PROGRAM_ID, merkleRoot);
+    expect(ix.keys[2].pubkey.toBase58()).toBe(expectedMarker.toBase58());
+    expect(ix.keys[2].isWritable).toBe(true);
+  });
+
+  it("[close_marker_discriminator_and_data_size] disc + 32-byte merkle_root arg", () => {
+    const tee = Keypair.generate();
+    const merkleRoot = filled(32, 0xAB);
+    const ix = buildCloseBatchValidityMarkerIx({
+      programId: PROGRAM_ID,
+      authority: tee.publicKey,
+      payer: tee.publicKey,
+      merkleRoot,
+    });
+    const expectedDisc = new Uint8Array(
+      createHash("sha256")
+        .update("global:close_batch_validity_marker")
+        .digest(),
+    ).slice(0, 8);
+    expect(new Uint8Array(ix.data).slice(0, 8)).toEqual(expectedDisc);
+    // disc (8) + merkle_root (32) = 40 bytes total.
+    expect(ix.data.length).toBe(40);
+    expect(new Uint8Array(ix.data).slice(8, 40)).toEqual(merkleRoot);
+  });
+
+  it("[close_marker_root_validation] rejects merkleRoot of wrong length", () => {
+    const tee = Keypair.generate();
+    const base = {
+      programId: PROGRAM_ID,
+      authority: tee.publicKey,
+      payer: tee.publicKey,
+    };
+    expect(() =>
+      buildCloseBatchValidityMarkerIx({ ...base, merkleRoot: filled(31, 0xAB) }),
+    ).toThrow(/merkleRoot.*32 bytes/);
+    expect(() =>
+      buildCloseBatchValidityMarkerIx({ ...base, merkleRoot: filled(33, 0xAB) }),
+    ).toThrow(/merkleRoot.*32 bytes/);
+  });
+
+  it("[close_marker_authority_distinct_from_payer] expiry-GC path: third-party authority sweeps to payer", () => {
+    // When the matcher's marker has expired without being closed, any
+    // signer may sweep the rent — but the refund still flows to
+    // `marker.payer` (enforced via Anchor `has_one`). The builder
+    // simply lays out the accounts; the on-chain handler checks
+    // `clock.slot > marker.expiry_slot` when authority != payer.
+    const payer = Keypair.generate();
+    const sweeper = Keypair.generate();
+    const merkleRoot = filled(32, 0x99);
+    const ix = buildCloseBatchValidityMarkerIx({
+      programId: PROGRAM_ID,
+      authority: sweeper.publicKey,
+      payer: payer.publicKey,
+      merkleRoot,
+    });
+    expect(ix.keys[0].pubkey.toBase58()).toBe(sweeper.publicKey.toBase58());
+    expect(ix.keys[0].isSigner).toBe(true);
+    expect(ix.keys[1].pubkey.toBase58()).toBe(payer.publicKey.toBase58());
+    expect(ix.keys[1].isWritable).toBe(true);
   });
 
   it("[settle_batched_payload_relock_passthrough] relock fields survive the Borsh serialisation", () => {

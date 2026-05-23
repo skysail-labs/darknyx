@@ -87,6 +87,7 @@ cargo test -p vault --test set_protocol_config
 cargo test -p vault --test reset_merkle_tree
 cargo test -p matching_engine --test submit_order
 cargo test -p matching_engine --test run_batch
+cargo test -p matching_engine --test tee_forced_settle_batched  # v3.5 multi-match + marker close
 
 # Single test name (substring)
 cargo test -p vault canonical_payload_hash_fixed_vector
@@ -185,7 +186,7 @@ Expected counts (Phase 5 + ER wiring):
 | Layer                  | Count                               |
 |------------------------|-------------------------------------|
 | Rust workspace tests   | 82 total (27 crypto + merkle + ZK + Phase-4 + Phase-5 settle + set_protocol_config + reset_merkle_tree + submit_order + run_batch) |
-| TS SDK unit tests      | 106 passing / 17 skipped (devnet / ER / change-note / PER auto-skip via `RUN_*` env gates; includes 11-test v3.5 `settle-builder-batched.test.ts` + the N=2/N=4/N=16 `match-batch-prototype.test.ts` sanity suite) |
+| TS SDK unit tests      | 110 passing / 17 skipped (devnet / ER / change-note / PER auto-skip via `RUN_*` env gates; includes 15-test v3.5 `settle-builder-batched.test.ts` covering both `buildSettleBatchedIx` and `buildCloseBatchValidityMarkerIx`, plus the N=2/N=4/N=16 `match-batch-prototype.test.ts` sanity suite) |
 
 ---
 
@@ -644,13 +645,27 @@ keeps the v3.1 flow so the legacy ixs continue to be gated.
 | Pre-settle ix #1  | `verify_valid_create` (per match)                       | `verify_match_batch` (one Groth16 for the entire N=16-padded batch)         |
 | Pre-settle ix #2  | `verify_valid_price` (per match, writes marker PDA)     | (subsumed; batched verifier writes a single `BatchValidityMarker` PDA)      |
 | Per-batch ALT     | not needed                                              | created with 5 derived PDAs (lock_a/b/e/f + batch_marker) per settle        |
-| Settle ix         | `tee_forced_settle` (reads `ValidCreateMarker` + `ValidPriceMarker`) | `tee_forced_settle_batched` (reads `BatchValidityMarker` + walks 4-level Merkle inclusion path) |
+| Settle ix         | `tee_forced_settle` (reads `ValidCreateMarker` + `ValidPriceMarker`; closes both) | `tee_forced_settle_batched` (reads `BatchValidityMarker` + walks 4-level Merkle inclusion path; does NOT close the marker — see below) |
+| Marker cleanup    | per-match (one-shot in `tee_forced_settle`)             | once-per-batch via `close_batch_validity_marker` (matcher's fast-path) or expiry-GC by anyone after `marker.expiry_slot` |
 | Padding semantics | none                                                    | helper auto-pads to N=16 with dummy slots; the test still runs one real match |
 
 The settle tx grows by ~155 bytes for the Merkle proof + match_index;
 the per-batch ALT recovers that headroom by collapsing 5 derived PDAs
 into 1-byte ALT indices. Net result: settle tx ~1130 B (well under the
 1232 B cap).
+
+**Marker lifecycle (v3.5).** One `BatchValidityMarker` PDA covers all
+matches in a batch (it's keyed by the batch's Merkle root, which is
+identical across every match position). `tee_forced_settle_batched`
+deliberately does NOT close the marker — closing after match 0 would
+brick matches 1..N-1. After the last settle the matcher lands one
+`close_batch_validity_marker` ix to reclaim the ~49-byte rent.
+Post-expiry the marker becomes garbage-collectable by anyone; rent
+still flows back to `marker.payer` (enforced by the on-chain
+`has_one = payer` constraint). The
+`tests/helpers/batched-settle.ts::settleViaBatched` helper always
+closes immediately after the single test settle, since every test
+scenario is 1-real-match-per-batch.
 
 ### 11B.2 Local runs — flip the toggle
 
@@ -726,10 +741,40 @@ when reviewing a PR that touches the batched flow.
   on exact-fill, and to distinct locks on change-note variants.
 - Relock metadata round-trips through the Borsh payload region.
 
+Also includes 4 unit tests for `buildCloseBatchValidityMarkerIx`:
+account ordering (`authority, payer, marker`), discriminator,
+40-byte data shape (`disc + merkle_root`), `merkleRoot` length
+validation, and the expiry-GC path account layout
+(`authority != payer`).
+
 ```sh
 # Local run (pure TS, no RPC):
 ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/settle-builder-batched.test.ts )
 ```
+
+### 11B.5 On-chain regression test (litesvm, no devnet)
+
+`programs/matching_engine/tests/tee_forced_settle_batched.rs` covers
+the marker-lifecycle invariants that the devnet flows can't reach
+(every TS-side flow lands exactly one real match per batch):
+
+- `test_two_matches_share_one_marker` — seats two real matches at
+  slots 0 and 1, both settling against the SAME marker. Catches the
+  v3.1→v3.5 "close marker after every match" regression: pre-fix
+  this trips `BatchValidityMarkerExpired` at the second settle.
+- `test_close_marker_by_payer_refunds_rent` — `close_batch_validity_marker`
+  by the marker's payer wipes the PDA and refunds its rent.
+- `test_close_marker_by_third_party_pre_expiry_rejects` — only
+  `payer` may close before expiry; anyone else must wait until
+  `clock.slot > marker.expiry_slot`.
+
+```sh
+# Requires built BPF binaries (cargo build-sbf for vault + matching_engine).
+cargo test -p matching_engine --test tee_forced_settle_batched
+```
+
+Gated in CI via the `matching-engine-litesvm` job in
+`pr-checks.yml`.
 
 ---
 

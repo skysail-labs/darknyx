@@ -67,6 +67,8 @@ pub enum VaultError {
     InvalidBatchBinding,
     #[msg("BatchValidityMarker has expired")]
     BatchValidityMarkerExpired,
+    #[msg("BatchValidityMarker has not yet expired — only the original payer can close it before expiry")]
+    BatchValidityMarkerNotExpired,
 
     // ---- Arithmetic / overflow ----
     #[msg("Arithmetic overflow")]

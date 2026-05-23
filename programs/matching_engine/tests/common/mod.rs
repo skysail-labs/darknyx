@@ -1434,3 +1434,262 @@ pub fn build_settle_tx(h: &Harness, payload: &MatchResultPayload) -> Transaction
         h.svm.latest_blockhash(),
     )
 }
+
+// ---------------------------------------------------------------------------
+// v3.5 — batched-validity marker scaffolding
+// ---------------------------------------------------------------------------
+
+/// Mirrors `vault::state::BatchValidityMarker::SEED`.
+pub const BATCH_VALIDITY_MARKER_SEED: &[u8] = b"batch_validity";
+
+/// Domain tag used by the on-chain `walk_merkle_path_n16` when hashing
+/// inner Merkle nodes. Must match `DOMAIN_BATCH_ROOT` (= 22) in
+/// `tee_forced_settle_batched.rs`.
+const DOMAIN_BATCH_ROOT: u64 = 22;
+
+pub fn batch_validity_marker_pda(h: &Harness, merkle_root: &[u8; 32]) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[BATCH_VALIDITY_MARKER_SEED, merkle_root.as_ref()], &h.vault_id)
+}
+
+/// Pre-seed a `BatchValidityMarker` PDA so `tee_forced_settle_batched`
+/// finds one at the merkle-root-derived address. Same pattern as
+/// `seed_valid_create_marker` — bypasses `verify_match_batch`'s Groth16
+/// check so settle-handler behaviour can be tested without proof
+/// orchestration.
+///
+/// Layout (matches `vault::state::BatchValidityMarker`):
+///   8 disc + 32 payer + 8 expiry_slot + 1 bump = 49 bytes
+pub fn seed_batch_validity_marker(h: &mut Harness, merkle_root: &[u8; 32], expiry_slot: u64) {
+    use solana_account::Account as SolAccount;
+
+    let (pda, bump) = batch_validity_marker_pda(h, merkle_root);
+    let mut data = vec![0u8; 49];
+    data[0..8].copy_from_slice(&anchor_acct_disc("BatchValidityMarker"));
+    data[8..40].copy_from_slice(&h.tee.pubkey().to_bytes());
+    data[40..48].copy_from_slice(&expiry_slot.to_le_bytes());
+    data[48] = bump;
+
+    let acct = SolAccount {
+        lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
+        data,
+        owner: h.vault_id,
+        executable: false,
+        rent_epoch: 0,
+    };
+    h.svm.set_account(pda, acct).unwrap();
+}
+
+/// Whether the marker PDA still has any data — used to assert that
+/// `close_batch_validity_marker` actually wiped it.
+pub fn batch_validity_marker_exists(h: &Harness, merkle_root: &[u8; 32]) -> bool {
+    let (pda, _) = batch_validity_marker_pda(h, merkle_root);
+    match h.svm.get_account(&pda) {
+        Some(a) => !a.data.is_empty() && a.lamports > 0,
+        None => false,
+    }
+}
+
+/// Bridge from the test-side payload (its own BorshSerialize struct
+/// purely so we can drive Anchor without depending on the on-chain
+/// type's serde quirks) into the on-chain
+/// `vault::instructions::MatchResultPayload`. Field-by-field copy;
+/// the two structs are byte-identical Borsh shapes.
+fn to_onchain_payload(
+    p: &MatchResultPayload,
+) -> vault::instructions::tee_forced_settle::MatchResultPayload {
+    use vault::instructions::tee_forced_settle::MatchResultPayload as OnP;
+    OnP {
+        match_id: p.match_id,
+        note_a_commitment: p.note_a_commitment,
+        note_b_commitment: p.note_b_commitment,
+        note_c_commitment: p.note_c_commitment,
+        note_d_commitment: p.note_d_commitment,
+        note_e_commitment: p.note_e_commitment,
+        note_f_commitment: p.note_f_commitment,
+        nullifier_a: p.nullifier_a,
+        nullifier_b: p.nullifier_b,
+        order_id_a: p.order_id_a,
+        order_id_b: p.order_id_b,
+        base_amount: p.base_amount,
+        quote_amount: p.quote_amount,
+        buyer_change_amt: p.buyer_change_amt,
+        seller_change_amt: p.seller_change_amt,
+        buyer_fee_amt: p.buyer_fee_amt,
+        seller_fee_amt: p.seller_fee_amt,
+        note_fee_commitment: p.note_fee_commitment,
+        buyer_relock_order_id: p.buyer_relock_order_id,
+        buyer_relock_expiry: p.buyer_relock_expiry,
+        seller_relock_order_id: p.seller_relock_order_id,
+        seller_relock_expiry: p.seller_relock_expiry,
+        clearing_price: p.clearing_price,
+        batch_slot: p.batch_slot,
+    }
+}
+
+/// Recompute the per-slot Merkle leaf the on-chain handler expects.
+/// Wraps `vault::instructions::tee_forced_settle_batched::compute_match_leaf`
+/// (exposed for this exact purpose) so the leaf can never drift from
+/// the on-chain implementation.
+pub fn compute_match_leaf_for(
+    payload: &MatchResultPayload,
+    quote_mint: &Pubkey,
+    base_mint: &Pubkey,
+) -> [u8; 32] {
+    use anchor_lang::prelude::Pubkey as AnchorPubkey;
+    let qm = AnchorPubkey::new_from_array(quote_mint.to_bytes());
+    let bm = AnchorPubkey::new_from_array(base_mint.to_bytes());
+    vault::instructions::tee_forced_settle_batched::compute_match_leaf(
+        &to_onchain_payload(payload),
+        &qm,
+        &bm,
+    )
+    .expect("compute_match_leaf")
+}
+
+/// Build the depth-4 Merkle tree over 16 leaves and return the root +
+/// the inclusion path (4 siblings) for the supplied `target_index`.
+/// Mirrors the TS-side `merkleInclusionPath` exactly so the same
+/// (leaves, idx) input produces the same proof in both languages.
+pub fn build_merkle_root_and_path_n16(
+    leaves: &[[u8; 32]; 16],
+    target_index: u8,
+) -> ([u8; 32], [[u8; 32]; 4]) {
+    use darkpool_crypto::poseidon_hash_bytes;
+
+    assert!(target_index < 16, "target_index out of range");
+    let domain_be = {
+        let mut b = [0u8; 32];
+        b[24..32].copy_from_slice(&DOMAIN_BATCH_ROOT.to_be_bytes());
+        b
+    };
+
+    // Build the tree level-by-level from the bottom up.
+    // level0 = leaves (16) → level1 (8) → level2 (4) → level3 (2) → root (1).
+    let mut current: Vec<[u8; 32]> = leaves.to_vec();
+    let mut siblings = [[0u8; 32]; 4];
+    let mut idx = target_index as usize;
+    for sibling_slot in siblings.iter_mut() {
+        let sibling_idx = idx ^ 1;
+        *sibling_slot = current[sibling_idx];
+        let mut next = Vec::with_capacity(current.len() / 2);
+        for pair in current.chunks_exact(2) {
+            let hashed = poseidon_hash_bytes(&[domain_be, pair[0], pair[1]])
+                .expect("poseidon_hash_bytes");
+            next.push(hashed);
+        }
+        current = next;
+        idx /= 2;
+    }
+    let root = current[0];
+    (root, siblings)
+}
+
+/// Build a `tee_forced_settle_batched` ix with the supplied inclusion
+/// proof. Mirrors `build_settle_ix` but for the v3.5 ix variant: one
+/// extra `match_index` byte + 4 contiguous 32-byte siblings appended
+/// to ix.data; the two per-match marker accounts collapse to a single
+/// `batch_validity_marker`.
+pub fn build_settle_batched_ix(
+    h: &Harness,
+    payload: &MatchResultPayload,
+    match_index: u8,
+    merkle_proof: &[[u8; 32]; 4],
+    merkle_root: &[u8; 32],
+) -> Instruction {
+    let (vault_pda, _) = vault_config_pda(&h.vault_id);
+    let (lock_a, _) = note_lock_pda(&h.vault_id, &payload.note_a_commitment);
+    let (lock_b, _) = note_lock_pda(&h.vault_id, &payload.note_b_commitment);
+    let (consumed_a, _) = consumed_note_pda(&h.vault_id, &payload.note_a_commitment);
+    let (consumed_b, _) = consumed_note_pda(&h.vault_id, &payload.note_b_commitment);
+    let (null_a, _) = nullifier_pda(&h.vault_id, &payload.nullifier_a);
+    let (null_b, _) = nullifier_pda(&h.vault_id, &payload.nullifier_b);
+    let (lock_e, _) = note_lock_pda(&h.vault_id, &payload.note_e_commitment);
+    let (lock_f, _) = note_lock_pda(&h.vault_id, &payload.note_f_commitment);
+
+    let instructions_sysvar: Pubkey = Pubkey::from([
+        // Sysvar1nstructions1111111111111111111111111
+        6, 167, 213, 23, 24, 123, 209, 102, 53, 218, 212, 4, 85, 253, 194, 192, 193, 36, 198, 143,
+        33, 86, 117, 165, 219, 186, 203, 95, 8, 0, 0, 0,
+    ]);
+
+    let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
+
+    // ix data = disc + payload (Borsh) + match_index (u8) + 4 × 32-byte siblings.
+    let mut data = anchor_disc("tee_forced_settle_batched").to_vec();
+    payload.serialize(&mut data).unwrap();
+    data.push(match_index);
+    for s in merkle_proof.iter() {
+        data.extend_from_slice(s);
+    }
+
+    Instruction {
+        program_id: h.vault_id,
+        accounts: vec![
+            AccountMeta::new(h.tee.pubkey(), true),
+            AccountMeta::new(vault_pda, false),
+            AccountMeta::new(lock_a, false),
+            AccountMeta::new(lock_b, false),
+            AccountMeta::new(consumed_a, false),
+            AccountMeta::new(consumed_b, false),
+            AccountMeta::new(null_a, false),
+            AccountMeta::new(null_b, false),
+            AccountMeta::new(lock_e, false),
+            AccountMeta::new(lock_f, false),
+            AccountMeta::new_readonly(instructions_sysvar, false),
+            AccountMeta::new(marker_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data,
+    }
+}
+
+/// (ed25519_verify, tee_forced_settle_batched) tx — mirror of
+/// `build_settle_tx` for the v3.5 path.
+pub fn build_settle_batched_tx(
+    h: &Harness,
+    payload: &MatchResultPayload,
+    match_index: u8,
+    merkle_proof: &[[u8; 32]; 4],
+    merkle_root: &[u8; 32],
+) -> Transaction {
+    let msg_hash = canonical_payload_hash(payload);
+    let sig = h.tee.sign_message(&msg_hash);
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes.copy_from_slice(sig.as_ref());
+    let tee_pk = h.tee.pubkey().to_bytes();
+    let ed_ix = build_ed25519_verify_ix(&tee_pk, &sig_bytes, &msg_hash);
+    let settle_ix = build_settle_batched_ix(h, payload, match_index, merkle_proof, merkle_root);
+    Transaction::new(
+        &[&h.tee],
+        Message::new(
+            &[compute_budget_ix(1_400_000), ed_ix, settle_ix],
+            Some(&h.tee.pubkey()),
+        ),
+        h.svm.latest_blockhash(),
+    )
+}
+
+/// Build a `close_batch_validity_marker` ix.
+/// `authority == payer` is the fast-path (matcher closes immediately
+/// after the last settle); `authority != payer` is the expiry-GC path
+/// (anyone can sweep an expired marker; rent still flows to payer).
+pub fn build_close_batch_validity_marker_ix(
+    h: &Harness,
+    merkle_root: &[u8; 32],
+    authority: &Pubkey,
+    payer: &Pubkey,
+) -> Instruction {
+    let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
+    let mut data = anchor_disc("close_batch_validity_marker").to_vec();
+    data.extend_from_slice(merkle_root);
+
+    Instruction {
+        program_id: h.vault_id,
+        accounts: vec![
+            AccountMeta::new_readonly(*authority, true),
+            AccountMeta::new(*payer, false),
+            AccountMeta::new(marker_pda, false),
+        ],
+        data,
+    }
+}

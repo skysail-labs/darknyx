@@ -2,7 +2,7 @@
  * v3.5 — one-shot helper that drives a settle through the batched
  * `verify_match_batch` + `tee_forced_settle_batched` path.
  *
- * Encapsulates the four steps each test site otherwise has to repeat:
+ * Encapsulates the five steps each test site otherwise has to repeat:
  *
  *   1. Generate the batched Groth16 + land `verify_match_batch`
  *      (via `landVerifyMatchBatch`, which pads the single real match
@@ -14,6 +14,11 @@
  *      ALT to be usable.
  *   4. Send the settle as a v0 tx that stacks the static settle ALT
  *      + the per-batch ALT, packing the tx well under 1232 bytes.
+ *   5. Close the `BatchValidityMarker` to reclaim its ~49-byte rent.
+ *      The on-chain `tee_forced_settle_batched` handler deliberately
+ *      does NOT close the marker (one marker covers all N matches in
+ *      the batch). Every test site here lands exactly one real
+ *      settle per batch, so we always close at step 5.
  *
  * The caller constructs the `realSlot: MatchSlotWitness` from the
  * already-built payload + persona data. The helper handles
@@ -21,9 +26,10 @@
  *
  * For production matchers, the per-batch ALT-create+wait would be
  * amortised across all N=16 settles in the same batch (or via a
- * rolling-ALT pool — see `docs/v3.5-migration.md`). The one-ALT-per-
- * settle pattern here is convenient for tests with a single match,
- * not optimal for throughput.
+ * rolling-ALT pool — see `docs/v3.5-migration.md`), and the close
+ * would land once after the LAST settle. The one-ALT-and-one-close
+ * per settle pattern here is convenient for tests with a single
+ * real match, not optimal for throughput.
  */
 
 import {
@@ -41,6 +47,7 @@ import {
   noteLockPda,
 } from "../../src/idl/vault-client.js";
 import {
+  buildCloseBatchValidityMarkerIx,
   buildEd25519VerifyIx,
   buildSettleBatchedIx,
   type MatchResultPayload,
@@ -81,6 +88,8 @@ export interface SettleViaBatchedResult {
   altTxSig: string;
   /** Tx signature of the tee_forced_settle_batched tx. */
   settleTxSig: string;
+  /** Tx signature of the close_batch_validity_marker tx. */
+  closeTxSig: string;
   /** Pubkey of the per-batch ALT — useful if the test wants to
    *  inspect it. */
   batchAlt: PublicKey;
@@ -189,10 +198,31 @@ export async function settleViaBatched(
   });
   log("Ed25519 + tee_forced_settle_batched", settleTxSig);
 
+  // ─── Step 5: close the BatchValidityMarker to reclaim its rent ──
+  // The on-chain handler doesn't close (one marker, many matches);
+  // we land an explicit close because every test site here is a
+  // 1-real-match-per-batch flow.
+  const closeTx = new Transaction().add(
+    buildCloseBatchValidityMarkerIx({
+      programId: p.vaultProgramId,
+      authority: p.teeKeypair.publicKey,
+      payer: p.teeKeypair.publicKey,
+      merkleRoot: batchResult.merkleRoot,
+    }),
+  );
+  const closeTxSig = await sendAndConfirmTransaction(
+    p.connection,
+    closeTx,
+    [p.teeKeypair],
+    { commitment: "confirmed" },
+  );
+  log("close_batch_validity_marker", closeTxSig);
+
   return {
     verifyTxSig: batchResult.txSig,
     altTxSig,
     settleTxSig,
+    closeTxSig,
     batchAlt,
   };
 }

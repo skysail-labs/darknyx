@@ -21,6 +21,7 @@ pub mod zk;
 // and similar helper modules. Re-exporting each instruction submodule at crate
 // root lets the macro resolve everything correctly even though our source lives
 // under `programs/vault/src/instructions/`.
+pub use instructions::close_batch_validity_marker;
 pub use instructions::create_wallet;
 pub use instructions::deposit;
 pub use instructions::initialize;
@@ -245,6 +246,17 @@ pub mod vault {
             match_index,
             merkle_proof,
         )
+    }
+
+    /// v3.5 — close a `BatchValidityMarker` PDA and refund its rent to
+    /// `marker.payer`. Called by the matcher after all N matches in
+    /// the batch have settled, or by anyone post-expiry as garbage
+    /// collection. See instructions/close_batch_validity_marker.rs.
+    pub fn close_batch_validity_marker(
+        ctx: Context<CloseBatchValidityMarker>,
+        merkle_root: [u8; 32],
+    ) -> Result<()> {
+        close_batch_validity_marker::close_batch_validity_marker_handler(ctx, merkle_root)
     }
 
     /// DEV-NET-ONLY: reset the Merkle tree to empty. Admin-gated. See

@@ -112,7 +112,10 @@ fn pubkey_be32_pair(pk: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
 ///                     buyer_change_amt, seller_change_amt,
 ///                     buyer_fee_amt, seller_fee_amt,
 ///                     clearing_price, batch_slot)
-fn compute_match_leaf(
+// Exposed for integration tests that need to fabricate a Merkle root
+// without running the full `verify_match_batch` Groth16 verifier (see
+// `programs/matching_engine/tests/tee_forced_settle_batched.rs`).
+pub fn compute_match_leaf(
     payload: &MatchResultPayload,
     quote_mint: &Pubkey,
     base_mint: &Pubkey,
@@ -166,7 +169,9 @@ fn compute_match_leaf(
 /// left/right at each level (bit 0 = level 0; 0 = current is left child,
 /// 1 = current is right child). MUST match the circuit's `MerkleRoot(16)`
 /// template and the TS-side `merkleInclusionPath()` helper.
-fn walk_merkle_path_n16(
+// Exposed alongside `compute_match_leaf` for the same test-only
+// reason — see the comment above that fn.
+pub fn walk_merkle_path_n16(
     leaf: &[u8; 32],
     match_index: u8,
     proof: &[[u8; 32]; 4],
@@ -517,9 +522,9 @@ pub fn tee_forced_settle_batched_handler(
     // 1..N-1 because the existence check at the top of the handler
     // would see `lamports() == 0`. The marker carries an
     // `expiry_slot` so an unclosed-but-expired marker can't be
-    // reused; the small rent (~49 bytes) is reclaimable by a future
-    // `close_batch_validity_marker` admin/cleanup ix once the
-    // matcher knows the batch is fully settled.
+    // reused; the small rent (~49 bytes) is reclaimable by the
+    // `close_batch_validity_marker` ix once the matcher knows the
+    // batch is fully settled.
 
     emit!(TradeSettled {
         match_id: payload.match_id,

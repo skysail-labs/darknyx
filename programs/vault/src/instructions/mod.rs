@@ -1,3 +1,4 @@
+pub mod close_batch_validity_marker;
 pub mod create_wallet;
 pub mod deposit;
 pub mod initialize;
@@ -17,6 +18,7 @@ pub mod withdraw;
 // Re-export every item from each instruction module, including the hidden
 // `__client_accounts_*` modules Anchor's `#[derive(Accounts)]` macro generates.
 // The program macro resolves them at `crate::<module>::__client_accounts_*`.
+pub use close_batch_validity_marker::*;
 pub use create_wallet::*;
 pub use deposit::*;
 pub use initialize::*;
