@@ -1,0 +1,40 @@
+# Keep the Docker build context tight so reproducibility +
+# compose-hash stay stable.
+
+# Build artifacts — never want these copied in
+target/
+**/target/
+node_modules/
+**/node_modules/
+.devnet/
+build/
+dist/
+
+# Git / IDE
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.claude/
+
+# Docs / repo metadata — not needed at build time
+docs/
+*.md
+README*
+LICENSE*
+
+# Test fixtures and dev-only artifacts
+circuits/
+apps/
+packages/
+darkpool/
+phala-docs/
+dstack/
+godarkdex_docs_md/
+tdx_vs_snp_papers/
+
+# Local config (must NEVER end up in the image, even by accident)
+.env
+.env.*
+*.local.*
