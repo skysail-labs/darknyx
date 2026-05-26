@@ -33,6 +33,7 @@
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 
+pub mod algorithm;
 pub mod book;
 pub mod change_note;
 pub mod config;
@@ -50,21 +51,133 @@ pub use fee::FeeBucket;
 pub use match_result::{MatchPair, MatchStatus, RunBatchOutput, RELOCK_ORDER_ID_NONE};
 
 /// The single public entry point. Given a book snapshot + oracle
-/// reading + market config + the current slot, produce up to N
-/// matches (where N is the on-chain VALID_MATCH_BATCH instantiation
-/// size — currently 16) plus the post-match updates the caller must
-/// apply.
+/// reading + market config + the current slot + a starting match-id
+/// counter, produce all matches the uniform-clearing-price auction
+/// can extract from this book + the per-order updates the caller
+/// must apply.
 ///
-/// **PR-1 STUB.** Returns an empty batch. The full lift is gated
-/// by the `parity_against_litesvm_run_batch` test in
-/// `tests/parity.rs`, which arrives in PR 2.
+/// Steps (mirror the on-chain `run_batch_handler` exactly):
+///
+///   1. Validate the oracle is non-zero (else refuse to clear).
+///   2. Partition the book into bids / asks / expired / below-min,
+///      collect inclusion-leaf commitments.
+///   3. Sort bids descending-by-price (FIFO at ties), asks
+///      ascending-by-price (FIFO at ties).
+///   4. Reset the two fee buckets bound to (base_mint, quote_mint).
+///   5. Compute the uniform clearing price.
+///   6. Circuit-breaker check against `oracle.twap`. If tripped,
+///      skip matching, return cb_tripped=1 + match_count=0.
+///   7. Otherwise call `generate_matches`, accumulating matches +
+///      fees.
+///   8. Compute the SHA-256 inclusion root over the participants'
+///      `order_inclusion_commitment`s.
+///   9. Emit `OrderUpdate`s for full-fills, partial-fills, IOC
+///      residuals, FOK sentinels, and expired orders.
+///  10. Optionally flush the fee accumulators into protocol-owned
+///      change notes (only if `protocol_owner_commitment != [0;32]`
+///      AND circuit breaker did NOT trip — matches the on-chain
+///      gating).
+///  11. Return everything packaged in `RunBatchOutput`.
+///
+/// `start_match_id` is the value of `BatchResults.next_match_id`
+/// before this batch — the caller increments it past the highest
+/// `match_id` emitted in `output.matches` after this returns.
 pub fn run_batch(
-    _book: &OrderBook,
-    _oracle: &OracleSnapshot,
-    _config: &MatchConfig,
+    book: &OrderBook,
+    oracle: &OracleSnapshot,
+    config: &MatchConfig,
     current_slot: u64,
+    start_match_id: u64,
 ) -> Result<RunBatchOutput, MatchError> {
-    // TODO(PR-2): lift programs/matching_engine/src/instructions/run_batch.rs.
-    // Until then, the parity test in tests/parity.rs is #[ignore]d.
-    Ok(RunBatchOutput::empty(current_slot, 0, 0))
+    // Step 1 — oracle validity gate. Matches the on-chain
+    // `require!(pyth_twap > 0, MatchingError::OracleZeroPrice)`.
+    if oracle.twap == 0 {
+        return Err(MatchError::OracleStale {
+            publish: oracle.publish_slot,
+            now: current_slot,
+        });
+    }
+
+    // Step 2 — partition. Yields (bids, asks, expired_idxs,
+    // inclusion_leaves). expired_idxs feed OrderUpdate::Expired
+    // emissions below.
+    let (mut bids, mut asks, expired_idxs, inclusion_leaves) =
+        algorithm::partition_book(&book.orders, current_slot, config.min_order_size);
+
+    // Step 4 — fee buckets. Step 3 (sort) happened inside
+    // partition_book.
+    let mut fee_buckets = algorithm::reset_fee_buckets(config, current_slot);
+
+    let mut matches = Vec::new();
+    let mut order_updates = Vec::new();
+    let mut cb_tripped: u8 = 0;
+    let clearing_price;
+
+    // Step 5 + 6 — clearing price + circuit breaker.
+    if let Some((p_star, _matched)) = algorithm::compute_clearing_price(&bids, &asks) {
+        if algorithm::deviates_by_more_than_bps(p_star, oracle.twap, config.circuit_breaker_bps) {
+            cb_tripped = 1;
+            clearing_price = 0;
+        } else {
+            clearing_price = p_star;
+            // Step 7 — generate_matches. Mutates bids/asks/
+            // fee_buckets in place; appends to `matches`.
+            algorithm::generate_matches(
+                &mut bids,
+                &mut asks,
+                p_star,
+                oracle.twap,
+                current_slot,
+                &config.base_mint,
+                &config.quote_mint,
+                config.fee_rate_bps as u64,
+                start_match_id,
+                &mut matches,
+                &mut fee_buckets,
+            )?;
+        }
+    } else {
+        clearing_price = 0;
+    }
+
+    // Step 8 — inclusion root. Done regardless of CB state — the
+    // on-chain code publishes it on every batch.
+    let inclusion_root = algorithm::merkle_root_sha256(&inclusion_leaves);
+
+    // Step 9 — OrderUpdates. Two passes:
+    //   (a) algorithm::apply_slot_updates for bid/ask participants,
+    //   (b) explicit Expired emissions for orders drained in step 2.
+    algorithm::apply_slot_updates(&bids, &asks, &book.orders, &mut order_updates);
+    for &idx in &expired_idxs {
+        let o = &book.orders[idx];
+        order_updates.push(crate::book::OrderUpdate {
+            trading_key: o.trading_key,
+            order_id: o.order_id,
+            kind: crate::book::OrderUpdateKind::Expired,
+        });
+    }
+
+    // Step 10 — fee-note flush. Only when CB didn't trip AND a
+    // protocol owner commitment is configured (matches the on-chain
+    // `if protocol_owner_commitment != [0; 32] && cb_tripped == 0`).
+    if cb_tripped == 0 && config.protocol_owner_commitment != [0u8; 32] {
+        algorithm::flush_fee_notes(
+            &mut fee_buckets,
+            &config.base_mint,
+            &config.quote_mint,
+            &config.protocol_owner_commitment,
+            current_slot,
+        )?;
+    }
+
+    // Step 11 — pack and return.
+    Ok(RunBatchOutput {
+        matches,
+        order_updates,
+        clearing_price,
+        circuit_breaker_tripped: cb_tripped,
+        inclusion_root,
+        fee_buckets,
+        batch_slot: current_slot,
+    })
 }
