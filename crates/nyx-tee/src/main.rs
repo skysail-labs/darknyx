@@ -4,13 +4,16 @@
 //! the boot harness only; everything substantive lives in the
 //! sub-modules.
 //!
-//! # Phase-1 status
+//! # Status
 //!
-//! - Compiles, starts a tokio runtime, logs that it's alive.
-//! - Connects to `/var/run/dstack.sock` (or `DSTACK_SIMULATOR_ENDPOINT`
-//!   if set) and prints `info()`.
-//! - Every other module is stubbed; matching / settle / prover /
-//!   API server come later.
+//! - Phase-1 (committed): boots cleanly, modules stubbed.
+//! - PR 4a (this commit): dstack handshake — calls `info()`,
+//!   derives the Ed25519 signer via `get_key("nyx/ed25519-signer/v1")`,
+//!   logs the resulting Solana pubkey. If the dstack socket is
+//!   unreachable (no simulator + not running in a real CVM), boot
+//!   exits cleanly with a warning so we can build/run the binary
+//!   from a normal dev machine without setup ceremony.
+//! - PR 4b-d (upcoming): oracle sync, matcher tick, HTTP surface.
 
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
@@ -34,12 +37,23 @@ async fn main() -> Result<()> {
     let cfg = config::Config::from_env()?;
     tracing::info!(?cfg, "loaded config");
 
-    // Phase-1 smoke: just probe the dstack socket and log what's
-    // there. Real work (key derivation, attestation, API server)
-    // arrives in subsequent PRs.
-    boot::probe_dstack().await?;
+    // PR-4a: dstack handshake. Returns a `DerivedSigner` we'll
+    // thread into the settle pipeline + API surface as later PRs
+    // land. If the socket isn't reachable (no simulator running),
+    // we log and exit cleanly — running the binary on a dev
+    // machine without setup should not be a hard error.
+    let _signer = match boot::probe_dstack().await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!(error = %e, "dstack probe failed; exiting boot harness early");
+            tracing::info!("nyx-tee exiting (no dstack socket reachable)");
+            return Ok(());
+        }
+    };
 
-    tracing::info!("nyx-tee phase-1 skeleton: exiting cleanly");
+    tracing::info!(
+        "nyx-tee boot complete — signer derived; awaiting PR 4b+ to start oracle sync + matching"
+    );
     Ok(())
 }
 

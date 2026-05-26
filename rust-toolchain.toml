@@ -1,4 +1,10 @@
 [toolchain]
-channel = "1.89.0"
+# Bumped from 1.89 → 1.91 in TEE-v2 PR 4a (2026-05-27) because the
+# dstack-sdk we depend on pulls in alloy 1.8+, which requires
+# rustc 1.91+ via its ruint dependency. Rust is backwards-compatible
+# at the source level so this is a pure floor-raise — nothing in
+# the existing workspace depends on 1.89-specific behaviour.
+# CI will pull 1.91 automatically via this file.
+channel = "1.91.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

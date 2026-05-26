@@ -247,7 +247,7 @@ fn encode_string(s: &[u8]) -> Vec<u8> {
 fn bytepad(x: &[u8], w: usize) -> Vec<u8> {
     let mut v = left_encode(w as u64);
     v.extend_from_slice(x);
-    while v.len() % w != 0 {
+    while !v.len().is_multiple_of(w) {
         v.push(0);
     }
     v

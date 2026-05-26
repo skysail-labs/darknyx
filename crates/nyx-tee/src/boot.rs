@@ -1,37 +1,74 @@
 //! Boot-time dstack handshake.
 //!
-//! Phase-1: just verify the socket is reachable and log what
-//! `info()` returns. Later phases will:
-//!   - call `get_key("nyx/ed25519-signer/v1")` to derive our signer
-//!   - cross-check the on-chain `vault_config.tee_pubkey` matches
-//!   - export `/attestation` + `/info` endpoints
-//!   - kick off the Merkle sync from VaultConfig.current_root
+//! Stages (per `docs/tee-architecture.md` §3):
+//!   1. Connect to the dstack socket (`DSTACK_SIMULATOR_ENDPOINT` in
+//!      local dev; `/var/run/dstack.sock` in a real CVM — the
+//!      `DstackClient::new(None)` picks the right one).
+//!   2. `info()` → app_id, instance_id, compose_hash, MRTD.
+//!   3. Derive the Ed25519 signer via
+//!      `dstack.get_key("nyx/ed25519-signer/v1")` →
+//!      `SigningKey::from_bytes(seed)`.
+//!   4. Log the resulting Solana base58 pubkey so an operator can
+//!      cross-check against the on-chain `vault_config.tee_pubkey`
+//!      before running the rotation ceremony.
 //!
-//! See `docs/tee-architecture.md` §3 (boot sequence).
+//! Returns the derived signer to `main.rs`, which threads it
+//! through to the settle-pipeline + the API server's `/info`
+//! endpoint.
+//!
+//! Phase-1 simplification: if the dstack socket isn't reachable
+//! we log a warning and exit cleanly. The full v2 path
+//! (cross-check against on-chain vault_config) lands later when
+//! the matching loop + Solana client wiring arrive.
 
 use anyhow::Result;
 
-/// Probe `/var/run/dstack.sock` (or `DSTACK_SIMULATOR_ENDPOINT`)
-/// and log what's there. Returns `Ok(())` even on failure during
-/// Phase 1 — we want the skeleton to compile and run without a
-/// real socket available.
-pub async fn probe_dstack() -> Result<()> {
-    match std::env::var("DSTACK_SIMULATOR_ENDPOINT") {
-        Ok(path) => {
-            tracing::info!(socket = %path, "dstack simulator detected");
-        }
-        Err(_) => {
-            tracing::info!(
-                "no DSTACK_SIMULATOR_ENDPOINT set — assuming /var/run/dstack.sock \
-                 (only available inside a real CVM)"
+use crate::keys::ed25519::{self, DerivedSigner};
+
+/// Connect to dstack + derive the signer. Logs all the
+/// human-readable fields (app_id, compose_hash, signer pubkey).
+/// Returns the derived signer on success.
+pub async fn probe_dstack() -> Result<DerivedSigner> {
+    // DstackClient::new(None) picks up DSTACK_SIMULATOR_ENDPOINT
+    // from the env if set; otherwise falls back to
+    // /var/run/dstack.sock.
+    let client = dstack_sdk::dstack_client::DstackClient::new(None);
+
+    let info = match client.info().await {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "dstack.info() failed — assuming no dstack socket is reachable. \
+                 This is fine for local dev without the simulator running. \
+                 In a real CVM this would be a fatal boot error."
             );
+            anyhow::bail!("dstack unreachable: {}", e);
         }
-    }
+    };
 
-    // TODO(phase1): once the dstack-sdk dep is wired up properly,
-    // call DstackClient::new(...).info() and log the result.
-    // Keeping this as a no-op placeholder for now so the binary
-    // builds standalone without needing the socket present.
+    tracing::info!(
+        app_id = %info.app_id,
+        instance_id = %info.instance_id,
+        app_name = %info.app_name,
+        device_id = %info.device_id,
+        compose_hash = %info.compose_hash,
+        mrtd = %info.tcb_info.mrtd,
+        "dstack handshake — info() succeeded"
+    );
 
-    Ok(())
+    let signer = ed25519::derive(&client).await?;
+
+    // Logging the signer pubkey on boot is intentional — it's what
+    // an operator pastes into the multisig rotation proposal at
+    // image-upgrade time. The PRIVATE half (signer.key) is never
+    // logged.
+    tracing::info!(
+        path = ed25519::SIGNER_PATH,
+        pubkey_base58 = %signer.pubkey_base58,
+        pubkey_hex = %signer.pubkey_hex,
+        "dstack handshake — derived Ed25519 signer (this is the value to register as vault_config.tee_pubkey)"
+    );
+
+    Ok(signer)
 }

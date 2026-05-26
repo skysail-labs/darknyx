@@ -34,10 +34,18 @@ tracing-subscriber = { workspace = true }
 # tower-http         = { workspace = true }
 # tokio-tungstenite  = { workspace = true }
 
-# ─── Phase-2+ deps (uncomment when wiring keys + attestation) ────────
-# dstack-sdk    = { workspace = true }
-# ed25519-dalek = { workspace = true, features = ["rand_core"] }
-# sha2          = { workspace = true }
+# ─── PR 4a — keys + dstack handshake ─────────────────────────────────
+# DstackClient::new() + info() + get_key() + get_quote() — all the
+# Unix-socket calls that boot.rs makes against /var/run/dstack.sock
+# (or DSTACK_SIMULATOR_ENDPOINT in local dev).
+dstack-sdk    = { workspace = true }
+# Ed25519 signing key derivation from the dstack-supplied seed.
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+# Solana base58 encoding for logging the derived pubkey in the
+# canonical wire format (so log inspectors can match against
+# vault_config.tee_pubkey directly).
+bs58          = "0.5"
+hex           = { workspace = true }
 
 # ─── Phase-2+ deps (uncomment when wiring the settle pipeline) ───────
 # Note: solana-client 1.18 conflicts with ark-ec 0.5 on zeroize. When
