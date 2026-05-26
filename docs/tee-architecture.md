@@ -781,7 +781,7 @@ New test files to add as part of Phase 1:
 
 | File | Purpose |
 |---|---|
-| `crates/darkpool-matcher/tests/parity.rs` | Lift the run_batch litesvm test into the new crate; assert byte-for-byte identical output between the lifted matcher and the (still-present) litesvm version. Sunset the litesvm version at Phase 5. |
+| `crates/darkpool-matcher/tests/parity.rs` | **LANDED** (TEE v2 PR 2, 2026-05-27). 8 scenarios translated from `programs/matching_engine/tests/run_batch.rs`; all green. PR 3 cut the on-chain ix over to call the matcher; the 12 existing litesvm scenarios all still pass against the new shape (proves the lift is behavior-preserving end-to-end). |
 | `crates/nyx-tee/tests/boot.rs` | Spin up the simulator + nyx-tee; assert /attestation, /info, /tree/root return sane data. |
 | `crates/nyx-tee/tests/settle.rs` | Drive the full pipeline (place orders → wait for match cycle → assert on-chain settle tx confirmed). Uses litesvm as the L1 mock. |
 | `packages/sdk/tests/tee-attestation-verifier.test.ts` | Client-side: fetch /attestation from the simulator, assert dcap-qvl (Phala API or local) accepts the quote, compose-hash matches. |

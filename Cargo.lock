@@ -2180,6 +2180,7 @@ dependencies = [
  "borsh 1.6.1",
  "bytemuck",
  "darkpool-crypto",
+ "darkpool-matcher",
  "ephemeral-rollups-sdk",
  "litesvm",
  "sha2 0.10.9",

@@ -209,7 +209,7 @@ These are cross-language byte-equality contracts (see CLAUDE.md §6); breaking t
 | `state/pending_order.rs` (`PendingOrder`) | **DELETE** — the entire state struct + state machine + `MAX_PENDING_SLOTS_PER_USER` cap |
 | `state/batch_results.rs` (`BatchResults`) | **DELETE** — TEE submits settle txs directly with `MatchResultPayload`; no L1 ring buffer needed |
 | `state/match_result.rs` (`MatchResult`) | **DELETE** — TEE constructs the payload in-process |
-| `state/change_note.rs` | **DELETE** — change-note derivation moves into the TEE |
+| `state/change_note.rs` | **DELETED** (TEE v2 PR 3, 2026-05-27) — moved into `darkpool_matcher::change_note`. The on-chain ix calls into the matcher; the SDK's TS port is unchanged. Cross-language byte-equality (matcher ↔ TS) gated by `tests/change_note_parity.rs`. |
 | `state/fee_accumulator.rs` (`FeeAccumulator`) | **DELETE** — fee accrual happens in TEE memory |
 | `state/order_record.rs` | **DELETE** |
 | `state/pyth.rs` | Keep the parser; TEE reads Pyth on its own schedule |
@@ -350,7 +350,7 @@ Ordered by dependency. Each phase produces a working state — a phase can be pa
 * [ ] **Decide custom domain.** Buy `api.nyx.example.com` (or pick a subdomain we own); set up DNS access (Cloudflare token); configure CAA stub.
 * [ ] **Benchmark VALID_MATCH_BATCH N=16 proving time on Phala Cloud TDX-Lab tier vs bare metal.** Acceptance: ≤ 3× bare metal. If fail → flip D4 (move prover out of TEE; TEE signs public input). Phase-1 sign-off.
 * [ ] **Skeleton `nyx-tee` binary**: cargo crate, dstack SDK integration, OAuth2 token issuer, REST + WS framework via axum + tokio-tungstenite, in-memory order book stub (no matching yet). Per [`docs/tee-architecture.md`](tee-architecture.md) §2.
-* [ ] **Lift matching algorithm out of `programs/matching_engine`** into a new crate `crates/darkpool-matcher/`. No Anchor / Solana deps. The existing litesvm test for `run_batch.rs` becomes a thin wrapper around this crate; assert byte-for-byte identical output (parity).
+* [x] **Lift matching algorithm out of `programs/matching_engine`** into a new crate `crates/darkpool-matcher/`. **DONE in PR 1 + PR 2 + PR 3** (2026-05-27). The matcher is Anchor-free; the on-chain `run_batch.rs` is now a thin adapter that builds an `OrderBook` from PendingOrder PDAs, calls `darkpool_matcher::run_batch(...)`, and writes the returned `RunBatchOutput` back to BatchResults + PendingOrder PDAs. Parity gates (matcher: 8 scenarios; on-chain ix: 12 litesvm scenarios) all green. `programs/matching_engine/src/state/change_note.rs` deleted — its content now lives in `darkpool_matcher::change_note`.
 * [ ] **NOT in Phase 1:** the on-chain TDX quote verifier. Deferred to v3 — see §6 R1.
 
 ### Phase 2 — Read-only TEE-as-indexer
