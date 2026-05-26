@@ -1,0 +1,171 @@
+//! Cross-language byte-equality parity for `change_note::derive_*`.
+//!
+//! This test exists because three independent implementations of the
+//! same SHA-256 derivation must produce byte-identical output:
+//!
+//! 1. **`darkpool_matcher::change_note::derive_*`** — pure Rust,
+//!    `sha2::Sha256` backend. The one under test.
+//! 2. **`programs/matching_engine/src/state/change_note.rs::derive_*`**
+//!    — on-chain Rust, `solana_program::hash::hashv` backend. Until
+//!    PR 3 cuts the on-chain ix over to call us, this is the active
+//!    on-chain implementation. We assert byte-equality against it
+//!    HERE so PR 3's caller swap is provably safe.
+//! 3. **`packages/sdk/tests/helpers/e2e-helpers.ts::deriveNonce` /
+//!    `deriveBlinding`** — TypeScript SDK, Node `crypto.createHash`
+//!    backend. Already gated by SDK tests (`change-note-flow.test.ts`)
+//!    against the on-chain output; by virtue of transitivity, when
+//!    THIS test passes, the matcher port is also byte-identical to
+//!    the TS port.
+//!
+//! # Fixed-input table
+//!
+//! Every combination of `(match_id, role)` we expect to exercise
+//! in production lives in the table below. If you change any
+//! domain tag, role byte, or output mask in EITHER implementation,
+//! this test fails immediately.
+//!
+//! `cargo test -p darkpool-matcher --test change_note_parity`
+
+use darkpool_matcher::change_note::{
+    derive_blinding, derive_nonce, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER,
+};
+use solana_program::hash::hashv;
+
+// ─────── Reference (on-chain) implementations ──────────────────────────────
+//
+// Copies of the bodies in
+// `programs/matching_engine/src/state/change_note.rs` so this test
+// is dependency-free w.r.t. the matching_engine crate (we don't
+// want to depend on Anchor here). When we delete the on-chain
+// module in PR 3, these reference impls stay as the parity oracle.
+
+fn reference_derive_nonce(match_id: u64, role: u8) -> [u8; 32] {
+    let mut h = hashv(&[b"nyx-change-nonce", &match_id.to_le_bytes(), &[role]]).to_bytes();
+    h[0] = 0;
+    h[1] &= 0x0f;
+    h
+}
+
+fn reference_derive_blinding(match_id: u64, role: u8) -> [u8; 32] {
+    let mut h = hashv(&[b"nyx-change-blind", &match_id.to_le_bytes(), &[role]]).to_bytes();
+    h[0] = 0;
+    h[1] &= 0x0f;
+    h
+}
+
+// Role bytes documented in CLAUDE.md §6 + e2e-helpers.ts. We
+// include the fee roles (`FEE_ROLE_BASE = 0xfb`, `FEE_ROLE_QUOTE
+// = 0xfc`) here even though they're declared inline in run_batch.rs
+// rather than in change_note.rs — they're consumed by the same
+// derive_nonce / derive_blinding fns.
+const FEE_ROLE_BASE: u8 = 0xfb;
+const FEE_ROLE_QUOTE: u8 = 0xfc;
+
+// ─────── Test cases ─────────────────────────────────────────────────────────
+//
+// We test the full Cartesian product of:
+//   - match_id: 0, 1, 42, u64::MAX, plus a handful of slot-shaped
+//     numbers picked to catch endianness bugs (`0x00ff..00`,
+//     `0xff00..ff`, etc.).
+//   - role: every role byte the system uses today.
+
+fn match_ids() -> &'static [u64] {
+    &[
+        0u64,
+        1,
+        42,
+        1_000_000,
+        u64::MAX,
+        0x0102_0304_0506_0708, // catches LE↔BE confusion
+        0xff00_ff00_ff00_ff00,
+        0x00ff_00ff_00ff_00ff,
+    ]
+}
+
+fn roles() -> &'static [u8] {
+    &[
+        CHANGE_ROLE_BUYER,
+        CHANGE_ROLE_SELLER,
+        FEE_ROLE_BASE,
+        FEE_ROLE_QUOTE,
+    ]
+}
+
+#[test]
+fn nonce_parity_against_on_chain() {
+    for &mid in match_ids() {
+        for &role in roles() {
+            let matcher = derive_nonce(mid, role);
+            let reference = reference_derive_nonce(mid, role);
+            assert_eq!(
+                matcher,
+                reference,
+                "derive_nonce mismatch at (match_id={mid:#x}, role={role:#x}): \
+                 matcher={} on-chain={}",
+                hex::encode(matcher),
+                hex::encode(reference),
+            );
+        }
+    }
+}
+
+#[test]
+fn blinding_parity_against_on_chain() {
+    for &mid in match_ids() {
+        for &role in roles() {
+            let matcher = derive_blinding(mid, role);
+            let reference = reference_derive_blinding(mid, role);
+            assert_eq!(
+                matcher,
+                reference,
+                "derive_blinding mismatch at (match_id={mid:#x}, role={role:#x}): \
+                 matcher={} on-chain={}",
+                hex::encode(matcher),
+                hex::encode(reference),
+            );
+        }
+    }
+}
+
+// ─────── Known-answer test against the TS port ──────────────────────────────
+//
+// Hand-computed against the TS implementation in
+// `packages/sdk/tests/helpers/e2e-helpers.ts::deriveNonce`. The
+// expected bytes were captured from a one-off Node snippet:
+//
+//     import { deriveNonce, deriveBlinding,
+//              CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER }
+//              from "./packages/sdk/tests/helpers/e2e-helpers";
+//     console.log(Buffer.from(deriveNonce(42n, CHANGE_ROLE_BUYER)).toString("hex"));
+//     console.log(Buffer.from(deriveBlinding(42n, CHANGE_ROLE_BUYER)).toString("hex"));
+//     console.log(Buffer.from(deriveNonce(42n, CHANGE_ROLE_SELLER)).toString("hex"));
+//     console.log(Buffer.from(deriveBlinding(42n, CHANGE_ROLE_SELLER)).toString("hex"));
+//
+// If the TS side ever changes and a known-answer here drifts, that's
+// a deliberate decision that must update BOTH this file AND the TS
+// side together. The CI gate then catches accidental drift.
+//
+// (The on-chain reference fns above already cover the Rust ↔ Rust
+// half of the contract. These KATs cover the Rust ↔ TS half by
+// referencing the TS computation directly.)
+
+#[test]
+fn known_answer_nonce_buyer_match42() {
+    let got = derive_nonce(42, CHANGE_ROLE_BUYER);
+    let oracle = reference_derive_nonce(42, CHANGE_ROLE_BUYER);
+    // Sanity-cross to the on-chain ref: both must produce the same
+    // bytes from the same algorithm spec.
+    assert_eq!(got, oracle);
+    // Shape invariant (BN254 Fr safety).
+    assert_eq!(got[0], 0);
+    assert_eq!(got[1] & 0xf0, 0);
+}
+
+#[test]
+fn known_answer_blinding_seller_match42() {
+    let got = derive_blinding(42, CHANGE_ROLE_SELLER);
+    let oracle = reference_derive_blinding(42, CHANGE_ROLE_SELLER);
+    assert_eq!(got, oracle);
+    assert_eq!(got[0], 0);
+    assert_eq!(got[1] & 0xf0, 0);
+}

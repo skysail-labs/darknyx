@@ -4,6 +4,7 @@ members = [
     "programs/vault",
     "programs/matching_engine",
     "crates/darkpool-crypto",
+    "crates/darkpool-matcher",
 ]
 exclude = [
     "darkpool",

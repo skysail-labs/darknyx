@@ -1164,6 +1164,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "darkpool-matcher"
+version = "0.1.0"
+dependencies = [
+ "borsh 1.6.1",
+ "darkpool-crypto",
+ "hex",
+ "proptest",
+ "sha2 0.10.9",
+ "solana-program",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "darling"
 version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
