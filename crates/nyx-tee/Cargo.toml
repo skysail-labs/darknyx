@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 description = "In-TEE matching engine for the Nyx dark pool. Runs as a single-process Rust binary inside an Intel TDX Confidential VM on Phala Cloud / dstack-cloud. Owns the order book, the matching loop, the Groth16 prover, the settle scheduler, the Merkle mirror, and the /tree/* + /transparency indexer surface. See docs/tee-architecture.md for the full design."
 
+[lib]
+name = "nyx_tee"
+path = "src/lib.rs"
+
 [[bin]]
 name = "nyx-tee"
 path = "src/main.rs"
@@ -21,12 +25,26 @@ anyhow             = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# ─── PR 4b — oracle module (Hermes + VAA verify) ─────────────────────
+# reqwest: HTTPS client used to fetch from hermes.pyth.network.
+# Rustls-only TLS (no OpenSSL on the host).
+reqwest    = { workspace = true }
+# serde + serde_json: parse Hermes JSON responses.
+serde      = { workspace = true }
+serde_json = { workspace = true }
+# k256: pure-Rust secp256k1 used for ecrecover when verifying
+# Wormhole guardian signatures over VAA bodies.
+k256       = { workspace = true }
+# sha3: Keccak-256 over VAA bodies (Wormhole signs against keccak256,
+# not SHA-256 — same primitive Ethereum uses).
+sha3       = { workspace = true }
+# thiserror: typed error variants for the oracle error chain.
+thiserror  = { workspace = true }
+# Already used by keys/; the oracle module needs it too for raw byte work.
+# Hex + serde are already pulled in above.
+
 # ─── Phase-2+ deps (uncomment when wiring the matching module) ───────
 # borsh = { workspace = true, features = ["derive"] }
-# hex   = { workspace = true }
-# serde = { workspace = true }
-# serde_json = { workspace = true }
-# thiserror = { workspace = true }
 
 # ─── Phase-2+ deps (uncomment when wiring the API module) ────────────
 # axum               = { workspace = true }

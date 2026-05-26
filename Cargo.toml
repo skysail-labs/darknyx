@@ -88,6 +88,17 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = "1"
 
+# HTTPS client — used by nyx-tee/oracle to pull from Hermes.
+# Pinned to rustls so we don't depend on the host OpenSSL (which
+# wouldn't exist inside our dstack-os runtime anyway).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# secp256k1 in pure Rust — needed by nyx-tee/oracle/vaa.rs for the
+# ecrecover step that verifies Wormhole guardian signatures.
+# k256 is the RustCrypto implementation; same auditable surface as
+# the rest of the workspace's crypto.
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+
 [profile.release]
 overflow-checks = true
 lto = "fat"
