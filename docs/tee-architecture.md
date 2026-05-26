@@ -159,6 +159,12 @@ crates/nyx-tee/src/
 │   ├── book.rs          # per-market BTreeMap<Price, FifoQueue<OrderId>>
 │   ├── interval.rs      # tokio interval driver; runs run_batch each tick
 │   └── selftrade.rs     # self-trade prevention (moved from run_batch.rs)
+├── oracle/              # Pyth pull-pattern: Hermes fetch + VAA verify + cache (§5.6)
+│   ├── mod.rs
+│   ├── cache.rs         # Arc<RwLock<OracleCache>> shared with matcher tick
+│   ├── hermes.rs        # HTTPS client for hermes.pyth.network
+│   ├── vaa.rs           # Wormhole VAA parser + guardian-set sig verification
+│   └── sync.rs          # background tokio task that refreshes the cache
 ├── prover/              # in-process Groth16 prover for VALID_MATCH_BATCH
 │   ├── mod.rs
 │   ├── witness.rs       # build witness from matcher output
@@ -238,6 +244,10 @@ A new CVM coming up under our compose-hash:
       • Verifies its Ed25519 pubkey matches the on-chain
         vault_config.tee_pubkey. If not, refuses to settle until
         admin runs the rotation ceremony (§7).
+      • Spawns the `oracle_sync` background task (§5.6) — does an
+        initial Pyth fetch + guardian-sig verify so the cache is
+        warm before matching starts. Refuses to run if Hermes is
+        unreachable at boot.
       • Starts the matching loop, the settle scheduler, and the API
         server.
 7.  Container marks itself healthy. Phala gateway routes traffic.
@@ -359,6 +369,35 @@ the moment any order arrives over WS; matching ticks fire every
 `BATCH_MS` (default 2 s, configurable per market) and run a
 uniform-clearing-price auction over whatever's in the book at the
 tick instant.
+
+#### Who triggers a batch (conceptual shift vs v3.5)
+
+In v3.5 the matching algorithm was an on-chain ix; **someone had
+to call `run_batch` from outside the chain** to make matching
+happen. The TEE-pubkey signer gate restricted *who* could call it,
+but the trigger itself was an external Solana transaction.
+
+In v2 the matching algorithm lives inside a long-running daemon
+process. **No external party can trigger a match.** The TEE's own
+`tokio::time::interval` decides when each tick fires. Three
+consequences:
+
+* Clients can't rush their own fill. A market maker can't pay
+  extra fees to "settle now" — they wait for the next tick like
+  everyone else.
+* MEV searchers can't sandwich a batch by front-running its
+  trigger tx. There is no trigger tx.
+* A batch with zero matches leaves zero on-chain trace. Network
+  observers see only the TEE's idle uptime, not whether it
+  matched orders this tick.
+
+The trade-off is **TEE liveness becomes the matching SLA**. If the
+CVM stops ticking (crash, host migration, dstack-kms revocation),
+matching stops too. The settle scheduler is decoupled — already-
+matched batches can keep settling after a TEE restart via the
+LUKS persistence path (§8) — but new fills require the daemon up.
+That's the same liveness story as Phala Cloud's general SLA + our
+restart-from-snapshot recovery.
 
 ```rust
 let mut interval = tokio::time::interval(market.config().batch_ms_duration());
@@ -525,6 +564,160 @@ At v2 scale (sub-1M leaves, sub-1k orders/sec sustained) the shared
 design wins. Re-evaluate when (a) TEE host RAM becomes a real
 constraint, (b) we want read replicas, or (c) we want to expose the
 indexer to non-Nyx consumers.
+
+### 5.6 Oracle sync — pull-pattern from Pyth Hermes
+
+The matcher's circuit-breaker check + the `pyth_at_match` field on
+every `MatchPair` need a fresh oracle TWAP. In v3.5 this came from
+an on-chain Pyth `PriceUpdateV2` account that someone else had to
+update. In v2 the TEE reads Pyth directly via the Hermes pull API,
+verifies the Wormhole-guardian signature in-process, and caches
+the result for the matching tick to consume.
+
+#### Two-stage pattern
+
+```
+┌─── oracle_sync background task ──────────────────────┐
+│                                                       │
+│  tokio interval (~1 s):                              │
+│    GET https://hermes.pyth.network/v2/updates/       │
+│        price/latest?ids[]=<feed_id>                  │
+│    → parse VAA (Wormhole guardian signed)            │
+│    → verify signature against guardian set (cached)  │
+│    → write cache: {                                  │
+│        twap, confidence, exponent,                   │
+│        publish_time, publish_slot                    │
+│      }                                               │
+└──────────────────────┬───────────────────────────────┘
+                       │ writes
+                       ▼
+                 OracleCache (Arc<RwLock>)
+                       │ reads
+                       ▼
+┌─── matching tick (every BATCH_MS = 2 s) ─────────────┐
+│                                                       │
+│  oracle = cache.snapshot(market)                     │
+│  if (now_slot − oracle.publish_slot) > MAX_STALE:    │
+│      tracing::warn!("oracle stale, skipping tick");  │
+│      continue                                         │
+│  darkpool_matcher::run_batch(book, oracle, ...)      │
+└──────────────────────────────────────────────────────┘
+```
+
+The two stages are **independent tokio tasks** communicating only
+through `Arc<RwLock<OracleCache>>`. The matching tick reads from
+cache in sub-microsecond time — no HTTPS in the critical path.
+
+#### Why Hermes, not on-chain Pyth
+
+Pyth runs a "pull oracle" model — fresh prices live on the
+Hermes web service, signed by Wormhole's guardian set. The
+Solana on-chain `PriceUpdateV2` account only refreshes when
+someone pushes an update tx, which costs CU and tx fees. In v2:
+
+- The TEE pulls directly from Hermes over HTTPS (no on-chain
+  read needed for matching).
+- Hermes is a public CDN — no API keys, no auth, no rate-limit
+  per IP under normal load. Fallback Hermes endpoints exist
+  (hermes-beta.pyth.network etc.) for redundancy.
+- Wormhole guardian signature verification happens entirely
+  in-process. The TEE doesn't need to trust Pyth's web infra;
+  it only needs to trust the guardian set (whose pubkeys are
+  baked into the TEE binary, covered by compose-hash).
+
+#### Cache structure
+
+```rust
+// crates/nyx-tee/src/oracle/cache.rs (PR 4)
+pub struct OracleCache {
+    /// Per-market entries — one Pyth feed per market.
+    entries: HashMap<MarketId, CachedPrice>,
+}
+
+pub struct CachedPrice {
+    pub twap: u64,
+    pub confidence: u64,
+    pub exponent: i32,
+    /// Pyth's reported publish_time, translated to Solana slot.
+    /// Drives the staleness check inside the matching tick.
+    pub publish_slot: u64,
+    /// The full VAA bytes — kept so the settle scheduler can
+    /// optionally attach a PriceUpdateV2 update tx alongside
+    /// `verify_match_batch` for v3 on-chain-verified Pyth (future).
+    pub vaa: Vec<u8>,
+}
+```
+
+`MAX_STALE` is configurable (default 5 slots ≈ 2 seconds — same
+order as the batch tick). If Hermes is unreachable for long
+enough, the cache goes stale and matching ticks pause. Orders
+accumulate in the book; matching resumes when the next sync
+succeeds.
+
+#### Trust chain post-PR-4
+
+When the TEE submits `verify_match_batch` on-chain, the trust
+chain for `pyth_at_match` is:
+
+```
+TEE Ed25519 signature over MatchResultPayload
+   (verified on-chain via vault_config.tee_pubkey,
+    rotated only by the multisig per D2)
+   ↓
+contains pyth_at_match as a field
+   ↓
+VALID_MATCH_BATCH Groth16 proof binds pyth_at_match into
+the batch root via the circuit-breaker constraint
+(∀ slot: |price − pyth_twap| ≤ band · pyth_twap / 10000)
+   ↓
+on-chain verifier accepts the proof + reads pyth_at_match
+out of the payload + trusts the TEE's attestation that
+this came from real Pyth.
+```
+
+The on-chain side **trusts the TEE's word** that `pyth_at_match`
+is a genuine Pyth value. The trust is rooted in:
+
+1. The TEE Ed25519 key is registered via the multisig rotation
+   ceremony (D2 / `docs/tee-attestation-flow.md` §5).
+2. The TEE compose-hash is allowlisted in dstack governance.
+3. Inside that compose-hash, the `oracle_sync` task is the
+   one that verifies the Hermes guardian signature before
+   caching.
+
+#### What a malicious TEE could actually do
+
+A compromised TEE *could* claim a false `pyth_twap`, but the
+worst it can do is **defeat the circuit breaker** — clear a
+batch when the real Pyth says it shouldn't. The
+note-conservation invariant (`note.amount == trade_leg +
+change_leg + fee`) holds independently of `pyth_twap` because
+it's enforced inside VALID_MATCH_BATCH against the matcher's
+own claimed amounts. So no funds are lost; the worst-case
+attack is "the TEE lets a non-economic batch through."
+
+This is the v2 trade-off we accepted to skip the per-batch
+on-chain Pyth-verification cost. v3 closes the gap: attach a
+fresh Pyth `PriceUpdateV2` to `verify_match_batch`, have the
+vault read the on-chain Pyth account directly, compare to the
+`pyth_at_match` claimed in the payload. ~100k CU + one ALT
+entry per batch — the architecture supports it whenever we
+decide to enable it.
+
+#### Module layout (to land in PR 4)
+
+```
+crates/nyx-tee/src/oracle/
+├── mod.rs        Public surface: OracleCache + OracleSnapshot
+├── cache.rs      Arc<RwLock> wrapper + staleness check
+├── hermes.rs     HTTPS client for the Pyth Hermes API
+├── vaa.rs        Wormhole VAA parser + guardian-sig verification
+└── sync.rs       The background tokio task driving the cache
+```
+
+The interval task in §5.4 reads from `OracleCache` — no direct
+network calls, no shared state with the matching algorithm
+beyond the snapshot.
 
 ---
 
