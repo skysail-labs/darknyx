@@ -53,10 +53,10 @@ export function NyxLockup({
   size?: number;
   tone?: "chalk" | "ink";
 }) {
-  const color = tone === "chalk" ? "var(--nyx-chalk)" : "var(--nyx-ink)";
+  const isInk = tone === "chalk";
   return (
-    <div className="flex items-center gap-2 select-none" style={{ color }}>
-      <NyxMark size={size} />
+    <div className="flex items-center gap-2 select-none">
+      <NyxMark size={size} style={{ color: isInk ? "#d96820" : "var(--nyx-ink)" }} />
       <span
         className="nyx-display"
         style={{
@@ -65,8 +65,8 @@ export function NyxLockup({
           fontWeight: 600,
         }}
       >
-        dark
-        <span style={{ opacity: 0.55, fontWeight: 400 }}>nyx</span>
+        <span style={{ color: isInk ? "#d96820" : "var(--nyx-ink)" }}>dark</span>
+        <span style={{ color: isInk ? "#7a3810" : "var(--nyx-slate)", fontWeight: 400 }}>nyx</span>
       </span>
     </div>
   );

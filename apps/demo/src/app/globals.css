@@ -88,10 +88,13 @@
   --font-sans: var(--nyx-font-body);
 }
 
-html, body { margin: 0; padding: 0; }
+html, body { margin: 0; padding: 0; overflow-x: hidden; }
+
+* { scrollbar-width: none !important; }
+*::-webkit-scrollbar { display: none !important; width: 0 !important; }
 
 html {
-  background: var(--nyx-ink);
+  background: #050608;
   color: var(--nyx-chalk);
   font-family: var(--nyx-font-body);
   font-feature-settings: 'ss01';
@@ -100,11 +103,22 @@ html {
 }
 
 body {
-  background: var(--nyx-ink);
+  background: #050608;
   color: var(--nyx-chalk);
   font-family: var(--nyx-font-body);
   font-size: var(--nyx-fs-md);
   line-height: 1.55;
+}
+
+/* Gate-style vertical pixel grid — used on landing + architecture pages */
+.nyx-pixel-grid {
+  background-image: repeating-linear-gradient(
+    to right,
+    rgba(255,255,255,0.055) 0px,
+    rgba(255,255,255,0.055) 1px,
+    transparent 1px,
+    transparent 8px
+  );
 }
 
 /* Light "chalk" surface used by /dapp — opt-in via `data-theme="chalk"` on a wrapper. */
@@ -146,6 +160,23 @@ body {
 }
 .nyx-drift { animation: nyx-drift 6s var(--nyx-ease-standard) infinite; }
 
+@keyframes nyx-dash-travel {
+  0%   { transform: translateX(-8px); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { transform: translateX(20px); opacity: 0; }
+}
+
+@keyframes nyx-signal-sweep {
+  0%   { left: -240px; }
+  100% { left: 100%; }
+}
+
+@keyframes nyx-ring-expand {
+  0%   { transform: scale(0.6); opacity: 0.7; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
 @keyframes nyx-aurora-shift {
   0%   { transform: translate3d(-12%, 0, 0) scale(1.02); }
   50%  { transform: translate3d(8%, -4%, 0) scale(1.06); }
@@ -170,6 +201,17 @@ body {
 }
 .nyx-mono {
   font-family: var(--nyx-font-mono);
+}
+.nyx-section-title {
+  font-family: var(--nyx-font-display);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 0.96;
+  color: rgba(245,243,238,0.92);
+}
+.nyx-body-copy {
+  color: rgba(174,172,176,0.76);
+  line-height: 1.75;
 }
 
 /* ---------------------------------------------------------------------------
@@ -229,6 +271,44 @@ body {
   inset: 0;
   background: linear-gradient(90deg, transparent, rgba(245, 243, 238, 0.15), transparent);
   animation: nyx-scanline 2.4s linear infinite;
+}
+
+/* Wallet adapter button — override purple with orange theme */
+button.wallet-adapter-button,
+button.wallet-adapter-button-trigger {
+  background: rgba(217,104,32,0.15) !important;
+  background-color: rgba(217,104,32,0.15) !important;
+  border: 1px solid rgba(217,104,32,0.35) !important;
+  color: #d96820 !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.12em !important;
+  text-transform: uppercase !important;
+  border-radius: 4px !important;
+  height: 36px !important;
+  padding: 0 16px !important;
+  line-height: 36px !important;
+}
+button.wallet-adapter-button:hover:not([disabled]),
+button.wallet-adapter-button-trigger:hover:not([disabled]) {
+  background: rgba(217,104,32,0.28) !important;
+  background-color: rgba(217,104,32,0.28) !important;
+}
+button.wallet-adapter-button .wallet-adapter-button-start-icon,
+button.wallet-adapter-button-trigger .wallet-adapter-button-start-icon {
+  display: none !important;
+}
+.wallet-adapter-modal-wrapper {
+  background: #0d0f12 !important;
+  border: 1px solid rgba(217,104,32,0.18) !important;
+}
+.wallet-adapter-modal-title {
+  color: #c8b898 !important;
+}
+
+@keyframes dash {
+  to { stroke-dashoffset: -100; }
 }
 
 /* Reduce motion — respect system preference */

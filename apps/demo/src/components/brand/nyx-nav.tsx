@@ -15,29 +15,20 @@ interface NyxNavProps {
 }
 
 const LINKS: Array<{ label: string; href: string; key: NonNullable<NyxNavProps["active"]> }> = [
-  { label: "Overview", href: "/", key: "home" },
+  { label: "Overview", href: "/landing", key: "home" },
   { label: "Architecture", href: "/architecture", key: "architecture" },
 ];
 
 export function NyxNav({ tone = "ink", launchHref = "/dapp", active = null }: NyxNavProps) {
   const isInk = tone === "ink";
 
-  const linkBase = isInk
-    ? "text-[13px] text-nyx-fog hover:text-nyx-chalk transition-colors"
-    : "text-[13px] text-nyx-slate hover:text-nyx-ink transition-colors";
-  const linkActive = isInk ? "text-nyx-chalk" : "text-nyx-ink";
-
-  const ctaBase = isInk
-    ? "group inline-flex items-center gap-2 rounded-sm border border-nyx-chalk/20 bg-nyx-chalk text-nyx-ink"
-    : "group inline-flex items-center gap-2 rounded-sm border border-nyx-ink/15 bg-nyx-ink text-nyx-chalk";
-
   return (
     <header
-      className={
-        isInk
-          ? "sticky top-0 z-30 w-full border-b border-white/[0.06] bg-nyx-ink/80 backdrop-blur"
-          : "sticky top-0 z-30 w-full border-b border-black/[0.06] bg-nyx-chalk/85 backdrop-blur"
-      }
+      className="sticky top-0 z-30 w-full border-b"
+      style={{
+        background: isInk ? "#050608" : "var(--nyx-chalk)",
+        borderColor: isInk ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
+      }}
     >
       <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3 sm:px-7">
         <Link href="/" className="flex items-center gap-2">
@@ -49,7 +40,16 @@ export function NyxNav({ tone = "ink", launchHref = "/dapp", active = null }: Ny
             <Link
               key={l.key}
               href={l.href}
-              className={`${linkBase} ${active === l.key ? linkActive : ""}`}
+              className="transition-colors"
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: "11px",
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+                color: active === l.key
+                  ? (isInk ? "#d96820" : "var(--nyx-ink)")
+                  : (isInk ? "rgba(174,172,176,0.7)" : "var(--nyx-slate)"),
+              }}
             >
               {l.label}
             </Link>
@@ -58,13 +58,25 @@ export function NyxNav({ tone = "ink", launchHref = "/dapp", active = null }: Ny
 
         {launchHref ? (
           <Link
-            href={launchHref}
-            className={`${ctaBase} px-3.5 py-2 text-[12px] font-semibold uppercase tracking-[0.12em] transition hover:opacity-90`}
+            href="/landing"
+            className="group inline-flex items-center gap-2 transition-opacity hover:opacity-80"
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: "11px",
+              fontWeight: 600,
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
+              padding: "6px 14px",
+              borderRadius: "2px",
+              background: "rgba(217,104,32,0.15)",
+              border: "1px solid rgba(217,104,32,0.35)",
+              color: "#d96820",
+            }}
           >
-            <span>Launch dapp</span>
-            <svg
-              width="11"
-              height="11"
+            <span>Coming Soon on Mainnet</span>
+            {/* <svg
+              width="10"
+              height="10"
               viewBox="0 0 11 11"
               fill="none"
               className="transition-transform group-hover:translate-x-0.5"
@@ -77,10 +89,10 @@ export function NyxNav({ tone = "ink", launchHref = "/dapp", active = null }: Ny
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-            </svg>
+            </svg> */}
           </Link>
         ) : (
-          <span className="text-[11px] font-mono uppercase tracking-[0.18em] text-nyx-fog">
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "11px", letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(174,172,176,0.5)" }}>
             devnet
           </span>
         )}

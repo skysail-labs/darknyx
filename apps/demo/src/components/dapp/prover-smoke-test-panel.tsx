@@ -41,7 +41,7 @@ function bytesToHex(b: Uint8Array): string {
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-export function ProverSmokeTestPanel() {
+export function ProverSmokeTestPanel({ compact = false }: { compact?: boolean }) {
   const { getProver } = useDappContext();
   const [steps, setSteps] = useState<StepState[]>(INITIAL_STEPS);
   const [running, setRunning] = useState(false);
@@ -132,26 +132,34 @@ export function ProverSmokeTestPanel() {
   };
 
   return (
-    <section className="rounded-2xl border border-white/[0.08] bg-nyx-graphite p-6 shadow-sm shadow-black/20">
+    <section className={compact ? "" : "rounded-2xl border border-white/8 bg-nyx-graphite p-6 shadow-sm shadow-black/20"}>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-nyx-chalk">
-            Browser ZK prover · smoke test
-          </h2>
-          <p className="mt-1 max-w-xl text-xs text-nyx-fog">
-            Stand-alone health-check for the in-browser prover. Generates a{" "}
-            <code className="rounded bg-white/[0.06] px-1 text-nyx-chalk">VALID_WALLET_CREATE</code>{" "}
-            Groth16 proof end-to-end (snarkjs in a Web Worker) and verifies that
-            the public input it produces matches what the server independently
-            computed for the same fixture. No wallet, no session — just a single
-            click to confirm the pipeline is wired up.
-          </p>
-        </div>
+        {!compact && (
+          <div>
+            <h2 className="text-lg font-semibold text-nyx-chalk">
+              Browser ZK prover · smoke test
+            </h2>
+            <p className="mt-1 max-w-xl text-xs text-nyx-fog">
+              Stand-alone health-check for the in-browser prover. Generates a{" "}
+              <code className="rounded bg-white/6 px-1 text-nyx-chalk">VALID_WALLET_CREATE</code>{" "}
+              Groth16 proof end-to-end (snarkjs in a Web Worker) and verifies that
+              the public input it produces matches what the server independently
+              computed for the same fixture. No wallet, no session — just a single
+              click to confirm the pipeline is wired up.
+            </p>
+          </div>
+        )}
         <button
           type="button"
           onClick={runSmokeTest}
           disabled={running}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="rounded px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] transition-all disabled:cursor-not-allowed disabled:opacity-60"
+          style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            background: running ? "rgba(217,104,32,0.08)" : "rgba(217,104,32,0.15)",
+            border: "1px solid rgba(217,104,32,0.35)",
+            color: running ? "rgba(217,104,32,0.5)" : "#d96820",
+          }}
         >
           {running ? "Running…" : "Run smoke test"}
         </button>
@@ -187,7 +195,7 @@ export function ProverSmokeTestPanel() {
 
 function StatusBadge({ status }: { status: StepStatus }) {
   const cls: Record<StepStatus, string> = {
-    idle: "bg-white/[0.08] text-nyx-fog ring-1 ring-white/[0.08]",
+    idle: "bg-[#d96820]/10 text-[#d96820] ring-1 ring-[#d96820]/20",
     running: "bg-nyx-signal-amber/18 text-nyx-signal-amber ring-1 ring-nyx-signal-amber/35",
     success: "bg-nyx-signal-green/18 text-nyx-signal-green ring-1 ring-nyx-signal-green/35",
     error: "bg-nyx-signal-red/18 text-nyx-signal-red ring-1 ring-nyx-signal-red/35",

@@ -4,25 +4,21 @@ import { NyxMark } from "@/components/brand/nyx-mark";
 
 export function CtaSection() {
   return (
-    <section className="relative isolate overflow-hidden border-t border-white/[0.06] bg-nyx-ink py-24">
-      <div className="nyx-aurora" />
+    <section className="relative isolate border-t py-24" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
       <div className="mx-auto max-w-5xl px-5 text-center sm:px-7">
-        <NyxMark size={64} className="mx-auto text-nyx-chalk nyx-drift" />
-        <h2 className="nyx-display mt-7 text-[34px] leading-tight sm:text-[48px]">
-          Try it on devnet.
+        <NyxMark size={56} className="mx-auto nyx-drift" style={{ color: "#d96820" }} />
+        <h2 className="mt-7 leading-tight" style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, letterSpacing: "-0.02em" }}>
+          <span style={{  fontSize: "clamp(24px, 3.5vw, 40px)", color: "#d96820" }}>Soon live on Mainnet</span>
           <br />
-          <span className="text-nyx-fog">Every step is verifiable.</span>
+          <span style={{  fontSize: "clamp(24px, 3vw, 35px)", color: "rgba(174,172,176,0.5)" }}>Privacy without sacrificing auditability</span>
         </h2>
-        <p className="mx-auto mt-5 max-w-xl text-[15px] text-nyx-fog">
-          Connect a Phantom wallet on Solana devnet and run the full flow —
-          identity derivation, shielded deposit, ER-private order, TEE
-          settlement, and proof-backed withdraw. Every receipt is an explorer
-          link.
+        <p className="mx-auto mt-5 max-w-xl" style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", lineHeight: "1.8", color: "rgba(174,172,176,0.55)" }}>
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <Link
+          {/* <Link
             href="/dapp"
-            className="group inline-flex items-center gap-2 rounded-sm bg-nyx-chalk px-6 py-3.5 text-[12px] font-semibold uppercase tracking-[0.14em] text-nyx-ink transition hover:bg-white"
+            className="group inline-flex items-center gap-2 rounded-sm px-6 py-3.5 text-[12px] font-semibold uppercase tracking-[0.14em] transition"
+            style={{ fontFamily: "'JetBrains Mono', monospace", background: "rgba(217,104,32,0.18)", border: "1px solid rgba(217,104,32,0.4)", color: "#d96820" }}
           >
             Launch dapp
             <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
@@ -34,10 +30,11 @@ export function CtaSection() {
                 strokeLinejoin="round"
               />
             </svg>
-          </Link>
+          </Link> */}
           <Link
             href="/architecture"
-            className="inline-flex items-center gap-2 rounded-sm border border-white/15 px-6 py-3.5 text-[12px] font-semibold uppercase tracking-[0.14em] text-nyx-chalk transition hover:bg-white/5"
+            className="inline-flex items-center gap-2 rounded-sm px-6 py-3.5 text-[12px] font-semibold uppercase tracking-[0.14em] transition"
+            style={{ fontFamily: "'JetBrains Mono', monospace", border: "1px solid rgba(255,255,255,0.1)", color: "#aeacb0" }}
           >
             Architecture
           </Link>

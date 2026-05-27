@@ -35,6 +35,7 @@ tests/fixtures/wallets/*.json
 # Do NOT ignore circuits/build/ at the directory level; git won't descend
 # into an ignored directory to apply negation patterns.
 circuits/build/**/*.r1cs
+circuits/build/**/*.json
 circuits/build/**/*.sym
 circuits/build/**/*_js/
 circuits/build/**/*.zkey
@@ -59,3 +60,9 @@ Thumbs.db
 .factory/
 skills-lock.json
 
+
+#ui_iters
+backup_2/
+backup_src
+optimization.md
+suggestions.md
