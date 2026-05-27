@@ -49,6 +49,13 @@ async fn main() -> Result<()> {
             // one extra round-trip at boot.
             let client = DstackClient::new(None);
             let info = client.info().await?;
+
+            // Derive the bearer-JWT secret from dstack while the
+            // client is still in scope. Distinct path from the
+            // Ed25519 signer so a compromise of one key material
+            // doesn't trivially leak the other.
+            let jwt_secret = derive_jwt_secret(&client).await?;
+
             let dstack = Arc::new(client);
             let boot_info = nyx_tee::api::BootAppInfo {
                 app_id: info.app_id,
@@ -58,7 +65,7 @@ async fn main() -> Result<()> {
                 compose_hash: info.compose_hash,
                 mrtd: info.tcb_info.mrtd,
             };
-            nyx_tee::api::ApiState::from_boot(boot_info, &signer, dstack)
+            nyx_tee::api::ApiState::from_boot(boot_info, &signer, dstack, jwt_secret)
         }
         Err(e) => {
             tracing::warn!(
@@ -102,4 +109,30 @@ fn init_tracing() {
         .with_target(false)
         .compact()
         .init();
+}
+
+/// Derive the bearer-JWT HS256 secret from dstack. Uses a path
+/// distinct from the Ed25519 signer so the two key materials are
+/// independent (compromise of one shouldn't trivially leak the
+/// other). Same path → same secret across CVM restarts on the
+/// same `app_id`, so bearer tokens issued before a restart remain
+/// valid until they expire.
+async fn derive_jwt_secret(client: &DstackClient) -> anyhow::Result<[u8; 32]> {
+    // Same shape as `keys::ed25519::derive` — Some(path), None for
+    // purpose — so the two key-material derivations stay
+    // structurally identical and either can be swapped in tests.
+    let resp = client
+        .get_key(Some("nyx/jwt-secret/v1".to_string()), None)
+        .await
+        .map_err(|e| anyhow::anyhow!("dstack.get_key('nyx/jwt-secret/v1') failed: {e}"))?;
+    let bytes = resp
+        .decode_key()
+        .map_err(|e| anyhow::anyhow!("dstack.get_key returned undecodable JWT key: {e}"))?;
+    let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+        anyhow::anyhow!(
+            "dstack returned {} bytes for JWT secret; expected 32",
+            bytes.len()
+        )
+    })?;
+    Ok(arr)
 }

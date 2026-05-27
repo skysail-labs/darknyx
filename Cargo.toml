@@ -99,6 +99,16 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # the rest of the workspace's crypto.
 k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
 
+# JWT — nyx-tee/api/auth.rs uses HS256 with a 32-byte secret derived
+# from dstack via `get_key("nyx/jwt-secret/v1", "jwt")`. We pinned
+# v9 (the current major) which dropped the dependency on the
+# obsolete `ring` crate in favour of RustCrypto primitives.
+jsonwebtoken = { version = "9", default-features = false }
+
+# Constant-time comparison for credential verification. RustCrypto's
+# canonical impl; same crate used by ed25519-dalek under the hood.
+subtle = "2.5"
+
 [profile.release]
 overflow-checks = true
 lto = "fat"

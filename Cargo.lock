@@ -3305,6 +3305,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonwebtoken"
+version = "9.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
+dependencies = [
+ "base64 0.22.1",
+ "js-sys",
+ "ring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "k256"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3890,12 +3903,14 @@ dependencies = [
  "hex",
  "http",
  "http-body-util",
+ "jsonwebtoken",
  "k256",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "sha3 0.10.8",
+ "subtle",
  "thiserror 1.0.69",
  "tokio",
  "tower",

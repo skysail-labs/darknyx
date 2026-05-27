@@ -20,6 +20,7 @@ use std::time::Instant;
 
 use dstack_sdk::dstack_client::DstackClient;
 
+use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_JWT_SECRET};
 use crate::keys::ed25519::DerivedSigner;
 
 /// Fields we captured from `dstack.info()` at boot. Stable for
@@ -73,14 +74,35 @@ pub struct ApiState {
     /// see which `nyx-tee` revision is running. Pulled from
     /// `CARGO_PKG_VERSION` at compile time.
     pub nyx_version: &'static str,
+
+    // ── Layer A (operational) auth state ────────────────────────
+    /// HS256 secret for the bearer JWT. Production derives this
+    /// once at boot from dstack via
+    /// `get_key("nyx/jwt-secret/v1", "jwt")`; test mode uses
+    /// `auth::TEST_JWT_SECRET`. Treat the bytes as opaque — never
+    /// log, never expose via any endpoint.
+    pub jwt_secret: [u8; 32],
+    /// Account registry consulted by `POST /auth/token` to
+    /// validate `(api_key, api_secret, passphrase)` triples. In
+    /// this PR it's populated only via `for_tests()` (one seeded
+    /// account) and is empty in production until a separate
+    /// admin-registration endpoint lands.
+    pub accounts: Arc<AccountRegistry>,
+    /// Lifetime of each issued JWT. Configurable per instance;
+    /// defaults to [`super::auth::DEFAULT_JWT_TTL_SECONDS`].
+    pub jwt_ttl_seconds: u64,
 }
 
 impl ApiState {
-    /// Build production state from a successful boot.
+    /// Build production state from a successful boot. `jwt_secret`
+    /// is the 32-byte value derived via dstack `get_key`; the
+    /// account registry starts empty — populated by the (future)
+    /// admin-registration endpoint.
     pub fn from_boot(
         app_info: BootAppInfo,
         signer: &DerivedSigner,
         dstack: Arc<DstackClient>,
+        jwt_secret: [u8; 32],
     ) -> Self {
         Self {
             app_info,
@@ -89,13 +111,18 @@ impl ApiState {
             dstack: Some(dstack),
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
+            jwt_secret,
+            accounts: Arc::new(AccountRegistry::new()),
+            jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
         }
     }
 
     /// Build degraded state when dstack isn't reachable. Used by
     /// integration tests + by the dev-mode binary that falls back
     /// to serving `/health` + a stub `/info` when no simulator
-    /// is running. `/attestation` returns 503.
+    /// is running. `/attestation` returns 503; auth uses
+    /// `TEST_JWT_SECRET` + the single seeded account from
+    /// [`super::auth::test_registry`].
     pub fn for_tests() -> Self {
         Self {
             app_info: BootAppInfo::stub(),
@@ -104,6 +131,9 @@ impl ApiState {
             dstack: None,
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
+            jwt_secret: TEST_JWT_SECRET,
+            accounts: Arc::new(test_registry()),
+            jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
         }
     }
 }
