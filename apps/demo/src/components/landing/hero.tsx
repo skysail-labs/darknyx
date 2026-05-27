@@ -42,22 +42,9 @@ export function LandingHero() {
       className="relative isolate border-b"
       style={{ borderColor: "rgba(255,255,255,0.06)", minHeight: "100dvh", display: "flex", flexDirection: "column" }}
     >
-      {/* Live badge — centered, above the banner */}
-      <div className="nyx-rise flex justify-center pt-14 pb-5 px-5">
-        <div className="inline-flex items-center gap-2 px-3 py-1.5"
-          style={{ border: "1px solid rgba(217,104,32,0.2)", borderRadius: "2px", background: "rgba(217,104,32,0.05)" }}>
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inset-0 rounded-full bg-nyx-signal-green opacity-75 animate-ping" />
-            <span className="relative inline-flex rounded-full bg-nyx-signal-green h-1.5 w-1.5" />
-          </span>
-          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(174,172,176,0.7)" }}>
-            Live on Solana devnet
-          </span>
-        </div>
-      </div>
 
       {/* ASCII banner — true full-bleed, no horizontal padding */}
-      <div className="nyx-rise nyx-rise-delay-1 w-full">
+      <div className="nyx-rise nyx-rise-delay-1 w-full mt-16">
         <AsciiHeroBanner contained />
       </div>
 
@@ -69,8 +56,8 @@ export function LandingHero() {
           <div className="min-w-0">
             <h1 className="leading-[1.05]"
               style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "clamp(22px, 3vw, 36px)", fontWeight: 600, letterSpacing: "-0.02em" }}>
-              <span style={{ color: "#d96820" }}>Settle in the dark.</span>
-              <span style={{ color: "rgba(174,172,176,0.45)" }}> Prove in the light.</span>
+              <span style={{ color: "#d96820" }}>Settle in the dark<br/></span>
+              <span style={{ color: "rgba(174,172,176,0.45)" }}> Prove in the light</span>
             </h1>
             <p className="mt-3 max-w-lg"
               style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "11.5px", lineHeight: 1.8, color: "rgba(174,172,176,0.5)" }}>
@@ -100,7 +87,7 @@ export function LandingHero() {
       </div>
 
       {/* Scroll-down button */}
-      <div className="absolute bottom-10 left-0 right-0 flex justify-center">
+      <div className="absolute bottom-17 left-0 right-0 flex justify-center">
         <ScrollDownButton />
       </div>
     </section>
