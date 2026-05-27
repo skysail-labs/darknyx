@@ -1,16 +1,16 @@
 const PROTECTS_AGAINST = [
-  { title: "Front-running of unmatched orders", body: "Order intent lives in the TEE, never on L1." },
+  { title: "Front-running of unmatched orders", body: "Order intent arrives over RA-TLS into the TDX enclave; side, price, and amount never appear on L1." },
   { title: "Replay of TEE-signed settlements", body: "consumed_note PDAs lock both legs; a second identical settle collides at PDA allocation." },
   { title: "Withdrawals without ownership", body: "VALID_SPEND requires the spending key; nullifier PDAs prevent double-spend." },
   { title: "Conservation violations", body: "tee_forced_settle_batched enforces note.amount = trade + change + fee exactly before any state mutation." },
-  { title: "Mismatched canonical hashes", body: "The Ed25519 precompile message must equal canonical_payload_hash(payload); a TEE that signs a different message is rejected." },
+  { title: "TEE phantom-locking or mis-routing outputs", body: "VALID_INPUT gates every lock_note; VALID_MATCH_BATCH (N=16 Groth16) binds all output notes and clearing price for the entire batch." },
 ];
 
 const NOT_YET = [
-  { title: "Real TDX/SEV TEE + remote attestation", body: "Today the TEE is a software Ed25519 keypair. Production deploys must pin the key inside an attested enclave." },
-  { title: "Browser prover replacing snarkjs shell-out", body: "WebProverSuite is wired in for VALID_WALLET_CREATE + VALID_SPEND in the dapp; SDK-level prover still shells out for tests." },
-  { title: "Off-chain indexer for shielded notes", body: "Without one, the dapp reconstructs the Merkle tree from RPC history every time." },
-  { title: "Continuous TEE ↔ L1 commit scheduler", body: "Production wants commit_market_state every N slots so settlement can pick up matches without a full undelegate cycle." },
+  { title: "On-chain TDX quote verification (v3)", body: "v2 uses admin multisig + dstack-verifier off-chain. On-chain dcap-qvl BPF port deferred to v3." },
+  { title: "Real Phase-2 Groth16 trusted setup", body: "All circuits use a deterministic dev contribution; a real MPC ceremony with ≥3 contributors is required before mainnet." },
+  { title: "Browser prover (WebProverSuite)", body: "Replace snarkjs shell-out with an in-process WASM prover for VALID_WALLET_CREATE + VALID_SPEND in the browser." },
+  { title: "Light Protocol compressed nullifiers", body: "Replace NullifierEntry + ConsumedNoteEntry PDAs with compressed accounts — ~60× cheaper per settle at scale." },
   { title: "Real protocol-owner keypair for fee withdrawal", body: "Fee notes accumulate but can't be spent until a real protocol-owner key is wired in." },
 ];
 

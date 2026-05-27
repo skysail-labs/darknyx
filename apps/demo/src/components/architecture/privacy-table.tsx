@@ -5,12 +5,12 @@ interface Row {
 }
 
 const ROWS: Row[] = [
-  { object: "Order side / price / amount", l1Visible: false, notes: "Stays in the TEE until run_batch matches" },
-  { object: "Order's collateral note commitment", l1Visible: false, notes: "Same — only inside the TEE enclave" },
-  { object: "User's trading-key signature on submit_order", l1Visible: false, notes: "The whole submit tx lives in the TEE" },
+  { object: "Order side / price / amount", l1Visible: false, notes: "Stays inside the TDX enclave; never touches L1" },
+  { object: "Order's collateral note commitment", l1Visible: false, notes: "Only inside the enclave; not sent over RA-TLS to L1" },
+  { object: "User's trading-key signature on POST /order", l1Visible: false, notes: "Sent over RA-TLS into the enclave; never on L1" },
   { object: "note_commitment of the deposit note", l1Visible: true, notes: "Public on vault::deposit (always was)" },
   { object: "Deposit amount / mint", l1Visible: true, notes: "SPL transfer is on L1" },
-  { object: "Match clearing price + matched volume", l1Visible: true, notes: "Surfaces in BatchResults after commit" },
+  { object: "Match clearing price + matched volume", l1Visible: true, notes: "Published after batch settles on-chain" },
   { object: "Settlement note commitments (note_c, note_d, note_fee)", l1Visible: true, notes: "TEE appends them in tee_forced_settle_batched" },
   { object: "Withdrawal amount + recipient ATA", l1Visible: true, notes: "SPL transfer-out is on L1" },
 ];

@@ -68,7 +68,7 @@ export function LandingHero() {
             <p className="nyx-rise nyx-rise-delay-2 mt-6 max-w-lg leading-relaxed"
               style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", color: "rgba(174,172,176,0.6)" }}>
               Private orderbook on Solana.<br />
-              Orders match inside an attested ephemeral rollup, invisible to L1.<br />
+              Orders match inside an attested Intel TDX enclave, invisible to L1.<br />
               Every settlement is a Groth16 proof.
             </p>
 
