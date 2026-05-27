@@ -40,6 +40,7 @@ pub mod config;
 pub mod error;
 pub mod fee;
 pub mod match_result;
+pub mod order_canonical;
 
 pub use book::{
     Order, OrderBook, OrderSide, OrderStatus, OrderType, OrderUpdate, OrderUpdateKind, Price,
@@ -49,6 +50,9 @@ pub use config::{MatchConfig, OracleSnapshot, SETTLEMENT_BUFFER_SLOTS};
 pub use error::MatchError;
 pub use fee::FeeBucket;
 pub use match_result::{MatchPair, MatchStatus, RunBatchOutput, RELOCK_ORDER_ID_NONE};
+pub use order_canonical::{
+    CancelCanonical, CanonicalError, OrderCanonical, CANCEL_DOMAIN, ORDER_DOMAIN, SYMBOL_MAX_LEN,
+};
 
 /// The single public entry point. Given a book snapshot + oracle
 /// reading + market config + the current slot + a starting match-id
