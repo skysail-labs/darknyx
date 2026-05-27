@@ -42,29 +42,28 @@ export function LandingHero() {
       className="relative isolate border-b"
       style={{ borderColor: "rgba(255,255,255,0.06)", minHeight: "100dvh", display: "flex", flexDirection: "column" }}
     >
-      <div className="mx-auto w-full max-w-4xl px-5 pt-16 pb-10 sm:px-7 sm:pt-20">
-
-        {/* Live badge — centered above the banner */}
-        <div className="nyx-rise flex justify-center mb-6">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5"
-            style={{ border: "1px solid rgba(217,104,32,0.2)", borderRadius: "2px", background: "rgba(217,104,32,0.05)" }}>
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inset-0 rounded-full bg-nyx-signal-green opacity-75 animate-ping" />
-              <span className="relative inline-flex rounded-full bg-nyx-signal-green h-1.5 w-1.5" />
-            </span>
-            <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(174,172,176,0.7)" }}>
-              Live on Solana devnet
-            </span>
-          </div>
+      {/* Live badge — centered, above the banner */}
+      <div className="nyx-rise flex justify-center pt-14 pb-5 px-5">
+        <div className="inline-flex items-center gap-2 px-3 py-1.5"
+          style={{ border: "1px solid rgba(217,104,32,0.2)", borderRadius: "2px", background: "rgba(217,104,32,0.05)" }}>
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inset-0 rounded-full bg-nyx-signal-green opacity-75 animate-ping" />
+            <span className="relative inline-flex rounded-full bg-nyx-signal-green h-1.5 w-1.5" />
+          </span>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "10px", letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(174,172,176,0.7)" }}>
+            Live on Solana devnet
+          </span>
         </div>
+      </div>
 
-        {/* ASCII banner — full width, centered */}
-        <div className="nyx-rise nyx-rise-delay-1 w-full">
-          <AsciiHeroBanner contained />
-        </div>
+      {/* ASCII banner — true full-bleed, no horizontal padding */}
+      <div className="nyx-rise nyx-rise-delay-1 w-full">
+        <AsciiHeroBanner contained />
+      </div>
 
-        {/* Bottom row — tagline left, buttons right */}
-        <div className="nyx-rise nyx-rise-delay-2 mt-10 flex flex-col gap-8 sm:flex-row sm:items-end sm:justify-between">
+      {/* Bottom row — constrained to max-w-6xl, aligned with the rest of the page */}
+      <div className="nyx-rise nyx-rise-delay-2 mx-auto w-full max-w-6xl px-5 sm:px-7 pt-10 pb-16">
+        <div className="flex flex-col gap-8 sm:flex-row sm:items-end sm:justify-between">
 
           {/* Left — headline + description */}
           <div className="min-w-0">
@@ -83,15 +82,15 @@ export function LandingHero() {
           <div className="flex flex-col gap-2 shrink-0 sm:items-end">
             <Link
               href="/landing"
-              className="inline-flex items-center justify-center gap-2 px-6 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition"
-              style={{ fontFamily: "'JetBrains Mono', monospace", background: "rgba(217,104,32,0.18)", border: "1px solid rgba(217,104,32,0.4)", color: "#d96820", borderRadius: "2px" }}
+              className="inline-flex items-center justify-center px-6 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition"
+              style={{ fontFamily: "'JetBrains Mono', monospace", background: "rgba(217,104,32,0.18)", border: "1px solid rgba(217,104,32,0.4)", color: "#d96820", borderRadius: "2px", minWidth: "160px" }}
             >
               Coming Soon
             </Link>
             <Link
               href="/architecture"
-              className="inline-flex items-center justify-center gap-2 px-6 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition"
-              style={{ fontFamily: "'JetBrains Mono', monospace", border: "1px solid rgba(255,255,255,0.1)", color: "#aeacb0", borderRadius: "2px" }}
+              className="inline-flex items-center justify-center px-6 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition"
+              style={{ fontFamily: "'JetBrains Mono', monospace", border: "1px solid rgba(255,255,255,0.1)", color: "#aeacb0", borderRadius: "2px", minWidth: "160px" }}
             >
               Architecture
             </Link>
@@ -100,7 +99,7 @@ export function LandingHero() {
         </div>
       </div>
 
-      {/* Scroll-down button pinned near the bottom of the hero / viewport */}
+      {/* Scroll-down button */}
       <div className="absolute bottom-10 left-0 right-0 flex justify-center">
         <ScrollDownButton />
       </div>
