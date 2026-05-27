@@ -33,7 +33,7 @@ export function AsciiHeroBanner({ contained = false }: { contained?: boolean }) 
       const width = contained
         ? (canvas.parentElement?.offsetWidth ?? 480)
         : window.innerWidth;
-      const height = contained ? 340 : 620;
+      const height = contained ? 400 : 620;
 
       canvas.width = width * DPR;
       canvas.height = height * DPR;
@@ -228,7 +228,7 @@ export function AsciiHeroBanner({ contained = false }: { contained?: boolean }) 
   if (contained) {
     return (
       <div className="relative overflow-hidden" style={{ borderRadius: "2px", background: "#050505" }}>
-        <canvas ref={canvasRef} className="block w-full" style={{ height: "340px" }} />
+        <canvas ref={canvasRef} className="block w-full" style={{ height: "400px" }} />
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_30%,black_100%)]" />
         <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-linear-to-b from-black/50 to-transparent" />
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-black/60 to-transparent" />
