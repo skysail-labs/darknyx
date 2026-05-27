@@ -1,11 +1,12 @@
-//! In-TEE order book + matching loop. The matching ALGORITHM
-//! itself lives in `darkpool-matcher` (single source of truth,
-//! also used by litesvm parity tests). This module is the
-//! integration layer: order intake, indexing, tick driver, hand-off
-//! to the settle scheduler.
-//!
-//! See `docs/tee-architecture.md` §5.
+//! In-TEE matching layer. The pure algorithm lives in
+//! `crates/darkpool-matcher`; this module is the integration
+//! surface — the order book + the tokio interval driver that
+//! ties oracle, book, and algorithm together. See
+//! `docs/tee-architecture.md` §5.
 
 pub mod book;
 pub mod interval;
 pub mod selftrade;
+
+pub use book::{BookError, OrderBook};
+pub use interval::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};

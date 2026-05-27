@@ -11,16 +11,12 @@
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
 
-// Modules the binary uses directly. They also live under the
-// library crate (`nyx_tee::...`) for integration tests, but the
-// binary references them via local `mod` declarations to keep the
-// hot-path tree compact.
-mod api;
-mod matcher;
-mod merkle;
-mod persistence;
-mod prover;
-mod settle;
+// All module code lives in the library crate (`nyx_tee::...`).
+// The binary is a thin entry point that wires modules together;
+// it doesn't redeclare them locally. The remaining
+// `src/{api,merkle,persistence,prover,settle}` stubs are
+// scaffolding for later PRs and aren't included in the binary or
+// the library until they're ready to expose real APIs.
 
 #[tokio::main]
 async fn main() -> Result<()> {
