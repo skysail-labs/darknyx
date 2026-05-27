@@ -38,6 +38,9 @@ k256       = { workspace = true }
 # sha3: Keccak-256 over VAA bodies (Wormhole signs against keccak256,
 # not SHA-256 — same primitive Ethereum uses).
 sha3       = { workspace = true }
+# sha2: SHA-256 for the /attestation report_data pubkey binding
+# (the right half of the 64-byte report_data is SHA-256(tee_pubkey)).
+sha2       = { workspace = true }
 # thiserror: typed error variants for the oracle error chain.
 thiserror  = { workspace = true }
 # Already used by keys/; the oracle module needs it too for raw byte work.
@@ -46,11 +49,19 @@ thiserror  = { workspace = true }
 # ─── Phase-2+ deps (uncomment when wiring the matching module) ───────
 # borsh = { workspace = true, features = ["derive"] }
 
-# ─── Phase-2+ deps (uncomment when wiring the API module) ────────────
-# axum               = { workspace = true }
-# tower              = { workspace = true }
-# tower-http         = { workspace = true }
-# tokio-tungstenite  = { workspace = true }
+# ─── PR 4d — minimal HTTP surface (/health + /info + /attestation) ──
+# axum for the router + handlers. tower for the standard middleware
+# (we'll add request-id + tracing layers in PR 4e); tower-http for
+# the trace layer that bridges axum into our tracing setup.
+axum              = { workspace = true }
+tower             = { workspace = true }
+tower-http        = { workspace = true }
+http              = "1"
+# Used by integration tests to drive the router without binding a
+# real TCP port; production main.rs just calls axum::serve.
+http-body-util    = "0.1"
+# WS surface comes in PR 4e — keep this commented until then.
+# tokio-tungstenite = { workspace = true }
 
 # ─── PR 4a — keys + dstack handshake ─────────────────────────────────
 # DstackClient::new() + info() + get_key() + get_quote() — all the

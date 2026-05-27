@@ -8,6 +8,7 @@
 //! pulls these same modules into its own scope and threads them
 //! together. Either side compiles independently.
 
+pub mod api;
 pub mod boot;
 pub mod config;
 pub mod keys;
@@ -17,7 +18,6 @@ pub mod oracle;
 // The remaining modules are scaffolds that haven't grown
 // public-facing APIs yet — they'll get re-exports here as the
 // later PRs land.
-// pub mod api;
 // pub mod merkle;
 // pub mod persistence;
 // pub mod prover;
