@@ -50,23 +50,22 @@ export function LandingHero() {
 
       {/* Bottom row — constrained to max-w-6xl, aligned with the rest of the page */}
       <div className="nyx-rise nyx-rise-delay-2 mx-auto w-full max-w-6xl px-5 sm:px-7 pt-10 pb-16">
-        <div className="flex flex-col gap-8 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-8 sm:flex-row sm:items-center sm:justify-between">
 
           {/* Left — headline + description */}
           <div className="min-w-0">
-            <h1 className="leading-[1.05]"
-              style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "clamp(22px, 3vw, 36px)", fontWeight: 600, letterSpacing: "-0.02em" }}>
-              <span style={{ color: "#d96820" }}>Settle in the dark<br/></span>
-              <span style={{ color: "rgba(174,172,176,0.45)" }}> Prove in the light</span>
+            <h1 style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "clamp(22px, 3vw, 36px)", fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.5 }}>
+              <span style={{ display: "block", color: "#d96820" }}>Settle in the dark</span>
+              <span style={{ display: "block", color: "rgba(174,172,176,0.45)", marginTop: "6px" }}>Prove in the light</span>
             </h1>
             <p className="mt-3 max-w-lg"
               style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "11.5px", lineHeight: 1.8, color: "rgba(174,172,176,0.5)" }}>
-              Private orderbook on Solana. Orders match inside an attested Intel TDX enclave, invisible to L1. Every settlement is a Groth16 proof.
+              Private orderbook on Solana
             </p>
           </div>
 
-          {/* Right — buttons stacked */}
-          <div className="flex flex-col gap-2 shrink-0 sm:items-end">
+          {/* Right — buttons stacked, pushed down to align with bottom of text block */}
+          <div className="flex flex-col gap-2 shrink-0 sm:items-end self-end">
             <Link
               href="/landing"
               className="inline-flex items-center justify-center px-6 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition"
