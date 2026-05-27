@@ -82,6 +82,7 @@ By domain, additionally:
 | A `matching_engine` instruction | `programs/matching_engine/tests/common/mod.rs` (the test harness — it's 1500 lines of "what the on-chain ix expects"), then the existing litesvm test for the ix. |
 | `crates/darkpool-crypto` | The matching `*-parity.test.ts` file under `packages/sdk/tests/`. **Every host-side primitive has a byte-equality contract with TS.** Break the contract → parity test fails → CI fails. |
 | `crates/darkpool-matcher` | `crates/darkpool-matcher/tests/parity.rs` (8 integration scenarios) + `change_note_parity.rs` (4 cross-language byte-equality scenarios). The matcher's `run_batch` is the **single source of truth** for the matching algorithm — `programs/matching_engine/src/instructions/run_batch.rs` is a thin adapter over it. Any change to the matcher MUST keep both parity files green; specifically a change to `change_note::derive_*` triggers a triple-port (matcher Rust ↔ on-chain Rust reference ↔ TS in `packages/sdk/tests/helpers/e2e-helpers.ts`). |
+| `crates/nyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` — §11 for the user auth model (three identities, two-layer per-request auth), §13 for the iterate / spot-check / ceremony dev workflow + simulator-vs-real-CVM trade-offs + load-gen rationale. Also `docs/tee-attestation-flow.md` for the attestation chain + multisig rotation, and `docs/tee-api-openapi.yaml` for the wire contract. See [§12 of this file](#12-tee-development-workflow--iterate--spot-check--ceremony) — the 90/5/5 split is load-bearing for the dev loop. |
 | The SDK | The corresponding `tests/*-transport.test.ts` or wire-format unit test. `idl/vault-client.ts` + `idl/matching-engine-client.ts` hand-code every discriminator + Borsh layout (no Anchor IDL runtime) — you must keep them in sync with the on-chain structs by hand. |
 | Settlement plumbing | `CRYPTOGRAPHY.md` §9 (size analysis + ALT story). The 1232-byte cap is tight. See [§5 of this file](#5-the-1232-byte-transaction-size-budget). |
 
@@ -920,7 +921,67 @@ decision.
 
 ---
 
-## 12. When in doubt
+## 12. TEE development workflow — iterate / spot-check / ceremony
+
+TEE work (`crates/nyx-tee/` and its dstack handshake / oracle /
+matcher / HTTP-surface modules) runs across three execution targets.
+Each is suited to a different slice of the dev cycle, and skipping
+the wrong one wastes either money (deploying for things the simulator
+covers) or trust (shipping without ever validating real attestation).
+
+| Slice | Where | Cost / cycle | What it validates |
+|---|---|---|---|
+| **Iterate locally** (≈ 90%) | `nyx-tee` binary + `dstack-simulator` on the dev machine | ~5–15 s rebuild | Handler logic, matcher tick, oracle parsing, HTTP shape, key-derivation determinism, byte-level quote parsing |
+| **Spot-check on Phala** (≈ 5%) | Phala Cloud devnet CVM (`phala deploy ...`) | ~3 min, ~$0.003 / deploy | Real `compose_hash` measurements, real dstack-kms key delivery, Phala gateway latency, dstack-ingress RA-HTTPS |
+| **Full ceremony rehearsal** (≈ 5%) | Phala Cloud devnet CVM + multisig signers | ~10 min | Real Intel TCB signature, MRTD vs governance-approved set, end-to-end client `verifyTeeAttestation()`, multisig rotation flow |
+
+**Rules:**
+
+* **Iterate locally** for any handler tweak, matcher-algorithm change,
+  oracle module change, OpenAPI schema change. The simulator
+  (`dstack/sdk/simulator/dstack-simulator`) exposes the same
+  Unix-socket API a real TDX CVM does — `info()` + `get_key()` are
+  byte-identical; `get_quote()` returns a well-formed but
+  stub-signed quote. Real TCB verification (`dcap-qvl`, the t16z
+  Attestation Explorer, the SDK's `verifyTeeAttestation()`) **fails**
+  against simulator quotes — by design. That's the lever that keeps
+  the dev loop fast without letting clients be fooled by a stub
+  attestation.
+* **Spot-check on Phala** before opening a PR that touches the boot
+  path (`src/boot.rs`, `src/keys/`), the dstack handshake, or the
+  HTTP surface (`src/api/`). One smoke deploy + `/info` curl +
+  `phala cvms attestation` is enough.
+* **Full ceremony rehearsal** only when the `compose_hash` has
+  meaningfully changed — i.e. any PR that touches `Dockerfile`,
+  `deploy/docker-compose.yaml`, `crates/nyx-tee/Cargo.toml`, or
+  `crates/nyx-tee/src/`. Runs the multisig rotation flow from
+  `docs/tee-attestation-flow.md` §5 against actually-attested
+  measurements. Catches problems the simulator structurally cannot
+  see (real Intel-cert-chain mismatches, real measurement drift).
+
+**What you cannot validate locally:** the cryptographic chain of
+trust. `dcap-qvl verify` fails against the simulator's stub
+signature; clients trusting a simulator-issued `/attestation` cannot
+be deceived without explicit opt-in. Anything that depends on a real
+Intel-signed quote (the SDK `verifyTeeAttestation()`, the multisig
+admin's MRTD comparison) belongs in the spot-check or ceremony tier.
+
+**Load testing** is a planned dedicated PR
+(`crates/nyx-tee-loadgen/`, after `POST /orders` lands in PR 4e).
+Single-order matcher tests in `crates/nyx-tee/tests/matcher_tick.rs`
+are functional smoke, not throughput. See `docs/tee-architecture.md`
+§13.4 for the load-gen design + why a dedicated Rust generator
+(must produce cryptographically valid Ed25519-signed orders) beats
+a generic HTTP load tool. The PR 4f report `BENCHMARK.md` feeds the
+D5 (matching cadence) decision-revisit row.
+
+Full concrete commands (`phala deploy`, simulator startup, smoke
+checks) are in `docs/tee-architecture.md` §13.3. The user auth model
+the load-gen + handlers rely on is `docs/tee-architecture.md` §11.
+
+---
+
+## 13. When in doubt
 
 1. Re-read [§4](#4-touching-circuits-the-failure-mode-thats-bitten-us)
    if you're touching anything ZK-adjacent.
