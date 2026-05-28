@@ -14,6 +14,7 @@ pub mod config;
 pub mod keys;
 pub mod matcher;
 pub mod oracle;
+pub mod prover;
 pub mod settle;
 pub mod solana_rpc;
 
@@ -22,4 +23,3 @@ pub mod solana_rpc;
 // later PRs land.
 // pub mod merkle;
 // pub mod persistence;
-// pub mod prover;

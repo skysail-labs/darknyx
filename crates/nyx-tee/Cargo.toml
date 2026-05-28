@@ -122,10 +122,16 @@ hex           = { workspace = true }
 # solana-client = { workspace = true }
 # solana-sdk    = { workspace = true }
 
-# ─── Phase-2+ deps (uncomment when wiring the in-TEE prover) ─────────
+# ─── PR 4g.4a — in-TEE prover (deterministic foundation) ────────────
+# Reuses `darkpool-crypto`'s Poseidon helpers (already listed at top
+# of this file as `darkpool-crypto`). ark-bn254 + ark-ff cover field
+# arithmetic. The actual Groth16 prover (ark-groth16) is held back
+# to 4g.4b so 4g.4a stays focused on the byte-equality contract with
+# the TS side and doesn't drag the witness-calc dep wrangling into it.
+ark-bn254 = { workspace = true }
+ark-ff    = { workspace = true }
+# Activated in 4g.4b alongside circom-witnesscalc:
 # ark-groth16   = { workspace = true }
-# ark-bn254     = { workspace = true }
-# ark-ff        = { workspace = true }
 # ark-serialize = { workspace = true }
 # ark-ec        = { workspace = true }
 
