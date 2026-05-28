@@ -14,6 +14,8 @@
 pub mod account;
 pub mod attestation;
 pub mod auth;
+#[cfg(feature = "debug_endpoints")]
+pub mod debug;
 pub mod health;
 pub mod info;
 pub mod orders;
@@ -60,6 +62,14 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         .route("/info", get(info::handler))
         .route("/attestation", get(attestation::handler))
         .route("/auth/token", post(auth::token_handler));
+
+    // Debug endpoints — only compiled in when the `debug_endpoints`
+    // cargo feature is on. Used by `nyx-tee-loadgen` (PR 4f) for
+    // deterministic local-simulator runs; MUST be off in any
+    // production build. See `api::debug` for the security
+    // implications.
+    #[cfg(feature = "debug_endpoints")]
+    let public = public.route("/__debug/oracle/seed", post(debug::seed_oracle));
 
     // Bearer-protected sub-router. `from_fn_with_state` requires the
     // state to be visible on the inner router, so we attach it

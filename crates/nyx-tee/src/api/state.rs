@@ -25,6 +25,7 @@ use tokio::sync::RwLock;
 use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_JWT_SECRET};
 use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::MatcherState;
+use crate::oracle::OracleCache;
 
 /// Fields we captured from `dstack.info()` at boot. Stable for
 /// the CVM's lifetime — no need to re-fetch per request.
@@ -107,6 +108,13 @@ pub struct ApiState {
     /// book. Driven by a separate Solana-RPC poller in production
     /// (PR 4e.4); advanced manually in tests via `set_current_slot`.
     pub current_slot: Arc<std::sync::atomic::AtomicU64>,
+    /// Shared oracle cache the `MatcherDriver` reads on every tick.
+    /// `None` in degraded boot — same convention as `matcher`. The
+    /// `debug_endpoints` cargo feature uses this to back the
+    /// `POST /__debug/oracle/seed` endpoint; in production it's
+    /// written by `spawn_oracle_sync` (PR 4b) and read by the
+    /// matcher tick.
+    pub oracle: Option<OracleCache>,
 }
 
 impl ApiState {
@@ -136,23 +144,29 @@ impl ApiState {
             // handlers see `None` and return 503.
             matcher: None,
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            oracle: None,
         }
     }
 
     /// Attach a freshly-constructed `MatcherState` + shared
-    /// `current_slot` source to a boot-time `ApiState`. Called once
-    /// by `main.rs` after the `MatcherDriver` is spawned in PR 4e.4
-    /// — the `Arc<AtomicU64>` must be the SAME instance the driver
-    /// holds, so order arrivals + matcher ticks see a single clock.
-    /// Callers that build state via [`Self::for_tests`] don't need
-    /// to invoke this — `for_tests()` already seeds both.
+    /// `current_slot` source + shared `OracleCache` to a boot-time
+    /// `ApiState`. Called once by `main.rs` after the
+    /// `MatcherDriver` is spawned in PR 4e.4 — the `Arc<AtomicU64>`
+    /// and `OracleCache` must be the SAME instances the driver
+    /// holds, so order arrivals + matcher ticks see a single
+    /// clock + the same oracle view. Callers that build state via
+    /// [`Self::for_tests`] don't need to invoke this — `for_tests()`
+    /// already seeds the matcher + slot; pass an oracle here if a
+    /// test needs `/__debug/oracle/seed` to write somewhere.
     pub fn with_matcher_runtime(
         mut self,
         matcher: Arc<RwLock<MatcherState>>,
         current_slot: Arc<std::sync::atomic::AtomicU64>,
+        oracle: OracleCache,
     ) -> Self {
         self.matcher = Some(matcher);
         self.current_slot = current_slot;
+        self.oracle = Some(oracle);
         self
     }
 
@@ -179,6 +193,7 @@ impl ApiState {
             // `expiry_slot = 1_000_000` (the test default) lives
             // long enough to be matched without intervention.
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            oracle: Some(OracleCache::new()),
         }
     }
 }

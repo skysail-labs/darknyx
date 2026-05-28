@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
     let _drainer_handle = tokio::spawn(drain_matches(matches_rx));
 
     // ─── 6. Attach matcher to ApiState ────────────────────────────────
-    let api_state = api_state.with_matcher_runtime(matcher_state, current_slot);
+    let api_state = api_state.with_matcher_runtime(matcher_state, current_slot, oracle.clone());
 
     // ─── 7. Build router + bind listener + serve ──────────────────────
     let app = nyx_tee::api::build_router(Arc::new(api_state));

@@ -108,5 +108,17 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 # pulls in, so there's no resolution divergence.
 rand = { workspace = true }
 
+[features]
+default = []
+# Mounts `POST /__debug/oracle/seed`, used by `nyx-tee-loadgen`
+# for deterministic local-simulator runs (no real Hermes traffic
+# required). MUST be off in any production build — there's no
+# auth on this route, so a feature-on production deploy would
+# let anyone overwrite the matcher's price view. CI guards
+# against this with `cargo build -p nyx-tee` (default features
+# only); the loadgen smoke test builds with
+# `--features debug_endpoints` explicitly.
+debug_endpoints = []
+
 [lints.rust]
 unexpected_cfgs = { level = "warn" }

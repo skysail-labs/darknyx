@@ -156,8 +156,11 @@ async fn http_submit_two_crossing_orders_produces_match() {
     let (matches_tx, mut matches_rx) =
         mpsc::channel::<darkpool_matcher::match_result::RunBatchOutput>(8);
 
-    let api_state =
-        ApiState::for_tests().with_matcher_runtime(matcher_state.clone(), current_slot.clone());
+    let api_state = ApiState::for_tests().with_matcher_runtime(
+        matcher_state.clone(),
+        current_slot.clone(),
+        oracle.clone(),
+    );
     let app = build_router(Arc::new(api_state));
 
     // 2. Seed the oracle. The matcher's freshness window
@@ -282,8 +285,11 @@ async fn http_submit_without_crossing_produces_no_match() {
     let (matches_tx, mut matches_rx) =
         mpsc::channel::<darkpool_matcher::match_result::RunBatchOutput>(8);
 
-    let api_state =
-        ApiState::for_tests().with_matcher_runtime(matcher_state.clone(), current_slot.clone());
+    let api_state = ApiState::for_tests().with_matcher_runtime(
+        matcher_state.clone(),
+        current_slot.clone(),
+        oracle.clone(),
+    );
     let app = build_router(Arc::new(api_state));
 
     oracle
