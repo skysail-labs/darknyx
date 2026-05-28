@@ -102,6 +102,11 @@ hex           = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
+# Integration tests in tests/orders_surface.rs generate fresh
+# Ed25519 signing keys per test — needs an OsRng feeding into
+# `SigningKey::generate(...)`. Matches the version ed25519-dalek
+# pulls in, so there's no resolution divergence.
+rand = { workspace = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn" }

@@ -26,7 +26,8 @@ pub mod ws;
 use std::sync::Arc;
 
 use axum::{
-    routing::{get, post},
+    middleware::from_fn_with_state,
+    routing::{delete, get, post},
     Router,
 };
 
@@ -54,10 +55,38 @@ pub use state::{ApiState, BootAppInfo};
 /// session bearer-token scope is mounted via
 /// [`build_protected_router`] in PR 4e.3.
 pub fn build_router(state: Arc<ApiState>) -> Router {
-    Router::new()
+    let public = Router::new()
         .route("/health", get(health::handler))
         .route("/info", get(info::handler))
         .route("/attestation", get(attestation::handler))
-        .route("/auth/token", post(auth::token_handler))
-        .with_state(state)
+        .route("/auth/token", post(auth::token_handler));
+
+    // Bearer-protected sub-router. `from_fn_with_state` requires the
+    // state to be visible on the inner router, so we attach it
+    // there + on the outer merge target. Both halves share the
+    // same `Arc<ApiState>` so request handlers see identical state.
+    let protected = build_protected_router(state.clone());
+
+    public.merge(protected).with_state(state)
+}
+
+/// The bearer-protected sub-router. Mounts the per-order
+/// (Layer B) routes; PR 4f will add `/account/*` here too.
+/// Exposed `pub` so integration tests can mount additional
+/// test-only routes alongside the production ones.
+pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
+    // axum 0.7 path-capture syntax is `:name`, not `{name}` (which
+    // is axum 0.8's matchit syntax). Bumping axum is a separate
+    // PR — until then stick with `:order_id`.
+    //
+    // `route_layer` (not `layer`) so the bearer check runs ONLY on
+    // declared routes. With plain `.layer(...)` the middleware
+    // wraps the whole router including the 404 fallback, which
+    // surfaces as `401 Unauthorized` on every unknown path — not
+    // what we want.
+    Router::new()
+        .route("/orders", post(orders::place_order))
+        .route("/orders/:order_id", delete(orders::cancel_order))
+        .route("/orders/:order_id", get(orders::get_order))
+        .route_layer(from_fn_with_state(state, auth::bearer_middleware))
 }

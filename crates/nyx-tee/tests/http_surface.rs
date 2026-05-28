@@ -188,14 +188,16 @@ async fn unknown_route_returns_404() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/orders")
+                // /orders landed in PR 4e.3 — pick a path nothing
+                // has claimed yet to keep this test future-proof.
+                // /account, /tree, /settlement, /transparency are
+                // all PR 4g placeholders.
+                .uri("/this-route-does-not-exist")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    // /orders is documented in the OpenAPI spec but not wired
-    // until PR 4e — until then the router shouldn't have it.
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 

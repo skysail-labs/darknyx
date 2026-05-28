@@ -20,8 +20,11 @@ use std::time::Instant;
 
 use dstack_sdk::dstack_client::DstackClient;
 
+use tokio::sync::RwLock;
+
 use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_JWT_SECRET};
 use crate::keys::ed25519::DerivedSigner;
+use crate::matcher::MatcherState;
 
 /// Fields we captured from `dstack.info()` at boot. Stable for
 /// the CVM's lifetime — no need to re-fetch per request.
@@ -91,6 +94,19 @@ pub struct ApiState {
     /// Lifetime of each issued JWT. Configurable per instance;
     /// defaults to [`super::auth::DEFAULT_JWT_TTL_SECONDS`].
     pub jwt_ttl_seconds: u64,
+
+    // ── Matcher state (PR 4e.3 / 4e.4) ──────────────────────────
+    /// Shared order book + match-id counter. `None` in degraded
+    /// boot or during early initialisation — the `/orders` handlers
+    /// return 503 in that case. PR 4e.4 will populate this with the
+    /// long-running `MatcherDriver`'s state on every production
+    /// boot.
+    pub matcher: Option<Arc<RwLock<MatcherState>>>,
+    /// Monotonic counter the orders handler reads to stamp
+    /// `arrival_slot` on incoming orders before they land in the
+    /// book. Driven by a separate Solana-RPC poller in production
+    /// (PR 4e.4); advanced manually in tests via `set_current_slot`.
+    pub current_slot: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ApiState {
@@ -114,7 +130,23 @@ impl ApiState {
             jwt_secret,
             accounts: Arc::new(AccountRegistry::new()),
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
+            // `from_boot` doesn't construct the matcher — PR 4e.4
+            // spawns the `MatcherDriver` and plumbs its state in via
+            // a separate construction path. Until then the orders
+            // handlers see `None` and return 503.
+            matcher: None,
+            current_slot: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    /// Attach a freshly-constructed `MatcherState` to a boot-time
+    /// `ApiState`. Called once by `main.rs` after the
+    /// `MatcherDriver` is spawned in PR 4e.4. Idempotent: callers
+    /// that build the state via [`Self::for_tests`] don't need to
+    /// invoke this — `for_tests()` already seeds a fresh matcher.
+    pub fn with_matcher(mut self, matcher: Arc<RwLock<MatcherState>>) -> Self {
+        self.matcher = Some(matcher);
+        self
     }
 
     /// Build degraded state when dstack isn't reachable. Used by
@@ -134,6 +166,12 @@ impl ApiState {
             jwt_secret: TEST_JWT_SECRET,
             accounts: Arc::new(test_registry()),
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
+            matcher: Some(Arc::new(RwLock::new(MatcherState::new()))),
+            // Tests that exercise expiry need to bump this; the
+            // default starting slot is 1 so an order with
+            // `expiry_slot = 1_000_000` (the test default) lives
+            // long enough to be matched without intervention.
+            current_slot: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         }
     }
 }
