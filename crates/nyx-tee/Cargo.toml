@@ -72,6 +72,25 @@ jsonwebtoken      = { workspace = true }
 # Constant-time credential comparison (api_secret + passphrase).
 subtle            = { workspace = true }
 
+# ─── PR 4g.2 — Solana RPC client + fee-payer derivation ─────────────
+# Modular Solana crates (same set programs/vault uses as dev-deps).
+# Deliberately NOT `solana-client` / `solana-sdk` 1.18 — those
+# conflict with ark-ec 0.5 on zeroize. See workspace Cargo.toml
+# for the full rationale.
+#
+# 4g.2 needs: Pubkey (solana-address), Keypair (solana-keypair),
+# Hash (solana-hash), Signature (solana-signature), Signer trait
+# (solana-signer). 4g.3+ pulls in Instruction / Message / Transaction
+# from the same family.
+solana-address    = { workspace = true }
+solana-hash       = { workspace = true }
+solana-keypair    = { workspace = true }
+solana-signature  = { workspace = true }
+solana-signer     = { workspace = true }
+# Base64 encoding for tx wire format (solana RPC's sendTransaction
+# takes base64-encoded tx bytes).
+base64            = "0.22"
+
 # ─── PR 4a — keys + dstack handshake ─────────────────────────────────
 # DstackClient::new() + info() + get_key() + get_quote() — all the
 # Unix-socket calls that boot.rs makes against /var/run/dstack.sock

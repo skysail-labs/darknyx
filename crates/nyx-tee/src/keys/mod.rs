@@ -9,3 +9,4 @@
 //!     dstack-sdk publishes it for Rust (Python ships it today)
 
 pub mod ed25519;
+pub mod solana;

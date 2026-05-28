@@ -121,6 +121,29 @@ hdrhistogram = "7"
 # by ed25519-dalek; this brings rand_distr for lognormal sampling.
 rand_distr = "0.4"
 
+# nyx-tee/solana_rpc — modular Solana crates (PR 4g.2+).
+#
+# We deliberately AVOID `solana-client` / `solana-sdk` 1.18 because
+# they pull a `zeroize` major that conflicts with `ark-ec` 0.5.
+# Instead use the post-modularisation 2.x/3.x split crates that
+# `programs/vault`'s dev-deps already use. These compile cleanly
+# alongside the existing `ark-*` 0.5 workspace deps because they
+# share the same modern zeroize constraint.
+#
+# The JSON-RPC client itself is hand-rolled on top of `reqwest`
+# (already in tree for oracle/hermes) so there's no `solana-rpc-
+# client` dep — just the type system.
+solana-address           = "2"
+solana-hash              = "3"
+solana-keypair           = "~3.1"
+# `~3.1` not `~3.0` to satisfy litesvm 0.9.1's tighter requirement
+# — picked up by the matching_engine dev-deps.
+solana-signature         = "~3.1"
+solana-signer            = "~3.0"
+# 4g.3+ will pull in instruction / message / transaction / system-
+# interface from the same family. Add them when they're first used
+# so the dep-graph delta of THIS PR stays minimal.
+
 [profile.release]
 overflow-checks = true
 lto = "fat"

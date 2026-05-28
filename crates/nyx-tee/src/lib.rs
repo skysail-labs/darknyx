@@ -15,6 +15,7 @@ pub mod keys;
 pub mod matcher;
 pub mod oracle;
 pub mod settle;
+pub mod solana_rpc;
 
 // The remaining modules are scaffolds that haven't grown
 // public-facing APIs yet — they'll get re-exports here as the
@@ -22,4 +23,3 @@ pub mod settle;
 // pub mod merkle;
 // pub mod persistence;
 // pub mod prover;
-// pub mod solana_rpc;

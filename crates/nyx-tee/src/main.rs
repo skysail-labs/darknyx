@@ -37,11 +37,13 @@ use anyhow::Result;
 use darkpool_matcher::config::MatchConfig;
 use darkpool_matcher::match_result::RunBatchOutput;
 use dstack_sdk::dstack_client::DstackClient;
+use nyx_tee::keys::solana::{derive as derive_fee_payer, FeePayer};
 use nyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
 use nyx_tee::oracle::cache::OracleCache;
 use nyx_tee::oracle::hermes::HermesClient;
 use nyx_tee::oracle::sync::{spawn_oracle_sync, SyncConfig};
 use nyx_tee::settle::SettleScheduler;
+use nyx_tee::solana_rpc::SolanaRpcClient;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tracing_subscriber::EnvFilter;
@@ -55,8 +57,8 @@ async fn main() -> Result<()> {
     let cfg = nyx_tee::config::Config::from_env()?;
     tracing::info!(?cfg, "loaded config");
 
-    // ─── 1. dstack handshake ──────────────────────────────────────────
-    let api_state = match nyx_tee::boot::probe_dstack().await {
+    // ─── 1. dstack handshake + fee-payer derivation ──────────────────
+    let (api_state, fee_payer): (_, Option<FeePayer>) = match nyx_tee::boot::probe_dstack().await {
         Ok(signer) => {
             let client = DstackClient::new(None);
             let info = client.info().await?;
@@ -67,6 +69,18 @@ async fn main() -> Result<()> {
             // doesn't trivially leak the other.
             let jwt_secret = derive_jwt_secret(&client).await?;
 
+            // Same client, separate path → independent fee-payer
+            // keypair. First-time CVM boots need a manual
+            // airdrop to the logged pubkey (devnet:
+            // `solana airdrop 5 <pubkey>`); production deploys
+            // pre-fund out of band.
+            let fee_payer = derive_fee_payer(&client).await?;
+            tracing::info!(
+                fee_payer_pubkey = %fee_payer.pubkey_base58,
+                "derived Solana fee-payer keypair from dstack; \
+                 verify this address holds SOL on the target cluster"
+            );
+
             let dstack = Arc::new(client);
             let boot_info = nyx_tee::api::BootAppInfo {
                 app_id: info.app_id,
@@ -76,16 +90,19 @@ async fn main() -> Result<()> {
                 compose_hash: info.compose_hash,
                 mrtd: info.tcb_info.mrtd,
             };
-            nyx_tee::api::ApiState::from_boot(boot_info, &signer, dstack, jwt_secret)
+            (
+                nyx_tee::api::ApiState::from_boot(boot_info, &signer, dstack, jwt_secret),
+                Some(fee_payer),
+            )
         }
         Err(e) => {
             tracing::warn!(
                 error = %e,
                 "dstack probe failed; entering degraded boot. /health + /info \
-                 will serve stub data; /attestation returns 503. This is the \
-                 expected dev-machine experience without a running simulator."
+                 will serve stub data; /attestation returns 503. The settle \
+                 pipeline is also disabled — no fee-payer keypair available."
             );
-            nyx_tee::api::ApiState::for_tests()
+            (nyx_tee::api::ApiState::for_tests(), None)
         }
     };
 
@@ -155,12 +172,30 @@ async fn main() -> Result<()> {
     // brief write-lock per batch).
     let (_scheduler_handle, settle_state) = SettleScheduler::spawn(matches_rx);
 
-    // ─── 6. Attach matcher + settle state to ApiState ─────────────────
+    // ─── 6. Construct Solana RPC client (PR 4g.2) ─────────────────────
+    // Pointed at the configured cluster URL. The fee-payer keypair
+    // itself isn't on ApiState — it lives in the (future) settle
+    // stage workers' closure captures. Only the pubkey is surfaced
+    // (for `/info` operator visibility in 4g.5).
+    let api_state = if let Some(fp) = fee_payer.as_ref() {
+        let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
+        tracing::info!(
+            endpoint = cfg.solana_rpc_url,
+            fee_payer = %fp.pubkey_base58,
+            "Solana RPC client constructed; settle pipeline workers will use it from PR 4g.3"
+        );
+        api_state.with_solana_rpc(rpc, fp.pubkey_base58.clone())
+    } else {
+        tracing::warn!("no fee-payer derived (degraded boot); settle pipeline disabled");
+        api_state
+    };
+
+    // ─── 7. Attach matcher + settle state to ApiState ─────────────────
     let api_state = api_state
         .with_matcher_runtime(matcher_state, current_slot, oracle.clone())
         .with_settle_state(settle_state);
 
-    // ─── 7. Build router + bind listener + serve ──────────────────────
+    // ─── 8. Build router + bind listener + serve ──────────────────────
     let app = nyx_tee::api::build_router(Arc::new(api_state));
     let addr: SocketAddr = cfg
         .http_bind

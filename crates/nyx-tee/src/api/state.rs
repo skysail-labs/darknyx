@@ -27,6 +27,7 @@ use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::MatcherState;
 use crate::oracle::OracleCache;
 use crate::settle::SettleSchedulerState;
+use crate::solana_rpc::SolanaRpcClient;
 
 /// Fields we captured from `dstack.info()` at boot. Stable for
 /// the CVM's lifetime — no need to re-fetch per request.
@@ -123,6 +124,21 @@ pub struct ApiState {
     /// stage workers (4g.3 / 4g.5 / 4g.6) take brief write locks to
     /// advance jobs. `None` until `main.rs` spawns the scheduler.
     pub settle_state: Option<Arc<RwLock<SettleSchedulerState>>>,
+
+    // ── Solana RPC + fee-payer (PR 4g.2) ────────────────────────
+    /// Hand-rolled JSON-RPC client pointed at the configured
+    /// Solana cluster URL. `None` in degraded boot; populated by
+    /// `main.rs` after construction. Cloneable cheaply (the inner
+    /// reqwest::Client is internally Arc) — stage workers in
+    /// 4g.3+ will clone it into their per-job tasks.
+    pub solana_rpc: Option<SolanaRpcClient>,
+    /// Base58 of the dstack-derived fee-payer pubkey. The keypair
+    /// itself stays inside the settle pipeline's stage workers
+    /// (not exposed via HTTP). Surfacing the pubkey on `/info`
+    /// lets operators verify the address they pre-funded matches
+    /// the one this CVM derives. Filled by `main.rs` after
+    /// successful boot; `None` in degraded boot + tests.
+    pub fee_payer_pubkey_base58: Option<String>,
 }
 
 impl ApiState {
@@ -154,7 +170,23 @@ impl ApiState {
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             oracle: None,
             settle_state: None,
+            solana_rpc: None,
+            fee_payer_pubkey_base58: None,
         }
+    }
+
+    /// Attach the Solana RPC client + the fee-payer pubkey display
+    /// string. Called by `main.rs` once both are constructed; the
+    /// stage workers in 4g.3+ read `solana_rpc` to submit txs.
+    /// Idempotent.
+    pub fn with_solana_rpc(
+        mut self,
+        rpc: SolanaRpcClient,
+        fee_payer_pubkey_base58: String,
+    ) -> Self {
+        self.solana_rpc = Some(rpc);
+        self.fee_payer_pubkey_base58 = Some(fee_payer_pubkey_base58);
+        self
     }
 
     /// Attach a freshly-constructed `MatcherState` + shared
@@ -215,6 +247,11 @@ impl ApiState {
             // to drive the `/settlement/status/*` endpoint must
             // spawn one and call `with_settle_state(...)`.
             settle_state: None,
+            // No Solana RPC client by default — tests that need
+            // one construct it manually and attach via
+            // `with_solana_rpc(...)`.
+            solana_rpc: None,
+            fee_payer_pubkey_base58: None,
         }
     }
 }
