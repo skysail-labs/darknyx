@@ -23,16 +23,36 @@ pub struct Config {
     /// `DSTACK_SIMULATOR_ENDPOINT` is set we use that; otherwise
     /// `/var/run/dstack.sock`.
     pub dstack_socket: Option<String>,
+
+    /// Comma-separated list of Pyth Hermes feed ids the oracle
+    /// sync task should refresh on every tick. Empty by default —
+    /// dev-machine boots without network access skip oracle sync
+    /// entirely and the matcher's tick simply no-ops (stale oracle
+    /// is treated as "skip cycle"). Production sets one feed per
+    /// market via `NYX_TEE_FEED_IDS`. Each entry is the
+    /// 64-char-hex Pyth feed id.
+    pub feed_ids: Vec<String>,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        let feed_ids = std::env::var("NYX_TEE_FEED_IDS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(Self {
             http_bind: std::env::var("NYX_TEE_HTTP_BIND")
                 .unwrap_or_else(|_| "0.0.0.0:8080".to_string()),
             solana_rpc_url: std::env::var("NYX_TEE_SOLANA_RPC_URL")
                 .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string()),
             dstack_socket: std::env::var("DSTACK_SIMULATOR_ENDPOINT").ok(),
+            feed_ids,
         })
     }
 }

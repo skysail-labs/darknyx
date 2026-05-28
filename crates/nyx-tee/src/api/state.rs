@@ -139,13 +139,20 @@ impl ApiState {
         }
     }
 
-    /// Attach a freshly-constructed `MatcherState` to a boot-time
-    /// `ApiState`. Called once by `main.rs` after the
-    /// `MatcherDriver` is spawned in PR 4e.4. Idempotent: callers
-    /// that build the state via [`Self::for_tests`] don't need to
-    /// invoke this — `for_tests()` already seeds a fresh matcher.
-    pub fn with_matcher(mut self, matcher: Arc<RwLock<MatcherState>>) -> Self {
+    /// Attach a freshly-constructed `MatcherState` + shared
+    /// `current_slot` source to a boot-time `ApiState`. Called once
+    /// by `main.rs` after the `MatcherDriver` is spawned in PR 4e.4
+    /// — the `Arc<AtomicU64>` must be the SAME instance the driver
+    /// holds, so order arrivals + matcher ticks see a single clock.
+    /// Callers that build state via [`Self::for_tests`] don't need
+    /// to invoke this — `for_tests()` already seeds both.
+    pub fn with_matcher_runtime(
+        mut self,
+        matcher: Arc<RwLock<MatcherState>>,
+        current_slot: Arc<std::sync::atomic::AtomicU64>,
+    ) -> Self {
         self.matcher = Some(matcher);
+        self.current_slot = current_slot;
         self
     }
 
