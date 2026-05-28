@@ -51,6 +51,7 @@ pub use state::{ApiState, BootAppInfo};
 /// | POST   | `/orders`      | bearer (4e.2) | PR 4e.3  |
 /// | DELETE | `/orders/{id}` | bearer (4e.2) | PR 4e.3  |
 /// | GET    | `/orders/{id}` | bearer (4e.2) | PR 4e.3  |
+/// | GET    | `/settlement/status/{batch_id}` | bearer | PR 4g.1 |
 ///
 /// `POST /auth/token` is intentionally public (rate-limited at the
 /// reverse-proxy layer in production); everything inside the
@@ -98,5 +99,6 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         .route("/orders", post(orders::place_order))
         .route("/orders/:order_id", delete(orders::cancel_order))
         .route("/orders/:order_id", get(orders::get_order))
+        .route("/settlement/status/:batch_id", get(settlement::get_status))
         .route_layer(from_fn_with_state(state, auth::bearer_middleware))
 }

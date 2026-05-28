@@ -26,6 +26,7 @@ use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_
 use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::MatcherState;
 use crate::oracle::OracleCache;
+use crate::settle::SettleSchedulerState;
 
 /// Fields we captured from `dstack.info()` at boot. Stable for
 /// the CVM's lifetime — no need to re-fetch per request.
@@ -115,6 +116,13 @@ pub struct ApiState {
     /// written by `spawn_oracle_sync` (PR 4b) and read by the
     /// matcher tick.
     pub oracle: Option<OracleCache>,
+
+    // ── Settle scheduler state (PR 4g.1) ────────────────────────
+    /// Shared state the `SettleScheduler` task writes into. The
+    /// `GET /settlement/status/{batch_id}` handler reads it; future
+    /// stage workers (4g.3 / 4g.5 / 4g.6) take brief write locks to
+    /// advance jobs. `None` until `main.rs` spawns the scheduler.
+    pub settle_state: Option<Arc<RwLock<SettleSchedulerState>>>,
 }
 
 impl ApiState {
@@ -145,6 +153,7 @@ impl ApiState {
             matcher: None,
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             oracle: None,
+            settle_state: None,
         }
     }
 
@@ -167,6 +176,14 @@ impl ApiState {
         self.matcher = Some(matcher);
         self.current_slot = current_slot;
         self.oracle = Some(oracle);
+        self
+    }
+
+    /// Attach the shared [`SettleSchedulerState`]. Called once by
+    /// `main.rs` after [`crate::settle::SettleScheduler::spawn`].
+    /// Idempotent; calling twice replaces the prior handle.
+    pub fn with_settle_state(mut self, settle_state: Arc<RwLock<SettleSchedulerState>>) -> Self {
+        self.settle_state = Some(settle_state);
         self
     }
 
@@ -194,6 +211,10 @@ impl ApiState {
             // long enough to be matched without intervention.
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             oracle: Some(OracleCache::new()),
+            // No scheduler running by default — tests that need
+            // to drive the `/settlement/status/*` endpoint must
+            // spawn one and call `with_settle_state(...)`.
+            settle_state: None,
         }
     }
 }

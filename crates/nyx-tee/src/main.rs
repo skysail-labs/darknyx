@@ -41,6 +41,7 @@ use nyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_OR
 use nyx_tee::oracle::cache::OracleCache;
 use nyx_tee::oracle::hermes::HermesClient;
 use nyx_tee::oracle::sync::{spawn_oracle_sync, SyncConfig};
+use nyx_tee::settle::SettleScheduler;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tracing_subscriber::EnvFilter;
@@ -145,15 +146,19 @@ async fn main() -> Result<()> {
         Some(handle)
     };
 
-    // ─── 5. Settle-output drainer ─────────────────────────────────────
-    // Placeholder until PR 4f wires the real settle scheduler. Drains
-    // the matches channel so the matcher's `send().await` never
-    // backpressures during dev. Logs each output's match count for
-    // operator visibility.
-    let _drainer_handle = tokio::spawn(drain_matches(matches_rx));
+    // ─── 5. Settle scheduler (PR 4g.1) ────────────────────────────────
+    // Replaces the prior `drain_matches` stub. Currently accumulates
+    // jobs in `Queued` — PRs 4g.3 / 4g.5 / 4g.6 will plug stage
+    // workers in and drive jobs to `Done`. The matcher's
+    // `send().await` is fed continuously regardless of stage
+    // progress (the channel capacity is 1024, and ingestion is a
+    // brief write-lock per batch).
+    let (_scheduler_handle, settle_state) = SettleScheduler::spawn(matches_rx);
 
-    // ─── 6. Attach matcher to ApiState ────────────────────────────────
-    let api_state = api_state.with_matcher_runtime(matcher_state, current_slot, oracle.clone());
+    // ─── 6. Attach matcher + settle state to ApiState ─────────────────
+    let api_state = api_state
+        .with_matcher_runtime(matcher_state, current_slot, oracle.clone())
+        .with_settle_state(settle_state);
 
     // ─── 7. Build router + bind listener + serve ──────────────────────
     let app = nyx_tee::api::build_router(Arc::new(api_state));
@@ -241,17 +246,4 @@ fn dev_match_config() -> MatchConfig {
         fee_rate_bps: 0,
         protocol_owner_commitment: [0u8; 32],
     }
-}
-
-/// Drain the matches channel until the matcher driver is shut
-/// down. Replaced by the real settle scheduler in PR 4f.
-async fn drain_matches(mut rx: mpsc::Receiver<RunBatchOutput>) {
-    while let Some(output) = rx.recv().await {
-        tracing::info!(
-            count = output.matches.len(),
-            clearing_price = output.clearing_price,
-            "matcher output received (settle scheduler stub — discarding)"
-        );
-    }
-    tracing::info!("matches channel closed; drainer exiting");
 }
