@@ -6,6 +6,7 @@ members = [
     "crates/darkpool-crypto",
     "crates/darkpool-matcher",
     "crates/nyx-tee",
+    "crates/nyx-tee-loadgen",
 ]
 exclude = [
     "darkpool",
@@ -108,6 +109,17 @@ jsonwebtoken = { version = "9", default-features = false }
 # Constant-time comparison for credential verification. RustCrypto's
 # canonical impl; same crate used by ed25519-dalek under the hood.
 subtle = "2.5"
+
+# nyx-tee-loadgen — synthetic order traffic generator.
+# CLI parser. v4 is the stable major; derives keep the main.rs CLI
+# definition declarative.
+clap = { version = "4", features = ["derive"] }
+# hdrhistogram for percentile-aware latency tracking. Records
+# microseconds in a fixed window; cheap recording, O(1) querying.
+hdrhistogram = "7"
+# Pseudo-RNG for workload generators. rand 0.8 already pulled in
+# by ed25519-dalek; this brings rand_distr for lognormal sampling.
+rand_distr = "0.4"
 
 [profile.release]
 overflow-checks = true

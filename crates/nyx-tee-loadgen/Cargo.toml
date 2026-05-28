@@ -1,0 +1,59 @@
+[package]
+name = "nyx-tee-loadgen"
+version.workspace = true
+edition.workspace = true
+description = "Dev-only synthetic traffic generator for nyx-tee. Drives POST /orders / DELETE /orders / GET /orders against a running TEE (local-simulator or Phala devnet) and reports submit / match / cancel latency percentiles + sustained throughput. See docs/tee-architecture.md §13.4 for design rationale + the 90/5/5 dev-loop split this fits into."
+
+[[bin]]
+name = "nyx-tee-loadgen"
+path = "src/main.rs"
+
+[lib]
+name = "nyx_tee_loadgen"
+path = "src/lib.rs"
+
+[dependencies]
+# Sibling crates — we sign valid orders using the matcher's
+# canonical encoder, exactly the same code path the TEE's
+# Layer-B handler verifies against. Anything that drifts here
+# is caught by the cross-language parity test in
+# `packages/sdk/tests/order-canonical-parity.test.ts`.
+darkpool-matcher = { path = "../darkpool-matcher" }
+
+# Async runtime + HTTP client.
+tokio   = { workspace = true }
+reqwest = { workspace = true }
+
+# Signing. Each virtual trader gets a fresh keypair so the
+# matcher's self-trade-prevention sees them as distinct.
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+rand          = { workspace = true }
+rand_distr    = { workspace = true }
+
+# CLI + reporting.
+clap        = { workspace = true }
+hdrhistogram = { workspace = true }
+
+# Serde for wire bodies (and the report writer).
+serde      = { workspace = true }
+serde_json = { workspace = true }
+hex        = { workspace = true }
+
+# Tracing — same shape as nyx-tee so logs interleave cleanly when
+# loadgen + TEE run in the same shell.
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+anyhow    = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Smoke test needs to drive nyx-tee in-process with the feature
+# on so it can seed the oracle via the debug endpoint.
+nyx-tee = { path = "../nyx-tee", features = ["debug_endpoints"] }
+darkpool-matcher = { path = "../darkpool-matcher" }
+tokio   = { workspace = true, features = ["full", "test-util"] }
+axum    = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn" }

@@ -1,0 +1,148 @@
+//! Shared metrics — one `Arc<RunMetrics>` cloned into each trader.
+//!
+//! Histograms use `hdrhistogram` with a 1 µs precision over a
+//! 60 s range. Lock-contention is negligible because:
+//!   - record() is sub-µs,
+//!   - we record one value per HTTP request (~10s of µs per
+//!     trader),
+//!   - the lock is dropped before any other work.
+//!
+//! Final percentile read happens once at run end, outside the
+//! traders' loops.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use hdrhistogram::Histogram;
+use tokio::sync::Mutex;
+
+/// One `Histogram<u64>` per latency stream + atomic counters for
+/// the lock-free totals. Wrapped in `Arc<...>` by the run driver.
+pub struct RunMetrics {
+    pub submit_latency_us: Mutex<Histogram<u64>>,
+    pub cancel_latency_us: Mutex<Histogram<u64>>,
+    pub match_latency_us: Mutex<Histogram<u64>>,
+
+    pub submits_total: AtomicU64,
+    pub submits_ok: AtomicU64,
+    pub submits_4xx: AtomicU64,
+    pub submits_5xx: AtomicU64,
+    pub submits_neterr: AtomicU64,
+
+    pub cancels_total: AtomicU64,
+    pub cancels_ok: AtomicU64,
+    pub cancels_4xx: AtomicU64,
+    pub cancels_5xx: AtomicU64,
+}
+
+impl RunMetrics {
+    pub fn new() -> Arc<Self> {
+        // Range 1 µs..=60 s, sigfig 3 → ~5% relative error in the
+        // bucket the recorded value lands in. Plenty of resolution
+        // for the kind of numbers we'll see.
+        let new_hist =
+            || Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("valid hist bounds");
+        Arc::new(Self {
+            submit_latency_us: Mutex::new(new_hist()),
+            cancel_latency_us: Mutex::new(new_hist()),
+            match_latency_us: Mutex::new(new_hist()),
+            submits_total: AtomicU64::new(0),
+            submits_ok: AtomicU64::new(0),
+            submits_4xx: AtomicU64::new(0),
+            submits_5xx: AtomicU64::new(0),
+            submits_neterr: AtomicU64::new(0),
+            cancels_total: AtomicU64::new(0),
+            cancels_ok: AtomicU64::new(0),
+            cancels_4xx: AtomicU64::new(0),
+            cancels_5xx: AtomicU64::new(0),
+        })
+    }
+
+    pub async fn record_submit_latency_us(&self, us: u64) {
+        let _ = self.submit_latency_us.lock().await.record(us.max(1));
+    }
+
+    pub async fn record_cancel_latency_us(&self, us: u64) {
+        let _ = self.cancel_latency_us.lock().await.record(us.max(1));
+    }
+
+    pub async fn record_match_latency_us(&self, us: u64) {
+        let _ = self.match_latency_us.lock().await.record(us.max(1));
+    }
+
+    pub fn note_submit(&self, outcome: SubmitOutcome) {
+        self.submits_total.fetch_add(1, Ordering::Relaxed);
+        let bucket = match outcome {
+            SubmitOutcome::Ok => &self.submits_ok,
+            SubmitOutcome::Status4xx => &self.submits_4xx,
+            SubmitOutcome::Status5xx => &self.submits_5xx,
+            SubmitOutcome::NetworkError => &self.submits_neterr,
+        };
+        bucket.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn note_cancel(&self, outcome: CancelOutcome) {
+        self.cancels_total.fetch_add(1, Ordering::Relaxed);
+        let bucket = match outcome {
+            CancelOutcome::Ok => &self.cancels_ok,
+            CancelOutcome::Status4xx => &self.cancels_4xx,
+            CancelOutcome::Status5xx => &self.cancels_5xx,
+        };
+        bucket.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Snapshot of every counter, taken as a single u64 read each.
+    /// Not atomic across counters — the values may not represent
+    /// the same instant — but the granularity is plenty for the
+    /// end-of-run report.
+    pub fn snapshot_counters(&self) -> CounterSnapshot {
+        CounterSnapshot {
+            submits_total: self.submits_total.load(Ordering::Relaxed),
+            submits_ok: self.submits_ok.load(Ordering::Relaxed),
+            submits_4xx: self.submits_4xx.load(Ordering::Relaxed),
+            submits_5xx: self.submits_5xx.load(Ordering::Relaxed),
+            submits_neterr: self.submits_neterr.load(Ordering::Relaxed),
+            cancels_total: self.cancels_total.load(Ordering::Relaxed),
+            cancels_ok: self.cancels_ok.load(Ordering::Relaxed),
+            cancels_4xx: self.cancels_4xx.load(Ordering::Relaxed),
+            cancels_5xx: self.cancels_5xx.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SubmitOutcome {
+    Ok,
+    Status4xx,
+    Status5xx,
+    NetworkError,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CancelOutcome {
+    Ok,
+    Status4xx,
+    Status5xx,
+}
+
+#[derive(Debug, Clone)]
+pub struct CounterSnapshot {
+    pub submits_total: u64,
+    pub submits_ok: u64,
+    pub submits_4xx: u64,
+    pub submits_5xx: u64,
+    pub submits_neterr: u64,
+    pub cancels_total: u64,
+    pub cancels_ok: u64,
+    pub cancels_4xx: u64,
+    pub cancels_5xx: u64,
+}
+
+impl CounterSnapshot {
+    pub fn submit_success_rate(&self) -> f64 {
+        if self.submits_total == 0 {
+            return 0.0;
+        }
+        self.submits_ok as f64 / self.submits_total as f64
+    }
+}
