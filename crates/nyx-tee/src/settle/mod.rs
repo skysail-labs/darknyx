@@ -25,13 +25,22 @@
 pub mod job;
 pub mod scheduler;
 
-// On-chain tx-construction helpers — populated by 4g.5 / 4g.6.
-// Kept as files now so the module shape stays stable across the
-// sub-PR sequence.
+// Vault program constants + PDA derivation. Hand-mirrored from
+// `programs/vault/src/state.rs` because we don't pull in
+// anchor-lang here.
+pub mod vault;
+
+// Tx-construction modules — one per pipeline stage. PR 4g.3 lands
+// `lock_note`. PRs 4g.5 / 4g.6 will populate the rest of the
+// shells below (currently doc-only placeholders).
 pub mod alt;
+pub mod lock_note;
 pub mod payload;
 pub mod pipeline;
 pub mod sign;
+pub mod submit_lock;
 
 pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage};
+pub use lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
 pub use scheduler::{SettleScheduler, SettleSchedulerState};
+pub use submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockPairOutcome, LockSideInputs};

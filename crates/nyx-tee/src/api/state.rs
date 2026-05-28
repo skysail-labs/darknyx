@@ -125,20 +125,18 @@ pub struct ApiState {
     /// advance jobs. `None` until `main.rs` spawns the scheduler.
     pub settle_state: Option<Arc<RwLock<SettleSchedulerState>>>,
 
-    // ── Solana RPC + fee-payer (PR 4g.2) ────────────────────────
+    // ── Solana RPC (PR 4g.2 / walk-back in 4g.3) ────────────────
     /// Hand-rolled JSON-RPC client pointed at the configured
     /// Solana cluster URL. `None` in degraded boot; populated by
     /// `main.rs` after construction. Cloneable cheaply (the inner
     /// reqwest::Client is internally Arc) — stage workers in
-    /// 4g.3+ will clone it into their per-job tasks.
+    /// 4g.3+ clone it into their per-job tasks.
+    ///
+    /// The Solana fee-payer pubkey is `signer_pubkey_base58`
+    /// above: PR 4g.3 unified the TEE Ed25519 signer with the
+    /// Solana fee-payer (see `keys::ed25519::DerivedSigner::solana_keypair`
+    /// for the rationale + conversion).
     pub solana_rpc: Option<SolanaRpcClient>,
-    /// Base58 of the dstack-derived fee-payer pubkey. The keypair
-    /// itself stays inside the settle pipeline's stage workers
-    /// (not exposed via HTTP). Surfacing the pubkey on `/info`
-    /// lets operators verify the address they pre-funded matches
-    /// the one this CVM derives. Filled by `main.rs` after
-    /// successful boot; `None` in degraded boot + tests.
-    pub fee_payer_pubkey_base58: Option<String>,
 }
 
 impl ApiState {
@@ -171,21 +169,17 @@ impl ApiState {
             oracle: None,
             settle_state: None,
             solana_rpc: None,
-            fee_payer_pubkey_base58: None,
         }
     }
 
-    /// Attach the Solana RPC client + the fee-payer pubkey display
-    /// string. Called by `main.rs` once both are constructed; the
-    /// stage workers in 4g.3+ read `solana_rpc` to submit txs.
+    /// Attach the Solana RPC client. Called by `main.rs` after
+    /// constructing the client; stage workers in 4g.3+ read
+    /// `solana_rpc` to submit txs. The fee-payer pubkey is
+    /// `signer_pubkey_base58` (set at `from_boot` time) — no
+    /// separate field needed since 4g.3 unified the two.
     /// Idempotent.
-    pub fn with_solana_rpc(
-        mut self,
-        rpc: SolanaRpcClient,
-        fee_payer_pubkey_base58: String,
-    ) -> Self {
+    pub fn with_solana_rpc(mut self, rpc: SolanaRpcClient) -> Self {
         self.solana_rpc = Some(rpc);
-        self.fee_payer_pubkey_base58 = Some(fee_payer_pubkey_base58);
         self
     }
 
@@ -251,7 +245,6 @@ impl ApiState {
             // one construct it manually and attach via
             // `with_solana_rpc(...)`.
             solana_rpc: None,
-            fee_payer_pubkey_base58: None,
         }
     }
 }

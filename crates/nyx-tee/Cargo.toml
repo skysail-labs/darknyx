@@ -46,8 +46,10 @@ thiserror  = { workspace = true }
 # Already used by keys/; the oracle module needs it too for raw byte work.
 # Hex + serde are already pulled in above.
 
-# ─── Phase-2+ deps (uncomment when wiring the matching module) ───────
-# borsh = { workspace = true, features = ["derive"] }
+# Borsh — Anchor uses it for ix data + state serialisation. PR 4g.3
+# uses it for `lock_note` ix args (the matcher's MatchPair is also
+# Borsh; coming online in 4g.5 for the settle payload).
+borsh = { workspace = true, features = ["derive"] }
 
 # ─── PR 4d — minimal HTTP surface (/health + /info + /attestation) ──
 # axum for the router + handlers. tower for the standard middleware
@@ -82,14 +84,22 @@ subtle            = { workspace = true }
 # Hash (solana-hash), Signature (solana-signature), Signer trait
 # (solana-signer). 4g.3+ pulls in Instruction / Message / Transaction
 # from the same family.
-solana-address    = { workspace = true }
-solana-hash       = { workspace = true }
-solana-keypair    = { workspace = true }
-solana-signature  = { workspace = true }
-solana-signer     = { workspace = true }
+solana-address          = { workspace = true }
+solana-hash             = { workspace = true }
+solana-keypair          = { workspace = true }
+solana-signature        = { workspace = true }
+solana-signer           = { workspace = true }
+# PR 4g.3 — ix / message / transaction construction.
+solana-instruction      = { workspace = true }
+solana-message          = { workspace = true }
+solana-transaction      = { workspace = true }
+solana-system-interface = { workspace = true }
 # Base64 encoding for tx wire format (solana RPC's sendTransaction
 # takes base64-encoded tx bytes).
-base64            = "0.22"
+base64                  = "0.22"
+# bincode — Solana tx serialise format. Needed alongside the
+# `serde` feature on solana-transaction.
+bincode                 = { workspace = true }
 
 # ─── PR 4a — keys + dstack handshake ─────────────────────────────────
 # DstackClient::new() + info() + get_key() + get_quote() — all the
