@@ -24,6 +24,15 @@ pub const VAULT_CONFIG_SEED: &[u8] = b"vault_config";
 /// Vault `NoteLock::SEED` — mirrors `programs/vault/src/state.rs::NoteLock::SEED`.
 pub const NOTE_LOCK_SEED: &[u8] = b"note_lock";
 
+/// Vault `ConsumedNoteEntry::SEED` — mirrors `programs/vault/src/state.rs`.
+pub const CONSUMED_NOTE_SEED: &[u8] = b"consumed_note";
+
+/// Vault `NullifierEntry::SEED` — mirrors `programs/vault/src/state.rs`.
+pub const NULLIFIER_SEED: &[u8] = b"nullifier";
+
+/// Vault `BatchValidityMarker::SEED` — mirrors `programs/vault/src/state.rs`.
+pub const BATCH_VALIDITY_SEED: &[u8] = b"batch_validity";
+
 /// Parse the program id once. Cheap — pure deterministic base58
 /// decode — but no point doing it on every ix build. Callers go
 /// through this fn so the eventual `LazyLock` switch (if it pays
@@ -45,6 +54,25 @@ pub fn vault_config_pda() -> (Address, u8) {
 /// `[b"note_lock", note_commitment]`. One per note.
 pub fn note_lock_pda(note_commitment: &[u8; 32]) -> (Address, u8) {
     Address::find_program_address(&[NOTE_LOCK_SEED, note_commitment], &vault_program_id())
+}
+
+/// PDA: `consumed_note` for a settle-consumed note commitment.
+/// Seeds = `[b"consumed_note", note_commitment]`. Allocation locks
+/// out a second settle of the same note (replay protection).
+pub fn consumed_note_pda(note_commitment: &[u8; 32]) -> (Address, u8) {
+    Address::find_program_address(&[CONSUMED_NOTE_SEED, note_commitment], &vault_program_id())
+}
+
+/// PDA: `nullifier` entry. Seeds = `[b"nullifier", nullifier]`.
+pub fn nullifier_pda(nullifier: &[u8; 32]) -> (Address, u8) {
+    Address::find_program_address(&[NULLIFIER_SEED, nullifier], &vault_program_id())
+}
+
+/// PDA: `batch_validity` marker. Seeds = `[b"batch_validity",
+/// merkle_root]`. One per batch — keyed by the batch Merkle root,
+/// so every match in the batch resolves the SAME marker.
+pub fn batch_validity_marker_pda(merkle_root: &[u8; 32]) -> (Address, u8) {
+    Address::find_program_address(&[BATCH_VALIDITY_SEED, merkle_root], &vault_program_id())
 }
 
 #[cfg(test)]
