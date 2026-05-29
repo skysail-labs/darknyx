@@ -56,7 +56,28 @@ async fn main() -> Result<()> {
     tracing::info!("nyx-tee starting");
 
     let cfg = nyx_tee::config::Config::from_env()?;
-    tracing::info!(?cfg, "loaded config");
+    // Don't log the full Config: `solana_rpc_url` may embed an API key
+    // (some providers put it in the path / userinfo). Log the safe
+    // fields + the RPC host only (scheme, path, and any user:pass@
+    // stripped).
+    let rpc_host = cfg
+        .solana_rpc_url
+        .split("://")
+        .nth(1)
+        .unwrap_or(&cfg.solana_rpc_url)
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .rsplit('@')
+        .next()
+        .unwrap_or("");
+    tracing::info!(
+        http_bind = %cfg.http_bind,
+        rpc_host = %rpc_host,
+        feeds = cfg.feed_ids.len(),
+        dstack_socket = cfg.dstack_socket.is_some(),
+        "loaded config (solana_rpc_url redacted to host)"
+    );
 
     // ─── 1. dstack handshake ─────────────────────────────────────────
     // PR 4g.3 walk-back: the TEE Ed25519 signer (registered as

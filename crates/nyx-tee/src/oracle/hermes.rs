@@ -191,7 +191,17 @@ impl HermesClient {
         if raw_price <= 0 {
             return Err(HermesError::NonPositivePrice(raw_price));
         }
-        let raw_conf: u64 = raw_entry.ema_price.conf.parse().unwrap_or(0);
+        // Fail on a malformed confidence the same way `price` does,
+        // rather than silently substituting 0 — `conf` feeds the
+        // VALID_PRICE binding work, so a quiet zero would corrupt it.
+        let raw_conf: u64 = raw_entry
+            .ema_price
+            .conf
+            .parse()
+            .map_err(|_| HermesError::Json {
+                url: url.clone(),
+                source: serde::de::Error::custom("ema_price.conf not a valid u64"),
+            })?;
 
         Ok(HermesPriceUpdate {
             feed_id: raw_entry.id,

@@ -29,10 +29,12 @@
 # ─────────────────────────────────────────────────────────────────────
 
 # ─────────── Stage 1: builder ───────────
-# rust:1.84-slim-bookworm — TODO(phase1): pin to a SHA-256 digest
+# rust:1.91-slim-bookworm — matches rust-toolchain.toml's 1.91 floor
+# (the dstack-sdk → alloy → ruint chain requires rustc 1.91+).
+# TODO(phase1): pin to a SHA-256 digest
 # once we're past the rapid-iteration scaffolding phase. For now
 # the tag is fine; the deploy is dev-only.
-FROM rust:1.84-slim-bookworm AS builder
+FROM rust:1.91-slim-bookworm AS builder
 
 WORKDIR /build
 

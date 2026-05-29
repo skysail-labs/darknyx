@@ -8,7 +8,7 @@
 //! ┌──────────────────────────────────────────────────────────┐
 //! │ header                                                   │
 //! │   version              (1 byte)   — must be 1            │
-//! │   guardian_set_index   (4 bytes BE) — currently 4 mainnet│
+//! │   guardian_set_index   (4 bytes BE) = MAINNET_GUARDIAN_SET_INDEX│
 //! │   signatures_count     (1 byte)                          │
 //! │ signatures[]                                             │
 //! │   guardian_index       (1 byte)                          │
@@ -29,7 +29,7 @@
 //! the body, then ECDSA-signed); for each signature, recover the
 //! 20-byte Ethereum-style address via ecrecover and check it
 //! matches the guardian at the given index. Quorum is 13/19 for
-//! mainnet set 4.
+//! mainnet set 6 (see `MAINNET_GUARDIAN_SET_INDEX`).
 //!
 //! **NOT verified at this layer**: the Pyth-internal Merkle-proof
 //! inclusion of a specific price feed in the attested Merkle

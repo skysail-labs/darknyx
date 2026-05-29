@@ -90,8 +90,8 @@ if [ "$build" = true ] || [ ! -x "$SIM_BIN" ]; then
 fi
 
 # ───── Run mode: clean any stale socket + start simulator ─────────────
-if [ -S "$SOCK_PATH" ]; then
-    echo "[sim] removing stale socket at $SOCK_PATH" >&2
+if [ -e "$SOCK_PATH" ]; then
+    echo "[sim] removing stale entry at $SOCK_PATH" >&2
     rm -f "$SOCK_PATH"
 fi
 

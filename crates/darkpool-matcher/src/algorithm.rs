@@ -33,12 +33,11 @@ const FEE_ROLE_QUOTE: u8 = 0xfc;
 
 // ─────── Constants ──────────────────────────────────────────────────────────
 
-/// Orders whose `expiry_slot` is within this many slots of `now_slot`
-/// are drained before matching, not included in any match. Gives the
-/// follow-up settle pipeline enough runway to confirm before the
-/// implicit settle deadline. Lifted unchanged from the on-chain
-/// `run_batch::SETTLEMENT_BUFFER_SLOTS`.
-pub const SETTLEMENT_BUFFER_SLOTS: u64 = 20;
+// `SETTLEMENT_BUFFER_SLOTS` lives in `crate::config` — the single
+// source of truth shared by the matcher + re-exported at the crate
+// root. Import it here rather than redefining (the two copies could
+// silently diverge).
+use crate::config::SETTLEMENT_BUFFER_SLOTS;
 
 // ─────── deviates_by_more_than_bps ──────────────────────────────────────────
 
@@ -307,8 +306,16 @@ pub(crate) fn generate_matches(
         }
         let quote_amt = quote_amt_u128 as u64;
 
-        let buyer_fee_amt = ((quote_amt as u128) * fee_rate_bps as u128 / 10_000u128) as u64;
-        let seller_fee_amt = ((crossable as u128) * fee_rate_bps as u128 / 10_000u128) as u64;
+        // fee = amount * bps / 10_000. With the on-chain invariant
+        // `fee_rate_bps <= 10_000` (enforced by set_protocol_config)
+        // the result is <= the amount and always fits u64 — but make
+        // the narrowing fallible anyway, matching the checked
+        // `quote_amt` conversion above, so a bad config can never
+        // silently truncate fee accounting.
+        let buyer_fee_amt = u64::try_from((quote_amt as u128) * fee_rate_bps as u128 / 10_000u128)
+            .map_err(|_| MatchError::Internal("buyer fee overflow (u64)"))?;
+        let seller_fee_amt = u64::try_from((crossable as u128) * fee_rate_bps as u128 / 10_000u128)
+            .map_err(|_| MatchError::Internal("seller fee overflow (u64)"))?;
 
         let buyer_charge = quote_amt
             .checked_add(buyer_fee_amt)

@@ -87,7 +87,9 @@ serde_json = "1"
 # dstack SDK — sits inside the CVM, talks to /var/run/dstack.sock
 # Pinned to a specific commit during Phase 1 so build is reproducible.
 # Bump in lockstep with any image rebuild that needs new SDK features.
-dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git", branch = "master" }
+# Pinned to a specific commit (not `branch = "master"`, which is mutable)
+# for reproducible builds — this is the rev Cargo.lock already resolves to.
+dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git", rev = "f67b4f67ebabef0a27795705121698280a1038dc" }
 
 # Solana client (used by nyx-tee to submit settle txs from the TEE)
 solana-client = "1.18"

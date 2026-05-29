@@ -101,9 +101,12 @@ pub async fn handler(
     let mut report_data = [0u8; 64];
     report_data[..caller_bytes.len()].copy_from_slice(&caller_bytes);
     let pubkey_bytes = hex::decode(&state.signer_pubkey_hex).map_err(|e| {
+        // Log the detail internally; return a generic message so the
+        // wire response doesn't echo internal error strings.
+        tracing::error!(error = %e, "attestation: signer pubkey hex malformed");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("internal: signer pubkey hex is malformed: {e}"),
+            "internal error".to_string(),
         )
     })?;
     let pubkey_hash = Sha256::digest(&pubkey_bytes);
@@ -111,9 +114,10 @@ pub async fn handler(
 
     // 4. Fetch the quote.
     let quote = dstack.get_quote(report_data.to_vec()).await.map_err(|e| {
+        tracing::error!(error = %e, "attestation: dstack get_quote failed");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("dstack get_quote failed: {e}"),
+            "internal error".to_string(),
         )
     })?;
 
