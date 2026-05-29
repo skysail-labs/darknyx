@@ -31,21 +31,32 @@ pub mod scheduler;
 pub mod vault;
 
 // Tx-construction modules — one per pipeline stage. PR 4g.3 lands
-// `lock_note`. PRs 4g.5 / 4g.6 will populate the rest of the
-// shells below (currently doc-only placeholders).
+// `lock_note` (Tx A); 4g.5a `verify_match_batch` (Tx B); 4g.5b the
+// payload; 4g.5c the per-batch ALT (Tx C) + settle_batched (Tx D)
+// builders. 4g.6 wires the close marker (Tx E) + the stage workers.
 pub mod alt;
+pub mod ed25519;
 pub mod lock_note;
 pub mod payload;
 pub mod pipeline;
+pub mod settle_batched;
 pub mod sign;
 pub mod submit;
 pub mod submit_lock;
 pub mod verify_match_batch;
 
+pub use alt::{alt_account, build_per_batch_alt_ixs, PerBatchAltIxs};
+pub use ed25519::{build_ed25519_verify_ix, ED25519_PROGRAM_ID};
 pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage};
 pub use lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
 pub use payload::{MatchResultPayload, CANONICAL_DOMAIN};
+pub use pipeline::{build_settle_v0_tx, build_settle_v0_tx_b64};
 pub use scheduler::{SettleScheduler, SettleSchedulerState};
+pub use settle_batched::{
+    build_settle_batched_ix, per_batch_alt_addresses, INSTRUCTIONS_SYSVAR_ID,
+    SETTLE_BATCHED_DISCRIMINATOR,
+};
+pub use sign::sign_payload;
 pub use submit::{confirm_signatures, submit_ixs, submit_ixs_with_blockhash};
 pub use submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockPairOutcome, LockSideInputs};
 pub use verify_match_batch::{

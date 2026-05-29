@@ -94,6 +94,11 @@ solana-instruction      = { workspace = true }
 solana-message          = { workspace = true }
 solana-transaction      = { workspace = true }
 solana-system-interface = { workspace = true }
+# PR 4g.5c — per-batch ALT create/extend (Tx C).
+solana-address-lookup-table-interface = { workspace = true }
+# The ALT interface uses `solana_pubkey::Pubkey` in its ix builders;
+# we convert at that boundary (alt.rs). Pinned to the same 3.x line.
+solana-pubkey = "3"
 # Base64 encoding for tx wire format (solana RPC's sendTransaction
 # takes base64-encoded tx bytes).
 base64                  = "0.22"
