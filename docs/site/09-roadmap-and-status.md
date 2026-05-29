@@ -146,6 +146,7 @@ After 4g.6 lands:
 | Item | Why |
 |---|---|
 | In-browser ark-groth16 prover for user proofs | The current snarkjs path is slow; ark-groth16 in WASM is ~3× faster |
+| **In-TEE prover perf swap (rapidsnark / circom-witness-rs)** | **The initial in-TEE prover (PR 4g.4b) uses `ark-circom` 0.5.0 — pure-Rust, wasmer-backed, drop-in for our arkworks 0.5 workspace. If the post-cutover CVM benchmark (D4's ≥3× re-evaluation trigger) shows VALID_MATCH_BATCH proving exceeds the matching cadence budget, swap the prover internals to rapidsnark (FFI) or circom-witness-rs (C++ witness calc via cxx). The `Prover` trait surface from 4g.4a stays stable — the swap is internal, no on-chain or wire changes. Gated on measured numbers, not assumed: we do not pay rapidsnark's C++ build-pipeline + compose-hash complexity cost until the benchmark justifies it.** |
 | On-chain DCAP verifier in vault BPF | Eliminate the multisig (D2) from the trust chain |
 | Per-batch ALT pool for production matchers | Amortize ALT creation cost at high throughput |
 | Persistence layer for the in-TEE order book (LUKS-encrypted) | TEE restart should not lose open orders |

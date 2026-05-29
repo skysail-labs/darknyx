@@ -116,10 +116,14 @@ axum = { version = "0.7", features = ["ws", "macros"] }
 tokio-tungstenite = "0.21"
 rustls = "0.23"
 
-# Cryptography (must keep byte-identical to darkpool-crypto)
+# Cryptography (must keep byte-identical to darkpool-crypto).
+# arkworks pinned at 0.5 to match the workspace (darkpool-crypto +
+# ark-circom 0.5.0 both use ark-* 0.5). The in-TEE prover uses
+# ark-circom 0.5.0 (added in PR 4g.4b), which re-exports
+# ark-groth16 — we don't depend on ark-groth16 directly.
 darkpool-crypto = { path = "../darkpool-crypto" }
-ark-groth16 = "0.4"
-ark-bn254 = "0.4"
+ark-circom = "0.5.0"
+ark-bn254 = "0.5"
 ed25519-dalek = "2"
 
 # Matching (lifted from programs/matching_engine/src/instructions/run_batch.rs)
@@ -828,34 +832,101 @@ TEE crash, which is the safe default.
 
 ## 9. The Groth16 prover, inside the TEE
 
-Concrete plan for Phase 1:
+### 9.1 Implementation plan (split across PR 4g.4a + 4g.4b)
 
-- Use `ark-groth16` 0.4 with `ark-bn254` 0.4.
-- Load the proving key from `/circuits/build/match_batch_n16/circuit_final.zkey`
-  at startup. (The zkey ships in the Docker image; baked into
-  compose-hash, so any tampering changes attestation.)
-- Witness assembly: a Rust port of
-  `packages/sdk/tests/helpers/match-batch-prover.ts`. Same Poseidon
-  arity calls into `darkpool-crypto`.
-- Verify against the SAME `vk_match_batch_n16.rs` consts the on-chain
-  vault uses — byte-for-byte. This is the most likely class of bug
-  during the port (Fr endianness, point compression). We'll add a
-  parity test that proves the same input in `ark-groth16` and in
-  snarkjs, and verifies both proofs against the on-chain verifier
-  (using litesvm).
+The prover is built in two stages so the byte-equality-critical
+foundation lands and is tested independently of the witness-calc +
+proving dep wrangling:
 
-**Benchmark to gate the design** (Phase 1 sign-off):
+**PR 4g.4a — deterministic foundation (DONE, commit `e9962b0`).**
+Pure-Rust port of the byte-critical pieces of
+`packages/sdk/tests/helpers/match-batch-prover.ts`, behind a
+`Prover` trait whose stub returns `NotYetWired`:
+
+- `prover/witness.rs` — `MatchSlotWitness` type + `dummy_slot` +
+  `pad_batch`. All Poseidon goes through `darkpool-crypto` for
+  parity.
+- `prover/leaf.rs` — two-stage Poseidon12 → Poseidon9 leaf hash +
+  Merkle root + inclusion path. Pinned regression hex for the
+  dummy-slot leaf.
+- `prover/constraints.rs` — conservation validators (quote = base
+  × price; a/b-amount sums) surfacing named errors before the
+  circuit ever sees a bad witness.
+- `prover/inputs.rs` — the snarkjs-format single-element public-
+  input vector (the batch Merkle root).
+- `prover/groth16.rs` — the `Prover` trait + `NotYetWiredProver`
+  stub.
+
+**PR 4g.4b — ark-circom 0.5.0 wiring (planned).** Replaces the
+stub's `Err(NotYetWired)` branch with a real proof:
+
+- Use **`ark-circom` 0.5.0** (the published crates.io version —
+  it depends on ark-* 0.5.0 from crates.io with NO
+  `[patch.crates-io]` hack, so it's a clean drop-in for our
+  arkworks-0.5 workspace; `darkpool-crypto` already pulls ark-*
+  0.5). `ark-circom` bundles three things we need in one dep:
+  witness generation (wasmer 4.4.0 consuming `circuit.wasm`),
+  `.zkey` parsing, and `ark-groth16` proof generation.
+- Load `circuit.wasm` + `circuit.r1cs` from
+  `/circuits/build/match_batch_n16/` at startup; cache the
+  `CircomBuilder`. (The artifacts ship in the Docker image; baked
+  into compose-hash, so any tampering changes attestation.)
+- Push the ~30 named inputs per slot from `MatchSlotWitness`;
+  call `ark-groth16` prove with `CircomReduction`.
+- Convert `ark-groth16`'s `Proof<Bn254>` to the on-chain
+  `groth16-solana` BE-32 byte format (pi_a negated; pi_b/c in
+  the snarkjs G1/G2 encoding). ~80 LOC converter. This is the
+  most likely class of bug during the port (Fr endianness, point
+  compression) — gated by a parity test that verifies a generated
+  proof against the SAME `vk_match_batch_n2` consts the on-chain
+  verifier compiles (N=2 for a lighter test; pot16 sufficient).
+
+The `Prover` trait surface stays identical between 4g.4a and
+4g.4b — the swap is internal.
+
+### 9.2 Why ark-circom (and not circom-witnesscalc)
+
+Researched 2026-05-29. Our `match_batch.circom` uses circom 2.2.2
++ circomlib (poseidon, comparators, bitify) with compile-time-
+bound loops and no signal-conditional ternaries or EdDSA — it sits
+on ark-circom's happy path. The earlier candidate,
+`circom-witnesscalc`, has documented gaps (EdDSA, signal ternary,
+a perf regression) and only does witness gen — we'd still wire
+ark-groth16 + a zkey parser separately. ark-circom does all three
+in one battle-tested dep with zero dep-graph friction against our
+workspace. Decision recorded in PR 4g.4b's task.
+
+### 9.3 Benchmark to gate the design (D4 re-evaluation trigger)
 
 - Run the same N=16 proof on:
   - Bare-metal control (M3 MacBook or a non-TEE EC2 r6i.4xlarge)
-  - Phala Cloud TDX-Lab tier (the one whose benchmarks we cited)
-- Acceptance: proof time on TDX-Lab ≤ 3 × bare-metal. (Phala's
-  published zkTLS-in-CPU-TEE was 3.78x — Groth16 should be similar or
-  better, since it's smaller and has tighter memory patterns.)
-- If we miss the 3× bound, switch to the external-prover design:
-  TEE signs the public input hash, sidecar generates the proof,
-  vault verifies both. The external prover sees the witness but the
-  witness is mostly already-public-after-settle info anyway.
+  - Phala Cloud TDX tier (the one whose benchmarks we cited)
+- Acceptance: proof time on TDX ≤ 3 × bare-metal. (Phala's
+  published zkTLS-in-CPU-TEE was 3.78x — Groth16 should be similar
+  or better, since it's smaller and has tighter memory patterns.)
+
+### 9.4 Perf-swap fallback (deferred — gated on the §9.3 benchmark)
+
+If the post-cutover CVM benchmark misses the 3× bound OR shows
+VALID_MATCH_BATCH proving exceeding the matching-cadence budget
+(`BATCH_MS`, D5), swap the prover internals — **NOT** the trait
+surface:
+
+- **Option A: rapidsnark via FFI** (`rust-rapidsnark` +
+  `circom-witness-rs` for the witness). ~5-10× faster than
+  ark-groth16 for the same circuit. Cost: a C++ build pipeline
+  inside the Docker image, which widens the compose-hash + audit
+  surface.
+- **Option B: external-prover design.** TEE signs the public-input
+  hash, a sidecar generates the proof, the vault verifies both.
+  The external prover sees the witness, but the witness is mostly
+  already-public-after-settle info anyway.
+
+Both are deliberately deferred: we don't pay rapidsnark's
+build-complexity cost (or the external-prover trust-surface cost)
+until a measured number on real TDX hardware justifies it. The
+roadmap row is "In-TEE prover perf swap" in
+`docs/site/09-roadmap-and-status.md` § Near-term.
 
 ---
 
