@@ -35,6 +35,7 @@ pub mod vault;
 // payload; 4g.5c the per-batch ALT (Tx C) + settle_batched (Tx D)
 // builders. 4g.6 wires the close marker (Tx E) + the stage workers.
 pub mod alt;
+pub mod close_marker;
 pub mod ed25519;
 pub mod lock_note;
 pub mod payload;
@@ -44,8 +45,10 @@ pub mod sign;
 pub mod submit;
 pub mod submit_lock;
 pub mod verify_match_batch;
+pub mod worker;
 
 pub use alt::{alt_account, build_per_batch_alt_ixs, PerBatchAltIxs};
+pub use close_marker::{build_close_marker_ix, CLOSE_MARKER_DISCRIMINATOR};
 pub use ed25519::{build_ed25519_verify_ix, ED25519_PROGRAM_ID};
 pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage};
 pub use lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
@@ -61,4 +64,7 @@ pub use submit::{confirm_signatures, submit_ixs, submit_ixs_with_blockhash};
 pub use submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockPairOutcome, LockSideInputs};
 pub use verify_match_batch::{
     build_verify_match_batch_ix, VerifyMatchBatchArgs, VERIFY_MATCH_BATCH_DISCRIMINATOR,
+};
+pub use worker::{
+    run_batch_settle, BatchSettleInputs, MatchSettleInputs, SettleWorkerCtx, WorkerError,
 };

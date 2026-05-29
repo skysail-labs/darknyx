@@ -142,8 +142,12 @@ impl SettleScheduler {
 
     async fn run(mut self) {
         tracing::warn!(
-            "settle scheduler: PR 4g.1 stub — jobs accumulate in Queued; \
-             no on-chain settles until PRs 4g.3 / 4g.5 / 4g.6 land"
+            "settle scheduler: jobs accumulate in Queued. The full settle \
+             worker (lock→prove→verify→ALT→settle→close) lands in \
+             `settle::worker::run_batch_settle` as of PR 4g.6, but the \
+             MatchPair→BatchSettleInputs assembler that feeds it (note_c/d \
+             + nullifier derivation + the VALID_INPUT proof relay) is PR \
+             4g.7 — until then nothing drives jobs past Queued"
         );
 
         while let Some(output) = self.rx.recv().await {
