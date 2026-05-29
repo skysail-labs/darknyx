@@ -1421,6 +1421,38 @@ pub fn build_settle_batched_ix(
     }
 }
 
+/// Build a REAL `verify_match_batch` ix — the on-chain Groth16 verify
+/// (groth16-solana against `vk_match_batch_n16`) that creates the
+/// `BatchValidityMarker` iff the proof is valid. Unlike
+/// [`seed_batch_validity_marker`] (which fabricates the marker to
+/// bypass proving), this drives the actual verifier.
+///
+/// `proof_bytes` is the 256-byte Borsh `Groth16Proof`
+/// (`pi_a ‖ pi_b ‖ pi_c`); ix data = disc + merkle_root(32) +
+/// expiry_slot(u64 LE) + proof(256).
+pub fn build_verify_match_batch_ix(
+    h: &Harness,
+    payer: &Pubkey,
+    merkle_root: &[u8; 32],
+    expiry_slot: u64,
+    proof_bytes: &[u8; 256],
+) -> Instruction {
+    let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
+    let mut data = anchor_disc("verify_match_batch").to_vec();
+    data.extend_from_slice(merkle_root);
+    data.extend_from_slice(&expiry_slot.to_le_bytes());
+    data.extend_from_slice(proof_bytes);
+    Instruction {
+        program_id: h.vault_id,
+        accounts: vec![
+            AccountMeta::new(*payer, true),
+            AccountMeta::new(marker_pda, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data,
+    }
+}
+
 /// (ed25519_verify, tee_forced_settle_batched) tx — mirror of
 /// `build_settle_tx` for the v3.5 path.
 pub fn build_settle_batched_tx(

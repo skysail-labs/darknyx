@@ -192,4 +192,32 @@ async fn assembler_witness_proves_and_verifies_n16() {
         verified,
         "real N=16 proof from the assembler witness failed verification"
     );
+
+    // 6. Optionally dump the on-chain proof bytes + root as a fixture
+    //    for the litesvm on-chain-acceptance test (real-N16 step 2),
+    //    so that test doesn't have to pull in the (heavy) prover.
+    //    Layout: pi_a(64) ‖ pi_b(128) ‖ pi_c(64) ‖ merkle_root(32) = 288 B.
+    if std::env::var("DUMP_N16_FIXTURE").ok().as_deref() == Some("1") {
+        let onchain = nyx_tee::prover::proof_to_onchain_bytes(&proof);
+        let mut buf = Vec::with_capacity(288);
+        buf.extend_from_slice(&onchain.pi_a);
+        buf.extend_from_slice(&onchain.pi_b);
+        buf.extend_from_slice(&onchain.pi_c);
+        buf.extend_from_slice(&public.merkle_root);
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("programs")
+            .join("matching_engine")
+            .join("tests")
+            .join("fixtures")
+            .join("match_batch_n16_proof.bin");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &buf).unwrap();
+        eprintln!(
+            "wrote N=16 proof fixture ({} B) to {}",
+            buf.len(),
+            path.display()
+        );
+    }
 }
