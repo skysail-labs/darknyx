@@ -6,7 +6,9 @@
 
 pub mod book;
 pub mod interval;
+pub mod openings;
 pub mod selftrade;
 
 pub use book::{BookError, OrderBook};
 pub use interval::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
+pub use openings::{NoteOpening, OpeningError, OpeningStore};

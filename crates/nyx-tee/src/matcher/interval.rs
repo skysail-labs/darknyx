@@ -55,11 +55,31 @@ pub const DEFAULT_MAX_ORACLE_AGE_MS: u64 = 5_000;
 pub struct MatcherState {
     book: OrderBook,
     next_match_id: u64,
+    /// Per-order input-note openings (4g.7a). Populated at intake
+    /// after the opening verifies against the signed commitment;
+    /// read by the settle assembler; pruned on cancel / settle.
+    openings: super::openings::OpeningStore,
+    /// This market's base + quote SPL mints. The order intake needs
+    /// them to pick the collateral mint (bid → quote, ask → base)
+    /// when re-deriving + verifying the note commitment. Zero until
+    /// set via [`Self::with_market`]; `new()` leaves them zeroed for
+    /// tests that don't exercise the opening path.
+    base_mint: [u8; 32],
+    quote_mint: [u8; 32],
 }
 
 impl MatcherState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set this market's mints. Called once at startup from the same
+    /// `MatchConfig` the driver uses, so intake-time commitment
+    /// verification hashes against the real mints.
+    pub fn with_market(mut self, base_mint: [u8; 32], quote_mint: [u8; 32]) -> Self {
+        self.base_mint = base_mint;
+        self.quote_mint = quote_mint;
+        self
     }
 
     pub fn book(&self) -> &OrderBook {
@@ -72,6 +92,19 @@ impl MatcherState {
 
     pub fn next_match_id(&self) -> u64 {
         self.next_match_id
+    }
+
+    /// `(base_mint, quote_mint)` for this market.
+    pub fn market_mints(&self) -> ([u8; 32], [u8; 32]) {
+        (self.base_mint, self.quote_mint)
+    }
+
+    pub fn openings(&self) -> &super::openings::OpeningStore {
+        &self.openings
+    }
+
+    pub fn openings_mut(&mut self) -> &mut super::openings::OpeningStore {
+        &mut self.openings
     }
 }
 

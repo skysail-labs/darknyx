@@ -74,6 +74,25 @@ pub struct PlaceOrderRequest {
     /// 64-byte Ed25519 signature over
     /// `sha256(order_canonical_bytes)`, hex.
     pub trading_key_signature: String,
+
+    // ─── Input-note opening (4g.7a) ──────────────────────────────
+    // The TEE prover opens this note inside VALID_MATCH_BATCH, so it
+    // needs the secret opening fields the `note_commitment` hides.
+    // They're verified at intake against the signed commitment (so
+    // they're cryptographically pinned without expanding the signed
+    // canonical body) and held in enclave memory only. See
+    // `crate::matcher::openings`.
+    /// 32-byte note owner commitment `Poseidon3(1, spending_key,
+    /// r_owner)`, hex. NOT the same as `user_commitment`.
+    pub owner_commitment: String,
+    /// 32-byte per-note nonce, hex.
+    pub note_nonce: String,
+    /// 32-byte per-note blinding factor, hex.
+    pub note_blinding: String,
+    /// 32-byte nullifier `Poseidon3(3, spending_key, note_commitment)`,
+    /// hex. Precomputed by the client (needs the spending key, which
+    /// never enters the TEE); opaque to the matcher.
+    pub nullifier: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,6 +247,10 @@ pub async fn place_order(
     let user_commitment: [u8; 32] = decode_hex(&req.user_commitment, "user_commitment")?;
     let trading_key: [u8; 32] = decode_hex(&req.trading_key, "trading_key")?;
     let signature: [u8; 64] = decode_hex(&req.trading_key_signature, "trading_key_signature")?;
+    let owner_commitment: [u8; 32] = decode_hex(&req.owner_commitment, "owner_commitment")?;
+    let note_nonce: [u8; 32] = decode_hex(&req.note_nonce, "note_nonce")?;
+    let note_blinding: [u8; 32] = decode_hex(&req.note_blinding, "note_blinding")?;
+    let nullifier: [u8; 32] = decode_hex(&req.nullifier, "nullifier")?;
 
     // 2. Field-level validation. Cheap; runs before the expensive
     //    Ed25519 verify.
@@ -297,6 +320,39 @@ pub async fn place_order(
             .max(1),
         OrderSide::Ask => req.amount.max(1),
     };
+
+    // 4b. Build + verify the input-note opening. The collateral mint
+    //     is the quote mint for a bid (quote locked) and the base
+    //     mint for an ask. `verify_commitment` re-derives the note
+    //     commitment from (mint, note_amount, owner_commitment,
+    //     nonce, blinding) and asserts it equals the signed
+    //     `note_commitment` — pinning the opening to the signature
+    //     and enforcing `note_amount == committed amount` (the
+    //     conservation invariant the circuit needs). Done outside the
+    //     matcher lock so the Poseidon work doesn't block a tick.
+    let (base_mint, quote_mint) = {
+        let st = matcher.read().await;
+        st.market_mints()
+    };
+    let token_mint = match side {
+        OrderSide::Bid => quote_mint,
+        OrderSide::Ask => base_mint,
+    };
+    let opening = crate::matcher::openings::NoteOpening {
+        token_mint,
+        amount: note_amount,
+        owner_commitment,
+        nonce: note_nonce,
+        blinding: note_blinding,
+        nullifier,
+    };
+    opening.verify_commitment(&note_commitment).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("note opening does not match note_commitment: {e}"),
+        )
+    })?;
+
     let order = Order {
         trading_key,
         side,
@@ -321,6 +377,10 @@ pub async fn place_order(
     };
 
     // 5. Insert. Book may reject for duplicate order_id; map to 409.
+    //    On success, record the verified opening keyed by order_id so
+    //    the settle assembler can build the proof witness. Both
+    //    mutations happen under the same write lock so an observer
+    //    never sees a booked order without its opening.
     let mut st = matcher.write().await;
     st.book_mut().submit(order).map_err(|e| match e {
         BookError::Duplicate(_, _) => (StatusCode::CONFLICT, e.to_string()),
@@ -330,6 +390,7 @@ pub async fn place_order(
         // it's a bug — surface as 500.
         e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     })?;
+    st.openings_mut().insert(order_id, opening);
 
     Ok((
         StatusCode::ACCEPTED,
@@ -373,6 +434,8 @@ pub async fn cancel_order(
             BookError::NotOwner(_, _) => (StatusCode::FORBIDDEN, e.to_string()),
             e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         })?;
+    // Cancelled order can never settle — drop its in-enclave opening.
+    st.openings_mut().remove(&order_id);
 
     Ok(Json(CancelOrderResponse {
         order_id: hex::encode(order_id),

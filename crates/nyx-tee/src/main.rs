@@ -109,7 +109,13 @@ async fn main() -> Result<()> {
         };
 
     // ─── 2. Shared runtime ───────────────────────────────────────────
-    let matcher_state = Arc::new(RwLock::new(MatcherState::new()));
+    // Build the match config up front so its mints can seed the
+    // shared MatcherState — the order intake needs them to verify
+    // each input-note opening against the signed commitment (4g.7a).
+    let match_config = dev_match_config();
+    let matcher_state = Arc::new(RwLock::new(
+        MatcherState::new().with_market(match_config.base_mint, match_config.quote_mint),
+    ));
     let oracle = OracleCache::new();
     let current_slot = Arc::new(AtomicU64::new(1));
 
@@ -128,7 +134,7 @@ async fn main() -> Result<()> {
         current_slot: current_slot.clone(),
         matches_tx,
         cfg: DriverConfig {
-            match_config: dev_match_config(),
+            match_config,
             // First configured feed drives this single-market
             // build. PR 4g+ will spawn one driver per market.
             feed_id: cfg

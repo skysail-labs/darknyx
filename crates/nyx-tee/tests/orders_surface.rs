@@ -34,6 +34,7 @@ use http_body_util::BodyExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use nyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
 use nyx_tee::api::{build_router, ApiState};
+use nyx_tee::matcher::openings::NoteOpening;
 use rand::rngs::OsRng;
 use serde_json::json;
 use tower::ServiceExt;
@@ -82,13 +83,27 @@ struct PlaceOrderBuilder {
     min_fill_size: u64,
     expiry_slot: u64,
     order_id: [u8; 16],
-    note_commitment: [u8; 32],
     user_commitment: [u8; 32],
     arrival_nonce: u64,
+    // Input-note opening (4g.7a). The note_commitment is DERIVED from
+    // these via NoteOpening::commitment() so the handler's intake
+    // verification passes; tests that want to break the opening
+    // override the emitted JSON directly.
+    owner_commitment: [u8; 32],
+    note_nonce: [u8; 32],
+    note_blinding: [u8; 32],
+    nullifier: [u8; 32],
 }
 
 impl PlaceOrderBuilder {
     fn new() -> Self {
+        // Fr-safe opening fields (top byte zero so commitment_from_fields
+        // accepts them).
+        let fr_safe = |b: u8| {
+            let mut v = [b; 32];
+            v[0] = 0;
+            v
+        };
         Self {
             symbol: b"SOL-USDC".to_vec(),
             side: OrderSide::Bid,
@@ -103,10 +118,6 @@ impl PlaceOrderBuilder {
                 o[15] = 1;
                 o
             },
-            // Real-world note_commitment bytes are a Poseidon output;
-            // for tests any 32-byte string works because the matcher
-            // tick only Poseidon-hashes user_commitment.
-            note_commitment: [0x22; 32],
             // BN254 Fr-safe: top byte zero. The handler rejects
             // non-zero top byte even before signature verification.
             user_commitment: {
@@ -115,10 +126,51 @@ impl PlaceOrderBuilder {
                 u
             },
             arrival_nonce: 1,
+            owner_commitment: fr_safe(0x44),
+            note_nonce: fr_safe(0x55),
+            note_blinding: fr_safe(0x66),
+            nullifier: [0x77; 32],
         }
     }
 
+    /// The note value the handler will derive for this order (bid →
+    /// amount × price; ask → amount). MUST match the handler's
+    /// formula so the opening's committed amount lines up.
+    fn note_amount(&self) -> u64 {
+        match self.side {
+            OrderSide::Bid => self
+                .amount
+                .saturating_mul(self.price_limit)
+                .max(self.amount)
+                .max(1),
+            OrderSide::Ask => self.amount.max(1),
+        }
+    }
+
+    /// The opening the handler will reconstruct + verify. The test
+    /// market (`MatcherState::new()`) has zeroed mints, so the
+    /// collateral mint is `[0; 32]` for both sides.
+    fn opening(&self) -> NoteOpening {
+        NoteOpening {
+            token_mint: [0u8; 32],
+            amount: self.note_amount(),
+            owner_commitment: self.owner_commitment,
+            nonce: self.note_nonce,
+            blinding: self.note_blinding,
+            nullifier: self.nullifier,
+        }
+    }
+
+    /// note_commitment derived from the opening — what the trading
+    /// key signs and what the handler verifies the opening against.
+    fn note_commitment(&self) -> [u8; 32] {
+        self.opening()
+            .commitment()
+            .expect("test opening must be Fr-safe")
+    }
+
     fn sign(&self, key: &SigningKey) -> serde_json::Value {
+        let note_commitment = self.note_commitment();
         let canonical = OrderCanonical {
             symbol: &self.symbol,
             side: self.side,
@@ -128,7 +180,7 @@ impl PlaceOrderBuilder {
             min_fill_size: self.min_fill_size,
             expiry_slot: self.expiry_slot,
             order_id: self.order_id,
-            note_commitment: self.note_commitment,
+            note_commitment,
             user_commitment: self.user_commitment,
             arrival_nonce: self.arrival_nonce,
         };
@@ -149,11 +201,15 @@ impl PlaceOrderBuilder {
             "min_fill_size": self.min_fill_size,
             "expiry_slot": self.expiry_slot,
             "order_id": hex::encode(self.order_id),
-            "note_commitment": hex::encode(self.note_commitment),
+            "note_commitment": hex::encode(note_commitment),
             "user_commitment": hex::encode(self.user_commitment),
             "arrival_nonce": self.arrival_nonce,
             "trading_key": hex::encode(trading_key),
             "trading_key_signature": hex::encode(sig.to_bytes()),
+            "owner_commitment": hex::encode(self.owner_commitment),
+            "note_nonce": hex::encode(self.note_nonce),
+            "note_blinding": hex::encode(self.note_blinding),
+            "nullifier": hex::encode(self.nullifier),
         })
     }
 }
@@ -333,6 +389,34 @@ async fn place_rejects_oversize_symbol() {
 }
 
 const SYMBOL_MAX_LEN_FOR_TEST: usize = 8; // "SOL-USDC" length
+
+#[tokio::test]
+async fn place_rejects_opening_not_matching_commitment() {
+    // The opening fields are NOT part of the signed canonical body
+    // (they're pinned via the commitment check instead). Tamper a
+    // nonce after signing: the trading-key signature still verifies
+    // (note_nonce isn't in the canonical digest), but the opening now
+    // reconstructs to a different commitment than the signed one — so
+    // intake must reject with 400.
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let b = PlaceOrderBuilder::new();
+    let mut body = b.sign(&key);
+    body["note_nonce"] = json!(hex::encode({
+        let mut v = [0u8; 32];
+        v[31] = 0xEE; // Fr-safe but different from the signed opening's nonce
+        v
+    }));
+    let resp = place(&app, &bearer, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let body_str = std::str::from_utf8(&body).unwrap();
+    assert!(
+        body_str.contains("note opening does not match") || body_str.contains("note_commitment"),
+        "400 body should explain the opening mismatch; got: {body_str}"
+    );
+}
 
 // ─── POST /orders — signature checks ────────────────────────────────────────
 

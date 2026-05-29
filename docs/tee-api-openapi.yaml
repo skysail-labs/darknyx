@@ -145,7 +145,7 @@ components:
       properties:
         access_token:
           type: string
-          description: Bearer token. Pass as `Authorization: Bearer <token>`.
+          description: "Bearer token. Pass as `Authorization: Bearer <token>`."
         token_type:
           type: string
           enum: [Bearer]
@@ -312,6 +312,10 @@ components:
         - note_commitment
         - user_commitment
         - trading_key_signature
+        - owner_commitment
+        - note_nonce
+        - note_blinding
+        - nullifier
       properties:
         symbol:
           type: string
@@ -356,6 +360,32 @@ components:
             from the trading key. Lets the TEE attribute the order
             to a specific user without requiring a per-order
             on-chain tx.
+        owner_commitment:
+          type: string
+          description: |
+            32-byte hex — the collateral note's owner commitment
+            `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Part
+            of the input-note opening the in-TEE VALID_MATCH_BATCH
+            prover needs (the circuit re-derives `note_commitment`
+            from the opening). Distinct from `user_commitment`. The
+            matcher verifies the opening against the signed
+            `note_commitment` at intake, so it's cryptographically
+            pinned to the trading-key signature without being part of
+            the signed canonical body. Held in enclave memory only.
+        note_nonce:
+          type: string
+          description: 32-byte hex — the collateral note's per-note nonce (opening field).
+        note_blinding:
+          type: string
+          description: 32-byte hex — the collateral note's blinding factor (opening field).
+        nullifier:
+          type: string
+          description: |
+            32-byte hex — `Poseidon3(DOMAIN_NULL=3, spending_key,
+            note_commitment)`, precomputed client-side (the spending
+            key never enters the TEE). Opaque to the matcher; carried
+            into the settle payload. A wrong value is self-harm only
+            (on-chain replay protection keys off the note commitment).
 
     Order:
       type: object

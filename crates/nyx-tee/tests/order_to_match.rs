@@ -38,6 +38,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use nyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
 use nyx_tee::api::{build_router, ApiState};
+use nyx_tee::matcher::openings::NoteOpening;
 use nyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
 use nyx_tee::oracle::cache::{CachedPrice, OracleCache};
 use rand::rngs::OsRng;
@@ -81,12 +82,34 @@ fn sign_order(
         o[15] = 1;
         o
     };
-    let note_commitment = [0x22; 32];
     let user_commitment = {
         let mut u = [0x33; 32];
         u[0] = 0; // BN254 Fr-safe
         u
     };
+
+    // Input-note opening (4g.7a). The matcher (MatcherState::new() →
+    // zeroed mints in this test) verifies the opening against the
+    // signed commitment, so derive note_commitment from the opening.
+    let amount = 10_000_000u64;
+    let note_amount = match side {
+        OrderSide::Bid => amount.saturating_mul(price_limit).max(amount).max(1),
+        OrderSide::Ask => amount.max(1),
+    };
+    let fr_safe = |b: u8| {
+        let mut v = [b; 32];
+        v[0] = 0;
+        v
+    };
+    let opening = NoteOpening {
+        token_mint: [0u8; 32],
+        amount: note_amount,
+        owner_commitment: fr_safe(0x44),
+        nonce: fr_safe(0x55),
+        blinding: fr_safe(0x66),
+        nullifier: [0x77; 32],
+    };
+    let note_commitment = opening.commitment().expect("Fr-safe opening");
 
     let canonical = OrderCanonical {
         symbol: b"SOL-USDC",
@@ -119,6 +142,10 @@ fn sign_order(
         "arrival_nonce": arrival_nonce,
         "trading_key": hex::encode(trading_key),
         "trading_key_signature": hex::encode(sig.to_bytes()),
+        "owner_commitment": hex::encode(opening.owner_commitment),
+        "note_nonce": hex::encode(opening.nonce),
+        "note_blinding": hex::encode(opening.blinding),
+        "nullifier": hex::encode(opening.nullifier),
     })
 }
 
