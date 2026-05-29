@@ -119,8 +119,12 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
     }
 
     // ─── 4. Wait for traders to finish ────────────────────────────
-    for h in handles {
-        let _ = h.await;
+    // Surface (don't swallow) a panicked/cancelled trader task — a
+    // silently-dropped JoinError would skew the benchmark numbers.
+    for (i, h) in handles.into_iter().enumerate() {
+        if let Err(e) = h.await {
+            tracing::warn!(trader = i, error = %e, "trader task did not exit cleanly");
+        }
     }
     let elapsed = start.elapsed();
     tracing::info!(

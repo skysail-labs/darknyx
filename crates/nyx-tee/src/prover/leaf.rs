@@ -210,11 +210,14 @@ mod tests {
     fn batch_root_of_two_identical_dummies_is_pinned() {
         let leaf = compute_batch_leaf(&dummy_slot()).unwrap();
         let root = compute_batch_root(&[leaf, leaf]).unwrap();
-        let want = "152f53d2d8df27d6e25f137f7eb5db84f53d54c19cf3a9c8e3b41d7fa30dbb2c";
-        // Computed once via this same code path; pin the value so
-        // a future Poseidon refactor surfaces here.
-        let _ = want; // see assertion below
-        assert_eq!(hex::encode(root).len(), 64);
+        let want = "1c4abdfdd647d144c71fa9ed4cbbd0a57d0621b5769579f102662c3e114bc7f8";
+        // Pin the value byte-for-byte so a future Poseidon refactor
+        // surfaces here. (The prior literal was a dead pin —
+        // `let _ = want` with no assertion — and had drifted from the
+        // real root; captured fresh from this code path, which the
+        // N=2/N=16 prover roundtrips cross-validate against the
+        // circuit's own root.)
+        assert_eq!(hex::encode(root), want, "batch-root pin drifted");
         // Sanity: not the same as the leaf (Poseidon3 is non-
         // trivial even with identical inputs).
         assert_ne!(root, leaf);

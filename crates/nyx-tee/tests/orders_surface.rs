@@ -382,6 +382,20 @@ async fn place_rejects_zero_order_id() {
 }
 
 #[tokio::test]
+async fn place_rejects_zero_price_bid() {
+    // A bid with price_limit == 0 is economically meaningless and its
+    // collateral computation would silently fall back to base units.
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let mut b = PlaceOrderBuilder::new();
+    b.side = OrderSide::Bid;
+    b.price_limit = 0;
+    let resp = place(&app, &bearer, b.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn place_rejects_non_fr_safe_user_commitment() {
     let app = app_from(state());
     let bearer = fresh_bearer();

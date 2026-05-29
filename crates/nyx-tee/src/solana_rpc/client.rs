@@ -11,6 +11,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -168,6 +169,10 @@ impl SolanaRpcClient {
             // Reuse the same rustls path nyx-tee already uses for
             // Hermes — no system OpenSSL inside the CVM.
             .use_rustls_tls()
+            // Bound every RPC call so a stuck endpoint can't hang the
+            // settle worker indefinitely.
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
             .build()?;
         Ok(Self {
             http,
@@ -450,7 +455,15 @@ fn preview(bytes: &[u8]) -> String {
     if s.len() <= 512 {
         s.into_owned()
     } else {
-        format!("{}…", &s[..512])
+        // Truncate at a char boundary — slicing `&s[..512]` by raw
+        // byte index panics if 512 lands mid-codepoint.
+        let end = s
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= 512)
+            .last()
+            .unwrap_or(0);
+        format!("{}…", &s[..end])
     }
 }
 

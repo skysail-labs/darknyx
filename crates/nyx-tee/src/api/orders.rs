@@ -331,6 +331,17 @@ pub async fn place_order(
     //    pathological "zero" case the matcher never sees in
     //    practice.
     let arrival_slot = state.current_slot.load(Ordering::Relaxed);
+    // A bid's collateral is `amount * price_limit` (quote units). A
+    // zero price_limit is economically meaningless (buy at price 0)
+    // and would collapse to the base-unit `amount` fallback below —
+    // a silent unit confusion. Reject it. (An ask may legitimately
+    // use price_limit == 0 as a market sell, so this is bid-only.)
+    if matches!(side, OrderSide::Bid) && req.price_limit == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "price_limit must be > 0 for a bid".to_string(),
+        ));
+    }
     let note_amount = match side {
         OrderSide::Bid => req
             .amount

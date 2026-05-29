@@ -58,16 +58,33 @@ impl RunMetrics {
         })
     }
 
+    // Latencies are clamped to the histogram's [1, 60_000_000] µs
+    // bounds (see `new_with_bounds`) BEFORE recording: an out-of-range
+    // value makes `record` return Err, which — discarded — would
+    // silently DROP the sample and bias the tail (P99) downward.
+    // Clamping records it at the max bucket instead.
     pub async fn record_submit_latency_us(&self, us: u64) {
-        let _ = self.submit_latency_us.lock().await.record(us.max(1));
+        let _ = self
+            .submit_latency_us
+            .lock()
+            .await
+            .record(us.clamp(1, 60_000_000));
     }
 
     pub async fn record_cancel_latency_us(&self, us: u64) {
-        let _ = self.cancel_latency_us.lock().await.record(us.max(1));
+        let _ = self
+            .cancel_latency_us
+            .lock()
+            .await
+            .record(us.clamp(1, 60_000_000));
     }
 
     pub async fn record_match_latency_us(&self, us: u64) {
-        let _ = self.match_latency_us.lock().await.record(us.max(1));
+        let _ = self
+            .match_latency_us
+            .lock()
+            .await
+            .record(us.clamp(1, 60_000_000));
     }
 
     pub fn note_submit(&self, outcome: SubmitOutcome) {

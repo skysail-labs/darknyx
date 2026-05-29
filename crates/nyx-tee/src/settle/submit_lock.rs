@@ -152,15 +152,19 @@ pub async fn confirm_lock_pair(
         // than we want), Some + confirmed_at_commitment=true,
         // Some + err=Some.
         let mut all_confirmed = true;
-        for (label, status) in [("buyer", &statuses[0]), ("seller", &statuses[1])] {
+        // Index via `.get()` rather than `statuses[0]/[1]`: a
+        // non-compliant RPC could return a shorter array than we
+        // requested, and raw indexing would panic. A missing entry is
+        // treated as "not yet confirmed" (keep polling).
+        for (label, status) in [("buyer", statuses.first()), ("seller", statuses.get(1))] {
             match status {
-                Some(s) if s.err.is_some() => {
+                Some(Some(s)) if s.err.is_some() => {
                     return Err(RpcError::Schema(format!(
                         "{label} lock_note tx reverted: err={:?}",
                         s.err
                     )));
                 }
-                Some(s) if s.confirmed_at_commitment == Some(true) => { /* good */ }
+                Some(Some(s)) if s.confirmed_at_commitment == Some(true) => { /* good */ }
                 _ => all_confirmed = false,
             }
         }

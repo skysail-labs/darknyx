@@ -23,6 +23,7 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let cfg = RunConfig::parse();
+    cfg.validate()?;
     tracing::info!(
         endpoint = cfg.endpoint,
         traders = cfg.traders,

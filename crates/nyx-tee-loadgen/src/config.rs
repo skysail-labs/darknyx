@@ -146,4 +146,26 @@ impl RunConfig {
     pub fn aggregate_target_rate(&self) -> f64 {
         self.traders as f64 * self.orders_per_trader_per_sec
     }
+
+    /// Reject nonsensical CLI values at the parse boundary so they
+    /// never reach the run loop (where they'd silently produce
+    /// garbage benchmark numbers rather than a clear error).
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if !self.orders_per_trader_per_sec.is_finite() || self.orders_per_trader_per_sec <= 0.0 {
+            anyhow::bail!(
+                "--orders-per-trader-per-sec must be finite and > 0 (got {})",
+                self.orders_per_trader_per_sec
+            );
+        }
+        if !(0.0..=1.0).contains(&self.cancel_rate) {
+            anyhow::bail!(
+                "--cancel-rate must be a probability in [0, 1] (got {})",
+                self.cancel_rate
+            );
+        }
+        if self.traders == 0 {
+            anyhow::bail!("--traders must be > 0");
+        }
+        Ok(())
+    }
 }

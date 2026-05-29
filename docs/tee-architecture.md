@@ -861,7 +861,7 @@ Pure-Rust port of the byte-critical pieces of
 stub's `Err(NotYetWired)` branch with a real proof:
 
 - Use **`ark-circom` 0.5.0** (the published crates.io version —
-  it depends on ark-* 0.5.0 from crates.io with NO
+  it depends on `ark-*` 0.5.0 from crates.io with NO
   `[patch.crates-io]` hack, so it's a clean drop-in for our
   arkworks-0.5 workspace; `darkpool-crypto` already pulls ark-*
   0.5). `ark-circom` bundles three things we need in one dep:

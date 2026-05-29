@@ -168,7 +168,7 @@ page tracks shipped vs in-flight work.
 
 | Layer | Status | Notes |
 |---|---|---|
-| **Custody (vault program)** | Live on Solana devnet | Six instructions: `create_wallet`, `deposit`, `lock_note`, `verify_match_batch`, `tee_forced_settle_batched`, `close_batch_validity_marker`, `withdraw`. v3.5 hardening complete. |
+| **Custody (vault program)** | Live on Solana devnet | Seven instructions: `create_wallet`, `deposit`, `lock_note`, `verify_match_batch`, `tee_forced_settle_batched`, `close_batch_validity_marker`, `withdraw`. v3.5 hardening complete. |
 | **Matching algorithm** | Live (single source of truth in `darkpool-matcher` crate) | Uniform clearing price, FIFO tie-break, Pyth-band circuit breaker. Same Rust crate consumed by both the on-chain ix and the in-TEE matcher. |
 | **ZK circuits** | All six circuits compiled + verifying keys on-chain | VALID_INPUT, VALID_WALLET_CREATE, VALID_SPEND, VALID_MATCH_BATCH (N=2, N=4, N=16). N=16 is the production wired instantiation. |
 | **TypeScript SDK** | Parity-tested against Rust host-side primitives | Cross-language byte equality enforced on Poseidon, key derivation, note commitments, nullifiers, canonical payload hashes. |
