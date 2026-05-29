@@ -39,11 +39,13 @@ use darkpool_matcher::change_note::{
     derive_blinding, derive_nonce, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, FEE_ROLE_QUOTE,
     TRADE_ROLE_BUYER, TRADE_ROLE_SELLER,
 };
-use darkpool_matcher::match_result::MatchPair;
+use darkpool_matcher::match_result::{MatchPair, RunBatchOutput};
 
-use crate::matcher::openings::NoteOpening;
-use crate::prover::MatchSlotWitness;
+use crate::matcher::openings::{NoteOpening, OpeningStore};
+use crate::prover::{pad_batch, MatchSlotWitness};
 use crate::settle::payload::MatchResultPayload;
+use crate::settle::submit_lock::LockSideInputs;
+use crate::settle::worker::{BatchSettleInputs, MatchSettleInputs};
 
 /// Inputs to assemble one match. References are borrowed; the result
 /// owns its bytes.
@@ -77,6 +79,17 @@ pub enum AssembleError {
     BuyerMint,
     #[error("seller opening mint does not match the market base mint")]
     SellerMint,
+    /// A match references a collateral note with no opening in the
+    /// store — the order's opening was never captured (or was already
+    /// evicted). Cannot settle without it.
+    #[error("no opening in store for {side} note {commitment}")]
+    MissingOpening {
+        side: &'static str,
+        commitment: String,
+    },
+    /// The batch has more real matches than the circuit's N.
+    #[error("batch has {got} matches but circuit N = {n}")]
+    BatchTooLarge { got: usize, n: usize },
 }
 
 const ZERO32: [u8; 32] = [0u8; 32];
@@ -292,6 +305,118 @@ pub fn assemble_match(
     };
 
     Ok((witness, payload))
+}
+
+/// Parameters for assembling a whole batch (market + protocol context
+/// the per-match openings don't carry).
+pub struct BatchAssemblyParams {
+    /// Scheduler-local batch id (keys the per-match jobs).
+    pub batch_id: u64,
+    pub base_mint: [u8; 32],
+    pub quote_mint: [u8; 32],
+    pub protocol_owner_commitment: [u8; 32],
+    /// Slot the fee-note openings derive against.
+    pub fee_slot: u64,
+    /// `verify_match_batch` marker TTL.
+    pub marker_expiry_slot: u64,
+    /// Circuit instantiation N (production = 16) — the witness set is
+    /// padded with dummy slots up to this.
+    pub circuit_n: usize,
+}
+
+/// Turn one matcher `RunBatchOutput` into the settle worker's
+/// [`BatchSettleInputs`], resolving each match's two input-note
+/// openings from the in-enclave store (keyed by collateral note
+/// commitment — the matcher's `MatchPair` carries `note_buyer` /
+/// `note_seller`).
+///
+/// For each real match it produces the proof witness + signed payload
+/// (via [`assemble_match`]) AND the buyer/seller `lock_note` inputs
+/// (from the stored VALID_INPUT proof relay). The witness set is then
+/// padded to `circuit_n`.
+pub fn assemble_batch(
+    output: &RunBatchOutput,
+    store: &OpeningStore,
+    params: BatchAssemblyParams,
+) -> Result<BatchSettleInputs, AssembleError> {
+    if output.matches.len() > params.circuit_n {
+        return Err(AssembleError::BatchTooLarge {
+            got: output.matches.len(),
+            n: params.circuit_n,
+        });
+    }
+
+    let mut matches = Vec::with_capacity(output.matches.len());
+    let mut witnesses = Vec::with_capacity(output.matches.len());
+
+    for (idx, m) in output.matches.iter().enumerate() {
+        let buyer = store
+            .get(&m.note_buyer)
+            .ok_or_else(|| AssembleError::MissingOpening {
+                side: "buyer",
+                commitment: hex::encode(m.note_buyer),
+            })?;
+        let seller = store
+            .get(&m.note_seller)
+            .ok_or_else(|| AssembleError::MissingOpening {
+                side: "seller",
+                commitment: hex::encode(m.note_seller),
+            })?;
+
+        let (witness, payload) = assemble_match(MatchAssemblyInputs {
+            match_pair: m,
+            buyer_opening: &buyer.opening,
+            seller_opening: &seller.opening,
+            order_id_a: buyer.order_id,
+            order_id_b: seller.order_id,
+            base_mint: params.base_mint,
+            quote_mint: params.quote_mint,
+            protocol_owner_commitment: params.protocol_owner_commitment,
+            fee_slot: params.fee_slot,
+        })?;
+
+        let buyer_lock = lock_inputs(m.note_buyer, &buyer);
+        let seller_lock = lock_inputs(m.note_seller, &seller);
+
+        matches.push(MatchSettleInputs {
+            payload,
+            buyer_lock,
+            seller_lock,
+            match_index: idx as u8,
+        });
+        witnesses.push(witness);
+    }
+
+    // Pad the witness set to the circuit's N with dummy slots.
+    let witnesses =
+        pad_batch(&witnesses, params.circuit_n).map_err(|_| AssembleError::BatchTooLarge {
+            got: output.matches.len(),
+            n: params.circuit_n,
+        })?;
+
+    Ok(BatchSettleInputs {
+        batch_id: params.batch_id,
+        matches,
+        witnesses,
+        expiry_slot: params.marker_expiry_slot,
+    })
+}
+
+/// Build the `lock_note` (Tx A) inputs for one input note from its
+/// stored record — the VALID_INPUT proof + root the client relayed.
+fn lock_inputs(
+    note_commitment: [u8; 32],
+    rec: &crate::matcher::openings::OrderOpening,
+) -> LockSideInputs {
+    LockSideInputs {
+        note_commitment,
+        order_id: rec.order_id,
+        expiry_slot: rec.expiry_slot,
+        amount: rec.opening.amount,
+        token_mint: rec.opening.token_mint,
+        merkle_root: rec.merkle_root,
+        proof: rec.valid_input_proof.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -534,5 +659,102 @@ mod tests {
         buyer.token_mint = base_mint();
         let err = assemble_match(inputs(&m, &buyer, &seller)).unwrap_err();
         assert_eq!(err, AssembleError::BuyerMint);
+    }
+
+    // ─── assemble_batch ───────────────────────────────────────────
+
+    use crate::matcher::openings::OrderOpening;
+    use crate::settle::lock_note::Groth16ProofBytes;
+
+    fn order_rec(opening: NoteOpening, order_id: [u8; 16]) -> OrderOpening {
+        OrderOpening {
+            opening,
+            order_id,
+            expiry_slot: 999,
+            merkle_root: [0xDD; 32],
+            valid_input_proof: Groth16ProofBytes {
+                pi_a: [1u8; 64],
+                pi_b: [2u8; 128],
+                pi_c: [3u8; 64],
+            },
+        }
+    }
+
+    fn batch_params() -> BatchAssemblyParams {
+        BatchAssemblyParams {
+            batch_id: 5,
+            base_mint: base_mint(),
+            quote_mint: quote_mint(),
+            protocol_owner_commitment: fr_safe(0x07),
+            fee_slot: 1234,
+            marker_expiry_slot: 2000,
+            circuit_n: 16,
+        }
+    }
+
+    #[test]
+    fn assemble_batch_resolves_openings_and_pads_to_n() {
+        let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
+        let mut store = OpeningStore::new();
+        // Keyed by collateral commitment = note_buyer / note_seller.
+        store.insert(m.note_buyer, order_rec(buyer, [0x01; 16]));
+        store.insert(m.note_seller, order_rec(seller, [0x02; 16]));
+
+        let mut output = RunBatchOutput::empty(7, 100, 0);
+        output.matches = vec![m.clone()];
+
+        let bsi = assemble_batch(&output, &store, batch_params()).unwrap();
+        assert_eq!(bsi.batch_id, 5);
+        assert_eq!(bsi.matches.len(), 1);
+        // Witnesses padded to the circuit N.
+        assert_eq!(bsi.witnesses.len(), 16);
+        assert_eq!(bsi.expiry_slot, 2000);
+
+        let ms = &bsi.matches[0];
+        assert_eq!(ms.match_index, 0);
+        // Lock inputs resolved from the stored records.
+        assert_eq!(ms.buyer_lock.note_commitment, m.note_buyer);
+        assert_eq!(ms.buyer_lock.order_id, [0x01; 16]);
+        assert_eq!(ms.buyer_lock.token_mint, quote_mint());
+        assert_eq!(ms.buyer_lock.expiry_slot, 999);
+        assert_eq!(ms.seller_lock.note_commitment, m.note_seller);
+        assert_eq!(ms.seller_lock.token_mint, base_mint());
+        // Payload carries the resolved order ids.
+        assert_eq!(ms.payload.order_id_a, [0x01; 16]);
+        assert_eq!(ms.payload.order_id_b, [0x02; 16]);
+    }
+
+    #[test]
+    fn assemble_batch_missing_opening_errors() {
+        let (m, _buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
+        let mut store = OpeningStore::new();
+        // Only the seller's opening is present.
+        store.insert(m.note_seller, order_rec(seller, [0x02; 16]));
+        let mut output = RunBatchOutput::empty(7, 100, 0);
+        output.matches = vec![m];
+
+        let res = assemble_batch(&output, &store, batch_params());
+        assert!(matches!(
+            res,
+            Err(AssembleError::MissingOpening { side: "buyer", .. })
+        ));
+    }
+
+    #[test]
+    fn assemble_batch_rejects_oversize_batch() {
+        // circuit_n = 1 but two matches → too large.
+        let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
+        let mut store = OpeningStore::new();
+        store.insert(m.note_buyer, order_rec(buyer, [0x01; 16]));
+        store.insert(m.note_seller, order_rec(seller, [0x02; 16]));
+        let mut output = RunBatchOutput::empty(7, 100, 0);
+        output.matches = vec![m.clone(), m];
+        let mut params = batch_params();
+        params.circuit_n = 1;
+        let res = assemble_batch(&output, &store, params);
+        assert!(matches!(
+            res,
+            Err(AssembleError::BatchTooLarge { got: 2, n: 1 })
+        ));
     }
 }

@@ -49,7 +49,9 @@ pub mod verify_match_batch;
 pub mod worker;
 
 pub use alt::{alt_account, build_per_batch_alt_ixs, PerBatchAltIxs};
-pub use assemble::{assemble_match, AssembleError, MatchAssemblyInputs};
+pub use assemble::{
+    assemble_batch, assemble_match, AssembleError, BatchAssemblyParams, MatchAssemblyInputs,
+};
 pub use close_marker::{build_close_marker_ix, CLOSE_MARKER_DISCRIMINATOR};
 pub use ed25519::{build_ed25519_verify_ix, ED25519_PROGRAM_ID};
 pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage};
