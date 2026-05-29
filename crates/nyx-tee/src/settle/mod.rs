@@ -44,6 +44,7 @@ pub mod verify_match_batch;
 
 pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage};
 pub use lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
+pub use payload::{MatchResultPayload, CANONICAL_DOMAIN};
 pub use scheduler::{SettleScheduler, SettleSchedulerState};
 pub use submit::{confirm_signatures, submit_ixs, submit_ixs_with_blockhash};
 pub use submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockPairOutcome, LockSideInputs};
