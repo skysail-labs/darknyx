@@ -125,15 +125,24 @@ hex           = { workspace = true }
 # ─── PR 4g.4a — in-TEE prover (deterministic foundation) ────────────
 # Reuses `darkpool-crypto`'s Poseidon helpers (already listed at top
 # of this file as `darkpool-crypto`). ark-bn254 + ark-ff cover field
-# arithmetic. The actual Groth16 prover (ark-groth16) is held back
-# to 4g.4b so 4g.4a stays focused on the byte-equality contract with
-# the TS side and doesn't drag the witness-calc dep wrangling into it.
+# arithmetic for leaf/root/constraint computation.
 ark-bn254 = { workspace = true }
 ark-ff    = { workspace = true }
-# Activated in 4g.4b alongside circom-witnesscalc:
-# ark-groth16   = { workspace = true }
-# ark-serialize = { workspace = true }
-# ark-ec        = { workspace = true }
+
+# ─── PR 4g.4b — in-TEE Groth16 prover (real wiring) ─────────────────
+# ark-circom bundles witness gen (wasmer 4.4) + zkey parse +
+# ark-groth16 prove. ark-ec / ark-groth16 / ark-serialize give us
+# the proof type + field-element extraction for the on-chain
+# byte-format converter (groth16-solana layout).
+ark-circom    = { workspace = true }
+ark-groth16   = { workspace = true }
+ark-ec        = { workspace = true }
+ark-serialize = { workspace = true }
+num-bigint    = { workspace = true }
+# Groth16 prove needs an RngCore + CryptoRng source for the
+# proof's blinding factors. rand 0.8 / rand_core 0.6 — same as
+# ark-std expects.
+rand          = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

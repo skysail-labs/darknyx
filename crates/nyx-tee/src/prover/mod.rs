@@ -14,23 +14,32 @@
 //!     witness.
 //!   - [`inputs`] — the snarkjs-format public-input vector
 //!     `groth16-solana` consumes on-chain.
-//!   - [`groth16`] — the `Prover` trait + a `NotYetWiredProver`
-//!     stub (PR 4g.4a). The real ark-groth16 + circom-witnesscalc
-//!     impl lands in PR 4g.4b.
+//!   - [`groth16`] — the `Prover` trait + error type + output
+//!     struct (the stable abstraction the settle-stage worker
+//!     depends on).
+//!   - [`convert`] — ark-groth16 `Proof<Bn254>` → on-chain
+//!     `groth16-solana` 256-byte layout (PR 4g.4b).
+//!   - [`ark_prover`] — the real ark-circom-backed `Prover` impl
+//!     (PR 4g.4b): witness gen + zkey-backed Groth16 prove.
 //!
-//! Architecturally: PR 4g.4a ships the deterministic, byte-equality
-//! foundation. PR 4g.4b adds the actual Groth16 wiring behind the
-//! same `Prover` trait — no public-API changes at the trait
-//! surface.
+//! Architecturally: PR 4g.4a shipped the deterministic, byte-
+//! equality foundation (witness / leaf / constraints / inputs).
+//! PR 4g.4b wired the actual Groth16 proving behind the same
+//! `Prover` trait — no public-API changes at the trait surface,
+//! so a future rapidsnark swap stays internal.
 
+pub mod ark_prover;
 pub mod constraints;
+pub mod convert;
 pub mod groth16;
 pub mod inputs;
 pub mod leaf;
 pub mod witness;
 
+pub use ark_prover::ArkMatchBatchProver;
 pub use constraints::{validate_conservation, ConstraintError};
-pub use groth16::{NotYetWiredProver, ProofWithInputs, Prover, ProverError, PRODUCTION_BATCH_N};
+pub use convert::proof_to_onchain_bytes;
+pub use groth16::{ProofWithInputs, Prover, ProverError, PRODUCTION_BATCH_N};
 pub use inputs::{build_batch_public_inputs, BatchPublicInputs};
 pub use leaf::{
     compute_batch_leaf, compute_batch_root, merkle_inclusion_path, InclusionPath, LeafError,
