@@ -27,7 +27,8 @@
 //! `cargo test -p darkpool-matcher --test change_note_parity`
 
 use darkpool_matcher::change_note::{
-    derive_blinding, derive_nonce, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER,
+    derive_blinding, derive_nonce, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, TRADE_ROLE_BUYER,
+    TRADE_ROLE_SELLER,
 };
 use solana_program::hash::hashv;
 
@@ -86,6 +87,14 @@ fn roles() -> &'static [u8] {
     &[
         CHANGE_ROLE_BUYER,
         CHANGE_ROLE_SELLER,
+        // note_c / note_d trade-output roles (4g.7). On-chain never
+        // derives these (it receives note_c/d in the signed payload),
+        // but the derivation is backend-agnostic — proving the sha2
+        // and solana_program backends agree for these role bytes too
+        // guarantees the TEE prover + the TS SDK + any future on-chain
+        // use stay byte-identical.
+        TRADE_ROLE_BUYER,
+        TRADE_ROLE_SELLER,
         FEE_ROLE_BASE,
         FEE_ROLE_QUOTE,
     ]

@@ -239,17 +239,18 @@ fn push_all_inputs(
     push_be32!("b_owner_commit", b_owner_commit);
     push_u64!("a_amount", a_amount);
     push_u64!("b_amount", b_amount);
-    push_u64!("a_nonce", a_nonce);
+    // Nonces are full Fr elements (32-byte BE) — see MatchSlotWitness.
+    push_be32!("a_nonce", a_nonce);
     push_be32!("a_blinding", a_blinding);
-    push_u64!("b_nonce", b_nonce);
+    push_be32!("b_nonce", b_nonce);
     push_be32!("b_blinding", b_blinding);
-    push_u64!("c_nonce", c_nonce);
+    push_be32!("c_nonce", c_nonce);
     push_be32!("c_blinding", c_blinding);
-    push_u64!("d_nonce", d_nonce);
+    push_be32!("d_nonce", d_nonce);
     push_be32!("d_blinding", d_blinding);
-    push_u64!("e_nonce", e_nonce);
+    push_be32!("e_nonce", e_nonce);
     push_be32!("e_blinding", e_blinding);
-    push_u64!("f_nonce", f_nonce);
+    push_be32!("f_nonce", f_nonce);
     push_be32!("f_blinding", f_blinding);
 
     // VALID_PRICE private witness.
