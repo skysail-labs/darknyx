@@ -6,6 +6,7 @@
 //! TTL is 3600s and no realistic bench window exceeds that.
 
 use anyhow::{anyhow, Result};
+use darkpool_crypto::note::commitment_from_fields;
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::order_canonical::{CancelCanonical, OrderCanonical};
 use ed25519_dalek::{Signer, SigningKey};
@@ -70,8 +71,45 @@ pub fn build_signed_place_body(
     arrival_nonce: u64,
     symbol: &str,
 ) -> serde_json::Value {
-    let note_commitment = synthesised_note_commitment(&order_id);
     let user_commitment = synthesised_user_commitment(key);
+
+    // Build a synthetic input-note opening + the matching commitment so
+    // the order passes the TEE intake's opening verification (4g.7a/c):
+    // intake recomputes `commitment_from_fields(mint, note_amount,
+    // owner, nonce, blinding)` and asserts it equals `note_commitment`.
+    //
+    // `note_amount` mirrors the intake's derivation (bid → amount ×
+    // price; ask → amount). `token_mint` is all-zero to match the smoke
+    // test's `MatcherState::new()` (zero market mints); a load run
+    // against a real market would need that market's mints here. The
+    // nullifier / merkle_root / VALID_INPUT proof are not verified at
+    // intake (only stored), so synthetic values are fine.
+    let note_amount = match side {
+        OrderSide::Bid => amount.saturating_mul(price_limit).max(amount).max(1),
+        OrderSide::Ask => amount.max(1),
+    };
+    let token_mint = [0u8; 32];
+    let owner_commitment = fr_safe_opening_field(&order_id, 0x01);
+    let note_nonce = fr_safe_opening_field(&order_id, 0x02);
+    let note_blinding = fr_safe_opening_field(&order_id, 0x03);
+    let note_commitment = commitment_from_fields(
+        &token_mint,
+        note_amount,
+        &owner_commitment,
+        &note_nonce,
+        &note_blinding,
+    )
+    .expect("synthetic opening fields are Fr-safe (top byte zero)");
+    // Opaque-to-intake fields: a deterministic nullifier + an all-zero
+    // root + a 256-byte zero VALID_INPUT proof.
+    let nullifier = {
+        let mut n = [0u8; 32];
+        n[..16].copy_from_slice(&order_id);
+        n[16..].copy_from_slice(&order_id);
+        n
+    };
+    let merkle_root = [0u8; 32];
+    let valid_input_proof = [0u8; 256];
 
     let canonical = OrderCanonical {
         symbol: symbol.as_bytes(),
@@ -108,6 +146,13 @@ pub fn build_signed_place_body(
         "arrival_nonce": arrival_nonce,
         "trading_key": hex::encode(trading_key),
         "trading_key_signature": hex::encode(sig.to_bytes()),
+        // Input-note opening + VALID_INPUT relay (required since 4g.7a/c).
+        "owner_commitment": hex::encode(owner_commitment),
+        "note_nonce": hex::encode(note_nonce),
+        "note_blinding": hex::encode(note_blinding),
+        "nullifier": hex::encode(nullifier),
+        "merkle_root": hex::encode(merkle_root),
+        "valid_input_proof": hex::encode(valid_input_proof),
     })
 }
 
@@ -147,12 +192,16 @@ pub fn build_signed_cancel_body(
 // hash it directly — only `user_commitment` goes into Poseidon in
 // the change-note construction).
 
-fn synthesised_note_commitment(order_id: &[u8; 16]) -> [u8; 32] {
+/// Deterministic, BN254-Fr-safe (top byte 0) 32-byte field for the
+/// synthetic note opening, distinct per (order_id, tag). Fr-safe so
+/// `commitment_from_fields` accepts it; deterministic so reruns
+/// reproduce the same byte stream.
+fn fr_safe_opening_field(order_id: &[u8; 16], tag: u8) -> [u8; 32] {
     let mut out = [0u8; 32];
-    // Repeat the order_id twice for determinism + uniqueness across
-    // orders. No top-byte constraint here.
-    out[..16].copy_from_slice(order_id);
-    out[16..].copy_from_slice(order_id);
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = order_id[i % 16] ^ tag ^ (i as u8);
+    }
+    out[0] = 0; // < 2^248 < Fr modulus
     out
 }
 

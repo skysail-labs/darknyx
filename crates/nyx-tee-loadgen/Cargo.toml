@@ -19,6 +19,10 @@ path = "src/lib.rs"
 # is caught by the cross-language parity test in
 # `packages/sdk/tests/order-canonical-parity.test.ts`.
 darkpool-matcher = { path = "../darkpool-matcher" }
+# Note-commitment derivation — orders must carry an input-note opening
+# that the TEE intake verifies against the signed `note_commitment`
+# (`commitment_from_fields`), same primitive the deposit path uses.
+darkpool-crypto = { path = "../darkpool-crypto" }
 
 # Async runtime + HTTP client.
 tokio   = { workspace = true }
