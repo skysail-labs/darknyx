@@ -48,6 +48,9 @@ pub mod submit_lock;
 pub mod verify_match_batch;
 pub mod worker;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use alt::{alt_account, build_per_batch_alt_ixs, PerBatchAltIxs};
 pub use assemble::{
     assemble_batch, assemble_match, AssembleError, BatchAssemblyParams, MatchAssemblyInputs,
@@ -58,7 +61,7 @@ pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage};
 pub use lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
 pub use payload::{MatchResultPayload, CANONICAL_DOMAIN};
 pub use pipeline::{build_settle_v0_tx, build_settle_v0_tx_b64};
-pub use scheduler::{SettleScheduler, SettleSchedulerState};
+pub use scheduler::{SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState};
 pub use settle_batched::{
     build_settle_batched_ix, per_batch_alt_addresses, INSTRUCTIONS_SYSVAR_ID,
     SETTLE_BATCHED_DISCRIMINATOR,

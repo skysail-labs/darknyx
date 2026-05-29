@@ -41,7 +41,9 @@ use nyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_OR
 use nyx_tee::oracle::cache::OracleCache;
 use nyx_tee::oracle::hermes::HermesClient;
 use nyx_tee::oracle::sync::{spawn_oracle_sync, SyncConfig};
-use nyx_tee::settle::SettleScheduler;
+use nyx_tee::prover::{ArkMatchBatchProver, PRODUCTION_BATCH_N};
+use nyx_tee::settle::worker::SettleWorkerCtx;
+use nyx_tee::settle::{SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState};
 use nyx_tee::solana_rpc::SolanaRpcClient;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
@@ -63,56 +65,71 @@ async fn main() -> Result<()> {
     // `DerivedSigner::solana_keypair()`. One address to fund on
     // devnet, one signature satisfies both the `tee_authority`
     // gate AND the tx-fee responsibility.
-    let (api_state, tee_signer_pubkey): (_, Option<String>) =
-        match nyx_tee::boot::probe_dstack().await {
-            Ok(signer) => {
-                let client = DstackClient::new(None);
-                let info = client.info().await?;
+    #[allow(clippy::type_complexity)]
+    let (api_state, tee_signer_pubkey, settle_signer): (
+        _,
+        Option<String>,
+        Option<(solana_keypair::Keypair, ed25519_dalek::SigningKey)>,
+    ) = match nyx_tee::boot::probe_dstack().await {
+        Ok(signer) => {
+            let client = DstackClient::new(None);
+            let info = client.info().await?;
 
-                // Derive the bearer-JWT secret from dstack while
-                // the client is still in scope. Distinct path from
-                // the Ed25519 signer so a compromise of one key
-                // material doesn't trivially leak the other.
-                let jwt_secret = derive_jwt_secret(&client).await?;
+            // Derive the bearer-JWT secret from dstack while
+            // the client is still in scope. Distinct path from
+            // the Ed25519 signer so a compromise of one key
+            // material doesn't trivially leak the other.
+            let jwt_secret = derive_jwt_secret(&client).await?;
 
-                let signer_pubkey = signer.pubkey_base58.clone();
-                tracing::info!(
-                    tee_signer_pubkey = %signer_pubkey,
-                    "TEE Ed25519 signer also acts as Solana fee-payer; \
-                     verify this address holds SOL on the target cluster \
-                     (devnet: `solana airdrop 5 <pubkey>`)"
-                );
+            let signer_pubkey = signer.pubkey_base58.clone();
+            tracing::info!(
+                tee_signer_pubkey = %signer_pubkey,
+                "TEE Ed25519 signer also acts as Solana fee-payer; \
+                 verify this address holds SOL on the target cluster \
+                 (devnet: `solana airdrop 5 <pubkey>`)"
+            );
 
-                let dstack = Arc::new(client);
-                let boot_info = nyx_tee::api::BootAppInfo {
-                    app_id: info.app_id,
-                    instance_id: info.instance_id,
-                    app_name: info.app_name,
-                    device_id: info.device_id,
-                    compose_hash: info.compose_hash,
-                    mrtd: info.tcb_info.mrtd,
-                };
-                (
-                    nyx_tee::api::ApiState::from_boot(boot_info, &signer, dstack, jwt_secret),
-                    Some(signer_pubkey),
-                )
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "dstack probe failed; entering degraded boot. /health + /info \
-                     will serve stub data; /attestation returns 503. The settle \
-                     pipeline is also disabled — no TEE signer available."
-                );
-                (nyx_tee::api::ApiState::for_tests(), None)
-            }
-        };
+            let dstack = Arc::new(client);
+            let boot_info = nyx_tee::api::BootAppInfo {
+                app_id: info.app_id,
+                instance_id: info.instance_id,
+                app_name: info.app_name,
+                device_id: info.device_id,
+                compose_hash: info.compose_hash,
+                mrtd: info.tcb_info.mrtd,
+            };
+            // Capture the signer material for the settle driver: the
+            // Solana fee-payer keypair + the Ed25519 signing key
+            // (same seed). Held only in the driver's worker context,
+            // never on ApiState.
+            let settle_signer = Some((signer.solana_keypair(), signer.key.clone()));
+            (
+                nyx_tee::api::ApiState::from_boot(boot_info, &signer, dstack, jwt_secret),
+                Some(signer_pubkey),
+                settle_signer,
+            )
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "dstack probe failed; entering degraded boot. /health + /info \
+                 will serve stub data; /attestation returns 503. The settle \
+                 pipeline is also disabled — no TEE signer available."
+            );
+            (nyx_tee::api::ApiState::for_tests(), None, None)
+        }
+    };
 
     // ─── 2. Shared runtime ───────────────────────────────────────────
     // Build the match config up front so its mints can seed the
     // shared MatcherState — the order intake needs them to verify
     // each input-note opening against the signed commitment (4g.7a).
     let match_config = dev_match_config();
+    // Capture the values the settle driver needs before `match_config`
+    // is moved into the matcher driver below ([u8; 32] is Copy).
+    let settle_base_mint = match_config.base_mint;
+    let settle_quote_mint = match_config.quote_mint;
+    let settle_protocol_owner = match_config.protocol_owner_commitment;
     let matcher_state = Arc::new(RwLock::new(
         MatcherState::new().with_market(match_config.base_mint, match_config.quote_mint),
     ));
@@ -171,32 +188,57 @@ async fn main() -> Result<()> {
         Some(handle)
     };
 
-    // ─── 5. Settle scheduler (PR 4g.1) ────────────────────────────────
-    // Replaces the prior `drain_matches` stub. Currently accumulates
-    // jobs in `Queued` — PRs 4g.3 / 4g.5 / 4g.6 will plug stage
-    // workers in and drive jobs to `Done`. The matcher's
-    // `send().await` is fed continuously regardless of stage
-    // progress (the channel capacity is 1024, and ingestion is a
-    // brief write-lock per batch).
-    let (_scheduler_handle, settle_state) = SettleScheduler::spawn(matches_rx);
+    // ─── 5. Settle scheduler + live settle driver (PR 4g.7e) ──────────
+    // The scheduler accumulates per-match jobs; when the TEE is fully
+    // configured (signer + RPC + N=16 prover) a `SettleDriver` drives
+    // each batch through the full on-chain pipeline (lock → prove →
+    // verify → ALT → settle → close) and evicts the spent openings.
+    // Missing any dependency (degraded boot, prover zkey absent in a
+    // local dev run) → enqueue-only, logged below.
+    let settle_state = Arc::new(RwLock::new(SettleSchedulerState::default()));
+    let settle_driver: Option<SettleDriver> = match settle_signer {
+        Some((tee_keypair, signing_key)) => build_settle_driver(
+            &cfg,
+            tee_keypair,
+            signing_key,
+            settle_state.clone(),
+            matcher_state.clone(),
+            current_slot.clone(),
+            settle_base_mint,
+            settle_quote_mint,
+            settle_protocol_owner,
+        )
+        .map(|d| {
+            tracing::info!(
+                tee_signer = ?tee_signer_pubkey,
+                "settle driver constructed — live settle pipeline ENABLED"
+            );
+            Some(d)
+        })
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "settle driver unavailable; scheduler is enqueue-only");
+            None
+        }),
+        None => {
+            tracing::warn!("no TEE signer derived (degraded boot); settle pipeline disabled");
+            None
+        }
+    };
+    let _scheduler_handle =
+        SettleScheduler::spawn_with_settle(matches_rx, settle_state.clone(), settle_driver);
 
-    // ─── 6. Construct Solana RPC client (PR 4g.2 / 4g.3) ──────────────
-    // Pointed at the configured cluster URL. The TEE signer's
-    // Solana `Keypair` (which IS the fee-payer; see step 1's
-    // walk-back) lives in the settle stage workers' closure
-    // captures, not on ApiState. Only the pubkey is surfaced for
-    // operator visibility.
-    let api_state = if let Some(pubkey) = tee_signer_pubkey.as_ref() {
-        let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
-        tracing::info!(
-            endpoint = cfg.solana_rpc_url,
-            tee_signer = %pubkey,
-            "Solana RPC client constructed; settle pipeline workers use the TEE \
-             signer for both tee_authority and fee-payer roles"
-        );
-        api_state.with_solana_rpc(rpc)
+    // ─── 6. Attach a Solana RPC client to ApiState for visibility ─────
+    // (The settle driver owns its OWN client; this one only backs
+    // operator-facing read endpoints.)
+    let api_state = if tee_signer_pubkey.is_some() {
+        match SolanaRpcClient::new(&cfg.solana_rpc_url) {
+            Ok(rpc) => api_state.with_solana_rpc(rpc),
+            Err(e) => {
+                tracing::warn!(error = %e, "ApiState Solana RPC client construction failed");
+                api_state
+            }
+        }
     } else {
-        tracing::warn!("no TEE signer derived (degraded boot); settle pipeline disabled");
         api_state
     };
 
@@ -255,6 +297,71 @@ async fn derive_jwt_secret(client: &DstackClient) -> anyhow::Result<[u8; 32]> {
         )
     })?;
     Ok(arr)
+}
+
+/// `BatchValidityMarker` TTL (slots) the settle driver stamps into
+/// `verify_match_batch`. Generous — the marker only needs to outlive
+/// the batch's settles (seconds), then it's GC-able.
+const SETTLE_MARKER_TTL_SLOTS: u64 = 1000;
+
+/// Construct the live [`SettleDriver`] from the TEE signer + config.
+/// Fails (→ enqueue-only) if the RPC client or the N=16 proving key
+/// can't be constructed. The zkey path defaults to the in-image
+/// `/circuits/build`; set `NYX_TEE_CIRCUITS_DIR` to point at a local
+/// `circuits/build` for dev runs.
+#[allow(clippy::too_many_arguments)]
+fn build_settle_driver(
+    cfg: &nyx_tee::config::Config,
+    tee_keypair: solana_keypair::Keypair,
+    signing_key: ed25519_dalek::SigningKey,
+    settle_state: Arc<RwLock<SettleSchedulerState>>,
+    matcher_state: Arc<RwLock<MatcherState>>,
+    current_slot: Arc<AtomicU64>,
+    base_mint: [u8; 32],
+    quote_mint: [u8; 32],
+    protocol_owner_commitment: [u8; 32],
+) -> anyhow::Result<SettleDriver> {
+    let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
+    let circuits_dir =
+        std::env::var("NYX_TEE_CIRCUITS_DIR").unwrap_or_else(|_| "/circuits/build".to_string());
+    // The N=16 proving key is ~74 MB; `read_zkey` parses it
+    // synchronously here, before the HTTP surface comes up. Fast in a
+    // release build (the CVM), but a plain debug build takes ~minutes —
+    // log around it so a slow boot doesn't look hung.
+    tracing::info!(
+        circuits_dir,
+        n = PRODUCTION_BATCH_N,
+        "loading VALID_MATCH_BATCH proving key…"
+    );
+    let prover = ArkMatchBatchProver::load(&circuits_dir, PRODUCTION_BATCH_N).map_err(|e| {
+        anyhow::anyhow!("load N={PRODUCTION_BATCH_N} prover from {circuits_dir}: {e}")
+    })?;
+    tracing::info!("VALID_MATCH_BATCH proving key loaded");
+
+    let ctx = SettleWorkerCtx {
+        rpc,
+        tee_keypair: Arc::new(tee_keypair),
+        signing_key: Arc::new(signing_key),
+        prover: Arc::new(prover),
+        // Per-batch ALT only for now; the static settle ALT is created
+        // at devnet-setup and isn't yet threaded into the daemon.
+        static_alt: None,
+        settle_state,
+        confirm_timeout: Duration::from_secs(60),
+    };
+
+    Ok(SettleDriver {
+        ctx,
+        matcher_state,
+        current_slot,
+        cfg: SettleDriverConfig {
+            base_mint,
+            quote_mint,
+            protocol_owner_commitment,
+            circuit_n: PRODUCTION_BATCH_N,
+            marker_ttl_slots: SETTLE_MARKER_TTL_SLOTS,
+        },
+    })
 }
 
 /// Hardcoded dev `MatchConfig`. Production reads this from the

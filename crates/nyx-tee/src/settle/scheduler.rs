@@ -20,13 +20,17 @@
 //! eviction policy (keep last N batches, or last T minutes).
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use darkpool_matcher::match_result::RunBatchOutput;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 
+use super::assemble::{assemble_batch, BatchAssemblyParams};
 use super::job::{BatchId, JobStatus, MatchIdx, SettleJob, SettleJobId};
+use super::worker::{run_batch_settle, SettleWorkerCtx};
+use crate::matcher::MatcherState;
 
 /// Shared state exposed to status handlers + future stage workers.
 /// `Default` because it's trivially constructible.
@@ -115,61 +119,114 @@ impl SettleSchedulerState {
     }
 }
 
+/// Static per-market context the settle driver needs that a single
+/// `RunBatchOutput` doesn't carry.
+pub struct SettleDriverConfig {
+    pub base_mint: [u8; 32],
+    pub quote_mint: [u8; 32],
+    /// Owner commitment the protocol's fee notes pay to.
+    pub protocol_owner_commitment: [u8; 32],
+    /// Circuit instantiation N the witness set is padded to (16).
+    pub circuit_n: usize,
+    /// `verify_match_batch` marker TTL, added to the current slot.
+    pub marker_ttl_slots: u64,
+}
+
+/// The live-settle driver. Present only when the TEE is fully
+/// configured (signer + RPC + prover); `None` leaves the scheduler in
+/// enqueue-only mode (degraded boot / unit tests).
+pub struct SettleDriver {
+    /// The worker context (RPC, TEE keypair, signer, prover, the same
+    /// `SettleSchedulerState` the scheduler holds, confirm timeout).
+    pub ctx: SettleWorkerCtx,
+    /// The matcher state — read for the opening store at assembly,
+    /// written to evict openings after a batch settles.
+    pub matcher_state: Arc<RwLock<MatcherState>>,
+    /// Slot source for the fee-note derivation + marker expiry.
+    pub current_slot: Arc<AtomicU64>,
+    pub cfg: SettleDriverConfig,
+}
+
 /// The scheduler task itself. Spawned by `main.rs`; owns the
 /// receiver end of the matcher's matches channel.
 pub struct SettleScheduler {
     rx: mpsc::Receiver<RunBatchOutput>,
     state: Arc<RwLock<SettleSchedulerState>>,
+    /// `Some` drives each batch through the full on-chain pipeline;
+    /// `None` is enqueue-only.
+    settle: Option<SettleDriver>,
 }
 
 impl SettleScheduler {
-    /// Construct + spawn. Returns the join handle (for shutdown)
-    /// and the shared state (for status queries + future stage
-    /// workers). The caller must hold onto the state — dropping
-    /// it doesn't stop the scheduler, but it makes the status
-    /// endpoint unable to read.
+    /// Enqueue-only spawn (no settle driver). Returns the join handle
+    /// and the shared state for status queries. Used by the degraded
+    /// boot path and unit tests.
     pub fn spawn(
         rx: mpsc::Receiver<RunBatchOutput>,
     ) -> (JoinHandle<()>, Arc<RwLock<SettleSchedulerState>>) {
         let state = Arc::new(RwLock::new(SettleSchedulerState::default()));
-        let scheduler = Self {
-            rx,
-            state: state.clone(),
-        };
-        let handle = tokio::spawn(scheduler.run());
+        let handle = Self::spawn_inner(rx, state.clone(), None);
         (handle, state)
     }
 
+    /// Spawn with a caller-created `state` (so it can be shared into
+    /// the driver's `SettleWorkerCtx` AND held for the status
+    /// endpoint) and an optional settle driver. `None` is
+    /// enqueue-only — the same as [`Self::spawn`] but without
+    /// creating the state internally.
+    pub fn spawn_with_settle(
+        rx: mpsc::Receiver<RunBatchOutput>,
+        state: Arc<RwLock<SettleSchedulerState>>,
+        driver: Option<SettleDriver>,
+    ) -> JoinHandle<()> {
+        Self::spawn_inner(rx, state, driver)
+    }
+
+    fn spawn_inner(
+        rx: mpsc::Receiver<RunBatchOutput>,
+        state: Arc<RwLock<SettleSchedulerState>>,
+        settle: Option<SettleDriver>,
+    ) -> JoinHandle<()> {
+        let scheduler = Self { rx, state, settle };
+        tokio::spawn(scheduler.run())
+    }
+
     async fn run(mut self) {
-        tracing::warn!(
-            "settle scheduler: jobs accumulate in Queued. The full settle \
-             worker (lock→prove→verify→ALT→settle→close) lands in \
-             `settle::worker::run_batch_settle` as of PR 4g.6, but the \
-             MatchPair→BatchSettleInputs assembler that feeds it (note_c/d \
-             + nullifier derivation + the VALID_INPUT proof relay) is PR \
-             4g.7 — until then nothing drives jobs past Queued"
-        );
+        if self.settle.is_some() {
+            tracing::info!(
+                "settle scheduler: live driver attached — each batch is \
+                 assembled + driven through lock→prove→verify→ALT→settle→close"
+            );
+        } else {
+            tracing::warn!(
+                "settle scheduler: enqueue-only (no settle driver — degraded \
+                 boot or test); jobs accumulate in Queued"
+            );
+        }
 
         while let Some(output) = self.rx.recv().await {
-            self.enqueue_batch(output).await;
+            if let Some(batch_id) = self.enqueue_batch(&output).await {
+                if let Some(driver) = self.settle.as_ref() {
+                    self.drive_batch(driver, batch_id, &output).await;
+                }
+            }
         }
 
         tracing::info!("settle scheduler: matches channel closed; exiting");
     }
 
-    async fn enqueue_batch(&self, output: RunBatchOutput) {
+    /// Insert per-match jobs for a batch. Returns the assigned
+    /// `batch_id`, or `None` for an empty batch.
+    async fn enqueue_batch(&self, output: &RunBatchOutput) -> Option<BatchId> {
         let count = output.matches.len();
         if count == 0 {
-            // The matcher only sends outputs with non-empty
-            // matches (per `interval.rs::tick`), so this branch
-            // shouldn't fire in practice. Guard anyway so
-            // observers can't be confused by empty-batch entries.
-            return;
+            // The matcher only sends outputs with non-empty matches
+            // (per `interval.rs::tick`); guard anyway.
+            return None;
         }
         if count > u8::MAX as usize {
             // The on-chain VALID_MATCH_BATCH circuit instantiation
-            // tops out at N=16; the matcher should never emit
-            // more. Defensive.
+            // tops out at N=16; the matcher should never emit more.
             tracing::error!(
                 count,
                 "settle scheduler: RunBatchOutput has more matches than u8 — truncating"
@@ -179,12 +236,12 @@ impl SettleScheduler {
         let mut state = self.state.write().await;
         let batch_id = state.next_batch_id();
         let take = count.min(u8::MAX as usize);
-        for (idx, match_pair) in output.matches.into_iter().take(take).enumerate() {
+        for (idx, match_pair) in output.matches.iter().take(take).enumerate() {
             let id = SettleJobId {
                 batch_id,
                 match_idx: idx as u8,
             };
-            state.insert(SettleJob::new(id, match_pair));
+            state.insert(SettleJob::new(id, match_pair.clone()));
         }
         tracing::info!(
             batch_id,
@@ -192,6 +249,70 @@ impl SettleScheduler {
             total_batches = state.batch_count(),
             "settle scheduler: enqueued batch"
         );
+        Some(batch_id)
+    }
+
+    /// Assemble + settle one batch, then evict its openings. Failures
+    /// mark the batch's jobs `Failed` (assembly errors here; on-chain
+    /// errors inside `run_batch_settle`).
+    async fn drive_batch(&self, driver: &SettleDriver, batch_id: BatchId, output: &RunBatchOutput) {
+        let now_slot = driver.current_slot.load(Ordering::Relaxed);
+        let params = BatchAssemblyParams {
+            batch_id,
+            base_mint: driver.cfg.base_mint,
+            quote_mint: driver.cfg.quote_mint,
+            protocol_owner_commitment: driver.cfg.protocol_owner_commitment,
+            fee_slot: now_slot,
+            marker_expiry_slot: now_slot.saturating_add(driver.cfg.marker_ttl_slots),
+            circuit_n: driver.cfg.circuit_n,
+        };
+
+        // Assemble under a brief read lock on the opening store, then
+        // release it before the (long, RPC + proving) settle.
+        let assembled = {
+            let st = driver.matcher_state.read().await;
+            assemble_batch(output, st.openings(), params)
+        };
+        let inputs = match assembled {
+            Ok(i) => i,
+            Err(e) => {
+                tracing::error!(batch_id, error = %e, "settle: batch assembly failed");
+                self.fail_batch(batch_id, output.matches.len(), format!("assembly: {e}"))
+                    .await;
+                return;
+            }
+        };
+
+        if let Err(e) = run_batch_settle(&driver.ctx, inputs).await {
+            // run_batch_settle already marked the jobs Failed.
+            tracing::error!(batch_id, error = %e, "settle: batch settle failed");
+            return;
+        }
+
+        // Success — drop the now-spent openings (after close confirmed).
+        {
+            let mut st = driver.matcher_state.write().await;
+            for m in &output.matches {
+                st.openings_mut().remove(&m.note_buyer);
+                st.openings_mut().remove(&m.note_seller);
+            }
+        }
+        tracing::info!(
+            batch_id,
+            matches = output.matches.len(),
+            "settle: batch settled; openings evicted"
+        );
+    }
+
+    async fn fail_batch(&self, batch_id: BatchId, n: usize, reason: String) {
+        let mut state = self.state.write().await;
+        for idx in 0..n.min(u8::MAX as usize) {
+            let id = SettleJobId {
+                batch_id,
+                match_idx: idx as u8,
+            };
+            state.update(&id, |j| j.fail(reason.clone()));
+        }
     }
 }
 
@@ -337,5 +458,183 @@ mod tests {
         let job = st.get_job(&id).expect("job present");
         assert_eq!(job.stage, super::super::job::SettleJobStage::LockingNotes);
         assert_eq!(job.lock_buyer_sig.as_deref(), Some("sig-A"));
+    }
+
+    // ─── Live settle driver (4g.7e) ───────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn live_driver_settles_a_batch_and_evicts_openings() {
+        use crate::matcher::openings::{NoteOpening, OrderOpening};
+        use crate::settle::lock_note::Groth16ProofBytes;
+        use crate::settle::test_support::{spawn_mock_rpc, FakeProver};
+        use crate::settle::worker::SettleWorkerCtx;
+        use crate::solana_rpc::SolanaRpcClient;
+        use ed25519_dalek::SigningKey;
+        use solana_keypair::Keypair;
+        use std::time::Duration;
+
+        let base_mint = {
+            let mut m = [0u8; 32];
+            m[0] = 1;
+            m[31] = 0xb1;
+            m
+        };
+        let quote_mint = {
+            let mut m = [0u8; 32];
+            m[0] = 1;
+            m[31] = 0x9e;
+            m
+        };
+        let fr_safe = |b: u8| {
+            let mut v = [b; 32];
+            v[0] = 0;
+            v
+        };
+
+        // A consistent exact-fill match: base=10, quote=1000.
+        let buyer_open = NoteOpening {
+            token_mint: quote_mint,
+            amount: 1000,
+            owner_commitment: fr_safe(0x44),
+            nonce: fr_safe(0x11),
+            blinding: fr_safe(0x22),
+            nullifier: [0xAA; 32],
+        };
+        let seller_open = NoteOpening {
+            token_mint: base_mint,
+            amount: 10,
+            owner_commitment: fr_safe(0x55),
+            nonce: fr_safe(0x33),
+            blinding: fr_safe(0x66),
+            nullifier: [0xBB; 32],
+        };
+        let note_buyer = buyer_open.commitment().unwrap();
+        let note_seller = seller_open.commitment().unwrap();
+
+        // Matcher state seeded with both openings (as intake would).
+        let matcher_state = Arc::new(RwLock::new(
+            MatcherState::new().with_market(base_mint, quote_mint),
+        ));
+        let proof = Groth16ProofBytes {
+            pi_a: [1u8; 64],
+            pi_b: [2u8; 128],
+            pi_c: [3u8; 64],
+        };
+        {
+            let mut st = matcher_state.write().await;
+            st.openings_mut().insert(
+                note_buyer,
+                OrderOpening {
+                    opening: buyer_open,
+                    order_id: [0x01; 16],
+                    expiry_slot: 2000,
+                    merkle_root: [0xDD; 32],
+                    valid_input_proof: proof.clone(),
+                },
+            );
+            st.openings_mut().insert(
+                note_seller,
+                OrderOpening {
+                    opening: seller_open,
+                    order_id: [0x02; 16],
+                    expiry_slot: 2000,
+                    merkle_root: [0xDD; 32],
+                    valid_input_proof: proof,
+                },
+            );
+            assert_eq!(st.openings().len(), 2);
+        }
+
+        let m = MatchPair {
+            note_buyer,
+            note_seller,
+            note_e_commitment: [0; 32],
+            note_f_commitment: [0; 32],
+            owner_buyer: [0x77; 32],
+            owner_seller: [0x88; 32],
+            user_commitment_buyer: [0x99; 32],
+            user_commitment_seller: [0xAA; 32],
+            buyer_note_value: 1000,
+            seller_note_value: 10,
+            base_amt: 10,
+            quote_amt: 1000,
+            buyer_change_amt: 0,
+            seller_change_amt: 0,
+            buyer_fee_amt: 0,
+            seller_fee_amt: 0,
+            buyer_relock_order_id: [0; 16],
+            buyer_relock_expiry: 0,
+            seller_relock_order_id: [0; 16],
+            seller_relock_expiry: 0,
+            price: 100,
+            pyth_at_match: 100,
+            batch_slot: 7,
+            match_id: 42,
+            status: MatchStatus::Filled,
+        };
+
+        // Worker ctx (mock RPC + fake prover) + driver.
+        let url = spawn_mock_rpc().await;
+        let state = Arc::new(RwLock::new(SettleSchedulerState::default()));
+        let ctx = SettleWorkerCtx {
+            rpc: SolanaRpcClient::new(url).unwrap(),
+            tee_keypair: Arc::new(Keypair::new_from_array([0x42; 32])),
+            signing_key: Arc::new(SigningKey::from_bytes(&[0x42; 32])),
+            prover: Arc::new(FakeProver { n: 2 }),
+            static_alt: None,
+            settle_state: state.clone(),
+            confirm_timeout: Duration::from_secs(5),
+        };
+        let driver = SettleDriver {
+            ctx,
+            matcher_state: matcher_state.clone(),
+            current_slot: Arc::new(AtomicU64::new(1000)),
+            cfg: SettleDriverConfig {
+                base_mint,
+                quote_mint,
+                protocol_owner_commitment: fr_safe(0x07),
+                circuit_n: 2,
+                marker_ttl_slots: 150,
+            },
+        };
+
+        let (tx, rx) = mpsc::channel::<RunBatchOutput>(4);
+        let _handle = SettleScheduler::spawn_with_settle(rx, state.clone(), Some(driver));
+
+        let mut output = RunBatchOutput::empty(7, 100, 0);
+        output.matches = vec![m];
+        tx.send(output).await.unwrap();
+
+        // Poll until the single job reaches Done (the mock settle is
+        // fast but async across several tx round-trips).
+        let id = SettleJobId {
+            batch_id: 0,
+            match_idx: 0,
+        };
+        let mut done = false;
+        for _ in 0..200 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let st = state.read().await;
+            if let Some(j) = st.get_job(&id) {
+                match &j.stage {
+                    super::super::job::SettleJobStage::Done => {
+                        done = true;
+                        break;
+                    }
+                    super::super::job::SettleJobStage::Failed { reason } => {
+                        panic!("settle job failed: {reason}");
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(done, "job did not reach Done within the deadline");
+
+        // The settled batch's openings are evicted.
+        let st = matcher_state.read().await;
+        assert!(
+            st.openings().is_empty(),
+            "openings must be evicted after a batch settles"
+        );
     }
 }
