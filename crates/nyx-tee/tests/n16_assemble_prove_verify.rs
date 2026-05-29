@@ -33,10 +33,8 @@ use ark_ff::PrimeField;
 use ark_groth16::{prepare_verifying_key, Groth16};
 use darkpool_matcher::match_result::{MatchPair, MatchStatus};
 use nyx_tee::matcher::openings::NoteOpening;
-use nyx_tee::prover::{compute_batch_root, pad_batch, ArkMatchBatchProver};
+use nyx_tee::prover::{compute_batch_root, pad_batch, ArkMatchBatchProver, PRODUCTION_BATCH_N};
 use nyx_tee::settle::{assemble_match, MatchAssemblyInputs};
-
-const PRODUCTION_N: usize = 16;
 
 fn circuits_build_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -160,11 +158,12 @@ async fn assembler_witness_proves_and_verifies_n16() {
     .expect("assemble the match");
 
     // 2. Pad to the production N=16 with dummy slots.
-    let slots = pad_batch(&[witness], PRODUCTION_N).expect("pad to N=16");
-    assert_eq!(slots.len(), PRODUCTION_N);
+    let slots = pad_batch(&[witness], PRODUCTION_BATCH_N).expect("pad to N=16");
+    assert_eq!(slots.len(), PRODUCTION_BATCH_N);
 
     // 3. REAL Groth16 proof against the N=16 proving key.
-    let prover = ArkMatchBatchProver::load(&build_dir, PRODUCTION_N).expect("load N=16 prover");
+    let prover =
+        ArkMatchBatchProver::load(&build_dir, PRODUCTION_BATCH_N).expect("load N=16 prover");
     let (proof, public) = prover
         .prove_ark(&slots)
         .expect("prove the assembled N=16 batch");

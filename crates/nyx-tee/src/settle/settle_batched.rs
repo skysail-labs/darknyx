@@ -63,6 +63,14 @@ pub fn build_settle_batched_ix(
     merkle_proof: &[[u8; 32]; 4],
     merkle_root: &[u8; 32],
 ) -> Instruction {
+    // Depth-4 batch tree → 16 leaves, so match_index ∈ [0, 15]. The
+    // assembler only ever passes `idx < N=16`; assert it so an
+    // out-of-range index surfaces in tests rather than as an opaque
+    // on-chain root mismatch.
+    debug_assert!(
+        match_index < 16,
+        "match_index {match_index} out of range for a depth-4 batch (0..15)"
+    );
     let program_id = vault_program_id();
     let (vault_config, _) = vault_config_pda();
     let (lock_a, _) = note_lock_pda(&payload.note_a_commitment);

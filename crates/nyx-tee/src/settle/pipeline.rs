@@ -42,12 +42,9 @@ pub fn build_settle_v0_tx_b64(
     alts: &[AddressLookupTableAccount],
     blockhash: Hash,
 ) -> Result<String, RpcError> {
-    let payer = tee_keypair.pubkey();
-    let message = v0::Message::try_compile(&payer, &[ed25519_ix, settle_ix], alts, blockhash)
-        .map_err(|e| RpcError::Schema(format!("v0 message compile failed: {e}")))?;
-    let versioned = VersionedMessage::V0(message);
-    let tx = VersionedTransaction::try_new(versioned, &[tee_keypair])
-        .map_err(|e| RpcError::Schema(format!("v0 tx sign failed: {e}")))?;
+    // Delegate compile/sign to `build_settle_v0_tx` (single source) +
+    // serialise to the base64 wire form.
+    let tx = build_settle_v0_tx(tee_keypair, ed25519_ix, settle_ix, alts, blockhash)?;
     let wire = bincode::serialize(&tx)
         .map_err(|e| RpcError::Schema(format!("v0 tx bincode serialise failed: {e}")))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&wire))

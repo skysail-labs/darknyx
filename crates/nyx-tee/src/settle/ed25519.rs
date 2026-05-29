@@ -56,6 +56,15 @@ pub fn build_ed25519_verify_ix(
     data.extend_from_slice(&(pk_off as u16).to_le_bytes());
     data.extend_from_slice(&SENTINEL.to_le_bytes()); // pk ix index
     data.extend_from_slice(&(msg_off as u16).to_le_bytes());
+    // The precompile encodes the message length as u16. Every caller
+    // passes the 32-byte canonical payload hash, so this can't
+    // truncate — assert it so a future reuse with a larger message
+    // surfaces in tests instead of silently corrupting the layout.
+    debug_assert!(
+        message.len() <= u16::MAX as usize,
+        "ed25519 precompile message length {} exceeds u16",
+        message.len()
+    );
     data.extend_from_slice(&(message.len() as u16).to_le_bytes());
     data.extend_from_slice(&SENTINEL.to_le_bytes()); // msg ix index
     debug_assert_eq!(data.len(), HEADER_LEN);

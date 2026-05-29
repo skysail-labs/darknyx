@@ -77,7 +77,16 @@ pub(crate) async fn spawn_mock_rpc() -> String {
                     .collect();
                 json!({ "context": { "slot": 1000 }, "value": value })
             }
-            other => json!({ "error": format!("unexpected method {other}") }),
+            // An unexpected method gets a proper top-level JSON-RPC
+            // error object (no `result`), so the client surfaces it as
+            // RpcError::Rpc rather than a malformed result.
+            other => {
+                return Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": { "code": -32601, "message": format!("unexpected method {other}") },
+                }));
+            }
         };
         Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
     }
