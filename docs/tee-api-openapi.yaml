@@ -316,6 +316,8 @@ components:
         - note_nonce
         - note_blinding
         - nullifier
+        - merkle_root
+        - valid_input_proof
       properties:
         symbol:
           type: string
@@ -386,6 +388,23 @@ components:
             key never enters the TEE). Opaque to the matcher; carried
             into the settle payload. A wrong value is self-harm only
             (on-chain replay protection keys off the note commitment).
+        merkle_root:
+          type: string
+          description: |
+            32-byte hex — the merkle root the `valid_input_proof` was
+            generated against. Relayed into `lock_note` (settle Tx A);
+            must still be in the vault's 64-root ring buffer at lock
+            time, so settle must land within ~64 tree updates of
+            submission.
+        valid_input_proof:
+          type: string
+          description: |
+            256-byte hex (`pi_a ‖ pi_b ‖ pi_c`) — the per-note
+            VALID_INPUT Groth16 proof that gates `lock_note`. The TEE
+            cannot generate it (it needs the user's spending key +
+            merkle witness), so the client supplies it; the matcher
+            relays it unverified (on-chain `lock_note` verifies it)
+            and holds it in enclave memory until settle.
 
     Order:
       type: object

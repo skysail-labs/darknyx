@@ -37,6 +37,8 @@ use std::collections::HashMap;
 
 use darkpool_crypto::note::commitment_from_fields;
 
+use crate::settle::lock_note::Groth16ProofBytes;
+
 /// The full opening of one input note — everything the
 /// VALID_MATCH_BATCH circuit needs to re-derive its commitment, plus
 /// the user-supplied nullifier the settle payload carries.
@@ -106,13 +108,40 @@ impl NoteOpening {
     }
 }
 
-/// Per-order opening table. One entry per live order, keyed by the
-/// 16-byte `order_id`. Inserted at intake (after the opening
-/// verifies), read by the settle assembler (4g.7b), and removed on
-/// cancel / expiry / settle so the table tracks the live book.
+/// Everything the settle pipeline needs for one input note, captured
+/// at order intake. Bundles the crypto opening (for the proof
+/// witness) with the lock-side inputs the TEE relays into `lock_note`
+/// (Tx A) — the per-note VALID_INPUT proof + the merkle root it was
+/// generated against. The TEE cannot generate that proof (it needs
+/// the user's spending key + merkle witness), so the client supplies
+/// it; the on-chain `lock_note` verifies it against the vault's
+/// 64-root ring buffer, so it stays valid as long as settle lands
+/// within 64 tree updates of submission.
+#[derive(Clone, Debug)]
+pub struct OrderOpening {
+    /// The crypto opening (verified against the signed commitment).
+    pub opening: NoteOpening,
+    /// The order this note collateralises (payload `order_id_*`).
+    pub order_id: [u8; 16],
+    /// Lock TTL the matcher relays into `lock_note`.
+    pub expiry_slot: u64,
+    /// Merkle root the VALID_INPUT proof was generated against — must
+    /// still be in the vault's root history at lock time.
+    pub merkle_root: [u8; 32],
+    /// The client-generated VALID_INPUT Groth16 proof for `lock_note`.
+    pub valid_input_proof: Groth16ProofBytes,
+}
+
+/// Per-order settle-input table. One entry per live order, keyed by
+/// its collateral `note_commitment` — the matcher's `MatchPair`
+/// carries `note_buyer` / `note_seller` (commitments, not order ids),
+/// so keying by commitment lets the settle assembler resolve both
+/// sides of a match directly. Inserted at intake (after the opening
+/// verifies), read by the assembler (4g.7d), removed on cancel /
+/// expiry / settle so the table tracks the live book.
 #[derive(Default, Debug)]
 pub struct OpeningStore {
-    map: HashMap<[u8; 16], NoteOpening>,
+    map: HashMap<[u8; 32], OrderOpening>,
 }
 
 impl OpeningStore {
@@ -120,25 +149,24 @@ impl OpeningStore {
         Self::default()
     }
 
-    /// Record an order's verified opening. Overwrites any prior entry
-    /// for the same `order_id` (the book rejects duplicate live ids,
-    /// so in practice this only fires on a re-lock rotation that
-    /// reuses the id with a fresh change-note opening).
-    pub fn insert(&mut self, order_id: [u8; 16], opening: NoteOpening) {
-        self.map.insert(order_id, opening);
+    /// Record an order's settle inputs, keyed by collateral note
+    /// commitment. Overwrites any prior entry for the same commitment
+    /// (a re-lock rotation reuses the slot with a fresh opening).
+    pub fn insert(&mut self, note_commitment: [u8; 32], record: OrderOpening) {
+        self.map.insert(note_commitment, record);
     }
 
-    /// Fetch a clone of the opening for `order_id` (the assembler
-    /// needs an owned copy it can move into a witness without holding
+    /// Fetch a clone of the record for a collateral note commitment
+    /// (the assembler needs an owned copy it can use without holding
     /// the matcher lock across the proof).
-    pub fn get(&self, order_id: &[u8; 16]) -> Option<NoteOpening> {
-        self.map.get(order_id).cloned()
+    pub fn get(&self, note_commitment: &[u8; 32]) -> Option<OrderOpening> {
+        self.map.get(note_commitment).cloned()
     }
 
-    /// Drop an order's opening — on cancel, expiry, or after settle.
-    /// Returns the removed opening, if any.
-    pub fn remove(&mut self, order_id: &[u8; 16]) -> Option<NoteOpening> {
-        self.map.remove(order_id)
+    /// Drop a note's record — on cancel, expiry, or after settle.
+    /// Returns the removed record, if any.
+    pub fn remove(&mut self, note_commitment: &[u8; 32]) -> Option<OrderOpening> {
+        self.map.remove(note_commitment)
     }
 
     pub fn len(&self) -> usize {
@@ -240,17 +268,32 @@ mod tests {
         assert!(matches!(err, OpeningError::NotFrSafe(_)));
     }
 
+    fn sample_record(amount: u64) -> OrderOpening {
+        OrderOpening {
+            opening: sample_opening(amount),
+            order_id: [7u8; 16],
+            expiry_slot: 1_000_000,
+            merkle_root: [0xDD; 32],
+            valid_input_proof: Groth16ProofBytes {
+                pi_a: [1u8; 64],
+                pi_b: [2u8; 128],
+                pi_c: [3u8; 64],
+            },
+        }
+    }
+
     #[test]
     fn store_insert_get_remove() {
         let mut store = OpeningStore::new();
         assert!(store.is_empty());
-        let id = [7u8; 16];
-        let o = sample_opening(500);
-        store.insert(id, o.clone());
+        let rec = sample_record(500);
+        // Keyed by the collateral note commitment.
+        let key = rec.opening.commitment().unwrap();
+        store.insert(key, rec.clone());
         assert_eq!(store.len(), 1);
-        assert_eq!(store.get(&id), Some(o.clone()));
-        assert_eq!(store.get(&[9u8; 16]), None);
-        assert_eq!(store.remove(&id), Some(o));
+        assert_eq!(store.get(&key).map(|r| r.order_id), Some(rec.order_id));
+        assert!(store.get(&[9u8; 32]).is_none());
+        assert!(store.remove(&key).is_some());
         assert!(store.is_empty());
     }
 }

@@ -93,6 +93,20 @@ pub struct PlaceOrderRequest {
     /// hex. Precomputed by the client (needs the spending key, which
     /// never enters the TEE); opaque to the matcher.
     pub nullifier: String,
+
+    // ─── VALID_INPUT proof relay (4g.7c) ─────────────────────────
+    // `lock_note` (settle Tx A) requires a per-note VALID_INPUT
+    // Groth16 proof. The TEE cannot generate it (it needs the user's
+    // spending key + merkle witness), so the client generates it and
+    // relays it here. The matcher does NOT verify it (on-chain
+    // `lock_note` does, against the vault's 64-root ring buffer); it
+    // holds it in enclave memory until settle.
+    /// 32-byte merkle root the VALID_INPUT proof was generated
+    /// against, hex. Must still be in the vault's root history at
+    /// lock time (64-root window).
+    pub merkle_root: String,
+    /// 256-byte VALID_INPUT Groth16 proof (`pi_a ‖ pi_b ‖ pi_c`), hex.
+    pub valid_input_proof: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,6 +265,11 @@ pub async fn place_order(
     let note_nonce: [u8; 32] = decode_hex(&req.note_nonce, "note_nonce")?;
     let note_blinding: [u8; 32] = decode_hex(&req.note_blinding, "note_blinding")?;
     let nullifier: [u8; 32] = decode_hex(&req.nullifier, "nullifier")?;
+    let lock_merkle_root: [u8; 32] = decode_hex(&req.merkle_root, "merkle_root")?;
+    let valid_input_proof_bytes: [u8; 256] =
+        decode_hex(&req.valid_input_proof, "valid_input_proof")?;
+    let valid_input_proof =
+        crate::settle::lock_note::Groth16ProofBytes::from_concat(&valid_input_proof_bytes);
 
     // 2. Field-level validation. Cheap; runs before the expensive
     //    Ed25519 verify.
@@ -390,7 +409,18 @@ pub async fn place_order(
         // it's a bug — surface as 500.
         e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     })?;
-    st.openings_mut().insert(order_id, opening);
+    // Keyed by collateral note commitment so the settle assembler can
+    // resolve both sides of a match from MatchPair.note_buyer/seller.
+    st.openings_mut().insert(
+        note_commitment,
+        crate::matcher::openings::OrderOpening {
+            opening,
+            order_id,
+            expiry_slot: req.expiry_slot,
+            merkle_root: lock_merkle_root,
+            valid_input_proof,
+        },
+    );
 
     Ok((
         StatusCode::ACCEPTED,
@@ -427,6 +457,10 @@ pub async fn cancel_order(
     verify_sig(&digest, &trading_key, &signature)?;
 
     let mut st = matcher.write().await;
+    // Resolve the collateral note BEFORE cancelling (the store is
+    // keyed by note commitment, not order_id), so we can drop the
+    // opening after the book removes the order.
+    let collateral_note = st.book().get(&order_id).map(|o| o.collateral_note);
     st.book_mut()
         .cancel(trading_key, order_id)
         .map_err(|e| match e {
@@ -435,7 +469,9 @@ pub async fn cancel_order(
             e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         })?;
     // Cancelled order can never settle — drop its in-enclave opening.
-    st.openings_mut().remove(&order_id);
+    if let Some(note) = collateral_note {
+        st.openings_mut().remove(&note);
+    }
 
     Ok(Json(CancelOrderResponse {
         order_id: hex::encode(order_id),

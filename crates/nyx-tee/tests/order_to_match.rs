@@ -146,6 +146,8 @@ fn sign_order(
         "note_nonce": hex::encode(opening.nonce),
         "note_blinding": hex::encode(opening.blinding),
         "nullifier": hex::encode(opening.nullifier),
+        "merkle_root": hex::encode([0xDDu8; 32]),
+        "valid_input_proof": hex::encode([0u8; 256]),
     })
 }
 

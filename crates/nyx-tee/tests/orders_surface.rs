@@ -35,8 +35,11 @@ use jsonwebtoken::{encode, EncodingKey, Header};
 use nyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
 use nyx_tee::api::{build_router, ApiState};
 use nyx_tee::matcher::openings::NoteOpening;
+use nyx_tee::matcher::MatcherState;
+use nyx_tee::oracle::cache::OracleCache;
 use rand::rngs::OsRng;
 use serde_json::json;
+use std::sync::atomic::AtomicU64;
 use tower::ServiceExt;
 
 // ─── Shared fixtures ────────────────────────────────────────────────────────
@@ -210,6 +213,11 @@ impl PlaceOrderBuilder {
             "note_nonce": hex::encode(self.note_nonce),
             "note_blinding": hex::encode(self.note_blinding),
             "nullifier": hex::encode(self.nullifier),
+            // VALID_INPUT proof relay (4g.7c). Intake stores these
+            // opaquely (on-chain lock_note verifies the proof), so
+            // dummy bytes are fine for the orders-surface tests.
+            "merkle_root": hex::encode([0xDDu8; 32]),
+            "valid_input_proof": hex::encode([0u8; 256]),
         })
     }
 }
@@ -308,6 +316,56 @@ async fn place_happy_path_returns_202_and_lands_in_book() {
     assert_eq!(status_json["order_type"], "limit");
     assert_eq!(status_json["status"], "pending");
     assert_eq!(status_json["amount"], builder.amount);
+}
+
+#[tokio::test]
+async fn place_populates_opening_store_keyed_by_commitment_and_cancel_clears_it() {
+    // 4g.7c: a placed order's settle inputs (opening + order_id +
+    // VALID_INPUT proof relay) land in the in-enclave store keyed by
+    // the collateral note commitment, and a cancel drops them.
+    let matcher_state = Arc::new(tokio::sync::RwLock::new(MatcherState::new()));
+    let current_slot = Arc::new(AtomicU64::new(1));
+    let api = ApiState::for_tests().with_matcher_runtime(
+        matcher_state.clone(),
+        current_slot,
+        OracleCache::new(),
+    );
+    let app = app_from(Arc::new(api));
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let b = PlaceOrderBuilder::new();
+    let note_commitment = b.note_commitment();
+
+    let resp = place(&app, &bearer, b.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+    {
+        let st = matcher_state.read().await;
+        assert_eq!(st.openings().len(), 1);
+        let rec = st
+            .openings()
+            .get(&note_commitment)
+            .expect("opening stored under the collateral note commitment");
+        assert_eq!(rec.order_id, b.order_id);
+        assert_eq!(rec.expiry_slot, b.expiry_slot);
+        assert_eq!(rec.opening.nullifier, b.nullifier);
+    }
+
+    let c = cancel(
+        &app,
+        &bearer,
+        &hex::encode(b.order_id),
+        cancel_body(&key, b.order_id, 1),
+    )
+    .await;
+    assert_eq!(c.status(), StatusCode::OK);
+    {
+        let st = matcher_state.read().await;
+        assert!(
+            st.openings().is_empty(),
+            "cancel must drop the in-enclave opening"
+        );
+    }
 }
 
 // ─── POST /orders — input validation ────────────────────────────────────────

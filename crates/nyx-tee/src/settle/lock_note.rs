@@ -63,6 +63,18 @@ pub struct Groth16ProofBytes {
 impl Groth16ProofBytes {
     /// Borsh-encoded width — pinned by the on-chain Anchor type.
     pub const WIRE_LEN: usize = 64 + 128 + 64;
+
+    /// Parse from the 256-byte `pi_a ‖ pi_b ‖ pi_c` concatenation —
+    /// the wire form a client relays a VALID_INPUT proof in (4g.7c).
+    pub fn from_concat(bytes: &[u8; Self::WIRE_LEN]) -> Self {
+        let mut pi_a = [0u8; 64];
+        let mut pi_b = [0u8; 128];
+        let mut pi_c = [0u8; 64];
+        pi_a.copy_from_slice(&bytes[0..64]);
+        pi_b.copy_from_slice(&bytes[64..192]);
+        pi_c.copy_from_slice(&bytes[192..256]);
+        Self { pi_a, pi_b, pi_c }
+    }
 }
 
 /// All args to `lock_note`, in the declaration order the on-chain
