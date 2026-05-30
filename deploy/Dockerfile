@@ -37,16 +37,23 @@
 #
 # ARCHITECTURE — build this for linux/amd64. Phala TDX CVMs are
 # x86_64; an arm64 image (the default on Apple Silicon) fails the CVM
-# pull with "no matching manifest for linux/amd64". Cross-building
-# amd64 on an Apple-Silicon Mac via QEMU emulation fails at link time
-# with `undefined symbol: __rust_probestack` (an x86 stack-probe
-# intrinsic rust-lld can't resolve under emulation). Build on a native
-# amd64 host instead — i.e. a CI runner (`ubuntu-latest`) with
-# `docker buildx build --platform linux/amd64 --push`. Don't burn
-# emulated build cycles on a Mac.
+# pull with "no matching manifest for linux/amd64". Build it on a
+# native amd64 host — i.e. a CI runner (`ubuntu-latest`) with
+# `docker buildx build --platform linux/amd64 --push` — rather than
+# cross-building under QEMU on a Mac (slow, and emulated build cycles
+# are wasteful). See .github/workflows/tee-image.yml.
 FROM rust:1.91-slim-bookworm AS builder
 
 WORKDIR /build
+
+# LINKER — Rust 1.90+ switched the x86_64-unknown-linux-gnu default to
+# the self-contained `rust-lld`, which fails to link this binary with
+# `undefined symbol: __rust_probestack` (the x86 stack-probe intrinsic,
+# normally pulled from compiler_builtins). `-C linker-features=-lld` is
+# the stable opt-out shipped alongside that switch: it reverts to the
+# GNU linker (cc/ld), which resolves probestack correctly. Applies to
+# both the warmup and real cargo builds below.
+ENV RUSTFLAGS="-C linker-features=-lld"
 
 # System deps needed to build solana-poseidon + ark-* on Debian.
 # Keep this list tight; every package on the build side leaks into
