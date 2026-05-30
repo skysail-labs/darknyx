@@ -46,13 +46,23 @@ FROM rust:1.91-slim-bookworm AS builder
 
 WORKDIR /build
 
-# LINKER — Rust 1.90+ switched the x86_64-unknown-linux-gnu default to
-# the self-contained `rust-lld`, which fails to link this binary with
-# `undefined symbol: __rust_probestack` (the x86 stack-probe intrinsic,
-# normally pulled from compiler_builtins). `-C linker-features=-lld` is
-# the stable opt-out shipped alongside that switch: it reverts to the
-# GNU linker (cc/ld), which resolves probestack correctly. Applies to
-# both the warmup and real cargo builds below.
+# LTO — the workspace profile.release sets `lto = "fat"`. This binary
+# pulls in wasmer 4.4 (via ark-circom, for circom witness generation in
+# the prover). Fat LTO + --gc-sections drops the `__rust_probestack`
+# x86 stack-probe intrinsic from compiler_builtins, so the final link
+# fails with `undefined reference to __rust_probestack` inside wasmer's
+# apply_relocation (a large-stack-frame fn). It never surfaced before
+# because the binary had only ever been built on arm64-darwin, which
+# has no probestack intrinsic — fat LTO has never actually linked this
+# binary for x86_64-linux. Disable LTO for the image build: correctness
+# over the marginal LTO win for a long-running service binary. Done via
+# env so the committed profile.release is untouched — local host builds
+# and the BPF programs still link with fat LTO.
+ENV CARGO_PROFILE_RELEASE_LTO=off
+
+# LINKER — Rust 1.90+ defaults x86_64-unknown-linux-gnu to the
+# self-contained `rust-lld`. Revert to the GNU linker (cc/ld) — harmless
+# here and removes one lld-specific variable from the link.
 ENV RUSTFLAGS="-C linker-features=-lld"
 
 # System deps needed to build solana-poseidon + ark-* on Debian.
