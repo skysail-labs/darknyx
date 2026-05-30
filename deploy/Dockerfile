@@ -34,6 +34,16 @@
 # TODO(phase1): pin to a SHA-256 digest
 # once we're past the rapid-iteration scaffolding phase. For now
 # the tag is fine; the deploy is dev-only.
+#
+# ARCHITECTURE — build this for linux/amd64. Phala TDX CVMs are
+# x86_64; an arm64 image (the default on Apple Silicon) fails the CVM
+# pull with "no matching manifest for linux/amd64". Cross-building
+# amd64 on an Apple-Silicon Mac via QEMU emulation fails at link time
+# with `undefined symbol: __rust_probestack` (an x86 stack-probe
+# intrinsic rust-lld can't resolve under emulation). Build on a native
+# amd64 host instead — i.e. a CI runner (`ubuntu-latest`) with
+# `docker buildx build --platform linux/amd64 --push`. Don't burn
+# emulated build cycles on a Mac.
 FROM rust:1.91-slim-bookworm AS builder
 
 WORKDIR /build
@@ -55,17 +65,26 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/darkpool-crypto/Cargo.toml  crates/darkpool-crypto/
 COPY crates/darkpool-matcher/Cargo.toml crates/darkpool-matcher/
 COPY crates/nyx-tee/Cargo.toml          crates/nyx-tee/
+# nyx-tee-loadgen is a workspace member, so cargo must be able to
+# parse its manifest to resolve the workspace graph — even though the
+# warmup below only builds `-p nyx-tee`. Without this COPY the warmup
+# aborts with "failed to read .../nyx-tee-loadgen/Cargo.toml", losing
+# the dependency-cache layer (the real build still succeeds, just
+# slower). It is NOT compiled into the runtime image.
+COPY crates/nyx-tee-loadgen/Cargo.toml  crates/nyx-tee-loadgen/
 COPY programs/vault/Cargo.toml          programs/vault/
 COPY programs/matching_engine/Cargo.toml programs/matching_engine/
 
 # Create dummy main.rs/lib.rs so the dep build doesn't fail on
 # missing sources. The real sources come in the next COPY.
 RUN mkdir -p crates/darkpool-crypto/src crates/darkpool-matcher/src \
-             crates/nyx-tee/src \
+             crates/nyx-tee/src crates/nyx-tee-loadgen/src \
              programs/vault/src programs/matching_engine/src && \
     echo 'fn main() {}' > crates/nyx-tee/src/main.rs && \
+    echo 'fn main() {}' > crates/nyx-tee-loadgen/src/main.rs && \
     touch crates/darkpool-crypto/src/lib.rs \
           crates/darkpool-matcher/src/lib.rs \
+          crates/nyx-tee-loadgen/src/lib.rs \
           programs/vault/src/lib.rs \
           programs/matching_engine/src/lib.rs && \
     cargo build --release -p nyx-tee || true

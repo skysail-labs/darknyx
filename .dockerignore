@@ -1,0 +1,20 @@
+# Root build-context allowlist for deploy/Dockerfile.
+#
+# Docker reads the .dockerignore at the CONTEXT root (the repo root,
+# since the Dockerfile COPYs Cargo.toml / crates/ / programs/ from
+# there). `deploy/.dockerignore` is NOT applied for a root context, so
+# without this file the context would include target/ (~32 GB),
+# circuits/ (ptau + zkeys), dstack/, node_modules/, etc.
+#
+# Allowlist: ignore everything, then re-include only what the
+# Dockerfile actually COPYs.
+*
+!Cargo.toml
+!Cargo.lock
+!crates
+!programs
+
+# Belt-and-suspenders: never ship build artifacts even if a path
+# above is widened later.
+**/target
+**/node_modules
