@@ -18,6 +18,12 @@ pub mod prover;
 pub mod settle;
 pub mod solana_rpc;
 
+// Supplies the `__rust_probestack` symbol that wasmer 4.4 (via
+// ark-circom, in `prover`) references but Rust 1.91 no longer exports.
+// No Rust items — just a `global_asm!` definition, x86_64-linux only.
+// See the module doc comment for the full story.
+mod probestack;
+
 // The remaining modules are scaffolds that haven't grown
 // public-facing APIs yet — they'll get re-exports here as the
 // later PRs land.
