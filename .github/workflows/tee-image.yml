@@ -1,0 +1,105 @@
+# Build the nyx-tee CVM image for linux/amd64 and push it to ghcr.io.
+#
+# WHY THIS EXISTS — Phala TDX CVMs are x86_64. Cross-building amd64 on
+# an Apple-Silicon Mac via QEMU fails at link with
+# `undefined symbol: __rust_probestack` (see deploy/Dockerfile header).
+# `ubuntu-latest` is a NATIVE amd64 runner, so the build is clean and
+# fast and produces a CVM-pullable image.
+#
+# AUTH — no secrets required. The run-scoped GITHUB_TOKEN below
+# (granted `packages: write`) authenticates to ghcr.io. There is no
+# PAT to create or rotate.
+#
+# ONE-TIME after the first push: ghcr packages are private by default.
+# For Phala to pull anonymously, flip the package to public once:
+#   Org (skysail-labs) -> Packages -> nyx-tee -> Package settings
+#   -> Change visibility -> Public.
+# (Or, to keep it private, add registry pull-credentials to the CVM
+#  deploy instead — not needed for the dev spot-check.)
+#
+# HOW TO TRIGGER
+#   * Tag push (robust — reads this workflow from the tag's tree, so it
+#     works regardless of which branch is the repo default):
+#         git tag tee-v3-spot && git push origin tee-v3-spot
+#   * Manual dispatch (UI "Run workflow" / `gh workflow run`) — NOTE:
+#     workflow_dispatch only appears/dispatches once this file is on
+#     the repo's DEFAULT branch (same GitHub constraint documented for
+#     /test-devnet in CLAUDE.md §3.7). The tag-push path has no such
+#     constraint, so prefer it until this lands on the default branch.
+#
+# After a successful run the image is at:
+#   ghcr.io/skysail-labs/nyx-tee:<tag>
+# Point deploy/docker-compose.yaml `image:` at that, then
+#   PATH=...nvm.../bin:$PATH phala deploy -c deploy/docker-compose.yaml -n nyx-tee-spot --wait
+
+name: tee-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to push (e.g. tee-v3-spot)"
+        required: true
+        default: "tee-v3-spot"
+  push:
+    tags:
+      - "tee-*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image ref
+        id: ref
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          # ghcr requires a lowercase namespace.
+          owner_lc="${OWNER,,}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${{ inputs.tag }}"
+          fi
+          echo "image=ghcr.io/${owner_lc}/nyx-tee:${tag}" >> "$GITHUB_OUTPUT"
+          echo "Building -> ghcr.io/${owner_lc}/nyx-tee:${tag}"
+
+      - name: Build + push (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.ref.outputs.image }}
+          # Single-platform, plain manifest (no attestation index) so
+          # the CVM pull resolves a clean, stable digest. Keeps the
+          # compose_hash story simple when we later pin by @sha256.
+          provenance: false
+          sbom: false
+          # Layer cache across runs to keep the heavy Rust dep build
+          # off the critical path on re-runs.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Emit pull command
+        run: |
+          echo "Pushed: ${{ steps.ref.outputs.image }}"
+          echo "Pull/deploy: set deploy/docker-compose.yaml image: to the line above."
