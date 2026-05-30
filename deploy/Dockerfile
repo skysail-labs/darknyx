@@ -46,32 +46,20 @@ FROM rust:1.91-slim-bookworm AS builder
 
 WORKDIR /build
 
-# __rust_probestack — this binary pulls in wasmer 4.4 (via ark-circom,
-# for circom witness generation in the prover), and wasmer's libcalls /
-# relocation appliers reference the x86 `__rust_probestack` stack-probe
-# intrinsic from asm/naked-style trampolines. The link fails with
-# `undefined reference to __rust_probestack` even though compiler_builtins
-# (which defines it) is on the link line. Cause: release linking passes
-# `--gc-sections`, and gc cannot see the reference (it comes through a
-# relocation gc doesn't trace), so it garbage-collects the providing
-# section out of compiler_builtins. `-C link-dead-code=on` makes rustc
-# NOT pass --gc-sections, keeping the definition. It never surfaced
-# before because the binary had only ever been built on arm64-darwin,
-# which has no probestack intrinsic — this was the first x86_64-linux
-# link of nyx-tee.
-#
-# LTO is also forced off: the workspace profile.release uses `lto =
-# "fat"`, which is both slow and an independent risk for this same
-# wasmer/probestack interaction. Done via env so the committed
+# LTO is forced off for the image build. The workspace profile.release
+# uses `lto = "fat"`, which is slow in CI/Docker for no meaningful win
+# on a long-running service binary. Overridden via env so the committed
 # profile.release is untouched — local host builds and the BPF programs
 # still link with fat LTO.
+#
+# NB: the __rust_probestack link failure that blocked the first
+# x86_64-linux builds of this binary (wasmer 4.4, pulled via ark-circom,
+# references that x86 stack-probe intrinsic which Rust 1.91 no longer
+# exports) is fixed at the source level in
+# crates/nyx-tee/src/probestack.rs — NOT with a linker/gc-sections
+# workaround here. Stock Rust defaults (rust-lld, --gc-sections) link
+# fine once the symbol is supplied. See memory `tee_binary_amd64_link`.
 ENV CARGO_PROFILE_RELEASE_LTO=off
-
-# LINKER — Rust 1.90+ defaults x86_64-unknown-linux-gnu to the
-# self-contained `rust-lld`; revert to the GNU linker (cc/ld). The
-# link-dead-code flag (see above) disables --gc-sections so the
-# probestack definition survives.
-ENV RUSTFLAGS="-C linker-features=-lld -C link-dead-code=on"
 
 # System deps needed to build solana-poseidon + ark-* on Debian.
 # Keep this list tight; every package on the build side leaks into
