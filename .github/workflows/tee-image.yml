@@ -81,6 +81,37 @@ jobs:
           echo "image=ghcr.io/${owner_lc}/nyx-tee:${tag}" >> "$GITHUB_OUTPUT"
           echo "Building -> ghcr.io/${owner_lc}/nyx-tee:${tag}"
 
+      # The N=16 settle prover needs circuit.wasm + circuit.r1cs alongside
+      # the committed circuit_final.zkey, but those two are gitignored.
+      # Regenerate them with a circom compile (no ptau — we reuse the
+      # committed zkey's ceremony). The Dockerfile then COPYs all three
+      # into the runtime image. See deploy/Dockerfile + .dockerignore.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install circom 2.2.2 (prebuilt linux-amd64)
+        run: |
+          curl -fsSL https://github.com/iden3/circom/releases/download/v2.2.2/circom-linux-amd64 \
+            -o /usr/local/bin/circom
+          chmod +x /usr/local/bin/circom
+          circom --version
+
+      - name: npm ci (circomlib for circuit includes)
+        run: npm ci
+
+      - name: Compile N=16 circuit (wasm + r1cs; zkey is committed)
+        run: |
+          circom circuits/match_batch_n16/circuit.circom \
+            --r1cs --wasm \
+            -l node_modules \
+            -o circuits/build/match_batch_n16
+          echo "--- artifacts the Dockerfile will COPY ---"
+          ls -lh circuits/build/match_batch_n16/circuit_final.zkey \
+                 circuits/build/match_batch_n16/circuit.r1cs \
+                 circuits/build/match_batch_n16/circuit_js/circuit.wasm
+
       - name: Build + push (linux/amd64)
         uses: docker/build-push-action@v6
         with:

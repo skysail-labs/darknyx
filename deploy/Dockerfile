@@ -143,10 +143,22 @@ WORKDIR /opt/nyx
 # Binary. Owned by root, executable by everyone — running as nyx user.
 COPY --from=builder --chmod=755 /nyx-tee /opt/nyx/nyx-tee
 
-# TODO(phase 2): COPY the compiled VALID_MATCH_BATCH zkey + the
-# right-path zkeys into /opt/nyx/circuits/. Once that's in place,
-# point prover/groth16.rs at /opt/nyx/circuits/match_batch_n16/
-# circuit_final.zkey.
+# N=16 settle-prover artifacts. The runtime reads NYX_TEE_CIRCUITS_DIR
+# (default /circuits/build) and resolves
+# match_batch_n16/{circuit_final.zkey, circuit.r1cs, circuit_js/circuit.wasm}
+# (see crates/nyx-tee/src/prover/ark_prover.rs). Without these the settle
+# driver boots enqueue-only ("load N=16 prover ... No such file").
+#
+# Only circuit_final.zkey is git-tracked; circuit.r1cs + circuit.wasm are
+# gitignored and compiled in CI (circom, no ptau needed — the zkey's
+# ceremony is already committed) before this build. See
+# .github/workflows/tee-image.yml + .dockerignore.
+COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit_final.zkey \
+     /circuits/build/match_batch_n16/circuit_final.zkey
+COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit.r1cs \
+     /circuits/build/match_batch_n16/circuit.r1cs
+COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit_js/circuit.wasm \
+     /circuits/build/match_batch_n16/circuit_js/circuit.wasm
 
 USER nyx
 
