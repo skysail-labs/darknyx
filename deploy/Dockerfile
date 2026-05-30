@@ -82,19 +82,29 @@ RUN mkdir -p crates/darkpool-crypto/src crates/darkpool-matcher/src \
              programs/vault/src programs/matching_engine/src && \
     echo 'fn main() {}' > crates/nyx-tee/src/main.rs && \
     echo 'fn main() {}' > crates/nyx-tee-loadgen/src/main.rs && \
-    touch crates/darkpool-crypto/src/lib.rs \
+    touch crates/nyx-tee/src/lib.rs \
+          crates/darkpool-crypto/src/lib.rs \
           crates/darkpool-matcher/src/lib.rs \
           crates/nyx-tee-loadgen/src/lib.rs \
           programs/vault/src/lib.rs \
           programs/matching_engine/src/lib.rs && \
     cargo build --release -p nyx-tee || true
 
-# Now the real sources. We touch the entry points so cargo rebuilds
-# just the changed crates, not the whole dep tree.
+# Now the real sources.
 COPY crates/ crates/
 COPY programs/ programs/
 
-RUN cargo build --release -p nyx-tee && \
+# CRITICAL — bump the mtime of every workspace source after the COPY.
+# The warmup above compiled the path-dep crates from EMPTY dummy
+# lib.rs files and cached those .rlibs. COPY preserves the build
+# context's (older) mtimes, so without this touch cargo considers the
+# cached empty crates "up to date" and links nyx-tee against empty
+# darkpool-crypto / darkpool-matcher — surfacing as a wall of
+# `unresolved import` / `fr_to_be_bytes not found` errors. Touching
+# forces a rebuild of just the workspace crates; the external-dep
+# cache (tokio, ark-*, …) is keyed separately and is preserved.
+RUN find crates programs -name '*.rs' -exec touch {} + && \
+    cargo build --release -p nyx-tee && \
     cp /build/target/release/nyx-tee /nyx-tee && \
     strip /nyx-tee
 
