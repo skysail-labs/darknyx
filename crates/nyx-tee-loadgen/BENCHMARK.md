@@ -83,6 +83,33 @@
   bootstrap auth account, and per-side market-mint-aligned note
   commitments (loadgen fix). CVM deleted after the run.
 
+---
+
+## Run 2 — after the paged-matching PR (A + C), 2026-05-31
+
+Same config (10 traders × 5/s × 30s, real Pyth feed). Submit:
+**839 / 839 2xx (100%)**, 0 5xx, **27.7 orders/s** (still RTT-bound from
+the dev Mac — P50 274ms / P99 570ms). Cancel: 147 2xx / 78 4xx (races).
+
+**What A + C fixed (the point of the run):** the matcher now pages each
+tick into ≤16-match batches (34 page-emissions observed; batch sizes
+16/14/11/3/1…). The pre-PR failure — `settle: batch assembly failed …
+batch has N matches but circuit N = 16` — is **gone (0 occurrences)**.
+The settle pipeline now engages per batch instead of dropping oversized
+ticks.
+
+**Next gap the run surfaced (was masked by the size error):** assembly
+now fails with `no opening in store for buyer/seller note` (×34). When
+an order partial-fills it relocks to a change note (note_e), and a later
+page matches that note — but the change note's opening was never
+recorded in the intake-only opening store, so the assembler can't build
+its witness. This blocks before the lock→prove step. It is independent
+of A+C (those fixed chunking); it's the next settle-assembly fix
+(record/derive change-note openings) on the path to settle-under-load.
+Full on-chain settle additionally needs a SOL-funded TEE signer + real
+deposited notes (the synthetic loadgen orders aren't on-chain) — the
+separate prove→settle harness, deferred.
+
 <!-- ─────────────────────────────────────────────────────────────────
 ORIGINAL TEMPLATE / RUN-PROTOCOL REFERENCE (commented out 2026-05-31;
 superseded by the live run above, kept for the re-run protocol):
