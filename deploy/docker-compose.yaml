@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/nyx-privacy/nyx-tee:phase1-skeleton
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-spot
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -41,6 +41,26 @@ services:
       # privacy leak.
       NYX_TEE_LOG: "info,nyx_tee=debug"
       NYX_TEE_HTTP_BIND: "0.0.0.0:8080"
+
+      # Real Pyth Hermes feed for the matcher's oracle. This is the
+      # canonical SOL/USD mainnet feed id (see crates/nyx-tee/src/oracle/
+      # cache.rs). One feed only: the oracle-sync polls Hermes once per
+      # feed every 1 s (main.rs), and Pyth's free public Hermes caps at
+      # 10 req / 10 s per IP — one feed sits right at that edge, and the
+      # matcher's 5 s staleness window (DEFAULT_MAX_ORACLE_AGE_MS) absorbs
+      # the occasional 429. Do NOT add a second feed here for the bench.
+      NYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+
+      # BOOTSTRAP auth (dev/bench only). Seeds ONE account so the loadgen
+      # can acquire a bearer — the production from_boot path otherwise
+      # boots with an empty account registry (real account registration
+      # is deferred; see crates/nyx-tee/src/api/auth.rs module doc). These
+      # are throwaway test credentials (they match the loadgen's CLI
+      # defaults). NOT a real secret; fine in plaintext for a devnet bench.
+      # Remove once the registration feature lands.
+      NYX_TEE_API_KEY: "nyx-test-api-key"
+      NYX_TEE_API_SECRET: "nyx-test-secret"
+      NYX_TEE_PASSPHRASE: "nyx-test-passphrase"
 
       # Encrypted env vars get added here via the Phala dashboard's
       # UI (it encrypts them client-side to the CVM's env-encrypt
