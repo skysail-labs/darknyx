@@ -122,10 +122,7 @@ mod tests {
         // (vault_config + sysvar + system program) under the per-batch ALT
         // (the 5 derivable PDAs). Both are needed to keep the worst-case
         // (change-note, no PDA dedup) settle tx under the 1232-byte cap.
-        let static_alt = alt_account(
-            Address::new_from_array([0x44; 32]),
-            static_alt_addresses(),
-        );
+        let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses());
         let alt = alt_account(
             Address::new_from_array([0x55; 32]),
             per_batch_alt_addresses(&p, &root),

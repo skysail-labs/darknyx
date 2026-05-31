@@ -141,7 +141,11 @@ pub fn per_batch_alt_addresses(
 /// Hoisting these is what keeps the settle v0 tx under Solana's 1232-byte
 /// cap — without them the message is ~93 bytes larger (3 × 31).
 pub fn static_alt_addresses() -> Vec<Address> {
-    vec![vault_config_pda().0, INSTRUCTIONS_SYSVAR_ID, SYSTEM_PROGRAM_ID]
+    vec![
+        vault_config_pda().0,
+        INSTRUCTIONS_SYSVAR_ID,
+        SYSTEM_PROGRAM_ID,
+    ]
 }
 
 #[cfg(test)]
