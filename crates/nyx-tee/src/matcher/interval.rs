@@ -251,6 +251,13 @@ impl MatcherDriver {
                 now_slot,
                 start_match_id,
                 max_per_batch,
+                // single_fill_per_order: each order fills at most once
+                // per batch. A partially-filled order's residual relocks
+                // on-chain and is dropped from the book (apply_updates) —
+                // re-matching it would consume a change note the TEE
+                // can't nullify (no spending key). Until the client
+                // re-submission relayer lands, residuals await re-submit.
+                true,
             ) {
                 Ok(out) => out,
                 Err(e) => {

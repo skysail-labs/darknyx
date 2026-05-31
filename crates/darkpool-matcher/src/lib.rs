@@ -99,7 +99,15 @@ pub fn run_batch(
     current_slot: u64,
     start_match_id: u64,
 ) -> Result<RunBatchOutput, MatchError> {
-    run_batch_capped(book, oracle, config, current_slot, start_match_id, usize::MAX)
+    run_batch_capped(
+        book,
+        oracle,
+        config,
+        current_slot,
+        start_match_id,
+        usize::MAX,
+        false,
+    )
 }
 
 /// Batch auction bounded to at most `max_matches` matches per call.
@@ -120,6 +128,13 @@ pub fn run_batch(
 /// not of the matches. `fee_buckets` accumulate only over the matches
 /// actually produced this call, which is correct: the remaining matches
 /// accrue their fees on the call that produces them.
+///
+/// `single_fill_per_order` (the in-TEE matcher passes `true`) caps each
+/// order to one fill per batch — no intra-batch relock chain — so every
+/// match consumes an original input note whose opening + nullifier are
+/// in the settle store, never a TEE-created change note (whose nullifier
+/// needs the user spending key the TEE doesn't hold). The on-chain
+/// matcher passes `false`.
 pub fn run_batch_capped(
     book: &OrderBook,
     oracle: &OracleSnapshot,
@@ -127,6 +142,7 @@ pub fn run_batch_capped(
     current_slot: u64,
     start_match_id: u64,
     max_matches: usize,
+    single_fill_per_order: bool,
 ) -> Result<RunBatchOutput, MatchError> {
     // Step 1 — oracle validity gate. Matches the on-chain
     // `require!(pyth_twap > 0, MatchingError::OracleZeroPrice)`.
@@ -172,6 +188,7 @@ pub fn run_batch_capped(
                 config.fee_rate_bps as u64,
                 start_match_id,
                 max_matches,
+                single_fill_per_order,
                 &mut matches,
                 &mut fee_buckets,
             )?;

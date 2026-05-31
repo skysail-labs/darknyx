@@ -289,8 +289,11 @@ async fn tick_skips_when_book_empty() {
     ));
 }
 
-/// Partial fill: bid 20, ask 5 → 1 match of 5, bid stays in book
-/// with new_amount=15.
+/// Partial fill (option A): bid 20, ask 5 → 1 match of 5. The bid's
+/// 15-residual relocks on-chain and LEAVES the in-TEE book — the TEE
+/// can't re-match the change note (no spending key for its nullifier),
+/// so the residual awaits client re-submission. (Pre-option-A the bid
+/// stayed in the book with new_amount=15.)
 #[tokio::test]
 async fn tick_handles_partial_fill() {
     let state = Arc::new(RwLock::new(MatcherState::new()));
@@ -314,16 +317,21 @@ async fn tick_handles_partial_fill() {
     assert_eq!(output.matches[0].base_amt, 5);
 
     let final_state = state.read().await;
-    let remaining = final_state
-        .book()
-        .get(&bid_id)
-        .expect("bid still in book after partial fill");
-    assert_eq!(remaining.amount, 15);
-    assert_eq!(remaining.filled_quantity, 5);
+    assert!(
+        final_state.book().get(&bid_id).is_none(),
+        "partially-filled bid's residual relocked and left the in-TEE book"
+    );
+    assert!(
+        final_state.book().is_empty(),
+        "ask fully filled + bid residual relocked — book drained"
+    );
 }
 
-/// Two ticks in sequence: first fills exactly half a bid, second
-/// finishes the bid. next_match_id should advance to 2.
+/// Two ticks in sequence, each a distinct full-fill pair. next_match_id
+/// advances 0 → 1 → 2 and the book drains each tick. (Pre-option-A this
+/// finished a single partially-filled bid across two ticks; under
+/// option A a partial fill relocks + leaves the book, so the counter is
+/// exercised with two independent full fills instead.)
 #[tokio::test]
 async fn two_consecutive_ticks_advance_state() {
     let state = Arc::new(RwLock::new(MatcherState::new()));
@@ -332,8 +340,13 @@ async fn two_consecutive_ticks_advance_state() {
     let current_slot = Arc::new(AtomicU64::new(1));
     let (tx, mut rx) = mpsc::channel(8);
 
-    let bid = mk_order(OrderSide::Bid, 1, 100, 20);
-    state.write().await.book_mut().submit(bid).unwrap();
+    // Tick 1: bid(10) vs ask(10) — exact full fill, no relock.
+    state
+        .write()
+        .await
+        .book_mut()
+        .submit(mk_order(OrderSide::Bid, 1, 100, 10))
+        .unwrap();
     state
         .write()
         .await
@@ -346,13 +359,24 @@ async fn two_consecutive_ticks_advance_state() {
     let out1 = rx.try_recv().expect("first output");
     assert_eq!(out1.matches.len(), 1);
     assert_eq!(out1.matches[0].base_amt, 10);
+    assert_eq!(out1.matches[0].match_id, 0, "first match gets id 0");
+    assert!(
+        state.read().await.book().is_empty(),
+        "first pair fully drained"
+    );
 
-    // Bid has amount=10 remaining. Add another ask for the remainder.
+    // Tick 2: a fresh full-fill pair — the match-id counter continues.
     state
         .write()
         .await
         .book_mut()
-        .submit(mk_order(OrderSide::Ask, 3, 100, 10))
+        .submit(mk_order(OrderSide::Bid, 3, 100, 10))
+        .unwrap();
+    state
+        .write()
+        .await
+        .book_mut()
+        .submit(mk_order(OrderSide::Ask, 4, 100, 10))
         .unwrap();
 
     driver.tick().await.expect("second tick");
@@ -361,7 +385,6 @@ async fn two_consecutive_ticks_advance_state() {
     assert_eq!(out2.matches[0].base_amt, 10);
     assert_eq!(out2.matches[0].match_id, 1, "second match gets id 1");
 
-    // Both bid and asks fully drained.
     assert!(state.read().await.book().is_empty());
     assert_eq!(state.read().await.next_match_id(), 2);
 }

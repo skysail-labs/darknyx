@@ -21,9 +21,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-use darkpool_matcher::book::{
-    Order, OrderBook as MatcherOrderBook, OrderStatus, OrderUpdate, OrderUpdateKind,
-};
+use darkpool_matcher::book::{Order, OrderBook as MatcherOrderBook, OrderUpdate, OrderUpdateKind};
 
 pub type OrderId = [u8; 16];
 pub type TradingKey = [u8; 32];
@@ -153,24 +151,19 @@ impl OrderBook {
                     // Hard removal: remove from all indices.
                     let _ = self.remove_internal(&upd.order_id);
                 }
-                OrderUpdateKind::PartiallyFilled {
-                    new_amount,
-                    new_collateral_note,
-                    new_note_amount,
-                    filled_quantity,
-                } => {
-                    // Mutate in place. The order stays in the book
-                    // at the same price level — partial fills
-                    // preserve the FIFO position. The matcher's
-                    // RELOCK_ORDER_ID_NONE sentinel never reaches
-                    // here (its check happens at the matcher level).
-                    if let Some(o) = self.by_id.get_mut(&upd.order_id) {
-                        o.amount = *new_amount;
-                        o.collateral_note = *new_collateral_note;
-                        o.note_amount = *new_note_amount;
-                        o.filled_quantity = *filled_quantity;
-                        o.status = OrderStatus::Pending;
-                    }
+                OrderUpdateKind::PartiallyFilled { .. } => {
+                    // Option A (change-note-nullifier constraint): the
+                    // in-TEE matcher runs single-fill-per-batch mode, so
+                    // a partial fill means the order relocked its residual
+                    // to a change note (note_e) on-chain. The TEE cannot
+                    // re-match that change note — its nullifier needs the
+                    // user's spending key, which never enters the TEE, and
+                    // the settle assembler has no opening for it. So the
+                    // residual LEAVES the book (it is owned + re-locked
+                    // on-chain) and awaits client re-submission — the seam
+                    // the future order relayer fills. Remove rather than
+                    // rotate-and-keep (the pre-option-A behaviour).
+                    let _ = self.remove_internal(&upd.order_id);
                 }
             }
         }
@@ -265,7 +258,7 @@ impl OrderBook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use darkpool_matcher::book::{OrderSide, OrderType};
+    use darkpool_matcher::book::{OrderSide, OrderStatus, OrderType};
 
     fn mk_order(side: OrderSide, idx: u8, price: u64, amount: u64) -> Order {
         let mut tk = [0u8; 32];
@@ -364,7 +357,12 @@ mod tests {
     }
 
     #[test]
-    fn apply_updates_partial_fill_mutates_in_place() {
+    fn apply_updates_partial_fill_removes_relocked_residual() {
+        // Option A: a partial fill means the residual relocked to a
+        // change note on-chain; the in-TEE matcher can't re-match it
+        // (no spending key for its nullifier), so it LEAVES the book to
+        // await client re-submission. (Pre-option-A this mutated in place
+        // and kept the order Pending.)
         let mut book = OrderBook::new();
         let o = mk_order(darkpool_matcher::book::OrderSide::Bid, 1, 100, 20);
         let oid = o.order_id;
@@ -379,10 +377,11 @@ mod tests {
                 filled_quantity: 5,
             },
         }]);
-        let after = book.get(&oid).expect("still pending");
-        assert_eq!(after.amount, 15);
-        assert_eq!(after.collateral_note, [42u8; 32]);
-        assert_eq!(after.filled_quantity, 5);
+        assert!(
+            book.get(&oid).is_none(),
+            "relocked residual must leave the in-TEE book"
+        );
+        assert!(book.is_empty());
     }
 
     #[test]

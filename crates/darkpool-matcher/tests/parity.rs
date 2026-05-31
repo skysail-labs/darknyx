@@ -196,14 +196,22 @@ fn capped_bounds_fill_count_at_n() {
     };
 
     // Unbounded baseline == scenario 1: 3 fills at P*=146.
-    let full = run_batch(&book_of(seeds()), &oracle(146), &config(100_000, 0), 1, 0)
-        .expect("unbounded");
+    let full =
+        run_batch(&book_of(seeds()), &oracle(146), &config(100_000, 0), 1, 0).expect("unbounded");
     assert_eq!(full.matches.len(), 3);
     assert_eq!(full.clearing_price, 146);
 
     // Capped to 2: same P*, exactly 2 fills, all at 146, prefix of full.
-    let capped = run_batch_capped(&book_of(seeds()), &oracle(146), &config(100_000, 0), 1, 0, 2)
-        .expect("capped");
+    let capped = run_batch_capped(
+        &book_of(seeds()),
+        &oracle(146),
+        &config(100_000, 0),
+        1,
+        0,
+        2,
+        false,
+    )
+    .expect("capped");
     assert_eq!(
         capped.clearing_price, 146,
         "clearing price is computed over the whole book — the cap must not move it"
@@ -214,10 +222,67 @@ fn capped_bounds_fill_count_at_n() {
     assert_eq!(capped.matches[1].match_id, full.matches[1].match_id);
 
     // A cap at/above the available fills is a no-op.
-    let uncapped = run_batch_capped(&book_of(seeds()), &oracle(146), &config(100_000, 0), 1, 0, 16)
-        .expect("cap above available");
+    let uncapped = run_batch_capped(
+        &book_of(seeds()),
+        &oracle(146),
+        &config(100_000, 0),
+        1,
+        0,
+        16,
+        false,
+    )
+    .expect("cap above available");
     assert_eq!(uncapped.matches.len(), 3);
     assert_eq!(uncapped.clearing_price, 146);
+}
+
+// ─────── Single-fill mode: no intra-batch relock chain ──────────────────────
+//
+// The in-TEE matcher (run_batch_capped single_fill_per_order=true) caps
+// each order to ONE fill per batch, so a large order does NOT chain
+// against multiple counterparties — chaining would consume change notes
+// (note_e) the TEE can't nullify (no spending key). One 30-bid vs three
+// 10-asks at P*=100: default chains → 3 fills; single-fill → 1 fill
+// (the bid's residual relocks on-chain and leaves the in-TEE book to
+// await client re-submission).
+#[test]
+fn single_fill_mode_caps_one_fill_per_order() {
+    let seeds = || {
+        vec![
+            pseed(0, 0, 100, 30, 1_000_000), // bid, amount 30
+            pseed(1, 1, 100, 10, 1_000_000), // ask, 10
+            pseed(2, 1, 100, 10, 1_000_000), // ask, 10
+            pseed(3, 1, 100, 10, 1_000_000), // ask, 10
+        ]
+    };
+
+    // Default (on-chain) chains the 30-bid across all three asks.
+    let chained =
+        run_batch(&book_of(seeds()), &oracle(100), &config(100_000, 0), 1, 0).expect("default");
+    assert_eq!(
+        chained.matches.len(),
+        3,
+        "default chains the 30-bid across the three 10-asks"
+    );
+
+    // Single-fill (in-TEE) caps the bid to one fill; residual relocks.
+    let single = run_batch_capped(
+        &book_of(seeds()),
+        &oracle(100),
+        &config(100_000, 0),
+        1,
+        0,
+        usize::MAX,
+        true,
+    )
+    .expect("single-fill");
+    assert_eq!(
+        single.matches.len(),
+        1,
+        "single-fill caps the bid to one fill per batch"
+    );
+    assert_eq!(single.clearing_price, 100);
+    assert_eq!(single.matches[0].base_amt, 10);
 }
 
 // ─────── Scenario 2: intra-batch ordering irrelevant ────────────────────────

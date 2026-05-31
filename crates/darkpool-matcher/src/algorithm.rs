@@ -254,6 +254,15 @@ pub(crate) fn generate_matches(
     // pairs are produced; the rest stay unmatched in `bids`/`asks` (no
     // OrderUpdate emitted for them) and are drained by a later call.
     max_matches: usize,
+    // When true, advance BOTH sides after every match so each order
+    // fills at most once per batch (no intra-batch relock chain). The
+    // in-TEE matcher needs this: a chained match would consume a change
+    // note (note_e) whose nullifier the TEE can't produce (no spending
+    // key), and the settle assembler has no opening for it. The residual
+    // of a partially-filled order still relocks on-chain (note_e) and is
+    // dropped from the in-TEE book to await client re-submission. The
+    // on-chain matcher passes `false` (unchanged chaining behaviour).
+    single_fill_per_order: bool,
     out_matches: &mut Vec<MatchPair>,
     fee_buckets: &mut [FeeBucket; 2],
 ) -> Result<usize, MatchError> {
@@ -454,12 +463,23 @@ pub(crate) fn generate_matches(
 
         produced += 1;
 
-        // Advance whichever side filled entirely.
-        if b_remaining_after == 0 {
+        if single_fill_per_order {
+            // Each order fills at most once per batch: advance both
+            // sides regardless of residual. A partially-filled side has
+            // already relocked (note_e) above; it is NOT re-matched here
+            // (which would consume a change note the TEE can't nullify).
             bi += 1;
-        }
-        if a_remaining_after == 0 {
             ai += 1;
+        } else {
+            // Default (on-chain) behaviour: advance whichever side filled
+            // entirely; a partially-filled side stays to match the next
+            // counterparty (intra-batch relock chain).
+            if b_remaining_after == 0 {
+                bi += 1;
+            }
+            if a_remaining_after == 0 {
+                ai += 1;
+            }
         }
     }
 
