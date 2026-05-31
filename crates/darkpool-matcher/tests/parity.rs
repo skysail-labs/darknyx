@@ -22,7 +22,7 @@ use darkpool_matcher::book::{
     Order, OrderBook, OrderSide, OrderStatus, OrderType, OrderUpdateKind,
 };
 use darkpool_matcher::config::{MatchConfig, OracleSnapshot};
-use darkpool_matcher::run_batch;
+use darkpool_matcher::{run_batch, run_batch_capped};
 
 // ─────── Fixture helpers (mirror PendingSeed construction) ──────────────────
 //
@@ -167,6 +167,57 @@ fn parity_1_uniform_clearing_price() {
         "expected 3 fills (supply=30 base units / 10 per ask)"
     );
     assert!(out.matches.iter().all(|m| m.price == 146));
+}
+
+// ─────── Capped matching: run_batch_capped bounds the fill count ────────────
+//
+// Same book as scenario 1 (P*=146, 3 fills when unbounded). The N=16
+// settle circuit can't absorb a tick that produces more than N matches
+// (the loadgen caught 23-50-match ticks being dropped), so the matcher
+// must page: produce at most N fills at the same clearing price and
+// leave the rest for a later call. Pin that here:
+//   - the cap does NOT move the clearing price (P* is over the whole book)
+//   - exactly N fills are produced, and they're the highest-priority
+//     prefix of the unbounded run (same match_ids in order)
+//   - a cap >= available fills is a no-op
+#[test]
+fn capped_bounds_fill_count_at_n() {
+    let seeds = || {
+        vec![
+            pseed(0, 0, 150, 10, 1_000_000),
+            pseed(1, 0, 149, 10, 1_000_000),
+            pseed(2, 0, 148, 10, 1_000_000),
+            pseed(3, 0, 147, 10, 1_000_000),
+            pseed(4, 0, 146, 10, 1_000_000),
+            pseed(5, 1, 144, 10, 1_000_000),
+            pseed(6, 1, 145, 10, 1_000_000),
+            pseed(7, 1, 146, 10, 1_000_000),
+        ]
+    };
+
+    // Unbounded baseline == scenario 1: 3 fills at P*=146.
+    let full = run_batch(&book_of(seeds()), &oracle(146), &config(100_000, 0), 1, 0)
+        .expect("unbounded");
+    assert_eq!(full.matches.len(), 3);
+    assert_eq!(full.clearing_price, 146);
+
+    // Capped to 2: same P*, exactly 2 fills, all at 146, prefix of full.
+    let capped = run_batch_capped(&book_of(seeds()), &oracle(146), &config(100_000, 0), 1, 0, 2)
+        .expect("capped");
+    assert_eq!(
+        capped.clearing_price, 146,
+        "clearing price is computed over the whole book — the cap must not move it"
+    );
+    assert_eq!(capped.matches.len(), 2, "cap bounds the fill count to N");
+    assert!(capped.matches.iter().all(|m| m.price == 146));
+    assert_eq!(capped.matches[0].match_id, full.matches[0].match_id);
+    assert_eq!(capped.matches[1].match_id, full.matches[1].match_id);
+
+    // A cap at/above the available fills is a no-op.
+    let uncapped = run_batch_capped(&book_of(seeds()), &oracle(146), &config(100_000, 0), 1, 0, 16)
+        .expect("cap above available");
+    assert_eq!(uncapped.matches.len(), 3);
+    assert_eq!(uncapped.clearing_price, 146);
 }
 
 // ─────── Scenario 2: intra-batch ordering irrelevant ────────────────────────

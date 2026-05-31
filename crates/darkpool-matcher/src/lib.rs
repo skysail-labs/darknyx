@@ -86,12 +86,47 @@ pub use order_canonical::{
 /// `start_match_id` is the value of `BatchResults.next_match_id`
 /// before this batch — the caller increments it past the highest
 /// `match_id` emitted in `output.matches` after this returns.
+/// Match-all convenience wrapper: runs the batch auction with no cap on
+/// the number of matches produced. Signature-identical to the original
+/// so the byte-equality parity tests (`tests/parity.rs`,
+/// `tests/change_note_parity.rs`) are unaffected. Production callers —
+/// the in-TEE matcher and the on-chain `run_batch` adapter — use
+/// [`run_batch_capped`] with the N=16 circuit bound instead.
 pub fn run_batch(
     book: &OrderBook,
     oracle: &OracleSnapshot,
     config: &MatchConfig,
     current_slot: u64,
     start_match_id: u64,
+) -> Result<RunBatchOutput, MatchError> {
+    run_batch_capped(book, oracle, config, current_slot, start_match_id, usize::MAX)
+}
+
+/// Batch auction bounded to at most `max_matches` matches per call.
+///
+/// The N=16 VALID_MATCH_BATCH circuit settles at most N matches per
+/// batch, so the matcher must never emit more than N in one
+/// `RunBatchOutput` (the loadgen caught a 50-match tick being dropped by
+/// the settle assembler). The uniform clearing price P* is still
+/// computed over the WHOLE crossing book — the cap only bounds how many
+/// fills are produced AT P*, in price-time priority — so the price is
+/// identical regardless of the cap. Unmatched-but-crossable orders are
+/// left untouched in the book (no `OrderUpdate` emitted) and drained by
+/// a later call ("paged matching": the in-TEE matcher loops this within
+/// a tick; the on-chain adapter pages across `run_batch` calls).
+///
+/// `inclusion_root` is unaffected by the cap — it is the Merkle root of
+/// all *eligible orders* (a transparency root from `partition_book`),
+/// not of the matches. `fee_buckets` accumulate only over the matches
+/// actually produced this call, which is correct: the remaining matches
+/// accrue their fees on the call that produces them.
+pub fn run_batch_capped(
+    book: &OrderBook,
+    oracle: &OracleSnapshot,
+    config: &MatchConfig,
+    current_slot: u64,
+    start_match_id: u64,
+    max_matches: usize,
 ) -> Result<RunBatchOutput, MatchError> {
     // Step 1 — oracle validity gate. Matches the on-chain
     // `require!(pyth_twap > 0, MatchingError::OracleZeroPrice)`.
@@ -136,6 +171,7 @@ pub fn run_batch(
                 &config.quote_mint,
                 config.fee_rate_bps as u64,
                 start_match_id,
+                max_matches,
                 &mut matches,
                 &mut fee_buckets,
             )?;

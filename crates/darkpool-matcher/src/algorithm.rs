@@ -249,6 +249,11 @@ pub(crate) fn generate_matches(
     quote_mint: &[u8; 32],
     fee_rate_bps: u64,
     start_match_id: u64,
+    // Stop after this many matches (paged matching — see
+    // `run_batch_capped`). The N highest price-time-priority crossing
+    // pairs are produced; the rest stay unmatched in `bids`/`asks` (no
+    // OrderUpdate emitted for them) and are drained by a later call.
+    max_matches: usize,
     out_matches: &mut Vec<MatchPair>,
     fee_buckets: &mut [FeeBucket; 2],
 ) -> Result<usize, MatchError> {
@@ -257,7 +262,7 @@ pub(crate) fn generate_matches(
     let mut ai = 0usize;
     let mut next_match_id = start_match_id;
 
-    while bi < bids.len() && ai < asks.len() {
+    while produced < max_matches && bi < bids.len() && ai < asks.len() {
         // Price-limit crossing must hold at P*.
         if bids[bi].price_limit < p_star || asks[ai].price_limit > p_star {
             if bids[bi].price_limit < p_star {
