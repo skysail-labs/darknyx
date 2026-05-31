@@ -128,6 +128,50 @@ impl AccountRegistry {
     pub fn lookup(&self, api_key: &str) -> Option<&ApiCredentials> {
         self.by_api_key.get(api_key)
     }
+
+    /// BOOTSTRAP (dev / bench only). Seed a single account from the
+    /// `NYX_TEE_API_KEY` / `NYX_TEE_API_SECRET` / `NYX_TEE_PASSPHRASE`
+    /// env vars when all three are set and non-empty; otherwise return
+    /// an empty registry — byte-identical to `new()`, so a deploy that
+    /// doesn't set them behaves exactly as before.
+    ///
+    /// This is a deliberate STOPGAP so authenticated load / bench runs
+    /// can target a real `from_boot` CVM before the production account
+    /// system exists. It is explicitly NOT that system: one account,
+    /// plaintext from env, no registration / rotation / revocation. The
+    /// real plan (admin registration endpoint + Argon2 hashing +
+    /// dstack-encrypted `accounts.db`) is in this module's top doc.
+    /// TODO(auth): delete once the registration endpoint lands.
+    #[must_use]
+    pub fn from_env_bootstrap() -> Self {
+        match (
+            std::env::var("NYX_TEE_API_KEY"),
+            std::env::var("NYX_TEE_API_SECRET"),
+            std::env::var("NYX_TEE_PASSPHRASE"),
+        ) {
+            (Ok(api_key), Ok(api_secret), Ok(passphrase))
+                if !api_key.is_empty() && !api_secret.is_empty() && !passphrase.is_empty() =>
+            {
+                tracing::warn!(
+                    %api_key,
+                    "BOOTSTRAP auth: seeding ONE account from NYX_TEE_API_* env \
+                     (dev/bench stopgap — NOT the production account system)"
+                );
+                Self::new().with_entry(ApiCredentials {
+                    api_key,
+                    api_secret,
+                    passphrase,
+                })
+            }
+            _ => {
+                tracing::debug!(
+                    "no NYX_TEE_API_* bootstrap creds set; account registry empty \
+                     (auth rejects all credentials until the registration feature lands)"
+                );
+                Self::new()
+            }
+        }
+    }
 }
 
 fn now_unix_seconds() -> u64 {

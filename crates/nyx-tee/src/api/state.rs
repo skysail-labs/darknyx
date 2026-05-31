@@ -158,7 +158,11 @@ impl ApiState {
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
             jwt_secret,
-            accounts: Arc::new(AccountRegistry::new()),
+            // BOOTSTRAP: seed one account from NYX_TEE_API_* env if set,
+            // else empty (same as before). Dev/bench stopgap until the
+            // production account-registration feature lands — see
+            // api/auth.rs::AccountRegistry::from_env_bootstrap + module doc.
+            accounts: Arc::new(AccountRegistry::from_env_bootstrap()),
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
             // `from_boot` doesn't construct the matcher — PR 4e.4
             // spawns the `MatcherDriver` and plumbs its state in via
