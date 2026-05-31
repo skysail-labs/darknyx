@@ -28,7 +28,7 @@ use std::time::Duration;
 use darkpool_matcher::{
     config::{MatchConfig, OracleSnapshot},
     match_result::RunBatchOutput,
-    run_batch as matcher_run_batch,
+    run_batch_capped as matcher_run_batch,
 };
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
@@ -126,7 +126,19 @@ pub struct DriverConfig {
     pub batch_ms: u64,
     /// Maximum age for a cached oracle entry to be used.
     pub max_oracle_age_ms: u64,
+    /// Max matches the matcher emits per settle batch — the N of the
+    /// VALID_MATCH_BATCH circuit (production: `PRODUCTION_BATCH_N` = 16).
+    /// A tick that clears more than this is paged into multiple ≤N
+    /// batches (see `tick`). The settle circuit can't absorb a larger
+    /// batch, so emitting more would be dropped by the settle assembler.
+    pub max_matches_per_batch: usize,
 }
+
+/// Safety bound on paging iterations per tick — caps work/latency per
+/// tick and guarantees the paging loop terminates even if a logic bug
+/// stops the book from draining. At N=16 this allows up to 4096
+/// matches/tick, far beyond any realistic crossing book.
+const MAX_PAGES_PER_TICK: usize = 256;
 
 /// Drives matching for a single market. Each driver owns:
 ///   - an `Arc<RwLock<MatcherState>>` (the book + match-id counter)
@@ -208,59 +220,78 @@ impl MatcherDriver {
             );
         }
 
-        // Snapshot the book outside the matcher call — we don't
-        // want to hold the read lock across `run_batch` (could
-        // block submitters for tens of microseconds).
-        let (book_snap, start_match_id) = {
-            let state = self.state.read().await;
-            (state.book().snapshot(), state.next_match_id())
-        };
-
-        if book_snap.orders.is_empty() {
-            // Nothing to match; just return.
-            return Ok(());
-        }
-
-        let output = match matcher_run_batch(
-            &book_snap,
-            &oracle,
-            &self.cfg.match_config,
-            now_slot,
-            start_match_id,
-        ) {
-            Ok(out) => out,
-            Err(e) => {
-                // Production behaviour: log + continue — one bad
-                // order shouldn't kill the daemon. The most common
-                // failure today is `MatchError::Internal("Poseidon
-                // failed for ... change note")` — usually means an
-                // order with a non-BN254-Fr-safe `user_commitment`
-                // slipped past intake validation. Future PR adds an
-                // intake-time check; for now this is the catch-all.
-                tracing::warn!(
-                    error = %e,
-                    orders_in_snapshot = book_snap.orders.len(),
-                    "matcher run_batch failed; skipping tick"
-                );
-                return Ok(());
+        // ── Paged matching ──────────────────────────────────────────
+        // The matcher can clear far more crossing pairs than the N=16
+        // settle circuit absorbs in one batch (the loadgen saw 23-50
+        // matches/tick, all dropped by the settle assembler). Page the
+        // book: each iteration matches up to `max_matches_per_batch`
+        // fills (run_batch_capped), emits that ≤N RunBatchOutput as its
+        // own settle batch, applies the fills to the in-memory book,
+        // and loops until the book stops crossing. Batches settle
+        // SEQUENTIALLY downstream (the scheduler awaits each), so a
+        // relock / change note produced by one page is on-chain before
+        // a later page that consumes it as collateral settles.
+        let max_per_batch = self.cfg.max_matches_per_batch.max(1);
+        for page in 0..MAX_PAGES_PER_TICK {
+            // Re-snapshot each page so the previous page's fills (applied
+            // below) are reflected. Read lock is released before the
+            // match so submitters aren't blocked across it.
+            let (book_snap, start_match_id) = {
+                let state = self.state.read().await;
+                (state.book().snapshot(), state.next_match_id())
+            };
+            if book_snap.orders.is_empty() {
+                break;
             }
-        };
 
-        // Apply the matcher's emitted updates + bump next_match_id
-        // under a brief write lock.
-        {
-            let mut state = self.state.write().await;
-            state.book_mut().apply_updates(&output.order_updates);
-            state.next_match_id = state
-                .next_match_id
-                .saturating_add(output.matches.len() as u64);
-        }
+            let output = match matcher_run_batch(
+                &book_snap,
+                &oracle,
+                &self.cfg.match_config,
+                now_slot,
+                start_match_id,
+                max_per_batch,
+            ) {
+                Ok(out) => out,
+                Err(e) => {
+                    // Production behaviour: log + stop paging — one bad
+                    // order shouldn't kill the daemon. The most common
+                    // failure today is `MatchError::Internal("Poseidon
+                    // failed for ... change note")` — usually an order
+                    // with a non-BN254-Fr-safe `user_commitment` that
+                    // slipped past intake. Future PR adds an intake-time
+                    // check; for now this is the catch-all.
+                    tracing::warn!(
+                        error = %e,
+                        orders_in_snapshot = book_snap.orders.len(),
+                        page,
+                        "matcher run_batch failed; ending tick"
+                    );
+                    break;
+                }
+            };
 
-        if !output.matches.is_empty() {
+            // Apply this page's updates + advance the match-id counter
+            // under a brief write lock.
+            {
+                let mut state = self.state.write().await;
+                state.book_mut().apply_updates(&output.order_updates);
+                state.next_match_id = state
+                    .next_match_id
+                    .saturating_add(output.matches.len() as u64);
+            }
+
+            if output.matches.is_empty() {
+                // Book no longer crosses (circuit breaker, or no eligible
+                // pairs left) — nothing more to page this tick.
+                break;
+            }
+
             tracing::info!(
                 clearing_price = output.clearing_price,
                 count = output.matches.len(),
-                "matcher tick: produced matches"
+                page,
+                "matcher tick: produced matches (page)"
             );
             // Forward to the settle scheduler. Returns Err if the
             // receiver dropped — meaning we should shut down.

@@ -115,6 +115,7 @@ fn mk_driver(
             feed_id: FEED_ID.to_string(),
             batch_ms: 1000,
             max_oracle_age_ms: nyx_tee::matcher::DEFAULT_MAX_ORACLE_AGE_MS,
+            max_matches_per_batch: 16,
         },
     }
 }
@@ -166,6 +167,76 @@ async fn tick_produces_matches_for_crossing_book() {
     let final_state = state.read().await;
     assert!(final_state.book().is_empty(), "book should be drained");
     assert_eq!(final_state.next_match_id(), 1);
+}
+
+/// Paged matching (C): a tick that clears more than
+/// `max_matches_per_batch` pairs must emit MULTIPLE ≤N RunBatchOutputs
+/// (one settle batch each) rather than a single oversized batch the
+/// N=16 settle circuit can't absorb — the gap the Phala loadgen caught
+/// (23-50-match ticks dropped at settle assembly). 5 crossing pairs
+/// with a cap of 2 → 3 batches (2 + 2 + 1), 5 matches total, book
+/// drained across the pages, match-id counter at 5.
+#[tokio::test]
+async fn tick_pages_oversized_match_set_into_capped_batches() {
+    let state = Arc::new(RwLock::new(MatcherState::new()));
+    let oracle = OracleCache::new();
+    let current_slot = Arc::new(AtomicU64::new(1));
+    let (tx, mut rx) = mpsc::channel(16);
+
+    // 5 bids + 5 asks, all crossing at 100 (amount 10) → 5 fills.
+    for i in 0..5u8 {
+        state
+            .write()
+            .await
+            .book_mut()
+            .submit(mk_order(OrderSide::Bid, 1 + 2 * i, 100, 10))
+            .expect("submit bid");
+        state
+            .write()
+            .await
+            .book_mut()
+            .submit(mk_order(OrderSide::Ask, 2 + 2 * i, 100, 10))
+            .expect("submit ask");
+    }
+    seed_oracle(&oracle, 100).await;
+
+    // Driver with a small per-batch cap to force paging within one tick.
+    let driver = MatcherDriver {
+        state: state.clone(),
+        oracle,
+        current_slot,
+        matches_tx: tx,
+        cfg: DriverConfig {
+            match_config: mk_config(),
+            feed_id: FEED_ID.to_string(),
+            batch_ms: 1000,
+            max_oracle_age_ms: nyx_tee::matcher::DEFAULT_MAX_ORACLE_AGE_MS,
+            max_matches_per_batch: 2,
+        },
+    };
+    driver.tick().await.expect("tick");
+
+    // Drain the channel: 3 batches (2 + 2 + 1), each non-empty and ≤ N.
+    let mut batches = Vec::new();
+    while let Ok(o) = rx.try_recv() {
+        batches.push(o);
+    }
+    assert_eq!(batches.len(), 3, "5 fills / cap 2 → 3 paged batches");
+    assert!(
+        batches
+            .iter()
+            .all(|b| !b.matches.is_empty() && b.matches.len() <= 2),
+        "each emitted batch is non-empty and within the N cap"
+    );
+    let total: usize = batches.iter().map(|b| b.matches.len()).sum();
+    assert_eq!(total, 5, "every crossing pair matched across the pages");
+
+    let final_state = state.read().await;
+    assert!(
+        final_state.book().is_empty(),
+        "book drained across all pages of the tick"
+    );
+    assert_eq!(final_state.next_match_id(), 5);
 }
 
 /// When the oracle is missing the tick no-ops; nothing should

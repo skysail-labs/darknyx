@@ -224,6 +224,7 @@ async fn http_submit_two_crossing_orders_produces_match() {
             feed_id: FEED_ID.to_string(),
             batch_ms: 1000,
             max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+            max_matches_per_batch: 16,
         },
     };
 
@@ -345,6 +346,7 @@ async fn http_submit_without_crossing_produces_no_match() {
             feed_id: FEED_ID.to_string(),
             batch_ms: 1000,
             max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+            max_matches_per_batch: 16,
         },
     };
 

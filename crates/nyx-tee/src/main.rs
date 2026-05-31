@@ -182,6 +182,9 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|| "no-feed-configured".to_string()),
             batch_ms: 2000,
             max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+            // Page each tick into ≤N-match batches matching the N=16
+            // VALID_MATCH_BATCH settle circuit.
+            max_matches_per_batch: PRODUCTION_BATCH_N,
         },
     };
     let _driver_handle = driver.spawn();

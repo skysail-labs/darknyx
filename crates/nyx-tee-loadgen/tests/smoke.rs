@@ -62,6 +62,7 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
             // matching cycles during the 5-second run window.
             batch_ms: 300,
             max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+            max_matches_per_batch: 16,
         },
     };
     let _driver_handle = driver.spawn();
