@@ -17,12 +17,12 @@
 //!
 //! ## Two distinct field orderings (do not conflate)
 //!
-//! - **Borsh serialize** (the ix data): declaration order, with
-//!   `note_fee_commitment` AFTER `seller_fee_amt` (position 18).
-//! - **Canonical hash**: a hand-ordered concatenation that places
-//!   `note_fee_commitment` right after `note_f_commitment`
-//!   (position 8), before the nullifiers. Domain-tagged
-//!   `b"nyx-match-v5"`.
+//! - **Borsh serialize** (the ix data): declaration order, with the two
+//!   fee-note fields `note_fee_base_commitment` + `note_fee_quote_commitment`
+//!   AFTER `seller_fee_amt` (positions 18-19).
+//! - **Canonical hash**: a hand-ordered concatenation that places the two
+//!   fee-note fields right after `note_f_commitment` (positions 8-9),
+//!   before the nullifiers. Domain-tagged `b"nyx-match-v6"`.
 //!
 //! Both orderings are reproduced verbatim below from the on-chain
 //! source + the SDK.
@@ -31,8 +31,9 @@ use borsh::BorshSerialize;
 use sha2::{Digest, Sha256};
 
 /// Domain tag for the canonical hash. **Do not change** — on-chain
-/// verification rejects any hash computed with a different tag.
-pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v5";
+/// verification rejects any hash computed with a different tag. Bumped
+/// `v5`→`v6` when the single fee-note slot was split into base + quote.
+pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v6";
 
 /// 24-field settle payload. Field order is the on-chain struct's
 /// declaration order — `#[derive(BorshSerialize)]` then produces
@@ -57,7 +58,8 @@ pub struct MatchResultPayload {
     pub seller_change_amt: u64,
     pub buyer_fee_amt: u64,
     pub seller_fee_amt: u64,
-    pub note_fee_commitment: [u8; 32],
+    pub note_fee_base_commitment: [u8; 32],
+    pub note_fee_quote_commitment: [u8; 32],
     pub buyer_relock_order_id: [u8; 16],
     pub buyer_relock_expiry: u64,
     pub seller_relock_order_id: [u8; 16],
@@ -68,8 +70,8 @@ pub struct MatchResultPayload {
 
 impl MatchResultPayload {
     /// Total Borsh-encoded width: 16 + 6×32 + 2×32 + 2×16 + 6×8 +
-    /// 32 + 16 + 8 + 16 + 8 + 8 + 8 = 448 bytes.
-    pub const WIRE_LEN: usize = 448;
+    /// 2×32 (base+quote fee notes) + 16 + 8 + 16 + 8 + 8 + 8 = 480 bytes.
+    pub const WIRE_LEN: usize = 480;
 
     /// Borsh serialization — the bytes that go into the
     /// `tee_forced_settle_batched` ix data. Byte-identical to the
@@ -80,8 +82,8 @@ impl MatchResultPayload {
 
     /// Canonical 32-byte SHA-256 hash — the message the TEE's
     /// Ed25519 key signs. Field order is the hand-ordered sequence
-    /// from `canonical_payload_hash` (NOT the Borsh/struct order):
-    /// `note_fee_commitment` sits right after `note_f_commitment`.
+    /// from `canonical_payload_hash` (NOT the Borsh/struct order): the
+    /// two fee-note fields sit right after `note_f_commitment`.
     pub fn canonical_hash(&self) -> [u8; 32] {
         let mut h = Sha256::new();
         h.update(CANONICAL_DOMAIN);
@@ -92,7 +94,8 @@ impl MatchResultPayload {
         h.update(self.note_d_commitment);
         h.update(self.note_e_commitment);
         h.update(self.note_f_commitment);
-        h.update(self.note_fee_commitment); // <- moved up vs Borsh order
+        h.update(self.note_fee_base_commitment); // <- moved up vs Borsh order
+        h.update(self.note_fee_quote_commitment);
         h.update(self.nullifier_a);
         h.update(self.nullifier_b);
         h.update(self.order_id_a);
@@ -139,7 +142,8 @@ mod tests {
             seller_change_amt: 0,
             buyer_fee_amt: 0,
             seller_fee_amt: 0,
-            note_fee_commitment: [0; 32],
+            note_fee_base_commitment: [0; 32],
+            note_fee_quote_commitment: [0; 32],
             buyer_relock_order_id: [0; 16],
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
@@ -155,9 +159,9 @@ mod tests {
     #[test]
     fn canonical_hash_matches_onchain_fixed_vector() {
         let expected: [u8; 32] = [
-            0x03, 0x88, 0xE8, 0x01, 0x83, 0x01, 0x59, 0x29, 0x83, 0xB8, 0x6C, 0xBC, 0x2F, 0xB7,
-            0x96, 0x76, 0x57, 0x6C, 0x04, 0xC1, 0xA4, 0xB8, 0xAD, 0x79, 0x26, 0x15, 0xCA, 0x63,
-            0xFC, 0xE7, 0x1F, 0x92,
+            0x98, 0xF6, 0xF0, 0x18, 0x48, 0x80, 0x02, 0x61, 0x5E, 0x03, 0xD0, 0x22, 0xF9, 0xCF,
+            0xAC, 0x17, 0x27, 0x9A, 0xB3, 0xE5, 0xAB, 0x15, 0x5F, 0xA2, 0xCF, 0x71, 0xAD, 0x4D,
+            0x08, 0x84, 0x6B, 0x47,
         ];
         let got = fixed_vector_payload().canonical_hash();
         assert_eq!(
@@ -167,10 +171,10 @@ mod tests {
     }
 
     #[test]
-    fn borsh_serialization_is_448_bytes() {
+    fn borsh_serialization_is_480_bytes() {
         let bytes = fixed_vector_payload().serialize();
         assert_eq!(bytes.len(), MatchResultPayload::WIRE_LEN);
-        assert_eq!(bytes.len(), 448);
+        assert_eq!(bytes.len(), 480);
     }
 
     #[test]
@@ -189,18 +193,23 @@ mod tests {
     }
 
     #[test]
-    fn note_fee_commitment_position_differs_between_borsh_and_hash() {
-        // Regression guard for the easiest mistake: note_fee_commitment
-        // is at Borsh position 18 (after seller_fee_amt) but hashed
-        // at position 8 (after note_f). Build two payloads that
-        // differ ONLY in note_fee_commitment and confirm both the
-        // serialize bytes AND the hash change — and that moving the
-        // value to a different field doesn't accidentally collide.
-        let mut a = fixed_vector_payload();
-        a.note_fee_commitment = [0x77; 32];
+    fn note_fee_commitments_differ_between_borsh_and_hash() {
+        // Regression guard for the easiest mistake: the two fee-note
+        // fields are at Borsh positions 18-19 (after seller_fee_amt) but
+        // hashed at positions 8-9 (after note_f). Perturb each and
+        // confirm both the serialize bytes AND the hash change.
         let base = fixed_vector_payload();
+        let mut a = fixed_vector_payload();
+        a.note_fee_base_commitment = [0x77; 32];
         assert_ne!(a.canonical_hash(), base.canonical_hash());
         assert_ne!(a.serialize(), base.serialize());
+
+        let mut b = fixed_vector_payload();
+        b.note_fee_quote_commitment = [0x88; 32];
+        assert_ne!(b.canonical_hash(), base.canonical_hash());
+        assert_ne!(b.serialize(), base.serialize());
+        // base vs quote must not collide (distinct hash positions).
+        assert_ne!(a.canonical_hash(), b.canonical_hash());
     }
 
     #[test]

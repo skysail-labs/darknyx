@@ -747,7 +747,7 @@ maybeDescribe(
         });
         payload.buyerFeeAmt = BUYER_FEE;
         payload.sellerFeeAmt = SELLER_FEE;
-        payload.noteFeeCommitment = feeCommitment;
+        payload.noteFeeQuoteCommitment = feeCommitment;
 
         const msg = canonicalPayloadHash(payload);
         const teeSig = tee.signCanonical(msg);

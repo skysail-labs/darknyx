@@ -73,7 +73,9 @@ mod tests {
     use crate::settle::alt::alt_account;
     use crate::settle::ed25519::build_ed25519_verify_ix;
     use crate::settle::payload::MatchResultPayload;
-    use crate::settle::settle_batched::{build_settle_batched_ix, per_batch_alt_addresses};
+    use crate::settle::settle_batched::{
+        build_settle_batched_ix, per_batch_alt_addresses, static_alt_addresses,
+    };
     use solana_address::Address;
 
     fn payload() -> MatchResultPayload {
@@ -95,7 +97,8 @@ mod tests {
             seller_change_amt: 1,
             buyer_fee_amt: 0,
             seller_fee_amt: 0,
-            note_fee_commitment: [0; 32],
+            note_fee_base_commitment: [0; 32],
+            note_fee_quote_commitment: [0; 32],
             buyer_relock_order_id: [0; 16],
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
@@ -115,7 +118,14 @@ mod tests {
         let ed_ix = build_ed25519_verify_ix(&[0xAA; 32], &[0xBB; 64], &p.canonical_hash());
         let settle_ix = build_settle_batched_ix(&kp.pubkey(), &p, 5, &proof, &root);
 
-        // Per-batch ALT covering the 5 derivable PDAs.
+        // Production stacks BOTH ALTs (worker.rs): the static settle ALT
+        // (vault_config + sysvar + system program) under the per-batch ALT
+        // (the 5 derivable PDAs). Both are needed to keep the worst-case
+        // (change-note, no PDA dedup) settle tx under the 1232-byte cap.
+        let static_alt = alt_account(
+            Address::new_from_array([0x44; 32]),
+            static_alt_addresses(),
+        );
         let alt = alt_account(
             Address::new_from_array([0x55; 32]),
             per_batch_alt_addresses(&p, &root),
@@ -125,7 +135,7 @@ mod tests {
             &kp,
             ed_ix,
             settle_ix,
-            &[alt],
+            &[static_alt, alt],
             Hash::new_from_array([0x01; 32]),
         )
         .expect("v0 compile + sign");

@@ -62,12 +62,19 @@ pub struct MatchResultPayload {
     pub buyer_fee_amt: u64,
     /// Seller-side protocol fee (base units).
     pub seller_fee_amt: u64,
-    /// Batch-level fee note commitment for one mint. `[0u8;32]` = no fee
-    /// note to flush on this call (normal case when settlement of a batch
-    /// spans multiple txs). Populated by the TEE only on the settlement
-    /// chosen to carry the flush — typically the first settlement in the
-    /// batch (see `partial_fill_and_fee_notes.md §2.4`).
-    pub note_fee_commitment: [u8; 32],
+    /// Batch-level protocol fee notes — ONE PER MINT. `[0u8;32]` = no fee
+    /// note for that mint. Populated by the TEE only on the settlement
+    /// chosen to carry the batch flush — the first settlement in the batch
+    /// (see `partial_fill_and_fee_notes.md §2.4`). Both come straight from
+    /// the matcher's per-batch `flush_fee_notes`:
+    ///   - `note_fee_base_commitment`  — seller-side fees (base mint/units)
+    ///   - `note_fee_quote_commitment` — buyer-side fees (quote mint/units)
+    ///
+    /// Carrying base separately is what mints the seller-side fee as a real
+    /// protocol note instead of charging it in conservation but never
+    /// crediting it (the v1 single-slot, quote-only gap).
+    pub note_fee_base_commitment: [u8; 32],
+    pub note_fee_quote_commitment: [u8; 32],
     /// If non-zero, re-lock note_e_commitment against `buyer_relock_order_id`
     /// for `buyer_relock_expiry`. The continuing order keeps trading in
     /// the next batch without the user doing anything.
@@ -82,9 +89,11 @@ pub struct MatchResultPayload {
     // ix that writes a `ValidPriceMarker` PDA. This handler recomputes
     // `Poseidon3(DOMAIN_PRICE, clearing_price, batch_slot)` from the two
     // u64 fields above and asserts the marker PDA exists at that address.
-    // canonical_payload_hash is unchanged (it never included price_proof
-    // or price_commitment), so existing TEE signatures and the
-    // `nyx-match-v5` domain tag remain valid.
+    // The v3.1 price factor-out did NOT change canonical_payload_hash.
+    // The base/quote fee-note split (this PR) DID — the single
+    // `note_fee_commitment` became `note_fee_base_commitment` +
+    // `note_fee_quote_commitment`, and the domain tag bumped
+    // `nyx-match-v5` → `nyx-match-v6`.
 }
 
 // ---------------------------------------------------------------------------
@@ -180,8 +189,10 @@ pub struct TradeSettled {
     pub note_e_leaf: u64,
     /// `u64::MAX` means no seller-change leaf was inserted (exact fill).
     pub note_f_leaf: u64,
-    /// `u64::MAX` means no batch fee note was flushed on this settlement.
-    pub note_fee_leaf: u64,
+    /// `u64::MAX` means no base/quote batch fee note was flushed on this
+    /// settlement (only the first settlement in a batch carries them).
+    pub note_fee_base_leaf: u64,
+    pub note_fee_quote_leaf: u64,
     pub buyer_relock_active: bool,
     pub seller_relock_active: bool,
     pub new_root: [u8; 32],
@@ -204,7 +215,10 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     let price = p.clearing_price.to_le_bytes();
     let slot = p.batch_slot.to_le_bytes();
     hashv(&[
-        b"nyx-match-v5",
+        // v6: the single fee-note slot was split into base + quote (the
+        // per-batch base-mint protocol fee note is new). Bumping the domain
+        // tag invalidates v5 signatures over the old single-slot layout.
+        b"nyx-match-v6",
         p.match_id.as_ref(),
         p.note_a_commitment.as_ref(),
         p.note_b_commitment.as_ref(),
@@ -212,7 +226,8 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         p.note_d_commitment.as_ref(),
         p.note_e_commitment.as_ref(),
         p.note_f_commitment.as_ref(),
-        p.note_fee_commitment.as_ref(),
+        p.note_fee_base_commitment.as_ref(),
+        p.note_fee_quote_commitment.as_ref(),
         p.nullifier_a.as_ref(),
         p.nullifier_b.as_ref(),
         p.order_id_a.as_ref(),
@@ -352,7 +367,8 @@ mod tests {
             seller_change_amt: 0,
             buyer_fee_amt: 0,
             seller_fee_amt: 0,
-            note_fee_commitment: [0u8; 32],
+            note_fee_base_commitment: [0u8; 32],
+            note_fee_quote_commitment: [0u8; 32],
             buyer_relock_order_id: [0u8; 16],
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0u8; 16],
@@ -365,9 +381,9 @@ mod tests {
         // `[hash_cross_env_parity]`. When the payload shape changes, update
         // BOTH sides — any divergence breaks the TEE signature verification.
         let expected: [u8; 32] = [
-            0x03, 0x88, 0xE8, 0x01, 0x83, 0x01, 0x59, 0x29, 0x83, 0xB8, 0x6C, 0xBC, 0x2F, 0xB7,
-            0x96, 0x76, 0x57, 0x6C, 0x04, 0xC1, 0xA4, 0xB8, 0xAD, 0x79, 0x26, 0x15, 0xCA, 0x63,
-            0xFC, 0xE7, 0x1F, 0x92,
+            0x98, 0xF6, 0xF0, 0x18, 0x48, 0x80, 0x02, 0x61, 0x5E, 0x03, 0xD0, 0x22, 0xF9, 0xCF,
+            0xAC, 0x17, 0x27, 0x9A, 0xB3, 0xE5, 0xAB, 0x15, 0x5F, 0xA2, 0xCF, 0x71, 0xAD, 0x4D,
+            0x08, 0x84, 0x6B, 0x47,
         ];
         if hash != expected {
             panic!("canonical_payload_hash drifted — got {:02X?}", hash);

@@ -33,7 +33,8 @@ function encodeEvent(ev: TradeSettledEvent): Uint8Array {
     u64LE(ev.noteDleaf),
     u64LE(ev.noteEleaf),
     u64LE(ev.noteFleaf),
-    u64LE(ev.noteFeeLeaf),
+    u64LE(ev.noteFeeBaseLeaf),
+    u64LE(ev.noteFeeQuoteLeaf),
     new Uint8Array([ev.buyerRelockActive ? 1 : 0]),
     new Uint8Array([ev.sellerRelockActive ? 1 : 0]),
     ev.newRoot,
@@ -62,7 +63,8 @@ function baseEvent(): TradeSettledEvent {
     noteDleaf: 1n,
     noteEleaf: U64_MAX,
     noteFleaf: U64_MAX,
-    noteFeeLeaf: U64_MAX,
+    noteFeeBaseLeaf: U64_MAX,
+    noteFeeQuoteLeaf: U64_MAX,
     buyerRelockActive: false,
     sellerRelockActive: false,
     newRoot: new Uint8Array(32).fill(0x77),
@@ -90,13 +92,15 @@ describe("Phase 5 — settlement-watcher: decodeTradeSettled", () => {
       noteEleaf: 7n,
       buyerRelockActive: true,
       buyerFeeAmt: 3n,
-      noteFeeLeaf: 8n,
+      noteFeeBaseLeaf: 8n,
+      noteFeeQuoteLeaf: 9n,
     };
     const back = decodeTradeSettled(encodeEvent(ev));
     expect(back.buyerChangeAmt).toBe(50n);
     expect(back.noteEleaf).toBe(7n);
     expect(back.buyerRelockActive).toBe(true);
-    expect(back.noteFeeLeaf).toBe(8n);
+    expect(back.noteFeeBaseLeaf).toBe(8n);
+    expect(back.noteFeeQuoteLeaf).toBe(9n);
   });
 
   it("[decode_rejects_wrong_length] throws when buffer is too short", () => {
@@ -139,15 +143,16 @@ describe("Phase 5 — settlement-watcher: buyer/seller notifications", () => {
     expect(n.changeLeaf).toBe(null);
   });
 
-  it("[fee_leaf_propagates] both sides see the same noteFeeLeaf", () => {
+  it("[fee_leaves_per_side] buyer sees the quote fee leaf, seller the base fee leaf", () => {
     const ev: TradeSettledEvent = {
       ...baseEvent(),
       buyerFeeAmt: 3n,
       sellerFeeAmt: 1n,
-      noteFeeLeaf: 99n,
+      noteFeeBaseLeaf: 88n, // seller-side (base mint)
+      noteFeeQuoteLeaf: 99n, // buyer-side (quote mint)
     };
     expect(buyerNotification(ev).feeLeaf).toBe(99n);
-    expect(sellerNotification(ev).feeLeaf).toBe(99n);
+    expect(sellerNotification(ev).feeLeaf).toBe(88n);
     expect(buyerNotification(ev).feePaid).toBe(3n);
     expect(sellerNotification(ev).feePaid).toBe(1n);
   });

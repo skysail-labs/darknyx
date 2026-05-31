@@ -134,6 +134,16 @@ pub fn per_batch_alt_addresses(
     ]
 }
 
+/// The addresses the STATIC settle ALT must hold — the per-settle
+/// constant, non-signer accounts (`vault_config`, the instructions
+/// sysvar, the system program). Created once at devnet-setup and stacked
+/// UNDER the per-batch ALT (see `pipeline.rs` + `worker.rs::static_alt`).
+/// Hoisting these is what keeps the settle v0 tx under Solana's 1232-byte
+/// cap — without them the message is ~93 bytes larger (3 × 31).
+pub fn static_alt_addresses() -> Vec<Address> {
+    vec![vault_config_pda().0, INSTRUCTIONS_SYSVAR_ID, SYSTEM_PROGRAM_ID]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,7 +167,8 @@ mod tests {
             seller_change_amt: 0,
             buyer_fee_amt: 0,
             seller_fee_amt: 0,
-            note_fee_commitment: [0; 32],
+            note_fee_base_commitment: [0; 32],
+            note_fee_quote_commitment: [0; 32],
             buyer_relock_order_id: [0; 16],
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
@@ -194,21 +205,22 @@ mod tests {
     #[test]
     fn ix_data_total_length() {
         let ix = build_settle_batched_ix(&dummy_tee(), &dummy_payload(), 3, &proof(), &[0xAB; 32]);
-        // 8 disc + 448 payload + 1 match_index + 128 siblings = 585.
-        assert_eq!(ix.data.len(), 8 + 448 + 1 + 128);
-        assert_eq!(ix.data.len(), 585);
+        // 8 disc + 480 payload (v6, base+quote fee notes) + 1 match_index
+        // + 128 siblings = 617.
+        assert_eq!(ix.data.len(), 8 + 480 + 1 + 128);
+        assert_eq!(ix.data.len(), 617);
     }
 
     #[test]
     fn ix_data_layout() {
         let ix = build_settle_batched_ix(&dummy_tee(), &dummy_payload(), 7, &proof(), &[0xAB; 32]);
         assert_eq!(&ix.data[..8], &*SETTLE_BATCHED_DISCRIMINATOR);
-        // payload occupies [8, 456); match_index at 456; siblings [457, 585).
-        assert_eq!(ix.data[456], 7); // match_index
-        assert_eq!(&ix.data[457..489], &[0x01; 32]); // sibling 0
-        assert_eq!(&ix.data[489..521], &[0x02; 32]); // sibling 1
-        assert_eq!(&ix.data[521..553], &[0x03; 32]);
-        assert_eq!(&ix.data[553..585], &[0x04; 32]);
+        // payload occupies [8, 488); match_index at 488; siblings [489, 617).
+        assert_eq!(ix.data[488], 7); // match_index
+        assert_eq!(&ix.data[489..521], &[0x01; 32]); // sibling 0
+        assert_eq!(&ix.data[521..553], &[0x02; 32]); // sibling 1
+        assert_eq!(&ix.data[553..585], &[0x03; 32]);
+        assert_eq!(&ix.data[585..617], &[0x04; 32]);
     }
 
     #[test]

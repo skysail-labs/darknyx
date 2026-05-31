@@ -457,7 +457,7 @@ pub fn tee_forced_settle_batched_handler(
     nb._padding = [0u8; 7];
 
     // Append output leaves: note_c, note_d, note_e (if any), note_f (if any),
-    // note_fee (if any). Order matches the per-match handler exactly.
+    // then the two batch fee notes (base, quote) if any.
     let cfg = &mut ctx.accounts.vault_config.load_mut()?;
     let leaf_c = cfg.leaf_count;
     let _ = append_leaf(cfg, payload.note_c_commitment)?;
@@ -479,13 +479,30 @@ pub fn tee_forced_settle_batched_handler(
         u64::MAX
     };
 
-    let leaf_fee = if payload.note_fee_commitment != [0u8; 32] {
+    // Two batch-level protocol fee notes, one per mint: base (seller-side
+    // fees) + quote (buyer-side fees). Only the first settlement in a batch
+    // carries them; both `[0;32]` otherwise. Symmetric to the per-match
+    // output leaves above — settle never touches `outstanding` (value is
+    // conserved out of the consumed note_a/b; the fee note just lets the
+    // protocol claim its share via the normal VALID_SPEND path).
+    let leaf_fee_base = if payload.note_fee_base_commitment != [0u8; 32] {
         require!(
             cfg.protocol_owner_commitment != [0u8; 32],
             VaultError::ProtocolOwnerUnset
         );
         let idx = cfg.leaf_count;
-        new_root = append_leaf(cfg, payload.note_fee_commitment)?;
+        new_root = append_leaf(cfg, payload.note_fee_base_commitment)?;
+        idx
+    } else {
+        u64::MAX
+    };
+    let leaf_fee_quote = if payload.note_fee_quote_commitment != [0u8; 32] {
+        require!(
+            cfg.protocol_owner_commitment != [0u8; 32],
+            VaultError::ProtocolOwnerUnset
+        );
+        let idx = cfg.leaf_count;
+        new_root = append_leaf(cfg, payload.note_fee_quote_commitment)?;
         idx
     } else {
         u64::MAX
@@ -539,7 +556,8 @@ pub fn tee_forced_settle_batched_handler(
         note_d_leaf: leaf_d,
         note_e_leaf: leaf_e,
         note_f_leaf: leaf_f,
-        note_fee_leaf: leaf_fee,
+        note_fee_base_leaf: leaf_fee_base,
+        note_fee_quote_leaf: leaf_fee_quote,
         buyer_relock_active: payload.buyer_relock_order_id != [0u8; 16],
         seller_relock_active: payload.seller_relock_order_id != [0u8; 16],
         new_root,

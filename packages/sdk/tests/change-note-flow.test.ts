@@ -1102,7 +1102,7 @@ maybeDescribe(
         payload.noteEcommitment = noteEcommitment;
         payload.buyerFeeAmt = BUYER_FEE;
         payload.sellerFeeAmt = SELLER_FEE;
-        payload.noteFeeCommitment = feeCommitment;
+        payload.noteFeeQuoteCommitment = feeCommitment;
 
         const msg = canonicalPayloadHash(payload);
         const teeSig = teeSign(fx.teeKeypair, msg);
@@ -1561,7 +1561,7 @@ maybeDescribe(
         payload.noteEcommitment = noteEcommitment;
         payload.buyerFeeAmt = BUYER_FEE;
         payload.sellerFeeAmt = SELLER_FEE;
-        payload.noteFeeCommitment = feeCommitment;
+        payload.noteFeeQuoteCommitment = feeCommitment;
         // Activate re-lock — instructs tee_forced_settle to atomically allocate
         // a NoteLock(note_e) → aliceOrderId on L1.
         payload.buyerRelockOrderId = aliceOrderId;
@@ -2406,7 +2406,7 @@ maybeDescribe(
           });
           payload.buyerFeeAmt = BUYER_FEE;
           payload.sellerFeeAmt = SELLER_FEE;
-          payload.noteFeeCommitment = feeCommitment;
+          payload.noteFeeQuoteCommitment = feeCommitment;
 
           const msg = canonicalPayloadHash(payload);
           const teeSig = teeSign(fx.teeKeypair, msg);

@@ -30,8 +30,11 @@ export interface TradeSettledEvent {
   noteEleaf: bigint;
   /** `U64_MAX` means no seller change leaf was inserted. */
   noteFleaf: bigint;
-  /** `U64_MAX` means no batch fee note was flushed on this settlement. */
-  noteFeeLeaf: bigint;
+  /** Per-batch protocol fee note leaves (base + quote). `U64_MAX` means
+   *  that mint had no fee note on this settlement — only the first
+   *  settlement in a batch carries them. */
+  noteFeeBaseLeaf: bigint;
+  noteFeeQuoteLeaf: bigint;
   buyerRelockActive: boolean;
   sellerRelockActive: boolean;
   newRoot: Uint8Array;
@@ -46,7 +49,7 @@ export interface MatchNotification {
   isPartialFill: boolean;
   tradeLeaf: bigint;          // buyer=noteCleaf, seller=noteDleaf
   changeLeaf: bigint | null;  // buyer=noteEleaf, seller=noteFleaf (null if exact fill)
-  feeLeaf: bigint | null;     // noteFeeLeaf or null
+  feeLeaf: bigint | null;     // protocol fee-note leaf for this side's mint (buyer=quote, seller=base), batch-level, or null
   /** The side's protocol fee deducted from its input note. */
   feePaid: bigint;
   /** `true` when the continuing order was re-locked against the change
@@ -67,7 +70,8 @@ export function buyerNotification(ev: TradeSettledEvent): MatchNotification {
     isPartialFill: isPartial,
     tradeLeaf: ev.noteCleaf,
     changeLeaf: ev.noteEleaf === U64_MAX ? null : ev.noteEleaf,
-    feeLeaf: ev.noteFeeLeaf === U64_MAX ? null : ev.noteFeeLeaf,
+    // Buyer pays the quote-side fee → the quote fee note (batch-level).
+    feeLeaf: ev.noteFeeQuoteLeaf === U64_MAX ? null : ev.noteFeeQuoteLeaf,
     feePaid: ev.buyerFeeAmt,
     relockActive: ev.buyerRelockActive,
     baseAmount: ev.baseAmount,
@@ -86,7 +90,8 @@ export function sellerNotification(ev: TradeSettledEvent): MatchNotification {
     isPartialFill: isPartial,
     tradeLeaf: ev.noteDleaf,
     changeLeaf: ev.noteFleaf === U64_MAX ? null : ev.noteFleaf,
-    feeLeaf: ev.noteFeeLeaf === U64_MAX ? null : ev.noteFeeLeaf,
+    // Seller pays the base-side fee → the base fee note (batch-level).
+    feeLeaf: ev.noteFeeBaseLeaf === U64_MAX ? null : ev.noteFeeBaseLeaf,
     feePaid: ev.sellerFeeAmt,
     relockActive: ev.sellerRelockActive,
     baseAmount: ev.baseAmount,
@@ -113,13 +118,15 @@ export function sellerNotification(ev: TradeSettledEvent): MatchNotification {
  *    8   note_d_leaf
  *    8   note_e_leaf
  *    8   note_f_leaf
- *    8   note_fee_leaf
+ *    8   note_fee_base_leaf
+ *    8   note_fee_quote_leaf
  *    1   buyer_relock_active
  *    1   seller_relock_active
  *    32  new_root
  */
 export function decodeTradeSettled(eventData: Uint8Array): TradeSettledEvent {
-  const expected = 16 + 8 * 12 + 1 + 1 + 32;
+  // 16 (match_id) + 13 u64 fields (incl. base+quote fee leaves) + 2 bools + 32 root.
+  const expected = 16 + 8 * 13 + 1 + 1 + 32;
   if (eventData.length !== expected) {
     throw new Error(
       `TradeSettled event length mismatch: got ${eventData.length}, expected ${expected}`,
@@ -139,7 +146,8 @@ export function decodeTradeSettled(eventData: Uint8Array): TradeSettledEvent {
   const noteDleaf = dv.getBigUint64(off, true); off += 8;
   const noteEleaf = dv.getBigUint64(off, true); off += 8;
   const noteFleaf = dv.getBigUint64(off, true); off += 8;
-  const noteFeeLeaf = dv.getBigUint64(off, true); off += 8;
+  const noteFeeBaseLeaf = dv.getBigUint64(off, true); off += 8;
+  const noteFeeQuoteLeaf = dv.getBigUint64(off, true); off += 8;
   const buyerRelockActive = eventData[off] === 1; off += 1;
   const sellerRelockActive = eventData[off] === 1; off += 1;
   const newRoot = eventData.slice(off, off + 32);
@@ -156,7 +164,8 @@ export function decodeTradeSettled(eventData: Uint8Array): TradeSettledEvent {
     noteDleaf,
     noteEleaf,
     noteFleaf,
-    noteFeeLeaf,
+    noteFeeBaseLeaf,
+    noteFeeQuoteLeaf,
     buyerRelockActive,
     sellerRelockActive,
     newRoot,

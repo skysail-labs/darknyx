@@ -554,14 +554,16 @@ fn test_fee_note_appended() {
     );
     p.buyer_fee_amt = 15;
     p.seller_fee_amt = 3;
-    p.note_fee_commitment = fr_safe(0x0E, 0x88);
+    // Both per-batch fee notes: base (seller-side) + quote (buyer-side).
+    p.note_fee_base_commitment = fr_safe(0x0E, 0x77);
+    p.note_fee_quote_commitment = fr_safe(0x0E, 0x88);
 
     let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let before = vault_leaf_count(&h);
     h.svm.send_transaction(tx).expect("fee settle");
 
-    // Leaves: note_c + note_d + note_fee = 3.
-    assert_eq!(vault_leaf_count(&h), before + 3);
+    // Leaves: note_c + note_d + base_fee + quote_fee = 4.
+    assert_eq!(vault_leaf_count(&h), before + 4);
 }
 
 #[test]
@@ -586,7 +588,7 @@ fn test_zero_fee_no_note_created() {
         100,
         100,
     );
-    // fee fields are all zero; note_fee_commitment stays [0;32].
+    // fee fields are all zero; both note_fee_*_commitment stay [0;32].
 
     let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);
     let before = vault_leaf_count(&h);
@@ -599,7 +601,7 @@ fn test_zero_fee_no_note_created() {
 #[test]
 fn test_fee_note_without_protocol_owner_rejected() {
     // protocol_owner_commitment stays [0;32] (default). Supplying a
-    // note_fee_commitment must be rejected as ProtocolOwnerUnset.
+    // fee-note commitment must be rejected as ProtocolOwnerUnset.
     let mut h = Harness::setup();
 
     let note_a = fr_safe(0xA1, 0x01);
@@ -622,7 +624,7 @@ fn test_fee_note_without_protocol_owner_rejected() {
     );
     p.buyer_fee_amt = 15;
     p.seller_fee_amt = 3;
-    p.note_fee_commitment = fr_safe(0x10, 0x99);
+    p.note_fee_quote_commitment = fr_safe(0x10, 0x99);
 
     let before = vault_leaf_count(&h);
     let tx = seed_marker_and_build_settle_batched_tx(&mut h, &p);

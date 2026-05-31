@@ -9,12 +9,12 @@
  *   1. Account ordering matches `TeeForcedSettleBatched<'info>`
  *      (13 accounts, batch_validity_marker at slot 11).
  *   2. Data starts with `sha256("global:tee_forced_settle_batched")[..8]`.
- *   3. `ix.data` length = 8 (disc) + 448 (Borsh payload)
+ *   3. `ix.data` length = 8 (disc) + 480 (Borsh payload)
  *                       + 1 (matchIndex u8) + 128 (4 × 32-byte siblings)
  *                       = 585 bytes.
  *   4. The 4 Merkle siblings are encoded contiguously with NO length
  *      prefix (Anchor's `[[u8; 32]; 4]` wire shape).
- *   5. The match-index byte lives at offset `8 + 448` and reflects the
+ *   5. The match-index byte lives at offset `8 + 480` and reflects the
  *      caller-supplied value.
  *   6. Account slot 11 (`batch_validity_marker`) is the PDA derived
  *      from `[b"batch_validity", merkleRoot]` under the program id.
@@ -143,15 +143,14 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xF0),
     });
-    // Same 448-byte v3.1 Borsh payload (priceCommitment + priceProof
-    // were factored into the preceding verify_valid_price ix and
-    // never returned to the wire when the batched verifier subsumed
-    // them); see `serializePayload`.
+    // 480-byte v6 Borsh payload — the single note_fee_commitment slot was
+    // split into note_fee_base_commitment + note_fee_quote_commitment
+    // (+32 bytes vs the old 448), see `serializePayload`.
     const payloadBytes = serializePayload(payload);
-    expect(payloadBytes.length).toBe(448);
-    // 8 disc + 448 payload + 1 match_index byte + 4 × 32 sibling bytes.
-    expect(ix.data.length).toBe(8 + 448 + 1 + 128);
-    expect(ix.data.length).toBe(585);
+    expect(payloadBytes.length).toBe(480);
+    // 8 disc + 480 payload + 1 match_index byte + 4 × 32 sibling bytes.
+    expect(ix.data.length).toBe(8 + 480 + 1 + 128);
+    expect(ix.data.length).toBe(617);
   });
 
   it("[settle_batched_siblings_encoding] 4 siblings encoded contiguously without a length prefix", () => {
@@ -167,7 +166,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     });
     const buf = new Uint8Array(ix.data);
     // Siblings start right after disc + payload + 1-byte match_index.
-    const siblingsOffset = 8 + 448 + 1;
+    const siblingsOffset = 8 + 480 + 1;
     for (let i = 0; i < 4; i++) {
       const slice = buf.slice(
         siblingsOffset + i * 32,
@@ -192,7 +191,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const ix0 = buildSettleBatchedIx({ ...args, matchIndex: 0 });
     const ix7 = buildSettleBatchedIx({ ...args, matchIndex: 7 });
     const ix15 = buildSettleBatchedIx({ ...args, matchIndex: 15 });
-    const off = 8 + 448;
+    const off = 8 + 480;
     expect(ix0.data[off]).toBe(0);
     expect(ix7.data[off]).toBe(7);
     expect(ix15.data[off]).toBe(15);
@@ -454,7 +453,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xF0),
     });
-    const payloadBytes = new Uint8Array(ix.data).slice(8, 8 + 448);
+    const payloadBytes = new Uint8Array(ix.data).slice(8, 8 + 480);
     expect(payloadBytes).toEqual(serializePayload(relock));
   });
 });

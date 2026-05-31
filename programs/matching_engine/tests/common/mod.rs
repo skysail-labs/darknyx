@@ -910,7 +910,8 @@ pub struct MatchResultPayload {
     pub seller_change_amt: u64,
     pub buyer_fee_amt: u64,
     pub seller_fee_amt: u64,
-    pub note_fee_commitment: [u8; 32],
+    pub note_fee_base_commitment: [u8; 32],
+    pub note_fee_quote_commitment: [u8; 32],
     pub buyer_relock_order_id: [u8; 16],
     pub buyer_relock_expiry: u64,
     pub seller_relock_order_id: [u8; 16],
@@ -972,7 +973,8 @@ impl MatchResultPayload {
             seller_change_amt: 0,
             buyer_fee_amt: 0,
             seller_fee_amt: 0,
-            note_fee_commitment: [0u8; 32],
+            note_fee_base_commitment: [0u8; 32],
+            note_fee_quote_commitment: [0u8; 32],
             buyer_relock_order_id: RELOCK_ORDER_ID_NONE,
             buyer_relock_expiry: 0,
             seller_relock_order_id: RELOCK_ORDER_ID_NONE,
@@ -988,7 +990,7 @@ impl MatchResultPayload {
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    h.update(b"nyx-match-v5");
+    h.update(b"nyx-match-v6");
     h.update(p.match_id);
     h.update(p.note_a_commitment);
     h.update(p.note_b_commitment);
@@ -996,7 +998,8 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     h.update(p.note_d_commitment);
     h.update(p.note_e_commitment);
     h.update(p.note_f_commitment);
-    h.update(p.note_fee_commitment);
+    h.update(p.note_fee_base_commitment);
+    h.update(p.note_fee_quote_commitment);
     h.update(p.nullifier_a);
     h.update(p.nullifier_b);
     h.update(p.order_id_a);
@@ -1294,7 +1297,8 @@ fn to_onchain_payload(
         seller_change_amt: p.seller_change_amt,
         buyer_fee_amt: p.buyer_fee_amt,
         seller_fee_amt: p.seller_fee_amt,
-        note_fee_commitment: p.note_fee_commitment,
+        note_fee_base_commitment: p.note_fee_base_commitment,
+        note_fee_quote_commitment: p.note_fee_quote_commitment,
         buyer_relock_order_id: p.buyer_relock_order_id,
         buyer_relock_expiry: p.buyer_relock_expiry,
         seller_relock_order_id: p.seller_relock_order_id,

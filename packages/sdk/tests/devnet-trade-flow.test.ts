@@ -813,7 +813,7 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
       });
       payload.buyerFeeAmt = BUYER_FEE;
       payload.sellerFeeAmt = SELLER_FEE;
-      payload.noteFeeCommitment = feeCommitment;
+      payload.noteFeeQuoteCommitment = feeCommitment;
 
       const msg = canonicalPayloadHash(payload);
       const sig = tee.signCanonical(msg);

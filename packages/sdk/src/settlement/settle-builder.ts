@@ -79,7 +79,11 @@ export interface MatchResultPayload {
   sellerChangeAmt: bigint;
   buyerFeeAmt: bigint;
   sellerFeeAmt: bigint;
-  noteFeeCommitment: Uint8Array;    // [0;32] = no fee flush on this settlement
+  // Per-batch protocol fee notes, one per mint ([0;32] = none). Both set
+  // only on the first settlement in a batch. base = seller-side (base
+  // mint), quote = buyer-side (quote mint).
+  noteFeeBaseCommitment: Uint8Array;
+  noteFeeQuoteCommitment: Uint8Array;
   buyerRelockOrderId: Uint8Array;   // RELOCK_ORDER_ID_NONE when no re-lock
   buyerRelockExpiry: bigint;
   sellerRelockOrderId: Uint8Array;
@@ -141,7 +145,8 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     u64LE(p.sellerChangeAmt),
     u64LE(p.buyerFeeAmt),
     u64LE(p.sellerFeeAmt),
-    fixed(p.noteFeeCommitment, 32),
+    fixed(p.noteFeeBaseCommitment, 32),
+    fixed(p.noteFeeQuoteCommitment, 32),
     fixed(p.buyerRelockOrderId, 16),
     u64LE(p.buyerRelockExpiry),
     fixed(p.sellerRelockOrderId, 16),
@@ -166,7 +171,8 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
  */
 export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   const h = createHash("sha256");
-  h.update(Buffer.from("nyx-match-v5"));
+  // v6: the single fee-note slot was split into base + quote.
+  h.update(Buffer.from("nyx-match-v6"));
   h.update(fixed(p.matchId, 16));
   h.update(fixed(p.noteAcommitment, 32));
   h.update(fixed(p.noteBcommitment, 32));
@@ -174,7 +180,8 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   h.update(fixed(p.noteDcommitment, 32));
   h.update(fixed(p.noteEcommitment, 32));
   h.update(fixed(p.noteFcommitment, 32));
-  h.update(fixed(p.noteFeeCommitment, 32));
+  h.update(fixed(p.noteFeeBaseCommitment, 32));
+  h.update(fixed(p.noteFeeQuoteCommitment, 32));
   h.update(fixed(p.nullifierA, 32));
   h.update(fixed(p.nullifierB, 32));
   h.update(fixed(p.orderIdA, 16));
@@ -450,7 +457,8 @@ export function exactFillPayload(args: {
     sellerChangeAmt: 0n,
     buyerFeeAmt: 0n,
     sellerFeeAmt: 0n,
-    noteFeeCommitment: ZERO_COMMITMENT,
+    noteFeeBaseCommitment: ZERO_COMMITMENT,
+    noteFeeQuoteCommitment: ZERO_COMMITMENT,
     buyerRelockOrderId: RELOCK_ORDER_ID_NONE,
     buyerRelockExpiry: 0n,
     sellerRelockOrderId: RELOCK_ORDER_ID_NONE,

@@ -36,8 +36,8 @@
 
 use darkpool_crypto::note::commitment_from_fields;
 use darkpool_matcher::change_note::{
-    derive_blinding, derive_nonce, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, FEE_ROLE_QUOTE,
-    TRADE_ROLE_BUYER, TRADE_ROLE_SELLER,
+    derive_blinding, derive_nonce, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, TRADE_ROLE_BUYER,
+    TRADE_ROLE_SELLER,
 };
 use darkpool_matcher::match_result::{MatchPair, RunBatchOutput};
 
@@ -220,22 +220,13 @@ pub fn assemble_match(
         (ZERO32, ZERO32, ZERO32)
     };
 
-    // ── 5. Fee note (payload-only, NOT a circuit witness). The TS
-    // reference emits a single QUOTE-side protocol fee note from the
-    // buyer fee, derived against the settle slot. Zero when no fee.
-    let note_fee_commitment = if m.buyer_fee_amt > 0 {
-        let n = derive_nonce(inp.fee_slot, FEE_ROLE_QUOTE);
-        let r = derive_blinding(inp.fee_slot, FEE_ROLE_QUOTE);
-        commit(
-            &inp.quote_mint,
-            m.buyer_fee_amt,
-            &inp.protocol_owner_commitment,
-            &n,
-            &r,
-        )?
-    } else {
-        ZERO32
-    };
+    // ── 5. Fee notes are PER-BATCH, not per-match (payload-only, NOT a
+    // circuit witness). The matcher's `flush_fee_notes` computes one base
+    // + one quote protocol fee note for the WHOLE batch; `assemble_batch`
+    // attaches them to the FIRST match's payload and leaves them zero on
+    // every other match. So a per-match payload carries none here.
+    let note_fee_base_commitment = ZERO32;
+    let note_fee_quote_commitment = ZERO32;
 
     // ── 6. match_id → [u8; 16]: zero high… low LE in bytes [8,16).
     // Mirrors the TS `asU8a16` (DataView.setBigUint64(8, x, true)).
@@ -295,7 +286,10 @@ pub fn assemble_match(
         seller_change_amt: m.seller_change_amt,
         buyer_fee_amt: m.buyer_fee_amt,
         seller_fee_amt: m.seller_fee_amt,
-        note_fee_commitment,
+        // Per-match payloads carry no fee note; assemble_batch attaches the
+        // batch's base+quote fee notes to the FIRST match only.
+        note_fee_base_commitment,
+        note_fee_quote_commitment,
         buyer_relock_order_id: m.buyer_relock_order_id,
         buyer_relock_expiry: m.buyer_relock_expiry,
         seller_relock_order_id: m.seller_relock_order_id,
@@ -385,6 +379,18 @@ pub fn assemble_batch(
             match_index: idx as u8,
         });
         witnesses.push(witness);
+    }
+
+    // Attach the per-batch protocol fee notes (base + quote), computed
+    // once by the matcher's `flush_fee_notes` over the whole batch, to the
+    // FIRST match's payload — every other match keeps [0;32]. A [0;32]
+    // here means the matcher had nothing to flush (zero fee rate, or no
+    // protocol owner configured, or the circuit breaker tripped). This is
+    // what mints the base-mint (seller-side) fee, which the per-match path
+    // charged but never credited. See partial_fill_and_fee_notes §2.4.
+    if let Some(first) = matches.first_mut() {
+        first.payload.note_fee_base_commitment = output.fee_buckets[0].flushed_commitment;
+        first.payload.note_fee_quote_commitment = output.fee_buckets[1].flushed_commitment;
     }
 
     // Pad the witness set to the circuit's N with dummy slots.
@@ -536,8 +542,10 @@ mod tests {
         assert_eq!(w.note_f_commitment, [0u8; 32]);
         assert_eq!(w.e_nonce, [0u8; 32]);
         assert_eq!(w.f_nonce, [0u8; 32]);
-        // No fee → note_fee zero.
-        assert_eq!(p.note_fee_commitment, [0u8; 32]);
+        // Per-match payloads never carry fee notes (they're per-batch,
+        // set by assemble_batch on the first match).
+        assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
+        assert_eq!(p.note_fee_quote_commitment, [0u8; 32]);
         // clearing = quote/base.
         assert_eq!(w.clearing_price, 100);
         assert_eq!(p.clearing_price, 100);
@@ -580,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn with_change_and_fee_derives_e_and_fee_notes() {
+    fn with_change_derives_e_but_no_per_match_fee_note() {
         // base=10, quote=1000, buyer keeps 150 change + pays 50 fee
         // (a_amount = 1000 + 150 + 50 = 1200); seller exact.
         let (m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
@@ -594,13 +602,13 @@ mod tests {
         assert_eq!(w.e_nonce, en);
         assert_eq!(w.buyer_change_amt, 150);
 
-        // Fee note: QUOTE, protocol owner, derive_*(fee_slot, FEE_ROLE_QUOTE).
-        let fnn = derive_nonce(1234, FEE_ROLE_QUOTE);
-        let fr = derive_blinding(1234, FEE_ROLE_QUOTE);
-        let expected_fee =
-            commitment_from_fields(&quote_mint(), 50, &fr_safe(0x07), &fnn, &fr).unwrap();
-        assert_eq!(p.note_fee_commitment, expected_fee);
+        // The fee AMOUNT is still carried (conservation), but the fee NOTE
+        // is per-batch now — assemble_match leaves both fee-note slots zero
+        // even when this match has a fee. assemble_batch attaches the
+        // batch's base+quote fee notes to the first match.
         assert_eq!(p.buyer_fee_amt, 50);
+        assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
+        assert_eq!(p.note_fee_quote_commitment, [0u8; 32]);
     }
 
     #[test]
