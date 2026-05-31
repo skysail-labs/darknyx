@@ -15,9 +15,11 @@
 //! So linking the nyx-tee binary (or its test binaries) for
 //! x86_64-unknown-linux-gnu fails with:
 //!
-//!     undefined reference to `__rust_probestack'
-//!         in wasmer_vm::libcalls::function_pointer
-//!         (.data.rel.ro.wasmer_vm_probestack)
+//! ```text
+//! undefined reference to `__rust_probestack'
+//!     in wasmer_vm::libcalls::function_pointer
+//!     (.data.rel.ro.wasmer_vm_probestack)
+//! ```
 //!
 //! It only surfaced when the binary was first built for x86_64-linux
 //! (the Phala CVM target) — the dev Macs are arm64-darwin, which has no
