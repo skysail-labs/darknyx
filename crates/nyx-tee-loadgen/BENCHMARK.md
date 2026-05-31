@@ -110,6 +110,38 @@ Full on-chain settle additionally needs a SOL-funded TEE signer + real
 deposited notes (the synthetic loadgen orders aren't on-chain) — the
 separate prove→settle harness, deferred.
 
+---
+
+## Run 3 — after the single-fill PR (option A), 2026-05-31
+
+Same config (10 traders × 5/s × 30s, real Pyth feed). Submit: **829 /
+829 2xx (100%)**, 0 5xx, 27.4 orders/s (still RTT-bound). Batches paged
+≤16 (sizes 16/8/16/4/7/9/12/16/6/13/1…).
+
+**What option A fixed:** the in-TEE matcher now runs single-fill mode
+(one fill per order per batch) and drops relocked residuals from the
+book, so no match references a change note. The Run-2 gap is **gone**:
+
+| log signal | Run 2 | Run 3 |
+|---|---|---|
+| `batch has N matches but circuit N = 16` | 0 (fixed by A+C) | 0 |
+| `no opening in store …` | **34** | **0** |
+| `batch assembly failed …` | 34 | **0** |
+
+**Every batch now assembles and submits an on-chain settle tx.** 23
+batches reached the chain and failed at the *expected* next wall:
+`Transaction simulation failed: Attempt to debit an account but found
+no record of a prior credit` — the synthetic loadgen orders aren't
+backed by real deposited notes and the TEE signer holds 0 SOL. That is
+the deferred prove→settle harness (funded signer + real notes + market
+state), not a code gap.
+
+Pipeline now validated end-to-end on a live CVM: **intake → match →
+page (≤16) → assemble ✓ → on-chain settle submit → stops only at the
+no-real-funds wall.** Remaining for actual settled throughput: the
+funded-signer/real-notes harness, and (for full residual draining) the
+client re-submission relayer.
+
 <!-- ─────────────────────────────────────────────────────────────────
 ORIGINAL TEMPLATE / RUN-PROTOCOL REFERENCE (commented out 2026-05-31;
 superseded by the live run above, kept for the re-run protocol):
