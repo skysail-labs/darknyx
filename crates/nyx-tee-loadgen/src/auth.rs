@@ -79,16 +79,35 @@ pub fn build_signed_place_body(
     // owner, nonce, blinding)` and asserts it equals `note_commitment`.
     //
     // `note_amount` mirrors the intake's derivation (bid → amount ×
-    // price; ask → amount). `token_mint` is all-zero to match the smoke
-    // test's `MatcherState::new()` (zero market mints); a load run
-    // against a real market would need that market's mints here. The
-    // nullifier / merkle_root / VALID_INPUT proof are not verified at
-    // intake (only stored), so synthetic values are fine.
+    // price; ask → amount). `token_mint` must equal the TEE's per-side
+    // collateral mint, since intake (orders.rs) recomputes the
+    // commitment with bid → quote_mint, ask → base_mint from its
+    // configured market. Against a real `from_boot` CVM those are
+    // `dev_match_config()`'s placeholder mints (crates/nyx-tee/src/
+    // main.rs): base = 0x01..0xb1, quote = 0x01..0x9e. (All-zero only
+    // matches the simulator's `MatcherState::new()`.) The nullifier /
+    // merkle_root / VALID_INPUT proof are not verified at intake (only
+    // stored), so synthetic values are fine.
+    // TODO(loadgen): take these via --base-mint/--quote-mint once the
+    // TEE reads its market from the on-chain MatchingConfig PDA.
     let note_amount = match side {
         OrderSide::Bid => amount.saturating_mul(price_limit).max(amount).max(1),
         OrderSide::Ask => amount.max(1),
     };
-    let token_mint = [0u8; 32];
+    let token_mint: [u8; 32] = match side {
+        OrderSide::Bid => {
+            let mut m = [0u8; 32];
+            m[0] = 1;
+            m[31] = 0x9e; // quote_mint
+            m
+        }
+        OrderSide::Ask => {
+            let mut m = [0u8; 32];
+            m[0] = 1;
+            m[31] = 0xb1; // base_mint
+            m
+        }
+    };
     let owner_commitment = fr_safe_opening_field(&order_id, 0x01);
     let note_nonce = fr_safe_opening_field(&order_id, 0x02);
     let note_blinding = fr_safe_opening_field(&order_id, 0x03);
