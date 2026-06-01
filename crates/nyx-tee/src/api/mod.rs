@@ -52,6 +52,8 @@ pub use state::{ApiState, BootAppInfo};
 /// | DELETE | `/orders/{id}` | bearer (4e.2) | PR 4e.3  |
 /// | GET    | `/orders/{id}` | bearer (4e.2) | PR 4e.3  |
 /// | GET    | `/settlement/status/{batch_id}` | bearer | PR 4g.1 |
+/// | POST   | `/auth/token/revoke` | bearer   | Phase 1a |
+/// | POST   | `/admin/accounts` | bearer+admin | Phase 1a |
 ///
 /// `POST /auth/token` is intentionally public (rate-limited at the
 /// reverse-proxy layer in production); everything inside the
@@ -82,7 +84,8 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
 }
 
 /// The bearer-protected sub-router. Mounts the per-order
-/// (Layer B) routes; PR 4f will add `/account/*` here too.
+/// (Layer B) routes + the Phase 1a account-management routes
+/// (`/auth/token/revoke`, admin-gated `/admin/accounts`).
 /// Exposed `pub` so integration tests can mount additional
 /// test-only routes alongside the production ones.
 pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
@@ -100,5 +103,10 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         .route("/orders/:order_id", delete(orders::cancel_order))
         .route("/orders/:order_id", get(orders::get_order))
         .route("/settlement/status/:batch_id", get(settlement::get_status))
+        // Layer A account management — bearer-protected. `revoke`
+        // denylists the caller's own token; `/admin/accounts` is
+        // further admin-gated inside the handler (see auth.rs).
+        .route("/auth/token/revoke", post(auth::revoke_token_handler))
+        .route("/admin/accounts", post(auth::register_account_handler))
         .route_layer(from_fn_with_state(state, auth::bearer_middleware))
 }

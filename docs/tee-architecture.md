@@ -1127,6 +1127,7 @@ the user themselves holds the keys to link the three.
 |---|---|---|
 | JWT issuance (Layer A) | `crates/nyx-tee/src/api/auth.rs` | PR 4e |
 | Bearer-token middleware (Layer A) | `crates/nyx-tee/src/api/auth.rs` as a `tower::Layer` | PR 4e |
+| Argon2id credential hashing + admin registration + revocation (Layer A) | `crates/nyx-tee/src/api/auth.rs` (`register_account_handler`, `revoke_token_handler`, `ApiCredentials::{from_plaintext,verify_credentials}`) | Phase 1a |
 | Per-order signature verification (Layer B) | `crates/nyx-tee/src/api/orders.rs` POST handler | PR 4e |
 | `cancel_order` signature check (Layer B) | `crates/nyx-tee/src/api/orders.rs` DELETE handler | PR 4e |
 | Canonical body encoding (cross-language) | `crates/darkpool-matcher/src/order_canonical.rs` (shared) + parity test against TS in `packages/sdk/tests/order-canonical-parity.test.ts` | PR 4e |
@@ -1135,6 +1136,40 @@ The wire shapes are pinned by `docs/tee-api-openapi.yaml` (the
 `PlaceOrderRequest`, `CancelOrderRequest`, and `TokenResponse`
 schemas). Any change to either Layer A or Layer B is a wire-contract
 change and lands in lockstep with an SDK update.
+
+### 11.6 Account credential lifecycle (Phase 1a)
+
+API accounts (the Layer-A `(api_key, api_secret, passphrase)` triple)
+are **permissioned**, not open-registration — a dark pool shouldn't let
+anyone mint operational credentials.
+
+- **Storage.** Credentials are never stored in plaintext. Both the
+  `api_secret` and `passphrase` are kept as independent **argon2id**
+  PHC strings (random salt + params embedded). `POST /auth/token`
+  verifies via argon2's own constant-time check.
+- **Bootstrap admin.** *Something* has to create the first account, so
+  the TEE seeds one **admin** account from the `NYX_TEE_API_KEY` /
+  `NYX_TEE_API_SECRET` / `NYX_TEE_PASSPHRASE` env at boot
+  (`AccountRegistry::from_env_bootstrap`). The env plaintext is hashed
+  and dropped. If those vars are unset, the registry is empty and auth
+  rejects everything.
+- **Registration.** `POST /admin/accounts` (admin-gated) registers
+  further accounts. The admin check is **authoritative against the live
+  registry**, not trusted from a JWT claim, so an admin demotion takes
+  effect immediately rather than waiting for outstanding tokens to
+  expire. A duplicate `api_key` is rejected (409) — registration never
+  silently overwrites existing credentials.
+- **Revocation.** Each issued JWT carries a random `jti`.
+  `POST /auth/token/revoke` denylists the calling token's `jti`; the
+  bearer middleware rejects any denylisted token even while its
+  signature + `exp` are still valid.
+- **Phase 1a is in-memory.** The registry + the revocation denylist
+  live in process memory and are lost on restart. This is sound because
+  (a) the admin re-seeds from env on every boot and (b) every token
+  also carries a hard `exp` (default 1h), so a revoked token can
+  outlive a restart by at most its remaining TTL. **Phase 1b** replaces
+  the env seed + in-memory state with dstack-encrypted persistence to
+  `/var/lib/nyx-tee/accounts.db` (§8).
 
 ---
 

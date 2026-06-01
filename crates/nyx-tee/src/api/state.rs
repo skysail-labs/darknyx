@@ -88,12 +88,17 @@ pub struct ApiState {
     /// `auth::TEST_JWT_SECRET`. Treat the bytes as opaque — never
     /// log, never expose via any endpoint.
     pub jwt_secret: [u8; 32],
-    /// Account registry consulted by `POST /auth/token` to
-    /// validate `(api_key, api_secret, passphrase)` triples. In
-    /// this PR it's populated only via `for_tests()` (one seeded
-    /// account) and is empty in production until a separate
-    /// admin-registration endpoint lands.
-    pub accounts: Arc<AccountRegistry>,
+    /// Account registry consulted by `POST /auth/token` (read) and
+    /// mutated by the admin-gated `POST /admin/accounts` (write).
+    /// Behind a `RwLock` for that runtime mutation. Production seeds
+    /// the bootstrap admin from `NYX_TEE_API_*` env via
+    /// `AccountRegistry::from_env_bootstrap`; tests seed `test_registry()`.
+    pub accounts: Arc<RwLock<AccountRegistry>>,
+    /// Denylist of revoked JWT `jti`s. `POST /auth/token/revoke`
+    /// inserts; `bearer_middleware` rejects any token whose `jti` is
+    /// present. In-memory only in Phase 1a (lost on restart — sound
+    /// because tokens also carry a hard `exp`); Phase 1b persists it.
+    pub revoked_jtis: Arc<RwLock<std::collections::HashSet<String>>>,
     /// Lifetime of each issued JWT. Configurable per instance;
     /// defaults to [`super::auth::DEFAULT_JWT_TTL_SECONDS`].
     pub jwt_ttl_seconds: u64,
@@ -158,11 +163,12 @@ impl ApiState {
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
             jwt_secret,
-            // BOOTSTRAP: seed one account from NYX_TEE_API_* env if set,
-            // else empty (same as before). Dev/bench stopgap until the
-            // production account-registration feature lands — see
+            // Seed the bootstrap ADMIN from NYX_TEE_API_* env if set,
+            // else an empty registry. The admin then registers further
+            // accounts via POST /admin/accounts — see
             // api/auth.rs::AccountRegistry::from_env_bootstrap + module doc.
-            accounts: Arc::new(AccountRegistry::from_env_bootstrap()),
+            accounts: Arc::new(RwLock::new(AccountRegistry::from_env_bootstrap())),
+            revoked_jtis: Arc::new(RwLock::new(std::collections::HashSet::new())),
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
             // `from_boot` doesn't construct the matcher — PR 4e.4
             // spawns the `MatcherDriver` and plumbs its state in via
@@ -232,7 +238,8 @@ impl ApiState {
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
             jwt_secret: TEST_JWT_SECRET,
-            accounts: Arc::new(test_registry()),
+            accounts: Arc::new(RwLock::new(test_registry())),
+            revoked_jtis: Arc::new(RwLock::new(std::collections::HashSet::new())),
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
             matcher: Some(Arc::new(RwLock::new(MatcherState::new()))),
             // Tests that exercise expiry need to bump this; the

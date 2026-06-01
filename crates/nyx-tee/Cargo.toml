@@ -71,8 +71,12 @@ http-body-util    = "0.1"
 # ring in favour of RustCrypto primitives — keeps the dep graph
 # aligned with the rest of the crate.
 jsonwebtoken      = { workspace = true }
-# Constant-time credential comparison (api_secret + passphrase).
-subtle            = { workspace = true }
+# ─── Phase 1a — Argon2id credential hashing + admin registration ────
+# Stored credentials are argon2id PHC hashes, not plaintext. `argon2`
+# provides salted hashing + its own constant-time verify (replacing
+# the plaintext `subtle` compare). The JWT `jti` (for revocation) uses
+# `rand` — already a dependency for the Groth16 prover's blinding RNG.
+argon2            = { workspace = true }
 
 # ─── PR 4g.2 — Solana RPC client + fee-payer derivation ─────────────
 # Modular Solana crates (same set programs/vault uses as dev-deps).

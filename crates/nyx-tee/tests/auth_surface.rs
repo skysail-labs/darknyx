@@ -15,6 +15,11 @@
 //!       * tampered token (truncated / wrong signature),
 //!       * expired token,
 //!       * token signed with a different secret.
+//!   - Phase 1a: `POST /auth/token/revoke` denylists a token's `jti`
+//!     so the same token is rejected on the next request.
+//!   - Phase 1a: admin-gated `POST /admin/accounts` registers a new
+//!     argon2id-hashed account (which can then mint its own token),
+//!     rejects a non-admin caller (403) + a duplicate api_key (409).
 //!
 //! Run with: `cargo test -p nyx-tee --test auth_surface`
 
@@ -193,6 +198,9 @@ fn mint_token(sub: &str, secret: &[u8; 32], exp_offset_secs: i64) -> String {
         sub: sub.to_string(),
         iat,
         exp,
+        // Unique per minted token so revoking one in the revocation
+        // tests can't accidentally denylist another.
+        jti: format!("jti-{}", rand::random::<u64>()),
     };
     jsonwebtoken::encode(
         &Header::default(),
@@ -345,4 +353,120 @@ async fn middleware_does_not_leak_secret_in_error_message() {
         !body_str.contains(&hex_secret[..8]),
         "401 body should not include the server secret; got: {body_str}"
     );
+}
+
+// ─────── Phase 1a — revocation + admin registration ─────────────────────────
+
+/// Exchange credentials for a bearer token via `POST /auth/token`.
+/// Asserts 200 + returns the `access_token`.
+async fn get_token(app: &Router, api_key: &str, api_secret: &str, passphrase: &str) -> String {
+    let resp = token_request(
+        app,
+        json!({ "api_key": api_key, "api_secret": api_secret, "passphrase": passphrase }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "token issuance should succeed"
+    );
+    read_json(resp).await["access_token"]
+        .as_str()
+        .expect("access_token present")
+        .to_string()
+}
+
+async fn post_with_bearer(
+    app: &Router,
+    uri: &str,
+    token: &str,
+    body: serde_json::Value,
+) -> Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn revoke_denylists_the_token() {
+    let app = public_app();
+    let token = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+
+    // First revoke succeeds (204) — the bearer is still valid here.
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &token, json!({})).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // The SAME token is now denylisted: any bearer-protected route
+    // (including revoke itself) rejects it with 401.
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &token, json!({})).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_can_register_account_that_then_authenticates() {
+    let app = public_app();
+    // TEST_API_KEY is seeded as an admin by `test_registry()`.
+    let admin = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+
+    let resp = post_with_bearer(
+        &app,
+        "/admin/accounts",
+        &admin,
+        json!({ "api_key": "bob", "api_secret": "bob-secret", "passphrase": "bob-pass" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = read_json(resp).await;
+    assert_eq!(body["api_key"], "bob");
+    assert_eq!(body["is_admin"], false);
+
+    // The freshly-registered account can mint its own token.
+    let bob = get_token(&app, "bob", "bob-secret", "bob-pass").await;
+    assert!(!bob.is_empty());
+
+    // Duplicate registration of the same api_key → 409.
+    let resp = post_with_bearer(
+        &app,
+        "/admin/accounts",
+        &admin,
+        json!({ "api_key": "bob", "api_secret": "other", "passphrase": "other" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn non_admin_cannot_register() {
+    let app = public_app();
+    let admin = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+
+    // Admin mints a NON-admin account.
+    let resp = post_with_bearer(
+        &app,
+        "/admin/accounts",
+        &admin,
+        json!({ "api_key": "carol", "api_secret": "carol-secret", "passphrase": "carol-pass" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Carol authenticates, then tries to register someone — 403.
+    let carol = get_token(&app, "carol", "carol-secret", "carol-pass").await;
+    let resp = post_with_bearer(
+        &app,
+        "/admin/accounts",
+        &carol,
+        json!({ "api_key": "dave", "api_secret": "dave-secret", "passphrase": "dave-pass" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }

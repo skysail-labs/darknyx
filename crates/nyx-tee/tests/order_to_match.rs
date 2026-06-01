@@ -60,6 +60,7 @@ fn fresh_bearer() -> String {
         sub: TEST_API_KEY.to_string(),
         iat: now,
         exp: now + 60,
+        jti: "test-jti".to_string(),
     };
     encode(
         &Header::default(),

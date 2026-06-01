@@ -16,19 +16,31 @@
 //!   extensions on success; downstream handlers read it via
 //!   `axum::Extension<Authorized>`.
 //!
-//! Credential storage (this PR) is plaintext in-memory in
-//! [`AccountRegistry`]. That's fine while the registry is populated
-//! only from `ApiState::for_tests()` (single test account) and the
-//! production binary boots with an empty registry. A future PR will
-//! add (a) an admin endpoint to register accounts, (b) Argon2-based
-//! credential hashing, and (c) dstack-encrypted persistence to
-//! `/var/lib/nyx-tee/accounts.db`. The `verify_credentials` method
-//! already uses constant-time comparison so the hashing migration
-//! won't change call-sites.
+//! Credential storage (Phase 1a) is **argon2id PHC hashes** held
+//! in-memory in [`AccountRegistry`] — never plaintext. The registry
+//! is mutated at runtime by the admin-gated `POST /admin/accounts`
+//! registration endpoint ([`register_account_handler`]); the first
+//! admin is seeded from the `NYX_TEE_API_*` env at boot
+//! ([`AccountRegistry::from_env_bootstrap`]) since *something* has to
+//! seed the bootstrap admin (chicken-and-egg). Token revocation is an
+//! in-memory `jti` denylist on [`ApiState`]; [`bearer_middleware`]
+//! rejects revoked tokens.
+//!
+//! Still deferred to Phase 1b: dstack-encrypted persistence of the
+//! registry + denylist to `/var/lib/nyx-tee/accounts.db` (today both
+//! are lost on restart — acceptable while tokens are short-lived and
+//! the admin re-seeds from env on every boot). This module is still
+//! Layer A only (operational); the load-bearing custody auth is Layer
+//! B (the per-order trading-key signature), untouched here. See
+//! `docs/tee-architecture.md` §11.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use argon2::password_hash::{
+    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+};
+use argon2::Argon2;
 use axum::{
     body::Body,
     extract::State,
@@ -39,7 +51,6 @@ use axum::{
 };
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 
 use super::state::ApiState;
 
@@ -48,12 +59,15 @@ pub const DEFAULT_JWT_TTL_SECONDS: u64 = 3600;
 
 /// JWT claim shape. `sub` is the `account_id` (which equals
 /// `api_key` for now — they'll diverge if we ever support multiple
-/// API keys per account). `iat` / `exp` are unix-seconds.
+/// API keys per account). `iat` / `exp` are unix-seconds. `jti` is a
+/// random per-token id; `POST /auth/token/revoke` denylists it and
+/// [`bearer_middleware`] rejects any token whose `jti` is denylisted.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
     pub iat: u64,
     pub exp: u64,
+    pub jti: String,
 }
 
 /// Wire request body for `POST /auth/token`. Mirrors
@@ -73,40 +87,113 @@ pub struct TokenResponse {
     pub expires_in: u64,
 }
 
-/// Injected into request extensions by [`bearer_middleware`] on
-/// successful auth. Downstream handlers extract it via
-/// `axum::Extension<Authorized>` to identify the caller.
-#[derive(Clone, Debug)]
-pub struct Authorized {
-    pub account_id: String,
-}
-
-/// One account's credentials. Stored plaintext in this PR (see
-/// module-level doc). Comparison goes through [`Self::verify_credentials`],
-/// which already uses `subtle::ConstantTimeEq` so the future Argon2
-/// migration is a one-spot change.
-#[derive(Clone, Debug)]
-pub struct ApiCredentials {
+/// Wire request body for `POST /admin/accounts`. Admin-gated
+/// registration of a new API account. The provided `(api_secret,
+/// passphrase)` are argon2id-hashed before storage — the plaintext
+/// is never persisted. `is_admin` lets an admin mint another admin
+/// (defaults false via serde when omitted).
+#[derive(Debug, Deserialize)]
+pub struct RegisterAccountRequest {
     pub api_key: String,
     pub api_secret: String,
     pub passphrase: String,
+    #[serde(default)]
+    pub is_admin: bool,
+}
+
+/// Wire response for a successful registration. Echoes back the
+/// `api_key` + role so the caller can confirm what was created.
+/// Never echoes the secret/passphrase.
+#[derive(Debug, Serialize)]
+pub struct RegisterAccountResponse {
+    pub api_key: String,
+    pub is_admin: bool,
+}
+
+/// Injected into request extensions by [`bearer_middleware`] on
+/// successful auth. Downstream handlers extract it via
+/// `axum::Extension<Authorized>` to identify the caller. `jti` is the
+/// token id carried so `POST /auth/token/revoke` can denylist the
+/// exact token that authenticated the request.
+#[derive(Clone, Debug)]
+pub struct Authorized {
+    pub account_id: String,
+    pub jti: String,
+}
+
+/// One account's stored credentials. The `api_secret` and
+/// `passphrase` are kept ONLY as argon2id PHC-string hashes
+/// (salt + params embedded) — never plaintext. `is_admin` gates the
+/// `POST /admin/accounts` registration endpoint.
+#[derive(Clone, Debug)]
+pub struct ApiCredentials {
+    pub api_key: String,
+    pub secret_hash: String,
+    pub passphrase_hash: String,
+    pub is_admin: bool,
 }
 
 impl ApiCredentials {
-    /// Constant-time verification of `(api_secret, passphrase)`.
-    /// `api_key` is NOT compared here — the registry already used
-    /// it as the lookup key, so equality is structurally implied.
+    /// Hash a plaintext `(api_secret, passphrase)` pair into stored
+    /// credentials. Each field gets its own random salt + a fresh
+    /// argon2id PHC string. Returns an error only if argon2 hashing
+    /// fails (effectively never for these short inputs).
+    ///
+    /// This is CPU-bound by design (argon2 is deliberately slow).
+    /// It runs at registration time + once per `from_env_bootstrap`
+    /// / `test_registry` construction — never on the per-order hot
+    /// path — so a synchronous hash is fine.
+    pub fn from_plaintext(
+        api_key: impl Into<String>,
+        api_secret: &str,
+        passphrase: &str,
+        is_admin: bool,
+    ) -> Result<Self, argon2::password_hash::Error> {
+        Ok(Self {
+            api_key: api_key.into(),
+            secret_hash: hash_secret(api_secret)?,
+            passphrase_hash: hash_secret(passphrase)?,
+            is_admin,
+        })
+    }
+
+    /// Constant-time verification of `(api_secret, passphrase)`
+    /// against the stored argon2id hashes. `api_key` is NOT compared
+    /// here — the registry already used it as the lookup key, so
+    /// equality is structurally implied. Argon2's `verify_password`
+    /// is itself constant-time over the hash comparison.
+    ///
+    /// A malformed stored hash (shouldn't happen — we only ever store
+    /// hashes we produced) verifies as `false` rather than panicking.
     pub fn verify_credentials(&self, api_secret: &str, passphrase: &str) -> bool {
-        let a = self.api_secret.as_bytes().ct_eq(api_secret.as_bytes());
-        let b = self.passphrase.as_bytes().ct_eq(passphrase.as_bytes());
-        (a & b).into()
+        verify_secret(&self.secret_hash, api_secret)
+            && verify_secret(&self.passphrase_hash, passphrase)
     }
 }
 
-/// In-memory account registry. Read-only for the API surface;
-/// mutated only at construction time (in this PR, via
-/// `ApiState::for_tests()` or the boot path's `from_boot(...)`
-/// which currently boots with no accounts).
+/// Argon2id-hash a single secret with a fresh random salt, returning
+/// the PHC string (`$argon2id$v=19$m=...,t=...,p=...$salt$hash`).
+fn hash_secret(plaintext: &str) -> Result<String, argon2::password_hash::Error> {
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Argon2::default().hash_password(plaintext.as_bytes(), &salt)?;
+    Ok(hash.to_string())
+}
+
+/// Verify a plaintext secret against a stored argon2id PHC string.
+/// Returns `false` on any parse/verify failure (never panics).
+fn verify_secret(stored_phc: &str, plaintext: &str) -> bool {
+    match PasswordHash::new(stored_phc) {
+        Ok(parsed) => Argon2::default()
+            .verify_password(plaintext.as_bytes(), &parsed)
+            .is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// In-memory account registry. Held behind a `RwLock` on
+/// [`ApiState`] so the admin-gated `POST /admin/accounts` endpoint can
+/// insert at runtime ([`Self::register`]) while `POST /auth/token`
+/// takes read locks to look credentials up.
 #[derive(Clone, Debug, Default)]
 pub struct AccountRegistry {
     by_api_key: std::collections::HashMap<String, ApiCredentials>,
@@ -118,30 +205,47 @@ impl AccountRegistry {
     }
 
     /// Builder-style entry insert. Test-helper-ergonomic — used by
-    /// `ApiState::for_tests()` to seed one known account.
+    /// `test_registry()` + `from_env_bootstrap()` to seed accounts at
+    /// construction time. Takes already-hashed [`ApiCredentials`].
     #[must_use]
     pub fn with_entry(mut self, creds: ApiCredentials) -> Self {
         self.by_api_key.insert(creds.api_key.clone(), creds);
         self
     }
 
+    /// Runtime registration of a new account. Rejects a duplicate
+    /// `api_key` (returns `false`) so a registration can't silently
+    /// overwrite an existing account's credentials — the admin must
+    /// pick a fresh key. Returns `true` on a successful insert.
+    pub fn register(&mut self, creds: ApiCredentials) -> bool {
+        if self.by_api_key.contains_key(&creds.api_key) {
+            return false;
+        }
+        self.by_api_key.insert(creds.api_key.clone(), creds);
+        true
+    }
+
     pub fn lookup(&self, api_key: &str) -> Option<&ApiCredentials> {
         self.by_api_key.get(api_key)
     }
 
-    /// BOOTSTRAP (dev / bench only). Seed a single account from the
-    /// `NYX_TEE_API_KEY` / `NYX_TEE_API_SECRET` / `NYX_TEE_PASSPHRASE`
-    /// env vars when all three are set and non-empty; otherwise return
-    /// an empty registry — byte-identical to `new()`, so a deploy that
-    /// doesn't set them behaves exactly as before.
+    /// BOOTSTRAP the admin account from the `NYX_TEE_API_KEY` /
+    /// `NYX_TEE_API_SECRET` / `NYX_TEE_PASSPHRASE` env vars when all
+    /// three are set and non-empty; otherwise return an empty registry
+    /// — byte-identical to `new()`, so a deploy that doesn't set them
+    /// behaves exactly as before (auth rejects everything until an
+    /// admin exists).
     ///
-    /// This is a deliberate STOPGAP so authenticated load / bench runs
-    /// can target a real `from_boot` CVM before the production account
-    /// system exists. It is explicitly NOT that system: one account,
-    /// plaintext from env, no registration / rotation / revocation. The
-    /// real plan (admin registration endpoint + Argon2 hashing +
-    /// dstack-encrypted `accounts.db`) is in this module's top doc.
-    /// TODO(auth): delete once the registration endpoint lands.
+    /// The env-seeded account is the **bootstrap admin** (`is_admin =
+    /// true`): the chicken-and-egg seed that can then register every
+    /// other account via `POST /admin/accounts`. Its credentials are
+    /// argon2id-hashed here exactly as a registered account's would
+    /// be — the env plaintext is hashed and dropped, never stored.
+    ///
+    /// Phase 1b will replace this env seed with dstack-encrypted
+    /// `accounts.db` persistence; until then the admin re-seeds from
+    /// env on every boot (the registry isn't persisted across
+    /// restarts).
     #[must_use]
     pub fn from_env_bootstrap() -> Self {
         match (
@@ -152,21 +256,29 @@ impl AccountRegistry {
             (Ok(api_key), Ok(api_secret), Ok(passphrase))
                 if !api_key.is_empty() && !api_secret.is_empty() && !passphrase.is_empty() =>
             {
-                tracing::warn!(
-                    %api_key,
-                    "BOOTSTRAP auth: seeding ONE account from NYX_TEE_API_* env \
-                     (dev/bench stopgap — NOT the production account system)"
-                );
-                Self::new().with_entry(ApiCredentials {
-                    api_key,
-                    api_secret,
-                    passphrase,
-                })
+                match ApiCredentials::from_plaintext(&api_key, &api_secret, &passphrase, true) {
+                    Ok(creds) => {
+                        tracing::warn!(
+                            %api_key,
+                            "BOOTSTRAP auth: seeding the ADMIN account from NYX_TEE_API_* env \
+                             (argon2id-hashed). Register further accounts via POST /admin/accounts."
+                        );
+                        Self::new().with_entry(creds)
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            %api_key, error = %e,
+                            "BOOTSTRAP auth: argon2 hashing of the admin seed FAILED; \
+                             starting with an empty registry (auth rejects everything)"
+                        );
+                        Self::new()
+                    }
+                }
             }
             _ => {
                 tracing::debug!(
                     "no NYX_TEE_API_* bootstrap creds set; account registry empty \
-                     (auth rejects all credentials until the registration feature lands)"
+                     (auth rejects all credentials until an admin is seeded)"
                 );
                 Self::new()
             }
@@ -183,6 +295,16 @@ fn now_unix_seconds() -> u64 {
         .unwrap_or(0)
 }
 
+/// Generate a random 128-bit token id, hex-encoded. Used as the JWT
+/// `jti` so a specific issued token can be revoked
+/// (`POST /auth/token/revoke`) without invalidating other tokens for
+/// the same account. 128 bits of OS randomness makes collisions
+/// (and guessing) a non-issue.
+fn new_jti() -> String {
+    let bytes: [u8; 16] = rand::random();
+    hex::encode(bytes)
+}
+
 /// `POST /auth/token` handler.
 ///
 /// Returns 401 on:
@@ -196,10 +318,13 @@ pub async fn token_handler(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<TokenRequest>,
 ) -> Result<Json<TokenResponse>, (StatusCode, String)> {
-    let creds = state
-        .accounts
-        .lookup(&req.api_key)
-        .ok_or((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()))?;
+    // Clone the stored creds out of the read lock so the (CPU-bound)
+    // argon2 verify runs without holding the registry lock.
+    let creds = {
+        let registry = state.accounts.read().await;
+        registry.lookup(&req.api_key).cloned()
+    }
+    .ok_or((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()))?;
 
     if !creds.verify_credentials(&req.api_secret, &req.passphrase) {
         return Err((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()));
@@ -211,6 +336,7 @@ pub async fn token_handler(
         sub: creds.api_key.clone(),
         iat,
         exp,
+        jti: new_jti(),
     };
     let token = encode(
         &Header::default(),
@@ -265,11 +391,118 @@ pub async fn bearer_middleware(
     .map_err(|e| (StatusCode::UNAUTHORIZED, format!("invalid token: {e}")))?
     .claims;
 
+    // Revocation check: a `jti` on the denylist (added by
+    // `POST /auth/token/revoke`) is rejected even though the signature
+    // + expiry are still valid.
+    if state.revoked_jtis.read().await.contains(&claims.jti) {
+        return Err((StatusCode::UNAUTHORIZED, "token revoked".to_string()));
+    }
+
     req.extensions_mut().insert(Authorized {
         account_id: claims.sub,
+        jti: claims.jti,
     });
 
     Ok(next.run(req).await)
+}
+
+/// `POST /auth/token/revoke` handler.
+///
+/// Bearer-protected: mounted under [`bearer_middleware`], so the
+/// caller's [`Authorized`] (with the token's `jti`) is already in the
+/// request extensions. Adds that `jti` to the in-memory denylist and
+/// returns `204 No Content`. Idempotent — revoking an already-revoked
+/// `jti` (the token would have been rejected by the middleware before
+/// reaching here, so in practice this only fires once per token) is a
+/// no-op insert.
+///
+/// In-memory only (Phase 1a): the denylist is lost on restart, which
+/// is sound because every issued token also has a hard `exp` (default
+/// 1h) — a revoked token can outlive a restart by at most its
+/// remaining TTL. Phase 1b persists the denylist alongside
+/// `accounts.db`.
+pub async fn revoke_token_handler(
+    State(state): State<Arc<ApiState>>,
+    axum::Extension(authorized): axum::Extension<Authorized>,
+) -> StatusCode {
+    state.revoked_jtis.write().await.insert(authorized.jti);
+    StatusCode::NO_CONTENT
+}
+
+/// `POST /admin/accounts` handler — admin-gated account registration.
+///
+/// Bearer-protected AND admin-gated: the caller's account is looked up
+/// in the registry and must have `is_admin = true`. We re-check the
+/// registry (rather than trusting a JWT claim) so an admin demotion
+/// takes effect immediately, without waiting for outstanding tokens
+/// to expire.
+///
+/// On success registers a fresh argon2id-hashed account and returns
+/// `201 Created`. Returns `403` for a non-admin caller and `409` if
+/// the `api_key` already exists.
+pub async fn register_account_handler(
+    State(state): State<Arc<ApiState>>,
+    axum::Extension(authorized): axum::Extension<Authorized>,
+    Json(req): Json<RegisterAccountRequest>,
+) -> Result<(StatusCode, Json<RegisterAccountResponse>), (StatusCode, String)> {
+    // Authoritative admin check against the live registry.
+    let caller_is_admin = {
+        let registry = state.accounts.read().await;
+        registry
+            .lookup(&authorized.account_id)
+            .map(|c| c.is_admin)
+            .unwrap_or(false)
+    };
+    if !caller_is_admin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "admin privileges required".to_string(),
+        ));
+    }
+
+    if req.api_key.is_empty() || req.api_secret.is_empty() || req.passphrase.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "api_key, api_secret, and passphrase must all be non-empty".to_string(),
+        ));
+    }
+
+    // Hash the new credentials BEFORE taking the write lock (argon2 is
+    // CPU-bound; don't hold the registry lock across it).
+    let creds = ApiCredentials::from_plaintext(
+        &req.api_key,
+        &req.api_secret,
+        &req.passphrase,
+        req.is_admin,
+    )
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("credential hashing failed: {e}"),
+        )
+    })?;
+
+    let inserted = state.accounts.write().await.register(creds);
+    if !inserted {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("api_key '{}' already registered", req.api_key),
+        ));
+    }
+
+    tracing::info!(
+        api_key = %req.api_key,
+        is_admin = req.is_admin,
+        registered_by = %authorized.account_id,
+        "registered new API account"
+    );
+    Ok((
+        StatusCode::CREATED,
+        Json(RegisterAccountResponse {
+            api_key: req.api_key,
+            is_admin: req.is_admin,
+        }),
+    ))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -286,15 +519,16 @@ pub const TEST_API_SECRET: &str = "nyx-test-secret";
 pub const TEST_PASSPHRASE: &str = "nyx-test-passphrase";
 pub const TEST_JWT_SECRET: [u8; 32] = [0x42; 32];
 
-/// Build a registry pre-seeded with `TEST_*` credentials. Used by
-/// `ApiState::for_tests()` and by integration tests that want to
-/// drive `POST /auth/token` with a known-good payload.
+/// Build a registry pre-seeded with `TEST_*` credentials, registered
+/// as an **admin** so integration tests can drive the admin-gated
+/// `POST /admin/accounts` endpoint. Used by `ApiState::for_tests()`
+/// and by integration tests that want to drive `POST /auth/token`
+/// with a known-good payload.
 pub fn test_registry() -> AccountRegistry {
-    AccountRegistry::new().with_entry(ApiCredentials {
-        api_key: TEST_API_KEY.to_string(),
-        api_secret: TEST_API_SECRET.to_string(),
-        passphrase: TEST_PASSPHRASE.to_string(),
-    })
+    AccountRegistry::new().with_entry(
+        ApiCredentials::from_plaintext(TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE, true)
+            .expect("argon2 hashing of test credentials"),
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -306,55 +540,79 @@ pub fn test_registry() -> AccountRegistry {
 mod tests {
     use super::*;
 
+    fn creds(api_key: &str, secret: &str, pass: &str) -> ApiCredentials {
+        ApiCredentials::from_plaintext(api_key, secret, pass, false).expect("hash")
+    }
+
     #[test]
     fn verify_accepts_matching_credentials() {
-        let creds = ApiCredentials {
-            api_key: "k".into(),
-            api_secret: "s".into(),
-            passphrase: "p".into(),
-        };
-        assert!(creds.verify_credentials("s", "p"));
+        assert!(creds("k", "s", "p").verify_credentials("s", "p"));
     }
 
     #[test]
     fn verify_rejects_mismatched_secret() {
-        let creds = ApiCredentials {
-            api_key: "k".into(),
-            api_secret: "s".into(),
-            passphrase: "p".into(),
-        };
-        assert!(!creds.verify_credentials("s2", "p"));
+        assert!(!creds("k", "s", "p").verify_credentials("s2", "p"));
     }
 
     #[test]
     fn verify_rejects_mismatched_passphrase() {
-        let creds = ApiCredentials {
-            api_key: "k".into(),
-            api_secret: "s".into(),
-            passphrase: "p".into(),
-        };
-        assert!(!creds.verify_credentials("s", "p2"));
+        assert!(!creds("k", "s", "p").verify_credentials("s", "p2"));
     }
 
     #[test]
     fn verify_rejects_both_empty() {
-        let creds = ApiCredentials {
-            api_key: "k".into(),
-            api_secret: "s".into(),
-            passphrase: "p".into(),
-        };
-        assert!(!creds.verify_credentials("", ""));
+        assert!(!creds("k", "s", "p").verify_credentials("", ""));
+    }
+
+    #[test]
+    fn stored_creds_are_hashed_not_plaintext() {
+        // The PHC strings must never equal the plaintext, and must be
+        // argon2id. This is the regression guard against accidentally
+        // reverting to plaintext storage.
+        let c = creds("k", "super-secret", "pass-phrase");
+        assert_ne!(c.secret_hash, "super-secret");
+        assert_ne!(c.passphrase_hash, "pass-phrase");
+        assert!(c.secret_hash.starts_with("$argon2id$"));
+        assert!(c.passphrase_hash.starts_with("$argon2id$"));
+        // Same plaintext hashed twice → different PHC strings (random
+        // salt), but both verify.
+        let c2 = creds("k", "super-secret", "pass-phrase");
+        assert_ne!(c.secret_hash, c2.secret_hash);
+        assert!(c2.verify_credentials("super-secret", "pass-phrase"));
     }
 
     #[test]
     fn registry_lookup_by_api_key() {
-        let r = AccountRegistry::new().with_entry(ApiCredentials {
-            api_key: "alpha".into(),
-            api_secret: "x".into(),
-            passphrase: "y".into(),
-        });
+        let r = AccountRegistry::new().with_entry(creds("alpha", "x", "y"));
         assert!(r.lookup("alpha").is_some());
         assert!(r.lookup("beta").is_none());
+    }
+
+    #[test]
+    fn register_rejects_duplicate_api_key() {
+        let mut r = AccountRegistry::new().with_entry(creds("alpha", "x", "y"));
+        // Fresh key → inserts.
+        assert!(r.register(creds("beta", "x", "y")));
+        // Existing key → rejected, original creds untouched.
+        assert!(!r.register(creds("alpha", "different", "creds")));
+        assert!(r.lookup("alpha").unwrap().verify_credentials("x", "y"));
+    }
+
+    #[test]
+    fn bootstrap_admin_flag_is_set() {
+        let admin = ApiCredentials::from_plaintext("a", "s", "p", true).expect("hash");
+        assert!(admin.is_admin);
+        let user = ApiCredentials::from_plaintext("u", "s", "p", false).expect("hash");
+        assert!(!user.is_admin);
+    }
+
+    #[test]
+    fn jti_is_random_and_hex() {
+        let a = new_jti();
+        let b = new_jti();
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 32); // 16 bytes hex
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
@@ -364,6 +622,7 @@ mod tests {
             sub: "user-42".to_string(),
             iat: now_unix_seconds(),
             exp: now_unix_seconds() + 60,
+            jti: new_jti(),
         };
         let token = encode(
             &Header::default(),
@@ -388,6 +647,7 @@ mod tests {
             sub: "x".to_string(),
             iat: now_unix_seconds(),
             exp: now_unix_seconds() + 60,
+            jti: new_jti(),
         };
         let token = encode(
             &Header::default(),

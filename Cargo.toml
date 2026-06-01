@@ -121,6 +121,12 @@ jsonwebtoken = { version = "9", default-features = false }
 # canonical impl; same crate used by ed25519-dalek under the hood.
 subtle = "2.5"
 
+# Argon2id password hashing for API credentials (api_secret +
+# passphrase). RustCrypto's canonical impl; the `password-hash`
+# trait layer gives us salted PHC-string hashing + constant-time
+# verify. Default features pull in `std` + `alloc`; no external C.
+argon2 = "0.5"
+
 # nyx-tee-loadgen — synthetic order traffic generator.
 # CLI parser. v4 is the stable major; derives keep the main.rs CLI
 # definition declarative.
