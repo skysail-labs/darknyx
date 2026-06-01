@@ -534,14 +534,19 @@ Documented in `docs/tee-api-openapi.yaml`. The shape:
 | `GET /transparency` | <50 ms | Reserves + attestation + 24h stats. Unauthenticated. |
 | WS channel `tree` | push, ~10 ms after on-chain confirm | Live leaf-append events. |
 
-**Status (Phase 2a, live):** the `MerkleMirror`
+**Status (Phase 2a + 2b, live):** the `MerkleMirror`
 (`crate::merkle::mirror`) + the `/tree/root` (public),
 `/tree/inclusion` + `/tree/leaves` (bearer) endpoints are implemented,
 with byte-parity to `programs/vault/src/merkle.rs` and inclusion proofs
-ported from the SDK's `MerkleShadow`. The mirror starts **empty** — the
-cold-boot + live **sync** that fills it from on-chain leaf-append events
-(`crate::merkle::sync`) is Phase 2b. `/transparency` + the `tree` WS
-channel are later phases.
+ported from the SDK's `MerkleShadow`. The cold-boot + live **sync**
+(`crate::merkle::sync`) fills the mirror from on-chain leaf-append
+events — `NoteCreated` (deposit, index+value) and `TradeSettled`
+(settle; indices from the event, values from the settle ix's
+`MatchResultPayload`) — applies them in `leaf_index` order, and
+reconciles `mirror.root()` against `VaultConfig.current_root`
+(best-effort; on-chain stays canonical). Spawned at boot in `main.rs`
+against the configured cluster. `/transparency` + the `tree` WS channel
+are later phases. The live RPC sync path validates on devnet.
 
 #### Trustless fallback
 
