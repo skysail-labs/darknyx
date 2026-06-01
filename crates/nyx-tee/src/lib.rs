@@ -24,8 +24,10 @@ pub mod solana_rpc;
 // See the module doc comment for the full story.
 mod probestack;
 
+// Phase 1b — best-effort auth-state persistence (accounts.db).
+pub mod persistence;
+
 // The remaining modules are scaffolds that haven't grown
 // public-facing APIs yet — they'll get re-exports here as the
 // later PRs land.
 // pub mod merkle;
-// pub mod persistence;

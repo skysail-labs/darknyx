@@ -15,6 +15,8 @@
 //! change for the lifetime of the CVM, so we pull them once and
 //! hand them to every `/info` request from memory.
 
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -26,6 +28,7 @@ use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_
 use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::MatcherState;
 use crate::oracle::OracleCache;
+use crate::persistence;
 use crate::settle::SettleSchedulerState;
 use crate::solana_rpc::SolanaRpcClient;
 
@@ -96,9 +99,15 @@ pub struct ApiState {
     pub accounts: Arc<RwLock<AccountRegistry>>,
     /// Denylist of revoked JWT `jti`s. `POST /auth/token/revoke`
     /// inserts; `bearer_middleware` rejects any token whose `jti` is
-    /// present. In-memory only in Phase 1a (lost on restart — sound
-    /// because tokens also carry a hard `exp`); Phase 1b persists it.
-    pub revoked_jtis: Arc<RwLock<std::collections::HashSet<String>>>,
+    /// present. Persisted to `accounts.db` alongside the registry
+    /// (Phase 1b) so revocations survive a restart.
+    pub revoked_jtis: Arc<RwLock<HashSet<String>>>,
+    /// Directory the auth snapshot (`accounts.db`) is read from at boot
+    /// and written to after each registry/denylist mutation. `None`
+    /// disables persistence (tests + any deploy with no mounted
+    /// volume). In production this is the dstack LUKS mount
+    /// (`NYX_TEE_STATE_DIR`, default `/var/lib/nyx-tee`).
+    pub state_dir: Option<PathBuf>,
     /// Lifetime of each issued JWT. Configurable per instance;
     /// defaults to [`super::auth::DEFAULT_JWT_TTL_SECONDS`].
     pub jwt_ttl_seconds: u64,
@@ -146,15 +155,20 @@ pub struct ApiState {
 
 impl ApiState {
     /// Build production state from a successful boot. `jwt_secret`
-    /// is the 32-byte value derived via dstack `get_key`; the
-    /// account registry starts empty — populated by the (future)
-    /// admin-registration endpoint.
+    /// is the 32-byte value derived via dstack `get_key`. The account
+    /// registry + revocation denylist are loaded from the persisted
+    /// `accounts.db` snapshot if present (Phase 1b), then the env
+    /// bootstrap admin is merged in if its key is absent. On first
+    /// boot (no snapshot yet) the seeded state is persisted immediately
+    /// so the admin survives the next restart.
     pub fn from_boot(
         app_info: BootAppInfo,
         signer: &DerivedSigner,
         dstack: Arc<DstackClient>,
         jwt_secret: [u8; 32],
     ) -> Self {
+        let state_dir = persistence::state_dir_from_env();
+        let (registry, revoked) = Self::load_or_seed_auth(state_dir.as_deref());
         Self {
             app_info,
             signer_pubkey_base58: signer.pubkey_base58.clone(),
@@ -163,12 +177,9 @@ impl ApiState {
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
             jwt_secret,
-            // Seed the bootstrap ADMIN from NYX_TEE_API_* env if set,
-            // else an empty registry. The admin then registers further
-            // accounts via POST /admin/accounts — see
-            // api/auth.rs::AccountRegistry::from_env_bootstrap + module doc.
-            accounts: Arc::new(RwLock::new(AccountRegistry::from_env_bootstrap())),
-            revoked_jtis: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            accounts: Arc::new(RwLock::new(registry)),
+            revoked_jtis: Arc::new(RwLock::new(revoked)),
+            state_dir,
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
             // `from_boot` doesn't construct the matcher — PR 4e.4
             // spawns the `MatcherDriver` and plumbs its state in via
@@ -223,6 +234,16 @@ impl ApiState {
         self
     }
 
+    /// Enable auth-state persistence to `dir`. `from_boot` sets this
+    /// from `NYX_TEE_STATE_DIR`; this builder is for tests + any caller
+    /// that wants persistence on a state built via [`Self::for_tests`].
+    /// Only flips the target directory — it does NOT reload from disk
+    /// (use [`Self::load_or_seed_auth`] for that).
+    pub fn with_state_dir(mut self, dir: PathBuf) -> Self {
+        self.state_dir = Some(dir);
+        self
+    }
+
     /// Build degraded state when dstack isn't reachable. Used by
     /// integration tests + by the dev-mode binary that falls back
     /// to serving `/health` + a stub `/info` when no simulator
@@ -239,7 +260,12 @@ impl ApiState {
             nyx_version: env!("CARGO_PKG_VERSION"),
             jwt_secret: TEST_JWT_SECRET,
             accounts: Arc::new(RwLock::new(test_registry())),
-            revoked_jtis: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            revoked_jtis: Arc::new(RwLock::new(HashSet::new())),
+            // Persistence disabled in tests — they assert on in-memory
+            // behaviour and must not touch the host filesystem. Tests
+            // that exercise persistence drive the `persistence` module
+            // (or `persist_auth`) against an explicit tempdir.
+            state_dir: None,
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
             matcher: Some(Arc::new(RwLock::new(MatcherState::new()))),
             // Tests that exercise expiry need to bump this; the
@@ -257,5 +283,137 @@ impl ApiState {
             // `with_solana_rpc(...)`.
             solana_rpc: None,
         }
+    }
+
+    /// Boot-time auth load (Phase 1b). Loads the `accounts.db`
+    /// snapshot from `state_dir` if present, merges in the env
+    /// bootstrap admin if its key is absent, and — when seeding added
+    /// the admin to a previously-absent/empty snapshot — persists the
+    /// result so the admin survives the next restart. Returns the
+    /// `(registry, revoked_jtis)` to install on `ApiState`.
+    ///
+    /// `state_dir == None` (persistence disabled) falls back to the
+    /// pure env bootstrap, identical to the Phase-1a behaviour.
+    fn load_or_seed_auth(
+        state_dir: Option<&std::path::Path>,
+    ) -> (AccountRegistry, HashSet<String>) {
+        let Some(dir) = state_dir else {
+            return (AccountRegistry::from_env_bootstrap(), HashSet::new());
+        };
+
+        let path = persistence::accounts_db_path(dir);
+        let (mut registry, revoked) = match persistence::load_auth_snapshot(&path) {
+            Some(snap) => {
+                tracing::info!(
+                    accounts = snap.accounts.len(),
+                    revoked = snap.revoked_jtis.len(),
+                    path = %path.display(),
+                    "loaded auth snapshot"
+                );
+                (
+                    AccountRegistry::from_snapshot(snap.accounts),
+                    snap.revoked_jtis.into_iter().collect::<HashSet<_>>(),
+                )
+            }
+            None => (AccountRegistry::new(), HashSet::new()),
+        };
+
+        // Merge the env admin (no-op if a persisted account already
+        // owns that api_key). Persist immediately on first-boot seed so
+        // a crash before the first registration doesn't lose the admin.
+        if registry.ensure_admin() {
+            let snapshot = persistence::AuthSnapshot::new(registry.snapshot(), &revoked);
+            if let Err(e) = persistence::save_auth_snapshot(&path, &snapshot) {
+                tracing::warn!(error = %e, path = %path.display(), "first-boot auth persist failed (best-effort)");
+            }
+        }
+
+        (registry, revoked)
+    }
+
+    /// Best-effort snapshot of the current auth state (registry +
+    /// revocation denylist) to `accounts.db`. Called after each
+    /// `register` / `revoke` mutation. A `None` `state_dir` (tests,
+    /// no-volume deploys) is a no-op. A write failure is logged but
+    /// never surfaced to the caller — persistence is a complement to
+    /// the canonical on-chain state, not a hard dependency (§8).
+    pub async fn persist_auth(&self) {
+        let Some(dir) = self.state_dir.as_deref() else {
+            return;
+        };
+        let snapshot = {
+            let accounts = self.accounts.read().await.snapshot();
+            let revoked = self.revoked_jtis.read().await;
+            persistence::AuthSnapshot::new(accounts, &revoked)
+        };
+        let path = persistence::accounts_db_path(dir);
+        // The snapshot is small (a handful of accounts) — a synchronous
+        // write here costs well under a millisecond and keeps the
+        // durability point precisely after the mutation.
+        if let Err(e) = persistence::save_auth_snapshot(&path, &snapshot) {
+            tracing::warn!(error = %e, path = %path.display(), "auth snapshot persist failed (best-effort)");
+        }
+    }
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+    use crate::api::auth::ApiCredentials;
+
+    /// A registration that's persisted is recovered by a subsequent
+    /// boot-load from the same directory — the core Phase-1b
+    /// durability guarantee. Drives `persist_auth` (write) +
+    /// `load_or_seed_auth` (read) end to end.
+    #[tokio::test]
+    async fn register_then_persist_then_reload_recovers_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = ApiState::for_tests().with_state_dir(dir.path().to_path_buf());
+
+        // Register a fresh account + revoke a token, then persist.
+        let bob =
+            ApiCredentials::from_plaintext("bob", "bob-secret", "bob-pass", false).expect("hash");
+        assert!(st.accounts.write().await.register(bob));
+        st.revoked_jtis.write().await.insert("jti-xyz".to_string());
+        st.persist_auth().await;
+
+        // Simulate a restart: load the snapshot from the same dir.
+        let (registry, revoked) = ApiState::load_or_seed_auth(Some(dir.path()));
+
+        let bob = registry.lookup("bob").expect("bob survived restart");
+        assert!(bob.verify_credentials("bob-secret", "bob-pass"));
+        assert!(!bob.is_admin);
+        // The seeded test admin also persisted.
+        assert!(registry.lookup(crate::api::auth::TEST_API_KEY).is_some());
+        // The revocation survived too.
+        assert!(revoked.contains("jti-xyz"));
+    }
+
+    /// No snapshot + persistence disabled ⇒ falls back to the env
+    /// bootstrap (here: empty, since NYX_TEE_API_* is unset in tests),
+    /// never touching the filesystem.
+    #[test]
+    fn no_state_dir_uses_env_bootstrap() {
+        let (registry, revoked) = ApiState::load_or_seed_auth(None);
+        // NYX_TEE_API_* is not set in the test process → empty.
+        assert!(registry.is_empty());
+        assert!(revoked.is_empty());
+    }
+
+    /// A persisted snapshot is authoritative: load_or_seed_auth returns
+    /// exactly its accounts (env-admin merge is a no-op when unset).
+    #[test]
+    fn existing_snapshot_is_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let creds = ApiCredentials::from_plaintext("carol", "s", "p", true).expect("hash");
+        let snap = persistence::AuthSnapshot::new(vec![creds], &HashSet::new());
+        persistence::save_auth_snapshot(&persistence::accounts_db_path(dir.path()), &snap).unwrap();
+
+        let (registry, _) = ApiState::load_or_seed_auth(Some(dir.path()));
+        assert!(registry
+            .lookup("carol")
+            .unwrap()
+            .verify_credentials("s", "p"));
+        assert!(registry.lookup("carol").unwrap().is_admin);
     }
 }

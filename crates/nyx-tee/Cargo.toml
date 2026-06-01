@@ -160,6 +160,8 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 # `SigningKey::generate(...)`. Matches the version ed25519-dalek
 # pulls in, so there's no resolution divergence.
 rand = { workspace = true }
+# Phase 1b — persistence tests write snapshots to a throwaway dir.
+tempfile = "3"
 
 [features]
 default = []

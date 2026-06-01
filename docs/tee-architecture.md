@@ -814,12 +814,21 @@ Persistence strategy (Phase 1):
 
 - LUKS-encrypted disk volume provisioned by dstack-kms at boot. Key
   is deterministic from `app_id` — survives instance migration, lost
-  if the entire compose-hash is retired.
-- Periodic snapshots every 5 s (sync from in-memory state). Use
-  `bincode` for compact encoding. Atomic write-rename pattern.
-- On boot: load latest snapshot; for events since the snapshot
-  timestamp, replay from on-chain history (leaf-append events) +
-  client resubmission for open orders.
+  if the entire compose-hash is retired. Encryption-at-rest is
+  transparent to the app: it just does file I/O to `NYX_TEE_STATE_DIR`
+  (default `/var/lib/nyx-tee`).
+- `bincode` for compact encoding. Atomic write-rename pattern
+  (`*.tmp` → fsync → rename).
+- **Auth state (`accounts.db`) — live (Phase 1b).** The account
+  registry + JWT revocation denylist are low-churn, so they're
+  persisted **write-on-change** (after each register/revoke) rather
+  than on a timer; see `crate::persistence::auth` + §11.6.
+- **Book / Merkle leaves / settle outbox — scaffold.** These are
+  high-churn, so they take the **periodic 5 s snapshot** path
+  (`crate::persistence::snapshot`, not yet wired). On boot: load latest
+  snapshot; for events since the snapshot timestamp, replay from
+  on-chain history (leaf-append events) + client resubmission for open
+  orders.
 
 Persistence is **best-effort + complement, not the source of truth**.
 On-chain state is canonical for note ownership / settled balances.
@@ -1149,10 +1158,13 @@ anyone mint operational credentials.
   verifies via argon2's own constant-time check.
 - **Bootstrap admin.** *Something* has to create the first account, so
   the TEE seeds one **admin** account from the `NYX_TEE_API_KEY` /
-  `NYX_TEE_API_SECRET` / `NYX_TEE_PASSPHRASE` env at boot
-  (`AccountRegistry::from_env_bootstrap`). The env plaintext is hashed
-  and dropped. If those vars are unset, the registry is empty and auth
-  rejects everything.
+  `NYX_TEE_API_SECRET` / `NYX_TEE_PASSPHRASE` env at boot. The env
+  plaintext is hashed and dropped. With persistence on (below), the env
+  admin is *merged* into the loaded snapshot only if its `api_key` is
+  absent — a persisted registry is authoritative, so rotating the env
+  creds after first boot requires the API or a snapshot wipe. If the
+  env vars are unset and no snapshot exists, the registry is empty and
+  auth rejects everything.
 - **Registration.** `POST /admin/accounts` (admin-gated) registers
   further accounts. The admin check is **authoritative against the live
   registry**, not trusted from a JWT claim, so an admin demotion takes
@@ -1163,13 +1175,19 @@ anyone mint operational credentials.
   `POST /auth/token/revoke` denylists the calling token's `jti`; the
   bearer middleware rejects any denylisted token even while its
   signature + `exp` are still valid.
-- **Phase 1a is in-memory.** The registry + the revocation denylist
-  live in process memory and are lost on restart. This is sound because
-  (a) the admin re-seeds from env on every boot and (b) every token
-  also carries a hard `exp` (default 1h), so a revoked token can
-  outlive a restart by at most its remaining TTL. **Phase 1b** replaces
-  the env seed + in-memory state with dstack-encrypted persistence to
-  `/var/lib/nyx-tee/accounts.db` (§8).
+- **Persistence (Phase 1b, live).** The registry + revocation denylist
+  are persisted to `accounts.db` under `NYX_TEE_STATE_DIR` (default
+  `/var/lib/nyx-tee`, the dstack LUKS mount — see §8). It's
+  **write-on-change**: each `register` / `revoke` snapshots the full
+  state via an atomic write-tmp→fsync→rename, so a registration or
+  revocation survives a restart. Boot loads the snapshot, then merges
+  the env admin if absent (first boot seeds + persists immediately).
+  Persistence is **best-effort** (§8): a failed write logs but never
+  fails the request — auth is off-chain, so the worst case on data loss
+  is the admin re-registering. When `NYX_TEE_STATE_DIR` is unset (no
+  mounted volume / tests), persistence is disabled and behaviour falls
+  back to the in-memory Phase-1a path. Only argon2 hashes are written —
+  never plaintext — and the file lives on the encrypted volume.
 
 ---
 

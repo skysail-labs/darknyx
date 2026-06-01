@@ -5128,6 +5128,7 @@ dependencies = [
  "solana-signer 3.0.0",
  "solana-system-interface 3.0.0",
  "solana-transaction",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tower",

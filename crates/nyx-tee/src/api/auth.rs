@@ -26,13 +26,14 @@
 //! in-memory `jti` denylist on [`ApiState`]; [`bearer_middleware`]
 //! rejects revoked tokens.
 //!
-//! Still deferred to Phase 1b: dstack-encrypted persistence of the
-//! registry + denylist to `/var/lib/nyx-tee/accounts.db` (today both
-//! are lost on restart — acceptable while tokens are short-lived and
-//! the admin re-seeds from env on every boot). This module is still
-//! Layer A only (operational); the load-bearing custody auth is Layer
-//! B (the per-order trading-key signature), untouched here. See
-//! `docs/tee-architecture.md` §11.
+//! Phase 1b (live): the registry + denylist are persisted to
+//! `accounts.db` under `NYX_TEE_STATE_DIR` (the dstack LUKS mount) —
+//! write-on-change, best-effort, via [`crate::persistence::auth`].
+//! `ApiState::from_boot` loads the snapshot then merges the env admin;
+//! the register/revoke handlers call `ApiState::persist_auth` after
+//! mutating. This module is still Layer A only (operational); the
+//! load-bearing custody auth is Layer B (the per-order trading-key
+//! signature), untouched here. See `docs/tee-architecture.md` §11.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -125,7 +126,11 @@ pub struct Authorized {
 /// `passphrase` are kept ONLY as argon2id PHC-string hashes
 /// (salt + params embedded) — never plaintext. `is_admin` gates the
 /// `POST /admin/accounts` registration endpoint.
-#[derive(Clone, Debug)]
+///
+/// `Serialize`/`Deserialize` back the Phase-1b `accounts.db` snapshot
+/// ([`crate::persistence`]). Only the argon2 hashes are persisted —
+/// never plaintext — and the file lives on the dstack LUKS volume.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApiCredentials {
     pub api_key: String,
     pub secret_hash: String,
@@ -229,6 +234,34 @@ impl AccountRegistry {
         self.by_api_key.get(api_key)
     }
 
+    /// Number of registered accounts. Used by the boot path to decide
+    /// whether a loaded snapshot was non-empty.
+    pub fn len(&self) -> usize {
+        self.by_api_key.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_api_key.is_empty()
+    }
+
+    /// Snapshot all credentials as a `Vec` for persistence
+    /// ([`crate::persistence`]). Order is unspecified (HashMap
+    /// iteration) — the snapshot is a set, not a sequence.
+    pub fn snapshot(&self) -> Vec<ApiCredentials> {
+        self.by_api_key.values().cloned().collect()
+    }
+
+    /// Rebuild a registry from a persisted snapshot. Later duplicates
+    /// for the same `api_key` overwrite earlier ones (shouldn't happen
+    /// — the map that produced the snapshot was already keyed).
+    pub fn from_snapshot(entries: Vec<ApiCredentials>) -> Self {
+        let mut reg = Self::new();
+        for creds in entries {
+            reg.by_api_key.insert(creds.api_key.clone(), creds);
+        }
+        reg
+    }
+
     /// BOOTSTRAP the admin account from the `NYX_TEE_API_KEY` /
     /// `NYX_TEE_API_SECRET` / `NYX_TEE_PASSPHRASE` env vars when all
     /// three are set and non-empty; otherwise return an empty registry
@@ -242,47 +275,80 @@ impl AccountRegistry {
     /// argon2id-hashed here exactly as a registered account's would
     /// be — the env plaintext is hashed and dropped, never stored.
     ///
-    /// Phase 1b will replace this env seed with dstack-encrypted
-    /// `accounts.db` persistence; until then the admin re-seeds from
-    /// env on every boot (the registry isn't persisted across
-    /// restarts).
+    /// With Phase-1b persistence the env seed is merged into a loaded
+    /// `accounts.db` snapshot (see [`Self::ensure_admin`] +
+    /// `ApiState::from_boot`): the env admin is added only if its
+    /// `api_key` is absent, so a persisted registry is authoritative
+    /// and rotating the env creds after first boot needs the API or a
+    /// file wipe.
     #[must_use]
     pub fn from_env_bootstrap() -> Self {
-        match (
-            std::env::var("NYX_TEE_API_KEY"),
-            std::env::var("NYX_TEE_API_SECRET"),
-            std::env::var("NYX_TEE_PASSPHRASE"),
-        ) {
-            (Ok(api_key), Ok(api_secret), Ok(passphrase))
-                if !api_key.is_empty() && !api_secret.is_empty() && !passphrase.is_empty() =>
-            {
-                match ApiCredentials::from_plaintext(&api_key, &api_secret, &passphrase, true) {
-                    Ok(creds) => {
-                        tracing::warn!(
-                            %api_key,
-                            "BOOTSTRAP auth: seeding the ADMIN account from NYX_TEE_API_* env \
-                             (argon2id-hashed). Register further accounts via POST /admin/accounts."
-                        );
-                        Self::new().with_entry(creds)
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            %api_key, error = %e,
-                            "BOOTSTRAP auth: argon2 hashing of the admin seed FAILED; \
-                             starting with an empty registry (auth rejects everything)"
-                        );
-                        Self::new()
-                    }
-                }
+        match env_admin_credentials() {
+            Some(creds) => {
+                tracing::warn!(
+                    api_key = %creds.api_key,
+                    "BOOTSTRAP auth: seeding the ADMIN account from NYX_TEE_API_* env \
+                     (argon2id-hashed). Register further accounts via POST /admin/accounts."
+                );
+                Self::new().with_entry(creds)
             }
-            _ => {
+            None => {
                 tracing::debug!(
-                    "no NYX_TEE_API_* bootstrap creds set; account registry empty \
-                     (auth rejects all credentials until an admin is seeded)"
+                    "no NYX_TEE_API_* bootstrap creds set; account registry left as-is \
+                     (auth rejects unknown credentials until an admin exists)"
                 );
                 Self::new()
             }
         }
+    }
+
+    /// Ensure the bootstrap admin from the `NYX_TEE_API_*` env exists
+    /// in this (possibly snapshot-loaded) registry. Adds it only if its
+    /// `api_key` is absent — a persisted account with the same key is
+    /// never overwritten. Returns `true` if an account was added (so
+    /// the caller can persist the seeded state on first boot).
+    pub fn ensure_admin(&mut self) -> bool {
+        match env_admin_credentials() {
+            Some(creds) if self.lookup(&creds.api_key).is_none() => {
+                tracing::warn!(
+                    api_key = %creds.api_key,
+                    "BOOTSTRAP auth: admin not in persisted registry — seeding from \
+                     NYX_TEE_API_* env (argon2id-hashed)."
+                );
+                self.register(creds)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Read + argon2-hash the bootstrap admin credentials from the
+/// `NYX_TEE_API_KEY` / `NYX_TEE_API_SECRET` / `NYX_TEE_PASSPHRASE` env
+/// vars. `Some` only when all three are set, non-empty, and hashing
+/// succeeds; `None` otherwise (logged at error level on a hash
+/// failure). The env plaintext is hashed and dropped — never stored.
+fn env_admin_credentials() -> Option<ApiCredentials> {
+    match (
+        std::env::var("NYX_TEE_API_KEY"),
+        std::env::var("NYX_TEE_API_SECRET"),
+        std::env::var("NYX_TEE_PASSPHRASE"),
+    ) {
+        (Ok(api_key), Ok(api_secret), Ok(passphrase))
+            if !api_key.is_empty() && !api_secret.is_empty() && !passphrase.is_empty() =>
+        {
+            match ApiCredentials::from_plaintext(&api_key, &api_secret, &passphrase, true) {
+                Ok(creds) => Some(creds),
+                Err(e) => {
+                    tracing::error!(
+                        %api_key, error = %e,
+                        "BOOTSTRAP auth: argon2 hashing of the admin seed FAILED; \
+                         no admin will be seeded from env"
+                    );
+                    None
+                }
+            }
+        }
+        _ => None,
     }
 }
 
@@ -426,6 +492,9 @@ pub async fn revoke_token_handler(
     axum::Extension(authorized): axum::Extension<Authorized>,
 ) -> StatusCode {
     state.revoked_jtis.write().await.insert(authorized.jti);
+    // Persist the denylist so the revocation survives a restart
+    // (best-effort — see ApiState::persist_auth).
+    state.persist_auth().await;
     StatusCode::NO_CONTENT
 }
 
@@ -489,6 +558,10 @@ pub async fn register_account_handler(
             format!("api_key '{}' already registered", req.api_key),
         ));
     }
+
+    // Persist the new account before returning 201 so a restart
+    // doesn't drop it (best-effort — see ApiState::persist_auth).
+    state.persist_auth().await;
 
     tracing::info!(
         api_key = %req.api_key,
