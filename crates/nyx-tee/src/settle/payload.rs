@@ -27,7 +27,7 @@
 //! Both orderings are reproduced verbatim below from the on-chain
 //! source + the SDK.
 
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use sha2::{Digest, Sha256};
 
 /// Domain tag for the canonical hash. **Do not change** — on-chain
@@ -39,7 +39,11 @@ pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v6";
 /// declaration order — `#[derive(BorshSerialize)]` then produces
 /// byte-identical output to AnchorSerialize + the SDK's
 /// `serializePayload`.
-#[derive(Clone, Debug, BorshSerialize)]
+// `BorshDeserialize` is the exact inverse of `BorshSerialize` — same
+// byte layout, so the §6 byte-equality contract is untouched. It's
+// needed by `crate::merkle::events` to recover settle leaf values from
+// a `tee_forced_settle_batched` instruction's data during sync.
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct MatchResultPayload {
     pub match_id: [u8; 16],
     pub note_a_commitment: [u8; 32],

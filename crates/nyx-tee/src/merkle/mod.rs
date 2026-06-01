@@ -6,7 +6,9 @@
 //! Powers `/tree/*` indexer endpoints (D6). See
 //! `docs/tee-architecture.md` §5.5.
 
+pub mod events;
 pub mod mirror;
 pub mod sync;
 
+pub use events::{extract_appended_leaves, AppendedLeaf};
 pub use mirror::{InclusionProof, MerkleMirror, MirrorError, MERKLE_DEPTH};

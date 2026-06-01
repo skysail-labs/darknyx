@@ -1,0 +1,467 @@
+//! Decode on-chain leaf-append events into `(leaf_index, value)` pairs
+//! for the Merkle mirror sync (Phase 2b).
+//!
+//! The vault appends Merkle leaves in three instructions; only two
+//! actually create leaves, and they expose the data differently:
+//!
+//! - **`deposit`** emits `NoteCreated { leaf_index, commitment, … }` —
+//!   self-describing: the event carries both the index AND the value.
+//! - **`tee_forced_settle_batched`** emits `TradeSettled { …,
+//!   note_c_leaf, note_d_leaf, note_e_leaf, note_f_leaf,
+//!   note_fee_base_leaf, note_fee_quote_leaf, … }` — the event carries
+//!   the leaf INDICES (`u64::MAX` = not inserted) but NOT the values.
+//!   The values live in the instruction's `MatchResultPayload`
+//!   (`note_c_commitment`, …), which we decode from the ix data and
+//!   pair with the event indices by name.
+//! - **`withdraw`** appends nothing (it spends a note via its
+//!   nullifier; no new leaf), so it's not a source here.
+//!
+//! Anchor logs an event as a `Program data: <base64>` line where the
+//! decoded bytes are `discriminator(8) || borsh(fields)`, and the event
+//! discriminator is `sha256("event:<Name>")[..8]`.
+//!
+//! This module is pure decoding — the RPC fetch + ordering + applying
+//! to the mirror lives in [`super::sync`] (the sync task feeds the
+//! `(logs, settle_ix_data)` it pulled from each transaction in here).
+
+use std::sync::LazyLock;
+
+use base64::Engine as _;
+use borsh::BorshDeserialize;
+use sha2::{Digest, Sha256};
+
+use crate::settle::payload::MatchResultPayload;
+use crate::settle::settle_batched::SETTLE_BATCHED_DISCRIMINATOR;
+
+/// `sha256("event:NoteCreated")[..8]`.
+pub static NOTE_CREATED_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
+    let h = Sha256::digest(b"event:NoteCreated");
+    let mut d = [0u8; 8];
+    d.copy_from_slice(&h[..8]);
+    d
+});
+
+/// `sha256("event:TradeSettled")[..8]`.
+pub static TRADE_SETTLED_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
+    let h = Sha256::digest(b"event:TradeSettled");
+    let mut d = [0u8; 8];
+    d.copy_from_slice(&h[..8]);
+    d
+});
+
+/// One leaf appended on-chain: its index + 32-byte value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppendedLeaf {
+    pub leaf_index: u64,
+    pub value: [u8; 32],
+}
+
+/// Borsh-decode mirror of the vault `NoteCreated` event (field order
+/// must match `programs/vault/src/instructions/deposit.rs`).
+#[derive(BorshDeserialize)]
+struct NoteCreatedEvent {
+    leaf_index: u64,
+    commitment: [u8; 32],
+    _token_mint: [u8; 32],
+    _amount: u64,
+    _new_root: [u8; 32],
+}
+
+/// Borsh-decode mirror of the vault `TradeSettled` event (field order
+/// must match `programs/vault/src/instructions/tee_forced_settle.rs`).
+/// We only consume the six leaf-index fields, but the full layout is
+/// required for a correct sequential borsh decode.
+#[derive(BorshDeserialize)]
+struct TradeSettledEvent {
+    _match_id: [u8; 16],
+    _clearing_price: u64,
+    _base_amount: u64,
+    _quote_amount: u64,
+    _buyer_change_amt: u64,
+    _seller_change_amt: u64,
+    _buyer_fee_amt: u64,
+    _seller_fee_amt: u64,
+    note_c_leaf: u64,
+    note_d_leaf: u64,
+    note_e_leaf: u64,
+    note_f_leaf: u64,
+    note_fee_base_leaf: u64,
+    note_fee_quote_leaf: u64,
+    _buyer_relock_active: bool,
+    _seller_relock_active: bool,
+    _new_root: [u8; 32],
+}
+
+/// Sentinel in `TradeSettled` leaf-index fields meaning "no leaf
+/// inserted for this slot" (exact-fill change notes, or the
+/// non-first settlement in a batch for the fee notes).
+const NO_LEAF: u64 = u64::MAX;
+
+/// Decode a `MatchResultPayload` from a `tee_forced_settle_batched`
+/// instruction's data. Returns `None` if the data isn't a settle ix
+/// (wrong/short discriminator) or the payload bytes don't decode.
+///
+/// ix data layout: `disc(8) || Borsh(payload, 480) || match_index(1)
+/// || 4×32 siblings` (see `settle_batched::build_settle_batched_ix`).
+pub fn decode_settle_payload(ix_data: &[u8]) -> Option<MatchResultPayload> {
+    if ix_data.len() < 8 + MatchResultPayload::WIRE_LEN {
+        return None;
+    }
+    if ix_data[..8] != *SETTLE_BATCHED_DISCRIMINATOR {
+        return None;
+    }
+    let payload_bytes = &ix_data[8..8 + MatchResultPayload::WIRE_LEN];
+    MatchResultPayload::try_from_slice(payload_bytes).ok()
+}
+
+/// Extract every leaf appended by one transaction.
+///
+/// `logs` are the transaction's `meta.logMessages`; `settle_ix_data` is
+/// the data of the `tee_forced_settle_batched` instruction in that same
+/// transaction (if any), needed to recover settle leaf values. The
+/// caller sorts the combined results across all transactions by
+/// `leaf_index` before applying to the mirror.
+///
+/// A `TradeSettled` event with no decodable settle payload yields no
+/// settle leaves (logged by the caller) rather than guessing — a
+/// mismatch would corrupt the mirror root.
+pub fn extract_appended_leaves(
+    logs: &[String],
+    settle_ix_data: Option<&[u8]>,
+) -> Vec<AppendedLeaf> {
+    let settle_payload = settle_ix_data.and_then(decode_settle_payload);
+    let mut out = Vec::new();
+
+    for line in logs {
+        let Some(b64) = line.strip_prefix("Program data: ") else {
+            continue;
+        };
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64.trim()) else {
+            continue;
+        };
+        if bytes.len() < 8 {
+            continue;
+        }
+        let disc = &bytes[..8];
+        let body = &bytes[8..];
+
+        if disc == *NOTE_CREATED_DISCRIMINATOR {
+            if let Ok(ev) = NoteCreatedEvent::try_from_slice(body) {
+                out.push(AppendedLeaf {
+                    leaf_index: ev.leaf_index,
+                    value: ev.commitment,
+                });
+            }
+        } else if disc == *TRADE_SETTLED_DISCRIMINATOR {
+            let Ok(ev) = TradeSettledEvent::try_from_slice(body) else {
+                continue;
+            };
+            // Without the payload we can't recover the leaf VALUES, so
+            // emit nothing rather than a wrong leaf.
+            let Some(p) = settle_payload.as_ref() else {
+                continue;
+            };
+            // Pair each inserted leaf index with its commitment by name.
+            for (idx, value) in [
+                (ev.note_c_leaf, p.note_c_commitment),
+                (ev.note_d_leaf, p.note_d_commitment),
+                (ev.note_e_leaf, p.note_e_commitment),
+                (ev.note_f_leaf, p.note_f_commitment),
+                (ev.note_fee_base_leaf, p.note_fee_base_commitment),
+                (ev.note_fee_quote_leaf, p.note_fee_quote_commitment),
+            ] {
+                if idx != NO_LEAF {
+                    out.push(AppendedLeaf {
+                        leaf_index: idx,
+                        value,
+                    });
+                }
+            }
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settle::settle_batched::build_settle_batched_ix;
+    use borsh::BorshSerialize;
+
+    /// Re-encode an event the way Anchor's `emit!` logs it:
+    /// `Program data: base64(discriminator(8) || borsh(fields))`.
+    fn event_log_line(disc: &[u8; 8], body: &[u8]) -> String {
+        let mut bytes = disc.to_vec();
+        bytes.extend_from_slice(body);
+        format!(
+            "Program data: {}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        )
+    }
+
+    fn fr_safe(seed: u8) -> [u8; 32] {
+        let mut b = [seed; 32];
+        b[0] = 0;
+        b
+    }
+
+    // Mirror of the vault NoteCreated for ENCODING in tests (the decode
+    // mirror above intentionally has private/underscored fields).
+    #[derive(BorshSerialize)]
+    struct NoteCreatedWire {
+        leaf_index: u64,
+        commitment: [u8; 32],
+        token_mint: [u8; 32],
+        amount: u64,
+        new_root: [u8; 32],
+    }
+
+    #[derive(BorshSerialize)]
+    struct TradeSettledWire {
+        match_id: [u8; 16],
+        clearing_price: u64,
+        base_amount: u64,
+        quote_amount: u64,
+        buyer_change_amt: u64,
+        seller_change_amt: u64,
+        buyer_fee_amt: u64,
+        seller_fee_amt: u64,
+        note_c_leaf: u64,
+        note_d_leaf: u64,
+        note_e_leaf: u64,
+        note_f_leaf: u64,
+        note_fee_base_leaf: u64,
+        note_fee_quote_leaf: u64,
+        buyer_relock_active: bool,
+        seller_relock_active: bool,
+        new_root: [u8; 32],
+    }
+
+    fn sample_payload() -> MatchResultPayload {
+        MatchResultPayload {
+            match_id: [0x11; 16],
+            note_a_commitment: fr_safe(0xA1),
+            note_b_commitment: fr_safe(0xB1),
+            note_c_commitment: fr_safe(0xC1),
+            note_d_commitment: fr_safe(0xD1),
+            note_e_commitment: fr_safe(0xE1),
+            note_f_commitment: fr_safe(0xF1),
+            nullifier_a: fr_safe(0xEA),
+            nullifier_b: fr_safe(0xEB),
+            order_id_a: [0x01; 16],
+            order_id_b: [0x02; 16],
+            base_amount: 100,
+            quote_amount: 5_000,
+            buyer_change_amt: 1,
+            seller_change_amt: 1,
+            buyer_fee_amt: 0,
+            seller_fee_amt: 0,
+            note_fee_base_commitment: fr_safe(0x1B),
+            note_fee_quote_commitment: fr_safe(0x1C),
+            buyer_relock_order_id: [0; 16],
+            buyer_relock_expiry: 0,
+            seller_relock_order_id: [0; 16],
+            seller_relock_expiry: 0,
+            clearing_price: 50,
+            batch_slot: 7,
+        }
+    }
+
+    #[test]
+    fn discriminators_pin() {
+        // Guard against an accidental rename: these are
+        // sha256("event:<Name>")[..8].
+        assert_eq!(
+            hex::encode(*NOTE_CREATED_DISCRIMINATOR),
+            hex::encode({
+                let h = Sha256::digest(b"event:NoteCreated");
+                let mut d = [0u8; 8];
+                d.copy_from_slice(&h[..8]);
+                d
+            })
+        );
+    }
+
+    #[test]
+    fn decodes_note_created_index_and_value() {
+        let commitment = fr_safe(0x42);
+        let wire = NoteCreatedWire {
+            leaf_index: 7,
+            commitment,
+            token_mint: [0x9e; 32],
+            amount: 1_000,
+            new_root: fr_safe(0x33),
+        };
+        let line = event_log_line(&NOTE_CREATED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
+        let leaves = extract_appended_leaves(&[line], None);
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(leaves[0].leaf_index, 7);
+        assert_eq!(leaves[0].value, commitment);
+    }
+
+    #[test]
+    fn decodes_settle_leaves_from_event_plus_payload() {
+        let payload = sample_payload();
+        // A settle with change notes on both sides + both fee notes,
+        // so all six leaves are present (indices 10..=15).
+        let wire = TradeSettledWire {
+            match_id: payload.match_id,
+            clearing_price: payload.clearing_price,
+            base_amount: payload.base_amount,
+            quote_amount: payload.quote_amount,
+            buyer_change_amt: payload.buyer_change_amt,
+            seller_change_amt: payload.seller_change_amt,
+            buyer_fee_amt: payload.buyer_fee_amt,
+            seller_fee_amt: payload.seller_fee_amt,
+            note_c_leaf: 10,
+            note_d_leaf: 11,
+            note_e_leaf: 12,
+            note_f_leaf: 13,
+            note_fee_base_leaf: 14,
+            note_fee_quote_leaf: 15,
+            buyer_relock_active: false,
+            seller_relock_active: false,
+            new_root: fr_safe(0x55),
+        };
+        let line = event_log_line(&TRADE_SETTLED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
+
+        // Settle ix data the sync task would have pulled from the tx.
+        let ix = build_settle_batched_ix(
+            &solana_address::Address::new_from_array([0x42; 32]),
+            &payload,
+            0,
+            &[[0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32]],
+            &fr_safe(0xAB),
+        );
+
+        let leaves = extract_appended_leaves(&[line], Some(&ix.data));
+        assert_eq!(leaves.len(), 6);
+        // Index ↔ value pairing by name.
+        assert_eq!(
+            leaves[0],
+            AppendedLeaf {
+                leaf_index: 10,
+                value: payload.note_c_commitment
+            }
+        );
+        assert_eq!(
+            leaves[1],
+            AppendedLeaf {
+                leaf_index: 11,
+                value: payload.note_d_commitment
+            }
+        );
+        assert_eq!(
+            leaves[2],
+            AppendedLeaf {
+                leaf_index: 12,
+                value: payload.note_e_commitment
+            }
+        );
+        assert_eq!(
+            leaves[3],
+            AppendedLeaf {
+                leaf_index: 13,
+                value: payload.note_f_commitment
+            }
+        );
+        assert_eq!(
+            leaves[4],
+            AppendedLeaf {
+                leaf_index: 14,
+                value: payload.note_fee_base_commitment
+            }
+        );
+        assert_eq!(
+            leaves[5],
+            AppendedLeaf {
+                leaf_index: 15,
+                value: payload.note_fee_quote_commitment
+            }
+        );
+    }
+
+    #[test]
+    fn settle_skips_absent_leaves() {
+        let payload = sample_payload();
+        // Exact-fill, no change, no fees: only note_c + note_d present.
+        let wire = TradeSettledWire {
+            match_id: payload.match_id,
+            clearing_price: payload.clearing_price,
+            base_amount: payload.base_amount,
+            quote_amount: payload.quote_amount,
+            buyer_change_amt: 0,
+            seller_change_amt: 0,
+            buyer_fee_amt: 0,
+            seller_fee_amt: 0,
+            note_c_leaf: 4,
+            note_d_leaf: 5,
+            note_e_leaf: NO_LEAF,
+            note_f_leaf: NO_LEAF,
+            note_fee_base_leaf: NO_LEAF,
+            note_fee_quote_leaf: NO_LEAF,
+            buyer_relock_active: false,
+            seller_relock_active: false,
+            new_root: fr_safe(0x55),
+        };
+        let line = event_log_line(&TRADE_SETTLED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
+        let ix = build_settle_batched_ix(
+            &solana_address::Address::new_from_array([0x42; 32]),
+            &payload,
+            0,
+            &[[0x01; 32]; 4],
+            &fr_safe(0xAB),
+        );
+        let leaves = extract_appended_leaves(&[line], Some(&ix.data));
+        assert_eq!(leaves.len(), 2);
+        assert_eq!(leaves[0].leaf_index, 4);
+        assert_eq!(leaves[1].leaf_index, 5);
+    }
+
+    #[test]
+    fn trade_settled_without_payload_yields_nothing() {
+        let payload = sample_payload();
+        let wire = TradeSettledWire {
+            match_id: payload.match_id,
+            clearing_price: 1,
+            base_amount: 1,
+            quote_amount: 1,
+            buyer_change_amt: 0,
+            seller_change_amt: 0,
+            buyer_fee_amt: 0,
+            seller_fee_amt: 0,
+            note_c_leaf: 4,
+            note_d_leaf: 5,
+            note_e_leaf: NO_LEAF,
+            note_f_leaf: NO_LEAF,
+            note_fee_base_leaf: NO_LEAF,
+            note_fee_quote_leaf: NO_LEAF,
+            buyer_relock_active: false,
+            seller_relock_active: false,
+            new_root: fr_safe(0x55),
+        };
+        let line = event_log_line(&TRADE_SETTLED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
+        // No settle ix data → can't recover values → no leaves.
+        assert!(extract_appended_leaves(&[line], None).is_empty());
+    }
+
+    #[test]
+    fn ignores_non_event_log_lines() {
+        let logs = vec![
+            "Program log: instruction: Deposit".to_string(),
+            "Program 11111111111111111111111111111111 invoke [1]".to_string(),
+            "Program data: !!!not-base64!!!".to_string(),
+        ];
+        assert!(extract_appended_leaves(&logs, None).is_empty());
+    }
+
+    #[test]
+    fn decode_settle_payload_rejects_wrong_discriminator() {
+        let mut data = vec![0u8; 8 + MatchResultPayload::WIRE_LEN];
+        data[..8].copy_from_slice(b"badbaddd");
+        assert!(decode_settle_payload(&data).is_none());
+        // Too short.
+        assert!(decode_settle_payload(&[0u8; 4]).is_none());
+    }
+}

@@ -103,6 +103,45 @@ pub struct PrioritizationFee {
     pub prioritization_fee: u64,
 }
 
+/// One entry from `getSignaturesForAddress` (returned newest-first).
+#[derive(Debug, Clone)]
+pub struct RpcSignatureInfo {
+    pub signature: String,
+    pub slot: u64,
+    /// `Some` if the transaction reverted on-chain — its leaves never
+    /// landed, so the Merkle sync skips it.
+    pub err: Option<Value>,
+}
+
+/// One compiled instruction from a fetched transaction (the subset the
+/// Merkle sync needs).
+#[derive(Debug, Clone)]
+pub struct RpcInstruction {
+    /// Program that owns the instruction, resolved from the message's
+    /// static account keys via `programIdIndex`. Empty if the index
+    /// refers to an ALT-loaded address (the sync identifies the settle
+    /// instruction by its data discriminator, not the program id, so
+    /// this is best-effort metadata for logging).
+    pub program_id: String,
+    /// Instruction data, base58-decoded.
+    pub data: Vec<u8>,
+}
+
+/// A fetched transaction (the subset the Merkle sync reads): its slot,
+/// revert status, the Anchor `Program data:` log lines, and the
+/// top-level instructions.
+#[derive(Debug, Clone)]
+pub struct RpcTransaction {
+    pub slot: u64,
+    /// `meta.err` — `Some` if the tx reverted (skip its leaves).
+    pub err: Option<Value>,
+    /// `meta.logMessages` — carries the Anchor event `Program data:`
+    /// lines the leaf decoder parses.
+    pub log_messages: Vec<String>,
+    /// Top-level compiled instructions.
+    pub instructions: Vec<RpcInstruction>,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire envelopes (internal)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -337,6 +376,123 @@ impl SolanaRpcClient {
                 }))
             }
         }
+    }
+
+    /// `getSignaturesForAddress` — transaction signatures touching
+    /// `address`, newest-first, up to `limit` (RPC caps at 1000).
+    /// `before` pages backward: pass the oldest signature from the
+    /// previous page. Used by the Merkle cold-boot sync to walk the
+    /// vault program's history; an empty result means the page is
+    /// exhausted.
+    pub async fn get_signatures_for_address(
+        &self,
+        address: &Address,
+        before: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RpcSignatureInfo>, RpcError> {
+        #[derive(Deserialize)]
+        struct Inner {
+            signature: String,
+            slot: u64,
+            #[serde(default)]
+            err: Option<Value>,
+        }
+        let mut cfg = serde_json::Map::new();
+        cfg.insert("limit".to_string(), serde_json::json!(limit));
+        cfg.insert("commitment".to_string(), serde_json::json!(self.commitment));
+        if let Some(b) = before {
+            cfg.insert("before".to_string(), serde_json::json!(b));
+        }
+        let params = serde_json::json!([address.to_string(), Value::Object(cfg)]);
+        let rows: Vec<Inner> = self.call("getSignaturesForAddress", params).await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| RpcSignatureInfo {
+                signature: r.signature,
+                slot: r.slot,
+                err: r.err,
+            })
+            .collect())
+    }
+
+    /// `getTransaction` (`encoding=json`, `maxSupportedTransactionVersion=0`
+    /// so v0 settle txs decode). Returns `None` when the signature is
+    /// unknown / not yet confirmed at the configured commitment. Only
+    /// the slot, revert status, log messages, and top-level
+    /// instructions are extracted — enough for the Merkle leaf decoder.
+    pub async fn get_transaction(
+        &self,
+        signature: &str,
+    ) -> Result<Option<RpcTransaction>, RpcError> {
+        #[derive(Deserialize)]
+        struct Inner {
+            slot: u64,
+            #[serde(default)]
+            meta: Option<Meta>,
+            transaction: Tx,
+        }
+        #[derive(Deserialize)]
+        struct Meta {
+            #[serde(rename = "logMessages", default)]
+            log_messages: Option<Vec<String>>,
+            #[serde(default)]
+            err: Option<Value>,
+        }
+        #[derive(Deserialize)]
+        struct Tx {
+            message: Msg,
+        }
+        #[derive(Deserialize)]
+        struct Msg {
+            #[serde(rename = "accountKeys", default)]
+            account_keys: Vec<String>,
+            #[serde(default)]
+            instructions: Vec<CompiledIx>,
+        }
+        #[derive(Deserialize)]
+        struct CompiledIx {
+            #[serde(rename = "programIdIndex")]
+            program_id_index: usize,
+            data: String, // base58
+        }
+
+        let params = serde_json::json!([
+            signature,
+            {
+                "encoding": "json",
+                "commitment": self.commitment,
+                "maxSupportedTransactionVersion": 0,
+            }
+        ]);
+        let inner: Option<Inner> = self.call("getTransaction", params).await?;
+        let Some(inner) = inner else {
+            return Ok(None);
+        };
+
+        let (log_messages, err) = match inner.meta {
+            Some(m) => (m.log_messages.unwrap_or_default(), m.err),
+            None => (Vec::new(), None),
+        };
+
+        let keys = &inner.transaction.message.account_keys;
+        let instructions = inner
+            .transaction
+            .message
+            .instructions
+            .into_iter()
+            .map(|ci| RpcInstruction {
+                // Static keys only; ALT-loaded program ids resolve to "".
+                program_id: keys.get(ci.program_id_index).cloned().unwrap_or_default(),
+                data: bs58::decode(&ci.data).into_vec().unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(Some(RpcTransaction {
+            slot: inner.slot,
+            err,
+            log_messages,
+            instructions,
+        }))
     }
 
     /// `simulateTransaction` — pre-flight a signed tx. Used by the
