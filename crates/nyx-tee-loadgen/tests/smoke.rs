@@ -37,7 +37,17 @@ const FEED_ID: &str = "ef0d8b6fdac3e4cba65d8c1be8ea3b6b88c1d4e2c9d4d9b5e1d4a8e9f
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn loadgen_drives_real_tee_and_produces_matches() {
     // ─── 1. Shared runtime (mirrors main.rs's setup) ────────────────
-    let matcher_state = Arc::new(RwLock::new(MatcherState::new()));
+    // Seed the matcher's market with the SAME mints the driver +
+    // loadgen use (dev_match_config: base 0x..b1 / quote 0x..9e). The
+    // order intake recomputes each note's collateral commitment with
+    // `market_mints()` (bid→quote, ask→base), so the loadgen's signed
+    // note_commitment only verifies if MatcherState carries these
+    // mints — `MatcherState::new()` leaves them zeroed, which is what
+    // made every submit 400 before.
+    let match_config = dev_match_config();
+    let matcher_state = Arc::new(RwLock::new(
+        MatcherState::new().with_market(match_config.base_mint, match_config.quote_mint),
+    ));
     let oracle = OracleCache::new();
     let current_slot = Arc::new(AtomicU64::new(1));
     let (matches_tx, mut matches_rx) = mpsc::channel::<RunBatchOutput>(64);
@@ -56,7 +66,7 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         current_slot: current_slot.clone(),
         matches_tx,
         cfg: DriverConfig {
-            match_config: dev_match_config(),
+            match_config: match_config.clone(),
             feed_id: FEED_ID.to_string(),
             // Fast tick for the smoke test so we see multiple
             // matching cycles during the 5-second run window.
