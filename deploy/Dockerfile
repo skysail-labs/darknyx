@@ -160,6 +160,15 @@ COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit.r1cs \
 COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit_js/circuit.wasm \
      /circuits/build/match_batch_n16/circuit_js/circuit.wasm
 
+# Persistent state dir for the Phase-1b auth snapshot (accounts.db).
+# MUST be created + chowned to the runtime user BEFORE `USER nyx`: when
+# the empty `nyx_state` named volume (docker-compose.yaml) first mounts
+# here, Docker initialises it with this mountpoint's ownership. Without
+# the chown the volume is root-owned, the `nyx` process gets EACCES on
+# every write, and persistence silently no-ops (best-effort) — exactly
+# the spot-check regression this fixes. See NYX_TEE_STATE_DIR.
+RUN mkdir -p /var/lib/nyx-tee && chown nyx:nyx /var/lib/nyx-tee
+
 USER nyx
 
 # nyx-tee listens on :8080 internally; dstack-ingress fronts it on
