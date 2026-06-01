@@ -54,6 +54,9 @@ pub use state::{ApiState, BootAppInfo};
 /// | GET    | `/settlement/status/{batch_id}` | bearer | PR 4g.1 |
 /// | POST   | `/auth/token/revoke` | bearer   | Phase 1a |
 /// | POST   | `/admin/accounts` | bearer+admin | Phase 1a |
+/// | GET    | `/tree/root`   | public        | Phase 2a |
+/// | GET    | `/tree/inclusion` | bearer     | Phase 2a |
+/// | GET    | `/tree/leaves` | bearer        | Phase 2a |
 ///
 /// `POST /auth/token` is intentionally public (rate-limited at the
 /// reverse-proxy layer in production); everything inside the
@@ -64,7 +67,10 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         .route("/health", get(health::handler))
         .route("/info", get(info::handler))
         .route("/attestation", get(attestation::handler))
-        .route("/auth/token", post(auth::token_handler));
+        .route("/auth/token", post(auth::token_handler))
+        // Merkle mirror root — public convenience read (clients can
+        // always cross-check VaultConfig.current_root on Solana).
+        .route("/tree/root", get(tree::get_root));
 
     // Debug endpoints — only compiled in when the `debug_endpoints`
     // cargo feature is on. Used by `nyx-tee-loadgen` (PR 4f) for
@@ -106,6 +112,10 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // Layer A account management — bearer-protected. `revoke`
         // denylists the caller's own token; `/admin/accounts` is
         // further admin-gated inside the handler (see auth.rs).
+        // Merkle mirror — bearer-protected reads (inclusion proof +
+        // leaf pagination). Root is public above.
+        .route("/tree/inclusion", get(tree::get_inclusion))
+        .route("/tree/leaves", get(tree::get_leaves))
         .route("/auth/token/revoke", post(auth::revoke_token_handler))
         .route("/admin/accounts", post(auth::register_account_handler))
         .route_layer(from_fn_with_state(state, auth::bearer_middleware))

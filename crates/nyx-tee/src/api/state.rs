@@ -27,6 +27,7 @@ use tokio::sync::RwLock;
 use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_JWT_SECRET};
 use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::MatcherState;
+use crate::merkle::MerkleMirror;
 use crate::oracle::OracleCache;
 use crate::persistence;
 use crate::settle::SettleSchedulerState;
@@ -112,6 +113,15 @@ pub struct ApiState {
     /// defaults to [`super::auth::DEFAULT_JWT_TTL_SECONDS`].
     pub jwt_ttl_seconds: u64,
 
+    // ── Merkle mirror (Phase 2 — indexer surface) ───────────────
+    /// In-memory mirror of the on-chain incremental Merkle tree.
+    /// Backs the `/tree/*` read endpoints (D6, §5.5). Always present
+    /// (pure in-memory, no external dependency) — starts empty and is
+    /// fed by the sync task (Phase 2b). Readers take the read lock for
+    /// a single response; the sync task takes the write lock when
+    /// applying confirmed leaves.
+    pub merkle_mirror: Arc<RwLock<MerkleMirror>>,
+
     // ── Matcher state (PR 4e.3 / 4e.4) ──────────────────────────
     /// Shared order book + match-id counter. `None` in degraded
     /// boot or during early initialisation — the `/orders` handlers
@@ -181,6 +191,8 @@ impl ApiState {
             revoked_jtis: Arc::new(RwLock::new(revoked)),
             state_dir,
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
+            // Empty mirror — the Phase 2b sync task fills it from chain.
+            merkle_mirror: Arc::new(RwLock::new(MerkleMirror::new())),
             // `from_boot` doesn't construct the matcher — PR 4e.4
             // spawns the `MatcherDriver` and plumbs its state in via
             // a separate construction path. Until then the orders
@@ -267,6 +279,7 @@ impl ApiState {
             // (or `persist_auth`) against an explicit tempdir.
             state_dir: None,
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
+            merkle_mirror: Arc::new(RwLock::new(MerkleMirror::new())),
             matcher: Some(Arc::new(RwLock::new(MatcherState::new()))),
             // Tests that exercise expiry need to bump this; the
             // default starting slot is 1 so an order with

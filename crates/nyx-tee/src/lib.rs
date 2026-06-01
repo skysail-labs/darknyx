@@ -13,6 +13,7 @@ pub mod boot;
 pub mod config;
 pub mod keys;
 pub mod matcher;
+pub mod merkle;
 pub mod oracle;
 pub mod prover;
 pub mod settle;
@@ -26,8 +27,3 @@ mod probestack;
 
 // Phase 1b — best-effort auth-state persistence (accounts.db).
 pub mod persistence;
-
-// The remaining modules are scaffolds that haven't grown
-// public-facing APIs yet — they'll get re-exports here as the
-// later PRs land.
-// pub mod merkle;

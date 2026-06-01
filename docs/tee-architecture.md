@@ -534,6 +534,15 @@ Documented in `docs/tee-api-openapi.yaml`. The shape:
 | `GET /transparency` | <50 ms | Reserves + attestation + 24h stats. Unauthenticated. |
 | WS channel `tree` | push, ~10 ms after on-chain confirm | Live leaf-append events. |
 
+**Status (Phase 2a, live):** the `MerkleMirror`
+(`crate::merkle::mirror`) + the `/tree/root` (public),
+`/tree/inclusion` + `/tree/leaves` (bearer) endpoints are implemented,
+with byte-parity to `programs/vault/src/merkle.rs` and inclusion proofs
+ported from the SDK's `MerkleShadow`. The mirror starts **empty** — the
+cold-boot + live **sync** that fills it from on-chain leaf-append events
+(`crate::merkle::sync`) is Phase 2b. `/transparency` + the `tree` WS
+channel are later phases.
+
 #### Trustless fallback
 
 This is the critical property that makes TEE-as-indexer
