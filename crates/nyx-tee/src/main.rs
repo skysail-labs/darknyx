@@ -38,6 +38,7 @@ use darkpool_matcher::config::MatchConfig;
 use darkpool_matcher::match_result::RunBatchOutput;
 use dstack_sdk::dstack_client::DstackClient;
 use nyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
+use nyx_tee::merkle::{MerkleSync, MerkleSyncConfig};
 use nyx_tee::oracle::cache::OracleCache;
 use nyx_tee::oracle::hermes::HermesClient;
 use nyx_tee::oracle::sync::{spawn_oracle_sync, SyncConfig};
@@ -271,8 +272,45 @@ async fn main() -> Result<()> {
         .with_matcher_runtime(matcher_state, current_slot, oracle.clone())
         .with_settle_state(settle_state);
 
+    let api_state = Arc::new(api_state);
+
+    // ─── 7b. Spawn the Merkle mirror sync (Phase 2b) ──────────────────
+    // Cold-boots the mirror from the vault program's history, then
+    // live-polls. Uses its OWN read-only RPC client (independent of the
+    // settle driver's). Best-effort: a failure here only means /tree/*
+    // serves an empty/stale mirror — clients can always read
+    // VaultConfig directly. Gated on a real boot (signer present) since
+    // degraded boot has no real cluster to sync against.
+    if tee_signer_pubkey.is_some() {
+        match SolanaRpcClient::new(&cfg.solana_rpc_url) {
+            Ok(rpc) => {
+                let mirror = api_state.merkle_mirror.clone();
+                let vault_program_id = nyx_tee::settle::vault::vault_program_id();
+                let (vault_config_pda, _) = nyx_tee::settle::vault::vault_config_pda();
+                tokio::spawn(async move {
+                    let mut sync = MerkleSync::new(
+                        rpc,
+                        mirror,
+                        vault_program_id,
+                        vault_config_pda,
+                        MerkleSyncConfig::default(),
+                    );
+                    if let Err(e) = sync.cold_boot().await {
+                        tracing::warn!(error = %e, "merkle cold-boot failed; live loop will recover");
+                    }
+                    sync.run().await;
+                });
+                tracing::info!("merkle mirror sync spawned (cold-boot + live poll)");
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                "merkle sync RPC client construction failed; /tree/* serves an empty mirror"
+            ),
+        }
+    }
+
     // ─── 8. Build router + bind listener + serve ──────────────────────
-    let app = nyx_tee::api::build_router(Arc::new(api_state));
+    let app = nyx_tee::api::build_router(api_state);
     let addr: SocketAddr = cfg
         .http_bind
         .parse()
