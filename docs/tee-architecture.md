@@ -545,8 +545,13 @@ events — `NoteCreated` (deposit, index+value) and `TradeSettled`
 `MatchResultPayload`) — applies them in `leaf_index` order, and
 reconciles `mirror.root()` against `VaultConfig.current_root`
 (best-effort; on-chain stays canonical). Spawned at boot in `main.rs`
-against the configured cluster. `/transparency` + the `tree` WS channel
-are later phases. The live RPC sync path validates on devnet.
+against the configured cluster. `/instruments` (public market metadata)
++ `/transparency` (public proof-of-reserves — the mirror root/count +
+per-mint on-chain `OutstandingMint.outstanding` vs vault SPL balance +
+engine identity + scheduler stats) are live (Phase 2c); `/account` is
+deferred by design (501 — clients compute balances/notes from `/tree/*`
++ their keys, §11.3). The `tree` WS channel is a later phase. The live
+RPC paths validate on devnet.
 
 #### Trustless fallback
 

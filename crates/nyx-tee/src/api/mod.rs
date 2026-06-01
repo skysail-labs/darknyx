@@ -1,15 +1,12 @@
 //! HTTP + WS surface. Wire contract: `docs/tee-api-openapi.yaml`.
 //!
-//! PR 4d landed `health`, `info`, `attestation` (the unauthenticated
-//! introspection surface — enough for operators + the SDK's
-//! `verifyTeeAttestation()` helper). The remaining modules are
-//! still stubs awaiting:
-//!   - PR 4e: `auth` (OAuth2 client_credentials) + `orders` (the
-//!     authenticated POST/DELETE surface)
-//!   - PR 4f: `ws` (multiplexed sessions + channels)
-//!   - PR 4g: `account`, `tree`, `settlement`, `transparency`
-//!     (read endpoints once the matcher + Merkle mirror + settle
-//!     scheduler are wired)
+//! Landed: `health`, `info`, `attestation` (PR 4d); `auth` + `orders`
+//! (PR 4e); `settlement` (PR 4g.1); `auth/token/revoke` + admin
+//! `account` registration (Phase 1a); `tree/*` over the Merkle mirror
+//! (Phase 2a/2b); `instruments` + `transparency` (Phase 2c). `account`
+//! is mounted but deferred-by-design (501 — see `api::account`).
+//! Remaining: `ws` (multiplexed sessions + channels, incl. the live
+//! `tree` channel).
 
 pub mod account;
 pub mod attestation;
@@ -61,6 +58,7 @@ pub use state::{ApiState, BootAppInfo};
 /// | GET    | `/instruments` | public        | Phase 2c |
 /// | GET    | `/instruments/{symbol}` | public | Phase 2c |
 /// | GET    | `/account`     | bearer (501)  | Phase 2c |
+/// | GET    | `/transparency` | public       | Phase 2c |
 ///
 /// `POST /auth/token` is intentionally public (rate-limited at the
 /// reverse-proxy layer in production); everything inside the
@@ -77,7 +75,9 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         .route("/tree/root", get(tree::get_root))
         // Public market metadata.
         .route("/instruments", get(instruments::list_instruments))
-        .route("/instruments/:symbol", get(instruments::get_instrument));
+        .route("/instruments/:symbol", get(instruments::get_instrument))
+        // Public proof-of-reserves + engine identity + stats.
+        .route("/transparency", get(transparency::get_transparency));
 
     // Debug endpoints — only compiled in when the `debug_endpoints`
     // cargo feature is on. Used by `nyx-tee-loadgen` (PR 4f) for

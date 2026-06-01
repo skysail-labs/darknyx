@@ -33,6 +33,15 @@ pub const NULLIFIER_SEED: &[u8] = b"nullifier";
 /// Vault `BatchValidityMarker::SEED` — mirrors `programs/vault/src/state.rs`.
 pub const BATCH_VALIDITY_SEED: &[u8] = b"batch_validity";
 
+/// Vault `OutstandingMint::SEED` — mirrors `programs/vault/src/state.rs`.
+pub const OUTSTANDING_MINT_SEED: &[u8] = b"outstanding_mint";
+
+/// Vault token-account seed — mirrors the `seeds = [b"vault_token",
+/// token_mint]` constraint in `programs/vault/src/instructions/deposit.rs`.
+/// The PDA is an SPL `TokenAccount` (authority = `vault_config`) holding
+/// the vault's balance for one mint.
+pub const VAULT_TOKEN_SEED: &[u8] = b"vault_token";
+
 /// Parse the program id once. Cheap — pure deterministic base58
 /// decode — but no point doing it on every ix build. Callers go
 /// through this fn so the eventual `LazyLock` switch (if it pays
@@ -73,6 +82,20 @@ pub fn nullifier_pda(nullifier: &[u8; 32]) -> (Address, u8) {
 /// so every match in the batch resolves the SAME marker.
 pub fn batch_validity_marker_pda(merkle_root: &[u8; 32]) -> (Address, u8) {
     Address::find_program_address(&[BATCH_VALIDITY_SEED, merkle_root], &vault_program_id())
+}
+
+/// PDA: `outstanding_mint` counter for a mint. Seeds =
+/// `[b"outstanding_mint", mint]`. Holds the live un-spent note total
+/// for the mint (the v2 solvency counter).
+pub fn outstanding_mint_pda(mint: &[u8; 32]) -> (Address, u8) {
+    Address::find_program_address(&[OUTSTANDING_MINT_SEED, mint], &vault_program_id())
+}
+
+/// PDA: the vault's SPL token account for a mint. Seeds =
+/// `[b"vault_token", mint]`. Its `amount` is the actual on-chain
+/// balance backing the mint's outstanding notes.
+pub fn vault_token_account_pda(mint: &[u8; 32]) -> (Address, u8) {
+    Address::find_program_address(&[VAULT_TOKEN_SEED, mint], &vault_program_id())
 }
 
 #[cfg(test)]

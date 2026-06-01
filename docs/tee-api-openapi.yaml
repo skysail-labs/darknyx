@@ -622,15 +622,27 @@ components:
                       solvency invariant). If not, something is
                       wrong on-chain.
         tee:
-          $ref: '#/components/schemas/AttestationQuote'
+          type: object
+          description: |
+            Engine attestation IDENTITY — enough to tie this response to
+            a measured image. The full challenge-response quote is at
+            GET /attestation.
+          required: [app_id, compose_hash, mrtd, signer_pubkey]
+          properties:
+            app_id: { type: string }
+            compose_hash: { type: string }
+            mrtd: { type: string }
+            signer_pubkey: { type: string, description: TEE Ed25519 signer (base58). }
         stats:
           type: object
+          description: |
+            Settle-scheduler counters tracked today. The 24h windows +
+            finality timing (avg_settlement_finality_ms, settles_24h, …)
+            are a later addition once the scheduler records timestamps.
+          required: [batches, jobs]
           properties:
-            avg_settlement_finality_ms: { type: integer }
-            current_batch_id: { type: string }
-            last_settled_batch_id: { type: string }
-            settles_24h: { type: integer }
-            failed_settles_24h: { type: integer }
+            batches: { type: integer, description: Settle batches tracked. }
+            jobs: { type: integer, description: Per-match settle jobs tracked. }
 
     SettlementStatus:
       type: object
