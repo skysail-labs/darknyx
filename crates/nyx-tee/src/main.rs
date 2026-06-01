@@ -152,6 +152,9 @@ async fn main() -> Result<()> {
     let settle_base_mint = match_config.base_mint;
     let settle_quote_mint = match_config.quote_mint;
     let settle_protocol_owner = match_config.protocol_owner_commitment;
+    // Also for the /instruments metadata (captured before the move).
+    let market_tick_size = match_config.tick_size;
+    let market_min_order_size = match_config.min_order_size;
     let matcher_state = Arc::new(RwLock::new(
         MatcherState::new().with_market(match_config.base_mint, match_config.quote_mint),
     ));
@@ -267,10 +270,19 @@ async fn main() -> Result<()> {
         api_state
     };
 
-    // ─── 7. Attach matcher + settle state to ApiState ─────────────────
+    // ─── 7. Attach matcher + settle state + instruments to ApiState ───
+    let instruments = vec![nyx_tee::api::instruments::InstrumentInfo {
+        symbol: "SOL-USDC".to_string(),
+        base_mint: settle_base_mint,
+        quote_mint: settle_quote_mint,
+        tick_size: market_tick_size,
+        min_order_size: market_min_order_size,
+        oracle_feed_id: cfg.feed_ids.first().cloned().unwrap_or_default(),
+    }];
     let api_state = api_state
         .with_matcher_runtime(matcher_state, current_slot, oracle.clone())
-        .with_settle_state(settle_state);
+        .with_settle_state(settle_state)
+        .with_instruments(instruments);
 
     let api_state = Arc::new(api_state);
 

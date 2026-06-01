@@ -18,6 +18,7 @@ pub mod auth;
 pub mod debug;
 pub mod health;
 pub mod info;
+pub mod instruments;
 pub mod orders;
 pub mod settlement;
 pub mod state;
@@ -57,6 +58,9 @@ pub use state::{ApiState, BootAppInfo};
 /// | GET    | `/tree/root`   | public        | Phase 2a |
 /// | GET    | `/tree/inclusion` | bearer     | Phase 2a |
 /// | GET    | `/tree/leaves` | bearer        | Phase 2a |
+/// | GET    | `/instruments` | public        | Phase 2c |
+/// | GET    | `/instruments/{symbol}` | public | Phase 2c |
+/// | GET    | `/account`     | bearer (501)  | Phase 2c |
 ///
 /// `POST /auth/token` is intentionally public (rate-limited at the
 /// reverse-proxy layer in production); everything inside the
@@ -70,7 +74,10 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         .route("/auth/token", post(auth::token_handler))
         // Merkle mirror root — public convenience read (clients can
         // always cross-check VaultConfig.current_root on Solana).
-        .route("/tree/root", get(tree::get_root));
+        .route("/tree/root", get(tree::get_root))
+        // Public market metadata.
+        .route("/instruments", get(instruments::list_instruments))
+        .route("/instruments/:symbol", get(instruments::get_instrument));
 
     // Debug endpoints — only compiled in when the `debug_endpoints`
     // cargo feature is on. Used by `nyx-tee-loadgen` (PR 4f) for
@@ -116,6 +123,10 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // leaf pagination). Root is public above.
         .route("/tree/inclusion", get(tree::get_inclusion))
         .route("/tree/leaves", get(tree::get_leaves))
+        // Account snapshot — bearer, but deferred by design (501): the
+        // TEE can't compute per-account balances/notes without a
+        // spending key it never sees. See api::account.
+        .route("/account", get(account::get_account))
         .route("/auth/token/revoke", post(auth::revoke_token_handler))
         .route("/admin/accounts", post(auth::register_account_handler))
         .route_layer(from_fn_with_state(state, auth::bearer_middleware))

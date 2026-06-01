@@ -1026,14 +1026,22 @@ paths:
   /account:
     get:
       tags: [account]
-      summary: Account snapshot (balances + open orders + spendable notes).
+      summary: Account snapshot (DEFERRED — returns 501).
+      description: |
+        **Not implemented by design.** A faithful account snapshot
+        needs per-account `balances` + `outstanding_notes`, but the TEE
+        cannot compute those without the user's spending key — which it
+        never sees (docs/tee-architecture.md §11.3). Clients derive
+        their balances + spendable notes themselves from the `/tree/*`
+        inclusion proofs + their own keys (the trustless design).
+        Returns `501 Not Implemented` with a pointer.
       security: [{ BearerAuth: [] }]
       responses:
-        '200':
-          description: Account snapshot.
+        '501':
+          description: Deferred — compute client-side from /tree/* + your keys.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Account' }
+              schema: { $ref: '#/components/schemas/Error' }
 
   # ───── tree ────────────────────────────────────────────────────────────────
 

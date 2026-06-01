@@ -25,6 +25,7 @@ use dstack_sdk::dstack_client::DstackClient;
 use tokio::sync::RwLock;
 
 use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_JWT_SECRET};
+use super::instruments::InstrumentInfo;
 use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::MatcherState;
 use crate::merkle::MerkleMirror;
@@ -113,6 +114,12 @@ pub struct ApiState {
     /// defaults to [`super::auth::DEFAULT_JWT_TTL_SECONDS`].
     pub jwt_ttl_seconds: u64,
 
+    /// Tradable instruments served by `GET /instruments` (Phase 2c).
+    /// Static for the CVM's lifetime — captured at boot from the
+    /// market `MatchConfig` + the configured oracle feed. One market
+    /// for now; a multi-market deploy populates more.
+    pub instruments: Vec<InstrumentInfo>,
+
     // ── Merkle mirror (Phase 2 — indexer surface) ───────────────
     /// In-memory mirror of the on-chain incremental Merkle tree.
     /// Backs the `/tree/*` read endpoints (D6, §5.5). Always present
@@ -191,6 +198,9 @@ impl ApiState {
             revoked_jtis: Arc::new(RwLock::new(revoked)),
             state_dir,
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
+            // Populated by main.rs via `with_instruments` from the
+            // market MatchConfig; empty until then.
+            instruments: Vec::new(),
             // Empty mirror — the Phase 2b sync task fills it from chain.
             merkle_mirror: Arc::new(RwLock::new(MerkleMirror::new())),
             // `from_boot` doesn't construct the matcher — PR 4e.4
@@ -256,6 +266,13 @@ impl ApiState {
         self
     }
 
+    /// Set the tradable instruments served by `GET /instruments`.
+    /// Called once by `main.rs` from the market `MatchConfig`.
+    pub fn with_instruments(mut self, instruments: Vec<InstrumentInfo>) -> Self {
+        self.instruments = instruments;
+        self
+    }
+
     /// Build degraded state when dstack isn't reachable. Used by
     /// integration tests + by the dev-mode binary that falls back
     /// to serving `/health` + a stub `/info` when no simulator
@@ -279,6 +296,18 @@ impl ApiState {
             // (or `persist_auth`) against an explicit tempdir.
             state_dir: None,
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
+            // One placeholder instrument so /instruments tests have
+            // something to read. Mints match the orders_surface fixtures
+            // (zeroed market) — not the dev_match_config mints.
+            instruments: vec![InstrumentInfo {
+                symbol: "SOL-USDC".to_string(),
+                base_mint: [0u8; 32],
+                quote_mint: [0u8; 32],
+                tick_size: 1,
+                min_order_size: 0,
+                oracle_feed_id: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+                    .to_string(),
+            }],
             merkle_mirror: Arc::new(RwLock::new(MerkleMirror::new())),
             matcher: Some(Arc::new(RwLock::new(MatcherState::new()))),
             // Tests that exercise expiry need to bump this; the
