@@ -163,7 +163,9 @@ async fn main() -> Result<()> {
     let market_tick_size = match_config.tick_size;
     let market_min_order_size = match_config.min_order_size;
     let matcher_state = Arc::new(RwLock::new(
-        MatcherState::new().with_market(match_config.base_mint, match_config.quote_mint),
+        MatcherState::new()
+            .with_market(match_config.base_mint, match_config.quote_mint)
+            .with_fee_rate_bps(match_config.fee_rate_bps),
     ));
     let oracle = OracleCache::new();
     let current_slot = Arc::new(AtomicU64::new(1));

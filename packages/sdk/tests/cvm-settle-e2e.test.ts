@@ -88,6 +88,14 @@ const PASSPHRASE = process.env.NYX_TEE_PASSPHRASE ?? "nyx-test-passphrase";
 const SYMBOL = "SOL-USDC";
 const SOL_USD_FEED = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
 const SETTLE_TIMEOUT_MS = Number(process.env.NYX_CVM_SETTLE_TIMEOUT_MS ?? "60000");
+// Protocol fee the CVM matcher charges — MUST match the CVM's
+// NYX_TEE_FEE_RATE_BPS (default 30). The matcher's fee model is
+// additive: seller_charge = crossable + seller_fee (base), so the ASK
+// collateral note must cover qty + fee or run_batch rejects the match
+// as conservation-breaking. (The buyer's quote fee is absorbed by the
+// bid's price headroom — bid 1.2×anchor > clearing.) Set to 0 when the
+// CVM runs fee-free.
+const FEE_RATE_BPS = BigInt(process.env.NYX_CVM_FEE_RATE_BPS ?? "30");
 
 function hex(b: Uint8Array): string {
   return Buffer.from(b).toString("hex");
@@ -204,7 +212,9 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const anchor = await fetchOracleAnchor();
       const bidPrice = (anchor * 12n) / 10n;
       const askPrice = (anchor * 8n) / 10n;
-      console.log(`  · BASE_QTY=${BASE_QTY} bid=${bidPrice} ask=${askPrice}`);
+      console.log(
+        `  · BASE_QTY=${BASE_QTY} bid=${bidPrice} ask=${askPrice} feeBps=${FEE_RATE_BPS} sellerBaseFee=${(BASE_QTY * FEE_RATE_BPS) / 10_000n}`,
+      );
 
       // The tree must be empty (fresh reset) so our deposits land at 0,1
       // and the shadow matches on-chain.
@@ -231,8 +241,15 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
 
       const buyerQuoteAta = await getAssociatedTokenAddress(quoteMint, buyer.payer.publicKey);
       const sellerBaseAta = await getAssociatedTokenAddress(baseMint, seller.payer.publicKey);
-      const buyerNoteAmt = BASE_QTY * bidPrice; // bid collateral = amount × price
-      const sellerNoteAmt = BASE_QTY; // ask collateral = amount
+      // Each side locks NOMINAL collateral + its OWN protocol fee, matching
+      // the intake derivation (orders.rs: note_amount = nominal + nominal *
+      // bps / 10_000, floored). Bid nominal = qty × price (quote); ask
+      // nominal = qty (base). With fees off (bps=0) both collapse to the
+      // nominal, unchanged. Floor division must match intake exactly so the
+      // re-derived commitment lines up.
+      const withFee = (nominal: bigint) => nominal + (nominal * FEE_RATE_BPS) / 10_000n;
+      const buyerNoteAmt = withFee(BASE_QTY * bidPrice);
+      const sellerNoteAmt = withFee(BASE_QTY);
 
       await sendAndConfirmTransaction(
         conn,

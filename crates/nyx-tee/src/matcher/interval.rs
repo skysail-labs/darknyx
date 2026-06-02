@@ -66,6 +66,12 @@ pub struct MatcherState {
     /// tests that don't exercise the opening path.
     base_mint: [u8; 32],
     quote_mint: [u8; 32],
+    /// Protocol fee rate (bps) — mirrors the driver's
+    /// `MatchConfig.fee_rate_bps`. Intake uses it to derive the
+    /// *fee-inclusive* collateral each order must lock (nominal +
+    /// own fee) so a filled order can pay its own protocol fee out of
+    /// its own collateral. 0 (default) → fee-free, collateral = nominal.
+    fee_rate_bps: u16,
 }
 
 impl MatcherState {
@@ -80,6 +86,19 @@ impl MatcherState {
         self.base_mint = base_mint;
         self.quote_mint = quote_mint;
         self
+    }
+
+    /// Set the protocol fee rate (bps) intake uses to derive the
+    /// fee-inclusive collateral. Call at startup with the same
+    /// `MatchConfig.fee_rate_bps` the driver matches against.
+    pub fn with_fee_rate_bps(mut self, fee_rate_bps: u16) -> Self {
+        self.fee_rate_bps = fee_rate_bps;
+        self
+    }
+
+    /// Protocol fee rate (bps) for this market.
+    pub fn fee_rate_bps(&self) -> u16 {
+        self.fee_rate_bps
     }
 
     pub fn book(&self) -> &OrderBook {

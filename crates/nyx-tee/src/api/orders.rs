@@ -342,14 +342,32 @@ pub async fn place_order(
             "price_limit must be > 0 for a bid".to_string(),
         ));
     }
-    let note_amount = match side {
-        OrderSide::Bid => req
-            .amount
-            .saturating_mul(req.price_limit)
-            .max(req.amount)
-            .max(1),
-        OrderSide::Ask => req.amount.max(1),
+    // Collateral mints + the protocol fee rate, read together under one
+    // lock. (Done before deriving note_amount so the fee can be folded
+    // into the required collateral.)
+    let (base_mint, quote_mint, fee_rate_bps) = {
+        let st = matcher.read().await;
+        let (b, q) = st.market_mints();
+        (b, q, st.fee_rate_bps())
     };
+
+    // Nominal collateral: a bid locks `amount * price_limit` quote, an
+    // ask locks `amount` base.
+    let nominal = match side {
+        OrderSide::Bid => req.amount.saturating_mul(req.price_limit).max(req.amount),
+        OrderSide::Ask => req.amount,
+    };
+    // ...PLUS the order's own protocol fee. The matcher charges each leg
+    // `charge = trade + fee` (additive); so an order must lock enough to
+    // pay its OWN fee, else run_batch rejects the match as
+    // conservation-breaking. We over-collateralize on the NOMINAL/limit
+    // amount (the worst case — the matcher charges the fee on the lower
+    // clearing-based amount and returns the surplus as a change note).
+    // Floor division matches the matcher's fee math + the client's
+    // deposit, so the re-derived commitment lines up exactly. fee=0 when
+    // fee_rate_bps=0 → collateral == nominal (unchanged dev behaviour).
+    let fee = ((nominal as u128) * (fee_rate_bps as u128) / 10_000u128) as u64;
+    let note_amount = nominal.saturating_add(fee).max(1);
 
     // 4b. Build + verify the input-note opening. The collateral mint
     //     is the quote mint for a bid (quote locked) and the base
@@ -360,10 +378,6 @@ pub async fn place_order(
     //     and enforcing `note_amount == committed amount` (the
     //     conservation invariant the circuit needs). Done outside the
     //     matcher lock so the Poseidon work doesn't block a tick.
-    let (base_mint, quote_mint) = {
-        let st = matcher.read().await;
-        st.market_mints()
-    };
     let token_mint = match side {
         OrderSide::Bid => quote_mint,
         OrderSide::Ask => base_mint,
