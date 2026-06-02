@@ -324,6 +324,35 @@ async fn main() -> Result<()> {
         }
     }
 
+    // ─── 7c. Slot poller — keep current_slot ≈ the real cluster slot ──
+    // The settle driver stamps the BatchValidityMarker expiry as
+    // current_slot + ttl; the on-chain verify_match_batch rejects it
+    // (InvalidMarkerExpiry) unless it's in the future relative to the
+    // real cluster clock. The matcher also reads current_slot for
+    // expiry sweeps. Without this, current_slot stays at its init value
+    // (1) and every settle reverts. Polls the cluster slot every ~2 s
+    // into the SAME Arc the matcher + settle scheduler hold.
+    if tee_signer_pubkey.is_some() {
+        match SolanaRpcClient::new(&cfg.solana_rpc_url) {
+            Ok(rpc) => {
+                let slot = api_state.current_slot.clone();
+                tokio::spawn(async move {
+                    loop {
+                        match rpc.get_latest_blockhash().await {
+                            Ok(bh) => {
+                                slot.store(bh.context_slot, std::sync::atomic::Ordering::Relaxed)
+                            }
+                            Err(e) => tracing::debug!(error = %e, "slot poll failed; will retry"),
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                });
+                tracing::info!("slot poller spawned (current_slot <- cluster)");
+            }
+            Err(e) => tracing::warn!(error = %e, "slot poller RPC construction failed"),
+        }
+    }
+
     // ─── 8. Build router + bind listener + serve ──────────────────────
     let app = nyx_tee::api::build_router(api_state);
     let addr: SocketAddr = cfg

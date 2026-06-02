@@ -87,7 +87,7 @@ const PASSPHRASE = process.env.NYX_TEE_PASSPHRASE ?? "nyx-test-passphrase";
 
 const SYMBOL = "SOL-USDC";
 const SOL_USD_FEED = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
-const SETTLE_TIMEOUT_MS = 180_000;
+const SETTLE_TIMEOUT_MS = Number(process.env.NYX_CVM_SETTLE_TIMEOUT_MS ?? "60000");
 
 function hex(b: Uint8Array): string {
   return Buffer.from(b).toString("hex");
@@ -141,6 +141,12 @@ async function makePersona(name: string, seed0: number): Promise<Persona> {
     r1: BigInt(seed0) + 2n,
     r2: BigInt(seed0) + 3n,
   });
+  // Intake requires the top byte to be exactly 0 (it Poseidon-hashes
+  // this when constructing change notes). A real Poseidon output is
+  // Fr-safe (top byte ≤ 0x30) but not necessarily 0; for an exact-fill
+  // trade (no change notes) it's opaque, so zero the top byte to pass
+  // the stricter intake check — same shape the loadgen/orders fixtures use.
+  userCommitment[0] = 0;
   return { name, payer, trading, masterSeed, spendingKey, ownerBlinding, ownerCommit, userCommitment };
 }
 
@@ -358,7 +364,17 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const s2 = await submit(sellerOrder);
       expect(String(s1).startsWith("2"), `buyer order rejected (${s1})`).toBe(true);
       expect(String(s2).startsWith("2"), `seller order rejected (${s2})`).toBe(true);
-      console.log("  · both orders accepted by the CVM; waiting for match + settle…");
+      console.log(`  · orders accepted (buyer=${buyerOrder.order_id.slice(0, 8)} ask=${askPrice}, seller=${sellerOrder.order_id.slice(0, 8)} bid=${bidPrice})`);
+
+      // Diagnostic: confirm both are in the book (200) vs matched-and-gone
+      // (404), to localise a no-settle to matching vs the settle pipeline.
+      for (const [n, o] of [["buyer", buyerOrder], ["seller", sellerOrder]] as const) {
+        const r = await fetch(`${GATEWAY}/orders/${o.order_id}`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        console.log(`  · GET /orders/${n} -> ${r.status} ${(await r.text()).slice(0, 200)}`);
+      }
+      console.log("  · waiting for match + settle…");
 
       // ── 6. watch on-chain leaf_count grow (settle appended note_c/d) ─
       const deadline = Date.now() + SETTLE_TIMEOUT_MS;
