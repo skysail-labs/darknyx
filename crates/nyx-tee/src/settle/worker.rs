@@ -284,6 +284,22 @@ async fn run_batch_settle_inner(
     confirm_signatures(&ctx.rpc, &[alt_sig], ctx.confirm_timeout).await?;
     let per_batch_alt = alt_account(alt_build.alt_address, alt_addrs);
 
+    // A freshly extended ALT's addresses are NOT loadable until the
+    // slot AFTER the extend lands. Sending Tx D immediately makes the
+    // leader fail to resolve the ALT lookups and silently drop the tx —
+    // it never confirms (the "did not confirm within 60s: [None]"
+    // symptom). Wait until the chain advances past the slot at which we
+    // observed the extend confirmed. Mirrors the SDK settleViaBatched
+    // slot-wait. (We can't reuse `alt_recent_slot` here — the -32
+    // backoff puts it in the past, so it'd be an instant no-op.)
+    let alt_landed_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
+    for _ in 0..30 {
+        if ctx.rpc.get_latest_blockhash().await?.context_slot > alt_landed_slot {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+
     // ── 4. Settle each match (Tx D, v0) ─────────────────────────
     ctx.set_all_stages(batch_id, n, SettleJobStage::Settling)
         .await;
