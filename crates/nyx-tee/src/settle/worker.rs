@@ -262,7 +262,18 @@ async fn run_batch_settle_inner(
     // for the single-match settle path the tests exercise.)
     let bh = ctx.rpc.get_latest_blockhash().await?;
     let alt_addrs = per_batch_alt_addresses(&inputs.matches[0].payload, &merkle_root);
-    let alt_build = build_per_batch_alt_ixs(&tee_pubkey, bh.context_slot, &alt_addrs);
+    // `CreateLookupTable` rejects a `recent_slot` not present in the
+    // SlotHashes sysvar of the bank that processes it. A load-balanced
+    // RPC (Helius) can answer getLatestBlockhash from a replica a few
+    // slots AHEAD of the one that runs preflight simulation, so the
+    // confirmed `context_slot` lands "in the future" for the simulating
+    // bank → "is not a recent slot" / InvalidInstructionData. Back off a
+    // small margin so the slot is already rooted on any replica; 32 is
+    // far within the 512-slot SlotHashes window so it can't age out
+    // before the tx lands.
+    const ALT_RECENT_SLOT_BACKOFF: u64 = 32;
+    let alt_recent_slot = bh.context_slot.saturating_sub(ALT_RECENT_SLOT_BACKOFF);
+    let alt_build = build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
     let alt_sig = submit_ixs_with_blockhash(
         &ctx.rpc,
         &ctx.tee_keypair,
