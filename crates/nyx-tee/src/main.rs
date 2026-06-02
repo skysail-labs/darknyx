@@ -487,6 +487,9 @@ fn build_settle_driver(
         signing_key: Arc::new(signing_key),
         prover: Arc::new(prover),
         static_alt,
+        alt_pool: Arc::new(tokio::sync::Mutex::new(
+            nyx_tee::settle::alt_pool::AltPool::new(),
+        )),
         settle_state,
         confirm_timeout: Duration::from_secs(60),
     };

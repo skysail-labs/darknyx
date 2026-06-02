@@ -48,19 +48,30 @@ pub(crate) async fn spawn_mock_rpc() -> String {
     use axum::{extract::State, routing::post, Json, Router};
     use serde_json::{json, Value};
 
-    async fn handle(State(counter): State<Arc<AtomicU64>>, Json(req): Json<Value>) -> Json<Value> {
+    async fn handle(
+        State(counters): State<Arc<(AtomicU64, AtomicU64)>>,
+        Json(req): Json<Value>,
+    ) -> Json<Value> {
+        let (send_counter, slot_counter) = (&counters.0, &counters.1);
         let id = req.get("id").cloned().unwrap_or(json!(1));
         let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let result = match method {
-            "getLatestBlockhash" => json!({
-                "context": { "slot": 1000 },
-                "value": {
-                    "blockhash": bs58::encode([7u8; 32]).into_string(),
-                    "lastValidBlockHeight": 2000u64,
-                }
-            }),
+            "getLatestBlockhash" => {
+                // Advance the slot every call so the worker's per-batch
+                // ALT-activation wait (poll until the slot moves past the
+                // extend's landing slot) breaks promptly instead of
+                // spinning out its 30 retries.
+                let slot = 1000 + slot_counter.fetch_add(1, Ordering::SeqCst);
+                json!({
+                    "context": { "slot": slot },
+                    "value": {
+                        "blockhash": bs58::encode([7u8; 32]).into_string(),
+                        "lastValidBlockHeight": 2000u64,
+                    }
+                })
+            }
             "sendTransaction" => {
-                let nth = counter.fetch_add(1, Ordering::SeqCst);
+                let nth = send_counter.fetch_add(1, Ordering::SeqCst);
                 let mut sig = [0u8; 64];
                 sig[..8].copy_from_slice(&nth.to_le_bytes());
                 json!(bs58::encode(sig).into_string())
@@ -91,8 +102,8 @@ pub(crate) async fn spawn_mock_rpc() -> String {
         Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
     }
 
-    let counter = Arc::new(AtomicU64::new(0));
-    let app = Router::new().route("/", post(handle)).with_state(counter);
+    let counters = Arc::new((AtomicU64::new(0), AtomicU64::new(0)));
+    let app = Router::new().route("/", post(handle)).with_state(counters);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

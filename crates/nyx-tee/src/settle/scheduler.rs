@@ -584,6 +584,9 @@ mod tests {
             signing_key: Arc::new(SigningKey::from_bytes(&[0x42; 32])),
             prover: Arc::new(FakeProver { n: 2 }),
             static_alt: None,
+            alt_pool: Arc::new(tokio::sync::Mutex::new(
+                crate::settle::alt_pool::AltPool::new(),
+            )),
             settle_state: state.clone(),
             confirm_timeout: Duration::from_secs(5),
         };

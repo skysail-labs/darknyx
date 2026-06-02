@@ -17,7 +17,7 @@
 
 use solana_address::Address;
 use solana_address_lookup_table_interface::instruction::{
-    create_lookup_table, extend_lookup_table,
+    create_lookup_table, deactivate_lookup_table, extend_lookup_table,
 };
 use solana_instruction::Instruction;
 use solana_message::AddressLookupTableAccount;
@@ -67,6 +67,27 @@ pub fn build_per_batch_alt_ixs(
         ixs: vec![create_ix, extend_ix],
         alt_address: to_address(&alt_pk),
     }
+}
+
+/// Build a standalone `extend` ix that appends `addresses` to an
+/// existing ALT (the rolling-pool reuse path — no `create`). The
+/// newly appended addresses are unusable until the slot after this
+/// lands, same as a fresh create.
+pub fn build_extend_alt_ix(
+    authority: &Address,
+    alt: &Address,
+    addresses: &[Address],
+) -> Instruction {
+    let auth_pk = to_pubkey(authority);
+    let new_addresses: Vec<Pubkey> = addresses.iter().map(to_pubkey).collect();
+    extend_lookup_table(to_pubkey(alt), auth_pk, Some(auth_pk), new_addresses)
+}
+
+/// Build a `deactivate` ix for an ALT being rotated out of the pool.
+/// After this lands the ALT enters a ~512-slot cooldown; its rent is
+/// reclaimable (via `close`) only once cooled.
+pub fn build_deactivate_alt_ix(authority: &Address, alt: &Address) -> Instruction {
+    deactivate_lookup_table(to_pubkey(alt), to_pubkey(authority))
 }
 
 /// Construct the `AddressLookupTableAccount` Tx D's v0 message

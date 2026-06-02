@@ -36,7 +36,8 @@ use solana_keypair::Keypair;
 use solana_signer::Signer;
 use tokio::sync::RwLock;
 
-use super::alt::{alt_account, build_per_batch_alt_ixs};
+use super::alt::{build_deactivate_alt_ix, build_extend_alt_ix, build_per_batch_alt_ixs};
+use super::alt_pool::{AltPlan, AltPool};
 use super::close_marker::build_close_marker_ix;
 use super::ed25519::build_ed25519_verify_ix;
 use super::job::{SettleJobId, SettleJobStage};
@@ -93,6 +94,12 @@ pub struct SettleWorkerCtx {
     /// lands — the worker then relies on the per-batch ALT alone
     /// (slightly larger tx, still under cap for small batches).
     pub static_alt: Option<solana_message::AddressLookupTableAccount>,
+    /// Rolling per-batch ALT pool. Reused across batches (extend, not
+    /// create) and rotated near the 256-address cap — see
+    /// [`super::alt_pool`]. Behind a `Mutex` because the pool mutates as
+    /// each batch extends/rotates it; settle batches run serially today,
+    /// so contention is nil.
+    pub alt_pool: Arc<tokio::sync::Mutex<AltPool>>,
     /// Shared scheduler state — the worker updates job stages here.
     pub settle_state: Arc<RwLock<SettleSchedulerState>>,
     /// Per-leg confirmation timeout.
@@ -256,42 +263,85 @@ async fn run_batch_settle_inner(
         }
     }
 
-    // Per-batch ALT: covers note_lock_a/b/e/f + marker for the
-    // FIRST match. (A multi-match batch ALT pool is 4g.7+; here the
-    // ALT addresses are derived from match 0's payload — sufficient
-    // for the single-match settle path the tests exercise.)
-    let bh = ctx.rpc.get_latest_blockhash().await?;
+    // Per-batch ALT via the rolling pool: reuse a long-lived `current`
+    // ALT (extend it with this batch's 5 derivable PDAs) and only create
+    // a fresh one — deactivating the old — when it nears the 256-address
+    // cap. Addresses are derived from match 0's payload (the single-match
+    // settle path; multi-match is the loadgen phase).
     let alt_addrs = per_batch_alt_addresses(&inputs.matches[0].payload, &merkle_root);
-    // `CreateLookupTable` rejects a `recent_slot` not present in the
-    // SlotHashes sysvar of the bank that processes it. A load-balanced
-    // RPC (Helius) can answer getLatestBlockhash from a replica a few
-    // slots AHEAD of the one that runs preflight simulation, so the
-    // confirmed `context_slot` lands "in the future" for the simulating
-    // bank → "is not a recent slot" / InvalidInstructionData. Back off a
-    // small margin so the slot is already rooted on any replica; 32 is
-    // far within the 512-slot SlotHashes window so it can't age out
-    // before the tx lands.
-    const ALT_RECENT_SLOT_BACKOFF: u64 = 32;
-    let alt_recent_slot = bh.context_slot.saturating_sub(ALT_RECENT_SLOT_BACKOFF);
-    let alt_build = build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
-    let alt_sig = submit_ixs_with_blockhash(
-        &ctx.rpc,
-        &ctx.tee_keypair,
-        &alt_build.ixs,
-        Hash::new_from_array(bh.blockhash),
-    )
-    .await?;
-    confirm_signatures(&ctx.rpc, &[alt_sig], ctx.confirm_timeout).await?;
-    let per_batch_alt = alt_account(alt_build.alt_address, alt_addrs);
+    let plan = ctx.alt_pool.lock().await.plan(alt_addrs.len());
+    let bh = ctx.rpc.get_latest_blockhash().await?;
+    match plan {
+        AltPlan::Create { deactivate } => {
+            // Rotation: best-effort deactivate the old, full ALT so its
+            // rent can be reclaimed after the 512-slot cooldown. A failure
+            // here must NOT block the settle — the old ALT just lingers
+            // (a later reclaim sweep can retry).
+            let mut deactivated = None;
+            if let Some(old) = deactivate {
+                let deact_ix = build_deactivate_alt_ix(&tee_pubkey, &old);
+                match submit_ixs_with_blockhash(
+                    &ctx.rpc,
+                    &ctx.tee_keypair,
+                    &[deact_ix],
+                    Hash::new_from_array(bh.blockhash),
+                )
+                .await
+                {
+                    Ok(sig) => {
+                        let _ = confirm_signatures(&ctx.rpc, &[sig], ctx.confirm_timeout).await;
+                        deactivated = Some((old, bh.context_slot));
+                    }
+                    Err(e) => tracing::warn!(error = ?e, alt = %old,
+                        "deactivate rotated-out ALT failed; leaving it for a later reclaim"),
+                }
+            }
+            // `CreateLookupTable` rejects a `recent_slot` not present in
+            // the SlotHashes sysvar of the bank that processes it. A
+            // load-balanced RPC (Helius) can answer getLatestBlockhash
+            // from a replica a few slots AHEAD of the one that runs
+            // preflight simulation, so the confirmed `context_slot` lands
+            // "in the future" for the simulating bank → "is not a recent
+            // slot". Back off 32 (far within the 512-slot window).
+            const ALT_RECENT_SLOT_BACKOFF: u64 = 32;
+            let alt_recent_slot = bh.context_slot.saturating_sub(ALT_RECENT_SLOT_BACKOFF);
+            let alt_build = build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
+            let alt_sig = submit_ixs_with_blockhash(
+                &ctx.rpc,
+                &ctx.tee_keypair,
+                &alt_build.ixs,
+                Hash::new_from_array(bh.blockhash),
+            )
+            .await?;
+            confirm_signatures(&ctx.rpc, &[alt_sig], ctx.confirm_timeout).await?;
+            ctx.alt_pool.lock().await.commit_create(
+                alt_build.alt_address,
+                alt_addrs.clone(),
+                deactivated,
+            );
+        }
+        AltPlan::Extend { alt } => {
+            let extend_ix = build_extend_alt_ix(&tee_pubkey, &alt, &alt_addrs);
+            let ext_sig = submit_ixs_with_blockhash(
+                &ctx.rpc,
+                &ctx.tee_keypair,
+                &[extend_ix],
+                Hash::new_from_array(bh.blockhash),
+            )
+            .await?;
+            confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
+            ctx.alt_pool.lock().await.commit_extend(&alt_addrs);
+        }
+    }
 
-    // A freshly extended ALT's addresses are NOT loadable until the
-    // slot AFTER the extend lands. Sending Tx D immediately makes the
-    // leader fail to resolve the ALT lookups and silently drop the tx —
-    // it never confirms (the "did not confirm within 60s: [None]"
-    // symptom). Wait until the chain advances past the slot at which we
-    // observed the extend confirmed. Mirrors the SDK settleViaBatched
-    // slot-wait. (We can't reuse `alt_recent_slot` here — the -32
-    // backoff puts it in the past, so it'd be an instant no-op.)
+    // A freshly created OR extended ALT's new addresses are NOT loadable
+    // until the slot AFTER the extend lands. Sending Tx D immediately
+    // makes the leader fail to resolve the ALT lookups and silently drop
+    // the tx — it never confirms ("did not confirm within 60s: [None]").
+    // Wait until the chain advances past the slot we observed the extend
+    // confirmed at. Mirrors the SDK settleViaBatched slot-wait. (This is
+    // per-batch and unavoidable: a batch's PDAs are derived from its own
+    // notes, so no pool can pre-load them.)
     let alt_landed_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
     for _ in 0..30 {
         if ctx.rpc.get_latest_blockhash().await?.context_slot > alt_landed_slot {
@@ -299,6 +349,17 @@ async fn run_batch_settle_inner(
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
     }
+    let per_batch_alt = ctx
+        .alt_pool
+        .lock()
+        .await
+        .settle_account()
+        .expect("pool has a current ALT after plan/commit");
+    tracing::info!(
+        alt = %per_batch_alt.key,
+        entries = per_batch_alt.addresses.len(),
+        "per-batch ALT ready (rolling pool)"
+    );
 
     // ── 4. Settle each match (Tx D, v0) ─────────────────────────
     ctx.set_all_stages(batch_id, n, SettleJobStage::Settling)
@@ -584,6 +645,7 @@ mod tests {
             signing_key: Arc::new(SigningKey::from_bytes(&[0x42; 32])),
             prover: Arc::new(FakeProver { n }),
             static_alt: None,
+            alt_pool: Arc::new(tokio::sync::Mutex::new(AltPool::new())),
             settle_state: state,
             confirm_timeout: Duration::from_secs(5),
         }

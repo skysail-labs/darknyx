@@ -35,6 +35,7 @@ pub mod vault;
 // payload; 4g.5c the per-batch ALT (Tx C) + settle_batched (Tx D)
 // builders. 4g.6 wires the close marker (Tx E) + the stage workers.
 pub mod alt;
+pub mod alt_pool;
 pub mod assemble;
 pub mod close_marker;
 pub mod ed25519;
@@ -51,7 +52,11 @@ pub mod worker;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use alt::{alt_account, build_per_batch_alt_ixs, PerBatchAltIxs};
+pub use alt::{
+    alt_account, build_deactivate_alt_ix, build_extend_alt_ix, build_per_batch_alt_ixs,
+    PerBatchAltIxs,
+};
+pub use alt_pool::{AltPlan, AltPool, MAX_ALT_ENTRIES};
 pub use assemble::{
     assemble_batch, assemble_match, AssembleError, BatchAssemblyParams, MatchAssemblyInputs,
 };
