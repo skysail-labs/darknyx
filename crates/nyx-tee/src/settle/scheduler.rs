@@ -284,8 +284,10 @@ impl SettleScheduler {
         };
 
         if let Err(e) = run_batch_settle(&driver.ctx, inputs).await {
-            // run_batch_settle already marked the jobs Failed.
-            tracing::error!(batch_id, error = %e, "settle: batch settle failed");
+            // run_batch_settle already marked the jobs Failed. Debug-format
+            // so the RpcError `data` (preflight sim logs — which program +
+            // log line reverted) is captured, not just code+message.
+            tracing::error!(batch_id, error = ?e, "settle: batch settle failed");
             return;
         }
 
