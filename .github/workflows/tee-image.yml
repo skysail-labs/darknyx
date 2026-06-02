@@ -79,6 +79,8 @@ jobs:
             tag="${{ inputs.tag }}"
           fi
           echo "image=ghcr.io/${owner_lc}/nyx-tee:${tag}" >> "$GITHUB_OUTPUT"
+          # Stable, tag-independent build cache ref (see cache-from/to).
+          echo "cache=ghcr.io/${owner_lc}/nyx-tee:buildcache" >> "$GITHUB_OUTPUT"
           echo "Building -> ghcr.io/${owner_lc}/nyx-tee:${tag}"
 
       # The N=16 settle prover needs circuit.wasm + circuit.r1cs alongside
@@ -126,9 +128,25 @@ jobs:
           provenance: false
           sbom: false
           # Layer cache across runs to keep the heavy Rust dep build
-          # off the critical path on re-runs.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # (the Dockerfile's dummy-source warmup layer) off the critical
+          # path on re-runs.
+          #
+          # MUST be registry-backed, NOT just type=gha: GitHub Actions
+          # cache is isolated per git-ref, so a cache written while
+          # building tag `tee-v3-hardening-N` is unreadable when building
+          # `-N+1` (a new ref) → every new tag was a full from-scratch
+          # rebuild. A registry ref (`:buildcache`) is shared across ALL
+          # tags, so each tag build restores the prior dep layers and only
+          # the changed source recompiles. Keep bumping the *deploy* tag
+          # per iteration (the CVM only re-pulls on a changed compose image
+          # ref); the build cache is decoupled from it here. type=gha is
+          # kept as a same-ref fallback (helps re-runs of the same tag).
+          cache-from: |
+            type=registry,ref=${{ steps.ref.outputs.cache }}
+            type=gha
+          cache-to: |
+            type=registry,ref=${{ steps.ref.outputs.cache }},mode=max
+            type=gha,mode=max
 
       - name: Emit pull command
         run: |
