@@ -105,6 +105,16 @@ pub struct RunConfig {
     /// Override `passphrase`.
     #[arg(long, default_value = "nyx-test-passphrase")]
     pub passphrase: String,
+
+    /// Protocol fee rate (bps) the target CVM is running
+    /// (`NYX_TEE_FEE_RATE_BPS`). The loadgen folds this into each
+    /// order's collateral note (`nominal + nominal * bps / 10_000`) so
+    /// the synthetic note_commitment matches intake's fee-inclusive
+    /// re-derivation; a mismatch → 400 (opening != commitment). MUST
+    /// equal the CVM's rate. Default 30 mirrors the TEE default; set 0
+    /// when targeting a fee-free CVM.
+    #[arg(long, default_value_t = 30)]
+    pub fee_rate_bps: u16,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

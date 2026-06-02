@@ -60,6 +60,7 @@ pub async fn acquire_bearer(
 /// JSON body for `POST /orders`, signed by `trading_key`. The
 /// canonical bytes are reconstructed and signed with `key` so the
 /// TEE's `verify_strict` accepts.
+#[allow(clippy::too_many_arguments)]
 pub fn build_signed_place_body(
     key: &SigningKey,
     side: OrderSide,
@@ -70,6 +71,7 @@ pub fn build_signed_place_body(
     order_id: [u8; 16],
     arrival_nonce: u64,
     symbol: &str,
+    fee_rate_bps: u16,
 ) -> serde_json::Value {
     let user_commitment = synthesised_user_commitment(key);
 
@@ -78,22 +80,28 @@ pub fn build_signed_place_body(
     // intake recomputes `commitment_from_fields(mint, note_amount,
     // owner, nonce, blinding)` and asserts it equals `note_commitment`.
     //
-    // `note_amount` mirrors the intake's derivation (bid → amount ×
-    // price; ask → amount). `token_mint` must equal the TEE's per-side
-    // collateral mint, since intake (orders.rs) recomputes the
-    // commitment with bid → quote_mint, ask → base_mint from its
-    // configured market. Against a real `from_boot` CVM those are
-    // `dev_match_config()`'s placeholder mints (crates/nyx-tee/src/
-    // main.rs): base = 0x01..0xb1, quote = 0x01..0x9e. (All-zero only
-    // matches the simulator's `MatcherState::new()`.) The nullifier /
+    // `note_amount` MUST mirror intake's derivation EXACTLY (orders.rs):
+    // a fee-inclusive collateral `nominal + floor(nominal * fee_rate_bps
+    // / 10_000)`, where nominal = amount × price (bid) or amount (ask).
+    // The fee term is what lets a filled order pay its OWN protocol fee
+    // out of its own collateral; intake re-derives the commitment with
+    // this same amount, so an OLD nominal-only value would fail
+    // `verify_commitment` (400) whenever the CVM runs fee_rate_bps > 0.
+    // `fee_rate_bps` MUST equal the CVM's NYX_TEE_FEE_RATE_BPS. fee=0 →
+    // nominal-only, unchanged. `token_mint` must equal the TEE's per-side
+    // collateral mint (bid → quote, ask → base); against a real
+    // `from_boot` CVM those are `dev_match_config()`'s placeholder mints
+    // (base = 0x01..0xb1, quote = 0x01..0x9e). The nullifier /
     // merkle_root / VALID_INPUT proof are not verified at intake (only
     // stored), so synthetic values are fine.
-    // TODO(loadgen): take these via --base-mint/--quote-mint once the
-    // TEE reads its market from the on-chain MatchingConfig PDA.
-    let note_amount = match side {
-        OrderSide::Bid => amount.saturating_mul(price_limit).max(amount).max(1),
-        OrderSide::Ask => amount.max(1),
+    // TODO(loadgen): take mints via --base-mint/--quote-mint once the TEE
+    // reads its market from the on-chain MatchingConfig PDA.
+    let nominal = match side {
+        OrderSide::Bid => amount.saturating_mul(price_limit).max(amount),
+        OrderSide::Ask => amount,
     };
+    let fee = ((nominal as u128) * (fee_rate_bps as u128) / 10_000u128) as u64;
+    let note_amount = nominal.saturating_add(fee).max(1);
     let token_mint: [u8; 32] = match side {
         OrderSide::Bid => {
             let mut m = [0u8; 32];

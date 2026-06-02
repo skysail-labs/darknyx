@@ -120,6 +120,9 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         api_key: "nyx-test-api-key".to_string(),
         api_secret: "nyx-test-secret".to_string(),
         passphrase: "nyx-test-passphrase".to_string(),
+        // Matches the in-process MatchConfig (fee_rate_bps = 0) so the
+        // synthetic note_amount = nominal (fee-free) lines up with intake.
+        fee_rate_bps: 0,
     };
 
     let outcome = run_load_gen(cfg).await.expect("loadgen run completed");

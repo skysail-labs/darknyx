@@ -109,6 +109,7 @@ pub async fn trader_task(ctx: TraderCtx, mut workload: Box<dyn Workload>, deadli
             order_id,
             arrival_nonce,
             &intent.symbol,
+            ctx.cfg.fee_rate_bps,
         );
         arrival_nonce = arrival_nonce.wrapping_add(1);
 
