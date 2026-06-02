@@ -553,6 +553,7 @@ jobs:
         run: |
           cargo test -p vault \
             --test set_protocol_config \
+            --test set_tee_pubkey \
             --test user_commitment_registration \
             -- --nocapture
 

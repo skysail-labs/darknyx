@@ -225,6 +225,32 @@ export function buildSetProtocolConfigInstruction(
   });
 }
 
+export interface BuildSetTeePubkeyParams {
+  programId: PublicKey;
+  admin: PublicKey;
+  newTeePubkey: PublicKey; // the CVM's dstack-derived Ed25519 signer
+}
+
+/**
+ * Rotate `vault_config.tee_pubkey` to a new attested TEE signer.
+ * Admin-only. Used to point the vault at a freshly-deployed CVM's
+ * dstack-derived signer so its settle txs are accepted.
+ */
+export function buildSetTeePubkeyInstruction(
+  p: BuildSetTeePubkeyParams,
+): TransactionInstruction {
+  const [vaultPda] = vaultConfigPda(p.programId);
+  const data = cat(anchorDiscriminator("set_tee_pubkey"), p.newTeePubkey.toBytes());
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.admin, isSigner: true, isWritable: false },
+      { pubkey: vaultPda, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
 export interface BuildResetMerkleTreeParams {
   programId: PublicKey;
   admin: PublicKey;

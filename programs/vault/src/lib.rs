@@ -30,6 +30,7 @@ pub use instructions::release_lock;
 pub use instructions::reset_merkle_tree;
 pub use instructions::rotate_root_key;
 pub use instructions::set_protocol_config;
+pub use instructions::set_tee_pubkey;
 pub use instructions::tee_forced_settle;
 pub use instructions::tee_forced_settle_batched;
 pub use instructions::verify_match_batch;
@@ -134,6 +135,14 @@ pub mod vault {
             protocol_owner_commitment,
             fee_rate_bps,
         )
+    }
+
+    /// Rotate `vault_config.tee_pubkey` to a new attested TEE signer.
+    /// Admin-only. Needed whenever a fresh CVM boots with a new
+    /// dstack-derived signer. Devnet-simplified — production rotation
+    /// is multisig + attestation-gated (see `set_tee_pubkey.rs`).
+    pub fn set_tee_pubkey(ctx: Context<SetTeePubkey>, new_tee_pubkey: Pubkey) -> Result<()> {
+        set_tee_pubkey::set_tee_pubkey_handler(ctx, new_tee_pubkey)
     }
 
     /// v3.5 — verify a single Groth16 attesting VALID_CREATE +
