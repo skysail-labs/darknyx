@@ -67,6 +67,22 @@ pub struct Config {
     /// worker uses only the per-batch ALT (fine for the smaller test
     /// payloads, NOT for a real settle).
     pub settle_lookup_table: Option<[u8; 32]>,
+    /// Protocol fee rate in basis points. `NYX_TEE_FEE_RATE_BPS`,
+    /// default 30 (0.3%). The matcher charges `amount × bps / 10_000`
+    /// on each leg (seller→base bucket, buyer→quote bucket) and mints a
+    /// fee note per non-empty bucket. 0 disables fees entirely (no fee
+    /// notes). Should mirror the on-chain `VaultConfig.fee_rate_bps`
+    /// (≤ 10_000, enforced by set_protocol_config) so the matcher's
+    /// charge matches what settlement conservation expects.
+    pub fee_rate_bps: u64,
+    /// Owner commitment the protocol fee notes are minted to (32 bytes).
+    /// `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` (hex), default `[0;32]`. Set
+    /// it to the on-chain protocol owner commitment (e2e-config
+    /// `protocol.ownerCommitmentHex`) so the collected fee notes are
+    /// spendable by the protocol via the normal VALID_SPEND path; left
+    /// at zero the fee notes still mint + append but are unclaimable.
+    /// MUST be BN254-Fr-safe (it's a Poseidon-output commitment).
+    pub protocol_owner_commitment: [u8; 32],
 }
 
 /// The placeholder base mint used when `NYX_TEE_BASE_MINT` is unset —
@@ -101,6 +117,34 @@ fn parse_mint_env(var: &str, default: [u8; 32]) -> [u8; 32] {
             }
         },
         _ => default,
+    }
+}
+
+/// Parse a 32-byte value from a hex env var (64 hex chars, optional
+/// `0x` prefix), falling back to `default` when unset/empty/malformed.
+/// Used for commitments (which are raw field elements, not base58
+/// addresses).
+fn parse_hex32_env(var: &str, default: [u8; 32]) -> [u8; 32] {
+    let Ok(s) = std::env::var(var) else {
+        return default;
+    };
+    let s = s.trim().strip_prefix("0x").unwrap_or(s.trim());
+    if s.is_empty() {
+        return default;
+    }
+    match hex::decode(s) {
+        Ok(b) if b.len() == 32 => {
+            let mut k = [0u8; 32];
+            k.copy_from_slice(&b);
+            k
+        }
+        _ => {
+            tracing::warn!(
+                var,
+                "invalid hex env (need 32-byte / 64-hex-char); using default"
+            );
+            default
+        }
     }
 }
 
@@ -160,6 +204,14 @@ impl Config {
             tick_size: parse_u64_env("NYX_TEE_TICK_SIZE", 1),
             min_order_size: parse_u64_env("NYX_TEE_MIN_ORDER_SIZE", 0),
             settle_lookup_table: parse_pubkey_env("NYX_TEE_SETTLE_LOOKUP_TABLE"),
+            // Clamp to 100% — the matcher's fee math assumes
+            // bps ≤ 10_000 (normally enforced on-chain by
+            // set_protocol_config; the CVM matcher isn't gated by it).
+            fee_rate_bps: parse_u64_env("NYX_TEE_FEE_RATE_BPS", 30).min(10_000),
+            protocol_owner_commitment: parse_hex32_env(
+                "NYX_TEE_PROTOCOL_OWNER_COMMITMENT",
+                [0u8; 32],
+            ),
         })
     }
 }

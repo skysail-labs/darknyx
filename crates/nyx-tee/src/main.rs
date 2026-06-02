@@ -149,6 +149,11 @@ async fn main() -> Result<()> {
     // shared MatcherState — the order intake needs them to verify
     // each input-note opening against the signed commitment (4g.7a).
     let match_config = dev_match_config(&cfg);
+    tracing::info!(
+        fee_rate_bps = match_config.fee_rate_bps,
+        protocol_owner_set = (match_config.protocol_owner_commitment != [0u8; 32]),
+        "matcher fee config (fee notes mint when fee_rate_bps > 0)"
+    );
     // Capture the values the settle driver needs before `match_config`
     // is moved into the matcher driver below ([u8; 32] is Copy).
     let settle_base_mint = match_config.base_mint;
@@ -519,14 +524,15 @@ fn build_settle_driver(
 ///   - `circuit_breaker_bps`      effectively disabled
 ///     (`100_000` = 1000% drift band)
 ///   - `batch_ms = 2000`          (D5 default)
-///   - `fee_rate_bps = 0`         (dev: no fee)
+///   - `fee_rate_bps`             from Config (NYX_TEE_FEE_RATE_BPS, default 30)
 fn dev_match_config(cfg: &nyx_tee::config::Config) -> MatchConfig {
-    // Mints + tick + min come from Config (env-overridable) so a real
-    // settle can point the matcher at the on-chain mints the deposited
-    // notes use; they default to deterministic placeholders, so dev /
-    // loadgen behaviour is unchanged when the env vars are unset. The
+    // Mints + tick + min + fee come from Config (env-overridable) so a
+    // real settle can point the matcher at the on-chain mints the
+    // deposited notes use AND charge a real protocol fee (so fee notes
+    // actually mint). They default to deterministic placeholders / a
+    // 30 bps fee, so dev / loadgen behaviour is sane when unset. The
     // remaining fields are dev defaults (circuit breaker effectively
-    // disabled, 2 s batch, no fee).
+    // disabled, 2 s batch).
     MatchConfig {
         base_mint: cfg.base_mint,
         quote_mint: cfg.quote_mint,
@@ -534,7 +540,8 @@ fn dev_match_config(cfg: &nyx_tee::config::Config) -> MatchConfig {
         min_order_size: cfg.min_order_size,
         circuit_breaker_bps: 100_000,
         batch_ms: 2000,
-        fee_rate_bps: 0,
-        protocol_owner_commitment: [0u8; 32],
+        // Config clamps to ≤ 10_000, so the u16 cast is lossless.
+        fee_rate_bps: cfg.fee_rate_bps as u16,
+        protocol_owner_commitment: cfg.protocol_owner_commitment,
     }
 }

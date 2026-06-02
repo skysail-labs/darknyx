@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-9
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-10
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -109,6 +109,18 @@ services:
       # ALT only (fine for the small test payloads, overflows a real
       # settle). See crate::config + settle::worker.
       NYX_TEE_SETTLE_LOOKUP_TABLE: ${NYX_TEE_SETTLE_LOOKUP_TABLE}
+
+      # Protocol fee rate (basis points) the matcher charges per leg.
+      # Empty/unset → the code default (30 bps = 0.3%), so fee notes
+      # actually mint. Set to 0 to disable fees, or any value ≤ 10_000.
+      # Should mirror the on-chain VaultConfig.fee_rate_bps. See
+      # crate::config + darkpool-matcher flush_fee_notes.
+      NYX_TEE_FEE_RATE_BPS: ${NYX_TEE_FEE_RATE_BPS}
+      # Owner commitment the fee notes are minted to (32-byte hex). Set
+      # to the on-chain protocol owner (e2e-config protocol.ownerCommitmentHex)
+      # so collected fees are spendable via VALID_SPEND; empty/unset →
+      # [0;32] (fee notes still mint + append but are unclaimable).
+      NYX_TEE_PROTOCOL_OWNER_COMMITMENT: ${NYX_TEE_PROTOCOL_OWNER_COMMITMENT}
 
     ports:
       # 8080: nyx-tee's internal HTTP. dstack-ingress fronts this
