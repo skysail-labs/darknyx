@@ -20,6 +20,7 @@
 //! assembly.
 
 use base64::Engine as _;
+use solana_address::Address;
 use solana_hash::Hash;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
@@ -28,6 +29,35 @@ use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 
 use crate::solana_rpc::RpcError;
+
+/// Solana ComputeBudget program id
+/// (`ComputeBudget111111111111111111111111111111`).
+const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
+    0x03, 0x06, 0x46, 0x6f, 0xe5, 0x21, 0x17, 0x32, 0xff, 0xec, 0xad, 0xba, 0x72, 0xc3, 0x9b, 0xe7,
+    0xbc, 0x8c, 0xe5, 0xbb, 0xc5, 0xf7, 0x12, 0x6b, 0x2c, 0x43, 0x9b, 0x3a, 0x40, 0x00, 0x00, 0x00,
+]);
+
+/// CU ceiling for the settle tx. `tee_forced_settle_batched` does a
+/// two-stage Poseidon leaf hash + several PDA inits + Merkle path
+/// verification, which blows past the 200k default. Preflight
+/// simulation runs at the 1.4M max so it passes WITHOUT this ix, but
+/// on-chain the tx then reverts on CU exhaustion — so the explicit
+/// limit is required to actually land. Mirrors the SDK's
+/// `setComputeUnitLimit(1_400_000)`.
+const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
+
+/// Build a `ComputeBudget::SetComputeUnitLimit` ix (variant tag 2,
+/// then the u32 limit LE).
+fn set_compute_unit_limit_ix(units: u32) -> Instruction {
+    let mut data = Vec::with_capacity(5);
+    data.push(2u8);
+    data.extend_from_slice(&units.to_le_bytes());
+    Instruction {
+        program_id: COMPUTE_BUDGET_PROGRAM_ID,
+        accounts: vec![],
+        data,
+    }
+}
 
 /// Compile + sign the settle v0 transaction. `alts` is the static
 /// settle ALT followed by the per-batch ALT (order doesn't matter
@@ -61,8 +91,12 @@ pub fn build_settle_v0_tx(
     blockhash: Hash,
 ) -> Result<VersionedTransaction, RpcError> {
     let payer = tee_keypair.pubkey();
-    let message = v0::Message::try_compile(&payer, &[ed25519_ix, settle_ix], alts, blockhash)
-        .map_err(|e| RpcError::Schema(format!("v0 message compile failed: {e}")))?;
+    // ComputeBudget ix first so the 1.4M CU limit applies to the whole
+    // tx; then the ed25519 precompile + the settle ix.
+    let cu_ix = set_compute_unit_limit_ix(SETTLE_COMPUTE_UNIT_LIMIT);
+    let message =
+        v0::Message::try_compile(&payer, &[cu_ix, ed25519_ix, settle_ix], alts, blockhash)
+            .map_err(|e| RpcError::Schema(format!("v0 message compile failed: {e}")))?;
     VersionedTransaction::try_new(VersionedMessage::V0(message), &[tee_keypair])
         .map_err(|e| RpcError::Schema(format!("v0 tx sign failed: {e}")))
 }

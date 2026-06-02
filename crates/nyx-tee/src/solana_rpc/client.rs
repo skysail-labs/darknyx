@@ -268,16 +268,25 @@ impl SolanaRpcClient {
     /// signed tx bytes. Returns the signature (base58).
     pub async fn send_transaction(&self, tx_b64: &str) -> Result<String, RpcError> {
         // `skipPreflight=false` keeps the safety net during dev;
-        // `preflightCommitment` matches our default. 4g.5 may
-        // expose these as options once we know the failure shape
-        // we want.
+        // `preflightCommitment` matches our default.
+        //
+        // `maxRetries` is intentionally NOT pinned to 0: the big v0
+        // settle tx (~1.2 KB, near the cap) is easily dropped on a
+        // single broadcast under devnet load — it passes preflight,
+        // gets a signature, then never lands (confirmation polls
+        // forever as `[None]`). Omitting the field lets the RPC node
+        // rebroadcast the tx to successive leaders until its blockhash
+        // expires (~150 slots), which is what web3.js's
+        // sendAndConfirmTransaction (the SDK settle path) relies on.
+        // Resending the same signed tx is idempotent — the network
+        // dedups by signature — so this is safe for the smaller init
+        // txs too.
         let params = serde_json::json!([
             tx_b64,
             {
                 "encoding": "base64",
                 "skipPreflight": false,
                 "preflightCommitment": self.commitment,
-                "maxRetries": 0u32,
             }
         ]);
         let sig: String = self.call("sendTransaction", params).await?;
