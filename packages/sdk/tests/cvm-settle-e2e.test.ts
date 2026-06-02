@@ -93,6 +93,21 @@ function hex(b: Uint8Array): string {
   return Buffer.from(b).toString("hex");
 }
 
+/** fetch with retries — the dstack gateway can transiently close the
+ *  socket (UND_ERR_SOCKET) for the first minute after a CVM restart. */
+async function gwFetch(url: string, init?: RequestInit, tries = 6): Promise<Response> {
+  let last: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fetch(url, init);
+    } catch (e) {
+      last = e;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+  throw last;
+}
+
 /** Fetch the live raw SOL/USD price integer the CVM's oracle uses. */
 async function fetchOracleAnchor(): Promise<bigint> {
   if (process.env.NYX_CVM_PRICE) return BigInt(process.env.NYX_CVM_PRICE);
@@ -180,7 +195,12 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
   it(
     "CVM matches a crossing pair and settles on-chain",
     async () => {
-      const BASE_QTY = BigInt(process.env.NYX_CVM_BASE_QTY ?? "1");
+      // Per-run-unique base qty so the deposited note commitments (and
+      // thus the NoteLock / ConsumedNote PDAs) are FRESH each run —
+      // reset_merkle_tree clears the tree but NOT those PDAs, so a fixed
+      // note would collide ("Allocate: account already in use") on the
+      // second run. Override with NYX_CVM_BASE_QTY for a fixed value.
+      const BASE_QTY = BigInt(process.env.NYX_CVM_BASE_QTY ?? String((Date.now() % 900_000) + 1000));
       const anchor = await fetchOracleAnchor();
       const bidPrice = (anchor * 12n) / 10n;
       const askPrice = (anchor * 8n) / 10n;
@@ -341,7 +361,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const sellerOrder = await buildOrder(seller, OrderSide.Ask, askPrice, sellerNote, sellerVI);
 
       // ── 5. auth + submit both orders to the CVM ────────────────────
-      const tokRes = await fetch(`${GATEWAY}/auth/token`, {
+      const tokRes = await gwFetch(`${GATEWAY}/auth/token`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ api_key: API_KEY, api_secret: API_SECRET, passphrase: PASSPHRASE }),
@@ -350,7 +370,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const token = ((await tokRes.json()) as { access_token: string }).access_token;
 
       async function submit(body: object): Promise<number> {
-        const r = await fetch(`${GATEWAY}/orders`, {
+        const r = await gwFetch(`${GATEWAY}/orders`, {
           method: "POST",
           headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
           body: JSON.stringify(body),
@@ -369,7 +389,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       // Diagnostic: confirm both are in the book (200) vs matched-and-gone
       // (404), to localise a no-settle to matching vs the settle pipeline.
       for (const [n, o] of [["buyer", buyerOrder], ["seller", sellerOrder]] as const) {
-        const r = await fetch(`${GATEWAY}/orders/${o.order_id}`, {
+        const r = await gwFetch(`${GATEWAY}/orders/${o.order_id}`, {
           headers: { authorization: `Bearer ${token}` },
         });
         console.log(`  · GET /orders/${n} -> ${r.status} ${(await r.text()).slice(0, 200)}`);
