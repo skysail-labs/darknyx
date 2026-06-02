@@ -92,6 +92,13 @@ services:
       # slot, or a reset_merkle_tree slot on devnet, so the mirror
       # reconstructs the CURRENT tree. Empty/unset → 0 (replay genesis).
       NYX_TEE_SYNC_FROM_SLOT: ${NYX_TEE_SYNC_FROM_SLOT}
+      # Market mints (base58). Order intake verifies each input-note
+      # opening's mint against these (bid→quote, ask→base), so for a REAL
+      # settle they MUST equal the on-chain mints the deposited notes use
+      # (the devnet-setup e2e-config mints). Empty/unset → placeholder
+      # dev mints (fine for the synthetic-order loadgen). See Config.
+      NYX_TEE_BASE_MINT: ${NYX_TEE_BASE_MINT}
+      NYX_TEE_QUOTE_MINT: ${NYX_TEE_QUOTE_MINT}
 
     ports:
       # 8080: nyx-tee's internal HTTP. dstack-ingress fronts this
