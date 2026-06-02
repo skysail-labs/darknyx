@@ -42,6 +42,63 @@ pub struct Config {
     /// pre-reset leaves whose indices repeat post-reset. `0` (default)
     /// = replay from genesis (correct for a never-reset vault).
     pub sync_from_slot: u64,
+
+    /// Market base mint (32 bytes). Order intake verifies ASK-side note
+    /// openings against this. From `NYX_TEE_BASE_MINT` (base58); defaults
+    /// to a deterministic placeholder so dev/loadgen behaviour is
+    /// unchanged when unset. For a REAL settle it MUST equal the on-chain
+    /// mint the deposited notes use (else intake rejects the opening on a
+    /// mint mismatch).
+    pub base_mint: [u8; 32],
+    /// Market quote mint (32 bytes). BID-side openings verify against
+    /// this. From `NYX_TEE_QUOTE_MINT` (base58).
+    pub quote_mint: [u8; 32],
+    /// Price tick. `NYX_TEE_TICK_SIZE`, default 1.
+    pub tick_size: u64,
+    /// Minimum order size. `NYX_TEE_MIN_ORDER_SIZE`, default 0.
+    pub min_order_size: u64,
+}
+
+/// The placeholder base mint used when `NYX_TEE_BASE_MINT` is unset —
+/// matches the historical hardcoded dev value (`[1, 0…, 0xb1]`).
+fn default_base_mint() -> [u8; 32] {
+    let mut m = [0u8; 32];
+    m[0] = 1;
+    m[31] = 0xb1;
+    m
+}
+
+fn default_quote_mint() -> [u8; 32] {
+    let mut m = [0u8; 32];
+    m[0] = 1;
+    m[31] = 0x9e;
+    m
+}
+
+/// Parse a 32-byte mint from a base58 env var, falling back to
+/// `default` when unset/empty/malformed.
+fn parse_mint_env(var: &str, default: [u8; 32]) -> [u8; 32] {
+    match std::env::var(var) {
+        Ok(s) if !s.trim().is_empty() => match bs58::decode(s.trim()).into_vec() {
+            Ok(b) if b.len() == 32 => {
+                let mut m = [0u8; 32];
+                m.copy_from_slice(&b);
+                m
+            }
+            _ => {
+                tracing::warn!(var, "invalid mint env (need 32-byte base58); using default");
+                default
+            }
+        },
+        _ => default,
+    }
+}
+
+fn parse_u64_env(var: &str, default: u64) -> u64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(default)
 }
 
 impl Config {
@@ -67,6 +124,10 @@ impl Config {
                 .ok()
                 .and_then(|s| s.trim().parse().ok())
                 .unwrap_or(0),
+            base_mint: parse_mint_env("NYX_TEE_BASE_MINT", default_base_mint()),
+            quote_mint: parse_mint_env("NYX_TEE_QUOTE_MINT", default_quote_mint()),
+            tick_size: parse_u64_env("NYX_TEE_TICK_SIZE", 1),
+            min_order_size: parse_u64_env("NYX_TEE_MIN_ORDER_SIZE", 0),
         })
     }
 }

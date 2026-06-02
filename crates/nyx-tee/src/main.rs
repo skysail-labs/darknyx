@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
     // Build the match config up front so its mints can seed the
     // shared MatcherState — the order intake needs them to verify
     // each input-note opening against the signed commitment (4g.7a).
-    let match_config = dev_match_config();
+    let match_config = dev_match_config(&cfg);
     // Capture the values the settle driver needs before `match_config`
     // is moved into the matcher driver below ([u8; 32] is Copy).
     let settle_base_mint = match_config.base_mint;
@@ -453,23 +453,18 @@ fn build_settle_driver(
 ///     (`100_000` = 1000% drift band)
 ///   - `batch_ms = 2000`          (D5 default)
 ///   - `fee_rate_bps = 0`         (dev: no fee)
-fn dev_match_config() -> MatchConfig {
-    // Mints are inert in the matching algorithm itself — they're
-    // only there so the on-chain settle ix's per-mint balance
-    // checks have something to compare against. Use deterministic
-    // placeholders.
-    let mut base_mint = [0u8; 32];
-    base_mint[0] = 1;
-    base_mint[31] = 0xb1;
-    let mut quote_mint = [0u8; 32];
-    quote_mint[0] = 1;
-    quote_mint[31] = 0x9e;
-
+fn dev_match_config(cfg: &nyx_tee::config::Config) -> MatchConfig {
+    // Mints + tick + min come from Config (env-overridable) so a real
+    // settle can point the matcher at the on-chain mints the deposited
+    // notes use; they default to deterministic placeholders, so dev /
+    // loadgen behaviour is unchanged when the env vars are unset. The
+    // remaining fields are dev defaults (circuit breaker effectively
+    // disabled, 2 s batch, no fee).
     MatchConfig {
-        base_mint,
-        quote_mint,
-        tick_size: 1,
-        min_order_size: 0,
+        base_mint: cfg.base_mint,
+        quote_mint: cfg.quote_mint,
+        tick_size: cfg.tick_size,
+        min_order_size: cfg.min_order_size,
         circuit_breaker_bps: 100_000,
         batch_ms: 2000,
         fee_rate_bps: 0,
