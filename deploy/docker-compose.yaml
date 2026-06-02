@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-2
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-3
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -46,7 +46,9 @@ services:
       # In production we'd ship to a remote sink — but the logs
       # must be careful: any plaintext order intent in logs is a
       # privacy leak.
-      NYX_TEE_LOG: "info,nyx_tee=debug"
+      # Keep the settle pipeline at debug but quiet the 1/sec oracle-sync
+      # + merkle-poll DEBUG spam so settle errors aren't buried.
+      NYX_TEE_LOG: "info,nyx_tee::settle=debug,nyx_tee::oracle=info,nyx_tee::merkle=info"
       NYX_TEE_HTTP_BIND: "0.0.0.0:8080"
 
       # Real Pyth Hermes feed for the matcher's oracle. This is the

@@ -337,13 +337,27 @@ async fn main() -> Result<()> {
             Ok(rpc) => {
                 let slot = api_state.current_slot.clone();
                 tokio::spawn(async move {
+                    let mut ticks: u64 = 0;
                     loop {
                         match rpc.get_latest_blockhash().await {
                             Ok(bh) => {
-                                slot.store(bh.context_slot, std::sync::atomic::Ordering::Relaxed)
+                                slot.store(bh.context_slot, std::sync::atomic::Ordering::Relaxed);
+                                // Heartbeat: first poll + then ~every 30 s, so
+                                // current_slot is observable in the logs.
+                                if ticks.is_multiple_of(15) {
+                                    tracing::info!(
+                                        slot = bh.context_slot,
+                                        "slot poller: current_slot updated"
+                                    );
+                                }
                             }
-                            Err(e) => tracing::debug!(error = %e, "slot poll failed; will retry"),
+                            // WARN (not debug) — a stuck current_slot breaks
+                            // the settle marker expiry; we must see this.
+                            Err(e) => {
+                                tracing::warn!(error = %e, "slot poll FAILED; current_slot stale")
+                            }
                         }
+                        ticks = ticks.wrapping_add(1);
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
                 });

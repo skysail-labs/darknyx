@@ -217,11 +217,19 @@ async fn run_batch_settle_inner(
     // ── 3. verify_match_batch (Tx B) + per-batch ALT (Tx C) ─────
     ctx.set_all_stages(batch_id, n, SettleJobStage::Verifying)
         .await;
+    // BatchValidityMarker expiry MUST be in the future relative to the
+    // on-chain clock (verify_match_batch.rs: InvalidMarkerExpiry). Stamp
+    // it from a slot fetched FRESH here, not from `inputs.expiry_slot`
+    // (which the scheduler computes from the background slot poller's
+    // cached value — if that lags/stalls the marker reverts). A fresh
+    // slot + a generous margin is always valid + within MAX_TTL.
+    const MARKER_EXPIRY_MARGIN_SLOTS: u64 = 1000;
+    let marker_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
     let verify_ix = build_verify_match_batch_ix(
         &tee_pubkey,
         VerifyMatchBatchArgs {
             merkle_root,
-            expiry_slot: inputs.expiry_slot,
+            expiry_slot: marker_slot.saturating_add(MARKER_EXPIRY_MARGIN_SLOTS),
             proof: proof_bytes,
         },
     );
