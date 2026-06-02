@@ -76,10 +76,22 @@ services:
       NYX_TEE_API_SECRET: "nyx-test-secret"
       NYX_TEE_PASSPHRASE: "nyx-test-passphrase"
 
-      # Encrypted env vars get added here via the Phala dashboard's
-      # UI (it encrypts them client-side to the CVM's env-encrypt
-      # pubkey). DO NOT commit secrets to this file.
-      #   NYX_TEE_SOLANA_RPC_URL: ${SOLANA_RPC_URL}  (encrypted)
+      # Secret + per-deploy values are SUBSTITUTED from the encrypted
+      # env, NOT hardcoded here — `${VAR}` is interpolated by dstack
+      # from the values supplied at deploy (`phala deploy -e VAR=…` or
+      # the dashboard's encrypted-env UI). Only the var REFERENCE is in
+      # the compose (and thus compose_hash); the value never is. An
+      # unset var interpolates empty → the app falls back to its
+      # default (public devnet RPC / no sync floor).
+      #
+      # Solana RPC the matcher oracle (no) + the Merkle sync (yes) use.
+      # MUST be a private RPC (Helius); the public devnet RPC 429s on
+      # the sync's getSignaturesForAddress. DO NOT hardcode a key here.
+      NYX_TEE_SOLANA_RPC_URL: ${NYX_TEE_SOLANA_RPC_URL}
+      # Merkle cold-boot floor slot (Phase 2b). Set to the vault deploy
+      # slot, or a reset_merkle_tree slot on devnet, so the mirror
+      # reconstructs the CURRENT tree. Empty/unset → 0 (replay genesis).
+      NYX_TEE_SYNC_FROM_SLOT: ${NYX_TEE_SYNC_FROM_SLOT}
 
     ports:
       # 8080: nyx-tee's internal HTTP. dstack-ingress fronts this
