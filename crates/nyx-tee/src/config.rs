@@ -57,6 +57,16 @@ pub struct Config {
     pub tick_size: u64,
     /// Minimum order size. `NYX_TEE_MIN_ORDER_SIZE`, default 0.
     pub min_order_size: u64,
+    /// On-chain address of the STATIC settle ALT (the one devnet-setup
+    /// creates holding `vault_config`, `instructions_sysvar`,
+    /// `system_program` — see SDK `static_alt_addresses()`). From
+    /// `NYX_TEE_SETTLE_LOOKUP_TABLE` (base58). When set, the settle
+    /// worker stacks it UNDER the per-batch ALT so the v0 settle tx
+    /// stays under Solana's 1232-byte cap; without it the tx is ~93 B
+    /// larger and overflows on the real-mint settle path. Unset → the
+    /// worker uses only the per-batch ALT (fine for the smaller test
+    /// payloads, NOT for a real settle).
+    pub settle_lookup_table: Option<[u8; 32]>,
 }
 
 /// The placeholder base mint used when `NYX_TEE_BASE_MINT` is unset —
@@ -94,6 +104,27 @@ fn parse_mint_env(var: &str, default: [u8; 32]) -> [u8; 32] {
     }
 }
 
+/// Parse an optional 32-byte pubkey from a base58 env var. Returns
+/// `None` when unset/empty/malformed (logging a warn on malformed).
+fn parse_pubkey_env(var: &str) -> Option<[u8; 32]> {
+    let s = std::env::var(var).ok()?;
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    match bs58::decode(s).into_vec() {
+        Ok(b) if b.len() == 32 => {
+            let mut k = [0u8; 32];
+            k.copy_from_slice(&b);
+            Some(k)
+        }
+        _ => {
+            tracing::warn!(var, "invalid pubkey env (need 32-byte base58); ignoring");
+            None
+        }
+    }
+}
+
 fn parse_u64_env(var: &str, default: u64) -> u64 {
     std::env::var(var)
         .ok()
@@ -128,6 +159,7 @@ impl Config {
             quote_mint: parse_mint_env("NYX_TEE_QUOTE_MINT", default_quote_mint()),
             tick_size: parse_u64_env("NYX_TEE_TICK_SIZE", 1),
             min_order_size: parse_u64_env("NYX_TEE_MIN_ORDER_SIZE", 0),
+            settle_lookup_table: parse_pubkey_env("NYX_TEE_SETTLE_LOOKUP_TABLE"),
         })
     }
 }

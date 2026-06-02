@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-5
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-6
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -101,6 +101,14 @@ services:
       # dev mints (fine for the synthetic-order loadgen). See Config.
       NYX_TEE_BASE_MINT: ${NYX_TEE_BASE_MINT}
       NYX_TEE_QUOTE_MINT: ${NYX_TEE_QUOTE_MINT}
+      # On-chain address of the STATIC settle ALT (vault_config +
+      # instructions_sysvar + system_program) that devnet-setup creates
+      # (e2e-config `settleLookupTable`). The settle worker stacks it
+      # under the per-batch ALT so the v0 settle tx (Tx D) stays under
+      # the 1232-byte cap on the real-mint path. Empty/unset → per-batch
+      # ALT only (fine for the small test payloads, overflows a real
+      # settle). See crate::config + settle::worker.
+      NYX_TEE_SETTLE_LOOKUP_TABLE: ${NYX_TEE_SETTLE_LOOKUP_TABLE}
 
     ports:
       # 8080: nyx-tee's internal HTTP. dstack-ingress fronts this

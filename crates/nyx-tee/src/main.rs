@@ -44,7 +44,9 @@ use nyx_tee::oracle::hermes::HermesClient;
 use nyx_tee::oracle::sync::{spawn_oracle_sync, SyncConfig};
 use nyx_tee::prover::{ArkMatchBatchProver, PRODUCTION_BATCH_N};
 use nyx_tee::settle::worker::SettleWorkerCtx;
-use nyx_tee::settle::{SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState};
+use nyx_tee::settle::{
+    alt_account, SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState,
+};
 use nyx_tee::solana_rpc::SolanaRpcClient;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
@@ -458,14 +460,33 @@ fn build_settle_driver(
     })?;
     tracing::info!("VALID_MATCH_BATCH proving key loaded");
 
+    // Static settle ALT (vault_config + instructions_sysvar +
+    // system_program), created at devnet-setup. When its on-chain
+    // address is supplied via NYX_TEE_SETTLE_LOOKUP_TABLE, stack it
+    // under the per-batch ALT so the v0 settle tx (Tx D) stays under
+    // the 1232-byte cap on the real-mint path. The address list MUST
+    // match the on-chain ALT's contents in order — `static_alt_addresses()`
+    // mirrors the SDK's `extendLookupTable` order exactly.
+    let static_alt = cfg.settle_lookup_table.map(|lut| {
+        alt_account(
+            solana_address::Address::new_from_array(lut),
+            nyx_tee::settle::settle_batched::static_alt_addresses(),
+        )
+    });
+    match &static_alt {
+        Some(a) => tracing::info!(alt = %a.key, "static settle ALT threaded into settle worker"),
+        None => tracing::warn!(
+            "no static settle ALT (NYX_TEE_SETTLE_LOOKUP_TABLE unset) — \
+             real-mint settle tx may exceed 1232 bytes"
+        ),
+    }
+
     let ctx = SettleWorkerCtx {
         rpc,
         tee_keypair: Arc::new(tee_keypair),
         signing_key: Arc::new(signing_key),
         prover: Arc::new(prover),
-        // Per-batch ALT only for now; the static settle ALT is created
-        // at devnet-setup and isn't yet threaded into the daemon.
-        static_alt: None,
+        static_alt,
         settle_state,
         confirm_timeout: Duration::from_secs(60),
     };
