@@ -32,6 +32,16 @@ pub struct Config {
     /// market via `NYX_TEE_FEED_IDS`. Each entry is the
     /// 64-char-hex Pyth feed id.
     pub feed_ids: Vec<String>,
+
+    /// Merkle cold-boot floor slot. `getSignaturesForAddress` history
+    /// below this slot is ignored, so the sync only replays leaves from
+    /// here forward. This is the `deployed_slot` the indexer design
+    /// (§5.5) assumed: set it to the program's deploy slot (or, on a
+    /// devnet that ran `reset_merkle_tree`, to the reset slot) so the
+    /// mirror reconstructs the CURRENT tree rather than double-counting
+    /// pre-reset leaves whose indices repeat post-reset. `0` (default)
+    /// = replay from genesis (correct for a never-reset vault).
+    pub sync_from_slot: u64,
 }
 
 impl Config {
@@ -53,6 +63,10 @@ impl Config {
                 .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string()),
             dstack_socket: std::env::var("DSTACK_SIMULATOR_ENDPOINT").ok(),
             feed_ids,
+            sync_from_slot: std::env::var("NYX_TEE_SYNC_FROM_SLOT")
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0),
         })
     }
 }

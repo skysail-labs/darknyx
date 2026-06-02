@@ -52,12 +52,20 @@ pub struct MerkleSyncConfig {
     /// Live-poll cadence. ~2 s tracks settle confirmation closely
     /// without hammering the RPC.
     pub poll_interval: Duration,
+    /// Cold-boot floor slot — transactions older than this are
+    /// skipped. `0` replays from genesis. Set to the program's deploy
+    /// slot (or a `reset_merkle_tree` slot on devnet) so the mirror
+    /// reconstructs the CURRENT tree instead of double-counting
+    /// pre-reset leaves whose indices repeat. See
+    /// `Config::sync_from_slot`.
+    pub from_slot: u64,
 }
 
 impl Default for MerkleSyncConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_secs(2),
+            from_slot: 0,
         }
     }
 }
@@ -96,7 +104,8 @@ impl MerkleSync {
     /// leaves, reconcile. Sets `newest_seen` so the live loop continues
     /// from here. Returns the number of leaves applied.
     pub async fn cold_boot(&mut self) -> Result<usize, SyncError> {
-        // 1. Page backward to genesis, collecting (newest-first).
+        // 1. Page backward toward the `from_slot` floor (or genesis),
+        //    collecting (newest-first).
         let mut all_sigs: Vec<(String, u64, bool)> = Vec::new();
         let mut before: Option<String> = None;
         loop {
@@ -109,6 +118,8 @@ impl MerkleSync {
                 )
                 .await?;
             let short = page.len() < SIG_PAGE_LIMIT;
+            // Oldest entry of this page (newest-first → last).
+            let oldest_slot = page.last().map(|s| s.slot);
             if let Some(last) = page.last() {
                 before = Some(last.signature.clone());
             }
@@ -117,6 +128,11 @@ impl MerkleSync {
             }
             if short {
                 break; // short page → history exhausted
+            }
+            // Early-stop: once a page's oldest slot drops below the
+            // floor, every older page is below it too — stop paging.
+            if self.cfg.from_slot > 0 && oldest_slot.is_some_and(|s| s < self.cfg.from_slot) {
+                break;
             }
         }
         if all_sigs.is_empty() {
@@ -214,6 +230,9 @@ impl MerkleSync {
         let mut leaves: Vec<AppendedLeaf> = Vec::new();
         let mut max_slot = 0u64;
         for (sig, slot, is_err) in sigs {
+            if *slot < self.cfg.from_slot {
+                continue; // below the cold-boot floor (pre-deploy / pre-reset)
+            }
             if *is_err {
                 continue; // reverted tx — its leaves never landed
             }

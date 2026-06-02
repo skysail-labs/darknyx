@@ -305,7 +305,10 @@ async fn main() -> Result<()> {
                         mirror,
                         vault_program_id,
                         vault_config_pda,
-                        MerkleSyncConfig::default(),
+                        MerkleSyncConfig {
+                            from_slot: cfg.sync_from_slot,
+                            ..MerkleSyncConfig::default()
+                        },
                     );
                     if let Err(e) = sync.cold_boot().await {
                         tracing::warn!(error = %e, "merkle cold-boot failed; live loop will recover");
