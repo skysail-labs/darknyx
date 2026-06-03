@@ -37,9 +37,9 @@ pub trait Workload: Send + 'static {
     fn sample(&mut self) -> OrderIntent;
 }
 
-pub fn make_workload(kind: WorkloadKind, oracle_twap: u64) -> Box<dyn Workload> {
+pub fn make_workload(kind: WorkloadKind, oracle_twap: u64, expiry_slot: u64) -> Box<dyn Workload> {
     match kind {
-        WorkloadKind::Uniform => Box::new(UniformWorkload::new(oracle_twap)),
+        WorkloadKind::Uniform => Box::new(UniformWorkload::new(oracle_twap, expiry_slot)),
     }
 }
 
@@ -48,6 +48,11 @@ pub fn make_workload(kind: WorkloadKind, oracle_twap: u64) -> Box<dyn Workload> 
 pub struct UniformWorkload {
     rng: rand::rngs::StdRng,
     oracle_twap: u64,
+    /// Slot every sampled order expires at. MUST exceed the matcher's
+    /// `current_slot` (the real Solana slot, fed by the TEE's slot
+    /// poller) for the order's whole lifetime, else the matcher sweeps
+    /// it as expired before it can match. See [`crate::config`].
+    expiry_slot: u64,
     /// Lognormal size sampler. μ=0, σ=0.8 → median 1.0, P95 ≈ 3.7,
     /// rare draws up to ~10. Multiplied by 1_000_000 to land in
     /// "1.0 SOL = 1_000_000 base units" territory.
@@ -55,7 +60,7 @@ pub struct UniformWorkload {
 }
 
 impl UniformWorkload {
-    pub fn new(oracle_twap: u64) -> Self {
+    pub fn new(oracle_twap: u64, expiry_slot: u64) -> Self {
         use rand::SeedableRng;
         Self {
             // Per-instance fixed seed makes runs reproducible. Real
@@ -63,6 +68,7 @@ impl UniformWorkload {
             // construct multiple instances with distinct seeds.
             rng: rand::rngs::StdRng::seed_from_u64(0xC0FFEE),
             oracle_twap,
+            expiry_slot,
             size_dist: LogNormal::new(0.0, 0.8).expect("σ=0.8 is valid"),
         }
     }
@@ -95,8 +101,7 @@ impl Workload for UniformWorkload {
             order_type: OrderType::Limit,
             amount,
             price_limit,
-            expiry_slot: 100_000_000, // generous; the bench never
-            // approaches this slot
+            expiry_slot: self.expiry_slot,
             symbol: "SOL-USDC".to_string(),
         }
     }
@@ -108,7 +113,7 @@ mod tests {
 
     #[test]
     fn uniform_samples_within_price_band() {
-        let mut w = UniformWorkload::new(150_000_000);
+        let mut w = UniformWorkload::new(150_000_000, 2_000_000_000);
         for _ in 0..1000 {
             let intent = w.sample();
             let lo = (150_000_000_f64 * 0.95) as u64;
@@ -128,7 +133,7 @@ mod tests {
 
     #[test]
     fn uniform_balances_bid_ask() {
-        let mut w = UniformWorkload::new(150_000_000);
+        let mut w = UniformWorkload::new(150_000_000, 2_000_000_000);
         let mut bids = 0u32;
         let mut asks = 0u32;
         for _ in 0..1000 {

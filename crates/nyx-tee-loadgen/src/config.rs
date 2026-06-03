@@ -115,6 +115,17 @@ pub struct RunConfig {
     /// when targeting a fee-free CVM.
     #[arg(long, default_value_t = 30)]
     pub fee_rate_bps: u16,
+
+    /// Slot every generated order expires at. The TEE matcher sweeps
+    /// orders whose `expiry_slot < current_slot`, where `current_slot`
+    /// is the REAL Solana slot from the TEE's slot poller (~466M+ on
+    /// devnet). So this MUST sit comfortably above the live slot for
+    /// the whole run, else every order is swept as expired before it
+    /// can match (0 matches, though intake still 2xx-accepts them).
+    /// Default 2_000_000_000 is ~19 years out at devnet cadence; bump
+    /// it before ~2040 or when targeting a faster cluster.
+    #[arg(long, default_value_t = 2_000_000_000)]
+    pub expiry_slot: u64,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

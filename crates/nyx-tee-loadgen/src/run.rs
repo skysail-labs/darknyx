@@ -105,7 +105,7 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
 
     let mut handles = Vec::with_capacity(cfg.traders);
     for (idx, bearer) in bearers.into_iter().enumerate() {
-        let workload = make_workload(cfg.workload, cfg.oracle_twap);
+        let workload = make_workload(cfg.workload, cfg.oracle_twap, cfg.expiry_slot);
         let ctx = TraderCtx {
             idx,
             http: http.clone(),
