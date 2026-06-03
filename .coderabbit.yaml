@@ -1,0 +1,257 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit configuration for Nyx / darknyx — a privacy-preserving CLOB
+# darkpool on Solana (Rust workspace + circom ZK circuits + a TS SDK + an
+# in-TDX-CVM matcher/settler). The repo's hard invariants live in
+# CLAUDE.md / AGENTS.md / CRYPTOGRAPHY.md; this file points the reviewer at
+# them and at the specific cross-language / on-chain contracts that break in
+# unrelated-looking ways. See docs.coderabbit.ai for the schema.
+
+language: en-US
+
+# Crypto + on-chain money: correctness, byte-equality, and safety beat style.
+tone_instructions: >-
+  This is a pre-mainnet privacy darkpool handling on-chain funds and ZK
+  proofs. Prioritize correctness and safety: cross-language byte-equality of
+  cryptographic primitives, BN254 field-element safety, on-chain conservation
+  and replay protection, the 1232-byte transaction-size budget, circuit/VK
+  lockstep, and never leaking secrets. Flag genuine bugs and security issues
+  precisely; verify a claim against the actual code (and CLAUDE.md /
+  CRYPTOGRAPHY.md invariants) before raising it, and keep pure-style nits brief.
+
+reviews:
+  # Assertive: this codebase has subtle invariants where a missed bug is
+  # expensive. Path instructions below keep the extra feedback focused.
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  suggested_labels: true
+  suggested_reviewers: true
+  poem: false
+  in_progress_fortune: false
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    # Review PRs into the active integration/hardening branches too, not
+    # only the default branch.
+    base_branches:
+      - "main"
+      - "nyx-v2-onchain-hardening"
+      - "tee_v3.*"
+
+  # Keep reviews on hand-written source; skip generated artifacts, vendored
+  # reference docs, lockfiles, and binaries.
+  path_filters:
+    - "!**/target/**"
+    - "!**/node_modules/**"
+    - "!circuits/build/**"
+    - "!**/*.zkey"
+    - "!**/*.wasm"
+    - "!**/*.r1cs"
+    - "!**/*.so"
+    - "!**/*.ptau"
+    - "!package-lock.json"
+    - "!**/dist/**"
+    - "!phala-docs/**"
+    - "!dstack/**"
+    - "!godarkdex_docs_md/**"
+    - "!tdx_vs_snp_papers/**"
+    - "!apps/demo/**"
+    - "!**/*.png"
+    - "!**/*.jpeg"
+    - "!**/*.jpg"
+
+  path_instructions:
+    - path: "crates/darkpool-crypto/**/*.rs"
+      instructions: >-
+        Host-side cryptographic primitives with a BYTE-EQUALITY contract
+        against the TS SDK (CLAUDE.md §6). Any change to a Poseidon arity /
+        domain tag / absorb order, note-commitment field order, nullifier
+        construction, key-derivation label, or user-commitment shape MUST be
+        mirrored in packages/sdk/src (zk/poseidon.ts, utxo/note.ts,
+        utxo/nullifier.ts, keys/*, keys/user-commitment.ts) and the matching
+        *-parity.test.ts re-run — flag any one-sided change. Every value fed to
+        Poseidon must be BN254-Fr-safe (top byte ≤ 0x30); raw 0xFF.. inputs are
+        a silent killer (light-poseidon rejects values ≥ the modulus). Mint
+        pubkeys must be split into lo/hi 128-bit halves, never hashed whole.
+    - path: "packages/sdk/src/**/*.ts"
+      instructions: >-
+        The SDK is the client integration surface and the TS side of the
+        byte-equality contract with the Rust crypto crate (CLAUDE.md §6). A
+        change to any Poseidon/commitment/nullifier/key/canonical-hash shape
+        here must be mirrored in crates/darkpool-crypto (or programs/vault for
+        the on-chain hashers) and the parity tests re-run. idl/seeds.ts +
+        idl/*-client.ts hand-code every PDA seed, Anchor discriminator
+        (sha256("global:<ix>")[..8]), and Borsh layout with NO IDL runtime —
+        if a vault/matching_engine struct, seed, account list, or ix arg
+        changed on-chain, the matching builder/seed here must change in
+        lockstep (positional account order matters).
+    - path: "circuits/**"
+      instructions: >-
+        Touching any circuit.circom, a templates/*.circom shared template, the
+        Poseidon constants, or the leaf-hash shape requires regenerating BOTH
+        circuits/build/<name>/circuit_final.zkey AND
+        programs/vault/src/zk/vk_<name>.rs in the SAME commit, else the deployed
+        verifier silently rejects every new proof (InvalidProof 6000) —
+        CLAUDE.md §4. light-poseidon caps Poseidon at 12 inputs (MAX_X5_LEN=13),
+        so the N=16 leaf hash is deliberately two-stage (Poseidon12 +
+        Poseidon9) — do not refactor to a single hash. Domain tags
+        DOMAIN_LEAF_INNER=20 / LEAF_TOP=21 / BATCH_ROOT=22 must stay identical
+        across the circom template, the Rust handler, and the TS prover helper.
+    - path: "programs/vault/src/instructions/tee_forced_settle*.rs"
+      instructions: >-
+        The settle handlers. Verify (a) the conservation laws still hold (inputs
+        == outputs + change + fees per mint) and aren't loosened; (b) the
+        1232-byte v0 tx budget (CLAUDE.md §5) — any new account or ix-data field
+        risks overflow, account for the worst-case change-note variant (no
+        note_lock_e/f dedup); (c) BatchValidityMarker is 1:N — it must NOT be
+        closed per match (only close_batch_validity_marker closes it; a
+        try_borrow_mut_lamports against the marker here re-introduces the
+        §7.4 bug); (d) `init` constraints on NoteLock/ConsumedNote/Nullifier
+        PDAs are the replay guards — never change them to init_if_needed.
+        compute_match_leaf is byte-identical to the circom MatchSlot template +
+        the TS computeBatchLeaf; canonical_payload_hash + MatchResultPayload
+        Borsh shape must match the SDK serializePayload + the fixed-vector test.
+    - path: "crates/nyx-tee/src/settle/**/*.rs"
+      instructions: >-
+        The in-TEE settle pipeline (lock → prove → verify_match_batch →
+        per-batch ALT → tee_forced_settle_batched → close). Watch the
+        Solana-integration seams this repo has been bitten by: ALT recent_slot
+        must come from getLatestBlockhash().context_slot with a small backoff
+        (load-balanced RPC replicas); a freshly created/extended ALT isn't
+        loadable until the next slot (wait, don't settle against an unloadable
+        table); the BatchValidityMarker expiry is a TWO-SIDED bound
+        (clock.slot < expiry ≤ clock.slot + 300); the settle v0 tx needs a
+        ComputeBudget limit + must stack the static + per-batch ALTs to stay
+        under 1232 B; a multi-match batch's ALT must union EVERY match's
+        note_locks, not just matches[0]. Flag fee/collateral math that could
+        break conservation (each side must lock nominal + its own fee).
+    - path: "crates/nyx-tee/src/config.rs"
+      instructions: >-
+        CVM env config. Compose interpolates `${VAR}` to an empty string when
+        unset, so an empty value MUST fall back to the default (not be used
+        literally); a non-empty MALFORMED value should fail startup (fail-fast),
+        not silently use a placeholder. The full env-var set must also be in the
+        dstack app-compose allowed_envs — a new var changes compose_hash and
+        needs governance re-authorization. Never log secrets (solana_rpc_url may
+        embed an API key).
+    - path: "crates/nyx-tee/src/api/**/*.rs"
+      instructions: >-
+        The HTTP/auth surface, much of it PUBLIC + unauthenticated on a small
+        (1 vCPU / 2 GB) CVM. Flag CPU/memory-heavy work (Argon2id is ~19 MiB +
+        tens of ms/hash) run directly on the async reactor or without a
+        concurrency bound (DoS/OOM); credential checks that short-circuit (a
+        timing oracle); endpoints that can materialize unbounded responses
+        (paginate); RPC-degraded reads that fabricate a value indistinguishable
+        from a real one on a solvency/transparency surface; and any path that
+        could leak a spending key or order intent.
+    - path: "programs/**/*.rs"
+      instructions: >-
+        On-chain Anchor programs. Check account constraints (signer, seeds,
+        `init` vs `init_if_needed`, owner, has_one), PDA seed derivations, and
+        arithmetic overflow (use checked_*). A new PDA/seed must be mirrored in
+        the SDK (idl/seeds.ts + a *Pda() helper) — CLAUDE.md §7.3. Don't
+        regenerate program-id keypairs. Keep declare_id! and Anchor.toml in
+        sync (the consistency CI job fails otherwise).
+    - path: "{scripts/**,.github/workflows/**,deploy/**}"
+      instructions: >-
+        Build/deploy/CI surface. If a file under programs/*/tests/, circuits/,
+        crates/nyx-tee/**, or packages/sdk/tests/helpers/ was DELETED, the
+        same PR must remove its stale references in .github/workflows/*.yml and
+        scripts/*.sh (CLAUDE.md §2.7) — cargo test --workspace won't catch a
+        `--test <name>` that no longer exists, but CI will. For
+        deploy/docker-compose.yaml: secret/per-deploy values must be `${VAR}`
+        references injected via encrypted env, never hardcoded; adding an env
+        var / port / volume changes compose_hash. Flag any committed secret
+        (Helius RPC keys, dstack/API credentials, .devnet/keypairs).
+
+  tools:
+    clippy:
+      enabled: true        # Rust workspace
+    shellcheck:
+      enabled: true        # scripts/*.sh
+    actionlint:
+      enabled: true        # .github/workflows/*.yml
+    zizmor:
+      enabled: true        # GitHub Actions security (GITHUB_TOKEN / ghcr push)
+    hadolint:
+      enabled: true        # deploy/Dockerfile
+    yamllint:
+      enabled: true        # compose + workflows
+    gitleaks:
+      enabled: true        # secret scanning (Helius key / dstack creds)
+    trufflehog:
+      enabled: true        # verified secret scanning
+    markdownlint:
+      enabled: true        # docs (CLAUDE.md, dev-commands.md, …)
+    languagetool:
+      enabled: true
+      level: default
+
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: >-
+        Conventional-commit style: `<type>(<scope>): <imperative summary>`
+        (e.g. feat(nyx-tee): …, fix(vault,v3.5): …). Concise and descriptive.
+    custom_checks:
+      - name: "Circuit / VK lockstep"
+        mode: warning
+        instructions: >-
+          FAIL if the PR changes any circuits/<name>/circuit.circom, a
+          circuits/templates/*.circom, or crates/darkpool-crypto/src/poseidon.rs
+          (or the compute_match_leaf shape) WITHOUT also including the
+          regenerated programs/vault/src/zk/vk_<name>.rs (and, for committed
+          ceremonies, circuits/build/<name>/circuit_final.zkey) in the same PR.
+          PASS if no such circuit/Poseidon source changed, or if the matching
+          VK/zkey updates are present.
+      - name: "Cross-language crypto parity"
+        mode: warning
+        instructions: >-
+          FAIL if a cryptographic primitive (Poseidon arity/domain-tag, note
+          commitment, nullifier, key derivation, user commitment, or the
+          canonical payload hash / MatchResultPayload layout) is changed on ONE
+          side of the Rust↔TS boundary without the mirrored change on the other
+          (Rust: crates/darkpool-crypto, programs/vault hashers; TS:
+          packages/sdk/src). PASS if neither side changed a primitive, or both
+          sides changed consistently and the relevant *-parity test is updated.
+
+  labeling_instructions:
+    - label: "tee"
+      instructions: "Apply when the PR changes crates/nyx-tee or crates/nyx-tee-loadgen."
+    - label: "vault"
+      instructions: "Apply when the PR changes programs/vault."
+    - label: "circuits"
+      instructions: "Apply when the PR changes circuits/ or the vk_*.rs / zkey artifacts."
+    - label: "sdk"
+      instructions: "Apply when the PR changes packages/sdk."
+    - label: "crypto"
+      instructions: "Apply when the PR touches darkpool-crypto or any Poseidon/commitment/nullifier/key code."
+    - label: "security"
+      instructions: "Apply when the PR touches auth, secrets, attestation, replay protection, or the settle/conservation path."
+    - label: "ci/deploy"
+      instructions: "Apply when the PR changes .github/workflows, scripts, or deploy/."
+
+chat:
+  auto_reply: true
+  art: true
+
+knowledge_base:
+  # Learn the repo's contract from its agent docs (these carry the invariants
+  # the path_instructions reference).
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "CRYPTOGRAPHY.md"
+      - "docs/**/*.md"
+  learnings:
+    scope: local
+  web_search:
+    enabled: true
