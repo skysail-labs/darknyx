@@ -20,9 +20,9 @@ import { Keypair } from "@solana/web3.js";
 export const CHANGE_ROLE_BUYER = 0xb1;
 export const CHANGE_ROLE_SELLER = 0x5e;
 
-// TRADE_ROLE_* is test-only: it derives (nonce, r) for note_c / note_d so
+// TRADE_ROLE_* is test-only: it derives the inner_hash for note_c / note_d so
 // that the user can rebuild the plaintext and later withdraw. In production
-// the TEE emits these via the PER session. Defining them here mirrors the
+// the TEE emits these via the fills channel. Defining them here mirrors the
 // change_note.rs pattern with a distinct domain tag.
 export const TRADE_ROLE_BUYER = 0xc1; // note_c
 export const TRADE_ROLE_SELLER = 0xd1; // note_d
@@ -31,24 +31,14 @@ export const TRADE_ROLE_SELLER = 0xd1; // note_d
 export const FEE_ROLE_BASE = 0xfb;
 export const FEE_ROLE_QUOTE = 0xfc;
 
-/** Mirrors `change_note::derive_nonce` in the on-chain program. */
-export function deriveNonce(matchId: bigint, role: number): Uint8Array {
+/**
+ * Mirrors `change_note::derive_inner` (v2) in the matcher/on-chain program:
+ * SHA-256("nyx-change-inner" ‖ match_id_le ‖ role), Fr-safe masked. This is
+ * the single per-note inner_hash that replaced the old (nonce, blinding) pair.
+ */
+export function deriveInner(matchId: bigint, role: number): Uint8Array {
   const h = createHash("sha256");
-  h.update(Buffer.from("nyx-change-nonce"));
-  const mid = new Uint8Array(8);
-  new DataView(mid.buffer).setBigUint64(0, matchId, true);
-  h.update(mid);
-  h.update(new Uint8Array([role]));
-  const d = new Uint8Array(h.digest());
-  d[0] = 0;
-  d[1] &= 0x0f;
-  return d;
-}
-
-/** Mirrors `change_note::derive_blinding` in the on-chain program. */
-export function deriveBlinding(matchId: bigint, role: number): Uint8Array {
-  const h = createHash("sha256");
-  h.update(Buffer.from("nyx-change-blind"));
+  h.update(Buffer.from("nyx-change-inner"));
   const mid = new Uint8Array(8);
   new DataView(mid.buffer).setBigUint64(0, matchId, true);
   h.update(mid);

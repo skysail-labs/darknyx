@@ -64,7 +64,8 @@ import {
   bn254ToBE32,
 } from "../src/keys/key-generators.js";
 import { userCommitmentFromKeys } from "../src/keys/user-commitment.js";
-import { ownerCommitment, noteCommitment, nullifier } from "../src/utxo/note.js";
+import { ownerCommitment, noteCommitmentV2, nullifierV2 } from "../src/utxo/note.js";
+import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
 import { vaultConfigPda, buildDepositInstruction } from "../src/idl/vault-client.js";
 import { orderCanonicalDigest, OrderSide, OrderType } from "../src/orders/canonical.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
@@ -270,14 +271,14 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const tree = await MerkleShadow.create();
       async function deposit(p: Persona, mint: PublicKey, ata: PublicKey, amount: bigint) {
         const leafIndex = await onChainLeafCount(conn, vaultPda);
-        const nonce = deriveBlindingFactor(p.masterSeed, BigInt(leafIndex));
-        const blindingR = deriveBlindingFactor(p.masterSeed, BigInt(leafIndex) + 1n);
-        const commitment = await noteCommitment({
+        // v2: a single deterministic inner_hash (= the blinding-factor KDF at
+        // the leaf index) replaces the old (nonce, blinding) pair.
+        const innerHash = deriveBlindingFactor(p.masterSeed, BigInt(leafIndex));
+        const commitment = await noteCommitmentV2({
           tokenMint: mint.toBytes(),
           amount,
           ownerCommitment: p.ownerCommit,
-          nonce,
-          blindingR,
+          innerHash,
         });
         const ix = buildDepositInstruction({
           programId: vaultProgramId,
@@ -287,13 +288,12 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
           tokenProgramId: TOKEN_PROGRAM_ID,
           amount,
           ownerCommitment: bn254ToBE32(p.ownerCommit),
-          nonce: bn254ToBE32(nonce),
-          blindingR: bn254ToBE32(blindingR),
+          innerHash: bn254ToBE32(innerHash),
         });
         const sig = await sendAndConfirmTransaction(conn, new Transaction().add(ix), [p.payer]);
         await tree.append(commitment);
         console.log(`  · ${p.name} deposited leaf ${leafIndex} (${sig.slice(0, 8)}…)`);
-        return { mint, amount, nonce, blindingR, commitment, leafIndex };
+        return { mint, amount, innerHash, commitment, leafIndex };
       }
       const buyerNote = await deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmt);
       const sellerNote = await deposit(seller, baseMint, sellerBaseAta, sellerNoteAmt);
@@ -310,8 +310,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
           repoRoot: REPO_ROOT,
           spendingKey: p.spendingKey,
           ownerCommitmentBlinding: p.ownerBlinding,
-          nonce: note.nonce,
-          blindingR: note.blindingR,
+          innerHash: note.innerHash,
           tokenMint: note.mint.toBytes(),
           amount: note.amount,
           merkleRootBE: w.root,
@@ -338,6 +337,9 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         vi: { proofBytes: Uint8Array; root: Uint8Array },
       ) {
         const orderId = nacl.randomBytes(16);
+        // v2: the order carries a fixed continuation anchor pool whose hash
+        // is bound into the signed (v2) canonical digest.
+        const pool = await buildAnchorPool(p.masterSeed, p.spendingKey, orderId);
         const digest = orderCanonicalDigest({
           symbol: new TextEncoder().encode(SYMBOL),
           side,
@@ -350,6 +352,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
           noteCommitment: note.commitment,
           userCommitment: p.userCommitment,
           arrivalNonce: 1n,
+          anchorPoolHash: pool.poolHash,
         });
         const sig = nacl.sign.detached(digest, p.trading.secretKey);
         return {
@@ -367,11 +370,11 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
           trading_key: hex(p.trading.publicKey.toBytes()),
           trading_key_signature: hex(sig),
           owner_commitment: hex(bn254ToBE32(p.ownerCommit)),
-          note_nonce: hex(bn254ToBE32(note.nonce)),
-          note_blinding: hex(bn254ToBE32(note.blindingR)),
-          nullifier: hex(await nullifier(p.spendingKey, note.commitment)),
+          note_inner_hash: hex(bn254ToBE32(note.innerHash)),
+          nullifier: hex(await nullifierV2(p.spendingKey, note.innerHash)),
           merkle_root: hex(vi.root),
           valid_input_proof: hex(vi.proofBytes),
+          anchors: anchorsToJson(pool.anchors),
         };
       }
       const buyerOrder = await buildOrder(buyer, OrderSide.Bid, bidPrice, buyerNote, buyerVI);

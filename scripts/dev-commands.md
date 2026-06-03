@@ -15,6 +15,31 @@ All commands assume the repo root as the working directory:
 cd /path/to/repo/root
 ```
 
+> **⚠️ note-construction v2 (`inner_hash`) — read before any devnet run.**
+> The note commitment + nullifier were re-anchored on a single `inner_hash`
+> (Poseidon6 commitment; nullifier over `inner_hash`, not the commitment), and
+> every order now carries a fixed **anchor pool** of 10 `(inner_hash, nullifier)`
+> pairs that lets the matcher settle partial-fill continuations without a
+> roundtrip. Two operational consequences:
+>
+> 1. **A `reset_merkle_tree` is MANDATORY before the first v2 devnet run.** The
+>    migration UNIFIED all notes onto the arity-6 construction, so every
+>    pre-existing (arity-7) leaf is unspendable under v2 — a stale tree makes
+>    every `lock_note` / settle fail with `InvalidProof`. Run
+>    `node scripts/reset-merkle-tree.mjs` (§4.5 / §9.2), then redeploy the BPF
+>    (the circuits + `vk_*.rs` changed — `cargo build-sbf` + `deploy-devnet.sh`).
+> 2. **The `POST /orders` body changed.** `note_nonce` + `note_blinding` →
+>    a single `note_inner_hash`; a new `anchors` array (exactly 10
+>    `{inner_hash, nullifier}`) is required and its SHA-256 is bound into the
+>    signed order canonical (domain bumped `nyx-order-v1` → `v2`). The SDK
+>    builders are `buildAnchorPool` / `anchorsToJson` / `buildAnchorTopUp`
+>    (`packages/sdk/src/orders/anchor-pool.ts`); top-ups go to
+>    `POST /orders/{id}/anchors`; fills stream over `GET /ws/fills`
+>    (`verifyFillMemo` runs the integrity check, then store the change note).
+>    `cvm-settle-e2e.test.ts` is wired to this shape; the legacy
+>    `change-note-flow` / `er-trade-flow` (retiring ER path) are NOT yet
+>    migrated.
+
 **Contents**
 - §0 One-time setup
 - §1 Unit + integration tests (no devnet, no CVM)
