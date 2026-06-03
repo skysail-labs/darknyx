@@ -33,7 +33,8 @@ use axum::{
 };
 use darkpool_matcher::book::{Order, OrderSide, OrderStatus, OrderType};
 use darkpool_matcher::order_canonical::{
-    CancelCanonical, CanonicalError, OrderCanonical, SYMBOL_MAX_LEN,
+    anchor_pool_hash, Anchor, CancelCanonical, CanonicalError, OrderCanonical, ANCHOR_POOL_SIZE,
+    SYMBOL_MAX_LEN,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -85,11 +86,10 @@ pub struct PlaceOrderRequest {
     /// 32-byte note owner commitment `Poseidon3(1, spending_key,
     /// r_owner)`, hex. NOT the same as `user_commitment`.
     pub owner_commitment: String,
-    /// 32-byte per-note nonce, hex.
-    pub note_nonce: String,
-    /// 32-byte per-note blinding factor, hex.
-    pub note_blinding: String,
-    /// 32-byte nullifier `Poseidon3(3, spending_key, note_commitment)`,
+    /// 32-byte v2 note `inner_hash`, hex (replaces the old note_nonce +
+    /// note_blinding pair). Anchors both the commitment and the nullifier.
+    pub note_inner_hash: String,
+    /// 32-byte nullifier `Poseidon3(3, spending_key, inner_hash)`,
     /// hex. Precomputed by the client (needs the spending key, which
     /// never enters the TEE); opaque to the matcher.
     pub nullifier: String,
@@ -107,6 +107,21 @@ pub struct PlaceOrderRequest {
     pub merkle_root: String,
     /// 256-byte VALID_INPUT Groth16 proof (`pi_a ‖ pi_b ‖ pi_c`), hex.
     pub valid_input_proof: String,
+
+    /// The order's continuation anchor pool — exactly
+    /// `ANCHOR_POOL_SIZE` `(inner_hash, nullifier)` pairs the client
+    /// pre-supplied so the matcher can settle partial-fill
+    /// continuations without a per-fill roundtrip. The SHA-256 over
+    /// these (`anchor_pool_hash`) is bound into the signed canonical
+    /// body, so the matcher checks the pool against the signature.
+    pub anchors: Vec<AnchorJson>,
+}
+
+/// One `(inner_hash, nullifier)` continuation anchor, hex-encoded.
+#[derive(Debug, Deserialize)]
+pub struct AnchorJson {
+    pub inner_hash: String,
+    pub nullifier: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -262,9 +277,39 @@ pub async fn place_order(
     let trading_key: [u8; 32] = decode_hex(&req.trading_key, "trading_key")?;
     let signature: [u8; 64] = decode_hex(&req.trading_key_signature, "trading_key_signature")?;
     let owner_commitment: [u8; 32] = decode_hex(&req.owner_commitment, "owner_commitment")?;
-    let note_nonce: [u8; 32] = decode_hex(&req.note_nonce, "note_nonce")?;
-    let note_blinding: [u8; 32] = decode_hex(&req.note_blinding, "note_blinding")?;
+    let note_inner_hash: [u8; 32] = decode_hex(&req.note_inner_hash, "note_inner_hash")?;
     let nullifier: [u8; 32] = decode_hex(&req.nullifier, "nullifier")?;
+
+    // Anchor pool: exactly ANCHOR_POOL_SIZE (inner_hash, nullifier) pairs.
+    // Each inner_hash is Poseidon-hashed into a future change-note
+    // commitment, so it MUST be a canonical BN254 Fr (fail fast here, like
+    // the order's own note_inner_hash). The nullifier is opaque to the TEE
+    // (it can't verify it without the spending key) — only length-checked.
+    if req.anchors.len() != ANCHOR_POOL_SIZE {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "anchors: expected exactly {ANCHOR_POOL_SIZE} continuation anchors, got {}",
+                req.anchors.len()
+            ),
+        ));
+    }
+    let mut anchors: Vec<Anchor> = Vec::with_capacity(ANCHOR_POOL_SIZE);
+    for (i, a) in req.anchors.iter().enumerate() {
+        let inner_hash: [u8; 32] = decode_hex(&a.inner_hash, "anchor.inner_hash")?;
+        let null: [u8; 32] = decode_hex(&a.nullifier, "anchor.nullifier")?;
+        darkpool_crypto::fr_from_be_bytes(&inner_hash).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("anchors[{i}].inner_hash is not a canonical BN254 field element"),
+            )
+        })?;
+        anchors.push(Anchor {
+            inner_hash,
+            nullifier: null,
+        });
+    }
+    let pool_hash = anchor_pool_hash(&anchors);
     let lock_merkle_root: [u8; 32] = decode_hex(&req.merkle_root, "merkle_root")?;
     let valid_input_proof_bytes: [u8; 256] =
         decode_hex(&req.valid_input_proof, "valid_input_proof")?;
@@ -318,6 +363,7 @@ pub async fn place_order(
         note_commitment,
         user_commitment,
         arrival_nonce: req.arrival_nonce,
+        anchor_pool_hash: pool_hash,
     };
     let digest = canonical
         .digest()
@@ -393,8 +439,7 @@ pub async fn place_order(
         token_mint,
         amount: note_amount,
         owner_commitment,
-        nonce: note_nonce,
-        blinding: note_blinding,
+        inner_hash: note_inner_hash,
         nullifier,
     };
     opening.verify_commitment(&note_commitment).map_err(|e| {
@@ -453,6 +498,10 @@ pub async fn place_order(
             valid_input_proof,
         },
     );
+    // Stash the continuation anchor pool, keyed by order_id (stable
+    // across the collateral rotation a partial-fill continuation does).
+    st.openings_mut()
+        .insert_anchor_pool(order_id, crate::matcher::openings::AnchorPool::new(anchors));
 
     Ok((
         StatusCode::ACCEPTED,

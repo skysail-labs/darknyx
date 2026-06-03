@@ -6,9 +6,11 @@
 //! TTL is 3600s and no realistic bench window exceeds that.
 
 use anyhow::{anyhow, Result};
-use darkpool_crypto::note::commitment_from_fields;
+use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_matcher::book::{OrderSide, OrderType};
-use darkpool_matcher::order_canonical::{CancelCanonical, OrderCanonical};
+use darkpool_matcher::order_canonical::{
+    anchor_pool_hash, Anchor, CancelCanonical, OrderCanonical, ANCHOR_POOL_SIZE,
+};
 use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 
@@ -117,16 +119,10 @@ pub fn build_signed_place_body(
         }
     };
     let owner_commitment = fr_safe_opening_field(&order_id, 0x01);
-    let note_nonce = fr_safe_opening_field(&order_id, 0x02);
-    let note_blinding = fr_safe_opening_field(&order_id, 0x03);
-    let note_commitment = commitment_from_fields(
-        &token_mint,
-        note_amount,
-        &owner_commitment,
-        &note_nonce,
-        &note_blinding,
-    )
-    .expect("synthetic opening fields are Fr-safe (top byte zero)");
+    let note_inner_hash = fr_safe_opening_field(&order_id, 0x02);
+    let note_commitment =
+        commitment_from_fields_v2(&token_mint, note_amount, &owner_commitment, &note_inner_hash)
+            .expect("synthetic opening fields are Fr-safe (top byte zero)");
     // Opaque-to-intake fields: a deterministic nullifier + an all-zero
     // root + a 256-byte zero VALID_INPUT proof.
     let nullifier = {
@@ -137,6 +133,17 @@ pub fn build_signed_place_body(
     };
     let merkle_root = [0u8; 32];
     let valid_input_proof = [0u8; 256];
+
+    // Synthetic continuation anchor pool: ANCHOR_POOL_SIZE deterministic
+    // (inner_hash, nullifier) pairs derived from the order_id + index.
+    // Fr-safe inner_hashes (intake validates them); nullifiers are opaque.
+    let anchors: Vec<Anchor> = (0..ANCHOR_POOL_SIZE)
+        .map(|i| Anchor {
+            inner_hash: fr_safe_opening_field(&order_id, 0x10 + i as u8),
+            nullifier: fr_safe_opening_field(&order_id, 0x80 + i as u8),
+        })
+        .collect();
+    let pool_hash = anchor_pool_hash(&anchors);
 
     let canonical = OrderCanonical {
         symbol: symbol.as_bytes(),
@@ -150,6 +157,7 @@ pub fn build_signed_place_body(
         note_commitment,
         user_commitment,
         arrival_nonce,
+        anchor_pool_hash: pool_hash,
     };
     let digest = canonical.digest().expect("symbol bounded by caller");
     let sig = key.sign(&digest);
@@ -175,11 +183,15 @@ pub fn build_signed_place_body(
         "trading_key_signature": hex::encode(sig.to_bytes()),
         // Input-note opening + VALID_INPUT relay (required since 4g.7a/c).
         "owner_commitment": hex::encode(owner_commitment),
-        "note_nonce": hex::encode(note_nonce),
-        "note_blinding": hex::encode(note_blinding),
+        "note_inner_hash": hex::encode(note_inner_hash),
         "nullifier": hex::encode(nullifier),
         "merkle_root": hex::encode(merkle_root),
         "valid_input_proof": hex::encode(valid_input_proof),
+        // Continuation anchor pool (Phase 5): ANCHOR_POOL_SIZE pairs.
+        "anchors": anchors.iter().map(|a| serde_json::json!({
+            "inner_hash": hex::encode(a.inner_hash),
+            "nullifier": hex::encode(a.nullifier),
+        })).collect::<Vec<_>>(),
     })
 }
 

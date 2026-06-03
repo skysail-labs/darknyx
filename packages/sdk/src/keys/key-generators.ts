@@ -17,6 +17,7 @@ const INFO_VIEWING = new TextEncoder().encode("darkpool_viewing_key_v1");
 const INFO_TRADING = new TextEncoder().encode("darkpool_trading_key_v1");
 const INFO_ROOT = new TextEncoder().encode("darkpool_root_key_v1");
 const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
+const INFO_INNER_HASH = new TextEncoder().encode("nyx-inner-hash-v1");
 
 /** BN254 scalar field modulus r. */
 export const BN254_R =
@@ -125,6 +126,29 @@ export function deriveBlindingFactor(seed: Uint8Array, counter: bigint): bigint 
   const info = new Uint8Array(INFO_BLINDING.length + 8);
   info.set(INFO_BLINDING, 0);
   info.set(new Uint8Array(offsetBuf), INFO_BLINDING.length);
+  const okm = kmac256(seed, info, new Uint8Array(), 64);
+  return reduceMod(okm);
+}
+
+/**
+ * Derive the `inner_hash` for anchor `index` of a given order. Mirrors
+ * `darkpool_crypto::keys::derive_inner_hash`. Deterministic from
+ * `(seed, orderId, index)` so the whole anchor pool — and the matching
+ * nullifiers via `nullifierV2` — is regenerable without persisted state.
+ *
+ * KMAC custom-info = `INFO_INNER_HASH || orderId[16] || index_u32_le`.
+ */
+export function deriveInnerHash(seed: Uint8Array, orderId: Uint8Array, index: number): bigint {
+  if (orderId.length !== 16) throw new Error(`orderId must be 16 bytes; got ${orderId.length}`);
+  if (!Number.isInteger(index) || index < 0 || index > 0xffff_ffff) {
+    throw new Error(`index must be a u32; got ${index}`);
+  }
+  const idxBuf = new ArrayBuffer(4);
+  new DataView(idxBuf).setUint32(0, index, true); // little-endian
+  const info = new Uint8Array(INFO_INNER_HASH.length + 16 + 4);
+  info.set(INFO_INNER_HASH, 0);
+  info.set(orderId, INFO_INNER_HASH.length);
+  info.set(new Uint8Array(idxBuf), INFO_INNER_HASH.length + 16);
   const okm = kmac256(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
 }

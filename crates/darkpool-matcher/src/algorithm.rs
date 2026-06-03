@@ -22,7 +22,7 @@ use crate::config::MatchConfig;
 use crate::error::MatchError;
 use crate::fee::FeeBucket;
 use crate::match_result::{MatchPair, MatchStatus, RELOCK_ORDER_ID_NONE};
-use darkpool_crypto::note::commitment_from_fields;
+use darkpool_crypto::note::commitment_from_fields_v2;
 
 // Fee role tags. Mirrored inline in the on-chain `run_batch.rs` —
 // they fall under the same cross-language byte-equality contract as
@@ -364,28 +364,24 @@ pub(crate) fn generate_matches(
         // is byte-equal to the on-chain hashv version (gated by
         // `tests/change_note_parity.rs`).
         let note_e_commitment = if buyer_change_amt > 0 {
-            let nonce = change_note::derive_nonce(match_id, change_note::CHANGE_ROLE_BUYER);
-            let r = change_note::derive_blinding(match_id, change_note::CHANGE_ROLE_BUYER);
-            commitment_from_fields(
+            let inner = change_note::derive_inner(match_id, change_note::CHANGE_ROLE_BUYER);
+            commitment_from_fields_v2(
                 quote_mint,
                 buyer_change_amt,
                 &bids[bi].user_commitment,
-                &nonce,
-                &r,
+                &inner,
             )
             .map_err(|_| MatchError::Internal("Poseidon failed for buyer change note"))?
         } else {
             [0u8; 32]
         };
         let note_f_commitment = if seller_change_amt > 0 {
-            let nonce = change_note::derive_nonce(match_id, change_note::CHANGE_ROLE_SELLER);
-            let r = change_note::derive_blinding(match_id, change_note::CHANGE_ROLE_SELLER);
-            commitment_from_fields(
+            let inner = change_note::derive_inner(match_id, change_note::CHANGE_ROLE_SELLER);
+            commitment_from_fields_v2(
                 base_mint,
                 seller_change_amt,
                 &asks[ai].user_commitment,
-                &nonce,
-                &r,
+                &inner,
             )
             .map_err(|_| MatchError::Internal("Poseidon failed for seller change note"))?
         } else {
@@ -581,27 +577,23 @@ pub(crate) fn flush_fee_notes(
     now_slot: u64,
 ) -> Result<(), MatchError> {
     if fee_buckets[0].accumulated_fees > 0 {
-        let nonce = change_note::derive_nonce(now_slot, FEE_ROLE_BASE);
-        let r = change_note::derive_blinding(now_slot, FEE_ROLE_BASE);
-        let c = commitment_from_fields(
+        let inner = change_note::derive_inner(now_slot, FEE_ROLE_BASE);
+        let c = commitment_from_fields_v2(
             base_mint,
             fee_buckets[0].accumulated_fees,
             protocol_owner_commitment,
-            &nonce,
-            &r,
+            &inner,
         )
         .map_err(|_| MatchError::Internal("Poseidon failed for base fee note"))?;
         fee_buckets[0].flushed_commitment = c;
     }
     if fee_buckets[1].accumulated_fees > 0 {
-        let nonce = change_note::derive_nonce(now_slot, FEE_ROLE_QUOTE);
-        let r = change_note::derive_blinding(now_slot, FEE_ROLE_QUOTE);
-        let c = commitment_from_fields(
+        let inner = change_note::derive_inner(now_slot, FEE_ROLE_QUOTE);
+        let c = commitment_from_fields_v2(
             quote_mint,
             fee_buckets[1].accumulated_fees,
             protocol_owner_commitment,
-            &nonce,
-            &r,
+            &inner,
         )
         .map_err(|_| MatchError::Internal("Poseidon failed for quote fee note"))?;
         fee_buckets[1].flushed_commitment = c;

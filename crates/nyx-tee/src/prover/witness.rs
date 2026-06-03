@@ -7,9 +7,9 @@
 //!
 //! Type choices:
 //!   - `[u8; 32]` for anything that's a Poseidon output (already
-//!     Fr-safe by construction), a 256-bit blinding factor, or a
-//!     note nonce (the derived output-note nonces are full Fr
-//!     elements, not u64 — see the `*_nonce` fields).
+//!     Fr-safe by construction) or a note `inner_hash` (the derived
+//!     output-note inner_hashes are full Fr elements, not u64 — see
+//!     the `*_inner` fields).
 //!   - `u64` for amounts / slot indices — they always fit in Fr.
 //!   - 32-byte pubkeys live as `[u8; 32]` and are split into
 //!     `(lo, hi)` Fr-pair at hashing time via
@@ -52,26 +52,21 @@ pub struct MatchSlotWitness {
     pub b_owner_commit: [u8; 32],
     pub a_amount: u64,
     pub b_amount: u64,
-    // Note nonces are full BN254 Fr elements (32-byte BE), NOT u64:
-    // the trade/change/fee output-note nonces come from
-    // `change_note::derive_nonce` (a masked SHA-256, up to ~2^252),
-    // which does not fit in a u64. Feeding a truncated nonce would
-    // make the circuit reconstruct a different note commitment than
-    // the one in the witness, so the proof would silently fail.
-    pub a_nonce: [u8; 32],
-    pub a_blinding: [u8; 32],
-    pub b_nonce: [u8; 32],
-    pub b_blinding: [u8; 32],
-    pub c_nonce: [u8; 32],
-    pub c_blinding: [u8; 32],
-    pub d_nonce: [u8; 32],
-    pub d_blinding: [u8; 32],
+    // v2: one inner_hash per note (replaces the old nonce+blinding pair).
+    // inner_hashes are full BN254 Fr elements (32-byte BE), NOT u64: the
+    // trade/change/fee output-note inner_hashes come from
+    // `change_note::derive_inner` (a masked SHA-256, up to ~2^252) and the
+    // input-note inner_hashes come from the user's anchor/opening — neither
+    // fits in a u64. Feeding a truncated value would make the circuit
+    // reconstruct a different note commitment, so the proof would fail.
+    pub a_inner: [u8; 32],
+    pub b_inner: [u8; 32],
+    pub c_inner: [u8; 32],
+    pub d_inner: [u8; 32],
     /// Only meaningful when `buyer_change_amt != 0`.
-    pub e_nonce: [u8; 32],
-    pub e_blinding: [u8; 32],
+    pub e_inner: [u8; 32],
     /// Only meaningful when `seller_change_amt != 0`.
-    pub f_nonce: [u8; 32],
-    pub f_blinding: [u8; 32],
+    pub f_inner: [u8; 32],
 
     // ── VALID_PRICE private witness ──
     pub clearing_price: u64,
@@ -81,16 +76,16 @@ pub struct MatchSlotWitness {
 /// up to `N` when the matcher produced fewer than `N` real matches.
 ///
 /// Mirrors `dummySlot()` in `match-batch-prover.ts`. The dummy
-/// note commitment is `Poseidon7(2, 0, 0, 0, 0, 0, 0)` — the value
-/// every Poseidon7 note opening collapses to with all-zero inputs.
+/// note commitment is `Poseidon6(2, 0, 0, 0, 0, 0)` — the value
+/// every v2 Poseidon6 note opening collapses to with all-zero inputs.
 /// Two dummy slots in the same batch produce identical leaves; the
 /// Merkle root still uniquely commits to the real matches.
 pub fn dummy_slot() -> MatchSlotWitness {
     let mut domain = [0u8; 32];
     domain[31] = 2; // BE-encoded Fr(2)
     let zero = [0u8; 32];
-    let dummy_note = poseidon_hash_bytes(&[domain, zero, zero, zero, zero, zero, zero])
-        .expect("Poseidon7 over (tag=2, six zeros) cannot fail");
+    let dummy_note = poseidon_hash_bytes(&[domain, zero, zero, zero, zero, zero])
+        .expect("Poseidon6 over (tag=2, five zeros) cannot fail");
     let zero32 = [0u8; 32];
 
     MatchSlotWitness {
@@ -113,18 +108,12 @@ pub fn dummy_slot() -> MatchSlotWitness {
         b_owner_commit: zero32,
         a_amount: 0,
         b_amount: 0,
-        a_nonce: zero32,
-        a_blinding: zero32,
-        b_nonce: zero32,
-        b_blinding: zero32,
-        c_nonce: zero32,
-        c_blinding: zero32,
-        d_nonce: zero32,
-        d_blinding: zero32,
-        e_nonce: zero32,
-        e_blinding: zero32,
-        f_nonce: zero32,
-        f_blinding: zero32,
+        a_inner: zero32,
+        b_inner: zero32,
+        c_inner: zero32,
+        d_inner: zero32,
+        e_inner: zero32,
+        f_inner: zero32,
         clearing_price: 0,
     }
 }

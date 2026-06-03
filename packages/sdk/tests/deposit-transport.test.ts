@@ -119,7 +119,6 @@ describe("getDepositFunction", () => {
       tokenMint: mintBytes,
       amount: 1_000_000n,
       depositorTokenAccount: new PublicKey(mintBytes),
-      nonce: 7n,
       callbacks: {
         pre: (s) => {
           stages.push(s);
@@ -160,7 +159,6 @@ describe("getDepositFunction", () => {
         tokenMint: mint,
         amount: 0n,
         depositorTokenAccount: new PublicKey(mint),
-        nonce: 1n,
       }),
     ).rejects.toMatchObject({ stage: "parameter" });
   });
@@ -176,7 +174,6 @@ describe("getDepositFunction", () => {
         tokenMint: mint,
         amount: 1n,
         depositorTokenAccount: new PublicKey(mint),
-        nonce: 1n,
       }),
     ).rejects.toBeInstanceOf(DarkPoolError);
   });

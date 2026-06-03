@@ -28,7 +28,9 @@ use axum::{
     Router,
 };
 use darkpool_matcher::book::{OrderSide, OrderType};
-use darkpool_matcher::order_canonical::{CancelCanonical, OrderCanonical};
+use darkpool_matcher::order_canonical::{
+    anchor_pool_hash, Anchor, CancelCanonical, OrderCanonical, ANCHOR_POOL_SIZE,
+};
 use ed25519_dalek::{Signer, SigningKey};
 use http_body_util::BodyExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
@@ -94,9 +96,9 @@ struct PlaceOrderBuilder {
     // verification passes; tests that want to break the opening
     // override the emitted JSON directly.
     owner_commitment: [u8; 32],
-    note_nonce: [u8; 32],
-    note_blinding: [u8; 32],
+    note_inner_hash: [u8; 32],
     nullifier: [u8; 32],
+    anchors: Vec<Anchor>,
 }
 
 impl PlaceOrderBuilder {
@@ -131,9 +133,14 @@ impl PlaceOrderBuilder {
             },
             arrival_nonce: 1,
             owner_commitment: fr_safe(0x44),
-            note_nonce: fr_safe(0x55),
-            note_blinding: fr_safe(0x66),
+            note_inner_hash: fr_safe(0x55),
             nullifier: [0x77; 32],
+            anchors: (0..ANCHOR_POOL_SIZE)
+                .map(|i| Anchor {
+                    inner_hash: fr_safe(0x10 + i as u8),
+                    nullifier: [0x90 + i as u8; 32],
+                })
+                .collect(),
         }
     }
 
@@ -159,8 +166,7 @@ impl PlaceOrderBuilder {
             token_mint: [0u8; 32],
             amount: self.note_amount(),
             owner_commitment: self.owner_commitment,
-            nonce: self.note_nonce,
-            blinding: self.note_blinding,
+            inner_hash: self.note_inner_hash,
             nullifier: self.nullifier,
         }
     }
@@ -187,6 +193,7 @@ impl PlaceOrderBuilder {
             note_commitment,
             user_commitment: self.user_commitment,
             arrival_nonce: self.arrival_nonce,
+            anchor_pool_hash: anchor_pool_hash(&self.anchors),
         };
         let digest = canonical.digest().unwrap();
         let sig = key.sign(&digest);
@@ -211,14 +218,17 @@ impl PlaceOrderBuilder {
             "trading_key": hex::encode(trading_key),
             "trading_key_signature": hex::encode(sig.to_bytes()),
             "owner_commitment": hex::encode(self.owner_commitment),
-            "note_nonce": hex::encode(self.note_nonce),
-            "note_blinding": hex::encode(self.note_blinding),
+            "note_inner_hash": hex::encode(self.note_inner_hash),
             "nullifier": hex::encode(self.nullifier),
             // VALID_INPUT proof relay (4g.7c). Intake stores these
             // opaquely (on-chain lock_note verifies the proof), so
             // dummy bytes are fine for the orders-surface tests.
             "merkle_root": hex::encode([0xDDu8; 32]),
             "valid_input_proof": hex::encode([0u8; 256]),
+            "anchors": self.anchors.iter().map(|a| json!({
+                "inner_hash": hex::encode(a.inner_hash),
+                "nullifier": hex::encode(a.nullifier),
+            })).collect::<Vec<_>>(),
         })
     }
 }
@@ -466,9 +476,9 @@ const SYMBOL_MAX_LEN_FOR_TEST: usize = 8; // "SOL-USDC" length
 #[tokio::test]
 async fn place_rejects_opening_not_matching_commitment() {
     // The opening fields are NOT part of the signed canonical body
-    // (they're pinned via the commitment check instead). Tamper a
-    // nonce after signing: the trading-key signature still verifies
-    // (note_nonce isn't in the canonical digest), but the opening now
+    // (they're pinned via the commitment check instead). Tamper the
+    // inner_hash after signing: the trading-key signature still verifies
+    // (note_inner_hash isn't in the canonical digest), but the opening now
     // reconstructs to a different commitment than the signed one — so
     // intake must reject with 400.
     let app = app_from(state());
@@ -476,9 +486,9 @@ async fn place_rejects_opening_not_matching_commitment() {
     let key = fresh_signing_key();
     let b = PlaceOrderBuilder::new();
     let mut body = b.sign(&key);
-    body["note_nonce"] = json!(hex::encode({
+    body["note_inner_hash"] = json!(hex::encode({
         let mut v = [0u8; 32];
-        v[31] = 0xEE; // Fr-safe but different from the signed opening's nonce
+        v[31] = 0xEE; // Fr-safe but different from the signed opening's inner_hash
         v
     }));
     let resp = place(&app, &bearer, body).await;

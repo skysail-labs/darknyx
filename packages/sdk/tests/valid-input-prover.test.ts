@@ -16,7 +16,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Keypair } from "@solana/web3.js";
 
-import { noteCommitment, ownerCommitment, pubkeyToFrPair } from "../src/utxo/note.js";
+import { noteCommitmentV2, ownerCommitment, pubkeyToFrPair } from "../src/utxo/note.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.ts";
 import { be32ToBigInt } from "./helpers/e2e-helpers.js";
 import { proveValidInput } from "./helpers/valid-input-prover.ts";
@@ -35,19 +35,17 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
     // Note opening (small in-field values for safety on both Rust + circomlibjs).
     const spendingKey = 12345678901234567890n;
     const ownerBlinding = 42n;
-    const nonce = 7n;
-    const blindingR = 11n;
+    const innerHash = 7n;
     const amount = 1_000_000n;
     const tokenMint = Keypair.generate().publicKey.toBytes();
 
     // Build the note commitment + drop it into a fresh shadow tree.
     const ownerCommitFr = await ownerCommitment(spendingKey, ownerBlinding);
-    const noteCommitBE = await noteCommitment({
+    const noteCommitBE = await noteCommitmentV2({
       tokenMint,
       amount,
       ownerCommitment: ownerCommitFr,
-      nonce,
-      blindingR,
+      innerHash,
     });
     const tree = await MerkleShadow.create();
     await tree.append(noteCommitBE);
@@ -57,8 +55,7 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       repoRoot,
       spendingKey,
       ownerCommitmentBlinding: ownerBlinding,
-      nonce,
-      blindingR,
+      innerHash,
       tokenMint,
       amount,
       merkleRootBE: witness.root,
@@ -106,8 +103,7 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
     // Same opening, but the merkle witness is for a DIFFERENT leaf.
     const spendingKey = 1n;
     const ownerBlinding = 2n;
-    const nonce = 3n;
-    const blindingR = 4n;
+    const innerHash = 3n;
     const amount = 5n;
     const tokenMint = Keypair.generate().publicKey.toBytes();
 
@@ -127,8 +123,7 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
         repoRoot,
         spendingKey,
         ownerCommitmentBlinding: ownerBlinding,
-        nonce,
-        blindingR,
+        innerHash,
         tokenMint,
         amount,
         merkleRootBE: witness.root,

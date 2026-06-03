@@ -4,12 +4,12 @@ include "../../node_modules/circomlib/circuits/poseidon.circom";
 include "../../node_modules/circomlib/circuits/bitify.circom";
 include "../templates/merkle.circom";
 
-// VALID_SPEND
+// VALID_SPEND  (v2 — inner_hash note construction)
 //
 // Proves:
 //   1. Prover knows a note plaintext whose commitment is in the on-chain Merkle tree.
 //   2. Prover knows the spending key that owns the note.
-//   3. Nullifier is correctly derived from (spendingKey, noteCommitment).
+//   3. Nullifier is correctly derived from (spendingKey, innerHash).
 //   4. Amount is in [0, 2^64) — enforced by Num2Bits(64).
 //   5. noteCommitment is exposed as a public output so the on-chain withdraw
 //      instruction can bind the caller-supplied note_commitment to this proof,
@@ -19,7 +19,7 @@ include "../templates/merkle.circom";
 //   merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, noteCommitment
 //
 // Private witnesses:
-//   spendingKey, ownerCommitmentBlinding, nonce, blindingR,
+//   spendingKey, ownerCommitmentBlinding, innerHash,
 //   merklePath[depth], merkleIndices[depth]
 //
 // Domain tags — each Poseidon role gets a distinct constant first-input
@@ -27,8 +27,13 @@ include "../templates/merkle.circom";
 // Tag values are arbitrary non-zero field constants; they are committed
 // in the circuit so swapping roles would change the VK.
 //   DOMAIN_OWNER  = 1   (owner_commitment = Poseidon3(DOMAIN_OWNER, sk, r_owner))
-//   DOMAIN_NOTE   = 2   (noteCommitment   = Poseidon7(DOMAIN_NOTE,  mint_lo, mint_hi, amount, owner, nonce, r))
-//   DOMAIN_NULL   = 3   (nullifier        = Poseidon3(DOMAIN_NULL,  sk, noteCommitment))
+//   DOMAIN_NOTE   = 2   (noteCommitment   = Poseidon6(DOMAIN_NOTE,  mint_lo, mint_hi, amount, owner, innerHash))
+//   DOMAIN_NULL   = 3   (nullifier        = Poseidon3(DOMAIN_NULL,  sk, innerHash))
+//
+// v2 change: the per-note (nonce, blindingR) pair collapses into a single
+// `innerHash`, and the nullifier anchors on `innerHash` (amount-independent)
+// rather than the commitment. Keeps the mint binding. See
+// crates/darkpool-crypto/src/{note,nullifier}.rs `*_v2`.
 
 template ValidSpend(merkleDepth) {
     // ----- Public inputs / outputs -----
@@ -41,8 +46,7 @@ template ValidSpend(merkleDepth) {
     // ----- Private witnesses -----
     signal input spendingKey;
     signal input ownerCommitmentBlinding;  // r_owner
-    signal input nonce;
-    signal input blindingR;
+    signal input innerHash;
     signal input merklePath[merkleDepth];
     signal input merkleIndices[merkleDepth];
 
@@ -62,15 +66,14 @@ template ValidSpend(merkleDepth) {
     ownerCommit <== ownerHash.out;
 
     // ── noteCommitment = Poseidon(DOMAIN_NOTE, mint_lo, mint_hi, amount,
-    //                             ownerCommit, nonce, blindingR) ────────────
-    component noteHash = Poseidon(7);
+    //                             ownerCommit, innerHash) ──────────────────
+    component noteHash = Poseidon(6);
     noteHash.inputs[0] <== 2;   // DOMAIN_NOTE
     noteHash.inputs[1] <== tokenMint[0];
     noteHash.inputs[2] <== tokenMint[1];
     noteHash.inputs[3] <== amount;
     noteHash.inputs[4] <== ownerCommit;
-    noteHash.inputs[5] <== nonce;
-    noteHash.inputs[6] <== blindingR;
+    noteHash.inputs[5] <== innerHash;
     noteCommitment <== noteHash.out;
 
     // ── Merkle inclusion ─────────────────────────────────────────────────────
@@ -82,11 +85,11 @@ template ValidSpend(merkleDepth) {
         merkle.pathIndices[i]  <== merkleIndices[i];
     }
 
-    // ── nullifier = Poseidon(DOMAIN_NULL, spendingKey, noteCommitment) ───────
+    // ── nullifier = Poseidon(DOMAIN_NULL, spendingKey, innerHash) ───────────
     component nullifierHash = Poseidon(3);
     nullifierHash.inputs[0] <== 3;   // DOMAIN_NULL
     nullifierHash.inputs[1] <== spendingKey;
-    nullifierHash.inputs[2] <== noteCommitment;
+    nullifierHash.inputs[2] <== innerHash;
     nullifier === nullifierHash.out;
 }
 

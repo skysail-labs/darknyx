@@ -27,28 +27,21 @@
 //! `cargo test -p darkpool-matcher --test change_note_parity`
 
 use darkpool_matcher::change_note::{
-    derive_blinding, derive_nonce, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, TRADE_ROLE_BUYER,
-    TRADE_ROLE_SELLER,
+    derive_inner, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, TRADE_ROLE_BUYER, TRADE_ROLE_SELLER,
 };
 use solana_program::hash::hashv;
 
-// ─────── Reference (on-chain) implementations ──────────────────────────────
+// ─────── Reference (on-chain) implementation ────────────────────────────────
 //
-// Copies of the bodies in
-// `programs/matching_engine/src/state/change_note.rs` so this test
-// is dependency-free w.r.t. the matching_engine crate (we don't
-// want to depend on Anchor here). When we delete the on-chain
-// module in PR 3, these reference impls stay as the parity oracle.
+// Copy of the body in
+// `programs/matching_engine/src/state/change_note.rs::derive_inner` so this
+// test is dependency-free w.r.t. the matching_engine crate (we don't want to
+// depend on Anchor here). It uses the `solana_program::hash::hashv` backend;
+// the matcher port uses `sha2::Sha256`. Same algorithm → byte-identical, GATED
+// here rather than assumed.
 
-fn reference_derive_nonce(match_id: u64, role: u8) -> [u8; 32] {
-    let mut h = hashv(&[b"nyx-change-nonce", &match_id.to_le_bytes(), &[role]]).to_bytes();
-    h[0] = 0;
-    h[1] &= 0x0f;
-    h
-}
-
-fn reference_derive_blinding(match_id: u64, role: u8) -> [u8; 32] {
-    let mut h = hashv(&[b"nyx-change-blind", &match_id.to_le_bytes(), &[role]]).to_bytes();
+fn reference_derive_inner(match_id: u64, role: u8) -> [u8; 32] {
+    let mut h = hashv(&[b"nyx-change-inner", &match_id.to_le_bytes(), &[role]]).to_bytes();
     h[0] = 0;
     h[1] &= 0x0f;
     h
@@ -101,33 +94,15 @@ fn roles() -> &'static [u8] {
 }
 
 #[test]
-fn nonce_parity_against_on_chain() {
+fn inner_parity_against_on_chain() {
     for &mid in match_ids() {
         for &role in roles() {
-            let matcher = derive_nonce(mid, role);
-            let reference = reference_derive_nonce(mid, role);
+            let matcher = derive_inner(mid, role);
+            let reference = reference_derive_inner(mid, role);
             assert_eq!(
                 matcher,
                 reference,
-                "derive_nonce mismatch at (match_id={mid:#x}, role={role:#x}): \
-                 matcher={} on-chain={}",
-                hex::encode(matcher),
-                hex::encode(reference),
-            );
-        }
-    }
-}
-
-#[test]
-fn blinding_parity_against_on_chain() {
-    for &mid in match_ids() {
-        for &role in roles() {
-            let matcher = derive_blinding(mid, role);
-            let reference = reference_derive_blinding(mid, role);
-            assert_eq!(
-                matcher,
-                reference,
-                "derive_blinding mismatch at (match_id={mid:#x}, role={role:#x}): \
+                "derive_inner mismatch at (match_id={mid:#x}, role={role:#x}): \
                  matcher={} on-chain={}",
                 hex::encode(matcher),
                 hex::encode(reference),
@@ -159,9 +134,9 @@ fn blinding_parity_against_on_chain() {
 // referencing the TS computation directly.)
 
 #[test]
-fn known_answer_nonce_buyer_match42() {
-    let got = derive_nonce(42, CHANGE_ROLE_BUYER);
-    let oracle = reference_derive_nonce(42, CHANGE_ROLE_BUYER);
+fn known_answer_inner_buyer_match42() {
+    let got = derive_inner(42, CHANGE_ROLE_BUYER);
+    let oracle = reference_derive_inner(42, CHANGE_ROLE_BUYER);
     // Sanity-cross to the on-chain ref: both must produce the same
     // bytes from the same algorithm spec.
     assert_eq!(got, oracle);
@@ -171,9 +146,9 @@ fn known_answer_nonce_buyer_match42() {
 }
 
 #[test]
-fn known_answer_blinding_seller_match42() {
-    let got = derive_blinding(42, CHANGE_ROLE_SELLER);
-    let oracle = reference_derive_blinding(42, CHANGE_ROLE_SELLER);
+fn known_answer_inner_seller_match42() {
+    let got = derive_inner(42, CHANGE_ROLE_SELLER);
+    let oracle = reference_derive_inner(42, CHANGE_ROLE_SELLER);
     assert_eq!(got, oracle);
     assert_eq!(got[0], 0);
     assert_eq!(got[1] & 0xf0, 0);

@@ -17,9 +17,35 @@
 
 import { createHash } from "node:crypto";
 
-export const ORDER_DOMAIN: Uint8Array = new TextEncoder().encode("nyx-order-v1");
+export const ORDER_DOMAIN: Uint8Array = new TextEncoder().encode("nyx-order-v2");
 export const CANCEL_DOMAIN: Uint8Array = new TextEncoder().encode("nyx-cancel-v1");
 export const SYMBOL_MAX_LEN = 32;
+
+/** Fixed number of continuation anchors a client supplies per order.
+ *  Mirrors `darkpool_matcher::order_canonical::ANCHOR_POOL_SIZE`. */
+export const ANCHOR_POOL_SIZE = 10;
+/** Anchors added per WebSocket top-up when a pool drains. */
+export const ANCHOR_TOPUP_SIZE = 5;
+
+/** One continuation anchor: the (inner_hash, nullifier) pair for one
+ *  future change note. Both 32-byte BE field elements. */
+export interface Anchor {
+  innerHash: Uint8Array;
+  nullifier: Uint8Array;
+}
+
+/** SHA-256 over the ordered anchor pool: for each anchor,
+ *  innerHash ‖ nullifier. Mirrors `anchor_pool_hash` in the Rust matcher. */
+export function anchorPoolHash(anchors: Anchor[]): Uint8Array {
+  const h = createHash("sha256");
+  for (const a of anchors) {
+    if (a.innerHash.length !== 32) throw new CanonicalError("anchor.innerHash must be 32 bytes");
+    if (a.nullifier.length !== 32) throw new CanonicalError("anchor.nullifier must be 32 bytes");
+    h.update(Buffer.from(a.innerHash));
+    h.update(Buffer.from(a.nullifier));
+  }
+  return new Uint8Array(h.digest());
+}
 
 /**
  * `OrderSide` byte discriminants. Wire bytes are `0` (bid) / `1` (ask)
@@ -58,6 +84,8 @@ export interface OrderCanonical {
   /** 32 bytes. */
   userCommitment: Uint8Array;
   arrivalNonce: bigint;
+  /** 32 bytes — SHA-256 over the order's anchor pool (see `anchorPoolHash`). */
+  anchorPoolHash: Uint8Array;
 }
 
 export interface CancelCanonical {
@@ -115,9 +143,10 @@ function concat(parts: Uint8Array[]): Uint8Array {
  *   +50..+82     note_commitment : [u8; 32]
  *   +82..+114    user_commitment : [u8; 32]
  *   +114..+122   arrival_nonce : u64 LE
+ *   +122..+154   anchor_pool_hash : [u8; 32]
  * ```
  *
- * Total length: `135 + S` bytes.
+ * Total length: `167 + S` bytes.
  */
 export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
   if (o.symbol.length > SYMBOL_MAX_LEN) {
@@ -138,6 +167,11 @@ export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
       `userCommitment must be 32 bytes; got ${o.userCommitment.length}`,
     );
   }
+  if (o.anchorPoolHash.length !== 32) {
+    throw new CanonicalError(
+      `anchorPoolHash must be 32 bytes; got ${o.anchorPoolHash.length}`,
+    );
+  }
 
   return concat([
     ORDER_DOMAIN,
@@ -153,6 +187,7 @@ export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
     o.noteCommitment,
     o.userCommitment,
     u64LE(o.arrivalNonce),
+    o.anchorPoolHash,
   ]);
 }
 

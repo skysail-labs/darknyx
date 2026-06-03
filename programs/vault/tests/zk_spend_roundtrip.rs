@@ -5,8 +5,8 @@
 //!   1. Merkle-tree construction in Rust (via `append_leaf`) producing the same
 //!      root the circom `MerkleTreeChecker` verifies.
 //!   2. Owner commitment: Poseidon3(DOMAIN_OWNER=1, sk, r_owner)
-//!   3. Note commitment: Poseidon7(DOMAIN_NOTE=2, mint_lo, mint_hi, amt, owner, nonce, r)
-//!   4. Nullifier:       Poseidon3(DOMAIN_NULL=3,  sk, noteCommitment)
+//!   3. Note commitment: Poseidon6(DOMAIN_NOTE=2, mint_lo, mint_hi, amt, owner, inner_hash)
+//!   4. Nullifier:       Poseidon3(DOMAIN_NULL=3,  sk, inner_hash)
 //!   5. noteCommitment is the 6th public input/output (index 5).
 //!   6. snarkjs Groth16 proof generation.
 //!   7. `groth16-solana` verification producing `Ok(())`.
@@ -173,18 +173,16 @@ fn valid_spend_roundtrip() {
     // owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, r_owner)
     let owner_commitment =
         poseidon_hash(&[Fr::from(1u64), spending_key, owner_commit_blinding]).unwrap();
-    let nonce = fr_from_uniform_bytes(&[0x43u8; 32]);
-    let blinding_r = fr_from_uniform_bytes(&[0x44u8; 32]);
+    let inner_hash = fr_from_uniform_bytes(&[0x43u8; 32]);
 
-    // note_commitment = Poseidon7(DOMAIN_NOTE=2, mint_lo, mint_hi, amount, owner, nonce, r)
+    // note_commitment = Poseidon6(DOMAIN_NOTE=2, mint_lo, mint_hi, amount, owner, inner_hash)
     let note_commitment = poseidon_hash(&[
         Fr::from(2u64),
         mint_lo,
         mint_hi,
         amount_fr,
         owner_commitment,
-        nonce,
-        blinding_r,
+        inner_hash,
     ])
     .unwrap();
     let note_commitment_bytes = fr_to_be_bytes(&note_commitment);
@@ -201,8 +199,8 @@ fn valid_spend_roundtrip() {
          indicates our Merkle algorithm diverges from expected"
     );
 
-    // nullifier = Poseidon3(DOMAIN_NULL=3, spendingKey, noteCommitment)
-    let nullifier = poseidon_hash(&[Fr::from(3u64), spending_key, note_commitment]).unwrap();
+    // nullifier = Poseidon3(DOMAIN_NULL=3, spendingKey, inner_hash)
+    let nullifier = poseidon_hash(&[Fr::from(3u64), spending_key, inner_hash]).unwrap();
 
     // ----- Write snarkjs input.json -----
     let tmp = std::env::temp_dir().join("nyx_spend_roundtrip");
@@ -229,8 +227,7 @@ fn valid_spend_roundtrip() {
            \"amount\": \"{amt}\",\n\
            \"spendingKey\": \"{sk}\",\n\
            \"ownerCommitmentBlinding\": \"{ocb}\",\n\
-           \"nonce\": \"{no}\",\n\
-           \"blindingR\": \"{br}\",\n\
+           \"innerHash\": \"{ih}\",\n\
            \"merklePath\": [{sibs}],\n\
            \"merkleIndices\": [{idxs}]\n\
          }}",
@@ -241,8 +238,7 @@ fn valid_spend_roundtrip() {
         amt = amount_u64,
         sk = fr_to_dec(&spending_key),
         ocb = fr_to_dec(&owner_commit_blinding),
-        no = fr_to_dec(&nonce),
-        br = fr_to_dec(&blinding_r),
+        ih = fr_to_dec(&inner_hash),
         sibs = siblings_dec
             .iter()
             .map(|s| format!("\"{s}\""))

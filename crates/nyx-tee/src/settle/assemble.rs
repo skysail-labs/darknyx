@@ -34,10 +34,9 @@
 //! (4g.7c live wiring); this function is pure so it's exhaustively
 //! unit-testable without a matcher tick or a real proof.
 
-use darkpool_crypto::note::commitment_from_fields;
+use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_matcher::change_note::{
-    derive_blinding, derive_nonce, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, TRADE_ROLE_BUYER,
-    TRADE_ROLE_SELLER,
+    derive_inner, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, TRADE_ROLE_BUYER, TRADE_ROLE_SELLER,
 };
 use darkpool_matcher::match_result::{MatchPair, RunBatchOutput};
 
@@ -98,10 +97,9 @@ fn commit(
     mint: &[u8; 32],
     amount: u64,
     owner: &[u8; 32],
-    nonce: &[u8; 32],
-    blinding: &[u8; 32],
+    inner: &[u8; 32],
 ) -> Result<[u8; 32], AssembleError> {
-    commitment_from_fields(mint, amount, owner, nonce, blinding)
+    commitment_from_fields_v2(mint, amount, owner, inner)
         .map_err(|e| AssembleError::Crypto(e.to_string()))
 }
 
@@ -165,59 +163,51 @@ pub fn assemble_match(
     }
 
     // ── 3. Output notes c (buyer, BASE) + d (seller, QUOTE).
-    let c_nonce = derive_nonce(mid, TRADE_ROLE_BUYER);
-    let c_blinding = derive_blinding(mid, TRADE_ROLE_BUYER);
+    let c_inner = derive_inner(mid, TRADE_ROLE_BUYER);
     let note_c = commit(
         &inp.base_mint,
         m.base_amt,
         &inp.buyer_opening.owner_commitment,
-        &c_nonce,
-        &c_blinding,
+        &c_inner,
     )?;
 
-    let d_nonce = derive_nonce(mid, TRADE_ROLE_SELLER);
-    let d_blinding = derive_blinding(mid, TRADE_ROLE_SELLER);
+    let d_inner = derive_inner(mid, TRADE_ROLE_SELLER);
     let note_d = commit(
         &inp.quote_mint,
         m.quote_amt,
         &inp.seller_opening.owner_commitment,
-        &d_nonce,
-        &d_blinding,
+        &d_inner,
     )?;
 
     // ── 4. Change notes e (buyer, QUOTE) + f (seller, BASE),
     // conditional on a non-zero change amount. When there's no
-    // change, the commitment AND the (nonce, blinding) are all-zero —
-    // the circuit's IsZero gate bypasses the reconstruction
-    // constraint, matching the TS exact-fill witness.
-    let (note_e, e_nonce, e_blinding) = if m.buyer_change_amt > 0 {
-        let n = derive_nonce(mid, CHANGE_ROLE_BUYER);
-        let r = derive_blinding(mid, CHANGE_ROLE_BUYER);
+    // change, the commitment AND the inner_hash are all-zero — the
+    // circuit's IsZero gate bypasses the reconstruction constraint,
+    // matching the TS exact-fill witness.
+    let (note_e, e_inner) = if m.buyer_change_amt > 0 {
+        let inner = derive_inner(mid, CHANGE_ROLE_BUYER);
         let c = commit(
             &inp.quote_mint,
             m.buyer_change_amt,
             &inp.buyer_opening.owner_commitment,
-            &n,
-            &r,
+            &inner,
         )?;
-        (c, n, r)
+        (c, inner)
     } else {
-        (ZERO32, ZERO32, ZERO32)
+        (ZERO32, ZERO32)
     };
 
-    let (note_f, f_nonce, f_blinding) = if m.seller_change_amt > 0 {
-        let n = derive_nonce(mid, CHANGE_ROLE_SELLER);
-        let r = derive_blinding(mid, CHANGE_ROLE_SELLER);
+    let (note_f, f_inner) = if m.seller_change_amt > 0 {
+        let inner = derive_inner(mid, CHANGE_ROLE_SELLER);
         let c = commit(
             &inp.base_mint,
             m.seller_change_amt,
             &inp.seller_opening.owner_commitment,
-            &n,
-            &r,
+            &inner,
         )?;
-        (c, n, r)
+        (c, inner)
     } else {
-        (ZERO32, ZERO32, ZERO32)
+        (ZERO32, ZERO32)
     };
 
     // ── 5. Fee notes are PER-BATCH, not per-match (payload-only, NOT a
@@ -253,18 +243,12 @@ pub fn assemble_match(
         b_owner_commit: inp.seller_opening.owner_commitment,
         a_amount,
         b_amount,
-        a_nonce: inp.buyer_opening.nonce,
-        a_blinding: inp.buyer_opening.blinding,
-        b_nonce: inp.seller_opening.nonce,
-        b_blinding: inp.seller_opening.blinding,
-        c_nonce,
-        c_blinding,
-        d_nonce,
-        d_blinding,
-        e_nonce,
-        e_blinding,
-        f_nonce,
-        f_blinding,
+        a_inner: inp.buyer_opening.inner_hash,
+        b_inner: inp.seller_opening.inner_hash,
+        c_inner,
+        d_inner,
+        e_inner,
+        f_inner,
         clearing_price,
     };
 
@@ -466,16 +450,14 @@ mod tests {
             token_mint: quote_mint(),
             amount: a_amount,
             owner_commitment: buyer_owner,
-            nonce: fr_safe(0x11),
-            blinding: fr_safe(0x22),
+            inner_hash: fr_safe(0x11),
             nullifier: [0xAA; 32],
         };
         let seller_opening = NoteOpening {
             token_mint: base_mint(),
             amount: b_amount,
             owner_commitment: seller_owner,
-            nonce: fr_safe(0x33),
-            blinding: fr_safe(0x66),
+            inner_hash: fr_safe(0x33),
             nullifier: [0xBB; 32],
         };
         let note_buyer = buyer_opening.commitment().unwrap();
@@ -537,8 +519,8 @@ mod tests {
         // No change → note_e/f + their openings are all-zero.
         assert_eq!(w.note_e_commitment, [0u8; 32]);
         assert_eq!(w.note_f_commitment, [0u8; 32]);
-        assert_eq!(w.e_nonce, [0u8; 32]);
-        assert_eq!(w.f_nonce, [0u8; 32]);
+        assert_eq!(w.e_inner, [0u8; 32]);
+        assert_eq!(w.f_inner, [0u8; 32]);
         // Per-match payloads never carry fee notes (they're per-batch,
         // set by assemble_batch on the first match).
         assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
@@ -566,21 +548,18 @@ mod tests {
         let (w, p) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
 
         // note_c: buyer receives BASE, owner = buyer's note owner,
-        // (nonce, r) = derive_*(match_id=42, TRADE_ROLE_BUYER).
-        let cn = derive_nonce(42, TRADE_ROLE_BUYER);
-        let cr = derive_blinding(42, TRADE_ROLE_BUYER);
+        // inner_hash = derive_inner(match_id=42, TRADE_ROLE_BUYER).
+        let ci = derive_inner(42, TRADE_ROLE_BUYER);
         let expected_c =
-            commitment_from_fields(&base_mint(), 10, &buyer.owner_commitment, &cn, &cr).unwrap();
+            commitment_from_fields_v2(&base_mint(), 10, &buyer.owner_commitment, &ci).unwrap();
         assert_eq!(w.note_c_commitment, expected_c);
         assert_eq!(p.note_c_commitment, expected_c);
-        assert_eq!(w.c_nonce, cn);
+        assert_eq!(w.c_inner, ci);
 
         // note_d: seller receives QUOTE, owner = seller's note owner.
-        let dn = derive_nonce(42, TRADE_ROLE_SELLER);
-        let dr = derive_blinding(42, TRADE_ROLE_SELLER);
+        let di = derive_inner(42, TRADE_ROLE_SELLER);
         let expected_d =
-            commitment_from_fields(&quote_mint(), 1000, &seller.owner_commitment, &dn, &dr)
-                .unwrap();
+            commitment_from_fields_v2(&quote_mint(), 1000, &seller.owner_commitment, &di).unwrap();
         assert_eq!(w.note_d_commitment, expected_d);
     }
 
@@ -591,12 +570,11 @@ mod tests {
         let (m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
         let (w, p) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
 
-        let en = derive_nonce(42, CHANGE_ROLE_BUYER);
-        let er = derive_blinding(42, CHANGE_ROLE_BUYER);
+        let ei = derive_inner(42, CHANGE_ROLE_BUYER);
         let expected_e =
-            commitment_from_fields(&quote_mint(), 150, &buyer.owner_commitment, &en, &er).unwrap();
+            commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &ei).unwrap();
         assert_eq!(w.note_e_commitment, expected_e);
-        assert_eq!(w.e_nonce, en);
+        assert_eq!(w.e_inner, ei);
         assert_eq!(w.buyer_change_amt, 150);
 
         // The fee AMOUNT is still carried (conservation), but the fee NOTE

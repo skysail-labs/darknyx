@@ -33,7 +33,9 @@ use axum::{
 };
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::config::MatchConfig;
-use darkpool_matcher::order_canonical::OrderCanonical;
+use darkpool_matcher::order_canonical::{
+    anchor_pool_hash, Anchor, OrderCanonical, ANCHOR_POOL_SIZE,
+};
 use ed25519_dalek::{Signer, SigningKey};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use nyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
@@ -106,11 +108,22 @@ fn sign_order(
         token_mint: [0u8; 32],
         amount: note_amount,
         owner_commitment: fr_safe(0x44),
-        nonce: fr_safe(0x55),
-        blinding: fr_safe(0x66),
+        inner_hash: fr_safe(0x55),
         nullifier: [0x77; 32],
     };
     let note_commitment = opening.commitment().expect("Fr-safe opening");
+
+    let anchors: Vec<Anchor> = (0..ANCHOR_POOL_SIZE)
+        .map(|i| {
+            let mut inner = [0u8; 32];
+            inner[0] = 0;
+            inner[31] = 0x10 + i as u8;
+            Anchor {
+                inner_hash: inner,
+                nullifier: [0x90 + i as u8; 32],
+            }
+        })
+        .collect();
 
     let canonical = OrderCanonical {
         symbol: b"SOL-USDC",
@@ -124,6 +137,7 @@ fn sign_order(
         note_commitment,
         user_commitment,
         arrival_nonce,
+        anchor_pool_hash: anchor_pool_hash(&anchors),
     };
     let digest = canonical.digest().unwrap();
     let sig = key.sign(&digest);
@@ -144,11 +158,14 @@ fn sign_order(
         "trading_key": hex::encode(trading_key),
         "trading_key_signature": hex::encode(sig.to_bytes()),
         "owner_commitment": hex::encode(opening.owner_commitment),
-        "note_nonce": hex::encode(opening.nonce),
-        "note_blinding": hex::encode(opening.blinding),
+        "note_inner_hash": hex::encode(opening.inner_hash),
         "nullifier": hex::encode(opening.nullifier),
         "merkle_root": hex::encode([0xDDu8; 32]),
         "valid_input_proof": hex::encode([0u8; 256]),
+        "anchors": anchors.iter().map(|a| json!({
+            "inner_hash": hex::encode(a.inner_hash),
+            "nullifier": hex::encode(a.nullifier),
+        })).collect::<Vec<_>>(),
     })
 }
 

@@ -30,8 +30,8 @@ export interface SpendInputs {
   amount: bigint;
   spendingKey: bigint;
   ownerCommitmentBlinding: bigint;
-  nonce: bigint;
-  blindingR: bigint;
+  /** v2: single inner_hash replacing the old (nonce, blindingR) pair. */
+  innerHash: bigint;
   merklePath: bigint[]; // length 20
   merkleIndices: number[]; // length 20, 0 or 1
 }

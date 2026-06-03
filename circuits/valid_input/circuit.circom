@@ -61,8 +61,12 @@ template MerkleTreeChecker(depth) {
 //
 // Public inputs:  merkleRoot, noteCommitment, tokenMint[2] (lo|hi 128-bit
 //                 halves of the Solana mint pubkey), amount
-// Private inputs: spendingKey, ownerCommitmentBlinding, nonce, blindingR,
+// Private inputs: spendingKey, ownerCommitmentBlinding, innerHash,
 //                 merklePath[depth], merkleIndices[depth]
+//
+// v2 change: (nonce, blindingR) collapse into a single `innerHash`; the
+// commitment becomes Poseidon6. Mirrors VALID_SPEND v2 +
+// crates/darkpool-crypto/src/note.rs::commitment_from_fields_v2.
 template ValidInput(merkleDepth) {
     // ----- Public -----
     signal input merkleRoot;
@@ -73,8 +77,7 @@ template ValidInput(merkleDepth) {
     // ----- Private -----
     signal input spendingKey;
     signal input ownerCommitmentBlinding;  // r_owner used in owner_commitment
-    signal input nonce;
-    signal input blindingR;
+    signal input innerHash;
     signal input merklePath[merkleDepth];
     signal input merkleIndices[merkleDepth];
 
@@ -87,16 +90,15 @@ template ValidInput(merkleDepth) {
     signal ownerCommitment;
     ownerCommitment <== ownerHash.out;
 
-    // noteCommitment = Poseidon7(DOMAIN_NOTE=2, mint_lo, mint_hi, amount, owner, nonce, blinding)
+    // noteCommitment = Poseidon6(DOMAIN_NOTE=2, mint_lo, mint_hi, amount, owner, innerHash)
     // Domain tag matches crates/darkpool-crypto/src/note.rs::DOMAIN_NOTE.
-    component noteHash = Poseidon(7);
+    component noteHash = Poseidon(6);
     noteHash.inputs[0] <== 2;   // DOMAIN_NOTE
     noteHash.inputs[1] <== tokenMint[0];
     noteHash.inputs[2] <== tokenMint[1];
     noteHash.inputs[3] <== amount;
     noteHash.inputs[4] <== ownerCommitment;
-    noteHash.inputs[5] <== nonce;
-    noteHash.inputs[6] <== blindingR;
+    noteHash.inputs[5] <== innerHash;
     noteCommitment === noteHash.out;
 
     // Constraint: note is in the Merkle tree at merkleRoot.

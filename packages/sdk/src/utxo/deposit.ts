@@ -6,7 +6,6 @@
  *   const receipt = await deposit({
  *     tokenMint: mintBytes,
  *     amount: 100_000_000n,
- *     nonce: 42n,
  *     depositorTokenAccount: new PublicKey(...),
  *   });
  *
@@ -20,7 +19,7 @@ import { PublicKey } from "@solana/web3.js";
 import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
-import { noteCommitment, ownerCommitment } from "./note.js";
+import { noteCommitmentV2, ownerCommitment } from "./note.js";
 import { bn254ToBE32, deriveBlindingFactor } from "../keys/key-generators.js";
 import { buildDepositInstruction, vaultConfigPda } from "../idl/vault-client.js";
 
@@ -36,8 +35,6 @@ export interface DepositParams {
   amount: bigint;
   /** Depositor's SPL associated token account that holds `tokenMint`. */
   depositorTokenAccount: PublicKey;
-  /** Deterministic nonce (per-user monotonic counter). Must be unique per note. */
-  nonce: bigint;
   /** Override the SPL token program id (for Token-2022). */
   tokenProgramId?: PublicKey;
   callbacks?: TransactionCallbacks;
@@ -51,8 +48,8 @@ export interface DepositReceipt {
     tokenMint: Uint8Array;
     amount: bigint;
     ownerCommitment: bigint;
-    nonce: bigint;
-    blindingR: bigint;
+    /** v2: single inner_hash (deterministic from masterSeed + leafIndex). */
+    innerHash: bigint;
   };
 }
 
@@ -99,18 +96,19 @@ export function getDepositFunction(
 
     // --- Stage: note-build ---
     await params.callbacks?.pre?.("note-build");
-    const blindingR = deriveBlindingFactor(masterSeed, leafIndex);
+    // v2: the note's single randomness field is a deterministic, recoverable
+    // inner_hash derived from (masterSeed, leafIndex) — reuses the existing
+    // blinding-factor KDF (the client can regenerate it from its leaf index).
+    const innerHash = deriveBlindingFactor(masterSeed, leafIndex);
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
-    const nonceBytes = bn254ToBE32(params.nonce);
-    const blindingBytes = bn254ToBE32(blindingR);
+    const innerBytes = bn254ToBE32(innerHash);
     const ownerBytes = bn254ToBE32(owner);
 
-    const commitment = await noteCommitment({
+    const commitment = await noteCommitmentV2({
       tokenMint: params.tokenMint,
       amount: params.amount,
       ownerCommitment: owner,
-      nonce: params.nonce,
-      blindingR,
+      innerHash,
     });
 
     // --- Stage: instruction-build ---
@@ -124,8 +122,7 @@ export function getDepositFunction(
       tokenProgramId: params.tokenProgramId ?? TOKEN_PROGRAM_ID,
       amount: params.amount,
       ownerCommitment: ownerBytes,
-      nonce: nonceBytes,
-      blindingR: blindingBytes,
+      innerHash: innerBytes,
     });
 
     // --- Stage: transaction-send ---
@@ -143,8 +140,7 @@ export function getDepositFunction(
         tokenMint: params.tokenMint,
         amount: params.amount,
         ownerCommitment: owner,
-        nonce: params.nonce,
-        blindingR,
+        innerHash,
       },
     };
   };

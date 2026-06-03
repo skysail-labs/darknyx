@@ -335,8 +335,8 @@ export interface BuildDepositParams {
   tokenProgramId: PublicKey;
   amount: bigint;
   ownerCommitment: Uint8Array;
-  nonce: Uint8Array;
-  blindingR: Uint8Array;
+  /** v2: single inner_hash replacing the old (nonce, blindingR) pair. */
+  innerHash: Uint8Array;
 }
 
 export function buildDepositInstruction(p: BuildDepositParams): TransactionInstruction {
@@ -348,8 +348,7 @@ export function buildDepositInstruction(p: BuildDepositParams): TransactionInstr
     anchorDiscriminator("deposit"),
     u64LE(p.amount),
     fixed32(p.ownerCommitment),
-    fixed32(p.nonce),
-    fixed32(p.blindingR),
+    fixed32(p.innerHash),
   );
 
   // Sysvar rent pubkey = SysvarRent111111111111111111111111111111111

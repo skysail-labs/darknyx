@@ -19,7 +19,14 @@ use sha2::{Digest, Sha256};
 /// Domain-separation tag for order submit. Bound into the front of
 /// the canonical bytes so an `OrderCanonical` and a `CancelCanonical`
 /// with the same `order_id` can never collide on digest.
-pub const ORDER_DOMAIN: &[u8] = b"nyx-order-v1";
+///
+/// `v2` (was `v1`): the canonical body now binds a 32-byte
+/// `anchor_pool_hash` — a SHA-256 over the order's pre-supplied
+/// anchor pool (the `(inner_hash, nullifier)` pairs the in-TEE matcher
+/// uses to settle partial-fill continuations). Signing the hash (not
+/// the 640-byte pool inline) keeps the signed body compact while still
+/// cryptographically pinning the pool to the trading-key signature.
+pub const ORDER_DOMAIN: &[u8] = b"nyx-order-v2";
 
 /// Domain-separation tag for order cancel. See [`ORDER_DOMAIN`].
 pub const CANCEL_DOMAIN: &[u8] = b"nyx-cancel-v1";
@@ -28,6 +35,40 @@ pub const CANCEL_DOMAIN: &[u8] = b"nyx-cancel-v1";
 /// we expect to ever ship (`SOL-USDC`, `SOL-USDC-PERP-A`, etc.) and
 /// fits cleanly in a `u8` length prefix.
 pub const SYMBOL_MAX_LEN: usize = 32;
+
+/// Fixed number of continuation anchors a client supplies with each
+/// order. Bounds the per-order memory the CVM holds and the signed
+/// pool size. When exhausted (a 10th partial fill) the matcher pauses
+/// the order and requests a [`ANCHOR_TOPUP_SIZE`]-anchor top-up over WS.
+pub const ANCHOR_POOL_SIZE: usize = 10;
+
+/// Number of anchors added per WebSocket top-up when a pool is drained.
+pub const ANCHOR_TOPUP_SIZE: usize = 5;
+
+/// One pre-supplied continuation anchor: the `inner_hash` a future
+/// change note will be built with, plus the `nullifier =
+/// Poseidon3(DOMAIN_NULL, spending_key, inner_hash)` the client
+/// precomputed for when that change note is later spent. Both are
+/// 32-byte BE field elements. The CVM cannot forge either (it lacks
+/// the spending key); it only consumes them in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Anchor {
+    pub inner_hash: [u8; 32],
+    pub nullifier: [u8; 32],
+}
+
+/// SHA-256 over the ordered anchor pool: `H(a0.inner ‖ a0.null ‖ a1.inner
+/// ‖ a1.null ‖ …)`. This is the value bound into [`OrderCanonical`] and
+/// re-checked at intake against the full pool in the request body.
+/// Mirrored in TS by `anchorPoolHash` (`packages/sdk/src/orders/canonical.ts`).
+pub fn anchor_pool_hash(anchors: &[Anchor]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    for a in anchors {
+        h.update(a.inner_hash);
+        h.update(a.nullifier);
+    }
+    h.finalize().into()
+}
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum CanonicalError {
@@ -65,6 +106,12 @@ pub struct OrderCanonical<'a> {
     /// Client-supplied monotonic counter, scoped per trading key.
     /// Used by the TEE to reject submit-replay.
     pub arrival_nonce: u64,
+    /// SHA-256 over the order's anchor pool (the ordered
+    /// `(inner_hash ‖ nullifier)` pairs). Binds the pre-supplied
+    /// continuation anchors to the signature without inlining the
+    /// 640-byte pool in the signed body. The intake handler verifies
+    /// the full pool in the request body hashes to this value.
+    pub anchor_pool_hash: [u8; 32],
 }
 
 impl<'a> OrderCanonical<'a> {
@@ -72,7 +119,7 @@ impl<'a> OrderCanonical<'a> {
     /// running totals; `S` = symbol bytes length):
     ///
     /// ```text
-    ///   0..12        ORDER_DOMAIN              ("nyx-order-v1")
+    ///   0..12        ORDER_DOMAIN              ("nyx-order-v2")
     ///   12..13       symbol_len : u8
     ///   13..13+S     symbol bytes
     ///   +0..+1       side       : u8           (0 = bid, 1 = ask)
@@ -85,17 +132,18 @@ impl<'a> OrderCanonical<'a> {
     ///   +50..+82     note_commitment : [u8; 32]
     ///   +82..+114    user_commitment : [u8; 32]
     ///   +114..+122   arrival_nonce : u64 LE
+    ///   +122..+154   anchor_pool_hash : [u8; 32]
     /// ```
     ///
-    /// Total length: `12 + 1 + S + 1 + 1 + 32 + 16 + 32 + 32 + 8`
-    /// = `135 + S` bytes.
+    /// Total length: `12 + 1 + S + 1 + 1 + 32 + 16 + 32 + 32 + 8 + 32`
+    /// = `167 + S` bytes.
     pub fn to_bytes(&self) -> Result<Vec<u8>, CanonicalError> {
         if self.symbol.len() > SYMBOL_MAX_LEN {
             return Err(CanonicalError::SymbolTooLong(self.symbol.len()));
         }
         let symbol_len = self.symbol.len() as u8;
 
-        let mut buf = Vec::with_capacity(ORDER_DOMAIN.len() + 1 + self.symbol.len() + 122);
+        let mut buf = Vec::with_capacity(ORDER_DOMAIN.len() + 1 + self.symbol.len() + 154);
         buf.extend_from_slice(ORDER_DOMAIN);
         buf.push(symbol_len);
         buf.extend_from_slice(self.symbol);
@@ -109,6 +157,7 @@ impl<'a> OrderCanonical<'a> {
         buf.extend_from_slice(&self.note_commitment);
         buf.extend_from_slice(&self.user_commitment);
         buf.extend_from_slice(&self.arrival_nonce.to_le_bytes());
+        buf.extend_from_slice(&self.anchor_pool_hash);
         Ok(buf)
     }
 
@@ -169,7 +218,7 @@ mod tests {
     /// If you intentionally change the layout, regenerate this hex
     /// AND the TS-side fixture in the same commit.
     const FIXTURE_DIGEST_HEX: &str =
-        "961f3abc4d7f70a055a1d1faa6d22ac8350c9cbf59d04c22743fb571d50d3f23";
+        "03c9cb7db15bd91461dc5f21788ff975adb11351cb77e386ea5ca66ff07235ae";
 
     /// Pinned cancel-fixture digest. Same parity rule applies.
     const CANCEL_FIXTURE_DIGEST_HEX: &str =
@@ -188,6 +237,7 @@ mod tests {
             note_commitment: [0x22; 32],
             user_commitment: [0x33; 32],
             arrival_nonce: 42,
+            anchor_pool_hash: [0x44; 32],
         }
     }
 
@@ -210,9 +260,9 @@ mod tests {
     }
 
     #[test]
-    fn fixture_length_is_135_plus_symbol() {
+    fn fixture_length_is_167_plus_symbol() {
         let bytes = fixture().to_bytes().unwrap();
-        assert_eq!(bytes.len(), 135 + 8); // SOL-USDC = 8 bytes
+        assert_eq!(bytes.len(), 167 + 8); // SOL-USDC = 8 bytes
     }
 
     #[test]
@@ -264,6 +314,23 @@ mod tests {
         perturb!(note_commitment = [0x23; 32]);
         perturb!(user_commitment = [0x34; 32]);
         perturb!(arrival_nonce = 43);
+        perturb!(anchor_pool_hash = [0x45; 32]);
+    }
+
+    #[test]
+    fn anchor_pool_hash_is_order_sensitive() {
+        let a = Anchor {
+            inner_hash: [1u8; 32],
+            nullifier: [2u8; 32],
+        };
+        let b = Anchor {
+            inner_hash: [3u8; 32],
+            nullifier: [4u8; 32],
+        };
+        // Swapping the order of two distinct anchors changes the hash.
+        assert_ne!(anchor_pool_hash(&[a, b]), anchor_pool_hash(&[b, a]));
+        // Deterministic.
+        assert_eq!(anchor_pool_hash(&[a, b]), anchor_pool_hash(&[a, b]));
     }
 
     #[test]

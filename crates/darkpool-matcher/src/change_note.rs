@@ -26,6 +26,14 @@
 //! crate. SHA-256 is the same algorithm under both backends, so the
 //! output is byte-identical — but we GATE that with the parity test,
 //! we don't ASSUME it.
+//!
+//! ## v2 (inner_hash)
+//!
+//! The v2 note construction collapses the per-note (nonce, blinding_r) pair
+//! into a SINGLE `inner_hash` (see `darkpool_crypto::note::commitment_from_fields_v2`).
+//! So there is now ONE derivation per (match_id, role): [`derive_inner`]. It uses
+//! a single domain tag — the nonce/blinding domain split is gone because there is
+//! only one field to derive.
 
 use sha2::{Digest, Sha256};
 
@@ -47,15 +55,14 @@ pub const CHANGE_ROLE_SELLER: u8 = 0x5E;
 // ─── Trade-output + fee note roles (4g.7) ─────────────────────────────────────
 //
 // note_c / note_d are the full-fill output notes the buyer / seller
-// receive; the fee notes hold the protocol's cut. Their (nonce,
-// blinding) are derived the SAME way as the change notes — only the
-// role byte differs — so the user (and the protocol, for fee notes)
-// can re-derive the opening to spend the note later. Mirror of the TS
-// SDK's `TRADE_ROLE_*` / `FEE_ROLE_*` in
-// `packages/sdk/tests/helpers/e2e-helpers.ts`. Cross-language equality
-// follows from the shared `derive_inner` body (already parity-pinned
-// for the CHANGE roles by `tests/change_note_parity.rs`): same
-// SHA-256(domain ‖ match_id_le ‖ role), only the role byte changes.
+// receive; the fee notes hold the protocol's cut. Their `inner_hash` is
+// derived the SAME way as the change notes — only the role byte differs —
+// so the user (and the protocol, for fee notes) can re-derive the opening
+// to spend the note later. Mirror of the TS SDK's `TRADE_ROLE_*` /
+// `FEE_ROLE_*` in `packages/sdk/tests/helpers/e2e-helpers.ts`. Cross-language
+// equality follows from the shared `derive_inner` body (parity-pinned by
+// `tests/change_note_parity.rs`): same SHA-256(domain ‖ match_id_le ‖ role),
+// only the role byte changes.
 
 /// Role tag for the buyer's full-fill output note (`note_c`),
 /// derived against `match_id`.
@@ -68,38 +75,29 @@ pub const FEE_ROLE_BASE: u8 = 0xFB;
 /// Role tag for a quote-asset protocol fee note.
 pub const FEE_ROLE_QUOTE: u8 = 0xFC;
 
-// ─────── Domain tags ────────────────────────────────────────────────────────
+// ─────── Domain tag ──────────────────────────────────────────────────────────
 //
-// These bytes are the FIRST input to SHA-256 — they domain-separate
-// nonce derivation from blinding derivation so the same `(match_id,
-// role)` pair never produces colliding outputs across the two.
+// The single domain tag for the v2 inner_hash derivation. (The v1 split into
+// `nyx-change-nonce` / `nyx-change-blind` is gone — there is now one field per
+// note.)
 
-const DOMAIN_NONCE: &[u8] = b"nyx-change-nonce";
-const DOMAIN_BLIND: &[u8] = b"nyx-change-blind";
+const DOMAIN_INNER: &[u8] = b"nyx-change-inner";
 
-// ─────── Derivation primitives ──────────────────────────────────────────────
+// ─────── Derivation primitive ────────────────────────────────────────────────
 
-/// Derive the change-note `nonce` (32 bytes) from `(match_id, role)`.
+/// Derive the v2 note `inner_hash` (32 bytes) from `(match_id, role)`.
 ///
 /// Output is masked to be a valid BN254 Fr element:
 /// `out[0] = 0`, `out[1] &= 0x0f`. SHA-256 alone could produce a
 /// 32-byte value ≥ p (the Fr modulus); the mask drops it into a
 /// strict subset that's guaranteed < p without rejection sampling.
-pub fn derive_nonce(match_id: u64, role: u8) -> [u8; 32] {
-    derive_inner(DOMAIN_NONCE, match_id, role)
-}
-
-/// Derive the change-note blinding factor `r` from `(match_id, role)`.
-/// Same shape as [`derive_nonce`] but with a distinct domain tag.
-pub fn derive_blinding(match_id: u64, role: u8) -> [u8; 32] {
-    derive_inner(DOMAIN_BLIND, match_id, role)
-}
-
-/// Shared body for both derivations. Kept private so callers must
-/// go through the named entrypoints (which encode the domain tag).
-fn derive_inner(domain: &[u8], match_id: u64, role: u8) -> [u8; 32] {
+///
+/// This is the single per-note randomness field in the v2 construction
+/// (`commitment_from_fields_v2`). The `role` byte distinguishes the six note
+/// roles (buyer/seller change, buyer/seller trade output, base/quote fee).
+pub fn derive_inner(match_id: u64, role: u8) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(domain);
+    hasher.update(DOMAIN_INNER);
     hasher.update(match_id.to_le_bytes());
     hasher.update([role]);
     let mut out: [u8; 32] = hasher.finalize().into();
@@ -120,42 +118,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nonce_is_deterministic() {
+    fn inner_is_deterministic() {
         assert_eq!(
-            derive_nonce(42, CHANGE_ROLE_BUYER),
-            derive_nonce(42, CHANGE_ROLE_BUYER)
-        );
-    }
-
-    #[test]
-    fn blinding_is_deterministic() {
-        assert_eq!(
-            derive_blinding(42, CHANGE_ROLE_BUYER),
-            derive_blinding(42, CHANGE_ROLE_BUYER)
-        );
-    }
-
-    #[test]
-    fn nonce_and_blinding_differ() {
-        assert_ne!(
-            derive_nonce(42, CHANGE_ROLE_BUYER),
-            derive_blinding(42, CHANGE_ROLE_BUYER),
-            "different domain tags must yield different outputs"
+            derive_inner(42, CHANGE_ROLE_BUYER),
+            derive_inner(42, CHANGE_ROLE_BUYER)
         );
     }
 
     #[test]
     fn buyer_and_seller_differ() {
         assert_ne!(
-            derive_nonce(42, CHANGE_ROLE_BUYER),
-            derive_nonce(42, CHANGE_ROLE_SELLER),
+            derive_inner(42, CHANGE_ROLE_BUYER),
+            derive_inner(42, CHANGE_ROLE_SELLER),
             "different role bytes must yield different outputs"
         );
     }
 
     #[test]
+    fn match_id_changes_output() {
+        assert_ne!(
+            derive_inner(42, CHANGE_ROLE_BUYER),
+            derive_inner(43, CHANGE_ROLE_BUYER),
+            "different match_id must yield different outputs"
+        );
+    }
+
+    #[test]
     fn all_six_roles_are_distinct() {
-        // For one match_id, every role must produce a distinct nonce —
+        // For one match_id, every role must produce a distinct inner_hash —
         // a collision would alias two notes onto the same opening.
         let mid = 42u64;
         let roles = [
@@ -166,12 +156,12 @@ mod tests {
             FEE_ROLE_BASE,
             FEE_ROLE_QUOTE,
         ];
-        let nonces: Vec<[u8; 32]> = roles.iter().map(|&r| derive_nonce(mid, r)).collect();
-        for i in 0..nonces.len() {
-            for j in (i + 1)..nonces.len() {
+        let inners: Vec<[u8; 32]> = roles.iter().map(|&r| derive_inner(mid, r)).collect();
+        for i in 0..inners.len() {
+            for j in (i + 1)..inners.len() {
                 assert_ne!(
-                    nonces[i], nonces[j],
-                    "role {:#x} and {:#x} produced colliding nonces",
+                    inners[i], inners[j],
+                    "role {:#x} and {:#x} produced colliding inner_hashes",
                     roles[i], roles[j]
                 );
             }
@@ -189,12 +179,9 @@ mod tests {
                 FEE_ROLE_BASE,
                 FEE_ROLE_QUOTE,
             ] {
-                let n = derive_nonce(mid, role);
-                let r = derive_blinding(mid, role);
-                assert_eq!(n[0], 0, "nonce byte 0 must be zero");
-                assert_eq!(r[0], 0, "blinding byte 0 must be zero");
-                assert_eq!(n[1] & 0xf0, 0, "nonce byte 1 high nibble must be zero");
-                assert_eq!(r[1] & 0xf0, 0, "blinding byte 1 high nibble must be zero");
+                let n = derive_inner(mid, role);
+                assert_eq!(n[0], 0, "inner byte 0 must be zero");
+                assert_eq!(n[1] & 0xf0, 0, "inner byte 1 high nibble must be zero");
             }
         }
     }

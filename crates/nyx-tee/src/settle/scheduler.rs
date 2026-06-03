@@ -495,16 +495,14 @@ mod tests {
             token_mint: quote_mint,
             amount: 1000,
             owner_commitment: fr_safe(0x44),
-            nonce: fr_safe(0x11),
-            blinding: fr_safe(0x22),
+            inner_hash: fr_safe(0x11),
             nullifier: [0xAA; 32],
         };
         let seller_open = NoteOpening {
             token_mint: base_mint,
             amount: 10,
             owner_commitment: fr_safe(0x55),
-            nonce: fr_safe(0x33),
-            blinding: fr_safe(0x66),
+            inner_hash: fr_safe(0x33),
             nullifier: [0xBB; 32],
         };
         let note_buyer = buyer_open.commitment().unwrap();

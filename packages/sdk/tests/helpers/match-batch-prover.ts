@@ -79,25 +79,19 @@ export interface MatchSlotWitness {
   sellerFeeAmt: bigint;
   // ── VALID_PRICE-equivalent fields ──
   batchSlot: bigint;
-  // ── VALID_CREATE private witnesses ──
+  // ── VALID_CREATE private witnesses (v2: one inner_hash per note) ──
   aOwnerCommit: bigint;
   bOwnerCommit: bigint;
   aAmount: bigint;
   bAmount: bigint;
-  aNonce: bigint;
-  aBlinding: bigint;
-  bNonce: bigint;
-  bBlinding: bigint;
-  cNonce: bigint;
-  cBlinding: bigint;
-  dNonce: bigint;
-  dBlinding: bigint;
+  aInner: bigint;
+  bInner: bigint;
+  cInner: bigint;
+  dInner: bigint;
   /** Only meaningful when buyerChangeAmt != 0. */
-  eNonce: bigint;
-  eBlinding: bigint;
+  eInner: bigint;
   /** Only meaningful when sellerChangeAmt != 0. */
-  fNonce: bigint;
-  fBlinding: bigint;
+  fInner: bigint;
   // ── VALID_PRICE private witness ──
   clearingPrice: bigint;
 }
@@ -135,8 +129,8 @@ function pubkeyToFrPair(pk: Uint8Array): [bigint, bigint] {
  * next-supported N when the matcher produced fewer than N real
  * matches. Every per-slot constraint trivially holds:
  *
- *   - All Poseidon7 note openings collapse to
- *     `Poseidon7(2, 0, 0, 0, 0, 0, 0)`, so note_a/b/c/d all equal
+ *   - All Poseidon6 note openings collapse to
+ *     `Poseidon6(2, 0, 0, 0, 0, 0)`, so note_a/b/c/d all equal
  *     this same dummy hash (note_e/f stay zero because the IsZero
  *     gates short-circuit them when buyer/seller_change_amt == 0).
  *   - Conservation: a_amount = 0 = 0 + 0 + 0. Same for b.
@@ -149,10 +143,10 @@ function pubkeyToFrPair(pk: Uint8Array): [bigint, bigint] {
  */
 export async function dummySlot(): Promise<MatchSlotWitness> {
   const p = await getPoseidon();
-  // Poseidon7(DOMAIN_NOTE=2, mint_lo=0, mint_hi=0, amount=0,
-  //           owner_commit=0, nonce=0, blinding=0)
+  // Poseidon6(DOMAIN_NOTE=2, mint_lo=0, mint_hi=0, amount=0,
+  //           owner_commit=0, inner_hash=0)
   const dummyNote = bn254ToBE32(
-    p.F.toObject(p([2n, 0n, 0n, 0n, 0n, 0n, 0n])),
+    p.F.toObject(p([2n, 0n, 0n, 0n, 0n, 0n])),
   );
   const zero32 = new Uint8Array(32);
   return {
@@ -175,18 +169,12 @@ export async function dummySlot(): Promise<MatchSlotWitness> {
     bOwnerCommit: 0n,
     aAmount: 0n,
     bAmount: 0n,
-    aNonce: 0n,
-    aBlinding: 0n,
-    bNonce: 0n,
-    bBlinding: 0n,
-    cNonce: 0n,
-    cBlinding: 0n,
-    dNonce: 0n,
-    dBlinding: 0n,
-    eNonce: 0n,
-    eBlinding: 0n,
-    fNonce: 0n,
-    fBlinding: 0n,
+    aInner: 0n,
+    bInner: 0n,
+    cInner: 0n,
+    dInner: 0n,
+    eInner: 0n,
+    fInner: 0n,
     clearingPrice: 0n,
   };
 }
@@ -398,18 +386,12 @@ export async function proveMatchBatch(
     b_owner_commit: args.slots.map((s) => s.bOwnerCommit.toString()),
     a_amount: args.slots.map((s) => s.aAmount.toString()),
     b_amount: args.slots.map((s) => s.bAmount.toString()),
-    a_nonce: args.slots.map((s) => s.aNonce.toString()),
-    a_blinding: args.slots.map((s) => s.aBlinding.toString()),
-    b_nonce: args.slots.map((s) => s.bNonce.toString()),
-    b_blinding: args.slots.map((s) => s.bBlinding.toString()),
-    c_nonce: args.slots.map((s) => s.cNonce.toString()),
-    c_blinding: args.slots.map((s) => s.cBlinding.toString()),
-    d_nonce: args.slots.map((s) => s.dNonce.toString()),
-    d_blinding: args.slots.map((s) => s.dBlinding.toString()),
-    e_nonce: args.slots.map((s) => s.eNonce.toString()),
-    e_blinding: args.slots.map((s) => s.eBlinding.toString()),
-    f_nonce: args.slots.map((s) => s.fNonce.toString()),
-    f_blinding: args.slots.map((s) => s.fBlinding.toString()),
+    a_inner: args.slots.map((s) => s.aInner.toString()),
+    b_inner: args.slots.map((s) => s.bInner.toString()),
+    c_inner: args.slots.map((s) => s.cInner.toString()),
+    d_inner: args.slots.map((s) => s.dInner.toString()),
+    e_inner: args.slots.map((s) => s.eInner.toString()),
+    f_inner: args.slots.map((s) => s.fInner.toString()),
     // VALID_PRICE private witness
     clearing_price: args.slots.map((s) => s.clearingPrice.toString()),
   };

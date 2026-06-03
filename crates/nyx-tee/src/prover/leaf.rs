@@ -187,7 +187,7 @@ mod tests {
     /// this module's tag/arity ordering has drifted from the
     /// circuit (would silently break VALID_MATCH_BATCH on-chain).
     /// Either way: fail loud, fix at the source.
-    const DUMMY_LEAF_HEX: &str = "22d38c8fcc7a04f88ffafe510674a8dfa04473741d782bb142145abb9ec9f38e";
+    const DUMMY_LEAF_HEX: &str = "1136f7f54b6117db49a8fb1a920581a657a0c1220ececaedda30480fac9bcf6b";
 
     #[test]
     fn dummy_slot_leaf_is_pinned() {
@@ -210,7 +210,7 @@ mod tests {
     fn batch_root_of_two_identical_dummies_is_pinned() {
         let leaf = compute_batch_leaf(&dummy_slot()).unwrap();
         let root = compute_batch_root(&[leaf, leaf]).unwrap();
-        let want = "1c4abdfdd647d144c71fa9ed4cbbd0a57d0621b5769579f102662c3e114bc7f8";
+        let want = "2b2d7482bfd5e8342d73c1831c2bd7758c128f05ce0e504fd3604599326860e3";
         // Pin the value byte-for-byte so a future Poseidon refactor
         // surfaces here. (The prior literal was a dead pin —
         // `let _ = want` with no assertion — and had drifted from the

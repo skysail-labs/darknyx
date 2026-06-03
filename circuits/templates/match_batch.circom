@@ -15,7 +15,7 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 //
 // Constraint budget (measured on the N=16 instantiation —
 // `circuits/match_batch_n16/`):
-//   - VALID_CREATE constraints (6 Poseidon7 note hashes + IsZero
+//   - VALID_CREATE constraints (6 Poseidon6 note hashes + IsZero
 //     selectors + per-leg conservation)             ~2,100
 //   - VALID_PRICE  constraints (3 Num2Bits(64), one mul check)
 //                                                   ~  200
@@ -59,7 +59,7 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 // `packages/sdk/tests/helpers/match-batch-prover.ts` AND with the
 // on-chain leaf walker in
 // `programs/vault/src/instructions/tee_forced_settle_batched.rs`):
-//   DOMAIN_NOTE       =  2   (note commitment Poseidon7, existing)
+//   DOMAIN_NOTE       =  2   (note commitment Poseidon6 v2 — inner_hash)
 //   DOMAIN_LEAF_INNER = 20   (Poseidon(12) inner stage of leaf)
 //   DOMAIN_LEAF_TOP   = 21   (Poseidon(9) outer stage of leaf)
 //   DOMAIN_BATCH_ROOT = 22   (Merkle internal node, Poseidon(3))
@@ -99,23 +99,17 @@ template MatchSlot() {
     signal input clearing_price;
     signal input batch_slot;
 
-    // ----- VALID_CREATE private witnesses -----
+    // ----- VALID_CREATE private witnesses (v2: one inner_hash per note) -----
     signal input a_owner_commit;
     signal input b_owner_commit;
     signal input a_amount;
     signal input b_amount;
-    signal input a_nonce;
-    signal input a_blinding;
-    signal input b_nonce;
-    signal input b_blinding;
-    signal input c_nonce;
-    signal input c_blinding;
-    signal input d_nonce;
-    signal input d_blinding;
-    signal input e_nonce;
-    signal input e_blinding;
-    signal input f_nonce;
-    signal input f_blinding;
+    signal input a_inner;
+    signal input b_inner;
+    signal input c_inner;
+    signal input d_inner;
+    signal input e_inner;
+    signal input f_inner;
 
     // ============================================================
     // OUTPUT: leaf hash binding all per-slot fields the on-chain
@@ -129,73 +123,67 @@ template MatchSlot() {
     // `template ValidCreate()` from circuits/valid_create/circuit.circom.
     // ─────────────────────────────────────────────────────────────────
 
-    component hashA = Poseidon(7);
+    component hashA = Poseidon(6);
     hashA.inputs[0] <== 2;   // DOMAIN_NOTE
     hashA.inputs[1] <== quote_mint_lo;
     hashA.inputs[2] <== quote_mint_hi;
     hashA.inputs[3] <== a_amount;
     hashA.inputs[4] <== a_owner_commit;
-    hashA.inputs[5] <== a_nonce;
-    hashA.inputs[6] <== a_blinding;
+    hashA.inputs[5] <== a_inner;
     note_a_commitment === hashA.out;
 
-    component hashB = Poseidon(7);
+    component hashB = Poseidon(6);
     hashB.inputs[0] <== 2;
     hashB.inputs[1] <== base_mint_lo;
     hashB.inputs[2] <== base_mint_hi;
     hashB.inputs[3] <== b_amount;
     hashB.inputs[4] <== b_owner_commit;
-    hashB.inputs[5] <== b_nonce;
-    hashB.inputs[6] <== b_blinding;
+    hashB.inputs[5] <== b_inner;
     note_b_commitment === hashB.out;
 
     a_amount === quote_amount + buyer_change_amt + buyer_fee_amt;
     b_amount === base_amount + seller_change_amt + seller_fee_amt;
 
-    component hashC = Poseidon(7);
+    component hashC = Poseidon(6);
     hashC.inputs[0] <== 2;
     hashC.inputs[1] <== base_mint_lo;
     hashC.inputs[2] <== base_mint_hi;
     hashC.inputs[3] <== base_amount;
     hashC.inputs[4] <== a_owner_commit;
-    hashC.inputs[5] <== c_nonce;
-    hashC.inputs[6] <== c_blinding;
+    hashC.inputs[5] <== c_inner;
     note_c_commitment === hashC.out;
 
-    component hashD = Poseidon(7);
+    component hashD = Poseidon(6);
     hashD.inputs[0] <== 2;
     hashD.inputs[1] <== quote_mint_lo;
     hashD.inputs[2] <== quote_mint_hi;
     hashD.inputs[3] <== quote_amount;
     hashD.inputs[4] <== b_owner_commit;
-    hashD.inputs[5] <== d_nonce;
-    hashD.inputs[6] <== d_blinding;
+    hashD.inputs[5] <== d_inner;
     note_d_commitment === hashD.out;
 
     component buyerChangeIsZero = IsZero();
     buyerChangeIsZero.in <== buyer_change_amt;
-    component hashE = Poseidon(7);
+    component hashE = Poseidon(6);
     hashE.inputs[0] <== 2;
     hashE.inputs[1] <== quote_mint_lo;
     hashE.inputs[2] <== quote_mint_hi;
     hashE.inputs[3] <== buyer_change_amt;
     hashE.inputs[4] <== a_owner_commit;
-    hashE.inputs[5] <== e_nonce;
-    hashE.inputs[6] <== e_blinding;
+    hashE.inputs[5] <== e_inner;
     signal expectedNoteE;
     expectedNoteE <== (1 - buyerChangeIsZero.out) * hashE.out;
     note_e_commitment === expectedNoteE;
 
     component sellerChangeIsZero = IsZero();
     sellerChangeIsZero.in <== seller_change_amt;
-    component hashF = Poseidon(7);
+    component hashF = Poseidon(6);
     hashF.inputs[0] <== 2;
     hashF.inputs[1] <== base_mint_lo;
     hashF.inputs[2] <== base_mint_hi;
     hashF.inputs[3] <== seller_change_amt;
     hashF.inputs[4] <== b_owner_commit;
-    hashF.inputs[5] <== f_nonce;
-    hashF.inputs[6] <== f_blinding;
+    hashF.inputs[5] <== f_inner;
     signal expectedNoteF;
     expectedNoteF <== (1 - sellerChangeIsZero.out) * hashF.out;
     note_f_commitment === expectedNoteF;
@@ -326,23 +314,17 @@ template MatchBatch(N) {
     signal input seller_fee_amt[N];
     signal input batch_slot[N];
 
-    // ----- VALID_CREATE private witnesses -----
+    // ----- VALID_CREATE private witnesses (v2: one inner_hash per note) -----
     signal input a_owner_commit[N];
     signal input b_owner_commit[N];
     signal input a_amount[N];
     signal input b_amount[N];
-    signal input a_nonce[N];
-    signal input a_blinding[N];
-    signal input b_nonce[N];
-    signal input b_blinding[N];
-    signal input c_nonce[N];
-    signal input c_blinding[N];
-    signal input d_nonce[N];
-    signal input d_blinding[N];
-    signal input e_nonce[N];
-    signal input e_blinding[N];
-    signal input f_nonce[N];
-    signal input f_blinding[N];
+    signal input a_inner[N];
+    signal input b_inner[N];
+    signal input c_inner[N];
+    signal input d_inner[N];
+    signal input e_inner[N];
+    signal input f_inner[N];
 
     // ----- VALID_PRICE private witness -----
     signal input clearing_price[N];
@@ -371,18 +353,12 @@ template MatchBatch(N) {
         slot[i].b_owner_commit    <== b_owner_commit[i];
         slot[i].a_amount          <== a_amount[i];
         slot[i].b_amount          <== b_amount[i];
-        slot[i].a_nonce           <== a_nonce[i];
-        slot[i].a_blinding        <== a_blinding[i];
-        slot[i].b_nonce           <== b_nonce[i];
-        slot[i].b_blinding        <== b_blinding[i];
-        slot[i].c_nonce           <== c_nonce[i];
-        slot[i].c_blinding        <== c_blinding[i];
-        slot[i].d_nonce           <== d_nonce[i];
-        slot[i].d_blinding        <== d_blinding[i];
-        slot[i].e_nonce           <== e_nonce[i];
-        slot[i].e_blinding        <== e_blinding[i];
-        slot[i].f_nonce           <== f_nonce[i];
-        slot[i].f_blinding        <== f_blinding[i];
+        slot[i].a_inner           <== a_inner[i];
+        slot[i].b_inner           <== b_inner[i];
+        slot[i].c_inner           <== c_inner[i];
+        slot[i].d_inner           <== d_inner[i];
+        slot[i].e_inner           <== e_inner[i];
+        slot[i].f_inner           <== f_inner[i];
         slot[i].clearing_price    <== clearing_price[i];
     }
 

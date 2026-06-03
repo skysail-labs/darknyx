@@ -3,10 +3,10 @@ use crate::merkle::append_leaf;
 use crate::state::*;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
-use darkpool_crypto::note::commitment_from_fields;
+use darkpool_crypto::note::commitment_from_fields_v2;
 
 #[derive(Accounts)]
-#[instruction(amount: u64, owner_commitment: [u8; 32], nonce: [u8; 32], blinding_r: [u8; 32])]
+#[instruction(amount: u64, owner_commitment: [u8; 32], inner_hash: [u8; 32])]
 pub struct Deposit<'info> {
     #[account(mut)]
     pub depositor: Signer<'info>,
@@ -59,8 +59,7 @@ pub fn deposit_handler(
     ctx: Context<Deposit>,
     amount: u64,
     owner_commitment: [u8; 32],
-    nonce: [u8; 32],
-    blinding_r: [u8; 32],
+    inner_hash: [u8; 32],
 ) -> Result<()> {
     require!(amount > 0, VaultError::ZeroAmount);
 
@@ -77,16 +76,12 @@ pub fn deposit_handler(
         ctx.accounts.token_mint.decimals,
     )?;
 
-    // Compute note commitment using the shared crypto crate.
+    // Compute note commitment using the shared crypto crate (v2: single
+    // inner_hash replaces the old nonce + blinding_r pair; mint stays bound).
     let token_mint_bytes: [u8; 32] = ctx.accounts.token_mint.key().to_bytes();
-    let commitment = commitment_from_fields(
-        &token_mint_bytes,
-        amount,
-        &owner_commitment,
-        &nonce,
-        &blinding_r,
-    )
-    .map_err(|_| error!(VaultError::MalformedPublicInputs))?;
+    let commitment =
+        commitment_from_fields_v2(&token_mint_bytes, amount, &owner_commitment, &inner_hash)
+            .map_err(|_| error!(VaultError::MalformedPublicInputs))?;
 
     // Append into Merkle tree. Scoped so the RefMut on vault_config is
     // released before we touch the other ctx.accounts borrows below.

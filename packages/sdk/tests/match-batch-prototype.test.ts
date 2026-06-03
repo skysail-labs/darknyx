@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 
-import { noteCommitment } from "../src/utxo/note.js";
+import { noteCommitmentV2 } from "../src/utxo/note.js";
 import {
   proveMatchBatch,
   computeBatchLeaf,
@@ -64,7 +64,7 @@ async function buildSlot(args: {
   buyerFee: bigint;
   sellerFee: bigint;
   batchSlot: bigint;
-  /** Salt the nonces / blindings so multiple slots in the same batch
+  /** Salt the inner_hashes so multiple slots in the same batch
    *  don't accidentally collide commitments. */
   slotIdx: number;
 }): Promise<MatchSlotWitness> {
@@ -72,40 +72,39 @@ async function buildSlot(args: {
   const aAmount = quoteAmount + args.buyerChange + args.buyerFee;
   const bAmount = args.baseAmount + args.sellerChange + args.sellerFee;
 
-  const N = (idx: number) => BigInt(0xA0A0 + args.slotIdx * 100 + idx);
-  const B = (idx: number) => BigInt(0xB0B0 + args.slotIdx * 100 + idx);
+  // One inner_hash per note (v2). Salt by slot so leaves stay distinct.
+  const I = (idx: number) => BigInt(0xA0A0 + args.slotIdx * 100 + idx);
+  const aInner = I(1);
+  const bInner = I(2);
+  const cInner = I(3);
+  const dInner = I(4);
+  const eInner = I(5);
+  const fInner = I(6);
 
-  const aNonce = N(1), aBlinding = B(1);
-  const bNonce = N(2), bBlinding = B(2);
-  const cNonce = N(3), cBlinding = B(3);
-  const dNonce = N(4), dBlinding = B(4);
-  const eNonce = N(5), eBlinding = B(5);
-  const fNonce = N(6), fBlinding = B(6);
-
-  const noteA = await noteCommitment({
+  const noteA = await noteCommitmentV2({
     tokenMint: args.quoteMint, amount: aAmount,
-    ownerCommitment: args.buyerOwnerCommit, nonce: aNonce, blindingR: aBlinding,
+    ownerCommitment: args.buyerOwnerCommit, innerHash: aInner,
   });
-  const noteB = await noteCommitment({
+  const noteB = await noteCommitmentV2({
     tokenMint: args.baseMint, amount: bAmount,
-    ownerCommitment: args.sellerOwnerCommit, nonce: bNonce, blindingR: bBlinding,
+    ownerCommitment: args.sellerOwnerCommit, innerHash: bInner,
   });
-  const noteC = await noteCommitment({
+  const noteC = await noteCommitmentV2({
     tokenMint: args.baseMint, amount: args.baseAmount,
-    ownerCommitment: args.buyerOwnerCommit, nonce: cNonce, blindingR: cBlinding,
+    ownerCommitment: args.buyerOwnerCommit, innerHash: cInner,
   });
-  const noteD = await noteCommitment({
+  const noteD = await noteCommitmentV2({
     tokenMint: args.quoteMint, amount: quoteAmount,
-    ownerCommitment: args.sellerOwnerCommit, nonce: dNonce, blindingR: dBlinding,
+    ownerCommitment: args.sellerOwnerCommit, innerHash: dInner,
   });
   const zero = new Uint8Array(32);
-  const noteE = args.buyerChange === 0n ? zero : await noteCommitment({
+  const noteE = args.buyerChange === 0n ? zero : await noteCommitmentV2({
     tokenMint: args.quoteMint, amount: args.buyerChange,
-    ownerCommitment: args.buyerOwnerCommit, nonce: eNonce, blindingR: eBlinding,
+    ownerCommitment: args.buyerOwnerCommit, innerHash: eInner,
   });
-  const noteF = args.sellerChange === 0n ? zero : await noteCommitment({
+  const noteF = args.sellerChange === 0n ? zero : await noteCommitmentV2({
     tokenMint: args.baseMint, amount: args.sellerChange,
-    ownerCommitment: args.sellerOwnerCommit, nonce: fNonce, blindingR: fBlinding,
+    ownerCommitment: args.sellerOwnerCommit, innerHash: fInner,
   });
 
   return {
@@ -119,9 +118,7 @@ async function buildSlot(args: {
     batchSlot: args.batchSlot,
     aOwnerCommit: args.buyerOwnerCommit, bOwnerCommit: args.sellerOwnerCommit,
     aAmount, bAmount,
-    aNonce, aBlinding, bNonce, bBlinding,
-    cNonce, cBlinding, dNonce, dBlinding,
-    eNonce, eBlinding, fNonce, fBlinding,
+    aInner, bInner, cInner, dInner, eInner, fInner,
     clearingPrice: args.clearingPrice,
   };
 }
@@ -263,8 +260,8 @@ const ready2 = artefactsReady(2);
     // the prover's quick-checks (which only verify the high-level
     // VALID_PRICE / conservation arithmetic, not the per-note Poseidon
     // openings). snarkjs's witness generator should fail because the
-    // constraint `note_a_commitment === Poseidon7(2, qm_lo, qm_hi,
-    // a_amount, a_owner_commit, a_nonce, a_blinding)` no longer holds.
+    // constraint `note_a_commitment === Poseidon6(2, qm_lo, qm_hi,
+    // a_amount, a_owner_commit, a_inner)` no longer holds.
     const corrupted = new Uint8Array(slots[0].noteAcommitment);
     corrupted[31] ^= 0x01;
     slots[0] = { ...slots[0], noteAcommitment: corrupted };

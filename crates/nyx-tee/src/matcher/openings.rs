@@ -2,7 +2,7 @@
 //!
 //! The VALID_MATCH_BATCH circuit opens each input note — it
 //! re-derives `note_a_commitment` from the note's full opening
-//! (`amount`, `owner_commitment`, `nonce`, `blinding`) and asserts
+//! (`amount`, `owner_commitment`, `inner_hash`) and asserts
 //! equality (`circuits/templates/match_batch.circom`, `hashA`). So
 //! the in-TEE prover needs those secret fields, which the
 //! `MatchPair` (commitments only) does not carry. They arrive with
@@ -21,7 +21,7 @@
 //! cross-language signing-contract change — CLAUDE.md §6).
 //!
 //! The `nullifier` is the exception: `nullifier =
-//! Poseidon3(DOMAIN_NULL, spending_key, commitment)` needs the
+//! Poseidon3(DOMAIN_NULL, spending_key, inner_hash)` needs the
 //! user's spending key, which must NEVER enter the TEE. The user
 //! precomputes it client-side and submits it; the matcher cannot
 //! verify it (it lacks the spending key). A wrong nullifier is
@@ -35,9 +35,57 @@
 
 use std::collections::HashMap;
 
-use darkpool_crypto::note::commitment_from_fields;
+use darkpool_crypto::note::commitment_from_fields_v2;
+pub use darkpool_matcher::order_canonical::Anchor;
 
 use crate::settle::lock_note::Groth16ProofBytes;
+
+/// Per-order pool of pre-supplied continuation anchors. The client
+/// submits a fixed [`darkpool_matcher::order_canonical::ANCHOR_POOL_SIZE`]
+/// pool with each order; the settle assembler consumes one anchor per
+/// partial-fill change note (monotonic, single-use), so the residual's
+/// change note carries a client-known `inner_hash` + a pre-computed
+/// `nullifier` — which is what lets the matcher re-match the residual
+/// without a per-fill roundtrip (Phase 6). Keyed by `order_id` (NOT the
+/// collateral commitment, which rotates on each continuation).
+#[derive(Clone, Debug, Default)]
+pub struct AnchorPool {
+    anchors: Vec<Anchor>,
+    /// Index of the next unconsumed anchor (monotonic; single-use).
+    next_index: usize,
+    /// Set when the pool is exhausted and the matcher is awaiting a
+    /// WebSocket top-up (Phase 7). A paused order is skipped by the tick.
+    pub paused: bool,
+}
+
+impl AnchorPool {
+    pub fn new(anchors: Vec<Anchor>) -> Self {
+        Self {
+            anchors,
+            next_index: 0,
+            paused: false,
+        }
+    }
+
+    /// Consume the next unconsumed anchor, advancing the cursor. Returns
+    /// `None` (and the caller should pause the order) when exhausted.
+    pub fn consume_next(&mut self) -> Option<Anchor> {
+        let a = self.anchors.get(self.next_index).copied()?;
+        self.next_index += 1;
+        Some(a)
+    }
+
+    /// Append more anchors (a WebSocket top-up). Clears `paused`.
+    pub fn append(&mut self, more: impl IntoIterator<Item = Anchor>) {
+        self.anchors.extend(more);
+        self.paused = false;
+    }
+
+    /// Number of anchors not yet consumed.
+    pub fn remaining(&self) -> usize {
+        self.anchors.len().saturating_sub(self.next_index)
+    }
+}
 
 /// The full opening of one input note — everything the
 /// VALID_MATCH_BATCH circuit needs to re-derive its commitment, plus
@@ -54,11 +102,10 @@ pub struct NoteOpening {
     /// `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Distinct
     /// from the wallet `user_commitment`.
     pub owner_commitment: [u8; 32],
-    /// Per-note nonce.
-    pub nonce: [u8; 32],
-    /// Per-note blinding factor `r`.
-    pub blinding: [u8; 32],
-    /// `Poseidon3(DOMAIN_NULL=3, spending_key, note_commitment)`,
+    /// v2: the note's single `inner_hash` (replaces the old nonce +
+    /// blinding pair). Anchors both the commitment and the nullifier.
+    pub inner_hash: [u8; 32],
+    /// `Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash)`,
     /// precomputed by the user. Opaque to the matcher.
     pub nullifier: [u8; 32],
 }
@@ -80,12 +127,11 @@ impl NoteOpening {
     /// the deposit path + the on-chain verifier + the TS SDK agree
     /// on. Errors if any field isn't a valid BN254 Fr element.
     pub fn commitment(&self) -> Result<[u8; 32], OpeningError> {
-        commitment_from_fields(
+        commitment_from_fields_v2(
             &self.token_mint,
             self.amount,
             &self.owner_commitment,
-            &self.nonce,
-            &self.blinding,
+            &self.inner_hash,
         )
         .map_err(|e| OpeningError::NotFrSafe(e.to_string()))
     }
@@ -142,11 +188,37 @@ pub struct OrderOpening {
 #[derive(Default, Debug)]
 pub struct OpeningStore {
     map: HashMap<[u8; 32], OrderOpening>,
+    /// Per-order anchor pools, keyed by `order_id` (stable across the
+    /// collateral-note rotation a continuation performs). Inserted at
+    /// intake; consumed by the assembler on each partial fill; evicted
+    /// when the order leaves the book.
+    anchor_pools: HashMap<[u8; 16], AnchorPool>,
 }
 
 impl OpeningStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Record an order's anchor pool, keyed by `order_id`.
+    pub fn insert_anchor_pool(&mut self, order_id: [u8; 16], pool: AnchorPool) {
+        self.anchor_pools.insert(order_id, pool);
+    }
+
+    /// Mutable access to an order's anchor pool (for the assembler to
+    /// `consume_next`, or the WS handler to `append`).
+    pub fn anchor_pool_mut(&mut self, order_id: &[u8; 16]) -> Option<&mut AnchorPool> {
+        self.anchor_pools.get_mut(order_id)
+    }
+
+    /// Read-only access to an order's anchor pool.
+    pub fn anchor_pool(&self, order_id: &[u8; 16]) -> Option<&AnchorPool> {
+        self.anchor_pools.get(order_id)
+    }
+
+    /// Drop an order's anchor pool — on full fill / cancel / expiry.
+    pub fn remove_anchor_pool(&mut self, order_id: &[u8; 16]) -> Option<AnchorPool> {
+        self.anchor_pools.remove(order_id)
     }
 
     /// Record an order's settle inputs, keyed by collateral note
@@ -181,18 +253,16 @@ impl OpeningStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use darkpool_crypto::note::commitment_from_fields;
+    use darkpool_crypto::note::commitment_from_fields_v2;
 
-    // A deterministic, Fr-safe opening. `commitment_from_fields`
-    // rejects non-Fr-safe field elements, so the owner/nonce/blinding
+    // A deterministic, Fr-safe opening. `commitment_from_fields_v2`
+    // rejects non-Fr-safe field elements, so the owner/inner_hash
     // keep their top byte zeroed.
     fn sample_opening(amount: u64) -> NoteOpening {
         let mut owner = [0u8; 32];
         owner[31] = 0x11;
-        let mut nonce = [0u8; 32];
-        nonce[31] = 0x22;
-        let mut blinding = [0u8; 32];
-        blinding[31] = 0x33;
+        let mut inner_hash = [0u8; 32];
+        inner_hash[31] = 0x22;
         let mut mint = [0u8; 32];
         mint[0] = 1;
         mint[31] = 0x9e;
@@ -200,8 +270,7 @@ mod tests {
             token_mint: mint,
             amount,
             owner_commitment: owner,
-            nonce,
-            blinding,
+            inner_hash,
             nullifier: [0xAB; 32],
         }
     }
@@ -211,12 +280,11 @@ mod tests {
         let o = sample_opening(1_000);
         // Compute the canonical commitment the same way the deposit
         // path / on-chain verifier would.
-        let commitment = commitment_from_fields(
+        let commitment = commitment_from_fields_v2(
             &o.token_mint,
             o.amount,
             &o.owner_commitment,
-            &o.nonce,
-            &o.blinding,
+            &o.inner_hash,
         )
         .unwrap();
         assert!(o.verify_commitment(&commitment).is_ok());
@@ -225,12 +293,11 @@ mod tests {
     #[test]
     fn verify_commitment_rejects_wrong_amount() {
         let o = sample_opening(1_000);
-        let commitment = commitment_from_fields(
+        let commitment = commitment_from_fields_v2(
             &o.token_mint,
             o.amount,
             &o.owner_commitment,
-            &o.nonce,
-            &o.blinding,
+            &o.inner_hash,
         )
         .unwrap();
         // An opening that claims a different amount must not verify
@@ -243,18 +310,17 @@ mod tests {
     }
 
     #[test]
-    fn verify_commitment_rejects_wrong_blinding() {
+    fn verify_commitment_rejects_wrong_inner_hash() {
         let o = sample_opening(1_000);
-        let commitment = commitment_from_fields(
+        let commitment = commitment_from_fields_v2(
             &o.token_mint,
             o.amount,
             &o.owner_commitment,
-            &o.nonce,
-            &o.blinding,
+            &o.inner_hash,
         )
         .unwrap();
         let mut tampered = o.clone();
-        tampered.blinding[31] = 0x34;
+        tampered.inner_hash[31] = 0x34;
         assert!(tampered.verify_commitment(&commitment).is_err());
     }
 
@@ -280,6 +346,51 @@ mod tests {
                 pi_c: [3u8; 64],
             },
         }
+    }
+
+    #[test]
+    fn anchor_pool_consume_is_monotonic_and_single_use() {
+        let anchors: Vec<Anchor> = (0..3)
+            .map(|i| Anchor {
+                inner_hash: [i as u8; 32],
+                nullifier: [(i + 100) as u8; 32],
+            })
+            .collect();
+        let mut pool = AnchorPool::new(anchors.clone());
+        assert_eq!(pool.remaining(), 3);
+        assert_eq!(pool.consume_next(), Some(anchors[0]));
+        assert_eq!(pool.consume_next(), Some(anchors[1]));
+        assert_eq!(pool.remaining(), 1);
+        assert_eq!(pool.consume_next(), Some(anchors[2]));
+        // Exhausted → None (caller pauses the order).
+        assert_eq!(pool.consume_next(), None);
+        assert_eq!(pool.remaining(), 0);
+        // A top-up replenishes + unpauses.
+        pool.paused = true;
+        pool.append([Anchor {
+            inner_hash: [9u8; 32],
+            nullifier: [9u8; 32],
+        }]);
+        assert!(!pool.paused);
+        assert_eq!(pool.remaining(), 1);
+        assert!(pool.consume_next().is_some());
+    }
+
+    #[test]
+    fn store_anchor_pool_insert_consume_evict() {
+        let mut store = OpeningStore::new();
+        let oid = [0x42u8; 16];
+        store.insert_anchor_pool(
+            oid,
+            AnchorPool::new(vec![Anchor {
+                inner_hash: [1u8; 32],
+                nullifier: [2u8; 32],
+            }]),
+        );
+        assert!(store.anchor_pool(&oid).is_some());
+        assert!(store.anchor_pool_mut(&oid).unwrap().consume_next().is_some());
+        assert!(store.remove_anchor_pool(&oid).is_some());
+        assert!(store.anchor_pool(&oid).is_none());
     }
 
     #[test]

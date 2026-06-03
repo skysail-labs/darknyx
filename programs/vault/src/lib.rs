@@ -70,14 +70,14 @@ pub mod vault {
     }
 
     /// Deposit SPL tokens into the vault and insert a UTXO note commitment.
+    /// v2: a single `inner_hash` replaces the old (nonce, blinding_r) pair.
     pub fn deposit(
         ctx: Context<Deposit>,
         amount: u64,
         owner_commitment: [u8; 32],
-        nonce: [u8; 32],
-        blinding_r: [u8; 32],
+        inner_hash: [u8; 32],
     ) -> Result<()> {
-        deposit::deposit_handler(ctx, amount, owner_commitment, nonce, blinding_r)
+        deposit::deposit_handler(ctx, amount, owner_commitment, inner_hash)
     }
 
     /// Withdraw tokens using a VALID_SPEND proof.

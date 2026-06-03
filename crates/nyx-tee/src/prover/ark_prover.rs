@@ -239,19 +239,14 @@ fn push_all_inputs(
     push_be32!("b_owner_commit", b_owner_commit);
     push_u64!("a_amount", a_amount);
     push_u64!("b_amount", b_amount);
-    // Nonces are full Fr elements (32-byte BE) — see MatchSlotWitness.
-    push_be32!("a_nonce", a_nonce);
-    push_be32!("a_blinding", a_blinding);
-    push_be32!("b_nonce", b_nonce);
-    push_be32!("b_blinding", b_blinding);
-    push_be32!("c_nonce", c_nonce);
-    push_be32!("c_blinding", c_blinding);
-    push_be32!("d_nonce", d_nonce);
-    push_be32!("d_blinding", d_blinding);
-    push_be32!("e_nonce", e_nonce);
-    push_be32!("e_blinding", e_blinding);
-    push_be32!("f_nonce", f_nonce);
-    push_be32!("f_blinding", f_blinding);
+    // v2: one inner_hash per note (full Fr elements, 32-byte BE) — see
+    // MatchSlotWitness. Keys match the circuit's `*_inner` signal names.
+    push_be32!("a_inner", a_inner);
+    push_be32!("b_inner", b_inner);
+    push_be32!("c_inner", c_inner);
+    push_be32!("d_inner", d_inner);
+    push_be32!("e_inner", e_inner);
+    push_be32!("f_inner", f_inner);
 
     // VALID_PRICE private witness.
     push_u64!("clearing_price", clearing_price);

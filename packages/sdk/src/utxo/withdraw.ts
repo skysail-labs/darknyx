@@ -11,7 +11,7 @@ import { PublicKey } from "@solana/web3.js";
 import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
-import { noteCommitment, nullifier as computeNullifier } from "./note.js";
+import { noteCommitmentV2, nullifierV2 as computeNullifierV2 } from "./note.js";
 import { buildWithdrawInstruction } from "../idl/vault-client.js";
 
 /** SPL Token program id (classic). */
@@ -29,8 +29,8 @@ export interface WithdrawParams {
     tokenMint: Uint8Array;
     amount: bigint;
     ownerCommitment: bigint;
-    nonce: bigint;
-    blindingR: bigint;
+    /** v2: single inner_hash replacing the old (nonce, blindingR) pair. */
+    innerHash: bigint;
   };
   /** Merkle leaf index of the note. */
   leafIndex: bigint;
@@ -95,8 +95,8 @@ export function getWithdrawFunction(
 
     // --- Stage: note-build ---
     await params.callbacks?.pre?.("note-build");
-    const commitment = await noteCommitment(params.notePlaintext);
-    const nullifierBytes = await computeNullifier(spendingKey, commitment);
+    const commitment = await noteCommitmentV2(params.notePlaintext);
+    const nullifierBytes = await computeNullifierV2(spendingKey, params.notePlaintext.innerHash);
 
     // --- Stage: proof-generation (delegated to injected prover) ---
     await params.callbacks?.pre?.("proof-generation");
@@ -111,8 +111,7 @@ export function getWithdrawFunction(
         amount: params.amount,
         spendingKey,
         ownerCommitmentBlinding: ownerBlinding,
-        nonce: params.notePlaintext.nonce,
-        blindingR: params.notePlaintext.blindingR,
+        innerHash: params.notePlaintext.innerHash,
         merklePath: mProof.siblings.map(uint8ArrayToBigIntBE),
         merkleIndices: mProof.pathIndices,
       });

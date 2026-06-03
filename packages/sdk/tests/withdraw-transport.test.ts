@@ -119,8 +119,7 @@ describe("getWithdrawFunction", () => {
       tokenMint: mintBytes,
       amount: 250_000n,
       ownerCommitment: 3n,
-      nonce: 9n,
-      blindingR: 17n,
+      innerHash: 9n,
     };
 
     const receipt = await getWithdrawFunction({ client })({
@@ -190,8 +189,7 @@ describe("getWithdrawFunction", () => {
           tokenMint: mint,
           amount: 200n, // mismatch!
           ownerCommitment: 1n,
-          nonce: 1n,
-          blindingR: 1n,
+          innerHash: 1n,
         },
         leafIndex: 0n,
       }),

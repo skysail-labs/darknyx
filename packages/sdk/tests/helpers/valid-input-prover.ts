@@ -22,7 +22,7 @@ import { resolve } from "node:path";
 import {
   type Groth16OnChainProof,
 } from "../../src/idl/vault-client.js";
-import { noteCommitment, pubkeyToFrPair } from "../../src/utxo/note.js";
+import { noteCommitmentV2, pubkeyToFrPair } from "../../src/utxo/note.js";
 import { be32ToDec } from "./e2e-helpers.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";
 
@@ -45,8 +45,8 @@ export interface ValidInputProveParams {
   // ----- circuit private witnesses -----
   spendingKey: bigint;
   ownerCommitmentBlinding: bigint;
-  nonce: bigint;
-  blindingR: bigint;
+  /** v2: single inner_hash replacing the old (nonce, blindingR) pair. */
+  innerHash: bigint;
   merkleWitness: MerkleWitnessFr20;
 
   // ----- circuit public inputs -----
@@ -75,7 +75,7 @@ export interface ValidInputProveResult {
  * Generate a VALID_INPUT proof.
  *
  * The caller is responsible for ensuring the supplied (mint, amount,
- * spendingKey, ownerCommitmentBlinding, nonce, blindingR) actually compose
+ * spendingKey, ownerCommitmentBlinding, innerHash) actually compose
  * into a note whose commitment is at the position the merkleWitness
  * traverses to `merkleRootBE`. If any of those disagree, snarkjs will fail
  * to find a witness and throw.
@@ -102,12 +102,11 @@ export async function proveValidInput(
     const { ownerCommitment } = await import("../../src/utxo/note.js");
     return ownerCommitment(args.spendingKey, args.ownerCommitmentBlinding);
   })();
-  const commitmentBE = await noteCommitment({
+  const commitmentBE = await noteCommitmentV2({
     tokenMint: args.tokenMint,
     amount: args.amount,
     ownerCommitment: ownerCommitmentBytes,
-    nonce: args.nonce,
-    blindingR: args.blindingR,
+    innerHash: args.innerHash,
   });
 
   const [mintLo, mintHi] = pubkeyToFrPair(args.tokenMint);
@@ -119,8 +118,7 @@ export async function proveValidInput(
     amount: args.amount.toString(),
     spendingKey: args.spendingKey.toString(),
     ownerCommitmentBlinding: args.ownerCommitmentBlinding.toString(),
-    nonce: args.nonce.toString(),
-    blindingR: args.blindingR.toString(),
+    innerHash: args.innerHash.toString(),
     merklePath: args.merkleWitness.pathElements.map((e) => e.toString()),
     merkleIndices: args.merkleWitness.pathIndices.map((i) => i.toString()),
   };

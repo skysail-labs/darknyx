@@ -13,6 +13,12 @@
  *   DOMAIN_OWNER = 1n  — owner_commitment = Poseidon3(1, spendingKey, r_owner)
  *   DOMAIN_NOTE  = 2n  — noteCommitment   = Poseidon7(2, mint_lo, mint_hi, amount, owner, nonce, r)
  *   DOMAIN_NULL  = 3n  — nullifier        = Poseidon3(3, spendingKey, noteCommitment)
+ *
+ * v2 (inner_hash) construction — collapses (nonce, r) into a single inner_hash
+ * and re-anchors the nullifier on inner_hash (amount-independent, so a client
+ * can pre-supply change-note nullifiers). Mint binding kept:
+ *   noteCommitmentV2 = Poseidon6(2, mint_lo, mint_hi, amount, owner, inner_hash)
+ *   nullifierV2      = Poseidon3(3, spendingKey, inner_hash)
  */
 
 import { buildPoseidon } from "circomlibjs";
@@ -85,5 +91,33 @@ export async function nullifier(spendingKey: bigint, commitmentBE: Uint8Array): 
   for (const b of commitmentBE) cBig = (cBig << 8n) | BigInt(b);
   const p = await getPoseidon();
   const packed = p([DOMAIN_NULL, spendingKey, cBig]);
+  return bn254ToBE32(p.F.toObject(packed));
+}
+
+export interface NoteV2 {
+  tokenMint: Uint8Array;   // 32 bytes
+  amount: bigint;
+  ownerCommitment: bigint;
+  innerHash: bigint;
+}
+
+/**
+ * v2 note commitment = Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi, amount,
+ * ownerCommitment, innerHash). Mirrors
+ * `darkpool_crypto::note::commitment_from_fields_v2`.
+ */
+export async function noteCommitmentV2(note: NoteV2): Promise<Uint8Array> {
+  const [lo, hi] = pubkeyToFrPair(note.tokenMint);
+  return poseidonHashBytesBE([DOMAIN_NOTE, lo, hi, note.amount, note.ownerCommitment, note.innerHash]);
+}
+
+/**
+ * v2 nullifier = Poseidon3(DOMAIN_NULL, spendingKey, innerHash). Mirrors
+ * `darkpool_crypto::nullifier::nullifier_v2`. Amount-independent — computable
+ * before the change-note amount is known.
+ */
+export async function nullifierV2(spendingKey: bigint, innerHash: bigint): Promise<Uint8Array> {
+  const p = await getPoseidon();
+  const packed = p([DOMAIN_NULL, spendingKey, innerHash]);
   return bn254ToBE32(p.F.toObject(packed));
 }
