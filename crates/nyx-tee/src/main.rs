@@ -154,6 +154,16 @@ async fn main() -> Result<()> {
         protocol_owner_set = (match_config.protocol_owner_commitment != [0u8; 32]),
         "matcher fee config (fee notes mint when fee_rate_bps > 0)"
     );
+    // Fees on but no owner set ⇒ fee notes mint to the zero owner and are
+    // unclaimable. Flag the misconfiguration loudly (don't hard-fail: a
+    // fee-free or throwaway dev run is legitimate).
+    if match_config.fee_rate_bps > 0 && match_config.protocol_owner_commitment == [0u8; 32] {
+        tracing::warn!(
+            "fee_rate_bps > 0 but NYX_TEE_PROTOCOL_OWNER_COMMITMENT is unset — protocol \
+             fee notes will mint to a ZERO owner and be UNCLAIMABLE; set the owner \
+             commitment, or set NYX_TEE_FEE_RATE_BPS=0"
+        );
+    }
     // Capture the values the settle driver needs before `match_config`
     // is moved into the matcher driver below ([u8; 32] is Copy).
     let settle_base_mint = match_config.base_mint;
@@ -428,11 +438,6 @@ async fn derive_jwt_secret(client: &DstackClient) -> anyhow::Result<[u8; 32]> {
     Ok(arr)
 }
 
-/// `BatchValidityMarker` TTL (slots) the settle driver stamps into
-/// `verify_match_batch`. Generous — the marker only needs to outlive
-/// the batch's settles (seconds), then it's GC-able.
-const SETTLE_MARKER_TTL_SLOTS: u64 = 1000;
-
 /// Construct the live [`SettleDriver`] from the TEE signer + config.
 /// Fails (→ enqueue-only) if the RPC client or the N=16 proving key
 /// can't be constructed. The zkey path defaults to the in-image
@@ -510,7 +515,6 @@ fn build_settle_driver(
             quote_mint,
             protocol_owner_commitment,
             circuit_n: PRODUCTION_BATCH_N,
-            marker_ttl_slots: SETTLE_MARKER_TTL_SLOTS,
         },
     })
 }

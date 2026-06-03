@@ -24,9 +24,14 @@
 use solana_address::Address;
 use solana_message::AddressLookupTableAccount;
 
-/// Soft cap on addresses per ALT. Solana's hard cap is 256; we rotate at
-/// 246 so a batch's 5 (worst case, with a bit of slack) always fits
-/// without overflowing mid-batch.
+/// Soft cap on addresses per ALT before the pool rotates to a fresh one.
+/// Solana's HARD cap is 256 addresses/ALT; we rotate at 246 for a
+/// deliberate 10-slot slack (not an arbitrary number). That slack (a)
+/// guarantees a worst-case 5-address single match can always be appended
+/// without crossing 256 mid-batch — rotation happens BEFORE the extend,
+/// never part-way through one — and (b) leaves headroom for a modest
+/// future batch-size bump (e.g. two small batches, or a few extra
+/// derivable PDAs per match) without re-tuning the cap.
 pub const MAX_ALT_ENTRIES: usize = 246;
 
 /// The currently-active ALT plus the full, ordered list of addresses

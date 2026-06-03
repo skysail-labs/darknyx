@@ -401,7 +401,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const s2 = await submit(sellerOrder);
       expect(String(s1).startsWith("2"), `buyer order rejected (${s1})`).toBe(true);
       expect(String(s2).startsWith("2"), `seller order rejected (${s2})`).toBe(true);
-      console.log(`  · orders accepted (buyer=${buyerOrder.order_id.slice(0, 8)} ask=${askPrice}, seller=${sellerOrder.order_id.slice(0, 8)} bid=${bidPrice})`);
+      console.log(`  · orders accepted (buyer=${buyerOrder.order_id.slice(0, 8)} bid=${bidPrice}, seller=${sellerOrder.order_id.slice(0, 8)} ask=${askPrice})`);
 
       // Diagnostic: confirm both are in the book (200) vs matched-and-gone
       // (404), to localise a no-settle to matching vs the settle pipeline.

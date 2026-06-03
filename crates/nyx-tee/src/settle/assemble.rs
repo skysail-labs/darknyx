@@ -311,8 +311,6 @@ pub struct BatchAssemblyParams {
     pub protocol_owner_commitment: [u8; 32],
     /// Slot the fee-note openings derive against.
     pub fee_slot: u64,
-    /// `verify_match_batch` marker TTL.
-    pub marker_expiry_slot: u64,
     /// Circuit instantiation N (production = 16) — the witness set is
     /// padded with dummy slots up to this.
     pub circuit_n: usize,
@@ -404,7 +402,6 @@ pub fn assemble_batch(
         batch_id: params.batch_id,
         matches,
         witnesses,
-        expiry_slot: params.marker_expiry_slot,
     })
 }
 
@@ -695,7 +692,6 @@ mod tests {
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
             fee_slot: 1234,
-            marker_expiry_slot: 2000,
             circuit_n: 16,
         }
     }
@@ -716,7 +712,6 @@ mod tests {
         assert_eq!(bsi.matches.len(), 1);
         // Witnesses padded to the circuit N.
         assert_eq!(bsi.witnesses.len(), 16);
-        assert_eq!(bsi.expiry_slot, 2000);
 
         let ms = &bsi.matches[0];
         assert_eq!(ms.match_index, 0);

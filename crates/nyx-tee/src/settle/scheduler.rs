@@ -128,8 +128,6 @@ pub struct SettleDriverConfig {
     pub protocol_owner_commitment: [u8; 32],
     /// Circuit instantiation N the witness set is padded to (16).
     pub circuit_n: usize,
-    /// `verify_match_batch` marker TTL, added to the current slot.
-    pub marker_ttl_slots: u64,
 }
 
 /// The live-settle driver. Present only when the TEE is fully
@@ -263,7 +261,6 @@ impl SettleScheduler {
             quote_mint: driver.cfg.quote_mint,
             protocol_owner_commitment: driver.cfg.protocol_owner_commitment,
             fee_slot: now_slot,
-            marker_expiry_slot: now_slot.saturating_add(driver.cfg.marker_ttl_slots),
             circuit_n: driver.cfg.circuit_n,
         };
 
@@ -599,7 +596,6 @@ mod tests {
                 quote_mint,
                 protocol_owner_commitment: fr_safe(0x07),
                 circuit_n: 2,
-                marker_ttl_slots: 150,
             },
         };
 

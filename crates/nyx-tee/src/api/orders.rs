@@ -352,9 +352,16 @@ pub async fn place_order(
     };
 
     // Nominal collateral: a bid locks `amount * price_limit` quote, an
-    // ask locks `amount` base.
+    // ask locks `amount` base. Reject a bid whose `amount * price_limit`
+    // overflows u64 (mirrors the price_limit == 0 reject above) rather
+    // than saturating to a nonsense collateral the deposit can never
+    // match. price_limit > 0 is already enforced for bids, so the
+    // product is >= amount — no `.max` fallback needed.
     let nominal = match side {
-        OrderSide::Bid => req.amount.saturating_mul(req.price_limit).max(req.amount),
+        OrderSide::Bid => req.amount.checked_mul(req.price_limit).ok_or((
+            StatusCode::BAD_REQUEST,
+            "amount * price_limit overflows u64".to_string(),
+        ))?,
         OrderSide::Ask => req.amount,
     };
     // ...PLUS the order's own protocol fee. The matcher charges each leg

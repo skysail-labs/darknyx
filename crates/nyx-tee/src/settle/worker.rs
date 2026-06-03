@@ -44,7 +44,7 @@ use super::job::{SettleJobId, SettleJobStage};
 use super::payload::MatchResultPayload;
 use super::pipeline::build_settle_v0_tx_b64;
 use super::scheduler::SettleSchedulerState;
-use super::settle_batched::{build_settle_batched_ix, per_batch_alt_addresses};
+use super::settle_batched::{batch_alt_addresses, build_settle_batched_ix};
 use super::sign::sign_payload;
 use super::submit::{confirm_signatures, submit_ixs, submit_ixs_with_blockhash};
 use super::submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockSideInputs};
@@ -73,8 +73,6 @@ pub struct BatchSettleInputs {
     /// The padded N-slot witness set fed to the prover. Its leaves
     /// + root drive the per-match Merkle inclusion paths.
     pub witnesses: Vec<MatchSlotWitness>,
-    /// Marker TTL for `verify_match_batch`.
-    pub expiry_slot: u64,
 }
 
 /// Shared context the worker holds across a batch.
@@ -118,6 +116,8 @@ pub enum WorkerError {
     Leaf(String),
     #[error("batch has {0} matches but witnesses has {1} slots")]
     Mismatch(usize, usize),
+    #[error("per-batch ALT not active after wait (landed slot {0}); not settling against an unloadable lookup table")]
+    AltNotActive(u64),
 }
 
 impl SettleWorkerCtx {
@@ -264,11 +264,13 @@ async fn run_batch_settle_inner(
     }
 
     // Per-batch ALT via the rolling pool: reuse a long-lived `current`
-    // ALT (extend it with this batch's 5 derivable PDAs) and only create
-    // a fresh one — deactivating the old — when it nears the 256-address
-    // cap. Addresses are derived from match 0's payload (the single-match
-    // settle path; multi-match is the loadgen phase).
-    let alt_addrs = per_batch_alt_addresses(&inputs.matches[0].payload, &merkle_root);
+    // ALT (extend it with this batch's derivable PDAs) and only create a
+    // fresh one — deactivating the old — when it nears the 256-address
+    // cap. The address set is the UNION of EVERY match's note-lock PDAs
+    // (each match's Tx D references its own locks) + the single shared
+    // batch marker — so a multi-match batch's settle txs all stay under
+    // the 1232-byte cap, not just match 0's.
+    let alt_addrs = batch_alt_addresses(inputs.matches.iter().map(|m| &m.payload), &merkle_root);
     let plan = ctx.alt_pool.lock().await.plan(alt_addrs.len());
     let bh = ctx.rpc.get_latest_blockhash().await?;
     match plan {
@@ -343,11 +345,24 @@ async fn run_batch_settle_inner(
     // per-batch and unavoidable: a batch's PDAs are derived from its own
     // notes, so no pool can pre-load them.)
     let alt_landed_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
+    let mut activated = false;
     for _ in 0..30 {
         if ctx.rpc.get_latest_blockhash().await?.context_slot > alt_landed_slot {
+            activated = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+    if !activated {
+        // The slot never advanced within the wait window — the ALT's new
+        // addresses may not be loadable yet. Fail loudly instead of
+        // sending Tx D against an unloadable lookup table (which would be
+        // silently dropped). The batch is marked Failed + can be retried.
+        tracing::error!(
+            alt_landed_slot,
+            "per-batch ALT activation timed out; aborting settle"
+        );
+        return Err(WorkerError::AltNotActive(alt_landed_slot));
     }
     let per_batch_alt = ctx
         .alt_pool
@@ -502,13 +517,19 @@ mod tests {
             let id = req.get("id").cloned().unwrap_or(json!(1));
             let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
             let result = match method {
-                "getLatestBlockhash" => json!({
-                    "context": { "slot": 1000 },
-                    "value": {
-                        "blockhash": bs58::encode([7u8; 32]).into_string(),
-                        "lastValidBlockHeight": 2000u64,
-                    }
-                }),
+                "getLatestBlockhash" => {
+                    // Advance the slot every call so the worker's per-batch
+                    // ALT-activation wait breaks (it errors if the slot
+                    // never moves past the extend's landing slot).
+                    let slot = 1000 + counter.fetch_add(1, Ordering::SeqCst);
+                    json!({
+                        "context": { "slot": slot },
+                        "value": {
+                            "blockhash": bs58::encode([7u8; 32]).into_string(),
+                            "lastValidBlockHeight": 2000u64,
+                        }
+                    })
+                }
                 "sendTransaction" => {
                     // 64-byte sig, distinct per call so the worker's
                     // per-job sig fields don't collide.
@@ -676,7 +697,6 @@ mod tests {
                 },
             ],
             witnesses: vec![dummy_slot(), dummy_slot()],
-            expiry_slot: 2000,
         };
 
         run_batch_settle(&ctx, inputs).await.expect("batch settle");
@@ -728,7 +748,6 @@ mod tests {
                 match_index: 0,
             }],
             witnesses: vec![dummy_slot(), dummy_slot()],
-            expiry_slot: 2000,
         };
 
         let err = run_batch_settle(&ctx, inputs).await.unwrap_err();
@@ -777,7 +796,6 @@ mod tests {
             ],
             // Only one witness slot — fewer than the two matches.
             witnesses: vec![dummy_slot()],
-            expiry_slot: 2000,
         };
 
         let err = run_batch_settle(&ctx, inputs).await.unwrap_err();

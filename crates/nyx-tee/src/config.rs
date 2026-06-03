@@ -101,79 +101,100 @@ fn default_quote_mint() -> [u8; 32] {
     m
 }
 
-/// Parse a 32-byte mint from a base58 env var, falling back to
-/// `default` when unset/empty/malformed.
-fn parse_mint_env(var: &str, default: [u8; 32]) -> [u8; 32] {
+// ── env parsing ──────────────────────────────────────────────────────
+//
+// Compose interpolates `${VAR}` to an EMPTY STRING when the value isn't
+// supplied at deploy, so every helper treats `""` (after trim) the same
+// as unset → the default. A NON-EMPTY but malformed value is a hard
+// error (propagated by `from_env`), so a config typo fails startup
+// loudly instead of silently falling back to a dev placeholder.
+
+/// A string env var, trimmed; unset or empty → `default`.
+fn env_string_or(var: &str, default: &str) -> String {
     match std::env::var(var) {
-        Ok(s) if !s.trim().is_empty() => match bs58::decode(s.trim()).into_vec() {
-            Ok(b) if b.len() == 32 => {
-                let mut m = [0u8; 32];
-                m.copy_from_slice(&b);
-                m
-            }
-            _ => {
-                tracing::warn!(var, "invalid mint env (need 32-byte base58); using default");
-                default
-            }
-        },
-        _ => default,
+        Ok(s) if !s.trim().is_empty() => s.trim().to_string(),
+        _ => default.to_string(),
     }
 }
 
-/// Parse a 32-byte value from a hex env var (64 hex chars, optional
-/// `0x` prefix), falling back to `default` when unset/empty/malformed.
-/// Used for commitments (which are raw field elements, not base58
-/// addresses).
-fn parse_hex32_env(var: &str, default: [u8; 32]) -> [u8; 32] {
+/// Parse a 32-byte mint from a base58 env var. Unset/empty → `default`;
+/// non-empty malformed → `Err`.
+fn parse_mint_env(var: &str, default: [u8; 32]) -> Result<[u8; 32]> {
     let Ok(s) = std::env::var(var) else {
-        return default;
+        return Ok(default);
     };
-    let s = s.trim().strip_prefix("0x").unwrap_or(s.trim());
+    let s = s.trim();
     if s.is_empty() {
-        return default;
+        return Ok(default);
     }
-    match hex::decode(s) {
+    match bs58::decode(s).into_vec() {
+        Ok(b) if b.len() == 32 => {
+            let mut m = [0u8; 32];
+            m.copy_from_slice(&b);
+            Ok(m)
+        }
+        _ => Err(anyhow::anyhow!("{var}: invalid mint (need 32-byte base58)")),
+    }
+}
+
+/// Parse a 32-byte hex value (optional `0x` prefix) from an env var —
+/// for commitments (raw field elements, not base58). Unset/empty →
+/// `default`; non-empty malformed → `Err`.
+fn parse_hex32_env(var: &str, default: [u8; 32]) -> Result<[u8; 32]> {
+    let Ok(s) = std::env::var(var) else {
+        return Ok(default);
+    };
+    let t = s.trim();
+    let t = t.strip_prefix("0x").unwrap_or(t);
+    if t.is_empty() {
+        return Ok(default);
+    }
+    match hex::decode(t) {
         Ok(b) if b.len() == 32 => {
             let mut k = [0u8; 32];
             k.copy_from_slice(&b);
-            k
+            Ok(k)
         }
-        _ => {
-            tracing::warn!(
-                var,
-                "invalid hex env (need 32-byte / 64-hex-char); using default"
-            );
-            default
-        }
+        _ => Err(anyhow::anyhow!(
+            "{var}: invalid hex (need 32-byte / 64 hex chars)"
+        )),
     }
 }
 
-/// Parse an optional 32-byte pubkey from a base58 env var. Returns
-/// `None` when unset/empty/malformed (logging a warn on malformed).
-fn parse_pubkey_env(var: &str) -> Option<[u8; 32]> {
-    let s = std::env::var(var).ok()?;
+/// Parse an OPTIONAL 32-byte pubkey (base58) from an env var.
+/// Unset/empty → `None`; non-empty malformed → `Err`.
+fn parse_pubkey_env(var: &str) -> Result<Option<[u8; 32]>> {
+    let Ok(s) = std::env::var(var) else {
+        return Ok(None);
+    };
     let s = s.trim();
     if s.is_empty() {
-        return None;
+        return Ok(None);
     }
     match bs58::decode(s).into_vec() {
         Ok(b) if b.len() == 32 => {
             let mut k = [0u8; 32];
             k.copy_from_slice(&b);
-            Some(k)
+            Ok(Some(k))
         }
-        _ => {
-            tracing::warn!(var, "invalid pubkey env (need 32-byte base58); ignoring");
-            None
-        }
+        _ => Err(anyhow::anyhow!(
+            "{var}: invalid pubkey (need 32-byte base58)"
+        )),
     }
 }
 
-fn parse_u64_env(var: &str, default: u64) -> u64 {
-    std::env::var(var)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(default)
+/// Parse a `u64` env var. Unset/empty → `default`; non-empty
+/// unparseable → `Err`.
+fn parse_u64_env(var: &str, default: u64) -> Result<u64> {
+    let Ok(s) = std::env::var(var) else {
+        return Ok(default);
+    };
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(default);
+    }
+    s.parse::<u64>()
+        .map_err(|e| anyhow::anyhow!("{var}: invalid u64 ({e})"))
 }
 
 impl Config {
@@ -189,29 +210,31 @@ impl Config {
             .unwrap_or_default();
 
         Ok(Self {
-            http_bind: std::env::var("NYX_TEE_HTTP_BIND")
-                .unwrap_or_else(|_| "0.0.0.0:8080".to_string()),
-            solana_rpc_url: std::env::var("NYX_TEE_SOLANA_RPC_URL")
-                .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string()),
-            dstack_socket: std::env::var("DSTACK_SIMULATOR_ENDPOINT").ok(),
-            feed_ids,
-            sync_from_slot: std::env::var("NYX_TEE_SYNC_FROM_SLOT")
+            http_bind: env_string_or("NYX_TEE_HTTP_BIND", "0.0.0.0:8080"),
+            // Empty (compose `${VAR}` with no value) → the default, NOT a
+            // literal empty URL that breaks every RPC call.
+            solana_rpc_url: env_string_or(
+                "NYX_TEE_SOLANA_RPC_URL",
+                "https://api.devnet.solana.com",
+            ),
+            dstack_socket: std::env::var("DSTACK_SIMULATOR_ENDPOINT")
                 .ok()
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(0),
-            base_mint: parse_mint_env("NYX_TEE_BASE_MINT", default_base_mint()),
-            quote_mint: parse_mint_env("NYX_TEE_QUOTE_MINT", default_quote_mint()),
-            tick_size: parse_u64_env("NYX_TEE_TICK_SIZE", 1),
-            min_order_size: parse_u64_env("NYX_TEE_MIN_ORDER_SIZE", 0),
-            settle_lookup_table: parse_pubkey_env("NYX_TEE_SETTLE_LOOKUP_TABLE"),
+                .filter(|s| !s.trim().is_empty()),
+            feed_ids,
+            sync_from_slot: parse_u64_env("NYX_TEE_SYNC_FROM_SLOT", 0)?,
+            base_mint: parse_mint_env("NYX_TEE_BASE_MINT", default_base_mint())?,
+            quote_mint: parse_mint_env("NYX_TEE_QUOTE_MINT", default_quote_mint())?,
+            tick_size: parse_u64_env("NYX_TEE_TICK_SIZE", 1)?,
+            min_order_size: parse_u64_env("NYX_TEE_MIN_ORDER_SIZE", 0)?,
+            settle_lookup_table: parse_pubkey_env("NYX_TEE_SETTLE_LOOKUP_TABLE")?,
             // Clamp to 100% — the matcher's fee math assumes
             // bps ≤ 10_000 (normally enforced on-chain by
             // set_protocol_config; the CVM matcher isn't gated by it).
-            fee_rate_bps: parse_u64_env("NYX_TEE_FEE_RATE_BPS", 30).min(10_000),
+            fee_rate_bps: parse_u64_env("NYX_TEE_FEE_RATE_BPS", 30)?.min(10_000),
             protocol_owner_commitment: parse_hex32_env(
                 "NYX_TEE_PROTOCOL_OWNER_COMMITMENT",
                 [0u8; 32],
-            ),
+            )?,
         })
     }
 }

@@ -134,6 +134,34 @@ pub fn per_batch_alt_addresses(
     ]
 }
 
+/// The full set of derivable PDAs a MULTI-match batch's ALT must hold:
+/// the union of every match's `note_lock_{a,b,e,f}` (each match's Tx D
+/// references its OWN locks) plus the single shared `batch_validity_marker`
+/// (one per batch, keyed by the batch root). Deduped — exact-fill matches
+/// collide on the all-zero `note_lock_e/f` PDA, and the marker is shared.
+/// For a single match this equals [`per_batch_alt_addresses`]; building
+/// the ALT from only `matches[0]` would leave matches 1..N's locks inline
+/// and push their settle tx over the 1232-byte cap.
+pub fn batch_alt_addresses<'a>(
+    payloads: impl IntoIterator<Item = &'a MatchResultPayload>,
+    merkle_root: &[u8; 32],
+) -> Vec<Address> {
+    let mut out: Vec<Address> = Vec::new();
+    let mut push = |a: Address| {
+        if !out.contains(&a) {
+            out.push(a);
+        }
+    };
+    for p in payloads {
+        push(note_lock_pda(&p.note_a_commitment).0);
+        push(note_lock_pda(&p.note_b_commitment).0);
+        push(note_lock_pda(&p.note_e_commitment).0);
+        push(note_lock_pda(&p.note_f_commitment).0);
+    }
+    push(batch_validity_marker_pda(merkle_root).0);
+    out
+}
+
 /// The addresses the STATIC settle ALT must hold — the per-settle
 /// constant, non-signer accounts (`vault_config`, the instructions
 /// sysvar, the system program). Created once at devnet-setup and stacked
@@ -188,6 +216,34 @@ mod tests {
 
     fn proof() -> [[u8; 32]; 4] {
         [[0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32]]
+    }
+
+    #[test]
+    fn batch_alt_addresses_unions_all_matches_and_one_marker() {
+        let root = [0xAB; 32];
+
+        // Single match == per_batch_alt_addresses (5 entries: 4 locks +
+        // marker; note_e/f are zero here and collide → deduped to one).
+        let p0 = dummy_payload();
+        let single = batch_alt_addresses([&p0], &root);
+        // a, b, (e==f deduped), marker = 4 distinct.
+        assert_eq!(single.len(), 4);
+        assert!(single.contains(&note_lock_pda(&p0.note_a_commitment).0));
+        assert!(single.contains(&batch_validity_marker_pda(&root).0));
+
+        // Two DISTINCT matches: their a/b locks add, the marker stays
+        // single (shared across the batch).
+        let mut p1 = dummy_payload();
+        p1.note_a_commitment = [0xA2; 32];
+        p1.note_b_commitment = [0xB2; 32];
+        let multi = batch_alt_addresses([&p0, &p1], &root);
+        // p0: a,b + p1: a,b (e/f all zero → 1 shared) + marker = 6.
+        assert_eq!(multi.len(), 6);
+        assert!(multi.contains(&note_lock_pda(&p1.note_a_commitment).0));
+        assert!(multi.contains(&note_lock_pda(&p0.note_a_commitment).0));
+        // Exactly one marker.
+        let marker = batch_validity_marker_pda(&root).0;
+        assert_eq!(multi.iter().filter(|a| **a == marker).count(), 1);
     }
 
     #[test]
