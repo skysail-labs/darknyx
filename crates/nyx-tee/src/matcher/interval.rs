@@ -25,9 +25,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_matcher::{
+    book::OrderUpdateKind,
     config::{MatchConfig, OracleSnapshot},
-    match_result::RunBatchOutput,
+    match_result::{RunBatchOutput, RELOCK_ORDER_ID_NONE},
     run_batch_capped as matcher_run_batch,
 };
 use tokio::sync::{mpsc, RwLock};
@@ -37,6 +39,7 @@ use tokio::time;
 use crate::oracle::cache::OracleCache;
 
 use super::book::OrderBook;
+use super::openings::{NoteOpening, OrderOpening};
 
 /// Maximum age of an oracle cache entry the matcher will accept.
 /// Default 5 seconds — same order as the batch tick. If the
@@ -124,6 +127,169 @@ impl MatcherState {
 
     pub fn openings_mut(&mut self) -> &mut super::openings::OpeningStore {
         &mut self.openings
+    }
+}
+
+/// Assign continuation anchors for the relocking sides of a freshly
+/// matched batch (Phase 6). For each match whose buyer/seller relocks
+/// (a Limit partial fill that will continue), consume that order's next
+/// pre-supplied anchor, rebuild the change note (note_e / note_f) with
+/// the anchor's `inner_hash` against the order's `owner_commitment`,
+/// override the match commitment + the order update's
+/// `new_collateral_note`, and insert the rotated opening (keyed by the
+/// change-note commitment) carrying the anchor's `inner_hash` +
+/// pre-computed `nullifier`. The book rotation (`apply_updates`) then
+/// points the residual at it, and the settle assembler reads the opening
+/// for the witness — so the residual re-matches WITHOUT a client
+/// roundtrip (the matcher's old `single_fill` workaround dropped it).
+///
+/// On anchor-pool exhaustion (or a missing buyer/seller opening) the side
+/// is DOWNGRADED: the relock flag is cleared (so note_e becomes a final
+/// `derive_inner` change note the assembler builds + the client withdraws)
+/// and the order update is rewritten to `Cancelled` (residual leaves the
+/// book), with the pool flagged `paused` for the Phase 7 WS top-up.
+///
+/// Must run under the matcher write lock, BEFORE `apply_updates`.
+fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOutput) {
+    let (base_mint, quote_mint) = state.market_mints();
+    // Collected post-loop edits to `order_updates` (can't borrow it while
+    // `matches` is borrowed mut): order_id -> Some(new_collateral_note) to
+    // rewrite the PartiallyFilled, or None to downgrade to Cancelled.
+    let mut update_edits: Vec<([u8; 16], Option<[u8; 32]>)> = Vec::new();
+
+    for m in output.matches.iter_mut() {
+        // ── buyer side → note_e (QUOTE collateral) ──
+        if m.buyer_relock_order_id != RELOCK_ORDER_ID_NONE && m.buyer_change_amt > 0 {
+            let oid = m.buyer_relock_order_id;
+            let owner = state
+                .openings()
+                .get(&m.note_buyer)
+                .map(|o| o.opening.owner_commitment);
+            let prior = state.openings().get(&m.note_buyer);
+            let anchor = state
+                .openings_mut()
+                .anchor_pool_mut(&oid)
+                .and_then(|p| p.consume_next());
+            match (owner, prior, anchor) {
+                (Some(owner), Some(prior), Some(anchor)) => {
+                    if let Ok(note_e) = commitment_from_fields_v2(
+                        &quote_mint,
+                        m.buyer_change_amt,
+                        &owner,
+                        &anchor.inner_hash,
+                    ) {
+                        m.note_e_commitment = note_e;
+                        let opening = OrderOpening {
+                            opening: NoteOpening {
+                                token_mint: quote_mint,
+                                amount: m.buyer_change_amt,
+                                owner_commitment: owner,
+                                inner_hash: anchor.inner_hash,
+                                nullifier: anchor.nullifier,
+                            },
+                            order_id: oid,
+                            expiry_slot: prior.expiry_slot,
+                            // The relock (created when THIS batch settles)
+                            // pins note_e on-chain, so the continuation
+                            // re-consumes it without a fresh VALID_INPUT
+                            // proof; these carry forward the prior values.
+                            merkle_root: prior.merkle_root,
+                            valid_input_proof: prior.valid_input_proof.clone(),
+                        };
+                        state.openings_mut().insert(note_e, opening);
+                        update_edits.push((oid, Some(note_e)));
+                    } else {
+                        // Fr-safety failure (shouldn't happen — anchor
+                        // inner_hash validated at intake). Downgrade.
+                        m.buyer_relock_order_id = RELOCK_ORDER_ID_NONE;
+                        update_edits.push((oid, None));
+                    }
+                }
+                _ => {
+                    // Exhausted pool or missing opening → downgrade.
+                    m.buyer_relock_order_id = RELOCK_ORDER_ID_NONE;
+                    if let Some(p) = state.openings_mut().anchor_pool_mut(&oid) {
+                        p.paused = true;
+                    }
+                    update_edits.push((oid, None));
+                }
+            }
+        }
+
+        // ── seller side → note_f (BASE collateral) ──
+        if m.seller_relock_order_id != RELOCK_ORDER_ID_NONE && m.seller_change_amt > 0 {
+            let oid = m.seller_relock_order_id;
+            let owner = state
+                .openings()
+                .get(&m.note_seller)
+                .map(|o| o.opening.owner_commitment);
+            let prior = state.openings().get(&m.note_seller);
+            let anchor = state
+                .openings_mut()
+                .anchor_pool_mut(&oid)
+                .and_then(|p| p.consume_next());
+            match (owner, prior, anchor) {
+                (Some(owner), Some(prior), Some(anchor)) => {
+                    if let Ok(note_f) = commitment_from_fields_v2(
+                        &base_mint,
+                        m.seller_change_amt,
+                        &owner,
+                        &anchor.inner_hash,
+                    ) {
+                        m.note_f_commitment = note_f;
+                        let opening = OrderOpening {
+                            opening: NoteOpening {
+                                token_mint: base_mint,
+                                amount: m.seller_change_amt,
+                                owner_commitment: owner,
+                                inner_hash: anchor.inner_hash,
+                                nullifier: anchor.nullifier,
+                            },
+                            order_id: oid,
+                            expiry_slot: prior.expiry_slot,
+                            merkle_root: prior.merkle_root,
+                            valid_input_proof: prior.valid_input_proof.clone(),
+                        };
+                        state.openings_mut().insert(note_f, opening);
+                        update_edits.push((oid, Some(note_f)));
+                    } else {
+                        m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
+                        update_edits.push((oid, None));
+                    }
+                }
+                _ => {
+                    m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
+                    if let Some(p) = state.openings_mut().anchor_pool_mut(&oid) {
+                        p.paused = true;
+                    }
+                    update_edits.push((oid, None));
+                }
+            }
+        }
+    }
+
+    // Apply the collected edits to the order updates.
+    for (oid, edit) in update_edits {
+        for u in output.order_updates.iter_mut() {
+            if u.order_id != oid {
+                continue;
+            }
+            match edit {
+                Some(new_note) => {
+                    if let OrderUpdateKind::PartiallyFilled {
+                        new_collateral_note,
+                        ..
+                    } = &mut u.kind
+                    {
+                        *new_collateral_note = new_note;
+                    }
+                }
+                None => {
+                    // Downgrade the residual to Cancelled (leaves the book).
+                    u.kind = OrderUpdateKind::Cancelled;
+                }
+            }
+        }
     }
 }
 
@@ -263,7 +429,7 @@ impl MatcherDriver {
                 break;
             }
 
-            let output = match matcher_run_batch(
+            let mut output = match matcher_run_batch(
                 &book_snap,
                 &oracle,
                 &self.cfg.match_config,
@@ -298,10 +464,28 @@ impl MatcherDriver {
             };
 
             // Apply this page's updates + advance the match-id counter
-            // under a brief write lock.
+            // under a brief write lock. `assign_continuation_anchors`
+            // first consumes a pre-supplied anchor for each relocking side
+            // (rebuilding note_e/note_f from it + inserting the rotated
+            // opening) so the residual that `apply_updates` keeps in the
+            // book is re-matchable on a later page/tick without a roundtrip.
             {
                 let mut state = self.state.write().await;
+                assign_continuation_anchors(&mut state, &mut output);
                 state.book_mut().apply_updates(&output.order_updates);
+                // Evict the anchor pool of any order that left the book
+                // (full fill / cancel / IOC-or-exhaustion residual / expiry);
+                // a continuing PartiallyFilled keeps its pool.
+                for u in &output.order_updates {
+                    if matches!(
+                        u.kind,
+                        OrderUpdateKind::FullyFilled { .. }
+                            | OrderUpdateKind::Cancelled
+                            | OrderUpdateKind::Expired
+                    ) {
+                        state.openings_mut().remove_anchor_pool(&u.order_id);
+                    }
+                }
                 state.next_match_id = state
                     .next_match_id
                     .saturating_add(output.matches.len() as u64);

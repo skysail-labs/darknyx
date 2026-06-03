@@ -151,19 +151,36 @@ impl OrderBook {
                     // Hard removal: remove from all indices.
                     let _ = self.remove_internal(&upd.order_id);
                 }
-                OrderUpdateKind::PartiallyFilled { .. } => {
-                    // Option A (change-note-nullifier constraint): the
-                    // in-TEE matcher runs single-fill-per-batch mode, so
-                    // a partial fill means the order relocked its residual
-                    // to a change note (note_e) on-chain. The TEE cannot
-                    // re-match that change note — its nullifier needs the
-                    // user's spending key, which never enters the TEE, and
-                    // the settle assembler has no opening for it. So the
-                    // residual LEAVES the book (it is owned + re-locked
-                    // on-chain) and awaits client re-submission — the seam
-                    // the future order relayer fills. Remove rather than
-                    // rotate-and-keep (the pre-option-A behaviour).
-                    let _ = self.remove_internal(&upd.order_id);
+                OrderUpdateKind::PartiallyFilled {
+                    new_amount,
+                    new_collateral_note,
+                    new_note_amount,
+                    filled_quantity,
+                } => {
+                    // Continuation (inner_hash / anchor pool): the residual
+                    // relocked to a change note (note_e) whose `inner_hash`
+                    // came from the order's pre-supplied anchor pool, so the
+                    // TEE KNOWS its nullifier (the client pre-computed it and
+                    // it's stored in the rotated opening). The residual
+                    // therefore STAYS in the book with its collateral rotated
+                    // to that change note, and re-matches on a later
+                    // tick/page without a client roundtrip. The tick
+                    // (`assign_continuation_anchors`) has already overwritten
+                    // `new_collateral_note` with the anchor-based note_e and
+                    // inserted its opening; here we only mutate the in-book
+                    // order to point at it. (On anchor-pool exhaustion the
+                    // tick downgrades this update to `Cancelled`, so a
+                    // `PartiallyFilled` that reaches here is always
+                    // continuable.) Price + expiry are unchanged, so the
+                    // price/expiry/trader indices need no re-keying — only
+                    // the `by_id` entry's fields rotate.
+                    if let Some(order) = self.by_id.get_mut(&upd.order_id) {
+                        order.amount = *new_amount;
+                        order.collateral_note = *new_collateral_note;
+                        order.note_amount = *new_note_amount;
+                        order.filled_quantity = *filled_quantity;
+                        // Stays Pending — it remains a live, matchable order.
+                    }
                 }
             }
         }
@@ -357,12 +374,11 @@ mod tests {
     }
 
     #[test]
-    fn apply_updates_partial_fill_removes_relocked_residual() {
-        // Option A: a partial fill means the residual relocked to a
-        // change note on-chain; the in-TEE matcher can't re-match it
-        // (no spending key for its nullifier), so it LEAVES the book to
-        // await client re-submission. (Pre-option-A this mutated in place
-        // and kept the order Pending.)
+    fn apply_updates_partial_fill_rotates_and_keeps() {
+        // Continuation (inner_hash / anchor pool): a partial fill rotates
+        // the residual's collateral to the anchor-based change note and
+        // KEEPS it in the book (Pending), so it re-matches without a client
+        // roundtrip. (Pre-continuation this removed the order — "Option A".)
         let mut book = OrderBook::new();
         let o = mk_order(darkpool_matcher::book::OrderSide::Bid, 1, 100, 20);
         let oid = o.order_id;
@@ -377,11 +393,20 @@ mod tests {
                 filled_quantity: 5,
             },
         }]);
-        assert!(
-            book.get(&oid).is_none(),
-            "relocked residual must leave the in-TEE book"
+        let kept = book.get(&oid).expect("residual must stay in the book");
+        assert_eq!(kept.amount, 15, "amount decremented to the residual");
+        assert_eq!(
+            kept.collateral_note, [42u8; 32],
+            "collateral rotated to the change note"
         );
-        assert!(book.is_empty());
+        assert_eq!(kept.note_amount, 1500, "note_amount rotated");
+        assert_eq!(kept.filled_quantity, 5);
+        assert_eq!(
+            kept.status,
+            darkpool_matcher::book::OrderStatus::Pending,
+            "residual stays matchable"
+        );
+        assert!(!book.is_empty());
     }
 
     #[test]

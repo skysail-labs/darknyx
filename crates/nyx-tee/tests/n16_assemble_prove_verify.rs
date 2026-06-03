@@ -152,6 +152,8 @@ async fn assembler_witness_proves_and_verifies_n16() {
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
         fee_slot: 1234,
+        buyer_change_inner: None,
+        seller_change_inner: None,
     })
     .expect("assemble the match");
 

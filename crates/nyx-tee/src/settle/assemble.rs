@@ -38,7 +38,7 @@ use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_matcher::change_note::{
     derive_inner, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, TRADE_ROLE_BUYER, TRADE_ROLE_SELLER,
 };
-use darkpool_matcher::match_result::{MatchPair, RunBatchOutput};
+use darkpool_matcher::match_result::{MatchPair, RunBatchOutput, RELOCK_ORDER_ID_NONE};
 
 use crate::matcher::openings::{NoteOpening, OpeningStore};
 use crate::prover::{pad_batch, MatchSlotWitness};
@@ -66,6 +66,15 @@ pub struct MatchAssemblyInputs<'a> {
     /// protocol re-derives fee-note openings from (fee_slot,
     /// FEE_ROLE_*), so this must be a value the protocol can recover.
     pub fee_slot: u64,
+    /// For a CONTINUING buyer (the match's `buyer_relock_order_id` is
+    /// set), the `inner_hash` of the consumed anchor — the change note
+    /// note_e must be built with this (not `derive_inner`) so its
+    /// pre-supplied nullifier lets the matcher re-match the residual.
+    /// `None` when the buyer does not relock (note_e is a final change
+    /// note → `derive_inner`).
+    pub buyer_change_inner: Option<[u8; 32]>,
+    /// Same as [`Self::buyer_change_inner`] for the seller's note_f.
+    pub seller_change_inner: Option<[u8; 32]>,
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
@@ -184,8 +193,26 @@ pub fn assemble_match(
     // change, the commitment AND the inner_hash are all-zero — the
     // circuit's IsZero gate bypasses the reconstruction constraint,
     // matching the TS exact-fill witness.
+    //
+    // inner_hash source:
+    //   - CONTINUING side (relock_order_id set): the consumed anchor's
+    //     inner_hash (`*_change_inner`), so the change note carries the
+    //     client's pre-supplied nullifier and the matcher can re-match it.
+    //   - non-continuing side (full fill / IOC): `derive_inner(mid, role)`
+    //     — a final change note, recoverable by the client from match_id.
+    let buyer_relocks = m.buyer_relock_order_id != RELOCK_ORDER_ID_NONE;
+    let seller_relocks = m.seller_relock_order_id != RELOCK_ORDER_ID_NONE;
+
     let (note_e, e_inner) = if m.buyer_change_amt > 0 {
-        let inner = derive_inner(mid, CHANGE_ROLE_BUYER);
+        let inner = if buyer_relocks {
+            inp.buyer_change_inner.ok_or_else(|| {
+                AssembleError::Conservation(
+                    "buyer relocks but no continuation anchor inner_hash supplied".into(),
+                )
+            })?
+        } else {
+            derive_inner(mid, CHANGE_ROLE_BUYER)
+        };
         let c = commit(
             &inp.quote_mint,
             m.buyer_change_amt,
@@ -198,7 +225,15 @@ pub fn assemble_match(
     };
 
     let (note_f, f_inner) = if m.seller_change_amt > 0 {
-        let inner = derive_inner(mid, CHANGE_ROLE_SELLER);
+        let inner = if seller_relocks {
+            inp.seller_change_inner.ok_or_else(|| {
+                AssembleError::Conservation(
+                    "seller relocks but no continuation anchor inner_hash supplied".into(),
+                )
+            })?
+        } else {
+            derive_inner(mid, CHANGE_ROLE_SELLER)
+        };
         let c = commit(
             &inp.base_mint,
             m.seller_change_amt,
@@ -339,6 +374,22 @@ pub fn assemble_batch(
                 commitment: hex::encode(m.note_seller),
             })?;
 
+        // For a continuing side (relock_order_id set), the tick already
+        // built note_e/note_f from the consumed anchor and inserted the
+        // rotated opening keyed by the change-note commitment. Resolve the
+        // anchor's inner_hash from that opening so the witness reconstructs
+        // the exact same commitment the matcher emitted + the book rotated to.
+        let buyer_change_inner = if m.buyer_relock_order_id != RELOCK_ORDER_ID_NONE {
+            store.get(&m.note_e_commitment).map(|o| o.opening.inner_hash)
+        } else {
+            None
+        };
+        let seller_change_inner = if m.seller_relock_order_id != RELOCK_ORDER_ID_NONE {
+            store.get(&m.note_f_commitment).map(|o| o.opening.inner_hash)
+        } else {
+            None
+        };
+
         let (witness, payload) = assemble_match(MatchAssemblyInputs {
             match_pair: m,
             buyer_opening: &buyer.opening,
@@ -349,6 +400,8 @@ pub fn assemble_batch(
             quote_mint: params.quote_mint,
             protocol_owner_commitment: params.protocol_owner_commitment,
             fee_slot: params.fee_slot,
+            buyer_change_inner,
+            seller_change_inner,
         })?;
 
         let buyer_lock = lock_inputs(m.note_buyer, &buyer);
@@ -508,6 +561,8 @@ mod tests {
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
             fee_slot: 1234,
+            buyer_change_inner: None,
+            seller_change_inner: None,
         }
     }
 
@@ -584,6 +639,43 @@ mod tests {
         assert_eq!(p.buyer_fee_amt, 50);
         assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
         assert_eq!(p.note_fee_quote_commitment, [0u8; 32]);
+    }
+
+    #[test]
+    fn relocking_buyer_change_uses_anchor_inner_not_derive_inner() {
+        // Continuation (Phase 6): when the buyer relocks, note_e's
+        // inner_hash MUST be the consumed anchor's inner_hash (so the
+        // client's pre-supplied nullifier matches), NOT derive_inner.
+        let (mut m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
+        m.buyer_relock_order_id = [0xAB; 16]; // buyer relocks → continuation
+        let anchor_inner = fr_safe(0xC3);
+
+        let mut inp = inputs(&m, &buyer, &seller);
+        inp.buyer_change_inner = Some(anchor_inner);
+        let (w, _) = assemble_match(inp).unwrap();
+
+        let expected_e =
+            commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &anchor_inner)
+                .unwrap();
+        assert_eq!(w.note_e_commitment, expected_e);
+        assert_eq!(w.e_inner, anchor_inner, "must use the anchor inner_hash");
+        // And it must NOT equal the derive_inner value a non-relock fill uses.
+        let derive_e =
+            commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &derive_inner(42, CHANGE_ROLE_BUYER))
+                .unwrap();
+        assert_ne!(w.note_e_commitment, derive_e);
+    }
+
+    #[test]
+    fn relocking_buyer_without_anchor_inner_errors() {
+        // A relocking side with no supplied anchor inner_hash is a wiring
+        // bug (the tick must have consumed + inserted the opening). Fail
+        // loud rather than silently fall back to an unmatchable derive_inner.
+        let (mut m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
+        m.buyer_relock_order_id = [0xAB; 16];
+        let inp = inputs(&m, &buyer, &seller); // buyer_change_inner = None
+        let err = assemble_match(inp).unwrap_err();
+        assert!(matches!(err, AssembleError::Conservation(_)));
     }
 
     #[test]
