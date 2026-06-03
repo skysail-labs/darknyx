@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use dstack_sdk::dstack_client::DstackClient;
 
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 
 use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_JWT_SECRET};
 use super::instruments::InstrumentInfo;
@@ -104,6 +104,14 @@ pub struct ApiState {
     /// present. Persisted to `accounts.db` alongside the registry
     /// (Phase 1b) so revocations survive a restart.
     pub revoked_jtis: Arc<RwLock<HashSet<String>>>,
+    /// Concurrency limiter for Argon2id work. `/auth/token` (public,
+    /// unauthenticated) and `/admin/accounts` run Argon2id, which costs
+    /// ~19 MiB + tens of ms of CPU per hash. The handlers offload it to
+    /// `spawn_blocking` (so the async reactor isn't blocked) and acquire
+    /// a permit here first, so an unauthenticated `/auth/token` flood
+    /// can't spawn unbounded heavy jobs and exhaust the small CVM's RAM
+    /// (1 vCPU / 2 GB) — excess requests queue on the semaphore instead.
+    pub argon2_limiter: Arc<Semaphore>,
     /// Directory the auth snapshot (`accounts.db`) is read from at boot
     /// and written to after each registry/denylist mutation. `None`
     /// disables persistence (tests + any deploy with no mounted
@@ -170,6 +178,16 @@ pub struct ApiState {
     pub solana_rpc: Option<SolanaRpcClient>,
 }
 
+/// Max concurrent Argon2id hash/verify jobs allowed across the auth
+/// handlers. Sized to the host's parallelism (clamped) so legitimate
+/// auth still pipelines, while a flood queues rather than exhausting
+/// the small CVM's RAM (each job is ~19 MiB). See `argon2_limiter`.
+fn argon2_permits() -> usize {
+    std::thread::available_parallelism()
+        .map_or(2, |n| n.get())
+        .clamp(2, 16)
+}
+
 impl ApiState {
     /// Build production state from a successful boot. `jwt_secret`
     /// is the 32-byte value derived via dstack `get_key`. The account
@@ -196,6 +214,7 @@ impl ApiState {
             jwt_secret,
             accounts: Arc::new(RwLock::new(registry)),
             revoked_jtis: Arc::new(RwLock::new(revoked)),
+            argon2_limiter: Arc::new(Semaphore::new(argon2_permits())),
             state_dir,
             jwt_ttl_seconds: DEFAULT_JWT_TTL_SECONDS,
             // Populated by main.rs via `with_instruments` from the
@@ -290,6 +309,7 @@ impl ApiState {
             jwt_secret: TEST_JWT_SECRET,
             accounts: Arc::new(RwLock::new(test_registry())),
             revoked_jtis: Arc::new(RwLock::new(HashSet::new())),
+            argon2_limiter: Arc::new(Semaphore::new(argon2_permits())),
             // Persistence disabled in tests — they assert on in-memory
             // behaviour and must not touch the host filesystem. Tests
             // that exercise persistence drive the `persistence` module

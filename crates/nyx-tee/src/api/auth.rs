@@ -162,17 +162,24 @@ impl ApiCredentials {
         })
     }
 
-    /// Constant-time verification of `(api_secret, passphrase)`
-    /// against the stored argon2id hashes. `api_key` is NOT compared
-    /// here — the registry already used it as the lookup key, so
-    /// equality is structurally implied. Argon2's `verify_password`
-    /// is itself constant-time over the hash comparison.
+    /// Verify `(api_secret, passphrase)` against the stored argon2id
+    /// hashes. `api_key` is NOT compared here — the registry already
+    /// used it as the lookup key, so equality is structurally implied.
+    ///
+    /// BOTH factors are verified unconditionally (note the
+    /// non-short-circuiting `&`): a `&&` would skip the passphrase
+    /// Argon2 when the secret check fails, so a wrong `api_secret` would
+    /// return after ~1 hash while a correct secret + wrong passphrase
+    /// returns after ~2 — a timing oracle leaking whether the secret
+    /// alone matched. Argon2 is deliberately slow, so that gap is
+    /// measurable; verifying both every time closes it.
     ///
     /// A malformed stored hash (shouldn't happen — we only ever store
     /// hashes we produced) verifies as `false` rather than panicking.
     pub fn verify_credentials(&self, api_secret: &str, passphrase: &str) -> bool {
-        verify_secret(&self.secret_hash, api_secret)
-            && verify_secret(&self.passphrase_hash, passphrase)
+        let secret_ok = verify_secret(&self.secret_hash, api_secret);
+        let passphrase_ok = verify_secret(&self.passphrase_hash, passphrase);
+        secret_ok & passphrase_ok
     }
 }
 
@@ -392,7 +399,31 @@ pub async fn token_handler(
     }
     .ok_or((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()))?;
 
-    if !creds.verify_credentials(&req.api_secret, &req.passphrase) {
+    // Argon2id verify is CPU-bound + ~19 MiB per hash. Run it off the
+    // async reactor (spawn_blocking) and behind the concurrency limiter
+    // so an unauthenticated /auth/token flood can't starve the runtime
+    // or exhaust the small CVM's RAM. The permit is held for the whole
+    // verify, bounding concurrent Argon2 jobs.
+    let verified = {
+        let _permit = state.argon2_limiter.acquire().await.map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth limiter closed".to_string(),
+            )
+        })?;
+        let creds = creds.clone();
+        let api_secret = req.api_secret.clone();
+        let passphrase = req.passphrase.clone();
+        tokio::task::spawn_blocking(move || creds.verify_credentials(&api_secret, &passphrase))
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("verify task failed: {e}"),
+                )
+            })?
+    };
+    if !verified {
         return Err((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()));
     }
 
@@ -536,20 +567,39 @@ pub async fn register_account_handler(
         ));
     }
 
-    // Hash the new credentials BEFORE taking the write lock (argon2 is
-    // CPU-bound; don't hold the registry lock across it).
-    let creds = ApiCredentials::from_plaintext(
-        &req.api_key,
-        &req.api_secret,
-        &req.passphrase,
-        req.is_admin,
-    )
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("credential hashing failed: {e}"),
-        )
-    })?;
+    // Hash the new credentials off the async reactor (argon2 is
+    // CPU-bound + ~19 MiB/hash) and behind the concurrency limiter,
+    // BEFORE taking the write lock (don't hold the registry lock across
+    // it). Admin-gated, so lower risk than /auth/token, but the same
+    // offload keeps a slow hash from blocking the runtime.
+    let creds = {
+        let _permit = state.argon2_limiter.acquire().await.map_err(|_| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "auth limiter closed".to_string(),
+            )
+        })?;
+        let api_key = req.api_key.clone();
+        let api_secret = req.api_secret.clone();
+        let passphrase = req.passphrase.clone();
+        let is_admin = req.is_admin;
+        tokio::task::spawn_blocking(move || {
+            ApiCredentials::from_plaintext(api_key, &api_secret, &passphrase, is_admin)
+        })
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("hash task failed: {e}"),
+            )
+        })?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("credential hashing failed: {e}"),
+            )
+        })?
+    };
 
     let inserted = state.accounts.write().await.register(creds);
     if !inserted {
