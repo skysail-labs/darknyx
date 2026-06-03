@@ -139,9 +139,13 @@ pub fn per_batch_alt_addresses(
 /// references its OWN locks) plus the single shared `batch_validity_marker`
 /// (one per batch, keyed by the batch root). Deduped — exact-fill matches
 /// collide on the all-zero `note_lock_e/f` PDA, and the marker is shared.
-/// For a single match this equals [`per_batch_alt_addresses`]; building
-/// the ALT from only `matches[0]` would leave matches 1..N's locks inline
-/// and push their settle tx over the 1232-byte cap.
+/// NOTE this dedup means it is NOT identical to [`per_batch_alt_addresses`]
+/// even for a single match: an exact-fill payload yields 4 entries here (the
+/// `note_lock_e`/`note_lock_f` collision is collapsed) vs the 5
+/// (with a duplicate) that `per_batch_alt_addresses` always returns — so
+/// callers must not assume the two are interchangeable. Building the ALT
+/// from only `matches[0]` would leave matches 1..N's locks inline and push
+/// their settle tx over the 1232-byte cap.
 pub fn batch_alt_addresses<'a>(
     payloads: impl IntoIterator<Item = &'a MatchResultPayload>,
     merkle_root: &[u8; 32],

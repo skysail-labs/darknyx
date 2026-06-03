@@ -1336,9 +1336,13 @@ x-websocket:
 
     account.info:
       description: |
-        Pull-style request for account snapshot over WS (mirrors
-        GET /account). For live updates, subscribe to the
-        `account` channel.
+        DEFERRED — mirrors GET /account, which returns 501 by design:
+        the TEE never sees a spending key, so it cannot compute
+        per-account balances / spendable notes. Clients reconstruct
+        account state CLIENT-SIDE from the `/tree/*` endpoints (or the
+        `tree` channel) plus their own keys. Implementations should
+        reply with the same not-implemented error as GET /account
+        rather than a snapshot. See docs/tee-architecture.md §11.3.
       message:
         type: object
         required: [op, request_id]
@@ -1371,7 +1375,13 @@ x-websocket:
       description: Per-fill events as matches happen.
 
     account:
-      description: Balance + spendable-notes updates after settle.
+      description: |
+        DEFERRED — same reason as GET /account (501): the TEE can't
+        derive per-account balances / spendable notes without a
+        spending key it never holds. Clients keep account state by
+        reconstructing it from the `tree` channel (leaf-append events)
+        + their own keys; this channel is not served. See
+        docs/tee-architecture.md §11.3.
 
     settlement:
       description: |

@@ -35,7 +35,14 @@ if (!signerArg) {
   console.error("  (get it from `curl <gateway>/info | jq -r .tee_pubkey`)");
   process.exit(1);
 }
-const newTeePubkey = new PublicKey(signerArg);
+let newTeePubkey;
+try {
+  newTeePubkey = new PublicKey(signerArg);
+} catch {
+  console.error(`invalid signer public key: ${signerArg}`);
+  console.error("  expected a base58-encoded Solana pubkey (from `curl <gateway>/info | jq -r .tee_pubkey`)");
+  process.exit(1);
+}
 
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";

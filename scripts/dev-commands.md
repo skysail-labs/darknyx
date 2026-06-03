@@ -213,7 +213,7 @@ The public `api.devnet.solana.com` **429s** the heavy paths — the TEE's
 Merkle sync (`getSignaturesForAddress`) and the e2e harness's many reads.
 Use a **private RPC (Helius)** for those:
 
-```
+```text
 https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>
 ```
 
