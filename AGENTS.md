@@ -1,7 +1,7 @@
-# CLAUDE.md — agent onboarding for Nyx Darkpool
+# AGENTS.md — agent onboarding for Nyx Darkpool
 
 > This file is the contract between you (the agent) and the project.
-> Read it before touching code. It also doubles as `AGENTS.md` — same
+> Read it before touching code. It also doubles as `CLAUDE.md` — same
 > rules, just routed by name.
 >
 > If you only read one section, read **[§2 — The unbreakable
