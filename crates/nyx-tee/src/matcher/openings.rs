@@ -56,6 +56,9 @@ pub struct AnchorPool {
     /// Set when the pool is exhausted and the matcher is awaiting a
     /// WebSocket top-up (Phase 7). A paused order is skipped by the tick.
     pub paused: bool,
+    /// Highest `topup_nonce` accepted so far (Phase 7 replay protection).
+    /// A top-up must carry a strictly greater nonce. 0 = none yet.
+    pub last_topup_nonce: u64,
 }
 
 impl AnchorPool {
@@ -64,15 +67,18 @@ impl AnchorPool {
             anchors,
             next_index: 0,
             paused: false,
+            last_topup_nonce: 0,
         }
     }
 
     /// Consume the next unconsumed anchor, advancing the cursor. Returns
-    /// `None` (and the caller should pause the order) when exhausted.
-    pub fn consume_next(&mut self) -> Option<Anchor> {
-        let a = self.anchors.get(self.next_index).copied()?;
+    /// `(index, anchor)` so the caller can report the consumed slot in a
+    /// fill memo; `None` (and the caller should pause) when exhausted.
+    pub fn consume_next(&mut self) -> Option<(usize, Anchor)> {
+        let idx = self.next_index;
+        let a = self.anchors.get(idx).copied()?;
         self.next_index += 1;
-        Some(a)
+        Some((idx, a))
     }
 
     /// Append more anchors (a WebSocket top-up). Clears `paused`.
@@ -358,10 +364,10 @@ mod tests {
             .collect();
         let mut pool = AnchorPool::new(anchors.clone());
         assert_eq!(pool.remaining(), 3);
-        assert_eq!(pool.consume_next(), Some(anchors[0]));
-        assert_eq!(pool.consume_next(), Some(anchors[1]));
+        assert_eq!(pool.consume_next(), Some((0, anchors[0])));
+        assert_eq!(pool.consume_next(), Some((1, anchors[1])));
         assert_eq!(pool.remaining(), 1);
-        assert_eq!(pool.consume_next(), Some(anchors[2]));
+        assert_eq!(pool.consume_next(), Some((2, anchors[2])));
         // Exhausted → None (caller pauses the order).
         assert_eq!(pool.consume_next(), None);
         assert_eq!(pool.remaining(), 0);

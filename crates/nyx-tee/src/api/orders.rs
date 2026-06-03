@@ -33,8 +33,8 @@ use axum::{
 };
 use darkpool_matcher::book::{Order, OrderSide, OrderStatus, OrderType};
 use darkpool_matcher::order_canonical::{
-    anchor_pool_hash, Anchor, CancelCanonical, CanonicalError, OrderCanonical, ANCHOR_POOL_SIZE,
-    SYMBOL_MAX_LEN,
+    anchor_pool_hash, Anchor, AnchorTopUpCanonical, CancelCanonical, CanonicalError, OrderCanonical,
+    ANCHOR_POOL_SIZE, ANCHOR_TOPUP_SIZE, SYMBOL_MAX_LEN,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -558,6 +558,127 @@ pub async fn cancel_order(
         order_id: hex::encode(order_id),
         status: "cancelled",
     }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /orders/{order_id}/anchors  — anchor-pool top-up (Phase 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Body for `POST /orders/{order_id}/anchors`. Appends a fresh batch of
+/// continuation anchors to a live order whose pool drained (the matcher
+/// paused it). The trading key signs over the new pool's hash + a
+/// per-order monotonic `topup_nonce`.
+#[derive(Debug, Deserialize)]
+pub struct AnchorTopUpRequest {
+    /// Exactly `ANCHOR_TOPUP_SIZE` new `(inner_hash, nullifier)` anchors.
+    pub anchors: Vec<AnchorJson>,
+    /// Strictly-increasing per-order counter (replay protection).
+    pub topup_nonce: u64,
+    /// 32-byte trading key (must own the order), hex.
+    pub trading_key: String,
+    /// 64-byte Ed25519 signature over the top-up canonical digest, hex.
+    pub trading_key_signature: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AnchorTopUpResponse {
+    pub order_id: String,
+    pub status: &'static str,
+    /// Anchors not yet consumed after the append.
+    pub remaining: usize,
+}
+
+pub async fn topup_anchors(
+    State(state): State<Arc<ApiState>>,
+    Extension(_auth): Extension<Authorized>,
+    Path(order_id_hex): Path<String>,
+    Json(req): Json<AnchorTopUpRequest>,
+) -> Result<(StatusCode, Json<AnchorTopUpResponse>), (StatusCode, String)> {
+    let matcher = matcher_or_503(&state)?;
+
+    let order_id: [u8; 16] = decode_hex(&order_id_hex, "order_id (path)")?;
+    let trading_key: [u8; 32] = decode_hex(&req.trading_key, "trading_key")?;
+    let signature: [u8; 64] = decode_hex(&req.trading_key_signature, "trading_key_signature")?;
+
+    // Validate + decode the new anchors (same rules as intake).
+    if req.anchors.len() != ANCHOR_TOPUP_SIZE {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "anchors: expected exactly {ANCHOR_TOPUP_SIZE} top-up anchors, got {}",
+                req.anchors.len()
+            ),
+        ));
+    }
+    let mut anchors: Vec<Anchor> = Vec::with_capacity(ANCHOR_TOPUP_SIZE);
+    for (i, a) in req.anchors.iter().enumerate() {
+        let inner_hash: [u8; 32] = decode_hex(&a.inner_hash, "anchor.inner_hash")?;
+        let null: [u8; 32] = decode_hex(&a.nullifier, "anchor.nullifier")?;
+        darkpool_crypto::fr_from_be_bytes(&inner_hash).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("anchors[{i}].inner_hash is not a canonical BN254 field element"),
+            )
+        })?;
+        anchors.push(Anchor {
+            inner_hash,
+            nullifier: null,
+        });
+    }
+
+    // Verify the trading-key signature over (order_id, new-pool hash, nonce).
+    let canonical = AnchorTopUpCanonical {
+        order_id,
+        anchor_pool_hash: anchor_pool_hash(&anchors),
+        topup_nonce: req.topup_nonce,
+    };
+    verify_sig(&canonical.digest(), &trading_key, &signature)?;
+
+    let mut st = matcher.write().await;
+    // Authorize: the top-up's trading key must own the order. (A missing
+    // order → 404: it filled / cancelled / expired, so its pool is gone.)
+    match st.book().get(&order_id) {
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                "order not found (filled / cancelled / expired)".to_string(),
+            ))
+        }
+        Some(o) if o.trading_key != trading_key => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "trading key does not own this order".to_string(),
+            ))
+        }
+        Some(_) => {}
+    }
+
+    let pool = st.openings_mut().anchor_pool_mut(&order_id).ok_or((
+        StatusCode::NOT_FOUND,
+        "order has no anchor pool".to_string(),
+    ))?;
+    // Replay protection: the nonce must strictly increase.
+    if req.topup_nonce <= pool.last_topup_nonce {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "topup_nonce {} not greater than last accepted {}",
+                req.topup_nonce, pool.last_topup_nonce
+            ),
+        ));
+    }
+    pool.last_topup_nonce = req.topup_nonce;
+    pool.append(anchors); // also clears `paused` → the matcher resumes it
+    let remaining = pool.remaining();
+
+    Ok((
+        StatusCode::OK,
+        Json(AnchorTopUpResponse {
+            order_id: hex::encode(order_id),
+            status: "topped_up",
+            remaining,
+        }),
+    ))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

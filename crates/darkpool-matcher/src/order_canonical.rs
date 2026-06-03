@@ -31,6 +31,13 @@ pub const ORDER_DOMAIN: &[u8] = b"nyx-order-v2";
 /// Domain-separation tag for order cancel. See [`ORDER_DOMAIN`].
 pub const CANCEL_DOMAIN: &[u8] = b"nyx-cancel-v1";
 
+/// Domain-separation tag for an anchor-pool top-up (Phase 7 WS). A
+/// top-up appends [`ANCHOR_TOPUP_SIZE`] fresh anchors to a live order's
+/// pool when it drains; the trading key signs over the new pool's hash
+/// so the matcher can't be fed forged anchors. Distinct domain so a
+/// top-up can never be replayed as an order submit or cancel.
+pub const ANCHOR_TOPUP_DOMAIN: &[u8] = b"nyx-anchor-topup-v1";
+
 /// Cap on symbol length. 32 bytes covers every market identifier
 /// we expect to ever ship (`SOL-USDC`, `SOL-USDC-PERP-A`, etc.) and
 /// fits cleanly in a `u8` length prefix.
@@ -203,6 +210,43 @@ impl CancelCanonical {
     }
 }
 
+/// Anchor-pool top-up canonical view. Layout:
+///
+/// ```text
+///   0..19       ANCHOR_TOPUP_DOMAIN  ("nyx-anchor-topup-v1")
+///   19..35      order_id      : [u8; 16]
+///   35..67      anchor_pool_hash : [u8; 32]   (SHA-256 over the NEW anchors)
+///   67..75      topup_nonce   : u64 LE
+/// ```
+///
+/// `anchor_pool_hash` is [`anchor_pool_hash`] over ONLY the newly-added
+/// anchors (not the whole pool) — the handler appends them after the
+/// signature verifies. `topup_nonce` is a per-order monotonic counter so
+/// a top-up can't be replayed (the matcher tracks the last accepted
+/// nonce per order). `trading_key` is attested implicitly by the Ed25519
+/// signature, as in [`OrderCanonical`].
+#[derive(Clone, Debug)]
+pub struct AnchorTopUpCanonical {
+    pub order_id: [u8; 16],
+    pub anchor_pool_hash: [u8; 32],
+    pub topup_nonce: u64,
+}
+
+impl AnchorTopUpCanonical {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(ANCHOR_TOPUP_DOMAIN.len() + 16 + 32 + 8);
+        buf.extend_from_slice(ANCHOR_TOPUP_DOMAIN);
+        buf.extend_from_slice(&self.order_id);
+        buf.extend_from_slice(&self.anchor_pool_hash);
+        buf.extend_from_slice(&self.topup_nonce.to_le_bytes());
+        buf
+    }
+
+    pub fn digest(&self) -> [u8; 32] {
+        Sha256::digest(self.to_bytes()).into()
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,6 +359,39 @@ mod tests {
         perturb!(user_commitment = [0x34; 32]);
         perturb!(arrival_nonce = 43);
         perturb!(anchor_pool_hash = [0x45; 32]);
+    }
+
+    #[test]
+    fn anchor_topup_canonical_is_deterministic_and_domain_separated() {
+        let t = AnchorTopUpCanonical {
+            order_id: [0x11; 16],
+            anchor_pool_hash: [0x44; 32],
+            topup_nonce: 7,
+        };
+        // Deterministic.
+        assert_eq!(t.digest(), t.digest());
+        // Layout length: 19 (domain) + 16 + 32 + 8.
+        assert_eq!(t.to_bytes().len(), 19 + 16 + 32 + 8);
+        // Domain-separated from an order submit + a cancel with the same id.
+        let order = OrderCanonical {
+            order_id: t.order_id,
+            anchor_pool_hash: t.anchor_pool_hash,
+            ..fixture()
+        };
+        assert_ne!(t.digest(), order.digest().unwrap());
+        let cancel = CancelCanonical {
+            order_id: t.order_id,
+            trading_key: [0; 32],
+            cancel_nonce: 7,
+        };
+        assert_ne!(t.digest(), cancel.digest());
+        // nonce + pool-hash both affect the digest.
+        let mut t2 = t.clone();
+        t2.topup_nonce = 8;
+        assert_ne!(t.digest(), t2.digest());
+        let mut t3 = t.clone();
+        t3.anchor_pool_hash = [0x45; 32];
+        assert_ne!(t.digest(), t3.digest());
     }
 
     #[test]

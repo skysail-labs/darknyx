@@ -5,10 +5,12 @@
 //! `docs/tee-architecture.md` §5.
 
 pub mod book;
+pub mod fills;
 pub mod interval;
 pub mod openings;
 pub mod selftrade;
 
 pub use book::{BookError, OrderBook};
+pub use fills::FillMemo;
 pub use interval::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
 pub use openings::{NoteOpening, OpeningError, OpeningStore, OrderOpening};

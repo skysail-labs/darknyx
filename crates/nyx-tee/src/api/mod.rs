@@ -115,6 +115,13 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         .route("/orders", post(orders::place_order))
         .route("/orders/:order_id", delete(orders::cancel_order))
         .route("/orders/:order_id", get(orders::get_order))
+        // Anchor-pool top-up (Phase 7): replenish a drained pool so the
+        // matcher resumes the paused residual.
+        .route("/orders/:order_id/anchors", post(orders::topup_anchors))
+        // Fill-memo WebSocket (Phase 7): the client subscribes to learn
+        // which anchor each continuation fill consumed + verify/store the
+        // change note.
+        .route("/ws/fills", get(ws::fills_ws))
         .route("/settlement/status/:batch_id", get(settlement::get_status))
         // Merkle mirror — bearer-protected reads (inclusion proof +
         // leaf pagination). Root is public above.

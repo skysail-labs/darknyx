@@ -39,6 +39,7 @@ use tokio::time;
 use crate::oracle::cache::OracleCache;
 
 use super::book::OrderBook;
+use super::fills::FillMemo;
 use super::openings::{NoteOpening, OrderOpening};
 
 /// Maximum age of an oracle cache entry the matcher will accept.
@@ -54,7 +55,6 @@ pub const DEFAULT_MAX_ORACLE_AGE_MS: u64 = 5_000;
 /// microseconds; submitters take a write lock for microseconds.
 /// Read queries (future `/tree/inclusion` etc.) take the read
 /// lock so they don't contend.
-#[derive(Default)]
 pub struct MatcherState {
     book: OrderBook,
     next_match_id: u64,
@@ -75,11 +75,39 @@ pub struct MatcherState {
     /// own fee) so a filled order can pay its own protocol fee out of
     /// its own collateral. 0 (default) → fee-free, collateral = nominal.
     fee_rate_bps: u16,
+    /// Broadcast of [`FillMemo`]s — one per continuation anchor the tick
+    /// consumes. The `GET /ws/fills` handler subscribes; the client uses
+    /// the memo to correlate the anchor + run the integrity check + store
+    /// the change note. Kept alive even with no subscribers (send just
+    /// returns `Err`, which the tick ignores).
+    fills_tx: tokio::sync::broadcast::Sender<FillMemo>,
+}
+
+impl Default for MatcherState {
+    fn default() -> Self {
+        // 1024 buffered memos is ample — a slow WS client lags (loses old
+        // memos) rather than back-pressuring the matcher tick.
+        let (fills_tx, _rx) = tokio::sync::broadcast::channel(1024);
+        Self {
+            book: OrderBook::default(),
+            next_match_id: 0,
+            openings: super::openings::OpeningStore::default(),
+            base_mint: [0u8; 32],
+            quote_mint: [0u8; 32],
+            fee_rate_bps: 0,
+            fills_tx,
+        }
+    }
 }
 
 impl MatcherState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Subscribe to the fill-memo broadcast (the WS `fills` channel).
+    pub fn subscribe_fills(&self) -> tokio::sync::broadcast::Receiver<FillMemo> {
+        self.fills_tx.subscribe()
     }
 
     /// Set this market's mints. Called once at startup from the same
@@ -171,7 +199,7 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
                 .anchor_pool_mut(&oid)
                 .and_then(|p| p.consume_next());
             match (owner, prior, anchor) {
-                (Some(owner), Some(prior), Some(anchor)) => {
+                (Some(owner), Some(prior), Some((anchor_index, anchor))) => {
                     if let Ok(note_e) = commitment_from_fields_v2(
                         &quote_mint,
                         m.buyer_change_amt,
@@ -198,6 +226,23 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
                         };
                         state.openings_mut().insert(note_e, opening);
                         update_edits.push((oid, Some(note_e)));
+                        let _ = state.fills_tx.send(FillMemo::new(
+                            oid,
+                            anchor_index,
+                            m.buyer_change_amt,
+                            note_e,
+                            quote_mint,
+                            anchor.inner_hash,
+                        ));
+                        // Drained the last anchor → pause: the residual
+                        // stays in the book but won't match again until a
+                        // WS top-up replenishes the pool (the NEXT fill
+                        // would have no anchor for its change note).
+                        if let Some(p) = state.openings_mut().anchor_pool_mut(&oid) {
+                            if p.remaining() == 0 {
+                                p.paused = true;
+                            }
+                        }
                     } else {
                         // Fr-safety failure (shouldn't happen — anchor
                         // inner_hash validated at intake). Downgrade.
@@ -229,7 +274,7 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
                 .anchor_pool_mut(&oid)
                 .and_then(|p| p.consume_next());
             match (owner, prior, anchor) {
-                (Some(owner), Some(prior), Some(anchor)) => {
+                (Some(owner), Some(prior), Some((anchor_index, anchor))) => {
                     if let Ok(note_f) = commitment_from_fields_v2(
                         &base_mint,
                         m.seller_change_amt,
@@ -252,6 +297,19 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
                         };
                         state.openings_mut().insert(note_f, opening);
                         update_edits.push((oid, Some(note_f)));
+                        let _ = state.fills_tx.send(FillMemo::new(
+                            oid,
+                            anchor_index,
+                            m.seller_change_amt,
+                            note_f,
+                            base_mint,
+                            anchor.inner_hash,
+                        ));
+                        if let Some(p) = state.openings_mut().anchor_pool_mut(&oid) {
+                            if p.remaining() == 0 {
+                                p.paused = true;
+                            }
+                        }
                     } else {
                         m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
                         update_edits.push((oid, None));
@@ -423,7 +481,19 @@ impl MatcherDriver {
             // match so submitters aren't blocked across it.
             let (book_snap, start_match_id) = {
                 let state = self.state.read().await;
-                (state.book().snapshot(), state.next_match_id())
+                let mut snap = state.book().snapshot();
+                // Skip orders whose anchor pool is drained + awaiting a WS
+                // top-up (Phase 7): they stay in the book (their current
+                // change-note collateral is valid) but must NOT match again
+                // until topped up — the next fill would have no anchor for
+                // its change note. Unpaused by `POST /orders/:id/anchors`.
+                snap.orders.retain(|o| {
+                    !state
+                        .openings()
+                        .anchor_pool(&o.order_id)
+                        .is_some_and(|p| p.paused)
+                });
+                (snap, state.next_match_id())
             };
             if book_snap.orders.is_empty() {
                 break;

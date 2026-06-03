@@ -29,7 +29,8 @@ use axum::{
 };
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::order_canonical::{
-    anchor_pool_hash, Anchor, CancelCanonical, OrderCanonical, ANCHOR_POOL_SIZE,
+    anchor_pool_hash, Anchor, AnchorTopUpCanonical, CancelCanonical, OrderCanonical,
+    ANCHOR_POOL_SIZE, ANCHOR_TOPUP_SIZE,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use http_body_util::BodyExt;
@@ -284,6 +285,92 @@ async fn cancel(
 async fn read_json(resp: axum::response::Response) -> serde_json::Value {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&body).unwrap()
+}
+
+async fn topup(
+    app: &Router,
+    bearer: &str,
+    order_id_hex: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/orders/{order_id_hex}/anchors"))
+                .header("authorization", format!("Bearer {bearer}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+/// Build a signed anchor-pool top-up body with `ANCHOR_TOPUP_SIZE` fresh
+/// (Fr-safe) anchors derived from `salt`.
+fn topup_body(key: &SigningKey, order_id: [u8; 16], topup_nonce: u64, salt: u8) -> serde_json::Value {
+    let trading_key = key.verifying_key().to_bytes();
+    let anchors: Vec<Anchor> = (0..ANCHOR_TOPUP_SIZE)
+        .map(|i| {
+            let mut inner = [0u8; 32];
+            inner[31] = salt.wrapping_add(i as u8);
+            Anchor {
+                inner_hash: inner,
+                nullifier: [salt.wrapping_add(0x40 + i as u8); 32],
+            }
+        })
+        .collect();
+    let canonical = AnchorTopUpCanonical {
+        order_id,
+        anchor_pool_hash: anchor_pool_hash(&anchors),
+        topup_nonce,
+    };
+    let sig = key.sign(&canonical.digest());
+    json!({
+        "anchors": anchors.iter().map(|a| json!({
+            "inner_hash": hex::encode(a.inner_hash),
+            "nullifier": hex::encode(a.nullifier),
+        })).collect::<Vec<_>>(),
+        "topup_nonce": topup_nonce,
+        "trading_key": hex::encode(trading_key),
+        "trading_key_signature": hex::encode(sig.to_bytes()),
+    })
+}
+
+#[tokio::test]
+async fn anchor_topup_happy_path_then_replay_and_wrong_owner_rejected() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let builder = PlaceOrderBuilder::new();
+    let oid_hex = hex::encode(builder.order_id);
+    assert_eq!(place(&app, &bearer, builder.sign(&key)).await.status(), StatusCode::ACCEPTED);
+
+    // Happy path: a correctly-signed top-up appends ANCHOR_TOPUP_SIZE anchors.
+    let resp = topup(&app, &bearer, &oid_hex, topup_body(&key, builder.order_id, 1, 0x10)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let j = read_json(resp).await;
+    assert_eq!(j["status"], "topped_up");
+    // Pool started at ANCHOR_POOL_SIZE (none consumed), now + ANCHOR_TOPUP_SIZE.
+    assert_eq!(j["remaining"], (ANCHOR_POOL_SIZE + ANCHOR_TOPUP_SIZE) as u64);
+
+    // Replay: the same nonce is rejected (409).
+    let resp = topup(&app, &bearer, &oid_hex, topup_body(&key, builder.order_id, 1, 0x20)).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // A higher nonce is accepted.
+    let resp = topup(&app, &bearer, &oid_hex, topup_body(&key, builder.order_id, 2, 0x30)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Wrong owner: a different trading key over a valid-looking body → 403.
+    let other = fresh_signing_key();
+    let resp = topup(&app, &bearer, &oid_hex, topup_body(&other, builder.order_id, 3, 0x40)).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // Unknown order → 404.
+    let resp = topup(&app, &bearer, &hex::encode([0xAB; 16]), topup_body(&key, [0xAB; 16], 1, 0x50)).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 fn cancel_body(key: &SigningKey, order_id: [u8; 16], cancel_nonce: u64) -> serde_json::Value {
