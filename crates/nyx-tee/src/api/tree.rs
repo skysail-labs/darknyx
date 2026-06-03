@@ -29,6 +29,12 @@ use serde::{Deserialize, Serialize};
 use super::state::ApiState;
 use crate::merkle::MERKLE_DEPTH;
 
+/// Max leaves returned by a single `GET /tree/leaves` page. Bounds the
+/// response (and the memory to build it) so one bearer request can't
+/// materialise a large mirror into a single JSON body. Clients paginate
+/// with successive `from` cursors.
+const MAX_LEAF_PAGE: u64 = 10_000;
+
 /// `GET /tree/root` response. Mirrors the openapi `TreeRoot` schema.
 #[derive(Debug, Serialize)]
 pub struct TreeRootResponse {
@@ -139,8 +145,13 @@ pub async fn get_leaves(
             "`to` must be >= `from`".to_string(),
         ));
     }
+    // Cap the page so one request can't materialise a huge tree into a
+    // single JSON response (`leaves_range` clamps to the leaf COUNT, not
+    // a span — without this `?from=0&to=<huge>` would dump the whole
+    // mirror). Clients page with successive `from`.
+    let capped_to = q.to.min(q.from.saturating_add(MAX_LEAF_PAGE));
     let mirror = state.merkle_mirror.read().await;
-    let (start, leaves) = mirror.leaves_range(q.from, q.to);
+    let (start, leaves) = mirror.leaves_range(q.from, capped_to);
     Ok(Json(LeavesResponse {
         leaves: leaves
             .into_iter()

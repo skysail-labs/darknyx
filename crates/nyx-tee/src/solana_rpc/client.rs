@@ -604,12 +604,14 @@ impl SolanaRpcClient {
                 data: err.data,
             });
         }
-        let result_value = envelope.result.ok_or_else(|| {
-            RpcError::Schema(format!(
-                "rpc {method} returned neither result nor error: {body}",
-                body = preview(&bytes)
-            ))
-        })?;
+        // A JSON-RPC `"result": null` (e.g. getTransaction for a
+        // not-yet-found signature) deserializes `envelope.result` to
+        // None. Treat that as `Value::Null` and let the caller's `R`
+        // absorb it: for an `Option<T>` return that yields `Ok(None)`
+        // (the not-found path get_transaction relies on); for a
+        // non-optional `R` it still fails deserialization → Schema, so
+        // shape validation for genuinely-malformed responses is kept.
+        let result_value = envelope.result.unwrap_or(Value::Null);
         serde_json::from_value(result_value)
             .map_err(|e| RpcError::Schema(format!("rpc {method} result shape: {e}")))
     }

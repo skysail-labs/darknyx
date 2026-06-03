@@ -606,7 +606,7 @@ components:
               type: array
               items:
                 type: object
-                required: [mint, outstanding, vault_balance]
+                required: [mint, outstanding, vault_balance, stale]
                 properties:
                   mint: { type: string }
                   outstanding:
@@ -621,6 +621,13 @@ components:
                       this mint. MUST be >= outstanding (the v2
                       solvency invariant). If not, something is
                       wrong on-chain.
+                  stale:
+                    type: boolean
+                    description: |
+                      true if either on-chain read was DEGRADED (RPC
+                      error or malformed account); outstanding /
+                      vault_balance are then "unknown", not a real 0 —
+                      ignore the numbers for a solvency check.
         tee:
           type: object
           description: |

@@ -41,6 +41,12 @@ pub struct PerMintReserve {
     /// Actual SPL balance in the vault's PDA for this mint (decimal
     /// string). MUST be >= `outstanding` (v2 solvency invariant).
     pub vault_balance: String,
+    /// `true` if either on-chain read was DEGRADED (RPC error or a
+    /// malformed account) — the `outstanding` / `vault_balance` `0`s are
+    /// then "unknown", NOT a real zero. Consumers checking solvency MUST
+    /// ignore the numbers when this is set rather than reading a
+    /// fabricated 0 as a healthy/empty reserve.
+    pub stale: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,26 +89,44 @@ fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
     Some(u64::from_le_bytes(b))
 }
 
-/// Fetch `(outstanding, vault_balance)` for one mint. Missing accounts
-/// (mint never deposited) read as 0; an RPC error reads as 0 too (logged)
-/// so the endpoint still renders.
+/// Fetch `(outstanding, vault_balance)` for one mint. A missing account
+/// (mint never deposited) is a TRUE 0; an RPC error or malformed account
+/// reads as 0 too (logged) so the endpoint still renders, but sets
+/// `stale` so a consumer can tell that 0 apart from a real zero.
 async fn read_reserve(rpc: &SolanaRpcClient, mint: &[u8; 32]) -> PerMintReserve {
     let (om_pda, _) = outstanding_mint_pda(mint);
     let (vt_pda, _) = vault_token_account_pda(mint);
 
+    let mut stale = false;
     let outstanding = match rpc.get_account_info(&om_pda).await {
-        Ok(Some(acc)) => read_u64_le(&acc.data, OUTSTANDING_OFFSET).unwrap_or(0),
-        Ok(None) => 0, // counter PDA not yet created for this mint
+        Ok(Some(acc)) => match read_u64_le(&acc.data, OUTSTANDING_OFFSET) {
+            Some(v) => v,
+            None => {
+                tracing::warn!("transparency: outstanding_mint account too short");
+                stale = true;
+                0
+            }
+        },
+        Ok(None) => 0, // counter PDA not yet created for this mint — TRUE 0
         Err(e) => {
             tracing::warn!(error = %e, "transparency: outstanding_mint read failed");
+            stale = true;
             0
         }
     };
     let vault_balance = match rpc.get_account_info(&vt_pda).await {
-        Ok(Some(acc)) => read_u64_le(&acc.data, SPL_AMOUNT_OFFSET).unwrap_or(0),
+        Ok(Some(acc)) => match read_u64_le(&acc.data, SPL_AMOUNT_OFFSET) {
+            Some(v) => v,
+            None => {
+                tracing::warn!("transparency: vault_token_account too short");
+                stale = true;
+                0
+            }
+        },
         Ok(None) => 0,
         Err(e) => {
             tracing::warn!(error = %e, "transparency: vault_token_account read failed");
+            stale = true;
             0
         }
     };
@@ -111,6 +135,7 @@ async fn read_reserve(rpc: &SolanaRpcClient, mint: &[u8; 32]) -> PerMintReserve 
         mint: bs58::encode(mint).into_string(),
         outstanding: outstanding.to_string(),
         vault_balance: vault_balance.to_string(),
+        stale,
     }
 }
 

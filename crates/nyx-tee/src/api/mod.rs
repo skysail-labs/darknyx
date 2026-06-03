@@ -116,9 +116,6 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         .route("/orders/:order_id", delete(orders::cancel_order))
         .route("/orders/:order_id", get(orders::get_order))
         .route("/settlement/status/:batch_id", get(settlement::get_status))
-        // Layer A account management — bearer-protected. `revoke`
-        // denylists the caller's own token; `/admin/accounts` is
-        // further admin-gated inside the handler (see auth.rs).
         // Merkle mirror — bearer-protected reads (inclusion proof +
         // leaf pagination). Root is public above.
         .route("/tree/inclusion", get(tree::get_inclusion))
@@ -127,6 +124,9 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // TEE can't compute per-account balances/notes without a
         // spending key it never sees. See api::account.
         .route("/account", get(account::get_account))
+        // Layer A account management — bearer-protected. `revoke`
+        // denylists the caller's own token; `/admin/accounts` is
+        // further admin-gated inside the handler (see auth.rs).
         .route("/auth/token/revoke", post(auth::revoke_token_handler))
         .route("/admin/accounts", post(auth::register_account_handler))
         .route_layer(from_fn_with_state(state, auth::bearer_middleware))
