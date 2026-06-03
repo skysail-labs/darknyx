@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 
 export const ORDER_DOMAIN: Uint8Array = new TextEncoder().encode("nyx-order-v2");
 export const CANCEL_DOMAIN: Uint8Array = new TextEncoder().encode("nyx-cancel-v1");
+export const ANCHOR_TOPUP_DOMAIN: Uint8Array = new TextEncoder().encode("nyx-anchor-topup-v1");
 export const SYMBOL_MAX_LEN = 32;
 
 /** Fixed number of continuation anchors a client supplies per order.
@@ -218,4 +219,38 @@ export function cancelCanonicalBytes(c: CancelCanonical): Uint8Array {
 
 export function cancelCanonicalDigest(c: CancelCanonical): Uint8Array {
   return new Uint8Array(createHash("sha256").update(cancelCanonicalBytes(c)).digest());
+}
+
+export interface AnchorTopUpCanonical {
+  /** 16 bytes — the order being topped up. */
+  orderId: Uint8Array;
+  /** 32 bytes — SHA-256 over the NEW anchors (see `anchorPoolHash`). */
+  anchorPoolHash: Uint8Array;
+  /** Strictly-increasing per-order counter. */
+  topupNonce: bigint;
+}
+
+/**
+ * Anchor-pool top-up canonical view — mirrors
+ * `darkpool_matcher::order_canonical::AnchorTopUpCanonical`. Layout:
+ *
+ * ```
+ *   0..19       ANCHOR_TOPUP_DOMAIN  ("nyx-anchor-topup-v1")
+ *   19..35      order_id      : [u8; 16]
+ *   35..67      anchor_pool_hash : [u8; 32]
+ *   67..75      topup_nonce   : u64 LE
+ * ```
+ */
+export function anchorTopUpCanonicalBytes(t: AnchorTopUpCanonical): Uint8Array {
+  if (t.orderId.length !== 16) {
+    throw new CanonicalError(`orderId must be 16 bytes; got ${t.orderId.length}`);
+  }
+  if (t.anchorPoolHash.length !== 32) {
+    throw new CanonicalError(`anchorPoolHash must be 32 bytes; got ${t.anchorPoolHash.length}`);
+  }
+  return concat([ANCHOR_TOPUP_DOMAIN, t.orderId, t.anchorPoolHash, u64LE(t.topupNonce)]);
+}
+
+export function anchorTopUpCanonicalDigest(t: AnchorTopUpCanonical): Uint8Array {
+  return new Uint8Array(createHash("sha256").update(anchorTopUpCanonicalBytes(t)).digest());
 }

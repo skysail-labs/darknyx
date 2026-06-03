@@ -25,17 +25,28 @@ export * from "./orders/cancel-order.js";
 export {
   ORDER_DOMAIN,
   CANCEL_DOMAIN,
+  ANCHOR_TOPUP_DOMAIN,
+  ANCHOR_POOL_SIZE,
+  ANCHOR_TOPUP_SIZE,
   SYMBOL_MAX_LEN,
   CanonicalError,
   orderCanonicalBytes,
   orderCanonicalDigest,
   cancelCanonicalBytes,
   cancelCanonicalDigest,
+  anchorPoolHash,
+  anchorTopUpCanonicalBytes,
+  anchorTopUpCanonicalDigest,
   OrderSide as CanonicalOrderSide,
   OrderType as CanonicalOrderType,
   type OrderCanonical,
   type CancelCanonical,
+  type AnchorTopUpCanonical,
+  type Anchor,
 } from "./orders/canonical.js";
+export * from "./orders/anchor-pool.js";
+export * from "./orders/fill-memo.js";
+export * from "./utxo/note-store.js";
 export * from "./batch/inclusion-proof.js";
 export * from "./settlement/settle-builder.js";
 export * from "./settlement/settlement-watcher.js";
