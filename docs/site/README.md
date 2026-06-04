@@ -42,9 +42,9 @@ Each file is a self-contained page that:
 | 04 | `matching-layer.md` | In-TEE matcher, oracle, order book, why TEE |
 | 05 | `cryptography.md` | Keys, note system, ZK circuits, replay protection |
 | 06 | `trust-model.md` | Attestation, multisig rotation, threat model |
-| 07 | `settlement-pipeline.md` | The five-transaction v3.5 batched flow |
+| 07 | `settlement-pipeline.md` | The five-transaction batched settle flow |
 | 08 | `api-and-integration.md` | Wire contract, auth model, order lifecycle |
-| 09 | `roadmap-and-status.md` | Shipped vs in-flight vs future, the six v2 decisions |
+| 09 | `roadmap-and-status.md` | Shipped vs future, the six architecture decisions |
 | 10 | `differentiation.md` | Vs MagicBlock PER, godarkdex, Renegade, Penumbra |
 | 11 | `glossary.md` | Terms + acronyms |
 

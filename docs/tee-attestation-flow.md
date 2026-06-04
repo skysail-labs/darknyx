@@ -1,11 +1,7 @@
-# Nyx TEE v2 — Attestation Flow
+# Nyx TEE — Attestation Flow
 
-> End-to-end attestation deep-dive for the v2 dedicated-TEE matching
-> layer. Read after `docs/tee-architecture.md` (the in-TEE design)
-> and `docs/tee-v2-migration.md` (the migration plan).
->
-> **Last revised:** 2026-05-25.
-> **Branch:** `nyx-v2-onchain-hardening`.
+> End-to-end attestation deep-dive for the in-CVM matching/settlement
+> layer. Read after `docs/tee-architecture.md` (the in-TEE design).
 
 ---
 
@@ -45,9 +41,9 @@ understanding the flow.
 | **TLS cert private key** | dstack-ingress container's memory inside the CVM. Derived from our App Root via the TLS path. | TLS termination on `api.nyx.example.com`. | Rotated automatically on each Let's Encrypt renewal (every ~60 days). |
 | **Admin multisig signing keys** | The 3-of-5 signers' hardware wallets / Ledgers / Yubikeys. **Outside the TEE.** | Sign `set_tee_pubkey` + governance txs. | Rotated per multisig membership changes (organisational, not technical). |
 
-What about the `root_key` field in `vault_config`? That's the
-**MagicBlock PER Permission Group root**, unrelated to the TEE.
-Deleted in Phase 5 of the migration.
+What about the `root_key` field in `vault_config`? That's a long-lived
+**protocol governance authority**, distinct from `admin` and unrelated
+to the TEE signer — rotatable only by a self-signed `rotate_root_key`.
 
 ---
 
@@ -674,10 +670,9 @@ After v2 ships AND:
 ## 13. What this document is NOT covering
 
 - **The TEE-internal binary design** → `docs/tee-architecture.md`
-- **Migration sequence** → `docs/tee-v2-migration.md`
 - **Wire contract** → `docs/tee-api-openapi.yaml`
 - **Cryptographic invariants of our note system / circuits** →
-  `CRYPTOGRAPHY.md` (these are unchanged by the TEE migration)
+  `CRYPTOGRAPHY.md`
 - **PR / commit / CI hygiene** → `CLAUDE.md`
 
 ---

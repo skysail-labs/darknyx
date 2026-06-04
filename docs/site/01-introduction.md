@@ -134,32 +134,31 @@ No single component sees enough to deanonymize a user's trading.
 
 ---
 
-## The TEE migration (v2)
+## The matching layer runs in a TEE
 
-As of mid-2026, Nyx is migrating its matching layer from
-MagicBlock's Permission-Group Ephemeral Rollup (PER) to a dedicated
-Intel TDX Confidential VM operated under the open-source
+Nyx's matching layer runs inside a dedicated Intel TDX Confidential
+VM operated under the open-source
 [dstack](https://github.com/Dstack-TEE/dstack) framework on Phala
-Cloud. The migration is the "TEE v2" workstream.
+Cloud. (An earlier design ran matching on MagicBlock's
+Permission-Group Ephemeral Rollup; Nyx moved off it.) The current
+shape is validated end-to-end on devnet — a deployed CVM matches and
+settles a real crossing pair on L1.
 
-The motivation is twofold:
+The motivation for the TDX CVM is twofold:
 
-1. **Architectural simplification.** The PER added a second cluster
-   that ran a forked Solana rollup, with its own attestation,
-   delegation, and undelegation choreography. The TDX CVM is a
-   single-process Rust daemon; the trust chain shrinks from
-   "[user → SDK → PER attestation → MagicBlock → Solana]" to
+1. **Architectural simplification.** The earlier rollup approach
+   added a second cluster running a forked Solana rollup, with its
+   own attestation, delegation, and undelegation choreography. The
+   TDX CVM is a single-process Rust daemon; the trust chain is just
    "[user → SDK → dstack attestation → Solana]".
 
-2. **Trust minimisation.** PER attestation is built on MagicBlock's
-   own infrastructure. TDX attestation chains to Intel's cert root
-   directly; multisig governance rotates the registered
+2. **Trust minimisation.** TDX attestation chains to Intel's cert
+   root directly; multisig governance rotates the registered
    `compose_hash` on-chain in the vault. The TEE itself can be
    independently verified by any client running the existing
    `dcap-qvl` tool.
 
-The migration is being executed sub-PR-by-sub-PR with each piece
-landing independently testable. The [roadmap](./roadmap-and-status.md)
+The [roadmap](./roadmap-and-status.md)
 page tracks shipped vs in-flight work.
 
 ---
@@ -168,11 +167,11 @@ page tracks shipped vs in-flight work.
 
 | Layer | Status | Notes |
 |---|---|---|
-| **Custody (vault program)** | Live on Solana devnet | Seven instructions: `create_wallet`, `deposit`, `lock_note`, `verify_match_batch`, `tee_forced_settle_batched`, `close_batch_validity_marker`, `withdraw`. v3.5 hardening complete. |
-| **Matching algorithm** | Live (single source of truth in `darkpool-matcher` crate) | Uniform clearing price, FIFO tie-break, Pyth-band circuit breaker. Same Rust crate consumed by both the on-chain ix and the in-TEE matcher. |
-| **ZK circuits** | All six circuits compiled + verifying keys on-chain | VALID_INPUT, VALID_WALLET_CREATE, VALID_SPEND, VALID_MATCH_BATCH (N=2, N=4, N=16). N=16 is the production wired instantiation. |
+| **Custody (vault program)** | Live on Solana devnet | Core trade-path instructions: `create_wallet`, `deposit`, `lock_note`, `verify_match_batch`, `tee_forced_settle_batched`, `close_batch_validity_marker`, `withdraw`. Batched-validity settlement complete. |
+| **Matching algorithm** | Live (single source of truth in `darkpool-matcher` crate) | Uniform clearing price, FIFO tie-break, Pyth-band circuit breaker. The in-TEE matcher consumes this crate directly. |
+| **ZK circuits** | All four circuits compiled + verifying keys on-chain | VALID_INPUT, VALID_WALLET_CREATE, VALID_SPEND, VALID_MATCH_BATCH (N=2, N=4, N=16). N=16 is the production wired instantiation. |
 | **TypeScript SDK** | Parity-tested against Rust host-side primitives | Cross-language byte equality enforced on Poseidon, key derivation, note commitments, nullifiers, canonical payload hashes. |
-| **TEE v2 daemon (`nyx-tee`)** | Boot path live; matcher + oracle + HTTP surface live; settle scheduler skeleton live | See [roadmap-and-status](./roadmap-and-status.md). |
+| **In-TEE matcher/settler (`nyx-tee`)** | Shipped — boot, matcher, oracle, HTTP/WS surface, and the full settle pipeline live; validated end-to-end on a Phala CVM | See [roadmap-and-status](./roadmap-and-status.md). |
 
 ---
 

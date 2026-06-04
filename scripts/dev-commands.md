@@ -1,13 +1,9 @@
 # Nyx Darkpool — developer command cheat sheet (TEE architecture)
 
-> **What this covers.** The v3.5 + **TEE-v3** flows: matching and settlement
-> run **inside a TDX CVM** (`crates/nyx-tee/`) on Phala Cloud, driving the
-> on-chain `vault` program over real devnet. The legacy MagicBlock
-> Ephemeral-Rollup path (`programs/matching_engine` + ER delegation) is
-> being retired — its detailed runbook has been removed from this doc. The
-> only place `matching_engine` still appears is the litesvm settle
-> regression suite and the SDK-only `devnet-trade-flow` (which lets you
-> exercise the vault settle path WITHOUT a CVM).
+> **What this covers.** Matching and settlement run **inside a TDX CVM**
+> (`crates/nyx-tee/`) on Phala Cloud, driving the on-chain `vault` program
+> (the only on-chain program) over real devnet. There is no legacy
+> matching_engine / Ephemeral-Rollup path anymore.
 
 All commands assume the repo root as the working directory:
 
@@ -36,9 +32,7 @@ cd /path/to/repo/root
 >    (`packages/sdk/src/orders/anchor-pool.ts`); top-ups go to
 >    `POST /orders/{id}/anchors`; fills stream over `GET /ws/fills`
 >    (`verifyFillMemo` runs the integrity check, then store the change note).
->    `cvm-settle-e2e.test.ts` is wired to this shape; the legacy
->    `change-note-flow` / `er-trade-flow` (retiring ER path) are NOT yet
->    migrated.
+>    `cvm-settle-e2e.test.ts` is wired to this shape.
 
 **Contents**
 - §0 One-time setup
@@ -64,7 +58,6 @@ bash scripts/download-ptau.sh                          # pot16 (~80 MB) + pot18 
 bash scripts/build-circuits.sh                         # compile 6 circom circuits; writes vk_*.rs
 cargo build --examples -p darkpool-crypto              # TS↔Rust parity helper binaries
 cargo build-sbf --manifest-path programs/vault/Cargo.toml          # BPF (litesvm + deploy)
-cargo build-sbf --manifest-path programs/matching_engine/Cargo.toml
 ```
 
 The CVM image build (§5) is **amd64-only via CI** — never built locally on
@@ -84,7 +77,7 @@ gh --version             # GitHub CLI, for triggering/ watching the image build
 
 These need **no network**. Run them on every change.
 
-### 1.1 Rust workspace (host-side crypto, matcher, vault/ME litesvm)
+### 1.1 Rust workspace (host-side crypto, matcher, vault litesvm)
 
 ```sh
 cargo test --workspace                            # everything (~80+ tests)
@@ -93,18 +86,15 @@ cargo test --workspace                            # everything (~80+ tests)
 cargo test -p darkpool-crypto                     # Poseidon / note / nullifier / key parity
 cargo test -p darkpool-matcher                    # uniform-price matching + parity.rs scenarios
 cargo test -p vault                               # vault unit + litesvm integration
-cargo test -p matching_engine                     # ME unit + litesvm
 
 # Key litesvm integration files (need `cargo build-sbf` first)
 cargo test -p vault --test zk_roundtrip                       # VALID_WALLET_CREATE on-chain verify
 cargo test -p vault --test zk_spend_roundtrip                 # VALID_SPEND + Merkle parity
-cargo test -p vault --test zk_price_roundtrip
-cargo test -p vault --test settle                             # v3.1 settlement scenarios
-cargo test -p vault --test reset_merkle_tree
 cargo test -p vault --test set_tee_pubkey                     # admin-gated tee_pubkey rotation
-cargo test -p matching_engine --test tee_forced_settle_batched   # v3.5 1:N marker lifecycle
-cargo test -p matching_engine --test run_batch
-cargo test -p matching_engine --test submit_order
+cargo test -p vault --test tee_forced_settle_batched          # 1:N marker lifecycle (shared marker)
+cargo test -p vault --test match_batch_verify                 # N=16 VALID_MATCH_BATCH verify (committed proof fixture)
+cargo test -p vault --test user_commitment_registration       # WalletEntry registration
+cargo test -p vault --test set_protocol_config
 
 # Single test by substring
 cargo test -p vault canonical_payload_hash_fixed_vector
@@ -146,7 +136,7 @@ cargo test -p nyx-tee --test solana_rpc           # RPC client envelope parsing 
 ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/poseidon-parity.test.ts )
 ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/note-commitment-parity.test.ts )
 
-# v3.5 settle wire-format (no RPC)
+# batched settle wire-format (no RPC)
 ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/settle-builder-batched.test.ts )
 ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/match-batch-prototype.test.ts )  # needs circuit artifacts
 
@@ -154,9 +144,9 @@ cargo test -p nyx-tee --test solana_rpc           # RPC client envelope parsing 
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit
 ```
 
-The `RUN_*`-gated tests (`devnet-*`, `er-*`, `change-note-*`, `cvm-settle-e2e`,
-`orders-submit.devnet`) auto-skip without their env var — that's the 17
-skips. They're the devnet flows in §6–§8.
+The `RUN_*`-gated tests (`devnet-setup`, `devnet-deposit-withdraw`,
+`cvm-settle-e2e`) auto-skip without their env var. They're the devnet /
+CVM flows in §6–§8.
 
 ### 1.4 Loadgen (`nyx-tee-loadgen`)
 
@@ -183,7 +173,6 @@ Run before every commit / PR. Mirrors `.github/workflows/pr-checks.yml`.
 set -e
 cargo fmt --all && cargo fmt --all -- --check
 cargo build-sbf --manifest-path programs/vault/Cargo.toml
-cargo build-sbf --manifest-path programs/matching_engine/Cargo.toml
 cargo build --examples -p darkpool-crypto
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -256,7 +245,7 @@ Rules:
 
 ```sh
 bash scripts/setup-devnet.sh        # one-time: generate + fund .devnet/keypairs/{admin,tee_authority,root_key,trader}
-bash scripts/deploy-devnet.sh       # (re)deploy target/deploy/{vault,matching_engine}.so in place
+bash scripts/deploy-devnet.sh       # (re)deploy target/deploy/vault.so in place
 ```
 
 `deploy-devnet.sh` is idempotent (reuses the program IDs / upgrades in
@@ -270,10 +259,8 @@ place). Run `cargo build-sbf` first if you touched a program.
 This is the canonical "start clean" step. It: creates a **fresh BASE +
 QUOTE SPL mint pair**, `vault::initialize`, **`reset_merkle_tree`**,
 `set_protocol_config` (owner commitment + 30 bps fee), creates the **static
-settle ALT** (the `settleLookupTable` the CVM needs), seeds a mock oracle +
-`matching_engine` market (used only by the SDK-only flows), and writes
-everything to **`.devnet/e2e-config.json`** (mints, market, settle ALT,
-protocol config).
+settle ALT** (the `settleLookupTable` the CVM needs), and writes everything
+to **`.devnet/e2e-config.json`** (mints, settle ALT, protocol config).
 
 ```sh
 SOLANA_RPC_URL="$HELIUS" \
@@ -551,29 +538,24 @@ creds), `--report <path.md>`.
 
 ---
 
-## 8. SDK-only settle path (no CVM) + legacy flows
+## 8. Vault crypto on devnet (no CVM)
 
-`devnet-trade-flow.test.ts` exercises the **vault settle path WITHOUT a
-CVM** — the SDK plays the TEE and drives
-`lock → verify_match_batch → ALT → settle_batched → close` via the
-`settleViaBatched` helper. Fast way to test vault-side changes without
-spinning a CVM. Run `devnet-setup.test.ts` first.
+`devnet-deposit-withdraw.test.ts` exercises the **vault deposit +
+VALID_SPEND withdraw round-trip on devnet in isolation** — no CVM, no TEE
+authority. It resets the tree, mints, deposits a v2 note, then withdraws it
+with a VALID_SPEND proof and asserts the round-trip. Use it to test vault
+crypto changes cheaply before spending on a CVM.
 
 ```sh
-SOLANA_RPC_URL="$HELIUS" RUN_DEVNET_E2E=1 \
+SOLANA_RPC_URL="$HELIUS" RUN_DEVNET_DW=1 \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-  TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
-  ROOT_KEY_KEYPAIR=.devnet/keypairs/root_key.json \
   FUNDER_KEYPAIR=~/.config/solana/id.json \
-  bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-trade-flow.test.ts'
+  bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-deposit-withdraw.test.ts'
 ```
 
-**Legacy (retiring):** `er-trade-flow.test.ts` + the ER scenarios in
-`change-note-flow.test.ts` use the MagicBlock Ephemeral-Rollup path
-(`delegate_*` + ER `submit_order` + `run_batch`). The in-TEE matcher
-supersedes this; the detailed ER runbook was removed from this doc. The
-`change-note-flow` continuation + real-fee-withdraw scenarios still gate on
-`RUN_CN_E2E=1` if you need them.
+Run `devnet-setup.test.ts` first if `.devnet/e2e-config.json` is missing
+(it writes the mints + settle ALT + protocol config every other devnet
+test reads).
 
 ---
 
@@ -641,4 +623,4 @@ account; `current_root` is the 32 bytes at offset **112**.
 
 *Architecture deep-dives: `docs/tee-architecture.md` (§11 auth, §13 the
 iterate/spot-check/ceremony loop), `docs/tee-attestation-flow.md`,
-`docs/v3.5-migration.md`, `CRYPTOGRAPHY.md`, `CLAUDE.md`.*
+`docs/ARCHITECTURE.md`, `CRYPTOGRAPHY.md`, `CLAUDE.md`.*

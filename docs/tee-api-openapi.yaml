@@ -1,11 +1,9 @@
 openapi: 3.1.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Nyx TEE v2 — API contract
+# Nyx TEE — API contract
 #
-# Wire contract for the dedicated-TEE matching layer that replaces the
-# MagicBlock-PER-based one in v2. Read this with:
-#   * docs/tee-v2-migration.md  — component classification + phases
+# Wire contract for the in-CVM matching/settlement layer. Read this with:
 #   * docs/tee-architecture.md  — in-TEE design (boot, persistence, prover)
 #   * docs/tee-attestation-flow.md — who verifies what, when, on failure
 #   * CRYPTOGRAPHY.md §§4-9     — cryptographic invariants the on-chain
@@ -44,7 +42,7 @@ openapi: 3.1.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 info:
-  title: Nyx TEE v2 API
+  title: Nyx TEE API
   version: 2.0.0-draft
   description: |
     Public + authenticated REST and WebSocket API for the Nyx dark pool

@@ -28,8 +28,8 @@ comparison swings to where Nyx differentiates.
 ## vs MagicBlock Permission Group Ephemeral Rollup (PER)
 
 **What PER is.** A short-lived Solana rollup operated by MagicBlock
-for permission-group use cases. Nyx v1 ran on PER for matching;
-the TEE v2 migration is moving off of it.
+for permission-group use cases. An earlier Nyx design ran on PER
+for matching; Nyx has since moved off it to the in-TEE matcher.
 
 **What PER does well:**
 - Native Solana tooling (uses standard Anchor programs)
@@ -77,7 +77,7 @@ matching. The closest peer-competitor to Nyx by architectural shape.
 | Attestation chain | TEE quote → verifying service | TEE quote → Intel TCB (direct, via dcap-qvl) |
 | Multisig governance scope | TEE operations | TEE pubkey only (vault is non-upgradeable post-launch) |
 | Matching algorithm | Continuous matching | Frequent-batch auction (no front-running within a batch) |
-| Settlement | Per-match | v3.5 batched (one Groth16 per N matches; ~10× cheaper) |
+| Settlement | Per-match | Batched (one Groth16 per N matches; ~10× cheaper) |
 | ZK circuit budget | VALID_CREATE + VALID_PRICE per match | VALID_MATCH_BATCH (N=16) bundles all per-match constraints |
 | Open-source visibility | Limited (audit-driven release) | Fully open (this monorepo is the production code) |
 
@@ -86,7 +86,8 @@ infrastructure play that explicitly takes some godarkdex
 architectural patterns (the three-key identity model, the TEE-
 based matching) and extends them with batched validity proofs and
 a more rigorous attestation chain. The differentiation is in the
-v3.5 economics + the trust model, not in being first to the idea.
+batched-settlement economics + the trust model, not in being first
+to the idea.
 
 ---
 
@@ -219,9 +220,9 @@ checks).
 
 When investors ask "what's the moat?", three honest answers:
 
-### 1. The composability of the v3.5 batched flow
+### 1. The composability of the batched settle flow
 
-The v3.5 design — N=16 matches per Groth16 proof, with a per-
+The batched design — N=16 matches per Groth16 proof, with a per-
 match settle that only verifies an inclusion path — is genuinely
 novel. Most projects in this space either do per-match proofs
 (expensive) or skip the on-chain proof entirely (centralized).
@@ -276,7 +277,7 @@ the team is already executing on.
 
 | Project | Privacy | Trust model | L1 | Status |
 |---|---|---|---|---|
-| **Nyx** | Order intent, position, trader identity | Intel TDX + Solana + Wormhole | Solana | TEE v2 in flight |
+| **Nyx** | Order intent, position, trader identity | Intel TDX + Solana + Wormhole | Solana | Devnet (validated e2e) |
 | MagicBlock PER | Permission-group rollup | MagicBlock infra | Solana | Production |
 | godarkdex | Order intent, position | TEE (single-vendor attestation) | Solana | Production |
 | Renegade | Order intent, position | 2-party MPC | Ethereum | Production |

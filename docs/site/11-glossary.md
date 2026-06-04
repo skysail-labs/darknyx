@@ -161,8 +161,8 @@ practical meaning is the same: code running inside a hardware-
 attested isolation boundary.
 
 **Ephemeral Rollup.** A short-lived Solana rollup, like
-MagicBlock's PER. Nyx v1 used PER for matching; the TEE v2
-migration moves off of PER.
+MagicBlock's PER. An earlier Nyx design used PER for matching;
+Nyx has since moved off it to the in-TEE matcher.
 
 ---
 
@@ -358,7 +358,8 @@ batch_validity_marker). See
 [settlement-pipeline](./settlement-pipeline.md) § Tx C.
 
 **PER (Permission Group Ephemeral Rollup).** MagicBlock's
-ephemeral-rollup product. Nyx v1 used it; TEE v2 migrates away.
+ephemeral-rollup product. An earlier Nyx design used it; Nyx has
+since moved off it to the in-TEE matcher.
 
 **Phala Cloud.** The TDX hosting provider Nyx uses. dstack
 framework, per-minute pricing, public attestation endpoint.
@@ -507,7 +508,7 @@ attesting validity of all N matches in a batch. The single
 public input is the batch Merkle root. PR 4g.4 wires the
 in-TEE prover.
 
-**VALID_PRICE.** Deprecated in v3.5 (folded into VALID_MATCH_BATCH).
+**VALID_PRICE.** Removed — folded into VALID_MATCH_BATCH.
 Used to prove the clearing-price commitment matched the
 declared price.
 

@@ -62,7 +62,7 @@ The tree is rebuilt on `reset_merkle_tree` (admin-only, used in
 dev to reset devnet state) and grows monotonically otherwise.
 Each `deposit` appends one leaf; each `tee_forced_settle_batched`
 appends up to four leaves (two new change notes per match, times
-up to N=16 matches per batch, but in the v3.5 batched flow each
+up to N=16 matches per batch, but in the batched flow each
 match appends only its own change notes — typically 0 or 2 per
 match).
 
@@ -241,24 +241,24 @@ it before any tokens move.
 
 ---
 
-## The v3.5 batched validity hardening
+## How the settlement design got here
 
-Nyx is currently on **v3.5** — the batched-validity migration that
-landed in early 2026. The progression:
+The current settlement path is the batched-validity design. It got
+there through a few iterations, kept here as historical context:
 
-| Version | What it added |
+| Stage | What it added |
 |---|---|
-| v1 | Original hackathon submission. PER-based matching. Per-match validity proofs. |
-| v2 | VALID_INPUT proof at lock time + `NoteLock.token_mint` binding + `MAX_LOCK_TTL_SLOTS` cap + `outstanding[mint]` counter. |
-| v3 | VALID_CREATE proof for change-note construction + `ValidCreateMarker` PDA. |
-| v3.1 | VALID_PRICE proof for clearing-price commitment + `ValidPriceMarker` PDA + v0 transactions + ALT migration. |
-| **v3.5 (current)** | **VALID_MATCH_BATCH (N=16) + `BatchValidityMarker` (1:N) + `tee_forced_settle_batched` + `close_batch_validity_marker`. Phase 1c-hard complete: v3.1 per-match settle path removed entirely.** |
+| Original | Hackathon submission. PER-based matching. Per-match validity proofs. |
+| — | VALID_INPUT proof at lock time + `NoteLock.token_mint` binding + `MAX_LOCK_TTL_SLOTS` cap + `outstanding[mint]` counter. |
+| — | VALID_CREATE proof for change-note construction + a per-match validity marker. |
+| — | VALID_PRICE proof for clearing-price commitment + v0 transactions + ALT migration. |
+| **Current** | **VALID_MATCH_BATCH (N=16) + `BatchValidityMarker` (1:N) + `tee_forced_settle_batched` + `close_batch_validity_marker`. The earlier per-match settle path was removed entirely.** |
 
-The v3.5 batched flow reduces per-match overhead by roughly 10×
-compared to v3.1 (one Groth16 verify per batch instead of one per
-match) while keeping the per-match settle transaction itself
-sub-1232 bytes. The migration log is in
-`docs/v3.5-migration.md` for engineering reference.
+The batched flow reduces per-match overhead by roughly 10×
+compared to the earlier per-match settle path (one Groth16 verify
+per batch instead of one per match) while keeping the per-match
+settle transaction itself sub-1232 bytes. See `CRYPTOGRAPHY.md` §9
+for the settlement size analysis.
 
 ---
 
@@ -286,13 +286,11 @@ each defense ultimately rests on.
 
 ## What's coming
 
-The custody layer is stable. The recent PRs landing in the TEE v2
-workstream don't touch the on-chain code at all — they're moving
-the matching layer from MagicBlock PER to a dedicated TDX CVM.
-The vault program will see a TEE-pubkey rotation when the v2 CVM
-goes live (the existing v1 PER attestation will be replaced by the
-v2 TDX attestation), but the vault's instructions, state, and
-verifier code stay the same.
+The custody layer is stable. The move of the matching layer into a
+dedicated TDX CVM did not touch the on-chain code — the vault's
+instructions, state, and verifier are unchanged; the only vault-side
+effect is the registered `tee_pubkey` pointing at the CVM's
+dstack-derived signer (rotatable by the multisig).
 
 The next custody-layer change planned is a deferred upgrade-
 authority removal for mainnet — once the upgrade authority is
@@ -300,6 +298,6 @@ permanently null, the vault becomes truly immutable.
 
 ---
 
-*Last updated 2026-05-29. Source of truth:
-`programs/vault/src/`, `CRYPTOGRAPHY.md`, `docs/v3.5-migration.md`.*
+*Source of truth: `programs/vault/src/`, `CRYPTOGRAPHY.md`,
+`docs/ARCHITECTURE.md`.*
 </content>

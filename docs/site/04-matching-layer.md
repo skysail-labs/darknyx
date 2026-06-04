@@ -82,9 +82,9 @@ TDX wins on three counts for our use case:
    Alternative options exist on GCP/Azure but with more friction in
    the attestation chain.
 
-The alternative we evaluated was MagicBlock's Permission Group
-Ephemeral Rollup (PER). PER was the v1 matching path; the v2
-migration is moving away from it. The motivation: PER attestation
+The alternative we evaluated earlier was MagicBlock's Permission
+Group Ephemeral Rollup (PER) — an earlier matching path we since
+moved off of. The motivation for leaving it: PER attestation
 depended on MagicBlock's own infrastructure; the cluster ran a
 forked Solana rollup with its own delegation/undelegation
 choreography. The TDX CVM collapses all of that into a single
@@ -114,11 +114,10 @@ The matcher is a **uniform-clearing-price frequent-batch auction**:
    [settlement-pipeline](./settlement-pipeline.md)).
 
 The algorithm lives in a separate crate (`darkpool-matcher`) that
-is **the single source of truth**. Both the on-chain `run_batch`
-instruction (used in the v1 MagicBlock PER path) and the in-TEE
-matcher consume the same crate. Identical bytes in, identical
-matches out — regardless of which environment is running it.
-Behavioral parity is enforced by a litesvm integration test
+is **the single source of truth**. The in-TEE matcher consumes this
+crate directly via its `run_batch` / `run_batch_capped` entrypoints
+— identical bytes in, identical matches out, deterministically.
+Behavioral parity is enforced by the crate's integration test
 (`crates/darkpool-matcher/tests/parity.rs`).
 
 ### Why uniform clearing price
@@ -234,10 +233,9 @@ pub fn run_batch(
 The actual implementation is ~2000 lines of pure Rust. No
 floating point anywhere — every amount, price, and fee is u64.
 The matcher is deterministic given identical inputs (no clock
-reads, no random sources). This is what makes the
-single-source-of-truth property work: the on-chain `run_batch`
-ix and the in-TEE matcher both call into the same Rust crate
-and produce identical outputs.
+reads, no random sources). That determinism is what lets the
+in-TEE matcher's output be re-derived and audited from the same
+crate: identical inputs always produce identical matches.
 
 ---
 
@@ -381,32 +379,29 @@ until on-chain finality also drops.
 
 ---
 
-## What's coming
+## Status
 
-The matching layer is in the middle of the **TEE v2** migration.
-Status as of mid-2026:
+The in-TEE matching + settlement layer is shipped and validated
+end-to-end on a live Phala CVM:
 
-- ✅ dstack handshake (boot path)
-- ✅ Ed25519 signer derivation
+- ✅ dstack handshake (boot path) + Ed25519 signer derivation
 - ✅ Oracle VAA verification + sync
 - ✅ Matcher driver + tokio interval
-- ✅ HTTP surface (`/health`, `/info`, `/attestation`, `/auth/token`,
-  `/orders`, `/settlement/status`)
+- ✅ HTTP/WS surface (`/health`, `/info`, `/attestation`, `/auth/token`,
+  `/orders`, `/orders/{id}/anchors`, `/settlement/status`, `/ws/fills`)
 - ✅ POST /orders auth (Layer A + Layer B)
-- ✅ Settle scheduler skeleton + Solana RPC client
-- ✅ `lock_note` builder + Tx A submission
-- ✅ VALID_MATCH_BATCH prover foundation (witness types, leaf/root
-  computation, conservation validators)
-- ⏳ In-TEE Groth16 prover wiring (next PR)
-- ⏳ Tx B / C / D builders
-- ⏳ Tx E (close marker)
-- ⏳ End-to-end litesvm test
+- ✅ Settle scheduler + Solana RPC client
+- ✅ Full settle pipeline (Tx A lock → B verify_match_batch → C
+  per-batch ALT → D settle_batched → E close marker)
+- ✅ In-TEE VALID_MATCH_BATCH Groth16 prover
+- ✅ Per-order anchor pool → partial-fill continuation across batches
 
-See [roadmap-and-status](./roadmap-and-status.md) for the full
-list with commit references.
+What remains is hardening + the off-TEE fills/trade-history indexer
+(`docs/fills-history-architecture.md`). See
+[roadmap-and-status](./roadmap-and-status.md) for the full build log.
 
 ---
 
-*Last updated 2026-05-29. Source of truth: `crates/darkpool-matcher/`,
-`crates/nyx-tee/`, `docs/tee-architecture.md`.*
+*Source of truth: `crates/darkpool-matcher/`, `crates/nyx-tee/`,
+`docs/tee-architecture.md`.*
 </content>

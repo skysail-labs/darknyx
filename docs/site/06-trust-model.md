@@ -159,9 +159,8 @@ Each of these triggers a multisig rotation:
 ```
 
 The ceremony is documented in detail at `docs/tee-attestation-flow.md`
-§5. The first production rotation will be the cutover from the v1
-PER attestation to the v2 TDX attestation, scheduled for the end
-of the TEE v2 workstream.
+§5. Each rotation registers a new TDX `compose_hash` + the CVM's
+dstack-derived signer in the vault, gated by the admin multisig.
 
 ---
 

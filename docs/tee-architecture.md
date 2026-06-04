@@ -1,13 +1,11 @@
-# Nyx TEE v2 — Internal Architecture
+# Nyx TEE — Internal Architecture
 
-> Design of the in-TEE matching engine that replaces the MagicBlock-PER
-> matching layer. Read after `docs/tee-v2-migration.md` (the migration
-> brief) and `docs/tee-api-openapi.yaml` (the wire contract). Pairs
-> with `docs/tee-attestation-flow.md` (the attestation deep-dive).
+> Design of the in-CVM matching engine + settler (`crates/nyx-tee/`).
+> Read with `docs/tee-api-openapi.yaml` (the wire contract). Pairs with
+> `docs/tee-attestation-flow.md` (the attestation deep-dive).
 >
-> **Last revised:** 2026-05-25.
-> **Status:** v2 design, pre-implementation. Reflects the constraints
-> agreed on after the dstack docs deep-dive on 2026-05-25.
+> **Status:** implemented and validated end-to-end on a live Phala CVM
+> (`cvm-settle-e2e` real settle + load generator).
 > **Branch:** `nyx-v2-onchain-hardening`.
 
 ---
@@ -83,10 +81,9 @@ trigger conditions that would flip any of them.
 └──────────────────────────────────┬───────────────────────────────────────┘
                                    │ Helius RPC (HTTPS out)
                                    ▼
-┌──────────────────────────── Solana mainnet ──────────────────────────────┐
-│  vault (custody, unchanged from v3.5)                                    │
-│  matching_engine (~200 LOC after Phase 5: init_market + init_oracle      │
-│    + configure_access only)                                              │
+┌──────────────────────────── Solana devnet ───────────────────────────────┐
+│  vault (the only on-chain program — custody + Groth16 verifier +         │
+│    batched atomic settlement)                                            │
 │  admin-multisig (Squads, 3-of-5) — signs set_tee_pubkey + governance     │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -191,18 +188,17 @@ crates/nyx-tee/src/
 └── config.rs            # env-driven config (Helius URL, market params, etc.)
 ```
 
-### 2.3 Two crates split from existing code
+### 2.3 Two crates carrying the matching logic
 
-Two pieces of today's matching_engine that move into the TEE binary
-get extracted as standalone crates so the litesvm parity tests can
-still depend on them:
+The matching logic lives in standalone crates (extracted from the
+former on-chain matching program when it was removed) so it has no
+Anchor / Solana deps and can be unit-tested directly:
 
 - `crates/darkpool-matcher/` — the uniform-clearing-price + FIFO
-  algorithm currently in `programs/matching_engine/src/instructions/run_batch.rs`
-  and adjacent state structs. No Anchor / Solana deps. Pure input
-  (open orders) → output (matches + fees + clearing price). The
-  litesvm test for `run_batch` becomes a thin wrapper around this
-  crate, and `nyx-tee` consumes the same crate. **Single source of
+  algorithm (`run_batch` / `run_batch_capped`) and adjacent state
+  structs. No Anchor / Solana deps. Pure input (open orders) →
+  output (matches + fees + clearing price). `nyx-tee` consumes this
+  crate directly, and `tests/parity.rs` pins its behavior. **Single source of
   truth for the matching algorithm.**
 
 - `crates/nyx-tee-types/` — Borsh structs shared between the SDK
@@ -1431,7 +1427,6 @@ the on-chain code, or the cryptographic invariants.
 ## 15. What this document is NOT covering
 
 - **Attestation deep-dive** → `docs/tee-attestation-flow.md`
-- **Migration sequence + component classification** → `docs/tee-v2-migration.md`
 - **API wire contract** → `docs/tee-api-openapi.yaml`
 - **Cryptographic invariants** → `CRYPTOGRAPHY.md`
 - **Custody-layer architecture** → `docs/ARCHITECTURE.md`
@@ -1439,19 +1434,16 @@ the on-chain code, or the cryptographic invariants.
 
 ---
 
-## 16. Reading list before implementation
-
-For whoever picks up Phase 1:
+## 16. Reading list
 
 1. This whole doc.
 2. `docs/tee-attestation-flow.md` (sister doc).
-3. `docs/tee-v2-migration.md` for the broader plan.
-4. `docs/tee-api-openapi.yaml` for the wire contract.
-5. Phala docs: `phala-docs/dstack/overview.mdx` + `local-development.mdx` + `getting-started.mdx`.
-6. Phala docs: `phala-cloud/cvm/create-with-docker-compose.mdx` + `cvm/set-secure-environment-variables.mdx`.
-7. Phala docs: `phala-cloud/networking/setup-custom-domain.mdx` + `phala-cloud/networking/domain-attestation.mdx`.
-8. dstack source: `dstack/sdk/rust/` (the SDK we'll consume) + `dstack/sdk/simulator/`.
-9. ark-groth16 docs + the existing snarkjs prover at
+3. `docs/tee-api-openapi.yaml` for the wire contract.
+4. Phala docs: `phala-docs/dstack/overview.mdx` + `local-development.mdx` + `getting-started.mdx`.
+5. Phala docs: `phala-cloud/cvm/create-with-docker-compose.mdx` + `cvm/set-secure-environment-variables.mdx`.
+6. Phala docs: `phala-cloud/networking/setup-custom-domain.mdx` + `phala-cloud/networking/domain-attestation.mdx`.
+7. dstack source: `dstack/sdk/rust/` (the SDK we consume) + `dstack/sdk/simulator/`.
+8. ark-groth16 docs + the existing snarkjs prover at
    `packages/sdk/tests/helpers/match-batch-prover.ts` (the spec
    we're porting).
 

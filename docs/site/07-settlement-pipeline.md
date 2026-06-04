@@ -414,7 +414,6 @@ not the TEE.
 
 ---
 
-*Last updated 2026-05-29. Source of truth: `CRYPTOGRAPHY.md` §9,
-`programs/vault/src/instructions/tee_forced_settle_batched.rs`,
-`docs/v3.5-migration.md`.*
+*Source of truth: `CRYPTOGRAPHY.md` §9,
+`programs/vault/src/instructions/tee_forced_settle_batched.rs`.*
 </content>

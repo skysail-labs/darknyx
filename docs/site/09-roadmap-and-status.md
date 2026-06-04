@@ -1,30 +1,29 @@
 # Roadmap and status
 
 > Where Nyx is right now, where it's going, and the six locked
-> decisions that frame the v2 architecture. Status is updated
-> per-PR; the structure below reflects the work in flight as of
-> mid-2026.
+> decisions that frame the architecture.
 
 ---
 
-## Where we are: the v3.5 + TEE v2 migration
+## Where we are
 
-Nyx's custody layer is **stable on Solana devnet** at v3.5
-("batched-validity migration"). The matching layer is **in flight**
-as the **TEE v2 migration** — moving from MagicBlock's Permission
-Group Ephemeral Rollup (PER) to a dedicated Intel TDX
-Confidential VM on Phala Cloud.
+Nyx's custody layer is **stable on Solana devnet** (the batched
+atomic-settlement path), and the matching layer **runs inside an
+Intel TDX Confidential VM on Phala Cloud**, validated end-to-end:
+a deployed CVM matches and settles a real crossing pair on devnet
+(`cvm-settle-e2e`), plus a load generator exercising intake +
+matcher paging. (An earlier design ran matching on MagicBlock's
+Permission-Group Ephemeral Rollup; Nyx has since moved off it.)
 
-The migration is intentionally being executed as a chain of small,
-independently-testable sub-PRs. Each landing leaves the system in
-a deployable state; the cutover from v1 to v2 happens when every
-sub-PR has landed and the multisig rotates the TEE pubkey on-chain.
+What remains is hardening and the off-TEE fills/trade-history
+indexer (see `docs/fills-history-architecture.md`) — not a change
+of matching substrate.
 
 ---
 
-## The six locked v2 decisions
+## The six locked architecture decisions
 
-The TEE v2 architecture is anchored in six decisions, all locked in
+The in-TEE architecture is anchored in six decisions, all locked in
 early 2026 after a multi-month design review. Each decision has an
 explicit re-evaluation trigger; details in `docs/tee-architecture.md`
 §14.
@@ -54,10 +53,9 @@ each can be flipped independently without breaking the rest.
   `create_wallet`, `deposit`, `lock_note`, `verify_match_batch`,
   `tee_forced_settle_batched`, `close_batch_validity_marker`,
   `withdraw`
-- Six ZK circuits compiled with verifying keys on-chain
-- v3.5 batched-validity hardening complete (Phase 1c-hard
-  cutover: the v3.1 per-match settle path has been removed
-  entirely)
+- Four ZK circuits compiled with verifying keys on-chain
+- Batched-validity settlement complete (the earlier per-match
+  settle path has been removed entirely)
 
 ### Matching algorithm
 
@@ -78,7 +76,7 @@ each can be flipped independently without breaking the rest.
 
 ### TypeScript SDK
 
-- Six ZK provers (snarkjs-backed) for VALID_INPUT,
+- Four ZK provers (snarkjs-backed) for VALID_INPUT,
   VALID_WALLET_CREATE, VALID_SPEND, VALID_MATCH_BATCH (N=2/4/16)
 - TEE attestation verifier
 - Order canonical body encoder + signer (parity-tested vs Rust)
@@ -87,7 +85,11 @@ each can be flipped independently without breaking the rest.
 
 ---
 
-## TEE v2 — work in flight
+## In-TEE matcher/settler — shipped
+
+The in-CVM matcher + settle pipeline is built and validated
+end-to-end on devnet. The PR-by-PR record below is kept as a build
+log.
 
 ### Phase 1: foundation (complete)
 
@@ -114,32 +116,32 @@ each can be flipped independently without breaking the rest.
 | 4f.1 | Debug oracle-seed endpoint (feature-gated) | `fb21d1a` |
 | 4f.2 | `nyx-tee-loadgen` crate + smoke test + BENCHMARK.md template | `8f32d2a` |
 
-### Phase 4: settle pipeline (in flight)
+### Phase 4: settle pipeline (complete)
 
 | PR | What | Status |
 |---|---|---|
 | 4g.1 | SettleScheduler skeleton + status endpoint | ✅ `06b7207` |
 | 4g.2 | Hand-rolled Solana JSON-RPC client + fee-payer derivation | ✅ `79166d0` |
 | 4g.3 | lock_note ix builder + Tx A submission | ✅ `c016e05` |
-| 4g.4a | VALID_MATCH_BATCH prover foundation (witness, leaves, root, constraints, stub Prover trait) | ✅ `e9962b0` |
-| 4g.4b | ark-circom 0.5.0 wiring + Groth16 proof gen + format converter | ⏳ next |
-| 4g.5 | Tx B (verify_match_batch) + Tx C (per-batch ALT) + Tx D (settle_batched) | ⏳ |
-| 4g.6 | Tx E (close marker) + stage workers + end-to-end litesvm test | ⏳ |
+| 4g.4a | VALID_MATCH_BATCH prover foundation (witness, leaves, root, constraints, Prover trait) | ✅ `e9962b0` |
+| 4g.4b | ark-circom Groth16 proof gen + format converter | ✅ |
+| 4g.5 | Tx B (verify_match_batch) + Tx C (per-batch ALT) + Tx D (settle_batched) | ✅ |
+| 4g.6 | Tx E (close marker) + stage workers + end-to-end test | ✅ |
 
-### Phase 5: production cutover
+The full pipeline is validated on a live Phala CVM: `cvm-settle-e2e`
+deposits real notes, posts a crossing pair, and the CVM matches +
+settles on devnet (leaf count grows across the batch).
 
-After 4g.6 lands:
+### Phase 5: continuation + anchor pool (complete)
 
-1. Spike on Phala devnet `tdx.small` with the `nyx-tee-loadgen`
-   harness; populate the `BENCHMARK.md` report
-2. Full attestation-rotation ceremony rehearsal against the new
-   compose_hash
-3. Multisig rotation cutover (v1 PER pubkey → v2 TDX pubkey)
-4. v1 PER cluster decommission
+On top of the base settle pipeline, the per-order anchor pool
+(v2 `inner_hash` notes) lets the matcher rotate a partial-fill
+residual in place and re-match it across batches with no client
+roundtrip — also validated on the CVM.
 
 ---
 
-## Future direction (post-v2)
+## Future direction
 
 ### Near-term (next 6 months)
 
@@ -200,9 +202,8 @@ A few things we've decided to NOT do, with the reasoning:
 
 ## How to contribute
 
-The repo is open-source. Contributions land via PRs against the
-active branch (`tee_v3_implementation` for the TEE v2 workstream).
-CLAUDE.md is the engineer's contract: it documents the pre-PR
+The repo is open-source. CLAUDE.md is the engineer's contract: it
+documents the pre-PR
 gate, the cross-language byte-equality contracts, the deletion
 checklist, and the test-surface conventions.
 
@@ -222,14 +223,9 @@ Specific high-value contribution areas:
 
 | Layer | Status |
 |---|---|
-| Custody (vault program) | ✅ Live on Solana devnet (v3.5) |
+| Custody (vault program) | ✅ Live on Solana devnet |
 | Matching algorithm | ✅ Stable in `darkpool-matcher` crate |
-| TEE v2 daemon (`nyx-tee`) | 🟡 ~60% complete; settle pipeline next |
+| In-TEE matcher/settler (`nyx-tee`) | ✅ Shipped; validated e2e on a live Phala CVM (`cvm-settle-e2e` + loadgen) |
 | TypeScript SDK | ✅ Live; parity tested |
-| Public docs site | 🟡 In progress (these pages) |
-| Phala devnet deployment | 🟡 Spike-ready; full rotation ceremony pending 4g.6 |
-| Mainnet | ⏳ Pending TEE v2 cutover + audit |
-
----
-
-*Last updated 2026-05-29.*
+| Fills/trade-history indexer | ⏳ Designed, not yet built (`docs/fills-history-architecture.md`) |
+| Mainnet | ⏳ Pending audit + upgrade-authority removal |

@@ -2,7 +2,7 @@
 
 > Three primitives carry the cryptographic load: BN254 Poseidon
 > (for everything Merkle-tree-shaped), Ed25519 (for signatures),
-> and Groth16 over BN254 (for the six ZK circuits). The
+> and Groth16 over BN254 (for the four ZK circuits). The
 > byte-equality contract between host-side Rust, on-chain Solana
 > BPF, and in-browser TypeScript is enforced by parity tests
 > running in CI on every commit.
@@ -15,7 +15,7 @@
 |---|---|---|
 | **Poseidon over BN254** | Note commitments, nullifiers, Merkle tree, leaf hashes, user commitments, key derivation chain steps | Designed for SNARK efficiency: ~30× fewer constraints per hash than SHA-256 inside a circuit. Native Solana support via `solana_poseidon::hashv` syscall (cheap on-chain verification). |
 | **Ed25519** | TEE signing key, user trading keys, JWT bearer tokens | Standard signing scheme. Same key format Solana uses natively. Constant-time implementations widely available. |
-| **Groth16 over BN254** | All six ZK circuits | Smallest proof size (~200 bytes); fastest on-chain verification on Solana via `groth16-solana` (an open-source BPF-friendly verifier we audit). Mature tooling: circom + snarkjs for circuit compilation. |
+| **Groth16 over BN254** | All four ZK circuits | Smallest proof size (~200 bytes); fastest on-chain verification on Solana via `groth16-solana` (an open-source BPF-friendly verifier we audit). Mature tooling: circom + snarkjs for circuit compilation. |
 
 The BN254 / Groth16 combination is the de facto standard for
 SNARK applications on Solana. Newer curves (BLS12-381, Pasta) and
@@ -224,12 +224,12 @@ and similar.
 
 ---
 
-## The six ZK circuits
+## The four ZK circuits
 
-Nyx uses six distinct Groth16 circuits, each enforcing a different
-invariant. All six are written in Circom 2.x, compiled with
-snarkjs, and have their verification keys baked into the on-chain
-verifier (the constants in `programs/vault/src/zk/vk_*.rs`).
+Nyx uses four distinct Groth16 circuits, each enforcing a different
+invariant. All are written in Circom 2.x, compiled with snarkjs,
+and have their verification keys baked into the on-chain verifier
+(the constants in `programs/vault/src/zk/vk_*.rs`).
 
 ### 1. VALID_WALLET_CREATE
 
@@ -252,25 +252,17 @@ the note's full value). Includes a Merkle inclusion path against
 a recent root. ~3,200 constraints (dominated by the
 depth-20 Merkle path).
 
-### 4. VALID_CREATE (deprecated in v3.5)
+### 4. VALID_MATCH_BATCH
 
-Proved change-note construction was correctly derived from input
-notes. Folded into VALID_MATCH_BATCH in v3.5. ~150 constraints
-per match.
-
-### 5. VALID_PRICE (deprecated in v3.5)
-
-Proved the clearing-price commitment was correctly bound. Folded
-into VALID_MATCH_BATCH in v3.5. ~200 constraints per match.
-
-### 6. VALID_MATCH_BATCH
-
-The big one. Proves all of VALID_CREATE + VALID_PRICE for every
-slot in a batch of N matches. Parameterised over N ∈ {2, 4, 16};
-N=16 is the production wired instantiation. The single public
-input is the Merkle root over the per-slot leaves (computed
-inside the circuit). ~163,000 constraints at N=16 — requires the
-pot18 PowersOfTau ceremony.
+The big one. For every slot in a batch of N matches it proves both
+the change-note construction (correctly derived from the input
+notes) and the clearing-price binding — invariants that used to
+live in two separate per-match circuits (VALID_CREATE +
+VALID_PRICE) and were folded into this batched circuit.
+Parameterised over N ∈ {2, 4, 16}; N=16 is the production wired
+instantiation. The single public input is the Merkle root over the
+per-slot leaves (computed inside the circuit). ~163,000 constraints
+at N=16 — requires the pot18 PowersOfTau ceremony.
 
 The batched circuit replaces what was a per-match
 `verify_valid_create` + `verify_valid_price` + per-match
@@ -356,7 +348,7 @@ The byte-equality enforcement:
 | Key derivation | `crates/darkpool-crypto/src/keys.rs` | `packages/sdk/src/keys/key-generators.ts` | `keys-parity.test.ts` |
 | User commitment | `crates/darkpool-crypto/src/user_commitment.rs` | `packages/sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |
 | Canonical payload hash | `programs/vault/src/instructions/tee_forced_settle.rs` | `packages/sdk/src/settlement/settle-builder.ts` | Rust `canonical_payload_hash_fixed_vector` + TS `settle-builder-batched.test.ts` |
-| Match leaf hash (v3.5) | `programs/vault/src/instructions/tee_forced_settle_batched.rs` | `packages/sdk/tests/helpers/match-batch-prover.ts` | `match-batch-prototype.test.ts` |
+| Match leaf hash | `programs/vault/src/instructions/tee_forced_settle_batched.rs` | `packages/sdk/tests/helpers/match-batch-prover.ts` | `match-batch-prototype.test.ts` |
 
 Every cross-language hash change requires updating both sides AND
 the parity test, in the same commit. CI rejects any PR where the

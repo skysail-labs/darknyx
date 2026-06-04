@@ -12,18 +12,17 @@
 
 ### Layer 1 — Custody (on Solana)
 
-Two Solana programs, both Anchor 0.32:
+One Solana program, Anchor 0.32:
 
 - **`vault`** (program id `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`
   on devnet) — owns the funds, the Merkle tree of UTXO note
   commitments, the nullifier set, the consumed-note set, the
-  note-lock set, and the per-batch validity markers.
-- **`matching_engine`** (program id `6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe`
-  on devnet) — owns the on-chain order metadata and the batch
-  results buffer. This program is being deprecated in the TEE v2
-  migration; matching is moving into the enclave, but the program
-  remains for the v1 path and as the on-chain entry point during
-  the cutover.
+  note-lock set, the Groth16 verifier, and the atomic batched
+  settlement path with its per-batch validity markers.
+
+There is no on-chain order book or matching program: matching runs
+entirely inside the enclave (Layer 2), which drives the vault's
+settle instructions directly.
 
 Custody is the only layer that can hold or move user tokens. Every
 withdraw requires a VALID_SPEND zero-knowledge proof that proves
@@ -147,11 +146,8 @@ The SDK is the user-side bridge. It:
 │  │  - per-batch markers             │  │   │  - JWT secret       │
 │  └──────────────────────────────────┘  │   │  - Solana fee-payer │
 │                                        │   │    (same key as     │
-│  ┌──────────────────────────────────┐  │   │     tee_authority)  │
-│  │  matching_engine program         │  │   │                     │
-│  │  (deprecating in TEE v2)         │  │   └─────────────────────┘
-│  └──────────────────────────────────┘  │            │
-└────────────────────────────────────────┘            │
+│                                        │   │     tee_authority)  │
+└────────────────────────────────────────┘   └─────────────────────┘
         ▲                                              │
         │                                              │
         └──────────────────────────────────────────────┘
@@ -277,7 +273,7 @@ the user's secret stays on their device.**
   architecture, the frequent-batch-auction algorithm, oracle
   integration, why TDX specifically.
 - [Cryptography](./cryptography.md) — the key derivation chain, the
-  Poseidon hash spec, the six ZK circuits, replay protection.
+  Poseidon hash spec, the four ZK circuits, replay protection.
 - [Trust model](./trust-model.md) — the attestation chain, multisig
   governance, threat model, what a malicious TEE can and cannot do.
 - [Settlement pipeline](./settlement-pipeline.md) — the five-tx
