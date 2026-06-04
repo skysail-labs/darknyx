@@ -28,9 +28,9 @@ pub struct VaultConfig {
     pub admin: Pubkey,
     /// Attested TEE Ed25519 signing pubkey. Verified for `tee_forced_settle`.
     pub tee_pubkey: Pubkey,
-    /// Permission Group "root key". The only key authorised to configure the
-    /// MagicBlock Permission Group that gates order submission. Rotatable only
-    /// by a self-signed message (see `rotate_root_key` in permissions program).
+    /// Protocol "root key": a long-lived governance authority distinct from
+    /// `admin`, rotatable only by a self-signed message (see `rotate_root_key`).
+    /// Reserved for protocol-level governance actions.
     pub root_key: Pubkey,
     /// Number of leaves currently inserted into the Merkle tree. Monotonically
     /// increasing; used as the `note_counter` for blinding factor derivation.

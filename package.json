@@ -2,7 +2,7 @@
   "name": "nyx-darkpool",
   "version": "0.1.0",
   "private": true,
-  "description": "Solana dark pool with MagicBlock PER (TEE) and ZK settlement",
+  "description": "Privacy-preserving Solana dark pool: in-TEE matching/settlement (Phala CVM) + ZK note settlement",
   "workspaces": [
     "packages/*",
     "circuits"
@@ -17,11 +17,10 @@
   },
   "devDependencies": {
     "@coral-xyz/anchor": "0.32.1",
-    "@magicblock-labs/ephemeral-rollups-sdk": "^0.6.5",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.0",
     "@types/node": "^20.11.0",
-    "circom_tester": "^0.0.19",
+    "circom_tester": "^0.0.24",
     "circomlib": "^2.0.5",
     "dotenv": "16.4.5",
     "prettier": "^3.2.5",
@@ -29,7 +28,7 @@
     "ts-node": "^10.9.0",
     "tweetnacl": "1.0.3",
     "typescript": "^5.4.0",
-    "vitest": "^2.0.0"
+    "vitest": "^4.1.7"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -58,9 +58,6 @@ rand = "0.8"
 # SPL tokens
 spl-token = "4.0"
 
-# TEE / MagicBlock
-ephemeral-rollups-sdk = { version = "0.8.0", features = ["anchor", "access-control"] }
-
 # Serde
 borsh = "1.5"
 bytemuck = { version = "1.16", features = ["derive"] }
@@ -179,6 +176,17 @@ solana-address-lookup-table-interface = { version = "=3.0.1", features = ["binco
 # bincode 1.x — Solana's tx wire format. Pinned at 1 because 2.x's
 # API broke the `bincode::serialize` global fn.
 bincode                  = "1"
+
+# Dev builds: strip debuginfo from DEPENDENCIES only. The dependency
+# graph here (solana-sdk, ark-*, groth16-solana, wasmer in nyx-tee, …)
+# is what makes target/debug balloon — each dep's unstripped debuginfo
+# dominates the artifact size, and cargo never GCs the stale copies left
+# by earlier builds. Stripping deps' debuginfo cuts target/debug roughly
+# in half while keeping full debuginfo for our own workspace crates, so
+# backtraces through Nyx code are unaffected. (See README / dev-commands
+# for the periodic `cargo clean`/`cargo-sweep` GC story.)
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 overflow-checks = true

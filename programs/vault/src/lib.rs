@@ -54,7 +54,7 @@ pub mod vault {
         initialize::initialize_handler(ctx, tee_pubkey, root_key)
     }
 
-    /// Rotate the Permission Group root key. Must be signed by the current
+    /// Rotate the protocol root key. Must be signed by the current
     /// root key (self-signature model — admin cannot override).
     pub fn rotate_root_key(ctx: Context<RotateRootKey>, new_root_key: Pubkey) -> Result<()> {
         rotate_root_key::rotate_root_key_handler(ctx, new_root_key)

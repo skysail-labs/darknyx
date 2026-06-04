@@ -1,8 +1,8 @@
-//! Rotate the Permission Group root key.
+//! Rotate the protocol root key.
 //!
 //! Root-key rotation uses a self-signature model: only the current root key
-//! can sign to install a new one. Admin cannot override because root-key
-//! compromise would otherwise force a full reinit of every Permission Group.
+//! can sign to install a new one. Admin cannot override — the root key is an
+//! independent governance authority by design.
 
 use crate::errors::VaultError;
 use crate::state::*;
