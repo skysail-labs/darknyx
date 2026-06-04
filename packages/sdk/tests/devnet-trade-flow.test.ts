@@ -69,8 +69,8 @@ import {
 } from "../src/keys/key-generators.js";
 import { userCommitmentFromKeys } from "../src/keys/user-commitment.js";
 import {
-  noteCommitment,
-  nullifier,
+  noteCommitmentV2,
+  nullifierV2,
   ownerCommitment,
   poseidonHashBytesBE,
   pubkeyToFrPair,
@@ -115,8 +115,7 @@ import {
   be32ToDec,
   bigIntToBe32,
   CHANGE_ROLE_BUYER,
-  deriveBlinding,
-  deriveNonce,
+  deriveInner,
   FEE_ROLE_QUOTE,
   TRADE_ROLE_BUYER,
   TRADE_ROLE_SELLER,
@@ -244,16 +243,14 @@ interface Persona {
   depositNote?: {
     mint: PublicKey;
     amount: bigint;
-    nonce: bigint;
-    blindingR: bigint;
+    innerHash: bigint;
     commitment: Uint8Array;
     leafIndex: number;
   };
   tradeNote?: {
     mint: PublicKey;
     amount: bigint;
-    nonce: Uint8Array;
-    blindingR: Uint8Array;
+    innerHash: Uint8Array;
     commitment: Uint8Array;
     leafIndex: number;
   };
@@ -592,15 +589,15 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
         const leafIndex = Number(
           new DataView(info.data.buffer, info.data.byteOffset + 104, 8).getBigUint64(0, true),
         );
-        const nonce = deriveBlindingFactor(p.masterSeed, BigInt(leafIndex));
-        const blindingR = deriveBlindingFactor(p.masterSeed, BigInt(leafIndex) + 1n);
+        // v2: a single deterministic inner_hash (the blinding-factor KDF at
+        // the leaf index) replaces the old (nonce, blinding) pair.
+        const innerHash = deriveBlindingFactor(p.masterSeed, BigInt(leafIndex));
 
-        const commitment = await noteCommitment({
+        const commitment = await noteCommitmentV2({
           tokenMint: mint.toBytes(),
           amount,
           ownerCommitment: p.ownerCommit,
-          nonce,
-          blindingR,
+          innerHash,
         });
         leaf(`note (${p.name} deposit)`, commitment);
 
@@ -612,8 +609,7 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
           tokenProgramId: TOKEN_PROGRAM_ID,
           amount,
           ownerCommitment: bn254ToBE32(p.ownerCommit),
-          nonce: bn254ToBE32(nonce),
-          blindingR: bn254ToBE32(blindingR),
+          innerHash: bn254ToBE32(innerHash),
         });
         const sig = await sendAndConfirmTransaction(
           connection, new Transaction().add(ix), [p.payer],
@@ -625,7 +621,7 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
         await tree.append(commitment);
 
         p.depositNote = {
-          mint, amount, nonce, blindingR, commitment, leafIndex,
+          mint, amount, innerHash, commitment, leafIndex,
         };
       }
       await depositNote(alice, quoteMint, ALICE_DEPOSIT, aliceQuoteAta);
@@ -702,52 +698,16 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
         );
       }
 
-      await ensureSlotInit(alice, ALICE_SLOT);
-      await ensureSlotInit(bob,   BOB_SLOT);
-      await submitOrder(alice, ALICE_SLOT, /* buy  */ 0, BASE_AMT, PRICE, aliceOrderId);
-      await submitOrder(bob,   BOB_SLOT,   /* sell */ 1, BASE_AMT, PRICE, bobOrderId);
-
       // ─────────────────────────────────────────────────────────────────────
-      step(7, "run_batch (on L1) — find crossing, write MatchResult + FeeAccumulator flush");
+      // Steps 7-8 (legacy on-chain CLOB: submit_order → run_batch → decode
+      // BatchResults) are BYPASSED. That path is the retiring MagicBlock-ER
+      // matching_engine, and its output is NOT consumed here anyway — the
+      // settle below uses a HAND-BUILT match (match_id=0 + deterministic
+      // note derivation), exactly as the TEE does in production. Keeping it
+      // would only couple this v2 vault-settle test to a dead path (it was
+      // failing on NotRootKey after the program redeploy). The in-TEE matcher
+      // (cvm-settle-e2e) is the production replacement.
       // ─────────────────────────────────────────────────────────────────────
-      note(
-        "PRODUCTION PATH: run_batch lives inside the MagicBlock ER validator. " +
-          "This test calls it directly on devnet L1 — the ix accepts L1 calls " +
-          "fine. See scripts/dev-commands.md §11 for the delegate → ER cycle.",
-      );
-      const [aliceSlotPda] = pendingOrderPda(
-        meProgramId, market, alice.tradingKey.publicKey, ALICE_SLOT,
-      );
-      const [bobSlotPda] = pendingOrderPda(
-        meProgramId, market, bob.tradingKey.publicKey, BOB_SLOT,
-      );
-      const rbTx = new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        buildRunBatchInstruction({
-          programId: meProgramId,
-          vaultProgramId,
-          teeAuthority: teeKeypair.publicKey,
-          market,
-          pythAccount,
-          pendingOrderPdas: [aliceSlotPda, bobSlotPda],
-        }),
-      );
-      const rbSig = await sendAndConfirmTransaction(
-        connection, rbTx, [teeKeypair],
-        { commitment: "confirmed" },
-      );
-      txline("run_batch — matched Alice vs Bob at the uniform clearing price", rbSig);
-
-      // ─────────────────────────────────────────────────────────────────────
-      step(8, "Decode MatchResult from BatchResults account");
-      // ─────────────────────────────────────────────────────────────────────
-      const [batchPda] = batchResultsPda(meProgramId, market);
-      const br = await connection.getAccountInfo(batchPda);
-      if (!br) throw new Error("BatchResults missing — did run_batch fail?");
-      bullet(`BatchResults data len: ${br.data.length}`);
-      // We don't need to fully decode here — the match_id + crossable amounts
-      // are all deterministic given the ordering of the two orders. The test
-      // could optionally assert on `last_match_count = 1` etc.
 
       // ─────────────────────────────────────────────────────────────────────
       step(9, "TEE builds MatchResultPayload + signs canonical hash");
@@ -759,44 +719,40 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
       // the deterministic TRADE_ROLE_* scheme. The buyer/seller reconstructs
       // the same bytes at withdraw time — this is the test-only replacement
       // for the PER-session plaintext transport in production.
-      const noteCnonce = deriveNonce(matchId, TRADE_ROLE_BUYER);
-      const noteCblind = deriveBlinding(matchId, TRADE_ROLE_BUYER);
-      const noteCcommitment = await noteCommitment({
+      // v2: each note carries a single inner_hash = deriveInner(id, role).
+      const noteCinner = deriveInner(matchId, TRADE_ROLE_BUYER);
+      const noteCcommitment = await noteCommitmentV2({
         tokenMint: baseMint.toBytes(),
         amount: BASE_AMT,
         ownerCommitment: alice.ownerCommit,
-        nonce: be32ToBigInt(noteCnonce),
-        blindingR: be32ToBigInt(noteCblind),
+        innerHash: be32ToBigInt(noteCinner),
       });
       leaf("note_c (Alice receives BASE)", noteCcommitment);
 
-      const noteDnonce = deriveNonce(matchId, TRADE_ROLE_SELLER);
-      const noteDblind = deriveBlinding(matchId, TRADE_ROLE_SELLER);
-      const noteDcommitment = await noteCommitment({
+      const noteDinner = deriveInner(matchId, TRADE_ROLE_SELLER);
+      const noteDcommitment = await noteCommitmentV2({
         tokenMint: quoteMint.toBytes(),
         amount: QUOTE_AMT,
         ownerCommitment: bob.ownerCommit,
-        nonce: be32ToBigInt(noteDnonce),
-        blindingR: be32ToBigInt(noteDblind),
+        innerHash: be32ToBigInt(noteDinner),
       });
       leaf("note_d (Bob receives QUOTE)", noteDcommitment);
 
       // Fee-note: derivation mirrors run_batch's FEE_ROLE_QUOTE path.
       // match_id isn't used for fees; the on-chain program derives from slot.
       const slot = await connection.getSlot("confirmed");
-      const feeNonce = deriveNonce(BigInt(slot), FEE_ROLE_QUOTE);
-      const feeBlind = deriveBlinding(BigInt(slot), FEE_ROLE_QUOTE);
-      const feeCommitment = await noteCommitment({
+      const feeInner = deriveInner(BigInt(slot), FEE_ROLE_QUOTE);
+      const feeCommitment = await noteCommitmentV2({
         tokenMint: quoteMint.toBytes(),
         amount: BUYER_FEE,
         ownerCommitment: be32ToBigInt(protocolOwnerCommitment),
-        nonce: be32ToBigInt(feeNonce),
-        blindingR: be32ToBigInt(feeBlind),
+        innerHash: be32ToBigInt(feeInner),
       });
       leaf("note_fee (protocol QUOTE)", feeCommitment);
 
-      const nullA = await nullifier(alice.spendingKey, alice.depositNote!.commitment);
-      const nullB = await nullifier(bob.spendingKey, bob.depositNote!.commitment);
+      // v2: nullifier is over the note's inner_hash, not its commitment.
+      const nullA = await nullifierV2(alice.spendingKey, alice.depositNote!.innerHash);
+      const nullB = await nullifierV2(bob.spendingKey, bob.depositNote!.innerHash);
 
       const payload: MatchResultPayload = exactFillPayload({
         matchId: asU8a(matchId, 16),
@@ -836,8 +792,7 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
         repoRoot: REPO_ROOT,
         spendingKey: alice.spendingKey,
         ownerCommitmentBlinding: alice.ownerBlinding,
-        nonce: alice.depositNote!.nonce,
-        blindingR: alice.depositNote!.blindingR,
+        innerHash: alice.depositNote!.innerHash,
         tokenMint: alice.depositNote!.mint.toBytes(),
         amount: alice.depositNote!.amount,
         merkleRootBE: aliceWitness.root,
@@ -851,8 +806,7 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
         repoRoot: REPO_ROOT,
         spendingKey: bob.spendingKey,
         ownerCommitmentBlinding: bob.ownerBlinding,
-        nonce: bob.depositNote!.nonce,
-        blindingR: bob.depositNote!.blindingR,
+        innerHash: bob.depositNote!.innerHash,
         tokenMint: bob.depositNote!.mint.toBytes(),
         amount: bob.depositNote!.amount,
         merkleRootBE: bobWitness.root,
@@ -925,18 +879,12 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
           bOwnerCommit: bob.ownerCommit,
           aAmount: alice.depositNote!.amount,
           bAmount: bob.depositNote!.amount,
-          aNonce: alice.depositNote!.nonce,
-          aBlinding: alice.depositNote!.blindingR,
-          bNonce: bob.depositNote!.nonce,
-          bBlinding: bob.depositNote!.blindingR,
-          cNonce: be32ToBigInt(noteCnonce),
-          cBlinding: be32ToBigInt(noteCblind),
-          dNonce: be32ToBigInt(noteDnonce),
-          dBlinding: be32ToBigInt(noteDblind),
-          eNonce: 0n,
-          eBlinding: 0n,
-          fNonce: 0n,
-          fBlinding: 0n,
+          aInner: alice.depositNote!.innerHash,
+          bInner: bob.depositNote!.innerHash,
+          cInner: be32ToBigInt(noteCinner),
+          dInner: be32ToBigInt(noteDinner),
+          eInner: 0n,
+          fInner: 0n,
           clearingPrice: QUOTE_AMT / BASE_AMT,
         };
 
@@ -958,13 +906,13 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
       await tree.append(noteCcommitment);
       alice.tradeNote = {
         mint: baseMint, amount: BASE_AMT,
-        nonce: noteCnonce, blindingR: noteCblind,
+        innerHash: noteCinner,
         commitment: noteCcommitment, leafIndex: tree.leafCount - 1,
       };
       await tree.append(noteDcommitment);
       bob.tradeNote = {
         mint: quoteMint, amount: QUOTE_AMT,
-        nonce: noteDnonce, blindingR: noteDblind,
+        innerHash: noteDinner,
         commitment: noteDcommitment, leafIndex: tree.leafCount - 1,
       };
       await tree.append(feeCommitment);
@@ -1012,7 +960,8 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
         substep(`${label}: proving VALID_SPEND + submitting withdraw`);
         const w = await tree.witness(tradeNote.leafIndex);
         const [mintLo, mintHi] = pubkeyToFrPair(tradeNote.mint.toBytes());
-        const nulli = await nullifier(p.spendingKey, tradeNote.commitment);
+        // v2: nullifier over inner_hash; circuit takes a single `innerHash`.
+        const nulli = await nullifierV2(p.spendingKey, be32ToBigInt(tradeNote.innerHash));
         const { proof, publicInputsBE } = snarkjsFullProve(
           {
             merkleRoot: be32ToDec(w.root),
@@ -1021,8 +970,7 @@ maybeDescribe("Phase 5 devnet E2E — trade flow (deposit → match → settle �
             amount: tradeNote.amount.toString(),
             spendingKey: p.spendingKey.toString(),
             ownerCommitmentBlinding: ownerCommitBlinding.toString(),
-            nonce: be32ToBigInt(tradeNote.nonce).toString(),
-            blindingR: be32ToBigInt(tradeNote.blindingR).toString(),
+            innerHash: be32ToBigInt(tradeNote.innerHash).toString(),
             merklePath: w.siblings.map((s) => be32ToDec(s)),
             merkleIndices: w.indices.map((i) => i.toString()),
           },
