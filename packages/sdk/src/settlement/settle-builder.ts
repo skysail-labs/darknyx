@@ -38,7 +38,9 @@ export const ED25519_PROGRAM_ID = new PublicKey(
   "Ed25519SigVerify111111111111111111111111111",
 );
 
-import { RELOCK_ORDER_ID_NONE } from "../batch/inclusion-proof.js";
+/** 16 zero bytes — the "no relock" sentinel for an order id
+ *  (relocated here when batch/inclusion-proof.ts was removed). */
+const RELOCK_ORDER_ID_NONE = new Uint8Array(16);
 export { RELOCK_ORDER_ID_NONE };
 
 /** All-zero 32-byte commitment (= "field not used" e.g. no change note). */

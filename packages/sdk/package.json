@@ -16,12 +16,15 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.32.1",
+    "@magicblock-labs/ephemeral-rollups-sdk": "0.14.3",
+    "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.0",
+    "circom_tester": "0.0.24",
     "circomlibjs": "^0.1.7"
   },
   "devDependencies": {
-    "vitest": "^2.0.0",
     "@types/node": "^20.11.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.7"
   }
 }
