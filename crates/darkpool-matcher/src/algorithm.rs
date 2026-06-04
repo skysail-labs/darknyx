@@ -24,12 +24,10 @@ use crate::fee::FeeBucket;
 use crate::match_result::{MatchPair, MatchStatus, RELOCK_ORDER_ID_NONE};
 use darkpool_crypto::note::commitment_from_fields_v2;
 
-// Fee role tags. Mirrored inline in the on-chain `run_batch.rs` —
-// they fall under the same cross-language byte-equality contract as
-// `change_note::CHANGE_ROLE_*` (CLAUDE.md §6). The TS-side mirror
-// lives at `packages/sdk/tests/helpers/e2e-helpers.ts`.
-const FEE_ROLE_BASE: u8 = 0xfb;
-const FEE_ROLE_QUOTE: u8 = 0xfc;
+// Fee role tags live in `change_note` (the single source of the
+// parity-sensitive role bytes); see `change_note::FEE_ROLE_BASE` /
+// `FEE_ROLE_QUOTE`. The cross-language mirrors are the on-chain
+// `run_batch.rs` + the TS `packages/sdk/tests/helpers/e2e-helpers.ts`.
 
 // ─────── Constants ──────────────────────────────────────────────────────────
 
@@ -577,7 +575,7 @@ pub(crate) fn flush_fee_notes(
     now_slot: u64,
 ) -> Result<(), MatchError> {
     if fee_buckets[0].accumulated_fees > 0 {
-        let inner = change_note::derive_inner(now_slot, FEE_ROLE_BASE);
+        let inner = change_note::derive_inner(now_slot, change_note::FEE_ROLE_BASE);
         let c = commitment_from_fields_v2(
             base_mint,
             fee_buckets[0].accumulated_fees,
@@ -588,7 +586,7 @@ pub(crate) fn flush_fee_notes(
         fee_buckets[0].flushed_commitment = c;
     }
     if fee_buckets[1].accumulated_fees > 0 {
-        let inner = change_note::derive_inner(now_slot, FEE_ROLE_QUOTE);
+        let inner = change_note::derive_inner(now_slot, change_note::FEE_ROLE_QUOTE);
         let c = commitment_from_fields_v2(
             quote_mint,
             fee_buckets[1].accumulated_fees,

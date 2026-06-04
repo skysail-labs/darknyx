@@ -73,6 +73,16 @@ export function getWithdrawFunction(
         "withdraw amount must equal the note's plaintext amount (no partial withdrawals)",
       );
     }
+    // The commitment hashes `notePlaintext.tokenMint` but the prover inputs +
+    // the on-chain instruction use `params.tokenMint`; a mismatch would make
+    // the proof reconstruct a different note than the one being spent. Pin
+    // them to a single canonical mint here.
+    if (Buffer.compare(Buffer.from(params.tokenMint), Buffer.from(params.notePlaintext.tokenMint)) !== 0) {
+      throw new DarkPoolError(
+        "parameter",
+        "params.tokenMint must equal notePlaintext.tokenMint",
+      );
+    }
 
     const { spendingKey } = await client.getResolvedKeys();
 

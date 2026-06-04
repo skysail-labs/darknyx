@@ -150,6 +150,8 @@ describe("getWithdrawFunction", () => {
     expect(prover.capturedSpendInputs).toHaveLength(1);
     const si = prover.capturedSpendInputs[0];
     expect(si.amount).toBe(250_000n);
+    // The note's inner_hash must reach the prover unchanged.
+    expect(si.innerHash).toBe(notePlaintext.innerHash);
     expect(si.merklePath).toHaveLength(20);
     expect(si.merkleIndices).toHaveLength(20);
 

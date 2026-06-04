@@ -43,6 +43,10 @@ fn main() {
             hex::encode(fr_to_be_bytes(&derive_blinding_factor(&seed, ctr)))
         }
         "inner-hash" => {
+            if args.len() < 5 {
+                eprintln!("usage: derive-keys inner-hash <seed_hex> <order_id_hex32> <index>");
+                std::process::exit(2);
+            }
             let oid_bytes = hex::decode(&args[3]).expect("order_id hex parse");
             assert_eq!(oid_bytes.len(), 16, "order_id must be 16 bytes (32 hex chars)");
             let mut order_id = [0u8; 16];

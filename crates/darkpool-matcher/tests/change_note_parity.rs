@@ -133,13 +133,22 @@ fn inner_parity_against_on_chain() {
 // half of the contract. These KATs cover the Rust ↔ TS half by
 // referencing the TS computation directly.)
 
+// True known-answer values — computed INDEPENDENTLY of the
+// implementation (`printf 'nyx-change-inner' ‖ 42_le_u64 ‖ role |
+// shasum -a 256`, then byte0=0, byte1 &= 0x0f). Hardcoding the bytes
+// (rather than calling reference_derive_inner) keeps these KATs an
+// independent oracle — they'd catch a bug that the reference impl
+// shared. The TS port pins the buyer value too
+// (`packages/sdk/tests/change-note-inner-parity.test.ts`).
+const KAT_INNER_BUYER_42: &str =
+    "0003e743eb441d6b6f5363d7ad169cf3b8dd6621303ed9d47cb14ddf05de286b";
+const KAT_INNER_SELLER_42: &str =
+    "000e6d1cff8251e672fb9b1f84257ea0884095de985dadb2b8b6d2616cf90179";
+
 #[test]
 fn known_answer_inner_buyer_match42() {
     let got = derive_inner(42, CHANGE_ROLE_BUYER);
-    let oracle = reference_derive_inner(42, CHANGE_ROLE_BUYER);
-    // Sanity-cross to the on-chain ref: both must produce the same
-    // bytes from the same algorithm spec.
-    assert_eq!(got, oracle);
+    assert_eq!(hex::encode(got), KAT_INNER_BUYER_42);
     // Shape invariant (BN254 Fr safety).
     assert_eq!(got[0], 0);
     assert_eq!(got[1] & 0xf0, 0);
@@ -148,8 +157,7 @@ fn known_answer_inner_buyer_match42() {
 #[test]
 fn known_answer_inner_seller_match42() {
     let got = derive_inner(42, CHANGE_ROLE_SELLER);
-    let oracle = reference_derive_inner(42, CHANGE_ROLE_SELLER);
-    assert_eq!(got, oracle);
+    assert_eq!(hex::encode(got), KAT_INNER_SELLER_42);
     assert_eq!(got[0], 0);
     assert_eq!(got[1] & 0xf0, 0);
 }

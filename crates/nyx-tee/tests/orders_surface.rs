@@ -588,6 +588,27 @@ async fn place_rejects_opening_not_matching_commitment() {
     );
 }
 
+#[tokio::test]
+async fn place_rejects_anchor_tampered_after_signing() {
+    // The anchor pool is bound into the signed canonical via its SHA-256
+    // (anchor_pool_hash). Tampering an anchor AFTER signing changes the hash
+    // the handler recomputes from the submitted pool, so the trading-key
+    // signature no longer verifies → 403 (signature mismatch).
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let b = PlaceOrderBuilder::new();
+    let mut body = b.sign(&key);
+    // Mutate anchors[0].inner_hash to a different Fr-safe value.
+    body["anchors"][0]["inner_hash"] = json!(hex::encode({
+        let mut v = [0u8; 32];
+        v[31] = 0xEE;
+        v
+    }));
+    let resp = place(&app, &bearer, body).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
 // ─── POST /orders — signature checks ────────────────────────────────────────
 
 #[tokio::test]

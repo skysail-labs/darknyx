@@ -137,6 +137,11 @@ describe("order canonical encoder — Rust parity", () => {
 
     const o3 = { ...fixture(), userCommitment: new Uint8Array(33) };
     expect(() => orderCanonicalBytes(o3)).toThrow(/userCommitment must be 32 bytes/);
+
+    const o4 = { ...fixture(), anchorPoolHash: new Uint8Array(31) };
+    expect(() => orderCanonicalBytes(o4)).toThrow(/anchorPoolHash must be 32 bytes/);
+    const o5 = { ...fixture(), anchorPoolHash: new Uint8Array(33) };
+    expect(() => orderCanonicalBytes(o5)).toThrow(/anchorPoolHash must be 32 bytes/);
   });
 
   test("domain tag is the first 12 bytes", () => {

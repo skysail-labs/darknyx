@@ -549,10 +549,14 @@ pub async fn cancel_order(
             BookError::NotOwner(_, _) => (StatusCode::FORBIDDEN, e.to_string()),
             e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         })?;
-    // Cancelled order can never settle — drop its in-enclave opening.
+    // Cancelled order can never settle — drop its in-enclave opening
+    // AND its order_id-keyed continuation anchor pool (the cancel path
+    // removes the order directly, bypassing the tick's apply_updates
+    // pool eviction, so do it here too).
     if let Some(note) = collateral_note {
         st.openings_mut().remove(&note);
     }
+    st.openings_mut().remove_anchor_pool(&order_id);
 
     Ok(Json(CancelOrderResponse {
         order_id: hex::encode(order_id),
