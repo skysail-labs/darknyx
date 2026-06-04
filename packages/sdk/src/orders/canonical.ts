@@ -131,7 +131,7 @@ function concat(parts: Uint8Array[]): Uint8Array {
  * `S` = symbol bytes length):
  *
  * ```
- *   0..12        ORDER_DOMAIN              ("nyx-order-v1")
+ *   0..12        ORDER_DOMAIN              ("nyx-order-v2")
  *   12..13       symbol_len : u8
  *   13..13+S     symbol bytes
  *   +0..+1       side       : u8           (0 = bid, 1 = ask)

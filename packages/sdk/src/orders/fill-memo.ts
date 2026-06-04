@@ -40,8 +40,29 @@ export class FillMemoError extends Error {
 }
 
 function fromHex(hex: string, label: string, len: number): Uint8Array {
-  if (hex.length !== len * 2) throw new FillMemoError(`${label}: expected ${len} bytes`, "malformed");
-  return Uint8Array.from(Buffer.from(hex, "hex"));
+  // Validate FULLY: Buffer.from(hex,"hex") silently truncates at the first
+  // non-hex char, so length-only checks let malformed input through.
+  if (typeof hex !== "string" || hex.length !== len * 2 || !/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new FillMemoError(`${label}: expected ${len}-byte hex`, "malformed");
+  }
+  const bytes = Uint8Array.from(Buffer.from(hex, "hex"));
+  if (bytes.length !== len) throw new FillMemoError(`${label}: expected ${len} bytes`, "malformed");
+  return bytes;
+}
+
+/** A non-negative safe-integer field; throws FillMemoError otherwise. */
+function requireU32Index(n: number): number {
+  if (!Number.isInteger(n) || n < 0 || n > 0xffff_ffff) {
+    throw new FillMemoError(`anchor_index must be a u32; got ${n}`, "malformed");
+  }
+  return n;
+}
+
+function requireAmount(n: number): bigint {
+  if (!Number.isInteger(n) || n < 0) {
+    throw new FillMemoError(`change_amount must be a non-negative integer; got ${n}`, "malformed");
+  }
+  return BigInt(n);
 }
 
 function be32ToBig(b: Uint8Array): bigint {
@@ -65,7 +86,7 @@ export async function verifyFillMemo(
   masterSeed: Uint8Array,
   ownerCommitment: bigint,
 ): Promise<ChangeNoteRecord> {
-  return verifyFillMemoExact(memo, masterSeed, ownerCommitment, BigInt(memo.change_amount));
+  return verifyFillMemoExact(memo, masterSeed, ownerCommitment, requireAmount(memo.change_amount));
 }
 
 export async function verifyFillMemoExact(
@@ -77,13 +98,14 @@ export async function verifyFillMemoExact(
   const orderId = fromHex(memo.order_id, "order_id", 16);
   const mint = fromHex(memo.mint, "mint", 32);
   const memoInner = fromHex(memo.inner_hash, "inner_hash", 32);
-  fromHex(memo.change_note_commitment, "change_note_commitment", 32); // length check
+  fromHex(memo.change_note_commitment, "change_note_commitment", 32); // full hex validation
+  const anchorIndex = requireU32Index(memo.anchor_index);
 
   // (1) inner_hash binding — the TEE must have used OUR derived inner_hash.
-  const expectedInner = bn254ToBE32(deriveInnerHash(masterSeed, orderId, memo.anchor_index));
+  const expectedInner = bn254ToBE32(deriveInnerHash(masterSeed, orderId, anchorIndex));
   if (Buffer.compare(Buffer.from(expectedInner), Buffer.from(memoInner)) !== 0) {
     throw new FillMemoError(
-      `inner_hash mismatch at anchor_index ${memo.anchor_index}: ` +
+      `inner_hash mismatch at anchor_index ${anchorIndex}: ` +
         `TEE used ${memo.inner_hash}, client derived ${Buffer.from(expectedInner).toString("hex")}`,
       "inner_hash_mismatch",
     );
@@ -112,7 +134,7 @@ export async function verifyFillMemoExact(
     ownerCommitment,
     innerHash: innerBig,
     orderId: memo.order_id,
-    anchorIndex: memo.anchor_index,
+    anchorIndex,
   };
 }
 

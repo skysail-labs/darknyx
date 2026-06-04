@@ -99,6 +99,12 @@ export async function buildAnchorTopUp(args: {
   count?: number;
 }): Promise<AnchorTopUpBody> {
   const count = args.count ?? ANCHOR_TOPUP_SIZE;
+  // topup_nonce goes on the wire as a JSON number; the signature is over the
+  // exact bigint. Reject values that wouldn't round-trip through a JS number
+  // (would silently desync the wire value from the signed digest → 403).
+  if (args.topupNonce < 0n || args.topupNonce > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`topupNonce out of safe range [0, 2^53): ${args.topupNonce}`);
+  }
   const anchors = await deriveAnchors(
     args.masterSeed,
     args.spendingKey,

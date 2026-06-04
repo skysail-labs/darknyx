@@ -111,17 +111,13 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
     // wraps the whole router including the 404 fallback, which
     // surfaces as `401 Unauthorized` on every unknown path — not
     // what we want.
-    Router::new()
+    let router = Router::new()
         .route("/orders", post(orders::place_order))
         .route("/orders/:order_id", delete(orders::cancel_order))
         .route("/orders/:order_id", get(orders::get_order))
         // Anchor-pool top-up (Phase 7): replenish a drained pool so the
         // matcher resumes the paused residual.
         .route("/orders/:order_id/anchors", post(orders::topup_anchors))
-        // Fill-memo WebSocket (Phase 7): the client subscribes to learn
-        // which anchor each continuation fill consumed + verify/store the
-        // change note.
-        .route("/ws/fills", get(ws::fills_ws))
         .route("/settlement/status/:batch_id", get(settlement::get_status))
         // Merkle mirror — bearer-protected reads (inclusion proof +
         // leaf pagination). Root is public above.
@@ -135,6 +131,16 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // denylists the caller's own token; `/admin/accounts` is
         // further admin-gated inside the handler (see auth.rs).
         .route("/auth/token/revoke", post(auth::revoke_token_handler))
-        .route("/admin/accounts", post(auth::register_account_handler))
-        .route_layer(from_fn_with_state(state, auth::bearer_middleware))
+        .route("/admin/accounts", post(auth::register_account_handler));
+
+    // Fill-memo WebSocket (Phase 7). The stream is currently UNFILTERED —
+    // every subscriber sees every order's memos — so it is FAIL-CLOSED on
+    // hardened builds: only compiled in under `debug_endpoints` (the same
+    // gate as `/__debug/oracle/seed`). It MUST stay off until per-account
+    // (per-bearer) filtering lands; production clients reconstruct change
+    // notes deterministically from their seed + the Merkle mirror meanwhile.
+    #[cfg(feature = "debug_endpoints")]
+    let router = router.route("/ws/fills", get(ws::fills_ws));
+
+    router.route_layer(from_fn_with_state(state, auth::bearer_middleware))
 }

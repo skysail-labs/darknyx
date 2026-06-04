@@ -20,10 +20,13 @@ import { Keypair } from "@solana/web3.js";
 export const CHANGE_ROLE_BUYER = 0xb1;
 export const CHANGE_ROLE_SELLER = 0x5e;
 
-// TRADE_ROLE_* is test-only: it derives the inner_hash for note_c / note_d so
-// that the user can rebuild the plaintext and later withdraw. In production
-// the TEE emits these via the fills channel. Defining them here mirrors the
-// change_note.rs pattern with a distinct domain tag.
+// TRADE_ROLE_* is test-only: it derives the inner_hash for note_c / note_d
+// (the full-fill output notes) so the user can rebuild the plaintext and later
+// withdraw. The TEE does NOT emit these — they're deterministic from
+// (match_id, role), so the user re-derives them itself. The `/ws/fills` channel
+// (crates/nyx-tee/src/matcher/fills.rs) streams ONLY continuation change-note
+// (note_e/f) memos. Defining the trade roles here mirrors change_note.rs's
+// domain-tag pattern for the test harness.
 export const TRADE_ROLE_BUYER = 0xc1; // note_c
 export const TRADE_ROLE_SELLER = 0xd1; // note_d
 

@@ -91,6 +91,32 @@ describe("fill-memo integrity", () => {
     });
   });
 
+  it("rejects malformed memo fields with FillMemoError (not native errors)", async () => {
+    const base = await goodMemo(2, 100n);
+    // Non-hex inner_hash.
+    await expect(
+      verifyFillMemo({ ...base, inner_hash: "zz".repeat(32) }, SEED, OWNER),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    // Wrong-length commitment.
+    await expect(
+      verifyFillMemo({ ...base, change_note_commitment: "00" }, SEED, OWNER),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    // Negative / fractional change_amount.
+    await expect(
+      verifyFillMemo({ ...base, change_amount: -1 }, SEED, OWNER),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    await expect(
+      verifyFillMemo({ ...base, change_amount: 1.5 }, SEED, OWNER),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    // Out-of-range anchor_index.
+    await expect(
+      verifyFillMemo({ ...base, anchor_index: -1 }, SEED, OWNER),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    await expect(
+      verifyFillMemo({ ...base, anchor_index: 2 ** 32 }, SEED, OWNER),
+    ).rejects.toMatchObject({ kind: "malformed" });
+  });
+
   it("receiveFillMemo persists a verified note into the store", async () => {
     const store = new InMemoryNoteStore();
     const memo = await goodMemo(1, 777n);
