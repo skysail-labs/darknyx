@@ -2151,16 +2151,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "const-crypto"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c06f1eb05f06cf2e380fdded278fbf056a38974299d77960555a311dcf91a52"
-dependencies = [
- "keccak-const",
- "sha2-const-stable",
-]
-
-[[package]]
 name = "const-hex"
 version = "1.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3111,83 +3101,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "ephemeral-rollups-sdk"
-version = "0.8.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5382adbd81b6532054e6b270c2bac713bf6ca03fa8391dc67259bd9a96f9822b"
-dependencies = [
- "anchor-lang",
- "base64ct",
- "borsh 0.10.4",
- "ephemeral-rollups-sdk-attribute-action",
- "ephemeral-rollups-sdk-attribute-commit",
- "ephemeral-rollups-sdk-attribute-delegate",
- "ephemeral-rollups-sdk-attribute-ephemeral",
- "ephemeral-rollups-sdk-attribute-ephemeral-accounts",
- "getrandom 0.2.17",
- "magicblock-delegation-program",
- "magicblock-magic-program-api",
- "num-derive",
- "num-traits",
- "solana-program",
- "solana-system-interface 2.0.0",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "ephemeral-rollups-sdk-attribute-action"
-version = "0.8.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31804758eef070c3c46d12cd826b97fa373f8e0431e665641f3e055e0114de5a"
-dependencies = [
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "ephemeral-rollups-sdk-attribute-commit"
-version = "0.8.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4df6fd684272cc0a0b3ae0a85199fd067ca44070e170b7090573b11781553bea"
-dependencies = [
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "ephemeral-rollups-sdk-attribute-delegate"
-version = "0.8.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bbfaa338039b11e9fefa2b7abf8649706d0f7012177b3327b6b8742854ce986"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "ephemeral-rollups-sdk-attribute-ephemeral"
-version = "0.8.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60ca7532687b5c55a6f83150e283557215cca7e8e69af3140a73d0c600517e66"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "ephemeral-rollups-sdk-attribute-ephemeral-accounts"
-version = "0.8.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53c9c23a4b846294088ed6bc6a50056e0ed65f75991c69634606e3542ed01423"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
 ]
 
 [[package]]
@@ -4392,12 +4305,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "keccak-const"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d8d8ce877200136358e0bbff3a77965875db3af755a11e1fa6b1b3e2df13ea"
-
-[[package]]
 name = "konst"
 version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4689,32 +4596,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "magicblock-delegation-program"
-version = "1.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0e25f9e37194cc27c0f1d3dbc00e83795f7f4012f1a99c20bc557bdeb62e13e"
-dependencies = [
- "borsh 1.6.1",
- "bytemuck",
- "num_enum 0.7.6",
- "solana-program",
- "static_assertions",
-]
-
-[[package]]
-name = "magicblock-magic-program-api"
-version = "0.8.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "291f7a68f6cc622741a3fae513bd71640911abefd1fae2b2602b934515ed4b95"
-dependencies = [
- "bincode",
- "const-crypto",
- "serde",
- "solana-program",
- "solana-signature 2.3.0",
-]
-
-[[package]]
 name = "managed"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4727,31 +4608,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
-]
-
-[[package]]
-name = "matching_engine"
-version = "0.1.0"
-dependencies = [
- "anchor-lang",
- "anchor-spl",
- "borsh 1.6.1",
- "bytemuck",
- "darkpool-crypto",
- "darkpool-matcher",
- "ephemeral-rollups-sdk",
- "litesvm",
- "sha2 0.10.9",
- "solana-account 3.4.0",
- "solana-address 2.6.0",
- "solana-instruction 3.1.0",
- "solana-keypair",
- "solana-message 3.0.1",
- "solana-program",
- "solana-signer 3.0.0",
- "solana-system-interface 3.0.0",
- "solana-transaction",
- "vault",
 ]
 
 [[package]]
@@ -8539,9 +8395,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64c8ec8e657aecfc187522fc67495142c12f35e55ddeca8698edbb738b8dbd8c"
 dependencies = [
  "five8 0.2.1",
- "serde",
- "serde-big-array",
- "serde_derive",
  "solana-sanitize 2.2.1",
 ]
 
@@ -10416,6 +10269,7 @@ dependencies = [
  "litesvm",
  "serde_json",
  "sha2 0.10.9",
+ "solana-account 3.4.0",
  "solana-address 2.6.0",
  "solana-instruction 3.1.0",
  "solana-keypair",

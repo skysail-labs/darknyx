@@ -3,7 +3,7 @@
 #
 # Scope (per the CI plan):
 #   - Rust: workspace `cargo fmt --check`, `cargo clippy -D warnings`,
-#     unit tests for `darkpool-crypto`, `vault` (lib), `matching_engine` (lib).
+#     unit tests for `darkpool-crypto`, `vault` (lib).
 #   - Circuits (Phase 2): compile all four circom circuits, run the
 #     snarkjs ceremony, produce `.wasm` + `.zkey` + `verification_key.json`.
 #   - SDK: parity tests (TS ↔ Rust byte equality, requires Rust example
@@ -135,10 +135,6 @@ jobs:
         # Includes `canonical_payload_hash_fixed_vector` (TEE-signed hash
         # byte-stability) and `test_id` (program-ID sanity).
         run: cargo test -p vault --lib
-
-      - name: matching_engine lib unit tests
-        # Required for now; will be re-scoped when the TEE refactor lands.
-        run: cargo test -p matching_engine --lib
 
       # SDK parity tests shell out to these helper binaries via spawnSync.
       # They cross-validate TS Poseidon / note-commitment / nullifier /
@@ -328,7 +324,7 @@ jobs:
           }
 
           fail=0
-          for prog in vault matching_engine; do
+          for prog in vault; do
             decl=$(extract_declare_id "programs/${prog}/src/lib.rs")
             local_id=$(extract_anchor_toml_id "$prog" "localnet")
             devnet_id=$(extract_anchor_toml_id "$prog" "devnet")
@@ -346,7 +342,7 @@ jobs:
 
   # ------------------------------------------------------------------
   # Phase 3 — SBF build.
-  # Produces `target/deploy/{vault,matching_engine}.so` and uploads
+  # Produces `target/deploy/vault.so` and uploads
   # them so downstream litesvm jobs don't each repeat the ~5-min
   # cargo-build-sbf. We install Anza's Solana CLI (which bundles its
   # own SBF toolchain) instead of relying on the host Rust pin —
@@ -415,29 +411,24 @@ jobs:
       - name: cargo build-sbf — vault
         run: cargo build-sbf --manifest-path programs/vault/Cargo.toml
 
-      - name: cargo build-sbf — matching_engine
-        run: cargo build-sbf --manifest-path programs/matching_engine/Cargo.toml
-
-      - name: Sanity-check .so sizes (must be > 100 KB each)
+      - name: Sanity-check .so size (must be > 100 KB)
         shell: bash
         run: |
           set -euo pipefail
-          for so in target/deploy/vault.so target/deploy/matching_engine.so; do
-            sz=$(stat -c%s "$so" 2>/dev/null || stat -f%z "$so")
-            echo "$so: $sz bytes"
-            if [[ "$sz" -lt 102400 ]]; then
-              echo "::error file=$so::expected a real Solana program (>100 KB); got a stub ($sz bytes). cargo build-sbf likely emitted only the most-recent program."
-              exit 1
-            fi
-          done
+          so=target/deploy/vault.so
+          sz=$(stat -c%s "$so" 2>/dev/null || stat -f%z "$so")
+          echo "$so: $sz bytes"
+          if [[ "$sz" -lt 102400 ]]; then
+            echo "::error file=$so::expected a real Solana program (>100 KB); got a stub ($sz bytes)."
+            exit 1
+          fi
 
-      - name: Upload program .so files for litesvm jobs
+      - name: Upload program .so file for litesvm jobs
         uses: actions/upload-artifact@v4
         with:
           name: sbf-programs
           path: |
             target/deploy/vault.so
-            target/deploy/matching_engine.so
           if-no-files-found: error
           retention-days: 1
 
@@ -550,55 +541,16 @@ jobs:
           path: circuits/build
 
       - name: vault integration tests
+        # Incl. the settle-regression suite migrated from matching_engine:
+        # tee_forced_settle_batched (1:N BatchValidityMarker lifecycle) +
+        # match_batch_verify (real N=16 proof → on-chain verify_match_batch).
         run: |
           cargo test -p vault \
             --test set_protocol_config \
             --test set_tee_pubkey \
             --test user_commitment_registration \
-            -- --nocapture
-
-  # ------------------------------------------------------------------
-  # Phase 3 — matching-engine litesvm tests.
-  # `settle.rs` is the headline test: it exercises
-  # `vault::tee_forced_settle` end-to-end, including the v3
-  # VALID_CREATE marker check. `submit_order` + `run_batch` drive the
-  # on-chain order-book mutation paths. None of these shell out to
-  # snarkjs, so they don't need the circuits artefact.
-  # ------------------------------------------------------------------
-  matching-engine-litesvm:
-    name: Matching engine LiteSVM — settle + order book
-    runs-on: ubuntu-latest
-    needs: [changes, sbf-build]
-    if: >-
-      always() && (
-        github.event_name == 'push' ||
-        needs.changes.outputs.rust == 'true'
-      ) && needs['sbf-build'].result != 'failure'
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust 1.89.0
-        uses: dtolnay/rust-toolchain@1.89.0
-
-      - name: Cache cargo registry + target/
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: pr-checks-rust
-
-      - name: Download SBF programs
-        uses: actions/download-artifact@v4
-        with:
-          name: sbf-programs
-          path: target/deploy
-
-      - name: matching_engine integration tests
-        run: |
-          cargo test -p matching_engine \
-            --test settle \
-            --test run_batch \
-            --test submit_order \
             --test tee_forced_settle_batched \
+            --test match_batch_verify \
             -- --nocapture
 
   # ------------------------------------------------------------------
@@ -618,7 +570,6 @@ jobs:
       - sbf-build
       - vault-zk
       - vault-litesvm
-      - matching-engine-litesvm
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -634,8 +585,7 @@ jobs:
             needs.consistency.result != 'success' ||
             (needs['sbf-build'].result != 'success' && needs['sbf-build'].result != 'skipped') ||
             (needs['vault-zk'].result != 'success' && needs['vault-zk'].result != 'skipped') ||
-            (needs['vault-litesvm'].result != 'success' && needs['vault-litesvm'].result != 'skipped') ||
-            (needs['matching-engine-litesvm'].result != 'success' && needs['matching-engine-litesvm'].result != 'skipped')
+            (needs['vault-litesvm'].result != 'success' && needs['vault-litesvm'].result != 'skipped')
           }}
         run: |
           echo "rust:                     ${{ needs.rust.result }}"
@@ -645,7 +595,6 @@ jobs:
           echo "sbf-build:                ${{ needs['sbf-build'].result }}"
           echo "vault-zk:                 ${{ needs['vault-zk'].result }}"
           echo "vault-litesvm:            ${{ needs['vault-litesvm'].result }}"
-          echo "matching-engine-litesvm:  ${{ needs['matching-engine-litesvm'].result }}"
           echo "::error::One or more required jobs failed."
           exit 1
       - name: All required checks passed

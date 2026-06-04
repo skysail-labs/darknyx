@@ -32,10 +32,6 @@ pub fn vault_so_path() -> PathBuf {
     repo_root().join("target/deploy/vault.so")
 }
 
-pub fn matching_engine_so_path() -> PathBuf {
-    repo_root().join("target/deploy/matching_engine.so")
-}
-
 pub fn anchor_disc(name: &str) -> [u8; 8] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -178,17 +174,10 @@ pub struct Harness {
 impl Harness {
     pub fn setup() -> Self {
         let vault_so = vault_so_path();
-        let me_so = matching_engine_so_path();
         if !vault_so.exists() {
             panic!(
                 "vault binary missing — run `cargo build-sbf --manifest-path programs/vault/Cargo.toml`. Expected: {:?}",
                 vault_so
-            );
-        }
-        if !me_so.exists() {
-            panic!(
-                "matching_engine binary missing — run `cargo build-sbf --manifest-path programs/matching_engine/Cargo.toml`. Expected: {:?}",
-                me_so
             );
         }
 
@@ -196,7 +185,6 @@ impl Harness {
         let vault_id: Pubkey = VAULT_PROGRAM_ID.parse().unwrap();
         let me_id: Pubkey = ME_PROGRAM_ID.parse().unwrap();
         svm.add_program_from_file(vault_id, &vault_so).unwrap();
-        svm.add_program_from_file(me_id, &me_so).unwrap();
 
         let admin = Keypair::new();
         let tee = Keypair::new();

@@ -207,7 +207,7 @@ async fn assembler_witness_proves_and_verifies_n16() {
             .join("..")
             .join("..")
             .join("programs")
-            .join("matching_engine")
+            .join("vault")
             .join("tests")
             .join("fixtures")
             .join("match_batch_n16_proof.bin");

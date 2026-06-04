@@ -9,9 +9,9 @@
 //! seats TWO real matches at slots 0 and 1, both settling against
 //! the SAME `BatchValidityMarker`.
 
-mod common;
+mod settle_harness;
 
-use common::*;
+use settle_harness::*;
 use solana_signer::Signer;
 
 // ---------------------------------------------------------------------------

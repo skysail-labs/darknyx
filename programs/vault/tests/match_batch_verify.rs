@@ -21,9 +21,9 @@
 //!
 //! Requires `target/deploy/vault.so` (run `cargo build-sbf`).
 
-mod common;
+mod settle_harness;
 
-use common::*;
+use settle_harness::*;
 use solana_message::Message;
 use solana_signer::Signer;
 use solana_transaction::Transaction;

@@ -88,7 +88,7 @@ reviews:
         the on-chain hashers) and the parity tests re-run. idl/seeds.ts +
         idl/*-client.ts hand-code every PDA seed, Anchor discriminator
         (sha256("global:<ix>")[..8]), and Borsh layout with NO IDL runtime —
-        if a vault/matching_engine struct, seed, account list, or ix arg
+        if a vault struct, seed, account list, or ix arg
         changed on-chain, the matching builder/seed here must change in
         lockstep (positional account order matters).
     - path: "circuits/**"
