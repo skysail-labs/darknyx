@@ -36,12 +36,35 @@ export interface SpendInputs {
   merkleIndices: number[]; // length 20, 0 or 1
 }
 
+/** VALID_MERGE(K) witness — K input slots (dummy-padded) → one summed output note. */
+export interface MergeInputs {
+  k: 2 | 4;
+  merkleRoot: bigint;
+  tokenMint: [bigint, bigint];
+  outputCommitment: bigint;
+  /** K public nullifiers — real (non-zero) for active slots, 0 for dummy. */
+  nullifiers: bigint[];
+  // ── shared owner ──
+  spendingKey: bigint;
+  ownerCommitmentBlinding: bigint;
+  outputInnerHash: bigint;
+  // ── per-slot (length K; dummy slots zeroed) ──
+  isActive: number[]; // 1 | 0
+  amount: bigint[];
+  innerHash: bigint[];
+  merklePath: bigint[][]; // K × 20
+  merkleIndices: number[][]; // K × 20
+}
+
 export interface IDarkPoolZkProverSuite {
   walletCreate: {
     prove(inputs: WalletCreateInputs): Promise<Groth16ProofBytes>;
   };
   spend: {
     prove(inputs: SpendInputs): Promise<Groth16ProofBytes>;
+  };
+  merge: {
+    prove(inputs: MergeInputs): Promise<Groth16ProofBytes>;
   };
 }
 
@@ -66,6 +89,11 @@ export class UnimplementedProverSuite implements IDarkPoolZkProverSuite {
   spend = {
     prove: async (): Promise<Groth16ProofBytes> => {
       throw new Error(`UnimplementedProverSuite.spend.prove: ${this.reason}`);
+    },
+  };
+  merge = {
+    prove: async (): Promise<Groth16ProofBytes> => {
+      throw new Error(`UnimplementedProverSuite.merge.prove: ${this.reason}`);
     },
   };
 }

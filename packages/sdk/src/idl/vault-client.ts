@@ -539,3 +539,66 @@ export function buildVerifyMatchBatchInstruction(
     data: Buffer.from(data),
   });
 }
+
+// ---------------------------------------------------------------------------
+// merge — in-pool note consolidation (VALID_MERGE K=2/4). Consumes K input
+// notes (their nullifier PDAs), appends ONE summed output leaf. No transfer.
+// ---------------------------------------------------------------------------
+
+export interface BuildMergeParams {
+  programId: PublicKey;
+  payer: PublicKey;
+  /** K nullifiers in circuit order — real (non-zero) for active slots, all-zero for dummies. */
+  nullifiers: Uint8Array[];
+  outputCommitment: Uint8Array;
+  tokenMint: PublicKey;
+  merkleRoot: Uint8Array;
+  k: number; // 2 | 4
+  proof: Groth16OnChainProof;
+}
+
+/**
+ * Wire format (matches `programs/vault/src/instructions/merge.rs`):
+ *
+ *   data = disc(8) || nullifiers(Vec<[u8;32]>: u32 LE len ++ len*32)
+ *        || output_commitment(32) || token_mint(32) || merkle_root(32)
+ *        || k(u8) || pi_a(64) || pi_b(128) || pi_c(64)
+ *
+ *   accounts:
+ *     [0] payer          (signer, mut)
+ *     [1] vault_config   (mut)
+ *     [2] system_program (ro)
+ *     [3..] one NullifierEntry PDA per NON-ZERO nullifier (mut), in order
+ */
+export function buildMergeInstruction(p: BuildMergeParams): TransactionInstruction {
+  const [vaultPda] = vaultConfigPda(p.programId);
+  const isZero = (b: Uint8Array) => b.every((x) => x === 0);
+  const nullifierPdas = p.nullifiers
+    .filter((n) => !isZero(n))
+    .map((n) => nullifierEntryPda(p.programId, n)[0]);
+
+  const lenLE = new Uint8Array(4);
+  new DataView(lenLE.buffer).setUint32(0, p.nullifiers.length, true);
+  const nullifiersBytes = cat(lenLE, ...p.nullifiers.map((n) => fixed32(n)));
+
+  const data = cat(
+    anchorDiscriminator("merge"),
+    nullifiersBytes,
+    fixed32(p.outputCommitment),
+    p.tokenMint.toBytes(),
+    fixed32(p.merkleRoot),
+    new Uint8Array([p.k & 0xff]),
+    serializeProof(p.proof),
+  );
+
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.payer, isSigner: true, isWritable: true },
+      { pubkey: vaultPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...nullifierPdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+    ],
+    data: Buffer.from(data),
+  });
+}

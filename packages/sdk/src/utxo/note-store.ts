@@ -47,6 +47,9 @@ export interface NoteStore {
   put(rec: StoredNote): Promise<void> | void;
   get(commitment: string): Promise<StoredNote | undefined> | StoredNote | undefined;
   list(): Promise<StoredNote[]> | StoredNote[];
+  /** Remove a note (e.g. after it's merged/spent). Optional — implement it for
+   *  correct balances after consolidation. */
+  delete?(commitment: string): Promise<void> | void;
 }
 
 /** Default in-memory store (sufficient for tests + ephemeral sessions). */
@@ -60,5 +63,8 @@ export class InMemoryNoteStore implements NoteStore {
   }
   list(): StoredNote[] {
     return [...this.map.values()];
+  }
+  delete(commitment: string): void {
+    this.map.delete(commitment);
   }
 }

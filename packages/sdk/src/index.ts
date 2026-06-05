@@ -7,6 +7,7 @@ export * from "./utxo/note.js";
 export * from "./utxo/deposit.js";
 export * from "./utxo/withdraw.js";
 export * from "./utxo/note-store.js";
+export * from "./utxo/merge.js";
 export * from "./wallet/wallet.js";
 export * from "./zk/prover-suite.js";
 export * from "./zk/groth16-format.js";
