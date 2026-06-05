@@ -61,6 +61,7 @@ import {
   deriveSpendingKey,
   deriveMasterViewingKey,
   deriveBlindingFactor,
+  deriveOrderId,
   bn254ToBE32,
 } from "../src/keys/key-generators.js";
 import { userCommitmentFromKeys } from "../src/keys/user-commitment.js";
@@ -68,6 +69,9 @@ import { ownerCommitment, noteCommitmentV2, nullifierV2 } from "../src/utxo/note
 import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
 import { vaultConfigPda, buildDepositInstruction } from "../src/idl/vault-client.js";
 import { orderCanonicalDigest, OrderSide, OrderType } from "../src/orders/canonical.js";
+import { fetchOrderFills, reconstructChangeNote } from "../src/fills/history.js";
+import { subscribeFills, type FillsSubscription } from "../src/fills/ws-client.js";
+import { InMemoryNoteStore, type ChangeNoteRecord } from "../src/utxo/note-store.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { be32ToBigInt, loadKeypairRel, loadOrCreateKeypair } from "./helpers/e2e-helpers.js";
@@ -97,6 +101,15 @@ const SETTLE_TIMEOUT_MS = Number(process.env.NYX_CVM_SETTLE_TIMEOUT_MS ?? "60000
 // bid's price headroom — bid 1.2×anchor > clearing.) Set to 0 when the
 // CVM runs fee-free.
 const FEE_RATE_BPS = BigInt(process.env.NYX_CVM_FEE_RATE_BPS ?? "30");
+
+// Fills mode (opt-in): when NYX_INDEXER_URL points at a locally-running indexer
+// (`scripts/run-indexer-local.sh`), additionally assert the buyer's continuation
+// change note surfaces over BOTH paths — the durable off-TEE indexer
+// (GET /fills, decoded from the on-chain settle) and the live per-account WS
+// (FillMemo). The WS half needs a CVM built from the fills commit; the indexer
+// half works against any deployed CVM (it only reads the chain).
+const INDEXER_URL = (process.env.NYX_INDEXER_URL ?? "").replace(/\/$/, "");
+const FILLS = INDEXER_URL !== "";
 
 function hex(b: Uint8Array): string {
   return Buffer.from(b).toString("hex");
@@ -210,6 +223,11 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       // note would collide ("Allocate: account already in use") on the
       // second run. Override with NYX_CVM_BASE_QTY for a fixed value.
       const BASE_QTY = BigInt(process.env.NYX_CVM_BASE_QTY ?? String((Date.now() % 900_000) + 1000));
+      // Run-unique order-id index. Order ids are now DETERMINISTIC
+      // (`deriveOrderId(seed, n)`) so fills mode can query the indexer by the
+      // exact id we used; the run-unique `n` keeps re-runs from colliding on the
+      // same id (and lets the indexer's by-order_id rows stay per-run).
+      const ORDER_N = Number(process.env.NYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000));
       const anchor = await fetchOracleAnchor();
       const bidPrice = (anchor * 12n) / 10n;
       const askPrice = (anchor * 8n) / 10n;
@@ -335,8 +353,11 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         priceLimit: bigint,
         note: typeof buyerNote,
         vi: { proofBytes: Uint8Array; root: Uint8Array },
+        orderIndex: number,
       ) {
-        const orderId = nacl.randomBytes(16);
+        // Deterministic per (seed, n) — buyer + seller have distinct seeds, so
+        // the same n yields distinct ids. Recoverable by the fills gap-scan.
+        const orderId = deriveOrderId(p.masterSeed, orderIndex);
         // v2: the order carries a fixed continuation anchor pool whose hash
         // is bound into the signed (v2) canonical digest.
         const pool = await buildAnchorPool(p.masterSeed, p.spendingKey, orderId);
@@ -377,8 +398,8 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
           anchors: anchorsToJson(pool.anchors),
         };
       }
-      const buyerOrder = await buildOrder(buyer, OrderSide.Bid, bidPrice, buyerNote, buyerVI);
-      const sellerOrder = await buildOrder(seller, OrderSide.Ask, askPrice, sellerNote, sellerVI);
+      const buyerOrder = await buildOrder(buyer, OrderSide.Bid, bidPrice, buyerNote, buyerVI, ORDER_N);
+      const sellerOrder = await buildOrder(seller, OrderSide.Ask, askPrice, sellerNote, sellerVI, ORDER_N);
 
       // ── 5. auth + submit both orders to the CVM ────────────────────
       const tokRes = await gwFetch(`${GATEWAY}/auth/token`, {
@@ -388,6 +409,26 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       });
       expect(tokRes.status, "auth/token failed").toBe(200);
       const token = ((await tokRes.json()) as { access_token: string }).access_token;
+
+      // Fills (live): open the per-account WS BEFORE submitting. The matcher
+      // emits the FillMemo at MATCH time (broadcast, not buffered for late
+      // subscribers), so we must be connected first. Verifies + stores via the
+      // real client path (buyer keys — the buyer is the side that changes).
+      const wsStore = new InMemoryNoteStore();
+      const wsFills: ChangeNoteRecord[] = [];
+      let wsSub: FillsSubscription | undefined;
+      if (FILLS) {
+        wsSub = subscribeFills({
+          gatewayWsUrl: GATEWAY.replace(/^http/, "ws"),
+          token,
+          masterSeed: buyer.masterSeed,
+          ownerCommitment: buyer.ownerCommit,
+          store: wsStore,
+          onFill: (r) => wsFills.push(r),
+          onError: (e) => console.log(`  !! ws/fills: ${e.message}`),
+        });
+        await new Promise((r) => setTimeout(r, 2000)); // let the upgrade connect
+      }
 
       async function submit(body: object): Promise<number> {
         const r = await gwFetch(`${GATEWAY}/orders`, {
@@ -429,6 +470,51 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         finalCount,
         "settle did not land — CVM logs (phala cvms logs) show the failing settle stage",
       ).toBeGreaterThanOrEqual(depositCount + 2);
+
+      // ── 7. fills delivery (durable indexer + live WS) ──────────────
+      if (FILLS) {
+        const buyerId = buyerOrder.order_id;
+
+        // Durable: poll the local indexer until it has decoded the buyer's
+        // change note from the on-chain settle. The indexer tracks FINALIZED,
+        // which lags the CONFIRMED leaf_count above by a few slots.
+        let idxFills = await fetchOrderFills(INDEXER_URL, buyerId);
+        const fDeadline = Date.now() + 60_000;
+        while (Date.now() < fDeadline && !idxFills.some((f) => f.changeNoteCommitment)) {
+          await new Promise((r) => setTimeout(r, 3000));
+          idxFills = await fetchOrderFills(INDEXER_URL, buyerId);
+        }
+        console.log(`  · indexer fills[${buyerId.slice(0, 8)}]: ${JSON.stringify(idxFills)}`);
+        const change = idxFills.find((f) => f.side === "buyer" && f.changeNoteCommitment);
+        expect(change, "indexer did not surface the buyer change-note fill").toBeTruthy();
+        expect(BigInt(change!.changeAmount)).toBeGreaterThan(0n);
+
+        // The durable path recovers the spendable opening from the seed alone
+        // (the anchor-index search = the Vuln-4 integrity check): the commitment
+        // must reproduce exactly.
+        const rec = await reconstructChangeNote(change!, {
+          masterSeed: buyer.masterSeed,
+          ownerCommitment: buyer.ownerCommit,
+          baseMint: baseMint.toBytes(),
+          quoteMint: quoteMint.toBytes(),
+        });
+        expect(rec, "could not reconstruct the change note from the indexer fill").not.toBeNull();
+        expect(rec!.commitment).toBe(change!.changeNoteCommitment);
+
+        // Live: the per-account WS delivered + verified the same memo.
+        const wsDeadline = Date.now() + 15_000;
+        while (Date.now() < wsDeadline && !wsFills.some((r) => r.orderId === buyerId)) {
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        expect(
+          wsFills.some((r) => r.orderId === buyerId),
+          "live /ws/fills did not deliver the buyer FillMemo (is the CVM built from the fills commit?)",
+        ).toBe(true);
+        console.log(
+          `  · fills OK — indexer + WS both surfaced buyer change note ${change!.changeNoteCommitment.slice(0, 12)}…`,
+        );
+      }
+      wsSub?.close();
     },
     SETTLE_TIMEOUT_MS + 120_000,
   );

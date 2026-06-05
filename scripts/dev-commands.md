@@ -482,37 +482,32 @@ node -e 'import("@solana/web3.js").then(async ({Connection,PublicKey})=>{const c
 
 The same settle that mints `note_e` (above) is a **continuation fill**: the CVM
 emits a `FillMemo` over `GET /ws/fills` (live) and the on-chain settle tx carries
-the change note's `order_id` + amount + commitment (durable). Validate both
-without deploying anything extra — the indexer runs **locally**, reads the same
-devnet RPC, and you query it by order_id (the CVM never talks to it).
+the change note's `order_id` + amount + commitment (durable). `cvm-settle-e2e`
+asserts BOTH automatically when `NYX_INDEXER_URL` is set — order ids are
+deterministic (`deriveOrderId`), so the test queries the indexer by the exact id
+it used and matches the WS memo to it. The indexer runs **locally**, reads the
+same devnet RPC, and the CVM never talks to it.
 
 ```sh
-# 1. Start the local indexer (temp SQLite, reads devnet read-only). Leave it
-#    running in another shell BEFORE / during the cvm-settle-e2e run.
-INDEXER_RPC_URL="$HELIUS" scripts/run-indexer-local.sh   # serves :8090, GET /fills, /health
+# 1. Start the local indexer (temp SQLite, reads devnet read-only) in another shell.
+INDEXER_RPC_URL="$HELIUS" scripts/run-indexer-local.sh    # serves :8090 — GET /fills, /health
 
-# 2. Run cvm-settle-e2e (§6). It mints note_e → a fill row + a FillMemo.
-
-# 3. Durable path — query the indexer by the buyer order_id the test used:
-curl -s "http://127.0.0.1:8090/fills?order_id=<order_id_hex>" | jq
-#    → { "fills": [ { side:"buyer", changeAmount, changeNoteCommitment, ... } ] }
-
-# 4. Live path — tail the per-account WS (token from POST /auth/token):
-#    the token goes in ?token= (the WS-friendly auth path).
-wscat -c "${GW/https/wss}/ws/fills?token=<jwt>"          # observe the FillMemo frame
+# 2. Run cvm-settle-e2e with fills mode on. It mints note_e → asserts the buyer's
+#    change note over (a) the indexer GET /fills and (b) the live per-account WS,
+#    and reconstructs the spendable opening from the seed (the integrity check).
+RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" NYX_INDEXER_URL="http://127.0.0.1:8090" \
+  SOLANA_RPC_URL="$HELIUS" NYX_CVM_SETTLE_TIMEOUT_MS=150000 \
+  FUNDER_KEYPAIR="$HOME/.config/solana/id.json" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+  bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts'
 ```
 
-In the SDK this is the "backfill then tail" one-liner `startFillsSync({ indexerBaseUrl,
-gatewayWsUrl, token, masterSeed, ownerCommitment, baseMint, quoteMint, store })`
-(`packages/sdk/src/fills/`) — it backfills history from the indexer, then tails the
-WS, deduping by commitment.
-
-> **Tier-3 follow-up (run on your next CVM deploy):** wire `deriveOrderId(seed, n)`
-> into `cvm-settle-e2e` (replacing the random `order_id`) so the test can assert the
-> indexer `GET /fills` AND the WS `FillMemo` automatically behind `RUN_CVM_FILLS=1`.
-> The order/decode/routing layers are all covered by fast local tests
-> (`order-id`, `fills-sequencing`, indexer `decode`/`watcher`, `ws_fills_routing`);
-> this step just closes the loop against a real on-chain settle.
+> **The WS half needs a CVM built from the fills commit** (per-account `/ws/fills`,
+> un-gated). The **indexer half works against any deployed CVM** — it only reads the
+> chain. Without `NYX_INDEXER_URL` the test runs exactly as before (settle only).
+> In the SDK the equivalent client one-liner is `startFillsSync({ indexerBaseUrl,
+> gatewayWsUrl, token, masterSeed, ownerCommitment, baseMint, quoteMint, store })`
+> (`packages/sdk/src/fills/`) — backfill history from the indexer, then tail the WS,
+> deduping by commitment.
 
 ---
 
