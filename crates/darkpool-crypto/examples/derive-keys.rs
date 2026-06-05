@@ -48,7 +48,11 @@ fn main() {
                 std::process::exit(2);
             }
             let oid_bytes = hex::decode(&args[3]).expect("order_id hex parse");
-            assert_eq!(oid_bytes.len(), 16, "order_id must be 16 bytes (32 hex chars)");
+            assert_eq!(
+                oid_bytes.len(),
+                16,
+                "order_id must be 16 bytes (32 hex chars)"
+            );
             let mut order_id = [0u8; 16];
             order_id.copy_from_slice(&oid_bytes);
             let index: u32 = args[4].parse().expect("index u32");

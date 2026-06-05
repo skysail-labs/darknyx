@@ -309,7 +309,12 @@ async fn topup(
 
 /// Build a signed anchor-pool top-up body with `ANCHOR_TOPUP_SIZE` fresh
 /// (Fr-safe) anchors derived from `salt`.
-fn topup_body(key: &SigningKey, order_id: [u8; 16], topup_nonce: u64, salt: u8) -> serde_json::Value {
+fn topup_body(
+    key: &SigningKey,
+    order_id: [u8; 16],
+    topup_nonce: u64,
+    salt: u8,
+) -> serde_json::Value {
     let trading_key = key.verifying_key().to_bytes();
     let anchors: Vec<Anchor> = (0..ANCHOR_TOPUP_SIZE)
         .map(|i| {
@@ -345,31 +350,67 @@ async fn anchor_topup_happy_path_then_replay_and_wrong_owner_rejected() {
     let key = fresh_signing_key();
     let builder = PlaceOrderBuilder::new();
     let oid_hex = hex::encode(builder.order_id);
-    assert_eq!(place(&app, &bearer, builder.sign(&key)).await.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        place(&app, &bearer, builder.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
 
     // Happy path: a correctly-signed top-up appends ANCHOR_TOPUP_SIZE anchors.
-    let resp = topup(&app, &bearer, &oid_hex, topup_body(&key, builder.order_id, 1, 0x10)).await;
+    let resp = topup(
+        &app,
+        &bearer,
+        &oid_hex,
+        topup_body(&key, builder.order_id, 1, 0x10),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
     let j = read_json(resp).await;
     assert_eq!(j["status"], "topped_up");
     // Pool started at ANCHOR_POOL_SIZE (none consumed), now + ANCHOR_TOPUP_SIZE.
-    assert_eq!(j["remaining"], (ANCHOR_POOL_SIZE + ANCHOR_TOPUP_SIZE) as u64);
+    assert_eq!(
+        j["remaining"],
+        (ANCHOR_POOL_SIZE + ANCHOR_TOPUP_SIZE) as u64
+    );
 
     // Replay: the same nonce is rejected (409).
-    let resp = topup(&app, &bearer, &oid_hex, topup_body(&key, builder.order_id, 1, 0x20)).await;
+    let resp = topup(
+        &app,
+        &bearer,
+        &oid_hex,
+        topup_body(&key, builder.order_id, 1, 0x20),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
 
     // A higher nonce is accepted.
-    let resp = topup(&app, &bearer, &oid_hex, topup_body(&key, builder.order_id, 2, 0x30)).await;
+    let resp = topup(
+        &app,
+        &bearer,
+        &oid_hex,
+        topup_body(&key, builder.order_id, 2, 0x30),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     // Wrong owner: a different trading key over a valid-looking body → 403.
     let other = fresh_signing_key();
-    let resp = topup(&app, &bearer, &oid_hex, topup_body(&other, builder.order_id, 3, 0x40)).await;
+    let resp = topup(
+        &app,
+        &bearer,
+        &oid_hex,
+        topup_body(&other, builder.order_id, 3, 0x40),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
     // Unknown order → 404.
-    let resp = topup(&app, &bearer, &hex::encode([0xAB; 16]), topup_body(&key, [0xAB; 16], 1, 0x50)).await;
+    let resp = topup(
+        &app,
+        &bearer,
+        &hex::encode([0xAB; 16]),
+        topup_body(&key, [0xAB; 16], 1, 0x50),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 

@@ -140,8 +140,7 @@ fn inner_parity_against_on_chain() {
 // independent oracle — they'd catch a bug that the reference impl
 // shared. The TS port pins the buyer value too
 // (`packages/sdk/tests/change-note-inner-parity.test.ts`).
-const KAT_INNER_BUYER_42: &str =
-    "0003e743eb441d6b6f5363d7ad169cf3b8dd6621303ed9d47cb14ddf05de286b";
+const KAT_INNER_BUYER_42: &str = "0003e743eb441d6b6f5363d7ad169cf3b8dd6621303ed9d47cb14ddf05de286b";
 const KAT_INNER_SELLER_42: &str =
     "000e6d1cff8251e672fb9b1f84257ea0884095de985dadb2b8b6d2616cf90179";
 

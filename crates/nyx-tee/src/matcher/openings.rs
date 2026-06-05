@@ -286,26 +286,18 @@ mod tests {
         let o = sample_opening(1_000);
         // Compute the canonical commitment the same way the deposit
         // path / on-chain verifier would.
-        let commitment = commitment_from_fields_v2(
-            &o.token_mint,
-            o.amount,
-            &o.owner_commitment,
-            &o.inner_hash,
-        )
-        .unwrap();
+        let commitment =
+            commitment_from_fields_v2(&o.token_mint, o.amount, &o.owner_commitment, &o.inner_hash)
+                .unwrap();
         assert!(o.verify_commitment(&commitment).is_ok());
     }
 
     #[test]
     fn verify_commitment_rejects_wrong_amount() {
         let o = sample_opening(1_000);
-        let commitment = commitment_from_fields_v2(
-            &o.token_mint,
-            o.amount,
-            &o.owner_commitment,
-            &o.inner_hash,
-        )
-        .unwrap();
+        let commitment =
+            commitment_from_fields_v2(&o.token_mint, o.amount, &o.owner_commitment, &o.inner_hash)
+                .unwrap();
         // An opening that claims a different amount must not verify
         // against the same commitment — this is the check that pins
         // a_amount == note_amount.
@@ -318,13 +310,9 @@ mod tests {
     #[test]
     fn verify_commitment_rejects_wrong_inner_hash() {
         let o = sample_opening(1_000);
-        let commitment = commitment_from_fields_v2(
-            &o.token_mint,
-            o.amount,
-            &o.owner_commitment,
-            &o.inner_hash,
-        )
-        .unwrap();
+        let commitment =
+            commitment_from_fields_v2(&o.token_mint, o.amount, &o.owner_commitment, &o.inner_hash)
+                .unwrap();
         let mut tampered = o.clone();
         tampered.inner_hash[31] = 0x34;
         assert!(tampered.verify_commitment(&commitment).is_err());
@@ -394,7 +382,11 @@ mod tests {
             }]),
         );
         assert!(store.anchor_pool(&oid).is_some());
-        assert!(store.anchor_pool_mut(&oid).unwrap().consume_next().is_some());
+        assert!(store
+            .anchor_pool_mut(&oid)
+            .unwrap()
+            .consume_next()
+            .is_some());
         assert!(store.remove_anchor_pool(&oid).is_some());
         assert!(store.anchor_pool(&oid).is_none());
     }

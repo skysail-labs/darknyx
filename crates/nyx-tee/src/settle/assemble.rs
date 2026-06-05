@@ -380,12 +380,16 @@ pub fn assemble_batch(
         // anchor's inner_hash from that opening so the witness reconstructs
         // the exact same commitment the matcher emitted + the book rotated to.
         let buyer_change_inner = if m.buyer_relock_order_id != RELOCK_ORDER_ID_NONE {
-            store.get(&m.note_e_commitment).map(|o| o.opening.inner_hash)
+            store
+                .get(&m.note_e_commitment)
+                .map(|o| o.opening.inner_hash)
         } else {
             None
         };
         let seller_change_inner = if m.seller_relock_order_id != RELOCK_ORDER_ID_NONE {
-            store.get(&m.note_f_commitment).map(|o| o.opening.inner_hash)
+            store
+                .get(&m.note_f_commitment)
+                .map(|o| o.opening.inner_hash)
         } else {
             None
         };
@@ -660,9 +664,13 @@ mod tests {
         assert_eq!(w.note_e_commitment, expected_e);
         assert_eq!(w.e_inner, anchor_inner, "must use the anchor inner_hash");
         // And it must NOT equal the derive_inner value a non-relock fill uses.
-        let derive_e =
-            commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &derive_inner(42, CHANGE_ROLE_BUYER))
-                .unwrap();
+        let derive_e = commitment_from_fields_v2(
+            &quote_mint(),
+            150,
+            &buyer.owner_commitment,
+            &derive_inner(42, CHANGE_ROLE_BUYER),
+        )
+        .unwrap();
         assert_ne!(w.note_e_commitment, derive_e);
     }
 

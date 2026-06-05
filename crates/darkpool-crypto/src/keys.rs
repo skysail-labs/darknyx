@@ -360,7 +360,10 @@ mod tests {
     fn inner_hash_deterministic() {
         let s = fixed_seed();
         let oid = [0x11u8; 16];
-        assert_eq!(derive_inner_hash(&s, &oid, 0), derive_inner_hash(&s, &oid, 0));
+        assert_eq!(
+            derive_inner_hash(&s, &oid, 0),
+            derive_inner_hash(&s, &oid, 0)
+        );
     }
 
     #[test]
@@ -388,6 +391,9 @@ mod tests {
         // Different domain string → must not collide with the blinding KDF.
         let s = fixed_seed();
         let oid = [0u8; 16];
-        assert_ne!(derive_inner_hash(&s, &oid, 0), derive_blinding_factor(&s, 0));
+        assert_ne!(
+            derive_inner_hash(&s, &oid, 0),
+            derive_blinding_factor(&s, 0)
+        );
     }
 }

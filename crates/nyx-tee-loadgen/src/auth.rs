@@ -120,9 +120,13 @@ pub fn build_signed_place_body(
     };
     let owner_commitment = fr_safe_opening_field(&order_id, 0x01);
     let note_inner_hash = fr_safe_opening_field(&order_id, 0x02);
-    let note_commitment =
-        commitment_from_fields_v2(&token_mint, note_amount, &owner_commitment, &note_inner_hash)
-            .expect("synthetic opening fields are Fr-safe (top byte zero)");
+    let note_commitment = commitment_from_fields_v2(
+        &token_mint,
+        note_amount,
+        &owner_commitment,
+        &note_inner_hash,
+    )
+    .expect("synthetic opening fields are Fr-safe (top byte zero)");
     // Opaque-to-intake fields: a deterministic nullifier + an all-zero
     // root + a 256-byte zero VALID_INPUT proof.
     let nullifier = {
