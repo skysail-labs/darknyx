@@ -538,3 +538,46 @@ fn parity_8_partial_fill_keeps_slot_pending() {
         ask_upd.kind
     );
 }
+
+// ─────── Over-collateralization: surplus returns as change ──────────────────
+//
+// A bid may lock MORE than `amount * price_limit` (over-collateralization —
+// e.g. a 500-USDC note pointed at a 50-USDC order). The matcher returns the
+// full surplus as the buyer's change note via the SAME `change = note_amount -
+// charge` path that price improvement already uses, so no matcher/circuit
+// change is needed for over-collateralized intake. This pins that behaviour.
+
+#[test]
+fn over_collateralized_bid_returns_the_surplus_as_change() {
+    let extra: u64 = 500;
+    let mut bid = pseed(0, 0, 150, 10, 1_000_000); // exact note_amount = 10 * 150
+    let exact_note = bid.note_amount;
+    bid.note_amount = exact_note + extra; // lock more than the order needs
+    let ask = pseed(1, 1, 146, 10, 1_000_000);
+
+    let out = run_batch(
+        &book_of(vec![bid, ask]),
+        &oracle(148),
+        &config(100_000, 0),
+        1,
+        0,
+    )
+    .expect("matcher");
+    assert_eq!(out.matches.len(), 1, "the crossing pair matches once");
+    let m = &out.matches[0];
+
+    // Conservation identity (fee = 0 in this config): note_amount == quote + change.
+    assert_eq!(m.buyer_fee_amt, 0);
+    assert_eq!(
+        m.buyer_change_amt,
+        (exact_note + extra) - m.quote_amt,
+        "buyer change must absorb the full surplus (note_amount - quote)"
+    );
+    // The change is at least the over-collateral extra (plus any price improvement).
+    assert!(
+        m.buyer_change_amt >= extra,
+        "over-collateral surplus ({}) must come back as change ({})",
+        extra,
+        m.buyer_change_amt
+    );
+}

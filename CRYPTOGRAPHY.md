@@ -432,10 +432,29 @@ the first match's payload (the others carry `[0;32]`). The fee-note
 `inner_hash` is `derive_inner(slot, FEE_ROLE_BASE/QUOTE)`, so the operator
 reconstructs them deterministically and withdraws via standard `VALID_SPEND`.
 
-Each order must lock `nominal + its own fee` collateral (intake derives this
-in `orders.rs`) or `run_batch` rejects the match as conservation-breaking.
-The CVM fee rate is `NYX_TEE_FEE_RATE_BPS` (default 30);
+Each order must lock **at least** `nominal + its own fee` collateral (intake
+derives this floor in `orders.rs`) or `run_batch` rejects the match as
+conservation-breaking. The CVM fee rate is `NYX_TEE_FEE_RATE_BPS` (default 30);
 `VaultConfig.fee_rate_bps` is vestigial for the TEE settle path.
+
+**Over-collateralization.** An order MAY lock a note larger than that floor —
+e.g. point a 500-USDC deposit at a 50-USDC order. The client declares the
+note's actual amount in the order's optional `collateral_amount` field (a
+plaintext opening field, pinned to the already-signed `note_commitment` — not
+in the canonical bytes); intake checks `collateral_amount ≥ floor` and the
+matcher returns the surplus as a change note via the same `change = note_amount
+− charge` path price-improvement already uses (`algorithm.rs`). So a user
+deposits once and trades many sizes up to their largest single note; the
+surplus rides the anchor-pool/fills path and is client-recoverable. (Orders
+larger than any single note need the deferred in-pool note-**merge** primitive.)
+
+**Tracking balance.** There is no account→balance server mapping (a privacy
+choice). A user's balance is the sum of their own UNSPENT notes — deposits
+(recorded at deposit time) + trade-change (recovered via the fills indexer) —
+exactly like a wallet summing its UTXOs. "Unspent" is the on-chain note status
+(`ConsumedNote`/`NoteLock` PDAs). The SDK `Wallet` (`packages/sdk/src/wallet/`)
+exposes `getBalance` / `listNotes` / `selectCollateral`; everything is
+recoverable from the seed + the indexer.
 
 ---
 

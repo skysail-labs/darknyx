@@ -100,6 +100,10 @@ struct PlaceOrderBuilder {
     note_inner_hash: [u8; 32],
     nullifier: [u8; 32],
     anchors: Vec<Anchor>,
+    /// Over-collateralization: when set, the collateral note carries this
+    /// amount (≥ the derived floor) and the JSON declares `collateral_amount`.
+    /// `None` ⇒ exact collateral (the opening amount == the derived floor).
+    collateral_amount: Option<u64>,
 }
 
 impl PlaceOrderBuilder {
@@ -142,12 +146,20 @@ impl PlaceOrderBuilder {
                     nullifier: [0x90 + i as u8; 32],
                 })
                 .collect(),
+            collateral_amount: None,
         }
     }
 
-    /// The note value the handler will derive for this order (bid →
-    /// amount × price; ask → amount). MUST match the handler's
-    /// formula so the opening's committed amount lines up.
+    /// Over-collateralize: the collateral note carries `c` (≥ the floor) and the
+    /// JSON declares `collateral_amount: c`.
+    fn with_collateral_amount(mut self, c: u64) -> Self {
+        self.collateral_amount = Some(c);
+        self
+    }
+
+    /// The minimum collateral the handler requires (bid → amount × price; ask →
+    /// amount). MUST match the handler's `required` floor (the test market has a
+    /// zero fee rate, so no fee term).
     fn note_amount(&self) -> u64 {
         match self.side {
             OrderSide::Bid => self
@@ -159,13 +171,20 @@ impl PlaceOrderBuilder {
         }
     }
 
+    /// The amount the collateral note actually carries — `collateral_amount`
+    /// when over-collateralizing, else the floor. The opening + commitment are
+    /// built against THIS, mirroring the handler's `note_amount`.
+    fn effective_collateral(&self) -> u64 {
+        self.collateral_amount.unwrap_or_else(|| self.note_amount())
+    }
+
     /// The opening the handler will reconstruct + verify. The test
     /// market (`MatcherState::new()`) has zeroed mints, so the
     /// collateral mint is `[0; 32]` for both sides.
     fn opening(&self) -> NoteOpening {
         NoteOpening {
             token_mint: [0u8; 32],
-            amount: self.note_amount(),
+            amount: self.effective_collateral(),
             owner_commitment: self.owner_commitment,
             inner_hash: self.note_inner_hash,
             nullifier: self.nullifier,
@@ -226,6 +245,8 @@ impl PlaceOrderBuilder {
             // dummy bytes are fine for the orders-surface tests.
             "merkle_root": hex::encode([0xDDu8; 32]),
             "valid_input_proof": hex::encode([0u8; 256]),
+            // null when None (handler's `#[serde(default)]` → exact collateral).
+            "collateral_amount": self.collateral_amount,
             "anchors": self.anchors.iter().map(|a| json!({
                 "inner_hash": hex::encode(a.inner_hash),
                 "nullifier": hex::encode(a.nullifier),
@@ -455,6 +476,46 @@ async fn place_happy_path_returns_202_and_lands_in_book() {
     assert_eq!(status_json["order_type"], "limit");
     assert_eq!(status_json["status"], "pending");
     assert_eq!(status_json["amount"], builder.amount);
+}
+
+#[tokio::test]
+async fn place_accepts_over_collateralized_order() {
+    // Over-collateralization: lock a note worth 50% more than the order needs.
+    // Intake must accept it (the opening verifies against the signed commitment
+    // for the larger amount); the surplus comes back as a change note at settle.
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let builder = PlaceOrderBuilder::new();
+    let floor = builder.note_amount();
+    let over = builder.with_collateral_amount(floor + floor / 2);
+
+    let resp = place(&app, &bearer, over.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let json = read_json(resp).await;
+    assert_eq!(json["status"], "accepted");
+
+    // The order is in the book; its order amount is unchanged (the extra
+    // collateral does not change WHAT is traded, only the change returned).
+    let get_resp = get_order(&app, &bearer, &hex::encode(over.order_id)).await;
+    assert_eq!(get_resp.status(), StatusCode::OK);
+    assert_eq!(read_json(get_resp).await["amount"], over.amount);
+}
+
+#[tokio::test]
+async fn place_rejects_collateral_below_the_required_floor() {
+    // A declared collateral_amount below the order's required floor (it could
+    // not pay its own fee / cover the trade) is rejected with 400 — BEFORE the
+    // opening is even built (the signature is already verified by then).
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let builder = PlaceOrderBuilder::new();
+    let floor = builder.note_amount();
+    let under = builder.with_collateral_amount(floor - 1);
+
+    let resp = place(&app, &bearer, under.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

@@ -108,6 +108,19 @@ pub struct PlaceOrderRequest {
     /// 256-byte VALID_INPUT Groth16 proof (`pi_a ‖ pi_b ‖ pi_c`), hex.
     pub valid_input_proof: String,
 
+    /// OPTIONAL over-collateralization: the actual amount the collateral note
+    /// carries, when it exceeds the order's nominal locked amount
+    /// (`amount*price_limit + fee` for a bid, `amount + fee` for an ask). Lets a
+    /// user point a large note (e.g. a 500-USDC deposit) at a small order and
+    /// get the surplus back as a change note. A plaintext opening field — it is
+    /// NOT in the signed canonical body, because the signed `note_commitment`
+    /// already commits the amount; intake re-derives the commitment from this
+    /// value and rejects a mismatch (same mechanism as `owner_commitment` /
+    /// `note_inner_hash`). Absent ⇒ exact collateral (`note == nominal + fee`),
+    /// unchanged behaviour.
+    #[serde(default)]
+    pub collateral_amount: Option<u64>,
+
     /// The order's continuation anchor pool — exactly
     /// `ANCHOR_POOL_SIZE` `(inner_hash, nullifier)` pairs the client
     /// pre-supplied so the matcher can settle partial-fill
@@ -420,17 +433,39 @@ pub async fn place_order(
     // deposit, so the re-derived commitment lines up exactly. fee=0 when
     // fee_rate_bps=0 → collateral == nominal (unchanged dev behaviour).
     let fee = ((nominal as u128) * (fee_rate_bps as u128) / 10_000u128) as u64;
-    let note_amount = nominal.saturating_add(fee).max(1);
+    // The minimum the collateral note must carry so the order can pay its own
+    // worst-case fee. With exact collateral this IS the note amount; with
+    // over-collateralization it's the floor.
+    let required = nominal.saturating_add(fee).max(1);
+
+    // Over-collateralization: if the client declares a `collateral_amount`, the
+    // note may be LARGER than `required` and the matcher returns the surplus as
+    // a change note (the same path price-improvement surplus already takes —
+    // `algorithm.rs` computes `change = note_amount - charge`). The declared
+    // amount must still be >= the floor (so the fee is covered), and it is
+    // pinned to the signed `note_commitment` by `verify_commitment` below.
+    let note_amount = match req.collateral_amount {
+        Some(c) if c >= required => c,
+        Some(c) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "collateral_amount {c} is below the required {required} \
+                     (nominal {nominal} + fee {fee}) for this order"
+                ),
+            ));
+        }
+        None => required,
+    };
 
     // 4b. Build + verify the input-note opening. The collateral mint
     //     is the quote mint for a bid (quote locked) and the base
     //     mint for an ask. `verify_commitment` re-derives the note
     //     commitment from (mint, note_amount, owner_commitment,
-    //     nonce, blinding) and asserts it equals the signed
-    //     `note_commitment` — pinning the opening to the signature
-    //     and enforcing `note_amount == committed amount` (the
-    //     conservation invariant the circuit needs). Done outside the
-    //     matcher lock so the Poseidon work doesn't block a tick.
+    //     inner_hash) and asserts it equals the signed `note_commitment`
+    //     — pinning the opening (incl. the possibly over-collateralized
+    //     `note_amount`) to the signature. Done outside the matcher lock
+    //     so the Poseidon work doesn't block a tick.
     let token_mint = match side {
         OrderSide::Bid => quote_mint,
         OrderSide::Ask => base_mint,

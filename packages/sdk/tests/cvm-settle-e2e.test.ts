@@ -267,7 +267,12 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       // nominal, unchanged. Floor division must match intake exactly so the
       // re-derived commitment lines up.
       const withFee = (nominal: bigint) => nominal + (nominal * FEE_RATE_BPS) / 10_000n;
-      const buyerNoteAmt = withFee(BASE_QTY * bidPrice);
+      // Over-collateralization knob: deposit a buyer note LARGER than the order
+      // needs (NYX_CVM_BUYER_SURPLUS quote units). The order declares its actual
+      // collateral_amount; intake accepts note ≥ required and the matcher returns
+      // the surplus as an (even bigger) change note. Default 0 ⇒ exact-at-limit.
+      const BUYER_SURPLUS = BigInt(process.env.NYX_CVM_BUYER_SURPLUS ?? "0");
+      const buyerNoteAmt = withFee(BASE_QTY * bidPrice) + BUYER_SURPLUS;
       const sellerNoteAmt = withFee(BASE_QTY);
 
       await sendAndConfirmTransaction(
@@ -395,6 +400,10 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
           nullifier: hex(await nullifierV2(p.spendingKey, note.innerHash)),
           merkle_root: hex(vi.root),
           valid_input_proof: hex(vi.proofBytes),
+          // Declare the note's ACTUAL amount. For an exact-collateral order this
+          // equals the derived floor (a no-op); for an over-collateralized one
+          // it's larger and intake accepts note ≥ required.
+          collateral_amount: Number(note.amount),
           anchors: anchorsToJson(pool.anchors),
         };
       }
@@ -488,6 +497,15 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         const change = idxFills.find((f) => f.side === "buyer" && f.changeNoteCommitment);
         expect(change, "indexer did not surface the buyer change-note fill").toBeTruthy();
         expect(BigInt(change!.changeAmount)).toBeGreaterThan(0n);
+
+        // Over-collateralization: the surplus we deposited must come back in the
+        // change note (on top of any price-improvement surplus).
+        if (BUYER_SURPLUS > 0n) {
+          expect(
+            BigInt(change!.changeAmount),
+            "over-collateral surplus did not return as change",
+          ).toBeGreaterThanOrEqual(BUYER_SURPLUS);
+        }
 
         // The durable path recovers the spendable opening from the seed alone
         // (the anchor-index search = the Vuln-4 integrity check): the commitment

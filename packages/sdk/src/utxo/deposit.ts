@@ -18,6 +18,7 @@ import { PublicKey } from "@solana/web3.js";
 
 import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
+import type { StoredNote } from "./note-store.js";
 import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, ownerCommitment } from "./note.js";
 import { bn254ToBE32, deriveBlindingFactor } from "../keys/key-generators.js";
@@ -50,6 +51,24 @@ export interface DepositReceipt {
     ownerCommitment: bigint;
     /** v2: single inner_hash (deterministic from masterSeed + leafIndex). */
     innerHash: bigint;
+  };
+}
+
+/**
+ * Convert a deposit receipt into a storable wallet note. Call
+ * `store.put(depositNoteFromReceipt(receipt))` after a deposit so the wallet's
+ * balance + coin-selection see it. (Deposits aren't recoverable from the seed
+ * alone on a fresh device — record them here; trade-change notes recover via the
+ * fills indexer.)
+ */
+export function depositNoteFromReceipt(receipt: DepositReceipt): StoredNote {
+  return {
+    commitment: Buffer.from(receipt.noteCommitment).toString("hex"),
+    tokenMint: receipt.notePlaintext.tokenMint,
+    amount: receipt.notePlaintext.amount,
+    ownerCommitment: receipt.notePlaintext.ownerCommitment,
+    innerHash: receipt.notePlaintext.innerHash,
+    leafIndex: receipt.leafIndex,
   };
 }
 

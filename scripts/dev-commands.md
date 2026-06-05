@@ -509,6 +509,12 @@ RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" NYX_INDEXER_URL="http://127.0.0.1:8090" \
 > (`packages/sdk/src/fills/`) — backfill history from the indexer, then tail the WS,
 > deduping by commitment.
 
+**Over-collateralization scenario:** add `NYX_CVM_BUYER_SURPLUS=<quote units>` to
+deposit a buyer note larger than the order needs. The order auto-declares its
+`collateral_amount`, intake accepts `note ≥ required`, and the test asserts the
+indexer change-note's `changeAmount ≥ the surplus` (the surplus came back). Default
+0 = exact collateral. (Works against a CVM built from the over-collateral commit.)
+
 ---
 
 ## 7. Devnet E2E #2 — loadgen against a CVM
