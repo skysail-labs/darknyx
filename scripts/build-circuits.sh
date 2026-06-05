@@ -83,6 +83,9 @@ build_circuit() {
 build_circuit valid_wallet_create
 build_circuit valid_spend
 build_circuit valid_input
+# In-pool note merge (K=2/4). Both fit pot16 (~26k / ~50k constraints).
+build_circuit valid_merge_k2
+build_circuit valid_merge_k4
 # v3.1 valid_create + valid_price circuits were removed in Phase 1c-hard.
 # They've been subsumed by the v3.5 batched-validity circuit (see
 # circuits/match_batch_n*). The N=16 instantiation requires pot18 and is

@@ -518,6 +518,7 @@ jobs:
           cargo test -p vault \
             --test zk_roundtrip \
             --test zk_spend_roundtrip \
+            --test merge_verify \
             --test merkle_host \
             -- --nocapture
 

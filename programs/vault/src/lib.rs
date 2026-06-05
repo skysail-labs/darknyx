@@ -26,6 +26,7 @@ pub use instructions::create_wallet;
 pub use instructions::deposit;
 pub use instructions::initialize;
 pub use instructions::lock_note;
+pub use instructions::merge;
 pub use instructions::release_lock;
 pub use instructions::reset_merkle_tree;
 pub use instructions::rotate_root_key;
@@ -90,6 +91,29 @@ pub mod vault {
         proof: Groth16Proof,
     ) -> Result<()> {
         withdraw::withdraw_handler(ctx, note_commitment, nullifier, merkle_root, amount, proof)
+    }
+
+    /// Merge K input notes (K=2 or 4) into ONE output note of their sum, using a
+    /// VALID_MERGE proof. In-pool consolidation — no external transfer. The K
+    /// non-zero input nullifiers' PDAs are passed as remaining_accounts.
+    pub fn merge<'info>(
+        ctx: Context<'_, '_, '_, 'info, Merge<'info>>,
+        nullifiers: Vec<[u8; 32]>,
+        output_commitment: [u8; 32],
+        token_mint: Pubkey,
+        merkle_root: [u8; 32],
+        k: u8,
+        proof: Groth16Proof,
+    ) -> Result<()> {
+        merge::merge_handler(
+            ctx,
+            nullifiers,
+            output_commitment,
+            token_mint,
+            merkle_root,
+            k,
+            proof,
+        )
     }
 
     /// Lock a note to an order (TEE-only; v2 requires a VALID_INPUT proof

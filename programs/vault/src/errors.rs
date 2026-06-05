@@ -95,4 +95,10 @@ pub enum VaultError {
     FeeNoteInconsistent,
     #[msg("Fee rate exceeds the allowed maximum (10000 bps)")]
     InvalidFeeRate,
+
+    // ---- Note merge ----
+    #[msg("Merge K must be 2 or 4 and match the nullifier count")]
+    InvalidMergeK,
+    #[msg("Merge nullifier account missing or does not match the derived PDA")]
+    MergeAccountMismatch,
 }

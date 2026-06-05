@@ -42,6 +42,9 @@ build_wasm() {
 build_wasm valid_wallet_create
 build_wasm valid_spend
 build_wasm valid_input
+# In-pool note merge (K=2/4) — wasm only; committed circuit_final.zkey.
+build_wasm valid_merge_k2
+build_wasm valid_merge_k4
 # v3.1 valid_create + valid_price were removed in Phase 1c-hard
 # (subsumed by the v3.5 batched-validity circuit). The N=16 batched
 # circuit isn't wired into this CI step yet — it needs pot18, which
