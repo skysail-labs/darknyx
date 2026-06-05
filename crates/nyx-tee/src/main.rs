@@ -386,6 +386,11 @@ async fn main() -> Result<()> {
         }
     }
 
+    // ─── 7d. Spawn the fills router ───────────────────────────────────
+    // Fans the matcher's global FillMemo broadcast into per-account channels
+    // (the leak guard behind `/ws/fills`). No-op in degraded boot (no matcher).
+    nyx_tee::api::fills_router::spawn_fills_router(api_state.clone());
+
     // ─── 8. Build router + bind listener + serve ──────────────────────
     let app = nyx_tee::api::build_router(api_state);
     let addr: SocketAddr = cfg

@@ -15,19 +15,19 @@
 //! change for the lifetime of the CVM, so we pull them once and
 //! hand them to every `/info` request from memory.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
 use dstack_sdk::dstack_client::DstackClient;
 
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{broadcast, RwLock, Semaphore};
 
 use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_JWT_SECRET};
 use super::instruments::InstrumentInfo;
 use crate::keys::ed25519::DerivedSigner;
-use crate::matcher::MatcherState;
+use crate::matcher::{FillMemo, MatcherState};
 use crate::merkle::MerkleMirror;
 use crate::oracle::OracleCache;
 use crate::persistence;
@@ -176,7 +176,24 @@ pub struct ApiState {
     /// Solana fee-payer (see `keys::ed25519::DerivedSigner::solana_keypair`
     /// for the rationale + conversion).
     pub solana_rpc: Option<SolanaRpcClient>,
+
+    // ── Per-account fills routing (fills-history) ───────────────
+    /// `order_id (hex) → account_id`. Written at accepted intake (the one
+    /// moment the bearer/account and the order_id are visible together) and
+    /// read by the fills router to route each `FillMemo` to its owner. Kept
+    /// in-memory in the enclave and NEVER persisted off-TEE — the off-TEE
+    /// indexer is account-agnostic by design.
+    pub order_owner: Arc<RwLock<HashMap<String, String>>>,
+    /// `account_id → per-account fill-memo broadcast`. Created lazily when an
+    /// account opens `/ws/fills`. The fills router fans the matcher's global
+    /// broadcast into these per-account channels, so a subscriber sees ONLY
+    /// its own order's memos (the leak guard that gated the old global route).
+    pub fills_routes: Arc<RwLock<HashMap<String, broadcast::Sender<FillMemo>>>>,
 }
+
+/// Per-account fill-memo channel depth. A slow `/ws/fills` client that lags
+/// past this is closed with a 1011 resync (it backfills via the indexer).
+const FILLS_CHANNEL_CAP: usize = 1024;
 
 /// Max concurrent Argon2id hash/verify jobs allowed across the auth
 /// handlers. Sized to the host's parallelism (clamped) so legitimate
@@ -231,6 +248,8 @@ impl ApiState {
             oracle: None,
             settle_state: None,
             solana_rpc: None,
+            order_owner: Arc::new(RwLock::new(HashMap::new())),
+            fills_routes: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -344,6 +363,47 @@ impl ApiState {
             // one construct it manually and attach via
             // `with_solana_rpc(...)`.
             solana_rpc: None,
+            order_owner: Arc::new(RwLock::new(HashMap::new())),
+            fills_routes: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    // ── Per-account fills routing ───────────────────────────────
+
+    /// Record `order_id → account_id` at accepted intake. Idempotent.
+    pub async fn record_order_owner(&self, order_id: String, account_id: String) {
+        self.order_owner.write().await.insert(order_id, account_id);
+    }
+
+    /// Drop an order's owner mapping (on cancel; full-fill/expiry eviction is a
+    /// follow-up that needs the matcher to signal the API layer).
+    pub async fn forget_order(&self, order_id: &str) {
+        self.order_owner.write().await.remove(order_id);
+    }
+
+    /// Get-or-create the caller account's fill-memo channel and subscribe. A
+    /// receiver created here only sees memos sent AFTER it subscribes — earlier
+    /// fills are recovered via the indexer backfill (the "backfill then tail"
+    /// contract).
+    pub async fn subscribe_account_fills(&self, account_id: &str) -> broadcast::Receiver<FillMemo> {
+        let mut routes = self.fills_routes.write().await;
+        let tx = routes
+            .entry(account_id.to_string())
+            .or_insert_with(|| broadcast::channel(FILLS_CHANNEL_CAP).0);
+        tx.subscribe()
+    }
+
+    /// Route one memo to its owning account's channel. Returns true when it was
+    /// delivered to at least one live subscriber; false when the order is
+    /// unknown or no `/ws/fills` client is currently attached (the client will
+    /// backfill from the indexer).
+    pub async fn route_fill(&self, memo: &FillMemo) -> bool {
+        let account = self.order_owner.read().await.get(&memo.order_id).cloned();
+        let Some(account) = account else { return false };
+        let tx = self.fills_routes.read().await.get(&account).cloned();
+        match tx {
+            Some(tx) => tx.send(memo.clone()).is_ok(),
+            None => false,
         }
     }
 

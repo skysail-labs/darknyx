@@ -18,6 +18,7 @@ const INFO_TRADING = new TextEncoder().encode("darkpool_trading_key_v1");
 const INFO_ROOT = new TextEncoder().encode("darkpool_root_key_v1");
 const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
 const INFO_INNER_HASH = new TextEncoder().encode("nyx-inner-hash-v1");
+const INFO_ORDER_ID = new TextEncoder().encode("nyx-order-id-v1");
 
 /** BN254 scalar field modulus r. */
 export const BN254_R =
@@ -151,6 +152,32 @@ export function deriveInnerHash(seed: Uint8Array, orderId: Uint8Array, index: nu
   info.set(new Uint8Array(idxBuf), INFO_INNER_HASH.length + 16);
   const okm = kmac256(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
+}
+
+/**
+ * Derive the deterministic 16-byte order id for the `n`-th order of this seed.
+ *
+ * Same philosophy as the anchor pool + note blinding: derive everything from
+ * the seed, persist nothing. The client regenerates order ids on demand, and a
+ * fresh device rebuilds full trade history by gap-scanning `deriveOrderId(seed,
+ * 0), [1], …` against the indexer until a run of empties. A distinct info
+ * string (`nyx-order-id-v1`) keeps order ids in a separate domain from note
+ * blinding / inner_hash so they can never collide.
+ *
+ * `HKDF-SHA256-expand(seed, INFO_ORDER_ID || n_u32_le)[:16]`. Client-only — the
+ * TEE merely echoes `order_id` back in the settle payload, so there is no
+ * cross-language consumer to keep parity with; pinned by a fixed vector.
+ */
+export function deriveOrderId(seed: Uint8Array, n: number): Uint8Array {
+  if (!Number.isInteger(n) || n < 0 || n > 0xffff_ffff) {
+    throw new Error(`n must be a u32; got ${n}`);
+  }
+  const nBuf = new ArrayBuffer(4);
+  new DataView(nBuf).setUint32(0, n, true); // little-endian
+  const info = new Uint8Array(INFO_ORDER_ID.length + 4);
+  info.set(INFO_ORDER_ID, 0);
+  info.set(new Uint8Array(nBuf), INFO_ORDER_ID.length);
+  return hkdfExpand(seed, info, 16);
 }
 
 /** Serialize a BN254 field element as 32-byte BE. */

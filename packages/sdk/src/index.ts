@@ -37,5 +37,7 @@ export {
 } from "./orders/canonical.js";
 export * from "./orders/anchor-pool.js";
 export * from "./orders/fill-memo.js";
+export * from "./fills/history.js";
+export * from "./fills/ws-client.js";
 export * from "./settlement/settle-builder.js";
 export * from "./settlement/settlement-watcher.js";

@@ -480,6 +480,20 @@ pub async fn bearer_middleware(
         "Authorization must use the 'Bearer ' scheme".to_string(),
     ))?;
 
+    let authorized = validate_token(&state, token).await?;
+    req.extensions_mut().insert(authorized);
+    Ok(next.run(req).await)
+}
+
+/// Validate a raw JWT string against the signing secret + revocation denylist,
+/// returning the caller's [`Authorized`] identity. Shared by
+/// [`bearer_middleware`] (header-based) and the `/ws/fills` handler (which takes
+/// the token as a `?token=` query param, since browsers + the global
+/// `WebSocket` can't set an Authorization header on the upgrade request).
+pub async fn validate_token(
+    state: &ApiState,
+    token: &str,
+) -> Result<Authorized, (StatusCode, String)> {
     let claims = decode::<Claims>(
         token,
         &DecodingKey::from_secret(&state.jwt_secret),
@@ -495,12 +509,10 @@ pub async fn bearer_middleware(
         return Err((StatusCode::UNAUTHORIZED, "token revoked".to_string()));
     }
 
-    req.extensions_mut().insert(Authorized {
+    Ok(Authorized {
         account_id: claims.sub,
         jti: claims.jti,
-    });
-
-    Ok(next.run(req).await)
+    })
 }
 
 /// `POST /auth/token/revoke` handler.

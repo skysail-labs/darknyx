@@ -1,9 +1,22 @@
-# Fills delivery + trade history — architecture (SHELVED design, not yet built)
+# Fills delivery + trade history — architecture
 
-> Status: **DESIGN ONLY — not implemented.** Pinned 2026-06-04 after the
-> Phase-7 `/ws/fills` review surfaced that an unfiltered broadcast can't
-> ship. Implementation deferred until after the devnet/CVM validation pass.
-> When picking this up, this doc is the contract.
+> Status: **IMPLEMENTED** (local tests green; live devnet smoke is the one
+> remaining manual step — see `scripts/dev-commands.md §6.1`).
+>
+> **As-built deltas from the original design below:**
+> - **The account↔order_id registry (§4) was DROPPED.** Because order ids are
+>   deterministic, the client gap-scans its own ids and the indexer serves fills
+>   **by order_id only** — staying fully account-agnostic (no TEE→indexer feed, no
+>   auth between them, more private). The registry is the documented escape-hatch
+>   reverse; we took it from the start.
+> - **The indexer decodes the settle INSTRUCTION DATA** (`MatchResultPayload`),
+>   not the `TradeSettled` event — the event lacks `order_id` + commitments.
+> - **The indexer is a TS package** `packages/indexer/` (SQLite via the built-in
+>   `node:sqlite`); the SDK client is `packages/sdk/src/fills/`
+>   (`deriveOrderId`, `backfillHistory`, `subscribeFills`, `startFillsSync`);
+>   the TEE per-account routing is `api/{state,fills_router,ws}.rs`.
+>
+> The sections below are the original decision record (pinned 2026-06-04).
 
 ## Problem
 

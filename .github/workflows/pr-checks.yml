@@ -70,6 +70,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       circuits: ${{ steps.filter.outputs.circuits }}
       sdk: ${{ steps.filter.outputs.sdk }}
+      indexer: ${{ steps.filter.outputs.indexer }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,6 +92,11 @@ jobs:
               - 'package-lock.json'
             sdk:
               - 'packages/sdk/**'
+              - 'package.json'
+              - 'package-lock.json'
+            indexer:
+              - 'packages/indexer/**'
+              - 'packages/sdk/src/settlement/**'
               - 'package.json'
               - 'package-lock.json'
 
@@ -284,6 +290,34 @@ jobs:
       # / change-note flows still auto-skip via `RUN_*` env-var checks.
       - name: vitest run (parity, transport, provers, devnet-skipped)
         run: node node_modules/vitest/vitest.mjs run --root packages/sdk
+
+  indexer:
+    name: Indexer — decode parity + db/server (vitest)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.indexer == 'true'
+      )
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22 so the built-in `node:sqlite` is available (the indexer's
+      # zero-native-dep DB). The DB tests self-skip on older runtimes; the
+      # decode parity gate runs regardless.
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: npm ci (root, with workspaces)
+        run: npm ci
+
+      - name: vitest run (decode parity + db/server)
+        run: NODE_OPTIONS=--experimental-sqlite node node_modules/vitest/vitest.mjs run --root packages/indexer
 
   # ------------------------------------------------------------------
   # Phase 3 — consistency: `declare_id!()` in each program's lib.rs
@@ -566,6 +600,7 @@ jobs:
       - rust
       - circuits
       - sdk
+      - indexer
       - consistency
       - sbf-build
       - vault-zk
@@ -582,6 +617,7 @@ jobs:
             (needs.rust.result != 'success' && needs.rust.result != 'skipped') ||
             (needs.circuits.result != 'success' && needs.circuits.result != 'skipped') ||
             (needs.sdk.result != 'success' && needs.sdk.result != 'skipped') ||
+            (needs.indexer.result != 'success' && needs.indexer.result != 'skipped') ||
             needs.consistency.result != 'success' ||
             (needs['sbf-build'].result != 'success' && needs['sbf-build'].result != 'skipped') ||
             (needs['vault-zk'].result != 'success' && needs['vault-zk'].result != 'skipped') ||
@@ -591,6 +627,7 @@ jobs:
           echo "rust:                     ${{ needs.rust.result }}"
           echo "circuits:                 ${{ needs.circuits.result }}"
           echo "sdk:                      ${{ needs.sdk.result }}"
+          echo "indexer:                  ${{ needs.indexer.result }}"
           echo "consistency:              ${{ needs.consistency.result }}"
           echo "sbf-build:                ${{ needs['sbf-build'].result }}"
           echo "vault-zk:                 ${{ needs['vault-zk'].result }}"

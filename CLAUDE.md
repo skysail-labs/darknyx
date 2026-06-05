@@ -192,7 +192,9 @@ cargo build --examples -p darkpool-crypto           # parity tests shell out to 
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                              # unit + litesvm integration
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit
+./node_modules/.bin/tsc -p packages/indexer/tsconfig.json --noEmit
 ( cd packages/sdk && ../../node_modules/.bin/vitest run )   # devnet/CVM tests auto-skip
+( cd packages/indexer && ../../node_modules/.bin/vitest run ) # fills indexer; DB tests need Node 22+ (node:sqlite)
 echo "ALL GREEN — safe to push"
 ```
 

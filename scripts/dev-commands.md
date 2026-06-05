@@ -478,6 +478,42 @@ node -e 'import("@solana/web3.js").then(async ({Connection,PublicKey})=>{const c
 
 **Teardown:** `phala cvms stop "$CVM"` + `shred -u /tmp/nyx.env`.
 
+### 6.1 Validate fills delivery — the off-TEE indexer + per-account WS
+
+The same settle that mints `note_e` (above) is a **continuation fill**: the CVM
+emits a `FillMemo` over `GET /ws/fills` (live) and the on-chain settle tx carries
+the change note's `order_id` + amount + commitment (durable). Validate both
+without deploying anything extra — the indexer runs **locally**, reads the same
+devnet RPC, and you query it by order_id (the CVM never talks to it).
+
+```sh
+# 1. Start the local indexer (temp SQLite, reads devnet read-only). Leave it
+#    running in another shell BEFORE / during the cvm-settle-e2e run.
+INDEXER_RPC_URL="$HELIUS" scripts/run-indexer-local.sh   # serves :8090, GET /fills, /health
+
+# 2. Run cvm-settle-e2e (§6). It mints note_e → a fill row + a FillMemo.
+
+# 3. Durable path — query the indexer by the buyer order_id the test used:
+curl -s "http://127.0.0.1:8090/fills?order_id=<order_id_hex>" | jq
+#    → { "fills": [ { side:"buyer", changeAmount, changeNoteCommitment, ... } ] }
+
+# 4. Live path — tail the per-account WS (token from POST /auth/token):
+#    the token goes in ?token= (the WS-friendly auth path).
+wscat -c "${GW/https/wss}/ws/fills?token=<jwt>"          # observe the FillMemo frame
+```
+
+In the SDK this is the "backfill then tail" one-liner `startFillsSync({ indexerBaseUrl,
+gatewayWsUrl, token, masterSeed, ownerCommitment, baseMint, quoteMint, store })`
+(`packages/sdk/src/fills/`) — it backfills history from the indexer, then tails the
+WS, deduping by commitment.
+
+> **Tier-3 follow-up (run on your next CVM deploy):** wire `deriveOrderId(seed, n)`
+> into `cvm-settle-e2e` (replacing the random `order_id`) so the test can assert the
+> indexer `GET /fills` AND the WS `FillMemo` automatically behind `RUN_CVM_FILLS=1`.
+> The order/decode/routing layers are all covered by fast local tests
+> (`order-id`, `fills-sequencing`, indexer `decode`/`watcher`, `ws_fills_routing`);
+> this step just closes the loop against a real on-chain settle.
+
 ---
 
 ## 7. Devnet E2E #2 — loadgen against a CVM

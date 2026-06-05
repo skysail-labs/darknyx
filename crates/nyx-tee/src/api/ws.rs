@@ -1,48 +1,79 @@
 //! WebSocket surface. Wire contract: `docs/tee-api-openapi.yaml`.
 //!
-//! `GET /ws/fills` (Phase 7) streams [`crate::matcher::FillMemo`]s — one
-//! per continuation fill — so a client learns which anchor each fill
-//! consumed, runs the settle-memo integrity check, and stores the change
-//! note. The matcher publishes memos to a broadcast channel
-//! (`MatcherState::subscribe_fills`); this handler forwards them as JSON
-//! text frames.
+//! `GET /ws/fills` streams [`crate::matcher::FillMemo`]s — one per continuation
+//! fill — so a client learns which anchor each fill consumed, runs the
+//! settle-memo integrity check, and stores the change note.
 //!
-//! NOTE (pre-production): the stream is currently UNFILTERED — every
-//! subscriber sees every order's fill memos. The route is therefore
-//! FAIL-CLOSED: it is only mounted under the `debug_endpoints` cargo
-//! feature (see `api::mod::build_protected_router`), so it cannot ship on
-//! hardened builds until per-account (per-bearer) filtering lands. Until
-//! then production clients reconstruct change notes deterministically from
-//! their seed + the Merkle mirror.
+//! PER-ACCOUNT ROUTING (the leak guard): the matcher publishes memos to a single
+//! global broadcast; a router task (`api::fills_router`) fans each memo to its
+//! owning account's channel using the `order_id → account` map recorded at
+//! intake. This handler authenticates the caller and subscribes to ONLY that
+//! account's channel, so a subscriber never sees another account's memos. (The
+//! old global route leaked every memo to every subscriber and was fail-closed
+//! behind `debug_endpoints`; that gate is now gone.)
+//!
+//! AUTH: the token is taken from `?token=` (browsers + the global `WebSocket`
+//! can't set an `Authorization` header on the upgrade) or, as a fallback, the
+//! `Authorization: Bearer` header — both validated via `auth::validate_token`.
+//! This route therefore self-authenticates and is mounted OUTSIDE the
+//! header-only bearer middleware.
 
 use std::sync::Arc;
 
 use axum::{
     extract::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
-        State,
+        Query, State,
     },
-    response::Response,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
+use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
 
+use super::auth::validate_token;
 use super::state::ApiState;
 
-/// `GET /ws/fills` — upgrade to a WebSocket that streams fill memos.
-pub async fn fills_ws(ws: WebSocketUpgrade, State(state): State<Arc<ApiState>>) -> Response {
-    ws.on_upgrade(move |socket| handle_fills(socket, state))
+#[derive(Debug, Deserialize)]
+pub struct FillsQuery {
+    /// Bearer JWT as a query param (the WS-friendly auth path).
+    pub token: Option<String>,
 }
 
-async fn handle_fills(mut socket: WebSocket, state: Arc<ApiState>) {
-    // Subscribe to the matcher's fill-memo broadcast. With no matcher
-    // wired (degraded boot / tests without one), close immediately.
-    let mut rx = match &state.matcher {
-        Some(m) => m.read().await.subscribe_fills(),
-        None => {
-            let _ = socket.send(Message::Close(None)).await;
-            return;
-        }
+/// `GET /ws/fills?token=<jwt>` — authenticate, then upgrade to a per-account
+/// fill-memo stream.
+pub async fn fills_ws(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Query(q): Query<FillsQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let token = q.token.or_else(|| {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .map(str::to_string)
+    });
+    let Some(token) = token else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "missing token (?token= or Bearer)",
+        )
+            .into_response();
     };
+
+    let account_id = match validate_token(&state, &token).await {
+        Ok(auth) => auth.account_id,
+        Err((code, msg)) => return (code, msg).into_response(),
+    };
+
+    ws.on_upgrade(move |socket| handle_fills(socket, state, account_id))
+}
+
+async fn handle_fills(mut socket: WebSocket, state: Arc<ApiState>, account_id: String) {
+    // Subscribe to THIS account's channel only. Created lazily if first here.
+    let mut rx = state.subscribe_account_fills(&account_id).await;
 
     loop {
         tokio::select! {
@@ -53,16 +84,14 @@ async fn handle_fills(mut socket: WebSocket, state: Arc<ApiState>) {
                         break; // client gone
                     }
                 }
-                // A slow client lagged past the buffer + missed memos. Don't
-                // silently swallow it: log + close with a resync reason so the
-                // client reopens with a fresh cursor (it can backfill any
-                // missed change notes deterministically from its seed + the
-                // Merkle mirror).
+                // Slow client lagged past the buffer. Don't silently swallow:
+                // close with a resync reason so the client reopens + backfills
+                // the gap from the off-TEE indexer.
                 Err(RecvError::Lagged(skipped)) => {
-                    tracing::warn!(skipped, "ws/fills subscriber lagged; closing for resync");
+                    tracing::warn!(account = %account_id, skipped, "ws/fills lagged; closing for resync");
                     let _ = socket
                         .send(Message::Close(Some(CloseFrame {
-                            code: 1011, // internal/server-side condition
+                            code: 1011,
                             reason: format!("lagged: {skipped} memos skipped — reopen to resync")
                                 .into(),
                         })))
@@ -71,8 +100,7 @@ async fn handle_fills(mut socket: WebSocket, state: Arc<ApiState>) {
                 }
                 Err(RecvError::Closed) => break,
             },
-            // Drain inbound frames (ping/pong handled by axum; we only act
-            // on Close / errors) so a half-open socket is detected promptly.
+            // Drain inbound frames so a half-open socket is detected promptly.
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Ok(_)) => {}

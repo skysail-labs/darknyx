@@ -33,8 +33,8 @@ use axum::{
 };
 use darkpool_matcher::book::{Order, OrderSide, OrderStatus, OrderType};
 use darkpool_matcher::order_canonical::{
-    anchor_pool_hash, Anchor, AnchorTopUpCanonical, CancelCanonical, CanonicalError, OrderCanonical,
-    ANCHOR_POOL_SIZE, ANCHOR_TOPUP_SIZE, SYMBOL_MAX_LEN,
+    anchor_pool_hash, Anchor, AnchorTopUpCanonical, CancelCanonical, CanonicalError,
+    OrderCanonical, ANCHOR_POOL_SIZE, ANCHOR_TOPUP_SIZE, SYMBOL_MAX_LEN,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -265,7 +265,7 @@ fn order_inclusion_commitment(
 
 pub async fn place_order(
     State(state): State<Arc<ApiState>>,
-    Extension(_auth): Extension<Authorized>,
+    Extension(auth): Extension<Authorized>,
     Json(req): Json<PlaceOrderRequest>,
 ) -> Result<(StatusCode, Json<PlaceOrderResponse>), (StatusCode, String)> {
     let matcher = matcher_or_503(&state)?;
@@ -502,6 +502,14 @@ pub async fn place_order(
     // across the collateral rotation a partial-fill continuation does).
     st.openings_mut()
         .insert_anchor_pool(order_id, crate::matcher::openings::AnchorPool::new(anchors));
+    drop(st);
+
+    // Record order→account for per-account fills routing — this is the one
+    // moment the bearer (account) and the order_id are both in hand. Done after
+    // dropping the matcher lock so we never hold it across the routing-map lock.
+    state
+        .record_order_owner(hex::encode(order_id), auth.account_id.clone())
+        .await;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -557,6 +565,10 @@ pub async fn cancel_order(
         st.openings_mut().remove(&note);
     }
     st.openings_mut().remove_anchor_pool(&order_id);
+    drop(st);
+
+    // Cancelled order can never produce a fill — drop its fills-routing entry.
+    state.forget_order(&order_id_hex).await;
 
     Ok(Json(CancelOrderResponse {
         order_id: hex::encode(order_id),

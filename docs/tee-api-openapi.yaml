@@ -1210,10 +1210,40 @@ paths:
 # protocol as a series of message schemas)
 # ─────────────────────────────────────────────────────────────────────────────
 
+x-websocket-implemented:
+  # The CURRENTLY IMPLEMENTED WS surface (the multiplexed `/v1/stream` below is
+  # the planned superset). A single dedicated, per-account fill-memo stream.
+  url: /ws/fills
+  auth: |
+    Bearer token from POST /auth/token, passed as the `?token=` query param
+    (browsers + the global WebSocket can't set an Authorization header on the
+    upgrade; a `Authorization: Bearer` header is also accepted). The stream is
+    PER-ACCOUNT: a subscriber only ever receives fill memos for orders it placed
+    (routed via the intake-time order_id→account map). Earlier fills (before the
+    socket opened, or after a lag-close) are recovered from the off-TEE indexer —
+    the "backfill then tail" client flow.
+  server_messages:
+    FillMemo:
+      description: One continuation fill. The client verifies it (inner_hash +
+        commitment binding) then stores the change note. See docs/fills-history-architecture.md.
+      message:
+        type: object
+        required: [order_id, anchor_index, change_amount, change_note_commitment, mint, inner_hash]
+        properties:
+          order_id: { type: string, description: 16-byte hex. }
+          anchor_index: { type: integer }
+          change_amount: { type: integer, format: uint64 }
+          change_note_commitment: { type: string, description: 32-byte hex. }
+          mint: { type: string, description: 32-byte hex. }
+          inner_hash: { type: string, description: 32-byte hex. }
+  close_codes:
+    1011: Lagged past the per-account buffer — reopen and backfill from the indexer.
+
 x-websocket:
 
   url: /v1/stream
   description: |
+    PLANNED (not yet implemented — `/ws/fills` above is the live surface).
     One multiplexed socket per session. Authenticate with
     `op: login` (carrying a bearer token from POST /auth/token),
     then subscribe to channels.
