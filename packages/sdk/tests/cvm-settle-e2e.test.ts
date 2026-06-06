@@ -118,6 +118,13 @@ const FEE_RATE_BPS = BigInt(process.env.NYX_CVM_FEE_RATE_BPS ?? "30");
 const INDEXER_URL = (process.env.NYX_INDEXER_URL ?? "").replace(/\/$/, "");
 const FILLS = INDEXER_URL !== "";
 
+// Cross-batch re-match (opt-in, requires FILLS). After the buyer's residual
+// relocks onto an anchor in batch 1, submit a SECOND ask so the matcher
+// re-matches that relocked note in a NEW batch and settles it again — proving
+// a partial fill's continuation actually re-matches across batches, not just
+// that one continuation note is minted. Needs a 3rd (seller2) deposit up-front.
+const REMATCH = FILLS && process.env.NYX_CVM_REMATCH === "1";
+
 function hex(b: Uint8Array): string {
   return Buffer.from(b).toString("hex");
 }
@@ -269,9 +276,16 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const startCount = await onChainLeafCount(conn, vaultPda);
       expect(startCount, "tree not empty — run devnet-setup (reset) first").toBe(0);
 
+      // For the cross-batch re-match we need a 2nd ask, so a 3rd deposit
+      // (seller2). It's pre-deposited up-front: its VALID_INPUT root stays in
+      // the vault's 64-deep recent-root ring through batch 1's settle, so the
+      // proof is still valid when batch 2 locks it.
+      const seller2 = REMATCH ? await makePersona("cvm-seller2", 0xc0) : null;
+      const personas = seller2 ? [buyer, seller, seller2] : [buyer, seller];
+
       // ── 1. fund payers + mint collateral ───────────────────────────
       await t.step("fund payers (SOL)", async () => {
-        for (const p of [buyer, seller]) {
+        for (const p of personas) {
           const bal = await conn.getBalance(p.payer.publicKey);
           if (bal < 0.05 * LAMPORTS_PER_SOL) {
             await sendAndConfirmTransaction(
@@ -354,10 +368,32 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const buyerNote = await t.step("deposit buyer note", () => deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmt));
       const sellerNote = await t.step("deposit seller note", () => deposit(seller, baseMint, sellerBaseAta, sellerNoteAmt));
 
+      // seller2: a 2nd ask's collateral, deposited now (leaf 2) for the
+      // batch-2 re-match. Same base amount as seller1.
+      let seller2Note: Awaited<ReturnType<typeof deposit>> | null = null;
+      if (seller2) {
+        const seller2BaseAta = await getAssociatedTokenAddress(baseMint, seller2.payer.publicKey);
+        await t.step("mint seller2 collateral", () =>
+          sendAndConfirmTransaction(
+            conn,
+            new Transaction().add(
+              createAssociatedTokenAccountIdempotentInstruction(
+                admin.publicKey, seller2BaseAta, seller2.payer.publicKey, baseMint,
+              ),
+              createMintToInstruction(baseMint, seller2BaseAta, admin.publicKey, sellerNoteAmt),
+            ),
+            [admin],
+          ),
+        );
+        seller2Note = await t.step("deposit seller2 note", () =>
+          deposit(seller2, baseMint, seller2BaseAta, sellerNoteAmt),
+        );
+      }
+
       // shadow root must equal on-chain current_root (so the VALID_INPUT
       // proof root is in the vault's recent ring at lock time).
       const depositCount = await onChainLeafCount(conn, vaultPda);
-      expect(depositCount).toBe(2);
+      expect(depositCount).toBe(REMATCH ? 3 : 2);
 
       // ── 3. VALID_INPUT proofs (relayed to lock_note via the order) ──
       async function viProof(p: Persona, note: typeof buyerNote) {
@@ -380,6 +416,10 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       }
       const buyerVI = await t.step("VALID_INPUT prove buyer (snarkjs)", () => viProof(buyer, buyerNote));
       const sellerVI = await t.step("VALID_INPUT prove seller (snarkjs)", () => viProof(seller, sellerNote));
+      const seller2VI =
+        seller2 && seller2Note
+          ? await t.step("VALID_INPUT prove seller2 (snarkjs)", () => viProof(seller2, seller2Note!))
+          : null;
 
       // ── 4. build + sign the two orders ─────────────────────────────
       const slot = await conn.getSlot("confirmed");
@@ -608,11 +648,74 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         console.log(
           `  · fills OK — indexer + WS both surfaced buyer change note ${change!.changeNoteCommitment.slice(0, 12)}…`,
         );
+
+        // ── 8. cross-batch RE-MATCH (opt-in) ─────────────────────────
+        // The buyer's residual relocked onto anchor[0] in batch 1 and stays in
+        // the book. Submit a SECOND ask: the matcher must re-match that
+        // relocked note (note_e from batch 1) in a NEW batch and settle it
+        // again — the real proof that a partial fill continues across batches,
+        // not just that one continuation note is minted.
+        if (REMATCH && seller2 && seller2Note && seller2VI) {
+          const leafBeforeRematch = await onChainLeafCount(conn, vaultPda);
+          const seller2Order = await buildOrder(
+            seller2,
+            OrderSide.Ask,
+            askPrice,
+            seller2Note,
+            seller2VI,
+            ORDER_N + 1, // distinct order_id from the batch-1 ask
+            BASE_QTY,
+          );
+          const s3 = await t.step("submit 2nd ask (re-match the relocked residual)", () =>
+            submit(seller2Order),
+          );
+          expect(String(s3).startsWith("2"), `2nd ask rejected (${s3})`).toBe(true);
+
+          let leafAfterRematch = leafBeforeRematch;
+          await t.step("CVM re-match + settle batch 2 (from the relocked note)", async () => {
+            const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+            while (Date.now() < deadline) {
+              leafAfterRematch = await onChainLeafCount(conn, vaultPda);
+              if (leafAfterRematch >= leafBeforeRematch + 2) break;
+              await new Promise((r) => setTimeout(r, 3000));
+            }
+          });
+          // The ONLY order the 2nd ask can match is the buyer's relocked
+          // residual, so a second settle landing proves the residual re-matched
+          // from the relocked note.
+          expect(
+            leafAfterRematch,
+            "residual did not re-match + settle in a 2nd batch (cross-batch continuation broken?)",
+          ).toBeGreaterThanOrEqual(leafBeforeRematch + 2);
+          console.log(`  · re-match settled: leaf_count ${leafBeforeRematch} → ${leafAfterRematch}`);
+
+          // The buyer order_id now carries a SECOND fill (batch 2), under the
+          // SAME order_id — i.e. the same order continued across batches.
+          let fills2 = await fetchOrderFills(INDEXER_URL, buyerId);
+          await t.step("indexer 2nd fill (re-match, finalized lag)", async () => {
+            const d2 = Date.now() + IDX_TIMEOUT_MS;
+            while (Date.now() < d2 && fills2.length < 2) {
+              await new Promise((r) => setTimeout(r, 3000));
+              fills2 = await fetchOrderFills(INDEXER_URL, buyerId);
+            }
+          });
+          expect(
+            fills2.length,
+            "buyer order_id did not get a 2nd fill from the re-match",
+          ).toBeGreaterThanOrEqual(2);
+          // The 2nd fill is a distinct on-chain settle (different signature).
+          const sigs = new Set(fills2.map((f) => f.signature));
+          expect(sigs.size, "the 2 fills came from the same settle tx").toBeGreaterThanOrEqual(2);
+          console.log(
+            `  · re-match: buyer order_id has ${fills2.length} fills across ${sigs.size} settles (batch1 continuation + batch2)`,
+          );
+        }
       }
       wsSub?.close();
       t.report("cvm-settle-e2e: deposit → CVM match → CVM settle → fills");
     },
     // settle wait + the (widened) indexer finalization window + WS + slack.
-    SETTLE_TIMEOUT_MS + 180_000,
+    // The re-match phase adds a 2nd settle + a 2nd finalized-indexer wait.
+    SETTLE_TIMEOUT_MS + 420_000,
   );
 });

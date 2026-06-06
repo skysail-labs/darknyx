@@ -27,7 +27,7 @@
 //! so it doesn't stall a runtime worker.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ed25519_dalek::SigningKey;
 use solana_address::Address;
@@ -185,6 +185,15 @@ async fn run_batch_settle_inner(
         return Err(WorkerError::Mismatch(n, inputs.witnesses.len()));
     }
 
+    // Per-stage latency profiling. `t` is reset at each stage boundary; a
+    // single structured summary is emitted at the end (parseable from
+    // `phala cvms logs`). This separates the TWO things the on-chain landing
+    // timeline conflates: real in-enclave compute (prove_ms — the only heavy
+    // ZK step) vs Solana tx-confirmation latency (lock/verify/settle/close ms)
+    // vs the ALT-activation slot-wait (alt_wait_ms). Optimize the dominant one.
+    let t_pipeline = Instant::now();
+    let mut t = Instant::now();
+
     // ── 1. Lock notes (Tx A) ────────────────────────────────────
     ctx.set_all_stages(batch_id, n, SettleJobStage::LockingNotes)
         .await;
@@ -208,6 +217,9 @@ async fn run_batch_settle_inner(
         });
     }
 
+    let lock_ms = t.elapsed().as_millis() as u64;
+    t = Instant::now();
+
     // ── 2. Prove the batch (spawn_blocking) ─────────────────────
     ctx.set_all_stages(batch_id, n, SettleJobStage::Proving)
         .await;
@@ -220,6 +232,9 @@ async fn run_batch_settle_inner(
     let proof_bytes = proof_out.proof;
     let leaves = proof_out.public.leaves;
     let merkle_root = proof_out.public.merkle_root;
+
+    let prove_ms = t.elapsed().as_millis() as u64;
+    t = Instant::now();
 
     // ── 3. verify_match_batch (Tx B) + per-batch ALT (Tx C) ─────
     ctx.set_all_stages(batch_id, n, SettleJobStage::Verifying)
@@ -262,6 +277,9 @@ async fn run_batch_settle_inner(
             st.update(&id, |j| j.verify_sig = Some(verify_sig.clone()));
         }
     }
+
+    let verify_ms = t.elapsed().as_millis() as u64;
+    t = Instant::now();
 
     // Per-batch ALT via the rolling pool: reuse a long-lived `current`
     // ALT (extend it with this batch's derivable PDAs) and only create a
@@ -336,6 +354,9 @@ async fn run_batch_settle_inner(
         }
     }
 
+    let alt_tx_ms = t.elapsed().as_millis() as u64;
+    t = Instant::now();
+
     // A freshly created OR extended ALT's new addresses are NOT loadable
     // until the slot AFTER the extend lands. Sending Tx D immediately
     // makes the leader fail to resolve the ALT lookups and silently drop
@@ -375,6 +396,9 @@ async fn run_batch_settle_inner(
         entries = per_batch_alt.addresses.len(),
         "per-batch ALT ready (rolling pool)"
     );
+
+    let alt_wait_ms = t.elapsed().as_millis() as u64;
+    t = Instant::now();
 
     // ── 4. Settle each match (Tx D, v0) ─────────────────────────
     ctx.set_all_stages(batch_id, n, SettleJobStage::Settling)
@@ -430,6 +454,9 @@ async fn run_batch_settle_inner(
         st.update(&id, |j| j.settle_sig = Some(settle_sig.clone()));
     }
 
+    let settle_ms = t.elapsed().as_millis() as u64;
+    t = Instant::now();
+
     // ── 5. Close the marker (Tx E), once ────────────────────────
     ctx.set_all_stages(batch_id, n, SettleJobStage::Closing)
         .await;
@@ -441,6 +468,25 @@ async fn run_batch_settle_inner(
         ctx.confirm_timeout,
     )
     .await?;
+
+    let close_ms = t.elapsed().as_millis() as u64;
+    let total_ms = t_pipeline.elapsed().as_millis() as u64;
+    // The fine-grained per-stage latency profile. `prove_ms` is the only
+    // in-enclave ZK compute; `alt_wait_ms` is the Solana ALT-activation
+    // slot-wait; lock/verify/settle/close are tx submit+confirm latency.
+    tracing::info!(
+        batch_id,
+        n,
+        lock_ms,
+        prove_ms,
+        verify_ms,
+        alt_tx_ms,
+        alt_wait_ms,
+        settle_ms,
+        close_ms,
+        total_ms,
+        "settle pipeline timing (per-stage ms)"
+    );
 
     // ── Done ────────────────────────────────────────────────────
     {
