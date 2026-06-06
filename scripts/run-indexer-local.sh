@@ -28,8 +28,14 @@ PROGRAM="${INDEXER_PROGRAM_ID:-C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx}"
 echo "building @nyx/indexer..."
 ./node_modules/.bin/tsc -p packages/indexer/tsconfig.json
 
-echo "starting indexer: rpc=$RPC port=$PORT db=$DB"
+# Live-tail by default for local testing: skip the (possibly days-long)
+# backfill so a settle that lands during a test surfaces in seconds. Set
+# INDEXER_START_FROM_TIP=0 to get the production backfill-from-history path.
+FROM_TIP="${INDEXER_START_FROM_TIP:-1}"
+
+echo "starting indexer: rpc=$RPC port=$PORT db=$DB start_from_tip=$FROM_TIP"
 INDEXER_RPC_URL="$RPC" INDEXER_PORT="$PORT" INDEXER_DB="$DB" INDEXER_PROGRAM_ID="$PROGRAM" \
+  INDEXER_START_FROM_TIP="$FROM_TIP" \
   node packages/indexer/dist/bin/indexer.js &
 IDX_PID=$!
 # Clean up the process + the temp DB unless the caller supplied their own.

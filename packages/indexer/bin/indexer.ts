@@ -27,6 +27,12 @@ async function main(): Promise<void> {
 
   const watcher = new Watcher({ connection, programId, db });
 
+  // Live-tail cold-start (opt-in): skip the (possibly days-long) backfill page
+  // so a settle that lands after boot surfaces in seconds. See IndexerConfig.
+  if (cfg.startFromTip) {
+    await watcher.seedCursorToTip();
+  }
+
   const shutdown = () => {
     console.log("[indexer] shutting down");
     watcher.stop();

@@ -54,6 +54,22 @@ export class Watcher {
     this.log = o.log ?? ((m) => console.log(`[watcher] ${m}`));
   }
 
+  /**
+   * Cold-start fast path: if the db has no cursor yet, seed it to the chain's
+   * newest signature WITHOUT ingesting history, so subsequent polls only see
+   * settles that land after this point. A no-op once a cursor exists (resumes
+   * normally). Returns the seeded slot, or null if nothing was seeded.
+   */
+  async seedCursorToTip(): Promise<number | null> {
+    const { lastSignature } = this.db.getCursor();
+    if (lastSignature) return null; // already tracking — don't rewind
+    const newest = await this.conn.getSignaturesForAddress(this.programId, { limit: 1 });
+    if (newest.length === 0) return null; // no program history yet; backfill path is fine
+    this.db.setCursor(newest[0].signature, newest[0].slot);
+    this.log(`cold-start: seeded cursor to tip slot ${newest[0].slot} (no backfill)`);
+    return newest[0].slot;
+  }
+
   /** One incremental pass. Returns the number of fill rows ingested. */
   async pollOnce(): Promise<number> {
     const { lastSignature } = this.db.getCursor();

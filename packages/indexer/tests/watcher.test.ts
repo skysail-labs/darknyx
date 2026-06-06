@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
 import { serializePayload, type MatchResultPayload } from "../../sdk/src/settlement/settle-builder.js";
-import { extractFills } from "../src/watcher.js";
+import { extractFills, Watcher } from "../src/watcher.js";
 import { FillsDb } from "../src/db.js";
 import { startServer } from "../src/server.js";
 import { SETTLE_DISCRIMINATOR, DEFAULT_PROGRAM_ID } from "../src/index.js";
@@ -143,6 +143,43 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
     expect(db.getCursor().lastSignature).toBeNull();
     db.setCursor("sigXYZ", 1234);
     expect(db.getCursor()).toEqual({ lastSignature: "sigXYZ", lastSlot: 1234 });
+    rmSync(path, { force: true });
+  });
+
+  it("seedCursorToTip seeds an empty cursor to the newest sig (no backfill)", async () => {
+    const path = dbPath();
+    const db = new FillsDb(path);
+    dbs.push(db);
+    const conn = {
+      getSignaturesForAddress: async (_pid: unknown, opts: { limit: number }) => {
+        expect(opts.limit).toBe(1); // asks for just the tip
+        return [{ signature: "tipSig", slot: 999_999 }];
+      },
+    } as never;
+    const w = new Watcher({ connection: conn, programId: VAULT, db, log: () => {} });
+    expect(await w.seedCursorToTip()).toBe(999_999);
+    expect(db.getCursor()).toEqual({ lastSignature: "tipSig", lastSlot: 999_999 });
+    // seeding must NOT ingest any history
+    expect(db.getFillsByOrder(hexN(0xaa, 16))).toHaveLength(0);
+    rmSync(path, { force: true });
+  });
+
+  it("seedCursorToTip is a no-op once a cursor exists (never rewinds)", async () => {
+    const path = dbPath();
+    const db = new FillsDb(path);
+    dbs.push(db);
+    db.setCursor("existing", 42);
+    let called = false;
+    const conn = {
+      getSignaturesForAddress: async () => {
+        called = true;
+        return [];
+      },
+    } as never;
+    const w = new Watcher({ connection: conn, programId: VAULT, db, log: () => {} });
+    expect(await w.seedCursorToTip()).toBeNull();
+    expect(called).toBe(false);
+    expect(db.getCursor()).toEqual({ lastSignature: "existing", lastSlot: 42 });
     rmSync(path, { force: true });
   });
 });
