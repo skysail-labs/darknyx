@@ -3,6 +3,9 @@ name = "nyx-tee"
 version.workspace = true
 edition.workspace = true
 description = "In-TEE matching engine for the Nyx dark pool. Runs as a single-process Rust binary inside an Intel TDX Confidential VM on Phala Cloud / dstack-cloud. Owns the order book, the matching loop, the Groth16 prover, the settle scheduler, the Merkle mirror, and the /tree/* + /transparency indexer surface. See docs/tee-architecture.md for the full design."
+# build.rs only emits link directives when the `rapidsnark` feature is on
+# (otherwise a no-op); default builds (incl. local macOS dev) link nothing new.
+build = "build.rs"
 
 [lib]
 name = "nyx_tee"
@@ -165,6 +168,14 @@ tempfile = "3"
 
 [features]
 default = []
+# Links the rapidsnark C++ Groth16 prover (FFI) as an alternative backend to
+# ark-groth16, selectable at runtime via NYX_TEE_PROVER=rapidsnark. The image's
+# amd64 build enables it; local macOS dev can enable it too (rapidsnark builds
+# for macos_arm64). build.rs links prebuilt static libs from $RAPIDSNARK_LIB_DIR
+# — the rapidsnark build itself is a separate step (Docker layer / `make`), NOT
+# part of `cargo build`. Witness gen stays on ark-circom (circom-witness-rs was
+# ruled out by the Step-1 spike); only the PROVE step is rapidsnark.
+rapidsnark = []
 # Mounts `POST /__debug/oracle/seed`, used by `nyx-tee-loadgen`
 # for deterministic local-simulator runs (no real Hermes traffic
 # required). MUST be off in any production build — there's no

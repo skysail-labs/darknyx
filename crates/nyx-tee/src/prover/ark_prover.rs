@@ -30,7 +30,7 @@
 use std::path::{Path, PathBuf};
 
 use ark_bn254::{Bn254, Fr};
-use ark_circom::{CircomBuilder, CircomConfig, CircomReduction};
+use ark_circom::{CircomBuilder, CircomCircuit, CircomConfig, CircomReduction};
 use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::{Groth16, Proof, ProvingKey};
 use num_bigint::{BigInt, Sign};
@@ -110,40 +110,10 @@ impl ArkMatchBatchProver {
         super::constraints::validate_conservation(slots)?;
         let public = build_batch_public_inputs(slots)?;
 
-        // 2. Build the witness via ark-circom. CircomConfig holds a
-        //    wasmer Store, so it's constructed fresh per call (see
-        //    the module doc on the Sync constraint).
-        let cfg = CircomConfig::<Fr>::new(&self.wasm_path, &self.r1cs_path)
-            .map_err(|e| ProverError::WitnessGen(format!("CircomConfig::new: {e}")))?;
-        let mut builder = CircomBuilder::new(cfg);
-        push_all_inputs(&mut builder, slots, &public.merkle_root);
-
-        let circom = builder
-            .build()
-            .map_err(|e| ProverError::WitnessGen(format!("witness build: {e}")))?;
-
-        // 3. Cross-check: the circuit's single public input (the
-        //    Merkle root it computed internally) MUST equal our
-        //    off-circuit `compute_batch_root`. A mismatch means the
-        //    leaf/root port in `prover/leaf.rs` drifted from the
-        //    circuit — fail loud here instead of producing a proof
-        //    that the on-chain verifier silently rejects.
-        let circuit_public = circom
-            .get_public_inputs()
-            .ok_or_else(|| ProverError::WitnessGen("circuit produced no public inputs".into()))?;
-        if circuit_public.len() != 1 {
-            return Err(ProverError::WitnessGen(format!(
-                "expected 1 public input (merkle_root), got {}",
-                circuit_public.len()
-            )));
-        }
-        let circuit_root = fr_to_be32(&circuit_public[0]);
-        if circuit_root != public.merkle_root {
-            return Err(ProverError::RootMismatch {
-                circuit: hex::encode(circuit_root),
-                computed: hex::encode(public.merkle_root),
-            });
-        }
+        // 2-3. Build the ark-circom witness + cross-check the circuit's
+        //      Merkle root against our off-circuit one (shared with the
+        //      rapidsnark backend, which reuses this witness).
+        let circom = build_circom_and_check(&self.wasm_path, &self.r1cs_path, slots, &public)?;
 
         // 4. Prove against the cached proving key.
         let mut rng = rand::thread_rng();
@@ -168,6 +138,50 @@ impl Prover for ArkMatchBatchProver {
     fn n(&self) -> usize {
         self.n
     }
+}
+
+/// Build the ark-circom witness for `slots` and cross-check that the circuit's
+/// single public input (its internally-computed Merkle root) equals our
+/// off-circuit `build_batch_public_inputs` root. Returns the built
+/// `CircomCircuit` (whose `.witness` is the full assignment) so BOTH backends
+/// share one witness-gen + drift guard:
+///   - ark proves `circom` directly with `create_random_proof_with_reduction`,
+///   - rapidsnark serializes `circom.witness` to `.wtns` and proves via FFI.
+///
+/// The wasmer `Store` inside `CircomConfig` is `!Sync`, so this is called fresh
+/// per prove (the ~100-300ms witness parse; proving dominates).
+pub(crate) fn build_circom_and_check(
+    wasm_path: &Path,
+    r1cs_path: &Path,
+    slots: &[MatchSlotWitness],
+    public: &BatchPublicInputs,
+) -> Result<CircomCircuit<Fr>, ProverError> {
+    let cfg = CircomConfig::<Fr>::new(wasm_path, r1cs_path)
+        .map_err(|e| ProverError::WitnessGen(format!("CircomConfig::new: {e}")))?;
+    let mut builder = CircomBuilder::new(cfg);
+    push_all_inputs(&mut builder, slots, &public.merkle_root);
+
+    let circom = builder
+        .build()
+        .map_err(|e| ProverError::WitnessGen(format!("witness build: {e}")))?;
+
+    let circuit_public = circom
+        .get_public_inputs()
+        .ok_or_else(|| ProverError::WitnessGen("circuit produced no public inputs".into()))?;
+    if circuit_public.len() != 1 {
+        return Err(ProverError::WitnessGen(format!(
+            "expected 1 public input (merkle_root), got {}",
+            circuit_public.len()
+        )));
+    }
+    let circuit_root = fr_to_be32(&circuit_public[0]);
+    if circuit_root != public.merkle_root {
+        return Err(ProverError::RootMismatch {
+            circuit: hex::encode(circuit_root),
+            computed: hex::encode(public.merkle_root),
+        });
+    }
+    Ok(circom)
 }
 
 /// Big-endian 32-byte encoding of a BN254 scalar-field element.

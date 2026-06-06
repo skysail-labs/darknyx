@@ -35,6 +35,15 @@ pub mod groth16;
 pub mod inputs;
 pub mod leaf;
 pub mod witness;
+pub mod wtns;
+
+// The rapidsnark backend (perf swap). Witness gen stays on ark-circom; only
+// the PROVE step is rapidsnark. Linked via build.rs from $RAPIDSNARK_LIB_DIR;
+// off by default (incl. local builds without the static libs).
+#[cfg(feature = "rapidsnark")]
+pub mod rapidsnark_prover;
+#[cfg(feature = "rapidsnark")]
+mod rapidsnark_sys;
 
 pub use ark_prover::ArkMatchBatchProver;
 pub use constraints::{validate_conservation, ConstraintError};
@@ -45,4 +54,6 @@ pub use leaf::{
     compute_batch_leaf, compute_batch_root, merkle_inclusion_path, InclusionPath, LeafError,
     DOMAIN_BATCH_ROOT, DOMAIN_LEAF_INNER, DOMAIN_LEAF_TOP,
 };
+#[cfg(feature = "rapidsnark")]
+pub use rapidsnark_prover::RapidsnarkMatchBatchProver;
 pub use witness::{dummy_slot, pad_batch, MatchSlotWitness, PadError};
