@@ -247,7 +247,14 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       // reset_merkle_tree clears the tree but NOT those PDAs, so a fixed
       // note would collide ("Allocate: account already in use") on the
       // second run. Override with NYX_CVM_BASE_QTY for a fixed value.
-      const BASE_QTY = BigInt(process.env.NYX_CVM_BASE_QTY ?? String((Date.now() % 900_000) + 1000));
+      //
+      // Capped at 250k: the buyer's collateral is BUY_QTY×bidPrice×(1+fee),
+      // and in FILLS mode BUY_QTY = 2×BASE_QTY. The order body sends
+      // `collateral_amount` as a JSON number, so it must stay ≤ 2^53
+      // (Number.MAX_SAFE_INTEGER ≈ 9.007e15) or `Number(noteAmt)` rounds it and
+      // intake rejects it as 1 below the required floor. 2×250k×bidPrice(~7.4e9)
+      // ≈ 3.7e15 — comfortably exact even if SOL's price doubles.
+      const BASE_QTY = BigInt(process.env.NYX_CVM_BASE_QTY ?? String((Date.now() % 250_000) + 1000));
       // Run-unique order-id index. Order ids are now DETERMINISTIC
       // (`deriveOrderId(seed, n)`) so fills mode can query the indexer by the
       // exact id we used; the run-unique `n` keeps re-runs from colliding on the
