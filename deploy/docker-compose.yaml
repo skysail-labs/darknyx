@@ -121,6 +121,11 @@ services:
       # so collected fees are spendable via VALID_SPEND; empty/unset →
       # [0;32] (fee notes still mint + append but are unclaimable).
       NYX_TEE_PROTOCOL_OWNER_COMMITMENT: ${NYX_TEE_PROTOCOL_OWNER_COMMITMENT}
+      # Groth16 prover backend: ark (default) | rapidsnark. The image ships
+      # both (built --features rapidsnark); flip this to A/B proving on the
+      # SAME image + instance. `:-ark` so an unset/empty value defaults to ark
+      # (an empty string would otherwise fail the boot-time backend match).
+      NYX_TEE_PROVER: ${NYX_TEE_PROVER:-ark}
 
     ports:
       # 8080: nyx-tee's internal HTTP. dstack-ingress fronts this
