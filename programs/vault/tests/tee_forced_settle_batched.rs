@@ -132,6 +132,134 @@ fn test_two_matches_share_one_marker() {
 }
 
 // ---------------------------------------------------------------------------
+// Regression: a relocked CONTINUATION note is consumable across a SECOND
+// batch (the cross-batch re-match path).
+//
+// Two bugs made cross-batch re-match fail and were only caught on a live CVM.
+// This pins the VAULT-side one:
+//
+//   `create_relock_pda` once wrote every NoteLock field EXCEPT `token_mint`,
+//   so a relocked note's lock carried `token_mint = Pubkey::default()`. The
+//   next batch that consumed it fed that zero mint into `compute_match_leaf`
+//   (token_mint is hashed into the leaf), producing a leaf that no longer
+//   walked up to the marker root → InvalidBatchBinding (6022). `lock_note`
+//   always set token_mint; the re-lock IS a lock and must match in every
+//   field the settle reads back.
+//
+// (The sibling TEE-side bug — re-issuing `lock_note` on the already-relocked
+// note → "Allocate: account already in use" — is guarded by
+// `submit_lock_note_pair_skips_relocked_side` in nyx-tee.)
+//
+// Batch 0's buyer partially fills + re-locks note_e; batch 1 consumes note_e.
+// Batch 1's marker is seeded from the TRUE mint (`h.test_mint`), NOT the
+// lock's, so a zero-mint re-lock makes the on-chain leaf diverge from the
+// marker (settle fails → this test fails) instead of silently agreeing.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_relocked_note_consumable_across_second_batch() {
+    let mut h = Harness::setup();
+    let far_future = u64::MAX / 2;
+
+    // ── Batch 0: buyer partially fills, mints + re-locks note_e ──
+    let note_a0 = fr_safe(0xA0, 0x11);
+    let note_b0 = fr_safe(0xB0, 0x11);
+    let note_e = fr_safe(0xE5, 0x11); // the buyer's continuation note
+    let oid_a0 = [0x10u8; 16];
+    let oid_b0 = [0x11u8; 16];
+    let oid_relock = [0x30u8; 16]; // the order note_e continues under
+                                   // quote_in (lock_a) = quote_amount(5000) + buyer_change(1000) = 6000.
+    seed_note_lock(&mut h, &note_a0, &oid_a0, far_future, 6_000);
+    seed_note_lock(&mut h, &note_b0, &oid_b0, far_future, 100);
+
+    let mut p0 = MatchResultPayload::exact_fill(
+        [0xE0u8; 16],
+        note_a0,
+        note_b0,
+        fr_safe(0xC0, 0x11),
+        fr_safe(0xD0, 0x11),
+        [0xF0u8; 32],
+        [0xF1u8; 32],
+        oid_a0,
+        oid_b0,
+        100,
+        5_000,
+    );
+    p0.note_e_commitment = note_e;
+    p0.buyer_change_amt = 1_000;
+    p0.buyer_relock_order_id = oid_relock;
+    p0.buyer_relock_expiry = far_future;
+
+    let tx0 = seed_marker_and_build_settle_batched_tx(&mut h, &p0);
+    h.svm
+        .send_transaction(tx0)
+        .expect("batch 0 settles + re-locks note_e");
+
+    // THE FIX: the re-lock must exist AND carry the note's real mint. Pre-fix
+    // this was Pubkey::default() and the assertion (and batch 1) would fail.
+    assert!(note_lock_exists(&h, &note_e), "note_e re-lock must exist");
+    assert_eq!(
+        read_note_lock_mint(&h, &note_e),
+        h.test_mint,
+        "re-lock must populate token_mint — a zero mint here breaks the next \
+         batch's leaf↔marker binding",
+    );
+
+    // ── Batch 1: consume note_e (the relocked note) as the buyer input ──
+    // note_e is ALREADY locked by the re-lock (order_id = oid_relock, amount
+    // = 1000); do NOT re-seed its lock — only the fresh seller side.
+    let note_b1 = fr_safe(0xB1, 0x22);
+    let oid_b1 = [0x21u8; 16];
+    seed_note_lock(&mut h, &note_b1, &oid_b1, far_future, 100);
+
+    // Exact-fill: quote_in = note_e's locked 1000. order_id_a MUST equal the
+    // re-lock's order_id (oid_relock) — the continuation keeps the same order.
+    let p1 = MatchResultPayload::exact_fill(
+        [0xE1u8; 16],
+        note_e,
+        note_b1,
+        fr_safe(0xC1, 0x22),
+        fr_safe(0xD1, 0x22),
+        [0xF4u8; 32],
+        [0xF5u8; 32],
+        oid_relock,
+        oid_b1,
+        100,
+        1_000,
+    );
+
+    // Seed the marker from the TRUE mint: a zero-mint re-lock then makes the
+    // on-chain leaf (computed from note_e's NoteLock.token_mint) diverge from
+    // this marker root → InvalidBatchBinding.
+    let leaf1 = compute_match_leaf_for(&p1, &h.test_mint, &h.test_mint);
+    let mut leaves = [[0u8; 32]; 16];
+    leaves[0] = leaf1;
+    let (root1, proof1) = build_merkle_root_and_path_n16(&leaves, 0);
+    seed_batch_validity_marker(&mut h, &root1, far_future);
+
+    let before = vault_leaf_count(&h);
+    let tx1 = build_settle_batched_tx(&h, &p1, 0, &proof1, &root1);
+    h.svm.send_transaction(tx1).expect(
+        "relocked note_e settles in batch 1 (binding holds iff the re-lock's token_mint is right)",
+    );
+
+    // note_e consumed, its re-lock closed, the two output leaves appended.
+    assert!(
+        consumed_note_exists(&h, &note_e),
+        "note_e consumed in batch 1"
+    );
+    assert!(
+        !note_lock_exists(&h, &note_e),
+        "note_e re-lock closed on consume"
+    );
+    assert_eq!(
+        vault_leaf_count(&h),
+        before + 2,
+        "note_c1 + note_d1 appended by batch 1"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // `close_batch_validity_marker` — fast-path: marker.payer closes it
 // immediately, no expiry wait. Rent is refunded to the payer.
 // ---------------------------------------------------------------------------
