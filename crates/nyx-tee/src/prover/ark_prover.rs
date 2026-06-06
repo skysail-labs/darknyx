@@ -113,14 +113,24 @@ impl ArkMatchBatchProver {
         // 2-3. Build the ark-circom witness + cross-check the circuit's
         //      Merkle root against our off-circuit one (shared with the
         //      rapidsnark backend, which reuses this witness).
+        let t_w = std::time::Instant::now();
         let circom = build_circom_and_check(&self.wasm_path, &self.r1cs_path, slots, &public)?;
+        let witness_ms = t_w.elapsed().as_millis();
 
         // 4. Prove against the cached proving key.
+        let t_p = std::time::Instant::now();
         let mut rng = rand::thread_rng();
         let proof = Groth16::<Bn254, CircomReduction>::create_random_proof_with_reduction(
             circom, &self.pk, &mut rng,
         )
         .map_err(|e| ProverError::Prove(format!("groth16 prove: {e}")))?;
+        let prove_step_ms = t_p.elapsed().as_millis();
+        tracing::info!(
+            backend = "ark",
+            witness_ms = witness_ms as u64,
+            prove_step_ms = prove_step_ms as u64,
+            "prove breakdown (witness-gen vs groth16 prove)"
+        );
 
         Ok((proof, public))
     }

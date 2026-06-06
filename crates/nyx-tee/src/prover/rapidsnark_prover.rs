@@ -87,12 +87,15 @@ impl RapidsnarkMatchBatchProver {
         // shared with the ark backend (same drift guard).
         super::constraints::validate_conservation(slots)?;
         let public = build_batch_public_inputs(slots)?;
+        let t_w = std::time::Instant::now();
         let circom = build_circom_and_check(&self.wasm_path, &self.r1cs_path, slots, &public)?;
         let witness = circom
             .witness
             .ok_or_else(|| ProverError::WitnessGen("ark-circom produced no witness".into()))?;
+        let witness_ms = t_w.elapsed().as_millis();
 
         // Serialize the witness + prove with rapidsnark (serialized via the Mutex).
+        let t_p = std::time::Instant::now();
         let wtns = serialize_wtns(&witness);
         let (proof_json, _public_json) = {
             let raw = self
@@ -102,8 +105,15 @@ impl RapidsnarkMatchBatchProver {
             raw.prove(&wtns)
                 .map_err(|e| ProverError::Prove(format!("rapidsnark prove: {e}")))?
         };
-
         let proof = parse_snarkjs_proof(&proof_json)?;
+        let prove_step_ms = t_p.elapsed().as_millis();
+        tracing::info!(
+            backend = "rapidsnark",
+            witness_ms = witness_ms as u64,
+            prove_step_ms = prove_step_ms as u64,
+            "prove breakdown (ark-circom witness-gen vs rapidsnark prove)"
+        );
+
         Ok((proof, public))
     }
 }
