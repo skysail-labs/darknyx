@@ -70,7 +70,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         clang \
         cmake \
         ca-certificates \
+        build-essential \
+        nasm \
+        m4 \
+        curl \
     && rm -rf /var/lib/apt/lists/*
+
+# ─── rapidsnark static libs (the `rapidsnark` prover backend) ───
+# Built in its OWN early layer so it's cached across Rust-source changes
+# (only invalidates when the third_party/rapidsnark submodule pin moves).
+# We build ONLY the static lib target (not the pistache/libsodium server),
+# so the link is self-contained: librapidsnark.a + libfr.a + libfq.a + a
+# static libgmp.a. USE_ASM defaults ON for x86_64 (rapidsnark's primary,
+# well-tested path). build_gmp.sh downloads the gmp tarball (build-time
+# network) — vendoring it for a reproducible mainnet build is a follow-up.
+COPY third_party/rapidsnark/ third_party/rapidsnark/
+RUN cd third_party/rapidsnark && \
+    ./build_gmp.sh host && \
+    cmake -S . -B build_prover -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build build_prover --target rapidsnarkStatic -j"$(nproc)"
+ENV RAPIDSNARK_LIB_DIR=/build/third_party/rapidsnark/build_prover/src \
+    RAPIDSNARK_GMP_LIB_DIR=/build/third_party/rapidsnark/depends/gmp/package/lib
 
 # Copy workspace manifests + lockfile first so Docker layer caching
 # can re-use the dependency build across iterations.
@@ -115,7 +135,7 @@ COPY programs/ programs/
 # forces a rebuild of just the workspace crates; the external-dep
 # cache (tokio, ark-*, …) is keyed separately and is preserved.
 RUN find crates programs -name '*.rs' -exec touch {} + && \
-    cargo build --release -p nyx-tee && \
+    cargo build --release -p nyx-tee --features rapidsnark && \
     cp /build/target/release/nyx-tee /nyx-tee && \
     strip /nyx-tee
 
@@ -127,9 +147,14 @@ FROM debian:bookworm-slim AS runtime
 
 # ca-certificates: needed for outbound HTTPS to Helius RPC + Pyth.
 # tini: PID 1 reaper, gives us clean signal handling.
+# libstdc++6: the rapidsnark static libs (librapidsnark/fr/fq) are C++;
+#   gmp is linked statically but libstdc++ is dynamic, so the runtime needs
+#   the C++ runtime. (gmp itself adds NO runtime dep — it's static.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         tini \
+        libstdc++6 \
+        libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Run as a non-root user. UID/GID are fixed so the volume mounts

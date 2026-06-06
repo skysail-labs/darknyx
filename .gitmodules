@@ -1,0 +1,3 @@
+[submodule "third_party/rapidsnark"]
+	path = third_party/rapidsnark
+	url = https://github.com/iden3/rapidsnark.git

@@ -28,6 +28,15 @@ circuits/build/*
 # circuit.sym (14 MB) is debug-only — the prover never reads it.
 circuits/build/match_batch_n16/circuit.sym
 
+# rapidsnark vendored source (the `rapidsnark` prover backend). The
+# Dockerfile builds its static libs from this; CI checks it out with
+# `submodules: recursive` so the nested deps (ffiasm/json/circom_runtime)
+# are present. Exclude any local build dirs — the image builds them fresh.
+!third_party
+third_party/rapidsnark/build_prover
+third_party/rapidsnark/depends/gmp/build*
+third_party/rapidsnark/depends/gmp/package*
+
 # Belt-and-suspenders: never ship build artifacts even if a path
 # above is widened later.
 **/target

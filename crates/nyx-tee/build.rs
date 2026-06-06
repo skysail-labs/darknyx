@@ -40,6 +40,12 @@ fn main() {
         println!("cargo:rustc-link-lib=c++");
     } else {
         println!("cargo:rustc-link-lib=stdc++");
+        // On Linux (the production image) rapidsnark is built with gcc OpenMP
+        // for the multithreaded MSM — its static lib references omp_* symbols,
+        // so link gcc's libgomp (the runtime needs libgomp1). gcc always
+        // provides libgomp, so this resolves whether or not cmake actually
+        // enabled OpenMP. (Skipped on macOS, where the local build is no-OpenMP.)
+        println!("cargo:rustc-link-lib=dylib=gomp");
     }
 
     println!("cargo:rerun-if-env-changed=RAPIDSNARK_LIB_DIR");
