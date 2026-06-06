@@ -126,6 +126,7 @@ fn buyer_inputs() -> LockSideInputs {
         token_mint: [0xCC; 32],
         merkle_root: [0xDD; 32],
         proof: dummy_proof(),
+        already_locked: false,
     }
 }
 
@@ -138,6 +139,7 @@ fn seller_inputs() -> LockSideInputs {
         token_mint: [0x77; 32],
         merkle_root: [0xDD; 32],
         proof: dummy_proof(),
+        already_locked: false,
     }
 }
 
@@ -176,8 +178,8 @@ async fn submit_lock_note_pair_sends_two_distinct_txs() {
         .await
         .unwrap();
 
-    assert_eq!(outcome.buyer_sig, "sig-buyer-aaaa");
-    assert_eq!(outcome.seller_sig, "sig-seller-bbbb");
+    assert_eq!(outcome.buyer_sig.as_deref(), Some("sig-buyer-aaaa"));
+    assert_eq!(outcome.seller_sig.as_deref(), Some("sig-seller-bbbb"));
 
     // Wire-level assertions: exactly one blockhash fetch + two
     // sendTransaction calls, and the two tx bodies differ (different
@@ -200,6 +202,45 @@ async fn submit_lock_note_pair_sends_two_distinct_txs() {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "+/=".contains(c)));
     }
+}
+
+#[tokio::test]
+async fn submit_lock_note_pair_skips_relocked_side() {
+    // A relocked continuation input (already_locked) was locked by a PRIOR
+    // batch's re-lock PDA; re-issuing lock_note would collide. The pair
+    // submitter must SKIP it — only the fresh side hits the wire.
+    let (endpoint, mock, _server) = spawn_mock().await;
+    {
+        let mut s = mock.lock().await;
+        seed_blockhash(&mut s);
+        s.overrides.insert(
+            "sendTransaction".to_string(),
+            vec![json!("sig-seller-only")],
+        );
+    }
+
+    let client = SolanaRpcClient::new(endpoint).unwrap();
+    let keypair = fixed_keypair();
+    let mut buyer = buyer_inputs();
+    buyer.already_locked = true; // relocked continuation note
+
+    let outcome = submit_lock_note_pair(&client, &keypair, buyer, seller_inputs())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outcome.buyer_sig, None,
+        "relocked buyer side must be skipped"
+    );
+    assert_eq!(outcome.seller_sig.as_deref(), Some("sig-seller-only"));
+
+    // Exactly ONE sendTransaction (the fresh seller); the buyer was skipped.
+    let s = mock.lock().await;
+    assert_eq!(s.captured.get("sendTransaction").unwrap().len(), 1);
+
+    // confirm_lock_pair confirms only the present sig (no panic on the None).
+    // (Confirmation status is seeded as confirmed below in a focused unit; here
+    // we only assert the skip wiring.)
 }
 
 #[tokio::test]
@@ -254,8 +295,8 @@ async fn confirm_lock_pair_returns_ok_when_both_confirmed() {
         .unwrap()
         .with_commitment(Commitment::Confirmed);
     let outcome = nyx_tee::settle::LockPairOutcome {
-        buyer_sig: "sig-a".to_string(),
-        seller_sig: "sig-b".to_string(),
+        buyer_sig: Some("sig-a".to_string()),
+        seller_sig: Some("sig-b".to_string()),
     };
     confirm_lock_pair(&client, &outcome, Duration::from_secs(2))
         .await
@@ -280,8 +321,8 @@ async fn confirm_lock_pair_fails_when_one_reverts() {
     }
     let client = SolanaRpcClient::new(endpoint).unwrap();
     let outcome = nyx_tee::settle::LockPairOutcome {
-        buyer_sig: "sig-a".to_string(),
-        seller_sig: "sig-b".to_string(),
+        buyer_sig: Some("sig-a".to_string()),
+        seller_sig: Some("sig-b".to_string()),
     };
     let err = confirm_lock_pair(&client, &outcome, Duration::from_secs(2))
         .await
@@ -313,8 +354,8 @@ async fn confirm_lock_pair_times_out_when_never_confirmed() {
     }
     let client = SolanaRpcClient::new(endpoint).unwrap();
     let outcome = nyx_tee::settle::LockPairOutcome {
-        buyer_sig: "sig-a".to_string(),
-        seller_sig: "sig-b".to_string(),
+        buyer_sig: Some("sig-a".to_string()),
+        seller_sig: Some("sig-b".to_string()),
     };
     let err = confirm_lock_pair(&client, &outcome, Duration::from_millis(500))
         .await

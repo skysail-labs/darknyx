@@ -212,8 +212,8 @@ async fn run_batch_settle_inner(
         };
         let mut st = ctx.settle_state.write().await;
         st.update(&id, |j| {
-            j.lock_buyer_sig = Some(outcome.buyer_sig.clone());
-            j.lock_seller_sig = Some(outcome.seller_sig.clone());
+            j.lock_buyer_sig = outcome.buyer_sig.clone();
+            j.lock_seller_sig = outcome.seller_sig.clone();
         });
     }
 
@@ -628,6 +628,7 @@ mod tests {
             token_mint: [0xCC; 32],
             merkle_root: [0xDD; 32],
             proof: proof_bytes(),
+            already_locked: false,
         }
     }
 

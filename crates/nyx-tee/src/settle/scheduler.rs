@@ -527,6 +527,7 @@ mod tests {
                     expiry_slot: 2000,
                     merkle_root: [0xDD; 32],
                     valid_input_proof: proof.clone(),
+                    from_relock: false,
                 },
             );
             st.openings_mut().insert(
@@ -537,6 +538,7 @@ mod tests {
                     expiry_slot: 2000,
                     merkle_root: [0xDD; 32],
                     valid_input_proof: proof,
+                    from_relock: false,
                 },
             );
             assert_eq!(st.openings().len(), 2);

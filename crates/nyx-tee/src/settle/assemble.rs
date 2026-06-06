@@ -460,6 +460,9 @@ fn lock_inputs(
         token_mint: rec.opening.token_mint,
         merkle_root: rec.merkle_root,
         proof: rec.valid_input_proof.clone(),
+        // A relocked continuation note is already locked by the prior batch's
+        // re-lock PDA — skip lock_note for it (re-init would collide).
+        already_locked: rec.from_relock,
     }
 }
 
@@ -760,6 +763,7 @@ mod tests {
                 pi_b: [2u8; 128],
                 pi_c: [3u8; 64],
             },
+            from_relock: false,
         }
     }
 

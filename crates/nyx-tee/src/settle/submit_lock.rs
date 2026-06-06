@@ -50,6 +50,12 @@ pub struct LockSideInputs {
     pub token_mint: [u8; 32],
     pub merkle_root: [u8; 32],
     pub proof: Groth16ProofBytes,
+    /// True when this input is a relocked continuation note: a PRIOR
+    /// batch's `tee_forced_settle_batched` already created its `NoteLock`
+    /// PDA (the re-lock), so issuing `lock_note` again would collide
+    /// ("Allocate: account already in use"). The existing relock pins the
+    /// note for this settle, so the lock is SKIPPED for this side.
+    pub already_locked: bool,
 }
 
 impl From<LockSideInputs> for LockNoteArgs {
@@ -71,9 +77,10 @@ impl From<LockSideInputs> for LockNoteArgs {
 pub struct LockPairOutcome {
     /// Base58 signature of the buyer's lock_note tx, populated as
     /// soon as `sendTransaction` returned (NOT after confirmation —
-    /// see [`confirm_lock_pair`] for the polling helper).
-    pub buyer_sig: String,
-    pub seller_sig: String,
+    /// see [`confirm_lock_pair`] for the polling helper). `None` when
+    /// the side was a relocked continuation note (lock skipped).
+    pub buyer_sig: Option<String>,
+    pub seller_sig: Option<String>,
 }
 
 /// Build + sign + submit both `lock_note` txs for one match.
@@ -93,13 +100,28 @@ pub async fn submit_lock_note_pair(
     buyer: LockSideInputs,
     seller: LockSideInputs,
 ) -> Result<LockPairOutcome, RpcError> {
-    let blockhash_resp = rpc.get_latest_blockhash().await?;
-    let blockhash = Hash::new_from_array(blockhash_resp.blockhash);
-
+    // A relocked continuation input is already locked by the prior batch's
+    // re-lock PDA — skip its lock_note (re-init would collide). If BOTH sides
+    // are relocked there's nothing to send.
     let tee_pubkey = tee_keypair.pubkey();
+    let blockhash = if buyer.already_locked && seller.already_locked {
+        None
+    } else {
+        Some(Hash::new_from_array(
+            rpc.get_latest_blockhash().await?.blockhash,
+        ))
+    };
 
-    let buyer_sig = build_sign_send(rpc, tee_keypair, &tee_pubkey, blockhash, buyer).await?;
-    let seller_sig = build_sign_send(rpc, tee_keypair, &tee_pubkey, blockhash, seller).await?;
+    let buyer_sig = if buyer.already_locked {
+        None
+    } else {
+        Some(build_sign_send(rpc, tee_keypair, &tee_pubkey, blockhash.unwrap(), buyer).await?)
+    };
+    let seller_sig = if seller.already_locked {
+        None
+    } else {
+        Some(build_sign_send(rpc, tee_keypair, &tee_pubkey, blockhash.unwrap(), seller).await?)
+    };
 
     Ok(LockPairOutcome {
         buyer_sig,
@@ -143,7 +165,20 @@ pub async fn confirm_lock_pair(
 ) -> Result<(), RpcError> {
     let start = std::time::Instant::now();
     let mut interval = std::time::Duration::from_millis(250);
-    let sigs = vec![outcome.buyer_sig.clone(), outcome.seller_sig.clone()];
+    // Only the sides that were actually locked have a sig to confirm; a
+    // relocked continuation side was skipped (None). If both were skipped
+    // there is nothing to confirm.
+    let labeled: Vec<(&str, String)> = [
+        ("buyer", outcome.buyer_sig.clone()),
+        ("seller", outcome.seller_sig.clone()),
+    ]
+    .into_iter()
+    .filter_map(|(l, s)| s.map(|s| (l, s)))
+    .collect();
+    if labeled.is_empty() {
+        return Ok(());
+    }
+    let sigs: Vec<String> = labeled.iter().map(|(_, s)| s.clone()).collect();
 
     loop {
         let statuses = rpc.get_signature_statuses(&sigs).await?;
@@ -152,12 +187,11 @@ pub async fn confirm_lock_pair(
         // than we want), Some + confirmed_at_commitment=true,
         // Some + err=Some.
         let mut all_confirmed = true;
-        // Index via `.get()` rather than `statuses[0]/[1]`: a
-        // non-compliant RPC could return a shorter array than we
-        // requested, and raw indexing would panic. A missing entry is
-        // treated as "not yet confirmed" (keep polling).
-        for (label, status) in [("buyer", statuses.first()), ("seller", statuses.get(1))] {
-            match status {
+        // Index via `.get()` rather than `statuses[i]`: a non-compliant RPC
+        // could return a shorter array than we requested, and raw indexing
+        // would panic. A missing entry is treated as "not yet confirmed".
+        for (i, (label, _)) in labeled.iter().enumerate() {
+            match statuses.get(i) {
                 Some(Some(s)) if s.err.is_some() => {
                     return Err(RpcError::Schema(format!(
                         "{label} lock_note tx reverted: err={:?}",
@@ -207,6 +241,7 @@ mod tests {
             token_mint: [0xCC; 32],
             merkle_root: [0xDD; 32],
             proof: dummy_proof(),
+            already_locked: false,
         }
     }
 
@@ -219,6 +254,7 @@ mod tests {
             token_mint: [0x77; 32],
             merkle_root: [0xDD; 32],
             proof: dummy_proof(),
+            already_locked: false,
         }
     }
 

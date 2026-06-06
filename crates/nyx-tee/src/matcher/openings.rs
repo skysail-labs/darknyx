@@ -182,6 +182,12 @@ pub struct OrderOpening {
     pub merkle_root: [u8; 32],
     /// The client-generated VALID_INPUT Groth16 proof for `lock_note`.
     pub valid_input_proof: Groth16ProofBytes,
+    /// True when this opening is a relocked CONTINUATION note (note_e/note_f
+    /// rotated in by `assign_continuation_anchors`): a prior batch's settle
+    /// already created its `NoteLock` (the re-lock), so the settle worker must
+    /// SKIP `lock_note` for it — re-locking would collide. False for a fresh
+    /// deposit opening registered at intake.
+    pub from_relock: bool,
 }
 
 /// Per-order settle-input table. One entry per live order, keyed by
@@ -339,6 +345,7 @@ mod tests {
                 pi_b: [2u8; 128],
                 pi_c: [3u8; 64],
             },
+            from_relock: false,
         }
     }
 

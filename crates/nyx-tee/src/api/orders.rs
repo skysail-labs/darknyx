@@ -531,6 +531,8 @@ pub async fn place_order(
             expiry_slot: req.expiry_slot,
             merkle_root: lock_merkle_root,
             valid_input_proof,
+            // A fresh deposit: lock_note must run for it (no prior re-lock).
+            from_relock: false,
         },
     );
     // Stash the continuation anchor pool, keyed by order_id (stable
