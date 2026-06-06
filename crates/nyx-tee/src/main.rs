@@ -42,7 +42,9 @@ use nyx_tee::merkle::{MerkleSync, MerkleSyncConfig};
 use nyx_tee::oracle::cache::OracleCache;
 use nyx_tee::oracle::hermes::HermesClient;
 use nyx_tee::oracle::sync::{spawn_oracle_sync, SyncConfig};
-use nyx_tee::prover::{ArkMatchBatchProver, PRODUCTION_BATCH_N};
+#[cfg(feature = "rapidsnark")]
+use nyx_tee::prover::RapidsnarkMatchBatchProver;
+use nyx_tee::prover::{ArkMatchBatchProver, Prover, PRODUCTION_BATCH_N};
 use nyx_tee::settle::worker::SettleWorkerCtx;
 use nyx_tee::settle::{
     alt_account, SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState,
@@ -467,15 +469,48 @@ fn build_settle_driver(
     // synchronously here, before the HTTP surface comes up. Fast in a
     // release build (the CVM), but a plain debug build takes ~minutes —
     // log around it so a slow boot doesn't look hung.
+    // Prover backend select (A/B): NYX_TEE_PROVER=ark (default) | rapidsnark.
+    // Both backends ship in the image (rapidsnark feature on for the amd64
+    // build), so flipping the env A/Bs proving on the SAME image + instance and
+    // rolls back instantly without a rebuild/re-attestation. Witness gen is
+    // ark-circom either way; only the prove step differs.
+    let backend = std::env::var("NYX_TEE_PROVER").unwrap_or_else(|_| "ark".to_string());
     tracing::info!(
         circuits_dir,
         n = PRODUCTION_BATCH_N,
+        backend,
         "loading VALID_MATCH_BATCH proving key…"
     );
-    let prover = ArkMatchBatchProver::load(&circuits_dir, PRODUCTION_BATCH_N).map_err(|e| {
-        anyhow::anyhow!("load N={PRODUCTION_BATCH_N} prover from {circuits_dir}: {e}")
-    })?;
-    tracing::info!("VALID_MATCH_BATCH proving key loaded");
+    let prover: Arc<dyn Prover> = match backend.as_str() {
+        "rapidsnark" => {
+            #[cfg(feature = "rapidsnark")]
+            {
+                Arc::new(
+                    RapidsnarkMatchBatchProver::load(&circuits_dir, PRODUCTION_BATCH_N).map_err(
+                        |e| {
+                            anyhow::anyhow!(
+                                "load rapidsnark N={PRODUCTION_BATCH_N} from {circuits_dir}: {e}"
+                            )
+                        },
+                    )?,
+                )
+            }
+            #[cfg(not(feature = "rapidsnark"))]
+            {
+                anyhow::bail!(
+                    "NYX_TEE_PROVER=rapidsnark but this binary was built without the \
+                     `rapidsnark` feature"
+                );
+            }
+        }
+        "ark" => Arc::new(
+            ArkMatchBatchProver::load(&circuits_dir, PRODUCTION_BATCH_N).map_err(|e| {
+                anyhow::anyhow!("load ark N={PRODUCTION_BATCH_N} from {circuits_dir}: {e}")
+            })?,
+        ),
+        other => anyhow::bail!("unknown NYX_TEE_PROVER={other:?} (expected `ark` or `rapidsnark`)"),
+    };
+    tracing::info!(backend, "VALID_MATCH_BATCH proving key loaded");
 
     // Static settle ALT (vault_config + instructions_sysvar +
     // system_program), created at devnet-setup. When its on-chain
@@ -502,7 +537,7 @@ fn build_settle_driver(
         rpc,
         tee_keypair: Arc::new(tee_keypair),
         signing_key: Arc::new(signing_key),
-        prover: Arc::new(prover),
+        prover,
         static_alt,
         alt_pool: Arc::new(tokio::sync::Mutex::new(
             nyx_tee::settle::alt_pool::AltPool::new(),
