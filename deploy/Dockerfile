@@ -114,6 +114,7 @@ RUN mkdir -p crates/darkpool-crypto/src crates/darkpool-matcher/src \
              programs/vault/src && \
     echo 'fn main() {}' > crates/nyx-tee/src/main.rs && \
     echo 'fn main() {}' > crates/nyx-tee-loadgen/src/main.rs && \
+    echo 'fn main() {}' > crates/nyx-tee/build.rs && \
     touch crates/nyx-tee/src/lib.rs \
           crates/darkpool-crypto/src/lib.rs \
           crates/darkpool-matcher/src/lib.rs \
