@@ -86,21 +86,19 @@ COPY crates/nyx-tee/Cargo.toml          crates/nyx-tee/
 # slower). It is NOT compiled into the runtime image.
 COPY crates/nyx-tee-loadgen/Cargo.toml  crates/nyx-tee-loadgen/
 COPY programs/vault/Cargo.toml          programs/vault/
-COPY programs/matching_engine/Cargo.toml programs/matching_engine/
 
 # Create dummy main.rs/lib.rs so the dep build doesn't fail on
 # missing sources. The real sources come in the next COPY.
 RUN mkdir -p crates/darkpool-crypto/src crates/darkpool-matcher/src \
              crates/nyx-tee/src crates/nyx-tee-loadgen/src \
-             programs/vault/src programs/matching_engine/src && \
+             programs/vault/src && \
     echo 'fn main() {}' > crates/nyx-tee/src/main.rs && \
     echo 'fn main() {}' > crates/nyx-tee-loadgen/src/main.rs && \
     touch crates/nyx-tee/src/lib.rs \
           crates/darkpool-crypto/src/lib.rs \
           crates/darkpool-matcher/src/lib.rs \
           crates/nyx-tee-loadgen/src/lib.rs \
-          programs/vault/src/lib.rs \
-          programs/matching_engine/src/lib.rs && \
+          programs/vault/src/lib.rs && \
     cargo build --release -p nyx-tee || true
 
 # Now the real sources.
