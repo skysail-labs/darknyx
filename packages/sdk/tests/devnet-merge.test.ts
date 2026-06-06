@@ -44,7 +44,7 @@ import {
 } from "../src/idl/vault-client.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
-import { be32ToDec, be32ToBigInt } from "./helpers/e2e-helpers.js";
+import { be32ToDec, be32ToBigInt, StepTimer } from "./helpers/e2e-helpers.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -82,12 +82,16 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const ownerBlinding = 0xabcdef12n;
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
 
+    const t = new StepTimer();
+
     // ── 1. reset → deposit two notes at leaves 0,1 ──
-    await sendAndConfirmTransaction(
-      conn,
-      new Transaction().add(buildResetMerkleTreeInstruction({ programId: VAULT_ID, admin: admin.publicKey })),
-      [admin],
-      { commitment: "confirmed" },
+    await t.step("reset_merkle_tree", () =>
+      sendAndConfirmTransaction(
+        conn,
+        new Transaction().add(buildResetMerkleTreeInstruction({ programId: VAULT_ID, admin: admin.publicKey })),
+        [admin],
+        { commitment: "confirmed" },
+      ),
     );
     const [vaultPda] = vaultConfigPda(VAULT_ID);
     expect(leafCount((await conn.getAccountInfo(vaultPda))!), "tree empty after reset").toBe(0);
@@ -97,24 +101,26 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     for (const [i, amount] of [A0, A1].entries()) {
       const innerHash = deriveBlindingFactor(masterSeed, BigInt(i));
       const commitment = await noteCommitmentV2({ tokenMint: mint.toBytes(), amount, ownerCommitment: owner, innerHash });
-      await sendAndConfirmTransaction(
-        conn,
-        new Transaction().add(
-          createAssociatedTokenAccountIdempotentInstruction(admin.publicKey, ata, admin.publicKey, mint),
-          createMintToInstruction(mint, ata, admin.publicKey, amount),
-          buildDepositInstruction({
-            programId: VAULT_ID,
-            depositor: admin.publicKey,
-            tokenMint: mint,
-            depositorTokenAccount: ata,
-            tokenProgramId: TOKEN_PROGRAM_ID,
-            amount,
-            ownerCommitment: bn254ToBE32(owner),
-            innerHash: bn254ToBE32(innerHash),
-          }),
+      await t.step(`deposit note ${i}`, () =>
+        sendAndConfirmTransaction(
+          conn,
+          new Transaction().add(
+            createAssociatedTokenAccountIdempotentInstruction(admin.publicKey, ata, admin.publicKey, mint),
+            createMintToInstruction(mint, ata, admin.publicKey, amount),
+            buildDepositInstruction({
+              programId: VAULT_ID,
+              depositor: admin.publicKey,
+              tokenMint: mint,
+              depositorTokenAccount: ata,
+              tokenProgramId: TOKEN_PROGRAM_ID,
+              amount,
+              ownerCommitment: bn254ToBE32(owner),
+              innerHash: bn254ToBE32(innerHash),
+            }),
+          ),
+          [admin],
+          { commitment: "confirmed" },
         ),
-        [admin],
-        { commitment: "confirmed" },
       );
       await tree.append(commitment);
       notes.push({ amount, innerHash, commitment, leafIndex: i });
@@ -130,36 +136,40 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     );
     const root = await tree.computeRoot();
     const outputInnerHash = deriveMergeInnerHash(masterSeed, 0);
-    const mergeRes = await proveValidMerge({
-      repoRoot: REPO_ROOT,
-      k: 2,
-      spendingKey,
-      ownerCommitmentBlinding: ownerBlinding,
-      outputInnerHash,
-      tokenMint: mint.toBytes(),
-      merkleRootBE: root,
-      slots,
-    });
+    const mergeRes = await t.step("VALID_MERGE prove (K=2, snarkjs)", () =>
+      proveValidMerge({
+        repoRoot: REPO_ROOT,
+        k: 2,
+        spendingKey,
+        ownerCommitmentBlinding: ownerBlinding,
+        outputInnerHash,
+        tokenMint: mint.toBytes(),
+        merkleRootBE: root,
+        slots,
+      }),
+    );
     const nf0 = await nullifierV2(spendingKey, notes[0].innerHash);
     const nf1 = await nullifierV2(spendingKey, notes[1].innerHash);
 
-    const mergeSig = await sendAndConfirmTransaction(
-      conn,
-      new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-        buildMergeInstruction({
-          programId: VAULT_ID,
-          payer: admin.publicKey,
-          nullifiers: [nf0, nf1],
-          outputCommitment: mergeRes.outputCommitmentBE,
-          tokenMint: mint,
-          merkleRoot: root,
-          k: 2,
-          proof: mergeRes.proof,
-        }),
+    const mergeSig = await t.step("merge ix submit + confirm", () =>
+      sendAndConfirmTransaction(
+        conn,
+        new Transaction().add(
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+          buildMergeInstruction({
+            programId: VAULT_ID,
+            payer: admin.publicKey,
+            nullifiers: [nf0, nf1],
+            outputCommitment: mergeRes.outputCommitmentBE,
+            tokenMint: mint,
+            merkleRoot: root,
+            k: 2,
+            proof: mergeRes.proof,
+          }),
+        ),
+        [admin],
+        { commitment: "confirmed" },
       ),
-      [admin],
-      { commitment: "confirmed" },
     );
     console.log(`  · merge ${mergeSig.slice(0, 8)}… → one note of ${SUM}`);
 
@@ -172,46 +182,51 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const w = await tree.witness(mergedLeaf);
     const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
     const mergedNull = await nullifierV2(spendingKey, outputInnerHash);
-    const { proof } = snarkjsFullProve(
-      {
-        merkleRoot: be32ToDec(w.root),
-        nullifier: be32ToDec(mergedNull),
-        tokenMint: [mintLo.toString(), mintHi.toString()],
-        amount: SUM.toString(),
-        spendingKey: spendingKey.toString(),
-        ownerCommitmentBlinding: ownerBlinding.toString(),
-        innerHash: outputInnerHash.toString(),
-        merklePath: w.siblings.map((s) => be32ToDec(s)),
-        merkleIndices: w.indices.map((i) => i.toString()),
-      },
-      { circuitWasmPath: SPEND_WASM, circuitZkeyPath: SPEND_ZKEY, repoRoot: REPO_ROOT },
+    const { proof } = await t.step("VALID_SPEND prove (snarkjs)", async () =>
+      snarkjsFullProve(
+        {
+          merkleRoot: be32ToDec(w.root),
+          nullifier: be32ToDec(mergedNull),
+          tokenMint: [mintLo.toString(), mintHi.toString()],
+          amount: SUM.toString(),
+          spendingKey: spendingKey.toString(),
+          ownerCommitmentBlinding: ownerBlinding.toString(),
+          innerHash: outputInnerHash.toString(),
+          merklePath: w.siblings.map((s) => be32ToDec(s)),
+          merkleIndices: w.indices.map((i) => i.toString()),
+        },
+        { circuitWasmPath: SPEND_WASM, circuitZkeyPath: SPEND_ZKEY, repoRoot: REPO_ROOT },
+      ),
     );
 
     const balBefore = (await getAccount(conn, ata)).amount;
-    await sendAndConfirmTransaction(
-      conn,
-      new Transaction().add(
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
-        buildWithdrawInstruction({
-          programId: VAULT_ID,
-          payer: admin.publicKey,
-          tokenMint: mint,
-          destinationTokenAccount: ata,
-          tokenProgramId: TOKEN_PROGRAM_ID,
-          noteCommitment: mergeRes.outputCommitmentBE,
-          nullifier: mergedNull,
-          merkleRoot: w.root,
-          amount: SUM,
-          proof,
-        }),
+    await t.step("withdraw ix submit + confirm", () =>
+      sendAndConfirmTransaction(
+        conn,
+        new Transaction().add(
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+          buildWithdrawInstruction({
+            programId: VAULT_ID,
+            payer: admin.publicKey,
+            tokenMint: mint,
+            destinationTokenAccount: ata,
+            tokenProgramId: TOKEN_PROGRAM_ID,
+            noteCommitment: mergeRes.outputCommitmentBE,
+            nullifier: mergedNull,
+            merkleRoot: w.root,
+            amount: SUM,
+            proof,
+          }),
+        ),
+        [admin],
+        { commitment: "confirmed" },
       ),
-      [admin],
-      { commitment: "confirmed" },
     );
 
     // The merged note was spendable for the FULL consolidated amount.
     const balAfter = (await getAccount(conn, ata)).amount;
     expect(balAfter - balBefore).toBe(SUM);
     console.log(`  · withdrew the merged note — ${SUM} tokens round-tripped`);
+    t.report("devnet-merge: deposit×2 → MERGE(K=2) → withdraw");
   }, 180_000);
 });

@@ -74,7 +74,14 @@ import { subscribeFills, type FillsSubscription } from "../src/fills/ws-client.j
 import { InMemoryNoteStore, type ChangeNoteRecord } from "../src/utxo/note-store.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
-import { be32ToBigInt, loadKeypairRel, loadOrCreateKeypair } from "./helpers/e2e-helpers.js";
+import {
+  be32ToBigInt,
+  loadKeypairRel,
+  loadOrCreateKeypair,
+  StepTimer,
+  fetchSettleTimeline,
+  reportSettleTimeline,
+} from "./helpers/e2e-helpers.js";
 import type { E2EConfig } from "./devnet-setup.test.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
@@ -228,7 +235,8 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       // exact id we used; the run-unique `n` keeps re-runs from colliding on the
       // same id (and lets the indexer's by-order_id rows stay per-run).
       const ORDER_N = Number(process.env.NYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000));
-      const anchor = await fetchOracleAnchor();
+      const t = new StepTimer();
+      const anchor = await t.step("oracle anchor (Hermes)", () => fetchOracleAnchor());
       const bidPrice = (anchor * 12n) / 10n;
       const askPrice = (anchor * 8n) / 10n;
       console.log(
@@ -241,22 +249,24 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       expect(startCount, "tree not empty — run devnet-setup (reset) first").toBe(0);
 
       // ── 1. fund payers + mint collateral ───────────────────────────
-      for (const p of [buyer, seller]) {
-        const bal = await conn.getBalance(p.payer.publicKey);
-        if (bal < 0.05 * LAMPORTS_PER_SOL) {
-          await sendAndConfirmTransaction(
-            conn,
-            new Transaction().add(
-              SystemProgram.transfer({
-                fromPubkey: funder.publicKey,
-                toPubkey: p.payer.publicKey,
-                lamports: 0.1 * LAMPORTS_PER_SOL,
-              }),
-            ),
-            [funder],
-          );
+      await t.step("fund payers (SOL)", async () => {
+        for (const p of [buyer, seller]) {
+          const bal = await conn.getBalance(p.payer.publicKey);
+          if (bal < 0.05 * LAMPORTS_PER_SOL) {
+            await sendAndConfirmTransaction(
+              conn,
+              new Transaction().add(
+                SystemProgram.transfer({
+                  fromPubkey: funder.publicKey,
+                  toPubkey: p.payer.publicKey,
+                  lamports: 0.1 * LAMPORTS_PER_SOL,
+                }),
+              ),
+              [funder],
+            );
+          }
         }
-      }
+      });
 
       const buyerQuoteAta = await getAssociatedTokenAddress(quoteMint, buyer.payer.publicKey);
       const sellerBaseAta = await getAssociatedTokenAddress(baseMint, seller.payer.publicKey);
@@ -275,19 +285,21 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const buyerNoteAmt = withFee(BASE_QTY * bidPrice) + BUYER_SURPLUS;
       const sellerNoteAmt = withFee(BASE_QTY);
 
-      await sendAndConfirmTransaction(
-        conn,
-        new Transaction().add(
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey, buyerQuoteAta, buyer.payer.publicKey, quoteMint,
+      await t.step("mint collateral (ATAs + mintTo)", () =>
+        sendAndConfirmTransaction(
+          conn,
+          new Transaction().add(
+            createAssociatedTokenAccountIdempotentInstruction(
+              admin.publicKey, buyerQuoteAta, buyer.payer.publicKey, quoteMint,
+            ),
+            createAssociatedTokenAccountIdempotentInstruction(
+              admin.publicKey, sellerBaseAta, seller.payer.publicKey, baseMint,
+            ),
+            createMintToInstruction(quoteMint, buyerQuoteAta, admin.publicKey, buyerNoteAmt),
+            createMintToInstruction(baseMint, sellerBaseAta, admin.publicKey, sellerNoteAmt),
           ),
-          createAssociatedTokenAccountIdempotentInstruction(
-            admin.publicKey, sellerBaseAta, seller.payer.publicKey, baseMint,
-          ),
-          createMintToInstruction(quoteMint, buyerQuoteAta, admin.publicKey, buyerNoteAmt),
-          createMintToInstruction(baseMint, sellerBaseAta, admin.publicKey, sellerNoteAmt),
+          [admin],
         ),
-        [admin],
       );
 
       // ── 2. deposit both notes; mirror into a shadow tree ───────────
@@ -318,8 +330,8 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         console.log(`  · ${p.name} deposited leaf ${leafIndex} (${sig.slice(0, 8)}…)`);
         return { mint, amount, innerHash, commitment, leafIndex };
       }
-      const buyerNote = await deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmt);
-      const sellerNote = await deposit(seller, baseMint, sellerBaseAta, sellerNoteAmt);
+      const buyerNote = await t.step("deposit buyer note", () => deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmt));
+      const sellerNote = await t.step("deposit seller note", () => deposit(seller, baseMint, sellerBaseAta, sellerNoteAmt));
 
       // shadow root must equal on-chain current_root (so the VALID_INPUT
       // proof root is in the vault's recent ring at lock time).
@@ -345,8 +357,8 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         const proofBytes = new Uint8Array([...vi.proof.piA, ...vi.proof.piB, ...vi.proof.piC]);
         return { proofBytes, root: w.root };
       }
-      const buyerVI = await viProof(buyer, buyerNote);
-      const sellerVI = await viProof(seller, sellerNote);
+      const buyerVI = await t.step("VALID_INPUT prove buyer (snarkjs)", () => viProof(buyer, buyerNote));
+      const sellerVI = await t.step("VALID_INPUT prove seller (snarkjs)", () => viProof(seller, sellerNote));
 
       // ── 4. build + sign the two orders ─────────────────────────────
       const slot = await conn.getSlot("confirmed");
@@ -411,11 +423,13 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const sellerOrder = await buildOrder(seller, OrderSide.Ask, askPrice, sellerNote, sellerVI, ORDER_N);
 
       // ── 5. auth + submit both orders to the CVM ────────────────────
-      const tokRes = await gwFetch(`${GATEWAY}/auth/token`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ api_key: API_KEY, api_secret: API_SECRET, passphrase: PASSPHRASE }),
-      });
+      const tokRes = await t.step("auth/token (CVM)", () =>
+        gwFetch(`${GATEWAY}/auth/token`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ api_key: API_KEY, api_secret: API_SECRET, passphrase: PASSPHRASE }),
+        }),
+      );
       expect(tokRes.status, "auth/token failed").toBe(200);
       const token = ((await tokRes.json()) as { access_token: string }).access_token;
 
@@ -450,8 +464,8 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         }
         return r.status;
       }
-      const s1 = await submit(buyerOrder);
-      const s2 = await submit(sellerOrder);
+      const s1 = await t.step("submit buyer order (intake + VI verify)", () => submit(buyerOrder));
+      const s2 = await t.step("submit seller order (intake + VI verify)", () => submit(sellerOrder));
       expect(String(s1).startsWith("2"), `buyer order rejected (${s1})`).toBe(true);
       expect(String(s2).startsWith("2"), `seller order rejected (${s2})`).toBe(true);
       console.log(`  · orders accepted (buyer=${buyerOrder.order_id.slice(0, 8)} bid=${bidPrice}, seller=${sellerOrder.order_id.slice(0, 8)} ask=${askPrice})`);
@@ -467,18 +481,42 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       console.log("  · waiting for match + settle…");
 
       // ── 6. watch on-chain leaf_count grow (settle appended note_c/d) ─
-      const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+      // The black box: wall-time from "orders accepted" to the settle landing
+      // on-chain — covers the CVM matcher tick + lock_note → verify_match_batch
+      // → per-batch ALT → tee_forced_settle_batched → close (5 txs). For the
+      // per-stage split, cross-reference `phala cvms logs` (each stage is logged
+      // with a timestamp); this client-side number is the end-to-end latency.
       let finalCount = depositCount;
-      while (Date.now() < deadline) {
-        finalCount = await onChainLeafCount(conn, vaultPda);
-        if (finalCount >= depositCount + 2) break;
-        await new Promise((r) => setTimeout(r, 3000));
-      }
+      await t.step("CVM match + settle (on-chain leaf_count +2)", async () => {
+        const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+          finalCount = await onChainLeafCount(conn, vaultPda);
+          if (finalCount >= depositCount + 2) break;
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      });
       console.log(`  · on-chain leaf_count: ${depositCount} → ${finalCount}`);
       expect(
         finalCount,
         "settle did not land — CVM logs (phala cvms logs) show the failing settle stage",
       ).toBeGreaterThanOrEqual(depositCount + 2);
+
+      // Per-stage settle breakdown: read the 5 settle txs off the CVM signer's
+      // on-chain history (lock×2 → verify → settle → close) and report their
+      // slot/blockTime deltas. Best-effort — never fails the test.
+      try {
+        const infoRes = await gwFetch(`${GATEWAY}/info`);
+        const info = (await infoRes.json()) as { tee_pubkey?: string };
+        if (info.tee_pubkey) {
+          const timeline = await fetchSettleTimeline(conn, new PublicKey(info.tee_pubkey), {
+            limit: 12,
+            vaultProgramId: cfg.vaultProgramId,
+          });
+          reportSettleTimeline("cvm settle pipeline (on-chain, CVM signer)", timeline);
+        }
+      } catch (e) {
+        console.log(`  !! settle-timeline probe failed: ${(e as Error).message}`);
+      }
 
       // ── 7. fills delivery (durable indexer + live WS) ──────────────
       if (FILLS) {
@@ -488,11 +526,13 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         // change note from the on-chain settle. The indexer tracks FINALIZED,
         // which lags the CONFIRMED leaf_count above by a few slots.
         let idxFills = await fetchOrderFills(INDEXER_URL, buyerId);
-        const fDeadline = Date.now() + 60_000;
-        while (Date.now() < fDeadline && !idxFills.some((f) => f.changeNoteCommitment)) {
-          await new Promise((r) => setTimeout(r, 3000));
-          idxFills = await fetchOrderFills(INDEXER_URL, buyerId);
-        }
+        await t.step("indexer fill delivery (finalized lag)", async () => {
+          const fDeadline = Date.now() + 60_000;
+          while (Date.now() < fDeadline && !idxFills.some((f) => f.changeNoteCommitment)) {
+            await new Promise((r) => setTimeout(r, 3000));
+            idxFills = await fetchOrderFills(INDEXER_URL, buyerId);
+          }
+        });
         console.log(`  · indexer fills[${buyerId.slice(0, 8)}]: ${JSON.stringify(idxFills)}`);
         const change = idxFills.find((f) => f.side === "buyer" && f.changeNoteCommitment);
         expect(change, "indexer did not surface the buyer change-note fill").toBeTruthy();
@@ -520,10 +560,12 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         expect(rec!.commitment).toBe(change!.changeNoteCommitment);
 
         // Live: the per-account WS delivered + verified the same memo.
-        const wsDeadline = Date.now() + 15_000;
-        while (Date.now() < wsDeadline && !wsFills.some((r) => r.orderId === buyerId)) {
-          await new Promise((r) => setTimeout(r, 1000));
-        }
+        await t.step("live WS fill delivery", async () => {
+          const wsDeadline = Date.now() + 15_000;
+          while (Date.now() < wsDeadline && !wsFills.some((r) => r.orderId === buyerId)) {
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+        });
         expect(
           wsFills.some((r) => r.orderId === buyerId),
           "live /ws/fills did not deliver the buyer FillMemo (is the CVM built from the fills commit?)",
@@ -533,6 +575,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         );
       }
       wsSub?.close();
+      t.report("cvm-settle-e2e: deposit → CVM match → CVM settle → fills");
     },
     SETTLE_TIMEOUT_MS + 120_000,
   );
