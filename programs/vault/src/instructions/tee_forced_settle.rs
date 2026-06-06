@@ -123,6 +123,7 @@ pub(crate) fn create_relock_pda<'info>(
     payer: &Signer<'info>,
     system_program: &Program<'info, System>,
     note_commitment: &[u8; 32],
+    token_mint: &Pubkey,
     order_id: &[u8; 16],
     expiry_slot: u64,
     amount: u64,
@@ -163,6 +164,13 @@ pub(crate) fn create_relock_pda<'info>(
         let (_head, body) = data.split_at_mut(8);
         let lock: &mut NoteLock = bytemuck::from_bytes_mut(body);
         lock.note_commitment = *note_commitment;
+        // CRITICAL: populate token_mint. A later batch that consumes this
+        // relocked note reads `note_lock.token_mint` to recompute the
+        // batch-binding leaf (`compute_match_leaf`); a zero mint there →
+        // wrong leaf → InvalidBatchBinding. lock_note sets this too — the
+        // relock is a lock and must be byte-identical in the fields the
+        // settle reads back.
+        lock.token_mint = *token_mint;
         lock.order_id = *order_id;
         lock.expiry_slot = expiry_slot;
         lock.locked_by = payer.key();

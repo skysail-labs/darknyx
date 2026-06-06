@@ -330,15 +330,17 @@ pub fn tee_forced_settle_batched_handler(
     // expected `BatchValidityMarker` PDA address, and assert this account
     // is at that address + owned by us + non-expired.
     // ────────────────────────────────────────────────────────────────────
+    // Quote mint is lock_a's mint (buyer pays quote → note_a is quote); base
+    // mint is lock_b's. Read once here: the batch-binding leaf needs them, AND
+    // the re-locks below stamp them onto the continuation NoteLock (note_e is
+    // quote, note_f is base) so the NEXT batch that consumes the continuation
+    // reads back a correct mint.
+    let (lock_a_mint, lock_b_mint) = {
+        let la = ctx.accounts.note_lock_a.load()?;
+        let lb = ctx.accounts.note_lock_b.load()?;
+        (la.token_mint, lb.token_mint)
+    };
     {
-        let (lock_a_mint, lock_b_mint) = {
-            let la = ctx.accounts.note_lock_a.load()?;
-            let lb = ctx.accounts.note_lock_b.load()?;
-            (la.token_mint, lb.token_mint)
-        };
-
-        // Quote mint is the lock_a's mint (buyer pays quote → note_a is quote).
-        // Base mint is lock_b's mint (seller pays base → note_b is base).
         let leaf = compute_match_leaf(&payload, &lock_a_mint, &lock_b_mint)?;
         let computed_root = walk_merkle_path_n16(&leaf, match_index, &merkle_proof)?;
 
@@ -516,6 +518,7 @@ pub fn tee_forced_settle_batched_handler(
             &ctx.accounts.tee_authority,
             &ctx.accounts.system_program,
             &payload.note_e_commitment,
+            &lock_a_mint, // note_e is the buyer's change → QUOTE
             &payload.buyer_relock_order_id,
             payload.buyer_relock_expiry,
             payload.buyer_change_amt,
@@ -527,6 +530,7 @@ pub fn tee_forced_settle_batched_handler(
             &ctx.accounts.tee_authority,
             &ctx.accounts.system_program,
             &payload.note_f_commitment,
+            &lock_b_mint, // note_f is the seller's change → BASE
             &payload.seller_relock_order_id,
             payload.seller_relock_expiry,
             payload.seller_change_amt,
