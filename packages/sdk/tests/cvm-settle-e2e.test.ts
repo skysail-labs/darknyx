@@ -250,8 +250,18 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       const anchor = await t.step("oracle anchor (Hermes)", () => fetchOracleAnchor());
       const bidPrice = (anchor * 12n) / 10n;
       const askPrice = (anchor * 8n) / 10n;
+      // In FILLS mode we validate the anchor-pool partial-fill CONTINUATION: the
+      // buyer over-buys (bids 2× the seller's qty) so only BASE_QTY crosses and
+      // the residual relocks onto anchor[0]. That relock is the ONLY path that
+      // rewrites note_e to an anchor-based change note (reconstructChangeNote)
+      // AND emits a live FillMemo (assign_continuation_anchors) — both fills
+      // assertions are continuation-only, so a full fill can't exercise them.
+      // Without FILLS we keep the simpler full-fill settle check (BUY_QTY=BASE_QTY).
+      // Override the multiplier with NYX_CVM_BUY_MULT.
+      const BUY_MULT = BigInt(process.env.NYX_CVM_BUY_MULT ?? (FILLS ? "2" : "1"));
+      const BUY_QTY = BASE_QTY * BUY_MULT;
       console.log(
-        `  · BASE_QTY=${BASE_QTY} bid=${bidPrice} ask=${askPrice} feeBps=${FEE_RATE_BPS} sellerBaseFee=${(BASE_QTY * FEE_RATE_BPS) / 10_000n}`,
+        `  · BASE_QTY=${BASE_QTY} buyQty=${BUY_QTY} (mult ${BUY_MULT}${FILLS ? ", partial-fill continuation" : ""}) bid=${bidPrice} ask=${askPrice} feeBps=${FEE_RATE_BPS}`,
       );
 
       // The tree must be empty (fresh reset) so our deposits land at 0,1
@@ -293,7 +303,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       // collateral_amount; intake accepts note ≥ required and the matcher returns
       // the surplus as an (even bigger) change note. Default 0 ⇒ exact-at-limit.
       const BUYER_SURPLUS = BigInt(process.env.NYX_CVM_BUYER_SURPLUS ?? "0");
-      const buyerNoteAmt = withFee(BASE_QTY * bidPrice) + BUYER_SURPLUS;
+      const buyerNoteAmt = withFee(BUY_QTY * bidPrice) + BUYER_SURPLUS;
       const sellerNoteAmt = withFee(BASE_QTY);
 
       await t.step("mint collateral (ATAs + mintTo)", () =>
@@ -382,6 +392,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
         note: typeof buyerNote,
         vi: { proofBytes: Uint8Array; root: Uint8Array },
         orderIndex: number,
+        qty: bigint,
       ) {
         // Deterministic per (seed, n) — buyer + seller have distinct seeds, so
         // the same n yields distinct ids. Recoverable by the fills gap-scan.
@@ -393,7 +404,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
           symbol: new TextEncoder().encode(SYMBOL),
           side,
           orderType: OrderType.Limit,
-          amount: BASE_QTY,
+          amount: qty,
           priceLimit,
           minFillSize: 0n,
           expirySlot,
@@ -408,7 +419,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
           symbol: SYMBOL,
           side: side === OrderSide.Bid ? "bid" : "ask",
           order_type: "limit",
-          amount: Number(BASE_QTY),
+          amount: Number(qty),
           price_limit: Number(priceLimit),
           min_fill_size: 0,
           expiry_slot: Number(expirySlot),
@@ -430,8 +441,8 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
           anchors: anchorsToJson(pool.anchors),
         };
       }
-      const buyerOrder = await buildOrder(buyer, OrderSide.Bid, bidPrice, buyerNote, buyerVI, ORDER_N);
-      const sellerOrder = await buildOrder(seller, OrderSide.Ask, askPrice, sellerNote, sellerVI, ORDER_N);
+      const buyerOrder = await buildOrder(buyer, OrderSide.Bid, bidPrice, buyerNote, buyerVI, ORDER_N, BUY_QTY);
+      const sellerOrder = await buildOrder(seller, OrderSide.Ask, askPrice, sellerNote, sellerVI, ORDER_N, BASE_QTY);
 
       // ── 5. auth + submit both orders to the CVM ────────────────────
       const tokRes = await t.step("auth/token (CVM)", () =>
@@ -565,15 +576,23 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
 
         // The durable path recovers the spendable opening from the seed alone
         // (the anchor-index search = the Vuln-4 integrity check): the commitment
-        // must reproduce exactly.
+        // must reproduce exactly. This ONLY succeeds for an anchor-based
+        // CONTINUATION note (partial fill) — proving the buyer's residual
+        // relocked onto an anchor, which is the whole point of the anchor pool.
         const rec = await reconstructChangeNote(change!, {
           masterSeed: buyer.masterSeed,
           ownerCommitment: buyer.ownerCommit,
           baseMint: baseMint.toBytes(),
           quoteMint: quoteMint.toBytes(),
         });
-        expect(rec, "could not reconstruct the change note from the indexer fill").not.toBeNull();
+        expect(
+          rec,
+          "could not reconstruct the change note — note_e is not anchor-based (was this a full fill, not a continuation?)",
+        ).not.toBeNull();
         expect(rec!.commitment).toBe(change!.changeNoteCommitment);
+        // The continuation consumed an anchor from the pool (index ≥ 0).
+        expect(rec!.anchorIndex, "continuation did not consume an anchor").toBeGreaterThanOrEqual(0);
+        console.log(`  · continuation note recovered at anchor index ${rec!.anchorIndex}`);
 
         // Live: the per-account WS delivered + verified the same memo.
         await t.step("live WS fill delivery", async () => {
