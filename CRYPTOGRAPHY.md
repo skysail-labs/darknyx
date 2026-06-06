@@ -445,8 +445,18 @@ in the canonical bytes); intake checks `collateral_amount ≥ floor` and the
 matcher returns the surplus as a change note via the same `change = note_amount
 − charge` path price-improvement already uses (`algorithm.rs`). So a user
 deposits once and trades many sizes up to their largest single note; the
-surplus rides the anchor-pool/fills path and is client-recoverable. (Orders
-larger than any single note need the deferred in-pool note-**merge** primitive.)
+surplus rides the anchor-pool/fills path and is client-recoverable.
+
+**Note merge (orders larger than any single note).** An in-pool consolidation
+primitive (`vault::merge` + the `VALID_MERGE(K)` circuit, K∈{2,4}): consume K
+input notes (same owner + mint, each proven in the tree) and mint ONE output
+note = their sum — no external transfer, `OutstandingMint` unchanged. The output
+is a normal tree leaf, recoverable from the seed (`deriveMergeInnerHash`), so
+it's spendable like a deposit. The wallet's `consolidate` greedily merges the
+largest notes (fewest inputs → cheapest proof) and **chains** for >K, then the
+merged note feeds an over-collateralized order. `VALID_MERGE` pads unused slots
+(an `isActive[i]` flag, public nullifier 0) so K=4 merges 2–4 notes; both K fit
+pot16. See §7.5.
 
 **Tracking balance.** There is no account→balance server mapping (a privacy
 choice). A user's balance is the sum of their own UNSPENT notes — deposits
@@ -531,9 +541,10 @@ The depth is enforced consistently in:
 
 ---
 
-## 7. The four ZK circuits
+## 7. The ZK circuits
 
-Four Groth16 circuits ship. The matching/settlement validity proof,
+Four trade-path Groth16 circuits ship, plus the auxiliary `VALID_MERGE(K)`
+consolidation circuit (§7.5). The matching/settlement validity proof,
 `VALID_MATCH_BATCH`, proves **output-note construction + price-band +
 conservation** for an entire batch (≤ N=16 matches) in one proof — it is
 what earlier designs split across separate `VALID_CREATE` (output-note
@@ -547,8 +558,12 @@ circuits were removed.
 | `VALID_SPEND` | ~7,000 | 5 | Prove note ownership + Merkle inclusion at withdraw time |
 | `VALID_INPUT` | ~5,500 | 5 | Prove note ownership + Merkle inclusion at **lock** time, without revealing a nullifier |
 | `VALID_MATCH_BATCH` | 162,947 (N=16) | 1 | Output-note construction + price band + conservation for every match in a batch, hashed into one batch Merkle root (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
+| `VALID_MERGE` (K=2) | ~26,000 | 6 | In-pool note consolidation: K inputs (same owner+mint, Merkle-proven) → one summed output note (§5 / §7.5) |
+| `VALID_MERGE` (K=4) | ~50,000 | 8 | Same, up to 4 inputs (dummy-padded for 2–3); chained for >4 |
 
-The first three use the **`pot16` Powers-of-Tau** file
+The trade-path circuits are the first four; `VALID_MERGE(K)` is an auxiliary
+consolidation circuit (its own ix, `vault::merge`, not part of settle).
+The first three + both `VALID_MERGE` use the **`pot16` Powers-of-Tau** file
 (`scripts/ptau/powersOfTau28_hez_final_16.ptau`, 2^16 capacity).
 `VALID_MATCH_BATCH` at N=16 needs **`pot18`** (~288 MB, 2^18 capacity)
 because its constraints exceed 2^16 — `scripts/download-ptau.sh` fetches
@@ -775,6 +790,75 @@ the on-chain `compute_match_leaf`).
 [`tee_forced_settle_batched.rs`](../programs/vault/tests/tee_forced_settle_batched.rs)
 (litesvm — drives two real matches through one shared marker;
 catches the "close after every match" 1:N-marker regression).
+
+---
+
+### 7.5 `VALID_MERGE(K)`
+
+An **auxiliary** circuit (not part of settle): in-pool note consolidation.
+It backs the `vault::merge` instruction, which consumes K input notes and
+mints ONE output note = their sum. This is what lets a user trade an order
+**larger than any single note** — the wallet consolidates fragments into one
+note ≥ the order, then places it as an over-collateralized order (§5).
+
+Instantiated at **K ∈ {2, 4}** (`circuits/valid_merge_k2`,
+`valid_merge_k4`). The wallet picks K=2 for ≤2 inputs, K=4 for 3–4 (the
+spare slots are dummy-padded), and **chains** merges for >4.
+
+```
+            For each slot i ∈ [0, K):
+            ┌────────────────────────────────────────────┐
+            │  isActive[i] ∈ {0,1}  (boolean-constrained) │
+            │  commit_i := Poseidon6(DOMAIN_NOTE,         │
+            │     mint_lo, mint_hi, amount[i],            │
+            │     owner_commitment, innerHash[i])         │
+            │  root_i := MerkleRootFromLeaf(commit_i,     │  ← compute-only;
+            │              path[i], idx[i])               │     no hard assert
+            │  isActive[i]·(root_i − merkleRoot) === 0    │  ← conditional bind
+            │  null_i := Poseidon3(DOMAIN_NULL,           │
+            │              spendingKey, innerHash[i])     │
+            │  isActive[i]·(null_i − nullifiers[i]) === 0 │
+            │  (1−isActive[i])·nullifiers[i] === 0        │  ← dummy ⇒ public 0
+            │  Num2Bits(64)(amount[i])                    │
+            └────────────────┬───────────────────────────┘
+                             ▼
+            outputAmount := Σ isActive[i]·amount[i]   (Num2Bits(64))
+            outputCommitment === Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi,
+                                  outputAmount, owner_commitment,
+                                  outputInnerHash)
+```
+
+Public inputs: `merkleRoot`, `outputCommitment`, `tokenMint[2]`,
+`nullifiers[K]` — **6 for K=2, 8 for K=4**. Private: one shared
+`spendingKey` + `ownerCommitmentBlinding` (this is what enforces *all K notes
+belong to the same owner*), `outputInnerHash`, and per-slot `isActive`,
+`amount`, `innerHash`, `merklePath[20]`, `merkleIndices[20]`.
+
+The one real subtlety is the **dummy slots**. `MerkleTreeChecker` (used by
+VALID_SPEND/INPUT) hard-asserts `root === computed`, which a padded slot
+can't satisfy — so merge uses a compute-only `MerkleRootFromLeaf(depth)` (the
+same Switcher/Poseidon2 ladder, but it *outputs* the root) and binds it
+conditionally: `isActive[i]·(root_i − merkleRoot) === 0`. An inactive slot
+sets `isActive[i]=0`, must carry public `nullifiers[i]===0` (a real nullifier
+is a Poseidon output, never 0), and contributes 0 to the sum. The on-chain
+`merge` ix creates a `NullifierEntry` PDA only for each **non-zero**
+nullifier (the replay guard), so a padded slot can't smuggle a spend.
+
+Conservation: K notes consumed + 1 minted, same mint, same total ⇒ **no
+`OutstandingMint` change** (unlike withdraw — the pool still owes the same
+total). The output note is a normal tree leaf with a seed-recoverable
+`inner_hash` (`deriveMergeInnerHash`), so it's spendable exactly like a
+deposit — no tree reset (merge ADDS a circuit, reusing the v2 note
+construction).
+
+**Tests**:
+[`merge-prover.test.ts`](../packages/sdk/tests/merge-prover.test.ts)
+(snarkjs K=2 / padded-K=4 round-trip + tamper rejection),
+[`merge_verify.rs`](../programs/vault/tests/merge_verify.rs) (on-chain
+verify + public-input wire order),
+[`devnet-merge.test.ts`](../packages/sdk/tests/devnet-merge.test.ts)
+(deposit → merge → withdraw the consolidated note round-trips, gated
+`RUN_DEVNET_MERGE`).
 
 ---
 

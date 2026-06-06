@@ -594,6 +594,24 @@ Run `devnet-setup.test.ts` first if `.devnet/e2e-config.json` is missing
 (it writes the mints + settle ALT + protocol config every other devnet
 test reads).
 
+`devnet-merge.test.ts` is the sibling for the **in-pool note merge** ix
+(`VALID_MERGE`) — also no CVM, no TEE (merge is a pure vault tx). It resets
+the tree, deposits two notes, merges them (K=2) into one, then withdraws the
+merged note with a VALID_SPEND proof and asserts the consolidated amount
+round-trips (and `leaf_count` 2 → 3: two inputs nullified, one output leaf).
+
+```sh
+SOLANA_RPC_URL="$HELIUS" RUN_DEVNET_MERGE=1 \
+  ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+  FUNDER_KEYPAIR=~/.config/solana/id.json \
+  bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-merge.test.ts'
+```
+
+Build the merge circuits first if `circuits/build/valid_merge_k{2,4}/` is
+missing (`bash scripts/build-circuits.sh` — they're in the list; pot16, no
+new ptau). The deployed vault must carry the `merge` ix + the
+`vk_valid_merge_k{2,4}.rs` consts.
+
 ---
 
 ## 9. Resetting state

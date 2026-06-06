@@ -581,3 +581,69 @@ fn over_collateralized_bid_returns_the_surplus_as_change() {
         m.buyer_change_amt
     );
 }
+
+// ─────── Over-collateralized order that PARTIALLY fills ─────────────────────
+//
+// The scenario behind the merge work: lock a note LARGER than the order needs,
+// and only part of the order fills this batch. The filled portion settles; the
+// residual rotates onto the change note (which now holds the unfilled-portion
+// collateral + the over-collateral surplus) and stays in the book, STILL
+// over-collateralized, to continue next batch. Confirms over-collateralization
+// composes with the partial-fill continuation — no special handling needed.
+
+#[test]
+fn over_collateralized_bid_partial_fill_keeps_residual_over_collateralized() {
+    // Bid: qty 20 @ 100 (nominal 2000) but locks 2500 (500 surplus).
+    let mut bid = pseed(0, 0, 100, 20, 1_000_000);
+    bid.note_amount = 2500;
+    let ask = pseed(1, 1, 100, 5, 1_000_000); // only 5 available → partial fill
+    let out = run_batch(
+        &book_of(vec![bid, ask]),
+        &oracle(100),
+        &config(100_000, 0),
+        1,
+        0,
+    )
+    .expect("matcher");
+
+    assert_eq!(out.matches.len(), 1);
+    let m = &out.matches[0];
+    assert_eq!(m.base_amt, 5);
+    assert_eq!(m.quote_amt, 500);
+    // The change absorbs everything left: unfilled 15 @ 100 + the 500 surplus.
+    assert_eq!(m.buyer_change_amt, 2500 - 500);
+
+    // The residual (qty 15) rotates onto the change note and stays in the book.
+    let bid_oid = {
+        let mut o = [0u8; 16];
+        o[0] = 1;
+        o[2..10].copy_from_slice(&100u64.to_le_bytes());
+        o[15] = 1;
+        o
+    };
+    let upd = out
+        .order_updates
+        .iter()
+        .find(|u| u.order_id == bid_oid)
+        .expect("bid update");
+    match &upd.kind {
+        OrderUpdateKind::PartiallyFilled {
+            new_amount,
+            new_note_amount,
+            ..
+        } => {
+            assert_eq!(*new_amount, 15, "residual qty");
+            assert_eq!(
+                *new_note_amount, 2000,
+                "residual collateral = the change note"
+            );
+            assert!(
+                *new_note_amount >= 15 * 100,
+                "residual must stay over-collateralized ({} >= {})",
+                new_note_amount,
+                15 * 100
+            );
+        }
+        other => panic!("expected PartiallyFilled, got {other:?}"),
+    }
+}
