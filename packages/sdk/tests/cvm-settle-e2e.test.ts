@@ -168,11 +168,22 @@ interface Persona {
   userCommitment: Uint8Array; // 32B BE
 }
 
+// Per-run salt so the persona's seed-derived keys — and therefore the
+// amount-INDEPENDENT v2 nullifiers (Poseidon3(DOMAIN_NULL, spending_key,
+// inner_hash)) — are fresh each run. Without this the deposit inner_hash
+// (deriveBlindingFactor(masterSeed, leafIndex) at a fixed masterSeed + fresh
+// tree leaf 0/1) repeats, so the settle's NullifierEntry PDA collides on the
+// 2nd run with "Allocate: account already in use". Randomising BASE_QTY only
+// freshens the commitment (ConsumedNoteEntry), NOT the nullifier.
+const RUN_SALT = BigInt(process.env.NYX_CVM_RUN_SALT ?? String(Date.now()));
+
 async function makePersona(name: string, seed0: number): Promise<Persona> {
   const payer = loadOrCreateKeypair(resolve(REPO_ROOT, `.devnet/keypairs/${name}-payer.json`));
   const trading = loadOrCreateKeypair(resolve(REPO_ROOT, `.devnet/keypairs/${name}-trading.json`));
   const masterSeed = new Uint8Array(64);
-  for (let i = 0; i < 64; i++) masterSeed[i] = (seed0 + i * 7) & 0xff;
+  for (let i = 0; i < 64; i++) {
+    masterSeed[i] = (seed0 + i * 7 + Number((RUN_SALT >> BigInt(i % 53)) & 0xffn)) & 0xff;
+  }
   const spendingKey = deriveSpendingKey(masterSeed);
   const viewingKey = deriveMasterViewingKey(masterSeed);
   const ownerBlinding = BigInt(seed0) + 0xfeedn;
@@ -524,10 +535,15 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
 
         // Durable: poll the local indexer until it has decoded the buyer's
         // change note from the on-chain settle. The indexer tracks FINALIZED,
-        // which lags the CONFIRMED leaf_count above by a few slots.
+        // which lags the CONFIRMED leaf_count above — and the watcher only
+        // ingests a settle once it finalizes (~13-30s) AND its poll cycle
+        // reaches it. The leaf_count wait above already burned part of the
+        // budget at CONFIRMED, so give finalization a generous window
+        // (override with NYX_CVM_INDEXER_TIMEOUT_MS).
+        const IDX_TIMEOUT_MS = Number(process.env.NYX_CVM_INDEXER_TIMEOUT_MS ?? "120000");
         let idxFills = await fetchOrderFills(INDEXER_URL, buyerId);
         await t.step("indexer fill delivery (finalized lag)", async () => {
-          const fDeadline = Date.now() + 60_000;
+          const fDeadline = Date.now() + IDX_TIMEOUT_MS;
           while (Date.now() < fDeadline && !idxFills.some((f) => f.changeNoteCommitment)) {
             await new Promise((r) => setTimeout(r, 3000));
             idxFills = await fetchOrderFills(INDEXER_URL, buyerId);
@@ -577,6 +593,7 @@ maybeDescribe("Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM 
       wsSub?.close();
       t.report("cvm-settle-e2e: deposit → CVM match → CVM settle → fills");
     },
-    SETTLE_TIMEOUT_MS + 120_000,
+    // settle wait + the (widened) indexer finalization window + WS + slack.
+    SETTLE_TIMEOUT_MS + 180_000,
   );
 });
