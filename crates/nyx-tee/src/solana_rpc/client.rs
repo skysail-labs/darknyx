@@ -265,9 +265,25 @@ impl SolanaRpcClient {
     }
 
     /// `sendTransaction` — accepts the already-base64-encoded
-    /// signed tx bytes. Returns the signature (base58).
+    /// signed tx bytes. Returns the signature (base58). Runs
+    /// preflight (the dev safety net).
     pub async fn send_transaction(&self, tx_b64: &str) -> Result<String, RpcError> {
-        // `skipPreflight=false` keeps the safety net during dev;
+        self.send_transaction_opts(tx_b64, false).await
+    }
+
+    /// `sendTransaction` with an explicit `skip_preflight`. The settle
+    /// Tx D rebroadcast loop ([`crate::settle::submit::send_and_confirm_with_rebroadcast`])
+    /// validates the tx with preflight on the FIRST send, then re-pushes the
+    /// identical (idempotent — the network dedups by signature) signed tx with
+    /// `skip_preflight=true` so each resend is a cheap re-broadcast to more
+    /// leaders, not a full re-simulation (which also avoids a spurious
+    /// preflight failure if the resend hits a leader whose bank fork hasn't yet
+    /// processed the per-batch ALT extend).
+    pub async fn send_transaction_opts(
+        &self,
+        tx_b64: &str,
+        skip_preflight: bool,
+    ) -> Result<String, RpcError> {
         // `preflightCommitment` matches our default.
         //
         // `maxRetries` is intentionally NOT pinned to 0: the big v0
@@ -285,7 +301,7 @@ impl SolanaRpcClient {
             tx_b64,
             {
                 "encoding": "base64",
-                "skipPreflight": false,
+                "skipPreflight": skip_preflight,
                 "preflightCommitment": self.commitment,
             }
         ]);

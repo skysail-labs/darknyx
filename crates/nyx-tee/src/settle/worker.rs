@@ -46,7 +46,9 @@ use super::pipeline::build_settle_v0_tx_b64;
 use super::scheduler::SettleSchedulerState;
 use super::settle_batched::{batch_alt_addresses, build_settle_batched_ix};
 use super::sign::sign_payload;
-use super::submit::{confirm_signatures, submit_ixs, submit_ixs_with_blockhash};
+use super::submit::{
+    confirm_signatures, send_and_confirm_with_rebroadcast, submit_ixs, submit_ixs_with_blockhash,
+};
 use super::submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockSideInputs};
 use super::verify_match_batch::{build_verify_match_batch_ix, VerifyMatchBatchArgs};
 use crate::prover::{merkle_inclusion_path, MatchSlotWitness, Prover};
@@ -438,11 +440,15 @@ async fn run_batch_settle_inner(
             &alts,
             Hash::new_from_array(bh.blockhash),
         )?;
-        let settle_sig = ctx.rpc.send_transaction(&tx_b64).await?;
-        confirm_signatures(
+        // Tx D references a brand-new per-batch ALT; the first broadcast is
+        // routinely dropped until the ALT activates network-wide. Rebroadcast
+        // the identical signed tx every ~1.5 s until it confirms instead of
+        // waiting on the RPC's lazy rebroadcast (the ~10-14 s settle stall).
+        let settle_sig = send_and_confirm_with_rebroadcast(
             &ctx.rpc,
-            std::slice::from_ref(&settle_sig),
+            &tx_b64,
             ctx.confirm_timeout,
+            Duration::from_millis(1500),
         )
         .await?;
 

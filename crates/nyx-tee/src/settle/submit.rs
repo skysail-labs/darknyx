@@ -58,6 +58,78 @@ pub async fn submit_ixs_with_blockhash(
     rpc.send_transaction(&tx_b64).await
 }
 
+/// Send a pre-built base64 tx, then poll until it confirms at the client's
+/// commitment, REBROADCASTING the identical signed tx every `resend_every`
+/// until it lands. Returns the (stable) signature once confirmed.
+///
+/// This is the fix for the per-batch-ALT settle stall (Tx D): a freshly
+/// created/extended Address Lookup Table's new entries can take several slots
+/// to become loadable network-wide, so the leader that receives the first
+/// broadcast often drops the tx (it can't resolve the ALT yet) — and the lone
+/// initial `send_transaction` then relies on the RPC node's own lazy
+/// rebroadcast cadence, which on devnet leaves Tx D unconfirmed for ~10-14 s.
+/// Re-pushing the same signature every ~1.5 s lets the tx land the moment the
+/// ALT activates instead of waiting on the RPC. Resends use `skip_preflight`
+/// (the first send already validated via preflight; the network dedups by
+/// signature, so resends are idempotent and cheap).
+///
+/// Errors if the tx reverts (carries the on-chain err) or `timeout` elapses.
+pub async fn send_and_confirm_with_rebroadcast(
+    rpc: &SolanaRpcClient,
+    tx_b64: &str,
+    timeout: std::time::Duration,
+    resend_every: std::time::Duration,
+) -> Result<String, RpcError> {
+    let start = std::time::Instant::now();
+    // First send WITH preflight — validates the tx once.
+    let sig = rpc.send_transaction(tx_b64).await?;
+    let mut last_send = std::time::Instant::now();
+    let mut resends = 0u32;
+    let mut interval = std::time::Duration::from_millis(250);
+
+    loop {
+        let statuses = rpc
+            .get_signature_statuses(std::slice::from_ref(&sig))
+            .await?;
+        match statuses.first() {
+            Some(Some(s)) if s.err.is_some() => {
+                return Err(RpcError::Schema(format!(
+                    "settle tx ({sig}) reverted: err={:?}",
+                    s.err
+                )));
+            }
+            Some(Some(s)) if s.confirmed_at_commitment == Some(true) => {
+                if resends > 0 {
+                    tracing::debug!(
+                        %sig,
+                        resends,
+                        elapsed_ms = start.elapsed().as_millis() as u64,
+                        "settle tx confirmed after rebroadcast(s)"
+                    );
+                }
+                return Ok(sig);
+            }
+            _ => {}
+        }
+        if start.elapsed() >= timeout {
+            return Err(RpcError::Schema(format!(
+                "settle tx ({sig}) did not confirm within {timeout:?} ({resends} rebroadcast(s))"
+            )));
+        }
+        // Rebroadcast the identical tx (skip preflight) so a leader that dropped
+        // the first copy gets another chance once the ALT is loadable. Resend
+        // errors (e.g. transient RPC) are non-fatal — keep polling.
+        if last_send.elapsed() >= resend_every {
+            if rpc.send_transaction_opts(tx_b64, true).await.is_ok() {
+                resends += 1;
+            }
+            last_send = std::time::Instant::now();
+        }
+        tokio::time::sleep(interval).await;
+        interval = (interval * 2).min(std::time::Duration::from_secs(1));
+    }
+}
+
 /// Poll `getSignatureStatuses` until every signature in `sigs` is
 /// confirmed at the client's commitment OR `timeout` elapses.
 /// Returns `Ok(())` once all confirm; `Err` if any tx reverts
