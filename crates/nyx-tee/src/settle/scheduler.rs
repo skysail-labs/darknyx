@@ -24,8 +24,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use darkpool_matcher::match_result::RunBatchOutput;
-use tokio::sync::{mpsc, RwLock};
-use tokio::task::JoinHandle;
+use tokio::sync::{mpsc, RwLock, Semaphore};
+use tokio::task::{JoinHandle, JoinSet};
+
+/// Max batches the settle pipeline drives CONCURRENTLY. Pipelining overlaps
+/// batch N's ~14 s ALT-activation + settle wait with batch N+1's prove/lock,
+/// taking the (serial) prover from ~14% utilization toward saturated. Bounded
+/// at 3: the prover serializes the prove steps and the rolling ALT pool
+/// serializes the ALT op anyway (worker.rs holds its lock across that), so a
+/// small bound captures most of the win without unbounded RPC/work fan-out.
+/// Acquiring a permit before each batch back-pressures the matcher channel.
+const SETTLE_CONCURRENCY: usize = 3;
 
 use super::assemble::{assemble_batch, BatchAssemblyParams};
 use super::job::{BatchId, JobStatus, MatchIdx, SettleJob, SettleJobId};
@@ -151,8 +160,9 @@ pub struct SettleScheduler {
     rx: mpsc::Receiver<RunBatchOutput>,
     state: Arc<RwLock<SettleSchedulerState>>,
     /// `Some` drives each batch through the full on-chain pipeline;
-    /// `None` is enqueue-only.
-    settle: Option<SettleDriver>,
+    /// `None` is enqueue-only. `Arc` so each batch's pipeline runs in its own
+    /// spawned task (bounded concurrency — see [`SETTLE_CONCURRENCY`]).
+    settle: Option<Arc<SettleDriver>>,
 }
 
 impl SettleScheduler {
@@ -185,7 +195,11 @@ impl SettleScheduler {
         state: Arc<RwLock<SettleSchedulerState>>,
         settle: Option<SettleDriver>,
     ) -> JoinHandle<()> {
-        let scheduler = Self { rx, state, settle };
+        let scheduler = Self {
+            rx,
+            state,
+            settle: settle.map(Arc::new),
+        };
         tokio::spawn(scheduler.run())
     }
 
@@ -202,14 +216,39 @@ impl SettleScheduler {
             );
         }
 
+        // Bounded settle pipeline: each batch is driven in its own task, up to
+        // SETTLE_CONCURRENCY at once. The semaphore permit is acquired BEFORE
+        // spawning, so when the pipeline is full the recv loop blocks on
+        // `acquire` — back-pressuring the matcher channel rather than fanning
+        // out unbounded work. The JoinSet lets us drain in-flight batches when
+        // the channel closes (so a shutdown — and tests — wait for completion).
+        let semaphore = Arc::new(Semaphore::new(SETTLE_CONCURRENCY));
+        let mut tasks: JoinSet<()> = JoinSet::new();
+
         while let Some(output) = self.rx.recv().await {
             if let Some(batch_id) = self.enqueue_batch(&output).await {
-                if let Some(driver) = self.settle.as_ref() {
-                    self.drive_batch(driver, batch_id, &output).await;
+                if let Some(driver) = self.settle.clone() {
+                    // `acquire_owned` never errors here — the semaphore is never
+                    // closed while the loop runs.
+                    let permit = semaphore
+                        .clone()
+                        .acquire_owned()
+                        .await
+                        .expect("settle semaphore");
+                    let state = self.state.clone();
+                    let output = output.clone();
+                    tasks.spawn(async move {
+                        let _permit = permit; // released when the batch finishes
+                        drive_batch(&driver, &state, batch_id, &output).await;
+                    });
                 }
             }
+            // Reap completed tasks so the JoinSet doesn't grow unbounded.
+            while tasks.try_join_next().is_some() {}
         }
 
+        // Channel closed — drain the batches still settling before exiting.
+        while tasks.join_next().await.is_some() {}
         tracing::info!("settle scheduler: matches channel closed; exiting");
     }
 
@@ -249,69 +288,85 @@ impl SettleScheduler {
         );
         Some(batch_id)
     }
+}
 
-    /// Assemble + settle one batch, then evict its openings. Failures
-    /// mark the batch's jobs `Failed` (assembly errors here; on-chain
-    /// errors inside `run_batch_settle`).
-    async fn drive_batch(&self, driver: &SettleDriver, batch_id: BatchId, output: &RunBatchOutput) {
-        let now_slot = driver.current_slot.load(Ordering::Relaxed);
-        let params = BatchAssemblyParams {
-            batch_id,
-            base_mint: driver.cfg.base_mint,
-            quote_mint: driver.cfg.quote_mint,
-            protocol_owner_commitment: driver.cfg.protocol_owner_commitment,
-            fee_slot: now_slot,
-            circuit_n: driver.cfg.circuit_n,
-        };
+/// Assemble + settle one batch, then evict its openings. Failures mark the
+/// batch's jobs `Failed` (assembly errors here; on-chain errors inside
+/// `run_batch_settle`). A free fn (not a method) so it can run in its own
+/// spawned task off `Arc<SettleDriver>` + the shared scheduler state.
+async fn drive_batch(
+    driver: &SettleDriver,
+    state: &Arc<RwLock<SettleSchedulerState>>,
+    batch_id: BatchId,
+    output: &RunBatchOutput,
+) {
+    let now_slot = driver.current_slot.load(Ordering::Relaxed);
+    let params = BatchAssemblyParams {
+        batch_id,
+        base_mint: driver.cfg.base_mint,
+        quote_mint: driver.cfg.quote_mint,
+        protocol_owner_commitment: driver.cfg.protocol_owner_commitment,
+        fee_slot: now_slot,
+        circuit_n: driver.cfg.circuit_n,
+    };
 
-        // Assemble under a brief read lock on the opening store, then
-        // release it before the (long, RPC + proving) settle.
-        let assembled = {
-            let st = driver.matcher_state.read().await;
-            assemble_batch(output, st.openings(), params)
-        };
-        let inputs = match assembled {
-            Ok(i) => i,
-            Err(e) => {
-                tracing::error!(batch_id, error = %e, "settle: batch assembly failed");
-                self.fail_batch(batch_id, output.matches.len(), format!("assembly: {e}"))
-                    .await;
-                return;
-            }
-        };
-
-        if let Err(e) = run_batch_settle(&driver.ctx, inputs).await {
-            // run_batch_settle already marked the jobs Failed. Debug-format
-            // so the RpcError `data` (preflight sim logs — which program +
-            // log line reverted) is captured, not just code+message.
-            tracing::error!(batch_id, error = ?e, "settle: batch settle failed");
+    // Assemble under a brief read lock on the opening store, then
+    // release it before the (long, RPC + proving) settle.
+    let assembled = {
+        let st = driver.matcher_state.read().await;
+        assemble_batch(output, st.openings(), params)
+    };
+    let inputs = match assembled {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::error!(batch_id, error = %e, "settle: batch assembly failed");
+            fail_batch(
+                state,
+                batch_id,
+                output.matches.len(),
+                format!("assembly: {e}"),
+            )
+            .await;
             return;
         }
+    };
 
-        // Success — drop the now-spent openings (after close confirmed).
-        {
-            let mut st = driver.matcher_state.write().await;
-            for m in &output.matches {
-                st.openings_mut().remove(&m.note_buyer);
-                st.openings_mut().remove(&m.note_seller);
-            }
-        }
-        tracing::info!(
-            batch_id,
-            matches = output.matches.len(),
-            "settle: batch settled; openings evicted"
-        );
+    if let Err(e) = run_batch_settle(&driver.ctx, inputs).await {
+        // run_batch_settle already marked the jobs Failed. Debug-format
+        // so the RpcError `data` (preflight sim logs — which program +
+        // log line reverted) is captured, not just code+message.
+        tracing::error!(batch_id, error = ?e, "settle: batch settle failed");
+        return;
     }
 
-    async fn fail_batch(&self, batch_id: BatchId, n: usize, reason: String) {
-        let mut state = self.state.write().await;
-        for idx in 0..n.min(u8::MAX as usize) {
-            let id = SettleJobId {
-                batch_id,
-                match_idx: idx as u8,
-            };
-            state.update(&id, |j| j.fail(reason.clone()));
+    // Success — drop the now-spent openings (after close confirmed).
+    {
+        let mut st = driver.matcher_state.write().await;
+        for m in &output.matches {
+            st.openings_mut().remove(&m.note_buyer);
+            st.openings_mut().remove(&m.note_seller);
         }
+    }
+    tracing::info!(
+        batch_id,
+        matches = output.matches.len(),
+        "settle: batch settled; openings evicted"
+    );
+}
+
+async fn fail_batch(
+    state: &Arc<RwLock<SettleSchedulerState>>,
+    batch_id: BatchId,
+    n: usize,
+    reason: String,
+) {
+    let mut state = state.write().await;
+    for idx in 0..n.min(u8::MAX as usize) {
+        let id = SettleJobId {
+            batch_id,
+            match_idx: idx as u8,
+        };
+        state.update(&id, |j| j.fail(reason.clone()));
     }
 }
 

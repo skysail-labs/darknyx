@@ -323,74 +323,89 @@ async fn run_batch_settle_inner(
         // all stay under the 1232-byte cap, not just match 0's.
         let alt_addrs =
             batch_alt_addresses(inputs.matches.iter().map(|m| &m.payload), &merkle_root);
-        let plan = ctx.alt_pool.lock().await.plan(alt_addrs.len());
-        let bh = ctx.rpc.get_latest_blockhash().await?;
-        match plan {
-            AltPlan::Create { deactivate } => {
-                // Rotation: best-effort deactivate the old, full ALT so its
-                // rent can be reclaimed after the 512-slot cooldown. A failure
-                // here must NOT block the settle — the old ALT just lingers
-                // (a later reclaim sweep can retry).
-                let mut deactivated = None;
-                if let Some(old) = deactivate {
-                    let deact_ix = build_deactivate_alt_ix(&tee_pubkey, &old);
-                    match submit_ixs_with_blockhash(
+        // Hold the pool lock across the WHOLE ALT op (plan + create/extend tx +
+        // commit + capturing THIS batch's table), so concurrent batches (the
+        // pipelined scheduler) serialize ONLY here — their prove + settle-wait
+        // still overlap. Capturing `settle_account()` while still locked is
+        // required: once we release, another in-flight batch may extend/rotate
+        // the pool and a later read would return the wrong table.
+        let per_batch_alt = {
+            let mut pool = ctx.alt_pool.lock().await;
+            let plan = pool.plan(alt_addrs.len());
+            let bh = ctx.rpc.get_latest_blockhash().await?;
+            match plan {
+                AltPlan::Create { deactivate } => {
+                    // Rotation: best-effort deactivate the old, full ALT so its
+                    // rent can be reclaimed after the 512-slot cooldown. A
+                    // failure here must NOT block the settle — the old ALT just
+                    // lingers (a later reclaim sweep can retry).
+                    let mut deactivated = None;
+                    if let Some(old) = deactivate {
+                        let deact_ix = build_deactivate_alt_ix(&tee_pubkey, &old);
+                        match submit_ixs_with_blockhash(
+                            &ctx.rpc,
+                            &ctx.tee_keypair,
+                            &[deact_ix],
+                            Hash::new_from_array(bh.blockhash),
+                        )
+                        .await
+                        {
+                            Ok(sig) => {
+                                let _ =
+                                    confirm_signatures(&ctx.rpc, &[sig], ctx.confirm_timeout).await;
+                                deactivated = Some((old, bh.context_slot));
+                            }
+                            Err(e) => tracing::warn!(error = ?e, alt = %old,
+                                "deactivate rotated-out ALT failed; leaving it for a later reclaim"),
+                        }
+                    }
+                    // `CreateLookupTable` rejects a `recent_slot` not present in
+                    // the SlotHashes sysvar of the bank that processes it. A
+                    // load-balanced RPC can answer getLatestBlockhash from a
+                    // replica a few slots AHEAD of the simulating bank → "is not
+                    // a recent slot". Back off 32 (within the 512-slot window).
+                    const ALT_RECENT_SLOT_BACKOFF: u64 = 32;
+                    let alt_recent_slot = bh.context_slot.saturating_sub(ALT_RECENT_SLOT_BACKOFF);
+                    let alt_build =
+                        build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
+                    let alt_sig = submit_ixs_with_blockhash(
                         &ctx.rpc,
                         &ctx.tee_keypair,
-                        &[deact_ix],
+                        &alt_build.ixs,
                         Hash::new_from_array(bh.blockhash),
                     )
-                    .await
-                    {
-                        Ok(sig) => {
-                            let _ = confirm_signatures(&ctx.rpc, &[sig], ctx.confirm_timeout).await;
-                            deactivated = Some((old, bh.context_slot));
-                        }
-                        Err(e) => tracing::warn!(error = ?e, alt = %old,
-                            "deactivate rotated-out ALT failed; leaving it for a later reclaim"),
-                    }
+                    .await?;
+                    confirm_signatures(&ctx.rpc, &[alt_sig], ctx.confirm_timeout).await?;
+                    pool.commit_create(alt_build.alt_address, alt_addrs.clone(), deactivated);
                 }
-                // `CreateLookupTable` rejects a `recent_slot` not present in
-                // the SlotHashes sysvar of the bank that processes it. A
-                // load-balanced RPC can answer getLatestBlockhash from a
-                // replica a few slots AHEAD of the simulating bank → "is not a
-                // recent slot". Back off 32 (far within the 512-slot window).
-                const ALT_RECENT_SLOT_BACKOFF: u64 = 32;
-                let alt_recent_slot = bh.context_slot.saturating_sub(ALT_RECENT_SLOT_BACKOFF);
-                let alt_build = build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
-                let alt_sig = submit_ixs_with_blockhash(
-                    &ctx.rpc,
-                    &ctx.tee_keypair,
-                    &alt_build.ixs,
-                    Hash::new_from_array(bh.blockhash),
-                )
-                .await?;
-                confirm_signatures(&ctx.rpc, &[alt_sig], ctx.confirm_timeout).await?;
-                ctx.alt_pool.lock().await.commit_create(
-                    alt_build.alt_address,
-                    alt_addrs.clone(),
-                    deactivated,
-                );
+                AltPlan::Extend { alt } => {
+                    let extend_ix = build_extend_alt_ix(&tee_pubkey, &alt, &alt_addrs);
+                    let ext_sig = submit_ixs_with_blockhash(
+                        &ctx.rpc,
+                        &ctx.tee_keypair,
+                        &[extend_ix],
+                        Hash::new_from_array(bh.blockhash),
+                    )
+                    .await?;
+                    confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
+                    pool.commit_extend(&alt_addrs);
+                }
             }
-            AltPlan::Extend { alt } => {
-                let extend_ix = build_extend_alt_ix(&tee_pubkey, &alt, &alt_addrs);
-                let ext_sig = submit_ixs_with_blockhash(
-                    &ctx.rpc,
-                    &ctx.tee_keypair,
-                    &[extend_ix],
-                    Hash::new_from_array(bh.blockhash),
-                )
-                .await?;
-                confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
-                ctx.alt_pool.lock().await.commit_extend(&alt_addrs);
-            }
-        }
+            pool.settle_account()
+                .expect("pool has a current ALT after plan/commit")
+        };
         let alt_tx_ms = t.elapsed().as_millis() as u64;
+        tracing::info!(
+            alt = %per_batch_alt.key,
+            entries = per_batch_alt.addresses.len(),
+            "per-batch ALT ready (rolling pool)"
+        );
 
         // A freshly created OR extended ALT's new addresses are NOT loadable
         // until the slot AFTER the extend lands. Wait until the chain advances
         // past the slot we observed the extend confirmed at, or fail loudly
-        // (sending Tx D against an unloadable ALT → silently dropped).
+        // (sending Tx D against an unloadable ALT → silently dropped). No lock
+        // needed here — `per_batch_alt` is already captured.
         let t = Instant::now();
         let alt_landed_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
         let mut activated = false;
@@ -408,17 +423,6 @@ async fn run_batch_settle_inner(
             );
             return Err(WorkerError::AltNotActive(alt_landed_slot));
         }
-        let per_batch_alt = ctx
-            .alt_pool
-            .lock()
-            .await
-            .settle_account()
-            .expect("pool has a current ALT after plan/commit");
-        tracing::info!(
-            alt = %per_batch_alt.key,
-            entries = per_batch_alt.addresses.len(),
-            "per-batch ALT ready (rolling pool)"
-        );
         Ok::<_, WorkerError>((per_batch_alt, alt_tx_ms, t.elapsed().as_millis() as u64))
     };
 
