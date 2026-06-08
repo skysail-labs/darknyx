@@ -54,7 +54,7 @@ use super::submit::{
 };
 use super::submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockSideInputs};
 use super::verify_match_batch::{build_verify_match_batch_ix, VerifyMatchBatchArgs};
-use crate::prover::{merkle_inclusion_path, MatchSlotWitness, Prover};
+use crate::prover::{build_batch_public_inputs, merkle_inclusion_path, MatchSlotWitness, Prover};
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
 /// Per-match inputs the worker needs to settle one match.
@@ -207,216 +207,228 @@ async fn run_batch_settle_inner(
     // ZK step) vs Solana tx-confirmation latency (lock/verify/settle/close ms)
     // vs the ALT-activation slot-wait (alt_wait_ms). Optimize the dominant one.
     let t_pipeline = Instant::now();
-    let mut t = Instant::now();
 
-    // ── 1. Lock notes (Tx A) ────────────────────────────────────
-    ctx.set_all_stages(batch_id, n, SettleJobStage::LockingNotes)
-        .await;
-    for (idx, m) in inputs.matches.iter().enumerate() {
-        let outcome = submit_lock_note_pair(
-            &ctx.rpc,
-            &ctx.tee_keypair,
-            m.buyer_lock.clone(),
-            m.seller_lock.clone(),
-            priority_fee,
-        )
-        .await?;
-        confirm_lock_pair(&ctx.rpc, &outcome, ctx.confirm_timeout).await?;
-        let id = SettleJobId {
-            batch_id,
-            match_idx: idx as u8,
-        };
-        let mut st = ctx.settle_state.write().await;
-        st.update(&id, |j| {
-            j.lock_buyer_sig = outcome.buyer_sig.clone();
-            j.lock_seller_sig = outcome.seller_sig.clone();
-        });
-    }
+    // The batch's public inputs (merkle_root + per-match leaves) are a cheap
+    // Poseidon fold of the match leaves — NOT the heavy Groth16 prove — and are
+    // byte-identical to what the prover emits (the prover cross-checks the
+    // circuit witness against exactly these). Computing them up front lets the
+    // per-batch ALT (whose `batch_validity_marker` PDA is seeded by merkle_root)
+    // be built CONCURRENTLY with proving instead of waiting for it.
+    let public = build_batch_public_inputs(&inputs.witnesses)
+        .map_err(|e| WorkerError::Prover(format!("public inputs: {e}")))?;
+    let merkle_root = public.merkle_root;
+    let leaves = public.leaves;
 
-    let lock_ms = t.elapsed().as_millis() as u64;
-    t = Instant::now();
-
-    // ── 2. Prove the batch (spawn_blocking) ─────────────────────
+    // ── Stages 1-3 run CONCURRENTLY ─────────────────────────────
+    // lock (Tx A), prove→verify (Tx B), and per-batch ALT create+activate
+    // (Tx C) are mutually independent: the ALT uses the pre-computed
+    // merkle_root, not the proof; verify is the only thing that needs the
+    // proof. Overlapping them collapses the pre-settle critical path from the
+    // SUM of their latencies to ~the MAX — and, crucially, starts the ALT's
+    // activation clock ~one prove earlier, so the settle's ALT-loadability wait
+    // is shorter. Each branch reports its own internal timing; `parallel_ms` is
+    // the wall-clock of the overlapped phase.
     ctx.set_all_stages(batch_id, n, SettleJobStage::Proving)
         .await;
-    let prover = ctx.prover.clone();
-    let witnesses = inputs.witnesses.clone();
-    let proof_out = tokio::task::spawn_blocking(move || prover.prove(&witnesses))
-        .await
-        .map_err(|e| WorkerError::ProverPanic(e.to_string()))?
-        .map_err(|e| WorkerError::Prover(format!("{e}")))?;
-    let proof_bytes = proof_out.proof;
-    let leaves = proof_out.public.leaves;
-    let merkle_root = proof_out.public.merkle_root;
+    let t_par = Instant::now();
 
-    let prove_ms = t.elapsed().as_millis() as u64;
-    t = Instant::now();
-
-    // ── 3. verify_match_batch (Tx B) + per-batch ALT (Tx C) ─────
-    ctx.set_all_stages(batch_id, n, SettleJobStage::Verifying)
-        .await;
-    // BatchValidityMarker expiry is bounded on BOTH sides by
-    // verify_match_batch.rs: it must be (a) strictly in the future AND
-    // (b) within MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS (= 300) of the
-    // on-chain clock. Stamp it from a slot fetched FRESH here, not from
-    // `inputs.expiry_slot` (which the scheduler computes from the
-    // background slot poller's cached value — if that lags/stalls the
-    // lower bound reverts). The margin must stay UNDER 300 (a margin of
-    // 1000 overshot the upper bound — same InvalidMarkerExpiry code from
-    // the other side); 250 leaves ~50 slots of headroom against the cap
-    // for confirmed-commitment lag + verify-tx landing, and still gives
-    // ~200 slots (~80 s) of settle runway after verify lands.
-    const MARKER_EXPIRY_MARGIN_SLOTS: u64 = 250;
-    let marker_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
-    let verify_ix = build_verify_match_batch_ix(
-        &tee_pubkey,
-        VerifyMatchBatchArgs {
-            merkle_root,
-            expiry_slot: marker_slot.saturating_add(MARKER_EXPIRY_MARGIN_SLOTS),
-            proof: proof_bytes,
-        },
-    );
-    let mut verify_ixs = budget_ixs(VERIFY_COMPUTE_UNIT_LIMIT, priority_fee);
-    verify_ixs.push(verify_ix);
-    let verify_sig = submit_ixs(&ctx.rpc, &ctx.tee_keypair, &verify_ixs).await?;
-    confirm_signatures(
-        &ctx.rpc,
-        std::slice::from_ref(&verify_sig),
-        ctx.confirm_timeout,
-    )
-    .await?;
-    {
-        let mut st = ctx.settle_state.write().await;
-        for idx in 0..n {
+    // Branch A — lock the input notes (Tx A), per match.
+    let lock_branch = async {
+        let t = Instant::now();
+        for (idx, m) in inputs.matches.iter().enumerate() {
+            let outcome = submit_lock_note_pair(
+                &ctx.rpc,
+                &ctx.tee_keypair,
+                m.buyer_lock.clone(),
+                m.seller_lock.clone(),
+                priority_fee,
+            )
+            .await?;
+            confirm_lock_pair(&ctx.rpc, &outcome, ctx.confirm_timeout).await?;
             let id = SettleJobId {
                 batch_id,
                 match_idx: idx as u8,
             };
-            st.update(&id, |j| j.verify_sig = Some(verify_sig.clone()));
+            let mut st = ctx.settle_state.write().await;
+            st.update(&id, |j| {
+                j.lock_buyer_sig = outcome.buyer_sig.clone();
+                j.lock_seller_sig = outcome.seller_sig.clone();
+            });
         }
-    }
+        Ok::<u64, WorkerError>(t.elapsed().as_millis() as u64)
+    };
 
-    let verify_ms = t.elapsed().as_millis() as u64;
-    t = Instant::now();
+    // Branch B — prove (spawn_blocking) then verify_match_batch (Tx B).
+    let prove_verify_branch = async {
+        let t = Instant::now();
+        let prover = ctx.prover.clone();
+        let witnesses = inputs.witnesses.clone();
+        let proof_out = tokio::task::spawn_blocking(move || prover.prove(&witnesses))
+            .await
+            .map_err(|e| WorkerError::ProverPanic(e.to_string()))?
+            .map_err(|e| WorkerError::Prover(format!("{e}")))?;
+        let proof_bytes = proof_out.proof;
+        let prove_ms = t.elapsed().as_millis() as u64;
 
-    // Per-batch ALT via the rolling pool: reuse a long-lived `current`
-    // ALT (extend it with this batch's derivable PDAs) and only create a
-    // fresh one — deactivating the old — when it nears the 256-address
-    // cap. The address set is the UNION of EVERY match's note-lock PDAs
-    // (each match's Tx D references its own locks) + the single shared
-    // batch marker — so a multi-match batch's settle txs all stay under
-    // the 1232-byte cap, not just match 0's.
-    let alt_addrs = batch_alt_addresses(inputs.matches.iter().map(|m| &m.payload), &merkle_root);
-    let plan = ctx.alt_pool.lock().await.plan(alt_addrs.len());
-    let bh = ctx.rpc.get_latest_blockhash().await?;
-    match plan {
-        AltPlan::Create { deactivate } => {
-            // Rotation: best-effort deactivate the old, full ALT so its
-            // rent can be reclaimed after the 512-slot cooldown. A failure
-            // here must NOT block the settle — the old ALT just lingers
-            // (a later reclaim sweep can retry).
-            let mut deactivated = None;
-            if let Some(old) = deactivate {
-                let deact_ix = build_deactivate_alt_ix(&tee_pubkey, &old);
-                match submit_ixs_with_blockhash(
+        let t = Instant::now();
+        // BatchValidityMarker expiry is bounded on BOTH sides by
+        // verify_match_batch.rs: it must be (a) strictly in the future AND
+        // (b) within MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS (= 300) of the
+        // on-chain clock. Stamp it from a slot fetched FRESH here, not from
+        // `inputs.expiry_slot` (which the scheduler computes from the
+        // background slot poller's cached value — if that lags/stalls the
+        // lower bound reverts). The margin must stay UNDER 300; 250 leaves
+        // ~50 slots of headroom against the cap and ~200 slots (~80 s) of
+        // settle runway after verify lands.
+        const MARKER_EXPIRY_MARGIN_SLOTS: u64 = 250;
+        let marker_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
+        let verify_ix = build_verify_match_batch_ix(
+            &tee_pubkey,
+            VerifyMatchBatchArgs {
+                merkle_root,
+                expiry_slot: marker_slot.saturating_add(MARKER_EXPIRY_MARGIN_SLOTS),
+                proof: proof_bytes,
+            },
+        );
+        let mut verify_ixs = budget_ixs(VERIFY_COMPUTE_UNIT_LIMIT, priority_fee);
+        verify_ixs.push(verify_ix);
+        let verify_sig = submit_ixs(&ctx.rpc, &ctx.tee_keypair, &verify_ixs).await?;
+        confirm_signatures(
+            &ctx.rpc,
+            std::slice::from_ref(&verify_sig),
+            ctx.confirm_timeout,
+        )
+        .await?;
+        {
+            let mut st = ctx.settle_state.write().await;
+            for idx in 0..n {
+                let id = SettleJobId {
+                    batch_id,
+                    match_idx: idx as u8,
+                };
+                st.update(&id, |j| j.verify_sig = Some(verify_sig.clone()));
+            }
+        }
+        Ok::<(u64, u64), WorkerError>((prove_ms, t.elapsed().as_millis() as u64))
+    };
+
+    // Branch C — per-batch ALT create/extend (Tx C) + activation wait.
+    let alt_branch = async {
+        let t = Instant::now();
+        // Per-batch ALT via the rolling pool: reuse a long-lived `current`
+        // ALT (extend it with this batch's derivable PDAs) and only create a
+        // fresh one — deactivating the old — when it nears the 256-address
+        // cap. The address set is the UNION of EVERY match's note-lock PDAs +
+        // the single shared batch marker — so a multi-match batch's settle txs
+        // all stay under the 1232-byte cap, not just match 0's.
+        let alt_addrs =
+            batch_alt_addresses(inputs.matches.iter().map(|m| &m.payload), &merkle_root);
+        let plan = ctx.alt_pool.lock().await.plan(alt_addrs.len());
+        let bh = ctx.rpc.get_latest_blockhash().await?;
+        match plan {
+            AltPlan::Create { deactivate } => {
+                // Rotation: best-effort deactivate the old, full ALT so its
+                // rent can be reclaimed after the 512-slot cooldown. A failure
+                // here must NOT block the settle — the old ALT just lingers
+                // (a later reclaim sweep can retry).
+                let mut deactivated = None;
+                if let Some(old) = deactivate {
+                    let deact_ix = build_deactivate_alt_ix(&tee_pubkey, &old);
+                    match submit_ixs_with_blockhash(
+                        &ctx.rpc,
+                        &ctx.tee_keypair,
+                        &[deact_ix],
+                        Hash::new_from_array(bh.blockhash),
+                    )
+                    .await
+                    {
+                        Ok(sig) => {
+                            let _ = confirm_signatures(&ctx.rpc, &[sig], ctx.confirm_timeout).await;
+                            deactivated = Some((old, bh.context_slot));
+                        }
+                        Err(e) => tracing::warn!(error = ?e, alt = %old,
+                            "deactivate rotated-out ALT failed; leaving it for a later reclaim"),
+                    }
+                }
+                // `CreateLookupTable` rejects a `recent_slot` not present in
+                // the SlotHashes sysvar of the bank that processes it. A
+                // load-balanced RPC can answer getLatestBlockhash from a
+                // replica a few slots AHEAD of the simulating bank → "is not a
+                // recent slot". Back off 32 (far within the 512-slot window).
+                const ALT_RECENT_SLOT_BACKOFF: u64 = 32;
+                let alt_recent_slot = bh.context_slot.saturating_sub(ALT_RECENT_SLOT_BACKOFF);
+                let alt_build = build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
+                let alt_sig = submit_ixs_with_blockhash(
                     &ctx.rpc,
                     &ctx.tee_keypair,
-                    &[deact_ix],
+                    &alt_build.ixs,
                     Hash::new_from_array(bh.blockhash),
                 )
-                .await
-                {
-                    Ok(sig) => {
-                        let _ = confirm_signatures(&ctx.rpc, &[sig], ctx.confirm_timeout).await;
-                        deactivated = Some((old, bh.context_slot));
-                    }
-                    Err(e) => tracing::warn!(error = ?e, alt = %old,
-                        "deactivate rotated-out ALT failed; leaving it for a later reclaim"),
-                }
+                .await?;
+                confirm_signatures(&ctx.rpc, &[alt_sig], ctx.confirm_timeout).await?;
+                ctx.alt_pool.lock().await.commit_create(
+                    alt_build.alt_address,
+                    alt_addrs.clone(),
+                    deactivated,
+                );
             }
-            // `CreateLookupTable` rejects a `recent_slot` not present in
-            // the SlotHashes sysvar of the bank that processes it. A
-            // load-balanced RPC (Helius) can answer getLatestBlockhash
-            // from a replica a few slots AHEAD of the one that runs
-            // preflight simulation, so the confirmed `context_slot` lands
-            // "in the future" for the simulating bank → "is not a recent
-            // slot". Back off 32 (far within the 512-slot window).
-            const ALT_RECENT_SLOT_BACKOFF: u64 = 32;
-            let alt_recent_slot = bh.context_slot.saturating_sub(ALT_RECENT_SLOT_BACKOFF);
-            let alt_build = build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
-            let alt_sig = submit_ixs_with_blockhash(
-                &ctx.rpc,
-                &ctx.tee_keypair,
-                &alt_build.ixs,
-                Hash::new_from_array(bh.blockhash),
-            )
-            .await?;
-            confirm_signatures(&ctx.rpc, &[alt_sig], ctx.confirm_timeout).await?;
-            ctx.alt_pool.lock().await.commit_create(
-                alt_build.alt_address,
-                alt_addrs.clone(),
-                deactivated,
+            AltPlan::Extend { alt } => {
+                let extend_ix = build_extend_alt_ix(&tee_pubkey, &alt, &alt_addrs);
+                let ext_sig = submit_ixs_with_blockhash(
+                    &ctx.rpc,
+                    &ctx.tee_keypair,
+                    &[extend_ix],
+                    Hash::new_from_array(bh.blockhash),
+                )
+                .await?;
+                confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
+                ctx.alt_pool.lock().await.commit_extend(&alt_addrs);
+            }
+        }
+        let alt_tx_ms = t.elapsed().as_millis() as u64;
+
+        // A freshly created OR extended ALT's new addresses are NOT loadable
+        // until the slot AFTER the extend lands. Wait until the chain advances
+        // past the slot we observed the extend confirmed at, or fail loudly
+        // (sending Tx D against an unloadable ALT → silently dropped).
+        let t = Instant::now();
+        let alt_landed_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
+        let mut activated = false;
+        for _ in 0..30 {
+            if ctx.rpc.get_latest_blockhash().await?.context_slot > alt_landed_slot {
+                activated = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+        if !activated {
+            tracing::error!(
+                alt_landed_slot,
+                "per-batch ALT activation timed out; aborting settle"
             );
+            return Err(WorkerError::AltNotActive(alt_landed_slot));
         }
-        AltPlan::Extend { alt } => {
-            let extend_ix = build_extend_alt_ix(&tee_pubkey, &alt, &alt_addrs);
-            let ext_sig = submit_ixs_with_blockhash(
-                &ctx.rpc,
-                &ctx.tee_keypair,
-                &[extend_ix],
-                Hash::new_from_array(bh.blockhash),
-            )
-            .await?;
-            confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
-            ctx.alt_pool.lock().await.commit_extend(&alt_addrs);
-        }
-    }
-
-    let alt_tx_ms = t.elapsed().as_millis() as u64;
-    t = Instant::now();
-
-    // A freshly created OR extended ALT's new addresses are NOT loadable
-    // until the slot AFTER the extend lands. Sending Tx D immediately
-    // makes the leader fail to resolve the ALT lookups and silently drop
-    // the tx — it never confirms ("did not confirm within 60s: [None]").
-    // Wait until the chain advances past the slot we observed the extend
-    // confirmed at. Mirrors the SDK settleViaBatched slot-wait. (This is
-    // per-batch and unavoidable: a batch's PDAs are derived from its own
-    // notes, so no pool can pre-load them.)
-    let alt_landed_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
-    let mut activated = false;
-    for _ in 0..30 {
-        if ctx.rpc.get_latest_blockhash().await?.context_slot > alt_landed_slot {
-            activated = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(400)).await;
-    }
-    if !activated {
-        // The slot never advanced within the wait window — the ALT's new
-        // addresses may not be loadable yet. Fail loudly instead of
-        // sending Tx D against an unloadable lookup table (which would be
-        // silently dropped). The batch is marked Failed + can be retried.
-        tracing::error!(
-            alt_landed_slot,
-            "per-batch ALT activation timed out; aborting settle"
+        let per_batch_alt = ctx
+            .alt_pool
+            .lock()
+            .await
+            .settle_account()
+            .expect("pool has a current ALT after plan/commit");
+        tracing::info!(
+            alt = %per_batch_alt.key,
+            entries = per_batch_alt.addresses.len(),
+            "per-batch ALT ready (rolling pool)"
         );
-        return Err(WorkerError::AltNotActive(alt_landed_slot));
-    }
-    let per_batch_alt = ctx
-        .alt_pool
-        .lock()
-        .await
-        .settle_account()
-        .expect("pool has a current ALT after plan/commit");
-    tracing::info!(
-        alt = %per_batch_alt.key,
-        entries = per_batch_alt.addresses.len(),
-        "per-batch ALT ready (rolling pool)"
-    );
+        Ok::<_, WorkerError>((per_batch_alt, alt_tx_ms, t.elapsed().as_millis() as u64))
+    };
 
-    let alt_wait_ms = t.elapsed().as_millis() as u64;
-    t = Instant::now();
+    let (lock_r, pv_r, alt_r) = tokio::join!(lock_branch, prove_verify_branch, alt_branch);
+    let lock_ms = lock_r?;
+    let (prove_ms, verify_ms) = pv_r?;
+    let (per_batch_alt, alt_tx_ms, alt_wait_ms) = alt_r?;
+    let parallel_ms = t_par.elapsed().as_millis() as u64;
+
+    let mut t = Instant::now();
 
     // ── 4. Settle each match (Tx D, v0) ─────────────────────────
     ctx.set_all_stages(batch_id, n, SettleJobStage::Settling)
@@ -499,9 +511,12 @@ async fn run_batch_settle_inner(
 
     let close_ms = t.elapsed().as_millis() as u64;
     let total_ms = t_pipeline.elapsed().as_millis() as u64;
-    // The fine-grained per-stage latency profile. `prove_ms` is the only
-    // in-enclave ZK compute; `alt_wait_ms` is the Solana ALT-activation
-    // slot-wait; lock/verify/settle/close are tx submit+confirm latency.
+    // The fine-grained per-stage latency profile. lock/prove+verify/alt run
+    // CONCURRENTLY: `parallel_ms` is the wall-clock of that overlapped phase
+    // (≈ the max of the branches, vs the old sum of lock+prove+verify+alt).
+    // `prove_ms` is the only in-enclave ZK compute; `alt_wait_ms` is the
+    // Solana ALT-activation slot-wait; lock/verify/settle/close are tx
+    // submit+confirm latency.
     tracing::info!(
         batch_id,
         n,
@@ -510,6 +525,7 @@ async fn run_batch_settle_inner(
         verify_ms,
         alt_tx_ms,
         alt_wait_ms,
+        parallel_ms,
         settle_ms,
         close_ms,
         total_ms,
