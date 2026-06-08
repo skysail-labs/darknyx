@@ -40,30 +40,39 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 // ── Per-tx CU limits (right-sized from measured `unitsConsumed`) ──
 //
 // Every settle-path tx requests an explicit ComputeUnitLimit sized to its
-// measured worst-case consumption + ~1.5× headroom, replacing the old blanket
-// 1.4M on the settle tx (and the implicit 200k/ix default on the rest). A tight
-// limit is the prerequisite for priority fees: the prioritization fee is
-// `compute_unit_price × requested_limit`, so an over-requested limit overpays
-// for the same per-CU bid AND packs worse into a block's CU budget.
+// measured worst-case consumption + 15% headroom (×1.15), replacing the old
+// blanket 1.4M on the settle tx (and the implicit 200k/ix default on the rest).
+// A tight limit is the prerequisite for priority fees: the prioritization fee
+// is `compute_unit_price × requested_limit`, so an over-requested limit
+// overpays for the same per-CU bid AND packs worse into a block's CU budget.
+//
+// 15% is enough because every settle-path ix's CU is DETERMINISTIC:
+//   - verify/lock/close are fixed work (N=16 groth16; a fixed 26-level Merkle
+//     inclusion check; a PDA close).
+//   - settle's `append_leaf` (merkle.rs) does exactly MERKLE_DEPTH (26)
+//     poseidon2 hashes PER LEAF unconditionally — constant per leaf, no
+//     index/tree-fill dependence — so the only variable is leaf count, which
+//     tops out at 5 (note_c/d + buyer change + base/quote fee). The 5-leaf
+//     worst case is a hard, stable ceiling (162,145), not a moving target.
 //
 // Measured 2026-06-08 (image tee-v3-hardening-20):
 //   lock_note               117,943 CU (devnet, fixed 26-level Merkle path)
 //   verify_match_batch        87,224 CU (litesvm, deterministic N=16 groth16)
 //   tee_forced_settle_batched 162,145 CU (devnet, WORST case: 5 leaves appended
 //                                          = note_c/d + buyer change + 2 fee notes;
-//                                          litesvm 2-leaf path is 99,299)
+//                                          litesvm 2-leaf path is ~100k)
 //   close_batch_validity_marker 3,546 CU (litesvm)
 // Regression-guarded by the `CU_PROFILE`/assert lines in
 // programs/vault/tests/{match_batch_verify,tee_forced_settle_batched}.rs.
 
-/// CU ceiling for the settle tx (Tx D). 5-leaf worst case ≈ 162k; 250k ≈ 1.54×.
-const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 250_000;
-/// CU ceiling for each lock_note tx (Tx A). ~118k measured; 175k ≈ 1.48×.
-pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 175_000;
-/// CU ceiling for the verify_match_batch tx (Tx B). ~87k measured; 130k ≈ 1.49×.
-pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 130_000;
-/// CU ceiling for the close_batch_validity_marker tx (Tx E). ~3.5k; 15k generous.
-pub(crate) const CLOSE_COMPUTE_UNIT_LIMIT: u32 = 15_000;
+/// CU ceiling for the settle tx (Tx D). 5-leaf worst case 162,145 × 1.15.
+const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 187_000;
+/// CU ceiling for each lock_note tx (Tx A). 117,943 × 1.15.
+pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 136_000;
+/// CU ceiling for the verify_match_batch tx (Tx B). 87,224 × 1.15.
+pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 101_000;
+/// CU ceiling for the close_batch_validity_marker tx (Tx E). 3,546 × 1.15 → 5k floor.
+pub(crate) const CLOSE_COMPUTE_UNIT_LIMIT: u32 = 5_000;
 
 /// Build a `ComputeBudget::SetComputeUnitLimit` ix (variant tag 2,
 /// then the u32 limit LE).
@@ -76,6 +85,33 @@ pub(crate) fn set_compute_unit_limit_ix(units: u32) -> Instruction {
         accounts: vec![],
         data,
     }
+}
+
+/// Build a `ComputeBudget::SetComputeUnitPrice` ix (variant tag 3,
+/// then the u64 micro-lamports-per-CU price LE). The priority fee paid is
+/// `price × requested_compute_unit_limit / 1_000_000` lamports — which is why
+/// the per-tx limits are right-sized (see the CU-limit block above).
+pub(crate) fn set_compute_unit_price_ix(micro_lamports_per_cu: u64) -> Instruction {
+    let mut data = Vec::with_capacity(9);
+    data.push(3u8);
+    data.extend_from_slice(&micro_lamports_per_cu.to_le_bytes());
+    Instruction {
+        program_id: COMPUTE_BUDGET_PROGRAM_ID,
+        accounts: vec![],
+        data,
+    }
+}
+
+/// The ComputeBudget ixs every settle-path tx prepends: the right-sized CU
+/// `limit`, plus a `SetComputeUnitPrice` at `priority_fee` when non-zero (a
+/// quiet network bids 0 → no price ix, identical to the pre-priority-fee shape).
+pub(crate) fn budget_ixs(limit: u32, priority_fee: u64) -> Vec<Instruction> {
+    let mut v = Vec::with_capacity(2);
+    v.push(set_compute_unit_limit_ix(limit));
+    if priority_fee > 0 {
+        v.push(set_compute_unit_price_ix(priority_fee));
+    }
+    v
 }
 
 /// Compile + sign the settle v0 transaction. `alts` is the static
@@ -102,6 +138,15 @@ pub fn build_settle_v0_tx_b64(
 /// Same as [`build_settle_v0_tx_b64`] but returns the raw
 /// `VersionedTransaction` (for tests that want to inspect the
 /// compiled message — account count, ALT lookups, wire size).
+///
+/// NOTE: the settle tx (Tx D) deliberately carries ONLY the right-sized
+/// `SetComputeUnitLimit` ix — NOT a `SetComputeUnitPrice` priority-fee ix.
+/// The worst-case settle tx (non-zero change note + 2 ALTs) is ~1226 B against
+/// Solana's 1232-byte cap (CLAUDE.md §6); a price ix (~12 B) overflows it
+/// (1238 B). That's an acceptable omission: Tx D's confirmation latency is
+/// bound by per-batch ALT activation, not by priority (a fee can't make a
+/// leader load an ALT that isn't rooted yet — see settle::submit). Priority
+/// fees go on the room-to-spare txs: lock (Tx A), verify (Tx B), close (Tx E).
 pub fn build_settle_v0_tx(
     tee_keypair: &Keypair,
     ed25519_ix: Instruction,
@@ -110,8 +155,9 @@ pub fn build_settle_v0_tx(
     blockhash: Hash,
 ) -> Result<VersionedTransaction, RpcError> {
     let payer = tee_keypair.pubkey();
-    // ComputeBudget ix first so the (right-sized) CU limit applies to the
-    // whole tx; then the ed25519 precompile + the settle ix.
+    // ComputeBudget limit ix first so the right-sized CU limit applies to the
+    // whole tx; then the ed25519 precompile + the settle ix. No price ix — see
+    // the doc comment (1232-byte cap).
     let cu_ix = set_compute_unit_limit_ix(SETTLE_COMPUTE_UNIT_LIMIT);
     let message =
         v0::Message::try_compile(&payer, &[cu_ix, ed25519_ix, settle_ix], alts, blockhash)

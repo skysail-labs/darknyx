@@ -33,7 +33,7 @@ use solana_signer::Signer;
 use solana_transaction::Transaction;
 
 use super::lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
-use super::pipeline::{set_compute_unit_limit_ix, LOCK_COMPUTE_UNIT_LIMIT};
+use super::pipeline::{budget_ixs, LOCK_COMPUTE_UNIT_LIMIT};
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
 /// Per-side inputs the TEE needs to construct one `lock_note` ix.
@@ -100,6 +100,7 @@ pub async fn submit_lock_note_pair(
     tee_keypair: &Keypair,
     buyer: LockSideInputs,
     seller: LockSideInputs,
+    priority_fee: u64,
 ) -> Result<LockPairOutcome, RpcError> {
     // A relocked continuation input is already locked by the prior batch's
     // re-lock PDA — skip its lock_note (re-init would collide). If BOTH sides
@@ -116,12 +117,32 @@ pub async fn submit_lock_note_pair(
     let buyer_sig = if buyer.already_locked {
         None
     } else {
-        Some(build_sign_send(rpc, tee_keypair, &tee_pubkey, blockhash.unwrap(), buyer).await?)
+        Some(
+            build_sign_send(
+                rpc,
+                tee_keypair,
+                &tee_pubkey,
+                blockhash.unwrap(),
+                buyer,
+                priority_fee,
+            )
+            .await?,
+        )
     };
     let seller_sig = if seller.already_locked {
         None
     } else {
-        Some(build_sign_send(rpc, tee_keypair, &tee_pubkey, blockhash.unwrap(), seller).await?)
+        Some(
+            build_sign_send(
+                rpc,
+                tee_keypair,
+                &tee_pubkey,
+                blockhash.unwrap(),
+                seller,
+                priority_fee,
+            )
+            .await?,
+        )
     };
 
     Ok(LockPairOutcome {
@@ -136,18 +157,20 @@ async fn build_sign_send(
     tee_pubkey: &Address,
     blockhash: Hash,
     side: LockSideInputs,
+    priority_fee: u64,
 ) -> Result<String, RpcError> {
     let ix = build_lock_note_ix(tee_pubkey, side.into());
     // lock_note runs a full 26-level Merkle inclusion check (~118k CU,
     // tight under the 200k/ix default) — request a right-sized explicit
-    // limit so the tx is priority-fee-ready and packs predictably.
-    let cu_ix = set_compute_unit_limit_ix(LOCK_COMPUTE_UNIT_LIMIT);
+    // limit (+ the priority-fee price ix) so the tx is bid on a tight CU
+    // footprint and packs predictably.
+    let mut ixs = budget_ixs(LOCK_COMPUTE_UNIT_LIMIT, priority_fee);
+    ixs.push(ix);
     // `new_signed_with_payer` sets `account_keys[0]` to the
     // payer (the TEE pubkey), and signs in one shot. Same key
     // plays `tee_authority` AND fee-payer, so one keypair in
     // the signers slice satisfies both constraints.
-    let tx =
-        Transaction::new_signed_with_payer(&[cu_ix, ix], Some(tee_pubkey), &[keypair], blockhash);
+    let tx = Transaction::new_signed_with_payer(&ixs, Some(tee_pubkey), &[keypair], blockhash);
 
     let wire = bincode::serialize(&tx)
         .map_err(|e| RpcError::Schema(format!("tx bincode serialise failed: {e}")))?;

@@ -26,6 +26,7 @@
 //! in scope (wasmer); it runs inside `tokio::task::spawn_blocking`
 //! so it doesn't stall a runtime worker.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -43,8 +44,7 @@ use super::ed25519::build_ed25519_verify_ix;
 use super::job::{SettleJobId, SettleJobStage};
 use super::payload::MatchResultPayload;
 use super::pipeline::{
-    build_settle_v0_tx_b64, set_compute_unit_limit_ix, CLOSE_COMPUTE_UNIT_LIMIT,
-    VERIFY_COMPUTE_UNIT_LIMIT,
+    budget_ixs, build_settle_v0_tx_b64, CLOSE_COMPUTE_UNIT_LIMIT, VERIFY_COMPUTE_UNIT_LIMIT,
 };
 use super::scheduler::SettleSchedulerState;
 use super::settle_batched::{batch_alt_addresses, build_settle_batched_ix};
@@ -107,6 +107,11 @@ pub struct SettleWorkerCtx {
     pub settle_state: Arc<RwLock<SettleSchedulerState>>,
     /// Per-leg confirmation timeout.
     pub confirm_timeout: Duration,
+    /// Current compute-unit price bid (micro-lamports/CU), refreshed by the
+    /// priority-fee poller (main.rs) from `getRecentPrioritizationFees`. Read
+    /// once per batch; prepended as a `SetComputeUnitPrice` ix on every
+    /// settle-path tx. 0 on a quiet network → no price ix.
+    pub current_priority_fee: Arc<AtomicU64>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -190,6 +195,11 @@ async fn run_batch_settle_inner(
         return Err(WorkerError::Mismatch(n, inputs.witnesses.len()));
     }
 
+    // Snapshot the priority-fee bid once for the whole batch (the poller keeps
+    // it fresh; a stable value across one batch's txs is fine). Prepended as a
+    // SetComputeUnitPrice ix on every settle-path tx below.
+    let priority_fee = ctx.current_priority_fee.load(Ordering::Relaxed);
+
     // Per-stage latency profiling. `t` is reset at each stage boundary; a
     // single structured summary is emitted at the end (parseable from
     // `phala cvms logs`). This separates the TWO things the on-chain landing
@@ -208,6 +218,7 @@ async fn run_batch_settle_inner(
             &ctx.tee_keypair,
             m.buyer_lock.clone(),
             m.seller_lock.clone(),
+            priority_fee,
         )
         .await?;
         confirm_lock_pair(&ctx.rpc, &outcome, ctx.confirm_timeout).await?;
@@ -265,15 +276,9 @@ async fn run_batch_settle_inner(
             proof: proof_bytes,
         },
     );
-    let verify_sig = submit_ixs(
-        &ctx.rpc,
-        &ctx.tee_keypair,
-        &[
-            set_compute_unit_limit_ix(VERIFY_COMPUTE_UNIT_LIMIT),
-            verify_ix,
-        ],
-    )
-    .await?;
+    let mut verify_ixs = budget_ixs(VERIFY_COMPUTE_UNIT_LIMIT, priority_fee);
+    verify_ixs.push(verify_ix);
+    let verify_sig = submit_ixs(&ctx.rpc, &ctx.tee_keypair, &verify_ixs).await?;
     confirm_signatures(
         &ctx.rpc,
         std::slice::from_ref(&verify_sig),
@@ -444,6 +449,10 @@ async fn run_batch_settle_inner(
         );
 
         let bh = ctx.rpc.get_latest_blockhash().await?;
+        // NOTE: the settle tx carries no priority-fee ix — it's already at the
+        // 1232-byte cap, and its latency is ALT-activation-bound, not priority-
+        // bound (see build_settle_v0_tx). `priority_fee` is applied to the
+        // lock/verify/close txs instead.
         let tx_b64 = build_settle_v0_tx_b64(
             &ctx.tee_keypair,
             ed_ix,
@@ -478,15 +487,9 @@ async fn run_batch_settle_inner(
     ctx.set_all_stages(batch_id, n, SettleJobStage::Closing)
         .await;
     let close_ix = build_close_marker_ix(&tee_pubkey, &tee_pubkey, &merkle_root);
-    let close_sig = submit_ixs(
-        &ctx.rpc,
-        &ctx.tee_keypair,
-        &[
-            set_compute_unit_limit_ix(CLOSE_COMPUTE_UNIT_LIMIT),
-            close_ix,
-        ],
-    )
-    .await?;
+    let mut close_ixs = budget_ixs(CLOSE_COMPUTE_UNIT_LIMIT, priority_fee);
+    close_ixs.push(close_ix);
+    let close_sig = submit_ixs(&ctx.rpc, &ctx.tee_keypair, &close_ixs).await?;
     confirm_signatures(
         &ctx.rpc,
         std::slice::from_ref(&close_sig),
@@ -741,6 +744,7 @@ mod tests {
             alt_pool: Arc::new(tokio::sync::Mutex::new(AltPool::new())),
             settle_state: state,
             confirm_timeout: Duration::from_secs(5),
+            current_priority_fee: Arc::new(AtomicU64::new(0)),
         }
     }
 

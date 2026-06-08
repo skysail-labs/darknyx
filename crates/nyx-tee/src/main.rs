@@ -181,6 +181,10 @@ async fn main() -> Result<()> {
     ));
     let oracle = OracleCache::new();
     let current_slot = Arc::new(AtomicU64::new(1));
+    // Compute-unit price bid (micro-lamports/CU) the settle worker prepends to
+    // every settle-path tx. Refreshed by the priority-fee poller (7e) from
+    // getRecentPrioritizationFees; starts at 0 (no bid until the first poll).
+    let current_priority_fee = Arc::new(AtomicU64::new(0));
 
     // Matches channel — capacity 1024 is plenty: the matcher
     // produces at most one `RunBatchOutput` per tick (default
@@ -253,6 +257,7 @@ async fn main() -> Result<()> {
             settle_state.clone(),
             matcher_state.clone(),
             current_slot.clone(),
+            current_priority_fee.clone(),
             settle_base_mint,
             settle_quote_mint,
             settle_protocol_owner,
@@ -388,6 +393,63 @@ async fn main() -> Result<()> {
         }
     }
 
+    // ─── 7e. Priority-fee poller — bid from getRecentPrioritizationFees ──
+    // The settle worker prepends a SetComputeUnitPrice ix (sized to its
+    // right-sized CU limits) to every settle-path tx; this task keeps the bid
+    // current. It polls the recent cluster prioritization fees every ~10 s,
+    // folds them into the 75th-percentile bid (capped), and stores it in the
+    // SAME Arc the worker reads. A quiet network (devnet) yields 0 → no price
+    // ix, so this is a no-op there and only starts paying under real
+    // congestion. Cap overridable via NYX_TEE_PRIORITY_FEE_CAP.
+    if tee_signer_pubkey.is_some() {
+        let cap = std::env::var("NYX_TEE_PRIORITY_FEE_CAP")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(nyx_tee::settle::priority::DEFAULT_PRIORITY_FEE_CAP_MICRO_LAMPORTS);
+        match SolanaRpcClient::new(&cfg.solana_rpc_url) {
+            Ok(rpc) => {
+                let fee = current_priority_fee.clone();
+                tokio::spawn(async move {
+                    let mut ticks: u64 = 0;
+                    loop {
+                        // Empty writable set → global recent fees (broad
+                        // congestion signal). Could be narrowed to the vault
+                        // config PDA (the hottest written account) later.
+                        match rpc.get_recent_prioritization_fees(&[]).await {
+                            Ok(samples) => {
+                                let bid = nyx_tee::settle::priority::priority_fee_bid(
+                                    &samples
+                                        .iter()
+                                        .map(|s| s.prioritization_fee)
+                                        .collect::<Vec<_>>(),
+                                    cap,
+                                );
+                                fee.store(bid, std::sync::atomic::Ordering::Relaxed);
+                                if ticks.is_multiple_of(6) {
+                                    tracing::info!(
+                                        priority_fee_micro_lamports = bid,
+                                        samples = samples.len(),
+                                        "priority-fee poller: bid updated"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "priority-fee poll failed; bid stale")
+                            }
+                        }
+                        ticks = ticks.wrapping_add(1);
+                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    }
+                });
+                tracing::info!(
+                    priority_fee_cap_micro_lamports = cap,
+                    "priority-fee poller spawned (bid <- getRecentPrioritizationFees)"
+                );
+            }
+            Err(e) => tracing::warn!(error = %e, "priority-fee poller RPC construction failed"),
+        }
+    }
+
     // ─── 7d. Spawn the fills router ───────────────────────────────────
     // Fans the matcher's global FillMemo broadcast into per-account channels
     // (the leak guard behind `/ws/fills`). No-op in degraded boot (no matcher).
@@ -458,6 +520,7 @@ fn build_settle_driver(
     settle_state: Arc<RwLock<SettleSchedulerState>>,
     matcher_state: Arc<RwLock<MatcherState>>,
     current_slot: Arc<AtomicU64>,
+    current_priority_fee: Arc<AtomicU64>,
     base_mint: [u8; 32],
     quote_mint: [u8; 32],
     protocol_owner_commitment: [u8; 32],
@@ -544,6 +607,7 @@ fn build_settle_driver(
         )),
         settle_state,
         confirm_timeout: Duration::from_secs(60),
+        current_priority_fee: current_priority_fee.clone(),
     };
 
     Ok(SettleDriver {

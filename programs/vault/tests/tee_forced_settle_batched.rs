@@ -99,20 +99,20 @@ fn test_two_matches_share_one_marker() {
     let tx0 = build_settle_batched_tx(&h, &p0, 0, &proof0, &merkle_root);
     let meta0 = h.svm.send_transaction(tx0).expect("match 0 settles");
     // CU profiling + regression guard for nyx-tee's SETTLE_COMPUTE_UNIT_LIMIT
-    // (250_000 in crates/nyx-tee/src/settle/pipeline.rs). NOTE: this path
-    // appends only note_c + note_d (2 leaves, ~99k CU); a production settle adds
-    // a buyer change note + base/quote fee notes → up to 5 leaves (~162k CU on
-    // devnet, ~21k/extra-leaf). The 140k sentinel below catches a per-op
-    // regression on the 2-leaf path *before* the extrapolated 5-leaf worst case
-    // would breach the 250k limit.
+    // (187_000 = 162,145×1.15 in crates/nyx-tee/src/settle/pipeline.rs). NOTE:
+    // this path appends only note_c + note_d (2 leaves, ~100k CU); a production
+    // settle adds a buyer change note + base/quote fee notes → up to 5 leaves
+    // (~162k CU on devnet, ~20.4k/extra-leaf — append_leaf is constant per leaf).
+    // The 125k sentinel keeps the extrapolated 5-leaf worst case (2-leaf +
+    // 3×20.4k) under the 187k limit: 2-leaf must stay < 187k − 61.3k ≈ 125.6k.
     eprintln!(
         "CU_PROFILE tee_forced_settle_batched(2-leaf) consumed={}",
         meta0.compute_units_consumed
     );
     assert!(
-        meta0.compute_units_consumed < 140_000,
+        meta0.compute_units_consumed < 125_000,
         "settle(2-leaf) CU {} regressed — extrapolated 5-leaf worst case risks \
-         breaching nyx-tee SETTLE_COMPUTE_UNIT_LIMIT (250_000); re-measure",
+         breaching nyx-tee SETTLE_COMPUTE_UNIT_LIMIT (187_000); re-measure",
         meta0.compute_units_consumed
     );
 
@@ -303,14 +303,14 @@ fn test_close_marker_by_payer_refunds_rent() {
         h.svm.latest_blockhash(),
     );
     let close_meta = h.svm.send_transaction(tx).expect("close by payer");
-    // Regression guard for nyx-tee's CLOSE_COMPUTE_UNIT_LIMIT (15_000).
+    // Regression guard for nyx-tee's CLOSE_COMPUTE_UNIT_LIMIT (5_000).
     eprintln!(
         "CU_PROFILE close_batch_validity_marker consumed={}",
         close_meta.compute_units_consumed
     );
     assert!(
-        close_meta.compute_units_consumed < 15_000,
-        "close_batch_validity_marker CU {} exceeds nyx-tee CLOSE_COMPUTE_UNIT_LIMIT",
+        close_meta.compute_units_consumed < 5_000,
+        "close_batch_validity_marker CU {} exceeds nyx-tee CLOSE_COMPUTE_UNIT_LIMIT (5_000)",
         close_meta.compute_units_consumed
     );
 

@@ -42,6 +42,7 @@ pub mod ed25519;
 pub mod lock_note;
 pub mod payload;
 pub mod pipeline;
+pub mod priority;
 pub mod settle_batched;
 pub mod sign;
 pub mod submit;

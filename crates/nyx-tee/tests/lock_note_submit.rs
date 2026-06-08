@@ -174,7 +174,7 @@ async fn submit_lock_note_pair_sends_two_distinct_txs() {
     let client = SolanaRpcClient::new(endpoint).unwrap();
     let keypair = fixed_keypair();
 
-    let outcome = submit_lock_note_pair(&client, &keypair, buyer_inputs(), seller_inputs())
+    let outcome = submit_lock_note_pair(&client, &keypair, buyer_inputs(), seller_inputs(), 0)
         .await
         .unwrap();
 
@@ -224,7 +224,7 @@ async fn submit_lock_note_pair_skips_relocked_side() {
     let mut buyer = buyer_inputs();
     buyer.already_locked = true; // relocked continuation note
 
-    let outcome = submit_lock_note_pair(&client, &keypair, buyer, seller_inputs())
+    let outcome = submit_lock_note_pair(&client, &keypair, buyer, seller_inputs(), 0)
         .await
         .unwrap();
 
@@ -262,7 +262,7 @@ async fn submit_lock_note_pair_propagates_rpc_error_on_second_tx() {
 
     let client = SolanaRpcClient::new(endpoint).unwrap();
     let keypair = fixed_keypair();
-    let err = submit_lock_note_pair(&client, &keypair, buyer_inputs(), seller_inputs())
+    let err = submit_lock_note_pair(&client, &keypair, buyer_inputs(), seller_inputs(), 0)
         .await
         .unwrap_err();
     use nyx_tee::solana_rpc::RpcError;
