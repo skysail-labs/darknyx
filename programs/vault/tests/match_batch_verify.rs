@@ -60,9 +60,24 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
         Message::new(&[ix], Some(&h.tee.pubkey())),
         h.svm.latest_blockhash(),
     );
-    h.svm
+    let meta = h
+        .svm
         .send_transaction(tx)
         .expect("on-chain groth16-solana must accept our real N=16 proof");
+
+    // CU profiling + regression guard for nyx-tee's per-tx ComputeUnitLimit
+    // right-sizing. Keep below VERIFY_COMPUTE_UNIT_LIMIT (130_000) in
+    // crates/nyx-tee/src/settle/pipeline.rs — if this assert trips, the verify
+    // ix got heavier and that limit must be raised (and re-measured).
+    eprintln!(
+        "CU_PROFILE verify_match_batch consumed={}",
+        meta.compute_units_consumed
+    );
+    assert!(
+        meta.compute_units_consumed < 130_000,
+        "verify_match_batch CU {} exceeds nyx-tee VERIFY_COMPUTE_UNIT_LIMIT headroom",
+        meta.compute_units_consumed
+    );
 
     // Marker created → the proof verified on-chain.
     assert!(

@@ -42,7 +42,10 @@ use super::close_marker::build_close_marker_ix;
 use super::ed25519::build_ed25519_verify_ix;
 use super::job::{SettleJobId, SettleJobStage};
 use super::payload::MatchResultPayload;
-use super::pipeline::build_settle_v0_tx_b64;
+use super::pipeline::{
+    build_settle_v0_tx_b64, set_compute_unit_limit_ix, CLOSE_COMPUTE_UNIT_LIMIT,
+    VERIFY_COMPUTE_UNIT_LIMIT,
+};
 use super::scheduler::SettleSchedulerState;
 use super::settle_batched::{batch_alt_addresses, build_settle_batched_ix};
 use super::sign::sign_payload;
@@ -262,7 +265,15 @@ async fn run_batch_settle_inner(
             proof: proof_bytes,
         },
     );
-    let verify_sig = submit_ixs(&ctx.rpc, &ctx.tee_keypair, &[verify_ix]).await?;
+    let verify_sig = submit_ixs(
+        &ctx.rpc,
+        &ctx.tee_keypair,
+        &[
+            set_compute_unit_limit_ix(VERIFY_COMPUTE_UNIT_LIMIT),
+            verify_ix,
+        ],
+    )
+    .await?;
     confirm_signatures(
         &ctx.rpc,
         std::slice::from_ref(&verify_sig),
@@ -467,7 +478,15 @@ async fn run_batch_settle_inner(
     ctx.set_all_stages(batch_id, n, SettleJobStage::Closing)
         .await;
     let close_ix = build_close_marker_ix(&tee_pubkey, &tee_pubkey, &merkle_root);
-    let close_sig = submit_ixs(&ctx.rpc, &ctx.tee_keypair, &[close_ix]).await?;
+    let close_sig = submit_ixs(
+        &ctx.rpc,
+        &ctx.tee_keypair,
+        &[
+            set_compute_unit_limit_ix(CLOSE_COMPUTE_UNIT_LIMIT),
+            close_ix,
+        ],
+    )
+    .await?;
     confirm_signatures(
         &ctx.rpc,
         std::slice::from_ref(&close_sig),

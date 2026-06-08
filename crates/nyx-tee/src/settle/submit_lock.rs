@@ -33,6 +33,7 @@ use solana_signer::Signer;
 use solana_transaction::Transaction;
 
 use super::lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
+use super::pipeline::{set_compute_unit_limit_ix, LOCK_COMPUTE_UNIT_LIMIT};
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
 /// Per-side inputs the TEE needs to construct one `lock_note` ix.
@@ -137,11 +138,16 @@ async fn build_sign_send(
     side: LockSideInputs,
 ) -> Result<String, RpcError> {
     let ix = build_lock_note_ix(tee_pubkey, side.into());
+    // lock_note runs a full 26-level Merkle inclusion check (~118k CU,
+    // tight under the 200k/ix default) — request a right-sized explicit
+    // limit so the tx is priority-fee-ready and packs predictably.
+    let cu_ix = set_compute_unit_limit_ix(LOCK_COMPUTE_UNIT_LIMIT);
     // `new_signed_with_payer` sets `account_keys[0]` to the
     // payer (the TEE pubkey), and signs in one shot. Same key
     // plays `tee_authority` AND fee-payer, so one keypair in
     // the signers slice satisfies both constraints.
-    let tx = Transaction::new_signed_with_payer(&[ix], Some(tee_pubkey), &[keypair], blockhash);
+    let tx =
+        Transaction::new_signed_with_payer(&[cu_ix, ix], Some(tee_pubkey), &[keypair], blockhash);
 
     let wire = bincode::serialize(&tx)
         .map_err(|e| RpcError::Schema(format!("tx bincode serialise failed: {e}")))?;

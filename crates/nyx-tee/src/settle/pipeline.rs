@@ -37,18 +37,37 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
     0xbc, 0x8c, 0xe5, 0xbb, 0xc5, 0xf7, 0x12, 0x6b, 0x2c, 0x43, 0x9b, 0x3a, 0x40, 0x00, 0x00, 0x00,
 ]);
 
-/// CU ceiling for the settle tx. `tee_forced_settle_batched` does a
-/// two-stage Poseidon leaf hash + several PDA inits + Merkle path
-/// verification, which blows past the 200k default. Preflight
-/// simulation runs at the 1.4M max so it passes WITHOUT this ix, but
-/// on-chain the tx then reverts on CU exhaustion — so the explicit
-/// limit is required to actually land. Mirrors the SDK's
-/// `setComputeUnitLimit(1_400_000)`.
-const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
+// ── Per-tx CU limits (right-sized from measured `unitsConsumed`) ──
+//
+// Every settle-path tx requests an explicit ComputeUnitLimit sized to its
+// measured worst-case consumption + ~1.5× headroom, replacing the old blanket
+// 1.4M on the settle tx (and the implicit 200k/ix default on the rest). A tight
+// limit is the prerequisite for priority fees: the prioritization fee is
+// `compute_unit_price × requested_limit`, so an over-requested limit overpays
+// for the same per-CU bid AND packs worse into a block's CU budget.
+//
+// Measured 2026-06-08 (image tee-v3-hardening-20):
+//   lock_note               117,943 CU (devnet, fixed 26-level Merkle path)
+//   verify_match_batch        87,224 CU (litesvm, deterministic N=16 groth16)
+//   tee_forced_settle_batched 162,145 CU (devnet, WORST case: 5 leaves appended
+//                                          = note_c/d + buyer change + 2 fee notes;
+//                                          litesvm 2-leaf path is 99,299)
+//   close_batch_validity_marker 3,546 CU (litesvm)
+// Regression-guarded by the `CU_PROFILE`/assert lines in
+// programs/vault/tests/{match_batch_verify,tee_forced_settle_batched}.rs.
+
+/// CU ceiling for the settle tx (Tx D). 5-leaf worst case ≈ 162k; 250k ≈ 1.54×.
+const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 250_000;
+/// CU ceiling for each lock_note tx (Tx A). ~118k measured; 175k ≈ 1.48×.
+pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 175_000;
+/// CU ceiling for the verify_match_batch tx (Tx B). ~87k measured; 130k ≈ 1.49×.
+pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 130_000;
+/// CU ceiling for the close_batch_validity_marker tx (Tx E). ~3.5k; 15k generous.
+pub(crate) const CLOSE_COMPUTE_UNIT_LIMIT: u32 = 15_000;
 
 /// Build a `ComputeBudget::SetComputeUnitLimit` ix (variant tag 2,
 /// then the u32 limit LE).
-fn set_compute_unit_limit_ix(units: u32) -> Instruction {
+pub(crate) fn set_compute_unit_limit_ix(units: u32) -> Instruction {
     let mut data = Vec::with_capacity(5);
     data.push(2u8);
     data.extend_from_slice(&units.to_le_bytes());
@@ -91,8 +110,8 @@ pub fn build_settle_v0_tx(
     blockhash: Hash,
 ) -> Result<VersionedTransaction, RpcError> {
     let payer = tee_keypair.pubkey();
-    // ComputeBudget ix first so the 1.4M CU limit applies to the whole
-    // tx; then the ed25519 precompile + the settle ix.
+    // ComputeBudget ix first so the (right-sized) CU limit applies to the
+    // whole tx; then the ed25519 precompile + the settle ix.
     let cu_ix = set_compute_unit_limit_ix(SETTLE_COMPUTE_UNIT_LIMIT);
     let message =
         v0::Message::try_compile(&payer, &[cu_ix, ed25519_ix, settle_ix], alts, blockhash)
