@@ -480,6 +480,7 @@ async fn run_batch_settle_inner(
         // routinely dropped until the ALT activates network-wide. Rebroadcast
         // the identical signed tx every ~1.5 s until it confirms instead of
         // waiting on the RPC's lazy rebroadcast (the ~10-14 s settle stall).
+        let t_tx = Instant::now();
         let settle_sig = send_and_confirm_with_rebroadcast(
             &ctx.rpc,
             &tx_b64,
@@ -487,6 +488,17 @@ async fn run_batch_settle_inner(
             Duration::from_millis(1500),
         )
         .await?;
+        // Per-match Tx D confirm latency. In a multi-match batch the FIRST one
+        // eats the per-batch ALT-activation wait (~10-14 s on devnet); the rest
+        // reveal the steady-state on-chain settle ceiling (serialized on the
+        // vault_config Merkle append). This is the number that decides whether
+        // the on-chain settle — vs the prover — is the throughput bottleneck.
+        tracing::info!(
+            batch_id,
+            match_idx = idx,
+            settle_tx_ms = t_tx.elapsed().as_millis() as u64,
+            "settle Tx D confirmed (per-match)"
+        );
 
         let id = SettleJobId {
             batch_id,
