@@ -159,9 +159,14 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       const bidPrice = (anchor * 12n) / 10n;
       const askPrice = (anchor * 8n) / 10n;
       const withFee = (nominal: bigint) => nominal + (nominal * FEE_RATE_BPS) / 10_000n;
-      // Distinct qty per pair so each match's note commitments are unique.
+      // SAME qty for every pair → the uniform-price match is cleanly pairwise
+      // (M bids × M asks, all full fills, NO partial-fill residual/relock) so all
+      // M matches land in ONE batch — exactly what we want for a clean per-batch
+      // co-inclusion measurement (and one settle pipeline, not M, which keeps the
+      // RPC under the rate limit). Commitments stay unique via the per-leaf
+      // inner_hash, so identical amounts don't collide.
       const baseSalt = BigInt(Date.now() % 200_000) + 1000n;
-      const qtys = Array.from({ length: MATCHES }, (_, i) => baseSalt + BigInt(i));
+      const qtys = Array.from({ length: MATCHES }, () => baseSalt);
       console.log(`  · matches=${MATCHES} bid=${bidPrice} ask=${askPrice} feeBps=${FEE_RATE_BPS} qtys=${qtys.join(",")}`);
 
       // Fund both payers.

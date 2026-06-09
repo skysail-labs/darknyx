@@ -606,16 +606,34 @@ impl SolanaRpcClient {
             method,
             params,
         };
-        let resp = self.http.post(&self.endpoint).json(&body).send().await?;
-        let status = resp.status();
-        let bytes = resp.bytes().await?;
-        if !status.is_success() {
-            return Err(RpcError::Schema(format!(
-                "HTTP {status} from {endpoint}: {body}",
-                endpoint = self.endpoint,
-                body = preview(&bytes)
-            )));
-        }
+        // Retry HTTP 429 (rate limited) with exponential backoff. Under the
+        // concurrent settle pipeline a burst of RPCs can transiently exceed the
+        // provider's rate limit; a settle must not die on a *transient* 429.
+        // Non-429 HTTP errors + JSON-RPC errors are NOT retried (they're real).
+        // `id`/`body` are reused across attempts — reads are idempotent and tx
+        // sends dedup by signature, so re-sending is safe.
+        const MAX_429_RETRIES: u32 = 6;
+        let mut attempt = 0u32;
+        let mut backoff = std::time::Duration::from_millis(200);
+        let bytes = loop {
+            let resp = self.http.post(&self.endpoint).json(&body).send().await?;
+            let status = resp.status();
+            let bytes = resp.bytes().await?;
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempt < MAX_429_RETRIES {
+                attempt += 1;
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(std::time::Duration::from_secs(4));
+                continue;
+            }
+            if !status.is_success() {
+                return Err(RpcError::Schema(format!(
+                    "HTTP {status} from {endpoint}: {body}",
+                    endpoint = self.endpoint,
+                    body = preview(&bytes)
+                )));
+            }
+            break bytes;
+        };
         let envelope: RpcResponse =
             serde_json::from_slice(&bytes).map_err(|e| RpcError::InvalidJson {
                 body_preview: preview(&bytes),
