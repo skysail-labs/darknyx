@@ -642,6 +642,7 @@ mod tests {
             settle_state: state.clone(),
             confirm_timeout: Duration::from_secs(5),
             current_priority_fee: Arc::new(AtomicU64::new(0)),
+            settle_send_concurrency: 8,
         };
         let driver = SettleDriver {
             ctx,

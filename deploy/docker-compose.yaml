@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-21
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-22
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -126,6 +126,12 @@ services:
       # SAME image + instance. `:-ark` so an unset/empty value defaults to ark
       # (an empty string would otherwise fail the boot-time backend match).
       NYX_TEE_PROVER: ${NYX_TEE_PROVER:-ark}
+
+      # Max settle Tx D's sent CONCURRENTLY within a batch (default 16). Firing
+      # them together lets the leader co-include them in one block so they
+      # confirm in a single ~1.13s window instead of one-at-a-time. Sweep this
+      # (1/4/8/16/32) to find the on-chain settle throughput ceiling. `:-16`.
+      NYX_TEE_SETTLE_SEND_CONCURRENCY: ${NYX_TEE_SETTLE_SEND_CONCURRENCY:-16}
 
     ports:
       # 8080: nyx-tee's internal HTTP. dstack-ingress fronts this

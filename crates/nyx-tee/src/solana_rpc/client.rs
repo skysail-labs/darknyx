@@ -66,6 +66,11 @@ pub struct RpcSignatureStatus {
     /// runtime failed). Carries the raw `InstructionError` JSON
     /// so call-sites can introspect.
     pub err: Option<Value>,
+    /// The slot the tx was processed in. Lets the settle worker
+    /// measure block CO-INCLUSION: many settle txs sharing one slot
+    /// means the leader batched them → they confirm together (the
+    /// throughput lever — see settle::worker concurrent sends).
+    pub slot: Option<u64>,
 }
 
 /// Result of `getAccountInfo` (truncated to fields we read).
@@ -323,6 +328,8 @@ impl SolanaRpcClient {
             confirmation_status: Option<String>,
             #[serde(default)]
             err: Option<Value>,
+            #[serde(default)]
+            slot: Option<u64>,
         }
         let params = serde_json::json!([sigs, { "searchTransactionHistory": false }]);
         let raw: RpcContextValue<Vec<Option<Inner>>> =
@@ -354,6 +361,7 @@ impl SolanaRpcClient {
                     RpcSignatureStatus {
                         confirmed_at_commitment,
                         err: i.err,
+                        slot: i.slot,
                     }
                 })
             })

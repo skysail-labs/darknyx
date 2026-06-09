@@ -74,12 +74,16 @@ pub async fn submit_ixs_with_blockhash(
 /// signature, so resends are idempotent and cheap).
 ///
 /// Errors if the tx reverts (carries the on-chain err) or `timeout` elapses.
+/// Returns `(signature, confirmed_slot)`. The slot lets the settle worker
+/// measure block CO-INCLUSION (many settle txs sharing a slot = the leader
+/// batched them, so they confirm together — the concurrent-send throughput
+/// lever). `confirmed_slot` is `None` only if the RPC omitted it.
 pub async fn send_and_confirm_with_rebroadcast(
     rpc: &SolanaRpcClient,
     tx_b64: &str,
     timeout: std::time::Duration,
     resend_every: std::time::Duration,
-) -> Result<String, RpcError> {
+) -> Result<(String, Option<u64>), RpcError> {
     let start = std::time::Instant::now();
     // First send WITH preflight — validates the tx once.
     let sig = rpc.send_transaction(tx_b64).await?;
@@ -107,7 +111,7 @@ pub async fn send_and_confirm_with_rebroadcast(
                         "settle tx confirmed after rebroadcast(s)"
                     );
                 }
-                return Ok(sig);
+                return Ok((sig, s.slot));
             }
             _ => {}
         }

@@ -608,6 +608,7 @@ fn build_settle_driver(
         settle_state,
         confirm_timeout: Duration::from_secs(60),
         current_priority_fee: current_priority_fee.clone(),
+        settle_send_concurrency: cfg.settle_send_concurrency as usize,
     };
 
     Ok(SettleDriver {

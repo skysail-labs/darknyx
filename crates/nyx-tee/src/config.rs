@@ -83,6 +83,11 @@ pub struct Config {
     /// at zero the fee notes still mint + append but are unclaimable.
     /// MUST be BN254-Fr-safe (it's a Poseidon-output commitment).
     pub protocol_owner_commitment: [u8; 32],
+    /// Max settle Tx D's the settle worker sends CONCURRENTLY within a batch.
+    /// `NYX_TEE_SETTLE_SEND_CONCURRENCY`, default 16. Concurrent sends let the
+    /// leader co-include settles in one block so they confirm together (the
+    /// on-chain throughput lever); 1 reproduces the old one-at-a-time behavior.
+    pub settle_send_concurrency: u64,
 }
 
 /// The placeholder base mint used when `NYX_TEE_BASE_MINT` is unset —
@@ -246,6 +251,7 @@ impl Config {
                 "NYX_TEE_PROTOCOL_OWNER_COMMITMENT",
                 [0u8; 32],
             )?,
+            settle_send_concurrency: parse_u64_env("NYX_TEE_SETTLE_SEND_CONCURRENCY", 16)?.max(1),
         })
     }
 }
