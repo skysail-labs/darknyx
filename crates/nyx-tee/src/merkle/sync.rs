@@ -87,6 +87,10 @@ pub struct MerkleSync {
     /// Newest signature already applied — the live poll stops paging
     /// when it reaches this. `None` until the first sync completes.
     newest_seen: Option<String>,
+    /// Per-shard "currently flagged as diverged" latch, so reconcile WARNs
+    /// once on divergence (not every ~2s poll) and logs once on recovery.
+    /// Indexed by `tree_id`; length == `mirrors.len()`.
+    diverged: Vec<bool>,
 }
 
 impl MerkleSync {
@@ -102,6 +106,7 @@ impl MerkleSync {
             merkle_tree_pdas.len(),
             "one MerkleTree PDA per mirror shard"
         );
+        let diverged = vec![false; mirrors.len()];
         Self {
             rpc,
             mirrors,
@@ -109,6 +114,7 @@ impl MerkleSync {
             merkle_tree_pdas,
             cfg,
             newest_seen: None,
+            diverged,
         }
     }
 
@@ -299,12 +305,25 @@ impl MerkleSync {
         Ok(applied)
     }
 
-    /// Compare each shard mirror's root to its `MerkleTree[j].current_root`.
-    /// Logged per shard, never fatal — a mismatch flags an incomplete sync
-    /// (the live loop will catch up) without taking the indexer down.
-    async fn reconcile(&self) {
-        for (tree_id, tree_pda) in self.merkle_tree_pdas.iter().enumerate() {
-            let chain = match self.rpc.get_account_info(tree_pda).await {
+    /// Compare each shard mirror's root to its `MerkleTree[j].current_root` and
+    /// classify the outcome — never fatal. Three cases:
+    ///
+    /// * **OK** (count + root match): healthy. Logged `debug`; logs `info` once
+    ///   when recovering from a previously-flagged divergence.
+    /// * **Behind** (`chain_count > mirror_count`): the mirror is mid-catch-up
+    ///   (normal sync lag). `debug` — the next poll applies the new leaves.
+    /// * **Diverged** (`mirror_count > chain_count`, or equal counts with
+    ///   different roots): the mirror holds leaves no longer on chain — i.e. an
+    ///   on-chain `reset_merkle_tree` ran underneath it (a DEVNET op; production
+    ///   never resets). The append-only mirror can't roll back from the event
+    ///   stream (a reset emits no event), so it stays stale until the CVM is
+    ///   restarted (or `NYX_TEE_SYNC_FROM_SLOT` is bumped past the reset). WARN
+    ///   ONCE per shard (latched in `self.diverged`) so this doesn't flood the
+    ///   log every poll.
+    async fn reconcile(&mut self) {
+        for tree_id in 0..self.merkle_tree_pdas.len() {
+            let tree_pda = self.merkle_tree_pdas[tree_id];
+            let chain = match self.rpc.get_account_info(&tree_pda).await {
                 Ok(Some(acc)) => acc,
                 Ok(None) => {
                     tracing::warn!(tree_id, "merkle reconcile: merkle_tree account not found");
@@ -323,24 +342,84 @@ impl MerkleSync {
                 );
                 continue;
             };
-            let mirror = self.mirrors[tree_id].read().await;
-            if mirror.root() == chain_root && mirror.leaf_count() == chain_count {
-                tracing::info!(
-                    tree_id,
-                    leaf_count = chain_count,
-                    "merkle reconcile OK — shard mirror matches MerkleTree.current_root"
-                );
-            } else {
-                tracing::warn!(
-                    tree_id,
-                    mirror_leaves = mirror.leaf_count(),
-                    chain_leaves = chain_count,
-                    mirror_root = %hex::encode(mirror.root()),
-                    chain_root = %hex::encode(chain_root),
-                    "merkle reconcile MISMATCH — shard mirror behind / incomplete; will retry"
-                );
+            let (mirror_count, mirror_root) = {
+                let m = self.mirrors[tree_id].read().await;
+                (m.leaf_count(), m.root())
+            };
+
+            match classify_reconcile(mirror_count, &mirror_root, chain_count, &chain_root) {
+                ReconcileState::Ok => {
+                    if self.diverged[tree_id] {
+                        tracing::info!(
+                            tree_id,
+                            leaf_count = chain_count,
+                            "merkle reconcile RECOVERED — shard mirror matches chain again"
+                        );
+                        self.diverged[tree_id] = false;
+                    } else {
+                        tracing::debug!(tree_id, leaf_count = chain_count, "merkle reconcile OK");
+                    }
+                }
+                ReconcileState::Behind => {
+                    // Normal sync lag; the next poll applies the new leaves.
+                    tracing::debug!(
+                        tree_id,
+                        mirror_leaves = mirror_count,
+                        chain_leaves = chain_count,
+                        "merkle reconcile: shard mirror behind chain; catching up"
+                    );
+                }
+                ReconcileState::Diverged => {
+                    if !self.diverged[tree_id] {
+                        // Mirror AHEAD of chain (or equal count, different root):
+                        // it holds leaves the chain no longer has → an on-chain
+                        // reset ran underneath us. Warn ONCE; the append-only
+                        // mirror needs a restart to re-cold-boot post-reset.
+                        tracing::warn!(
+                            tree_id,
+                            mirror_leaves = mirror_count,
+                            chain_leaves = chain_count,
+                            mirror_root = %hex::encode(mirror_root),
+                            chain_root = %hex::encode(chain_root),
+                            "merkle reconcile DIVERGED — shard mirror holds leaves no longer on \
+                             chain (on-chain reset_merkle_tree underneath the mirror?). \
+                             Append-only mirror can't roll back; restart the CVM or bump \
+                             NYX_TEE_SYNC_FROM_SLOT past the reset. (DEVNET only — production \
+                             never resets.) Suppressing until recovered."
+                        );
+                        self.diverged[tree_id] = true;
+                    }
+                }
             }
         }
+    }
+}
+
+/// Reconcile outcome for one shard — the mirror vs its on-chain `MerkleTree`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcileState {
+    /// Counts + roots match.
+    Ok,
+    /// Chain ahead of the mirror — normal sync lag, resolves next poll.
+    Behind,
+    /// Mirror ahead of chain, or equal count with a different root — the mirror
+    /// holds leaves no longer on chain (an on-chain reset underneath it).
+    Diverged,
+}
+
+/// Pure classification of a shard's reconcile (no RPC / locks).
+fn classify_reconcile(
+    mirror_count: u64,
+    mirror_root: &[u8; 32],
+    chain_count: u64,
+    chain_root: &[u8; 32],
+) -> ReconcileState {
+    if mirror_count == chain_count && mirror_root == chain_root {
+        ReconcileState::Ok
+    } else if chain_count > mirror_count {
+        ReconcileState::Behind
+    } else {
+        ReconcileState::Diverged
     }
 }
 
@@ -525,5 +604,22 @@ mod tests {
     #[test]
     fn parse_merkle_tree_root_rejects_short_buffer() {
         assert!(parse_merkle_tree_root(&[0u8; 4]).is_none());
+    }
+
+    #[test]
+    fn classify_reconcile_distinguishes_behind_from_diverged() {
+        let r1 = fr_safe(0x11);
+        let r2 = fr_safe(0x22);
+        // Match → Ok.
+        assert_eq!(classify_reconcile(5, &r1, 5, &r1), ReconcileState::Ok);
+        // Chain ahead → Behind (normal lag).
+        assert_eq!(classify_reconcile(3, &r1, 5, &r2), ReconcileState::Behind);
+        // Mirror ahead of chain → Diverged (on-chain reset signature).
+        assert_eq!(classify_reconcile(8, &r1, 0, &r2), ReconcileState::Diverged);
+        // Equal count, different root → Diverged (post-reset refill at same idx).
+        assert_eq!(
+            classify_reconcile(24, &r1, 24, &r2),
+            ReconcileState::Diverged
+        );
     }
 }
