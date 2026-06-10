@@ -95,8 +95,9 @@ fn test_two_matches_share_one_marker() {
 
     let before = vault_leaf_count(&h);
 
-    // Match 0 → success (was always fine, even pre-fix).
-    let tx0 = build_settle_batched_tx(&h, &p0, 0, &proof0, &merkle_root);
+    // Match 0 → success (was always fine, even pre-fix). Both matches settle to
+    // shard 0 here — the shared-marker invariant is tree-independent.
+    let tx0 = build_settle_batched_tx(&h, 0, &p0, 0, &proof0, &merkle_root);
     let meta0 = h.svm.send_transaction(tx0).expect("match 0 settles");
     // CU profiling + regression guard for nyx-tee's SETTLE_COMPUTE_UNIT_LIMIT
     // (187_000 = 162,145×1.15 in crates/nyx-tee/src/settle/pipeline.rs). NOTE:
@@ -125,7 +126,7 @@ fn test_two_matches_share_one_marker() {
         "marker must remain present after match 0 — closing it here \
          bricks every subsequent match in the batch",
     );
-    let tx1 = build_settle_batched_tx(&h, &p1, 1, &proof1, &merkle_root);
+    let tx1 = build_settle_batched_tx(&h, 0, &p1, 1, &proof1, &merkle_root);
     h.svm
         .send_transaction(tx1)
         .expect("match 1 settles against the shared marker");
@@ -255,7 +256,7 @@ fn test_relocked_note_consumable_across_second_batch() {
     seed_batch_validity_marker(&mut h, &root1, far_future);
 
     let before = vault_leaf_count(&h);
-    let tx1 = build_settle_batched_tx(&h, &p1, 0, &proof1, &root1);
+    let tx1 = build_settle_batched_tx(&h, 0, &p1, 0, &proof1, &root1);
     h.svm.send_transaction(tx1).expect(
         "relocked note_e settles in batch 1 (binding holds iff the re-lock's token_mint is right)",
     );
@@ -357,4 +358,72 @@ fn test_close_marker_by_third_party_pre_expiry_rejects() {
     assert!(res.is_err(), "third-party close pre-expiry must fail");
     // Marker must still be intact after the rejected attempt.
     assert!(batch_validity_marker_exists(&h, &merkle_root));
+}
+
+// ---------------------------------------------------------------------------
+// Tree-sharding: two settles routed to DISTINCT shards advance each shard's
+// `leaf_count` independently — the whole point of splitting the single
+// Merkle-tree account into K. The output appends touch only `merkle_tree[id]`,
+// so settle-to-shard-0 and settle-to-shard-1 share no writable tree account
+// (the lever that lets the leader co-include them). Each is its own
+// single-match batch with its own marker (distinct merkle roots).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_settles_to_distinct_shards_advance_independently() {
+    let mut h = Harness::setup();
+
+    // Both shards start empty.
+    assert_eq!(tree_leaf_count(&h, 0), 0);
+    assert_eq!(tree_leaf_count(&h, 1), 0);
+
+    // Helper: build one exact-fill match keyed off a `tag` byte, seed its
+    // locks + a single-match marker, and return a tx settling it to `tree_id`.
+    let build_one = |h: &mut Harness, tag: u8, tree_id: u8| {
+        let note_a = fr_safe(0xA0, tag);
+        let note_b = fr_safe(0xB0, tag);
+        let oid_a = [0x10u8 ^ tag; 16];
+        let oid_b = [0x11u8 ^ tag; 16];
+        seed_note_lock(h, &note_a, &oid_a, 1_000_000, 5_000); // quote
+        seed_note_lock(h, &note_b, &oid_b, 1_000_000, 100); // base
+        let p = MatchResultPayload::exact_fill(
+            [0xE0u8 ^ tag; 16],
+            note_a,
+            note_b,
+            fr_safe(0xC0, tag),
+            fr_safe(0xD0, tag),
+            [0xF0u8 ^ tag; 32],
+            [0xF1u8 ^ tag; 32],
+            oid_a,
+            oid_b,
+            100,
+            5_000,
+        );
+        let mint = read_note_lock_mint(h, &note_a);
+        let leaf = compute_match_leaf_for(&p, &mint, &mint);
+        let mut leaves = [[0u8; 32]; 16];
+        leaves[0] = leaf;
+        let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
+        seed_batch_validity_marker(h, &root, u64::MAX / 2);
+        build_settle_batched_tx(h, tree_id, &p, 0, &proof, &root)
+    };
+
+    // Match 0 → shard 0; match 1 → shard 1.
+    let tx0 = build_one(&mut h, 0x01, 0);
+    h.svm.send_transaction(tx0).expect("settle to shard 0");
+    let tx1 = build_one(&mut h, 0x02, 1);
+    h.svm.send_transaction(tx1).expect("settle to shard 1");
+
+    // Each shard appended exactly its own (note_c, note_d) pair — and the two
+    // are wholly independent: shard 0's count didn't pick up shard 1's leaves.
+    assert_eq!(
+        tree_leaf_count(&h, 0),
+        2,
+        "shard 0 holds only its own 2 output leaves"
+    );
+    assert_eq!(
+        tree_leaf_count(&h, 1),
+        2,
+        "shard 1 holds only its own 2 output leaves"
+    );
 }

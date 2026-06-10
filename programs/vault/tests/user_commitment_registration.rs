@@ -68,6 +68,7 @@ struct RawGroth16Proof {
 struct InitializeArgs {
     tee_pubkey: [u8; 32],
     root_key: [u8; 32],
+    num_trees: u8,
 }
 
 fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
@@ -108,6 +109,7 @@ fn test_user_commitment_registration() {
     let init_args = InitializeArgs {
         tee_pubkey: tee_kp.pubkey().to_bytes(),
         root_key: root_kp.pubkey().to_bytes(),
+        num_trees: 1,
     };
     init_args.serialize(&mut init_data).unwrap();
 

@@ -38,6 +38,7 @@ fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
 struct InitializeArgs {
     tee_pubkey: [u8; 32],
     root_key: [u8; 32],
+    num_trees: u8,
 }
 
 #[derive(BorshSerialize)]
@@ -55,6 +56,7 @@ fn initialize(svm: &mut LiteSVM, admin: &Keypair, program_id: &Pubkey) -> Pubkey
     InitializeArgs {
         tee_pubkey: tee_kp.pubkey().to_bytes(),
         root_key: root_kp.pubkey().to_bytes(),
+        num_trees: 1,
     }
     .serialize(&mut data)
     .unwrap();
@@ -130,14 +132,16 @@ fn set_protocol_config_happy_path_writes_both_fields() {
     svm.send_transaction(tx)
         .expect("set_protocol_config failed");
 
-    // Re-read the account raw and check the last 34 bytes where
-    // (protocol_owner_commitment || fee_rate_bps || padding) live.
+    // Re-read the account raw and check the tail where
+    // (protocol_owner_commitment || fee_rate_bps || …) live.
     let acct = svm.get_account(&vault_pda).expect("vault config");
-    // VaultConfig layout tail: protocol_owner_commitment([u8;32]) + fee_rate_bps(u16) + _padding([u8;4]).
-    // Walk from the very end so we don't have to track Anchor's 8-byte disc.
+    // VaultConfig layout tail (post-sharding): protocol_owner_commitment([u8;32])
+    // + fee_rate_bps(u16) + num_tee_keys(u8) + num_trees(u8) + bump(u8) + _padding([u8;3]).
+    // That's 32 + 2 + 1 + 1 + 1 + 3 = 40 trailing bytes; walk from the end so we
+    // don't have to track Anchor's 8-byte disc.
     let len = acct.data.len();
-    let tail_commitment = &acct.data[len - 38..len - 6];
-    let tail_rate = u16::from_le_bytes(acct.data[len - 6..len - 4].try_into().unwrap());
+    let tail_commitment = &acct.data[len - 40..len - 8];
+    let tail_rate = u16::from_le_bytes(acct.data[len - 8..len - 6].try_into().unwrap());
     assert_eq!(tail_commitment, new_commitment);
     assert_eq!(tail_rate, 42);
 }

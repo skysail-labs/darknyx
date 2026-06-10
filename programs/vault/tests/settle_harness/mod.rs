@@ -59,10 +59,15 @@ pub fn anchor_acct_disc(name: &str) -> [u8; 8] {
 // Ix arg structs
 // ============================================================================
 
+/// Number of Merkle-tree shards the harness initializes. ≥2 so multi-tree
+/// settle tests can route matches to distinct shards (tree 0 and tree 1).
+pub const HARNESS_NUM_TREES: u8 = 2;
+
 #[derive(BorshSerialize)]
 pub struct InitializeArgs {
     pub tee_pubkey: [u8; 32],
     pub root_key: [u8; 32],
+    pub num_trees: u8,
 }
 
 #[derive(BorshSerialize)]
@@ -102,6 +107,15 @@ pub struct SubmitOrderArgs {
 
 pub fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"vault_config"], program_id)
+}
+
+/// Per-shard Merkle-tree PDA. Seed `[b"merkle_tree", &[tree_id]]` — mirrors
+/// `vault::state::MerkleTree::SEED`.
+pub fn merkle_tree_pda(program_id: &Pubkey, tree_id: u8) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[b"merkle_tree", core::slice::from_ref(&tree_id)],
+        program_id,
+    )
 }
 
 pub fn dark_clob_pda(program_id: &Pubkey, market: &Pubkey) -> (Pubkey, u8) {
@@ -194,12 +208,13 @@ impl Harness {
             svm.airdrop(&kp.pubkey(), 10_000_000_000).unwrap();
         }
 
-        // Initialize vault.
+        // Initialize the global vault config.
         let (vault_pda, _) = vault_config_pda(&vault_id);
         let mut init_data = anchor_disc("initialize").to_vec();
         InitializeArgs {
             tee_pubkey: tee.pubkey().to_bytes(),
             root_key: root.pubkey().to_bytes(),
+            num_trees: HARNESS_NUM_TREES,
         }
         .serialize(&mut init_data)
         .unwrap();
@@ -218,6 +233,30 @@ impl Harness {
             svm.latest_blockhash(),
         );
         svm.send_transaction(tx).expect("vault initialize failed");
+
+        // Initialize each Merkle-tree shard.
+        for tree_id in 0..HARNESS_NUM_TREES {
+            let (tree_pda, _) = merkle_tree_pda(&vault_id, tree_id);
+            let mut data = anchor_disc("initialize_tree").to_vec();
+            data.push(tree_id);
+            let ix = Instruction {
+                program_id: vault_id,
+                accounts: vec![
+                    AccountMeta::new(admin.pubkey(), true),
+                    AccountMeta::new_readonly(vault_pda, false),
+                    AccountMeta::new(tree_pda, false),
+                    AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+                ],
+                data,
+            };
+            let tx = Transaction::new(
+                &[&admin],
+                Message::new(&[ix], Some(&admin.pubkey())),
+                svm.latest_blockhash(),
+            );
+            svm.send_transaction(tx)
+                .unwrap_or_else(|e| panic!("initialize_tree({tree_id}) failed: {e:?}"));
+        }
 
         // Create a mock Pyth oracle account holding a TWAP of 150 (arbitrary).
         let pyth_account = Keypair::new().pubkey();
@@ -1114,13 +1153,18 @@ pub fn read_note_lock_mint(h: &Harness, note_commitment: &[u8; 32]) -> Pubkey {
     Pubkey::from(mint)
 }
 
-/// Read the current leaf_count out of VaultConfig.
+/// Read the current `leaf_count` out of a per-shard `MerkleTree` account.
+/// `MerkleTree` layout: 8 disc + 8 leaf_count + ... (leaf_count at offset 8).
+pub fn tree_leaf_count(h: &Harness, tree_id: u8) -> u64 {
+    let (pda, _) = merkle_tree_pda(&h.vault_id, tree_id);
+    let acct = h.svm.get_account(&pda).expect("merkle_tree");
+    u64::from_le_bytes(acct.data[8..16].try_into().unwrap())
+}
+
+/// Back-compat: leaf_count of shard 0 (the default tree single-tree settle
+/// tests route to).
 pub fn vault_leaf_count(h: &Harness) -> u64 {
-    let (pda, _) = vault_config_pda(&h.vault_id);
-    let acct = h.svm.get_account(&pda).expect("vault_config");
-    // Layout: 8 disc + 32 admin + 32 tee_pubkey + 32 root_key + 8 leaf_count
-    let off = 8 + 32 + 32 + 32;
-    u64::from_le_bytes(acct.data[off..off + 8].try_into().unwrap())
+    tree_leaf_count(h, 0)
 }
 
 /// Read protocol_owner_commitment out of VaultConfig.
@@ -1133,32 +1177,29 @@ pub fn vault_protocol_owner(h: &Harness) -> [u8; 32] {
     out
 }
 
-/// Offsets inside VaultConfig.
+/// Offsets inside the (post-sharding) VaultConfig — the Merkle-tree STATE
+/// moved out to per-shard `MerkleTree` accounts; only the tree-independent
+/// config + the global `zero_subtree_roots` remain.
 /// Layout (matches programs/vault/src/state.rs::VaultConfig — keep in sync):
 ///   8  disc
-///   32 admin + 32 tee_pubkey + 32 root_key
-///   8  leaf_count
-///   32 current_root
-///   32 * 64  roots
+///   32 admin
+///   32 * 16  tee_pubkeys (MAX_TEE_KEYS)
+///   32 root_key
 ///   32 * 20  zero_subtree_roots
-///   32 * 20  right_path
-///   1  roots_head (u8)
-///   1  bump
 ///   32 protocol_owner_commitment
 ///   2  fee_rate_bps (u16)
-///   4  _padding
+///   1  num_tee_keys (u8)
+///   1  num_trees (u8)
+///   1  bump (u8)
+///   3  _padding
 pub mod vault_layout {
-    pub const ROOT_HISTORY_SIZE: usize = 64;
+    pub const MAX_TEE_KEYS: usize = 16;
     pub const MERKLE_DEPTH: usize = 20;
     pub const PROTOCOL_OWNER_OFFSET: usize = 8
-        + 32 * 3   // admin + tee + root
-        + 8        // leaf_count
-        + 32       // current_root
-        + 32 * ROOT_HISTORY_SIZE
-        + 32 * MERKLE_DEPTH   // zero subtree roots
-        + 32 * MERKLE_DEPTH   // right path
-        + 1        // roots_head (u8)
-        + 1; // bump (u8)
+        + 32                  // admin
+        + 32 * MAX_TEE_KEYS   // tee_pubkeys
+        + 32                  // root_key
+        + 32 * MERKLE_DEPTH; // zero_subtree_roots
 }
 
 /// Overwrite `protocol_owner_commitment` + `fee_rate_bps` directly in the
@@ -1361,12 +1402,14 @@ pub fn build_merkle_root_and_path_n16(
 /// `batch_validity_marker`.
 pub fn build_settle_batched_ix(
     h: &Harness,
+    tree_id: u8,
     payload: &MatchResultPayload,
     match_index: u8,
     merkle_proof: &[[u8; 32]; 4],
     merkle_root: &[u8; 32],
 ) -> Instruction {
     let (vault_pda, _) = vault_config_pda(&h.vault_id);
+    let (tree_pda, _) = merkle_tree_pda(&h.vault_id, tree_id);
     let (lock_a, _) = note_lock_pda(&h.vault_id, &payload.note_a_commitment);
     let (lock_b, _) = note_lock_pda(&h.vault_id, &payload.note_b_commitment);
     let (consumed_a, _) = consumed_note_pda(&h.vault_id, &payload.note_a_commitment);
@@ -1384,8 +1427,10 @@ pub fn build_settle_batched_ix(
 
     let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
 
-    // ix data = disc + payload (Borsh) + match_index (u8) + 4 × 32-byte siblings.
+    // ix data = disc + tree_id (u8) + payload (Borsh) + match_index (u8)
+    //         + 4 × 32-byte siblings.
     let mut data = anchor_disc("tee_forced_settle_batched").to_vec();
+    data.push(tree_id);
     payload.serialize(&mut data).unwrap();
     data.push(match_index);
     for s in merkle_proof.iter() {
@@ -1396,7 +1441,8 @@ pub fn build_settle_batched_ix(
         program_id: h.vault_id,
         accounts: vec![
             AccountMeta::new(h.tee.pubkey(), true),
-            AccountMeta::new(vault_pda, false),
+            AccountMeta::new_readonly(vault_pda, false),
+            AccountMeta::new(tree_pda, false),
             AccountMeta::new(lock_a, false),
             AccountMeta::new(lock_b, false),
             AccountMeta::new(consumed_a, false),
@@ -1449,6 +1495,7 @@ pub fn build_verify_match_batch_ix(
 /// `build_settle_tx` for the v3.5 path.
 pub fn build_settle_batched_tx(
     h: &Harness,
+    tree_id: u8,
     payload: &MatchResultPayload,
     match_index: u8,
     merkle_proof: &[[u8; 32]; 4],
@@ -1460,7 +1507,8 @@ pub fn build_settle_batched_tx(
     sig_bytes.copy_from_slice(sig.as_ref());
     let tee_pk = h.tee.pubkey().to_bytes();
     let ed_ix = build_ed25519_verify_ix(&tee_pk, &sig_bytes, &msg_hash);
-    let settle_ix = build_settle_batched_ix(h, payload, match_index, merkle_proof, merkle_root);
+    let settle_ix =
+        build_settle_batched_ix(h, tree_id, payload, match_index, merkle_proof, merkle_root);
     Transaction::new(
         &[&h.tee],
         Message::new(
@@ -1489,7 +1537,8 @@ pub fn seed_marker_and_build_settle_batched_tx(
     leaves[0] = leaf;
     let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
     seed_batch_validity_marker(h, &root, u64::MAX / 2);
-    build_settle_batched_tx(h, p, 0, &proof, &root)
+    // Single-tree default: settle outputs append to shard 0.
+    build_settle_batched_tx(h, 0, p, 0, &proof, &root)
 }
 
 /// Companion to [`seed_marker_and_build_settle_batched_tx`] — returns
@@ -1507,7 +1556,8 @@ pub fn seed_marker_and_build_settle_batched_ix(
     leaves[0] = leaf;
     let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
     seed_batch_validity_marker(h, &root, u64::MAX / 2);
-    build_settle_batched_ix(h, p, 0, &proof, &root)
+    // Single-tree default: settle outputs append to shard 0.
+    build_settle_batched_ix(h, 0, p, 0, &proof, &root)
 }
 
 /// Build a `close_batch_validity_marker` ix.

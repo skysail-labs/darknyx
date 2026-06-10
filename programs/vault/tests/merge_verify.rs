@@ -16,7 +16,7 @@ use common::{fr_to_dec, repo_root, snarkjs_fullprove};
 use darkpool_crypto::field::{fr_to_be_bytes, pubkey_to_fr_pair, u64_to_fr};
 use darkpool_crypto::poseidon::poseidon_hash;
 use vault::merkle::{append_leaf, compute_zero_subtree_roots, empty_root};
-use vault::state::{VaultConfig, MERKLE_DEPTH, ROOT_HISTORY_SIZE};
+use vault::state::{MerkleTree, MERKLE_DEPTH, ROOT_HISTORY_SIZE};
 use vault::zk::verifier::{make_vk, Groth16Proof};
 use vault::zk::verify_groth16_proof;
 
@@ -30,23 +30,19 @@ fn owner_parts() -> (Fr, Fr, Fr) {
     (sk, r_owner, owner)
 }
 
-fn fresh_config() -> VaultConfig {
+fn fresh_tree() -> (MerkleTree, [[u8; 32]; MERKLE_DEPTH as usize]) {
     let zeros = compute_zero_subtree_roots().unwrap();
-    VaultConfig {
-        admin: Default::default(),
-        tee_pubkey: Default::default(),
-        root_key: Default::default(),
+    let tree = MerkleTree {
         leaf_count: 0,
         current_root: empty_root(&zeros).unwrap(),
         roots: [[0u8; 32]; ROOT_HISTORY_SIZE],
-        roots_head: 0,
-        zero_subtree_roots: zeros,
         right_path: [[0u8; 32]; MERKLE_DEPTH as usize],
+        roots_head: 0,
+        tree_id: 0,
         bump: 0,
-        protocol_owner_commitment: [0u8; 32],
-        fee_rate_bps: 0,
-        _padding: [0u8; 4],
-    }
+        _padding: [0u8; 5],
+    };
+    (tree, zeros)
 }
 
 /// Inclusion witness for `target_index` in a small dense tree padded to depth 20.
@@ -114,7 +110,7 @@ fn prove_merge(
         .collect();
 
     // Commit each note + append to a fresh on-chain-style tree.
-    let mut cfg = fresh_config();
+    let (mut tree, zsr) = fresh_tree();
     let mut commitments = vec![];
     let mut root = [0u8; 32];
     for i in 0..num_real {
@@ -129,7 +125,7 @@ fn prove_merge(
         .unwrap();
         let cb = fr_to_be_bytes(&c);
         commitments.push(cb);
-        root = append_leaf(&mut cfg, cb).unwrap();
+        root = append_leaf(&mut tree, &zsr, cb).unwrap();
     }
 
     // Per-slot witnesses (real) + dummies.

@@ -40,6 +40,7 @@ fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
 struct InitializeArgs {
     tee_pubkey: [u8; 32],
     root_key: [u8; 32],
+    num_trees: u8,
 }
 
 /// Initialise, returning `(vault_pda, initial_tee_pubkey)`.
@@ -52,6 +53,7 @@ fn initialize(svm: &mut LiteSVM, admin: &Keypair, program_id: &Pubkey) -> (Pubke
     InitializeArgs {
         tee_pubkey: tee_kp.pubkey().to_bytes(),
         root_key: root_kp.pubkey().to_bytes(),
+        num_trees: 1,
     }
     .serialize(&mut data)
     .unwrap();
@@ -81,7 +83,10 @@ fn build_set_tee_pubkey_ix(
     new_tee_pubkey: [u8; 32],
 ) -> Instruction {
     let mut data = common::anchor_disc("set_tee_pubkey").to_vec();
-    data.extend_from_slice(&new_tee_pubkey); // Pubkey == raw 32 bytes (Borsh)
+    // The arg is now `keys: Vec<Pubkey>` (the K-key set). Borsh-encode a
+    // single-element vec: 4-byte LE length prefix + the 32-byte key.
+    data.extend_from_slice(&1u32.to_le_bytes());
+    data.extend_from_slice(&new_tee_pubkey);
     Instruction {
         program_id: *program_id,
         accounts: vec![

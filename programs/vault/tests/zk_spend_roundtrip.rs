@@ -23,7 +23,7 @@ use ark_ff::{BigInteger, PrimeField};
 use darkpool_crypto::field::{fr_from_uniform_bytes, fr_to_be_bytes, pubkey_to_fr_pair, u64_to_fr};
 use darkpool_crypto::poseidon::poseidon_hash;
 use vault::merkle::{append_leaf, compute_zero_subtree_roots, empty_root};
-use vault::state::{VaultConfig, MERKLE_DEPTH, ROOT_HISTORY_SIZE};
+use vault::state::{MerkleTree, MERKLE_DEPTH, ROOT_HISTORY_SIZE};
 use vault::zk::verifier::{make_vk, Groth16Proof};
 use vault::zk::verify_groth16_proof;
 use vault::zk::vk_valid_spend::*;
@@ -71,23 +71,19 @@ fn num_bigint_decstring(bytes: &[u8]) -> String {
     out
 }
 
-fn fresh_config() -> VaultConfig {
+fn fresh_tree() -> (MerkleTree, [[u8; 32]; MERKLE_DEPTH as usize]) {
     let zeros = compute_zero_subtree_roots().unwrap();
-    VaultConfig {
-        admin: Default::default(),
-        tee_pubkey: Default::default(),
-        root_key: Default::default(),
+    let tree = MerkleTree {
         leaf_count: 0,
         current_root: empty_root(&zeros).unwrap(),
         roots: [[0u8; 32]; ROOT_HISTORY_SIZE],
-        roots_head: 0,
-        zero_subtree_roots: zeros,
         right_path: [[0u8; 32]; MERKLE_DEPTH as usize],
+        roots_head: 0,
+        tree_id: 0,
         bump: 0,
-        protocol_owner_commitment: [0u8; 32],
-        fee_rate_bps: 0,
-        _padding: [0u8; 4],
-    }
+        _padding: [0u8; 5],
+    };
+    (tree, zeros)
 }
 
 /// Build a Merkle inclusion proof for `leaf_index` in a tree populated with `leaves`.
@@ -188,8 +184,8 @@ fn valid_spend_roundtrip() {
     let note_commitment_bytes = fr_to_be_bytes(&note_commitment);
 
     // ----- Build an on-chain-style Merkle tree with this as the only leaf -----
-    let mut cfg = fresh_config();
-    let root_bytes = append_leaf(&mut cfg, note_commitment_bytes).unwrap();
+    let (mut tree, zsr) = fresh_tree();
+    let root_bytes = append_leaf(&mut tree, &zsr, note_commitment_bytes).unwrap();
 
     // Build the matching inclusion witness.
     let (siblings, path_indices, witness_root) = merkle_witness(&[note_commitment_bytes], 0);
