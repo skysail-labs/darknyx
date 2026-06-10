@@ -132,8 +132,44 @@ pub fn build_settle_v0_tx_b64(
     let tx = build_settle_v0_tx(tee_keypair, ed25519_ix, settle_ix, alts, blockhash)?;
     let wire = bincode::serialize(&tx)
         .map_err(|e| RpcError::Schema(format!("v0 tx bincode serialise failed: {e}")))?;
+
+    // Pre-send size guard. The settle tx rides near the 1232-byte cap; if an
+    // account that SHOULD be ALT-referenced fell inline (e.g. a per-batch ALT
+    // that didn't cover this batch's PDAs), the RPC rejects it post-send with an
+    // opaque -32602. Catch it here + log WHICH accounts are inline (static keys)
+    // vs ALT-looked-up, so the failure names its cause instead of a byte count.
+    if wire.len() > SOLANA_TX_SIZE_CAP {
+        if let VersionedMessage::V0(m) = &tx.message {
+            let inline: Vec<String> = m.account_keys.iter().map(|k| k.to_string()).collect();
+            let alt_lookups: usize = m
+                .address_table_lookups
+                .iter()
+                .map(|l| l.writable_indexes.len() + l.readonly_indexes.len())
+                .sum();
+            tracing::error!(
+                raw_bytes = wire.len(),
+                cap = SOLANA_TX_SIZE_CAP,
+                inline_accounts = m.account_keys.len(),
+                alt_lookups,
+                alts_passed = alts.len(),
+                inline = ?inline,
+                "settle Tx D over the 1232-byte cap — accounts that should be \
+                 ALT-referenced are inline; check the per-batch ALT covers this \
+                 batch's locks/consumed/nullifier PDAs",
+            );
+        }
+        return Err(RpcError::Schema(format!(
+            "settle Tx D is {} raw bytes (cap {SOLANA_TX_SIZE_CAP}); too many inline accounts \
+             — per-batch ALT likely missing this batch's PDAs",
+            wire.len()
+        )));
+    }
+
     Ok(base64::engine::general_purpose::STANDARD.encode(&wire))
 }
+
+/// Solana's hard transaction-size cap (raw wire bytes).
+const SOLANA_TX_SIZE_CAP: usize = 1232;
 
 /// Same as [`build_settle_v0_tx_b64`] but returns the raw
 /// `VersionedTransaction` (for tests that want to inspect the
@@ -236,11 +272,16 @@ mod tests {
         )
         .expect("v0 compile + sign");
 
-        // Serialized wire size must be under Solana's 1232-byte cap.
+        // Serialized wire size must be under Solana's 1232-byte cap — with
+        // COMFORTABLE headroom now that the per-batch ALT also hoists the
+        // consumed-note + nullifier PDAs out of the inline keys (~124 B freed).
+        // This is the worst case: a change-note fill (note_e/f distinct) on a
+        // sharded settle. Assert < 1160 so a regression that drops an account
+        // back inline (≈ −32 B/account of margin) trips here, not on devnet.
         let wire = bincode::serialize(&tx).unwrap();
         assert!(
-            wire.len() <= 1232,
-            "settle v0 tx is {} bytes, over the 1232 cap",
+            wire.len() <= 1160,
+            "settle v0 tx is {} bytes — lost ALT headroom (an account fell inline?)",
             wire.len()
         );
 

@@ -127,11 +127,13 @@ pub fn build_settle_batched_ix(
     }
 }
 
-/// The five per-batch PDAs that go into the per-batch ALT (Tx C):
-/// `note_lock_a/b/e/f` + `batch_validity_marker`. These are exactly
-/// the writable, match-derivable accounts that Tx D references but
-/// that vary per batch — hoisting them into the ALT is what keeps
-/// the settle tx under the 1232-byte cap.
+/// The per-batch PDAs that go into the per-batch ALT (Tx C): the writable,
+/// match-derivable accounts a settle Tx D references but that vary per batch —
+/// `note_lock_{a,b,e,f}`, the `consumed_note` + `nullifier` entries for both
+/// inputs, and `batch_validity_marker`. Hoisting ALL of them (not just the
+/// locks) keeps the settle tx well under the 1232-byte cap: the consumed +
+/// nullifier PDAs were previously inline (~124 B), which left the change-note /
+/// sharded tx riding the edge.
 pub fn per_batch_alt_addresses(
     payload: &MatchResultPayload,
     merkle_root: &[u8; 32],
@@ -141,6 +143,10 @@ pub fn per_batch_alt_addresses(
         note_lock_pda(&payload.note_b_commitment).0,
         note_lock_pda(&payload.note_e_commitment).0,
         note_lock_pda(&payload.note_f_commitment).0,
+        consumed_note_pda(&payload.note_a_commitment).0,
+        consumed_note_pda(&payload.note_b_commitment).0,
+        nullifier_pda(&payload.nullifier_a).0,
+        nullifier_pda(&payload.nullifier_b).0,
         batch_validity_marker_pda(merkle_root).0,
     ]
 }
@@ -172,6 +178,13 @@ pub fn batch_alt_addresses<'a>(
         push(note_lock_pda(&p.note_b_commitment).0);
         push(note_lock_pda(&p.note_e_commitment).0);
         push(note_lock_pda(&p.note_f_commitment).0);
+        // consumed-note + nullifier entries for both inputs — Tx D inits these,
+        // and ALT-referencing them (vs inline) is what gives the change-note /
+        // sharded settle tx its headroom under the 1232-byte cap.
+        push(consumed_note_pda(&p.note_a_commitment).0);
+        push(consumed_note_pda(&p.note_b_commitment).0);
+        push(nullifier_pda(&p.nullifier_a).0);
+        push(nullifier_pda(&p.nullifier_b).0);
     }
     push(batch_validity_marker_pda(merkle_root).0);
     out
@@ -243,25 +256,30 @@ mod tests {
     fn batch_alt_addresses_unions_all_matches_and_one_marker() {
         let root = [0xAB; 32];
 
-        // Single match == per_batch_alt_addresses (5 entries: 4 locks +
-        // marker; note_e/f are zero here and collide → deduped to one).
+        // Single match: note_lock_a, note_lock_b, (note_lock_e==f deduped to 1),
+        // consumed_a, consumed_b, nullifier_a, nullifier_b, marker = 8 distinct.
         let p0 = dummy_payload();
         let single = batch_alt_addresses([&p0], &root);
-        // a, b, (e==f deduped), marker = 4 distinct.
-        assert_eq!(single.len(), 4);
+        assert_eq!(single.len(), 8);
         assert!(single.contains(&note_lock_pda(&p0.note_a_commitment).0));
+        assert!(single.contains(&consumed_note_pda(&p0.note_a_commitment).0));
+        assert!(single.contains(&nullifier_pda(&p0.nullifier_a).0));
         assert!(single.contains(&batch_validity_marker_pda(&root).0));
 
-        // Two DISTINCT matches: their a/b locks add, the marker stays
-        // single (shared across the batch).
+        // Two DISTINCT matches (distinct notes AND nullifiers): each adds its
+        // a/b locks + consumed + nullifier; the all-zero note_lock_e/f and the
+        // marker stay shared across the batch.
         let mut p1 = dummy_payload();
         p1.note_a_commitment = [0xA2; 32];
         p1.note_b_commitment = [0xB2; 32];
+        p1.nullifier_a = [0xE2; 32];
+        p1.nullifier_b = [0xE3; 32];
         let multi = batch_alt_addresses([&p0, &p1], &root);
-        // p0: a,b + p1: a,b (e/f all zero → 1 shared) + marker = 6.
-        assert_eq!(multi.len(), 6);
+        // p0: a,b locks + consumed_a,b + null_a,b + (e/f shared 1) = 7
+        // p1: a,b locks + consumed_a,b + null_a,b = 6 (e/f shared) → 13 + marker = 14.
+        assert_eq!(multi.len(), 14);
         assert!(multi.contains(&note_lock_pda(&p1.note_a_commitment).0));
-        assert!(multi.contains(&note_lock_pda(&p0.note_a_commitment).0));
+        assert!(multi.contains(&nullifier_pda(&p1.nullifier_a).0));
         // Exactly one marker.
         let marker = batch_validity_marker_pda(&root).0;
         assert_eq!(multi.iter().filter(|a| **a == marker).count(), 1);
@@ -355,10 +373,12 @@ mod tests {
     }
 
     #[test]
-    fn per_batch_alt_has_five_addresses() {
+    fn per_batch_alt_has_nine_addresses() {
         let addrs = per_batch_alt_addresses(&dummy_payload(), &[0xAB; 32]);
-        assert_eq!(addrs.len(), 5);
+        // 4 locks (a,b,e,f — e/f duplicated for an exact fill, not deduped here)
+        // + 2 consumed + 2 nullifier + marker = 9.
+        assert_eq!(addrs.len(), 9);
         // Marker is last; matches the standalone PDA.
-        assert_eq!(addrs[4], batch_validity_marker_pda(&[0xAB; 32]).0);
+        assert_eq!(addrs[8], batch_validity_marker_pda(&[0xAB; 32]).0);
     }
 }
