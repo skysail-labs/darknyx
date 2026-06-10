@@ -88,6 +88,9 @@ pub(crate) async fn spawn_mock_rpc() -> String {
                     .collect();
                 json!({ "context": { "slot": 1000 }, "value": value })
             }
+            // Per-batch ALT re-read → null so the worker falls back to its
+            // in-memory ALT order (the mock doesn't model account state).
+            "getAccountInfo" => json!({ "context": { "slot": 1000 }, "value": null }),
             // An unexpected method gets a proper top-level JSON-RPC
             // error object (no `result`), so the client surfaces it as
             // RpcError::Rpc rather than a malformed result.

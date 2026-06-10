@@ -114,6 +114,28 @@ pub fn build_extend_alt_ix_chunks(
         .collect()
 }
 
+/// Parse the address list out of a raw on-chain ALT account's data. Addresses
+/// are 32-byte pubkeys packed contiguously after the 56-byte `LookupTableMeta`
+/// (`LOOKUP_TABLE_META_SIZE`). Used to read an ALT's CANONICAL on-chain order
+/// back after the per-batch extends are fired CONCURRENTLY — the leader chooses
+/// their in-block execution (and thus append) order, so the worker can't assume
+/// its in-memory order matches; it re-reads the truth and feeds that to the Tx D
+/// v0 message (which resolves each account to its index in this list).
+pub fn parse_alt_addresses(data: &[u8]) -> Vec<Address> {
+    const LOOKUP_TABLE_META_SIZE: usize = 56;
+    if data.len() <= LOOKUP_TABLE_META_SIZE {
+        return Vec::new();
+    }
+    data[LOOKUP_TABLE_META_SIZE..]
+        .chunks_exact(32)
+        .map(|c| {
+            let mut a = [0u8; 32];
+            a.copy_from_slice(c);
+            Address::new_from_array(a)
+        })
+        .collect()
+}
+
 /// Build a `deactivate` ix for an ALT being rotated out of the pool.
 /// After this lands the ALT enters a ~512-slot cooldown; its rent is
 /// reclaimable (via `close`) only once cooled.
@@ -175,6 +197,22 @@ mod tests {
         assert_eq!(chunks.len(), 4);
         // Empty input → no extend ixs.
         assert!(build_extend_alt_ix_chunks(&auth, &alt, &[]).is_empty());
+    }
+
+    #[test]
+    fn parse_alt_addresses_reads_packed_pubkeys_after_meta() {
+        // 56-byte meta + 3 packed 32-byte addresses.
+        let mut data = vec![0u8; 56];
+        for i in 1u8..=3 {
+            data.extend_from_slice(&[i; 32]);
+        }
+        let addrs = parse_alt_addresses(&data);
+        assert_eq!(addrs.len(), 3);
+        assert_eq!(addrs[0], Address::new_from_array([1; 32]));
+        assert_eq!(addrs[2], Address::new_from_array([3; 32]));
+        // Meta-only (or shorter) → empty.
+        assert!(parse_alt_addresses(&[0u8; 56]).is_empty());
+        assert!(parse_alt_addresses(&[0u8; 10]).is_empty());
     }
 
     #[test]

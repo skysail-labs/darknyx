@@ -49,13 +49,25 @@ pub async fn submit_ixs_with_blockhash(
     ixs: &[Instruction],
     blockhash: Hash,
 ) -> Result<String, RpcError> {
+    let tx_b64 = build_tx_b64(payer, ixs, blockhash)?;
+    rpc.send_transaction(&tx_b64).await
+}
+
+/// Build + sign a legacy tx → base64 wire (does NOT send). Lets a caller fire
+/// many txs CONCURRENTLY (sharing one blockhash) and confirm them together —
+/// e.g. the per-batch ALT's chunked extends, which write-conflict on the ALT so
+/// the leader co-includes them in one block (a single activation window).
+pub fn build_tx_b64(
+    payer: &Keypair,
+    ixs: &[Instruction],
+    blockhash: Hash,
+) -> Result<String, RpcError> {
     use solana_signer::Signer;
     let payer_pubkey = payer.pubkey();
     let tx = Transaction::new_signed_with_payer(ixs, Some(&payer_pubkey), &[payer], blockhash);
     let wire = bincode::serialize(&tx)
         .map_err(|e| RpcError::Schema(format!("tx bincode serialise failed: {e}")))?;
-    let tx_b64 = base64::engine::general_purpose::STANDARD.encode(&wire);
-    rpc.send_transaction(&tx_b64).await
+    Ok(base64::engine::general_purpose::STANDARD.encode(&wire))
 }
 
 /// Send a pre-built base64 tx, then poll until it confirms at the client's

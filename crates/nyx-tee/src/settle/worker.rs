@@ -33,11 +33,15 @@ use std::time::{Duration, Instant};
 use ed25519_dalek::SigningKey;
 use solana_address::Address;
 use solana_hash::Hash;
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 use tokio::sync::RwLock;
 
-use super::alt::{build_deactivate_alt_ix, build_extend_alt_ix_chunks, build_per_batch_alt_ixs};
+use super::alt::{
+    build_deactivate_alt_ix, build_extend_alt_ix_chunks, build_per_batch_alt_ixs,
+    parse_alt_addresses,
+};
 use super::alt_pool::{AltPlan, AltPool};
 use super::close_marker::build_close_marker_ix;
 use super::ed25519::build_ed25519_verify_ix;
@@ -50,7 +54,8 @@ use super::scheduler::SettleSchedulerState;
 use super::settle_batched::{batch_alt_addresses, build_settle_batched_ix};
 use super::sign::sign_payload;
 use super::submit::{
-    confirm_signatures, send_and_confirm_with_rebroadcast, submit_ixs, submit_ixs_with_blockhash,
+    build_tx_b64, confirm_signatures, send_and_confirm_with_rebroadcast, submit_ixs,
+    submit_ixs_with_blockhash,
 };
 use super::submit_lock::{build_lock_tx_b64, LockSideInputs};
 use super::verify_match_batch::{build_verify_match_batch_ix, VerifyMatchBatchArgs};
@@ -128,6 +133,47 @@ pub struct SettleWorkerCtx {
 /// One concurrent settle Tx D's outcome: (match_idx, signature, confirmed_slot,
 /// confirm_latency_ms). Collected from the bounded `JoinSet` in the settle stage.
 type SettleSendResult = Result<(usize, String, Option<u64>, u64), WorkerError>;
+
+/// Fire a set of per-batch ALT `extend` ixs CONCURRENTLY (one tx each, bounded),
+/// confirming all. The extends write-conflict on the ALT account, so the leader
+/// co-includes them in ONE block — collapsing the old sequential-confirm latency
+/// (~1.13s × chunks) into a single confirmation window + a single activation
+/// window. Their on-chain append order is leader-chosen; the caller re-reads the
+/// ALT's canonical order afterward (see [`parse_alt_addresses`]).
+async fn send_extends_concurrent(
+    rpc: &SolanaRpcClient,
+    payer: &Keypair,
+    extend_ixs: Vec<Instruction>,
+    blockhash: Hash,
+    timeout: Duration,
+    concurrency: usize,
+) -> Result<(), WorkerError> {
+    if extend_ixs.is_empty() {
+        return Ok(());
+    }
+    // Build+sign each extend tx up front (sharing the blockhash), then fire.
+    let mut txs: Vec<String> = Vec::with_capacity(extend_ixs.len());
+    for ix in extend_ixs {
+        txs.push(build_tx_b64(payer, &[ix], blockhash)?);
+    }
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
+    let mut set: tokio::task::JoinSet<Result<(), WorkerError>> = tokio::task::JoinSet::new();
+    for tx_b64 in txs {
+        let rpc = rpc.clone();
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire_owned().await.expect("extend semaphore");
+            send_and_confirm_with_rebroadcast(&rpc, &tx_b64, timeout, Duration::from_millis(1500))
+                .await?;
+            Ok(())
+        });
+    }
+    while let Some(joined) = set.join_next().await {
+        joined
+            .map_err(|e| WorkerError::Rpc(RpcError::Schema(format!("extend send task: {e}"))))??;
+    }
+    Ok(())
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum WorkerError {
@@ -398,7 +444,7 @@ async fn run_batch_settle_inner(
         // still overlap. Capturing `settle_account()` while still locked is
         // required: once we release, another in-flight batch may extend/rotate
         // the pool and a later read would return the wrong table.
-        let per_batch_alt = {
+        let in_mem_alt = {
             let mut pool = ctx.alt_pool.lock().await;
             let plan = pool.plan(alt_addrs.len());
             let bh = ctx.rpc.get_latest_blockhash().await?;
@@ -438,11 +484,8 @@ async fn run_batch_settle_inner(
                     let alt_build =
                         build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
                     // tx0: create + the FIRST extend chunk (keeps small batches a
-                    // single tx, unchanged). Remaining chunks go one-tx-each below
-                    // — a single tx can't hold > ~30 addresses' worth of extend
-                    // data (an N=16 batch's lock+consumed+nullifier PDAs blow past
-                    // that), and they must land in order so the ALT index mapping
-                    // mirrors `alt_addrs`.
+                    // single tx). The create must confirm before the rest can
+                    // reference the ALT.
                     let mut extends = alt_build.extend_ixs.into_iter();
                     let mut tx0 = vec![alt_build.create_ix];
                     tx0.extend(extends.next());
@@ -454,43 +497,43 @@ async fn run_batch_settle_inner(
                     )
                     .await?;
                     confirm_signatures(&ctx.rpc, &[create_sig], ctx.confirm_timeout).await?;
-                    for ext_ix in extends {
-                        let ext_sig = submit_ixs_with_blockhash(
-                            &ctx.rpc,
-                            ctx.primary_keypair(),
-                            &[ext_ix],
-                            Hash::new_from_array(bh.blockhash),
-                        )
-                        .await?;
-                        confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
-                    }
+                    // Remaining chunks CONCURRENTLY — they write-conflict on the
+                    // ALT so the leader co-includes them in one block (a single
+                    // activation window instead of one slot per chunk). Order is
+                    // leader-chosen → we re-read the ALT's canonical order below.
+                    send_extends_concurrent(
+                        &ctx.rpc,
+                        ctx.primary_keypair(),
+                        extends.collect(),
+                        Hash::new_from_array(bh.blockhash),
+                        ctx.confirm_timeout,
+                        ctx.settle_send_concurrency,
+                    )
+                    .await?;
                     pool.commit_create(alt_build.alt_address, alt_addrs.clone(), deactivated);
                 }
                 AltPlan::Extend { alt } => {
-                    // Append this batch's addresses, chunked across sequential txs
-                    // (≤ MAX_EXTEND_ADDRESSES each, in order).
-                    for ext_ix in build_extend_alt_ix_chunks(&tee_pubkey, &alt, &alt_addrs) {
-                        let ext_sig = submit_ixs_with_blockhash(
-                            &ctx.rpc,
-                            ctx.primary_keypair(),
-                            &[ext_ix],
-                            Hash::new_from_array(bh.blockhash),
-                        )
-                        .await?;
-                        confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
-                    }
+                    // Append this batch's addresses; chunks fired CONCURRENTLY
+                    // (co-include → single activation window).
+                    send_extends_concurrent(
+                        &ctx.rpc,
+                        ctx.primary_keypair(),
+                        build_extend_alt_ix_chunks(&tee_pubkey, &alt, &alt_addrs),
+                        Hash::new_from_array(bh.blockhash),
+                        ctx.confirm_timeout,
+                        ctx.settle_send_concurrency,
+                    )
+                    .await?;
                     pool.commit_extend(&alt_addrs);
                 }
             }
+            // The pool's in-memory table (key + the addresses in submit order).
+            // Used as the fallback below if the on-chain re-read comes back empty
+            // (e.g. a transient RPC blip, or the mock RPC in unit tests).
             pool.settle_account()
                 .expect("pool has a current ALT after plan/commit")
         };
         let alt_tx_ms = t.elapsed().as_millis() as u64;
-        tracing::info!(
-            alt = %per_batch_alt.key,
-            entries = per_batch_alt.addresses.len(),
-            "per-batch ALT ready (rolling pool)"
-        );
 
         // A freshly created OR extended ALT's new addresses are NOT loadable
         // until the slot AFTER the extend lands. Wait until the chain advances
@@ -514,6 +557,33 @@ async fn run_batch_settle_inner(
             );
             return Err(WorkerError::AltNotActive(alt_landed_slot));
         }
+
+        // Re-read the ALT's CANONICAL on-chain address order. The extends were
+        // fired concurrently, so the leader (not us) chose their append order;
+        // the Tx D v0 message resolves each account to its index in this list,
+        // which MUST mirror the on-chain ALT exactly. Fall back to the pool's
+        // in-memory table if the read comes back empty (transient RPC / tests).
+        let alt_key = in_mem_alt.key;
+        let on_chain = ctx
+            .rpc
+            .get_account_info(&alt_key)
+            .await?
+            .map(|acc| parse_alt_addresses(&acc.data))
+            .unwrap_or_default();
+        let per_batch_alt = if on_chain.is_empty() {
+            tracing::warn!(alt = %alt_key, "per-batch ALT re-read empty; using in-memory order");
+            in_mem_alt
+        } else {
+            solana_message::AddressLookupTableAccount {
+                key: alt_key,
+                addresses: on_chain,
+            }
+        };
+        tracing::info!(
+            alt = %per_batch_alt.key,
+            entries = per_batch_alt.addresses.len(),
+            "per-batch ALT ready (canonical order re-read after concurrent extends)"
+        );
         Ok::<_, WorkerError>((per_batch_alt, alt_tx_ms, t.elapsed().as_millis() as u64))
     };
 
@@ -789,6 +859,9 @@ mod tests {
                         .collect();
                     json!({ "context": { "slot": 1000 }, "value": value })
                 }
+                // Per-batch ALT re-read → null so the worker falls back to its
+                // in-memory ALT order (the mock doesn't model account state).
+                "getAccountInfo" => json!({ "context": { "slot": 1000 }, "value": null }),
                 other => json!({ "error": format!("unexpected method {other}") }),
             };
             Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
@@ -855,6 +928,9 @@ mod tests {
                         .collect();
                     json!({ "context": { "slot": 1000 }, "value": value })
                 }
+                // Per-batch ALT re-read → null so the worker falls back to its
+                // in-memory ALT order (the mock doesn't model account state).
+                "getAccountInfo" => json!({ "context": { "slot": 1000 }, "value": null }),
                 other => json!({ "error": format!("unexpected method {other}") }),
             };
             Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))

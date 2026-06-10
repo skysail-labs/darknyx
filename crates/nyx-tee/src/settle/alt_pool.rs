@@ -121,6 +121,14 @@ impl AltPool {
         })
     }
 
+    /// The current ALT's address (key), if any. The worker captures this while
+    /// holding the pool lock, then (after releasing) re-reads the ALT's
+    /// canonical on-chain address order for the Tx D v0 message — its in-memory
+    /// `addresses` order may not match once extends are fired concurrently.
+    pub fn current_alt_address(&self) -> Option<Address> {
+        self.current.as_ref().map(|c| c.address)
+    }
+
     /// Number of entries in the current ALT (for logging / metrics).
     pub fn current_len(&self) -> usize {
         self.current
