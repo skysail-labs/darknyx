@@ -158,31 +158,51 @@ pub async fn submit_lock_note_pair(
     })
 }
 
-async fn build_sign_send(
-    rpc: &SolanaRpcClient,
+/// Build + sign ONE `lock_note` tx → base64 wire form. Does NOT send — the
+/// caller can fire many concurrently (sharing `blockhash`) and confirm them
+/// together (see the worker's concurrent lock pass). `keypair` is the shard's
+/// fee-payer AND `tee_authority` AND signer (one key, one signature). Returns
+/// `None` for an `already_locked` continuation side (no lock to issue).
+pub fn build_lock_tx_b64(
     keypair: &Keypair,
-    tee_pubkey: &Address,
     blockhash: Hash,
-    side: LockSideInputs,
+    side: &LockSideInputs,
     priority_fee: u64,
-) -> Result<String, RpcError> {
-    let ix = build_lock_note_ix(tee_pubkey, side.into());
+) -> Result<Option<String>, RpcError> {
+    if side.already_locked {
+        return Ok(None);
+    }
+    let tee_pubkey = keypair.pubkey();
+    let ix = build_lock_note_ix(&tee_pubkey, side.clone().into());
     // lock_note runs a full 26-level Merkle inclusion check (~118k CU,
     // tight under the 200k/ix default) — request a right-sized explicit
     // limit (+ the priority-fee price ix) so the tx is bid on a tight CU
     // footprint and packs predictably.
     let mut ixs = budget_ixs(LOCK_COMPUTE_UNIT_LIMIT, priority_fee);
     ixs.push(ix);
-    // `new_signed_with_payer` sets `account_keys[0]` to the
-    // payer (the TEE pubkey), and signs in one shot. Same key
-    // plays `tee_authority` AND fee-payer, so one keypair in
-    // the signers slice satisfies both constraints.
-    let tx = Transaction::new_signed_with_payer(&ixs, Some(tee_pubkey), &[keypair], blockhash);
-
+    // `new_signed_with_payer` sets `account_keys[0]` to the payer (the shard
+    // key), and signs in one shot — that key plays `tee_authority` AND
+    // fee-payer, so one keypair satisfies both constraints.
+    let tx = Transaction::new_signed_with_payer(&ixs, Some(&tee_pubkey), &[keypair], blockhash);
     let wire = bincode::serialize(&tx)
         .map_err(|e| RpcError::Schema(format!("tx bincode serialise failed: {e}")))?;
-    let tx_b64 = base64::engine::general_purpose::STANDARD.encode(&wire);
+    Ok(Some(
+        base64::engine::general_purpose::STANDARD.encode(&wire),
+    ))
+}
 
+async fn build_sign_send(
+    rpc: &SolanaRpcClient,
+    keypair: &Keypair,
+    _tee_pubkey: &Address,
+    blockhash: Hash,
+    side: LockSideInputs,
+    priority_fee: u64,
+) -> Result<String, RpcError> {
+    // `already_locked` is handled by the caller here (the side is only passed
+    // when there's a lock to send), so `build_lock_tx_b64` always returns Some.
+    let tx_b64 = build_lock_tx_b64(keypair, blockhash, &side, priority_fee)?
+        .expect("build_sign_send called for an already_locked side");
     rpc.send_transaction(&tx_b64).await
 }
 

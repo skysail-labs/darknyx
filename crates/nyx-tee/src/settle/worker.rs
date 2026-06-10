@@ -52,7 +52,7 @@ use super::sign::sign_payload;
 use super::submit::{
     confirm_signatures, send_and_confirm_with_rebroadcast, submit_ixs, submit_ixs_with_blockhash,
 };
-use super::submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockSideInputs};
+use super::submit_lock::{build_lock_tx_b64, LockSideInputs};
 use super::verify_match_batch::{build_verify_match_batch_ix, VerifyMatchBatchArgs};
 use crate::prover::{build_batch_public_inputs, merkle_inclusion_path, MatchSlotWitness, Prover};
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
@@ -259,27 +259,69 @@ async fn run_batch_settle_inner(
         .await;
     let t_par = Instant::now();
 
-    // Branch A — lock the input notes (Tx A), per match.
+    // Branch A — lock the input notes (Tx A), CONCURRENTLY. Mirrors the
+    // settle send pass: the old per-match `submit → confirm → next` loop paid a
+    // full ~1.13s block-confirmation SERIALLY per match (lock_ms scaled ~1.4s ×
+    // N — the post-sharding bottleneck). The locks are independent (distinct
+    // NoteLock PDAs) and only READ `merkle_tree`, so firing them together lets
+    // the leader co-include them; round-robining the fee-payer/authority across
+    // the K shard keys removes the last shared writable account (the fee-payer)
+    // so they parallelize, exactly like Tx D.
     let lock_branch = async {
         let t = Instant::now();
+        // Pass 1 — build+sign every lock tx up front, sharing ONE blockhash.
+        let bh = ctx.rpc.get_latest_blockhash().await?;
+        let blockhash = Hash::new_from_array(bh.blockhash);
+        // (match_idx, is_buyer, tx_b64)
+        let mut lock_txs: Vec<(usize, bool, String)> = Vec::with_capacity(2 * n);
         for (idx, m) in inputs.matches.iter().enumerate() {
-            let outcome = submit_lock_note_pair(
-                &ctx.rpc,
-                ctx.primary_keypair(),
-                m.buyer_lock.clone(),
-                m.seller_lock.clone(),
-                priority_fee,
-            )
-            .await?;
-            confirm_lock_pair(&ctx.rpc, &outcome, ctx.confirm_timeout).await?;
+            let kp = &ctx.tee_keypairs[idx % ctx.num_settle_shards()];
+            if let Some(tx) = build_lock_tx_b64(kp, blockhash, &m.buyer_lock, priority_fee)? {
+                lock_txs.push((idx, true, tx));
+            }
+            if let Some(tx) = build_lock_tx_b64(kp, blockhash, &m.seller_lock, priority_fee)? {
+                lock_txs.push((idx, false, tx));
+            }
+        }
+
+        // Pass 2 — send+confirm all locks concurrently (bounded), rebroadcasting
+        // until each lands (same primitive Tx D uses).
+        let sem = Arc::new(tokio::sync::Semaphore::new(
+            ctx.settle_send_concurrency.max(1),
+        ));
+        let mut set: tokio::task::JoinSet<Result<(usize, bool, String), WorkerError>> =
+            tokio::task::JoinSet::new();
+        for (idx, is_buyer, tx_b64) in lock_txs {
+            let rpc = ctx.rpc.clone();
+            let timeout = ctx.confirm_timeout;
+            let sem = sem.clone();
+            set.spawn(async move {
+                let _permit = sem.acquire_owned().await.expect("lock semaphore");
+                let (sig, _slot) = send_and_confirm_with_rebroadcast(
+                    &rpc,
+                    &tx_b64,
+                    timeout,
+                    Duration::from_millis(1500),
+                )
+                .await?;
+                Ok((idx, is_buyer, sig))
+            });
+        }
+        while let Some(joined) = set.join_next().await {
+            let (idx, is_buyer, sig) = joined.map_err(|e| {
+                WorkerError::Rpc(RpcError::Schema(format!("lock send task: {e}")))
+            })??;
             let id = SettleJobId {
                 batch_id,
                 match_idx: idx as u8,
             };
             let mut st = ctx.settle_state.write().await;
             st.update(&id, |j| {
-                j.lock_buyer_sig = outcome.buyer_sig.clone();
-                j.lock_seller_sig = outcome.seller_sig.clone();
+                if is_buyer {
+                    j.lock_buyer_sig = Some(sig.clone());
+                } else {
+                    j.lock_seller_sig = Some(sig.clone());
+                }
             });
         }
         Ok::<u64, WorkerError>(t.elapsed().as_millis() as u64)
@@ -956,6 +998,18 @@ mod tests {
         }
     }
 
+    /// Fee-payer (`account_keys[0]`) of a base64 LEGACY tx, returning `None`
+    /// for a v0 tx — so a test can filter the legacy lock txs (Tx A) from the
+    /// v0 settle txs (Tx D).
+    fn legacy_fee_payer(tx_b64: &str) -> Option<Address> {
+        use base64::Engine as _;
+        let wire = base64::engine::general_purpose::STANDARD
+            .decode(tx_b64)
+            .ok()?;
+        let tx: solana_transaction::Transaction = bincode::deserialize(&wire).ok()?;
+        tx.message.account_keys.first().copied()
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn settle_round_robins_distinct_shard_fee_payers() {
         // K=2 shard keys, a 2-match batch → the two settle Tx D's must be
@@ -1006,6 +1060,12 @@ mod tests {
             settle_payers.contains(&key1),
             "shard-1 key must pay a settle"
         );
+
+        // The LOCK txs (Tx A, legacy) must ALSO round-robin the two shard keys —
+        // match 0's locks paid by key0, match 1's by key1 (idx % K).
+        let lock_payers: Vec<Address> = sent.iter().filter_map(|t| legacy_fee_payer(t)).collect();
+        assert!(lock_payers.contains(&key0), "shard-0 key must pay a lock");
+        assert!(lock_payers.contains(&key1), "shard-1 key must pay a lock");
     }
 
     #[tokio::test(flavor = "multi_thread")]
