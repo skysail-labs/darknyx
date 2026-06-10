@@ -38,9 +38,18 @@ const MAX_LEAF_PAGE: u64 = 10_000;
 /// `GET /tree/root` response. Mirrors the openapi `TreeRoot` schema.
 #[derive(Debug, Serialize)]
 pub struct TreeRootResponse {
+    pub tree_id: u8,
     pub merkle_root: String,
     pub leaf_count: u64,
     pub on_chain_slot: u64,
+}
+
+/// Shared `?tree_id=` selector for the `/tree/*` reads. Defaults to shard 0
+/// (the single-shard / pre-sharding view) when omitted.
+#[derive(Debug, Deserialize, Default)]
+pub struct TreeIdQuery {
+    #[serde(default)]
+    pub tree_id: u8,
 }
 
 /// `GET /tree/inclusion` response. Mirrors the openapi `InclusionProof`
@@ -56,6 +65,8 @@ pub struct InclusionProofResponse {
 #[derive(Debug, Deserialize)]
 pub struct InclusionQuery {
     pub commitment: String,
+    #[serde(default)]
+    pub tree_id: u8,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,6 +85,8 @@ pub struct LeavesResponse {
 pub struct LeavesQuery {
     pub from: u64,
     pub to: u64,
+    #[serde(default)]
+    pub tree_id: u8,
 }
 
 /// Parse a 32-byte hex string (with or without a `0x` prefix) into a
@@ -90,10 +103,14 @@ fn parse_hex32(s: &str) -> Result<[u8; 32], (StatusCode, String)> {
     })
 }
 
-/// `GET /tree/root` — public.
-pub async fn get_root(State(state): State<Arc<ApiState>>) -> Json<TreeRootResponse> {
-    let mirror = state.merkle_mirror.read().await;
+/// `GET /tree/root?tree_id=` — public. Defaults to shard 0.
+pub async fn get_root(
+    State(state): State<Arc<ApiState>>,
+    Query(q): Query<TreeIdQuery>,
+) -> Json<TreeRootResponse> {
+    let mirror = state.merkle_mirror(q.tree_id as usize).read().await;
     Json(TreeRootResponse {
+        tree_id: q.tree_id,
         merkle_root: hex::encode(mirror.root()),
         leaf_count: mirror.leaf_count(),
         on_chain_slot: mirror.on_chain_slot(),
@@ -111,7 +128,7 @@ pub async fn get_inclusion(
     let commitment = parse_hex32(&q.commitment)?;
 
     let proof = {
-        let mirror = state.merkle_mirror.read().await;
+        let mirror = state.merkle_mirror(q.tree_id as usize).read().await;
         mirror.inclusion_proof(&commitment).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -150,7 +167,7 @@ pub async fn get_leaves(
     // a span — without this `?from=0&to=<huge>` would dump the whole
     // mirror). Clients page with successive `from`.
     let capped_to = q.to.min(q.from.saturating_add(MAX_LEAF_PAGE));
-    let mirror = state.merkle_mirror.read().await;
+    let mirror = state.merkle_mirror(q.tree_id as usize).read().await;
     let (start, leaves) = mirror.leaves_range(q.from, capped_to);
     Ok(Json(LeavesResponse {
         leaves: leaves

@@ -141,10 +141,17 @@ async fn read_reserve(rpc: &SolanaRpcClient, mint: &[u8; 32]) -> PerMintReserve 
 
 /// `GET /transparency` — public.
 pub async fn get_transparency(State(state): State<Arc<ApiState>>) -> Json<TransparencySnapshot> {
-    // Reserves: mirror root/count + per-mint on-chain reads.
+    // Reserves: mirror root/count + per-mint on-chain reads. Post-sharding
+    // `leaf_count` is the SUM across all shard mirrors (total notes in the
+    // pool); `merkle_root` is shard 0's root (there is no single global root —
+    // each shard has its own; clients fetch per-shard roots via /tree/root).
     let (merkle_root, leaf_count) = {
-        let m = state.merkle_mirror.read().await;
-        (hex::encode(m.root()), m.leaf_count())
+        let root = hex::encode(state.merkle_mirror(0).read().await.root());
+        let mut total = 0u64;
+        for shard in &state.merkle_mirrors {
+            total += shard.read().await.leaf_count();
+        }
+        (root, total)
     };
 
     // Unique market mints across all instruments.

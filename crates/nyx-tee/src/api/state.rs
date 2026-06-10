@@ -34,6 +34,13 @@ use crate::persistence;
 use crate::settle::SettleSchedulerState;
 use crate::solana_rpc::SolanaRpcClient;
 
+/// Build `num_trees.max(1)` empty shard mirrors (one per `tree_id`).
+fn new_shard_mirrors(num_trees: u8) -> Vec<Arc<RwLock<MerkleMirror>>> {
+    (0..num_trees.max(1))
+        .map(|_| Arc::new(RwLock::new(MerkleMirror::new())))
+        .collect()
+}
+
 /// Fields we captured from `dstack.info()` at boot. Stable for
 /// the CVM's lifetime — no need to re-fetch per request.
 #[derive(Debug, Clone)]
@@ -128,14 +135,14 @@ pub struct ApiState {
     /// for now; a multi-market deploy populates more.
     pub instruments: Vec<InstrumentInfo>,
 
-    // ── Merkle mirror (Phase 2 — indexer surface) ───────────────
-    /// In-memory mirror of the on-chain incremental Merkle tree.
+    // ── Merkle mirrors (Phase 2 indexer surface; sharded Phase 3) ───
+    /// One in-memory mirror per Merkle-tree shard, indexed by `tree_id`.
     /// Backs the `/tree/*` read endpoints (D6, §5.5). Always present
-    /// (pure in-memory, no external dependency) — starts empty and is
-    /// fed by the sync task (Phase 2b). Readers take the read lock for
-    /// a single response; the sync task takes the write lock when
-    /// applying confirmed leaves.
-    pub merkle_mirror: Arc<RwLock<MerkleMirror>>,
+    /// (pure in-memory) — each starts empty and is fed by the sync task,
+    /// which routes every appended leaf to `merkle_mirrors[leaf.tree_id]`.
+    /// `len() == num_trees` (1 for a single-shard / `for_tests` build).
+    /// Use [`Self::merkle_mirror`] to index by `tree_id` safely.
+    pub merkle_mirrors: Vec<Arc<RwLock<MerkleMirror>>>,
 
     // ── Matcher state (PR 4e.3 / 4e.4) ──────────────────────────
     /// Shared order book + match-id counter. `None` in degraded
@@ -218,6 +225,7 @@ impl ApiState {
         signer: &DerivedSigner,
         dstack: Arc<DstackClient>,
         jwt_secret: [u8; 32],
+        num_trees: u8,
     ) -> Self {
         let state_dir = persistence::state_dir_from_env();
         let (registry, revoked) = Self::load_or_seed_auth(state_dir.as_deref());
@@ -237,8 +245,8 @@ impl ApiState {
             // Populated by main.rs via `with_instruments` from the
             // market MatchConfig; empty until then.
             instruments: Vec::new(),
-            // Empty mirror — the Phase 2b sync task fills it from chain.
-            merkle_mirror: Arc::new(RwLock::new(MerkleMirror::new())),
+            // K empty shard mirrors — the sync task fills each from chain.
+            merkle_mirrors: new_shard_mirrors(num_trees),
             // `from_boot` doesn't construct the matcher — PR 4e.4
             // spawns the `MatcherDriver` and plumbs its state in via
             // a separate construction path. Until then the orders
@@ -251,6 +259,20 @@ impl ApiState {
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// The Merkle mirror for shard `tree_id`. Out-of-range (a bad
+    /// `?tree_id` query) clamps to shard 0 so a malformed request reads the
+    /// primary shard instead of panicking.
+    pub fn merkle_mirror(&self, tree_id: usize) -> &Arc<RwLock<MerkleMirror>> {
+        self.merkle_mirrors
+            .get(tree_id)
+            .unwrap_or(&self.merkle_mirrors[0])
+    }
+
+    /// Number of shard mirrors (== `num_trees`).
+    pub fn num_mirror_shards(&self) -> usize {
+        self.merkle_mirrors.len()
     }
 
     /// Attach the Solana RPC client. Called by `main.rs` after
@@ -347,7 +369,7 @@ impl ApiState {
                 oracle_feed_id: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
                     .to_string(),
             }],
-            merkle_mirror: Arc::new(RwLock::new(MerkleMirror::new())),
+            merkle_mirrors: new_shard_mirrors(1),
             matcher: Some(Arc::new(RwLock::new(MatcherState::new()))),
             // Tests that exercise expiry need to bump this; the
             // default starting slot is 1 so an order with

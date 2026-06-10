@@ -49,9 +49,12 @@ pub static TRADE_SETTLED_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
     d
 });
 
-/// One leaf appended on-chain: its index + 32-byte value.
+/// One leaf appended on-chain: which shard it landed in + its index within
+/// that shard + the 32-byte value. Post-sharding the index is PER-SHARD, so
+/// `tree_id` is required to route the leaf to the right mirror.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppendedLeaf {
+    pub tree_id: u8,
     pub leaf_index: u64,
     pub value: [u8; 32],
 }
@@ -60,7 +63,7 @@ pub struct AppendedLeaf {
 /// must match `programs/vault/src/instructions/deposit.rs`).
 #[derive(BorshDeserialize)]
 struct NoteCreatedEvent {
-    _tree_id: u8,
+    tree_id: u8,
     leaf_index: u64,
     commitment: [u8; 32],
     _token_mint: [u8; 32],
@@ -74,7 +77,7 @@ struct NoteCreatedEvent {
 /// required for a correct sequential borsh decode.
 #[derive(BorshDeserialize)]
 struct TradeSettledEvent {
-    _tree_id: u8,
+    tree_id: u8,
     _match_id: [u8; 16],
     _clearing_price: u64,
     _base_amount: u64,
@@ -153,6 +156,7 @@ pub fn extract_appended_leaves(
         if disc == *NOTE_CREATED_DISCRIMINATOR {
             if let Ok(ev) = NoteCreatedEvent::try_from_slice(body) {
                 out.push(AppendedLeaf {
+                    tree_id: ev.tree_id,
                     leaf_index: ev.leaf_index,
                     value: ev.commitment,
                 });
@@ -166,7 +170,8 @@ pub fn extract_appended_leaves(
             let Some(p) = settle_payload.as_ref() else {
                 continue;
             };
-            // Pair each inserted leaf index with its commitment by name.
+            // Every output of one settle appends to the SAME shard
+            // (`ev.tree_id`). Pair each inserted leaf index with its commitment.
             for (idx, value) in [
                 (ev.note_c_leaf, p.note_c_commitment),
                 (ev.note_d_leaf, p.note_d_commitment),
@@ -177,6 +182,7 @@ pub fn extract_appended_leaves(
             ] {
                 if idx != NO_LEAF {
                     out.push(AppendedLeaf {
+                        tree_id: ev.tree_id,
                         leaf_index: idx,
                         value,
                     });
@@ -351,6 +357,7 @@ mod tests {
         assert_eq!(
             leaves[0],
             AppendedLeaf {
+                tree_id: 0,
                 leaf_index: 10,
                 value: payload.note_c_commitment
             }
@@ -358,6 +365,7 @@ mod tests {
         assert_eq!(
             leaves[1],
             AppendedLeaf {
+                tree_id: 0,
                 leaf_index: 11,
                 value: payload.note_d_commitment
             }
@@ -365,6 +373,7 @@ mod tests {
         assert_eq!(
             leaves[2],
             AppendedLeaf {
+                tree_id: 0,
                 leaf_index: 12,
                 value: payload.note_e_commitment
             }
@@ -372,6 +381,7 @@ mod tests {
         assert_eq!(
             leaves[3],
             AppendedLeaf {
+                tree_id: 0,
                 leaf_index: 13,
                 value: payload.note_f_commitment
             }
@@ -379,6 +389,7 @@ mod tests {
         assert_eq!(
             leaves[4],
             AppendedLeaf {
+                tree_id: 0,
                 leaf_index: 14,
                 value: payload.note_fee_base_commitment
             }
@@ -386,6 +397,7 @@ mod tests {
         assert_eq!(
             leaves[5],
             AppendedLeaf {
+                tree_id: 0,
                 leaf_index: 15,
                 value: payload.note_fee_quote_commitment
             }

@@ -26,11 +26,12 @@ use super::AppendedLeaf;
 use crate::settle::settle_batched::SETTLE_BATCHED_DISCRIMINATOR;
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
-/// `VaultConfig` zero-copy layout offsets (after the 8-byte Anchor
-/// discriminator): admin(32) + tee_pubkey(32) + root_key(32) =>
-/// leaf_count at 104, current_root at 112.
-const VAULT_LEAF_COUNT_OFFSET: usize = 8 + 32 + 32 + 32;
-const VAULT_CURRENT_ROOT_OFFSET: usize = VAULT_LEAF_COUNT_OFFSET + 8;
+/// `MerkleTree` zero-copy shard-account layout offsets (after the 8-byte Anchor
+/// discriminator): `leaf_count: u64` at 8, `current_root: [u8;32]` at 16.
+/// (Post-sharding the tree STATE moved out of `VaultConfig` into one
+/// `MerkleTree` account per shard — `programs/vault/src/state.rs::MerkleTree`.)
+const TREE_LEAF_COUNT_OFFSET: usize = 8;
+const TREE_CURRENT_ROOT_OFFSET: usize = TREE_LEAF_COUNT_OFFSET + 8;
 
 /// RPC page size for `getSignaturesForAddress` (the RPC hard-caps at
 /// 1000).
@@ -70,12 +71,18 @@ impl Default for MerkleSyncConfig {
     }
 }
 
-/// Drives the Merkle mirror from on-chain state.
+/// Drives the K per-shard Merkle mirrors from on-chain state. One sync task
+/// pages the vault's whole tx history once and routes each appended leaf to
+/// `mirrors[leaf.tree_id]` (a deposit/settle event carries its shard), so the
+/// shards stay independent + correct even as settles round-robin across them.
 pub struct MerkleSync {
     rpc: SolanaRpcClient,
-    mirror: Arc<RwLock<MerkleMirror>>,
+    /// One mirror per shard, indexed by `tree_id`. `mirrors.len() == num_trees`.
+    mirrors: Vec<Arc<RwLock<MerkleMirror>>>,
     vault_program_id: Address,
-    vault_config_pda: Address,
+    /// The K `MerkleTree` shard PDAs, indexed by `tree_id` — read at reconcile
+    /// to compare each mirror's root against its shard's on-chain root.
+    merkle_tree_pdas: Vec<Address>,
     cfg: MerkleSyncConfig,
     /// Newest signature already applied — the live poll stops paging
     /// when it reaches this. `None` until the first sync completes.
@@ -85,16 +92,21 @@ pub struct MerkleSync {
 impl MerkleSync {
     pub fn new(
         rpc: SolanaRpcClient,
-        mirror: Arc<RwLock<MerkleMirror>>,
+        mirrors: Vec<Arc<RwLock<MerkleMirror>>>,
         vault_program_id: Address,
-        vault_config_pda: Address,
+        merkle_tree_pdas: Vec<Address>,
         cfg: MerkleSyncConfig,
     ) -> Self {
+        assert_eq!(
+            mirrors.len(),
+            merkle_tree_pdas.len(),
+            "one MerkleTree PDA per mirror shard"
+        );
         Self {
             rpc,
-            mirror,
+            mirrors,
             vault_program_id,
-            vault_config_pda,
+            merkle_tree_pdas,
             cfg,
             newest_seen: None,
         }
@@ -147,9 +159,23 @@ impl MerkleSync {
 
         self.newest_seen = newest;
         self.reconcile().await;
-        let leaf_count = self.mirror.read().await.leaf_count();
-        tracing::info!(applied, leaf_count, "merkle cold-boot complete");
+        let total_leaves = self.total_leaf_count().await;
+        tracing::info!(
+            applied,
+            total_leaves,
+            shards = self.mirrors.len(),
+            "merkle cold-boot complete"
+        );
         Ok(applied)
+    }
+
+    /// Sum of leaf counts across all shard mirrors.
+    async fn total_leaf_count(&self) -> u64 {
+        let mut total = 0u64;
+        for m in &self.mirrors {
+            total += m.read().await.leaf_count();
+        }
+        total
     }
 
     /// One live-poll step: fetch signatures newer than `newest_seen`,
@@ -254,52 +280,88 @@ impl MerkleSync {
             }
         }
 
-        let mut mirror = self.mirror.write().await;
-        let applied = apply_leaves(&mut mirror, leaves)?;
-        if max_slot > mirror.on_chain_slot() {
-            mirror.set_on_chain_slot(max_slot);
+        // Route each leaf to its shard's mirror. Group by tree_id so we take
+        // each shard's write lock once.
+        let num_shards = self.mirrors.len();
+        let by_shard = group_by_shard(leaves, num_shards);
+
+        let mut applied = 0;
+        for (tree_id, shard_leaves) in by_shard.into_iter().enumerate() {
+            if shard_leaves.is_empty() {
+                continue;
+            }
+            let mut mirror = self.mirrors[tree_id].write().await;
+            applied += apply_leaves(&mut mirror, shard_leaves)?;
+            if max_slot > mirror.on_chain_slot() {
+                mirror.set_on_chain_slot(max_slot);
+            }
         }
         Ok(applied)
     }
 
-    /// Compare the mirror's root to `VaultConfig.current_root`. Logged,
-    /// never fatal — a mismatch flags an incomplete sync (the live loop
-    /// will catch up) without taking the indexer down.
+    /// Compare each shard mirror's root to its `MerkleTree[j].current_root`.
+    /// Logged per shard, never fatal — a mismatch flags an incomplete sync
+    /// (the live loop will catch up) without taking the indexer down.
     async fn reconcile(&self) {
-        let chain = match self.rpc.get_account_info(&self.vault_config_pda).await {
-            Ok(Some(acc)) => acc,
-            Ok(None) => {
-                tracing::warn!("merkle reconcile: vault_config account not found");
-                return;
+        for (tree_id, tree_pda) in self.merkle_tree_pdas.iter().enumerate() {
+            let chain = match self.rpc.get_account_info(tree_pda).await {
+                Ok(Some(acc)) => acc,
+                Ok(None) => {
+                    tracing::warn!(tree_id, "merkle reconcile: merkle_tree account not found");
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(tree_id, error = %e, "merkle reconcile: merkle_tree read failed");
+                    continue;
+                }
+            };
+            let Some((chain_count, chain_root)) = parse_merkle_tree_root(&chain.data) else {
+                tracing::warn!(
+                    tree_id,
+                    len = chain.data.len(),
+                    "merkle reconcile: merkle_tree data too short to parse"
+                );
+                continue;
+            };
+            let mirror = self.mirrors[tree_id].read().await;
+            if mirror.root() == chain_root && mirror.leaf_count() == chain_count {
+                tracing::info!(
+                    tree_id,
+                    leaf_count = chain_count,
+                    "merkle reconcile OK — shard mirror matches MerkleTree.current_root"
+                );
+            } else {
+                tracing::warn!(
+                    tree_id,
+                    mirror_leaves = mirror.leaf_count(),
+                    chain_leaves = chain_count,
+                    mirror_root = %hex::encode(mirror.root()),
+                    chain_root = %hex::encode(chain_root),
+                    "merkle reconcile MISMATCH — shard mirror behind / incomplete; will retry"
+                );
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "merkle reconcile: vault_config read failed");
-                return;
-            }
-        };
-        let Some((chain_count, chain_root)) = parse_vault_root(&chain.data) else {
-            tracing::warn!(
-                len = chain.data.len(),
-                "merkle reconcile: vault_config data too short to parse"
-            );
-            return;
-        };
-        let mirror = self.mirror.read().await;
-        if mirror.root() == chain_root && mirror.leaf_count() == chain_count {
-            tracing::info!(
-                leaf_count = chain_count,
-                "merkle reconcile OK — mirror root matches VaultConfig.current_root"
-            );
+        }
+    }
+}
+
+/// Partition leaves by `tree_id` into `num_shards` buckets (bucket `j` holds
+/// shard `j`'s leaves, in arrival order). A leaf naming a shard ≥ `num_shards`
+/// is a decode/config mismatch — dropped (logged) rather than panicking.
+pub fn group_by_shard(leaves: Vec<AppendedLeaf>, num_shards: usize) -> Vec<Vec<AppendedLeaf>> {
+    let mut by_shard: Vec<Vec<AppendedLeaf>> = vec![Vec::new(); num_shards.max(1)];
+    for leaf in leaves {
+        let t = leaf.tree_id as usize;
+        if t < by_shard.len() {
+            by_shard[t].push(leaf);
         } else {
             tracing::warn!(
-                mirror_leaves = mirror.leaf_count(),
-                chain_leaves = chain_count,
-                mirror_root = %hex::encode(mirror.root()),
-                chain_root = %hex::encode(chain_root),
-                "merkle reconcile MISMATCH — mirror behind / incomplete; will retry"
+                tree_id = leaf.tree_id,
+                num_shards,
+                "merkle sync: leaf names a shard beyond num_trees; skipped"
             );
         }
     }
+    by_shard
 }
 
 /// Apply decoded leaves to the mirror in strict `leaf_index` order.
@@ -332,16 +394,16 @@ pub fn apply_leaves(
     Ok(applied)
 }
 
-/// Extract `(leaf_count, current_root)` from raw `VaultConfig` account
+/// Extract `(leaf_count, current_root)` from raw `MerkleTree` shard-account
 /// data. `None` if the buffer is too short.
-pub fn parse_vault_root(data: &[u8]) -> Option<(u64, [u8; 32])> {
-    if data.len() < VAULT_CURRENT_ROOT_OFFSET + 32 {
+pub fn parse_merkle_tree_root(data: &[u8]) -> Option<(u64, [u8; 32])> {
+    if data.len() < TREE_CURRENT_ROOT_OFFSET + 32 {
         return None;
     }
     let mut lc = [0u8; 8];
-    lc.copy_from_slice(&data[VAULT_LEAF_COUNT_OFFSET..VAULT_LEAF_COUNT_OFFSET + 8]);
+    lc.copy_from_slice(&data[TREE_LEAF_COUNT_OFFSET..TREE_LEAF_COUNT_OFFSET + 8]);
     let mut root = [0u8; 32];
-    root.copy_from_slice(&data[VAULT_CURRENT_ROOT_OFFSET..VAULT_CURRENT_ROOT_OFFSET + 32]);
+    root.copy_from_slice(&data[TREE_CURRENT_ROOT_OFFSET..TREE_CURRENT_ROOT_OFFSET + 32]);
     Some((u64::from_le_bytes(lc), root))
 }
 
@@ -357,6 +419,7 @@ mod tests {
 
     fn leaf(i: u64, seed: u8) -> AppendedLeaf {
         AppendedLeaf {
+            tree_id: 0,
             leaf_index: i,
             value: fr_safe(seed),
         }
@@ -396,6 +459,49 @@ mod tests {
         ));
     }
 
+    fn leaf_on(tree_id: u8, i: u64, seed: u8) -> AppendedLeaf {
+        AppendedLeaf {
+            tree_id,
+            leaf_index: i,
+            value: fr_safe(seed),
+        }
+    }
+
+    #[test]
+    fn group_by_shard_routes_each_leaf_to_its_tree() {
+        // Interleaved leaves for shards 0 and 1 → each shard's bucket holds
+        // ONLY its own leaves, in arrival order, with per-shard indices intact.
+        let leaves = vec![
+            leaf_on(0, 0, 1),
+            leaf_on(1, 0, 2),
+            leaf_on(0, 1, 3),
+            leaf_on(1, 1, 4),
+        ];
+        let buckets = group_by_shard(leaves, 2);
+        assert_eq!(buckets.len(), 2);
+        assert_eq!(buckets[0], vec![leaf_on(0, 0, 1), leaf_on(0, 1, 3)]);
+        assert_eq!(buckets[1], vec![leaf_on(1, 0, 2), leaf_on(1, 1, 4)]);
+
+        // Applied to separate per-shard mirrors, each advances independently.
+        let mut m0 = MerkleMirror::new();
+        let mut m1 = MerkleMirror::new();
+        assert_eq!(apply_leaves(&mut m0, buckets[0].clone()).unwrap(), 2);
+        assert_eq!(apply_leaves(&mut m1, buckets[1].clone()).unwrap(), 2);
+        assert_eq!(m0.leaf_count(), 2);
+        assert_eq!(m1.leaf_count(), 2);
+        assert_eq!(m0.leaf_index_of(&fr_safe(3)), Some(1));
+        assert_eq!(m1.leaf_index_of(&fr_safe(2)), Some(0));
+    }
+
+    #[test]
+    fn group_by_shard_drops_out_of_range_shard() {
+        // A leaf naming shard 5 when only 2 shards exist is dropped, not a panic.
+        let leaves = vec![leaf_on(0, 0, 1), leaf_on(5, 0, 2)];
+        let buckets = group_by_shard(leaves, 2);
+        assert_eq!(buckets[0].len(), 1);
+        assert_eq!(buckets[1].len(), 0);
+    }
+
     #[test]
     fn apply_leaves_dedups_duplicate_index() {
         let mut m = MerkleMirror::new();
@@ -405,19 +511,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_vault_root_extracts_offsets() {
+    fn parse_merkle_tree_root_extracts_offsets() {
         let mut data = vec![0u8; 200];
-        data[VAULT_LEAF_COUNT_OFFSET..VAULT_LEAF_COUNT_OFFSET + 8]
+        data[TREE_LEAF_COUNT_OFFSET..TREE_LEAF_COUNT_OFFSET + 8]
             .copy_from_slice(&42u64.to_le_bytes());
         let root = fr_safe(0x77);
-        data[VAULT_CURRENT_ROOT_OFFSET..VAULT_CURRENT_ROOT_OFFSET + 32].copy_from_slice(&root);
-        let (count, got) = parse_vault_root(&data).unwrap();
+        data[TREE_CURRENT_ROOT_OFFSET..TREE_CURRENT_ROOT_OFFSET + 32].copy_from_slice(&root);
+        let (count, got) = parse_merkle_tree_root(&data).unwrap();
         assert_eq!(count, 42);
         assert_eq!(got, root);
     }
 
     #[test]
-    fn parse_vault_root_rejects_short_buffer() {
-        assert!(parse_vault_root(&[0u8; 100]).is_none());
+    fn parse_merkle_tree_root_rejects_short_buffer() {
+        assert!(parse_merkle_tree_root(&[0u8; 4]).is_none());
     }
 }

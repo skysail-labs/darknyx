@@ -51,7 +51,7 @@ async fn app_with_leaves(n: u8) -> (axum::Router, Vec<[u8; 32]>) {
     let state = Arc::new(ApiState::for_tests());
     let mut commits = Vec::new();
     {
-        let mut mirror = state.merkle_mirror.write().await;
+        let mut mirror = state.merkle_mirror(0).write().await;
         for i in 1..=n {
             let c = fr_safe(i);
             mirror.append_leaf(c).unwrap();

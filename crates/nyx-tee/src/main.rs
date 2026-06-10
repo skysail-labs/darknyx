@@ -147,7 +147,13 @@ async fn main() -> Result<()> {
                     .collect::<Vec<_>>(),
             );
             (
-                nyx_tee::api::ApiState::from_boot(boot_info, &signer, dstack, jwt_secret),
+                nyx_tee::api::ApiState::from_boot(
+                    boot_info,
+                    &signer,
+                    dstack,
+                    jwt_secret,
+                    cfg.num_trees,
+                ),
                 Some(signer_pubkey),
                 settle_signer,
             )
@@ -344,15 +350,20 @@ async fn main() -> Result<()> {
     if tee_signer_pubkey.is_some() {
         match SolanaRpcClient::new(&cfg.solana_rpc_url) {
             Ok(rpc) => {
-                let mirror = api_state.merkle_mirror.clone();
+                // One sync over all K shard mirrors; it routes each appended
+                // leaf to mirrors[leaf.tree_id] + reconciles each against its
+                // MerkleTree[j] shard account.
+                let mirrors = api_state.merkle_mirrors.clone();
                 let vault_program_id = nyx_tee::settle::vault::vault_program_id();
-                let (vault_config_pda, _) = nyx_tee::settle::vault::vault_config_pda();
+                let merkle_tree_pdas: Vec<_> = (0..mirrors.len() as u8)
+                    .map(|tree_id| nyx_tee::settle::vault::merkle_tree_pda(tree_id).0)
+                    .collect();
                 tokio::spawn(async move {
                     let mut sync = MerkleSync::new(
                         rpc,
-                        mirror,
+                        mirrors,
                         vault_program_id,
-                        vault_config_pda,
+                        merkle_tree_pdas,
                         MerkleSyncConfig {
                             from_slot: cfg.sync_from_slot,
                             ..MerkleSyncConfig::default()

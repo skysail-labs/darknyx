@@ -26,7 +26,7 @@ async fn transparency_is_public_and_reports_mirror_and_identity() {
     let state = Arc::new(ApiState::for_tests());
     // Seed two leaves so leaf_count is non-trivial.
     {
-        let mut m = state.merkle_mirror.write().await;
+        let mut m = state.merkle_mirror(0).write().await;
         m.append_leaf(fr_safe(1)).unwrap();
         m.append_leaf(fr_safe(2)).unwrap();
     }
