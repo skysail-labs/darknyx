@@ -22,6 +22,7 @@ pub mod zk;
 // root lets the macro resolve everything correctly even though our source lives
 // under `programs/vault/src/instructions/`.
 pub use instructions::close_batch_validity_marker;
+pub use instructions::close_vault_config;
 pub use instructions::create_wallet;
 pub use instructions::deposit;
 pub use instructions::initialize;
@@ -248,5 +249,12 @@ pub mod vault {
     /// instructions/reset_merkle_tree.rs for rationale + caveats.
     pub fn reset_merkle_tree(ctx: Context<ResetMerkleTree>, tree_id: u8) -> Result<()> {
         reset_merkle_tree::reset_merkle_tree_handler(ctx, tree_id)
+    }
+
+    /// DEV-NET-ONLY: close the `VaultConfig` PDA so it can be re-`initialize`d
+    /// under a new layout (e.g. after the tree-sharding split). Admin-gated.
+    /// See instructions/close_vault_config.rs.
+    pub fn close_vault_config(ctx: Context<CloseVaultConfig>) -> Result<()> {
+        close_vault_config::close_vault_config_handler(ctx)
     }
 }

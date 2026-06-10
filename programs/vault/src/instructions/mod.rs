@@ -1,4 +1,5 @@
 pub mod close_batch_validity_marker;
+pub mod close_vault_config;
 pub mod create_wallet;
 pub mod deposit;
 pub mod initialize;
@@ -19,6 +20,7 @@ pub mod withdraw;
 // `__client_accounts_*` modules Anchor's `#[derive(Accounts)]` macro generates.
 // The program macro resolves them at `crate::<module>::__client_accounts_*`.
 pub use close_batch_validity_marker::*;
+pub use close_vault_config::*;
 pub use create_wallet::*;
 pub use deposit::*;
 pub use initialize::*;

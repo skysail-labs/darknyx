@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-23
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-24
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -132,6 +132,13 @@ services:
       # confirm in a single ~1.13s window instead of one-at-a-time. Sweep this
       # (1/4/8/16/32) to find the on-chain settle throughput ceiling. `:-16`.
       NYX_TEE_SETTLE_SEND_CONCURRENCY: ${NYX_TEE_SETTLE_SEND_CONCURRENCY:-16}
+
+      # Number of Merkle-tree shards. The settle worker derives K fee-payer
+      # keys (nyx/ed25519-signer/v1/{0..K-1}) and round-robins each match
+      # across (key[j], merkle_tree[j]) so the concurrent Tx D's share no
+      # writable account. MUST equal the on-chain num_trees (e2e-config
+      # numTrees). `:-1` keeps single-shard by default.
+      NYX_TEE_NUM_TREES: ${NYX_TEE_NUM_TREES:-1}
 
     ports:
       # 8080: nyx-tee's internal HTTP. dstack-ingress fronts this
