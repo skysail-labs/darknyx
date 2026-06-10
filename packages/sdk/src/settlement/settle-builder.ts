@@ -28,6 +28,7 @@ import {
   anchorDiscriminator,
   batchValidityMarkerPda,
   consumedNotePda,
+  merkleTreePda,
   noteLockPda,
   nullifierEntryPda,
   vaultConfigPda,
@@ -263,7 +264,9 @@ export function buildEd25519VerifyIx(params: {
 
 export interface BuildSettleBatchedIxParams {
   programId: PublicKey;
-  /** TEE authority — signer, must equal vault_config.tee_pubkey. */
+  /** Which Merkle-tree shard the output notes append to. */
+  treeId: number;
+  /** TEE authority — signer, must be one of vault_config.tee_pubkeys. */
   teeAuthority: PublicKey;
   payload: MatchResultPayload;
   /** Match's position in the batch (0..15). Bits select left/right at each
@@ -283,23 +286,24 @@ export interface BuildSettleBatchedIxParams {
  * `canonicalPayloadHash(payload)` with `teeAuthority` for the on-chain
  * verification to succeed.
  *
- * Accounts order MUST match `TeeForcedSettleBatched<'info>`:
+ * Accounts order MUST match `TeeForcedSettleBatched<'info>` (post-sharding:
+ * vault_config is read-only, the writable tree state is merkle_tree at slot 2):
  *   0  tee_authority           (mut, signer)
- *   1  vault_config            (mut)
- *   2  note_lock_a             (mut, close)
- *   3  note_lock_b             (mut, close)
- *   4  consumed_a              (init)
- *   5  consumed_b              (init)
- *   6  nullifier_a_entry       (init)
- *   7  nullifier_b_entry       (init)
- *   8  note_lock_e             (mut — relock; dummy when no buyer change)
- *   9  note_lock_f             (mut — relock; dummy when no seller change)
- *  10  instructions_sysvar
- *  11  batch_validity_marker   (mut — closed to tee_authority on success)
- *  12  system_program
+ *   1  vault_config            (ro)
+ *   2  merkle_tree[treeId]     (mut — the output-shard append)
+ *   3  note_lock_a             (mut, close)
+ *   4  note_lock_b             (mut, close)
+ *   5  consumed_a              (init)
+ *   6  consumed_b              (init)
+ *   7  nullifier_a_entry       (init)
+ *   8  nullifier_b_entry       (init)
+ *   9  note_lock_e             (mut — relock; dummy when no buyer change)
+ *  10  note_lock_f             (mut — relock; dummy when no seller change)
+ *  11  instructions_sysvar
+ *  12  batch_validity_marker   (mut — left open; closed by a separate ix)
+ *  13  system_program
  *
- * Single batch marker replaces the per-match `valid_create_marker` +
- * `valid_price_marker` of the v3.1 path.
+ * ix data = disc(8) || tree_id(1) || payload(Borsh) || match_index(1) || 4×32 siblings.
  */
 export function buildSettleBatchedIx(
   p: BuildSettleBatchedIxParams,
@@ -320,6 +324,7 @@ export function buildSettleBatchedIx(
   }
 
   const [vaultConfig] = vaultConfigPda(p.programId);
+  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [lockA] = noteLockPda(p.programId, p.payload.noteAcommitment);
   const [lockB] = noteLockPda(p.programId, p.payload.noteBcommitment);
   const [consumedA] = consumedNotePda(p.programId, p.payload.noteAcommitment);
@@ -337,6 +342,7 @@ export function buildSettleBatchedIx(
 
   const data = cat(
     anchorDiscriminator("tee_forced_settle_batched"),
+    new Uint8Array([p.treeId & 0xff]),
     serializePayload(p.payload),
     matchIndexByte,
     siblingsConcat,
@@ -346,7 +352,8 @@ export function buildSettleBatchedIx(
     programId: p.programId,
     keys: [
       { pubkey: p.teeAuthority, isSigner: true, isWritable: true },
-      { pubkey: vaultConfig, isSigner: false, isWritable: true },
+      { pubkey: vaultConfig, isSigner: false, isWritable: false },
+      { pubkey: merkleTree, isSigner: false, isWritable: true },
       { pubkey: lockA, isSigner: false, isWritable: true },
       { pubkey: lockB, isSigner: false, isWritable: true },
       { pubkey: consumedA, isSigner: false, isWritable: true },

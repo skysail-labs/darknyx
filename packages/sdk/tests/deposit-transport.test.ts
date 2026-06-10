@@ -22,15 +22,16 @@ import type {
 } from "../src/providers.js";
 import { DarkPoolClient } from "../src/client.js";
 import { UnimplementedProverSuite } from "../src/zk/prover-suite.js";
-import { anchorDiscriminator, vaultConfigPda } from "../src/idl/vault-client.js";
+import { anchorDiscriminator, vaultConfigPda, merkleTreePda } from "../src/idl/vault-client.js";
 
 const PROGRAM_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
-/** Build a VaultConfig-shaped buffer with `leafCount` at offset 104. */
-function fakeVaultConfigData(leafCount: bigint): Buffer {
-  // 8 (disc) + 32 (admin) + 32 (tee) + 32 (root_key) + 8 (leaf_count) + ...
+/** Build a MerkleTree-shard-shaped buffer with `leafCount` at offset 8.
+ *  Post-sharding the tree state lives in the per-shard MerkleTree account
+ *  (8 disc + 8 leaf_count + ...), not VaultConfig. */
+function fakeMerkleTreeData(leafCount: bigint): Buffer {
   const b = Buffer.alloc(320, 0);
-  b.writeBigUInt64LE(leafCount, 104);
+  b.writeBigUInt64LE(leafCount, 8);
   return b;
 }
 
@@ -48,7 +49,7 @@ function makeProviders(opts: {
       getAccountInfo: async (pk: PublicKey) => {
         if (opts.vaultConfigData === null) return null;
         return {
-          data: opts.vaultConfigData ?? fakeVaultConfigData(7n),
+          data: opts.vaultConfigData ?? fakeMerkleTreeData(7n),
           owner: PROGRAM_ID,
         };
       },
@@ -103,7 +104,7 @@ describe("getDepositFunction", () => {
   it("builds a valid deposit instruction and records stages", async () => {
     const ixs: TransactionInstruction[] = [];
     const providers = makeProviders({
-      vaultConfigData: fakeVaultConfigData(42n),
+      vaultConfigData: fakeMerkleTreeData(42n),
       captureIxs: ixs,
       forwarderReply: "deposit_sig_abc",
     });
@@ -141,11 +142,14 @@ describe("getDepositFunction", () => {
     // Discriminator check.
     const disc = Buffer.from(anchorDiscriminator("deposit"));
     expect((ix.data as NodeBuffer).subarray(0, 8).equals(disc)).toBe(true);
-    // Second vault account must be the vault_config PDA.
+    // [1] vault_config (read-only), [2] merkle_tree[0] (the leaf-append shard).
     const [vaultPda] = vaultConfigPda(PROGRAM_ID);
     expect(ix.keys[1].pubkey.toBase58()).toBe(vaultPda.toBase58());
-    // Amount (u64 LE at offset 8).
-    expect((ix.data as NodeBuffer).readBigUInt64LE(8)).toBe(1_000_000n);
+    const [treePda] = merkleTreePda(PROGRAM_ID, 0);
+    expect(ix.keys[2].pubkey.toBase58()).toBe(treePda.toBase58());
+    // tree_id(1) at offset 8, then amount (u64 LE) at offset 9.
+    expect((ix.data as NodeBuffer)[8]).toBe(0);
+    expect((ix.data as NodeBuffer).readBigUInt64LE(9)).toBe(1_000_000n);
   });
 
   it("throws parameter error on zero amount", async () => {

@@ -88,7 +88,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     await t.step("reset_merkle_tree", () =>
       sendAndConfirmTransaction(
         conn,
-        new Transaction().add(buildResetMerkleTreeInstruction({ programId: VAULT_ID, admin: admin.publicKey })),
+        new Transaction().add(buildResetMerkleTreeInstruction({ programId: VAULT_ID, admin: admin.publicKey, treeId: 0 })),
         [admin],
         { commitment: "confirmed" },
       ),

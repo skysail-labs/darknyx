@@ -20,6 +20,8 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 export interface WithdrawParams {
   /** Fee-payer / signer for the withdraw transaction. */
   payer: PublicKey;
+  /** Which Merkle-tree shard the spent note lives in (default 0). */
+  treeId?: number;
   tokenMint: Uint8Array;
   amount: bigint;
   /** Destination SPL token account (must match `tokenMint`). */
@@ -134,6 +136,7 @@ export function getWithdrawFunction(
     const tokenMintPk = new PublicKey(params.tokenMint);
     const ix = buildWithdrawInstruction({
       programId: client.programId,
+      treeId: params.treeId ?? 0,
       payer: params.payer,
       tokenMint: tokenMintPk,
       destinationTokenAccount: params.destinationTokenAccount,

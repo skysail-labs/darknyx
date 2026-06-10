@@ -18,8 +18,7 @@ import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, nullifierV2, pubkeyToFrPair } from "./note.js";
 import { deriveMergeInnerHash } from "../keys/key-generators.js";
-import { buildMergeInstruction } from "../idl/vault-client.js";
-import { vaultConfigPda } from "../idl/vault-client.js";
+import { buildMergeInstruction, merkleTreePda } from "../idl/vault-client.js";
 import type { StoredNote } from "./note-store.js";
 
 const MAX_K = 4;
@@ -33,6 +32,9 @@ export interface MergeInputNote {
 
 export interface MergeParams {
   payer: PublicKey;
+  /** Which Merkle-tree shard the inputs live in + the merged output appends to
+   *  (default 0). */
+  treeId?: number;
   /** 2–4 input notes — all the same mint + owner. */
   inputs: MergeInputNote[];
   tokenMint: Uint8Array;
@@ -59,13 +61,18 @@ const u8ToBigBE = (x: Uint8Array): bigint => {
   return acc;
 };
 
-/** Read `VaultConfig.leaf_count` (u64 @ offset 104) — the output note's leaf index. */
-async function readLeafCount(client: DarkPoolClient): Promise<bigint> {
-  const [vaultPda] = vaultConfigPda(client.programId);
-  const info = await client.providers.accountInfoProvider.getAccountInfo(vaultPda);
-  if (!info) throw new DarkPoolError("merkle-position-fetch", "vault_config not initialised");
+/** Read shard `treeId`'s `MerkleTree.leaf_count` (u64 @ offset 8) — the merged
+ *  output note's leaf index within that shard. */
+async function readLeafCount(client: DarkPoolClient, treeId: number): Promise<bigint> {
+  const [treePda] = merkleTreePda(client.programId, treeId);
+  const info = await client.providers.accountInfoProvider.getAccountInfo(treePda);
+  if (!info)
+    throw new DarkPoolError(
+      "merkle-position-fetch",
+      `merkle_tree shard ${treeId} not initialised`,
+    );
   const d = info.data;
-  return new DataView(d.buffer, d.byteOffset + 104, 8).getBigUint64(0, true);
+  return new DataView(d.buffer, d.byteOffset + 8, 8).getBigUint64(0, true);
 }
 
 export function getMergeFunction(
@@ -164,13 +171,15 @@ export function getMergeFunction(
       throw new DarkPoolError("proof-generation", (e as Error).message, e);
     }
 
-    // The output note lands at the current leaf_count.
-    const outputLeafIndex = await readLeafCount(client);
+    // The output note lands at the current leaf_count of the target shard.
+    const treeId = params.treeId ?? 0;
+    const outputLeafIndex = await readLeafCount(client, treeId);
 
     // --- submit ---
     await params.callbacks?.pre?.("instruction-build");
     const ix = buildMergeInstruction({
       programId: client.programId,
+      treeId,
       payer: params.payer,
       nullifiers: nullifierBytes,
       outputCommitment,

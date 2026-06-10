@@ -7,16 +7,16 @@
  *
  * Verifies that:
  *   1. Account ordering matches `TeeForcedSettleBatched<'info>`
- *      (13 accounts, batch_validity_marker at slot 11).
+ *      (14 accounts, merkle_tree at slot 2, batch_validity_marker at slot 12).
  *   2. Data starts with `sha256("global:tee_forced_settle_batched")[..8]`.
- *   3. `ix.data` length = 8 (disc) + 480 (Borsh payload)
+ *   3. `ix.data` length = 8 (disc) + 1 (tree_id) + 480 (Borsh payload)
  *                       + 1 (matchIndex u8) + 128 (4 × 32-byte siblings)
- *                       = 585 bytes.
+ *                       = 618 bytes.
  *   4. The 4 Merkle siblings are encoded contiguously with NO length
  *      prefix (Anchor's `[[u8; 32]; 4]` wire shape).
- *   5. The match-index byte lives at offset `8 + 480` and reflects the
+ *   5. The match-index byte lives at offset `8 + 1 + 480` and reflects the
  *      caller-supplied value.
- *   6. Account slot 11 (`batch_validity_marker`) is the PDA derived
+ *   6. Account slot 12 (`batch_validity_marker`) is the PDA derived
  *      from `[b"batch_validity", merkleRoot]` under the program id.
  *   7. note_lock_e / note_lock_f are derived from the payload's
  *      noteEcommitment / noteFcommitment (so they collapse to a
@@ -82,6 +82,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const merkleRoot = filled(32, 0xF0);
     const ix = buildSettleBatchedIx({
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload,
       matchIndex: 0,
@@ -92,34 +93,35 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(ix.programId.toBase58()).toBe(PROGRAM_ID.toBase58());
     // 13 accounts: tee + vault_config + locks(a,b) + consumed(a,b)
     //            + null(a,b) + locks(e,f) + sysvar + batch_marker + system.
-    expect(ix.keys.length).toBe(13);
+    expect(ix.keys.length).toBe(14);
 
     // Slot 0: tee_authority (mut, signer).
     expect(ix.keys[0].pubkey.toBase58()).toBe(tee.publicKey.toBase58());
     expect(ix.keys[0].isSigner).toBe(true);
     expect(ix.keys[0].isWritable).toBe(true);
 
-    // Slot 10: instructions sysvar.
-    expect(ix.keys[10].pubkey.toBase58()).toBe(
+    // Slot 11: instructions sysvar.
+    expect(ix.keys[11].pubkey.toBase58()).toBe(
       SYSVAR_INSTRUCTIONS_PUBKEY.toBase58(),
     );
-    expect(ix.keys[10].isWritable).toBe(false);
+    expect(ix.keys[11].isWritable).toBe(false);
 
-    // Slot 11: batch_validity_marker (mut — closed to tee_authority on success).
-    expect(ix.keys[11].isWritable).toBe(true);
+    // Slot 12: batch_validity_marker (mut — left open; closed by a separate ix).
+    expect(ix.keys[12].isWritable).toBe(true);
 
-    // Slot 12: system_program.
-    expect(ix.keys[12].pubkey.toBase58()).toBe(
+    // Slot 13: system_program.
+    expect(ix.keys[13].pubkey.toBase58()).toBe(
       SystemProgram.programId.toBase58(),
     );
-    expect(ix.keys[12].isSigner).toBe(false);
-    expect(ix.keys[12].isWritable).toBe(false);
+    expect(ix.keys[13].isSigner).toBe(false);
+    expect(ix.keys[13].isWritable).toBe(false);
   });
 
   it("[settle_batched_anchor_discriminator_present] data starts with sha256('global:tee_forced_settle_batched')[..8]", () => {
     const tee = Keypair.generate();
     const ix = buildSettleBatchedIx({
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       matchIndex: 0,
@@ -137,6 +139,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const payload = exactFillFixture();
     const ix = buildSettleBatchedIx({
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload,
       matchIndex: 0,
@@ -149,8 +152,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const payloadBytes = serializePayload(payload);
     expect(payloadBytes.length).toBe(480);
     // 8 disc + 480 payload + 1 match_index byte + 4 × 32 sibling bytes.
-    expect(ix.data.length).toBe(8 + 480 + 1 + 128);
-    expect(ix.data.length).toBe(617);
+    expect(ix.data.length).toBe(8 + 1 + 480 + 1 + 128);
+    expect(ix.data.length).toBe(618);
   });
 
   it("[settle_batched_siblings_encoding] 4 siblings encoded contiguously without a length prefix", () => {
@@ -158,6 +161,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const siblings = fourSiblings();
     const ix = buildSettleBatchedIx({
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       matchIndex: 0,
@@ -166,7 +170,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     });
     const buf = new Uint8Array(ix.data);
     // Siblings start right after disc + payload + 1-byte match_index.
-    const siblingsOffset = 8 + 480 + 1;
+    const siblingsOffset = 8 + 1 + 480 + 1;
     for (let i = 0; i < 4; i++) {
       const slice = buf.slice(
         siblingsOffset + i * 32,
@@ -183,6 +187,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const tee = Keypair.generate();
     const args = {
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       merkleProof: fourSiblings(),
@@ -191,7 +196,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const ix0 = buildSettleBatchedIx({ ...args, matchIndex: 0 });
     const ix7 = buildSettleBatchedIx({ ...args, matchIndex: 7 });
     const ix15 = buildSettleBatchedIx({ ...args, matchIndex: 15 });
-    const off = 8 + 480;
+    const off = 8 + 1 + 480;
     expect(ix0.data[off]).toBe(0);
     expect(ix7.data[off]).toBe(7);
     expect(ix15.data[off]).toBe(15);
@@ -202,11 +207,12 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(dropMatchByte(ix0.data)).toEqual(dropMatchByte(ix15.data));
   });
 
-  it("[settle_batched_marker_pda_derivation] account 11 = PDA([b\"batch_validity\", merkleRoot])", () => {
+  it("[settle_batched_marker_pda_derivation] account 12 = PDA([b\"batch_validity\", merkleRoot])", () => {
     const tee = Keypair.generate();
     const merkleRoot = filled(32, 0x77);
     const ix = buildSettleBatchedIx({
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       matchIndex: 3,
@@ -214,18 +220,19 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleRoot,
     });
     const [expected] = batchValidityMarkerPda(PROGRAM_ID, merkleRoot);
-    expect(ix.keys[11].pubkey.toBase58()).toBe(expected.toBase58());
+    expect(ix.keys[12].pubkey.toBase58()).toBe(expected.toBase58());
 
     // Marker is keyed by the root, so a different root → different PDA.
     const ix2 = buildSettleBatchedIx({
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       matchIndex: 3,
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0x88),
     });
-    expect(ix2.keys[11].pubkey.toBase58()).not.toBe(ix.keys[11].pubkey.toBase58());
+    expect(ix2.keys[12].pubkey.toBase58()).not.toBe(ix.keys[12].pubkey.toBase58());
   });
 
   it("[settle_batched_lock_e_f_pdas] note_lock_e / note_lock_f derive from payload commitments", () => {
@@ -238,6 +245,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(exact.noteFcommitment).toEqual(ZERO_COMMITMENT);
     const ixExact = buildSettleBatchedIx({
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: exact,
       matchIndex: 0,
@@ -245,8 +253,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleRoot: filled(32, 0xF0),
     });
     const [zeroLock] = noteLockPda(PROGRAM_ID, ZERO_COMMITMENT);
-    expect(ixExact.keys[8].pubkey.toBase58()).toBe(zeroLock.toBase58());
     expect(ixExact.keys[9].pubkey.toBase58()).toBe(zeroLock.toBase58());
+    expect(ixExact.keys[10].pubkey.toBase58()).toBe(zeroLock.toBase58());
 
     // Change-note variant: noteE non-zero → lock_e diverges from lock_f.
     const withChange: MatchResultPayload = {
@@ -256,6 +264,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     };
     const ixChange = buildSettleBatchedIx({
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: withChange,
       matchIndex: 0,
@@ -263,9 +272,9 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleRoot: filled(32, 0xF0),
     });
     const [lockE] = noteLockPda(PROGRAM_ID, withChange.noteEcommitment);
-    expect(ixChange.keys[8].pubkey.toBase58()).toBe(lockE.toBase58());
-    expect(ixChange.keys[8].pubkey.toBase58()).not.toBe(
-      ixChange.keys[9].pubkey.toBase58(),
+    expect(ixChange.keys[9].pubkey.toBase58()).toBe(lockE.toBase58());
+    expect(ixChange.keys[9].pubkey.toBase58()).not.toBe(
+      ixChange.keys[10].pubkey.toBase58(),
     );
   });
 
@@ -273,6 +282,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const tee = Keypair.generate();
     const base = {
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       merkleProof: fourSiblings(),
@@ -293,6 +303,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const tee = Keypair.generate();
     const base = {
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       matchIndex: 0,
@@ -330,6 +341,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const tee = Keypair.generate();
     const base = {
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       matchIndex: 0,
@@ -447,13 +459,14 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
 
     const ix = buildSettleBatchedIx({
       programId: PROGRAM_ID,
+      treeId: 0,
       teeAuthority: tee.publicKey,
       payload: relock,
       matchIndex: 0,
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xF0),
     });
-    const payloadBytes = new Uint8Array(ix.data).slice(8, 8 + 480);
+    const payloadBytes = new Uint8Array(ix.data).slice(9, 9 + 480);
     expect(payloadBytes).toEqual(serializePayload(relock));
   });
 });

@@ -161,14 +161,15 @@ describe("getWithdrawFunction", () => {
     const disc = Buffer.from(anchorDiscriminator("withdraw"));
     expect((ix.data as NodeBuffer).subarray(0, 8).equals(disc)).toBe(true);
 
-    // Data layout: disc(8) || note_commitment(32) || nullifier(32) ||
-    //              merkle_root(32) || amount(u64 LE) || pi_a(64) || pi_b(128) || pi_c(64)
+    // Data layout: disc(8) || tree_id(1) || note_commitment(32) || nullifier(32)
+    //   || merkle_root(32) || amount(u64 LE) || pi_a(64) || pi_b(128) || pi_c(64)
     const d = ix.data as NodeBuffer;
-    expect(d.length).toBe(8 + 32 + 32 + 32 + 8 + 64 + 128 + 64);
-    const amt = d.readBigUInt64LE(8 + 32 + 32 + 32);
+    expect(d.length).toBe(8 + 1 + 32 + 32 + 32 + 8 + 64 + 128 + 64);
+    expect(d[8]).toBe(0); // tree_id
+    const amt = d.readBigUInt64LE(8 + 1 + 32 + 32 + 32);
     expect(amt).toBe(250_000n);
     // Proof bytes (0xaa / 0xbb / 0xcc) should be present at the tail.
-    const tailStart = 8 + 32 + 32 + 32 + 8;
+    const tailStart = 8 + 1 + 32 + 32 + 32 + 8;
     expect(d[tailStart]).toBe(0xaa);
     expect(d[tailStart + 64]).toBe(0xbb);
     expect(d[tailStart + 64 + 128]).toBe(0xcc);

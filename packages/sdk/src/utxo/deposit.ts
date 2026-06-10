@@ -22,7 +22,7 @@ import type { StoredNote } from "./note-store.js";
 import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, ownerCommitment } from "./note.js";
 import { bn254ToBE32, deriveBlindingFactor } from "../keys/key-generators.js";
-import { buildDepositInstruction, vaultConfigPda } from "../idl/vault-client.js";
+import { buildDepositInstruction, merkleTreePda } from "../idl/vault-client.js";
 
 /** SPL Token program id (classic, not Token-2022). */
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -30,6 +30,9 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 export interface DepositParams {
   /** Fee-payer / signer for the deposit transaction. */
   depositor: PublicKey;
+  /** Which Merkle-tree shard to deposit into (default 0). The note's leaf
+   *  index + recoverable inner_hash are read from THIS shard's tree. */
+  treeId?: number;
   /** 32-byte SPL mint. */
   tokenMint: Uint8Array;
   /** Amount in base units. */
@@ -84,32 +87,32 @@ export function getDepositFunction(
     }
 
     const { masterSeed, spendingKey, ownerBlinding } = await client.getResolvedKeys();
+    const treeId = params.treeId ?? 0;
 
     // --- Stage: merkle-position-fetch ---
     await params.callbacks?.pre?.("merkle-position-fetch");
-    const [vaultPda] = vaultConfigPda(client.programId);
-    const info = await client.providers.accountInfoProvider.getAccountInfo(vaultPda);
+    // Post-sharding the tree state lives in the per-shard MerkleTree account
+    // (NOT VaultConfig). Read THIS shard's leaf_count to position the new leaf.
+    const [treePda] = merkleTreePda(client.programId, treeId);
+    const info = await client.providers.accountInfoProvider.getAccountInfo(treePda);
     if (!info) {
       throw new DarkPoolError(
         "merkle-position-fetch",
-        "vault_config not initialised — deploy/init the program first",
+        `merkle_tree shard ${treeId} not initialised — run initialize_tree(${treeId}) first`,
       );
     }
-    // VaultConfig layout (offsets after the 8-byte Anchor discriminator):
-    //   admin:      Pubkey        @   8
-    //   tee_pubkey: Pubkey        @  40
-    //   root_key:   Pubkey        @  72
-    //   leaf_count: u64 LE        @ 104
+    // MerkleTree layout (offsets after the 8-byte Anchor discriminator):
+    //   leaf_count: u64 LE        @   8
     const data = info.data;
-    if (data.byteLength < 112) {
+    if (data.byteLength < 16) {
       throw new DarkPoolError(
         "merkle-position-fetch",
-        `vault_config data too small: ${data.byteLength}`,
+        `merkle_tree data too small: ${data.byteLength}`,
       );
     }
     const leafIndex = new DataView(
       data.buffer,
-      data.byteOffset + 104,
+      data.byteOffset + 8,
       8,
     ).getBigUint64(0, true);
 
@@ -135,6 +138,7 @@ export function getDepositFunction(
     const tokenMintPk = new PublicKey(params.tokenMint);
     const ix = buildDepositInstruction({
       programId: client.programId,
+      treeId,
       depositor: params.depositor,
       tokenMint: tokenMintPk,
       depositorTokenAccount: params.depositorTokenAccount,

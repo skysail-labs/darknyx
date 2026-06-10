@@ -22,10 +22,10 @@
  * critical difference from `Vec<u8>`, which does carry a 4-byte length.
  */
 
-import { PublicKey, TransactionInstruction, SystemProgram } from "@solana/web3.js";
+import { PublicKey, TransactionInstruction, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 
-import { VAULT_CONFIG_SEED, WALLET_SEED, NULLIFIER_SEED, NOTE_LOCK_SEED, CONSUMED_NOTE_SEED, VAULT_TOKEN_SEED, OUTSTANDING_MINT_SEED, BATCH_VALIDITY_MARKER_SEED } from "./seeds.js";
+import { VAULT_CONFIG_SEED, MERKLE_TREE_SEED, WALLET_SEED, NULLIFIER_SEED, NOTE_LOCK_SEED, CONSUMED_NOTE_SEED, VAULT_TOKEN_SEED, OUTSTANDING_MINT_SEED, BATCH_VALIDITY_MARKER_SEED } from "./seeds.js";
 
 /** On-chain portion of a Groth16 proof — the three curve points. */
 export interface Groth16OnChainProof {
@@ -84,6 +84,35 @@ function serializeProof(p: Groth16OnChainProof): Uint8Array {
 
 export function vaultConfigPda(programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([VAULT_CONFIG_SEED], programId);
+}
+
+/** Per-shard `MerkleTree` PDA. Seed `[b"merkle_tree", &[treeId]]`. */
+export function merkleTreePda(
+  programId: PublicKey,
+  treeId: number,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [MERKLE_TREE_SEED, new Uint8Array([treeId & 0xff])],
+    programId,
+  );
+}
+
+/**
+ * The addresses the STATIC settle ALT must hold, in order — mirrors the Rust
+ * `nyx_tee::settle::settle_batched::static_alt_addresses(num_trees)`:
+ * `[vault_config, instructions_sysvar, system_program, merkle_tree(0..K-1)]`.
+ * Used by `devnet-setup` to build the ALT the CVM settle worker references.
+ */
+export function staticSettleAltAddresses(
+  programId: PublicKey,
+  numTrees: number,
+): PublicKey[] {
+  const [vaultConfig] = vaultConfigPda(programId);
+  const out = [vaultConfig, SYSVAR_INSTRUCTIONS_PUBKEY, SystemProgram.programId];
+  for (let treeId = 0; treeId < Math.max(1, numTrees); treeId++) {
+    out.push(merkleTreePda(programId, treeId)[0]);
+  }
+  return out;
 }
 
 export function walletEntryPda(
@@ -168,6 +197,9 @@ export interface BuildInitializeParams {
   admin: PublicKey;
   teePubkey: PublicKey;
   rootKey: PublicKey;
+  /** Number of Merkle-tree shards (1..=16). Each shard is then created with
+   *  its own `initialize_tree(treeId)` call. */
+  numTrees: number;
 }
 
 export function buildInitializeInstruction(
@@ -178,12 +210,48 @@ export function buildInitializeInstruction(
     anchorDiscriminator("initialize"),
     p.teePubkey.toBytes(),
     p.rootKey.toBytes(),
+    new Uint8Array([p.numTrees & 0xff]),
   );
   return new TransactionInstruction({
     programId: p.programId,
     keys: [
       { pubkey: p.admin, isSigner: true, isWritable: true },
       { pubkey: vaultPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
+export interface BuildInitializeTreeParams {
+  programId: PublicKey;
+  admin: PublicKey;
+  /** Shard id to create (0..numTrees-1). */
+  treeId: number;
+}
+
+/**
+ * Create one `MerkleTree` shard account. Mirrors
+ * `programs/vault/src/instructions/initialize_tree.rs`.
+ *
+ *   data = disc(8) || tree_id(1)
+ *   accounts: [admin(signer,mut), vault_config(ro), merkle_tree(init,mut), system(ro)]
+ */
+export function buildInitializeTreeInstruction(
+  p: BuildInitializeTreeParams,
+): TransactionInstruction {
+  const [vaultPda] = vaultConfigPda(p.programId);
+  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
+  const data = cat(
+    anchorDiscriminator("initialize_tree"),
+    new Uint8Array([p.treeId & 0xff]),
+  );
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.admin, isSigner: true, isWritable: true },
+      { pubkey: vaultPda, isSigner: false, isWritable: false },
+      { pubkey: merkleTree, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(data),
@@ -228,19 +296,32 @@ export function buildSetProtocolConfigInstruction(
 export interface BuildSetTeePubkeyParams {
   programId: PublicKey;
   admin: PublicKey;
-  newTeePubkey: PublicKey; // the CVM's dstack-derived Ed25519 signer
+  /** The FULL authorized TEE signer set (the K shard fee-payer/authority keys).
+   *  Replaces `vault_config.tee_pubkeys` wholesale. 1..=16 keys. */
+  teePubkeys: PublicKey[];
 }
 
 /**
- * Rotate `vault_config.tee_pubkey` to a new attested TEE signer.
- * Admin-only. Used to point the vault at a freshly-deployed CVM's
- * dstack-derived signer so its settle txs are accepted.
+ * Install the full authorized TEE signer set (`Vec<Pubkey>`). Admin-only. Used
+ * to register a freshly-deployed CVM's K dstack-derived shard signers so their
+ * settle txs are accepted. Mirrors `set_tee_pubkey(keys: Vec<Pubkey>)`.
+ *
+ *   data = disc(8) || keys(Vec<Pubkey>: u32 LE len ++ len*32)
  */
 export function buildSetTeePubkeyInstruction(
   p: BuildSetTeePubkeyParams,
 ): TransactionInstruction {
+  if (p.teePubkeys.length < 1 || p.teePubkeys.length > 16) {
+    throw new Error(`teePubkeys must have 1..=16 entries, got ${p.teePubkeys.length}`);
+  }
   const [vaultPda] = vaultConfigPda(p.programId);
-  const data = cat(anchorDiscriminator("set_tee_pubkey"), p.newTeePubkey.toBytes());
+  const lenLE = new Uint8Array(4);
+  new DataView(lenLE.buffer).setUint32(0, p.teePubkeys.length, true);
+  const data = cat(
+    anchorDiscriminator("set_tee_pubkey"),
+    lenLE,
+    ...p.teePubkeys.map((k) => k.toBytes()),
+  );
   return new TransactionInstruction({
     programId: p.programId,
     keys: [
@@ -254,21 +335,31 @@ export function buildSetTeePubkeyInstruction(
 export interface BuildResetMerkleTreeParams {
   programId: PublicKey;
   admin: PublicKey;
+  /** Which shard to reset. Other shards are untouched. */
+  treeId: number;
 }
 
 /**
- * DEV-NET-ONLY: reset vault's Merkle tree to empty. Admin must sign.
+ * DEV-NET-ONLY: reset shard `treeId`'s Merkle tree to empty. Admin must sign.
+ *
+ *   data = disc(8) || tree_id(1)
+ *   accounts: [admin(signer), vault_config(ro), merkle_tree(mut)]
  */
 export function buildResetMerkleTreeInstruction(
   p: BuildResetMerkleTreeParams,
 ): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
-  const data = anchorDiscriminator("reset_merkle_tree");
+  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
+  const data = cat(
+    anchorDiscriminator("reset_merkle_tree"),
+    new Uint8Array([p.treeId & 0xff]),
+  );
   return new TransactionInstruction({
     programId: p.programId,
     keys: [
       { pubkey: p.admin, isSigner: true, isWritable: false },
-      { pubkey: vaultPda, isSigner: false, isWritable: true },
+      { pubkey: vaultPda, isSigner: false, isWritable: false },
+      { pubkey: merkleTree, isSigner: false, isWritable: true },
     ],
     data: Buffer.from(data),
   });
@@ -329,6 +420,8 @@ export function buildCreateWalletInstruction(
 
 export interface BuildDepositParams {
   programId: PublicKey;
+  /** Which Merkle-tree shard the deposit's note commitment appends to. */
+  treeId: number;
   depositor: PublicKey;
   tokenMint: PublicKey;
   depositorTokenAccount: PublicKey;
@@ -341,11 +434,13 @@ export interface BuildDepositParams {
 
 export function buildDepositInstruction(p: BuildDepositParams): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
+  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
   const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
 
   const data = cat(
     anchorDiscriminator("deposit"),
+    new Uint8Array([p.treeId & 0xff]),
     u64LE(p.amount),
     fixed32(p.ownerCommitment),
     fixed32(p.innerHash),
@@ -358,7 +453,10 @@ export function buildDepositInstruction(p: BuildDepositParams): TransactionInstr
     programId: p.programId,
     keys: [
       { pubkey: p.depositor, isSigner: true, isWritable: true },
-      { pubkey: vaultPda, isSigner: false, isWritable: true },
+      // vault_config is read-only post-sharding (the tree state moved to
+      // merkle_tree); the leaf append mutates merkle_tree[treeId].
+      { pubkey: vaultPda, isSigner: false, isWritable: false },
+      { pubkey: merkleTree, isSigner: false, isWritable: true },
       { pubkey: p.tokenMint, isSigner: false, isWritable: false },
       { pubkey: p.depositorTokenAccount, isSigner: false, isWritable: true },
       { pubkey: vaultTokenAcct, isSigner: false, isWritable: true },
@@ -373,6 +471,8 @@ export function buildDepositInstruction(p: BuildDepositParams): TransactionInstr
 
 export interface BuildWithdrawParams {
   programId: PublicKey;
+  /** Which Merkle-tree shard the spent note lives in (recency check). */
+  treeId: number;
   payer: PublicKey;
   tokenMint: PublicKey;
   destinationTokenAccount: PublicKey;
@@ -392,7 +492,10 @@ export interface BuildWithdrawParams {
 
 export interface BuildLockNoteParams {
   programId: PublicKey;
-  /** Must equal `vault_config.tee_pubkey`. Pays the rent for the new PDA. */
+  /** Which Merkle-tree shard the input note lives in (its home tree) — the
+   *  shard whose recent-roots ring the handler checks `merkleRoot` against. */
+  treeId: number;
+  /** Must be one of `vault_config.tee_pubkeys`. Pays the rent for the new PDA. */
   teeAuthority: PublicKey;
   noteCommitment: Uint8Array;
   /** 16-byte order id used for `tee_forced_settle` cross-check. */
@@ -417,26 +520,29 @@ export interface BuildLockNoteParams {
 /**
  * v2 wire format (matches `programs/vault/src/instructions/lock_note.rs`):
  *
- *   data = disc(8) || note_commitment(32) || order_id(16) || expiry_slot(u64 LE)
- *        || amount(u64 LE) || token_mint(32) || merkle_root(32)
- *        || pi_a(64) || pi_b(128) || pi_c(64)
+ *   data = disc(8) || tree_id(1) || note_commitment(32) || order_id(16)
+ *        || expiry_slot(u64 LE) || amount(u64 LE) || token_mint(32)
+ *        || merkle_root(32) || pi_a(64) || pi_b(128) || pi_c(64)
  *
  *   accounts:
  *     [0] tee_authority   (signer, mut)
- *     [1] vault_config    (ro — handler reads tee_pubkey + checks root ring)
- *     [2] note_lock       (init, mut)
- *     [3] system_program  (ro)
+ *     [1] vault_config    (ro — handler reads tee_pubkeys + zsr)
+ *     [2] merkle_tree     (ro — the shard whose root ring is checked)
+ *     [3] note_lock       (init, mut)
+ *     [4] system_program  (ro)
  */
 export function buildLockNoteInstruction(
   p: BuildLockNoteParams,
 ): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
+  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
   if (p.orderId.length !== 16) {
     throw new Error(`orderId must be 16 bytes, got ${p.orderId.length}`);
   }
   const data = cat(
     anchorDiscriminator("lock_note"),
+    new Uint8Array([p.treeId & 0xff]),
     fixed32(p.noteCommitment),
     new Uint8Array(p.orderId),
     u64LE(p.expirySlot),
@@ -450,6 +556,7 @@ export function buildLockNoteInstruction(
     keys: [
       { pubkey: p.teeAuthority, isSigner: true, isWritable: true },
       { pubkey: vaultPda, isSigner: false, isWritable: false },
+      { pubkey: merkleTree, isSigner: false, isWritable: false },
       { pubkey: noteLock, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
@@ -459,6 +566,7 @@ export function buildLockNoteInstruction(
 
 export function buildWithdrawInstruction(p: BuildWithdrawParams): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
+  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
   const [consumedNote] = consumedNotePda(p.programId, p.noteCommitment);
   const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
@@ -467,6 +575,7 @@ export function buildWithdrawInstruction(p: BuildWithdrawParams): TransactionIns
 
   const data = cat(
     anchorDiscriminator("withdraw"),
+    new Uint8Array([p.treeId & 0xff]),
     fixed32(p.noteCommitment),
     fixed32(p.nullifier),
     fixed32(p.merkleRoot),
@@ -478,7 +587,10 @@ export function buildWithdrawInstruction(p: BuildWithdrawParams): TransactionIns
     programId: p.programId,
     keys: [
       { pubkey: p.payer, isSigner: true, isWritable: true },
-      { pubkey: vaultPda, isSigner: false, isWritable: true },
+      // vault_config is the SPL token authority (read-only PDA signer);
+      // merkle_tree[treeId] is read-only (the recent-roots ring check).
+      { pubkey: vaultPda, isSigner: false, isWritable: false },
+      { pubkey: merkleTree, isSigner: false, isWritable: false },
       { pubkey: p.tokenMint, isSigner: false, isWritable: false },
       { pubkey: vaultTokenAcct, isSigner: false, isWritable: true },
       { pubkey: p.destinationTokenAccount, isSigner: false, isWritable: true },
@@ -547,6 +659,8 @@ export function buildVerifyMatchBatchInstruction(
 
 export interface BuildMergeParams {
   programId: PublicKey;
+  /** Which Merkle-tree shard the inputs live in + the merged output appends to. */
+  treeId: number;
   payer: PublicKey;
   /** K nullifiers in circuit order — real (non-zero) for active slots, all-zero for dummies. */
   nullifiers: Uint8Array[];
@@ -560,18 +674,21 @@ export interface BuildMergeParams {
 /**
  * Wire format (matches `programs/vault/src/instructions/merge.rs`):
  *
- *   data = disc(8) || nullifiers(Vec<[u8;32]>: u32 LE len ++ len*32)
+ *   data = disc(8) || tree_id(1)
+ *        || nullifiers(Vec<[u8;32]>: u32 LE len ++ len*32)
  *        || output_commitment(32) || token_mint(32) || merkle_root(32)
  *        || k(u8) || pi_a(64) || pi_b(128) || pi_c(64)
  *
  *   accounts:
  *     [0] payer          (signer, mut)
- *     [1] vault_config   (mut)
- *     [2] system_program (ro)
- *     [3..] one NullifierEntry PDA per NON-ZERO nullifier (mut), in order
+ *     [1] vault_config   (ro — provides zero_subtree_roots)
+ *     [2] merkle_tree    (mut — inputs' shard + the merged-output append)
+ *     [3] system_program (ro)
+ *     [4..] one NullifierEntry PDA per NON-ZERO nullifier (mut), in order
  */
 export function buildMergeInstruction(p: BuildMergeParams): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
+  const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const isZero = (b: Uint8Array) => b.every((x) => x === 0);
   const nullifierPdas = p.nullifiers
     .filter((n) => !isZero(n))
@@ -583,6 +700,7 @@ export function buildMergeInstruction(p: BuildMergeParams): TransactionInstructi
 
   const data = cat(
     anchorDiscriminator("merge"),
+    new Uint8Array([p.treeId & 0xff]),
     nullifiersBytes,
     fixed32(p.outputCommitment),
     p.tokenMint.toBytes(),
@@ -595,7 +713,8 @@ export function buildMergeInstruction(p: BuildMergeParams): TransactionInstructi
     programId: p.programId,
     keys: [
       { pubkey: p.payer, isSigner: true, isWritable: true },
-      { pubkey: vaultPda, isSigner: false, isWritable: true },
+      { pubkey: vaultPda, isSigner: false, isWritable: false },
+      { pubkey: merkleTree, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ...nullifierPdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
     ],

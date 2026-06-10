@@ -83,7 +83,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     const resetSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        buildResetMerkleTreeInstruction({ programId: VAULT_ID, admin: admin.publicKey }),
+        buildResetMerkleTreeInstruction({ programId: VAULT_ID, admin: admin.publicKey, treeId: 0 }),
       ),
       [admin],
       { commitment: "confirmed" },

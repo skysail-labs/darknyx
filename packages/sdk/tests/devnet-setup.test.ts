@@ -297,6 +297,9 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
             admin: admin.publicKey,
             teePubkey: tee.publicKey,
             rootKey: rootKey.publicKey,
+            // Phase 6 expands this to a configurable K + an initialize_tree loop
+            // + a K-tree static ALT; single shard for now.
+            numTrees: 1,
           }),
         );
         const sig = await sendAndConfirmTransaction(connection, initTx, [admin], {
@@ -328,6 +331,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         buildResetMerkleTreeInstruction({
           programId: VAULT_PROGRAM_ID,
           admin: admin.publicKey,
+          treeId: 0,
         }),
       );
       const resetSig = await sendAndConfirmTransaction(connection, resetTx, [admin], {
