@@ -44,6 +44,8 @@ export class Watcher {
   private readonly pageLimit: number;
   private readonly log: (msg: string) => void;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Resolver for the inter-poll sleep, so stop() can wake run() immediately. */
+  private wake: (() => void) | null = null;
   private stopped = false;
 
   constructor(o: WatcherOpts) {
@@ -93,6 +95,11 @@ export class Watcher {
             this.db.upsertFills(s.signature, s.slot, fills);
             ingested += fills.length;
           }
+        } else {
+          // null tx = pruned by the RPC or a transient miss. We still advance
+          // the cursor below (no retry here), so warn loudly: any settle in this
+          // tx is lost to the index until a rebuild from an earlier cursor.
+          this.log(`WARN: getTransaction returned null for ${s.signature} (slot ${s.slot}) — skipping (pruned/transient)`);
         }
       }
       this.db.setCursor(s.signature, s.slot);
@@ -110,14 +117,24 @@ export class Watcher {
       } catch (e) {
         this.log(`poll error: ${(e as Error).message}`);
       }
+      if (this.stopped) break;
+      // Sleep between polls, but expose the resolver so stop() can wake us
+      // immediately. clearTimeout alone never resolves this promise, so the
+      // loop would hang forever after stop() — resolve it explicitly there.
       await new Promise<void>((res) => {
+        this.wake = res;
         this.timer = setTimeout(res, intervalMs);
       });
+      this.wake = null;
+      this.timer = null;
     }
   }
 
   stop(): void {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
+    if (this.wake) this.wake(); // unblock the pending sleep so run() can exit
+    this.timer = null;
+    this.wake = null;
   }
 }

@@ -162,6 +162,10 @@ describe("backfill then tail", () => {
       mint: hex(QUOTE_MINT),
       inner_hash: hex(bn254ToBE32(a.inner)),
     };
+    // A re-subscribe is a NEW connection — use a fresh FakeWs so the first
+    // subscription's still-registered message handler doesn't also fire on this
+    // emit (same-instance reuse double-processes aMemo).
+    const ws2 = new FakeWs();
     const done2 = new Promise<void>((resolve) => {
       subscribeFills({
         gatewayWsUrl: "wss://gw.test",
@@ -169,11 +173,11 @@ describe("backfill then tail", () => {
         masterSeed: SEED,
         ownerCommitment: OWNER,
         store,
-        webSocketFactory: () => ws,
+        webSocketFactory: () => ws2,
         onFill: () => resolve(),
       });
     });
-    ws.emit("message", { data: JSON.stringify(aMemo) });
+    ws2.emit("message", { data: JSON.stringify(aMemo) });
     await done2;
     expect(await store.list()).toHaveLength(2); // still 2 — commitment-keyed
   });

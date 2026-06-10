@@ -79,7 +79,15 @@ async fn handle_fills(mut socket: WebSocket, state: Arc<ApiState>, account_id: S
         tokio::select! {
             memo = rx.recv() => match memo {
                 Ok(memo) => {
-                    let Ok(json) = serde_json::to_string(&memo) else { continue };
+                    let json = match serde_json::to_string(&memo) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            // Should be unreachable for a plain FillMemo, but
+                            // don't swallow it silently if it ever fires.
+                            tracing::error!(account = %account_id, error = %e, "ws/fills: FillMemo serialize failed; dropping");
+                            continue;
+                        }
+                    };
                     if socket.send(Message::Text(json)).await.is_err() {
                         break; // client gone
                     }
