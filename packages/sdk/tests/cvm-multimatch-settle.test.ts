@@ -51,7 +51,7 @@ import {
 import { userCommitmentFromKeys } from "../src/keys/user-commitment.js";
 import { ownerCommitment, noteCommitmentV2, nullifierV2 } from "../src/utxo/note.js";
 import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
-import { vaultConfigPda, buildDepositInstruction } from "../src/idl/vault-client.js";
+import { vaultConfigPda, merkleTreePda, buildDepositInstruction } from "../src/idl/vault-client.js";
 import { orderCanonicalDigest, OrderSide, OrderType } from "../src/orders/canonical.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
@@ -96,10 +96,31 @@ async function fetchOracleAnchor(): Promise<bigint> {
   return BigInt(j.parsed[0].price.price);
 }
 
-async function onChainLeafCount(conn: Connection, vaultPda: PublicKey): Promise<number> {
-  const info = await conn.getAccountInfo(vaultPda);
-  if (!info) throw new Error("vault_config missing — run devnet-setup");
-  return Number(new DataView(info.data.buffer, info.data.byteOffset + 104, 8).getBigUint64(0, true));
+// Post-sharding the tree state lives in K per-shard MerkleTree accounts
+// (8 disc + 8 leaf_count + …). leaf_count is at offset 8.
+async function shardLeafCount(
+  conn: Connection,
+  programId: PublicKey,
+  treeId: number,
+): Promise<number> {
+  const [treePda] = merkleTreePda(programId, treeId);
+  const info = await conn.getAccountInfo(treePda);
+  if (!info) throw new Error(`merkle_tree shard ${treeId} missing — run devnet-setup`);
+  return Number(new DataView(info.data.buffer, info.data.byteOffset + 8, 8).getBigUint64(0, true));
+}
+
+// Total leaves across all K shards. Settle outputs round-robin across shards,
+// so the pool's leaf count is the SUM (a single shard sees only its slice).
+async function totalLeafCount(
+  conn: Connection,
+  programId: PublicKey,
+  numTrees: number,
+): Promise<number> {
+  let total = 0;
+  for (let treeId = 0; treeId < numTrees; treeId++) {
+    total += await shardLeafCount(conn, programId, treeId);
+  }
+  return total;
 }
 
 interface Persona {
@@ -148,12 +169,15 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       const [vaultPda] = vaultConfigPda(vaultProgramId);
       const baseMint = new PublicKey(cfg.baseMint.pubkey);
       const quoteMint = new PublicKey(cfg.quoteMint.pubkey);
+      // K shards (default 1). Deposits all go to shard 0; settle OUTPUTS
+      // round-robin across all K, so totals are summed across shards.
+      const NUM_TREES = (cfg as { numTrees?: number }).numTrees ?? 1;
 
       const buyer = await makePersona("cvm-buyer", 0x40);
       const seller = await makePersona("cvm-seller", 0x80);
 
-      const startCount = await onChainLeafCount(conn, vaultPda);
-      expect(startCount, "tree not empty — reset the merkle tree first").toBe(0);
+      const startCount = await totalLeafCount(conn, vaultProgramId, NUM_TREES);
+      expect(startCount, "trees not empty — reset the merkle trees first").toBe(0);
 
       const anchor = await fetchOracleAnchor();
       const bidPrice = (anchor * 12n) / 10n;
@@ -203,11 +227,13 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       // Deposit all 2M notes, mirroring into one shadow tree.
       const tree = await MerkleShadow.create();
       async function deposit(p: Persona, mint: PublicKey, ata: PublicKey, amount: bigint) {
-        const leafIndex = await onChainLeafCount(conn, vaultPda);
+        // All deposits go to shard 0 → leaf index is shard 0's leaf_count.
+        const leafIndex = await shardLeafCount(conn, vaultProgramId, 0);
         const innerHash = deriveBlindingFactor(p.masterSeed, BigInt(leafIndex));
         const commitment = await noteCommitmentV2({ tokenMint: mint.toBytes(), amount, ownerCommitment: p.ownerCommit, innerHash });
         const ix = buildDepositInstruction({
           programId: vaultProgramId,
+          treeId: 0,
           depositor: p.payer.publicKey,
           tokenMint: mint,
           depositorTokenAccount: ata,
@@ -229,7 +255,7 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
         buyerNotes.push(await deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmts[i]));
         sellerNotes.push(await deposit(seller, baseMint, sellerBaseAta, sellerNoteAmts[i]));
       }
-      const depositCount = await onChainLeafCount(conn, vaultPda);
+      const depositCount = await totalLeafCount(conn, vaultProgramId, NUM_TREES);
       expect(depositCount).toBe(2 * MATCHES);
       console.log(`  · deposited ${2 * MATCHES} notes (leaf_count ${startCount} → ${depositCount})`);
 
@@ -336,7 +362,7 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       let finalCount = depositCount;
       const deadline = Date.now() + SETTLE_TIMEOUT_MS;
       while (Date.now() < deadline) {
-        finalCount = await onChainLeafCount(conn, vaultPda);
+        finalCount = await totalLeafCount(conn, vaultProgramId, NUM_TREES);
         if (finalCount >= wantLeaves) break;
         await new Promise((r) => setTimeout(r, 2000));
       }
