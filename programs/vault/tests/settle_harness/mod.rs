@@ -1408,6 +1408,31 @@ pub fn build_settle_batched_ix(
     merkle_proof: &[[u8; 32]; 4],
     merkle_root: &[u8; 32],
 ) -> Instruction {
+    build_settle_batched_ix_for(
+        h,
+        &h.tee.pubkey(),
+        tree_id,
+        payload,
+        match_index,
+        merkle_proof,
+        merkle_root,
+    )
+}
+
+/// Like [`build_settle_batched_ix`] but with an explicit `authority` as the
+/// `tee_authority` signer + rent payer. Used by the multi-key auth test, where
+/// a settle is signed by `tee_pubkeys[1]` (or an unregistered key) rather than
+/// the default `h.tee`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_settle_batched_ix_for(
+    h: &Harness,
+    authority: &Pubkey,
+    tree_id: u8,
+    payload: &MatchResultPayload,
+    match_index: u8,
+    merkle_proof: &[[u8; 32]; 4],
+    merkle_root: &[u8; 32],
+) -> Instruction {
     let (vault_pda, _) = vault_config_pda(&h.vault_id);
     let (tree_pda, _) = merkle_tree_pda(&h.vault_id, tree_id);
     let (lock_a, _) = note_lock_pda(&h.vault_id, &payload.note_a_commitment);
@@ -1440,7 +1465,7 @@ pub fn build_settle_batched_ix(
     Instruction {
         program_id: h.vault_id,
         accounts: vec![
-            AccountMeta::new(h.tee.pubkey(), true),
+            AccountMeta::new(*authority, true),
             AccountMeta::new_readonly(vault_pda, false),
             AccountMeta::new(tree_pda, false),
             AccountMeta::new(lock_a, false),
@@ -1517,6 +1542,82 @@ pub fn build_settle_batched_tx(
         ),
         h.svm.latest_blockhash(),
     )
+}
+
+/// Like [`build_settle_batched_tx`] but signed (ed25519 precompile + tx
+/// fee-payer + `tee_authority`) by an arbitrary `signer`. Used to exercise the
+/// multi-key authorized-set: a settle signed by `tee_pubkeys[1]` must succeed,
+/// one signed by an unregistered key must be rejected `Unauthorized`.
+pub fn build_settle_batched_tx_signed_by(
+    h: &Harness,
+    signer: &Keypair,
+    tree_id: u8,
+    payload: &MatchResultPayload,
+    match_index: u8,
+    merkle_proof: &[[u8; 32]; 4],
+    merkle_root: &[u8; 32],
+) -> Transaction {
+    let msg_hash = canonical_payload_hash(payload);
+    let sig = signer.sign_message(&msg_hash);
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes.copy_from_slice(sig.as_ref());
+    let pk = signer.pubkey().to_bytes();
+    let ed_ix = build_ed25519_verify_ix(&pk, &sig_bytes, &msg_hash);
+    let settle_ix = build_settle_batched_ix_for(
+        h,
+        &signer.pubkey(),
+        tree_id,
+        payload,
+        match_index,
+        merkle_proof,
+        merkle_root,
+    );
+    Transaction::new(
+        &[signer],
+        Message::new(
+            &[compute_budget_ix(1_400_000), ed_ix, settle_ix],
+            Some(&signer.pubkey()),
+        ),
+        h.svm.latest_blockhash(),
+    )
+}
+
+/// Build a `set_tee_pubkey` ix that installs the full authorized-key set
+/// (`keys: Vec<Pubkey>`). Admin-signed. Mirrors `set_tee_pubkey.rs`'s Borsh
+/// shape: a length-prefixed vec of 32-byte pubkeys.
+pub fn build_set_tee_pubkeys_ix(h: &Harness, keys: &[Pubkey]) -> Instruction {
+    let (vault_pda, _) = vault_config_pda(&h.vault_id);
+    let mut data = anchor_disc("set_tee_pubkey").to_vec();
+    data.extend_from_slice(&(keys.len() as u32).to_le_bytes());
+    for k in keys {
+        data.extend_from_slice(&k.to_bytes());
+    }
+    Instruction {
+        program_id: h.vault_id,
+        accounts: vec![
+            AccountMeta::new_readonly(h.admin.pubkey(), true),
+            AccountMeta::new(vault_pda, false),
+        ],
+        data,
+    }
+}
+
+/// Build a `reset_merkle_tree(tree_id)` ix. Admin-signed; targets the single
+/// shard `tree_id` (the other shards are untouched).
+pub fn build_reset_merkle_tree_ix(h: &Harness, tree_id: u8) -> Instruction {
+    let (vault_pda, _) = vault_config_pda(&h.vault_id);
+    let (tree_pda, _) = merkle_tree_pda(&h.vault_id, tree_id);
+    let mut data = anchor_disc("reset_merkle_tree").to_vec();
+    data.push(tree_id);
+    Instruction {
+        program_id: h.vault_id,
+        accounts: vec![
+            AccountMeta::new_readonly(h.admin.pubkey(), true),
+            AccountMeta::new_readonly(vault_pda, false),
+            AccountMeta::new(tree_pda, false),
+        ],
+        data,
+    }
 }
 
 /// One-shot: compute the v3.5 leaf + Merkle root for a single-match

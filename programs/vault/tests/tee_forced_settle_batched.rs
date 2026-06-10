@@ -12,7 +12,41 @@
 mod settle_harness;
 
 use settle_harness::*;
+use solana_keypair::Keypair;
 use solana_signer::Signer;
+
+/// Build one exact-fill, single-match "batch" keyed off a `tag` byte: seed its
+/// two input locks + the single-match `BatchValidityMarker`, and return
+/// `(payload, proof, root)` so the caller can settle it to any shard, signed by
+/// any key. Shared by the multi-shard / multi-key / per-shard-reset tests.
+fn seed_single_match(h: &mut Harness, tag: u8) -> (MatchResultPayload, [[u8; 32]; 4], [u8; 32]) {
+    let note_a = fr_safe(0xA0, tag);
+    let note_b = fr_safe(0xB0, tag);
+    let oid_a = [0x10u8 ^ tag; 16];
+    let oid_b = [0x11u8 ^ tag; 16];
+    seed_note_lock(h, &note_a, &oid_a, 1_000_000, 5_000); // quote
+    seed_note_lock(h, &note_b, &oid_b, 1_000_000, 100); // base
+    let p = MatchResultPayload::exact_fill(
+        [0xE0u8 ^ tag; 16],
+        note_a,
+        note_b,
+        fr_safe(0xC0, tag),
+        fr_safe(0xD0, tag),
+        [0xF0u8 ^ tag; 32],
+        [0xF1u8 ^ tag; 32],
+        oid_a,
+        oid_b,
+        100,
+        5_000,
+    );
+    let mint = read_note_lock_mint(h, &note_a);
+    let leaf = compute_match_leaf_for(&p, &mint, &mint);
+    let mut leaves = [[0u8; 32]; 16];
+    leaves[0] = leaf;
+    let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
+    seed_batch_validity_marker(h, &root, u64::MAX / 2);
+    (p, proof, root)
+}
 
 // ---------------------------------------------------------------------------
 // Regression: multiple matches share one marker.
@@ -425,5 +459,103 @@ fn test_settles_to_distinct_shards_advance_independently() {
         tree_leaf_count(&h, 1),
         2,
         "shard 1 holds only its own 2 output leaves"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Multi-key authorized set: a settle signed by ANY of the registered
+// `tee_pubkeys` (here `tee_pubkeys[1]`) succeeds; one signed by a key NOT in
+// the set is rejected `Unauthorized`. This is the on-chain half of the K
+// fee-payer lever — each shard's settle is paid + signed by a distinct dstack
+// key, and the vault must accept the whole registered set, not just key 0.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_settle_signed_by_registered_key_succeeds_unregistered_fails() {
+    let mut h = Harness::setup();
+
+    // Register a SECOND authorized key alongside the default `h.tee`.
+    let second = Keypair::new();
+    h.svm
+        .airdrop(&second.pubkey(), 10_000_000_000)
+        .expect("airdrop second key");
+    let set_ix = build_set_tee_pubkeys_ix(&h, &[h.tee.pubkey(), second.pubkey()]);
+    let set_tx = solana_transaction::Transaction::new(
+        &[&h.admin],
+        solana_message::Message::new(&[set_ix], Some(&h.admin.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    h.svm
+        .send_transaction(set_tx)
+        .expect("register the 2-key authorized set");
+
+    // A settle signed by `tee_pubkeys[1]` (the second registered key) settles.
+    let (p_ok, proof_ok, root_ok) = seed_single_match(&mut h, 0x11);
+    let tx_ok = build_settle_batched_tx_signed_by(&h, &second, 0, &p_ok, 0, &proof_ok, &root_ok);
+    h.svm
+        .send_transaction(tx_ok)
+        .expect("settle signed by a registered key must succeed");
+    assert!(consumed_note_exists(&h, &p_ok.note_a_commitment));
+
+    // A settle signed by an UNREGISTERED key is rejected (`is_authorized_tee`
+    // fails before any state mutation).
+    let impostor = Keypair::new();
+    h.svm
+        .airdrop(&impostor.pubkey(), 10_000_000_000)
+        .expect("airdrop impostor");
+    let (p_bad, proof_bad, root_bad) = seed_single_match(&mut h, 0x22);
+    let tx_bad =
+        build_settle_batched_tx_signed_by(&h, &impostor, 0, &p_bad, 0, &proof_bad, &root_bad);
+    assert!(
+        h.svm.send_transaction(tx_bad).is_err(),
+        "settle signed by an unregistered key must be rejected",
+    );
+    assert!(
+        !consumed_note_exists(&h, &p_bad.note_a_commitment),
+        "the rejected settle must not have consumed its input note",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Per-shard reset: `reset_merkle_tree(1)` wipes ONLY shard 1's leaf state;
+// shard 0 keeps its accumulated leaves. Confirms the reset ix is correctly
+// scoped to a single `MerkleTree` account post-sharding (each shard resets
+// independently — the devnet e2e harness relies on this to clean one shard
+// without disturbing the others).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_reset_one_shard_leaves_others_untouched() {
+    let mut h = Harness::setup();
+
+    // Populate both shards: each settle appends its (note_c, note_d) pair.
+    let (p0, proof0, root0) = seed_single_match(&mut h, 0x31);
+    h.svm
+        .send_transaction(build_settle_batched_tx(&h, 0, &p0, 0, &proof0, &root0))
+        .expect("settle to shard 0");
+    let (p1, proof1, root1) = seed_single_match(&mut h, 0x32);
+    h.svm
+        .send_transaction(build_settle_batched_tx(&h, 1, &p1, 0, &proof1, &root1))
+        .expect("settle to shard 1");
+    assert_eq!(tree_leaf_count(&h, 0), 2);
+    assert_eq!(tree_leaf_count(&h, 1), 2);
+
+    // Reset ONLY shard 1.
+    let reset_ix = build_reset_merkle_tree_ix(&h, 1);
+    let reset_tx = solana_transaction::Transaction::new(
+        &[&h.admin],
+        solana_message::Message::new(&[reset_ix], Some(&h.admin.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    h.svm
+        .send_transaction(reset_tx)
+        .expect("reset_merkle_tree(1)");
+
+    // Shard 1 back to empty; shard 0 untouched.
+    assert_eq!(tree_leaf_count(&h, 1), 0, "shard 1 reset to empty");
+    assert_eq!(
+        tree_leaf_count(&h, 0),
+        2,
+        "shard 0 must be untouched by a shard-1 reset"
     );
 }
