@@ -62,8 +62,11 @@ import {
 
 import {
   buildInitializeInstruction,
+  buildInitializeTreeInstruction,
   buildResetMerkleTreeInstruction,
   buildSetProtocolConfigInstruction,
+  merkleTreePda,
+  staticSettleAltAddresses,
   vaultConfigPda,
 } from "../src/idl/vault-client.js";
 
@@ -87,6 +90,17 @@ const VAULT_PROGRAM_ID = new PublicKey(
 );
 
 const PROTOCOL_FEE_BPS = Number(process.env.PROTOCOL_FEE_BPS ?? "30");
+
+/** Number of Merkle-tree shards to provision. The CVM settle worker
+ *  round-robins settles across K shards + K fee-payer keys; this must equal
+ *  the CVM's `NYX_TEE_NUM_TREES`. Default 1 (single shard). */
+const NUM_TREES = (() => {
+  const n = Number(process.env.NYX_NUM_TREES ?? "1");
+  if (!Number.isInteger(n) || n < 1 || n > 16) {
+    throw new Error("NYX_NUM_TREES must be an integer 1..16");
+  }
+  return n;
+})();
 
 /** SPL mint decimals for both BASE and QUOTE (0–9). Default 6 keeps human peg aligned with atomic `price_limit` when mock TWAP = 100. */
 const DEMO_MINT_DECIMALS = (() => {
@@ -171,11 +185,16 @@ export interface E2EConfig {
     feeRateBps: number;
   };
   vaultConfigPda: string;
+  /** Number of Merkle-tree shards provisioned. The CVM's NYX_TEE_NUM_TREES
+   *  must equal this. */
+  numTrees: number;
+  /** The K `MerkleTree` shard PDAs, indexed by tree_id. */
+  merkleTreePdas: string[];
   /**
-   * v3 — Address Lookup Table that hoists the three static accounts
-   * (vault_config, instructions_sysvar, system_program) out of the settle
-   * tx's account-keys list. Saves ~60 bytes on every settle vs. legacy txs,
-   * which buys headroom for the VALID_CREATE marker + future expansion.
+   * v3 — Address Lookup Table that hoists the static settle accounts
+   * (vault_config, instructions_sysvar, system_program) AND the K merkle_tree
+   * shard PDAs out of the settle tx's account-keys list. Saves bytes on every
+   * settle vs. legacy txs, which buys headroom under the 1232-byte cap.
    *
    * Optional: callers can still send a legacy settle tx when the marker
    * fits; the v0 wrapper is preferred for change-note / re-lock paths
@@ -283,7 +302,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       tx(`created both SPL mints (BASE=${DEMO_MINT_DECIMALS}d, QUOTE=${DEMO_MINT_DECIMALS}d)`, mintSig);
 
       // ────────────────────────────────────────────────────────────────────
-      step(2, "Initialise vault_config (idempotent)");
+      step(2, `Initialise vault_config + ${NUM_TREES} Merkle-tree shard(s) (idempotent)`);
       // ────────────────────────────────────────────────────────────────────
       const [vaultPda] = vaultConfigPda(VAULT_PROGRAM_ID);
       bullet(`vault_config PDA:   ${vaultPda.toBase58()}`);
@@ -297,15 +316,39 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
             admin: admin.publicKey,
             teePubkey: tee.publicKey,
             rootKey: rootKey.publicKey,
-            // Phase 6 expands this to a configurable K + an initialize_tree loop
-            // + a K-tree static ALT; single shard for now.
-            numTrees: 1,
+            numTrees: NUM_TREES,
           }),
         );
         const sig = await sendAndConfirmTransaction(connection, initTx, [admin], {
           commitment: "confirmed",
         });
         tx("initialize(vault_config)", sig);
+      }
+
+      // Create each Merkle-tree shard account (idempotent — skip if it exists).
+      // The settle worker appends to merkle_tree[tree_id]; ALL K must exist
+      // before the CVM can settle to any non-zero shard.
+      const merkleTreePdas: PublicKey[] = [];
+      for (let treeId = 0; treeId < NUM_TREES; treeId++) {
+        const [treePda] = merkleTreePda(VAULT_PROGRAM_ID, treeId);
+        merkleTreePdas.push(treePda);
+        const exists = await connection.getAccountInfo(treePda);
+        if (exists) {
+          bullet(`merkle_tree[${treeId}] exists: ${treePda.toBase58()}`);
+          continue;
+        }
+        const treeTx = new Transaction().add(
+          buildInitializeTreeInstruction({
+            programId: VAULT_PROGRAM_ID,
+            admin: admin.publicKey,
+            treeId,
+          }),
+        );
+        const sig = await sendAndConfirmTransaction(connection, treeTx, [admin], {
+          commitment: "confirmed",
+        });
+        tx(`initialize_tree(${treeId})`, sig);
+        bullet(`merkle_tree[${treeId}]: ${treePda.toBase58()}`);
       }
 
       // ────────────────────────────────────────────────────────────────────
@@ -324,20 +367,22 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       protocolOwnerCommitment.set(tag.slice(0, 32));
       protocolOwnerCommitment[0] = 0; // keep value < BN254 Fr
 
-      // DEV-NET: wipe the vault's Merkle tree so the trade-flow test's
-      // in-memory shadow tree starts from the same empty root as on-chain.
+      // DEV-NET: wipe every Merkle-tree shard so the trade-flow test's
+      // in-memory shadow trees start from the same empty root as on-chain.
       // Idempotent + admin-gated. See programs/vault/src/instructions/reset_merkle_tree.rs.
-      const resetTx = new Transaction().add(
-        buildResetMerkleTreeInstruction({
-          programId: VAULT_PROGRAM_ID,
-          admin: admin.publicKey,
-          treeId: 0,
-        }),
-      );
-      const resetSig = await sendAndConfirmTransaction(connection, resetTx, [admin], {
-        commitment: "confirmed",
-      });
-      tx("reset_merkle_tree (devnet-only)", resetSig);
+      for (let treeId = 0; treeId < NUM_TREES; treeId++) {
+        const resetTx = new Transaction().add(
+          buildResetMerkleTreeInstruction({
+            programId: VAULT_PROGRAM_ID,
+            admin: admin.publicKey,
+            treeId,
+          }),
+        );
+        const resetSig = await sendAndConfirmTransaction(connection, resetTx, [admin], {
+          commitment: "confirmed",
+        });
+        tx(`reset_merkle_tree(${treeId}) (devnet-only)`, resetSig);
+      }
 
       const spcTx = new Transaction().add(
         buildSetProtocolConfigInstruction({
@@ -355,11 +400,13 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // ────────────────────────────────────────────────────────────────────
       step(4, "Create Address Lookup Table for settle txs (size relief)");
       // ────────────────────────────────────────────────────────────────────
-      // Hoist the three accounts that appear in EVERY settle tx and never
-      // change: vault_config, instructions sysvar, system program. The
-      // address-lookup-table compresses each from 32 bytes (in the keys
-      // list) to 1 byte (an index into the ALT), saving ~60 bytes net
-      // after the ALT pubkey overhead.
+      // Hoist the static settle accounts (vault_config, instructions sysvar,
+      // system program) AND the K merkle_tree shard PDAs out of the settle tx's
+      // account-keys list — the address-lookup-table compresses each from 32
+      // bytes to a 1-byte index. With sharding the worker references its
+      // merkle_tree[j] from this ALT, so all K shards must be listed (mirrors
+      // the Rust static_alt_addresses).
+      const altAddresses = staticSettleAltAddresses(VAULT_PROGRAM_ID, NUM_TREES);
       const slot = await connection.getSlot("confirmed");
       const [createAltIx, settleLookupTable] =
         AddressLookupTableProgram.createLookupTable({
@@ -371,7 +418,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         payer: admin.publicKey,
         authority: admin.publicKey,
         lookupTable: settleLookupTable,
-        addresses: [vaultPda, SYSVAR_INSTRUCTIONS_PUBKEY, SystemProgram.programId],
+        addresses: altAddresses,
       });
       const altTx = new Transaction().add(createAltIx, extendAltIx);
       const altSig = await sendAndConfirmTransaction(connection, altTx, [admin], {
@@ -408,6 +455,8 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           feeRateBps: PROTOCOL_FEE_BPS,
         },
         vaultConfigPda: vaultPda.toBase58(),
+        numTrees: NUM_TREES,
+        merkleTreePdas: merkleTreePdas.map((p) => p.toBase58()),
         settleLookupTable: settleLookupTable.toBase58(),
         createdAt: new Date().toISOString(),
       };
