@@ -33,6 +33,15 @@ fn to_address(p: &Pubkey) -> Address {
     Address::new_from_array(p.to_bytes())
 }
 
+/// Max addresses per `extend_lookup_table` tx. One extend ix carries 32 bytes
+/// per address inline; with the tx envelope (sig + header + ~4 account keys +
+/// blockhash + ix overhead ≈ 250 B) that caps a single extend tx at ~30
+/// addresses under Solana's 1232-byte limit. 25 leaves a safety margin — a
+/// batch needing more addresses (e.g. N=16 with the lock + consumed + nullifier
+/// PDAs) is split across SEQUENTIAL extend txs (order matters: the ALT's index
+/// mapping must mirror the in-memory address list).
+pub const MAX_EXTEND_ADDRESSES: usize = 25;
+
 /// The create + extend instructions for a per-batch ALT, plus the
 /// derived ALT address. The caller submits these as Tx C, waits
 /// for confirmation, then references the ALT in the Tx D v0
@@ -42,14 +51,20 @@ fn to_address(p: &Pubkey) -> Address {
 /// `recent_slot` must be the context slot from a recent
 /// `getLatestBlockhash` (see the module doc).
 pub struct PerBatchAltIxs {
-    /// `[create_ix, extend_ix]`, in submit order.
-    pub ixs: Vec<Instruction>,
+    /// The `create_lookup_table` ix — sent in its own tx (or with the first
+    /// extend chunk).
+    pub create_ix: Instruction,
+    /// One `extend` ix per ≤[`MAX_EXTEND_ADDRESSES`] chunk of `addresses`, in
+    /// order. Each MUST go in its OWN tx (a single tx can't hold more than ~30
+    /// addresses' worth of extend data) and be confirmed before the next so the
+    /// on-chain address order matches the in-memory list.
+    pub extend_ixs: Vec<Instruction>,
     /// The derived ALT address — used to construct the
     /// `AddressLookupTableAccount` for Tx D's v0 message.
     pub alt_address: Address,
 }
 
-/// Build the per-batch ALT create + extend instructions for the
+/// Build the per-batch ALT create + (chunked) extend instructions for the
 /// given derivable addresses (from
 /// [`super::settle_batched::per_batch_alt_addresses`]).
 pub fn build_per_batch_alt_ixs(
@@ -59,13 +74,11 @@ pub fn build_per_batch_alt_ixs(
 ) -> PerBatchAltIxs {
     let auth_pk = to_pubkey(authority);
     let (create_ix, alt_pk) = create_lookup_table(auth_pk, auth_pk, recent_slot);
-
-    let new_addresses: Vec<Pubkey> = addresses.iter().map(to_pubkey).collect();
-    let extend_ix = extend_lookup_table(alt_pk, auth_pk, Some(auth_pk), new_addresses);
-
+    let alt_address = to_address(&alt_pk);
     PerBatchAltIxs {
-        ixs: vec![create_ix, extend_ix],
-        alt_address: to_address(&alt_pk),
+        create_ix,
+        extend_ixs: build_extend_alt_ix_chunks(authority, &alt_address, addresses),
+        alt_address,
     }
 }
 
@@ -73,6 +86,9 @@ pub fn build_per_batch_alt_ixs(
 /// existing ALT (the rolling-pool reuse path — no `create`). The
 /// newly appended addresses are unusable until the slot after this
 /// lands, same as a fresh create.
+///
+/// `addresses` MUST be ≤ [`MAX_EXTEND_ADDRESSES`] (one tx's worth); use
+/// [`build_extend_alt_ix_chunks`] for an arbitrary-length set.
 pub fn build_extend_alt_ix(
     authority: &Address,
     alt: &Address,
@@ -81,6 +97,21 @@ pub fn build_extend_alt_ix(
     let auth_pk = to_pubkey(authority);
     let new_addresses: Vec<Pubkey> = addresses.iter().map(to_pubkey).collect();
     extend_lookup_table(to_pubkey(alt), auth_pk, Some(auth_pk), new_addresses)
+}
+
+/// Chunk `addresses` into ≤[`MAX_EXTEND_ADDRESSES`] groups and build one
+/// `extend` ix per chunk — each must be sent in its OWN tx, in order, so the
+/// on-chain ALT address ordering matches the in-memory list a Tx D v0 message
+/// indexes into. Empty input → no ixs.
+pub fn build_extend_alt_ix_chunks(
+    authority: &Address,
+    alt: &Address,
+    addresses: &[Address],
+) -> Vec<Instruction> {
+    addresses
+        .chunks(MAX_EXTEND_ADDRESSES)
+        .map(|chunk| build_extend_alt_ix(authority, alt, chunk))
+        .collect()
 }
 
 /// Build a `deactivate` ix for an ALT being rotated out of the pool.
@@ -116,17 +147,34 @@ mod tests {
     }
 
     #[test]
-    fn build_returns_create_plus_extend() {
+    fn build_returns_create_plus_one_extend_for_small_set() {
         let auth = dummy_authority();
         let addrs: Vec<Address> = (0u8..5).map(|i| Address::new_from_array([i; 32])).collect();
         let out = build_per_batch_alt_ixs(&auth, 12345, &addrs);
-        assert_eq!(out.ixs.len(), 2);
+        // 5 addresses ≤ MAX_EXTEND_ADDRESSES → a single extend chunk.
+        assert_eq!(out.extend_ixs.len(), 1);
         // The ALT address is deterministic from (authority, slot).
         let out2 = build_per_batch_alt_ixs(&auth, 12345, &addrs);
         assert_eq!(out.alt_address, out2.alt_address);
         // A different recent_slot → different ALT address.
         let out3 = build_per_batch_alt_ixs(&auth, 12346, &addrs);
         assert_ne!(out.alt_address, out3.alt_address);
+    }
+
+    #[test]
+    fn extend_chunks_split_large_address_sets() {
+        let auth = dummy_authority();
+        let alt = Address::new_from_array([0x99; 32]);
+        // 98 addresses (≈ N=16 with lock+consumed+nullifier PDAs) → ceil(98/25)
+        // = 4 extend txs, none over the per-tx address cap.
+        let addrs: Vec<Address> = (0u16..98)
+            .map(|i| Address::new_from_array([(i % 251) as u8; 32]))
+            .collect();
+        let chunks = build_extend_alt_ix_chunks(&auth, &alt, &addrs);
+        assert_eq!(chunks.len(), 98_usize.div_ceil(MAX_EXTEND_ADDRESSES));
+        assert_eq!(chunks.len(), 4);
+        // Empty input → no extend ixs.
+        assert!(build_extend_alt_ix_chunks(&auth, &alt, &[]).is_empty());
     }
 
     #[test]

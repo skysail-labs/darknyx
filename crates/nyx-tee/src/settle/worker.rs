@@ -37,7 +37,7 @@ use solana_keypair::Keypair;
 use solana_signer::Signer;
 use tokio::sync::RwLock;
 
-use super::alt::{build_deactivate_alt_ix, build_extend_alt_ix, build_per_batch_alt_ixs};
+use super::alt::{build_deactivate_alt_ix, build_extend_alt_ix_chunks, build_per_batch_alt_ixs};
 use super::alt_pool::{AltPlan, AltPool};
 use super::close_marker::build_close_marker_ix;
 use super::ed25519::build_ed25519_verify_ix;
@@ -437,26 +437,48 @@ async fn run_batch_settle_inner(
                     let alt_recent_slot = bh.context_slot.saturating_sub(ALT_RECENT_SLOT_BACKOFF);
                     let alt_build =
                         build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
-                    let alt_sig = submit_ixs_with_blockhash(
+                    // tx0: create + the FIRST extend chunk (keeps small batches a
+                    // single tx, unchanged). Remaining chunks go one-tx-each below
+                    // — a single tx can't hold > ~30 addresses' worth of extend
+                    // data (an N=16 batch's lock+consumed+nullifier PDAs blow past
+                    // that), and they must land in order so the ALT index mapping
+                    // mirrors `alt_addrs`.
+                    let mut extends = alt_build.extend_ixs.into_iter();
+                    let mut tx0 = vec![alt_build.create_ix];
+                    tx0.extend(extends.next());
+                    let create_sig = submit_ixs_with_blockhash(
                         &ctx.rpc,
                         ctx.primary_keypair(),
-                        &alt_build.ixs,
+                        &tx0,
                         Hash::new_from_array(bh.blockhash),
                     )
                     .await?;
-                    confirm_signatures(&ctx.rpc, &[alt_sig], ctx.confirm_timeout).await?;
+                    confirm_signatures(&ctx.rpc, &[create_sig], ctx.confirm_timeout).await?;
+                    for ext_ix in extends {
+                        let ext_sig = submit_ixs_with_blockhash(
+                            &ctx.rpc,
+                            ctx.primary_keypair(),
+                            &[ext_ix],
+                            Hash::new_from_array(bh.blockhash),
+                        )
+                        .await?;
+                        confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
+                    }
                     pool.commit_create(alt_build.alt_address, alt_addrs.clone(), deactivated);
                 }
                 AltPlan::Extend { alt } => {
-                    let extend_ix = build_extend_alt_ix(&tee_pubkey, &alt, &alt_addrs);
-                    let ext_sig = submit_ixs_with_blockhash(
-                        &ctx.rpc,
-                        ctx.primary_keypair(),
-                        &[extend_ix],
-                        Hash::new_from_array(bh.blockhash),
-                    )
-                    .await?;
-                    confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
+                    // Append this batch's addresses, chunked across sequential txs
+                    // (≤ MAX_EXTEND_ADDRESSES each, in order).
+                    for ext_ix in build_extend_alt_ix_chunks(&tee_pubkey, &alt, &alt_addrs) {
+                        let ext_sig = submit_ixs_with_blockhash(
+                            &ctx.rpc,
+                            ctx.primary_keypair(),
+                            &[ext_ix],
+                            Hash::new_from_array(bh.blockhash),
+                        )
+                        .await?;
+                        confirm_signatures(&ctx.rpc, &[ext_sig], ctx.confirm_timeout).await?;
+                    }
                     pool.commit_extend(&alt_addrs);
                 }
             }
