@@ -453,6 +453,11 @@ fn lock_inputs(
     rec: &crate::matcher::openings::OrderOpening,
 ) -> LockSideInputs {
     LockSideInputs {
+        // Single-shard for now: every input note's home tree is shard 0.
+        // Phase 3 sources this from the stored opening (intake records which
+        // shard the deposit/continuation note lives in) so lock_note checks
+        // recency against the right `merkle_tree` shard.
+        tree_id: 0,
         note_commitment,
         order_id: rec.order_id,
         expiry_slot: rec.expiry_slot,

@@ -585,7 +585,7 @@ fn build_settle_driver(
     let static_alt = cfg.settle_lookup_table.map(|lut| {
         alt_account(
             solana_address::Address::new_from_array(lut),
-            nyx_tee::settle::settle_batched::static_alt_addresses(),
+            nyx_tee::settle::settle_batched::static_alt_addresses(cfg.num_trees),
         )
     });
     match &static_alt {

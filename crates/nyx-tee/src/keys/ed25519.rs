@@ -1,21 +1,35 @@
 //! Ed25519 signer derivation from a dstack-supplied seed.
 //!
-//! The single load-bearing constant in this module is the path
+//! The single load-bearing constant in this module is the path PREFIX
 //! `"nyx/ed25519-signer/v1"`. **Bumping it triggers the full
 //! multisig rotation ceremony** documented in
 //! `docs/tee-attestation-flow.md` §5. Same seed → same signing
 //! key, deterministically, for the lifetime of the compose-hash.
+//!
+//! Tree-sharding (Phase 2) derives **K** signers — one per shard —
+//! at the indexed sub-paths `"nyx/ed25519-signer/v1/{i}"` for
+//! `i ∈ 0..K`. Each key is simultaneously a shard fee-payer +
+//! `tee_authority` + Ed25519 settle-signer, so the K concurrent
+//! settle Tx D's (one per shard) share NO writable account: distinct
+//! `merkle_tree[i]` + distinct fee-payer `key[i]` → the leader has no
+//! reason to serialize them across blocks. All K are registered in
+//! `vault_config.tee_pubkeys` via `set_tee_pubkey` at the ceremony.
 
 use anyhow::{Context, Result};
 use dstack_sdk::dstack_client::DstackClient;
 use ed25519_dalek::SigningKey;
 use solana_keypair::Keypair;
 
-/// The canonical derivation path. Mirrored byte-for-byte in
+/// The canonical derivation-path PREFIX. The K per-shard signers live at
+/// `"{SIGNER_PATH}/{i}"`. Mirrored byte-for-byte in
 /// `packages/sdk/src/tee/attestation.ts` so client-side verifier
-/// scripts know which key to check against
-/// `vault_config.tee_pubkey`.
+/// scripts know which keys to check against `vault_config.tee_pubkeys`.
 pub const SIGNER_PATH: &str = "nyx/ed25519-signer/v1";
+
+/// The dstack derivation path for shard `index`'s signer.
+pub fn signer_path(index: u8) -> String {
+    format!("{SIGNER_PATH}/{index}")
+}
 
 /// Derived Ed25519 signing key + display-ready encodings.
 ///
@@ -62,22 +76,23 @@ impl DerivedSigner {
     }
 }
 
-/// Derive the signer from dstack's KDF.
+/// Derive shard `index`'s signer from dstack's KDF.
 ///
 /// Stages:
-///   1. Call `dstack.get_key("nyx/ed25519-signer/v1")` — returns
-///      hex-encoded 32-byte seed material.
+///   1. Call `dstack.get_key("nyx/ed25519-signer/v1/{index}")` —
+///      returns hex-encoded 32-byte seed material.
 ///   2. `decode_key()` to bytes; assert length == 32.
 ///   3. Construct `SigningKey::from_bytes(&seed)`. The same 32-byte
 ///      seed is what Python's `solders.Keypair.from_seed(...)` uses
 ///      (which is what we validated end-to-end against a real
 ///      Phala Cloud CVM in the Phase-1 smoke test), so the Solana
 ///      pubkey produced here is byte-identical to that path.
-pub async fn derive(client: &DstackClient) -> Result<DerivedSigner> {
+pub async fn derive(client: &DstackClient, index: u8) -> Result<DerivedSigner> {
+    let path = signer_path(index);
     let resp = client
-        .get_key(Some(SIGNER_PATH.to_string()), None)
+        .get_key(Some(path.clone()), None)
         .await
-        .with_context(|| format!("dstack.get_key('{}') failed", SIGNER_PATH))?;
+        .with_context(|| format!("dstack.get_key('{path}') failed"))?;
 
     let seed_bytes = resp
         .decode_key()
@@ -95,4 +110,20 @@ pub async fn derive(client: &DstackClient) -> Result<DerivedSigner> {
         pubkey_base58: bs58::encode(pubkey_bytes).into_string(),
         pubkey_hex: hex::encode(pubkey_bytes),
     })
+}
+
+/// Derive the full K-signer set (`count` keys, one per shard), at the
+/// indexed sub-paths `0..count`. `count` must be in `1..=MAX` (the vault's
+/// `MAX_TEE_KEYS = 16`); the caller passes `num_trees`. Returns the signers
+/// in shard order, so `signers[i]` is shard `i`'s fee-payer/authority.
+pub async fn derive_set(client: &DstackClient, count: u8) -> Result<Vec<DerivedSigner>> {
+    anyhow::ensure!(
+        (1..=16).contains(&count),
+        "tee signer count {count} out of range (1..=16)"
+    );
+    let mut out = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        out.push(derive(client, i).await?);
+    }
+    Ok(out)
 }

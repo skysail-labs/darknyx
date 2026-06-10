@@ -215,13 +215,13 @@ mod tests {
         let proof = [[0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32]];
 
         let ed_ix = build_ed25519_verify_ix(&[0xAA; 32], &[0xBB; 64], &p.canonical_hash());
-        let settle_ix = build_settle_batched_ix(&kp.pubkey(), &p, 5, &proof, &root);
+        let settle_ix = build_settle_batched_ix(&kp.pubkey(), 0, &p, 5, &proof, &root);
 
         // Production stacks BOTH ALTs (worker.rs): the static settle ALT
-        // (vault_config + sysvar + system program) under the per-batch ALT
-        // (the 5 derivable PDAs). Both are needed to keep the worst-case
-        // (change-note, no PDA dedup) settle tx under the 1232-byte cap.
-        let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses());
+        // (vault_config + sysvar + system program + K merkle_tree shards) under
+        // the per-batch ALT (the 5 derivable PDAs). Both are needed to keep the
+        // worst-case (change-note, no PDA dedup) settle tx under the 1232-byte cap.
+        let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses(4));
         let alt = alt_account(
             Address::new_from_array([0x55; 32]),
             per_batch_alt_addresses(&p, &root),
@@ -256,7 +256,7 @@ mod tests {
         let root = [0xAB; 32];
         let proof = [[0x01; 32]; 4];
         let ed_ix = build_ed25519_verify_ix(&[0xAA; 32], &[0xBB; 64], &p.canonical_hash());
-        let settle_ix = build_settle_batched_ix(&kp.pubkey(), &p, 0, &proof, &root);
+        let settle_ix = build_settle_batched_ix(&kp.pubkey(), 0, &p, 0, &proof, &root);
         let alt = alt_account(
             Address::new_from_array([0x55; 32]),
             per_batch_alt_addresses(&p, &root),

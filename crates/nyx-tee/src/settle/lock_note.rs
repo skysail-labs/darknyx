@@ -37,7 +37,9 @@ use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 
-use crate::settle::vault::{note_lock_pda, vault_config_pda, vault_program_id, SYSTEM_PROGRAM_ID};
+use crate::settle::vault::{
+    merkle_tree_pda, note_lock_pda, vault_config_pda, vault_program_id, SYSTEM_PROGRAM_ID,
+};
 
 /// Anchor discriminator for the `lock_note` instruction. Computed
 /// at first access; the result is `sha256("global:lock_note")[..8]`.
@@ -82,6 +84,10 @@ impl Groth16ProofBytes {
 /// `tee_authority` pubkey, then derives the two PDAs internally.
 #[derive(Clone, Debug, BorshSerialize)]
 pub struct LockNoteArgs {
+    /// Which Merkle-tree shard the input note lives in. FIRST arg (Anchor
+    /// serializes in declaration order) — selects the `merkle_tree` account
+    /// whose recent-roots ring the handler checks `merkle_root` against.
+    pub tree_id: u8,
     pub note_commitment: [u8; 32],
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
@@ -95,8 +101,8 @@ pub struct LockNoteArgs {
 }
 
 impl LockNoteArgs {
-    /// Total Borsh-encoded width: 32 + 16 + 8 + 8 + 32 + 32 + 256 = 384 bytes.
-    pub const WIRE_LEN: usize = 32 + 16 + 8 + 8 + 32 + 32 + Groth16ProofBytes::WIRE_LEN;
+    /// Total Borsh-encoded width: 1 + 32 + 16 + 8 + 8 + 32 + 32 + 256 = 385 bytes.
+    pub const WIRE_LEN: usize = 1 + 32 + 16 + 8 + 8 + 32 + 32 + Groth16ProofBytes::WIRE_LEN;
 }
 
 /// Build the full `Instruction`. Caller composes this into a
@@ -110,18 +116,22 @@ impl LockNoteArgs {
 ///   - `[0]` `tee_authority`: signer, writable (pays rent for the
 ///     new note_lock PDA AND the tx fee).
 ///   - `[1]` `vault_config`: read-only PDA, seeds=[b"vault_config"].
-///   - `[2]` `note_lock`: writable PDA (init), seeds=[b"note_lock",
+///   - `[2]` `merkle_tree`: read-only PDA, seeds=[b"merkle_tree",
+///     &[tree_id]] — the shard whose recent-roots ring is checked.
+///   - `[3]` `note_lock`: writable PDA (init), seeds=[b"note_lock",
 ///     note_commitment].
-///   - `[3]` `system_program`: read-only.
+///   - `[4]` `system_program`: read-only.
 pub fn build_lock_note_ix(tee_authority: &Address, args: LockNoteArgs) -> Instruction {
     let program_id = vault_program_id();
     let (vault_cfg_pda, _) = vault_config_pda();
+    let (merkle_tree, _) = merkle_tree_pda(args.tree_id);
     let (note_lock_pda_addr, _) = note_lock_pda(&args.note_commitment);
 
     let accounts = vec![
         AccountMeta::new(*tee_authority, true), // signer + writable
         AccountMeta::new_readonly(vault_cfg_pda, false),
-        AccountMeta::new(note_lock_pda_addr, false), // writable (init)
+        AccountMeta::new_readonly(merkle_tree, false), // shard recency source
+        AccountMeta::new(note_lock_pda_addr, false),   // writable (init)
         AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
     ];
 
@@ -143,6 +153,7 @@ mod tests {
 
     fn dummy_args() -> LockNoteArgs {
         LockNoteArgs {
+            tree_id: 0,
             note_commitment: [0xAA; 32],
             order_id: [0xBB; 16],
             expiry_slot: 1_000_000,
@@ -188,9 +199,9 @@ mod tests {
     #[test]
     fn ix_data_total_length_matches_wire_spec() {
         let ix = build_lock_note_ix(&dummy_tee_authority(), dummy_args());
-        // 8 disc + 32 + 16 + 8 + 8 + 32 + 32 + 256 = 392 bytes.
+        // 8 disc + 1 tree_id + 32 + 16 + 8 + 8 + 32 + 32 + 256 = 393 bytes.
         assert_eq!(ix.data.len(), 8 + LockNoteArgs::WIRE_LEN);
-        assert_eq!(ix.data.len(), 392);
+        assert_eq!(ix.data.len(), 393);
     }
 
     #[test]
@@ -203,6 +214,9 @@ mod tests {
         let body = &ix.data[8..]; // skip discriminator
 
         let mut off = 0;
+        // tree_id (u8) — first arg
+        assert_eq!(body[off], 0);
+        off += 1;
         // note_commitment
         assert_eq!(&body[off..off + 32], &[0xAA; 32]);
         off += 32;
@@ -235,11 +249,11 @@ mod tests {
     #[test]
     fn account_list_matches_anchor_struct_order() {
         // Mirror of programs/vault/src/instructions/lock_note.rs
-        // LockNote<'info>: tee_authority, vault_config, note_lock,
-        // system_program.
+        // LockNote<'info>: tee_authority, vault_config, merkle_tree,
+        // note_lock, system_program.
         let tee = dummy_tee_authority();
         let ix = build_lock_note_ix(&tee, dummy_args());
-        assert_eq!(ix.accounts.len(), 4);
+        assert_eq!(ix.accounts.len(), 5);
 
         // [0] tee_authority: signer + writable
         assert_eq!(ix.accounts[0].pubkey, tee);
@@ -247,17 +261,23 @@ mod tests {
         assert!(ix.accounts[0].is_writable);
 
         // [1] vault_config: readonly
+        assert_eq!(ix.accounts[1].pubkey, vault_config_pda().0);
         assert!(!ix.accounts[1].is_signer);
         assert!(!ix.accounts[1].is_writable);
 
-        // [2] note_lock: writable (init)
+        // [2] merkle_tree[tree_id]: readonly (recency source)
+        assert_eq!(ix.accounts[2].pubkey, merkle_tree_pda(0).0);
         assert!(!ix.accounts[2].is_signer);
-        assert!(ix.accounts[2].is_writable);
+        assert!(!ix.accounts[2].is_writable);
 
-        // [3] system_program: readonly
-        assert_eq!(ix.accounts[3].pubkey, SYSTEM_PROGRAM_ID);
+        // [3] note_lock: writable (init)
         assert!(!ix.accounts[3].is_signer);
-        assert!(!ix.accounts[3].is_writable);
+        assert!(ix.accounts[3].is_writable);
+
+        // [4] system_program: readonly
+        assert_eq!(ix.accounts[4].pubkey, SYSTEM_PROGRAM_ID);
+        assert!(!ix.accounts[4].is_signer);
+        assert!(!ix.accounts[4].is_writable);
     }
 
     #[test]
@@ -271,7 +291,8 @@ mod tests {
         args2.note_commitment = [0x11; 32];
         let ix1 = build_lock_note_ix(&tee, dummy_args());
         let ix2 = build_lock_note_ix(&tee, args2);
-        assert_ne!(ix1.accounts[2].pubkey, ix2.accounts[2].pubkey);
+        // note_lock is at [3] post-sharding (merkle_tree inserted at [2]).
+        assert_ne!(ix1.accounts[3].pubkey, ix2.accounts[3].pubkey);
     }
 
     #[test]

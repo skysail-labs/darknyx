@@ -88,6 +88,14 @@ pub struct Config {
     /// leader co-include settles in one block so they confirm together (the
     /// on-chain throughput lever); 1 reproduces the old one-at-a-time behavior.
     pub settle_send_concurrency: u64,
+    /// Number of Merkle-tree shards (`= vault_config.num_trees`). The settle
+    /// worker derives K signer keys (`nyx/ed25519-signer/v1/{i}`) and
+    /// round-robins each match across `(key[j], merkle_tree[j])` so the
+    /// concurrent settle Tx D's share no writable account → the leader can
+    /// co-include + parallelize them. `NYX_TEE_NUM_TREES`, default 1 (single
+    /// shard = the pre-sharding behavior). MUST equal the on-chain
+    /// `num_trees` set at `initialize`. Range 1..=16.
+    pub num_trees: u8,
 }
 
 /// The placeholder base mint used when `NYX_TEE_BASE_MINT` is unset —
@@ -252,6 +260,9 @@ impl Config {
                 [0u8; 32],
             )?,
             settle_send_concurrency: parse_u64_env("NYX_TEE_SETTLE_SEND_CONCURRENCY", 16)?.max(1),
+            // 1..=16 (vault MAX_TREES). Clamp rather than fail: a 0 or absurd
+            // value falls back to a single shard (the safe, pre-sharding path).
+            num_trees: parse_u64_env("NYX_TEE_NUM_TREES", 1)?.clamp(1, 16) as u8,
         })
     }
 }

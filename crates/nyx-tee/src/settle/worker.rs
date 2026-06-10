@@ -469,8 +469,13 @@ async fn run_batch_settle_inner(
         }
         let (msg, sig) = sign_payload(&ctx.signing_key, &m.payload);
         let ed_ix = build_ed25519_verify_ix(&ctx.tee_keypair.pubkey().to_bytes(), &sig, &msg);
+        // Single-shard for now: outputs append to shard 0. Phase 2's K-key
+        // round-robin (key[j], tree[j]) lands once intake tracks per-note home
+        // trees; until then every settle targets shard 0 so the on-chain ix
+        // shape is exercised end-to-end without splitting liquidity.
         let settle_ix = build_settle_batched_ix(
             &tee_pubkey,
+            0,
             &m.payload,
             m.match_index,
             &siblings,
@@ -722,6 +727,7 @@ mod tests {
 
     fn lock_inputs(seed: u8) -> LockSideInputs {
         LockSideInputs {
+            tree_id: 0,
             note_commitment: [seed; 32],
             order_id: [seed; 16],
             expiry_slot: 2000,

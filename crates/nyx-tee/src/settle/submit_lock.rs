@@ -44,6 +44,12 @@ use crate::solana_rpc::{RpcError, SolanaRpcClient};
 /// integration gap).
 #[derive(Clone, Debug)]
 pub struct LockSideInputs {
+    /// The Merkle-tree shard this input note lives in (its home tree). Selects
+    /// the `merkle_tree` account whose recent-roots ring `lock_note` checks
+    /// `merkle_root` against. A fresh deposit's home tree is its deposit tree;
+    /// a relocked continuation's home tree is the shard the prior settle
+    /// appended its change note to.
+    pub tree_id: u8,
     pub note_commitment: [u8; 32],
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
@@ -62,6 +68,7 @@ pub struct LockSideInputs {
 impl From<LockSideInputs> for LockNoteArgs {
     fn from(s: LockSideInputs) -> Self {
         Self {
+            tree_id: s.tree_id,
             note_commitment: s.note_commitment,
             order_id: s.order_id,
             expiry_slot: s.expiry_slot,
@@ -263,6 +270,7 @@ mod tests {
 
     fn dummy_buyer_inputs() -> LockSideInputs {
         LockSideInputs {
+            tree_id: 0,
             note_commitment: [0xAA; 32],
             order_id: [0xBB; 16],
             expiry_slot: 1_000_000,
@@ -276,6 +284,7 @@ mod tests {
 
     fn dummy_seller_inputs() -> LockSideInputs {
         LockSideInputs {
+            tree_id: 0,
             note_commitment: [0x55; 32],
             order_id: [0x66; 16],
             expiry_slot: 1_000_000,

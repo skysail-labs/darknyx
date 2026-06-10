@@ -60,6 +60,7 @@ pub struct AppendedLeaf {
 /// must match `programs/vault/src/instructions/deposit.rs`).
 #[derive(BorshDeserialize)]
 struct NoteCreatedEvent {
+    _tree_id: u8,
     leaf_index: u64,
     commitment: [u8; 32],
     _token_mint: [u8; 32],
@@ -73,6 +74,7 @@ struct NoteCreatedEvent {
 /// required for a correct sequential borsh decode.
 #[derive(BorshDeserialize)]
 struct TradeSettledEvent {
+    _tree_id: u8,
     _match_id: [u8; 16],
     _clearing_price: u64,
     _base_amount: u64,
@@ -101,16 +103,19 @@ const NO_LEAF: u64 = u64::MAX;
 /// instruction's data. Returns `None` if the data isn't a settle ix
 /// (wrong/short discriminator) or the payload bytes don't decode.
 ///
-/// ix data layout: `disc(8) || Borsh(payload, 480) || match_index(1)
-/// || 4×32 siblings` (see `settle_batched::build_settle_batched_ix`).
+/// ix data layout: `disc(8) || tree_id(1) || Borsh(payload, 480) ||
+/// match_index(1) || 4×32 siblings` (see
+/// `settle_batched::build_settle_batched_ix`). Post-sharding the payload
+/// starts at offset 9 (disc + the 1-byte `tree_id`).
 pub fn decode_settle_payload(ix_data: &[u8]) -> Option<MatchResultPayload> {
-    if ix_data.len() < 8 + MatchResultPayload::WIRE_LEN {
+    const PAYLOAD_START: usize = 8 + 1; // disc + tree_id
+    if ix_data.len() < PAYLOAD_START + MatchResultPayload::WIRE_LEN {
         return None;
     }
     if ix_data[..8] != *SETTLE_BATCHED_DISCRIMINATOR {
         return None;
     }
-    let payload_bytes = &ix_data[8..8 + MatchResultPayload::WIRE_LEN];
+    let payload_bytes = &ix_data[PAYLOAD_START..PAYLOAD_START + MatchResultPayload::WIRE_LEN];
     MatchResultPayload::try_from_slice(payload_bytes).ok()
 }
 
@@ -210,6 +215,7 @@ mod tests {
     // mirror above intentionally has private/underscored fields).
     #[derive(BorshSerialize)]
     struct NoteCreatedWire {
+        tree_id: u8,
         leaf_index: u64,
         commitment: [u8; 32],
         token_mint: [u8; 32],
@@ -219,6 +225,7 @@ mod tests {
 
     #[derive(BorshSerialize)]
     struct TradeSettledWire {
+        tree_id: u8,
         match_id: [u8; 16],
         clearing_price: u64,
         base_amount: u64,
@@ -287,6 +294,7 @@ mod tests {
     fn decodes_note_created_index_and_value() {
         let commitment = fr_safe(0x42);
         let wire = NoteCreatedWire {
+            tree_id: 0,
             leaf_index: 7,
             commitment,
             token_mint: [0x9e; 32],
@@ -306,6 +314,7 @@ mod tests {
         // A settle with change notes on both sides + both fee notes,
         // so all six leaves are present (indices 10..=15).
         let wire = TradeSettledWire {
+            tree_id: 0,
             match_id: payload.match_id,
             clearing_price: payload.clearing_price,
             base_amount: payload.base_amount,
@@ -329,6 +338,7 @@ mod tests {
         // Settle ix data the sync task would have pulled from the tx.
         let ix = build_settle_batched_ix(
             &solana_address::Address::new_from_array([0x42; 32]),
+            0,
             &payload,
             0,
             &[[0x01; 32], [0x02; 32], [0x03; 32], [0x04; 32]],
@@ -387,6 +397,7 @@ mod tests {
         let payload = sample_payload();
         // Exact-fill, no change, no fees: only note_c + note_d present.
         let wire = TradeSettledWire {
+            tree_id: 0,
             match_id: payload.match_id,
             clearing_price: payload.clearing_price,
             base_amount: payload.base_amount,
@@ -408,6 +419,7 @@ mod tests {
         let line = event_log_line(&TRADE_SETTLED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
         let ix = build_settle_batched_ix(
             &solana_address::Address::new_from_array([0x42; 32]),
+            0,
             &payload,
             0,
             &[[0x01; 32]; 4],
@@ -423,6 +435,7 @@ mod tests {
     fn trade_settled_without_payload_yields_nothing() {
         let payload = sample_payload();
         let wire = TradeSettledWire {
+            tree_id: 0,
             match_id: payload.match_id,
             clearing_price: 1,
             base_amount: 1,

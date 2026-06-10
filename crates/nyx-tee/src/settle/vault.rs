@@ -21,6 +21,10 @@ pub const SYSTEM_PROGRAM_ID: Address = Address::new_from_array([0u8; 32]);
 /// Vault `VaultConfig::SEED` — mirrors `programs/vault/src/state.rs::VaultConfig::SEED`.
 pub const VAULT_CONFIG_SEED: &[u8] = b"vault_config";
 
+/// Vault `MerkleTree::SEED` — mirrors `programs/vault/src/state.rs::MerkleTree::SEED`.
+/// One `MerkleTree` shard account per `tree_id`.
+pub const MERKLE_TREE_SEED: &[u8] = b"merkle_tree";
+
 /// Vault `NoteLock::SEED` — mirrors `programs/vault/src/state.rs::NoteLock::SEED`.
 pub const NOTE_LOCK_SEED: &[u8] = b"note_lock";
 
@@ -57,6 +61,12 @@ pub fn vault_program_id() -> Address {
 /// program, so the result is stable across calls.
 pub fn vault_config_pda() -> (Address, u8) {
     Address::find_program_address(&[VAULT_CONFIG_SEED], &vault_program_id())
+}
+
+/// PDA: `merkle_tree` shard `tree_id`. Seeds = `[b"merkle_tree", &[tree_id]]`.
+/// One account per shard; settles to different shards write distinct accounts.
+pub fn merkle_tree_pda(tree_id: u8) -> (Address, u8) {
+    Address::find_program_address(&[MERKLE_TREE_SEED, &[tree_id]], &vault_program_id())
 }
 
 /// PDA: `note_lock` for the given note commitment. Seeds =

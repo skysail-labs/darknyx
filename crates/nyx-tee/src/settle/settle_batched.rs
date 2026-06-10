@@ -12,12 +12,14 @@
 //! `settle-builder.ts::buildSettleBatchedIx`.
 //!
 //! Args (after the 8-byte discriminator):
-//!   - `payload: MatchResultPayload`  — 448-byte Borsh ([`super::payload`])
+//!   - `tree_id: u8`                  — which `merkle_tree` shard the
+//!     output notes append to (post-sharding; first arg)
+//!   - `payload: MatchResultPayload`  — 480-byte Borsh ([`super::payload`])
 //!   - `match_index: u8`              — position in the batch (0..15)
 //!   - `merkle_proof: [[u8;32]; 4]`   — 128 contiguous bytes, the
 //!     depth-4 inclusion path (leaf-level sibling first)
 //!
-//! ix data total = 8 + 448 + 1 + 128 = 585 bytes.
+//! ix data total = 8 + 1 + 480 + 1 + 128 = 618 bytes.
 //!
 //! `merkle_root` is NOT in the ix data — it only derives the
 //! `batch_validity_marker` PDA address. The handler recomputes the
@@ -32,8 +34,8 @@ use solana_instruction::{AccountMeta, Instruction};
 
 use super::payload::MatchResultPayload;
 use super::vault::{
-    batch_validity_marker_pda, consumed_note_pda, note_lock_pda, nullifier_pda, vault_config_pda,
-    vault_program_id, SYSTEM_PROGRAM_ID,
+    batch_validity_marker_pda, consumed_note_pda, merkle_tree_pda, note_lock_pda, nullifier_pda,
+    vault_config_pda, vault_program_id, SYSTEM_PROGRAM_ID,
 };
 
 /// Solana instructions sysvar id (`Sysvar1nstructions1111111111111111111111111`).
@@ -53,11 +55,15 @@ pub static SETTLE_BATCHED_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
 
 /// Build the `tee_forced_settle_batched` instruction.
 ///
-/// `tee_authority` is the TEE pubkey (signer + writable). The
+/// `tee_authority` is the TEE pubkey (signer + writable) — the shard's
+/// fee-payer key. `tree_id` selects the `merkle_tree` shard the output notes
+/// append to; settles to different shards write distinct accounts (and a
+/// distinct fee-payer) → the leader can co-include + parallelize them. The
 /// caller MUST prepend an Ed25519 precompile ix signing
 /// `payload.canonical_hash()` with the same key.
 pub fn build_settle_batched_ix(
     tee_authority: &Address,
+    tree_id: u8,
     payload: &MatchResultPayload,
     match_index: u8,
     merkle_proof: &[[u8; 32]; 4],
@@ -73,6 +79,7 @@ pub fn build_settle_batched_ix(
     );
     let program_id = vault_program_id();
     let (vault_config, _) = vault_config_pda();
+    let (merkle_tree, _) = merkle_tree_pda(tree_id);
     let (lock_a, _) = note_lock_pda(&payload.note_a_commitment);
     let (lock_b, _) = note_lock_pda(&payload.note_b_commitment);
     let (consumed_a, _) = consumed_note_pda(&payload.note_a_commitment);
@@ -83,26 +90,30 @@ pub fn build_settle_batched_ix(
     let (lock_f, _) = note_lock_pda(&payload.note_f_commitment);
     let (marker, _) = batch_validity_marker_pda(merkle_root);
 
-    // Account order MUST match TeeForcedSettleBatched<'info>.
+    // Account order MUST match TeeForcedSettleBatched<'info>. Post-sharding:
+    // vault_config is READ-ONLY (key/owner/zsr source) and the writable tree
+    // state moved to `merkle_tree` (slot 2).
     let accounts = vec![
         AccountMeta::new(*tee_authority, true), // 0 tee_authority (signer, mut)
-        AccountMeta::new(vault_config, false),  // 1 vault_config (mut)
-        AccountMeta::new(lock_a, false),        // 2 note_lock_a (mut, close)
-        AccountMeta::new(lock_b, false),        // 3 note_lock_b (mut, close)
-        AccountMeta::new(consumed_a, false),    // 4 consumed_a (init)
-        AccountMeta::new(consumed_b, false),    // 5 consumed_b (init)
-        AccountMeta::new(null_a, false),        // 6 nullifier_a_entry (init)
-        AccountMeta::new(null_b, false),        // 7 nullifier_b_entry (init)
-        AccountMeta::new(lock_e, false),        // 8 note_lock_e (mut, unchecked)
-        AccountMeta::new(lock_f, false),        // 9 note_lock_f (mut, unchecked)
-        AccountMeta::new_readonly(INSTRUCTIONS_SYSVAR_ID, false), // 10
-        AccountMeta::new(marker, false),        // 11 batch_validity_marker (mut)
-        AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false), // 12
+        AccountMeta::new_readonly(vault_config, false), // 1 vault_config (readonly)
+        AccountMeta::new(merkle_tree, false),   // 2 merkle_tree[tree_id] (mut)
+        AccountMeta::new(lock_a, false),        // 3 note_lock_a (mut, close)
+        AccountMeta::new(lock_b, false),        // 4 note_lock_b (mut, close)
+        AccountMeta::new(consumed_a, false),    // 5 consumed_a (init)
+        AccountMeta::new(consumed_b, false),    // 6 consumed_b (init)
+        AccountMeta::new(null_a, false),        // 7 nullifier_a_entry (init)
+        AccountMeta::new(null_b, false),        // 8 nullifier_b_entry (init)
+        AccountMeta::new(lock_e, false),        // 9 note_lock_e (mut, unchecked)
+        AccountMeta::new(lock_f, false),        // 10 note_lock_f (mut, unchecked)
+        AccountMeta::new_readonly(INSTRUCTIONS_SYSVAR_ID, false), // 11
+        AccountMeta::new(marker, false),        // 12 batch_validity_marker (mut)
+        AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false), // 13
     ];
 
-    // ix data: disc || Borsh(payload) || match_index || 4×32 siblings.
-    let mut data = Vec::with_capacity(8 + MatchResultPayload::WIRE_LEN + 1 + 128);
+    // ix data: disc || tree_id || Borsh(payload) || match_index || 4×32 siblings.
+    let mut data = Vec::with_capacity(8 + 1 + MatchResultPayload::WIRE_LEN + 1 + 128);
     data.extend_from_slice(&*SETTLE_BATCHED_DISCRIMINATOR);
+    data.push(tree_id);
     data.extend_from_slice(&payload.serialize());
     data.push(match_index);
     for sib in merkle_proof {
@@ -168,16 +179,22 @@ pub fn batch_alt_addresses<'a>(
 
 /// The addresses the STATIC settle ALT must hold — the per-settle
 /// constant, non-signer accounts (`vault_config`, the instructions
-/// sysvar, the system program). Created once at devnet-setup and stacked
+/// sysvar, the system program) PLUS the K `merkle_tree` shard accounts
+/// (`num_trees` of them). Created once at devnet-setup and stacked
 /// UNDER the per-batch ALT (see `pipeline.rs` + `worker.rs::static_alt`).
 /// Hoisting these is what keeps the settle v0 tx under Solana's 1232-byte
-/// cap — without them the message is ~93 bytes larger (3 × 31).
-pub fn static_alt_addresses() -> Vec<Address> {
-    vec![
+/// cap — each shard's settle references its `merkle_tree[j]` from the ALT
+/// (1 index byte) instead of inline (32 bytes).
+pub fn static_alt_addresses(num_trees: u8) -> Vec<Address> {
+    let mut out = vec![
         vault_config_pda().0,
         INSTRUCTIONS_SYSVAR_ID,
         SYSTEM_PROGRAM_ID,
-    ]
+    ];
+    for tree_id in 0..num_trees.max(1) {
+        out.push(merkle_tree_pda(tree_id).0);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -268,48 +285,60 @@ mod tests {
 
     #[test]
     fn ix_data_total_length() {
-        let ix = build_settle_batched_ix(&dummy_tee(), &dummy_payload(), 3, &proof(), &[0xAB; 32]);
-        // 8 disc + 480 payload (v6, base+quote fee notes) + 1 match_index
-        // + 128 siblings = 617.
-        assert_eq!(ix.data.len(), 8 + 480 + 1 + 128);
-        assert_eq!(ix.data.len(), 617);
+        let ix =
+            build_settle_batched_ix(&dummy_tee(), 0, &dummy_payload(), 3, &proof(), &[0xAB; 32]);
+        // 8 disc + 1 tree_id + 480 payload (v6, base+quote fee notes)
+        // + 1 match_index + 128 siblings = 618.
+        assert_eq!(ix.data.len(), 8 + 1 + 480 + 1 + 128);
+        assert_eq!(ix.data.len(), 618);
     }
 
     #[test]
     fn ix_data_layout() {
-        let ix = build_settle_batched_ix(&dummy_tee(), &dummy_payload(), 7, &proof(), &[0xAB; 32]);
+        let ix =
+            build_settle_batched_ix(&dummy_tee(), 5, &dummy_payload(), 7, &proof(), &[0xAB; 32]);
         assert_eq!(&ix.data[..8], &*SETTLE_BATCHED_DISCRIMINATOR);
-        // payload occupies [8, 488); match_index at 488; siblings [489, 617).
-        assert_eq!(ix.data[488], 7); // match_index
-        assert_eq!(&ix.data[489..521], &[0x01; 32]); // sibling 0
-        assert_eq!(&ix.data[521..553], &[0x02; 32]); // sibling 1
-        assert_eq!(&ix.data[553..585], &[0x03; 32]);
-        assert_eq!(&ix.data[585..617], &[0x04; 32]);
+        // tree_id at 8; payload occupies [9, 489); match_index at 489;
+        // siblings [490, 618).
+        assert_eq!(ix.data[8], 5); // tree_id
+        assert_eq!(ix.data[489], 7); // match_index
+        assert_eq!(&ix.data[490..522], &[0x01; 32]); // sibling 0
+        assert_eq!(&ix.data[522..554], &[0x02; 32]); // sibling 1
+        assert_eq!(&ix.data[554..586], &[0x03; 32]);
+        assert_eq!(&ix.data[586..618], &[0x04; 32]);
     }
 
     #[test]
     fn account_layout_matches_anchor_struct() {
         let tee = dummy_tee();
-        let ix = build_settle_batched_ix(&tee, &dummy_payload(), 0, &proof(), &[0xAB; 32]);
-        assert_eq!(ix.accounts.len(), 13);
+        let ix = build_settle_batched_ix(&tee, 3, &dummy_payload(), 0, &proof(), &[0xAB; 32]);
+        assert_eq!(ix.accounts.len(), 14);
 
         // [0] tee_authority signer + writable.
         assert_eq!(ix.accounts[0].pubkey, tee);
         assert!(ix.accounts[0].is_signer);
         assert!(ix.accounts[0].is_writable);
 
-        // [10] instructions sysvar: readonly.
-        assert_eq!(ix.accounts[10].pubkey, INSTRUCTIONS_SYSVAR_ID);
-        assert!(!ix.accounts[10].is_writable);
+        // [1] vault_config is now READ-ONLY (state moved to merkle_tree).
+        assert_eq!(ix.accounts[1].pubkey, vault_config_pda().0);
+        assert!(!ix.accounts[1].is_writable);
 
-        // [12] system program: readonly.
-        assert_eq!(ix.accounts[12].pubkey, SYSTEM_PROGRAM_ID);
-        assert!(!ix.accounts[12].is_writable);
+        // [2] merkle_tree[tree_id] writable — the sharded output target.
+        assert_eq!(ix.accounts[2].pubkey, merkle_tree_pda(3).0);
+        assert!(ix.accounts[2].is_writable);
 
-        // Marker [11] matches the PDA for the given root.
+        // [11] instructions sysvar: readonly.
+        assert_eq!(ix.accounts[11].pubkey, INSTRUCTIONS_SYSVAR_ID);
+        assert!(!ix.accounts[11].is_writable);
+
+        // [13] system program: readonly.
+        assert_eq!(ix.accounts[13].pubkey, SYSTEM_PROGRAM_ID);
+        assert!(!ix.accounts[13].is_writable);
+
+        // Marker [12] matches the PDA for the given root.
         let (marker, _) = batch_validity_marker_pda(&[0xAB; 32]);
-        assert_eq!(ix.accounts[11].pubkey, marker);
-        assert!(ix.accounts[11].is_writable);
+        assert_eq!(ix.accounts[12].pubkey, marker);
+        assert!(ix.accounts[12].is_writable);
     }
 
     #[test]
@@ -319,8 +348,10 @@ mod tests {
         // PDA. The legacy tx encoder dedups these to one key (saving
         // 32 bytes) — we surface the equality here so the
         // 1232-byte budget analysis in CLAUDE.md §5 holds.
-        let ix = build_settle_batched_ix(&dummy_tee(), &dummy_payload(), 0, &proof(), &[0xAB; 32]);
-        assert_eq!(ix.accounts[8].pubkey, ix.accounts[9].pubkey);
+        let ix =
+            build_settle_batched_ix(&dummy_tee(), 0, &dummy_payload(), 0, &proof(), &[0xAB; 32]);
+        // note_lock_e [9] and note_lock_f [10] collide for an exact fill.
+        assert_eq!(ix.accounts[9].pubkey, ix.accounts[10].pubkey);
     }
 
     #[test]

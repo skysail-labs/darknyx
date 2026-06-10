@@ -57,17 +57,20 @@ pub async fn probe_dstack() -> Result<DerivedSigner> {
         "dstack handshake — info() succeeded"
     );
 
-    let signer = ed25519::derive(&client).await?;
+    // Shard 0's signer. The full K-signer set (one fee-payer per shard) is
+    // derived in `main.rs` via `ed25519::derive_set` once `num_trees` is known;
+    // this primary is what `/info` advertises + the operator cross-checks.
+    let signer = ed25519::derive(&client, 0).await?;
 
     // Logging the signer pubkey on boot is intentional — it's what
     // an operator pastes into the multisig rotation proposal at
     // image-upgrade time. The PRIVATE half (signer.key) is never
     // logged.
     tracing::info!(
-        path = ed25519::SIGNER_PATH,
+        path = %ed25519::signer_path(0),
         pubkey_base58 = %signer.pubkey_base58,
         pubkey_hex = %signer.pubkey_hex,
-        "dstack handshake — derived Ed25519 signer (this is the value to register as vault_config.tee_pubkey)"
+        "dstack handshake — derived shard-0 Ed25519 signer (register the full set in vault_config.tee_pubkeys)"
     );
 
     Ok(signer)
