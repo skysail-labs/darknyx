@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
     let (api_state, tee_signer_pubkey, settle_signer): (
         _,
         Option<String>,
-        Option<(solana_keypair::Keypair, ed25519_dalek::SigningKey)>,
+        Option<Vec<(solana_keypair::Keypair, ed25519_dalek::SigningKey)>>,
     ) = match nyx_tee::boot::probe_dstack().await {
         Ok(signer) => {
             let client = DstackClient::new(None);
@@ -107,10 +107,23 @@ async fn main() -> Result<()> {
             // material doesn't trivially leak the other.
             let jwt_secret = derive_jwt_secret(&client).await?;
 
+            // Derive the full K-shard signer set (one fee-payer/authority per
+            // Merkle-tree shard, at nyx/ed25519-signer/v1/{i}). signers[0] is
+            // the primary `signer` from probe_dstack (the /info advertisement +
+            // the per-batch lock/verify/ALT/close payer); signers[1..] are the
+            // extra shard fee-payers the settle Tx D's round-robin across. ALL K
+            // must be registered in vault_config.tee_pubkeys + funded.
+            let signers = nyx_tee::keys::ed25519::derive_set(&client, cfg.num_trees).await?;
+            tracing::info!(
+                num_trees = cfg.num_trees,
+                shard_pubkeys = ?signers.iter().map(|s| s.pubkey_base58.clone()).collect::<Vec<_>>(),
+                "derived K-shard TEE signer set — register ALL in vault_config.tee_pubkeys + fund each"
+            );
+
             let signer_pubkey = signer.pubkey_base58.clone();
             tracing::info!(
                 tee_signer_pubkey = %signer_pubkey,
-                "TEE Ed25519 signer also acts as Solana fee-payer; \
+                "TEE Ed25519 signer (shard 0) also acts as Solana fee-payer; \
                  verify this address holds SOL on the target cluster \
                  (devnet: `solana airdrop 5 <pubkey>`)"
             );
@@ -124,11 +137,15 @@ async fn main() -> Result<()> {
                 compose_hash: info.compose_hash,
                 mrtd: info.tcb_info.mrtd,
             };
-            // Capture the signer material for the settle driver: the
-            // Solana fee-payer keypair + the Ed25519 signing key
-            // (same seed). Held only in the driver's worker context,
-            // never on ApiState.
-            let settle_signer = Some((signer.solana_keypair(), signer.key.clone()));
+            // Capture the K-shard signer material for the settle driver: each
+            // shard's Solana fee-payer keypair + Ed25519 signing key (same
+            // seed). Held only in the driver's worker context, never on ApiState.
+            let settle_signer = Some(
+                signers
+                    .iter()
+                    .map(|s| (s.solana_keypair(), s.key.clone()))
+                    .collect::<Vec<_>>(),
+            );
             (
                 nyx_tee::api::ApiState::from_boot(boot_info, &signer, dstack, jwt_secret),
                 Some(signer_pubkey),
@@ -250,29 +267,34 @@ async fn main() -> Result<()> {
     // local dev run) → enqueue-only, logged below.
     let settle_state = Arc::new(RwLock::new(SettleSchedulerState::default()));
     let settle_driver: Option<SettleDriver> = match settle_signer {
-        Some((tee_keypair, signing_key)) => build_settle_driver(
-            &cfg,
-            tee_keypair,
-            signing_key,
-            settle_state.clone(),
-            matcher_state.clone(),
-            current_slot.clone(),
-            current_priority_fee.clone(),
-            settle_base_mint,
-            settle_quote_mint,
-            settle_protocol_owner,
-        )
-        .map(|d| {
-            tracing::info!(
-                tee_signer = ?tee_signer_pubkey,
-                "settle driver constructed — live settle pipeline ENABLED"
-            );
-            Some(d)
-        })
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "settle driver unavailable; scheduler is enqueue-only");
-            None
-        }),
+        Some(shard_signers) => {
+            // Split the K (keypair, signing_key) pairs into the two parallel
+            // Vecs the worker holds (tee_keypairs[j] pairs with signing_keys[j]).
+            let (tee_keypairs, signing_keys): (Vec<_>, Vec<_>) = shard_signers.into_iter().unzip();
+            build_settle_driver(
+                &cfg,
+                tee_keypairs,
+                signing_keys,
+                settle_state.clone(),
+                matcher_state.clone(),
+                current_slot.clone(),
+                current_priority_fee.clone(),
+                settle_base_mint,
+                settle_quote_mint,
+                settle_protocol_owner,
+            )
+            .map(|d| {
+                tracing::info!(
+                    tee_signer = ?tee_signer_pubkey,
+                    "settle driver constructed — live settle pipeline ENABLED"
+                );
+                Some(d)
+            })
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "settle driver unavailable; scheduler is enqueue-only");
+                None
+            })
+        }
         None => {
             tracing::warn!("no TEE signer derived (degraded boot); settle pipeline disabled");
             None
@@ -515,8 +537,8 @@ async fn derive_jwt_secret(client: &DstackClient) -> anyhow::Result<[u8; 32]> {
 #[allow(clippy::too_many_arguments)]
 fn build_settle_driver(
     cfg: &nyx_tee::config::Config,
-    tee_keypair: solana_keypair::Keypair,
-    signing_key: ed25519_dalek::SigningKey,
+    tee_keypairs: Vec<solana_keypair::Keypair>,
+    signing_keys: Vec<ed25519_dalek::SigningKey>,
     settle_state: Arc<RwLock<SettleSchedulerState>>,
     matcher_state: Arc<RwLock<MatcherState>>,
     current_slot: Arc<AtomicU64>,
@@ -598,8 +620,8 @@ fn build_settle_driver(
 
     let ctx = SettleWorkerCtx {
         rpc,
-        tee_keypair: Arc::new(tee_keypair),
-        signing_key: Arc::new(signing_key),
+        tee_keypairs: tee_keypairs.into_iter().map(Arc::new).collect(),
+        signing_keys: signing_keys.into_iter().map(Arc::new).collect(),
         prover,
         static_alt,
         alt_pool: Arc::new(tokio::sync::Mutex::new(

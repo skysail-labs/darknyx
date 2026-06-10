@@ -83,11 +83,17 @@ pub struct BatchSettleInputs {
 /// Shared context the worker holds across a batch.
 pub struct SettleWorkerCtx {
     pub rpc: SolanaRpcClient,
-    /// TEE keypair — fee-payer + `tee_authority` for every tx.
-    pub tee_keypair: Arc<Keypair>,
-    /// Ed25519 signing key (same key material) for the settle
-    /// payload signature inlined into the precompile ix.
-    pub signing_key: Arc<SigningKey>,
+    /// The K per-shard TEE keypairs (one fee-payer + `tee_authority` per
+    /// Merkle-tree shard). `[0]` is the PRIMARY: it pays the per-batch txs
+    /// (lock Tx A, verify Tx B, ALT Tx C, close Tx E). The concurrent settle
+    /// Tx D's round-robin `(tee_keypairs[j], merkle_tree[j])` per match so they
+    /// share no writable account (distinct shard + distinct fee-payer) → the
+    /// leader can co-include + parallelize them. Length == `num_trees`.
+    pub tee_keypairs: Vec<Arc<Keypair>>,
+    /// The K Ed25519 signing keys (same material as `tee_keypairs`), used to
+    /// sign each settle payload for the precompile ix. `signing_keys[j]` pairs
+    /// with `tee_keypairs[j]`.
+    pub signing_keys: Vec<Arc<SigningKey>>,
     /// The Groth16 prover. `Arc<dyn Prover>` so the backend
     /// (ark-circom now, rapidsnark later) is swappable + so tests
     /// inject a fast fake.
@@ -140,8 +146,20 @@ pub enum WorkerError {
 }
 
 impl SettleWorkerCtx {
+    /// The PRIMARY TEE keypair (`tee_keypairs[0]`) — pays the per-batch
+    /// lock/verify/ALT/close txs.
+    fn primary_keypair(&self) -> &Arc<Keypair> {
+        &self.tee_keypairs[0]
+    }
+
+    /// The primary TEE pubkey (the per-batch fee-payer / authority).
     fn tee_pubkey(&self) -> Address {
-        self.tee_keypair.pubkey()
+        self.tee_keypairs[0].pubkey()
+    }
+
+    /// Number of shards the settle Tx D's round-robin across (== K keys).
+    fn num_settle_shards(&self) -> usize {
+        self.tee_keypairs.len().max(1)
     }
 
     /// Transition every job in the batch to `stage`. Best-effort —
@@ -247,7 +265,7 @@ async fn run_batch_settle_inner(
         for (idx, m) in inputs.matches.iter().enumerate() {
             let outcome = submit_lock_note_pair(
                 &ctx.rpc,
-                &ctx.tee_keypair,
+                ctx.primary_keypair(),
                 m.buyer_lock.clone(),
                 m.seller_lock.clone(),
                 priority_fee,
@@ -301,7 +319,7 @@ async fn run_batch_settle_inner(
         );
         let mut verify_ixs = budget_ixs(VERIFY_COMPUTE_UNIT_LIMIT, priority_fee);
         verify_ixs.push(verify_ix);
-        let verify_sig = submit_ixs(&ctx.rpc, &ctx.tee_keypair, &verify_ixs).await?;
+        let verify_sig = submit_ixs(&ctx.rpc, ctx.primary_keypair(), &verify_ixs).await?;
         confirm_signatures(
             &ctx.rpc,
             std::slice::from_ref(&verify_sig),
@@ -353,7 +371,7 @@ async fn run_batch_settle_inner(
                         let deact_ix = build_deactivate_alt_ix(&tee_pubkey, &old);
                         match submit_ixs_with_blockhash(
                             &ctx.rpc,
-                            &ctx.tee_keypair,
+                            ctx.primary_keypair(),
                             &[deact_ix],
                             Hash::new_from_array(bh.blockhash),
                         )
@@ -379,7 +397,7 @@ async fn run_batch_settle_inner(
                         build_per_batch_alt_ixs(&tee_pubkey, alt_recent_slot, &alt_addrs);
                     let alt_sig = submit_ixs_with_blockhash(
                         &ctx.rpc,
-                        &ctx.tee_keypair,
+                        ctx.primary_keypair(),
                         &alt_build.ixs,
                         Hash::new_from_array(bh.blockhash),
                     )
@@ -391,7 +409,7 @@ async fn run_batch_settle_inner(
                     let extend_ix = build_extend_alt_ix(&tee_pubkey, &alt, &alt_addrs);
                     let ext_sig = submit_ixs_with_blockhash(
                         &ctx.rpc,
-                        &ctx.tee_keypair,
+                        ctx.primary_keypair(),
                         &[extend_ix],
                         Hash::new_from_array(bh.blockhash),
                     )
@@ -467,15 +485,20 @@ async fn run_batch_settle_inner(
         for (i, s) in path.siblings.iter().take(4).enumerate() {
             siblings[i] = *s;
         }
-        let (msg, sig) = sign_payload(&ctx.signing_key, &m.payload);
-        let ed_ix = build_ed25519_verify_ix(&ctx.tee_keypair.pubkey().to_bytes(), &sig, &msg);
-        // Single-shard for now: outputs append to shard 0. Phase 2's K-key
-        // round-robin (key[j], tree[j]) lands once intake tracks per-note home
-        // trees; until then every settle targets shard 0 so the on-chain ix
-        // shape is exercised end-to-end without splitting liquidity.
+        // Round-robin (key[j], merkle_tree[j]) per match → the concurrent Tx
+        // D's share NO writable account (distinct shard append + distinct
+        // fee-payer/authority), so the leader can co-include + parallelize them.
+        // The shard's key is the tx fee-payer AND `tee_authority` AND the
+        // Ed25519 settle-signer (one key, one signature). With num_trees=1 this
+        // collapses to the single-key path. The merkle_tree[j] account is
+        // referenced via the static ALT (see static_alt_addresses).
+        let shard = idx % ctx.num_settle_shards();
+        let shard_keypair = &ctx.tee_keypairs[shard];
+        let (msg, sig) = sign_payload(&ctx.signing_keys[shard], &m.payload);
+        let ed_ix = build_ed25519_verify_ix(&shard_keypair.pubkey().to_bytes(), &sig, &msg);
         let settle_ix = build_settle_batched_ix(
-            &tee_pubkey,
-            0,
+            &shard_keypair.pubkey(),
+            shard as u8,
             &m.payload,
             m.match_index,
             &siblings,
@@ -483,7 +506,7 @@ async fn run_batch_settle_inner(
         );
         // No priority-fee ix on Tx D — it's at the 1232-byte cap (see
         // build_settle_v0_tx). lock/verify/close carry the priority fee instead.
-        let tx_b64 = build_settle_v0_tx_b64(&ctx.tee_keypair, ed_ix, settle_ix, &alts, blockhash)?;
+        let tx_b64 = build_settle_v0_tx_b64(shard_keypair, ed_ix, settle_ix, &alts, blockhash)?;
         txs.push((idx, tx_b64));
     }
 
@@ -563,7 +586,7 @@ async fn run_batch_settle_inner(
     let close_ix = build_close_marker_ix(&tee_pubkey, &tee_pubkey, &merkle_root);
     let mut close_ixs = budget_ixs(CLOSE_COMPUTE_UNIT_LIMIT, priority_fee);
     close_ixs.push(close_ix);
-    let close_sig = submit_ixs(&ctx.rpc, &ctx.tee_keypair, &close_ixs).await?;
+    let close_sig = submit_ixs(&ctx.rpc, ctx.primary_keypair(), &close_ixs).await?;
     confirm_signatures(
         &ctx.rpc,
         std::slice::from_ref(&close_sig),
@@ -717,6 +740,75 @@ mod tests {
         format!("http://{addr}")
     }
 
+    /// Like [`spawn_mock_rpc`] but also CAPTURES every `sendTransaction`
+    /// base64 payload into the returned `Vec`, so a test can decode the
+    /// settle Tx D's and assert which shard key fee-paid each one.
+    async fn spawn_capturing_mock_rpc() -> (String, Arc<tokio::sync::Mutex<Vec<String>>>) {
+        use axum::{extract::State, routing::post, Json, Router};
+        use serde_json::{json, Value};
+
+        type Cap = Arc<tokio::sync::Mutex<Vec<String>>>;
+
+        async fn handle(
+            State((counter, cap)): State<(Arc<AtomicU64>, Cap)>,
+            Json(req): Json<Value>,
+        ) -> Json<Value> {
+            let id = req.get("id").cloned().unwrap_or(json!(1));
+            let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            let result = match method {
+                "getLatestBlockhash" => {
+                    let slot = 1000 + counter.fetch_add(1, Ordering::SeqCst);
+                    json!({
+                        "context": { "slot": slot },
+                        "value": {
+                            "blockhash": bs58::encode([7u8; 32]).into_string(),
+                            "lastValidBlockHeight": 2000u64,
+                        }
+                    })
+                }
+                "sendTransaction" => {
+                    if let Some(tx_b64) = req
+                        .get("params")
+                        .and_then(|p| p.get(0))
+                        .and_then(|s| s.as_str())
+                    {
+                        cap.lock().await.push(tx_b64.to_string());
+                    }
+                    let nth = counter.fetch_add(1, Ordering::SeqCst);
+                    let mut sig = [0u8; 64];
+                    sig[..8].copy_from_slice(&nth.to_le_bytes());
+                    json!(bs58::encode(sig).into_string())
+                }
+                "getSignatureStatuses" => {
+                    let want = req
+                        .get("params")
+                        .and_then(|p| p.get(0))
+                        .and_then(|s| s.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(1);
+                    let value: Vec<Value> = (0..want)
+                        .map(|_| json!({ "confirmationStatus": "confirmed", "err": null }))
+                        .collect();
+                    json!({ "context": { "slot": 1000 }, "value": value })
+                }
+                other => json!({ "error": format!("unexpected method {other}") }),
+            };
+            Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+        }
+
+        let counter = Arc::new(AtomicU64::new(0));
+        let cap: Cap = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/", post(handle))
+            .with_state((counter, cap.clone()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), cap)
+    }
+
     fn proof_bytes() -> Groth16ProofBytes {
         Groth16ProofBytes {
             pi_a: [0x11; 64],
@@ -816,8 +908,8 @@ mod tests {
     fn ctx_for(url: String, state: Arc<RwLock<SettleSchedulerState>>, n: usize) -> SettleWorkerCtx {
         SettleWorkerCtx {
             rpc: SolanaRpcClient::new(url).unwrap(),
-            tee_keypair: Arc::new(Keypair::new_from_array([0x42; 32])),
-            signing_key: Arc::new(SigningKey::from_bytes(&[0x42; 32])),
+            tee_keypairs: vec![Arc::new(Keypair::new_from_array([0x42; 32]))],
+            signing_keys: vec![Arc::new(SigningKey::from_bytes(&[0x42; 32]))],
             prover: Arc::new(FakeProver { n }),
             static_alt: None,
             alt_pool: Arc::new(tokio::sync::Mutex::new(AltPool::new())),
@@ -826,6 +918,94 @@ mod tests {
             current_priority_fee: Arc::new(AtomicU64::new(0)),
             settle_send_concurrency: 8,
         }
+    }
+
+    /// Like [`ctx_for`] but with `k` distinct shard keypairs (the K-fee-payer
+    /// round-robin set). `tee_keypairs[j]` is seeded from `[0x40 + j; 32]` so
+    /// each shard's fee-payer pubkey is distinct + reproducible.
+    fn ctx_for_k(
+        url: String,
+        state: Arc<RwLock<SettleSchedulerState>>,
+        n: usize,
+        k: usize,
+    ) -> SettleWorkerCtx {
+        let mut ctx = ctx_for(url, state, n);
+        ctx.tee_keypairs = (0..k)
+            .map(|j| Arc::new(Keypair::new_from_array([0x40 + j as u8; 32])))
+            .collect();
+        ctx.signing_keys = (0..k)
+            .map(|j| Arc::new(SigningKey::from_bytes(&[0x40 + j as u8; 32])))
+            .collect();
+        ctx
+    }
+
+    /// Decode the fee-payer (`static_account_keys()[0]`) of a base64
+    /// VersionedTransaction, returning `None` for a legacy (non-v0) tx so the
+    /// caller can filter the settle Tx D's (the only v0 txs) from the
+    /// lock/verify/ALT/close legacy txs.
+    fn v0_fee_payer(tx_b64: &str) -> Option<Address> {
+        use base64::Engine as _;
+        use solana_transaction::versioned::VersionedTransaction;
+        let wire = base64::engine::general_purpose::STANDARD
+            .decode(tx_b64)
+            .ok()?;
+        let tx: VersionedTransaction = bincode::deserialize(&wire).ok()?;
+        match tx.message {
+            solana_message::VersionedMessage::V0(m) => m.account_keys.first().copied(),
+            _ => None,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn settle_round_robins_distinct_shard_fee_payers() {
+        // K=2 shard keys, a 2-match batch → the two settle Tx D's must be
+        // fee-paid (and signed) by the TWO DISTINCT shard keys (match 0 → key
+        // 0, match 1 → key 1). That's the whole point of the K-fee-payer lever:
+        // the concurrent Tx D's share no writable account.
+        let (url, cap) = spawn_capturing_mock_rpc().await;
+        let state = Arc::new(RwLock::new(SettleSchedulerState::default()));
+        seed_jobs(&state, 0, 2).await;
+        let ctx = ctx_for_k(url, state.clone(), 2, 2);
+        assert_eq!(ctx.num_settle_shards(), 2);
+
+        let inputs = BatchSettleInputs {
+            batch_id: 0,
+            matches: vec![
+                MatchSettleInputs {
+                    payload: payload(0xA0),
+                    buyer_lock: lock_inputs(0x01),
+                    seller_lock: lock_inputs(0x02),
+                    match_index: 0,
+                },
+                MatchSettleInputs {
+                    payload: payload(0xB0),
+                    buyer_lock: lock_inputs(0x03),
+                    seller_lock: lock_inputs(0x04),
+                    match_index: 1,
+                },
+            ],
+            witnesses: vec![dummy_slot(), dummy_slot()],
+        };
+        run_batch_settle(&ctx, inputs).await.expect("batch settle");
+
+        // The settle Tx D's are the only v0 txs; collect their fee-payers.
+        let sent = cap.lock().await.clone();
+        let settle_payers: Vec<Address> = sent.iter().filter_map(|t| v0_fee_payer(t)).collect();
+        assert_eq!(settle_payers.len(), 2, "expected two v0 settle Tx D's");
+        assert_ne!(
+            settle_payers[0], settle_payers[1],
+            "the two settle Tx D's must be fee-paid by DISTINCT shard keys"
+        );
+        let key0 = Keypair::new_from_array([0x40; 32]).pubkey();
+        let key1 = Keypair::new_from_array([0x41; 32]).pubkey();
+        assert!(
+            settle_payers.contains(&key0),
+            "shard-0 key must pay a settle"
+        );
+        assert!(
+            settle_payers.contains(&key1),
+            "shard-1 key must pay a settle"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

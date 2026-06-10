@@ -632,8 +632,8 @@ mod tests {
         let state = Arc::new(RwLock::new(SettleSchedulerState::default()));
         let ctx = SettleWorkerCtx {
             rpc: SolanaRpcClient::new(url).unwrap(),
-            tee_keypair: Arc::new(Keypair::new_from_array([0x42; 32])),
-            signing_key: Arc::new(SigningKey::from_bytes(&[0x42; 32])),
+            tee_keypairs: vec![Arc::new(Keypair::new_from_array([0x42; 32]))],
+            signing_keys: vec![Arc::new(SigningKey::from_bytes(&[0x42; 32]))],
             prover: Arc::new(FakeProver { n: 2 }),
             static_alt: None,
             alt_pool: Arc::new(tokio::sync::Mutex::new(
