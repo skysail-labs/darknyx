@@ -23,18 +23,25 @@ fn u64_be32(v: u64) -> [u8; 32] {
 }
 
 #[derive(Accounts)]
-#[instruction(note_commitment: [u8; 32], nullifier: [u8; 32], merkle_root: [u8; 32], amount: u64, proof: Groth16Proof)]
+#[instruction(tree_id: u8, note_commitment: [u8; 32], nullifier: [u8; 32], merkle_root: [u8; 32], amount: u64, proof: Groth16Proof)]
 pub struct Withdraw<'info> {
     /// Any signer may pay the rent. Authorization is via ZK proof.
     #[account(mut)]
     pub payer: Signer<'info>,
 
+    /// Global config — the SPL token authority (read-only; no tree state here).
     #[account(
-        mut,
         seeds = [VaultConfig::SEED],
-        bump,
+        bump = vault_config.load()?.bump,
     )]
     pub vault_config: AccountLoader<'info, VaultConfig>,
+
+    /// The Merkle-tree shard the spent note lives in (read-only recency check).
+    #[account(
+        seeds = [MerkleTree::SEED, &[tree_id]],
+        bump = merkle_tree.load()?.bump,
+    )]
+    pub merkle_tree: AccountLoader<'info, MerkleTree>,
 
     pub token_mint: Account<'info, Mint>,
 
@@ -95,8 +102,10 @@ pub struct Withdraw<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn withdraw_handler(
     ctx: Context<Withdraw>,
+    _tree_id: u8,
     note_commitment: [u8; 32],
     nullifier: [u8; 32],
     merkle_root: [u8; 32],
@@ -129,12 +138,9 @@ pub fn withdraw_handler(
         }
     }
 
-    // ----- Merkle root must be recent -----
+    // ----- Merkle root must be recent (in THIS shard's ring) -----
     require!(
-        ctx.accounts
-            .vault_config
-            .load()?
-            .contains_root(&merkle_root),
+        ctx.accounts.merkle_tree.load()?.contains_root(&merkle_root),
         VaultError::StaleMerkleRoot
     );
 

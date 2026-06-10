@@ -200,17 +200,30 @@ pub fn walk_merkle_path_n16(
 // ----------------------------------------------------------------------------
 
 #[derive(Accounts)]
-#[instruction(payload: MatchResultPayload, match_index: u8, merkle_proof: [[u8; 32]; 4])]
+#[instruction(tree_id: u8, payload: MatchResultPayload, match_index: u8, merkle_proof: [[u8; 32]; 4])]
 pub struct TeeForcedSettleBatched<'info> {
     #[account(mut)]
     pub tee_authority: Signer<'info>,
 
+    /// Global config — READ-ONLY on the settle hot path (authorized-key check +
+    /// protocol_owner_commitment + zero_subtree_roots). Read-only is the whole
+    /// point of sharding: the output append goes to `merkle_tree` below, so two
+    /// settles on different shards share no writable account.
     #[account(
-        mut,
         seeds = [VaultConfig::SEED],
-        bump,
+        bump = vault_config.load()?.bump,
     )]
     pub vault_config: AccountLoader<'info, VaultConfig>,
+
+    /// The Merkle-tree shard this settle appends its output notes to. Different
+    /// matches round-robin across shards → no write-conflict → the leader can
+    /// co-include + parallelize them.
+    #[account(
+        mut,
+        seeds = [MerkleTree::SEED, &[tree_id]],
+        bump = merkle_tree.load()?.bump,
+    )]
+    pub merkle_tree: AccountLoader<'info, MerkleTree>,
 
     #[account(
         mut,
@@ -300,19 +313,22 @@ pub struct TeeForcedSettleBatched<'info> {
 
 pub fn tee_forced_settle_batched_handler(
     ctx: Context<TeeForcedSettleBatched>,
+    _tree_id: u8,
     payload: MatchResultPayload,
     match_index: u8,
     merkle_proof: [[u8; 32]; 4],
 ) -> Result<()> {
     let clock = Clock::get()?;
-    let tee_pubkey = {
-        let cfg = ctx.accounts.vault_config.load()?;
-        require!(
-            ctx.accounts.tee_authority.key() == cfg.tee_pubkey,
-            VaultError::Unauthorized
-        );
-        cfg.tee_pubkey
-    };
+    // The signer must be one of the authorized TEE keys (the shard
+    // fee-payer/authority set); the ed25519 sig is bound to THAT key.
+    let tee_pubkey = ctx.accounts.tee_authority.key();
+    require!(
+        ctx.accounts
+            .vault_config
+            .load()?
+            .is_authorized_tee(&tee_pubkey),
+        VaultError::Unauthorized
+    );
 
     // Ed25519 precompile binds the TEE signature to the canonical hash
     // of the payload. Identical to the per-match flow.
@@ -458,24 +474,33 @@ pub fn tee_forced_settle_batched_handler(
     nb.bump = ctx.bumps.nullifier_b_entry;
     nb._padding = [0u8; 7];
 
-    // Append output leaves: note_c, note_d, note_e (if any), note_f (if any),
-    // then the two batch fee notes (base, quote) if any.
-    let cfg = &mut ctx.accounts.vault_config.load_mut()?;
-    let leaf_c = cfg.leaf_count;
-    let _ = append_leaf(cfg, payload.note_c_commitment)?;
-    let leaf_d = cfg.leaf_count;
-    let mut new_root = append_leaf(cfg, payload.note_d_commitment)?;
+    // Append output leaves to THIS shard: note_c, note_d, note_e (if any),
+    // note_f (if any), then the two batch fee notes (base, quote) if any.
+    // `zero_subtree_roots` + the protocol-owner gate come from the read-only
+    // global config; the appends mutate only `merkle_tree`.
+    let (zsr, protocol_owner_set) = {
+        let cfg = ctx.accounts.vault_config.load()?;
+        (
+            cfg.zero_subtree_roots,
+            cfg.protocol_owner_commitment != [0u8; 32],
+        )
+    };
+    let tree = &mut ctx.accounts.merkle_tree.load_mut()?;
+    let leaf_c = tree.leaf_count;
+    let _ = append_leaf(tree, &zsr, payload.note_c_commitment)?;
+    let leaf_d = tree.leaf_count;
+    let mut new_root = append_leaf(tree, &zsr, payload.note_d_commitment)?;
 
     let leaf_e = if payload.note_e_commitment != [0u8; 32] {
-        let idx = cfg.leaf_count;
-        new_root = append_leaf(cfg, payload.note_e_commitment)?;
+        let idx = tree.leaf_count;
+        new_root = append_leaf(tree, &zsr, payload.note_e_commitment)?;
         idx
     } else {
         u64::MAX
     };
     let leaf_f = if payload.note_f_commitment != [0u8; 32] {
-        let idx = cfg.leaf_count;
-        new_root = append_leaf(cfg, payload.note_f_commitment)?;
+        let idx = tree.leaf_count;
+        new_root = append_leaf(tree, &zsr, payload.note_f_commitment)?;
         idx
     } else {
         u64::MAX
@@ -488,23 +513,17 @@ pub fn tee_forced_settle_batched_handler(
     // conserved out of the consumed note_a/b; the fee note just lets the
     // protocol claim its share via the normal VALID_SPEND path).
     let leaf_fee_base = if payload.note_fee_base_commitment != [0u8; 32] {
-        require!(
-            cfg.protocol_owner_commitment != [0u8; 32],
-            VaultError::ProtocolOwnerUnset
-        );
-        let idx = cfg.leaf_count;
-        new_root = append_leaf(cfg, payload.note_fee_base_commitment)?;
+        require!(protocol_owner_set, VaultError::ProtocolOwnerUnset);
+        let idx = tree.leaf_count;
+        new_root = append_leaf(tree, &zsr, payload.note_fee_base_commitment)?;
         idx
     } else {
         u64::MAX
     };
     let leaf_fee_quote = if payload.note_fee_quote_commitment != [0u8; 32] {
-        require!(
-            cfg.protocol_owner_commitment != [0u8; 32],
-            VaultError::ProtocolOwnerUnset
-        );
-        let idx = cfg.leaf_count;
-        new_root = append_leaf(cfg, payload.note_fee_quote_commitment)?;
+        require!(protocol_owner_set, VaultError::ProtocolOwnerUnset);
+        let idx = tree.leaf_count;
+        new_root = append_leaf(tree, &zsr, payload.note_fee_quote_commitment)?;
         idx
     } else {
         u64::MAX
@@ -548,6 +567,7 @@ pub fn tee_forced_settle_batched_handler(
     // batch is fully settled.
 
     emit!(TradeSettled {
+        tree_id: _tree_id,
         match_id: payload.match_id,
         clearing_price: payload.clearing_price,
         base_amount: payload.base_amount,

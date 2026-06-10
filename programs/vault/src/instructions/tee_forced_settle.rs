@@ -183,6 +183,9 @@ pub(crate) fn create_relock_pda<'info>(
 
 #[event]
 pub struct TradeSettled {
+    /// The Merkle-tree shard the output notes were appended to. The mirror /
+    /// indexer routes the (note_*_leaf) indices into this shard.
+    pub tree_id: u8,
     pub match_id: [u8; 16],
     pub clearing_price: u64,
     pub base_amount: u64,

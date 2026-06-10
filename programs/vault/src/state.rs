@@ -21,47 +21,98 @@ pub const ROOT_HISTORY_SIZE: usize = 64;
 /// `release_lock` is called — so the lock window is the censorship window).
 pub const MAX_LOCK_TTL_SLOTS: u64 = 216_000;
 
-/// Global vault configuration + append-only Merkle tree header + root history.
+/// Max authorized TEE signer keys (= max shard fee-payers). Each settles a
+/// shard; round-robined so concurrent settles use DISTINCT fee-payers (no
+/// write-conflict on the fee-payer account — the tree-sharding throughput lever).
+pub const MAX_TEE_KEYS: usize = 16;
+
+/// Max Merkle-tree shards. Each shard is its own `MerkleTree` account so settles
+/// to different shards don't write-conflict and the leader can co-include more
+/// of them per block.
+pub const MAX_TREES: u8 = 16;
+
+/// Global vault configuration. The Merkle-tree STATE lives in the per-tree
+/// [`MerkleTree`] accounts (sharded); this account holds only the
+/// tree-independent config + the precomputed empty-subtree roots (identical for
+/// every shard, so stored once here). Read-only on the settle hot path → no
+/// write-contention.
 #[account(zero_copy)]
 pub struct VaultConfig {
-    /// Admin authority (usually a multisig). Can rotate `tee_pubkey`.
+    /// Admin authority (usually a multisig). Can rotate the TEE keys.
     pub admin: Pubkey,
-    /// Attested TEE Ed25519 signing pubkey. Verified for `tee_forced_settle`.
-    pub tee_pubkey: Pubkey,
+    /// Authorized TEE Ed25519 signer pubkeys. Each is simultaneously a settle
+    /// fee-payer + `tee_authority` + ed25519 settle-signer (one signer per tx,
+    /// no extra signature). The first `num_tee_keys` are live.
+    pub tee_pubkeys: [Pubkey; MAX_TEE_KEYS],
     /// Protocol "root key": a long-lived governance authority distinct from
     /// `admin`, rotatable only by a self-signed message (see `rotate_root_key`).
-    /// Reserved for protocol-level governance actions.
     pub root_key: Pubkey,
-    /// Number of leaves currently inserted into the Merkle tree. Monotonically
-    /// increasing; used as the `note_counter` for blinding factor derivation.
-    pub leaf_count: u64,
-    /// Current Merkle root.
-    pub current_root: [u8; 32],
-    /// Ring buffer of the last `ROOT_HISTORY_SIZE` roots, newest first.
-    pub roots: [[u8; 32]; ROOT_HISTORY_SIZE],
-    /// Precomputed empty-subtree roots at each level (0 = leaf, depth-1 = root's children).
-    /// Needed to verify append insertions without holding the entire tree on-chain.
+    /// Precomputed empty-subtree roots at each level (0 = leaf, depth-1 = root's
+    /// children). Tree-independent, so global; the per-tree append reads these.
     pub zero_subtree_roots: [[u8; 32]; MERKLE_DEPTH as usize],
-    /// Right-path nodes: the rightmost filled node at each level. Lets us
-    /// append a new leaf by recomputing only MERKLE_DEPTH hashes. This is
-    /// exactly the "incremental Merkle tree" pattern from Tornado/Semaphore.
-    pub right_path: [[u8; 32]; MERKLE_DEPTH as usize],
-    pub roots_head: u8,
-    pub bump: u8,
-    /// Phase-5 protocol-owned shielded identity. Every fee note flushed
-    /// at batch close carries `owner_commitment = protocol_owner_commitment`
-    /// so the protocol treasury's Spending Key can later VALID_SPEND them.
-    /// Zero-bytes until initialised — fee accrual paused while unset.
+    /// Phase-5 protocol-owned shielded identity. Every fee note flushed at batch
+    /// close carries `owner_commitment = protocol_owner_commitment`. Zero until
+    /// initialised — fee accrual paused while unset.
     pub protocol_owner_commitment: [u8; 32],
-    /// Protocol fee rate expressed in basis points of notional. e.g.
-    /// `30 = 0.30 %`. Applied equally to both sides of every match.
+    /// Protocol fee rate in basis points of notional (e.g. `30 = 0.30 %`).
     pub fee_rate_bps: u16,
+    /// Number of live entries in `tee_pubkeys`.
+    pub num_tee_keys: u8,
+    /// Number of Merkle-tree shards the matcher round-robins across.
+    pub num_trees: u8,
+    pub bump: u8,
     /// Explicit trailing padding so the zero-copy Pod layout has no implicit padding.
-    pub _padding: [u8; 4],
+    pub _padding: [u8; 3],
 }
 
 impl VaultConfig {
     pub const SEED: &'static [u8] = b"vault_config";
+
+    /// Is `key` one of the authorized TEE signer pubkeys?
+    pub fn is_authorized_tee(&self, key: &Pubkey) -> bool {
+        let n = (self.num_tee_keys as usize).min(MAX_TEE_KEYS);
+        self.tee_pubkeys[..n].contains(key)
+    }
+}
+
+/// One Merkle-tree shard: an append-only incremental tree + its recent-root
+/// ring. PDA seed `[b"merkle_tree", &[tree_id]]`. Sharding the tree across K of
+/// these is what lets settles to different shards avoid the single-account
+/// write-conflict that serialized them.
+#[account(zero_copy)]
+pub struct MerkleTree {
+    /// Leaves inserted into THIS shard. Monotonic; the per-shard insertion index.
+    pub leaf_count: u64,
+    /// Current Merkle root of this shard.
+    pub current_root: [u8; 32],
+    /// Ring buffer of the last `ROOT_HISTORY_SIZE` roots of this shard.
+    pub roots: [[u8; 32]; ROOT_HISTORY_SIZE],
+    /// Right-path nodes (the rightmost filled node at each level) for this shard.
+    pub right_path: [[u8; 32]; MERKLE_DEPTH as usize],
+    pub roots_head: u8,
+    pub tree_id: u8,
+    pub bump: u8,
+    pub _padding: [u8; 5],
+}
+
+impl MerkleTree {
+    pub const SEED: &'static [u8] = b"merkle_tree";
+
+    /// Check whether a Merkle root appears in this shard's recent-roots ring.
+    pub fn contains_root(&self, root: &[u8; 32]) -> bool {
+        if &self.current_root == root {
+            return true;
+        }
+        self.roots.iter().any(|r| r == root)
+    }
+
+    /// Push a new root into this shard's ring buffer, replacing the oldest entry.
+    pub fn push_root(&mut self, root: [u8; 32]) {
+        let idx = self.roots_head as usize;
+        self.roots[idx] = self.current_root;
+        self.roots_head = ((idx + 1) % ROOT_HISTORY_SIZE) as u8;
+        self.current_root = root;
+    }
 }
 
 /// PDA marking a registered user commitment (wallet identity).
@@ -209,21 +260,3 @@ impl BatchValidityMarker {
 /// in the same matcher cycle; longer TTL just lets stale state pile
 /// up if a settle goes missing.
 pub const MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS: u64 = 300;
-
-impl VaultConfig {
-    /// Check whether a Merkle root appears in the recent-roots ring buffer.
-    pub fn contains_root(&self, root: &[u8; 32]) -> bool {
-        if &self.current_root == root {
-            return true;
-        }
-        self.roots.iter().any(|r| r == root)
-    }
-
-    /// Push a new root into the ring buffer, replacing the oldest entry.
-    pub fn push_root(&mut self, root: [u8; 32]) {
-        let idx = self.roots_head as usize;
-        self.roots[idx] = self.current_root;
-        self.roots_head = ((idx + 1) % ROOT_HISTORY_SIZE) as u8;
-        self.current_root = root;
-    }
-}

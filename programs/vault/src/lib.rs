@@ -46,13 +46,21 @@ declare_id!("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 pub mod vault {
     use super::*;
 
-    /// Initialize the global `VaultConfig` singleton. One-time setup.
+    /// Initialize the global `VaultConfig` singleton. One-time setup. The K
+    /// Merkle-tree shards are created separately via `initialize_tree`.
     pub fn initialize(
         ctx: Context<Initialize>,
         tee_pubkey: Pubkey,
         root_key: Pubkey,
+        num_trees: u8,
     ) -> Result<()> {
-        initialize::initialize_handler(ctx, tee_pubkey, root_key)
+        initialize::initialize_handler(ctx, tee_pubkey, root_key, num_trees)
+    }
+
+    /// Initialize one Merkle-tree shard account (`tree_id < num_trees`).
+    /// Admin-gated. Run once per shard at devnet-setup.
+    pub fn initialize_tree(ctx: Context<InitializeTree>, tree_id: u8) -> Result<()> {
+        initialize_tree::initialize_tree_handler(ctx, tree_id)
     }
 
     /// Rotate the protocol root key. Must be signed by the current
@@ -74,30 +82,43 @@ pub mod vault {
     /// v2: a single `inner_hash` replaces the old (nonce, blinding_r) pair.
     pub fn deposit(
         ctx: Context<Deposit>,
+        tree_id: u8,
         amount: u64,
         owner_commitment: [u8; 32],
         inner_hash: [u8; 32],
     ) -> Result<()> {
-        deposit::deposit_handler(ctx, amount, owner_commitment, inner_hash)
+        deposit::deposit_handler(ctx, tree_id, amount, owner_commitment, inner_hash)
     }
 
     /// Withdraw tokens using a VALID_SPEND proof.
+    #[allow(clippy::too_many_arguments)]
     pub fn withdraw(
         ctx: Context<Withdraw>,
+        tree_id: u8,
         note_commitment: [u8; 32],
         nullifier: [u8; 32],
         merkle_root: [u8; 32],
         amount: u64,
         proof: Groth16Proof,
     ) -> Result<()> {
-        withdraw::withdraw_handler(ctx, note_commitment, nullifier, merkle_root, amount, proof)
+        withdraw::withdraw_handler(
+            ctx,
+            tree_id,
+            note_commitment,
+            nullifier,
+            merkle_root,
+            amount,
+            proof,
+        )
     }
 
     /// Merge K input notes (K=2 or 4) into ONE output note of their sum, using a
     /// VALID_MERGE proof. In-pool consolidation — no external transfer. The K
     /// non-zero input nullifiers' PDAs are passed as remaining_accounts.
+    #[allow(clippy::too_many_arguments)]
     pub fn merge<'info>(
         ctx: Context<'_, '_, '_, 'info, Merge<'info>>,
+        tree_id: u8,
         nullifiers: Vec<[u8; 32]>,
         output_commitment: [u8; 32],
         token_mint: Pubkey,
@@ -107,6 +128,7 @@ pub mod vault {
     ) -> Result<()> {
         merge::merge_handler(
             ctx,
+            tree_id,
             nullifiers,
             output_commitment,
             token_mint,
@@ -121,6 +143,7 @@ pub mod vault {
     #[allow(clippy::too_many_arguments)]
     pub fn lock_note(
         ctx: Context<LockNote>,
+        tree_id: u8,
         note_commitment: [u8; 32],
         order_id: [u8; 16],
         expiry_slot: u64,
@@ -131,6 +154,7 @@ pub mod vault {
     ) -> Result<()> {
         lock_note::lock_note_handler(
             ctx,
+            tree_id,
             note_commitment,
             order_id,
             expiry_slot,
@@ -165,8 +189,8 @@ pub mod vault {
     /// Admin-only. Needed whenever a fresh CVM boots with a new
     /// dstack-derived signer. Devnet-simplified — production rotation
     /// is multisig + attestation-gated (see `set_tee_pubkey.rs`).
-    pub fn set_tee_pubkey(ctx: Context<SetTeePubkey>, new_tee_pubkey: Pubkey) -> Result<()> {
-        set_tee_pubkey::set_tee_pubkey_handler(ctx, new_tee_pubkey)
+    pub fn set_tee_pubkey(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> Result<()> {
+        set_tee_pubkey::set_tee_pubkey_handler(ctx, keys)
     }
 
     /// v3.5 — verify a single Groth16 attesting VALID_CREATE +
@@ -195,12 +219,14 @@ pub mod vault {
     /// dependencies were removed in Phase 1c-hard.
     pub fn tee_forced_settle_batched(
         ctx: Context<TeeForcedSettleBatched>,
+        tree_id: u8,
         payload: MatchResultPayload,
         match_index: u8,
         merkle_proof: [[u8; 32]; 4],
     ) -> Result<()> {
         tee_forced_settle_batched::tee_forced_settle_batched_handler(
             ctx,
+            tree_id,
             payload,
             match_index,
             merkle_proof,
@@ -218,17 +244,9 @@ pub mod vault {
         close_batch_validity_marker::close_batch_validity_marker_handler(ctx, merkle_root)
     }
 
-    /// DEV-NET-ONLY: reset the Merkle tree to empty. Admin-gated. See
+    /// DEV-NET-ONLY: reset a Merkle-tree shard to empty. Admin-gated. See
     /// instructions/reset_merkle_tree.rs for rationale + caveats.
-    pub fn reset_merkle_tree(ctx: Context<ResetMerkleTree>) -> Result<()> {
-        reset_merkle_tree::reset_merkle_tree_handler(ctx)
-    }
-
-    /// One-shot migration: realloc `VaultConfig` to the current Rust
-    /// struct size. Run once per devnet deployment whenever a layout
-    /// change (e.g. `ROOT_HISTORY_SIZE` bump) makes the existing PDA
-    /// shorter than `size_of::<VaultConfig>()`. Admin-gated.
-    pub fn realloc_vault_config(ctx: Context<ReallocVaultConfig>) -> Result<()> {
-        realloc_vault_config::realloc_vault_config_handler(ctx)
+    pub fn reset_merkle_tree(ctx: Context<ResetMerkleTree>, tree_id: u8) -> Result<()> {
+        reset_merkle_tree::reset_merkle_tree_handler(ctx, tree_id)
     }
 }

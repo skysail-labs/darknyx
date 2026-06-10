@@ -34,22 +34,30 @@ fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
 }
 
 #[derive(Accounts)]
+#[instruction(tree_id: u8)]
 pub struct Merge<'info> {
     /// Any signer pays rent for the new nullifier PDAs + output leaf. Authority
     /// is the ZK proof.
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    #[account(mut, seeds = [VaultConfig::SEED], bump)]
+    /// Global config — read-only (provides `zero_subtree_roots`).
+    #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
     pub vault_config: AccountLoader<'info, VaultConfig>,
+
+    /// The Merkle-tree shard the inputs live in + the merged output is appended to.
+    #[account(mut, seeds = [MerkleTree::SEED, &[tree_id]], bump = merkle_tree.load()?.bump)]
+    pub merkle_tree: AccountLoader<'info, MerkleTree>,
 
     pub system_program: Program<'info, System>,
     // The NullifierEntry PDAs for the NON-ZERO input nullifiers are passed as
     // `remaining_accounts` (writable, uninitialised), in nullifier order.
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn merge_handler<'info>(
     ctx: Context<'_, '_, '_, 'info, Merge<'info>>,
+    _tree_id: u8,
     nullifiers: Vec<[u8; 32]>,
     output_commitment: [u8; 32],
     token_mint: Pubkey,
@@ -62,12 +70,9 @@ pub fn merge_handler<'info>(
         VaultError::InvalidMergeK
     );
 
-    // Merkle root must be recent (the membership proofs were built against it).
+    // Merkle root must be recent in THIS shard (membership proofs built against it).
     require!(
-        ctx.accounts
-            .vault_config
-            .load()?
-            .contains_root(&merkle_root),
+        ctx.accounts.merkle_tree.load()?.contains_root(&merkle_root),
         VaultError::StaleMerkleRoot
     );
 
@@ -144,8 +149,9 @@ pub fn merge_handler<'info>(
 
     // ----- Mint the output note: append its commitment as a new leaf -----
     let new_root = {
-        let cfg = &mut ctx.accounts.vault_config.load_mut()?;
-        append_leaf(cfg, output_commitment)?
+        let zsr = ctx.accounts.vault_config.load()?.zero_subtree_roots;
+        let tree = &mut ctx.accounts.merkle_tree.load_mut()?;
+        append_leaf(tree, &zsr, output_commitment)?
     };
 
     // NOTE: OutstandingMint is intentionally UNCHANGED — value in == value out.

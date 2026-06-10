@@ -8,7 +8,7 @@
 //! `zero_subtree_roots` (if our position is a left child with no sibling yet).
 
 use crate::errors::VaultError;
-use crate::state::{VaultConfig, MERKLE_DEPTH};
+use crate::state::{MerkleTree, MERKLE_DEPTH};
 use anchor_lang::prelude::*;
 #[cfg(not(target_os = "solana"))]
 use ark_bn254::Fr;
@@ -59,10 +59,18 @@ pub fn empty_root(zero_subtree_roots: &[[u8; 32]; MERKLE_DEPTH as usize]) -> Res
     poseidon2(&last, &last)
 }
 
-/// Append a leaf to the tree and return the new root.
-/// Updates `right_path` in-place.
-pub fn append_leaf(vault: &mut VaultConfig, leaf: [u8; 32]) -> Result<[u8; 32]> {
-    let leaf_index = vault.leaf_count;
+/// Append a leaf to a Merkle-tree SHARD and return the new root. Updates the
+/// shard's `right_path` + recent-root ring in-place. `zero_subtree_roots` are
+/// the global (tree-independent) empty-subtree roots from `VaultConfig`.
+// The loop indexes BOTH `tree.right_path` and `zero_subtree_roots` by `level`,
+// so the iterator form would be less readable than the explicit index.
+#[allow(clippy::needless_range_loop)]
+pub fn append_leaf(
+    tree: &mut MerkleTree,
+    zero_subtree_roots: &[[u8; 32]; MERKLE_DEPTH as usize],
+    leaf: [u8; 32],
+) -> Result<[u8; 32]> {
+    let leaf_index = tree.leaf_count;
     require!(
         leaf_index < (1u64 << MERKLE_DEPTH),
         VaultError::MerkleTreeFull
@@ -76,18 +84,18 @@ pub fn append_leaf(vault: &mut VaultConfig, leaf: [u8; 32]) -> Result<[u8; 32]> 
         if is_right_child {
             // Left sibling is already in right_path (from when a previous leaf
             // was a left child at this level).
-            current = poseidon2(&vault.right_path[level], &current)?;
+            current = poseidon2(&tree.right_path[level], &current)?;
         } else {
             // We're a left child — sibling is the empty subtree.
-            vault.right_path[level] = current;
-            current = poseidon2(&current, &vault.zero_subtree_roots[level])?;
+            tree.right_path[level] = current;
+            current = poseidon2(&current, &zero_subtree_roots[level])?;
         }
         idx >>= 1;
     }
 
-    vault.leaf_count = leaf_index
+    tree.leaf_count = leaf_index
         .checked_add(1)
         .ok_or(error!(VaultError::ArithmeticOverflow))?;
-    vault.push_root(current);
+    tree.push_root(current);
     Ok(current)
 }

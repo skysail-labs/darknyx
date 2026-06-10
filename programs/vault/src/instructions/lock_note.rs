@@ -23,6 +23,7 @@ fn u64_be32(v: u64) -> [u8; 32] {
 
 #[derive(Accounts)]
 #[instruction(
+    tree_id: u8,
     note_commitment: [u8; 32],
     order_id: [u8; 16],
     expiry_slot: u64,
@@ -32,8 +33,9 @@ fn u64_be32(v: u64) -> [u8; 32] {
     proof: Groth16Proof,
 )]
 pub struct LockNote<'info> {
-    /// The TEE-operated relayer. We enforce that `tee_authority.key()` ==
-    /// `vault_config.tee_pubkey` so only the registered TEE can lock notes.
+    /// The TEE-operated relayer. We enforce that `tee_authority.key()` is one of
+    /// `vault_config.tee_pubkeys` (the authorized shard fee-payer/signer set) so
+    /// only a registered TEE key can lock notes.
     ///
     /// NOTE: even with the registered key gate, the TEE could previously
     /// "lock" any 32-byte commitment whether or not it actually existed in
@@ -50,6 +52,14 @@ pub struct LockNote<'info> {
     )]
     pub vault_config: AccountLoader<'info, VaultConfig>,
 
+    /// The Merkle-tree shard the input note lives in. Read-only — we only check
+    /// its recent-root ring.
+    #[account(
+        seeds = [MerkleTree::SEED, &[tree_id]],
+        bump = merkle_tree.load()?.bump,
+    )]
+    pub merkle_tree: AccountLoader<'info, MerkleTree>,
+
     #[account(
         init,
         payer = tee_authority,
@@ -62,8 +72,10 @@ pub struct LockNote<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn lock_note_handler(
     ctx: Context<LockNote>,
+    _tree_id: u8,
     note_commitment: [u8; 32],
     order_id: [u8; 16],
     expiry_slot: u64,
@@ -74,16 +86,19 @@ pub fn lock_note_handler(
 ) -> Result<()> {
     let clock = Clock::get()?;
 
-    // TEE-authority gate + Merkle-root recency check.
+    // TEE-authority gate + Merkle-root recency check (against THIS shard).
     {
         let cfg = ctx.accounts.vault_config.load()?;
         require!(
-            ctx.accounts.tee_authority.key() == cfg.tee_pubkey,
+            cfg.is_authorized_tee(&ctx.accounts.tee_authority.key()),
             VaultError::Unauthorized
         );
         // The proof was generated against `merkle_root`; that root must still
-        // be in the recent 32-root ring. Same recency policy as `withdraw`.
-        require!(cfg.contains_root(&merkle_root), VaultError::StaleMerkleRoot);
+        // be in this shard's recent-root ring. Same recency policy as `withdraw`.
+        require!(
+            ctx.accounts.merkle_tree.load()?.contains_root(&merkle_root),
+            VaultError::StaleMerkleRoot
+        );
     }
 
     require!(expiry_slot > clock.slot, VaultError::InvalidExpirySlot);

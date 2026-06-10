@@ -33,20 +33,32 @@ pub struct SetTeePubkey<'info> {
     pub vault_config: AccountLoader<'info, VaultConfig>,
 }
 
-pub fn set_tee_pubkey_handler(ctx: Context<SetTeePubkey>, new_tee_pubkey: Pubkey) -> Result<()> {
+/// Install the FULL authorized TEE signer set (the K shard fee-payer/authority
+/// keys). Replaces the whole `tee_pubkeys` array + `num_tee_keys`. One ix sets
+/// all K at the rotation ceremony (e.g. when a fresh CVM derives K dstack keys).
+pub fn set_tee_pubkey_handler(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> Result<()> {
     let mut cfg = ctx.accounts.vault_config.load_mut()?;
     require!(
         ctx.accounts.admin.key() == cfg.admin,
         VaultError::Unauthorized
     );
+    require!(
+        !keys.is_empty() && keys.len() <= MAX_TEE_KEYS,
+        VaultError::InvalidProof
+    );
 
-    let old = cfg.tee_pubkey;
-    cfg.tee_pubkey = new_tee_pubkey;
+    let old = cfg.tee_pubkeys[0];
+    cfg.tee_pubkeys = [Pubkey::default(); MAX_TEE_KEYS];
+    for (slot, k) in cfg.tee_pubkeys.iter_mut().zip(keys.iter()) {
+        *slot = *k;
+    }
+    cfg.num_tee_keys = keys.len() as u8;
 
     emit!(TeePubkeyRotated {
         admin: ctx.accounts.admin.key(),
         old_tee_pubkey: old,
-        new_tee_pubkey,
+        new_tee_pubkey: keys[0],
+        num_keys: keys.len() as u8,
     });
     Ok(())
 }
@@ -56,4 +68,5 @@ pub struct TeePubkeyRotated {
     pub admin: Pubkey,
     pub old_tee_pubkey: Pubkey,
     pub new_tee_pubkey: Pubkey,
+    pub num_keys: u8,
 }
