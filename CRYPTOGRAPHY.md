@@ -62,8 +62,9 @@ The on-chain trust surface is tightened so the TEE can deny liveness but
   mis-mints / clears at a bad price." (Earlier designs split this into
   separate per-match `VALID_CREATE` + `VALID_PRICE` circuits; those were
   folded into the batched proof and removed.)
-- **Signer pinning.** Every TEE-authority ix checks `VaultConfig.tee_pubkey`,
-  rotated to the CVM's dstack-derived key; clients verify the enclave's TDX
+- **Signer pinning.** Every TEE-authority ix checks the signer against
+  `VaultConfig.tee_pubkeys` (the set of K authorized shard fee-payer keys),
+  each rotated to a CVM dstack-derived key; clients verify the enclave's TDX
   attestation before sending order data.
 
 Validated end-to-end against a real devnet deployment under
@@ -94,7 +95,7 @@ through a Phala CVM (`cvm-settle-e2e`).
 | Threat | Status |
 |---|---|
 | TEE clears at a bad price | **Closed** — the clearing-price band is a constraint inside `VALID_MATCH_BATCH`, verified on-chain by `verify_match_batch`. |
-| TEE-binary substitution | **Open** — `tee_pubkey` is a software Ed25519 key. Production must pin it to an attested enclave. |
+| TEE-binary substitution | **Open** — `tee_pubkeys` are software Ed25519 keys. Production must pin them to an attested enclave. |
 | Trusted-setup ceremony soundness | **Open** — all four Groth16 circuits use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
 | Aggregate trade analytics from settle txs | **By design** — match volume + clearing price are public per settled batch. |
 | Network-level traffic analysis | Partially mitigated by TLS to the CVM + bearer auth; not fully eliminated. |
@@ -484,29 +485,42 @@ recoverable from the seed + the indexer.
   Tornado-style window to avoid griefing legitimate withdraws via racing
   deposits. With ~400 ms slots this gives roughly **2 minutes of freshness**.
 
-### Storage trick
+### Storage trick (sharded across K trees)
 
-The chain only stores **O(depth)** state:
+The chain only stores **O(depth)** state per tree. The tree state was split
+**out of `VaultConfig`** into **K per-shard `MerkleTree` accounts** (PDA
+`[b"merkle_tree", &[tree_id]]`) — settles to different shards write distinct
+accounts, so the leader can co-include a batch's settle txs (see §9). The
+amount-independent `zero_subtree_roots` are identical for every shard, so they
+stay **global** in `VaultConfig`; the per-tree append reads them.
 
 ```rust
+// Global, read-only on the settle hot path:
 struct VaultConfig {
-    // ...
-    leaf_count:         u64,                      // monotonic counter
-    current_root:       [u8; 32],
-    roots:              [[u8; 32]; 32],           // ring buffer
-    zero_subtree_roots: [[u8; 32]; 20],           // precomputed
-    right_path:         [[u8; 32]; 20],           // rightmost filled per level
-    roots_head:         u8,
-    // ...
+    admin: Pubkey,
+    tee_pubkeys: [Pubkey; 16],                    // the K authorized TEE signers
+    root_key: Pubkey,
+    zero_subtree_roots: [[u8; 32]; 20],           // precomputed, shared by all shards
+    protocol_owner_commitment: [u8; 32],
+    fee_rate_bps: u16, num_tee_keys: u8, num_trees: u8, bump: u8, /* ... */
+}
+
+// One per shard (K of them). leaf_count at byte offset 8, current_root at 16:
+struct MerkleTree {
+    leaf_count:   u64,                            // monotonic, PER-SHARD
+    current_root: [u8; 32],
+    roots:        [[u8; 32]; 64],                 // 64-root ring buffer
+    right_path:   [[u8; 32]; 20],                 // rightmost filled per level
+    roots_head:   u8, tree_id: u8, bump: u8, /* ... */
 }
 ```
 
-A new leaf is appended in `O(depth)` Poseidon hashes: walk up the tree,
-hash with either the right_path sibling or a zero_subtree_root depending on
-whether we're a left or right child at each level. The right_path is updated
-in place.
+A new leaf is appended in `O(depth)` Poseidon hashes into `merkle_tree[tree_id]`:
+walk up the tree, hash with either the right_path sibling or a zero_subtree_root
+(read from `VaultConfig`) depending on whether we're a left or right child at
+each level. The right_path is updated in place.
 
-Reference: `programs/vault/src/merkle.rs::append_leaf` (~30 lines).
+Reference: `programs/vault/src/merkle.rs::append_leaf(tree, zero_subtree_roots, leaf)`.
 
 ### Off-chain "shadow tree" for proof generation
 
@@ -1062,16 +1076,20 @@ vault::lock_note(
 ```
 
 Accounts:
-- `tee_authority` (signer = `vault_config.tee_pubkey`)
-- `vault_config` (ro — read for tee_pubkey + root recency check)
+- `tee_authority` (signer ∈ `vault_config.tee_pubkeys`)
+- `vault_config` (ro — read for the authorized-signer check)
+- `merkle_tree[tree_id]` (ro — root recency check on the shard the note lives in)
 - `note_lock` (PDA at `[b"note_lock", note_commitment]`, **init**)
 - `system_program`
 
+(`tree_id` is a new leading ix arg under tree-sharding; back-compat
+default 0.)
+
 Handler steps (v2):
 
-1. Assert `tee_authority.key() == vault_config.tee_pubkey`.
-2. Assert `merkle_root` is in `vault_config.contains_root()` (current root
-   or any of the previous 32).
+1. Assert `tee_authority.key() ∈ vault_config.tee_pubkeys`.
+2. Assert `merkle_root` is in `merkle_tree.contains_root()` (current root
+   or any of the previous 32 on that shard).
 3. Assert `expiry_slot > clock.slot` AND `expiry_slot ≤ clock.slot + MAX_LOCK_TTL_SLOTS`
    (= 216,000 slots ≈ 24h on 400ms-slot devnet).
 4. Assert `amount > 0`.
@@ -1168,43 +1186,52 @@ The settle ix is:
 
 ```rust
 vault::tee_forced_settle_batched(
+    tree_id:      u8,                 // which Merkle-tree shard the outputs append to
     payload:      MatchResultPayload,
     match_index:  u8,                 // 0..15, which slot in the batch
     merkle_proof: [[u8; 32]; 4],      // depth-4 inclusion path
 )
 ```
 
-The payload is a 448-byte Borsh struct carrying 7 commitments, 2
-nullifiers, 2 order IDs, 6 u64 amounts, 2 re-lock (order_id + expiry)
-pairs, and clearing_price + batch_slot. The Rust struct definition is in
-`programs/vault/src/instructions/tee_forced_settle.rs:42-80`.
+The payload is a 480-byte Borsh struct (v6: separate base+quote fee notes)
+carrying 7 commitments, 2 nullifiers, 2 order IDs, 6 u64 amounts, 2 re-lock
+(order_id + expiry) pairs, and clearing_price + batch_slot. The Rust struct
+definition is in `programs/vault/src/instructions/tee_forced_settle.rs`.
 
-Accounts (13 total, in this exact order — must match the Rust struct):
+Accounts (14 total, in this exact order — must match the Rust struct).
+Post-sharding `vault_config` is **read-only** and the writable tree state is
+`merkle_tree[tree_id]` at slot 2:
 
 | # | Account | Role |
 |---|---|---|
-| 0 | `tee_authority` | signer = `vault_config.tee_pubkey` |
-| 1 | `vault_config` | mut — Merkle state + tee_pubkey |
-| 2 | `note_lock_a` | mut, close — input lock from step 7 |
-| 3 | `note_lock_b` | mut, close — input lock from step 7 |
-| 4 | `consumed_a` | init — replay protection for note_a |
-| 5 | `consumed_b` | init — replay protection for note_b |
-| 6 | `nullifier_a_entry` | init — nullifier recorded (belt-and-suspenders) |
-| 7 | `nullifier_b_entry` | init — nullifier recorded |
-| 8 | `note_lock_e` | unchecked, mut — relock destination for buyer's change |
-| 9 | `note_lock_f` | unchecked, mut — relock destination for seller's change |
-| 10 | `instructions_sysvar` | sysvar — for finding the Ed25519 precompile |
-| 11 | `batch_validity_marker` | the 1:N marker from step 8 — checked, NOT closed here |
-| 12 | `system_program` | for CPIs |
+| 0 | `tee_authority` | signer ∈ `vault_config.tee_pubkeys` (the shard's fee-payer key) |
+| 1 | `vault_config` | **ro** — authorized-key check + protocol_owner + zero_subtree_roots |
+| 2 | `merkle_tree[tree_id]` | **mut** — the output-shard the notes append to |
+| 3 | `note_lock_a` | mut, close — input lock from step 7 |
+| 4 | `note_lock_b` | mut, close — input lock from step 7 |
+| 5 | `consumed_a` | init — replay protection for note_a |
+| 6 | `consumed_b` | init — replay protection for note_b |
+| 7 | `nullifier_a_entry` | init — nullifier recorded (belt-and-suspenders) |
+| 8 | `nullifier_b_entry` | init — nullifier recorded |
+| 9 | `note_lock_e` | unchecked, mut — relock destination for buyer's change |
+| 10 | `note_lock_f` | unchecked, mut — relock destination for seller's change |
+| 11 | `instructions_sysvar` | sysvar — for finding the Ed25519 precompile |
+| 12 | `batch_validity_marker` | the 1:N marker from step 8 — checked, NOT closed here |
+| 13 | `system_program` | for CPIs |
+
+ix data = disc(8) ‖ tree_id(1) ‖ payload(480) ‖ match_index(1) ‖ 4×32 siblings = 618 B.
 
 Handler walkthrough:
 
-1. **TEE authority check**: `tee_authority.key() == vault_config.tee_pubkey`.
+1. **TEE authority check**: `vault_config.is_authorized_tee(tee_authority.key())`
+   (the signer must be one of the K registered `tee_pubkeys`).
 
 2. **Ed25519 signature binding** (`verify_tee_signature`):
    walk the tx's instructions sysvar, find an `Ed25519Program` precompile
    ix, assert its inlined (pubkey, message) tuple equals
-   `(tee_pubkey, canonical_payload_hash(payload))`. The precompile itself
+   `(tee_authority.key(), canonical_payload_hash(payload))` — i.e. the
+   signature is bound to *the same* registered shard key that signed the
+   tx (one of the K `tee_pubkeys`). The precompile itself
    has already done the signature-bytes verification — the vault just
    binds it to the right key + message.
 
@@ -1610,21 +1637,27 @@ const extendIx = AddressLookupTableProgram.extendLookupTable({
     payer:        admin.publicKey,
     authority:    admin.publicKey,
     lookupTable:  altPubkey,
-    addresses:    [vaultConfigPda, SYSVAR_INSTRUCTIONS_PUBKEY, SystemProgram.programId],
+    addresses:    [vaultConfigPda, SYSVAR_INSTRUCTIONS_PUBKEY, SystemProgram.programId,
+                   ...merkleTreePdas /* one per shard, tree 0..K-1 */],
 });
 // Send both ixs in one tx, then wait one slot for the ALT to be referenceable.
 ```
 
 The resulting ALT pubkey is written to `.devnet/e2e-config.json` as
-`settleLookupTable` and reused by every settle tx forever.
+`settleLookupTable` and reused by every settle tx forever. With
+tree-sharding the static ALT also lists the **K `merkle_tree` PDAs** —
+every settle's writable `merkle_tree[tree_id]` (the per-shard tree the
+match's outputs append to) resolves through this one ALT regardless of
+which shard the worker round-robins the match onto, so no per-shard ALT
+churn is needed.
 
 #### Per-batch ALTs on top of the static one
 
 The settle adds a 1-byte `match_index` + 4 × 32-byte Merkle
 siblings = 129 bytes to ix.data. That pushed `tee_forced_settle_batched`
 over the 1232-byte cap even with the static settle ALT. Fix: stack a
-second ALT, created once per batch, holding the 5 PDAs that vary per
-match but are derivable from the payload alone:
+second ALT, created once per batch, holding the **9 PDAs** that vary
+per match but are derivable from the payload alone:
 
 | Account | Why it's in the per-batch ALT |
 |---|---|
@@ -1632,13 +1665,33 @@ match but are derivable from the payload alone:
 | `note_lock_b` | derived from `payload.note_b_commitment` |
 | `note_lock_e` | derived from `payload.note_e_commitment` (or zero) |
 | `note_lock_f` | derived from `payload.note_f_commitment` (or zero) |
+| `consumed_note_a` | derived from `payload.note_a_commitment` (TEE-consume guard) |
+| `consumed_note_b` | derived from `payload.note_b_commitment` |
+| `nullifier_a` | derived from `payload.nullifier_a` |
+| `nullifier_b` | derived from `payload.nullifier_b` |
 | `batch_validity_marker` | derived from the batch's `merkle_root` |
 
-This saves another ~155 B (5 × ~30) per settle, bringing the tx
-back to ~1130 B — comfortably under 1232.
+Folding the consumed-note + nullifier PDAs into the ALT (they were
+inline before) is what keeps the **continuation/change-note** settle —
+where `note_lock_e/f` are non-zero so the exact-fill dedup disappears
+and the tx grows — under the cap. The settle tx lands at **≤ 1160 B**
+(was ~1226 B for one match before this folding), comfortably under 1232
+for both exact-fill and change-note paths.
 
-Per-batch ALT creation is part of the `settleViaBatched` helper
-(`packages/sdk/tests/helpers/batched-settle.ts`). Important gotcha:
+Because the per-batch ALT now carries 9 addresses per match (and a
+batch packs up to N=16 matches → well past the ~30-address ceiling a
+single `extendLookupTable` tx can hold), the extend is **chunked**:
+`MAX_EXTEND_ADDRESSES = 25` addresses per extend tx (`settle/alt.rs::
+build_extend_alt_ix_chunks`), and the chunks are fired **concurrently**
+so the leader co-includes them in one block instead of paying one
+confirmation per chunk. The worker then **re-reads the ALT's canonical
+on-chain address order** (`parse_alt_addresses`, the account data at
+byte offset 56 in 32-byte strides) before building any settle tx —
+concurrent extends can land in a different order than they were issued,
+and a v0 tx's account indices must match the ALT's real layout, not the
+order the worker intended. If the re-read returns empty (the entries
+haven't rooted yet) it falls back to the in-memory order.
+
 `createLookupTable` requires the `recentSlot` arg to be a slot present
 in the `SlotHashes` sysvar. Fetching via `getSlot("confirmed")`
 occasionally picks a slot the leader skipped → `InvalidInstructionData`
@@ -1646,14 +1699,22 @@ occasionally picks a slot the leader skipped → `InvalidInstructionData`
 instead — that slot is the one the blockhash was sampled at and is
 therefore guaranteed to be in `SlotHashes`.
 
-Production matchers should amortise both the per-batch ALT and the
-`close_batch_validity_marker` across all N matches in the batch (one
-ALT, one close per batch — not per match). For N = 16 matches this
-turns 80+ per-match alt/close ops into 1 + 16 + 1 = 18 txs per batch.
-ALT deactivation has a 512-slot (~3.5 minute) cooldown, so a rolling
-pool of ≥ 2 ALTs is needed if batches run faster than that —
-the settle pipeline has the full
-analysis.
+The per-batch ALT + `close_batch_validity_marker` are amortised across
+all N matches in the batch (one ALT, one close per batch — not per
+match). For N = 16 matches this turns 80+ per-match alt/close ops into
+1 ALT-create + a few chunked extends + 16 settles + 1 close per batch.
+ALT deactivation has a 512-slot (~3.5 minute) cooldown, so the settle
+worker keeps a **rolling pool** of per-batch ALTs (`settle/alt_pool.rs`,
+driven by `settle/worker.rs`) and recycles them once deactivation
+clears, rather than creating-and-burning one per batch.
+
+> **ALT activation finality.** Freshly-extended ALT entries only become
+> *loadable* by a v0 tx ~1 slot after the extend roots. This one-slot
+> wait — not darkpool compute — is the residual `settle_ms` tail you see
+> in the CVM timings. Concurrent chunked extends collapse the *extend*
+> cost into one block, but the activation wait is block-finality-bound
+> and goes away under Alpenglow's sub-second finality, not via any
+> code change here.
 
 #### Sending a v0 tx
 
@@ -1823,7 +1884,7 @@ or via withdraw (layer 3 alone).
 | `zk_roundtrip.rs` | VALID_WALLET_CREATE end-to-end (off-chain prove → on-chain verify) |
 | `zk_spend_roundtrip.rs` | VALID_SPEND (v2 inner_hash) end-to-end + Poseidon parity vs circomlib |
 | `user_commitment_registration.rs` | `create_wallet` flow with proof verification |
-| `set_protocol_config.rs` / `set_tee_pubkey.rs` | admin-gated config + TEE-signer rotation |
+| `set_protocol_config.rs` / `set_tee_pubkey.rs` | admin-gated config + TEE-signer rotation (the whole K-key `tee_pubkeys` set in one ix) |
 | `merkle_host.rs` | pure-Rust Merkle invariants (poseidon2, zero-subtree, append) |
 | `tee_forced_settle_batched.rs` | 1:N `BatchValidityMarker` lifecycle (two matches share one marker; the close-after-every-match regression) |
 | `match_batch_verify.rs` | real N=16 proof → on-chain `verify_match_batch` acceptance (committed fixture) |
@@ -1907,7 +1968,8 @@ Sorted roughly by cryptographic impact:
    time, but not the need for a project-specific phase-2 MPC).
 
 2. **Attested TEE-pubkey rotation** — `set_tee_pubkey` rotates
-   `VaultConfig.tee_pubkey` to the CVM's dstack-derived key, and clients
+   `VaultConfig.tee_pubkeys` (the K shard signer keys) to the CVM's
+   dstack-derived keys, and clients
    verify the enclave's TDX quote client-side before sending orders. The
    remaining gap is binding the *on-chain* rotation to a verified quote +
    a governance-approved measurement set (a multisig accepting the quote),
@@ -1957,16 +2019,16 @@ nyx-monorepo/
 │   └── nyx-tee-loadgen/                        host load-tester
 │
 ├── programs/vault/                            the ONLY on-chain program
-│   ├── src/state.rs                           VaultConfig, WalletEntry, NullifierEntry,
-│   │                                           ConsumedNoteEntry, NoteLock, OutstandingMint,
-│   │                                           BatchValidityMarker
+│   ├── src/state.rs                           VaultConfig (global), MerkleTree (per-shard),
+│   │                                           WalletEntry, NullifierEntry, ConsumedNoteEntry,
+│   │                                           NoteLock, OutstandingMint, BatchValidityMarker
 │   ├── src/merkle.rs                          incremental tree, depth 20
-│   ├── src/zk/{verifier,vk_valid_wallet_create,vk_valid_spend,vk_valid_input,vk_match_batch_n16}.rs
-│   ├── src/instructions/                       initialize, create_wallet, deposit, lock_note,
-│   │                                           release_lock, verify_match_batch,
+│   ├── src/zk/{verifier,vk_valid_wallet_create,vk_valid_spend,vk_valid_input,vk_valid_merge_k2,vk_valid_merge_k4,vk_match_batch_n16}.rs
+│   ├── src/instructions/                       initialize, initialize_tree, create_wallet, deposit,
+│   │                                           lock_note, release_lock, verify_match_batch,
 │   │                                           tee_forced_settle(_batched), close_batch_validity_marker,
-│   │                                           withdraw, set_protocol_config, set_tee_pubkey,
-│   │                                           rotate_root_key, reset_merkle_tree
+│   │                                           merge, withdraw, set_protocol_config, set_tee_pubkey,
+│   │                                           rotate_root_key, reset_merkle_tree, close_vault_config
 │   └── tests/                                  settle_harness/ + the litesvm suite (§12)
 │
 ├── packages/sdk/

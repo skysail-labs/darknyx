@@ -23,7 +23,7 @@ end-to-end:
 | D3 | **API edge** | Custom domain via dstack-ingress | `api.nyx.example.com` with ACME inside the TEE, `/evidences/` endpoint for RA-TLS verification, CAA-locked Let's Encrypt account. Branding ours, end-to-end TLS into the enclave. |
 | D4 | **Prover location** | Inside the TEE | Witness never leaves the enclave. ~5-10% TDX overhead on top of ~0.7s Groth16 time is within budget. Benchmark in Phase 1 — if memory-encryption pushes us above 3s, fall back to TEE-signed-public-input + external prover. |
 | D5 | **Matching cadence** | Frequent-batch-auction with `BATCH_MS = 2000` default, tunable per market via on-chain `MatchingConfig` | Settle-latency floor (~2-3 s) means ticks faster than that pipeline up. 2 s is the aggressive setting; per-market tunable so we can dial liquid markets faster and thin markets slower without a code change. **Hot order book, batched clearing** — orders are visible the moment they arrive over WS; only the actual matching is batched. See §5.4. |
-| D6 | **Indexer architecture** | Inside the TEE, shared in-memory state via `tokio RwLock` | The TEE already holds the Merkle mirror + nullifier set + lock state in RAM to do matching — exposing `/tree/*` over the same state is essentially free. One deployment, one attestation chain. Clients who don't trust the TEE retain the trustless fallback (read `VaultConfig.current_root` + PDAs directly from Solana). See §5.5. |
+| D6 | **Indexer architecture** | Inside the TEE, shared in-memory state via `tokio RwLock` | The TEE already holds the Merkle mirror + nullifier set + lock state in RAM to do matching — exposing `/tree/*` over the same state is essentially free. One deployment, one attestation chain. Clients who don't trust the TEE retain the trustless fallback (read `MerkleTree[tree_id].current_root` + PDAs directly from Solana). See §5.5. |
 
 Everything below assumes those six choices. Section 14 documents the
 trigger conditions that would flip any of them.
@@ -61,9 +61,9 @@ trigger conditions that would flip any of them.
 │  │   │  HTTP / WS server (axum + tokio-tungstenite)                  ││ │
 │  │   │  Order book (per-market BTreeMap + indices)                   ││ │
 │  │   │  Matching loop (tokio interval, every batch_interval slots)   ││ │
-│  │   │  Groth16 prover (snarkjs-equivalent in Rust — ark-groth16)    ││ │
-│  │   │  Settle scheduler (solana-client async)                       ││ │
-│  │   │  Merkle mirror (programs/vault/src/merkle.rs lifted)          ││ │
+│  │   │  Groth16 prover (in-Rust — ark-groth16 | rapidsnark FFI)     ││ │
+│  │   │  Settle scheduler (concurrent, K shard fee-payers)            ││ │
+│  │   │  K Merkle mirrors (programs/vault/src/merkle.rs lifted)       ││ │
 │  │   │  Persistence (encrypted disk snapshots)                       ││ │
 │  │   └───────────────────────────────────────────────────────────────┘│ │
 │  └────────────────────────────────────────────────────────────────────┘ │
@@ -169,23 +169,27 @@ crates/nyx-tee/src/
 ├── prover/              # in-process Groth16 prover for VALID_MATCH_BATCH
 │   ├── mod.rs
 │   ├── witness.rs       # build witness from matcher output
-│   └── groth16.rs       # ark-groth16 wrapper (N=16 instantiation)
+│   └── groth16.rs       # ark | rapidsnark backend (NYX_TEE_PROVER), N=16
 ├── settle/              # on-chain settle pipeline
 │   ├── mod.rs
 │   ├── payload.rs       # MatchResultPayload construction
-│   ├── sign.rs          # Ed25519 signing using the TEE-derived key
-│   ├── pipeline.rs      # verify_match_batch → settles → close (v3.5 path)
-│   └── alt.rs           # per-batch ALT creation
-├── merkle/              # local mirror of vault's incremental Merkle tree
+│   ├── sign.rs          # Ed25519 signing using the TEE-derived shard key
+│   ├── worker.rs        # concurrent lock/extend/settle + (key[j],tree[j]) round-robin
+│   ├── lock_note.rs     # per-match input-note locks (concurrent Tx A)
+│   ├── assemble.rs      # tag each match with output tree_id + fee-payer
+│   ├── alt.rs           # per-batch ALT create + chunked extend (MAX_EXTEND_ADDRESSES=25)
+│   └── alt_pool.rs      # rolling pool of per-batch ALTs (512-slot cooldown recycle)
+├── merkle/              # K local mirrors of vault's sharded Merkle trees
 │   ├── mod.rs
-│   └── sync.rs          # poll VaultConfig + leaf-append events to stay current
+│   ├── mirror.rs        # one MerkleMirror per shard
+│   └── sync.rs          # route leaf-append events to mirrors[tree_id]; reconcile each
 ├── persistence/         # LUKS-encrypted snapshots (book + leaves + outbox)
 │   ├── mod.rs
 │   └── snapshot.rs
 ├── keys/                # dstack-derived keypair management
 │   ├── mod.rs
-│   └── ed25519.rs       # getKey("nyx/ed25519-signer/v1") → Ed25519 keypair
-└── config.rs            # env-driven config (Helius URL, market params, etc.)
+│   └── ed25519.rs       # getKey("nyx/ed25519-signer/v1/{j}") → K Ed25519 keypairs
+└── config.rs            # env-driven config (Helius URL, num_trees, prover, concurrency)
 ```
 
 ### 2.3 Two crates carrying the matching logic
@@ -234,15 +238,16 @@ A new CVM coming up under our compose-hash:
         acme-account.json}.
 6.  nyx-tee container starts:
       • Calls `client.info()` — reads app_id, instance_id, RTMRs.
-      • Calls `client.get_key("nyx/ed25519-signer/v1")` — deterministic
-        32-byte seed.
-      • Derives Ed25519 keypair from the seed. The pubkey is stable
-        for the lifetime of this compose-hash.
+      • Calls `client.get_key("nyx/ed25519-signer/v1/{j}")` for
+        j∈0..num_trees — K deterministic 32-byte seeds.
+      • Derives K Ed25519 keypairs (one per shard fee-payer). The
+        pubkeys are stable for the lifetime of this compose-hash.
       • Loads persistence snapshot from LUKS disk (if present) and
         replays since the last snapshot.
-      • Syncs Merkle mirror from on-chain VaultConfig.
-      • Verifies its Ed25519 pubkey matches the on-chain
-        vault_config.tee_pubkey. If not, refuses to settle until
+      • Syncs the K Merkle mirrors from on-chain MerkleTree[0..K]
+        (cold-boot from NYX_TEE_SYNC_FROM_SLOT).
+      • Verifies each Ed25519 pubkey is registered in the on-chain
+        vault_config.tee_pubkeys set. If not, refuses to settle until
         admin runs the rotation ceremony (§7).
       • Spawns the `oracle_sync` background task (§5.6) — does an
         initial Pyth fetch + guardian-sig verify so the cache is
@@ -258,10 +263,13 @@ attestation + KMS handshake + ACME cert (if cold) dominate.
 
 ---
 
-## 4. Key bootstrap — the Ed25519 signer
+## 4. Key bootstrap — the K Ed25519 shard signers
 
-The single most important key in this system. It's what
-`vault.tee_forced_settle_batched` checks every settle.
+The most important keys in this system. They're what
+`vault.tee_forced_settle_batched` checks every settle. Tree-sharding
+derives **K = `num_trees`** of them (one per shard) so concurrent settle
+Tx D's carry distinct fee-payers and share zero writable accounts (§6).
+With `num_trees = 1` this collapses to the single-signer case.
 
 ### 4.1 Derivation
 
@@ -270,12 +278,13 @@ The single most important key in this system. It's what
 use dstack_sdk::DstackClient;
 use ed25519_dalek::SigningKey;
 
-pub async fn derive_signer(client: &DstackClient) -> Result<SigningKey> {
+// One signer per shard: path nyx/ed25519-signer/v1/{j}, j ∈ 0..num_trees.
+pub async fn derive_signer(client: &DstackClient, tree_id: u8) -> Result<SigningKey> {
     // dstack returns 32 bytes of deterministic KDF output keyed by
-    // (deployer_id, app_hash, path). Same compose-hash → same bytes.
-    let key_resp = client
-        .get_key(Some("nyx/ed25519-signer/v1".to_string()), None)
-        .await?;
+    // (deployer_id, app_hash, path). Same compose-hash + path → same bytes;
+    // distinct paths → independent keys, so each shard's fee-payer differs.
+    let path = format!("nyx/ed25519-signer/v1/{tree_id}");
+    let key_resp = client.get_key(Some(path), None).await?;
     let seed: [u8; 32] = key_resp.decode_key().try_into()
         .expect("dstack getKey returned non-32-byte material");
 
@@ -292,8 +301,9 @@ pub async fn derive_signer(client: &DstackClient) -> Result<SigningKey> {
 | CVM restart | None. Key is deterministic from the dstack KMS seed. |
 | Hardware migration | None. dstack-kms hands the new host the same seed. |
 | KMS root key share rotation (internal to dstack-kms) | None. Application-level KDF outputs unchanged. |
-| KMS root key full rotation (rare, security incident) | All app keys re-derive. Our signer pubkey changes. Admin multisig must run `set_tee_pubkey` with the new pubkey. |
-| Image upgrade (new compose-hash) | New `app_hash` → KDF emits new seed → new signer pubkey. Admin runs the rotation ceremony before the new image can settle. |
+| KMS root key full rotation (rare, security incident) | All app keys re-derive. All K signer pubkeys change. Admin multisig must run `set_tee_pubkey` with the new K-pubkey set. |
+| Image upgrade (new compose-hash) | New `app_hash` → KDF emits new seeds → new signer pubkeys. Admin runs the rotation ceremony (registers all K) before the new image can settle. |
+| `num_trees` increase | The new shards' signer paths (`…/v1/{j}` for the new j) derive fresh keys; admin registers the expanded K-pubkey set + funds the new fee-payers. |
 | Path change (e.g. `nyx/ed25519-signer/v2`) | Same as image upgrade — but we should bump the path ONLY when we want a clean break, never as a quiet operational reroll. |
 
 ### 4.3 What is NOT used
@@ -505,14 +515,17 @@ A brand-new CVM that just got its dstack keys doesn't have any
 Merkle history. The boot sequence (see §3 step 6) does:
 
 ```
-1. Read VaultConfig once (current_root, leaf_count, deployed_slot).
+1. Read each MerkleTree[j] once (current_root, leaf_count) +
+   VaultConfig (num_trees, deployed/floor slot).
 2. Paginate getSignaturesForAddress(vault_program_id) from
-   deployed_slot forward, in batches of 1000.
+   the floor slot forward, in batches of 1000.
 3. For each tx, parse the leaf-append events emitted by
-   deposit / withdraw / tee_forced_settle_batched.
-4. Replay each leaf into the local Merkle mirror in order.
-5. Stop when local root == VaultConfig.current_root.
+   deposit / withdraw / tee_forced_settle_batched (each carries tree_id).
+4. Replay each leaf into mirrors[tree_id] in order.
+5. Stop when every mirror[j].root() == MerkleTree[j].current_root.
 ```
+
+(With `num_trees = 1` this is the original single-mirror path.)
 
 For ~1 year of mainnet activity this is 30-60 s on cold boot. The
 LUKS snapshot path (warm restart) skips this entirely and replays
@@ -530,17 +543,26 @@ Documented in `docs/tee-api-openapi.yaml`. The shape:
 | `GET /transparency` | <50 ms | Reserves + attestation + 24h stats. Unauthenticated. |
 | WS channel `tree` | push, ~10 ms after on-chain confirm | Live leaf-append events. |
 
-**Status (Phase 2a + 2b, live):** the `MerkleMirror`
-(`crate::merkle::mirror`) + the `/tree/root` (public),
-`/tree/inclusion` + `/tree/leaves` (bearer) endpoints are implemented,
-with byte-parity to `programs/vault/src/merkle.rs` and inclusion proofs
-ported from the SDK's `MerkleShadow`. The cold-boot + live **sync**
-(`crate::merkle::sync`) fills the mirror from on-chain leaf-append
-events — `NoteCreated` (deposit, index+value) and `TradeSettled`
-(settle; indices from the event, values from the settle ix's
-`MatchResultPayload`) — applies them in `leaf_index` order, and
-reconciles `mirror.root()` against `VaultConfig.current_root`
-(best-effort; on-chain stays canonical). Spawned at boot in `main.rs`
+**Status (Phase 2a + 2b, live):** the per-shard `MerkleMirror`
+(`crate::merkle::mirror`, held as `Vec<MerkleMirror>` indexed by
+`tree_id`) + the `/tree/root` (public), `/tree/inclusion` +
+`/tree/leaves` (bearer) endpoints are implemented, with byte-parity to
+`programs/vault/src/merkle.rs` and inclusion proofs ported from the
+SDK's `MerkleShadow`. The `/tree/*` endpoints take an optional
+`?tree_id` (default 0) selecting the shard; `/tree/root` echoes it back,
+and transparency `leaf_count` sums across shards. The cold-boot + live
+**sync** (`crate::merkle::sync`) fills the mirrors from on-chain
+leaf-append events — `NoteCreated` (deposit, index+value) and
+`TradeSettled` (settle; indices from the event, values from the settle
+ix's `MatchResultPayload`), each carrying `tree_id` — routes them to
+`mirrors[tree_id]`, applies them in per-shard `leaf_index` order, and
+reconciles each `mirror.root()` against its `MerkleTree[j].current_root`
+(best-effort; on-chain stays canonical). Reconcile classifies a
+mismatch as **Behind** (mirror lagging on-chain — transient, warns once)
+vs **Diverged** (roots at the same count disagree — a real fault); an
+append-only mirror cannot self-heal from an on-chain `reset_merkle_tree`
+(there is no reset event), so a deliberate tree reset requires a CVM
+cold-boot from the new floor slot. Spawned at boot in `main.rs`
 against the configured cluster. `/instruments` (public market metadata)
 + `/transparency` (public proof-of-reserves — the mirror root/count +
 per-mint on-chain `OutstandingMint.outstanding` vs vault SPL balance +
@@ -555,8 +577,8 @@ This is the critical property that makes TEE-as-indexer
 defensible. **Clients who don't trust the TEE for read queries can
 always:**
 
-- Read `VaultConfig.current_root` directly from Solana (~1 RPC call,
-  trustless).
+- Read `MerkleTree[tree_id].current_root` directly from Solana (~1 RPC
+  call per shard, trustless).
 - Read `NullifierEntry`, `ConsumedNoteEntry`, `NoteLock`,
   `WalletEntry` PDAs directly (one PDA per object, trustless).
 - Re-derive their own Merkle tree from on-chain leaf-append events
@@ -680,7 +702,8 @@ chain for `pyth_at_match` is:
 
 ```
 TEE Ed25519 signature over MatchResultPayload
-   (verified on-chain via vault_config.tee_pubkey,
+   (verified on-chain against vault_config.tee_pubkeys —
+    the signing shard key must be in the registered set,
     rotated only by the multisig per D2)
    ↓
 contains pyth_at_match as a field
@@ -742,36 +765,63 @@ beyond the snapshot.
 
 ## 6. Settle scheduler — the v3.5 batched pipeline, server-side
 
-For each batch with ≥1 real matches, sequentially:
+For each batch with ≥1 real matches:
 
 1. **Pad to N=16**: same logic the SDK's `batched-settle.ts` uses
    today. Real matches first, dummy slots after.
 2. **Generate VALID_MATCH_BATCH Groth16 proof.**
-   - In-process `ark-groth16` against `circuits/build/match_batch_n16/circuit_final.zkey`.
+   - In-process prover against `circuits/build/match_batch_n16/circuit_final.zkey`.
+   - Backend selectable at boot via `NYX_TEE_PROVER` = `ark` (default,
+     `ark-groth16`) | `rapidsnark` (FFI). The image ships both (built
+     `--features rapidsnark`); see §9.4. Both emit byte-identical proofs.
    - The zkey is baked into the Docker image, so its bytes are
      covered by compose-hash.
    - Witness assembly mirrors `packages/sdk/tests/helpers/match-batch-prover.ts`.
 3. **Build `MatchResultPayload` for each real match.**
-   - Same Borsh shape as today (24 fields, 448 bytes).
-   - Same `canonical_payload_hash(payload)` — see CLAUDE.md §6.
-4. **Sign each payload's canonical hash with the Ed25519 signer key.**
-5. **Submit the v3.5 settle pipeline:**
-   - `verify_match_batch(merkle_root, expiry, proof)` — once per batch
-   - Per-batch ALT create + extend (see CRYPTOGRAPHY.md §9)
-   - `tee_forced_settle_batched(payload, match_index, merkle_proof)`
-     — once per real match, fired concurrently
-   - `close_batch_validity_marker(merkle_root)` — once per batch,
-     after all settles confirm
-6. **Update local Merkle mirror** with the new leaves the on-chain
-   handler just appended (we know the leaf hashes ahead of time —
-   compose them locally as the on-chain code does).
+   - Borsh shape `canonical_payload_hash(payload)` — see CLAUDE.md §6.
+   - Each match is round-robined onto an **output shard** `j = idx %
+     num_trees`, paired with the shard's fee-payer key `tee_keypairs[j]`
+     (§4, §8). The continuation/change note inherits the same shard so
+     the re-lock targets the right `merkle_tree[j]`.
+4. **Sign each payload's canonical hash** with that shard's Ed25519
+   signer key (`tee_keypairs[j]`, which is also the tx fee-payer and the
+   `tee_authority` — one key, three roles, no extra signature).
+5. **Submit the v3.5 settle pipeline (concurrent throughout):**
+   - **Tx A — lock**: the per-match input-note locks, two-pass
+     (build/sign sequentially off a shared blockhash, then send all
+     **concurrently**) so 32 locks confirm in ~one block window instead
+     of serially. Each lock reads its note's shard `merkle_tree[tree_id]`.
+   - **Tx B — `verify_match_batch(merkle_root, expiry, proof)`** — once
+     per batch.
+   - **Tx C — per-batch ALT create + chunked extend**: the per-batch ALT
+     now holds 9 PDAs/match (locks + consumed + nullifier + marker), so
+     the extend is **chunked** (`MAX_EXTEND_ADDRESSES = 25`) and the
+     chunks fired **concurrently**; the worker re-reads the ALT's
+     canonical on-chain address order before building any settle tx (see
+     CRYPTOGRAPHY.md §9). A rolling ALT pool (`settle/alt_pool.rs`)
+     recycles tables past the 512-slot deactivation cooldown.
+   - **Tx D — `tee_forced_settle_batched(tree_id, payload, match_index,
+     merkle_proof)`** — once per real match, all fired **concurrently**
+     (bounded by `NYX_TEE_SETTLE_SEND_CONCURRENCY`, default 16). Because
+     each carries a distinct `(tee_keypairs[j], merkle_tree[j])`, the
+     concurrent Tx D's share **zero** writable accounts, so the leader
+     co-includes them in one block instead of spreading them across
+     slots (the single-tree, single-fee-payer plateau).
+   - **Tx E — `close_batch_validity_marker(merkle_root)`** — once per
+     batch, after all settles confirm.
+6. **Update the local Merkle mirrors** — route each appended leaf to
+   `mirrors[tree_id]` (we know the leaf hashes ahead of time — compose
+   them locally as the on-chain code does). §8.
 7. **Mark `batch_id` settled** in the in-memory ledger; emit on
    `settlement` WS channel.
 
-This is exactly the path `packages/sdk/tests/helpers/batched-settle.ts`
-implements today — we move it server-side, swap snarkjs for
-`ark-groth16` (same proving key, byte-identical proofs), and the
-on-chain handler doesn't notice the difference.
+This is the server-side evolution of the path
+`packages/sdk/tests/helpers/batched-settle.ts` implements: moved
+in-enclave, snarkjs swapped for the in-process backend, and the whole
+lock→extend→settle pipeline restructured from serial awaits to
+concurrent sends + tree-sharded fee-payers. The residual latency tail is
+ALT-activation finality (~1 slot), not darkpool compute — it closes
+under Alpenglow sub-second finality, not via code here.
 
 ---
 
@@ -787,19 +837,20 @@ When we ship a new version (new `compose-hash`):
 3. Phala Cloud deploys the new image. Old CVM continues running
    under the old compose-hash (Phala supports rolling deploys).
 4. New CVM boots:
-     • dstack-kms derives a NEW Ed25519 seed (because app_hash is
-       in the KDF input).
-     • New CVM's pubkey is different from the on-chain
-       vault_config.tee_pubkey.
-     • New CVM exposes the new pubkey via GET /attestation.
+     • dstack-kms derives K NEW Ed25519 seeds (because app_hash is
+       in the KDF input) — one per shard path …/v1/{j}.
+     • The new CVM's K shard pubkeys differ from the on-chain
+       vault_config.tee_pubkeys set.
+     • New CVM exposes all K pubkeys via GET /attestation + /info.
 5. Admin (one signer of the 3-of-5 multisig):
      • Fetches the new attestation: curl https://api.nyx.example.com/attestation
      • Verifies the quote off-chain:
          docker run -p 8080:8080 dstacktee/dstack-verifier:latest &
          curl -d @quote.json localhost:8080/verify | jq
      • Confirms compose-hash in event_log matches expected.
-     • Constructs set_tee_pubkey(new_pubkey) tx; posts to Squads as a
-       proposal.
+     • Constructs set_tee_pubkey([k0..k_{K-1}]) tx (registers the whole
+       new K-key set in one ix); posts to Squads as a proposal. Funds
+       each new shard fee-payer.
 6. Other multisig signers independently repeat step 5's verification.
 7. Three signatures collected → multisig executes set_tee_pubkey on
    the vault.
@@ -818,12 +869,22 @@ multisig honestly ran step 5." Future v3 work (§9) closes that.
 The TEE's authoritative state at any moment:
 
 - **Open orders + book structure** (≪50 MB per market).
-- **Merkle leaves seen** (32 B × leaf_count; grows ~1 leaf per match
-  pair → ~50 MB after 1.5M trades).
+- **K Merkle-leaf mirrors** — one `MerkleMirror` per shard
+  (`Vec<MerkleMirror>`, indexed by `tree_id`). The on-chain tree is
+  split into `num_trees` per-shard `MerkleTree` accounts; the sync
+  routes each appended leaf (`NoteCreated`/`TradeSettled`, now carrying
+  `tree_id`) to `mirrors[tree_id]`, and reconcile compares each
+  `mirror.root()` against its `MerkleTree[j].current_root`. 32 B ×
+  total leaf_count; transparency `leaf_count` = sum across shards.
+- **K Ed25519 signer keys** — `tee_keypairs[0..num_trees]`, derived from
+  indexed dstack paths `nyx/ed25519-signer/v1/{0..K-1}` (§4). Each is a
+  shard fee-payer / `tee_authority` / settle-signer.
 - **Settle outbox** — pending L1 txs that haven't confirmed yet,
   needed for crash-recovery so we don't double-submit.
-- **Per-batch ALT lookup** — `batch_id → ALT pubkey` mapping for
-  in-flight settles.
+- **Per-batch ALT pool** — a rolling pool of per-batch ALTs
+  (`settle/alt_pool.rs`) recycled past the 512-slot deactivation
+  cooldown, plus the `batch_id → ALT pubkey` mapping for in-flight
+  settles.
 
 Persistence strategy (Phase 1):
 
@@ -929,27 +990,32 @@ workspace. Decision recorded in PR 4g.4b's task.
   published zkTLS-in-CPU-TEE was 3.78x — Groth16 should be similar
   or better, since it's smaller and has tighter memory patterns.)
 
-### 9.4 Perf-swap fallback (deferred — gated on the §9.3 benchmark)
+### 9.4 Perf-swap — rapidsnark backend (LANDED), and what's left
 
-If the post-cutover CVM benchmark misses the 3× bound OR shows
-VALID_MATCH_BATCH proving exceeding the matching-cadence budget
-(`BATCH_MS`, D5), swap the prover internals — **NOT** the trait
-surface:
+The prover backend is selectable at boot via `NYX_TEE_PROVER` = `ark`
+(default) | `rapidsnark`, behind the same `Prover` trait — the swap is
+internal, the trait surface unchanged.
 
-- **Option A: rapidsnark via FFI** (`rust-rapidsnark` +
-  `circom-witness-rs` for the witness). ~5-10× faster than
-  ark-groth16 for the same circuit. Cost: a C++ build pipeline
-  inside the Docker image, which widens the compose-hash + audit
-  surface.
-- **Option B: external-prover design.** TEE signs the public-input
-  hash, a sidecar generates the proof, the vault verifies both.
-  The external prover sees the witness, but the witness is mostly
-  already-public-after-settle info anyway.
+- **Option A — rapidsnark via FFI (LANDED).** The image is built
+  `--features rapidsnark` and ships **both** backends, so the same image
+  + instance can A/B-prove by flipping one env var. The C++ build
+  pipeline does widen the compose-hash + audit surface — that's the cost
+  we accepted. **Measured result:** the real lever is **vCPU count**,
+  not the backend — rapidsnark is ~**1.4×** ark on an 8-vCPU CVM (not
+  the 5-10× the single-thread literature suggests), and on 1 vCPU the
+  two are close. A full ark/rapidsnark × 1/8-vCPU table is in the
+  `rapidsnark-ab-results` engineering note. Net: proving (~4-5 m/s) is
+  now the throughput ceiling — on-chain settle (post tree-sharding) is
+  no longer the bottleneck.
+- **Option B — external-prover design (still deferred).** TEE signs the
+  public-input hash, a sidecar generates the proof, the vault verifies
+  both. The external prover sees the witness, but the witness is mostly
+  already-public-after-settle info anyway. Deferred: we don't pay the
+  external-prover trust-surface cost yet.
 
-Both are deliberately deferred: we don't pay rapidsnark's
-build-complexity cost (or the external-prover trust-surface cost)
-until a measured number on real TDX hardware justifies it. The
-roadmap row is "In-TEE prover perf swap" in
+Pushing total throughput past the ~5 m/s prover ceiling now needs
+prover-hardware scaling (more vCPUs / GPU / multi-TEE), a separate
+track. The roadmap row is "In-TEE prover perf swap" in
 `docs/site/09-roadmap-and-status.md` § Near-term.
 
 ---

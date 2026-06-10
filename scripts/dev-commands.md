@@ -34,6 +34,33 @@ cd /path/to/repo/root
 >    (`verifyFillMemo` runs the integrity check, then store the change note).
 >    `cvm-settle-e2e.test.ts` is wired to this shape.
 
+> **⚠️ tree-sharding (settle-throughput scaling) — read before any K>1 run.**
+> The Merkle-tree STATE was split out of `VaultConfig` into **K per-shard
+> `MerkleTree` accounts** (PDA `[b"merkle_tree", &[tree_id]]`). The settle worker
+> derives **K fee-payer keys** (`nyx/ed25519-signer/v1/{0..K-1}`) and
+> round-robins each match across `(key[j], merkle_tree[j])` so the concurrent
+> settle Tx D's share no writable account → the leader co-includes them in one
+> block (8-match → 1 slot, vs the single-tree ~3/slot plateau). Operational
+> consequences:
+>
+> 1. **`leaf_count` moved.** It is NO LONGER in `vault_config` (old offset 104);
+>    it's a `u64` at offset **8** of each `MerkleTree[tree_id]` account
+>    (`current_root` at offset **16**). Per-shard; the pool total is the SUM.
+> 2. **Every leaf-touching ix gained a `tree_id` (first arg) + the
+>    `merkle_tree[tree_id]` account.** `vault_config` is read-only on the settle
+>    hot path. `tee_pubkey` → `tee_pubkeys[16]` + `num_tee_keys`;
+>    `set_tee_pubkey` now installs a `Vec<Pubkey>`. New ixs: `initialize_tree`,
+>    and (devnet-only) `close_vault_config` for the layout migration.
+> 3. **A `VaultConfig` layout change needs `close_vault_config` BEFORE re-init.**
+>    A program upgrade leaves the old-layout PDA in place (wrong size → every ix
+>    fails `ConstraintSeeds`, and `initialize`'s `init` can't recreate it). Run
+>    `node scripts/close-vault-config.mjs` once, then `devnet-setup` rebuilds it.
+> 4. **Config is `NYX_TEE_NUM_TREES` (CVM) / `NYX_NUM_TREES` (devnet-setup),
+>    default 1.** Keep it at 1 for a single-shard run; set both to the same K
+>    (e.g. 4) for the sharded path. New scripts: `fund-tee-keys.mjs` (fund the K
+>    signers), `close-vault-config.mjs`; `reset-merkle-tree.mjs` takes
+>    `--all`(default)/`--tree <id>`; `rotate-tee-pubkey.mjs` registers all K.
+
 **Contents**
 - §0 One-time setup
 - §1 Unit + integration tests (no devnet, no CVM)
@@ -55,7 +82,7 @@ cd /path/to/repo/root
 ```sh
 npm install                                            # SDK + snarkjs + circomlib
 bash scripts/download-ptau.sh                          # pot16 (~80 MB) + pot18 (~288 MB)
-bash scripts/build-circuits.sh                         # compile 6 circom circuits; writes vk_*.rs
+bash scripts/build-circuits.sh                         # compile 8 circom circuits; writes vk_*.rs
 cargo build --examples -p darkpool-crypto              # TS↔Rust parity helper binaries
 cargo build-sbf --manifest-path programs/vault/Cargo.toml          # BPF (litesvm + deploy)
 ```
@@ -90,11 +117,17 @@ cargo test -p vault                               # vault unit + litesvm integra
 # Key litesvm integration files (need `cargo build-sbf` first)
 cargo test -p vault --test zk_roundtrip                       # VALID_WALLET_CREATE on-chain verify
 cargo test -p vault --test zk_spend_roundtrip                 # VALID_SPEND + Merkle parity
-cargo test -p vault --test set_tee_pubkey                     # admin-gated tee_pubkey rotation
-cargo test -p vault --test tee_forced_settle_batched          # 1:N marker lifecycle (shared marker)
+cargo test -p vault --test merge_verify                       # VALID_MERGE(K=2/4) verify roundtrip
+cargo test -p vault --test set_tee_pubkey                     # admin-gated tee_pubkeys (Vec) rotation
+cargo test -p vault --test tee_forced_settle_batched          # 1:N marker + sharding (distinct-shard / multi-key auth / per-shard reset)
 cargo test -p vault --test match_batch_verify                 # N=16 VALID_MATCH_BATCH verify (committed proof fixture)
 cargo test -p vault --test user_commitment_registration       # WalletEntry registration
 cargo test -p vault --test set_protocol_config
+
+# Tree-sharding litesvm coverage lives in tee_forced_settle_batched.rs:
+#   test_settles_to_distinct_shards_advance_independently       (round-robin output shards)
+#   test_settle_signed_by_registered_key_succeeds_unregistered_fails  (K-key authorized set)
+#   test_reset_one_shard_leaves_others_untouched                (per-shard reset)
 
 # Single test by substring
 cargo test -p vault canonical_payload_hash_fixed_vector
@@ -193,8 +226,9 @@ echo "ALL GREEN — safe to push"
 ## 3. Circuits (circom / snarkjs)
 
 ```sh
-bash scripts/build-circuits.sh                    # compile all 6, run ceremony, write vk_*.rs
+bash scripts/build-circuits.sh                    # compile all 8, run ceremony, write vk_*.rs
 ls circuits/build/match_batch_n16/                # the production N=16 batched-validity circuit
+ls circuits/build/valid_merge_k2 valid_merge_k4   # in-pool note merge (K=2/4)
 
 # Regenerate just the Rust VK consts (if you tweaked the parser)
 node scripts/parse-vk-to-rust.js \
@@ -257,19 +291,28 @@ place). Run `cargo build-sbf` first if you touched a program.
 ### 4.4 Fresh devnet state — `devnet-setup.test.ts`
 
 This is the canonical "start clean" step. It: creates a **fresh BASE +
-QUOTE SPL mint pair**, `vault::initialize`, **`reset_merkle_tree`**,
+QUOTE SPL mint pair**, `vault::initialize(numTrees)`, loops
+**`initialize_tree(j)`** for j∈0..K, **`reset_merkle_tree(j)`** per shard,
 `set_protocol_config` (owner commitment + 30 bps fee), creates the **static
-settle ALT** (the `settleLookupTable` the CVM needs), and writes everything
-to **`.devnet/e2e-config.json`** (mints, settle ALT, protocol config).
+settle ALT** (`[vault_config, sysvar, system, merkle_tree(0..K-1)]` — the
+`settleLookupTable` the CVM needs), and writes everything to
+**`.devnet/e2e-config.json`** (mints, settle ALT, protocol config,
+**`numTrees`**, **`merkleTreePdas[]`**).
 
 ```sh
 SOLANA_RPC_URL="$HELIUS" \
 RUN_DEVNET_E2E=1 \
+  NYX_NUM_TREES=4 \                                # shard count (default 1); must equal the CVM's NYX_TEE_NUM_TREES
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
   ROOT_KEY_KEYPAIR=.devnet/keypairs/root_key.json \
   bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-setup.test.ts'
 ```
+
+> **Layout migration.** If you redeployed a `VaultConfig` layout change (e.g.
+> the tree-sharding split) over an existing init, `initialize`'s `init` fails
+> (the old PDA exists, wrong size). Run `node scripts/close-vault-config.mjs`
+> (admin-gated, devnet-only) ONCE first, then `devnet-setup` rebuilds it fresh.
 
 Run it: **the first time**, **after `change the mints`** (§4.6), or whenever
 the SDK shadow tree drifts (`StaleMerkleRoot 6004`).
@@ -281,11 +324,14 @@ only need the reset, not a full setup:
 
 ```sh
 SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-  node scripts/reset-merkle-tree.mjs
+  node scripts/reset-merkle-tree.mjs                 # --all (default): reads num_trees, resets every shard
+# or a single shard:
+SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+  node scripts/reset-merkle-tree.mjs --tree 2
 ```
 
-(`devnet-setup.test.ts` also resets; this script is the standalone fast
-path — see `scripts/reset-merkle-tree.mjs`.)
+(`devnet-setup.test.ts` also resets every shard; this script is the standalone
+fast path — see `scripts/reset-merkle-tree.mjs`.)
 
 ### 4.6 Changing the market mints
 
@@ -386,6 +432,9 @@ NYX_TEE_QUOTE_MINT=$QUOTE
 NYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 NYX_TEE_FEE_RATE_BPS=30
 NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
+NYX_TEE_NUM_TREES=4                              # shard count; MUST equal e2e-config numTrees (1 = single-shard)
+NYX_TEE_SETTLE_SEND_CONCURRENCY=16               # concurrent settle Tx D's (co-inclusion lever)
+NYX_TEE_PROVER=ark                               # ark (default) | rapidsnark (both ship in the image)
 EOF
 # ... deploy ... then:
 shred -u /tmp/nyx.env
@@ -401,26 +450,39 @@ Every CVM env var (`crates/nyx-tee/src/config.rs`):
 | `NYX_TEE_SETTLE_LOOKUP_TABLE` | settle worker | the `settleLookupTable` ALT. Without it the settle v0 tx exceeds 1232 B. |
 | `NYX_TEE_FEE_RATE_BPS` | matcher | default 30. Empty → 30. 0 = fees off. Charged on BOTH legs → 2 fee notes. |
 | `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` | matcher fee notes | 32-byte hex. Owner the fee notes mint to. Fees-on **without** it → a startup WARN (fees unclaimable). |
+| `NYX_TEE_NUM_TREES` | settle worker + K mirrors | shard count (1..=16, default 1). MUST equal the on-chain `num_trees` (`e2e-config.numTrees`). K>1 derives K fee-payer keys + K mirrors. |
+| `NYX_TEE_SETTLE_SEND_CONCURRENCY` | settle worker | max settle Tx D's (+ lock txs + ALT extends) fired CONCURRENTLY (default 16). Lets the leader co-include them in one block. |
+| `NYX_TEE_PROVER` | prover | `ark` (default) \| `rapidsnark`. The image ships both (`--features rapidsnark`); flip to A/B prove on the SAME image (no rebuild). |
 | `NYX_TEE_FEED_IDS` | oracle | Pyth Hermes SOL/USD id (set literally in the compose). |
 
 A **malformed** (non-empty) value now **fails startup** (config fail-fast);
 an **empty** `${VAR}` falls back to the default.
 
-### 5.4 Rotate `vault.tee_pubkey` to the CVM signer + fund it (one-time per CVM)
+### 5.4 Register the CVM's K signer(s) in `vault.tee_pubkeys` + fund them
 
-Every TEE-authority ix gates on `tee_authority == vault_config.tee_pubkey`.
-A new CVM (new app_id) has a new dstack signer, so rotate the vault to it and
-fund it. The signer is deterministic per app_id → this survives stop/start;
-only redo it for a brand-new app_id.
+Every TEE-authority ix gates on `tee_authority ∈ vault_config.tee_pubkeys`.
+A new CVM (new app_id) derives new dstack signers, so register them and fund
+each. Each is the fee-payer for the settle Tx D's it pays, so ALL K need SOL.
+Signers are deterministic per app_id → survives stop/start; redo only for a
+brand-new app_id (or a new K).
+
+With **K=1** (single shard) the CVM derives one signer; with **K>1** it derives
+K (`nyx/ed25519-signer/v1/{0..K-1}`), logged at boot as
+`derived K-shard TEE signer set … shard_pubkeys=[…]` (also `GET /info`).
 
 ```sh
-SIGNER=$(curl -s "$GW/info" | jq -r .tee_pubkey)
-# Rotate vault.tee_pubkey -> the CVM signer (admin-gated set_tee_pubkey):
+# Grab the K shard signers from the CVM boot log (shard order matters: key[j]
+# settles shard j):
+phala cvms logs "$CVM" | grep "derived K-shard TEE signer set"
+K0=…; K1=…; K2=…; K3=…
+
+# Install the FULL authorized set (admin-gated set_tee_pubkey(Vec<Pubkey>)):
 SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-  node scripts/rotate-tee-pubkey.mjs "$SIGNER"
-# Fund the signer (it's also the Solana fee-payer). solana transfer, NOT airdrop:
-solana transfer "$SIGNER" 2 --from ~/.config/solana/id.json \
-  --url devnet --allow-unfunded-recipient
+  node scripts/rotate-tee-pubkey.mjs $K0 $K1 $K2 $K3      # one key still works for K=1
+
+# Fund each shard signer (default 2 SOL/key; idempotent, skips if already ≥target):
+SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
+  node scripts/fund-tee-keys.mjs $K0 $K1 $K2 $K3
 ```
 
 ---
@@ -469,14 +531,35 @@ price improvement), and **both fee notes** (`note_fee_base` +
 `NYX_CVM_PRICE` (override the Hermes anchor), `NYX_CVM_FEE_RATE_BPS` (must
 match the CVM's `NYX_TEE_FEE_RATE_BPS`), `NYX_CVM_SETTLE_TIMEOUT_MS`.
 
-**Confirm on-chain afterwards** (leaf_count is a u64 at offset 104 of
-`vault_config`):
+**Confirm on-chain afterwards** (post-sharding `leaf_count` is a u64 at offset
+**8** of each `MerkleTree[tree_id]` account — NOT `vault_config`; deposits go to
+shard 0, settle outputs round-robin so sum across shards for the pool total):
 
 ```sh
-node -e 'import("@solana/web3.js").then(async ({Connection,PublicKey})=>{const c=new Connection(process.env.SOLANA_RPC_URL,"confirmed");const[p]=PublicKey.findProgramAddressSync([Buffer.from("vault_config")],new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"));const i=await c.getAccountInfo(p);console.log("leaf_count",new DataView(i.data.buffer,i.data.byteOffset+104,8).getBigUint64(0,true))})' 
+node -e 'import("@solana/web3.js").then(async ({Connection,PublicKey})=>{const c=new Connection(process.env.SOLANA_RPC_URL,"confirmed");const P=new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");const[t0]=PublicKey.findProgramAddressSync([Buffer.from("merkle_tree"),Buffer.from([0])],P);const i=await c.getAccountInfo(t0);console.log("shard0 leaf_count",new DataView(i.data.buffer,i.data.byteOffset+8,8).getBigUint64(0,true))})'
 ```
 
 **Teardown:** `phala cvms stop "$CVM"` + `shred -u /tmp/nyx.env`.
+
+### 6.2 Multi-match settle profiler — `cvm-multimatch-settle.test.ts`
+
+The throughput profiler: deposits **M** crossing pairs and submits them
+together so the CVM settles a multi-match batch, then reads the **co-inclusion**
+(`distinct_slots`) + per-stage timing from the CVM logs. With K=4 shards, an
+8-match batch confirms all 8 settles in **one slot** (8× co-inclusion vs the
+single-tree ~2.67×). Same real-mint regime as §6.
+
+```sh
+# Reset all shards first (the test asserts trees start empty), then:
+RUN_CVM_E2E=1 NYX_CVM_MATCHES=16 NYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+  FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+  bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-multimatch-settle.test.ts'
+
+# Read the levers from the CVM logs:
+phala cvms logs "$CVM" | grep -E "settle co-inclusion|settle pipeline timing"
+#   distinct_slots = blocks the settles spanned (co-inclusion = n ÷ distinct_slots)
+#   lock_ms / prove_ms / alt_tx_ms / settle_ms = per-stage wall time
+```
 
 ### 6.1 Validate fills delivery — the off-TEE indexer + per-account WS
 
@@ -648,7 +731,12 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | Settle: `InvalidMarkerExpiry (6018)` | marker expiry outside `clock.slot < e <= clock.slot+300` | margin is 250 in the worker; ensure the CVM's RPC slot is fresh (slot poller) |
 | Settle: `<slot> is not a recent slot` (CreateLookupTable) | ALT `recent_slot` ahead of the simulating replica | the worker backs off 32 slots; transient — retry |
 | Settle: `did not confirm … [None]` | ALT not active yet, or tx dropped | the worker waits a slot + rebroadcasts; a hard timeout now errors `AltNotActive` (retryable) |
-| Settle: `Transaction too large: …` | settle v0 tx > 1232 B | ensure `NYX_TEE_SETTLE_LOOKUP_TABLE` is set (static ALT stacked) |
+| Settle: `Transaction too large: …` (settle Tx D) | settle v0 tx > 1232 B | ensure `NYX_TEE_SETTLE_LOOKUP_TABLE` is set (static ALT stacked). The per-batch ALT now also hoists the consumed/nullifier PDAs; the worker logs the inline-account breakdown on overflow. |
+| Settle: `Transaction too large: …5224 B…` (ALT extend) | per-batch ALT extend not chunked for a big batch | fixed: extends chunk at ≤25 addr/tx + fire concurrently (image ≥ `tee-v3-hardening-26`) |
+| Settle stage ~13s wall despite co-inclusion | per-batch ALT activation finality wait (Tx D rebroadcasts until the freshly-extended ALT is loadable) | inherent pre-Alpenglow; concurrent extends collapse it to ONE activation window |
+| All ixs fail `ConstraintSeeds (2006)` after a redeploy | old-layout `VaultConfig` PDA (size/offset mismatch) | `node scripts/close-vault-config.mjs` then `devnet-setup` (§4.4) |
+| Settle signed by an unregistered key → `Unauthorized` | the CVM's K shard signers aren't all registered | `rotate-tee-pubkey.mjs <K0..Kn>` (the full set); `fund-tee-keys.mjs` |
+| `merkle reconcile DIVERGED` in CVM logs | trees reset on-chain underneath the append-only mirror (dev resets without CVM restart) | cosmetic for settle; restart the CVM (or bump `NYX_TEE_SYNC_FROM_SLOT`). Logged once per shard. |
 | Matcher: `conservation broken … in=N out=N+fee` | order under-collateralized for its own fee | each side must lock `nominal + fee` (intake derives this; the e2e harness `withFee()` + loadgen do too) |
 | `phala deploy` didn't pick up code changes | same image tag (cached) | bump `tee-v3-hardening-N`, push the tag, rebuild (§5.1) |
 | Auth: 401 after a CVM restart | runtime-registered account lost (persistence volume perms) | use the env bootstrap admin; check `NYX_TEE_STATE_DIR` is a writable volume |
@@ -668,11 +756,13 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | Pyth Hermes SOL/USD feed id | `ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
 | Placeholder dev mints | base `[1,0…,0xb1]`, quote `[1,0…,0x9e]` (loadgen regime) |
 | Test keypair dir (gitignored) | `.devnet/keypairs/` |
-| Runtime config (gitignored) | `.devnet/e2e-config.json` |
-| Helper scripts | `scripts/reset-merkle-tree.mjs`, `scripts/rotate-tee-pubkey.mjs`, `scripts/setup-devnet.sh`, `scripts/deploy-devnet.sh` |
+| Runtime config (gitignored) | `.devnet/e2e-config.json` (now incl. `numTrees` + `merkleTreePdas[]`) |
+| Merkle-tree shard PDA | `[b"merkle_tree", &[tree_id]]` under the vault program |
+| Helper scripts | `reset-merkle-tree.mjs` (`--all`/`--tree`), `rotate-tee-pubkey.mjs` (Vec), `fund-tee-keys.mjs`, `close-vault-config.mjs`, `setup-devnet.sh`, `deploy-devnet.sh` |
 
-`leaf_count` is a `u64` at byte offset **104** of the `vault_config`
-account; `current_root` is the 32 bytes at offset **112**.
+Post-sharding, `leaf_count` is a `u64` at byte offset **8** of each
+`MerkleTree[tree_id]` account; `current_root` is the 32 bytes at offset **16**.
+(The old `vault_config` offsets 104/112 are gone — the tree state moved out.)
 
 ---
 

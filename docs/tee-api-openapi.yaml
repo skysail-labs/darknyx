@@ -29,9 +29,10 @@ openapi: 3.1.0
 #     + `close_batch_validity_marker` to L1. Settlement is async;
 #     clients poll `/settlement/status/{batchId}` or subscribe to the
 #     WS settlement channel.
-#   * Tree state: the TEE mirrors `VaultConfig.current_root` + the
-#     full leaf set in-memory. `/tree/*` endpoints replace the SDK's
-#     `MerkleShadow` rebuild.
+#   * Tree state: the TEE mirrors each `MerkleTree[tree_id].current_root`
+#     + the full per-shard leaf set in-memory (K mirrors under
+#     tree-sharding). `/tree/*` endpoints replace the SDK's
+#     `MerkleShadow` rebuild and take an optional `?tree_id` (default 0).
 #   * Transparency: `/transparency` is unauthenticated. Anyone can
 #     verify reserves + attestation + aggregate stats.
 #
@@ -273,7 +274,14 @@ components:
           description: Hex hash of the running dstack OS image.
         tee_pubkey:
           type: string
-          description: Base58 Ed25519 pubkey (same as in AttestationQuote).
+          description: |
+            Base58 Ed25519 pubkey (same as in AttestationQuote). This is
+            the PRIMARY (shard-0) signer. Under tree-sharding the TEE
+            derives K = num_trees signer keys (paths
+            nyx/ed25519-signer/v1/{0..K-1}); all K are registered in the
+            on-chain `vault_config.tee_pubkeys` set via one
+            `set_tee_pubkey` rotation, and each is a shard settle
+            fee-payer. The attestation report-data binds this primary key.
         nyx_version:
           type: string
           description: Semver tag of the nyx-tee build (e.g. v0.4.2).
@@ -556,19 +564,26 @@ components:
       type: object
       required: [merkle_root, leaf_count, on_chain_slot]
       properties:
+        tree_id:
+          type: integer
+          default: 0
+          description: |
+            Which Merkle shard this root is for (echoes the request's
+            `?tree_id`, default 0). Present under tree-sharding.
         merkle_root:
           type: string
           description: |
-            Current Merkle root, hex-encoded. Must equal on-chain
-            `VaultConfig.current_root` (or be present in the
-            32-root ring buffer).
+            Current Merkle root of shard `tree_id`, hex-encoded. Must
+            equal on-chain `MerkleTree[tree_id].current_root` (or be
+            present in that shard's 32-root ring buffer).
         leaf_count:
           type: integer
+          description: Leaf count of this shard.
         on_chain_slot:
           type: integer
           description: |
-            Solana slot at which the TEE last synced its mirror
-            from on-chain `VaultConfig`.
+            Solana slot at which the TEE last synced this shard's mirror
+            from on-chain `MerkleTree[tree_id]`.
 
     InclusionProof:
       type: object
@@ -598,8 +613,15 @@ components:
           type: object
           required: [merkle_root, leaf_count, per_mint]
           properties:
-            merkle_root: { type: string }
-            leaf_count: { type: integer }
+            merkle_root:
+              type: string
+              description: |
+                Shard-0 root for back-compat. Under tree-sharding each
+                shard has its own root; read per-shard via
+                `/tree/root?tree_id=`.
+            leaf_count:
+              type: integer
+              description: Total leaves SUMMED across all `num_trees` shards.
             per_mint:
               type: array
               items:
@@ -1069,14 +1091,25 @@ paths:
         Current Merkle root + leaf count.
       description: |
         Convenience read served by the TEE's in-memory Merkle mirror.
-        Eventually-consistent with on-chain VaultConfig.current_root
-        (lags by ~1-2 slots after each settle confirms).
+        Eventually-consistent with the on-chain
+        MerkleTree[tree_id].current_root (lags by ~1-2 slots after each
+        settle confirms).
+
+        Under tree-sharding the on-chain tree is split into `num_trees`
+        per-shard `MerkleTree` accounts; pass `?tree_id` to select a
+        shard (default 0). The response echoes the `tree_id` it served.
 
         Trustless fallback: clients who don't trust the TEE for read
-        queries can fetch VaultConfig directly from Solana RPC and
-        recompute / verify on their own. /tree/root is a fast happy
+        queries can fetch MerkleTree[tree_id] directly from Solana RPC
+        and recompute / verify on their own. /tree/root is a fast happy
         path, not a trust layer. See docs/tee-architecture.md §5.5
         and docs/tee-attestation-flow.md §10.
+      parameters:
+        - name: tree_id
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+          description: Which Merkle shard to read (0..num_trees-1). Default 0.
       responses:
         '200':
           description: Tree root snapshot.
@@ -1096,10 +1129,10 @@ paths:
 
         The TEE-served inclusion proof is verifiable: re-hash the
         leaf + siblings up to the returned merkle_root, compare
-        against on-chain VaultConfig.current_root, accept the proof
-        only if both match. The TEE cannot lie about an inclusion
-        proof without the client detecting it on Solana — so this is
-        a fast convenience read, not a trust assertion.
+        against the on-chain MerkleTree[tree_id].current_root, accept
+        the proof only if both match. The TEE cannot lie about an
+        inclusion proof without the client detecting it on Solana — so
+        this is a fast convenience read, not a trust assertion.
       security: [{ BearerAuth: [] }]
       parameters:
         - name: commitment
@@ -1107,6 +1140,11 @@ paths:
           required: true
           schema: { type: string }
           description: 32-byte hex note commitment.
+        - name: tree_id
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+          description: Which Merkle shard the commitment lives in. Default 0.
       responses:
         '200':
           description: Inclusion proof.
@@ -1135,9 +1173,14 @@ paths:
           in: query
           required: true
           schema: { type: integer }
+        - name: tree_id
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+          description: Which Merkle shard to page (0..num_trees-1). Default 0.
       responses:
         '200':
-          description: Leaves in [from, to).
+          description: Leaves in [from, to) on the selected shard.
           content:
             application/json:
               schema:
@@ -1478,14 +1521,15 @@ x-implementation-notes:
     on-chain settle chain (verify → settles → close) finalizes.
 
   tree_consistency: |
-    `/tree/root` returns the TEE's current view, which is
-    eventually consistent with on-chain `VaultConfig.current_root`
-    (lags by ~1-2 slots after each settle confirms). For
-    correctness-critical reads (e.g. just before building a
-    VALID_SPEND proof), clients should call /tree/root, take the
-    root value, build the proof against THAT specific root, and
-    submit `withdraw` referencing the same root. The on-chain
-    handler accepts any root within the 32-slot ring buffer.
+    `/tree/root?tree_id=` returns the TEE's current view of that
+    shard, eventually consistent with the on-chain
+    `MerkleTree[tree_id].current_root` (lags by ~1-2 slots after each
+    settle confirms). For correctness-critical reads (e.g. just before
+    building a VALID_SPEND proof), clients should call /tree/root for
+    the shard the note lives in, take the root value, build the proof
+    against THAT specific root, and submit `withdraw` referencing the
+    same root + tree_id. The on-chain handler accepts any root within
+    that shard's 32-slot ring buffer.
 
   rate_limits: |
     Per-account weighted action cost model — order placement

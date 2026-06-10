@@ -17,16 +17,21 @@ VM (a "CVM") on Phala Cloud**. Three layers:
 
 * **L1 (Solana)** — `programs/vault/` is the only on-chain program
   (Anchor 0.32). It owns custody, the incremental Merkle tree of note
-  commitments, the nullifier / consumed-note sets, the Groth16 verifier,
-  and the **atomic batched settlement** path
+  commitments (now **sharded into K per-shard `MerkleTree` accounts** —
+  `VaultConfig` holds the global state incl. the K-key `tee_pubkeys` set
+  + `num_trees`), the nullifier / consumed-note sets, the Groth16
+  verifier, the **note-merge** path (`merge`, VALID_MERGE K=2/4), and the
+  **atomic batched settlement** path
   (`lock_note → verify_match_batch → tee_forced_settle_batched →
-  close_batch_validity_marker`, N=16 matches per batch). Devnet program
-  id: `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`.
+  close_batch_validity_marker`, N=16 matches per batch, `tree_id`-routed).
+  Devnet program id: `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`.
 * **TEE (`crates/nyx-tee/`)** — the in-enclave engine. It owns hidden
   order intake (`POST /orders`), uniform-clearing-price matching, the
-  full settle pipeline (lock → prove N=16 VALID_MATCH_BATCH → verify →
-  per-batch ALT → `tee_forced_settle_batched` → close, signed by its
-  dstack-derived Ed25519 key), a Merkle-mirror indexer, the per-order
+  full settle pipeline (lock → prove N=16 VALID_MATCH_BATCH [ark or
+  rapidsnark backend, `NYX_TEE_PROVER`] → verify → per-batch ALT →
+  `tee_forced_settle_batched` → close, **concurrent sends round-robined
+  across K shard fee-payer keys + K trees** so the leader co-includes a
+  batch's settles in one block), K Merkle-mirror indexers, the per-order
   continuation **anchor pool**, and the auth'd HTTP/WS surface. Order
   intent never touches an L1 tx; the enclave drives the vault settle ixs
   directly.
@@ -105,7 +110,7 @@ Everything runs from the repo root.
 ```sh
 npm install                                        # SDK + snarkjs + circomlib
 bash scripts/download-ptau.sh                      # pot16 (~80 MB) + pot18 (~288 MB)
-bash scripts/build-circuits.sh                     # compile all 6 circom circuits;
+bash scripts/build-circuits.sh                     # compile all 8 circom circuits;
                                                    #   regenerates vk_*.rs Rust consts
 cargo build --examples -p darkpool-crypto          # TS↔Rust parity helper binaries
 ```
@@ -317,18 +322,24 @@ phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/nyx.env --wai
 shred -u /tmp/nyx.env
 
 GW="https://<app_id>-8080.dstack-pha-prod5.phala.network"
-curl -s "$GW/info" | jq -r .tee_pubkey          # the enclave's Ed25519 signer
-phala cvms logs "$CVM" | tail -40               # watch boot: proving key load, merkle cold-boot, "settle pipeline ENABLED"
+curl -s "$GW/info" | jq -r .tee_pubkey          # the PRIMARY (shard-0) Ed25519 signer
+phala cvms logs "$CVM" | tail -40               # watch boot: proving key load, merkle cold-boot,
+                                                #   "derived K-shard TEE signer set" (← copy all K), "settle pipeline ENABLED"
 ```
 
-The CVM signer is **also the Solana fee-payer** for settle txs. Rotate the
-vault's `tee_pubkey` to it + fund it (one-time per CVM signer):
+Under tree-sharding the CVM derives **K = `num_trees`** shard signers
+(`nyx/ed25519-signer/v1/{0..K-1}`), each the Solana fee-payer for its
+shard's settle Tx D. `/info` surfaces only the primary; grab the full
+set from the boot log line "derived K-shard TEE signer set". Register
+ALL K in shard order (`keys[j]` settles shard j) + fund each
+(one-time per CVM — they're deterministic per `app_id`):
 
 ```sh
 SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-  node scripts/rotate-tee-pubkey.mjs <tee_pubkey_from_/info>
-solana transfer <tee_pubkey> 2 --url "$HELIUS" --allow-unfunded-recipient \
-  --keypair ~/.config/solana/id.json     # settle path needs SOL for lock/verify/ALT/settle/close
+  node scripts/rotate-tee-pubkey.mjs <key0> <key1> <key2> <key3>   # set the whole tee_pubkeys Vec
+SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
+  node scripts/fund-tee-keys.mjs <key0> <key1> <key2> <key3>       # tops each to FUND_TARGET_SOL (default 2)
+# settle path needs SOL per shard for lock/verify/ALT/settle/close
 ```
 
 ### 3.4 Run the flagship + the loadgen
