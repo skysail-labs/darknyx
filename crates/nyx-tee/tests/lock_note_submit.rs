@@ -246,6 +246,35 @@ async fn submit_lock_note_pair_skips_relocked_side() {
 }
 
 #[tokio::test]
+async fn submit_lock_note_pair_skips_both_relocked_sides() {
+    // When BOTH sides are relocked continuation notes (each pinned by a prior
+    // batch's re-lock PDA), there's nothing to lock: no blockhash fetch, no
+    // sendTransaction, and both sigs come back None.
+    let (endpoint, mock, _server) = spawn_mock().await;
+    // Deliberately seed NOTHING — any RPC call would 32601-error and fail the
+    // test, proving the both-skipped path touches the wire zero times.
+
+    let client = SolanaRpcClient::new(endpoint).unwrap();
+    let keypair = fixed_keypair();
+    let mut buyer = buyer_inputs();
+    let mut seller = seller_inputs();
+    buyer.already_locked = true;
+    seller.already_locked = true;
+
+    let outcome = submit_lock_note_pair(&client, &keypair, buyer, seller, 0)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.buyer_sig, None, "relocked buyer side must be skipped");
+    assert_eq!(outcome.seller_sig, None, "relocked seller side must be skipped");
+
+    // No blockhash fetch and no sends — the function short-circuits before any RPC.
+    let s = mock.lock().await;
+    assert!(!s.captured.contains_key("getLatestBlockhash"), "no blockhash fetch expected");
+    assert!(!s.captured.contains_key("sendTransaction"), "no sends expected");
+}
+
+#[tokio::test]
 async fn submit_lock_note_pair_propagates_rpc_error_on_second_tx() {
     let (endpoint, mock, _server) = spawn_mock().await;
     {

@@ -218,7 +218,18 @@ fn prove_merge(
     );
 
     let build = repo_root().join(format!("circuits/build/valid_merge_k{k}"));
-    let tmp = std::env::temp_dir().join(format!("nyx_merge_verify_k{k}_{num_real}"));
+    // Unique per call: `cargo test` runs the test fns in this binary in
+    // parallel, and two of them (merge_k2_verifies_… + merge_rejects_tampered_…)
+    // both prove_merge(2, 2). A shared dir name lets their concurrent snarkjs
+    // runs clobber each other's input/proof/public files → flaky failures.
+    // pid + a process-local counter is unique across threads AND processes
+    // without pulling in a tempfile dep.
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let uniq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!(
+        "nyx_merge_verify_k{k}_{num_real}_{}_{uniq}",
+        std::process::id()
+    ));
     let (pb, public_inputs) = snarkjs_fullprove(&input_json, &build, &tmp);
     let proof = Groth16Proof {
         pi_a: pb.pi_a,

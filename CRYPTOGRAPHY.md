@@ -842,8 +842,10 @@ spare slots are dummy-padded), and **chains** merges for >4.
                                   outputInnerHash)
 ```
 
-Public inputs: `merkleRoot`, `outputCommitment`, `tokenMint[2]`,
-`nullifiers[K]` — **6 for K=2, 8 for K=4**. Private: one shared
+Public signals (circom output-first order, matching `merge.rs`'s `pi`
+array): `outputCommitment` (the single `signal output`), then the public
+inputs `merkleRoot`, `tokenMint[2]` (mint_lo, mint_hi), `nullifiers[K]`
+— **6 for K=2, 8 for K=4**. Private: one shared
 `spendingKey` + `ownerCommitmentBlinding` (this is what enforces *all K notes
 belong to the same owner*), `outputInnerHash`, and per-slot `isActive`,
 `amount`, `innerHash`, `merklePath[20]`, `merkleIndices[20]`.

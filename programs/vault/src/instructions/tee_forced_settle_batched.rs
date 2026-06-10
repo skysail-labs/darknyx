@@ -347,10 +347,11 @@ pub fn tee_forced_settle_batched_handler(
     // is at that address + owned by us + non-expired.
     // ────────────────────────────────────────────────────────────────────
     // Quote mint is lock_a's mint (buyer pays quote → note_a is quote); base
-    // mint is lock_b's. Read once here: the batch-binding leaf needs them, AND
-    // the re-locks below stamp them onto the continuation NoteLock (note_e is
-    // quote, note_f is base) so the NEXT batch that consumes the continuation
-    // reads back a correct mint.
+    // mint is lock_b's. Cache the two MINTS here (a single load of each lock):
+    // the batch-binding leaf needs them, AND the re-locks below stamp them onto
+    // the continuation NoteLock (note_e is quote, note_f is base) so the NEXT
+    // batch that consumes the continuation reads back a correct mint. The locks
+    // themselves are re-loaded further below for the order_id/amount validation.
     let (lock_a_mint, lock_b_mint) = {
         let la = ctx.accounts.note_lock_a.load()?;
         let lb = ctx.accounts.note_lock_b.load()?;

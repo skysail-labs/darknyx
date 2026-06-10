@@ -140,8 +140,13 @@ export class Wallet {
    * covers `required`, returns it without merging.
    */
   async consolidate(required: bigint, mint: Uint8Array, mergeFn: MergeFn): Promise<StoredNote> {
-    // Bounded: each merge reduces the note count by ≥1, so this terminates.
-    for (let guard = 0; guard < 64; guard++) {
+    // Bounded: each merge reduces the note count by ≥1, so this terminates in at
+    // most (initial spendable count) iterations. Derive the budget from that
+    // count (floored at 64) — a fixed 64 cap would falsely abort a heavily
+    // fragmented wallet that legitimately needs >64 chained merges to reach
+    // `required`.
+    const maxIterations = Math.max(64, (await this.spendableNotes(mint)).length);
+    for (let guard = 0; guard < maxIterations; guard++) {
       const spendable = await this.spendableNotes(mint);
       const single = spendable.filter((n) => n.amount >= required).sort(ascending)[0];
       if (single) return single;
