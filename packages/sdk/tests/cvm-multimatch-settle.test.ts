@@ -10,10 +10,16 @@
  *   phala cvms logs <cvm> | grep "settle Tx D confirmed (per-match)"
  *
  * The FIRST Tx D in a batch eats the ALT-activation wait; the marginal ones
- * reveal the steady-state on-chain settle ceiling (serialized on the
- * vault_config Merkle append) — the number that decides whether the on-chain
- * settle, vs the prover (~5 matches/s, hardware-bound per the local bench), is
- * the current throughput bottleneck.
+ * reveal the steady-state on-chain settle ceiling — post tree-sharding the
+ * concurrent Tx D's round-robin across K shard fee-payers + K trees, so they
+ * co-include in a block rather than serializing on a single tree's Merkle
+ * append. That ceiling is the number that decides whether the on-chain settle,
+ * vs the prover (~5 matches/s, hardware-bound per the local bench), is the
+ * current throughput bottleneck.
+ *
+ * NOTE: orders are submitted concurrently (Promise.all) and can span multiple
+ * matcher ticks, so the batch boundaries + per-match timings are APPROXIMATE —
+ * treat them as a steady-state estimate, not a guaranteed single-batch measurement.
  *
  * Real-mint regime + a fresh tree reset (like cvm-settle-e2e). Run:
  *   RUN_CVM_E2E=1 NYX_CVM_MATCHES=4 NYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$HELIUS \

@@ -31,7 +31,10 @@ pub fn priority_fee_bid(samples: &[u64], cap: u64) -> u64 {
     }
     let mut v: Vec<u64> = samples.to_vec();
     v.sort_unstable();
-    // Nearest-rank percentile on a 0-indexed sorted vec.
+    // idx = floor((N-1) * PRIORITY_FEE_PERCENTILE / 100) on the 0-indexed sorted
+    // `v` — the lower index of the linear-interpolation percentile (floored), so
+    // slightly more conservative than textbook nearest-rank (which would be
+    // ceil(P/100 * N) - 1). Cheap + monotonic; exactness isn't needed for a fee bid.
     let idx = ((v.len() - 1) * PRIORITY_FEE_PERCENTILE) / 100;
     v[idx].min(cap)
 }

@@ -236,7 +236,10 @@ impl SettleScheduler {
                         .await
                         .expect("settle semaphore");
                     let state = self.state.clone();
-                    let output = output.clone();
+                    // Move the owned `output` into the task — it isn't used again
+                    // in this iteration (enqueue_batch above only borrowed it), so
+                    // there's no need to deep-clone RunBatchOutput (up to 16 matches
+                    // + fees) per batch.
                     tasks.spawn(async move {
                         let _permit = permit; // released when the batch finishes
                         drive_batch(&driver, &state, batch_id, &output).await;
