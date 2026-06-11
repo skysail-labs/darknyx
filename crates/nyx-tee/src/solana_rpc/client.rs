@@ -147,6 +147,46 @@ pub struct RpcTransaction {
     pub instructions: Vec<RpcInstruction>,
 }
 
+/// Sort order for [`SolanaRpcClient::get_transactions_for_address`].
+#[derive(Debug, Clone, Copy)]
+pub enum TxSortOrder {
+    /// Oldest-first (chronological) — leaf indices arrive in append order.
+    Asc,
+    /// Newest-first.
+    Desc,
+}
+
+impl TxSortOrder {
+    fn as_str(self) -> &'static str {
+        match self {
+            TxSortOrder::Asc => "asc",
+            TxSortOrder::Desc => "desc",
+        }
+    }
+}
+
+/// One FULL transaction from `getTransactionsForAddress` — like
+/// [`RpcTransaction`] but carries its own `signature` inline (the address
+/// scan returns the whole tx, so no follow-up `getTransaction` is needed).
+#[derive(Debug, Clone)]
+pub struct RpcAddressTx {
+    pub signature: String,
+    pub slot: u64,
+    /// `meta.err` — `Some` if the tx reverted. (Empty when the call filters
+    /// `status: succeeded`, but parsed defensively.)
+    pub err: Option<Value>,
+    pub log_messages: Vec<String>,
+    pub instructions: Vec<RpcInstruction>,
+}
+
+/// One page of [`SolanaRpcClient::get_transactions_for_address`].
+#[derive(Debug, Clone)]
+pub struct AddressTxPage {
+    pub txs: Vec<RpcAddressTx>,
+    /// Opaque `"slot:position"` cursor for the NEXT page; `None` at the end.
+    pub pagination_token: Option<String>,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Wire envelopes (internal)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -528,6 +568,142 @@ impl SolanaRpcClient {
         }))
     }
 
+    /// `getTransactionsForAddress` (Helius-exclusive) — returns up to `limit`
+    /// **full** transactions touching `address` in ONE call, collapsing the
+    /// `getSignaturesForAddress` + per-signature `getTransaction` fan-out the
+    /// Merkle sync used to do (≈1 call per 1000 txs instead of 1 + N).
+    ///
+    /// Pinned options: `transactionDetails: full`, `encoding: json`,
+    /// `maxSupportedTransactionVersion: 0` (v0 settle txs decode), and
+    /// `status: succeeded` (a reverted tx appends no leaves, so we never need
+    /// it — and this drops the per-tx err check). `slot_gte` floors the scan at
+    /// the cold-boot / last-applied slot; `pagination_token` (the prior page's
+    /// `"slot:position"`) continues a multi-page scan.
+    ///
+    /// `sort_order = Asc` yields oldest-first so leaves arrive in append order.
+    ///
+    /// NOTE: on **devnet** Helius retains only ~2 weeks of history; this is fine
+    /// because the mirror always cold-boots from a recent `from_slot` floor
+    /// (the deploy / `reset_merkle_tree` slot), never genesis.
+    pub async fn get_transactions_for_address(
+        &self,
+        address: &Address,
+        sort_order: TxSortOrder,
+        slot_gte: Option<u64>,
+        pagination_token: Option<&str>,
+        limit: usize,
+    ) -> Result<AddressTxPage, RpcError> {
+        #[derive(Deserialize)]
+        struct Page {
+            #[serde(default)]
+            data: Vec<Inner>,
+            #[serde(rename = "paginationToken", default)]
+            pagination_token: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct Inner {
+            slot: u64,
+            #[serde(default)]
+            meta: Option<Meta>,
+            transaction: Tx,
+        }
+        #[derive(Deserialize)]
+        struct Meta {
+            #[serde(rename = "logMessages", default)]
+            log_messages: Option<Vec<String>>,
+            #[serde(default)]
+            err: Option<Value>,
+        }
+        #[derive(Deserialize)]
+        struct Tx {
+            #[serde(default)]
+            signatures: Vec<String>,
+            message: Msg,
+        }
+        #[derive(Deserialize)]
+        struct Msg {
+            #[serde(rename = "accountKeys", default)]
+            account_keys: Vec<String>,
+            #[serde(default)]
+            instructions: Vec<CompiledIx>,
+        }
+        #[derive(Deserialize)]
+        struct CompiledIx {
+            #[serde(rename = "programIdIndex")]
+            program_id_index: usize,
+            data: String, // base58
+        }
+
+        let mut filters = serde_json::Map::new();
+        if let Some(s) = slot_gte {
+            filters.insert("slot".to_string(), serde_json::json!({ "gte": s }));
+        }
+        filters.insert("status".to_string(), serde_json::json!("succeeded"));
+
+        let mut cfg = serde_json::Map::new();
+        cfg.insert(
+            "transactionDetails".to_string(),
+            serde_json::json!("full"),
+        );
+        cfg.insert("encoding".to_string(), serde_json::json!("json"));
+        cfg.insert(
+            "sortOrder".to_string(),
+            serde_json::json!(sort_order.as_str()),
+        );
+        cfg.insert("limit".to_string(), serde_json::json!(limit));
+        cfg.insert("commitment".to_string(), serde_json::json!(self.commitment));
+        cfg.insert(
+            "maxSupportedTransactionVersion".to_string(),
+            serde_json::json!(0),
+        );
+        cfg.insert("filters".to_string(), Value::Object(filters));
+        if let Some(tok) = pagination_token {
+            cfg.insert("paginationToken".to_string(), serde_json::json!(tok));
+        }
+
+        let params = serde_json::json!([address.to_string(), Value::Object(cfg)]);
+        let page: Page = self.call("getTransactionsForAddress", params).await?;
+
+        let txs = page
+            .data
+            .into_iter()
+            .map(|inner| {
+                let (log_messages, err) = match inner.meta {
+                    Some(m) => (m.log_messages.unwrap_or_default(), m.err),
+                    None => (Vec::new(), None),
+                };
+                let keys = &inner.transaction.message.account_keys;
+                let instructions = inner
+                    .transaction
+                    .message
+                    .instructions
+                    .into_iter()
+                    .map(|ci| RpcInstruction {
+                        program_id: keys.get(ci.program_id_index).cloned().unwrap_or_default(),
+                        data: bs58::decode(&ci.data).into_vec().unwrap_or_default(),
+                    })
+                    .collect();
+                RpcAddressTx {
+                    signature: inner
+                        .transaction
+                        .signatures
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default(),
+                    slot: inner.slot,
+                    err,
+                    log_messages,
+                    instructions,
+                }
+            })
+            .collect();
+
+        Ok(AddressTxPage {
+            txs,
+            pagination_token: page.pagination_token,
+        })
+    }
+
     /// `simulateTransaction` — pre-flight a signed tx. Used by the
     /// scheduler to surface preflight failures (compute budget,
     /// invalid signer, etc.) before paying for an on-chain send.
@@ -789,5 +965,36 @@ mod tests {
         assert_ne!(bh.blockhash, [0u8; 32]);
         assert!(bh.context_slot > 0);
         assert!(bh.last_valid_block_height > bh.context_slot);
+    }
+
+    /// Env-gated Helius smoke for `getTransactionsForAddress` (Helius-exclusive,
+    /// so it needs a Helius URL in `HELIUS_RPC_URL`). Validates the wire format
+    /// end-to-end: a full-tx page over the devnet vault program returns txs that
+    /// carry their signature, slot, log messages, and instructions inline — no
+    /// follow-up `getTransaction`. Skipped without `RUN_DEVNET_RPC_SMOKE=1` +
+    /// `HELIUS_RPC_URL`.
+    #[tokio::test]
+    async fn devnet_get_transactions_for_address_smoke() {
+        if std::env::var("RUN_DEVNET_RPC_SMOKE").ok().as_deref() != Some("1") {
+            return;
+        }
+        let Ok(url) = std::env::var("HELIUS_RPC_URL") else {
+            return; // gTFA is Helius-only; skip without a Helius endpoint
+        };
+        let client = SolanaRpcClient::new(&url).unwrap();
+        let vault: Address = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"
+            .parse()
+            .unwrap();
+        let page = client
+            .get_transactions_for_address(&vault, TxSortOrder::Desc, None, None, 10)
+            .await
+            .expect("gTFA call should succeed against Helius");
+        assert!(!page.txs.is_empty(), "vault program has history");
+        for tx in &page.txs {
+            assert!(!tx.signature.is_empty(), "full tx carries its signature");
+            assert!(tx.slot > 0);
+            // status:succeeded is filtered server-side.
+            assert!(tx.err.is_none());
+        }
     }
 }

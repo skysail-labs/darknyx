@@ -1,12 +1,16 @@
 //! Cold-boot + live sync of the Merkle mirror against on-chain state.
 //!
-//! Cold boot walks the vault program's transaction history
-//! (`getSignaturesForAddress`, paged backward to genesis), decodes the
-//! leaf-append events of each tx ([`super::events`]), applies them to
-//! the mirror in `leaf_index` order, and reconciles the resulting root
-//! against `VaultConfig.current_root`. The live loop then polls for new
-//! signatures on an interval and applies their leaves as settles +
-//! deposits confirm.
+//! Cold boot walks the vault program's transaction history via Helius'
+//! `getTransactionsForAddress` (gTFA) — one call returns up to 1000 FULL
+//! transactions, oldest-first, filtered to `status: succeeded` and floored at
+//! `from_slot`, paged forward by `paginationToken`. This collapses the old
+//! `getSignaturesForAddress` + per-signature `getTransaction` fan-out (1 + N
+//! calls) into ≈1 call per 1000 txs. It decodes the leaf-append events of each
+//! tx ([`super::events`]), applies them to the mirror in `leaf_index` order,
+//! and reconciles each shard's root against its on-chain `MerkleTree`. The live
+//! loop then re-scans gTFA from the last-seen slot on an interval and applies
+//! new leaves as settles + deposits confirm (idempotent: the mirror skips
+//! already-applied indices, so re-including the boundary slot is harmless).
 //!
 //! Best-effort, like all TEE persistence (`docs/tee-architecture.md`
 //! §8): on-chain is canonical. A reconcile mismatch or an RPC error is
@@ -24,7 +28,7 @@ use super::events::extract_appended_leaves;
 use super::mirror::{MerkleMirror, MirrorError};
 use super::AppendedLeaf;
 use crate::settle::settle_batched::SETTLE_BATCHED_DISCRIMINATOR;
-use crate::solana_rpc::{RpcError, SolanaRpcClient};
+use crate::solana_rpc::{RpcAddressTx, RpcError, SolanaRpcClient, TxSortOrder};
 
 /// `MerkleTree` zero-copy shard-account layout offsets (after the 8-byte Anchor
 /// discriminator): `leaf_count: u64` at 8, `current_root: [u8;32]` at 16.
@@ -33,9 +37,8 @@ use crate::solana_rpc::{RpcError, SolanaRpcClient};
 const TREE_LEAF_COUNT_OFFSET: usize = 8;
 const TREE_CURRENT_ROOT_OFFSET: usize = TREE_LEAF_COUNT_OFFSET + 8;
 
-/// RPC page size for `getSignaturesForAddress` (the RPC hard-caps at
-/// 1000).
-const SIG_PAGE_LIMIT: usize = 1000;
+/// Page size for `getTransactionsForAddress` (Helius caps at 1000 full txs).
+const GTFA_PAGE_LIMIT: usize = 1000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
@@ -84,9 +87,10 @@ pub struct MerkleSync {
     /// to compare each mirror's root against its shard's on-chain root.
     merkle_tree_pdas: Vec<Address>,
     cfg: MerkleSyncConfig,
-    /// Newest signature already applied — the live poll stops paging
-    /// when it reaches this. `None` until the first sync completes.
-    newest_seen: Option<String>,
+    /// Highest slot scanned so far — the live poll re-scans gTFA from here
+    /// (`slot >= last_slot`, idempotent), advancing as new txs land. `0` until
+    /// the first sync runs.
+    last_slot: u64,
     /// Per-shard "currently flagged as diverged" latch, so reconcile WARNs
     /// once on divergence (not every ~2s poll) and logs once on recovery.
     /// Indexed by `tree_id`; length == `mirrors.len()`.
@@ -113,66 +117,32 @@ impl MerkleSync {
             vault_program_id,
             merkle_tree_pdas,
             cfg,
-            newest_seen: None,
+            last_slot: 0,
             diverged,
         }
     }
 
-    /// Cold boot: page the full vault history oldest→newest, apply all
-    /// leaves, reconcile. Sets `newest_seen` so the live loop continues
-    /// from here. Returns the number of leaves applied.
+    /// Cold boot: scan the vault history oldest→newest from the `from_slot`
+    /// floor via gTFA (full txs, paged by `paginationToken`), apply every
+    /// leaf, reconcile. Sets `last_slot` so the live loop continues from here.
+    /// Returns the number of leaves applied.
     pub async fn cold_boot(&mut self) -> Result<usize, SyncError> {
-        // 1. Page backward toward the `from_slot` floor (or genesis),
-        //    collecting (newest-first).
-        let mut all_sigs: Vec<(String, u64, bool)> = Vec::new();
-        let mut before: Option<String> = None;
-        loop {
-            let page = self
-                .rpc
-                .get_signatures_for_address(
-                    &self.vault_program_id,
-                    before.as_deref(),
-                    SIG_PAGE_LIMIT,
-                )
-                .await?;
-            let short = page.len() < SIG_PAGE_LIMIT;
-            // Oldest entry of this page (newest-first → last).
-            let oldest_slot = page.last().map(|s| s.slot);
-            if let Some(last) = page.last() {
-                before = Some(last.signature.clone());
-            }
-            for s in page {
-                all_sigs.push((s.signature, s.slot, s.err.is_some()));
-            }
-            if short {
-                break; // short page → history exhausted
-            }
-            // Early-stop: once a page's oldest slot drops below the
-            // floor, every older page is below it too — stop paging.
-            if self.cfg.from_slot > 0 && oldest_slot.is_some_and(|s| s < self.cfg.from_slot) {
-                break;
-            }
-        }
-        if all_sigs.is_empty() {
-            tracing::info!("merkle cold-boot: vault has no transaction history yet");
+        let floor = (self.cfg.from_slot > 0).then_some(self.cfg.from_slot);
+        let applied = self.scan_and_apply(floor).await?;
+        if applied.txs_seen == 0 {
+            tracing::info!("merkle cold-boot: vault has no transaction history in range yet");
             return Ok(0);
         }
-        let newest = all_sigs.first().map(|(s, _, _)| s.clone());
-
-        // 2. Oldest-first so leaf indices arrive in order.
-        all_sigs.reverse();
-        let applied = self.apply_signatures(&all_sigs).await?;
-
-        self.newest_seen = newest;
+        self.last_slot = applied.max_slot.max(self.last_slot);
         self.reconcile().await;
         let total_leaves = self.total_leaf_count().await;
         tracing::info!(
-            applied,
+            applied = applied.leaves_applied,
             total_leaves,
             shards = self.mirrors.len(),
             "merkle cold-boot complete"
         );
-        Ok(applied)
+        Ok(applied.leaves_applied)
     }
 
     /// Sum of leaf counts across all shard mirrors.
@@ -184,39 +154,18 @@ impl MerkleSync {
         total
     }
 
-    /// One live-poll step: fetch signatures newer than `newest_seen`,
-    /// apply their leaves, advance `newest_seen`. Returns the count
+    /// One live-poll step: re-scan gTFA from `last_slot` (the boundary slot is
+    /// re-included; the mirror's idempotent append skips already-applied
+    /// indices), apply new leaves, advance `last_slot`. Returns the count
     /// applied this step.
     pub async fn poll_once(&mut self) -> Result<usize, SyncError> {
-        let until = self.newest_seen.clone();
-        let mut new_sigs: Vec<(String, u64, bool)> = Vec::new();
-        let mut before: Option<String> = None;
-        loop {
-            let page = self
-                .get_signatures_until(before.as_deref(), until.as_deref())
-                .await?;
-            let short = page.len() < SIG_PAGE_LIMIT;
-            if let Some(last) = page.last() {
-                before = Some(last.0.clone());
-            }
-            new_sigs.extend(page);
-            if short {
-                break;
-            }
-        }
-        if new_sigs.is_empty() {
-            return Ok(0);
-        }
-        let newest = new_sigs.first().map(|(s, _, _)| s.clone());
-        new_sigs.reverse(); // oldest-first
-        let applied = self.apply_signatures(&new_sigs).await?;
-        if newest.is_some() {
-            self.newest_seen = newest;
-        }
-        if applied > 0 {
+        let floor = Some(self.last_slot.max(self.cfg.from_slot)).filter(|s| *s > 0);
+        let result = self.scan_and_apply(floor).await?;
+        self.last_slot = result.max_slot.max(self.last_slot);
+        if result.leaves_applied > 0 {
             self.reconcile().await;
         }
-        Ok(applied)
+        Ok(result.leaves_applied)
     }
 
     /// Run the live loop forever, polling every `poll_interval`. Errors
@@ -233,46 +182,49 @@ impl MerkleSync {
         }
     }
 
-    /// Page `getSignaturesForAddress` with an `until` floor, returning
-    /// `(signature, slot, is_err)` newest-first for this page (stopping
-    /// when `until` is reached).
-    async fn get_signatures_until(
-        &self,
-        before: Option<&str>,
-        until: Option<&str>,
-    ) -> Result<Vec<(String, u64, bool)>, SyncError> {
-        let page = self
-            .rpc
-            .get_signatures_for_address(&self.vault_program_id, before, SIG_PAGE_LIMIT)
-            .await?;
-        let mut out = Vec::with_capacity(page.len());
-        for s in page {
-            if Some(s.signature.as_str()) == until {
-                break;
+    /// Scan the vault history via gTFA from `slot_gte` (oldest-first, full txs,
+    /// `status: succeeded`), paging by `paginationToken`, and apply each page's
+    /// leaves to the mirrors as it arrives (bounds memory — no need to buffer
+    /// the whole history). Returns aggregate counts + the highest slot seen.
+    async fn scan_and_apply(&self, slot_gte: Option<u64>) -> Result<ScanResult, SyncError> {
+        let mut token: Option<String> = None;
+        let mut out = ScanResult::default();
+        loop {
+            let page = self
+                .rpc
+                .get_transactions_for_address(
+                    &self.vault_program_id,
+                    TxSortOrder::Asc,
+                    slot_gte,
+                    token.as_deref(),
+                    GTFA_PAGE_LIMIT,
+                )
+                .await?;
+            if !page.txs.is_empty() {
+                out.txs_seen += page.txs.len();
+                if let Some(max) = page.txs.iter().map(|t| t.slot).max() {
+                    out.max_slot = out.max_slot.max(max);
+                }
+                out.leaves_applied += self.apply_address_txs(&page.txs).await?;
             }
-            out.push((s.signature, s.slot, s.err.is_some()));
+            match page.pagination_token {
+                Some(t) => token = Some(t),
+                None => break, // last page
+            }
         }
         Ok(out)
     }
 
-    /// Fetch + decode each signature's leaves and apply them to the
-    /// mirror. `sigs` MUST be oldest-first. Stamps the mirror's
-    /// `on_chain_slot` with the highest slot applied.
-    async fn apply_signatures(&self, sigs: &[(String, u64, bool)]) -> Result<usize, SyncError> {
+    /// Decode the leaves from a page of FULL gTFA transactions (no follow-up
+    /// `getTransaction`) and apply them, routed per shard. `txs` MUST be
+    /// oldest-first. Stamps each touched mirror's `on_chain_slot` with the
+    /// highest slot applied.
+    async fn apply_address_txs(&self, txs: &[RpcAddressTx]) -> Result<usize, SyncError> {
         let mut leaves: Vec<AppendedLeaf> = Vec::new();
         let mut max_slot = 0u64;
-        for (sig, slot, is_err) in sigs {
-            if *slot < self.cfg.from_slot {
-                continue; // below the cold-boot floor (pre-deploy / pre-reset)
-            }
-            if *is_err {
-                continue; // reverted tx — its leaves never landed
-            }
-            let Some(tx) = self.rpc.get_transaction(sig).await? else {
-                continue;
-            };
+        for tx in txs {
             if tx.err.is_some() {
-                continue;
+                continue; // defensive — `status: succeeded` already excludes reverts
             }
             let settle_ix_data = tx
                 .instructions
@@ -281,7 +233,7 @@ impl MerkleSync {
                 .find(|d| d.len() >= 8 && d[..8] == *SETTLE_BATCHED_DISCRIMINATOR);
             let mut tx_leaves = extract_appended_leaves(&tx.log_messages, settle_ix_data);
             if !tx_leaves.is_empty() {
-                max_slot = max_slot.max(*slot);
+                max_slot = max_slot.max(tx.slot);
                 leaves.append(&mut tx_leaves);
             }
         }
@@ -393,6 +345,17 @@ impl MerkleSync {
             }
         }
     }
+}
+
+/// Aggregate outcome of one [`MerkleSync::scan_and_apply`] pass.
+#[derive(Debug, Default)]
+struct ScanResult {
+    /// Total txs returned by gTFA this scan (leaf-bearing or not).
+    txs_seen: usize,
+    /// Leaves actually appended to the mirrors.
+    leaves_applied: usize,
+    /// Highest slot observed in the scan (`0` if none).
+    max_slot: u64,
 }
 
 /// Reconcile outcome for one shard — the mirror vs its on-chain `MerkleTree`.
@@ -604,6 +567,80 @@ mod tests {
     #[test]
     fn parse_merkle_tree_root_rejects_short_buffer() {
         assert!(parse_merkle_tree_root(&[0u8; 4]).is_none());
+    }
+
+    /// End-to-end of the gTFA cold-boot path against a mock RPC: one
+    /// `getTransactionsForAddress` page carrying a deposit's NoteCreated event
+    /// is decoded + applied to the mirror — no per-signature `getTransaction`.
+    #[tokio::test]
+    async fn cold_boot_applies_leaves_from_gtfa_full_txs() {
+        use axum::{routing::post, Json, Router};
+        use base64::Engine as _;
+        use serde_json::{json, Value};
+        use sha2::{Digest, Sha256};
+
+        // A NoteCreated event for a deposit landing at leaf 0.
+        let commitment = fr_safe(0xAB);
+        let mut event = Sha256::digest(b"event:NoteCreated")[..8].to_vec();
+        event.push(0u8); // tree_id
+        event.extend_from_slice(&0u64.to_le_bytes()); // leaf_index
+        event.extend_from_slice(&commitment); // commitment
+        event.extend_from_slice(&[0u8; 32]); // token_mint
+        event.extend_from_slice(&1000u64.to_le_bytes()); // amount
+        event.extend_from_slice(&[0u8; 32]); // new_root
+        let log_line = format!(
+            "Program data: {}",
+            base64::engine::general_purpose::STANDARD.encode(&event)
+        );
+
+        // One gTFA page: a single deposit tx, no next page.
+        let page = Arc::new(json!({
+            "data": [{
+                "slot": 100,
+                "transaction": {
+                    "signatures": ["sig1"],
+                    "message": { "accountKeys": [], "instructions": [] }
+                },
+                "meta": { "logMessages": [log_line], "err": null }
+            }],
+            "paginationToken": Value::Null
+        }));
+
+        async fn handle(
+            axum::extract::State(page): axum::extract::State<Arc<Value>>,
+            Json(req): Json<Value>,
+        ) -> Json<Value> {
+            let id = req.get("id").cloned().unwrap_or(json!(1));
+            let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            let result = match method {
+                "getTransactionsForAddress" => (*page).clone(),
+                // reconcile reads the merkle_tree account → null (warns, non-fatal).
+                "getAccountInfo" => json!({ "context": { "slot": 100 }, "value": null }),
+                _ => json!(null),
+            };
+            Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+        }
+
+        let app = Router::new().route("/", post(handle)).with_state(page);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let rpc = SolanaRpcClient::new(format!("http://{addr}")).unwrap();
+        let mirror = Arc::new(RwLock::new(MerkleMirror::new()));
+        let mut sync = MerkleSync::new(
+            rpc,
+            vec![mirror.clone()],
+            Address::new_from_array([1u8; 32]),
+            vec![Address::new_from_array([2u8; 32])],
+            MerkleSyncConfig::default(),
+        );
+
+        let applied = sync.cold_boot().await.unwrap();
+        assert_eq!(applied, 1, "the deposit's leaf was decoded from the gTFA full tx");
+        let m = mirror.read().await;
+        assert_eq!(m.leaf_count(), 1);
+        assert_eq!(m.leaf_index_of(&commitment), Some(0));
     }
 
     #[test]

@@ -31,7 +31,8 @@ pub mod client;
 pub mod error;
 
 pub use client::{
-    BlockhashWithSlot, Commitment, PrioritizationFee, RpcAccountInfo, RpcInstruction,
-    RpcSignatureInfo, RpcSignatureStatus, RpcSimulationResult, RpcTransaction, SolanaRpcClient,
+    AddressTxPage, BlockhashWithSlot, Commitment, PrioritizationFee, RpcAccountInfo, RpcAddressTx,
+    RpcInstruction, RpcSignatureInfo, RpcSignatureStatus, RpcSimulationResult, RpcTransaction,
+    SolanaRpcClient, TxSortOrder,
 };
 pub use error::RpcError;
