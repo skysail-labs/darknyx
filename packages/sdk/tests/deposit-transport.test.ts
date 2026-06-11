@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import type { Buffer as NodeBuffer } from "node:buffer";
 
@@ -33,6 +34,17 @@ function fakeMerkleTreeData(leafCount: bigint): Buffer {
   const b = Buffer.alloc(320, 0);
   b.writeBigUInt64LE(leafCount, 8);
   return b;
+}
+
+/** The deposit's actual leaf index is read back from the NoteCreated event in
+ *  the confirmed tx. Build a synthetic `Program data:` log carrying it. Body:
+ *  tree_id(1) ‖ leaf_index(8) ‖ commitment(32) ‖ token_mint(32) ‖ amount(8) ‖ new_root(32). */
+const EVENT_LEAF_INDEX = 99n;
+function noteCreatedLog(leafIndex: bigint): string {
+  const disc = createHash("sha256").update("event:NoteCreated").digest().subarray(0, 8);
+  const body = Buffer.alloc(1 + 8 + 32 + 32 + 8 + 32, 0);
+  body.writeBigUInt64LE(leafIndex, 1); // after tree_id(1)
+  return `Program data: ${Buffer.concat([disc, body]).toString("base64")}`;
 }
 
 function makeProviders(opts: {
@@ -78,7 +90,11 @@ function makeClient(
   providers: ReturnType<typeof makeProviders>,
 ): DarkPoolClient {
   const conn: SolanaConnectionProvider = {
-    connection: {} as never,
+    connection: {
+      getTransaction: async () => ({
+        meta: { logMessages: [noteCreatedLog(EVENT_LEAF_INDEX)] },
+      }),
+    } as never,
     perRpcUrl: "http://stub",
   };
   const storage: MasterSeedStorage = {
@@ -119,6 +135,7 @@ describe("getDepositFunction", () => {
       depositor: new PublicKey(mintBytes), // reuse as stub pubkey
       tokenMint: mintBytes,
       amount: 1_000_000n,
+      depositIndex: 3n,
       depositorTokenAccount: new PublicKey(mintBytes),
       callbacks: {
         pre: (s) => {
@@ -128,7 +145,8 @@ describe("getDepositFunction", () => {
     });
 
     expect(receipt.signature).toBe("deposit_sig_abc");
-    expect(receipt.leafIndex).toBe(42n);
+    // leafIndex comes from the NoteCreated event, NOT the pre-send leaf_count read.
+    expect(receipt.leafIndex).toBe(EVENT_LEAF_INDEX);
     expect(receipt.noteCommitment).toHaveLength(32);
     expect(stages).toEqual([
       "merkle-position-fetch",
@@ -162,6 +180,7 @@ describe("getDepositFunction", () => {
         depositor: new PublicKey(mint),
         tokenMint: mint,
         amount: 0n,
+        depositIndex: 0n,
         depositorTokenAccount: new PublicKey(mint),
       }),
     ).rejects.toMatchObject({ stage: "parameter" });
@@ -177,6 +196,7 @@ describe("getDepositFunction", () => {
         depositor: new PublicKey(mint),
         tokenMint: mint,
         amount: 1n,
+        depositIndex: 0n,
         depositorTokenAccount: new PublicKey(mint),
       }),
     ).rejects.toBeInstanceOf(DarkPoolError);

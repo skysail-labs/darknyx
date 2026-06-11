@@ -49,6 +49,14 @@ pub static TRADE_SETTLED_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
     d
 });
 
+/// `sha256("event:NoteMerged")[..8]`.
+pub static NOTE_MERGED_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
+    let h = Sha256::digest(b"event:NoteMerged");
+    let mut d = [0u8; 8];
+    d.copy_from_slice(&h[..8]);
+    d
+});
+
 /// One leaf appended on-chain: which shard it landed in + its index within
 /// that shard + the 32-byte value. Post-sharding the index is PER-SHARD, so
 /// `tree_id` is required to route the leaf to the right mirror.
@@ -94,6 +102,19 @@ struct TradeSettledEvent {
     note_fee_quote_leaf: u64,
     _buyer_relock_active: bool,
     _seller_relock_active: bool,
+    _new_root: [u8; 32],
+}
+
+/// Borsh-decode mirror of the vault `NoteMerged` event (field order
+/// must match `programs/vault/src/instructions/merge.rs`). One merge
+/// appends exactly one output leaf.
+#[derive(BorshDeserialize)]
+struct NoteMergedEvent {
+    tree_id: u8,
+    output_commitment: [u8; 32],
+    _token_mint: [u8; 32],
+    _k: u8,
+    leaf_index: u64,
     _new_root: [u8; 32],
 }
 
@@ -159,6 +180,16 @@ pub fn extract_appended_leaves(
                     tree_id: ev.tree_id,
                     leaf_index: ev.leaf_index,
                     value: ev.commitment,
+                });
+            }
+        } else if disc == *NOTE_MERGED_DISCRIMINATOR {
+            // A merge appends one output leaf; without this branch the mirror
+            // would silently fall behind on-chain after any consolidation.
+            if let Ok(ev) = NoteMergedEvent::try_from_slice(body) {
+                out.push(AppendedLeaf {
+                    tree_id: ev.tree_id,
+                    leaf_index: ev.leaf_index,
+                    value: ev.output_commitment,
                 });
             }
         } else if disc == *TRADE_SETTLED_DISCRIMINATOR {
@@ -230,6 +261,16 @@ mod tests {
     }
 
     #[derive(BorshSerialize)]
+    struct NoteMergedWire {
+        tree_id: u8,
+        output_commitment: [u8; 32],
+        token_mint: [u8; 32],
+        k: u8,
+        leaf_index: u64,
+        new_root: [u8; 32],
+    }
+
+    #[derive(BorshSerialize)]
     struct TradeSettledWire {
         tree_id: u8,
         match_id: [u8; 16],
@@ -294,6 +335,15 @@ mod tests {
                 d
             })
         );
+        assert_eq!(
+            hex::encode(*NOTE_MERGED_DISCRIMINATOR),
+            hex::encode({
+                let h = Sha256::digest(b"event:NoteMerged");
+                let mut d = [0u8; 8];
+                d.copy_from_slice(&h[..8]);
+                d
+            })
+        );
     }
 
     #[test]
@@ -312,6 +362,31 @@ mod tests {
         assert_eq!(leaves.len(), 1);
         assert_eq!(leaves[0].leaf_index, 7);
         assert_eq!(leaves[0].value, commitment);
+    }
+
+    #[test]
+    fn decodes_note_merged_index_and_value() {
+        // A merge appends exactly one output leaf; the mirror must apply it on
+        // the shard the event names (regression for the mirror-misses-merges bug).
+        let output = fr_safe(0x77);
+        let wire = NoteMergedWire {
+            tree_id: 2,
+            output_commitment: output,
+            token_mint: [0x9e; 32],
+            k: 4,
+            leaf_index: 19,
+            new_root: fr_safe(0x44),
+        };
+        let line = event_log_line(&NOTE_MERGED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
+        let leaves = extract_appended_leaves(&[line], None);
+        assert_eq!(
+            leaves,
+            vec![AppendedLeaf {
+                tree_id: 2,
+                leaf_index: 19,
+                value: output,
+            }]
+        );
     }
 
     #[test]

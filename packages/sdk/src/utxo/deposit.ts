@@ -23,6 +23,7 @@ import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, ownerCommitment } from "./note.js";
 import { bn254ToBE32, deriveBlindingFactor } from "../keys/key-generators.js";
 import { buildDepositInstruction, merkleTreePda } from "../idl/vault-client.js";
+import { readNoteCreatedLeafIndex } from "./leaf-index.js";
 
 /** SPL Token program id (classic, not Token-2022). */
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -30,9 +31,15 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 export interface DepositParams {
   /** Fee-payer / signer for the deposit transaction. */
   depositor: PublicKey;
-  /** Which Merkle-tree shard to deposit into (default 0). The note's leaf
-   *  index + recoverable inner_hash are read from THIS shard's tree. */
+  /** Which Merkle-tree shard to deposit into (default 0). The note's actual
+   *  leaf index is read back from the deposit's `NoteCreated` event. */
   treeId?: number;
+  /** Client-side monotonic counter that seeds this note's `inner_hash`
+   *  (`deriveBlindingFactor(seed, depositIndex)`) — INDEPENDENT of the leaf
+   *  position, so a concurrent on-chain append can't desync the opening from
+   *  where the leaf lands. Recover the note by commitment, not by index. The
+   *  caller owns the counter (one per deposit, like `merge`'s `mergeIndex`). */
+  depositIndex: bigint;
   /** 32-byte SPL mint. */
   tokenMint: Uint8Array;
   /** Amount in base units. */
@@ -52,7 +59,7 @@ export interface DepositReceipt {
     tokenMint: Uint8Array;
     amount: bigint;
     ownerCommitment: bigint;
-    /** v2: single inner_hash (deterministic from masterSeed + leafIndex). */
+    /** v2: single inner_hash (deterministic from masterSeed + depositIndex). */
     innerHash: bigint;
   };
 }
@@ -91,8 +98,10 @@ export function getDepositFunction(
 
     // --- Stage: merkle-position-fetch ---
     await params.callbacks?.pre?.("merkle-position-fetch");
-    // Post-sharding the tree state lives in the per-shard MerkleTree account
-    // (NOT VaultConfig). Read THIS shard's leaf_count to position the new leaf.
+    // Guard: the target shard must be initialised (the deposit ix appends to
+    // its MerkleTree account). We no longer read leaf_count to PREDICT the
+    // index — the actual index is read back from the NoteCreated event after
+    // confirm, which is immune to concurrent appends.
     const [treePda] = merkleTreePda(client.programId, treeId);
     const info = await client.providers.accountInfoProvider.getAccountInfo(treePda);
     if (!info) {
@@ -101,27 +110,13 @@ export function getDepositFunction(
         `merkle_tree shard ${treeId} not initialised — run initialize_tree(${treeId}) first`,
       );
     }
-    // MerkleTree layout (offsets after the 8-byte Anchor discriminator):
-    //   leaf_count: u64 LE        @   8
-    const data = info.data;
-    if (data.byteLength < 16) {
-      throw new DarkPoolError(
-        "merkle-position-fetch",
-        `merkle_tree data too small: ${data.byteLength}`,
-      );
-    }
-    const leafIndex = new DataView(
-      data.buffer,
-      data.byteOffset + 8,
-      8,
-    ).getBigUint64(0, true);
 
     // --- Stage: note-build ---
     await params.callbacks?.pre?.("note-build");
-    // v2: the note's single randomness field is a deterministic, recoverable
-    // inner_hash derived from (masterSeed, leafIndex) — reuses the existing
-    // blinding-factor KDF (the client can regenerate it from its leaf index).
-    const innerHash = deriveBlindingFactor(masterSeed, leafIndex);
+    // The note's inner_hash is derived from a client-side `depositIndex`,
+    // NOT the leaf position — so the opening stays recoverable (by commitment)
+    // regardless of where the leaf actually lands. See DepositParams.depositIndex.
+    const innerHash = deriveBlindingFactor(masterSeed, params.depositIndex);
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
     const innerBytes = bn254ToBE32(innerHash);
     const ownerBytes = bn254ToBE32(owner);
@@ -154,6 +149,13 @@ export function getDepositFunction(
       [ix],
     );
     await params.callbacks?.post?.("transaction-send", signature);
+
+    // Read the ACTUAL leaf index from the confirmed tx's NoteCreated event —
+    // race-proof against appends that landed between build and execution.
+    const leafIndex = await readNoteCreatedLeafIndex(
+      client.connectionProvider.connection,
+      signature,
+    );
 
     return {
       signature,

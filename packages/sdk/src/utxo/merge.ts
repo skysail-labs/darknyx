@@ -18,7 +18,8 @@ import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, nullifierV2, pubkeyToFrPair } from "./note.js";
 import { deriveMergeInnerHash } from "../keys/key-generators.js";
-import { buildMergeInstruction, merkleTreePda } from "../idl/vault-client.js";
+import { buildMergeInstruction } from "../idl/vault-client.js";
+import { readNoteMergedLeafIndex } from "./leaf-index.js";
 import type { StoredNote } from "./note-store.js";
 
 const MAX_K = 4;
@@ -61,19 +62,6 @@ const u8ToBigBE = (x: Uint8Array): bigint => {
   return acc;
 };
 
-/** Read shard `treeId`'s `MerkleTree.leaf_count` (u64 @ offset 8) — the merged
- *  output note's leaf index within that shard. */
-async function readLeafCount(client: DarkPoolClient, treeId: number): Promise<bigint> {
-  const [treePda] = merkleTreePda(client.programId, treeId);
-  const info = await client.providers.accountInfoProvider.getAccountInfo(treePda);
-  if (!info)
-    throw new DarkPoolError(
-      "merkle-position-fetch",
-      `merkle_tree shard ${treeId} not initialised`,
-    );
-  const d = info.data;
-  return new DataView(d.buffer, d.byteOffset + 8, 8).getBigUint64(0, true);
-}
 
 export function getMergeFunction(
   { client }: { client: DarkPoolClient },
@@ -171,9 +159,7 @@ export function getMergeFunction(
       throw new DarkPoolError("proof-generation", (e as Error).message, e);
     }
 
-    // The output note lands at the current leaf_count of the target shard.
     const treeId = params.treeId ?? 0;
-    const outputLeafIndex = await readLeafCount(client, treeId);
 
     // --- submit ---
     await params.callbacks?.pre?.("instruction-build");
@@ -197,6 +183,13 @@ export function getMergeFunction(
       throw new DarkPoolError("transaction-send", (e as Error).message, e);
     }
     await params.callbacks?.post?.("transaction-send", signature);
+
+    // Read the ACTUAL leaf index from the confirmed tx's NoteMerged event —
+    // race-proof against appends that landed between build and execution.
+    const outputLeafIndex = await readNoteMergedLeafIndex(
+      client.connectionProvider.connection,
+      signature,
+    );
 
     const outputNote: StoredNote = {
       commitment: Buffer.from(outputCommitment).toString("hex"),

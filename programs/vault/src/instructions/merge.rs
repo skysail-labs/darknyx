@@ -57,7 +57,7 @@ pub struct Merge<'info> {
 #[allow(clippy::too_many_arguments)]
 pub fn merge_handler<'info>(
     ctx: Context<'_, '_, '_, 'info, Merge<'info>>,
-    _tree_id: u8,
+    tree_id: u8,
     nullifiers: Vec<[u8; 32]>,
     output_commitment: [u8; 32],
     token_mint: Pubkey,
@@ -148,18 +148,26 @@ pub fn merge_handler<'info>(
     require!(accts.next().is_none(), VaultError::MergeAccountMismatch);
 
     // ----- Mint the output note: append its commitment as a new leaf -----
-    let new_root = {
+    // Capture the leaf_index the same way `deposit` does (the slot the leaf
+    // lands at, BEFORE append_leaf bumps leaf_count) so `NoteMerged` can carry
+    // it — the off-chain mirror + the client both need the EXACT index, which a
+    // post-hoc leaf_count read can't give under concurrent appends.
+    let (leaf_index, new_root) = {
         let zsr = ctx.accounts.vault_config.load()?.zero_subtree_roots;
         let tree = &mut ctx.accounts.merkle_tree.load_mut()?;
-        append_leaf(tree, &zsr, output_commitment)?
+        let leaf_index = tree.leaf_count;
+        let new_root = append_leaf(tree, &zsr, output_commitment)?;
+        (leaf_index, new_root)
     };
 
     // NOTE: OutstandingMint is intentionally UNCHANGED — value in == value out.
 
     emit!(NoteMerged {
+        tree_id,
         output_commitment,
         token_mint,
         k,
+        leaf_index,
         new_root,
     });
     Ok(())
@@ -216,8 +224,12 @@ fn create_nullifier_pda<'info>(
 
 #[event]
 pub struct NoteMerged {
+    /// Shard the merged output leaf was appended to (routes the off-chain mirror).
+    pub tree_id: u8,
     pub output_commitment: [u8; 32],
     pub token_mint: Pubkey,
     pub k: u8,
+    /// Tree position the merged output leaf landed at (its inclusion index).
+    pub leaf_index: u64,
     pub new_root: [u8; 32],
 }
