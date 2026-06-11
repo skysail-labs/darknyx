@@ -695,6 +695,24 @@ missing (`bash scripts/build-circuits.sh` — they're in the list; pot16, no
 new ptau). The deployed vault must carry the `merge` ix + the
 `vk_valid_merge_k{2,4}.rs` consts.
 
+`devnet-leaf-index.test.ts` validates the **race-proof leaf-index read**
+(`utxo/leaf-index.ts`) against real RPC: it drives the HIGH-LEVEL
+`getDepositFunction` + `getMergeFunction` (full `DarkPoolClient` with devnet
+providers + a snarkjs `VALID_MERGE` prover adapter), so the
+`getTransaction → parse NoteCreated/NoteMerged event` path is exercised
+end-to-end (the unit tests can only mock it). Resets shard 0 (sole appender),
+deposits 2 notes (asserts each event-read index == 0,1), merges them (asserts
+the `NoteMerged` index == 2). Requires the redeployed vault whose `NoteMerged`
+event carries `tree_id` + `leaf_index`.
+
+```sh
+RUN_DEVNET_LEAF=1 \
+  bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-leaf-index.test.ts'
+```
+
+(Reads `l1RpcUrl` + `baseMint` from `.devnet/e2e-config.json` and signs with
+`.devnet/keypairs/admin.json` — the mint authority.)
+
 ---
 
 ## 9. Resetting state

@@ -611,8 +611,11 @@ A longer error catalogue is in `scripts/dev-commands.md §10`.
   `merkle-shadow.ts`, `match-batch-prover.ts`, `valid-input-prover.ts`,
   `snarkjs-prover.ts`.
 * env-gated devnet/CVM flows: `devnet-setup` (`RUN_DEVNET_E2E`),
-  `devnet-deposit-withdraw` (`RUN_DEVNET_DW`), `cvm-settle-e2e` (`RUN_CVM_E2E`).
-  Add new e2e scenarios alongside these using the existing harness.
+  `devnet-deposit-withdraw` (`RUN_DEVNET_DW`), `devnet-merge` (`RUN_DEVNET_MERGE`),
+  `devnet-leaf-index` (`RUN_DEVNET_LEAF` — drives the high-level
+  `getDepositFunction`/`getMergeFunction` so the event-based leaf-index read in
+  `utxo/leaf-index.ts` is exercised against real RPC), `cvm-settle-e2e`
+  (`RUN_CVM_E2E`). Add new e2e scenarios alongside these using the existing harness.
 
 ---
 
