@@ -409,6 +409,15 @@ impl ApiState {
     /// contract).
     pub async fn subscribe_account_fills(&self, account_id: &str) -> broadcast::Receiver<FillMemo> {
         let mut routes = self.fills_routes.write().await;
+        // Opportunistic GC: drop channels whose `/ws/fills` subscribers have all
+        // disconnected (`receiver_count() == 0`), so the map stays bounded by the
+        // number of CURRENTLY-connected accounts rather than every account ever
+        // seen. Safe because we hold the write lock here — `subscribe` is the only
+        // path that inserts, so no concurrent caller can be mid-flight holding a
+        // just-created receiver; and a reconnecting client backfills from the
+        // indexer ("backfill then tail"), so discarding its stale channel loses
+        // nothing. Cheap: `receiver_count()` is an atomic load, subscribes are rare.
+        routes.retain(|_, tx| tx.receiver_count() > 0);
         let tx = routes
             .entry(account_id.to_string())
             .or_insert_with(|| broadcast::channel(FILLS_CHANNEL_CAP).0);

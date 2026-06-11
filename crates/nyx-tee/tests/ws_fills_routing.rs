@@ -96,3 +96,28 @@ async fn no_subscriber_means_no_delivery_but_no_error() {
     // will backfill from the indexer), and routing does not panic.
     assert!(!state.route_fill(&memo("order_a")).await);
 }
+
+#[tokio::test]
+async fn disconnected_account_channels_are_gc_d_on_next_subscribe() {
+    // The routing map must not grow unbounded: a channel whose only subscriber
+    // disconnected is reclaimed the next time ANYONE subscribes.
+    let state = Arc::new(ApiState::for_tests());
+
+    // acct_a connects then disconnects (its receiver is dropped).
+    {
+        let _rx_a = state.subscribe_account_fills("acct_a").await;
+    }
+    // The entry lingers until a subsequent subscribe sweeps it.
+    assert!(state.fills_routes.read().await.contains_key("acct_a"));
+
+    // A still-connected account must NOT be swept.
+    let _rx_live = state.subscribe_account_fills("acct_live").await;
+    // Any new subscribe runs the GC.
+    let _rx_b = state.subscribe_account_fills("acct_b").await;
+
+    let routes = state.fills_routes.read().await;
+    assert!(!routes.contains_key("acct_a"), "disconnected acct_a should be GC'd");
+    assert!(routes.contains_key("acct_live"), "connected account stays");
+    assert!(routes.contains_key("acct_b"), "the subscriber itself stays");
+    assert_eq!(routes.len(), 2, "map bounded by live subscribers, not history");
+}
