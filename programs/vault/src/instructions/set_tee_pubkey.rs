@@ -44,7 +44,7 @@ pub fn set_tee_pubkey_handler(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> 
     );
     require!(
         !keys.is_empty() && keys.len() <= MAX_TEE_KEYS,
-        VaultError::InvalidProof
+        VaultError::InvalidKeyCount
     );
 
     let old = cfg.tee_pubkeys[0];

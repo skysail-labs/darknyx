@@ -40,7 +40,7 @@ import {
   buildWithdrawInstruction,
   buildMergeInstruction,
   buildResetMerkleTreeInstruction,
-  vaultConfigPda,
+  merkleTreePda,
 } from "../src/idl/vault-client.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
@@ -61,8 +61,11 @@ const d = READY ? describe : describe.skip;
 function loadKp(rel: string): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))));
 }
+// Post-sharding leaf_count lives in the per-shard MerkleTree account at offset 8
+// (after the 8-byte Anchor discriminator), NOT in VaultConfig. Pass a
+// merkleTreePda(VAULT_ID, treeId) account.
 const leafCount = (info: { data: Uint8Array }): number =>
-  Number(new DataView(info.data.buffer, info.data.byteOffset + 104, 8).getBigUint64(0, true));
+  Number(new DataView(info.data.buffer, info.data.byteOffset + 8, 8).getBigUint64(0, true));
 
 d("devnet merge → withdraw (isolated, no CVM)", () => {
   it("merges two notes into one and withdraws the consolidated note", async () => {
@@ -93,8 +96,8 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         { commitment: "confirmed" },
       ),
     );
-    const [vaultPda] = vaultConfigPda(VAULT_ID);
-    expect(leafCount((await conn.getAccountInfo(vaultPda))!), "tree empty after reset").toBe(0);
+    const [treePda] = merkleTreePda(VAULT_ID, 0);
+    expect(leafCount((await conn.getAccountInfo(treePda))!), "tree empty after reset").toBe(0);
 
     const tree = await MerkleShadow.create();
     const notes: { amount: bigint; innerHash: bigint; commitment: Uint8Array; leafIndex: number }[] = [];
@@ -174,7 +177,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     console.log(`  · merge ${mergeSig.slice(0, 8)}… → one note of ${SUM}`);
 
     // The merged note appended at leaf 2 (leaf_count 2 → 3).
-    expect(leafCount((await conn.getAccountInfo(vaultPda))!), "merge appended one leaf").toBe(3);
+    expect(leafCount((await conn.getAccountInfo(treePda))!), "merge appended one leaf").toBe(3);
     await tree.append(mergeRes.outputCommitmentBE);
 
     // ── 3. withdraw the merged note (VALID_SPEND) ──

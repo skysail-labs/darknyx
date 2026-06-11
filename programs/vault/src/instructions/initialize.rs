@@ -34,7 +34,7 @@ pub fn initialize_handler(
 ) -> Result<()> {
     require!(
         (1..=MAX_TREES).contains(&num_trees),
-        VaultError::InvalidProof
+        VaultError::InvalidTreeCount
     );
     let cfg = &mut ctx.accounts.vault_config.load_init()?;
 

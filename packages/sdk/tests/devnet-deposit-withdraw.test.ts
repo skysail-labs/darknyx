@@ -115,6 +115,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
         createMintToInstruction(mint, ata, admin.publicKey, AMOUNT),
         buildDepositInstruction({
           programId: VAULT_ID,
+          treeId: 0,
           depositor: admin.publicKey,
           tokenMint: mint,
           depositorTokenAccount: ata,
@@ -158,6 +159,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
         ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
         buildWithdrawInstruction({
           programId: VAULT_ID,
+          treeId: 0,
           payer: admin.publicKey,
           tokenMint: mint,
           destinationTokenAccount: ata,

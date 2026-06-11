@@ -308,6 +308,11 @@ export interface BuildSettleBatchedIxParams {
 export function buildSettleBatchedIx(
   p: BuildSettleBatchedIxParams,
 ): TransactionInstruction {
+  if (!Number.isInteger(p.treeId) || p.treeId < 0 || p.treeId > 255) {
+    // treeId is a u8 shard id (PDA seed byte + first ix-data byte). A negative
+    // or non-integer value would silently mask to a bogus shard via `& 0xff`.
+    throw new Error(`buildSettleBatchedIx: treeId (${p.treeId}) must be an integer in [0,255]`);
+  }
   if (p.matchIndex < 0 || p.matchIndex > 15) {
     throw new Error(`buildSettleBatchedIx: matchIndex (${p.matchIndex}) out of range [0,15]`);
   }

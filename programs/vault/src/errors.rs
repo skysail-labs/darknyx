@@ -101,4 +101,8 @@ pub enum VaultError {
     InvalidMergeK,
     #[msg("Merge nullifier account missing or does not match the derived PDA")]
     MergeAccountMismatch,
+    #[msg("num_trees out of range (must be in 1..=MAX_TREES)")]
+    InvalidTreeCount,
+    #[msg("tee_pubkeys count out of range (must be in 1..=MAX_TEE_KEYS)")]
+    InvalidKeyCount,
 }

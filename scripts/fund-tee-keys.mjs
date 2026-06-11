@@ -50,6 +50,10 @@ try {
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
 const FUNDER_KP = process.env.FUNDER_KEYPAIR ?? join(homedir(), ".config/solana/id.json");
 const TARGET_SOL = Number(process.env.FUND_TARGET_SOL ?? "2");
+if (!Number.isFinite(TARGET_SOL) || TARGET_SOL <= 0) {
+  console.error(`FUND_TARGET_SOL must be a positive number, got "${process.env.FUND_TARGET_SOL}"`);
+  process.exit(1);
+}
 const TARGET_LAMPORTS = Math.round(TARGET_SOL * LAMPORTS_PER_SOL);
 
 const funder = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(FUNDER_KP, "utf8"))));

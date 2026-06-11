@@ -407,7 +407,10 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // merkle_tree[j] from this ALT, so all K shards must be listed (mirrors
       // the Rust static_alt_addresses).
       const altAddresses = staticSettleAltAddresses(VAULT_PROGRAM_ID, NUM_TREES);
-      const slot = await connection.getSlot("confirmed");
+      // Use the blockhash's context slot, not getSlot("confirmed") — the latter
+      // can return a leader-skipped slot absent from SlotHashes → ALT create
+      // fails with "is not a recent slot" (CRYPTOGRAPHY.md §9).
+      const slot = (await connection.getLatestBlockhashAndContext()).context.slot;
       const [createAltIx, settleLookupTable] =
         AddressLookupTableProgram.createLookupTable({
           authority: admin.publicKey,

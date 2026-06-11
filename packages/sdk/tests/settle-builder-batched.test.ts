@@ -299,6 +299,24 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(() => buildSettleBatchedIx({ ...base, matchIndex: 15 })).not.toThrow();
   });
 
+  it("[settle_batched_tree_id_validation] rejects negative, non-integer, or out-of-byte treeId", () => {
+    const tee = Keypair.generate();
+    const base = {
+      programId: PROGRAM_ID,
+      teeAuthority: tee.publicKey,
+      payload: exactFillFixture(),
+      matchIndex: 0,
+      merkleProof: fourSiblings(),
+      merkleRoot: filled(32, 0xF0),
+    };
+    expect(() => buildSettleBatchedIx({ ...base, treeId: -1 })).toThrow(/treeId/);
+    expect(() => buildSettleBatchedIx({ ...base, treeId: 1.5 })).toThrow(/treeId/);
+    expect(() => buildSettleBatchedIx({ ...base, treeId: 256 })).toThrow(/treeId/);
+    // Boundary OKs.
+    expect(() => buildSettleBatchedIx({ ...base, treeId: 0 })).not.toThrow();
+    expect(() => buildSettleBatchedIx({ ...base, treeId: 255 })).not.toThrow();
+  });
+
   it("[settle_batched_merkle_proof_validation] rejects wrong sibling count or wrong sibling length", () => {
     const tee = Keypair.generate();
     const base = {

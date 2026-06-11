@@ -4,19 +4,22 @@
 //! handler expects. The on-chain side
 //! (`programs/vault/src/instructions/lock_note.rs`) takes:
 //!
-//!   - 4 accounts: `tee_authority` (signer, writable), `vault_config`
-//!     (PDA, read-only), `note_lock` (PDA, writable — init), `system_program`.
-//!   - 7 instruction-data args, Anchor-style (8-byte discriminator
+//!   - 5 accounts: `tee_authority` (signer, writable), `vault_config`
+//!     (PDA, read-only), `merkle_tree[tree_id]` (PDA, read-only — the
+//!     shard whose recent-roots ring the `merkle_root` is checked
+//!     against), `note_lock` (PDA, writable — init), `system_program`.
+//!   - 8 instruction-data args, Anchor-style (8-byte discriminator
 //!     + Borsh-encoded args in declaration order):
-//!       1. `note_commitment: [u8; 32]`
-//!       2. `order_id: [u8; 16]`
-//!       3. `expiry_slot: u64`
-//!       4. `amount: u64`
-//!       5. `token_mint: Pubkey` (32 bytes)
-//!       6. `merkle_root: [u8; 32]`
-//!       7. `proof: Groth16Proof` (256 bytes — pi_a 64 + pi_b 128 + pi_c 64)
+//!       1. `tree_id: u8` (post-sharding: selects the `merkle_tree` account)
+//!       2. `note_commitment: [u8; 32]`
+//!       3. `order_id: [u8; 16]`
+//!       4. `expiry_slot: u64`
+//!       5. `amount: u64`
+//!       6. `token_mint: Pubkey` (32 bytes)
+//!       7. `merkle_root: [u8; 32]`
+//!       8. `proof: Groth16Proof` (256 bytes — pi_a 64 + pi_b 128 + pi_c 64)
 //!
-//! The handler enforces `tee_authority == vault_config.tee_pubkey`
+//! The handler enforces `tee_authority ∈ vault_config.tee_pubkeys`
 //! and verifies the VALID_INPUT Groth16 proof against the merkle
 //! root. **The proof is user-supplied** — the TEE just relays it.
 //! 4g.3 takes the proof bytes as a builder input; integrating it
