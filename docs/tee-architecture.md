@@ -517,15 +517,23 @@ Merkle history. The boot sequence (see §3 step 6) does:
 ```
 1. Read each MerkleTree[j] once (current_root, leaf_count) +
    VaultConfig (num_trees, deployed/floor slot).
-2. Paginate getSignaturesForAddress(vault_program_id) from
-   the floor slot forward, in batches of 1000.
+2. Scan getTransactionsForAddress(vault_program_id) — Helius gTFA, full
+   txs, status: succeeded, sortOrder asc — from the floor slot forward,
+   paged by paginationToken (≤1000 full txs/call). One call per page
+   replaces the old getSignaturesForAddress + per-signature getTransaction
+   fan-out (1 + N calls).
 3. For each tx, parse the leaf-append events emitted by
-   deposit / withdraw / tee_forced_settle_batched (each carries tree_id).
+   deposit / withdraw / merge / tee_forced_settle_batched (each carries tree_id).
 4. Replay each leaf into mirrors[tree_id] in order.
 5. Stop when every mirror[j].root() == MerkleTree[j].current_root.
 ```
 
-(With `num_trees = 1` this is the original single-mirror path.)
+The live loop re-scans gTFA from the last-seen slot each interval (the
+boundary slot is re-included; the append-only mirror skips already-applied
+indices, so overlap is harmless). gTFA is Helius-exclusive and retains ~2
+weeks on devnet — fine, since the mirror always cold-boots from a recent
+`from_slot` floor (deploy / reset slot), never genesis. (With `num_trees =
+1` this is the original single-mirror path.)
 
 For ~1 year of mainnet activity this is 30-60 s on cold boot. The
 LUKS snapshot path (warm restart) skips this entirely and replays

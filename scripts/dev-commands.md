@@ -257,9 +257,11 @@ fee payer for deploys and the funder for test personas / the CVM signer.
 
 ### 4.2 Helius RPC (why, and how to use it)
 
-The public `api.devnet.solana.com` **429s** the heavy paths — the TEE's
-Merkle sync (`getSignaturesForAddress`) and the e2e harness's many reads.
-Use a **private RPC (Helius)** for those:
+The public `api.devnet.solana.com` **429s** the heavy paths — the e2e
+harness's many reads — AND the TEE Merkle sync + the fills indexer now use
+Helius' **`getTransactionsForAddress`** (gTFA), which is **Helius-exclusive**
+(not a standard Solana RPC method), so a private RPC (Helius) is **required**,
+not just nice-to-have:
 
 ```text
 https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>
