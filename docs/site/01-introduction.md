@@ -1,198 +1,122 @@
+---
+sidebar_position: 1
+title: Introduction
+description: Nyx is a privacy-preserving CLOB darkpool on Solana — hidden orders matched inside an attested TEE, settled trustlessly with zero-knowledge proofs.
+---
+
 # Introduction
 
-> Nyx is a privacy-preserving central-limit-order-book (CLOB) darkpool
-> on Solana. Hidden orders meet inside an attested Intel TDX
-> Confidential VM; settlement happens trustlessly on Solana with
-> zero-knowledge proofs binding every transfer to a verified note
-> commitment. The on-chain footprint is custody and proofs;
-> matching is invisible to mempools, sequencers, and validators.
+:::info TL;DR
+Nyx is a privacy-preserving central-limit-order-book darkpool on Solana.
+Hidden orders are matched inside an **attested Intel TDX Confidential VM**;
+settlement lands **trustlessly on Solana**, with zero-knowledge proofs binding
+every transfer to a verified note commitment. Solana sees custody and proofs —
+never your order. The enclave sees your order — but can never move your funds.
+:::
 
----
+## The problem
 
-## The problem Nyx solves
+Public order books leak. Every resting limit order is a free signal — to a
+sandwich bot, to a market maker fading your flow, to a counterparty content to
+wait you out. On-chain order books make this *worse* than a centralized venue,
+because the leak is permanent, public, and indexed forever.
 
-Public order books bleed information. Every limit order resting on a
-DEX is a free signal to a sandwich bot, a market maker rebalancing
-inventory against you, or a counterparty looking to wait you out.
-The literature calls it "informational alpha leakage"; the daily
-PnL drain on Solana DEXes is measurable in tens of millions of
-dollars per year. On-chain order books make this worse, not better,
-than centralized venues — because the leak is permanent, public, and
-indexed.
+The usual escape is to take the order off-chain: an RFQ desk, an off-chain
+matching engine, a custodial dark pool. That trades information risk for
+**custody risk**. The operator sees every order, every fill, every position —
+and can front-run, leak, get subpoenaed, or get hacked. The Mt. Gox shape never
+goes away.
 
-The traditional response is to take the order off-chain entirely:
-quote-driven RFQ venues, off-chain matching engines, or dark pools
-operated by a custodian. These solutions cost custody risk. The
-operator can see every order, every fill, and every position. They
-can front-run, they can leak, they can be subpoenaed, they can be
-hacked. The Mt. Gox shape never goes away.
+**Nyx is the third option.** Orders enter an enclave whose code is *attested*
+and whose keys are cryptographically bound to one specific compiled image. The
+operator cannot read order intent. The enclave cannot move funds without a
+zero-knowledge proof verified on Solana. Matching happens in private; settlement
+happens trustlessly.
 
-**Nyx is the third option.** Orders enter an enclave whose code is
-attested and whose key material is cryptographically gated to a
-specific compiled image. The operator cannot read order intent
-inside the enclave; the enclave cannot exit funds without a
-zero-knowledge proof verified on Solana. The matching engine sees
-hidden orders, computes a uniform clearing price, and emits a
-batched validity proof that lets settlement land atomically on-chain.
+## What "private" means here
 
----
+Nyx enforces three distinct privacy properties, each by a separate mechanism:
 
-## What "privacy-preserving" actually means in Nyx
+| Property | What's hidden | Enforced by |
+|---|---|---|
+| **Order privacy** | Side, size, limit price | Order intent lives only inside the attested TEE — never in any Solana tx, log, or account. |
+| **Trader privacy** | The link from a trade to your wallet | You authenticate with a fresh trading key, not your wallet. The wallet ↔ trade link only ever exists inside your own withdraw proof. |
+| **Position privacy** | What you hold | Assets are UTXO-style **notes** stored on-chain as Poseidon hashes. Owner, value, and token are sealed inside the hash until *you* spend it with a proof. |
 
-Three distinct privacy properties, each enforced by a separate
-mechanism:
+No single component — not Solana, not the operator, not an observer — sees
+enough to deanonymize your trading.
 
-### 1. Order privacy
+## How it fits together
 
-Order side (buy/sell), size, and limit price are visible only to the
-TEE. They are not in any Solana transaction, log, or account that an
-external observer can read. The TEE cannot reveal them — the
-hardware attestation prevents code substitution, and the on-chain
-verifier rejects any settlement that doesn't come from the attested
-binary. (See [trust-model](./trust-model.md) for the full chain.)
-
-### 2. Trader privacy
-
-A user's Solana wallet pubkey is never a parameter in any Nyx API
-request. Users authenticate to the TEE with a separate trading-key
-keypair (Ed25519, freshly generated client-side). The on-chain
-settlement instructions carry only the trading key; the link from
-trading key to wallet exists only in the user's own withdraw-time
-VALID_SPEND proof, where the spending key never leaves their device.
-
-### 3. Position privacy
-
-Notes (the UTXO-style commitments Nyx uses for assets) are stored
-on-chain only as Poseidon hashes. The note's owner, value, and token
-are bound inside the hash; nothing about them is observable on-chain
-until the user themselves spends the note via a zero-knowledge proof.
-
----
-
-## Who Nyx is for
-
-| Segment | Why they use Nyx |
-|---|---|
-| **Active traders** | Large limit orders that don't telegraph intent. The clearing-price auction sidesteps slippage from sandwich bots; the hidden order book stops the "wait it out" game. |
-| **Market makers** | A two-sided venue where quotes don't leak to retail flow before they fill. Quote turnover and inventory rebalancing remain private — the venue can't see them, competitors can't infer them. |
-| **Institutions** | Trustless custody (the TEE can never withdraw funds without a user-generated ZK proof) combined with off-chain matching speed. The auditability properties (TDX attestation, multisig governance, deterministic image) satisfy compliance teams who would not approve a black-box dark pool. |
-| **Treasury / OTC desks** | One-shot block trades with no market impact. The order is visible only to the TEE; the resulting on-chain settle batches with other trades, so even the settle tx doesn't single out the block. |
-
----
-
-## Headline architecture
-
-Nyx is three layers that compose:
+Nyx is three layers that compose into one trust chain:
 
 ```text
-┌────────────────────────────────────────────────────────────────┐
-│  CUSTODY LAYER  — Solana program (vault)                       │
-│                                                                │
-│  Holds funds. Owns the Merkle tree of UTXO note commitments.   │
-│  Verifies every withdraw with a VALID_SPEND ZK proof; verifies │
-│  every settlement with a VALID_MATCH_BATCH proof. The only     │
-│  layer that can move tokens.                                   │
-└────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │  signed settle txs (attested TEE)
-                              │
-┌────────────────────────────────────────────────────────────────┐
-│  MATCHING LAYER  — Intel TDX Confidential VM (nyx-tee)         │
-│                                                                │
-│  Runs the order book, the matching engine, the in-TEE Groth16  │
-│  prover, and the settle scheduler. Receives orders over RA-    │
-│  TLS, runs a frequent-batch auction every 2 seconds, signs     │
-│  settlement payloads with a key derived inside the enclave.    │
-│  The enclave's compose_hash is on-chain in vault_config; only  │
-│  that compiled image can produce valid signatures.             │
-└────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │  signed order intents (Ed25519)
-                              │
-┌────────────────────────────────────────────────────────────────┐
-│  CLIENT LAYER  — TypeScript SDK                                │
-│                                                                │
-│  Generates ZK proofs (VALID_INPUT for deposits, VALID_SPEND    │
-│  for withdraws), signs canonical order bodies, attests the     │
-│  TEE's measurement chain before trusting it, and manages       │
-│  three distinct user identities (wallet / trading key / API    │
-│  credentials).                                                 │
-└────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  CUSTODY — Solana program (the "vault")                       │
+│  Holds funds. Owns the Merkle tree of note commitments.       │
+│  The only layer that can move tokens — and only against a     │
+│  zero-knowledge proof.                                        │
+└──────────────────────────────────────────────────────────────┘
+                         ▲  attested, signed settle txs
+┌──────────────────────────────────────────────────────────────┐
+│  MATCHING — Intel TDX Confidential VM                         │
+│  Runs the hidden order book, the clearing-price auction, the  │
+│  in-enclave prover, and the settle scheduler. Sees orders;    │
+│  cannot exit funds. Its image is pinned on-chain.             │
+└──────────────────────────────────────────────────────────────┘
+                         ▲  signed order intents
+┌──────────────────────────────────────────────────────────────┐
+│  CLIENT — TypeScript SDK                                      │
+│  Builds your proofs locally, verifies the enclave's           │
+│  attestation before trusting it, and keeps your spending key  │
+│  on your device — never on the wire.                          │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-The three-layer separation is the privacy story:
+The split *is* the privacy story:
 
-- **Solana sees**: deposit notes (Poseidon hashes), Merkle root
-  updates, settlement transactions (with trading keys, not wallet
-  keys), withdraw VALID_SPEND proofs.
-- **The TEE sees**: orders signed by trading keys, the matching
-  results, the canonical payload it signs.
-- **Each user sees**: their own wallet → trading-key link, their
-  own notes, their own spending keys.
+- **Solana sees** note commitments (hashes), Merkle roots, and settlement
+  transactions carrying trading keys — never wallet keys, never order intent.
+- **The enclave sees** orders signed by trading keys and the match it computes
+  — and nothing it can act on to steal.
+- **You see** your own wallet ↔ trading-key link, your own notes, your own
+  secrets — which never leave your device.
 
-No single component sees enough to deanonymize a user's trading.
+## Why matching runs in a TEE
 
----
+Matching is stateful and latency-sensitive. Run it on-chain (or on a rollup, or
+a sidechain) and every order leaks to a sequencer or validator. Run it inside an
+**attested enclave** and order intent is invisible to everyone except the
+enclave's exact compiled image — and that image is fixed by a measurement
+(`compose_hash`) registered on-chain. Only that image can produce settlements
+the vault will accept.
 
-## The matching layer runs in a TEE
+The result is a short, verifiable trust chain — *you → SDK → TEE attestation →
+Solana* — with no extra rollup, sequencer, or custodian in the middle. Clients
+verify the enclave's Intel-signed attestation before sending a single order.
 
-Nyx's matching layer runs inside a dedicated Intel TDX Confidential
-VM operated under the open-source
-[dstack](https://github.com/Dstack-TEE/dstack) framework on Phala
-Cloud. (An earlier design ran matching on MagicBlock's
-Permission-Group Ephemeral Rollup; Nyx moved off it.) The current
-shape is validated end-to-end on devnet — a deployed CVM matches and
-settles a real crossing pair on L1.
+:::note Worst case is bounded
+Even a fully compromised enclave **cannot withdraw your funds** — every exit
+needs a proof only you can generate. The most it can do is refuse to match
+(censorship) or reorder within a single batch tick — both blunted by the
+uniform-clearing-price, frequent-batch-auction design. See
+[Trust model](./trust-model).
+:::
 
-The motivation for the TDX CVM is twofold:
+## Who it's for
 
-1. **Architectural simplification.** The earlier rollup approach
-   added a second cluster running a forked Solana rollup, with its
-   own attestation, delegation, and undelegation choreography. The
-   TDX CVM is a single-process Rust daemon; the trust chain is just
-   "[user → SDK → dstack attestation → Solana]".
+| You are… | Why Nyx |
+|---|---|
+| **An active trader** | Large limit orders that don't telegraph intent. The clearing-price auction sidesteps sandwich slippage; the hidden book ends the "wait it out" game. |
+| **A market maker** | A two-sided venue where quotes don't leak to flow before they fill. Inventory rebalancing stays private. |
+| **An institution / desk** | Trustless custody (the venue can never withdraw your funds) plus off-chain matching speed — and a verifiable attestation + governance story a black-box pool can't offer. |
+| **An OTC block** | One-shot trades with no market impact; the settle batches with others, so even the on-chain tx doesn't single you out. |
 
-2. **Trust minimisation.** TDX attestation chains to Intel's cert
-   root directly; multisig governance rotates the registered
-   `compose_hash` on-chain in the vault. The TEE itself can be
-   independently verified by any client running the existing
-   `dcap-qvl` tool.
+## Where to go next
 
-The [roadmap](./roadmap-and-status.md)
-page tracks shipped vs in-flight work.
-
----
-
-## What's already in production
-
-| Layer | Status | Notes |
-|---|---|---|
-| **Custody (vault program)** | Live on Solana devnet | Core trade-path instructions: `create_wallet`, `deposit`, `lock_note`, `verify_match_batch`, `tee_forced_settle_batched`, `close_batch_validity_marker`, `withdraw`. Batched-validity settlement complete. |
-| **Matching algorithm** | Live (single source of truth in `darkpool-matcher` crate) | Uniform clearing price, FIFO tie-break, Pyth-band circuit breaker. The in-TEE matcher consumes this crate directly. |
-| **ZK circuits** | All four circuits compiled + verifying keys on-chain | VALID_INPUT, VALID_WALLET_CREATE, VALID_SPEND, VALID_MATCH_BATCH (N=2, N=4, N=16). N=16 is the production wired instantiation. |
-| **TypeScript SDK** | Parity-tested against Rust host-side primitives | Cross-language byte equality enforced on Poseidon, key derivation, note commitments, nullifiers, canonical payload hashes. |
-| **In-TEE matcher/settler (`nyx-tee`)** | Shipped — boot, matcher, oracle, HTTP/WS surface, and the full settle pipeline live; validated end-to-end on a Phala CVM | See [roadmap-and-status](./roadmap-and-status.md). |
-
----
-
-## Where to go from here
-
-If you're skimming for the **technology overview**, continue to
-[architecture-overview](./architecture-overview.md).
-
-If you're evaluating the **trust model**, jump to
-[trust-model](./trust-model.md).
-
-If you want the **settlement details** (what actually happens
-on-chain), go to [settlement-pipeline](./settlement-pipeline.md).
-
-If you're an integrator, [api-and-integration](./api-and-integration.md)
-is the wire contract.
-
----
-
-*Last updated 2026-05-29. Source of truth for the technical claims
-on this page is the `nyx-monorepo` repository; specifically
-`CRYPTOGRAPHY.md`, `docs/ARCHITECTURE.md`, `docs/tee-architecture.md`,
-and `docs/tee-attestation-flow.md`.*
+- New to the design? → [Architecture overview](./architecture-overview)
+- Evaluating the trust story? → [Trust model](./trust-model)
+- Want the on-chain mechanics? → [Settlement pipeline](./settlement-pipeline)
+- Building on it? → [Integration](./integration) and the
+  [API reference](./api-reference)
 </content>

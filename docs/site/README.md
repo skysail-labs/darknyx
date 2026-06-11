@@ -1,56 +1,49 @@
 # Nyx documentation portal — content source
 
-This directory holds the **public-facing documentation portal**
-content. The other docs at the repo root and `docs/` (e.g.
-`ARCHITECTURE.md`, `tee-architecture.md`,
-`tee-attestation-flow.md`) are engineer-facing reference material;
-this directory is the curated, narrative-led version meant for
-investors, partners, integrators, and serious technical readers
-encountering Nyx for the first time.
+This directory holds the **public-facing documentation content** for the
+Nyx docs site. It is the curated, narrative version meant for technical
+readers arriving from the landing page — traders, integrators, and
+engineers getting their first real hold on how Nyx works.
+
+It is **not** the engineer-facing reference. The deep implementation
+material (`ARCHITECTURE.md`, `CRYPTOGRAPHY.md`, `docs/tee-architecture.md`,
+`docs/tee-api-openapi.yaml`) lives elsewhere and is the source of truth for
+the technical claims here; this directory restates them for a reader, not a
+contributor.
 
 ---
 
-## Intended target
+## Target: Docusaurus
 
-The content is structured for an MDX-based documentation site
-(Next.js App Router + GitBook / Mintlify / Vercel Docs aesthetic).
-Each file is a self-contained page that:
+These pages are written to drop into a **Docusaurus** site. Each is a
+self-contained Markdown page with:
 
-- Opens with a one-line "TL;DR" the reader can grasp without
-  prior context.
-- Uses `# H1` for the page title, `##` for sections, `###` for
-  subsections — a consistent hierarchy the right-sidebar TOC can
-  consume verbatim.
-- Uses fenced code blocks with language hints (`rust`, `ts`,
-  `bash`, `text`, `json`, `solidity`-style for Anchor where it
-  helps).
-- Uses ASCII diagrams (no Mermaid) so the conversion is
-  zero-friction; an MDX-side `<Diagram>` component can wrap them
-  later if needed.
-- Cross-links sibling pages by relative path (`./trust-model`)
-  rather than by anchor.
+- **Frontmatter** — `sidebar_position`, `title`, and `description` (used for
+  the sidebar order, the page `<title>`, and SEO/social meta).
+- A **hero TL;DR** at the top (a `:::info` admonition) the reader can grasp
+  with no prior context.
+- A consistent heading hierarchy (`#` title → `##` sections → `###`
+  subsections) the right-rail "On this page" TOC consumes verbatim.
+- **Admonitions** for callouts: `:::note` (context), `:::tip` (do this),
+  `:::caution` (gotcha), `:::info` (key fact).
+- **ASCII diagrams** in fenced ```` ```text ```` blocks (no Mermaid) so the
+  conversion is zero-friction; wrap in a styled component later if desired.
+- **Relative cross-links** between pages (`./trust-model`).
 
----
+### What this content deliberately omits
 
-## Sitemap
-
-| # | File | Purpose |
-|---|---|---|
-| 01 | `introduction.md` | Vision, problem, who Nyx is for, headline architecture |
-| 02 | `architecture-overview.md` | The three-layer model + system map |
-| 03 | `custody-layer.md` | The Solana vault, notes, Merkle tree, on-chain state |
-| 04 | `matching-layer.md` | In-TEE matcher, oracle, order book, why TEE |
-| 05 | `cryptography.md` | Keys, note system, ZK circuits, replay protection |
-| 06 | `trust-model.md` | Attestation, multisig rotation, threat model |
-| 07 | `settlement-pipeline.md` | The five-transaction batched settle flow |
-| 08 | `api-and-integration.md` | Wire contract, auth model, order lifecycle |
-| 09 | `roadmap-and-status.md` | Shipped vs future, the six architecture decisions |
-| 10 | `differentiation.md` | Vs MagicBlock PER, godarkdex, Renegade, Penumbra |
-| 11 | `glossary.md` | Terms + acronyms |
+This is reader-facing, so it leaves out everything that only matters to a
+contributor: commit/PR references, "shipped in X" changelog notes, internal
+file paths, dated "last updated" footers, and design choices that don't
+change what the reader can do or trust. Architectural choices are explained
+only where they help the reader's mental model.
 
 ---
 
-## Recommended sidebar grouping for the MDX site
+## Sitemap & sidebar
+
+Group the pages into these Docusaurus categories (suggested
+`_category_.json` labels in **bold**):
 
 ```text
 Introduction
@@ -63,34 +56,50 @@ Architecture
   ├─ 05-cryptography
   └─ 06-trust-model
 
-Pipeline
-  ├─ 07-settlement-pipeline
-  └─ 08-api-and-integration
+Settlement
+  └─ 07-settlement-pipeline
 
-Status & Roadmap
-  ├─ 09-roadmap-and-status
-  └─ 10-differentiation
+Integration
+  ├─ 08-integration
+  └─ 09-api-reference
 
 Reference
-  └─ 11-glossary
+  ├─ 10-differentiation
+  ├─ 11-roadmap
+  └─ 12-glossary
 ```
 
-For the search index, the H2/H3 anchors give natural fuzzy match
-targets without further tagging.
+| # | File | Purpose |
+|---|---|---|
+| 01 | `introduction` | Vision, the problem, the three privacy properties, who it's for |
+| 02 | `architecture-overview` | The three layers + the system map |
+| 03 | `custody-layer` | The vault, notes, the sharded Merkle tree, on-chain state |
+| 04 | `matching-layer` | The in-TEE matcher, the batch auction, the oracle, continuations |
+| 05 | `cryptography` | Keys, the note model, the ZK circuits, replay protection |
+| 06 | `trust-model` | Attestation, governance, what a malicious operator can/can't do |
+| 07 | `settlement-pipeline` | The batched, tree-sharded, concurrent settle path |
+| 08 | `integration` | The deposit → trade → withdraw lifecycle, the SDK |
+| 09 | `api-reference` | The TEE HTTP + WebSocket API, distilled |
+| 10 | `differentiation` | How Nyx compares to other private/dark venues |
+| 11 | `roadmap` | Where it is and where it's going (forward-looking, no changelog) |
+| 12 | `glossary` | Terms + acronyms |
 
 ---
 
 ## Authoring conventions
 
-- **Inline links to the engineer-facing docs** use the form
-  `[Architecture reference](../ARCHITECTURE.md)` so they resolve
-  on both GitHub (for source review) and the docs site (where the
-  MDX agent will rewrite them to the site's internal routing).
-- **Code blocks** show real on-chain types / function signatures
-  where they aid the explanation; nothing here is invented.
-- **Numbers are real.** Constraint counts, transaction sizes,
-  decision dates — all match the source code as of the date in
-  the page footer.
-- **No emojis** in the prose. The MDX site can add icons as part
-  of theming if desired.
+- **No emojis** in prose. The site theme can add icons.
+- **Numbers are real** — circuit counts, the 1232-byte tx cap, batch sizes
+  all match the protocol as built.
+- **Voice**: professional but approachable; short paragraphs; lead with the
+  "why it matters to you," then the mechanism.
+- **Frontmatter template**:
+
+  ```md
+  ---
+  sidebar_position: 1
+  title: Introduction
+  description: A one-line summary used for the sidebar tooltip + SEO.
+  ---
+  ```
 </content>
