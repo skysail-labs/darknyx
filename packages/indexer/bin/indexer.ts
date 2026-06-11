@@ -5,6 +5,10 @@
  *
  *   INDEXER_RPC_URL=$HELIUS INDEXER_DB=/tmp/nyx-idx.sqlite node dist/bin/indexer.js
  *
+ * The watcher scans via Helius `getTransactionsForAddress` (gTFA), so
+ * INDEXER_RPC_URL MUST be a Helius endpoint — gTFA is not a standard Solana RPC
+ * method and a public RPC will reject it.
+ *
  * See scripts/run-indexer-local.sh for the local-testing one-liner.
  */
 

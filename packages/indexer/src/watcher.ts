@@ -1,59 +1,132 @@
 /**
- * Settle-tx watcher: polls the vault program's signatures (finalized — no
- * reorgs), pulls each tx, extracts `tee_forced_settle_batched` fills, and
- * upserts them by order_id.
+ * Settle-tx watcher: scans the vault program's history via Helius
+ * `getTransactionsForAddress` (gTFA) — ONE call returns up to 1000 FULL
+ * transactions (signatures + slots + instructions inline), oldest-first,
+ * filtered to `status: succeeded`, floored at the cursor slot. This replaces the
+ * old `getSignaturesForAddress` + per-signature `getTransaction` fan-out (1 + N
+ * calls → ~1 call per 1000 txs). Each settle's fills are upserted by order_id.
  *
- * `extractFills` is a pure function over a `getTransaction` response so it can be
- * tested against a captured/synthetic tx with no live RPC.
+ * `extractFills` is a pure function over one gTFA (jsonParsed) tx so it stays
+ * testable with a synthetic tx and no live RPC.
+ *
+ * Devnet caveat: Helius retains ~2 weeks of history on devnet; the indexer seeds
+ * its cursor to the tip (`seedCursorToTip`) and only tails forward, so this is
+ * not a concern in steady state.
  */
 
-import type { Connection, PublicKey, VersionedTransactionResponse } from "@solana/web3.js";
+import type { Connection, PublicKey } from "@solana/web3.js";
 import { decodeSettleIxData, type SettleFill } from "./decode.js";
+import { base58Decode } from "./base58.js";
 import type { FillsDb } from "./db.js";
 
-/** Pull every settle fill out of one confirmed tx (any vault settle ixs it contains). */
-export function extractFills(programId: PublicKey, tx: VersionedTransactionResponse): SettleFill[] {
-  const msg = tx.transaction.message;
-  // v0 settle txs reference accounts (incl. the program id) via ALTs, so resolve
-  // the full key list including looked-up addresses.
-  const keys = msg.getAccountKeys({ accountKeysFromLookups: tx.meta?.loadedAddresses ?? undefined });
+/** One full transaction from gTFA (jsonParsed), trimmed to what the watcher reads. */
+export interface GtfaTx {
+  slot: number;
+  transaction: { signatures: string[]; message: { instructions: GtfaInstruction[] } };
+  meta?: { err: unknown | null } | null;
+}
+/** A jsonParsed top-level instruction. For our (unparsed) vault program the RPC
+ *  returns the resolved `programId` + base58 `data` (no manual ALT/index work). */
+interface GtfaInstruction {
+  programId: string;
+  data?: string; // base58; present for unparsed instructions
+}
+
+/** One page of gTFA results + the `"slot:position"` cursor for the next page. */
+export interface GtfaPage {
+  txs: GtfaTx[];
+  nextToken: string | null;
+}
+
+/** Injectable gTFA scanner (a single page). Defaults to a `fetch` against the
+ *  connection's RPC URL; tests inject a mock. */
+export type GtfaScan = (opts: {
+  sortOrder: "asc" | "desc";
+  slotGte?: number;
+  limit: number;
+  paginationToken?: string;
+}) => Promise<GtfaPage>;
+
+/** Pull every settle fill out of one gTFA tx (any vault settle ixs it contains). */
+export function extractFills(programId: string, tx: GtfaTx): SettleFill[] {
   const out: SettleFill[] = [];
-  for (const ix of msg.compiledInstructions) {
-    const pid = keys.get(ix.programIdIndex);
-    if (!pid || !pid.equals(programId)) continue;
-    const fills = decodeSettleIxData(ix.data);
+  for (const ix of tx.transaction.message.instructions) {
+    if (ix.programId !== programId || typeof ix.data !== "string") continue;
+    const fills = decodeSettleIxData(base58Decode(ix.data));
     if (fills) out.push(...fills);
   }
   return out;
+}
+
+/** Build the default fetch-based gTFA scanner against `rpcUrl` for `programId`. */
+export function makeGtfaScan(rpcUrl: string, programId: string): GtfaScan {
+  return async ({ sortOrder, slotGte, limit, paginationToken }) => {
+    const filters: Record<string, unknown> = { status: "succeeded" };
+    if (slotGte !== undefined) filters.slot = { gte: slotGte };
+    const config: Record<string, unknown> = {
+      transactionDetails: "full",
+      encoding: "jsonParsed",
+      sortOrder,
+      limit,
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+      filters,
+    };
+    if (paginationToken) config.paginationToken = paginationToken;
+
+    const res = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getTransactionsForAddress",
+        params: [programId, config],
+      }),
+    });
+    if (!res.ok) throw new Error(`gTFA HTTP ${res.status}`);
+    const json = (await res.json()) as {
+      error?: { message: string };
+      result?: { data?: GtfaTx[]; paginationToken?: string | null };
+    };
+    if (json.error) throw new Error(`gTFA: ${json.error.message}`);
+    return {
+      txs: json.result?.data ?? [],
+      nextToken: json.result?.paginationToken ?? null,
+    };
+  };
 }
 
 export interface WatcherOpts {
   connection: Connection;
   programId: PublicKey;
   db: FillsDb;
-  /** Max signatures to pull per poll. */
+  /** Max transactions to pull per gTFA page (Helius caps at 1000). */
   pageLimit?: number;
   /** Logger (defaults to console). */
   log?: (msg: string) => void;
+  /** Override the gTFA scanner (tests inject a mock). Defaults to a `fetch`
+   *  against `connection.rpcEndpoint`. */
+  scan?: GtfaScan;
 }
 
 export class Watcher {
-  private readonly conn: Connection;
-  private readonly programId: PublicKey;
+  private readonly programIdStr: string;
   private readonly db: FillsDb;
   private readonly pageLimit: number;
   private readonly log: (msg: string) => void;
+  private readonly scan: GtfaScan;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Resolver for the inter-poll sleep, so stop() can wake run() immediately. */
   private wake: (() => void) | null = null;
   private stopped = false;
 
   constructor(o: WatcherOpts) {
-    this.conn = o.connection;
-    this.programId = o.programId;
+    this.programIdStr = o.programId.toBase58();
     this.db = o.db;
     this.pageLimit = o.pageLimit ?? 1000;
     this.log = o.log ?? ((m) => console.log(`[watcher] ${m}`));
+    this.scan = o.scan ?? makeGtfaScan(o.connection.rpcEndpoint, this.programIdStr);
   }
 
   /**
@@ -65,45 +138,50 @@ export class Watcher {
   async seedCursorToTip(): Promise<number | null> {
     const { lastSignature } = this.db.getCursor();
     if (lastSignature) return null; // already tracking — don't rewind
-    const newest = await this.conn.getSignaturesForAddress(this.programId, { limit: 1 });
-    if (newest.length === 0) return null; // no program history yet; backfill path is fine
-    this.db.setCursor(newest[0].signature, newest[0].slot);
-    this.log(`cold-start: seeded cursor to tip slot ${newest[0].slot} (no backfill)`);
-    return newest[0].slot;
+    const { txs } = await this.scan({ sortOrder: "desc", limit: 1 });
+    if (txs.length === 0) return null; // no program history yet; backfill path is fine
+    const tip = txs[0];
+    const sig = tip.transaction.signatures[0];
+    this.db.setCursor(sig, tip.slot);
+    this.log(`cold-start: seeded cursor to tip slot ${tip.slot} (no backfill)`);
+    return tip.slot;
   }
 
   /** One incremental pass. Returns the number of fill rows ingested. */
   async pollOnce(): Promise<number> {
-    const { lastSignature } = this.db.getCursor();
-    const sigs = await this.conn.getSignaturesForAddress(this.programId, {
-      until: lastSignature ?? undefined,
-      limit: this.pageLimit,
-    });
-    if (sigs.length === 0) return 0;
+    const { lastSlot } = this.db.getCursor();
+    // Re-scan from the cursor slot inclusive (gte): the boundary slot may have
+    // gained later txs since we last saw it, and the db upsert is idempotent
+    // (INSERT OR IGNORE keyed by signature+match+side), so re-seeing it is safe.
+    const slotGte = lastSlot ?? undefined;
 
-    // getSignaturesForAddress returns newest-first; process oldest-first so the
-    // cursor advances monotonically and a crash mid-pass is resumable.
+    let token: string | undefined;
     let ingested = 0;
-    for (const s of [...sigs].reverse()) {
-      if (!s.err) {
-        const tx = await this.conn.getTransaction(s.signature, {
-          maxSupportedTransactionVersion: 0,
-        });
-        if (tx) {
-          const fills = extractFills(this.programId, tx);
-          if (fills.length > 0) {
-            this.db.upsertFills(s.signature, s.slot, fills);
-            ingested += fills.length;
-          }
-        } else {
-          // null tx = pruned by the RPC or a transient miss. We still advance
-          // the cursor below (no retry here), so warn loudly: any settle in this
-          // tx is lost to the index until a rebuild from an earlier cursor.
-          this.log(`WARN: getTransaction returned null for ${s.signature} (slot ${s.slot}) — skipping (pruned/transient)`);
+    let newest: { sig: string; slot: number } | null = null;
+
+    do {
+      const { txs, nextToken } = await this.scan({
+        sortOrder: "asc",
+        slotGte,
+        limit: this.pageLimit,
+        paginationToken: token,
+      });
+      // gTFA asc → oldest-first, so the cursor advances monotonically.
+      for (const tx of txs) {
+        const sig = tx.transaction.signatures[0];
+        if (!sig) continue;
+        if (tx.meta?.err) continue; // defensive — status:succeeded already filters reverts
+        const fills = extractFills(this.programIdStr, tx);
+        if (fills.length > 0) {
+          this.db.upsertFills(sig, tx.slot, fills);
+          ingested += fills.length;
         }
+        newest = { sig, slot: tx.slot };
       }
-      this.db.setCursor(s.signature, s.slot);
-    }
+      token = nextToken ?? undefined;
+    } while (token);
+
+    if (newest) this.db.setCursor(newest.sig, newest.slot);
     if (ingested > 0) this.log(`ingested ${ingested} fill row(s)`);
     return ingested;
   }

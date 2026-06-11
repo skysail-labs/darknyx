@@ -1,24 +1,24 @@
 /**
- * Watcher tx-extraction + DB + HTTP query, end-to-end with no live RPC: a mocked
- * `getTransaction` response carrying one settle ix flows through extractFills →
- * FillsDb → GET /fills.
+ * Watcher tx-extraction + DB + HTTP query, with no live RPC: a synthetic gTFA
+ * (jsonParsed) tx carrying one settle ix flows through extractFills → FillsDb →
+ * GET /fills, and the gTFA scanner is injected to drive seedCursorToTip/pollOnce.
  */
 
 import { createRequire } from "node:module";
 import { describe, it, expect, afterEach } from "vitest";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, type Connection } from "@solana/web3.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
 import { serializePayload, type MatchResultPayload } from "../../sdk/src/settlement/settle-builder.js";
-import { extractFills, Watcher } from "../src/watcher.js";
+import { extractFills, Watcher, type GtfaTx, type GtfaScan } from "../src/watcher.js";
+import { base58Encode } from "../src/base58.js";
 import { FillsDb } from "../src/db.js";
 import { startServer } from "../src/server.js";
 import { SETTLE_DISCRIMINATOR, DEFAULT_PROGRAM_ID } from "../src/index.js";
 
 // `node:sqlite` is Node 22+ (unflagged on 24). On older runtimes (CI pins Node
-// 20) the DB-backed tests skip; the decode parity gate (decode.test.ts) and the
-// pure extractFills test below still run everywhere.
+// 20) the DB-backed tests skip; the pure extractFills test below still runs.
 const HAS_SQLITE = (() => {
   try {
     createRequire(import.meta.url)("node:sqlite");
@@ -61,6 +61,7 @@ function payload(): MatchResultPayload {
   };
 }
 
+/** Real settle ix data shape: disc(8) ‖ payload ‖ match_index(1) ‖ 128 siblings. */
 function ixData(p: MatchResultPayload): Uint8Array {
   const body = serializePayload(p);
   const out = new Uint8Array(8 + body.length + 1 + 128);
@@ -69,25 +70,28 @@ function ixData(p: MatchResultPayload): Uint8Array {
   return out;
 }
 
-const VAULT = new PublicKey(DEFAULT_PROGRAM_ID);
-const OTHER = new PublicKey("So11111111111111111111111111111111111111112");
+const VAULT = new PublicKey(DEFAULT_PROGRAM_ID).toBase58();
+const OTHER = new PublicKey("So11111111111111111111111111111111111111112").toBase58();
 
-/** Build a minimal getTransaction-shaped object the watcher reads from. */
-function mockTx(): any {
-  const keys = [OTHER, VAULT];
+/** A gTFA (jsonParsed) full tx with a non-vault ix + a vault settle ix. */
+function gtfaTx(signature = "sig1", slot = 500): GtfaTx {
   return {
+    slot,
     transaction: {
+      signatures: [signature],
       message: {
-        getAccountKeys: () => ({ get: (i: number) => keys[i] }),
-        compiledInstructions: [
-          { programIdIndex: 0, data: new Uint8Array([9, 9, 9]) }, // non-vault → skipped
-          { programIdIndex: 1, data: ixData(payload()) }, // vault settle → 2 fills
+        instructions: [
+          { programId: OTHER, data: base58Encode(new Uint8Array([9, 9, 9])) }, // skipped
+          { programId: VAULT, data: base58Encode(ixData(payload())) }, // 2 fills
         ],
       },
     },
-    meta: { loadedAddresses: undefined },
+    meta: { err: null },
   };
 }
+
+/** Stub connection — the gTFA scanner is injected, so rpcEndpoint is unused. */
+const stubConn = { rpcEndpoint: "http://stub" } as unknown as Connection;
 
 const dbs: FillsDb[] = [];
 const dbPath = () => join(tmpdir(), `nyx-idx-test-${Math.random().toString(36).slice(2)}.sqlite`);
@@ -97,7 +101,7 @@ afterEach(() => {
 
 describe("watcher extractFills", () => {
   it("pulls fills only from the vault settle ix", () => {
-    const fills = extractFills(VAULT, mockTx());
+    const fills = extractFills(VAULT, gtfaTx());
     expect(fills).toHaveLength(2);
     expect(fills.map((f) => f.side).sort()).toEqual(["buyer", "seller"]);
   });
@@ -109,7 +113,7 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
     const db = new FillsDb(path);
     dbs.push(db);
 
-    const fills = extractFills(VAULT, mockTx());
+    const fills = extractFills(VAULT, gtfaTx());
     db.upsertFills("sigABC", 500, fills);
     db.upsertFills("sigABC", 500, fills); // idempotent re-scan
 
@@ -136,13 +140,29 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
     rmSync(path, { force: true });
   });
 
-  it("advances the cursor", () => {
+  it("pollOnce ingests fills from a gTFA page and advances the cursor", async () => {
     const path = dbPath();
     const db = new FillsDb(path);
     dbs.push(db);
-    expect(db.getCursor().lastSignature).toBeNull();
-    db.setCursor("sigXYZ", 1234);
-    expect(db.getCursor()).toEqual({ lastSignature: "sigXYZ", lastSlot: 1234 });
+
+    let calls = 0;
+    const scan: GtfaScan = async (opts) => {
+      calls += 1;
+      if (calls === 1) {
+        expect(opts.sortOrder).toBe("asc"); // oldest-first
+        return { txs: [gtfaTx("sigPoll", 700)], nextToken: null };
+      }
+      return { txs: [], nextToken: null };
+    };
+    const w = new Watcher({ connection: stubConn, programId: new PublicKey(VAULT), db, scan, log: () => {} });
+
+    const n = await w.pollOnce();
+    expect(n).toBe(2); // buyer + seller
+    expect(db.getCursor()).toEqual({ lastSignature: "sigPoll", lastSlot: 700 });
+    expect(db.getFillsByOrder(hexN(0xaa, 16))).toHaveLength(1);
+
+    // Re-poll with no new txs → idempotent, cursor unchanged.
+    expect(await w.pollOnce()).toBe(0);
     rmSync(path, { force: true });
   });
 
@@ -150,13 +170,12 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
     const path = dbPath();
     const db = new FillsDb(path);
     dbs.push(db);
-    const conn = {
-      getSignaturesForAddress: async (_pid: unknown, opts: { limit: number }) => {
-        expect(opts.limit).toBe(1); // asks for just the tip
-        return [{ signature: "tipSig", slot: 999_999 }];
-      },
-    } as never;
-    const w = new Watcher({ connection: conn, programId: VAULT, db, log: () => {} });
+    const scan: GtfaScan = async (opts) => {
+      expect(opts.sortOrder).toBe("desc"); // newest-first
+      expect(opts.limit).toBe(1); // just the tip
+      return { txs: [gtfaTx("tipSig", 999_999)], nextToken: null };
+    };
+    const w = new Watcher({ connection: stubConn, programId: new PublicKey(VAULT), db, scan, log: () => {} });
     expect(await w.seedCursorToTip()).toBe(999_999);
     expect(db.getCursor()).toEqual({ lastSignature: "tipSig", lastSlot: 999_999 });
     // seeding must NOT ingest any history
@@ -170,13 +189,11 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
     dbs.push(db);
     db.setCursor("existing", 42);
     let called = false;
-    const conn = {
-      getSignaturesForAddress: async () => {
-        called = true;
-        return [];
-      },
-    } as never;
-    const w = new Watcher({ connection: conn, programId: VAULT, db, log: () => {} });
+    const scan: GtfaScan = async () => {
+      called = true;
+      return { txs: [], nextToken: null };
+    };
+    const w = new Watcher({ connection: stubConn, programId: new PublicKey(VAULT), db, scan, log: () => {} });
     expect(await w.seedCursorToTip()).toBeNull();
     expect(called).toBe(false);
     expect(db.getCursor()).toEqual({ lastSignature: "existing", lastSlot: 42 });
