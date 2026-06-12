@@ -84,7 +84,9 @@ tags:
   - name: instruments
     description: Public market metadata.
   - name: orders
-    description: Place / cancel / mass-quote / inspect orders.
+    description: Place / cancel / modify / inspect orders.
+  - name: system
+    description: Public engine liveness + server time (GTT slot conversion).
   - name: account
     description: Per-account balance, open orders, outstanding notes.
   - name: tree
@@ -1031,17 +1033,87 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+    put:
+      tags: [orders]
+      summary: |
+        Modify an open order — atomic cancel + replace.
+      description: |
+        "The same owner replaces their resting order with a new one." The body
+        carries a signed cancel of the OLD order (over its id) plus a full new
+        order (`replacement`, a normal signed order). The trading key that signs
+        the cancel MUST be the one that signs the replacement. The swap is
+        applied under one matcher lock with BOTH preconditions checked first
+        (old order exists + owned; replacement order_id not already booked unless
+        it is the same id, a reprice in place), so there is no window where the
+        caller has neither order. The replacement carries its own note +
+        VALID_INPUT proof (it may reuse the old note while the root is still in
+        the 64-root window) — no new signed message type; it composes the
+        existing cancel + order canonical bodies.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: string }
+          description: The OLD order's id (hex) to replace.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cancel_signature, cancel_nonce, replacement]
+              properties:
+                cancel_signature:
+                  type: string
+                  description: 64-byte Ed25519 sig over CancelCanonical{old_id, trading_key, cancel_nonce}, hex.
+                cancel_nonce: { type: integer }
+                replacement:
+                  description: A full, independently-signed place-order body (same shape as POST /orders).
+      responses:
+        '200':
+          description: Modified — old order cancelled, replacement resting.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [old_order_id, order_id, status, arrival_slot]
+                properties:
+                  old_order_id: { type: string }
+                  order_id: { type: string, description: New order id (may equal old_order_id on a reprice). }
+                  status: { type: string, enum: [modified] }
+                  arrival_slot: { type: integer }
+        '403':
+          description: The booked order is not owned by this trading_key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: The old order doesn't exist.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: The replacement order_id is already booked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /orders/mass-quote:
     post:
       tags: [orders]
       summary: |
-        Atomic cancel-replace batch (market-maker primitive).
+        Atomic cancel-replace batch (SHELVED — not implemented).
       description: |
-        Up to 20 cancel-replace pairs in one round-trip. Either
-        the whole batch succeeds or the whole batch fails (no
-        partial-state outcomes). This is the recommended API for
-        market makers managing many concurrent quotes.
+        **Shelved, not built.** A true mass-quote needs a collateral
+        primitive we don't have: one note backing a *set* of quotes
+        (today every resting order pins its own locked note + VALID_INPUT
+        proof, so N quotes cost N notes — there is no cheaper-than-N path
+        at the endpoint layer). That primitive is a vault + circuit
+        project, not an endpoint. The MM-friendly atomic operation we DO
+        ship is `PUT /orders/{order_id}` (single atomic cancel+replace).
+        Rationale + the revisit criteria: docs/api-surface-roadmap.md
+        (Shelved → Mass-quote). Returns 501 until/unless built.
       security: [{ BearerAuth: [] }]
       requestBody:
         required: true
@@ -1049,13 +1121,8 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/MassQuoteRequest' }
       responses:
-        '200':
-          description: Batch processed atomically.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/MassQuoteResponse' }
-        '400':
-          description: Validation error (one or more legs invalid).
+        '501':
+          description: Shelved — use PUT /orders/{order_id} for atomic cancel+replace.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -1197,6 +1264,64 @@ paths:
                         value: { type: string }
                   merkle_root: { type: string }
 
+  # ───── system ──────────────────────────────────────────────────────────────
+
+  /system/status:
+    get:
+      tags: [system]
+      summary: |
+        Liveness / degraded-mode snapshot. Public, unauthenticated.
+      description: |
+        Reports whether the matching tick and the on-chain settle
+        pipeline are wired, whether an oracle cache is attached, and the
+        TEE's current Solana slot. `degraded` is `true` whenever the
+        matcher or the settle pipeline is down — mirrors GoDark's
+        degraded-mode signaling so clients can back off before they hit
+        a write failure.
+      responses:
+        '200':
+          description: Engine status snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [degraded, matcher_running, settle_enabled, oracle_configured, current_slot, nyx_version]
+                properties:
+                  degraded:
+                    type: boolean
+                    description: true when matching OR settle is down.
+                  matcher_running: { type: boolean }
+                  settle_enabled:
+                    type: boolean
+                    description: The on-chain settle pipeline is wired.
+                  oracle_configured:
+                    type: boolean
+                    description: An oracle cache (clearing-price reference) is attached.
+                  current_slot: { type: integer, format: uint64 }
+                  nyx_version: { type: string }
+
+  /time:
+    get:
+      tags: [system]
+      summary: |
+        Server time — current Solana slot + unix ms. Public.
+      description: |
+        The TEE's current slot and wall-clock time. Clients use this to
+        convert a wall-clock GTT (good-till-time) expiry into an
+        `expiry_slot` without running their own RPC. Mirrors GoDark's
+        "Server Time".
+      responses:
+        '200':
+          description: Server time snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [slot, unix_ms]
+                properties:
+                  slot: { type: integer, format: uint64 }
+                  unix_ms: { type: integer, format: uint64, description: Server unix time, milliseconds. }
+
   # ───── transparency ────────────────────────────────────────────────────────
 
   /transparency:
@@ -1255,30 +1380,58 @@ paths:
 
 x-websocket-implemented:
   # The CURRENTLY IMPLEMENTED WS surface (the multiplexed `/v1/stream` below is
-  # the planned superset). A single dedicated, per-account fill-memo stream.
-  url: /ws/fills
+  # the planned superset). Two dedicated, per-account streams: fill-memos and
+  # order-lifecycle events. Both share the same self-auth + per-account routing.
   auth: |
     Bearer token from POST /auth/token, passed as the `?token=` query param
     (browsers + the global WebSocket can't set an Authorization header on the
-    upgrade; a `Authorization: Bearer` header is also accepted). The stream is
-    PER-ACCOUNT: a subscriber only ever receives fill memos for orders it placed
-    (routed via the intake-time order_id→account map). Earlier fills (before the
-    socket opened, or after a lag-close) are recovered from the off-TEE indexer —
-    the "backfill then tail" client flow.
-  server_messages:
-    FillMemo:
-      description: One continuation fill. The client verifies it (inner_hash +
-        commitment binding) then stores the change note. See docs/fills-history-architecture.md.
-      message:
-        type: object
-        required: [order_id, anchor_index, change_amount, change_note_commitment, mint, inner_hash]
-        properties:
-          order_id: { type: string, description: 16-byte hex. }
-          anchor_index: { type: integer }
-          change_amount: { type: integer, format: uint64 }
-          change_note_commitment: { type: string, description: 32-byte hex. }
-          mint: { type: string, description: 32-byte hex. }
-          inner_hash: { type: string, description: 32-byte hex. }
+    upgrade; a `Authorization: Bearer` header is also accepted). Every stream is
+    PER-ACCOUNT: a subscriber only ever receives events for orders it placed
+    (routed via the intake-time order_id→account map).
+  streams:
+    /ws/fills:
+      description: |
+        Per-account continuation-fill memos. Earlier fills (before the socket
+        opened, or after a lag-close) are recovered from the off-TEE indexer —
+        the "backfill then tail" client flow.
+      server_messages:
+        FillMemo:
+          description: One continuation fill. The client verifies it (inner_hash +
+            commitment binding) then stores the change note. See docs/fills-history-architecture.md.
+          message:
+            type: object
+            required: [order_id, anchor_index, change_amount, change_note_commitment, mint, inner_hash]
+            properties:
+              order_id: { type: string, description: 16-byte hex. }
+              anchor_index: { type: integer }
+              change_amount: { type: integer, format: uint64 }
+              change_note_commitment: { type: string, description: 32-byte hex. }
+              mint: { type: string, description: 32-byte hex. }
+              inner_hash: { type: string, description: 32-byte hex. }
+    /ws/orders:
+      description: |
+        Per-account order-lifecycle events. The matcher emits an update each
+        time one of the account's orders changes state in a tick
+        (partial/full fill, expiry); an explicit DELETE /orders/{id} (and the
+        cancel leg of a PUT /orders/{id} modify) also emits a synthetic
+        `cancelled`. Terminal events (fully_filled / cancelled / expired) are the
+        order's last; the server then drops its routing entry.
+      server_messages:
+        OrderUpdate:
+          description: One order state transition. `filled_quantity` is present on fills;
+            `new_amount` / `new_note_amount` are present on a partial fill (the residual
+            that keeps resting).
+          message:
+            type: object
+            required: [order_id, kind]
+            properties:
+              order_id: { type: string, description: 16-byte hex. }
+              kind:
+                type: string
+                enum: [partially_filled, fully_filled, cancelled, expired]
+              filled_quantity: { type: integer, format: uint64 }
+              new_amount: { type: integer, format: uint64, description: Residual base amount after a partial fill. }
+              new_note_amount: { type: integer, format: uint64, description: Residual collateral-note amount after a partial fill. }
   close_codes:
     1011: Lagged past the per-account buffer — reopen and backfill from the indexer.
 
@@ -1395,15 +1548,25 @@ x-websocket:
           request_id: { type: string }
           order_id: { type: string }
 
-    order.mass_quote:
-      description: Atomic cancel-replace batch (same as POST /orders/mass-quote).
+    order.modify:
+      description: |
+        Atomic cancel + replace (same as PUT /orders/{order_id}): cancel the
+        OLD order and rest a fully-signed replacement under one matcher lock.
       message:
         type: object
-        required: [op, request_id, params]
+        required: [op, request_id, order_id, cancel_signature, cancel_nonce, replacement]
         properties:
-          op: { type: string, enum: [order.mass_quote] }
+          op: { type: string, enum: [order.modify] }
           request_id: { type: string }
-          params: { $ref: '#/components/schemas/MassQuoteRequest' }
+          order_id: { type: string, description: The OLD order id (hex) to replace. }
+          cancel_signature: { type: string }
+          cancel_nonce: { type: integer }
+          replacement: { $ref: '#/components/schemas/PlaceOrderRequest' }
+
+    # order.mass_quote was SHELVED (see POST /orders/mass-quote and
+    # docs/api-surface-roadmap.md): a mass-quote needs a one-note-backs-many-
+    # quotes collateral primitive we don't have. The atomic MM op we ship is
+    # order.modify (single cancel+replace) above.
 
     account.info:
       description: |

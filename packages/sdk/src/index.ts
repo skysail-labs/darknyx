@@ -39,6 +39,11 @@ export {
 } from "./orders/canonical.js";
 export * from "./orders/anchor-pool.js";
 export * from "./orders/fill-memo.js";
+// Order-builder sugar (market / AON / FOK / GTT presets) + the per-account
+// order-lifecycle WS client + the public system endpoints.
+export * from "./orders/builders.js";
+export * from "./orders/orders-ws-client.js";
+export * from "./system/system-client.js";
 export * from "./fills/history.js";
 export * from "./fills/ws-client.js";
 export * from "./settlement/settle-builder.js";
