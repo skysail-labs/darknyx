@@ -29,7 +29,10 @@ pub fn serialize_wtns(witness: &[Fr]) -> Vec<u8> {
     // The .wtns format stores nWitness as a u32 (line 15). A witness exceeding
     // u32::MAX is physically impossible here (>137 GB at 32 B/element), but make
     // the format bound explicit so the `n as u32` below can never silently wrap.
-    debug_assert!(n <= u32::MAX as usize, "witness length {n} exceeds .wtns u32 nWitness bound");
+    debug_assert!(
+        n <= u32::MAX as usize,
+        "witness length {n} exceeds .wtns u32 nWitness bound"
+    );
     let mut out = Vec::with_capacity(12 + (4 + 8 + 40) + (4 + 8) + n * 32);
 
     out.extend_from_slice(b"wtns");

@@ -641,10 +641,7 @@ impl SolanaRpcClient {
         filters.insert("status".to_string(), serde_json::json!("succeeded"));
 
         let mut cfg = serde_json::Map::new();
-        cfg.insert(
-            "transactionDetails".to_string(),
-            serde_json::json!("full"),
-        );
+        cfg.insert("transactionDetails".to_string(), serde_json::json!("full"));
         cfg.insert("encoding".to_string(), serde_json::json!("json"));
         cfg.insert(
             "sortOrder".to_string(),

@@ -265,13 +265,25 @@ async fn submit_lock_note_pair_skips_both_relocked_sides() {
         .await
         .unwrap();
 
-    assert_eq!(outcome.buyer_sig, None, "relocked buyer side must be skipped");
-    assert_eq!(outcome.seller_sig, None, "relocked seller side must be skipped");
+    assert_eq!(
+        outcome.buyer_sig, None,
+        "relocked buyer side must be skipped"
+    );
+    assert_eq!(
+        outcome.seller_sig, None,
+        "relocked seller side must be skipped"
+    );
 
     // No blockhash fetch and no sends — the function short-circuits before any RPC.
     let s = mock.lock().await;
-    assert!(!s.captured.contains_key("getLatestBlockhash"), "no blockhash fetch expected");
-    assert!(!s.captured.contains_key("sendTransaction"), "no sends expected");
+    assert!(
+        !s.captured.contains_key("getLatestBlockhash"),
+        "no blockhash fetch expected"
+    );
+    assert!(
+        !s.captured.contains_key("sendTransaction"),
+        "no sends expected"
+    );
 }
 
 #[tokio::test]

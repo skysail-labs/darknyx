@@ -637,7 +637,10 @@ mod tests {
         );
 
         let applied = sync.cold_boot().await.unwrap();
-        assert_eq!(applied, 1, "the deposit's leaf was decoded from the gTFA full tx");
+        assert_eq!(
+            applied, 1,
+            "the deposit's leaf was decoded from the gTFA full tx"
+        );
         let m = mirror.read().await;
         assert_eq!(m.leaf_count(), 1);
         assert_eq!(m.leaf_index_of(&commitment), Some(0));
