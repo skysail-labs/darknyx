@@ -959,3 +959,175 @@ async fn get_rejects_missing_bearer_with_401() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+// ─── PUT /orders/{id} — atomic cancel + replace (modify) ────────────────────
+
+async fn modify(
+    app: &Router,
+    bearer: &str,
+    old_id_hex: &str,
+    body: serde_json::Value,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/orders/{old_id_hex}"))
+                .header("authorization", format!("Bearer {bearer}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+fn modify_body(
+    key: &SigningKey,
+    old_id: [u8; 16],
+    cancel_nonce: u64,
+    replacement: serde_json::Value,
+) -> serde_json::Value {
+    let trading_key = key.verifying_key().to_bytes();
+    let cancel = CancelCanonical {
+        order_id: old_id,
+        trading_key,
+        cancel_nonce,
+    };
+    let sig = key.sign(&cancel.digest());
+    json!({
+        "cancel_signature": hex::encode(sig.to_bytes()),
+        "cancel_nonce": cancel_nonce,
+        "replacement": replacement,
+    })
+}
+
+#[tokio::test]
+async fn modify_swaps_old_order_for_new_atomically() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    let a = PlaceOrderBuilder::new();
+    assert_eq!(
+        place(&app, &bearer, a.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    // Replacement B: new order_id + distinct note (different inner_hash).
+    let mut b = PlaceOrderBuilder::new();
+    b.order_id = {
+        let mut o = [0u8; 16];
+        o[0] = 0xBB;
+        o[15] = 2;
+        o
+    };
+    b.note_inner_hash = {
+        let mut v = [0x56u8; 32];
+        v[0] = 0;
+        v
+    };
+
+    let resp = modify(
+        &app,
+        &bearer,
+        &hex::encode(a.order_id),
+        modify_body(&key, a.order_id, 1, b.sign(&key)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["status"], "modified");
+    assert_eq!(json["old_order_id"], hex::encode(a.order_id));
+    assert_eq!(json["order_id"], hex::encode(b.order_id));
+
+    // Old gone, new resting.
+    assert_eq!(
+        get_order(&app, &bearer, &hex::encode(a.order_id))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get_order(&app, &bearer, &hex::encode(b.order_id))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn modify_reprice_in_place_keeps_the_same_id() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    let a = PlaceOrderBuilder::new();
+    assert_eq!(
+        place(&app, &bearer, a.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    // Same order_id, new price (a reprice). The note must cover the new
+    // collateral, so keep price (and thus note_amount) unchanged here; bump the
+    // min_fill instead to prove the canonical body was re-signed + re-committed.
+    let mut b = PlaceOrderBuilder::new();
+    b.min_fill_size = 1;
+
+    let resp = modify(
+        &app,
+        &bearer,
+        &hex::encode(a.order_id),
+        modify_body(&key, a.order_id, 1, b.sign(&key)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert_eq!(json["order_id"], hex::encode(a.order_id), "same id reused");
+
+    assert_eq!(
+        get_order(&app, &bearer, &hex::encode(a.order_id))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn modify_non_owner_is_forbidden() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let owner = fresh_signing_key();
+    let attacker = fresh_signing_key();
+
+    let a = PlaceOrderBuilder::new();
+    assert_eq!(
+        place(&app, &bearer, a.sign(&owner)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    // Attacker signs both the cancel + the replacement → cancel sig verifies, but
+    // the booked order is owned by `owner`, so the swap is rejected (and nothing
+    // is mutated — atomic precondition check).
+    let mut b = PlaceOrderBuilder::new();
+    b.order_id = {
+        let mut o = [0u8; 16];
+        o[0] = 0xCC;
+        o
+    };
+    let resp = modify(
+        &app,
+        &bearer,
+        &hex::encode(a.order_id),
+        modify_body(&attacker, a.order_id, 1, b.sign(&attacker)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    // Old order untouched.
+    assert_eq!(
+        get_order(&app, &bearer, &hex::encode(a.order_id))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+}

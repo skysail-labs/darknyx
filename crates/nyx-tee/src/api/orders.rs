@@ -137,7 +137,7 @@ pub struct AnchorJson {
     pub nullifier: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SideTag {
     Bid,
@@ -153,7 +153,7 @@ impl From<SideTag> for OrderSide {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OrderTypeTag {
     Limit,
@@ -276,13 +276,30 @@ fn order_inclusion_commitment(
 // POST /orders
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub async fn place_order(
-    State(state): State<Arc<ApiState>>,
-    Extension(auth): Extension<Authorized>,
-    Json(req): Json<PlaceOrderRequest>,
-) -> Result<(StatusCode, Json<PlaceOrderResponse>), (StatusCode, String)> {
-    let matcher = matcher_or_503(&state)?;
+/// Everything an order needs to be committed to the book, after all
+/// (lock-free) verification has passed. Built by [`prepare_order`]; consumed by
+/// [`commit_order`] under the matcher write lock.
+struct PreparedOrder {
+    order: Order,
+    note_commitment: [u8; 32],
+    opening: crate::matcher::openings::NoteOpening,
+    order_id: [u8; 16],
+    lock_merkle_root: [u8; 32],
+    valid_input_proof: crate::settle::lock_note::Groth16ProofBytes,
+    anchors: Vec<Anchor>,
+    arrival_slot: u64,
+}
 
+/// Verify + build an order WITHOUT touching the book (decode, Fr-checks,
+/// canonical-signature verify, collateral/fee derivation, opening verify, Order
+/// construction). Lock-free so the Poseidon work doesn't block a matcher tick;
+/// the caller commits the result under the write lock. Shared by `place_order`
+/// and `modify_order`.
+async fn prepare_order(
+    state: &ApiState,
+    matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
+    req: &PlaceOrderRequest,
+) -> Result<PreparedOrder, (StatusCode, String)> {
     // 1. Decode hex inputs.
     let order_id: [u8; 16] = decode_hex(&req.order_id, "order_id")?;
     let note_commitment: [u8; 32] = decode_hex(&req.note_commitment, "note_commitment")?;
@@ -507,43 +524,94 @@ pub async fn place_order(
         ),
     };
 
-    // 5. Insert. Book may reject for duplicate order_id; map to 409.
-    //    On success, record the verified opening keyed by order_id so
-    //    the settle assembler can build the proof witness. Both
-    //    mutations happen under the same write lock so an observer
-    //    never sees a booked order without its opening.
-    let mut st = matcher.write().await;
-    st.book_mut().submit(order).map_err(|e| match e {
+    Ok(PreparedOrder {
+        order,
+        note_commitment,
+        opening,
+        order_id,
+        lock_merkle_root,
+        valid_input_proof,
+        anchors,
+        arrival_slot,
+    })
+}
+
+/// Commit a prepared order to the book under the matcher write lock: submit it,
+/// store the opening (keyed by note commitment so the settle assembler resolves
+/// both sides of a match), and stash the continuation anchor pool. Both
+/// mutations happen under the same lock the caller holds, so an observer never
+/// sees a booked order without its opening.
+fn commit_order(
+    st: &mut crate::matcher::MatcherState,
+    p: PreparedOrder,
+    expiry_slot: u64,
+) -> Result<(), (StatusCode, String)> {
+    st.book_mut().submit(p.order).map_err(|e| match e {
         BookError::Duplicate(_, _) => (StatusCode::CONFLICT, e.to_string()),
         BookError::ZeroOrderId => (StatusCode::BAD_REQUEST, e.to_string()),
-        // The matcher's other BookError variants belong to cancel
-        // / status paths and shouldn't surface here. If they do,
-        // it's a bug — surface as 500.
         e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     })?;
-    // Keyed by collateral note commitment so the settle assembler can
-    // resolve both sides of a match from MatchPair.note_buyer/seller.
     st.openings_mut().insert(
-        note_commitment,
+        p.note_commitment,
         crate::matcher::openings::OrderOpening {
-            opening,
-            order_id,
-            expiry_slot: req.expiry_slot,
-            merkle_root: lock_merkle_root,
-            valid_input_proof,
+            opening: p.opening,
+            order_id: p.order_id,
+            expiry_slot,
+            merkle_root: p.lock_merkle_root,
+            valid_input_proof: p.valid_input_proof,
             // A fresh deposit: lock_note must run for it (no prior re-lock).
             from_relock: false,
         },
     );
-    // Stash the continuation anchor pool, keyed by order_id (stable
-    // across the collateral rotation a partial-fill continuation does).
-    st.openings_mut()
-        .insert_anchor_pool(order_id, crate::matcher::openings::AnchorPool::new(anchors));
-    drop(st);
+    st.openings_mut().insert_anchor_pool(
+        p.order_id,
+        crate::matcher::openings::AnchorPool::new(p.anchors),
+    );
+    Ok(())
+}
 
-    // Record order→account for per-account fills routing — this is the one
-    // moment the bearer (account) and the order_id are both in hand. Done after
-    // dropping the matcher lock so we never hold it across the routing-map lock.
+/// Remove an order + its opening + anchor pool from the book under the matcher
+/// write lock (the lock-held half of `cancel_order`, reused by `modify_order`).
+fn cancel_in_book(
+    st: &mut crate::matcher::MatcherState,
+    trading_key: [u8; 32],
+    order_id: [u8; 16],
+) -> Result<(), (StatusCode, String)> {
+    // Resolve the collateral note BEFORE cancelling (the store is keyed by note
+    // commitment, not order_id).
+    let collateral_note = st.book().get(&order_id).map(|o| o.collateral_note);
+    st.book_mut()
+        .cancel(trading_key, order_id)
+        .map_err(|e| match e {
+            BookError::NotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),
+            BookError::NotOwner(_, _) => (StatusCode::FORBIDDEN, e.to_string()),
+            e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        })?;
+    if let Some(note) = collateral_note {
+        st.openings_mut().remove(&note);
+    }
+    st.openings_mut().remove_anchor_pool(&order_id);
+    Ok(())
+}
+
+pub async fn place_order(
+    State(state): State<Arc<ApiState>>,
+    Extension(auth): Extension<Authorized>,
+    Json(req): Json<PlaceOrderRequest>,
+) -> Result<(StatusCode, Json<PlaceOrderResponse>), (StatusCode, String)> {
+    let matcher = matcher_or_503(&state)?;
+    let prepared = prepare_order(&state, matcher, &req).await?;
+    let order_id = prepared.order_id;
+    let arrival_slot = prepared.arrival_slot;
+
+    {
+        let mut st = matcher.write().await;
+        commit_order(&mut st, prepared, req.expiry_slot)?;
+    }
+
+    // Record order→account for per-account routing — the one moment the bearer
+    // (account) and the order_id are both in hand. After dropping the matcher
+    // lock so we never hold it across the routing-map lock.
     state
         .record_order_owner(hex::encode(order_id), auth.account_id.clone())
         .await;
@@ -627,6 +695,127 @@ pub async fn cancel_order(
     Ok(Json(CancelOrderResponse {
         order_id: hex::encode(order_id),
         status: "cancelled",
+    }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PUT /orders/{order_id}  — atomic cancel + replace (modify)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Body for `PUT /orders/{order_id}`. A modify is "the same owner replaces their
+/// resting order with a new one." It carries a signed cancel of the OLD order
+/// (over its id) plus a full new order (`replacement`, a normal signed
+/// `PlaceOrderRequest`). The trading key that signs the cancel MUST be the one
+/// that signs the replacement — the swap happens atomically under one matcher
+/// lock, so there is no window where the caller has neither order.
+#[derive(Debug, Deserialize)]
+pub struct ModifyOrderRequest {
+    /// 64-byte Ed25519 signature over `CancelCanonical{old_order_id, trading_key,
+    /// cancel_nonce}`, hex — proves ownership of the OLD order.
+    pub cancel_signature: String,
+    pub cancel_nonce: u64,
+    /// The replacement order — a full, independently-signed `PlaceOrderRequest`
+    /// (its own note + `VALID_INPUT` proof; may reuse the old order's note while
+    /// the root is still in the 64-root window).
+    pub replacement: PlaceOrderRequest,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModifyOrderResponse {
+    /// The cancelled order's id (hex).
+    pub old_order_id: String,
+    /// The new order's id (hex; may equal `old_order_id` on a reprice-in-place).
+    pub order_id: String,
+    pub status: &'static str,
+    pub arrival_slot: u64,
+}
+
+pub async fn modify_order(
+    State(state): State<Arc<ApiState>>,
+    Extension(auth): Extension<Authorized>,
+    Path(old_order_id_hex): Path<String>,
+    Json(req): Json<ModifyOrderRequest>,
+) -> Result<Json<ModifyOrderResponse>, (StatusCode, String)> {
+    let matcher = matcher_or_503(&state)?;
+
+    let old_order_id: [u8; 16] = decode_hex(&old_order_id_hex, "order_id (path)")?;
+    // The cancel is authorized by the SAME trading_key that signs the
+    // replacement. Verify the cancel sig over the OLD id with that key.
+    let trading_key: [u8; 32] =
+        decode_hex(&req.replacement.trading_key, "replacement.trading_key")?;
+    let cancel_signature: [u8; 64] = decode_hex(&req.cancel_signature, "cancel_signature")?;
+    let cancel = CancelCanonical {
+        order_id: old_order_id,
+        trading_key,
+        cancel_nonce: req.cancel_nonce,
+    };
+    verify_sig(&cancel.digest(), &trading_key, &cancel_signature)?;
+
+    // Verify + build the replacement (its own canonical sig, collateral, opening)
+    // OUTSIDE the lock — the Poseidon/Ed25519 work doesn't block a tick.
+    let prepared = prepare_order(&state, matcher, &req.replacement).await?;
+    let new_order_id = prepared.order_id;
+    let arrival_slot = prepared.arrival_slot;
+
+    // Atomic swap under ONE write lock. Check BOTH preconditions before mutating
+    // so neither side partially applies (no "user has neither order" window):
+    //   - the old order exists and is owned by this trading_key, and
+    //   - the new order_id isn't already booked (unless it's the same id — a
+    //     reprice in place, where cancelling the old frees the id first).
+    {
+        let mut st = matcher.write().await;
+        match st.book().get(&old_order_id) {
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!("order {old_order_id_hex} not found"),
+                ))
+            }
+            Some(o) if o.trading_key != trading_key => {
+                return Err((StatusCode::FORBIDDEN, "not the order owner".to_string()))
+            }
+            Some(_) => {}
+        }
+        if new_order_id != old_order_id && st.book().get(&new_order_id).is_some() {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "replacement order_id {} already exists",
+                    hex::encode(new_order_id)
+                ),
+            ));
+        }
+        // Preconditions hold → both mutations succeed.
+        cancel_in_book(&mut st, trading_key, old_order_id)?;
+        commit_order(&mut st, prepared, req.replacement.expiry_slot)?;
+    }
+
+    // The old order left the book → emit a Cancelled on `/ws/orders` + drop its
+    // owner mapping, UNLESS the id is reused (a reprice keeps the logical order).
+    if new_order_id != old_order_id {
+        state
+            .route_order_update(
+                &old_order_id_hex,
+                &OrderUpdateMsg {
+                    order_id: old_order_id_hex.clone(),
+                    kind: "cancelled",
+                    filled_quantity: None,
+                    new_amount: None,
+                    new_note_amount: None,
+                },
+            )
+            .await;
+        state.forget_order(&old_order_id_hex).await;
+    }
+    state
+        .record_order_owner(hex::encode(new_order_id), auth.account_id.clone())
+        .await;
+
+    Ok(Json(ModifyOrderResponse {
+        old_order_id: old_order_id_hex,
+        order_id: hex::encode(new_order_id),
+        status: "modified",
+        arrival_slot,
     }))
 }
 
