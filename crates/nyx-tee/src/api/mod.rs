@@ -22,6 +22,7 @@ pub mod orders;
 pub mod settlement;
 pub mod state;
 pub mod system;
+pub mod trading;
 pub mod transparency;
 pub mod tree;
 pub mod ws;
@@ -91,7 +92,11 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         .route("/ws/fills", get(ws::fills_ws))
         // Per-account order-lifecycle stream — same self-auth + per-account
         // routing as `/ws/fills` (see `api::ws::orders_ws` + `api::order_router`).
-        .route("/ws/orders", get(ws::orders_ws));
+        .route("/ws/orders", get(ws::orders_ws))
+        // Bidirectional order-submission socket — framed place/cancel/modify
+        // over one warm authenticated connection + cancel-on-disconnect. Same
+        // self-auth (`?token=`) as the streams above (see `api::trading`).
+        .route("/ws/trading", get(trading::trading_ws));
 
     // Debug endpoints — only compiled in when the `debug_endpoints`
     // cargo feature is on. Used by `nyx-tee-loadgen` (PR 4f) for

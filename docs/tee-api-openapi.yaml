@@ -1432,6 +1432,95 @@ x-websocket-implemented:
               filled_quantity: { type: integer, format: uint64 }
               new_amount: { type: integer, format: uint64, description: Residual base amount after a partial fill. }
               new_note_amount: { type: integer, format: uint64, description: Residual collateral-note amount after a partial fill. }
+    /ws/trading:
+      description: |
+        BIDIRECTIONAL order-submission socket. One warm, pre-authenticated
+        connection over which a client streams framed `order.place` /
+        `order.cancel` / `order.modify` requests and gets one reply per frame —
+        each dispatched to the SAME intake the REST `POST/DELETE/PUT /orders`
+        handlers use, so there is no second verification path. The win over
+        REST is the avoided per-request TLS + bearer round-trip and
+        **cancel-on-disconnect**.
+
+        AUTH: the socket self-authenticates at upgrade (bearer via `?token=` or
+        the Authorization header). The per-order trading-key SIGNATURE is still
+        required on every place/cancel/modify frame (the JWT identifies the
+        account; the trading_key is the cryptographic owner) — an authed socket
+        cannot move another key's orders.
+
+        CANCEL-ON-DISCONNECT: open with `?cancel_on_disconnect=true`. The TEE
+        tracks the orders placed on THIS socket and, when it closes, cancels
+        the ones still resting. That teardown is server-initiated (no client
+        signature — the order was placed on this authenticated session, and a
+        cancel only removes a resting order, never settles). A market maker
+        that loses connectivity therefore doesn't leave stale quotes crossing.
+      client_messages:
+        # Each frame is internally tagged by `op`; `request_id` (optional) is
+        # echoed on the reply so a client can correlate on the multiplexed socket.
+        order.place:
+          message:
+            type: object
+            required: [op, params]
+            properties:
+              op: { type: string, enum: [order.place] }
+              request_id: { type: string }
+              params: { $ref: '#/components/schemas/PlaceOrderRequest' }
+        order.cancel:
+          message:
+            type: object
+            required: [op, order_id, params]
+            properties:
+              op: { type: string, enum: [order.cancel] }
+              request_id: { type: string }
+              order_id: { type: string, description: 16-byte hex. }
+              params:
+                type: object
+                description: Same body as DELETE /orders/{id} (trading-key cancel signature).
+                required: [trading_key, cancel_nonce, trading_key_signature]
+                properties:
+                  trading_key: { type: string }
+                  cancel_nonce: { type: integer }
+                  trading_key_signature: { type: string }
+        order.modify:
+          message:
+            type: object
+            required: [op, order_id, params]
+            properties:
+              op: { type: string, enum: [order.modify] }
+              request_id: { type: string }
+              order_id: { type: string, description: The OLD order id (hex) to replace. }
+              params:
+                type: object
+                required: [cancel_signature, cancel_nonce, replacement]
+                properties:
+                  cancel_signature: { type: string }
+                  cancel_nonce: { type: integer }
+                  replacement: { $ref: '#/components/schemas/PlaceOrderRequest' }
+        ping:
+          message:
+            type: object
+            required: [op]
+            properties:
+              op: { type: string, enum: [ping] }
+              request_id: { type: string }
+      server_messages:
+        Reply:
+          description: |
+            One reply per request frame. `op` echoes the request's
+            (`order.place` / `order.cancel` / `order.modify`) with a `result`
+            body identical to the REST response, or `pong` for a ping. A failed
+            frame returns `op: error` with the HTTP-equivalent `code`
+            (400/403/404/409/503) + `message` — the same reason the REST path
+            would have returned.
+          message:
+            type: object
+            required: [op]
+            properties:
+              op: { type: string, enum: [order.place, order.cancel, order.modify, pong, error] }
+              request_id: { type: string }
+              result: { type: object, description: Present on success; mirrors the REST response body. }
+              code: { type: integer, description: Present on `error` — the HTTP-equivalent status. }
+              message: { type: string, description: Present on `error`. }
   close_codes:
     1011: Lagged past the per-account buffer — reopen and backfill from the indexer.
 
@@ -1439,7 +1528,9 @@ x-websocket:
 
   url: /v1/stream
   description: |
-    PLANNED (not yet implemented — `/ws/fills` above is the live surface).
+    PLANNED multiplexed superset (the live surface is the dedicated
+    `/ws/fills`, `/ws/orders`, and `/ws/trading` sockets above — the
+    order.place/cancel/modify ops below already ship on `/ws/trading`).
     One multiplexed socket per session. Authenticate with
     `op: login` (carrying a bearer token from POST /auth/token),
     then subscribe to channels.

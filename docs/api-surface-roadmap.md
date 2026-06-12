@@ -45,8 +45,8 @@ Two facts flow from this and gate the whole roadmap:
 
 | Channel | GoDark | Nyx (today) | Action |
 |---|---|---|---|
-| **Order lifecycle** | `/ws/orders` | ❌ — we stream **fills only** | **add — Tier 1 (A1), the headline win** |
-| **Order submission** | `/ws/trading` (`place/cancel/modify`) | ❌ — HTTP POST only | **add — Tier 2 (Phase B)** |
+| **Order lifecycle** | `/ws/orders` | ✅ `/ws/orders` (per-account lifecycle events) | **✅ done (Tier 1, A1)** |
+| **Order submission** | `/ws/trading` (`place/cancel/modify`) | ✅ `/ws/trading` (framed place/cancel/modify + cancel-on-disconnect) | **✅ done (Phase B)** |
 | User events / positions | `/ws/user` | ❌ (positions N/A) | later |
 | External market data | `/ws/gomarket` | ❌ (oracle is internal) | not planned |
 | Fills | (part of orders) | ✅ `/ws/fills` (per-account, Vuln-4 integrity check) | — |
@@ -103,24 +103,38 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
 
 ## 6. Roadmap
 
-### Tier 1 — high value, feasible, aligned
-- **A1 — `/ws/orders` order-lifecycle channel.** Stream the `OrderUpdate`s the matcher already
-  emits; reuse the `fills_router` per-account fan-out.
-- **A2 — market / AON / GTT sugar** (SDK builders) + **`GET /time`** (server slot + unix, for
-  GTT conversion).
-- **A3 — baseline self-trade prevention** (skip self-crossing pairs in `generate_matches`).
-- **A4 — `/system/status`** (matcher / settle / oracle-freshness / slot / `degraded`).
+### Tier 1 — high value, feasible, aligned — ✅ DONE
+- **A1 — `/ws/orders` order-lifecycle channel.** ✅ Streams the `OrderUpdate`s the matcher
+  emits; reuses the `fills_router` per-account fan-out (`api/order_router.rs`).
+- **A2 — market / AON / GTT sugar** (SDK builders, `packages/sdk/src/orders/builders.ts`) +
+  **`GET /time`** (server slot + unix, for GTT conversion). ✅
+- **A3 — baseline self-trade prevention** (skip self-crossing pairs in `generate_matches`). ✅
+- **A4 — `/system/status`** (matcher / settle / oracle-presence / slot / `degraded`). ✅
 
-### Tier 2 — valuable, more work
-- **A5 — `order.modify`** as atomic cancel+replace (`PUT /orders/:id`): compose the existing
-  `CancelCanonical` + `OrderCanonical` (no new signed type); swap under one matcher lock. Win =
-  atomicity (no cancel/replace gap) + one round-trip. The new order carries its own
-  note + `VALID_INPUT` proof (may reuse the same note+proof while the root is in the 64-root
-  window).
-- **Phase B (staged fast-follow) — `/ws/trading` submission + cancel-on-disconnect.** Submit
-  `order.place/cancel/modify` over the socket; track `session → {order_id}` and cancel the
-  session's resting orders on disconnect (authenticated server action). Account-level default +
-  per-session opt-in (like GoDark's `cancel_on_disconnect`). Done after A1's plumbing is proven.
+### Tier 2 — valuable, more work — ✅ DONE
+- **A5 — `order.modify`** as atomic cancel+replace (`PUT /orders/:id`): ✅ composes the existing
+  `CancelCanonical` + `OrderCanonical` (no new signed type); swaps under one matcher lock with
+  both preconditions checked first. Win = atomicity (no cancel/replace gap) + one round-trip.
+  The new order carries its own note + `VALID_INPUT` proof (may reuse the same note+proof while
+  the root is in the 64-root window).
+- **Phase B — `/ws/trading` submission + cancel-on-disconnect.** ✅ A bidirectional socket
+  streams framed `order.place/cancel/modify`, each dispatched to the SAME intake the REST
+  handlers call (`orders::{place,cancel,modify}_core` — no second verification path). With
+  `?cancel_on_disconnect=true`, the handler tracks `session → {order_id}` and tears down the
+  session's still-resting orders on close via a server-initiated cancel (no client sig — the
+  order was placed on this authed session; a cancel only un-rests, never settles). The
+  per-order trading-key signature is still required on every place/cancel/modify frame.
+  - *Deferred:* an **account-level** cancel-on-disconnect default (today it's per-session opt-in
+    via the query param). That needs an account-config store the registry doesn't have yet —
+    revisit alongside any `/account` settings work.
+  - *Deferred:* an **SDK `/ws/trading` send-client**. The SDK has no order-submission transport
+    today (clients build + sign + POST the canonical body themselves; the SDK ships only crypto
+    primitives + receive-only streams). A send-client would be the first such transport — a
+    separate decision from Phase B. The OpenAPI frame contract is the integration surface for now.
+
+> **Status:** Phase A + Phase B shipped on the `tree-sharding` branch. `/v1/stream` (the
+> multiplexed superset in the OpenAPI) remains planned; its order ops already live on
+> `/ws/trading`.
 
 ## 7. What we already do better (differentiators)
 

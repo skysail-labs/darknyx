@@ -594,13 +594,17 @@ fn cancel_in_book(
     Ok(())
 }
 
-pub async fn place_order(
-    State(state): State<Arc<ApiState>>,
-    Extension(auth): Extension<Authorized>,
-    Json(req): Json<PlaceOrderRequest>,
-) -> Result<(StatusCode, Json<PlaceOrderResponse>), (StatusCode, String)> {
-    let matcher = matcher_or_503(&state)?;
-    let prepared = prepare_order(&state, matcher, &req).await?;
+/// Place an order: verify + build (lock-free) then commit it under the matcher
+/// write lock + record its owner for per-account routing. The transport-agnostic
+/// core shared by `POST /orders` (`place_order`) and the `/ws/trading`
+/// `order.place` frame — both already hold the authenticated `account_id`.
+pub async fn place_core(
+    state: &ApiState,
+    matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
+    req: &PlaceOrderRequest,
+    account_id: &str,
+) -> Result<PlaceOrderResponse, (StatusCode, String)> {
+    let prepared = prepare_order(state, matcher, req).await?;
     let order_id = prepared.order_id;
     let arrival_slot = prepared.arrival_slot;
 
@@ -613,32 +617,61 @@ pub async fn place_order(
     // (account) and the order_id are both in hand. After dropping the matcher
     // lock so we never hold it across the routing-map lock.
     state
-        .record_order_owner(hex::encode(order_id), auth.account_id.clone())
+        .record_order_owner(hex::encode(order_id), account_id.to_string())
         .await;
 
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(PlaceOrderResponse {
-            order_id: hex::encode(order_id),
-            status: "accepted",
-            arrival_slot,
-        }),
-    ))
+    Ok(PlaceOrderResponse {
+        order_id: hex::encode(order_id),
+        status: "accepted",
+        arrival_slot,
+    })
+}
+
+pub async fn place_order(
+    State(state): State<Arc<ApiState>>,
+    Extension(auth): Extension<Authorized>,
+    Json(req): Json<PlaceOrderRequest>,
+) -> Result<(StatusCode, Json<PlaceOrderResponse>), (StatusCode, String)> {
+    let matcher = matcher_or_503(&state)?;
+    let resp = place_core(&state, matcher, &req, &auth.account_id).await?;
+    Ok((StatusCode::ACCEPTED, Json(resp)))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DELETE /orders/{order_id}
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub async fn cancel_order(
-    State(state): State<Arc<ApiState>>,
-    Extension(_auth): Extension<Authorized>,
-    Path(order_id_hex): Path<String>,
-    Json(req): Json<CancelOrderRequest>,
-) -> Result<Json<CancelOrderResponse>, (StatusCode, String)> {
-    let matcher = matcher_or_503(&state)?;
+/// Route a synthetic `Cancelled` onto `/ws/orders` then drop the order's
+/// routing entry. Explicit/server cancels bypass the matcher tick (so they
+/// never reach the `order_updates` broadcast); this mirrors them so
+/// `/ws/orders` subscribers still see the order leave, and bounds the
+/// `order_owner` map. Shared by every cancel path.
+async fn announce_cancel(state: &ApiState, order_id_hex: &str) {
+    state
+        .route_order_update(
+            order_id_hex,
+            &OrderUpdateMsg {
+                order_id: order_id_hex.to_string(),
+                kind: "cancelled",
+                filled_quantity: None,
+                new_amount: None,
+                new_note_amount: None,
+            },
+        )
+        .await;
+    state.forget_order(order_id_hex).await;
+}
 
-    let order_id: [u8; 16] = decode_hex(&order_id_hex, "order_id (path)")?;
+/// Cancel an order after verifying a fresh trading-key signature over its id.
+/// The transport-agnostic core shared by `DELETE /orders/{id}` (`cancel_order`)
+/// and the `/ws/trading` `order.cancel` frame.
+pub async fn cancel_core(
+    state: &ApiState,
+    matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
+    order_id_hex: &str,
+    req: &CancelOrderRequest,
+) -> Result<CancelOrderResponse, (StatusCode, String)> {
+    let order_id: [u8; 16] = decode_hex(order_id_hex, "order_id (path)")?;
     let trading_key: [u8; 32] = decode_hex(&req.trading_key, "trading_key")?;
     let signature: [u8; 64] = decode_hex(&req.trading_key_signature, "trading_key_signature")?;
 
@@ -647,55 +680,57 @@ pub async fn cancel_order(
         trading_key,
         cancel_nonce: req.cancel_nonce,
     };
-    let digest = cancel.digest();
-    verify_sig(&digest, &trading_key, &signature)?;
+    verify_sig(&cancel.digest(), &trading_key, &signature)?;
 
-    let mut st = matcher.write().await;
-    // Resolve the collateral note BEFORE cancelling (the store is
-    // keyed by note commitment, not order_id), so we can drop the
-    // opening after the book removes the order.
-    let collateral_note = st.book().get(&order_id).map(|o| o.collateral_note);
-    st.book_mut()
-        .cancel(trading_key, order_id)
-        .map_err(|e| match e {
-            BookError::NotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),
-            BookError::NotOwner(_, _) => (StatusCode::FORBIDDEN, e.to_string()),
-            e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        })?;
-    // Cancelled order can never settle — drop its in-enclave opening
-    // AND its order_id-keyed continuation anchor pool (the cancel path
-    // removes the order directly, bypassing the tick's apply_updates
-    // pool eviction, so do it here too).
-    if let Some(note) = collateral_note {
-        st.openings_mut().remove(&note);
+    {
+        let mut st = matcher.write().await;
+        cancel_in_book(&mut st, trading_key, order_id)?;
     }
-    st.openings_mut().remove_anchor_pool(&order_id);
-    drop(st);
+    announce_cancel(state, order_id_hex).await;
 
-    // Mirror the cancel onto the order-lifecycle stream BEFORE forgetting the
-    // owner mapping (explicit cancels bypass the matcher tick, so they don't go
-    // through the order_updates broadcast — route a synthetic Cancelled here so
-    // `/ws/orders` subscribers see it).
-    state
-        .route_order_update(
-            &order_id_hex,
-            &OrderUpdateMsg {
-                order_id: order_id_hex.clone(),
-                kind: "cancelled",
-                filled_quantity: None,
-                new_amount: None,
-                new_note_amount: None,
-            },
-        )
-        .await;
-
-    // Cancelled order can never produce a fill — drop its fills-routing entry.
-    state.forget_order(&order_id_hex).await;
-
-    Ok(Json(CancelOrderResponse {
+    Ok(CancelOrderResponse {
         order_id: hex::encode(order_id),
         status: "cancelled",
-    }))
+    })
+}
+
+/// Server-initiated cancel of a still-resting order — the cancel-on-disconnect
+/// path. Cancels using the order's OWN booked `trading_key` (no client
+/// signature): the order was placed on an authenticated `/ws/trading` session,
+/// so the session's authority covers tearing it down when the socket closes.
+/// A no-op (returns `false`) if the order already left the book
+/// (filled/expired/already cancelled). Cancelling only removes a resting order
+/// — it never moves funds or settles — so requiring no fresh signature is safe.
+pub async fn cancel_resting_unchecked(
+    state: &ApiState,
+    matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
+    order_id_hex: &str,
+) -> bool {
+    let Ok(order_id) = decode_hex::<16>(order_id_hex, "order_id") else {
+        return false;
+    };
+    {
+        let mut st = matcher.write().await;
+        let Some(trading_key) = st.book().get(&order_id).map(|o| o.trading_key) else {
+            return false; // already gone
+        };
+        if cancel_in_book(&mut st, trading_key, order_id).is_err() {
+            return false;
+        }
+    }
+    announce_cancel(state, order_id_hex).await;
+    true
+}
+
+pub async fn cancel_order(
+    State(state): State<Arc<ApiState>>,
+    Extension(_auth): Extension<Authorized>,
+    Path(order_id_hex): Path<String>,
+    Json(req): Json<CancelOrderRequest>,
+) -> Result<Json<CancelOrderResponse>, (StatusCode, String)> {
+    let matcher = matcher_or_503(&state)?;
+    let resp = cancel_core(&state, matcher, &order_id_hex, &req).await?;
+    Ok(Json(resp))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -730,15 +765,17 @@ pub struct ModifyOrderResponse {
     pub arrival_slot: u64,
 }
 
-pub async fn modify_order(
-    State(state): State<Arc<ApiState>>,
-    Extension(auth): Extension<Authorized>,
-    Path(old_order_id_hex): Path<String>,
-    Json(req): Json<ModifyOrderRequest>,
-) -> Result<Json<ModifyOrderResponse>, (StatusCode, String)> {
-    let matcher = matcher_or_503(&state)?;
-
-    let old_order_id: [u8; 16] = decode_hex(&old_order_id_hex, "order_id (path)")?;
+/// Atomic cancel + replace. The transport-agnostic core shared by
+/// `PUT /orders/{id}` (`modify_order`) and the `/ws/trading` `order.modify`
+/// frame.
+pub async fn modify_core(
+    state: &ApiState,
+    matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
+    old_order_id_hex: &str,
+    req: &ModifyOrderRequest,
+    account_id: &str,
+) -> Result<ModifyOrderResponse, (StatusCode, String)> {
+    let old_order_id: [u8; 16] = decode_hex(old_order_id_hex, "order_id (path)")?;
     // The cancel is authorized by the SAME trading_key that signs the
     // replacement. Verify the cancel sig over the OLD id with that key.
     let trading_key: [u8; 32] =
@@ -753,7 +790,7 @@ pub async fn modify_order(
 
     // Verify + build the replacement (its own canonical sig, collateral, opening)
     // OUTSIDE the lock — the Poseidon/Ed25519 work doesn't block a tick.
-    let prepared = prepare_order(&state, matcher, &req.replacement).await?;
+    let prepared = prepare_order(state, matcher, &req.replacement).await?;
     let new_order_id = prepared.order_id;
     let arrival_slot = prepared.arrival_slot;
 
@@ -793,30 +830,29 @@ pub async fn modify_order(
     // The old order left the book → emit a Cancelled on `/ws/orders` + drop its
     // owner mapping, UNLESS the id is reused (a reprice keeps the logical order).
     if new_order_id != old_order_id {
-        state
-            .route_order_update(
-                &old_order_id_hex,
-                &OrderUpdateMsg {
-                    order_id: old_order_id_hex.clone(),
-                    kind: "cancelled",
-                    filled_quantity: None,
-                    new_amount: None,
-                    new_note_amount: None,
-                },
-            )
-            .await;
-        state.forget_order(&old_order_id_hex).await;
+        announce_cancel(state, old_order_id_hex).await;
     }
     state
-        .record_order_owner(hex::encode(new_order_id), auth.account_id.clone())
+        .record_order_owner(hex::encode(new_order_id), account_id.to_string())
         .await;
 
-    Ok(Json(ModifyOrderResponse {
-        old_order_id: old_order_id_hex,
+    Ok(ModifyOrderResponse {
+        old_order_id: old_order_id_hex.to_string(),
         order_id: hex::encode(new_order_id),
         status: "modified",
         arrival_slot,
-    }))
+    })
+}
+
+pub async fn modify_order(
+    State(state): State<Arc<ApiState>>,
+    Extension(auth): Extension<Authorized>,
+    Path(old_order_id_hex): Path<String>,
+    Json(req): Json<ModifyOrderRequest>,
+) -> Result<Json<ModifyOrderResponse>, (StatusCode, String)> {
+    let matcher = matcher_or_503(&state)?;
+    let resp = modify_core(&state, matcher, &old_order_id_hex, &req, &auth.account_id).await?;
+    Ok(Json(resp))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
