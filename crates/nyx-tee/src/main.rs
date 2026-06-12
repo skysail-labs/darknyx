@@ -488,6 +488,11 @@ async fn main() -> Result<()> {
     // (the leak guard behind `/ws/fills`). No-op in degraded boot (no matcher).
     nyx_tee::api::fills_router::spawn_fills_router(api_state.clone());
 
+    // ─── 7e. Spawn the order-lifecycle router ─────────────────────────
+    // Fans the matcher's global OrderUpdate broadcast into per-account channels
+    // (behind `/ws/orders`). No-op in degraded boot (no matcher).
+    nyx_tee::api::order_router::spawn_order_router(api_state.clone());
+
     // ─── 8. Build router + bind listener + serve ──────────────────────
     let app = nyx_tee::api::build_router(api_state);
     let addr: SocketAddr = cfg

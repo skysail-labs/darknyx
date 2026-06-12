@@ -17,9 +17,11 @@ pub mod fills_router;
 pub mod health;
 pub mod info;
 pub mod instruments;
+pub mod order_router;
 pub mod orders;
 pub mod settlement;
 pub mod state;
+pub mod system;
 pub mod transparency;
 pub mod tree;
 pub mod ws;
@@ -79,11 +81,17 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         .route("/instruments/:symbol", get(instruments::get_instrument))
         // Public proof-of-reserves + engine identity + stats.
         .route("/transparency", get(transparency::get_transparency))
+        // Liveness/degraded-mode snapshot + server time (for GTT slot conversion).
+        .route("/system/status", get(system::get_status))
+        .route("/time", get(system::get_time))
         // Per-account fill-memo stream. Self-authenticating (token via
         // `?token=` or Bearer header), so it is mounted on the PUBLIC router
         // (outside the header-only bearer middleware) yet only ever streams the
         // authenticated account's own memos — see `api::ws` + `api::fills_router`.
-        .route("/ws/fills", get(ws::fills_ws));
+        .route("/ws/fills", get(ws::fills_ws))
+        // Per-account order-lifecycle stream — same self-auth + per-account
+        // routing as `/ws/fills` (see `api::ws::orders_ws` + `api::order_router`).
+        .route("/ws/orders", get(ws::orders_ws));
 
     // Debug endpoints — only compiled in when the `debug_endpoints`
     // cargo feature is on. Used by `nyx-tee-loadgen` (PR 4f) for

@@ -217,3 +217,39 @@ async fn wrong_method_returns_405() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
+
+// ─────── /system/status + /time ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn system_status_returns_200_with_flags() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/system/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    // for_tests() wires a matcher but no settle pipeline → degraded.
+    assert_eq!(json["matcher_running"], true);
+    assert!(json["degraded"].is_boolean());
+    assert!(json["current_slot"].is_number());
+    assert!(json["nyx_version"].is_string());
+}
+
+#[tokio::test]
+async fn time_returns_slot_and_unix_ms() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(Request::builder().uri("/time").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = read_json(resp).await;
+    assert!(json["slot"].is_number());
+    assert!(json["unix_ms"].as_u64().unwrap() > 0);
+}

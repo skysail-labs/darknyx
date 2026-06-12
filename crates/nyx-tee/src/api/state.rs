@@ -22,6 +22,7 @@ use std::time::Instant;
 
 use dstack_sdk::dstack_client::DstackClient;
 
+use serde::Serialize;
 use tokio::sync::{broadcast, RwLock, Semaphore};
 
 use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_JWT_SECRET};
@@ -196,6 +197,31 @@ pub struct ApiState {
     /// broadcast into these per-account channels, so a subscriber sees ONLY
     /// its own order's memos (the leak guard that gated the old global route).
     pub fills_routes: Arc<RwLock<HashMap<String, broadcast::Sender<FillMemo>>>>,
+    /// `account_id → per-account order-lifecycle broadcast`. Same per-account
+    /// fan-out as `fills_routes`, but for `/ws/orders`: the order router fans
+    /// the matcher's global `OrderUpdate` broadcast into these channels keyed
+    /// by `order_owner`, so a subscriber sees ONLY its own orders' updates.
+    pub order_routes: Arc<RwLock<HashMap<String, broadcast::Sender<OrderUpdateMsg>>>>,
+}
+
+/// Wire form of a `darkpool_matcher::book::OrderUpdate` streamed on `/ws/orders`.
+/// `kind` is the lifecycle tag; the numeric fields are present only for the
+/// kinds that carry them (flattened from `OrderUpdateKind`).
+#[derive(Clone, Debug, Serialize)]
+pub struct OrderUpdateMsg {
+    /// 16-byte order id, hex.
+    pub order_id: String,
+    /// `"fully_filled" | "partially_filled" | "cancelled" | "expired"`.
+    pub kind: &'static str,
+    /// Cumulative filled quantity (fully/partially filled only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filled_quantity: Option<u64>,
+    /// Remaining order size after a partial fill (partially filled only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_amount: Option<u64>,
+    /// New collateral-note value after a partial-fill re-lock (partially filled only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_note_amount: Option<u64>,
 }
 
 /// Per-account fill-memo channel depth. A slow `/ws/fills` client that lags
@@ -258,6 +284,7 @@ impl ApiState {
             solana_rpc: None,
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
+            order_routes: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -387,6 +414,7 @@ impl ApiState {
             solana_rpc: None,
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
+            order_routes: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -434,6 +462,34 @@ impl ApiState {
         let tx = self.fills_routes.read().await.get(&account).cloned();
         match tx {
             Some(tx) => tx.send(memo.clone()).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Get-or-create the caller account's order-update channel and subscribe.
+    /// Same lazy create + opportunistic GC of disconnected channels as
+    /// [`Self::subscribe_account_fills`].
+    pub async fn subscribe_account_order_updates(
+        &self,
+        account_id: &str,
+    ) -> broadcast::Receiver<OrderUpdateMsg> {
+        let mut routes = self.order_routes.write().await;
+        routes.retain(|_, tx| tx.receiver_count() > 0);
+        let tx = routes
+            .entry(account_id.to_string())
+            .or_insert_with(|| broadcast::channel(FILLS_CHANNEL_CAP).0);
+        tx.subscribe()
+    }
+
+    /// Route one order-update to its owning account's `/ws/orders` channel.
+    /// Returns true when delivered to ≥1 live subscriber. `order_id` is the
+    /// update's 16-byte order id, hex-encoded (the `order_owner` key).
+    pub async fn route_order_update(&self, order_id: &str, msg: &OrderUpdateMsg) -> bool {
+        let account = self.order_owner.read().await.get(order_id).cloned();
+        let Some(account) = account else { return false };
+        let tx = self.order_routes.read().await.get(&account).cloned();
+        match tx {
+            Some(tx) => tx.send(msg.clone()).is_ok(),
             None => false,
         }
     }

@@ -281,6 +281,26 @@ pub(crate) fn generate_matches(
             continue;
         }
 
+        // Self-trade prevention (baseline): never match two orders from the same
+        // owner — a wash trade that would waste a settle on a no-op. Skip the
+        // pair, advancing the SMALLER side (ties → advance the ask, keeping the
+        // bid resting so an external taker can still hit it this pass). The
+        // skipped order is NOT cancelled — it produces no update and stays in the
+        // book, so the other side can still match a non-self counterparty and the
+        // deferred order is reconsidered next tick. (A single greedy pass can't
+        // try `bid vs next-ask` AND `next-bid vs ask` simultaneously, so a rare
+        // multi-self-order config may defer one legitimate match to the next
+        // tick — acceptable for a baseline; the safety property, no wash trade,
+        // always holds.)
+        if bids[bi].trading_key == asks[ai].trading_key {
+            if asks[ai].amount <= bids[bi].amount {
+                ai += 1;
+            } else {
+                bi += 1;
+            }
+            continue;
+        }
+
         let crossable = bids[bi].amount.min(asks[ai].amount);
 
         // FOK enforcement: if the entire bid can't fill at P*, cancel

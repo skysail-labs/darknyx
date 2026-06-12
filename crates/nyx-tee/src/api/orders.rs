@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::auth::Authorized;
-use super::state::ApiState;
+use super::state::{ApiState, OrderUpdateMsg};
 use crate::matcher::book::BookError;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -603,6 +603,23 @@ pub async fn cancel_order(
     }
     st.openings_mut().remove_anchor_pool(&order_id);
     drop(st);
+
+    // Mirror the cancel onto the order-lifecycle stream BEFORE forgetting the
+    // owner mapping (explicit cancels bypass the matcher tick, so they don't go
+    // through the order_updates broadcast — route a synthetic Cancelled here so
+    // `/ws/orders` subscribers see it).
+    state
+        .route_order_update(
+            &order_id_hex,
+            &OrderUpdateMsg {
+                order_id: order_id_hex.clone(),
+                kind: "cancelled",
+                filled_quantity: None,
+                new_amount: None,
+                new_note_amount: None,
+            },
+        )
+        .await;
 
     // Cancelled order can never produce a fill — drop its fills-routing entry.
     state.forget_order(&order_id_hex).await;

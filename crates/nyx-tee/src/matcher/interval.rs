@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_matcher::{
-    book::OrderUpdateKind,
+    book::{OrderUpdate, OrderUpdateKind},
     config::{MatchConfig, OracleSnapshot},
     match_result::{RunBatchOutput, RELOCK_ORDER_ID_NONE},
     run_batch_capped as matcher_run_batch,
@@ -81,6 +81,13 @@ pub struct MatcherState {
     /// the change note. Kept alive even with no subscribers (send just
     /// returns `Err`, which the tick ignores).
     fills_tx: tokio::sync::broadcast::Sender<FillMemo>,
+    /// Broadcast of [`OrderUpdate`]s — the order-lifecycle events the tick
+    /// produces (fully-filled / partially-filled / cancelled / expired). The
+    /// `GET /ws/orders` handler subscribes (via `api::order_router`) and fans
+    /// each to the owning account. Kept alive with no subscribers (the tick
+    /// ignores the send `Err`). Account-agnostic here — keyed by `order_id`;
+    /// the API layer maps `order_id → account` (same bridge fills use).
+    order_updates_tx: tokio::sync::broadcast::Sender<OrderUpdate>,
 }
 
 impl Default for MatcherState {
@@ -88,6 +95,7 @@ impl Default for MatcherState {
         // 1024 buffered memos is ample — a slow WS client lags (loses old
         // memos) rather than back-pressuring the matcher tick.
         let (fills_tx, _rx) = tokio::sync::broadcast::channel(1024);
+        let (order_updates_tx, _rx2) = tokio::sync::broadcast::channel(1024);
         Self {
             book: OrderBook::default(),
             next_match_id: 0,
@@ -96,6 +104,7 @@ impl Default for MatcherState {
             quote_mint: [0u8; 32],
             fee_rate_bps: 0,
             fills_tx,
+            order_updates_tx,
         }
     }
 }
@@ -108,6 +117,11 @@ impl MatcherState {
     /// Subscribe to the fill-memo broadcast (the WS `fills` channel).
     pub fn subscribe_fills(&self) -> tokio::sync::broadcast::Receiver<FillMemo> {
         self.fills_tx.subscribe()
+    }
+
+    /// Subscribe to the order-lifecycle broadcast (the WS `orders` channel).
+    pub fn subscribe_order_updates(&self) -> tokio::sync::broadcast::Receiver<OrderUpdate> {
+        self.order_updates_tx.subscribe()
     }
 
     /// Set this market's mints. Called once at startup from the same
@@ -550,8 +564,11 @@ impl MatcherDriver {
                 state.book_mut().apply_updates(&output.order_updates);
                 // Evict the anchor pool of any order that left the book
                 // (full fill / cancel / IOC-or-exhaustion residual / expiry);
-                // a continuing PartiallyFilled keeps its pool.
+                // a continuing PartiallyFilled keeps its pool. Also publish
+                // every update on the order-lifecycle broadcast so `/ws/orders`
+                // can stream it (best-effort; no subscriber → send `Err`, ignored).
                 for u in &output.order_updates {
+                    let _ = state.order_updates_tx.send(u.clone());
                     if matches!(
                         u.kind,
                         OrderUpdateKind::FullyFilled { .. }

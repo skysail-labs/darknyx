@@ -1,9 +1,14 @@
 //! Self-trade prevention.
 //!
-//! TODO(PR-4d): implement. The current `OrderBook` already tracks
-//! per-trader order ids via the `by_trader` index, so the lookup
-//! is cheap. The policy choice (cancel-newest, cancel-oldest,
-//! cancel-both, reject-on-submit) is mirrored from godarkdex
-//! and a few other dark pools — leaving the call until after the
-//! WS layer lands so we can also surface STP rejections on the
-//! right event channel.
+//! Implemented (baseline) in the matching algorithm itself, not here: a single
+//! behavior — two orders sharing a `trading_key` are never matched against each
+//! other (a wash trade / no-op settle). See
+//! `darkpool_matcher::algorithm::generate_matches`, where the self-pair is
+//! skipped (advancing the smaller side) so each order can still match a non-self
+//! counterparty and a deferred order is reconsidered next tick.
+//!
+//! Why a single behavior (not cancel-taker/maker/both like a continuous CLOB):
+//! our tick is a uniform-clearing-price batch auction, so there is no
+//! maker/taker ordering *within* a tick for those modes to act on. The skip
+//! never cancels the resting order, so there's nothing to surface on the
+//! `/ws/orders` channel beyond the normal lifecycle events.

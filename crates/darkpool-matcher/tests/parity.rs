@@ -647,3 +647,52 @@ fn over_collateralized_bid_partial_fill_keeps_residual_over_collateralized() {
         other => panic!("expected PartiallyFilled, got {other:?}"),
     }
 }
+
+// ─────── Self-trade prevention (baseline) ───────────────────────────────────
+//
+// pseed() derives `trading_key` from `idx`, so two orders with the SAME idx
+// share an owner (a self-pair); same idx + different side yields distinct
+// order_ids. The matcher must never cross a self-pair, but the resting side
+// must still match a different trader's order in the same tick.
+
+#[test]
+fn stp_self_pair_never_matches() {
+    // Trader 1 has a crossing bid + ask and is the only participant → 0 fills.
+    let book = book_of(vec![
+        pseed(1, 0, 150, 10, 1_000_000), // trader 1 bid @150
+        pseed(1, 1, 140, 10, 1_000_000), // trader 1 ask @140 (self)
+    ]);
+    let out = run_batch(&book, &oracle(145), &config(100_000, 0), 16, 0).expect("matcher");
+    assert_eq!(
+        out.matches.len(),
+        0,
+        "a self-pair must never match (wash trade)"
+    );
+}
+
+#[test]
+fn stp_skips_self_ask_but_fills_against_other_trader() {
+    // Trader 1's bid is self-paired with trader 1's ask (tried first on the @140
+    // FIFO tie) but must instead fill against trader 2's ask.
+    let book = book_of(vec![
+        pseed(1, 0, 150, 10, 1_000_000), // trader 1 bid @150
+        pseed(1, 1, 140, 10, 1_000_000), // trader 1 ask @140 (self — skipped)
+        pseed(2, 1, 140, 10, 1_000_000), // trader 2 ask @140 (the legit fill)
+    ]);
+    let out = run_batch(&book, &oracle(145), &config(100_000, 0), 16, 0).expect("matcher");
+    assert_eq!(
+        out.matches.len(),
+        1,
+        "bid fills once, against the non-self ask"
+    );
+    for m in &out.matches {
+        assert_ne!(
+            m.owner_buyer, m.owner_seller,
+            "matched a self-pair — STP failed"
+        );
+    }
+    // The seller is trader 2 (idx=2), not trader 1.
+    let mut trader2 = [0u8; 32];
+    trader2[1..9].copy_from_slice(&2u64.to_le_bytes());
+    assert_eq!(out.matches[0].owner_seller, trader2);
+}

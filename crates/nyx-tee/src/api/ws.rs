@@ -117,3 +117,75 @@ async fn handle_fills(mut socket: WebSocket, state: Arc<ApiState>, account_id: S
         }
     }
 }
+
+/// `GET /ws/orders?token=<jwt>` — authenticate, then upgrade to a per-account
+/// order-lifecycle stream (accepted/partial/filled/cancelled/expired). Same
+/// per-account routing + self-auth as `/ws/fills`.
+pub async fn orders_ws(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Query(q): Query<FillsQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let token = q.token.or_else(|| {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .map(str::to_string)
+    });
+    let Some(token) = token else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "missing token (?token= or Bearer)",
+        )
+            .into_response();
+    };
+
+    let account_id = match validate_token(&state, &token).await {
+        Ok(auth) => auth.account_id,
+        Err((code, msg)) => return (code, msg).into_response(),
+    };
+
+    ws.on_upgrade(move |socket| handle_orders(socket, state, account_id))
+}
+
+async fn handle_orders(mut socket: WebSocket, state: Arc<ApiState>, account_id: String) {
+    let mut rx = state.subscribe_account_order_updates(&account_id).await;
+
+    loop {
+        tokio::select! {
+            update = rx.recv() => match update {
+                Ok(update) => {
+                    let json = match serde_json::to_string(&update) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            tracing::error!(account = %account_id, error = %e, "ws/orders: OrderUpdateMsg serialize failed; dropping");
+                            continue;
+                        }
+                    };
+                    if socket.send(Message::Text(json)).await.is_err() {
+                        break; // client gone
+                    }
+                }
+                Err(RecvError::Lagged(skipped)) => {
+                    tracing::warn!(account = %account_id, skipped, "ws/orders lagged; closing for resync");
+                    let _ = socket
+                        .send(Message::Close(Some(CloseFrame {
+                            code: 1011,
+                            reason: format!("lagged: {skipped} updates skipped — reopen + poll GET /orders/:id")
+                                .into(),
+                        })))
+                        .await;
+                    break;
+                }
+                Err(RecvError::Closed) => break,
+            },
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Ok(_)) => {}
+                Some(Err(_)) => break,
+            },
+        }
+    }
+}
