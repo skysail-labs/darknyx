@@ -1,0 +1,10 @@
+{
+  "label": "SDK",
+  "position": 8,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "SDK",
+    "description": "A worked TypeScript client: authenticate, build and submit orders, and stream order and fill events."
+  }
+}

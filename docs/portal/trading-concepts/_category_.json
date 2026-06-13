@@ -1,0 +1,10 @@
+{
+  "label": "Trading Concepts",
+  "position": 7,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "Trading Concepts",
+    "description": "How orders behave on a uniform-clearing-price batch auction: order types, time in force, execution attributes, the clearing price, self-trade prevention, and the continuation anchor pool."
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "label": "API",
+  "position": 2,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "API",
+    "description": "Where the endpoints live, how requests are authenticated, and how the transport is secured and attested."
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "label": "How It Works",
+  "position": 9,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "How It Works",
+    "description": "The architecture under the API: the trade lifecycle, the confidential VM, the privacy and attestation model, the shielded note pool, settlement, and fees."
+  }
+}

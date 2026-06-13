@@ -1,0 +1,10 @@
+{
+  "label": "Account",
+  "position": 4,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "Account",
+    "description": "Your balances are notes you own on-chain. This section covers the account model, the Merkle proofs you read to reconstruct state, the public proof-of-reserves, and settlement status."
+  }
+}
