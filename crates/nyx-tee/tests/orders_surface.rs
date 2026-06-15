@@ -36,6 +36,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use http_body_util::BodyExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use nyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
+use nyx_tee::api::instruments::InstrumentInfo;
 use nyx_tee::api::{build_router, ApiState};
 use nyx_tee::matcher::openings::NoteOpening;
 use nyx_tee::matcher::MatcherState;
@@ -760,18 +761,33 @@ async fn place_rejects_invalid_trading_key_bytes() {
 // ─── POST /orders — book conflicts + auth ───────────────────────────────────
 
 #[tokio::test]
-async fn place_rejects_duplicate_order_id_with_409() {
+async fn place_is_idempotent_on_same_body_but_409s_on_a_different_body_reusing_the_id() {
     let app = app_from(state());
     let bearer = fresh_bearer();
     let key = fresh_signing_key();
     let b = PlaceOrderBuilder::new();
     let body = b.sign(&key);
 
+    // First accept.
     let r1 = place(&app, &bearer, body.clone()).await;
     assert_eq!(r1.status(), StatusCode::ACCEPTED);
+    let j1 = read_json(r1).await;
 
+    // A true retry (byte-identical signed body) is idempotent → 202 again with
+    // the SAME order_id, not a 409.
     let r2 = place(&app, &bearer, body).await;
-    assert_eq!(r2.status(), StatusCode::CONFLICT);
+    assert_eq!(r2.status(), StatusCode::ACCEPTED);
+    let j2 = read_json(r2).await;
+    assert_eq!(j1["order_id"], j2["order_id"]);
+
+    // A DIFFERENT order reusing the same order_id (changed amount, re-signed) is
+    // a real conflict → 409, code 1201.
+    let mut c = PlaceOrderBuilder::new();
+    c.amount = b.amount + 1; // changes the canonical digest
+    let r3 = place(&app, &bearer, c.sign(&key)).await;
+    assert_eq!(r3.status(), StatusCode::CONFLICT);
+    let j3 = read_json(r3).await;
+    assert_eq!(j3["code"], 1201);
 }
 
 #[tokio::test]
@@ -1157,6 +1173,29 @@ async fn error_responses_use_the_structured_envelope_with_a_numeric_code() {
         j["message"].as_str().unwrap().contains("BN254 Fr"),
         "message text preserved in the envelope: {j}"
     );
+}
+
+#[tokio::test]
+async fn order_below_market_minimum_is_rejected_with_min_notional() {
+    // A market whose minimum exceeds the builder's default amount (10_000_000).
+    let st = ApiState::for_tests().with_instruments(vec![InstrumentInfo {
+        symbol: "SOL-USDC".to_string(),
+        base_mint: [0u8; 32],
+        quote_mint: [0u8; 32],
+        tick_size: 1,
+        min_order_size: 20_000_000,
+        oracle_feed_id: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+            .to_string(),
+    }]);
+    let app = app_from(Arc::new(st));
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    // Default amount 10_000_000 < 20_000_000 minimum → 400, code 1004.
+    let resp = place(&app, &bearer, PlaceOrderBuilder::new().sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let j = read_json(resp).await;
+    assert_eq!(j["code"], 1004, "min_notional code");
 }
 
 #[tokio::test]

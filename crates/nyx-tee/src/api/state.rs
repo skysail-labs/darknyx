@@ -202,6 +202,66 @@ pub struct ApiState {
     /// the matcher's global `OrderUpdate` broadcast into these channels keyed
     /// by `order_owner`, so a subscriber sees ONLY its own orders' updates.
     pub order_routes: Arc<RwLock<HashMap<String, broadcast::Sender<OrderUpdateMsg>>>>,
+
+    // ── Per-account rate limiting ───────────────────────────────
+    /// `account_id → weighted token bucket`. A second middleware on the
+    /// protected router (after `bearer_middleware`, so `Authorized.account_id`
+    /// is present) charges each request a route-dependent weight against its
+    /// account's bucket — cancels cheap, place/modify heavier — and returns
+    /// `429` when the bucket is empty. Mirrors the `argon2_limiter` intent
+    /// (protect the small CVM) but per-account + weighted. Created lazily.
+    pub rate_buckets: Arc<RwLock<HashMap<String, TokenBucket>>>,
+
+    // ── Idempotency (POST /orders safe retries) ─────────────────
+    /// `order_id (hex) → (canonical_digest, arrival_slot)` recorded at accept
+    /// time. A duplicate `order_id` whose signed body hashes to the SAME digest
+    /// is a true retry → return the original acceptance; a DIFFERENT digest is a
+    /// real conflict → `409`. Persists past order terminal (so a retry after a
+    /// fill still de-dupes rather than re-booking a consumed-note order), bounded
+    /// by [`IDEMPOTENCY_CAP`].
+    pub idempotency: Arc<RwLock<HashMap<String, IdempotencyRecord>>>,
+}
+
+/// What an accepted order records for idempotent-retry detection:
+/// `(canonical_digest, arrival_slot)`.
+pub type IdempotencyRecord = ([u8; 32], u64);
+
+/// A simple per-account token bucket: `tokens` refill at `RATE_REFILL_PER_SEC`
+/// up to `RATE_CAPACITY` (the burst), and each request costs a route weight.
+#[derive(Debug)]
+pub struct TokenBucket {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+/// Burst size (max tokens) per account.
+pub const RATE_CAPACITY: f64 = 40.0;
+/// Sustained refill rate (tokens per second). At weight 1.0/place this is ~20
+/// places/sec sustained, ~100 cancels/sec (weight 0.2), with a 40-token burst.
+pub const RATE_REFILL_PER_SEC: f64 = 20.0;
+
+impl TokenBucket {
+    fn new() -> Self {
+        Self {
+            tokens: RATE_CAPACITY,
+            last_refill: Instant::now(),
+        }
+    }
+
+    /// Refill for elapsed time, then try to spend `cost`. On success returns
+    /// `Ok(())`; on insufficient tokens returns `Err(retry_after_secs)`.
+    fn try_spend(&mut self, cost: f64) -> Result<(), f64> {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * RATE_REFILL_PER_SEC).min(RATE_CAPACITY);
+        self.last_refill = now;
+        if self.tokens >= cost {
+            self.tokens -= cost;
+            Ok(())
+        } else {
+            Err(((cost - self.tokens) / RATE_REFILL_PER_SEC).max(0.001))
+        }
+    }
 }
 
 /// Wire form of a `darkpool_matcher::book::OrderUpdate` streamed on `/ws/orders`.
@@ -227,6 +287,10 @@ pub struct OrderUpdateMsg {
 /// Per-account fill-memo channel depth. A slow `/ws/fills` client that lags
 /// past this is closed with a 1011 resync (it backfills via the indexer).
 const FILLS_CHANNEL_CAP: usize = 1024;
+
+/// Max retained idempotency records (order_id → accepted body). Bounds the map;
+/// the oldest entries age out (best-effort retry window).
+const IDEMPOTENCY_CAP: usize = 16_384;
 
 /// Max concurrent Argon2id hash/verify jobs allowed across the auth
 /// handlers. Sized to the host's parallelism (clamped) so legitimate
@@ -285,6 +349,8 @@ impl ApiState {
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
+            rate_buckets: Arc::new(RwLock::new(HashMap::new())),
+            idempotency: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -415,6 +481,8 @@ impl ApiState {
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
+            rate_buckets: Arc::new(RwLock::new(HashMap::new())),
+            idempotency: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -492,6 +560,43 @@ impl ApiState {
             Some(tx) => tx.send(msg.clone()).is_ok(),
             None => false,
         }
+    }
+
+    /// Charge `cost` weighted tokens against `account_id`'s rate bucket
+    /// (created lazily at full burst). `Ok(())` allows the request; `Err(secs)`
+    /// is the suggested `Retry-After` when the bucket is empty. The map is
+    /// bounded by the number of accounts that have made a request — small in
+    /// practice — so no GC is needed.
+    pub async fn try_consume_rate(&self, account_id: &str, cost: f64) -> Result<(), f64> {
+        let mut buckets = self.rate_buckets.write().await;
+        buckets
+            .entry(account_id.to_string())
+            .or_insert_with(TokenBucket::new)
+            .try_spend(cost)
+    }
+
+    /// Look up a prior acceptance for `order_id_hex` — `(canonical_digest,
+    /// arrival_slot)` if this id was accepted before.
+    pub async fn idempotency_lookup(&self, order_id_hex: &str) -> Option<([u8; 32], u64)> {
+        self.idempotency.read().await.get(order_id_hex).copied()
+    }
+
+    /// Record an accepted order for idempotent-retry detection. Bounded: when
+    /// the map is at [`IDEMPOTENCY_CAP`], an arbitrary old entry is evicted (the
+    /// dedup window is best-effort, like a TTL).
+    pub async fn idempotency_record(
+        &self,
+        order_id_hex: String,
+        digest: [u8; 32],
+        arrival_slot: u64,
+    ) {
+        let mut m = self.idempotency.write().await;
+        if m.len() >= IDEMPOTENCY_CAP && !m.contains_key(&order_id_hex) {
+            if let Some(k) = m.keys().next().cloned() {
+                m.remove(&k);
+            }
+        }
+        m.insert(order_id_hex, (digest, arrival_slot));
     }
 
     /// Boot-time auth load (Phase 1b). Loads the `accounts.db`

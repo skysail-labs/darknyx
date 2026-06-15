@@ -150,19 +150,38 @@ the book — **not** that it has filled. Track fills via
 A market or fill-or-kill order that cannot execute in its arrival batch leaves the
 book immediately rather than resting.
 
+## Idempotency
+
+`order_id` is your idempotency key. A retry that re-sends the **byte-identical**
+signed order returns the original acceptance (`202`, same `order_id`) instead of
+a conflict — so a network blip is safe to retry. Reusing an `order_id` for a
+**different** order (any economic field changed) is a real conflict and returns
+`409` (`code` 1201). Because order ids are client-chosen, pick a fresh one per
+distinct order.
+
 ## Verification at intake
 
-Every order is verified before it enters the book. A non-`202` response means one
-of these failed:
+Every order is verified before it enters the book. A non-`202` response carries a
+[structured error code](../reference/error-codes); the conditions:
 
-| Check | Status |
-|---|---|
-| Well-formed fields (hex widths, non-zero `order_id`, field-element safety) | `400` |
-| The trading-key signature verifies over the canonical body | `403` |
-| The note opening re-derives the signed `note_commitment` | `400` |
-| The collateral covers the order's nominal cost plus its own fee | `400` |
-| The `order_id` is not already in the book | `409` |
+| Check | Status | Code |
+|---|---|---|
+| Well-formed fields (hex widths, non-zero `order_id`) | `400` | 1001 |
+| Hashed fields are canonical field elements | `400` | 1002 |
+| Order amount meets the market minimum | `400` | 1004 |
+| A bid has a positive price limit | `400` | 1005 |
+| The note opening re-derives the signed `note_commitment` | `400` | 1006 |
+| The collateral covers the order's nominal cost plus its own fee | `400` | 1003 |
+| The trading-key signature verifies over the canonical body | `403` | 1102 |
+| The `order_id` is not reused for a different order | `409` | 1201 |
+| Per-account rate limit not exceeded | `429` | 1401 |
 
 Because the opening is checked against the *signed* commitment, the secret
 opening fields are cryptographically pinned to your signature without being part
-of the signed canonical body. See [Error Codes](../reference/error-codes).
+of the signed canonical body.
+
+:::note Rate limits are weighted
+Order management is rate-limited per account with a token bucket — cancels are
+cheap, place and modify cost more. A `429` includes a `Retry-After` header. For
+high-frequency management prefer the [WebSocket trading socket](../websocket/ws-trading).
+:::

@@ -20,6 +20,7 @@ pub mod info;
 pub mod instruments;
 pub mod order_router;
 pub mod orders;
+pub mod rate_limit;
 pub mod settlement;
 pub mod state;
 pub mod system;
@@ -166,5 +167,14 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
     // via `?token=`/Bearer and routes per-account) — NOT here, because the
     // header-only `bearer_middleware` can't see a query-param token.
 
-    router.route_layer(from_fn_with_state(state, auth::bearer_middleware))
+    // Two route_layers. The LAST-added is OUTERMOST, so `bearer_middleware`
+    // runs first (injecting `Authorized`), then `rate_limit_middleware` runs
+    // with the account in hand. Reads + auth ops are cheap-weighted; place /
+    // cancel / modify carry the real cost.
+    router
+        .route_layer(from_fn_with_state(
+            state.clone(),
+            rate_limit::rate_limit_middleware,
+        ))
+        .route_layer(from_fn_with_state(state, auth::bearer_middleware))
 }

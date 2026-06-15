@@ -283,6 +283,9 @@ struct PreparedOrder {
     valid_input_proof: crate::settle::lock_note::Groth16ProofBytes,
     anchors: Vec<Anchor>,
     arrival_slot: u64,
+    /// SHA-256 of the signed canonical body. Identifies "the same order" for
+    /// idempotent-retry detection on a duplicate `order_id` (see `place_core`).
+    canonical_digest: [u8; 32],
 }
 
 /// Verify + build an order WITHOUT touching the book (decode, Fr-checks,
@@ -358,6 +361,22 @@ async fn prepare_order(
         return Err(ApiError::fr_unsafe(
             "user_commitment top byte must be zero (BN254 Fr safety)",
         ));
+    }
+    // Minimum order size (dust floor). The market's `min_order_size` is static
+    // instrument metadata; reject a sub-minimum order here, before the expensive
+    // Ed25519 verify. An unlisted symbol has no floor (min 0) — the canonical
+    // verify below still binds the symbol, and the matcher rejects unknown
+    // markets downstream.
+    let min_order_size = state
+        .instruments
+        .iter()
+        .find(|i| i.symbol == req.symbol)
+        .map_or(0, |i| i.min_order_size);
+    if req.amount < min_order_size {
+        return Err(ApiError::min_notional(format!(
+            "amount {} is below the market minimum {min_order_size}",
+            req.amount
+        )));
     }
 
     // 3. Reconstruct the canonical bytes and verify the trading-key
@@ -511,6 +530,7 @@ async fn prepare_order(
         valid_input_proof,
         anchors,
         arrival_slot,
+        canonical_digest: digest,
     })
 }
 
@@ -585,21 +605,44 @@ pub async fn place_core(
     let prepared = prepare_order(state, matcher, req).await?;
     let order_id = prepared.order_id;
     let arrival_slot = prepared.arrival_slot;
+    let digest = prepared.canonical_digest;
+    let order_id_hex = hex::encode(order_id);
+
+    // Idempotency: if this order_id was accepted before, a retry of the SAME
+    // signed body returns the original acceptance (not a 409); a DIFFERENT body
+    // reusing the id is a real conflict. Checked before the write lock; the rare
+    // concurrent-double-submit race still resolves to one acceptance + one 409
+    // (the book's `submit` is the hard dedup).
+    if let Some((prev_digest, prev_slot)) = state.idempotency_lookup(&order_id_hex).await {
+        if prev_digest == digest {
+            return Ok(PlaceOrderResponse {
+                order_id: order_id_hex,
+                status: "accepted",
+                arrival_slot: prev_slot,
+            });
+        }
+        return Err(ApiError::duplicate(
+            "order_id already used with a different order",
+        ));
+    }
 
     {
         let mut st = matcher.write().await;
         commit_order(&mut st, prepared, req.expiry_slot)?;
     }
 
-    // Record order→account for per-account routing — the one moment the bearer
-    // (account) and the order_id are both in hand. After dropping the matcher
-    // lock so we never hold it across the routing-map lock.
+    // Record the acceptance for idempotent retries, then the order→account
+    // mapping for per-account routing. After dropping the matcher lock so we
+    // never hold it across the other map locks.
     state
-        .record_order_owner(hex::encode(order_id), account_id.to_string())
+        .idempotency_record(order_id_hex.clone(), digest, arrival_slot)
+        .await;
+    state
+        .record_order_owner(order_id_hex.clone(), account_id.to_string())
         .await;
 
     Ok(PlaceOrderResponse {
-        order_id: hex::encode(order_id),
+        order_id: order_id_hex,
         status: "accepted",
         arrival_slot,
     })
