@@ -688,6 +688,13 @@ mod persist_tests {
         let bob =
             ApiCredentials::from_plaintext("bob", "bob-secret", "bob-pass", false).expect("hash");
         assert!(st.accounts.write().await.register(bob));
+        // Flip bob's cancel-on-disconnect default so we can prove settings persist.
+        assert!(st.accounts.write().await.set_settings(
+            "bob",
+            crate::api::auth::AccountSettings {
+                cancel_on_disconnect_default: true,
+            },
+        ));
         st.revoked_jtis.write().await.insert("jti-xyz".to_string());
         st.persist_auth().await;
 
@@ -697,6 +704,8 @@ mod persist_tests {
         let bob = registry.lookup("bob").expect("bob survived restart");
         assert!(bob.verify_credentials("bob-secret", "bob-pass"));
         assert!(!bob.is_admin);
+        // The per-account setting survived the snapshot round-trip.
+        assert!(bob.settings.cancel_on_disconnect_default);
         // The seeded test admin also persisted.
         assert!(registry.lookup(crate::api::auth::TEST_API_KEY).is_some());
         // The revocation survived too.

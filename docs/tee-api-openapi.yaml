@@ -583,48 +583,33 @@ components:
 
     Account:
       type: object
-      required: [account_id, balances, open_orders, outstanding_notes]
+      description: |
+        `GET /account` response. Returns ONLY the caller's open orders — the
+        slice of account state the TEE legitimately holds (it tracks the
+        order_id→account map at intake). Balances and notes are intentionally
+        absent: linking an account to its notes needs the spending key, which
+        the TEE never sees. Clients derive balances + spendable notes themselves
+        from `/tree/*` + their own keys.
+      required: [account_id, open_orders]
       properties:
         account_id: { type: string }
-        balances:
-          type: array
-          items:
-            type: object
-            required: [mint, available, locked]
-            properties:
-              mint:
-                type: string
-                description: SPL mint pubkey (base58).
-              available:
-                type: string
-                description: |
-                  Total value of notes the user owns that are NOT
-                  locked by any order. Computed by the TEE from
-                  the on-chain Merkle tree + nullifier set + the
-                  user's spending key (which the TEE never sees —
-                  the user submits owner-commitment proofs).
-              locked:
-                type: string
-                description: |
-                  Total value of notes currently held by open
-                  orders / pending settles.
         open_orders:
           type: array
+          description: The caller's orders still resting in the book.
           items: { $ref: '#/components/schemas/Order' }
-        outstanding_notes:
-          type: array
+
+    AccountSettings:
+      type: object
+      description: |
+        Per-account preferences (`GET`/`PUT /account/settings`), persisted with
+        the account. Omitted fields default on `PUT`.
+      properties:
+        cancel_on_disconnect_default:
+          type: boolean
           description: |
-            Note commitments owned by the user that are spendable
-            (have an inclusion path in the current Merkle root +
-            no nullifier on-chain).
-          items:
-            type: object
-            required: [note_commitment, leaf_index, amount, mint]
-            properties:
-              note_commitment: { type: string }
-              leaf_index: { type: integer }
-              amount: { type: string }
-              mint: { type: string }
+            Account-wide default for `/ws/trading` cancel-on-disconnect. A
+            socket's explicit `?cancel_on_disconnect=` query param overrides it.
+          default: false
 
     TreeRoot:
       type: object
@@ -1196,22 +1181,50 @@ paths:
   /account:
     get:
       tags: [account]
-      summary: Account snapshot (DEFERRED — returns 501).
+      summary: The caller's open orders.
       description: |
-        **Not implemented by design.** A faithful account snapshot
-        needs per-account `balances` + `outstanding_notes`, but the TEE
-        cannot compute those without the user's spending key — which it
-        never sees (docs/tee-architecture.md §11.3). Clients derive
-        their balances + spendable notes themselves from the `/tree/*`
-        inclusion proofs + their own keys (the trustless design).
-        Returns `501 Not Implemented` with a pointer.
+        Returns the orders this account placed that are still in the book.
+        Balances + notes are intentionally NOT returned — the TEE has no
+        spending key, so clients derive those themselves from `/tree/*` + their
+        own keys (docs/tee-architecture.md §11.3).
       security: [{ BearerAuth: [] }]
       responses:
-        '501':
-          description: Deferred — compute client-side from /tree/* + your keys.
+        '200':
+          description: Open-orders snapshot.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema: { $ref: '#/components/schemas/Account' }
+
+  /account/settings:
+    get:
+      tags: [account]
+      summary: Read the caller's account settings.
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Current settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountSettings' }
+    put:
+      tags: [account]
+      summary: Replace the caller's account settings.
+      description: |
+        Replaces the settings wholesale (omitted fields default), then persists.
+        Used e.g. to set the cancel-on-disconnect default for all future
+        `/ws/trading` sockets.
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountSettings' }
+      responses:
+        '200':
+          description: The updated settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountSettings' }
 
   # ───── tree ────────────────────────────────────────────────────────────────
 

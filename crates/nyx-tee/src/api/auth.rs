@@ -136,6 +136,22 @@ pub struct ApiCredentials {
     pub secret_hash: String,
     pub passphrase_hash: String,
     pub is_admin: bool,
+    /// Per-account preferences. `#[serde(default)]` so snapshots written before
+    /// this field existed still deserialize (older `accounts.db` files have no
+    /// `settings` key → `AccountSettings::default()`).
+    #[serde(default)]
+    pub settings: AccountSettings,
+}
+
+/// Per-account, mutable preferences served by `GET`/`PUT /account/settings`.
+/// Persisted in the `accounts.db` snapshot alongside the credential hashes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountSettings {
+    /// Account-wide default for `/ws/trading` cancel-on-disconnect. A socket's
+    /// explicit `?cancel_on_disconnect=` query param overrides this; absent, the
+    /// account default applies.
+    #[serde(default)]
+    pub cancel_on_disconnect_default: bool,
 }
 
 impl ApiCredentials {
@@ -159,6 +175,7 @@ impl ApiCredentials {
             secret_hash: hash_secret(api_secret)?,
             passphrase_hash: hash_secret(passphrase)?,
             is_admin,
+            settings: AccountSettings::default(),
         })
     }
 
@@ -239,6 +256,18 @@ impl AccountRegistry {
 
     pub fn lookup(&self, api_key: &str) -> Option<&ApiCredentials> {
         self.by_api_key.get(api_key)
+    }
+
+    /// Replace an account's [`AccountSettings`]. Returns `true` if the account
+    /// existed (and was updated). The caller persists the registry afterwards.
+    pub fn set_settings(&mut self, api_key: &str, settings: AccountSettings) -> bool {
+        match self.by_api_key.get_mut(api_key) {
+            Some(creds) => {
+                creds.settings = settings;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Number of registered accounts. Used by the boot path to decide

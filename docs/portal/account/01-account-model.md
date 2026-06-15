@@ -14,7 +14,11 @@ which notes are yours and what they are worth. You reconstruct your account stat
 the spending key that would let it do it for you.
 :::
 
-## Why there is no `GET /account` balance
+## Why there is no balance in `GET /account`
+
+`GET /account` returns the slice of account state the engine legitimately holds —
+your **open orders** (the orders you placed that are still in the book). It does
+**not** return balances or notes.
 
 On a custodial venue the operator keeps your balance in a database and serves it
 on request. That only works because the operator can see what you hold — which is
@@ -49,9 +53,10 @@ turn it into a balance.
 | The current state of the on-chain tree | `GET /tree/root` | [Merkle Proofs](./merkle-proofs) |
 | An inclusion proof for one of your notes | `GET /tree/inclusion` | [Merkle Proofs](./merkle-proofs) |
 | A page of raw leaves (to rebuild a local mirror) | `GET /tree/leaves` | [Merkle Proofs](./merkle-proofs) |
-| Your open orders | `GET /orders/{order_id}` (per order), the orders stream | [Get Order](../orders/get-order), [Orders Channel](../websocket/orders-channel) |
+| Your open orders | `GET /account` (all), or `GET /orders/{order_id}` + the orders stream | [Get Order](../orders/get-order), [Orders Channel](../websocket/orders-channel) |
 | Your continuation fills | the fills stream / your durable history | [Fills Channel](../websocket/fills-channel) |
 | Venue-wide solvency | `GET /transparency` | [Transparency](./transparency) |
+| Your account preferences | `GET`/`PUT /account/settings` | (cancel-on-disconnect default, …) |
 
 The **SDK** wraps this: from your seed it derives your keys, scans the tree, and
 maintains a local note store of your spendable notes — so in practice you call an

@@ -92,9 +92,54 @@ async fn account_requires_bearer() {
 }
 
 #[tokio::test]
-async fn account_is_deferred_501() {
-    // Authenticated, but the endpoint is deliberately not implemented:
-    // per-account balances/notes are client-computed (privacy model).
+async fn account_settings_round_trip() {
+    // One app (one ApiState) so the PUT mutation is visible to the GET.
+    let app = app();
+    let b = bearer();
+
+    // Default is false.
+    let resp = get(&app, "/account/settings", Some(&b)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(read_json(resp).await["cancel_on_disconnect_default"], false);
+
+    // PUT it on.
+    let put = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/account/settings")
+                .header("authorization", format!("Bearer {b}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"cancel_on_disconnect_default":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.status(), StatusCode::OK);
+    assert_eq!(read_json(put).await["cancel_on_disconnect_default"], true);
+
+    // GET reflects it.
+    let resp = get(&app, "/account/settings", Some(&b)).await;
+    assert_eq!(read_json(resp).await["cancel_on_disconnect_default"], true);
+}
+
+#[tokio::test]
+async fn account_settings_requires_bearer() {
+    let resp = get(&app(), "/account/settings", None).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn account_returns_open_orders_empty_when_none_placed() {
+    // Authenticated. Returns the caller's open orders (none here) — balances
+    // and notes stay client-computed (privacy model), so they're absent.
     let resp = get(&app(), "/account", Some(&bearer())).await;
-    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = read_json(resp).await;
+    assert!(body["open_orders"].as_array().unwrap().is_empty());
+    assert!(
+        body.get("balances").is_none(),
+        "balances are client-side, never served"
+    );
 }

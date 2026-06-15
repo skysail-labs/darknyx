@@ -49,9 +49,9 @@ use super::state::ApiState;
 pub struct TradingQuery {
     /// Bearer JWT as a query param (the WS-friendly auth path).
     pub token: Option<String>,
-    /// Opt into cancel-on-disconnect for this session. Default `false`.
-    #[serde(default)]
-    pub cancel_on_disconnect: bool,
+    /// Per-session cancel-on-disconnect. `Some(_)` (an explicit `?cancel_on_disconnect=`)
+    /// wins; `None` (omitted) falls back to the account's stored default.
+    pub cancel_on_disconnect: Option<bool>,
 }
 
 /// A client → server frame. Internally tagged by `op`; each variant's body
@@ -151,7 +151,18 @@ pub async fn trading_ws(
         Err(e) => return e.into_response(),
     };
 
-    let cod = q.cancel_on_disconnect;
+    // Explicit query param wins; absent, fall back to the account's stored
+    // cancel-on-disconnect default (`/account/settings`).
+    let cod = match q.cancel_on_disconnect {
+        Some(v) => v,
+        None => state
+            .accounts
+            .read()
+            .await
+            .lookup(&account_id)
+            .map(|c| c.settings.cancel_on_disconnect_default)
+            .unwrap_or(false),
+    };
     ws.on_upgrade(move |socket| handle_trading(socket, state, account_id, cod))
 }
 

@@ -81,6 +81,11 @@ placed on **this** socket and, when the socket closes, cancels the ones still
 resting. This protects a market maker that loses connectivity from leaving stale
 quotes crossing.
 
+You can also set an **account-wide default** so every socket gets the behavior
+without the query param: `PUT /account/settings` with
+`{ "cancel_on_disconnect_default": true }`. An explicit `?cancel_on_disconnect=`
+on a socket always overrides the account default for that connection.
+
 The teardown is a server-initiated cancel using each order's own booked key — it
 needs no client signature, because the order was placed on this authenticated
 session and a cancel only un-rests an order (it never settles or moves funds).

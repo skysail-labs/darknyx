@@ -153,10 +153,14 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // leaf pagination). Root is public above.
         .route("/tree/inclusion", get(tree::get_inclusion))
         .route("/tree/leaves", get(tree::get_leaves))
-        // Account snapshot — bearer, but deferred by design (501): the
-        // TEE can't compute per-account balances/notes without a
-        // spending key it never sees. See api::account.
+        // Account snapshot — bearer. Returns the caller's open orders (the
+        // slice the TEE legitimately holds); balances/notes stay client-side.
         .route("/account", get(account::get_account))
+        // Per-account settings (cancel-on-disconnect default, …).
+        .route(
+            "/account/settings",
+            get(account::get_settings).put(account::put_settings),
+        )
         // Layer A account management — bearer-protected. `revoke`
         // denylists the caller's own token; `/admin/accounts` is
         // further admin-gated inside the handler (see auth.rs).
