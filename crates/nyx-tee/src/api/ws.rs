@@ -65,7 +65,7 @@ pub async fn fills_ws(
 
     let account_id = match validate_token(&state, &token).await {
         Ok(auth) => auth.account_id,
-        Err((code, msg)) => return (code, msg).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     ws.on_upgrade(move |socket| handle_fills(socket, state, account_id))
@@ -144,7 +144,7 @@ pub async fn orders_ws(
 
     let account_id = match validate_token(&state, &token).await {
         Ok(auth) => auth.account_id,
-        Err((code, msg)) => return (code, msg).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     ws.on_upgrade(move |socket| handle_orders(socket, state, account_id))

@@ -167,7 +167,8 @@ async fn cancel_core_requires_the_owner_signature() {
     )
     .await
     .unwrap_err();
-    assert_eq!(err.0, axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(err.status, axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(err.code, 1103); // not_owner
     assert!(
         matcher.read().await.book().get(&order_id).is_some(),
         "still resting"

@@ -114,17 +114,23 @@ components:
 
     Error:
       type: object
+      description: |
+        The error envelope. Every non-2xx response renders as this shape, with
+        the mapped HTTP status. Success responses are NOT enveloped (their typed
+        body is returned directly). Every response — success and error — carries
+        an `x-request-id` header for correlation with server logs.
       required: [code, message]
       properties:
         code:
-          type: string
-          example: "token_expired"
+          type: integer
+          description: |
+            Stable numeric error code. Ranges: 1000–1099 request validation,
+            1100–1199 auth, 1200–1299 conflict, 1300–1399 not found, 1400–1499
+            rate limit, 5000+ server. See the Error Codes reference.
+          example: 1102
         message:
           type: string
-          example: "Bearer token has expired — call POST /auth/token to refresh."
-        retry_after_ms:
-          type: integer
-          description: When the client may retry (rate-limit + transient errors).
+          example: "trading_key_signature does not verify against the canonical body"
 
     AuthTokenRequest:
       type: object
@@ -345,136 +351,194 @@ components:
 
     PlaceOrderRequest:
       type: object
+      description: |
+        The v2 (`inner_hash`) order body. All 32/64/16-byte fields are
+        hex-encoded strings; all numeric fields are JSON integers (u64).
+        The trading-key signature covers the canonical encoding of the
+        economic fields + the anchor-pool hash + `arrival_nonce`; the
+        opening fields (`owner_commitment`, `note_inner_hash`) are pinned
+        to the signature indirectly — the matcher re-derives
+        `note_commitment` from them and rejects a mismatch.
       required:
         - symbol
         - side
         - order_type
         - amount
+        - price_limit
+        - expiry_slot
+        - order_id
         - note_commitment
         - user_commitment
+        - arrival_nonce
+        - trading_key
         - trading_key_signature
         - owner_commitment
-        - note_nonce
-        - note_blinding
+        - note_inner_hash
         - nullifier
         - merkle_root
         - valid_input_proof
+        - anchors
       properties:
         symbol:
           type: string
         side:
           type: string
-          enum: [buy, sell]
+          enum: [bid, ask]
+          description: "`bid` = buy base; `ask` = sell base."
         order_type:
           type: string
           enum: [limit, ioc, fok]
         amount:
-          type: string
-          description: Decimal string in base units.
+          type: integer
+          format: uint64
+          description: Order size in base units.
         price_limit:
-          type: string
-          description: Decimal string; required for limit/ioc/fok orders.
+          type: integer
+          format: uint64
+          description: |
+            Worst acceptable price, in quote units per base. Required for
+            a bid (must be > 0); an ask may use `0` to accept any clearing
+            price.
         min_fill_size:
-          type: string
-          description: Optional. Reject fills smaller than this.
+          type: integer
+          format: uint64
+          description: |
+            Optional (default 0). Reject fills smaller than this; set equal
+            to `amount` for resting all-or-none.
         expiry_slot:
           type: integer
+          format: uint64
           description: |
-            Solana slot past which this order auto-expires. Bounded
-            by the per-market max expiry to prevent permanent
-            collateral lock.
+            Solana slot past which this order auto-expires. Bounded by the
+            per-market max expiry to prevent permanent collateral lock.
+        order_id:
+          type: string
+          description: 16-byte client-chosen id, hex. Must be unique + non-zero.
         note_commitment:
           type: string
           description: |
-            32-byte hex — Poseidon6 commitment to the collateral
-            note this order is backed by. Note must exist on-chain
-            (in the Merkle tree) AND be in a lockable state (no
-            existing NoteLock PDA).
+            32-byte hex — Poseidon6 commitment to the collateral note this
+            order is backed by. Note must exist on-chain (in the Merkle
+            tree) AND be lockable (no existing NoteLock PDA).
         user_commitment:
           type: string
           description: |
-            32-byte hex — `Poseidon2(spending_key, r_owner)`. Used
-            on-chain by VALID_MATCH_BATCH to bind output notes to
-            the correct owner.
+            32-byte hex — binds the order's output notes to the correct
+            owner on-chain. Top byte must be zero (BN254 Fr safety).
+        arrival_nonce:
+          type: integer
+          format: uint64
+          description: Per-order nonce bound into the signed canonical body.
+        trading_key:
+          type: string
+          description: 32-byte hex — the Ed25519 public key that owns this order.
         trading_key_signature:
           type: string
           description: |
-            Ed25519 sig (base64) over the canonical request body,
-            from the trading key. Lets the TEE attribute the order
-            to a specific user without requiring a per-order
-            on-chain tx.
+            64-byte hex — Ed25519 signature over `sha256(canonical body)`
+            from the trading key. Lets the TEE attribute the order to a
+            specific key without a per-order on-chain tx.
         owner_commitment:
           type: string
           description: |
             32-byte hex — the collateral note's owner commitment
-            `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Part
-            of the input-note opening the in-TEE VALID_MATCH_BATCH
-            prover needs (the circuit re-derives `note_commitment`
-            from the opening). Distinct from `user_commitment`. The
-            matcher verifies the opening against the signed
-            `note_commitment` at intake, so it's cryptographically
-            pinned to the trading-key signature without being part of
-            the signed canonical body. Held in enclave memory only.
-        note_nonce:
+            `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Part of the
+            input-note opening the in-TEE VALID_MATCH_BATCH prover needs
+            (the circuit re-derives `note_commitment` from the opening).
+            Distinct from `user_commitment`. Verified against the signed
+            `note_commitment` at intake. Held in enclave memory only.
+        note_inner_hash:
           type: string
-          description: 32-byte hex — the collateral note's per-note nonce (opening field).
-        note_blinding:
-          type: string
-          description: 32-byte hex — the collateral note's blinding factor (opening field).
+          description: |
+            32-byte hex — the collateral note's amount-independent v2
+            `inner_hash` (an opening field; replaces the v1 note_nonce +
+            note_blinding pair). Anchors both the commitment and the
+            nullifier.
         nullifier:
           type: string
           description: |
             32-byte hex — `Poseidon3(DOMAIN_NULL=3, spending_key,
-            note_commitment)`, precomputed client-side (the spending
-            key never enters the TEE). Opaque to the matcher; carried
-            into the settle payload. A wrong value is self-harm only
-            (on-chain replay protection keys off the note commitment).
+            inner_hash)`, precomputed client-side (the spending key never
+            enters the TEE). Opaque to the matcher; carried into the settle
+            payload.
         merkle_root:
           type: string
           description: |
             32-byte hex — the merkle root the `valid_input_proof` was
             generated against. Relayed into `lock_note` (settle Tx A);
-            must still be in the vault's 64-root ring buffer at lock
-            time, so settle must land within ~64 tree updates of
-            submission.
+            must still be in the vault's root ring buffer at lock time.
         valid_input_proof:
           type: string
           description: |
-            256-byte hex (`pi_a ‖ pi_b ‖ pi_c`) — the per-note
-            VALID_INPUT Groth16 proof that gates `lock_note`. The TEE
-            cannot generate it (it needs the user's spending key +
-            merkle witness), so the client supplies it; the matcher
-            relays it unverified (on-chain `lock_note` verifies it)
-            and holds it in enclave memory until settle.
+            256-byte hex (`pi_a ‖ pi_b ‖ pi_c`) — the per-note VALID_INPUT
+            Groth16 proof that gates `lock_note`. The TEE cannot generate
+            it (needs the spending key + merkle witness), so the client
+            supplies it; the matcher relays it unverified (on-chain
+            `lock_note` verifies it).
+        collateral_amount:
+          type: integer
+          format: uint64
+          description: |
+            Optional over-collateralization: the actual value the
+            collateral note carries when it exceeds the order's nominal
+            cost. Lets a large note back a small order; the surplus returns
+            as a change note. Omit for exact collateral.
+        anchors:
+          type: array
+          minItems: 10
+          maxItems: 10
+          description: |
+            Exactly 10 continuation anchors. Each is the
+            `(inner_hash, nullifier)` pair for a future change note, so the
+            matcher can settle partial fills and re-lock the remainder
+            without a per-fill round-trip. The SHA-256 over the pool is
+            bound into the signed canonical body.
+          items:
+            type: object
+            required: [inner_hash, nullifier]
+            properties:
+              inner_hash: { type: string, description: 32-byte hex (canonical BN254 Fr). }
+              nullifier: { type: string, description: 32-byte hex. }
 
     Order:
       type: object
-      required: [order_id, symbol, side, order_type, amount, status, created_at]
+      description: The `GET /orders/{order_id}` status body.
+      required:
+        - order_id
+        - side
+        - order_type
+        - status
+        - amount
+        - filled_quantity
+        - price_limit
+        - expiry_slot
+        - arrival_slot
       properties:
         order_id:
           type: string
-          description: TEE-assigned order ID.
-        symbol: { type: string }
-        side: { type: string, enum: [buy, sell] }
+          description: 16-byte order id, hex (the one supplied at placement).
+        side: { type: string, enum: [bid, ask] }
         order_type: { type: string, enum: [limit, ioc, fok] }
-        amount: { type: string }
-        price_limit: { type: string }
-        min_fill_size: { type: string }
-        expiry_slot: { type: integer }
         status:
           type: string
-          enum: [pending, partial, filled, expired, cancelled]
-        filled_amount: { type: string }
-        average_fill_price: { type: string }
-        created_at: { type: string, format: date-time }
-        last_fill_at: { type: string, format: date-time, nullable: true }
-        batch_id:
-          type: string
+          enum: [empty, pending, matched, expired, cancelled]
           description: |
-            ID of the batch this order matched in (if any). Use with
-            GET /settlement/status/{batch_id} to find the on-chain
-            settle tx.
-          nullable: true
+            `pending` (resting), `matched` (settling/settled), `expired`,
+            `cancelled`, or `empty` (slot reclaimed).
+        amount:
+          type: integer
+          format: uint64
+          description: Original order size, base units.
+        filled_quantity:
+          type: integer
+          format: uint64
+          description: Cumulative filled quantity.
+        price_limit: { type: integer, format: uint64 }
+        expiry_slot: { type: integer, format: uint64 }
+        arrival_slot:
+          type: integer
+          format: uint64
+          description: Slot stamped on arrival; frozen for the order's life.
 
     MassQuoteRequest:
       type: object
@@ -1509,9 +1573,9 @@ x-websocket-implemented:
             One reply per request frame. `op` echoes the request's
             (`order.place` / `order.cancel` / `order.modify`) with a `result`
             body identical to the REST response, or `pong` for a ping. A failed
-            frame returns `op: error` with the HTTP-equivalent `code`
-            (400/403/404/409/503) + `message` — the same reason the REST path
-            would have returned.
+            frame returns `op: error` with the same numeric `code` + `message`
+            the REST error envelope would have returned (see the Error Codes
+            reference).
           message:
             type: object
             required: [op]
@@ -1519,7 +1583,7 @@ x-websocket-implemented:
               op: { type: string, enum: [order.place, order.cancel, order.modify, pong, error] }
               request_id: { type: string }
               result: { type: object, description: Present on success; mirrors the REST response body. }
-              code: { type: integer, description: Present on `error` — the HTTP-equivalent status. }
+              code: { type: integer, description: "Present on `error` — the stable numeric error code." }
               message: { type: string, description: Present on `error`. }
   close_codes:
     1011: Lagged past the per-account buffer — reopen and backfill from the indexer.

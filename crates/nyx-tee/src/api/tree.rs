@@ -124,7 +124,7 @@ pub async fn get_root(
 pub async fn get_inclusion(
     State(state): State<Arc<ApiState>>,
     Query(q): Query<InclusionQuery>,
-) -> Result<Json<InclusionProofResponse>, (StatusCode, String)> {
+) -> Result<Json<InclusionProofResponse>, super::error::ApiError> {
     let commitment = parse_hex32(&q.commitment)?;
 
     let proof = {
@@ -155,12 +155,9 @@ pub async fn get_inclusion(
 pub async fn get_leaves(
     State(state): State<Arc<ApiState>>,
     Query(q): Query<LeavesQuery>,
-) -> Result<Json<LeavesResponse>, (StatusCode, String)> {
+) -> Result<Json<LeavesResponse>, super::error::ApiError> {
     if q.to < q.from {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "`to` must be >= `from`".to_string(),
-        ));
+        return Err(super::error::ApiError::malformed("`to` must be >= `from`"));
     }
     // Cap the page so one request can't materialise a huge tree into a
     // single JSON response (`leaves_range` clamps to the leaf COUNT, not

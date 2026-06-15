@@ -113,11 +113,12 @@ pub enum TradingResponse {
     #[serde(rename = "pong")]
     Pong { request_id: Option<String> },
     /// A frame failed: `code` is the HTTP-equivalent status the REST path would
-    /// have returned (400/403/404/409/503), `message` the same reason string.
+    /// have returned, `message` the same reason string. `code` is the stable
+    /// numeric error code from the REST error catalogue (see `api::error`).
     #[serde(rename = "error")]
     Error {
         request_id: Option<String>,
-        code: u16,
+        code: u32,
         message: String,
     },
 }
@@ -147,7 +148,7 @@ pub async fn trading_ws(
 
     let account_id = match validate_token(&state, &token).await {
         Ok(auth) => auth.account_id,
-        Err((code, msg)) => return (code, msg).into_response(),
+        Err(e) => return e.into_response(),
     };
 
     let cod = q.cancel_on_disconnect;
@@ -167,7 +168,7 @@ async fn handle_trading(
             .send(Message::Text(
                 serde_json::to_string(&TradingResponse::Error {
                     request_id: None,
-                    code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    code: 5001,
                     message: "matcher state not initialised on this instance".to_string(),
                 })
                 .unwrap_or_default(),
@@ -235,7 +236,7 @@ async fn process_frame(
         Err(e) => {
             return TradingResponse::Error {
                 request_id: None,
-                code: StatusCode::BAD_REQUEST.as_u16(),
+                code: 1001,
                 message: format!("malformed frame: {e}"),
             }
         }
@@ -250,10 +251,10 @@ async fn process_frame(
                     session_orders.insert(result.order_id.clone());
                     TradingResponse::Place { request_id, result }
                 }
-                Err((code, message)) => TradingResponse::Error {
+                Err(e) => TradingResponse::Error {
                     request_id,
-                    code: code.as_u16(),
-                    message,
+                    code: e.code,
+                    message: e.message,
                 },
             }
         }
@@ -267,10 +268,10 @@ async fn process_frame(
                 session_orders.remove(&order_id);
                 TradingResponse::Cancel { request_id, result }
             }
-            Err((code, message)) => TradingResponse::Error {
+            Err(e) => TradingResponse::Error {
                 request_id,
-                code: code.as_u16(),
-                message,
+                code: e.code,
+                message: e.message,
             },
         },
 
@@ -285,10 +286,10 @@ async fn process_frame(
                 session_orders.insert(result.order_id.clone());
                 TradingResponse::Modify { request_id, result }
             }
-            Err((code, message)) => TradingResponse::Error {
+            Err(e) => TradingResponse::Error {
                 request_id,
-                code: code.as_u16(),
-                message,
+                code: e.code,
+                message: e.message,
             },
         },
     }

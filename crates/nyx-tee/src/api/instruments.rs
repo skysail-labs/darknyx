@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
     Json,
 };
 use serde::Serialize;
@@ -80,14 +79,11 @@ pub async fn list_instruments(State(state): State<Arc<ApiState>>) -> Json<Vec<In
 pub async fn get_instrument(
     State(state): State<Arc<ApiState>>,
     Path(symbol): Path<String>,
-) -> Result<Json<Instrument>, (StatusCode, String)> {
+) -> Result<Json<Instrument>, super::error::ApiError> {
     state
         .instruments
         .iter()
         .find(|i| i.symbol == symbol)
         .map(|i| Json(Instrument::from(i)))
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            format!("unknown instrument '{symbol}'"),
-        ))
+        .ok_or_else(|| super::error::ApiError::not_found(format!("unknown instrument '{symbol}'")))
 }

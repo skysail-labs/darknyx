@@ -390,7 +390,7 @@ fn new_jti() -> String {
 pub async fn token_handler(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<TokenRequest>,
-) -> Result<Json<TokenResponse>, (StatusCode, String)> {
+) -> Result<Json<TokenResponse>, super::error::ApiError> {
     // Clone the stored creds out of the read lock so the (CPU-bound)
     // argon2 verify runs without holding the registry lock.
     let creds = {
@@ -424,7 +424,7 @@ pub async fn token_handler(
             })?
     };
     if !verified {
-        return Err((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()));
+        return Err(super::error::ApiError::unauthorized("invalid credentials"));
     }
 
     let iat = now_unix_seconds();
@@ -465,7 +465,7 @@ pub async fn bearer_middleware(
     State(state): State<Arc<ApiState>>,
     mut req: Request<Body>,
     next: Next,
-) -> Result<Response, (StatusCode, String)> {
+) -> Result<Response, super::error::ApiError> {
     let auth_header = req
         .headers()
         .get("authorization")
@@ -493,7 +493,7 @@ pub async fn bearer_middleware(
 pub async fn validate_token(
     state: &ApiState,
     token: &str,
-) -> Result<Authorized, (StatusCode, String)> {
+) -> Result<Authorized, super::error::ApiError> {
     let claims = decode::<Claims>(
         token,
         &DecodingKey::from_secret(&state.jwt_secret),
@@ -506,7 +506,7 @@ pub async fn validate_token(
     // `POST /auth/token/revoke`) is rejected even though the signature
     // + expiry are still valid.
     if state.revoked_jtis.read().await.contains(&claims.jti) {
-        return Err((StatusCode::UNAUTHORIZED, "token revoked".to_string()));
+        return Err(super::error::ApiError::unauthorized("token revoked"));
     }
 
     Ok(Authorized {
@@ -556,7 +556,7 @@ pub async fn register_account_handler(
     State(state): State<Arc<ApiState>>,
     axum::Extension(authorized): axum::Extension<Authorized>,
     Json(req): Json<RegisterAccountRequest>,
-) -> Result<(StatusCode, Json<RegisterAccountResponse>), (StatusCode, String)> {
+) -> Result<(StatusCode, Json<RegisterAccountResponse>), super::error::ApiError> {
     // Authoritative admin check against the live registry.
     let caller_is_admin = {
         let registry = state.accounts.read().await;
@@ -566,16 +566,14 @@ pub async fn register_account_handler(
             .unwrap_or(false)
     };
     if !caller_is_admin {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "admin privileges required".to_string(),
+        return Err(super::error::ApiError::forbidden(
+            "admin privileges required",
         ));
     }
 
     if req.api_key.is_empty() || req.api_secret.is_empty() || req.passphrase.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "api_key, api_secret, and passphrase must all be non-empty".to_string(),
+        return Err(super::error::ApiError::malformed(
+            "api_key, api_secret, and passphrase must all be non-empty",
         ));
     }
 
@@ -615,10 +613,10 @@ pub async fn register_account_handler(
 
     let inserted = state.accounts.write().await.register(creds);
     if !inserted {
-        return Err((
-            StatusCode::CONFLICT,
-            format!("api_key '{}' already registered", req.api_key),
-        ));
+        return Err(super::error::ApiError::duplicate(format!(
+            "api_key '{}' already registered",
+            req.api_key
+        )));
     }
 
     // Persist the new account before returning 201 so a restart

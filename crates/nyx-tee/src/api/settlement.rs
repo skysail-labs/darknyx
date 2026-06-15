@@ -39,7 +39,7 @@ pub async fn get_status(
     State(state): State<Arc<ApiState>>,
     Extension(_auth): Extension<Authorized>,
     Path(batch_id): Path<u64>,
-) -> Result<Json<BatchSettleStatus>, (StatusCode, String)> {
+) -> Result<Json<BatchSettleStatus>, super::error::ApiError> {
     let scheduler_state = state.settle_state.as_ref().ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "settle scheduler not initialised on this instance".to_string(),

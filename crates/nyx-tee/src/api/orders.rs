@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::auth::Authorized;
+use super::error::ApiError;
 use super::state::{ApiState, OrderUpdateMsg};
 use crate::matcher::book::BookError;
 
@@ -231,19 +232,13 @@ fn verify_sig(
     digest: &[u8; 32],
     trading_key: &[u8; 32],
     signature: &[u8; 64],
-) -> Result<(), (StatusCode, String)> {
+) -> Result<(), ApiError> {
     let vk = VerifyingKey::from_bytes(trading_key).map_err(|e| {
-        (
-            StatusCode::FORBIDDEN,
-            format!("trading_key is not a valid Ed25519 pubkey: {e}"),
-        )
+        ApiError::sig_invalid(format!("trading_key is not a valid Ed25519 pubkey: {e}"))
     })?;
     let sig = Signature::from_bytes(signature);
     vk.verify_strict(digest, &sig).map_err(|_| {
-        (
-            StatusCode::FORBIDDEN,
-            "trading_key_signature does not verify against the canonical body".to_string(),
-        )
+        ApiError::sig_invalid("trading_key_signature does not verify against the canonical body")
     })
 }
 
@@ -299,7 +294,7 @@ async fn prepare_order(
     state: &ApiState,
     matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
     req: &PlaceOrderRequest,
-) -> Result<PreparedOrder, (StatusCode, String)> {
+) -> Result<PreparedOrder, ApiError> {
     // 1. Decode hex inputs.
     let order_id: [u8; 16] = decode_hex(&req.order_id, "order_id")?;
     let note_commitment: [u8; 32] = decode_hex(&req.note_commitment, "note_commitment")?;
@@ -316,23 +311,19 @@ async fn prepare_order(
     // the order's own note_inner_hash). The nullifier is opaque to the TEE
     // (it can't verify it without the spending key) — only length-checked.
     if req.anchors.len() != ANCHOR_POOL_SIZE {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!(
-                "anchors: expected exactly {ANCHOR_POOL_SIZE} continuation anchors, got {}",
-                req.anchors.len()
-            ),
-        ));
+        return Err(ApiError::malformed(format!(
+            "anchors: expected exactly {ANCHOR_POOL_SIZE} continuation anchors, got {}",
+            req.anchors.len()
+        )));
     }
     let mut anchors: Vec<Anchor> = Vec::with_capacity(ANCHOR_POOL_SIZE);
     for (i, a) in req.anchors.iter().enumerate() {
         let inner_hash: [u8; 32] = decode_hex(&a.inner_hash, "anchor.inner_hash")?;
         let null: [u8; 32] = decode_hex(&a.nullifier, "anchor.nullifier")?;
         darkpool_crypto::fr_from_be_bytes(&inner_hash).map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!("anchors[{i}].inner_hash is not a canonical BN254 field element"),
-            )
+            ApiError::fr_unsafe(format!(
+                "anchors[{i}].inner_hash is not a canonical BN254 field element"
+            ))
         })?;
         anchors.push(Anchor {
             inner_hash,
@@ -349,29 +340,23 @@ async fn prepare_order(
     // 2. Field-level validation. Cheap; runs before the expensive
     //    Ed25519 verify.
     if order_id == [0u8; 16] {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "order_id must not be all-zero (sentinel reserved for matcher RELOCK_ORDER_ID_NONE)"
-                .to_string(),
+        return Err(ApiError::malformed(
+            "order_id must not be all-zero (sentinel reserved for matcher RELOCK_ORDER_ID_NONE)",
         ));
     }
     if req.symbol.len() > SYMBOL_MAX_LEN {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!(
-                "symbol length {} exceeds SYMBOL_MAX_LEN ({SYMBOL_MAX_LEN})",
-                req.symbol.len()
-            ),
-        ));
+        return Err(ApiError::malformed(format!(
+            "symbol length {} exceeds SYMBOL_MAX_LEN ({SYMBOL_MAX_LEN})",
+            req.symbol.len()
+        )));
     }
     if user_commitment[0] != 0 {
         // BN254 Fr-safety. Matcher Poseidon-hashes this during
         // change-note construction; non-zero top byte means
         // light-poseidon's `hash_bytes_be` will fail at tick time.
         // Reject early at intake.
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "user_commitment top byte must be zero (BN254 Fr safety)".to_string(),
+        return Err(ApiError::fr_unsafe(
+            "user_commitment top byte must be zero (BN254 Fr safety)",
         ));
     }
 
@@ -413,9 +398,8 @@ async fn prepare_order(
     // a silent unit confusion. Reject it. (An ask may legitimately
     // use price_limit == 0 as a market sell, so this is bid-only.)
     if matches!(side, OrderSide::Bid) && req.price_limit == 0 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "price_limit must be > 0 for a bid".to_string(),
+        return Err(ApiError::zero_price_bid(
+            "price_limit must be > 0 for a bid",
         ));
     }
     // Collateral mints + the protocol fee rate, read together under one
@@ -434,10 +418,10 @@ async fn prepare_order(
     // match. price_limit > 0 is already enforced for bids, so the
     // product is >= amount — no `.max` fallback needed.
     let nominal = match side {
-        OrderSide::Bid => req.amount.checked_mul(req.price_limit).ok_or((
-            StatusCode::BAD_REQUEST,
-            "amount * price_limit overflows u64".to_string(),
-        ))?,
+        OrderSide::Bid => req
+            .amount
+            .checked_mul(req.price_limit)
+            .ok_or_else(|| ApiError::malformed("amount * price_limit overflows u64"))?,
         OrderSide::Ask => req.amount,
     };
     // ...PLUS the order's own protocol fee. The matcher charges each leg
@@ -464,13 +448,10 @@ async fn prepare_order(
     let note_amount = match req.collateral_amount {
         Some(c) if c >= required => c,
         Some(c) => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "collateral_amount {c} is below the required {required} \
-                     (nominal {nominal} + fee {fee}) for this order"
-                ),
-            ));
+            return Err(ApiError::below_collateral(format!(
+                "collateral_amount {c} is below the required {required} \
+                 (nominal {nominal} + fee {fee}) for this order"
+            )));
         }
         None => required,
     };
@@ -495,10 +476,7 @@ async fn prepare_order(
         nullifier,
     };
     opening.verify_commitment(&note_commitment).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            format!("note opening does not match note_commitment: {e}"),
-        )
+        ApiError::bad_opening(format!("note opening does not match note_commitment: {e}"))
     })?;
 
     let order = Order {
@@ -545,11 +523,11 @@ fn commit_order(
     st: &mut crate::matcher::MatcherState,
     p: PreparedOrder,
     expiry_slot: u64,
-) -> Result<(), (StatusCode, String)> {
+) -> Result<(), ApiError> {
     st.book_mut().submit(p.order).map_err(|e| match e {
-        BookError::Duplicate(_, _) => (StatusCode::CONFLICT, e.to_string()),
-        BookError::ZeroOrderId => (StatusCode::BAD_REQUEST, e.to_string()),
-        e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        BookError::Duplicate(_, _) => ApiError::duplicate(e.to_string()),
+        BookError::ZeroOrderId => ApiError::malformed(e.to_string()),
+        e => ApiError::internal(e.to_string()),
     })?;
     st.openings_mut().insert(
         p.note_commitment,
@@ -576,16 +554,16 @@ fn cancel_in_book(
     st: &mut crate::matcher::MatcherState,
     trading_key: [u8; 32],
     order_id: [u8; 16],
-) -> Result<(), (StatusCode, String)> {
+) -> Result<(), ApiError> {
     // Resolve the collateral note BEFORE cancelling (the store is keyed by note
     // commitment, not order_id).
     let collateral_note = st.book().get(&order_id).map(|o| o.collateral_note);
     st.book_mut()
         .cancel(trading_key, order_id)
         .map_err(|e| match e {
-            BookError::NotFound(_) => (StatusCode::NOT_FOUND, e.to_string()),
-            BookError::NotOwner(_, _) => (StatusCode::FORBIDDEN, e.to_string()),
-            e => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            BookError::NotFound(_) => ApiError::not_found(e.to_string()),
+            BookError::NotOwner(_, _) => ApiError::not_owner(e.to_string()),
+            e => ApiError::internal(e.to_string()),
         })?;
     if let Some(note) = collateral_note {
         st.openings_mut().remove(&note);
@@ -603,7 +581,7 @@ pub async fn place_core(
     matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
     req: &PlaceOrderRequest,
     account_id: &str,
-) -> Result<PlaceOrderResponse, (StatusCode, String)> {
+) -> Result<PlaceOrderResponse, ApiError> {
     let prepared = prepare_order(state, matcher, req).await?;
     let order_id = prepared.order_id;
     let arrival_slot = prepared.arrival_slot;
@@ -631,7 +609,7 @@ pub async fn place_order(
     State(state): State<Arc<ApiState>>,
     Extension(auth): Extension<Authorized>,
     Json(req): Json<PlaceOrderRequest>,
-) -> Result<(StatusCode, Json<PlaceOrderResponse>), (StatusCode, String)> {
+) -> Result<(StatusCode, Json<PlaceOrderResponse>), ApiError> {
     let matcher = matcher_or_503(&state)?;
     let resp = place_core(&state, matcher, &req, &auth.account_id).await?;
     Ok((StatusCode::ACCEPTED, Json(resp)))
@@ -670,7 +648,7 @@ pub async fn cancel_core(
     matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
     order_id_hex: &str,
     req: &CancelOrderRequest,
-) -> Result<CancelOrderResponse, (StatusCode, String)> {
+) -> Result<CancelOrderResponse, ApiError> {
     let order_id: [u8; 16] = decode_hex(order_id_hex, "order_id (path)")?;
     let trading_key: [u8; 32] = decode_hex(&req.trading_key, "trading_key")?;
     let signature: [u8; 64] = decode_hex(&req.trading_key_signature, "trading_key_signature")?;
@@ -727,7 +705,7 @@ pub async fn cancel_order(
     Extension(_auth): Extension<Authorized>,
     Path(order_id_hex): Path<String>,
     Json(req): Json<CancelOrderRequest>,
-) -> Result<Json<CancelOrderResponse>, (StatusCode, String)> {
+) -> Result<Json<CancelOrderResponse>, ApiError> {
     let matcher = matcher_or_503(&state)?;
     let resp = cancel_core(&state, matcher, &order_id_hex, &req).await?;
     Ok(Json(resp))
@@ -774,7 +752,7 @@ pub async fn modify_core(
     old_order_id_hex: &str,
     req: &ModifyOrderRequest,
     account_id: &str,
-) -> Result<ModifyOrderResponse, (StatusCode, String)> {
+) -> Result<ModifyOrderResponse, ApiError> {
     let old_order_id: [u8; 16] = decode_hex(old_order_id_hex, "order_id (path)")?;
     // The cancel is authorized by the SAME trading_key that signs the
     // replacement. Verify the cancel sig over the OLD id with that key.
@@ -803,24 +781,20 @@ pub async fn modify_core(
         let mut st = matcher.write().await;
         match st.book().get(&old_order_id) {
             None => {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    format!("order {old_order_id_hex} not found"),
-                ))
+                return Err(ApiError::not_found(format!(
+                    "order {old_order_id_hex} not found"
+                )))
             }
             Some(o) if o.trading_key != trading_key => {
-                return Err((StatusCode::FORBIDDEN, "not the order owner".to_string()))
+                return Err(ApiError::not_owner("not the order owner"))
             }
             Some(_) => {}
         }
         if new_order_id != old_order_id && st.book().get(&new_order_id).is_some() {
-            return Err((
-                StatusCode::CONFLICT,
-                format!(
-                    "replacement order_id {} already exists",
-                    hex::encode(new_order_id)
-                ),
-            ));
+            return Err(ApiError::id_in_use(format!(
+                "replacement order_id {} already exists",
+                hex::encode(new_order_id)
+            )));
         }
         // Preconditions hold → both mutations succeed.
         cancel_in_book(&mut st, trading_key, old_order_id)?;
@@ -849,7 +823,7 @@ pub async fn modify_order(
     Extension(auth): Extension<Authorized>,
     Path(old_order_id_hex): Path<String>,
     Json(req): Json<ModifyOrderRequest>,
-) -> Result<Json<ModifyOrderResponse>, (StatusCode, String)> {
+) -> Result<Json<ModifyOrderResponse>, ApiError> {
     let matcher = matcher_or_503(&state)?;
     let resp = modify_core(&state, matcher, &old_order_id_hex, &req, &auth.account_id).await?;
     Ok(Json(resp))
@@ -888,7 +862,7 @@ pub async fn topup_anchors(
     Extension(_auth): Extension<Authorized>,
     Path(order_id_hex): Path<String>,
     Json(req): Json<AnchorTopUpRequest>,
-) -> Result<(StatusCode, Json<AnchorTopUpResponse>), (StatusCode, String)> {
+) -> Result<(StatusCode, Json<AnchorTopUpResponse>), ApiError> {
     let matcher = matcher_or_503(&state)?;
 
     let order_id: [u8; 16] = decode_hex(&order_id_hex, "order_id (path)")?;
@@ -897,23 +871,19 @@ pub async fn topup_anchors(
 
     // Validate + decode the new anchors (same rules as intake).
     if req.anchors.len() != ANCHOR_TOPUP_SIZE {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!(
-                "anchors: expected exactly {ANCHOR_TOPUP_SIZE} top-up anchors, got {}",
-                req.anchors.len()
-            ),
-        ));
+        return Err(ApiError::malformed(format!(
+            "anchors: expected exactly {ANCHOR_TOPUP_SIZE} top-up anchors, got {}",
+            req.anchors.len()
+        )));
     }
     let mut anchors: Vec<Anchor> = Vec::with_capacity(ANCHOR_TOPUP_SIZE);
     for (i, a) in req.anchors.iter().enumerate() {
         let inner_hash: [u8; 32] = decode_hex(&a.inner_hash, "anchor.inner_hash")?;
         let null: [u8; 32] = decode_hex(&a.nullifier, "anchor.nullifier")?;
         darkpool_crypto::fr_from_be_bytes(&inner_hash).map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!("anchors[{i}].inner_hash is not a canonical BN254 field element"),
-            )
+            ApiError::fr_unsafe(format!(
+                "anchors[{i}].inner_hash is not a canonical BN254 field element"
+            ))
         })?;
         anchors.push(Anchor {
             inner_hash,
@@ -934,33 +904,26 @@ pub async fn topup_anchors(
     // order → 404: it filled / cancelled / expired, so its pool is gone.)
     match st.book().get(&order_id) {
         None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                "order not found (filled / cancelled / expired)".to_string(),
+            return Err(ApiError::not_found(
+                "order not found (filled / cancelled / expired)",
             ))
         }
         Some(o) if o.trading_key != trading_key => {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "trading key does not own this order".to_string(),
-            ))
+            return Err(ApiError::not_owner("trading key does not own this order"))
         }
         Some(_) => {}
     }
 
-    let pool = st.openings_mut().anchor_pool_mut(&order_id).ok_or((
-        StatusCode::NOT_FOUND,
-        "order has no anchor pool".to_string(),
-    ))?;
+    let pool = st
+        .openings_mut()
+        .anchor_pool_mut(&order_id)
+        .ok_or_else(|| ApiError::not_found("order has no anchor pool"))?;
     // Replay protection: the nonce must strictly increase.
     if req.topup_nonce <= pool.last_topup_nonce {
-        return Err((
-            StatusCode::CONFLICT,
-            format!(
-                "topup_nonce {} not greater than last accepted {}",
-                req.topup_nonce, pool.last_topup_nonce
-            ),
-        ));
+        return Err(ApiError::stale_nonce(format!(
+            "topup_nonce {} not greater than last accepted {}",
+            req.topup_nonce, pool.last_topup_nonce
+        )));
     }
     pool.last_topup_nonce = req.topup_nonce;
     pool.append(anchors); // also clears `paused` → the matcher resumes it
@@ -984,15 +947,15 @@ pub async fn get_order(
     State(state): State<Arc<ApiState>>,
     Extension(_auth): Extension<Authorized>,
     Path(order_id_hex): Path<String>,
-) -> Result<Json<OrderStatusResponse>, (StatusCode, String)> {
+) -> Result<Json<OrderStatusResponse>, ApiError> {
     let matcher = matcher_or_503(&state)?;
     let order_id: [u8; 16] = decode_hex(&order_id_hex, "order_id (path)")?;
 
     let st = matcher.read().await;
-    let order = st.book().get(&order_id).ok_or((
-        StatusCode::NOT_FOUND,
-        format!("no order with id {order_id_hex}"),
-    ))?;
+    let order = st
+        .book()
+        .get(&order_id)
+        .ok_or_else(|| ApiError::not_found(format!("no order with id {order_id_hex}")))?;
 
     Ok(Json(OrderStatusResponse {
         order_id: order_id_hex,

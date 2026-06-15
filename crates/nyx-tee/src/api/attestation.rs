@@ -64,7 +64,7 @@ pub struct AttestationResponse {
 pub async fn handler(
     State(state): State<Arc<ApiState>>,
     Query(params): Query<AttestationParams>,
-) -> Result<Json<AttestationResponse>, (StatusCode, String)> {
+) -> Result<Json<AttestationResponse>, super::error::ApiError> {
     // 1. Degraded-boot check.
     let dstack = state.dstack.as_ref().ok_or_else(|| {
         (
@@ -83,13 +83,10 @@ pub async fn handler(
                 )
             })?;
             if bytes.len() > 32 {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "reportData is {} bytes; max 32 (the right half is reserved for tee_pubkey binding)",
-                        bytes.len()
-                    ),
-                ));
+                return Err(super::error::ApiError::malformed(format!(
+                    "reportData is {} bytes; max 32 (the right half is reserved for tee_pubkey binding)",
+                    bytes.len()
+                )));
             }
             bytes
         }

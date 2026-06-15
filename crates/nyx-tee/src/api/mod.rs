@@ -13,6 +13,7 @@ pub mod attestation;
 pub mod auth;
 #[cfg(feature = "debug_endpoints")]
 pub mod debug;
+pub mod error;
 pub mod fills_router;
 pub mod health;
 pub mod info;
@@ -35,6 +36,7 @@ use axum::{
     Router,
 };
 
+pub use error::ApiError;
 pub use state::{ApiState, BootAppInfo};
 
 /// Construct the production HTTP router. Production main.rs hands
@@ -112,7 +114,13 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
     // same `Arc<ApiState>` so request handlers see identical state.
     let protected = build_protected_router(state.clone());
 
-    public.merge(protected).with_state(state)
+    // Stamp every response (success, error, and 404 fallback) with an
+    // `x-request-id` correlation header. Layered on the merged router so it
+    // wraps the whole surface.
+    public
+        .merge(protected)
+        .layer(axum::middleware::from_fn(error::request_id_middleware))
+        .with_state(state)
 }
 
 /// The bearer-protected sub-router. Mounts the per-order

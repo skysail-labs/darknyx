@@ -7,25 +7,62 @@ description: How Nyx signals failure — HTTP status codes and the conditions th
 # Error Codes
 
 :::info TL;DR
-REST errors are signaled by HTTP **status code** plus a human-readable message
-describing the specific reason. WebSocket frame errors carry the same
-HTTP-equivalent status as a `code` field. Branch on the status; log the message.
+Every error response is a small JSON **envelope** — `{ code, message }` — with a
+mapped HTTP status. `code` is a **stable numeric error code** you can branch on;
+`message` is the human-readable reason. Every response (success and error)
+carries an **`x-request-id`** header for correlating with server logs. Success
+responses are not enveloped — their typed body is returned directly.
 :::
 
 ## Error shape
 
-A failed REST request returns a non-2xx HTTP status and a message:
+A failed REST request returns a non-2xx HTTP status and the envelope:
 
 ```json
-{ "error": "trading_key_signature does not verify against the canonical body" }
+{ "code": 1102, "message": "trading_key_signature does not verify against the canonical body" }
 ```
 
-A failed `/ws/trading` frame returns an `error` reply whose `code` is the
-HTTP-equivalent status and whose `message` is the same reason string:
+A failed `/ws/trading` frame returns an `error` reply carrying the **same**
+numeric `code` and `message` the REST path would have returned:
 
 ```json
-{ "op": "error", "request_id": "r2", "code": 403, "message": "not the order owner" }
+{ "op": "error", "request_id": "r2", "code": 1103, "message": "not the order owner" }
 ```
+
+Every response includes an `x-request-id` header:
+
+```text
+x-request-id: req_a3f19c7b21d40e8a
+```
+
+Quote it when reporting an issue — it ties your request to the server's log line.
+
+## Code catalogue
+
+Codes are grouped by class. The HTTP status is derived from the class.
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `1000` | 400 | Generic bad request. |
+| `1001` | 400 | Malformed input — bad hex, wrong width, zero/illegal id, wrong anchor count. |
+| `1002` | 400 | A hashed field is not a canonical field element (BN254 Fr-unsafe). |
+| `1003` | 400 | Collateral below the order's nominal cost + fee. |
+| `1004` | 400 | Order amount below the market minimum. |
+| `1005` | 400 | A bid with a zero price limit. |
+| `1006` | 400 | The note opening does not re-derive the signed `note_commitment`. |
+| `1101` | 401 | Missing / invalid / expired / revoked token, or bad credentials. |
+| `1102` | 403 | The trading-key signature did not verify. |
+| `1103` | 403 | The trading key does not own the targeted order. |
+| `1150` | 403 | Forbidden (e.g. admin-only route). |
+| `1201` | 409 | Duplicate order id (a different order already holds it). |
+| `1202` | 409 | A replay-protection nonce did not advance. |
+| `1203` | 409 | A modify's replacement id is already booked. |
+| `1301` | 404 | No such order / batch / instrument / note. |
+| `1401` | 429 | Rate limited — back off and retry. |
+| `5001` | 503 | A required subsystem (matching / settlement) is unavailable. |
+| `5000` | 500 | Internal error. |
+
+Codes are stable: branch on the number, not the message text (which may change).
 
 ## Status reference
 

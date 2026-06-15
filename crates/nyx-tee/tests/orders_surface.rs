@@ -1131,3 +1131,51 @@ async fn modify_non_owner_is_forbidden() {
         StatusCode::OK
     );
 }
+
+// ─── error envelope + request-id correlation (Phase 1) ──────────────────────
+
+#[tokio::test]
+async fn error_responses_use_the_structured_envelope_with_a_numeric_code() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    // A bid with a non-Fr-safe user_commitment (top byte set) → 400 with the
+    // `fr_unsafe` code (1002) and the message preserved in the JSON body.
+    let mut b = PlaceOrderBuilder::new();
+    b.user_commitment = [0x33; 32]; // top byte != 0 → BN254 Fr unsafe
+    let resp = place(&app, &bearer, b.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    // Every response carries a correlation id.
+    assert!(
+        resp.headers().get("x-request-id").is_some(),
+        "x-request-id header missing on error"
+    );
+    let j = read_json(resp).await;
+    assert_eq!(j["code"], 1002, "fr_unsafe numeric code");
+    assert!(
+        j["message"].as_str().unwrap().contains("BN254 Fr"),
+        "message text preserved in the envelope: {j}"
+    );
+}
+
+#[tokio::test]
+async fn success_responses_also_carry_a_request_id_header() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    let resp = place(&app, &bearer, PlaceOrderBuilder::new().sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    assert!(
+        resp.headers().get("x-request-id").is_some(),
+        "x-request-id header missing on success"
+    );
+    // Success bodies are NOT wrapped — still the plain typed shape.
+    let j = read_json(resp).await;
+    assert_eq!(j["status"], "accepted");
+    assert!(
+        j.get("code").is_none(),
+        "success body must not be enveloped"
+    );
+}
