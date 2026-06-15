@@ -112,9 +112,9 @@ pub enum TradingResponse {
     },
     #[serde(rename = "pong")]
     Pong { request_id: Option<String> },
-    /// A frame failed: `code` is the HTTP-equivalent status the REST path would
-    /// have returned, `message` the same reason string. `code` is the stable
-    /// numeric error code from the REST error catalogue (see `api::error`).
+    /// A frame failed: `code` is the stable numeric error code from the REST
+    /// error catalogue (see `api::error`), `message` the same reason string the
+    /// REST path would have returned.
     #[serde(rename = "error")]
     Error {
         request_id: Option<String>,
@@ -180,14 +180,19 @@ async fn handle_trading(
     // Order ids placed on THIS socket and not yet known-terminal. Drives
     // cancel-on-disconnect; hex-keyed so the cancel path can decode them.
     let mut session_orders: HashSet<String> = HashSet::new();
+    // Per-connection monotonic sequence stamped on every reply frame.
+    let mut seq: u64 = 0;
 
     while let Some(incoming) = socket.recv().await {
         match incoming {
             Ok(Message::Text(txt)) => {
                 let resp =
                     process_frame(&state, &matcher, &account_id, &mut session_orders, &txt).await;
-                let json = serde_json::to_string(&resp).unwrap_or_else(|e| {
-                    format!(r#"{{"op":"error","code":500,"message":"serialize: {e}"}}"#)
+                seq += 1;
+                let json = super::ws::seq_json(&resp, seq).unwrap_or_else(|e| {
+                    format!(
+                        r#"{{"op":"error","code":5000,"message":"serialize: {e}","seq":{seq}}}"#
+                    )
                 });
                 if socket.send(Message::Text(json)).await.is_err() {
                     break; // client gone

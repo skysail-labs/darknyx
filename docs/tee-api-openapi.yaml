@@ -1452,6 +1452,11 @@ x-websocket-implemented:
     upgrade; a `Authorization: Bearer` header is also accepted). Every stream is
     PER-ACCOUNT: a subscriber only ever receives events for orders it placed
     (routed via the intake-time order_id→account map).
+
+    SEQUENCING: every server message carries a top-level `seq` — a per-connection
+    monotonic counter starting at 1. A gap in `seq` (or a 1011 lag-close) means
+    the client missed messages; recover by reconciling (GET /orders/:id for the
+    orders stream; the indexer backfill for fills).
   streams:
     /ws/fills:
       description: |
@@ -1464,8 +1469,9 @@ x-websocket-implemented:
             commitment binding) then stores the change note. See docs/fills-history-architecture.md.
           message:
             type: object
-            required: [order_id, anchor_index, change_amount, change_note_commitment, mint, inner_hash]
+            required: [seq, order_id, anchor_index, change_amount, change_note_commitment, mint, inner_hash]
             properties:
+              seq: { type: integer, format: uint64, description: Per-connection monotonic sequence (gap detection). }
               order_id: { type: string, description: 16-byte hex. }
               anchor_index: { type: integer }
               change_amount: { type: integer, format: uint64 }
@@ -1487,8 +1493,9 @@ x-websocket-implemented:
             that keeps resting).
           message:
             type: object
-            required: [order_id, kind]
+            required: [seq, order_id, kind]
             properties:
+              seq: { type: integer, format: uint64, description: Per-connection monotonic sequence (gap detection). }
               order_id: { type: string, description: 16-byte hex. }
               kind:
                 type: string
@@ -1578,9 +1585,10 @@ x-websocket-implemented:
             reference).
           message:
             type: object
-            required: [op]
+            required: [op, seq]
             properties:
               op: { type: string, enum: [order.place, order.cancel, order.modify, pong, error] }
+              seq: { type: integer, format: uint64, description: Per-connection monotonic sequence (every reply frame). }
               request_id: { type: string }
               result: { type: object, description: Present on success; mirrors the REST response body. }
               code: { type: integer, description: "Present on `error` — the stable numeric error code." }

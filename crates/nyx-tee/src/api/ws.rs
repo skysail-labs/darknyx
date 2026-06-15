@@ -34,6 +34,22 @@ use tokio::sync::broadcast::error::RecvError;
 use super::auth::validate_token;
 use super::state::ApiState;
 
+/// Serialize a per-account stream message and inject a top-level monotonic
+/// `seq` field. Injecting (rather than wrapping in `{seq, data}`) keeps the
+/// message shape backward-compatible — parsers that ignore unknown fields read
+/// the message as before, while seq-aware clients detect gaps. Shared by the
+/// `/ws/fills`, `/ws/orders`, and `/ws/trading` send loops.
+pub(crate) fn seq_json<T: serde::Serialize>(
+    msg: &T,
+    seq: u64,
+) -> Result<String, serde_json::Error> {
+    let mut v = serde_json::to_value(msg)?;
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("seq".to_string(), serde_json::Value::from(seq));
+    }
+    serde_json::to_string(&v)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct FillsQuery {
     /// Bearer JWT as a query param (the WS-friendly auth path).
@@ -74,12 +90,16 @@ pub async fn fills_ws(
 async fn handle_fills(mut socket: WebSocket, state: Arc<ApiState>, account_id: String) {
     // Subscribe to THIS account's channel only. Created lazily if first here.
     let mut rx = state.subscribe_account_fills(&account_id).await;
+    // Per-connection monotonic sequence. A gap (or a 1011 lag-close) tells the
+    // client exactly how many memos it missed; recovery is the indexer backfill.
+    let mut seq: u64 = 0;
 
     loop {
         tokio::select! {
             memo = rx.recv() => match memo {
                 Ok(memo) => {
-                    let json = match serde_json::to_string(&memo) {
+                    seq += 1;
+                    let json = match seq_json(&memo, seq) {
                         Ok(j) => j,
                         Err(e) => {
                             // Should be unreachable for a plain FillMemo, but
@@ -152,12 +172,15 @@ pub async fn orders_ws(
 
 async fn handle_orders(mut socket: WebSocket, state: Arc<ApiState>, account_id: String) {
     let mut rx = state.subscribe_account_order_updates(&account_id).await;
+    // Per-connection monotonic sequence (gap detection; 1011 on lag).
+    let mut seq: u64 = 0;
 
     loop {
         tokio::select! {
             update = rx.recv() => match update {
                 Ok(update) => {
-                    let json = match serde_json::to_string(&update) {
+                    seq += 1;
+                    let json = match seq_json(&update, seq) {
                         Ok(j) => j,
                         Err(e) => {
                             tracing::error!(account = %account_id, error = %e, "ws/orders: OrderUpdateMsg serialize failed; dropping");
@@ -187,5 +210,33 @@ async fn handle_orders(mut socket: WebSocket, state: Arc<ApiState>, account_id: 
                 Some(Err(_)) => break,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::state::OrderUpdateMsg;
+
+    #[test]
+    fn seq_json_injects_seq_and_preserves_fields() {
+        let msg = OrderUpdateMsg {
+            order_id: "ab".repeat(16),
+            kind: "fully_filled",
+            filled_quantity: Some(7),
+            new_amount: None,
+            new_note_amount: None,
+        };
+        let s = seq_json(&msg, 42).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        // seq added at the top level...
+        assert_eq!(v["seq"], 42);
+        // ...alongside the original fields (not nested under `data`), so a
+        // parser that ignores unknown fields still reads the message as before.
+        assert_eq!(v["order_id"], "ab".repeat(16));
+        assert_eq!(v["kind"], "fully_filled");
+        assert_eq!(v["filled_quantity"], 7);
+        // Optional fields stay omitted (skip_serializing_if), not nulled.
+        assert!(v.get("new_amount").is_none());
     }
 }

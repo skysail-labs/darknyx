@@ -23,6 +23,9 @@ const defaultWsFactory: WebSocketFactory = (url) =>
 
 /** Wire shape of one order-lifecycle event (mirrors `OrderUpdateMsg`). */
 export interface OrderUpdate {
+  /** Per-connection monotonic sequence. A gap means missed events — reconcile
+   *  via `GET /orders/:id` (the channel is a notifier, not a durable log). */
+  seq?: number;
   order_id: string; // 16-byte hex
   kind: "partially_filled" | "fully_filled" | "cancelled" | "expired";
   /** Present on fills. */

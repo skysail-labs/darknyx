@@ -30,6 +30,7 @@ Each message is a JSON object describing one state transition:
 
 ```json
 {
+  "seq": 12,
   "order_id": "aa00000000000000000000000000000001",
   "kind": "partially_filled",
   "filled_quantity": 3000000,
@@ -40,6 +41,7 @@ Each message is a JSON object describing one state transition:
 
 | Field | Type | Present when | Description |
 |---|---|---|---|
+| `seq` | integer | always | Per-connection monotonic sequence, starting at 1. A gap means missed events. |
 | `order_id` | string | always | The 16-byte order id, hex. |
 | `kind` | string | always | The transition: `partially_filled`, `fully_filled`, `cancelled`, or `expired`. |
 | `filled_quantity` | integer | on fills | Cumulative filled quantity. |
@@ -73,10 +75,14 @@ the [Fills Channel](./fills-channel).
 
 ## Gap recovery
 
-If a slow consumer falls behind the per-account buffer, the server closes the
-socket with code **1011**. On a 1011 close, reconnect and reconcile any orders you
-care about with `GET /orders/{order_id}` — the channel is a low-latency notifier,
-not a durable log.
+Every event carries a per-connection monotonic `seq` (starting at 1). Track the
+last `seq` you processed; if the next event's `seq` is not exactly one greater,
+you missed events in between — reconcile the orders you care about with
+`GET /orders/{order_id}`.
+
+If a slow consumer falls behind the per-account buffer, the server also closes the
+socket with code **1011**. On a 1011 close, reconnect and reconcile — the channel
+is a low-latency notifier, not a durable log.
 
 ## Example
 

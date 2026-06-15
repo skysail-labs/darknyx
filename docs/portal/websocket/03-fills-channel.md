@@ -38,6 +38,7 @@ receive memos for orders you placed.
 
 ```json
 {
+  "seq": 5,
   "order_id": "aa00000000000000000000000000000001",
   "anchor_index": 0,
   "change_amount": 7000000,
@@ -49,6 +50,7 @@ receive memos for orders you placed.
 
 | Field | Type | Description |
 |---|---|---|
+| `seq` | integer | Per-connection monotonic sequence, starting at 1. A gap means missed memos — re-run the backfill. |
 | `order_id` | string | The 16-byte order id, hex. |
 | `anchor_index` | integer | Which continuation anchor the engine consumed for this fill. |
 | `change_amount` | integer | The value of the change note. |

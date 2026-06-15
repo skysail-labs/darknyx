@@ -55,20 +55,23 @@ reply echoes so a client can correlate responses on the multiplexed socket.
 
 ### Reply frames
 
+Every reply carries a per-connection monotonic `seq` (starting at 1) so a client
+can detect a dropped frame.
+
 | `op` | Fields | Meaning |
 |---|---|---|
-| `order.place` | `request_id?`, `result` | Order accepted; `result` mirrors the REST place response. |
-| `order.cancel` | `request_id?`, `result` | Order cancelled. |
-| `order.modify` | `request_id?`, `result` | Order modified. |
-| `pong` | `request_id?` | Heartbeat reply. |
-| `error` | `request_id?`, `code`, `message` | A frame failed. `code` is the HTTP-equivalent status (`400`, `403`, `404`, `409`, `503`) and `message` the same reason the REST path would have returned. |
+| `order.place` | `seq`, `request_id?`, `result` | Order accepted; `result` mirrors the REST place response. |
+| `order.cancel` | `seq`, `request_id?`, `result` | Order cancelled. |
+| `order.modify` | `seq`, `request_id?`, `result` | Order modified. |
+| `pong` | `seq`, `request_id?` | Heartbeat reply. |
+| `error` | `seq`, `request_id?`, `code`, `message` | A frame failed. `code` is the stable numeric [error code](../reference/error-codes); `message` is the same reason the REST path would have returned. |
 
 ```json
-{ "op": "order.place", "request_id": "r1", "result": { "order_id": "aa…01", "status": "accepted", "arrival_slot": 309482113 } }
+{ "op": "order.place", "seq": 1, "request_id": "r1", "result": { "order_id": "aa…01", "status": "accepted", "arrival_slot": 309482113 } }
 ```
 
 ```json
-{ "op": "error", "request_id": "r2", "code": 403, "message": "trading_key_signature does not verify against the canonical body" }
+{ "op": "error", "seq": 2, "request_id": "r2", "code": 1102, "message": "trading_key_signature does not verify against the canonical body" }
 ```
 
 ## Cancel-on-disconnect

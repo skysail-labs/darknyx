@@ -21,6 +21,9 @@ import type { ChangeNoteRecord, NoteStore } from "../utxo/note-store.js";
 
 /** Wire shape of a fill memo (mirrors `nyx_tee::matcher::FillMemo`). */
 export interface FillMemo {
+  /** Per-connection monotonic sequence. A gap means missed memos — recover via
+   *  the indexer backfill ("backfill then tail"). Present on the live stream. */
+  seq?: number;
   order_id: string; // 16-byte hex
   anchor_index: number;
   change_amount: number; // u64 fits a JS number for realistic amounts; see note below
