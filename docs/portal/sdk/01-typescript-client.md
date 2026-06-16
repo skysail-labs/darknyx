@@ -44,6 +44,15 @@ import {
   fetchSystemStatus,
   subscribeOrderUpdates,
   subscribeFills,
+  // order submission
+  proveAndBuildOrder,
+  buildOrder,
+  buildCancel,
+  nodeValidInputProver,
+  placeOrder,
+  TradingClient,
+  NyxApiError,
+  deriveOrderId,
 } from "@nyx/sdk";
 
 class NyxClient {
@@ -142,13 +151,41 @@ const market = marketPolicy({ side: OrderSide.Bid, priceCap: 155_000_000n });
 // An all-or-none resting bid.
 const aon = aonPolicy({ amount: 10_000_000n, priceLimit: 150_000_000n });
 
-// The SDK's order-builder takes a policy + a spendable note + your keys and
-// returns the full signed wire body (note commitment, input proof, anchor pool,
-// signature). Submit it as-is.
-const order = await sdk.buildOrder({ symbol: "SOL-USDC", side: OrderSide.Bid, amount: 10_000_000n, policy: gttPolicy, note });
-const res = await client.placeOrder(order);
+// `proveAndBuildOrder` does the whole flow: fetch the note's inclusion witness
+// from /tree/inclusion, generate the VALID_INPUT proof, then assemble + sign the
+// wire body (note commitment, proof, anchor pool, trading-key signature). The
+// prover is pluggable — `nodeValidInputProver` runs the compiled circuit via
+// snarkjs in Node; a browser app supplies its own WASM prover.
+const order = await proveAndBuildOrder({
+  baseUrl: GATEWAY,
+  token: client["token"]!,
+  prover: nodeValidInputProver({ wasmPath, zkeyPath }),
+  ownerCommitmentBlinding,
+  tokenMint,
+  masterSeed,
+  spendingKey,
+  ownerCommitment,
+  userCommitment,
+  tradingKey: trading.publicKey,
+  sign: (digest) => nacl.sign.detached(digest, trading.secretKey),
+  note,                         // { commitment, innerHash, amount }
+  symbol: "SOL-USDC",
+  side: OrderSide.Bid,
+  policy: gttPolicy,
+  amount: 10_000_000n,
+  orderId: deriveOrderId(masterSeed, 0),
+});
+
+// Submit over REST...
+const res = await placeOrder({ baseUrl: GATEWAY, token: client["token"]! }, order);
 console.log("placed", res.order_id, res.status);
 ```
+
+:::tip Already hold a proof?
+If you already have a VALID_INPUT proof (e.g. relayed from elsewhere), skip the
+prover and call `buildOrder({ …, validInput: { proofBytes, merkleRoot } })`
+directly — `proveAndBuildOrder` is just the fetch-prove-build convenience on top.
+:::
 
 ## Streaming order and fill events
 
@@ -181,16 +218,27 @@ const fills = subscribeFills({
 
 For a high-frequency client, submit orders over the [WebSocket trading
 socket](../websocket/ws-trading) instead of REST — one warm connection, plus
-cancel-on-disconnect.
+cancel-on-disconnect. The `TradingClient` correlates each reply to its request
+and resolves a promise per call:
 
 ```typescript
-const ws = new WebSocket(`${WSS}/ws/trading?token=${TOKEN}&cancel_on_disconnect=true`);
-ws.onopen = () => ws.send(JSON.stringify({ op: "order.place", request_id: "r1", params: order }));
-ws.onmessage = (e) => {
-  const msg = JSON.parse(e.data);
-  if (msg.op === "error") console.error(msg.code, msg.message);
-  else if (msg.op === "order.place") console.log("accepted", msg.result.order_id);
-};
+const trader = new TradingClient({
+  gatewayWsUrl: WSS,
+  token: client["token"]!,
+  cancelOnDisconnect: true,
+});
+await trader.connect();
+
+try {
+  const res = await trader.place(order);          // resolves with the acceptance
+  console.log("accepted", res.order_id);
+} catch (e) {
+  if (e instanceof NyxApiError) console.error(e.code, e.message); // numeric code
+}
+
+// Cancel + modify use the same socket; build the bodies with buildCancel / buildOrder.
+const cancel = await buildCancel({ orderId, tradingKey: trading.publicKey, cancelNonce: 1n, sign });
+await trader.cancel(hex(orderId), cancel);
 ```
 
 ## Usage

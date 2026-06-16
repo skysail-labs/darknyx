@@ -127,10 +127,11 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
   - *Deferred:* an **account-level** cancel-on-disconnect default (today it's per-session opt-in
     via the query param). That needs an account-config store the registry doesn't have yet —
     revisit alongside any `/account` settings work.
-  - *Deferred:* an **SDK `/ws/trading` send-client**. The SDK has no order-submission transport
-    today (clients build + sign + POST the canonical body themselves; the SDK ships only crypto
-    primitives + receive-only streams). A send-client would be the first such transport — a
-    separate decision from Phase B. The OpenAPI frame contract is the integration surface for now.
+  - ✅ *Done:* the **SDK order-submission layer** (`buildOrder` + REST `order-client` + the
+    `TradingClient` `/ws/trading` send-client + the VALID_INPUT prover/witness fetch). The SDK
+    now builds, signs, and submits orders end to end; `buildOrder`'s canonical digest is byte-parity
+    guarded against the Rust matcher (`build-order-parity.test.ts`). The `snarkjs` prover is a
+    dynamically-imported Node adapter (pluggable), so it isn't forced on browser consumers.
 
 > **Status:** Phase A + Phase B shipped on the `tree-sharding` branch. `/v1/stream` (the
 > multiplexed superset in the OpenAPI) remains planned; its order ops already live on
