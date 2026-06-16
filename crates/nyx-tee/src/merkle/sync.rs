@@ -1,11 +1,12 @@
 //! Cold-boot + live sync of the Merkle mirror against on-chain state.
 //!
 //! Cold boot walks the vault program's transaction history via Helius'
-//! `getTransactionsForAddress` (gTFA) — one call returns up to 1000 FULL
-//! transactions, oldest-first, filtered to `status: succeeded` and floored at
-//! `from_slot`, paged forward by `paginationToken`. This collapses the old
-//! `getSignaturesForAddress` + per-signature `getTransaction` fan-out (1 + N
-//! calls) into ≈1 call per 1000 txs. It decodes the leaf-append events of each
+//! `getTransactionsForAddress` (gTFA) — one call returns up to 100 FULL
+//! transactions (Helius' cap for `transactionDetails: full`), oldest-first,
+//! filtered to `status: succeeded` and floored at `from_slot`, paged forward by
+//! `paginationToken`. This collapses the old `getSignaturesForAddress` +
+//! per-signature `getTransaction` fan-out (1 + N calls) into ≈1 call per 100
+//! txs. It decodes the leaf-append events of each
 //! tx ([`super::events`]), applies them to the mirror in `leaf_index` order,
 //! and reconciles each shard's root against its on-chain `MerkleTree`. The live
 //! loop then re-scans gTFA from the last-seen slot on an interval and applies
@@ -37,8 +38,12 @@ use crate::solana_rpc::{RpcAddressTx, RpcError, SolanaRpcClient, TxSortOrder};
 const TREE_LEAF_COUNT_OFFSET: usize = 8;
 const TREE_CURRENT_ROOT_OFFSET: usize = TREE_LEAF_COUNT_OFFSET + 8;
 
-/// Page size for `getTransactionsForAddress` (Helius caps at 1000 full txs).
-const GTFA_PAGE_LIMIT: usize = 1000;
+/// Page size for `getTransactionsForAddress`. Helius caps a `transactionDetails:
+/// full` request at **100** txs ("you can only request up to 100 transactions at
+/// a time"); a larger `limit` is rejected outright (`-32603 Invalid limit`),
+/// which previously stalled both the cold-boot and the live poll. `scan_and_apply`
+/// pages via `paginationToken`, so a smaller page just means more pages.
+const GTFA_PAGE_LIMIT: usize = 100;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {

@@ -571,7 +571,10 @@ impl SolanaRpcClient {
     /// `getTransactionsForAddress` (Helius-exclusive) — returns up to `limit`
     /// **full** transactions touching `address` in ONE call, collapsing the
     /// `getSignaturesForAddress` + per-signature `getTransaction` fan-out the
-    /// Merkle sync used to do (≈1 call per 1000 txs instead of 1 + N).
+    /// Merkle sync used to do (1 + N calls). NOTE: Helius caps a
+    /// `transactionDetails: full` request at **100** — a larger `limit` is
+    /// rejected with `-32603 Invalid limit`, so callers page via
+    /// `pagination_token` (see `merkle::sync::GTFA_PAGE_LIMIT`).
     ///
     /// Pinned options: `transactionDetails: full`, `encoding: json`,
     /// `maxSupportedTransactionVersion: 0` (v0 settle txs decode), and
