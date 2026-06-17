@@ -33,7 +33,7 @@ use num_bigint::{BigInt, Sign};
 
 use darkpool_crypto::note::owner_commitment;
 use darkpool_crypto::{
-    commitment_from_fields_v2, fr_to_be_bytes, poseidon_hash_bytes, pubkey_to_fr_pair,
+    commitment_from_fields_v2, fr_to_be_bytes, nullifier_v2, poseidon_hash_bytes, pubkey_to_fr_pair,
 };
 
 /// Depth of the vault's incremental Merkle tree (the VALID_INPUT witness is 20
@@ -327,6 +327,185 @@ fn fq_be32(fq: &Fq) -> [u8; 32] {
     out
 }
 
+// ── VALID_MERGE prover (ark-circom, K=2/4) ───────────────────────────────────
+
+/// One real input note for a merge: its opening + Merkle witness (all active
+/// slots prove membership against the same `witness.root`).
+pub struct MergeInput {
+    pub amount: u64,
+    pub inner_hash: [u8; 32],
+    pub witness: MerkleWitness,
+}
+
+/// A built VALID_MERGE proof + the merged output note it produces.
+pub struct MergeProof {
+    pub proof_bytes: [u8; 256],
+    /// The merged note's commitment (Σ input amounts, output_inner_hash).
+    pub output_commitment: [u8; 32],
+    /// The merged note's amount (Σ active input amounts).
+    pub output_amount: u64,
+}
+
+/// ark-circom VALID_MERGE prover for a fixed K (2 or 4). Mirrors
+/// [`ValidInputProver`] + `tests/helpers/merge-prover.ts` (exact signals).
+pub struct MergeProver {
+    pk: ProvingKey<Bn254>,
+    wasm_path: PathBuf,
+    r1cs_path: PathBuf,
+    k: usize,
+}
+
+impl MergeProver {
+    /// Resolve `valid_merge_k{k}/{circuit_final.zkey, circuit_js/circuit.wasm,
+    /// circuit.r1cs}` under `circuits/build`.
+    pub fn load(circuits_build_dir: impl AsRef<Path>, k: usize) -> Result<Self, RealSettleError> {
+        let base = circuits_build_dir
+            .as_ref()
+            .join(format!("valid_merge_k{k}"));
+        let mut zkey = std::fs::File::open(base.join("circuit_final.zkey"))
+            .map_err(|e| RealSettleError::Io(format!("open merge zkey: {e}")))?;
+        let (pk, _m) = ark_circom::read_zkey(&mut zkey)
+            .map_err(|e| RealSettleError::Io(format!("read merge zkey: {e}")))?;
+        Ok(Self {
+            pk,
+            wasm_path: base.join("circuit_js").join("circuit.wasm"),
+            r1cs_path: base.join("circuit.r1cs"),
+            k,
+        })
+    }
+
+    pub fn verifying_key(&self) -> &ark_groth16::VerifyingKey<Bn254> {
+        &self.pk.vk
+    }
+
+    /// Prove a K-slot merge of `inputs` (M ≤ K real notes, same owner + mint, all
+    /// under `inputs[0].witness.root`) into one output note carrying their sum +
+    /// `output_inner_hash`. Returns the 256-byte on-chain proof + the merged note.
+    pub fn prove(
+        &self,
+        spending_key: &Fr,
+        owner_blinding: &Fr,
+        output_inner_hash: &[u8; 32],
+        token_mint: &[u8; 32],
+        inputs: &[MergeInput],
+    ) -> Result<MergeProof, RealSettleError> {
+        let (proof, output_commitment, output_amount) = self.prove_ark(
+            spending_key,
+            owner_blinding,
+            output_inner_hash,
+            token_mint,
+            inputs,
+        )?;
+        Ok(MergeProof {
+            proof_bytes: proof_to_onchain_bytes(&proof),
+            output_commitment,
+            output_amount,
+        })
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn prove_ark(
+        &self,
+        spending_key: &Fr,
+        owner_blinding: &Fr,
+        output_inner_hash: &[u8; 32],
+        token_mint: &[u8; 32],
+        inputs: &[MergeInput],
+    ) -> Result<(Proof<Bn254>, [u8; 32], u64), RealSettleError> {
+        if inputs.is_empty() || inputs.len() > self.k {
+            return Err(RealSettleError::Prove(format!(
+                "merge needs 1..{} real slots; got {}",
+                self.k,
+                inputs.len()
+            )));
+        }
+        let owner = owner_commitment(spending_key, owner_blinding)
+            .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+        let merkle_root = inputs[0].witness.root;
+        let sum: u64 = inputs.iter().map(|s| s.amount).sum();
+        let output_commitment =
+            commitment_from_fields_v2(token_mint, sum, &owner, output_inner_hash)
+                .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+
+        let cfg = CircomConfig::<Fr>::new(&self.wasm_path, &self.r1cs_path)
+            .map_err(|e| RealSettleError::Prove(format!("merge CircomConfig::new: {e}")))?;
+        let mut b = CircomBuilder::new(cfg);
+        let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
+
+        b.push_input("merkleRoot", be32_to_bigint(&merkle_root));
+        b.push_input("tokenMint", fr_to_bigint(&mint_lo));
+        b.push_input("tokenMint", fr_to_bigint(&mint_hi));
+        // Public nullifiers[k] (active: nullifier_v2; dummy: 0).
+        for i in 0..self.k {
+            let nf = match inputs.get(i) {
+                Some(s) => {
+                    let n = nullifier_v2(spending_key, &s.inner_hash)
+                        .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+                    be32_to_bigint(&n)
+                }
+                None => BigInt::from(0),
+            };
+            b.push_input("nullifiers", nf);
+        }
+        b.push_input("spendingKey", fr_to_bigint(spending_key));
+        b.push_input("ownerCommitmentBlinding", fr_to_bigint(owner_blinding));
+        b.push_input("outputInnerHash", be32_to_bigint(output_inner_hash));
+        // Per-slot private witnesses, padded to k with dummies.
+        for i in 0..self.k {
+            b.push_input("isActive", BigInt::from(inputs.get(i).is_some() as u8));
+        }
+        for i in 0..self.k {
+            b.push_input(
+                "amount",
+                BigInt::from(inputs.get(i).map(|s| s.amount).unwrap_or(0)),
+            );
+        }
+        for i in 0..self.k {
+            let ih = inputs.get(i).map(|s| s.inner_hash).unwrap_or([0u8; 32]);
+            b.push_input("innerHash", be32_to_bigint(&ih));
+        }
+        // merklePath[k][20] + merkleIndices[k][20], row-major.
+        for i in 0..self.k {
+            match inputs.get(i) {
+                Some(s) => {
+                    for sib in &s.witness.path_elements {
+                        b.push_input("merklePath", be32_to_bigint(sib));
+                    }
+                }
+                None => {
+                    for _ in 0..TREE_DEPTH {
+                        b.push_input("merklePath", BigInt::from(0));
+                    }
+                }
+            }
+        }
+        for i in 0..self.k {
+            match inputs.get(i) {
+                Some(s) => {
+                    for &bit in &s.witness.path_indices {
+                        b.push_input("merkleIndices", BigInt::from(bit));
+                    }
+                }
+                None => {
+                    for _ in 0..TREE_DEPTH {
+                        b.push_input("merkleIndices", BigInt::from(0));
+                    }
+                }
+            }
+        }
+
+        let circom = b
+            .build()
+            .map_err(|e| RealSettleError::Prove(format!("merge witness build: {e}")))?;
+        let mut rng = rand::thread_rng();
+        let proof = Groth16::<Bn254, CircomReduction>::create_random_proof_with_reduction(
+            circom, &self.pk, &mut rng,
+        )
+        .map_err(|e| RealSettleError::Prove(format!("merge groth16 prove: {e}")))?;
+        Ok((proof, output_commitment, sum))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +597,70 @@ mod tests {
         let onchain = proof_to_onchain_bytes(&proof);
         assert_eq!(onchain.len(), 256);
         assert!(onchain.iter().any(|&b| b != 0));
+    }
+
+    #[tokio::test]
+    async fn valid_merge_proof_verifies_against_zkey_vk() {
+        let Some(dir) = artifacts_dir() else {
+            eprintln!("skipping: circuits/build artifacts not present");
+            return;
+        };
+        if !dir.join("valid_merge_k2/circuit_final.zkey").exists() {
+            eprintln!("skipping: valid_merge_k2 artifacts not present");
+            return;
+        }
+        let prover = MergeProver::load(&dir, 2).expect("load merge prover");
+
+        let sk = Fr::from(123u64);
+        let ob = Fr::from(456u64);
+        let owner = owner_commitment(&sk, &ob).unwrap();
+        let mut mint = [0u8; 32];
+        mint[0] = 1;
+        mint[31] = 0xb1;
+        let ih0 = fr_to_be_bytes(&Fr::from(11u64));
+        let ih1 = fr_to_be_bytes(&Fr::from(22u64));
+        let (a0, a1) = (3_000u64, 2_000u64);
+        let c0 = commitment_from_fields_v2(&mint, a0, &owner, &ih0).unwrap();
+        let c1 = commitment_from_fields_v2(&mint, a1, &owner, &ih1).unwrap();
+
+        let mut tree = IncrementalTree::new().unwrap();
+        tree.append(c0);
+        tree.append(c1);
+        let inputs = vec![
+            MergeInput {
+                amount: a0,
+                inner_hash: ih0,
+                witness: tree.witness(0).unwrap(),
+            },
+            MergeInput {
+                amount: a1,
+                inner_hash: ih1,
+                witness: tree.witness(1).unwrap(),
+            },
+        ];
+        let out_ih = fr_to_be_bytes(&Fr::from(99u64));
+        let (proof, out_commit, sum) = prover
+            .prove_ark(&sk, &ob, &out_ih, &mint, &inputs)
+            .expect("merge prove");
+        assert_eq!(sum, a0 + a1);
+
+        // Public inputs (circuit order): [outputCommitment, merkleRoot,
+        // mint_lo, mint_hi, nullifiers[0..k-1]].
+        let [mint_lo, mint_hi] = pubkey_to_fr_pair(&mint);
+        let nf0 = nullifier_v2(&sk, &ih0).unwrap();
+        let nf1 = nullifier_v2(&sk, &ih1).unwrap();
+        let public = vec![
+            fr_from_be_bytes(&out_commit).unwrap(),
+            fr_from_be_bytes(&tree.root().unwrap()).unwrap(),
+            mint_lo,
+            mint_hi,
+            fr_from_be_bytes(&nf0).unwrap(),
+            fr_from_be_bytes(&nf1).unwrap(),
+        ];
+        let pvk = ark_groth16::prepare_verifying_key(prover.verifying_key());
+        assert!(
+            Groth16::<Bn254>::verify_proof(&pvk, &proof, &public).expect("verify runs"),
+            "VALID_MERGE proof failed to verify against the zkey VK"
+        );
     }
 }
