@@ -51,6 +51,24 @@ tracing-subscriber = { workspace = true }
 anyhow    = { workspace = true }
 thiserror = { workspace = true }
 
+# ── real-settle (opt-in) ──────────────────────────────────────────────────
+# A Rust VALID_INPUT prover (ark-circom against circuits/build/valid_input) +
+# a Poseidon Merkle witness, so the loadgen can drive REAL on-chain settle
+# (deposit → prove → order → settle) — not just synthetic intake. Gated behind
+# the `real-settle` feature so the default synthetic build stays lean (no
+# ark-circom / wasmer pulled in). See src/real_settle.rs + BENCHMARK.md.
+ark-circom    = { workspace = true, optional = true }
+ark-bn254     = { workspace = true, optional = true }
+ark-groth16   = { workspace = true, optional = true }
+ark-ff        = { workspace = true, optional = true }
+num-bigint    = { workspace = true, optional = true }
+
+[features]
+# Enables the Rust VALID_INPUT prover + Merkle witness (Increment A of the
+# real-settle harness). The Solana deposit/settle orchestration (Increment B)
+# layers on top.
+real-settle = ["dep:ark-circom", "dep:ark-bn254", "dep:ark-groth16", "dep:ark-ff", "dep:num-bigint"]
+
 [dev-dependencies]
 # Smoke test needs to drive nyx-tee in-process with the feature
 # on so it can seed the oracle via the debug endpoint.

@@ -32,6 +32,11 @@ pub mod run;
 pub mod trader;
 pub mod workload;
 
+/// Real on-chain settle support (VALID_INPUT prover + Merkle witness).
+/// Opt-in via the `real-settle` feature so the default build stays lean.
+#[cfg(feature = "real-settle")]
+pub mod real_settle;
+
 pub use config::{AuthMode, RunConfig, Scenario};
 pub use metrics::RunMetrics;
 pub use run::run_load_gen;

@@ -51,20 +51,26 @@ cargo run -q -p nyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
 The Hybrid harness's second half: a small N of **real-note traders** that deposit
 on-chain, prove a real VALID_INPUT, POST a crossing order, and track the on-chain
 settle (leaf-count growth / `TradeSettled`) — the loadgen analogue of
-`cvm-settle-e2e`, plus a `merge-before-order` variant. Not yet wired; it needs:
+`cvm-settle-e2e`, plus a `merge-before-order` variant. Behind the `real-settle`
+cargo feature (keeps the default synthetic build lean — no ark-circom/wasmer).
 
-1. A Solana client + the vault ix builders behind a **`real-settle` cargo feature**
-   (keeps the synthetic build lean — no solana-client in the default build).
-2. A **Rust VALID_INPUT prover** — none exists yet (the TEE proves
-   VALID_MATCH_BATCH; clients prove VALID_INPUT via snarkjs). The path is
-   `ark-circom` against `circuits/build/valid_input` (the crate already pulls
-   `ark-circom`/`ark-groth16`), mirroring the SDK's `proveValidInput`.
-3. Deposit + per-shard Merkle-shadow witness + settle-tracking, mirroring
-   `packages/sdk/tests/helpers/cvm-harness.ts`.
+**Increment A — DONE (`src/real_settle.rs`).** The CVM-free, unit-tested core:
+- A **Rust VALID_INPUT prover** (`ValidInputProver`) — ark-circom against
+  `circuits/build/valid_input`, mirroring the SDK's `proveValidInput` (none
+  existed before: the TEE proves VALID_MATCH_BATCH, clients prove VALID_INPUT
+  via snarkjs). Emits the same 256-byte on-chain proof layout.
+- A depth-20 Poseidon **`IncrementalTree`** + `MerkleWitness` (mirrors the SDK's
+  `MerkleShadow`).
+- Validated by `cargo test -p nyx-tee-loadgen --features real-settle`: a proof is
+  produced AND verifies against the circuit's own zkey VK — no CVM needed.
 
-Until then, real settle is validated by the TS `cvm-*` bucket
-(`packages/sdk/tests/cvm-settle-e2e.test.ts`, `cvm-merge-then-order.test.ts`).
-Run it via `docs/cvm-run-runbook.md`.
+**Increment B — TODO.** The Solana glue on top of Increment A: a solana-client
+dep + the vault deposit ix, recover `(tree_id, leaf_index)` from the NoteCreated
+event into the `IncrementalTree`, build the order off the proof, POST, and track
+the settle. The `merge-before-order` variant deposits 2 → merges → orders off the
+merged note. This half can only be validated against a live CVM
+(`docs/cvm-run-runbook.md`); the TS `cvm-*` bucket
+(`cvm-settle-e2e.test.ts`, `cvm-merge-then-order.test.ts`) covers it meanwhile.
 
 ---
 
