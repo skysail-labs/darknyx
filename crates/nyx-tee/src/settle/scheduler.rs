@@ -43,10 +43,20 @@ use tokio::task::{JoinHandle, JoinSet};
 /// already queued; serial FIFO processing settles them in dependency order.
 ///
 /// The throughput win is the WITHIN-batch concurrency (locks + settles fire in
-/// parallel across a batch's matches + K shards — unchanged). Cross-batch
-/// pipelining is the lost optimization; re-enabling it needs a per-batch
-/// DISTINCT ALT (not the shared rolling pool) + explicit continuation-dependency
-/// ordering. Acquiring a permit before each batch back-pressures the matcher.
+/// parallel across a batch's matches + K shards — `settle_send_concurrency`,
+/// the tree-sharding co-inclusion, unchanged). Cross-batch pipelining is the
+/// lost optimization.
+///
+/// Re-enabling it is only worth it AFTER GPU proving: on CPU, ark/rapidsnark
+/// already multithread a single prove across all cores, so concurrent batch
+/// proves just contend — no gain (and it's what broke the shared ALT). Once a
+/// GPU backend (rapidsnark+ICICLE) drops each prove to ~tens of ms, the
+/// bottleneck shifts to the on-chain settle round-trips, and overlapping batch
+/// N+1's cheap prove+lock with batch N's settle-IO pays off. At that point set
+/// this `> 1` AND fix the two blockers: a per-batch DISTINCT ALT (not the shared
+/// rolling pool) + explicit continuation-dependency ordering (a child batch
+/// waits for its parent's relock). Acquiring a permit before each batch
+/// back-pressures the matcher channel.
 const SETTLE_CONCURRENCY: usize = 1;
 
 use super::assemble::{assemble_batch, BatchAssemblyParams};
