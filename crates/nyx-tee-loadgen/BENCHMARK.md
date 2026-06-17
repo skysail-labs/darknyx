@@ -147,6 +147,37 @@ done
 ```
 The settle-rate plateau across the steps is the prover ceiling.
 
+### Live results — 2026-06-17, image `tee-v3-hardening-30` (num_trees=4)
+
+`--traders 5 --real-mix "exact-match:1,partial-fill:1,merge:1,over-collateral:1,ioc-fok:1"`
+(one of each scenario; merge + multi-anchor included):
+
+- **Cross-shard fix validated** — `cvm-multimatch-settle` with round-robin INPUTS
+  across all 4 shards SETTLED (previously `StaleMerkleRoot`). The `tree_id` threading
+  works end to end.
+- **Rig drives all 5 scenarios end to end through matching** — 12 orders (incl. the
+  merge's deposit-2→VALID_MERGE→order-off-merged-note) deposited, proved, submitted;
+  **12/12 accepted**; the matcher produced **7 matches** across 3 batches at a uniform
+  clearing price.
+- **★ Prover bottleneck quantified** — client VALID_INPUT proving is **~40 s/proof**
+  (12 proofs in 45 s wall ≈ 0.27/s even across cores). This is the host-side ceiling
+  that caps order submission, and the TEE's VALID_MATCH_BATCH prove dominates settle
+  the same way (`rapidsnark_ab_results`: vCPU is the lever). **→ the evidence base for
+  GPU-accelerated proving.**
+
+**Finding — multi-batch settle fails under concurrent load** (a NEW issue the rig
+surfaced; single-pair + single-batch tests never hit it):
+- partial-fill continuation batches failed `AccountOwnedByWrongProgram (3007)` on
+  `note_lock_a` — a dependent batch's settle simulated before the prior batch that
+  creates its relock NoteLock landed → a **cross-batch continuation ordering race**
+  (the concurrent settle worker doesn't serialize batches that depend on a prior
+  batch's relock output).
+- the 5-match batch reverted at instruction 1 (`Custom 0`).
+- **Next:** a TEE settle-worker fix (serialize dependent/continuation batches; ensure
+  each batch's lock_note (Tx A) confirms before its settle (Tx D) simulates) — a
+  separate image. The matching + intake + cross-shard lock are proven; the gap is the
+  concurrent multi-batch settle scheduler.
+
 ---
 
 # nyx-tee-loadgen benchmark

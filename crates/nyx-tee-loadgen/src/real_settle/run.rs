@@ -457,13 +457,16 @@ fn parse_mix(s: &str) -> Result<Vec<(RealScenario, u32)>> {
     Ok(out)
 }
 
-/// Deterministic weighted pick by instance index.
-fn pick_scenario(mix: &[(RealScenario, u32)], i: usize) -> RealScenario {
-    let total: u32 = mix.iter().map(|(_, w)| *w).sum::<u32>().max(1);
-    let pos = (i as u32) % total;
-    let mut acc = 0;
+/// Deterministic weighted pick for instance `i` of `n`. Spreads the `n`
+/// instances PROPORTIONALLY across the weighted buckets (`pos = i*total/n`), so
+/// every scenario is represented even at small `n` (a plain `i % total` would
+/// cluster the first instances on the first bucket when weights are large).
+fn pick_scenario(mix: &[(RealScenario, u32)], i: usize, n: usize) -> RealScenario {
+    let total: u64 = mix.iter().map(|(_, w)| *w as u64).sum::<u64>().max(1);
+    let pos = (i as u64 * total) / (n.max(1) as u64);
+    let mut acc = 0u64;
     for (s, w) in mix {
-        acc += *w;
+        acc += *w as u64;
         if pos < acc {
             return *s;
         }
@@ -538,7 +541,7 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
 
     tracing::info!(traders = p.traders, mix = %p.mix, "real-settle LOAD: planning + depositing");
     for inst in 0..p.traders {
-        let scenario = pick_scenario(&mix, inst);
+        let scenario = pick_scenario(&mix, inst, p.traders);
         // Per-instance, per-side fresh personas (salted → fresh nullifiers).
         let seed_base = (salt << 20) ^ ((inst as u64) << 4);
 
@@ -694,8 +697,11 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 let merged_amt = with_fee(p.qty, p.fee_rate_bps);
                 let a1 = merged_amt / 2;
                 let a0 = merged_amt - a1;
-                let ih0 = fr_to_be_bytes(&Fr::from((seed_base ^ 0x30) | 1));
-                let ih1 = fr_to_be_bytes(&Fr::from((seed_base ^ 0x31) | 1));
+                // Distinct high-bit XORs (NOT 0x30/0x31 — they differ only in
+                // bit0, which a `|1` would clobber, making both inner_hashes —
+                // and thus both nullifiers — equal → merge NoteAlreadyConsumed).
+                let ih0 = fr_to_be_bytes(&Fr::from(seed_base ^ 0x1300));
+                let ih1 = fr_to_be_bytes(&Fr::from(seed_base ^ 0x2500));
                 let c0 = darkpool_crypto::commitment_from_fields_v2(
                     &p.base_mint,
                     a0,
@@ -746,7 +752,7 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                     .ok_or_else(|| anyhow!("merge prover not loaded"))?;
                 let w0 = harness.shadow_witness(shard, n0.leaf_index)?;
                 let w1 = harness.shadow_witness(shard, n1.leaf_index)?;
-                let out_ih = fr_to_be_bytes(&Fr::from((seed_base ^ 0x39) | 1));
+                let out_ih = fr_to_be_bytes(&Fr::from(seed_base ^ 0x3900));
                 let mproof = mp
                     .prove(
                         &sp.spending_key,
