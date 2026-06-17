@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-31
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-32
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -121,11 +121,13 @@ services:
       # so collected fees are spendable via VALID_SPEND; empty/unset →
       # [0;32] (fee notes still mint + append but are unclaimable).
       NYX_TEE_PROTOCOL_OWNER_COMMITMENT: ${NYX_TEE_PROTOCOL_OWNER_COMMITMENT}
-      # Groth16 prover backend: ark (default) | rapidsnark. The image ships
+      # Groth16 prover backend: rapidsnark (default) | ark. The image ships
       # both (built --features rapidsnark); flip this to A/B proving on the
-      # SAME image + instance. `:-ark` so an unset/empty value defaults to ark
-      # (an empty string would otherwise fail the boot-time backend match).
-      NYX_TEE_PROVER: ${NYX_TEE_PROVER:-ark}
+      # SAME image + instance. `:-rapidsnark` so an unset/empty value defaults
+      # to rapidsnark — the CPU baseline we compare the future GPU (ICICLE)
+      # backend against, so it's the steady-state prover, not an opt-in. Set
+      # `NYX_TEE_PROVER=ark` to A/B against the ark backend on the same image.
+      NYX_TEE_PROVER: ${NYX_TEE_PROVER:-rapidsnark}
 
       # Max settle Tx D's sent CONCURRENTLY within a batch (default 16). Firing
       # them together lets the leader co-include them in one block so they

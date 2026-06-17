@@ -7,6 +7,97 @@
 
 ---
 
+## Prover baseline protocol (pre-GPU) — lock in the CPU numbers for the GPU comparison
+
+> **Purpose.** Before we build the ICICLE-accelerated GPU rapidsnark backend, capture
+> a frozen, repeatable CPU baseline so the GPU win is measurable apples-to-apples. The
+> thesis to prove and quantify: **the Groth16 prove (`prove_ms`) is the pipeline's only
+> irreducible off-chain compute, and it's the throughput blocker once the on-chain
+> confirm/finality latency is taken out** (which is exactly what Alpenglow removes). The
+> GPU upgrade attacks `prove_ms` and nothing else, so `prove_ms` is THE comparison metric.
+
+### Why `prove_ms` is the metric (the stage taxonomy)
+
+Each settled batch logs `settle pipeline timing (per-stage ms)` on the CVM. Classify every
+stage as **COMPUTE** (off-chain, what GPU accelerates) vs **CONSENSUS/IO** (Solana confirm
++ finality latency, which Alpenglow's ~150 ms fast-finality collapses — explicitly *out of
+scope* for the prover comparison, per the framing):
+
+| Stage | Tx | Class | Post-Alpenglow |
+|---|---|---|---|
+| `lock_ms` | A (lock_note ×2) | CONSENSUS/IO | →~0 |
+| **`prove_ms`** | — (VALID_MATCH_BATCH Groth16 prove) | **COMPUTE** | **unchanged — GPU target** |
+| `verify_ms` | B (verify_match_batch) | CONSENSUS/IO | →~0 |
+| `alt_tx_ms` | C (per-batch ALT create+extend) | CONSENSUS/IO | →~0 |
+| `alt_wait_ms` | — (ALT activation cooldown, ~1 slot) | CONSENSUS/IO | →0 (vanishes) |
+| `settle_ms` | D (tee_forced_settle_batched) | CONSENSUS/IO | →~0 |
+| `close_ms` | E (close_batch_validity_marker) | CONSENSUS/IO | →~0 |
+| `total_ms` | wall | — | →`prove_ms` + ε |
+
+`prove_ms` is the **only** compute term. Note it folds witness-gen (ark-circom, CPU, NOT
+GPU-accelerated by ICICLE) + the Groth16 prove (MSM/NTT — what ICICLE accelerates); if the
+backend logs the split, record both, because the GPU win is bounded by the prove portion
+(Amdahl: witness-gen becomes the new floor). Derived comparison metrics, per run:
+
+- **`prove_ms` (absolute, per N=16 batch)** — the headline. GPU speedup = `prove_ms_cpu / prove_ms_gpu`.
+- **Finality-free per-batch latency** = `total_ms − (lock+verify+alt_tx+alt_wait+settle+close)` ≈ `prove_ms + ε`. Models the post-Alpenglow world; shows `prove_ms` dominates once IO →0.
+- **Projected post-Alpenglow settle throughput** ≈ `1 / (prove_ms + 6×~0.15 s)` batches/s → today prove-bound, so the GPU ratio passes ~1:1 into throughput.
+- **Client `VALID_INPUT` prove rate** (loadgen-side, ark-circom) — the order-submission ceiling; the same prover-bound story client-side.
+
+### Fixed conditions (must hold across CPU baseline AND GPU re-run, or it's not comparable)
+
+- **Same CVM size** — record vCPU/RAM (`phala cvms list`/dashboard). Per [[rapidsnark_ab_results]] vCPU count is the dominant CPU lever, so it must be pinned. The GPU run will be on the confidential-GPU CVM — note that as the one deliberate platform change.
+- **Same N=16 zkey/circuit**, **`--real-num-trees 4`**, **same Helius devnet RPC**, **real-mint regime**, **fresh-reset tree per run** (clean cold-boot).
+- **Backend = rapidsnark** (now the default; §below). A/B against `ark` is an env-only flip (`NYX_TEE_PROVER=ark`), no rebuild.
+- Devnet confirm latency is noisy → the CONSENSUS/IO stages vary run-to-run; **`prove_ms` is the stable comparable**. Take ≥3 batches per run, report median.
+
+### The run suite (all on the rapidsnark-default image, one CVM session)
+
+Common prefix (real-mint regime, hex mints, see operator note in the isolation-run section):
+```sh
+GW=...; BASE_HEX=...; QUOTE_HEX=...        # see §3 of docs/cvm-run-runbook.md + the hex-mint note
+COMMON="--real-settle --endpoint $GW --rpc-url $SOLANA_RPC_URL \
+  --admin-keypair .devnet/keypairs/admin.json --base-mint $BASE_HEX --quote-mint $QUOTE_HEX \
+  --oracle-twap <pyth> --fee-rate-bps 30 --real-num-trees 4"
+```
+
+| ID | Command (append to `$COMMON`) | Captures | Why |
+|---|---|---|---|
+| **B1** | `--real-mix "partial-fill:1" --traders 1 --real-multi-anchor-asks 3` | clean per-batch `prove_ms` (3 serial n=1 batches), all stages | lowest-contention prove isolation (the isolation run already did this on ark: `prove_ms`≈4 s, `settle_ms`≈9 s) |
+| **B2** | `--real-mix "exact-match:100" --traders 16` | `prove_ms` for a **full / near-full N=16 batch** + within-batch co-inclusion settle | the production case — the prove cost the GPU must cut; the headline number |
+| **B3** | `--real-mix "exact-match:40,partial-fill:20,merge:10,over-collateral:20,ioc-fok:10" --traders 10 --real-multi-anchor-asks 3` | blended pipeline, cross-shard settle, client prove rate under realistic load | realism — the rig as the protocol test bed |
+| **B4** | re-run B2 twice with `NYX_TEE_PROVER=ark` then `=rapidsnark` (env-only flip) | ark-CPU vs rapidsnark-CPU `prove_ms` ratio | the third leg: ark-CPU / **rapidsnark-CPU (baseline)** / rapidsnark-GPU (future) |
+| **B5** *(opt)* | B2 with `NYX_TEE_SETTLE_SEND_CONCURRENCY ∈ {1,4,16}` | the co-inclusion (CONSENSUS/IO) win, isolated from prove | documents the IO portion Alpenglow addresses, kept separate from the prove story |
+
+Per run, pull the TEE timing with:
+`phala cvms logs <cvm> | grep -E "settle pipeline timing|CLIENT VALID_INPUT prove rate|real-settle LOAD complete"`.
+
+### Results table template (fill the CPU columns now; GPU column post-upgrade)
+
+Per-batch median ms, N=16 (B2/B4):
+
+| Stage | ark-CPU | **rapidsnark-CPU (baseline)** | rapidsnark-GPU (ICICLE) |
+|---|---|---|---|
+| witness-gen (if split) | | | |
+| **`prove_ms`** | _TBD_ | _TBD_ | _(future)_ |
+| `verify_ms` (IO) | | | |
+| `settle_ms` (IO) | | | |
+| `alt_tx+alt_wait` (IO) | | | |
+| `lock_ms`+`close_ms` (IO) | | | |
+| `total_ms` | | | |
+| **finality-free latency** (≈prove) | | | |
+| **proj. post-Alpenglow batches/s** | | | |
+| client VALID_INPUT proofs/s | | | |
+
+> **Known CPU data points** (to seed the table): the 2026-06-17 isolation run (ark, n=1, on
+> the dev CVM) logged per-batch `prove_ms`≈3.9–4.6 s, `settle_ms`≈8.7–10.1 s, `total_ms`≈15.4–16.9 s
+> — i.e. at n=1, on-chain IO already dominates *because the prove is small at n=1*; the N=16
+> prove (B2) is the number that matters and is not yet captured under rapidsnark. Client
+> `VALID_INPUT` prove ≈0.25/s (~40 s/proof single, ~15 s for 4 concurrent). See also
+> [[rapidsnark_ab_results]] (ark/rapidsnark × 1/8 vCPU; rapidsnark ~1.4× on 8 vCPU).
+
+---
+
 ## Harness v2 — scenarios, configurable market, observability
 
 The loadgen is the synthetic-load half of the e2e harness: it stresses **intake

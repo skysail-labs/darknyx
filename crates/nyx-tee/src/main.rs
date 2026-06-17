@@ -570,12 +570,24 @@ fn build_settle_driver(
     // synchronously here, before the HTTP surface comes up. Fast in a
     // release build (the CVM), but a plain debug build takes ~minutes —
     // log around it so a slow boot doesn't look hung.
-    // Prover backend select (A/B): NYX_TEE_PROVER=ark (default) | rapidsnark.
+    // Prover backend select (A/B): NYX_TEE_PROVER=rapidsnark (default) | ark.
     // Both backends ship in the image (rapidsnark feature on for the amd64
     // build), so flipping the env A/Bs proving on the SAME image + instance and
     // rolls back instantly without a rebuild/re-attestation. Witness gen is
     // ark-circom either way; only the prove step differs.
-    let backend = std::env::var("NYX_TEE_PROVER").unwrap_or_else(|_| "ark".to_string());
+    //
+    // Default is rapidsnark — it's the CPU baseline we compare the future
+    // GPU (ICICLE+rapidsnark) backend against, so it must be the steady-state
+    // prover, not an opt-in. The default is feature-gated: a local build
+    // without the `rapidsnark` feature (the fast iterate loop) falls back to
+    // `ark` so it still boots; the image (built `--features rapidsnark`) gets
+    // rapidsnark. An explicit NYX_TEE_PROVER always wins (the A/B lever).
+    let default_backend = if cfg!(feature = "rapidsnark") {
+        "rapidsnark"
+    } else {
+        "ark"
+    };
+    let backend = std::env::var("NYX_TEE_PROVER").unwrap_or_else(|_| default_backend.to_string());
     tracing::info!(
         circuits_dir,
         n = PRODUCTION_BATCH_N,
