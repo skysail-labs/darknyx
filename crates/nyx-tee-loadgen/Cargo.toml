@@ -62,12 +62,36 @@ ark-bn254     = { workspace = true, optional = true }
 ark-groth16   = { workspace = true, optional = true }
 ark-ff        = { workspace = true, optional = true }
 num-bigint    = { workspace = true, optional = true }
+# Increment B (on-chain glue): the modular solana stack the workspace
+# standardised on (NOT solana-client/sdk — those conflict with ark 0.5 on
+# zeroize). All already compiled via the nyx-tee dev-dep, so this is mostly
+# linking. The JSON-RPC client is hand-rolled on reqwest (already a dep).
+solana-address          = { workspace = true, optional = true }
+solana-hash             = { workspace = true, optional = true }
+solana-keypair          = { workspace = true, optional = true }
+solana-signature        = { workspace = true, optional = true }
+solana-signer           = { workspace = true, optional = true }
+solana-instruction      = { workspace = true, optional = true }
+solana-message          = { workspace = true, optional = true }
+solana-transaction      = { workspace = true, optional = true }
+solana-system-interface = { workspace = true, optional = true }
+sha2                    = { workspace = true, optional = true }
+bincode                 = { workspace = true, optional = true }
+base64                  = { version = "0.22", optional = true }
+bs58                    = { version = "0.5", optional = true }
 
 [features]
-# Enables the Rust VALID_INPUT prover + Merkle witness (Increment A of the
-# real-settle harness). The Solana deposit/settle orchestration (Increment B)
-# layers on top.
+# Increment A: the Rust VALID_INPUT prover + Merkle witness (CVM-free, tested).
 real-settle = ["dep:ark-circom", "dep:ark-bn254", "dep:ark-groth16", "dep:ark-ff", "dep:num-bigint"]
+# Increment B: the on-chain deposit/settle orchestration (needs a live CVM to
+# validate; the vault ix encoding is unit-tested locally). Implies real-settle.
+real-settle-chain = [
+    "real-settle",
+    "dep:solana-address", "dep:solana-hash", "dep:solana-keypair",
+    "dep:solana-signature", "dep:solana-signer", "dep:solana-instruction",
+    "dep:solana-message", "dep:solana-transaction", "dep:solana-system-interface",
+    "dep:sha2", "dep:bincode", "dep:base64", "dep:bs58",
+]
 
 [dev-dependencies]
 # Smoke test needs to drive nyx-tee in-process with the feature

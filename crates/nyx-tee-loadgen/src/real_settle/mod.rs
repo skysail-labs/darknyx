@@ -9,7 +9,11 @@
 //! to produce the same 256-byte on-chain proof in-process.
 //!
 //! Increment B (deposit on-chain → witness → POST order → track settle) layers
-//! the Solana glue on top of this; see BENCHMARK.md.
+//! the Solana glue on top of this (the `vault` + `rpc` submodules, behind the
+//! `real-settle-chain` feature); see BENCHMARK.md.
+
+#[cfg(feature = "real-settle-chain")]
+pub mod vault;
 
 use std::path::{Path, PathBuf};
 
@@ -38,6 +42,14 @@ pub enum RealSettleError {
     Prove(String),
     #[error("leaf index {0} out of range (tree has {1} leaves)")]
     LeafOutOfRange(usize, usize),
+    /// Increment B: a JSON-RPC call / encoding / on-chain error.
+    #[cfg(feature = "real-settle-chain")]
+    #[error("rpc: {0}")]
+    Rpc(String),
+    /// Increment B: a confirmed tx had no parseable NoteCreated event.
+    #[cfg(feature = "real-settle-chain")]
+    #[error("event: {0}")]
+    Event(String),
 }
 
 // ── Incremental Poseidon Merkle tree (depth 20) ──────────────────────────────
