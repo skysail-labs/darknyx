@@ -42,7 +42,6 @@ import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import nacl from "tweetnacl";
 import {
-  TOKEN_PROGRAM_ID,
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
   createMintToInstruction,
@@ -57,26 +56,10 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
-import {
-  deriveSpendingKey,
-  deriveMasterViewingKey,
-  deriveBlindingFactor,
-  deriveOrderId,
-  bn254ToBE32,
-} from "../src/keys/key-generators.js";
-import { userCommitmentFromKeys } from "../src/keys/user-commitment.js";
-import {
-  ownerCommitment,
-  noteCommitmentV2,
-  nullifierV2,
-} from "../src/utxo/note.js";
+import { deriveOrderId, bn254ToBE32 } from "../src/keys/key-generators.js";
+import { nullifierV2 } from "../src/utxo/note.js";
 import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
-import {
-  vaultConfigPda,
-  merkleTreePda,
-  buildDepositInstruction,
-} from "../src/idl/vault-client.js";
-import { readNoteCreated } from "../src/utxo/leaf-index.js";
+import { vaultConfigPda } from "../src/idl/vault-client.js";
 import {
   orderCanonicalDigest,
   OrderSide,
@@ -94,16 +77,27 @@ import {
   InMemoryNoteStore,
   type ChangeNoteRecord,
 } from "../src/utxo/note-store.js";
-import { MerkleShadow } from "./helpers/merkle-shadow.js";
-import { proveValidInput } from "./helpers/valid-input-prover.js";
 import {
-  be32ToBigInt,
   loadKeypairRel,
-  loadOrCreateKeypair,
   StepTimer,
   fetchSettleTimeline,
   reportSettleTimeline,
 } from "./helpers/e2e-helpers.js";
+import {
+  CvmHarness,
+  makePersona,
+  gwFetch,
+  fetchOracleAnchor,
+  hex,
+  withFee,
+  FEE_RATE_BPS,
+  SYMBOL,
+  API_KEY,
+  API_SECRET,
+  PASSPHRASE,
+  type Persona,
+  type DepositedNote,
+} from "./helpers/cvm-harness.js";
 import type { E2EConfig } from "./devnet-setup.test.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
@@ -114,25 +108,12 @@ const READY =
   process.env.RUN_CVM_E2E === "1" && GATEWAY !== "" && existsSync(CONFIG_PATH);
 const maybeDescribe = READY ? describe : describe.skip;
 
-// CVM bootstrap admin creds (match deploy/docker-compose.yaml).
-const API_KEY = process.env.NYX_TEE_API_KEY ?? "nyx-test-api-key";
-const API_SECRET = process.env.NYX_TEE_API_SECRET ?? "nyx-test-secret";
-const PASSPHRASE = process.env.NYX_TEE_PASSPHRASE ?? "nyx-test-passphrase";
-
-const SYMBOL = "SOL-USDC";
-const SOL_USD_FEED =
-  "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
+// CVM creds, SYMBOL, FEE_RATE_BPS, gwFetch, fetchOracleAnchor, hex, withFee,
+// Persona/makePersona, and the shard-aware deposit/witness harness all live in
+// `./helpers/cvm-harness.ts` (shared across the cvm-* tests).
 const SETTLE_TIMEOUT_MS = Number(
   process.env.NYX_CVM_SETTLE_TIMEOUT_MS ?? "60000",
 );
-// Protocol fee the CVM matcher charges — MUST match the CVM's
-// NYX_TEE_FEE_RATE_BPS (default 30). The matcher's fee model is
-// additive: seller_charge = crossable + seller_fee (base), so the ASK
-// collateral note must cover qty + fee or run_batch rejects the match
-// as conservation-breaking. (The buyer's quote fee is absorbed by the
-// bid's price headroom — bid 1.2×anchor > clearing.) Set to 0 when the
-// CVM runs fee-free.
-const FEE_RATE_BPS = BigInt(process.env.NYX_CVM_FEE_RATE_BPS ?? "30");
 
 // Fills mode (opt-in): when NYX_INDEXER_URL points at a locally-running indexer
 // (`scripts/run-indexer-local.sh`), additionally assert the buyer's continuation
@@ -149,133 +130,6 @@ const FILLS = INDEXER_URL !== "";
 // a partial fill's continuation actually re-matches across batches, not just
 // that one continuation note is minted. Needs a 3rd (seller2) deposit up-front.
 const REMATCH = FILLS && process.env.NYX_CVM_REMATCH === "1";
-
-function hex(b: Uint8Array): string {
-  return Buffer.from(b).toString("hex");
-}
-
-/** fetch with retries — the dstack gateway can transiently close the
- *  socket (UND_ERR_SOCKET) for the first minute after a CVM restart. */
-async function gwFetch(
-  url: string,
-  init?: RequestInit,
-  tries = 6,
-): Promise<Response> {
-  let last: unknown;
-  for (let i = 0; i < tries; i++) {
-    try {
-      return await fetch(url, init);
-    } catch (e) {
-      last = e;
-      await new Promise((r) => setTimeout(r, 3000));
-    }
-  }
-  throw last;
-}
-
-/** Fetch the live raw SOL/USD price integer the CVM's oracle uses. */
-async function fetchOracleAnchor(): Promise<bigint> {
-  if (process.env.NYX_CVM_PRICE) return BigInt(process.env.NYX_CVM_PRICE);
-  const url = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${SOL_USD_FEED}`;
-  const res = await fetch(url);
-  const j = (await res.json()) as {
-    parsed: { price: { price: string; expo: number } }[];
-  };
-  const raw = BigInt(j.parsed[0].price.price);
-  console.log(
-    `  · oracle anchor (raw SOL/USD): ${raw} (expo ${j.parsed[0].price.expo})`,
-  );
-  return raw;
-}
-
-/** Total on-chain leaf count, summed across the K `MerkleTree` shard accounts.
- *  Post-sharding the tree state moved out of `VaultConfig` into one `MerkleTree`
- *  per shard (`leaf_count: u64` @ offset 8, after the 8-byte Anchor disc — see
- *  `crates/nyx-tee/src/merkle/sync.rs`). Deposits/settles spread leaves across
- *  shards, so a settle that adds N output notes grows this SUM by N regardless
- *  of routing. */
-async function onChainLeafCount(
-  conn: Connection,
-  programId: PublicKey,
-  numTrees: number,
-): Promise<number> {
-  let total = 0;
-  for (let treeId = 0; treeId < Math.max(1, numTrees); treeId++) {
-    const [pda] = merkleTreePda(programId, treeId);
-    const info = await conn.getAccountInfo(pda);
-    if (!info)
-      throw new Error(`MerkleTree shard ${treeId} missing — run devnet-setup`);
-    total += Number(
-      new DataView(info.data.buffer, info.data.byteOffset + 8, 8).getBigUint64(
-        0,
-        true,
-      ),
-    );
-  }
-  return total;
-}
-
-interface Persona {
-  name: string;
-  payer: Keypair;
-  trading: Keypair; // Ed25519 key that signs the order body
-  masterSeed: Uint8Array;
-  spendingKey: bigint;
-  ownerBlinding: bigint;
-  ownerCommit: bigint;
-  userCommitment: Uint8Array; // 32B BE
-}
-
-// Per-run salt so the persona's seed-derived keys — and therefore the
-// amount-INDEPENDENT v2 nullifiers (Poseidon3(DOMAIN_NULL, spending_key,
-// inner_hash)) — are fresh each run. Without this the deposit inner_hash
-// (deriveBlindingFactor(masterSeed, leafIndex) at a fixed masterSeed + fresh
-// tree leaf 0/1) repeats, so the settle's NullifierEntry PDA collides on the
-// 2nd run with "Allocate: account already in use". Randomising BASE_QTY only
-// freshens the commitment (ConsumedNoteEntry), NOT the nullifier.
-const RUN_SALT = BigInt(process.env.NYX_CVM_RUN_SALT ?? String(Date.now()));
-
-async function makePersona(name: string, seed0: number): Promise<Persona> {
-  const payer = loadOrCreateKeypair(
-    resolve(REPO_ROOT, `.devnet/keypairs/${name}-payer.json`),
-  );
-  const trading = loadOrCreateKeypair(
-    resolve(REPO_ROOT, `.devnet/keypairs/${name}-trading.json`),
-  );
-  const masterSeed = new Uint8Array(64);
-  for (let i = 0; i < 64; i++) {
-    masterSeed[i] =
-      (seed0 + i * 7 + Number((RUN_SALT >> BigInt(i % 53)) & 0xffn)) & 0xff;
-  }
-  const spendingKey = deriveSpendingKey(masterSeed);
-  const viewingKey = deriveMasterViewingKey(masterSeed);
-  const ownerBlinding = BigInt(seed0) + 0xfeedn;
-  const ownerCommit = await ownerCommitment(spendingKey, ownerBlinding);
-  const userCommitment = await userCommitmentFromKeys({
-    rootKeyPubkey: payer.publicKey.toBytes(),
-    spendingKey,
-    viewingKey,
-    r0: BigInt(seed0) + 1n,
-    r1: BigInt(seed0) + 2n,
-    r2: BigInt(seed0) + 3n,
-  });
-  // Intake requires the top byte to be exactly 0 (it Poseidon-hashes
-  // this when constructing change notes). A real Poseidon output is
-  // Fr-safe (top byte ≤ 0x30) but not necessarily 0; for an exact-fill
-  // trade (no change notes) it's opaque, so zero the top byte to pass
-  // the stricter intake check — same shape the loadgen/orders fixtures use.
-  userCommitment[0] = 0;
-  return {
-    name,
-    payer,
-    trading,
-    masterSeed,
-    spendingKey,
-    ownerBlinding,
-    ownerCommit,
-    userCommitment,
-  };
-}
 
 maybeDescribe(
   "Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM settle)",
@@ -308,8 +162,8 @@ maybeDescribe(
       [vaultPda] = vaultConfigPda(vaultProgramId);
       baseMint = new PublicKey(cfg.baseMint.pubkey);
       quoteMint = new PublicKey(cfg.quoteMint.pubkey);
-      buyer = await makePersona("cvm-buyer", 0x40);
-      seller = await makePersona("cvm-seller", 0x80);
+      buyer = await makePersona(REPO_ROOT, "cvm-buyer", 0x40);
+      seller = await makePersona(REPO_ROOT, "cvm-seller", 0x80);
     });
 
     it(
@@ -360,18 +214,15 @@ maybeDescribe(
         );
 
         // Number of Merkle shards (K). Deposits + settle outputs route across
-        // them; we keep one shadow per shard and recover each note's
+        // them; the harness keeps one shadow per shard and recovers each note's
         // (tree_id, leaf_index) from its NoteCreated event.
         const numTrees =
           (cfg as unknown as { numTrees?: number }).numTrees ?? 1;
+        const harness = await CvmHarness.create(conn, vaultProgramId, numTrees);
 
         // The tree must be empty (fresh reset) so each shard's shadow starts from
         // 0 and matches on-chain.
-        const startCount = await onChainLeafCount(
-          conn,
-          vaultProgramId,
-          numTrees,
-        );
+        const startCount = await harness.leafCount();
         expect(
           startCount,
           "tree not empty — run devnet-setup (reset) first",
@@ -381,7 +232,9 @@ maybeDescribe(
         // (seller2). It's pre-deposited up-front: its VALID_INPUT root stays in
         // the vault's 64-deep recent-root ring through batch 1's settle, so the
         // proof is still valid when batch 2 locks it.
-        const seller2 = REMATCH ? await makePersona("cvm-seller2", 0xc0) : null;
+        const seller2 = REMATCH
+          ? await makePersona(REPO_ROOT, "cvm-seller2", 0xc0)
+          : null;
         const personas = seller2 ? [buyer, seller, seller2] : [buyer, seller];
 
         // ── 1. fund payers + mint collateral ───────────────────────────
@@ -417,9 +270,7 @@ maybeDescribe(
         // bps / 10_000, floored). Bid nominal = qty × price (quote); ask
         // nominal = qty (base). With fees off (bps=0) both collapse to the
         // nominal, unchanged. Floor division must match intake exactly so the
-        // re-derived commitment lines up.
-        const withFee = (nominal: bigint) =>
-          nominal + (nominal * FEE_RATE_BPS) / 10_000n;
+        // re-derived commitment lines up. (`withFee` is shared from cvm-harness.)
         // Over-collateralization knob: deposit a buyer note LARGER than the order
         // needs (NYX_CVM_BUYER_SURPLUS quote units). The order declares its actual
         // collateral_amount; intake accepts note ≥ required and the matcher returns
@@ -462,69 +313,19 @@ maybeDescribe(
         );
 
         // ── 2. deposit both notes; mirror into the per-shard shadow trees ──
-        // One shadow per shard — a deposit lands in a shard the PROGRAM chooses,
-        // so we read the actual (tree_id, leaf_index) back from the NoteCreated
-        // event and append to that shard's shadow (matching on-chain shard state).
-        const shadows = await Promise.all(
-          Array.from({ length: numTrees }, () => MerkleShadow.create()),
-        );
-        async function deposit(
-          p: Persona,
-          mint: PublicKey,
-          ata: PublicKey,
-          amount: bigint,
-        ) {
-          // The inner_hash is just a deterministic per-deposit nonce baked into the
-          // committed leaf; use the pre-deposit total count (0,1,2 in this isolated
-          // run). v2: a single inner_hash replaces the old (nonce, blinding) pair.
-          const nonce = await onChainLeafCount(conn, vaultProgramId, numTrees);
-          const innerHash = deriveBlindingFactor(p.masterSeed, BigInt(nonce));
-          const commitment = await noteCommitmentV2({
-            tokenMint: mint.toBytes(),
-            amount,
-            ownerCommitment: p.ownerCommit,
-            innerHash,
-          });
-          const ix = buildDepositInstruction({
-            programId: vaultProgramId,
-            depositor: p.payer.publicKey,
-            tokenMint: mint,
-            depositorTokenAccount: ata,
-            tokenProgramId: TOKEN_PROGRAM_ID,
-            amount,
-            ownerCommitment: bn254ToBE32(p.ownerCommit),
-            innerHash: bn254ToBE32(innerHash),
-          });
-          const sig = await sendAndConfirmTransaction(
-            conn,
-            new Transaction().add(ix),
-            [p.payer],
-          );
-          // Recover the shard + position the program actually appended to.
-          const { treeId, leafIndex } = await readNoteCreated(conn, sig);
-          await shadows[treeId].append(commitment);
-          console.log(
-            `  · ${p.name} deposited shard ${treeId} leaf ${leafIndex} (${sig.slice(0, 8)}…)`,
-          );
-          return {
-            mint,
-            amount,
-            innerHash,
-            commitment,
-            treeId,
-            leafIndex: Number(leafIndex),
-          };
-        }
+        // The harness reads each deposit's actual (tree_id, leaf_index) back from
+        // its NoteCreated event and appends to that shard's shadow, so the
+        // VALID_INPUT witness is built against the right tree.
         const buyerNote = await t.step("deposit buyer note", () =>
-          deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmt),
+          harness.deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmt),
         );
         const sellerNote = await t.step("deposit seller note", () =>
-          deposit(seller, baseMint, sellerBaseAta, sellerNoteAmt),
+          harness.deposit(seller, baseMint, sellerBaseAta, sellerNoteAmt),
         );
 
         // seller2: a 2nd ask's collateral, deposited now (leaf 2) for the
         // batch-2 re-match. Same base amount as seller1.
-        let seller2Note: Awaited<ReturnType<typeof deposit>> | null = null;
+        let seller2Note: DepositedNote | null = null;
         if (seller2) {
           const seller2BaseAta = await getAssociatedTokenAddress(
             baseMint,
@@ -551,55 +352,28 @@ maybeDescribe(
             ),
           );
           seller2Note = await t.step("deposit seller2 note", () =>
-            deposit(seller2, baseMint, seller2BaseAta, sellerNoteAmt),
+            harness.deposit(seller2, baseMint, seller2BaseAta, sellerNoteAmt),
           );
         }
 
         // shadow root must equal on-chain current_root (so the VALID_INPUT
         // proof root is in the vault's recent ring at lock time).
-        const depositCount = await onChainLeafCount(
-          conn,
-          vaultProgramId,
-          numTrees,
-        );
+        const depositCount = await harness.leafCount();
         expect(depositCount).toBe(REMATCH ? 3 : 2);
 
         // ── 3. VALID_INPUT proofs (relayed to lock_note via the order) ──
-        async function viProof(p: Persona, note: typeof buyerNote) {
-          // Witness against the shard the note landed in (its shadow root must
-          // equal that shard's on-chain MerkleTree.current_root at lock time).
-          const w = await shadows[note.treeId].witness(note.leafIndex);
-          const vi = await proveValidInput({
-            repoRoot: REPO_ROOT,
-            spendingKey: p.spendingKey,
-            ownerCommitmentBlinding: p.ownerBlinding,
-            innerHash: note.innerHash,
-            tokenMint: note.mint.toBytes(),
-            amount: note.amount,
-            merkleRootBE: w.root,
-            merkleWitness: {
-              pathElements: w.siblings.map(be32ToBigInt),
-              pathIndices: w.indices,
-            },
-          });
-          const proofBytes = new Uint8Array([
-            ...vi.proof.piA,
-            ...vi.proof.piB,
-            ...vi.proof.piC,
-          ]);
-          return { proofBytes, root: w.root };
-        }
+        // harness.viProof witnesses against the shard the note landed in.
         const buyerVI = await t.step("VALID_INPUT prove buyer (snarkjs)", () =>
-          viProof(buyer, buyerNote),
+          harness.viProof(REPO_ROOT, buyer, buyerNote),
         );
         const sellerVI = await t.step(
           "VALID_INPUT prove seller (snarkjs)",
-          () => viProof(seller, sellerNote),
+          () => harness.viProof(REPO_ROOT, seller, sellerNote),
         );
         const seller2VI =
           seller2 && seller2Note
             ? await t.step("VALID_INPUT prove seller2 (snarkjs)", () =>
-                viProof(seller2, seller2Note!),
+                harness.viProof(REPO_ROOT, seller2, seller2Note!),
               )
             : null;
 
@@ -611,7 +385,7 @@ maybeDescribe(
           p: Persona,
           side: OrderSide,
           priceLimit: bigint,
-          note: typeof buyerNote,
+          note: DepositedNote,
           vi: { proofBytes: Uint8Array; root: Uint8Array },
           orderIndex: number,
           qty: bigint,
@@ -781,11 +555,7 @@ maybeDescribe(
           async () => {
             const deadline = Date.now() + SETTLE_TIMEOUT_MS;
             while (Date.now() < deadline) {
-              finalCount = await onChainLeafCount(
-                conn,
-                vaultProgramId,
-                numTrees,
-              );
+              finalCount = await harness.leafCount();
               if (finalCount >= depositCount + 2) break;
               await new Promise((r) => setTimeout(r, 3000));
             }
@@ -909,7 +679,7 @@ maybeDescribe(
             "live /ws/fills did not deliver the buyer FillMemo (is the CVM built from the fills commit?)",
           ).toBe(true);
           console.log(
-            `  · fills OK — indexer + WS both surfaced buyer change note ${change!.changeNoteCommitment.slice(0, 12)}…`,
+            `  · fills OK — indexer + WS both surfaced buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}…`,
           );
 
           // ── 8. cross-batch RE-MATCH (opt-in) ─────────────────────────
@@ -919,11 +689,7 @@ maybeDescribe(
           // again — the real proof that a partial fill continues across batches,
           // not just that one continuation note is minted.
           if (REMATCH && seller2 && seller2Note && seller2VI) {
-            const leafBeforeRematch = await onChainLeafCount(
-              conn,
-              vaultProgramId,
-              numTrees,
-            );
+            const leafBeforeRematch = await harness.leafCount();
             const seller2Order = await buildOrder(
               seller2,
               OrderSide.Ask,
@@ -947,11 +713,7 @@ maybeDescribe(
               async () => {
                 const deadline = Date.now() + SETTLE_TIMEOUT_MS;
                 while (Date.now() < deadline) {
-                  leafAfterRematch = await onChainLeafCount(
-                    conn,
-                    vaultProgramId,
-                    numTrees,
-                  );
+                  leafAfterRematch = await harness.leafCount();
                   if (leafAfterRematch >= leafBeforeRematch + 2) break;
                   await new Promise((r) => setTimeout(r, 3000));
                 }
