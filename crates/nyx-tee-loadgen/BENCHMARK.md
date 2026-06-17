@@ -108,17 +108,22 @@ image -20/-21 — prior image, same box class, label accordingly):
    (GPU/parallel witness, or a faster witness backend) as the immediate follow-on, or the prove
    speedup is capped at ~1.7×. This is the single most important number for the GPU roadmap.
 
-> **⚠️ REGRESSION found by this run — faster proving breaks the partial-fill continuation chain.**
+> **⚠️ Intermittent partial-fill continuation race — PROVER-INDEPENDENT (controlled A/B).**
 > B1 (partial-fill, 3 continuation batches) settled **only batch 0**; batches 1–2 failed
 > (`Custom 0` "Allocate … already in use" on batch 1 → root; `3007` note_lock_a system-owned on
-> batch 2 → cascade). The SAME scenario settled 3/3 clean on `-31` (ark). The only settle-relevant
-> difference is prove speed: ark's ~4 s prove incidentally let batch N's on-chain outputs/relock
-> confirm before batch N+1 simulated; rapidsnark's ~1.5 s prove removed that cushion and exposed
-> the **continuation-dependency race** — `SETTLE_CONCURRENCY=1` serializes *scheduling* but does
-> NOT gate batch N+1's settle on batch N's relock being *confirmed on-chain*. **This is now a GPU
-> prerequisite** (GPU makes proving even faster → the race gets worse). Independent matches (B2,
-> exact-match) are unaffected — settled 16/16. Fix: explicit parent-relock-confirmed gating in the
-> scheduler (the blocker already noted in `scheduler.rs`). Tracked as a follow-up task.
+> batch 2 → cascade). It initially looked prove-speed-related (it settled 3/3 on `-31`/ark), but a
+> **same-image `-32` A/B flipping only `NYX_TEE_PROVER`** refuted that: **ark AND rapidsnark both
+> fail identically** (batch 0 only, leaf 4→9). The settle-path code is **byte-identical `-31`→`-32`**
+> (`scheduler.rs` diff comment-only, `SETTLE_CONCURRENCY=1` in both; only `main.rs` prover-select
+> changed). So the `-31` 3/3 pass was a **timing-lucky win of an intermittent cross-batch race**,
+> not a property of ark — prove speed is NOT the cause. The real bug: `SETTLE_CONCURRENCY=1`
+> serializes *scheduling* but doesn't gate batch N+1's settle on batch N's relock being *confirmed
+> on-chain*; whether it wins depends on devnet confirm timing. Independent matches (B2, exact-match)
+> are unaffected — settled 16/16, so it is specific to the continuation/relock hand-off. Fix:
+> deterministic parent-relock-confirmed gating in the scheduler. **Still a prerequisite for relying
+> on continuations under load (and before GPU), but for correctness, not because GPU "exposes" it.**
+> Method note: same-image env-only A/B (`phala deploy -e` with `NYX_TEE_PROVER=ark|rapidsnark`) is
+> the right way to attribute a behavior change to the prover vs everything else.
 
 ---
 
