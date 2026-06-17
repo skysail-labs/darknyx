@@ -46,7 +46,10 @@ function fakeIndexer(rows: Record<string, IndexerFill[]>): typeof fetch {
 
 class FakeWs implements WebSocketLike {
   private handlers: Record<string, Array<(ev?: unknown) => void>> = {};
-  addEventListener(type: string, cb: (ev?: unknown) => void): void {
+  // `any` callback param: a single mock signature can't satisfy the interface's
+  // four typed addEventListener overloads otherwise (callback contravariance).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  addEventListener(type: string, cb: (ev: any) => void): void {
     (this.handlers[type] ??= []).push(cb as (ev?: unknown) => void);
   }
   close(): void {

@@ -17,10 +17,8 @@ import {
   TradingClient,
   type SendableWebSocketLike,
 } from "../src/orders/trading-ws-client.js";
-import {
-  NyxApiError,
-  type PlaceOrderRequest,
-} from "../src/orders/order-client.js";
+import { NyxApiError } from "../src/orders/order-client.js";
+import type { PlaceOrderRequest } from "../src/orders/build-order.js";
 import { limitPolicy } from "../src/orders/builders.js";
 import { OrderSide } from "../src/orders/canonical.js";
 import { noteCommitmentV2, ownerCommitment } from "../src/utxo/note.js";
@@ -127,7 +125,10 @@ describe("proveAndBuildOrder", () => {
 class FakeSocket implements SendableWebSocketLike {
   listeners: Record<string, ((ev?: unknown) => void)[]> = {};
   sent: string[] = [];
-  addEventListener(type: string, cb: (ev?: unknown) => void): void {
+  // `any` callback param: a single mock signature can't satisfy the interface's
+  // four typed addEventListener overloads otherwise (callback contravariance).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  addEventListener(type: string, cb: (ev: any) => void): void {
     (this.listeners[type] ||= []).push(cb as (ev?: unknown) => void);
   }
   send(data: string): void {

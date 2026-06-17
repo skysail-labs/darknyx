@@ -17,9 +17,9 @@ import { fileURLToPath } from "node:url";
 import { Keypair } from "@solana/web3.js";
 
 import { noteCommitmentV2, ownerCommitment, pubkeyToFrPair } from "../src/utxo/note.js";
-import { MerkleShadow } from "./helpers/merkle-shadow.ts";
+import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { be32ToBigInt } from "./helpers/e2e-helpers.js";
-import { proveValidInput } from "./helpers/valid-input-prover.ts";
+import { proveValidInput } from "./helpers/valid-input-prover.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");

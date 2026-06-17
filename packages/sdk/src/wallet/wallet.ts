@@ -15,6 +15,10 @@ import type { NoteStore, StoredNote } from "../utxo/note-store.js";
 import { isDepositNote } from "../utxo/note-store.js";
 import type { NoteStatus } from "../client.js";
 
+// Re-export so consumers (and tests) can import the status union from the
+// wallet surface without reaching into ../client.js.
+export type { NoteStatus };
+
 export interface WalletNoteView {
   commitment: string;
   tokenMint: Uint8Array;

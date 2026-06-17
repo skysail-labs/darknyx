@@ -17,7 +17,7 @@ describe("Phase 5 — MerkleShadow parity with on-chain incremental tree", () =>
 
     // Brute-force: z_{i+1} = poseidon2(z_i, z_i), starting from z_0 = 0.
     // on-chain `empty_root` = poseidon2^TREE_DEPTH(0) = z_{TREE_DEPTH}.
-    let cur = new Uint8Array(32);
+    let cur: Uint8Array = new Uint8Array(32);
     for (let i = 0; i < TREE_DEPTH; i++) {
       cur = await poseidonHashBytesBE([bytesToBigInt(cur), bytesToBigInt(cur)]);
     }

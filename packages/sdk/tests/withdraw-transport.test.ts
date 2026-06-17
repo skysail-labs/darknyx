@@ -45,6 +45,11 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
       };
     },
   };
+  merge = {
+    prove: async () => {
+      throw new Error("not used in withdraw test");
+    },
+  };
 }
 
 function makeProviders(captureIxs: TransactionInstruction[]): {

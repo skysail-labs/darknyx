@@ -112,6 +112,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
             createMintToInstruction(mint, ata, admin.publicKey, amount),
             buildDepositInstruction({
               programId: VAULT_ID,
+              treeId: 0,
               depositor: admin.publicKey,
               tokenMint: mint,
               depositorTokenAccount: ata,
@@ -161,6 +162,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
           ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
           buildMergeInstruction({
             programId: VAULT_ID,
+            treeId: 0,
             payer: admin.publicKey,
             nullifiers: [nf0, nf1],
             outputCommitment: mergeRes.outputCommitmentBE,
@@ -210,6 +212,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
           ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
           buildWithdrawInstruction({
             programId: VAULT_ID,
+            treeId: 0,
             payer: admin.publicKey,
             tokenMint: mint,
             destinationTokenAccount: ata,
