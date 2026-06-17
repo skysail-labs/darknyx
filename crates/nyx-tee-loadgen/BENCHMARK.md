@@ -64,13 +64,28 @@ cargo feature (keeps the default synthetic build lean — no ark-circom/wasmer).
 - Validated by `cargo test -p nyx-tee-loadgen --features real-settle`: a proof is
   produced AND verifies against the circuit's own zkey VK — no CVM needed.
 
-**Increment B — TODO.** The Solana glue on top of Increment A: a solana-client
-dep + the vault deposit ix, recover `(tree_id, leaf_index)` from the NoteCreated
-event into the `IncrementalTree`, build the order off the proof, POST, and track
-the settle. The `merge-before-order` variant deposits 2 → merges → orders off the
-merged note. This half can only be validated against a live CVM
-(`docs/cvm-run-runbook.md`); the TS `cvm-*` bucket
-(`cvm-settle-e2e.test.ts`, `cvm-merge-then-order.test.ts`) covers it meanwhile.
+**Increment B — building blocks DONE (behind `real-settle-chain`), live wiring
+TODO.** The Solana glue on top of Increment A, using the modular solana-* stack
+(NOT solana-client — it conflicts with ark 0.5 on zeroize):
+
+- **B1 (`vault.rs`, unit-tested):** the vault `deposit` ix builder + PDAs + anchor
+  discriminator + the NoteCreated event parser — hand-mirrored from the SDK and
+  asserted byte-for-byte (discriminator, the 81-byte data layout, the 10-account
+  order, PDA determinism, event round-trip).
+- **B2 (`rpc.rs` + `flow.rs`, unit-tested where pure):** a minimal reqwest
+  JSON-RPC client (blockhash / send / confirm / logs / account-data) and a
+  `RealSettleHarness` that signs+sends a tx, `deposit()`s a note (recovering its
+  real `(tree_id, leaf_index)` from the event into a per-shard `IncrementalTree`),
+  reads summed `leaf_count`, and `prove()`s VALID_INPUT against the right shard.
+
+Remaining (validated only on a CVM, `docs/cvm-run-runbook.md`): the `run.rs`/CLI
+integration — `--real-settle` flags, pairing bid/ask real traders off pre-funded
+ATAs (collateral minting stays out-of-crate: `spl-token` reintroduces the ark
+zeroize conflict, so `devnet-setup` mints), assembling the order off the real
+proof, POSTing, and tracking the settle. The `merge-before-order` variant
+deposits 2 → merges → orders off the merged note. The TS `cvm-*` bucket
+(`cvm-settle-e2e.test.ts`, `cvm-merge-then-order.test.ts`) covers this end to end
+meanwhile.
 
 ---
 

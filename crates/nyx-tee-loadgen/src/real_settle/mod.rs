@@ -13,6 +13,10 @@
 //! `real-settle-chain` feature); see BENCHMARK.md.
 
 #[cfg(feature = "real-settle-chain")]
+pub mod flow;
+#[cfg(feature = "real-settle-chain")]
+pub mod rpc;
+#[cfg(feature = "real-settle-chain")]
 pub mod vault;
 
 use std::path::{Path, PathBuf};
