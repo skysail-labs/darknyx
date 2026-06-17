@@ -95,9 +95,57 @@ cargo run -p nyx-tee-loadgen --features real-settle-chain -- \
 
 Validated 2026-06-17 on `tee-v3-hardening-29` (num_trees=4): **leaf_count 2 → 7**
 (note_c/d + buyer change + base & quote fee notes) — the Rust VALID_INPUT prover's
-proofs were accepted by the on-chain `lock_note`. The `merge-before-order` variant
-+ multi-pair concurrency layer on the same blocks (the TS `cvm-merge-then-order`
-covers the merge flow). See `docs/cvm-run-runbook.md` for the bring-up.
+proofs were accepted by the on-chain `lock_note`. See `docs/cvm-run-runbook.md`.
+
+## `--real-settle` LOAD rig — multi-trader, multi-scenario (the protocol testing rig)
+
+`run_real_settle_load` (auto-selected when `--traders > 1` or a non-trivial
+`--real-mix`) drives N scenario INSTANCES end-to-end through the live CVM and
+reports the prover-bottleneck evidence. Inputs now **span shards** (the cross-shard
+`tree_id` fix — `feat(tee): carry tree_id …`), so deposits parallelize K-ways and a
+batch can settle inputs from different shards.
+
+**Scenarios** (`--real-mix "exact-match:50,partial-fill:20,merge:20,over-collateral:5,ioc-fok:5"`):
+
+| Scenario | Pathway | Exercises |
+|---|---|---|
+| `exact-match` | bid + ask, equal qty | baseline full-fill settle |
+| `over-collateral` | bid note +20% over required → surplus change note | over-collateral path |
+| `partial-fill` | 1 big bid + M small asks (`--real-multi-anchor-asks`) → M fills over M batches | continuation / consumes M anchors |
+| `merge` | deposit 2 sub-threshold notes → VALID_MERGE → ask off the merged note | the merge→spend pathway |
+| `ioc-fok` | crossing pair, IOC bid / FOK ask | execution-policy plumbing |
+
+**Phases:** plan → mint+deposit(+merge) all notes (sequential, shards round-robined)
+→ **prove all VALID_INPUT concurrently** (`spawn_blocking` across cores) → submit all
+concurrently → drain the settle.
+
+**Prover-bottleneck metrics** (loadgen-only + CVM-log cross-ref, per the decision):
+- **Client prove rate** — proofs/sec + p50/p95 of every VALID_INPUT/MERGE prove (the
+  host-side proving ceiling that caps order submission).
+- **End-to-end settle rate** — settled-matches/sec from `leaf_count` growth; plateaus
+  below offered load when the TEE prover (VALID_MATCH_BATCH) is the bottleneck.
+- **Cross-ref** — the run prints `phala cvms logs <cvm> | grep -E "prove breakdown|
+  settle pipeline timing"` to read the TEE's `prove_step_ms` (the dominant settle cost).
+  Per `rapidsnark_ab_results`, the lever is vCPU/GPU → the evidence base for GPU proving.
+
+```sh
+cargo run -p nyx-tee-loadgen --features real-settle-chain -- \
+  --endpoint "$GW" --real-settle --rpc-url "$HELIUS" \
+  --admin-keypair .devnet/keypairs/admin.json \
+  --base-mint <hex32> --quote-mint <hex32> --oracle-twap "$ORACLE_RAW" \
+  --fee-rate-bps 30 --real-num-trees 4 \
+  --traders 8 --real-mix "exact-match:40,partial-fill:30,merge:20,over-collateral:5,ioc-fok:5"
+```
+
+**Load sweep** (throughput-vs-offered-load curve): an EXTERNAL loop — each step needs a
+fresh tree (reset + redeploy cold-boots the mirror; a mid-run reset desyncs it), so:
+```sh
+for T in 2 4 8 16; do
+  # reset all shards + redeploy the image (see docs/cvm-run-runbook.md), then:
+  cargo run -p nyx-tee-loadgen --features real-settle-chain -- … --traders "$T"
+done
+```
+The settle-rate plateau across the steps is the prover ceiling.
 
 ---
 

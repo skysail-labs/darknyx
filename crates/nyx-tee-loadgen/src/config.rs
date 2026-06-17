@@ -186,6 +186,20 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 2000)]
     pub real_qty: u64,
 
+    /// Weighted `--real-settle` scenario mix, e.g.
+    /// `exact-match:50,partial-fill:20,merge:20,over-collateral:5,ioc-fok:5`.
+    /// One scenario INSTANCE per `--traders`; each instance produces a
+    /// self-crossing order group. Scenarios: `exact-match`, `over-collateral`,
+    /// `partial-fill` (1 big bid + M small asks → M anchors over M batches),
+    /// `merge` (deposit 2 → merge → order off merged note), `ioc-fok`.
+    #[arg(long, default_value = "exact-match:100")]
+    pub real_mix: String,
+
+    /// `partial-fill` scenario: number of small asks crossing the one big bid
+    /// (= anchors consumed over that many batches).
+    #[arg(long, default_value_t = 3)]
+    pub real_multi_anchor_asks: u8,
+
     /// Slot every generated order expires at. The TEE matcher sweeps
     /// orders whose `expiry_slot < current_slot`, where `current_slot`
     /// is the REAL Solana slot from the TEE's slot poller (~466M+ on

@@ -25,14 +25,31 @@ async fn main() -> Result<()> {
     let cfg = RunConfig::parse();
     cfg.validate()?;
 
-    // Real on-chain settle path (opt-in) — a single REAL crossing pair through
-    // the live CVM, not the synthetic load.
+    // Real on-chain settle path (opt-in) — REAL deposits/proofs/orders driven
+    // through the live CVM. A single crossing pair (the validated smoke) for the
+    // trivial config; the multi-trader, multi-scenario load rig otherwise.
     if cfg.real_settle {
         #[cfg(feature = "real-settle-chain")]
         {
-            use nyx_tee_loadgen::real_settle::run::{run_real_settle, RealSettleParams};
-            tracing::info!(endpoint = cfg.endpoint, "starting --real-settle round");
-            run_real_settle(RealSettleParams::from_config(&cfg)?).await?;
+            use nyx_tee_loadgen::real_settle::run::{
+                run_real_settle, run_real_settle_load, RealSettleParams,
+            };
+            let params = RealSettleParams::from_config(&cfg)?;
+            if cfg.traders <= 1 && cfg.real_mix == "exact-match:100" {
+                tracing::info!(
+                    endpoint = cfg.endpoint,
+                    "starting --real-settle single pair"
+                );
+                run_real_settle(params).await?;
+            } else {
+                tracing::info!(
+                    endpoint = cfg.endpoint,
+                    traders = cfg.traders,
+                    mix = %cfg.real_mix,
+                    "starting --real-settle LOAD rig"
+                );
+                run_real_settle_load(params).await?;
+            }
             return Ok(());
         }
         #[cfg(not(feature = "real-settle-chain"))]

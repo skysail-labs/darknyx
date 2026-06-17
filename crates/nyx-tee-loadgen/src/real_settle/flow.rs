@@ -169,6 +169,29 @@ impl RealSettleHarness {
             &witness,
         )
     }
+
+    // ── Merge primitives (for the merge-before-order scenario) ───────────────
+
+    /// The inclusion witness for `leaf` in shard `tree_id` (against the shadow's
+    /// current root) — the input witnesses a merge prove needs.
+    pub fn shadow_witness(&self, tree_id: u8, leaf: u64) -> R<super::MerkleWitness> {
+        self.shadows[tree_id as usize].witness(leaf as usize)
+    }
+
+    /// Append a settle/merge OUTPUT commitment to a shard's shadow (sequential
+    /// setup keeps the shadow index == the on-chain leaf the program appended).
+    /// Returns the leaf index.
+    pub fn append_shadow(&mut self, tree_id: u8, commitment: [u8; 32]) -> u64 {
+        self.shadows[tree_id as usize].append(commitment) as u64
+    }
+
+    /// Recover a confirmed merge tx's output `(tree_id, leaf_index)` from its
+    /// NoteMerged event.
+    pub async fn note_merged(&self, signature: &str) -> R<(u8, u64)> {
+        let logs = self.rpc.transaction_logs(signature).await?;
+        let n = vault::note_merged_from_logs(&logs)?;
+        Ok((n.tree_id, n.leaf_index))
+    }
 }
 
 #[cfg(test)]

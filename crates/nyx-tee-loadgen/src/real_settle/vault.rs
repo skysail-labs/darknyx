@@ -224,6 +224,43 @@ pub fn note_created_from_logs(logs: &[String]) -> Result<NoteCreated, RealSettle
     ))
 }
 
+/// Scan logs for the `NoteMerged` event → its `(tree_id, leaf_index)`. Body:
+/// `tree_id(1) ‖ output_commitment(32) ‖ token_mint(32) ‖ k(1) ‖ leaf_index(8) ‖ …`
+/// after the 8-byte `sha256("event:NoteMerged")[..8]` discriminator (mirrors
+/// `utxo/leaf-index.ts` NOTE_MERGED_OFF = 66).
+pub fn note_merged_from_logs(logs: &[String]) -> Result<NoteCreated, RealSettleError> {
+    const LEAF_OFF: usize = 1 + 32 + 32 + 1; // 66
+    let disc = {
+        let d = Sha256::digest(b"event:NoteMerged");
+        let mut out = [0u8; 8];
+        out.copy_from_slice(&d[..8]);
+        out
+    };
+    for line in logs {
+        let Some(b64) = line.strip_prefix(PROGRAM_DATA_PREFIX) else {
+            continue;
+        };
+        let Ok(bytes) =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64.trim())
+        else {
+            continue;
+        };
+        if bytes.len() < 8 + LEAF_OFF + 8 || bytes[..8] != disc {
+            continue;
+        }
+        let tree_id = bytes[8];
+        let mut le = [0u8; 8];
+        le.copy_from_slice(&bytes[8 + LEAF_OFF..8 + LEAF_OFF + 8]);
+        return Ok(NoteCreated {
+            tree_id,
+            leaf_index: u64::from_le_bytes(le),
+        });
+    }
+    Err(RealSettleError::Event(
+        "no NoteMerged event in tx logs".into(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
