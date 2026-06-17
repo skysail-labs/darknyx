@@ -166,17 +166,39 @@ The settle-rate plateau across the steps is the prover ceiling.
   GPU-accelerated proving.**
 
 **Finding — multi-batch settle fails under concurrent load** (a NEW issue the rig
-surfaced; single-pair + single-batch tests never hit it):
+surfaced; single-pair + single-batch tests never hit it). On `-30`:
 - partial-fill continuation batches failed `AccountOwnedByWrongProgram (3007)` on
   `note_lock_a` — a dependent batch's settle simulated before the prior batch that
-  creates its relock NoteLock landed → a **cross-batch continuation ordering race**
-  (the concurrent settle worker doesn't serialize batches that depend on a prior
-  batch's relock output).
+  creates its relock NoteLock landed → a **cross-batch continuation ordering race**.
 - the 5-match batch reverted at instruction 1 (`Custom 0`).
-- **Next:** a TEE settle-worker fix (serialize dependent/continuation batches; ensure
-  each batch's lock_note (Tx A) confirms before its settle (Tx D) simulates) — a
-  separate image. The matching + intake + cross-shard lock are proven; the gap is the
-  concurrent multi-batch settle scheduler.
+- **net result: `leaf_count` 14→14 — 0/7 matches settled.**
+
+**Root cause + fix — `SETTLE_CONCURRENCY` 3→1** (image `-31`, commit `d9a388b`):
+the scheduler ran up to 3 settle batches concurrently, but all batches share **one
+rolling per-batch ALT** (a Mutex-guarded pool) and continuation batches depend on a
+prior batch's relock NoteLock. Three batches racing the same ALT corrupted batch 0's
+account list (the `Custom 0` revert) and let continuation batches settle before their
+parent's relock landed (the `3007` cascade). Serializing settle (FIFO, one batch at a
+time) respects both invariants. The within-batch co-inclusion
+(`settle_send_concurrency=16`, the tree-sharding win) is untouched.
+
+### Live re-validation — 2026-06-17, image `tee-v3-hardening-31` (SETTLE_CONCURRENCY=1)
+
+Same run (`--traders 5 --real-mix "exact-match:1,partial-fill:1,merge:1,over-collateral:1,ioc-fok:1"
+--real-multi-anchor-asks 3`): 12/12 accepted, 7 matches across 3 batches.
+- **`leaf_count` 14→28 (+14 = 7 matches × 2 leaves)** — vs 14→14 on `-30`. Multi-batch
+  settle now LANDS; the catastrophic 0/7 failure is resolved.
+- Batches settled ~7 s apart (serial), vs ~2 s concurrent on `-30` — the expected
+  serialization, and the cost is hidden behind the ~40 s prove anyway.
+- **Caveat — residual error logs.** The CVM logs still showed a batch-0 `Custom 0` and
+  continuation `3007` lines, but timestamped **after** the leaf reached 28. These are
+  consistent with `send_and_confirm_with_rebroadcast` re-simulating an already-landed tx
+  against post-settle state (spurious retry noise), not a real settle failure — but the
+  leaf accounting (+14) alone can't distinguish "all 7 settled" from "batch-0-only +
+  continuations still failing." A focused isolation run
+  (`--real-mix "partial-fill:1" --traders 1 --real-multi-anchor-asks 3` = 1 big bid + 3
+  asks → 3 pure-continuation batches) is the clean way to confirm the continuation chain
+  settles across batches; pending the next CVM session.
 
 ---
 
