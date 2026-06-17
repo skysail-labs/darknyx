@@ -108,22 +108,32 @@ image -20/-21 — prior image, same box class, label accordingly):
    (GPU/parallel witness, or a faster witness backend) as the immediate follow-on, or the prove
    speedup is capped at ~1.7×. This is the single most important number for the GPU roadmap.
 
-> **⚠️ Intermittent partial-fill continuation race — PROVER-INDEPENDENT (controlled A/B).**
-> B1 (partial-fill, 3 continuation batches) settled **only batch 0**; batches 1–2 failed
-> (`Custom 0` "Allocate … already in use" on batch 1 → root; `3007` note_lock_a system-owned on
-> batch 2 → cascade). It initially looked prove-speed-related (it settled 3/3 on `-31`/ark), but a
-> **same-image `-32` A/B flipping only `NYX_TEE_PROVER`** refuted that: **ark AND rapidsnark both
-> fail identically** (batch 0 only, leaf 4→9). The settle-path code is **byte-identical `-31`→`-32`**
-> (`scheduler.rs` diff comment-only, `SETTLE_CONCURRENCY=1` in both; only `main.rs` prover-select
-> changed). So the `-31` 3/3 pass was a **timing-lucky win of an intermittent cross-batch race**,
-> not a property of ark — prove speed is NOT the cause. The real bug: `SETTLE_CONCURRENCY=1`
-> serializes *scheduling* but doesn't gate batch N+1's settle on batch N's relock being *confirmed
-> on-chain*; whether it wins depends on devnet confirm timing. Independent matches (B2, exact-match)
-> are unaffected — settled 16/16, so it is specific to the continuation/relock hand-off. Fix:
-> deterministic parent-relock-confirmed gating in the scheduler. **Still a prerequisite for relying
-> on continuations under load (and before GPU), but for correctness, not because GPU "exposes" it.**
-> Method note: same-image env-only A/B (`phala deploy -e` with `NYX_TEE_PROVER=ark|rapidsnark`) is
-> the right way to attribute a behavior change to the prover vs everything else.
+> **✅ Partial-fill "continuation failure" — ROOT-CAUSED + FIXED + validated (it was a loadgen bug,
+> not the protocol, not the prover).** Symptom: B1 (3 continuation batches) settled **only batch 0**;
+> batch 1 failed `Custom 0` ("Allocate … already in use"), batch 2 `3007` (cascade), leaf 4→9.
+> Two hypotheses were tested and BOTH refuted before the fix:
+> 1. *Prove speed?* No — a same-image `-32` A/B flipping only `NYX_TEE_PROVER` showed **ark and
+>    rapidsnark fail identically** (settle code byte-identical `-31`→`-32`).
+> 2. *Cross-batch race?* No — deterministic, not timing.
+>
+> **Real root cause (proven):** the loadgen built `order_id` from the order INDEX only (no salt),
+> so the per-order anchor pool (`inner_hash`/`nullifier = fr_safe(order_id, …)`) was **identical
+> every run**. A partial fill's continuation residual note takes its nullifier *directly* from a
+> consumed anchor (`matcher::assign_continuation_anchors`), and that nullifier is written on-chain
+> as a `NullifierEntry` PDA — the **permanent replay backbone, NOT cleared by
+> `reset-merkle-tree.mjs`** (only the Merkle tree resets). So the FIRST run to settle a continuation
+> created `NullifierEntry[anchor0]` forever; every run after collided. Verified: the failing PDA
+> `Dmg3tgEycfnepSojGuoXRAVGC7DEuBjHeDbzdqaM6s8o == findPDA(["nullifier", fr_safe(order_id_idx0, 0x80)])`
+> and exists on-chain owned by the vault. The `-31` 3/3 pass was **first-occurrence**, not luck;
+> batch 0 always settled because primary notes use *salted* persona keys — only anchors were unsalted.
+>
+> **Fix** (`fix(loadgen): salt order_ids per run`): `order_id = [run_nonce(ms) | order index]` so each
+> run's anchors (and their `NullifierEntry` PDAs) are fresh. **Validated 2026-06-18 on `-32`/rapidsnark:
+> the partial-fill chain settled 3/3 — batch 0/1/2 each `Tx D confirmed` + `batch settled`, zero
+> `Custom 0`/`3007`, leaf 4→9→14→19.** The protocol continuation chain is correct (and settles on
+> rapidsnark). Method note: same-image env-only A/B (`phala deploy -e NYX_TEE_PROVER=…`) is the right
+> way to attribute a behavior change to the prover; deriving the failing PDA from first principles is
+> the right way to attribute a settle failure to a specific account.
 
 ---
 
