@@ -72,29 +72,53 @@ COMMON="--real-settle --endpoint $GW --rpc-url $SOLANA_RPC_URL \
 Per run, pull the TEE timing with:
 `phala cvms logs <cvm> | grep -E "settle pipeline timing|CLIENT VALID_INPUT prove rate|real-settle LOAD complete"`.
 
-### Results table template (fill the CPU columns now; GPU column post-upgrade)
+### CAPTURED BASELINE — 2026-06-18, image `tee-v3-hardening-32`, CVM 8 vCPU / 16 GB
 
-Per-batch median ms, N=16 (B2/B4):
+**Per-batch ms, N=16 full batch** (B2: `--real-mix "exact-match:100" --traders 16` → matcher
+`count=16 page=0`, **settled 16/16 clean**). ark column from [[rapidsnark_ab_results]] (8 vCPU,
+image -20/-21 — prior image, same box class, label accordingly):
 
-| Stage | ark-CPU | **rapidsnark-CPU (baseline)** | rapidsnark-GPU (ICICLE) |
-|---|---|---|---|
-| witness-gen (if split) | | | |
-| **`prove_ms`** | _TBD_ | _TBD_ | _(future)_ |
-| `verify_ms` (IO) | | | |
-| `settle_ms` (IO) | | | |
-| `alt_tx+alt_wait` (IO) | | | |
-| `lock_ms`+`close_ms` (IO) | | | |
-| `total_ms` | | | |
-| **finality-free latency** (≈prove) | | | |
-| **proj. post-Alpenglow batches/s** | | | |
-| client VALID_INPUT proofs/s | | | |
+| Stage | ark-CPU (ref) | **rapidsnark-CPU (baseline)** | rapidsnark-GPU (ICICLE) |
+|---|--:|--:|--:|
+| witness-gen (ark-circom, CPU — **not** GPU-accel) | ~1600 | **2124** | ~2124 *(floor — Amdahl)* |
+| **`prove_step_ms`** (Groth16 MSM/NTT — the ICICLE target) | ~2350 | **1485** | _(future, →tens of ms)_ |
+| **`prove_ms`** (witness + prove) | ~4000 | **3661** | ~2200 *(witness-bound)* |
+| `verify_ms` (IO) | — | 1119 | →~0 |
+| `settle_ms` (IO) | ~14000 | **11222** | →~0 |
+| `alt_tx`+`alt_wait` (IO) | — | 3380 | →0 |
+| `lock_ms`+`close_ms` (IO) | — | 4332 | →~0 |
+| `total_ms` (wall, w/ overlap) | ~22500 | **16938** | →`prove_ms`+ε |
+| prove share of wall | ~18% | **~22%** | — |
+| **finality-free latency** (≈`prove_ms`) | ~4 s | **~3.7 s** | ~2.2 s |
+| **proj. post-Alpenglow** matches/s (16 / finality-free) | ~4 | **~4.3** | ~7.3 |
+| client VALID_INPUT proofs/s (loadgen, ark-circom) | — | **0.19** (32 conc..) / 0.26 (4 conc.) | — |
 
-> **Known CPU data points** (to seed the table): the 2026-06-17 isolation run (ark, n=1, on
-> the dev CVM) logged per-batch `prove_ms`≈3.9–4.6 s, `settle_ms`≈8.7–10.1 s, `total_ms`≈15.4–16.9 s
-> — i.e. at n=1, on-chain IO already dominates *because the prove is small at n=1*; the N=16
-> prove (B2) is the number that matters and is not yet captured under rapidsnark. Client
-> `VALID_INPUT` prove ≈0.25/s (~40 s/proof single, ~15 s for 4 concurrent). See also
-> [[rapidsnark_ab_results]] (ark/rapidsnark × 1/8 vCPU; rapidsnark ~1.4× on 8 vCPU).
+**n=1 isolation** (B1: `partial-fill` first batch, rapidsnark): `witness`≈1.3–1.6 s,
+`prove_step`≈1.3 s, `prove_ms`≈2.9 s, `settle_ms`≈11.2 s, `total`≈17.2 s.
+
+**Reading the baseline — three findings that frame the GPU work:**
+1. **`prove_ms` is the floor once IO is removed, exactly as posited.** Today on-chain IO
+   (esp. `settle_ms`≈11 s) dominates wall, but that's the Alpenglow-killed term. Strip it and
+   per-batch latency → `prove_ms`≈3.7 s, so throughput → prove-bound (~4.3 matches/s at N=16).
+2. **rapidsnark-CPU already wins on the *prove step* (1485 vs ~2350 ms ≈ 1.6×), but only ~1.07×
+   on `prove_ms`** — because witness-gen (2.1 s, ark-circom, single-threaded-ish) dilutes it.
+3. **⚠️ ICICLE's ceiling is witness-gen.** ICICLE accelerates `prove_step` (1485 ms → tens of ms),
+   NOT witness-gen. So GPU best-case `prove_ms` ≈ 2.1 s (witness) + ε ≈ **1.66× over rapidsnark-CPU,
+   then witness-gen is the new bottleneck**. The GPU project should budget a witness-gen plan
+   (GPU/parallel witness, or a faster witness backend) as the immediate follow-on, or the prove
+   speedup is capped at ~1.7×. This is the single most important number for the GPU roadmap.
+
+> **⚠️ REGRESSION found by this run — faster proving breaks the partial-fill continuation chain.**
+> B1 (partial-fill, 3 continuation batches) settled **only batch 0**; batches 1–2 failed
+> (`Custom 0` "Allocate … already in use" on batch 1 → root; `3007` note_lock_a system-owned on
+> batch 2 → cascade). The SAME scenario settled 3/3 clean on `-31` (ark). The only settle-relevant
+> difference is prove speed: ark's ~4 s prove incidentally let batch N's on-chain outputs/relock
+> confirm before batch N+1 simulated; rapidsnark's ~1.5 s prove removed that cushion and exposed
+> the **continuation-dependency race** — `SETTLE_CONCURRENCY=1` serializes *scheduling* but does
+> NOT gate batch N+1's settle on batch N's relock being *confirmed on-chain*. **This is now a GPU
+> prerequisite** (GPU makes proving even faster → the race gets worse). Independent matches (B2,
+> exact-match) are unaffected — settled 16/16. Fix: explicit parent-relock-confirmed gating in the
+> scheduler (the blocker already noted in `scheduler.rs`). Tracked as a follow-up task.
 
 ---
 
