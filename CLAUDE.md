@@ -235,8 +235,14 @@ settler**, so any change under `crates/nyx-tee/`, `Dockerfile`,
 `deploy/docker-compose.yaml`, or the circuits requires a **rebuilt image**
 — `phala cvms start` on the old image runs stale code.
 
-The full step-by-step lives in `scripts/dev-commands.md §5–§7`; this is the
-operational summary plus the gotchas that cost real time.
+**The copy-paste runbook is [`docs/cvm-run-runbook.md`](docs/cvm-run-runbook.md)**
+— the exact build→deploy→rotate→fund→reset→test→STOP commands plus the
+gotchas that have each burned a deploy (the origin→`skysail-labs/darknyx`
+remote redirect, the hardcoded compose creds, the nvm-shim `node` path, the
+gTFA 100 cap, the two mint regimes, secrets-via-`.env`-not-`/tmp`, and
+rotating/funding all K shard signers). Start there for any CVM run.
+`scripts/dev-commands.md §5–§7` is the longer reference; this section is the
+conceptual summary.
 
 ### 3.0 Tooling
 
