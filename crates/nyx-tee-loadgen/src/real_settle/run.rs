@@ -575,7 +575,21 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     for inst in 0..p.traders {
         let scenario = pick_scenario(&mix, inst, p.traders);
         // Per-instance, per-side fresh personas (salted → fresh nullifiers).
-        let seed_base = (salt << 20) ^ ((inst as u64) << 4);
+        //
+        // DISJOINT BIT FIELDS are load-bearing. Each note's seed is
+        // `seed_base ^ tag`, where `tag` is a small per-order constant
+        // (`0x1` bid, `0x2`/merge, `0x10+j` partial-fill asks, and the merge
+        // inner-hash tags up to `0x3900`). The nullifier is
+        // `nullifier_v2(spending_key, inner_hash)` and BOTH derive only from
+        // the seed — it ignores mint + amount. So if two orders in different
+        // instances resolve to the same seed, a base-ask and a quote-bid with
+        // different commitments still share a nullifier → the 2nd to settle
+        // dies `NullifierEntry already in use` (custom 0). The old
+        // `(salt<<20) ^ (inst<<4)` let `inst<<4` (bits 4-11) overlap the tag
+        // bits, so e.g. inst=0 ask j=1 (`S^0x11`) collided with inst=1 bid
+        // (`(S^0x10)^0x1 = S^0x11`). Lay salt / inst / tag in non-overlapping
+        // fields: tag in bits 0-15 (≤ 0x3900), inst in bits 16-31, salt above.
+        let seed_base = ((salt & 0xFFFF_FFFF) << 32) ^ ((inst as u64) << 16);
 
         // Helper to mint + deposit one note, returning (persona, note).
         macro_rules! mint_deposit {
@@ -976,4 +990,54 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         settled_matches, drain_s, settled_matches as f64 / drain_s.max(1e-9),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    /// The current (fixed) seed_base layout: salt in bits 32+, inst in bits
+    /// 16-31, leaving bits 0-15 for the per-order tag. MUST match the inline
+    /// formula in `run_real_settle_load`.
+    fn seed_base(salt: u64, inst: u64) -> u64 {
+        ((salt & 0xFFFF_FFFF) << 32) ^ (inst << 16)
+    }
+
+    /// Every per-order PRIMARY-note seed is `seed_base ^ tag`. Two primary
+    /// notes share a nullifier iff they share a seed (nullifier_v2 ignores
+    /// mint+amount). So the safety invariant is: across all instances, all
+    /// `seed_base(inst) ^ tag` are globally unique for the primary tag set
+    /// (`0x1` bid, `0x2` seller, `0x10+j` partial-fill asks).
+    #[test]
+    fn per_note_seeds_are_globally_unique() {
+        let salt = 0x1234_5678u64;
+        let mut tags = vec![0x1u64, 0x2];
+        tags.extend((0..64u64).map(|j| 0x10 + j)); // generous partial-fill ask span
+        let mut seen = HashSet::new();
+        for inst in 0..256u64 {
+            let sb = seed_base(salt, inst);
+            for &t in &tags {
+                assert!(
+                    seen.insert(sb ^ t),
+                    "seed collision: inst={inst} tag={t:#x} — would alias a nullifier"
+                );
+            }
+        }
+    }
+
+    /// Regression guard: the OLD `(salt<<20) ^ (inst<<4)` layout aliased
+    /// inst=0's ask j=1 with inst=1's bid (the multi-scenario settle bug).
+    /// Pin that the fix breaks that specific collision so we can't revert.
+    #[test]
+    fn old_overlapping_layout_collided() {
+        let salt = 0x1234_5678u64;
+        let old = |inst: u64| (salt << 20) ^ (inst << 4);
+        assert_eq!(
+            old(0) ^ 0x11,
+            old(1) ^ 0x1,
+            "old layout collision (documented)"
+        );
+        // The new layout must NOT collide for the same pair.
+        assert_ne!(seed_base(salt, 0) ^ 0x11, seed_base(salt, 1) ^ 0x1);
+    }
 }
