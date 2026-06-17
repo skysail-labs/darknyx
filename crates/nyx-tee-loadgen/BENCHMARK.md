@@ -190,15 +190,40 @@ Same run (`--traders 5 --real-mix "exact-match:1,partial-fill:1,merge:1,over-col
   settle now LANDS; the catastrophic 0/7 failure is resolved.
 - Batches settled ~7 s apart (serial), vs ~2 s concurrent on `-30` — the expected
   serialization, and the cost is hidden behind the ~40 s prove anyway.
-- **Caveat — residual error logs.** The CVM logs still showed a batch-0 `Custom 0` and
-  continuation `3007` lines, but timestamped **after** the leaf reached 28. These are
-  consistent with `send_and_confirm_with_rebroadcast` re-simulating an already-landed tx
-  against post-settle state (spurious retry noise), not a real settle failure — but the
-  leaf accounting (+14) alone can't distinguish "all 7 settled" from "batch-0-only +
-  continuations still failing." A focused isolation run
-  (`--real-mix "partial-fill:1" --traders 1 --real-multi-anchor-asks 3` = 1 big bid + 3
-  asks → 3 pure-continuation batches) is the clean way to confirm the continuation chain
-  settles across batches; pending the next CVM session.
+- The `-31` mixed run also showed residual batch-0 `Custom 0` + continuation `3007` log
+  lines timestamped **after** the leaf reached 28 — `send_and_confirm_with_rebroadcast`
+  re-simulating an already-landed tx against post-settle state (spurious retry noise), but
+  the leaf accounting (+14) alone couldn't distinguish "all settled" from "batch-0-only".
+
+### Isolation run — 2026-06-17, image `-31`, the continuation chain is CLEAN
+
+Focused run (`--real-mix "partial-fill:1" --traders 1 --real-multi-anchor-asks 3`
+= 1 big bid + 3 small asks → **3 pure-continuation batches**, fresh-reset tree) to settle
+the ambiguity definitively. The CVM settle log (not just the leaf count):
+
+| batch | match | Tx D confirmed slot | total_ms | result |
+|---|---|---|---|---|
+| 0 | 0 | 470102866 | 16894 | `batch settled; openings evicted` |
+| 1 | 0 | 470102908 | 16282 | `batch settled; openings evicted` |
+| 2 | 0 | 470102949 | 15437 | `batch settled; openings evicted` |
+
+- **All 3 continuation batches settled cleanly, in strict dependency order** — monotonic
+  confirmed slots ~40 apart (serial, as designed); each child batch locked its parent's
+  relocked residual. **Zero `3007`, zero `Custom 0`** in the logs. `leaf_count` 4→9→14→19
+  (+15 = 3 fills × 5 leaves: 2 trade + 1 buyer change + base+quote fee per fill).
+- This is exactly the path that failed `0/7` on `-30`. The `SETTLE_CONCURRENCY=1` fix is
+  **fully validated** for the partial-fill continuation chain; the `-31` mixed-run residual
+  error lines were confirmed spurious retry-after-confirm noise.
+- **Operator note:** the loadgen `--real-settle` needs the real e2e-config mints passed as
+  **64-char hex** (`--base-mint`/`--quote-mint`); they default to the placeholder dev mints
+  (`…b1`/`…9e`), which aren't on-chain token mints → the first ATA `CreateIdempotent` fails
+  `IncorrectProgramId` before any order. Convert base58 → hex (`PublicKey.toBytes()`).
+- **Per-stage timing** (n=1 batches): `settle_ms` ≈ 8.7–10.1 s dominates each batch (mostly
+  rebroadcast wait on devnet), `prove_ms` ≈ 4 s. At n=1 the on-chain settle IO dominates;
+  the VALID_MATCH_BATCH prove only dominates at n=16 — consistent with the prover-bound
+  thesis once batches are full. Note: the loadgen's `settled_matches=7` print is a
+  leaf/2 heuristic that over-counts (each fill mints 5 leaves, not 2); the **authoritative
+  count is 3 fills**, one per continuation batch, per the CVM `batch settled` logs.
 
 ---
 
