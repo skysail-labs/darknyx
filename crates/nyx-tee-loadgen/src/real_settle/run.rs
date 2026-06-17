@@ -176,6 +176,9 @@ fn build_order_body(
         "merkle_root": hex::encode(proof.merkle_root),
         "valid_input_proof": hex::encode(proof.proof_bytes),
         "collateral_amount": note.amount,
+        // Which shard the input note lives in — lets the CVM route lock_note to
+        // the right merkle_tree so a batch's inputs can span shards (cross-shard fix).
+        "tree_id": note.tree_id,
         "anchors": anchors.iter().map(|a| serde_json::json!({
             "inner_hash": hex::encode(a.inner_hash),
             "nullifier": hex::encode(a.nullifier),

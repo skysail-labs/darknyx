@@ -180,6 +180,12 @@ pub struct OrderOpening {
     /// Merkle root the VALID_INPUT proof was generated against — must
     /// still be in the vault's root history at lock time.
     pub merkle_root: [u8; 32],
+    /// Merkle-tree shard the input note lives in. Selects the
+    /// `merkle_tree[tree_id]` account `lock_note` checks `merkle_root`
+    /// recency against, so a batch's input notes can span shards. From the
+    /// order's `tree_id` (fresh deposit); irrelevant for a relocked
+    /// continuation (`from_relock` skips `lock_note`).
+    pub tree_id: u8,
     /// The client-generated VALID_INPUT Groth16 proof for `lock_note`.
     pub valid_input_proof: Groth16ProofBytes,
     /// True when this opening is a relocked CONTINUATION note (note_e/note_f
@@ -340,6 +346,7 @@ mod tests {
             order_id: [7u8; 16],
             expiry_slot: 1_000_000,
             merkle_root: [0xDD; 32],
+            tree_id: 0,
             valid_input_proof: Groth16ProofBytes {
                 pi_a: [1u8; 64],
                 pi_b: [2u8; 128],

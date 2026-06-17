@@ -347,6 +347,7 @@ maybeDescribe("CVM merge-then-order (deposit×2 → merge → order off merged n
           merkle_root: hex(vi.root),
           valid_input_proof: hex(vi.proofBytes),
           collateral_amount: Number(note.amount),
+          tree_id: note.treeId,
           anchors: anchorsToJson(pool.anchors),
         };
       }

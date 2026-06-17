@@ -236,6 +236,8 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
                             // re-consumes it without a fresh VALID_INPUT
                             // proof; these carry forward the prior values.
                             merkle_root: prior.merkle_root,
+                            // Carried forward; unused — `from_relock` skips lock_note.
+                            tree_id: prior.tree_id,
                             valid_input_proof: prior.valid_input_proof.clone(),
                             // note_e is locked by THIS batch's re-lock — the
                             // NEXT batch that consumes it must skip lock_note.
@@ -310,6 +312,8 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
                             order_id: oid,
                             expiry_slot: prior.expiry_slot,
                             merkle_root: prior.merkle_root,
+                            // Carried forward; unused — `from_relock` skips lock_note.
+                            tree_id: prior.tree_id,
                             valid_input_proof: prior.valid_input_proof.clone(),
                             // note_f is locked by THIS batch's re-lock.
                             from_relock: true,

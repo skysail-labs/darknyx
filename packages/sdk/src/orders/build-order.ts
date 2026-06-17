@@ -84,6 +84,9 @@ export interface BuildOrderArgs {
   arrivalNonce?: bigint;
   /** The note's actual value when over-collateralizing. Default `note.amount`. */
   collateralAmount?: bigint;
+  /** Which Merkle-tree shard the note lives in (selects the settle's lock_note
+   *  shard so a batch's inputs can span shards). Default `0`. NOT signed. */
+  treeId?: number;
 }
 
 /** The fully-signed `POST /orders` wire body (all hex fields; numeric u64s). */
@@ -107,6 +110,8 @@ export interface PlaceOrderRequest {
   merkle_root: string;
   valid_input_proof: string;
   collateral_amount: number;
+  /** Which Merkle-tree shard the collateral note lives in. Default 0. */
+  tree_id: number;
   anchors: { inner_hash: string; nullifier: string }[];
 }
 
@@ -195,6 +200,7 @@ export async function buildOrder(
     merkle_root: toHex(args.validInput.merkleRoot),
     valid_input_proof: toHex(args.validInput.proofBytes),
     collateral_amount: u64(collateralAmount, "collateral_amount"),
+    tree_id: args.treeId ?? 0,
     anchors: anchorsToJson(pool.anchors),
   };
 }

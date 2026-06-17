@@ -438,6 +438,7 @@ maybeDescribe(
             // equals the derived floor (a no-op); for an over-collateralized one
             // it's larger and intake accepts note ≥ required.
             collateral_amount: Number(note.amount),
+            tree_id: note.treeId,
             anchors: anchorsToJson(pool.anchors),
           };
         }

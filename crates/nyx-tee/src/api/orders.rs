@@ -122,6 +122,16 @@ pub struct PlaceOrderRequest {
     #[serde(default)]
     pub collateral_amount: Option<u64>,
 
+    /// Which Merkle-tree shard the collateral note lives in (the shard it was
+    /// deposited/merged into). Selects the `merkle_tree[tree_id]` account the
+    /// settle's `lock_note` checks the proof's `merkle_root` recency against, so
+    /// a batch's input notes can span shards. NOT in the signed canonical body —
+    /// the proof's `merkle_root` + the shard's recent-roots ring already bind the
+    /// note; a wrong `tree_id` only self-harms (lock fails). `#[serde(default)]`
+    /// ⇒ shard 0, back-compatible with pre-sharding clients.
+    #[serde(default)]
+    pub tree_id: u8,
+
     /// The order's continuation anchor pool — exactly
     /// `ANCHOR_POOL_SIZE` `(inner_hash, nullifier)` pairs the client
     /// pre-supplied so the matcher can settle partial-fill
@@ -280,6 +290,9 @@ struct PreparedOrder {
     opening: crate::matcher::openings::NoteOpening,
     order_id: [u8; 16],
     lock_merkle_root: [u8; 32],
+    /// Merkle-tree shard the collateral note lives in (selects the lock_note
+    /// `merkle_tree` account). From `PlaceOrderRequest::tree_id`.
+    tree_id: u8,
     valid_input_proof: crate::settle::lock_note::Groth16ProofBytes,
     anchors: Vec<Anchor>,
     arrival_slot: u64,
@@ -527,6 +540,7 @@ async fn prepare_order(
         opening,
         order_id,
         lock_merkle_root,
+        tree_id: req.tree_id,
         valid_input_proof,
         anchors,
         arrival_slot,
@@ -556,6 +570,7 @@ fn commit_order(
             order_id: p.order_id,
             expiry_slot,
             merkle_root: p.lock_merkle_root,
+            tree_id: p.tree_id,
             valid_input_proof: p.valid_input_proof,
             // A fresh deposit: lock_note must run for it (no prior re-lock).
             from_relock: false,

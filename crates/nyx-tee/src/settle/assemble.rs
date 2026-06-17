@@ -453,11 +453,12 @@ fn lock_inputs(
     rec: &crate::matcher::openings::OrderOpening,
 ) -> LockSideInputs {
     LockSideInputs {
-        // Single-shard for now: every input note's home tree is shard 0.
-        // Phase 3 sources this from the stored opening (intake records which
-        // shard the deposit/continuation note lives in) so lock_note checks
-        // recency against the right `merkle_tree` shard.
-        tree_id: 0,
+        // The shard the input note lives in (from the order's `tree_id`,
+        // recorded at intake) — so lock_note checks `merkle_root` recency
+        // against the right `merkle_tree` shard and a batch's inputs can span
+        // shards. Irrelevant for a relocked continuation (`already_locked`
+        // below skips lock_note entirely).
+        tree_id: rec.tree_id,
         note_commitment,
         order_id: rec.order_id,
         expiry_slot: rec.expiry_slot,
@@ -763,6 +764,7 @@ mod tests {
             order_id,
             expiry_slot: 999,
             merkle_root: [0xDD; 32],
+            tree_id: 0,
             valid_input_proof: Groth16ProofBytes {
                 pi_a: [1u8; 64],
                 pi_b: [2u8; 128],
