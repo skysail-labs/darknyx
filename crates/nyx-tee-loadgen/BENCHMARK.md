@@ -135,6 +135,25 @@ image -20/-21 — prior image, same box class, label accordingly):
 > way to attribute a behavior change to the prover; deriving the failing PDA from first principles is
 > the right way to attribute a settle failure to a specific account.
 
+> **✅ Multi-scenario mix — a SECOND loadgen seed collision, root-caused + FIXED + validated.** After
+> the salt fix, the isolated partial-fill settled 3/3 but the full mix (`--traders 5`, all 5 scenarios)
+> still failed a partial-fill continuation batch — `Custom 0` on `nullifier_b` (the SELLER side, a
+> *different* PDA `2m2J…`), within-run. Root cause (arithmetic): `seed_base = (salt<<20) ^ (inst<<4)`
+> let the `inst` field (bits 4-11) OVERLAP the per-order tag bits (`^0x1` bid, `^0x10+j` asks). So
+> cross-instance seeds collided, e.g. inst=0 ask j=1 (`S^0x11`) == inst=1 bid (`(S^0x10)^0x1`). Same
+> seed → same `Persona` spending_key + same note `inner_hash` → **same nullifier (`nullifier_v2`
+> ignores mint+amount)**, so a base-ask and a quote-bid with different commitments alias one nullifier;
+> both match in the shared book, the 2nd settle dies on the on-chain replay guard. Only ≥2 instances
+> hit it (the isolated partial-fill has one). NOT a protocol/matcher bug — the matcher matched distinct
+> orders; the replay guard *correctly rejected* the aliased nullifier. **Fix:** disjoint bit fields,
+> `seed_base = ((salt & 0xFFFF_FFFF)<<32) ^ (inst<<16)` (tag bits 0-15, inst bits 16-31, salt above) +
+> two regression tests (`per_note_seeds_are_globally_unique`, `old_overlapping_layout_collided`).
+> **Validated 2026-06-18 on `-32`/rapidsnark: the full mix settled clean — batch 0 (5)/1/2 all `batch
+> settled`, ZERO `Custom 0`/`3007`, leaf 14→41 (+27 vs the buggy run's +17 partial).** All 5 pathways
+> (exact-match, over-collateral, partial-fill+continuations, merge, ioc-fok) settle end-to-end.
+> Lesson: XOR-combining seed fields that share bit ranges silently aliases nullifiers — use disjoint
+> fields (or a global counter), and remember the nullifier is independent of mint+amount.
+
 ---
 
 ## Harness v2 — scenarios, configurable market, observability
