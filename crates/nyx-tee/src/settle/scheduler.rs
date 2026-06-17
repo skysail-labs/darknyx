@@ -27,14 +27,27 @@ use darkpool_matcher::match_result::RunBatchOutput;
 use tokio::sync::{mpsc, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 
-/// Max batches the settle pipeline drives CONCURRENTLY. Pipelining overlaps
-/// batch N's ~14 s ALT-activation + settle wait with batch N+1's prove/lock,
-/// taking the (serial) prover from ~14% utilization toward saturated. Bounded
-/// at 3: the prover serializes the prove steps and the rolling ALT pool
-/// serializes the ALT op anyway (worker.rs holds its lock across that), so a
-/// small bound captures most of the win without unbounded RPC/work fan-out.
-/// Acquiring a permit before each batch back-pressures the matcher channel.
-const SETTLE_CONCURRENCY: usize = 3;
+/// Max batches the settle pipeline drives CONCURRENTLY.
+///
+/// **Must be 1.** Two batch-level invariants require serial batches, both of
+/// which `>1` violated (a live multi-scenario loadgen run, 2026-06-17, hit
+/// both): (a) the **rolling per-batch ALT** is shared + extended across batches
+/// (`worker.rs::alt_pool`, "settle batches run serially today") — concurrent
+/// batches extend the SAME ALT, so each batch's v0 settle tx is compiled
+/// against a shifting ALT → wrong account indices → the ed25519/settle ix
+/// fails; (b) a **partial-fill continuation** batch consumes a note whose
+/// NoteLock is created by the PRIOR batch's settle (the re-lock) — it must not
+/// settle until that prior batch lands, else `lock_note` is missing
+/// (`AccountOwnedByWrongProgram 3007`). The matcher emits the whole
+/// continuation chain in one tick (pages 0,1,2…), so dependent batches are
+/// already queued; serial FIFO processing settles them in dependency order.
+///
+/// The throughput win is the WITHIN-batch concurrency (locks + settles fire in
+/// parallel across a batch's matches + K shards — unchanged). Cross-batch
+/// pipelining is the lost optimization; re-enabling it needs a per-batch
+/// DISTINCT ALT (not the shared rolling pool) + explicit continuation-dependency
+/// ordering. Acquiring a permit before each batch back-pressures the matcher.
+const SETTLE_CONCURRENCY: usize = 1;
 
 use super::assemble::{assemble_batch, BatchAssemblyParams};
 use super::job::{BatchId, JobStatus, MatchIdx, SettleJob, SettleJobId};
