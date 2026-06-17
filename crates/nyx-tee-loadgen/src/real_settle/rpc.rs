@@ -76,11 +76,17 @@ impl RpcClient {
             .await
     }
 
-    /// `sendTransaction` for an already-base64-encoded signed tx.
+    /// `sendTransaction` for an already-base64-encoded signed tx. The preflight
+    /// commitment MUST match the blockhash's (`confirmed`) — its default
+    /// (`finalized`) bank lags `confirmed` and wouldn't have our fresh blockhash
+    /// yet → a spurious `BlockhashNotFound`.
     pub async fn send_transaction(&self, tx_b64: &str) -> R<String> {
         self.call(
             "sendTransaction",
-            json!([tx_b64, { "encoding": "base64", "skipPreflight": false }]),
+            json!([
+                tx_b64,
+                { "encoding": "base64", "skipPreflight": false, "preflightCommitment": "confirmed" }
+            ]),
         )
         .await
     }

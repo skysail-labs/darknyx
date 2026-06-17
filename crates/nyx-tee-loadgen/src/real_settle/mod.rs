@@ -17,6 +17,10 @@ pub mod flow;
 #[cfg(feature = "real-settle-chain")]
 pub mod rpc;
 #[cfg(feature = "real-settle-chain")]
+pub mod run;
+#[cfg(feature = "real-settle-chain")]
+pub mod spl;
+#[cfg(feature = "real-settle-chain")]
 pub mod vault;
 
 use std::path::{Path, PathBuf};
@@ -170,6 +174,8 @@ pub struct ValidInputProof {
     pub proof_bytes: [u8; 256],
     /// The note commitment (32 BE bytes) the proof binds.
     pub note_commitment: [u8; 32],
+    /// The Merkle root the proof was built against (the order's `merkle_root`).
+    pub merkle_root: [u8; 32],
 }
 
 /// ark-circom VALID_INPUT prover. Loads the proving key once; rebuilds the
@@ -224,6 +230,7 @@ impl ValidInputProver {
         Ok(ValidInputProof {
             proof_bytes: proof_to_onchain_bytes(&proof),
             note_commitment,
+            merkle_root: witness.root,
         })
     }
 

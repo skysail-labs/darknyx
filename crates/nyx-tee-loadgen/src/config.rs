@@ -160,6 +160,32 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 30)]
     pub fee_rate_bps: u16,
 
+    /// Drive a REAL on-chain settle (deposit→prove→order→settle) instead of the
+    /// synthetic load. Requires building with `--features real-settle-chain` +
+    /// `--rpc-url`/`--admin-keypair`. A crossing pair against the live CVM.
+    #[arg(long, default_value_t = false)]
+    pub real_settle: bool,
+
+    /// Solana RPC (Helius devnet) for the `--real-settle` deposits/reads.
+    #[arg(long)]
+    pub rpc_url: Option<String>,
+
+    /// Funded admin keypair (mint authority + fee payer) for `--real-settle`.
+    #[arg(long)]
+    pub admin_keypair: Option<String>,
+
+    /// Path to `circuits/build` (the valid_input artifacts) for `--real-settle`.
+    #[arg(long, default_value = "circuits/build")]
+    pub circuits_dir: String,
+
+    /// On-chain shard count (e2e-config `numTrees`) for `--real-settle`.
+    #[arg(long, default_value_t = 4)]
+    pub real_num_trees: u8,
+
+    /// Base quantity of the `--real-settle` crossing pair (base units).
+    #[arg(long, default_value_t = 2000)]
+    pub real_qty: u64,
+
     /// Slot every generated order expires at. The TEE matcher sweeps
     /// orders whose `expiry_slot < current_slot`, where `current_slot`
     /// is the REAL Solana slot from the TEE's slot poller (~466M+ on

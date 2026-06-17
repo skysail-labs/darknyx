@@ -78,14 +78,26 @@ TODO.** The Solana glue on top of Increment A, using the modular solana-* stack
   real `(tree_id, leaf_index)` from the event into a per-shard `IncrementalTree`),
   reads summed `leaf_count`, and `prove()`s VALID_INPUT against the right shard.
 
-Remaining (validated only on a CVM, `docs/cvm-run-runbook.md`): the `run.rs`/CLI
-integration — `--real-settle` flags, pairing bid/ask real traders off pre-funded
-ATAs (collateral minting stays out-of-crate: `spl-token` reintroduces the ark
-zeroize conflict, so `devnet-setup` mints), assembling the order off the real
-proof, POSTing, and tracking the settle. The `merge-before-order` variant
-deposits 2 → merges → orders off the merged note. The TS `cvm-*` bucket
-(`cvm-settle-e2e.test.ts`, `cvm-merge-then-order.test.ts`) covers this end to end
-meanwhile.
+**`--real-settle` — DONE + validated live.** `run.rs` drives a REAL crossing
+pair through the live CVM: mints collateral (hand-built SPL MintTo +
+CreateIdempotentATA ixs — `spl.rs`, avoiding the `spl-token`/ark zeroize
+conflict), deposits a bid + ask note into shard 0 (co-shard inputs — a split
+fails lock, see cvm-multimatch), proves VALID_INPUT (Increment A), POSTs both
+orders, and watches the settle land.
+
+```sh
+cargo run -p nyx-tee-loadgen --features real-settle-chain -- \
+  --endpoint "$GW" --real-settle --rpc-url "$HELIUS" \
+  --admin-keypair .devnet/keypairs/admin.json \
+  --base-mint <hex32> --quote-mint <hex32> \
+  --oracle-twap "$ORACLE_RAW" --real-qty 2000 --fee-rate-bps 30 --real-num-trees 4
+```
+
+Validated 2026-06-17 on `tee-v3-hardening-29` (num_trees=4): **leaf_count 2 → 7**
+(note_c/d + buyer change + base & quote fee notes) — the Rust VALID_INPUT prover's
+proofs were accepted by the on-chain `lock_note`. The `merge-before-order` variant
++ multi-pair concurrency layer on the same blocks (the TS `cvm-merge-then-order`
+covers the merge flow). See `docs/cvm-run-runbook.md` for the bring-up.
 
 ---
 

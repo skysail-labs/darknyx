@@ -24,6 +24,21 @@ async fn main() -> Result<()> {
 
     let cfg = RunConfig::parse();
     cfg.validate()?;
+
+    // Real on-chain settle path (opt-in) — a single REAL crossing pair through
+    // the live CVM, not the synthetic load.
+    if cfg.real_settle {
+        #[cfg(feature = "real-settle-chain")]
+        {
+            use nyx_tee_loadgen::real_settle::run::{run_real_settle, RealSettleParams};
+            tracing::info!(endpoint = cfg.endpoint, "starting --real-settle round");
+            run_real_settle(RealSettleParams::from_config(&cfg)?).await?;
+            return Ok(());
+        }
+        #[cfg(not(feature = "real-settle-chain"))]
+        anyhow::bail!("--real-settle requires building with --features real-settle-chain");
+    }
+
     tracing::info!(
         endpoint = cfg.endpoint,
         traders = cfg.traders,
