@@ -35,6 +35,41 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
         .pool_max_idle_per_host(cfg.traders.max(8))
         .build()?;
 
+    let base_mint = cfg.base_mint_bytes()?;
+    let quote_mint = cfg.quote_mint_bytes()?;
+
+    // ─── 0. Status preflight — fail fast on a degraded / misconfigured CVM ──
+    if cfg.status_preflight {
+        let url = format!("{}/system/status", cfg.endpoint);
+        match http.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                let degraded = body
+                    .get("degraded")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                tracing::info!(
+                    degraded,
+                    matcher_running = ?body.get("matcher_running"),
+                    settle_enabled = ?body.get("settle_enabled"),
+                    current_slot = ?body.get("current_slot"),
+                    "preflight /system/status"
+                );
+                if degraded {
+                    anyhow::bail!(
+                        "CVM reports degraded (matcher/settle down) — aborting. \
+                         Pass --no-status-preflight to override."
+                    );
+                }
+            }
+            Ok(resp) => tracing::warn!(
+                status = %resp.status(),
+                "preflight /system/status non-200 (older CVM?); continuing"
+            ),
+            Err(e) => tracing::warn!(error = %e, "preflight /system/status failed; continuing"),
+        }
+    }
+
     // ─── 1. Bearer acquisition ────────────────────────────────────
     let bearers = match cfg.auth_mode {
         AuthMode::Shared => {
@@ -105,7 +140,14 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
 
     let mut handles = Vec::with_capacity(cfg.traders);
     for (idx, bearer) in bearers.into_iter().enumerate() {
-        let workload = make_workload(cfg.workload, cfg.oracle_twap, cfg.expiry_slot);
+        let workload = make_workload(
+            cfg.scenario,
+            cfg.oracle_twap,
+            cfg.expiry_slot,
+            cfg.symbol.clone(),
+            cfg.over_collateral_bps,
+            idx as u64,
+        );
         let ctx = TraderCtx {
             idx,
             http: http.clone(),
@@ -114,6 +156,8 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
             cancel_rate: cfg.cancel_rate,
             cfg: cfg_arc.clone(),
             metrics: metrics.clone(),
+            base_mint,
+            quote_mint,
         };
         handles.push(tokio::spawn(trader_task(ctx, workload, deadline)));
     }

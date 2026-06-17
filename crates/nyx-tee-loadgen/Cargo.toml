@@ -2,7 +2,7 @@
 name = "nyx-tee-loadgen"
 version.workspace = true
 edition.workspace = true
-description = "Dev-only synthetic traffic generator for nyx-tee. Drives POST /orders / DELETE /orders / GET /orders against a running TEE (local-simulator or Phala devnet) and reports submit / match / cancel latency percentiles + sustained throughput. See docs/tee-architecture.md §13.4 for design rationale + the 90/5/5 dev-loop split this fits into."
+description = "End-to-end testing harness for nyx-tee. Drives a configurable synthetic workload (scenarios: uniform / exact-match / partial-fill / ioc-fok / over-collateral; configurable mints + symbol + traders) against a running TEE (local-simulator or Phala devnet), with /system/status preflight, rate-limit-aware (429) backoff, optional order-lifecycle polling, and submit / match / cancel latency-percentile + throughput reporting. Real on-chain settle is the planned --real-settle mode (see BENCHMARK.md). See docs/tee-architecture.md §13.4 for design rationale."
 
 [[bin]]
 name = "nyx-tee-loadgen"

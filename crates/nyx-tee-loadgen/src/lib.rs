@@ -32,6 +32,6 @@ pub mod run;
 pub mod trader;
 pub mod workload;
 
-pub use config::{AuthMode, RunConfig, WorkloadKind};
+pub use config::{AuthMode, RunConfig, Scenario};
 pub use metrics::RunMetrics;
 pub use run::run_load_gen;

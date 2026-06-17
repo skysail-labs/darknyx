@@ -42,6 +42,10 @@ pub struct TraderCtx {
     pub cancel_rate: f64,
     pub cfg: Arc<RunConfig>,
     pub metrics: Arc<RunMetrics>,
+    /// ASK-side collateral mint (parsed from `--base-mint`).
+    pub base_mint: [u8; 32],
+    /// BID-side collateral mint (parsed from `--quote-mint`).
+    pub quote_mint: [u8; 32],
 }
 
 pub async fn trader_task(ctx: TraderCtx, mut workload: Box<dyn Workload>, deadline: TokioInstant) {
@@ -110,6 +114,9 @@ pub async fn trader_task(ctx: TraderCtx, mut workload: Box<dyn Workload>, deadli
             arrival_nonce,
             &intent.symbol,
             ctx.cfg.fee_rate_bps,
+            &ctx.base_mint,
+            &ctx.quote_mint,
+            intent.collateral_surplus_bps,
         );
         arrival_nonce = arrival_nonce.wrapping_add(1);
 
@@ -121,6 +128,12 @@ pub async fn trader_task(ctx: TraderCtx, mut workload: Box<dyn Workload>, deadli
                 recent_order_ids.pop_front();
             }
             recent_order_ids.push_back(order_id);
+
+            // Observability: sample a fraction of accepted orders and read
+            // their lifecycle via GET /orders/{id} (open/partial/filled).
+            if ctx.cfg.poll_orders > 0.0 && rng.gen_bool(ctx.cfg.poll_orders.clamp(0.0, 1.0)) {
+                run_poll(&ctx, order_id).await;
+            }
         }
     }
 }
@@ -141,6 +154,19 @@ async fn run_submit(ctx: &TraderCtx, body: &serde_json::Value) -> SubmitOutcome 
             let status = resp.status();
             if status.is_success() {
                 SubmitOutcome::Ok
+            } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                // Respect the rate limiter's Retry-After so the loadgen measures
+                // throughput, not an error storm. Cap the backoff so a huge
+                // header value can't stall the whole run.
+                let retry = resp
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or(1)
+                    .clamp(1, 5);
+                tokio::time::sleep(std::time::Duration::from_secs(retry)).await;
+                SubmitOutcome::RateLimited
             } else if status.is_client_error() {
                 SubmitOutcome::Status4xx
             } else {
@@ -152,6 +178,25 @@ async fn run_submit(ctx: &TraderCtx, body: &serde_json::Value) -> SubmitOutcome 
     ctx.metrics.note_submit(outcome);
     ctx.metrics.record_submit_latency_us(elapsed_us).await;
     outcome
+}
+
+/// Best-effort lifecycle read of a placed order (`GET /orders/{id}`). Records the
+/// round-trip latency into the submit histogram's sibling stream is overkill, so
+/// we just log at debug — the value is confirming the order is observable, not a
+/// new latency number. Never fails the run.
+async fn run_poll(ctx: &TraderCtx, order_id: [u8; 16]) {
+    let url = format!("{}/orders/{}", ctx.endpoint, hex::encode(order_id));
+    if let Ok(resp) = ctx.http.get(&url).bearer_auth(&ctx.bearer).send().await {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        tracing::debug!(
+            trader = ctx.idx,
+            order = %hex::encode(order_id),
+            %status,
+            "poll /orders/{{id}}: {}",
+            body.chars().take(160).collect::<String>(),
+        );
+    }
 }
 
 async fn run_cancel(

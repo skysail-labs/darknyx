@@ -42,9 +42,53 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 30, value_name = "SECONDS")]
     pub duration_secs: u64,
 
-    /// Workload distribution.
-    #[arg(long, value_enum, default_value_t = WorkloadKind::Uniform)]
-    pub workload: WorkloadKind,
+    /// Order-shape scenario the workload generates. Steers intake +
+    /// matcher coverage across the spectrum from "never crosses" to
+    /// "high partial-fill / anchor-rotation pressure". See [`Scenario`].
+    #[arg(long, value_enum, default_value_t = Scenario::Uniform, alias = "workload")]
+    pub scenario: Scenario,
+
+    /// Base-mint (32-byte hex, no 0x). The ASK side's collateral mint;
+    /// the synthetic note opening is derived against it, so it MUST match
+    /// the CVM's base mint (placeholder `…b1` for a `from_boot` CVM, or the
+    /// e2e-config base mint for a real-mint CVM). Default = placeholder.
+    #[arg(
+        long,
+        default_value = "01000000000000000000000000000000000000000000000000000000000000b1"
+    )]
+    pub base_mint: String,
+
+    /// Quote-mint (32-byte hex, no 0x). The BID side's collateral mint.
+    /// Default = the `from_boot` placeholder quote mint (`…9e`).
+    #[arg(
+        long,
+        default_value = "010000000000000000000000000000000000000000000000000000000000009e"
+    )]
+    pub quote_mint: String,
+
+    /// Market symbol every order carries. Must match a CVM instrument.
+    #[arg(long, default_value = "SOL-USDC")]
+    pub symbol: String,
+
+    /// Over-collateralization surplus (bps of the required collateral) for
+    /// the `over-collateral` scenario: the order declares a `collateral_amount`
+    /// this much above the fee-inclusive minimum, so intake accepts note ≥
+    /// required and the matcher returns the surplus as change. Ignored by the
+    /// other scenarios. Default 2000 = +20%.
+    #[arg(long, default_value_t = 2000)]
+    pub over_collateral_bps: u16,
+
+    /// Preflight `GET /system/status` before firing: abort if the CVM is
+    /// `degraded` (matcher/settle down) so a misconfigured target fails fast
+    /// instead of producing a 0-match run. `--no-status-preflight` to skip.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub status_preflight: bool,
+
+    /// Poll `GET /orders/{id}` for a sampled fraction of placed orders to
+    /// track lifecycle (open/partially_filled/filled) beyond the POST ack.
+    /// `0.0` (default) disables polling; `0.1` polls ~10% of accepted orders.
+    #[arg(long, default_value_t = 0.0)]
+    pub poll_orders: f64,
 
     /// Probability a placed order gets cancelled before fill,
     /// in `[0.0, 1.0]`. `0.20` ≈ real-world darkpool flow.
@@ -128,12 +172,27 @@ pub struct RunConfig {
     pub expiry_slot: u64,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum WorkloadKind {
-    /// Side coin-flip; price drawn uniformly in `oracle_twap *
-    /// [0.95, 1.05]`; size lognormal around `1.0 SOL`. This is
-    /// the default for v1 and the only variant implemented.
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum Scenario {
+    /// Side coin-flip; price uniform in `oracle_twap × [0.95, 1.05]`;
+    /// size lognormal around `1.0 SOL`. Broad intake/throughput load;
+    /// crosses only when a bid happens to sit above an ask.
     Uniform,
+    /// Deterministic crossing pairs at the oracle midpoint, equal size,
+    /// alternating bid/ask — every consecutive pair fully matches. Drives
+    /// the matcher's batch path (and the settle-attempt path) hard.
+    ExactMatch,
+    /// Like `exact-match` but bids are 2× the ask size, so each match
+    /// leaves a residual that relocks onto an anchor — stresses the
+    /// continuation/anchor-rotation path at a high rate.
+    PartialFill,
+    /// Crossing pairs whose orders are a mix of `limit`/`ioc`/`fok` —
+    /// exercises the immediate-or-cancel / fill-or-kill execution policies.
+    IocFok,
+    /// `exact-match` shape, but each order declares a `collateral_amount`
+    /// `--over-collateral-bps` above the minimum, so intake takes the
+    /// over-collateral path and the matcher returns the surplus as change.
+    OverCollateral,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -168,6 +227,16 @@ impl RunConfig {
         self.traders as f64 * self.orders_per_trader_per_sec
     }
 
+    /// Parse `--base-mint` into 32 bytes.
+    pub fn base_mint_bytes(&self) -> anyhow::Result<[u8; 32]> {
+        parse_mint(&self.base_mint, "--base-mint")
+    }
+
+    /// Parse `--quote-mint` into 32 bytes.
+    pub fn quote_mint_bytes(&self) -> anyhow::Result<[u8; 32]> {
+        parse_mint(&self.quote_mint, "--quote-mint")
+    }
+
     /// Reject nonsensical CLI values at the parse boundary so they
     /// never reach the run loop (where they'd silently produce
     /// garbage benchmark numbers rather than a clear error).
@@ -187,6 +256,25 @@ impl RunConfig {
         if self.traders == 0 {
             anyhow::bail!("--traders must be > 0");
         }
+        if !(0.0..=1.0).contains(&self.poll_orders) {
+            anyhow::bail!(
+                "--poll-orders must be a probability in [0, 1] (got {})",
+                self.poll_orders
+            );
+        }
+        // Surface a bad mint at the parse boundary, not mid-run.
+        self.base_mint_bytes()?;
+        self.quote_mint_bytes()?;
         Ok(())
     }
+}
+
+/// Parse a 32-byte hex mint (no `0x`), erroring with the flag name.
+fn parse_mint(s: &str, flag: &str) -> anyhow::Result<[u8; 32]> {
+    let bytes = hex::decode(s.trim_start_matches("0x"))
+        .map_err(|e| anyhow::anyhow!("{flag}: not valid hex ({e})"))?;
+    let arr: [u8; 32] = bytes
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow::anyhow!("{flag}: need 32 bytes, got {}", v.len()))?;
+    Ok(arr)
 }

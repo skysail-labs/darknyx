@@ -41,10 +41,12 @@ pub async fn render_markdown(inputs: ReportInputs<'_>) -> String {
         inputs.cfg.aggregate_target_rate()
     );
     let _ = writeln!(out, "| duration | {}s |", inputs.cfg.duration_secs);
-    let _ = writeln!(out, "| workload | {:?} |", inputs.cfg.workload);
+    let _ = writeln!(out, "| scenario | {:?} |", inputs.cfg.scenario);
+    let _ = writeln!(out, "| symbol | `{}` |", inputs.cfg.symbol);
     let _ = writeln!(out, "| cancel_rate | {:.2} |", inputs.cfg.cancel_rate);
     let _ = writeln!(out, "| auth_mode | {:?} |", inputs.cfg.auth_mode);
     let _ = writeln!(out, "| oracle_twap | {} |", inputs.cfg.oracle_twap);
+    let _ = writeln!(out, "| fee_rate_bps | {} |", inputs.cfg.fee_rate_bps);
     let _ = writeln!(out);
 
     let _ = writeln!(out, "## Throughput\n");
@@ -97,6 +99,7 @@ fn render_submit_table(c: &CounterSnapshot) -> String {
          |---|---|---|\n\
          | 2xx accepted | {} | {:.2}% |\n\
          | 4xx client error | {} | {:.2}% |\n\
+         | ↳ 429 rate-limited | {} | {:.2}% |\n\
          | 5xx server error | {} | {:.2}% |\n\
          | network error | {} | {:.2}% |\n\
          | **success rate** | | **{:.2}%** |",
@@ -104,6 +107,8 @@ fn render_submit_table(c: &CounterSnapshot) -> String {
         pct(c.submits_ok, total),
         c.submits_4xx,
         pct(c.submits_4xx, total),
+        c.submits_429,
+        pct(c.submits_429, total),
         c.submits_5xx,
         pct(c.submits_5xx, total),
         c.submits_neterr,

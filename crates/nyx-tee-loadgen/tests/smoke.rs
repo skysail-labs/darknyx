@@ -27,7 +27,7 @@ use darkpool_matcher::match_result::RunBatchOutput;
 use nyx_tee::api::{build_router, ApiState};
 use nyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
 use nyx_tee::oracle::OracleCache;
-use nyx_tee_loadgen::config::{AuthMode, RunConfig, WorkloadKind};
+use nyx_tee_loadgen::config::{AuthMode, RunConfig, Scenario};
 use nyx_tee_loadgen::run_load_gen;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, RwLock};
@@ -109,7 +109,14 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         traders: 10,
         orders_per_trader_per_sec: 5.0,
         duration_secs: 5,
-        workload: WorkloadKind::Uniform,
+        scenario: Scenario::Uniform,
+        // Placeholder dev mints (the in-process matcher's dev_match_config).
+        base_mint: "01000000000000000000000000000000000000000000000000000000000000b1".to_string(),
+        quote_mint: "010000000000000000000000000000000000000000000000000000000000009e".to_string(),
+        symbol: "SOL-USDC".to_string(),
+        over_collateral_bps: 2000,
+        status_preflight: false,
+        poll_orders: 0.0,
         cancel_rate: 0.20,
         auth_mode: AuthMode::PerTrader,
         feed_id: FEED_ID.to_string(),
@@ -144,10 +151,26 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         "expected ≥ 50 total submits over 5s × 10 × 5/s; got {}",
         counters.submits_total
     );
-    let success_rate = counters.submit_success_rate();
+    // All 10 traders authenticate as the SAME account, so the per-account rate
+    // limiter (added in the API-hardening phase) throttles part of the 50/s
+    // flood with 429s — that's the limiter working as designed, NOT a loadgen
+    // failure (the trader backs off on Retry-After). So exclude 429s from the
+    // success metric, but DO assert there are no OTHER (real intake) 4xx — a
+    // commitment/nonce/auth regression would show up there.
+    let real_4xx = counters.submits_4xx.saturating_sub(counters.submits_429);
+    assert_eq!(
+        real_4xx, 0,
+        "unexpected non-429 client errors ({real_4xx}) — an intake regression? see counters above"
+    );
+    let non_throttled = counters.submits_total.saturating_sub(counters.submits_429);
+    let success_rate = if non_throttled > 0 {
+        counters.submits_ok as f64 / non_throttled as f64
+    } else {
+        0.0
+    };
     assert!(
         success_rate >= 0.95,
-        "submit success rate {:.2}% below 95% — see counters above",
+        "non-throttled submit success rate {:.2}% below 95% — see counters above",
         100.0 * success_rate
     );
 

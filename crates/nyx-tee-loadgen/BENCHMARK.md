@@ -5,6 +5,69 @@
 > template / run-protocol reference is preserved, commented out, at the
 > bottom of this file.
 
+---
+
+## Harness v2 — scenarios, configurable market, observability
+
+The loadgen is the synthetic-load half of the e2e harness: it stresses **intake
++ the matcher** (batching, paging, anchor rotation, execution policy). Synthetic
+orders carry stub VALID_INPUT proofs, so a *match* attempts to settle but the
+on-chain lock fails — settle is NOT exercised here (that's `--real-settle`, below).
+
+**Scenarios** (`--scenario`, default `uniform`):
+
+| Scenario | Order shape | Stresses |
+|---|---|---|
+| `uniform` | side coin-flip; price in `twap × [0.95,1.05]`; lognormal size | broad intake throughput; crosses by chance |
+| `exact-match` | alternating bid/ask at the midpoint, equal size | matcher batch path — every pair fully matches |
+| `partial-fill` | `exact-match` but bids are 2× the ask size | continuation / anchor-rotation at a high rate |
+| `ioc-fok` | `exact-match` with order_type cycling limit/ioc/fok | IOC / FOK execution policies |
+| `over-collateral` | `exact-match`; declares `collateral_amount` `--over-collateral-bps` above min | intake's over-collateral path + surplus-as-change |
+
+**Configurable market:** `--base-mint`/`--quote-mint` (32-byte hex) +`--symbol`.
+Must match the target CVM's regime — placeholder mints (`…b1`/`…9e`, the default)
+for a `from_boot` CVM, or the `.devnet/e2e-config.json` mints for a real-mint CVM.
+`--fee-rate-bps` MUST equal the CVM's `NYX_TEE_FEE_RATE_BPS`.
+
+**Observability:**
+- `--status-preflight` (default on): `GET /system/status` before firing; aborts if
+  the CVM is `degraded`. `--no-status-preflight` to override.
+- 429 backoff: the trader respects the rate limiter's `Retry-After` and the report
+  breaks out the `↳ 429 rate-limited` subset of 4xx — so a flood measures
+  throughput, not an error storm.
+- `--poll-orders <0..1>`: sample a fraction of accepted orders for a
+  `GET /orders/{id}` lifecycle read (logged at debug).
+
+Example (placeholder-mint CVM, partial-fill stress, 20 traders):
+
+```sh
+RAW=$(curl -s "https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d" | jq -r '.parsed[0].price.price')
+cargo run -q -p nyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
+  --scenario partial-fill --fee-rate-bps 30 --traders 20 --duration-secs 25 --poll-orders 0.1
+```
+
+## Roadmap — `--real-settle` (opt-in real on-chain settle)
+
+The Hybrid harness's second half: a small N of **real-note traders** that deposit
+on-chain, prove a real VALID_INPUT, POST a crossing order, and track the on-chain
+settle (leaf-count growth / `TradeSettled`) — the loadgen analogue of
+`cvm-settle-e2e`, plus a `merge-before-order` variant. Not yet wired; it needs:
+
+1. A Solana client + the vault ix builders behind a **`real-settle` cargo feature**
+   (keeps the synthetic build lean — no solana-client in the default build).
+2. A **Rust VALID_INPUT prover** — none exists yet (the TEE proves
+   VALID_MATCH_BATCH; clients prove VALID_INPUT via snarkjs). The path is
+   `ark-circom` against `circuits/build/valid_input` (the crate already pulls
+   `ark-circom`/`ark-groth16`), mirroring the SDK's `proveValidInput`.
+3. Deposit + per-shard Merkle-shadow witness + settle-tracking, mirroring
+   `packages/sdk/tests/helpers/cvm-harness.ts`.
+
+Until then, real settle is validated by the TS `cvm-*` bucket
+(`packages/sdk/tests/cvm-settle-e2e.test.ts`, `cvm-merge-then-order.test.ts`).
+Run it via `docs/cvm-run-runbook.md`.
+
+---
+
 # nyx-tee-loadgen benchmark
 
 ## Run configuration

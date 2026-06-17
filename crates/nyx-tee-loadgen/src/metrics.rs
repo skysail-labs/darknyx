@@ -26,6 +26,9 @@ pub struct RunMetrics {
     pub submits_total: AtomicU64,
     pub submits_ok: AtomicU64,
     pub submits_4xx: AtomicU64,
+    /// Subset of 4xx that were `429 Too Many Requests` (the rate limiter).
+    /// Counted in BOTH `submits_4xx` and here so the report can call them out.
+    pub submits_429: AtomicU64,
     pub submits_5xx: AtomicU64,
     pub submits_neterr: AtomicU64,
 
@@ -49,6 +52,7 @@ impl RunMetrics {
             submits_total: AtomicU64::new(0),
             submits_ok: AtomicU64::new(0),
             submits_4xx: AtomicU64::new(0),
+            submits_429: AtomicU64::new(0),
             submits_5xx: AtomicU64::new(0),
             submits_neterr: AtomicU64::new(0),
             cancels_total: AtomicU64::new(0),
@@ -92,6 +96,11 @@ impl RunMetrics {
         let bucket = match outcome {
             SubmitOutcome::Ok => &self.submits_ok,
             SubmitOutcome::Status4xx => &self.submits_4xx,
+            SubmitOutcome::RateLimited => {
+                // 429 is a 4xx; count it in both so totals stay consistent.
+                self.submits_4xx.fetch_add(1, Ordering::Relaxed);
+                &self.submits_429
+            }
             SubmitOutcome::Status5xx => &self.submits_5xx,
             SubmitOutcome::NetworkError => &self.submits_neterr,
         };
@@ -117,6 +126,7 @@ impl RunMetrics {
             submits_total: self.submits_total.load(Ordering::Relaxed),
             submits_ok: self.submits_ok.load(Ordering::Relaxed),
             submits_4xx: self.submits_4xx.load(Ordering::Relaxed),
+            submits_429: self.submits_429.load(Ordering::Relaxed),
             submits_5xx: self.submits_5xx.load(Ordering::Relaxed),
             submits_neterr: self.submits_neterr.load(Ordering::Relaxed),
             cancels_total: self.cancels_total.load(Ordering::Relaxed),
@@ -131,6 +141,8 @@ impl RunMetrics {
 pub enum SubmitOutcome {
     Ok,
     Status4xx,
+    /// `429 Too Many Requests` — the per-account rate limiter (code 1401).
+    RateLimited,
     Status5xx,
     NetworkError,
 }
@@ -147,6 +159,7 @@ pub struct CounterSnapshot {
     pub submits_total: u64,
     pub submits_ok: u64,
     pub submits_4xx: u64,
+    pub submits_429: u64,
     pub submits_5xx: u64,
     pub submits_neterr: u64,
     pub cancels_total: u64,

@@ -74,6 +74,9 @@ pub fn build_signed_place_body(
     arrival_nonce: u64,
     symbol: &str,
     fee_rate_bps: u16,
+    base_mint: &[u8; 32],
+    quote_mint: &[u8; 32],
+    collateral_surplus_bps: u16,
 ) -> serde_json::Value {
     let user_commitment = synthesised_user_commitment(key);
 
@@ -103,20 +106,17 @@ pub fn build_signed_place_body(
         OrderSide::Ask => amount,
     };
     let fee = ((nominal as u128) * (fee_rate_bps as u128) / 10_000u128) as u64;
-    let note_amount = nominal.saturating_add(fee).max(1);
+    let required = nominal.saturating_add(fee).max(1);
+    // Over-collateralization: a `collateral_amount` above the fee-inclusive
+    // minimum. `0` ⇒ exact (no explicit collateral_amount field; intake uses
+    // the derived required). The synthetic note opening is re-derived against
+    // `note_amount`, which MUST equal the declared collateral_amount.
+    let surplus = ((required as u128) * (collateral_surplus_bps as u128) / 10_000u128) as u64;
+    let note_amount = required.saturating_add(surplus);
+    // The ASK side locks BASE collateral; the BID side locks QUOTE.
     let token_mint: [u8; 32] = match side {
-        OrderSide::Bid => {
-            let mut m = [0u8; 32];
-            m[0] = 1;
-            m[31] = 0x9e; // quote_mint
-            m
-        }
-        OrderSide::Ask => {
-            let mut m = [0u8; 32];
-            m[0] = 1;
-            m[31] = 0xb1; // base_mint
-            m
-        }
+        OrderSide::Bid => *quote_mint,
+        OrderSide::Ask => *base_mint,
     };
     let owner_commitment = fr_safe_opening_field(&order_id, 0x01);
     let note_inner_hash = fr_safe_opening_field(&order_id, 0x02);
@@ -167,7 +167,7 @@ pub fn build_signed_place_body(
     let sig = key.sign(&digest);
     let trading_key = key.verifying_key().to_bytes();
 
-    serde_json::json!({
+    let mut body = serde_json::json!({
         "symbol": symbol,
         "side": match side { OrderSide::Bid => "bid", OrderSide::Ask => "ask" },
         "order_type": match order_type {
@@ -196,7 +196,16 @@ pub fn build_signed_place_body(
             "inner_hash": hex::encode(a.inner_hash),
             "nullifier": hex::encode(a.nullifier),
         })).collect::<Vec<_>>(),
-    })
+    });
+
+    // Over-collateral: declare the surplus collateral so intake takes the
+    // over-collateral path (note ≥ required). Omitted at surplus 0 so the
+    // exact-fill path stays byte-identical to before.
+    if surplus > 0 {
+        body["collateral_amount"] = serde_json::json!(note_amount);
+    }
+
+    body
 }
 
 /// JSON body for `DELETE /orders/{order_id}`. Same canonical
