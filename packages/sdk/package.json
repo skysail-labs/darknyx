@@ -12,6 +12,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:local": "vitest run --project local",
+    "test:devnet": "vitest run --project devnet",
+    "test:cvm": "vitest run --project cvm",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

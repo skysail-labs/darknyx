@@ -1,0 +1,13 @@
+{
+  // Type-checks the test suite (tests/ is NOT in the build tsconfig, which only
+  // emits src/). The CVM tests can only RUN against a live enclave, so this is
+  // the static safety net that catches a broken refactor without a deploy.
+  // `npm run -w packages/sdk typecheck:tests`.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "tests/**/*"]
+}
