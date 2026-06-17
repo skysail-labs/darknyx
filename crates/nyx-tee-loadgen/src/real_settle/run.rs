@@ -97,6 +97,35 @@ fn fr_safe(order_id: &[u8; 16], tag: u8) -> [u8; 32] {
     out
 }
 
+/// A per-run sub-second nonce (ms since epoch) — the salt that makes every
+/// run's `order_id`s (and thus its anchor `inner_hash`/`nullifier`s, which are
+/// `fr_safe(order_id, …)`) unique. Sub-second so back-to-back runs don't collide.
+fn run_nonce() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Build a unique `order_id`: `[run_nonce (8 LE) | order index (8 LE)]`.
+///
+/// CRITICAL: the anchor pool is `fr_safe(order_id, …)`, and a partial fill's
+/// continuation residual note takes its nullifier DIRECTLY from a consumed
+/// anchor (the matcher's `assign_continuation_anchors`). That nullifier is
+/// registered on-chain as a `NullifierEntry` PDA, which is the permanent
+/// replay-protection backbone and is NOT cleared by `reset-merkle-tree.mjs`.
+/// So a fixed (index-only) `order_id` reuses the same anchor nullifiers every
+/// run → the SECOND run's continuation settle hits `Allocate: already in use`
+/// (custom error 0) on that `NullifierEntry`, which cascades to `3007` on the
+/// next continuation batch. Folding `run_nonce()` in makes each run's anchors
+/// fresh. (Personas were already salted; the anchors/`order_id` were the gap.)
+fn salted_order_id(nonce: u64, index: u64) -> [u8; 16] {
+    let mut oid = [0u8; 16];
+    oid[..8].copy_from_slice(&nonce.to_le_bytes());
+    oid[8..16].copy_from_slice(&index.to_le_bytes());
+    oid
+}
+
 /// A trader's keys for one order.
 struct Persona {
     spending_key: Fr,
@@ -328,8 +357,11 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
     let buyer_proof = harness.prove(&buyer.spending_key, &buyer.owner_blinding, &buyer_note)?;
     let seller_proof = harness.prove(&seller.spending_key, &seller.owner_blinding, &seller_note)?;
 
-    // 4. Build + sign both orders.
+    // 4. Build + sign both orders. Salt the order_ids per run (see
+    // `salted_order_id`): even though this single-pair path is exact-fill (no
+    // anchors consumed), fixed order_ids are a latent cross-run collision.
     let expiry_slot = rpc.slot().await? + 50_000;
+    let pair_nonce = run_nonce();
     let buyer_order = build_order_body(
         &buyer,
         OrderSide::Bid,
@@ -337,7 +369,7 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
         bid_price,
         &buyer_note,
         &buyer_proof,
-        [0x0b; 16],
+        salted_order_id(pair_nonce, 0),
         p.qty,
         expiry_slot,
         &p.symbol,
@@ -349,7 +381,7 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
         ask_price,
         &seller_note,
         &seller_proof,
-        [0x05; 16],
+        salted_order_id(pair_nonce, 1),
         p.qty,
         expiry_slot,
         &p.symbol,
@@ -860,11 +892,10 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         .await
         .map_err(|e| anyhow!("auth: {e}"))?;
     let expiry_slot = rpc.slot().await? + 50_000;
+    let submit_nonce = run_nonce();
     let mut bodies = Vec::with_capacity(orders.len());
     for (i, o) in orders.iter().enumerate() {
-        let mut oid = [0u8; 16];
-        oid[..8].copy_from_slice(&(i as u64).to_le_bytes());
-        oid[15] = 1;
+        let oid = salted_order_id(submit_nonce, i as u64);
         bodies.push(build_order_body(
             &o.persona,
             o.side,
