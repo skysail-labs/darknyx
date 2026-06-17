@@ -38,20 +38,51 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
     token = await authToken(GATEWAY);
   });
 
-  it("error envelope: a malformed POST /orders → {code,message} + x-request-id", async () => {
+  /** A COMPLETE, serde-valid PlaceOrderRequest (so it passes axum's JSON
+   *  extraction and reaches the handler), with one deliberately bad field via
+   *  `overrides` to trigger an `ApiError` (the {code,message} envelope) rather
+   *  than axum's default extraction rejection. */
+  function dummyOrderBody(overrides: Record<string, unknown> = {}) {
+    const z32 = "00".repeat(32);
+    return {
+      symbol: "SOL-USDC",
+      side: "bid",
+      order_type: "limit",
+      amount: 1,
+      price_limit: 1,
+      min_fill_size: 0,
+      expiry_slot: 1,
+      order_id: "0102030405060708090a0b0c0d0e0f10",
+      note_commitment: z32,
+      user_commitment: z32,
+      arrival_nonce: 1,
+      trading_key: z32,
+      trading_key_signature: "00".repeat(64),
+      owner_commitment: z32,
+      note_inner_hash: z32,
+      nullifier: z32,
+      merkle_root: z32,
+      valid_input_proof: "00".repeat(256),
+      anchors: Array.from({ length: 10 }, () => ({
+        inner_hash: z32,
+        nullifier: z32,
+      })),
+      ...overrides,
+    };
+  }
+
+  it("error envelope: a handler-rejected POST /orders → {code,message} + x-request-id", async () => {
     const res = await gwFetch(`${GATEWAY}/orders`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${token}`,
       },
-      // Structurally invalid (bad hex / missing fields) → rejected at intake
-      // validation with a 4xx error code, before any proof work.
-      body: JSON.stringify({ symbol: "SOL-USDC", side: "bid", note_commitment: "zz" }),
+      // Complete body, but valid_input_proof is the wrong length → the handler's
+      // decode_hex rejects it with a numeric code (after serde extraction).
+      body: JSON.stringify(dummyOrderBody({ valid_input_proof: "00" })),
     });
-    expect(res.status, "malformed order should be a 4xx").toBeGreaterThanOrEqual(
-      400,
-    );
+    expect(res.status, "bad order should be a 4xx").toBeGreaterThanOrEqual(400);
     expect(res.status).toBeLessThan(500);
     expect(
       res.headers.get("x-request-id"),

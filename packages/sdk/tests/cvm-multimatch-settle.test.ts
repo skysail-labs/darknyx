@@ -197,29 +197,22 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
         [admin],
       );
 
-      // Deposit all 2M notes, round-robined across shards. The harness recovers
-      // each note's real (tree_id, leaf_index) from its NoteCreated event and
-      // mirrors into that shard's shadow, so the witness is shard-correct.
+      // Deposit all 2M notes into shard 0. A batch's INPUT notes must be
+      // co-shard: the order body carries no tree_id, so the settle's lock_note
+      // can't route per-note to different shards — inputs split across shards
+      // fail lock with StaleMerkleRoot (6004). The harness still recovers each
+      // note's (tree_id, leaf_index) from its event + mirrors into shadows[0],
+      // and leaf_count() sums across shards — so the settle OUTPUTS, which DO
+      // round-robin across the K shards (the on-chain scaling this test
+      // measures), are still counted correctly.
       const buyerNotes: DepositedNote[] = [];
       const sellerNotes: DepositedNote[] = [];
       for (let i = 0; i < MATCHES; i++) {
         buyerNotes.push(
-          await harness.deposit(
-            buyer,
-            quoteMint,
-            buyerQuoteAta,
-            buyerNoteAmts[i],
-            (2 * i) % numTrees,
-          ),
+          await harness.deposit(buyer, quoteMint, buyerQuoteAta, buyerNoteAmts[i], 0),
         );
         sellerNotes.push(
-          await harness.deposit(
-            seller,
-            baseMint,
-            sellerBaseAta,
-            sellerNoteAmts[i],
-            (2 * i + 1) % numTrees,
-          ),
+          await harness.deposit(seller, baseMint, sellerBaseAta, sellerNoteAmts[i], 0),
         );
       }
       const depositCount = await harness.leafCount();
