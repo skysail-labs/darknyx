@@ -108,6 +108,24 @@ image -20/-21 — prior image, same box class, label accordingly):
    (GPU/parallel witness, or a faster witness backend) as the immediate follow-on, or the prove
    speedup is capped at ~1.7×. This is the single most important number for the GPU roadmap.
 
+### Witness-gen optimization — Steps 0→2 (revamp_proving, 2026-06-18)
+
+Attacked the witness floor above (finding #3) in two shipped steps:
+
+| step | what | witness-gen (N=16) | how validated |
+|---|---|---|---|
+| baseline | ark-circom in wasmer, `CircomConfig` rebuilt per prove | ~2.1 s (CVM) | — |
+| **Step 0** | cache the compiled wasm + r1cs (`Mutex<CircomConfig>`, reused) | local arm64 669→**322 ms** (−52%; removes the per-call ~350 ms wasm recompile) | n16 prove+verify |
+| **Step 1** | amd64 CI bench: native circom `--c` C++ gen vs WASM | native **94 ms** vs node-wasm 1676 ms = **17.8×**, witnesses byte-identical | `.github/workflows/witness-bench.yml` |
+| **Step 2** | ship the native gen in the image; `NYX_TEE_WITNESS=native` (now default) | **CVM `witness_ms`=201** (vs ~1.7–2.1 s wasmer = **~8–10×**) | CVM real-settle: 4/4 batch settled clean, on-chain verify passed → witness byte-correct |
+
+The native generator is built on debian:bookworm in CI (glibc/ABI match to the runtime) and
+ships with its `circuit.dat` constants; the prover spawns `<bin> input.json out.wtns`, reads the
+`.wtns`, and feeds rapidsnark. Default is now native with a wasmer fallback (warn) if the binary
+is absent. **Net effect on the compute floor:** witness ~2.1 s → **0.2 s**; pairing this with the
+future ICICLE prove (`prove_step` ~1.5 s → tens of ms) takes the per-batch compute from ~3.6 s
+toward **~0.25 s** — and witness-gen is no longer the Amdahl ceiling.
+
 > **✅ Partial-fill "continuation failure" — ROOT-CAUSED + FIXED + validated (it was a loadgen bug,
 > not the protocol, not the prover).** Symptom: B1 (3 continuation batches) settled **only batch 0**;
 > batch 1 failed `Custom 0` ("Allocate … already in use"), batch 2 `3007` (cascade), leaf 4→9.
