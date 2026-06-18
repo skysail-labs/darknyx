@@ -65,27 +65,31 @@ impl RapidsnarkMatchBatchProver {
 
         let cfg = load_circom_cfg(dir, n)?;
 
-        // Native witness generator (opt-in via NYX_TEE_WITNESS=native). The
-        // image ships the circom `--c` C++ binary at
-        // match_batch_n{n}/circuit_cpp/circuit (built on the amd64 CI runner).
-        let native_witness_bin = if std::env::var("NYX_TEE_WITNESS").as_deref() == Ok("native") {
+        // Witness generator: native (the circom `--c` C++ gen — DEFAULT) | wasm
+        // (wasmer). Native is CVM-validated + ~8-10× faster (witness_ms 201 vs
+        // ~1.7-2.1s); the image ships the binary at
+        // match_batch_n{n}/circuit_cpp/circuit. Fall back to wasmer (warn) if
+        // the binary is absent so a missing artifact DEGRADES rather than bricks
+        // boot; an explicit NYX_TEE_WITNESS=wasm forces wasmer.
+        let want = std::env::var("NYX_TEE_WITNESS").unwrap_or_default();
+        let native_witness_bin = if want == "wasm" {
+            tracing::info!("witness generator: wasmer (NYX_TEE_WITNESS=wasm)");
+            None
+        } else {
             let bin = dir
                 .join(format!("match_batch_n{n}"))
                 .join("circuit_cpp")
                 .join("circuit");
-            if !bin.exists() {
-                return Err(ProverError::Io(format!(
-                    "NYX_TEE_WITNESS=native but the native witness generator is missing at {}",
+            if bin.exists() {
+                tracing::info!(bin = %bin.display(), n, "native witness generator ENABLED");
+                Some(bin)
+            } else {
+                tracing::warn!(
+                    "native witness binary absent at {} — falling back to wasmer",
                     bin.display()
-                )));
+                );
+                None
             }
-            tracing::info!(bin = %bin.display(), n, "native witness generator ENABLED");
-            Some(bin)
-        } else {
-            tracing::info!(
-                "witness generator: wasmer (set NYX_TEE_WITNESS=native for the C++ gen)"
-            );
-            None
         };
 
         Ok(Self {
