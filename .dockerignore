@@ -27,6 +27,10 @@ circuits/build/*
 !circuits/build/match_batch_n16
 # circuit.sym (14 MB) is debug-only — the prover never reads it.
 circuits/build/match_batch_n16/circuit.sym
+# circuit_cpp/ is the native witness-gen SOURCE (32 MB circuit.cpp + .dat +
+# fr.asm); the image only needs the compiled `circuit` binary. Ship that one.
+circuits/build/match_batch_n16/circuit_cpp/*
+!circuits/build/match_batch_n16/circuit_cpp/circuit
 
 # rapidsnark vendored source (the `rapidsnark` prover backend). The
 # Dockerfile builds its static libs from this; CI checks it out with

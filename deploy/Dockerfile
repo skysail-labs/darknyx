@@ -151,11 +151,14 @@ FROM debian:bookworm-slim AS runtime
 # libstdc++6: the rapidsnark static libs (librapidsnark/fr/fq) are C++;
 #   gmp is linked statically but libstdc++ is dynamic, so the runtime needs
 #   the C++ runtime. (gmp itself adds NO runtime dep — it's static.)
+# libgmp10: the native circom `--c` witness generator (circuit_cpp/circuit,
+#   below) links gmp DYNAMICALLY (`-lgmp`), unlike the static rapidsnark libs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         tini \
         libstdc++6 \
         libgomp1 \
+        libgmp10 \
     && rm -rf /var/lib/apt/lists/*
 
 # Run as a non-root user. UID/GID are fixed so the volume mounts
@@ -183,6 +186,13 @@ COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit.r1cs \
      /circuits/build/match_batch_n16/circuit.r1cs
 COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit_js/circuit.wasm \
      /circuits/build/match_batch_n16/circuit_js/circuit.wasm
+
+# The native circom `--c` C++ witness generator (amd64 binary, built in CI from
+# `circom --c` + make on the runner). When NYX_TEE_WITNESS=native the prover
+# spawns this instead of wasmer (≈18× faster witness-gen; see witness-bench).
+# Gitignored + CI-built like the wasm/r1cs above.
+COPY --chown=nyx:nyx --chmod=755 circuits/build/match_batch_n16/circuit_cpp/circuit \
+     /circuits/build/match_batch_n16/circuit_cpp/circuit
 
 # Persistent state dir for the Phase-1b auth snapshot (accounts.db).
 # MUST be created + chowned to the runtime user BEFORE `USER nyx`: when

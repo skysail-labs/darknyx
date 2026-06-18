@@ -110,16 +110,26 @@ jobs:
       - name: npm ci (circomlib for circuit includes)
         run: npm ci
 
-      - name: Compile N=16 circuit (wasm + r1cs; zkey is committed)
+      - name: Native witness-gen toolchain (nasm + gmp + nlohmann)
+        run: sudo apt-get update && sudo apt-get install -y nasm libgmp-dev nlohmann-json3-dev
+
+      - name: Compile N=16 circuit (wasm + r1cs + C++ witness gen; zkey committed)
         run: |
+          # --wasm: the wasmer fallback path; --c: the native C++ witness
+          # generator (≈18× faster on amd64 — see witness-bench). r1cs feeds the
+          # cached CircomConfig. No ptau/zkey needed for any of these.
           circom circuits/match_batch_n16/circuit.circom \
-            --r1cs --wasm \
+            --r1cs --wasm --c \
             -l node_modules \
             -o circuits/build/match_batch_n16
+          # Build the native generator (amd64 binary; -O3 + fr.asm ADX). The
+          # 32MB circuit.cpp at -O3 takes a couple of minutes.
+          ( cd circuits/build/match_batch_n16/circuit_cpp && time make )
           echo "--- artifacts the Dockerfile will COPY ---"
           ls -lh circuits/build/match_batch_n16/circuit_final.zkey \
                  circuits/build/match_batch_n16/circuit.r1cs \
-                 circuits/build/match_batch_n16/circuit_js/circuit.wasm
+                 circuits/build/match_batch_n16/circuit_js/circuit.wasm \
+                 circuits/build/match_batch_n16/circuit_cpp/circuit
 
       - name: Build + push (linux/amd64)
         uses: docker/build-push-action@v6

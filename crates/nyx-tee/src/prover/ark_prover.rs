@@ -244,6 +244,43 @@ pub(crate) fn build_circom_and_check(
     Ok(circom)
 }
 
+/// Serialize the circuit inputs for `slots` to a circom `input.json` string
+/// (consumed by the native C++ witness generator). Reuses `push_all_inputs`
+/// so the inputs are byte-for-byte the SAME as the wasmer path feeds — the
+/// only scalar signal is `merkle_root` (emitted as a string); every other
+/// signal is a length-N array of decimal strings. Mirrors the TS
+/// `match-batch-prover.ts` inputs object exactly.
+#[cfg(feature = "rapidsnark")] // only the rapidsnark backend's native path uses it
+pub(crate) fn circom_input_json(
+    slots: &[MatchSlotWitness],
+    merkle_root: &[u8; 32],
+) -> Result<String, ProverError> {
+    let mut inputs: std::collections::HashMap<String, Vec<BigInt>> =
+        std::collections::HashMap::new();
+    push_all_inputs(&mut inputs, slots, merkle_root);
+
+    let mut obj = serde_json::Map::with_capacity(inputs.len());
+    for (name, vals) in inputs {
+        let value = if name == "merkle_root" {
+            // The circuit's single SCALAR public input → a bare string.
+            let v = vals
+                .first()
+                .ok_or_else(|| ProverError::WitnessGen("empty merkle_root input".into()))?;
+            serde_json::Value::String(v.to_str_radix(10))
+        } else {
+            // Array signal → list of decimal strings, one per slot.
+            serde_json::Value::Array(
+                vals.iter()
+                    .map(|b| serde_json::Value::String(b.to_str_radix(10)))
+                    .collect(),
+            )
+        };
+        obj.insert(name, value);
+    }
+    serde_json::to_string(&serde_json::Value::Object(obj))
+        .map_err(|e| ProverError::WitnessGen(format!("serialize circom input.json: {e}")))
+}
+
 /// Big-endian 32-byte encoding of a BN254 scalar-field element.
 fn fr_to_be32(fr: &Fr) -> [u8; 32] {
     let v = fr.into_bigint().to_bytes_be();
