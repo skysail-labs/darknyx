@@ -90,8 +90,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG ENABLE_CUDA=0
 ARG CUDA_ARCH=90
 ENV ICICLE_INSTALL_DIR=/build/icicle-install
+# `git` is required by the icicle CPU backend's cmake: backend/cpu/CMakeLists.txt
+# FetchContent's Taskflow v3.8.0 via GIT_REPOSITORY (a shallow clone) at configure
+# time. Kept in the ENABLE_CUDA block so the CPU/rapidsnark image (which never
+# compiles icicle) stays git-free. (Vendoring Taskflow for a hermetic build is a
+# follow-up, like the gmp-download TODO.)
 RUN if [ "$ENABLE_CUDA" = "1" ]; then \
-        apt-get update && apt-get install -y --no-install-recommends gnupg wget && \
+        apt-get update && apt-get install -y --no-install-recommends gnupg wget git && \
         wget -qO /tmp/cuda-keyring.deb \
           https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb && \
         dpkg -i /tmp/cuda-keyring.deb && rm /tmp/cuda-keyring.deb && \
