@@ -34,8 +34,10 @@ jobs:
           node-version: '20'
           cache: npm
 
-      - name: System deps (nasm + libgmp for the C++ generator)
-        run: sudo apt-get update && sudo apt-get install -y nasm libgmp-dev
+      - name: System deps (nasm + libgmp + nlohmann-json for the C++ generator)
+        # circom's --c main.cpp parses input.json via <nlohmann/json.hpp> and
+        # links gmp; fr.asm is assembled with nasm.
+        run: sudo apt-get update && sudo apt-get install -y nasm libgmp-dev nlohmann-json3-dev
 
       - name: npm ci (circomlib include path)
         run: npm ci
