@@ -35,6 +35,19 @@ fn main() {
     } else if cfg!(feature = "pull_cuda_backend") {
         config.define("CUDA_BACKEND", "main");
     }
+    // Forward an explicit CUDA arch so the cmake CUDA build does NOT fall back to
+    // `CMAKE_CUDA_ARCHITECTURES native` (Common.cmake set_gpu_env), which probes the
+    // live GPU and FAILS on a GPU-less build host (our CI image builder). The cmake
+    // honours `-DCUDA_ARCH` as the user override. NYX_ICICLE_CUDA_ARCH=90 => H200 /
+    // Hopper (sm_90). Unset => unchanged. (nyx-monorepo addition over upstream icicle.)
+    println!("cargo:rerun-if-env-changed=NYX_ICICLE_CUDA_ARCH");
+    if cfg!(any(feature = "cuda_backend", feature = "pull_cuda_backend")) {
+        if let Ok(arch) = env::var("NYX_ICICLE_CUDA_ARCH") {
+            if !arch.is_empty() {
+                config.define("CUDA_ARCH", arch);
+            }
+        }
+    }
     if cfg!(feature = "metal_backend") {
         config.define("METAL_BACKEND", "local");
     } else if cfg!(feature = "pull_metal_backend") {

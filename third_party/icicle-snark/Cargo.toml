@@ -18,3 +18,8 @@ clap = { version="4.5.23", features=["derive"] }
 [features]
 no-randomness=[]
 coset-gen=[]
+# Build + link the ICICLE CUDA backend (needs nvcc/CUDA toolkit at build; no GPU
+# required if NYX_ICICLE_CUDA_ARCH is set). icicle-runtime builds the device
+# backend .so; icicle-bn254 builds the bn254 field/curve CUDA .so. Both are
+# loaded at runtime from ICICLE_BACKEND_INSTALL_DIR. (nyx-monorepo addition.)
+cuda=["icicle-runtime/cuda_backend", "icicle-bn254/cuda_backend"]

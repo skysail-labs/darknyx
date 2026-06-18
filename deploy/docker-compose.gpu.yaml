@@ -1,0 +1,88 @@
+# docker-compose.gpu.yaml — the GPU (ICICLE CUDA) variant of docker-compose.yaml
+# for a Phala **H200 confidential-compute GPU CVM**.
+#
+# Why a SEPARATE file (not a flag on the base compose): `phala deploy -c <file>`
+# hashes ONE self-contained file into `compose_hash` (no override-merge), and the
+# `deploy.resources.reservations.devices: nvidia` block below BREAKS a deploy on a
+# non-GPU (plain TDX) host. So the CPU/rapidsnark image keeps using
+# docker-compose.yaml; this file is used ONLY for the GPU CVM.
+#
+# ⚠️ KEEP THE `environment:` BLOCK IN SYNC with docker-compose.yaml — the intake
+# config (mints / fee rate / owner commitment) must match the base, or real
+# deposits fail `verify_commitment`. The ONLY intended differences are: the
+# `image:` (a `-cuda` tag), the `deploy.resources` GPU block, and the
+# `NYX_TEE_ICICLE_DEVICE` default. See docker-compose.yaml for the full per-var
+# rationale (comments are terse here to keep the diff reviewable).
+#
+# Deploy (NEW cvm — different instance type → new app_id → new K-shard signers):
+#   phala deploy -n nyx-gpu -c deploy/docker-compose.gpu.yaml -e /tmp/nyx.env \
+#     -t h200.small --kms phala --wait
+# Then confirm CC mode:  phala ssh -- nvidia-smi conf-compute -q   # ConfComputeMode : ON
+# STOP after the session: phala cvms stop <app_id>   (H200 is ~$3.50/hr)
+
+services:
+  nyx-tee:
+    # The ICICLE CUDA image (built by tee-image.yml with ENABLE_CUDA=1 — a
+    # `-cuda`-suffixed tag). Bump per image iteration.
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-36-cuda
+    restart: unless-stopped
+
+    # GPU passthrough — Phala injects the NVIDIA driver (libcuda.so.1) via the
+    # nvidia container runtime; the image already ships libcudart/libcurand + the
+    # ICICLE CUDA backend .so. This block is what makes the H200 visible to the
+    # container; it is ALSO why this compose must not be deployed to a TDX-only CVM.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - nyx_state:/var/lib/nyx-tee
+
+    environment:
+      NYX_TEE_LOG: "info,nyx_tee::settle=debug,nyx_tee::oracle=info,nyx_tee::merkle=info"
+      NYX_TEE_HTTP_BIND: "0.0.0.0:8080"
+      NYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+      NYX_TEE_STATE_DIR: "/var/lib/nyx-tee"
+
+      # BOOTSTRAP admin (dev/bench) — throwaway test creds, argon2id-hashed on
+      # load, NOT a real secret. Same as the base compose.
+      NYX_TEE_API_KEY: "nyx-test-api-key"
+      NYX_TEE_API_SECRET: "nyx-test-secret"
+      NYX_TEE_PASSPHRASE: "nyx-test-passphrase"
+
+      # Secret + per-deploy values from the encrypted -e env (never hardcoded).
+      NYX_TEE_SOLANA_RPC_URL: ${NYX_TEE_SOLANA_RPC_URL}
+      NYX_TEE_SYNC_FROM_SLOT: ${NYX_TEE_SYNC_FROM_SLOT}
+      NYX_TEE_BASE_MINT: ${NYX_TEE_BASE_MINT}
+      NYX_TEE_QUOTE_MINT: ${NYX_TEE_QUOTE_MINT}
+      NYX_TEE_SETTLE_LOOKUP_TABLE: ${NYX_TEE_SETTLE_LOOKUP_TABLE}
+      NYX_TEE_FEE_RATE_BPS: ${NYX_TEE_FEE_RATE_BPS}
+      NYX_TEE_PROTOCOL_OWNER_COMMITMENT: ${NYX_TEE_PROTOCOL_OWNER_COMMITMENT}
+
+      # Prover backend. On the GPU CVM set NYX_TEE_PROVER=icicle (via -e) to
+      # exercise the GPU; flip to rapidsnark on the SAME image for the CPU
+      # baseline A/B. Defaults to rapidsnark so a misconfigured deploy still boots.
+      NYX_TEE_PROVER: ${NYX_TEE_PROVER:-rapidsnark}
+
+      # Witness generator: native (default) | wasm. Same native circom --c gen as
+      # the CPU image (witness gen is GPU-independent).
+      NYX_TEE_WITNESS: ${NYX_TEE_WITNESS:-native}
+
+      # ICICLE compute device. Defaults to CUDA here (this is the GPU compose);
+      # the backend .so is loaded from ICICLE_BACKEND_INSTALL_DIR (baked in the
+      # image). Set NYX_TEE_ICICLE_DEVICE=CPU to A/B icicle-CPU on the same image.
+      NYX_TEE_ICICLE_DEVICE: ${NYX_TEE_ICICLE_DEVICE:-CUDA}
+
+      NYX_TEE_SETTLE_SEND_CONCURRENCY: ${NYX_TEE_SETTLE_SEND_CONCURRENCY:-16}
+      NYX_TEE_NUM_TREES: ${NYX_TEE_NUM_TREES:-1}
+
+    ports:
+      - "8080:8080"
+
+volumes:
+  nyx_state:

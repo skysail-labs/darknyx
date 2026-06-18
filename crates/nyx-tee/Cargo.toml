@@ -194,6 +194,13 @@ rapidsnark = []
 # Witness gen stays shared (native circom --c / wasmer); only the PROVE differs.
 # `dep:icicle-snark` keeps the heavy cmake build OUT of default/`rapidsnark` builds.
 icicle = ["dep:icicle-snark"]
+# The ICICLE CUDA backend (Phase 2). Implies `icicle` and builds icicle-snark's
+# CUDA backend (.so loaded at runtime from ICICLE_BACKEND_INSTALL_DIR). Needs the
+# CUDA toolkit at build time (nvcc; no GPU if NYX_ICICLE_CUDA_ARCH is set) and
+# libcudart/libcurand + the backend .so in the runtime image. The Dockerfile's
+# ENABLE_CUDA=1 path builds `--features rapidsnark,icicle-cuda`; default builds
+# never pull it. Runtime device is still chosen by NYX_TEE_ICICLE_DEVICE=CUDA.
+icicle-cuda = ["icicle", "icicle-snark/cuda"]
 # Mounts `POST /__debug/oracle/seed`, used by `nyx-tee-loadgen`
 # for deterministic local-simulator runs (no real Hermes traffic
 # required). MUST be off in any production build — there's no

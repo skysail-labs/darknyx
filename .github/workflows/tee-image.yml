@@ -41,6 +41,11 @@ on:
         description: "Image tag to push (e.g. tee-v3-spot)"
         required: true
         default: "tee-v3-spot"
+      enable_cuda:
+        description: "Build the ICICLE CUDA (GPU) image instead of the CPU one"
+        type: boolean
+        required: false
+        default: false
   push:
     tags:
       - "tee-*"
@@ -85,10 +90,23 @@ jobs:
           else
             tag="${{ inputs.tag }}"
           fi
+          # CUDA (GPU) image vs CPU image. Triggered by a `-cuda`-suffixed git tag
+          # OR the workflow_dispatch toggle. The image tag carries the suffix, so
+          # CPU and CUDA images coexist (A/B). The CUDA build uses a SEPARATE build
+          # cache so its multi-GB CUDA-toolkit layer doesn't evict the CPU cache.
+          enable_cuda=0
+          case "$tag" in *-cuda) enable_cuda=1 ;; esac
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && \
+             [ "${{ inputs.enable_cuda }}" = "true" ]; then
+            enable_cuda=1
+          fi
+          cache_suffix=""
+          [ "$enable_cuda" = "1" ] && cache_suffix="-cuda"
           echo "image=ghcr.io/${owner_lc}/nyx-tee:${tag}" >> "$GITHUB_OUTPUT"
-          # Stable, tag-independent build cache ref (see cache-from/to).
-          echo "cache=ghcr.io/${owner_lc}/nyx-tee:buildcache" >> "$GITHUB_OUTPUT"
-          echo "Building -> ghcr.io/${owner_lc}/nyx-tee:${tag}"
+          # Stable, tag-independent build cache ref (see cache-from/to), per variant.
+          echo "cache=ghcr.io/${owner_lc}/nyx-tee:buildcache${cache_suffix}" >> "$GITHUB_OUTPUT"
+          echo "enable_cuda=${enable_cuda}" >> "$GITHUB_OUTPUT"
+          echo "Building -> ghcr.io/${owner_lc}/nyx-tee:${tag} (ENABLE_CUDA=${enable_cuda})"
 
       # The N=16 settle prover needs circuit.wasm + circuit.r1cs alongside
       # the committed circuit_final.zkey, but those two are gitignored.
@@ -150,6 +168,13 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.ref.outputs.image }}
+          # ENABLE_CUDA=1 (a `-cuda` tag / dispatch toggle) builds the ICICLE CUDA
+          # backend into the image. nvcc cross-compiles for sm_90 (CUDA_ARCH=90,
+          # H200/Hopper) with NO GPU on the runner — the icicle build.rs forwards it
+          # so cmake skips its `native` GPU probe. ENABLE_CUDA=0 = today's CPU image.
+          build-args: |
+            ENABLE_CUDA=${{ steps.ref.outputs.enable_cuda }}
+            CUDA_ARCH=90
           # Single-platform, plain manifest (no attestation index) so
           # the CVM pull resolves a clean, stable digest. Keeps the
           # compose_hash story simple when we later pin by @sha256.
@@ -175,6 +200,27 @@ jobs:
           cache-to: |
             type=registry,ref=${{ steps.ref.outputs.cache }},mode=max
             type=gha,mode=max
+
+      # CI-spike gate for the CUDA image — validates the GPU image is well-formed
+      # WITHOUT a GPU: the icicle backend .so shipped, and the binary's dynamic
+      # links resolve (frontend .so via LD_LIBRARY_PATH). We ldd the BINARY only —
+      # the CUDA backend .so intentionally links libcuda.so.1 (the driver, injected
+      # by the nvidia runtime at deploy), so it is NOT resolvable here by design.
+      - name: Verify CUDA image (no GPU)
+        if: steps.ref.outputs.enable_cuda == '1'
+        run: |
+          IMG="${{ steps.ref.outputs.image }}"
+          docker pull "$IMG"
+          echo "=== icicle CUDA backend .so shipped under /opt/icicle/lib/backend ==="
+          docker run --rm --entrypoint sh "$IMG" -c 'ls -R /opt/icicle/lib/backend'
+          docker run --rm --entrypoint sh "$IMG" -c \
+            'ls /opt/icicle/lib/backend/cuda/libicicle_backend_cuda_device.so \
+                /opt/icicle/lib/backend/bn254/cuda/libicicle_backend_cuda_field_bn254.so \
+                /opt/icicle/lib/backend/bn254/cuda/libicicle_backend_cuda_curve_bn254.so'
+          echo "=== nyx-tee binary links resolve (frontend icicle .so via LD_LIBRARY_PATH) ==="
+          docker run --rm --entrypoint sh "$IMG" -c 'ldd /opt/nyx/nyx-tee | grep -i icicle'
+          docker run --rm --entrypoint sh "$IMG" -c \
+            'if ldd /opt/nyx/nyx-tee | grep -i "not found"; then echo "UNRESOLVED LIBS"; exit 1; fi; echo "all binary libs resolved"'
 
       - name: Emit pull command
         run: |
