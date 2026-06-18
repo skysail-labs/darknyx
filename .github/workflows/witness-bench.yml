@@ -1,0 +1,99 @@
+# Step-1 spike (revamp_proving): on a native amd64 runner, build the circom
+# `--c` C++ witness generator for VALID_MATCH_BATCH(16) and time it against the
+# WASM witness generator (node) on the SAME committed input.json. Answers "is a
+# native witness generator meaningfully faster than the WASM path?" — the
+# decision gate before integrating one (Step 2). Manual-only (workflow_dispatch);
+# witness-gen needs no ptau/zkey, so this is light (no ceremony).
+name: witness-bench
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: native C++ vs WASM witness-gen (N=16, amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.89.0 (for circom build)
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: System deps (nasm + libgmp for the C++ generator)
+        run: sudo apt-get update && sudo apt-get install -y nasm libgmp-dev
+
+      - name: npm ci (circomlib include path)
+        run: npm ci
+
+      - name: Cache circom binary
+        id: cache-circom
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/circom
+          key: circom-${{ runner.os }}-v2.2.2
+
+      - name: Install circom 2.2.2 (cache miss only)
+        if: steps.cache-circom.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v2.2.2 https://github.com/iden3/circom.git /tmp/circom
+          cd /tmp/circom
+          cargo install --path circom --locked
+
+      # Witness-gen only → no ptau / no zkey / no groth16 setup. Emit BOTH the
+      # WASM calculator (circuit_js/) and the C++ generator (circuit_cpp/).
+      - name: Compile N=16 circuit (--wasm + --c, no ceremony)
+        run: |
+          OUT=circuits/build/match_batch_n16
+          mkdir -p "$OUT"
+          circom circuits/match_batch_n16/circuit.circom \
+            --wasm --c -l "$PWD/node_modules" -o "$OUT"
+          ls -la "$OUT/circuit_cpp" | head
+
+      - name: Build the native C++ witness generator (-O3 + fr.asm/ADX)
+        run: |
+          cd circuits/build/match_batch_n16/circuit_cpp
+          time make
+          ls -la circuit
+
+      - name: Bench — native C++ vs node-wasm on the SAME input.json
+        run: |
+          set -euo pipefail
+          IN="$PWD/circuits/match_batch_n16/bench_input.json"
+          CPP="$PWD/circuits/build/match_batch_n16/circuit_cpp/circuit"
+          WJS="$PWD/circuits/build/match_batch_n16/circuit_js"
+          echo "runner CPU:"; grep -m1 'model name' /proc/cpuinfo; nproc
+          echo "ADX/BMI2 present (for fr.asm)?"; grep -o -m1 -E 'adx|bmi2' /proc/cpuinfo || echo "  (flags not listed)"
+
+          bench() {
+            label="$1"; shift
+            best=99999999
+            for i in 1 2 3 4 5; do
+              s=$(date +%s%N); "$@" >/dev/null 2>&1; e=$(date +%s%N)
+              ms=$(( (e - s) / 1000000 ))
+              echo "  $label run $i: ${ms}ms"
+              [ "$ms" -lt "$best" ] && best=$ms
+            done
+            echo "==> $label BEST: ${best}ms"
+            eval "${label}_best=$best"
+          }
+
+          bench native_cpp "$CPP" "$IN" /tmp/w_cpp.wtns
+          bench node_wasm node "$WJS/generate_witness.js" "$WJS/circuit.wasm" "$IN" /tmp/w_wasm.wtns
+
+          echo "=== witness parity (must be byte-identical) ==="
+          if cmp -s /tmp/w_cpp.wtns /tmp/w_wasm.wtns; then
+            echo "OK: native C++ and WASM witnesses are byte-identical"
+          else
+            echo "MISMATCH: witnesses differ — investigate before trusting timings"; exit 1
+          fi
+
+          echo "=== RESULT (N=16 witness-gen, amd64) ==="
+          echo "native C++ (fr.asm): ${native_cpp_best}ms   node-wasm: ${node_wasm_best}ms"
+          awk "BEGIN{ if (${native_cpp_best}>0) printf \"speedup (wasm/native): %.2fx\\n\", ${node_wasm_best}/${native_cpp_best} }"
