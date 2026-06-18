@@ -190,9 +190,13 @@ COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit_js/circuit.wasm \
 # The native circom `--c` C++ witness generator (amd64 binary, built in CI from
 # `circom --c` + make on the runner). When NYX_TEE_WITNESS=native the prover
 # spawns this instead of wasmer (≈18× faster witness-gen; see witness-bench).
-# Gitignored + CI-built like the wasm/r1cs above.
+# `circuit.dat` (the witness-gen constants) MUST sit next to the binary —
+# main.cpp loads `<argv[0]>.dat` at runtime. Gitignored + CI-built like the
+# wasm/r1cs above.
 COPY --chown=nyx:nyx --chmod=755 circuits/build/match_batch_n16/circuit_cpp/circuit \
      /circuits/build/match_batch_n16/circuit_cpp/circuit
+COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit_cpp/circuit.dat \
+     /circuits/build/match_batch_n16/circuit_cpp/circuit.dat
 
 # Persistent state dir for the Phase-1b auth snapshot (accounts.db).
 # MUST be created + chowned to the runtime user BEFORE `USER nyx`: when

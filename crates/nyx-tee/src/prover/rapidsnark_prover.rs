@@ -255,19 +255,21 @@ fn native_witness_wtns(bin: &Path, input_json: &str) -> Result<Vec<u8>, ProverEr
     std::fs::write(&in_path, input_json)
         .map_err(|e| ProverError::WitnessGen(format!("write input.json: {e}")))?;
 
-    let status = std::process::Command::new(bin)
+    let out = std::process::Command::new(bin)
         .arg(&in_path)
         .arg(&out_path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .output()
         .map_err(|e| {
             ProverError::WitnessGen(format!("spawn native witness gen {}: {e}", bin.display()))
         })?;
-    if !status.success() {
+    if !out.status.success() {
+        // Surface the generator's own stderr (e.g. ".dat file not found",
+        // a bad input signal) — it's the actionable part of the failure.
         return Err(ProverError::WitnessGen(format!(
-            "native witness gen {} exited unsuccessfully: {status}",
-            bin.display()
+            "native witness gen {} failed ({}): {}",
+            bin.display(),
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
     std::fs::read(&out_path).map_err(|e| ProverError::WitnessGen(format!("read .wtns: {e}")))
