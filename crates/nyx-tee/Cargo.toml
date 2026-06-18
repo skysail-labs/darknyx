@@ -156,6 +156,16 @@ num-bigint    = { workspace = true }
 # ark-std expects.
 rand          = { workspace = true }
 
+# ─── ICICLE GPU/CPU Groth16 prover (the `icicle` feature) ───────────
+# Vendored under third_party/icicle-snark (next to the rapidsnark submodule;
+# includes its nested icicle/ C++ tree). Optional — only the `icicle` feature
+# pulls it in, so a default build never triggers its cmake/native build.
+# Consumes our existing snarkjs .zkey + .wtns and emits a snarkjs-format proof
+# (same on-chain byte converter as the rapidsnark path). device="CPU" needs no
+# GPU (Phase 1); device="CUDA" (Phase 2) needs a confidential-GPU TEE + the
+# CUDA backend shipped in the image.
+icicle-snark  = { path = "../../third_party/icicle-snark", optional = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 # Integration tests in tests/orders_surface.rs generate fresh
@@ -176,6 +186,14 @@ default = []
 # part of `cargo build`. Witness gen stays on ark-circom (circom-witness-rs was
 # ruled out by the Step-1 spike); only the PROVE step is rapidsnark.
 rapidsnark = []
+# The ICICLE-backed Groth16 prover (icicle-snark crate), selectable at runtime
+# via NYX_TEE_PROVER=icicle. One backend, CPU or CUDA, chosen at prove time
+# (NYX_TEE_ICICLE_DEVICE=CPU|CUDA, default CPU). CPU needs no GPU — that's the
+# Phase-1 validation path (byte-identical proof, A/B vs rapidsnark-CPU). CUDA
+# (Phase 2) needs a confidential-GPU TEE + the ICICLE CUDA backend in the image.
+# Witness gen stays shared (native circom --c / wasmer); only the PROVE differs.
+# `dep:icicle-snark` keeps the heavy cmake build OUT of default/`rapidsnark` builds.
+icicle = ["dep:icicle-snark"]
 # Mounts `POST /__debug/oracle/seed`, used by `nyx-tee-loadgen`
 # for deterministic local-simulator runs (no real Hermes traffic
 # required). MUST be off in any production build — there's no

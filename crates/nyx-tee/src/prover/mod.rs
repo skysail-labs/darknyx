@@ -45,10 +45,23 @@ pub mod rapidsnark_prover;
 #[cfg(feature = "rapidsnark")]
 mod rapidsnark_sys;
 
+// The ICICLE backend (GPU/CPU perf swap; `icicle` feature). Witness gen shared;
+// only the PROVE step is icicle-snark (vendored under third_party/icicle-snark).
+// Off by default (the heavy cmake build is `dep:icicle-snark`, pulled in only by
+// the feature).
+#[cfg(feature = "icicle")]
+pub mod icicle_prover;
+
+// Snarkjs-format proof helpers shared by the rapidsnark + icicle backends.
+#[cfg(any(feature = "rapidsnark", feature = "icicle"))]
+mod snarkjs;
+
 pub use ark_prover::ArkMatchBatchProver;
 pub use constraints::{validate_conservation, ConstraintError};
 pub use convert::proof_to_onchain_bytes;
 pub use groth16::{ProofWithInputs, Prover, ProverError, PRODUCTION_BATCH_N};
+#[cfg(feature = "icicle")]
+pub use icicle_prover::IcicleMatchBatchProver;
 pub use inputs::{build_batch_public_inputs, BatchPublicInputs};
 pub use leaf::{
     compute_batch_leaf, compute_batch_root, merkle_inclusion_path, InclusionPath, LeafError,

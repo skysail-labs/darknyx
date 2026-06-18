@@ -250,7 +250,8 @@ pub(crate) fn build_circom_and_check(
 /// only scalar signal is `merkle_root` (emitted as a string); every other
 /// signal is a length-N array of decimal strings. Mirrors the TS
 /// `match-batch-prover.ts` inputs object exactly.
-#[cfg(feature = "rapidsnark")] // only the rapidsnark backend's native path uses it
+// Only the snarkjs-format backends' native witness path uses it.
+#[cfg(any(feature = "rapidsnark", feature = "icicle"))]
 pub(crate) fn circom_input_json(
     slots: &[MatchSlotWitness],
     merkle_root: &[u8; 32],

@@ -121,8 +121,12 @@ fn load_rejects_missing_artifacts() {
     }
 }
 
-#[test]
-fn prove_rejects_wrong_batch_size() {
+// `tokio::test`: since the witness-calc cache (Step 0) moved the circom wasm
+// compile into `load()`, loading the prover spins up wasmer's virtual-fs, which
+// needs a Tokio 1.x reactor. The batch-size rejection itself still happens in
+// `prove()` before any witness gen — this just gives `load()` a runtime.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prove_rejects_wrong_batch_size() {
     // A prover loaded for N=2 must reject a 1-slot batch BEFORE
     // touching any artifact — so this runs even when artifacts are
     // absent (load fails first if absent, so gate on presence).

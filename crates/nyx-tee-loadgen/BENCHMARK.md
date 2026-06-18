@@ -126,6 +126,39 @@ is absent. **Net effect on the compute floor:** witness ~2.1 s → **0.2 s**; pa
 future ICICLE prove (`prove_step` ~1.5 s → tens of ms) takes the per-batch compute from ~3.6 s
 toward **~0.25 s** — and witness-gen is no longer the Amdahl ceiling.
 
+### ICICLE prover — Phase 1 (CPU): integration + byte-parity (revamp_proving, 2026-06-18)
+
+The GPU-prove track. We vendored `icicle-snark` under `third_party/` (ingonyama's ICICLE-backed Groth16: one crate,
+CPU **and** CUDA, switched by a `device` string at prove time) and wired it as a **third prover
+backend** alongside ark + rapidsnark (`NYX_TEE_PROVER=icicle`, device via `NYX_TEE_ICICLE_DEVICE`,
+default `CPU`). It consumes our existing snarkjs `.zkey` + `.wtns` and emits a snarkjs-format proof,
+so it reuses the shared witness gen and routes through the **same `proof_to_onchain_bytes`
+converter** as the other two backends — and it's NOT "ICICLE-into-rapidsnark" (rapidsnark is a
+CPU prover; GPU-accelerating it would mean reimplementing what icicle-snark already is).
+
+Phase 1 deliberately validates on **CPU** — no GPU, no CVM — to de-risk the entire integration
+(I/O, proof format, randomness, image plumbing) before the GPU is in play:
+
+| check | result |
+|---|---|
+| builds (macOS arm64, CPU backend, cmake) | ✅ ~54 s cold |
+| **byte-parity** — icicle-CPU N=16 proof verifies against the zkey's own VK (the same VK ark + the on-chain verifier use) | ✅ `tests/icicle_parity.rs` (warmup + steady both verify) |
+| ark + icicle agree on the batch public input (merkle root) | ✅ |
+| icicle-CPU prove time (arm64 M-series, prove-step only) | **~1.75–2.08 s** vs ark **1.57 s** on the same machine |
+
+**Reading:** on CPU, icicle is *not* faster than ark/rapidsnark here — as expected. The CPU
+backend's value is purely as a **no-GPU harness that exercises the exact code path CUDA will use**;
+the headline win is the GPU. (And per the witness-gen lesson, arm64 M-series ≠ the amd64 CVM
+platform, so the definitive icicle-CPU-vs-rapidsnark-CPU number belongs on amd64 — folded into the
+Phase-2 CVM run.) Phase 1's goal — prove the proof format is byte-correct and the backend slots in
+cleanly — is **met**.
+
+> **Phase 2 (not started):** flip `device=CUDA`, ship the ICICLE CUDA backend in the image, and
+> validate on a **confidential-GPU TEE** (H100/H200 CC-mode on Phala). The real prerequisite is
+> infra + trust-model, not code: a CC-GPU attached to the CVM whose own attestation folds into
+> `verifyTeeAttestation()` (order intent is processed on the GPU). That's the headline `prove_step`
+> win (~1.5 s → tens of ms).
+
 > **✅ Partial-fill "continuation failure" — ROOT-CAUSED + FIXED + validated (it was a loadgen bug,
 > not the protocol, not the prover).** Symptom: B1 (3 continuation batches) settled **only batch 0**;
 > batch 1 failed `Custom 0` ("Allocate … already in use"), batch 2 `3007` (cascade), leaf 4→9.
