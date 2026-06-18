@@ -12,14 +12,15 @@
 //! [`proof_to_onchain_bytes`] so there is a single, already-tested on-chain
 //! byte converter (pi_a negation + pi_b Fq2 swap) for both backends.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
-use ark_bn254::{Bn254, Fq, Fq2, G1Affine, G2Affine};
+use ark_bn254::{Bn254, Fq, Fq2, Fr, G1Affine, G2Affine};
+use ark_circom::CircomConfig;
 use ark_ff::PrimeField;
 use ark_groth16::Proof;
 
-use super::ark_prover::build_circom_and_check;
+use super::ark_prover::{build_circom_and_check, load_circom_cfg};
 use super::convert::proof_to_onchain_bytes;
 use super::groth16::{ProofWithInputs, Prover, ProverError};
 use super::inputs::{build_batch_public_inputs, BatchPublicInputs};
@@ -33,9 +34,10 @@ pub struct RapidsnarkMatchBatchProver {
     /// Mutex-guarded so `prove(&self)` can serialize the C call — the settle
     /// worker proves one batch at a time, so there's no contention.
     raw: Mutex<RawProver>,
-    /// ark-circom witness-calc inputs (the witness still comes from wasmer).
-    wasm_path: PathBuf,
-    r1cs_path: PathBuf,
+    /// Cached ark-circom witness calculator (wasm compiled + r1cs parsed ONCE,
+    /// reused per prove). Witness gen is ark-circom for BOTH backends — only
+    /// the prove step is rapidsnark. See `ArkMatchBatchProver::cfg`.
+    cfg: Mutex<CircomConfig<Fr>>,
     n: usize,
 }
 
@@ -45,12 +47,10 @@ impl RapidsnarkMatchBatchProver {
     /// `ArkMatchBatchProver::load` path resolution so the two backends are
     /// drop-in interchangeable.
     pub fn load(circuits_build_dir: impl AsRef<Path>, n: usize) -> Result<Self, ProverError> {
-        let base = circuits_build_dir
-            .as_ref()
-            .join(format!("match_batch_n{n}"));
-        let zkey_path = base.join("circuit_final.zkey");
-        let wasm_path = base.join("circuit_js").join("circuit.wasm");
-        let r1cs_path = base.join("circuit.r1cs");
+        let dir = circuits_build_dir.as_ref();
+        let zkey_path = dir
+            .join(format!("match_batch_n{n}"))
+            .join("circuit_final.zkey");
 
         let zkey_str = zkey_path.to_str().ok_or_else(|| {
             ProverError::Io(format!("non-UTF8 zkey path {}", zkey_path.display()))
@@ -58,10 +58,11 @@ impl RapidsnarkMatchBatchProver {
         let raw = RawProver::create_from_zkey_file(zkey_str)
             .map_err(|e| ProverError::Io(format!("rapidsnark zkey load {zkey_str}: {e}")))?;
 
+        let cfg = load_circom_cfg(dir, n)?;
+
         Ok(Self {
             raw: Mutex::new(raw),
-            wasm_path,
-            r1cs_path,
+            cfg,
             n,
         })
     }
@@ -88,7 +89,7 @@ impl RapidsnarkMatchBatchProver {
         super::constraints::validate_conservation(slots)?;
         let public = build_batch_public_inputs(slots)?;
         let t_w = std::time::Instant::now();
-        let circom = build_circom_and_check(&self.wasm_path, &self.r1cs_path, slots, &public)?;
+        let circom = build_circom_and_check(&self.cfg, slots, &public)?;
         let witness = circom
             .witness
             .ok_or_else(|| ProverError::WitnessGen("ark-circom produced no witness".into()))?;
