@@ -573,7 +573,9 @@ should call out any percentile that meaningfully regresses.
 - `## Throughput` — actual submit rate, achieved/target ratio
 - `## Submit outcomes` — 2xx / 4xx / 5xx / net-err counts + success rate
 - `## Cancel outcomes` — 2xx / 4xx / 5xx counts
-- `## Latency (ms)` — submit / cancel / match (TODO) histograms at P50 / P95 / P99 / P99.9 / max
+- `## Latency (ms)` — submit / cancel / match histograms at P50 / P95 / P99 / P99.9 / max
+  (the `match` row is the submit→match latency from the sampled `GET /orders/{id}` poller,
+  populated when `--poll-orders` > 0; `count=0` otherwise)
 
 ## Last-run snapshots
 

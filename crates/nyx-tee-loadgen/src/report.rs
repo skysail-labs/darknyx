@@ -79,10 +79,10 @@ pub async fn render_markdown(inputs: ReportInputs<'_>) -> String {
     let _ = writeln!(out, "|---|---|---|---|---|---|---|");
     write_hist_row(&mut out, "submit", &submit_hist);
     write_hist_row(&mut out, "cancel", &cancel_hist);
-    // Match latency is empty until we wire GET /orders polling
-    // (PR 4f.3 territory). The histogram is allocated so the
-    // schema is stable; the row reports `count=0`.
-    write_hist_row(&mut out, "match (TODO)", &_match_hist);
+    // submit→match latency, populated by the sampled `GET /orders/{id}` poller
+    // (`trader::spawn_match_poll`, gated on `--poll-orders`). Reports `count=0`
+    // when polling is off (the default), real p50/p95/p99 when sampling is on.
+    write_hist_row(&mut out, "match", &_match_hist);
     let _ = writeln!(out);
 
     let _ = writeln!(

@@ -14,7 +14,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ed25519_dalek::SigningKey;
 use rand::Rng;
@@ -120,6 +120,7 @@ pub async fn trader_task(ctx: TraderCtx, mut workload: Box<dyn Workload>, deadli
         );
         arrival_nonce = arrival_nonce.wrapping_add(1);
 
+        let submit_at = Instant::now();
         let outcome = run_submit(&ctx, &body).await;
         if matches!(outcome, SubmitOutcome::Ok) {
             // Track for potential cancel later. Drop oldest if
@@ -129,10 +130,12 @@ pub async fn trader_task(ctx: TraderCtx, mut workload: Box<dyn Workload>, deadli
             }
             recent_order_ids.push_back(order_id);
 
-            // Observability: sample a fraction of accepted orders and read
-            // their lifecycle via GET /orders/{id} (open/partial/filled).
+            // Observability: sample a fraction of accepted orders and measure
+            // submit→match latency via GET /orders/{id}, into match_latency_us.
+            // Spawned (not awaited) so the bounded poll loop never skews this
+            // trader's submit throughput; sampling bounds the spawned-task count.
             if ctx.cfg.poll_orders > 0.0 && rng.gen_bool(ctx.cfg.poll_orders.clamp(0.0, 1.0)) {
-                run_poll(&ctx, order_id).await;
+                spawn_match_poll(ctx.clone(), order_id, submit_at);
             }
         }
     }
@@ -184,19 +187,45 @@ async fn run_submit(ctx: &TraderCtx, body: &serde_json::Value) -> SubmitOutcome 
 /// round-trip latency into the submit histogram's sibling stream is overkill, so
 /// we just log at debug — the value is confirming the order is observable, not a
 /// new latency number. Never fails the run.
-async fn run_poll(ctx: &TraderCtx, order_id: [u8; 16]) {
-    let url = format!("{}/orders/{}", ctx.endpoint, hex::encode(order_id));
-    if let Ok(resp) = ctx.http.get(&url).bearer_auth(&ctx.bearer).send().await {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        tracing::debug!(
-            trader = ctx.idx,
-            order = %hex::encode(order_id),
-            %status,
-            "poll /orders/{{id}}: {}",
-            body.chars().take(160).collect::<String>(),
-        );
-    }
+/// Spawn a bounded poller that measures submit→match latency for one sampled
+/// order and records it into `match_latency_us`. Polls `GET /orders/{id}` until
+/// the order leaves `pending` (`matched` — or `filled`/`partially_filled` if the
+/// status vocabulary grows), then records `submit_at.elapsed()`. Gives up at the
+/// deadline (the order may never match under this workload). Detached from the
+/// trader's submit loop so it adds no throughput skew; the call-site sampling
+/// (`poll_orders`) bounds how many of these run concurrently.
+fn spawn_match_poll(ctx: TraderCtx, order_id: [u8; 16], submit_at: Instant) {
+    const MATCH_POLL_DEADLINE: Duration = Duration::from_secs(5);
+    const MATCH_POLL_INTERVAL: Duration = Duration::from_millis(150);
+    tokio::spawn(async move {
+        let url = format!("{}/orders/{}", ctx.endpoint, hex::encode(order_id));
+        loop {
+            if submit_at.elapsed() >= MATCH_POLL_DEADLINE {
+                break; // never matched within the window — no sample
+            }
+            if let Ok(resp) = ctx.http.get(&url).bearer_auth(&ctx.bearer).send().await {
+                if resp.status().is_success() {
+                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                        let status = body.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                        if matches!(status, "matched" | "filled" | "partially_filled") {
+                            ctx.metrics
+                                .record_match_latency_us(submit_at.elapsed().as_micros() as u64)
+                                .await;
+                            tracing::debug!(
+                                trader = ctx.idx,
+                                order = %hex::encode(order_id),
+                                status,
+                                latency_ms = submit_at.elapsed().as_millis() as u64,
+                                "poll /orders/{{id}}: matched",
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(MATCH_POLL_INTERVAL).await;
+        }
+    });
 }
 
 async fn run_cancel(
