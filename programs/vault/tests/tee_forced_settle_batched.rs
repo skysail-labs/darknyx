@@ -49,6 +49,48 @@ fn seed_single_match(h: &mut Harness, tag: u8) -> (MatchResultPayload, [[u8; 32]
 }
 
 // ---------------------------------------------------------------------------
+// Regression: the on-chain fee FLOOR (VaultConfig.fee_rate_bps enforced in
+// tee_forced_settle_batched). Conservation pins note.amount == trade + change +
+// fee, but the fee LEG is matcher-chosen — without a floor the settle could
+// charge zero protocol fee, making `fee_rate_bps` a dead field. The floor
+// requires each leg's charged fee >= notional * fee_rate_bps / 10_000.
+//
+// The test isolates the floor as the SOLE cause by settling the SAME 0-fee
+// exact-fill twice, differing only in the configured rate: it SETTLES at
+// fee_rate_bps==0 (floor == 0, no-op — the historical behaviour every other
+// test relies on) and is REJECTED at fee_rate_bps==30 (quote=5_000 →
+// buyer floor = 5_000*30/10_000 = 15 > the charged 0). The owner commitment is
+// set identically in both arms so only the rate varies.
+// ---------------------------------------------------------------------------
+#[test]
+fn fee_floor_rejects_undercharged_but_allows_at_rate_zero() {
+    let owner = fr_safe(0x07, 0x00);
+
+    // Control arm: fee_rate_bps == 0 → floor == 0 → the 0-fee exact-fill settles.
+    let mut h0 = Harness::setup();
+    set_vault_fee_config(&mut h0, owner, 0);
+    let (p0, proof0, root0) = seed_single_match(&mut h0, 0x01);
+    assert!(
+        h0.svm
+            .send_transaction(build_settle_batched_tx(&h0, 0, &p0, 0, &proof0, &root0))
+            .is_ok(),
+        "0-fee exact-fill must settle when fee_rate_bps == 0 (floor is a no-op)"
+    );
+
+    // Floor arm: same match, fee_rate_bps == 30 → buyer floor (15) > charged (0).
+    let mut h = Harness::setup();
+    set_vault_fee_config(&mut h, owner, 30);
+    let (p, proof, root) = seed_single_match(&mut h, 0x01);
+    assert!(
+        h.svm
+            .send_transaction(build_settle_batched_tx(&h, 0, &p, 0, &proof, &root))
+            .is_err(),
+        "0-fee exact-fill must be rejected by the 30bps on-chain fee floor \
+         (InsufficientFeeCharge)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Regression: multiple matches share one marker.
 //
 // Pre-fix `tee_forced_settle_batched` unconditionally drained the marker's

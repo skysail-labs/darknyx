@@ -428,6 +428,32 @@ pub fn tee_forced_settle_batched_handler(
             VaultError::ConservationViolation
         );
 
+        // Fee FLOOR. Conservation above pins note.amount == trade + change + fee,
+        // but the fee LEG itself is matcher-chosen — without a floor the TEE could
+        // settle a match charging zero protocol fee (the on-chain `fee_rate_bps`
+        // would be a dead field). Enforce that each leg's charged fee is at least
+        // the floor `notional * fee_rate_bps / 10_000`, using the SAME truncating
+        // floor-division the matcher uses to derive the fee
+        // (`darkpool-matcher::algorithm` does `notional * bps / 10_000`), so a
+        // legitimately-charged match always satisfies `>=`. `>=` (not `==`) keeps
+        // a rounding/rate change from bricking otherwise-valid settles. `fee_rate_bps`
+        // is read from the already-loaded `vault_config` (no new account, no size
+        // cost). With the default `fee_rate_bps == 0` the floor is 0 (no-op), so
+        // fee-free dev/test settles are unaffected.
+        let rate = ctx.accounts.vault_config.load()?.fee_rate_bps as u128;
+        if rate > 0 {
+            let buyer_fee_floor = (payload.quote_amount as u128) * rate / 10_000;
+            require!(
+                (payload.buyer_fee_amt as u128) >= buyer_fee_floor,
+                VaultError::InsufficientFeeCharge
+            );
+            let seller_fee_floor = (payload.base_amount as u128) * rate / 10_000;
+            require!(
+                (payload.seller_fee_amt as u128) >= seller_fee_floor,
+                VaultError::InsufficientFeeCharge
+            );
+        }
+
         let has_e = payload.note_e_commitment != [0u8; 32];
         let has_f = payload.note_f_commitment != [0u8; 32];
         require!(
