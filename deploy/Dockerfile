@@ -231,9 +231,13 @@ RUN if [ "$ENABLE_CUDA" = "1" ]; then \
           https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb && \
         dpkg -i /tmp/cuda-keyring.deb && rm /tmp/cuda-keyring.deb && \
         apt-get update && apt-get install -y --no-install-recommends \
-            cuda-cudart-12-6 libcurand-12-6 && \
+            cuda-cudart-12-6 libcurand-12-6 libatomic1 && \
         rm -rf /var/lib/apt/lists/*; \
     fi
+# libatomic1: the icicle frontend/backend .so reference libatomic.so.1 (GCC
+# atomic intrinsics). Caught by the no-GPU verify step (ldd "not found"). It is
+# in the base Debian repo (not the CUDA repo) but gated here since only the GPU
+# image links icicle.
 
 # Run as a non-root user. UID/GID are fixed so the volume mounts
 # behave predictably across deploys.
