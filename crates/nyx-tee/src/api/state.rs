@@ -493,8 +493,10 @@ impl ApiState {
         self.order_owner.write().await.insert(order_id, account_id);
     }
 
-    /// Drop an order's owner mapping (on cancel; full-fill/expiry eviction is a
-    /// follow-up that needs the matcher to signal the API layer).
+    /// Drop an order's owner mapping. Called on explicit cancel AND by the
+    /// order-update router on any TERMINAL matcher update (fully-filled /
+    /// cancelled / expired — see `order_router::spawn_order_router`), so the
+    /// `order_owner` map stays bounded over the engine's lifetime.
     pub async fn forget_order(&self, order_id: &str) {
         self.order_owner.write().await.remove(order_id);
     }
