@@ -31,9 +31,12 @@
 # ─────────── Stage 1: builder ───────────
 # rust:1.91-slim-bookworm — matches rust-toolchain.toml's 1.91 floor
 # (the dstack-sdk → alloy → ruint chain requires rustc 1.91+).
-# TODO(phase1): pin to a SHA-256 digest
-# once we're past the rapid-iteration scaffolding phase. For now
-# the tag is fine; the deploy is dev-only.
+#
+# PINNED BY DIGEST (the multi-arch index — `--platform linux/amd64` still
+# selects the amd64 variant). A floating tag would let the base drift on every
+# pull and silently shift `compose_hash` (the attestation-relevant artifact
+# baked into RTMR3). Re-resolve + bump deliberately with:
+#   docker buildx imagetools inspect rust:1.91-slim-bookworm --format '{{.Manifest.Digest}}'
 #
 # ARCHITECTURE — build this for linux/amd64. Phala TDX CVMs are
 # x86_64; an arm64 image (the default on Apple Silicon) fails the CVM
@@ -42,7 +45,7 @@
 # `docker buildx build --platform linux/amd64 --push` — rather than
 # cross-building under QEMU on a Mac (slow, and emulated build cycles
 # are wasteful). See .github/workflows/tee-image.yml.
-FROM rust:1.91-slim-bookworm AS builder
+FROM rust:1.91-slim-bookworm@sha256:8514999d4786ef12efe89239e86b3d0a021b94b9d35108c8efe6c79ca7dc1a65 AS builder
 
 WORKDIR /build
 
@@ -143,8 +146,12 @@ RUN find crates programs -name '*.rs' -exec touch {} + && \
 # ─────────── Stage 2: runtime ───────────
 # debian:bookworm-slim — minimal Debian. We pick Debian (not Alpine)
 # because solana-client + rustls + ed25519-dalek work cleanly on
-# glibc and we don't need to fight musl quirks.
-FROM debian:bookworm-slim AS runtime
+# glibc and we don't need to fight musl quirks. PINNED BY DIGEST (the
+# multi-arch index) for a stable compose_hash — re-resolve + bump with
+# `docker buildx imagetools inspect debian:bookworm-slim --format '{{.Manifest.Digest}}'`.
+# Keep this digest IN SYNC with the witness-gen container in tee-image.yml
+# (same base, same glibc/ABI — the native witness binary must match this runtime).
+FROM debian:bookworm-slim@sha256:96e378d7e6531ac9a15ad505478fcc2e69f371b10f5cdf87857c4b8188404716 AS runtime
 
 # ca-certificates: needed for outbound HTTPS to Helius RPC + Pyth.
 # tini: PID 1 reaper, gives us clean signal handling.
