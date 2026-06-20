@@ -3,18 +3,25 @@
  * fill records.
  *
  * WHY the ix data (not the `TradeSettled` event): the event is keyed by
- * `match_id` and carries change amounts + leaf indices but NOT `order_id` or note
- * commitments. Only the instruction's `MatchResultPayload` carries `order_id_a/b`
- * + `note_e/f_commitment` + the change amounts — exactly what a by-order_id index
- * needs. So we decode the ix data.
+ * `match_id` and carries leaf indices but NOT `order_id` or note commitments.
+ * Only the instruction's `MatchResultPayload` carries `order_id_a/b` +
+ * `note_e/f_commitment` — exactly what a by-order_id index needs. So we decode
+ * the ix data.
  *
- * BYTE-LAYOUT CONTRACT: the 480-byte payload mirrors
+ * Amount-privacy (P3b): the settle ix no longer carries any plaintext amounts
+ * (trade size / change / fees / clearing price). The off-TEE indexer is
+ * UNTRUSTED, so this is by design — it sees only commitments + order ids and
+ * acts as a by-order_id COMMITMENT LOCATOR. Each client reconstructs its own
+ * amounts from the per-account FillMemo (delivered over the authenticated
+ * `/ws/fills` channel); partial-fill is signalled by change-note presence.
+ *
+ * BYTE-LAYOUT CONTRACT: the 424-byte payload mirrors
  * `programs/vault/src/instructions/tee_forced_settle.rs::MatchResultPayload`
  * and the TS encoder `@nyx/sdk` `settle-builder.ts::serializePayload`. The
  * `decode.test.ts` round-trips against that encoder so the two can't drift.
  *
  * One settle ix = ONE match (one payload). A batch is N such ixs sharing a
- * marker. ix data = disc(8) ‖ payload(480) ‖ match_index(1) ‖ siblings(128).
+ * marker. ix data = disc(8) ‖ payload(424) ‖ match_index(1) ‖ siblings(128).
  */
 
 import { createHash } from "node:crypto";
@@ -28,25 +35,22 @@ export const SETTLE_IX_NAME = "tee_forced_settle_batched";
 export const SETTLE_DISCRIMINATOR = anchorDiscriminator(SETTLE_IX_NAME);
 
 /** Borsh-serialized `MatchResultPayload` is exactly this many bytes. */
-export const PAYLOAD_LEN = 480;
+export const PAYLOAD_LEN = 424;
 
 const ZERO32 = "0".repeat(64);
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 const u64 = (v: DataView, off: number) => v.getBigUint64(off, true);
 
-/** Field-level decode of a 480-byte `MatchResultPayload`. */
+/** Field-level decode of a 424-byte `MatchResultPayload`.
+ *
+ *  Amount-privacy (P3b): commitments + order ids only — no plaintext amounts. */
 export interface MatchPayload {
   matchId: string;
   orderIdA: string;
   orderIdB: string;
   noteEcommitment: string; // buyer change note ([0;32] = exact fill)
   noteFcommitment: string; // seller change note ([0;32] = exact fill)
-  baseAmount: bigint;
-  quoteAmount: bigint;
-  buyerChangeAmt: bigint;
-  sellerChangeAmt: bigint;
-  clearingPrice: bigint;
   batchSlot: bigint;
 }
 
@@ -62,25 +66,27 @@ export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
     noteFcommitment: hex(payload.subarray(176, 208)),
     orderIdA: hex(payload.subarray(272, 288)),
     orderIdB: hex(payload.subarray(288, 304)),
-    baseAmount: u64(v, 304),
-    quoteAmount: u64(v, 312),
-    buyerChangeAmt: u64(v, 320),
-    sellerChangeAmt: u64(v, 328),
-    clearingPrice: u64(v, 464),
-    batchSlot: u64(v, 472),
+    // After order_id_b: note_fee_base (304..336) + note_fee_quote (336..368) +
+    // buyer_relock_order_id (368..384) + buyer_relock_expiry (384..392) +
+    // seller_relock_order_id (392..408) + seller_relock_expiry (408..416) +
+    // batch_slot (416..424).
+    batchSlot: u64(v, 416),
   };
 }
 
-/** One settled fill, keyed by the order that produced it. */
+/** One settled fill, keyed by the order that produced it.
+ *
+ *  Amount-privacy (P3b): the indexer is a commitment LOCATOR — it carries the
+ *  change-note commitment (and whether the side filled exactly) but NOT the
+ *  amount. The client reads the amount from its per-account FillMemo. */
 export interface SettleFill {
   orderId: string;
   side: "buyer" | "seller";
   matchId: string;
-  /** Change amount in base units (decimal string — u64-safe). `"0"` on exact fill. */
-  changeAmount: string;
+  /** `true` when this side received a change note (partial fill). */
+  isPartialFill: boolean;
   /** 32-byte hex of the minted change note, or `null` when the side filled exactly. */
   changeNoteCommitment: string | null;
-  clearingPrice: string;
   batchSlot: string;
 }
 
@@ -93,18 +99,16 @@ export function payloadToFills(p: MatchPayload): SettleFill[] {
       orderId: p.orderIdA,
       side: "buyer",
       matchId: p.matchId,
-      changeAmount: p.buyerChangeAmt.toString(),
+      isPartialFill: !buyerExact,
       changeNoteCommitment: buyerExact ? null : p.noteEcommitment,
-      clearingPrice: p.clearingPrice.toString(),
       batchSlot: p.batchSlot.toString(),
     },
     {
       orderId: p.orderIdB,
       side: "seller",
       matchId: p.matchId,
-      changeAmount: p.sellerChangeAmt.toString(),
+      isPartialFill: !sellerExact,
       changeNoteCommitment: sellerExact ? null : p.noteFcommitment,
-      clearingPrice: p.clearingPrice.toString(),
       batchSlot: p.batchSlot.toString(),
     },
   ];

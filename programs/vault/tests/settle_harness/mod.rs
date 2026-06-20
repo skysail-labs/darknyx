@@ -931,25 +931,17 @@ pub struct MatchResultPayload {
     pub nullifier_b: [u8; 32],
     pub order_id_a: [u8; 16],
     pub order_id_b: [u8; 16],
-    pub base_amount: u64,
-    pub quote_amount: u64,
-    pub buyer_change_amt: u64,
-    pub seller_change_amt: u64,
-    pub buyer_fee_amt: u64,
-    pub seller_fee_amt: u64,
     pub note_fee_base_commitment: [u8; 32],
     pub note_fee_quote_commitment: [u8; 32],
     pub buyer_relock_order_id: [u8; 16],
     pub buyer_relock_expiry: u64,
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
-    pub clearing_price: u64,
     pub batch_slot: u64,
-    // v3.1: price_proof + price_commitment were removed from the payload.
-    // The VALID_PRICE proof now lives in a preceding `verify_valid_price`
-    // ix that writes a marker PDA at [b"valid_price", price_commitment].
-    // The settle handler recomputes price_commitment from
-    // (clearing_price, batch_slot) and checks the marker exists.
+    // Amount-privacy (P3b): the seven plaintext amount fields (base/quote/
+    // buyer_change/seller_change/buyer_fee/seller_fee/clearing_price) were
+    // dropped — they're proven in-circuit + bound by the note commitments.
+    // Mirror of `vault::instructions::tee_forced_settle::MatchResultPayload`.
 }
 
 /// Sentinel used by on-chain code.
@@ -979,8 +971,11 @@ impl MatchResultPayload {
         nullifier_b: [u8; 32],
         order_id_a: [u8; 16],
         order_id_b: [u8; 16],
-        base_amount: u64,
-        quote_amount: u64,
+        // Amount-privacy (P3b): amounts no longer ride the payload. Kept as
+        // params so the call sites (which still read as "this trade is 100 base
+        // for 5000 quote") stay untouched; they don't affect on-chain behavior.
+        _base_amount: u64,
+        _quote_amount: u64,
     ) -> Self {
         Self {
             match_id,
@@ -994,19 +989,12 @@ impl MatchResultPayload {
             nullifier_b,
             order_id_a,
             order_id_b,
-            base_amount,
-            quote_amount,
-            buyer_change_amt: 0,
-            seller_change_amt: 0,
-            buyer_fee_amt: 0,
-            seller_fee_amt: 0,
             note_fee_base_commitment: [0u8; 32],
             note_fee_quote_commitment: [0u8; 32],
             buyer_relock_order_id: RELOCK_ORDER_ID_NONE,
             buyer_relock_expiry: 0,
             seller_relock_order_id: RELOCK_ORDER_ID_NONE,
             seller_relock_expiry: 0,
-            clearing_price: 0,
             batch_slot: 0,
         }
     }
@@ -1017,7 +1005,7 @@ impl MatchResultPayload {
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    h.update(b"nyx-match-v6");
+    h.update(b"nyx-match-v7");
     h.update(p.match_id);
     h.update(p.note_a_commitment);
     h.update(p.note_b_commitment);
@@ -1031,17 +1019,10 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     h.update(p.nullifier_b);
     h.update(p.order_id_a);
     h.update(p.order_id_b);
-    h.update(p.base_amount.to_le_bytes());
-    h.update(p.quote_amount.to_le_bytes());
-    h.update(p.buyer_change_amt.to_le_bytes());
-    h.update(p.seller_change_amt.to_le_bytes());
-    h.update(p.buyer_fee_amt.to_le_bytes());
-    h.update(p.seller_fee_amt.to_le_bytes());
     h.update(p.buyer_relock_order_id);
     h.update(p.buyer_relock_expiry.to_le_bytes());
     h.update(p.seller_relock_order_id);
     h.update(p.seller_relock_expiry.to_le_bytes());
-    h.update(p.clearing_price.to_le_bytes());
     h.update(p.batch_slot.to_le_bytes());
     let out = h.finalize();
     let mut r = [0u8; 32];
@@ -1112,25 +1093,26 @@ pub fn seed_note_lock(
     note_commitment: &[u8; 32],
     order_id: &[u8; 16],
     expiry_slot: u64,
-    amount: u64,
+    // Amount-privacy (P3b): NoteLock.amount was removed. The param is kept so
+    // the many call sites stay untouched, but it's no longer written anywhere.
+    _amount: u64,
 ) {
     use solana_account::Account as SolAccount;
     let (pda, bump) = note_lock_pda(&h.vault_id, note_commitment);
-    // v2 layout: 8 disc + 32 commit + 32 token_mint + 16 order_id + 8 expiry
-    //          + 32 locked_by + 8 amount + 1 bump + 7 pad = 144 bytes.
-    // token_mint sits between note_commitment and order_id (matches
-    // `vault::state::NoteLock` exactly; keep in sync if NoteLock ever moves
-    // fields). Uses `h.test_mint` so seed_valid_create_marker / build_settle_ix
+    // P3b layout: 8 disc + 32 commit + 32 token_mint + 16 order_id + 8 expiry
+    //          + 32 locked_by + 1 bump + 7 pad = 136 bytes (was 144 with the
+    // now-removed 8-byte amount). token_mint sits between note_commitment and
+    // order_id (matches `vault::state::NoteLock` exactly; keep in sync if
+    // NoteLock ever moves fields). Uses `h.test_mint` so the marker / settle ix
     // compute a consistent binding hash from the same mint.
-    let mut data = vec![0u8; 144];
+    let mut data = vec![0u8; 136];
     data[0..8].copy_from_slice(&anchor_acct_disc("NoteLock"));
     data[8..40].copy_from_slice(note_commitment);
     data[40..72].copy_from_slice(&h.test_mint.to_bytes());
     data[72..88].copy_from_slice(order_id);
     data[88..96].copy_from_slice(&expiry_slot.to_le_bytes());
     data[96..128].copy_from_slice(&h.tee.pubkey().to_bytes());
-    data[128..136].copy_from_slice(&amount.to_le_bytes());
-    data[136] = bump;
+    data[128] = bump;
     let acct = SolAccount {
         lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
         data,
@@ -1320,19 +1302,12 @@ fn to_onchain_payload(
         nullifier_b: p.nullifier_b,
         order_id_a: p.order_id_a,
         order_id_b: p.order_id_b,
-        base_amount: p.base_amount,
-        quote_amount: p.quote_amount,
-        buyer_change_amt: p.buyer_change_amt,
-        seller_change_amt: p.seller_change_amt,
-        buyer_fee_amt: p.buyer_fee_amt,
-        seller_fee_amt: p.seller_fee_amt,
         note_fee_base_commitment: p.note_fee_base_commitment,
         note_fee_quote_commitment: p.note_fee_quote_commitment,
         buyer_relock_order_id: p.buyer_relock_order_id,
         buyer_relock_expiry: p.buyer_relock_expiry,
         seller_relock_order_id: p.seller_relock_order_id,
         seller_relock_expiry: p.seller_relock_expiry,
-        clearing_price: p.clearing_price,
         batch_slot: p.batch_slot,
     }
 }

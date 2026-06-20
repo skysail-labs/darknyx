@@ -483,7 +483,6 @@ pub fn tee_forced_settle_batched_handler(
             &lock_a_mint, // note_e is the buyer's change → QUOTE
             &payload.buyer_relock_order_id,
             payload.buyer_relock_expiry,
-            payload.buyer_change_amt,
         )?;
     }
     if payload.seller_relock_order_id != [0u8; 16] {
@@ -495,7 +494,6 @@ pub fn tee_forced_settle_batched_handler(
             &lock_b_mint, // note_f is the seller's change → BASE
             &payload.seller_relock_order_id,
             payload.seller_relock_expiry,
-            payload.seller_change_amt,
         )?;
     }
 

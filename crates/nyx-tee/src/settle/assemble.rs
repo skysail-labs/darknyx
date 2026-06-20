@@ -313,12 +313,12 @@ pub fn assemble_match(
         nullifier_b: inp.seller_opening.nullifier,
         order_id_a: inp.order_id_a,
         order_id_b: inp.order_id_b,
-        base_amount: m.base_amt,
-        quote_amount: m.quote_amt,
-        buyer_change_amt: m.buyer_change_amt,
-        seller_change_amt: m.seller_change_amt,
-        buyer_fee_amt: m.buyer_fee_amt,
-        seller_fee_amt: m.seller_fee_amt,
+        // Amount-privacy (P3b): the amounts (base/quote/change/fee/price) stay
+        // in the WITNESS (private prover inputs) but no longer ride the payload
+        // — VALID_MATCH_BATCH proves conservation + the fee floor over them and
+        // the note commitments bind them, so the on-chain settle ix carries no
+        // plaintext amounts.
+        //
         // Per-match payloads carry no fee note; assemble_batch attaches the
         // batch's base+quote fee notes to the FIRST match only.
         note_fee_base_commitment,
@@ -327,7 +327,6 @@ pub fn assemble_match(
         buyer_relock_expiry: m.buyer_relock_expiry,
         seller_relock_order_id: m.seller_relock_order_id,
         seller_relock_expiry: m.seller_relock_expiry,
-        clearing_price,
         batch_slot: m.batch_slot,
     };
 
@@ -619,9 +618,9 @@ mod tests {
         // set by assemble_batch on the first match).
         assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
         assert_eq!(p.note_fee_quote_commitment, [0u8; 32]);
-        // clearing = quote/base.
+        // clearing = quote/base. Amount-privacy (P3b): the clearing price lives
+        // only in the witness now (the payload no longer carries it).
         assert_eq!(w.clearing_price, 100);
-        assert_eq!(p.clearing_price, 100);
     }
 
     #[test]
@@ -671,11 +670,12 @@ mod tests {
         assert_eq!(w.e_inner, ei);
         assert_eq!(w.buyer_change_amt, 150);
 
-        // The fee AMOUNT is still carried (conservation), but the fee NOTE
-        // is per-batch now — assemble_match leaves both fee-note slots zero
-        // even when this match has a fee. assemble_batch attaches the
-        // batch's base+quote fee notes to the first match.
-        assert_eq!(p.buyer_fee_amt, 50);
+        // The fee AMOUNT is still in the WITNESS (conservation), but the fee
+        // NOTE is per-batch now — assemble_match leaves both fee-note slots
+        // zero even when this match has a fee. assemble_batch attaches the
+        // batch's base+quote fee notes to the first match. (Amount-privacy
+        // P3b: the fee amount no longer rides the payload.)
+        assert_eq!(w.buyer_fee_amt, 50);
         assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
         assert_eq!(p.note_fee_quote_commitment, [0u8; 32]);
     }

@@ -245,7 +245,6 @@ fn test_relocked_note_consumable_across_second_batch() {
         5_000,
     );
     p0.note_e_commitment = note_e;
-    p0.buyer_change_amt = 1_000;
     p0.buyer_relock_order_id = oid_relock;
     p0.buyer_relock_expiry = far_future;
 

@@ -2,7 +2,7 @@
 //! of a CLAUDE.md §6 byte-equality contract.
 //!
 //! This Rust port MUST produce, for any payload:
-//!   - the SAME 448-byte Borsh serialization as the on-chain
+//!   - the SAME 424-byte Borsh serialization as the on-chain
 //!     `vault::instructions::tee_forced_settle::MatchResultPayload`
 //!     (AnchorSerialize) and the SDK's
 //!     `settle-builder.ts::serializePayload`;
@@ -15,14 +15,21 @@
 //! below pins the hash byte-for-byte against the on-chain
 //! `canonical_payload_hash_fixed_vector` unit test.
 //!
+//! ## Amount-privacy (P3b)
+//!
+//! The seven plaintext amount fields (`base_amount`, `quote_amount`,
+//! `buyer/seller_change_amt`, `buyer/seller_fee_amt`, `clearing_price`) were
+//! dropped from the payload — they're proven in-circuit + bound by the note
+//! commitments, and putting them in the (public, on-chain) settle ix leaked
+//! every trade size. The domain tag bumped `v6`→`v7`.
+//!
 //! ## Two distinct field orderings (do not conflate)
 //!
 //! - **Borsh serialize** (the ix data): declaration order, with the two
 //!   fee-note fields `note_fee_base_commitment` + `note_fee_quote_commitment`
-//!   AFTER `seller_fee_amt` (positions 18-19).
-//! - **Canonical hash**: a hand-ordered concatenation that places the two
-//!   fee-note fields right after `note_f_commitment` (positions 8-9),
-//!   before the nullifiers. Domain-tagged `b"nyx-match-v6"`.
+//!   right after `order_id_b`.
+//! - **Canonical hash**: the same hand-ordered concatenation, domain-tagged
+//!   `b"nyx-match-v7"`.
 //!
 //! Both orderings are reproduced verbatim below from the on-chain
 //! source + the SDK.
@@ -32,13 +39,12 @@ use sha2::{Digest, Sha256};
 
 /// Domain tag for the canonical hash. **Do not change** — on-chain
 /// verification rejects any hash computed with a different tag. Bumped
-/// `v5`→`v6` when the single fee-note slot was split into base + quote.
-pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v6";
+/// `v6`→`v7` when amount-privacy (P3b) dropped the seven plaintext amounts.
+pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v7";
 
-/// 24-field settle payload. Field order is the on-chain struct's
-/// declaration order — `#[derive(BorshSerialize)]` then produces
-/// byte-identical output to AnchorSerialize + the SDK's
-/// `serializePayload`.
+/// Settle payload. Field order is the on-chain struct's declaration order —
+/// `#[derive(BorshSerialize)]` then produces byte-identical output to
+/// AnchorSerialize + the SDK's `serializePayload`.
 // `BorshDeserialize` is the exact inverse of `BorshSerialize` — same
 // byte layout, so the §6 byte-equality contract is untouched. It's
 // needed by `crate::merkle::events` to recover settle leaf values from
@@ -56,26 +62,19 @@ pub struct MatchResultPayload {
     pub nullifier_b: [u8; 32],
     pub order_id_a: [u8; 16],
     pub order_id_b: [u8; 16],
-    pub base_amount: u64,
-    pub quote_amount: u64,
-    pub buyer_change_amt: u64,
-    pub seller_change_amt: u64,
-    pub buyer_fee_amt: u64,
-    pub seller_fee_amt: u64,
     pub note_fee_base_commitment: [u8; 32],
     pub note_fee_quote_commitment: [u8; 32],
     pub buyer_relock_order_id: [u8; 16],
     pub buyer_relock_expiry: u64,
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
-    pub clearing_price: u64,
     pub batch_slot: u64,
 }
 
 impl MatchResultPayload {
-    /// Total Borsh-encoded width: 16 + 6×32 + 2×32 + 2×16 + 6×8 +
-    /// 2×32 (base+quote fee notes) + 16 + 8 + 16 + 8 + 8 + 8 = 480 bytes.
-    pub const WIRE_LEN: usize = 480;
+    /// Total Borsh-encoded width: 16 + 6×32 + 2×32 + 2×16 +
+    /// 2×32 (base+quote fee notes) + 16 + 8 + 16 + 8 + 8 = 424 bytes.
+    pub const WIRE_LEN: usize = 424;
 
     /// Borsh serialization — the bytes that go into the
     /// `tee_forced_settle_batched` ix data. Byte-identical to the
@@ -104,17 +103,10 @@ impl MatchResultPayload {
         h.update(self.nullifier_b);
         h.update(self.order_id_a);
         h.update(self.order_id_b);
-        h.update(self.base_amount.to_le_bytes());
-        h.update(self.quote_amount.to_le_bytes());
-        h.update(self.buyer_change_amt.to_le_bytes());
-        h.update(self.seller_change_amt.to_le_bytes());
-        h.update(self.buyer_fee_amt.to_le_bytes());
-        h.update(self.seller_fee_amt.to_le_bytes());
         h.update(self.buyer_relock_order_id);
         h.update(self.buyer_relock_expiry.to_le_bytes());
         h.update(self.seller_relock_order_id);
         h.update(self.seller_relock_expiry.to_le_bytes());
-        h.update(self.clearing_price.to_le_bytes());
         h.update(self.batch_slot.to_le_bytes());
         h.finalize().into()
     }
@@ -140,19 +132,12 @@ mod tests {
             nullifier_b: [0xEB; 32],
             order_id_a: [0x01; 16],
             order_id_b: [0x02; 16],
-            base_amount: 100,
-            quote_amount: 5_000,
-            buyer_change_amt: 0,
-            seller_change_amt: 0,
-            buyer_fee_amt: 0,
-            seller_fee_amt: 0,
             note_fee_base_commitment: [0; 32],
             note_fee_quote_commitment: [0; 32],
             buyer_relock_order_id: [0; 16],
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
-            clearing_price: 0,
             batch_slot: 0,
         }
     }
@@ -163,9 +148,9 @@ mod tests {
     #[test]
     fn canonical_hash_matches_onchain_fixed_vector() {
         let expected: [u8; 32] = [
-            0x98, 0xF6, 0xF0, 0x18, 0x48, 0x80, 0x02, 0x61, 0x5E, 0x03, 0xD0, 0x22, 0xF9, 0xCF,
-            0xAC, 0x17, 0x27, 0x9A, 0xB3, 0xE5, 0xAB, 0x15, 0x5F, 0xA2, 0xCF, 0x71, 0xAD, 0x4D,
-            0x08, 0x84, 0x6B, 0x47,
+            0x38, 0xD6, 0x61, 0x37, 0x4A, 0x9C, 0xA4, 0xAF, 0x86, 0xE5, 0x89, 0x6C, 0xD6, 0x6B,
+            0x0F, 0xA0, 0xF0, 0x5C, 0x39, 0xAC, 0x67, 0x33, 0x22, 0x92, 0x0B, 0x96, 0xEE, 0x42,
+            0xE1, 0xAD, 0x4C, 0x2D,
         ];
         let got = fixed_vector_payload().canonical_hash();
         assert_eq!(
@@ -175,10 +160,10 @@ mod tests {
     }
 
     #[test]
-    fn borsh_serialization_is_480_bytes() {
+    fn borsh_serialization_is_424_bytes() {
         let bytes = fixed_vector_payload().serialize();
         assert_eq!(bytes.len(), MatchResultPayload::WIRE_LEN);
-        assert_eq!(bytes.len(), 480);
+        assert_eq!(bytes.len(), 424);
     }
 
     #[test]
@@ -190,10 +175,11 @@ mod tests {
         assert_eq!(&bytes[0..16], &[0x11; 16]); // match_id
         assert_eq!(&bytes[16..48], &[0xA1; 32]); // note_a
         assert_eq!(&bytes[48..80], &[0xB1; 32]); // note_b
-                                                 // base_amount is at offset 16 + 6*32 + 2*32 + 2*16 = 16+192+64+32 = 304.
-        assert_eq!(&bytes[304..312], &100u64.to_le_bytes());
-        // quote_amount immediately after.
-        assert_eq!(&bytes[312..320], &5_000u64.to_le_bytes());
+                                                 // Amount-privacy (P3b): the amount block is gone, so the two fee-note
+                                                 // commitments now sit right after order_id_b at offset
+                                                 // 16 + 6*32 + 2*32 + 2*16 = 304 (both [0;32] in the fixture).
+        assert_eq!(&bytes[304..336], &[0u8; 32]); // note_fee_base_commitment
+        assert_eq!(&bytes[336..368], &[0u8; 32]); // note_fee_quote_commitment
     }
 
     #[test]
@@ -235,9 +221,7 @@ mod tests {
         perturb!(note_a_commitment = [0xA2; 32]);
         perturb!(nullifier_a = [0xE0; 32]);
         perturb!(order_id_b = [0x03; 16]);
-        perturb!(base_amount = 101);
-        perturb!(quote_amount = 5_001);
-        perturb!(clearing_price = 1);
+        perturb!(note_fee_base_commitment = [0x77; 32]);
         perturb!(batch_slot = 1);
         perturb!(buyer_relock_expiry = 1);
     }

@@ -14,6 +14,9 @@ export interface FillRow extends SettleFill {
   signature: string;
 }
 
+// Amount-privacy (P3b): the on-chain settle ix no longer carries amounts, so
+// the indexer stores commitments + a partial-fill flag only (no change_amount /
+// clearing_price columns). Clients reconstruct amounts from the FillMemo.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS fills (
   order_id              TEXT    NOT NULL,
@@ -21,9 +24,8 @@ CREATE TABLE IF NOT EXISTS fills (
   match_id              TEXT    NOT NULL,
   signature             TEXT    NOT NULL,
   slot                  INTEGER NOT NULL,
-  change_amount         TEXT    NOT NULL,
+  is_partial_fill       INTEGER NOT NULL,
   change_note_commitment TEXT,
-  clearing_price        TEXT    NOT NULL,
   batch_slot            TEXT    NOT NULL,
   created_at            INTEGER NOT NULL,
   PRIMARY KEY (signature, match_id, side)
@@ -49,9 +51,9 @@ export class FillsDb {
   upsertFills(signature: string, slot: number, fills: SettleFill[]): void {
     const stmt = this.db.prepare(
       `INSERT OR IGNORE INTO fills
-        (order_id, side, match_id, signature, slot, change_amount,
-         change_note_commitment, clearing_price, batch_slot, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (order_id, side, match_id, signature, slot, is_partial_fill,
+         change_note_commitment, batch_slot, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const now = Date.now();
     for (const f of fills) {
@@ -61,9 +63,8 @@ export class FillsDb {
         f.matchId,
         signature,
         slot,
-        f.changeAmount,
+        f.isPartialFill ? 1 : 0,
         f.changeNoteCommitment,
-        f.clearingPrice,
         f.batchSlot,
         now,
       );
@@ -74,8 +75,8 @@ export class FillsDb {
   getFillsByOrder(orderId: string, sinceSlot = 0): FillRow[] {
     const rows = this.db
       .prepare(
-        `SELECT order_id, side, match_id, signature, slot, change_amount,
-                change_note_commitment, clearing_price, batch_slot
+        `SELECT order_id, side, match_id, signature, slot, is_partial_fill,
+                change_note_commitment, batch_slot
            FROM fills
           WHERE order_id = ? AND slot >= ?
           ORDER BY slot ASC, side ASC`,
@@ -86,9 +87,8 @@ export class FillsDb {
       side: r.side as "buyer" | "seller",
       matchId: r.match_id as string,
       signature: r.signature as string,
-      changeAmount: r.change_amount as string,
+      isPartialFill: (r.is_partial_fill as number) === 1,
       changeNoteCommitment: (r.change_note_commitment as string | null) ?? null,
-      clearingPrice: r.clearing_price as string,
       batchSlot: r.batch_slot as string,
     }));
   }

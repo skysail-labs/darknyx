@@ -141,7 +141,10 @@ pub fn lock_note_handler(
     lock.order_id = order_id;
     lock.expiry_slot = expiry_slot;
     lock.locked_by = ctx.accounts.tee_authority.key();
-    lock.amount = amount;
+    // NoteLock.amount removed (amount-privacy P3b) — the lock no longer stores
+    // the note value. `amount` is still a VALID_INPUT public input above (it
+    // binds the lock to the real Merkle leaf) and rides the NoteLocked event,
+    // a separate boundary surface out of this change's scope.
     lock.bump = ctx.bumps.note_lock;
     lock._padding = [0u8; 7];
 

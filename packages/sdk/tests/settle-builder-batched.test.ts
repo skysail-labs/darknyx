@@ -9,12 +9,12 @@
  *   1. Account ordering matches `TeeForcedSettleBatched<'info>`
  *      (14 accounts, merkle_tree at slot 2, batch_validity_marker at slot 12).
  *   2. Data starts with `sha256("global:tee_forced_settle_batched")[..8]`.
- *   3. `ix.data` length = 8 (disc) + 1 (tree_id) + 480 (Borsh payload)
+ *   3. `ix.data` length = 8 (disc) + 1 (tree_id) + 424 (Borsh payload)
  *                       + 1 (matchIndex u8) + 128 (4 × 32-byte siblings)
- *                       = 618 bytes.
+ *                       = 562 bytes.
  *   4. The 4 Merkle siblings are encoded contiguously with NO length
  *      prefix (Anchor's `[[u8; 32]; 4]` wire shape).
- *   5. The match-index byte lives at offset `8 + 1 + 480` and reflects the
+ *   5. The match-index byte lives at offset `8 + 1 + 424` and reflects the
  *      caller-supplied value.
  *   6. Account slot 12 (`batch_validity_marker`) is the PDA derived
  *      from `[b"batch_validity", merkleRoot]` under the program id.
@@ -66,8 +66,6 @@ function exactFillFixture(): MatchResultPayload {
     nullifierB: filled(32, 0xEB),
     orderIdA: filled(16, 0x01),
     orderIdB: filled(16, 0x02),
-    baseAmount: 100n,
-    quoteAmount: 5_000n,
   });
 }
 
@@ -146,14 +144,13 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xF0),
     });
-    // 480-byte v6 Borsh payload — the single note_fee_commitment slot was
-    // split into note_fee_base_commitment + note_fee_quote_commitment
-    // (+32 bytes vs the old 448), see `serializePayload`.
+    // 424-byte v7 Borsh payload — amount-privacy (P3b) dropped the seven
+    // plaintext amount fields (-56 bytes vs the old 480), see `serializePayload`.
     const payloadBytes = serializePayload(payload);
-    expect(payloadBytes.length).toBe(480);
-    // 8 disc + 480 payload + 1 match_index byte + 4 × 32 sibling bytes.
-    expect(ix.data.length).toBe(8 + 1 + 480 + 1 + 128);
-    expect(ix.data.length).toBe(618);
+    expect(payloadBytes.length).toBe(424);
+    // 8 disc + 424 payload + 1 match_index byte + 4 × 32 sibling bytes.
+    expect(ix.data.length).toBe(8 + 1 + 424 + 1 + 128);
+    expect(ix.data.length).toBe(562);
   });
 
   it("[settle_batched_siblings_encoding] 4 siblings encoded contiguously without a length prefix", () => {
@@ -170,7 +167,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     });
     const buf = new Uint8Array(ix.data);
     // Siblings start right after disc + payload + 1-byte match_index.
-    const siblingsOffset = 8 + 1 + 480 + 1;
+    const siblingsOffset = 8 + 1 + 424 + 1;
     for (let i = 0; i < 4; i++) {
       const slice = buf.slice(
         siblingsOffset + i * 32,
@@ -196,7 +193,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const ix0 = buildSettleBatchedIx({ ...args, matchIndex: 0 });
     const ix7 = buildSettleBatchedIx({ ...args, matchIndex: 7 });
     const ix15 = buildSettleBatchedIx({ ...args, matchIndex: 15 });
-    const off = 8 + 1 + 480;
+    const off = 8 + 1 + 424;
     expect(ix0.data[off]).toBe(0);
     expect(ix7.data[off]).toBe(7);
     expect(ix15.data[off]).toBe(15);
@@ -259,7 +256,6 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     // Change-note variant: noteE non-zero → lock_e diverges from lock_f.
     const withChange: MatchResultPayload = {
       ...exact,
-      buyerChangeAmt: 50n,
       noteEcommitment: filled(32, 0xE2),
     };
     const ixChange = buildSettleBatchedIx({
@@ -468,7 +464,6 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const base = exactFillFixture();
     const relock: MatchResultPayload = {
       ...base,
-      buyerChangeAmt: 7_021n,
       noteEcommitment: filled(32, 0xE2),
       buyerRelockOrderId: filled(16, 0xAB),
       buyerRelockExpiry: 1_234_567n,
@@ -484,7 +479,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xF0),
     });
-    const payloadBytes = new Uint8Array(ix.data).slice(9, 9 + 480);
+    const payloadBytes = new Uint8Array(ix.data).slice(9, 9 + 424);
     expect(payloadBytes).toEqual(serializePayload(relock));
   });
 });

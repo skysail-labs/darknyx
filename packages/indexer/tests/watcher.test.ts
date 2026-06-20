@@ -44,19 +44,12 @@ function payload(): MatchResultPayload {
     nullifierB: fill(32, 0x1b),
     orderIdA: fill(16, 0xaa),
     orderIdB: fill(16, 0xbb),
-    baseAmount: 1000n,
-    quoteAmount: 2000n,
-    buyerChangeAmt: 111n,
-    sellerChangeAmt: 222n,
-    buyerFeeAmt: 3n,
-    sellerFeeAmt: 4n,
     noteFeeBaseCommitment: fill(32, 0),
     noteFeeQuoteCommitment: fill(32, 0),
     buyerRelockOrderId: fill(16, 0),
     buyerRelockExpiry: 0n,
     sellerRelockOrderId: fill(16, 0),
     sellerRelockExpiry: 0n,
-    clearingPrice: 1500n,
     batchSlot: 99n,
   };
 }
@@ -123,7 +116,8 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
     const buyer = hexN(0xaa, 16);
     const rows = db.getFillsByOrder(buyer);
     expect(rows).toHaveLength(1); // not duplicated
-    expect(rows[0].changeAmount).toBe("111");
+    expect(rows[0].isPartialFill).toBe(true);
+    expect(rows[0].changeNoteCommitment).toBe(hexN(0xee, 32));
     expect(rows[0].signature).toBe("sigABC");
 
     const { server, port } = await startServer(db, 0);

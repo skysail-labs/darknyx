@@ -26,17 +26,24 @@ use crate::errors::VaultError;
 use crate::state::*;
 use anchor_lang::prelude::*;
 
-/// Phase-5 MatchResultPayload — extended with change-note commitments and
-/// input-note values so the vault can verify the conservation law before
-/// writing any state.
+/// Phase-5 MatchResultPayload — carries the commitments + relock plumbing
+/// the on-chain settle handler needs.
 ///
-/// Conservation law (spec `change_note_implementation.md`):
-///   note_A.amount == quote_amount + buyer_change_amt   (buyer pays quote)
-///   note_B.amount == base_amount  + seller_change_amt  (seller pays base)
+/// **Amount-privacy (P3b).** The plaintext amounts (`base_amount`,
+/// `quote_amount`, `buyer/seller_change_amt`, `buyer/seller_fee_amt`,
+/// `clearing_price`) USED to live here so the chain could re-check the
+/// conservation law + fee floor. They have been REMOVED: VALID_MATCH_BATCH
+/// now proves conservation + the fee floor in-circuit over PRIVATE amounts
+/// (range-checked), and the note commitments bind the amounts transitively.
+/// Putting them in the settle ix (which lands on-chain in plaintext) was a
+/// public leak — competitors could read every trade size + execution price.
+/// The payload now carries ONLY commitments, nullifiers, order ids, relock
+/// fields, and the batch slot. Each client reconstructs its own amounts from
+/// the per-account FillMemo.
 ///
 /// `note_e_commitment` / `note_f_commitment` carry the Poseidon-hashed
 /// change note commitments for buyer and seller respectively. They are
-/// encoded as `[0u8; 32]` when the corresponding `change_amt` is zero
+/// encoded as `[0u8; 32]` when the corresponding change is zero
 /// (exact-fill) to keep the payload fixed-size and Borsh-stable; the
 /// handler skips the tree insertion for zero commitments.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
@@ -52,16 +59,6 @@ pub struct MatchResultPayload {
     pub nullifier_b: [u8; 32],
     pub order_id_a: [u8; 16],
     pub order_id_b: [u8; 16],
-    pub base_amount: u64,
-    pub quote_amount: u64,
-    pub buyer_change_amt: u64,
-    pub seller_change_amt: u64,
-    /// Buyer-side protocol fee (quote units). Subtracted from note_A at
-    /// conservation-law check time. Already rolled into the batch fee
-    /// accumulator by `run_batch`.
-    pub buyer_fee_amt: u64,
-    /// Seller-side protocol fee (base units).
-    pub seller_fee_amt: u64,
     /// Batch-level protocol fee notes — ONE PER MINT. `[0u8;32]` = no fee
     /// note for that mint. Populated by the TEE only on the settlement
     /// chosen to carry the batch flush — the first settlement in the batch
@@ -82,18 +79,16 @@ pub struct MatchResultPayload {
     pub buyer_relock_expiry: u64,
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
-    pub clearing_price: u64,
     pub batch_slot: u64,
-    // v3.1 note: `price_proof` and `price_commitment` previously lived
-    // here. They have been factored out into a preceding `verify_valid_price`
-    // ix that writes a `ValidPriceMarker` PDA. This handler recomputes
-    // `Poseidon3(DOMAIN_PRICE, clearing_price, batch_slot)` from the two
-    // u64 fields above and asserts the marker PDA exists at that address.
-    // The v3.1 price factor-out did NOT change canonical_payload_hash.
-    // The base/quote fee-note split (this PR) DID — the single
-    // `note_fee_commitment` became `note_fee_base_commitment` +
-    // `note_fee_quote_commitment`, and the domain tag bumped
-    // `nyx-match-v5` → `nyx-match-v6`.
+    // Amount-privacy (P3b): `clearing_price` was removed alongside the other
+    // plaintext amounts — the price is proven in-circuit
+    // (`quote === base*price`) and bound inside the note commitments, so it no
+    // longer needs to ride in the (public) settle ix. The domain tag bumped
+    // `nyx-match-v6` → `nyx-match-v7` for this layout change.
+    //
+    // v3.1 note: `price_proof` and `price_commitment` had previously been
+    // factored out into a preceding `verify_valid_price` ix; that path was
+    // since subsumed by the batched VALID_MATCH_BATCH proof.
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +121,6 @@ pub(crate) fn create_relock_pda<'info>(
     token_mint: &Pubkey,
     order_id: &[u8; 16],
     expiry_slot: u64,
-    amount: u64,
 ) -> Result<()> {
     use anchor_lang::system_program;
     use core::mem::size_of;
@@ -174,7 +168,6 @@ pub(crate) fn create_relock_pda<'info>(
         lock.order_id = *order_id;
         lock.expiry_slot = expiry_slot;
         lock.locked_by = payer.key();
-        lock.amount = amount;
         lock.bump = bump;
         lock._padding = [0u8; 7];
     }
@@ -212,21 +205,16 @@ pub struct TradeSettled {
 /// produce byte-identical output.
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     use solana_program::hash::hashv;
-    let base = p.base_amount.to_le_bytes();
-    let quote = p.quote_amount.to_le_bytes();
-    let buyer_change = p.buyer_change_amt.to_le_bytes();
-    let seller_change = p.seller_change_amt.to_le_bytes();
-    let buyer_fee = p.buyer_fee_amt.to_le_bytes();
-    let seller_fee = p.seller_fee_amt.to_le_bytes();
     let buyer_relock_exp = p.buyer_relock_expiry.to_le_bytes();
     let seller_relock_exp = p.seller_relock_expiry.to_le_bytes();
-    let price = p.clearing_price.to_le_bytes();
     let slot = p.batch_slot.to_le_bytes();
     hashv(&[
-        // v6: the single fee-note slot was split into base + quote (the
-        // per-batch base-mint protocol fee note is new). Bumping the domain
-        // tag invalidates v5 signatures over the old single-slot layout.
-        b"nyx-match-v6",
+        // v7: amount-privacy (P3b) dropped the seven plaintext amount fields
+        // (base/quote/buyer_change/seller_change/buyer_fee/seller_fee/price)
+        // from the payload — they're proven in-circuit + bound by the note
+        // commitments. Bumping the tag invalidates every v6 signature over the
+        // old amount-bearing layout.
+        b"nyx-match-v7",
         p.match_id.as_ref(),
         p.note_a_commitment.as_ref(),
         p.note_b_commitment.as_ref(),
@@ -240,17 +228,10 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         p.nullifier_b.as_ref(),
         p.order_id_a.as_ref(),
         p.order_id_b.as_ref(),
-        &base,
-        &quote,
-        &buyer_change,
-        &seller_change,
-        &buyer_fee,
-        &seller_fee,
         p.buyer_relock_order_id.as_ref(),
         &buyer_relock_exp,
         p.seller_relock_order_id.as_ref(),
         &seller_relock_exp,
-        &price,
         &slot,
     ])
     .to_bytes()
@@ -369,19 +350,12 @@ mod tests {
             nullifier_b: [0xEBu8; 32],
             order_id_a: [0x01u8; 16],
             order_id_b: [0x02u8; 16],
-            base_amount: 100,
-            quote_amount: 5_000,
-            buyer_change_amt: 0,
-            seller_change_amt: 0,
-            buyer_fee_amt: 0,
-            seller_fee_amt: 0,
             note_fee_base_commitment: [0u8; 32],
             note_fee_quote_commitment: [0u8; 32],
             buyer_relock_order_id: [0u8; 16],
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0u8; 16],
             seller_relock_expiry: 0,
-            clearing_price: 0,
             batch_slot: 0,
         };
         let hash = canonical_payload_hash(&p);
@@ -389,9 +363,9 @@ mod tests {
         // `[hash_cross_env_parity]`. When the payload shape changes, update
         // BOTH sides — any divergence breaks the TEE signature verification.
         let expected: [u8; 32] = [
-            0x98, 0xF6, 0xF0, 0x18, 0x48, 0x80, 0x02, 0x61, 0x5E, 0x03, 0xD0, 0x22, 0xF9, 0xCF,
-            0xAC, 0x17, 0x27, 0x9A, 0xB3, 0xE5, 0xAB, 0x15, 0x5F, 0xA2, 0xCF, 0x71, 0xAD, 0x4D,
-            0x08, 0x84, 0x6B, 0x47,
+            0x38, 0xD6, 0x61, 0x37, 0x4A, 0x9C, 0xA4, 0xAF, 0x86, 0xE5, 0x89, 0x6C, 0xD6, 0x6B,
+            0x0F, 0xA0, 0xF0, 0x5C, 0x39, 0xAC, 0x67, 0x33, 0x22, 0x92, 0x0B, 0x96, 0xEE, 0x42,
+            0xE1, 0xAD, 0x4C, 0x2D,
         ];
         if hash != expected {
             panic!("canonical_payload_hash drifted — got {:02X?}", hash);

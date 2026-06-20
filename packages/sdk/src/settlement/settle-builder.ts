@@ -63,7 +63,13 @@ export const ZERO_PROOF: Groth16Proof = {
   piC: new Uint8Array(64),
 };
 
-/** Byte-for-byte shape of `tee_forced_settle::MatchResultPayload`. */
+/** Byte-for-byte shape of `tee_forced_settle::MatchResultPayload`.
+ *
+ *  Amount-privacy (P3b): the seven plaintext amount fields (baseAmount,
+ *  quoteAmount, buyer/sellerChangeAmt, buyer/sellerFeeAmt, clearingPrice) were
+ *  removed — they're proven in-circuit + bound by the note commitments, and
+ *  putting them in the (public, on-chain) settle ix leaked every trade size.
+ *  The canonical-hash domain bumped `v6`→`v7`. */
 export interface MatchResultPayload {
   matchId: Uint8Array;              // [u8; 16]
   noteAcommitment: Uint8Array;      // [u8; 32]
@@ -76,12 +82,6 @@ export interface MatchResultPayload {
   nullifierB: Uint8Array;
   orderIdA: Uint8Array;             // [u8; 16]
   orderIdB: Uint8Array;
-  baseAmount: bigint;
-  quoteAmount: bigint;
-  buyerChangeAmt: bigint;
-  sellerChangeAmt: bigint;
-  buyerFeeAmt: bigint;
-  sellerFeeAmt: bigint;
   // Per-batch protocol fee notes, one per mint ([0;32] = none). Both set
   // only on the first settlement in a batch. base = seller-side (base
   // mint), quote = buyer-side (quote mint).
@@ -91,15 +91,7 @@ export interface MatchResultPayload {
   buyerRelockExpiry: bigint;
   sellerRelockOrderId: Uint8Array;
   sellerRelockExpiry: bigint;
-  clearingPrice: bigint;
   batchSlot: bigint;
-  // v3.1: `priceProof` and `priceCommitment` are no longer in the settle
-  // payload. The VALID_PRICE Groth16 proof now lives in a preceding
-  // `verify_valid_price` ix that writes a marker PDA at
-  // `[b"valid_price", priceCommitment]`. The on-chain settle handler
-  // recomputes the commitment from (clearingPrice, batchSlot) and
-  // asserts the marker PDA exists. Build the prep ix via
-  // `buildVerifyValidPriceIx` and submit it before the settle tx.
 }
 
 // ---------- Borsh serialisation ----------
@@ -142,24 +134,15 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     fixed(p.nullifierB, 32),
     fixed(p.orderIdA, 16),
     fixed(p.orderIdB, 16),
-    u64LE(p.baseAmount),
-    u64LE(p.quoteAmount),
-    u64LE(p.buyerChangeAmt),
-    u64LE(p.sellerChangeAmt),
-    u64LE(p.buyerFeeAmt),
-    u64LE(p.sellerFeeAmt),
     fixed(p.noteFeeBaseCommitment, 32),
     fixed(p.noteFeeQuoteCommitment, 32),
     fixed(p.buyerRelockOrderId, 16),
     u64LE(p.buyerRelockExpiry),
     fixed(p.sellerRelockOrderId, 16),
     u64LE(p.sellerRelockExpiry),
-    u64LE(p.clearingPrice),
     u64LE(p.batchSlot),
-    // v3.1: priceProof + priceCommitment removed from the payload (the
-    // Groth16 proof is verified by a preceding `verify_valid_price` ix
-    // that writes a marker PDA; the settle handler recomputes
-    // priceCommitment from clearingPrice + batchSlot and reads the marker).
+    // Amount-privacy (P3b): the seven plaintext amount fields were removed
+    // from the payload (proven in-circuit + bound by the note commitments).
   );
 }
 
@@ -174,8 +157,8 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
  */
 export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   const h = createHash("sha256");
-  // v6: the single fee-note slot was split into base + quote.
-  h.update(Buffer.from("nyx-match-v6"));
+  // v7: amount-privacy (P3b) dropped the seven plaintext amount fields.
+  h.update(Buffer.from("nyx-match-v7"));
   h.update(fixed(p.matchId, 16));
   h.update(fixed(p.noteAcommitment, 32));
   h.update(fixed(p.noteBcommitment, 32));
@@ -189,17 +172,10 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   h.update(fixed(p.nullifierB, 32));
   h.update(fixed(p.orderIdA, 16));
   h.update(fixed(p.orderIdB, 16));
-  h.update(u64LE(p.baseAmount));
-  h.update(u64LE(p.quoteAmount));
-  h.update(u64LE(p.buyerChangeAmt));
-  h.update(u64LE(p.sellerChangeAmt));
-  h.update(u64LE(p.buyerFeeAmt));
-  h.update(u64LE(p.sellerFeeAmt));
   h.update(fixed(p.buyerRelockOrderId, 16));
   h.update(u64LE(p.buyerRelockExpiry));
   h.update(fixed(p.sellerRelockOrderId, 16));
   h.update(u64LE(p.sellerRelockExpiry));
-  h.update(u64LE(p.clearingPrice));
   h.update(u64LE(p.batchSlot));
   return new Uint8Array(h.digest());
 }
@@ -437,7 +413,12 @@ export function buildCloseBatchValidityMarkerIx(
 
 /** Construct an exact-fill payload with sensible zero defaults for the
  *  Phase-5 fields. Callers can mutate the returned object for partial
- *  fills / fees / re-locks. */
+ *  fills / fees / re-locks.
+ *
+ *  Amount-privacy (P3b): `baseAmount` / `quoteAmount` / `clearingPrice` no
+ *  longer ride the payload. They're accepted as optional args for call-site
+ *  back-compat (and to read as "this is a 100-base/5000-quote fill") but are
+ *  not written anywhere. */
 export function exactFillPayload(args: {
   matchId: Uint8Array;
   noteAcommitment: Uint8Array;
@@ -448,8 +429,8 @@ export function exactFillPayload(args: {
   nullifierB: Uint8Array;
   orderIdA: Uint8Array;
   orderIdB: Uint8Array;
-  baseAmount: bigint;
-  quoteAmount: bigint;
+  baseAmount?: bigint;
+  quoteAmount?: bigint;
   clearingPrice?: bigint;
   batchSlot?: bigint;
 }): MatchResultPayload {
@@ -465,36 +446,12 @@ export function exactFillPayload(args: {
     nullifierB: args.nullifierB,
     orderIdA: args.orderIdA,
     orderIdB: args.orderIdB,
-    baseAmount: args.baseAmount,
-    quoteAmount: args.quoteAmount,
-    buyerChangeAmt: 0n,
-    sellerChangeAmt: 0n,
-    buyerFeeAmt: 0n,
-    sellerFeeAmt: 0n,
     noteFeeBaseCommitment: ZERO_COMMITMENT,
     noteFeeQuoteCommitment: ZERO_COMMITMENT,
     buyerRelockOrderId: RELOCK_ORDER_ID_NONE,
     buyerRelockExpiry: 0n,
     sellerRelockOrderId: RELOCK_ORDER_ID_NONE,
     sellerRelockExpiry: 0n,
-    // v3.1: default clearingPrice from the leg ratio. The VALID_PRICE
-    // circuit asserts `quoteAmount === baseAmount * clearingPrice` exactly,
-    // so for any explicit-fill match this is forced. Tests that need a
-    // different price (e.g. asserting the circuit catches mismatches)
-    // pass `clearingPrice` explicitly.
-    clearingPrice: args.clearingPrice ?? (
-      args.baseAmount === 0n
-        ? 0n
-        : args.quoteAmount % args.baseAmount === 0n
-          ? args.quoteAmount / args.baseAmount
-          : (() => {
-              throw new Error(
-                `exactFillPayload: quoteAmount (${args.quoteAmount}) ` +
-                  `is not an exact multiple of baseAmount (${args.baseAmount}); ` +
-                  `pass an explicit clearingPrice to override`,
-              );
-            })()
-    ),
     batchSlot: args.batchSlot ?? 0n,
   };
 }

@@ -158,18 +158,18 @@ impl ConsumedNoteEntry {
 
 /// PDA locking a note to a specific order. Automatically expires at `expiry_slot`.
 ///
-/// Phase 5 additions:
-///   - `amount` is the full value of the locked note (in base units of the
-///     asset the note carries). Captured at `lock_note` time so
-///     `tee_forced_settle` can enforce the conservation-law equality
-///     `note.amount == trade_leg + change_leg` before ever writing state.
+/// Amount-privacy (P3b): the `amount` field (the locked note's full value) was
+/// REMOVED. It was only ever read by the old on-chain conservation check in
+/// `tee_forced_settle*`, which is now proven in-circuit by VALID_MATCH_BATCH
+/// over private, range-checked amounts. The note commitment binds the amount;
+/// the lock no longer needs (and must not leak) it.
 ///
 /// v2 additions (on-chain hardening — see `tee_v2_status_and_migration_brief.md`):
 ///   - `token_mint` is the SPL mint that the locked note carries. Set by
 ///     `lock_note` from the public inputs of the VALID_INPUT proof (so it is
 ///     cryptographically bound to the on-chain Merkle leaf — a malicious TEE
-///     cannot lie about the mint). Used by `tee_forced_settle` for per-mint
-///     conservation checks.
+///     cannot lie about the mint). The settle handler reads it back to
+///     recompute the batch-binding leaf + to stamp continuation re-locks.
 #[account(zero_copy)]
 pub struct NoteLock {
     pub note_commitment: [u8; 32],
@@ -177,7 +177,6 @@ pub struct NoteLock {
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
     pub locked_by: Pubkey, // the TEE key that locked
-    pub amount: u64,
     pub bump: u8,
     pub _padding: [u8; 7],
 }

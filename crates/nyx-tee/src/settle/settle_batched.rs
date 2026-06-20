@@ -14,12 +14,12 @@
 //! Args (after the 8-byte discriminator):
 //!   - `tree_id: u8`                  — which `merkle_tree` shard the
 //!     output notes append to (post-sharding; first arg)
-//!   - `payload: MatchResultPayload`  — 480-byte Borsh ([`super::payload`])
+//!   - `payload: MatchResultPayload`  — 424-byte Borsh ([`super::payload`])
 //!   - `match_index: u8`              — position in the batch (0..15)
 //!   - `merkle_proof: [[u8;32]; 4]`   — 128 contiguous bytes, the
 //!     depth-4 inclusion path (leaf-level sibling first)
 //!
-//! ix data total = 8 + 1 + 480 + 1 + 128 = 618 bytes.
+//! ix data total = 8 + 1 + 424 + 1 + 128 = 562 bytes.
 //!
 //! `merkle_root` is NOT in the ix data — it only derives the
 //! `batch_validity_marker` PDA address. The handler recomputes the
@@ -227,19 +227,12 @@ mod tests {
             nullifier_b: [0xEB; 32],
             order_id_a: [0x01; 16],
             order_id_b: [0x02; 16],
-            base_amount: 100,
-            quote_amount: 5_000,
-            buyer_change_amt: 0,
-            seller_change_amt: 0,
-            buyer_fee_amt: 0,
-            seller_fee_amt: 0,
             note_fee_base_commitment: [0; 32],
             note_fee_quote_commitment: [0; 32],
             buyer_relock_order_id: [0; 16],
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
-            clearing_price: 0,
             batch_slot: 0,
         }
     }
@@ -305,10 +298,10 @@ mod tests {
     fn ix_data_total_length() {
         let ix =
             build_settle_batched_ix(&dummy_tee(), 0, &dummy_payload(), 3, &proof(), &[0xAB; 32]);
-        // 8 disc + 1 tree_id + 480 payload (v6, base+quote fee notes)
-        // + 1 match_index + 128 siblings = 618.
-        assert_eq!(ix.data.len(), 8 + 1 + 480 + 1 + 128);
-        assert_eq!(ix.data.len(), 618);
+        // 8 disc + 1 tree_id + 424 payload (v7, amount-privacy P3b)
+        // + 1 match_index + 128 siblings = 562.
+        assert_eq!(ix.data.len(), 8 + 1 + 424 + 1 + 128);
+        assert_eq!(ix.data.len(), 562);
     }
 
     #[test]
@@ -316,14 +309,14 @@ mod tests {
         let ix =
             build_settle_batched_ix(&dummy_tee(), 5, &dummy_payload(), 7, &proof(), &[0xAB; 32]);
         assert_eq!(&ix.data[..8], &*SETTLE_BATCHED_DISCRIMINATOR);
-        // tree_id at 8; payload occupies [9, 489); match_index at 489;
-        // siblings [490, 618).
+        // tree_id at 8; payload occupies [9, 433); match_index at 433;
+        // siblings [434, 562).
         assert_eq!(ix.data[8], 5); // tree_id
-        assert_eq!(ix.data[489], 7); // match_index
-        assert_eq!(&ix.data[490..522], &[0x01; 32]); // sibling 0
-        assert_eq!(&ix.data[522..554], &[0x02; 32]); // sibling 1
-        assert_eq!(&ix.data[554..586], &[0x03; 32]);
-        assert_eq!(&ix.data[586..618], &[0x04; 32]);
+        assert_eq!(ix.data[433], 7); // match_index
+        assert_eq!(&ix.data[434..466], &[0x01; 32]); // sibling 0
+        assert_eq!(&ix.data[466..498], &[0x02; 32]); // sibling 1
+        assert_eq!(&ix.data[498..530], &[0x03; 32]);
+        assert_eq!(&ix.data[530..562], &[0x04; 32]);
     }
 
     #[test]

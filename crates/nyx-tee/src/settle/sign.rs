@@ -51,19 +51,12 @@ mod tests {
             nullifier_b: [0xEB; 32],
             order_id_a: [0x01; 16],
             order_id_b: [0x02; 16],
-            base_amount: 100,
-            quote_amount: 5_000,
-            buyer_change_amt: 0,
-            seller_change_amt: 0,
-            buyer_fee_amt: 0,
-            seller_fee_amt: 0,
             note_fee_base_commitment: [0; 32],
             note_fee_quote_commitment: [0; 32],
             buyer_relock_order_id: [0; 16],
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
-            clearing_price: 0,
             batch_slot: 0,
         }
     }
@@ -88,7 +81,7 @@ mod tests {
     fn different_payloads_yield_different_messages() {
         let key = SigningKey::from_bytes(&[0x42; 32]);
         let mut p2 = dummy_payload();
-        p2.base_amount = 101;
+        p2.match_id = [0x99; 16];
         let (m1, _) = sign_payload(&key, &dummy_payload());
         let (m2, _) = sign_payload(&key, &p2);
         assert_ne!(m1, m2);

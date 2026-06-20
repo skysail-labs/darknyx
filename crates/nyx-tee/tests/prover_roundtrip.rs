@@ -80,8 +80,11 @@ async fn prove_and_verify_n2_dummy_batch() {
     // 1. Prove (raw ark proof + public inputs).
     let (proof, public) = prover.prove_ark(&slots).expect("prove n2 dummy batch");
 
-    // 2. The public input vector is the single batch Merkle root.
-    assert_eq!(public.public_inputs_be.len(), 1);
+    // 2. The public input vector is [merkle_root, fee_rate_bps,
+    //    protocol_owner_commitment] (P1b-2: in-circuit fee floor +
+    //    fee-note binding added fee_rate_bps + protocol_owner as the 2nd/3rd
+    //    public inputs). The dummy slots carry fee_rate_bps=0 / owner=0.
+    assert_eq!(public.public_inputs_be.len(), 3);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
 
     // 3. Verify the proof against the zkey's own VK, in-ark. This
@@ -89,7 +92,11 @@ async fn prove_and_verify_n2_dummy_batch() {
     //    gen, or the root cross-check were wrong, the proof would
     //    not verify.
     let pvk = prepare_verifying_key(prover.verifying_key());
-    let public_fr = vec![Fr::from_be_bytes_mod_order(&public.merkle_root)];
+    let public_fr: Vec<Fr> = public
+        .public_inputs_be
+        .iter()
+        .map(|x| Fr::from_be_bytes_mod_order(x))
+        .collect();
     let verified =
         Groth16::<Bn254>::verify_proof(&pvk, &proof, &public_fr).expect("verify_proof call");
     assert!(verified, "freshly-produced N=2 proof failed verification");
