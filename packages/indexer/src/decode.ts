@@ -116,10 +116,17 @@ export function payloadToFills(p: MatchPayload): SettleFill[] {
  * discriminator / too short) so the watcher can skip it.
  */
 export function decodeSettleIxData(data: Uint8Array): SettleFill[] | null {
-  if (data.length < 8 + PAYLOAD_LEN) return null;
+  // ix data layout: 8-byte Anchor discriminator, then the Borsh args in
+  // declaration order — `tree_id: u8` (the cross-shard output-shard id), THEN
+  // the MatchResultPayload, then match_index + merkle_proof. The payload starts
+  // AFTER the discriminator AND that leading `tree_id` byte; reading at offset 8
+  // (discriminator only) shifts every field 1 byte and corrupts the decoded
+  // order_ids — see `tee_forced_settle_batched`'s signature in programs/vault.
+  const PAYLOAD_OFFSET = 8 + 1; // discriminator (8) + tree_id (u8)
+  if (data.length < PAYLOAD_OFFSET + PAYLOAD_LEN) return null;
   for (let i = 0; i < 8; i++) {
     if (data[i] !== SETTLE_DISCRIMINATOR[i]) return null;
   }
-  const payload = data.subarray(8, 8 + PAYLOAD_LEN);
+  const payload = data.subarray(PAYLOAD_OFFSET, PAYLOAD_OFFSET + PAYLOAD_LEN);
   return payloadToFills(decodeMatchPayload(payload));
 }

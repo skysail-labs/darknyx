@@ -1,7 +1,8 @@
 /**
  * Settle-tx watcher: scans the vault program's history via Helius
- * `getTransactionsForAddress` (gTFA) — ONE call returns up to 1000 FULL
- * transactions (signatures + slots + instructions inline), oldest-first,
+ * `getTransactionsForAddress` (gTFA) — ONE call returns up to 100 FULL
+ * transactions (the Helius cap for `transactionDetails: "full"`; signatures +
+ * slots + instructions inline), oldest-first,
  * filtered to `status: succeeded`, floored at the cursor slot. This replaces the
  * old `getSignaturesForAddress` + per-signature `getTransaction` fan-out (1 + N
  * calls → ~1 call per 1000 txs). Each settle's fills are upserted by order_id.
@@ -101,7 +102,10 @@ export interface WatcherOpts {
   connection: Connection;
   programId: PublicKey;
   db: FillsDb;
-  /** Max transactions to pull per gTFA page (Helius caps at 1000). */
+  /** Max transactions to pull per gTFA page. Helius caps `getTransactionsForAddress`
+   *  at 100 when `transactionDetails: "full"` (a higher limit 400s every poll with
+   *  "you can only request up to 100 transactions at a time"); the 1000 cap only
+   *  applies to lighter detail levels. Defaults to 100. */
   pageLimit?: number;
   /** Logger (defaults to console). */
   log?: (msg: string) => void;
@@ -124,7 +128,7 @@ export class Watcher {
   constructor(o: WatcherOpts) {
     this.programIdStr = o.programId.toBase58();
     this.db = o.db;
-    this.pageLimit = o.pageLimit ?? 1000;
+    this.pageLimit = o.pageLimit ?? 100;
     this.log = o.log ?? ((m) => console.log(`[watcher] ${m}`));
     this.scan = o.scan ?? makeGtfaScan(o.connection.rpcEndpoint, this.programIdStr);
   }

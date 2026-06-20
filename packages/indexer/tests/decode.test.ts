@@ -51,9 +51,15 @@ function makePayload(over: Partial<MatchResultPayload> = {}): MatchResultPayload
 
 function ixData(p: MatchResultPayload): Uint8Array {
   const body = serializePayload(p);
-  const out = new Uint8Array(8 + body.length + 1 + 128); // disc + payload + match_index + siblings
+  // Real `tee_forced_settle_batched` ix data: disc(8) + tree_id(u8) + payload +
+  // match_index(u8) + merkle_proof(4×32). The leading `tree_id` byte (the
+  // cross-shard output-shard id) MUST be present so the decoder's payload offset
+  // is exercised against the true framing — omitting it is the gap that let the
+  // off-by-one decode bug (every settle's order_ids shifted 1 byte) ship.
+  const out = new Uint8Array(8 + 1 + body.length + 1 + 128);
   out.set(SETTLE_DISCRIMINATOR, 0);
-  out.set(body, 8);
+  out[8] = 0x03; // tree_id (any shard id) — the byte decodeSettleIxData must skip
+  out.set(body, 9);
   return out;
 }
 

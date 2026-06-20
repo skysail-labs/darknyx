@@ -61,12 +61,15 @@ function payload(): MatchResultPayload {
   };
 }
 
-/** Real settle ix data shape: disc(8) ‖ payload ‖ match_index(1) ‖ 128 siblings. */
+/** Real settle ix data shape: disc(8) ‖ tree_id(u8) ‖ payload ‖ match_index(1) ‖ 128 siblings.
+ *  The leading tree_id (cross-shard output-shard id) must be present so the
+ *  decoder's payload offset is tested against the true framing. */
 function ixData(p: MatchResultPayload): Uint8Array {
   const body = serializePayload(p);
-  const out = new Uint8Array(8 + body.length + 1 + 128);
+  const out = new Uint8Array(8 + 1 + body.length + 1 + 128);
   out.set(SETTLE_DISCRIMINATOR, 0);
-  out.set(body, 8);
+  out[8] = 0x03; // tree_id — the byte the decoder must skip before the payload
+  out.set(body, 9);
   return out;
 }
 
