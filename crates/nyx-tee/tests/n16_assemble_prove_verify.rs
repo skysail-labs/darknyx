@@ -174,10 +174,12 @@ async fn assembler_witness_proves_and_verifies_n16() {
     // 4. The single public input is the batch Merkle root, and it
     //    must equal our off-circuit root over the leaves (the prover
     //    already cross-checks this internally; assert it here too).
-    // [merkle_root, fee_rate_bps]. fee_rate_bps = 0 for this zero-fee match.
-    assert_eq!(public.public_inputs_be.len(), 2);
+    // [merkle_root, fee_rate_bps, protocol_owner]. fee_rate_bps = 0 (zero-fee
+    // match); protocol_owner = the assemble's fr_safe(0x07).
+    assert_eq!(public.public_inputs_be.len(), 3);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
     assert_eq!(public.public_inputs_be[1], [0u8; 32]);
+    assert_eq!(public.public_inputs_be[2], fr_safe(0x07));
     assert_eq!(
         public.merkle_root,
         compute_batch_root(&public.leaves).expect("recompute root"),

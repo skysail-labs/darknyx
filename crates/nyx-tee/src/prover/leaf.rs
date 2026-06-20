@@ -61,11 +61,12 @@ pub enum LeafError {
 /// Compute one slot's leaf. Identical bytes as the circuit's
 /// `template MatchSlot()` output.
 ///
-/// Commitment-only (amount-privacy, P1b): `Poseidon8(DOMAIN_LEAF_V2,
-/// note_a..note_f, batch_slot)`. The amounts/mints/price the old
-/// two-stage leaf hashed are bound transitively through the six note
-/// commitments, so they no longer appear in the leaf (and can leave the
-/// settle payload entirely).
+/// Commitment-only (amount-privacy, P1b): `Poseidon10(DOMAIN_LEAF_V2,
+/// note_a..note_f, note_fee_base, note_fee_quote, batch_slot)`. The
+/// amounts/mints/price the old two-stage leaf hashed are bound transitively
+/// through the note commitments, so they no longer appear in the leaf (and can
+/// leave the settle payload). The two fee-note commitments are included so the
+/// on-chain settle's append of them (slot 0 only) is proof-backed.
 pub fn compute_batch_leaf(slot: &MatchSlotWitness) -> Result<[u8; 32], LeafError> {
     let leaf = poseidon_hash_bytes(&[
         u8_tag_to_be32(DOMAIN_LEAF_V2),
@@ -75,6 +76,8 @@ pub fn compute_batch_leaf(slot: &MatchSlotWitness) -> Result<[u8; 32], LeafError
         slot.note_d_commitment,
         slot.note_e_commitment,
         slot.note_f_commitment,
+        slot.note_fee_base_commitment,
+        slot.note_fee_quote_commitment,
         u64_to_be32(slot.batch_slot),
     ])?;
     Ok(leaf)
@@ -171,7 +174,7 @@ mod tests {
     /// this module's tag/arity ordering has drifted from the
     /// circuit (would silently break VALID_MATCH_BATCH on-chain).
     /// Either way: fail loud, fix at the source.
-    const DUMMY_LEAF_HEX: &str = "1a527e39345448f0e269d44d97c7b3fbf73c5204e63d470cbde9eb1d059936fd";
+    const DUMMY_LEAF_HEX: &str = "03b5e7a46d136b0a48083f38603053f695d7ed195dca055911a9b9939bbf3569";
 
     #[test]
     fn dummy_slot_leaf_is_pinned() {
@@ -194,7 +197,7 @@ mod tests {
     fn batch_root_of_two_identical_dummies_is_pinned() {
         let leaf = compute_batch_leaf(&dummy_slot()).unwrap();
         let root = compute_batch_root(&[leaf, leaf]).unwrap();
-        let want = "03f21bde88d0a988a97e23c05ce6dc23582fdd97fd878ec8e8406842cd757997";
+        let want = "15ba9e2a3978f6484adb0f0bb98d21929a34057fe9bfbc09466e96773c4d0205";
         // Pin the value byte-for-byte so a future Poseidon refactor
         // surfaces here. (The prior literal was a dead pin —
         // `let _ = want` with no assertion — and had drifted from the

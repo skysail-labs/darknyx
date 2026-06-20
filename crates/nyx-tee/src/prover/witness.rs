@@ -71,11 +71,24 @@ pub struct MatchSlotWitness {
     // ── VALID_PRICE private witness ──
     pub clearing_price: u64,
 
+    // ── Protocol fee notes (per-slot; non-zero only on the flush slot 0) ──
+    /// Base-mint fee note commitment (seller fees). `[0;32]` off slot 0 / no fee.
+    pub note_fee_base_commitment: [u8; 32],
+    /// Quote-mint fee note commitment (buyer fees). `[0;32]` off slot 0 / no fee.
+    pub note_fee_quote_commitment: [u8; 32],
+
     // ── Batch-level fields (same across every slot in a batch) ──
     /// Protocol fee rate (bps), a MatchBatch-level PUBLIC input bound on-chain
     /// to `VaultConfig.fee_rate_bps`. Stored per-slot for convenience; the
     /// prover reads it from `slots[0]` and pushes the single circuit input.
     pub fee_rate_bps: u64,
+    /// Protocol fee-note owner, a MatchBatch-level PUBLIC input bound on-chain
+    /// to `VaultConfig.protocol_owner_commitment`. Read from `slots[0]`.
+    pub protocol_owner_commitment: [u8; 32],
+    /// Fee-note inner_hashes (`derive_inner(batch_slot, FEE_ROLE_*)`), private
+    /// witnesses for the slot-0 fee-note binding. Read from `slots[0]`.
+    pub fee_base_inner: [u8; 32],
+    pub fee_quote_inner: [u8; 32],
 }
 
 /// Build a fully-valid all-zero "dummy" slot. Used to pad a batch
@@ -121,7 +134,12 @@ pub fn dummy_slot() -> MatchSlotWitness {
         e_inner: zero32,
         f_inner: zero32,
         clearing_price: 0,
+        note_fee_base_commitment: zero32,
+        note_fee_quote_commitment: zero32,
         fee_rate_bps: 0,
+        protocol_owner_commitment: zero32,
+        fee_base_inner: zero32,
+        fee_quote_inner: zero32,
     }
 }
 

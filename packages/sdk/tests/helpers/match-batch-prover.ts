@@ -95,9 +95,19 @@ export interface MatchSlotWitness {
   fInner: bigint;
   // ── VALID_PRICE private witness ──
   clearingPrice: bigint;
+  // ── Protocol fee notes (per-slot; non-zero only on the flush slot 0) ──
+  /** Base-mint (seller) fee note commitment; all-zero off slot 0 / no fee. */
+  noteFeeBaseCommitment: Uint8Array;
+  /** Quote-mint (buyer) fee note commitment; all-zero off slot 0 / no fee. */
+  noteFeeQuoteCommitment: Uint8Array;
   // ── Batch-level (same on every slot; the prover reads slots[0]) ──
   /** Protocol fee rate (bps) — the circuit fee-floor PUBLIC input. */
   feeRateBps: bigint;
+  /** Protocol fee-note owner — the fee-note-binding PUBLIC input. */
+  protocolOwnerCommitment: bigint;
+  /** Fee-note inner_hashes (derive_inner(batch_slot, FEE_ROLE_*)). */
+  feeBaseInner: bigint;
+  feeQuoteInner: bigint;
 }
 
 export interface BatchProveResult {
@@ -180,7 +190,12 @@ export async function dummySlot(): Promise<MatchSlotWitness> {
     eInner: 0n,
     fInner: 0n,
     clearingPrice: 0n,
+    noteFeeBaseCommitment: zero32,
+    noteFeeQuoteCommitment: zero32,
     feeRateBps: 0n,
+    protocolOwnerCommitment: 0n,
+    feeBaseInner: 0n,
+    feeQuoteInner: 0n,
   };
 }
 
@@ -222,6 +237,8 @@ export async function computeBatchLeaf(slot: MatchSlotWitness): Promise<Uint8Arr
       bigintFromBE32(slot.noteDcommitment),
       bigintFromBE32(slot.noteEcommitment),
       bigintFromBE32(slot.noteFcommitment),
+      bigintFromBE32(slot.noteFeeBaseCommitment),
+      bigintFromBE32(slot.noteFeeQuoteCommitment),
       slot.batchSlot,
     ]),
   );
@@ -350,9 +367,12 @@ export async function proveMatchBatch(
 
   const inputs: Record<string, string | string[]> = {
     merkle_root: bigintFromBE32(merkleRoot).toString(),
-    // Batch-level PUBLIC input (single value, not per-slot). Order in the
-    // circuit `main` public list: [merkle_root, fee_rate_bps].
+    // Batch-level PUBLIC/private inputs (single values, read from slot 0).
+    // Circuit `main` public order: [merkle_root, fee_rate_bps, protocol_owner].
     fee_rate_bps: args.slots[0].feeRateBps.toString(),
+    protocol_owner_commitment: args.slots[0].protocolOwnerCommitment.toString(),
+    fee_base_inner: args.slots[0].feeBaseInner.toString(),
+    fee_quote_inner: args.slots[0].feeQuoteInner.toString(),
     // VALID_CREATE-equivalent public fields
     note_a_commitment: args.slots.map((s) => bigintFromBE32(s.noteAcommitment).toString()),
     note_b_commitment: args.slots.map((s) => bigintFromBE32(s.noteBcommitment).toString()),
@@ -360,6 +380,8 @@ export async function proveMatchBatch(
     note_d_commitment: args.slots.map((s) => bigintFromBE32(s.noteDcommitment).toString()),
     note_e_commitment: args.slots.map((s) => bigintFromBE32(s.noteEcommitment).toString()),
     note_f_commitment: args.slots.map((s) => bigintFromBE32(s.noteFcommitment).toString()),
+    note_fee_base_commitment: args.slots.map((s) => bigintFromBE32(s.noteFeeBaseCommitment).toString()),
+    note_fee_quote_commitment: args.slots.map((s) => bigintFromBE32(s.noteFeeQuoteCommitment).toString()),
     quote_mint_lo: args.slots.map((s) => pubkeyToFrPair(s.quoteMint)[0].toString()),
     quote_mint_hi: args.slots.map((s) => pubkeyToFrPair(s.quoteMint)[1].toString()),
     base_mint_lo: args.slots.map((s) => pubkeyToFrPair(s.baseMint)[0].toString()),

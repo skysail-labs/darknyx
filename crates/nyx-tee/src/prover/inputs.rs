@@ -42,14 +42,15 @@ pub fn build_batch_public_inputs(
         .map(compute_batch_leaf)
         .collect::<Result<Vec<_>, _>>()?;
     let merkle_root = compute_batch_root(&leaves)?;
-    // `fee_rate_bps` is a batch-level value (identical on every slot); read it
-    // from slot 0. Public-input ORDER must match the circuit's `main` public
-    // list: [merkle_root, fee_rate_bps].
+    // Batch-level values (identical on every slot); read from slot 0. ORDER
+    // must match the circuit `main` public list:
+    // [merkle_root, fee_rate_bps, protocol_owner_commitment].
     let fee_rate_bps = slots[0].fee_rate_bps;
+    let protocol_owner = slots[0].protocol_owner_commitment;
     Ok(BatchPublicInputs {
         leaves,
         merkle_root,
-        public_inputs_be: vec![merkle_root, u64_to_be32(fee_rate_bps)],
+        public_inputs_be: vec![merkle_root, u64_to_be32(fee_rate_bps), protocol_owner],
     })
 }
 
@@ -59,17 +60,24 @@ mod tests {
     use crate::prover::witness::dummy_slot;
 
     #[test]
-    fn public_input_vector_is_root_then_fee_rate() {
+    fn public_input_vector_is_root_fee_rate_owner() {
         let mut slots = vec![dummy_slot(); 4];
         slots[0].fee_rate_bps = 30;
+        let owner = {
+            let mut o = [0x11u8; 32];
+            o[0] = 0; // Fr-safe
+            o
+        };
+        slots[0].protocol_owner_commitment = owner;
         let pi = build_batch_public_inputs(&slots).unwrap();
         assert_eq!(pi.leaves.len(), 4);
-        // [merkle_root, fee_rate_bps] — order matches the circuit `main` list.
-        assert_eq!(pi.public_inputs_be.len(), 2);
+        // [merkle_root, fee_rate_bps, protocol_owner] — circuit `main` order.
+        assert_eq!(pi.public_inputs_be.len(), 3);
         assert_eq!(pi.public_inputs_be[0], pi.merkle_root);
         let mut fee_be = [0u8; 32];
         fee_be[31] = 30;
         assert_eq!(pi.public_inputs_be[1], fee_be);
+        assert_eq!(pi.public_inputs_be[2], owner);
     }
 
     #[test]

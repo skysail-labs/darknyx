@@ -78,14 +78,19 @@ pub fn verify_match_batch_handler(
         VaultError::InvalidMarkerExpiry
     );
 
-    // Public inputs, in the circuit `main` order [merkle_root, fee_rate_bps].
-    // merkle_root is already 32 BE bytes (Poseidon output); fee_rate_bps is the
-    // on-chain config value as a 32-byte BE field element. Binding fee_rate_bps
-    // here is what pins the proof's in-circuit fee floor to the protocol's rate.
-    let fee_rate_bps = ctx.accounts.vault_config.load()?.fee_rate_bps as u64;
+    // Public inputs, in the circuit `main` order
+    // [merkle_root, fee_rate_bps, protocol_owner_commitment]. merkle_root +
+    // protocol_owner are already 32 BE bytes (Poseidon outputs); fee_rate_bps is
+    // the on-chain config value as a BE field element. Binding fee_rate_bps +
+    // protocol_owner here pins the proof's in-circuit fee floor AND fee-note
+    // binding to the protocol's on-chain values (a prover can't pick its own).
+    let (fee_rate_bps, protocol_owner) = {
+        let cfg = ctx.accounts.vault_config.load()?;
+        (cfg.fee_rate_bps as u64, cfg.protocol_owner_commitment)
+    };
     let mut fee_rate_be = [0u8; 32];
     fee_rate_be[24..32].copy_from_slice(&fee_rate_bps.to_be_bytes());
-    let public_inputs: [[u8; 32]; 2] = [merkle_root, fee_rate_be];
+    let public_inputs: [[u8; 32]; 3] = [merkle_root, fee_rate_be, protocol_owner];
 
     let vk = make_vk(
         &MATCH_BATCH_N16_ALPHA_G1,
@@ -94,7 +99,7 @@ pub fn verify_match_batch_handler(
         &MATCH_BATCH_N16_DELTA_G2,
         &MATCH_BATCH_N16_IC,
     );
-    verify_groth16_proof::<2>(&vk, &proof, &public_inputs)?;
+    verify_groth16_proof::<3>(&vk, &proof, &public_inputs)?;
 
     let marker = &mut ctx.accounts.marker;
     marker.payer = ctx.accounts.payer.key();

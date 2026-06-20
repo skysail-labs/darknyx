@@ -89,14 +89,15 @@ fn u64_be32(v: u64) -> [u8; 32] {
 /// Compute the per-slot leaf hash. MUST byte-match `template MatchSlot()` in
 /// `circuits/templates/match_batch.circom`:
 ///
-///   leaf = Poseidon8(DOMAIN_LEAF_V2=23,
-///                    note_a, note_b, note_c, note_d, note_e, note_f,
-///                    batch_slot)
+///   leaf = Poseidon10(DOMAIN_LEAF_V2=23,
+///                     note_a, note_b, note_c, note_d, note_e, note_f,
+///                     note_fee_base, note_fee_quote, batch_slot)
 ///
-/// Commitment-only (amount-privacy, P1b): the six note commitments bind the
-/// amounts/mints/price transitively (each commitment is a Poseidon6 of its
+/// Commitment-only (amount-privacy, P1b): the note commitments bind the
+/// amounts/mints/price transitively (each is a Poseidon6 of its
 /// mint+amount+owner+inner), so the leaf no longer hashes — and the payload
-/// no longer needs to carry — the plaintext amounts.
+/// no longer needs to carry — the plaintext amounts. The two fee-note
+/// commitments are bound here so the slot-0 append of them is proof-backed.
 // Exposed for integration tests that need to fabricate a Merkle root
 // without running the full `verify_match_batch` Groth16 verifier (see
 // `programs/vault/tests/tee_forced_settle_batched.rs`).
@@ -112,6 +113,8 @@ pub fn compute_match_leaf(payload: &MatchResultPayload) -> Result<[u8; 32]> {
         payload.note_d_commitment.as_ref(),
         payload.note_e_commitment.as_ref(),
         payload.note_f_commitment.as_ref(),
+        payload.note_fee_base_commitment.as_ref(),
+        payload.note_fee_quote_commitment.as_ref(),
         &batch_slot,
     ])?;
 

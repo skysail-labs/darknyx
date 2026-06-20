@@ -180,7 +180,7 @@ pub(crate) fn build_circom_and_check(
         .ok_or_else(|| ProverError::WitnessGen("circuit produced no public inputs".into()))?;
     if circuit_public.len() != public.public_inputs_be.len() {
         return Err(ProverError::WitnessGen(format!(
-            "expected {} public inputs ([merkle_root, fee_rate_bps]), got {}",
+            "expected {} public inputs ([merkle_root, fee_rate_bps, protocol_owner]), got {}",
             public.public_inputs_be.len(),
             circuit_public.len()
         )));
@@ -226,8 +226,14 @@ fn push_all_inputs(
 ) {
     // Public inputs (order matches the circuit `main` list).
     builder.push_input("merkle_root", be32_to_bigint(merkle_root));
-    // fee_rate_bps is a single batch-level input (same on every slot).
+    // Batch-level single inputs (same on every slot; read from slot 0).
     builder.push_input("fee_rate_bps", BigInt::from(slots[0].fee_rate_bps));
+    builder.push_input(
+        "protocol_owner_commitment",
+        be32_to_bigint(&slots[0].protocol_owner_commitment),
+    );
+    builder.push_input("fee_base_inner", be32_to_bigint(&slots[0].fee_base_inner));
+    builder.push_input("fee_quote_inner", be32_to_bigint(&slots[0].fee_quote_inner));
 
     macro_rules! push_u64 {
         ($name:literal, $field:ident) => {
@@ -251,6 +257,8 @@ fn push_all_inputs(
     push_be32!("note_d_commitment", note_d_commitment);
     push_be32!("note_e_commitment", note_e_commitment);
     push_be32!("note_f_commitment", note_f_commitment);
+    push_be32!("note_fee_base_commitment", note_fee_base_commitment);
+    push_be32!("note_fee_quote_commitment", note_fee_quote_commitment);
 
     // Mint halves. lo = bytes[16..32], hi = bytes[0..16] — matches
     // `darkpool_crypto::pubkey_to_fr_pair` and the TS `pubkeyToFrPair`.

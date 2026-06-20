@@ -123,8 +123,52 @@ async function buildSlot(args: {
     aAmount, bAmount,
     aInner, bInner, cInner, dInner, eInner, fInner,
     clearingPrice: args.clearingPrice,
+    // Fee notes default to none; `bindFeeNotes` sets slot 0's aggregate for
+    // fee-bearing batches.
+    noteFeeBaseCommitment: new Uint8Array(32),
+    noteFeeQuoteCommitment: new Uint8Array(32),
     feeRateBps: args.feeRateBps ?? 0n,
+    protocolOwnerCommitment: 0n,
+    feeBaseInner: 0n,
+    feeQuoteInner: 0n,
   };
+}
+
+/**
+ * Bind the batch-aggregated protocol fee notes onto slot 0 (matching the
+ * circuit's slot-0 fee-note binding): slot0.noteFeeQuote = Poseidon6 over the
+ * SUM of buyer fees, slot0.noteFeeBase = sum of seller fees; all slots carry
+ * the same protocol_owner + fee inners. Without this a fee-bearing batch won't
+ * satisfy the in-circuit binding.
+ */
+async function bindFeeNotes(
+  slots: MatchSlotWitness[],
+  args: {
+    quoteMint: Uint8Array;
+    baseMint: Uint8Array;
+    protocolOwner: bigint;
+    feeBaseInner: bigint;
+    feeQuoteInner: bigint;
+  },
+): Promise<void> {
+  const totalBuyerFee = slots.reduce((a, s) => a + s.buyerFeeAmt, 0n);
+  const totalSellerFee = slots.reduce((a, s) => a + s.sellerFeeAmt, 0n);
+  const zero = new Uint8Array(32);
+  const feeQuote = totalBuyerFee === 0n ? zero : await noteCommitmentV2({
+    tokenMint: args.quoteMint, amount: totalBuyerFee,
+    ownerCommitment: args.protocolOwner, innerHash: args.feeQuoteInner,
+  });
+  const feeBase = totalSellerFee === 0n ? zero : await noteCommitmentV2({
+    tokenMint: args.baseMint, amount: totalSellerFee,
+    ownerCommitment: args.protocolOwner, innerHash: args.feeBaseInner,
+  });
+  slots.forEach((s, i) => {
+    s.protocolOwnerCommitment = args.protocolOwner;
+    s.feeBaseInner = args.feeBaseInner;
+    s.feeQuoteInner = args.feeQuoteInner;
+    s.noteFeeBaseCommitment = i === 0 ? feeBase : zero;
+    s.noteFeeQuoteCommitment = i === 0 ? feeQuote : zero;
+  });
 }
 
 function rand32(seed: number): Uint8Array {
@@ -172,7 +216,7 @@ for (const N of [2, 4, 16] as const) {
       const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots });
 
       // [merkle_root, fee_rate_bps].
-      expect(result.publicInputsBE.length).toBe(2);
+      expect(result.publicInputsBE.length).toBe(3);
       expect(result.publicInputsBE[0]).toEqual(result.merkleRoot);
 
       // TS-side leaf + root reproduce the circuit's internal computation.
@@ -221,10 +265,16 @@ const ready2 = artefactsReady(2);
         batchSlot: 1_000_001n, slotIdx: 1,
       }),
     ];
+    // slot 1 charges a buyer fee → the batch mints an aggregate quote fee note
+    // on slot 0; bind it so the in-circuit fee-note constraint holds.
+    await bindFeeNotes(slots, {
+      quoteMint, baseMint, protocolOwner: 0x07070707n,
+      feeBaseInner: 0xB1B1n, feeQuoteInner: 0x9E9En,
+    });
 
     const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots });
 
-    expect(result.publicInputsBE.length).toBe(2);
+    expect(result.publicInputsBE.length).toBe(3);
     expect(result.leaves[0]).not.toEqual(result.leaves[1]);   // distinct shapes → distinct leaves.
 
     const tsRoot = await computeBatchRoot(result.leaves);
@@ -254,13 +304,18 @@ const ready2 = artefactsReady(2);
         buyerFee, sellerFee: 0n,
         batchSlot: 2_000_000n, slotIdx: idx, feeRateBps: 30n,
       });
-    return [await mk(0), await mk(1)];
+    const slots = [await mk(0), await mk(1)];
+    await bindFeeNotes(slots, {
+      quoteMint, baseMint, protocolOwner: 0x07070707n,
+      feeBaseInner: 0xB1B1n, feeQuoteInner: 0x9E9En,
+    });
+    return slots;
   }
 
   it("[fee_at_floor] charging exactly the floor proves at rate=30", async () => {
     const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots: await feeBatch(3n) });
     // fee_rate_bps is the 2nd public input (value 30).
-    expect(result.publicInputsBE.length).toBe(2);
+    expect(result.publicInputsBE.length).toBe(3);
     const fee = result.publicInputsBE[1];
     expect(fee[31]).toBe(30);
   }, 60_000);

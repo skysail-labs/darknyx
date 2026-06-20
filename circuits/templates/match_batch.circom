@@ -81,6 +81,12 @@ template MatchSlot() {
     signal input note_d_commitment;
     signal input note_e_commitment;
     signal input note_f_commitment;
+    // Protocol fee notes (amount-privacy, P1b). Per-slot inputs but non-zero
+    // only on the batch's flush slot (slot 0); bound to the batch fee sums at
+    // the MatchBatch level. Hashed into the leaf so the on-chain settle's
+    // append of these commitments is proof-backed.
+    signal input note_fee_base_commitment;
+    signal input note_fee_quote_commitment;
     signal input quote_mint_lo;
     signal input quote_mint_hi;
     signal input base_mint_lo;
@@ -269,15 +275,18 @@ template MatchSlot() {
     // on-chain handler recompute the leaf from the (amount-free) settle
     // payload, so the amounts can leave the payload entirely (P3).
     //
-    // Single Poseidon8 (1 domain + 6 commitments + batch_slot = 8 ≤ 12,
-    // the light-poseidon width cap), so no two-stage split is needed.
+    // Single Poseidon10 (1 domain + 8 commitments + batch_slot = 10 ≤ 12,
+    // the light-poseidon width cap), so no two-stage split is needed. The two
+    // fee-note commitments are included so the on-chain settle's append of them
+    // (slot 0 only) is bound by the proof.
     //
-    //   leaf = Poseidon8(DOMAIN_LEAF_V2=23,
-    //                    note_a, note_b, note_c, note_d, note_e, note_f,
-    //                    batch_slot)
+    //   leaf = Poseidon10(DOMAIN_LEAF_V2=23,
+    //                     note_a, note_b, note_c, note_d, note_e, note_f,
+    //                     note_fee_base, note_fee_quote,
+    //                     batch_slot)
     // ─────────────────────────────────────────────────────────────────
 
-    component leafH = Poseidon(8);
+    component leafH = Poseidon(10);
     leafH.inputs[0] <== 23;   // DOMAIN_LEAF_V2
     leafH.inputs[1] <== note_a_commitment;
     leafH.inputs[2] <== note_b_commitment;
@@ -285,7 +294,9 @@ template MatchSlot() {
     leafH.inputs[4] <== note_d_commitment;
     leafH.inputs[5] <== note_e_commitment;
     leafH.inputs[6] <== note_f_commitment;
-    leafH.inputs[7] <== batch_slot;
+    leafH.inputs[7] <== note_fee_base_commitment;
+    leafH.inputs[8] <== note_fee_quote_commitment;
+    leafH.inputs[9] <== batch_slot;
 
     leaf <== leafH.out;
 }
@@ -336,6 +347,14 @@ template MatchBatch(N) {
     signal input fee_rate_bps;
     component feeRateBits = Num2Bits(16);
     feeRateBits.in <== fee_rate_bps;
+    // Protocol fee-note owner, PUBLIC — bound on-chain to
+    // VaultConfig.protocol_owner_commitment so the minted fee notes can only
+    // pay the protocol's owner. Public order:
+    // [merkle_root, fee_rate_bps, protocol_owner_commitment].
+    signal input protocol_owner_commitment;
+    // Fee-note inner_hashes (private; meaningful only on the flush slot).
+    signal input fee_base_inner;
+    signal input fee_quote_inner;
 
     // ----- Per-slot public-bound fields -----
     signal input note_a_commitment[N];
@@ -344,6 +363,8 @@ template MatchBatch(N) {
     signal input note_d_commitment[N];
     signal input note_e_commitment[N];
     signal input note_f_commitment[N];
+    signal input note_fee_base_commitment[N];
+    signal input note_fee_quote_commitment[N];
     signal input quote_mint_lo[N];
     signal input quote_mint_hi[N];
     signal input base_mint_lo[N];
@@ -380,6 +401,8 @@ template MatchBatch(N) {
         slot[i].note_d_commitment <== note_d_commitment[i];
         slot[i].note_e_commitment <== note_e_commitment[i];
         slot[i].note_f_commitment <== note_f_commitment[i];
+        slot[i].note_fee_base_commitment  <== note_fee_base_commitment[i];
+        slot[i].note_fee_quote_commitment <== note_fee_quote_commitment[i];
         slot[i].quote_mint_lo     <== quote_mint_lo[i];
         slot[i].quote_mint_hi     <== quote_mint_hi[i];
         slot[i].base_mint_lo      <== base_mint_lo[i];
@@ -403,6 +426,68 @@ template MatchBatch(N) {
         slot[i].e_inner           <== e_inner[i];
         slot[i].f_inner           <== f_inner[i];
         slot[i].clearing_price    <== clearing_price[i];
+    }
+
+    // ── Fee-note binding (amount-privacy, P1b) ────────────────────────────
+    // The protocol fee notes are batch-aggregated — the matcher's
+    // flush_fee_notes mints ONE note per mint over the whole batch and attaches
+    // both to the FIRST match (slot 0). Bind those commitments to the batch fee
+    // sums so a malicious/buggy prover can't mint a fee note worth more than the
+    // fees conservation accounts for, nor to a non-protocol owner (the over-mint
+    // / wrong-owner inflation gap surfaced in the P0 audit §7).
+    signal partialBuyerFee[N];
+    signal partialSellerFee[N];
+    partialBuyerFee[0]  <== buyer_fee_amt[0];
+    partialSellerFee[0] <== seller_fee_amt[0];
+    for (var i = 1; i < N; i++) {
+        partialBuyerFee[i]  <== partialBuyerFee[i-1]  + buyer_fee_amt[i];
+        partialSellerFee[i] <== partialSellerFee[i-1] + seller_fee_amt[i];
+    }
+    signal total_buyer_fee;
+    signal total_seller_fee;
+    total_buyer_fee  <== partialBuyerFee[N-1];
+    total_seller_fee <== partialSellerFee[N-1];
+    // The minted fee note's amount must be a u64 to stay spendable: each
+    // per-slot fee is 64-bit (MatchSlot range checks), but a sum of up to N
+    // could in principle exceed 2^64 — range-check the totals too.
+    component totalBuyerFeeBits = Num2Bits(64);
+    totalBuyerFeeBits.in <== total_buyer_fee;
+    component totalSellerFeeBits = Num2Bits(64);
+    totalSellerFeeBits.in <== total_seller_fee;
+
+    // Slot 0's quote fee note === Poseidon6(DOMAIN_NOTE, quote_mint, total_buyer_fee,
+    // protocol_owner, fee_quote_inner), zeroed when there are no fees (same
+    // IsZero gate note_e/note_f use → a zero-fee batch mints [0;32]).
+    component buyerFeeIsZero = IsZero();
+    buyerFeeIsZero.in <== total_buyer_fee;
+    component feeQuoteHash = Poseidon(6);
+    feeQuoteHash.inputs[0] <== 2;                       // DOMAIN_NOTE
+    feeQuoteHash.inputs[1] <== quote_mint_lo[0];
+    feeQuoteHash.inputs[2] <== quote_mint_hi[0];
+    feeQuoteHash.inputs[3] <== total_buyer_fee;
+    feeQuoteHash.inputs[4] <== protocol_owner_commitment;
+    feeQuoteHash.inputs[5] <== fee_quote_inner;
+    signal expectedFeeQuote;
+    expectedFeeQuote <== (1 - buyerFeeIsZero.out) * feeQuoteHash.out;
+    note_fee_quote_commitment[0] === expectedFeeQuote;
+
+    component sellerFeeIsZero = IsZero();
+    sellerFeeIsZero.in <== total_seller_fee;
+    component feeBaseHash = Poseidon(6);
+    feeBaseHash.inputs[0] <== 2;                        // DOMAIN_NOTE
+    feeBaseHash.inputs[1] <== base_mint_lo[0];
+    feeBaseHash.inputs[2] <== base_mint_hi[0];
+    feeBaseHash.inputs[3] <== total_seller_fee;
+    feeBaseHash.inputs[4] <== protocol_owner_commitment;
+    feeBaseHash.inputs[5] <== fee_base_inner;
+    signal expectedFeeBase;
+    expectedFeeBase <== (1 - sellerFeeIsZero.out) * feeBaseHash.out;
+    note_fee_base_commitment[0] === expectedFeeBase;
+
+    // Non-flush slots (1..N-1) carry no fee notes.
+    for (var i = 1; i < N; i++) {
+        note_fee_base_commitment[i] === 0;
+        note_fee_quote_commitment[i] === 0;
     }
 
     component merkle = MerkleRoot(N);

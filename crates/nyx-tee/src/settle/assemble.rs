@@ -36,7 +36,8 @@
 
 use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_matcher::change_note::{
-    derive_inner, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, TRADE_ROLE_BUYER, TRADE_ROLE_SELLER,
+    derive_inner, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, FEE_ROLE_BASE, FEE_ROLE_QUOTE,
+    TRADE_ROLE_BUYER, TRADE_ROLE_SELLER,
 };
 use darkpool_matcher::match_result::{MatchPair, RunBatchOutput, RELOCK_ORDER_ID_NONE};
 
@@ -288,7 +289,16 @@ pub fn assemble_match(
         e_inner,
         f_inner,
         clearing_price,
+        // Per-match witnesses carry NO fee note (zeroed). The batch-aggregated
+        // fee notes are stamped onto slot 0 by `assemble_batch` after the flush.
+        note_fee_base_commitment: [0u8; 32],
+        note_fee_quote_commitment: [0u8; 32],
         fee_rate_bps: inp.fee_rate_bps,
+        protocol_owner_commitment: inp.protocol_owner_commitment,
+        // Fee-note inner_hashes — MUST match the matcher's flush_fee_notes
+        // (`derive_inner(fee_slot, FEE_ROLE_*)`, fee_slot == batch_slot).
+        fee_base_inner: derive_inner(inp.fee_slot, FEE_ROLE_BASE),
+        fee_quote_inner: derive_inner(inp.fee_slot, FEE_ROLE_QUOTE),
     };
 
     let payload = MatchResultPayload {
@@ -438,6 +448,13 @@ pub fn assemble_batch(
     if let Some(first) = matches.first_mut() {
         first.payload.note_fee_base_commitment = output.fee_buckets[0].flushed_commitment;
         first.payload.note_fee_quote_commitment = output.fee_buckets[1].flushed_commitment;
+    }
+    // The leaf binds the fee notes (amount-privacy, P1b), so slot 0's WITNESS
+    // must carry the same commitments the circuit's slot-0 binding reproduces
+    // from the batch fee sums (kept in lockstep with the payload above).
+    if let Some(first) = witnesses.first_mut() {
+        first.note_fee_base_commitment = output.fee_buckets[0].flushed_commitment;
+        first.note_fee_quote_commitment = output.fee_buckets[1].flushed_commitment;
     }
 
     // Pad the witness set to the circuit's N with dummy slots.

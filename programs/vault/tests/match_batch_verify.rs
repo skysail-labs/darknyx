@@ -31,6 +31,17 @@ use solana_transaction::Transaction;
 /// 256-byte Borsh `Groth16Proof` followed by the 32-byte batch root.
 const FIXTURE: &[u8] = include_bytes!("fixtures/match_batch_n16_proof.bin");
 
+/// The protocol_owner_commitment the fixture (n16_assemble_prove_verify) was
+/// proved with — `fr_safe(0x07)`. The on-chain verify reads this from
+/// VaultConfig as the 3rd public input, so the test must seed it to match or
+/// the proof's public inputs won't line up. (fee_rate_bps stays 0: the fixture
+/// match is zero-fee.)
+fn fixture_protocol_owner() -> [u8; 32] {
+    let mut v = [0x07u8; 32];
+    v[0] = 0;
+    v
+}
+
 fn fixture() -> ([u8; 256], [u8; 32]) {
     assert_eq!(
         FIXTURE.len(),
@@ -48,6 +59,9 @@ fn fixture() -> ([u8; 256], [u8; 32]) {
 fn real_n16_proof_accepted_onchain_creates_marker() {
     let mut h = Harness::setup();
     let (proof, root) = fixture();
+    // The 3rd public input (protocol_owner) is read from VaultConfig; seed it
+    // to the value the fixture proved with.
+    set_vault_fee_config(&mut h, fixture_protocol_owner(), 0);
 
     // Marker absent before verify.
     assert!(!batch_validity_marker_exists(&h, &root));
