@@ -15,8 +15,25 @@
 >   `node:sqlite`); the SDK client is `packages/sdk/src/fills/`
 >   (`deriveOrderId`, `backfillHistory`, `subscribeFills`, `startFillsSync`);
 >   the TEE per-account routing is `api/{state,fills_router,ws}.rs`.
+> - **Amount-privacy (P3b) made the indexer a pure COMMITMENT LOCATOR.** The
+>   settle ix no longer carries any plaintext amount (trade size / change / fee /
+>   price) — they're proven in-circuit and bound by the note commitments, so the
+>   untrusted off-TEE indexer can no longer see them (by design). An indexer row
+>   is now `{ order_id, side, match_id, is_partial_fill, change_note_commitment,
+>   batch_slot }`. **The change `amount` — hence the *spendable* opening — comes
+>   ONLY from the per-account `FillMemo`** (`orders/fill-memo.ts`,
+>   `verifyFillMemo`). `backfillHistory` LOCATES fills (which order_ids minted
+>   which change-note commitments); the live WS memos populate the `NoteStore`.
+>   Consequence: "rebuild from chain alone" still recovers *which* notes you own,
+>   but NOT their amounts — the same note-plaintext requirement every shielded
+>   pool has. A fill whose memo was missed (offline gap) is locatable but not yet
+>   spendable until the memo is re-obtained (a future authenticated TEE
+>   memo-replay endpoint — not yet built).
 >
 > The sections below are the original decision record (pinned 2026-06-04).
+> **NOTE: where they say the chain / `MatchResultPayload` carries the change
+> `amount`, that is pre-amount-privacy — see the delta above; the amount now
+> lives only in the FillMemo.**
 
 ## Problem
 
@@ -39,11 +56,13 @@ every user's memos to every authenticated subscriber.
 
 ## Key facts that drive the design
 
-- **The chain is the permanent record.** Every fill settles on-chain
-  (`tee_forced_settle_batched`, `MatchResultPayload` = order_id + change
-  amount + change-note commitment). Nothing is ever truly lost; worst case
-  the client rebuilds history from chain. The WS + any cache are accelerants
-  over immutable on-chain truth.
+- **The chain is the permanent record — of commitments, not amounts.** Every
+  fill settles on-chain (`tee_forced_settle_batched`, `MatchResultPayload` =
+  order_id + change-note commitment; **amount-privacy P3b removed the amount** —
+  see the as-built delta above). The set of notes you own is never truly lost
+  (worst case the client re-locates commitments from chain); their *amounts*
+  live only in the FillMemo. The WS + any cache are accelerants over immutable
+  on-chain truth.
 - **The chain has no notion of "account."** On-chain a fill is attributable
   only to `order_id` (and note commitments). The `account` (API credential →
   bearer JWT) is purely off-chain. So an indexer reading only the chain can
@@ -86,6 +105,8 @@ pure, attestable engine):
 
 - Watches the vault program's settle txs, decodes `MatchResultPayload`,
   stores fills keyed by `order_id` + a per-account monotonic cursor.
+  (Amount-privacy P3b: the decode yields commitments + order ids only — no
+  amounts; the indexer is a commitment locator.)
 - Joins to accounts via the **intake registry** (below).
 - Serves `GET /account/history?since=<cursor>&limit=N` (bearer-auth'd),
   paginated.

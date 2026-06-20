@@ -81,7 +81,7 @@ export function subscribeFills(opts: SubscribeFillsOptions): FillsSubscription {
 
 export interface FillsSyncOptions
   extends Omit<BackfillOptions, "baseUrl">,
-    Omit<SubscribeFillsOptions, "store" | "masterSeed" | "ownerCommitment"> {
+    SubscribeFillsOptions {
   /** Indexer base URL for the history backfill. */
   indexerBaseUrl: string;
 }
@@ -93,11 +93,14 @@ export interface FillsSync {
 }
 
 /**
- * "Backfill then tail": rebuild durable history from the indexer, then open the
- * live WS — invisible to the user. On a 1011 resync the WS closed because we
- * lagged; re-backfill (cheap, incremental from the cursor) and reopen. Dedup is
- * automatic: the NoteStore is keyed by commitment, so a note seen in both paths
- * is just re-put.
+ * "Backfill then tail": LOCATE durable history from the indexer (the change-note
+ * commitments per order_id — amount-privacy P3b means the indexer carries no
+ * amounts), then open the live WS for the spendable FillMemos — invisible to the
+ * user. On a 1011 resync the WS closed because we lagged; re-locate (cheap,
+ * incremental from the cursor) and reopen. The `NoteStore` is populated by the
+ * verified memos (commitment-keyed, so re-delivery just re-puts); the located
+ * commitments are the gap signal (a located commitment with no stored note = a
+ * fill whose memo we still need).
  */
 export async function startFillsSync(opts: FillsSyncOptions): Promise<FillsSync> {
   const backfill = await backfillHistory({ ...opts, baseUrl: opts.indexerBaseUrl });

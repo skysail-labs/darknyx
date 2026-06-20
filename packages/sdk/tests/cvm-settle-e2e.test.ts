@@ -65,10 +65,7 @@ import {
   OrderSide,
   OrderType,
 } from "../src/orders/canonical.js";
-import {
-  fetchOrderFills,
-  reconstructChangeNote,
-} from "../src/fills/history.js";
+import { fetchOrderFills } from "../src/fills/history.js";
 import {
   subscribeFills,
   type FillsSubscription,
@@ -622,6 +619,9 @@ maybeDescribe(
           console.log(
             `  · indexer fills[${buyerId.slice(0, 8)}]: ${JSON.stringify(idxFills)}`,
           );
+          // Amount-privacy (P3b): the indexer is a COMMITMENT LOCATOR — it
+          // surfaces THAT the buyer got a change note + its commitment, but NOT
+          // the amount. The spendable amount + opening come from the FillMemo.
           const change = idxFills.find(
             (f) => f.side === "buyer" && f.changeNoteCommitment,
           );
@@ -629,58 +629,60 @@ maybeDescribe(
             change,
             "indexer did not surface the buyer change-note fill",
           ).toBeTruthy();
-          expect(BigInt(change!.changeAmount)).toBeGreaterThan(0n);
 
-          // Over-collateralization: the surplus we deposited must come back in the
-          // change note (on top of any price-improvement surplus).
-          if (BUYER_SURPLUS > 0n) {
-            expect(
-              BigInt(change!.changeAmount),
-              "over-collateral surplus did not return as change",
-            ).toBeGreaterThanOrEqual(BUYER_SURPLUS);
-          }
-
-          // The durable path recovers the spendable opening from the seed alone
-          // (the anchor-index search = the Vuln-4 integrity check): the commitment
-          // must reproduce exactly. This ONLY succeeds for an anchor-based
-          // CONTINUATION note (partial fill) — proving the buyer's residual
-          // relocked onto an anchor, which is the whole point of the anchor pool.
-          const rec = await reconstructChangeNote(change!, {
-            masterSeed: buyer.masterSeed,
-            ownerCommitment: buyer.ownerCommit,
-            baseMint: baseMint.toBytes(),
-            quoteMint: quoteMint.toBytes(),
-          });
-          expect(
-            rec,
-            "could not reconstruct the change note — note_e is not anchor-based (was this a full fill, not a continuation?)",
-          ).not.toBeNull();
-          expect(rec!.commitment).toBe(change!.changeNoteCommitment);
-          // The continuation consumed an anchor from the pool (index ≥ 0).
-          expect(
-            rec!.anchorIndex,
-            "continuation did not consume an anchor",
-          ).toBeGreaterThanOrEqual(0);
-          console.log(
-            `  · continuation note recovered at anchor index ${rec!.anchorIndex}`,
-          );
-
-          // Live: the per-account WS delivered + verified the same memo.
+          // Live: wait for the per-account WS to deliver + verify the FillMemo
+          // for THIS located commitment. The verified ChangeNoteRecord is the
+          // spendable opening — `verifyFillMemo` recomputed the commitment from
+          // the memo's amount + inner_hash (the Vuln-4 integrity check), so a
+          // record that matches the indexer-located commitment is the
+          // locator↔memo cross-check.
           await t.step("live WS fill delivery", async () => {
             const wsDeadline = Date.now() + 15_000;
             while (
               Date.now() < wsDeadline &&
-              !wsFills.some((r) => r.orderId === buyerId)
+              !wsFills.some(
+                (r) =>
+                  r.orderId === buyerId &&
+                  r.commitment === change!.changeNoteCommitment,
+              )
             ) {
               await new Promise((r) => setTimeout(r, 1000));
             }
           });
+          const memoRec = wsFills.find(
+            (r) =>
+              r.orderId === buyerId &&
+              r.commitment === change!.changeNoteCommitment,
+          );
           expect(
-            wsFills.some((r) => r.orderId === buyerId),
-            "live /ws/fills did not deliver the buyer FillMemo (is the CVM built from the fills commit?)",
-          ).toBe(true);
+            memoRec,
+            "live /ws/fills did not deliver+verify the buyer FillMemo for the located commitment (is the CVM built from the fills commit?)",
+          ).toBeTruthy();
+
+          // The memo's amount is the authoritative (off-chain) change amount.
+          expect(
+            memoRec!.amount,
+            "change amount must be positive",
+          ).toBeGreaterThan(0n);
+
+          // Over-collateralization: the surplus we deposited must come back in
+          // the change note (on top of any price-improvement surplus).
+          if (BUYER_SURPLUS > 0n) {
+            expect(
+              memoRec!.amount,
+              "over-collateral surplus did not return as change",
+            ).toBeGreaterThanOrEqual(BUYER_SURPLUS);
+          }
+
+          // The continuation consumed an anchor from the pool (index ≥ 0) —
+          // the whole point of the anchor pool (the buyer's residual relocked
+          // onto an anchor and keeps trading).
+          expect(
+            memoRec!.anchorIndex,
+            "continuation did not consume an anchor",
+          ).toBeGreaterThanOrEqual(0);
           console.log(
-            `  · fills OK — indexer + WS both surfaced buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}…`,
+            `  · fills OK — indexer located + WS memo verified buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}… (amount ${memoRec!.amount}, anchor ${memoRec!.anchorIndex})`,
           );
 
           // ── 8. cross-batch RE-MATCH (opt-in) ─────────────────────────

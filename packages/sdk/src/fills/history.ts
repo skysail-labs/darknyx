@@ -1,37 +1,48 @@
 /**
  * Durable trade history — the "backfill" half of "backfill then tail".
  *
- * The off-TEE indexer (`packages/indexer`) serves fills BY order_id, decoded from
- * the chain. It is account-agnostic and holds no secrets, so an indexer row
- * carries only `{ orderId, side, changeAmount, changeNoteCommitment }` — NOT the
- * `inner_hash` / `anchor_index` / `mint` the client needs to spend the change
- * note. The client recovers those from its own seed:
+ * Amount-privacy (P3b): the off-TEE indexer (`packages/indexer`) is now a pure
+ * COMMITMENT LOCATOR. Its rows carry no amounts — only `{ orderId, side,
+ * matchId, isPartialFill, changeNoteCommitment, batchSlot }`. The amount, the
+ * `inner_hash`/`anchor_index`, and therefore the *spendable* change-note
+ * opening come ONLY from the per-account `FillMemo` (the authenticated live
+ * `/ws/fills` channel, verified in `orders/fill-memo.ts`). A change note's
+ * amount is never on-chain, so it cannot be rebuilt from the chain/indexer
+ * alone — the same note-plaintext requirement every shielded pool has.
+ *
+ * So this module's job is narrowed:
  *
  *   1. Gap-scan: derive `deriveOrderId(seed, 0..)`, query the indexer for each,
- *      stop after `gapLimit` consecutive empty order ids. Full history from the
- *      seed alone — no persisted order-id list (HD-wallet style).
- *   2. For each fill with a change note, find the anchor index by deriving
- *      `inner_hash` for k = 0,1,… and recomputing the commitment until it matches
- *      the row's `change_note_commitment`. That search both recovers the opening
- *      AND proves integrity (a wrong commitment never matches).
+ *      stop after `gapLimit` consecutive empty order ids. Full set of FILLS
+ *      (order_id + change-note commitment + slot) from the seed alone — no
+ *      persisted order-id list (HD-wallet style).
+ *   2. Return the located fills + a coarse slot cursor for "tail from here".
+ *      The client populates its `NoteStore` from FillMemos (live tail); the
+ *      located commitments let it detect gaps (a located commitment it has no
+ *      memo/note for = a fill it was offline for).
  *
- * The live WS path (`ws-client.ts`) gets `inner_hash`/`anchor_index` directly in
- * the `FillMemo`, so it skips the search.
+ * Gap recovery for a fill the client was offline for (memo missed) requires the
+ * memo to be re-obtained — a future authenticated TEE memo-replay endpoint.
+ * Until then a missed memo means the located commitment is known but its amount
+ * (hence its opening) is not yet recoverable.
  */
 
-import { deriveOrderId, deriveInnerHash, bn254ToBE32 } from "../keys/key-generators.js";
-import { noteCommitmentV2 } from "../utxo/note.js";
-import type { ChangeNoteRecord, NoteStore } from "../utxo/note-store.js";
+import { deriveOrderId } from "../keys/key-generators.js";
 
-/** One fill row as served by the indexer's `GET /fills`. */
+/** One located fill as served by the indexer's `GET /fills`.
+ *
+ *  COMMITMENT LOCATOR shape (amount-privacy P3b): it tells you THAT an order
+ *  had a fill and the change-note commitment, but NOT the amount — that comes
+ *  from the FillMemo. */
 export interface IndexerFill {
   orderId: string;
   side: "buyer" | "seller";
   matchId: string;
   signature: string;
-  changeAmount: string; // decimal string (u64-safe)
-  changeNoteCommitment: string | null; // null = exact fill, no change note
-  clearingPrice: string;
+  /** `true` when this side received a change note (partial fill). */
+  isPartialFill: boolean;
+  /** 32-byte hex of the minted change note, or `null` when the side filled exactly. */
+  changeNoteCommitment: string | null;
   batchSlot: string;
 }
 
@@ -57,23 +68,18 @@ export interface BackfillOptions {
   /** Indexer base URL, e.g. http://localhost:8090. */
   baseUrl: string;
   masterSeed: Uint8Array;
-  ownerCommitment: bigint;
-  /** The user's base + quote mints (32 bytes). buyer change = quote, seller change = base. */
-  baseMint: Uint8Array;
-  quoteMint: Uint8Array;
-  store: NoteStore;
   /** Stop gap-scanning after this many consecutive empty order ids. Default 5. */
   gapLimit?: number;
-  /** Max anchor indices to search per fill when recovering the opening. Default 64. */
-  anchorMax?: number;
   /** Only consider fills at/after this slot (incremental backfill). */
   since?: number;
   fetchImpl?: typeof fetch;
 }
 
 export interface BackfillResult {
-  /** Change notes recovered + stored. */
-  notes: ChangeNoteRecord[];
+  /** Located change-note fills (order_id + commitment + slot), NOT spendable
+   *  openings — the amount/opening for each comes from the FillMemo. Only fills
+   *  that minted a change note are included (exact fills carry no note). */
+  located: IndexerFill[];
   /** Highest order index that returned any fills (for a future incremental scan). */
   highestUsedIndex: number;
   /** Highest batch slot seen (a coarse cursor for "tail from here"). */
@@ -81,56 +87,17 @@ export interface BackfillResult {
 }
 
 /**
- * Recover the `ChangeNoteRecord` for one indexer fill by searching anchor
- * indices. Returns null when the row is an exact fill (no change note) or the
- * commitment can't be reproduced within `anchorMax` (corrupt/foreign row).
- */
-export async function reconstructChangeNote(
-  fill: IndexerFill,
-  opts: Pick<BackfillOptions, "masterSeed" | "ownerCommitment" | "baseMint" | "quoteMint"> & {
-    anchorMax?: number;
-  },
-): Promise<ChangeNoteRecord | null> {
-  if (!fill.changeNoteCommitment) return null;
-  const orderId = Uint8Array.from(Buffer.from(fill.orderId, "hex"));
-  const mint = fill.side === "buyer" ? opts.quoteMint : opts.baseMint;
-  const amount = BigInt(fill.changeAmount);
-  const anchorMax = opts.anchorMax ?? 64;
-
-  for (let k = 0; k < anchorMax; k++) {
-    const innerBig = deriveInnerHash(opts.masterSeed, orderId, k);
-    const commitment = await noteCommitmentV2({
-      tokenMint: mint,
-      amount,
-      ownerCommitment: opts.ownerCommitment,
-      innerHash: innerBig,
-    });
-    if (toHex(commitment) === fill.changeNoteCommitment) {
-      return {
-        commitment: fill.changeNoteCommitment,
-        tokenMint: mint,
-        amount,
-        ownerCommitment: opts.ownerCommitment,
-        innerHash: innerBig,
-        orderId: fill.orderId,
-        anchorIndex: k,
-      };
-    }
-    // bn254ToBE32 guards range; deriveInnerHash already reduces mod r.
-    void bn254ToBE32;
-  }
-  return null;
-}
-
-/**
- * Rebuild full trade history from the seed: gap-scan order ids, recover every
- * change note, and store it. Idempotent — the NoteStore is keyed by commitment,
- * so re-running (or overlapping with the live WS tail) just re-puts the same
- * record.
+ * Gap-scan order ids from the seed and LOCATE every change-note fill (commitment
+ * + order_id + slot). Does not reconstruct spendable openings — amounts live
+ * only in the FillMemo (amount-privacy P3b), so the live tail
+ * (`subscribeFills`) is what populates the `NoteStore`.
+ *
+ * Idempotent + stateless: order ids are HD-derived, so re-running (or running
+ * with a `since` cursor) just re-locates the same set.
  */
 export async function backfillHistory(opts: BackfillOptions): Promise<BackfillResult> {
   const gapLimit = opts.gapLimit ?? 5;
-  const notes: ChangeNoteRecord[] = [];
+  const located: IndexerFill[] = [];
   let consecutiveEmpty = 0;
   let n = 0;
   let highestUsedIndex = -1;
@@ -149,14 +116,10 @@ export async function backfillHistory(opts: BackfillOptions): Promise<BackfillRe
       highestUsedIndex = n;
       for (const fill of fills) {
         cursorSlot = Math.max(cursorSlot, Number(fill.batchSlot));
-        const rec = await reconstructChangeNote(fill, opts);
-        if (rec) {
-          await opts.store.put(rec);
-          notes.push(rec);
-        }
+        if (fill.changeNoteCommitment) located.push(fill);
       }
     }
     n += 1;
   }
-  return { notes, highestUsedIndex, cursorSlot };
+  return { located, highestUsedIndex, cursorSlot };
 }

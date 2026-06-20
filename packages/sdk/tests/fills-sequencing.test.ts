@@ -1,11 +1,11 @@
 /**
- * "Backfill then tail" — the durable (indexer) + live (WS) fills paths must
- * recover the same change notes and dedup cleanly across the handoff.
+ * "Backfill then tail" — the durable (indexer) + live (WS) fills paths.
  *
- * The indexer row carries no secrets, so `backfillHistory` recovers the opening
- * by searching anchor indices; the WS `FillMemo` carries `inner_hash`/
- * `anchor_index` directly. Both end in the commitment-keyed NoteStore, so a note
- * seen on both paths is stored once.
+ * Amount-privacy (P3b): the indexer is a COMMITMENT LOCATOR (no amounts), so
+ * `backfillHistory` LOCATES change-note fills (order_id + commitment + slot) but
+ * does NOT reconstruct openings. The spendable opening — amount + `inner_hash`/
+ * `anchor_index` — comes from the WS `FillMemo`, which lands in the
+ * commitment-keyed NoteStore (so re-delivery is deduped).
  */
 
 import { describe, it, expect } from "vitest";
@@ -19,7 +19,6 @@ import type { FillMemo } from "../src/orders/fill-memo.js";
 const SEED = new Uint8Array(64).map((_, i) => (i * 7 + 1) & 0xff);
 const OWNER = 12345678901234567890n % 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 const QUOTE_MINT = new Uint8Array(32).fill(0x22);
-const BASE_MINT = new Uint8Array(32).fill(0x33);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
 /** Build the buyer (quote-side) change-note commitment for order n, anchor k. */
@@ -61,7 +60,7 @@ class FakeWs implements WebSocketLike {
 }
 
 describe("backfill then tail", () => {
-  it("backfillHistory gap-scans, recovers the opening, and stores the note", async () => {
+  it("backfillHistory gap-scans and locates change-note fills (no amounts)", async () => {
     const amount = 500n;
     const n = 3;
     const k = 2;
@@ -74,39 +73,34 @@ describe("backfill then tail", () => {
           side: "buyer",
           matchId: "ab".repeat(8),
           signature: "sig1",
-          changeAmount: amount.toString(),
+          isPartialFill: true,
           changeNoteCommitment: commitment,
-          clearingPrice: "1500",
           batchSlot: "100",
         },
       ],
     };
 
-    const store = new InMemoryNoteStore();
     const res = await backfillHistory({
       baseUrl: "http://indexer.test",
       masterSeed: SEED,
-      ownerCommitment: OWNER,
-      baseMint: BASE_MINT,
-      quoteMint: QUOTE_MINT,
-      store,
       gapLimit: 5,
       fetchImpl: fakeIndexer(rows),
     });
 
-    expect(res.notes).toHaveLength(1);
+    // Locator only: the fill + its commitment are found, but no opening is
+    // reconstructed (the amount isn't on the wire — it comes from the memo).
+    expect(res.located).toHaveLength(1);
+    expect(res.located[0].changeNoteCommitment).toBe(commitment);
+    expect(res.located[0].orderId).toBe(orderId);
     expect(res.highestUsedIndex).toBe(n);
     expect(res.cursorSlot).toBe(100);
-    const stored = await store.get(commitment);
-    expect(stored?.anchorIndex).toBe(k);
-    expect(stored?.amount).toBe(amount);
   });
 
   it("subscribeFills verifies + stores a live memo, then dedups against backfill", async () => {
     const store = new InMemoryNoteStore();
     const n = 1;
 
-    // Pre-store a backfilled note (anchor 0).
+    // Pre-store a note from an earlier verified memo (anchor 0).
     const a = await buyerCommitment(n, 0, 200n);
     await store.put({
       commitment: a.commitment,
