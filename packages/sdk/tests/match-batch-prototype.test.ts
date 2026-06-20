@@ -67,6 +67,9 @@ async function buildSlot(args: {
   /** Salt the inner_hashes so multiple slots in the same batch
    *  don't accidentally collide commitments. */
   slotIdx: number;
+  /** Circuit fee-floor PUBLIC input (bps). Defaults to 0 (floor is a
+   *  no-op). Batch-level: every slot must carry the same value. */
+  feeRateBps?: bigint;
 }): Promise<MatchSlotWitness> {
   const quoteAmount = args.baseAmount * args.clearingPrice;
   const aAmount = quoteAmount + args.buyerChange + args.buyerFee;
@@ -120,6 +123,7 @@ async function buildSlot(args: {
     aAmount, bAmount,
     aInner, bInner, cInner, dInner, eInner, fInner,
     clearingPrice: args.clearingPrice,
+    feeRateBps: args.feeRateBps ?? 0n,
   };
 }
 
@@ -167,7 +171,8 @@ for (const N of [2, 4, 16] as const) {
       const slots = await defaultBatch(N);
       const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots });
 
-      expect(result.publicInputsBE.length).toBe(1);
+      // [merkle_root, fee_rate_bps].
+      expect(result.publicInputsBE.length).toBe(2);
       expect(result.publicInputsBE[0]).toEqual(result.merkleRoot);
 
       // TS-side leaf + root reproduce the circuit's internal computation.
@@ -219,12 +224,54 @@ const ready2 = artefactsReady(2);
 
     const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots });
 
-    expect(result.publicInputsBE.length).toBe(1);
+    expect(result.publicInputsBE.length).toBe(2);
     expect(result.leaves[0]).not.toEqual(result.leaves[1]);   // distinct shapes → distinct leaves.
 
     const tsRoot = await computeBatchRoot(result.leaves);
     expect(result.merkleRoot).toEqual(tsRoot);
   }, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// Fee floor (amount-privacy, P1b) — in-circuit `(fee+1)*10000 > notional*rate`.
+// ---------------------------------------------------------------------------
+
+(ready2 ? describe : describe.skip)("v3.5 — N=2 fee floor", () => {
+  // base=10, price=100 → quote=1000. At rate=30 the buyer floor is
+  // ⌊1000*30/10000⌋ = 3; the seller floor is ⌊10*30/10000⌋ = 0.
+  const quoteMint = rand32(0xEE);
+  const baseMint = rand32(0xFF);
+  const buyerCommit = 0xC0FFEE00n;
+  const sellerCommit = 0xDECAF000n;
+
+  async function feeBatch(buyerFee: bigint): Promise<MatchSlotWitness[]> {
+    const mk = (idx: number) =>
+      buildSlot({
+        quoteMint, baseMint,
+        buyerOwnerCommit: buyerCommit, sellerOwnerCommit: sellerCommit,
+        baseAmount: 10n, clearingPrice: 100n,
+        buyerChange: 0n, sellerChange: 0n,
+        buyerFee, sellerFee: 0n,
+        batchSlot: 2_000_000n, slotIdx: idx, feeRateBps: 30n,
+      });
+    return [await mk(0), await mk(1)];
+  }
+
+  it("[fee_at_floor] charging exactly the floor proves at rate=30", async () => {
+    const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots: await feeBatch(3n) });
+    // fee_rate_bps is the 2nd public input (value 30).
+    expect(result.publicInputsBE.length).toBe(2);
+    const fee = result.publicInputsBE[1];
+    expect(fee[31]).toBe(30);
+  }, 60_000);
+
+  it("[fee_below_floor] under-charging is UNPROVABLE at rate=30", async () => {
+    // buyerFee=2 < floor 3 ⇒ (2+1)*10000 = 30000 is NOT > 1000*30 = 30000,
+    // so the in-circuit GreaterThan fails witness generation.
+    await expect(
+      proveMatchBatch({ repoRoot: REPO_ROOT, slots: await feeBatch(2n) }),
+    ).rejects.toThrow();
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------

@@ -62,6 +62,9 @@ pub struct MatchAssemblyInputs<'a> {
     pub quote_mint: [u8; 32],
     /// Owner commitment the protocol's fee notes pay to.
     pub protocol_owner_commitment: [u8; 32],
+    /// Protocol fee rate (bps) — the circuit's fee-floor public input
+    /// (`VaultConfig.fee_rate_bps`). Stamped into every slot's witness.
+    pub fee_rate_bps: u64,
     /// Slot the fee note's (nonce, blinding) derives against. The
     /// protocol re-derives fee-note openings from (fee_slot,
     /// FEE_ROLE_*), so this must be a value the protocol can recover.
@@ -285,6 +288,7 @@ pub fn assemble_match(
         e_inner,
         f_inner,
         clearing_price,
+        fee_rate_bps: inp.fee_rate_bps,
     };
 
     let payload = MatchResultPayload {
@@ -330,6 +334,9 @@ pub struct BatchAssemblyParams {
     pub protocol_owner_commitment: [u8; 32],
     /// Slot the fee-note openings derive against.
     pub fee_slot: u64,
+    /// Protocol fee rate (bps) — the circuit fee-floor public input
+    /// (`VaultConfig.fee_rate_bps`).
+    pub fee_rate_bps: u64,
     /// Circuit instantiation N (production = 16) — the witness set is
     /// padded with dummy slots up to this.
     pub circuit_n: usize,
@@ -404,6 +411,7 @@ pub fn assemble_batch(
             quote_mint: params.quote_mint,
             protocol_owner_commitment: params.protocol_owner_commitment,
             fee_slot: params.fee_slot,
+            fee_rate_bps: params.fee_rate_bps,
             buyer_change_inner,
             seller_change_inner,
         })?;
@@ -574,6 +582,7 @@ mod tests {
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
             fee_slot: 1234,
+            fee_rate_bps: 0,
             buyer_change_inner: None,
             seller_change_inner: None,
         }
@@ -781,6 +790,7 @@ mod tests {
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
             fee_slot: 1234,
+            fee_rate_bps: 0,
             circuit_n: 16,
         }
     }

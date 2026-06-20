@@ -171,7 +171,7 @@ mod tests {
     /// this module's tag/arity ordering has drifted from the
     /// circuit (would silently break VALID_MATCH_BATCH on-chain).
     /// Either way: fail loud, fix at the source.
-    const DUMMY_LEAF_HEX: &str = "1136f7f54b6117db49a8fb1a920581a657a0c1220ececaedda30480fac9bcf6b";
+    const DUMMY_LEAF_HEX: &str = "1a527e39345448f0e269d44d97c7b3fbf73c5204e63d470cbde9eb1d059936fd";
 
     #[test]
     fn dummy_slot_leaf_is_pinned() {
@@ -194,7 +194,7 @@ mod tests {
     fn batch_root_of_two_identical_dummies_is_pinned() {
         let leaf = compute_batch_leaf(&dummy_slot()).unwrap();
         let root = compute_batch_root(&[leaf, leaf]).unwrap();
-        let want = "2b2d7482bfd5e8342d73c1831c2bd7758c128f05ce0e504fd3604599326860e3";
+        let want = "03f21bde88d0a988a97e23c05ce6dc23582fdd97fd878ec8e8406842cd757997";
         // Pin the value byte-for-byte so a future Poseidon refactor
         // surfaces here. (The prior literal was a dead pin —
         // `let _ = want` with no assertion — and had drifted from the
@@ -279,11 +279,22 @@ mod tests {
     }
 
     #[test]
-    fn changing_quote_mint_changes_leaf() {
+    fn changing_a_note_commitment_changes_leaf() {
+        // The commitment-only leaf (P1b) binds the note commitments, NOT the
+        // mints/amounts directly — those are bound transitively inside each
+        // commitment. So a different note commitment must change the leaf
+        // (whereas mutating only `quote_mint`, which no longer feeds the leaf,
+        // would not).
         let mut s1 = dummy_slot();
         let mut s2 = dummy_slot();
-        s1.quote_mint = [0xAA; 32];
-        s2.quote_mint = [0xBB; 32];
+        // Fr-safe commitments (top byte 0 keeps them below the BN254 modulus,
+        // so the leaf Poseidon accepts them).
+        let mut c1 = [0xAA; 32];
+        c1[0] = 0;
+        let mut c2 = [0xBB; 32];
+        c2[0] = 0;
+        s1.note_c_commitment = c1;
+        s2.note_c_commitment = c2;
         let leaf1 = compute_batch_leaf(&s1).unwrap();
         let leaf2 = compute_batch_leaf(&s2).unwrap();
         assert_ne!(leaf1, leaf2);

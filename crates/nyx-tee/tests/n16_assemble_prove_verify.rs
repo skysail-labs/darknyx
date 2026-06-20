@@ -152,6 +152,9 @@ async fn assembler_witness_proves_and_verifies_n16() {
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
         fee_slot: 1234,
+        // Zero-fee exact-fill match → fee_rate_bps MUST be 0, or the in-circuit
+        // fee floor `(fee+1)*10000 > notional*rate` would reject it (fee=0).
+        fee_rate_bps: 0,
         buyer_change_inner: None,
         seller_change_inner: None,
     })
@@ -171,8 +174,10 @@ async fn assembler_witness_proves_and_verifies_n16() {
     // 4. The single public input is the batch Merkle root, and it
     //    must equal our off-circuit root over the leaves (the prover
     //    already cross-checks this internally; assert it here too).
-    assert_eq!(public.public_inputs_be.len(), 1);
+    // [merkle_root, fee_rate_bps]. fee_rate_bps = 0 for this zero-fee match.
+    assert_eq!(public.public_inputs_be.len(), 2);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
+    assert_eq!(public.public_inputs_be[1], [0u8; 32]);
     assert_eq!(
         public.merkle_root,
         compute_batch_root(&public.leaves).expect("recompute root"),
@@ -184,7 +189,11 @@ async fn assembler_witness_proves_and_verifies_n16() {
     //    the circuit rejects, or the leaf/root port drifted, this is
     //    where it surfaces.
     let pvk = prepare_verifying_key(prover.verifying_key());
-    let public_fr = vec![Fr::from_be_bytes_mod_order(&public.merkle_root)];
+    let public_fr: Vec<Fr> = public
+        .public_inputs_be
+        .iter()
+        .map(|b| Fr::from_be_bytes_mod_order(b))
+        .collect();
     let verified =
         Groth16::<Bn254>::verify_proof(&pvk, &proof, &public_fr).expect("verify_proof call");
     assert!(

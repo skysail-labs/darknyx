@@ -11,7 +11,7 @@
 //! produces on the TS side.
 
 use super::leaf::{compute_batch_leaf, compute_batch_root, LeafError};
-use super::witness::MatchSlotWitness;
+use super::witness::{u64_to_be32, MatchSlotWitness};
 
 /// Computed leaves + root + the single-element public-input vector,
 /// in the wire shape `groth16-solana` consumes.
@@ -42,10 +42,14 @@ pub fn build_batch_public_inputs(
         .map(compute_batch_leaf)
         .collect::<Result<Vec<_>, _>>()?;
     let merkle_root = compute_batch_root(&leaves)?;
+    // `fee_rate_bps` is a batch-level value (identical on every slot); read it
+    // from slot 0. Public-input ORDER must match the circuit's `main` public
+    // list: [merkle_root, fee_rate_bps].
+    let fee_rate_bps = slots[0].fee_rate_bps;
     Ok(BatchPublicInputs {
         leaves,
         merkle_root,
-        public_inputs_be: vec![merkle_root],
+        public_inputs_be: vec![merkle_root, u64_to_be32(fee_rate_bps)],
     })
 }
 
@@ -55,12 +59,17 @@ mod tests {
     use crate::prover::witness::dummy_slot;
 
     #[test]
-    fn public_input_vector_has_single_root_element() {
-        let slots = vec![dummy_slot(); 4];
+    fn public_input_vector_is_root_then_fee_rate() {
+        let mut slots = vec![dummy_slot(); 4];
+        slots[0].fee_rate_bps = 30;
         let pi = build_batch_public_inputs(&slots).unwrap();
         assert_eq!(pi.leaves.len(), 4);
-        assert_eq!(pi.public_inputs_be.len(), 1);
+        // [merkle_root, fee_rate_bps] — order matches the circuit `main` list.
+        assert_eq!(pi.public_inputs_be.len(), 2);
         assert_eq!(pi.public_inputs_be[0], pi.merkle_root);
+        let mut fee_be = [0u8; 32];
+        fee_be[31] = 30;
+        assert_eq!(pi.public_inputs_be[1], fee_be);
     }
 
     #[test]

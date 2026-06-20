@@ -93,11 +93,15 @@ template MatchSlot() {
     signal input seller_fee_amt;
 
     // ----- VALID_PRICE-equivalent fields -----
-    // clearing_price was private in the old VALID_PRICE; it's still private
-    // to the circuit, but the leaf binds it directly (the on-chain handler
-    // reads it from the settle payload, where it's been public since v3).
+    // clearing_price + the amounts are PRIVATE; the commitment-only leaf no
+    // longer binds them (amount-privacy, P1b) — the per-slot conservation +
+    // range constraints prove them, and the note commitments bind them.
     signal input clearing_price;
     signal input batch_slot;
+    // Protocol fee rate (basis points), a MatchBatch-level PUBLIC input fanned
+    // to every slot, bound on-chain to VaultConfig.fee_rate_bps. Drives the
+    // in-circuit fee floor below.
+    signal input fee_rate_bps;
 
     // ----- VALID_CREATE private witnesses (v2: one inner_hash per note) -----
     signal input a_owner_commit;
@@ -233,6 +237,27 @@ template MatchSlot() {
     quote_amount === base_amount * clearing_price;
 
     // ─────────────────────────────────────────────────────────────────
+    // FEE FLOOR (amount-privacy, P1b) — moved in-circuit from the on-chain
+    // settle (which loses the plaintext amounts it needed). The matcher FLOORS
+    // each leg's fee: `fee = ⌊notional·rate/10000⌋`. The exact division-free
+    // equivalent of the on-chain check `fee ≥ ⌊notional·rate/10000⌋` is
+    // `(fee+1)·10000 > notional·rate` (proof in
+    // docs/settlement-amount-privacy-p0-soundness.md §8). `fee_rate_bps` is a
+    // PUBLIC input bound to VaultConfig.fee_rate_bps, so the verifier pins the
+    // rate. rate=0 ⇒ RHS=0 ⇒ `(fee+1)·10000 > 0` holds for any fee≥0, so the
+    // default fee-free path needs no special-casing. GreaterThan(96): both
+    // operands are < 2^80 (fee/notional < 2^64 range-checked, rate < 2^16).
+    component buyerFeeFloor = GreaterThan(96);
+    buyerFeeFloor.in[0] <== buyer_fee_amt * 10000 + 10000;
+    buyerFeeFloor.in[1] <== quote_amount * fee_rate_bps;
+    buyerFeeFloor.out === 1;
+
+    component sellerFeeFloor = GreaterThan(96);
+    sellerFeeFloor.in[0] <== seller_fee_amt * 10000 + 10000;
+    sellerFeeFloor.in[1] <== base_amount * fee_rate_bps;
+    sellerFeeFloor.out === 1;
+
+    // ─────────────────────────────────────────────────────────────────
     // LEAF HASH — commitment-only (amount-privacy, P1b).
     //
     // The leaf binds ONLY the six note commitments + batch_slot — NOT
@@ -304,6 +329,13 @@ template MerkleRoot(N) {
 // ----------------------------------------------------------------------------
 template MatchBatch(N) {
     signal input merkle_root;
+    // Protocol fee rate (bps), PUBLIC — bound on-chain to
+    // VaultConfig.fee_rate_bps. Declared right after merkle_root so the public
+    // signal order is [merkle_root, fee_rate_bps]. Range-bound to 16 bits so the
+    // per-slot fee-floor products stay < 2^80.
+    signal input fee_rate_bps;
+    component feeRateBits = Num2Bits(16);
+    feeRateBits.in <== fee_rate_bps;
 
     // ----- Per-slot public-bound fields -----
     signal input note_a_commitment[N];
@@ -359,6 +391,7 @@ template MatchBatch(N) {
         slot[i].buyer_fee_amt     <== buyer_fee_amt[i];
         slot[i].seller_fee_amt    <== seller_fee_amt[i];
         slot[i].batch_slot        <== batch_slot[i];
+        slot[i].fee_rate_bps      <== fee_rate_bps;
         slot[i].a_owner_commit    <== a_owner_commit[i];
         slot[i].b_owner_commit    <== b_owner_commit[i];
         slot[i].a_amount          <== a_amount[i];

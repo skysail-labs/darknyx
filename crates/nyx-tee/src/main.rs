@@ -225,6 +225,10 @@ async fn main() -> Result<()> {
     let settle_base_mint = match_config.base_mint;
     let settle_quote_mint = match_config.quote_mint;
     let settle_protocol_owner = match_config.protocol_owner_commitment;
+    // The reconciled fee rate (on-chain VaultConfig value via #11a) the settle
+    // driver feeds the circuit fee-floor public input — must equal what the
+    // matcher charges.
+    let settle_fee_rate_bps = match_config.fee_rate_bps as u64;
     // Also for the /instruments metadata (captured before the move).
     let market_tick_size = match_config.tick_size;
     let market_min_order_size = match_config.min_order_size;
@@ -319,6 +323,7 @@ async fn main() -> Result<()> {
                 settle_base_mint,
                 settle_quote_mint,
                 settle_protocol_owner,
+                settle_fee_rate_bps,
             )
             .map(|d| {
                 tracing::info!(
@@ -597,6 +602,7 @@ fn build_settle_driver(
     base_mint: [u8; 32],
     quote_mint: [u8; 32],
     protocol_owner_commitment: [u8; 32],
+    fee_rate_bps: u64,
 ) -> anyhow::Result<SettleDriver> {
     let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
     let circuits_dir =
@@ -704,6 +710,7 @@ fn build_settle_driver(
             base_mint,
             quote_mint,
             protocol_owner_commitment,
+            fee_rate_bps,
             circuit_n: PRODUCTION_BATCH_N,
         },
     })

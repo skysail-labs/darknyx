@@ -70,6 +70,12 @@ pub struct MatchSlotWitness {
 
     // ── VALID_PRICE private witness ──
     pub clearing_price: u64,
+
+    // ── Batch-level fields (same across every slot in a batch) ──
+    /// Protocol fee rate (bps), a MatchBatch-level PUBLIC input bound on-chain
+    /// to `VaultConfig.fee_rate_bps`. Stored per-slot for convenience; the
+    /// prover reads it from `slots[0]` and pushes the single circuit input.
+    pub fee_rate_bps: u64,
 }
 
 /// Build a fully-valid all-zero "dummy" slot. Used to pad a batch
@@ -115,6 +121,7 @@ pub fn dummy_slot() -> MatchSlotWitness {
         e_inner: zero32,
         f_inner: zero32,
         clearing_price: 0,
+        fee_rate_bps: 0,
     }
 }
 

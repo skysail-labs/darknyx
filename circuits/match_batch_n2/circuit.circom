@@ -6,4 +6,4 @@ include "../templates/match_batch.circom";
 // cross-validation gate against the per-match valid_create + valid_price
 // circuits during Phase 1a. Once N=16 is the default, N=2 stays around
 // for fast unit tests and as a documentation-grade reference instance.
-component main { public [merkle_root] } = MatchBatch(2);
+component main { public [merkle_root, fee_rate_bps] } = MatchBatch(2);

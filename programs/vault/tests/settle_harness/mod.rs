@@ -1496,14 +1496,17 @@ pub fn build_verify_match_batch_ix(
     proof_bytes: &[u8; 256],
 ) -> Instruction {
     let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
+    let (vault_pda, _) = vault_config_pda(&h.vault_id);
     let mut data = anchor_disc("verify_match_batch").to_vec();
     data.extend_from_slice(merkle_root);
     data.extend_from_slice(&expiry_slot.to_le_bytes());
     data.extend_from_slice(proof_bytes);
     Instruction {
         program_id: h.vault_id,
+        // Order MUST match VerifyMatchBatch: payer, vault_config, marker, system.
         accounts: vec![
             AccountMeta::new(*payer, true),
+            AccountMeta::new_readonly(vault_pda, false),
             AccountMeta::new(marker_pda, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],

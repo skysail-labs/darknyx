@@ -178,9 +178,10 @@ pub(crate) fn build_circom_and_check(
     let circuit_public = circom
         .get_public_inputs()
         .ok_or_else(|| ProverError::WitnessGen("circuit produced no public inputs".into()))?;
-    if circuit_public.len() != 1 {
+    if circuit_public.len() != public.public_inputs_be.len() {
         return Err(ProverError::WitnessGen(format!(
-            "expected 1 public input (merkle_root), got {}",
+            "expected {} public inputs ([merkle_root, fee_rate_bps]), got {}",
+            public.public_inputs_be.len(),
             circuit_public.len()
         )));
     }
@@ -190,6 +191,18 @@ pub(crate) fn build_circom_and_check(
             circuit: hex::encode(circuit_root),
             computed: hex::encode(public.merkle_root),
         });
+    }
+    // Remaining public inputs (fee_rate_bps, …) must match the off-circuit
+    // vector IN ORDER, or the on-chain verifier would reject the proof.
+    for (i, cp) in circuit_public.iter().enumerate().skip(1) {
+        let got = fr_to_be32(cp);
+        if got != public.public_inputs_be[i] {
+            return Err(ProverError::WitnessGen(format!(
+                "public input[{i}] mismatch: circuit {} != computed {}",
+                hex::encode(got),
+                hex::encode(public.public_inputs_be[i])
+            )));
+        }
     }
     Ok(circom)
 }
@@ -211,8 +224,10 @@ fn push_all_inputs(
     slots: &[MatchSlotWitness],
     merkle_root: &[u8; 32],
 ) {
-    // Single public input.
+    // Public inputs (order matches the circuit `main` list).
     builder.push_input("merkle_root", be32_to_bigint(merkle_root));
+    // fee_rate_bps is a single batch-level input (same on every slot).
+    builder.push_input("fee_rate_bps", BigInt::from(slots[0].fee_rate_bps));
 
     macro_rules! push_u64 {
         ($name:literal, $field:ident) => {

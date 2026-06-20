@@ -95,6 +95,9 @@ export interface MatchSlotWitness {
   fInner: bigint;
   // ── VALID_PRICE private witness ──
   clearingPrice: bigint;
+  // ── Batch-level (same on every slot; the prover reads slots[0]) ──
+  /** Protocol fee rate (bps) — the circuit fee-floor PUBLIC input. */
+  feeRateBps: bigint;
 }
 
 export interface BatchProveResult {
@@ -177,6 +180,7 @@ export async function dummySlot(): Promise<MatchSlotWitness> {
     eInner: 0n,
     fInner: 0n,
     clearingPrice: 0n,
+    feeRateBps: 0n,
   };
 }
 
@@ -346,6 +350,9 @@ export async function proveMatchBatch(
 
   const inputs: Record<string, string | string[]> = {
     merkle_root: bigintFromBE32(merkleRoot).toString(),
+    // Batch-level PUBLIC input (single value, not per-slot). Order in the
+    // circuit `main` public list: [merkle_root, fee_rate_bps].
+    fee_rate_bps: args.slots[0].feeRateBps.toString(),
     // VALID_CREATE-equivalent public fields
     note_a_commitment: args.slots.map((s) => bigintFromBE32(s.noteAcommitment).toString()),
     note_b_commitment: args.slots.map((s) => bigintFromBE32(s.noteBcommitment).toString()),

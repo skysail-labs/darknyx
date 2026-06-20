@@ -25,7 +25,7 @@
 //! can't find the marker).
 
 use crate::errors::VaultError;
-use crate::state::{BatchValidityMarker, MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS};
+use crate::state::{BatchValidityMarker, VaultConfig, MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS};
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_match_batch_n16::*, Groth16Proof};
 use anchor_lang::prelude::*;
 
@@ -36,6 +36,13 @@ pub struct VerifyMatchBatch<'info> {
     /// a forged proof simply fails Groth16 verification and no marker is created.
     #[account(mut)]
     pub payer: Signer<'info>,
+
+    /// Read-only — supplies `fee_rate_bps` as the circuit's 2nd PUBLIC input
+    /// (amount-privacy, P1b): the prover proved the in-circuit fee floor at THIS
+    /// rate, and binding it to the on-chain config is what makes the proof's
+    /// floor enforce the protocol's rate (not a prover-chosen one).
+    #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
+    pub vault_config: AccountLoader<'info, VaultConfig>,
 
     /// Marker PDA. `init` ensures the same `merkle_root` can't be re-verified
     /// after the first call (a second `verify_match_batch` for the same batch
@@ -71,10 +78,14 @@ pub fn verify_match_batch_handler(
         VaultError::InvalidMarkerExpiry
     );
 
-    // Single public input — the Merkle root the prover supplied as the
-    // batch commitment. Already 32 BE bytes (Poseidon output), so we
-    // can hand it directly to the verifier.
-    let public_inputs: [[u8; 32]; 1] = [merkle_root];
+    // Public inputs, in the circuit `main` order [merkle_root, fee_rate_bps].
+    // merkle_root is already 32 BE bytes (Poseidon output); fee_rate_bps is the
+    // on-chain config value as a 32-byte BE field element. Binding fee_rate_bps
+    // here is what pins the proof's in-circuit fee floor to the protocol's rate.
+    let fee_rate_bps = ctx.accounts.vault_config.load()?.fee_rate_bps as u64;
+    let mut fee_rate_be = [0u8; 32];
+    fee_rate_be[24..32].copy_from_slice(&fee_rate_bps.to_be_bytes());
+    let public_inputs: [[u8; 32]; 2] = [merkle_root, fee_rate_be];
 
     let vk = make_vk(
         &MATCH_BATCH_N16_ALPHA_G1,
@@ -83,7 +94,7 @@ pub fn verify_match_batch_handler(
         &MATCH_BATCH_N16_DELTA_G2,
         &MATCH_BATCH_N16_IC,
     );
-    verify_groth16_proof::<1>(&vk, &proof, &public_inputs)?;
+    verify_groth16_proof::<2>(&vk, &proof, &public_inputs)?;
 
     let marker = &mut ctx.accounts.marker;
     marker.payer = ctx.accounts.payer.key();

@@ -21,9 +21,11 @@
 //!   `[0]` payer            — signer + writable (the TEE keypair;
 //!                            authorization is implicit in the proof,
 //!                            but the TEE pays rent + fee)
-//!   `[1]` marker           — writable PDA (init), seeds
+//!   `[1]` vault_config     — readonly; supplies `fee_rate_bps` as the
+//!                            2nd public input (amount-privacy, P1b)
+//!   `[2]` marker           — writable PDA (init), seeds
 //!                            `[b"batch_validity", merkle_root]`
-//!   `[2]` system_program   — readonly
+//!   `[3]` system_program   — readonly
 
 use std::sync::LazyLock;
 
@@ -33,7 +35,9 @@ use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 
 use super::lock_note::Groth16ProofBytes;
-use super::vault::{batch_validity_marker_pda, vault_program_id, SYSTEM_PROGRAM_ID};
+use super::vault::{
+    batch_validity_marker_pda, vault_config_pda, vault_program_id, SYSTEM_PROGRAM_ID,
+};
 
 /// Anchor discriminator for `verify_match_batch`:
 /// `sha256("global:verify_match_batch")[..8]`.
@@ -64,8 +68,11 @@ pub fn build_verify_match_batch_ix(payer: &Address, args: VerifyMatchBatchArgs) 
     let program_id = vault_program_id();
     let (marker_pda, _) = batch_validity_marker_pda(&args.merkle_root);
 
+    let (vault_config, _) = vault_config_pda();
+    // Order MUST match the Accounts struct: payer, vault_config, marker, system.
     let accounts = vec![
-        AccountMeta::new(*payer, true),      // payer: signer + writable
+        AccountMeta::new(*payer, true), // payer: signer + writable
+        AccountMeta::new_readonly(vault_config, false), // vault_config (fee_rate_bps public input)
         AccountMeta::new(marker_pda, false), // marker: writable (init)
         AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
     ];
@@ -140,23 +147,28 @@ mod tests {
     fn account_layout_matches_anchor_struct() {
         let payer = dummy_payer();
         let ix = build_verify_match_batch_ix(&payer, dummy_args());
-        assert_eq!(ix.accounts.len(), 3);
+        assert_eq!(ix.accounts.len(), 4);
 
         // [0] payer: signer + writable
         assert_eq!(ix.accounts[0].pubkey, payer);
         assert!(ix.accounts[0].is_signer);
         assert!(ix.accounts[0].is_writable);
 
-        // [1] marker: writable PDA (init), not signer
-        let (marker, _) = batch_validity_marker_pda(&[0xAB; 32]);
-        assert_eq!(ix.accounts[1].pubkey, marker);
+        // [1] vault_config: readonly (fee_rate_bps public input)
+        assert_eq!(ix.accounts[1].pubkey, vault_config_pda().0);
         assert!(!ix.accounts[1].is_signer);
-        assert!(ix.accounts[1].is_writable);
+        assert!(!ix.accounts[1].is_writable);
 
-        // [2] system_program: readonly
-        assert_eq!(ix.accounts[2].pubkey, SYSTEM_PROGRAM_ID);
+        // [2] marker: writable PDA (init), not signer
+        let (marker, _) = batch_validity_marker_pda(&[0xAB; 32]);
+        assert_eq!(ix.accounts[2].pubkey, marker);
         assert!(!ix.accounts[2].is_signer);
-        assert!(!ix.accounts[2].is_writable);
+        assert!(ix.accounts[2].is_writable);
+
+        // [3] system_program: readonly
+        assert_eq!(ix.accounts[3].pubkey, SYSTEM_PROGRAM_ID);
+        assert!(!ix.accounts[3].is_signer);
+        assert!(!ix.accounts[3].is_writable);
     }
 
     #[test]
@@ -165,6 +177,7 @@ mod tests {
         args2.merkle_root = [0x01; 32];
         let ix1 = build_verify_match_batch_ix(&dummy_payer(), dummy_args());
         let ix2 = build_verify_match_batch_ix(&dummy_payer(), args2);
-        assert_ne!(ix1.accounts[1].pubkey, ix2.accounts[1].pubkey);
+        // marker is now account [2] (vault_config inserted at [1]).
+        assert_ne!(ix1.accounts[2].pubkey, ix2.accounts[2].pubkey);
     }
 }
