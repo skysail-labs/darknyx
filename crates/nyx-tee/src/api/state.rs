@@ -29,7 +29,7 @@ use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_
 use super::instruments::InstrumentInfo;
 use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::{FillMemo, MatcherState};
-use crate::merkle::MerkleMirror;
+use crate::merkle::{MerkleMirror, TreeAppendEvent};
 use crate::oracle::OracleCache;
 use crate::persistence;
 use crate::settle::SettleSchedulerState;
@@ -220,6 +220,16 @@ pub struct ApiState {
     /// fill still de-dupes rather than re-booking a consumed-note order), bounded
     /// by [`IDEMPOTENCY_CAP`].
     pub idempotency: Arc<RwLock<HashMap<String, IdempotencyRecord>>>,
+
+    // ── Live tree channel (/v1/stream `tree`) ───────────────────
+    /// GLOBAL leaf-append broadcast feeding the multiplexed `/v1/stream`
+    /// `tree` channel. Unlike fills/orders this is NOT per-account: every
+    /// appended leaf is already on-chain (public), and clients reconstruct
+    /// their own portfolio from the stream + their keys. The Merkle sync task
+    /// publishes here (`MerkleSync::with_tree_publisher`); subscribers attach
+    /// via [`Self::subscribe_tree_appends`]. The `Sender` is held so the
+    /// channel survives periods with zero subscribers (sends then no-op).
+    pub tree_appends: broadcast::Sender<TreeAppendEvent>,
 }
 
 /// What an accepted order records for idempotent-retry detection:
@@ -288,6 +298,13 @@ pub struct OrderUpdateMsg {
 /// past this is closed with a 1011 resync (it backfills via the indexer).
 const FILLS_CHANNEL_CAP: usize = 1024;
 
+/// Global `tree`-channel depth. Sized larger than the per-account channels
+/// because every settle/deposit appends to ONE shared channel (so it carries
+/// every account's leaves), and a settle can append several leaves at once. A
+/// subscriber that still lags past this is closed with a 1011 resync (it
+/// re-reads `/tree/*`).
+const TREE_CHANNEL_CAP: usize = 4096;
+
 /// Max retained idempotency records (order_id → accepted body). Bounds the map;
 /// the oldest entries age out (best-effort retry window).
 const IDEMPOTENCY_CAP: usize = 16_384;
@@ -351,6 +368,7 @@ impl ApiState {
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
             idempotency: Arc::new(RwLock::new(HashMap::new())),
+            tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
         }
     }
 
@@ -483,6 +501,7 @@ impl ApiState {
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
             idempotency: Arc::new(RwLock::new(HashMap::new())),
+            tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
         }
     }
 
@@ -534,6 +553,20 @@ impl ApiState {
             Some(tx) => tx.send(memo.clone()).is_ok(),
             None => false,
         }
+    }
+
+    /// Subscribe to the GLOBAL live `tree` leaf-append channel (the
+    /// `/v1/stream` `tree` channel). Unlike fills/orders there is no
+    /// per-account fan-out — every leaf is public. The receiver only sees
+    /// appends AFTER it subscribes; earlier leaves come from `/tree/leaves`.
+    pub fn subscribe_tree_appends(&self) -> broadcast::Receiver<TreeAppendEvent> {
+        self.tree_appends.subscribe()
+    }
+
+    /// A `Sender` clone for the Merkle sync task to publish leaf-appends into
+    /// (see [`crate::merkle::MerkleSync::with_tree_publisher`]).
+    pub fn tree_publisher(&self) -> broadcast::Sender<TreeAppendEvent> {
+        self.tree_appends.clone()
     }
 
     /// Get-or-create the caller account's order-update channel and subscribe.

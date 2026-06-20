@@ -27,7 +27,7 @@ use tokio::sync::RwLock;
 
 use super::events::extract_appended_leaves;
 use super::mirror::{MerkleMirror, MirrorError};
-use super::AppendedLeaf;
+use super::{AppendedLeaf, TreeAppendEvent};
 use crate::settle::settle_batched::SETTLE_BATCHED_DISCRIMINATOR;
 use crate::solana_rpc::{RpcAddressTx, RpcError, SolanaRpcClient, TxSortOrder};
 
@@ -100,6 +100,12 @@ pub struct MerkleSync {
     /// once on divergence (not every ~2s poll) and logs once on recovery.
     /// Indexed by `tree_id`; length == `mirrors.len()`.
     diverged: Vec<bool>,
+    /// Optional live `tree`-channel publisher. Every NEWLY applied leaf is
+    /// broadcast here so the multiplexed `/v1/stream` `tree` channel can push
+    /// leaf-append events. `None` (the default) disables it. A send with no
+    /// subscribers is a benign no-op — so the cold-boot bulk replay, which runs
+    /// before any client connects, broadcasts to nobody.
+    tree_tx: Option<tokio::sync::broadcast::Sender<TreeAppendEvent>>,
 }
 
 impl MerkleSync {
@@ -124,7 +130,19 @@ impl MerkleSync {
             cfg,
             last_slot: 0,
             diverged,
+            tree_tx: None,
         }
+    }
+
+    /// Attach a live `tree`-channel publisher: every newly applied leaf is
+    /// broadcast as a [`TreeAppendEvent`] for the multiplexed `/v1/stream`
+    /// `tree` channel. See [`crate::api::state::ApiState::tree_appends`].
+    pub fn with_tree_publisher(
+        mut self,
+        tx: tokio::sync::broadcast::Sender<TreeAppendEvent>,
+    ) -> Self {
+        self.tree_tx = Some(tx);
+        self
     }
 
     /// Cold boot: scan the vault history oldest→newest from the `from_slot`
@@ -253,10 +271,26 @@ impl MerkleSync {
             if shard_leaves.is_empty() {
                 continue;
             }
+            // Snapshot for the live tree-channel broadcast (only when a publisher
+            // is attached): the leaves `apply_leaves` will NEWLY append are
+            // exactly those whose index lands in `[before, before + n)` — it
+            // appends contiguously from the mirror's current count.
+            let broadcast_src = self.tree_tx.as_ref().map(|_| shard_leaves.clone());
             let mut mirror = self.mirrors[tree_id].write().await;
-            applied += apply_leaves(&mut mirror, shard_leaves)?;
+            let before = mirror.leaf_count();
+            let n = apply_leaves(&mut mirror, shard_leaves)?;
             if max_slot > mirror.on_chain_slot() {
                 mirror.set_on_chain_slot(max_slot);
+            }
+            drop(mirror); // release the shard write lock before broadcasting
+            applied += n;
+
+            if let (Some(tx), Some(src)) = (self.tree_tx.as_ref(), broadcast_src) {
+                for leaf in newly_applied(src, before, n) {
+                    // A send with no subscribers is a benign no-op (Err dropped),
+                    // so the cold-boot replay broadcasts to nobody.
+                    let _ = tx.send(TreeAppendEvent::from_leaf(&leaf));
+                }
             }
         }
         Ok(applied)
@@ -441,6 +475,22 @@ pub fn apply_leaves(
     Ok(applied)
 }
 
+/// Of `src`, the leaves `apply_leaves` NEWLY appended: after the same
+/// sort + dedup-by-index it does, those whose index falls in
+/// `[before, before + applied)`. `before` is the mirror's leaf count
+/// before the apply, `applied` the count it returned. Pulled out so the
+/// live tree-channel broadcast filter is unit-testable without an RPC
+/// round-trip (and so an already-applied / idempotent re-scan broadcasts
+/// nothing — its leaves all have index `< before`).
+fn newly_applied(mut src: Vec<AppendedLeaf>, before: u64, applied: usize) -> Vec<AppendedLeaf> {
+    src.sort_by_key(|l| l.leaf_index);
+    src.dedup_by_key(|l| l.leaf_index);
+    let hi = before + applied as u64;
+    src.into_iter()
+        .filter(|l| l.leaf_index >= before && l.leaf_index < hi)
+        .collect()
+}
+
 /// Extract `(leaf_count, current_root)` from raw `MerkleTree` shard-account
 /// data. `None` if the buffer is too short.
 pub fn parse_merkle_tree_root(data: &[u8]) -> Option<(u64, [u8; 32])> {
@@ -555,6 +605,34 @@ mod tests {
         let n = apply_leaves(&mut m, vec![leaf(0, 1), leaf(0, 1)]).unwrap();
         assert_eq!(n, 1);
         assert_eq!(m.leaf_count(), 1);
+    }
+
+    #[test]
+    fn newly_applied_returns_only_the_freshly_appended_in_index_order() {
+        // Mirror had 2 leaves; this scan applied 2 more (indices 2,3). A leaf at
+        // index 1 (already applied, idempotent re-scan) and an out-of-window
+        // index 9 must NOT be broadcast.
+        let src = vec![leaf(3, 0xd), leaf(1, 0xa), leaf(2, 0xc), leaf(9, 0x9)];
+        let got = newly_applied(src, 2, 2);
+        assert_eq!(
+            got.iter().map(|l| l.leaf_index).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn newly_applied_empty_when_nothing_applied() {
+        // An idempotent re-scan (applied == 0) broadcasts nothing.
+        assert!(newly_applied(vec![leaf(0, 1), leaf(1, 2)], 2, 0).is_empty());
+    }
+
+    #[test]
+    fn tree_append_event_from_leaf_is_hex_and_tagged() {
+        let ev = TreeAppendEvent::from_leaf(&leaf_on(3, 7, 0xab));
+        assert_eq!(ev.channel, "tree");
+        assert_eq!(ev.tree_id, 3);
+        assert_eq!(ev.leaf_index, 7);
+        assert_eq!(ev.commitment, hex::encode(fr_safe(0xab)));
     }
 
     #[test]

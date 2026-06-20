@@ -10,6 +10,6 @@ pub mod events;
 pub mod mirror;
 pub mod sync;
 
-pub use events::{extract_appended_leaves, AppendedLeaf};
+pub use events::{extract_appended_leaves, AppendedLeaf, TreeAppendEvent};
 pub use mirror::{InclusionProof, MerkleMirror, MirrorError, MERKLE_DEPTH};
 pub use sync::{MerkleSync, MerkleSyncConfig, SyncError};

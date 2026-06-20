@@ -385,6 +385,9 @@ async fn main() -> Result<()> {
                 // leaf to mirrors[leaf.tree_id] + reconciles each against its
                 // MerkleTree[j] shard account.
                 let mirrors = api_state.merkle_mirrors.clone();
+                // Feed the live `tree` channel of the multiplexed /v1/stream:
+                // every newly applied leaf is broadcast here for subscribers.
+                let tree_tx = api_state.tree_publisher();
                 let vault_program_id = nyx_tee::settle::vault::vault_program_id();
                 let merkle_tree_pdas: Vec<_> = (0..mirrors.len() as u8)
                     .map(|tree_id| nyx_tee::settle::vault::merkle_tree_pda(tree_id).0)
@@ -399,7 +402,8 @@ async fn main() -> Result<()> {
                             from_slot: cfg.sync_from_slot,
                             ..MerkleSyncConfig::default()
                         },
-                    );
+                    )
+                    .with_tree_publisher(tree_tx);
                     if let Err(e) = sync.cold_boot().await {
                         tracing::warn!(error = %e, "merkle cold-boot failed; live loop will recover");
                     }

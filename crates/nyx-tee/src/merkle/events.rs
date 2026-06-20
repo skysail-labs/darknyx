@@ -67,6 +67,33 @@ pub struct AppendedLeaf {
     pub value: [u8; 32],
 }
 
+/// A leaf-append, wire-shaped for the live `tree` channel of the multiplexed
+/// `/v1/stream` socket (`docs/tee-api-openapi.yaml`). The commitment is hex so
+/// a browser client can match it against its own note commitments without a
+/// byte decode. Public information (every leaf is already on-chain), so the
+/// `tree` channel is GLOBAL — not per-account like fills/orders.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TreeAppendEvent {
+    /// Discriminates the channel on the multiplexed socket.
+    pub channel: &'static str,
+    pub tree_id: u8,
+    pub leaf_index: u64,
+    /// 32-byte leaf commitment, hex-encoded.
+    pub commitment: String,
+}
+
+impl TreeAppendEvent {
+    /// Build the wire event from an applied leaf.
+    pub fn from_leaf(leaf: &AppendedLeaf) -> Self {
+        Self {
+            channel: "tree",
+            tree_id: leaf.tree_id,
+            leaf_index: leaf.leaf_index,
+            commitment: hex::encode(leaf.value),
+        }
+    }
+}
+
 /// Borsh-decode mirror of the vault `NoteCreated` event (field order
 /// must match `programs/vault/src/instructions/deposit.rs`).
 #[derive(BorshDeserialize)]
