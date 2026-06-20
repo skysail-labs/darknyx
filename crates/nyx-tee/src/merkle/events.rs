@@ -150,10 +150,11 @@ const NO_LEAF: u64 = u64::MAX;
 /// instruction's data. Returns `None` if the data isn't a settle ix
 /// (wrong/short discriminator) or the payload bytes don't decode.
 ///
-/// ix data layout: `disc(8) || tree_id(1) || Borsh(payload, 480) ||
+/// ix data layout: `disc(8) || tree_id(1) || Borsh(payload, 424) ||
 /// match_index(1) || 4×32 siblings` (see
 /// `settle_batched::build_settle_batched_ix`). Post-sharding the payload
-/// starts at offset 9 (disc + the 1-byte `tree_id`).
+/// starts at offset 9 (disc + the 1-byte `tree_id`). The width is
+/// `MatchResultPayload::WIRE_LEN` (amount-privacy P3b shrank it 480→424).
 pub fn decode_settle_payload(ix_data: &[u8]) -> Option<MatchResultPayload> {
     const PAYLOAD_START: usize = 8 + 1; // disc + tree_id
     if ix_data.len() < PAYLOAD_START + MatchResultPayload::WIRE_LEN {

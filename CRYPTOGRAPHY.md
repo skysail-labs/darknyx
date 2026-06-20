@@ -734,9 +734,16 @@ instead of 64 ~30 s per-match proofs).
             │  MatchSlot(i)                          │
             │    • VALID_CREATE constraints for      │
             │      (note_a..f, mints, amounts)       │
-            │    • VALID_PRICE constraints for       │
-            │      (clearing_price, batch_slot)      │
-            │    • leaf_i := H_leaf(slot witness)    │
+            │    • VALID_PRICE: quote == base*price  │
+            │    • conservation: a == quote+change+  │
+            │      fee (+ seller leg)                 │
+            │    • range checks: Num2Bits(64) on ALL │
+            │      amounts (P1a — no inflation)       │
+            │    • fee floor: (fee+1)*10000 >        │
+            │      notional*fee_rate_bps (P1b)        │
+            │    • fee-note binding: slot-0 fee notes│
+            │      == Poseidon6(Σ fee, owner, …)     │
+            │    • leaf_i := H_leaf(commitments)     │
             └────────────────┬───────────────────────┘
                              │
                              ▼     (leaves of size N, N ∈ {2, 4, 16})
@@ -753,36 +760,37 @@ instead of 64 ~30 s per-match proofs).
                          merkle_root   ← public input
 ```
 
-Public inputs (1):
+Public inputs (3) — declaration order is load-bearing (matches the on-chain
+`verify_groth16_proof::<3>` in `verify_match_batch`):
 - `merkle_root` — the depth-`log2(N)` Poseidon Merkle root over the
   per-slot leaves. The on-chain `verify_match_batch` uses this as the
-  PDA seed for `BatchValidityMarker` at `[b"batch_validity",
-  merkle_root]`.
+  PDA seed for `BatchValidityMarker` at `[b"batch_validity", merkle_root]`.
+- `fee_rate_bps` — the protocol fee floor the circuit enforces per slot;
+  `verify_match_batch` binds it to the authoritative `VaultConfig.fee_rate_bps`.
+- `protocol_owner_commitment` — the owner the batch's fee notes are bound to;
+  `verify_match_batch` binds it to `VaultConfig.protocol_owner_commitment`.
 
-Leaf-hash construction. The on-chain `light-poseidon` caps arity at
-12 (its `MAX_X5_LEN` = 13 limit), so a single Poseidon over all 19
-slot fields isn't feasible. The leaf is built in two stages:
+Leaf-hash construction. **Amount-privacy (P1b): the leaf is commitment-only.**
+The note commitments transitively bind the amounts/mints/price (each is a
+Poseidon6 of mint+amount+owner+inner), and conservation + the range checks are
+proven over the private witness, so the leaf no longer needs to hash any
+plaintext amount/mint/price. This replaced the old two-stage Poseidon12+Poseidon9
+(which hashed `base_amount`/`quote_amount`/change/fee/`clearing_price` directly).
+A single Poseidon10 fits under the on-chain `light-poseidon` arity cap of 12:
 
 ```
-h_inner = Poseidon12(DOMAIN_LEAF_INNER = 20,
-                     note_a_commit, note_b_commit, note_c_commit,
-                     note_d_commit, note_e_commit, note_f_commit,
-                     quote_mint_lo, quote_mint_hi,
-                     base_mint_lo,  base_mint_hi,
-                     base_amount)
-
-leaf    = Poseidon9 (DOMAIN_LEAF_TOP = 21,
-                     h_inner,
-                     quote_amount,
-                     buyer_change, seller_change,
-                     buyer_fee, seller_fee,
-                     clearing_price, batch_slot)
+leaf = Poseidon10(DOMAIN_LEAF_V2 = 23,
+                  note_a_commit, note_b_commit, note_c_commit,
+                  note_d_commit, note_e_commit, note_f_commit,
+                  note_fee_base_commit, note_fee_quote_commit,
+                  batch_slot)
 ```
 
-Inner-node hashes use `Poseidon3(DOMAIN_BATCH_ROOT = 22, left, right)`.
-Mint pubkeys are split into 128-bit halves (lo/hi) for the same
-reason as in note commitments — a 256-bit pubkey doesn't fit in one
-BN254 Fr element.
+Inner-node hashes use `Poseidon3(DOMAIN_BATCH_ROOT = 22, left, right)`. The two
+fee-note commitments are non-zero only on slot 0 (the batch flush); the circuit
+binds them to `Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi, Σ side_fee,
+protocol_owner_commitment, fee_inner)` so a malicious TEE can't over-mint a fee
+note (the pre-P1 inflation gap).
 
 Padding semantics. The prover (`helpers/match-batch-prover.ts`) auto-
 pads short batches to N=16 by repeating a fixed `dummySlot()`
@@ -791,11 +799,13 @@ because the on-chain handler walks a fixed depth-4 Merkle path
 (`walk_merkle_path_n16`). Slot 0 is always real in current tests;
 slots 1..15 are dummies unless the matcher provides real data.
 
-Constraint count grew from VALID_CREATE+VALID_PRICE (~12 k) to
-162 947 at N=16, dominated by the Merkle tree + 16 × per-slot
-constraints. Total non-linear + linear constraints exceed 2^16 →
-requires `pot18` for setup. On-host proof generation: ~6.7 s on a
-modern laptop, ~1.5 s on-chain verification.
+Constraint count at N=16 is dominated by the Merkle tree + 16 × per-slot
+constraints. Amount-privacy (P1b) nets two opposing effects: the commitment-only
+leaf REMOVED the amount-hashing Poseidon12+Poseidon9 stages, while the per-amount
+`Num2Bits(64)` range checks + the in-circuit fee floor/binding ADDED constraints.
+Net total still exceeds 2^16 → `pot18` is required for setup (don't edit
+`download-ptau.sh` to skip it). On-host proof generation: ~6.7 s on a modern
+laptop, ~1.5 s on-chain verification.
 
 **Tests**:
 [`match-batch-prototype.test.ts`](../packages/sdk/tests/match-batch-prototype.test.ts)
@@ -1151,14 +1161,20 @@ vault::verify_match_batch(
 
 Accounts:
 - `payer` (signer — anyone can pay; auth is the proof)
+- `vault_config` (**ro** — source of the authoritative `fee_rate_bps` +
+  `protocol_owner_commitment` bound into the proof's public inputs)
 - `marker` (PDA at `[b"batch_validity", merkle_root]`, **init**)
 - `system_program`
 
 Handler:
 1. Assert `expiry_slot ∈ (clock.slot, clock.slot + 300]` (≈ 2 min TTL).
-2. Pack the single public input `[merkle_root]` and verify the Groth16
-   against `vk_match_batch_n16` (~200 k CU — the verifier cost scales with
-   public-input count, not constraint count).
+2. Read `fee_rate_bps` + `protocol_owner_commitment` from `vault_config`, pack
+   the 3 public inputs `[merkle_root, fee_rate_be32, protocol_owner]`, and
+   verify the Groth16 against `vk_match_batch_n16` via
+   `verify_groth16_proof::<3>` (~200 k CU — the verifier cost scales with
+   public-input count, not constraint count). Binding the fee rate + owner here
+   is what makes the circuit's fee floor + fee-note binding enforce the
+   protocol's actual config.
 3. Init `BatchValidityMarker { payer, expiry_slot, bump }`.
 
 One marker covers all N matches sharing the same `merkle_root`. The matcher
@@ -1195,9 +1211,12 @@ vault::tee_forced_settle_batched(
 )
 ```
 
-The payload is a 480-byte Borsh struct (v6: separate base+quote fee notes)
-carrying 7 commitments, 2 nullifiers, 2 order IDs, 6 u64 amounts, 2 re-lock
-(order_id + expiry) pairs, and clearing_price + batch_slot. The Rust struct
+The payload is a 424-byte Borsh struct (v7: amount-privacy P3b — the 7
+plaintext amount fields were removed) carrying 7 note commitments + 2 protocol
+fee-note commitments, 2 nullifiers, 2 order IDs, 2 re-lock (order_id + expiry)
+pairs, and batch_slot. The amounts are no longer on-chain at all — they're
+proven in-circuit by VALID_MATCH_BATCH (conservation + fee floor over private,
+range-checked amounts) and bound by the note commitments. The Rust struct
 definition is in `programs/vault/src/instructions/tee_forced_settle.rs`.
 
 Accounts (14 total, in this exact order — must match the Rust struct).
@@ -1221,7 +1240,7 @@ Post-sharding `vault_config` is **read-only** and the writable tree state is
 | 12 | `batch_validity_marker` | the 1:N marker from step 8 — checked, NOT closed here |
 | 13 | `system_program` | for CPIs |
 
-ix data = disc(8) ‖ tree_id(1) ‖ payload(480) ‖ match_index(1) ‖ 4×32 siblings = 618 B.
+ix data = disc(8) ‖ tree_id(1) ‖ payload(424) ‖ match_index(1) ‖ 4×32 siblings = 562 B.
 
 Handler walkthrough:
 
@@ -1242,13 +1261,15 @@ Handler walkthrough:
    `lock_a.token_mint` and `lock_b.token_mint` for later use.
 
 4. **Validity marker check**:
-   - Recompute the per-slot Merkle leaf via the same Poseidon12 +
-     Poseidon9 stages the circuit uses (see §7.4):
+   - Recompute the per-slot Merkle leaf via the same single Poseidon10 the
+     circuit uses (see §7.4). Amount-privacy (P1b) made the leaf
+     **commitment-only** — the note commitments transitively bind the
+     amounts/mints/price, so the leaf no longer hashes them (it replaced the old
+     two-stage Poseidon12+Poseidon9 that did):
      ```
-     h_inner = Poseidon12(20, 6 note commits, 4 mint halves, base_amount)
-     leaf    = Poseidon9 (21, h_inner, quote_amount, buyer_change,
-                              seller_change, buyer_fee, seller_fee,
-                              clearing_price, batch_slot)
+     leaf = Poseidon10(DOMAIN_LEAF_V2 = 23,
+                       note_a, note_b, note_c, note_d, note_e, note_f,
+                       note_fee_base, note_fee_quote, batch_slot)
      ```
    - Walk a depth-4 Merkle path with the caller-supplied 4 siblings +
      `match_index` (bits of `match_index` select left/right at each
@@ -1324,13 +1345,14 @@ Handler walkthrough:
 
 **Why this is split across THREE txs (lock + verify + settle)**: tx size.
 Each Groth16 proof is 256 bytes; combining lock proofs + a settle proof +
-the canonical-hash Ed25519 precompile + all the account keys + the 448-byte
+the canonical-hash Ed25519 precompile + all the account keys + the 424-byte
 payload would be ~1800 bytes total — way over the 1232 cap. By splitting:
 - Tx A (lock): 2 lock_notes with embedded VALID_INPUT proofs, ~1100 B.
 - Tx B (verify): 1 verify_match_batch with the embedded VALID_MATCH_BATCH
   proof, ~640 B.
 - Tx D (settle, V0 + stacked ALTs): Ed25519 precompile + tee_forced_settle_batched
-  + the depth-4 inclusion proof, ~1130 B.
+  + the depth-4 inclusion proof, ~1075 B (amount-privacy P3b shaved 56 B off the
+  payload — extra headroom under the 1232 cap).
 
 See §9 for why the v0/ALT stacking was specifically required.
 
@@ -1531,7 +1553,7 @@ precompile, settle} is well over the cap. Napkin math:
 | `lock_note` accounts (4 × 32) | 128 |
 | `verify_match_batch` ix data (8 disc + 32 root + 8 expiry + 256 proof) | ~304 |
 | Ed25519 precompile ix (header + pubkey + sig + 32-byte msg) | ~150 |
-| `tee_forced_settle_batched` ix data (8 disc + 448 payload + 1 match_index + 4×32 siblings) | ~585 |
+| `tee_forced_settle_batched` ix data (8 disc + 424 payload + 1 match_index + 4×32 siblings) | ~561 |
 | Account keys for everything together (~13 distinct) | 416 |
 | **TOTAL** | **~2000+** |
 
@@ -1542,7 +1564,7 @@ So the settle is split into a pipeline, per batch (≤ N=16 matches):
 | **Tx A — lock** | compute_budget + lock_note(a) + lock_note(b) | ~1050 B | N per batch (one per match) |
 | **Tx B — verify_match_batch** | compute_budget + verify_match_batch (1 Groth16, 1 marker init) | ~640 B | 1 per batch |
 | **Tx C — per-batch ALT** | createLookupTable + extendLookupTable(5 PDAs) | ~250 B | 1 per batch |
-| **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | ~1130 B | N per batch |
+| **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | ~1075 B | N per batch |
 | **Tx E — close** | compute_budget + close_batch_validity_marker | ~250 B | 1 per batch |
 
 All fit under 1232 B. Atomic dependency is enforced by account-existence
@@ -1563,10 +1585,11 @@ TTLs (locks ~24h, markers ~2 min), so abandoned state self-cleans.
 ### The marker PDA construction (binding by seed)
 
 The `BatchValidityMarker`'s *seed* is the batch Merkle root, not its data.
-`verify_match_batch` verifies the Groth16 over the single public input
-`[merkle_root]` and inits the marker at `[b"batch_validity", merkle_root]`.
+`verify_match_batch` verifies the Groth16 over the 3 public inputs
+`[merkle_root, fee_rate_bps, protocol_owner_commitment]` (the latter two bound
+to `VaultConfig`) and inits the marker at `[b"batch_validity", merkle_root]`.
 At settle, `tee_forced_settle_batched` recomputes the per-slot leaf from
-the payload + lock mints, walks the depth-4 inclusion path to a root, and
+the payload commitments, walks the depth-4 inclusion path to a root, and
 requires the marker to exist at `[b"batch_validity", that_root]` — so a
 match can only settle against a marker whose verified proof actually
 covered it.
@@ -1747,38 +1770,37 @@ All five change-note tests now pass.
 ### The canonical payload hash
 
 The TEE's Ed25519 signature is over a 32-byte SHA-256 hash, not the
-448-byte payload directly. The hash construction (current version, post
-the v6→v5 revert during devnet validation):
+424-byte payload directly. The hash construction (current version: `v7`, after
+amount-privacy P3b removed the seven plaintext amount fields; the prior `v6`
+had split the single fee note into base + quote, and `v5` was the pre-split
+single-fee-note form):
 
 ```rust
 canonical_payload_hash(p) = SHA256(
-    b"nyx-match-v5",
+    b"nyx-match-v7",
     p.match_id,
     p.note_a_commitment, p.note_b_commitment,
     p.note_c_commitment, p.note_d_commitment,
     p.note_e_commitment, p.note_f_commitment,
-    p.note_fee_commitment,
+    p.note_fee_base_commitment, p.note_fee_quote_commitment,
     p.nullifier_a, p.nullifier_b,
     p.order_id_a, p.order_id_b,
-    p.base_amount.to_le_bytes(),
-    p.quote_amount.to_le_bytes(),
-    p.buyer_change_amt.to_le_bytes(),
-    p.seller_change_amt.to_le_bytes(),
-    p.buyer_fee_amt.to_le_bytes(),
-    p.seller_fee_amt.to_le_bytes(),
     p.buyer_relock_order_id,  p.buyer_relock_expiry.to_le_bytes(),
     p.seller_relock_order_id, p.seller_relock_expiry.to_le_bytes(),
-    p.clearing_price.to_le_bytes(),
     p.batch_slot.to_le_bytes(),
 )
 ```
+
+The amounts (base/quote/buyer_change/seller_change/buyer_fee/seller_fee/
+clearing_price) are GONE from the signed message — they're proven in-circuit
+and bound by the note commitments, so the TEE no longer signs over them.
 
 Reference: `programs/vault/src/instructions/tee_forced_settle.rs::canonical_payload_hash`,
 mirror in `packages/sdk/src/settlement/settle-builder.ts::canonicalPayloadHash`.
 Cross-environment parity is locked down by a fixed-vector test in both:
 
 - Rust: `canonical_payload_hash_fixed_vector` expects
-  `0x0388E8...1F92` for a specific input.
+  `0x38D661...4C2D` for a specific input.
 - TS: `[hash_cross_env_parity]` in `settle-builder-batched.test.ts` asserts the same
   bytes from the TS implementation.
 
@@ -1786,6 +1808,11 @@ If you ever change the payload shape, both sides must update in lock-step
 or settlements will start failing across the board.
 
 #### Why the v6 payload mints got reverted
+
+> **Historical** — the `v5`/`v6` tags below are from this earlier mints-revert
+> episode. The tag has since advanced: `v6` (base/quote fee-note split) →
+> **`v7`** (amount-privacy P3b dropped the plaintext amounts). The CURRENT
+> canonical hash is in *The canonical payload hash* above.
 
 The first cut of v3 added `quote_mint` and `base_mint` as fields in
 `MatchResultPayload` and into the canonical hash (with a `b"nyx-match-v6"`
@@ -2007,7 +2034,8 @@ nyx-monorepo/
 │   ├── valid_wallet_create/circuit.circom    1 public input
 │   ├── valid_spend/circuit.circom            5 public inputs (v2 inner_hash)
 │   ├── valid_input/circuit.circom            5 public inputs (v2 inner_hash)
-│   └── match_batch_n16/  (+ n2, n4 dev)      VALID_MATCH_BATCH, 1 public input
+│   └── match_batch_n16/  (+ n2, n4 dev)      VALID_MATCH_BATCH, 3 public inputs
+│                                              (merkle_root, fee_rate_bps, protocol_owner)
 │
 ├── crates/
 │   ├── darkpool-crypto/                       single source of truth (host crypto)
