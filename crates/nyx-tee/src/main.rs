@@ -173,7 +173,38 @@ async fn main() -> Result<()> {
     // Build the match config up front so its mints can seed the
     // shared MatcherState — the order intake needs them to verify
     // each input-note opening against the signed commitment (4g.7a).
-    let match_config = dev_match_config(&cfg);
+    let mut match_config = dev_match_config(&cfg);
+    // Reconcile the fee rate with the on-chain VaultConfig (#11a). The
+    // batched-settle handler enforces a fee FLOOR against
+    // `VaultConfig.fee_rate_bps` (commit d86a3be); if the TEE charged a
+    // LOWER rate than the chain expects, every settle would reject. So on
+    // a real boot adopt the authoritative on-chain rate — overriding the
+    // `NYX_TEE_FEE_RATE_BPS` env — and warn loudly on any divergence.
+    // Best-effort + real-boot only (degraded boot has no live cluster).
+    if tee_signer_pubkey.is_some() {
+        match read_on_chain_fee_rate_bps(&cfg).await {
+            Ok(Some(on_chain)) => {
+                if on_chain != match_config.fee_rate_bps {
+                    tracing::warn!(
+                        env_fee_rate_bps = match_config.fee_rate_bps,
+                        on_chain_fee_rate_bps = on_chain,
+                        "NYX_TEE_FEE_RATE_BPS disagrees with on-chain VaultConfig.fee_rate_bps; \
+                         adopting the on-chain rate so the settle fee FLOOR is never violated"
+                    );
+                }
+                match_config.fee_rate_bps = on_chain;
+            }
+            Ok(None) => tracing::warn!(
+                env_fee_rate_bps = match_config.fee_rate_bps,
+                "VaultConfig not found on-chain; using NYX_TEE_FEE_RATE_BPS"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                env_fee_rate_bps = match_config.fee_rate_bps,
+                "could not read on-chain fee_rate_bps; using NYX_TEE_FEE_RATE_BPS"
+            ),
+        }
+    }
     tracing::info!(
         fee_rate_bps = match_config.fee_rate_bps,
         protocol_owner_set = (match_config.protocol_owner_commitment != [0u8; 32]),
@@ -705,4 +736,21 @@ fn dev_match_config(cfg: &nyx_tee::config::Config) -> MatchConfig {
         fee_rate_bps: cfg.fee_rate_bps as u16,
         protocol_owner_commitment: cfg.protocol_owner_commitment,
     }
+}
+
+/// Read `VaultConfig.fee_rate_bps` from the live cluster (#11a). The
+/// on-chain batched-settle handler enforces a fee FLOOR against this
+/// value, so the TEE must charge AT LEAST it. Returns `Ok(Some(rate))`
+/// on a successful read, `Ok(None)` if the config account isn't present,
+/// or an `Err` on an RPC/transport failure; callers treat all three as
+/// best-effort and fall back to `NYX_TEE_FEE_RATE_BPS`.
+async fn read_on_chain_fee_rate_bps(
+    cfg: &nyx_tee::config::Config,
+) -> Result<Option<u16>, nyx_tee::solana_rpc::RpcError> {
+    let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
+    let (config_pda, _) = nyx_tee::settle::vault::vault_config_pda();
+    Ok(rpc
+        .get_account_info(&config_pda)
+        .await?
+        .and_then(|acc| nyx_tee::solana_rpc::vault_config::parse_fee_rate_bps(&acc.data)))
 }

@@ -73,7 +73,11 @@ pub struct Config {
     /// fee note per non-empty bucket. 0 disables fees entirely (no fee
     /// notes). Should mirror the on-chain `VaultConfig.fee_rate_bps`
     /// (≤ 10_000, enforced by set_protocol_config) so the matcher's
-    /// charge matches what settlement conservation expects.
+    /// charge matches what settlement conservation expects. On a real
+    /// boot the TEE reads the authoritative on-chain rate and OVERRIDES
+    /// this env value (see `main.rs::read_on_chain_fee_rate_bps`), since
+    /// the batched-settle handler enforces a fee FLOOR against it — so
+    /// this acts only as a fallback (degraded boot / config absent).
     pub fee_rate_bps: u64,
     /// Owner commitment the protocol fee notes are minted to (32 bytes).
     /// `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` (hex), default `[0;32]`. Set
