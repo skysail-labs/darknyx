@@ -366,61 +366,20 @@ pub fn tee_forced_settle_batched_handler(
             VaultError::NoteNotLockedForOrder
         );
 
-        let expected_a = payload
-            .quote_amount
-            .checked_add(payload.buyer_change_amt)
-            .and_then(|v| v.checked_add(payload.buyer_fee_amt))
-            .ok_or(error!(VaultError::ArithmeticOverflow))?;
-        require!(
-            lock_a.amount == expected_a,
-            VaultError::ConservationViolation
-        );
-        let expected_b = payload
-            .base_amount
-            .checked_add(payload.seller_change_amt)
-            .and_then(|v| v.checked_add(payload.seller_fee_amt))
-            .ok_or(error!(VaultError::ArithmeticOverflow))?;
-        require!(
-            lock_b.amount == expected_b,
-            VaultError::ConservationViolation
-        );
-
-        // Fee FLOOR. Conservation above pins note.amount == trade + change + fee,
-        // but the fee LEG itself is matcher-chosen — without a floor the TEE could
-        // settle a match charging zero protocol fee (the on-chain `fee_rate_bps`
-        // would be a dead field). Enforce that each leg's charged fee is at least
-        // the floor `notional * fee_rate_bps / 10_000`, using the SAME truncating
-        // floor-division the matcher uses to derive the fee
-        // (`darkpool-matcher::algorithm` does `notional * bps / 10_000`), so a
-        // legitimately-charged match always satisfies `>=`. `>=` (not `==`) keeps
-        // a rounding/rate change from bricking otherwise-valid settles. `fee_rate_bps`
-        // is read from the already-loaded `vault_config` (no new account, no size
-        // cost). With the default `fee_rate_bps == 0` the floor is 0 (no-op), so
-        // fee-free dev/test settles are unaffected.
-        let rate = ctx.accounts.vault_config.load()?.fee_rate_bps as u128;
-        if rate > 0 {
-            let buyer_fee_floor = (payload.quote_amount as u128) * rate / 10_000;
-            require!(
-                (payload.buyer_fee_amt as u128) >= buyer_fee_floor,
-                VaultError::InsufficientFeeCharge
-            );
-            let seller_fee_floor = (payload.base_amount as u128) * rate / 10_000;
-            require!(
-                (payload.seller_fee_amt as u128) >= seller_fee_floor,
-                VaultError::InsufficientFeeCharge
-            );
-        }
-
+        // Conservation + the fee FLOOR are now enforced IN-CIRCUIT
+        // (amount-privacy, P1a/P1b): VALID_MATCH_BATCH range-checks every amount
+        // and proves `a_amount === quote+change+fee` (+ the seller leg) and
+        // `(fee+1)*10000 > notional*rate` over PRIVATE amounts, with fee_rate_bps
+        // bound to this config as a public input. So the chain no longer
+        // re-derives or re-checks any of it from plaintext — and the amounts
+        // leave the payload entirely (P3b). The note commitments + the batch
+        // proof bind the values; `NoteLock.amount` is no longer consulted.
+        //
+        // Change-note PRESENCE is also proven in-circuit
+        // (`note_e === (change>0)*hash`), so we only need to know WHETHER a
+        // change note exists — to gate the relock below.
         let has_e = payload.note_e_commitment != [0u8; 32];
         let has_f = payload.note_f_commitment != [0u8; 32];
-        require!(
-            has_e == (payload.buyer_change_amt > 0),
-            VaultError::ChangeNoteInconsistent
-        );
-        require!(
-            has_f == (payload.seller_change_amt > 0),
-            VaultError::ChangeNoteInconsistent
-        );
 
         if payload.buyer_relock_order_id != [0u8; 16] {
             require!(has_e, VaultError::RelockRequiresChangeNote);
