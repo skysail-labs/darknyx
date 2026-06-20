@@ -23,6 +23,7 @@ pub mod orders;
 pub mod rate_limit;
 pub mod settlement;
 pub mod state;
+pub mod stream;
 pub mod system;
 pub mod trading;
 pub mod transparency;
@@ -99,7 +100,12 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         // Bidirectional order-submission socket — framed place/cancel/modify
         // over one warm authenticated connection + cancel-on-disconnect. Same
         // self-auth (`?token=`) as the streams above (see `api::trading`).
-        .route("/ws/trading", get(trading::trading_ws));
+        .route("/ws/trading", get(trading::trading_ws))
+        // Multiplexed session socket — the superset of the three sockets above
+        // (login/subscribe/order ops + the orders/fills/tree channels) on one
+        // connection. Auth is IN-BAND (`op: login`), so like them it is mounted
+        // on the PUBLIC router (see `api::stream`).
+        .route("/v1/stream", get(stream::stream_ws));
 
     // Debug endpoints — only compiled in when the `debug_endpoints`
     // cargo feature is on. Used by `nyx-tee-loadgen` (PR 4f) for

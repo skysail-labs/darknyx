@@ -1456,9 +1456,11 @@ paths:
 # ─────────────────────────────────────────────────────────────────────────────
 
 x-websocket-implemented:
-  # The CURRENTLY IMPLEMENTED WS surface (the multiplexed `/v1/stream` below is
-  # the planned superset). Two dedicated, per-account streams: fill-memos and
-  # order-lifecycle events. Both share the same self-auth + per-account routing.
+  # The CURRENTLY IMPLEMENTED WS surface. Two dedicated, per-account streams
+  # (fill-memos + order-lifecycle), the bidirectional `/ws/trading` order
+  # socket, AND the multiplexed `/v1/stream` superset below (now LIVE — it
+  # subsumes all three plus a global live `tree` channel; see `api::stream`).
+  # The dedicated sockets share the same self-auth + per-account routing.
   auth: |
     Bearer token from POST /auth/token, passed as the `?token=` query param
     (browsers + the global WebSocket can't set an Authorization header on the
@@ -1613,12 +1615,20 @@ x-websocket:
 
   url: /v1/stream
   description: |
-    PLANNED multiplexed superset (the live surface is the dedicated
-    `/ws/fills`, `/ws/orders`, and `/ws/trading` sockets above — the
-    order.place/cancel/modify ops below already ship on `/ws/trading`).
-    One multiplexed socket per session. Authenticate with
-    `op: login` (carrying a bearer token from POST /auth/token),
-    then subscribe to channels.
+    LIVE multiplexed superset (`api::stream`) of the dedicated
+    `/ws/fills`, `/ws/orders`, and `/ws/trading` sockets, plus a global
+    live `tree` channel. One socket per session. Authenticate IN-BAND with
+    `op: login` (carrying a bearer token from POST /auth/token) — unlike
+    the dedicated sockets, which auth at upgrade via `?token=` — then
+    subscribe to channels. The order.place/cancel/modify ops dispatch to
+    the SAME intake core as `/ws/trading` + the REST path.
+
+    Served channels: `orders`, `fills` (per-account), `tree` (global
+    leaf-appends). NOT served: `account` (mirrors GET /account 501),
+    `settlement` (no event plumbing yet) — a subscribe to either returns
+    an error frame. `account.info` + `tree.inclusion` reply
+    not-implemented (use the `tree` channel + your keys, or
+    GET /tree/inclusion).
 
     There is no in-band session-encryption envelope. The previous
     draft of this spec had X25519 ECDH + AES-256-GCM ops
