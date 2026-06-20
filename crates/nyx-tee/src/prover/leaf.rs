@@ -36,7 +36,7 @@
 //! `solana_poseidon::hashv`. CLAUDE.md §4.3 documents the cap +
 //! the two-stage decomposition rationale.
 
-use darkpool_crypto::{poseidon_hash_bytes, pubkey_to_fr_pair, CryptoError};
+use darkpool_crypto::{poseidon_hash_bytes, CryptoError};
 
 use super::witness::{u64_to_be32, u8_tag_to_be32, MatchSlotWitness};
 
@@ -44,6 +44,9 @@ use super::witness::{u64_to_be32, u8_tag_to_be32, MatchSlotWitness};
 pub const DOMAIN_LEAF_INNER: u8 = 20;
 pub const DOMAIN_LEAF_TOP: u8 = 21;
 pub const DOMAIN_BATCH_ROOT: u8 = 22;
+/// Commitment-only leaf (amount-privacy, P1b). A fresh tag avoids any
+/// overlap with the old two-stage leaf (20/21).
+pub const DOMAIN_LEAF_V2: u8 = 23;
 
 #[derive(thiserror::Error, Debug)]
 pub enum LeafError {
@@ -57,40 +60,21 @@ pub enum LeafError {
 
 /// Compute one slot's leaf. Identical bytes as the circuit's
 /// `template MatchSlot()` output.
+///
+/// Commitment-only (amount-privacy, P1b): `Poseidon8(DOMAIN_LEAF_V2,
+/// note_a..note_f, batch_slot)`. The amounts/mints/price the old
+/// two-stage leaf hashed are bound transitively through the six note
+/// commitments, so they no longer appear in the leaf (and can leave the
+/// settle payload entirely).
 pub fn compute_batch_leaf(slot: &MatchSlotWitness) -> Result<[u8; 32], LeafError> {
-    let frs = pubkey_to_fr_pair(&slot.quote_mint);
-    let q_lo_be32 = darkpool_crypto::fr_to_be_bytes(&frs[0]);
-    let q_hi_be32 = darkpool_crypto::fr_to_be_bytes(&frs[1]);
-    let frs = pubkey_to_fr_pair(&slot.base_mint);
-    let b_lo_be32 = darkpool_crypto::fr_to_be_bytes(&frs[0]);
-    let b_hi_be32 = darkpool_crypto::fr_to_be_bytes(&frs[1]);
-
-    // h1 = Poseidon12(...). 12 inputs total.
-    let h1 = poseidon_hash_bytes(&[
-        u8_tag_to_be32(DOMAIN_LEAF_INNER),
+    let leaf = poseidon_hash_bytes(&[
+        u8_tag_to_be32(DOMAIN_LEAF_V2),
         slot.note_a_commitment,
         slot.note_b_commitment,
         slot.note_c_commitment,
         slot.note_d_commitment,
         slot.note_e_commitment,
         slot.note_f_commitment,
-        q_lo_be32,
-        q_hi_be32,
-        b_lo_be32,
-        b_hi_be32,
-        u64_to_be32(slot.base_amount),
-    ])?;
-
-    // leaf = Poseidon9(...). 9 inputs total.
-    let leaf = poseidon_hash_bytes(&[
-        u8_tag_to_be32(DOMAIN_LEAF_TOP),
-        h1,
-        u64_to_be32(slot.quote_amount),
-        u64_to_be32(slot.buyer_change_amt),
-        u64_to_be32(slot.seller_change_amt),
-        u64_to_be32(slot.buyer_fee_amt),
-        u64_to_be32(slot.seller_fee_amt),
-        u64_to_be32(slot.clearing_price),
         u64_to_be32(slot.batch_slot),
     ])?;
     Ok(leaf)

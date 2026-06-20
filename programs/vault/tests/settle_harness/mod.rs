@@ -1343,18 +1343,13 @@ fn to_onchain_payload(
 /// the on-chain implementation.
 pub fn compute_match_leaf_for(
     payload: &MatchResultPayload,
-    quote_mint: &Pubkey,
-    base_mint: &Pubkey,
+    // Commitment-only leaf (amount-privacy, P1b) no longer hashes the mints;
+    // kept in the signature so the many call sites stay untouched.
+    _quote_mint: &Pubkey,
+    _base_mint: &Pubkey,
 ) -> [u8; 32] {
-    use anchor_lang::prelude::Pubkey as AnchorPubkey;
-    let qm = AnchorPubkey::new_from_array(quote_mint.to_bytes());
-    let bm = AnchorPubkey::new_from_array(base_mint.to_bytes());
-    vault::instructions::tee_forced_settle_batched::compute_match_leaf(
-        &to_onchain_payload(payload),
-        &qm,
-        &bm,
-    )
-    .expect("compute_match_leaf")
+    vault::instructions::tee_forced_settle_batched::compute_match_leaf(&to_onchain_payload(payload))
+        .expect("compute_match_leaf")
 }
 
 /// Build the depth-4 Merkle tree over 16 leaves and return the root +

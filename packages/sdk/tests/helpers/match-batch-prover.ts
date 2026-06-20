@@ -40,9 +40,10 @@ import { bn254ToBE32 } from "../../src/keys/key-generators.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";
 
 // Domain tags — MUST match the circuit constants.
-const DOMAIN_LEAF_INNER = 20n;
-const DOMAIN_LEAF_TOP = 21n;
 const DOMAIN_BATCH_ROOT = 22n;
+// Commitment-only leaf (amount-privacy, P1b). Replaces the old two-stage
+// leaf's DOMAIN_LEAF_INNER=20 / DOMAIN_LEAF_TOP=21.
+const DOMAIN_LEAF_V2 = 23n;
 
 type PoseidonFn = ((inputs: bigint[]) => Uint8Array) & {
   F: { toObject: (x: Uint8Array) => bigint };
@@ -205,36 +206,18 @@ export async function padBatch(
  */
 export async function computeBatchLeaf(slot: MatchSlotWitness): Promise<Uint8Array> {
   const p = await getPoseidon();
-  const [qLo, qHi] = pubkeyToFrPair(slot.quoteMint);
-  const [bLo, bHi] = pubkeyToFrPair(slot.baseMint);
-
-  const h1 = p.F.toObject(
+  // Commitment-only leaf (amount-privacy, P1b): Poseidon8(DOMAIN_LEAF_V2,
+  // note_a..note_f, batch_slot). The amounts/mints/price are bound
+  // transitively via the six note commitments, so they leave the leaf.
+  const leaf = p.F.toObject(
     p([
-      DOMAIN_LEAF_INNER,
+      DOMAIN_LEAF_V2,
       bigintFromBE32(slot.noteAcommitment),
       bigintFromBE32(slot.noteBcommitment),
       bigintFromBE32(slot.noteCcommitment),
       bigintFromBE32(slot.noteDcommitment),
       bigintFromBE32(slot.noteEcommitment),
       bigintFromBE32(slot.noteFcommitment),
-      qLo,
-      qHi,
-      bLo,
-      bHi,
-      slot.baseAmount,
-    ]),
-  );
-
-  const leaf = p.F.toObject(
-    p([
-      DOMAIN_LEAF_TOP,
-      h1,
-      slot.quoteAmount,
-      slot.buyerChangeAmt,
-      slot.sellerChangeAmt,
-      slot.buyerFeeAmt,
-      slot.sellerFeeAmt,
-      slot.clearingPrice,
       slot.batchSlot,
     ]),
   );

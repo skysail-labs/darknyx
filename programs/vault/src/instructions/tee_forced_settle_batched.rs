@@ -86,78 +86,32 @@ fn u64_be32(v: u64) -> [u8; 32] {
     out
 }
 
-/// Split a 32-byte pubkey into [lo_u128_be32, hi_u128_be32]. Matches the
-/// `pubkey_pair_be32` helper used by VALID_CREATE / VALID_SPEND and the
-/// `pubkeyToFrPair` helper in the TS prover.
-///
-/// hi = the FIRST 16 bytes of the pubkey, viewed as a u128.
-/// lo = the LAST 16 bytes.
-fn pubkey_be32_pair(pk: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    let mut lo = [0u8; 32];
-    lo[16..32].copy_from_slice(&pk[16..32]);
-    let mut hi = [0u8; 32];
-    hi[16..32].copy_from_slice(&pk[0..16]);
-    (lo, hi)
-}
-
 /// Compute the per-slot leaf hash. MUST byte-match `template MatchSlot()` in
 /// `circuits/templates/match_batch.circom`:
 ///
-///   h1   = Poseidon12(DOMAIN_LEAF_INNER=20,
-///                     note_a, note_b, note_c, note_d, note_e, note_f,
-///                     qm_lo, qm_hi, bm_lo, bm_hi,
-///                     base_amount)
-///   leaf = Poseidon9 (DOMAIN_LEAF_TOP=21, h1,
-///                     quote_amount,
-///                     buyer_change_amt, seller_change_amt,
-///                     buyer_fee_amt, seller_fee_amt,
-///                     clearing_price, batch_slot)
+///   leaf = Poseidon8(DOMAIN_LEAF_V2=23,
+///                    note_a, note_b, note_c, note_d, note_e, note_f,
+///                    batch_slot)
+///
+/// Commitment-only (amount-privacy, P1b): the six note commitments bind the
+/// amounts/mints/price transitively (each commitment is a Poseidon6 of its
+/// mint+amount+owner+inner), so the leaf no longer hashes — and the payload
+/// no longer needs to carry — the plaintext amounts.
 // Exposed for integration tests that need to fabricate a Merkle root
 // without running the full `verify_match_batch` Groth16 verifier (see
-// `programs/matching_engine/tests/tee_forced_settle_batched.rs`).
-pub fn compute_match_leaf(
-    payload: &MatchResultPayload,
-    quote_mint: &Pubkey,
-    base_mint: &Pubkey,
-) -> Result<[u8; 32]> {
-    let (qm_lo, qm_hi) = pubkey_be32_pair(&quote_mint.to_bytes());
-    let (bm_lo, bm_hi) = pubkey_be32_pair(&base_mint.to_bytes());
-    let domain_inner = u64_be32(20); // DOMAIN_LEAF_INNER
-    let base_amount = u64_be32(payload.base_amount);
+// `programs/vault/tests/tee_forced_settle_batched.rs`).
+pub fn compute_match_leaf(payload: &MatchResultPayload) -> Result<[u8; 32]> {
+    let domain = u64_be32(23); // DOMAIN_LEAF_V2
+    let batch_slot = u64_be32(payload.batch_slot);
 
-    let h1 = poseidon_n(&[
-        &domain_inner,
+    let leaf = poseidon_n(&[
+        &domain,
         payload.note_a_commitment.as_ref(),
         payload.note_b_commitment.as_ref(),
         payload.note_c_commitment.as_ref(),
         payload.note_d_commitment.as_ref(),
         payload.note_e_commitment.as_ref(),
         payload.note_f_commitment.as_ref(),
-        &qm_lo,
-        &qm_hi,
-        &bm_lo,
-        &bm_hi,
-        &base_amount,
-    ])?;
-
-    let domain_top = u64_be32(21); // DOMAIN_LEAF_TOP
-    let quote_amount = u64_be32(payload.quote_amount);
-    let buyer_change = u64_be32(payload.buyer_change_amt);
-    let seller_change = u64_be32(payload.seller_change_amt);
-    let buyer_fee = u64_be32(payload.buyer_fee_amt);
-    let seller_fee = u64_be32(payload.seller_fee_amt);
-    let clearing_price = u64_be32(payload.clearing_price);
-    let batch_slot = u64_be32(payload.batch_slot);
-
-    let leaf = poseidon_n(&[
-        &domain_top,
-        &h1,
-        &quote_amount,
-        &buyer_change,
-        &seller_change,
-        &buyer_fee,
-        &seller_fee,
-        &clearing_price,
         &batch_slot,
     ])?;
 
@@ -358,7 +312,7 @@ pub fn tee_forced_settle_batched_handler(
         (la.token_mint, lb.token_mint)
     };
     {
-        let leaf = compute_match_leaf(&payload, &lock_a_mint, &lock_b_mint)?;
+        let leaf = compute_match_leaf(&payload)?;
         let computed_root = walk_merkle_path_n16(&leaf, match_index, &merkle_proof)?;
 
         let (expected_marker_pda, _) = Pubkey::find_program_address(

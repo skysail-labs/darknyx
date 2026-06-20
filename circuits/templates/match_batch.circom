@@ -233,54 +233,36 @@ template MatchSlot() {
     quote_amount === base_amount * clearing_price;
 
     // ─────────────────────────────────────────────────────────────────
-    // LEAF HASH — Poseidon12 + Poseidon9.
+    // LEAF HASH — commitment-only (amount-privacy, P1b).
     //
-    // Why this arity, not bigger: solana_poseidon (via light-poseidon)
-    // caps at width 13, i.e. max nInputs = 12. The on-chain handler
-    // re-derives this exact hash from the settle payload to look up
-    // the BatchValidityMarker PDA, so the in-circuit arities have to
-    // stay ≤ 12 for parity.
+    // The leaf binds ONLY the six note commitments + batch_slot — NOT
+    // the plaintext amounts/mints/price the old two-stage leaf hashed.
+    // Each note commitment is itself a Poseidon6 of (mint, amount, owner,
+    // inner_hash), so the commitments transitively bind the amounts +
+    // mints without putting them in the clear; the per-slot conservation
+    // + range constraints above prove they're consistent. This lets the
+    // on-chain handler recompute the leaf from the (amount-free) settle
+    // payload, so the amounts can leave the payload entirely (P3).
     //
-    //   h1   = Poseidon12(DOMAIN_LEAF_INNER,
-    //                     note_a, note_b, note_c, note_d, note_e, note_f,
-    //                     qm_lo, qm_hi, bm_lo, bm_hi,
-    //                     base_amount)
-    //   leaf = Poseidon9 (DOMAIN_LEAF_TOP, h1,
-    //                     quote_amount,
-    //                     buyer_change, seller_change,
-    //                     buyer_fee, seller_fee,
-    //                     clearing_price, batch_slot)
+    // Single Poseidon8 (1 domain + 6 commitments + batch_slot = 8 ≤ 12,
+    // the light-poseidon width cap), so no two-stage split is needed.
     //
-    // Eighteen data fields bound across the two hashes (11 in h1,
-    // 7 in the top hash).
+    //   leaf = Poseidon8(DOMAIN_LEAF_V2=23,
+    //                    note_a, note_b, note_c, note_d, note_e, note_f,
+    //                    batch_slot)
     // ─────────────────────────────────────────────────────────────────
 
-    component leafH1 = Poseidon(12);
-    leafH1.inputs[0]  <== 20;   // DOMAIN_LEAF_INNER
-    leafH1.inputs[1]  <== note_a_commitment;
-    leafH1.inputs[2]  <== note_b_commitment;
-    leafH1.inputs[3]  <== note_c_commitment;
-    leafH1.inputs[4]  <== note_d_commitment;
-    leafH1.inputs[5]  <== note_e_commitment;
-    leafH1.inputs[6]  <== note_f_commitment;
-    leafH1.inputs[7]  <== quote_mint_lo;
-    leafH1.inputs[8]  <== quote_mint_hi;
-    leafH1.inputs[9]  <== base_mint_lo;
-    leafH1.inputs[10] <== base_mint_hi;
-    leafH1.inputs[11] <== base_amount;
+    component leafH = Poseidon(8);
+    leafH.inputs[0] <== 23;   // DOMAIN_LEAF_V2
+    leafH.inputs[1] <== note_a_commitment;
+    leafH.inputs[2] <== note_b_commitment;
+    leafH.inputs[3] <== note_c_commitment;
+    leafH.inputs[4] <== note_d_commitment;
+    leafH.inputs[5] <== note_e_commitment;
+    leafH.inputs[6] <== note_f_commitment;
+    leafH.inputs[7] <== batch_slot;
 
-    component leafTop = Poseidon(9);
-    leafTop.inputs[0] <== 21;   // DOMAIN_LEAF_TOP
-    leafTop.inputs[1] <== leafH1.out;
-    leafTop.inputs[2] <== quote_amount;
-    leafTop.inputs[3] <== buyer_change_amt;
-    leafTop.inputs[4] <== seller_change_amt;
-    leafTop.inputs[5] <== buyer_fee_amt;
-    leafTop.inputs[6] <== seller_fee_amt;
-    leafTop.inputs[7] <== clearing_price;
-    leafTop.inputs[8] <== batch_slot;
-
-    leaf <== leafTop.out;
+    leaf <== leafH.out;
 }
 
 // ----------------------------------------------------------------------------
