@@ -202,6 +202,34 @@ template MatchSlot() {
     component quoteBits = Num2Bits(64);
     quoteBits.in <== quote_amount;
 
+    // ── Amount-privacy soundness gate (P1a, see
+    //    docs/settlement-amount-privacy-p0-soundness.md) ──────────────────
+    // When the on-chain settle drops its plaintext `u64` + `checked_add`
+    // conservation backstop, THIS circuit becomes the sole no-inflation
+    // guarantor. Conservation (`a_amount === quote + buyer_change + buyer_fee`,
+    // `b_amount === base + seller_change + seller_fee`) holds over BN254 Fr, so
+    // without a range check a prover could field-WRAP `change`/`fee` to satisfy
+    // it while the implied u64 values mint value from nothing. Range-checking
+    // every term of each conservation equation to 64 bits forces Fr-equality to
+    // imply exact u64-equality with no overflow (sum of three 64-bit terms is
+    // < 3·2^64 ≪ Fr). `base_amount`/`quote_amount` are already checked above;
+    // these six are the previously-unchecked terms:
+    //   LOAD-BEARING (fresh outputs only bound by conservation + their note hash)
+    component buyerChangeBits = Num2Bits(64);
+    buyerChangeBits.in <== buyer_change_amt;
+    component sellerChangeBits = Num2Bits(64);
+    sellerChangeBits.in <== seller_change_amt;
+    component buyerFeeBits = Num2Bits(64);
+    buyerFeeBits.in <== buyer_fee_amt;
+    component sellerFeeBits = Num2Bits(64);
+    sellerFeeBits.in <== seller_fee_amt;
+    //   INSURANCE (transitively bound via the input-note commitment, but cheap
+    //   to assert so conservation is self-contained in THIS circuit)
+    component aAmountBits = Num2Bits(64);
+    aAmountBits.in <== a_amount;
+    component bAmountBits = Num2Bits(64);
+    bAmountBits.in <== b_amount;
+
     quote_amount === base_amount * clearing_price;
 
     // ─────────────────────────────────────────────────────────────────

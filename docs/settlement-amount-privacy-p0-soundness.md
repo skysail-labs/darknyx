@@ -172,21 +172,40 @@ does **not** prove that the *minted fee note's* amount equals `buyer_fee_amt` / 
 - This is a **pre-existing** property, identical before and after amount privacy: the on-chain
   conservation we remove never bound the fee-note amount either (it appends the commitment without
   recomputing it). So this change does not regress it.
-- It is, however, worth an explicit decision at P2/P3: either (a) accept it (the fee note pays the
-  *protocol*, and conservation already caps the value deducted from the user at `buyer_fee_amt`, so a
-  TEE minting a *larger* fee note would break per-mint conservation against the user's input and be
-  caught — see below), or (b) bind the fee notes in-circuit for completeness.
-- **Sub-analysis:** can a TEE inflate via the fee note? note D (seller's quote) + note E (buyer change)
-  + the quote fee note must all come out of `a_amount` (the only quote input). The circuit forces
+- **Sub-analysis (the real inflation vector):** note D (seller's quote) + note E (buyer change) + the
+  quote fee note all come out of `a_amount` (the only quote input). The circuit forces
   `a_amount = quote_amount + buyer_change_amt + buyer_fee_amt`. The on-chain handler appends
   `note_fee_quote` whose amount is *not* checked against `buyer_fee_amt`. If the TEE mints
-  `note_fee_quote` with amount `> buyer_fee_amt`, total quote output `> a_amount` ⟹ inflation that the
-  circuit's conservation does NOT catch (because conservation constrains the *signal* `buyer_fee_amt`,
-  not the *minted note*). **→ This is a real, pre-existing gap that the on-chain `u64` conservation
-  ALSO did not catch.** Recommendation: **bind the fee notes in-circuit at P1/P2** (add
-  `note_fee_quote_commitment === Poseidon6(2, qm_lo, qm_hi, buyer_fee_amt, protocol_owner, fee_inner)`
-  and the base analogue), closing it as part of this work rather than carrying it. This is an
-  **upgrade to the P1 scope** flagged here for the review decision.
+  `note_fee_quote` with amount `> Σ buyer_fee_amt`, total quote output `> Σ a_amount` ⟹ inflation that
+  neither the circuit nor the old on-chain `u64` conservation catches (both only ever look at the
+  *signal* `buyer_fee_amt`, never the minted note). The excess note is owned by `protocol_owner` and
+  withdrawable for real SPL → vault drained. **Real, pre-existing gap.**
+
+**Decision (taken with the user 2026-06-20): CLOSE IT IN P1.** Bind the fee notes in-circuit.
+
+**Design (confirmed against the fee-flush mechanics):** the fee notes are **batch-aggregated, not
+per-match** — `flush_fee_notes` (`darkpool-matcher/src/algorithm.rs:590`) commits
+`Poseidon6(mint, Σ accumulated_fees, protocol_owner, derive_inner(batch_slot, FEE_ROLE))`, and
+`assemble.rs:430` attaches both fee notes to **`matches.first_mut()` → slot 0 deterministically**
+(all other slots carry `[0;32]`). So the binding is NOT a per-slot opening; it is:
+1. At the batch level, `total_buyer_fee := Σ_i buyer_fee_amt[i]`, `total_seller_fee := Σ_i seller_fee_amt[i]`
+   (linear combinations — ~free in constraints).
+2. On **slot 0**, with the same `IsZero` conditional note E uses (zero fee ⇒ `[0;32]` note):
+   `note_fee_quote_commitment[0] === (1−isZero(total_buyer_fee))·Poseidon6(2, qm_lo, qm_hi, total_buyer_fee, protocol_owner, fee_quote_inner)`
+   and the base analogue with `total_seller_fee`/`bm_*`/`fee_base_inner`.
+3. On slots 1..N−1, force `note_fee_*_commitment[i] === 0` (non-flush slots mint no fee note).
+4. Make **`protocol_owner_commitment` a public input** too (bound on-chain to
+   `VaultConfig.protocol_owner_commitment`), so the binding also closes a *second* leak — a TEE
+   minting the fee note to its OWN owner instead of the protocol's (fee-theft, distinct from
+   over-mint). `fee_quote_inner`/`fee_base_inner` stay private witnesses.
+5. Include both fee commitments in the **new commitment-only leaf** (so the on-chain recompute +
+   marker bind them): `leaf = Poseidon10(DOMAIN_LEAF_V2=23, note_a..note_f, note_fee_base, note_fee_quote, batch_slot)`.
+   The on-chain handler's blind `append_leaf` of the fee notes (`tee_forced_settle_batched.rs:542-553`)
+   then becomes proof-backed (the fee notes are part of slot 0's verified leaf).
+
+Cost: 2 extra Poseidon6 on slot 0 only (~600 constraints for the whole batch) + a third public input.
+Constraint-cheap; the work is the leaf-format + lockstep change, done once with the commitment-only
+leaf anyway.
 
 ---
 
@@ -222,10 +241,19 @@ P1 must, in one lockstep circuit change:
    (load-bearing) and **`a_amount, b_amount`** (insurance). §5.
 2. Add the in-circuit **fee floor** with `fee_rate_bps` as a public input, using the
    `(fee+1)·10000 > notional·rate` form. §8.
-3. **DECISION NEEDED (review):** also bind the two fee notes in-circuit (§7) — recommended, closes a
-   pre-existing inflation gap — vs. defer it as a separate item. This is the one scope question P0
-   surfaces that wasn't in the original design doc.
-4. Commitment-only leaf + `[merkle_root, fee_rate_bps]` public inputs are P1's *other* changes (not
-   soundness-gating); they don't affect this analysis.
+3. **Bind the two fee notes in-circuit** (§7, decided): batch-summed fee binding on slot 0 +
+   `protocol_owner_commitment` as a public input + fee commitments in the new leaf.
+4. Commitment-only leaf `Poseidon10(23, note_a..f, note_fee_base, note_fee_quote, batch_slot)` +
+   public inputs `[merkle_root, fee_rate_bps, protocol_owner_commitment]` are P1's other changes (not
+   soundness-gating on their own; the fee-note binding rides on them).
 
-**No code in this repo was modified by P0.** Awaiting review before P1.
+**Sequencing within P1 (to keep each step reviewable):**
+- **P1a — range checks ONLY** (this §5 list). Constraint-additive: the leaf, the single
+  `[merkle_root]` public input, the payload, and all 4 ports are UNCHANGED — only the VK + the
+  committed N=16 fixture regenerate. This is the self-contained inflation-gap fix and lands first.
+- **P1b — the leaf rewrite + fee floor + fee-note binding** (commitment-only `Poseidon10` leaf,
+  in-circuit fee floor with the `(fee+1)·10000 > notional·rate` form, fee-note binding, and the
+  `[merkle_root, fee_rate_bps, protocol_owner_commitment]` 3-input public). This is the lockstep
+  change that ripples into P2 (4 ports), P3 (vault verify + leaf + payload), P4 (indexer).
+
+**P0 changed no executable code.** Reviewed + approved; P1a in progress.
