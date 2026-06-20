@@ -187,13 +187,10 @@ pub struct TradeSettled {
     /// indexer routes the (note_*_leaf) indices into this shard.
     pub tree_id: u8,
     pub match_id: [u8; 16],
-    pub clearing_price: u64,
-    pub base_amount: u64,
-    pub quote_amount: u64,
-    pub buyer_change_amt: u64,
-    pub seller_change_amt: u64,
-    pub buyer_fee_amt: u64,
-    pub seller_fee_amt: u64,
+    // Amount-privacy (P3b): the trade amounts / change / fees / clearing price
+    // were dropped from this event — they were a public leak (events are
+    // on-chain). The event now carries only the leaf INDICES + relock flags +
+    // root; a client reconstructs its own amounts from the per-account FillMemo.
     pub note_c_leaf: u64,
     pub note_d_leaf: u64,
     /// `u64::MAX` means no buyer-change leaf was inserted (exact fill).

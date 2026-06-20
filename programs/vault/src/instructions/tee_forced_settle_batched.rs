@@ -512,13 +512,6 @@ pub fn tee_forced_settle_batched_handler(
     emit!(TradeSettled {
         tree_id: _tree_id,
         match_id: payload.match_id,
-        clearing_price: payload.clearing_price,
-        base_amount: payload.base_amount,
-        quote_amount: payload.quote_amount,
-        buyer_change_amt: payload.buyer_change_amt,
-        seller_change_amt: payload.seller_change_amt,
-        buyer_fee_amt: payload.buyer_fee_amt,
-        seller_fee_amt: payload.seller_fee_amt,
         note_c_leaf: leaf_c,
         note_d_leaf: leaf_d,
         note_e_leaf: leaf_e,
