@@ -158,6 +158,9 @@ async fn icicle_cpu_proves_and_verifies_n16() {
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
         fee_slot: 1234,
+        // Zero-fee exact-fill match → fee_rate_bps MUST be 0, or the in-circuit
+        // fee floor `(fee+1)*10000 > notional*rate` would reject it (fee=0).
+        fee_rate_bps: 0,
         buyer_change_inner: None,
         seller_change_inner: None,
     })
@@ -184,14 +187,22 @@ async fn icicle_cpu_proves_and_verifies_n16() {
     let icicle_ms = t1.elapsed().as_millis();
 
     // 4. Byte-correctness gate: the icicle proof verifies against the zkey VK.
-    assert_eq!(public.public_inputs_be.len(), 1);
+    // Public inputs are [merkle_root, fee_rate_bps, protocol_owner] — fee_rate_bps
+    // = 0 (zero-fee exact-fill match), protocol_owner = the assemble's fr_safe(0x07).
+    assert_eq!(public.public_inputs_be.len(), 3);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
+    assert_eq!(public.public_inputs_be[1], [0u8; 32]);
+    assert_eq!(public.public_inputs_be[2], fr_safe(0x07));
     assert_eq!(
         public.merkle_root,
         compute_batch_root(&public.leaves).expect("recompute root"),
         "assembler/leaf root disagrees with the circuit's public input"
     );
-    let public_fr = vec![Fr::from_be_bytes_mod_order(&public.merkle_root)];
+    let public_fr: Vec<Fr> = public
+        .public_inputs_be
+        .iter()
+        .map(|b| Fr::from_be_bytes_mod_order(b))
+        .collect();
     for (label, p) in [("warmup", &warm_proof), ("steady", &proof)] {
         let ok = Groth16::<Bn254>::verify_proof(&pvk, p, &public_fr).expect("verify_proof call");
         assert!(
