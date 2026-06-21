@@ -66,6 +66,7 @@ import {
   OrderType,
 } from "../src/orders/canonical.js";
 import { fetchOrderFills } from "../src/fills/history.js";
+import { replayFills } from "../src/fills/replay.js";
 import {
   subscribeFills,
   type FillsSubscription,
@@ -684,6 +685,42 @@ maybeDescribe(
           console.log(
             `  · fills OK — indexer located + WS memo verified buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}… (amount ${memoRec!.amount}, anchor ${memoRec!.anchorIndex})`,
           );
+
+          // ── 7b. DURABLE MEMO REPLAY (P7 self-healing) ────────────────
+          // The live memo above proves the WS tail. This proves the durable
+          // half: GET /fills/replay recovers the SAME change note (amount +
+          // opening) from the TEE's persisted per-account log — into a FRESH
+          // store, simulating a client that was offline / restarted and never
+          // saw the live memo. After amount-privacy this is the only way to
+          // recover the amount (the indexer is a commitment-only locator).
+          await t.step("durable memo replay (P7)", async () => {
+            const replayStore = new InMemoryNoteStore();
+            const r = await replayFills({
+              gatewayHttpUrl: GATEWAY,
+              token,
+              masterSeed: buyer.masterSeed,
+              ownerCommitment: buyer.ownerCommit,
+              store: replayStore,
+              since: 0, // no cursor → replay everything the TEE retained
+              fetchImpl: gwFetch as unknown as typeof fetch,
+            });
+            const recovered = r.records.find(
+              (rec) => rec.commitment === change!.changeNoteCommitment,
+            );
+            expect(
+              recovered,
+              "GET /fills/replay did not recover the buyer change note from the durable log",
+            ).toBeTruthy();
+            // The replayed opening must match the live memo byte-for-byte.
+            expect(recovered!.amount).toBe(memoRec!.amount);
+            expect(recovered!.anchorIndex).toBe(memoRec!.anchorIndex);
+            // And it landed in the fresh store (recovered from cold, no live WS).
+            const stored = await replayStore.get(change!.changeNoteCommitment!);
+            expect(stored?.amount).toBe(memoRec!.amount);
+            console.log(
+              `  · P7 replay OK — recovered ${r.records.length} memo(s) into a cold store; cursor=${r.nextCursor}`,
+            );
+          });
 
           // ── 8. cross-batch RE-MATCH (opt-in) ─────────────────────────
           // The buyer's residual relocked onto anchor[0] in batch 1 and stays in
