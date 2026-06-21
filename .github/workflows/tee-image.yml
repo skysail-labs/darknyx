@@ -100,6 +100,12 @@ jobs:
              [ "${{ inputs.enable_cuda }}" = "true" ]; then
             enable_cuda=1
           fi
+          # Enforce the tag contract: a CUDA image MUST carry a -cuda suffix so a
+          # CUDA build can never publish under a CPU-style tag (e.g. a dispatch
+          # with enable_cuda=true but a plain tag). Append it if missing.
+          if [ "$enable_cuda" = "1" ]; then
+            case "$tag" in *-cuda) ;; *) tag="${tag}-cuda" ;; esac
+          fi
           cache_suffix=""
           [ "$enable_cuda" = "1" ] && cache_suffix="-cuda"
           echo "image=ghcr.io/${owner_lc}/nyx-tee:${tag}" >> "$GITHUB_OUTPUT"

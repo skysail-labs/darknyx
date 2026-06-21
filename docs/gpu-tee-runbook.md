@@ -28,11 +28,12 @@ GPU** (commit `0400776` + the `git`/`libatomic1` fixups):
 So the **only** remaining work is the live GPU session: deploy → confirm CC mode → measure the GPU
 prove speedup + settle on-chain (2a) → wire the GPU attestation (2b) → stop.
 
-**Tooling note:** the nvm `node`/`phala` shims are broken on this machine — always use absolute
-paths:
+**Tooling note:** an nvm `node`/`phala` shim can shadow the real binary — if so, point these at the
+absolute nvm path for YOUR node version (find it with `ls "$HOME/.nvm/versions/node"`):
 ```
-PHALA=/Users/arnabnandi/.nvm/versions/node/v24.2.0/bin/phala
-NODE=/Users/arnabnandi/.nvm/versions/node/v24.2.0/bin/node
+NVM_BIN="$HOME/.nvm/versions/node/<your-version>/bin"   # e.g. v24.2.0
+PHALA="$NVM_BIN/phala"
+NODE="$NVM_BIN/node"
 ```
 
 ---
@@ -60,7 +61,7 @@ Two equivalent paths. **Path A (dashboard)** is what worked around the CLI capac
 ### Per-session values to refresh first
 
 ```sh
-cd /Users/arnabnandi/nyx-monorepo
+cd "$NYX_REPO"   # the nyx-monorepo checkout root
 RPC=$(grep '^SOLANA_RPC_URL=' packages/sdk/.env | head -1 | cut -d= -f2- | tr -d '"'\'' \r')
 # Reset the on-chain Merkle tree (all 4 shards) so the mirror cold-boots empty:
 SOLANA_RPC_URL="$RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json "$NODE" scripts/reset-merkle-tree.mjs

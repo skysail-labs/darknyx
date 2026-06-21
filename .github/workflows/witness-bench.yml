@@ -24,6 +24,10 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          # No step pushes to git (npm/circom/cargo only), so don't leave the
+          # write-capable token in .git/config (mirrors tee-image.yml).
+          persist-credentials: false
 
       - name: Install Rust 1.89.0 (for circom build)
         uses: dtolnay/rust-toolchain@1.89.0
