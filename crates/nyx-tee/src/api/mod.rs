@@ -14,6 +14,7 @@ pub mod auth;
 #[cfg(feature = "debug_endpoints")]
 pub mod debug;
 pub mod error;
+pub mod fills;
 pub mod fills_router;
 pub mod health;
 pub mod info;
@@ -162,6 +163,11 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // Account snapshot — bearer. Returns the caller's open orders (the
         // slice the TEE legitimately holds); balances/notes stay client-side.
         .route("/account", get(account::get_account))
+        // Fill-memo replay — bearer. The durable backfill for "backfill then
+        // tail": recovers the caller's change-note amounts/openings the live
+        // /ws/fills may have missed (offline / restart). Header bearer is fine
+        // here (it's a plain GET, unlike the query-param-token /ws/fills).
+        .route("/fills/replay", get(fills::replay_fills))
         // Per-account settings (cancel-on-disconnect default, …).
         .route(
             "/account/settings",

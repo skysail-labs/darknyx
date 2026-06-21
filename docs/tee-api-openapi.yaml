@@ -1226,6 +1226,59 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AccountSettings' }
 
+  /fills/replay:
+    get:
+      tags: [account]
+      summary: Replay the caller's missed fill memos (durable backfill).
+      description: |
+        The durable "backfill" half of "backfill then tail". Returns the caller
+        account's persisted `FillMemo`s with `seq > since`, oldest first.
+
+        Amount-privacy (P3b/P4) moved trade amounts off-chain into the
+        per-account `FillMemo`, and the off-TEE indexer is a commitment-only
+        locator. So a client that was offline — or whose CVM restarted — when a
+        fill settled recovers its change-note amount + opening HERE, not from the
+        indexer. Cursor: pass `since=0` for a first/no-cursor sync (every real
+        memo has `seq >= 1`), then `since=<next_cursor from the prior reply>`.
+
+        Integrity is the client's job: each replayed memo runs the same
+        `verifyFillMemo` (Vuln-4) check as a live one. See
+        docs/fills-history-architecture.md.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: query
+          name: since
+          required: false
+          schema: { type: integer, format: uint64, default: 0 }
+          description: The client's last-seen seq. Returns memos with seq > since.
+      responses:
+        '200':
+          description: Memos newer than `since`, oldest first, plus the next cursor.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [memos, next_cursor]
+                properties:
+                  memos:
+                    type: array
+                    description: Same shape as the /ws/fills FillMemo (each carries its seq).
+                    items:
+                      type: object
+                      required: [seq, order_id, anchor_index, change_amount, change_note_commitment, mint, inner_hash]
+                      properties:
+                        seq: { type: integer, format: uint64 }
+                        order_id: { type: string, description: 16-byte hex. }
+                        anchor_index: { type: integer }
+                        change_amount: { type: integer, format: uint64 }
+                        change_note_commitment: { type: string, description: 32-byte hex. }
+                        mint: { type: string, description: 32-byte hex. }
+                        inner_hash: { type: string, description: 32-byte hex. }
+                  next_cursor:
+                    type: integer
+                    format: uint64
+                    description: Max seq returned (store + pass as next `since`); echoes `since` when empty.
+
   # ───── tree ────────────────────────────────────────────────────────────────
 
   /tree/root:
@@ -1475,9 +1528,12 @@ x-websocket-implemented:
   streams:
     /ws/fills:
       description: |
-        Per-account continuation-fill memos. Earlier fills (before the socket
-        opened, or after a lag-close) are recovered from the off-TEE indexer —
-        the "backfill then tail" client flow.
+        Per-account continuation-fill memos (the live "tail"). Earlier fills
+        (before the socket opened, or after a lag-close / restart) are recovered
+        from `GET /fills/replay?since=<seq>` — the durable "backfill then tail"
+        flow. NOTE: the off-TEE indexer is a commitment-only locator after
+        amount-privacy (P4) and does NOT carry the amount; the replay endpoint is
+        the amount source.
       server_messages:
         FillMemo:
           description: One continuation fill. The client verifies it (inner_hash +
@@ -1486,7 +1542,7 @@ x-websocket-implemented:
             type: object
             required: [seq, order_id, anchor_index, change_amount, change_note_commitment, mint, inner_hash]
             properties:
-              seq: { type: integer, format: uint64, description: Per-connection monotonic sequence (gap detection). }
+              seq: { type: integer, format: uint64, description: Per-account monotonic, durable sequence — the GET /fills/replay cursor. }
               order_id: { type: string, description: 16-byte hex. }
               anchor_index: { type: integer }
               change_amount: { type: integer, format: uint64 }
