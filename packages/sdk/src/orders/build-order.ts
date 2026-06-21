@@ -147,6 +147,8 @@ export async function buildOrder(
     throw new Error("note.commitment must be 32 bytes");
   if (args.validInput.merkleRoot.length !== 32)
     throw new Error("merkleRoot must be 32 bytes");
+  if (args.treeId != null && args.treeId < 0)
+    throw new Error("treeId must be non-negative");
 
   const arrivalNonce = args.arrivalNonce ?? 1n;
   const collateralAmount = args.collateralAmount ?? args.note.amount;

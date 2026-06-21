@@ -95,8 +95,11 @@ export async function fetchOracleAnchor(): Promise<bigint> {
   if (process.env.NYX_CVM_PRICE) return BigInt(process.env.NYX_CVM_PRICE);
   const url = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${SOL_USD_FEED}`;
   const j = (await (await fetch(url)).json()) as {
-    parsed: { price: { price: string; expo: number } }[];
+    parsed?: { price: { price: string; expo: number } }[];
   };
+  if (!j.parsed || j.parsed.length === 0) {
+    throw new Error(`Hermes returned no price data for ${SOL_USD_FEED}`);
+  }
   const raw = BigInt(j.parsed[0].price.price);
   console.log(
     `  · oracle anchor (raw SOL/USD): ${raw} (expo ${j.parsed[0].price.expo})`,
@@ -118,7 +121,13 @@ export async function authToken(gateway: string): Promise<string> {
   if (res.status !== 200) {
     throw new Error(`auth/token failed (${res.status}): ${await res.text()}`);
   }
-  return ((await res.json()) as { access_token: string }).access_token;
+  const body = (await res.json()) as { access_token?: unknown };
+  if (typeof body.access_token !== "string") {
+    throw new Error(
+      `auth/token: response missing access_token: ${JSON.stringify(body)}`,
+    );
+  }
+  return body.access_token;
 }
 
 export interface Persona {

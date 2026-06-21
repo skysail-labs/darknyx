@@ -109,7 +109,7 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         traders: 10,
         orders_per_trader_per_sec: 5.0,
         duration_secs: 5,
-        scenario: Scenario::Uniform,
+        scenario: Scenario::ExactMatch,
         // Placeholder dev mints (the in-process matcher's dev_match_config).
         base_mint: "01000000000000000000000000000000000000000000000000000000000000b1".to_string(),
         quote_mint: "010000000000000000000000000000000000000000000000000000000000009e".to_string(),

@@ -105,7 +105,9 @@ impl ScenarioWorkload {
             over_collateral_bps,
             size_dist: LogNormal::new(0.0, 0.8).expect("σ=0.8 is valid"),
             next_is_bid: true,
-            type_cycle: 0,
+            // Seed-derived starting phase so traders don't all emit the same
+            // order type each tick (synchronized one-sided bursts).
+            type_cycle: seed as u8,
         }
     }
 

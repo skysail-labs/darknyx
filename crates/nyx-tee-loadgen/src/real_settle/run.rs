@@ -246,9 +246,11 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
 
     // Salt the personas' keys so the v2 nullifiers are fresh each run (a fixed
     // key collides the settle's NullifierEntry PDA on re-run).
+    // Nanosecond resolution so two runs started within the same second get
+    // distinct salts (as_secs() collided → nullifier-PDA replay on re-run).
     let salt = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
     let buyer = Persona::new(0x40_0000 ^ salt)?;
     let seller = Persona::new(0x80_0000 ^ salt)?;
@@ -536,9 +538,11 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         return Err(anyhow!("tree not empty — reset + redeploy the CVM first"));
     }
 
+    // Nanosecond resolution so two runs started within the same second get
+    // distinct salts (as_secs() collided → nullifier-PDA replay on re-run).
     let salt = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
     let bid_price = p.oracle_twap.saturating_mul(12) / 10;
     let ask_price = p.oracle_twap.saturating_mul(8) / 10;

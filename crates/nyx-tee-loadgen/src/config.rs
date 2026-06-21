@@ -81,7 +81,7 @@ pub struct RunConfig {
     /// Preflight `GET /system/status` before firing: abort if the CVM is
     /// `degraded` (matcher/settle down) so a misconfigured target fails fast
     /// instead of producing a 0-match run. `--no-status-preflight` to skip.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    #[arg(long = "no-status-preflight", default_value_t = true, action = clap::ArgAction::SetFalse)]
     pub status_preflight: bool,
 
     /// Poll `GET /orders/{id}` for a sampled fraction of placed orders to

@@ -29,7 +29,11 @@ pub struct RpcClient {
 impl RpcClient {
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            // Bound every RPC call so a stalled endpoint can't hang the run.
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("reqwest client with timeout"),
             endpoint: endpoint.into(),
         }
     }
@@ -50,6 +54,16 @@ impl RpcClient {
             .send()
             .await
             .map_err(rpc_err)?;
+        // Surface HTTP errors (429/5xx) as such, not as confusing JSON-decode
+        // failures on a non-JSON error body.
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(RealSettleError::Rpc(format!(
+                "{method}: HTTP {status}: {}",
+                text.trim()
+            )));
+        }
         let v: Value = resp.json().await.map_err(rpc_err)?;
         if let Some(e) = v.get("error") {
             return Err(RealSettleError::Rpc(format!("{method}: {e}")));
