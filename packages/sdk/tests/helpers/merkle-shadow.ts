@@ -43,7 +43,7 @@ export class MerkleShadow {
 
   private async initZero() {
     const z: Uint8Array[] = [];
-    let cur = new Uint8Array(32);
+    let cur: Uint8Array = new Uint8Array(32);
     for (let i = 0; i < TREE_DEPTH; i++) {
       z.push(cur);
       cur = await this.poseidon2(cur, cur);

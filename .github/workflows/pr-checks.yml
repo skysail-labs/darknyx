@@ -1,0 +1,639 @@
+# PR gate — checks on the on-chain ZK custody layer + the SDK primitives
+# that mirror it.
+#
+# Scope (per the CI plan):
+#   - Rust: workspace `cargo fmt --check`, `cargo clippy -D warnings`,
+#     unit tests for `darkpool-crypto`, `vault` (lib).
+#   - Circuits (Phase 2): compile all four circom circuits, run the
+#     snarkjs ceremony, produce `.wasm` + `.zkey` + `verification_key.json`.
+#   - SDK: parity tests (TS ↔ Rust byte equality, requires Rust example
+#     binaries), transport / wire-format unit tests, and the snarkjs
+#     prover smoke tests (require circuits — Phase 2 promotes these from
+#     auto-skipped to required).
+#
+# Out of scope (covered by later phases):
+#   - Strict VK-consistency byte diff. Deferred because the snarkjs dev
+#     contribution is empirically non-deterministic across runs. The
+#     real catch-net comes in Phase 3 via `programs/vault/tests/zk_*`
+#     integration tests that verify proofs against the committed Rust
+#     VK consts at runtime.
+#   - `programs/vault/tests/` litesvm integration tests (Phase 3 — they
+#     need built circuits AND a Solana SBF toolchain).
+#   - `cargo build-sbf` (Phase 4 — informational only on PRs).
+#   - Env-gated devnet/ER/CN end-to-end tests (auto-skipped without
+#     `RUN_*=1`; promoted to a nightly cron in Phase 4).
+#
+# Required-for-merge status check: the aggregator `pr-checks success`.
+# Configure branch protection on `main` (and `nyx-v2-onchain-hardening`
+# until merged) to require it.
+
+name: pr-checks
+
+on:
+  pull_request:
+    branches: [main, nyx-v2-onchain-hardening]
+  push:
+    branches: [main, nyx-v2-onchain-hardening]
+
+# When a PR is force-pushed, kill the in-flight run for that ref to save
+# minutes. Push-to-main runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # NOTE: do NOT set `RUSTFLAGS: -D warnings` here at workflow scope.
+  # It would be inherited by every `cargo` invocation in every job,
+  # including external builds like `cargo install --git iden3/circom`
+  # — upstream crates often carry harmless `dead_code` warnings that
+  # would then break the install. The strict-warnings gate is enforced
+  # for OUR workspace via the `cargo clippy --workspace -- -D warnings`
+  # CLI argument, which catches both rustc and clippy lints on our
+  # code without poisoning third-party builds.
+
+jobs:
+  # ------------------------------------------------------------------
+  # Fast path: detect which parts of the tree changed. Downstream jobs
+  # use `needs.changes.outputs.*` to decide whether to run or skip.
+  # On push-to-base (not a PR), always run everything.
+  # ------------------------------------------------------------------
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      circuits: ${{ steps.filter.outputs.circuits }}
+      sdk: ${{ steps.filter.outputs.sdk }}
+      indexer: ${{ steps.filter.outputs.indexer }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'programs/**'
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+            circuits:
+              - 'circuits/**'
+              - 'scripts/ci-build-circuits.sh'
+              - 'package.json'
+              - 'package-lock.json'
+            sdk:
+              - 'packages/sdk/**'
+              - 'package.json'
+              - 'package-lock.json'
+            indexer:
+              - 'packages/indexer/**'
+              - 'packages/sdk/src/settlement/**'
+              - 'package.json'
+              - 'package-lock.json'
+
+  rust:
+    name: Rust — fmt, clippy, unit tests, examples
+    runs-on: ubuntu-latest
+    needs: [changes]
+    # Always run on push to base branches; skip on PRs that touch nothing Rust.
+    if: >-
+      github.event_name == 'push' ||
+      needs.changes.outputs.rust == 'true'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to match rust-toolchain.toml. Bump both together.
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + target/
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pr-checks-rust
+          # Don't cache target/ subdirs we'll wipe between steps.
+          cache-on-failure: true
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (workspace, all targets)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Library unit tests only. Integration tests under `programs/vault/tests/`
+      # need the circuit artefacts (they shell out to snarkjs) — promoted in
+      # Phase 3.
+      - name: darkpool-crypto unit tests
+        run: cargo test -p darkpool-crypto --lib
+
+      - name: vault lib unit tests
+        # Includes `canonical_payload_hash_fixed_vector` (TEE-signed hash
+        # byte-stability) and `test_id` (program-ID sanity).
+        run: cargo test -p vault --lib
+
+      # SDK parity tests shell out to these helper binaries via spawnSync.
+      # They cross-validate TS Poseidon / note-commitment / nullifier /
+      # user-commitment / key-derivation against the canonical Rust impl.
+      - name: Build darkpool-crypto example binaries
+        run: cargo build -p darkpool-crypto --examples
+
+      - name: Upload example binaries for the sdk job
+        uses: actions/upload-artifact@v4
+        with:
+          name: darkpool-crypto-examples
+          path: |
+            target/debug/examples/poseidon-hash
+            target/debug/examples/user-commitment
+            target/debug/examples/note-commitment
+            target/debug/examples/nullifier
+            target/debug/examples/derive-keys
+          if-no-files-found: error
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # Phase 2 — circuit build.
+  # Installs circom + uses the npm-installed snarkjs to run the dev
+  # ceremony for all four circuits. Heavy caches on the circom binary
+  # and PTAU file so warm runs are ~30s; cold runs ~4 min (circom
+  # compile + first ceremony).
+  # ------------------------------------------------------------------
+  circuits:
+    name: Circuits — circom + snarkjs build
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      github.event_name == 'push' ||
+      needs.changes.outputs.circuits == 'true' ||
+      needs.changes.outputs.rust == 'true'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.89.0 (for circom build)
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Install Node.js (for snarkjs)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: npm ci (snarkjs + circomlib live here)
+        run: npm ci
+
+      # circom is a Rust binary; compiling from source takes ~3 min.
+      # Cache the compiled binary keyed by version so subsequent runs
+      # restore it instantly.
+      - name: Cache circom binary
+        id: cache-circom
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/circom
+          key: circom-${{ runner.os }}-v2.2.2
+
+      - name: Install circom 2.2.2 (cache miss only)
+        if: steps.cache-circom.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v2.2.2 https://github.com/iden3/circom.git /tmp/circom
+          cd /tmp/circom
+          cargo install --path circom --locked
+
+      # Compile wasm from source; use committed circuit_final.zkey files.
+      # groth16 setup is non-deterministic, so we never re-run the ceremony
+      # in CI. The committed zkeys were generated locally with `zkey beacon`
+      # and match the Rust VK constants in programs/vault/src/zk/vk_*.rs.
+      # To update after a circuit change: run build-circuits.sh locally,
+      # regenerate Rust VKs with parse-vk-to-rust.js, commit both.
+      - name: Build circuits (wasm only; zkeys from repo)
+        run: bash scripts/ci-build-circuits.sh
+
+      # Upload the build output for the sdk job. Only the artefacts the
+      # prover tests actually consume: `.wasm` and `.zkey`. We don't
+      # need the `.r1cs` / `.sym` / `verification_key.json` downstream.
+      - name: Upload circuit build artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: circuit-build
+          path: |
+            circuits/build/*/circuit_js/circuit.wasm
+            circuits/build/*/circuit_final.zkey
+          if-no-files-found: error
+          retention-days: 1
+
+  sdk:
+    name: SDK — parity + transport + provers (vitest)
+    runs-on: ubuntu-latest
+    needs: [changes, rust, circuits]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.sdk == 'true' ||
+        needs.changes.outputs.rust == 'true' ||
+        needs.changes.outputs.circuits == 'true'
+      ) &&
+      needs.rust.result != 'failure' &&
+      needs.circuits.result != 'failure'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: npm ci (root, with workspaces)
+        run: npm ci
+
+      # upload-artifact@v4 strips the least-common-directory from the
+      # uploaded paths (so the zip contains bare filenames /
+      # leaf-relative paths, NOT the full `target/debug/examples/...`
+      # or `circuits/build/...` prefixes). Re-anchor on download with
+      # an explicit `path:` so the binaries and circuit artefacts land
+      # where the tests expect them.
+      # These artifacts may not exist when the upstream job was skipped
+      # (e.g. SDK-only change). The prover / parity tests self-skip via
+      # RUN_* env checks when wasm/zkey/binaries are absent.
+      - name: Download Rust example binaries
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: darkpool-crypto-examples
+          path: target/debug/examples
+
+      - name: Make example binaries executable
+        run: chmod +x target/debug/examples/* 2>/dev/null || true
+
+      - name: Download circuit build artefacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: circuit-build
+          path: circuits/build
+
+      # Run the entire SDK suite. With the circuit artefacts now in
+      # place, the prover tests (`valid-input-prover`, `valid-create-prover`,
+      # `helpers/snarkjs-prover`) leave the auto-skip path and execute
+      # against the just-built `.wasm` + `.zkey`. Env-gated devnet / ER
+      # / change-note flows still auto-skip via `RUN_*` env-var checks.
+      - name: vitest run (parity, transport, provers, devnet-skipped)
+        run: node node_modules/vitest/vitest.mjs run --root packages/sdk
+
+  indexer:
+    name: Indexer — decode parity + db/server (vitest)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.indexer == 'true'
+      )
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22 so the built-in `node:sqlite` is available (the indexer's
+      # zero-native-dep DB). The DB tests self-skip on older runtimes; the
+      # decode parity gate runs regardless.
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: npm ci (root, with workspaces)
+        run: npm ci
+
+      - name: vitest run (decode parity + db/server)
+        run: NODE_OPTIONS=--experimental-sqlite node node_modules/vitest/vitest.mjs run --root packages/indexer
+
+  # ------------------------------------------------------------------
+  # Phase 3 — consistency: `declare_id!()` in each program's lib.rs
+  # MUST match the `[programs.localnet]` and `[programs.devnet]`
+  # entries in Anchor.toml. Pure bash, no deps; catches the class of
+  # "bumped the on-chain ID but forgot to update one of the three
+  # places it's written" bugs before any expensive job runs.
+  # ------------------------------------------------------------------
+  consistency:
+    name: Consistency — program-id sanity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: declare_id!() <-> Anchor.toml parity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          extract_declare_id() {
+            local file="$1"
+            grep -oE 'declare_id!\("[1-9A-HJ-NP-Za-km-z]+"\)' "$file" \
+              | head -n1 \
+              | sed -E 's/^declare_id!\("(.+)"\)$/\1/'
+          }
+
+          extract_anchor_toml_id() {
+            local prog="$1"
+            local section="$2"
+            awk -v sec="[programs.${section}]" -v prog="${prog}" '
+              $0 == sec { in_sec = 1; next }
+              /^\[/ && in_sec { exit }
+              in_sec && $1 == prog && $2 == "=" {
+                gsub(/"/, "", $3); print $3; exit
+              }
+            ' Anchor.toml
+          }
+
+          fail=0
+          for prog in vault; do
+            decl=$(extract_declare_id "programs/${prog}/src/lib.rs")
+            local_id=$(extract_anchor_toml_id "$prog" "localnet")
+            devnet_id=$(extract_anchor_toml_id "$prog" "devnet")
+            echo "${prog}: declare_id=${decl}  localnet=${local_id}  devnet=${devnet_id}"
+            if [[ -z "$decl" || -z "$local_id" || -z "$devnet_id" ]]; then
+              echo "::error file=Anchor.toml::Missing program-id entry for ${prog}"
+              fail=1
+            elif [[ "$decl" != "$local_id" || "$decl" != "$devnet_id" ]]; then
+              echo "::error file=programs/${prog}/src/lib.rs::declare_id!() does not match Anchor.toml for ${prog}"
+              fail=1
+            fi
+          done
+          if [[ "$fail" -ne 0 ]]; then exit 1; fi
+          echo "OK: all declare_id!() values match Anchor.toml"
+
+  # ------------------------------------------------------------------
+  # Phase 3 — SBF build.
+  # Produces `target/deploy/vault.so` and uploads
+  # them so downstream litesvm jobs don't each repeat the ~5-min
+  # cargo-build-sbf. We install Anza's Solana CLI (which bundles its
+  # own SBF toolchain) instead of relying on the host Rust pin —
+  # build-sbf insists on its bundled compiler. The install dir is
+  # ~700 MB so we cache it aggressively by version.
+  # ------------------------------------------------------------------
+  sbf-build:
+    name: SBF — cargo build-sbf
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      github.event_name == 'push' ||
+      needs.changes.outputs.rust == 'true'
+    timeout-minutes: 25
+    env:
+      # Match the developer's local Agave install. v2.x bundles
+      # Cargo 1.79.0, which cannot parse manifests that declare
+      # edition = "2024" — and at least one transitive dep
+      # (toml_parser 1.1.2+spec-1.1.0, pulled in by the Solana
+      # SDK toml stack) now uses that edition. v3.1.x bundles
+      # platform-tools v1.52 with rustc/cargo 1.89.0.
+      SOLANA_CLI_VERSION: v3.1.12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Solana CLI install
+        id: cache-solana
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/solana/install
+          key: solana-${{ runner.os }}-${{ env.SOLANA_CLI_VERSION }}
+
+      - name: Install Solana CLI (cache miss only)
+        if: steps.cache-solana.outputs.cache-hit != 'true'
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/${SOLANA_CLI_VERSION}/install)"
+
+      - name: Put Solana CLI on PATH
+        run: |
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Verify solana + cargo-build-sbf available
+        run: |
+          solana --version
+          cargo build-sbf --version || cargo-build-sbf --version
+
+      - name: Cache cargo registry + target/
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Separate key from the host-rust job: build-sbf writes
+          # intermediates under target/sbf-solana-solana/ and the
+          # registry shape diverges enough that sharing slows both.
+          # Include a source hash so the cache busts when programs/ or
+          # crates/ change — without this the key never busts and stale
+          # .so files can pass CI after a code change.
+          shared-key: pr-checks-sbf
+          key: pr-checks-sbf-${{ hashFiles('programs/**/*.rs', 'crates/**/*.rs', 'Cargo.lock') }}
+          cache-on-failure: true
+
+      # Empirically, `cargo build-sbf` at the workspace root only emits a
+      # full .so for one program — the other gets an 896-byte stub. The
+      # workaround the project's own deploy-devnet.sh recommends is to
+      # invoke build-sbf per-program with an explicit manifest path. Do
+      # that here so the artefact downstream litesvm jobs consume holds
+      # two real binaries.
+      - name: cargo build-sbf — vault
+        run: cargo build-sbf --manifest-path programs/vault/Cargo.toml
+
+      - name: Sanity-check .so size (must be > 100 KB)
+        shell: bash
+        run: |
+          set -euo pipefail
+          so=target/deploy/vault.so
+          sz=$(stat -c%s "$so" 2>/dev/null || stat -f%z "$so")
+          echo "$so: $sz bytes"
+          if [[ "$sz" -lt 102400 ]]; then
+            echo "::error file=$so::expected a real Solana program (>100 KB); got a stub ($sz bytes)."
+            exit 1
+          fi
+
+      - name: Upload program .so file for litesvm jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbf-programs
+          path: |
+            target/deploy/vault.so
+          if-no-files-found: error
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # Phase 3 — cross-environment proof round-trip.
+  # `zk_roundtrip` and `zk_spend_roundtrip` are the Section 22.4
+  # "critical compatibility check": generate a snarkjs Groth16 proof
+  # and verify it with the exact `groth16-solana` code the on-chain
+  # program runs. `merkle_host` exercises pure-Rust Merkle invariants
+  # (poseidon2, zero-subtree roots, append_leaf). None of these need
+  # the .so — host-only — so they ride the circuit artefact alone
+  # and run in parallel with sbf-build.
+  # ------------------------------------------------------------------
+  vault-zk:
+    name: Vault ZK — host round-trips + Merkle invariants
+    runs-on: ubuntu-latest
+    needs: [changes, circuits]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.rust == 'true' ||
+        needs.changes.outputs.circuits == 'true'
+      ) && needs.circuits.result != 'failure'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Install Node.js (for snarkjs)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: npm ci (snarkjs lives here)
+        run: npm ci
+
+      - name: Cache cargo registry + target/
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pr-checks-rust
+
+      - name: Download circuit build artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: circuit-build
+          path: circuits/build
+
+      - name: Cross-env round-trips + merkle host tests
+        run: |
+          cargo test -p vault \
+            --test zk_roundtrip \
+            --test zk_spend_roundtrip \
+            --test merge_verify \
+            --test merkle_host \
+            -- --nocapture
+
+  # ------------------------------------------------------------------
+  # Phase 3 — vault litesvm tests.
+  # Boots LiteSVM, loads `target/deploy/vault.so`, and drives the
+  # registration + governance paths end-to-end.
+  # `user_commitment_registration` shells out to snarkjs for a
+  # VALID_WALLET_CREATE proof, so it needs the circuit artefact too.
+  # `set_protocol_config` does not, but pulling both in is cheap.
+  # ------------------------------------------------------------------
+  vault-litesvm:
+    name: Vault LiteSVM — registration + governance
+    runs-on: ubuntu-latest
+    needs: [changes, sbf-build, circuits]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.rust == 'true' ||
+        needs.changes.outputs.circuits == 'true'
+      ) &&
+      needs['sbf-build'].result != 'failure' &&
+      needs.circuits.result != 'failure'
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Install Node.js (for snarkjs)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Cache cargo registry + target/
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pr-checks-rust
+
+      - name: Download SBF programs
+        uses: actions/download-artifact@v4
+        with:
+          name: sbf-programs
+          path: target/deploy
+
+      - name: Download circuit build artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: circuit-build
+          path: circuits/build
+
+      - name: vault integration tests
+        # Incl. the settle-regression suite migrated from matching_engine:
+        # tee_forced_settle_batched (1:N BatchValidityMarker lifecycle) +
+        # match_batch_verify (real N=16 proof → on-chain verify_match_batch).
+        run: |
+          cargo test -p vault \
+            --test set_protocol_config \
+            --test set_tee_pubkey \
+            --test user_commitment_registration \
+            --test tee_forced_settle_batched \
+            --test match_batch_verify \
+            -- --nocapture
+
+  # ------------------------------------------------------------------
+  # Aggregator. Branch protection should require ONLY this status check.
+  # The individual job results are visible in the PR UI for debugging.
+  # Note: dashes in job names require bracket lookup in the `needs`
+  # expression context (`needs.foo-bar` parses as `needs.foo - bar`).
+  # ------------------------------------------------------------------
+  ci-success:
+    name: pr-checks success
+    needs:
+      - changes
+      - rust
+      - circuits
+      - sdk
+      - indexer
+      - consistency
+      - sbf-build
+      - vault-zk
+      - vault-litesvm
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Verify all required jobs passed
+        # 'skipped' is acceptable — it means the paths filter determined
+        # that job was not relevant to this change. 'failure' and
+        # 'cancelled' are hard failures.
+        if: >-
+          ${{
+            (needs.rust.result != 'success' && needs.rust.result != 'skipped') ||
+            (needs.circuits.result != 'success' && needs.circuits.result != 'skipped') ||
+            (needs.sdk.result != 'success' && needs.sdk.result != 'skipped') ||
+            (needs.indexer.result != 'success' && needs.indexer.result != 'skipped') ||
+            needs.consistency.result != 'success' ||
+            (needs['sbf-build'].result != 'success' && needs['sbf-build'].result != 'skipped') ||
+            (needs['vault-zk'].result != 'success' && needs['vault-zk'].result != 'skipped') ||
+            (needs['vault-litesvm'].result != 'success' && needs['vault-litesvm'].result != 'skipped')
+          }}
+        run: |
+          echo "rust:                     ${{ needs.rust.result }}"
+          echo "circuits:                 ${{ needs.circuits.result }}"
+          echo "sdk:                      ${{ needs.sdk.result }}"
+          echo "indexer:                  ${{ needs.indexer.result }}"
+          echo "consistency:              ${{ needs.consistency.result }}"
+          echo "sbf-build:                ${{ needs['sbf-build'].result }}"
+          echo "vault-zk:                 ${{ needs['vault-zk'].result }}"
+          echo "vault-litesvm:            ${{ needs['vault-litesvm'].result }}"
+          echo "::error::One or more required jobs failed."
+          exit 1
+      - name: All required checks passed
+        run: echo "Phase 3 gate satisfied."

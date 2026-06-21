@@ -20,11 +20,12 @@
 
 pub mod errors;
 pub mod field;
+#[cfg(not(target_os = "solana"))]
+pub mod keys;
 pub mod note;
 pub mod nullifier;
 pub mod poseidon;
-#[cfg(not(target_os = "solana"))]
-pub mod keys;
+pub mod price_commitment;
 #[cfg(not(target_os = "solana"))]
 pub mod user_commitment;
 #[cfg(not(target_os = "solana"))]
@@ -34,12 +35,15 @@ pub use errors::CryptoError;
 pub use field::{fr_from_be_bytes, fr_to_be_bytes, pubkey_to_fr_pair, Fr, FR_BYTES};
 #[cfg(not(target_os = "solana"))]
 pub use keys::{
-    derive_master_viewing_key, derive_spending_key, derive_trading_key_at_offset, KeyBundle,
-    MasterSeed, MASTER_SEED_BYTES,
+    derive_blinding_factor, derive_inner_hash, derive_master_viewing_key, derive_spending_key,
+    derive_trading_key_at_offset, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
 };
-pub use note::{Note, NoteCommitment, NOTE_COMMITMENT_BYTES};
-pub use nullifier::{nullifier, Nullifier, NULLIFIER_BYTES};
+pub use note::{
+    commitment_from_fields, commitment_from_fields_v2, Note, NoteCommitment, NOTE_COMMITMENT_BYTES,
+};
+pub use nullifier::{nullifier, nullifier_v2, Nullifier, NULLIFIER_BYTES};
 pub use poseidon::{poseidon_hash, poseidon_hash_bytes};
+pub use price_commitment::price_commitment;
 #[cfg(not(target_os = "solana"))]
 pub use user_commitment::{user_commitment_from_keys, UserCommitmentInputs};
 #[cfg(not(target_os = "solana"))]

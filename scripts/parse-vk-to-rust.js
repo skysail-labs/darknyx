@@ -24,6 +24,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { spawnSync } = require("child_process");
 
 function bnToBytesBE(decStr) {
   // Parse decimal string to 32-byte big-endian.
@@ -113,6 +114,19 @@ function main() {
 
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, lines.join("\n"));
+
+  // We emit one-byte-per-element arrays on a single line, but rustfmt
+  // wraps at column 100. Run rustfmt on the output so `cargo fmt --check`
+  // stays clean without a manual reformatting pass after every VK refresh.
+  const fmt = spawnSync("rustfmt", ["--edition", "2021", outPath], {
+    stdio: "inherit",
+  });
+  if (fmt.error || fmt.status !== 0) {
+    console.warn(
+      `[parse-vk-to-rust] WARNING: rustfmt failed on ${outPath} (${fmt.error || `exit ${fmt.status}`}); run \`cargo fmt --all\` manually`,
+    );
+  }
+
   console.log(`[parse-vk-to-rust] wrote ${outPath}`);
 }
 

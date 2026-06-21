@@ -1,0 +1,105 @@
+[package]
+name = "nyx-tee-loadgen"
+version.workspace = true
+edition.workspace = true
+description = "End-to-end testing harness for nyx-tee. Drives a configurable synthetic workload (scenarios: uniform / exact-match / partial-fill / ioc-fok / over-collateral; configurable mints + symbol + traders) against a running TEE (local-simulator or Phala devnet), with /system/status preflight, rate-limit-aware (429) backoff, optional order-lifecycle polling, and submit / match / cancel latency-percentile + throughput reporting. Real on-chain settle is the planned --real-settle mode (see BENCHMARK.md). See docs/tee-architecture.md §13.4 for design rationale."
+
+[[bin]]
+name = "nyx-tee-loadgen"
+path = "src/main.rs"
+
+[lib]
+name = "nyx_tee_loadgen"
+path = "src/lib.rs"
+
+[dependencies]
+# Sibling crates — we sign valid orders using the matcher's
+# canonical encoder, exactly the same code path the TEE's
+# Layer-B handler verifies against. Anything that drifts here
+# is caught by the cross-language parity test in
+# `packages/sdk/tests/order-canonical-parity.test.ts`.
+darkpool-matcher = { path = "../darkpool-matcher" }
+# Note-commitment derivation — orders must carry an input-note opening
+# that the TEE intake verifies against the signed `note_commitment`
+# (`commitment_from_fields`), same primitive the deposit path uses.
+darkpool-crypto = { path = "../darkpool-crypto" }
+
+# Async runtime + HTTP client.
+tokio   = { workspace = true }
+reqwest = { workspace = true }
+
+# Signing. Each virtual trader gets a fresh keypair so the
+# matcher's self-trade-prevention sees them as distinct.
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+rand          = { workspace = true }
+rand_distr    = { workspace = true }
+
+# CLI + reporting.
+clap        = { workspace = true }
+hdrhistogram = { workspace = true }
+
+# Serde for wire bodies (and the report writer).
+serde      = { workspace = true }
+serde_json = { workspace = true }
+hex        = { workspace = true }
+
+# Tracing — same shape as nyx-tee so logs interleave cleanly when
+# loadgen + TEE run in the same shell.
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+anyhow    = { workspace = true }
+thiserror = { workspace = true }
+
+# ── real-settle (opt-in) ──────────────────────────────────────────────────
+# A Rust VALID_INPUT prover (ark-circom against circuits/build/valid_input) +
+# a Poseidon Merkle witness, so the loadgen can drive REAL on-chain settle
+# (deposit → prove → order → settle) — not just synthetic intake. Gated behind
+# the `real-settle` feature so the default synthetic build stays lean (no
+# ark-circom / wasmer pulled in). See src/real_settle.rs + BENCHMARK.md.
+ark-circom    = { workspace = true, optional = true }
+ark-bn254     = { workspace = true, optional = true }
+ark-groth16   = { workspace = true, optional = true }
+ark-ff        = { workspace = true, optional = true }
+num-bigint    = { workspace = true, optional = true }
+# Increment B (on-chain glue): the modular solana stack the workspace
+# standardised on (NOT solana-client/sdk — those conflict with ark 0.5 on
+# zeroize). All already compiled via the nyx-tee dev-dep, so this is mostly
+# linking. The JSON-RPC client is hand-rolled on reqwest (already a dep).
+solana-address          = { workspace = true, optional = true }
+solana-hash             = { workspace = true, optional = true }
+solana-keypair          = { workspace = true, optional = true }
+solana-signature        = { workspace = true, optional = true }
+solana-signer           = { workspace = true, optional = true }
+solana-instruction      = { workspace = true, optional = true }
+solana-message          = { workspace = true, optional = true }
+solana-transaction      = { workspace = true, optional = true }
+solana-system-interface = { workspace = true, optional = true }
+sha2                    = { workspace = true, optional = true }
+bincode                 = { workspace = true, optional = true }
+base64                  = { version = "0.22", optional = true }
+bs58                    = { version = "0.5", optional = true }
+
+[features]
+# Increment A: the Rust VALID_INPUT prover + Merkle witness (CVM-free, tested).
+real-settle = ["dep:ark-circom", "dep:ark-bn254", "dep:ark-groth16", "dep:ark-ff", "dep:num-bigint"]
+# Increment B: the on-chain deposit/settle orchestration (needs a live CVM to
+# validate; the vault ix encoding is unit-tested locally). Implies real-settle.
+real-settle-chain = [
+    "real-settle",
+    "dep:solana-address", "dep:solana-hash", "dep:solana-keypair",
+    "dep:solana-signature", "dep:solana-signer", "dep:solana-instruction",
+    "dep:solana-message", "dep:solana-transaction", "dep:solana-system-interface",
+    "dep:sha2", "dep:bincode", "dep:base64", "dep:bs58",
+]
+
+[dev-dependencies]
+# Smoke test needs to drive nyx-tee in-process with the feature
+# on so it can seed the oracle via the debug endpoint.
+nyx-tee = { path = "../nyx-tee", features = ["debug_endpoints"] }
+darkpool-matcher = { path = "../darkpool-matcher" }
+tokio   = { workspace = true, features = ["full", "test-util"] }
+axum    = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn" }

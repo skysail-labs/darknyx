@@ -18,8 +18,6 @@ import { consumedNotePda, noteLockPda } from "./idl/vault-client.js";
 
 export interface DarkPoolClientConfig {
   programId: PublicKey;
-  /** Matching-engine program id. Optional for pre-Phase-3 flows (deposit/withdraw). */
-  matchingEngineProgramId?: PublicKey;
   seedMode: MasterSeedMode;
   tradingOffset?: bigint;
   connectionProvider: SolanaConnectionProvider;
@@ -42,7 +40,6 @@ export interface NoteStatusInfo {
 
 export class DarkPoolClient {
   readonly programId: PublicKey;
-  readonly matchingEngineProgramId: PublicKey | undefined;
   readonly connectionProvider: SolanaConnectionProvider;
   readonly providers: DarkPoolClientConfig["providers"];
   readonly zkProver: IDarkPoolZkProverSuite;
@@ -53,7 +50,6 @@ export class DarkPoolClient {
 
   constructor(cfg: DarkPoolClientConfig) {
     this.programId = cfg.programId;
-    this.matchingEngineProgramId = cfg.matchingEngineProgramId;
     this.connectionProvider = cfg.connectionProvider;
     this.providers = cfg.providers;
     this.zkProver = cfg.zkProver;

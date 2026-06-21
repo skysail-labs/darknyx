@@ -27,6 +27,19 @@
 //! blinding_r(i) = reduce_mod_r( KMAC256(master_seed, b"note_blinding_v1" || i_u64_le, 512) )
 //! ```
 //!
+//! Inner-hash derivation (v2 note construction — the per-order anchor pool):
+//!
+//! ```text
+//! inner_hash(order_id, j) =
+//!     reduce_mod_r( KMAC256(master_seed, b"nyx-inner-hash-v1" || order_id[16] || j_u32_le, 512) )
+//! ```
+//!
+//! `inner_hash` replaces the (nonce, blinding_r) pair in a v2 note commitment
+//! and anchors the v2 nullifier (see `note::commitment_from_fields_v2` /
+//! `nullifier::nullifier_v2`). It is deterministic from the master seed so a
+//! client can REGENERATE every change-note inner_hash (and thus nullifier) from
+//! `(master_seed, order_id)` alone — full recoverability without local state.
+//!
 //! All KDF outputs are 512 bits (64 bytes) to make the reduction mod r statistically
 //! uniform (bias < 2^-256).
 
@@ -51,6 +64,9 @@ const INFO_VIEWING: &[u8] = b"darkpool_viewing_key_v1";
 const INFO_TRADING: &[u8] = b"darkpool_trading_key_v1";
 const INFO_ROOT: &[u8] = b"darkpool_root_key_v1";
 const INFO_BLINDING: &[u8] = b"note_blinding_v1";
+/// Custom-info string for the v2 anchor-pool inner_hash derivation. The `_v1`
+/// suffix versions the derivation independently of the note-construction version.
+const INFO_INNER_HASH: &[u8] = b"nyx-inner-hash-v1";
 
 /// The raw master seed (64 bytes, cryptographically random or wallet-derived).
 #[derive(Clone)]
@@ -134,13 +150,17 @@ pub fn derive_master_viewing_key(seed: &MasterSeed) -> Result<Fr, CryptoError> {
 
 /// Derive an Ed25519 Trading Key at a given rotation offset.
 /// offset = 0 for the first trading key; rotate by incrementing.
-pub fn derive_trading_key_at_offset(seed: &MasterSeed, offset: u64) -> Result<SigningKey, CryptoError> {
+pub fn derive_trading_key_at_offset(
+    seed: &MasterSeed,
+    offset: u64,
+) -> Result<SigningKey, CryptoError> {
     let hk = Hkdf::<Sha256>::new(None, seed.as_bytes());
     let mut info = Vec::with_capacity(INFO_TRADING.len() + 8);
     info.extend_from_slice(INFO_TRADING);
     info.extend_from_slice(&offset.to_le_bytes());
     let mut okm = [0u8; 32];
-    hk.expand(&info, &mut okm).map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
+    hk.expand(&info, &mut okm)
+        .map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
     // Ed25519 accepts any 32-byte secret.
     let secret: SecretKey = okm;
     Ok(SigningKey::from_bytes(&secret))
@@ -152,7 +172,8 @@ pub fn derive_trading_key_at_offset(seed: &MasterSeed, offset: u64) -> Result<Si
 pub fn derive_root_key(seed: &MasterSeed) -> Result<SigningKey, CryptoError> {
     let hk = Hkdf::<Sha256>::new(None, seed.as_bytes());
     let mut okm = [0u8; 32];
-    hk.expand(INFO_ROOT, &mut okm).map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
+    hk.expand(INFO_ROOT, &mut okm)
+        .map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
     Ok(SigningKey::from_bytes(&okm))
 }
 
@@ -166,12 +187,32 @@ pub fn derive_blinding_factor(seed: &MasterSeed, counter: u64) -> Fr {
     fr_from_uniform_bytes(&bytes)
 }
 
+/// Derive the `inner_hash` for anchor `index` of a given order. Deterministic
+/// from `(master_seed, order_id, index)` so the client can regenerate the whole
+/// anchor pool (and the matching nullifiers via [`crate::nullifier::nullifier_v2`])
+/// without persisting local state. The result is a uniform, Fr-safe field
+/// element. `order_id` is the 16-byte client-chosen order identifier (see
+/// `OrderCanonical::order_id`); `index` is the 0-based slot within the pool.
+///
+/// KMAC custom-info = `INFO_INNER_HASH || order_id[16] || index_u32_le` — all
+/// fields fixed-width so the encoding is unambiguous. Mirrored in TS by
+/// `deriveInnerHash` (`packages/sdk/src/keys/key-generators.ts`).
+pub fn derive_inner_hash(seed: &MasterSeed, order_id: &[u8; 16], index: u32) -> Fr {
+    let mut info = Vec::with_capacity(INFO_INNER_HASH.len() + 16 + 4);
+    info.extend_from_slice(INFO_INNER_HASH);
+    info.extend_from_slice(order_id);
+    info.extend_from_slice(&index.to_le_bytes());
+    let bytes = kmac256(seed.as_bytes(), &info, &[], 64);
+    fr_from_uniform_bytes(&bytes)
+}
+
 // ---------- internal helpers ----------
 
 fn hkdf_expand_64(ikm: &[u8], info: &[u8]) -> Result<[u8; 64], CryptoError> {
     let hk = Hkdf::<Sha256>::new(None, ikm);
     let mut okm = [0u8; 64];
-    hk.expand(info, &mut okm).map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
+    hk.expand(info, &mut okm)
+        .map_err(|e| CryptoError::Hkdf(format!("{e:?}")))?;
     Ok(okm)
 }
 
@@ -241,7 +282,7 @@ fn encode_string(s: &[u8]) -> Vec<u8> {
 fn bytepad(x: &[u8], w: usize) -> Vec<u8> {
     let mut v = left_encode(w as u64);
     v.extend_from_slice(x);
-    while v.len() % w != 0 {
+    while !v.len().is_multiple_of(w) {
         v.push(0);
     }
     v
@@ -313,5 +354,46 @@ mod tests {
             let r = derive_blinding_factor(&s, i);
             assert!(set.insert(r), "collision at counter {i}");
         }
+    }
+
+    #[test]
+    fn inner_hash_deterministic() {
+        let s = fixed_seed();
+        let oid = [0x11u8; 16];
+        assert_eq!(
+            derive_inner_hash(&s, &oid, 0),
+            derive_inner_hash(&s, &oid, 0)
+        );
+    }
+
+    #[test]
+    fn inner_hash_unique_per_index_and_order() {
+        let s = fixed_seed();
+        let oid_a = [0x11u8; 16];
+        let oid_b = [0x22u8; 16];
+        let mut set = std::collections::HashSet::new();
+        // Distinct across indices within an order.
+        for j in 0..256u32 {
+            assert!(
+                set.insert(derive_inner_hash(&s, &oid_a, j)),
+                "collision at index {j}"
+            );
+        }
+        // Distinct across orders at the same index.
+        assert_ne!(
+            derive_inner_hash(&s, &oid_a, 0),
+            derive_inner_hash(&s, &oid_b, 0)
+        );
+    }
+
+    #[test]
+    fn inner_hash_differs_from_blinding() {
+        // Different domain string → must not collide with the blinding KDF.
+        let s = fixed_seed();
+        let oid = [0u8; 16];
+        assert_ne!(
+            derive_inner_hash(&s, &oid, 0),
+            derive_blinding_factor(&s, 0)
+        );
     }
 }

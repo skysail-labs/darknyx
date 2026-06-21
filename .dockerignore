@@ -1,0 +1,49 @@
+# Root build-context allowlist for deploy/Dockerfile.
+#
+# Docker reads the .dockerignore at the CONTEXT root (the repo root,
+# since the Dockerfile COPYs Cargo.toml / crates/ / programs/ from
+# there). `deploy/.dockerignore` is NOT applied for a root context, so
+# without this file the context would include target/ (~32 GB),
+# circuits/ (ptau + zkeys), dstack/, node_modules/, etc.
+#
+# Allowlist: ignore everything, then re-include only what the
+# Dockerfile actually COPYs.
+*
+!Cargo.toml
+!Cargo.lock
+!crates
+!programs
+
+# N=16 settle-prover artifacts, copied into the runtime image (the
+# prover reads /circuits/build/match_batch_n16/). Ladder-include ONLY
+# this circuit dir — circuits/ is otherwise excluded so we don't drag in
+# pot18 (~288 MB) or the other circuits' zkeys. The zkey is committed;
+# circuit.r1cs + circuit_js/circuit.wasm are compiled in CI before the
+# build (see .github/workflows/tee-image.yml).
+!circuits
+circuits/*
+!circuits/build
+circuits/build/*
+!circuits/build/match_batch_n16
+# circuit.sym (14 MB) is debug-only — the prover never reads it.
+circuits/build/match_batch_n16/circuit.sym
+# circuit_cpp/ is the native witness-gen SOURCE (32 MB circuit.cpp + fr.asm).
+# The image needs the compiled `circuit` binary AND its `circuit.dat` constants
+# (main.cpp loads `<argv[0]>.dat` at runtime). Ship those two, exclude the rest.
+circuits/build/match_batch_n16/circuit_cpp/*
+!circuits/build/match_batch_n16/circuit_cpp/circuit
+!circuits/build/match_batch_n16/circuit_cpp/circuit.dat
+
+# rapidsnark vendored source (the `rapidsnark` prover backend). The
+# Dockerfile builds its static libs from this; CI checks it out with
+# `submodules: recursive` so the nested deps (ffiasm/json/circom_runtime)
+# are present. Exclude any local build dirs — the image builds them fresh.
+!third_party
+third_party/rapidsnark/build_prover
+third_party/rapidsnark/depends/gmp/build*
+third_party/rapidsnark/depends/gmp/package*
+
+# Belt-and-suspenders: never ship build artifacts even if a path
+# above is widened later.
+**/target
+**/node_modules

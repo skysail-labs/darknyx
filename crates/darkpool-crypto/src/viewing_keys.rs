@@ -33,11 +33,7 @@ pub fn derive_viewing_key_for_pair(
 }
 
 /// Derive a per-month viewing key from a pair viewing key.
-pub fn derive_monthly_viewing_key(
-    pair_vk: &Fr,
-    year: u64,
-    month: u64,
-) -> Result<Fr, CryptoError> {
+pub fn derive_monthly_viewing_key(pair_vk: &Fr, year: u64, month: u64) -> Result<Fr, CryptoError> {
     let yearly = poseidon_hash(&[*pair_vk, u64_to_fr(year)])?;
     poseidon_hash(&[yearly, u64_to_fr(month)])
 }
@@ -164,7 +160,10 @@ mod tests {
 
         // Wrong pair (same month) must fail.
         let wrong_pair = scope_aead_decrypt(&scope_wbtc_jan, &nonce, &ct).unwrap();
-        assert!(wrong_pair.is_none(), "wBTC/USDC key decrypted SOL/USDC ciphertext!");
+        assert!(
+            wrong_pair.is_none(),
+            "wBTC/USDC key decrypted SOL/USDC ciphertext!"
+        );
 
         // Tampered ciphertext must fail under right key too.
         let mut bad = ct.clone();

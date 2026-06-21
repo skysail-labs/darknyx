@@ -1,0 +1,7 @@
+[submodule "third_party/rapidsnark"]
+	path = third_party/rapidsnark
+	url = https://github.com/iden3/rapidsnark.git
+[submodule "third_party/icicle-snark"]
+	path = third_party/icicle-snark
+	url = https://github.com/skysail-labs/icicle-snark.git
+	branch = nyx

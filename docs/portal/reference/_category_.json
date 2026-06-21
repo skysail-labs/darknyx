@@ -1,0 +1,10 @@
+{
+  "label": "Reference",
+  "position": 10,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "Reference",
+    "description": "Error handling, the venue's degraded-mode signaling, and a glossary of terms."
+  }
+}

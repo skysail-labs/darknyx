@@ -5,6 +5,10 @@
 //! any circuit change.
 
 pub mod verifier;
+pub mod vk_match_batch_n16;
+pub mod vk_valid_input;
+pub mod vk_valid_merge_k2;
+pub mod vk_valid_merge_k4;
 pub mod vk_valid_spend;
 pub mod vk_valid_wallet_create;
 

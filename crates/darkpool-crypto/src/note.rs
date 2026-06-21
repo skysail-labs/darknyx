@@ -2,18 +2,44 @@
 //!
 //! Note commitment formula (must be byte-identical across Rust, circom, on-chain):
 //!
+//! Domain tag DOMAIN_NOTE=2 is prepended as the first Poseidon input to prevent
+//! second-preimage collisions with the owner-commitment and nullifier Poseidon
+//! uses (which use DOMAIN_OWNER=1 and DOMAIN_NULL=3 respectively).
+//!
 //! ```text
-//!     C(note) = Poseidon6(
+//!     C(note) = Poseidon7(
+//!         DOMAIN_NOTE=2,        // domain separation tag
 //!         token_mint_lo_u128,   // Solana pubkey low 128 bits
 //!         token_mint_hi_u128,   // Solana pubkey high 128 bits
 //!         amount_u64,
-//!         owner_commitment_fr,
+//!         owner_commitment_fr,  // = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
 //!         nonce_fr,
 //!         blinding_r_fr,
 //!     )
 //! ```
 //!
-//! Reference: Section 23.1.2 of darkpool_protocol_spec_v3_changed.md
+//! ## v2 (inner_hash) construction
+//!
+//! The inner_hash migration collapses the two per-note randomness fields
+//! (`nonce`, `blinding_r`) into a SINGLE `inner_hash`, and re-anchors the
+//! nullifier on that `inner_hash` instead of the commitment (see
+//! [`crate::nullifier::nullifier_v2`]). This decouples the nullifier from the
+//! note amount so a client can PRE-SUPPLY the nullifier of a change note it has
+//! not yet received (the per-order "anchor pool"). The mint binding is kept:
+//!
+//! ```text
+//!     C_v2(note) = Poseidon6(
+//!         DOMAIN_NOTE=2,        // same domain tag
+//!         token_mint_lo_u128,
+//!         token_mint_hi_u128,
+//!         amount_u64,
+//!         owner_commitment_fr,
+//!         inner_hash_fr,        // replaces (nonce, blinding_r)
+//!     )
+//! ```
+//!
+//! Reference: Section 23.1.2 of darkpool_protocol_spec_v3_changed.md +
+//! `~/.claude/plans/agile-chasing-parnas.md`
 
 use crate::errors::CryptoError;
 use crate::field::{fr_to_be_bytes, pubkey_to_fr_pair, u64_to_fr, Fr};
@@ -57,6 +83,16 @@ impl Note {
 /// Compute a note commitment directly from its field components. Useful for
 /// the vault program, which does not need to hold a full `Note` struct in
 /// account state.
+const DOMAIN_OWNER: u64 = 1;
+const DOMAIN_NOTE: u64 = 2;
+
+/// Compute the owner commitment: Poseidon3(DOMAIN_OWNER, spending_key, r_owner).
+/// This is the value stored inside each note and constrained by VALID_SPEND.
+pub fn owner_commitment(spending_key: &Fr, r_owner: &Fr) -> Result<[u8; 32], CryptoError> {
+    let h = poseidon_hash(&[Fr::from(DOMAIN_OWNER), *spending_key, *r_owner])?;
+    Ok(fr_to_be_bytes(&h))
+}
+
 pub fn commitment_from_fields(
     token_mint: &[u8; 32],
     amount: u64,
@@ -72,7 +108,47 @@ pub fn commitment_from_fields(
     let nonce_fr = fr_from_be_bytes(nonce)?;
     let blinding_fr = fr_from_be_bytes(blinding_r)?;
 
-    let inputs: [Fr; 6] = [mint_lo, mint_hi, amount_fr, owner_fr, nonce_fr, blinding_fr];
+    let inputs: [Fr; 7] = [
+        Fr::from(DOMAIN_NOTE),
+        mint_lo,
+        mint_hi,
+        amount_fr,
+        owner_fr,
+        nonce_fr,
+        blinding_fr,
+    ];
+    let h = poseidon_hash(&inputs)?;
+    Ok(fr_to_be_bytes(&h))
+}
+
+/// v2 note commitment: `Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi, amount,
+/// owner_commitment, inner_hash)`. Collapses the (nonce, blinding_r) pair of
+/// [`commitment_from_fields`] into a single `inner_hash` while keeping the mint
+/// binding. Pairs with [`crate::nullifier::nullifier_v2`].
+///
+/// `inner_hash` is a canonical BN254 `Fr` (32 BE bytes) — typically derived
+/// client-side via [`crate::keys::derive_inner_hash`].
+pub fn commitment_from_fields_v2(
+    token_mint: &[u8; 32],
+    amount: u64,
+    owner_commitment: &[u8; 32],
+    inner_hash: &[u8; 32],
+) -> Result<NoteCommitment, CryptoError> {
+    use crate::field::fr_from_be_bytes;
+
+    let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
+    let amount_fr = u64_to_fr(amount);
+    let owner_fr = fr_from_be_bytes(owner_commitment)?;
+    let inner_fr = fr_from_be_bytes(inner_hash)?;
+
+    let inputs: [Fr; 6] = [
+        Fr::from(DOMAIN_NOTE),
+        mint_lo,
+        mint_hi,
+        amount_fr,
+        owner_fr,
+        inner_fr,
+    ];
     let h = poseidon_hash(&inputs)?;
     Ok(fr_to_be_bytes(&h))
 }
@@ -120,5 +196,66 @@ mod tests {
         a.blinding_r = [5u8; 32];
         b.blinding_r = [6u8; 32];
         assert_ne!(a.commitment().unwrap(), b.commitment().unwrap());
+    }
+
+    // ── v2 (inner_hash) commitment ─────────────────────────────────────────
+
+    fn inner(seed: u8) -> [u8; 32] {
+        // Fr-safe: small value in the low byte, zero top bytes.
+        let mut v = [0u8; 32];
+        v[31] = seed;
+        v
+    }
+
+    #[test]
+    fn commitment_v2_deterministic() {
+        let mint = [1u8; 32];
+        let owner = [2u8; 32];
+        let ih = inner(7);
+        let c1 = commitment_from_fields_v2(&mint, 100, &owner, &ih).unwrap();
+        let c2 = commitment_from_fields_v2(&mint, 100, &owner, &ih).unwrap();
+        assert_eq!(c1, c2);
+    }
+
+    #[test]
+    fn commitment_v2_distinguishes_amount_mint_owner_inner() {
+        let mint = [1u8; 32];
+        let owner = [2u8; 32];
+        let base = commitment_from_fields_v2(&mint, 100, &owner, &inner(7)).unwrap();
+        // amount
+        assert_ne!(
+            base,
+            commitment_from_fields_v2(&mint, 101, &owner, &inner(7)).unwrap()
+        );
+        // mint
+        let mut mint2 = mint;
+        mint2[0] = 0xaa;
+        assert_ne!(
+            base,
+            commitment_from_fields_v2(&mint2, 100, &owner, &inner(7)).unwrap()
+        );
+        // owner
+        let mut owner2 = owner;
+        owner2[31] = 3;
+        assert_ne!(
+            base,
+            commitment_from_fields_v2(&mint, 100, &owner2, &inner(7)).unwrap()
+        );
+        // inner_hash
+        assert_ne!(
+            base,
+            commitment_from_fields_v2(&mint, 100, &owner, &inner(8)).unwrap()
+        );
+    }
+
+    #[test]
+    fn commitment_v2_differs_from_v1() {
+        // Same mint/amount/owner, but v2 hashes a different arity/shape so it
+        // must never collide with a v1 commitment.
+        let mint = [1u8; 32];
+        let owner = [2u8; 32];
+        let v1 = commitment_from_fields(&mint, 100, &owner, &[3u8; 32], &[4u8; 32]).unwrap();
+        let v2 = commitment_from_fields_v2(&mint, 100, &owner, &inner(3)).unwrap();
+        assert_ne!(v1, v2);
     }
 }

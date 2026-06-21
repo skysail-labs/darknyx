@@ -1,0 +1,10 @@
+{
+  "label": "Reference Data",
+  "position": 3,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "Reference Data",
+    "description": "Static market metadata: the instruments you can trade and their parameters."
+  }
+}

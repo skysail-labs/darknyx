@@ -3,12 +3,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-vault = "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY"
-matching_engine = "DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH"
+vault = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"
 
 [programs.devnet]
-vault = "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY"
-matching_engine = "DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH"
+vault = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"
 
 [registry]
 url = "https://api.apr.dev"
@@ -24,4 +22,4 @@ test = "echo 'use cargo test + npm test'"
 url = "https://api.devnet.solana.com"
 
 [workspace]
-members = ["programs/vault", "programs/matching_engine"]
+members = ["programs/vault"]

@@ -6,7 +6,6 @@
  *   const receipt = await deposit({
  *     tokenMint: mintBytes,
  *     amount: 100_000_000n,
- *     nonce: 42n,
  *     depositorTokenAccount: new PublicKey(...),
  *   });
  *
@@ -19,10 +18,12 @@ import { PublicKey } from "@solana/web3.js";
 
 import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
+import type { StoredNote } from "./note-store.js";
 import { DarkPoolError } from "../errors.js";
-import { noteCommitment, ownerCommitment } from "./note.js";
+import { noteCommitmentV2, ownerCommitment } from "./note.js";
 import { bn254ToBE32, deriveBlindingFactor } from "../keys/key-generators.js";
-import { buildDepositInstruction, vaultConfigPda } from "../idl/vault-client.js";
+import { buildDepositInstruction, merkleTreePda } from "../idl/vault-client.js";
+import { readNoteCreatedLeafIndex } from "./leaf-index.js";
 
 /** SPL Token program id (classic, not Token-2022). */
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -30,14 +31,21 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 export interface DepositParams {
   /** Fee-payer / signer for the deposit transaction. */
   depositor: PublicKey;
+  /** Which Merkle-tree shard to deposit into (default 0). The note's actual
+   *  leaf index is read back from the deposit's `NoteCreated` event. */
+  treeId?: number;
+  /** Client-side monotonic counter that seeds this note's `inner_hash`
+   *  (`deriveBlindingFactor(seed, depositIndex)`) — INDEPENDENT of the leaf
+   *  position, so a concurrent on-chain append can't desync the opening from
+   *  where the leaf lands. Recover the note by commitment, not by index. The
+   *  caller owns the counter (one per deposit, like `merge`'s `mergeIndex`). */
+  depositIndex: bigint;
   /** 32-byte SPL mint. */
   tokenMint: Uint8Array;
   /** Amount in base units. */
   amount: bigint;
   /** Depositor's SPL associated token account that holds `tokenMint`. */
   depositorTokenAccount: PublicKey;
-  /** Deterministic nonce (per-user monotonic counter). Must be unique per note. */
-  nonce: bigint;
   /** Override the SPL token program id (for Token-2022). */
   tokenProgramId?: PublicKey;
   callbacks?: TransactionCallbacks;
@@ -51,8 +59,26 @@ export interface DepositReceipt {
     tokenMint: Uint8Array;
     amount: bigint;
     ownerCommitment: bigint;
-    nonce: bigint;
-    blindingR: bigint;
+    /** v2: single inner_hash (deterministic from masterSeed + depositIndex). */
+    innerHash: bigint;
+  };
+}
+
+/**
+ * Convert a deposit receipt into a storable wallet note. Call
+ * `store.put(depositNoteFromReceipt(receipt))` after a deposit so the wallet's
+ * balance + coin-selection see it. (Deposits aren't recoverable from the seed
+ * alone on a fresh device — record them here; trade-change notes recover via the
+ * fills indexer.)
+ */
+export function depositNoteFromReceipt(receipt: DepositReceipt): StoredNote {
+  return {
+    commitment: Buffer.from(receipt.noteCommitment).toString("hex"),
+    tokenMint: receipt.notePlaintext.tokenMint,
+    amount: receipt.notePlaintext.amount,
+    ownerCommitment: receipt.notePlaintext.ownerCommitment,
+    innerHash: receipt.notePlaintext.innerHash,
+    leafIndex: receipt.leafIndex,
   };
 }
 
@@ -68,49 +94,38 @@ export function getDepositFunction(
     }
 
     const { masterSeed, spendingKey, ownerBlinding } = await client.getResolvedKeys();
+    const treeId = params.treeId ?? 0;
 
     // --- Stage: merkle-position-fetch ---
     await params.callbacks?.pre?.("merkle-position-fetch");
-    const [vaultPda] = vaultConfigPda(client.programId);
-    const info = await client.providers.accountInfoProvider.getAccountInfo(vaultPda);
+    // Guard: the target shard must be initialised (the deposit ix appends to
+    // its MerkleTree account). We no longer read leaf_count to PREDICT the
+    // index — the actual index is read back from the NoteCreated event after
+    // confirm, which is immune to concurrent appends.
+    const [treePda] = merkleTreePda(client.programId, treeId);
+    const info = await client.providers.accountInfoProvider.getAccountInfo(treePda);
     if (!info) {
       throw new DarkPoolError(
         "merkle-position-fetch",
-        "vault_config not initialised — deploy/init the program first",
+        `merkle_tree shard ${treeId} not initialised — run initialize_tree(${treeId}) first`,
       );
     }
-    // VaultConfig layout (offsets after the 8-byte Anchor discriminator):
-    //   admin:      Pubkey        @   8
-    //   tee_pubkey: Pubkey        @  40
-    //   root_key:   Pubkey        @  72
-    //   leaf_count: u64 LE        @ 104
-    const data = info.data;
-    if (data.byteLength < 112) {
-      throw new DarkPoolError(
-        "merkle-position-fetch",
-        `vault_config data too small: ${data.byteLength}`,
-      );
-    }
-    const leafIndex = new DataView(
-      data.buffer,
-      data.byteOffset + 104,
-      8,
-    ).getBigUint64(0, true);
 
     // --- Stage: note-build ---
     await params.callbacks?.pre?.("note-build");
-    const blindingR = deriveBlindingFactor(masterSeed, leafIndex);
+    // The note's inner_hash is derived from a client-side `depositIndex`,
+    // NOT the leaf position — so the opening stays recoverable (by commitment)
+    // regardless of where the leaf actually lands. See DepositParams.depositIndex.
+    const innerHash = deriveBlindingFactor(masterSeed, params.depositIndex);
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
-    const nonceBytes = bn254ToBE32(params.nonce);
-    const blindingBytes = bn254ToBE32(blindingR);
+    const innerBytes = bn254ToBE32(innerHash);
     const ownerBytes = bn254ToBE32(owner);
 
-    const commitment = await noteCommitment({
+    const commitment = await noteCommitmentV2({
       tokenMint: params.tokenMint,
       amount: params.amount,
       ownerCommitment: owner,
-      nonce: params.nonce,
-      blindingR,
+      innerHash,
     });
 
     // --- Stage: instruction-build ---
@@ -118,14 +133,14 @@ export function getDepositFunction(
     const tokenMintPk = new PublicKey(params.tokenMint);
     const ix = buildDepositInstruction({
       programId: client.programId,
+      treeId,
       depositor: params.depositor,
       tokenMint: tokenMintPk,
       depositorTokenAccount: params.depositorTokenAccount,
       tokenProgramId: params.tokenProgramId ?? TOKEN_PROGRAM_ID,
       amount: params.amount,
       ownerCommitment: ownerBytes,
-      nonce: nonceBytes,
-      blindingR: blindingBytes,
+      innerHash: innerBytes,
     });
 
     // --- Stage: transaction-send ---
@@ -135,6 +150,13 @@ export function getDepositFunction(
     );
     await params.callbacks?.post?.("transaction-send", signature);
 
+    // Read the ACTUAL leaf index from the confirmed tx's NoteCreated event —
+    // race-proof against appends that landed between build and execution.
+    const leafIndex = await readNoteCreatedLeafIndex(
+      client.connectionProvider.connection,
+      signature,
+    );
+
     return {
       signature,
       leafIndex,
@@ -143,8 +165,7 @@ export function getDepositFunction(
         tokenMint: params.tokenMint,
         amount: params.amount,
         ownerCommitment: owner,
-        nonce: params.nonce,
-        blindingR,
+        innerHash,
       },
     };
   };

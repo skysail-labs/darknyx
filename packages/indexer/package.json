@@ -1,0 +1,29 @@
+{
+  "name": "@nyx/indexer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nyx off-TEE Solana indexer — watches the vault's settle txs and serves fills by order_id. Account-agnostic; the durable record is the chain.",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "bin": {
+    "nyx-indexer": "dist/bin/indexer.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/bin/indexer.js",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.7"
+  }
+}

@@ -1,13 +1,18 @@
 # Nyx Darkpool
 
-A **dark pool on Solana** for SPL tokens. Order intent stays inside a
-MagicBlock Ephemeral Rollup (ER), settlement is atomic on L1 with a
+A **dark pool on Solana** for SPL tokens. Order intent is matched and
+settled **inside an Intel TDX confidential VM (a "CVM") on Phala Cloud** —
+it never touches an L1 transaction. Settlement is atomic on L1 with a
 TEE-signed payload, and balances are encrypted UTXO notes (Poseidon
-commitments in an incremental Merkle tree). Withdrawals require a
-Groth16 ZK proof.
+commitments in an incremental Merkle tree). Note locking, matching, and
+withdrawal each carry their own Groth16 ZK proof. **Per-trade amounts + the
+execution price are hidden on-chain too** — the settle tx carries only note
+commitments, and each trade's amount reaches its owner off-chain through an
+auth'd fill memo (`/ws/fills`, with durable replay), never an L1 transaction.
 
-> **Status:** functional on Solana **devnet**. Live ER end-to-end flow
-> is green. **Not audited. Not for mainnet use.**
+> **Status:** functional on Solana **devnet**, validated end-to-end on a
+> live Phala CVM (`cvm-settle-e2e` real settle + a load generator).
+> **Not audited. Not for mainnet use.**
 
 ---
 
@@ -15,35 +20,59 @@ Groth16 ZK proof.
 
 | Property                        | How                                                                  |
 |---------------------------------|----------------------------------------------------------------------|
-| Hidden order intent             | `submit_order` runs inside the MagicBlock ER, never on L1            |
+| Hidden order intent             | Orders are `POST`ed to the in-CVM matcher (`POST /orders`), never to L1 |
 | Hidden balances                 | UTXO notes (Poseidon commitments) in a depth-20 Merkle tree          |
-| Atomic settlement               | TEE Ed25519-signed `tee_forced_settle` enforces conservation on L1   |
+| Hidden trade amount + price     | Settlement carries note commitments only (no plaintext amounts/price); `VALID_MATCH_BATCH` range-checks amounts + enforces the fee floor in-circuit; the amount reaches the trader via the `/ws/fills` fill memo |
+| Atomic settlement               | TEE Ed25519-signed `tee_forced_settle_batched` enforces conservation on L1 |
+| TEE can't lock a note it doesn't own | `VALID_INPUT` Groth16 verified at `lock_note` time              |
+| TEE can't misroute outputs      | `VALID_MATCH_BATCH` Groth16 verified at `verify_match_batch` time (N=16/batch) |
+| Per-mint solvency invariant     | `outstanding[mint] ≤ vault_token_account.amount` after every ix      |
+| Bounded censorship window       | `MAX_LOCK_TTL_SLOTS` (~24h) ceiling on note locks                    |
 | Trustless withdrawal            | Groth16 `VALID_SPEND` proof — no operator can move user funds        |
-| Front-running protection        | Uniform clearing price + Pyth circuit breaker per batch              |
+| Front-running protection        | Uniform clearing price + Pyth oracle band per batch                  |
+| Partial-fill continuation       | A per-order anchor pool lets the matcher rotate the residual + re-match it with no client roundtrip |
+
+For the full cryptographic walkthrough (key model, the four ZK
+circuits, lifecycle, settlement mechanics) see
+**[`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md)**.
+
+---
+
+## Architecture in 60 seconds
+
+Three layers:
+
+* **L1 (Solana)** — `programs/vault/` is the only on-chain program
+  (Anchor 0.32). It owns custody, the incremental Merkle tree of note
+  commitments, the nullifier / consumed-note sets, the Groth16 verifier,
+  and the atomic batched settlement path (`lock_note → verify_match_batch
+  → tee_forced_settle_batched → close_batch_validity_marker`, N=16
+  matches per batch).
+* **TEE (`crates/nyx-tee/`)** — the in-enclave matcher + settler. It owns
+  hidden order intake, uniform-clearing-price matching, the full settle
+  pipeline (signed by its dstack-derived Ed25519 key), a Merkle-mirror
+  indexer, the per-order continuation anchor pool, and the auth'd HTTP/WS
+  surface.
+* **Client (TypeScript SDK + snarkjs prover)** — `packages/sdk/` builds
+  VALID_INPUT proofs and `POST`s orders to the CVM. `crates/darkpool-crypto/`
+  is the host-side Rust crypto crate with byte-identical Poseidon / note /
+  key derivation that the TS SDK has parity tests against.
+
+There is **no on-chain CLOB and no Ephemeral Rollup** — the only on-chain
+program is `vault`; the only matcher is the in-TEE one.
 
 ---
 
 ## Deployed programs (Solana devnet)
 
-| Program           | Address                                          |
-|-------------------|--------------------------------------------------|
-| `vault`           | `ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY`   |
-| `matching_engine` | `DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH`   |
-
-MagicBlock infra (used by the SDK):
-
-| Thing                            | Address                                          |
-|----------------------------------|--------------------------------------------------|
-| Delegation program               | `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh`  |
-| Magic program                    | `Magic11111111111111111111111111111111111111`  |
-| Magic context                    | `MagicContext1111111111111111111111111111111`  |
-| ER RPC (devnet)                  | `https://devnet.magicblock.app`                |
+| Program | Address                                          |
+|---------|--------------------------------------------------|
+| `vault` | `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`   |
 
 Verify on-chain:
 
 ```sh
-solana program show ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY
-solana program show DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH
+solana program show C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx
 ```
 
 ---
@@ -55,19 +84,20 @@ solana program show DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH
 npm install
 
 # 2. Build the ZK circuits + Rust verifier-key consts
+bash scripts/download-ptau.sh
 bash scripts/build-circuits.sh
 
-# 3. Build the on-chain programs
+# 3. Build the on-chain program
 cargo build-sbf --manifest-path programs/vault/Cargo.toml
-cargo build-sbf --manifest-path programs/matching_engine/Cargo.toml
 
-# 4. Run the full test gate (86 Rust + 76 SDK tests)
+# 4. Run the full test gate (Rust unit/integ + SDK unit; env-gated devnet/CVM tests auto-skip)
 cargo test --workspace
 ( cd packages/sdk && ../../node_modules/.bin/vitest run )
 ```
 
-To run the live devnet ER trade flow, see
-[`scripts/dev-commands.md`](scripts/dev-commands.md) §10 / §11.
+To build, deploy, and test against a live Phala CVM (the flagship
+real-settle path), see [`scripts/dev-commands.md`](scripts/dev-commands.md)
+§5–§7.
 
 ---
 
@@ -75,12 +105,13 @@ To run the live devnet ER trade flow, see
 
 | Path             | What's there                                                                |
 |------------------|------------------------------------------------------------------------------|
-| `programs/`      | On-chain Anchor programs — `vault` and `matching_engine`                    |
-| `crates/`        | `darkpool-crypto` — host-side Poseidon / key derivation / note crypto       |
-| `circuits/`      | Circom 2 ZK circuits — `valid_wallet_create`, `valid_spend`                 |
-| `packages/sdk/`  | `@nyx/sdk` — TypeScript client (ix builders, prover, settlement)            |
+| `programs/`      | On-chain Anchor program — `vault` (the only on-chain program)               |
+| `crates/`        | `darkpool-crypto` (host Poseidon/key/note crypto), `darkpool-matcher` (the matching algorithm), `nyx-tee` (the in-CVM matcher/settler), `nyx-tee-loadgen` |
+| `circuits/`      | Circom 2 ZK circuits — `valid_wallet_create`, `valid_spend`, `valid_input`, `valid_match_batch` |
+| `packages/sdk/`  | `@nyx/sdk` — TypeScript client (ix builders, prover, order/settlement)      |
+| `deploy/`        | Dockerfile + `docker-compose.yaml` for the Phala CVM image                  |
 | `scripts/`       | Build / deploy / setup shell scripts + master dev cheat-sheet               |
-| `docs/`          | Deep-dive design docs                                                        |
+| `docs/`          | Deep-dive design docs + the documentation site under `docs/site/`           |
 | `.devnet/`       | Generated keypairs + e2e config (gitignored)                                 |
 
 ---
@@ -89,22 +120,17 @@ To run the live devnet ER trade flow, see
 
 | Document                                                       | Read it for…                                                |
 |----------------------------------------------------------------|-------------------------------------------------------------|
-| **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**             | Deep dive — every component, PDA, flow, threat model        |
-| **[`DeepWiki`](https://deepwiki.com/skysail-labs/darknyx)**    | Indexed, code-linked walkthrough of the repo                |
+| **[`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md)**                       | Cryptographic walkthrough — key model, the four ZK circuits, lifecycle, settlement mechanics. **Start here if you care about the crypto.** |
+| **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**             | System overview: every component, PDA, flow, threat model  |
+| **[`CLAUDE.md`](CLAUDE.md)**                                  | Agent / contributor onboarding: the build-validate cycle + the Phala CVM runbook + the byte-equality invariants |
 | **[`scripts/dev-commands.md`](scripts/dev-commands.md)**       | Master command cheat-sheet — build, test, deploy, troubleshoot |
-| `order_privacy_fix.md`                                         | Design note — why `submit_order` moved into the ER          |
-| `partial_fill_and_fee_notes.md`                                | Design note — partial-fill collateral rotation + fee notes   |
-| `change_note_implementation.md`                                | Design note — change-note schema for partial fills          |
-| `darkpool_protocol_spec_v3_changed.md`                         | Original protocol spec (historical reference)                |
+| **[`docs/tee-architecture.md`](docs/tee-architecture.md)**     | The in-TEE matcher/settler design (book, settle pipeline, auth) |
+| **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)** | Fills delivery + trade history: deterministic order_ids + per-account `/ws/fills` memos (the amount source after amount-privacy) + durable `GET /fills/replay` recovery; the off-TEE indexer is a commitment locator only |
+| **[`DeepWiki`](https://deepwiki.com/skysail-labs/darknyx)**    | Indexed, code-linked walkthrough of the repo                |
 
-The `*.md` design notes at the repo root are historical and informative;
-the **authoritative** description of the live system is in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), the indexed
-[DeepWiki](https://deepwiki.com/skysail-labs/darknyx), and in the source code under
-`programs/` and `packages/sdk/src/`.
+The **authoritative** description of the live system is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md),
+the indexed [DeepWiki](https://deepwiki.com/skysail-labs/darknyx), and the
+source under `programs/`, `crates/`, and `packages/sdk/src/`.
 
 ---
-
-## License
-
-Apache-2.0.

@@ -1,0 +1,172 @@
+# docker-compose.yaml for nyx-tee under Phala Cloud / dstack.
+#
+# This file gets hashed (canonically, alphabetically-sorted JSON
+# under app-compose.json) into the `compose_hash` baked into RTMR3.
+# Every byte here is load-bearing — adding a port, a volume, an env
+# var, changing the runner, all change compose_hash and require a
+# new image authorization in dstack governance + a multisig rotation
+# on Solana. See docs/tee-attestation-flow.md §5.
+#
+# Deploy:
+#   phala deploy -c deploy/docker-compose.yaml -n nyx-tee-spike
+#
+# The first deploy creates the CVM; subsequent deploys with
+# `phala deploy` update it (after a fresh compose-hash is
+# allowlisted in Phala's dashboard).
+
+services:
+  # The main nyx-tee binary — matcher, prover, settle scheduler,
+  # indexer, API server. See crates/nyx-tee/ + docs/tee-architecture.md.
+  nyx-tee:
+    # TODO(phase 1): replace with a pinned ghcr.io/<org>/nyx-tee@sha256:...
+    # digest once we set up the build pipeline. Local builds during
+    # Phase 1 use `phala docker build` + `phala docker push` to push
+    # to Phala's image registry directly.
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-38
+    restart: unless-stopped
+
+    # /var/run/dstack.sock gives the container access to:
+    #   - getKey(path)   — deterministic key derivation
+    #   - getQuote(data) — TDX attestation quote
+    #   - info()         — app_id / instance_id / RTMRs
+    # This is the canonical mount documented in
+    # phala-docs/dstack/getting-started.mdx.
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      # Persistent, LUKS-encrypted (dstack-kms sealing key) named volume
+      # for the Layer-A auth snapshot (accounts.db) — Phase 1b. Survives
+      # CVM restart + migration; encryption-at-rest is transparent to
+      # the app. The matcher book / Merkle-leaf snapshots will share
+      # this volume when that persistence lands. See
+      # docs/tee-architecture.md §8 + §11.6.
+      - nyx_state:/var/lib/nyx-tee
+
+    environment:
+      # Logs are visible in `phala logs --cvm-id nyx-tee-spike`.
+      # In production we'd ship to a remote sink — but the logs
+      # must be careful: any plaintext order intent in logs is a
+      # privacy leak.
+      # Keep the settle pipeline at debug but quiet the 1/sec oracle-sync
+      # + merkle-poll DEBUG spam so settle errors aren't buried.
+      NYX_TEE_LOG: "info,nyx_tee::settle=debug,nyx_tee::oracle=info,nyx_tee::merkle=info"
+      NYX_TEE_HTTP_BIND: "0.0.0.0:8080"
+
+      # Real Pyth Hermes feed for the matcher's oracle. This is the
+      # canonical SOL/USD mainnet feed id (see crates/nyx-tee/src/oracle/
+      # cache.rs). One feed only: the oracle-sync polls Hermes once per
+      # feed every 1 s (main.rs), and Pyth's free public Hermes caps at
+      # 10 req / 10 s per IP — one feed sits right at that edge, and the
+      # matcher's 5 s staleness window (DEFAULT_MAX_ORACLE_AGE_MS) absorbs
+      # the occasional 429. Do NOT add a second feed here for the bench.
+      NYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+
+      # State directory for the auth snapshot (accounts.db). Points at
+      # the persistent volume mounted above so registrations + token
+      # revocations survive a restart (Phase 1b). Unset → persistence
+      # disabled (in-memory only). See crate::persistence::auth.
+      NYX_TEE_STATE_DIR: "/var/lib/nyx-tee"
+
+      # BOOTSTRAP admin (dev/bench). Seeds the first ADMIN account so the
+      # loadgen can acquire a bearer AND so there's a registrar for
+      # POST /admin/accounts. With persistence on (above) this is merged
+      # into the loaded accounts.db only if its api_key is absent — the
+      # snapshot is authoritative once it exists, so rotating these after
+      # first boot needs the API or wiping the volume. Throwaway test
+      # credentials (match the loadgen's CLI defaults); argon2id-hashed
+      # on load, never stored in plaintext. NOT a real secret.
+      NYX_TEE_API_KEY: "nyx-test-api-key"
+      NYX_TEE_API_SECRET: "nyx-test-secret"
+      NYX_TEE_PASSPHRASE: "nyx-test-passphrase"
+
+      # Secret + per-deploy values are SUBSTITUTED from the encrypted
+      # env, NOT hardcoded here — `${VAR}` is interpolated by dstack
+      # from the values supplied at deploy (`phala deploy -e VAR=…` or
+      # the dashboard's encrypted-env UI). Only the var REFERENCE is in
+      # the compose (and thus compose_hash); the value never is. An
+      # unset var interpolates empty → the app falls back to its
+      # default (public devnet RPC / no sync floor).
+      #
+      # Solana RPC the matcher oracle (no) + the Merkle sync (yes) use.
+      # MUST be a private RPC (Helius); the public devnet RPC 429s on
+      # the sync's getSignaturesForAddress. DO NOT hardcode a key here.
+      NYX_TEE_SOLANA_RPC_URL: ${NYX_TEE_SOLANA_RPC_URL}
+      # Merkle cold-boot floor slot (Phase 2b). Set to the vault deploy
+      # slot, or a reset_merkle_tree slot on devnet, so the mirror
+      # reconstructs the CURRENT tree. Empty/unset → 0 (replay genesis).
+      NYX_TEE_SYNC_FROM_SLOT: ${NYX_TEE_SYNC_FROM_SLOT}
+      # Market mints (base58). Order intake verifies each input-note
+      # opening's mint against these (bid→quote, ask→base), so for a REAL
+      # settle they MUST equal the on-chain mints the deposited notes use
+      # (the devnet-setup e2e-config mints). Empty/unset → placeholder
+      # dev mints (fine for the synthetic-order loadgen). See Config.
+      NYX_TEE_BASE_MINT: ${NYX_TEE_BASE_MINT}
+      NYX_TEE_QUOTE_MINT: ${NYX_TEE_QUOTE_MINT}
+      # On-chain address of the STATIC settle ALT (vault_config +
+      # instructions_sysvar + system_program) that devnet-setup creates
+      # (e2e-config `settleLookupTable`). The settle worker stacks it
+      # under the per-batch ALT so the v0 settle tx (Tx D) stays under
+      # the 1232-byte cap on the real-mint path. Empty/unset → per-batch
+      # ALT only (fine for the small test payloads, overflows a real
+      # settle). See crate::config + settle::worker.
+      NYX_TEE_SETTLE_LOOKUP_TABLE: ${NYX_TEE_SETTLE_LOOKUP_TABLE}
+
+      # Protocol fee rate (basis points) the matcher charges per leg.
+      # Empty/unset → the code default (30 bps = 0.3%), so fee notes
+      # actually mint. Set to 0 to disable fees, or any value ≤ 10_000.
+      # Should mirror the on-chain VaultConfig.fee_rate_bps. See
+      # crate::config + darkpool-matcher flush_fee_notes.
+      NYX_TEE_FEE_RATE_BPS: ${NYX_TEE_FEE_RATE_BPS}
+      # Owner commitment the fee notes are minted to (32-byte hex). Set
+      # to the on-chain protocol owner (e2e-config protocol.ownerCommitmentHex)
+      # so collected fees are spendable via VALID_SPEND; empty/unset →
+      # [0;32] (fee notes still mint + append but are unclaimable).
+      NYX_TEE_PROTOCOL_OWNER_COMMITMENT: ${NYX_TEE_PROTOCOL_OWNER_COMMITMENT}
+      # Groth16 prover backend: rapidsnark (default) | ark. The image ships
+      # both (built --features rapidsnark); flip this to A/B proving on the
+      # SAME image + instance. `:-rapidsnark` so an unset/empty value defaults
+      # to rapidsnark — the CPU baseline we compare the future GPU (ICICLE)
+      # backend against, so it's the steady-state prover, not an opt-in. Set
+      # `NYX_TEE_PROVER=ark` to A/B against the ark backend on the same image.
+      NYX_TEE_PROVER: ${NYX_TEE_PROVER:-rapidsnark}
+
+      # Witness generator: native (default) | wasm (wasmer). `native` spawns the
+      # circom --c C++ generator shipped in the image — CVM-validated, byte-
+      # identical witness, ~8-10× faster (witness_ms 201 vs ~1.7-2.1s; see
+      # witness-bench). The prover falls back to wasmer if the binary is absent,
+      # so `:-native` is safe. Set NYX_TEE_WITNESS=wasm to A/B the wasmer path.
+      NYX_TEE_WITNESS: ${NYX_TEE_WITNESS:-native}
+
+      # Max settle Tx D's sent CONCURRENTLY within a batch (default 16). Firing
+      # them together lets the leader co-include them in one block so they
+      # confirm in a single ~1.13s window instead of one-at-a-time. Sweep this
+      # (1/4/8/16/32) to find the on-chain settle throughput ceiling. `:-16`.
+      NYX_TEE_SETTLE_SEND_CONCURRENCY: ${NYX_TEE_SETTLE_SEND_CONCURRENCY:-16}
+
+      # Number of Merkle-tree shards. The settle worker derives K fee-payer
+      # keys (nyx/ed25519-signer/v1/{0..K-1}) and round-robins each match
+      # across (key[j], merkle_tree[j]) so the concurrent Tx D's share no
+      # writable account. MUST equal the on-chain num_trees (e2e-config
+      # numTrees). `:-1` keeps single-shard by default.
+      NYX_TEE_NUM_TREES: ${NYX_TEE_NUM_TREES:-1}
+
+    ports:
+      # 8080: nyx-tee's internal HTTP. dstack-ingress fronts this
+      # on :443 once that container is added (Phase 2+).
+      - "8080:8080"
+
+# Named volumes. dstack backs these with the CVM's LUKS-encrypted data
+# disk (sealing key from dstack-kms), so they persist across restart +
+# instance migration. See phala-docs/dstack/trust-center-technical.mdx
+# for the pattern.
+volumes:
+  nyx_state:
+
+# Phase 2+ additions (not enabled yet — listed here as a roadmap):
+#
+#  - dstack-ingress sidecar for the custom domain + ACME + CAA setup
+#    (api.nyx.example.com → :8080 inside this CVM, with /evidences/
+#    published per docs/tee-attestation-flow.md §4)
+#  - the matcher book + Merkle-leaf + settle-outbox snapshots sharing
+#    the nyx_state volume above (docs/tee-architecture.md §8 — the auth
+#    snapshot already uses it as of Phase 1b)
+#  - healthcheck that probes /tree/root to gate readiness

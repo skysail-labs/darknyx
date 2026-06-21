@@ -5,11 +5,12 @@
 //!   target/debug/examples/derive-keys trading  <seed_hex> <offset>
 //!   target/debug/examples/derive-keys root     <seed_hex>
 //!   target/debug/examples/derive-keys blinding <seed_hex> <counter>
+//!   target/debug/examples/derive-keys inner-hash <seed_hex> <order_id_hex32> <index>
 
 use darkpool_crypto::field::fr_to_be_bytes;
 use darkpool_crypto::keys::{
-    derive_blinding_factor, derive_master_viewing_key, derive_root_key, derive_spending_key,
-    derive_trading_key_at_offset, MasterSeed, MASTER_SEED_BYTES,
+    derive_blinding_factor, derive_inner_hash, derive_master_viewing_key, derive_root_key,
+    derive_spending_key, derive_trading_key_at_offset, MasterSeed, MASTER_SEED_BYTES,
 };
 
 fn parse_seed(h: &str) -> MasterSeed {
@@ -40,6 +41,22 @@ fn main() {
         "blinding" => {
             let ctr: u64 = args[3].parse().expect("counter u64");
             hex::encode(fr_to_be_bytes(&derive_blinding_factor(&seed, ctr)))
+        }
+        "inner-hash" => {
+            if args.len() < 5 {
+                eprintln!("usage: derive-keys inner-hash <seed_hex> <order_id_hex32> <index>");
+                std::process::exit(2);
+            }
+            let oid_bytes = hex::decode(&args[3]).expect("order_id hex parse");
+            assert_eq!(
+                oid_bytes.len(),
+                16,
+                "order_id must be 16 bytes (32 hex chars)"
+            );
+            let mut order_id = [0u8; 16];
+            order_id.copy_from_slice(&oid_bytes);
+            let index: u32 = args[4].parse().expect("index u32");
+            hex::encode(fr_to_be_bytes(&derive_inner_hash(&seed, &order_id, index)))
         }
         other => {
             eprintln!("unknown command: {other}");

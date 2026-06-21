@@ -31,13 +31,17 @@ tests/fixtures/wallets/*.json
 .devnet/
 !.devnet/README.md
 
-# Circom build artifacts (generated)
-circuits/build/
+# Circom build artifacts (generated — except committed zkeys)
+# Do NOT ignore circuits/build/ at the directory level; git won't descend
+# into an ignored directory to apply negation patterns.
+circuits/build/**/*.r1cs
+circuits/build/**/*.sym
+circuits/build/**/*_js/
+circuits/build/**/*.zkey
+!circuits/build/**/circuit_final.zkey
 circuits/**/*.r1cs
 circuits/**/*.sym
 circuits/**/*_js/
-circuits/**/*.zkey
-!circuits/**/*_final.zkey
 
 # Powers of Tau (large files, downloaded)
 scripts/ptau/*.ptau
@@ -55,3 +59,6 @@ Thumbs.db
 .factory/
 skills-lock.json
 
+
+# icicle-snark NTT precompute cache (written to CWD at prove time)
+precomputed_*.bin

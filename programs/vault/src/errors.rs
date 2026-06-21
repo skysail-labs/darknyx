@@ -43,6 +43,32 @@ pub enum VaultError {
     TeeKeyNotRegistered,
     #[msg("Input note commitment not locked for the claimed order")]
     NoteNotLockedForOrder,
+    #[msg("Outstanding live-notes counter for this mint is less than the withdraw amount")]
+    InsufficientOutstanding,
+    #[msg("Outstanding live-notes counter has diverged from the on-chain SPL balance — vault is over-claimed")]
+    SolvencyInvariantViolated,
+    #[msg(
+        "VALID_CREATE binding hash claimed by caller does not match the hash recomputed on-chain"
+    )]
+    InvalidCreateBinding,
+    #[msg("VALID_CREATE marker expiry is invalid (must be in the future and within MAX_CREATE_MARKER_TTL_SLOTS)")]
+    InvalidMarkerExpiry,
+    #[msg("VALID_CREATE marker has expired")]
+    MarkerExpired,
+    #[msg(
+        "VALID_PRICE binding hash claimed by caller does not match the marker PDA derived on-chain"
+    )]
+    InvalidPriceBinding,
+    #[msg("VALID_PRICE marker has expired")]
+    PriceMarkerExpired,
+    #[msg(
+        "Batched-validity Merkle inclusion failed: leaf does not walk up to the marker PDA's seed"
+    )]
+    InvalidBatchBinding,
+    #[msg("BatchValidityMarker has expired")]
+    BatchValidityMarkerExpired,
+    #[msg("BatchValidityMarker has not yet expired — only the original payer can close it before expiry")]
+    BatchValidityMarkerNotExpired,
 
     // ---- Arithmetic / overflow ----
     #[msg("Arithmetic overflow")]
@@ -57,7 +83,9 @@ pub enum VaultError {
     // ---- Phase 5: change-note settlement ----
     #[msg("Conservation law violated: note.amount != trade_leg + change_leg + fee_leg")]
     ConservationViolation,
-    #[msg("Change-note commitment inconsistent with change amount (one is zero, the other is not)")]
+    #[msg(
+        "Change-note commitment inconsistent with change amount (one is zero, the other is not)"
+    )]
     ChangeNoteInconsistent,
     #[msg("Re-lock requested but no change-note commitment was provided for that side")]
     RelockRequiresChangeNote,
@@ -67,4 +95,16 @@ pub enum VaultError {
     FeeNoteInconsistent,
     #[msg("Fee rate exceeds the allowed maximum (10000 bps)")]
     InvalidFeeRate,
+    #[msg("Collected protocol fee is below the on-chain VaultConfig.fee_rate_bps floor")]
+    InsufficientFeeCharge,
+
+    // ---- Note merge ----
+    #[msg("Merge K must be 2 or 4 and match the nullifier count")]
+    InvalidMergeK,
+    #[msg("Merge nullifier account missing or does not match the derived PDA")]
+    MergeAccountMismatch,
+    #[msg("num_trees out of range (must be in 1..=MAX_TREES)")]
+    InvalidTreeCount,
+    #[msg("tee_pubkeys count out of range (must be in 1..=MAX_TEE_KEYS)")]
+    InvalidKeyCount,
 }

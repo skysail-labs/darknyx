@@ -8,10 +8,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "circom_tester": "0.0.24",
     "circomlib": "^2.0.5"
   },
   "devDependencies": {
     "snarkjs": "^0.7.5",
-    "vitest": "^2.0.0"
+    "vitest": "^4.1.7"
   }
 }

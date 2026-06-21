@@ -17,6 +17,9 @@ const INFO_VIEWING = new TextEncoder().encode("darkpool_viewing_key_v1");
 const INFO_TRADING = new TextEncoder().encode("darkpool_trading_key_v1");
 const INFO_ROOT = new TextEncoder().encode("darkpool_root_key_v1");
 const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
+const INFO_INNER_HASH = new TextEncoder().encode("nyx-inner-hash-v1");
+const INFO_ORDER_ID = new TextEncoder().encode("nyx-order-id-v1");
+const INFO_MERGE_INNER = new TextEncoder().encode("nyx-merge-inner-v1");
 
 /** BN254 scalar field modulus r. */
 export const BN254_R =
@@ -125,6 +128,76 @@ export function deriveBlindingFactor(seed: Uint8Array, counter: bigint): bigint 
   const info = new Uint8Array(INFO_BLINDING.length + 8);
   info.set(INFO_BLINDING, 0);
   info.set(new Uint8Array(offsetBuf), INFO_BLINDING.length);
+  const okm = kmac256(seed, info, new Uint8Array(), 64);
+  return reduceMod(okm);
+}
+
+/**
+ * Derive the `inner_hash` for anchor `index` of a given order. Mirrors
+ * `darkpool_crypto::keys::derive_inner_hash`. Deterministic from
+ * `(seed, orderId, index)` so the whole anchor pool — and the matching
+ * nullifiers via `nullifierV2` — is regenerable without persisted state.
+ *
+ * KMAC custom-info = `INFO_INNER_HASH || orderId[16] || index_u32_le`.
+ */
+export function deriveInnerHash(seed: Uint8Array, orderId: Uint8Array, index: number): bigint {
+  if (orderId.length !== 16) throw new Error(`orderId must be 16 bytes; got ${orderId.length}`);
+  if (!Number.isInteger(index) || index < 0 || index > 0xffff_ffff) {
+    throw new Error(`index must be a u32; got ${index}`);
+  }
+  const idxBuf = new ArrayBuffer(4);
+  new DataView(idxBuf).setUint32(0, index, true); // little-endian
+  const info = new Uint8Array(INFO_INNER_HASH.length + 16 + 4);
+  info.set(INFO_INNER_HASH, 0);
+  info.set(orderId, INFO_INNER_HASH.length);
+  info.set(new Uint8Array(idxBuf), INFO_INNER_HASH.length + 16);
+  const okm = kmac256(seed, info, new Uint8Array(), 64);
+  return reduceMod(okm);
+}
+
+/**
+ * Derive the deterministic 16-byte order id for the `n`-th order of this seed.
+ *
+ * Same philosophy as the anchor pool + note blinding: derive everything from
+ * the seed, persist nothing. The client regenerates order ids on demand, and a
+ * fresh device rebuilds full trade history by gap-scanning `deriveOrderId(seed,
+ * 0), [1], …` against the indexer until a run of empties. A distinct info
+ * string (`nyx-order-id-v1`) keeps order ids in a separate domain from note
+ * blinding / inner_hash so they can never collide.
+ *
+ * `HKDF-SHA256-expand(seed, INFO_ORDER_ID || n_u32_le)[:16]`. Client-only — the
+ * TEE merely echoes `order_id` back in the settle payload, so there is no
+ * cross-language consumer to keep parity with; pinned by a fixed vector.
+ */
+export function deriveOrderId(seed: Uint8Array, n: number): Uint8Array {
+  if (!Number.isInteger(n) || n < 0 || n > 0xffff_ffff) {
+    throw new Error(`n must be a u32; got ${n}`);
+  }
+  const nBuf = new ArrayBuffer(4);
+  new DataView(nBuf).setUint32(0, n, true); // little-endian
+  const info = new Uint8Array(INFO_ORDER_ID.length + 4);
+  info.set(INFO_ORDER_ID, 0);
+  info.set(new Uint8Array(nBuf), INFO_ORDER_ID.length);
+  return hkdfExpand(seed, info, 16);
+}
+
+/**
+ * Derive the `inner_hash` (BN254 Fr) for the `n`-th merged output note of this
+ * seed. Deterministic + recoverable like the anchor / order-id derivations, so a
+ * consolidated note can be reconstructed + spent from the seed. A distinct info
+ * string (`nyx-merge-inner-v1`) keeps it in its own domain.
+ *
+ * `reduce_mod_r(KMAC256(seed, "nyx-merge-inner-v1" || n_u32_le, 512))`.
+ */
+export function deriveMergeInnerHash(seed: Uint8Array, n: number): bigint {
+  if (!Number.isInteger(n) || n < 0 || n > 0xffff_ffff) {
+    throw new Error(`n must be a u32; got ${n}`);
+  }
+  const nBuf = new ArrayBuffer(4);
+  new DataView(nBuf).setUint32(0, n, true); // little-endian
+  const info = new Uint8Array(INFO_MERGE_INNER.length + 4);
+  info.set(INFO_MERGE_INNER, 0);
+  info.set(new Uint8Array(nBuf), INFO_MERGE_INNER.length);
   const okm = kmac256(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
 }

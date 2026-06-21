@@ -50,9 +50,11 @@ import {
   getMinimumBalanceForRentExemptMint,
 } from "@solana/spl-token";
 import {
+  AddressLookupTableProgram,
   Connection,
   Keypair,
   PublicKey,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   SystemProgram,
   Transaction,
   sendAndConfirmTransaction,
@@ -60,17 +62,13 @@ import {
 
 import {
   buildInitializeInstruction,
+  buildInitializeTreeInstruction,
   buildResetMerkleTreeInstruction,
   buildSetProtocolConfigInstruction,
+  merkleTreePda,
+  staticSettleAltAddresses,
   vaultConfigPda,
 } from "../src/idl/vault-client.js";
-import {
-  buildInitMarketInstruction,
-  buildInitMockOracleInstruction,
-  batchResultsPda,
-  darkClobPda,
-  matchingConfigPda,
-} from "../src/idl/matching-engine-client.js";
 
 // ────────────────────────────────────────────────────────────────────────────
 // env + keypair loading
@@ -88,19 +86,21 @@ const L1_RPC_URL =
   process.env.L1_RPC_URL ?? "https://api.devnet.solana.com";
 const VAULT_PROGRAM_ID = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
-    "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY",
-);
-const ME_PROGRAM_ID = new PublicKey(
-  process.env.MATCHING_ENGINE_PROGRAM_ID ??
-    "DvYcaiBuaHgJFVjVd57JLM7ZMavzXvBezJwsvA46FJbH",
-);
-// Pyth SOL/USD devnet feed. init_market only persists this; it's read by run_batch.
-const PYTH_ACCOUNT = new PublicKey(
-  process.env.PYTH_ACCOUNT ??
-    "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix",
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 const PROTOCOL_FEE_BPS = Number(process.env.PROTOCOL_FEE_BPS ?? "30");
+
+/** Number of Merkle-tree shards to provision. The CVM settle worker
+ *  round-robins settles across K shards + K fee-payer keys; this must equal
+ *  the CVM's `NYX_TEE_NUM_TREES`. Default 1 (single shard). */
+const NUM_TREES = (() => {
+  const n = Number(process.env.NYX_NUM_TREES ?? "1");
+  if (!Number.isInteger(n) || n < 1 || n > 16) {
+    throw new Error("NYX_NUM_TREES must be an integer 1..16");
+  }
+  return n;
+})();
 
 /** SPL mint decimals for both BASE and QUOTE (0–9). Default 6 keeps human peg aligned with atomic `price_limit` when mock TWAP = 100. */
 const DEMO_MINT_DECIMALS = (() => {
@@ -170,8 +170,6 @@ function bullet(text: string) {
 export interface E2EConfig {
   l1RpcUrl: string;
   vaultProgramId: string;
-  matchingEngineProgramId: string;
-  pythAccount: string;
   baseMint: {
     pubkey: string;
     decimals: number;
@@ -182,22 +180,27 @@ export interface E2EConfig {
     decimals: number;
     secretKey: number[];
   };
-  market: {
-    pubkey: string;
-    secretKey: number[];
-    batchIntervalSlots: string;
-    circuitBreakerBps: string;
-    tickSize: string;
-    minOrderSize: string;
-  };
   protocol: {
     ownerCommitmentHex: string;
     feeRateBps: number;
   };
   vaultConfigPda: string;
-  darkClobPda: string;
-  matchingConfigPda: string;
-  batchResultsPda: string;
+  /** Number of Merkle-tree shards provisioned. The CVM's NYX_TEE_NUM_TREES
+   *  must equal this. */
+  numTrees: number;
+  /** The K `MerkleTree` shard PDAs, indexed by tree_id. */
+  merkleTreePdas: string[];
+  /**
+   * v3 — Address Lookup Table that hoists the static settle accounts
+   * (vault_config, instructions_sysvar, system_program) AND the K merkle_tree
+   * shard PDAs out of the settle tx's account-keys list. Saves bytes on every
+   * settle vs. legacy txs, which buys headroom under the 1232-byte cap.
+   *
+   * Optional: callers can still send a legacy settle tx when the marker
+   * fits; the v0 wrapper is preferred for change-note / re-lock paths
+   * where the tx is at the edge of the 1232-byte cap.
+   */
+  settleLookupTable?: string;
   createdAt: string;
 }
 
@@ -231,8 +234,6 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
     banner("NYX DARKPOOL — DEVNET E2E SETUP");
     bullet(`RPC:                   ${rpcHostLabel(L1_RPC_URL)}`);
     bullet(`vault program:         ${VAULT_PROGRAM_ID.toBase58()}`);
-    bullet(`matching_engine:       ${ME_PROGRAM_ID.toBase58()}`);
-    bullet(`pyth:                  ${PYTH_ACCOUNT.toBase58()}`);
     bullet(`admin:                 ${admin.publicKey.toBase58()}`);
     bullet(`tee_authority:         ${tee.publicKey.toBase58()}`);
     bullet(`root_key:              ${rootKey.publicKey.toBase58()}`);
@@ -249,7 +250,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
   }, 30_000);
 
   it(
-    "creates token pair, initialises vault + protocol config + market, writes config.json",
+    "creates token pair, initialises vault + protocol config + settle ALT, writes config.json",
     { timeout: 180_000 },
     async () => {
       // ────────────────────────────────────────────────────────────────────
@@ -301,7 +302,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       tx(`created both SPL mints (BASE=${DEMO_MINT_DECIMALS}d, QUOTE=${DEMO_MINT_DECIMALS}d)`, mintSig);
 
       // ────────────────────────────────────────────────────────────────────
-      step(2, "Initialise vault_config (idempotent)");
+      step(2, `Initialise vault_config + ${NUM_TREES} Merkle-tree shard(s) (idempotent)`);
       // ────────────────────────────────────────────────────────────────────
       const [vaultPda] = vaultConfigPda(VAULT_PROGRAM_ID);
       bullet(`vault_config PDA:   ${vaultPda.toBase58()}`);
@@ -315,12 +316,39 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
             admin: admin.publicKey,
             teePubkey: tee.publicKey,
             rootKey: rootKey.publicKey,
+            numTrees: NUM_TREES,
           }),
         );
         const sig = await sendAndConfirmTransaction(connection, initTx, [admin], {
           commitment: "confirmed",
         });
         tx("initialize(vault_config)", sig);
+      }
+
+      // Create each Merkle-tree shard account (idempotent — skip if it exists).
+      // The settle worker appends to merkle_tree[tree_id]; ALL K must exist
+      // before the CVM can settle to any non-zero shard.
+      const merkleTreePdas: PublicKey[] = [];
+      for (let treeId = 0; treeId < NUM_TREES; treeId++) {
+        const [treePda] = merkleTreePda(VAULT_PROGRAM_ID, treeId);
+        merkleTreePdas.push(treePda);
+        const exists = await connection.getAccountInfo(treePda);
+        if (exists) {
+          bullet(`merkle_tree[${treeId}] exists: ${treePda.toBase58()}`);
+          continue;
+        }
+        const treeTx = new Transaction().add(
+          buildInitializeTreeInstruction({
+            programId: VAULT_PROGRAM_ID,
+            admin: admin.publicKey,
+            treeId,
+          }),
+        );
+        const sig = await sendAndConfirmTransaction(connection, treeTx, [admin], {
+          commitment: "confirmed",
+        });
+        tx(`initialize_tree(${treeId})`, sig);
+        bullet(`merkle_tree[${treeId}]: ${treePda.toBase58()}`);
       }
 
       // ────────────────────────────────────────────────────────────────────
@@ -339,19 +367,22 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       protocolOwnerCommitment.set(tag.slice(0, 32));
       protocolOwnerCommitment[0] = 0; // keep value < BN254 Fr
 
-      // DEV-NET: wipe the vault's Merkle tree so the trade-flow test's
-      // in-memory shadow tree starts from the same empty root as on-chain.
+      // DEV-NET: wipe every Merkle-tree shard so the trade-flow test's
+      // in-memory shadow trees start from the same empty root as on-chain.
       // Idempotent + admin-gated. See programs/vault/src/instructions/reset_merkle_tree.rs.
-      const resetTx = new Transaction().add(
-        buildResetMerkleTreeInstruction({
-          programId: VAULT_PROGRAM_ID,
-          admin: admin.publicKey,
-        }),
-      );
-      const resetSig = await sendAndConfirmTransaction(connection, resetTx, [admin], {
-        commitment: "confirmed",
-      });
-      tx("reset_merkle_tree (devnet-only)", resetSig);
+      for (let treeId = 0; treeId < NUM_TREES; treeId++) {
+        const resetTx = new Transaction().add(
+          buildResetMerkleTreeInstruction({
+            programId: VAULT_PROGRAM_ID,
+            admin: admin.publicKey,
+            treeId,
+          }),
+        );
+        const resetSig = await sendAndConfirmTransaction(connection, resetTx, [admin], {
+          commitment: "confirmed",
+        });
+        tx(`reset_merkle_tree(${treeId}) (devnet-only)`, resetSig);
+      }
 
       const spcTx = new Transaction().add(
         buildSetProtocolConfigInstruction({
@@ -367,81 +398,44 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       tx(`set_protocol_config(fee_rate=${PROTOCOL_FEE_BPS}bps)`, spcSig);
 
       // ────────────────────────────────────────────────────────────────────
-      step(4, "init_market on matching_engine (with mock oracle for devnet)");
+      step(4, "Create Address Lookup Table for settle txs (size relief)");
       // ────────────────────────────────────────────────────────────────────
-      // Pyth Pull-Oracle v2 (`PriceUpdateV2`) accounts on devnet are rarely
-      // actively-maintained for arbitrary feeds, and the old Pythnet-legacy
-      // accounts (magic 0xa1b2c3d4) are not recognised by our `read_oracle`.
-      // So we create a tiny mock-oracle account (magic NYXMKPTH + u64 TWAP)
-      // via the new `init_mock_oracle` ix and bake its pubkey into the
-      // market config. The circuit breaker still fires meaningfully —
-      // just against a TWAP we control.
-      const useMockOracle =
-        !process.env.PYTH_ACCOUNT ||
-        (process.env.USE_MOCK_ORACLE ?? "1") === "1";
-
-      let oracleAccount: PublicKey;
-      if (useMockOracle) {
-        const mockOracleKp = Keypair.generate();
-        const MOCK_TWAP = 100n;
-        const mockTx = new Transaction().add(
-          buildInitMockOracleInstruction({
-            programId: ME_PROGRAM_ID,
-            payer: admin.publicKey,
-            mockOracle: mockOracleKp.publicKey,
-            twap: MOCK_TWAP,
-          }),
-        );
-        const mockSig = await sendAndConfirmTransaction(
-          connection, mockTx, [admin, mockOracleKp],
-          { commitment: "confirmed" },
-        );
-        tx(`init_mock_oracle (twap=${MOCK_TWAP}) at ${mockOracleKp.publicKey.toBase58()}`, mockSig);
-        oracleAccount = mockOracleKp.publicKey;
-      } else {
-        oracleAccount = PYTH_ACCOUNT;
-        bullet(`using real Pyth feed: ${oracleAccount.toBase58()}`);
-      }
-
-      const market = Keypair.generate();
-      const batchIntervalSlots = 8n;
-      const circuitBreakerBps = 500n; // 5% deviation before breaker trips
-      const tickSize = 1n;
-      const minOrderSize = 1n;
-
-      bullet(`market pubkey:          ${market.publicKey.toBase58()}`);
-      bullet(`oracle account:         ${oracleAccount.toBase58()}`);
-      bullet(`batch interval slots:   ${batchIntervalSlots}`);
-      bullet(`circuit breaker bps:    ${circuitBreakerBps}`);
-      bullet(`tick size:              ${tickSize}`);
-      bullet(`min order size:         ${minOrderSize}`);
-
-      const [clob] = darkClobPda(ME_PROGRAM_ID, market.publicKey);
-      const [mcfg] = matchingConfigPda(ME_PROGRAM_ID, market.publicKey);
-      const [breq] = batchResultsPda(ME_PROGRAM_ID, market.publicKey);
-      bullet(`dark_clob PDA:          ${clob.toBase58()}`);
-      bullet(`matching_config PDA:    ${mcfg.toBase58()}`);
-      bullet(`batch_results PDA:      ${breq.toBase58()}`);
-
-      const imTx = new Transaction().add(
-        buildInitMarketInstruction({
-          programId: ME_PROGRAM_ID,
-          vaultProgramId: VAULT_PROGRAM_ID,
+      // Hoist the static settle accounts (vault_config, instructions sysvar,
+      // system program) AND the K merkle_tree shard PDAs out of the settle tx's
+      // account-keys list — the address-lookup-table compresses each from 32
+      // bytes to a 1-byte index. With sharding the worker references its
+      // merkle_tree[j] from this ALT, so all K shards must be listed (mirrors
+      // the Rust static_alt_addresses).
+      const altAddresses = staticSettleAltAddresses(VAULT_PROGRAM_ID, NUM_TREES);
+      // Use the blockhash's context slot, not getSlot("confirmed") — the latter
+      // can return a leader-skipped slot absent from SlotHashes → ALT create
+      // fails with "is not a recent slot" (CRYPTOGRAPHY.md §9).
+      const slot = (await connection.getLatestBlockhashAndContext()).context.slot;
+      const [createAltIx, settleLookupTable] =
+        AddressLookupTableProgram.createLookupTable({
+          authority: admin.publicKey,
           payer: admin.publicKey,
-          market: market.publicKey,
-          baseMint: baseMint.publicKey,
-          quoteMint: quoteMint.publicKey,
-          pythAccount: oracleAccount,
-          batchIntervalSlots,
-          circuitBreakerBps,
-          tickSize,
-          minOrderSize,
-        }),
-      );
-      const imSig = await sendAndConfirmTransaction(connection, imTx, [admin], {
+          recentSlot: slot,
+        });
+      const extendAltIx = AddressLookupTableProgram.extendLookupTable({
+        payer: admin.publicKey,
+        authority: admin.publicKey,
+        lookupTable: settleLookupTable,
+        addresses: altAddresses,
+      });
+      const altTx = new Transaction().add(createAltIx, extendAltIx);
+      const altSig = await sendAndConfirmTransaction(connection, altTx, [admin], {
         commitment: "confirmed",
       });
-      tx("init_market", imSig);
+      tx("createLookupTable + extendLookupTable", altSig);
+      bullet(`settle ALT: ${settleLookupTable.toBase58()}`);
+      // Solana requires a fresh ALT to be at least one slot old before it
+      // can be referenced by a tx. Block briefly so the test that runs
+      // immediately after setup doesn't hit "ALT not found".
+      const altReadySlot = await connection.getSlot("confirmed");
+      while ((await connection.getSlot("confirmed")) <= altReadySlot) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
 
       // ────────────────────────────────────────────────────────────────────
       step(5, "Persist config to .devnet/e2e-config.json");
@@ -449,8 +443,6 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       const cfg: E2EConfig = {
         l1RpcUrl: L1_RPC_URL,
         vaultProgramId: VAULT_PROGRAM_ID.toBase58(),
-        matchingEngineProgramId: ME_PROGRAM_ID.toBase58(),
-        pythAccount: oracleAccount.toBase58(),
         baseMint: {
           pubkey: baseMint.publicKey.toBase58(),
           decimals: DEMO_MINT_DECIMALS,
@@ -461,33 +453,25 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           decimals: DEMO_MINT_DECIMALS,
           secretKey: Array.from(quoteMint.secretKey),
         },
-        market: {
-          pubkey: market.publicKey.toBase58(),
-          secretKey: Array.from(market.secretKey),
-          batchIntervalSlots: batchIntervalSlots.toString(),
-          circuitBreakerBps: circuitBreakerBps.toString(),
-          tickSize: tickSize.toString(),
-          minOrderSize: minOrderSize.toString(),
-        },
         protocol: {
           ownerCommitmentHex: Buffer.from(protocolOwnerCommitment).toString("hex"),
           feeRateBps: PROTOCOL_FEE_BPS,
         },
         vaultConfigPda: vaultPda.toBase58(),
-        darkClobPda: clob.toBase58(),
-        matchingConfigPda: mcfg.toBase58(),
-        batchResultsPda: breq.toBase58(),
+        numTrees: NUM_TREES,
+        merkleTreePdas: merkleTreePdas.map((p) => p.toBase58()),
+        settleLookupTable: settleLookupTable.toBase58(),
         createdAt: new Date().toISOString(),
       };
       saveConfig(cfg);
       bullet(`wrote: ${CONFIG_PATH}`);
 
-      banner("SETUP COMPLETE — run devnet-trade-flow.test.ts next");
+      banner("SETUP COMPLETE — run cvm-settle-e2e.test.ts next");
 
       // Sanity assertions
       expect(existsSync(CONFIG_PATH)).toBe(true);
       const reread = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
-      expect(reread.market.pubkey).toBe(market.publicKey.toBase58());
+      expect(reread.baseMint.pubkey).toBe(baseMint.publicKey.toBase58());
       expect(reread.protocol.feeRateBps).toBe(PROTOCOL_FEE_BPS);
     },
   );

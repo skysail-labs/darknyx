@@ -1,0 +1,10 @@
+{
+  "label": "Get Started",
+  "position": 1,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "title": "Get Started",
+    "description": "What Nyx is, how the venue is put together, and how to start trading it programmatically."
+  }
+}

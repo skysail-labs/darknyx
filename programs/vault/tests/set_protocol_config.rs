@@ -21,7 +21,10 @@ use solana_transaction::Transaction;
 type Pubkey = Address;
 const SYSTEM_PROGRAM_ID: Pubkey = solana_system_interface::program::ID;
 
-const VAULT_PROGRAM_ID_BYTES: &str = "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY";
+// Must match `declare_id!` in programs/vault/src/lib.rs. LiteSVM
+// verifies the embedded declared id in target/deploy/vault.so against
+// the id supplied to add_program_from_file and rejects mismatches.
+const VAULT_PROGRAM_ID_BYTES: &str = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
 
 fn program_so_path() -> PathBuf {
     common::repo_root().join("target/deploy/vault.so")
@@ -35,6 +38,7 @@ fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
 struct InitializeArgs {
     tee_pubkey: [u8; 32],
     root_key: [u8; 32],
+    num_trees: u8,
 }
 
 #[derive(BorshSerialize)]
@@ -52,6 +56,7 @@ fn initialize(svm: &mut LiteSVM, admin: &Keypair, program_id: &Pubkey) -> Pubkey
     InitializeArgs {
         tee_pubkey: tee_kp.pubkey().to_bytes(),
         root_key: root_kp.pubkey().to_bytes(),
+        num_trees: 1,
     }
     .serialize(&mut data)
     .unwrap();
@@ -109,35 +114,34 @@ fn set_protocol_config_happy_path_writes_both_fields() {
 
     let mut svm = LiteSVM::new();
     let program_id: Pubkey = VAULT_PROGRAM_ID_BYTES.parse().unwrap();
-    svm.add_program_from_file(program_id, &program_path).unwrap();
+    svm.add_program_from_file(program_id, &program_path)
+        .unwrap();
 
     let admin = Keypair::new();
     svm.airdrop(&admin.pubkey(), 1_000_000_000).unwrap();
     let vault_pda = initialize(&mut svm, &admin, &program_id);
 
     let new_commitment = [0xCD; 32];
-    let ix = build_set_protocol_config_ix(
-        &program_id,
-        &admin.pubkey(),
-        &vault_pda,
-        new_commitment,
-        42,
-    );
+    let ix =
+        build_set_protocol_config_ix(&program_id, &admin.pubkey(), &vault_pda, new_commitment, 42);
     let tx = Transaction::new(
         &[&admin],
         Message::new(&[ix], Some(&admin.pubkey())),
         svm.latest_blockhash(),
     );
-    svm.send_transaction(tx).expect("set_protocol_config failed");
+    svm.send_transaction(tx)
+        .expect("set_protocol_config failed");
 
-    // Re-read the account raw and check the last 34 bytes where
-    // (protocol_owner_commitment || fee_rate_bps || padding) live.
+    // Re-read the account raw and check the tail where
+    // (protocol_owner_commitment || fee_rate_bps || …) live.
     let acct = svm.get_account(&vault_pda).expect("vault config");
-    // VaultConfig layout tail: protocol_owner_commitment([u8;32]) + fee_rate_bps(u16) + _padding([u8;4]).
-    // Walk from the very end so we don't have to track Anchor's 8-byte disc.
+    // VaultConfig layout tail (post-sharding): protocol_owner_commitment([u8;32])
+    // + fee_rate_bps(u16) + num_tee_keys(u8) + num_trees(u8) + bump(u8) + _padding([u8;3]).
+    // That's 32 + 2 + 1 + 1 + 1 + 3 = 40 trailing bytes; walk from the end so we
+    // don't have to track Anchor's 8-byte disc.
     let len = acct.data.len();
-    let tail_commitment = &acct.data[len - 38..len - 6];
-    let tail_rate = u16::from_le_bytes(acct.data[len - 6..len - 4].try_into().unwrap());
+    let tail_commitment = &acct.data[len - 40..len - 8];
+    let tail_rate = u16::from_le_bytes(acct.data[len - 8..len - 6].try_into().unwrap());
     assert_eq!(tail_commitment, new_commitment);
     assert_eq!(tail_rate, 42);
 }
@@ -151,7 +155,8 @@ fn set_protocol_config_rejects_non_admin_signer() {
 
     let mut svm = LiteSVM::new();
     let program_id: Pubkey = VAULT_PROGRAM_ID_BYTES.parse().unwrap();
-    svm.add_program_from_file(program_id, &program_path).unwrap();
+    svm.add_program_from_file(program_id, &program_path)
+        .unwrap();
 
     let admin = Keypair::new();
     let impostor = Keypair::new();
@@ -159,13 +164,8 @@ fn set_protocol_config_rejects_non_admin_signer() {
     svm.airdrop(&impostor.pubkey(), 1_000_000_000).unwrap();
     let vault_pda = initialize(&mut svm, &admin, &program_id);
 
-    let ix = build_set_protocol_config_ix(
-        &program_id,
-        &impostor.pubkey(),
-        &vault_pda,
-        [0x99; 32],
-        10,
-    );
+    let ix =
+        build_set_protocol_config_ix(&program_id, &impostor.pubkey(), &vault_pda, [0x99; 32], 10);
     let tx = Transaction::new(
         &[&impostor],
         Message::new(&[ix], Some(&impostor.pubkey())),
@@ -187,7 +187,8 @@ fn set_protocol_config_rejects_fee_rate_above_max() {
 
     let mut svm = LiteSVM::new();
     let program_id: Pubkey = VAULT_PROGRAM_ID_BYTES.parse().unwrap();
-    svm.add_program_from_file(program_id, &program_path).unwrap();
+    svm.add_program_from_file(program_id, &program_path)
+        .unwrap();
 
     let admin = Keypair::new();
     svm.airdrop(&admin.pubkey(), 1_000_000_000).unwrap();

@@ -11,7 +11,7 @@ import { PublicKey } from "@solana/web3.js";
 import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
-import { noteCommitment, nullifier as computeNullifier } from "./note.js";
+import { noteCommitmentV2, nullifierV2 as computeNullifierV2 } from "./note.js";
 import { buildWithdrawInstruction } from "../idl/vault-client.js";
 
 /** SPL Token program id (classic). */
@@ -20,6 +20,8 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 export interface WithdrawParams {
   /** Fee-payer / signer for the withdraw transaction. */
   payer: PublicKey;
+  /** Which Merkle-tree shard the spent note lives in (default 0). */
+  treeId?: number;
   tokenMint: Uint8Array;
   amount: bigint;
   /** Destination SPL token account (must match `tokenMint`). */
@@ -29,8 +31,8 @@ export interface WithdrawParams {
     tokenMint: Uint8Array;
     amount: bigint;
     ownerCommitment: bigint;
-    nonce: bigint;
-    blindingR: bigint;
+    /** v2: single inner_hash replacing the old (nonce, blindingR) pair. */
+    innerHash: bigint;
   };
   /** Merkle leaf index of the note. */
   leafIndex: bigint;
@@ -73,6 +75,16 @@ export function getWithdrawFunction(
         "withdraw amount must equal the note's plaintext amount (no partial withdrawals)",
       );
     }
+    // The commitment hashes `notePlaintext.tokenMint` but the prover inputs +
+    // the on-chain instruction use `params.tokenMint`; a mismatch would make
+    // the proof reconstruct a different note than the one being spent. Pin
+    // them to a single canonical mint here.
+    if (Buffer.compare(Buffer.from(params.tokenMint), Buffer.from(params.notePlaintext.tokenMint)) !== 0) {
+      throw new DarkPoolError(
+        "parameter",
+        "params.tokenMint must equal notePlaintext.tokenMint",
+      );
+    }
 
     const { spendingKey } = await client.getResolvedKeys();
 
@@ -95,8 +107,8 @@ export function getWithdrawFunction(
 
     // --- Stage: note-build ---
     await params.callbacks?.pre?.("note-build");
-    const commitment = await noteCommitment(params.notePlaintext);
-    const nullifierBytes = await computeNullifier(spendingKey, commitment);
+    const commitment = await noteCommitmentV2(params.notePlaintext);
+    const nullifierBytes = await computeNullifierV2(spendingKey, params.notePlaintext.innerHash);
 
     // --- Stage: proof-generation (delegated to injected prover) ---
     await params.callbacks?.pre?.("proof-generation");
@@ -111,8 +123,7 @@ export function getWithdrawFunction(
         amount: params.amount,
         spendingKey,
         ownerCommitmentBlinding: ownerBlinding,
-        nonce: params.notePlaintext.nonce,
-        blindingR: params.notePlaintext.blindingR,
+        innerHash: params.notePlaintext.innerHash,
         merklePath: mProof.siblings.map(uint8ArrayToBigIntBE),
         merkleIndices: mProof.pathIndices,
       });
@@ -125,6 +136,7 @@ export function getWithdrawFunction(
     const tokenMintPk = new PublicKey(params.tokenMint);
     const ix = buildWithdrawInstruction({
       programId: client.programId,
+      treeId: params.treeId ?? 0,
       payer: params.payer,
       tokenMint: tokenMintPk,
       destinationTokenAccount: params.destinationTokenAccount,

@@ -25,7 +25,7 @@ import { DarkPoolClient } from "../src/client.js";
 import { anchorDiscriminator } from "../src/idl/vault-client.js";
 import type { IDarkPoolZkProverSuite, SpendInputs } from "../src/zk/prover-suite.js";
 
-const PROGRAM_ID = new PublicKey("ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY");
+const PROGRAM_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 class FakeProverSuite implements IDarkPoolZkProverSuite {
   public capturedSpendInputs: SpendInputs[] = [];
@@ -43,6 +43,11 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
         piC: new Uint8Array(64).fill(0xcc),
         publicInputs: [],
       };
+    },
+  };
+  merge = {
+    prove: async () => {
+      throw new Error("not used in withdraw test");
     },
   };
 }
@@ -119,8 +124,7 @@ describe("getWithdrawFunction", () => {
       tokenMint: mintBytes,
       amount: 250_000n,
       ownerCommitment: 3n,
-      nonce: 9n,
-      blindingR: 17n,
+      innerHash: 9n,
     };
 
     const receipt = await getWithdrawFunction({ client })({
@@ -151,6 +155,8 @@ describe("getWithdrawFunction", () => {
     expect(prover.capturedSpendInputs).toHaveLength(1);
     const si = prover.capturedSpendInputs[0];
     expect(si.amount).toBe(250_000n);
+    // The note's inner_hash must reach the prover unchanged.
+    expect(si.innerHash).toBe(notePlaintext.innerHash);
     expect(si.merklePath).toHaveLength(20);
     expect(si.merkleIndices).toHaveLength(20);
 
@@ -160,14 +166,15 @@ describe("getWithdrawFunction", () => {
     const disc = Buffer.from(anchorDiscriminator("withdraw"));
     expect((ix.data as NodeBuffer).subarray(0, 8).equals(disc)).toBe(true);
 
-    // Data layout: disc(8) || note_commitment(32) || nullifier(32) ||
-    //              merkle_root(32) || amount(u64 LE) || pi_a(64) || pi_b(128) || pi_c(64)
+    // Data layout: disc(8) || tree_id(1) || note_commitment(32) || nullifier(32)
+    //   || merkle_root(32) || amount(u64 LE) || pi_a(64) || pi_b(128) || pi_c(64)
     const d = ix.data as NodeBuffer;
-    expect(d.length).toBe(8 + 32 + 32 + 32 + 8 + 64 + 128 + 64);
-    const amt = d.readBigUInt64LE(8 + 32 + 32 + 32);
+    expect(d.length).toBe(8 + 1 + 32 + 32 + 32 + 8 + 64 + 128 + 64);
+    expect(d[8]).toBe(0); // tree_id
+    const amt = d.readBigUInt64LE(8 + 1 + 32 + 32 + 32);
     expect(amt).toBe(250_000n);
     // Proof bytes (0xaa / 0xbb / 0xcc) should be present at the tail.
-    const tailStart = 8 + 32 + 32 + 32 + 8;
+    const tailStart = 8 + 1 + 32 + 32 + 32 + 8;
     expect(d[tailStart]).toBe(0xaa);
     expect(d[tailStart + 64]).toBe(0xbb);
     expect(d[tailStart + 64 + 128]).toBe(0xcc);
@@ -190,8 +197,7 @@ describe("getWithdrawFunction", () => {
           tokenMint: mint,
           amount: 200n, // mismatch!
           ownerCommitment: 1n,
-          nonce: 1n,
-          blindingR: 1n,
+          innerHash: 1n,
         },
         leafIndex: 0n,
       }),

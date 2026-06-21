@@ -3,10 +3,10 @@
 //!
 //! Usage: poseidon-hash 2 12345 67890
 
-use darkpool_crypto::field::fr_to_be_bytes;
-use darkpool_crypto::poseidon::poseidon_hash;
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
+use darkpool_crypto::field::fr_to_be_bytes;
+use darkpool_crypto::poseidon::poseidon_hash;
 
 /// Convert a base-10 decimal string to a big-endian u256 byte buffer by
 /// repeated divison. Faster to just use u128 for small test inputs; we accept
@@ -28,7 +28,9 @@ fn dec_to_be(s: &str) -> Vec<u8> {
         out.insert(0, rem as u8);
         digits = new_digits;
     }
-    if out.is_empty() { out.push(0); }
+    if out.is_empty() {
+        out.push(0);
+    }
     out
 }
 

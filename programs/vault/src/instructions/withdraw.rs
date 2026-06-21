@@ -23,18 +23,25 @@ fn u64_be32(v: u64) -> [u8; 32] {
 }
 
 #[derive(Accounts)]
-#[instruction(note_commitment: [u8; 32], nullifier: [u8; 32], merkle_root: [u8; 32], amount: u64, proof: Groth16Proof)]
+#[instruction(tree_id: u8, note_commitment: [u8; 32], nullifier: [u8; 32], merkle_root: [u8; 32], amount: u64, proof: Groth16Proof)]
 pub struct Withdraw<'info> {
     /// Any signer may pay the rent. Authorization is via ZK proof.
     #[account(mut)]
     pub payer: Signer<'info>,
 
+    /// Global config — the SPL token authority (read-only; no tree state here).
     #[account(
-        mut,
         seeds = [VaultConfig::SEED],
-        bump,
+        bump = vault_config.load()?.bump,
     )]
     pub vault_config: AccountLoader<'info, VaultConfig>,
+
+    /// The Merkle-tree shard the spent note lives in (read-only recency check).
+    #[account(
+        seeds = [MerkleTree::SEED, &[tree_id]],
+        bump = merkle_tree.load()?.bump,
+    )]
+    pub merkle_tree: AccountLoader<'info, MerkleTree>,
 
     pub token_mint: Account<'info, Mint>,
 
@@ -81,12 +88,24 @@ pub struct Withdraw<'info> {
     )]
     pub nullifier_entry: AccountLoader<'info, NullifierEntry>,
 
+    /// v2 — per-mint outstanding-notes counter for this token. MUST exist
+    /// (i.e. deposit() must have been called for this mint at least once,
+    /// or there's nothing to withdraw).
+    #[account(
+        mut,
+        seeds = [OutstandingMint::SEED, token_mint.key().as_ref()],
+        bump = outstanding_mint.bump,
+    )]
+    pub outstanding_mint: Account<'info, OutstandingMint>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn withdraw_handler(
     ctx: Context<Withdraw>,
+    _tree_id: u8,
     note_commitment: [u8; 32],
     nullifier: [u8; 32],
     merkle_root: [u8; 32],
@@ -119,20 +138,36 @@ pub fn withdraw_handler(
         }
     }
 
-    // ----- Merkle root must be recent -----
+    // ----- Merkle root must be recent (in THIS shard's ring) -----
     require!(
-        ctx.accounts
-            .vault_config
-            .load()?
-            .contains_root(&merkle_root),
+        ctx.accounts.merkle_tree.load()?.contains_root(&merkle_root),
         VaultError::StaleMerkleRoot
     );
 
     // ----- Verify ZK proof -----
-    // VALID_SPEND public inputs: [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount]
+    // VALID_SPEND public signals (in circuit declaration order):
+    //   [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, noteCommitment]
+    //
+    // Wire order matches circuit.sym (circom places outputs before inputs):
+    //   wire 1: noteCommitment (signal output — first in IC sum)
+    //   wire 2: merkleRoot
+    //   wire 3: nullifier
+    //   wire 4: tokenMint[0]
+    //   wire 5: tokenMint[1]
+    //   wire 6: amount
+    // Binding noteCommitment as wire 1 prevents the "arbitrary note_commitment
+    // bypass" attack where a caller supplies an un-nullified commitment while
+    // submitting a proof for a different, already-nullified note.
     let mint_bytes = ctx.accounts.token_mint.key().to_bytes();
     let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
-    let public_inputs: [[u8; 32]; 5] = [merkle_root, nullifier, mint_lo, mint_hi, u64_be32(amount)];
+    let public_inputs: [[u8; 32]; 6] = [
+        note_commitment,
+        merkle_root,
+        nullifier,
+        mint_lo,
+        mint_hi,
+        u64_be32(amount),
+    ];
 
     let vk = make_vk(
         &VALID_SPEND_ALPHA_G1,
@@ -141,7 +176,13 @@ pub fn withdraw_handler(
         &VALID_SPEND_DELTA_G2,
         &VALID_SPEND_IC,
     );
-    verify_groth16_proof::<5>(&vk, &proof, &public_inputs)?;
+    verify_groth16_proof::<6>(&vk, &proof, &public_inputs)?;
+
+    // ----- v2 solvency check (must come BEFORE state mutation) -----
+    require!(
+        ctx.accounts.outstanding_mint.outstanding >= amount,
+        VaultError::InsufficientOutstanding
+    );
 
     // ----- Mark nullifier as spent -----
     let n = &mut ctx.accounts.nullifier_entry.load_init()?;
@@ -149,6 +190,10 @@ pub fn withdraw_handler(
     n.spent_slot = Clock::get()?.slot;
     n.bump = ctx.bumps.nullifier_entry;
     n._padding = [0u8; 7];
+
+    // ----- Decrement outstanding counter -----
+    // Subtract is safe because of the InsufficientOutstanding check above.
+    ctx.accounts.outstanding_mint.outstanding -= amount;
 
     // ----- Transfer tokens out -----
     let bump = ctx.accounts.vault_config.load()?.bump;
@@ -170,6 +215,13 @@ pub fn withdraw_handler(
         amount,
         ctx.accounts.token_mint.decimals,
     )?;
+
+    // Solvency invariant check (both counters dropped by `amount`).
+    ctx.accounts.vault_token_account.reload()?;
+    require!(
+        ctx.accounts.outstanding_mint.outstanding <= ctx.accounts.vault_token_account.amount,
+        VaultError::SolvencyInvariantViolated
+    );
 
     emit!(Withdrawn {
         nullifier,

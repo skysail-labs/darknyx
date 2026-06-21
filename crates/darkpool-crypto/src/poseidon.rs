@@ -20,12 +20,7 @@ use solana_poseidon::{hashv, Endianness, Parameters};
 ///
 /// Supported arities: 1..=12 (light-poseidon / BN254 Poseidon spec).
 pub fn poseidon_hash(inputs: &[Fr]) -> Result<Fr, CryptoError> {
-    let bytes = poseidon_hash_bytes(
-        &inputs
-            .iter()
-            .map(fr_to_be_bytes)
-            .collect::<Vec<_>>(),
-    )?;
+    let bytes = poseidon_hash_bytes(&inputs.iter().map(fr_to_be_bytes).collect::<Vec<_>>())?;
     fr_from_be_bytes(&bytes)
 }
 
@@ -42,13 +37,14 @@ pub fn poseidon_hash_bytes(inputs: &[[u8; FR_BYTES]]) -> Result<[u8; FR_BYTES], 
 
     #[cfg(not(target_os = "solana"))]
     {
-    let mut hasher = Poseidon::<Fr>::new_circom(inputs.len())
-        .map_err(|e| CryptoError::Poseidon(format!("init (arity {}): {:?}", inputs.len(), e)))?;
-    let input_refs: Vec<&[u8]> = inputs.iter().map(|b| b.as_slice()).collect();
-    let out = hasher
-        .hash_bytes_be(&input_refs)
-        .map_err(|e| CryptoError::Poseidon(format!("hash: {:?}", e)))?;
-    Ok(out)
+        let mut hasher = Poseidon::<Fr>::new_circom(inputs.len()).map_err(|e| {
+            CryptoError::Poseidon(format!("init (arity {}): {:?}", inputs.len(), e))
+        })?;
+        let input_refs: Vec<&[u8]> = inputs.iter().map(|b| b.as_slice()).collect();
+        let out = hasher
+            .hash_bytes_be(&input_refs)
+            .map_err(|e| CryptoError::Poseidon(format!("hash: {:?}", e)))?;
+        Ok(out)
     }
 }
 
@@ -79,10 +75,10 @@ mod tests {
     }
 
     #[test]
-    fn poseidon_6_arity_matches_note_commitment_use() {
-        // Note commitment uses arity 6 in the circuit (tokenMint[lo], tokenMint[hi],
-        // amount, ownerCommitment, nonce, blindingR). Make sure we can do arity 6.
-        let inputs = (0..6).map(|i| Fr::from((i + 1) as u64)).collect::<Vec<_>>();
+    fn poseidon_7_arity_matches_note_commitment_use() {
+        // Note commitment uses arity 7: domain_tag + tokenMint[lo] + tokenMint[hi]
+        // + amount + ownerCommitment + nonce + blindingR.
+        let inputs = (0..7).map(|i| Fr::from((i + 1) as u64)).collect::<Vec<_>>();
         let h = poseidon_hash(&inputs).unwrap();
         assert_ne!(h, Fr::zero());
     }

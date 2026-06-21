@@ -53,12 +53,23 @@ build_circuit() {
     echo "[$name] groth16 setup"
     "$SNARKJS" groth16 setup "$r1cs" "$PTAU" "$out/circuit_0000.zkey"
 
-    # Single deterministic dev contribution (entropy from fixed seed).
-    # For production, this MUST be replaced with a real multi-party ceremony.
-    echo "[$name] zkey contribute (dev-only, deterministic)"
-    echo "nyx-phase1-dev-contribution-$name" | "$SNARKJS" zkey contribute \
+    # Deterministic dev contribution via `zkey beacon`. Unlike `zkey
+    # contribute -e=...`, which mixes user entropy with crypto.randomBytes()
+    # and is therefore NOT reproducible across machines, `zkey beacon`
+    # derives the contribution purely from the supplied hash + iteration
+    # exponent. Identical inputs => byte-identical circuit_final.zkey =>
+    # byte-identical verification_key.json => the committed Rust VK
+    # constants in programs/vault/src/zk/vk_*.rs stay in sync across
+    # every developer's local rebuild and every CI run.
+    #
+    # For production, this MUST be replaced with a real multi-party
+    # ceremony (or a public-beacon contribution derived from an
+    # unpredictable future event hash).
+    echo "[$name] zkey beacon (dev-only, deterministic)"
+    "$SNARKJS" zkey beacon \
         "$out/circuit_0000.zkey" "$out/circuit_final.zkey" \
-        --name="nyx-dev-$name" -v -e="nyx-phase1-dev-contribution-$name"
+        0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20 10 \
+        --name="nyx-dev-$name" -v
 
     echo "[$name] export verification key"
     "$SNARKJS" zkey export verificationkey "$out/circuit_final.zkey" "$out/verification_key.json"
@@ -71,6 +82,15 @@ build_circuit() {
 
 build_circuit valid_wallet_create
 build_circuit valid_spend
+build_circuit valid_input
+# In-pool note merge (K=2/4). Both fit pot16 (~26k / ~50k constraints).
+build_circuit valid_merge_k2
+build_circuit valid_merge_k4
+# v3.1 valid_create + valid_price circuits were removed in Phase 1c-hard.
+# They've been subsumed by the v3.5 batched-validity circuit (see
+# circuits/match_batch_n*). The N=16 instantiation requires pot18 and is
+# built/setup manually for now (no entry here); add it to this list once
+# the build script learns to pick the right PTAU per-circuit.
 
 echo ""
 echo "All circuits built. Artifacts in $BUILD_DIR/"

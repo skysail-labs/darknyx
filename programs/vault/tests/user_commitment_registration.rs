@@ -40,8 +40,10 @@ use solana_transaction::Transaction;
 type Pubkey = Address;
 const SYSTEM_PROGRAM_ID: Pubkey = solana_system_interface::program::ID;
 
-// Must match `declare_id!` in programs/vault/src/lib.rs.
-const VAULT_PROGRAM_ID_BYTES: &str = "ELt4FH2gH8RaZkYbvbbDjGkX8dPhGFdWnspM4w1fdjoY";
+// Must match `declare_id!` in programs/vault/src/lib.rs. LiteSVM
+// verifies the embedded declared id in target/deploy/vault.so against
+// the id supplied to add_program_from_file and rejects mismatches.
+const VAULT_PROGRAM_ID_BYTES: &str = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
 
 fn program_so_path() -> PathBuf {
     common::repo_root().join("target/deploy/vault.so")
@@ -66,6 +68,7 @@ struct RawGroth16Proof {
 struct InitializeArgs {
     tee_pubkey: [u8; 32],
     root_key: [u8; 32],
+    num_trees: u8,
 }
 
 fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
@@ -106,6 +109,7 @@ fn test_user_commitment_registration() {
     let init_args = InitializeArgs {
         tee_pubkey: tee_kp.pubkey().to_bytes(),
         root_key: root_kp.pubkey().to_bytes(),
+        num_trees: 1,
     };
     init_args.serialize(&mut init_data).unwrap();
 
