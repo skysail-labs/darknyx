@@ -147,6 +147,9 @@ export async function startFillsSync(opts: FillsSyncOptions): Promise<FillsSync>
       // Advance the replay cursor in lockstep with the live tail.
       onSeq: (seq) => {
         if (seq > cursor) cursor = seq;
+        // Forward to the caller's onSeq — this internal override (via `...opts`)
+        // must not swallow a user-provided callback.
+        opts.onSeq?.(seq);
       },
       onResync: async (reason) => {
         opts.onResync?.(reason);

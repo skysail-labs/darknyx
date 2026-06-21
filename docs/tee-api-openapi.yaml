@@ -1524,7 +1524,8 @@ x-websocket-implemented:
     SEQUENCING: every server message carries a top-level `seq` — a per-connection
     monotonic counter starting at 1. A gap in `seq` (or a 1011 lag-close) means
     the client missed messages; recover by reconciling (GET /orders/:id for the
-    orders stream; the indexer backfill for fills).
+    orders stream; GET /fills/replay?since=<seq> for fills — the indexer is a
+    commitment-only locator after amount-privacy, not the recovery source).
   streams:
     /ws/fills:
       description: |
@@ -1665,7 +1666,7 @@ x-websocket-implemented:
               code: { type: integer, description: "Present on `error` — the stable numeric error code." }
               message: { type: string, description: Present on `error`. }
   close_codes:
-    1011: Lagged past the per-account buffer — reopen and backfill from the indexer.
+    1011: Lagged past the per-account buffer — reopen and replay via GET /fills/replay?since=<seq>.
 
 x-websocket:
 

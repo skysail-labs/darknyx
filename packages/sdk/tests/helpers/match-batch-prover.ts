@@ -226,9 +226,10 @@ export async function padBatch(
  */
 export async function computeBatchLeaf(slot: MatchSlotWitness): Promise<Uint8Array> {
   const p = await getPoseidon();
-  // Commitment-only leaf (amount-privacy, P1b): Poseidon8(DOMAIN_LEAF_V2,
-  // note_a..note_f, batch_slot). The amounts/mints/price are bound
-  // transitively via the six note commitments, so they leave the leaf.
+  // Commitment-only leaf (amount-privacy, P1b): Poseidon10(DOMAIN_LEAF_V2,
+  // note_a..note_f, note_fee_base, note_fee_quote, batch_slot). The
+  // amounts/mints/price are bound transitively via the note commitments, so
+  // they leave the leaf.
   const leaf = p.F.toObject(
     p([
       DOMAIN_LEAF_V2,

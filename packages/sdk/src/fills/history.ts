@@ -116,7 +116,10 @@ export async function backfillHistory(opts: BackfillOptions): Promise<BackfillRe
       consecutiveEmpty = 0;
       highestUsedIndex = n;
       for (const fill of fills) {
-        cursorSlot = Math.max(cursorSlot, Number(fill.batchSlot));
+        // Guard against a malformed batchSlot poisoning the cursor: Math.max
+        // with NaN is NaN, which would break downstream incremental sync.
+        const slot = Number(fill.batchSlot);
+        if (Number.isFinite(slot)) cursorSlot = Math.max(cursorSlot, slot);
         if (fill.changeNoteCommitment) located.push(fill);
       }
     }

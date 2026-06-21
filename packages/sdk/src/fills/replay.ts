@@ -76,5 +76,8 @@ export async function replayFills(opts: ReplayOptions): Promise<ReplayResult> {
       opts.onError?.(e as Error);
     }
   }
-  return { records, nextCursor: body.next_cursor ?? since };
+  // Clamp the cursor monotonically forward: a stale/malformed server
+  // next_cursor must never regress below `since`, or a replay-then-tail driver
+  // could re-fetch the same window forever.
+  return { records, nextCursor: Math.max(body.next_cursor ?? since, since) };
 }
