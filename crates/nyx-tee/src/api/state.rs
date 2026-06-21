@@ -294,8 +294,13 @@ pub struct OrderUpdateMsg {
     pub new_note_amount: Option<u64>,
 }
 
-/// Per-account fill-memo channel depth. A slow `/ws/fills` client that lags
-/// past this is closed with a 1011 resync (it backfills via the indexer).
+/// Per-account fill-memo channel depth. A CONNECTED-but-slow `/ws/fills` client
+/// that lags past this is closed with a 1011 resync. NOTE: this buffer only
+/// covers a still-attached lagging client — it is not a durable mailbox, so a
+/// memo sent while the account has no live `/ws/fills` receiver is dropped
+/// (`route_fill` → false), not retained for a later reconnect. Amount-privacy
+/// (P4) makes that drop lossy for the amount (the indexer locates the commitment
+/// but not the amount); the memo-replay endpoint is the planned fix.
 const FILLS_CHANNEL_CAP: usize = 1024;
 
 /// Global `tree`-channel depth. Sized larger than the per-account channels
@@ -522,8 +527,16 @@ impl ApiState {
 
     /// Get-or-create the caller account's fill-memo channel and subscribe. A
     /// receiver created here only sees memos sent AFTER it subscribes — earlier
-    /// fills are recovered via the indexer backfill (the "backfill then tail"
-    /// contract).
+    /// fills are LOCATED (commitment only) via the indexer backfill, but their
+    /// amounts are NOT recoverable from it.
+    ///
+    /// Amount-privacy (P3b/P4) note: the indexer no longer carries amounts, so a
+    /// memo emitted while no client is attached is currently lost from the
+    /// recovery path (the change-note commitment is still locatable on-chain, but
+    /// its amount — hence the spendable opening — lives only in this ephemeral
+    /// memo). Closing that gap is the planned authenticated memo-replay endpoint;
+    /// until it lands, "backfill then tail" recovers *which* notes you own, not
+    /// their amounts. See `docs/fills-history-architecture.md`.
     pub async fn subscribe_account_fills(&self, account_id: &str) -> broadcast::Receiver<FillMemo> {
         let mut routes = self.fills_routes.write().await;
         // Opportunistic GC: drop channels whose `/ws/fills` subscribers have all
@@ -531,9 +544,11 @@ impl ApiState {
         // number of CURRENTLY-connected accounts rather than every account ever
         // seen. Safe because we hold the write lock here — `subscribe` is the only
         // path that inserts, so no concurrent caller can be mid-flight holding a
-        // just-created receiver; and a reconnecting client backfills from the
-        // indexer ("backfill then tail"), so discarding its stale channel loses
-        // nothing. Cheap: `receiver_count()` is an atomic load, subscribes are rare.
+        // just-created receiver. NOTE: discarding a disconnected account's channel
+        // drops any memo sent before it reconnects — see the amount-privacy caveat
+        // on this fn (the indexer locates the commitment but not the amount; full
+        // recovery awaits the memo-replay endpoint). Cheap: `receiver_count()` is
+        // an atomic load, subscribes are rare.
         routes.retain(|_, tx| tx.receiver_count() > 0);
         let tx = routes
             .entry(account_id.to_string())
@@ -543,8 +558,14 @@ impl ApiState {
 
     /// Route one memo to its owning account's channel. Returns true when it was
     /// delivered to at least one live subscriber; false when the order is
-    /// unknown or no `/ws/fills` client is currently attached (the client will
-    /// backfill from the indexer).
+    /// unknown or no `/ws/fills` client is currently attached.
+    ///
+    /// A `false` return means the memo was DROPPED (the per-account broadcast has
+    /// no live receiver). Amount-privacy (P4) caveat: this is NOT yet self-healing
+    /// — the indexer backfill can re-locate the change-note commitment but not its
+    /// amount, so a memo dropped here strands the spendable opening until the
+    /// planned memo-replay endpoint. Do NOT re-add a "client will backfill from
+    /// the indexer" claim here without that endpoint; see `subscribe_account_fills`.
     pub async fn route_fill(&self, memo: &FillMemo) -> bool {
         let account = self.order_owner.read().await.get(&memo.order_id).cloned();
         let Some(account) = account else { return false };
