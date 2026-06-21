@@ -11,12 +11,23 @@
 //! could forge in a way that fools the client — the integrity check is
 //! the client's guard against a misbehaving TEE (design-doc Vuln 4).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A single continuation fill: the change note minted for a relocking
 /// side, plus the anchor it consumed.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+///
+/// `Deserialize` is needed by the durable fill-memo log (P7 memo replay);
+/// the on-disk form is bincode, so fields use plain `Option` (NOT
+/// `skip_serializing_if`, which would desync bincode's serialize/deserialize).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FillMemo {
+    /// Per-account monotonic sequence number, assigned at ROUTING time
+    /// (`ApiState::route_fill`), not by the matcher. `None` only on a
+    /// freshly-constructed memo that hasn't been routed yet; every memo the
+    /// client ever sees (live or replayed) carries `Some`. The client uses it
+    /// as the `?since=` cursor for `GET /fills/replay`.
+    #[serde(default)]
+    pub seq: Option<u64>,
     /// The order that partially filled (16-byte id), hex.
     pub order_id: String,
     /// Index into the order's anchor pool that was consumed for this
@@ -46,6 +57,7 @@ impl FillMemo {
         inner_hash: [u8; 32],
     ) -> Self {
         Self {
+            seq: None,
             order_id: hex::encode(order_id),
             anchor_index: anchor_index as u32,
             change_amount,

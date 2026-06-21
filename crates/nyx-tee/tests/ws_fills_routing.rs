@@ -14,6 +14,7 @@ use nyx_tee::matcher::FillMemo;
 
 fn memo(order_id: &str) -> FillMemo {
     FillMemo {
+        seq: None, // assigned by route_fill
         order_id: order_id.to_string(),
         anchor_index: 0,
         change_amount: 100,
@@ -92,8 +93,9 @@ async fn no_subscriber_means_no_delivery_but_no_error() {
     state
         .record_order_owner("order_a".into(), "acct_a".into())
         .await;
-    // Owner known, but no /ws/fills client attached → not delivered (the client
-    // will backfill from the indexer), and routing does not panic.
+    // Owner known, but no /ws/fills client attached → not delivered LIVE
+    // (recoverable via the durable fill log / memo replay, P7), and routing does
+    // not panic.
     assert!(!state.route_fill(&memo("order_a")).await);
 }
 

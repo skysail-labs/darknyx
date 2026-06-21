@@ -197,6 +197,13 @@ pub struct ApiState {
     /// broadcast into these per-account channels, so a subscriber sees ONLY
     /// its own order's memos (the leak guard that gated the old global route).
     pub fills_routes: Arc<RwLock<HashMap<String, broadcast::Sender<FillMemo>>>>,
+    /// Durable per-account fill-memo log (P7). Every routed memo is appended
+    /// here with a monotonic `seq` BEFORE the live send, so a memo emitted while
+    /// no `/ws/fills` client is attached survives for `GET /fills/replay`. This
+    /// is what restores self-healing recovery after amount-privacy (P4) made the
+    /// indexer a commitment-only locator. Persisted to the LUKS volume
+    /// (`fills.db`) when `state_dir` is set; in-memory only otherwise.
+    pub fill_log: Arc<RwLock<persistence::FillLog>>,
     /// `account_id → per-account order-lifecycle broadcast`. Same per-account
     /// fan-out as `fills_routes`, but for `/ws/orders`: the order router fans
     /// the matcher's global `OrderUpdate` broadcast into these channels keyed
@@ -294,6 +301,15 @@ pub struct OrderUpdateMsg {
     pub new_note_amount: Option<u64>,
 }
 
+/// Wall-clock unix seconds, saturating to 0 before the epoch. Used to stamp
+/// stored fill memos for the TTL prune (coarse — exactness doesn't matter).
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Per-account fill-memo channel depth. A CONNECTED-but-slow `/ws/fills` client
 /// that lags past this is closed with a 1011 resync. NOTE: this buffer only
 /// covers a still-attached lagging client — it is not a durable mailbox, so a
@@ -341,6 +357,7 @@ impl ApiState {
     ) -> Self {
         let state_dir = persistence::state_dir_from_env();
         let (registry, revoked) = Self::load_or_seed_auth(state_dir.as_deref());
+        let fill_log = Self::load_fill_log(state_dir.as_deref());
         Self {
             app_info,
             signer_pubkey_base58: signer.pubkey_base58.clone(),
@@ -370,6 +387,7 @@ impl ApiState {
             solana_rpc: None,
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
+            fill_log: Arc::new(RwLock::new(fill_log)),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
             idempotency: Arc::new(RwLock::new(HashMap::new())),
@@ -503,6 +521,7 @@ impl ApiState {
             solana_rpc: None,
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
+            fill_log: Arc::new(RwLock::new(persistence::FillLog::default())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
             idempotency: Arc::new(RwLock::new(HashMap::new())),
@@ -557,21 +576,36 @@ impl ApiState {
     }
 
     /// Route one memo to its owning account's channel. Returns true when it was
-    /// delivered to at least one live subscriber; false when the order is
-    /// unknown or no `/ws/fills` client is currently attached.
+    /// delivered to at least one LIVE subscriber; false when the order is unknown
+    /// or no `/ws/fills` client is currently attached.
     ///
-    /// A `false` return means the memo was DROPPED (the per-account broadcast has
-    /// no live receiver). Amount-privacy (P4) caveat: this is NOT yet self-healing
-    /// — the indexer backfill can re-locate the change-note commitment but not its
-    /// amount, so a memo dropped here strands the spendable opening until the
-    /// planned memo-replay endpoint. Do NOT re-add a "client will backfill from
-    /// the indexer" claim here without that endpoint; see `subscribe_account_fills`.
+    /// P7 (self-healing): the memo is FIRST appended to the durable per-account
+    /// fill log — which assigns its monotonic `seq` and persists it (best-effort)
+    /// to `fills.db` — and ONLY THEN routed to the live channel. So the return
+    /// value reflects live delivery only; even a `false` (no attached client) is
+    /// no longer a loss — the seq-stamped memo is recoverable via
+    /// `GET /fills/replay?since=`. The stamped memo (with `seq`) is what goes on
+    /// the live channel too, so a connected client's cursor advances in lockstep.
     pub async fn route_fill(&self, memo: &FillMemo) -> bool {
         let account = self.order_owner.read().await.get(&memo.order_id).cloned();
         let Some(account) = account else { return false };
+
+        // Durable-first: append + stamp `seq`, then persist. The single
+        // `fills_router` task is the only caller, so per-account seq assignment
+        // is naturally serialized (no concurrent append on the same account).
+        let stamped = {
+            let now = now_unix_secs();
+            self.fill_log
+                .write()
+                .await
+                .append(&account, memo.clone(), now)
+        };
+        self.persist_fill_log().await;
+
+        // Then route the seq-stamped memo to the live channel if one is attached.
         let tx = self.fills_routes.read().await.get(&account).cloned();
         match tx {
-            Some(tx) => tx.send(memo.clone()).is_ok(),
+            Some(tx) => tx.send(stamped).is_ok(),
             None => false,
         }
     }
@@ -724,6 +758,50 @@ impl ApiState {
             tracing::warn!(error = %e, path = %path.display(), "auth snapshot persist failed (best-effort)");
         }
     }
+
+    /// Boot-time fill-log load (P7). Loads `fills.db` from `state_dir` if
+    /// present (best-effort); an empty log otherwise. `state_dir == None`
+    /// (persistence disabled) yields an in-memory-only log.
+    fn load_fill_log(state_dir: Option<&std::path::Path>) -> persistence::FillLog {
+        let Some(dir) = state_dir else {
+            return persistence::FillLog::default();
+        };
+        let path = persistence::fills_db_path(dir);
+        match persistence::load_fill_log(&path) {
+            Some(snap) => {
+                tracing::info!(
+                    accounts = snap.accounts.len(),
+                    path = %path.display(),
+                    "loaded fill-memo log"
+                );
+                persistence::FillLog::from_snapshot(snap)
+            }
+            None => persistence::FillLog::default(),
+        }
+    }
+
+    /// Best-effort persist of the in-memory fill log to `fills.db`. A `None`
+    /// `state_dir` is a no-op. Called after each memo append (`route_fill`); a
+    /// write failure is logged, never surfaced — the live channel already
+    /// delivered the memo, and the log is a recovery complement, not a hard
+    /// dependency. The snapshot is bounded by the per-account ring cap.
+    async fn persist_fill_log(&self) {
+        let Some(dir) = self.state_dir.as_deref() else {
+            return;
+        };
+        let snapshot = self.fill_log.read().await.to_snapshot();
+        let path = persistence::fills_db_path(dir);
+        if let Err(e) = persistence::save_fill_log(&path, &snapshot) {
+            tracing::warn!(error = %e, path = %path.display(), "fill-log persist failed (best-effort)");
+        }
+    }
+
+    /// Replay an account's persisted memos with `seq > since` (P7 — the
+    /// `GET /fills/replay` backend). Empty when the account is unknown or
+    /// caught up.
+    pub async fn replay_fills(&self, account_id: &str, since: u64) -> Vec<FillMemo> {
+        self.fill_log.read().await.replay_since(account_id, since)
+    }
 }
 
 #[cfg(test)]
@@ -794,5 +872,41 @@ mod persist_tests {
             .unwrap()
             .verify_credentials("s", "p"));
         assert!(registry.lookup("carol").unwrap().is_admin);
+    }
+
+    /// P7 self-healing: a memo routed while NO `/ws/fills` client is attached is
+    /// no longer lost — it's persisted to `fills.db` with a `seq` and recovered
+    /// both via `replay_fills` and across a simulated restart. This is the exact
+    /// offline-gap the amount-privacy upgrade opened.
+    #[tokio::test]
+    async fn route_fill_persists_memo_even_without_a_live_subscriber() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = ApiState::for_tests().with_state_dir(dir.path().to_path_buf());
+
+        // The intake-time order → account join.
+        let order_id = [0xABu8; 16];
+        let order_hex = hex::encode(order_id);
+        st.record_order_owner(order_hex, "alice".to_string()).await;
+
+        // Route a memo with NO subscriber attached: not delivered live...
+        let memo =
+            crate::matcher::FillMemo::new(order_id, 3, 777, [0xCC; 32], [0x11; 32], [0x22; 32]);
+        assert!(
+            !st.route_fill(&memo).await,
+            "no subscriber → not delivered live"
+        );
+
+        // ...but recoverable via replay (seq 1, amount + anchor preserved).
+        let replay = st.replay_fills("alice", 0).await;
+        assert_eq!(replay.len(), 1);
+        assert_eq!(replay[0].seq, Some(1));
+        assert_eq!(replay[0].change_amount, 777);
+        assert_eq!(replay[0].anchor_index, 3);
+
+        // And it survives a restart (persisted to fills.db, boot-reloaded).
+        let reloaded = ApiState::load_fill_log(Some(dir.path()));
+        let after = reloaded.replay_since("alice", 0);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].change_amount, 777);
     }
 }
