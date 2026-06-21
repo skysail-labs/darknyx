@@ -42,6 +42,8 @@ use nyx_tee::merkle::{MerkleSync, MerkleSyncConfig};
 use nyx_tee::oracle::cache::OracleCache;
 use nyx_tee::oracle::hermes::HermesClient;
 use nyx_tee::oracle::sync::{spawn_oracle_sync, SyncConfig};
+#[cfg(feature = "icicle")]
+use nyx_tee::prover::IcicleMatchBatchProver;
 #[cfg(feature = "rapidsnark")]
 use nyx_tee::prover::RapidsnarkMatchBatchProver;
 use nyx_tee::prover::{ArkMatchBatchProver, Prover, PRODUCTION_BATCH_N};
@@ -662,7 +664,29 @@ fn build_settle_driver(
                 anyhow::anyhow!("load ark N={PRODUCTION_BATCH_N} from {circuits_dir}: {e}")
             })?,
         ),
-        other => anyhow::bail!("unknown NYX_TEE_PROVER={other:?} (expected `ark` or `rapidsnark`)"),
+        "icicle" => {
+            #[cfg(feature = "icicle")]
+            {
+                Arc::new(
+                    IcicleMatchBatchProver::load(&circuits_dir, PRODUCTION_BATCH_N).map_err(
+                        |e| {
+                            anyhow::anyhow!(
+                                "load icicle N={PRODUCTION_BATCH_N} from {circuits_dir}: {e}"
+                            )
+                        },
+                    )?,
+                )
+            }
+            #[cfg(not(feature = "icicle"))]
+            {
+                anyhow::bail!(
+                    "NYX_TEE_PROVER=icicle but this binary was built without the `icicle` feature"
+                );
+            }
+        }
+        other => anyhow::bail!(
+            "unknown NYX_TEE_PROVER={other:?} (expected `ark`, `rapidsnark`, or `icicle`)"
+        ),
     };
     tracing::info!(backend, "VALID_MATCH_BATCH proving key loaded");
 

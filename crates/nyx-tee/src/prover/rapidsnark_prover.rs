@@ -15,15 +15,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use ark_bn254::{Bn254, Fq, Fq2, G1Affine, G2Affine};
-use ark_ff::PrimeField;
+use ark_bn254::{Bn254, Fr};
+use ark_circom::CircomConfig;
 use ark_groth16::Proof;
 
-use super::ark_prover::build_circom_and_check;
+use super::ark_prover::{build_circom_and_check, circom_input_json, load_circom_cfg};
 use super::convert::proof_to_onchain_bytes;
 use super::groth16::{ProofWithInputs, Prover, ProverError};
 use super::inputs::{build_batch_public_inputs, BatchPublicInputs};
 use super::rapidsnark_sys::RawProver;
+use super::snarkjs::{assert_public_root, native_witness_wtns, parse_snarkjs_proof};
 use super::witness::MatchSlotWitness;
 use super::wtns::serialize_wtns;
 
@@ -33,9 +34,15 @@ pub struct RapidsnarkMatchBatchProver {
     /// Mutex-guarded so `prove(&self)` can serialize the C call — the settle
     /// worker proves one batch at a time, so there's no contention.
     raw: Mutex<RawProver>,
-    /// ark-circom witness-calc inputs (the witness still comes from wasmer).
-    wasm_path: PathBuf,
-    r1cs_path: PathBuf,
+    /// Cached ark-circom witness calculator (wasm compiled + r1cs parsed ONCE,
+    /// reused per prove). The wasmer fallback when native witness is off.
+    cfg: Mutex<CircomConfig<Fr>>,
+    /// `Some(binary)` → use the native circom `--c` C++ witness generator
+    /// (~18× faster than wasmer on amd64, byte-identical witness; see Step 1
+    /// bench). Set when `NYX_TEE_WITNESS=native` AND the binary is present in
+    /// the image. `None` → the wasmer path (`cfg`). Lets us A/B native vs
+    /// wasmer on the SAME image by flipping the env, like `NYX_TEE_PROVER`.
+    native_witness_bin: Option<PathBuf>,
     n: usize,
 }
 
@@ -45,12 +52,10 @@ impl RapidsnarkMatchBatchProver {
     /// `ArkMatchBatchProver::load` path resolution so the two backends are
     /// drop-in interchangeable.
     pub fn load(circuits_build_dir: impl AsRef<Path>, n: usize) -> Result<Self, ProverError> {
-        let base = circuits_build_dir
-            .as_ref()
-            .join(format!("match_batch_n{n}"));
-        let zkey_path = base.join("circuit_final.zkey");
-        let wasm_path = base.join("circuit_js").join("circuit.wasm");
-        let r1cs_path = base.join("circuit.r1cs");
+        let dir = circuits_build_dir.as_ref();
+        let zkey_path = dir
+            .join(format!("match_batch_n{n}"))
+            .join("circuit_final.zkey");
 
         let zkey_str = zkey_path.to_str().ok_or_else(|| {
             ProverError::Io(format!("non-UTF8 zkey path {}", zkey_path.display()))
@@ -58,10 +63,39 @@ impl RapidsnarkMatchBatchProver {
         let raw = RawProver::create_from_zkey_file(zkey_str)
             .map_err(|e| ProverError::Io(format!("rapidsnark zkey load {zkey_str}: {e}")))?;
 
+        let cfg = load_circom_cfg(dir, n)?;
+
+        // Witness generator: native (the circom `--c` C++ gen — DEFAULT) | wasm
+        // (wasmer). Native is CVM-validated + ~8-10× faster (witness_ms 201 vs
+        // ~1.7-2.1s); the image ships the binary at
+        // match_batch_n{n}/circuit_cpp/circuit. Fall back to wasmer (warn) if
+        // the binary is absent so a missing artifact DEGRADES rather than bricks
+        // boot; an explicit NYX_TEE_WITNESS=wasm forces wasmer.
+        let want = std::env::var("NYX_TEE_WITNESS").unwrap_or_default();
+        let native_witness_bin = if want == "wasm" {
+            tracing::info!("witness generator: wasmer (NYX_TEE_WITNESS=wasm)");
+            None
+        } else {
+            let bin = dir
+                .join(format!("match_batch_n{n}"))
+                .join("circuit_cpp")
+                .join("circuit");
+            if bin.exists() {
+                tracing::info!(bin = %bin.display(), n, "native witness generator ENABLED");
+                Some(bin)
+            } else {
+                tracing::warn!(
+                    "native witness binary absent at {} — falling back to wasmer",
+                    bin.display()
+                );
+                None
+            }
+        };
+
         Ok(Self {
             raw: Mutex::new(raw),
-            wasm_path,
-            r1cs_path,
+            cfg,
+            native_witness_bin,
             n,
         })
     }
@@ -87,17 +121,30 @@ impl RapidsnarkMatchBatchProver {
         // shared with the ark backend (same drift guard).
         super::constraints::validate_conservation(slots)?;
         let public = build_batch_public_inputs(slots)?;
+
+        // Witness → `.wtns` bytes. Native C++ generator if enabled (input.json
+        // → subprocess → out.wtns), else the cached wasmer path. Both produce
+        // the SAME witness (Step-1 bench confirmed byte-identical), so the
+        // rapidsnark prove + on-chain verify are unaffected.
         let t_w = std::time::Instant::now();
-        let circom = build_circom_and_check(&self.wasm_path, &self.r1cs_path, slots, &public)?;
-        let witness = circom
-            .witness
-            .ok_or_else(|| ProverError::WitnessGen("ark-circom produced no witness".into()))?;
+        let wtns: Vec<u8> = match &self.native_witness_bin {
+            Some(bin) => {
+                let input_json = circom_input_json(slots, &public.merkle_root)?;
+                native_witness_wtns(bin, &input_json)?
+            }
+            None => {
+                let circom = build_circom_and_check(&self.cfg, slots, &public)?;
+                let witness = circom.witness.ok_or_else(|| {
+                    ProverError::WitnessGen("ark-circom produced no witness".into())
+                })?;
+                serialize_wtns(&witness)
+            }
+        };
         let witness_ms = t_w.elapsed().as_millis();
 
-        // Serialize the witness + prove with rapidsnark (serialized via the Mutex).
+        // Prove with rapidsnark (serialized via the Mutex).
         let t_p = std::time::Instant::now();
-        let wtns = serialize_wtns(&witness);
-        let (proof_json, _public_json) = {
+        let (proof_json, public_json) = {
             let raw = self
                 .raw
                 .lock()
@@ -105,13 +152,23 @@ impl RapidsnarkMatchBatchProver {
             raw.prove(&wtns)
                 .map_err(|e| ProverError::Prove(format!("rapidsnark prove: {e}")))?
         };
+        // Drift guard: the wasmer path checks the circuit's public input inside
+        // `build_circom_and_check`; the native path doesn't see the in-circuit
+        // root, so assert the PROOF's public input (merkle_root) equals our
+        // off-circuit root here. Cheap + a strict correctness check either way.
+        assert_public_root(&public_json, &public.merkle_root)?;
         let proof = parse_snarkjs_proof(&proof_json)?;
         let prove_step_ms = t_p.elapsed().as_millis();
         tracing::info!(
             backend = "rapidsnark",
+            witness = if self.native_witness_bin.is_some() {
+                "native"
+            } else {
+                "wasmer"
+            },
             witness_ms = witness_ms as u64,
             prove_step_ms = prove_step_ms as u64,
-            "prove breakdown (ark-circom witness-gen vs rapidsnark prove)"
+            "prove breakdown (witness-gen vs rapidsnark prove)"
         );
 
         Ok((proof, public))
@@ -131,47 +188,4 @@ impl Prover for RapidsnarkMatchBatchProver {
     fn n(&self) -> usize {
         self.n
     }
-}
-
-#[derive(serde::Deserialize)]
-struct SnarkjsProof {
-    pi_a: Vec<String>,
-    pi_b: Vec<Vec<String>>,
-    pi_c: Vec<String>,
-}
-
-/// Parse a snarkjs-format Groth16 proof JSON into an ark `Proof<Bn254>` in the
-/// SAME representation `ArkMatchBatchProver` produces (points as-is, y NOT
-/// negated, Fq2 in snarkjs (c0,c1) order) — `proof_to_onchain_bytes` then
-/// applies the pi_a negation + pi_b Fq2 swap identically for both backends.
-fn parse_snarkjs_proof(json: &str) -> Result<Proof<Bn254>, ProverError> {
-    let p: SnarkjsProof = serde_json::from_str(json)
-        .map_err(|e| ProverError::Prove(format!("parse rapidsnark proof json: {e}")))?;
-    if p.pi_a.len() < 2
-        || p.pi_c.len() < 2
-        || p.pi_b.len() < 2
-        || p.pi_b[0].len() < 2
-        || p.pi_b[1].len() < 2
-    {
-        return Err(ProverError::Prove(
-            "rapidsnark proof json has wrong shape".into(),
-        ));
-    }
-
-    let a = G1Affine::new_unchecked(fq_dec(&p.pi_a[0])?, fq_dec(&p.pi_a[1])?);
-    // snarkjs G2: x = (c0, c1), y = (c0, c1); ark Fq2::new(c0, c1).
-    let b = G2Affine::new_unchecked(
-        Fq2::new(fq_dec(&p.pi_b[0][0])?, fq_dec(&p.pi_b[0][1])?),
-        Fq2::new(fq_dec(&p.pi_b[1][0])?, fq_dec(&p.pi_b[1][1])?),
-    );
-    let c = G1Affine::new_unchecked(fq_dec(&p.pi_c[0])?, fq_dec(&p.pi_c[1])?);
-
-    Ok(Proof { a, b, c })
-}
-
-/// Decimal string → BN254 base-field element.
-fn fq_dec(s: &str) -> Result<Fq, ProverError> {
-    let b = num_bigint::BigUint::parse_bytes(s.as_bytes(), 10)
-        .ok_or_else(|| ProverError::Prove(format!("bad Fq decimal: {s}")))?;
-    Ok(Fq::from_le_bytes_mod_order(&b.to_bytes_le()))
 }

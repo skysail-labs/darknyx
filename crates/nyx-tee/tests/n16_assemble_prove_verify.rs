@@ -122,6 +122,11 @@ fn one_real_match() -> (MatchPair, NoteOpening, NoteOpening) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn assembler_witness_proves_and_verifies_n16() {
+    // Surface the prover's `prove breakdown` + `witness-gen split` info logs.
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_test_writer()
+        .try_init();
     if std::env::var("RUN_N16_PROVE").ok().as_deref() != Some("1") {
         eprintln!(
             "skipping assembler_witness_proves_and_verifies_n16: set RUN_N16_PROVE=1 to run \

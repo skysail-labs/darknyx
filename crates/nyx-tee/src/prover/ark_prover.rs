@@ -27,10 +27,11 @@
 //! shows the parse matters, a `Mutex<CircomConfig>` or a Store pool
 //! is the fix — internal, no trait-surface change.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::Mutex;
 
 use ark_bn254::{Bn254, Fr};
-use ark_circom::{CircomBuilder, CircomCircuit, CircomConfig, CircomReduction};
+use ark_circom::{CircomCircuit, CircomConfig, CircomReduction};
 use ark_ff::{BigInteger, PrimeField};
 use ark_groth16::{Groth16, Proof, ProvingKey};
 use num_bigint::{BigInt, Sign};
@@ -44,10 +45,14 @@ use super::witness::MatchSlotWitness;
 pub struct ArkMatchBatchProver {
     /// Cached proving key parsed from `circuit_final.zkey`.
     pk: ProvingKey<Bn254>,
-    /// Path to `circuit.wasm` (witness calculator).
-    wasm_path: PathBuf,
-    /// Path to `circuit.r1cs` (constraint system).
-    r1cs_path: PathBuf,
+    /// Cached ark-circom witness calculator: the wasm is compiled
+    /// (`Module::from_file`) + the r1cs parsed ONCE here, then reused across
+    /// every `prove()` (`calculate_witness` re-inits the wasm instance, so the
+    /// witness stays byte-identical). `Mutex` because the wasmer `Store` is
+    /// `!Sync` and the settle worker proves one batch at a time anyway. Removes
+    /// the per-call wasm compile (~350 ms ≈ half of witness-gen) the old path
+    /// paid on every prove.
+    cfg: Mutex<CircomConfig<Fr>>,
     /// Circuit instantiation size (2, 4, or 16).
     n: usize,
 }
@@ -59,24 +64,19 @@ impl ArkMatchBatchProver {
     /// `match_batch_n{N}/{circuit_final.zkey, circuit_js/circuit.wasm,
     /// circuit.r1cs}` under it.
     pub fn load(circuits_build_dir: impl AsRef<Path>, n: usize) -> Result<Self, ProverError> {
-        let base = circuits_build_dir
-            .as_ref()
-            .join(format!("match_batch_n{n}"));
-        let zkey_path = base.join("circuit_final.zkey");
-        let wasm_path = base.join("circuit_js").join("circuit.wasm");
-        let r1cs_path = base.join("circuit.r1cs");
+        let dir = circuits_build_dir.as_ref();
+        let zkey_path = dir
+            .join(format!("match_batch_n{n}"))
+            .join("circuit_final.zkey");
 
         let mut zkey_file = std::fs::File::open(&zkey_path)
             .map_err(|e| ProverError::Io(format!("open zkey {}: {e}", zkey_path.display())))?;
         let (pk, _matrices) = ark_circom::read_zkey(&mut zkey_file)
             .map_err(|e| ProverError::Io(format!("read_zkey {}: {e}", zkey_path.display())))?;
 
-        Ok(Self {
-            pk,
-            wasm_path,
-            r1cs_path,
-            n,
-        })
+        let cfg = load_circom_cfg(dir, n)?;
+
+        Ok(Self { pk, cfg, n })
     }
 
     /// Read-only access to the cached proving key's verifying key.
@@ -114,7 +114,7 @@ impl ArkMatchBatchProver {
         //      Merkle root against our off-circuit one (shared with the
         //      rapidsnark backend, which reuses this witness).
         let t_w = std::time::Instant::now();
-        let circom = build_circom_and_check(&self.wasm_path, &self.r1cs_path, slots, &public)?;
+        let circom = build_circom_and_check(&self.cfg, slots, &public)?;
         let witness_ms = t_w.elapsed().as_millis();
 
         // 4. Prove against the cached proving key.
@@ -150,30 +150,80 @@ impl Prover for ArkMatchBatchProver {
     }
 }
 
-/// Build the ark-circom witness for `slots` and cross-check that the circuit's
-/// single public input (its internally-computed Merkle root) equals our
-/// off-circuit `build_batch_public_inputs` root. Returns the built
-/// `CircomCircuit` (whose `.witness` is the full assignment) so BOTH backends
-/// share one witness-gen + drift guard:
+/// Compile the witness calculator (wasm) + parse the r1cs ONCE, returning a
+/// `Mutex`-wrapped `CircomConfig` to cache on the prover. The wasm compile
+/// (`Module::from_file`) is ~half of per-prove witness-gen, so doing it here
+/// instead of per `build_circom_and_check` call is the Step-0 win. Shared by
+/// both backends' `load` (the witness path is ark-circom either way).
+pub(crate) fn load_circom_cfg(
+    circuits_build_dir: &Path,
+    n: usize,
+) -> Result<Mutex<CircomConfig<Fr>>, ProverError> {
+    let base = circuits_build_dir.join(format!("match_batch_n{n}"));
+    let wasm_path = base.join("circuit_js").join("circuit.wasm");
+    let r1cs_path = base.join("circuit.r1cs");
+    let t = std::time::Instant::now();
+    let cfg = CircomConfig::<Fr>::new(&wasm_path, &r1cs_path)
+        .map_err(|e| ProverError::WitnessGen(format!("CircomConfig::new: {e}")))?;
+    tracing::info!(
+        parse_ms = t.elapsed().as_millis() as u64,
+        n,
+        "witness-gen cfg compiled + cached (wasm compile + r1cs parse, once at load)"
+    );
+    Ok(Mutex::new(cfg))
+}
+
+/// Build the ark-circom witness for `slots` (using the CACHED `CircomConfig`)
+/// and cross-check that the circuit's single public input (its
+/// internally-computed Merkle root) equals our off-circuit
+/// `build_batch_public_inputs` root. Returns the built `CircomCircuit` (whose
+/// `.witness` is the full assignment) so BOTH backends share one witness-gen +
+/// drift guard:
 ///   - ark proves `circom` directly with `create_random_proof_with_reduction`,
 ///   - rapidsnark serializes `circom.witness` to `.wtns` and proves via FFI.
 ///
-/// The wasmer `Store` inside `CircomConfig` is `!Sync`, so this is called fresh
-/// per prove (the ~100-300ms witness parse; proving dominates).
+/// Reuses the cached `WitnessCalculator` + wasmer `Store` under the `Mutex`
+/// (`calculate_witness` re-inits the instance each call → byte-identical
+/// witness; no per-call wasm recompile). This replaces `CircomBuilder`, which
+/// would consume a fresh `CircomConfig`.
 pub(crate) fn build_circom_and_check(
-    wasm_path: &Path,
-    r1cs_path: &Path,
+    cfg_cell: &Mutex<CircomConfig<Fr>>,
     slots: &[MatchSlotWitness],
     public: &BatchPublicInputs,
 ) -> Result<CircomCircuit<Fr>, ProverError> {
-    let cfg = CircomConfig::<Fr>::new(wasm_path, r1cs_path)
-        .map_err(|e| ProverError::WitnessGen(format!("CircomConfig::new: {e}")))?;
-    let mut builder = CircomBuilder::new(cfg);
-    push_all_inputs(&mut builder, slots, &public.merkle_root);
+    let mut inputs: std::collections::HashMap<String, Vec<BigInt>> =
+        std::collections::HashMap::new();
+    push_all_inputs(&mut inputs, slots, &public.merkle_root);
 
-    let circom = builder
-        .build()
-        .map_err(|e| ProverError::WitnessGen(format!("witness build: {e}")))?;
+    let t_exec = std::time::Instant::now();
+    let circom = {
+        let mut guard = cfg_cell
+            .lock()
+            .map_err(|_| ProverError::WitnessGen("circom cfg mutex poisoned".into()))?;
+        // Disjoint mutable borrows of the cached config's fields so the witness
+        // calc (wtns) + its Store are reused (no recompile). Mirrors
+        // `CircomBuilder::{setup, build}` exactly.
+        let CircomConfig {
+            r1cs,
+            wtns,
+            store,
+            sanity_check,
+        } = &mut *guard;
+        let mut circom = CircomCircuit {
+            r1cs: r1cs.clone(),
+            witness: None,
+        };
+        circom.r1cs.wire_mapping = None;
+        let witness = wtns
+            .calculate_witness_element::<Fr, _>(store, inputs, *sanity_check)
+            .map_err(|e| ProverError::WitnessGen(format!("witness build: {e}")))?;
+        circom.witness = Some(witness);
+        circom
+    };
+    tracing::info!(
+        exec_ms = t_exec.elapsed().as_millis() as u64,
+        "witness-gen (cached cfg — exec only; wasm compile amortized at load)"
+    );
 
     let circuit_public = circom
         .get_public_inputs()
@@ -207,6 +257,55 @@ pub(crate) fn build_circom_and_check(
     Ok(circom)
 }
 
+/// Serialize the circuit inputs for `slots` to a circom `input.json` string
+/// (consumed by the native C++ witness generator). Reuses `push_all_inputs`
+/// so the inputs are byte-for-byte the SAME as the wasmer path feeds — the
+/// only scalar signal is `merkle_root` (emitted as a string); every other
+/// signal is a length-N array of decimal strings. Mirrors the TS
+/// `match-batch-prover.ts` inputs object exactly.
+// Only the snarkjs-format backends' native witness path uses it.
+#[cfg(any(feature = "rapidsnark", feature = "icicle"))]
+pub(crate) fn circom_input_json(
+    slots: &[MatchSlotWitness],
+    merkle_root: &[u8; 32],
+) -> Result<String, ProverError> {
+    let mut inputs: std::collections::HashMap<String, Vec<BigInt>> =
+        std::collections::HashMap::new();
+    push_all_inputs(&mut inputs, slots, merkle_root);
+
+    // Batch-level `signal input` (no `[N]`) at the MatchBatch level → bare
+    // scalar strings in input.json. Everything else is a per-slot array signal.
+    // Keep IN SYNC with the scalar pushes in `push_all_inputs` and the circuit's
+    // MatchBatch signal declarations.
+    const SCALAR_INPUTS: &[&str] = &[
+        "merkle_root",
+        "fee_rate_bps",
+        "protocol_owner_commitment",
+        "fee_base_inner",
+        "fee_quote_inner",
+    ];
+    let mut obj = serde_json::Map::with_capacity(inputs.len());
+    for (name, vals) in inputs {
+        let value = if SCALAR_INPUTS.contains(&name.as_str()) {
+            // A circuit SCALAR signal → a bare string.
+            let v = vals
+                .first()
+                .ok_or_else(|| ProverError::WitnessGen(format!("empty scalar input {name}")))?;
+            serde_json::Value::String(v.to_str_radix(10))
+        } else {
+            // Array signal → list of decimal strings, one per slot.
+            serde_json::Value::Array(
+                vals.iter()
+                    .map(|b| serde_json::Value::String(b.to_str_radix(10)))
+                    .collect(),
+            )
+        };
+        obj.insert(name, value);
+    }
+    serde_json::to_string(&serde_json::Value::Object(obj))
+        .map_err(|e| ProverError::WitnessGen(format!("serialize circom input.json: {e}")))
+}
+
 /// Big-endian 32-byte encoding of a BN254 scalar-field element.
 fn fr_to_be32(fr: &Fr) -> [u8; 32] {
     let v = fr.into_bigint().to_bytes_be();
@@ -220,32 +319,40 @@ fn fr_to_be32(fr: &Fr) -> [u8; 32] {
 /// into the circuit's array signal. Names + ordering mirror the TS
 /// `proveMatchBatch` inputs object exactly.
 fn push_all_inputs(
-    builder: &mut CircomBuilder<Fr>,
+    inputs: &mut std::collections::HashMap<String, Vec<BigInt>>,
     slots: &[MatchSlotWitness],
     merkle_root: &[u8; 32],
 ) {
+    macro_rules! push {
+        ($name:expr, $val:expr) => {
+            inputs.entry($name.to_string()).or_default().push($val);
+        };
+    }
     // Public inputs (order matches the circuit `main` list).
-    builder.push_input("merkle_root", be32_to_bigint(merkle_root));
-    // Batch-level single inputs (same on every slot; read from slot 0).
-    builder.push_input("fee_rate_bps", BigInt::from(slots[0].fee_rate_bps));
-    builder.push_input(
+    push!("merkle_root", be32_to_bigint(merkle_root));
+    // Batch-level single (scalar) inputs — identical on every slot; read from
+    // slot 0. These are `signal input` (no `[N]`) at the MatchBatch level, so
+    // the native-witness JSON path must emit them as bare scalars (see
+    // `circom_input_json`'s SCALAR_INPUTS set), not length-1 arrays.
+    push!("fee_rate_bps", BigInt::from(slots[0].fee_rate_bps));
+    push!(
         "protocol_owner_commitment",
-        be32_to_bigint(&slots[0].protocol_owner_commitment),
+        be32_to_bigint(&slots[0].protocol_owner_commitment)
     );
-    builder.push_input("fee_base_inner", be32_to_bigint(&slots[0].fee_base_inner));
-    builder.push_input("fee_quote_inner", be32_to_bigint(&slots[0].fee_quote_inner));
+    push!("fee_base_inner", be32_to_bigint(&slots[0].fee_base_inner));
+    push!("fee_quote_inner", be32_to_bigint(&slots[0].fee_quote_inner));
 
     macro_rules! push_u64 {
         ($name:literal, $field:ident) => {
             for s in slots {
-                builder.push_input($name, BigInt::from(s.$field));
+                push!($name, BigInt::from(s.$field));
             }
         };
     }
     macro_rules! push_be32 {
         ($name:literal, $field:ident) => {
             for s in slots {
-                builder.push_input($name, be32_to_bigint(&s.$field));
+                push!($name, be32_to_bigint(&s.$field));
             }
         };
     }
@@ -264,13 +371,13 @@ fn push_all_inputs(
     // `darkpool_crypto::pubkey_to_fr_pair` and the TS `pubkeyToFrPair`.
     for s in slots {
         let (lo, hi) = mint_lo_hi(&s.quote_mint);
-        builder.push_input("quote_mint_lo", lo);
-        builder.push_input("quote_mint_hi", hi);
+        push!("quote_mint_lo", lo);
+        push!("quote_mint_hi", hi);
     }
     for s in slots {
         let (lo, hi) = mint_lo_hi(&s.base_mint);
-        builder.push_input("base_mint_lo", lo);
-        builder.push_input("base_mint_hi", hi);
+        push!("base_mint_lo", lo);
+        push!("base_mint_hi", hi);
     }
 
     push_u64!("base_amount", base_amount);

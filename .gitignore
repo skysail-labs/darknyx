@@ -59,3 +59,6 @@ Thumbs.db
 .factory/
 skills-lock.json
 
+
+# icicle-snark NTT precompute cache (written to CWD at prove time)
+precomputed_*.bin

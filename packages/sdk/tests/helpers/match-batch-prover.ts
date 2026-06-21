@@ -32,6 +32,7 @@
  *   parent = Poseidon3(DOMAIN_BATCH_ROOT=22, left, right)
  */
 
+import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { buildPoseidon } from "circomlibjs";
 
@@ -407,6 +408,13 @@ export async function proveMatchBatch(
     // VALID_PRICE private witness
     clearing_price: args.slots.map((s) => s.clearingPrice.toString()),
   };
+
+  // (witness-gen bench, Step 1) Dump the circom input.json so the native C++
+  // witness generator + node-wasm reference can be timed on the EXACT same
+  // inputs as our prover. Gated by DUMP_CIRCOM_INPUT=<path>; no-op otherwise.
+  if (process.env.DUMP_CIRCOM_INPUT) {
+    writeFileSync(process.env.DUMP_CIRCOM_INPUT, JSON.stringify(inputs));
+  }
 
   const wasmRel = `circuits/build/match_batch_n${N}/circuit_js/circuit.wasm`;
   const zkeyRel = `circuits/build/match_batch_n${N}/circuit_final.zkey`;

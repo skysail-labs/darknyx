@@ -129,6 +129,13 @@ services:
       # `NYX_TEE_PROVER=ark` to A/B against the ark backend on the same image.
       NYX_TEE_PROVER: ${NYX_TEE_PROVER:-rapidsnark}
 
+      # Witness generator: native (default) | wasm (wasmer). `native` spawns the
+      # circom --c C++ generator shipped in the image — CVM-validated, byte-
+      # identical witness, ~8-10× faster (witness_ms 201 vs ~1.7-2.1s; see
+      # witness-bench). The prover falls back to wasmer if the binary is absent,
+      # so `:-native` is safe. Set NYX_TEE_WITNESS=wasm to A/B the wasmer path.
+      NYX_TEE_WITNESS: ${NYX_TEE_WITNESS:-native}
+
       # Max settle Tx D's sent CONCURRENTLY within a batch (default 16). Firing
       # them together lets the leader co-include them in one block so they
       # confirm in a single ~1.13s window instead of one-at-a-time. Sweep this

@@ -9,6 +9,12 @@ members = [
 ]
 exclude = [
     "darkpool",
+    # Vendored ICICLE GPU/CPU Groth16 prover (icicle-snark + its nested
+    # icicle/ C++ tree + wrappers/rust workspace), under third_party/ next to
+    # the rapidsnark submodule. Pulled in only by the `icicle` feature of
+    # crates/nyx-tee as a path dep; kept OUT of our workspace so a default
+    # build never triggers its cmake/native build.
+    "third_party/icicle-snark",
 ]
 
 [workspace.package]
