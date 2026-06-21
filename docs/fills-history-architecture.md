@@ -23,12 +23,19 @@
 >   batch_slot }`. **The change `amount` — hence the *spendable* opening — comes
 >   ONLY from the per-account `FillMemo`** (`orders/fill-memo.ts`,
 >   `verifyFillMemo`). `backfillHistory` LOCATES fills (which order_ids minted
->   which change-note commitments); the live WS memos populate the `NoteStore`.
->   Consequence: "rebuild from chain alone" still recovers *which* notes you own,
->   but NOT their amounts — the same note-plaintext requirement every shielded
->   pool has. A fill whose memo was missed (offline gap) is locatable but not yet
->   spendable until the memo is re-obtained (a future authenticated TEE
->   memo-replay endpoint — not yet built).
+>   which change-note commitments); the memos (live + replayed) populate the
+>   `NoteStore`. Consequence: "rebuild from chain alone" still recovers *which*
+>   notes you own, but NOT their amounts — the same note-plaintext requirement
+>   every shielded pool has.
+> - **Self-healing recovery (P7).** A memo missed while offline (or across a CVM
+>   restart) is no longer stranded: the TEE persists every routed memo to a
+>   durable per-account log (`persistence/fills.rs`, on the LUKS volume) with a
+>   monotonic `seq`, and serves `GET /fills/replay?since=<seq>` (bearer,
+>   per-account). The client recovers the amount + opening there — `replayFills`
+>   → `verifyFillMemo` → `NoteStore` — and `startFillsSync` does "replay then
+>   tail" (replay first, then the live WS, cursor advancing in lockstep).
+>   Retention: a per-account ring (512) + 30-day TTL, so an unspent note past the
+>   TTL falls back to "locatable but not replayable" (rare).
 >
 > The sections below are the original decision record (pinned 2026-06-04).
 > **NOTE: where they say the chain / `MatchResultPayload` carries the change
@@ -137,6 +144,12 @@ login →  GET /account/history?since=<lastCursor>   # backfill the gap
 cursor is a per-account monotonic sequence number the indexer assigns;
 the client stores only that single integer (or rediscovers via §1 gap-scan).
 
+> **As-built (P7):** the gap-recovery call is now `GET /fills/replay?since=<seq>`
+> (the TEE's durable memo log), NOT `/account/history` (the indexer, which after
+> amount-privacy carries no amounts). The cursor is the per-account memo `seq`.
+> `startFillsSync` does replay-then-tail; the by-order_id indexer is the
+> secondary commitment locator for gap-detection.
+
 ## What this explicitly does NOT need
 
 - No per-user encryption / Zcash-style view-tags / trial decryption. That
@@ -145,6 +158,12 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 - No user-managed order-id state.
 - No history DB inside the TEE (the TEE stays a pure engine; the chain +
   indexer are the record).
+  > **As-built (P7) deviation:** amount-privacy forced a small, bounded
+  > exception — the TEE now keeps a durable per-account *fill-memo log*
+  > (`persistence/fills.rs`, ring + TTL capped) for `GET /fills/replay`. It is
+  > NOT a full history DB (it holds only the recent change-note memos, the one
+  > thing with no other durable home once amounts left the chain); the chain +
+  > indexer remain the record of *which* notes exist.
 
 ## Build order when resumed
 
@@ -160,7 +179,13 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 
 - Current fail-closed WS: `crates/nyx-tee/src/api/ws.rs` +
   `build_protected_router` (gated behind `debug_endpoints`).
-- `FillMemo`: `crates/nyx-tee/src/matcher/fills.rs`.
+- `FillMemo`: `crates/nyx-tee/src/matcher/fills.rs` (carries `seq`, P7).
+- Durable memo log + replay (P7): `crates/nyx-tee/src/persistence/fills.rs`
+  (`FillLog`, ring + TTL), `api/state.rs::{route_fill, replay_fills}`,
+  `api/fills.rs` (`GET /fills/replay`).
 - Client memo verify/store: `packages/sdk/src/orders/fill-memo.ts`,
   `packages/sdk/src/utxo/note-store.ts`.
+- Client replay-then-tail (P7): `packages/sdk/src/fills/replay.ts`
+  (`replayFills`) + `fills/ws-client.ts` (`startFillsSync`); the indexer locator
+  is `fills/history.ts` (`backfillHistory`).
 - Settle payload: `tee_forced_settle.rs::MatchResultPayload`.

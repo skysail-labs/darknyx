@@ -17,14 +17,15 @@
  *      (order_id + change-note commitment + slot) from the seed alone — no
  *      persisted order-id list (HD-wallet style).
  *   2. Return the located fills + a coarse slot cursor for "tail from here".
- *      The client populates its `NoteStore` from FillMemos (live tail); the
- *      located commitments let it detect gaps (a located commitment it has no
- *      memo/note for = a fill it was offline for).
+ *      The client populates its `NoteStore` from FillMemos; the located
+ *      commitments let it detect gaps (a located commitment it has no memo/note
+ *      for = a fill whose memo it still needs to replay).
  *
- * Gap recovery for a fill the client was offline for (memo missed) requires the
- * memo to be re-obtained — a future authenticated TEE memo-replay endpoint.
- * Until then a missed memo means the located commitment is known but its amount
- * (hence its opening) is not yet recoverable.
+ * Gap recovery for a fill the client was offline for (memo missed) is handled by
+ * the durable memo-replay endpoint (`replayFills` → `GET /fills/replay`, P7) —
+ * the amount + opening come from there, not from this locator. So this module is
+ * a secondary gap-detector now; `startFillsSync` recovers via replay first, then
+ * tails the live WS.
  */
 
 import { deriveOrderId } from "../keys/key-generators.js";

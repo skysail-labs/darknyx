@@ -311,12 +311,12 @@ fn now_unix_secs() -> u64 {
 }
 
 /// Per-account fill-memo channel depth. A CONNECTED-but-slow `/ws/fills` client
-/// that lags past this is closed with a 1011 resync. NOTE: this buffer only
-/// covers a still-attached lagging client — it is not a durable mailbox, so a
-/// memo sent while the account has no live `/ws/fills` receiver is dropped
-/// (`route_fill` → false), not retained for a later reconnect. Amount-privacy
-/// (P4) makes that drop lossy for the amount (the indexer locates the commitment
-/// but not the amount); the memo-replay endpoint is the planned fix.
+/// that lags past this is closed with a 1011 resync. This in-channel buffer only
+/// covers a still-attached lagging client — it is not the durable mailbox. The
+/// durable record is `fill_log` (P7): every routed memo is persisted there
+/// regardless of any live receiver, so a memo sent while no `/ws/fills` client is
+/// attached is recovered via `GET /fills/replay` (the live channel drop is no
+/// longer a loss).
 const FILLS_CHANNEL_CAP: usize = 1024;
 
 /// Global `tree`-channel depth. Sized larger than the per-account channels
@@ -546,16 +546,11 @@ impl ApiState {
 
     /// Get-or-create the caller account's fill-memo channel and subscribe. A
     /// receiver created here only sees memos sent AFTER it subscribes — earlier
-    /// fills are LOCATED (commitment only) via the indexer backfill, but their
-    /// amounts are NOT recoverable from it.
-    ///
-    /// Amount-privacy (P3b/P4) note: the indexer no longer carries amounts, so a
-    /// memo emitted while no client is attached is currently lost from the
-    /// recovery path (the change-note commitment is still locatable on-chain, but
-    /// its amount — hence the spendable opening — lives only in this ephemeral
-    /// memo). Closing that gap is the planned authenticated memo-replay endpoint;
-    /// until it lands, "backfill then tail" recovers *which* notes you own, not
-    /// their amounts. See `docs/fills-history-architecture.md`.
+    /// fills (sent before this subscribe, or while the account was disconnected)
+    /// are recovered via `GET /fills/replay` from the durable `fill_log` (P7),
+    /// which is where the change-note amount lives after amount-privacy (P4) made
+    /// the off-TEE indexer a commitment-only locator. "Replay then tail": the
+    /// client replays from its cursor, then tails this channel.
     pub async fn subscribe_account_fills(&self, account_id: &str) -> broadcast::Receiver<FillMemo> {
         let mut routes = self.fills_routes.write().await;
         // Opportunistic GC: drop channels whose `/ws/fills` subscribers have all
@@ -563,11 +558,11 @@ impl ApiState {
         // number of CURRENTLY-connected accounts rather than every account ever
         // seen. Safe because we hold the write lock here — `subscribe` is the only
         // path that inserts, so no concurrent caller can be mid-flight holding a
-        // just-created receiver. NOTE: discarding a disconnected account's channel
-        // drops any memo sent before it reconnects — see the amount-privacy caveat
-        // on this fn (the indexer locates the commitment but not the amount; full
-        // recovery awaits the memo-replay endpoint). Cheap: `receiver_count()` is
-        // an atomic load, subscribes are rare.
+        // just-created receiver. Discarding a disconnected account's channel
+        // drops any in-flight broadcast memo, but that's not a loss: every memo
+        // is durably in `fill_log` and recovered via `GET /fills/replay` on
+        // reconnect (P7). Cheap: `receiver_count()` is an atomic load, subscribes
+        // are rare.
         routes.retain(|_, tx| tx.receiver_count() > 0);
         let tx = routes
             .entry(account_id.to_string())
