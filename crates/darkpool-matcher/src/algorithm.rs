@@ -131,6 +131,9 @@ pub(crate) struct OrderSnapshot {
     pub note_amount: u64,
     pub collateral_note: [u8; 32],
     pub user_commitment: [u8; 32],
+    /// Note-bound owner identity (see `book::Order::owner_commitment`) — the
+    /// self-trade key.
+    pub owner_commitment: [u8; 32],
     pub trading_key: [u8; 32],
     pub order_id: [u8; 16],
     pub inclusion: [u8; 32],
@@ -155,6 +158,7 @@ impl OrderSnapshot {
             note_amount: o.note_amount,
             collateral_note: o.collateral_note,
             user_commitment: o.user_commitment,
+            owner_commitment: o.owner_commitment,
             trading_key: o.trading_key,
             order_id: o.order_id,
             inclusion: o.order_inclusion_commitment,
@@ -281,18 +285,34 @@ pub(crate) fn generate_matches(
             continue;
         }
 
-        // Self-trade prevention (baseline): never match two orders from the same
-        // owner — a wash trade that would waste a settle on a no-op. Skip the
-        // pair, advancing the SMALLER side (ties → advance the ask, keeping the
-        // bid resting so an external taker can still hit it this pass). The
-        // skipped order is NOT cancelled — it produces no update and stays in the
-        // book, so the other side can still match a non-self counterparty and the
-        // deferred order is reconsidered next tick. (A single greedy pass can't
-        // try `bid vs next-ask` AND `next-bid vs ask` simultaneously, so a rare
-        // multi-self-order config may defer one legitimate match to the next
-        // tick — acceptable for a baseline; the safety property, no wash trade,
-        // always holds.)
-        if bids[bi].trading_key == asks[ai].trading_key {
+        // Self-trade prevention: never match two orders from the same owner — a
+        // wash trade that would waste a settle on a no-op. Keyed on the
+        // note-BOUND `owner_commitment` (`Poseidon2(spending_key, r_owner)`):
+        // intake pins it to the collateral note via `verify_commitment`, so —
+        // unlike the client-asserted `user_commitment` — a settling wash CANNOT
+        // lie about it (the only way to present two different `owner_commitment`s
+        // is two genuinely different note owners). It is reused across all of a
+        // user's notes, so it catches the case a `trading_key`-only check misses:
+        // one user trading under TWO trading keys (the trading key is freely
+        // re-derived by `offset` and is deliberately NOT part of the owner). The
+        // `trading_key` equality is kept as a cheap belt-and-suspenders. The
+        // `!= [0;32]` guard keeps zero-identity test/degenerate orders from
+        // colliding (a real `owner_commitment` is a non-zero Poseidon output).
+        // Skip the pair, advancing the SMALLER side (ties → advance the ask,
+        // keeping the bid resting so an external taker can still hit it this
+        // pass). The skipped order is NOT cancelled — it stays in the book so the
+        // other side can still match a non-self counterparty and the deferred
+        // order is reconsidered next tick. (A single greedy pass can't try
+        // `bid vs next-ask` AND `next-bid vs ask` simultaneously, so a rare
+        // multi-self-order config may defer one legitimate match to the next tick
+        // — acceptable; the safety property, no wash trade, always holds. NOTE:
+        // still best-effort in a pseudonymous pool — a user can register a SECOND
+        // wallet (a distinct `owner_commitment`, or deposit notes under a
+        // different `r_owner`) and wash across the two; that Sybil case is out of
+        // scope for any matcher rule.)
+        let same_owner = bids[bi].owner_commitment != [0u8; 32]
+            && bids[bi].owner_commitment == asks[ai].owner_commitment;
+        if bids[bi].trading_key == asks[ai].trading_key || same_owner {
             if asks[ai].amount <= bids[bi].amount {
                 ai += 1;
             } else {
@@ -806,6 +826,7 @@ mod tests {
             note_amount: amount.saturating_mul(price).max(1),
             collateral_note: [0; 32],
             user_commitment: [0; 32],
+            owner_commitment: [0; 32],
             trading_key: [0; 32],
             order_id: [0; 16],
             inclusion: [0; 32],

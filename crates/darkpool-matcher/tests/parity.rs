@@ -82,6 +82,9 @@ fn pseed(idx: u8, side_u8: u8, price: u64, amount: u64, expiry: u64) -> Order {
         note_amount: amount.saturating_mul(price).max(amount).max(1),
         collateral_note,
         user_commitment,
+        // Same derived owner identity as user_commitment (both keyed on idx), so
+        // a same-idx self-pair shares it and distinct traders differ.
+        owner_commitment: user_commitment,
         order_id,
         order_inclusion_commitment: oic,
     }
@@ -695,4 +698,37 @@ fn stp_skips_self_ask_but_fills_against_other_trader() {
     let mut trader2 = [0u8; 32];
     trader2[1..9].copy_from_slice(&2u64.to_le_bytes());
     assert_eq!(out.matches[0].owner_seller, trader2);
+}
+
+#[test]
+fn stp_same_owner_two_trading_keys_never_matches() {
+    // The case a trading_key-only check MISSES: one user trading under TWO
+    // trading keys (free offset rotation) shares ONE owner identity
+    // (`user_commitment`). pseed(1) and pseed(2) have DIFFERENT trading keys; we
+    // force both orders onto a single non-zero `user_commitment` so only the
+    // owner check can stop the wash.
+    let mut bid = pseed(1, 0, 150, 10, 1_000_000); // trading_key from idx 1
+    let mut ask = pseed(2, 1, 140, 10, 1_000_000); // DIFFERENT trading_key (idx 2)
+    assert_ne!(
+        bid.trading_key, ask.trading_key,
+        "precondition: the two trading keys must differ"
+    );
+    // Force ONE shared owner identity; leave trading_key + user_commitment
+    // distinct so only the note-bound owner_commitment check can stop the wash.
+    let mut owner = [0x07u8; 32];
+    owner[0] = 0; // Fr safety (a real owner_commitment is a Poseidon output)
+    bid.owner_commitment = owner;
+    ask.owner_commitment = owner;
+    assert_ne!(
+        bid.user_commitment, ask.user_commitment,
+        "precondition: only owner_commitment should be shared"
+    );
+
+    let book = book_of(vec![bid, ask]);
+    let out = run_batch(&book, &oracle(145), &config(100_000, 0), 16, 0).expect("matcher");
+    assert_eq!(
+        out.matches.len(),
+        0,
+        "two trading keys under one owner must not wash-trade"
+    );
 }

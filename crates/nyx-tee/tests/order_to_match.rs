@@ -85,11 +85,17 @@ fn sign_order(
         o[15] = 1;
         o
     };
-    let user_commitment = {
-        let mut u = [0x33; 32];
+    // Distinct owner identity per trader: self-trade prevention keys on the
+    // note-bound `owner_commitment` (verified at intake against `note_commitment`),
+    // so two genuinely different traders must carry different owners to cross.
+    // Derive it from the trading key so each generated key is a distinct owner;
+    // `user_commitment` tracks it (a wallet's notes share one owner).
+    let owner_commitment = {
+        let mut u = key.verifying_key().to_bytes();
         u[0] = 0; // BN254 Fr-safe
         u
     };
+    let user_commitment = owner_commitment;
 
     // Input-note opening (4g.7a). The matcher (MatcherState::new() →
     // zeroed mints in this test) verifies the opening against the
@@ -107,7 +113,7 @@ fn sign_order(
     let opening = NoteOpening {
         token_mint: [0u8; 32],
         amount: note_amount,
-        owner_commitment: fr_safe(0x44),
+        owner_commitment,
         inner_hash: fr_safe(0x55),
         nullifier: [0x77; 32],
     };

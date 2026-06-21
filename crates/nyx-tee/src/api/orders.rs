@@ -526,6 +526,10 @@ async fn prepare_order(
         note_amount,
         collateral_note: note_commitment,
         user_commitment,
+        // The owner_commitment was just pinned to `note_commitment` by
+        // `verify_commitment` above, so the matcher's self-trade check keys on a
+        // value the caller cannot spoof for a note they don't own.
+        owner_commitment,
         order_id,
         order_inclusion_commitment: order_inclusion_commitment(
             arrival_slot,
