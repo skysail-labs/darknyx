@@ -2,8 +2,11 @@
 
 Nyx (aka **darknyx**) is a privacy-preserving CLOB-style darkpool on
 Solana. Order intent (side, price, amount, the note backing it) never
-appears on-chain; matching and settlement run **inside an Intel TDX
-confidential VM (a "CVM") on Phala Cloud**.
+appears on-chain, and **per-trade amounts + the execution price are hidden
+at settlement too** — the on-chain settle tx carries only note commitments,
+no plaintext amounts (see *Settlement amount privacy* below). Matching and
+settlement run **inside an Intel TDX confidential VM (a "CVM") on Phala
+Cloud**.
 
 This doc is the system-level map. For the cryptography see
 [`CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md); for the agent build/deploy/test
@@ -153,15 +156,49 @@ src/
 
 | Hidden (never on-chain) | Public (on-chain) |
 |---|---|
-| Order side / price / amount | Note commitments (Poseidon hashes) as Merkle leaves |
-| Which note backs an order | Nullifiers of consumed notes (unlinkable to the owner) |
-| The owner of a note | SPL token amounts entering (`deposit`) / leaving (`withdraw`) the vault |
-| The match graph (who traded with whom) | The TEE's settle txs (note commitments + amounts, already public) |
+| Order side / price / amount (intent) | Note commitments (Poseidon hashes) as Merkle leaves |
+| **Per-trade amount + the execution price** (at settlement) | Nullifiers of consumed notes (unlinkable to the owner) |
+| Which note backs an order | Gross SPL amounts entering (`deposit`) / leaving (`withdraw`) the vault |
+| The owner of a note + the match graph | The TEE's settle txs — note commitments only, **no plaintext amounts or price** |
 
 A note's **commitment** is `Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi,
 amount, owner_commitment, inner_hash)` — a hash that reveals nothing. Its
 **nullifier** is `Poseidon3(DOMAIN_NULL, spending_key, inner_hash)`,
 unlinkable to the commitment or the owner. See `CRYPTOGRAPHY.md` §4–§5.
+
+### Settlement amount privacy (amounts off-chain, via the fill memo)
+
+The settle tx used to reveal each trade's amounts + the clearing price in
+plaintext — alpha/MEV exposure that dark-pool peers (Renegade, GoDarkDEX) also
+close. Those are now gone from L1; the proof is the sole binder:
+
+* **The circuit guarantees soundness over PRIVATE amounts.** `VALID_MATCH_BATCH`
+  already proved conservation; it now also **range-checks every amount**
+  (`Num2Bits(64)`) and enforces the **protocol fee floor in-circuit**
+  (`fee_rate_bps` is a public input that `verify_match_batch` binds to the
+  authoritative `VaultConfig.fee_rate_bps`). The per-match Merkle leaf is
+  **commitment-only** — `Poseidon10` over the six note commitments + the two
+  fee-note commitments + `batch_slot`, hashing no amounts.
+* **The settle ix + event carry no amounts.** `MatchResultPayload` dropped its
+  seven amount/price fields (480 → 424 bytes; canonical-hash domain
+  `nyx-match-v6` → `v7`), and the `TradeSettled` event dropped them too. The
+  note commitments bind the amounts; the chain never sees them.
+* **Amounts reach the trader off-chain, via the fill memo.** The owner of each
+  order receives a per-account **`FillMemo`** (`order_id`, `anchor_index`,
+  `change_amount`, `change_note_commitment`, `inner_hash`) over the auth'd
+  `/ws/fills` channel — the only place a trade's change amount appears. The
+  client's **Vuln-4 guard** (`sdk/src/orders/fill-memo.ts`) recomputes the
+  commitment from the memo (`Poseidon6(mint, change_amount, owner, inner_hash)`)
+  and rejects a TEE that lied. Memos are **durably logged per account**, so a
+  client that was offline backfills via **`GET /fills/replay?since=<seq>`** then
+  tails the live socket (self-healing, no on-chain dependency).
+* **The off-TEE indexer is now a commitment LOCATOR only.** With amounts gone
+  from the payload + event, `packages/indexer` decodes the 424-byte settle just
+  to locate commitments for gap-detection; the spendable amount always comes
+  from the memo / replay, never the indexer.
+
+See `CRYPTOGRAPHY.md` §7.4 (the circuit + the commitment-only leaf) and §9 (the
+payload), and [`fills-history-architecture.md`](fills-history-architecture.md).
 
 ### Why a TEE/CVM (not an on-chain CLOB)?
 
@@ -171,8 +208,8 @@ Intel TDX confidential VM:
 
 * **Order intent never lands in any transaction.** Clients `POST /orders`
   over TLS directly to the enclave. The book lives in enclave memory; only
-  the *settlement* (which references already-public note commitments + SPL
-  amounts) touches L1.
+  the *settlement* touches L1 — and since amount-privacy it references only
+  note commitments, no plaintext trade amounts or price.
 * **The enclave is attestable.** Clients verify a TDX quote
   (`verifyTeeAttestation()`) binding the running code's measurement
   (`compose_hash` / MRTD) to a governance-approved set before trusting it
@@ -246,7 +283,7 @@ on-chain hashers).
 | `VALID_WALLET_CREATE` | a well-formed user commitment | on-chain (`create_wallet`) |
 | `VALID_SPEND` | knowledge of a note's opening + its Merkle inclusion + correct nullifier | on-chain (`withdraw`) |
 | `VALID_INPUT` | a note's opening + inclusion (gates `lock_note`) | on-chain (`lock_note`) |
-| `VALID_MATCH_BATCH` (N=16) | conservation + correct output-note construction for ≤16 matches, hashed into one batch Merkle root | in-enclave prove → on-chain `verify_match_batch` |
+| `VALID_MATCH_BATCH` (N=16) | conservation + 64-bit range-checks + an in-circuit fee floor over PRIVATE amounts, + correct output-note construction for ≤16 matches, hashed into one **commitment-only** batch Merkle root | in-enclave prove → on-chain `verify_match_batch` |
 | `VALID_MERGE` (K=2/4) | K input notes (same owner+mint, each included) consolidate into one output note of the same total | on-chain (`merge`) |
 
 (`MatchBatch(N)` is also instantiated at N=2/4 for dev/test only.) The
@@ -280,8 +317,11 @@ verification + the change-note store, and the hand-coded `vault-client.ts`
 6. **Settle (CVM → L1).** The settle pipeline drives Tx A–E (above) on L1: the
    matched output notes (note_c/d), any change notes (note_e/f), and the
    base+quote protocol fee notes are appended to the tree.
-7. **Fill memo (CVM → client).** The client receives the fill, runs the
-   integrity check, and stores the change note for later spending.
+7. **Fill memo (CVM → client).** Since amounts left L1 (above), the change
+   amount reaches the order's owner ONLY here — a per-account `FillMemo` over
+   `/ws/fills` (durably logged, recoverable via `GET /fills/replay`). The
+   client runs the Vuln-4 integrity check (recompute the commitment from the
+   memo), then stores the change note for later spending.
 8. **`withdraw` (L1).** Client spends an output note via a VALID_SPEND proof;
    the nullifier is recorded; SPL leaves the vault.
 
@@ -326,8 +366,11 @@ sysvar + system program.
 * **Privacy.** Order intent never leaves the enclave except as settlement
   referencing already-public note commitments.
 
-Known gaps: the `/ws/fills` channel is currently fail-closed (unfiltered
-broadcast — see [`fills-history-architecture.md`](fills-history-architecture.md));
+The `/ws/fills` channel is **per-account routed** (each order's memo goes only
+to its owner's channel) and **self-healing**: a memo that arrives while no
+client is attached survives in the durable per-account log and is recovered via
+`GET /fills/replay?since=<seq>` on reconnect — see
+[`fills-history-architecture.md`](fills-history-architecture.md). Known gap:
 settle-under-load is bounded by RPC capacity (Helius 429s), not the matcher.
 
 ---

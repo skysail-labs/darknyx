@@ -5,7 +5,10 @@ settled **inside an Intel TDX confidential VM (a "CVM") on Phala Cloud** —
 it never touches an L1 transaction. Settlement is atomic on L1 with a
 TEE-signed payload, and balances are encrypted UTXO notes (Poseidon
 commitments in an incremental Merkle tree). Note locking, matching, and
-withdrawal each carry their own Groth16 ZK proof.
+withdrawal each carry their own Groth16 ZK proof. **Per-trade amounts + the
+execution price are hidden on-chain too** — the settle tx carries only note
+commitments, and each trade's amount reaches its owner off-chain through an
+auth'd fill memo (`/ws/fills`, with durable replay), never an L1 transaction.
 
 > **Status:** functional on Solana **devnet**, validated end-to-end on a
 > live Phala CVM (`cvm-settle-e2e` real settle + a load generator).
@@ -19,6 +22,7 @@ withdrawal each carry their own Groth16 ZK proof.
 |---------------------------------|----------------------------------------------------------------------|
 | Hidden order intent             | Orders are `POST`ed to the in-CVM matcher (`POST /orders`), never to L1 |
 | Hidden balances                 | UTXO notes (Poseidon commitments) in a depth-20 Merkle tree          |
+| Hidden trade amount + price     | Settlement carries note commitments only (no plaintext amounts/price); `VALID_MATCH_BATCH` range-checks amounts + enforces the fee floor in-circuit; the amount reaches the trader via the `/ws/fills` fill memo |
 | Atomic settlement               | TEE Ed25519-signed `tee_forced_settle_batched` enforces conservation on L1 |
 | TEE can't lock a note it doesn't own | `VALID_INPUT` Groth16 verified at `lock_note` time              |
 | TEE can't misroute outputs      | `VALID_MATCH_BATCH` Groth16 verified at `verify_match_batch` time (N=16/batch) |
@@ -121,7 +125,7 @@ real-settle path), see [`scripts/dev-commands.md`](scripts/dev-commands.md)
 | **[`CLAUDE.md`](CLAUDE.md)**                                  | Agent / contributor onboarding: the build-validate cycle + the Phala CVM runbook + the byte-equality invariants |
 | **[`scripts/dev-commands.md`](scripts/dev-commands.md)**       | Master command cheat-sheet — build, test, deploy, troubleshoot |
 | **[`docs/tee-architecture.md`](docs/tee-architecture.md)**     | The in-TEE matcher/settler design (book, settle pipeline, auth) |
-| **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)** | The decided fills-delivery + trade-history design (deterministic order_ids + per-account WS + off-TEE indexer) |
+| **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)** | Fills delivery + trade history: deterministic order_ids + per-account `/ws/fills` memos (the amount source after amount-privacy) + durable `GET /fills/replay` recovery; the off-TEE indexer is a commitment locator only |
 | **[`DeepWiki`](https://deepwiki.com/skysail-labs/darknyx)**    | Indexed, code-linked walkthrough of the repo                |
 
 The **authoritative** description of the live system is in
