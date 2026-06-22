@@ -8,6 +8,7 @@
  */
 
 import crypto from "node:crypto";
+import nacl from "tweetnacl";
 import type { MasterSeedMode } from "../providers.js";
 
 export const MASTER_SEED_BYTES = 64;
@@ -20,13 +21,14 @@ const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
 const INFO_INNER_HASH = new TextEncoder().encode("nyx-inner-hash-v1");
 const INFO_ORDER_ID = new TextEncoder().encode("nyx-order-id-v1");
 const INFO_MERGE_INNER = new TextEncoder().encode("nyx-merge-inner-v1");
+const INFO_VIEWING_ENC = new TextEncoder().encode("nyx-viewing-enc-v1");
 
 /** BN254 scalar field modulus r. */
 export const BN254_R =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 /** HKDF-SHA256 expand returning an arbitrary-length byte string. */
-function hkdfExpand(ikm: Uint8Array, info: Uint8Array, length: number): Uint8Array {
+export function hkdfExpand(ikm: Uint8Array, info: Uint8Array, length: number): Uint8Array {
   // HKDF-SHA256: extract (salt=empty) then expand.
   const salt = new Uint8Array(32); // all zeros
   const prk = crypto.createHmac("sha256", Buffer.from(salt)).update(Buffer.from(ikm)).digest();
@@ -200,6 +202,34 @@ export function deriveMergeInnerHash(seed: Uint8Array, n: number): bigint {
   info.set(new Uint8Array(nBuf), INFO_MERGE_INNER.length);
   const okm = kmac256(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
+}
+
+export interface X25519Keypair {
+  secretKey: Uint8Array; // 32-byte X25519 scalar
+  publicKey: Uint8Array; // 32-byte X25519 public point
+}
+
+/**
+ * Derive the X25519 viewing-encryption keypair from the master seed
+ * (change-amount recovery, Proposal B). The client sends `publicKey` with each
+ * order; the TEE encrypts each fill's `change_amount` to it on-chain, and only
+ * `secretKey` — regenerable from the seed on any device — can decrypt it. This
+ * is what makes a change note recoverable after a CVM redeploy wipes the live
+ * fill memo.
+ *
+ * `secretKey = HKDF-SHA256-expand(seed, "nyx-viewing-enc-v1")[:32]`
+ * `publicKey = X25519(secretKey · basepoint)` (tweetnacl clamps the scalar).
+ *
+ * Client-only: the TEE merely *consumes* `publicKey` (it never re-derives it),
+ * so there is no cross-language parity contract on this derivation. A distinct
+ * info string keeps it in its own domain from the spend/view/trade/root keys.
+ * The encryption *construction* it feeds, however, is pinned cross-language by
+ * the fixed vector in `tests/fill-encryption.test.ts`.
+ */
+export function deriveViewingEncKeypair(seed: Uint8Array): X25519Keypair {
+  const secretKey = hkdfExpand(seed, INFO_VIEWING_ENC, 32);
+  const publicKey = nacl.scalarMult.base(secretKey);
+  return { secretKey, publicKey };
 }
 
 /** Serialize a BN254 field element as 32-byte BE. */
