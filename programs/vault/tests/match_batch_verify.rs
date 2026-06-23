@@ -80,16 +80,19 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
         .expect("on-chain groth16-solana must accept our real N=16 proof");
 
     // CU profiling + regression guard for nyx-tee's per-tx ComputeUnitLimit
-    // right-sizing. Keep below VERIFY_COMPUTE_UNIT_LIMIT (101_000 = 87,224×1.15)
-    // in crates/nyx-tee/src/settle/pipeline.rs — if this assert trips, the
-    // verify ix got heavier and that limit must be raised (and re-measured).
+    // right-sizing (VERIFY_COMPUTE_UNIT_LIMIT in crates/nyx-tee/src/settle/pipeline.rs,
+    // now 140_000). litesvm measures ~100,533 here; the on-chain limit carries
+    // extra margin because devnet's alt_bn128/groth16 syscalls run hotter than
+    // litesvm (a 101,000 limit died ComputationalBudgetExceeded on devnet). This
+    // guard trips earlier than the on-chain limit so a heavier verify ix prompts
+    // a re-measure + headroom check before it can exceed the devnet budget.
     eprintln!(
         "CU_PROFILE verify_match_batch consumed={}",
         meta.compute_units_consumed
     );
     assert!(
-        meta.compute_units_consumed < 101_000,
-        "verify_match_batch CU {} exceeds nyx-tee VERIFY_COMPUTE_UNIT_LIMIT (101_000)",
+        meta.compute_units_consumed < 115_000,
+        "verify_match_batch CU {} grew — re-measure + re-check VERIFY_COMPUTE_UNIT_LIMIT (140_000) headroom vs devnet",
         meta.compute_units_consumed
     );
 

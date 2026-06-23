@@ -57,11 +57,22 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 //
 // Measured 2026-06-08 (image tee-v3-hardening-20):
 //   lock_note               117,943 CU (devnet, fixed 26-level Merkle path)
-//   verify_match_batch        87,224 CU (litesvm, deterministic N=16 groth16)
 //   tee_forced_settle_batched 162,145 CU (devnet, WORST case: 5 leaves appended
 //                                          = note_c/d + buyer change + 2 fee notes;
 //                                          litesvm 2-leaf path is ~100k)
 //   close_batch_validity_marker 3,546 CU (litesvm)
+//
+// Re-measured 2026-06-23 (image tee-v3-hardening-40, post amount-privacy +
+// change-amount-recovery):
+//   verify_match_batch       100,533 CU (litesvm) — up from 87,224: amount-privacy
+//     (P1b) added fee-binding + more public inputs to VALID_MATCH_BATCH, so the
+//     on-chain groth16 verify got heavier. DEVNET runs the alt_bn128 syscalls
+//     HOTTER than litesvm (a -39 deploy with a 101,000 limit died
+//     `ComputationalBudgetExceeded` at ~100,850), so the on-chain limit carries
+//     a generous margin over the litesvm figure — NOT the usual ×1.15.
+//   tee_forced_settle_batched 93,542 CU (litesvm 2-leaf) — v8's +128B fill_recovery
+//     adds only one extra SHA-256 block to the on-chain canonical-hash recompute;
+//     the devnet 5-leaf worst case stays well under SETTLE_COMPUTE_UNIT_LIMIT.
 // Regression-guarded by the `CU_PROFILE`/assert lines in
 // programs/vault/tests/{match_batch_verify,tee_forced_settle_batched}.rs.
 
@@ -69,8 +80,10 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 187_000;
 /// CU ceiling for each lock_note tx (Tx A). 117,943 × 1.15.
 pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 136_000;
-/// CU ceiling for the verify_match_batch tx (Tx B). 87,224 × 1.15.
-pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 101_000;
+/// CU ceiling for the verify_match_batch tx (Tx B). litesvm measures 100,533;
+/// devnet's groth16 runs hotter (a 101,000 limit exceeded budget on devnet), so
+/// this carries ~1.4× headroom over the litesvm figure rather than the usual ×1.15.
+pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 140_000;
 /// CU ceiling for the close_batch_validity_marker tx (Tx E). 3,546 × 1.15 → 5k floor.
 pub(crate) const CLOSE_COMPUTE_UNIT_LIMIT: u32 = 5_000;
 
