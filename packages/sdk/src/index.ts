@@ -54,7 +54,6 @@ export * from "./zk/valid-input-prover.js";
 export * from "./fills/history.js";
 export * from "./fills/recover.js";
 export * from "./utxo/change-note.js";
-export * from "./fills/replay.js";
 export * from "./fills/ws-client.js";
 export * from "./settlement/settle-builder.js";
 export * from "./settlement/settlement-watcher.js";

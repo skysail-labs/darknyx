@@ -189,13 +189,18 @@ close. Those are now gone from L1; the proof is the sole binder:
   `/ws/fills` channel — the only place a trade's change amount appears. The
   client's **Vuln-4 guard** (`sdk/src/orders/fill-memo.ts`) recomputes the
   commitment from the memo (`Poseidon6(mint, change_amount, owner, inner_hash)`)
-  and rejects a TEE that lied. Memos are **durably logged per account**, so a
-  client that was offline backfills via **`GET /fills/replay?since=<seq>`** then
-  tails the live socket (self-healing, no on-chain dependency).
-* **The off-TEE indexer is now a commitment LOCATOR only.** With amounts gone
-  from the payload + event, `packages/indexer` decodes the 424-byte settle just
-  to locate commitments for gap-detection; the spendable amount always comes
-  from the memo / replay, never the indexer.
+  and rejects a TEE that lied. The live socket is a low-latency fast path; the
+  **durable** recovery source is the **on-chain encrypted `change_amount`**
+  (change-amount recovery, Proposal B): the settle ix carries the amount
+  X25519-ECIES-encrypted to the order's viewing key, so an offline client
+  recovers it from the chain via `recoverChangeFromChain` (decrypt + the same
+  Vuln-4 self-verify) — surviving a CVM redeploy. (This replaced the old durable
+  per-account memo log + `GET /fills/replay`, which a redeploy wiped.)
+* **The off-TEE indexer is a commitment LOCATOR + opaque ciphertext store.** With
+  plaintext amounts gone from the payload + event, `packages/indexer` decodes the
+  settle ix to locate commitments AND surface the opaque `fill_recovery`
+  ciphertext (it can't decrypt it); the client decrypts that to recover the
+  spendable amount.
 
 See `CRYPTOGRAPHY.md` §7.4 (the circuit + the commitment-only leaf) and §9 (the
 payload), and [`fills-history-architecture.md`](fills-history-architecture.md).
@@ -317,11 +322,13 @@ verification + the change-note store, and the hand-coded `vault-client.ts`
 6. **Settle (CVM → L1).** The settle pipeline drives Tx A–E (above) on L1: the
    matched output notes (note_c/d), any change notes (note_e/f), and the
    base+quote protocol fee notes are appended to the tree.
-7. **Fill memo (CVM → client).** Since amounts left L1 (above), the change
-   amount reaches the order's owner ONLY here — a per-account `FillMemo` over
-   `/ws/fills` (durably logged, recoverable via `GET /fills/replay`). The
-   client runs the Vuln-4 integrity check (recompute the commitment from the
-   memo), then stores the change note for later spending.
+7. **Fill memo (CVM → client) + on-chain backstop.** Since plaintext amounts
+   left L1, the change amount reaches the owner two ways: live as a per-account
+   `FillMemo` over `/ws/fills` (the fast path), and durably as the on-chain
+   `fill_recovery` ciphertext (encrypted to the order's viewing key) that
+   `recoverChangeFromChain` decrypts after a missed memo / redeploy. Either way
+   the client runs the Vuln-4 integrity check (recompute the commitment), then
+   stores the change note for later spending.
 8. **`withdraw` (L1).** Client spends an output note via a VALID_SPEND proof;
    the nullifier is recorded; SPL leaves the vault.
 
@@ -368,8 +375,9 @@ sysvar + system program.
 
 The `/ws/fills` channel is **per-account routed** (each order's memo goes only
 to its owner's channel) and **self-healing**: a memo that arrives while no
-client is attached survives in the durable per-account log and is recovered via
-`GET /fills/replay?since=<seq>` on reconnect — see
+client is attached is not lost — the change amount rides the settle ix encrypted
+on-chain, so the client recovers it on reconnect from the indexer + on-chain
+ciphertext (`recoverChangeFromChain`) — see
 [`fills-history-architecture.md`](fills-history-architecture.md). Known gap:
 settle-under-load is bounded by RPC capacity (Helius 429s), not the matcher.
 

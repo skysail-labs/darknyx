@@ -21,14 +21,13 @@
  *      commitments let it detect gaps (a located commitment it has no memo/note
  *      for = a fill whose memo it still needs to replay).
  *
- * Gap recovery for a fill the client was offline for (memo missed) has two
- * sources: the durable memo-replay endpoint (`replayFills` → `GET /fills/replay`,
- * P7) and — change-amount recovery (Proposal B) — the PERMANENT on-chain
- * ciphertext surfaced here as `IndexerFill.{ephemeralPubkey, changeEnc}`, which
+ * Gap recovery for a fill the client was offline for (memo missed) comes from
+ * the PERMANENT on-chain ciphertext (change-amount recovery, Proposal B):
+ * surfaced here as `IndexerFill.{ephemeralPubkey, changeEnc}`, which
  * `recoverChangeFromChain` (`fills/recover.ts`) decrypts + self-verifies into a
- * spendable note. The on-chain path survives a CVM redeploy that wipes the
- * replay log, so it's the durable backstop; replay/live-WS are the low-latency
- * fast paths.
+ * spendable note. It survives a CVM redeploy, so it's the durable backstop; the
+ * live `/ws/fills` push is the low-latency fast path. (The old durable
+ * memo-replay log + `GET /fills/replay` were retired in favour of this.)
  */
 
 import { deriveOrderId } from "../keys/key-generators.js";

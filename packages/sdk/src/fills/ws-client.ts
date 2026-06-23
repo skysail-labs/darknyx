@@ -1,5 +1,5 @@
 /**
- * Live fills transport — the "tail" half of "backfill then tail".
+ * Live fills transport — the "tail" half of "tail then backfill".
  *
  * Opens an authenticated per-account WebSocket to the CVM's `GET /ws/fills`,
  * verifies each `FillMemo` (the Vuln-4 integrity check in `fill-memo.ts`), and
@@ -13,7 +13,7 @@
 import type { NoteStore, ChangeNoteRecord } from "../utxo/note-store.js";
 import { receiveFillMemo, type FillMemo } from "../orders/fill-memo.js";
 import { backfillHistory, type BackfillOptions, type BackfillResult } from "./history.js";
-import { replayFills, type ReplayResult } from "./replay.js";
+import { recoverChangeFromChain } from "./recover.js";
 
 export interface WebSocketLike {
   addEventListener(type: "open", cb: () => void): void;
@@ -35,9 +35,6 @@ export interface SubscribeFillsOptions {
   ownerCommitment: bigint;
   store: NoteStore;
   onFill?: (rec: ChangeNoteRecord) => void;
-  /** Called with each live memo's `seq` (P7) so the caller can advance its
-   *  replay cursor in lockstep with the live tail. */
-  onSeq?: (seq: number) => void;
   onError?: (err: Error) => void;
   /** Server closed with 1011 (lagged past the buffer) — caller should re-backfill. */
   onResync?: (reason: string) => void;
@@ -61,7 +58,6 @@ export function subscribeFills(opts: SubscribeFillsOptions): FillsSubscription {
       try {
         const text = typeof ev.data === "string" ? ev.data : String(ev.data);
         const memo = JSON.parse(text) as FillMemo;
-        if (typeof memo.seq === "number") opts.onSeq?.(memo.seq);
         const rec = await receiveFillMemo(memo, opts.masterSeed, opts.ownerCommitment, opts.store);
         opts.onFill?.(rec);
       } catch (e) {
@@ -87,55 +83,62 @@ export function subscribeFills(opts: SubscribeFillsOptions): FillsSubscription {
 export interface FillsSyncOptions
   extends Omit<BackfillOptions, "baseUrl">,
     SubscribeFillsOptions {
-  /** Gateway HTTP origin for `GET /fills/replay` — the durable amount-recovery
-   *  source (P7). e.g. `https://<app>-8080.dstack-…` (the http:// form). */
-  gatewayHttpUrl: string;
-  /** Optional indexer base URL. Used ONLY as a commitment LOCATOR for
-   *  gap-detection — after amount-privacy (P4) it carries no amounts, so it is
-   *  not the recovery source. Omit to skip the locate step. */
+  /** Indexer base URL. Locates the account's change-note fills (by HD-derived
+   *  order id), and — when `baseMint`/`quoteMint` are set — recovers each
+   *  amount/opening from the PERMANENT on-chain ciphertext (change-amount
+   *  recovery, Proposal B) via `recoverChangeFromChain`. Omit to skip backfill
+   *  entirely (live tail only). */
   indexerBaseUrl?: string;
-  /** Initial replay cursor (the client's last-stored `seq`). `0`/undefined
-   *  replays everything the TEE has retained. */
-  initialCursor?: number;
+  /** Market mints (32 bytes each). Required to recover located fills from the
+   *  chain; without them the backfill only LOCATES commitments (gap-detect). */
+  baseMint?: Uint8Array;
+  quoteMint?: Uint8Array;
 }
 
 export interface FillsSync {
   close(): void;
-  /** The initial replay result — amounts/openings recovered before tailing. */
-  replay: ReplayResult;
-  /** Optional indexer locator result (commitments only), when `indexerBaseUrl`
-   *  was set. A located commitment with no recovered note flags a gap. */
+  /** The indexer locator result (commitments + ciphertext), when `indexerBaseUrl`
+   *  was set. Recovered notes are already in the `NoteStore`. */
   located?: BackfillResult;
 }
 
 /**
- * "Backfill then tail", self-healing (P7): REPLAY the durable per-account memos
- * from the TEE (`GET /fills/replay`) to recover the amounts/openings the live
- * socket may have missed — then open the live WS tail. Invisible to the user.
- * The replay cursor advances in lockstep with the live tail (`onSeq`); on a 1011
- * resync we re-replay from the cursor and reopen. The `NoteStore` is
- * commitment-keyed, so overlapping replay/live delivery just re-puts.
+ * "Tail then backfill", self-healing: open the live `/ws/fills` tail AND backfill
+ * any gap from the chain. The durable recovery source is the PERMANENT on-chain
+ * ciphertext (Proposal B) — for each fill the indexer locates,
+ * `recoverChangeFromChain` decrypts + self-verifies the spendable opening into
+ * the `NoteStore`. This replaced the retired durable memo-replay log
+ * (`GET /fills/replay`), which a CVM redeploy used to wipe.
  *
- * The indexer (if `indexerBaseUrl` is set) is consulted only as a commitment
- * LOCATOR for gap-detection — amount-privacy (P4) means it carries no amounts,
- * so the spendable opening always comes from the replay/live memo.
+ * The `NoteStore` is commitment-keyed, so overlapping backfill/live delivery just
+ * re-puts. On a 1011 resync we re-backfill from the chain and reopen.
  */
 export async function startFillsSync(opts: FillsSyncOptions): Promise<FillsSync> {
-  let cursor = opts.initialCursor ?? 0;
-
-  // 1. Durable recovery FIRST: replay missed memos (the amount source).
-  const replay = await replayFills({ ...opts, since: cursor });
-  cursor = replay.nextCursor;
-
-  // 2. Optional: locate commitments via the indexer (no amounts) for gap-detect.
   let located: BackfillResult | undefined;
-  if (opts.indexerBaseUrl) {
+
+  const backfill = async () => {
+    if (!opts.indexerBaseUrl) return;
     try {
       located = await backfillHistory({ ...opts, baseUrl: opts.indexerBaseUrl });
+      if (!opts.baseMint || !opts.quoteMint) return; // locate-only (no mints).
+      for (const fill of located.located) {
+        const note = await recoverChangeFromChain(fill, {
+          masterSeed: opts.masterSeed,
+          ownerCommitment: opts.ownerCommitment,
+          baseMint: opts.baseMint,
+          quoteMint: opts.quoteMint,
+        });
+        if (note) {
+          await opts.store.put(note);
+          opts.onFill?.(note);
+        }
+      }
     } catch (e) {
       opts.onError?.(e as Error);
     }
-  }
+  };
+
+  await backfill();
 
   let sub: FillsSubscription | null = null;
   let closed = false;
@@ -144,22 +147,9 @@ export async function startFillsSync(opts: FillsSyncOptions): Promise<FillsSync>
     if (closed) return;
     sub = subscribeFills({
       ...opts,
-      // Advance the replay cursor in lockstep with the live tail.
-      onSeq: (seq) => {
-        if (seq > cursor) cursor = seq;
-        // Forward to the caller's onSeq — this internal override (via `...opts`)
-        // must not swallow a user-provided callback.
-        opts.onSeq?.(seq);
-      },
       onResync: async (reason) => {
         opts.onResync?.(reason);
-        // Re-replay the gap from the cursor, then reopen.
-        try {
-          const r = await replayFills({ ...opts, since: cursor });
-          cursor = r.nextCursor;
-        } catch (e) {
-          opts.onError?.(e as Error);
-        }
+        await backfill(); // re-recover the gap from the chain, then reopen.
         if (!closed) open();
       },
     });
@@ -167,7 +157,6 @@ export async function startFillsSync(opts: FillsSyncOptions): Promise<FillsSync>
   open();
 
   return {
-    replay,
     located,
     close() {
       closed = true;
