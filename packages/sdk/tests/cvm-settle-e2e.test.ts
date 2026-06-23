@@ -56,7 +56,7 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
-import { deriveOrderId, bn254ToBE32 } from "../src/keys/key-generators.js";
+import { deriveOrderId, bn254ToBE32, deriveViewingEncKeypair } from "../src/keys/key-generators.js";
 import { nullifierV2 } from "../src/utxo/note.js";
 import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
 import { vaultConfigPda } from "../src/idl/vault-client.js";
@@ -437,6 +437,11 @@ maybeDescribe(
             // it's larger and intake accepts note ≥ required.
             collateral_amount: Number(note.amount),
             tree_id: note.treeId,
+            // Change-amount recovery (Proposal B): the seed-derived viewing key
+            // the TEE encrypts this order's change_amount to on-chain. NOT in the
+            // signed canonical (so the digest above is unchanged). Without it the
+            // TEE writes the all-zero fill_recovery sentinel and recovery can't run.
+            viewing_pubkey: hex(deriveViewingEncKeypair(p.masterSeed).publicKey),
             anchors: anchorsToJson(pool.anchors),
           };
         }
