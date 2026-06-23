@@ -381,6 +381,31 @@ ciphertext (`recoverChangeFromChain`) — see
 [`fills-history-architecture.md`](fills-history-architecture.md). Known gap:
 settle-under-load is bounded by RPC capacity (Helius 429s), not the matcher.
 
+### Building a production client (the recoverability contract)
+
+A production client (browser/mobile wallet, not the stale `apps/demo`) wires
+three SDK entry points so a user's notes are recoverable on any device from
+their wallet alone — no stored secret, surviving a CVM redeploy:
+
+1. **Deterministic seed (Proposal A).** Derive the 64-byte master seed from a
+   wallet signature, never a stored CSPRNG blob:
+   `resolveMasterSeed({ type: "wallet-signature", signMessage })` — or, if you
+   verify the signature server-side first, `seedFromWalletSignature(sig)` over
+   `MASTER_SEED_MESSAGE` (`"NYX_DARKPOOL_SEED_V1"`). Both are the SAME derivation
+   (`SHA-512(sig)[:64]`); pinned by `master-seed-wallet-signature.test.ts`.
+2. **Viewing-encryption key on every order (Proposal B).** Send
+   `deriveViewingEncKeypair(seed).publicKey` as the order's `viewing_pubkey`
+   (`buildOrder` defaults to it). The TEE encrypts each fill's `change_amount`
+   to it on-chain.
+3. **Recover on reconnect.** Backfill located fills from the indexer
+   (`backfillHistory`) and decrypt+self-verify each via `recoverChangeFromChain`;
+   `startFillsSync` does this "tail then backfill" automatically when given the
+   indexer URL + mints. The full client journey is covered (no live CVM) by
+   `packages/indexer/tests/change-recovery-e2e.test.ts`.
+
+NOTE: `apps/demo` predates this and is intentionally not updated — treat the SDK
+functions above + that e2e test as the reference for the real client.
+
 ---
 
 ## Deployment runbook

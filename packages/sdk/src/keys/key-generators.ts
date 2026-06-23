@@ -73,6 +73,30 @@ export function generateMasterSeed(): Uint8Array {
   return new Uint8Array(crypto.randomBytes(MASTER_SEED_BYTES));
 }
 
+/**
+ * Derive the deterministic master seed from a wallet's Ed25519 signature over the
+ * seed-derivation message — `SHA-512(signature)[:64]`. This is the canonical
+ * `wallet-signature` derivation (Proposal A): the seed is recoverable on any
+ * device from the wallet alone, with no stored secret. The CALLER is responsible
+ * for having signed the fixed message (`MASTER_SEED_MESSAGE`) + verifying the
+ * signature against the expected pubkey before trusting the seed.
+ *
+ * THIS is the single source of truth for the derivation — `resolveMasterSeed`'s
+ * wallet-signature branch calls it, and any production client deriving the seed
+ * server-side (e.g. a verify-then-derive endpoint behind a `signMessage` UI)
+ * should call it too, so they cannot drift. Recoverability of a change note
+ * (change-amount recovery, Proposal B) depends on this seed being reproduced
+ * byte-for-byte, since the viewing-encryption keypair derives from it
+ * ([`deriveViewingEncKeypair`]).
+ */
+export function seedFromWalletSignature(signature: Uint8Array): Uint8Array {
+  const hash = crypto.createHash("sha512").update(Buffer.from(signature)).digest();
+  return new Uint8Array(hash.subarray(0, MASTER_SEED_BYTES));
+}
+
+/** The fixed message a wallet signs to derive its master seed (Proposal A). */
+export const MASTER_SEED_MESSAGE = new TextEncoder().encode("NYX_DARKPOOL_SEED_V1");
+
 /** Resolve a `MasterSeedMode` to actual seed bytes. */
 export async function resolveMasterSeed(mode: MasterSeedMode): Promise<Uint8Array> {
   if (mode.type === "csprng") {
@@ -82,11 +106,10 @@ export async function resolveMasterSeed(mode: MasterSeedMode): Promise<Uint8Arra
     await mode.storage.store(fresh);
     return fresh;
   }
-  // wallet-signature: sign a fixed message, use first 64 bytes of SHA-512 of signature.
-  const msg = mode.message ?? new TextEncoder().encode("NYX_DARKPOOL_SEED_V1");
+  // wallet-signature: sign the fixed message, derive via the canonical helper.
+  const msg = mode.message ?? MASTER_SEED_MESSAGE;
   const sig = await mode.signMessage(msg);
-  const hash = crypto.createHash("sha512").update(Buffer.from(sig)).digest();
-  return new Uint8Array(hash.subarray(0, MASTER_SEED_BYTES));
+  return seedFromWalletSignature(sig);
 }
 
 export function deriveSpendingKey(seed: Uint8Array): bigint {
