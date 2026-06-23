@@ -108,4 +108,27 @@ describe("MatchResultPayload decode", () => {
   it("returns null for too-short data", () => {
     expect(decodeSettleIxData(new Uint8Array(10))).toBeNull();
   });
+
+  it("decodes the change-amount recovery ciphertext per side (Proposal B)", () => {
+    // fill_recovery layout: eph(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ pad(24).
+    const recovery = new Uint8Array(128);
+    recovery.set(fill(32, 0xe1), 0);
+    recovery.set(fill(36, 0xb2), 32);
+    recovery.set(fill(36, 0xc3), 68);
+    const p = decodeMatchPayload(serializePayload(makePayload({ fillRecovery: recovery })));
+    expect(p.ephemeralPubkey).toBe(hexN(0xe1, 32));
+    expect(p.buyerEnc).toBe(hexN(0xb2, 36));
+    expect(p.sellerEnc).toBe(hexN(0xc3, 36));
+    const [buyer, seller] = payloadToFills(p);
+    expect(buyer.ephemeralPubkey).toBe(hexN(0xe1, 32));
+    expect(buyer.changeEnc).toBe(hexN(0xb2, 36));
+    expect(seller.changeEnc).toBe(hexN(0xc3, 36));
+  });
+
+  it("treats an all-zero recovery bundle as no ciphertext (null)", () => {
+    const [buyer, seller] = payloadToFills(decodeMatchPayload(serializePayload(makePayload())));
+    expect(buyer.ephemeralPubkey).toBeNull();
+    expect(buyer.changeEnc).toBeNull();
+    expect(seller.changeEnc).toBeNull();
+  });
 });

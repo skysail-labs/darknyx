@@ -16,7 +16,10 @@ export interface FillRow extends SettleFill {
 
 // Amount-privacy (P3b): the on-chain settle ix no longer carries amounts, so
 // the indexer stores commitments + a partial-fill flag only (no change_amount /
-// clearing_price columns). Clients reconstruct amounts from the FillMemo.
+// clearing_price columns). Clients reconstruct amounts from the FillMemo, or —
+// change-amount recovery (Proposal B) — by decrypting the opaque on-chain
+// ciphertext stored in `ephemeral_pubkey` + `change_enc` (the indexer cannot
+// decrypt these; only the order owner's viewing key can).
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS fills (
   order_id              TEXT    NOT NULL,
@@ -27,6 +30,8 @@ CREATE TABLE IF NOT EXISTS fills (
   is_partial_fill       INTEGER NOT NULL,
   change_note_commitment TEXT,
   batch_slot            TEXT    NOT NULL,
+  ephemeral_pubkey      TEXT,
+  change_enc            TEXT,
   created_at            INTEGER NOT NULL,
   PRIMARY KEY (signature, match_id, side)
 );
@@ -52,8 +57,8 @@ export class FillsDb {
     const stmt = this.db.prepare(
       `INSERT OR IGNORE INTO fills
         (order_id, side, match_id, signature, slot, is_partial_fill,
-         change_note_commitment, batch_slot, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         change_note_commitment, batch_slot, ephemeral_pubkey, change_enc, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const now = Date.now();
     for (const f of fills) {
@@ -66,6 +71,8 @@ export class FillsDb {
         f.isPartialFill ? 1 : 0,
         f.changeNoteCommitment,
         f.batchSlot,
+        f.ephemeralPubkey,
+        f.changeEnc,
         now,
       );
     }
@@ -76,7 +83,7 @@ export class FillsDb {
     const rows = this.db
       .prepare(
         `SELECT order_id, side, match_id, signature, slot, is_partial_fill,
-                change_note_commitment, batch_slot
+                change_note_commitment, batch_slot, ephemeral_pubkey, change_enc
            FROM fills
           WHERE order_id = ? AND slot >= ?
           ORDER BY slot ASC, side ASC`,
@@ -90,6 +97,8 @@ export class FillsDb {
       isPartialFill: (r.is_partial_fill as number) === 1,
       changeNoteCommitment: (r.change_note_commitment as string | null) ?? null,
       batchSlot: r.batch_slot as string,
+      ephemeralPubkey: (r.ephemeral_pubkey as string | null) ?? null,
+      changeEnc: (r.change_enc as string | null) ?? null,
     }));
   }
 
