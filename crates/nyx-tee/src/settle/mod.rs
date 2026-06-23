@@ -39,6 +39,7 @@ pub mod alt_pool;
 pub mod assemble;
 pub mod close_marker;
 pub mod ed25519;
+pub mod fill_recovery;
 pub mod lock_note;
 pub mod payload;
 pub mod pipeline;

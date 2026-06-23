@@ -72,6 +72,11 @@ pub struct MatchSettleInputs {
     /// This match's position in the batch (0..N-1), selecting the
     /// Merkle inclusion path.
     pub match_index: u8,
+    /// Per-fill change-amount recovery ciphertext (change-amount recovery,
+    /// Proposal B). Computed at assembly from the openings' viewing keys;
+    /// all-zero when neither side has a recoverable change note. B.5a writes it
+    /// into the signed `MatchResultPayload` so it lands on-chain.
+    pub fill_ciphertext: crate::settle::fill_recovery::FillCiphertext,
 }
 
 /// Everything needed to settle one batch.
@@ -1121,12 +1126,14 @@ mod tests {
                     buyer_lock: lock_inputs(0x01),
                     seller_lock: lock_inputs(0x02),
                     match_index: 0,
+                    fill_ciphertext: Default::default(),
                 },
                 MatchSettleInputs {
                     payload: payload(0xB0),
                     buyer_lock: lock_inputs(0x03),
                     seller_lock: lock_inputs(0x04),
                     match_index: 1,
+                    fill_ciphertext: Default::default(),
                 },
             ],
             witnesses: vec![dummy_slot(), dummy_slot()],
@@ -1175,12 +1182,14 @@ mod tests {
                     buyer_lock: lock_inputs(0x01),
                     seller_lock: lock_inputs(0x02),
                     match_index: 0,
+                    fill_ciphertext: Default::default(),
                 },
                 MatchSettleInputs {
                     payload: payload(0xB0),
                     buyer_lock: lock_inputs(0x03),
                     seller_lock: lock_inputs(0x04),
                     match_index: 1,
+                    fill_ciphertext: Default::default(),
                 },
             ],
             witnesses: vec![dummy_slot(), dummy_slot()],
@@ -1233,6 +1242,7 @@ mod tests {
                 buyer_lock: lock_inputs(0x01),
                 seller_lock: lock_inputs(0x02),
                 match_index: 0,
+                fill_ciphertext: Default::default(),
             }],
             witnesses: vec![dummy_slot(), dummy_slot()],
         };
@@ -1273,12 +1283,14 @@ mod tests {
                     buyer_lock: lock_inputs(0x01),
                     seller_lock: lock_inputs(0x02),
                     match_index: 0,
+                    fill_ciphertext: Default::default(),
                 },
                 MatchSettleInputs {
                     payload: payload(0xB0),
                     buyer_lock: lock_inputs(0x03),
                     seller_lock: lock_inputs(0x04),
                     match_index: 1,
+                    fill_ciphertext: Default::default(),
                 },
             ],
             // Only one witness slot — fewer than the two matches.
