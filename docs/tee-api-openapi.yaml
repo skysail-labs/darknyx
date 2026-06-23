@@ -483,6 +483,17 @@ components:
             collateral note carries when it exceeds the order's nominal
             cost. Lets a large note back a small order; the surplus returns
             as a change note. Omit for exact collateral.
+        viewing_pubkey:
+          type: string
+          description: |
+            Optional 32-byte X25519 viewing-encryption public key, hex
+            (`deriveViewingEncKeypair().publicKey`). When present, the TEE
+            encrypts each of this order's change_amounts to it and writes the
+            ciphertext on-chain, so the change note stays recoverable after a
+            CVM redeploy wipes the live fill memo. NOT part of the signed
+            canonical body (a wrong key only makes the owner's own change
+            unrecoverable, and the ciphertext is self-verifying client-side).
+            Omit to skip the on-chain ciphertext (back-compatible).
         anchors:
           type: array
           minItems: 10

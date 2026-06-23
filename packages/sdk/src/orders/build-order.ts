@@ -23,7 +23,7 @@
 import { buildAnchorPool, anchorsToJson } from "./anchor-pool.js";
 import { orderCanonicalDigest, OrderSide, OrderType } from "./canonical.js";
 import type { ExecutionPolicy } from "./builders.js";
-import { bn254ToBE32 } from "../keys/key-generators.js";
+import { bn254ToBE32, deriveViewingEncKeypair } from "../keys/key-generators.js";
 import { nullifierV2 } from "../utxo/note.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
@@ -87,6 +87,12 @@ export interface BuildOrderArgs {
   /** Which Merkle-tree shard the note lives in (selects the settle's lock_note
    *  shard so a batch's inputs can span shards). Default `0`. NOT signed. */
   treeId?: number;
+  /** 32-byte X25519 viewing-encryption public key (change-amount recovery,
+   *  Proposal B). The TEE encrypts this order's change_amounts to it on-chain so
+   *  they survive a CVM redeploy. Defaults to
+   *  `deriveViewingEncKeypair(masterSeed).publicKey` (recovery on by default).
+   *  NOT signed — a wrong key only self-harms (own change unrecoverable). */
+  viewingPubkey?: Uint8Array;
 }
 
 /** The fully-signed `POST /orders` wire body (all hex fields; numeric u64s). */
@@ -112,6 +118,8 @@ export interface PlaceOrderRequest {
   collateral_amount: number;
   /** Which Merkle-tree shard the collateral note lives in. Default 0. */
   tree_id: number;
+  /** 32-byte X25519 viewing-encryption pubkey, hex (change-amount recovery). */
+  viewing_pubkey: string;
   anchors: { inner_hash: string; nullifier: string }[];
 }
 
@@ -152,6 +160,12 @@ export async function buildOrder(
 
   const arrivalNonce = args.arrivalNonce ?? 1n;
   const collateralAmount = args.collateralAmount ?? args.note.amount;
+  // Recovery on by default: derive the viewing-enc pubkey from the seed unless
+  // the caller overrides it. NOT in the signed canonical (see emit below).
+  const viewingPubkey =
+    args.viewingPubkey ?? deriveViewingEncKeypair(args.masterSeed).publicKey;
+  if (viewingPubkey.length !== 32)
+    throw new Error("viewingPubkey must be 32 bytes");
 
   // Deterministic continuation anchor pool (recoverable from the seed alone).
   const pool = await buildAnchorPool(
@@ -203,6 +217,7 @@ export async function buildOrder(
     valid_input_proof: toHex(args.validInput.proofBytes),
     collateral_amount: u64(collateralAmount, "collateral_amount"),
     tree_id: args.treeId ?? 0,
+    viewing_pubkey: toHex(viewingPubkey),
     anchors: anchorsToJson(pool.anchors),
   };
 }

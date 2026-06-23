@@ -797,6 +797,7 @@ mod tests {
                 pi_c: [3u8; 64],
             },
             from_relock: false,
+            viewing_pubkey: None,
         }
     }
 

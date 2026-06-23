@@ -132,6 +132,19 @@ pub struct PlaceOrderRequest {
     #[serde(default)]
     pub tree_id: u8,
 
+    /// OPTIONAL 32-byte X25519 viewing-encryption public key, hex
+    /// (`deriveViewingEncKeypair().publicKey`). When present, the settle
+    /// assembler encrypts each of this order's change_amounts to it and writes
+    /// the ciphertext on-chain, so the change note stays recoverable after a CVM
+    /// redeploy wipes the live fill memo (change-amount recovery, Proposal B).
+    /// NOT in the signed canonical body — it pins nothing the signature must
+    /// cover; a wrong key only makes the owner's OWN change unrecoverable
+    /// (self-harm), and the ciphertext is self-verifying client-side. Absent ⇒
+    /// no on-chain ciphertext (back-compatible). Any 32 bytes are accepted (an
+    /// X25519 point, not a Poseidon input — no Fr check).
+    #[serde(default)]
+    pub viewing_pubkey: Option<String>,
+
     /// The order's continuation anchor pool — exactly
     /// `ANCHOR_POOL_SIZE` `(inner_hash, nullifier)` pairs the client
     /// pre-supplied so the matcher can settle partial-fill
@@ -293,6 +306,9 @@ struct PreparedOrder {
     /// Merkle-tree shard the collateral note lives in (selects the lock_note
     /// `merkle_tree` account). From `PlaceOrderRequest::tree_id`.
     tree_id: u8,
+    /// The owner's X25519 viewing-encryption pubkey, if supplied — recipient for
+    /// the on-chain change_amount ciphertext (Proposal B). Stored on the opening.
+    viewing_pubkey: Option<[u8; 32]>,
     valid_input_proof: crate::settle::lock_note::Groth16ProofBytes,
     anchors: Vec<Anchor>,
     arrival_slot: u64,
@@ -320,6 +336,12 @@ async fn prepare_order(
     let owner_commitment: [u8; 32] = decode_hex(&req.owner_commitment, "owner_commitment")?;
     let note_inner_hash: [u8; 32] = decode_hex(&req.note_inner_hash, "note_inner_hash")?;
     let nullifier: [u8; 32] = decode_hex(&req.nullifier, "nullifier")?;
+    // Optional X25519 viewing-encryption pubkey (Proposal B). Length-checked
+    // only — it's an X25519 point, not a Poseidon input, so no Fr safety check.
+    let viewing_pubkey: Option<[u8; 32]> = match req.viewing_pubkey.as_deref() {
+        Some(h) => Some(decode_hex(h, "viewing_pubkey")?),
+        None => None,
+    };
 
     // Anchor pool: exactly ANCHOR_POOL_SIZE (inner_hash, nullifier) pairs.
     // Each inner_hash is Poseidon-hashed into a future change-note
@@ -541,6 +563,7 @@ async fn prepare_order(
         order_id,
         lock_merkle_root,
         tree_id: req.tree_id,
+        viewing_pubkey,
         valid_input_proof,
         anchors,
         arrival_slot,
@@ -574,6 +597,7 @@ fn commit_order(
             valid_input_proof: p.valid_input_proof,
             // A fresh deposit: lock_note must run for it (no prior re-lock).
             from_relock: false,
+            viewing_pubkey: p.viewing_pubkey,
         },
     );
     st.openings_mut().insert_anchor_pool(

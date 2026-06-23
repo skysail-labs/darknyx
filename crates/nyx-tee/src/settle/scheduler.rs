@@ -614,6 +614,7 @@ mod tests {
                     tree_id: 0,
                     valid_input_proof: proof.clone(),
                     from_relock: false,
+                    viewing_pubkey: None,
                 },
             );
             st.openings_mut().insert(
@@ -626,6 +627,7 @@ mod tests {
                     tree_id: 0,
                     valid_input_proof: proof,
                     from_relock: false,
+                    viewing_pubkey: None,
                 },
             );
             assert_eq!(st.openings().len(), 2);
