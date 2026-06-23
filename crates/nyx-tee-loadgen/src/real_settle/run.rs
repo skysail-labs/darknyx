@@ -10,7 +10,7 @@
 
 use anyhow::{anyhow, Result};
 use darkpool_crypto::note::owner_commitment;
-use darkpool_crypto::{fr_to_be_bytes, nullifier_v2, Fr};
+use darkpool_crypto::{ephemeral_public, fr_to_be_bytes, nullifier_v2, Fr};
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::order_canonical::{
     anchor_pool_hash, Anchor, OrderCanonical, ANCHOR_POOL_SIZE,
@@ -195,6 +195,11 @@ fn build_order_body(
     let sig = p.trading.sign(&digest);
     let nullifier =
         nullifier_v2(&p.spending_key, &note.inner_hash).map_err(|e| anyhow!("nullifier: {e}"))?;
+    // Change-amount recovery (Proposal B): a valid per-persona X25519 viewing
+    // pubkey the TEE encrypts this order's change_amount to on-chain. Stand-in
+    // derived from the trading key (the loadgen doesn't itself recover — a real
+    // client would use the seed-derived `deriveViewingEncKeypair`). NOT signed.
+    let viewing_pubkey = ephemeral_public(&p.trading.to_bytes());
 
     Ok(serde_json::json!({
         "symbol": symbol,
@@ -214,6 +219,7 @@ fn build_order_body(
         "arrival_nonce": 1u64,
         "trading_key": hex::encode(p.trading.verifying_key().to_bytes()),
         "trading_key_signature": hex::encode(sig.to_bytes()),
+        "viewing_pubkey": hex::encode(viewing_pubkey),
         "owner_commitment": hex::encode(p.owner_commit),
         "note_inner_hash": hex::encode(note.inner_hash),
         "nullifier": hex::encode(nullifier),

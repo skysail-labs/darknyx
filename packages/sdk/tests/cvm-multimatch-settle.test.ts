@@ -51,7 +51,7 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
-import { deriveOrderId, bn254ToBE32 } from "../src/keys/key-generators.js";
+import { deriveOrderId, bn254ToBE32, deriveViewingEncKeypair } from "../src/keys/key-generators.js";
 import { nullifierV2 } from "../src/utxo/note.js";
 import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
 import { vaultConfigPda } from "../src/idl/vault-client.js";
@@ -283,6 +283,9 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
           valid_input_proof: hex(vi.proofBytes),
           collateral_amount: Number(note.amount),
           tree_id: note.treeId,
+          // Change-amount recovery (Proposal B): the seed-derived viewing key the
+          // TEE encrypts this order's change_amount to on-chain. NOT signed.
+          viewing_pubkey: hex(deriveViewingEncKeypair(p.masterSeed).publicKey),
           anchors: anchorsToJson(pool.anchors),
         };
       }

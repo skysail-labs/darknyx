@@ -166,6 +166,14 @@ pub fn build_signed_place_body(
     let digest = canonical.digest().expect("symbol bounded by caller");
     let sig = key.sign(&digest);
     let trading_key = key.verifying_key().to_bytes();
+    // Change-amount recovery (Proposal B): a deterministic per-trader X25519
+    // viewing pubkey the TEE encrypts this order's change_amount to on-chain.
+    // Derived from the trading-key bytes so the whole trader's order stream
+    // shares one viewing key (like a real client). NOT in the signed canonical
+    // (a wrong key only self-harms); intake length-checks it. The synthetic
+    // loadgen settle never lands (stub VALID_INPUT proof), so this just exercises
+    // the intake decode + follows the order-submission convention.
+    let viewing_pubkey = darkpool_crypto::ephemeral_public(&key.to_bytes());
 
     let mut body = serde_json::json!({
         "symbol": symbol,
@@ -185,6 +193,8 @@ pub fn build_signed_place_body(
         "arrival_nonce": arrival_nonce,
         "trading_key": hex::encode(trading_key),
         "trading_key_signature": hex::encode(sig.to_bytes()),
+        // Change-amount recovery (Proposal B): the order's viewing-encryption key.
+        "viewing_pubkey": hex::encode(viewing_pubkey),
         // Input-note opening + VALID_INPUT relay (required since 4g.7a/c).
         "owner_commitment": hex::encode(owner_commitment),
         "note_inner_hash": hex::encode(note_inner_hash),
