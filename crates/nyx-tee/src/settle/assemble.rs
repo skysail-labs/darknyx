@@ -328,6 +328,10 @@ pub fn assemble_match(
         seller_relock_order_id: m.seller_relock_order_id,
         seller_relock_expiry: m.seller_relock_expiry,
         batch_slot: m.batch_slot,
+        // Change-amount recovery (Proposal B): zero here; `assemble_batch`
+        // fills it from the openings' viewing keys (it has the OrderOpenings;
+        // this per-match fn only sees the NoteOpenings). Zero = no ciphertext.
+        fill_recovery: [0u8; 128],
     };
 
     Ok((witness, payload))
@@ -410,7 +414,7 @@ pub fn assemble_batch(
             None
         };
 
-        let (witness, payload) = assemble_match(MatchAssemblyInputs {
+        let (witness, mut payload) = assemble_match(MatchAssemblyInputs {
             match_pair: m,
             buyer_opening: &buyer.opening,
             seller_opening: &seller.opening,
@@ -431,21 +435,21 @@ pub fn assemble_batch(
         // Change-amount recovery (Proposal B): encrypt each side's change_amount
         // to its order's viewing key so the change note stays recoverable after
         // a CVM redeploy. The change note returns to the same owner, so the
-        // input note's opening is the right recipient. B.5a writes this onto the
-        // signed payload.
+        // input note's opening is the right recipient. The ciphertext rides the
+        // SIGNED payload (so the TEE signature binds it on-chain).
         let fill_ciphertext = crate::settle::fill_recovery::build_fill_ciphertext(
             buyer.viewing_pubkey,
             seller.viewing_pubkey,
             m.buyer_change_amt,
             m.seller_change_amt,
         );
+        payload.fill_recovery = fill_ciphertext.to_payload_bytes();
 
         matches.push(MatchSettleInputs {
             payload,
             buyer_lock,
             seller_lock,
             match_index: idx as u8,
-            fill_ciphertext,
         });
         witnesses.push(witness);
     }
@@ -876,7 +880,10 @@ mod tests {
         output.matches = vec![m];
 
         let bsi = assemble_batch(&output, &store, batch_params()).unwrap();
-        let ct = &bsi.matches[0].fill_ciphertext;
+        // The ciphertext rides the signed payload's fill_recovery field.
+        let ct = crate::settle::fill_recovery::FillCiphertext::from_payload_bytes(
+            &bsi.matches[0].payload.fill_recovery,
+        );
         assert!(
             !ct.is_empty(),
             "buyer change + viewing key → ciphertext present"
@@ -901,7 +908,12 @@ mod tests {
         output.matches = vec![m];
 
         let bsi = assemble_batch(&output, &store, batch_params()).unwrap();
-        assert!(bsi.matches[0].fill_ciphertext.is_empty());
+        assert!(
+            crate::settle::fill_recovery::FillCiphertext::from_payload_bytes(
+                &bsi.matches[0].payload.fill_recovery
+            )
+            .is_empty()
+        );
     }
 
     #[test]

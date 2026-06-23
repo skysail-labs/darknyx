@@ -38,6 +38,7 @@ function makePayload(over: Partial<MatchResultPayload> = {}): MatchResultPayload
     sellerRelockOrderId: fill(16, 0),
     sellerRelockExpiry: 0n,
     batchSlot: 99n,
+    fillRecovery: fill(128, 0),
     ...over,
   };
 }

@@ -72,11 +72,6 @@ pub struct MatchSettleInputs {
     /// This match's position in the batch (0..N-1), selecting the
     /// Merkle inclusion path.
     pub match_index: u8,
-    /// Per-fill change-amount recovery ciphertext (change-amount recovery,
-    /// Proposal B). Computed at assembly from the openings' viewing keys;
-    /// all-zero when neither side has a recoverable change note. B.5a writes it
-    /// into the signed `MatchResultPayload` so it lands on-chain.
-    pub fill_ciphertext: crate::settle::fill_recovery::FillCiphertext,
 }
 
 /// Everything needed to settle one batch.
@@ -996,6 +991,7 @@ mod tests {
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
             batch_slot: 7,
+            fill_recovery: [0u8; 128],
         }
     }
 
@@ -1049,7 +1045,14 @@ mod tests {
             tee_keypairs: vec![Arc::new(Keypair::new_from_array([0x42; 32]))],
             signing_keys: vec![Arc::new(SigningKey::from_bytes(&[0x42; 32]))],
             prover: Arc::new(FakeProver { n }),
-            static_alt: None,
+            // Production stacks the static settle ALT under the per-batch ALT;
+            // with the v8 +128 recovery bundle the per-batch ALT alone overflows
+            // the 1232-byte cap, so the worker tests must mirror production and
+            // provide it too (vault_config + sysvar + system + 4 merkle shards).
+            static_alt: Some(crate::settle::alt::alt_account(
+                solana_address::Address::new_from_array([0x44; 32]),
+                crate::settle::settle_batched::static_alt_addresses(4),
+            )),
             alt_pool: Arc::new(tokio::sync::Mutex::new(AltPool::new())),
             settle_state: state,
             confirm_timeout: Duration::from_secs(5),
@@ -1126,14 +1129,12 @@ mod tests {
                     buyer_lock: lock_inputs(0x01),
                     seller_lock: lock_inputs(0x02),
                     match_index: 0,
-                    fill_ciphertext: Default::default(),
                 },
                 MatchSettleInputs {
                     payload: payload(0xB0),
                     buyer_lock: lock_inputs(0x03),
                     seller_lock: lock_inputs(0x04),
                     match_index: 1,
-                    fill_ciphertext: Default::default(),
                 },
             ],
             witnesses: vec![dummy_slot(), dummy_slot()],
@@ -1182,14 +1183,12 @@ mod tests {
                     buyer_lock: lock_inputs(0x01),
                     seller_lock: lock_inputs(0x02),
                     match_index: 0,
-                    fill_ciphertext: Default::default(),
                 },
                 MatchSettleInputs {
                     payload: payload(0xB0),
                     buyer_lock: lock_inputs(0x03),
                     seller_lock: lock_inputs(0x04),
                     match_index: 1,
-                    fill_ciphertext: Default::default(),
                 },
             ],
             witnesses: vec![dummy_slot(), dummy_slot()],
@@ -1242,7 +1241,6 @@ mod tests {
                 buyer_lock: lock_inputs(0x01),
                 seller_lock: lock_inputs(0x02),
                 match_index: 0,
-                fill_ciphertext: Default::default(),
             }],
             witnesses: vec![dummy_slot(), dummy_slot()],
         };
@@ -1283,14 +1281,12 @@ mod tests {
                     buyer_lock: lock_inputs(0x01),
                     seller_lock: lock_inputs(0x02),
                     match_index: 0,
-                    fill_ciphertext: Default::default(),
                 },
                 MatchSettleInputs {
                     payload: payload(0xB0),
                     buyer_lock: lock_inputs(0x03),
                     seller_lock: lock_inputs(0x04),
                     match_index: 1,
-                    fill_ciphertext: Default::default(),
                 },
             ],
             // Only one witness slot — fewer than the two matches.

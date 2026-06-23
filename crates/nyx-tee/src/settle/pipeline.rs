@@ -233,6 +233,10 @@ mod tests {
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
             batch_slot: 7,
+            // Worst case for the size guard below: a full 128-byte recovery
+            // bundle (Borsh encodes [u8;128] as 128 bytes regardless of content,
+            // so zeros measure the same wire size as a real ciphertext).
+            fill_recovery: [0u8; 128],
         }
     }
 
@@ -265,15 +269,15 @@ mod tests {
         )
         .expect("v0 compile + sign");
 
-        // Serialized wire size must be under Solana's 1232-byte cap — with
-        // COMFORTABLE headroom now that the per-batch ALT also hoists the
-        // consumed-note + nullifier PDAs out of the inline keys (~124 B freed).
-        // This is the worst case: a change-note fill (note_e/f distinct) on a
-        // sharded settle. Assert < 1160 so a regression that drops an account
-        // back inline (≈ −32 B/account of margin) trips here, not on devnet.
+        // Serialized wire size must be under Solana's 1232-byte cap. This is the
+        // worst case: a change-note fill (note_e/f distinct) on a sharded settle,
+        // now carrying the full 128-byte change-amount-recovery bundle (Proposal
+        // B, +128 B vs the pre-recovery 1049 B → ~1177 B; still ~55 B under cap).
+        // Assert a tight bound so a regression that drops an account back inline
+        // (≈ −32 B/account of margin) trips here, not on devnet.
         let wire = bincode::serialize(&tx).unwrap();
         assert!(
-            wire.len() <= 1160,
+            wire.len() <= 1184,
             "settle v0 tx is {} bytes — lost ALT headroom (an account fell inline?)",
             wire.len()
         );
@@ -291,6 +295,10 @@ mod tests {
         let proof = [[0x01; 32]; 4];
         let ed_ix = build_ed25519_verify_ix(&[0xAA; 32], &[0xBB; 64], &p.canonical_hash());
         let settle_ix = build_settle_batched_ix(&kp.pubkey(), 0, &p, 0, &proof, &root);
+        // Both ALTs (as production stacks them) — see the worst-case test above.
+        // With the v8 +128 recovery bundle the per-batch ALT alone overflows the
+        // 1232 cap, so the static ALT is required here too.
+        let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses(4));
         let alt = alt_account(
             Address::new_from_array([0x55; 32]),
             per_batch_alt_addresses(&p, &root),
@@ -299,7 +307,7 @@ mod tests {
             &kp,
             ed_ix,
             settle_ix,
-            &[alt],
+            &[static_alt, alt],
             Hash::new_from_array([0x01; 32]),
         )
         .unwrap();

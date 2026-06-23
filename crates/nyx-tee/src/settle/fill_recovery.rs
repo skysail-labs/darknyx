@@ -45,11 +45,47 @@ impl Default for FillCiphertext {
     }
 }
 
+/// Width of the on-chain recovery field. The 104-byte ECIES bundle
+/// (`ephemeral_pubkey 32 + 2×36` side blobs) padded to the next array size
+/// `borsh 0.10` (Anchor's serializer) can encode: borsh 0.10 impls
+/// `[u8; N]` for `N ≤ 32`, then jumps to 64, 65, 128, … — so 104 rounds up to
+/// 128. The trailing 24 bytes are always zero. A single fixed field keeps the
+/// cross-port canonical-hash lockstep to ONE entry.
+pub const RECOVERY_LEN: usize = 128;
+
 impl FillCiphertext {
     /// True iff this carries no recovery ciphertext (the all-zero sentinel). A
     /// real ciphertext always has a non-zero ephemeral pubkey.
     pub fn is_empty(&self) -> bool {
         self.ephemeral_pubkey == [0u8; 32]
+    }
+
+    /// Pack into the on-chain `MatchResultPayload.fill_recovery` field:
+    /// `ephemeral_pubkey(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ zero_pad(24)`.
+    /// The all-zero sentinel packs to all-zero.
+    pub fn to_payload_bytes(&self) -> [u8; RECOVERY_LEN] {
+        let mut out = [0u8; RECOVERY_LEN];
+        out[0..32].copy_from_slice(&self.ephemeral_pubkey);
+        out[32..32 + SIDE_BLOB_LEN].copy_from_slice(&self.buyer_enc);
+        out[32 + SIDE_BLOB_LEN..32 + 2 * SIDE_BLOB_LEN].copy_from_slice(&self.seller_enc);
+        out
+    }
+
+    /// Inverse of [`Self::to_payload_bytes`] — used by the client / indexer to
+    /// recover the ephemeral pubkey + each side's ciphertext from the on-chain
+    /// field. (The trailing pad is ignored.)
+    pub fn from_payload_bytes(b: &[u8; RECOVERY_LEN]) -> Self {
+        let mut ephemeral_pubkey = [0u8; 32];
+        ephemeral_pubkey.copy_from_slice(&b[0..32]);
+        let mut buyer_enc = [0u8; SIDE_BLOB_LEN];
+        buyer_enc.copy_from_slice(&b[32..32 + SIDE_BLOB_LEN]);
+        let mut seller_enc = [0u8; SIDE_BLOB_LEN];
+        seller_enc.copy_from_slice(&b[32 + SIDE_BLOB_LEN..32 + 2 * SIDE_BLOB_LEN]);
+        Self {
+            ephemeral_pubkey,
+            buyer_enc,
+            seller_enc,
+        }
     }
 }
 
@@ -164,5 +200,22 @@ mod tests {
     fn no_viewing_key_means_no_ciphertext() {
         let ct = build_fill_ciphertext(None, None, 1234, 5678);
         assert!(ct.is_empty());
+    }
+
+    #[test]
+    fn payload_bytes_round_trip() {
+        let (_, buyer_pk) = keypair(0x11);
+        let (_, seller_pk) = keypair(0x22);
+        let ct = build_fill_ciphertext(Some(buyer_pk), Some(seller_pk), 1234, 5678);
+        let bytes = ct.to_payload_bytes();
+        assert_eq!(bytes.len(), RECOVERY_LEN);
+        assert_eq!(&bytes[104..], &[0u8; 24], "trailing pad is zero");
+        assert_eq!(FillCiphertext::from_payload_bytes(&bytes), ct);
+        // The empty sentinel packs to all-zero and round-trips.
+        assert_eq!(
+            FillCiphertext::default().to_payload_bytes(),
+            [0u8; RECOVERY_LEN]
+        );
+        assert!(FillCiphertext::from_payload_bytes(&[0u8; RECOVERY_LEN]).is_empty());
     }
 }

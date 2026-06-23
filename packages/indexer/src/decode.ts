@@ -15,13 +15,13 @@
  * amounts from the per-account FillMemo (delivered over the authenticated
  * `/ws/fills` channel); partial-fill is signalled by change-note presence.
  *
- * BYTE-LAYOUT CONTRACT: the 424-byte payload mirrors
+ * BYTE-LAYOUT CONTRACT: the 552-byte payload mirrors
  * `programs/vault/src/instructions/tee_forced_settle.rs::MatchResultPayload`
  * and the TS encoder `@nyx/sdk` `settle-builder.ts::serializePayload`. The
  * `decode.test.ts` round-trips against that encoder so the two can't drift.
  *
  * One settle ix = ONE match (one payload). A batch is N such ixs sharing a
- * marker. ix data = disc(8) ‖ payload(424) ‖ match_index(1) ‖ siblings(128).
+ * marker. ix data = disc(8) ‖ payload(552) ‖ match_index(1) ‖ siblings(128).
  */
 
 import { createHash } from "node:crypto";
@@ -34,8 +34,11 @@ export function anchorDiscriminator(name: string): Uint8Array {
 export const SETTLE_IX_NAME = "tee_forced_settle_batched";
 export const SETTLE_DISCRIMINATOR = anchorDiscriminator(SETTLE_IX_NAME);
 
-/** Borsh-serialized `MatchResultPayload` is exactly this many bytes. */
-export const PAYLOAD_LEN = 424;
+/** Borsh-serialized `MatchResultPayload` is exactly this many bytes.
+ *  v8 (change-amount recovery, Proposal B) appended the 128-byte `fill_recovery`
+ *  field to the v7 424-byte layout → 552. The locator fields this indexer reads
+ *  all precede it, so their offsets are unchanged. */
+export const PAYLOAD_LEN = 552;
 
 const ZERO32 = "0".repeat(64);
 
