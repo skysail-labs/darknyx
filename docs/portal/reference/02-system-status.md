@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: System Status
-description: How Nyx signals readiness and degraded mode — check it before trading and back off when subsystems are down.
+description: How Nyx signals readiness and degraded mode, so you can check it before trading and back off when subsystems are down.
 ---
 
 # System Status
@@ -19,7 +19,7 @@ write failure.
 GET /system/status
 ```
 
-Public — no authentication.
+Public, with no authentication.
 
 ### Response
 
@@ -45,7 +45,7 @@ Public — no authentication.
 
 ## When degradation occurs
 
-The venue is `degraded` when a core subsystem is not available — for example, the
+The venue is `degraded` when a core subsystem is not available, for example, the
 matching tick is not running, or the settlement pipeline is not wired. While
 degraded, order submission may fail with `503 Service Unavailable`.
 
@@ -55,7 +55,7 @@ degraded, order submission may fail with `503 Service Unavailable`.
 |---|---|
 | REST order management | May return `503`; reads (`/instruments`, `/transparency`, `/tree/*`) generally remain available. |
 | WebSocket trading | An `order.place` / `order.cancel` / `order.modify` frame may return an `error` with `code: 503`. |
-| `/health` | Still returns `200` (the gateway process is up) — which is why `/system/status` is the better readiness signal for a trading client. |
+| `/health` | Still returns `200` (the gateway process is up), which is why `/system/status` is the better readiness signal for a trading client. |
 
 ## Best practices
 

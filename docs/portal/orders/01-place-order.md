@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Place Order
-description: Submit a hidden, fully-collateralized order — the request body, the cryptographic fields the SDK builds for you, and the response lifecycle.
+description: Submit a hidden, fully-collateralized order, covering the request body, the cryptographic fields the SDK builds for you, and the response lifecycle.
 ---
 
 # Place Order
@@ -25,7 +25,7 @@ Auth: `Authorization: Bearer <token>` **and** a trading-key signature in the bod
 
 On a transparent venue, placing an order is just sending its economic fields. On
 Nyx an order is *fully collateralized by a specific note you already deposited*,
-and it is *private* — so the request also carries:
+and it is *private*, so the request also carries:
 
 - the **commitment** of the collateral note, and a secret **opening** of that
   note the in-enclave prover needs;
@@ -34,8 +34,11 @@ and it is *private* — so the request also carries:
 - a **continuation anchor pool** that lets the engine settle partial fills and
   keep the remainder working without a round-trip to you per fill;
 - an **Ed25519 signature** from your trading key over the canonical body, so the
-  engine can attribute — and ultimately settle — the order to you without any
-  per-order on-chain transaction.
+  engine can attribute, and ultimately settle, the order to you without any
+  per-order on-chain transaction;
+- *(optional)* a **viewing key** the engine uses to store each change amount
+  **encrypted on-chain**, so a partial fill's change note stays recoverable on
+  any device and after an engine redeploy.
 
 You do not assemble these by hand. The SDK takes your keys and a spendable note
 and produces a ready-to-sign request. The full field reference is here so the
@@ -63,7 +66,7 @@ wire contract is unambiguous.
 |---|---|---|---|
 | `note_commitment` | string | Yes | 32-byte hex. The commitment of the collateral note backing this order. The note must exist in the tree and be lockable (not already locked). |
 | `collateral_amount` | integer | No | The value the collateral note actually carries, when it exceeds the order's nominal cost. Lets you point a large note at a small order and receive the surplus back as a change note. Omit for exact collateral. |
-| `owner_commitment` | string | Yes | 32-byte hex. The collateral note's owner commitment — part of the secret opening the in-enclave prover re-derives the commitment from. Distinct from `user_commitment`. Held in enclave memory only. |
+| `owner_commitment` | string | Yes | 32-byte hex. The collateral note's owner commitment, part of the secret opening the in-enclave prover re-derives the commitment from. Distinct from `user_commitment`. Held in enclave memory only. |
 | `note_inner_hash` | string | Yes | 32-byte hex. The note's amount-independent inner hash (an opening field that anchors both the commitment and the nullifier). |
 | `user_commitment` | string | Yes | 32-byte hex. Binds the order's output notes to the correct owner on-chain. |
 | `nullifier` | string | Yes | 32-byte hex. Precomputed client-side (it needs the spending key, which never enters the enclave). Opaque to the engine; carried into the settlement payload. |
@@ -76,12 +79,18 @@ wire contract is unambiguous.
 |---|---|---|---|
 | `anchors` | array | Yes | Exactly **10** continuation anchors. Each is an `{ inner_hash, nullifier }` pair (both 32-byte hex) for a future change note, so the engine can settle a partial fill and re-lock the remainder without asking you for a new note per fill. The hash of the pool is bound into the signature. See [The Anchor Pool](../trading-concepts/anchor-pool). |
 
+### Change-amount recovery (optional)
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `viewing_pubkey` | string | No | 32-byte hex. An X25519 viewing-encryption public key the SDK derives from your seed. When present, the engine encrypts each of this order's change amounts to it and stores the ciphertext **on-chain** at settlement, so a change note stays recoverable permanently, even after an engine redeploy clears the live fill memo. It is **not** part of the signed canonical body: a wrong key only affects your own recoverability, and the ciphertext is self-verifying when you decrypt it. The SDK populates it by default; omit it to rely only on the live [Fills Channel](../websocket/fills-channel) memo. See [Recovering your notes](../account/account-model#recovering-your-notes). |
+
 ### Signature
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `trading_key` | string | Yes | 32-byte hex. The Ed25519 public key that owns this order. |
-| `trading_key_signature` | string | Yes | 64-byte hex. Signature over the canonical encoding of the body — every economic field plus the anchor-pool hash and `arrival_nonce`. |
+| `trading_key_signature` | string | Yes | 64-byte hex. Signature over the canonical encoding of the body: every economic field plus the anchor-pool hash and `arrival_nonce`. |
 
 ## Example
 
@@ -109,6 +118,7 @@ curl -s -X POST "$GATEWAY/orders" \
     "nullifier": "…",
     "merkle_root": "…",
     "valid_input_proof": "…",
+    "viewing_pubkey": "…",
     "anchors": [ { "inner_hash": "…", "nullifier": "…" }, "… 10 total …" ]
   }'
 ```
@@ -128,12 +138,12 @@ Returned with `202 Accepted`.
 | Field | Type | Description |
 |---|---|---|
 | `order_id` | string | The order's id (the one you supplied). |
-| `status` | string | `"accepted"` — the order passed verification and entered the book. |
+| `status` | string | `"accepted"` means the order passed verification and entered the book. |
 | `arrival_slot` | integer | The slot the engine stamped on arrival; frozen for the order's life. |
 
 :::note Accepted is not filled
 A `202` means the order passed signature and collateral verification and entered
-the book — **not** that it has filled. Track fills via
+the book, **not** that it has filled. Track fills via
 [`GET /orders/{order_id}`](./get-order) or the
 [Orders Channel](../websocket/orders-channel).
 :::
@@ -154,7 +164,7 @@ book immediately rather than resting.
 
 `order_id` is your idempotency key. A retry that re-sends the **byte-identical**
 signed order returns the original acceptance (`202`, same `order_id`) instead of
-a conflict — so a network blip is safe to retry. Reusing an `order_id` for a
+a conflict, so a network blip is safe to retry. Reusing an `order_id` for a
 **different** order (any economic field changed) is a real conflict and returns
 `409` (`code` 1201). Because order ids are client-chosen, pick a fresh one per
 distinct order.
@@ -181,7 +191,7 @@ opening fields are cryptographically pinned to your signature without being part
 of the signed canonical body.
 
 :::note Rate limits are weighted
-Order management is rate-limited per account with a token bucket — cancels are
+Order management is rate-limited per account with a token bucket; cancels are
 cheap, place and modify cost more. A `429` includes a `Retry-After` header. For
 high-frequency management prefer the [WebSocket trading socket](../websocket/ws-trading).
 :::

@@ -13,7 +13,7 @@ transaction signatures and tells you which stage of the settlement pipeline it i
 in. Use it to confirm finality and to get a Solana explorer link for your trade.
 :::
 
-A fill on Nyx is not final the instant the engine matches it — it is final when
+A fill on Nyx is not final the instant the engine matches it. It is final when
 the settlement transaction lands on Solana. Settlement runs as a short on-chain
 pipeline per batch (lock the notes, verify the batch proof, execute the atomic
 transfers, then reclaim the batch marker). This endpoint surfaces where a batch is
@@ -84,15 +84,15 @@ The pipeline advances through these stages in order:
 Each signature is a real Solana transaction you can inspect on any explorer.
 Because settlement is enforced on-chain by a zero-knowledge proof, a `settled`
 batch is a cryptographic guarantee that the transfers were conservation-correct
-and bound to the committed notes — not merely the engine's assertion. To confirm a
+and bound to the committed notes, not merely the engine's assertion. To confirm a
 trade independently:
 
 1. Read `settle_signatures` for the batch.
 2. Look each up on a Solana explorer.
 3. Confirm the transaction succeeded and updated the vault's note tree.
 
-The new notes created by settlement — your filled asset, any change note for an
-unfilled remainder — appear as fresh leaves in the tree, which the SDK picks up
+The new notes created by settlement (your filled asset, any change note for an
+unfilled remainder) appear as fresh leaves in the tree, which the SDK picks up
 when it follows tree updates. See [Settlement](../how-it-works/settlement) for the
 full pipeline and [Fills Channel](../websocket/fills-channel) for the per-fill
 notifications that let you recover the change notes.

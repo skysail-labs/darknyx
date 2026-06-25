@@ -1,17 +1,17 @@
 ---
 sidebar_position: 1
 title: Error Codes
-description: How Nyx signals failure — HTTP status codes and the conditions that produce them — and how to handle them.
+description: How Nyx signals failure, covering the HTTP status codes, the conditions that produce them, and how to handle them.
 ---
 
 # Error Codes
 
 :::info TL;DR
-Every error response is a small JSON **envelope** — `{ code, message }` — with a
+Every error response is a small JSON **envelope**, `{ code, message }`, with a
 mapped HTTP status. `code` is a **stable numeric error code** you can branch on;
 `message` is the human-readable reason. Every response (success and error)
 carries an **`x-request-id`** header for correlating with server logs. Success
-responses are not enveloped — their typed body is returned directly.
+responses are not enveloped; their typed body is returned directly.
 :::
 
 ## Error shape
@@ -35,7 +35,7 @@ Every response includes an `x-request-id` header:
 x-request-id: req_a3f19c7b21d40e8a
 ```
 
-Quote it when reporting an issue — it ties your request to the server's log line.
+Quote it when reporting an issue; it ties your request to the server's log line.
 
 ## Code catalogue
 
@@ -44,7 +44,7 @@ Codes are grouped by class. The HTTP status is derived from the class.
 | Code | HTTP | Meaning |
 |---|---|---|
 | `1000` | 400 | Generic bad request. |
-| `1001` | 400 | Malformed input — bad hex, wrong width, zero/illegal id, wrong anchor count. |
+| `1001` | 400 | Malformed input: bad hex, wrong width, zero/illegal id, wrong anchor count. |
 | `1002` | 400 | A hashed field is not a canonical field element (BN254 Fr-unsafe). |
 | `1003` | 400 | Collateral below the order's nominal cost + fee. |
 | `1004` | 400 | Order amount below the market minimum. |
@@ -58,7 +58,7 @@ Codes are grouped by class. The HTTP status is derived from the class.
 | `1202` | 409 | A replay-protection nonce did not advance. |
 | `1203` | 409 | A modify's replacement id is already booked. |
 | `1301` | 404 | No such order / batch / instrument / note. |
-| `1401` | 429 | Rate limited — back off and retry. |
+| `1401` | 429 | Rate limited; back off and retry. |
 | `5001` | 503 | A required subsystem (matching / settlement) is unavailable. |
 | `5000` | 500 | Internal error. |
 
@@ -73,37 +73,37 @@ Codes are stable: branch on the number, not the message text (which may change).
 | `403 Forbidden` | Ownership | The trading-key signature did not verify over the canonical body; the trading key does not own the order being cancelled / modified / topped up. |
 | `404 Not Found` | Missing resource | No such order (already filled / expired / cancelled), batch, or instrument. |
 | `409 Conflict` | State conflict | Duplicate `order_id`; a modify whose replacement id is already booked; a top-up nonce that did not advance. |
-| `429 Too Many Requests` | Rate limit | Operational rate limit exceeded — back off and retry. |
+| `429 Too Many Requests` | Rate limit | Operational rate limit exceeded; back off and retry. |
 | `503 Service Unavailable` | Subsystem down | Matching or settlement is not available; see [`/system/status`](./system-status). |
 
 ## Conditions by endpoint
 
 ### Authentication
-- `401` — bad credentials (`POST /auth/token`), or a missing / expired / revoked
+- `401`: bad credentials (`POST /auth/token`), or a missing / expired / revoked
   token on an authenticated request.
 
 ### Place order
-- `400` — malformed fields, a failed field-element check, a zero order id, a bid
+- `400`: malformed fields, a failed field-element check, a zero order id, a bid
   with zero price, an opening that does not match the signed commitment, or
   collateral below the required (nominal + fee) floor.
-- `403` — the trading-key signature does not verify.
-- `409` — the `order_id` is already in the book.
+- `403`: the trading-key signature does not verify.
+- `409`: the `order_id` is already in the book.
 
 ### Cancel / modify / top-up
-- `403` — signature does not verify, or the key does not own the order.
-- `404` — the order is not resting (filled / expired / cancelled).
-- `409` (modify) — the replacement `order_id` is already booked.
-- `409` (top-up) — the `topup_nonce` did not advance.
+- `403`: signature does not verify, or the key does not own the order.
+- `404`: the order is not resting (filled / expired / cancelled).
+- `409` (modify): the replacement `order_id` is already booked.
+- `409` (top-up): the `topup_nonce` did not advance.
 
 ### Reads (orders, settlement, tree)
-- `400` — malformed id / parameter hex.
-- `404` — unknown order / batch / note.
+- `400`: malformed id / parameter hex.
+- `404`: unknown order / batch / note.
 
 ## Handling errors
 
 | Status | Recommended client behavior |
 |---|---|
-| `400` | A bug in request construction — fix and do not blindly retry. |
+| `400` | A bug in request construction; fix and do not blindly retry. |
 | `401` | Refresh the bearer token and retry once. |
 | `403` | Check you signed with the correct trading key over the correct canonical body. |
 | `404` (on cancel/modify) | Treat as "no longer resting"; reconcile via `GET /orders/{id}` or the orders stream. |

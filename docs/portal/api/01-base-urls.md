@@ -7,7 +7,7 @@ description: Where the Nyx API lives, the common request and response convention
 # Base URLs
 
 :::info TL;DR
-Every endpoint — REST and WebSocket — is served by the **same enclave gateway**
+Every endpoint, REST and WebSocket, is served by the **same enclave gateway**
 over RA-TLS. There is no separate gateway tier in the trust path: TLS terminates
 inside the attested VM. Use the gateway origin for HTTPS and the same origin
 (swap the scheme to `wss://`) for WebSocket.
@@ -30,7 +30,7 @@ WebSocket wss://<gateway-host>
   `/ws/fills`); connect with the `wss://` scheme.
 
 The exact host for a given deployment is published with that deployment. The
-identity of the code behind the host is independently verifiable — see
+identity of the code behind the host is independently verifiable. See
 [`/info` and `/attestation`](./transport-and-attestation).
 
 ## Common headers
@@ -59,7 +59,7 @@ plain-text or JSON message describing the specific reason:
 | `403 Forbidden` | The trading-key signature did not verify, or the caller does not own the order. |
 | `404 Not Found` | No such order / batch / instrument. |
 | `409 Conflict` | Duplicate order id, or a replay-protection nonce that did not advance. |
-| `429 Too Many Requests` | Rate limited — back off and retry. |
+| `429 Too Many Requests` | Rate limited. Back off and retry. |
 | `503 Service Unavailable` | A required subsystem (matching or settlement) is not available; see `/system/status`. |
 
 See [Error Codes](../reference/error-codes) for the full catalogue of conditions

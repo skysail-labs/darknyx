@@ -11,7 +11,7 @@ A resting order carries a pool of pre-supplied **continuation anchors** that let
 the engine settle partial fills and re-lock the remainder automatically. A
 long-lived, frequently-filled order can exhaust that pool. `POST
 /orders/{order_id}/anchors` appends a fresh batch of anchors so the order resumes
-filling — no cancel-and-replace, no new proof.
+filling, with no cancel-and-replace and no new proof.
 :::
 
 ```text
@@ -25,7 +25,7 @@ Auth: `Authorization: Bearer <token>` **and** a trading-key signature in the bod
 When an order partially fills, the unfilled remainder needs to keep resting as a
 *new* note (the previous collateral note is consumed by the fill). To do that
 without a round-trip to you on every fill, you pre-supply a small pool of
-**continuation anchors** when you place the order — each anchor is the secret
+**continuation anchors** when you place the order. Each anchor is the secret
 material for one future change note. The engine consumes one anchor per partial
 fill to mint the remainder note and keep the order working. See
 [The Anchor Pool](../trading-concepts/anchor-pool) for the full mechanism.
@@ -56,7 +56,7 @@ material it does not have. Topping the pool up resumes it.
 | `anchors` | array | Yes | Exactly **5** fresh `{ inner_hash, nullifier }` anchors (both 32-byte hex), continuing the order's anchor sequence. |
 | `topup_nonce` | integer | Yes | A strictly-increasing per-order counter (replay protection). Must exceed the last accepted top-up nonce for this order. |
 | `trading_key` | string | Yes | 32-byte hex. Must own the order. |
-| `trading_key_signature` | string | Yes | 64-byte hex. Ed25519 signature over the canonical top-up body — `{ order_id, hash-of-the-new-anchors, topup_nonce }`. |
+| `trading_key_signature` | string | Yes | 64-byte hex. Ed25519 signature over the canonical top-up body: `{ order_id, hash-of-the-new-anchors, topup_nonce }`. |
 
 ## Example
 

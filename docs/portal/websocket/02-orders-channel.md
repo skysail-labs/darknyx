@@ -1,14 +1,14 @@
 ---
 sidebar_position: 2
 title: Orders Channel
-description: A per-account push stream of order-lifecycle events — partial fills, full fills, cancellations, and expiries.
+description: A per-account push stream of order-lifecycle events: partial fills, full fills, cancellations, and expiries.
 ---
 
 # Orders Channel
 
 :::info TL;DR
 `/ws/orders` streams **order-lifecycle events** for your account: each time one
-of your orders changes state — partial fill, full fill, cancellation, expiry — the
+of your orders changes state (partial fill, full fill, cancellation, expiry), the
 engine pushes an event. The stream is per-account: you only ever see your own
 orders. Use it instead of polling `GET /orders/{id}`.
 :::
@@ -54,7 +54,7 @@ Each message is a JSON object describing one state transition:
 |---|---|---|
 | `partially_filled` | No | Part of the order filled; the remainder keeps resting (re-locked into a new note). |
 | `fully_filled` | Yes | The order filled completely. |
-| `cancelled` | Yes | The order was cancelled — by you, by a modify, or on session disconnect. |
+| `cancelled` | Yes | The order was cancelled, whether by you, by a modify, or on session disconnect. |
 | `expired` | Yes | The order reached its `expiry_slot` without fully filling. |
 
 A **terminal** event is the order's last; after it, the order has left the book
@@ -77,11 +77,11 @@ the [Fills Channel](./fills-channel).
 
 Every event carries a per-connection monotonic `seq` (starting at 1). Track the
 last `seq` you processed; if the next event's `seq` is not exactly one greater,
-you missed events in between — reconcile the orders you care about with
+you missed events in between, so reconcile the orders you care about with
 `GET /orders/{order_id}`.
 
 If a slow consumer falls behind the per-account buffer, the server also closes the
-socket with code **1011**. On a 1011 close, reconnect and reconcile — the channel
+socket with code **1011**. On a 1011 close, reconnect and reconcile. The channel
 is a low-latency notifier, not a durable log.
 
 ## Example

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: TypeScript Client
-description: A worked TypeScript client — authenticate, read markets, build and submit an order with the SDK's order builders, and stream order and fill events.
+description: A worked TypeScript client that authenticates, reads markets, builds and submits an order with the SDK's order builders, and streams order and fill events.
 ---
 
 # TypeScript Client
@@ -10,8 +10,8 @@ description: A worked TypeScript client — authenticate, read markets, build an
 A reference client that ties the pieces together: get a bearer token, read
 markets and server time, use the SDK's **order builders** to assemble a signed
 order from a deposited note, submit it, and subscribe to the order and fill
-streams. The SDK owns the cryptography — note commitments, the input proof, and
-the anchor pool — so your code works in economic terms.
+streams. The SDK owns the cryptography (note commitments, the input proof, and
+the anchor pool) so your code works in economic terms.
 :::
 
 ## What the SDK does for you
@@ -20,16 +20,22 @@ The hard part of a Nyx order is its cryptographic backing: the collateral-note
 commitment, the zero-knowledge input proof, the owner-commitment opening, and the
 continuation anchor pool (see [Place Order](../orders/place-order)). The SDK
 derives all of it from your seed and a spendable note, and signs the canonical
-body with your trading key. You supply the *intent* — side, amount, price,
-time-in-force — and get back a ready-to-send order.
+body with your trading key. You supply the *intent* (side, amount, price,
+time-in-force) and get back a ready-to-send order.
 
 The SDK also ships:
 
-- **Order builders** — presets for market, all-or-none, and good-til-time orders
-  over the native fields.
-- **Stream clients** — per-account order-lifecycle and fill subscriptions, with
+- **Order builders**: presets for market, all-or-none, and good-til-time orders
+  over the native fields. They include the `viewing_pubkey` for on-chain
+  change-amount recovery **by default**, so a change note stays recoverable
+  without any extra work.
+- **Stream clients**: per-account order-lifecycle and fill subscriptions, with
   the fill-memo verification built in.
-- **System helpers** — server time (for slot-based expiry) and the degraded-mode
+- **Recovery helpers**: derive a deterministic master seed from a wallet
+  signature (`seedFromWalletSignature`, over `MASTER_SEED_MESSAGE`) so the same
+  wallet reproduces your keys on any device, and recover change notes from the
+  on-chain ciphertext (`recoverChangeFromChain`) when backfilling.
+- **System helpers**: server time (for slot-based expiry) and the degraded-mode
   status.
 
 ## Client implementation
@@ -92,7 +98,7 @@ class NyxClient {
   }
 
   // ── Orders ───────────────────────────────────────────────────────────
-  // `order` is a fully-built, signed wire body — produced by the SDK's
+  // `order` is a fully-built, signed wire body, produced by the SDK's
   // order-builder from your keys + a spendable note (it fills the note
   // commitment, the VALID_INPUT proof, the anchor pool, and the signature).
   placeOrder(order: object) {
@@ -154,7 +160,7 @@ const aon = aonPolicy({ amount: 10_000_000n, priceLimit: 150_000_000n });
 // `proveAndBuildOrder` does the whole flow: fetch the note's inclusion witness
 // from /tree/inclusion, generate the VALID_INPUT proof, then assemble + sign the
 // wire body (note commitment, proof, anchor pool, trading-key signature). The
-// prover is pluggable — `nodeValidInputProver` runs the compiled circuit via
+// prover is pluggable: `nodeValidInputProver` runs the compiled circuit via
 // snarkjs in Node; a browser app supplies its own WASM prover.
 const order = await proveAndBuildOrder({
   baseUrl: GATEWAY,
@@ -184,7 +190,7 @@ console.log("placed", res.order_id, res.status);
 :::tip Already hold a proof?
 If you already have a VALID_INPUT proof (e.g. relayed from elsewhere), skip the
 prover and call `buildOrder({ …, validInput: { proofBytes, merkleRoot } })`
-directly — `proveAndBuildOrder` is just the fetch-prove-build convenience on top.
+directly. `proveAndBuildOrder` is just the fetch-prove-build convenience on top.
 :::
 
 ## Streaming order and fill events
@@ -198,7 +204,7 @@ const orders = subscribeOrderUpdates({
     if (u.kind === "partially_filled") console.log("partial", u.filled_quantity, "resting", u.new_amount);
     if (u.kind === "fully_filled") console.log("filled", u.order_id);
   },
-  onResync: () => console.warn("orders stream lagged — reconcile via GET /orders/:id"),
+  onResync: () => console.warn("orders stream lagged, reconcile via GET /orders/:id"),
 });
 
 // Per-account fills: verified change-note memos (the SDK checks each memo's
@@ -210,14 +216,14 @@ const fills = subscribeFills({
   ownerCommitment,
   store: noteStore,
   onFill: (rec) => console.log("change note stored", rec.commitment),
-  onResync: () => console.warn("fills stream lagged — backfill then reopen"),
+  onResync: () => console.warn("fills stream lagged, backfill then reopen"),
 });
 ```
 
 ## Submitting over the trading socket
 
 For a high-frequency client, submit orders over the [WebSocket trading
-socket](../websocket/ws-trading) instead of REST — one warm connection, plus
+socket](../websocket/ws-trading) instead of REST, using one warm connection plus
 cancel-on-disconnect. The `TradingClient` correlates each reply to its request
 and resolves a promise per call:
 
@@ -248,7 +254,7 @@ const client = new NyxClient("https://<gateway-host>");
 await client.login(API_KEY, API_SECRET, PASSPHRASE);
 
 const status = await client.systemStatus();
-if (status.degraded) throw new Error("venue degraded — back off");
+if (status.degraded) throw new Error("venue degraded, back off");
 
 const markets = await client.getInstruments();
 console.log(markets.instruments.map((m) => m.symbol));
@@ -258,7 +264,7 @@ console.log(markets.instruments.map((m) => m.symbol));
 
 :::tip Verify the engine first
 For the full trust guarantee, verify the enclave's attestation against an
-expected measurement before sending order intent — the SDK ships a helper that
+expected measurement before sending order intent; the SDK ships a helper that
 runs the [attestation chain](../api/transport-and-attestation) for you. Skipping it
 gives you a private channel to *a* machine, not a verified one.
 :::

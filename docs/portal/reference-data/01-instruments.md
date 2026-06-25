@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Get Instruments
-description: List the markets Nyx supports and read a single market's parameters — mints, tick size, minimum order size, and the price oracle.
+description: List the markets Nyx supports and read a single market's parameters: mints, tick size, minimum order size, and the price oracle.
 ---
 
 # Get Instruments
@@ -12,7 +12,7 @@ the price increment, the minimum order size, and the **oracle** that anchors the
 clearing price. Both endpoints are public.
 :::
 
-Each Nyx market is a pair of SPL token mints — a base and a quote — together with
+Each Nyx market is a pair of SPL token mints (a base and a quote) together with
 the parameters the matching engine needs to clear it. Because Nyx clears each
 batch at a single oracle-anchored price (see
 [Clearing Price](../trading-concepts/clearing-price)), every instrument names the
@@ -24,7 +24,7 @@ oracle that provides its reference price.
 GET /instruments
 ```
 
-Returns every tradable market. Public — no authentication.
+Returns every tradable market. Public, with no authentication.
 
 ### Example
 
@@ -88,7 +88,7 @@ batch. Two consequences matter to you as a trader:
 - **Fair reference.** Both sides of a match settle at the same oracle-anchored
   clearing price; there is no maker/taker ordering within a batch to be gamed.
 - **A hard circuit breaker.** `circuit_breaker_bps` caps how far the clearing
-  price may move from the oracle. This bound is not just a server policy — it is
+  price may move from the oracle. This bound is not just a server policy. It is
   enforced inside the zero-knowledge settlement proof, so a settlement that
   violates it is rejected on-chain. A market whose oracle is stale or wildly
   off simply will not clear rather than clear at a bad price.
@@ -98,6 +98,6 @@ per-batch price is determined.
 
 ## Cache semantics
 
-Instrument metadata is static for the lifetime of a deployment — the mints, tick
+Instrument metadata is static for the lifetime of a deployment: the mints, tick
 size, and oracle do not change underneath you mid-session. It is safe to fetch
 the list once at startup and cache it.

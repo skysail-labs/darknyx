@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Modify Order
-description: Replace a resting order atomically — an in-place cancel-and-replace with no window where you hold neither order.
+description: Replace a resting order atomically with an in-place cancel-and-replace, leaving no window where you hold neither order.
 ---
 
 # Modify Order
@@ -24,7 +24,7 @@ order and a full new order), both from the **same** trading key.
 ## Why modify instead of cancel-then-place
 
 Cancelling and re-placing as two separate calls leaves a gap: between the cancel
-landing and the new order arriving, you have *no* order resting — and a batch may
+landing and the new order arriving, you have *no* order resting, and a batch may
 clear in that gap. `PUT /orders/{order_id}` closes the gap. It verifies both
 sides, then applies the cancel and the replacement atomically: either the swap
 happens whole, or nothing changes.
@@ -47,14 +47,14 @@ happens whole, or nothing changes.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `cancel_signature` | string | Yes | 64-byte hex. Ed25519 signature over the canonical cancel body of the OLD order — proves ownership of what is being replaced. |
+| `cancel_signature` | string | Yes | 64-byte hex. Ed25519 signature over the canonical cancel body of the OLD order, which proves ownership of what is being replaced. |
 | `cancel_nonce` | integer | Yes | The cancel nonce bound into `cancel_signature`. |
 | `replacement` | object | Yes | A complete, independently-signed [Place Order](./place-order) body. It carries its own collateral note and input proof. |
 
 The trading key that signs the cancel **must** be the key that signs the
 replacement. The replacement may reuse the old order's note and proof while that
 proof's root is still in the on-chain root window, or it may point at a different
-note — it is a normal place-order body either way.
+note; it is a normal place-order body either way.
 
 ### Reprice in place
 
@@ -101,11 +101,11 @@ Both preconditions are checked **before** anything mutates:
 
 1. The old order exists and is owned by the signing trading key.
 2. The replacement's `order_id` is not already booked (unless it equals the old
-   id — the reprice-in-place case).
+   id, the reprice-in-place case).
 
 If either fails, the call returns an error and **neither** order is touched. Only
 when both hold does the engine cancel the old order and book the replacement under
-the same lock — no batch can clear between the two.
+the same lock; no batch can clear between the two.
 
 ## Errors
 

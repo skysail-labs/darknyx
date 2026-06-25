@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Time in Force
-description: How long an order stays working — GTC, GTT, IOC, and FOK — expressed through the order type and a slot-based expiry.
+description: How long an order stays working (GTC, GTT, IOC, and FOK), expressed through the order type and a slot-based expiry.
 ---
 
 # Time in Force
@@ -26,13 +26,13 @@ slot.
 
 ## Available behaviors
 
-### GTC — Good-til-Cancelled
+### GTC: Good-til-Cancelled
 
 A **limit** order with a far-future `expiry_slot`. It rests until it fills, you
 cancel it, or it eventually hits its (distant) expiry. This is the standard
 resting order.
 
-### GTT — Good-til-Time
+### GTT: Good-til-Time
 
 A **limit** order with an `expiry_slot` chosen to match a wall-clock deadline. To
 place "good for the next ten minutes," read [`/time`](../api/base-urls) for the
@@ -46,12 +46,12 @@ expiry_slot = current_slot + ceil((deadline_ms - now_ms) / slot_ms)
 When the chain passes `expiry_slot`, the order is swept and an `expired` event is
 emitted on the [Orders Channel](../websocket/orders-channel).
 
-### IOC — Immediate-or-Cancel
+### IOC: Immediate-or-Cancel
 
 An `ioc` order. Fills what it can in its arrival batch, cancels the rest. Never
 rests, so `expiry_slot` is moot for it.
 
-### FOK — Fill-or-Kill
+### FOK: Fill-or-Kill
 
 A `fok` order. Fills its whole size in its arrival batch or is dropped. Never
 rests and never partially fills.
@@ -66,8 +66,8 @@ rests and never partially fills.
 | FOK | `fok` | No |
 
 :::note Slots, not timestamps
-Because settlement is on Solana, expiry is anchored to the chain's clock — the
-slot — so it stays consistent with on-chain state. `/time` gives you both the slot
+Because settlement is on Solana, expiry is anchored to the chain's clock, the
+slot, so it stays consistent with on-chain state. `/time` gives you both the slot
 and the wall-clock instant so you can convert between them. See
 [Order Types](./order-types) for how the type controls resting, and
 [Execution Attributes](./execution-attributes) for fill-size constraints.

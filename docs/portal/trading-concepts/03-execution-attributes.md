@@ -1,14 +1,14 @@
 ---
 sidebar_position: 3
 title: Execution Attributes
-description: Constrain how an order fills — all-or-none and minimum fill size — independent of its type and time in force.
+description: Constrain how an order fills (all-or-none and minimum fill size) independent of its type and time in force.
 ---
 
 # Execution Attributes
 
 :::info TL;DR
 Execution attributes constrain *how* an order fills, on top of its type. Nyx
-supports a **minimum fill size** — reject any execution smaller than a threshold —
+supports a **minimum fill size** (reject any execution smaller than a threshold)
 and **all-or-none**, which is the special case where the threshold equals the full
 order amount.
 :::
@@ -21,17 +21,17 @@ min_fill_size: <integer base units>
 
 `min_fill_size` rejects any single execution smaller than the given amount. A
 batch may only include the order if it can fill at least `min_fill_size` of it.
-Use it to avoid being filled in dust-sized increments — useful when each fill
+Use it to avoid being filled in dust-sized increments, useful when each fill
 produces a change note you would rather not accumulate.
 
-- Default `0` — any partial fill is acceptable.
+- Default `0`: any partial fill is acceptable.
 - Set it to a positive value to require executions of at least that size.
 
 ## All-or-None (AON)
 
 All-or-none is `min_fill_size == amount`: the order fills *completely* or not at
 all in any given batch. Because it is expressed through `min_fill_size`, an AON
-order can still **rest** — a limit order with `min_fill_size = amount` keeps
+order can still **rest**: a limit order with `min_fill_size = amount` keeps
 waiting, batch after batch, until one batch can fill it whole at its price.
 
 ```text

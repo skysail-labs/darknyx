@@ -39,10 +39,10 @@ the body.
 |---|---|---|---|
 | `trading_key` | string | Yes | 32-byte hex. Must be the key that placed the order. |
 | `cancel_nonce` | integer | Yes | A nonce bound into the signed cancel body (replay protection). |
-| `trading_key_signature` | string | Yes | 64-byte hex. Ed25519 signature over the canonical cancel body — `{ order_id, trading_key, cancel_nonce }`. |
+| `trading_key_signature` | string | Yes | 64-byte hex. Ed25519 signature over the canonical cancel body: `{ order_id, trading_key, cancel_nonce }`. |
 
 The cancel nonce is part of the signed bytes, so a captured cancel request cannot
-be replayed to cancel a *different* (later, same-id) order — the canonical body,
+be replayed to cancel a *different* (later, same-id) order, because the canonical body,
 and therefore the signature, differs.
 
 ## Example
@@ -84,7 +84,7 @@ order leave without polling.
 | Malformed `order_id` / `trading_key` / signature hex | `400` |
 | Missing or invalid bearer token | `401` |
 | The signature does not verify, or the key does not own the order | `403` |
-| No such (resting) order — already filled, expired, or cancelled | `404` |
+| No such (resting) order, already filled, expired, or cancelled | `404` |
 
 :::note Cancelling races the match
 An order can match in a batch between when you decide to cancel and when the

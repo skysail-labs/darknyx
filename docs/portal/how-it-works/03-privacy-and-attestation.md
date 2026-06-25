@@ -7,7 +7,7 @@ description: Who can see your orders on Nyx (no one), and how you verify the eng
 # Privacy & Attestation
 
 :::info TL;DR
-On Nyx, **no party — not even the operator — can see your orders, balances, or
+On Nyx, **no party, not even the operator, can see your orders, balances, or
 strategy**. Order intent lives only inside an attested enclave; balances are
 sealed inside on-chain note commitments. You do not take this on trust: you
 **verify** the running engine against an expected measurement, and confirm it is
@@ -21,19 +21,20 @@ the same engine that settles on-chain.
 | **Centralized exchange** | The operator | Can front-run, trade against you, or leak data. |
 | **On-chain order book** | The sequencer / validators, and anyone indexing the chain | Reorder, censor, sandwich (MEV); the leak is permanent and public. |
 | **Off-chain dark desk** | The operator | Custody and order intent both exposed to one party. |
-| **Nyx** | **No party** — order intent lives only inside a hardware-isolated, attested enclave; it is never a transaction | No party can read or replay your orders; an observer of Solana learns nothing about them. |
+| **Nyx** | **No party.** Order intent lives only inside a hardware-isolated, attested enclave; it is never a transaction | No party can read or replay your orders; an observer of Solana learns nothing about them. |
 
 The difference from "encrypted on-chain orders" is that on Nyx your order is
 **never a transaction at all** (see [Trade Flow](./trade-flow)). What lands on
-Solana is the settled *result*, with a zero-knowledge proof — never the order.
+Solana is the settled *result*, with a zero-knowledge proof, never the order.
 
 ## The three privacy properties
 
 | Property | What is hidden | Mechanism |
 |---|---|---|
-| **Order privacy** | Side, size, limit price | Order intent exists only inside the attested enclave — never in a tx, log, or account. |
-| **Trader privacy** | The link from a trade to your wallet | You sign with a **trading key**, not your wallet. The wallet ↔ trade link exists only inside your own withdraw proof. |
+| **Order privacy** | Side, size, limit price | Order intent exists only inside the attested enclave, never in a tx, log, or account. |
+| **Trader privacy** | The link from a trade to your wallet | You sign with a **trading key**, not your wallet. The wallet-to-trade link exists only inside your own withdraw proof. |
 | **Position privacy** | What you hold | Balances are on-chain **note commitments** (Poseidon hashes) that seal owner, value, and token until you spend them. |
+| **Amount privacy** | The size and price of a settled trade | Settlement publishes only note commitments and a zero-knowledge proof of conservation; the traded amounts and the clearing price never appear on-chain. |
 
 Each is enforced by a separate mechanism, so a weakness in one does not collapse
 the others.
@@ -41,7 +42,7 @@ the others.
 ## Privacy is a guarantee, not a promise
 
 The point of attestation is that you do not have to *believe* the operator is
-running the honest engine — you can check. The enclave's privacy comes from
+running the honest engine. You can check. The enclave's privacy comes from
 hardware memory encryption keyed to a *measured* image, and the integrity of
 settlement comes from a *proof the chain verifies*. Both are cryptographic facts
 you can inspect, not terms of service.
