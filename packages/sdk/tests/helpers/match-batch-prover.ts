@@ -14,19 +14,17 @@
  * as scaling-validation steps and fast unit-test instances.
  *
  * Leaf-hash layout — MUST match `template MatchSlot()` in
- * `circuits/templates/match_batch.circom`. Arities capped at 12
- * (= light-poseidon's MAX_X5_LEN-1, so the on-chain handler can
- * re-derive this hash via solana_poseidon::hashv).
+ * `circuits/templates/match_batch.circom`. Single Poseidon10 (10 inputs ≤ 12
+ * = light-poseidon's MAX_X5_LEN-1, so the on-chain handler can re-derive this
+ * hash via solana_poseidon::hashv). Commitment-only (amount-privacy, P1b): the
+ * note commitments bind the amounts/mints/price transitively, so the leaf no
+ * longer hashes them (the old two-stage Poseidon12+Poseidon9 leaf, tags
+ * 20/21, is retired).
  *
- *   h1   = Poseidon12(DOMAIN_LEAF_INNER=20,
+ *   leaf = Poseidon10(DOMAIN_LEAF_V2=23,
  *                     note_a, note_b, note_c, note_d, note_e, note_f,
- *                     qm_lo, qm_hi, bm_lo, bm_hi,
- *                     base_amount)
- *   leaf = Poseidon9 (DOMAIN_LEAF_TOP=21, h1,
- *                     quote_amount,
- *                     buyer_change_amt, seller_change_amt,
- *                     buyer_fee_amt, seller_fee_amt,
- *                     clearing_price, batch_slot)
+ *                     note_fee_base, note_fee_quote,
+ *                     batch_slot)
  *
  * Internal Merkle-tree node (also matches the circuit):
  *   parent = Poseidon3(DOMAIN_BATCH_ROOT=22, left, right)

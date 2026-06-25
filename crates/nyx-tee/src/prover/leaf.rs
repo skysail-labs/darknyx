@@ -12,40 +12,35 @@
 //! in `circuits/templates/match_batch.circom`:
 //!
 //! ```text
-//!   h1   = Poseidon12(
-//!     DOMAIN_LEAF_INNER (= 20),
+//!   leaf = Poseidon10(
+//!     DOMAIN_LEAF_V2 (= 23),
 //!     note_a, note_b, note_c, note_d, note_e, note_f,
-//!     qm_lo, qm_hi, bm_lo, bm_hi,
-//!     base_amount,
-//!   )
-//!   leaf = Poseidon9(
-//!     DOMAIN_LEAF_TOP (= 21),
-//!     h1,
-//!     quote_amount,
-//!     buyer_change_amt, seller_change_amt,
-//!     buyer_fee_amt, seller_fee_amt,
-//!     clearing_price, batch_slot,
+//!     note_fee_base, note_fee_quote,
+//!     batch_slot,
 //!   )
 //! ```
 //!
 //! Internal Merkle node: `Poseidon3(DOMAIN_BATCH_ROOT = 22, left,
 //! right)`.
 //!
-//! Arities cap at 12 (= `light-poseidon::MAX_X5_LEN - 1`) so the
-//! on-chain handler can re-derive these hashes via
-//! `solana_poseidon::hashv`. CLAUDE.md §4.3 documents the cap +
-//! the two-stage decomposition rationale.
+//! Commitment-only (amount-privacy, P1b): the six note commitments + two fee
+//! notes bind the amounts/mints/price transitively (each commitment is itself
+//! a Poseidon6 of mint+amount+owner+inner), so the leaf no longer hashes the
+//! plaintext amounts the old two-stage (Poseidon12+Poseidon9) leaf did — and
+//! they can leave the settle payload entirely. 10 inputs ≤ 12
+//! (= `light-poseidon::MAX_X5_LEN - 1`), so a single Poseidon suffices and the
+//! on-chain handler can re-derive it via `solana_poseidon::hashv`; keep it
+//! ≤ 12 (CLAUDE.md §5.3).
 
 use darkpool_crypto::{poseidon_hash_bytes, CryptoError};
 
 use super::witness::{u64_to_be32, u8_tag_to_be32, MatchSlotWitness};
 
 // ── Domain-separation tags. MUST match the circuit constants. ───
-pub const DOMAIN_LEAF_INNER: u8 = 20;
-pub const DOMAIN_LEAF_TOP: u8 = 21;
 pub const DOMAIN_BATCH_ROOT: u8 = 22;
 /// Commitment-only leaf (amount-privacy, P1b). A fresh tag avoids any
-/// overlap with the old two-stage leaf (20/21).
+/// overlap with the old two-stage leaf (the retired DOMAIN_LEAF_INNER=20 /
+/// DOMAIN_LEAF_TOP=21 tags, removed when the leaf collapsed to one Poseidon10).
 pub const DOMAIN_LEAF_V2: u8 = 23;
 
 #[derive(thiserror::Error, Debug)]

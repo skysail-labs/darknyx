@@ -65,7 +65,7 @@ pub use icicle_prover::IcicleMatchBatchProver;
 pub use inputs::{build_batch_public_inputs, BatchPublicInputs};
 pub use leaf::{
     compute_batch_leaf, compute_batch_root, merkle_inclusion_path, InclusionPath, LeafError,
-    DOMAIN_BATCH_ROOT, DOMAIN_LEAF_INNER, DOMAIN_LEAF_TOP,
+    DOMAIN_BATCH_ROOT, DOMAIN_LEAF_V2,
 };
 #[cfg(feature = "rapidsnark")]
 pub use rapidsnark_prover::RapidsnarkMatchBatchProver;

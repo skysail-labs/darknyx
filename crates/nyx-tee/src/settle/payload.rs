@@ -2,7 +2,7 @@
 //! of a CLAUDE.md §6 byte-equality contract.
 //!
 //! This Rust port MUST produce, for any payload:
-//!   - the SAME 424-byte Borsh serialization as the on-chain
+//!   - the SAME 552-byte Borsh serialization as the on-chain
 //!     `vault::instructions::tee_forced_settle::MatchResultPayload`
 //!     (AnchorSerialize) and the SDK's
 //!     `settle-builder.ts::serializePayload`;
@@ -21,7 +21,9 @@
 //! `buyer/seller_change_amt`, `buyer/seller_fee_amt`, `clearing_price`) were
 //! dropped from the payload — they're proven in-circuit + bound by the note
 //! commitments, and putting them in the (public, on-chain) settle ix leaked
-//! every trade size. The domain tag bumped `v6`→`v7`.
+//! every trade size. The domain tag bumped `v6`→`v7`. Change-amount recovery
+//! (Proposal B) then appended the 128-byte `fill_recovery` field and bumped
+//! `v7`→`v8` (424→552 bytes).
 //!
 //! ## Two distinct field orderings (do not conflate)
 //!
@@ -29,7 +31,7 @@
 //!   fee-note fields `note_fee_base_commitment` + `note_fee_quote_commitment`
 //!   right after `order_id_b`.
 //! - **Canonical hash**: the same hand-ordered concatenation, domain-tagged
-//!   `b"nyx-match-v7"`.
+//!   `b"nyx-match-v8"`.
 //!
 //! Both orderings are reproduced verbatim below from the on-chain
 //! source + the SDK.

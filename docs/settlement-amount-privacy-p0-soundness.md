@@ -1,5 +1,14 @@
 # P0 — Settlement Amount Privacy: circuit soundness audit (the gate)
 
+> **⚠️ SUPERSEDED — the P1 changes this audit gated have all SHIPPED.** Historical
+> analysis doc, accurate as of 2026-06-20. The circuit now range-checks all six
+> previously-unbound terms (`buyer/seller_change_amt`, `buyer/seller_fee_amt`,
+> `a_amount`, `b_amount`), binds the two protocol fee notes in-circuit (closing the §7
+> over-mint gap), uses a commitment-only `Poseidon10` leaf, and exposes 3 public inputs
+> `[merkle_root, fee_rate_bps, protocol_owner_commitment]`. "P1a in progress" / future
+> tense below is lineage only — see `match_batch.circom` + `CRYPTOGRAPHY.md` for the
+> as-built state. (The external circuit audit remains the one open pre-mainnet item.)
+>
 > **Status:** ANALYSIS ONLY — no code changed. This is the gating deliverable of the
 > settlement-amount-privacy project (`docs/settlement-amount-privacy.md`, phase P0).
 > **Date:** 2026-06-20. **Branch:** `settlement_amount_privacy`.

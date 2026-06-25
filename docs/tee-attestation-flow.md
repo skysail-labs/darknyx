@@ -2,6 +2,15 @@
 
 > End-to-end attestation deep-dive for the in-CVM matching/settlement
 > layer. Read after `docs/tee-architecture.md` (the in-TEE design).
+>
+> **Note (post tree-sharding):** this doc predates K-shard tree-sharding and
+> says `vault_config.tee_pubkey` (singular) throughout. The on-chain field is
+> now `vault_config.tee_pubkeys: [Pubkey; 16]` (K = `num_trees` live entries,
+> one shard fee-payer/signer each). The settle check is **set membership** —
+> `vault_config.is_authorized_tee(signer)` — not equality against a single
+> key. The rotation ix is still named `set_tee_pubkey` but takes a
+> `Vec<Pubkey>` and replaces the whole array. Read every "the tee_pubkey"
+> below as "one of the tee_pubkeys."
 
 ---
 
@@ -15,7 +24,7 @@ verifier, different cadence, and different consequence on failure:
 |---|---|---|---|---|
 | 1 | **dstack-kms** | The CVM's TDX quote (cert chain + RTMR3 + compose-hash whitelist) | KMS refuses to derive app keys; CVM cannot start | Once per CVM boot |
 | 2 | **Our admin multisig** | A specific new CVM's TDX quote, before signing `set_tee_pubkey` | Multisig refuses to sign rotation; new image cannot settle | Once per image upgrade |
-| 3 | **Solana vault program** | Ed25519 signature on `MatchResultPayload` canonical hash matches `vault_config.tee_pubkey` | Settle ix reverts | Every settle tx |
+| 3 | **Solana vault program** | Ed25519 signature on `MatchResultPayload` canonical hash matches one of `vault_config.tee_pubkeys` (`is_authorized_tee`) | Settle ix reverts | Every settle tx |
 | 4 | **Client (browser/SDK)** | RA-TLS evidence + TDX quote behind the API endpoint | Client refuses to send orders | Once per session start |
 | 5 | **External observer** | All of the above, via the public `/transparency` endpoint | Public trust signal degrades; nothing breaks technically | Continuous |
 
@@ -399,7 +408,7 @@ recapping the flow for completeness.
     vault::verify_tee_signature(payload, &instructions_sysvar)
         – Reads Ix 0's data via the instructions sysvar
         – Confirms Ix 0 invoked the Ed25519Program
-        – Confirms Ix 0's pubkey == vault_config.tee_pubkey
+        – Confirms Ix 0's pubkey ∈ vault_config.tee_pubkeys (is_authorized_tee)
         – Confirms Ix 0's message == canonical_payload_hash(payload)
         – Confirms Ix 0's signature is the one Ed25519Program just
           verified

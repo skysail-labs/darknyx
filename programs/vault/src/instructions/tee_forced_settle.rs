@@ -93,7 +93,9 @@ pub struct MatchResultPayload {
     // plaintext amounts — the price is proven in-circuit
     // (`quote === base*price`) and bound inside the note commitments, so it no
     // longer needs to ride in the (public) settle ix. The domain tag bumped
-    // `nyx-match-v6` → `nyx-match-v7` for this layout change.
+    // `nyx-match-v6` → `nyx-match-v7` for this layout change, then
+    // `nyx-match-v7` → `nyx-match-v8` when change-amount recovery (Proposal B)
+    // appended the `fill_recovery` field above.
     //
     // v3.1 note: `price_proof` and `price_commitment` had previously been
     // factored out into a preceding `verify_valid_price` ix; that path was
