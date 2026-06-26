@@ -20,7 +20,9 @@ export function StackStrip() {
       <div className="mx-auto max-w-6xl px-5 sm:px-7">
         <div className="flex items-baseline justify-between">
           <span className="nyx-eyebrow">Built on</span>
-          <span className="font-mono text-[10px] text-nyx-fog">v1 · devnet</span>
+          <span className="font-mono text-[10px] text-nyx-fog">
+            v1 · devnet
+          </span>
         </div>
         <ul className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
           {STACK.map((s) => (
@@ -28,8 +30,12 @@ export function StackStrip() {
               key={s.label}
               className="group flex flex-col gap-0.5 border-l border-white/[0.08] pl-3 transition-colors hover:border-nyx-accent/60"
             >
-              <span className="text-[13px] font-medium text-nyx-chalk">{s.label}</span>
-              <span className="font-mono text-[11px] text-nyx-fog">{s.detail}</span>
+              <span className="text-[13px] font-medium text-nyx-chalk">
+                {s.label}
+              </span>
+              <span className="font-mono text-[11px] text-nyx-fog">
+                {s.detail}
+              </span>
             </li>
           ))}
         </ul>

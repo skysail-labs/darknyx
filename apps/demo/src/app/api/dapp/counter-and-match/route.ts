@@ -11,13 +11,21 @@ import {
   getDepositFunction,
   pendingOrderPda,
 } from "@nyx/sdk";
-import { buildUndelegateMarketInstruction, waitForL1AccountChange } from "@nyx/sdk/dist/idl/er-client.js";
+import {
+  buildUndelegateMarketInstruction,
+  waitForL1AccountChange,
+} from "@nyx/sdk/dist/idl/er-client.js";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
   createMintToInstruction,
   getAssociatedTokenAddress,
 } from "@solana/spl-token";
-import { Keypair, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
+import {
+  Keypair,
+  PublicKey,
+  sendAndConfirmTransaction,
+  Transaction,
+} from "@solana/web3.js";
 import bs58 from "bs58";
 import { NextResponse } from "next/server";
 import nacl from "tweetnacl";
@@ -105,7 +113,8 @@ async function chooseFreshSlot(
       firstReusable = idx;
     }
   }
-  if (firstReusable != null) return { slotIdx: firstReusable, needsInit: false };
+  if (firstReusable != null)
+    return { slotIdx: firstReusable, needsInit: false };
   throw new Error(
     `Maker has all ${MAX_PENDING_SLOTS_PER_USER} pending-order slots with live orders. ` +
       "Wait for outstanding maker orders to clear or rotate the demo maker keypair.",
@@ -113,7 +122,11 @@ async function chooseFreshSlot(
 }
 
 export async function POST(req: Request) {
-  const signatures: { label: string; signature: string; cluster: "l1" | "er" }[] = [];
+  const signatures: {
+    label: string;
+    signature: string;
+    cluster: "l1" | "er";
+  }[] = [];
   try {
     const body = (await req.json()) as {
       phantomSignatureBase58?: string;
@@ -144,7 +157,11 @@ export async function POST(req: Request) {
       body.userExpirySlot == null
     ) {
       return NextResponse.json(
-        { ok: false, error: "missing counter-and-match fields (need userOrderIdHex + userExpirySlot for L1 settle)" },
+        {
+          ok: false,
+          error:
+            "missing counter-and-match fields (need userOrderIdHex + userExpirySlot for L1 settle)",
+        },
         { status: 400 },
       );
     }
@@ -153,11 +170,18 @@ export async function POST(req: Request) {
       body.phantomSignatureBase58,
       body.ownerPubkeyBase58,
     );
-    const userTrading = Keypair.fromSecretKey(bs58.decode(body.tradingSecretKeyBase58));
+    const userTrading = Keypair.fromSecretKey(
+      bs58.decode(body.tradingSecretKeyBase58),
+    );
     const expectedSeed = deriveTradingKeyAtOffset(seed, 0n).secretKey;
-    const expected = Keypair.fromSecretKey(nacl.sign.keyPair.fromSeed(expectedSeed).secretKey);
+    const expected = Keypair.fromSecretKey(
+      nacl.sign.keyPair.fromSeed(expectedSeed).secretKey,
+    );
     if (!expected.publicKey.equals(userTrading.publicKey)) {
-      return NextResponse.json({ ok: false, error: "trading key mismatch" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "trading key mismatch" },
+        { status: 400 },
+      );
     }
 
     const repoRoot = resolveRepoRoot();
@@ -166,7 +190,12 @@ export async function POST(req: Request) {
     const programs = parseDemoPrograms(cfg);
     const { admin, funder, tee, maker } = loadDemoKeyring(repoRoot);
 
-    await ensureMarketDelegatedOnL1(l1, programs.meProgramId, programs.market, funder);
+    await ensureMarketDelegatedOnL1(
+      l1,
+      programs.meProgramId,
+      programs.market,
+      funder,
+    );
     await topUpSol(l1, funder, maker.publicKey);
     await topUpSol(l1, funder, admin.publicKey);
 
@@ -181,7 +210,11 @@ export async function POST(req: Request) {
     // line — we don't want to advertise the 30 → 0 reduction, but the on-chain
     // signature is worth keeping visible so anyone auditing on the explorer
     // can confirm vault_config.fee_rate_bps actually flipped.
-    const feeOutcome = await ensureZeroProtocolFee(l1, programs.vaultProgramId, admin);
+    const feeOutcome = await ensureZeroProtocolFee(
+      l1,
+      programs.vaultProgramId,
+      admin,
+    );
     if (feeOutcome.zeroed && feeOutcome.signature) {
       signatures.push({
         label: "protocol fees set to 0 for this demo",
@@ -190,8 +223,14 @@ export async function POST(req: Request) {
       });
     }
 
-    const makerBaseAta = await getAssociatedTokenAddress(programs.baseMint, maker.publicKey);
-    const makerQuoteAta = await getAssociatedTokenAddress(programs.quoteMint, maker.publicKey);
+    const makerBaseAta = await getAssociatedTokenAddress(
+      programs.baseMint,
+      maker.publicKey,
+    );
+    const makerQuoteAta = await getAssociatedTokenAddress(
+      programs.quoteMint,
+      maker.publicKey,
+    );
 
     const mintUi = Math.min(
       Number(process.env.DEMO_COUNTERPARTY_MINT_UI ?? `${200 * 1e9}`),
@@ -213,13 +252,27 @@ export async function POST(req: Request) {
           maker.publicKey,
           programs.quoteMint,
         ),
-        createMintToInstruction(programs.baseMint, makerBaseAta, admin.publicKey, mintUi),
-        createMintToInstruction(programs.quoteMint, makerQuoteAta, admin.publicKey, mintUi),
+        createMintToInstruction(
+          programs.baseMint,
+          makerBaseAta,
+          admin.publicKey,
+          mintUi,
+        ),
+        createMintToInstruction(
+          programs.quoteMint,
+          makerQuoteAta,
+          admin.publicKey,
+          mintUi,
+        ),
       ),
       [admin],
       { commitment: "confirmed" },
     );
-    signatures.push({ label: "counterparty mint", signature: mintSig, cluster: "l1" });
+    signatures.push({
+      label: "counterparty mint",
+      signature: mintSig,
+      cluster: "l1",
+    });
 
     const makerClient = makePersonaDarkPoolClient(
       l1,
@@ -237,7 +290,9 @@ export async function POST(req: Request) {
     const depAta = userBidsBase ? makerBaseAta : makerQuoteAta;
     // Default to 100 — matches the setup-devnet mock-oracle TWAP so the
     // clearing price falls inside the 5% circuit-breaker band.
-    const quotePerBase = BigInt(process.env.DEMO_EXCHANGE_QUOTE_PER_BASE ?? "100");
+    const quotePerBase = BigInt(
+      process.env.DEMO_EXCHANGE_QUOTE_PER_BASE ?? "100",
+    );
     const depAmount = userBidsBase
       ? BigInt(body.userAmount) * 3n
       : BigInt(body.userAmount) * quotePerBase * 3n;
@@ -249,7 +304,11 @@ export async function POST(req: Request) {
       depositorTokenAccount: depAta,
       nonce: depNonce,
     });
-    signatures.push({ label: "counterparty deposit", signature: makerReceipt.signature, cluster: "l1" });
+    signatures.push({
+      label: "counterparty deposit",
+      signature: makerReceipt.signature,
+      cluster: "l1",
+    });
 
     const makerPick = await chooseFreshSlot(
       l1,
@@ -281,7 +340,11 @@ export async function POST(req: Request) {
         [maker],
         { commitment: "confirmed" },
       );
-      signatures.push({ label: "maker init slot", signature: s, cluster: "l1" });
+      signatures.push({
+        label: "maker init slot",
+        signature: s,
+        cluster: "l1",
+      });
       info = await l1.getAccountInfo(slotPda, "confirmed");
     }
     if (!info) throw new Error("maker slot missing");
@@ -300,7 +363,11 @@ export async function POST(req: Request) {
         [funder, maker],
         { commitment: "confirmed" },
       );
-      signatures.push({ label: "maker delegate slot", signature: s2, cluster: "l1" });
+      signatures.push({
+        label: "maker delegate slot",
+        signature: s2,
+        cluster: "l1",
+      });
     }
 
     const makerSide = body.userSide === 0 ? 1 : 0;
@@ -311,7 +378,9 @@ export async function POST(req: Request) {
     const orderId = randomBytes(16);
     if (orderId.every((b) => b === 0)) orderId[0] = 1;
 
-    const makerOwnerCommitBytes = bn254ToBE32(makerReceipt.notePlaintext.ownerCommitment);
+    const makerOwnerCommitBytes = bn254ToBE32(
+      makerReceipt.notePlaintext.ownerCommitment,
+    );
 
     const { ix: makerIx } = buildSubmitOrderInstruction({
       programId: programs.meProgramId,
@@ -328,10 +397,19 @@ export async function POST(req: Request) {
       userCommitment: makerOwnerCommitBytes,
     });
 
-    const erSig = await sendAndConfirmTransaction(er, new Transaction().add(makerIx), [maker], {
-      commitment: "confirmed",
+    const erSig = await sendAndConfirmTransaction(
+      er,
+      new Transaction().add(makerIx),
+      [maker],
+      {
+        commitment: "confirmed",
+      },
+    );
+    signatures.push({
+      label: "counterparty submit_order (PER)",
+      signature: erSig,
+      cluster: "er",
     });
-    signatures.push({ label: "counterparty submit_order (PER)", signature: erSig, cluster: "er" });
 
     const [userPda] = pendingOrderPda(
       programs.meProgramId,
@@ -379,21 +457,37 @@ export async function POST(req: Request) {
       [funder],
       { commitment: "confirmed" },
     );
-    signatures.push({ label: "undelegate_market", signature: undSig, cluster: "er" });
+    signatures.push({
+      label: "undelegate_market",
+      signature: undSig,
+      cluster: "er",
+    });
 
     await waitForL1AccountChange(l1, batchPda, preHex, {
       timeoutMs: 90_000,
       intervalMs: 1000,
     });
 
-    const userOrderBytes = Buffer.from(body.userOrderIdHex.replace(/^0x/, ""), "hex");
+    const userOrderBytes = Buffer.from(
+      body.userOrderIdHex.replace(/^0x/, ""),
+      "hex",
+    );
     if (userOrderBytes.length !== 16) {
-      return NextResponse.json({ ok: false, error: "userOrderIdHex must be 32 hex chars (16 bytes)" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "userOrderIdHex must be 32 hex chars (16 bytes)" },
+        { status: 400 },
+      );
     }
 
-    const userNoteBuyer = Buffer.from(body.userNoteCommitmentHex.replace(/^0x/, ""), "hex");
+    const userNoteBuyer = Buffer.from(
+      body.userNoteCommitmentHex.replace(/^0x/, ""),
+      "hex",
+    );
     if (userNoteBuyer.length !== 32) {
-      return NextResponse.json({ ok: false, error: "bad userNoteCommitmentHex" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "bad userNoteCommitmentHex" },
+        { status: 400 },
+      );
     }
 
     const settleOutcome = await runTradeL1Settle({
@@ -418,18 +512,25 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      message: "Counterparty matched, batch executed, market committed, L1 settle complete.",
+      message:
+        "Counterparty matched, batch executed, market committed, L1 settle complete.",
       signatures,
       maker: {
         slotIdx: makerSlot,
         orderIdHex: Buffer.from(orderId).toString("hex"),
-        noteCommitmentHex: Buffer.from(makerReceipt.noteCommitment).toString("hex"),
+        noteCommitmentHex: Buffer.from(makerReceipt.noteCommitment).toString(
+          "hex",
+        ),
       },
       tradeWithdrawBuyerBase: settleOutcome.buyerBaseNote,
     });
   } catch (e) {
     return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : String(e), signatures },
+      {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+        signatures,
+      },
       { status: 500 },
     );
   }

@@ -99,7 +99,10 @@ async function pushDepositLeafAsync(
 ) {
   if (data.length < 8 + 8 + 32 + 32 + 32) return;
   if (!data.subarray(0, 8).every((b, i) => b === DEPOSIT_DISC[i])) return;
-  const amount = new DataView(data.buffer, data.byteOffset + 8, 8).getBigUint64(0, true);
+  const amount = new DataView(data.buffer, data.byteOffset + 8, 8).getBigUint64(
+    0,
+    true,
+  );
   const owner = data.subarray(16, 48);
   const nonce = data.subarray(48, 80);
   const blindingR = data.subarray(80, 112);
@@ -120,11 +123,17 @@ async function processIxDataAsync(
   data: Uint8Array,
   ixAccountKeys: PublicKey[],
 ) {
-  if (data.length >= 8 && data.subarray(0, 8).every((b, i) => b === DEPOSIT_DISC[i])) {
+  if (
+    data.length >= 8 &&
+    data.subarray(0, 8).every((b, i) => b === DEPOSIT_DISC[i])
+  ) {
     await pushDepositLeafAsync(leaves, data, ixAccountKeys);
     return;
   }
-  if (data.length >= 8 && data.subarray(0, 8).every((b, i) => b === SETTLE_DISC[i])) {
+  if (
+    data.length >= 8 &&
+    data.subarray(0, 8).every((b, i) => b === SETTLE_DISC[i])
+  ) {
     pushSettleLeaves(leaves, data.subarray(8));
   }
 }
@@ -144,7 +153,9 @@ async function walkTransactionOrdered(
 
   const keys = resolveAccountKeys(tx);
   const msg = tx.transaction.message;
-  type InnerIxList = NonNullable<NonNullable<VersionedTransactionResponse["meta"]>["innerInstructions"]>[number]["instructions"];
+  type InnerIxList = NonNullable<
+    NonNullable<VersionedTransactionResponse["meta"]>["innerInstructions"]
+  >[number]["instructions"];
   const innerByTop = new Map<number, InnerIxList>();
   for (const g of tx.meta?.innerInstructions ?? []) {
     innerByTop.set(g.index, g.instructions);
@@ -165,7 +176,9 @@ async function walkTransactionOrdered(
     if (leaves.length >= cap) return;
     const ix = top[ti]!;
     const pid = keys[ix.programIdIndex];
-    const ixKeys = Array.from(ix.accountKeyIndexes ?? []).map((kIdx) => keys[kIdx]);
+    const ixKeys = Array.from(ix.accountKeyIndexes ?? []).map(
+      (kIdx) => keys[kIdx],
+    );
     await walkIx(Buffer.from(ix.data), pid, ixKeys);
     const inners = innerByTop.get(ti);
     if (inners) {
@@ -187,7 +200,8 @@ async function walkTransactionOrdered(
             raw = new Uint8Array(ixi.data as Buffer);
           }
           // CompiledInstruction shape: `accounts: number[]`.
-          const acctIdx = (ixi as unknown as { accounts?: number[] }).accounts ?? [];
+          const acctIdx =
+            (ixi as unknown as { accounts?: number[] }).accounts ?? [];
           ixKeys = acctIdx.map((kIdx) => keys[kIdx]);
         } else {
           // Parsed/JSON inner ix shape (rare with maxSupportedTransactionVersion=0 +
@@ -251,8 +265,15 @@ export async function collectVaultLeavesOrdered(
   // still bounded so a misconfigured replay can't run away. Tune via
   // options.maxSignatures if you've been hammering devnet for hours.
   const maxSig = options?.maxSignatures ?? 10000;
-  const sigs = await fetchSignaturesPaginated(connection, vaultProgramId, maxSig);
-  if (sigs.length === 0) throw new Error("no vault program signatures — cannot replay Merkle history");
+  const sigs = await fetchSignaturesPaginated(
+    connection,
+    vaultProgramId,
+    maxSig,
+  );
+  if (sigs.length === 0)
+    throw new Error(
+      "no vault program signatures — cannot replay Merkle history",
+    );
 
   // getSignaturesForAddress returns newest-first; replay must walk oldest-first
   // so leaf indices line up with on-chain `leaf_count`.
@@ -261,7 +282,13 @@ export async function collectVaultLeavesOrdered(
 
   for (const { signature } of chronological) {
     if (leaves.length >= targetCount) break;
-    await walkTransactionOrdered(connection, signature, vaultProgramId, leaves, targetCount);
+    await walkTransactionOrdered(
+      connection,
+      signature,
+      vaultProgramId,
+      leaves,
+      targetCount,
+    );
   }
 
   if (leaves.length !== targetCount) {

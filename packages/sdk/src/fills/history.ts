@@ -104,7 +104,9 @@ export interface BackfillResult {
  * Idempotent + stateless: order ids are HD-derived, so re-running (or running
  * with a `since` cursor) just re-locates the same set.
  */
-export async function backfillHistory(opts: BackfillOptions): Promise<BackfillResult> {
+export async function backfillHistory(
+  opts: BackfillOptions,
+): Promise<BackfillResult> {
   const gapLimit = opts.gapLimit ?? 5;
   const located: IndexerFill[] = [];
   let consecutiveEmpty = 0;

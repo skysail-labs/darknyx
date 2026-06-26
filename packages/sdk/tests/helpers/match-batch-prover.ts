@@ -52,7 +52,8 @@ let cached: PoseidonFn | null = null;
 async function getPoseidon(): Promise<PoseidonFn> {
   if (cached) return cached;
   const p = await buildPoseidon();
-  const fn = ((inputs: bigint[]) => p(inputs.map((i) => p.F.e(i)))) as PoseidonFn;
+  const fn = ((inputs: bigint[]) =>
+    p(inputs.map((i) => p.F.e(i)))) as PoseidonFn;
   fn.F = p.F;
   cached = fn;
   return fn;
@@ -158,9 +159,7 @@ export async function dummySlot(): Promise<MatchSlotWitness> {
   const p = await getPoseidon();
   // Poseidon6(DOMAIN_NOTE=2, mint_lo=0, mint_hi=0, amount=0,
   //           owner_commit=0, inner_hash=0)
-  const dummyNote = bn254ToBE32(
-    p.F.toObject(p([2n, 0n, 0n, 0n, 0n, 0n])),
-  );
+  const dummyNote = bn254ToBE32(p.F.toObject(p([2n, 0n, 0n, 0n, 0n, 0n])));
   const zero32 = new Uint8Array(32);
   return {
     noteAcommitment: dummyNote,
@@ -222,7 +221,9 @@ export async function padBatch(
  * Compute the per-slot leaf hash. MUST match `template MatchSlot()` in the
  * circuit exactly — divergence here breaks Merkle inclusion on-chain.
  */
-export async function computeBatchLeaf(slot: MatchSlotWitness): Promise<Uint8Array> {
+export async function computeBatchLeaf(
+  slot: MatchSlotWitness,
+): Promise<Uint8Array> {
   const p = await getPoseidon();
   // Commitment-only leaf (amount-privacy, P1b): Poseidon10(DOMAIN_LEAF_V2,
   // note_a..note_f, note_fee_base, note_fee_quote, batch_slot). The
@@ -250,18 +251,20 @@ export async function computeBatchLeaf(slot: MatchSlotWitness): Promise<Uint8Arr
  * Internal node = Poseidon3(DOMAIN_BATCH_ROOT, left, right). Identical to
  * `template MerkleRoot(N)` in the circuit.
  */
-export async function computeBatchRoot(leaves: Uint8Array[]): Promise<Uint8Array> {
+export async function computeBatchRoot(
+  leaves: Uint8Array[],
+): Promise<Uint8Array> {
   if (leaves.length === 0 || (leaves.length & (leaves.length - 1)) !== 0) {
-    throw new Error(`computeBatchRoot: N (${leaves.length}) must be a power of 2`);
+    throw new Error(
+      `computeBatchRoot: N (${leaves.length}) must be a power of 2`,
+    );
   }
   const p = await getPoseidon();
   let level: bigint[] = leaves.map(bigintFromBE32);
   while (level.length > 1) {
     const next: bigint[] = [];
     for (let i = 0; i < level.length; i += 2) {
-      next.push(
-        p.F.toObject(p([DOMAIN_BATCH_ROOT, level[i], level[i + 1]])),
-      );
+      next.push(p.F.toObject(p([DOMAIN_BATCH_ROOT, level[i], level[i + 1]])));
     }
     level = next;
   }
@@ -339,7 +342,9 @@ export async function proveMatchBatch(
 ): Promise<BatchProveResult> {
   const N = args.slots.length as BatchSize;
   if (N !== 2 && N !== 4 && N !== 16) {
-    throw new Error(`proveMatchBatch: unsupported batch size N=${N} (must be 2, 4, or 16)`);
+    throw new Error(
+      `proveMatchBatch: unsupported batch size N=${N} (must be 2, 4, or 16)`,
+    );
   }
 
   // Sanity-check the headline constraints before invoking snarkjs.
@@ -350,14 +355,22 @@ export async function proveMatchBatch(
           `base (${slot.baseAmount}) * price (${slot.clearingPrice})`,
       );
     }
-    if (slot.aAmount !== slot.quoteAmount + slot.buyerChangeAmt + slot.buyerFeeAmt) {
+    if (
+      slot.aAmount !==
+      slot.quoteAmount + slot.buyerChangeAmt + slot.buyerFeeAmt
+    ) {
       throw new Error(
         `match-batch-prover[slot${i}]: a_amount conservation failed ` +
           `(${slot.aAmount} != ${slot.quoteAmount} + ${slot.buyerChangeAmt} + ${slot.buyerFeeAmt})`,
       );
     }
-    if (slot.bAmount !== slot.baseAmount + slot.sellerChangeAmt + slot.sellerFeeAmt) {
-      throw new Error(`match-batch-prover[slot${i}]: b_amount conservation failed`);
+    if (
+      slot.bAmount !==
+      slot.baseAmount + slot.sellerChangeAmt + slot.sellerFeeAmt
+    ) {
+      throw new Error(
+        `match-batch-prover[slot${i}]: b_amount conservation failed`,
+      );
     }
   });
 
@@ -374,18 +387,42 @@ export async function proveMatchBatch(
     fee_base_inner: args.slots[0].feeBaseInner.toString(),
     fee_quote_inner: args.slots[0].feeQuoteInner.toString(),
     // VALID_CREATE-equivalent public fields
-    note_a_commitment: args.slots.map((s) => bigintFromBE32(s.noteAcommitment).toString()),
-    note_b_commitment: args.slots.map((s) => bigintFromBE32(s.noteBcommitment).toString()),
-    note_c_commitment: args.slots.map((s) => bigintFromBE32(s.noteCcommitment).toString()),
-    note_d_commitment: args.slots.map((s) => bigintFromBE32(s.noteDcommitment).toString()),
-    note_e_commitment: args.slots.map((s) => bigintFromBE32(s.noteEcommitment).toString()),
-    note_f_commitment: args.slots.map((s) => bigintFromBE32(s.noteFcommitment).toString()),
-    note_fee_base_commitment: args.slots.map((s) => bigintFromBE32(s.noteFeeBaseCommitment).toString()),
-    note_fee_quote_commitment: args.slots.map((s) => bigintFromBE32(s.noteFeeQuoteCommitment).toString()),
-    quote_mint_lo: args.slots.map((s) => pubkeyToFrPair(s.quoteMint)[0].toString()),
-    quote_mint_hi: args.slots.map((s) => pubkeyToFrPair(s.quoteMint)[1].toString()),
-    base_mint_lo: args.slots.map((s) => pubkeyToFrPair(s.baseMint)[0].toString()),
-    base_mint_hi: args.slots.map((s) => pubkeyToFrPair(s.baseMint)[1].toString()),
+    note_a_commitment: args.slots.map((s) =>
+      bigintFromBE32(s.noteAcommitment).toString(),
+    ),
+    note_b_commitment: args.slots.map((s) =>
+      bigintFromBE32(s.noteBcommitment).toString(),
+    ),
+    note_c_commitment: args.slots.map((s) =>
+      bigintFromBE32(s.noteCcommitment).toString(),
+    ),
+    note_d_commitment: args.slots.map((s) =>
+      bigintFromBE32(s.noteDcommitment).toString(),
+    ),
+    note_e_commitment: args.slots.map((s) =>
+      bigintFromBE32(s.noteEcommitment).toString(),
+    ),
+    note_f_commitment: args.slots.map((s) =>
+      bigintFromBE32(s.noteFcommitment).toString(),
+    ),
+    note_fee_base_commitment: args.slots.map((s) =>
+      bigintFromBE32(s.noteFeeBaseCommitment).toString(),
+    ),
+    note_fee_quote_commitment: args.slots.map((s) =>
+      bigintFromBE32(s.noteFeeQuoteCommitment).toString(),
+    ),
+    quote_mint_lo: args.slots.map((s) =>
+      pubkeyToFrPair(s.quoteMint)[0].toString(),
+    ),
+    quote_mint_hi: args.slots.map((s) =>
+      pubkeyToFrPair(s.quoteMint)[1].toString(),
+    ),
+    base_mint_lo: args.slots.map((s) =>
+      pubkeyToFrPair(s.baseMint)[0].toString(),
+    ),
+    base_mint_hi: args.slots.map((s) =>
+      pubkeyToFrPair(s.baseMint)[1].toString(),
+    ),
     base_amount: args.slots.map((s) => s.baseAmount.toString()),
     quote_amount: args.slots.map((s) => s.quoteAmount.toString()),
     buyer_change_amt: args.slots.map((s) => s.buyerChangeAmt.toString()),

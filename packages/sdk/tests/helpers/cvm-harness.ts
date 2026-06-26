@@ -53,7 +53,8 @@ export const SOL_USD_FEED =
  *  so these defaults match the deployed CVM. See docs/cvm-run-runbook.md. */
 export const API_KEY = process.env.NYX_TEE_API_KEY ?? "nyx-test-api-key";
 export const API_SECRET = process.env.NYX_TEE_API_SECRET ?? "nyx-test-secret";
-export const PASSPHRASE = process.env.NYX_TEE_PASSPHRASE ?? "nyx-test-passphrase";
+export const PASSPHRASE =
+  process.env.NYX_TEE_PASSPHRASE ?? "nyx-test-passphrase";
 
 /** Protocol fee bps — MUST match the CVM's NYX_TEE_FEE_RATE_BPS (default 30). */
 export const FEE_RATE_BPS = BigInt(process.env.NYX_CVM_FEE_RATE_BPS ?? "30");
@@ -62,7 +63,9 @@ export const FEE_RATE_BPS = BigInt(process.env.NYX_CVM_FEE_RATE_BPS ?? "30");
  *  nullifiers) are fresh each run — a fixed seed would collide the settle's
  *  NullifierEntry PDA ("Allocate: account already in use") on a 2nd run since
  *  reset_merkle_tree clears the tree but NOT those PDAs. */
-export const RUN_SALT = BigInt(process.env.NYX_CVM_RUN_SALT ?? String(Date.now()));
+export const RUN_SALT = BigInt(
+  process.env.NYX_CVM_RUN_SALT ?? String(Date.now()),
+);
 
 export const hex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 
@@ -229,7 +232,9 @@ export class CvmHarness {
       const [pda] = merkleTreePda(this.vaultProgramId, treeId);
       const info = await this.conn.getAccountInfo(pda);
       if (!info)
-        throw new Error(`MerkleTree shard ${treeId} missing — run devnet-setup`);
+        throw new Error(
+          `MerkleTree shard ${treeId} missing — run devnet-setup`,
+        );
       total += Number(
         new DataView(
           info.data.buffer,

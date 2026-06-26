@@ -30,17 +30,25 @@ describe("anchor pool — client derivation", () => {
     // Deterministic from (seed, orderId).
     expect(Buffer.from(a.poolHash)).toEqual(Buffer.from(b.poolHash));
     // The reported poolHash matches anchorPoolHash over the anchors.
-    expect(Buffer.from(a.poolHash)).toEqual(Buffer.from(anchorPoolHash(a.anchors)));
+    expect(Buffer.from(a.poolHash)).toEqual(
+      Buffer.from(anchorPoolHash(a.anchors)),
+    );
     // Indices are 0..N-1.
-    expect(a.anchors.map((x) => x.index)).toEqual([...Array(ANCHOR_POOL_SIZE).keys()]);
+    expect(a.anchors.map((x) => x.index)).toEqual([
+      ...Array(ANCHOR_POOL_SIZE).keys(),
+    ]);
   });
 
   it("each anchor's (inner_hash, nullifier) matches direct derivation", async () => {
     const pool = await buildAnchorPool(SEED, SK, ORDER_ID);
     for (const anc of pool.anchors) {
       const innerBig = deriveInnerHash(SEED, ORDER_ID, anc.index);
-      expect(Buffer.from(anc.innerHash)).toEqual(Buffer.from(bn254ToBE32(innerBig)));
-      expect(Buffer.from(anc.nullifier)).toEqual(Buffer.from(await nullifierV2(SK, innerBig)));
+      expect(Buffer.from(anc.innerHash)).toEqual(
+        Buffer.from(bn254ToBE32(innerBig)),
+      );
+      expect(Buffer.from(anc.nullifier)).toEqual(
+        Buffer.from(await nullifierV2(SK, innerBig)),
+      );
     }
   });
 
@@ -85,7 +93,9 @@ describe("anchor pool — client derivation", () => {
 
     // The new inner_hashes don't collide with the initial pool's.
     const initial = await buildAnchorPool(SEED, SK, ORDER_ID);
-    const initialInners = new Set(initial.anchors.map((a) => Buffer.from(a.innerHash).toString("hex")));
+    const initialInners = new Set(
+      initial.anchors.map((a) => Buffer.from(a.innerHash).toString("hex")),
+    );
     for (const a of body.anchors) {
       expect(initialInners.has(a.inner_hash)).toBe(false);
     }

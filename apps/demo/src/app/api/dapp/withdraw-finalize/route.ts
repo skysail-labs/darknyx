@@ -13,7 +13,9 @@ import { verifyPhantomSeedSignature } from "@/lib/dapp/phantom-verify";
 
 export const runtime = "nodejs";
 
-const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_PROGRAM_ID = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
 
 function hexToBytes(hex: string): Uint8Array {
   const h = hex.startsWith("0x") ? hex.slice(2) : hex;
@@ -50,7 +52,10 @@ export async function POST(req: Request) {
       );
     }
 
-    verifyPhantomSeedSignature(body.phantomSignatureBase58, body.ownerPubkeyBase58);
+    verifyPhantomSeedSignature(
+      body.phantomSignatureBase58,
+      body.ownerPubkeyBase58,
+    );
 
     const repoRoot = resolveRepoRoot();
     const cfg = loadDemoE2eConfig(repoRoot);

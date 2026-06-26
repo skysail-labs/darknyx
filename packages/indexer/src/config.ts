@@ -19,9 +19,12 @@ export interface IndexerConfig {
 }
 
 /** Default devnet vault program id (matches `declare_id!` in programs/vault). */
-export const DEFAULT_PROGRAM_ID = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
+export const DEFAULT_PROGRAM_ID =
+  "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): IndexerConfig {
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): IndexerConfig {
   const rpcUrl = env.INDEXER_RPC_URL;
   if (!rpcUrl) throw new Error("INDEXER_RPC_URL is required");
   return {

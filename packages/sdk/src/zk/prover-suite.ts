@@ -83,7 +83,9 @@ export class UnimplementedProverSuite implements IDarkPoolZkProverSuite {
   }
   walletCreate = {
     prove: async (): Promise<Groth16ProofBytes> => {
-      throw new Error(`UnimplementedProverSuite.walletCreate.prove: ${this.reason}`);
+      throw new Error(
+        `UnimplementedProverSuite.walletCreate.prove: ${this.reason}`,
+      );
     },
   };
   spend = {

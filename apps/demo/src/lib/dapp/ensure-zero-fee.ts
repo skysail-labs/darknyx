@@ -25,7 +25,8 @@ import {
 } from "@solana/web3.js";
 
 /** VaultConfig field offsets (after the 8B anchor discriminator). */
-const PROTOCOL_OWNER_COMMITMENT_OFFSET = 8 + 32 + 32 + 32 + 8 + 32 + 32 * 32 + 20 * 32 + 20 * 32 + 1 + 1;
+const PROTOCOL_OWNER_COMMITMENT_OFFSET =
+  8 + 32 + 32 + 32 + 8 + 32 + 32 * 32 + 20 * 32 + 20 * 32 + 1 + 1;
 const FEE_RATE_BPS_OFFSET = PROTOCOL_OWNER_COMMITMENT_OFFSET + 32;
 
 export interface EnsureZeroFeeOutcome {
@@ -64,7 +65,10 @@ export async function ensureZeroProtocolFee(
     return { observedFeeBps: 0, zeroed: false };
   }
   const protocolOwnerCommitment = new Uint8Array(
-    data.subarray(PROTOCOL_OWNER_COMMITMENT_OFFSET, PROTOCOL_OWNER_COMMITMENT_OFFSET + 32),
+    data.subarray(
+      PROTOCOL_OWNER_COMMITMENT_OFFSET,
+      PROTOCOL_OWNER_COMMITMENT_OFFSET + 32,
+    ),
   );
   const ix = buildSetProtocolConfigInstruction({
     programId: vaultProgramId,
@@ -72,8 +76,13 @@ export async function ensureZeroProtocolFee(
     protocolOwnerCommitment,
     feeRateBps: 0,
   });
-  const sig = await sendAndConfirmTransaction(l1, new Transaction().add(ix), [admin], {
-    commitment: "confirmed",
-  });
+  const sig = await sendAndConfirmTransaction(
+    l1,
+    new Transaction().add(ix),
+    [admin],
+    {
+      commitment: "confirmed",
+    },
+  );
   return { observedFeeBps, zeroed: true, signature: sig };
 }

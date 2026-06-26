@@ -56,8 +56,8 @@ export function SystemOverview() {
                     l.cluster === "L1"
                       ? "border-nyx-signal-green/45 text-nyx-signal-green"
                       : l.cluster === "ER"
-                      ? "border-nyx-accent/55 text-nyx-accent"
-                      : "border-nyx-fog/40 text-nyx-fog"
+                        ? "border-nyx-accent/55 text-nyx-accent"
+                        : "border-nyx-fog/40 text-nyx-fog"
                   }`}
                 >
                   {l.cluster}
@@ -66,7 +66,9 @@ export function SystemOverview() {
               <h3 className="mt-5 text-[18px] font-semibold leading-snug text-nyx-chalk">
                 {l.title}
               </h3>
-              <p className="mt-2 text-[13px] leading-relaxed text-nyx-fog">{l.body}</p>
+              <p className="mt-2 text-[13px] leading-relaxed text-nyx-fog">
+                {l.body}
+              </p>
               <div className="mt-5 flex flex-wrap gap-1.5">
                 {l.techs.map((t) => (
                   <code

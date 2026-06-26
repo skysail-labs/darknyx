@@ -19,7 +19,9 @@ export function instructionToJson(ix: TransactionInstruction): InstructionJson {
   };
 }
 
-export function instructionFromJson(j: InstructionJson): TransactionInstruction {
+export function instructionFromJson(
+  j: InstructionJson,
+): TransactionInstruction {
   return new TransactionInstruction({
     programId: new PublicKey(j.programId),
     keys: j.keys.map((k) => ({

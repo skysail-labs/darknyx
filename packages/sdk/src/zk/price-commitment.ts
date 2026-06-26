@@ -23,7 +23,8 @@ let cached: PoseidonFn | null = null;
 async function getPoseidon(): Promise<PoseidonFn> {
   if (cached) return cached;
   const p = await buildPoseidon();
-  const fn = ((inputs: bigint[]) => p(inputs.map((i) => p.F.e(i)))) as PoseidonFn;
+  const fn = ((inputs: bigint[]) =>
+    p(inputs.map((i) => p.F.e(i)))) as PoseidonFn;
   fn.F = p.F;
   cached = fn;
   return fn;

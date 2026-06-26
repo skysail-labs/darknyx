@@ -11,7 +11,9 @@ import type {
  */
 
 export interface AccountInfoProvider {
-  getAccountInfo(pubkey: PublicKey): Promise<{ data: Buffer; owner: PublicKey } | null>;
+  getAccountInfo(
+    pubkey: PublicKey,
+  ): Promise<{ data: Buffer; owner: PublicKey } | null>;
 }
 
 export interface TransactionForwarder {

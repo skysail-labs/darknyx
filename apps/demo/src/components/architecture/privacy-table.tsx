@@ -54,7 +54,8 @@ export function PrivacyTable() {
         <div className="max-w-2xl">
           <span className="nyx-eyebrow">02 · Privacy boundary</span>
           <h2 className="nyx-display mt-3 text-[32px] leading-tight sm:text-[40px]">
-            What stays hidden, <span className="text-nyx-fog">what surfaces.</span>
+            What stays hidden,{" "}
+            <span className="text-nyx-fog">what surfaces.</span>
           </h2>
           <p className="mt-3 text-[14px] text-nyx-fog">
             Nyx hides individual <em>order intent</em>. Aggregate match data
@@ -81,7 +82,9 @@ export function PrivacyTable() {
             <tbody>
               {ROWS.map((r) => (
                 <tr key={r.object} className="border-t border-white/[0.05]">
-                  <td className="px-5 py-3 align-top text-nyx-chalk">{r.object}</td>
+                  <td className="px-5 py-3 align-top text-nyx-chalk">
+                    {r.object}
+                  </td>
                   <td className="px-5 py-3 align-top">
                     {r.l1Visible ? (
                       <span className="inline-flex items-center gap-1.5 rounded-sm border border-nyx-signal-amber/45 bg-nyx-signal-amber/10 px-2 py-0.5 font-mono text-[10.5px] uppercase tracking-[0.14em] text-nyx-signal-amber">
@@ -95,7 +98,9 @@ export function PrivacyTable() {
                       </span>
                     )}
                   </td>
-                  <td className="px-5 py-3 align-top text-nyx-fog">{r.notes}</td>
+                  <td className="px-5 py-3 align-top text-nyx-fog">
+                    {r.notes}
+                  </td>
                 </tr>
               ))}
             </tbody>

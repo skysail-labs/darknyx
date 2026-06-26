@@ -33,7 +33,8 @@ import {
 
 function compileUnsignedV0(tx: Transaction): VersionedTransaction {
   if (!tx.feePayer) throw new Error("compileUnsignedV0: tx.feePayer missing");
-  if (!tx.recentBlockhash) throw new Error("compileUnsignedV0: recentBlockhash missing");
+  if (!tx.recentBlockhash)
+    throw new Error("compileUnsignedV0: recentBlockhash missing");
   const msg = new TransactionMessage({
     payerKey: tx.feePayer,
     recentBlockhash: tx.recentBlockhash,
@@ -89,9 +90,15 @@ async function formatWalletSendFailure(
       if (!detail && sim.value.err) {
         detail = `simulateTransaction err: ${JSON.stringify(sim.value.err)}`;
       }
-      console.warn("[PhantomTransactionForwarder] manual simulation", sim.value);
+      console.warn(
+        "[PhantomTransactionForwarder] manual simulation",
+        sim.value,
+      );
     } catch (simErr) {
-      console.warn("[PhantomTransactionForwarder] manual simulation failed", simErr);
+      console.warn(
+        "[PhantomTransactionForwarder] manual simulation failed",
+        simErr,
+      );
     }
   }
 
@@ -176,10 +183,16 @@ export class PhantomTransactionForwarder implements TransactionForwarder {
         );
       }
     } catch (e) {
-      if (e instanceof Error && e.message.startsWith("Pre-flight simulation failed")) {
+      if (
+        e instanceof Error &&
+        e.message.startsWith("Pre-flight simulation failed")
+      ) {
         throw e;
       }
-      console.warn("[PhantomTransactionForwarder] pre-flight simulate threw, continuing", e);
+      console.warn(
+        "[PhantomTransactionForwarder] pre-flight simulate threw, continuing",
+        e,
+      );
     }
 
     let signature: TransactionSignature;
@@ -207,7 +220,9 @@ export class PhantomTransactionForwarder implements TransactionForwarder {
   }
 }
 
-function toTransaction(input: Transaction | TransactionInstruction[]): Transaction {
+function toTransaction(
+  input: Transaction | TransactionInstruction[],
+): Transaction {
   if (input instanceof Transaction) return input;
   const tx = new Transaction();
   for (const ix of input) tx.add(ix);

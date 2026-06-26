@@ -62,11 +62,17 @@ async function makeFill(opts: {
     ownerCommitment: OWNER,
     innerHash: opts.innerHash,
   });
-  const recipient = opts.recipientPub ?? deriveViewingEncKeypair(SEED).publicKey;
+  const recipient =
+    opts.recipientPub ?? deriveViewingEncKeypair(SEED).publicKey;
   const ephSecret = crypto.randomBytes(32);
   const ephPub = nacl.scalarMult.base(ephSecret);
   const nonce = crypto.randomBytes(12);
-  const changeEnc = encryptChangeAmount(ephSecret, recipient, opts.amount, nonce);
+  const changeEnc = encryptChangeAmount(
+    ephSecret,
+    recipient,
+    opts.amount,
+    nonce,
+  );
   return {
     orderId: hex(ORDER_ID),
     side: opts.side,
@@ -90,7 +96,12 @@ const params = {
 describe("recoverChangeFromChain (B.4)", () => {
   it("recovers a FINAL change note (derive_inner)", async () => {
     const innerHash = be32ToBig(deriveChangeInner(42n, CHANGE_ROLE_BUYER));
-    const fill = await makeFill({ side: "buyer", innerHash, amount: 250n, matchId: 42n });
+    const fill = await makeFill({
+      side: "buyer",
+      innerHash,
+      amount: 250n,
+      matchId: 42n,
+    });
 
     const note = await recoverChangeFromChain(fill, params);
     expect(note).not.toBeNull();
@@ -103,7 +114,12 @@ describe("recoverChangeFromChain (B.4)", () => {
 
   it("recovers a CONTINUATION note (anchor inner_hash) + its anchor index", async () => {
     const innerHash = deriveInnerHash(SEED, ORDER_ID, 3);
-    const fill = await makeFill({ side: "seller", innerHash, amount: 777n, matchId: 9n });
+    const fill = await makeFill({
+      side: "seller",
+      innerHash,
+      amount: 777n,
+      matchId: 9n,
+    });
 
     const note = await recoverChangeFromChain(fill, params);
     expect(note).not.toBeNull();
@@ -116,7 +132,9 @@ describe("recoverChangeFromChain (B.4)", () => {
   it("returns null for a wrong viewing key (not ours)", async () => {
     const innerHash = be32ToBig(deriveChangeInner(42n, CHANGE_ROLE_BUYER));
     // Encrypt to a DIFFERENT recipient than SEED's viewing key.
-    const stranger = deriveViewingEncKeypair(new Uint8Array(64).fill(0x99)).publicKey;
+    const stranger = deriveViewingEncKeypair(
+      new Uint8Array(64).fill(0x99),
+    ).publicKey;
     const fill = await makeFill({
       side: "buyer",
       innerHash,
@@ -129,7 +147,12 @@ describe("recoverChangeFromChain (B.4)", () => {
 
   it("returns null for a tampered ciphertext", async () => {
     const innerHash = be32ToBig(deriveChangeInner(42n, CHANGE_ROLE_BUYER));
-    const fill = await makeFill({ side: "buyer", innerHash, amount: 250n, matchId: 42n });
+    const fill = await makeFill({
+      side: "buyer",
+      innerHash,
+      amount: 250n,
+      matchId: 42n,
+    });
     const bytes = Uint8Array.from(Buffer.from(fill.changeEnc!, "hex"));
     bytes[bytes.length - 1] ^= 0x01; // flip a tag byte
     fill.changeEnc = hex(bytes);
@@ -140,7 +163,12 @@ describe("recoverChangeFromChain (B.4)", () => {
     // Decryptable, but the commitment was built for a DIFFERENT amount → the
     // self-verify (Vuln-4) recomputes no candidate and rejects.
     const innerHash = be32ToBig(deriveChangeInner(42n, CHANGE_ROLE_BUYER));
-    const fill = await makeFill({ side: "buyer", innerHash, amount: 250n, matchId: 42n });
+    const fill = await makeFill({
+      side: "buyer",
+      innerHash,
+      amount: 250n,
+      matchId: 42n,
+    });
     // Re-point the commitment at amount 999 (same inner) — decrypt yields 250.
     const wrongCommitment = await noteCommitmentV2({
       tokenMint: QUOTE_MINT,

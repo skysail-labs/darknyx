@@ -14,7 +14,12 @@ interface NyxMarkProps {
  *
  * Source: apps/demo/design-system/svg/nyx-mark.svg
  */
-export function NyxMark({ size = 32, className, style, rising = false }: NyxMarkProps) {
+export function NyxMark({
+  size = 32,
+  className,
+  style,
+  rising = false,
+}: NyxMarkProps) {
   return (
     <svg
       width={size}
@@ -38,7 +43,14 @@ export function NyxMark({ size = 32, className, style, rising = false }: NyxMark
         clipPath={`url(#nyx-mark-hor-${rising ? "r" : "s"})`}
       />
       <rect x="18" y="66" width="84" height="4" fill="currentColor" />
-      <rect x="18" y="78" width="60" height="4" fill="currentColor" opacity="0.5" />
+      <rect
+        x="18"
+        y="78"
+        width="60"
+        height="4"
+        fill="currentColor"
+        opacity="0.5"
+      />
     </svg>
   );
 }

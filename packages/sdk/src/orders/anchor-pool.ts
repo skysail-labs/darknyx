@@ -66,14 +66,25 @@ export async function buildAnchorPool(
   spendingKey: bigint,
   orderId: Uint8Array,
 ): Promise<BuiltAnchorPool> {
-  const anchors = await deriveAnchors(masterSeed, spendingKey, orderId, ANCHOR_POOL_SIZE, 0);
+  const anchors = await deriveAnchors(
+    masterSeed,
+    spendingKey,
+    orderId,
+    ANCHOR_POOL_SIZE,
+    0,
+  );
   return { anchors, poolHash: anchorPoolHash(anchors) };
 }
 
 /** JSON-shaped anchor for the request body (`{ inner_hash, nullifier }` hex). */
-export function anchorsToJson(anchors: Anchor[]): { inner_hash: string; nullifier: string }[] {
+export function anchorsToJson(
+  anchors: Anchor[],
+): { inner_hash: string; nullifier: string }[] {
   const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
-  return anchors.map((a) => ({ inner_hash: hex(a.innerHash), nullifier: hex(a.nullifier) }));
+  return anchors.map((a) => ({
+    inner_hash: hex(a.innerHash),
+    nullifier: hex(a.nullifier),
+  }));
 }
 
 export interface AnchorTopUpBody {
@@ -102,8 +113,13 @@ export async function buildAnchorTopUp(args: {
   // topup_nonce goes on the wire as a JSON number; the signature is over the
   // exact bigint. Reject values that wouldn't round-trip through a JS number
   // (would silently desync the wire value from the signed digest → 403).
-  if (args.topupNonce < 0n || args.topupNonce > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error(`topupNonce out of safe range [0, 2^53): ${args.topupNonce}`);
+  if (
+    args.topupNonce < 0n ||
+    args.topupNonce > BigInt(Number.MAX_SAFE_INTEGER)
+  ) {
+    throw new Error(
+      `topupNonce out of safe range [0, 2^53): ${args.topupNonce}`,
+    );
   }
   const anchors = await deriveAnchors(
     args.masterSeed,

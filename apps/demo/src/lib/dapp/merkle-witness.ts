@@ -44,7 +44,10 @@ export async function computeZeroSubtreeRoots(): Promise<Uint8Array[]> {
 }
 
 async function poseidonPair(a: Uint8Array, b: Uint8Array): Promise<Uint8Array> {
-  return (await poseidonHashBytesBE([beToBigInt(a), beToBigInt(b)])) as Uint8Array;
+  return (await poseidonHashBytesBE([
+    beToBigInt(a),
+    beToBigInt(b),
+  ])) as Uint8Array;
 }
 
 function beToBigInt(x: Uint8Array): bigint {

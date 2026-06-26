@@ -21,13 +21,19 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
 describe("wallet-signature master seed", () => {
   it("the seed message is the fixed NYX_DARKPOOL_SEED_V1 string", () => {
-    expect(new TextDecoder().decode(MASTER_SEED_MESSAGE)).toBe("NYX_DARKPOOL_SEED_V1");
+    expect(new TextDecoder().decode(MASTER_SEED_MESSAGE)).toBe(
+      "NYX_DARKPOOL_SEED_V1",
+    );
   });
 
   it("seedFromWalletSignature = SHA-512(signature)[:64]", () => {
     const sig = new Uint8Array(64).fill(0xab);
     const expected = new Uint8Array(
-      crypto.createHash("sha512").update(Buffer.from(sig)).digest().subarray(0, MASTER_SEED_BYTES),
+      crypto
+        .createHash("sha512")
+        .update(Buffer.from(sig))
+        .digest()
+        .subarray(0, MASTER_SEED_BYTES),
     );
     const seed = seedFromWalletSignature(sig);
     expect(seed.length).toBe(64);
@@ -53,6 +59,8 @@ describe("wallet-signature master seed", () => {
 
   it("is deterministic + recoverable (same signature → same seed)", () => {
     const sig = crypto.randomBytes(64);
-    expect(hex(seedFromWalletSignature(sig))).toBe(hex(seedFromWalletSignature(sig)));
+    expect(hex(seedFromWalletSignature(sig))).toBe(
+      hex(seedFromWalletSignature(sig)),
+    );
   });
 });

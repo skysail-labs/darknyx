@@ -59,7 +59,9 @@ describe("fill-memo integrity", () => {
     const c = Buffer.from(memo.change_note_commitment, "hex");
     c[31] ^= 0x01;
     memo.change_note_commitment = c.toString("hex");
-    await expect(verifyFillMemo(memo, SEED, OWNER)).rejects.toThrow(FillMemoError);
+    await expect(verifyFillMemo(memo, SEED, OWNER)).rejects.toThrow(
+      FillMemoError,
+    );
     await expect(verifyFillMemo(memo, SEED, OWNER)).rejects.toMatchObject({
       kind: "commitment_mismatch",
     });

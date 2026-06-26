@@ -29,9 +29,14 @@ export function expandUserPath(inputPath: string): string {
   return inputPath;
 }
 
-export function loadKeypairFromPath(repoRoot: string, maybeRelative: string): Keypair {
+export function loadKeypairFromPath(
+  repoRoot: string,
+  maybeRelative: string,
+): Keypair {
   const expanded = expandUserPath(maybeRelative);
-  const absolute = expanded.startsWith("/") ? expanded : resolve(repoRoot, expanded);
+  const absolute = expanded.startsWith("/")
+    ? expanded
+    : resolve(repoRoot, expanded);
   const raw = JSON.parse(readFileSync(absolute, "utf8")) as number[];
   return Keypair.fromSecretKey(new Uint8Array(raw));
 }
@@ -42,7 +47,9 @@ export function keypairFromBase58(secret: string): Keypair {
   if (bytes.length === 32) {
     return Keypair.fromSecretKey(nacl.sign.keyPair.fromSeed(bytes).secretKey);
   }
-  throw new Error("Base58 key must decode to 32-byte seed or 64-byte secret key.");
+  throw new Error(
+    "Base58 key must decode to 32-byte seed or 64-byte secret key.",
+  );
 }
 
 /**
@@ -79,7 +86,9 @@ export function loadDemoE2eConfig(repoRoot: string): DemoE2eConfigJson {
 
   const customPath = process.env.DEMO_E2E_CONFIG_PATH;
   const p = customPath
-    ? (customPath.startsWith("/") ? customPath : resolve(repoRoot, customPath))
+    ? customPath.startsWith("/")
+      ? customPath
+      : resolve(repoRoot, customPath)
     : resolve(repoRoot, ".devnet", "e2e-config.json");
 
   if (!existsSync(p)) {
@@ -95,7 +104,8 @@ export function loadDemoE2eConfig(repoRoot: string): DemoE2eConfigJson {
 
 export function getDemoConnections(cfg: DemoE2eConfigJson) {
   const l1RpcUrl = process.env.DEMO_L1_RPC_URL ?? cfg.l1RpcUrl;
-  const erRpcUrl = process.env.DEMO_ER_RPC_URL ?? "https://devnet.magicblock.app";
+  const erRpcUrl =
+    process.env.DEMO_ER_RPC_URL ?? "https://devnet.magicblock.app";
   return {
     l1: new Connection(l1RpcUrl, "confirmed"),
     er: new Connection(erRpcUrl, "confirmed"),
@@ -133,7 +143,9 @@ function loadKeypairFromEnv(envBase: string): Keypair | null {
       );
     }
     if (!Array.isArray(parsed) || parsed.some((b) => typeof b !== "number")) {
-      throw new Error(`${envBase}_JSON must be a JSON byte-array (e.g. [1,2,3,...])`);
+      throw new Error(
+        `${envBase}_JSON must be a JSON byte-array (e.g. [1,2,3,...])`,
+      );
     }
     if (parsed.length !== 64 && parsed.length !== 32) {
       throw new Error(

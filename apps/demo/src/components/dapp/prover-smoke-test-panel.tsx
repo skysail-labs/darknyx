@@ -32,9 +32,15 @@ interface StepState {
 
 const INITIAL_STEPS: StepState[] = [
   { label: "Fetch a deterministic fixture from the server", status: "idle" },
-  { label: "Boot the in-browser prover (Web Worker + snarkjs)", status: "idle" },
+  {
+    label: "Boot the in-browser prover (Web Worker + snarkjs)",
+    status: "idle",
+  },
   { label: "Generate VALID_WALLET_CREATE Groth16 proof", status: "idle" },
-  { label: "Verify the public input matches the server commitment", status: "idle" },
+  {
+    label: "Verify the public input matches the server commitment",
+    status: "idle",
+  },
 ];
 
 function bytesToHex(b: Uint8Array): string {
@@ -47,7 +53,9 @@ export function ProverSmokeTestPanel() {
   const [running, setRunning] = useState(false);
 
   const updateStep = (idx: number, patch: Partial<StepState>) => {
-    setSteps((prev) => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
+    setSteps((prev) =>
+      prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)),
+    );
   };
 
   const reset = () => {
@@ -63,7 +71,9 @@ export function ProverSmokeTestPanel() {
       // Step 1: fetch fixture
       updateStep(0, { status: "running" });
       const t1 = performance.now();
-      const res = await fetch("/api/dapp/prover-fixture", { cache: "no-store" });
+      const res = await fetch("/api/dapp/prover-fixture", {
+        cache: "no-store",
+      });
       if (!res.ok) {
         throw new Error(`fixture fetch failed: HTTP ${res.status}`);
       }
@@ -90,7 +100,10 @@ export function ProverSmokeTestPanel() {
       const t3 = performance.now();
       const proof = await prover.walletCreate.prove({
         userCommitment: BigInt(fixture.inputs.userCommitment),
-        rootKey: [BigInt(fixture.inputs.rootKey[0]), BigInt(fixture.inputs.rootKey[1])],
+        rootKey: [
+          BigInt(fixture.inputs.rootKey[0]),
+          BigInt(fixture.inputs.rootKey[1]),
+        ],
         spendingKey: BigInt(fixture.inputs.spendingKey),
         viewingKey: BigInt(fixture.inputs.viewingKey),
         r0: BigInt(fixture.inputs.r0),
@@ -122,7 +135,11 @@ export function ProverSmokeTestPanel() {
         const next = [...prev];
         const runningIdx = next.findIndex((s) => s.status === "running");
         if (runningIdx >= 0) {
-          next[runningIdx] = { ...next[runningIdx], status: "error", detail: message };
+          next[runningIdx] = {
+            ...next[runningIdx],
+            status: "error",
+            detail: message,
+          };
         }
         return next;
       });
@@ -140,7 +157,9 @@ export function ProverSmokeTestPanel() {
           </h2>
           <p className="mt-1 max-w-xl text-xs text-nyx-fog">
             Stand-alone health-check for the in-browser prover. Generates a{" "}
-            <code className="rounded bg-white/[0.06] px-1 text-nyx-chalk">VALID_WALLET_CREATE</code>{" "}
+            <code className="rounded bg-white/[0.06] px-1 text-nyx-chalk">
+              VALID_WALLET_CREATE
+            </code>{" "}
             Groth16 proof end-to-end (snarkjs in a Web Worker) and verifies that
             the public input it produces matches what the server independently
             computed for the same fixture. No wallet, no session — just a single
@@ -188,9 +207,12 @@ export function ProverSmokeTestPanel() {
 function StatusBadge({ status }: { status: StepStatus }) {
   const cls: Record<StepStatus, string> = {
     idle: "bg-white/[0.08] text-nyx-fog ring-1 ring-white/[0.08]",
-    running: "bg-nyx-signal-amber/18 text-nyx-signal-amber ring-1 ring-nyx-signal-amber/35",
-    success: "bg-nyx-signal-green/18 text-nyx-signal-green ring-1 ring-nyx-signal-green/35",
-    error: "bg-nyx-signal-red/18 text-nyx-signal-red ring-1 ring-nyx-signal-red/35",
+    running:
+      "bg-nyx-signal-amber/18 text-nyx-signal-amber ring-1 ring-nyx-signal-amber/35",
+    success:
+      "bg-nyx-signal-green/18 text-nyx-signal-green ring-1 ring-nyx-signal-green/35",
+    error:
+      "bg-nyx-signal-red/18 text-nyx-signal-red ring-1 ring-nyx-signal-red/35",
   };
   const label: Record<StepStatus, string> = {
     idle: "—",

@@ -1,6 +1,9 @@
 "use client";
 
-import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
+import {
+  ConnectionProvider,
+  WalletProvider,
+} from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { clusterApiUrl } from "@solana/web3.js";
 import { useMemo } from "react";
@@ -35,7 +38,10 @@ export function DappProviders({ children }: { children: React.ReactNode }) {
       // URL into the public env var, scream in the dev console so they catch
       // it before pushing to production. In prod builds, the warning still
       // fires but only the operator's first visit will see it.
-      if (typeof window !== "undefined" && /[?&](api[-_]?key|apikey)=/i.test(fromEnv)) {
+      if (
+        typeof window !== "undefined" &&
+        /[?&](api[-_]?key|apikey)=/i.test(fromEnv)
+      ) {
         // eslint-disable-next-line no-console
         console.warn(
           "[DappProviders] NEXT_PUBLIC_DEVNET_RPC_URL appears to contain an api-key query " +

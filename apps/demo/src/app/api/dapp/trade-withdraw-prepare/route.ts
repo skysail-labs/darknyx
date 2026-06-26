@@ -11,7 +11,12 @@ import {
 import { PublicKey } from "@solana/web3.js";
 import { NextResponse } from "next/server";
 
-import { be32ToBigInt, deriveBlinding, deriveNonce, TRADE_ROLE_BUYER } from "@/lib/dapp/change-note-derive";
+import {
+  be32ToBigInt,
+  deriveBlinding,
+  deriveNonce,
+  TRADE_ROLE_BUYER,
+} from "@/lib/dapp/change-note-derive";
 import {
   getDemoConnections,
   loadDemoE2eConfig,
@@ -44,8 +49,13 @@ function isZero32(b: Uint8Array): boolean {
   return b.every((x) => x === 0);
 }
 
-function readVaultRoots(data: Buffer): { current: Uint8Array; ring: Uint8Array[] } {
-  const current = new Uint8Array(data.subarray(VAULT_CURRENT_ROOT_OFFSET, VAULT_CURRENT_ROOT_OFFSET + 32));
+function readVaultRoots(data: Buffer): {
+  current: Uint8Array;
+  ring: Uint8Array[];
+} {
+  const current = new Uint8Array(
+    data.subarray(VAULT_CURRENT_ROOT_OFFSET, VAULT_CURRENT_ROOT_OFFSET + 32),
+  );
   const ring: Uint8Array[] = [];
   for (let i = 0; i < VAULT_ROOT_HISTORY_SIZE; i++) {
     const off = VAULT_ROOTS_OFFSET + i * 32;
@@ -57,7 +67,8 @@ function readVaultRoots(data: Buffer): { current: Uint8Array; ring: Uint8Array[]
 
 function rootMatches(witnessRoot: Uint8Array, target: Uint8Array): boolean {
   if (witnessRoot.length !== target.length) return false;
-  for (let i = 0; i < witnessRoot.length; i++) if (witnessRoot[i] !== target[i]) return false;
+  for (let i = 0; i < witnessRoot.length; i++)
+    if (witnessRoot[i] !== target[i]) return false;
   return true;
 }
 
@@ -157,7 +168,10 @@ export async function POST(req: Request) {
     const wantOwner = body.ownerCommitmentHex.replace(/^0x/, "").toLowerCase();
     if (ownerHex.toLowerCase() !== wantOwner) {
       return NextResponse.json(
-        { ok: false, error: "ownerCommitmentHex does not match derived identity" },
+        {
+          ok: false,
+          error: "ownerCommitmentHex does not match derived identity",
+        },
         { status: 400 },
       );
     }
@@ -170,9 +184,16 @@ export async function POST(req: Request) {
 
     const nonceBytes = deriveNonce(matchId, TRADE_ROLE_BUYER);
     const blindBytes = deriveBlinding(matchId, TRADE_ROLE_BUYER);
-    if (nonce !== be32ToBigInt(nonceBytes) || blindingR !== be32ToBigInt(blindBytes)) {
+    if (
+      nonce !== be32ToBigInt(nonceBytes) ||
+      blindingR !== be32ToBigInt(blindBytes)
+    ) {
       return NextResponse.json(
-        { ok: false, error: "nonce/blindingR do not match deterministic trade-note derivation for matchId" },
+        {
+          ok: false,
+          error:
+            "nonce/blindingR do not match deterministic trade-note derivation for matchId",
+        },
         { status: 400 },
       );
     }
@@ -187,7 +208,11 @@ export async function POST(req: Request) {
     const wantCommit = body.commitmentHex.replace(/^0x/, "").toLowerCase();
     if (Buffer.from(recomputed).toString("hex").toLowerCase() !== wantCommit) {
       return NextResponse.json(
-        { ok: false, error: "commitmentHex does not match recomputed note_c for this match" },
+        {
+          ok: false,
+          error:
+            "commitmentHex does not match recomputed note_c for this match",
+        },
         { status: 400 },
       );
     }
@@ -203,18 +228,28 @@ export async function POST(req: Request) {
 
     if (leafIndex >= liveLeafCount) {
       return NextResponse.json(
-        { ok: false, error: `leafIndex ${leafIndex} out of range (leaf_count=${liveLeafCount})` },
+        {
+          ok: false,
+          error: `leafIndex ${leafIndex} out of range (leaf_count=${liveLeafCount})`,
+        },
         { status: 400 },
       );
     }
 
-    const { current: liveCurrentRoot, ring: liveRoots } = readVaultRoots(info.data as Buffer);
+    const { current: liveCurrentRoot, ring: liveRoots } = readVaultRoots(
+      info.data as Buffer,
+    );
 
     const targetCount = Number(liveLeafCount);
     const leafIndexNum = Number(leafIndex);
-    const leaves = await collectVaultLeavesOrdered(l1, vaultProgramId, targetCount, {
-      maxSignatures: body.maxSignatures ?? 10000,
-    });
+    const leaves = await collectVaultLeavesOrdered(
+      l1,
+      vaultProgramId,
+      targetCount,
+      {
+        maxSignatures: body.maxSignatures ?? 10000,
+      },
+    );
 
     // Verify our recomputed note_c matches the leaf the on-chain settle
     // appended at `leafIndex`. If this is wrong, every witness attempt below
@@ -222,7 +257,8 @@ export async function POST(req: Request) {
     const replayedAtIndex = leaves[leafIndexNum];
     if (
       replayedAtIndex &&
-      Buffer.compare(Buffer.from(replayedAtIndex), Buffer.from(recomputed)) !== 0
+      Buffer.compare(Buffer.from(replayedAtIndex), Buffer.from(recomputed)) !==
+        0
     ) {
       return NextResponse.json(
         {
@@ -246,7 +282,12 @@ export async function POST(req: Request) {
     // accepts any of these via `VaultConfig::contains_root`, so even if newer
     // leaves invalidate `current_root` matching, an earlier prefix's root may
     // still be live in the ring (for up to 32 leaves of grace).
-    let chosen: { witness: MerkleWitness; matchedRoot: Uint8Array; matchedAs: string; prefixUsed: number } | null = null;
+    let chosen: {
+      witness: MerkleWitness;
+      matchedRoot: Uint8Array;
+      matchedAs: string;
+      prefixUsed: number;
+    } | null = null;
     const triedPrefixes: number[] = [];
 
     // Outer loop: walk back from N down to leafIndex+1.
@@ -256,7 +297,10 @@ export async function POST(req: Request) {
     const minPrefix = leafIndexNum + 1;
     for (let prefix = targetCount; prefix >= minPrefix; prefix--) {
       triedPrefixes.push(prefix);
-      const witness = await buildWitnessForPrefix(leaves.slice(0, prefix), leafIndexNum);
+      const witness = await buildWitnessForPrefix(
+        leaves.slice(0, prefix),
+        leafIndexNum,
+      );
       const match = findMatchingRoot(witness.root, liveCurrentRoot, liveRoots);
       if (match) {
         chosen = {
@@ -295,7 +339,10 @@ export async function POST(req: Request) {
               .map((r) => Buffer.from(r).toString("hex")),
             sampleReplayedHex: leaves
               .slice(Math.max(0, leafIndexNum - 2), leafIndexNum + 4)
-              .map((l, i) => ({ idx: leafIndexNum - 2 + i, hex: Buffer.from(l).toString("hex") })),
+              .map((l, i) => ({
+                idx: leafIndexNum - 2 + i,
+                hex: Buffer.from(l).toString("hex"),
+              })),
           },
         },
         { status: 409 },
@@ -316,7 +363,9 @@ export async function POST(req: Request) {
         ownerCommitmentBlinding: ownerBlinding.toString(),
         nonce: nonce.toString(),
         blindingR: blindingR.toString(),
-        merklePath: chosen.witness.siblings.map((s) => beBytesToBigInt(s).toString()),
+        merklePath: chosen.witness.siblings.map((s) =>
+          beBytesToBigInt(s).toString(),
+        ),
         merkleIndices: chosen.witness.indices.map((i) => i.toString()),
       },
       ixContext: {

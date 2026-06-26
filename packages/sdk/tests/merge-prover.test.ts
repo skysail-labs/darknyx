@@ -22,8 +22,12 @@ import { proveValidMerge, type MergeSlot } from "./helpers/merge-prover.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
 const HAVE_ARTIFACTS =
-  existsSync(resolve(REPO_ROOT, "circuits/build/valid_merge_k2/circuit_final.zkey")) &&
-  existsSync(resolve(REPO_ROOT, "circuits/build/valid_merge_k4/circuit_final.zkey"));
+  existsSync(
+    resolve(REPO_ROOT, "circuits/build/valid_merge_k2/circuit_final.zkey"),
+  ) &&
+  existsSync(
+    resolve(REPO_ROOT, "circuits/build/valid_merge_k4/circuit_final.zkey"),
+  );
 
 const maybe = HAVE_ARTIFACTS ? describe : describe.skip;
 
@@ -37,7 +41,12 @@ async function buildTree(notes: { amount: bigint; innerHash: bigint }[]) {
   const owner = await ownerCommitment(SK, BLINDING);
   const tree = await MerkleShadow.create();
   for (const n of notes) {
-    const c = await noteCommitmentV2({ tokenMint: MINT, amount: n.amount, ownerCommitment: owner, innerHash: n.innerHash });
+    const c = await noteCommitmentV2({
+      tokenMint: MINT,
+      amount: n.amount,
+      ownerCommitment: owner,
+      innerHash: n.innerHash,
+    });
     await tree.append(c); // leaf index = append order
   }
   const slots: MergeSlot[] = [];
@@ -55,88 +64,76 @@ async function buildTree(notes: { amount: bigint; innerHash: bigint }[]) {
 }
 
 maybe("VALID_MERGE circuit", () => {
-  it(
-    "K=2 merges two notes into one of their sum",
-    async () => {
-      const notes = [
-        { amount: 300n, innerHash: 0x11n },
-        { amount: 200n, innerHash: 0x22n },
-      ];
-      const { slots, root } = await buildTree(notes);
-      const outputInnerHash = 0xabcn;
+  it("K=2 merges two notes into one of their sum", async () => {
+    const notes = [
+      { amount: 300n, innerHash: 0x11n },
+      { amount: 200n, innerHash: 0x22n },
+    ];
+    const { slots, root } = await buildTree(notes);
+    const outputInnerHash = 0xabcn;
 
-      const r = await proveValidMerge({
+    const r = await proveValidMerge({
+      repoRoot: REPO_ROOT,
+      k: 2,
+      spendingKey: SK,
+      ownerCommitmentBlinding: BLINDING,
+      outputInnerHash,
+      tokenMint: MINT,
+      merkleRootBE: root,
+      slots,
+    });
+
+    expect(r.outputAmount).toBe(500n);
+    expect(hex(r.publicInputsBE[0])).toBe(hex(r.outputCommitmentBE)); // output (signal 0)
+    expect(hex(r.publicInputsBE[1])).toBe(hex(root)); // merkleRoot
+  }, 120_000);
+
+  it("K=4 merges two real notes with two dummy-padded slots", async () => {
+    const notes = [
+      { amount: 100n, innerHash: 0x33n },
+      { amount: 250n, innerHash: 0x44n },
+    ];
+    const { slots, root } = await buildTree(notes);
+
+    const r = await proveValidMerge({
+      repoRoot: REPO_ROOT,
+      k: 4,
+      spendingKey: SK,
+      ownerCommitmentBlinding: BLINDING,
+      outputInnerHash: 0xdefn,
+      tokenMint: MINT,
+      merkleRootBE: root,
+      slots, // only 2 real → 2 dummy slots padded
+    });
+
+    expect(r.outputAmount).toBe(350n);
+    expect(hex(r.publicInputsBE[0])).toBe(hex(r.outputCommitmentBE));
+    // The two dummy slots' public nullifiers (signals 6,7) are zero.
+    expect(be32ToBigInt(r.publicInputsBE[6])).toBe(0n);
+    expect(be32ToBigInt(r.publicInputsBE[7])).toBe(0n);
+  }, 120_000);
+
+  it("rejects an input note that is not in the tree (membership constraint)", async () => {
+    const notes = [
+      { amount: 300n, innerHash: 0x11n },
+      { amount: 200n, innerHash: 0x22n },
+    ];
+    const { slots, root } = await buildTree(notes);
+    // Tamper: claim a different inner_hash for slot 0 → its commitment is no
+    // longer the tree leaf the path traverses to, so membership must fail.
+    slots[0] = { ...slots[0], innerHash: 0x99n };
+
+    await expect(
+      proveValidMerge({
         repoRoot: REPO_ROOT,
         k: 2,
         spendingKey: SK,
         ownerCommitmentBlinding: BLINDING,
-        outputInnerHash,
+        outputInnerHash: 0xabcn,
         tokenMint: MINT,
         merkleRootBE: root,
         slots,
-      });
-
-      expect(r.outputAmount).toBe(500n);
-      expect(hex(r.publicInputsBE[0])).toBe(hex(r.outputCommitmentBE)); // output (signal 0)
-      expect(hex(r.publicInputsBE[1])).toBe(hex(root)); // merkleRoot
-    },
-    120_000,
-  );
-
-  it(
-    "K=4 merges two real notes with two dummy-padded slots",
-    async () => {
-      const notes = [
-        { amount: 100n, innerHash: 0x33n },
-        { amount: 250n, innerHash: 0x44n },
-      ];
-      const { slots, root } = await buildTree(notes);
-
-      const r = await proveValidMerge({
-        repoRoot: REPO_ROOT,
-        k: 4,
-        spendingKey: SK,
-        ownerCommitmentBlinding: BLINDING,
-        outputInnerHash: 0xdefn,
-        tokenMint: MINT,
-        merkleRootBE: root,
-        slots, // only 2 real → 2 dummy slots padded
-      });
-
-      expect(r.outputAmount).toBe(350n);
-      expect(hex(r.publicInputsBE[0])).toBe(hex(r.outputCommitmentBE));
-      // The two dummy slots' public nullifiers (signals 6,7) are zero.
-      expect(be32ToBigInt(r.publicInputsBE[6])).toBe(0n);
-      expect(be32ToBigInt(r.publicInputsBE[7])).toBe(0n);
-    },
-    120_000,
-  );
-
-  it(
-    "rejects an input note that is not in the tree (membership constraint)",
-    async () => {
-      const notes = [
-        { amount: 300n, innerHash: 0x11n },
-        { amount: 200n, innerHash: 0x22n },
-      ];
-      const { slots, root } = await buildTree(notes);
-      // Tamper: claim a different inner_hash for slot 0 → its commitment is no
-      // longer the tree leaf the path traverses to, so membership must fail.
-      slots[0] = { ...slots[0], innerHash: 0x99n };
-
-      await expect(
-        proveValidMerge({
-          repoRoot: REPO_ROOT,
-          k: 2,
-          spendingKey: SK,
-          ownerCommitmentBlinding: BLINDING,
-          outputInnerHash: 0xabcn,
-          tokenMint: MINT,
-          merkleRootBE: root,
-          slots,
-        }),
-      ).rejects.toThrow();
-    },
-    120_000,
-  );
+      }),
+    ).rejects.toThrow();
+  }, 120_000);
 });

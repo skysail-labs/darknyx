@@ -12,20 +12,29 @@
 
 import type { NoteStore, ChangeNoteRecord } from "../utxo/note-store.js";
 import { receiveFillMemo, type FillMemo } from "../orders/fill-memo.js";
-import { backfillHistory, type BackfillOptions, type BackfillResult } from "./history.js";
+import {
+  backfillHistory,
+  type BackfillOptions,
+  type BackfillResult,
+} from "./history.js";
 import { recoverChangeFromChain } from "./recover.js";
 
 export interface WebSocketLike {
   addEventListener(type: "open", cb: () => void): void;
   addEventListener(type: "message", cb: (ev: { data: unknown }) => void): void;
-  addEventListener(type: "close", cb: (ev: { code: number; reason?: string }) => void): void;
+  addEventListener(
+    type: "close",
+    cb: (ev: { code: number; reason?: string }) => void,
+  ): void;
   addEventListener(type: "error", cb: (ev: unknown) => void): void;
   close(): void;
 }
 export type WebSocketFactory = (url: string) => WebSocketLike;
 
 const defaultWsFactory: WebSocketFactory = (url) =>
-  new (globalThis as { WebSocket: new (u: string) => WebSocketLike }).WebSocket(url);
+  new (globalThis as { WebSocket: new (u: string) => WebSocketLike }).WebSocket(
+    url,
+  );
 
 export interface SubscribeFillsOptions {
   /** Gateway WS origin, e.g. `wss://<app>-8080.dstack-…`. `/ws/fills` is appended. */
@@ -58,7 +67,12 @@ export function subscribeFills(opts: SubscribeFillsOptions): FillsSubscription {
       try {
         const text = typeof ev.data === "string" ? ev.data : String(ev.data);
         const memo = JSON.parse(text) as FillMemo;
-        const rec = await receiveFillMemo(memo, opts.masterSeed, opts.ownerCommitment, opts.store);
+        const rec = await receiveFillMemo(
+          memo,
+          opts.masterSeed,
+          opts.ownerCommitment,
+          opts.store,
+        );
         opts.onFill?.(rec);
       } catch (e) {
         opts.onError?.(e as Error);
@@ -81,8 +95,7 @@ export function subscribeFills(opts: SubscribeFillsOptions): FillsSubscription {
 }
 
 export interface FillsSyncOptions
-  extends Omit<BackfillOptions, "baseUrl">,
-    SubscribeFillsOptions {
+  extends Omit<BackfillOptions, "baseUrl">, SubscribeFillsOptions {
   /** Indexer base URL. Locates the account's change-note fills (by HD-derived
    *  order id), and — when `baseMint`/`quoteMint` are set — recovers each
    *  amount/opening from the PERMANENT on-chain ciphertext (change-amount
@@ -113,13 +126,18 @@ export interface FillsSync {
  * The `NoteStore` is commitment-keyed, so overlapping backfill/live delivery just
  * re-puts. On a 1011 resync we re-backfill from the chain and reopen.
  */
-export async function startFillsSync(opts: FillsSyncOptions): Promise<FillsSync> {
+export async function startFillsSync(
+  opts: FillsSyncOptions,
+): Promise<FillsSync> {
   let located: BackfillResult | undefined;
 
   const backfill = async () => {
     if (!opts.indexerBaseUrl) return;
     try {
-      located = await backfillHistory({ ...opts, baseUrl: opts.indexerBaseUrl });
+      located = await backfillHistory({
+        ...opts,
+        baseUrl: opts.indexerBaseUrl,
+      });
       if (!opts.baseMint || !opts.quoteMint) return; // locate-only (no mints).
       for (const fill of located.located) {
         const note = await recoverChangeFromChain(fill, {

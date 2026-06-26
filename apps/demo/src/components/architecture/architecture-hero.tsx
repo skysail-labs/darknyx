@@ -11,8 +11,8 @@ export function ArchitectureHero() {
           <span className="text-nyx-chalk">One verifiable settlement.</span>
         </h1>
         <p className="nyx-rise nyx-rise-delay-2 mt-5 max-w-2xl text-[15px] text-nyx-fog">
-          A condensed tour of how Nyx keeps order intent private without
-          giving up on-chain auditability. Source-of-truth lives in{" "}
+          A condensed tour of how Nyx keeps order intent private without giving
+          up on-chain auditability. Source-of-truth lives in{" "}
           <a
             className="text-nyx-chalk underline decoration-nyx-fog/40 underline-offset-4 hover:decoration-nyx-chalk"
             href="https://github.com/skysail-labs/darknyx/blob/main/docs/ARCHITECTURE.md"

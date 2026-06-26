@@ -68,10 +68,13 @@ export class WebProverSuite implements IDarkPoolZkProverSuite {
     if (typeof window === "undefined") {
       throw new Error("WebProverSuite can only run in a browser context");
     }
-    const w = new Worker(new URL("../../workers/prover.worker.ts", import.meta.url), {
-      type: "module",
-      name: "nyx-prover",
-    });
+    const w = new Worker(
+      new URL("../../workers/prover.worker.ts", import.meta.url),
+      {
+        type: "module",
+        name: "nyx-prover",
+      },
+    );
     w.addEventListener("message", (ev: MessageEvent<ProverWorkerResponse>) => {
       const reply = ev.data;
       const handler = this.pending.get(reply.id);
@@ -147,7 +150,10 @@ export class WebProverSuite implements IDarkPoolZkProverSuite {
 
   spend = {
     prove: async (inputs: SpendInputs): Promise<Groth16ProofBytes> => {
-      if (inputs.merklePath.length !== 20 || inputs.merkleIndices.length !== 20) {
+      if (
+        inputs.merklePath.length !== 20 ||
+        inputs.merkleIndices.length !== 20
+      ) {
         throw new Error(
           `WebProverSuite.spend.prove: expected merkle path/indices length 20, got ${inputs.merklePath.length}/${inputs.merkleIndices.length}`,
         );
@@ -155,7 +161,10 @@ export class WebProverSuite implements IDarkPoolZkProverSuite {
       const decimal: Record<string, string | string[]> = {
         merkleRoot: inputs.merkleRoot.toString(),
         nullifier: inputs.nullifier.toString(),
-        tokenMint: [inputs.tokenMint[0].toString(), inputs.tokenMint[1].toString()],
+        tokenMint: [
+          inputs.tokenMint[0].toString(),
+          inputs.tokenMint[1].toString(),
+        ],
         amount: inputs.amount.toString(),
         spendingKey: inputs.spendingKey.toString(),
         ownerCommitmentBlinding: inputs.ownerCommitmentBlinding.toString(),

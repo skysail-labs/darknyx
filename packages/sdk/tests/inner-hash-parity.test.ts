@@ -33,7 +33,10 @@ import { deriveInnerHash } from "../src/keys/key-generators.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
-const noteV2Helper = resolve(repoRoot, "target/debug/examples/note-commitment-v2");
+const noteV2Helper = resolve(
+  repoRoot,
+  "target/debug/examples/note-commitment-v2",
+);
 const nullV2Helper = resolve(repoRoot, "target/debug/examples/nullifier-v2");
 const keysHelper = resolve(repoRoot, "target/debug/examples/derive-keys");
 
@@ -62,11 +65,16 @@ function bigintFromHex32(hex: string): bigint {
 }
 
 // Same fixed 64-byte seed the Rust keys tests use (bytes 0x00..0x3f).
-const SEED_HEX = Array.from({ length: 64 }, (_, i) => i.toString(16).padStart(2, "0")).join("");
+const SEED_HEX = Array.from({ length: 64 }, (_, i) =>
+  i.toString(16).padStart(2, "0"),
+).join("");
 const SEED = bytesFromHex(SEED_HEX);
 
 describe("inner_hash v2 parity (TS vs Rust)", () => {
-  const available = existsSync(noteV2Helper) && existsSync(nullV2Helper) && existsSync(keysHelper);
+  const available =
+    existsSync(noteV2Helper) &&
+    existsSync(nullV2Helper) &&
+    existsSync(keysHelper);
   const ait = (name: string, fn: () => Promise<void>) =>
     available ? it(name, fn) : it.skip(name, fn);
 
@@ -76,7 +84,12 @@ describe("inner_hash v2 parity (TS vs Rust)", () => {
       const oid = bytesFromHex(oidHex);
       for (const index of [0, 1, 9, 10, 255, 0x0001_0000]) {
         const ts = deriveInnerHash(SEED, oid, index);
-        const rs = run(keysHelper, ["inner-hash", SEED_HEX, oidHex, index.toString()]);
+        const rs = run(keysHelper, [
+          "inner-hash",
+          SEED_HEX,
+          oidHex,
+          index.toString(),
+        ]);
         expect(ts.toString(16).padStart(64, "0")).toBe(rs);
       }
     }
@@ -98,7 +111,12 @@ describe("inner_hash v2 parity (TS vs Rust)", () => {
           innerHash: bigintFromHex32(v.innerHex),
         }),
       );
-      const rs = run(noteV2Helper, [v.mintHex, v.amount.toString(), v.ownerHex, v.innerHex]);
+      const rs = run(noteV2Helper, [
+        v.mintHex,
+        v.amount.toString(),
+        v.ownerHex,
+        v.innerHex,
+      ]);
       return { ts, rs };
     };
 
@@ -118,23 +136,31 @@ describe("inner_hash v2 parity (TS vs Rust)", () => {
     }
   });
 
-  ait("v2 note commitment matches on amount edges (0, 1, u64::MAX)", async () => {
-    const mintHex = "ff".repeat(16) + "00".repeat(16);
-    const ownerHex = "0d".repeat(32);
-    const innerHex = "0f".repeat(32);
-    for (const amount of [0n, 1n, 18446744073709551615n]) {
-      const ts = hex32(
-        await noteCommitmentV2({
-          tokenMint: bytesFromHex(mintHex),
-          amount,
-          ownerCommitment: bigintFromHex32(ownerHex),
-          innerHash: bigintFromHex32(innerHex),
-        }),
-      );
-      const rs = run(noteV2Helper, [mintHex, amount.toString(), ownerHex, innerHex]);
-      expect(ts).toBe(rs);
-    }
-  });
+  ait(
+    "v2 note commitment matches on amount edges (0, 1, u64::MAX)",
+    async () => {
+      const mintHex = "ff".repeat(16) + "00".repeat(16);
+      const ownerHex = "0d".repeat(32);
+      const innerHex = "0f".repeat(32);
+      for (const amount of [0n, 1n, 18446744073709551615n]) {
+        const ts = hex32(
+          await noteCommitmentV2({
+            tokenMint: bytesFromHex(mintHex),
+            amount,
+            ownerCommitment: bigintFromHex32(ownerHex),
+            innerHash: bigintFromHex32(innerHex),
+          }),
+        );
+        const rs = run(noteV2Helper, [
+          mintHex,
+          amount.toString(),
+          ownerHex,
+          innerHex,
+        ]);
+        expect(ts).toBe(rs);
+      }
+    },
+  );
 
   ait("v2 nullifier matches + is sensitive to sk and inner_hash", async () => {
     const sk = 42n;
@@ -157,29 +183,32 @@ describe("inner_hash v2 parity (TS vs Rust)", () => {
     expect(ts3).not.toBe(ts);
   });
 
-  ait("end-to-end: derived inner_hash flows through commitment + nullifier", async () => {
-    // Exercise the realistic path: derive an inner_hash, then use it in both
-    // the commitment and the nullifier — exactly how the anchor pool is built.
-    const oid = bytesFromHex("ab".repeat(16));
-    const innerBig = deriveInnerHash(SEED, oid, 3);
-    const innerHex = innerBig.toString(16).padStart(64, "0");
-    const mintHex = "01".repeat(32);
-    const ownerHex = "0a".repeat(32);
-    const sk = 7n;
+  ait(
+    "end-to-end: derived inner_hash flows through commitment + nullifier",
+    async () => {
+      // Exercise the realistic path: derive an inner_hash, then use it in both
+      // the commitment and the nullifier — exactly how the anchor pool is built.
+      const oid = bytesFromHex("ab".repeat(16));
+      const innerBig = deriveInnerHash(SEED, oid, 3);
+      const innerHex = innerBig.toString(16).padStart(64, "0");
+      const mintHex = "01".repeat(32);
+      const ownerHex = "0a".repeat(32);
+      const sk = 7n;
 
-    const commitTs = hex32(
-      await noteCommitmentV2({
-        tokenMint: bytesFromHex(mintHex),
-        amount: 500n,
-        ownerCommitment: bigintFromHex32(ownerHex),
-        innerHash: innerBig,
-      }),
-    );
-    const commitRs = run(noteV2Helper, [mintHex, "500", ownerHex, innerHex]);
-    expect(commitTs).toBe(commitRs);
+      const commitTs = hex32(
+        await noteCommitmentV2({
+          tokenMint: bytesFromHex(mintHex),
+          amount: 500n,
+          ownerCommitment: bigintFromHex32(ownerHex),
+          innerHash: innerBig,
+        }),
+      );
+      const commitRs = run(noteV2Helper, [mintHex, "500", ownerHex, innerHex]);
+      expect(commitTs).toBe(commitRs);
 
-    const nullTs = hex32(await nullifierV2(sk, innerBig));
-    const nullRs = run(nullV2Helper, [sk.toString(), innerHex]);
-    expect(nullTs).toBe(nullRs);
-  });
+      const nullTs = hex32(await nullifierV2(sk, innerBig));
+      const nullRs = run(nullV2Helper, [sk.toString(), innerHex]);
+      expect(nullTs).toBe(nullRs);
+    },
+  );
 });

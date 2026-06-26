@@ -62,14 +62,18 @@ const u8ToBigBE = (x: Uint8Array): bigint => {
   return acc;
 };
 
-
-export function getMergeFunction(
-  { client }: { client: DarkPoolClient },
-): (params: MergeParams) => Promise<MergeReceipt> {
+export function getMergeFunction({
+  client,
+}: {
+  client: DarkPoolClient;
+}): (params: MergeParams) => Promise<MergeReceipt> {
   return async (params) => {
     const m = params.inputs.length;
     if (m < 2 || m > MAX_K) {
-      throw new DarkPoolError("parameter", `merge needs 2..${MAX_K} input notes; got ${m}`);
+      throw new DarkPoolError(
+        "parameter",
+        `merge needs 2..${MAX_K} input notes; got ${m}`,
+      );
     }
     const k: 2 | 4 = m <= 2 ? 2 : 4;
     const { spendingKey } = await client.getResolvedKeys();
@@ -79,23 +83,34 @@ export function getMergeFunction(
     await params.callbacks?.pre?.("merkle-proof-fetch");
     const proofs = [];
     for (const inp of params.inputs) {
-      const w = await client.providers.merkleProofProvider.getInclusionProof(inp.leafIndex);
+      const w = await client.providers.merkleProofProvider.getInclusionProof(
+        inp.leafIndex,
+      );
       if (w.siblings.length !== 20 || w.pathIndices.length !== 20) {
-        throw new DarkPoolError("merkle-proof-fetch", "expected a 20-level Merkle path");
+        throw new DarkPoolError(
+          "merkle-proof-fetch",
+          "expected a 20-level Merkle path",
+        );
       }
       proofs.push(w);
     }
     const merkleRoot = proofs[0].root;
     for (const w of proofs) {
       if (Buffer.compare(Buffer.from(w.root), Buffer.from(merkleRoot)) !== 0) {
-        throw new DarkPoolError("merkle-proof-fetch", "all inputs must prove against the same root");
+        throw new DarkPoolError(
+          "merkle-proof-fetch",
+          "all inputs must prove against the same root",
+        );
       }
     }
 
     // --- build the merged output note ---
     await params.callbacks?.pre?.("note-build");
     const sum = params.inputs.reduce((s, i) => s + i.amount, 0n);
-    const outputInnerHash = deriveMergeInnerHash((await client.getResolvedKeys()).masterSeed, params.mergeIndex);
+    const outputInnerHash = deriveMergeInnerHash(
+      (await client.getResolvedKeys()).masterSeed,
+      params.mergeIndex,
+    );
     const outputCommitment = await noteCommitmentV2({
       tokenMint: params.tokenMint,
       amount: sum,
@@ -178,7 +193,9 @@ export function getMergeFunction(
     await params.callbacks?.pre?.("transaction-send");
     let signature;
     try {
-      signature = await client.providers.transactionForwarder.sendAndConfirm([ix]);
+      signature = await client.providers.transactionForwarder.sendAndConfirm([
+        ix,
+      ]);
     } catch (e) {
       throw new DarkPoolError("transaction-send", (e as Error).message, e);
     }
@@ -205,7 +222,9 @@ export function getMergeFunction(
       outputCommitment,
       outputLeafIndex,
       outputNote,
-      spentCommitments: params.inputs.map((i) => Buffer.from(i.commitment).toString("hex")),
+      spentCommitments: params.inputs.map((i) =>
+        Buffer.from(i.commitment).toString("hex"),
+      ),
     };
   };
 }

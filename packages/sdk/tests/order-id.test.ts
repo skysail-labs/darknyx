@@ -11,7 +11,12 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { deriveOrderId, deriveMergeInnerHash, BN254_R, __testing } from "../src/keys/key-generators.js";
+import {
+  deriveOrderId,
+  deriveMergeInnerHash,
+  BN254_R,
+  __testing,
+} from "../src/keys/key-generators.js";
 
 const SEED = new Uint8Array(64);
 for (let i = 0; i < 64; i++) SEED[i] = i;
@@ -72,7 +77,9 @@ describe("deriveOrderId", () => {
 describe("deriveMergeInnerHash", () => {
   it("is a deterministic, distinct, in-range Fr per (seed, n)", () => {
     expect(deriveMergeInnerHash(SEED, 0)).toBe(deriveMergeInnerHash(SEED, 0));
-    expect(deriveMergeInnerHash(SEED, 0)).not.toBe(deriveMergeInnerHash(SEED, 1));
+    expect(deriveMergeInnerHash(SEED, 0)).not.toBe(
+      deriveMergeInnerHash(SEED, 1),
+    );
     expect(deriveMergeInnerHash(SEED, 5)).toBeLessThan(BN254_R);
     expect(deriveMergeInnerHash(SEED, 5)).toBeGreaterThanOrEqual(0n);
   });

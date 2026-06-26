@@ -30,8 +30,17 @@ import {
   getAssociatedTokenAddress,
 } from "@solana/spl-token";
 
-import { deriveSpendingKey, bn254ToBE32, deriveBlindingFactor } from "../src/keys/key-generators.js";
-import { noteCommitmentV2, nullifierV2, ownerCommitment, pubkeyToFrPair } from "../src/utxo/note.js";
+import {
+  deriveSpendingKey,
+  bn254ToBE32,
+  deriveBlindingFactor,
+} from "../src/keys/key-generators.js";
+import {
+  noteCommitmentV2,
+  nullifierV2,
+  ownerCommitment,
+  pubkeyToFrPair,
+} from "../src/utxo/note.js";
 import {
   buildDepositInstruction,
   buildWithdrawInstruction,
@@ -44,12 +53,20 @@ import { be32ToDec } from "./helpers/e2e-helpers.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
-const SPEND_WASM = resolve(REPO_ROOT, "circuits/build/valid_spend/circuit_js/circuit.wasm");
-const SPEND_ZKEY = resolve(REPO_ROOT, "circuits/build/valid_spend/circuit_final.zkey");
+const SPEND_WASM = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_spend/circuit_js/circuit.wasm",
+);
+const SPEND_ZKEY = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_spend/circuit_final.zkey",
+);
 const VAULT_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 const READY =
-  process.env.RUN_DEVNET_DW === "1" && existsSync(CONFIG_PATH) && existsSync(SPEND_ZKEY);
+  process.env.RUN_DEVNET_DW === "1" &&
+  existsSync(CONFIG_PATH) &&
+  existsSync(SPEND_ZKEY);
 const d = READY ? describe : describe.skip;
 
 function loadKp(rel: string): Keypair {
@@ -73,17 +90,22 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     // prior run (reset_merkle_tree clears the tree, NOT those replay PDAs).
     const runSalt = BigInt(Date.now());
     const masterSeed = new Uint8Array(64).map(
-      (_, i) => (i * 13 + 1 + Number((runSalt >> BigInt(i % 53)) & 0xffn)) & 0xff,
+      (_, i) =>
+        (i * 13 + 1 + Number((runSalt >> BigInt(i % 53)) & 0xffn)) & 0xff,
     );
     const spendingKey = deriveSpendingKey(masterSeed);
-    const ownerBlinding = 0xABCDEF12n;
+    const ownerBlinding = 0xabcdef12n;
     const ownerCommit = await ownerCommitment(spendingKey, ownerBlinding);
 
     // ── 1. reset the tree so we deposit at a known leaf 0 ──
     const resetSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        buildResetMerkleTreeInstruction({ programId: VAULT_ID, admin: admin.publicKey, treeId: 0 }),
+        buildResetMerkleTreeInstruction({
+          programId: VAULT_ID,
+          admin: admin.publicKey,
+          treeId: 0,
+        }),
       ),
       [admin],
       { commitment: "confirmed" },
@@ -94,7 +116,11 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     const vinfo = await conn.getAccountInfo(vaultPda);
     if (!vinfo) throw new Error("vault_config missing");
     const leafIndex = Number(
-      new DataView(vinfo.data.buffer, vinfo.data.byteOffset + 104, 8).getBigUint64(0, true),
+      new DataView(
+        vinfo.data.buffer,
+        vinfo.data.byteOffset + 104,
+        8,
+      ).getBigUint64(0, true),
     );
     expect(leafIndex, "tree must be empty after reset").toBe(0);
 
@@ -107,11 +133,18 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       innerHash,
     });
 
-    const balBefore = await getAccount(conn, ata).then((a) => a.amount).catch(() => 0n);
+    const balBefore = await getAccount(conn, ata)
+      .then((a) => a.amount)
+      .catch(() => 0n);
     const depositSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        createAssociatedTokenAccountIdempotentInstruction(admin.publicKey, ata, admin.publicKey, mint),
+        createAssociatedTokenAccountIdempotentInstruction(
+          admin.publicKey,
+          ata,
+          admin.publicKey,
+          mint,
+        ),
         createMintToInstruction(mint, ata, admin.publicKey, AMOUNT),
         buildDepositInstruction({
           programId: VAULT_ID,
@@ -149,7 +182,11 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
         merklePath: w.siblings.map((s) => be32ToDec(s)),
         merkleIndices: w.indices.map((i) => i.toString()),
       },
-      { circuitWasmPath: SPEND_WASM, circuitZkeyPath: SPEND_ZKEY, repoRoot: REPO_ROOT },
+      {
+        circuitWasmPath: SPEND_WASM,
+        circuitZkeyPath: SPEND_ZKEY,
+        repoRoot: REPO_ROOT,
+      },
     );
 
     const balAfterDeposit = (await getAccount(conn, ata)).amount;
@@ -174,7 +211,9 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       [admin],
       { commitment: "confirmed" },
     );
-    console.log(`  · withdraw ${withdrawSig.slice(0, 8)}… (VALID_SPEND verified on-chain)`);
+    console.log(
+      `  · withdraw ${withdrawSig.slice(0, 8)}… (VALID_SPEND verified on-chain)`,
+    );
 
     // ── 4. assert the tokens round-tripped back ──
     const balFinal = (await getAccount(conn, ata)).amount;

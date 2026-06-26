@@ -33,8 +33,18 @@ import {
   getAssociatedTokenAddress,
 } from "@solana/spl-token";
 
-import { deriveSpendingKey, bn254ToBE32, deriveBlindingFactor, deriveMergeInnerHash } from "../src/keys/key-generators.js";
-import { noteCommitmentV2, nullifierV2, ownerCommitment, pubkeyToFrPair } from "../src/utxo/note.js";
+import {
+  deriveSpendingKey,
+  bn254ToBE32,
+  deriveBlindingFactor,
+  deriveMergeInnerHash,
+} from "../src/keys/key-generators.js";
+import {
+  noteCommitmentV2,
+  nullifierV2,
+  ownerCommitment,
+  pubkeyToFrPair,
+} from "../src/utxo/note.js";
 import {
   buildDepositInstruction,
   buildWithdrawInstruction,
@@ -49,23 +59,42 @@ import { proveValidMerge } from "./helpers/merge-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
-const SPEND_WASM = resolve(REPO_ROOT, "circuits/build/valid_spend/circuit_js/circuit.wasm");
-const SPEND_ZKEY = resolve(REPO_ROOT, "circuits/build/valid_spend/circuit_final.zkey");
-const MERGE_ZKEY = resolve(REPO_ROOT, "circuits/build/valid_merge_k2/circuit_final.zkey");
+const SPEND_WASM = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_spend/circuit_js/circuit.wasm",
+);
+const SPEND_ZKEY = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_spend/circuit_final.zkey",
+);
+const MERGE_ZKEY = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_merge_k2/circuit_final.zkey",
+);
 const VAULT_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 const READY =
-  process.env.RUN_DEVNET_MERGE === "1" && existsSync(CONFIG_PATH) && existsSync(MERGE_ZKEY) && existsSync(SPEND_ZKEY);
+  process.env.RUN_DEVNET_MERGE === "1" &&
+  existsSync(CONFIG_PATH) &&
+  existsSync(MERGE_ZKEY) &&
+  existsSync(SPEND_ZKEY);
 const d = READY ? describe : describe.skip;
 
 function loadKp(rel: string): Keypair {
-  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))));
+  return Keypair.fromSecretKey(
+    Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))),
+  );
 }
 // Post-sharding leaf_count lives in the per-shard MerkleTree account at offset 8
 // (after the 8-byte Anchor discriminator), NOT in VaultConfig. Pass a
 // merkleTreePda(VAULT_ID, treeId) account.
 const leafCount = (info: { data: Uint8Array }): number =>
-  Number(new DataView(info.data.buffer, info.data.byteOffset + 8, 8).getBigUint64(0, true));
+  Number(
+    new DataView(info.data.buffer, info.data.byteOffset + 8, 8).getBigUint64(
+      0,
+      true,
+    ),
+  );
 
 d("devnet merge → withdraw (isolated, no CVM)", () => {
   it("merges two notes into one and withdraws the consolidated note", async () => {
@@ -80,7 +109,10 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const SUM = A0 + A1;
 
     const runSalt = BigInt(Date.now());
-    const masterSeed = new Uint8Array(64).map((_, i) => (i * 13 + 1 + Number((runSalt >> BigInt(i % 53)) & 0xffn)) & 0xff);
+    const masterSeed = new Uint8Array(64).map(
+      (_, i) =>
+        (i * 13 + 1 + Number((runSalt >> BigInt(i % 53)) & 0xffn)) & 0xff,
+    );
     const spendingKey = deriveSpendingKey(masterSeed);
     const ownerBlinding = 0xabcdef12n;
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
@@ -91,24 +123,48 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     await t.step("reset_merkle_tree", () =>
       sendAndConfirmTransaction(
         conn,
-        new Transaction().add(buildResetMerkleTreeInstruction({ programId: VAULT_ID, admin: admin.publicKey, treeId: 0 })),
+        new Transaction().add(
+          buildResetMerkleTreeInstruction({
+            programId: VAULT_ID,
+            admin: admin.publicKey,
+            treeId: 0,
+          }),
+        ),
         [admin],
         { commitment: "confirmed" },
       ),
     );
     const [treePda] = merkleTreePda(VAULT_ID, 0);
-    expect(leafCount((await conn.getAccountInfo(treePda))!), "tree empty after reset").toBe(0);
+    expect(
+      leafCount((await conn.getAccountInfo(treePda))!),
+      "tree empty after reset",
+    ).toBe(0);
 
     const tree = await MerkleShadow.create();
-    const notes: { amount: bigint; innerHash: bigint; commitment: Uint8Array; leafIndex: number }[] = [];
+    const notes: {
+      amount: bigint;
+      innerHash: bigint;
+      commitment: Uint8Array;
+      leafIndex: number;
+    }[] = [];
     for (const [i, amount] of [A0, A1].entries()) {
       const innerHash = deriveBlindingFactor(masterSeed, BigInt(i));
-      const commitment = await noteCommitmentV2({ tokenMint: mint.toBytes(), amount, ownerCommitment: owner, innerHash });
+      const commitment = await noteCommitmentV2({
+        tokenMint: mint.toBytes(),
+        amount,
+        ownerCommitment: owner,
+        innerHash,
+      });
       await t.step(`deposit note ${i}`, () =>
         sendAndConfirmTransaction(
           conn,
           new Transaction().add(
-            createAssociatedTokenAccountIdempotentInstruction(admin.publicKey, ata, admin.publicKey, mint),
+            createAssociatedTokenAccountIdempotentInstruction(
+              admin.publicKey,
+              ata,
+              admin.publicKey,
+              mint,
+            ),
             createMintToInstruction(mint, ata, admin.publicKey, amount),
             buildDepositInstruction({
               programId: VAULT_ID,
@@ -135,7 +191,12 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const slots = await Promise.all(
       notes.map(async (n) => {
         const w = await tree.witness(n.leafIndex);
-        return { amount: n.amount, innerHash: n.innerHash, pathElements: w.siblings.map(be32ToBigInt), pathIndices: w.indices };
+        return {
+          amount: n.amount,
+          innerHash: n.innerHash,
+          pathElements: w.siblings.map(be32ToBigInt),
+          pathIndices: w.indices,
+        };
       }),
     );
     const root = await tree.computeRoot();
@@ -179,7 +240,10 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     console.log(`  · merge ${mergeSig.slice(0, 8)}… → one note of ${SUM}`);
 
     // The merged note appended at leaf 2 (leaf_count 2 → 3).
-    expect(leafCount((await conn.getAccountInfo(treePda))!), "merge appended one leaf").toBe(3);
+    expect(
+      leafCount((await conn.getAccountInfo(treePda))!),
+      "merge appended one leaf",
+    ).toBe(3);
     await tree.append(mergeRes.outputCommitmentBE);
 
     // ── 3. withdraw the merged note (VALID_SPEND) ──
@@ -200,7 +264,11 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
           merklePath: w.siblings.map((s) => be32ToDec(s)),
           merkleIndices: w.indices.map((i) => i.toString()),
         },
-        { circuitWasmPath: SPEND_WASM, circuitZkeyPath: SPEND_ZKEY, repoRoot: REPO_ROOT },
+        {
+          circuitWasmPath: SPEND_WASM,
+          circuitZkeyPath: SPEND_ZKEY,
+          repoRoot: REPO_ROOT,
+        },
       ),
     );
 

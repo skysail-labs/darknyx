@@ -16,14 +16,21 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Keypair } from "@solana/web3.js";
 
-import { noteCommitmentV2, ownerCommitment, pubkeyToFrPair } from "../src/utxo/note.js";
+import {
+  noteCommitmentV2,
+  ownerCommitment,
+  pubkeyToFrPair,
+} from "../src/utxo/note.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { be32ToBigInt } from "./helpers/e2e-helpers.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
-const wasm = resolve(repoRoot, "circuits/build/valid_input/circuit_js/circuit.wasm");
+const wasm = resolve(
+  repoRoot,
+  "circuits/build/valid_input/circuit_js/circuit.wasm",
+);
 const zkey = resolve(repoRoot, "circuits/build/valid_input/circuit_final.zkey");
 
 const available = existsSync(wasm) && existsSync(zkey);
@@ -31,73 +38,76 @@ const ait = (name: string, fn: () => Promise<void>) =>
   available ? it(name, fn, 60_000) : it.skip(name, fn);
 
 describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
-  ait("produces a proof whose public inputs match the circuit declaration", async () => {
-    // Note opening (small in-field values for safety on both Rust + circomlibjs).
-    const spendingKey = 12345678901234567890n;
-    const ownerBlinding = 42n;
-    const innerHash = 7n;
-    const amount = 1_000_000n;
-    const tokenMint = Keypair.generate().publicKey.toBytes();
+  ait(
+    "produces a proof whose public inputs match the circuit declaration",
+    async () => {
+      // Note opening (small in-field values for safety on both Rust + circomlibjs).
+      const spendingKey = 12345678901234567890n;
+      const ownerBlinding = 42n;
+      const innerHash = 7n;
+      const amount = 1_000_000n;
+      const tokenMint = Keypair.generate().publicKey.toBytes();
 
-    // Build the note commitment + drop it into a fresh shadow tree.
-    const ownerCommitFr = await ownerCommitment(spendingKey, ownerBlinding);
-    const noteCommitBE = await noteCommitmentV2({
-      tokenMint,
-      amount,
-      ownerCommitment: ownerCommitFr,
-      innerHash,
-    });
-    const tree = await MerkleShadow.create();
-    await tree.append(noteCommitBE);
-    const witness = await tree.witness(0);
+      // Build the note commitment + drop it into a fresh shadow tree.
+      const ownerCommitFr = await ownerCommitment(spendingKey, ownerBlinding);
+      const noteCommitBE = await noteCommitmentV2({
+        tokenMint,
+        amount,
+        ownerCommitment: ownerCommitFr,
+        innerHash,
+      });
+      const tree = await MerkleShadow.create();
+      await tree.append(noteCommitBE);
+      const witness = await tree.witness(0);
 
-    const result = await proveValidInput({
-      repoRoot,
-      spendingKey,
-      ownerCommitmentBlinding: ownerBlinding,
-      innerHash,
-      tokenMint,
-      amount,
-      merkleRootBE: witness.root,
-      merkleWitness: {
-        pathElements: witness.siblings.map(be32ToBigInt),
-        pathIndices: witness.indices,
-      },
-    });
+      const result = await proveValidInput({
+        repoRoot,
+        spendingKey,
+        ownerCommitmentBlinding: ownerBlinding,
+        innerHash,
+        tokenMint,
+        amount,
+        merkleRootBE: witness.root,
+        merkleWitness: {
+          pathElements: witness.siblings.map(be32ToBigInt),
+          pathIndices: witness.indices,
+        },
+      });
 
-    // Proof byte layout (matches groth16-solana).
-    expect(result.proof.piA.length).toBe(64);
-    expect(result.proof.piB.length).toBe(128);
-    expect(result.proof.piC.length).toBe(64);
+      // Proof byte layout (matches groth16-solana).
+      expect(result.proof.piA.length).toBe(64);
+      expect(result.proof.piB.length).toBe(128);
+      expect(result.proof.piC.length).toBe(64);
 
-    // Five public inputs in circuit-declaration order:
-    //   [merkleRoot, noteCommitment, tokenMint_lo, tokenMint_hi, amount]
-    expect(result.publicInputsBE.length).toBe(5);
-    for (const pi of result.publicInputsBE) expect(pi.length).toBe(32);
+      // Five public inputs in circuit-declaration order:
+      //   [merkleRoot, noteCommitment, tokenMint_lo, tokenMint_hi, amount]
+      expect(result.publicInputsBE.length).toBe(5);
+      for (const pi of result.publicInputsBE) expect(pi.length).toBe(32);
 
-    // Sanity: returned commitment matches what the tree saw.
-    expect(Buffer.from(result.noteCommitmentBE).toString("hex")).toBe(
-      Buffer.from(noteCommitBE).toString("hex"),
-    );
+      // Sanity: returned commitment matches what the tree saw.
+      expect(Buffer.from(result.noteCommitmentBE).toString("hex")).toBe(
+        Buffer.from(noteCommitBE).toString("hex"),
+      );
 
-    // Sanity: public input 0 is the merkle_root we asked for.
-    expect(Buffer.from(result.publicInputsBE[0]).toString("hex")).toBe(
-      Buffer.from(witness.root).toString("hex"),
-    );
+      // Sanity: public input 0 is the merkle_root we asked for.
+      expect(Buffer.from(result.publicInputsBE[0]).toString("hex")).toBe(
+        Buffer.from(witness.root).toString("hex"),
+      );
 
-    // Sanity: public input 1 is the note commitment.
-    expect(Buffer.from(result.publicInputsBE[1]).toString("hex")).toBe(
-      Buffer.from(noteCommitBE).toString("hex"),
-    );
+      // Sanity: public input 1 is the note commitment.
+      expect(Buffer.from(result.publicInputsBE[1]).toString("hex")).toBe(
+        Buffer.from(noteCommitBE).toString("hex"),
+      );
 
-    // Sanity: public inputs 2,3 reconstruct the original mint.
-    const [expLo, expHi] = pubkeyToFrPair(tokenMint);
-    expect(be32ToBigInt(result.publicInputsBE[2])).toBe(expLo);
-    expect(be32ToBigInt(result.publicInputsBE[3])).toBe(expHi);
+      // Sanity: public inputs 2,3 reconstruct the original mint.
+      const [expLo, expHi] = pubkeyToFrPair(tokenMint);
+      expect(be32ToBigInt(result.publicInputsBE[2])).toBe(expLo);
+      expect(be32ToBigInt(result.publicInputsBE[3])).toBe(expHi);
 
-    // Sanity: public input 4 is the amount.
-    expect(be32ToBigInt(result.publicInputsBE[4])).toBe(amount);
-  });
+      // Sanity: public input 4 is the amount.
+      expect(be32ToBigInt(result.publicInputsBE[4])).toBe(amount);
+    },
+  );
 
   ait("rejects a witness for a leaf that's not in the tree", async () => {
     // Same opening, but the merkle witness is for a DIFFERENT leaf.

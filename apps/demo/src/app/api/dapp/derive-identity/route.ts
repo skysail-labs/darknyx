@@ -53,12 +53,18 @@ export async function POST(req: Request) {
   try {
     body = (await req.json()) as DeriveIdentityRequest;
   } catch {
-    return NextResponse.json({ ok: false, error: "invalid JSON body" }, { status: 400 });
+    return NextResponse.json(
+      { ok: false, error: "invalid JSON body" },
+      { status: 400 },
+    );
   }
 
   if (!body.phantomSignatureBase58 || !body.ownerPubkeyBase58) {
     return NextResponse.json(
-      { ok: false, error: "missing phantomSignatureBase58 or ownerPubkeyBase58" },
+      {
+        ok: false,
+        error: "missing phantomSignatureBase58 or ownerPubkeyBase58",
+      },
       { status: 400 },
     );
   }

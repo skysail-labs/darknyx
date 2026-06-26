@@ -24,9 +24,12 @@ export function PrivacyTimelinePanel({ steps }: PrivacyTimelinePanelProps) {
   return (
     <section className="w-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
       <div className="mb-5">
-        <h2 className="text-xl font-semibold text-zinc-900">Panel A — Privacy Timeline</h2>
+        <h2 className="text-xl font-semibold text-zinc-900">
+          Panel A — Privacy Timeline
+        </h2>
         <p className="mt-1 text-sm text-zinc-600">
-          ER stages keep order intent private; L1 stages expose only settlement-level artifacts.
+          ER stages keep order intent private; L1 stages expose only
+          settlement-level artifacts.
         </p>
       </div>
 
@@ -34,13 +37,20 @@ export function PrivacyTimelinePanel({ steps }: PrivacyTimelinePanelProps) {
         {steps.map((step, index) => {
           const txUrl = explorerUrl(step.signature);
           return (
-            <li key={step.id} className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+            <li
+              key={step.id}
+              className="rounded-xl border border-zinc-200 bg-zinc-50 p-4"
+            >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-zinc-900 px-2 text-xs font-semibold text-white">
                   {index + 1}
                 </span>
-                <h3 className="text-base font-semibold text-zinc-900">{step.title}</h3>
-                <span className={`rounded-full px-2 py-1 text-xs font-medium ${LAYER_BADGE[step.layer]}`}>
+                <h3 className="text-base font-semibold text-zinc-900">
+                  {step.title}
+                </h3>
+                <span
+                  className={`rounded-full px-2 py-1 text-xs font-medium ${LAYER_BADGE[step.layer]}`}
+                >
                   {step.layer}
                 </span>
                 <span
@@ -62,7 +72,9 @@ export function PrivacyTimelinePanel({ steps }: PrivacyTimelinePanelProps) {
                   View transaction evidence
                 </a>
               ) : (
-                <p className="mt-3 text-xs text-zinc-500">Transaction evidence link will be attached per scenario run.</p>
+                <p className="mt-3 text-xs text-zinc-500">
+                  Transaction evidence link will be attached per scenario run.
+                </p>
               )}
             </li>
           );

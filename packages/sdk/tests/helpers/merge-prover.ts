@@ -10,7 +10,12 @@
 import { resolve } from "node:path";
 
 import { type Groth16OnChainProof } from "../../src/idl/vault-client.js";
-import { noteCommitmentV2, nullifierV2, ownerCommitment, pubkeyToFrPair } from "../../src/utxo/note.js";
+import {
+  noteCommitmentV2,
+  nullifierV2,
+  ownerCommitment,
+  pubkeyToFrPair,
+} from "../../src/utxo/note.js";
 import { be32ToBigInt, be32ToDec } from "./e2e-helpers.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";
 
@@ -48,19 +53,26 @@ export interface MergeProveResult {
   outputAmount: bigint;
 }
 
-const WASM_REL = (k: number) => `circuits/build/valid_merge_k${k}/circuit_js/circuit.wasm`;
-const ZKEY_REL = (k: number) => `circuits/build/valid_merge_k${k}/circuit_final.zkey`;
+const WASM_REL = (k: number) =>
+  `circuits/build/valid_merge_k${k}/circuit_js/circuit.wasm`;
+const ZKEY_REL = (k: number) =>
+  `circuits/build/valid_merge_k${k}/circuit_final.zkey`;
 
 const ZERO_PATH = Array.from({ length: 20 }, () => 0n);
 const ZERO_IDX = Array.from({ length: 20 }, () => 0);
 
-export async function proveValidMerge(args: MergeProveParams): Promise<MergeProveResult> {
+export async function proveValidMerge(
+  args: MergeProveParams,
+): Promise<MergeProveResult> {
   const { k, slots } = args;
   if (slots.length === 0 || slots.length > k) {
     throw new Error(`merge needs 1..${k} real slots; got ${slots.length}`);
   }
 
-  const owner = await ownerCommitment(args.spendingKey, args.ownerCommitmentBlinding);
+  const owner = await ownerCommitment(
+    args.spendingKey,
+    args.ownerCommitmentBlinding,
+  );
   const [mintLo, mintHi] = pubkeyToFrPair(args.tokenMint);
 
   // Per-slot arrays, padded to k with dummies.
@@ -80,7 +92,11 @@ export async function proveValidMerge(args: MergeProveParams): Promise<MergeProv
       innerHash.push(s.innerHash.toString());
       merklePath.push(s.pathElements.map((e) => e.toString()));
       merkleIndices.push(s.pathIndices.map((x) => x.toString()));
-      nullifiers.push(be32ToBigInt(await nullifierV2(args.spendingKey, s.innerHash)).toString());
+      nullifiers.push(
+        be32ToBigInt(
+          await nullifierV2(args.spendingKey, s.innerHash),
+        ).toString(),
+      );
       sum += s.amount;
     } else {
       isActive.push("0");

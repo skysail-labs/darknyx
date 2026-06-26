@@ -15,14 +15,19 @@
 
 import { describe, expect, it } from "vitest";
 
-import { deriveInner, CHANGE_ROLE_BUYER, TRADE_ROLE_BUYER } from "./helpers/e2e-helpers.js";
+import {
+  deriveInner,
+  CHANGE_ROLE_BUYER,
+  TRADE_ROLE_BUYER,
+} from "./helpers/e2e-helpers.js";
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
 describe("derive_inner — cross-language KAT", () => {
   it("matches the independently-computed spec value for (42, CHANGE_ROLE_BUYER)", () => {
     // raw sha256 = 0233e743...286b; mask → byte0=0x00, byte1=0x33&0x0f=0x03.
-    const expected = "0003e743eb441d6b6f5363d7ad169cf3b8dd6621303ed9d47cb14ddf05de286b";
+    const expected =
+      "0003e743eb441d6b6f5363d7ad169cf3b8dd6621303ed9d47cb14ddf05de286b";
     expect(hex(deriveInner(42n, CHANGE_ROLE_BUYER))).toBe(expected);
   });
 
@@ -40,7 +45,11 @@ describe("derive_inner — cross-language KAT", () => {
   });
 
   it("distinguishes role + match_id", () => {
-    expect(hex(deriveInner(42n, CHANGE_ROLE_BUYER))).not.toBe(hex(deriveInner(42n, TRADE_ROLE_BUYER)));
-    expect(hex(deriveInner(42n, CHANGE_ROLE_BUYER))).not.toBe(hex(deriveInner(43n, CHANGE_ROLE_BUYER)));
+    expect(hex(deriveInner(42n, CHANGE_ROLE_BUYER))).not.toBe(
+      hex(deriveInner(42n, TRADE_ROLE_BUYER)),
+    );
+    expect(hex(deriveInner(42n, CHANGE_ROLE_BUYER))).not.toBe(
+      hex(deriveInner(43n, CHANGE_ROLE_BUYER)),
+    );
   });
 });

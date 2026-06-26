@@ -12,7 +12,14 @@ import {
   ZERO_COMMITMENT,
   type MatchResultPayload,
 } from "@nyx/sdk";
-import { ComputeBudgetProgram, Connection, Keypair, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
+import {
+  ComputeBudgetProgram,
+  Connection,
+  Keypair,
+  PublicKey,
+  sendAndConfirmTransaction,
+  Transaction,
+} from "@solana/web3.js";
 import nacl from "tweetnacl";
 
 import { actorSeed } from "@/lib/dapp/persona-client";
@@ -69,8 +76,19 @@ export interface TradeL1SettleResult {
   };
 }
 
-export async function runTradeL1Settle(ctx: TradeL1SettleContext): Promise<TradeL1SettleResult> {
-  const { l1, vaultProgramId, baseMint, quoteMint, batchPda, tee, maker, userMasterSeed } = ctx;
+export async function runTradeL1Settle(
+  ctx: TradeL1SettleContext,
+): Promise<TradeL1SettleResult> {
+  const {
+    l1,
+    vaultProgramId,
+    baseMint,
+    quoteMint,
+    batchPda,
+    tee,
+    maker,
+    userMasterSeed,
+  } = ctx;
 
   const brAcct = await l1.getAccountInfo(batchPda, "confirmed");
   if (!brAcct?.data) throw new Error("BatchResults account missing on L1");
@@ -151,8 +169,12 @@ export async function runTradeL1Settle(ctx: TradeL1SettleContext): Promise<Trade
     blindingR: be32ToBigInt(blindD),
   });
 
-  const noteE = isZero32(mr.noteEcommitment) ? ZERO_COMMITMENT : mr.noteEcommitment;
-  const noteF = isZero32(mr.noteFcommitment) ? ZERO_COMMITMENT : mr.noteFcommitment;
+  const noteE = isZero32(mr.noteEcommitment)
+    ? ZERO_COMMITMENT
+    : mr.noteEcommitment;
+  const noteF = isZero32(mr.noteFcommitment)
+    ? ZERO_COMMITMENT
+    : mr.noteFcommitment;
 
   const payload: MatchResultPayload = {
     matchId: matchIdToPayloadBytes(mr.matchId),
@@ -173,9 +195,13 @@ export async function runTradeL1Settle(ctx: TradeL1SettleContext): Promise<Trade
     buyerFeeAmt: mr.buyerFeeAmt,
     sellerFeeAmt: mr.sellerFeeAmt,
     noteFeeCommitment: ZERO_COMMITMENT,
-    buyerRelockOrderId: isRelockNone(mr.buyerRelockOrderId) ? RELOCK_ORDER_ID_NONE : mr.buyerRelockOrderId,
+    buyerRelockOrderId: isRelockNone(mr.buyerRelockOrderId)
+      ? RELOCK_ORDER_ID_NONE
+      : mr.buyerRelockOrderId,
     buyerRelockExpiry: mr.buyerRelockExpiry,
-    sellerRelockOrderId: isRelockNone(mr.sellerRelockOrderId) ? RELOCK_ORDER_ID_NONE : mr.sellerRelockOrderId,
+    sellerRelockOrderId: isRelockNone(mr.sellerRelockOrderId)
+      ? RELOCK_ORDER_ID_NONE
+      : mr.sellerRelockOrderId,
     sellerRelockExpiry: mr.sellerRelockExpiry,
     clearingPrice: mr.price,
     batchSlot: mr.batchSlot,
@@ -203,7 +229,9 @@ export async function runTradeL1Settle(ctx: TradeL1SettleContext): Promise<Trade
       amount: mr.sellerNoteValue,
     }),
   );
-  const lockSig = await sendAndConfirmTransaction(l1, lockTx, [tee], { commitment: "confirmed" });
+  const lockSig = await sendAndConfirmTransaction(l1, lockTx, [tee], {
+    commitment: "confirmed",
+  });
 
   const settleTx = new Transaction().add(
     ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -218,7 +246,9 @@ export async function runTradeL1Settle(ctx: TradeL1SettleContext): Promise<Trade
       payload,
     }),
   );
-  const settleSig = await sendAndConfirmTransaction(l1, settleTx, [tee], { commitment: "confirmed" });
+  const settleSig = await sendAndConfirmTransaction(l1, settleTx, [tee], {
+    commitment: "confirmed",
+  });
 
   const vcPost = await l1.getAccountInfo(vaultPda, "confirmed");
   if (!vcPost?.data) throw new Error("vault_config missing after settle");
@@ -237,9 +267,14 @@ export async function runTradeL1Settle(ctx: TradeL1SettleContext): Promise<Trade
   // metadata the UI needs to drive the withdraw step.
   const cHex = Buffer.from(noteCcommitment).toString("hex");
   try {
-    const leaves = await collectVaultLeavesOrdered(l1, vaultProgramId, Number(leafAfter), {
-      maxSignatures: 2000,
-    });
+    const leaves = await collectVaultLeavesOrdered(
+      l1,
+      vaultProgramId,
+      Number(leafAfter),
+      {
+        maxSignatures: 2000,
+      },
+    );
     const shadow = await MerkleShadow.create();
     for (const leaf of leaves) {
       await shadow.append(leaf);
@@ -254,7 +289,10 @@ export async function runTradeL1Settle(ctx: TradeL1SettleContext): Promise<Trade
       );
     }
     const leafBytes = leaves[noteCLeaf];
-    if (leafBytes && Buffer.compare(Buffer.from(leafBytes), Buffer.from(noteCcommitment)) !== 0) {
+    if (
+      leafBytes &&
+      Buffer.compare(Buffer.from(leafBytes), Buffer.from(noteCcommitment)) !== 0
+    ) {
       console.warn(
         "[run-trade-l1-settle] replayed leaf at note_c index does not match derived note_c commitment.",
       );
@@ -269,7 +307,11 @@ export async function runTradeL1Settle(ctx: TradeL1SettleContext): Promise<Trade
   const out: TradeL1SettleResult = {
     lockSettleSignatures: [
       { label: "lock_note ×2 (L1)", signature: lockSig, cluster: "l1" },
-      { label: "Ed25519 + tee_forced_settle (L1)", signature: settleSig, cluster: "l1" },
+      {
+        label: "Ed25519 + tee_forced_settle (L1)",
+        signature: settleSig,
+        cluster: "l1",
+      },
     ],
     buyerBaseNote: {
       matchId: mr.matchId.toString(),

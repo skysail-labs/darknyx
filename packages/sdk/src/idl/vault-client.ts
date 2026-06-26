@@ -22,10 +22,25 @@
  * critical difference from `Vec<u8>`, which does carry a 4-byte length.
  */
 
-import { PublicKey, TransactionInstruction, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import {
+  PublicKey,
+  TransactionInstruction,
+  SystemProgram,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+} from "@solana/web3.js";
 import { createHash } from "node:crypto";
 
-import { VAULT_CONFIG_SEED, MERKLE_TREE_SEED, WALLET_SEED, NULLIFIER_SEED, NOTE_LOCK_SEED, CONSUMED_NOTE_SEED, VAULT_TOKEN_SEED, OUTSTANDING_MINT_SEED, BATCH_VALIDITY_MARKER_SEED } from "./seeds.js";
+import {
+  VAULT_CONFIG_SEED,
+  MERKLE_TREE_SEED,
+  WALLET_SEED,
+  NULLIFIER_SEED,
+  NOTE_LOCK_SEED,
+  CONSUMED_NOTE_SEED,
+  VAULT_TOKEN_SEED,
+  OUTSTANDING_MINT_SEED,
+  BATCH_VALIDITY_MARKER_SEED,
+} from "./seeds.js";
 
 /** On-chain portion of a Groth16 proof — the three curve points. */
 export interface Groth16OnChainProof {
@@ -108,7 +123,11 @@ export function staticSettleAltAddresses(
   numTrees: number,
 ): PublicKey[] {
   const [vaultConfig] = vaultConfigPda(programId);
-  const out = [vaultConfig, SYSVAR_INSTRUCTIONS_PUBKEY, SystemProgram.programId];
+  const out = [
+    vaultConfig,
+    SYSVAR_INSTRUCTIONS_PUBKEY,
+    SystemProgram.programId,
+  ];
   for (let treeId = 0; treeId < Math.max(1, numTrees); treeId++) {
     out.push(merkleTreePda(programId, treeId)[0]);
   }
@@ -119,21 +138,30 @@ export function walletEntryPda(
   programId: PublicKey,
   commitment: Uint8Array,
 ): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([WALLET_SEED, fixed32(commitment)], programId);
+  return PublicKey.findProgramAddressSync(
+    [WALLET_SEED, fixed32(commitment)],
+    programId,
+  );
 }
 
 export function nullifierEntryPda(
   programId: PublicKey,
   nullifier: Uint8Array,
 ): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([NULLIFIER_SEED, fixed32(nullifier)], programId);
+  return PublicKey.findProgramAddressSync(
+    [NULLIFIER_SEED, fixed32(nullifier)],
+    programId,
+  );
 }
 
 export function noteLockPda(
   programId: PublicKey,
   noteCommitment: Uint8Array,
 ): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([NOTE_LOCK_SEED, fixed32(noteCommitment)], programId);
+  return PublicKey.findProgramAddressSync(
+    [NOTE_LOCK_SEED, fixed32(noteCommitment)],
+    programId,
+  );
 }
 
 export function consumedNotePda(
@@ -312,7 +340,9 @@ export function buildSetTeePubkeyInstruction(
   p: BuildSetTeePubkeyParams,
 ): TransactionInstruction {
   if (p.teePubkeys.length < 1 || p.teePubkeys.length > 16) {
-    throw new Error(`teePubkeys must have 1..=16 entries, got ${p.teePubkeys.length}`);
+    throw new Error(
+      `teePubkeys must have 1..=16 entries, got ${p.teePubkeys.length}`,
+    );
   }
   const [vaultPda] = vaultConfigPda(p.programId);
   const lenLE = new Uint8Array(4);
@@ -432,7 +462,9 @@ export interface BuildDepositParams {
   innerHash: Uint8Array;
 }
 
-export function buildDepositInstruction(p: BuildDepositParams): TransactionInstruction {
+export function buildDepositInstruction(
+  p: BuildDepositParams,
+): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
@@ -447,7 +479,9 @@ export function buildDepositInstruction(p: BuildDepositParams): TransactionInstr
   );
 
   // Sysvar rent pubkey = SysvarRent111111111111111111111111111111111
-  const rentSysvar = new PublicKey("SysvarRent111111111111111111111111111111111");
+  const rentSysvar = new PublicKey(
+    "SysvarRent111111111111111111111111111111111",
+  );
 
   return new TransactionInstruction({
     programId: p.programId,
@@ -564,7 +598,9 @@ export function buildLockNoteInstruction(
   });
 }
 
-export function buildWithdrawInstruction(p: BuildWithdrawParams): TransactionInstruction {
+export function buildWithdrawInstruction(
+  p: BuildWithdrawParams,
+): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
@@ -604,7 +640,6 @@ export function buildWithdrawInstruction(p: BuildWithdrawParams): TransactionIns
     data: Buffer.from(data),
   });
 }
-
 
 // ---------------------------------------------------------------------------
 // v3.5 — verify_match_batch. Lands in its own tx before the N (≤ 16)
@@ -686,7 +721,9 @@ export interface BuildMergeParams {
  *     [3] system_program (ro)
  *     [4..] one NullifierEntry PDA per NON-ZERO nullifier (mut), in order
  */
-export function buildMergeInstruction(p: BuildMergeParams): TransactionInstruction {
+export function buildMergeInstruction(
+  p: BuildMergeParams,
+): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const isZero = (b: Uint8Array) => b.every((x) => x === 0);
@@ -716,7 +753,11 @@ export function buildMergeInstruction(p: BuildMergeParams): TransactionInstructi
       { pubkey: vaultPda, isSigner: false, isWritable: false },
       { pubkey: merkleTree, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ...nullifierPdas.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+      ...nullifierPdas.map((pubkey) => ({
+        pubkey,
+        isSigner: false,
+        isWritable: true,
+      })),
     ],
     data: Buffer.from(data),
   });

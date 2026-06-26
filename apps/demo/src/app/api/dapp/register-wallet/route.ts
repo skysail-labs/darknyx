@@ -38,9 +38,16 @@ export async function POST(req: Request) {
       ownerPubkeyBase58?: string;
       proof?: { piAHex?: string; piBHex?: string; piCHex?: string };
     };
-    if (!body.phantomSignatureBase58 || !body.ownerPubkeyBase58 || !body.proof?.piAHex) {
+    if (
+      !body.phantomSignatureBase58 ||
+      !body.ownerPubkeyBase58 ||
+      !body.proof?.piAHex
+    ) {
       return NextResponse.json(
-        { ok: false, error: "missing phantomSignatureBase58, ownerPubkeyBase58, or proof" },
+        {
+          ok: false,
+          error: "missing phantomSignatureBase58, ownerPubkeyBase58, or proof",
+        },
         { status: 400 },
       );
     }
@@ -52,7 +59,9 @@ export async function POST(req: Request) {
     const spendingKey = deriveSpendingKey(seed);
     const viewingKey = deriveMasterViewingKey(seed);
     const rootKeyRaw = deriveRootKey(seed);
-    const rootKeyPubkey = nacl.sign.keyPair.fromSeed(rootKeyRaw.secretKey).publicKey;
+    const rootKeyPubkey = nacl.sign.keyPair.fromSeed(
+      rootKeyRaw.secretKey,
+    ).publicKey;
     const ownerBlinding = deriveBlindingFactor(seed, 0n);
     const r0 = deriveBlindingFactor(seed, 1n);
     const r1 = deriveBlindingFactor(seed, 2n);
@@ -72,7 +81,10 @@ export async function POST(req: Request) {
     const piC = hexToBytes(body.proof.piCHex!);
     if (piA.length !== 64 || piB.length !== 128 || piC.length !== 64) {
       return NextResponse.json(
-        { ok: false, error: `bad proof sizes: piA ${piA.length} piB ${piB.length} piC ${piC.length}` },
+        {
+          ok: false,
+          error: `bad proof sizes: piA ${piA.length} piB ${piB.length} piC ${piC.length}`,
+        },
         { status: 400 },
       );
     }
@@ -95,7 +107,9 @@ export async function POST(req: Request) {
         walletPdaBase58: walletPda.toBase58(),
         publicData: {
           userCommitmentHex: Buffer.from(userCommitmentBE).toString("hex"),
-          ownerCommitmentHex: Buffer.from(bn254ToBE32(ownerCommit)).toString("hex"),
+          ownerCommitmentHex: Buffer.from(bn254ToBE32(ownerCommit)).toString(
+            "hex",
+          ),
         },
       });
     }
@@ -114,7 +128,9 @@ export async function POST(req: Request) {
       instruction: instructionToJson(ix),
       publicData: {
         userCommitmentHex: Buffer.from(userCommitmentBE).toString("hex"),
-        ownerCommitmentHex: Buffer.from(bn254ToBE32(ownerCommit)).toString("hex"),
+        ownerCommitmentHex: Buffer.from(bn254ToBE32(ownerCommit)).toString(
+          "hex",
+        ),
       },
     });
   } catch (e) {

@@ -7,11 +7,15 @@ import bs58 from "bs58";
 import { useDappContext } from "@/lib/dapp/dapp-context";
 import { formatAtoms, toAtoms } from "@/lib/dapp/decimals";
 import { instructionFromJson, type InstructionJson } from "@/lib/dapp/ix-json";
-import { readDappSessionForOwner, type DappSessionV1 } from "@/lib/dapp/dapp-session";
+import {
+  readDappSessionForOwner,
+  type DappSessionV1,
+} from "@/lib/dapp/dapp-session";
 
 import { NYX_TRADE_WITHDRAW_KEY } from "@/lib/dapp/trade-withdraw-storage";
 
-const ER_RPC = process.env.NEXT_PUBLIC_DEMO_ER_RPC_URL ?? "https://devnet.magicblock.app";
+const ER_RPC =
+  process.env.NEXT_PUBLIC_DEMO_ER_RPC_URL ?? "https://devnet.magicblock.app";
 
 type TokenMeta = {
   baseDecimals: number;
@@ -66,7 +70,9 @@ export function DappTradeFlowPanel() {
   const [baseAmount, setBaseAmount] = useState(
     process.env.NEXT_PUBLIC_DEMO_BASE_HUMAN ?? "1",
   );
-  const [depositNonce] = useState(() => (BigInt(Date.now()) + 333_333n).toString());
+  const [depositNonce] = useState(() =>
+    (BigInt(Date.now()) + 333_333n).toString(),
+  );
   const [tokenMeta, setTokenMeta] = useState<TokenMeta | null>(null);
   const connectedOwner = wallet.publicKey?.toBase58() ?? null;
 
@@ -79,7 +85,8 @@ export function DappTradeFlowPanel() {
   const orderPriceLimitStr = tokenMeta?.orderPriceLimit ?? "100";
   const humanQuotePerBase = useMemo(
     () =>
-      quotePerBaseAtomic * 10n ** BigInt(Math.max(0, baseDecimals - quoteDecimals)),
+      quotePerBaseAtomic *
+      10n ** BigInt(Math.max(0, baseDecimals - quoteDecimals)),
     [quotePerBaseAtomic, baseDecimals, quoteDecimals],
   );
 
@@ -122,7 +129,9 @@ export function DappTradeFlowPanel() {
     commitmentHex: string;
     amount: string;
   } | null>(null);
-  const orderCtxRef = useRef<{ orderIdHex: string; expirySlot: string } | null>(null);
+  const orderCtxRef = useRef<{ orderIdHex: string; expirySlot: string } | null>(
+    null,
+  );
   const [receipt, setReceipt] = useState<ReceiptLine[]>([]);
   const [balances, setBalances] = useState<BalancesResponse | null>(null);
 
@@ -136,7 +145,10 @@ export function DappTradeFlowPanel() {
       const json = (await res.json()) as BalancesResponse;
       setBalances(json);
     } catch (e) {
-      setBalances({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      setBalances({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   }, []);
 
@@ -191,7 +203,8 @@ export function DappTradeFlowPanel() {
       walletPdaBase58?: string;
       instruction?: InstructionJson;
     };
-    if (!res.ok || !json.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+    if (!res.ok || !json.ok)
+      throw new Error(json.error ?? `HTTP ${res.status}`);
     if (json.alreadyRegistered) {
       appendReceipt([
         {
@@ -201,8 +214,12 @@ export function DappTradeFlowPanel() {
         },
       ]);
     } else if (json.instruction) {
-      const sig = await forwarder.sendAndConfirm([instructionFromJson(json.instruction)]);
-      appendReceipt([{ label: "create_wallet (L1)", signature: sig, cluster: "l1" }]);
+      const sig = await forwarder.sendAndConfirm([
+        instructionFromJson(json.instruction),
+      ]);
+      appendReceipt([
+        { label: "create_wallet (L1)", signature: sig, cluster: "l1" },
+      ]);
     } else {
       throw new Error("register-wallet: missing instruction in response");
     }
@@ -224,8 +241,13 @@ export function DappTradeFlowPanel() {
         tradingSecretKeyBase58: s.tradingSecretKeyBase58,
       }),
     });
-    const json = (await res.json()) as { ok?: boolean; slotIdx?: number; error?: string };
-    if (!res.ok || !json.ok || json.slotIdx === undefined) throw new Error(json.error ?? `HTTP ${res.status}`);
+    const json = (await res.json()) as {
+      ok?: boolean;
+      slotIdx?: number;
+      error?: string;
+    };
+    if (!res.ok || !json.ok || json.slotIdx === undefined)
+      throw new Error(json.error ?? `HTTP ${res.status}`);
     setSlotIdx(json.slotIdx);
     setStep("slot_ready");
     setBusy(false);
@@ -275,9 +297,14 @@ export function DappTradeFlowPanel() {
       preview?: { noteCommitmentHex: string };
       error?: string;
     };
-    if (!res.ok || !json.ok || !json.instruction) throw new Error(json.error ?? `HTTP ${res.status}`);
-    const sig = await forwarder.sendAndConfirm([instructionFromJson(json.instruction)]);
-    appendReceipt([{ label: "deposit quote collateral (L1)", signature: sig, cluster: "l1" }]);
+    if (!res.ok || !json.ok || !json.instruction)
+      throw new Error(json.error ?? `HTTP ${res.status}`);
+    const sig = await forwarder.sendAndConfirm([
+      instructionFromJson(json.instruction),
+    ]);
+    appendReceipt([
+      { label: "deposit quote collateral (L1)", signature: sig, cluster: "l1" },
+    ]);
     setDepositNote({
       commitmentHex: json.preview?.noteCommitmentHex ?? "",
       amount: quoteAtoms.toString(),
@@ -305,7 +332,9 @@ export function DappTradeFlowPanel() {
     }
     setBusy(true);
     setError(null);
-    const trading = Keypair.fromSecretKey(bs58.decode(s.tradingSecretKeyBase58));
+    const trading = Keypair.fromSecretKey(
+      bs58.decode(s.tradingSecretKeyBase58),
+    );
     const now = await l1.getSlot("confirmed");
     const expiry = BigInt(now) + 500n;
     const orderId = crypto.getRandomValues(new Uint8Array(16));
@@ -336,9 +365,11 @@ export function DappTradeFlowPanel() {
       instruction?: InstructionJson;
       error?: string;
     };
-    if (!res.ok || !json.ok || !json.instruction) throw new Error(json.error ?? `HTTP ${res.status}`);
+    if (!res.ok || !json.ok || !json.instruction)
+      throw new Error(json.error ?? `HTTP ${res.status}`);
     const tx = new Transaction().add(instructionFromJson(json.instruction));
-    const { blockhash, lastValidBlockHeight } = await er.getLatestBlockhash("confirmed");
+    const { blockhash, lastValidBlockHeight } =
+      await er.getLatestBlockhash("confirmed");
     tx.recentBlockhash = blockhash;
     tx.feePayer = trading.publicKey;
     tx.sign(trading);
@@ -346,8 +377,13 @@ export function DappTradeFlowPanel() {
       skipPreflight: false,
       preflightCommitment: "confirmed",
     });
-    await er.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
-    appendReceipt([{ label: "submit_order bid (PER)", signature: sig, cluster: "er" }]);
+    await er.confirmTransaction(
+      { signature: sig, blockhash, lastValidBlockHeight },
+      "confirmed",
+    );
+    appendReceipt([
+      { label: "submit_order bid (PER)", signature: sig, cluster: "er" },
+    ]);
     setStep("order_er");
     setBusy(false);
   };
@@ -359,7 +395,9 @@ export function DappTradeFlowPanel() {
     setError(null);
     const ctx = orderCtxRef.current;
     if (!ctx?.orderIdHex || !ctx.expirySlot) {
-      throw new Error("Internal: order id / expiry missing — submit_order step must run first.");
+      throw new Error(
+        "Internal: order id / expiry missing — submit_order step must run first.",
+      );
     }
     const baseAtoms = baseAtomsForCurrentInput();
     const res = await fetch("/api/dapp/counter-and-match", {
@@ -396,7 +434,8 @@ export function DappTradeFlowPanel() {
         vaultLeafCountAfter: string;
       };
     };
-    if (!res.ok || !json.ok || !json.signatures) throw new Error(json.error ?? `HTTP ${res.status}`);
+    if (!res.ok || !json.ok || !json.signatures)
+      throw new Error(json.error ?? `HTTP ${res.status}`);
     appendReceipt(json.signatures);
     if (json.tradeWithdrawBuyerBase) {
       try {
@@ -451,17 +490,20 @@ export function DappTradeFlowPanel() {
     <section className="rounded-2xl border border-white/[0.08] bg-nyx-graphite p-6 shadow-sm shadow-black/20">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-nyx-chalk">Trade on devnet</h2>
+          <h2 className="text-lg font-semibold text-nyx-chalk">
+            Trade on devnet
+          </h2>
           <p className="mt-1 max-w-xl text-xs text-nyx-fog">
-            Place a shielded bid that&rsquo;s matched inside the MagicBlock Private Ephemeral
-            Rollup. Your order&rsquo;s size, side, and price-limit stay encrypted on
-            the rollup; only a TEE-signed match result lands on L1, where the vault
-            writes fresh shielded notes for buyer and seller. The demo pegs{" "}
+            Place a shielded bid that&rsquo;s matched inside the MagicBlock
+            Private Ephemeral Rollup. Your order&rsquo;s size, side, and
+            price-limit stay encrypted on the rollup; only a TEE-signed match
+            result lands on L1, where the vault writes fresh shielded notes for
+            buyer and seller. The demo pegs{" "}
             <span className="font-mono font-semibold text-nyx-chalk">
               1 BASE = {humanQuotePerBase.toString()} QUOTE
             </span>{" "}
-            against a mock oracle (±5% circuit breaker), so the default bid clears
-            without any taker price discovery.
+            against a mock oracle (±5% circuit breaker), so the default bid
+            clears without any taker price discovery.
           </p>
         </div>
         <button
@@ -474,7 +516,9 @@ export function DappTradeFlowPanel() {
       </div>
 
       {!s0 ? (
-        <p className="text-sm text-nyx-fog">Finish the identity step above — session will appear here.</p>
+        <p className="text-sm text-nyx-fog">
+          Finish the identity step above — session will appear here.
+        </p>
       ) : (
         <>
           <div className="mb-3 grid grid-cols-1 gap-2 text-[11px] text-nyx-chalk sm:grid-cols-2">
@@ -487,7 +531,9 @@ export function DappTradeFlowPanel() {
                   ? `${formatAtoms(balances.base.amount, balances.base.decimals)} BASE`
                   : "?"}
                 {balances?.base && !balances.base.exists ? (
-                  <span className="ml-2 text-nyx-signal-amber">(no ATA yet)</span>
+                  <span className="ml-2 text-nyx-signal-amber">
+                    (no ATA yet)
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -500,7 +546,9 @@ export function DappTradeFlowPanel() {
                   ? `${formatAtoms(balances.quote.amount, balances.quote.decimals)} QUOTE`
                   : "?"}
                 {balances?.quote && !balances.quote.exists ? (
-                  <span className="ml-2 text-nyx-signal-amber">(no ATA yet)</span>
+                  <span className="ml-2 text-nyx-signal-amber">
+                    (no ATA yet)
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -536,7 +584,8 @@ export function DappTradeFlowPanel() {
 
           {slotIdx != null ? (
             <p className="mb-2 text-xs text-nyx-fog">
-              PER slot: <span className="font-mono font-semibold">{slotIdx}</span>
+              PER slot:{" "}
+              <span className="font-mono font-semibold">{slotIdx}</span>
             </p>
           ) : null}
 
@@ -550,27 +599,36 @@ export function DappTradeFlowPanel() {
           </button>
 
           {error ? (
-            <div className="mt-3 rounded-md border border-nyx-signal-red/35 bg-nyx-signal-red/10 px-3 py-2 text-xs text-nyx-signal-red">{error}</div>
+            <div className="mt-3 rounded-md border border-nyx-signal-red/35 bg-nyx-signal-red/10 px-3 py-2 text-xs text-nyx-signal-red">
+              {error}
+            </div>
           ) : null}
 
           {step === "matched" ? (
             <div className="mt-4 rounded-md border border-nyx-signal-green/35 bg-nyx-signal-green/10 px-3 py-2 text-xs text-nyx-signal-green">
-              <span className="font-semibold">Settlement complete.</span> Your BASE fill landed as a fresh shielded
-              note. Withdrawing that note on-chain needs a synchronized Merkle witness — that&rsquo;s wired up to
-              an indexer in the next milestone.
+              <span className="font-semibold">Settlement complete.</span> Your
+              BASE fill landed as a fresh shielded note. Withdrawing that note
+              on-chain needs a synchronized Merkle witness — that&rsquo;s wired
+              up to an indexer in the next milestone.
             </div>
           ) : null}
 
           {receipt.length > 0 ? (
             <div className="mt-5">
-              <h3 className="text-sm font-semibold text-nyx-chalk">Transaction receipt</h3>
+              <h3 className="text-sm font-semibold text-nyx-chalk">
+                Transaction receipt
+              </h3>
               <ul className="mt-2 space-y-1 text-xs">
                 {receipt.map((r, i) => (
-                  <li key={`${r.signature}-${i}`} className="font-mono text-nyx-chalk">
+                  <li
+                    key={`${r.signature}-${i}`}
+                    className="font-mono text-nyx-chalk"
+                  >
                     <span className="text-nyx-slate">{r.label}</span>
                     {r.signature && r.signature !== "skipped" ? (
                       <>
-                        {" "}·{" "}
+                        {" "}
+                        ·{" "}
                         <a
                           className="text-nyx-accent hover:underline"
                           href={txUrl(r.signature)}

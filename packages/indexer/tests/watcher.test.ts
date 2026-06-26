@@ -10,8 +10,16 @@ import { PublicKey, type Connection } from "@solana/web3.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
-import { serializePayload, type MatchResultPayload } from "../../sdk/src/settlement/settle-builder.js";
-import { extractFills, Watcher, type GtfaTx, type GtfaScan } from "../src/watcher.js";
+import {
+  serializePayload,
+  type MatchResultPayload,
+} from "../../sdk/src/settlement/settle-builder.js";
+import {
+  extractFills,
+  Watcher,
+  type GtfaTx,
+  type GtfaScan,
+} from "../src/watcher.js";
 import { base58Encode } from "../src/base58.js";
 import { FillsDb } from "../src/db.js";
 import { startServer } from "../src/server.js";
@@ -29,7 +37,8 @@ const HAS_SQLITE = (() => {
 })();
 
 const fill = (len: number, b: number) => new Uint8Array(len).fill(b);
-const hexN = (b: number, len: number) => b.toString(16).padStart(2, "0").repeat(len);
+const hexN = (b: number, len: number) =>
+  b.toString(16).padStart(2, "0").repeat(len);
 
 function payload(): MatchResultPayload {
   return {
@@ -68,7 +77,9 @@ function ixData(p: MatchResultPayload): Uint8Array {
 }
 
 const VAULT = new PublicKey(DEFAULT_PROGRAM_ID).toBase58();
-const OTHER = new PublicKey("So11111111111111111111111111111111111111112").toBase58();
+const OTHER = new PublicKey(
+  "So11111111111111111111111111111111111111112",
+).toBase58();
 
 /** A gTFA (jsonParsed) full tx with a non-vault ix + a vault settle ix. */
 function gtfaTx(signature = "sig1", slot = 500): GtfaTx {
@@ -91,7 +102,8 @@ function gtfaTx(signature = "sig1", slot = 500): GtfaTx {
 const stubConn = { rpcEndpoint: "http://stub" } as unknown as Connection;
 
 const dbs: FillsDb[] = [];
-const dbPath = () => join(tmpdir(), `nyx-idx-test-${Math.random().toString(36).slice(2)}.sqlite`);
+const dbPath = () =>
+  join(tmpdir(), `nyx-idx-test-${Math.random().toString(36).slice(2)}.sqlite`);
 afterEach(() => {
   for (const d of dbs.splice(0)) d.close();
 });
@@ -123,14 +135,20 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
 
     const { server, port } = await startServer(db, 0);
     try {
-      const health = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+      const health = await (
+        await fetch(`http://127.0.0.1:${port}/health`)
+      ).json();
       expect(health.ok).toBe(true);
 
-      const res = await (await fetch(`http://127.0.0.1:${port}/fills?order_id=${buyer}`)).json();
+      const res = await (
+        await fetch(`http://127.0.0.1:${port}/fills?order_id=${buyer}`)
+      ).json();
       expect(res.fills).toHaveLength(1);
       expect(res.fills[0].changeNoteCommitment).toBe(hexN(0xee, 32));
 
-      const miss = await (await fetch(`http://127.0.0.1:${port}/fills?order_id=${hexN(0x00, 16)}`)).json();
+      const miss = await (
+        await fetch(`http://127.0.0.1:${port}/fills?order_id=${hexN(0x00, 16)}`)
+      ).json();
       expect(miss.fills).toHaveLength(0);
     } finally {
       server.close();
@@ -152,7 +170,13 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
       }
       return { txs: [], nextToken: null };
     };
-    const w = new Watcher({ connection: stubConn, programId: new PublicKey(VAULT), db, scan, log: () => {} });
+    const w = new Watcher({
+      connection: stubConn,
+      programId: new PublicKey(VAULT),
+      db,
+      scan,
+      log: () => {},
+    });
 
     const n = await w.pollOnce();
     expect(n).toBe(2); // buyer + seller
@@ -173,9 +197,18 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
       expect(opts.limit).toBe(1); // just the tip
       return { txs: [gtfaTx("tipSig", 999_999)], nextToken: null };
     };
-    const w = new Watcher({ connection: stubConn, programId: new PublicKey(VAULT), db, scan, log: () => {} });
+    const w = new Watcher({
+      connection: stubConn,
+      programId: new PublicKey(VAULT),
+      db,
+      scan,
+      log: () => {},
+    });
     expect(await w.seedCursorToTip()).toBe(999_999);
-    expect(db.getCursor()).toEqual({ lastSignature: "tipSig", lastSlot: 999_999 });
+    expect(db.getCursor()).toEqual({
+      lastSignature: "tipSig",
+      lastSlot: 999_999,
+    });
     // seeding must NOT ingest any history
     expect(db.getFillsByOrder(hexN(0xaa, 16))).toHaveLength(0);
     rmSync(path, { force: true });
@@ -191,7 +224,13 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
       called = true;
       return { txs: [], nextToken: null };
     };
-    const w = new Watcher({ connection: stubConn, programId: new PublicKey(VAULT), db, scan, log: () => {} });
+    const w = new Watcher({
+      connection: stubConn,
+      programId: new PublicKey(VAULT),
+      db,
+      scan,
+      log: () => {},
+    });
     expect(await w.seedCursorToTip()).toBeNull();
     expect(called).toBe(false);
     expect(db.getCursor()).toEqual({ lastSignature: "existing", lastSlot: 42 });

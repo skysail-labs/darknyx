@@ -6,7 +6,10 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { serializePayload, type MatchResultPayload } from "../../sdk/src/settlement/settle-builder.js";
+import {
+  serializePayload,
+  type MatchResultPayload,
+} from "../../sdk/src/settlement/settle-builder.js";
 import {
   decodeMatchPayload,
   decodeSettleIxData,
@@ -16,9 +19,12 @@ import {
 } from "../src/decode.js";
 
 const fill = (len: number, b: number) => new Uint8Array(len).fill(b);
-const hexN = (b: number, len: number) => b.toString(16).padStart(2, "0").repeat(len);
+const hexN = (b: number, len: number) =>
+  b.toString(16).padStart(2, "0").repeat(len);
 
-function makePayload(over: Partial<MatchResultPayload> = {}): MatchResultPayload {
+function makePayload(
+  over: Partial<MatchResultPayload> = {},
+): MatchResultPayload {
   return {
     matchId: fill(16, 0x11),
     noteAcommitment: fill(32, 0xa),
@@ -93,7 +99,9 @@ describe("MatchResultPayload decode", () => {
       noteEcommitment: fill(32, 0),
       noteFcommitment: fill(32, 0),
     });
-    const [buyer, seller] = payloadToFills(decodeMatchPayload(serializePayload(exact)));
+    const [buyer, seller] = payloadToFills(
+      decodeMatchPayload(serializePayload(exact)),
+    );
     expect(buyer.changeNoteCommitment).toBeNull();
     expect(buyer.isPartialFill).toBe(false);
     expect(seller.changeNoteCommitment).toBeNull();
@@ -115,7 +123,9 @@ describe("MatchResultPayload decode", () => {
     recovery.set(fill(32, 0xe1), 0);
     recovery.set(fill(36, 0xb2), 32);
     recovery.set(fill(36, 0xc3), 68);
-    const p = decodeMatchPayload(serializePayload(makePayload({ fillRecovery: recovery })));
+    const p = decodeMatchPayload(
+      serializePayload(makePayload({ fillRecovery: recovery })),
+    );
     expect(p.ephemeralPubkey).toBe(hexN(0xe1, 32));
     expect(p.buyerEnc).toBe(hexN(0xb2, 36));
     expect(p.sellerEnc).toBe(hexN(0xc3, 36));
@@ -126,7 +136,9 @@ describe("MatchResultPayload decode", () => {
   });
 
   it("treats an all-zero recovery bundle as no ciphertext (null)", () => {
-    const [buyer, seller] = payloadToFills(decodeMatchPayload(serializePayload(makePayload())));
+    const [buyer, seller] = payloadToFills(
+      decodeMatchPayload(serializePayload(makePayload())),
+    );
     expect(buyer.ephemeralPubkey).toBeNull();
     expect(buyer.changeEnc).toBeNull();
     expect(seller.changeEnc).toBeNull();

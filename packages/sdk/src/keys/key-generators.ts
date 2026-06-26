@@ -28,10 +28,17 @@ export const BN254_R =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 /** HKDF-SHA256 expand returning an arbitrary-length byte string. */
-export function hkdfExpand(ikm: Uint8Array, info: Uint8Array, length: number): Uint8Array {
+export function hkdfExpand(
+  ikm: Uint8Array,
+  info: Uint8Array,
+  length: number,
+): Uint8Array {
   // HKDF-SHA256: extract (salt=empty) then expand.
   const salt = new Uint8Array(32); // all zeros
-  const prk = crypto.createHmac("sha256", Buffer.from(salt)).update(Buffer.from(ikm)).digest();
+  const prk = crypto
+    .createHmac("sha256", Buffer.from(salt))
+    .update(Buffer.from(ikm))
+    .digest();
   const out = Buffer.alloc(length);
   let prev = Buffer.alloc(0);
   let filled = 0;
@@ -90,15 +97,22 @@ export function generateMasterSeed(): Uint8Array {
  * ([`deriveViewingEncKeypair`]).
  */
 export function seedFromWalletSignature(signature: Uint8Array): Uint8Array {
-  const hash = crypto.createHash("sha512").update(Buffer.from(signature)).digest();
+  const hash = crypto
+    .createHash("sha512")
+    .update(Buffer.from(signature))
+    .digest();
   return new Uint8Array(hash.subarray(0, MASTER_SEED_BYTES));
 }
 
 /** The fixed message a wallet signs to derive its master seed (Proposal A). */
-export const MASTER_SEED_MESSAGE = new TextEncoder().encode("NYX_DARKPOOL_SEED_V1");
+export const MASTER_SEED_MESSAGE = new TextEncoder().encode(
+  "NYX_DARKPOOL_SEED_V1",
+);
 
 /** Resolve a `MasterSeedMode` to actual seed bytes. */
-export async function resolveMasterSeed(mode: MasterSeedMode): Promise<Uint8Array> {
+export async function resolveMasterSeed(
+  mode: MasterSeedMode,
+): Promise<Uint8Array> {
   if (mode.type === "csprng") {
     const existing = await mode.storage.load();
     if (existing) return existing;
@@ -147,7 +161,10 @@ export function deriveRootKey(seed: Uint8Array): Ed25519RawKeypair {
  * Derive the blinding factor for the note at a given Merkle insertion counter.
  * Matches `darkpool_crypto::keys::derive_blinding_factor`.
  */
-export function deriveBlindingFactor(seed: Uint8Array, counter: bigint): bigint {
+export function deriveBlindingFactor(
+  seed: Uint8Array,
+  counter: bigint,
+): bigint {
   const offsetBuf = new ArrayBuffer(8);
   new DataView(offsetBuf).setBigUint64(0, counter, true);
   const info = new Uint8Array(INFO_BLINDING.length + 8);
@@ -165,8 +182,13 @@ export function deriveBlindingFactor(seed: Uint8Array, counter: bigint): bigint 
  *
  * KMAC custom-info = `INFO_INNER_HASH || orderId[16] || index_u32_le`.
  */
-export function deriveInnerHash(seed: Uint8Array, orderId: Uint8Array, index: number): bigint {
-  if (orderId.length !== 16) throw new Error(`orderId must be 16 bytes; got ${orderId.length}`);
+export function deriveInnerHash(
+  seed: Uint8Array,
+  orderId: Uint8Array,
+  index: number,
+): bigint {
+  if (orderId.length !== 16)
+    throw new Error(`orderId must be 16 bytes; got ${orderId.length}`);
   if (!Number.isInteger(index) || index < 0 || index > 0xffff_ffff) {
     throw new Error(`index must be a u32; got ${index}`);
   }
@@ -317,7 +339,10 @@ function kmac256(
 ): Uint8Array {
   const shake = crypto.createHash("shake256", { outputLength: outLen });
   const name = new TextEncoder().encode("KMAC");
-  const header = new Uint8Array([...encodeString(name), ...encodeString(customInfo)]);
+  const header = new Uint8Array([
+    ...encodeString(name),
+    ...encodeString(customInfo),
+  ]);
   const paddedHeader = bytepad(header, 136);
   const paddedKey = bytepad(encodeString(key), 136);
 

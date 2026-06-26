@@ -5,7 +5,10 @@ import { useEffect, useState } from "react";
 import { useDappContext } from "@/lib/dapp/dapp-context";
 import { formatAtoms, toAtoms } from "@/lib/dapp/decimals";
 import { instructionFromJson, type InstructionJson } from "@/lib/dapp/ix-json";
-import { readDappSessionForOwner, type DappSessionV1 } from "@/lib/dapp/dapp-session";
+import {
+  readDappSessionForOwner,
+  type DappSessionV1,
+} from "@/lib/dapp/dapp-session";
 
 type DepositTracking = {
   leafIndex: string;
@@ -73,7 +76,10 @@ export function PrivateDepositWithdrawPanel() {
       const json = (await res.json()) as BalancesResponse;
       setBalances(json);
     } catch (e) {
-      setBalances({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      setBalances({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
     }
   };
 
@@ -123,7 +129,9 @@ export function PrivateDepositWithdrawPanel() {
     if (!s) throw new Error("Complete the identity step above first.");
     const dec = decimalsForSide(side);
     if (dec == null) {
-      throw new Error("Token decimals not loaded yet — hit Refresh and try again.");
+      throw new Error(
+        "Token decimals not loaded yet — hit Refresh and try again.",
+      );
     }
     let wantAtoms: bigint;
     try {
@@ -215,7 +223,12 @@ export function PrivateDepositWithdrawPanel() {
         merkleRootHex: string;
       };
     };
-    if (!prep.ok || !prepJson.ok || !prepJson.proverInputs || !prepJson.ixContext) {
+    if (
+      !prep.ok ||
+      !prepJson.ok ||
+      !prepJson.proverInputs ||
+      !prepJson.ixContext
+    ) {
       throw new Error(prepJson.error ?? `HTTP ${prep.status}`);
     }
 
@@ -230,7 +243,9 @@ export function PrivateDepositWithdrawPanel() {
       ],
       amount: BigInt(prepJson.proverInputs.amount),
       spendingKey: BigInt(prepJson.proverInputs.spendingKey),
-      ownerCommitmentBlinding: BigInt(prepJson.proverInputs.ownerCommitmentBlinding),
+      ownerCommitmentBlinding: BigInt(
+        prepJson.proverInputs.ownerCommitmentBlinding,
+      ),
       nonce: BigInt(prepJson.proverInputs.nonce),
       blindingR: BigInt(prepJson.proverInputs.blindingR),
       merklePath: prepJson.proverInputs.merklePath.map((p) => BigInt(p)),
@@ -264,7 +279,9 @@ export function PrivateDepositWithdrawPanel() {
     if (!fin.ok || !finJson.ok || !finJson.instruction) {
       throw new Error(finJson.error ?? `HTTP ${fin.status}`);
     }
-    const sig = await forwarder.sendAndConfirm([instructionFromJson(finJson.instruction)]);
+    const sig = await forwarder.sendAndConfirm([
+      instructionFromJson(finJson.instruction),
+    ]);
     append([{ label: `withdraw via VALID_SPEND (${side})`, signature: sig }]);
     setStep("withdrawn");
     setBusy(false);
@@ -312,17 +329,24 @@ export function PrivateDepositWithdrawPanel() {
     <section className="rounded-2xl border border-white/[0.08] bg-nyx-graphite p-6 shadow-sm shadow-black/20">
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-nyx-chalk">Private deposit / withdraw</h2>
+          <h2 className="text-lg font-semibold text-nyx-chalk">
+            Private deposit / withdraw
+          </h2>
           <p className="mt-1 max-w-xl text-xs text-nyx-fog">
-            End-to-end privacy primitive. A deposit hashes a fresh shielded note — a
-            Poseidon commitment over <span className="font-mono">(token, amount, owner, blinding)</span> —
-            and inserts it into the on-chain Merkle tree. To withdraw, your browser
-            proves <code className="mx-1 rounded bg-white/[0.06] px-1 text-nyx-chalk">VALID_SPEND</code> in
-            Groth16: it reveals a nullifier (so the note can&rsquo;t be double-spent) and
-            asserts a Merkle inclusion witness for that commitment — without disclosing
-            which leaf is yours, who deposited it, or how much it&rsquo;s worth.
-            Run withdraw <em>before</em> placing a trade on the same identity, otherwise
-            new leaves invalidate the cached witness.
+            End-to-end privacy primitive. A deposit hashes a fresh shielded note
+            — a Poseidon commitment over{" "}
+            <span className="font-mono">(token, amount, owner, blinding)</span>{" "}
+            — and inserts it into the on-chain Merkle tree. To withdraw, your
+            browser proves{" "}
+            <code className="mx-1 rounded bg-white/[0.06] px-1 text-nyx-chalk">
+              VALID_SPEND
+            </code>{" "}
+            in Groth16: it reveals a nullifier (so the note can&rsquo;t be
+            double-spent) and asserts a Merkle inclusion witness for that
+            commitment — without disclosing which leaf is yours, who deposited
+            it, or how much it&rsquo;s worth. Run withdraw <em>before</em>{" "}
+            placing a trade on the same identity, otherwise new leaves
+            invalidate the cached witness.
           </p>
         </div>
         <div className="flex gap-2">
@@ -344,7 +368,9 @@ export function PrivateDepositWithdrawPanel() {
       </div>
 
       {!s0 ? (
-        <p className="text-sm text-nyx-fog">Finish the identity step above — session will appear here.</p>
+        <p className="text-sm text-nyx-fog">
+          Finish the identity step above — session will appear here.
+        </p>
       ) : (
         <>
           <div className="mb-3 grid grid-cols-1 gap-2 text-[11px] text-nyx-chalk sm:grid-cols-2">
@@ -357,7 +383,9 @@ export function PrivateDepositWithdrawPanel() {
                   ? `${formatAtoms(balances.base.amount, balances.base.decimals)} BASE`
                   : "?"}
                 {balances?.base && !balances.base.exists ? (
-                  <span className="ml-2 text-nyx-signal-amber">(no ATA yet)</span>
+                  <span className="ml-2 text-nyx-signal-amber">
+                    (no ATA yet)
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -370,7 +398,9 @@ export function PrivateDepositWithdrawPanel() {
                   ? `${formatAtoms(balances.quote.amount, balances.quote.decimals)} QUOTE`
                   : "?"}
                 {balances?.quote && !balances.quote.exists ? (
-                  <span className="ml-2 text-nyx-signal-amber">(no ATA yet)</span>
+                  <span className="ml-2 text-nyx-signal-amber">
+                    (no ATA yet)
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -408,17 +438,23 @@ export function PrivateDepositWithdrawPanel() {
           {tracking ? (
             <div className="mb-3 rounded-md border border-white/[0.05] bg-nyx-graphite-2/55 px-3 py-2 text-[11px] text-nyx-chalk">
               <div>
-                leaf <span className="font-mono">{tracking.leafIndex}</span> · note commitment
+                leaf <span className="font-mono">{tracking.leafIndex}</span> ·
+                note commitment
               </div>
-              <div className="mt-0.5 truncate font-mono text-nyx-slate" title={tracking.commitmentHex}>
-                {tracking.commitmentHex.slice(0, 32)}…{tracking.commitmentHex.slice(-12)}
+              <div
+                className="mt-0.5 truncate font-mono text-nyx-slate"
+                title={tracking.commitmentHex}
+              >
+                {tracking.commitmentHex.slice(0, 32)}…
+                {tracking.commitmentHex.slice(-12)}
               </div>
             </div>
           ) : null}
 
           {proverMs != null ? (
             <p className="mb-2 text-[11px] text-nyx-slate">
-              VALID_SPEND proof generated in <span className="font-mono">{proverMs} ms</span> (browser)
+              VALID_SPEND proof generated in{" "}
+              <span className="font-mono">{proverMs} ms</span> (browser)
             </p>
           ) : null}
 
@@ -439,9 +475,10 @@ export function PrivateDepositWithdrawPanel() {
 
           {step === "withdrawn" ? (
             <div className="mt-4 rounded-md border border-nyx-signal-green/35 bg-nyx-signal-green/10 px-3 py-2 text-xs text-nyx-signal-green">
-              <span className="font-semibold">Withdraw confirmed.</span> Your shielded note has been
-              spent — the on-chain nullifier is now recorded, so this note can never be re-spent or
-              linked back to its deposit.
+              <span className="font-semibold">Withdraw confirmed.</span> Your
+              shielded note has been spent — the on-chain nullifier is now
+              recorded, so this note can never be re-spent or linked back to its
+              deposit.
             </div>
           ) : null}
 
@@ -450,7 +487,10 @@ export function PrivateDepositWithdrawPanel() {
               <h3 className="text-sm font-semibold text-nyx-chalk">Receipt</h3>
               <ul className="mt-2 space-y-1 text-xs">
                 {receipt.map((r, i) => (
-                  <li key={`${r.signature}-${i}`} className="font-mono text-nyx-chalk">
+                  <li
+                    key={`${r.signature}-${i}`}
+                    className="font-mono text-nyx-chalk"
+                  >
                     <span className="text-nyx-slate">{r.label}</span> ·{" "}
                     <a
                       className="text-nyx-accent hover:underline"

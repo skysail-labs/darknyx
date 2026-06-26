@@ -18,21 +18,29 @@ async function readAtaBalance(
 ) {
   const ata = await getAssociatedTokenAddress(mint, owner);
   const info = await conn.getAccountInfo(ata, "confirmed");
-  if (!info) return { ata: ata.toBase58(), exists: false, amount: "0" } as const;
+  if (!info)
+    return { ata: ata.toBase58(), exists: false, amount: "0" } as const;
   // SPL Token account layout: amount is u64 LE at offset 64.
   const amount = new DataView(
     info.data.buffer,
     info.data.byteOffset + 64,
     8,
   ).getBigUint64(0, true);
-  return { ata: ata.toBase58(), exists: true, amount: amount.toString() } as const;
+  return {
+    ata: ata.toBase58(),
+    exists: true,
+    amount: amount.toString(),
+  } as const;
 }
 
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as { ownerPubkeyBase58?: string };
     if (!body.ownerPubkeyBase58) {
-      return NextResponse.json({ ok: false, error: "missing ownerPubkeyBase58" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "missing ownerPubkeyBase58" },
+        { status: 400 },
+      );
     }
     const owner = new PublicKey(body.ownerPubkeyBase58);
 

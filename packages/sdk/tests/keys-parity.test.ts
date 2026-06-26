@@ -68,15 +68,21 @@ describe("key derivation parity", () => {
   it("TS spending key matches Rust bit-for-bit (cross-env parity)", () => {
     if (!helperAvailable) return;
     const s = fixedSeed();
-    const tsHex = Buffer.from(bn254ToBE32(deriveSpendingKey(s))).toString("hex");
-    const rustHex = runRustHelper("spending", [Buffer.from(s).toString("hex")])!;
+    const tsHex = Buffer.from(bn254ToBE32(deriveSpendingKey(s))).toString(
+      "hex",
+    );
+    const rustHex = runRustHelper("spending", [
+      Buffer.from(s).toString("hex"),
+    ])!;
     expect(tsHex).toBe(rustHex);
   });
 
   it("TS master viewing key matches Rust", () => {
     if (!helperAvailable) return;
     const s = fixedSeed();
-    const tsHex = Buffer.from(bn254ToBE32(deriveMasterViewingKey(s))).toString("hex");
+    const tsHex = Buffer.from(bn254ToBE32(deriveMasterViewingKey(s))).toString(
+      "hex",
+    );
     const rustHex = runRustHelper("viewing", [Buffer.from(s).toString("hex")])!;
     expect(tsHex).toBe(rustHex);
   });
@@ -84,8 +90,13 @@ describe("key derivation parity", () => {
   it("TS trading key (offset 0) matches Rust", () => {
     if (!helperAvailable) return;
     const s = fixedSeed();
-    const tsHex = Buffer.from(deriveTradingKeyAtOffset(s, 0n).secretKey).toString("hex");
-    const rustHex = runRustHelper("trading", [Buffer.from(s).toString("hex"), "0"])!;
+    const tsHex = Buffer.from(
+      deriveTradingKeyAtOffset(s, 0n).secretKey,
+    ).toString("hex");
+    const rustHex = runRustHelper("trading", [
+      Buffer.from(s).toString("hex"),
+      "0",
+    ])!;
     // Rust returns full 32-byte signing-key bytes (seed). TS emits the seed.
     // Both should be 64 hex chars.
     expect(tsHex).toBe(rustHex);
@@ -102,8 +113,13 @@ describe("key derivation parity", () => {
   it("TS blinding factors match Rust for counter=5", () => {
     if (!helperAvailable) return;
     const s = fixedSeed();
-    const tsHex = Buffer.from(bn254ToBE32(deriveBlindingFactor(s, 5n))).toString("hex");
-    const rustHex = runRustHelper("blinding", [Buffer.from(s).toString("hex"), "5"])!;
+    const tsHex = Buffer.from(
+      bn254ToBE32(deriveBlindingFactor(s, 5n)),
+    ).toString("hex");
+    const rustHex = runRustHelper("blinding", [
+      Buffer.from(s).toString("hex"),
+      "5",
+    ])!;
     expect(tsHex).toBe(rustHex);
   });
 

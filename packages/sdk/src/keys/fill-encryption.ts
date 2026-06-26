@@ -59,14 +59,20 @@ export function encryptChangeAmount(
   amount: bigint,
   nonce12: Uint8Array,
 ): Uint8Array {
-  if (nonce12.length !== NONCE_LEN) throw new Error(`nonce must be ${NONCE_LEN} bytes`);
+  if (nonce12.length !== NONCE_LEN)
+    throw new Error(`nonce must be ${NONCE_LEN} bytes`);
   const ephPub = nacl.scalarMult.base(ephemeralSecret);
   const shared = nacl.scalarMult(ephemeralSecret, recipientPub);
   const key = deriveAeadKey(shared, ephPub, recipientPub);
 
-  const cipher = crypto.createCipheriv("chacha20-poly1305", Buffer.from(key), Buffer.from(nonce12), {
-    authTagLength: TAG_LEN,
-  });
+  const cipher = crypto.createCipheriv(
+    "chacha20-poly1305",
+    Buffer.from(key),
+    Buffer.from(nonce12),
+    {
+      authTagLength: TAG_LEN,
+    },
+  );
   const amt = Buffer.alloc(AMOUNT_LEN);
   amt.writeBigUInt64LE(amount);
   const ct = Buffer.concat([cipher.update(amt), cipher.final()]);
@@ -107,7 +113,10 @@ export function decryptChangeAmount(
       { authTagLength: TAG_LEN },
     );
     decipher.setAuthTag(Buffer.from(tag));
-    const pt = Buffer.concat([decipher.update(Buffer.from(ct)), decipher.final()]);
+    const pt = Buffer.concat([
+      decipher.update(Buffer.from(ct)),
+      decipher.final(),
+    ]);
     if (pt.length !== AMOUNT_LEN) return null;
     return pt.readBigUInt64LE(0);
   } catch {

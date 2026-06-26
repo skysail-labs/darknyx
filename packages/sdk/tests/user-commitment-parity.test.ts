@@ -29,7 +29,14 @@ function rustHelper(
   if (!existsSync(helper)) throw new Error("user-commitment helper missing");
   const res = spawnSync(
     helper,
-    [rootHex, skDec.toString(), vkDec.toString(), r0.toString(), r1.toString(), r2.toString()],
+    [
+      rootHex,
+      skDec.toString(),
+      vkDec.toString(),
+      r0.toString(),
+      r1.toString(),
+      r2.toString(),
+    ],
     { encoding: "utf8" },
   );
   if (res.status !== 0) throw new Error(res.stderr || "helper failed");

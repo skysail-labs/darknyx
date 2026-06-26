@@ -45,9 +45,14 @@ import {
   serializePayload,
   type MatchResultPayload,
 } from "../src/settlement/settle-builder.js";
-import { batchValidityMarkerPda, noteLockPda } from "../src/idl/vault-client.js";
+import {
+  batchValidityMarkerPda,
+  noteLockPda,
+} from "../src/idl/vault-client.js";
 
-const PROGRAM_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
+const PROGRAM_ID = new PublicKey(
+  "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+);
 
 function filled(len: number, v: number): Uint8Array {
   const b = new Uint8Array(len);
@@ -58,26 +63,31 @@ function filled(len: number, v: number): Uint8Array {
 function exactFillFixture(): MatchResultPayload {
   return exactFillPayload({
     matchId: filled(16, 0x11),
-    noteAcommitment: filled(32, 0xA1),
-    noteBcommitment: filled(32, 0xB1),
-    noteCcommitment: filled(32, 0xC1),
-    noteDcommitment: filled(32, 0xD1),
-    nullifierA: filled(32, 0xEA),
-    nullifierB: filled(32, 0xEB),
+    noteAcommitment: filled(32, 0xa1),
+    noteBcommitment: filled(32, 0xb1),
+    noteCcommitment: filled(32, 0xc1),
+    noteDcommitment: filled(32, 0xd1),
+    nullifierA: filled(32, 0xea),
+    nullifierB: filled(32, 0xeb),
     orderIdA: filled(16, 0x01),
     orderIdB: filled(16, 0x02),
   });
 }
 
 function fourSiblings(): [Uint8Array, Uint8Array, Uint8Array, Uint8Array] {
-  return [filled(32, 0x21), filled(32, 0x22), filled(32, 0x23), filled(32, 0x24)];
+  return [
+    filled(32, 0x21),
+    filled(32, 0x22),
+    filled(32, 0x23),
+    filled(32, 0x24),
+  ];
 }
 
 describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   it("[settle_batched_accounts_layout] account ordering matches TeeForcedSettleBatched", () => {
     const tee = Keypair.generate();
     const payload = exactFillFixture();
-    const merkleRoot = filled(32, 0xF0);
+    const merkleRoot = filled(32, 0xf0);
     const ix = buildSettleBatchedIx({
       programId: PROGRAM_ID,
       treeId: 0,
@@ -124,7 +134,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       payload: exactFillFixture(),
       matchIndex: 0,
       merkleProof: fourSiblings(),
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     });
     const expectedDisc = new Uint8Array(
       createHash("sha256").update("global:tee_forced_settle_batched").digest(),
@@ -142,7 +152,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       payload,
       matchIndex: 0,
       merkleProof: fourSiblings(),
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     });
     // 552-byte v8 Borsh payload — v7's 424 + the 128-byte fill_recovery bundle
     // (change-amount recovery, Proposal B), see `serializePayload`.
@@ -163,7 +173,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       payload: exactFillFixture(),
       matchIndex: 0,
       merkleProof: siblings,
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     });
     const buf = new Uint8Array(ix.data);
     // Siblings start right after disc + payload + 1-byte match_index.
@@ -188,7 +198,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       merkleProof: fourSiblings(),
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     };
     const ix0 = buildSettleBatchedIx({ ...args, matchIndex: 0 });
     const ix7 = buildSettleBatchedIx({ ...args, matchIndex: 7 });
@@ -204,7 +214,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(dropMatchByte(ix0.data)).toEqual(dropMatchByte(ix15.data));
   });
 
-  it("[settle_batched_marker_pda_derivation] account 12 = PDA([b\"batch_validity\", merkleRoot])", () => {
+  it('[settle_batched_marker_pda_derivation] account 12 = PDA([b"batch_validity", merkleRoot])', () => {
     const tee = Keypair.generate();
     const merkleRoot = filled(32, 0x77);
     const ix = buildSettleBatchedIx({
@@ -229,7 +239,9 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0x88),
     });
-    expect(ix2.keys[12].pubkey.toBase58()).not.toBe(ix.keys[12].pubkey.toBase58());
+    expect(ix2.keys[12].pubkey.toBase58()).not.toBe(
+      ix.keys[12].pubkey.toBase58(),
+    );
   });
 
   it("[settle_batched_lock_e_f_pdas] note_lock_e / note_lock_f derive from payload commitments", () => {
@@ -247,7 +259,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       payload: exact,
       matchIndex: 0,
       merkleProof: fourSiblings(),
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     });
     const [zeroLock] = noteLockPda(PROGRAM_ID, ZERO_COMMITMENT);
     expect(ixExact.keys[9].pubkey.toBase58()).toBe(zeroLock.toBase58());
@@ -256,7 +268,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     // Change-note variant: noteE non-zero → lock_e diverges from lock_f.
     const withChange: MatchResultPayload = {
       ...exact,
-      noteEcommitment: filled(32, 0xE2),
+      noteEcommitment: filled(32, 0xe2),
     };
     const ixChange = buildSettleBatchedIx({
       programId: PROGRAM_ID,
@@ -265,7 +277,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       payload: withChange,
       matchIndex: 0,
       merkleProof: fourSiblings(),
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     });
     const [lockE] = noteLockPda(PROGRAM_ID, withChange.noteEcommitment);
     expect(ixChange.keys[9].pubkey.toBase58()).toBe(lockE.toBase58());
@@ -282,7 +294,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       merkleProof: fourSiblings(),
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     };
     expect(() => buildSettleBatchedIx({ ...base, matchIndex: -1 })).toThrow(
       /matchIndex/,
@@ -291,8 +303,12 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       /matchIndex/,
     );
     // Boundary OKs.
-    expect(() => buildSettleBatchedIx({ ...base, matchIndex: 0 })).not.toThrow();
-    expect(() => buildSettleBatchedIx({ ...base, matchIndex: 15 })).not.toThrow();
+    expect(() =>
+      buildSettleBatchedIx({ ...base, matchIndex: 0 }),
+    ).not.toThrow();
+    expect(() =>
+      buildSettleBatchedIx({ ...base, matchIndex: 15 }),
+    ).not.toThrow();
   });
 
   it("[settle_batched_tree_id_validation] rejects negative, non-integer, or out-of-byte treeId", () => {
@@ -303,11 +319,17 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       payload: exactFillFixture(),
       matchIndex: 0,
       merkleProof: fourSiblings(),
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     };
-    expect(() => buildSettleBatchedIx({ ...base, treeId: -1 })).toThrow(/treeId/);
-    expect(() => buildSettleBatchedIx({ ...base, treeId: 1.5 })).toThrow(/treeId/);
-    expect(() => buildSettleBatchedIx({ ...base, treeId: 256 })).toThrow(/treeId/);
+    expect(() => buildSettleBatchedIx({ ...base, treeId: -1 })).toThrow(
+      /treeId/,
+    );
+    expect(() => buildSettleBatchedIx({ ...base, treeId: 1.5 })).toThrow(
+      /treeId/,
+    );
+    expect(() => buildSettleBatchedIx({ ...base, treeId: 256 })).toThrow(
+      /treeId/,
+    );
     // Boundary OKs.
     expect(() => buildSettleBatchedIx({ ...base, treeId: 0 })).not.toThrow();
     expect(() => buildSettleBatchedIx({ ...base, treeId: 255 })).not.toThrow();
@@ -321,7 +343,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       teeAuthority: tee.publicKey,
       payload: exactFillFixture(),
       matchIndex: 0,
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     };
     // 3 siblings instead of 4. Cast away the tuple type to feed a bad
     // value through the runtime check the helper enforces for matchers
@@ -362,10 +384,10 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
     };
     expect(() =>
-      buildSettleBatchedIx({ ...base, merkleRoot: filled(31, 0xF0) }),
+      buildSettleBatchedIx({ ...base, merkleRoot: filled(31, 0xf0) }),
     ).toThrow(/merkleRoot.*32 bytes/);
     expect(() =>
-      buildSettleBatchedIx({ ...base, merkleRoot: filled(33, 0xF0) }),
+      buildSettleBatchedIx({ ...base, merkleRoot: filled(33, 0xf0) }),
     ).toThrow(/merkleRoot.*32 bytes/);
   });
 
@@ -400,7 +422,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
 
   it("[close_marker_discriminator_and_data_size] disc + 32-byte merkle_root arg", () => {
     const tee = Keypair.generate();
-    const merkleRoot = filled(32, 0xAB);
+    const merkleRoot = filled(32, 0xab);
     const ix = buildCloseBatchValidityMarkerIx({
       programId: PROGRAM_ID,
       authority: tee.publicKey,
@@ -426,10 +448,16 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       payer: tee.publicKey,
     };
     expect(() =>
-      buildCloseBatchValidityMarkerIx({ ...base, merkleRoot: filled(31, 0xAB) }),
+      buildCloseBatchValidityMarkerIx({
+        ...base,
+        merkleRoot: filled(31, 0xab),
+      }),
     ).toThrow(/merkleRoot.*32 bytes/);
     expect(() =>
-      buildCloseBatchValidityMarkerIx({ ...base, merkleRoot: filled(33, 0xAB) }),
+      buildCloseBatchValidityMarkerIx({
+        ...base,
+        merkleRoot: filled(33, 0xab),
+      }),
     ).toThrow(/merkleRoot.*32 bytes/);
   });
 
@@ -464,8 +492,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const base = exactFillFixture();
     const relock: MatchResultPayload = {
       ...base,
-      noteEcommitment: filled(32, 0xE2),
-      buyerRelockOrderId: filled(16, 0xAB),
+      noteEcommitment: filled(32, 0xe2),
+      buyerRelockOrderId: filled(16, 0xab),
       buyerRelockExpiry: 1_234_567n,
     };
     expect(relock.buyerRelockOrderId).not.toEqual(RELOCK_ORDER_ID_NONE);
@@ -477,7 +505,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       payload: relock,
       matchIndex: 0,
       merkleProof: fourSiblings(),
-      merkleRoot: filled(32, 0xF0),
+      merkleRoot: filled(32, 0xf0),
     });
     const payloadBytes = new Uint8Array(ix.data).slice(9, 9 + 552);
     expect(payloadBytes).toEqual(serializePayload(relock));

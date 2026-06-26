@@ -107,7 +107,10 @@ export function WalletIdentityPanel() {
           quoteDecimals?: number;
         };
         if (cancelled || !res.ok || !j.ok) return;
-        if (typeof j.baseDecimals === "number" && typeof j.quoteDecimals === "number") {
+        if (
+          typeof j.baseDecimals === "number" &&
+          typeof j.quoteDecimals === "number"
+        ) {
           setMintDecimals({ base: j.baseDecimals, quote: j.quoteDecimals });
         }
       } catch {
@@ -123,7 +126,9 @@ export function WalletIdentityPanel() {
 
   const run = async () => {
     if (!wallet.publicKey || !wallet.signMessage) {
-      setError("Connected wallet does not support signMessage. Try Phantom on devnet.");
+      setError(
+        "Connected wallet does not support signMessage. Try Phantom on devnet.",
+      );
       setPhase("error");
       return;
     }
@@ -149,7 +154,9 @@ export function WalletIdentityPanel() {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(`derive-identity HTTP ${res.status}: ${text.slice(0, 200)}`);
+        throw new Error(
+          `derive-identity HTTP ${res.status}: ${text.slice(0, 200)}`,
+        );
       }
       const derived = (await res.json()) as DeriveResponse;
       if (!derived.ok) {
@@ -282,7 +289,9 @@ export function WalletIdentityPanel() {
     <section className="rounded-2xl border border-white/[0.08] bg-nyx-graphite p-6 shadow-sm shadow-black/20">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-nyx-chalk">Derive your darkpool identity</h2>
+          <h2 className="text-lg font-semibold text-nyx-chalk">
+            Derive your darkpool identity
+          </h2>
           <p className="mt-1 max-w-xl text-xs text-nyx-fog">
             Phantom signs a fixed message (
             <code className="rounded bg-white/[0.06] px-1 font-mono text-[11px] text-nyx-chalk">
@@ -335,7 +344,9 @@ export function WalletIdentityPanel() {
         </div>
       ) : null}
 
-      {identity ? <IdentityCard identity={identity} mintDecimals={mintDecimals} /> : null}
+      {identity ? (
+        <IdentityCard identity={identity} mintDecimals={mintDecimals} />
+      ) : null}
     </section>
   );
 }
@@ -359,7 +370,13 @@ function phaseLabel(phase: Phase): string {
   }
 }
 
-const PHASE_ORDER: Phase[] = ["signing", "deriving", "proving", "airdropping", "ready"];
+const PHASE_ORDER: Phase[] = [
+  "signing",
+  "deriving",
+  "proving",
+  "airdropping",
+  "ready",
+];
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
   signing: "Phantom signMessage",
@@ -423,8 +440,11 @@ function AirdropBanner({
       <div className="rounded-md border border-nyx-signal-green/35 bg-nyx-signal-green/10 px-3 py-2 text-xs text-nyx-signal-green">
         <span className="font-semibold">Demo airdrop confirmed.</span>{" "}
         <span className="text-[11px]">
-          BASE +{formatAirdropAtoms(identity.airdrop.baseAmount, mintDecimals.base)} · QUOTE +
-          {formatAirdropAtoms(identity.airdrop.quoteAmount, mintDecimals.quote)} ·{" "}
+          BASE +
+          {formatAirdropAtoms(identity.airdrop.baseAmount, mintDecimals.base)} ·
+          QUOTE +
+          {formatAirdropAtoms(identity.airdrop.quoteAmount, mintDecimals.quote)}{" "}
+          ·{" "}
           <a
             className="underline hover:text-nyx-chalk"
             target="_blank"
@@ -488,10 +508,13 @@ function IdentityCard({
   return (
     <div className="mt-5 space-y-4">
       <div className="rounded-md border border-nyx-signal-green/35 bg-nyx-signal-green/10 px-3 py-2 text-xs text-nyx-signal-green">
-        <span className="font-semibold">✓ Identity derived & wallet-create proof verified</span>
+        <span className="font-semibold">
+          ✓ Identity derived & wallet-create proof verified
+        </span>
         <div className="mt-0.5 text-[11px]">
           proof bytes: pi_a {identity.proof.piAHex.length / 2}B · pi_b{" "}
-          {identity.proof.piBHex.length / 2}B · pi_c {identity.proof.piCHex.length / 2}B ·{" "}
+          {identity.proof.piBHex.length / 2}B · pi_c{" "}
+          {identity.proof.piCHex.length / 2}B ·{" "}
           {identity.proof.publicInputCount} public input · generated in{" "}
           {identity.proof.durationMs}ms
         </div>
@@ -507,9 +530,13 @@ function IdentityCard({
               {label}
             </span>
             <span>
-              <span className="break-all font-mono text-[11px] text-nyx-chalk">{value}</span>
+              <span className="break-all font-mono text-[11px] text-nyx-chalk">
+                {value}
+              </span>
               {hint ? (
-                <span className="ml-2 italic text-[10px] text-nyx-slate">{hint}</span>
+                <span className="ml-2 italic text-[10px] text-nyx-slate">
+                  {hint}
+                </span>
               ) : null}
             </span>
           </div>
@@ -522,13 +549,16 @@ function IdentityCard({
         </summary>
         <div className="mt-2 space-y-2 break-all font-mono text-[11px] text-nyx-fog">
           <div>
-            <span className="text-nyx-slate">pi_a:</span> 0x{identity.proof.piAHex}
+            <span className="text-nyx-slate">pi_a:</span> 0x
+            {identity.proof.piAHex}
           </div>
           <div>
-            <span className="text-nyx-slate">pi_b:</span> 0x{identity.proof.piBHex}
+            <span className="text-nyx-slate">pi_b:</span> 0x
+            {identity.proof.piBHex}
           </div>
           <div>
-            <span className="text-nyx-slate">pi_c:</span> 0x{identity.proof.piCHex}
+            <span className="text-nyx-slate">pi_c:</span> 0x
+            {identity.proof.piCHex}
           </div>
         </div>
       </details>

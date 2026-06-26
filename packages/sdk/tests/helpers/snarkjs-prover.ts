@@ -61,7 +61,11 @@ export function snarkjsFullProve(
   opts: SnarkjsFullProveOpts,
 ): SnarkjsProofResult {
   const tmp =
-    opts.tmpDir ?? join(tmpdir(), `nyx-snarkjs-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    opts.tmpDir ??
+    join(
+      tmpdir(),
+      `nyx-snarkjs-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
   mkdirSync(tmp, { recursive: true });
   const inputPath = join(tmp, "input.json");
   const proofPath = join(tmp, "proof.json");

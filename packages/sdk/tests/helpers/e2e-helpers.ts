@@ -73,7 +73,8 @@ export function bigIntToBe32(x: bigint): Uint8Array {
   if (hex.length > 64) throw new Error("overflows 32B");
   hex = hex.padStart(64, "0");
   const out = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  for (let i = 0; i < 32; i++)
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   return out;
 }
 
@@ -191,7 +192,8 @@ export class StepTimer {
 // timestamped line), and needs zero changes to the in-enclave binary.
 
 const VAULT_PROGRAM_ID = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
-const ADDRESS_LOOKUP_TABLE_PROGRAM = "AddressLookupTab1e1111111111111111111111111";
+const ADDRESS_LOOKUP_TABLE_PROGRAM =
+  "AddressLookupTab1e1111111111111111111111111";
 
 // disc(name)[..8] hex → human stage label, for the vault settle ixs.
 const SETTLE_DISC: Record<string, string> = (() => {
@@ -228,7 +230,9 @@ export async function fetchSettleTimeline(
   const vault = opts.vaultProgramId ?? VAULT_PROGRAM_ID;
   let sigs;
   try {
-    sigs = await conn.getSignaturesForAddress(teeSigner, { limit: opts.limit ?? 30 });
+    sigs = await conn.getSignaturesForAddress(teeSigner, {
+      limit: opts.limit ?? 30,
+    });
   } catch {
     return [];
   }
@@ -289,7 +293,10 @@ export function reportSettleTimeline(title: string, rows: SettleTxRow[]): void {
     `  ${"─".repeat(w + 34)}`,
     ...rows.map((r) => {
       const dSlot = r.slot - t0Slot;
-      const dMs = r.blockTimeMs != null ? `${((r.blockTimeMs - t0Ms) / 1000).toFixed(0)}s` : "—";
+      const dMs =
+        r.blockTimeMs != null
+          ? `${((r.blockTimeMs - t0Ms) / 1000).toFixed(0)}s`
+          : "—";
       return `  ${r.stage.padEnd(w)} ${`${r.slot}`.padStart(10)} ${`+${dSlot}`.padStart(7)} ${dMs.padStart(12)}`;
     }),
     `  ${"─".repeat(w + 34)}`,

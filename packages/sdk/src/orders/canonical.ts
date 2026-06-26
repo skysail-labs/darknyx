@@ -17,9 +17,15 @@
 
 import { createHash } from "node:crypto";
 
-export const ORDER_DOMAIN: Uint8Array = new TextEncoder().encode("nyx-order-v2");
-export const CANCEL_DOMAIN: Uint8Array = new TextEncoder().encode("nyx-cancel-v1");
-export const ANCHOR_TOPUP_DOMAIN: Uint8Array = new TextEncoder().encode("nyx-anchor-topup-v1");
+export const ORDER_DOMAIN: Uint8Array = new TextEncoder().encode(
+  "nyx-order-v2",
+);
+export const CANCEL_DOMAIN: Uint8Array = new TextEncoder().encode(
+  "nyx-cancel-v1",
+);
+export const ANCHOR_TOPUP_DOMAIN: Uint8Array = new TextEncoder().encode(
+  "nyx-anchor-topup-v1",
+);
 export const SYMBOL_MAX_LEN = 32;
 
 /** Fixed number of continuation anchors a client supplies per order.
@@ -40,8 +46,10 @@ export interface Anchor {
 export function anchorPoolHash(anchors: Anchor[]): Uint8Array {
   const h = createHash("sha256");
   for (const a of anchors) {
-    if (a.innerHash.length !== 32) throw new CanonicalError("anchor.innerHash must be 32 bytes");
-    if (a.nullifier.length !== 32) throw new CanonicalError("anchor.nullifier must be 32 bytes");
+    if (a.innerHash.length !== 32)
+      throw new CanonicalError("anchor.innerHash must be 32 bytes");
+    if (a.nullifier.length !== 32)
+      throw new CanonicalError("anchor.nullifier must be 32 bytes");
     h.update(Buffer.from(a.innerHash));
     h.update(Buffer.from(a.nullifier));
   }
@@ -156,7 +164,9 @@ export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
     );
   }
   if (o.orderId.length !== 16) {
-    throw new CanonicalError(`orderId must be 16 bytes; got ${o.orderId.length}`);
+    throw new CanonicalError(
+      `orderId must be 16 bytes; got ${o.orderId.length}`,
+    );
   }
   if (o.noteCommitment.length !== 32) {
     throw new CanonicalError(
@@ -194,7 +204,9 @@ export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
 
 /** SHA-256 over `orderCanonicalBytes` — the message the trading-key signature is over. */
 export function orderCanonicalDigest(o: OrderCanonical): Uint8Array {
-  return new Uint8Array(createHash("sha256").update(orderCanonicalBytes(o)).digest());
+  return new Uint8Array(
+    createHash("sha256").update(orderCanonicalBytes(o)).digest(),
+  );
 }
 
 /**
@@ -209,16 +221,22 @@ export function orderCanonicalDigest(o: OrderCanonical): Uint8Array {
  */
 export function cancelCanonicalBytes(c: CancelCanonical): Uint8Array {
   if (c.orderId.length !== 16) {
-    throw new CanonicalError(`orderId must be 16 bytes; got ${c.orderId.length}`);
+    throw new CanonicalError(
+      `orderId must be 16 bytes; got ${c.orderId.length}`,
+    );
   }
   if (c.tradingKey.length !== 32) {
-    throw new CanonicalError(`tradingKey must be 32 bytes; got ${c.tradingKey.length}`);
+    throw new CanonicalError(
+      `tradingKey must be 32 bytes; got ${c.tradingKey.length}`,
+    );
   }
   return concat([CANCEL_DOMAIN, c.orderId, c.tradingKey, u64LE(c.cancelNonce)]);
 }
 
 export function cancelCanonicalDigest(c: CancelCanonical): Uint8Array {
-  return new Uint8Array(createHash("sha256").update(cancelCanonicalBytes(c)).digest());
+  return new Uint8Array(
+    createHash("sha256").update(cancelCanonicalBytes(c)).digest(),
+  );
 }
 
 export interface AnchorTopUpCanonical {
@@ -243,14 +261,27 @@ export interface AnchorTopUpCanonical {
  */
 export function anchorTopUpCanonicalBytes(t: AnchorTopUpCanonical): Uint8Array {
   if (t.orderId.length !== 16) {
-    throw new CanonicalError(`orderId must be 16 bytes; got ${t.orderId.length}`);
+    throw new CanonicalError(
+      `orderId must be 16 bytes; got ${t.orderId.length}`,
+    );
   }
   if (t.anchorPoolHash.length !== 32) {
-    throw new CanonicalError(`anchorPoolHash must be 32 bytes; got ${t.anchorPoolHash.length}`);
+    throw new CanonicalError(
+      `anchorPoolHash must be 32 bytes; got ${t.anchorPoolHash.length}`,
+    );
   }
-  return concat([ANCHOR_TOPUP_DOMAIN, t.orderId, t.anchorPoolHash, u64LE(t.topupNonce)]);
+  return concat([
+    ANCHOR_TOPUP_DOMAIN,
+    t.orderId,
+    t.anchorPoolHash,
+    u64LE(t.topupNonce),
+  ]);
 }
 
-export function anchorTopUpCanonicalDigest(t: AnchorTopUpCanonical): Uint8Array {
-  return new Uint8Array(createHash("sha256").update(anchorTopUpCanonicalBytes(t)).digest());
+export function anchorTopUpCanonicalDigest(
+  t: AnchorTopUpCanonical,
+): Uint8Array {
+  return new Uint8Array(
+    createHash("sha256").update(anchorTopUpCanonicalBytes(t)).digest(),
+  );
 }

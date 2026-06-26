@@ -53,7 +53,8 @@ export class MerkleShadow {
       const next: Uint8Array[] = [];
       for (let i = 0; i < level.length; i += 2) {
         const l = level[i];
-        const r = i + 1 < level.length ? level[i + 1] : this.zeroSubtreeRoots[d];
+        const r =
+          i + 1 < level.length ? level[i + 1] : this.zeroSubtreeRoots[d];
         next.push(await this.poseidon2(l, r));
       }
       if (next.length === 0) {
@@ -68,7 +69,9 @@ export class MerkleShadow {
 
   async witness(targetIndex: number): Promise<MerkleWitness> {
     if (targetIndex < 0 || targetIndex >= this.leaves.length) {
-      throw new Error(`leaf ${targetIndex} out of range (have ${this.leaves.length})`);
+      throw new Error(
+        `leaf ${targetIndex} out of range (have ${this.leaves.length})`,
+      );
     }
     const siblings: Uint8Array[] = new Array(TREE_DEPTH);
     const indices: number[] = new Array(TREE_DEPTH);

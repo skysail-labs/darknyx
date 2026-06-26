@@ -21,7 +21,10 @@ export function verifyPhantomSeedSignature(
     throw new Error("Phantom signature does not verify against owner pubkey");
   }
   const seed = new Uint8Array(
-    createHash("sha512").update(Buffer.from(signature)).digest().subarray(0, MASTER_SEED_BYTES),
+    createHash("sha512")
+      .update(Buffer.from(signature))
+      .digest()
+      .subarray(0, MASTER_SEED_BYTES),
   );
   return { ownerPubkey, signature, seed };
 }

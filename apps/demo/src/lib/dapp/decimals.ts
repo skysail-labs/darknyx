@@ -13,7 +13,10 @@
  *    for very large balances.
  */
 
-export function toAtoms(human: string | number | bigint, decimals: number): bigint {
+export function toAtoms(
+  human: string | number | bigint,
+  decimals: number,
+): bigint {
   if (typeof human === "bigint") return human; // already atoms
   const raw = typeof human === "number" ? human.toString() : human.trim();
   if (!raw) return 0n;
@@ -32,7 +35,10 @@ export function toAtoms(human: string | number | bigint, decimals: number): bigi
   return sign * BigInt(intPart + padded);
 }
 
-export function fromAtoms(atoms: bigint | string | number, decimals: number): string {
+export function fromAtoms(
+  atoms: bigint | string | number,
+  decimals: number,
+): string {
   const v =
     typeof atoms === "bigint"
       ? atoms
@@ -54,7 +60,10 @@ export function fromAtoms(atoms: bigint | string | number, decimals: number): st
  * (e.g. "1,234.56"). Falls back to `fromAtoms` formatting if `Intl` is
  * unavailable for any reason.
  */
-export function formatAtoms(atoms: bigint | string | number, decimals: number): string {
+export function formatAtoms(
+  atoms: bigint | string | number,
+  decimals: number,
+): string {
   const raw = fromAtoms(atoms, decimals);
   const [intPart, fracPart] = raw.split(".");
   try {

@@ -31,7 +31,12 @@ export interface WalletNoteView {
 export type CollateralSelection =
   | { ok: true; note: StoredNote }
   /** No single note covers it, but the spendable set does → merge then order. */
-  | { ok: false; reason: "merge-needed"; candidates: StoredNote[]; total: bigint }
+  | {
+      ok: false;
+      reason: "merge-needed";
+      candidates: StoredNote[];
+      total: bigint;
+    }
   /** Even the full spendable set is below `required`. */
   | { ok: false; reason: "insufficient-funds"; total: bigint };
 
@@ -42,7 +47,8 @@ export interface WalletDeps {
 }
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
-const ascending = (a: StoredNote, b: StoredNote) => (a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0);
+const ascending = (a: StoredNote, b: StoredNote) =>
+  a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0;
 
 /** Max input notes a single merge can consume (the largest VALID_MERGE circuit). */
 export const MAX_MERGE_NOTES = 4;
@@ -99,10 +105,15 @@ export class Wallet {
    * does, return `merge-needed` (the deferred note-merge primitive is the
    * integration seam); when even the set is short, `insufficient-funds`.
    */
-  async selectCollateral(required: bigint, mint: Uint8Array): Promise<CollateralSelection> {
+  async selectCollateral(
+    required: bigint,
+    mint: Uint8Array,
+  ): Promise<CollateralSelection> {
     const spendable = await this.spendableNotes(mint);
 
-    const fitting = spendable.filter((n) => n.amount >= required).sort(ascending);
+    const fitting = spendable
+      .filter((n) => n.amount >= required)
+      .sort(ascending);
     if (fitting.length > 0) return { ok: true, note: fitting[0] };
 
     const total = spendable.reduce((s, n) => s + n.amount, 0n);
@@ -121,10 +132,16 @@ export class Wallet {
    * `chain-needed` = the 4 largest fall short but the whole set covers it (merge
    * these 4, then re-select — `consolidate` chains); else `insufficient-funds`.
    */
-  async selectForMerge(required: bigint, mint: Uint8Array): Promise<MergeSelection> {
-    const spendable = (await this.spendableNotes(mint)).sort((a, b) => -ascending(a, b)); // largest-first
+  async selectForMerge(
+    required: bigint,
+    mint: Uint8Array,
+  ): Promise<MergeSelection> {
+    const spendable = (await this.spendableNotes(mint)).sort(
+      (a, b) => -ascending(a, b),
+    ); // largest-first
     const total = spendable.reduce((s, n) => s + n.amount, 0n);
-    if (total < required) return { ok: false, reason: "insufficient-funds", total };
+    if (total < required)
+      return { ok: false, reason: "insufficient-funds", total };
 
     const pick: StoredNote[] = [];
     let sum = 0n;
@@ -134,7 +151,12 @@ export class Wallet {
       if (sum >= required || pick.length === MAX_MERGE_NOTES) break;
     }
     if (sum >= required) return { ok: true, notes: pick };
-    return { ok: false, reason: "chain-needed", notes: spendable.slice(0, MAX_MERGE_NOTES), total };
+    return {
+      ok: false,
+      reason: "chain-needed",
+      notes: spendable.slice(0, MAX_MERGE_NOTES),
+      total,
+    };
   }
 
   /**
@@ -143,21 +165,32 @@ export class Wallet {
    * merge (and prunes inputs + stores the merged note). If a single note already
    * covers `required`, returns it without merging.
    */
-  async consolidate(required: bigint, mint: Uint8Array, mergeFn: MergeFn): Promise<StoredNote> {
+  async consolidate(
+    required: bigint,
+    mint: Uint8Array,
+    mergeFn: MergeFn,
+  ): Promise<StoredNote> {
     // Bounded: each merge reduces the note count by ≥1, so this terminates in at
     // most (initial spendable count) iterations. Derive the budget from that
     // count (floored at 64) — a fixed 64 cap would falsely abort a heavily
     // fragmented wallet that legitimately needs >64 chained merges to reach
     // `required`.
-    const maxIterations = Math.max(64, (await this.spendableNotes(mint)).length);
+    const maxIterations = Math.max(
+      64,
+      (await this.spendableNotes(mint)).length,
+    );
     for (let guard = 0; guard < maxIterations; guard++) {
       const spendable = await this.spendableNotes(mint);
-      const single = spendable.filter((n) => n.amount >= required).sort(ascending)[0];
+      const single = spendable
+        .filter((n) => n.amount >= required)
+        .sort(ascending)[0];
       if (single) return single;
 
       const sel = await this.selectForMerge(required, mint);
       if (!sel.ok && sel.reason === "insufficient-funds") {
-        throw new Error(`consolidate: insufficient funds (have ${sel.total}, need ${required})`);
+        throw new Error(
+          `consolidate: insufficient funds (have ${sel.total}, need ${required})`,
+        );
       }
       const toMerge = sel.notes;
       if (toMerge.length < 2) throw new Error("consolidate: nothing to merge");
@@ -184,10 +217,17 @@ export interface NoteStatusProvider {
 }
 
 /** Build a `Wallet` backed by a client's on-chain note-status lookup. */
-export function walletFromClient(provider: NoteStatusProvider, store: NoteStore): Wallet {
+export function walletFromClient(
+  provider: NoteStatusProvider,
+  store: NoteStore,
+): Wallet {
   return new Wallet({
     store,
     noteStatus: async (commitmentHex) =>
-      (await provider.getNoteStatus(Uint8Array.from(Buffer.from(commitmentHex, "hex")))).status,
+      (
+        await provider.getNoteStatus(
+          Uint8Array.from(Buffer.from(commitmentHex, "hex")),
+        )
+      ).status,
   });
 }

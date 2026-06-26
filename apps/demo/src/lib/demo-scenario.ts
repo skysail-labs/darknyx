@@ -48,28 +48,32 @@ export const DEMO_ONCHAIN_SCENARIO: DemoOnChainScenario = {
       id: "deposit",
       label: "Deposit collateral",
       layer: "L1",
-      description: "Vault deposit transaction that funds the notes used in the demo.",
+      description:
+        "Vault deposit transaction that funds the notes used in the demo.",
       signature: process.env.NEXT_PUBLIC_DEMO_DEPOSIT_TX_SIG,
     },
     {
       id: "delegate",
       label: "Delegate pending-order slots",
       layer: "L1",
-      description: "L1 setup for pending-order slot delegation into the ER validator.",
+      description:
+        "L1 setup for pending-order slot delegation into the ER validator.",
       signature: process.env.NEXT_PUBLIC_DEMO_DELEGATE_TX_SIG,
     },
     {
       id: "settle",
       label: "Lock + tee_forced_settle",
       layer: "L1",
-      description: "Atomic settle path that consumes locked notes and emits settlement evidence.",
+      description:
+        "Atomic settle path that consumes locked notes and emits settlement evidence.",
       signature: process.env.NEXT_PUBLIC_DEMO_SETTLE_TX_SIG,
     },
     {
       id: "withdraw",
       label: "Withdraw valid spend",
       layer: "L1",
-      description: "Successful withdraw proving ownership and creating a nullifier entry.",
+      description:
+        "Successful withdraw proving ownership and creating a nullifier entry.",
       signature: process.env.NEXT_PUBLIC_DEMO_WITHDRAW_TX_SIG,
     },
   ],
@@ -89,7 +93,8 @@ export const DEMO_ONCHAIN_SCENARIO: DemoOnChainScenario = {
     feeLeaf: "48212",
     buyerRelockActive: false,
     sellerRelockActive: false,
-    newMerkleRootHex: "0x8f42f7c3d7f90db80df4b03ec40f9ad1da0d0a9d8eef6c5e347f8f942621b4ad",
+    newMerkleRootHex:
+      "0x8f42f7c3d7f90db80df4b03ec40f9ad1da0d0a9d8eef6c5e347f8f942621b4ad",
   },
   withdrawReplay: {
     firstWithdrawSignature: process.env.NEXT_PUBLIC_DEMO_WITHDRAW_TX_SIG,

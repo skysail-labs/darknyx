@@ -23,7 +23,10 @@
 import { buildAnchorPool, anchorsToJson } from "./anchor-pool.js";
 import { orderCanonicalDigest, OrderSide, OrderType } from "./canonical.js";
 import type { ExecutionPolicy } from "./builders.js";
-import { bn254ToBE32, deriveViewingEncKeypair } from "../keys/key-generators.js";
+import {
+  bn254ToBE32,
+  deriveViewingEncKeypair,
+} from "../keys/key-generators.js";
 import { nullifierV2 } from "../utxo/note.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");

@@ -62,7 +62,9 @@ export function CryptoPrimitives() {
               className="rounded-md border border-white/[0.08] bg-nyx-graphite p-5"
             >
               <div className="nyx-eyebrow">{p.primitive}</div>
-              <div className="mt-3 font-mono text-[14px] text-nyx-chalk">{p.choice}</div>
+              <div className="mt-3 font-mono text-[14px] text-nyx-chalk">
+                {p.choice}
+              </div>
               <div className="mt-2 text-[12.5px] text-nyx-fog">{p.where}</div>
             </article>
           ))}

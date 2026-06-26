@@ -103,7 +103,9 @@ export class FillsDb {
   }
 
   getCursor(): { lastSignature: string | null; lastSlot: number | null } {
-    const row = this.db.prepare("SELECT last_signature, last_slot FROM cursor WHERE id = 0").get() as
+    const row = this.db
+      .prepare("SELECT last_signature, last_slot FROM cursor WHERE id = 0")
+      .get() as
       | { last_signature: string | null; last_slot: number | null }
       | undefined;
     return {

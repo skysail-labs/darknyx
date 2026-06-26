@@ -15,7 +15,9 @@ import { noteCommitmentV2, nullifierV2 as computeNullifierV2 } from "./note.js";
 import { buildWithdrawInstruction } from "../idl/vault-client.js";
 
 /** SPL Token program id (classic). */
-const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_PROGRAM_ID = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
 
 export interface WithdrawParams {
   /** Fee-payer / signer for the withdraw transaction. */
@@ -62,9 +64,11 @@ function pubkeyPairBE(pk: Uint8Array): [bigint, bigint] {
   return [lo, hi];
 }
 
-export function getWithdrawFunction(
-  { client }: { client: DarkPoolClient },
-): (params: WithdrawParams) => Promise<WithdrawReceipt> {
+export function getWithdrawFunction({
+  client,
+}: {
+  client: DarkPoolClient;
+}): (params: WithdrawParams) => Promise<WithdrawReceipt> {
   return async (params) => {
     if (params.amount <= 0n) {
       throw new DarkPoolError("parameter", "withdraw amount must be > 0");
@@ -79,7 +83,12 @@ export function getWithdrawFunction(
     // the on-chain instruction use `params.tokenMint`; a mismatch would make
     // the proof reconstruct a different note than the one being spent. Pin
     // them to a single canonical mint here.
-    if (Buffer.compare(Buffer.from(params.tokenMint), Buffer.from(params.notePlaintext.tokenMint)) !== 0) {
+    if (
+      Buffer.compare(
+        Buffer.from(params.tokenMint),
+        Buffer.from(params.notePlaintext.tokenMint),
+      ) !== 0
+    ) {
       throw new DarkPoolError(
         "parameter",
         "params.tokenMint must equal notePlaintext.tokenMint",
@@ -108,7 +117,10 @@ export function getWithdrawFunction(
     // --- Stage: note-build ---
     await params.callbacks?.pre?.("note-build");
     const commitment = await noteCommitmentV2(params.notePlaintext);
-    const nullifierBytes = await computeNullifierV2(spendingKey, params.notePlaintext.innerHash);
+    const nullifierBytes = await computeNullifierV2(
+      spendingKey,
+      params.notePlaintext.innerHash,
+    );
 
     // --- Stage: proof-generation (delegated to injected prover) ---
     await params.callbacks?.pre?.("proof-generation");
@@ -156,7 +168,9 @@ export function getWithdrawFunction(
     await params.callbacks?.pre?.("transaction-send");
     let signature;
     try {
-      signature = await client.providers.transactionForwarder.sendAndConfirm([ix]);
+      signature = await client.providers.transactionForwarder.sendAndConfirm([
+        ix,
+      ]);
     } catch (e) {
       throw new DarkPoolError("transaction-send", (e as Error).message, e);
     }

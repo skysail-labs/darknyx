@@ -26,7 +26,9 @@ import { buildDepositInstruction, merkleTreePda } from "../idl/vault-client.js";
 import { readNoteCreatedLeafIndex } from "./leaf-index.js";
 
 /** SPL Token program id (classic, not Token-2022). */
-const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_PROGRAM_ID = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
 
 export interface DepositParams {
   /** Fee-payer / signer for the deposit transaction. */
@@ -82,9 +84,11 @@ export function depositNoteFromReceipt(receipt: DepositReceipt): StoredNote {
   };
 }
 
-export function getDepositFunction(
-  { client }: { client: DarkPoolClient },
-): (params: DepositParams) => Promise<DepositReceipt> {
+export function getDepositFunction({
+  client,
+}: {
+  client: DarkPoolClient;
+}): (params: DepositParams) => Promise<DepositReceipt> {
   return async (params) => {
     if (params.amount <= 0n) {
       throw new DarkPoolError("parameter", "deposit amount must be > 0");
@@ -93,7 +97,8 @@ export function getDepositFunction(
       throw new DarkPoolError("parameter", "tokenMint must be 32 bytes");
     }
 
-    const { masterSeed, spendingKey, ownerBlinding } = await client.getResolvedKeys();
+    const { masterSeed, spendingKey, ownerBlinding } =
+      await client.getResolvedKeys();
     const treeId = params.treeId ?? 0;
 
     // --- Stage: merkle-position-fetch ---
@@ -103,7 +108,8 @@ export function getDepositFunction(
     // index — the actual index is read back from the NoteCreated event after
     // confirm, which is immune to concurrent appends.
     const [treePda] = merkleTreePda(client.programId, treeId);
-    const info = await client.providers.accountInfoProvider.getAccountInfo(treePda);
+    const info =
+      await client.providers.accountInfoProvider.getAccountInfo(treePda);
     if (!info) {
       throw new DarkPoolError(
         "merkle-position-fetch",
@@ -145,9 +151,8 @@ export function getDepositFunction(
 
     // --- Stage: transaction-send ---
     await params.callbacks?.pre?.("transaction-send");
-    const signature = await client.providers.transactionForwarder.sendAndConfirm(
-      [ix],
-    );
+    const signature =
+      await client.providers.transactionForwarder.sendAndConfirm([ix]);
     await params.callbacks?.post?.("transaction-send", signature);
 
     // Read the ACTUAL leaf index from the confirmed tx's NoteCreated event —

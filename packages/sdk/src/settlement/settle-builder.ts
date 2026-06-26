@@ -49,9 +49,9 @@ export const ZERO_COMMITMENT = new Uint8Array(32);
 
 /** Groth16 proof bytes in the flat layout the on-chain verifier expects. */
 export interface Groth16Proof {
-  piA: Uint8Array;   // 64 bytes
-  piB: Uint8Array;   // 128 bytes
-  piC: Uint8Array;   // 64 bytes
+  piA: Uint8Array; // 64 bytes
+  piB: Uint8Array; // 128 bytes
+  piC: Uint8Array; // 64 bytes
 }
 
 /** All-zero Groth16 proof. Kept as a public export for callers (tests) that
@@ -71,23 +71,23 @@ export const ZERO_PROOF: Groth16Proof = {
  *  putting them in the (public, on-chain) settle ix leaked every trade size.
  *  The canonical-hash domain bumped `v6`→`v7`. */
 export interface MatchResultPayload {
-  matchId: Uint8Array;              // [u8; 16]
-  noteAcommitment: Uint8Array;      // [u8; 32]
+  matchId: Uint8Array; // [u8; 16]
+  noteAcommitment: Uint8Array; // [u8; 32]
   noteBcommitment: Uint8Array;
   noteCcommitment: Uint8Array;
   noteDcommitment: Uint8Array;
-  noteEcommitment: Uint8Array;      // [0;32] when no buyer change
-  noteFcommitment: Uint8Array;      // [0;32] when no seller change
+  noteEcommitment: Uint8Array; // [0;32] when no buyer change
+  noteFcommitment: Uint8Array; // [0;32] when no seller change
   nullifierA: Uint8Array;
   nullifierB: Uint8Array;
-  orderIdA: Uint8Array;             // [u8; 16]
+  orderIdA: Uint8Array; // [u8; 16]
   orderIdB: Uint8Array;
   // Per-batch protocol fee notes, one per mint ([0;32] = none). Both set
   // only on the first settlement in a batch. base = seller-side (base
   // mint), quote = buyer-side (quote mint).
   noteFeeBaseCommitment: Uint8Array;
   noteFeeQuoteCommitment: Uint8Array;
-  buyerRelockOrderId: Uint8Array;   // RELOCK_ORDER_ID_NONE when no re-lock
+  buyerRelockOrderId: Uint8Array; // RELOCK_ORDER_ID_NONE when no re-lock
   buyerRelockExpiry: bigint;
   sellerRelockOrderId: Uint8Array;
   sellerRelockExpiry: bigint;
@@ -96,7 +96,7 @@ export interface MatchResultPayload {
    *  `ephemeral_pubkey(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ zero_pad(24)`.
    *  All-zero when the fill has no recoverable change. 128 (not 104) because
    *  Anchor's borsh 0.10 only serializes `[u8; N]` for `N ≤ 32`, then 64/128. */
-  fillRecovery: Uint8Array;         // [u8; 128]
+  fillRecovery: Uint8Array; // [u8; 128]
 }
 
 // ---------- Borsh serialisation ----------
@@ -210,8 +210,8 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
  * Followed by pubkey (32B) || signature (64B) || message (N).
  */
 export function buildEd25519VerifyIx(params: {
-  teePubkey: Uint8Array;   // 32
-  signature: Uint8Array;   // 64
+  teePubkey: Uint8Array; // 32
+  signature: Uint8Array; // 64
   message: Uint8Array;
 }): TransactionInstruction {
   const pk = fixed(params.teePubkey, 32);
@@ -224,8 +224,8 @@ export function buildEd25519VerifyIx(params: {
 
   const header = new Uint8Array(headerLen);
   const dv = new DataView(header.buffer);
-  header[0] = 1;       // num_signatures
-  header[1] = 0;       // padding
+  header[0] = 1; // num_signatures
+  header[1] = 0; // padding
   dv.setUint16(2, sigOff, true);
   dv.setUint16(4, 0xffff, true); // sig_ix_idx
   dv.setUint16(6, pkOff, true);
@@ -241,7 +241,6 @@ export function buildEd25519VerifyIx(params: {
     data: Buffer.from(data),
   });
 }
-
 
 // ---------------------------------------------------------------------------
 // v3.5 — tee_forced_settle_batched
@@ -296,17 +295,25 @@ export function buildSettleBatchedIx(
   if (!Number.isInteger(p.treeId) || p.treeId < 0 || p.treeId > 255) {
     // treeId is a u8 shard id (PDA seed byte + first ix-data byte). A negative
     // or non-integer value would silently mask to a bogus shard via `& 0xff`.
-    throw new Error(`buildSettleBatchedIx: treeId (${p.treeId}) must be an integer in [0,255]`);
+    throw new Error(
+      `buildSettleBatchedIx: treeId (${p.treeId}) must be an integer in [0,255]`,
+    );
   }
   if (p.matchIndex < 0 || p.matchIndex > 15) {
-    throw new Error(`buildSettleBatchedIx: matchIndex (${p.matchIndex}) out of range [0,15]`);
+    throw new Error(
+      `buildSettleBatchedIx: matchIndex (${p.matchIndex}) out of range [0,15]`,
+    );
   }
   if (p.merkleProof.length !== 4) {
-    throw new Error("buildSettleBatchedIx: merkleProof must have exactly 4 siblings");
+    throw new Error(
+      "buildSettleBatchedIx: merkleProof must have exactly 4 siblings",
+    );
   }
   for (let i = 0; i < 4; i++) {
     if (p.merkleProof[i].length !== 32) {
-      throw new Error(`buildSettleBatchedIx: merkleProof[${i}] must be 32 bytes`);
+      throw new Error(
+        `buildSettleBatchedIx: merkleProof[${i}] must be 32 bytes`,
+      );
     }
   }
   if (p.merkleRoot.length !== 32) {
@@ -352,7 +359,11 @@ export function buildSettleBatchedIx(
       { pubkey: nullB, isSigner: false, isWritable: true },
       { pubkey: lockE, isSigner: false, isWritable: true },
       { pubkey: lockF, isSigner: false, isWritable: true },
-      { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+      {
+        pubkey: SYSVAR_INSTRUCTIONS_PUBKEY,
+        isSigner: false,
+        isWritable: false,
+      },
       { pubkey: batchMarker, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
@@ -416,7 +427,6 @@ export function buildCloseBatchValidityMarkerIx(
     data: Buffer.from(data),
   });
 }
-
 
 // ---------- Convenience helpers ----------
 

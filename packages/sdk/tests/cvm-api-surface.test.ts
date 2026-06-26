@@ -90,9 +90,10 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
     ).toBeTruthy();
     const body = await json(res);
     expect(typeof body.code, "error body has a numeric code").toBe("number");
-    expect(body.code, "validation codes are in the 1000s").toBeGreaterThanOrEqual(
-      1000,
-    );
+    expect(
+      body.code,
+      "validation codes are in the 1000s",
+    ).toBeGreaterThanOrEqual(1000);
     expect(typeof body.message).toBe("string");
   });
 
@@ -129,7 +130,14 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
 
   it("auth required: POST /orders and GET /account without a bearer → 1101", async () => {
     for (const [path, init] of [
-      ["/orders", { method: "POST", body: "{}", headers: { "content-type": "application/json" } }],
+      [
+        "/orders",
+        {
+          method: "POST",
+          body: "{}",
+          headers: { "content-type": "application/json" },
+        },
+      ],
       ["/account", {}],
     ] as const) {
       const res = await gwFetch(`${GATEWAY}${path}`, init);
@@ -251,8 +259,10 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
       throttled,
       "expected at least one 429 under a place flood (rate limiter wired?)",
     ).toBeTruthy();
-    expect(throttled!.headers.get("retry-after"), "429 carries Retry-After")
-      .toBeTruthy();
+    expect(
+      throttled!.headers.get("retry-after"),
+      "429 carries Retry-After",
+    ).toBeTruthy();
     expect((await json(throttled!)).code, "429 → rate_limited code 1401").toBe(
       1401,
     );

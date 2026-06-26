@@ -14,12 +14,20 @@ interface NyxNavProps {
   active?: "home" | "architecture" | "dapp" | null;
 }
 
-const LINKS: Array<{ label: string; href: string; key: NonNullable<NyxNavProps["active"]> }> = [
+const LINKS: Array<{
+  label: string;
+  href: string;
+  key: NonNullable<NyxNavProps["active"]>;
+}> = [
   { label: "Overview", href: "/", key: "home" },
   { label: "Architecture", href: "/architecture", key: "architecture" },
 ];
 
-export function NyxNav({ tone = "ink", launchHref = "/dapp", active = null }: NyxNavProps) {
+export function NyxNav({
+  tone = "ink",
+  launchHref = "/dapp",
+  active = null,
+}: NyxNavProps) {
   const isInk = tone === "ink";
 
   const linkBase = isInk

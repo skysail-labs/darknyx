@@ -3,7 +3,10 @@
 // the indexer uses. Drop this file once @types/node ships node:sqlite types.
 declare module "node:sqlite" {
   export interface StatementSync {
-    run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
+    run(...params: unknown[]): {
+      changes: number;
+      lastInsertRowid: number | bigint;
+    };
     get(...params: unknown[]): unknown;
     all(...params: unknown[]): unknown[];
   }

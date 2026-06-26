@@ -88,7 +88,9 @@ export function SecurityAndRoadmap() {
                       <div className="text-[14px] font-medium text-nyx-chalk">
                         {item.title}
                       </div>
-                      <div className="mt-0.5 text-[12.5px] text-nyx-fog">{item.body}</div>
+                      <div className="mt-0.5 text-[12.5px] text-nyx-fog">
+                        {item.body}
+                      </div>
                     </div>
                   </div>
                 </li>
@@ -115,7 +117,9 @@ export function SecurityAndRoadmap() {
                       <div className="text-[14px] font-medium text-nyx-chalk">
                         {item.title}
                       </div>
-                      <div className="mt-0.5 text-[12.5px] text-nyx-fog">{item.body}</div>
+                      <div className="mt-0.5 text-[12.5px] text-nyx-fog">
+                        {item.body}
+                      </div>
                     </div>
                   </div>
                 </li>

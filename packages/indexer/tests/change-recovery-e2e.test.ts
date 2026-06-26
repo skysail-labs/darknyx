@@ -65,7 +65,11 @@ function matchIdBytes(mid: bigint): Uint8Array {
 /** Pack the TEE's FillCiphertext into the 128-byte fill_recovery field:
  *  eph(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ pad(24). Mirrors
  *  `FillCiphertext::to_payload_bytes` in nyx-tee. */
-function packRecovery(eph: Uint8Array, buyerEnc: Uint8Array, sellerEnc: Uint8Array): Uint8Array {
+function packRecovery(
+  eph: Uint8Array,
+  buyerEnc: Uint8Array,
+  sellerEnc: Uint8Array,
+): Uint8Array {
   const out = new Uint8Array(128);
   out.set(eph, 0);
   out.set(buyerEnc, 32);
@@ -86,10 +90,18 @@ function ixData(p: MatchResultPayload): Uint8Array {
 
 /** Simulate the TEE encrypting `amount` to a recipient, returning the 36-byte blob
  *  + the shared ephemeral pubkey (one ephemeral per fill). */
-function teeEncrypt(recipientPub: Uint8Array, amount: bigint): { ephPub: Uint8Array; blob: Uint8Array } {
+function teeEncrypt(
+  recipientPub: Uint8Array,
+  amount: bigint,
+): { ephPub: Uint8Array; blob: Uint8Array } {
   const ephSecret = crypto.randomBytes(32);
   const ephPub = nacl.scalarMult.base(ephSecret);
-  const blob = encryptChangeAmount(ephSecret, recipientPub, amount, crypto.randomBytes(12));
+  const blob = encryptChangeAmount(
+    ephSecret,
+    recipientPub,
+    amount,
+    crypto.randomBytes(12),
+  );
   return { ephPub, blob };
 }
 
@@ -101,7 +113,11 @@ const recoverParams = {
 };
 
 /** Build the settle ix for a one-sided buyer change of `amount` under `inner`. */
-async function buyerChangeIx(inner: bigint, amount: bigint, matchId: bigint): Promise<Uint8Array> {
+async function buyerChangeIx(
+  inner: bigint,
+  amount: bigint,
+  matchId: bigint,
+): Promise<Uint8Array> {
   const commitment = await noteCommitmentV2({
     tokenMint: QUOTE_MINT,
     amount,
@@ -129,7 +145,9 @@ describe("change-amount recovery — client-side e2e", () => {
   it("seed → viewing key → the recipient the TEE encrypts to (A → B.1)", () => {
     // The order's viewing_pubkey (what intake carries + the TEE encrypts to) is
     // exactly the seed-derived key the recovering client regenerates.
-    expect(hex(VIEWING.publicKey)).toBe(hex(deriveViewingEncKeypair(SEED).publicKey));
+    expect(hex(VIEWING.publicKey)).toBe(
+      hex(deriveViewingEncKeypair(SEED).publicKey),
+    );
     expect(VIEWING.publicKey.length).toBe(32);
   });
 
@@ -210,7 +228,9 @@ describe("change-amount recovery — client-side e2e", () => {
     payload.noteFcommitment = commitment;
     payload.fillRecovery = packRecovery(ephPub, new Uint8Array(36), blob); // buyer exact
 
-    const seller = decodeSettleIxData(ixData(payload))!.find((f) => f.side === "seller")!;
+    const seller = decodeSettleIxData(ixData(payload))!.find(
+      (f) => f.side === "seller",
+    )!;
     expect(seller.changeEnc).toBe(hex(blob));
     const note = await recoverChangeFromChain(seller, recoverParams);
     expect(note!.amount).toBe(333n);

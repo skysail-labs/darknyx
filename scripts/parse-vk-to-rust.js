@@ -73,7 +73,9 @@ function g2ToBytes(point) {
 function main() {
   const [, , inPath, outPath, constPrefix] = process.argv;
   if (!inPath || !outPath || !constPrefix) {
-    console.error("usage: parse-vk-to-rust.js <vk.json> <out.rs> <CONST_PREFIX>");
+    console.error(
+      "usage: parse-vk-to-rust.js <vk.json> <out.rs> <CONST_PREFIX>",
+    );
     process.exit(1);
   }
 
@@ -95,15 +97,25 @@ function main() {
   lines.push(``);
   lines.push(`#![allow(dead_code)]`);
   lines.push(``);
-  lines.push(`pub const ${constPrefix}_NR_PUBLIC_INPUTS: usize = ${vk.nPublic};`);
+  lines.push(
+    `pub const ${constPrefix}_NR_PUBLIC_INPUTS: usize = ${vk.nPublic};`,
+  );
   lines.push(``);
-  lines.push(`pub const ${constPrefix}_ALPHA_G1: [u8; 64] = ${bytesToRustArray(alpha)};`);
+  lines.push(
+    `pub const ${constPrefix}_ALPHA_G1: [u8; 64] = ${bytesToRustArray(alpha)};`,
+  );
   lines.push(``);
-  lines.push(`pub const ${constPrefix}_BETA_G2: [u8; 128] = ${bytesToRustArray(beta)};`);
+  lines.push(
+    `pub const ${constPrefix}_BETA_G2: [u8; 128] = ${bytesToRustArray(beta)};`,
+  );
   lines.push(``);
-  lines.push(`pub const ${constPrefix}_GAMMA_G2: [u8; 128] = ${bytesToRustArray(gamma)};`);
+  lines.push(
+    `pub const ${constPrefix}_GAMMA_G2: [u8; 128] = ${bytesToRustArray(gamma)};`,
+  );
   lines.push(``);
-  lines.push(`pub const ${constPrefix}_DELTA_G2: [u8; 128] = ${bytesToRustArray(delta)};`);
+  lines.push(
+    `pub const ${constPrefix}_DELTA_G2: [u8; 128] = ${bytesToRustArray(delta)};`,
+  );
   lines.push(``);
   lines.push(`pub const ${constPrefix}_IC: [[u8; 64]; ${ic.length}] = [`);
   for (const b of ic) {

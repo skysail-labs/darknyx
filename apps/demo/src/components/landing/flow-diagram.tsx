@@ -12,7 +12,11 @@ const STAGES: Stage[] = [
     cluster: "L1",
     title: "Identity & deposit",
     body: "Sign a deterministic seed in your wallet, prove VALID_WALLET_CREATE in the browser, and shield SPL tokens into the vault as a UTXO note.",
-    primitives: ["Phantom signMessage", "VALID_WALLET_CREATE", "vault::deposit"],
+    primitives: [
+      "Phantom signMessage",
+      "VALID_WALLET_CREATE",
+      "vault::deposit",
+    ],
   },
   {
     id: "2",
@@ -65,8 +69,8 @@ export function FlowDiagram() {
                       s.cluster === "L1"
                         ? "border-nyx-signal-green/40 text-nyx-signal-green"
                         : s.cluster === "ER"
-                        ? "border-nyx-accent/50 text-nyx-accent"
-                        : "border-nyx-signal-amber/45 text-nyx-signal-amber"
+                          ? "border-nyx-accent/50 text-nyx-accent"
+                          : "border-nyx-signal-amber/45 text-nyx-signal-amber"
                     }`}
                   >
                     {s.cluster}
@@ -75,7 +79,9 @@ export function FlowDiagram() {
                 <h3 className="mt-5 text-[18px] font-semibold leading-snug text-nyx-chalk">
                   {s.title}
                 </h3>
-                <p className="mt-2 text-[13px] leading-relaxed text-nyx-fog">{s.body}</p>
+                <p className="mt-2 text-[13px] leading-relaxed text-nyx-fog">
+                  {s.body}
+                </p>
                 <div className="mt-5 flex flex-wrap gap-1.5">
                   {s.primitives.map((p) => (
                     <code
@@ -103,7 +109,13 @@ export function FlowDiagram() {
             className="inline-flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.14em] text-nyx-chalk transition hover:text-nyx-accent"
           >
             Architecture deep-dive
-            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 11 11"
+              fill="none"
+              aria-hidden="true"
+            >
               <path
                 d="M2 5.5h7m0 0L5.5 2m3.5 3.5L5.5 9"
                 stroke="currentColor"

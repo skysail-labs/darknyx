@@ -12,7 +12,10 @@ export function NyxFooter({ tone = "ink" }: { tone?: "ink" | "chalk" }) {
     >
       <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 sm:px-7 md:flex-row md:items-end md:justify-between">
         <div className="flex items-center gap-3">
-          <NyxMark size={28} className={isInk ? "text-nyx-chalk" : "text-nyx-ink"} />
+          <NyxMark
+            size={28}
+            className={isInk ? "text-nyx-chalk" : "text-nyx-ink"}
+          />
           <div>
             <div
               className={

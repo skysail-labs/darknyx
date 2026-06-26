@@ -45,7 +45,9 @@ export function isDepositNote(n: StoredNote): boolean {
 /** Minimal pluggable store interface — back it with IndexedDB / a file / etc. */
 export interface NoteStore {
   put(rec: StoredNote): Promise<void> | void;
-  get(commitment: string): Promise<StoredNote | undefined> | StoredNote | undefined;
+  get(
+    commitment: string,
+  ): Promise<StoredNote | undefined> | StoredNote | undefined;
   list(): Promise<StoredNote[]> | StoredNote[];
   /** Remove a note (e.g. after it's merged/spent). Optional — implement it for
    *  correct balances after consolidation. */

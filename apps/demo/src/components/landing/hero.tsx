@@ -38,7 +38,13 @@ export function LandingHero() {
             className="group inline-flex items-center gap-2 rounded-sm bg-nyx-chalk px-5 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-nyx-ink transition hover:bg-white"
           >
             <span>Launch dapp</span>
-            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 11 11"
+              fill="none"
+              aria-hidden="true"
+            >
               <path
                 d="M2 5.5h7m0 0L5.5 2m3.5 3.5L5.5 9"
                 stroke="currentColor"

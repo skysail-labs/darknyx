@@ -16,7 +16,9 @@ function txExplorerUrl(signature: string) {
 
 export function WithdrawProofPanel({ scenario }: WithdrawProofPanelProps) {
   const [state, setState] = useState<ReplayState>("idle");
-  const hasWithdrawSignature = Boolean(scenario.withdrawReplay.firstWithdrawSignature);
+  const hasWithdrawSignature = Boolean(
+    scenario.withdrawReplay.firstWithdrawSignature,
+  );
 
   const statusText = useMemo(() => {
     if (state === "idle") return "Ready";
@@ -27,15 +29,22 @@ export function WithdrawProofPanel({ scenario }: WithdrawProofPanelProps) {
   return (
     <section className="w-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
       <div className="mb-5">
-        <h2 className="text-xl font-semibold text-zinc-900">Panel C — Withdraw Proof + Replay Guard</h2>
+        <h2 className="text-xl font-semibold text-zinc-900">
+          Panel C — Withdraw Proof + Replay Guard
+        </h2>
         <p className="mt-1 text-sm text-zinc-600">
-          Interactive demo mode using pre-recorded devnet evidence from the over-collateralised scenario.
+          Interactive demo mode using pre-recorded devnet evidence from the
+          over-collateralised scenario.
         </p>
       </div>
 
       <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-        <p className="text-sm font-semibold text-zinc-900">Status: {statusText}</p>
-        <p className="mt-1 text-xs text-zinc-600">Expected replay error code: {scenario.withdrawReplay.replayErrorCode}</p>
+        <p className="text-sm font-semibold text-zinc-900">
+          Status: {statusText}
+        </p>
+        <p className="mt-1 text-xs text-zinc-600">
+          Expected replay error code: {scenario.withdrawReplay.replayErrorCode}
+        </p>
       </div>
 
       <div className="mt-4 flex flex-wrap gap-3">
@@ -60,10 +69,15 @@ export function WithdrawProofPanel({ scenario }: WithdrawProofPanelProps) {
         <div className="mt-5 rounded-xl border border-zinc-200 p-4">
           {state === "withdraw-success" ? (
             <div>
-              <p className="text-sm font-semibold text-emerald-700">Withdraw accepted on L1</p>
-              {hasWithdrawSignature && scenario.withdrawReplay.firstWithdrawSignature ? (
+              <p className="text-sm font-semibold text-emerald-700">
+                Withdraw accepted on L1
+              </p>
+              {hasWithdrawSignature &&
+              scenario.withdrawReplay.firstWithdrawSignature ? (
                 <a
-                  href={txExplorerUrl(scenario.withdrawReplay.firstWithdrawSignature)}
+                  href={txExplorerUrl(
+                    scenario.withdrawReplay.firstWithdrawSignature,
+                  )}
                   target="_blank"
                   rel="noreferrer"
                   className="mt-2 inline-block text-sm font-medium text-indigo-700 hover:text-indigo-900"
@@ -72,14 +86,16 @@ export function WithdrawProofPanel({ scenario }: WithdrawProofPanelProps) {
                 </a>
               ) : (
                 <p className="mt-2 text-xs text-zinc-500">
-                  Set `NEXT_PUBLIC_DEMO_WITHDRAW_TX_SIG` to attach explorer evidence.
+                  Set `NEXT_PUBLIC_DEMO_WITHDRAW_TX_SIG` to attach explorer
+                  evidence.
                 </p>
               )}
             </div>
           ) : (
             <div>
               <p className="text-sm font-semibold text-rose-700">
-                {scenario.withdrawReplay.replayErrorCode} — {scenario.withdrawReplay.replayErrorMessage}
+                {scenario.withdrawReplay.replayErrorCode} —{" "}
+                {scenario.withdrawReplay.replayErrorMessage}
               </p>
               <p className="mt-2 text-xs text-zinc-600">
                 Nullifier: {scenario.withdrawReplay.nullifierHex}

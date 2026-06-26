@@ -28,7 +28,9 @@ import { createHash } from "node:crypto";
 
 /** Anchor discriminator: `sha256("global:<name>")[..8]`. Mirrors `@nyx/sdk` `anchorDiscriminator`. */
 export function anchorDiscriminator(name: string): Uint8Array {
-  return new Uint8Array(createHash("sha256").update(`global:${name}`).digest().subarray(0, 8));
+  return new Uint8Array(
+    createHash("sha256").update(`global:${name}`).digest().subarray(0, 8),
+  );
 }
 
 export const SETTLE_IX_NAME = "tee_forced_settle_batched";
@@ -74,9 +76,15 @@ const hexOrNull = (b: Uint8Array) => (isZero(b) ? null : hex(b));
 
 export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
   if (payload.length !== PAYLOAD_LEN) {
-    throw new Error(`payload must be ${PAYLOAD_LEN} bytes; got ${payload.length}`);
+    throw new Error(
+      `payload must be ${PAYLOAD_LEN} bytes; got ${payload.length}`,
+    );
   }
-  const v = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const v = new DataView(
+    payload.buffer,
+    payload.byteOffset,
+    payload.byteLength,
+  );
   const r = FILL_RECOVERY_OFFSET;
   // fill_recovery internal layout: eph[0,32) buyer_enc[32,68) seller_enc[68,104).
   const eph = payload.subarray(r, r + 32);

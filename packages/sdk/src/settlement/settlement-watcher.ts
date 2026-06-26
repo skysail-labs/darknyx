@@ -45,9 +45,9 @@ export interface MatchNotification {
   matchId: Uint8Array;
   side: "buyer" | "seller";
   isPartialFill: boolean;
-  tradeLeaf: bigint;          // buyer=noteCleaf, seller=noteDleaf
-  changeLeaf: bigint | null;  // buyer=noteEleaf, seller=noteFleaf (null if exact fill)
-  feeLeaf: bigint | null;     // protocol fee-note leaf for this side's mint (buyer=quote, seller=base), batch-level, or null
+  tradeLeaf: bigint; // buyer=noteCleaf, seller=noteDleaf
+  changeLeaf: bigint | null; // buyer=noteEleaf, seller=noteFleaf (null if exact fill)
+  feeLeaf: bigint | null; // protocol fee-note leaf for this side's mint (buyer=quote, seller=base), batch-level, or null
   /** `true` when the continuing order was re-locked against the change
    *  note — relayer must NOT resubmit; the next batch continues trading. */
   relockActive: boolean;
@@ -112,17 +112,30 @@ export function decodeTradeSettled(eventData: Uint8Array): TradeSettledEvent {
       `TradeSettled event length mismatch: got ${eventData.length}, expected ${expected}`,
     );
   }
-  const dv = new DataView(eventData.buffer, eventData.byteOffset, eventData.byteLength);
+  const dv = new DataView(
+    eventData.buffer,
+    eventData.byteOffset,
+    eventData.byteLength,
+  );
   let off = 0;
-  const matchId = eventData.slice(off, off + 16); off += 16;
-  const noteCleaf = dv.getBigUint64(off, true); off += 8;
-  const noteDleaf = dv.getBigUint64(off, true); off += 8;
-  const noteEleaf = dv.getBigUint64(off, true); off += 8;
-  const noteFleaf = dv.getBigUint64(off, true); off += 8;
-  const noteFeeBaseLeaf = dv.getBigUint64(off, true); off += 8;
-  const noteFeeQuoteLeaf = dv.getBigUint64(off, true); off += 8;
-  const buyerRelockActive = eventData[off] === 1; off += 1;
-  const sellerRelockActive = eventData[off] === 1; off += 1;
+  const matchId = eventData.slice(off, off + 16);
+  off += 16;
+  const noteCleaf = dv.getBigUint64(off, true);
+  off += 8;
+  const noteDleaf = dv.getBigUint64(off, true);
+  off += 8;
+  const noteEleaf = dv.getBigUint64(off, true);
+  off += 8;
+  const noteFleaf = dv.getBigUint64(off, true);
+  off += 8;
+  const noteFeeBaseLeaf = dv.getBigUint64(off, true);
+  off += 8;
+  const noteFeeQuoteLeaf = dv.getBigUint64(off, true);
+  off += 8;
+  const buyerRelockActive = eventData[off] === 1;
+  off += 1;
+  const sellerRelockActive = eventData[off] === 1;
+  off += 1;
   const newRoot = eventData.slice(off, off + 32);
   return {
     matchId,

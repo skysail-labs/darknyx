@@ -26,12 +26,7 @@ describe("Phase 5 — MerkleShadow parity with on-chain incremental tree", () =>
 
   it("[witness_roundtrip] replaying siblings + indices recovers the root", async () => {
     const t = await MerkleShadow.create();
-    const leaves = [
-      bytes32(0x10),
-      bytes32(0x20),
-      bytes32(0x30),
-      bytes32(0x40),
-    ];
+    const leaves = [bytes32(0x10), bytes32(0x20), bytes32(0x30), bytes32(0x40)];
     for (const l of leaves) await t.append(l);
     const root = await t.computeRoot();
 
@@ -42,9 +37,10 @@ describe("Phase 5 — MerkleShadow parity with on-chain incremental tree", () =>
       let cur = leaves[i];
       for (let d = 0; d < TREE_DEPTH; d++) {
         const s = w.siblings[d];
-        cur = w.indices[d] === 0
-          ? await poseidonHashBytesBE([bytesToBigInt(cur), bytesToBigInt(s)])
-          : await poseidonHashBytesBE([bytesToBigInt(s), bytesToBigInt(cur)]);
+        cur =
+          w.indices[d] === 0
+            ? await poseidonHashBytesBE([bytesToBigInt(cur), bytesToBigInt(s)])
+            : await poseidonHashBytesBE([bytesToBigInt(s), bytesToBigInt(cur)]);
       }
       expect(cur).toEqual(root);
     }

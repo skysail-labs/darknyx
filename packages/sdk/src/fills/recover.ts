@@ -21,9 +21,16 @@
  *      commitment is rejected (a misbehaving TEE that encrypted a wrong amount).
  */
 
-import { deriveViewingEncKeypair, deriveInnerHash } from "../keys/key-generators.js";
+import {
+  deriveViewingEncKeypair,
+  deriveInnerHash,
+} from "../keys/key-generators.js";
 import { decryptChangeAmount } from "../keys/fill-encryption.js";
-import { deriveChangeInner, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER } from "../utxo/change-note.js";
+import {
+  deriveChangeInner,
+  CHANGE_ROLE_BUYER,
+  CHANGE_ROLE_SELLER,
+} from "../utxo/change-note.js";
 import { noteCommitmentV2 } from "../utxo/note.js";
 import type { StoredNote } from "../utxo/note-store.js";
 import type { IndexerFill } from "./history.js";
@@ -52,7 +59,8 @@ function be32ToBig(b: Uint8Array): bigint {
 /** Extract the u64 `match_id` from the 16-byte payload field (low 8 bytes, LE). */
 function matchIdU64(matchIdHex: string): bigint {
   const b = fromHex(matchIdHex);
-  if (b.length !== 16) throw new Error(`matchId must be 16 bytes; got ${b.length}`);
+  if (b.length !== 16)
+    throw new Error(`matchId must be 16 bytes; got ${b.length}`);
   return new DataView(b.buffer, b.byteOffset, 16).getBigUint64(8, true);
 }
 
@@ -71,7 +79,11 @@ export async function recoverChangeFromChain(
 
   // (1) Decrypt — AEAD tag failure ⇒ not our key, or tampered.
   const { secretKey } = deriveViewingEncKeypair(params.masterSeed);
-  const amount = decryptChangeAmount(secretKey, fromHex(fill.ephemeralPubkey), fromHex(fill.changeEnc));
+  const amount = decryptChangeAmount(
+    secretKey,
+    fromHex(fill.ephemeralPubkey),
+    fromHex(fill.changeEnc),
+  );
   if (amount === null) return null;
 
   const tokenMint = fill.side === "buyer" ? params.quoteMint : params.baseMint;
@@ -99,7 +111,9 @@ export async function recoverChangeFromChain(
   });
 
   // (2a) FINAL change note: inner_hash = derive_inner(match_id, role).
-  const finalInner = be32ToBig(deriveChangeInner(matchIdU64(fill.matchId), role));
+  const finalInner = be32ToBig(
+    deriveChangeInner(matchIdU64(fill.matchId), role),
+  );
   if (await recomputes(finalInner)) return note(finalInner);
 
   // (2b) CONTINUATION note: inner_hash is one of the order's anchor inner_hashes.

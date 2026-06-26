@@ -117,10 +117,19 @@ export async function POST(req: Request) {
     }
 
     const priorRightPath = body.priorRightPathHex.map(hexToBytes);
-    const witness = await witnessFromPriorRightPath(commitment, leafIndex, priorRightPath);
+    const witness = await witnessFromPriorRightPath(
+      commitment,
+      leafIndex,
+      priorRightPath,
+    );
 
     const liveCurrentRoot = info.data.subarray(112, 112 + 32);
-    if (Buffer.compare(Buffer.from(liveCurrentRoot), Buffer.from(witness.root)) !== 0) {
+    if (
+      Buffer.compare(
+        Buffer.from(liveCurrentRoot),
+        Buffer.from(witness.root),
+      ) !== 0
+    ) {
       return NextResponse.json(
         {
           ok: false,

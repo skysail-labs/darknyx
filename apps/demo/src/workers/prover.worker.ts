@@ -42,30 +42,37 @@ export type ProverWorkerResponse =
       error: string;
     };
 
-self.addEventListener("message", async (ev: MessageEvent<ProverWorkerRequest>) => {
-  const { id, inputs, wasmUrl, zkeyUrl } = ev.data;
-  const start = performance.now();
-  try {
-    const { proof, publicSignals } = await groth16.fullProve(inputs, wasmUrl, zkeyUrl);
-    const durationMs = performance.now() - start;
-    const reply: ProverWorkerResponse = {
-      id,
-      ok: true,
-      proof: {
-        pi_a: proof.pi_a as string[],
-        pi_b: proof.pi_b as string[][],
-        pi_c: proof.pi_c as string[],
-      },
-      publicSignals: publicSignals as string[],
-      durationMs,
-    };
-    (self as DedicatedWorkerGlobalScope).postMessage(reply);
-  } catch (err) {
-    const reply: ProverWorkerResponse = {
-      id,
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
-    (self as DedicatedWorkerGlobalScope).postMessage(reply);
-  }
-});
+self.addEventListener(
+  "message",
+  async (ev: MessageEvent<ProverWorkerRequest>) => {
+    const { id, inputs, wasmUrl, zkeyUrl } = ev.data;
+    const start = performance.now();
+    try {
+      const { proof, publicSignals } = await groth16.fullProve(
+        inputs,
+        wasmUrl,
+        zkeyUrl,
+      );
+      const durationMs = performance.now() - start;
+      const reply: ProverWorkerResponse = {
+        id,
+        ok: true,
+        proof: {
+          pi_a: proof.pi_a as string[],
+          pi_b: proof.pi_b as string[][],
+          pi_c: proof.pi_c as string[],
+        },
+        publicSignals: publicSignals as string[],
+        durationMs,
+      };
+      (self as DedicatedWorkerGlobalScope).postMessage(reply);
+    } catch (err) {
+      const reply: ProverWorkerResponse = {
+        id,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+      (self as DedicatedWorkerGlobalScope).postMessage(reply);
+    }
+  },
+);

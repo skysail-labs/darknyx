@@ -52,18 +52,28 @@ export async function POST(req: Request) {
       !body.userOwnerCommitmentHex ||
       !body.orderIdHex
     ) {
-      return NextResponse.json({ ok: false, error: "missing required fields" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "missing required fields" },
+        { status: 400 },
+      );
     }
 
     const { seed } = verifyPhantomSeedSignature(
       body.phantomSignatureBase58,
       body.ownerPubkeyBase58,
     );
-    const trading = Keypair.fromSecretKey(bs58.decode(body.tradingSecretKeyBase58));
+    const trading = Keypair.fromSecretKey(
+      bs58.decode(body.tradingSecretKeyBase58),
+    );
     const expectedSeed = deriveTradingKeyAtOffset(seed, 0n).secretKey;
-    const expected = Keypair.fromSecretKey(nacl.sign.keyPair.fromSeed(expectedSeed).secretKey);
+    const expected = Keypair.fromSecretKey(
+      nacl.sign.keyPair.fromSeed(expectedSeed).secretKey,
+    );
     if (!expected.publicKey.equals(trading.publicKey)) {
-      return NextResponse.json({ ok: false, error: "trading key mismatch" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "trading key mismatch" },
+        { status: 400 },
+      );
     }
 
     const repoRoot = resolveRepoRoot();
@@ -82,7 +92,10 @@ export async function POST(req: Request) {
     const expirySlot =
       body.expirySlot != null ? BigInt(body.expirySlot) : BigInt(0);
     if (expirySlot === 0n) {
-      return NextResponse.json({ ok: false, error: "expirySlot required (use current slot + buffer)" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "expirySlot required (use current slot + buffer)" },
+        { status: 400 },
+      );
     }
 
     const { ix, pendingOrderPda } = buildSubmitOrderInstruction({

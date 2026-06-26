@@ -27,7 +27,9 @@ async function main(): Promise<void> {
   const programId = new PublicKey(cfg.programId);
 
   const { port } = await startServer(db, cfg.port);
-  console.log(`[indexer] serving on :${port} | program ${cfg.programId} | db ${cfg.dbPath}`);
+  console.log(
+    `[indexer] serving on :${port} | program ${cfg.programId} | db ${cfg.dbPath}`,
+  );
 
   const watcher = new Watcher({ connection, programId, db });
 

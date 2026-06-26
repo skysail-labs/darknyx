@@ -28,7 +28,8 @@ let cached: PoseidonFn | null = null;
 async function getPoseidon(): Promise<PoseidonFn> {
   if (cached) return cached;
   const p = await buildPoseidon();
-  const fn = ((inputs: bigint[]) => p(inputs.map((i) => p.F.e(i)))) as PoseidonFn;
+  const fn = ((inputs: bigint[]) =>
+    p(inputs.map((i) => p.F.e(i)))) as PoseidonFn;
   fn.F = p.F;
   cached = fn;
   return fn;
@@ -57,11 +58,11 @@ export interface UserCommitmentInputs {
  */
 // Domain tags — must match circuits/valid_wallet_create/circuit.circom
 // and crates/darkpool-crypto/src/user_commitment.rs exactly.
-const DOMAIN_ROOT  = 10n;
+const DOMAIN_ROOT = 10n;
 const DOMAIN_SPEND = 11n;
-const DOMAIN_VIEW  = 12n;
-const DOMAIN_LEAF  = 13n;
-const DOMAIN_TOP   = 14n;
+const DOMAIN_VIEW = 12n;
+const DOMAIN_LEAF = 13n;
+const DOMAIN_TOP = 14n;
 
 export async function userCommitmentFromKeys(
   inputs: UserCommitmentInputs,
@@ -72,10 +73,12 @@ export async function userCommitmentFromKeys(
   const [rootLo, rootHi] = pubkeyToFrPair(inputs.rootKeyPubkey);
   const p = await getPoseidon();
 
-  const rootHash  = p.F.toObject(p([DOMAIN_ROOT,  rootLo, rootHi, inputs.r0]));
-  const spendHash = p.F.toObject(p([DOMAIN_SPEND, inputs.spendingKey, inputs.r1]));
-  const viewHash  = p.F.toObject(p([DOMAIN_VIEW,  inputs.viewingKey, inputs.r2]));
-  const leafPair  = p.F.toObject(p([DOMAIN_LEAF,  rootHash, spendHash]));
-  const commitment = p.F.toObject(p([DOMAIN_TOP,  leafPair, viewHash]));
+  const rootHash = p.F.toObject(p([DOMAIN_ROOT, rootLo, rootHi, inputs.r0]));
+  const spendHash = p.F.toObject(
+    p([DOMAIN_SPEND, inputs.spendingKey, inputs.r1]),
+  );
+  const viewHash = p.F.toObject(p([DOMAIN_VIEW, inputs.viewingKey, inputs.r2]));
+  const leafPair = p.F.toObject(p([DOMAIN_LEAF, rootHash, spendHash]));
+  const commitment = p.F.toObject(p([DOMAIN_TOP, leafPair, viewHash]));
   return bn254ToBE32(commitment);
 }

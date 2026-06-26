@@ -10,7 +10,11 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import {
+  PublicKey,
+  Transaction,
+  TransactionInstruction,
+} from "@solana/web3.js";
 import type { Buffer as NodeBuffer } from "node:buffer";
 
 import { getWithdrawFunction } from "../src/utxo/withdraw.js";
@@ -23,9 +27,14 @@ import type {
 } from "../src/providers.js";
 import { DarkPoolClient } from "../src/client.js";
 import { anchorDiscriminator } from "../src/idl/vault-client.js";
-import type { IDarkPoolZkProverSuite, SpendInputs } from "../src/zk/prover-suite.js";
+import type {
+  IDarkPoolZkProverSuite,
+  SpendInputs,
+} from "../src/zk/prover-suite.js";
 
-const PROGRAM_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
+const PROGRAM_ID = new PublicKey(
+  "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+);
 
 class FakeProverSuite implements IDarkPoolZkProverSuite {
   public capturedSpendInputs: SpendInputs[] = [];

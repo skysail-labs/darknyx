@@ -32,14 +32,17 @@ let cached: PoseidonFn | null = null;
 async function getPoseidon(): Promise<PoseidonFn> {
   if (cached) return cached;
   const p = await buildPoseidon();
-  const fn = ((inputs: bigint[]) => p(inputs.map((i) => p.F.e(i)))) as PoseidonFn;
+  const fn = ((inputs: bigint[]) =>
+    p(inputs.map((i) => p.F.e(i)))) as PoseidonFn;
   fn.F = p.F;
   cached = fn;
   return fn;
 }
 
 /** Hash an array of field elements (each in [0, BN254_r)) -> 32-byte BE result. */
-export async function poseidonHashBytesBE(inputs: bigint[]): Promise<Uint8Array> {
+export async function poseidonHashBytesBE(
+  inputs: bigint[],
+): Promise<Uint8Array> {
   const p = await getPoseidon();
   const packed = p(inputs);
   // circomlibjs returns a Montgomery-form Uint8Array. Convert to canonical bigint.
@@ -58,7 +61,7 @@ export function pubkeyToFrPair(pk: Uint8Array): [bigint, bigint] {
 }
 
 export interface Note {
-  tokenMint: Uint8Array;        // 32 bytes
+  tokenMint: Uint8Array; // 32 bytes
   amount: bigint;
   ownerCommitment: bigint;
   nonce: bigint;
@@ -68,11 +71,14 @@ export interface Note {
 // Domain tags — must match circuits/valid_spend/circuit.circom and
 // crates/darkpool-crypto/src/{note,nullifier}.rs exactly.
 const DOMAIN_OWNER = 1n;
-const DOMAIN_NOTE  = 2n;
-const DOMAIN_NULL  = 3n;
+const DOMAIN_NOTE = 2n;
+const DOMAIN_NULL = 3n;
 
 /** Compute owner_commitment = Poseidon3(DOMAIN_OWNER, spendingKey, r_owner). */
-export async function ownerCommitment(spendingKey: bigint, blinding: bigint): Promise<bigint> {
+export async function ownerCommitment(
+  spendingKey: bigint,
+  blinding: bigint,
+): Promise<bigint> {
   const p = await getPoseidon();
   const packed = p([DOMAIN_OWNER, spendingKey, blinding]);
   return p.F.toObject(packed);
@@ -81,12 +87,24 @@ export async function ownerCommitment(spendingKey: bigint, blinding: bigint): Pr
 /** Compute the 32-byte BE note commitment = Poseidon7(DOMAIN_NOTE, mint_lo, mint_hi, amount, ownerCommit, nonce, blindingR). */
 export async function noteCommitment(note: Note): Promise<Uint8Array> {
   const [lo, hi] = pubkeyToFrPair(note.tokenMint);
-  return poseidonHashBytesBE([DOMAIN_NOTE, lo, hi, note.amount, note.ownerCommitment, note.nonce, note.blindingR]);
+  return poseidonHashBytesBE([
+    DOMAIN_NOTE,
+    lo,
+    hi,
+    note.amount,
+    note.ownerCommitment,
+    note.nonce,
+    note.blindingR,
+  ]);
 }
 
 /** Compute nullifier = Poseidon3(DOMAIN_NULL, spendingKey, noteCommitmentBigint). */
-export async function nullifier(spendingKey: bigint, commitmentBE: Uint8Array): Promise<Uint8Array> {
-  if (commitmentBE.length !== 32) throw new Error("commitment must be 32 bytes");
+export async function nullifier(
+  spendingKey: bigint,
+  commitmentBE: Uint8Array,
+): Promise<Uint8Array> {
+  if (commitmentBE.length !== 32)
+    throw new Error("commitment must be 32 bytes");
   let cBig = 0n;
   for (const b of commitmentBE) cBig = (cBig << 8n) | BigInt(b);
   const p = await getPoseidon();
@@ -95,7 +113,7 @@ export async function nullifier(spendingKey: bigint, commitmentBE: Uint8Array): 
 }
 
 export interface NoteV2 {
-  tokenMint: Uint8Array;   // 32 bytes
+  tokenMint: Uint8Array; // 32 bytes
   amount: bigint;
   ownerCommitment: bigint;
   innerHash: bigint;
@@ -108,7 +126,14 @@ export interface NoteV2 {
  */
 export async function noteCommitmentV2(note: NoteV2): Promise<Uint8Array> {
   const [lo, hi] = pubkeyToFrPair(note.tokenMint);
-  return poseidonHashBytesBE([DOMAIN_NOTE, lo, hi, note.amount, note.ownerCommitment, note.innerHash]);
+  return poseidonHashBytesBE([
+    DOMAIN_NOTE,
+    lo,
+    hi,
+    note.amount,
+    note.ownerCommitment,
+    note.innerHash,
+  ]);
 }
 
 /**
@@ -116,7 +141,10 @@ export async function noteCommitmentV2(note: NoteV2): Promise<Uint8Array> {
  * `darkpool_crypto::nullifier::nullifier_v2`. Amount-independent — computable
  * before the change-note amount is known.
  */
-export async function nullifierV2(spendingKey: bigint, innerHash: bigint): Promise<Uint8Array> {
+export async function nullifierV2(
+  spendingKey: bigint,
+  innerHash: bigint,
+): Promise<Uint8Array> {
   const p = await getPoseidon();
   const packed = p([DOMAIN_NULL, spendingKey, innerHash]);
   return bn254ToBE32(p.F.toObject(packed));

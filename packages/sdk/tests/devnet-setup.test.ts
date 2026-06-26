@@ -33,12 +33,7 @@
  *     cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-setup.test.ts
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { config as dotenvConfig } from "dotenv";
@@ -82,8 +77,7 @@ const maybeDescribe = RUN ? describe : describe.skip;
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
 
-const L1_RPC_URL =
-  process.env.L1_RPC_URL ?? "https://api.devnet.solana.com";
+const L1_RPC_URL = process.env.L1_RPC_URL ?? "https://api.devnet.solana.com";
 const VAULT_PROGRAM_ID = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
     "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
@@ -158,7 +152,9 @@ function step(num: string | number, title: string) {
 function tx(note: string, signature: string) {
   console.log(`  >> ${note}`);
   console.log(`     TX: ${signature}`);
-  console.log(`     EXPLORER: https://explorer.solana.com/tx/${signature}?cluster=devnet`);
+  console.log(
+    `     EXPLORER: https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+  );
 }
 
 function bullet(text: string) {
@@ -238,7 +234,9 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
     bullet(`tee_authority:         ${tee.publicKey.toBase58()}`);
     bullet(`root_key:              ${rootKey.publicKey.toBase58()}`);
     bullet(`protocol fee (bps):    ${PROTOCOL_FEE_BPS}`);
-    bullet(`mint decimals (both):  ${DEMO_MINT_DECIMALS} (override with DEMO_MINT_DECIMALS)`);
+    bullet(
+      `mint decimals (both):  ${DEMO_MINT_DECIMALS} (override with DEMO_MINT_DECIMALS)`,
+    );
 
     const bal = await connection.getBalance(admin.publicKey);
     bullet(`admin balance:         ${(bal / 1e9).toFixed(4)} SOL`);
@@ -254,7 +252,10 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
     { timeout: 180_000 },
     async () => {
       // ────────────────────────────────────────────────────────────────────
-      step(1, `Create BASE + QUOTE SPL mints (${DEMO_MINT_DECIMALS} decimals each)`);
+      step(
+        1,
+        `Create BASE + QUOTE SPL mints (${DEMO_MINT_DECIMALS} decimals each)`,
+      );
       // ────────────────────────────────────────────────────────────────────
       const baseMint = Keypair.generate();
       const quoteMint = Keypair.generate();
@@ -299,10 +300,16 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         [admin, baseMint, quoteMint],
         { commitment: "confirmed" },
       );
-      tx(`created both SPL mints (BASE=${DEMO_MINT_DECIMALS}d, QUOTE=${DEMO_MINT_DECIMALS}d)`, mintSig);
+      tx(
+        `created both SPL mints (BASE=${DEMO_MINT_DECIMALS}d, QUOTE=${DEMO_MINT_DECIMALS}d)`,
+        mintSig,
+      );
 
       // ────────────────────────────────────────────────────────────────────
-      step(2, `Initialise vault_config + ${NUM_TREES} Merkle-tree shard(s) (idempotent)`);
+      step(
+        2,
+        `Initialise vault_config + ${NUM_TREES} Merkle-tree shard(s) (idempotent)`,
+      );
       // ────────────────────────────────────────────────────────────────────
       const [vaultPda] = vaultConfigPda(VAULT_PROGRAM_ID);
       bullet(`vault_config PDA:   ${vaultPda.toBase58()}`);
@@ -319,9 +326,14 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
             numTrees: NUM_TREES,
           }),
         );
-        const sig = await sendAndConfirmTransaction(connection, initTx, [admin], {
-          commitment: "confirmed",
-        });
+        const sig = await sendAndConfirmTransaction(
+          connection,
+          initTx,
+          [admin],
+          {
+            commitment: "confirmed",
+          },
+        );
         tx("initialize(vault_config)", sig);
       }
 
@@ -344,9 +356,14 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
             treeId,
           }),
         );
-        const sig = await sendAndConfirmTransaction(connection, treeTx, [admin], {
-          commitment: "confirmed",
-        });
+        const sig = await sendAndConfirmTransaction(
+          connection,
+          treeTx,
+          [admin],
+          {
+            commitment: "confirmed",
+          },
+        );
         tx(`initialize_tree(${treeId})`, sig);
         bullet(`merkle_tree[${treeId}]: ${treePda.toBase58()}`);
       }
@@ -378,9 +395,14 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
             treeId,
           }),
         );
-        const resetSig = await sendAndConfirmTransaction(connection, resetTx, [admin], {
-          commitment: "confirmed",
-        });
+        const resetSig = await sendAndConfirmTransaction(
+          connection,
+          resetTx,
+          [admin],
+          {
+            commitment: "confirmed",
+          },
+        );
         tx(`reset_merkle_tree(${treeId}) (devnet-only)`, resetSig);
       }
 
@@ -392,9 +414,14 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           feeRateBps: PROTOCOL_FEE_BPS,
         }),
       );
-      const spcSig = await sendAndConfirmTransaction(connection, spcTx, [admin], {
-        commitment: "confirmed",
-      });
+      const spcSig = await sendAndConfirmTransaction(
+        connection,
+        spcTx,
+        [admin],
+        {
+          commitment: "confirmed",
+        },
+      );
       tx(`set_protocol_config(fee_rate=${PROTOCOL_FEE_BPS}bps)`, spcSig);
 
       // ────────────────────────────────────────────────────────────────────
@@ -406,11 +433,15 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // bytes to a 1-byte index. With sharding the worker references its
       // merkle_tree[j] from this ALT, so all K shards must be listed (mirrors
       // the Rust static_alt_addresses).
-      const altAddresses = staticSettleAltAddresses(VAULT_PROGRAM_ID, NUM_TREES);
+      const altAddresses = staticSettleAltAddresses(
+        VAULT_PROGRAM_ID,
+        NUM_TREES,
+      );
       // Use the blockhash's context slot, not getSlot("confirmed") — the latter
       // can return a leader-skipped slot absent from SlotHashes → ALT create
       // fails with "is not a recent slot" (CRYPTOGRAPHY.md §9).
-      const slot = (await connection.getLatestBlockhashAndContext()).context.slot;
+      const slot = (await connection.getLatestBlockhashAndContext()).context
+        .slot;
       const [createAltIx, settleLookupTable] =
         AddressLookupTableProgram.createLookupTable({
           authority: admin.publicKey,
@@ -424,9 +455,14 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         addresses: altAddresses,
       });
       const altTx = new Transaction().add(createAltIx, extendAltIx);
-      const altSig = await sendAndConfirmTransaction(connection, altTx, [admin], {
-        commitment: "confirmed",
-      });
+      const altSig = await sendAndConfirmTransaction(
+        connection,
+        altTx,
+        [admin],
+        {
+          commitment: "confirmed",
+        },
+      );
       tx("createLookupTable + extendLookupTable", altSig);
       bullet(`settle ALT: ${settleLookupTable.toBase58()}`);
       // Solana requires a fresh ALT to be at least one slot old before it
@@ -454,7 +490,9 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           secretKey: Array.from(quoteMint.secretKey),
         },
         protocol: {
-          ownerCommitmentHex: Buffer.from(protocolOwnerCommitment).toString("hex"),
+          ownerCommitmentHex: Buffer.from(protocolOwnerCommitment).toString(
+            "hex",
+          ),
           feeRateBps: PROTOCOL_FEE_BPS,
         },
         vaultConfigPda: vaultPda.toBase58(),

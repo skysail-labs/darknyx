@@ -76,7 +76,7 @@ async function buildSlot(args: {
   const bAmount = args.baseAmount + args.sellerChange + args.sellerFee;
 
   // One inner_hash per note (v2). Salt by slot so leaves stay distinct.
-  const I = (idx: number) => BigInt(0xA0A0 + args.slotIdx * 100 + idx);
+  const I = (idx: number) => BigInt(0xa0a0 + args.slotIdx * 100 + idx);
   const aInner = I(1);
   const bInner = I(2);
   const cInner = I(3);
@@ -85,43 +85,75 @@ async function buildSlot(args: {
   const fInner = I(6);
 
   const noteA = await noteCommitmentV2({
-    tokenMint: args.quoteMint, amount: aAmount,
-    ownerCommitment: args.buyerOwnerCommit, innerHash: aInner,
+    tokenMint: args.quoteMint,
+    amount: aAmount,
+    ownerCommitment: args.buyerOwnerCommit,
+    innerHash: aInner,
   });
   const noteB = await noteCommitmentV2({
-    tokenMint: args.baseMint, amount: bAmount,
-    ownerCommitment: args.sellerOwnerCommit, innerHash: bInner,
+    tokenMint: args.baseMint,
+    amount: bAmount,
+    ownerCommitment: args.sellerOwnerCommit,
+    innerHash: bInner,
   });
   const noteC = await noteCommitmentV2({
-    tokenMint: args.baseMint, amount: args.baseAmount,
-    ownerCommitment: args.buyerOwnerCommit, innerHash: cInner,
+    tokenMint: args.baseMint,
+    amount: args.baseAmount,
+    ownerCommitment: args.buyerOwnerCommit,
+    innerHash: cInner,
   });
   const noteD = await noteCommitmentV2({
-    tokenMint: args.quoteMint, amount: quoteAmount,
-    ownerCommitment: args.sellerOwnerCommit, innerHash: dInner,
+    tokenMint: args.quoteMint,
+    amount: quoteAmount,
+    ownerCommitment: args.sellerOwnerCommit,
+    innerHash: dInner,
   });
   const zero = new Uint8Array(32);
-  const noteE = args.buyerChange === 0n ? zero : await noteCommitmentV2({
-    tokenMint: args.quoteMint, amount: args.buyerChange,
-    ownerCommitment: args.buyerOwnerCommit, innerHash: eInner,
-  });
-  const noteF = args.sellerChange === 0n ? zero : await noteCommitmentV2({
-    tokenMint: args.baseMint, amount: args.sellerChange,
-    ownerCommitment: args.sellerOwnerCommit, innerHash: fInner,
-  });
+  const noteE =
+    args.buyerChange === 0n
+      ? zero
+      : await noteCommitmentV2({
+          tokenMint: args.quoteMint,
+          amount: args.buyerChange,
+          ownerCommitment: args.buyerOwnerCommit,
+          innerHash: eInner,
+        });
+  const noteF =
+    args.sellerChange === 0n
+      ? zero
+      : await noteCommitmentV2({
+          tokenMint: args.baseMint,
+          amount: args.sellerChange,
+          ownerCommitment: args.sellerOwnerCommit,
+          innerHash: fInner,
+        });
 
   return {
-    noteAcommitment: noteA, noteBcommitment: noteB,
-    noteCcommitment: noteC, noteDcommitment: noteD,
-    noteEcommitment: noteE, noteFcommitment: noteF,
-    quoteMint: args.quoteMint, baseMint: args.baseMint,
-    baseAmount: args.baseAmount, quoteAmount,
-    buyerChangeAmt: args.buyerChange, sellerChangeAmt: args.sellerChange,
-    buyerFeeAmt: args.buyerFee, sellerFeeAmt: args.sellerFee,
+    noteAcommitment: noteA,
+    noteBcommitment: noteB,
+    noteCcommitment: noteC,
+    noteDcommitment: noteD,
+    noteEcommitment: noteE,
+    noteFcommitment: noteF,
+    quoteMint: args.quoteMint,
+    baseMint: args.baseMint,
+    baseAmount: args.baseAmount,
+    quoteAmount,
+    buyerChangeAmt: args.buyerChange,
+    sellerChangeAmt: args.sellerChange,
+    buyerFeeAmt: args.buyerFee,
+    sellerFeeAmt: args.sellerFee,
     batchSlot: args.batchSlot,
-    aOwnerCommit: args.buyerOwnerCommit, bOwnerCommit: args.sellerOwnerCommit,
-    aAmount, bAmount,
-    aInner, bInner, cInner, dInner, eInner, fInner,
+    aOwnerCommit: args.buyerOwnerCommit,
+    bOwnerCommit: args.sellerOwnerCommit,
+    aAmount,
+    bAmount,
+    aInner,
+    bInner,
+    cInner,
+    dInner,
+    eInner,
+    fInner,
     clearingPrice: args.clearingPrice,
     // Fee notes default to none; `bindFeeNotes` sets slot 0's aggregate for
     // fee-bearing batches.
@@ -154,14 +186,24 @@ async function bindFeeNotes(
   const totalBuyerFee = slots.reduce((a, s) => a + s.buyerFeeAmt, 0n);
   const totalSellerFee = slots.reduce((a, s) => a + s.sellerFeeAmt, 0n);
   const zero = new Uint8Array(32);
-  const feeQuote = totalBuyerFee === 0n ? zero : await noteCommitmentV2({
-    tokenMint: args.quoteMint, amount: totalBuyerFee,
-    ownerCommitment: args.protocolOwner, innerHash: args.feeQuoteInner,
-  });
-  const feeBase = totalSellerFee === 0n ? zero : await noteCommitmentV2({
-    tokenMint: args.baseMint, amount: totalSellerFee,
-    ownerCommitment: args.protocolOwner, innerHash: args.feeBaseInner,
-  });
+  const feeQuote =
+    totalBuyerFee === 0n
+      ? zero
+      : await noteCommitmentV2({
+          tokenMint: args.quoteMint,
+          amount: totalBuyerFee,
+          ownerCommitment: args.protocolOwner,
+          innerHash: args.feeQuoteInner,
+        });
+  const feeBase =
+    totalSellerFee === 0n
+      ? zero
+      : await noteCommitmentV2({
+          tokenMint: args.baseMint,
+          amount: totalSellerFee,
+          ownerCommitment: args.protocolOwner,
+          innerHash: args.feeBaseInner,
+        });
   slots.forEach((s, i) => {
     s.protocolOwnerCommitment = args.protocolOwner;
     s.feeBaseInner = args.feeBaseInner;
@@ -174,30 +216,35 @@ async function bindFeeNotes(
 function rand32(seed: number): Uint8Array {
   const out = new Uint8Array(32);
   for (let i = 0; i < 32; i++) out[i] = (seed + i * 37) & 0xff;
-  out[0] &= 0x0f;   // Keep within the BN254 scalar field.
+  out[0] &= 0x0f; // Keep within the BN254 scalar field.
   return out;
 }
 
 /** Default exact-fill scenario reused across N. */
 async function defaultBatch(N: BatchSize): Promise<MatchSlotWitness[]> {
-  const quoteMint = rand32(0xAA);
-  const baseMint = rand32(0xBB);
-  const buyerCommit = 0x1234567890ABCDEFn;
-  const sellerCommit = 0xFEDCBA0987654321n;
+  const quoteMint = rand32(0xaa);
+  const baseMint = rand32(0xbb);
+  const buyerCommit = 0x1234567890abcdefn;
+  const sellerCommit = 0xfedcba0987654321n;
   const slots: MatchSlotWitness[] = [];
   for (let i = 0; i < N; i++) {
-    slots.push(await buildSlot({
-      quoteMint, baseMint,
-      buyerOwnerCommit: buyerCommit,
-      sellerOwnerCommit: sellerCommit,
-      // Different base amounts per slot so the leaves are distinct.
-      baseAmount: 10n + BigInt(i) * 5n,
-      clearingPrice: 100n,
-      buyerChange: 0n, sellerChange: 0n,
-      buyerFee: 0n, sellerFee: 0n,
-      batchSlot: 1_000_000n,
-      slotIdx: i,
-    }));
+    slots.push(
+      await buildSlot({
+        quoteMint,
+        baseMint,
+        buyerOwnerCommit: buyerCommit,
+        sellerOwnerCommit: sellerCommit,
+        // Different base amounts per slot so the leaves are distinct.
+        baseAmount: 10n + BigInt(i) * 5n,
+        clearingPrice: 100n,
+        buyerChange: 0n,
+        sellerChange: 0n,
+        buyerFee: 0n,
+        sellerFee: 0n,
+        batchSlot: 1_000_000n,
+        slotIdx: i,
+      }),
+    );
   }
   return slots;
 }
@@ -231,7 +278,7 @@ for (const N of [2, 4, 16] as const) {
       expect(result.proof.piA.length).toBe(64);
       expect(result.proof.piB.length).toBe(128);
       expect(result.proof.piC.length).toBe(64);
-    }, 240_000);   // N=16 proof gen can be ~30-60s on M1.
+    }, 240_000); // N=16 proof gen can be ~30-60s on M1.
   });
 }
 
@@ -242,40 +289,55 @@ for (const N of [2, 4, 16] as const) {
 const ready2 = artefactsReady(2);
 (ready2 ? describe : describe.skip)("v3.5 — N=2 mixed-shape coverage", () => {
   it("[with_change_notes] one exact-fill + one over-collateralised with buyer change + fee", async () => {
-    const quoteMint = rand32(0xCC);
-    const baseMint = rand32(0xDD);
-    const buyerCommit = 0xAAAAAAAA00000001n;
-    const sellerCommit = 0xBBBBBBBB00000002n;
+    const quoteMint = rand32(0xcc);
+    const baseMint = rand32(0xdd);
+    const buyerCommit = 0xaaaaaaaa00000001n;
+    const sellerCommit = 0xbbbbbbbb00000002n;
 
     const slots: MatchSlotWitness[] = [
       await buildSlot({
-        quoteMint, baseMint,
-        buyerOwnerCommit: buyerCommit, sellerOwnerCommit: sellerCommit,
-        baseAmount: 25n, clearingPrice: 200n,
-        buyerChange: 0n, sellerChange: 0n,
-        buyerFee: 0n, sellerFee: 0n,
-        batchSlot: 1_000_001n, slotIdx: 0,
+        quoteMint,
+        baseMint,
+        buyerOwnerCommit: buyerCommit,
+        sellerOwnerCommit: sellerCommit,
+        baseAmount: 25n,
+        clearingPrice: 200n,
+        buyerChange: 0n,
+        sellerChange: 0n,
+        buyerFee: 0n,
+        sellerFee: 0n,
+        batchSlot: 1_000_001n,
+        slotIdx: 0,
       }),
       await buildSlot({
-        quoteMint, baseMint,
-        buyerOwnerCommit: buyerCommit, sellerOwnerCommit: sellerCommit,
-        baseAmount: 25n, clearingPrice: 200n,
-        buyerChange: 1_000n, sellerChange: 0n,
-        buyerFee: 15n, sellerFee: 0n,
-        batchSlot: 1_000_001n, slotIdx: 1,
+        quoteMint,
+        baseMint,
+        buyerOwnerCommit: buyerCommit,
+        sellerOwnerCommit: sellerCommit,
+        baseAmount: 25n,
+        clearingPrice: 200n,
+        buyerChange: 1_000n,
+        sellerChange: 0n,
+        buyerFee: 15n,
+        sellerFee: 0n,
+        batchSlot: 1_000_001n,
+        slotIdx: 1,
       }),
     ];
     // slot 1 charges a buyer fee → the batch mints an aggregate quote fee note
     // on slot 0; bind it so the in-circuit fee-note constraint holds.
     await bindFeeNotes(slots, {
-      quoteMint, baseMint, protocolOwner: 0x07070707n,
-      feeBaseInner: 0xB1B1n, feeQuoteInner: 0x9E9En,
+      quoteMint,
+      baseMint,
+      protocolOwner: 0x07070707n,
+      feeBaseInner: 0xb1b1n,
+      feeQuoteInner: 0x9e9en,
     });
 
     const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots });
 
     expect(result.publicInputsBE.length).toBe(3);
-    expect(result.leaves[0]).not.toEqual(result.leaves[1]);   // distinct shapes → distinct leaves.
+    expect(result.leaves[0]).not.toEqual(result.leaves[1]); // distinct shapes → distinct leaves.
 
     const tsRoot = await computeBatchRoot(result.leaves);
     expect(result.merkleRoot).toEqual(tsRoot);
@@ -289,31 +351,44 @@ const ready2 = artefactsReady(2);
 (ready2 ? describe : describe.skip)("v3.5 — N=2 fee floor", () => {
   // base=10, price=100 → quote=1000. At rate=30 the buyer floor is
   // ⌊1000*30/10000⌋ = 3; the seller floor is ⌊10*30/10000⌋ = 0.
-  const quoteMint = rand32(0xEE);
-  const baseMint = rand32(0xFF);
-  const buyerCommit = 0xC0FFEE00n;
-  const sellerCommit = 0xDECAF000n;
+  const quoteMint = rand32(0xee);
+  const baseMint = rand32(0xff);
+  const buyerCommit = 0xc0ffee00n;
+  const sellerCommit = 0xdecaf000n;
 
   async function feeBatch(buyerFee: bigint): Promise<MatchSlotWitness[]> {
     const mk = (idx: number) =>
       buildSlot({
-        quoteMint, baseMint,
-        buyerOwnerCommit: buyerCommit, sellerOwnerCommit: sellerCommit,
-        baseAmount: 10n, clearingPrice: 100n,
-        buyerChange: 0n, sellerChange: 0n,
-        buyerFee, sellerFee: 0n,
-        batchSlot: 2_000_000n, slotIdx: idx, feeRateBps: 30n,
+        quoteMint,
+        baseMint,
+        buyerOwnerCommit: buyerCommit,
+        sellerOwnerCommit: sellerCommit,
+        baseAmount: 10n,
+        clearingPrice: 100n,
+        buyerChange: 0n,
+        sellerChange: 0n,
+        buyerFee,
+        sellerFee: 0n,
+        batchSlot: 2_000_000n,
+        slotIdx: idx,
+        feeRateBps: 30n,
       });
     const slots = [await mk(0), await mk(1)];
     await bindFeeNotes(slots, {
-      quoteMint, baseMint, protocolOwner: 0x07070707n,
-      feeBaseInner: 0xB1B1n, feeQuoteInner: 0x9E9En,
+      quoteMint,
+      baseMint,
+      protocolOwner: 0x07070707n,
+      feeBaseInner: 0xb1b1n,
+      feeQuoteInner: 0x9e9en,
     });
     return slots;
   }
 
   it("[fee_at_floor] charging exactly the floor proves at rate=30", async () => {
-    const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots: await feeBatch(3n) });
+    const result = await proveMatchBatch({
+      repoRoot: REPO_ROOT,
+      slots: await feeBatch(3n),
+    });
     // fee_rate_bps is the 2nd public input (value 30).
     expect(result.publicInputsBE.length).toBe(3);
     const fee = result.publicInputsBE[1];

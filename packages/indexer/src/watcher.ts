@@ -23,7 +23,10 @@ import type { FillsDb } from "./db.js";
 /** One full transaction from gTFA (jsonParsed), trimmed to what the watcher reads. */
 export interface GtfaTx {
   slot: number;
-  transaction: { signatures: string[]; message: { instructions: GtfaInstruction[] } };
+  transaction: {
+    signatures: string[];
+    message: { instructions: GtfaInstruction[] };
+  };
   meta?: { err: unknown | null } | null;
 }
 /** A jsonParsed top-level instruction. For our (unparsed) vault program the RPC
@@ -130,7 +133,8 @@ export class Watcher {
     this.db = o.db;
     this.pageLimit = o.pageLimit ?? 100;
     this.log = o.log ?? ((m) => console.log(`[watcher] ${m}`));
-    this.scan = o.scan ?? makeGtfaScan(o.connection.rpcEndpoint, this.programIdStr);
+    this.scan =
+      o.scan ?? makeGtfaScan(o.connection.rpcEndpoint, this.programIdStr);
   }
 
   /**

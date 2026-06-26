@@ -79,7 +79,10 @@ export class DarkPoolClient {
       spendingKey: deriveSpendingKey(this.resolvedSeed),
       viewingKey: deriveMasterViewingKey(this.resolvedSeed),
       rootKey: deriveRootKey(this.resolvedSeed),
-      tradingKey: deriveTradingKeyAtOffset(this.resolvedSeed, this.tradingOffset),
+      tradingKey: deriveTradingKeyAtOffset(
+        this.resolvedSeed,
+        this.tradingOffset,
+      ),
       ownerBlinding: this.ownerBlinding,
     };
   }

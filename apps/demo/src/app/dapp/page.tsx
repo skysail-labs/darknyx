@@ -1,7 +1,10 @@
 "use client";
 
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { WalletDisconnectButton, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import {
+  WalletDisconnectButton,
+  WalletMultiButton,
+} from "@solana/wallet-adapter-react-ui";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { useEffect, useState } from "react";
 
@@ -42,7 +45,9 @@ export default function DappPage() {
     let cancelled = false;
     void (async () => {
       try {
-        const lamports = await connection.getBalance(publicKey, { commitment: "confirmed" });
+        const lamports = await connection.getBalance(publicKey, {
+          commitment: "confirmed",
+        });
         if (!cancelled) setSolBalance(lamports / LAMPORTS_PER_SOL);
       } catch {
         if (!cancelled) setSolBalance(null);
@@ -80,7 +85,9 @@ export default function DappPage() {
                 <div className="mt-5 max-w-[220px]">
                   <StatusPill
                     label="balance"
-                    value={solBalance == null ? "—" : `${solBalance.toFixed(4)} SOL`}
+                    value={
+                      solBalance == null ? "—" : `${solBalance.toFixed(4)} SOL`
+                    }
                     mono
                   />
                 </div>
@@ -106,10 +113,10 @@ export default function DappPage() {
                   {!mounted
                     ? "initializing…"
                     : connecting
-                    ? "connecting…"
-                    : connected
-                    ? "wallet connected"
-                    : "wallet not connected"}
+                      ? "connecting…"
+                      : connected
+                        ? "wallet connected"
+                        : "wallet not connected"}
                 </span>
               </div>
             </div>
@@ -131,20 +138,35 @@ export default function DappPage() {
 
           {!connected ? (
             <section className="rounded-md border border-dashed border-white/12 bg-white/[0.03] p-6 text-[13px] text-nyx-fog">
-              <h2 className="text-[16px] font-semibold text-nyx-chalk">Get started</h2>
+              <h2 className="text-[16px] font-semibold text-nyx-chalk">
+                Get started
+              </h2>
               <p className="mt-2">
-                This page only works on Solana <span className="font-semibold">devnet</span>.
-                Switch your Phantom wallet to devnet, then click <em>Select Wallet</em> above.
-                Once connected we&rsquo;ll guide you through the full deposit → trade →
-                withdraw flow.
+                This page only works on Solana{" "}
+                <span className="font-semibold">devnet</span>. Switch your
+                Phantom wallet to devnet, then click <em>Select Wallet</em>{" "}
+                above. Once connected we&rsquo;ll guide you through the full
+                deposit → trade → withdraw flow.
               </p>
               <ol className="mt-3 list-inside list-decimal space-y-1 text-nyx-chalk/85">
                 <li>Connect a Phantom wallet on devnet.</li>
-                <li>Sign a fixed message — your darkpool keys are derived from that signature alone.</li>
-                <li>Register your Poseidon wallet commitment on-chain (verified with a Groth16 proof).</li>
+                <li>
+                  Sign a fixed message — your darkpool keys are derived from
+                  that signature alone.
+                </li>
+                <li>
+                  Register your Poseidon wallet commitment on-chain (verified
+                  with a Groth16 proof).
+                </li>
                 <li>Get a small airdrop of demo BASE + QUOTE tokens.</li>
-                <li>Deposit into the shielded pool and place an encrypted bid on the Ephemeral Rollup.</li>
-                <li>A counterparty fills it; settlement writes shielded buyer / seller notes back to L1.</li>
+                <li>
+                  Deposit into the shielded pool and place an encrypted bid on
+                  the Ephemeral Rollup.
+                </li>
+                <li>
+                  A counterparty fills it; settlement writes shielded buyer /
+                  seller notes back to L1.
+                </li>
               </ol>
             </section>
           ) : null}

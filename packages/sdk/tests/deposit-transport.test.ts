@@ -9,7 +9,11 @@
 
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import {
+  PublicKey,
+  Transaction,
+  TransactionInstruction,
+} from "@solana/web3.js";
 import type { Buffer as NodeBuffer } from "node:buffer";
 
 import { getDepositFunction } from "../src/utxo/deposit.js";
@@ -23,9 +27,15 @@ import type {
 } from "../src/providers.js";
 import { DarkPoolClient } from "../src/client.js";
 import { UnimplementedProverSuite } from "../src/zk/prover-suite.js";
-import { anchorDiscriminator, vaultConfigPda, merkleTreePda } from "../src/idl/vault-client.js";
+import {
+  anchorDiscriminator,
+  vaultConfigPda,
+  merkleTreePda,
+} from "../src/idl/vault-client.js";
 
-const PROGRAM_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
+const PROGRAM_ID = new PublicKey(
+  "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+);
 
 /** Build a MerkleTree-shard-shaped buffer with `leafCount` at offset 8.
  *  Post-sharding the tree state lives in the per-shard MerkleTree account
@@ -41,7 +51,10 @@ function fakeMerkleTreeData(leafCount: bigint): Buffer {
  *  tree_id(1) ‖ leaf_index(8) ‖ commitment(32) ‖ token_mint(32) ‖ amount(8) ‖ new_root(32). */
 const EVENT_LEAF_INDEX = 99n;
 function noteCreatedLog(leafIndex: bigint): string {
-  const disc = createHash("sha256").update("event:NoteCreated").digest().subarray(0, 8);
+  const disc = createHash("sha256")
+    .update("event:NoteCreated")
+    .digest()
+    .subarray(0, 8);
   const body = Buffer.alloc(1 + 8 + 32 + 32 + 8 + 32, 0);
   body.writeBigUInt64LE(leafIndex, 1); // after tree_id(1)
   return `Program data: ${Buffer.concat([disc, body]).toString("base64")}`;

@@ -26,7 +26,9 @@ const helper = resolve(repoRoot, "target/debug/examples/nullifier");
 
 function rustHelper(skDec: bigint, noteCommitmentHex: string): string {
   if (!existsSync(helper)) throw new Error("nullifier helper missing");
-  const res = spawnSync(helper, [skDec.toString(), noteCommitmentHex], { encoding: "utf8" });
+  const res = spawnSync(helper, [skDec.toString(), noteCommitmentHex], {
+    encoding: "utf8",
+  });
   if (res.status !== 0) throw new Error(res.stderr || "helper failed");
   return res.stdout.trim();
 }

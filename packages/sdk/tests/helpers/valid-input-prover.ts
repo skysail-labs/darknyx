@@ -19,9 +19,7 @@
 
 import { resolve } from "node:path";
 
-import {
-  type Groth16OnChainProof,
-} from "../../src/idl/vault-client.js";
+import { type Groth16OnChainProof } from "../../src/idl/vault-client.js";
 import { noteCommitmentV2, pubkeyToFrPair } from "../../src/utxo/note.js";
 import { be32ToDec } from "./e2e-helpers.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";

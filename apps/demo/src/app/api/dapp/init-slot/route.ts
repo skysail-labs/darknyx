@@ -4,7 +4,12 @@ import {
   deriveTradingKeyAtOffset,
   pendingOrderPda,
 } from "@nyx/sdk";
-import { Keypair, PublicKey, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
+import {
+  Keypair,
+  PublicKey,
+  sendAndConfirmTransaction,
+  Transaction,
+} from "@solana/web3.js";
 import bs58 from "bs58";
 import { NextResponse } from "next/server";
 import nacl from "tweetnacl";
@@ -84,7 +89,8 @@ async function chooseFreshSlot(
       firstReusable = idx;
     }
   }
-  if (firstReusable != null) return { slotIdx: firstReusable, needsInit: false };
+  if (firstReusable != null)
+    return { slotIdx: firstReusable, needsInit: false };
   throw new Error(
     `All ${MAX_PENDING_SLOTS_PER_USER} pending-order slots for this trading key still have live Pending orders. ` +
       "Wait for an outstanding order to settle or use a fresh wallet for the demo.",
@@ -100,7 +106,12 @@ async function ensureSlotDelegated(
   slotIdx: number,
   needsInit: boolean,
 ): Promise<void> {
-  const [slotPda] = pendingOrderPda(meProgramId, market, trading.publicKey, slotIdx);
+  const [slotPda] = pendingOrderPda(
+    meProgramId,
+    market,
+    trading.publicKey,
+    slotIdx,
+  );
   let info = await l1.getAccountInfo(slotPda, "confirmed");
   if (!info && needsInit) {
     await sendAndConfirmTransaction(
@@ -143,19 +154,33 @@ export async function POST(req: Request) {
       ownerPubkeyBase58?: string;
       tradingSecretKeyBase58?: string;
     };
-    if (!body.phantomSignatureBase58 || !body.ownerPubkeyBase58 || !body.tradingSecretKeyBase58) {
-      return NextResponse.json({ ok: false, error: "missing session fields" }, { status: 400 });
+    if (
+      !body.phantomSignatureBase58 ||
+      !body.ownerPubkeyBase58 ||
+      !body.tradingSecretKeyBase58
+    ) {
+      return NextResponse.json(
+        { ok: false, error: "missing session fields" },
+        { status: 400 },
+      );
     }
     const { seed } = verifyPhantomSeedSignature(
       body.phantomSignatureBase58,
       body.ownerPubkeyBase58,
     );
-    const trading = Keypair.fromSecretKey(bs58.decode(body.tradingSecretKeyBase58));
+    const trading = Keypair.fromSecretKey(
+      bs58.decode(body.tradingSecretKeyBase58),
+    );
     const expectedSeed = deriveTradingKeyAtOffset(seed, 0n).secretKey;
-    const expected = Keypair.fromSecretKey(nacl.sign.keyPair.fromSeed(expectedSeed).secretKey);
+    const expected = Keypair.fromSecretKey(
+      nacl.sign.keyPair.fromSeed(expectedSeed).secretKey,
+    );
     if (!expected.publicKey.equals(trading.publicKey)) {
       return NextResponse.json(
-        { ok: false, error: "trading key does not match Phantom-derived session" },
+        {
+          ok: false,
+          error: "trading key does not match Phantom-derived session",
+        },
         { status: 400 },
       );
     }
@@ -168,9 +193,23 @@ export async function POST(req: Request) {
 
     await ensureMarketDelegatedOnL1(l1, meProgramId, market, funder);
 
-    const pick = await chooseFreshSlot(l1, er, meProgramId, market, trading.publicKey);
+    const pick = await chooseFreshSlot(
+      l1,
+      er,
+      meProgramId,
+      market,
+      trading.publicKey,
+    );
     await topUpSol(l1, funder, trading.publicKey);
-    await ensureSlotDelegated(l1, meProgramId, market, funder, trading, pick.slotIdx, pick.needsInit);
+    await ensureSlotDelegated(
+      l1,
+      meProgramId,
+      market,
+      funder,
+      trading,
+      pick.slotIdx,
+      pick.needsInit,
+    );
 
     return NextResponse.json({
       ok: true,

@@ -31,7 +31,9 @@ describe("Poseidon parity (circomlibjs vs light-poseidon)", () => {
     available ? it(name, fn) : it.skip(name, fn);
 
   ait("arity 2: simple small inputs", async () => {
-    const ts = Buffer.from(await poseidonHashBytesBE([42n, 42n])).toString("hex");
+    const ts = Buffer.from(await poseidonHashBytesBE([42n, 42n])).toString(
+      "hex",
+    );
     const rs = rustHash(2, [42n, 42n]);
     expect(ts).toBe(rs);
   });

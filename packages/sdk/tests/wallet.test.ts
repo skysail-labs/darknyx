@@ -11,15 +11,41 @@ import { Wallet, type NoteStatus, type MergeFn } from "../src/wallet/wallet.js";
 const MINT_A = new Uint8Array(32).fill(0xaa);
 const MINT_B = new Uint8Array(32).fill(0xbb);
 
-function deposit(commitment: string, mint: Uint8Array, amount: bigint): StoredNote {
-  return { commitment, tokenMint: mint, amount, ownerCommitment: 1n, innerHash: 2n, leafIndex: 0n };
+function deposit(
+  commitment: string,
+  mint: Uint8Array,
+  amount: bigint,
+): StoredNote {
+  return {
+    commitment,
+    tokenMint: mint,
+    amount,
+    ownerCommitment: 1n,
+    innerHash: 2n,
+    leafIndex: 0n,
+  };
 }
-function fill(commitment: string, mint: Uint8Array, amount: bigint): StoredNote {
-  return { commitment, tokenMint: mint, amount, ownerCommitment: 1n, innerHash: 2n, orderId: "ab".repeat(8), anchorIndex: 0 };
+function fill(
+  commitment: string,
+  mint: Uint8Array,
+  amount: bigint,
+): StoredNote {
+  return {
+    commitment,
+    tokenMint: mint,
+    amount,
+    ownerCommitment: 1n,
+    innerHash: 2n,
+    orderId: "ab".repeat(8),
+    anchorIndex: 0,
+  };
 }
 
 /** A wallet over a store + an explicit per-commitment status map (default active). */
-function walletWith(notes: StoredNote[], status: Record<string, NoteStatus> = {}): Wallet {
+function walletWith(
+  notes: StoredNote[],
+  status: Record<string, NoteStatus> = {},
+): Wallet {
   const store = new InMemoryNoteStore();
   for (const n of notes) store.put(n);
   return new Wallet({ store, noteStatus: (c) => status[c] ?? "active" });
@@ -44,7 +70,10 @@ describe("Wallet", () => {
   });
 
   it("listNotes reports source + status and can filter to spendable", async () => {
-    const w = walletWith([deposit("a1", MINT_A, 500n), fill("a2", MINT_A, 50n)], { a2: "consumed" });
+    const w = walletWith(
+      [deposit("a1", MINT_A, 500n), fill("a2", MINT_A, 50n)],
+      { a2: "consumed" },
+    );
 
     const all = await w.listNotes({ mint: MINT_A });
     expect(all).toHaveLength(2);
@@ -57,11 +86,17 @@ describe("Wallet", () => {
   });
 
   it("selectCollateral picks the smallest single note that covers the order", async () => {
-    const w = walletWith([deposit("big", MINT_A, 500n), fill("small", MINT_A, 50n)]);
+    const w = walletWith([
+      deposit("big", MINT_A, 500n),
+      fill("small", MINT_A, 50n),
+    ]);
 
     // 40 fits in the 50 note (smaller) — over-collateralize it, surplus returns.
     const r1 = await w.selectCollateral(40n, MINT_A);
-    expect(r1).toEqual({ ok: true, note: expect.objectContaining({ commitment: "small" }) });
+    expect(r1).toEqual({
+      ok: true,
+      note: expect.objectContaining({ commitment: "small" }),
+    });
 
     // 60 needs the 500 note (the 50 is too small).
     const r2 = await w.selectCollateral(60n, MINT_A);
@@ -69,7 +104,10 @@ describe("Wallet", () => {
   });
 
   it("signals merge-needed when no single note covers it but the set does", async () => {
-    const w = walletWith([deposit("n500", MINT_A, 500n), fill("n50", MINT_A, 50n)]);
+    const w = walletWith([
+      deposit("n500", MINT_A, 500n),
+      fill("n50", MINT_A, 50n),
+    ]);
 
     const r = await w.selectCollateral(550n, MINT_A);
     expect(r).toMatchObject({ ok: false, reason: "merge-needed", total: 550n });
@@ -103,14 +141,20 @@ describe("Wallet", () => {
 });
 
 /** A wallet + its store (so tests can drive a real `mergeFn`). */
-function walletAndStore(notes: StoredNote[]): { wallet: Wallet; store: InMemoryNoteStore; merges: () => number } {
+function walletAndStore(notes: StoredNote[]): {
+  wallet: Wallet;
+  store: InMemoryNoteStore;
+  merges: () => number;
+} {
   const store = new InMemoryNoteStore();
   for (const n of notes) store.put(n);
   const wallet = new Wallet({ store, noteStatus: () => "active" });
   let count = 0;
   // A mergeFn that mirrors the real one: sum the inputs, prune them, store the
   // merged note (always active by default).
-  (wallet as unknown as { _mockMerge: MergeFn })._mockMerge = async (toMerge) => {
+  (wallet as unknown as { _mockMerge: MergeFn })._mockMerge = async (
+    toMerge,
+  ) => {
     count += 1;
     const sum = toMerge.reduce((s, n) => s + n.amount, 0n);
     for (const n of toMerge) store.delete(n.commitment);
@@ -127,11 +171,16 @@ function walletAndStore(notes: StoredNote[]): { wallet: Wallet; store: InMemoryN
   };
   return { wallet, store, merges: () => count };
 }
-const mockMerge = (w: Wallet): MergeFn => (w as unknown as { _mockMerge: MergeFn })._mockMerge;
+const mockMerge = (w: Wallet): MergeFn =>
+  (w as unknown as { _mockMerge: MergeFn })._mockMerge;
 
 describe("Wallet merge selection + consolidation", () => {
   it("selectForMerge greedily picks the fewest largest notes that cover it", async () => {
-    const w = walletWith([deposit("n300", MINT_A, 300n), fill("n200", MINT_A, 200n), fill("n100", MINT_A, 100n)]);
+    const w = walletWith([
+      deposit("n300", MINT_A, 300n),
+      fill("n200", MINT_A, 200n),
+      fill("n100", MINT_A, 100n),
+    ]);
     const sel = await w.selectForMerge(450n, MINT_A);
     expect(sel.ok).toBe(true);
     if (sel.ok) expect(sel.notes.map((n) => n.amount)).toEqual([300n, 200n]); // not the 100
@@ -141,13 +190,25 @@ describe("Wallet merge selection + consolidation", () => {
     const notes = [1, 2, 3, 4, 5].map((i) => deposit(`n${i}`, MINT_A, 100n));
     const w = walletWith(notes);
     const sel = await w.selectForMerge(450n, MINT_A); // 4×100=400 < 450, total 500
-    expect(sel).toMatchObject({ ok: false, reason: "chain-needed", total: 500n });
-    if (!sel.ok && sel.reason === "chain-needed") expect(sel.notes).toHaveLength(4);
+    expect(sel).toMatchObject({
+      ok: false,
+      reason: "chain-needed",
+      total: 500n,
+    });
+    if (!sel.ok && sel.reason === "chain-needed")
+      expect(sel.notes).toHaveLength(4);
   });
 
   it("selectForMerge reports insufficient-funds when even the set is short", async () => {
-    const w = walletWith([deposit("a", MINT_A, 100n), deposit("b", MINT_A, 100n)]);
-    expect(await w.selectForMerge(500n, MINT_A)).toEqual({ ok: false, reason: "insufficient-funds", total: 200n });
+    const w = walletWith([
+      deposit("a", MINT_A, 100n),
+      deposit("b", MINT_A, 100n),
+    ]);
+    expect(await w.selectForMerge(500n, MINT_A)).toEqual({
+      ok: false,
+      reason: "insufficient-funds",
+      total: 200n,
+    });
   });
 
   it("consolidate merges in one step when ≤4 notes cover the order", async () => {
@@ -163,14 +224,19 @@ describe("Wallet merge selection + consolidation", () => {
 
   it("consolidate CHAINS merges when more than 4 notes are needed", async () => {
     // 5 × 100; need 450. 4 largest = 400 < 450 → must chain.
-    const { wallet, merges } = walletAndStore([1, 2, 3, 4, 5].map((i) => deposit(`n${i}`, MINT_A, 100n)));
+    const { wallet, merges } = walletAndStore(
+      [1, 2, 3, 4, 5].map((i) => deposit(`n${i}`, MINT_A, 100n)),
+    );
     const note = await wallet.consolidate(450n, MINT_A, mockMerge(wallet));
     expect(note.amount).toBeGreaterThanOrEqual(450n);
     expect(merges()).toBe(2); // merge 4→400, then 400+100→500
   });
 
   it("consolidate returns an existing note without merging when one already covers it", async () => {
-    const { wallet, merges } = walletAndStore([deposit("big", MINT_A, 1000n), deposit("s", MINT_A, 50n)]);
+    const { wallet, merges } = walletAndStore([
+      deposit("big", MINT_A, 1000n),
+      deposit("s", MINT_A, 50n),
+    ]);
     const note = await wallet.consolidate(450n, MINT_A, mockMerge(wallet));
     expect(note.commitment).toBe("big");
     expect(merges()).toBe(0);
@@ -178,6 +244,8 @@ describe("Wallet merge selection + consolidation", () => {
 
   it("consolidate throws on insufficient funds", async () => {
     const { wallet } = walletAndStore([deposit("a", MINT_A, 100n)]);
-    await expect(wallet.consolidate(500n, MINT_A, mockMerge(wallet))).rejects.toThrow(/insufficient/);
+    await expect(
+      wallet.consolidate(500n, MINT_A, mockMerge(wallet)),
+    ).rejects.toThrow(/insufficient/);
   });
 });

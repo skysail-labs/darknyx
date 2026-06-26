@@ -64,7 +64,9 @@ describe("fill-encryption (change-amount recovery B.1)", () => {
     const recipientPub = nacl.scalarMult.base(RECIPIENT_SECRET);
     const ephPub = nacl.scalarMult.base(EPH_SECRET);
     const blob = encryptChangeAmount(EPH_SECRET, recipientPub, AMOUNT, NONCE);
-    expect(decryptChangeAmount(new Uint8Array(32).fill(0x09), ephPub, blob)).toBeNull();
+    expect(
+      decryptChangeAmount(new Uint8Array(32).fill(0x09), ephPub, blob),
+    ).toBeNull();
   });
 
   it("rejects a tampered blob", () => {
@@ -81,8 +83,18 @@ describe("fill-encryption (change-amount recovery B.1)", () => {
     const ephSecret = new Uint8Array(32).fill(0x55);
     const ephPub = nacl.scalarMult.base(ephSecret);
 
-    const blobA = encryptChangeAmount(ephSecret, aliceKp.publicKey, 111n, new Uint8Array(12).fill(1));
-    const blobB = encryptChangeAmount(ephSecret, bobKp.publicKey, 222n, new Uint8Array(12).fill(2));
+    const blobA = encryptChangeAmount(
+      ephSecret,
+      aliceKp.publicKey,
+      111n,
+      new Uint8Array(12).fill(1),
+    );
+    const blobB = encryptChangeAmount(
+      ephSecret,
+      bobKp.publicKey,
+      222n,
+      new Uint8Array(12).fill(2),
+    );
 
     expect(decryptChangeAmount(aliceKp.secretKey, ephPub, blobA)).toBe(111n);
     expect(decryptChangeAmount(bobKp.secretKey, ephPub, blobB)).toBe(222n);

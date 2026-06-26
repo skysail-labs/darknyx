@@ -135,7 +135,9 @@ function resolveRepoRoot(): string {
   if (existsSync(resolve(cwd, "packages", "sdk"))) return cwd;
   const upTwo = resolve(cwd, "..", "..");
   if (existsSync(resolve(upTwo, "packages", "sdk"))) return upTwo;
-  throw new Error("Unable to resolve monorepo root from current working directory.");
+  throw new Error(
+    "Unable to resolve monorepo root from current working directory.",
+  );
 }
 
 function requireEnv(name: string): string {
@@ -148,7 +150,9 @@ function keypairFromBase58(secret: string): Keypair {
   const bytes = bs58.decode(secret.trim());
   if (bytes.length === 64) return Keypair.fromSecretKey(bytes);
   if (bytes.length === 32) return Keypair.fromSeed(bytes);
-  throw new Error("Base58 key must decode to 32-byte seed or 64-byte secret key.");
+  throw new Error(
+    "Base58 key must decode to 32-byte seed or 64-byte secret key.",
+  );
 }
 
 function loadKeypairFromPath(repoRoot: string, maybeRelative: string): Keypair {
@@ -215,9 +219,10 @@ function makeClient(
         },
       },
     },
-    zkProver: new UnimplementedProverSuite("not needed for deposit/submit flow"),
-    ownerCommitmentBlinding:
-      role === "taker" ? BigInt(1111) : BigInt(2222),
+    zkProver: new UnimplementedProverSuite(
+      "not needed for deposit/submit flow",
+    ),
+    ownerCommitmentBlinding: role === "taker" ? BigInt(1111) : BigInt(2222),
   });
 }
 
@@ -370,7 +375,8 @@ async function buildCtx(): Promise<RouteCtx> {
   const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as E2EConfig;
 
   const l1RpcUrl = process.env.DEMO_L1_RPC_URL ?? cfg.l1RpcUrl;
-  const erRpcUrl = process.env.DEMO_ER_RPC_URL ?? "https://devnet.magicblock.app";
+  const erRpcUrl =
+    process.env.DEMO_ER_RPC_URL ?? "https://devnet.magicblock.app";
   const perBaseUrl = (
     process.env.DEMO_PER_BASE_URL ?? "https://tee.magicblock.app"
   ).replace(/\/$/, "");
@@ -400,7 +406,8 @@ async function buildCtx(): Promise<RouteCtx> {
     ),
     tee: loadKeypairFromPath(
       repoRoot,
-      process.env.DEMO_TEE_KEYPAIR_PATH ?? ".devnet/keypairs/tee_authority.json",
+      process.env.DEMO_TEE_KEYPAIR_PATH ??
+        ".devnet/keypairs/tee_authority.json",
     ),
     taker: keypairFromBase58(requireEnv("DEMO_TAKER_SECRET_BASE58")),
     maker: keypairFromBase58(requireEnv("DEMO_MAKER_SECRET_BASE58")),
@@ -584,7 +591,8 @@ async function handleBootstrap(ctx: RouteCtx) {
   await writeState(ctx.statePath, state);
 
   return {
-    message: "Bootstrap complete: minted balances, deposited notes, delegated slots.",
+    message:
+      "Bootstrap complete: minted balances, deposited notes, delegated slots.",
     state,
   };
 }
@@ -653,7 +661,9 @@ async function handleSubmitOrder(ctx: RouteCtx, role: "taker" | "maker") {
 async function handleRunBatch(ctx: RouteCtx) {
   const state = await readState(ctx.statePath);
   if (!state.taker || !state.maker) {
-    throw new Error("Missing state for taker/maker. Run bootstrap and order submits first.");
+    throw new Error(
+      "Missing state for taker/maker. Run bootstrap and order submits first.",
+    );
   }
   const [takerPda] = pendingOrderPda(
     ctx.meProgramId,

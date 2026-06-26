@@ -56,7 +56,11 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
-import { deriveOrderId, bn254ToBE32, deriveViewingEncKeypair } from "../src/keys/key-generators.js";
+import {
+  deriveOrderId,
+  bn254ToBE32,
+  deriveViewingEncKeypair,
+} from "../src/keys/key-generators.js";
 import { nullifierV2 } from "../src/utxo/note.js";
 import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
 import { vaultConfigPda } from "../src/idl/vault-client.js";
@@ -441,7 +445,9 @@ maybeDescribe(
             // the TEE encrypts this order's change_amount to on-chain. NOT in the
             // signed canonical (so the digest above is unchanged). Without it the
             // TEE writes the all-zero fill_recovery sentinel and recovery can't run.
-            viewing_pubkey: hex(deriveViewingEncKeypair(p.masterSeed).publicKey),
+            viewing_pubkey: hex(
+              deriveViewingEncKeypair(p.masterSeed).publicKey,
+            ),
             anchors: anchorsToJson(pool.anchors),
           };
         }
@@ -699,28 +705,31 @@ maybeDescribe(
           // self-verifying it against the on-chain commitment — no memo, no live
           // WS, surviving a CVM redeploy. This replaced the retired durable
           // memo-replay log (`GET /fills/replay`).
-          await t.step("on-chain change-amount recovery (Proposal B)", async () => {
-            const coldStore = new InMemoryNoteStore();
-            const recovered = await recoverChangeFromChain(change!, {
-              masterSeed: buyer.masterSeed,
-              ownerCommitment: buyer.ownerCommit,
-              baseMint: baseMint.toBytes(),
-              quoteMint: quoteMint.toBytes(),
-            });
-            expect(
-              recovered,
-              "recoverChangeFromChain did not recover the buyer change note from the on-chain ciphertext (is the CVM built from the recovery commits?)",
-            ).toBeTruthy();
-            // The chain-recovered amount must match the live memo byte-for-byte.
-            expect(recovered!.amount).toBe(memoRec!.amount);
-            // And it lands spendable in a cold store (recovered from chain alone).
-            await coldStore.put(recovered!);
-            const stored = await coldStore.get(change!.changeNoteCommitment!);
-            expect(stored?.amount).toBe(memoRec!.amount);
-            console.log(
-              `  · on-chain recovery OK — decrypted + self-verified amount ${recovered!.amount} into a cold store (no memo)`,
-            );
-          });
+          await t.step(
+            "on-chain change-amount recovery (Proposal B)",
+            async () => {
+              const coldStore = new InMemoryNoteStore();
+              const recovered = await recoverChangeFromChain(change!, {
+                masterSeed: buyer.masterSeed,
+                ownerCommitment: buyer.ownerCommit,
+                baseMint: baseMint.toBytes(),
+                quoteMint: quoteMint.toBytes(),
+              });
+              expect(
+                recovered,
+                "recoverChangeFromChain did not recover the buyer change note from the on-chain ciphertext (is the CVM built from the recovery commits?)",
+              ).toBeTruthy();
+              // The chain-recovered amount must match the live memo byte-for-byte.
+              expect(recovered!.amount).toBe(memoRec!.amount);
+              // And it lands spendable in a cold store (recovered from chain alone).
+              await coldStore.put(recovered!);
+              const stored = await coldStore.get(change!.changeNoteCommitment!);
+              expect(stored?.amount).toBe(memoRec!.amount);
+              console.log(
+                `  · on-chain recovery OK — decrypted + self-verified amount ${recovered!.amount} into a cold store (no memo)`,
+              );
+            },
+          );
 
           // ── 8. cross-batch RE-MATCH (opt-in) ─────────────────────────
           // The buyer's residual relocked onto anchor[0] in batch 1 and stays in

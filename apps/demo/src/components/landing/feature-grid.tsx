@@ -62,7 +62,9 @@ export function FeatureGrid() {
               <h3 className="mt-2 text-[17px] font-semibold leading-snug text-nyx-chalk">
                 {f.title}
               </h3>
-              <p className="mt-2 text-[13px] leading-relaxed text-nyx-fog">{f.body}</p>
+              <p className="mt-2 text-[13px] leading-relaxed text-nyx-fog">
+                {f.body}
+              </p>
               <div
                 className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-nyx-accent/40 to-transparent opacity-0 transition-opacity group-hover:opacity-100"
                 aria-hidden="true"
@@ -80,20 +82,44 @@ function FeatureIcon({ kind }: { kind: Feature["icon"] }) {
   switch (kind) {
     case "moon":
       return (
-        <svg width="20" height="20" viewBox="0 0 24 24" className="text-nyx-chalk">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          className="text-nyx-chalk"
+        >
           <defs>
             <clipPath id="fgi-moon">
               <rect x="0" y="0" width="24" height="13" />
             </clipPath>
           </defs>
-          <circle cx="12" cy="12" r="7" fill="currentColor" clipPath="url(#fgi-moon)" />
+          <circle
+            cx="12"
+            cy="12"
+            r="7"
+            fill="currentColor"
+            clipPath="url(#fgi-moon)"
+          />
           <rect x="3" y="13" width="18" height="1.4" fill={stroke} />
-          <rect x="3" y="16" width="12" height="1.4" fill={stroke} opacity="0.5" />
+          <rect
+            x="3"
+            y="16"
+            width="12"
+            height="1.4"
+            fill={stroke}
+            opacity="0.5"
+          />
         </svg>
       );
     case "shield":
       return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-nyx-chalk">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          className="text-nyx-chalk"
+        >
           <path
             d="M12 3l8 3v6c0 4.5-3.4 8.4-8 9.5C7.4 20.4 4 16.5 4 12V6l8-3z"
             stroke={stroke}
@@ -111,7 +137,13 @@ function FeatureIcon({ kind }: { kind: Feature["icon"] }) {
       );
     case "spark":
       return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-nyx-chalk">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          className="text-nyx-chalk"
+        >
           <path
             d="M12 3v6m0 6v6m-9-9h6m6 0h6M5.6 5.6l4.2 4.2m4.4 4.4l4.2 4.2M5.6 18.4l4.2-4.2m4.4-4.4l4.2-4.2"
             stroke={stroke}
@@ -122,7 +154,13 @@ function FeatureIcon({ kind }: { kind: Feature["icon"] }) {
       );
     case "ledger":
       return (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-nyx-chalk">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          className="text-nyx-chalk"
+        >
           <rect
             x="4"
             y="4"

@@ -35,30 +35,47 @@ import { getDepositFunction } from "../src/utxo/deposit.js";
 import { getMergeFunction } from "../src/utxo/merge.js";
 import { ownerCommitment } from "../src/utxo/note.js";
 import { deriveSpendingKey, bn254ToBE32 } from "../src/keys/key-generators.js";
-import { buildResetMerkleTreeInstruction, merkleTreePda } from "../src/idl/vault-client.js";
+import {
+  buildResetMerkleTreeInstruction,
+  merkleTreePda,
+} from "../src/idl/vault-client.js";
 import type { MergeInputs, Groth16ProofBytes } from "../src/zk/prover-suite.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
-const MERGE_ZKEY = resolve(REPO_ROOT, "circuits/build/valid_merge_k2/circuit_final.zkey");
+const MERGE_ZKEY = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_merge_k2/circuit_final.zkey",
+);
 const VAULT_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 const READY =
-  process.env.RUN_DEVNET_LEAF === "1" && existsSync(CONFIG_PATH) && existsSync(MERGE_ZKEY);
+  process.env.RUN_DEVNET_LEAF === "1" &&
+  existsSync(CONFIG_PATH) &&
+  existsSync(MERGE_ZKEY);
 const d = READY ? describe : describe.skip;
 
 function loadKp(rel: string): Keypair {
-  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))));
+  return Keypair.fromSecretKey(
+    Uint8Array.from(JSON.parse(readFileSync(resolve(REPO_ROOT, rel), "utf8"))),
+  );
 }
 
 /** leaf_count (u64 @ offset 8) of shard `treeId`'s MerkleTree account. */
-async function onChainLeafCount(conn: Connection, treeId: number): Promise<bigint> {
+async function onChainLeafCount(
+  conn: Connection,
+  treeId: number,
+): Promise<bigint> {
   const [treePda] = merkleTreePda(VAULT_ID, treeId);
   const info = await conn.getAccountInfo(treePda, "confirmed");
   if (!info) throw new Error(`merkle_tree shard ${treeId} not found`);
-  return new DataView(info.data.buffer, info.data.byteOffset + 8, 8).getBigUint64(0, true);
+  return new DataView(
+    info.data.buffer,
+    info.data.byteOffset + 8,
+    8,
+  ).getBigUint64(0, true);
 }
 
 d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
@@ -80,7 +97,11 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
     await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
-        buildResetMerkleTreeInstruction({ programId: VAULT_ID, admin: admin.publicKey, treeId: 0 }),
+        buildResetMerkleTreeInstruction({
+          programId: VAULT_ID,
+          admin: admin.publicKey,
+          treeId: 0,
+        }),
       ),
       [admin],
       { commitment: "confirmed" },
@@ -92,7 +113,11 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
       programId: VAULT_ID,
       seedMode: {
         type: "csprng",
-        storage: { load: async () => masterSeed, store: async () => {}, generate: async () => masterSeed },
+        storage: {
+          load: async () => masterSeed,
+          store: async () => {},
+          generate: async () => masterSeed,
+        },
       },
       connectionProvider: { connection: conn, perRpcUrl: cfg.l1RpcUrl },
       ownerCommitmentBlinding: ownerBlinding,
@@ -111,19 +136,33 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
             const tx = new Transaction()
               .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }))
               .add(...ixs);
-            return sendAndConfirmTransaction(conn, tx, [admin], { commitment: "confirmed" });
+            return sendAndConfirmTransaction(conn, tx, [admin], {
+              commitment: "confirmed",
+            });
           },
         },
         merkleProofProvider: {
           getInclusionProof: async (leafIndex) => {
             const w = await tree.witness(Number(leafIndex));
-            return { root: w.root, siblings: w.siblings, pathIndices: w.indices };
+            return {
+              root: w.root,
+              siblings: w.siblings,
+              pathIndices: w.indices,
+            };
           },
         },
       },
       zkProver: {
-        walletCreate: { prove: async () => { throw new Error("walletCreate prover unused in this test"); } },
-        spend: { prove: async () => { throw new Error("spend prover unused in this test"); } },
+        walletCreate: {
+          prove: async () => {
+            throw new Error("walletCreate prover unused in this test");
+          },
+        },
+        spend: {
+          prove: async () => {
+            throw new Error("spend prover unused in this test");
+          },
+        },
         merge: {
           prove: async (inputs: MergeInputs): Promise<Groth16ProofBytes> => {
             const slots = [];
@@ -156,14 +195,24 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
 
     const deposit = getDepositFunction({ client });
     const amounts = [3_000_000n, 2_000_000n];
-    const notes: { commitment: Uint8Array; amount: bigint; innerHash: bigint; leafIndex: bigint }[] = [];
+    const notes: {
+      commitment: Uint8Array;
+      amount: bigint;
+      innerHash: bigint;
+      leafIndex: bigint;
+    }[] = [];
 
     for (const [i, amount] of amounts.entries()) {
       // Fund the depositor's ATA (the deposit ix transfers from it).
       await sendAndConfirmTransaction(
         conn,
         new Transaction().add(
-          createAssociatedTokenAccountIdempotentInstruction(admin.publicKey, ata, admin.publicKey, mint),
+          createAssociatedTokenAccountIdempotentInstruction(
+            admin.publicKey,
+            ata,
+            admin.publicKey,
+            mint,
+          ),
           createMintToInstruction(mint, ata, admin.publicKey, amount),
         ),
         [admin],

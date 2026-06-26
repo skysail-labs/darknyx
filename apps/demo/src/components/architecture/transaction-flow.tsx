@@ -125,8 +125,12 @@ export function TransactionFlow() {
                   <td className="px-4 py-3 align-top font-mono text-[12px] text-nyx-chalk">
                     {row.ix}
                   </td>
-                  <td className="px-4 py-3 align-top text-nyx-fog">{row.signer}</td>
-                  <td className="px-4 py-3 align-top text-nyx-fog">{row.privacy}</td>
+                  <td className="px-4 py-3 align-top text-nyx-fog">
+                    {row.signer}
+                  </td>
+                  <td className="px-4 py-3 align-top text-nyx-fog">
+                    {row.privacy}
+                  </td>
                 </tr>
               ))}
             </tbody>

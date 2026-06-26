@@ -133,15 +133,23 @@ describe("order canonical encoder — Rust parity", () => {
     expect(() => orderCanonicalBytes(o1)).toThrow(/orderId must be 16 bytes/);
 
     const o2 = { ...fixture(), noteCommitment: new Uint8Array(31) };
-    expect(() => orderCanonicalBytes(o2)).toThrow(/noteCommitment must be 32 bytes/);
+    expect(() => orderCanonicalBytes(o2)).toThrow(
+      /noteCommitment must be 32 bytes/,
+    );
 
     const o3 = { ...fixture(), userCommitment: new Uint8Array(33) };
-    expect(() => orderCanonicalBytes(o3)).toThrow(/userCommitment must be 32 bytes/);
+    expect(() => orderCanonicalBytes(o3)).toThrow(
+      /userCommitment must be 32 bytes/,
+    );
 
     const o4 = { ...fixture(), anchorPoolHash: new Uint8Array(31) };
-    expect(() => orderCanonicalBytes(o4)).toThrow(/anchorPoolHash must be 32 bytes/);
+    expect(() => orderCanonicalBytes(o4)).toThrow(
+      /anchorPoolHash must be 32 bytes/,
+    );
     const o5 = { ...fixture(), anchorPoolHash: new Uint8Array(33) };
-    expect(() => orderCanonicalBytes(o5)).toThrow(/anchorPoolHash must be 32 bytes/);
+    expect(() => orderCanonicalBytes(o5)).toThrow(
+      /anchorPoolHash must be 32 bytes/,
+    );
   });
 
   test("domain tag is the first 12 bytes", () => {
@@ -178,6 +186,8 @@ describe("cancel canonical encoder — Rust parity", () => {
     expect(() => cancelCanonicalBytes(c1)).toThrow(/orderId must be 16 bytes/);
 
     const c2 = { ...cancelFixture(), tradingKey: new Uint8Array(31) };
-    expect(() => cancelCanonicalBytes(c2)).toThrow(/tradingKey must be 32 bytes/);
+    expect(() => cancelCanonicalBytes(c2)).toThrow(
+      /tradingKey must be 32 bytes/,
+    );
   });
 });

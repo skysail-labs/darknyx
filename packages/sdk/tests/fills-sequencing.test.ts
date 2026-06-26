@@ -9,7 +9,11 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { deriveOrderId, deriveInnerHash, bn254ToBE32 } from "../src/keys/key-generators.js";
+import {
+  deriveOrderId,
+  deriveInnerHash,
+  bn254ToBE32,
+} from "../src/keys/key-generators.js";
 import { noteCommitmentV2 } from "../src/utxo/note.js";
 import { InMemoryNoteStore } from "../src/utxo/note-store.js";
 import { backfillHistory, type IndexerFill } from "../src/fills/history.js";
@@ -17,15 +21,26 @@ import { subscribeFills, type WebSocketLike } from "../src/fills/ws-client.js";
 import type { FillMemo } from "../src/orders/fill-memo.js";
 
 const SEED = new Uint8Array(64).map((_, i) => (i * 7 + 1) & 0xff);
-const OWNER = 12345678901234567890n % 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const OWNER =
+  12345678901234567890n %
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 const QUOTE_MINT = new Uint8Array(32).fill(0x22);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
 /** Build the buyer (quote-side) change-note commitment for order n, anchor k. */
-async function buyerCommitment(n: number, k: number, amount: bigint): Promise<{ orderId: string; commitment: string; inner: bigint }> {
+async function buyerCommitment(
+  n: number,
+  k: number,
+  amount: bigint,
+): Promise<{ orderId: string; commitment: string; inner: bigint }> {
   const orderId = deriveOrderId(SEED, n);
   const inner = deriveInnerHash(SEED, orderId, k);
-  const c = await noteCommitmentV2({ tokenMint: QUOTE_MINT, amount, ownerCommitment: OWNER, innerHash: inner });
+  const c = await noteCommitmentV2({
+    tokenMint: QUOTE_MINT,
+    amount,
+    ownerCommitment: OWNER,
+    innerHash: inner,
+  });
   return { orderId: hex(orderId), commitment: hex(c), inner };
 }
 

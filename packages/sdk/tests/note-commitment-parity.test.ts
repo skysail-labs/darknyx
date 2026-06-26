@@ -145,7 +145,13 @@ describe("Note commitment parity (TS vs Rust)", () => {
           blindingR: bigintFromHex32(v.blindingHex),
         }),
       );
-      const rs = rustHelper(v.mintHex, v.amount, v.ownerHex, v.nonceHex, v.blindingHex);
+      const rs = rustHelper(
+        v.mintHex,
+        v.amount,
+        v.ownerHex,
+        v.nonceHex,
+        v.blindingHex,
+      );
       expect(ts).toBe(rs);
       expect(ts).not.toBe(baseTs);
     }
@@ -157,31 +163,34 @@ describe("Note commitment parity (TS vs Rust)", () => {
   // behaviour — see the open punch-list item in the cryptography review.
   // Until then, this test pins the current behaviour so any future change is
   // intentional.
-  ait("Rust strictly rejects out-of-field inputs; TS silently reduces", async () => {
-    // 0x33 * (256^32 - 1) / 255 ≈ 0.2 * 2^256, just above BN254 r.
-    const outOfFieldHex = "33".repeat(32);
-    const mintHex = "01".repeat(32);
+  ait(
+    "Rust strictly rejects out-of-field inputs; TS silently reduces",
+    async () => {
+      // 0x33 * (256^32 - 1) / 255 ≈ 0.2 * 2^256, just above BN254 r.
+      const outOfFieldHex = "33".repeat(32);
+      const mintHex = "01".repeat(32);
 
-    // TS path silently reduces and produces a hash without throwing.
-    const tsOK = await noteCommitment({
-      tokenMint: bytesFromHex32(mintHex),
-      amount: 1n,
-      ownerCommitment: bigintFromHex32(outOfFieldHex),
-      nonce: 1n,
-      blindingR: 1n,
-    });
-    expect(tsOK).toBeInstanceOf(Uint8Array);
-    expect(tsOK.length).toBe(32);
+      // TS path silently reduces and produces a hash without throwing.
+      const tsOK = await noteCommitment({
+        tokenMint: bytesFromHex32(mintHex),
+        amount: 1n,
+        ownerCommitment: bigintFromHex32(outOfFieldHex),
+        nonce: 1n,
+        blindingR: 1n,
+      });
+      expect(tsOK).toBeInstanceOf(Uint8Array);
+      expect(tsOK.length).toBe(32);
 
-    // Rust path rejects with NotInField.
-    const res = spawnSync(
-      helper,
-      [mintHex, "1", outOfFieldHex, "01".repeat(32), "01".repeat(32)],
-      { encoding: "utf8" },
-    );
-    expect(res.status).not.toBe(0);
-    expect(res.stderr).toContain("NotInField");
-  });
+      // Rust path rejects with NotInField.
+      const res = spawnSync(
+        helper,
+        [mintHex, "1", outOfFieldHex, "01".repeat(32), "01".repeat(32)],
+        { encoding: "utf8" },
+      );
+      expect(res.status).not.toBe(0);
+      expect(res.stderr).toContain("NotInField");
+    },
+  );
 
   ait("matches on amount = 0 and large u64", async () => {
     const mintHex = "ff".repeat(16) + "00".repeat(16); // mixed high/low halves

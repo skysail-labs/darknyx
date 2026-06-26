@@ -25,7 +25,9 @@ import { verifyPhantomSeedSignature } from "@/lib/dapp/phantom-verify";
 
 export const runtime = "nodejs";
 
-const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_PROGRAM_ID = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
 
 const RIGHT_PATH_OFFSET = 1808;
 const MERKLE_DEPTH = 20;
@@ -39,9 +41,18 @@ export async function POST(req: Request) {
       amount?: string;
       nonce?: string;
     };
-    if (!body.phantomSignatureBase58 || !body.ownerPubkeyBase58 || !body.side || !body.amount) {
+    if (
+      !body.phantomSignatureBase58 ||
+      !body.ownerPubkeyBase58 ||
+      !body.side ||
+      !body.amount
+    ) {
       return NextResponse.json(
-        { ok: false, error: "missing phantomSignatureBase58, ownerPubkeyBase58, side, or amount" },
+        {
+          ok: false,
+          error:
+            "missing phantomSignatureBase58, ownerPubkeyBase58, side, or amount",
+        },
         { status: 400 },
       );
     }
@@ -52,7 +63,10 @@ export async function POST(req: Request) {
     );
     const amount = BigInt(body.amount);
     if (amount <= 0n) {
-      return NextResponse.json({ ok: false, error: "amount must be > 0" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "amount must be > 0" },
+        { status: 400 },
+      );
     }
     const nonce = body.nonce != null ? BigInt(body.nonce) : BigInt(Date.now());
 
@@ -100,7 +114,10 @@ export async function POST(req: Request) {
     const blindingBytes = bn254ToBE32(blindingR);
 
     const depositor = new PublicKey(body.ownerPubkeyBase58);
-    const depositorTokenAccount = await getAssociatedTokenAddress(tokenMint, depositor);
+    const depositorTokenAccount = await getAssociatedTokenAddress(
+      tokenMint,
+      depositor,
+    );
 
     const createAtaIx = createAssociatedTokenAccountIdempotentInstruction(
       depositor,

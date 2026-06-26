@@ -5,7 +5,12 @@ import {
   UnimplementedProverSuite,
   type DarkPoolClient,
 } from "@nyx/sdk";
-import { Connection, Keypair, sendAndConfirmTransaction, Transaction } from "@solana/web3.js";
+import {
+  Connection,
+  Keypair,
+  sendAndConfirmTransaction,
+  Transaction,
+} from "@solana/web3.js";
 
 /** Deterministic darkpool seed per demo persona — mirrors `live-er-flow/route.ts`. */
 export function actorSeed(role: "taker" | "maker", kp: Keypair): Uint8Array {
@@ -49,7 +54,9 @@ export function makePersonaDarkPoolClient(
       },
       transactionForwarder: {
         sendAndConfirm: async (txOrIxs) => {
-          const tx = Array.isArray(txOrIxs) ? new Transaction().add(...txOrIxs) : txOrIxs;
+          const tx = Array.isArray(txOrIxs)
+            ? new Transaction().add(...txOrIxs)
+            : txOrIxs;
           return sendAndConfirmTransaction(connection, tx, [signer], {
             commitment: "confirmed",
           });
