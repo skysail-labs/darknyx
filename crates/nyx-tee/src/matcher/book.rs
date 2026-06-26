@@ -307,6 +307,7 @@ mod tests {
             note_amount: amount.saturating_mul(price).max(amount).max(1),
             collateral_note: [idx; 32],
             user_commitment,
+            owner_commitment: user_commitment, // same owner identity, keyed on idx
             order_id: oid,
             order_inclusion_commitment: [idx ^ 0xcd; 32],
         }

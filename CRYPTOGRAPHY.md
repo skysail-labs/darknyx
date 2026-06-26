@@ -1986,7 +1986,7 @@ live devnet/CVM deployment.
 
 Sorted roughly by cryptographic impact:
 
-1. **Real Phase-2 ceremony** — all four shipped Groth16 circuits use a
+1. **Real Phase-2 ceremony** — every shipped Groth16 circuit uses a
    deterministic dev contribution
    (`echo "nyx-phase1-dev-contribution-$name" | snarkjs zkey contribute`),
    plus the batched zkey runs `zkey beacon 0102…1f20 10`. The toxic waste
@@ -1994,7 +1994,12 @@ Sorted roughly by cryptographic impact:
    mainnet blocker. Need a real MPC with ≥ 3 independent contributors and
    publicly verifiable transcripts. The PTAU files are SHA-256-pinned in
    `scripts/download-ptau.sh` (closes the supply-chain hole at download
-   time, but not the need for a project-specific phase-2 MPC).
+   time, but not the need for a project-specific phase-2 MPC). NOTE: amount
+   privacy raised the stakes here — `VALID_MATCH_BATCH` is now the SOLE
+   conservation guarantor (the on-chain amount checks were removed), so a
+   forged proof from recovered toxic waste could mint value with no on-chain
+   backstop. Soundness, not privacy: a leaked trapdoor breaks no-inflation,
+   not zero-knowledge.
 
 2. **Attested TEE-pubkey rotation** — `set_tee_pubkey` rotates
    `VaultConfig.tee_pubkeys` (the K shard signer keys) to the CVM's
@@ -2005,24 +2010,39 @@ Sorted roughly by cryptographic impact:
    so the chain itself enforces "only an attested enclave can be the
    signer." See `docs/tee-attestation-flow.md`.
 
-3. **Fills delivery + trade history** — `/ws/fills` is currently a
-   fail-closed unfiltered broadcast (gated behind `debug_endpoints`). The
-   decided design — deterministic HD order_ids + per-account WS + an
-   off-TEE indexer — is in
-   [`docs/fills-history-architecture.md`](docs/fills-history-architecture.md),
-   not yet built.
-
-4. **Real protocol-owner keypair** — fee notes mint to the protocol's
+3. **Real protocol-owner keypair** — fee notes mint to the protocol's
    `owner_commitment`; withdrawing them needs a real owner keypair wired up
    (the operator re-derives the fee notes via `derive_inner(slot, FEE_ROLE_*)`).
 
-5. **Browser prover** — the SDK shells out to `node_modules/.bin/snarkjs`
-   via `execFileSync`. Fine on a server, unwieldy in a browser extension;
-   the fix is an in-process `WebProverSuite` (wasm-bindgen or similar).
+4. **Browser prover** — the SDK's VALID_INPUT prover is a prover-agnostic
+   interface with a Node adapter that dynamically `import`s `snarkjs` at call
+   time (`packages/sdk/src/zk/valid-input-prover.ts`). Fine on a server; the
+   remaining work is an in-process browser/WASM prover behind the same
+   interface (wasm-bindgen or similar).
 
-6. **Self-trade prevention** — a user with two trading keys could match
-   against themselves; cheap to add to the in-TEE matcher (check same
-   `user_commitment`), more anti-leakage than soundness.
+### Recently shipped (formerly in this list)
+
+- **Fills delivery + trade history — DONE (P4/P7).** `/ws/fills` is a public,
+  self-authenticating, **per-account-routed** channel (each order's `FillMemo`
+  goes only to its owner's socket), with deterministic HD `order_id`s
+  (`deriveOrderId`), an off-TEE commitment-locator indexer (`packages/indexer`),
+  and durable **`GET /fills/replay?since=<seq>`** backfill-then-tail recovery.
+  After amount-privacy the memo is the *only* place a trade's change amount
+  appears. See
+  [`docs/fills-history-architecture.md`](docs/fills-history-architecture.md).
+
+- **Self-trade prevention — DONE (owner-level, note-bound).** The matcher
+  (`darkpool_matcher::algorithm::generate_matches`) never crosses two orders from
+  the same owner, keyed on the note-**bound** `owner_commitment`
+  (`Poseidon2(spending_key, r_owner)`, pinned to the collateral note at intake by
+  `verify_commitment`, reused across all of a user's notes). So it catches one
+  user trading under *two trading keys* (a free `offset` rotation, deliberately
+  NOT part of the owner identity), and — because `owner_commitment` is bound, not
+  client-asserted — a *settling* wash cannot lie about its owner. `trading_key`
+  equality is kept as a cheap belt-and-suspenders. **Caveat:** still best-effort,
+  not a hard guarantee — a user can register a SECOND wallet (a distinct
+  `owner_commitment`, or notes under a different `r_owner`) and wash across the
+  two; that Sybil case is out of scope for any matcher rule.
 
 ---
 
