@@ -122,6 +122,7 @@ single call, leaving you one larger spendable note to back a bigger order.
 
 Every transition is gated on-chain by a distinct record (a wallet entry, a
 nullifier, a consumed-note marker, a note lock), so a note can never be used twice
-regardless of what the engine does. See [Account Model](../account/account-model)
-for how you reconstruct your spendable set from this, and
-[Settlement](./settlement) for the on-chain spend pipeline.
+regardless of what the engine does. See [Deposit](../account/deposit) and
+[Withdraw](../account/withdraw) for the on-ramp and off-ramp,
+[Account Model](../account/account-model) for how you reconstruct your spendable
+set, and [Settlement](./settlement) for the on-chain spend pipeline.

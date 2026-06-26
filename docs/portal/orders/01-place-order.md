@@ -57,7 +57,7 @@ wire contract is unambiguous.
 | `price_limit` | integer | Conditional | Worst acceptable price, in quote units per base. Required for a bid; an ask may use `0` to accept any clearing price. |
 | `min_fill_size` | integer | No | Reject fills smaller than this. Set equal to `amount` for all-or-none. Default `0` (any partial fill). See [Execution Attributes](../trading-concepts/execution-attributes). |
 | `expiry_slot` | integer | Yes | Solana slot past which the order auto-expires. Bounded by the market's max expiry. See [Time in Force](../trading-concepts/time-in-force). |
-| `order_id` | string | Yes | A client-chosen 16-byte id, hex. Must be unique and non-zero. |
+| `order_id` | string | Yes | A client-chosen 16-byte id, hex. Must be unique and non-zero. The SDK can derive ids deterministically from your seed (`deriveOrderId`), so you can reconcile or recover your order set on a fresh device. |
 | `arrival_nonce` | integer | Yes | A per-order nonce bound into the signature. |
 
 ### Collateral, opening, and proof

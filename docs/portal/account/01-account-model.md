@@ -126,3 +126,13 @@ Two different keys, two different jobs. Keep them distinct.
 The enclave can verify *who placed an order* (trading key) without ever being
 able to determine *what you hold* (spending key). That split is what lets
 matching be authenticated while balances stay private.
+
+## Account settings
+
+`GET` / `PUT /account/settings` holds a small set of per-account preferences,
+persisted with your account. A `PUT` replaces them wholesale, so send the full
+object.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `cancel_on_disconnect_default` | `false` | When `true`, a [trading socket](../websocket/ws-trading) or [session stream](../websocket/session-stream) for this account cancels your open orders when it disconnects. A socket's own `cancel_on_disconnect` overrides this default. |
