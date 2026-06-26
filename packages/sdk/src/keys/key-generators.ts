@@ -8,6 +8,7 @@
  */
 
 import crypto from "node:crypto";
+import nacl from "tweetnacl";
 import type { MasterSeedMode } from "../providers.js";
 
 export const MASTER_SEED_BYTES = 64;
@@ -20,13 +21,14 @@ const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
 const INFO_INNER_HASH = new TextEncoder().encode("nyx-inner-hash-v1");
 const INFO_ORDER_ID = new TextEncoder().encode("nyx-order-id-v1");
 const INFO_MERGE_INNER = new TextEncoder().encode("nyx-merge-inner-v1");
+const INFO_VIEWING_ENC = new TextEncoder().encode("nyx-viewing-enc-v1");
 
 /** BN254 scalar field modulus r. */
 export const BN254_R =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
 /** HKDF-SHA256 expand returning an arbitrary-length byte string. */
-function hkdfExpand(ikm: Uint8Array, info: Uint8Array, length: number): Uint8Array {
+export function hkdfExpand(ikm: Uint8Array, info: Uint8Array, length: number): Uint8Array {
   // HKDF-SHA256: extract (salt=empty) then expand.
   const salt = new Uint8Array(32); // all zeros
   const prk = crypto.createHmac("sha256", Buffer.from(salt)).update(Buffer.from(ikm)).digest();
@@ -71,6 +73,30 @@ export function generateMasterSeed(): Uint8Array {
   return new Uint8Array(crypto.randomBytes(MASTER_SEED_BYTES));
 }
 
+/**
+ * Derive the deterministic master seed from a wallet's Ed25519 signature over the
+ * seed-derivation message — `SHA-512(signature)[:64]`. This is the canonical
+ * `wallet-signature` derivation (Proposal A): the seed is recoverable on any
+ * device from the wallet alone, with no stored secret. The CALLER is responsible
+ * for having signed the fixed message (`MASTER_SEED_MESSAGE`) + verifying the
+ * signature against the expected pubkey before trusting the seed.
+ *
+ * THIS is the single source of truth for the derivation — `resolveMasterSeed`'s
+ * wallet-signature branch calls it, and any production client deriving the seed
+ * server-side (e.g. a verify-then-derive endpoint behind a `signMessage` UI)
+ * should call it too, so they cannot drift. Recoverability of a change note
+ * (change-amount recovery, Proposal B) depends on this seed being reproduced
+ * byte-for-byte, since the viewing-encryption keypair derives from it
+ * ([`deriveViewingEncKeypair`]).
+ */
+export function seedFromWalletSignature(signature: Uint8Array): Uint8Array {
+  const hash = crypto.createHash("sha512").update(Buffer.from(signature)).digest();
+  return new Uint8Array(hash.subarray(0, MASTER_SEED_BYTES));
+}
+
+/** The fixed message a wallet signs to derive its master seed (Proposal A). */
+export const MASTER_SEED_MESSAGE = new TextEncoder().encode("NYX_DARKPOOL_SEED_V1");
+
 /** Resolve a `MasterSeedMode` to actual seed bytes. */
 export async function resolveMasterSeed(mode: MasterSeedMode): Promise<Uint8Array> {
   if (mode.type === "csprng") {
@@ -80,11 +106,10 @@ export async function resolveMasterSeed(mode: MasterSeedMode): Promise<Uint8Arra
     await mode.storage.store(fresh);
     return fresh;
   }
-  // wallet-signature: sign a fixed message, use first 64 bytes of SHA-512 of signature.
-  const msg = mode.message ?? new TextEncoder().encode("NYX_DARKPOOL_SEED_V1");
+  // wallet-signature: sign the fixed message, derive via the canonical helper.
+  const msg = mode.message ?? MASTER_SEED_MESSAGE;
   const sig = await mode.signMessage(msg);
-  const hash = crypto.createHash("sha512").update(Buffer.from(sig)).digest();
-  return new Uint8Array(hash.subarray(0, MASTER_SEED_BYTES));
+  return seedFromWalletSignature(sig);
 }
 
 export function deriveSpendingKey(seed: Uint8Array): bigint {
@@ -200,6 +225,34 @@ export function deriveMergeInnerHash(seed: Uint8Array, n: number): bigint {
   info.set(new Uint8Array(nBuf), INFO_MERGE_INNER.length);
   const okm = kmac256(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
+}
+
+export interface X25519Keypair {
+  secretKey: Uint8Array; // 32-byte X25519 scalar
+  publicKey: Uint8Array; // 32-byte X25519 public point
+}
+
+/**
+ * Derive the X25519 viewing-encryption keypair from the master seed
+ * (change-amount recovery, Proposal B). The client sends `publicKey` with each
+ * order; the TEE encrypts each fill's `change_amount` to it on-chain, and only
+ * `secretKey` — regenerable from the seed on any device — can decrypt it. This
+ * is what makes a change note recoverable after a CVM redeploy wipes the live
+ * fill memo.
+ *
+ * `secretKey = HKDF-SHA256-expand(seed, "nyx-viewing-enc-v1")[:32]`
+ * `publicKey = X25519(secretKey · basepoint)` (tweetnacl clamps the scalar).
+ *
+ * Client-only: the TEE merely *consumes* `publicKey` (it never re-derives it),
+ * so there is no cross-language parity contract on this derivation. A distinct
+ * info string keeps it in its own domain from the spend/view/trade/root keys.
+ * The encryption *construction* it feeds, however, is pinned cross-language by
+ * the fixed vector in `tests/fill-encryption.test.ts`.
+ */
+export function deriveViewingEncKeypair(seed: Uint8Array): X25519Keypair {
+  const secretKey = hkdfExpand(seed, INFO_VIEWING_ENC, 32);
+  const publicKey = nacl.scalarMult.base(secretKey);
+  return { secretKey, publicKey };
 }
 
 /** Serialize a BN254 field element as 32-byte BE. */

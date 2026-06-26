@@ -20,27 +20,30 @@
 >   price) — they're proven in-circuit and bound by the note commitments, so the
 >   untrusted off-TEE indexer can no longer see them (by design). An indexer row
 >   is now `{ order_id, side, match_id, is_partial_fill, change_note_commitment,
->   batch_slot }`. **The change `amount` — hence the *spendable* opening — comes
->   ONLY from the per-account `FillMemo`** (`orders/fill-memo.ts`,
->   `verifyFillMemo`). `backfillHistory` LOCATES fills (which order_ids minted
->   which change-note commitments); the memos (live + replayed) populate the
->   `NoteStore`. Consequence: "rebuild from chain alone" still recovers *which*
->   notes you own, but NOT their amounts — the same note-plaintext requirement
->   every shielded pool has.
-> - **Self-healing recovery (P7).** A memo missed while offline (or across a CVM
->   restart) is no longer stranded: the TEE persists every routed memo to a
->   durable per-account log (`persistence/fills.rs`, on the LUKS volume) with a
->   monotonic `seq`, and serves `GET /fills/replay?since=<seq>` (bearer,
->   per-account). The client recovers the amount + opening there — `replayFills`
->   → `verifyFillMemo` → `NoteStore` — and `startFillsSync` does "replay then
->   tail" (replay first, then the live WS, cursor advancing in lockstep).
->   Retention: a per-account ring (512) + 30-day TTL, so an unspent note past the
->   TTL falls back to "locatable but not replayable" (rare).
+>   batch_slot }` PLUS the opaque on-chain recovery ciphertext (next bullet).
+>   `backfillHistory` LOCATES fills (which order_ids minted which change-note
+>   commitments); the live `FillMemo` (`orders/fill-memo.ts`, `verifyFillMemo`)
+>   is the low-latency way to populate the `NoteStore`.
+> - **On-chain change-amount recovery (Proposal B) — the durable source.** The
+>   change `amount` no longer lives ONLY in the (ephemeral) FillMemo. The settle
+>   ix carries it ENCRYPTED on-chain in the 128-byte `fill_recovery` field
+>   (X25519-ECIES to the order's `viewing_pubkey`; crypto in
+>   `darkpool-crypto/src/fill_encryption.rs`, TEE-side in
+>   `nyx-tee/src/settle/fill_recovery.rs`). The indexer surfaces the opaque
+>   ciphertext (`ephemeral_pubkey` + per-side `change_enc`); the SDK
+>   `recoverChangeFromChain` (`fills/recover.ts`) decrypts it with the
+>   seed-derived viewing key and self-verifies (Vuln-4) against the on-chain
+>   commitment → a spendable note, **on any device, surviving a CVM redeploy**.
+>   So "rebuild from chain alone" now recovers BOTH which notes you own AND their
+>   amounts. `startFillsSync` does "tail then backfill" (live WS + chain
+>   backfill). **The old durable per-account memo log + `GET /fills/replay` (P7)
+>   were RETIRED** — the chain is the permanent source, so they added no value.
 >
 > The sections below are the original decision record (pinned 2026-06-04).
 > **NOTE: where they say the chain / `MatchResultPayload` carries the change
-> `amount`, that is pre-amount-privacy — see the delta above; the amount now
-> lives only in the FillMemo.**
+> `amount` in plaintext, that is pre-amount-privacy; and where they describe a
+> durable `/fills/replay` memo log, that was retired — see the deltas above. The
+> amount now rides the settle ix ENCRYPTED + is recovered from the chain.**
 
 ## Problem
 

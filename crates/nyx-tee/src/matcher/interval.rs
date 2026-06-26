@@ -242,6 +242,10 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
                             // note_e is locked by THIS batch's re-lock — the
                             // NEXT batch that consumes it must skip lock_note.
                             from_relock: true,
+                            // The continuation note returns to the same owner —
+                            // carry the viewing key so the residual stays
+                            // recoverable across re-locks (Proposal B).
+                            viewing_pubkey: prior.viewing_pubkey,
                         };
                         state.openings_mut().insert(note_e, opening);
                         update_edits.push((oid, Some(note_e)));
@@ -317,6 +321,9 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
                             valid_input_proof: prior.valid_input_proof.clone(),
                             // note_f is locked by THIS batch's re-lock.
                             from_relock: true,
+                            // Carry the viewing key forward (Proposal B) so the
+                            // seller's continuation residual stays recoverable.
+                            viewing_pubkey: prior.viewing_pubkey,
                         };
                         state.openings_mut().insert(note_f, opening);
                         update_edits.push((oid, Some(note_f)));
@@ -628,5 +635,117 @@ impl From<crate::oracle::cache::OracleSnapshot> for MatcherOracleSnapshot {
             exponent: value.exponent,
             publish_slot: value.publish_slot,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::matcher::openings::{AnchorPool, NoteOpening, OrderOpening};
+    use crate::settle::lock_note::Groth16ProofBytes;
+    use darkpool_matcher::match_result::{MatchPair, MatchStatus};
+    use darkpool_matcher::order_canonical::Anchor;
+
+    fn fr_safe(tag: u8) -> [u8; 32] {
+        // Top byte zero ⇒ < BN254 modulus (safe to Poseidon-hash).
+        let mut a = [0u8; 32];
+        a[31] = tag;
+        a
+    }
+
+    /// Proposal B: the viewing-encryption pubkey on a partially-filled order's
+    /// input opening must carry verbatim onto the rotated continuation opening,
+    /// so a multi-fill residual's change stays recoverable. Guards the
+    /// `viewing_pubkey: prior.viewing_pubkey` carry in `assign_continuation_anchors`.
+    #[test]
+    fn viewing_pubkey_survives_continuation_relock() {
+        let base_mint = [0xb1u8; 32];
+        let quote_mint = [0x9eu8; 32];
+        let mut state = MatcherState::new().with_market(base_mint, quote_mint);
+
+        let bid_id = [0x42u8; 16];
+        let note_buyer = [0x55u8; 32];
+        let owner = fr_safe(0x11);
+        let viewing = [0xABu8; 32];
+
+        // Input-note opening for the buyer, carrying a viewing pubkey.
+        state.openings_mut().insert(
+            note_buyer,
+            OrderOpening {
+                opening: NoteOpening {
+                    token_mint: quote_mint,
+                    amount: 2_000,
+                    owner_commitment: owner,
+                    inner_hash: fr_safe(0x33),
+                    nullifier: [0x77u8; 32],
+                },
+                order_id: bid_id,
+                expiry_slot: 1_000_000,
+                merkle_root: [0xDDu8; 32],
+                tree_id: 3,
+                valid_input_proof: Groth16ProofBytes {
+                    pi_a: [1u8; 64],
+                    pi_b: [2u8; 128],
+                    pi_c: [3u8; 64],
+                },
+                from_relock: false,
+                viewing_pubkey: Some(viewing),
+            },
+        );
+        // One continuation anchor for the bid.
+        state.openings_mut().insert_anchor_pool(
+            bid_id,
+            AnchorPool::new(vec![Anchor {
+                inner_hash: fr_safe(0x22),
+                nullifier: [0x88u8; 32],
+            }]),
+        );
+
+        // A partial fill that relocks the buyer's residual (note_e).
+        let m = MatchPair {
+            note_buyer,
+            note_seller: [0x66u8; 32],
+            note_e_commitment: [0u8; 32],
+            note_f_commitment: [0u8; 32],
+            owner_buyer: [0x01u8; 32],
+            owner_seller: [0x02u8; 32],
+            user_commitment_buyer: fr_safe(0x44),
+            user_commitment_seller: fr_safe(0x45),
+            buyer_note_value: 2_000,
+            seller_note_value: 1_000,
+            base_amt: 5,
+            quote_amt: 1_500,
+            buyer_change_amt: 500,
+            seller_change_amt: 0,
+            buyer_fee_amt: 0,
+            seller_fee_amt: 0,
+            buyer_relock_order_id: bid_id,
+            buyer_relock_expiry: 1_000_000,
+            seller_relock_order_id: RELOCK_ORDER_ID_NONE,
+            seller_relock_expiry: 0,
+            price: 100,
+            pyth_at_match: 100,
+            batch_slot: 10,
+            match_id: 0,
+            status: MatchStatus::Filled,
+        };
+        let mut output = RunBatchOutput::empty(10, 100, 0);
+        output.matches = vec![m];
+
+        assign_continuation_anchors(&mut state, &mut output);
+
+        // The rotated opening is keyed by the freshly-computed note_e.
+        let note_e = output.matches[0].note_e_commitment;
+        assert_ne!(note_e, [0u8; 32], "note_e should have been rebuilt");
+        let rotated = state
+            .openings()
+            .get(&note_e)
+            .expect("rotated continuation opening present");
+        assert!(rotated.from_relock, "continuation is a relock");
+        assert_eq!(
+            rotated.viewing_pubkey,
+            Some(viewing),
+            "viewing pubkey carried onto the continuation opening"
+        );
     }
 }

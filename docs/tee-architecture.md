@@ -927,6 +927,15 @@ TEE crash, which is the safe default.
 
 ### 9.1 Implementation plan (split across PR 4g.4a + 4g.4b)
 
+> **STATUS (current):** both stages below are DONE. The `Prover` trait is
+> backed by `prover::ark_prover::ArkMatchBatchProver` (ark-circom), with
+> optional `rapidsnark` + `icicle` backends selectable via `NYX_TEE_PROVER`.
+> There is no `NotYetWiredProver` stub anymore. The leaf is a single
+> commitment-only `Poseidon10` (not the two-stage hash this plan described),
+> and the verifier takes 3 public inputs (`[merkle_root, fee_rate_bps,
+> protocol_owner_commitment]`), not one. The plan text below is kept as
+> design lineage.
+
 The prover is built in two stages so the byte-equality-critical
 foundation lands and is tested independently of the witness-calc +
 proving dep wrangling:
@@ -934,24 +943,29 @@ proving dep wrangling:
 **PR 4g.4a — deterministic foundation (DONE, commit `e9962b0`).**
 Pure-Rust port of the byte-critical pieces of
 `packages/sdk/tests/helpers/match-batch-prover.ts`, behind a
-`Prover` trait whose stub returns `NotYetWired`:
+`Prover` trait (originally a `NotYetWired` stub; now backed by
+`ArkMatchBatchProver`):
 
 - `prover/witness.rs` — `MatchSlotWitness` type + `dummy_slot` +
   `pad_batch`. All Poseidon goes through `darkpool-crypto` for
   parity.
-- `prover/leaf.rs` — two-stage Poseidon12 → Poseidon9 leaf hash +
+- `prover/leaf.rs` — single commitment-only Poseidon10 leaf hash +
   Merkle root + inclusion path. Pinned regression hex for the
-  dummy-slot leaf.
+  dummy-slot leaf. (Originally a two-stage Poseidon12→Poseidon9 hash;
+  collapsed to one Poseidon10 by amount-privacy P1b.)
 - `prover/constraints.rs` — conservation validators (quote = base
   × price; a/b-amount sums) surfacing named errors before the
   circuit ever sees a bad witness.
-- `prover/inputs.rs` — the snarkjs-format single-element public-
-  input vector (the batch Merkle root).
-- `prover/groth16.rs` — the `Prover` trait + `NotYetWiredProver`
-  stub.
+- `prover/inputs.rs` — the snarkjs-format public-input vector.
+  (Now 3 elements: `[merkle_root, fee_rate_bps,
+  protocol_owner_commitment]` — was a single element, the batch
+  Merkle root, before amount-privacy P1b added the fee floor +
+  fee-note binding.)
+- `prover/groth16.rs` — the `Prover` trait (the real impl is
+  `prover::ark_prover::ArkMatchBatchProver`).
 
-**PR 4g.4b — ark-circom 0.5.0 wiring (planned).** Replaces the
-stub's `Err(NotYetWired)` branch with a real proof:
+**PR 4g.4b — ark-circom 0.5.0 wiring (DONE).** Replaces the
+original stub with a real proof:
 
 - Use **`ark-circom` 0.5.0** (the published crates.io version —
   it depends on `ark-*` 0.5.0 from crates.io with NO

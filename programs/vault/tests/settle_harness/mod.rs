@@ -941,7 +941,10 @@ pub struct MatchResultPayload {
     // Amount-privacy (P3b): the seven plaintext amount fields (base/quote/
     // buyer_change/seller_change/buyer_fee/seller_fee/clearing_price) were
     // dropped — they're proven in-circuit + bound by the note commitments.
+    // Change-amount recovery (Proposal B, v8): the 128-byte encrypted
+    // change_amount bundle was appended.
     // Mirror of `vault::instructions::tee_forced_settle::MatchResultPayload`.
+    pub fill_recovery: [u8; 128],
 }
 
 /// Sentinel used by on-chain code.
@@ -996,6 +999,7 @@ impl MatchResultPayload {
             seller_relock_order_id: RELOCK_ORDER_ID_NONE,
             seller_relock_expiry: 0,
             batch_slot: 0,
+            fill_recovery: [0u8; 128],
         }
     }
 }
@@ -1005,7 +1009,7 @@ impl MatchResultPayload {
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    h.update(b"nyx-match-v7");
+    h.update(b"nyx-match-v8");
     h.update(p.match_id);
     h.update(p.note_a_commitment);
     h.update(p.note_b_commitment);
@@ -1024,6 +1028,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     h.update(p.seller_relock_order_id);
     h.update(p.seller_relock_expiry.to_le_bytes());
     h.update(p.batch_slot.to_le_bytes());
+    h.update(p.fill_recovery); // v8: change-amount recovery bundle
     let out = h.finalize();
     let mut r = [0u8; 32];
     r.copy_from_slice(&out);
@@ -1309,6 +1314,7 @@ fn to_onchain_payload(
         seller_relock_order_id: p.seller_relock_order_id,
         seller_relock_expiry: p.seller_relock_expiry,
         batch_slot: p.batch_slot,
+        fill_recovery: p.fill_recovery,
     }
 }
 

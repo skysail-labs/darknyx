@@ -80,11 +80,22 @@ pub struct MatchResultPayload {
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
     pub batch_slot: u64,
+    /// Change-amount recovery (Proposal B): the per-fill X25519-ECIES bundle
+    /// `ephemeral_pubkey(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ zero_pad(24)`.
+    /// The TEE encrypts each side's change_amount to that order's viewing key so
+    /// a change note stays recoverable after a CVM redeploy wipes the live fill
+    /// memo. Opaque to the program — it never reads or constrains these bytes;
+    /// they ride the (signed) payload only to be persisted on-chain. All-zero
+    /// when the fill has no recoverable change. 128 (not 104) because borsh 0.10
+    /// only serializes `[u8; N]` for `N ≤ 32` then 64/128; the last 24 are zero.
+    pub fill_recovery: [u8; 128],
     // Amount-privacy (P3b): `clearing_price` was removed alongside the other
     // plaintext amounts — the price is proven in-circuit
     // (`quote === base*price`) and bound inside the note commitments, so it no
     // longer needs to ride in the (public) settle ix. The domain tag bumped
-    // `nyx-match-v6` → `nyx-match-v7` for this layout change.
+    // `nyx-match-v6` → `nyx-match-v7` for this layout change, then
+    // `nyx-match-v7` → `nyx-match-v8` when change-amount recovery (Proposal B)
+    // appended the `fill_recovery` field above.
     //
     // v3.1 note: `price_proof` and `price_commitment` had previously been
     // factored out into a preceding `verify_valid_price` ix; that path was
@@ -212,9 +223,10 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         // v7: amount-privacy (P3b) dropped the seven plaintext amount fields
         // (base/quote/buyer_change/seller_change/buyer_fee/seller_fee/price)
         // from the payload — they're proven in-circuit + bound by the note
-        // commitments. Bumping the tag invalidates every v6 signature over the
-        // old amount-bearing layout.
-        b"nyx-match-v7",
+        // commitments. v8: change-amount recovery (Proposal B) appended the
+        // 128-byte `fill_recovery` ciphertext bundle. Bumping the tag
+        // invalidates every signature over an older layout.
+        b"nyx-match-v8",
         p.match_id.as_ref(),
         p.note_a_commitment.as_ref(),
         p.note_b_commitment.as_ref(),
@@ -233,6 +245,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         p.seller_relock_order_id.as_ref(),
         &seller_relock_exp,
         &slot,
+        p.fill_recovery.as_ref(), // v8: change-amount recovery bundle
     ])
     .to_bytes()
 }
@@ -357,15 +370,16 @@ mod tests {
             seller_relock_order_id: [0u8; 16],
             seller_relock_expiry: 0,
             batch_slot: 0,
+            fill_recovery: [0u8; 128],
         };
         let hash = canonical_payload_hash(&p);
         // Keep in sync with packages/sdk/tests/settle-builder.test.ts
         // `[hash_cross_env_parity]`. When the payload shape changes, update
         // BOTH sides — any divergence breaks the TEE signature verification.
         let expected: [u8; 32] = [
-            0x38, 0xD6, 0x61, 0x37, 0x4A, 0x9C, 0xA4, 0xAF, 0x86, 0xE5, 0x89, 0x6C, 0xD6, 0x6B,
-            0x0F, 0xA0, 0xF0, 0x5C, 0x39, 0xAC, 0x67, 0x33, 0x22, 0x92, 0x0B, 0x96, 0xEE, 0x42,
-            0xE1, 0xAD, 0x4C, 0x2D,
+            0x32, 0x4C, 0xA2, 0x82, 0x93, 0x52, 0x9A, 0xDA, 0x1D, 0x68, 0x34, 0xC1, 0x63, 0x43,
+            0xE2, 0xA0, 0x59, 0x3E, 0x0A, 0x50, 0xBB, 0x2D, 0x7B, 0x9D, 0x63, 0xFB, 0xDE, 0xF1,
+            0x2F, 0xBC, 0x26, 0x88,
         ];
         if hash != expected {
             panic!("canonical_payload_hash drifted — got {:02X?}", hash);

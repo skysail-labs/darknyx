@@ -2,7 +2,7 @@
 //! of a CLAUDE.md §6 byte-equality contract.
 //!
 //! This Rust port MUST produce, for any payload:
-//!   - the SAME 424-byte Borsh serialization as the on-chain
+//!   - the SAME 552-byte Borsh serialization as the on-chain
 //!     `vault::instructions::tee_forced_settle::MatchResultPayload`
 //!     (AnchorSerialize) and the SDK's
 //!     `settle-builder.ts::serializePayload`;
@@ -21,7 +21,9 @@
 //! `buyer/seller_change_amt`, `buyer/seller_fee_amt`, `clearing_price`) were
 //! dropped from the payload — they're proven in-circuit + bound by the note
 //! commitments, and putting them in the (public, on-chain) settle ix leaked
-//! every trade size. The domain tag bumped `v6`→`v7`.
+//! every trade size. The domain tag bumped `v6`→`v7`. Change-amount recovery
+//! (Proposal B) then appended the 128-byte `fill_recovery` field and bumped
+//! `v7`→`v8` (424→552 bytes).
 //!
 //! ## Two distinct field orderings (do not conflate)
 //!
@@ -29,7 +31,7 @@
 //!   fee-note fields `note_fee_base_commitment` + `note_fee_quote_commitment`
 //!   right after `order_id_b`.
 //! - **Canonical hash**: the same hand-ordered concatenation, domain-tagged
-//!   `b"nyx-match-v7"`.
+//!   `b"nyx-match-v8"`.
 //!
 //! Both orderings are reproduced verbatim below from the on-chain
 //! source + the SDK.
@@ -39,8 +41,10 @@ use sha2::{Digest, Sha256};
 
 /// Domain tag for the canonical hash. **Do not change** — on-chain
 /// verification rejects any hash computed with a different tag. Bumped
-/// `v6`→`v7` when amount-privacy (P3b) dropped the seven plaintext amounts.
-pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v7";
+/// `v6`→`v7` when amount-privacy (P3b) dropped the seven plaintext amounts;
+/// `v7`→`v8` when change-amount recovery (Proposal B) appended the 128-byte
+/// `fill_recovery` field (the on-chain encrypted change_amount backstop).
+pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v8";
 
 /// Settle payload. Field order is the on-chain struct's declaration order —
 /// `#[derive(BorshSerialize)]` then produces byte-identical output to
@@ -69,12 +73,19 @@ pub struct MatchResultPayload {
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
     pub batch_slot: u64,
+    /// Change-amount recovery (Proposal B): the per-fill X25519-ECIES bundle
+    /// `ephemeral_pubkey(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ zero_pad(24)`
+    /// (see `crate::settle::fill_recovery::FillCiphertext::to_payload_bytes`).
+    /// All-zero when the fill has no recoverable change. 128 (not 104) because
+    /// Anchor's borsh 0.10 only serializes `[u8; N]` for `N ≤ 32` then 64/128.
+    pub fill_recovery: [u8; 128],
 }
 
 impl MatchResultPayload {
     /// Total Borsh-encoded width: 16 + 6×32 + 2×32 + 2×16 +
-    /// 2×32 (base+quote fee notes) + 16 + 8 + 16 + 8 + 8 = 424 bytes.
-    pub const WIRE_LEN: usize = 424;
+    /// 2×32 (base+quote fee notes) + 16 + 8 + 16 + 8 + 8 + 128
+    /// (fill_recovery) = 552 bytes.
+    pub const WIRE_LEN: usize = 552;
 
     /// Borsh serialization — the bytes that go into the
     /// `tee_forced_settle_batched` ix data. Byte-identical to the
@@ -108,6 +119,7 @@ impl MatchResultPayload {
         h.update(self.seller_relock_order_id);
         h.update(self.seller_relock_expiry.to_le_bytes());
         h.update(self.batch_slot.to_le_bytes());
+        h.update(self.fill_recovery); // v8: change-amount recovery bundle
         h.finalize().into()
     }
 }
@@ -139,6 +151,7 @@ mod tests {
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
             batch_slot: 0,
+            fill_recovery: [0; 128],
         }
     }
 
@@ -148,9 +161,9 @@ mod tests {
     #[test]
     fn canonical_hash_matches_onchain_fixed_vector() {
         let expected: [u8; 32] = [
-            0x38, 0xD6, 0x61, 0x37, 0x4A, 0x9C, 0xA4, 0xAF, 0x86, 0xE5, 0x89, 0x6C, 0xD6, 0x6B,
-            0x0F, 0xA0, 0xF0, 0x5C, 0x39, 0xAC, 0x67, 0x33, 0x22, 0x92, 0x0B, 0x96, 0xEE, 0x42,
-            0xE1, 0xAD, 0x4C, 0x2D,
+            0x32, 0x4C, 0xA2, 0x82, 0x93, 0x52, 0x9A, 0xDA, 0x1D, 0x68, 0x34, 0xC1, 0x63, 0x43,
+            0xE2, 0xA0, 0x59, 0x3E, 0x0A, 0x50, 0xBB, 0x2D, 0x7B, 0x9D, 0x63, 0xFB, 0xDE, 0xF1,
+            0x2F, 0xBC, 0x26, 0x88,
         ];
         let got = fixed_vector_payload().canonical_hash();
         assert_eq!(
@@ -160,10 +173,12 @@ mod tests {
     }
 
     #[test]
-    fn borsh_serialization_is_424_bytes() {
+    fn borsh_serialization_is_552_bytes() {
         let bytes = fixed_vector_payload().serialize();
         assert_eq!(bytes.len(), MatchResultPayload::WIRE_LEN);
-        assert_eq!(bytes.len(), 424);
+        assert_eq!(bytes.len(), 552);
+        // The appended fill_recovery field occupies the last 128 bytes.
+        assert_eq!(&bytes[424..552], &[0u8; 128]);
     }
 
     #[test]
@@ -224,5 +239,6 @@ mod tests {
         perturb!(note_fee_base_commitment = [0x77; 32]);
         perturb!(batch_slot = 1);
         perturb!(buyer_relock_expiry = 1);
+        perturb!(fill_recovery = [0x99; 128]);
     }
 }

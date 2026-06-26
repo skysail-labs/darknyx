@@ -1,13 +1,13 @@
 ---
 sidebar_position: 4
 title: Shielded Pool
-description: How balances are held privately — UTXO-style notes committed on-chain as hashes, with a Merkle tree, nullifiers, and zero-knowledge spends.
+description: How balances are held privately, as UTXO-style notes committed on-chain as hashes, with a Merkle tree, nullifiers, and zero-knowledge spends.
 ---
 
 # Shielded Pool
 
 :::info TL;DR
-Your balance on Nyx is a set of **notes** — UTXO-style values committed on-chain as
+Your balance on Nyx is a set of **notes**, UTXO-style values committed on-chain as
 Poseidon hashes that seal the owner, amount, and token. The commitments live in a
 Merkle tree; spending a note publishes a **nullifier** that prevents reuse. You
 prove ownership and inclusion in zero knowledge, so the chain enforces correctness
@@ -17,7 +17,7 @@ without ever learning what you hold.
 ## Notes, not balances
 
 A custodial venue stores your balance as a number in a database. Nyx stores it as
-a set of **notes**. A note is a commitment — a Poseidon hash — to four things:
+a set of **notes**. A note is a commitment, a Poseidon hash, to four things:
 
 ```text
 note commitment = Hash( token mint, amount, owner, inner_hash )
@@ -32,7 +32,7 @@ property of the data structure rather than a policy.
 
 Every note commitment is appended to an on-chain incremental **Merkle tree**. The
 tree's root is a single hash summarizing every note that exists. To use a note you
-prove, in zero knowledge, that it is a leaf under the current root — without
+prove, in zero knowledge, that it is a leaf under the current root, without
 revealing *which* leaf.
 
 ```text
@@ -45,20 +45,20 @@ revealing *which* leaf.
                └─ your note: you hold a secret opening + an inclusion path
 ```
 
-The tree is **sharded** for settlement throughput — several independent subtrees,
-each with its own root — but conceptually it is one accumulator of all
+The tree is **sharded** for settlement throughput (several independent subtrees,
+each with its own root), but conceptually it is one accumulator of all
 commitments. You read roots and inclusion paths through the
 [Merkle Proofs](../account/merkle-proofs) endpoints.
 
 ## Nullifiers prevent double-spends
 
 A commitment proves a note *exists*; a **nullifier** proves it has been *spent*.
-When a note is consumed — by a settlement or a withdrawal — a unique nullifier
+When a note is consumed (by a settlement or a withdrawal) a unique nullifier
 derived from it is published on-chain. The nullifier is computed so that:
 
 - it is **unlinkable** to the note commitment (publishing it does not reveal which
   note was spent), yet
-- it is **deterministic** — spending the same note twice produces the same
+- it is **deterministic**: spending the same note twice produces the same
   nullifier, and the second spend is rejected because the nullifier already
   exists.
 
@@ -77,14 +77,14 @@ attempt collides with the published nullifier.
 Each note's commitment and its nullifier are both anchored on a single
 amount-independent value, the note's **inner hash**. Decoupling the nullifier from
 the (amount-dependent) commitment is what lets you **pre-supply** the secret
-material for your future change notes — the continuation
-[anchor pool](../trading-concepts/anchor-pool) — so a partially-filled order can
+material for your future change notes (the continuation
+[anchor pool](../trading-concepts/anchor-pool)) so a partially-filled order can
 re-lock its remainder without a round-trip. The inner hash is the hinge that makes
 private, resting, repeatedly-fillable orders possible.
 
 ## Spending in zero knowledge
 
-To move value out of the pool — settling a trade or withdrawing — you produce a
+To move value out of the pool (settling a trade or withdrawing) you produce a
 zero-knowledge proof that:
 
 1. the input note is a leaf under a recent tree root (it exists and is yours),
@@ -93,8 +93,17 @@ zero-knowledge proof that:
 
 The on-chain program verifies the proof and applies the result: it publishes the
 input's nullifier, appends the output commitments, and (for a withdrawal) releases
-tokens. The chain learns that *a* valid spend happened — never whose, or for how
+tokens. The chain learns that *a* valid spend happened, never whose, or for how
 much beyond what a withdrawal necessarily reveals.
+
+## Consolidating notes
+
+An order is backed by a single note, so to trade more than any one note holds you
+first **merge** several notes of the same token into one. A merge is a
+zero-knowledge operation against the pool, like a spend: it consumes its input
+notes (publishing their nullifiers) and appends one output note carrying their
+combined value, proven so nothing is created or destroyed. The SDK exposes it as a
+single call, leaving you one larger spendable note to back a bigger order.
 
 ## The lifecycle, end to end
 
@@ -111,8 +120,9 @@ much beyond what a withdrawal necessarily reveals.
  withdraw ────► note nullified; tokens released to your wallet
 ```
 
-Every transition is gated on-chain by a distinct record — a wallet entry, a
-nullifier, a consumed-note marker, a note lock — so a note can never be used twice
-regardless of what the engine does. See [Account Model](../account/account-model)
-for how you reconstruct your spendable set from this, and
-[Settlement](./settlement) for the on-chain spend pipeline.
+Every transition is gated on-chain by a distinct record (a wallet entry, a
+nullifier, a consumed-note marker, a note lock), so a note can never be used twice
+regardless of what the engine does. See [Deposit](../account/deposit) and
+[Withdraw](../account/withdraw) for the on-ramp and off-ramp,
+[Account Model](../account/account-model) for how you reconstruct your spendable
+set, and [Settlement](./settlement) for the on-chain spend pipeline.

@@ -1,13 +1,13 @@
 ---
 sidebar_position: 2
 title: Confidential VM Architecture
-description: The matching engine runs inside a single attested Intel TDX confidential VM whose keys are bound to one measured image — the privacy and integrity root of the venue.
+description: The matching engine runs inside a single attested Intel TDX confidential VM whose keys are bound to one measured image, the privacy and integrity root of the venue.
 ---
 
 # Confidential VM Architecture
 
 :::info TL;DR
-Nyx matches orders inside a single **Intel TDX Confidential VM** — a hardware-
+Nyx matches orders inside a single **Intel TDX Confidential VM**, a hardware-
 isolated enclave whose memory the operator cannot read and whose signing keys are
 **derived from its measured image**. Change the code and the keys no longer
 derive, so a substituted engine cannot sign settlements or decrypt order intent.
@@ -20,7 +20,7 @@ verification, not from trusting the operator.
 A dark pool's central problem is: who runs the matching engine, and why can't they
 cheat? Most private venues answer "an operator you have to trust" or "a committee
 of operators, most of whom you have to trust." Nyx answers with hardware: the
-engine runs inside an Intel TDX confidential VM (a "CVM") — an enclave the CPU
+engine runs inside an Intel TDX confidential VM (a "CVM"), an enclave the CPU
 isolates from everything else on the host, including the operator, the
 hypervisor, and other tenants.
 
@@ -34,8 +34,8 @@ Two properties matter:
 
 ## Keys bound to the image
 
-The decisive property is **key binding**. The enclave's secrets — the TLS
-certificate key, the Ed25519 key it signs settlements with — are derived through a
+The decisive property is **key binding**. The enclave's secrets (the TLS
+certificate key, the Ed25519 key it signs settlements with) are derived through a
 key-management flow that ties them to the enclave's measurement. A different
 image produces different keys.
 
@@ -58,7 +58,7 @@ This is what makes attestation actionable. It is not enough to *measure* the cod
 the measurement has to *gate* the capability. On Nyx:
 
 - The TLS key is bound to the image, so a substituted engine cannot terminate your
-  encrypted channel — you would be talking to a different key, detectable at
+  encrypted channel. You would be talking to a different key, detectable at
   attestation.
 - The settlement signer is bound to the image **and registered on-chain**, so a
   substituted engine cannot produce a settlement transaction the vault program
@@ -73,11 +73,11 @@ the measurement has to *gate* the capability. On Nyx:
 | Deploy a new image (a new measurement) | Move user funds (custody is on-chain, gated by proofs) |
 | Observe encrypted traffic | Substitute the engine without changing the attestation a client checks |
 
-The worst a malicious operator can do is **deny service** — stop the VM. They
-cannot steal funds and cannot deanonymize orders, because neither capability lives
-on the machine they control: funds are guarded by on-chain proof verification, and
-order intent is sealed inside hardware-encrypted memory keyed to the measured
-image.
+The worst a malicious operator can do is **deny service**, that is, stop the VM.
+They cannot steal funds and cannot deanonymize orders, because neither capability
+lives on the machine they control: funds are guarded by on-chain proof
+verification, and order intent is sealed inside hardware-encrypted memory keyed to
+the measured image.
 
 ## Single enclave vs. a committee
 
@@ -85,7 +85,7 @@ Some private venues split the matching engine across a committee of operators so
 no single one sees an order. Nyx takes a different route: a single enclave, but one
 whose operator sees *nothing* and whose integrity is hardware-attested and
 on-chain-enforced. The trust assumption is the CPU vendor's attestation and the
-soundness of the zero-knowledge proofs — not the honesty of a quorum of operators.
+soundness of the zero-knowledge proofs, not the honesty of a quorum of operators.
 The practical consequences:
 
 - **No collusion surface.** There is no committee whose members could collude;

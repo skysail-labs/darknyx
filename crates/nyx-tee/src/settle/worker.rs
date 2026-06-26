@@ -991,6 +991,7 @@ mod tests {
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
             batch_slot: 7,
+            fill_recovery: [0u8; 128],
         }
     }
 
@@ -1044,7 +1045,14 @@ mod tests {
             tee_keypairs: vec![Arc::new(Keypair::new_from_array([0x42; 32]))],
             signing_keys: vec![Arc::new(SigningKey::from_bytes(&[0x42; 32]))],
             prover: Arc::new(FakeProver { n }),
-            static_alt: None,
+            // Production stacks the static settle ALT under the per-batch ALT;
+            // with the v8 +128 recovery bundle the per-batch ALT alone overflows
+            // the 1232-byte cap, so the worker tests must mirror production and
+            // provide it too (vault_config + sysvar + system + 4 merkle shards).
+            static_alt: Some(crate::settle::alt::alt_account(
+                solana_address::Address::new_from_array([0x44; 32]),
+                crate::settle::settle_batched::static_alt_addresses(4),
+            )),
             alt_pool: Arc::new(tokio::sync::Mutex::new(AltPool::new())),
             settle_state: state,
             confirm_timeout: Duration::from_secs(5),

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Authentication
-description: The two-layer Nyx auth model — account bearer tokens plus per-order trading-key signatures — and how to obtain and use them.
+description: The two-layer Nyx auth model, account bearer tokens plus per-order trading-key signatures, and how to obtain and use them.
 ---
 
 # Authentication
@@ -25,7 +25,7 @@ Two layers, two questions.
 The account layer is operational: it enables rate-limiting and audit, and is
 provisioned out of band (you receive an `api_key`, an `api_secret`, and a
 `passphrase`). The order layer is cryptographic: a trading key is an Ed25519
-keypair you control, and the venue attributes — and ultimately settles — each
+keypair you control, and the venue attributes, and ultimately settles, each
 order to the key that signed it.
 
 **One account can drive many trading keys.** A market-maker fleet or a set of
@@ -122,19 +122,19 @@ immediately; subsequent requests with it return `401`.
 Placing, cancelling, or modifying an order requires an Ed25519 signature from the
 order's trading key, in addition to the bearer token.
 
-- **Place** — sign the canonical order body. The signature binds every economic
+- **Place.** Sign the canonical order body. The signature binds every economic
   field of the order (symbol, side, type, amount, price limit, expiry, the
   collateral-note commitment, the continuation anchor-pool hash, and a nonce) so
   the venue can attribute the order to your key without any per-order on-chain
   transaction.
-- **Cancel** — sign a canonical cancel body over the order id, your trading key,
+- **Cancel.** Sign a canonical cancel body over the order id, your trading key,
   and a cancel nonce.
-- **Modify** — sign a cancel of the old order *and* a full new order; both
+- **Modify.** Sign a cancel of the old order *and* a full new order; both
   signatures must come from the same trading key.
 
 The canonical encodings are fixed-length and unambiguous, so re-encoding from
 JSON always yields the same bytes to sign. The SDK constructs and signs these for
-you. The exact field layout for each is on the corresponding endpoint page —
+you. The exact field layout for each is on the corresponding endpoint page:
 [Place Order](../orders/place-order), [Cancel Order](../orders/cancel-order),
 [Modify Order](../orders/modify-order).
 
@@ -148,6 +148,6 @@ These require no token:
 - `GET /tree/root`
 - `GET /transparency`
 
-Everything else — order management, account-scoped reads (`/tree/inclusion`,
-`/tree/leaves`, `/settlement/status`), and the WebSocket streams — requires the
-bearer token.
+Everything else requires the bearer token: order management, account-scoped reads
+(`/tree/inclusion`, `/tree/leaves`, `/settlement/status`), and the WebSocket
+streams.

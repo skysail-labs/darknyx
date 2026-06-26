@@ -2,6 +2,7 @@
 export * from "./errors.js";
 export * from "./providers.js";
 export * from "./keys/key-generators.js";
+export * from "./keys/fill-encryption.js";
 export * from "./keys/user-commitment.js";
 export * from "./utxo/note.js";
 export * from "./utxo/deposit.js";
@@ -51,7 +52,8 @@ export * from "./orders/order-client.js";
 export * from "./orders/trading-ws-client.js";
 export * from "./zk/valid-input-prover.js";
 export * from "./fills/history.js";
-export * from "./fills/replay.js";
+export * from "./fills/recover.js";
+export * from "./utxo/change-note.js";
 export * from "./fills/ws-client.js";
 export * from "./settlement/settle-builder.js";
 export * from "./settlement/settlement-watcher.js";

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Programmatic Access
-description: The Nyx API surface at a glance — the two-layer auth model, the REST and WebSocket endpoints, and a quick start.
+description: The Nyx API surface at a glance: the two-layer auth model, the REST and WebSocket endpoints, and a quick start.
 ---
 
 # Programmatic Access
@@ -25,7 +25,7 @@ need both to trade.
 | **Order** | Ed25519 **trading-key** signature over the canonical order body | "Who cryptographically owns this order?" | Every place / cancel / modify |
 
 The separation is deliberate. One account may operate many trading keys (sub-
-portfolios, a market-maker fleet), and the **trading key — not the account — is
+portfolios, a market-maker fleet), and the **trading key, not the account, is
 the cryptographic identity** that authorizes settlement. The bearer token only
 enables operational controls; it cannot, by itself, move or cancel another key's
 orders.
@@ -100,7 +100,7 @@ curl -s "$GATEWAY/system/status" | jq .
 
 # 4. Place an order. The body carries the collateral-note commitment, the
 #    VALID_INPUT proof, the continuation anchor pool, and a trading-key
-#    signature over the canonical body — the SDK builds all of these. See
+#    signature over the canonical body. The SDK builds all of these. See
 #    Orders → Place Order for the full field reference.
 curl -s -X POST "$GATEWAY/orders" \
   -H "Authorization: Bearer $TOKEN" \
@@ -111,7 +111,7 @@ curl -s -X POST "$GATEWAY/orders" \
 :::tip Use the SDK
 A raw place-order body is large: it includes a note commitment, a 256-byte
 zero-knowledge input proof, an owner-commitment opening, and a ten-entry
-continuation anchor pool — all of which the **TypeScript SDK** derives and signs
+continuation anchor pool, all of which the **TypeScript SDK** derives and signs
 for you from your keys and a deposited note. Hand-building the body is possible
 (the wire contract is documented), but the SDK is the intended path. See
 [SDK → TypeScript Client](../sdk/typescript-client).
@@ -121,7 +121,7 @@ for you from your keys and a deposited note. Hand-building the body is possible
 
 Read endpoints and authenticated order management are subject to operational
 rate limiting at the venue. Design clients to back off on `429` responses and to
-prefer the WebSocket trading socket for high-frequency order management — one
+prefer the WebSocket trading socket for high-frequency order management, since one
 authenticated connection avoids the per-request handshake cost. See
 [System Status](../reference/system-status) for how the venue signals
 degradation.

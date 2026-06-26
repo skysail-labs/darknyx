@@ -98,11 +98,13 @@ reviews:
         circuits/build/<name>/circuit_final.zkey AND
         programs/vault/src/zk/vk_<name>.rs in the SAME commit, else the deployed
         verifier silently rejects every new proof (InvalidProof 6000) —
-        CLAUDE.md §4. light-poseidon caps Poseidon at 12 inputs (MAX_X5_LEN=13),
-        so the N=16 leaf hash is deliberately two-stage (Poseidon12 +
-        Poseidon9) — do not refactor to a single hash. Domain tags
-        DOMAIN_LEAF_INNER=20 / LEAF_TOP=21 / BATCH_ROOT=22 must stay identical
-        across the circom template, the Rust handler, and the TS prover helper.
+        CLAUDE.md §4. light-poseidon caps Poseidon at 12 inputs (MAX_X5_LEN=13);
+        the N=16 leaf is a single commitment-only Poseidon10 (DOMAIN_LEAF_V2=23,
+        note_a..f + the two fee notes + batch_slot) — 10 inputs <= 12. Keep it
+        <=12: re-adding bound fields (e.g. plaintext amounts) would force the old
+        two-stage Poseidon12+Poseidon9 split (tags 20/21, now retired). Domain
+        tags DOMAIN_LEAF_V2=23 / BATCH_ROOT=22 must stay identical across the
+        circom template, the Rust handler, and the TS prover helper.
     - path: "programs/vault/src/instructions/tee_forced_settle*.rs"
       instructions: >-
         The settle handlers. Verify (a) the conservation laws still hold (inputs

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Merkle Proofs
-description: Read the on-chain note tree — the current root, an inclusion proof for one of your notes, and paginated leaves to rebuild a local mirror.
+description: Read the on-chain note tree, getting the current root, an inclusion proof for one of your notes, and paginated leaves to rebuild a local mirror.
 ---
 
 # Merkle Proofs
@@ -85,7 +85,7 @@ GET /tree/inclusion?note_commitment=<hex>&tree_id=0
 | `siblings` | string[] | The 20 sibling hashes from leaf to root (the authentication path). |
 
 The `siblings` path plus your secret note opening is the witness the SDK feeds to
-the input-proof circuit. You do not assemble the proof by hand — the SDK takes
+the input-proof circuit. You do not assemble the proof by hand. The SDK takes
 the inclusion proof and produces the Groth16 proof you attach to an order or
 withdrawal.
 
@@ -127,6 +127,6 @@ GET /tree/leaves?tree_id=0&from=0&limit=512
 | `leaves[].value` | string | The leaf hash (a note commitment), hex. |
 | `merkle_root` | string | The root the page is consistent with. |
 
-A leaf value is a note *commitment* — an opaque hash. It tells you a note exists,
+A leaf value is a note *commitment*, an opaque hash. It tells you a note exists,
 not who owns it or what it is worth; only your spending key turns the leaves you
 own into balances. See [Account Model](./account-model).

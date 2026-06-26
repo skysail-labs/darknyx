@@ -194,6 +194,16 @@ pub struct OrderOpening {
     /// SKIP `lock_note` for it — re-locking would collide. False for a fresh
     /// deposit opening registered at intake.
     pub from_relock: bool,
+    /// The order owner's X25519 viewing-encryption public key, if supplied at
+    /// intake (`PlaceOrderRequest::viewing_pubkey`). When set, the settle
+    /// assembler encrypts THIS side's `change_amount` to it for the permanent
+    /// on-chain recovery backstop (change-amount recovery, Proposal B): the
+    /// change note returns to this same owner, so its input-note opening is the
+    /// right recipient. Carried forward verbatim across continuation re-locks
+    /// (`assign_continuation_anchors`), so a multi-fill residual stays
+    /// recoverable. `None` ⇒ no on-chain ciphertext for this side (back-compatible
+    /// with clients that don't send a viewing key).
+    pub viewing_pubkey: Option<[u8; 32]>,
 }
 
 /// Per-order settle-input table. One entry per live order, keyed by
@@ -353,6 +363,7 @@ mod tests {
                 pi_c: [3u8; 64],
             },
             from_relock: false,
+            viewing_pubkey: None,
         }
     }
 

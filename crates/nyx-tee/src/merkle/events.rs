@@ -329,6 +329,7 @@ mod tests {
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
             batch_slot: 7,
+            fill_recovery: [0u8; 128],
         }
     }
 

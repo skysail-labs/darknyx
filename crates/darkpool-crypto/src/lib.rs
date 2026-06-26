@@ -21,6 +21,8 @@
 pub mod errors;
 pub mod field;
 #[cfg(not(target_os = "solana"))]
+pub mod fill_encryption;
+#[cfg(not(target_os = "solana"))]
 pub mod keys;
 pub mod note;
 pub mod nullifier;
@@ -33,6 +35,10 @@ pub mod viewing_keys;
 
 pub use errors::CryptoError;
 pub use field::{fr_from_be_bytes, fr_to_be_bytes, pubkey_to_fr_pair, Fr, FR_BYTES};
+#[cfg(not(target_os = "solana"))]
+pub use fill_encryption::{
+    decrypt_change_amount, encrypt_change_amount, ephemeral_public, SIDE_BLOB_LEN,
+};
 #[cfg(not(target_os = "solana"))]
 pub use keys::{
     derive_blinding_factor, derive_inner_hash, derive_master_viewing_key, derive_spending_key,

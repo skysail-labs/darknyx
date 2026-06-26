@@ -328,6 +328,10 @@ pub fn assemble_match(
         seller_relock_order_id: m.seller_relock_order_id,
         seller_relock_expiry: m.seller_relock_expiry,
         batch_slot: m.batch_slot,
+        // Change-amount recovery (Proposal B): zero here; `assemble_batch`
+        // fills it from the openings' viewing keys (it has the OrderOpenings;
+        // this per-match fn only sees the NoteOpenings). Zero = no ciphertext.
+        fill_recovery: [0u8; 128],
     };
 
     Ok((witness, payload))
@@ -410,7 +414,7 @@ pub fn assemble_batch(
             None
         };
 
-        let (witness, payload) = assemble_match(MatchAssemblyInputs {
+        let (witness, mut payload) = assemble_match(MatchAssemblyInputs {
             match_pair: m,
             buyer_opening: &buyer.opening,
             seller_opening: &seller.opening,
@@ -427,6 +431,19 @@ pub fn assemble_batch(
 
         let buyer_lock = lock_inputs(m.note_buyer, &buyer);
         let seller_lock = lock_inputs(m.note_seller, &seller);
+
+        // Change-amount recovery (Proposal B): encrypt each side's change_amount
+        // to its order's viewing key so the change note stays recoverable after
+        // a CVM redeploy. The change note returns to the same owner, so the
+        // input note's opening is the right recipient. The ciphertext rides the
+        // SIGNED payload (so the TEE signature binds it on-chain).
+        let fill_ciphertext = crate::settle::fill_recovery::build_fill_ciphertext(
+            buyer.viewing_pubkey,
+            seller.viewing_pubkey,
+            m.buyer_change_amt,
+            m.seller_change_amt,
+        );
+        payload.fill_recovery = fill_ciphertext.to_payload_bytes();
 
         matches.push(MatchSettleInputs {
             payload,
@@ -783,6 +800,7 @@ mod tests {
 
     use crate::matcher::openings::OrderOpening;
     use crate::settle::lock_note::Groth16ProofBytes;
+    use darkpool_crypto::fill_encryption::{decrypt_change_amount, ephemeral_public};
 
     fn order_rec(opening: NoteOpening, order_id: [u8; 16]) -> OrderOpening {
         OrderOpening {
@@ -797,6 +815,7 @@ mod tests {
                 pi_c: [3u8; 64],
             },
             from_relock: false,
+            viewing_pubkey: None,
         }
     }
 
@@ -841,6 +860,60 @@ mod tests {
         // Payload carries the resolved order ids.
         assert_eq!(ms.payload.order_id_a, [0x01; 16]);
         assert_eq!(ms.payload.order_id_b, [0x02; 16]);
+    }
+
+    #[test]
+    fn assemble_batch_encrypts_change_to_the_viewing_key() {
+        // A buyer partial fill (change 250) with a viewing key on its opening:
+        // assemble_batch must produce a recovery ciphertext the buyer decrypts.
+        let buyer_sk = [0x31u8; 32];
+        let buyer_pub = ephemeral_public(&buyer_sk);
+        let (m, buyer, seller) = scenario(10, 1000, 250, 0, 0, 0);
+
+        let mut buyer_rec = order_rec(buyer, [0x01; 16]);
+        buyer_rec.viewing_pubkey = Some(buyer_pub);
+        let mut store = OpeningStore::new();
+        store.insert(m.note_buyer, buyer_rec);
+        store.insert(m.note_seller, order_rec(seller, [0x02; 16])); // no viewing key
+
+        let mut output = RunBatchOutput::empty(7, 100, 0);
+        output.matches = vec![m];
+
+        let bsi = assemble_batch(&output, &store, batch_params()).unwrap();
+        // The ciphertext rides the signed payload's fill_recovery field.
+        let ct = crate::settle::fill_recovery::FillCiphertext::from_payload_bytes(
+            &bsi.matches[0].payload.fill_recovery,
+        );
+        assert!(
+            !ct.is_empty(),
+            "buyer change + viewing key → ciphertext present"
+        );
+        assert_eq!(
+            decrypt_change_amount(&buyer_sk, &ct.ephemeral_pubkey, &ct.buyer_enc),
+            Some(250),
+            "buyer recovers its change_amount from the on-chain-bound ciphertext"
+        );
+        // Seller had no viewing key → its blob stays zeroed.
+        assert_eq!(ct.seller_enc, [0u8; 36]);
+    }
+
+    #[test]
+    fn assemble_batch_no_viewing_key_means_empty_ciphertext() {
+        // Default openings (viewing_pubkey: None) → no recovery ciphertext.
+        let (m, buyer, seller) = scenario(10, 1000, 250, 0, 0, 0);
+        let mut store = OpeningStore::new();
+        store.insert(m.note_buyer, order_rec(buyer, [0x01; 16]));
+        store.insert(m.note_seller, order_rec(seller, [0x02; 16]));
+        let mut output = RunBatchOutput::empty(7, 100, 0);
+        output.matches = vec![m];
+
+        let bsi = assemble_batch(&output, &store, batch_params()).unwrap();
+        assert!(
+            crate::settle::fill_recovery::FillCiphertext::from_payload_bytes(
+                &bsi.matches[0].payload.fill_recovery
+            )
+            .is_empty()
+        );
     }
 
     #[test]

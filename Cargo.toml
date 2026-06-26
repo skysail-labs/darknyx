@@ -56,6 +56,11 @@ num-bigint = "0.4"
 
 # Key derivation / crypto
 ed25519-dalek = "2.2.0"
+# X25519 ECDH for the change-amount recovery backstop (Proposal B): the TEE
+# encrypts each fill's change_amount to the order's viewing-encryption pubkey.
+# `static_secrets` lets one ephemeral secret serve both sides of a fill
+# (StaticSecret is Clone/reusable; EphemeralSecret consumes itself per ECDH).
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 hkdf = "0.12.4"
 sha3 = "0.10.8"
 sha2 = "0.10.8"

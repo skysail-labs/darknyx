@@ -21,11 +21,13 @@
  *      commitments let it detect gaps (a located commitment it has no memo/note
  *      for = a fill whose memo it still needs to replay).
  *
- * Gap recovery for a fill the client was offline for (memo missed) is handled by
- * the durable memo-replay endpoint (`replayFills` → `GET /fills/replay`, P7) —
- * the amount + opening come from there, not from this locator. So this module is
- * a secondary gap-detector now; `startFillsSync` recovers via replay first, then
- * tails the live WS.
+ * Gap recovery for a fill the client was offline for (memo missed) comes from
+ * the PERMANENT on-chain ciphertext (change-amount recovery, Proposal B):
+ * surfaced here as `IndexerFill.{ephemeralPubkey, changeEnc}`, which
+ * `recoverChangeFromChain` (`fills/recover.ts`) decrypts + self-verifies into a
+ * spendable note. It survives a CVM redeploy, so it's the durable backstop; the
+ * live `/ws/fills` push is the low-latency fast path. (The old durable
+ * memo-replay log + `GET /fills/replay` were retired in favour of this.)
  */
 
 import { deriveOrderId } from "../keys/key-generators.js";
@@ -45,6 +47,12 @@ export interface IndexerFill {
   /** 32-byte hex of the minted change note, or `null` when the side filled exactly. */
   changeNoteCommitment: string | null;
   batchSlot: string;
+  /** Change-amount recovery (Proposal B): the shared ephemeral X25519 pubkey
+   *  (hex) and THIS side's 36-byte encrypted change_amount (hex). The amount is
+   *  recoverable from the chain alone via `recoverChangeFromChain` — no FillMemo
+   *  needed. `null` when this side carries no on-chain ciphertext. */
+  ephemeralPubkey?: string | null;
+  changeEnc?: string | null;
 }
 
 /** Fetch an order's fills from the indexer. */

@@ -9,8 +9,8 @@
 //! The handler:
 //!   1. Verifies the TEE Ed25519 signature over canonical_payload_hash
 //!      (identical to the per-match flow).
-//!   2. Recomputes the per-slot leaf from the payload + the input
-//!      locks' mints (Poseidon12 + Poseidon9 — must byte-match the
+//!   2. Recomputes the per-slot leaf from the payload's note commitments
+//!      (single commitment-only Poseidon10 — must byte-match the
 //!      circuit's `MatchSlot` template).
 //!   3. Walks a fixed-depth-4 Merkle inclusion path (N=16) using the
 //!      provided sibling hashes + match_index.

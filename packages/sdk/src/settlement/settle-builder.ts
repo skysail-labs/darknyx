@@ -92,6 +92,11 @@ export interface MatchResultPayload {
   sellerRelockOrderId: Uint8Array;
   sellerRelockExpiry: bigint;
   batchSlot: bigint;
+  /** Change-amount recovery (Proposal B): the 128-byte X25519-ECIES bundle
+   *  `ephemeral_pubkey(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ zero_pad(24)`.
+   *  All-zero when the fill has no recoverable change. 128 (not 104) because
+   *  Anchor's borsh 0.10 only serializes `[u8; N]` for `N ≤ 32`, then 64/128. */
+  fillRecovery: Uint8Array;         // [u8; 128]
 }
 
 // ---------- Borsh serialisation ----------
@@ -143,6 +148,8 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     u64LE(p.batchSlot),
     // Amount-privacy (P3b): the seven plaintext amount fields were removed
     // from the payload (proven in-circuit + bound by the note commitments).
+    // Change-amount recovery (Proposal B, v8): the 128-byte ciphertext bundle.
+    fixed(p.fillRecovery, 128),
   );
 }
 
@@ -158,7 +165,8 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
 export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   const h = createHash("sha256");
   // v7: amount-privacy (P3b) dropped the seven plaintext amount fields.
-  h.update(Buffer.from("nyx-match-v7"));
+  // v8: change-amount recovery (Proposal B) appended the 128-byte fill_recovery.
+  h.update(Buffer.from("nyx-match-v8"));
   h.update(fixed(p.matchId, 16));
   h.update(fixed(p.noteAcommitment, 32));
   h.update(fixed(p.noteBcommitment, 32));
@@ -177,6 +185,7 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   h.update(fixed(p.sellerRelockOrderId, 16));
   h.update(u64LE(p.sellerRelockExpiry));
   h.update(u64LE(p.batchSlot));
+  h.update(fixed(p.fillRecovery, 128)); // v8: change-amount recovery bundle
   return new Uint8Array(h.digest());
 }
 
@@ -453,5 +462,8 @@ export function exactFillPayload(args: {
     sellerRelockOrderId: RELOCK_ORDER_ID_NONE,
     sellerRelockExpiry: 0n,
     batchSlot: args.batchSlot ?? 0n,
+    // Change-amount recovery (Proposal B): zeroed by default (no recovery
+    // ciphertext for an exact fill). The TEE populates it at settle.
+    fillRecovery: new Uint8Array(128),
   };
 }

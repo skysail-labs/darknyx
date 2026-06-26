@@ -234,6 +234,7 @@ mod tests {
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
             batch_slot: 0,
+            fill_recovery: [0u8; 128],
         }
     }
 
@@ -298,10 +299,10 @@ mod tests {
     fn ix_data_total_length() {
         let ix =
             build_settle_batched_ix(&dummy_tee(), 0, &dummy_payload(), 3, &proof(), &[0xAB; 32]);
-        // 8 disc + 1 tree_id + 424 payload (v7, amount-privacy P3b)
-        // + 1 match_index + 128 siblings = 562.
-        assert_eq!(ix.data.len(), 8 + 1 + 424 + 1 + 128);
-        assert_eq!(ix.data.len(), 562);
+        // 8 disc + 1 tree_id + 552 payload (v8: v7's 424 + 128 fill_recovery)
+        // + 1 match_index + 128 siblings = 690.
+        assert_eq!(ix.data.len(), 8 + 1 + 552 + 1 + 128);
+        assert_eq!(ix.data.len(), 690);
     }
 
     #[test]
@@ -309,14 +310,14 @@ mod tests {
         let ix =
             build_settle_batched_ix(&dummy_tee(), 5, &dummy_payload(), 7, &proof(), &[0xAB; 32]);
         assert_eq!(&ix.data[..8], &*SETTLE_BATCHED_DISCRIMINATOR);
-        // tree_id at 8; payload occupies [9, 433); match_index at 433;
-        // siblings [434, 562).
+        // tree_id at 8; payload occupies [9, 561); match_index at 561;
+        // siblings [562, 690).
         assert_eq!(ix.data[8], 5); // tree_id
-        assert_eq!(ix.data[433], 7); // match_index
-        assert_eq!(&ix.data[434..466], &[0x01; 32]); // sibling 0
-        assert_eq!(&ix.data[466..498], &[0x02; 32]); // sibling 1
-        assert_eq!(&ix.data[498..530], &[0x03; 32]);
-        assert_eq!(&ix.data[530..562], &[0x04; 32]);
+        assert_eq!(ix.data[561], 7); // match_index
+        assert_eq!(&ix.data[562..594], &[0x01; 32]); // sibling 0
+        assert_eq!(&ix.data[594..626], &[0x02; 32]); // sibling 1
+        assert_eq!(&ix.data[626..658], &[0x03; 32]);
+        assert_eq!(&ix.data[658..690], &[0x04; 32]);
     }
 
     #[test]

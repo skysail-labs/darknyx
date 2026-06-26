@@ -453,11 +453,19 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
 ### 5.3 Specific traps
 
 * **Leaf-hash arity cap.** `light-poseidon` (on-chain) caps Poseidon at 12
-  inputs (`MAX_X5_LEN = 13`). The leaf hash uses **two stages** (Poseidon12
-  + Poseidon9) for exactly this. Don't refactor to one big Poseidon.
-* **Domain tags.** `DOMAIN_LEAF_INNER = 20`, `DOMAIN_LEAF_TOP = 21`,
+  inputs (`MAX_X5_LEN = 13`). The leaf is a **single `Poseidon10`** —
+  `Poseidon10(DOMAIN_LEAF_V2=23, note_a..note_f, note_fee_base,
+  note_fee_quote, batch_slot)` — **commitment-only** (amount-privacy P1b): the
+  six note commitments + two fee notes bind the amounts/mints/price
+  transitively, so the leaf no longer hashes plaintext amounts. 10 inputs ≤ 12,
+  so no split is needed. **Keep it ≤ 12** — re-introducing bound fields (e.g.
+  plaintext amounts) would force the old two-stage Poseidon12+Poseidon9 split
+  back (that's why it used to be two-stage).
+* **Domain tags.** `DOMAIN_LEAF_V2 = 23` (the active leaf tag),
   `DOMAIN_BATCH_ROOT = 22`, `DOMAIN_NOTE = 2`, `DOMAIN_NULL = 3` — each
-  appears in Rust + TS + circom; keep them in lockstep.
+  appears in Rust + TS + circom; keep them in lockstep. (`DOMAIN_LEAF_INNER =
+  20` / `DOMAIN_LEAF_TOP = 21` are the **retired** two-stage-leaf tags — dead
+  constants, no longer hashed.)
 * **Parameterised N.** `MatchBatch(N)` is instantiated at N=2/4/16. Only
   N=16 is wired on-chain (`vk_match_batch_n16.rs`); N=2/4 are dev/test. The
   N=16 proving key needs `pot18` (~288 MB) — don't edit `download-ptau.sh`

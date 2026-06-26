@@ -56,7 +56,7 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 
-import { deriveOrderId, bn254ToBE32 } from "../src/keys/key-generators.js";
+import { deriveOrderId, bn254ToBE32, deriveViewingEncKeypair } from "../src/keys/key-generators.js";
 import { nullifierV2 } from "../src/utxo/note.js";
 import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
 import { vaultConfigPda } from "../src/idl/vault-client.js";
@@ -66,7 +66,7 @@ import {
   OrderType,
 } from "../src/orders/canonical.js";
 import { fetchOrderFills } from "../src/fills/history.js";
-import { replayFills } from "../src/fills/replay.js";
+import { recoverChangeFromChain } from "../src/fills/recover.js";
 import {
   subscribeFills,
   type FillsSubscription,
@@ -437,6 +437,11 @@ maybeDescribe(
             // it's larger and intake accepts note ≥ required.
             collateral_amount: Number(note.amount),
             tree_id: note.treeId,
+            // Change-amount recovery (Proposal B): the seed-derived viewing key
+            // the TEE encrypts this order's change_amount to on-chain. NOT in the
+            // signed canonical (so the digest above is unchanged). Without it the
+            // TEE writes the all-zero fill_recovery sentinel and recovery can't run.
+            viewing_pubkey: hex(deriveViewingEncKeypair(p.masterSeed).publicKey),
             anchors: anchorsToJson(pool.anchors),
           };
         }
@@ -686,39 +691,34 @@ maybeDescribe(
             `  · fills OK — indexer located + WS memo verified buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}… (amount ${memoRec!.amount}, anchor ${memoRec!.anchorIndex})`,
           );
 
-          // ── 7b. DURABLE MEMO REPLAY (P7 self-healing) ────────────────
-          // The live memo above proves the WS tail. This proves the durable
-          // half: GET /fills/replay recovers the SAME change note (amount +
-          // opening) from the TEE's persisted per-account log — into a FRESH
-          // store, simulating a client that was offline / restarted and never
-          // saw the live memo. After amount-privacy this is the only way to
-          // recover the amount (the indexer is a commitment-only locator).
-          await t.step("durable memo replay (P7)", async () => {
-            const replayStore = new InMemoryNoteStore();
-            const r = await replayFills({
-              gatewayHttpUrl: GATEWAY,
-              token,
+          // ── 7b. ON-CHAIN CHANGE-AMOUNT RECOVERY (Proposal B) ─────────
+          // The live memo above proves the WS tail. This proves the PERMANENT
+          // backstop: a FRESH client with only the seed recovers the SAME change
+          // note (amount + opening) by DECRYPTING the on-chain ciphertext the
+          // indexer surfaced (`change.ephemeralPubkey` + `change.changeEnc`) and
+          // self-verifying it against the on-chain commitment — no memo, no live
+          // WS, surviving a CVM redeploy. This replaced the retired durable
+          // memo-replay log (`GET /fills/replay`).
+          await t.step("on-chain change-amount recovery (Proposal B)", async () => {
+            const coldStore = new InMemoryNoteStore();
+            const recovered = await recoverChangeFromChain(change!, {
               masterSeed: buyer.masterSeed,
               ownerCommitment: buyer.ownerCommit,
-              store: replayStore,
-              since: 0, // no cursor → replay everything the TEE retained
-              fetchImpl: gwFetch as unknown as typeof fetch,
+              baseMint: baseMint.toBytes(),
+              quoteMint: quoteMint.toBytes(),
             });
-            const recovered = r.records.find(
-              (rec) => rec.commitment === change!.changeNoteCommitment,
-            );
             expect(
               recovered,
-              "GET /fills/replay did not recover the buyer change note from the durable log",
+              "recoverChangeFromChain did not recover the buyer change note from the on-chain ciphertext (is the CVM built from the recovery commits?)",
             ).toBeTruthy();
-            // The replayed opening must match the live memo byte-for-byte.
+            // The chain-recovered amount must match the live memo byte-for-byte.
             expect(recovered!.amount).toBe(memoRec!.amount);
-            expect(recovered!.anchorIndex).toBe(memoRec!.anchorIndex);
-            // And it landed in the fresh store (recovered from cold, no live WS).
-            const stored = await replayStore.get(change!.changeNoteCommitment!);
+            // And it lands spendable in a cold store (recovered from chain alone).
+            await coldStore.put(recovered!);
+            const stored = await coldStore.get(change!.changeNoteCommitment!);
             expect(stored?.amount).toBe(memoRec!.amount);
             console.log(
-              `  · P7 replay OK — recovered ${r.records.length} memo(s) into a cold store; cursor=${r.nextCursor}`,
+              `  · on-chain recovery OK — decrypted + self-verified amount ${recovered!.amount} into a cold store (no memo)`,
             );
           });
 

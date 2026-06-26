@@ -17,6 +17,7 @@ import { limitPolicy } from "../src/orders/builders.js";
 import { OrderSide, orderCanonicalDigest } from "../src/orders/canonical.js";
 import { buildAnchorPool } from "../src/orders/anchor-pool.js";
 import { noteCommitmentV2, ownerCommitment } from "../src/utxo/note.js";
+import { deriveViewingEncKeypair } from "../src/keys/key-generators.js";
 
 const fromHex = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
 const toHex = (b: Uint8Array) => Buffer.from(b).toString("hex");
@@ -88,6 +89,12 @@ describe("buildOrder", () => {
     expect(body.valid_input_proof).toBe("00".repeat(256));
     expect(body.collateral_amount).toBe(10_000_000);
     expect(body.anchors).toHaveLength(10);
+    // Recovery on by default: viewing_pubkey is the seed-derived X25519 key.
+    // It is NOT in the signed canonical (the digest recomputed below omits it,
+    // yet the signature still verifies).
+    expect(body.viewing_pubkey).toBe(
+      toHex(deriveViewingEncKeypair(masterSeed).publicKey),
+    );
 
     // ── Signature parity: verify against the INDEPENDENTLY recomputed digest ──
     const pool = await buildAnchorPool(masterSeed, spendingKey, orderId);

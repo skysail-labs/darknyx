@@ -614,6 +614,7 @@ mod tests {
                     tree_id: 0,
                     valid_input_proof: proof.clone(),
                     from_relock: false,
+                    viewing_pubkey: None,
                 },
             );
             st.openings_mut().insert(
@@ -626,6 +627,7 @@ mod tests {
                     tree_id: 0,
                     valid_input_proof: proof,
                     from_relock: false,
+                    viewing_pubkey: None,
                 },
             );
             assert_eq!(st.openings().len(), 2);
@@ -667,7 +669,12 @@ mod tests {
             tee_keypairs: vec![Arc::new(Keypair::new_from_array([0x42; 32]))],
             signing_keys: vec![Arc::new(SigningKey::from_bytes(&[0x42; 32]))],
             prover: Arc::new(FakeProver { n: 2 }),
-            static_alt: None,
+            // Mirror production's stacked ALTs — the v8 +128 recovery bundle
+            // overflows the 1232 cap with the per-batch ALT alone.
+            static_alt: Some(crate::settle::alt::alt_account(
+                solana_address::Address::new_from_array([0x44; 32]),
+                crate::settle::settle_batched::static_alt_addresses(4),
+            )),
             alt_pool: Arc::new(tokio::sync::Mutex::new(
                 crate::settle::alt_pool::AltPool::new(),
             )),

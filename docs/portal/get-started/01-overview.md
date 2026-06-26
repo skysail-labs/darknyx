@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Overview
-description: Nyx is a privacy-preserving spot darkpool on Solana — hidden orders matched inside an attested confidential VM, settled trustlessly with zero-knowledge proofs.
+description: Nyx is a privacy-preserving spot darkpool on Solana, with hidden orders matched inside an attested confidential VM and settled trustlessly with zero-knowledge proofs.
 ---
 
 # Overview
@@ -11,7 +11,7 @@ Nyx is a **privacy-preserving spot darkpool on Solana**. You submit hidden
 orders to a matching engine that runs **inside an attested Intel TDX Confidential
 VM** (a "CVM"). Settlement lands **trustlessly on Solana**, with a zero-knowledge
 proof binding every transfer to a committed note. Solana sees custody and
-proofs — never your order. The enclave sees your order — but can never move your
+proofs, never your order. The enclave sees your order but can never move your
 funds without an on-chain proof.
 :::
 
@@ -29,8 +29,8 @@ with custody or with order intent:
   can move them is a zero-knowledge proof verified by that program.
 - **Matching is in an attested enclave.** The operator runs the machine but
   cannot read enclave memory, and the enclave's signing keys are bound to one
-  specific measured image. Swap the code and the keys no longer derive — clients
-  detect it at attestation time.
+  specific measured image. Swap the code and the keys no longer derive, and
+  clients detect it at attestation time.
 
 The result is a venue where matching happens in private and settlement happens
 trustlessly, with no single party able to both see your order and move your
@@ -42,11 +42,11 @@ Nyx enforces three distinct privacy properties, each by a separate mechanism.
 
 | Property | What is hidden | How |
 |---|---|---|
-| **Order privacy** | Side, size, limit price | Order intent exists only inside the attested TEE — never in any Solana tx, log, or account. |
-| **Trader privacy** | The link from a trade to your wallet | You authenticate and sign orders with a **trading key**, not your wallet. The wallet ↔ trade link exists only inside your own withdraw proof. |
+| **Order privacy** | Side, size, limit price | Order intent exists only inside the attested TEE, never in any Solana tx, log, or account. |
+| **Trader privacy** | The link from a trade to your wallet | You authenticate and sign orders with a **trading key**, not your wallet. The wallet-to-trade link exists only inside your own withdraw proof. |
 | **Position privacy** | What you hold | Balances are UTXO-style **notes** stored on-chain as Poseidon hashes. Owner, value, and token are sealed inside the hash until you spend it with a proof. |
 
-No single component — not Solana, not the operator, not a network observer —
+No single component (not Solana, not the operator, not a network observer)
 sees enough to deanonymize your trading.
 
 ## The three layers
@@ -81,7 +81,7 @@ Nyx is three layers that compose into one trust chain.
 - **Matching (the CVM).** The engine accepts orders over an authenticated
   HTTPS/WebSocket surface, clears them at a single oracle-anchored price per
   batch, proves each batch of matches, and submits the settlement transactions
-  to Solana itself. Your order never becomes a Solana transaction — the enclave
+  to Solana itself. Your order never becomes a Solana transaction; the enclave
   settles the *result*.
 - **Client (the SDK).** Your software builds the collateral note, generates the
   zero-knowledge input proof, signs the order with your trading key, and (if you
@@ -102,15 +102,15 @@ margin, funding) simply are not part of the model.
 - **Traders** who do not want their resting orders read by the venue or the
   chain.
 - **Market makers and systematic desks** that want programmatic order
-  management — REST and WebSocket — with order intent kept private.
+  management (REST and WebSocket) with order intent kept private.
 - **Integrators** building privacy-preserving trading flows who need custody to
   stay on-chain and verifiable.
 
 ## Next steps
 
-- [Programmatic Access](./programmatic-access) — the API surface, the auth
+- [Programmatic Access](./programmatic-access): the API surface, the auth
   model, and a quick start.
-- [Base URLs](../api/base-urls) — where the endpoints live and the common
+- [Base URLs](../api/base-urls): where the endpoints live and the common
   response conventions.
-- [Trade Flow](../how-it-works/trade-flow) — the end-to-end lifecycle of an
+- [Trade Flow](../how-it-works/trade-flow): the end-to-end lifecycle of an
   order, from submission to on-chain settlement.

@@ -57,11 +57,22 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 //
 // Measured 2026-06-08 (image tee-v3-hardening-20):
 //   lock_note               117,943 CU (devnet, fixed 26-level Merkle path)
-//   verify_match_batch        87,224 CU (litesvm, deterministic N=16 groth16)
 //   tee_forced_settle_batched 162,145 CU (devnet, WORST case: 5 leaves appended
 //                                          = note_c/d + buyer change + 2 fee notes;
 //                                          litesvm 2-leaf path is ~100k)
 //   close_batch_validity_marker 3,546 CU (litesvm)
+//
+// Re-measured 2026-06-23 (image tee-v3-hardening-40, post amount-privacy +
+// change-amount-recovery):
+//   verify_match_batch       100,533 CU (litesvm) — up from 87,224: amount-privacy
+//     (P1b) added fee-binding + more public inputs to VALID_MATCH_BATCH, so the
+//     on-chain groth16 verify got heavier. DEVNET runs the alt_bn128 syscalls
+//     HOTTER than litesvm (a -39 deploy with a 101,000 limit died
+//     `ComputationalBudgetExceeded` at ~100,850), so the on-chain limit carries
+//     a generous margin over the litesvm figure — NOT the usual ×1.15.
+//   tee_forced_settle_batched 93,542 CU (litesvm 2-leaf) — v8's +128B fill_recovery
+//     adds only one extra SHA-256 block to the on-chain canonical-hash recompute;
+//     the devnet 5-leaf worst case stays well under SETTLE_COMPUTE_UNIT_LIMIT.
 // Regression-guarded by the `CU_PROFILE`/assert lines in
 // programs/vault/tests/{match_batch_verify,tee_forced_settle_batched}.rs.
 
@@ -69,8 +80,10 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 187_000;
 /// CU ceiling for each lock_note tx (Tx A). 117,943 × 1.15.
 pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 136_000;
-/// CU ceiling for the verify_match_batch tx (Tx B). 87,224 × 1.15.
-pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 101_000;
+/// CU ceiling for the verify_match_batch tx (Tx B). litesvm measures 100,533;
+/// devnet's groth16 runs hotter (a 101,000 limit exceeded budget on devnet), so
+/// this carries ~1.4× headroom over the litesvm figure rather than the usual ×1.15.
+pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 140_000;
 /// CU ceiling for the close_batch_validity_marker tx (Tx E). 3,546 × 1.15 → 5k floor.
 pub(crate) const CLOSE_COMPUTE_UNIT_LIMIT: u32 = 5_000;
 
@@ -233,6 +246,10 @@ mod tests {
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
             batch_slot: 7,
+            // Worst case for the size guard below: a full 128-byte recovery
+            // bundle (Borsh encodes [u8;128] as 128 bytes regardless of content,
+            // so zeros measure the same wire size as a real ciphertext).
+            fill_recovery: [0u8; 128],
         }
     }
 
@@ -265,15 +282,15 @@ mod tests {
         )
         .expect("v0 compile + sign");
 
-        // Serialized wire size must be under Solana's 1232-byte cap — with
-        // COMFORTABLE headroom now that the per-batch ALT also hoists the
-        // consumed-note + nullifier PDAs out of the inline keys (~124 B freed).
-        // This is the worst case: a change-note fill (note_e/f distinct) on a
-        // sharded settle. Assert < 1160 so a regression that drops an account
-        // back inline (≈ −32 B/account of margin) trips here, not on devnet.
+        // Serialized wire size must be under Solana's 1232-byte cap. This is the
+        // worst case: a change-note fill (note_e/f distinct) on a sharded settle,
+        // now carrying the full 128-byte change-amount-recovery bundle (Proposal
+        // B, +128 B vs the pre-recovery 1049 B → ~1177 B; still ~55 B under cap).
+        // Assert a tight bound so a regression that drops an account back inline
+        // (≈ −32 B/account of margin) trips here, not on devnet.
         let wire = bincode::serialize(&tx).unwrap();
         assert!(
-            wire.len() <= 1160,
+            wire.len() <= 1184,
             "settle v0 tx is {} bytes — lost ALT headroom (an account fell inline?)",
             wire.len()
         );
@@ -291,6 +308,10 @@ mod tests {
         let proof = [[0x01; 32]; 4];
         let ed_ix = build_ed25519_verify_ix(&[0xAA; 32], &[0xBB; 64], &p.canonical_hash());
         let settle_ix = build_settle_batched_ix(&kp.pubkey(), 0, &p, 0, &proof, &root);
+        // Both ALTs (as production stacks them) — see the worst-case test above.
+        // With the v8 +128 recovery bundle the per-batch ALT alone overflows the
+        // 1232 cap, so the static ALT is required here too.
+        let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses(4));
         let alt = alt_account(
             Address::new_from_array([0x55; 32]),
             per_batch_alt_addresses(&p, &root),
@@ -299,7 +320,7 @@ mod tests {
             &kp,
             ed_ix,
             settle_ix,
-            &[alt],
+            &[static_alt, alt],
             Hash::new_from_array([0x01; 32]),
         )
         .unwrap();

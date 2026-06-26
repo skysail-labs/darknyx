@@ -9,12 +9,12 @@
  *   1. Account ordering matches `TeeForcedSettleBatched<'info>`
  *      (14 accounts, merkle_tree at slot 2, batch_validity_marker at slot 12).
  *   2. Data starts with `sha256("global:tee_forced_settle_batched")[..8]`.
- *   3. `ix.data` length = 8 (disc) + 1 (tree_id) + 424 (Borsh payload)
+ *   3. `ix.data` length = 8 (disc) + 1 (tree_id) + 552 (Borsh payload)
  *                       + 1 (matchIndex u8) + 128 (4 × 32-byte siblings)
  *                       = 562 bytes.
  *   4. The 4 Merkle siblings are encoded contiguously with NO length
  *      prefix (Anchor's `[[u8; 32]; 4]` wire shape).
- *   5. The match-index byte lives at offset `8 + 1 + 424` and reflects the
+ *   5. The match-index byte lives at offset `8 + 1 + 552` and reflects the
  *      caller-supplied value.
  *   6. Account slot 12 (`batch_validity_marker`) is the PDA derived
  *      from `[b"batch_validity", merkleRoot]` under the program id.
@@ -144,13 +144,13 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xF0),
     });
-    // 424-byte v7 Borsh payload — amount-privacy (P3b) dropped the seven
-    // plaintext amount fields (-56 bytes vs the old 480), see `serializePayload`.
+    // 552-byte v8 Borsh payload — v7's 424 + the 128-byte fill_recovery bundle
+    // (change-amount recovery, Proposal B), see `serializePayload`.
     const payloadBytes = serializePayload(payload);
-    expect(payloadBytes.length).toBe(424);
-    // 8 disc + 424 payload + 1 match_index byte + 4 × 32 sibling bytes.
-    expect(ix.data.length).toBe(8 + 1 + 424 + 1 + 128);
-    expect(ix.data.length).toBe(562);
+    expect(payloadBytes.length).toBe(552);
+    // 8 disc + 552 payload + 1 match_index byte + 4 × 32 sibling bytes.
+    expect(ix.data.length).toBe(8 + 1 + 552 + 1 + 128);
+    expect(ix.data.length).toBe(690);
   });
 
   it("[settle_batched_siblings_encoding] 4 siblings encoded contiguously without a length prefix", () => {
@@ -167,7 +167,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     });
     const buf = new Uint8Array(ix.data);
     // Siblings start right after disc + payload + 1-byte match_index.
-    const siblingsOffset = 8 + 1 + 424 + 1;
+    const siblingsOffset = 8 + 1 + 552 + 1;
     for (let i = 0; i < 4; i++) {
       const slice = buf.slice(
         siblingsOffset + i * 32,
@@ -193,7 +193,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const ix0 = buildSettleBatchedIx({ ...args, matchIndex: 0 });
     const ix7 = buildSettleBatchedIx({ ...args, matchIndex: 7 });
     const ix15 = buildSettleBatchedIx({ ...args, matchIndex: 15 });
-    const off = 8 + 1 + 424;
+    const off = 8 + 1 + 552;
     expect(ix0.data[off]).toBe(0);
     expect(ix7.data[off]).toBe(7);
     expect(ix15.data[off]).toBe(15);
@@ -479,7 +479,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xF0),
     });
-    const payloadBytes = new Uint8Array(ix.data).slice(9, 9 + 424);
+    const payloadBytes = new Uint8Array(ix.data).slice(9, 9 + 552);
     expect(payloadBytes).toEqual(serializePayload(relock));
   });
 });

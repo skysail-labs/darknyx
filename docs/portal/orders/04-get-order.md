@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: Get Order
-description: Read the current status of one order — its state, filled quantity, and the batch it matched in.
+description: Read the current status of one order, including its state, filled quantity, and the batch it matched in.
 ---
 
 # Get Order
