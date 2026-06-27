@@ -56,7 +56,7 @@ pub struct Merge<'info> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn merge_handler<'info>(
-    ctx: Context<'_, '_, '_, 'info, Merge<'info>>,
+    ctx: Context<'info, Merge<'info>>,
     tree_id: u8,
     nullifiers: Vec<[u8; 32]>,
     output_commitment: [u8; 32],
@@ -199,7 +199,7 @@ fn create_nullifier_pda<'info>(
 
     system_program::create_account(
         CpiContext::new_with_signer(
-            system_program.to_account_info(),
+            system_program.key(),
             system_program::CreateAccount {
                 from: payer.to_account_info(),
                 to: ai.to_account_info(),

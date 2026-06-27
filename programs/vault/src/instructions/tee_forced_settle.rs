@@ -151,7 +151,7 @@ pub(crate) fn create_relock_pda<'info>(
     let signer_seeds = &[seeds];
 
     let cpi_ctx = CpiContext::new_with_signer(
-        system_program.to_account_info(),
+        system_program.key(),
         system_program::CreateAccount {
             from: payer.to_account_info(),
             to: note_lock_ai.to_account_info(),
@@ -215,7 +215,7 @@ pub struct TradeSettled {
 /// SHA-256 so that a cross-environment signer (Rust TEE, TS client) can
 /// produce byte-identical output.
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
-    use solana_program::hash::hashv;
+    use solana_sha256_hasher::hashv;
     let buyer_relock_exp = p.buyer_relock_expiry.to_le_bytes();
     let seller_relock_exp = p.seller_relock_expiry.to_le_bytes();
     let slot = p.batch_slot.to_le_bytes();
@@ -252,7 +252,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
 
 /// The Solana Ed25519Program precompile id.
 fn ed25519_program_id() -> Pubkey {
-    solana_program::ed25519_program::ID
+    solana_sdk_ids::ed25519_program::ID
 }
 
 /// Scan the tx's instructions list for an Ed25519Program precompile ix
@@ -278,7 +278,7 @@ pub fn verify_tee_signature(
     expected_pubkey: &Pubkey,
     expected_msg: &[u8; 32],
 ) -> Result<()> {
-    use solana_program::sysvar::instructions::load_instruction_at_checked;
+    use solana_instructions_sysvar::load_instruction_at_checked;
 
     let ai = instructions_sysvar.to_account_info();
     // The sysvar data starts with a u16 instruction count at offset 0.

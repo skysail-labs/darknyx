@@ -25,14 +25,26 @@ authors = ["Nyx Darkpool"]
 
 [workspace.dependencies]
 # Anchor
-anchor-lang = "0.32.1"
-anchor-spl  = "0.32.1"
+anchor-lang = "1.1.2"
+anchor-spl  = "1.1.2"
 
-# Solana
-solana-program = "2"
+# Solana — monolithic facade (3.x re-exports the modular crates). Only
+# darkpool-matcher's change-note parity test still pulls this directly for
+# `solana_program::hash::hashv`; the vault program migrated to
+# `anchor_lang::solana_program::` (Anchor 1.x re-export) and dropped the dep.
+solana-program = "3"
+
+# Modular Solana crates used on-chain by the vault program. Anchor 1.x's
+# `anchor_lang::solana_program` re-export is a thin facade that does NOT expose
+# `hash`, `ed25519_program`, or `sysvar::instructions` (it never did — the
+# vault used the standalone `solana-program` crate for these under 0.32). With
+# the 1.x bump we drop the monolithic dep and pull the split crates directly:
+solana-sdk-ids            = "3.1"  # ed25519_program::ID, sysvar::instructions::ID
+solana-sha256-hasher      = "3.1"  # hashv (canonical_payload_hash SHA-256)
+solana-instructions-sysvar = "3"   # load_instruction_at_checked
 
 # Light Protocol (Merkle + Poseidon)
-light-poseidon = "0.3.0"
+light-poseidon = "0.4.0"
 solana-poseidon = "3.1.11"
 
 # ZK Groth16 verifier (on-chain)
@@ -77,7 +89,7 @@ bytemuck = { version = "1.16", features = ["derive"] }
 thiserror = "1.0"
 
 # Testing
-litesvm = "0.9.1"
+litesvm = "0.13.0"
 proptest = "1.4"
 hex = "0.4"
 
@@ -159,23 +171,29 @@ rand_distr = "0.4"
 # client` dep — just the type system.
 # `curve25519` feature unlocks `Address::find_program_address`,
 # which we need for PDA derivation (`note_lock`, `vault_config`).
-solana-address           = { version = "2", features = ["curve25519"] }
-solana-hash              = "3"
+# Pins realigned to litesvm 0.13.0's requirements (the dev-dep that drives the
+# test graph): it demands solana-address =2.2.0, solana-hash ^4.2.0,
+# solana-instruction =3.2.0, solana-message =3.1.0, solana-signature ^3.3.0,
+# solana-transaction ^3.1.0. nyx-tee's runtime settle path shares these
+# `{ workspace = true }` pins, so the whole graph unifies on one version set
+# (a 3.x/4.x split is NOT resolvable — vault-dev's `=3.2.0` can't coexist with
+# nyx-tee's `~3.1`). The `copy` feature on solana-hash is REQUIRED: 4.x gates
+# `impl Copy for Hash` behind `#[cfg_attr(feature = "copy", derive(Copy))]`, and
+# nyx-tee's settle path shares a single blockhash by value. Without it, the
+# image's `cargo build -p nyx-tee` (a narrow feature scope that doesn't pick up
+# the feature transitively the way a `--workspace` build does) fails with
+# "use of moved value: blockhash" in settle/worker.rs.
+solana-address           = { version = "=2.2.0", features = ["curve25519"] }
+solana-hash              = { version = "4", features = ["copy"] }
 solana-keypair           = "~3.1"
-# `~3.1` not `~3.0` to satisfy litesvm 0.9.1's tighter requirement
-# — picked up by the vault dev-deps.
-solana-signature         = "~3.1"
+solana-signature         = "^3.3"
 solana-signer            = "~3.0"
-# PR 4g.3 — ix / message / transaction construction. Same modular
-# family as the rest; same version pins programs/vault's dev-deps
-# use, so the workspace dep graph stays consistent.
-solana-instruction       = "~3.1"
-solana-message           = "~3.0"
+# PR 4g.3 — ix / message / transaction construction. Same modular family.
+solana-instruction       = "=3.2.0"
+solana-message           = "=3.1.0"
 # `serde` feature gives us `Transaction: Serialize`; `bincode`
 # unlocks `Transaction::new_signed_with_payer` + tx serialise.
-# Together: we can build, sign, and wire-encode a tx in three
-# library calls.
-solana-transaction       = { version = "~3.0", features = ["serde", "bincode"] }
+solana-transaction       = { version = "^3.1", features = ["serde", "bincode"] }
 solana-system-interface  = "3.0.0"
 # PR 4g.5c — per-batch ALT (Tx C). `bincode` feature unlocks the
 # `create_lookup_table` / `extend_lookup_table` ix builders.

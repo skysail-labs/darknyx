@@ -239,12 +239,17 @@ pub struct TeeForcedSettleBatched<'info> {
     pub note_lock_e: UncheckedAccount<'info>,
 
     /// CHECK: Seeds validated in handler when re-lock is requested.
-    #[account(mut)]
+    /// `dup`: on an exact-fill settle, note_lock_e/f both derive from the
+    /// `[0;32]` sentinel → the same PDA, so the encoder passes one pubkey for
+    /// both slots (CLAUDE.md §6). Anchor 1.0 rejects duplicate mutable accounts
+    /// by default; `dup` restores the 0.32 behavior. Harmless on partial fills
+    /// (distinct PDAs).
+    #[account(mut, dup)]
     pub note_lock_f: UncheckedAccount<'info>,
 
     /// Instructions sysvar — for Ed25519 precompile inspection.
     /// CHECK: Address validated via `address = sysvar_id()`.
-    #[account(address = solana_program::sysvar::instructions::ID)]
+    #[account(address = solana_sdk_ids::sysvar::instructions::ID)]
     pub instructions_sysvar: UncheckedAccount<'info>,
 
     /// v3.5 — single batch-validity marker. PDA seed = the Merkle root

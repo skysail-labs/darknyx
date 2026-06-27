@@ -46,6 +46,7 @@ import {
   buildWithdrawInstruction,
   buildResetMerkleTreeInstruction,
   vaultConfigPda,
+  merkleTreePda,
 } from "../src/idl/vault-client.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
@@ -112,13 +113,18 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     );
     console.log(`  · reset_merkle_tree ${resetSig.slice(0, 8)}…`);
 
-    const [vaultPda] = vaultConfigPda(VAULT_ID);
-    const vinfo = await conn.getAccountInfo(vaultPda);
-    if (!vinfo) throw new Error("vault_config missing");
+    // Read shard-0's per-shard leaf counter. Under tree sharding the global
+    // leaf count lives in each `MerkleTree` shard account (`leaf_count` is its
+    // first field, at byte offset 8 after the 8-byte discriminator), NOT in
+    // `VaultConfig` — which has no leaf field at all (offset 104 there is
+    // `tee_pubkeys[2]`). After resetting shard 0 this must be 0.
+    const [tree0Pda] = merkleTreePda(VAULT_ID, 0);
+    const tinfo = await conn.getAccountInfo(tree0Pda);
+    if (!tinfo) throw new Error("merkle_tree(0) missing");
     const leafIndex = Number(
       new DataView(
-        vinfo.data.buffer,
-        vinfo.data.byteOffset + 104,
+        tinfo.data.buffer,
+        tinfo.data.byteOffset + 8,
         8,
       ).getBigUint64(0, true),
     );

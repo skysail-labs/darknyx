@@ -29,7 +29,7 @@
 //! the body, then ECDSA-signed); for each signature, recover the
 //! 20-byte Ethereum-style address via ecrecover and check it
 //! matches the guardian at the given index. Quorum is 13/19 for
-//! mainnet set 6 (see `MAINNET_GUARDIAN_SET_INDEX`).
+//! mainnet set 7 (see `MAINNET_GUARDIAN_SET_INDEX`).
 //!
 //! **NOT verified at this layer**: the Pyth-internal Merkle-proof
 //! inclusion of a specific price feed in the attested Merkle
@@ -44,27 +44,31 @@ use anyhow::{Context, Result};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use sha3::{Digest, Keccak256};
 
-// ─────── Wormhole mainnet guardian set 6 ───────────────────────────────────
+// ─────── Wormhole mainnet guardian set 7 ───────────────────────────────────
 //
 // 19 guardians; quorum = ceil(2 * 19 / 3) + 1 = 13.
 //
-// Source: https://raw.githubusercontent.com/wormhole-foundation/wormhole/main/guardianset/mainnetv2/canonical_sets/v6.prototxt
-// Capture date: 2026-05-27 (live Hermes VAA was signed against
-// this set — confirmed by the captured `sol_usd_vaa.bin` fixture
-// in tests/fixtures/).
+// Source (the canonical_sets/*.prototxt dir in the wormhole repo lags the
+// on-chain rotation and currently stops at v6, so the live set is sourced
+// from Wormholescan): https://api.wormholescan.io/v1/guardianset/current
+// Capture date: 2026-06-27. Wormhole rotated 6 → 7; three guardians changed
+// vs set 6: index 7 (…→F3ea0AD4…), index 14 (…→aE565927…), index 18
+// (…→61D9800f…); the other 16 are unchanged. Confirmed against a live
+// Hermes SOL/USD VAA (`guardian_set_index` field = 7).
 //
-// When Wormhole next rotates: bump MAINNET_GUARDIAN_SET_INDEX +
-// replace this table.
+// When Wormhole next rotates: bump MAINNET_GUARDIAN_SET_INDEX, replace this
+// table (+ the assert in oracle/hermes.rs), and recapture the
+// `sol_usd_vaa.bin` test fixture.
 
 /// The guardian-set index this binary trusts. VAAs signed against a
 /// different set are rejected.
-pub const MAINNET_GUARDIAN_SET_INDEX: u32 = 6;
+pub const MAINNET_GUARDIAN_SET_INDEX: u32 = 7;
 
 /// Number of valid signatures required for a VAA to be accepted.
 pub const QUORUM: usize = 13;
 
 /// 20-byte Ethereum-style addresses (keccak256(pubkey)[12..]) of
-/// the 19 guardians in mainnet set 6.
+/// the 19 guardians in mainnet set 7. Indices 7, 14, 18 differ from set 6.
 #[rustfmt::skip]
 pub const MAINNET_GUARDIANS: [[u8; 20]; 19] = [
     hex_lit!("5893B5A76c3f739645648885bDCcC06cd70a3Cd3"),
@@ -74,18 +78,18 @@ pub const MAINNET_GUARDIANS: [[u8; 20]; 19] = [
     hex_lit!("8C82B2fd82FaeD2711d59AF0F2499D16e726f6b2"),
     hex_lit!("42579bFFbCF4276E290aB8E4C162bd4052b97970"),
     hex_lit!("938f104AEb5581293216ce97d771e0CB721221B1"),
-    hex_lit!("18e41674CcF26329cD111406C1D05C6c80b23EdC"),
+    hex_lit!("F3ea0AD4FFB5a178AE4EBc21861651B25BdcbB91"), // set 7: was 18e41674…
     hex_lit!("9D16870160e703324D057c3361c34C5beFBa2c34"),
     hex_lit!("000aC0076727b35FBea2dAc28fEE5cCB0fEA768e"),
     hex_lit!("AF45Ced136b9D9e24903464AE889F5C8a723FC14"),
     hex_lit!("f93124b7c738843CBB89E864c862c38cddCccF95"),
     hex_lit!("D2CC37A4dc036a8D232b48f62cDD4731412f4890"),
     hex_lit!("DA798F6896A3331F64b48c12D1D57Fd9cbe70811"),
-    hex_lit!("D1F64e26238811de5553C40f64af41eE1B6057Cc"),
+    hex_lit!("aE565927Bb8dB25CD8Bf3e7BB663D70023e4Ea78"), // set 7: was D1F64e26…
     hex_lit!("3F851Ad586A47ceF8d04748f33ab0D71395f06b4"),
     hex_lit!("178e21ad2E77AE06711549CFBB1f9c7a9d8096e8"),
     hex_lit!("7899cEAB1DC961Dae9defDB7A4f521269a5448FC"),
-    hex_lit!("6FbEBc898F403E4773E95feB15E80C9A99c8348d"),
+    hex_lit!("61D9800f9FCb4160FB0C6cf3A0902592bAC2B434"), // set 7: was 6FbEBc89…
 ];
 
 // Compile-time hex literal helper. Avoids a runtime hex::decode
