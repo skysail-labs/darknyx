@@ -86,6 +86,11 @@ You will not write correct code here without the mental model. Required:
 * **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)**
   — the decided-but-unbuilt fills-delivery + trade-history design
   (deterministic HD order_ids + per-account WS + off-TEE indexer).
+* **[`docs/throughput-roadmap.md`](docs/throughput-roadmap.md)** — the log of
+  settle/throughput optimizations deliberately DEFERRED behind platform gates
+  (🟢 GPU proving, 🔵 Alpenglow finality) + 🟡 real volume, with the measured
+  cost model they're reasoned against. Pull items from here (don't re-derive)
+  when a gate lifts; add new gated work there, not just in a code comment.
 
 By domain, additionally:
 
