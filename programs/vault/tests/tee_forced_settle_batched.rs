@@ -49,14 +49,15 @@ fn seed_single_match(h: &mut Harness, tag: u8) -> (MatchResultPayload, [[u8; 32]
 }
 
 // ---------------------------------------------------------------------------
-// CU profiling — WORST CASE: a single settle that appends all SIX output
+// CU profiling — TRUE WORST CASE: a single settle that appends all SIX output
 // leaves (note_c, note_d, buyer change note_e, seller change note_f, base-fee
-// note, quote-fee note). This is the 6-append upper bound the CU-1 batch-append
-// optimization targets. Pairs with `test_two_matches_share_one_marker`'s 2-leaf
-// (note_c + note_d only) print so we have both ends of the leaf-count range.
+// note, quote-fee note) AND creates BOTH continuation re-lock PDAs (buyer +
+// seller change). This is the absolute upper bound the on-chain settle pays,
+// and the figure nyx-tee's SETTLE_COMPUTE_UNIT_LIMIT must cover. Pairs with
+// `test_two_matches_share_one_marker`'s 2-leaf print so we bracket the range.
 // ---------------------------------------------------------------------------
 #[test]
-fn cu_profile_six_leaf_settle() {
+fn cu_profile_worst_case_settle() {
     let mut h = Harness::setup();
     // Fee notes require a set protocol owner (handler `require!(protocol_owner_set)`).
     set_vault_fee_config(&mut h, fr_safe(0x9A, 0x01), 30);
@@ -68,9 +69,7 @@ fn cu_profile_six_leaf_settle() {
     seed_note_lock(&mut h, &note_a, &oid_a, u64::MAX / 2, 6_000); // quote
     seed_note_lock(&mut h, &note_b, &oid_b, u64::MAX / 2, 200); // base
 
-    // All six output commitments non-zero → all six append_leaf calls fire.
-    // Re-lock order ids stay NONE so note_e/note_f append without needing the
-    // relock PDAs — we're isolating the Merkle-append CU, not the relock path.
+    // All six output commitments non-zero → all six leaves append.
     let mut p = MatchResultPayload::exact_fill(
         [0xE0u8; 16],
         note_a,
@@ -88,6 +87,13 @@ fn cu_profile_six_leaf_settle() {
     p.note_f_commitment = fr_safe(0xF5, 0x77);
     p.note_fee_base_commitment = fr_safe(0xFB, 0x77);
     p.note_fee_quote_commitment = fr_safe(0xFC, 0x77);
+    // BOTH continuation re-locks fire too — note_lock_e/f are freshly init'd by
+    // `create_relock_pda` (we never seed them), so this also pays the two
+    // system-CPI account creations the production worst case incurs.
+    p.buyer_relock_order_id = [0x31u8; 16];
+    p.buyer_relock_expiry = u64::MAX / 2;
+    p.seller_relock_order_id = [0x32u8; 16];
+    p.seller_relock_expiry = u64::MAX / 2;
 
     let mint = read_note_lock_mint(&h, &note_a);
     let leaf = compute_match_leaf_for(&p, &mint, &mint);
@@ -98,23 +104,29 @@ fn cu_profile_six_leaf_settle() {
 
     let before = vault_leaf_count(&h);
     let tx = build_settle_batched_tx(&h, 0, &p, 0, &proof, &root);
-    let meta = h.svm.send_transaction(tx).expect("6-leaf settle succeeds");
+    let meta = h
+        .svm
+        .send_transaction(tx)
+        .expect("worst-case settle succeeds");
     eprintln!(
-        "CU_PROFILE tee_forced_settle_batched(6-leaf) consumed={}",
+        "CU_PROFILE tee_forced_settle_batched(6-leaf+2-relock) consumed={}",
         meta.compute_units_consumed
     );
-    // The true worst-case settle. This is the figure nyx-tee's
-    // SETTLE_COMPUTE_UNIT_LIMIT must cover (crates/nyx-tee/src/settle/pipeline.rs).
-    // Post-CU-1 baseline ~80,230 (down from ~165k); the 95k sentinel guards a
-    // regression that would erode the lowered limit's margin.
+    // This is the figure nyx-tee's SETTLE_COMPUTE_UNIT_LIMIT must cover
+    // (crates/nyx-tee/src/settle/pipeline.rs). Post-CU-1 the worst case is far
+    // below the old ~165k; the sentinel guards a regression that would erode
+    // the headroom a lowered limit relies on.
     assert!(
-        meta.compute_units_consumed < 95_000,
-        "settle(6-leaf) worst-case CU {} regressed past the post-CU-1 baseline (~80k); \
-         re-measure + re-check nyx-tee SETTLE_COMPUTE_UNIT_LIMIT margin",
+        meta.compute_units_consumed < 110_000,
+        "settle worst-case CU {} regressed; re-measure + re-check nyx-tee \
+         SETTLE_COMPUTE_UNIT_LIMIT margin",
         meta.compute_units_consumed
     );
     // All six leaves landed.
     assert_eq!(vault_leaf_count(&h), before + 6);
+    // Both continuation re-locks were created.
+    assert!(note_lock_exists(&h, &p.note_e_commitment));
+    assert!(note_lock_exists(&h, &p.note_f_commitment));
 }
 
 // NOTE: the on-chain fee-FLOOR + conservation regression test that lived here

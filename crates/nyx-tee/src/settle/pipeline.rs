@@ -73,11 +73,33 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 //   tee_forced_settle_batched 93,542 CU (litesvm 2-leaf) — v8's +128B fill_recovery
 //     adds only one extra SHA-256 block to the on-chain canonical-hash recompute;
 //     the devnet 5-leaf worst case stays well under SETTLE_COMPUTE_UNIT_LIMIT.
+//
+// Re-measured 2026-06-28 (audit_1 "CU-1" batch-append + "CU-2" load dedupe,
+// vault commits 959c500 + 3d84c8c):
+//   tee_forced_settle_batched is no longer linear in leaf count. `merkle.rs`
+//   now appends the up-to-6 output leaves in ONE bottom-up pass
+//   (`append_leaves`) that shares the Merkle-path recomputation, so a full
+//   settle costs roughly a single leaf-walk instead of 6×20 poseidon2. Litesvm
+//   (== devnet for this poseidon-syscall-bound ix; the old 162,145 figure
+//   matched the litesvm extrapolation):
+//     2-leaf settle                 93,112 → 77,033
+//     6-leaf settle (no relock)    165,355 → 80,129
+//     6-leaf + 2 relock (TRUE worst) ~175,600 → 90,381
+//   The true worst case (all 6 output notes + both continuation re-lock CPIs)
+//   is now 90,381 — guarded by `cu_profile_worst_case_settle` in
+//   programs/vault/tests/tee_forced_settle_batched.rs.
+// (Stale-comment fix: MERKLE_DEPTH is 20, not 26 as the 2026-06-08 notes said.)
 // Regression-guarded by the `CU_PROFILE`/assert lines in
 // programs/vault/tests/{match_batch_verify,tee_forced_settle_batched}.rs.
 
-/// CU ceiling for the settle tx (Tx D). 5-leaf worst case 162,145 × 1.15.
-const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 187_000;
+/// CU ceiling for the settle tx (Tx D). Post-CU-1 the true worst case (6
+/// output leaves + both continuation re-locks) is 90,381; this is 90,381 ×
+/// ~1.27 ≈ 115k — down from the old 187k (pre-CU-1 5-leaf 162,145 × 1.15).
+/// Lowering it cuts the settle priority fee (= price × requested_limit) by
+/// ~38%. NOTE: must be confirmed by a `cvm-settle-e2e` run on a redeployed CVM
+/// image before the reduced fee is relied on — a too-low limit fails the
+/// settle tx loud-and-safe with `ComputationalBudgetExceeded` (no fund risk).
+const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 115_000;
 /// CU ceiling for each lock_note tx (Tx A). 117,943 × 1.15.
 pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 136_000;
 /// CU ceiling for the verify_match_batch tx (Tx B). litesvm measures 100,533;
