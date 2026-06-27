@@ -177,9 +177,14 @@ rand_distr = "0.4"
 # solana-transaction ^3.1.0. nyx-tee's runtime settle path shares these
 # `{ workspace = true }` pins, so the whole graph unifies on one version set
 # (a 3.x/4.x split is NOT resolvable — vault-dev's `=3.2.0` can't coexist with
-# nyx-tee's `~3.1`).
+# nyx-tee's `~3.1`). The `copy` feature on solana-hash is REQUIRED: 4.x gates
+# `impl Copy for Hash` behind `#[cfg_attr(feature = "copy", derive(Copy))]`, and
+# nyx-tee's settle path shares a single blockhash by value. Without it, the
+# image's `cargo build -p nyx-tee` (a narrow feature scope that doesn't pick up
+# the feature transitively the way a `--workspace` build does) fails with
+# "use of moved value: blockhash" in settle/worker.rs.
 solana-address           = { version = "=2.2.0", features = ["curve25519"] }
-solana-hash              = "4"
+solana-hash              = { version = "4", features = ["copy"] }
 solana-keypair           = "~3.1"
 solana-signature         = "^3.3"
 solana-signer            = "~3.0"
