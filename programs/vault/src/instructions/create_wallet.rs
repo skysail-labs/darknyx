@@ -1,4 +1,3 @@
-use crate::errors::VaultError;
 use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_wallet_create::*, Groth16Proof};
 use anchor_lang::prelude::*;
@@ -11,8 +10,9 @@ pub struct CreateWallet<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
 
-    pub vault_config: AccountLoader<'info, VaultConfig>,
-
+    // CU-3 / audit F-07: `vault_config` was here but never read — the handler
+    // only verifies the VALID_WALLET_CREATE proof + inits `wallet_entry`. Dropped
+    // (saves an account on the ix; SDK + tests mirror this account list).
     #[account(
         init,
         payer = owner,
@@ -56,9 +56,6 @@ pub fn create_wallet_handler(
         slot: w.created_slot,
     });
 
-    // Silence unused warnings when running cargo check without full program.
-    let _ = &ctx.accounts.vault_config;
-    let _ = VaultError::Unauthorized;
     Ok(())
 }
 
