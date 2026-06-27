@@ -81,7 +81,7 @@ pub fn deposit_handler(
         authority: ctx.accounts.depositor.to_account_info(),
     };
     transfer_checked(
-        CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts),
+        CpiContext::new(ctx.accounts.token_program.key(), cpi_accounts),
         amount,
         ctx.accounts.token_mint.decimals,
     )?;

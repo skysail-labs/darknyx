@@ -68,7 +68,7 @@ pub struct Withdraw<'info> {
         bump,
     )]
     /// CHECK: validated manually in the handler.
-    pub consumed_note_slot: AccountInfo<'info>,
+    pub consumed_note_slot: UncheckedAccount<'info>,
 
     /// Same pattern for note lock — must not be initialized.
     #[account(
@@ -76,7 +76,7 @@ pub struct Withdraw<'info> {
         bump,
     )]
     /// CHECK: validated manually in the handler.
-    pub note_lock_slot: AccountInfo<'info>,
+    pub note_lock_slot: UncheckedAccount<'info>,
 
     /// Nullifier PDA. If already initialized, the withdrawal is a double-spend.
     #[account(
@@ -207,11 +207,7 @@ pub fn withdraw_handler(
         authority: ctx.accounts.vault_config.to_account_info(),
     };
     transfer_checked(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            cpi_accounts,
-            signer_seeds,
-        ),
+        CpiContext::new_with_signer(ctx.accounts.token_program.key(), cpi_accounts, signer_seeds),
         amount,
         ctx.accounts.token_mint.decimals,
     )?;

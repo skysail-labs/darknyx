@@ -8,9 +8,6 @@ vault = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"
 [programs.devnet]
 vault = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx"
 
-[registry]
-url = "https://api.apr.dev"
-
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"

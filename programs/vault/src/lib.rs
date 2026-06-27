@@ -118,7 +118,7 @@ pub mod vault {
     /// non-zero input nullifiers' PDAs are passed as remaining_accounts.
     #[allow(clippy::too_many_arguments)]
     pub fn merge<'info>(
-        ctx: Context<'_, '_, '_, 'info, Merge<'info>>,
+        ctx: Context<'info, Merge<'info>>,
         tree_id: u8,
         nullifiers: Vec<[u8; 32]>,
         output_commitment: [u8; 32],
