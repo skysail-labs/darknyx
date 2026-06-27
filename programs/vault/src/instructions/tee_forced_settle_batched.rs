@@ -284,13 +284,19 @@ pub fn tee_forced_settle_batched_handler(
     // The signer must be one of the authorized TEE keys (the shard
     // fee-payer/authority set); the ed25519 sig is bound to THAT key.
     let tee_pubkey = ctx.accounts.tee_authority.key();
-    require!(
-        ctx.accounts
-            .vault_config
-            .load()?
-            .is_authorized_tee(&tee_pubkey),
-        VaultError::Unauthorized
-    );
+    // CU-2: one vault_config load yields everything the handler reads off it —
+    // the authorized-key gate, the empty-subtree roots the appends need, and
+    // whether a protocol owner is set (the fee-note gate) — instead of loading
+    // it again near the appends.
+    let (authorized, zsr, protocol_owner_set) = {
+        let cfg = ctx.accounts.vault_config.load()?;
+        (
+            cfg.is_authorized_tee(&tee_pubkey),
+            cfg.zero_subtree_roots,
+            cfg.protocol_owner_commitment != [0u8; 32],
+        )
+    };
+    require!(authorized, VaultError::Unauthorized);
 
     // Ed25519 precompile binds the TEE signature to the canonical hash
     // of the payload. Identical to the per-match flow.
@@ -314,10 +320,13 @@ pub fn tee_forced_settle_batched_handler(
     // the continuation NoteLock (note_e is quote, note_f is base) so the NEXT
     // batch that consumes the continuation reads back a correct mint. The locks
     // themselves are re-loaded further below for the order_id/amount validation.
-    let (lock_a_mint, lock_b_mint) = {
+    // CU-2: read every field we need off lock_a/lock_b in ONE load each (the
+    // mints for the leaf binding + relock stamping, AND the order_ids for the
+    // lock-binding check below), instead of re-loading the locks twice.
+    let (lock_a_mint, lock_b_mint, lock_a_order_id, lock_b_order_id) = {
         let la = ctx.accounts.note_lock_a.load()?;
         let lb = ctx.accounts.note_lock_b.load()?;
-        (la.token_mint, lb.token_mint)
+        (la.token_mint, lb.token_mint, la.order_id, lb.order_id)
     };
     {
         let leaf = compute_match_leaf(&payload)?;
@@ -360,14 +369,13 @@ pub fn tee_forced_settle_batched_handler(
     // shared inner function can wait until the old ix is retired.
     // ────────────────────────────────────────────────────────────────────
     {
-        let lock_a = ctx.accounts.note_lock_a.load()?;
-        let lock_b = ctx.accounts.note_lock_b.load()?;
+        // order_ids were cached from the single load above (CU-2) — no reload.
         require!(
-            lock_a.order_id == payload.order_id_a,
+            lock_a_order_id == payload.order_id_a,
             VaultError::NoteNotLockedForOrder
         );
         require!(
-            lock_b.order_id == payload.order_id_b,
+            lock_b_order_id == payload.order_id_b,
             VaultError::NoteNotLockedForOrder
         );
 
@@ -424,15 +432,8 @@ pub fn tee_forced_settle_batched_handler(
 
     // Append output leaves to THIS shard: note_c, note_d, note_e (if any),
     // note_f (if any), then the two batch fee notes (base, quote) if any.
-    // `zero_subtree_roots` + the protocol-owner gate come from the read-only
-    // global config; the appends mutate only `merkle_tree`.
-    let (zsr, protocol_owner_set) = {
-        let cfg = ctx.accounts.vault_config.load()?;
-        (
-            cfg.zero_subtree_roots,
-            cfg.protocol_owner_commitment != [0u8; 32],
-        )
-    };
+    // `zsr` (empty-subtree roots) + `protocol_owner_set` were read off
+    // vault_config at the top (CU-2); the appends mutate only `merkle_tree`.
 
     // Two batch-level protocol fee notes, one per mint: base (seller-side fees)
     // + quote (buyer-side fees). Only the first settlement in a batch carries
