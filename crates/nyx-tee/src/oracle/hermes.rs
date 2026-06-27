@@ -326,10 +326,10 @@ mod tests {
         let vaa = extract_vaa_from_accumulator(bytes, "sol_usd").expect("extract");
         // Sanity: VAA starts with version=1.
         assert_eq!(vaa[0], 1, "VAA version byte");
-        // The captured fixture is signed against set 6 (per
+        // The captured fixture is signed against set 7 (per
         // vaa::MAINNET_GUARDIAN_SET_INDEX). Its second-through-
         // fifth bytes encode the guardian_set_index BE u32.
-        assert_eq!(&vaa[1..5], &[0, 0, 0, 6], "guardian_set_index");
+        assert_eq!(&vaa[1..5], &[0, 0, 0, 7], "guardian_set_index");
     }
 
     #[test]

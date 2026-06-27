@@ -4,7 +4,7 @@
 //! Fixture: `tests/fixtures/sol_usd_vaa.bin` — a real Hermes
 //! `AccumulatorUpdateData` response captured live from
 //! `https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6f...`
-//! on 2026-05-27. Signed against Wormhole mainnet guardian set 6.
+//! on 2026-06-27. Signed against Wormhole mainnet guardian set 7.
 //!
 //! These tests prove three load-bearing properties:
 //!
@@ -13,7 +13,7 @@
 //!   2. The VAA byte layout parses without error against real
 //!      production data (no off-by-ones in the header / signature
 //!      / body section).
-//!   3. The Wormhole guardian-set-6 signatures all verify via
+//!   3. The Wormhole guardian-set-7 signatures all verify via
 //!      `k256` ecrecover against the hardcoded guardian table.
 //!      This is the cryptographic trust anchor — if this passes,
 //!      the TEE knows the price came from Pyth and wasn't forged
@@ -63,7 +63,7 @@ fn fixture_parses_cleanly() {
     let parsed = vaa::parse(&vaa_bytes).expect("parse");
 
     assert_eq!(parsed.guardian_set_index, vaa::MAINNET_GUARDIAN_SET_INDEX);
-    // Set 6 has 19 guardians, quorum is 13. Hermes typically
+    // Set 7 has 19 guardians, quorum is 13. Hermes typically
     // includes exactly the quorum count.
     assert!(
         parsed.signature_count as usize >= vaa::QUORUM,
@@ -85,7 +85,7 @@ fn fixture_parses_cleanly() {
 fn fixture_verifies_under_mainnet_guardians() {
     let vaa_bytes = extract_vaa(FIXTURE);
     // The load-bearing test: real Hermes bytes verify against
-    // the hardcoded set-6 guardian table.
+    // the hardcoded set-7 guardian table.
     vaa::verify(&vaa_bytes).expect("Wormhole guardian signature verification failed");
 }
 
@@ -123,7 +123,7 @@ fn flipped_body_byte_breaks_signatures() {
 #[test]
 fn flipped_guardian_set_index_is_rejected() {
     let mut vaa_bytes = extract_vaa(FIXTURE);
-    // bytes 1-4 = guardian_set_index BE u32. Change set 6 → set 99.
+    // bytes 1-4 = guardian_set_index BE u32. Change set 7 → set 99.
     vaa_bytes[1..5].copy_from_slice(&99u32.to_be_bytes());
     let err = vaa::verify(&vaa_bytes).expect_err("wrong-set VAA must not verify");
     // anyhow::Context wraps the inner VaaError::WrongGuardianSet

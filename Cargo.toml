@@ -171,24 +171,23 @@ rand_distr = "0.4"
 # client` dep — just the type system.
 # `curve25519` feature unlocks `Address::find_program_address`,
 # which we need for PDA derivation (`note_lock`, `vault_config`).
-# Pins realigned to litesvm 0.13.0's requirements (the dev-dep that drives
-# the test graph): it demands solana-address =2.2.0, solana-hash ^4.2.0,
+# Pins realigned to litesvm 0.13.0's requirements (the dev-dep that drives the
+# test graph): it demands solana-address =2.2.0, solana-hash ^4.2.0,
 # solana-instruction =3.2.0, solana-message =3.1.0, solana-signature ^3.3.0,
-# solana-transaction ^3.1.0. Keep the rest at the matching minors.
+# solana-transaction ^3.1.0. nyx-tee's runtime settle path shares these
+# `{ workspace = true }` pins, so the whole graph unifies on one version set
+# (a 3.x/4.x split is NOT resolvable — vault-dev's `=3.2.0` can't coexist with
+# nyx-tee's `~3.1`).
 solana-address           = { version = "=2.2.0", features = ["curve25519"] }
 solana-hash              = "4"
 solana-keypair           = "~3.1"
 solana-signature         = "^3.3"
 solana-signer            = "~3.0"
-# PR 4g.3 — ix / message / transaction construction. Same modular
-# family as the rest; same version pins programs/vault's dev-deps
-# use, so the workspace dep graph stays consistent.
+# PR 4g.3 — ix / message / transaction construction. Same modular family.
 solana-instruction       = "=3.2.0"
 solana-message           = "=3.1.0"
 # `serde` feature gives us `Transaction: Serialize`; `bincode`
 # unlocks `Transaction::new_signed_with_payer` + tx serialise.
-# Together: we can build, sign, and wire-encode a tx in three
-# library calls.
 solana-transaction       = { version = "^3.1", features = ["serde", "bincode"] }
 solana-system-interface  = "3.0.0"
 # PR 4g.5c — per-batch ALT (Tx C). `bincode` feature unlocks the
