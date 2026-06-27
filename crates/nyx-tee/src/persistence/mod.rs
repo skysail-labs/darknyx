@@ -15,6 +15,7 @@
 //! push remains.)
 
 pub mod auth;
+pub mod markers;
 pub mod snapshot;
 
 // Re-export the auth-persistence surface at the module root so call
@@ -23,3 +24,6 @@ pub use auth::{
     accounts_db_path, load_auth_snapshot, save_auth_snapshot, state_dir_from_env, AuthSnapshot,
     ACCOUNTS_DB_FILE, DEFAULT_STATE_DIR,
 };
+// Pending settle-marker roots (close = Tx E, swept asynchronously off the
+// settle critical path — see `settle::marker_sweep`).
+pub use markers::{markers_db_path, PendingMarkers, MARKERS_DB_FILE};
