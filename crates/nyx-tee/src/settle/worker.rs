@@ -36,20 +36,17 @@ use solana_hash::Hash;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 
 use super::alt::{
     build_deactivate_alt_ix, build_extend_alt_ix_chunks, build_per_batch_alt_ixs,
     parse_alt_addresses,
 };
 use super::alt_pool::{AltPlan, AltPool};
-use super::close_marker::build_close_marker_ix;
 use super::ed25519::build_ed25519_verify_ix;
 use super::job::{SettleJobId, SettleJobStage};
 use super::payload::MatchResultPayload;
-use super::pipeline::{
-    budget_ixs, build_settle_v0_tx_b64, CLOSE_COMPUTE_UNIT_LIMIT, VERIFY_COMPUTE_UNIT_LIMIT,
-};
+use super::pipeline::{budget_ixs, build_settle_v0_tx_b64, VERIFY_COMPUTE_UNIT_LIMIT};
 use super::scheduler::SettleSchedulerState;
 use super::settle_batched::{batch_alt_addresses, build_settle_batched_ix};
 use super::sign::sign_payload;
@@ -128,6 +125,11 @@ pub struct SettleWorkerCtx {
     /// throughput lever — vs sending one-at-a-time and paying ~1.13s
     /// confirmation per match). `NYX_TEE_SETTLE_SEND_CONCURRENCY`.
     pub settle_send_concurrency: usize,
+    /// Enqueues a settled batch's Merkle root for ASYNCHRONOUS marker close
+    /// (Tx E). Taking the close off the batch's critical path is what lets the
+    /// serial pipeline start the next batch without waiting on a confirmation
+    /// for a pure rent-reclaim tx. Drained by `marker_sweep::spawn_marker_sweeper`.
+    pub marker_sweep_tx: mpsc::UnboundedSender<[u8; 32]>,
 }
 
 /// One concurrent settle Tx D's outcome: (match_idx, signature, confirmed_slot,
@@ -714,20 +716,25 @@ async fn run_batch_settle_inner(
     let settle_ms = t.elapsed().as_millis() as u64;
     t = Instant::now();
 
-    // ── 5. Close the marker (Tx E), once ────────────────────────
+    // ── 5. Enqueue the marker close (Tx E) — ASYNC, OFF the critical path ──
+    // The marker is 1:N rent-reclaim bookkeeping; nothing downstream depends on
+    // it (the next batch has a different Merkle root → a different marker PDA).
+    // Sending + confirming it INLINE used to block the serial pipeline's next
+    // batch on a full confirmation for a tx that touches no user funds. Hand the
+    // root to the background sweeper (`marker_sweep::spawn_marker_sweeper`) and
+    // return immediately. A closed `marker_sweep_tx` (sweeper gone) is a
+    // best-effort no-op — the marker stays open until a later boot replays it
+    // from the persisted pending set.
     ctx.set_all_stages(batch_id, n, SettleJobStage::Closing)
         .await;
-    let close_ix = build_close_marker_ix(&tee_pubkey, &tee_pubkey, &merkle_root);
-    let mut close_ixs = budget_ixs(CLOSE_COMPUTE_UNIT_LIMIT, priority_fee);
-    close_ixs.push(close_ix);
-    let close_sig = submit_ixs(&ctx.rpc, ctx.primary_keypair(), &close_ixs).await?;
-    confirm_signatures(
-        &ctx.rpc,
-        std::slice::from_ref(&close_sig),
-        ctx.confirm_timeout,
-    )
-    .await?;
+    if ctx.marker_sweep_tx.send(merkle_root).is_err() {
+        tracing::warn!(
+            batch_id,
+            "marker sweeper channel closed; marker close deferred to next boot"
+        );
+    }
 
+    // `close_ms` is now just the enqueue (≈0) — the on-chain close is async.
     let close_ms = t.elapsed().as_millis() as u64;
     let total_ms = t_pipeline.elapsed().as_millis() as u64;
     // The fine-grained per-stage latency profile. lock/prove+verify/alt run
@@ -760,7 +767,8 @@ async fn run_batch_settle_inner(
                 match_idx: idx as u8,
             };
             st.update(&id, |j| {
-                j.close_sig = Some(close_sig.clone());
+                // `close_sig` stays None — the marker close is async (the
+                // sweeper closes it off-batch). Settlement is final at Tx D.
                 j.transition(SettleJobStage::Done);
             });
         }
@@ -1058,6 +1066,10 @@ mod tests {
             confirm_timeout: Duration::from_secs(5),
             current_priority_fee: Arc::new(AtomicU64::new(0)),
             settle_send_concurrency: 8,
+            // Throwaway sender — the rx is dropped, so the worker's enqueue is a
+            // harmless best-effort no-op (the marker-sweep path is unit-tested
+            // separately in `marker_sweep`).
+            marker_sweep_tx: mpsc::unbounded_channel().0,
         }
     }
 
@@ -1210,7 +1222,9 @@ mod tests {
             assert!(job.lock_seller_sig.is_some(), "match {idx} lock_seller");
             assert!(job.verify_sig.is_some(), "match {idx} verify");
             assert!(job.settle_sig.is_some(), "match {idx} settle");
-            assert!(job.close_sig.is_some(), "match {idx} close");
+            // The marker close is now ASYNC (enqueued to the sweeper, closed
+            // off-batch), so the worker no longer records a close sig on the job.
+            assert!(job.close_sig.is_none(), "match {idx} close is async");
         }
     }
 

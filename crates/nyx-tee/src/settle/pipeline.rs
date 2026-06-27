@@ -84,8 +84,10 @@ pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 136_000;
 /// devnet's groth16 runs hotter (a 101,000 limit exceeded budget on devnet), so
 /// this carries ~1.4× headroom over the litesvm figure rather than the usual ×1.15.
 pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 140_000;
-/// CU ceiling for the close_batch_validity_marker tx (Tx E). 3,546 × 1.15 → 5k floor.
-pub(crate) const CLOSE_COMPUTE_UNIT_LIMIT: u32 = 5_000;
+// (The close_batch_validity_marker tx (Tx E) no longer rides the settle worker's
+// budgeted path — it's closed asynchronously by `marker_sweep`, which packs
+// several closes per tx under the default CU budget. The old per-close
+// CLOSE_COMPUTE_UNIT_LIMIT const was removed with the inline close.)
 
 /// Build a `ComputeBudget::SetComputeUnitLimit` ix (variant tag 2,
 /// then the u32 limit LE).

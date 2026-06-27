@@ -682,6 +682,8 @@ mod tests {
             confirm_timeout: Duration::from_secs(5),
             current_priority_fee: Arc::new(AtomicU64::new(0)),
             settle_send_concurrency: 8,
+            // Throwaway sender (rx dropped) — enqueue is a best-effort no-op here.
+            marker_sweep_tx: tokio::sync::mpsc::unbounded_channel().0,
         };
         let driver = SettleDriver {
             ctx,
