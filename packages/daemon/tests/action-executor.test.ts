@@ -218,7 +218,6 @@ describe("executor ↔ engine integration", () => {
     await engine.dispatch(ORDER_ID, {
       type: "fill",
       anchorIndex: 6,
-      isPartial: true,
       producedChangeNote: false,
     });
     await flush();

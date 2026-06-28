@@ -73,7 +73,6 @@ describe("LifecycleEngine — dispatch + persistence", () => {
     await engine.dispatch("ab".repeat(8), {
       type: "fill",
       anchorIndex: 0,
-      isPartial: true,
       producedChangeNote: true,
     });
     const got = store.getOrder("ab".repeat(8))!;
@@ -99,7 +98,6 @@ describe("LifecycleEngine — auto anchor top-up loop", () => {
     await engine.dispatch("ab".repeat(8), {
       type: "fill",
       anchorIndex: 6,
-      isPartial: true,
       producedChangeNote: false,
     });
     await flush();
@@ -119,7 +117,6 @@ describe("LifecycleEngine — auto anchor top-up loop", () => {
     await engine.dispatch("ab".repeat(8), {
       type: "fill",
       anchorIndex: 6,
-      isPartial: true,
       producedChangeNote: false,
     });
     await flush();
@@ -132,7 +129,6 @@ describe("LifecycleEngine — auto anchor top-up loop", () => {
     await engine.dispatch("ab".repeat(8), {
       type: "fill",
       anchorIndex: 7,
-      isPartial: true,
       producedChangeNote: false,
     });
     await flush();
@@ -155,7 +151,6 @@ describe("LifecycleEngine — auto anchor top-up loop", () => {
     await engine.dispatch("ab".repeat(8), {
       type: "fill",
       anchorIndex: 6,
-      isPartial: true,
       producedChangeNote: false,
     });
     await flush();
@@ -180,7 +175,6 @@ describe("LifecycleEngine — auto-merge loop", () => {
     await engine.dispatch("ab".repeat(8), {
       type: "fill",
       anchorIndex: 3,
-      isPartial: true,
       producedChangeNote: true,
     });
     await flush();

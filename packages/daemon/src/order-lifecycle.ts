@@ -51,20 +51,25 @@ export const DEFAULT_THRESHOLDS: LifecycleThresholds = {
   mergeThreshold: 4,
 };
 
-/** Events the daemon feeds the reducer (CVM acks, fills, action outcomes). */
+/**
+ * Events the daemon feeds the reducer. Two streams drive distinct concerns:
+ * `/ws/fills` → anchor consumption (`fill`); `/ws/orders` → phase
+ * (`accepted` / `filled` / `cancelled` / `expired`). They're deliberately
+ * decoupled so neither stream double-drives the other.
+ */
 export type LifecycleEvent =
+  // ── phase (placement ack + /ws/orders) ──
   | { type: "accepted"; arrivalSlot: number }
   | { type: "rejected"; reason: string }
+  | { type: "filled" }
   | { type: "cancelled" }
+  | { type: "expired" }
+  // ── anchor consumption (/ws/fills) ──
   /** A continuation fill consumed anchor `anchorIndex`. `producedChangeNote`
-   *  is false on an exact fill (no residual). `isPartial` false = order fully
-   *  filled. */
-  | {
-      type: "fill";
-      anchorIndex: number;
-      isPartial: boolean;
-      producedChangeNote: boolean;
-    }
+   *  is false on an exact fill (no residual minted). This carries NO phase
+   *  meaning — the terminal `filled` comes from `/ws/orders`. */
+  | { type: "fill"; anchorIndex: number; producedChangeNote: boolean }
+  // ── action outcomes ──
   | { type: "topup-confirmed"; count: number }
   | { type: "topup-failed" }
   | { type: "merge-confirmed"; consumed: number }
@@ -114,12 +119,26 @@ export function reduceOrder(
       if (order.phase === "pending") next.phase = "rejected";
       break;
 
+    case "filled":
+      // Terminal matching (from /ws/orders `fully_filled`). Accept a still-
+      // `pending` order too: a fully_filled implies it was accepted + filled.
+      if (order.phase === "pending" || order.phase === "open") {
+        next.phase = "filled";
+      }
+      break;
+
     case "cancelled":
       if (!isTerminal(order.phase)) next.phase = "cancelled";
       break;
 
+    case "expired":
+      if (!isTerminal(order.phase)) next.phase = "expired";
+      break;
+
     case "fill": {
-      // anchorsConsumed is the high-water mark — fills can arrive out of order.
+      // Anchor consumption ONLY — no phase meaning (the terminal `filled`
+      // comes from /ws/orders). anchorsConsumed is the high-water mark, since
+      // fills can arrive out of order.
       next.anchorsConsumed = Math.max(
         order.anchorsConsumed,
         event.anchorIndex + 1,
@@ -127,7 +146,6 @@ export function reduceOrder(
       if (event.producedChangeNote) {
         next.pendingChangeNotes = order.pendingChangeNotes + 1;
       }
-      if (!event.isPartial && next.phase === "open") next.phase = "filled";
       break;
     }
 
@@ -162,12 +180,17 @@ export function reduceOrder(
   // ── Derive automation intents from the NEW state ──
   //
   // Intents are EDGE-triggered: derived only from events that represent new
-  // matching activity (`fill`) or the order going quiescent (`cancelled`), NOT
-  // from action outcomes. This is what prevents a permanently-failing top-up
-  // from hot-looping — clearing the in-flight latch on `topup-failed` does NOT
-  // immediately re-fire the intent; the retry rides the next fill (which only
-  // pushes `remaining` lower, so it WILL re-trigger). Same for merge.
-  const triggersIntents = event.type === "fill" || event.type === "cancelled";
+  // matching activity (`fill`) or the order going quiescent (`filled` /
+  // `cancelled` / `expired`), NOT from action outcomes. This is what prevents a
+  // permanently-failing top-up from hot-looping — clearing the in-flight latch
+  // on `topup-failed` does NOT immediately re-fire the intent; the retry rides
+  // the next fill (which only pushes `remaining` lower, so it WILL re-trigger).
+  // Same for merge.
+  const triggersIntents =
+    event.type === "fill" ||
+    event.type === "filled" ||
+    event.type === "cancelled" ||
+    event.type === "expired";
 
   // Auto anchor top-up: only while the order can still match, and only one
   // top-up in flight at a time (the latch prevents a burst of fills from each
@@ -190,9 +213,12 @@ export function reduceOrder(
   }
 
   // Auto-merge: consolidate once enough residuals accumulate, or as soon as the
-  // order stops matching (filled/cancelled) with any residual left — no point
-  // waiting for a quota that will never arrive. One merge in flight at a time.
-  const quiescent = next.phase === "filled" || next.phase === "cancelled";
+  // order stops matching (filled/cancelled/expired) with any residual left — no
+  // point waiting for a quota that will never arrive. One merge in flight at a time.
+  const quiescent =
+    next.phase === "filled" ||
+    next.phase === "cancelled" ||
+    next.phase === "expired";
   const shouldMerge =
     next.pendingChangeNotes >= thresholds.mergeThreshold ||
     (quiescent && next.pendingChangeNotes > 0);

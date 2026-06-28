@@ -22,6 +22,8 @@ export type OrderPhase =
   | "filled"
   /** Cancelled by the strategy or by cancel-on-disconnect. */
   | "cancelled"
+  /** Left the book on its time-in-force (TEE `/ws/orders` `expired`). */
+  | "expired"
   /** CVM rejected the order at intake. */
   | "rejected"
   /** Terminal: settled, reconciled, residual change notes consolidated. */
@@ -30,6 +32,7 @@ export type OrderPhase =
 /** Phases from which the order can no longer be matched or revived. */
 export const TERMINAL_PHASES: ReadonlySet<OrderPhase> = new Set<OrderPhase>([
   "cancelled",
+  "expired",
   "rejected",
   "closed",
 ]);

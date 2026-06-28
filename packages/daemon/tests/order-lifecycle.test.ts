@@ -1,6 +1,10 @@
 /**
- * Order-lifecycle reducer unit tests — pure, no CVM. Drives the two automation
- * decisions (auto anchor top-up, auto-merge) + phase transitions.
+ * Order-lifecycle reducer unit tests — pure, no CVM.
+ *
+ * Event model is decoupled: `fill` (from /ws/fills) drives ONLY anchor
+ * consumption + residual counting; phase comes from `filled` / `cancelled` /
+ * `expired` / `accepted` (from /ws/orders + placement). Covers both, plus the
+ * two automation decisions (auto anchor top-up, auto-merge).
  */
 
 import { describe, expect, it } from "vitest";
@@ -79,42 +83,79 @@ describe("reduceOrder — phase transitions", () => {
     expect(order.phase).toBe("rejected");
   });
 
-  it("does not revive a terminal order", () => {
-    const o = freshOpen({ phase: "closed" });
-    const { order } = reduceOrder(
-      o,
-      { type: "cancelled" },
-      DEFAULT_THRESHOLDS,
-      T0,
-    );
-    expect(order.phase).toBe("closed");
-  });
-
-  it("fully-filled fill moves open → filled", () => {
+  it("open → filled on a filled event", () => {
     const { order } = reduceOrder(
       freshOpen(),
-      {
-        type: "fill",
-        anchorIndex: 0,
-        isPartial: false,
-        producedChangeNote: false,
-      },
+      { type: "filled" },
       DEFAULT_THRESHOLDS,
       T0,
     );
     expect(order.phase).toBe("filled");
   });
 
+  it("pending → filled too (fully_filled implies it was accepted)", () => {
+    const o = newManagedOrder({
+      orderId: "ef".repeat(8),
+      seedIndex: 3,
+      side: "bid",
+      priceRaw: 1n,
+      sizeRaw: 1n,
+      anchorPoolSize: 10,
+      now: T0,
+    });
+    const { order } = reduceOrder(
+      o,
+      { type: "filled" },
+      DEFAULT_THRESHOLDS,
+      T0,
+    );
+    expect(order.phase).toBe("filled");
+  });
+
+  it("open → cancelled / expired", () => {
+    expect(
+      reduceOrder(freshOpen(), { type: "cancelled" }, DEFAULT_THRESHOLDS, T0)
+        .order.phase,
+    ).toBe("cancelled");
+    expect(
+      reduceOrder(freshOpen(), { type: "expired" }, DEFAULT_THRESHOLDS, T0)
+        .order.phase,
+    ).toBe("expired");
+  });
+
+  it("does not revive a terminal order", () => {
+    for (const term of [
+      "closed",
+      "cancelled",
+      "expired",
+      "rejected",
+    ] as const) {
+      const { order } = reduceOrder(
+        freshOpen({ phase: term }),
+        { type: "cancelled" },
+        DEFAULT_THRESHOLDS,
+        T0,
+      );
+      expect(order.phase).toBe(term);
+    }
+  });
+
+  it("a fill carries NO phase meaning (stays open)", () => {
+    const { order } = reduceOrder(
+      freshOpen(),
+      { type: "fill", anchorIndex: 0, producedChangeNote: false },
+      DEFAULT_THRESHOLDS,
+      T0,
+    );
+    expect(order.phase).toBe("open");
+    expect(order.anchorsConsumed).toBe(1);
+  });
+
   it("is immutable — does not mutate the input order", () => {
     const o = freshOpen();
     reduceOrder(
       o,
-      {
-        type: "fill",
-        anchorIndex: 4,
-        isPartial: true,
-        producedChangeNote: true,
-      },
+      { type: "fill", anchorIndex: 4, producedChangeNote: true },
       DEFAULT_THRESHOLDS,
       T0,
     );
@@ -129,12 +170,7 @@ describe("reduceOrder — auto anchor top-up", () => {
     const o = freshOpen({ anchorsConsumed: 6 });
     const { order, actions } = reduceOrder(
       o,
-      {
-        type: "fill",
-        anchorIndex: 6,
-        isPartial: true,
-        producedChangeNote: true,
-      },
+      { type: "fill", anchorIndex: 6, producedChangeNote: true },
       DEFAULT_THRESHOLDS,
       T0,
     );
@@ -153,12 +189,7 @@ describe("reduceOrder — auto anchor top-up", () => {
     const o = freshOpen({ anchorsConsumed: 7, topupInFlight: true });
     const { actions } = reduceOrder(
       o,
-      {
-        type: "fill",
-        anchorIndex: 8,
-        isPartial: true,
-        producedChangeNote: true,
-      },
+      { type: "fill", anchorIndex: 8, producedChangeNote: true },
       DEFAULT_THRESHOLDS,
       T0,
     );
@@ -184,14 +215,7 @@ describe("reduceOrder — auto anchor top-up", () => {
 
   it("a confirmed top-up restores headroom (no immediate re-topup)", () => {
     const { order, actions } = run(freshOpen({ anchorsConsumed: 7 }), [
-      // remaining 3 → topup intent, latch set
-      {
-        type: "fill",
-        anchorIndex: 6,
-        isPartial: true,
-        producedChangeNote: false,
-      },
-      // pool 10 → 15, latch cleared, nonce 1
+      { type: "fill", anchorIndex: 6, producedChangeNote: false },
       { type: "topup-confirmed", count: 5 },
     ]);
     expect(order.anchorPoolSize).toBe(15);
@@ -202,29 +226,18 @@ describe("reduceOrder — auto anchor top-up", () => {
 
   it("top-up-failed clears the latch so the next fill retries", () => {
     const { order, actions } = run(freshOpen({ anchorsConsumed: 7 }), [
-      {
-        type: "fill",
-        anchorIndex: 6,
-        isPartial: true,
-        producedChangeNote: false,
-      },
+      { type: "fill", anchorIndex: 6, producedChangeNote: false },
       { type: "topup-failed" },
-      // still at remaining 3 with the latch cleared → a fresh topup intent
-      {
-        type: "fill",
-        anchorIndex: 7,
-        isPartial: true,
-        producedChangeNote: false,
-      },
+      { type: "fill", anchorIndex: 7, producedChangeNote: false },
     ]);
     expect(actions.filter((a) => a.type === "topup")).toHaveLength(2);
     expect(order.topupInFlight).toBe(true);
   });
 
   it("topup-failed below the threshold emits NO action (edge-triggered, no hot loop)", () => {
-    // Regression: intents are derived only on fill/cancelled, never on action
-    // outcomes — otherwise a permanently-failing top-up would re-fire on every
-    // `topup-failed` (remaining stays ≤ threshold) and spin forever.
+    // Regression: intents are derived only on fill/filled/cancelled/expired,
+    // never on action outcomes — otherwise a permanently-failing top-up would
+    // re-fire on every `topup-failed` (remaining stays ≤ threshold) and spin.
     const o = freshOpen({ anchorsConsumed: 7, topupInFlight: true });
     const { order, actions } = reduceOrder(
       o,
@@ -237,15 +250,10 @@ describe("reduceOrder — auto anchor top-up", () => {
   });
 
   it("does not top up a filled (no-longer-matching) order", () => {
-    const o = freshOpen({ anchorsConsumed: 9, phase: "open" });
+    const o = freshOpen({ anchorsConsumed: 9 });
     const { order, actions } = reduceOrder(
       o,
-      {
-        type: "fill",
-        anchorIndex: 9,
-        isPartial: false,
-        producedChangeNote: true,
-      },
+      { type: "filled" },
       DEFAULT_THRESHOLDS,
       T0,
     );
@@ -259,12 +267,7 @@ describe("reduceOrder — auto-merge", () => {
     const o = freshOpen({ pendingChangeNotes: 3 });
     const { order, actions } = reduceOrder(
       o,
-      {
-        type: "fill",
-        anchorIndex: 3,
-        isPartial: true,
-        producedChangeNote: true,
-      },
+      { type: "fill", anchorIndex: 3, producedChangeNote: true },
       DEFAULT_THRESHOLDS,
       T0,
     );
@@ -281,12 +284,7 @@ describe("reduceOrder — auto-merge", () => {
     const o = freshOpen({ pendingChangeNotes: 5, mergeInFlight: true });
     const { actions } = reduceOrder(
       o,
-      {
-        type: "fill",
-        anchorIndex: 5,
-        isPartial: true,
-        producedChangeNote: true,
-      },
+      { type: "fill", anchorIndex: 5, producedChangeNote: true },
       DEFAULT_THRESHOLDS,
       T0,
     );
@@ -307,15 +305,10 @@ describe("reduceOrder — auto-merge", () => {
 
   it("consolidates leftover residuals when an order goes filled below the quota", () => {
     // 2 residuals (< mergeThreshold 4) but the order just fully filled → merge now.
-    const o = freshOpen({ pendingChangeNotes: 2, anchorsConsumed: 8 });
+    const o = freshOpen({ pendingChangeNotes: 2 });
     const { order, actions } = reduceOrder(
       o,
-      {
-        type: "fill",
-        anchorIndex: 8,
-        isPartial: false,
-        producedChangeNote: false,
-      },
+      { type: "filled" },
       DEFAULT_THRESHOLDS,
       T0,
     );
@@ -327,16 +320,23 @@ describe("reduceOrder — auto-merge", () => {
     });
   });
 
+  it("consolidates leftover residuals on expiry / cancel too", () => {
+    for (const ev of [{ type: "expired" }, { type: "cancelled" }] as const) {
+      const o = freshOpen({ pendingChangeNotes: 1 });
+      const { actions } = reduceOrder(o, ev, DEFAULT_THRESHOLDS, T0);
+      expect(actions).toContainEqual({
+        type: "merge",
+        orderId: o.orderId,
+        noteCount: 1,
+      });
+    }
+  });
+
   it("no merge when a quiescent order has zero residuals", () => {
-    const o = freshOpen({ pendingChangeNotes: 0, anchorsConsumed: 5 });
+    const o = freshOpen({ pendingChangeNotes: 0 });
     const { actions } = reduceOrder(
       o,
-      {
-        type: "fill",
-        anchorIndex: 5,
-        isPartial: false,
-        producedChangeNote: false,
-      },
+      { type: "filled" },
       DEFAULT_THRESHOLDS,
       T0,
     );

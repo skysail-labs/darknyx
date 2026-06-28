@@ -10,11 +10,12 @@
  * top-up) and counting the residual (which drives auto-merge).
  *
  * Division of labour with the orders stream: `/ws/fills` is the source of the
- * change-note OPENINGS + anchor consumption; the order's PHASE transitions
- * (accepted / fully_filled / cancelled / expired) come from `/ws/orders`
- * (the orders-listener, a later slice). So this listener always reports
- * `isPartial: true` — it never signals the terminal fill, which avoids
- * double-driving the phase from two streams.
+ * change-note OPENINGS + anchor consumption (the `fill` event carries NO phase
+ * meaning); the order's PHASE transitions (accepted / filled / cancelled /
+ * expired) come from `/ws/orders` (the {@link OrdersListener}). Decoupling the
+ * two streams means neither double-drives the other (`anchorsConsumed` is a
+ * max() high-water so it's idempotent; `pendingChangeNotes` is counted only
+ * here).
  *
  * `subscribeFills` is injected so the listener is unit-testable without forging
  * a cryptographically-valid memo: tests pass a fake that hands back synthetic
@@ -88,7 +89,6 @@ export class FillsListener {
       await this.opts.engine.dispatch(rec.orderId, {
         type: "fill",
         anchorIndex: rec.anchorIndex,
-        isPartial: true,
         producedChangeNote: rec.amount > 0n,
       });
     } catch (err) {
