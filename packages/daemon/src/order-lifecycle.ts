@@ -160,12 +160,21 @@ export function reduceOrder(
   }
 
   // ── Derive automation intents from the NEW state ──
+  //
+  // Intents are EDGE-triggered: derived only from events that represent new
+  // matching activity (`fill`) or the order going quiescent (`cancelled`), NOT
+  // from action outcomes. This is what prevents a permanently-failing top-up
+  // from hot-looping — clearing the in-flight latch on `topup-failed` does NOT
+  // immediately re-fire the intent; the retry rides the next fill (which only
+  // pushes `remaining` lower, so it WILL re-trigger). Same for merge.
+  const triggersIntents = event.type === "fill" || event.type === "cancelled";
 
   // Auto anchor top-up: only while the order can still match, and only one
   // top-up in flight at a time (the latch prevents a burst of fills from each
   // firing a redundant POST).
   const remaining = next.anchorPoolSize - next.anchorsConsumed;
   if (
+    triggersIntents &&
     next.phase === "open" &&
     !next.topupInFlight &&
     remaining <= thresholds.anchorTopUpThreshold
@@ -187,7 +196,7 @@ export function reduceOrder(
   const shouldMerge =
     next.pendingChangeNotes >= thresholds.mergeThreshold ||
     (quiescent && next.pendingChangeNotes > 0);
-  if (shouldMerge && !next.mergeInFlight) {
+  if (triggersIntents && shouldMerge && !next.mergeInFlight) {
     actions.push({
       type: "merge",
       orderId: next.orderId,

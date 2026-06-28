@@ -221,6 +221,21 @@ describe("reduceOrder — auto anchor top-up", () => {
     expect(order.topupInFlight).toBe(true);
   });
 
+  it("topup-failed below the threshold emits NO action (edge-triggered, no hot loop)", () => {
+    // Regression: intents are derived only on fill/cancelled, never on action
+    // outcomes — otherwise a permanently-failing top-up would re-fire on every
+    // `topup-failed` (remaining stays ≤ threshold) and spin forever.
+    const o = freshOpen({ anchorsConsumed: 7, topupInFlight: true });
+    const { order, actions } = reduceOrder(
+      o,
+      { type: "topup-failed" },
+      DEFAULT_THRESHOLDS,
+      T0,
+    );
+    expect(actions).toEqual([]);
+    expect(order.topupInFlight).toBe(false);
+  });
+
   it("does not top up a filled (no-longer-matching) order", () => {
     const o = freshOpen({ anchorsConsumed: 9, phase: "open" });
     const { order, actions } = reduceOrder(
