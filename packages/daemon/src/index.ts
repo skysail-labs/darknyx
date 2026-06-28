@@ -11,3 +11,5 @@ export * from "./fills-listener.js";
 export * from "./orders-listener.js";
 export * from "./order-placer.js";
 export * from "./place.js";
+export * from "./keystore.js";
+export * from "./build-place-request.js";
