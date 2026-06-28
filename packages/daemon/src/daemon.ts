@@ -49,6 +49,10 @@ import {
   type AttestationResult,
   type QuoteVerifier,
 } from "./attestation.js";
+import {
+  SettlementTracker,
+  type FetchInclusionFn,
+} from "./settlement-tracker.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
@@ -95,6 +99,10 @@ export interface DaemonDeps {
   verifyAttestation?: typeof verifyAttestation | false;
   /** Optional DCAP quote verifier (full Intel TCB) handed to the attestation. */
   quoteVerifier?: QuoteVerifier;
+  /** Settlement-tracker poll interval (ms) for resolving change-note leaves. */
+  settlementPollMs?: number;
+  /** Seam for the tracker's `/tree/inclusion` fetch (tests). */
+  fetchInclusion?: FetchInclusionFn;
 }
 
 export class Daemon {
@@ -115,8 +123,12 @@ export class Daemon {
   private readonly quoteVerifier?: QuoteVerifier;
   private attestationResult: AttestationResult | null = null;
 
+  private readonly settlementPollMs?: number;
+  private readonly fetchInclusion?: FetchInclusionFn;
+
   private fills: FillsListener | null = null;
   private orders: OrdersListener | null = null;
+  private tracker: SettlementTracker | null = null;
   private readonly listeners = new Set<(e: DaemonEvent) => void>();
   private nextIndex = 0;
   private started = false;
@@ -133,6 +145,8 @@ export class Daemon {
     // Attest by default (non-custody is the point); inject `false` to skip.
     this.verifyAttestationFn = deps.verifyAttestation ?? verifyAttestation;
     this.quoteVerifier = deps.quoteVerifier;
+    this.settlementPollMs = deps.settlementPollMs;
+    this.fetchInclusion = deps.fetchInclusion;
 
     const executor = new DaemonActionExecutor({
       keys: this.keystore,
@@ -207,13 +221,28 @@ export class Daemon {
       subscribeFn: this.subscribeOrdersFn,
       onError: (e) => this.emitError("orders", e),
     });
+    this.tracker = new SettlementTracker({
+      store: this.store,
+      gatewayUrl: this.config.gatewayUrl,
+      token: this.config.token,
+      treeId: this.treeId,
+      fetchImpl: this.fetchImpl,
+      pollMs: this.settlementPollMs,
+      fetchInclusion: this.fetchInclusion,
+      onResolved: (commitment) => {
+        const note = this.store.get(commitment);
+        if (note) this.emit({ type: "fill", note });
+      },
+    });
     this.fills.start();
     this.orders.start();
+    this.tracker.start();
   }
 
   stop(): void {
     this.fills?.stop();
     this.orders?.stop();
+    this.tracker?.stop();
     this.placer.close();
     this.started = false;
   }
