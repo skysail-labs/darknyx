@@ -53,6 +53,7 @@ import {
   SettlementTracker,
   type FetchInclusionFn,
 } from "./settlement-tracker.js";
+import { selectCollateralNote, type CollateralRequest } from "./note-select.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
@@ -163,7 +164,10 @@ export class Daemon {
     this.engine = new LifecycleEngine(this.store, executor, {
       thresholds: this.config.thresholds,
       onError: (err, ctx) => this.emitError(ctx, err),
-      onTransition: (order) => this.emit({ type: "order", order }),
+      onTransition: (order) => {
+        this.pruneConsumedCollateral(order);
+        this.emit({ type: "order", order });
+      },
     });
 
     this.placer =
@@ -274,6 +278,9 @@ export class Daemon {
       priceRaw: intent.policy.priceLimit,
       sizeRaw: intent.amount,
       anchorPoolSize: ANCHOR_POOL_SIZE,
+      // Lock the spent note to this order (excludes it from selection + lets a
+      // fill prune it).
+      collateralCommitment: note.commitment,
     });
     const resp = await placeManagedOrder({
       engine: this.engine,
@@ -282,6 +289,38 @@ export class Daemon {
       request,
     });
     return { orderId: orderIdHex, arrivalSlot: resp.arrival_slot };
+  }
+
+  /** Pick the best collateral note for a request, excluding notes already
+   *  locked by a resting (pending/open) order. `undefined` if none covers. */
+  selectNote(req: CollateralRequest): StoredNote | undefined {
+    return selectCollateralNote(
+      this.store.list(),
+      req,
+      this.lockedCommitments(),
+    );
+  }
+
+  /** Commitments locked by orders that still rest (and so can't be re-spent). */
+  private lockedCommitments(): Set<string> {
+    const locked = new Set<string>();
+    for (const o of this.store.listOrders()) {
+      if (
+        o.collateralCommitment &&
+        (o.phase === "pending" || o.phase === "open")
+      ) {
+        locked.add(o.collateralCommitment);
+      }
+    }
+    return locked;
+  }
+
+  /** Once a fill consumes the order's collateral note (the matcher rotates it
+   *  into a change note), prune it from the UTXO set. Idempotent. */
+  private pruneConsumedCollateral(order: ManagedOrder): void {
+    if (order.collateralCommitment && order.anchorsConsumed >= 1) {
+      this.store.delete(order.collateralCommitment);
+    }
   }
 
   /** Cancel a resting order: sign a cancel, send it, drive the phase. */

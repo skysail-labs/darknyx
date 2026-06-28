@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS orders (
   topup_in_flight     INTEGER NOT NULL,
   merge_in_flight     INTEGER NOT NULL,
   pending_change_notes INTEGER NOT NULL,
+  collateral_commitment TEXT,
   created_at          INTEGER NOT NULL,
   updated_at          INTEGER NOT NULL
 );
@@ -80,6 +81,7 @@ interface OrderRow {
   topup_in_flight: number;
   merge_in_flight: number;
   pending_change_notes: number;
+  collateral_commitment: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -112,6 +114,7 @@ function rowToOrder(r: OrderRow): ManagedOrder {
     topupInFlight: r.topup_in_flight === 1,
     mergeInFlight: r.merge_in_flight === 1,
     pendingChangeNotes: r.pending_change_notes,
+    collateralCommitment: r.collateral_commitment ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -195,8 +198,9 @@ export class DaemonStore implements NoteStore {
         `INSERT INTO orders
            (order_id, seed_index, side, price_raw, size_raw, phase,
             anchor_pool_size, anchors_consumed, topup_nonce, topup_in_flight,
-            merge_in_flight, pending_change_notes, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            merge_in_flight, pending_change_notes, collateral_commitment,
+            created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(order_id) DO UPDATE SET
            seed_index = excluded.seed_index,
            side = excluded.side,
@@ -209,6 +213,7 @@ export class DaemonStore implements NoteStore {
            topup_in_flight = excluded.topup_in_flight,
            merge_in_flight = excluded.merge_in_flight,
            pending_change_notes = excluded.pending_change_notes,
+           collateral_commitment = excluded.collateral_commitment,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -224,6 +229,7 @@ export class DaemonStore implements NoteStore {
         o.topupInFlight ? 1 : 0,
         o.mergeInFlight ? 1 : 0,
         o.pendingChangeNotes,
+        o.collateralCommitment ?? null,
         o.createdAt,
         o.updatedAt,
       );

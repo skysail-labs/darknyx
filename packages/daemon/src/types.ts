@@ -62,6 +62,10 @@ export interface ManagedOrder {
   mergeInFlight: boolean;
   /** Residual change notes awaiting consolidation. */
   pendingChangeNotes: number;
+  /** Commitment (hex) of the note this order locked as collateral. The note is
+   *  excluded from selection while the order rests, and pruned once a fill
+   *  consumes it (rotated into a change note). */
+  collateralCommitment?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -75,6 +79,8 @@ export function newManagedOrder(args: {
   sizeRaw: bigint;
   /** Initial anchor-pool size (defaults to the SDK `ANCHOR_POOL_SIZE`). */
   anchorPoolSize: number;
+  /** Commitment (hex) of the locked collateral note, if known at build time. */
+  collateralCommitment?: string;
   now?: number;
 }): ManagedOrder {
   const now = args.now ?? Date.now();
@@ -91,6 +97,7 @@ export function newManagedOrder(args: {
     topupInFlight: false,
     mergeInFlight: false,
     pendingChangeNotes: 0,
+    collateralCommitment: args.collateralCommitment,
     createdAt: now,
     updatedAt: now,
   };

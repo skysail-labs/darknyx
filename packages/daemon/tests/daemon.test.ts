@@ -227,3 +227,63 @@ describe("Daemon — balances + streams", () => {
     );
   });
 });
+
+describe("Daemon — collateral selection + pruning", () => {
+  const MINT = new Uint8Array(32).fill(9);
+  const spendable = (commitment: string, amount: bigint): StoredNote => ({
+    commitment,
+    tokenMint: MINT,
+    amount,
+    ownerCommitment: 12345n,
+    innerHash: 7n,
+    leafIndex: 0n,
+  });
+  const intent = {
+    symbol: "SOL-USDC",
+    side: OrderSide.Bid,
+    policy: limitPolicy({ priceLimit: 100n }),
+    amount: 500n,
+  };
+
+  const BIG = "1a".repeat(32);
+  const MID = "2b".repeat(32);
+  const COLL = "3c".repeat(32);
+
+  it("selectNote best-fits a spendable note of the mint", () => {
+    const daemon = mkDaemon();
+    store.put(spendable(BIG, 1000n));
+    store.put(spendable(MID, 500n));
+    expect(daemon.selectNote({ mint: MINT, minAmount: 300n })?.commitment).toBe(
+      MID,
+    );
+  });
+
+  it("excludes a note already locked by a resting order", async () => {
+    const daemon = mkDaemon();
+    const n = spendable(BIG, 1000n);
+    store.put(n);
+    // place an order spending it → it becomes locked (order open)
+    await daemon.placeOrder(intent, n);
+    expect(daemon.selectNote({ mint: MINT, minAmount: 1n })).toBeUndefined();
+  });
+
+  it("prunes the collateral note once a fill consumes it", async () => {
+    const daemon = mkDaemon();
+    const n = spendable(COLL, 1000n);
+    store.put(n);
+    const { orderId } = await daemon.placeOrder(intent, n);
+    expect(store.get(COLL)).toBeDefined(); // still there while resting
+
+    // a fill consumes anchor 0 → the collateral note is rotated/spent
+    await (
+      daemon as unknown as {
+        engine: { dispatch: (id: string, e: unknown) => Promise<unknown> };
+      }
+    ).engine.dispatch(orderId, {
+      type: "fill",
+      anchorIndex: 0,
+      producedChangeNote: true,
+    });
+    expect(store.get(COLL)).toBeUndefined(); // pruned
+  });
+});

@@ -62,6 +62,8 @@ async function main(): Promise<void> {
   }
 
   // Map a control-API `POST /orders` body → SDK intent + the note to spend.
+  // The note is either pinned (`note_commitment`) or auto-selected from the
+  // balance (`collateral_mint` + `collateral_min`).
   const mapPlace: PlaceMapper = (raw) => {
     const b = raw as {
       symbol: string;
@@ -70,10 +72,29 @@ async function main(): Promise<void> {
       amount: string | number;
       min_fill_size?: string | number;
       expiry_slot?: string | number;
-      note_commitment: string;
+      note_commitment?: string;
+      collateral_mint?: string;
+      collateral_min?: string | number;
     };
-    const note = daemon.getNote(b.note_commitment);
-    if (!note) throw new Error(`unknown note ${b.note_commitment}`);
+    let note;
+    if (b.note_commitment) {
+      note = daemon.getNote(b.note_commitment);
+      if (!note) throw new Error(`unknown note ${b.note_commitment}`);
+    } else if (b.collateral_mint && b.collateral_min !== undefined) {
+      note = daemon.selectNote({
+        mint: Uint8Array.from(Buffer.from(b.collateral_mint, "hex")),
+        minAmount: BigInt(b.collateral_min),
+      });
+      if (!note) {
+        throw new Error(
+          `no spendable note covering ${b.collateral_min} of ${b.collateral_mint}`,
+        );
+      }
+    } else {
+      throw new Error(
+        "provide note_commitment, or collateral_mint + collateral_min",
+      );
+    }
     return {
       note,
       intent: {
