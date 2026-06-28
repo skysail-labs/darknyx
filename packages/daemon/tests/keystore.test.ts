@@ -14,6 +14,8 @@ import {
   Keystore,
   saveKeystore,
   loadKeystore,
+  deriveAccountIdentity,
+  generateAccountIdentity,
   type AccountIdentity,
 } from "../src/keystore.js";
 import { newManagedOrder } from "../src/types.js";
@@ -99,6 +101,40 @@ describe("Keystore — derivation", () => {
     expect(nacl.sign.detached.verify(digest, sig, keys.tradingKeyPubkey)).toBe(
       true,
     );
+  });
+});
+
+describe("account identity derivation", () => {
+  const rootKey = new Uint8Array(32).fill(8);
+
+  it("is deterministic from (seed, rootKey)", () => {
+    const seed = new Uint8Array(64).fill(3);
+    const a = deriveAccountIdentity(seed, rootKey);
+    const b = deriveAccountIdentity(seed, rootKey);
+    expect(a.ownerBlinding).toBe(b.ownerBlinding);
+    expect(a.r0).toBe(b.r0);
+    expect(a.r1).toBe(b.r1);
+    expect(a.r2).toBe(b.r2);
+    // the four blindings are distinct domains
+    expect(new Set([a.ownerBlinding, a.r0, a.r1, a.r2]).size).toBe(4);
+  });
+
+  it("generate produces a fresh 64-byte seed each time", () => {
+    const a = generateAccountIdentity(rootKey);
+    const b = generateAccountIdentity(rootKey);
+    expect(a.masterSeed).toHaveLength(64);
+    expect(Buffer.from(a.masterSeed).equals(Buffer.from(b.masterSeed))).toBe(
+      false,
+    );
+  });
+
+  it("recreating from the same seed yields a usable, identical keystore", () => {
+    const id = generateAccountIdentity(rootKey);
+    const recreated = deriveAccountIdentity(id.masterSeed, rootKey);
+    expect(new Keystore(recreated).spendingKey).toBe(
+      new Keystore(id).spendingKey,
+    );
+    expect(recreated.ownerBlinding).toBe(id.ownerBlinding);
   });
 });
 

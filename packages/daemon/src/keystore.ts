@@ -33,6 +33,8 @@ import {
   deriveSpendingKey,
   deriveMasterViewingKey,
   deriveTradingKeyAtOffset,
+  deriveBlindingFactor,
+  generateMasterSeed,
   ownerCommitment,
   userCommitmentFromKeys,
 } from "@nyx/sdk";
@@ -43,6 +45,40 @@ import type { ManagedOrder } from "./types.js";
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
   Uint8Array.from(Buffer.from(h, "hex"));
+
+/**
+ * Account-blinding domain. The owner/user-commitment blindings derive from the
+ * seed at these high counters, away from the small leaf-counter range that note
+ * (`deriveBlindingFactor`) blindings use — so the WHOLE identity is recoverable
+ * from the seed alone (the keystore file is just an encrypted convenience).
+ */
+const ACCOUNT_BLINDING_BASE = 0xacc0_0000_0000n;
+
+/**
+ * Deterministically derive an {@link AccountIdentity} from a master seed + the
+ * operator's root (payer) key. Same `(seed, rootKey)` always yields the same
+ * on-chain identity, so a lost keystore is recoverable from the backed-up seed.
+ */
+export function deriveAccountIdentity(
+  masterSeed: Uint8Array,
+  rootKeyPubkey: Uint8Array,
+): AccountIdentity {
+  return {
+    masterSeed,
+    ownerBlinding: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE),
+    r0: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE + 1n),
+    r1: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE + 2n),
+    r2: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE + 3n),
+    rootKeyPubkey,
+  };
+}
+
+/** Generate a fresh identity (random 64-byte seed) for a root key. */
+export function generateAccountIdentity(
+  rootKeyPubkey: Uint8Array,
+): AccountIdentity {
+  return deriveAccountIdentity(generateMasterSeed(), rootKeyPubkey);
+}
 
 /** The account's persisted crypto identity. All else derives from this. */
 export interface AccountIdentity {

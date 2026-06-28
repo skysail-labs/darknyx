@@ -6,7 +6,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PublicKey } from "@solana/web3.js";
 
-import { DaemonMergeRunner, type MergeFn } from "../src/merge-runner.js";
+import {
+  DaemonMergeRunner,
+  createMergeRunner,
+  type MergeFn,
+} from "../src/merge-runner.js";
 import { DaemonStore } from "../src/store.js";
 import { newManagedOrder, type ManagedOrder } from "../src/types.js";
 import type { MergeParams, MergeReceipt, StoredNote } from "@nyx/sdk";
@@ -148,5 +152,27 @@ describe("DaemonMergeRunner", () => {
     const consumed = await runner(fn).run(order(), 3);
     expect(consumed).toBe(2);
     expect(Buffer.from(calls[0].tokenMint)).toEqual(Buffer.from(MINT_B));
+  });
+});
+
+describe("createMergeRunner", () => {
+  it("advances the merge index monotonically across runs", async () => {
+    store.put(changeNote("a", MINT_A, 10n, 0n));
+    store.put(changeNote("b", MINT_A, 20n, 1n));
+    const { fn, calls } = fakeMerge();
+    const r = createMergeRunner({
+      store,
+      payer: PublicKey.default,
+      ownerCommitment: 99n,
+      mergeFn: fn,
+      startMergeIndex: 5,
+    });
+    await r.run(order(), 2);
+    // a fresh pair to merge again
+    store.put(changeNote("d", MINT_A, 1n, 3n));
+    store.put(changeNote("e", MINT_A, 2n, 4n));
+    await r.run(order(), 2);
+    expect(calls[0].mergeIndex).toBe(5);
+    expect(calls[1].mergeIndex).toBe(6);
   });
 });

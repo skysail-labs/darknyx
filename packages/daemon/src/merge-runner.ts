@@ -50,6 +50,34 @@ export interface DaemonMergeRunnerOptions {
   treeId?: number;
 }
 
+/**
+ * Compose a {@link DaemonMergeRunner} from an SDK `mergeFn` (the
+ * `getMergeFunction({ client })` output) + the account context, with a simple
+ * monotone merge-index counter starting at `startMergeIndex`. The
+ * `mergeFn`/`payer`/`ownerCommitment` come from a real `DarkPoolClient` the
+ * caller builds (the provider stack — connection, tx forwarder, merge zk-prover
+ * — is constructed + devnet-validated at integration time, which is why bin
+ * leaves merge unconfigured until then).
+ */
+export function createMergeRunner(args: {
+  store: DaemonStore;
+  payer: PublicKey;
+  ownerCommitment: bigint;
+  mergeFn: MergeFn;
+  startMergeIndex?: number;
+  treeId?: number;
+}): DaemonMergeRunner {
+  let mergeIndex = args.startMergeIndex ?? 0;
+  return new DaemonMergeRunner({
+    store: args.store,
+    payer: args.payer,
+    ownerCommitment: args.ownerCommitment,
+    mergeFn: args.mergeFn,
+    nextMergeIndex: () => mergeIndex++,
+    treeId: args.treeId,
+  });
+}
+
 export class DaemonMergeRunner implements MergeRunner {
   constructor(private readonly opts: DaemonMergeRunnerOptions) {}
 
