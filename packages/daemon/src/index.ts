@@ -13,3 +13,5 @@ export * from "./order-placer.js";
 export * from "./place.js";
 export * from "./keystore.js";
 export * from "./build-place-request.js";
+export * from "./daemon.js";
+export * from "./control-api.js";

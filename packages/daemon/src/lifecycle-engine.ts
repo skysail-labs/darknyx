@@ -46,11 +46,18 @@ export interface LifecycleEngineOptions {
   /** Surfaced for unexpected executor throws (after they're converted to a
    *  `*-failed` event). Defaults to `console.error`. */
   onError?: (err: unknown, context: string) => void;
+  /** Fired AFTER each transition is persisted, with the new order + the event
+   *  that produced it. The daemon forwards these to the strategy's stream. */
+  onTransition?: (order: ManagedOrder, event: LifecycleEvent) => void;
 }
 
 export class LifecycleEngine {
   private readonly thresholds: LifecycleThresholds;
   private readonly onError: (err: unknown, context: string) => void;
+  private readonly onTransition?: (
+    order: ManagedOrder,
+    event: LifecycleEvent,
+  ) => void;
 
   constructor(
     private readonly store: DaemonStore,
@@ -60,6 +67,7 @@ export class LifecycleEngine {
     this.thresholds = opts.thresholds ?? DEFAULT_THRESHOLDS;
     this.onError =
       opts.onError ?? ((err, ctx) => console.error(`[daemon] ${ctx}:`, err));
+    this.onTransition = opts.onTransition;
   }
 
   /** Persist a freshly built (pending) order so `dispatch` can find it. */
@@ -90,6 +98,7 @@ export class LifecycleEngine {
       now,
     );
     this.store.putOrder(order);
+    this.onTransition?.(order, event);
 
     for (const action of actions) {
       // Detached — the engine doesn't block one order's fills on its top-up
