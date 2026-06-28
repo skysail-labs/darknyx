@@ -1,0 +1,30 @@
+{
+  "name": "@nyx/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nyx reference daemon — long-running client for market makers + funds. Wraps the SDK: order-lifecycle state machine, auto anchor top-up, auto-merge, settlement reconciliation, local control API. Keys + proving stay on-device.",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "bin": {
+    "nyx-daemon": "dist/bin/daemon.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/bin/daemon.js",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nyx/sdk": "0.1.0",
+    "@solana/web3.js": "^1.98.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.7"
+  }
+}

@@ -1,0 +1,93 @@
+/**
+ * Daemon configuration from the environment.
+ *
+ * The daemon talks to two services: the **CVM gateway** (order intake + fills
+ * WS, authenticated by a bearer token) and a **Solana RPC** (settlement
+ * reconciliation + leaf-index reads). Everything else is local: the sqlite
+ * store and the keystore live on the operator's machine.
+ */
+
+import {
+  DEFAULT_THRESHOLDS,
+  type LifecycleThresholds,
+} from "./order-lifecycle.js";
+
+export interface DaemonConfig {
+  /** CVM gateway origin, e.g. `https://<app>-8080.dstack-pha-prod5.phala.network`. */
+  gatewayUrl: string;
+  /** CVM gateway WS origin. Defaults to `gatewayUrl` with `http(s)`→`ws(s)`. */
+  gatewayWsUrl: string;
+  /** Bearer token from `POST /auth/token`. */
+  token: string;
+  /** Solana RPC (Helius) for settlement reconciliation / leaf-index reads. */
+  rpcUrl: string;
+  /** Local sqlite path for note + managed-order persistence. */
+  dbPath: string;
+  /** Local control-API port (REST + one WS the strategy drives). */
+  controlPort: number;
+  /** Path to the encrypted master-seed keystore. */
+  keystorePath: string;
+  /** Automation thresholds for the lifecycle reducer. */
+  thresholds: LifecycleThresholds;
+}
+
+/** Default control-API port (loopback). */
+export const DEFAULT_CONTROL_PORT = 8770;
+
+function httpToWs(url: string): string {
+  return url.replace(/^http/, "ws");
+}
+
+function intFromEnv(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  fallback: number,
+): number {
+  const raw = env[key];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`${key} must be a non-negative integer, got ${raw}`);
+  }
+  return n;
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
+  const gatewayUrl = env.NYX_DAEMON_GATEWAY_URL;
+  if (!gatewayUrl) throw new Error("NYX_DAEMON_GATEWAY_URL is required");
+  const token = env.NYX_DAEMON_TOKEN;
+  if (!token) throw new Error("NYX_DAEMON_TOKEN is required");
+  const rpcUrl = env.NYX_DAEMON_RPC_URL;
+  if (!rpcUrl) throw new Error("NYX_DAEMON_RPC_URL is required");
+
+  return {
+    gatewayUrl,
+    gatewayWsUrl: env.NYX_DAEMON_GATEWAY_WS_URL ?? httpToWs(gatewayUrl),
+    token,
+    rpcUrl,
+    dbPath: env.NYX_DAEMON_DB ?? "./nyx-daemon.sqlite",
+    controlPort: intFromEnv(
+      env,
+      "NYX_DAEMON_CONTROL_PORT",
+      DEFAULT_CONTROL_PORT,
+    ),
+    keystorePath: env.NYX_DAEMON_KEYSTORE ?? "./nyx-keystore.json",
+    thresholds: {
+      anchorTopUpThreshold: intFromEnv(
+        env,
+        "NYX_DAEMON_ANCHOR_TOPUP_THRESHOLD",
+        DEFAULT_THRESHOLDS.anchorTopUpThreshold,
+      ),
+      anchorTopUpSize: intFromEnv(
+        env,
+        "NYX_DAEMON_ANCHOR_TOPUP_SIZE",
+        DEFAULT_THRESHOLDS.anchorTopUpSize,
+      ),
+      mergeThreshold: intFromEnv(
+        env,
+        "NYX_DAEMON_MERGE_THRESHOLD",
+        DEFAULT_THRESHOLDS.mergeThreshold,
+      ),
+    },
+  };
+}
