@@ -116,6 +116,16 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
     if (method === "GET" && path === "/balances") {
       return send(res, 200, { balances: daemon.balances() });
     }
+    if (method === "GET" && path === "/attestation") {
+      const a = daemon.getAttestation();
+      return a
+        ? send(res, 200, {
+            tee_pubkey: a.teePubkey,
+            compose_hash: a.composeHash,
+            mrtd: a.mrtd,
+          })
+        : send(res, 404, { error: "not attested" });
+    }
     if (method === "GET" && path === "/stream") {
       return streamEvents(res);
     }

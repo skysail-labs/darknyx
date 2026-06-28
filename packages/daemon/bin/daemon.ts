@@ -41,8 +41,25 @@ async function main(): Promise<void> {
     zkeyPath: required("NYX_DAEMON_VI_ZKEY"),
   });
 
-  const daemon = new Daemon({ config, keystore, store, prover });
+  const daemon = new Daemon({
+    config,
+    keystore,
+    store,
+    prover,
+    // Attestation is on by default; NYX_DAEMON_SKIP_ATTEST=1 disables it (local
+    // dstack-simulator, whose stub quotes can't be verified by design).
+    verifyAttestation:
+      process.env.NYX_DAEMON_SKIP_ATTEST === "1" ? false : undefined,
+  });
   await daemon.start();
+  const att = daemon.getAttestation();
+  if (att) {
+    console.log(
+      `[daemon] attested gateway: tee_pubkey ${att.teePubkey} compose ${att.composeHash}`,
+    );
+  } else {
+    console.warn("[daemon] WARNING: attestation skipped");
+  }
 
   // Map a control-API `POST /orders` body → SDK intent + the note to spend.
   const mapPlace: PlaceMapper = (raw) => {

@@ -125,6 +125,7 @@ function mkDaemon(
     fetchImpl: fakeFetch(),
     subscribeFills: capture().fn as never,
     subscribeOrders: capture().fn as never,
+    verifyAttestation: false, // attestation covered in attestation.test.ts
     ...extra,
   });
 }

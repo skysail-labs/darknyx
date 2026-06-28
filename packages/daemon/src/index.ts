@@ -14,5 +14,6 @@ export * from "./place.js";
 export * from "./keystore.js";
 export * from "./build-place-request.js";
 export * from "./merge-runner.js";
+export * from "./attestation.js";
 export * from "./daemon.js";
 export * from "./control-api.js";

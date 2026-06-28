@@ -11,6 +11,7 @@ import {
   DEFAULT_THRESHOLDS,
   type LifecycleThresholds,
 } from "./order-lifecycle.js";
+import type { ExpectedMeasurements } from "./attestation.js";
 
 export interface DaemonConfig {
   /** CVM gateway origin, e.g. `https://<app>-8080.dstack-pha-prod5.phala.network`. */
@@ -29,6 +30,9 @@ export interface DaemonConfig {
   keystorePath: string;
   /** Automation thresholds for the lifecycle reducer. */
   thresholds: LifecycleThresholds;
+  /** Operator-pinned TEE measurements to enforce on connect (any subset). When
+   *  set, the daemon refuses to trade unless the gateway's attestation matches. */
+  attestation?: ExpectedMeasurements;
 }
 
 /** Default control-API port (loopback). */
@@ -89,5 +93,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
         DEFAULT_THRESHOLDS.mergeThreshold,
       ),
     },
+    attestation: parseExpected(env),
   };
+}
+
+/** Pinned TEE measurements from the environment (undefined if none set). */
+function parseExpected(
+  env: NodeJS.ProcessEnv,
+): ExpectedMeasurements | undefined {
+  const composeHash = env.NYX_DAEMON_EXPECT_COMPOSE_HASH;
+  const mrtd = env.NYX_DAEMON_EXPECT_MRTD;
+  const teePubkey = env.NYX_DAEMON_EXPECT_TEE_PUBKEY;
+  if (!composeHash && !mrtd && !teePubkey) return undefined;
+  return { composeHash, mrtd, teePubkey };
 }

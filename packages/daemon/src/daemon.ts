@@ -44,6 +44,11 @@ import { WsOrderPlacer, type OrderPlacer } from "./order-placer.js";
 import { placeManagedOrder } from "./place.js";
 import { buildPlaceRequest, type OrderIntent } from "./build-place-request.js";
 import { newManagedOrder, type ManagedOrder } from "./types.js";
+import {
+  verifyAttestation,
+  type AttestationResult,
+  type QuoteVerifier,
+} from "./attestation.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
@@ -85,6 +90,11 @@ export interface DaemonDeps {
   webSocketFactory?: WebSocketFactory;
   sendableWebSocketFactory?: SendableWebSocketFactory;
   fetchImpl?: typeof fetch;
+  /** Verify the gateway's TEE attestation on start. Defaults to the real
+   *  {@link verifyAttestation}; pass `false` to skip (tests/local-sim). */
+  verifyAttestation?: typeof verifyAttestation | false;
+  /** Optional DCAP quote verifier (full Intel TCB) handed to the attestation. */
+  quoteVerifier?: QuoteVerifier;
 }
 
 export class Daemon {
@@ -101,6 +111,10 @@ export class Daemon {
   private readonly subscribeOrdersFn?: SubscribeOrderUpdatesFn;
   private readonly webSocketFactory?: WebSocketFactory;
 
+  private readonly verifyAttestationFn: typeof verifyAttestation | false;
+  private readonly quoteVerifier?: QuoteVerifier;
+  private attestationResult: AttestationResult | null = null;
+
   private fills: FillsListener | null = null;
   private orders: OrdersListener | null = null;
   private readonly listeners = new Set<(e: DaemonEvent) => void>();
@@ -116,6 +130,9 @@ export class Daemon {
     this.subscribeFillsFn = deps.subscribeFills;
     this.subscribeOrdersFn = deps.subscribeOrders;
     this.webSocketFactory = deps.webSocketFactory;
+    // Attest by default (non-custody is the point); inject `false` to skip.
+    this.verifyAttestationFn = deps.verifyAttestation ?? verifyAttestation;
+    this.quoteVerifier = deps.quoteVerifier;
 
     const executor = new DaemonActionExecutor({
       keys: this.keystore,
@@ -147,9 +164,25 @@ export class Daemon {
 
   // ── lifecycle ──
 
-  /** Open the TEE streams + resume the next HD index. Idempotent. */
+  /**
+   * Verify the gateway's TEE attestation (unless disabled), then open the TEE
+   * streams + resume the next HD index. Idempotent. If attestation fails the
+   * daemon does NOT start — it refuses to send order flow to an unverified
+   * gateway (the non-custody guarantee).
+   */
   async start(): Promise<void> {
     if (this.started) return;
+
+    if (this.verifyAttestationFn) {
+      this.attestationResult = await this.verifyAttestationFn({
+        gatewayUrl: this.config.gatewayUrl,
+        token: this.config.token,
+        expected: this.config.attestation,
+        quoteVerifier: this.quoteVerifier,
+        fetchImpl: this.fetchImpl,
+      });
+    }
+
     this.started = true;
     this.nextIndex = this.store.maxSeedIndex() + 1;
 
@@ -248,6 +281,11 @@ export class Daemon {
   }
   getNote(commitment: string): StoredNote | undefined {
     return this.store.get(commitment);
+  }
+  /** The verified TEE identity from the connect-time attestation (null if
+   *  attestation was skipped or hasn't run yet). */
+  getAttestation(): AttestationResult | null {
+    return this.attestationResult;
   }
 
   /** Aggregate unspent notes into per-mint balances. */
