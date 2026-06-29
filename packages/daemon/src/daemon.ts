@@ -229,7 +229,10 @@ export class Daemon {
       ownerCommitment,
       webSocketFactory: this.webSocketFactory,
       subscribeFn: this.subscribeFillsFn,
-      onFill: (note) => this.emit({ type: "fill", note }),
+      onFill: (note) => {
+        this.pruneSupersededContinuations(note);
+        this.emit({ type: "fill", note });
+      },
       onError: (e) => this.emitError("fills", e),
     });
     this.orders = new OrdersListener({
@@ -349,18 +352,38 @@ export class Daemon {
     );
   }
 
-  /** Commitments locked by orders that still rest (and so can't be re-spent). */
+  /** Commitments locked by orders that still rest (and so can't be re-spent):
+   *  the original collateral note of a pending/open order, AND that order's
+   *  rolling continuation residual (a change note is RE-LOCKED for continuation
+   *  while its order is open — only released when the order goes terminal). */
   private lockedCommitments(): Set<string> {
+    const openOrderIds = new Set<string>();
     const locked = new Set<string>();
     for (const o of this.store.listOrders()) {
-      if (
-        o.collateralCommitment &&
-        (o.phase === "pending" || o.phase === "open")
-      ) {
-        locked.add(o.collateralCommitment);
+      if (o.phase === "pending" || o.phase === "open") {
+        openOrderIds.add(o.orderId);
+        if (o.collateralCommitment) locked.add(o.collateralCommitment);
+      }
+    }
+    for (const n of this.store.list()) {
+      if (n.orderId !== undefined && openOrderIds.has(n.orderId)) {
+        locked.add(n.commitment);
       }
     }
     return locked;
+  }
+
+  /** When a continuation fill rotates the residual onto a new anchor, the prior
+   *  change note(s) for that order are consumed on-chain — drop them so neither
+   *  collateral selection nor merge ever picks a spent note. Keeps one (latest)
+   *  residual per order. */
+  private pruneSupersededContinuations(note: StoredNote): void {
+    if (note.orderId === undefined || note.anchorIndex === undefined) return;
+    for (const n of this.store.notesByOrder(note.orderId)) {
+      if (n.anchorIndex !== undefined && n.anchorIndex < note.anchorIndex) {
+        this.store.delete(n.commitment);
+      }
+    }
   }
 
   /** Once a fill consumes the order's collateral note (the matcher rotates it

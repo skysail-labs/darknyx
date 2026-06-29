@@ -81,8 +81,14 @@ export function createMergeRunner(args: {
 export class DaemonMergeRunner implements MergeRunner {
   constructor(private readonly opts: DaemonMergeRunnerOptions) {}
 
-  async run(order: ManagedOrder, _noteCount: number): Promise<number> {
-    const batch = this.selectBatch(order.orderId);
+  async run(_order: ManagedOrder, _noteCount: number): Promise<number> {
+    // Selection is ACCOUNT-level cross-mint, not per-order: the anchor-pool
+    // model keeps one ROLLING residual per order (each partial fill consumes
+    // the prior + rebuilds it), so a single order never has ≥2 spendable
+    // residuals. The notes worth consolidating are the FINAL residuals of
+    // terminated orders + deposit notes, accumulated across orders + same-mint.
+    // The `order` arg is just the trigger; we scan the whole store.
+    const batch = this.selectBatch();
     if (!batch) return 0;
 
     const params: MergeParams = {
@@ -107,13 +113,11 @@ export class DaemonMergeRunner implements MergeRunner {
     return batch.length;
   }
 
-  /** First mintable batch of 2..4 same-mint, leaf-resolved residual notes. */
-  private selectBatch(orderId: string): StoredNote[] | undefined {
-    const eligible = this.opts.store
-      .notesByOrder(orderId)
-      .filter((n) => n.leafIndex !== undefined);
+  /** First mintable batch of 2..4 same-mint SPENDABLE notes (cross-order). */
+  private selectBatch(): StoredNote[] | undefined {
+    const spendable = this.opts.store.list().filter((n) => this.isMergeable(n));
     const byMint = new Map<string, StoredNote[]>();
-    for (const n of eligible) {
+    for (const n of spendable) {
       const k = Buffer.from(n.tokenMint).toString("hex");
       const g = byMint.get(k);
       if (g) g.push(n);
@@ -123,5 +127,16 @@ export class DaemonMergeRunner implements MergeRunner {
       if (group.length >= 2) return group.slice(0, MAX_K);
     }
     return undefined;
+  }
+
+  /** A note is mergeable iff its leaf is resolved AND it isn't a re-locked
+   *  rolling residual — i.e. a deposit note (no orderId) or a change note whose
+   *  order has gone terminal (its final residual is released). A change note of
+   *  a still-open order is re-locked for continuation, so it's NOT spendable. */
+  private isMergeable(n: StoredNote): boolean {
+    if (n.leafIndex === undefined) return false;
+    if (n.orderId === undefined) return true; // deposit note
+    const o = this.opts.store.getOrder(n.orderId);
+    return !o || (o.phase !== "pending" && o.phase !== "open");
   }
 }

@@ -340,3 +340,58 @@ describe("Daemon — deposit", () => {
     ).rejects.toThrow(/deposit not configured/);
   });
 });
+
+describe("Daemon — note-lifecycle hygiene (rolling residual)", () => {
+  const MINT = new Uint8Array(32).fill(9);
+  const OID = "ab".repeat(8);
+  const change = (commitment: string, anchorIndex: number): StoredNote => ({
+    commitment,
+    tokenMint: MINT,
+    amount: 100n,
+    ownerCommitment: 9n,
+    innerHash: 7n,
+    orderId: OID,
+    anchorIndex,
+    leafIndex: BigInt(anchorIndex),
+  });
+  const openMgr = (orderId: string): ManagedOrder => ({
+    orderId,
+    seedIndex: 0,
+    side: "bid",
+    priceRaw: 1n,
+    sizeRaw: 1n,
+    phase: "open",
+    anchorPoolSize: 10,
+    anchorsConsumed: 0,
+    topupNonce: 0,
+    topupInFlight: false,
+    mergeInFlight: false,
+    pendingChangeNotes: 0,
+    createdAt: 0,
+    updatedAt: 0,
+  });
+
+  it("selectNote excludes an open order's re-locked rolling residual", () => {
+    const daemon = mkDaemon();
+    store.putOrder(openMgr(OID));
+    store.put(change("res", 0)); // the open order's rolling residual
+    // locked while the order is open → not selectable
+    expect(daemon.selectNote({ mint: MINT, minAmount: 1n })).toBeUndefined();
+  });
+
+  it("a continuation fill prunes the order's prior residuals (keeps the latest)", async () => {
+    const c = capture<{ onFill?: (n: StoredNote) => void }>();
+    const daemon = mkDaemon({ subscribeFills: c.fn as never });
+    store.putOrder(openMgr(OID));
+    await daemon.start();
+    // the SDK stores each memo's note before onFill; simulate that + drive onFill.
+    store.put(change("c0", 0));
+    store.put(change("c1", 1));
+    store.put(change("c2", 2));
+    c.cap.opts!.onFill!(change("c2", 2));
+    expect(store.get("c0")).toBeUndefined(); // superseded → pruned
+    expect(store.get("c1")).toBeUndefined();
+    expect(store.get("c2")).toBeDefined(); // latest kept
+    daemon.stop();
+  });
+});
