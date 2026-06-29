@@ -150,6 +150,31 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
     if (method === "GET" && path === "/stream") {
       return streamEvents(res);
     }
+    // Read-only TEE surface, proxied so the strategy reads everything locally.
+    if (method === "GET" && path.startsWith("/tee/")) {
+      const sub = path.slice("/tee/".length);
+      if (sub === "account") return send(res, 200, await daemon.tee.account());
+      if (sub === "instruments")
+        return send(res, 200, await daemon.tee.instruments());
+      if (sub.startsWith("instruments/"))
+        return send(
+          res,
+          200,
+          await daemon.tee.instrument(sub.slice("instruments/".length)),
+        );
+      if (sub.startsWith("settlement/"))
+        return send(
+          res,
+          200,
+          await daemon.tee.settlementStatus(sub.slice("settlement/".length)),
+        );
+      if (sub === "system")
+        return send(res, 200, await daemon.tee.systemStatus());
+      if (sub === "time") return send(res, 200, await daemon.tee.serverTime());
+      if (sub === "transparency")
+        return send(res, 200, await daemon.tee.transparency());
+      return send(res, 404, { error: "unknown tee endpoint" });
+    }
     return send(res, 404, { error: "not found" });
   }
 

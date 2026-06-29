@@ -59,6 +59,7 @@ import {
   type FetchInclusionFn,
 } from "./settlement-tracker.js";
 import { selectCollateralNote, type CollateralRequest } from "./note-select.js";
+import { TeeReadClient } from "./tee-read.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
@@ -122,6 +123,8 @@ export class Daemon {
   private readonly prover: ValidInputProver;
   private readonly engine: LifecycleEngine;
   private readonly placer: OrderPlacer;
+  /** Authenticated read-only TEE surface (account/instruments/settlement/…). */
+  readonly tee: TeeReadClient;
   private readonly fetchImpl?: typeof fetch;
   private readonly treeId = 0;
 
@@ -193,6 +196,12 @@ export class Daemon {
         cancelOnDisconnect: true,
         webSocketFactory: deps.sendableWebSocketFactory,
       });
+
+    this.tee = new TeeReadClient({
+      gatewayUrl: this.config.gatewayUrl,
+      token: this.config.token,
+      fetchImpl: this.fetchImpl,
+    });
   }
 
   // ── lifecycle ──

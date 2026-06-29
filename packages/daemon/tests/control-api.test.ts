@@ -48,6 +48,15 @@ function fakeDaemon() {
       arrivalSlot: 9,
     })),
     cancelOrder: vi.fn(async () => {}),
+    tee: {
+      account: vi.fn(async () => ({ account_id: "acct" })),
+      instruments: vi.fn(async () => [{ symbol: "SOL-USDC" }]),
+      instrument: vi.fn(async (s: string) => ({ symbol: s })),
+      settlementStatus: vi.fn(async (b: string | number) => ({ batch_id: b })),
+      systemStatus: vi.fn(async () => ({ ok: true })),
+      serverTime: vi.fn(async () => ({ slot: 1 })),
+      transparency: vi.fn(async () => ({ leaf_count: 7 })),
+    },
     subscribe: vi.fn((l: (e: DaemonEvent) => void) => {
       subs.add(l);
       return () => subs.delete(l);
@@ -137,6 +146,27 @@ describe("control-api — routes", () => {
 
   it("404s an unknown route", async () => {
     expect((await fetch(`${base}/nope`)).status).toBe(404);
+  });
+
+  it("proxies the read-only TEE surface under /tee/*", async () => {
+    const acct = (await (await fetch(`${base}/tee/account`)).json()) as {
+      account_id: string;
+    };
+    expect(acct.account_id).toBe("acct");
+    expect(daemon.tee.account).toHaveBeenCalledOnce();
+    const inst = (await (
+      await fetch(`${base}/tee/instruments/SOL-USDC`)
+    ).json()) as { symbol: string };
+    expect(inst.symbol).toBe("SOL-USDC");
+    const sett = (await (await fetch(`${base}/tee/settlement/42`)).json()) as {
+      batch_id: string;
+    };
+    expect(String(sett.batch_id)).toBe("42");
+    const t = (await (await fetch(`${base}/tee/transparency`)).json()) as {
+      leaf_count: number;
+    };
+    expect(t.leaf_count).toBe(7);
+    expect((await fetch(`${base}/tee/bogus`)).status).toBe(404);
   });
 });
 

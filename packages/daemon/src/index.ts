@@ -15,6 +15,7 @@ export * from "./keystore.js";
 export * from "./build-place-request.js";
 export * from "./merge-runner.js";
 export * from "./note-select.js";
+export * from "./tee-read.js";
 export * from "./settlement-tracker.js";
 export * from "./solana-providers.js";
 export * from "./daemon-client.js";

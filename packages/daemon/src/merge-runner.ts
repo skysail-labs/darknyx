@@ -8,13 +8,12 @@
  * the spent inputs + stores the merged output note. Consolidating residuals back
  * into a single large note is what amortizes proving across many partial fills.
  *
- * Selection rules (VALID_MERGE consumes 2–4 same-owner, same-mint notes):
- *   - only this order's continuation notes that already have a known on-chain
- *     `leafIndex` (a change note can't be merged until its leaf is resolved —
- *     the settlement-tracker's job, a later slice);
- *   - grouped by mint; the first group with ≥ 2 notes, capped at 4 (K=4).
- * Fewer than 2 mergeable → returns 0 (a clean no-op; the engine just leaves the
- * residual count where it is and retries on the next quiescence).
+ * Selection is ACCOUNT-level cross-mint (NOT per-order — see `run`): VALID_MERGE
+ * consumes 2–4 same-owner, same-mint SPENDABLE notes. Spendable = leaf-resolved
+ * (the settlement-tracker's job) AND not a re-locked rolling residual — i.e. a
+ * deposit note or the final residual of a TERMINATED order. Grouped by mint;
+ * first group with ≥ 2, capped at 4 (K=4). Fewer than 2 → returns 0 (clean
+ * no-op; retried on the next quiescence as residuals accumulate across orders).
  *
  * `mergeFn` (the heavy DarkPoolClient-backed path) + `nextMergeIndex` are
  * injected, so this stays unit-testable without devnet; `bin/daemon.ts` supplies
