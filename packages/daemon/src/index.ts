@@ -16,6 +16,8 @@ export * from "./build-place-request.js";
 export * from "./merge-runner.js";
 export * from "./note-select.js";
 export * from "./settlement-tracker.js";
+export * from "./solana-providers.js";
+export * from "./daemon-client.js";
 export * from "./attestation.js";
 export * from "./daemon.js";
 export * from "./control-api.js";

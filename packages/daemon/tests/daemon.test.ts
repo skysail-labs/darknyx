@@ -4,6 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PublicKey } from "@solana/web3.js";
 
 import { Daemon, type DaemonEvent } from "../src/daemon.js";
 import { DaemonStore } from "../src/store.js";
@@ -42,6 +43,7 @@ const config = (): DaemonConfig => ({
   controlPort: 0,
   keystorePath: "x",
   thresholds: DEFAULT_THRESHOLDS,
+  programId: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 });
 
 const note: StoredNote = {
@@ -285,5 +287,56 @@ describe("Daemon — collateral selection + pruning", () => {
       producedChangeNote: true,
     });
     expect(store.get(COLL)).toBeUndefined(); // pruned
+  });
+});
+
+describe("Daemon — deposit", () => {
+  const MINT = new Uint8Array(32).fill(9);
+
+  it("calls the deposit fn, stores the minted note, returns it", async () => {
+    const depositFn = vi.fn(
+      async (params: { tokenMint: Uint8Array; amount: bigint }) => ({
+        signature: "depsig",
+        leafIndex: 42n,
+        noteCommitment: new Uint8Array(32).fill(0xcd),
+        notePlaintext: {
+          tokenMint: params.tokenMint,
+          amount: params.amount,
+          ownerCommitment: 7n,
+          innerHash: 8n,
+        },
+      }),
+    );
+    const daemon = mkDaemon({
+      depositFn: depositFn as never,
+      depositor: PublicKey.default,
+    });
+
+    const out = await daemon.deposit({
+      tokenMint: MINT,
+      amount: 1000n,
+      depositorTokenAccount: PublicKey.default,
+    });
+
+    expect(depositFn).toHaveBeenCalledOnce();
+    expect(
+      typeof (depositFn.mock.calls[0][0] as { depositIndex: bigint })
+        .depositIndex,
+    ).toBe("bigint");
+    expect(out.leafIndex).toBe(42n);
+    const stored = store.get(out.commitment)!;
+    expect(stored.amount).toBe(1000n);
+    expect(stored.leafIndex).toBe(42n); // spendable immediately
+  });
+
+  it("throws when deposit isn't configured", async () => {
+    const daemon = mkDaemon(); // no depositFn
+    await expect(
+      daemon.deposit({
+        tokenMint: MINT,
+        amount: 1n,
+        depositorTokenAccount: PublicKey.default,
+      }),
+    ).rejects.toThrow(/deposit not configured/);
   });
 });

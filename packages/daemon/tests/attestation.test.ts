@@ -167,6 +167,7 @@ describe("Daemon — attestation gate", () => {
     controlPort: 0,
     keystorePath: "x",
     thresholds: DEFAULT_THRESHOLDS,
+    programId: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
   });
 
   it("refuses to start when attestation fails", async () => {

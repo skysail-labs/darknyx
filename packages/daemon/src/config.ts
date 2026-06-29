@@ -33,7 +33,15 @@ export interface DaemonConfig {
   /** Operator-pinned TEE measurements to enforce on connect (any subset). When
    *  set, the daemon refuses to trade unless the gateway's attestation matches. */
   attestation?: ExpectedMeasurements;
+  /** Vault program id (base58). Default = the devnet vault. */
+  programId: string;
+  /** Path to the operator's Solana payer keypair (enables on-chain deposit). */
+  payerKeypairPath?: string;
 }
+
+/** Default devnet vault program id (matches `declare_id!` in programs/vault). */
+export const DEFAULT_PROGRAM_ID =
+  "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
 
 /** Default control-API port (loopback). */
 export const DEFAULT_CONTROL_PORT = 8770;
@@ -94,6 +102,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
       ),
     },
     attestation: parseExpected(env),
+    programId: env.NYX_DAEMON_PROGRAM_ID ?? DEFAULT_PROGRAM_ID,
+    payerKeypairPath: env.NYX_DAEMON_PAYER_KEYPAIR,
   };
 }
 

@@ -15,18 +15,36 @@
  *   node dist/bin/daemon.js
  */
 
-import { nodeValidInputProver, limitPolicy, OrderSide } from "@nyx/sdk";
+import { readFileSync } from "node:fs";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import {
+  nodeValidInputProver,
+  getDepositFunction,
+  limitPolicy,
+  OrderSide,
+} from "@nyx/sdk";
 
 import { loadConfig } from "../src/config.js";
 import { DaemonStore } from "../src/store.js";
 import { loadKeystore } from "../src/keystore.js";
+import { createDaemonClient } from "../src/daemon-client.js";
 import { Daemon } from "../src/daemon.js";
-import { startControlServer, type PlaceMapper } from "../src/control-api.js";
+import {
+  startControlServer,
+  type PlaceMapper,
+  type DepositMapper,
+} from "../src/control-api.js";
 
 function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is required`);
   return v;
+}
+
+/** Load a Solana keypair from a `solana-keygen` JSON file (array of bytes). */
+function loadKeypair(path: string): Keypair {
+  const bytes = JSON.parse(readFileSync(path, "utf8")) as number[];
+  return Keypair.fromSecretKey(Uint8Array.from(bytes));
 }
 
 async function main(): Promise<void> {
@@ -41,11 +59,29 @@ async function main(): Promise<void> {
     zkeyPath: required("NYX_DAEMON_VI_ZKEY"),
   });
 
+  // On-chain deposit is enabled only when a payer keypair is configured.
+  const programId = new PublicKey(config.programId);
+  let depositFn;
+  let depositor;
+  if (config.payerKeypairPath) {
+    const payer = loadKeypair(config.payerKeypairPath);
+    const client = createDaemonClient({
+      programId,
+      rpcUrl: config.rpcUrl,
+      payer,
+      keystore,
+    });
+    depositFn = getDepositFunction({ client });
+    depositor = payer.publicKey;
+  }
+
   const daemon = new Daemon({
     config,
     keystore,
     store,
     prover,
+    depositFn,
+    depositor,
     // Attestation is on by default; NYX_DAEMON_SKIP_ATTEST=1 disables it (local
     // dstack-simulator, whose stub quotes can't be verified by design).
     verifyAttestation:
@@ -112,10 +148,29 @@ async function main(): Promise<void> {
     };
   };
 
+  // Map a `POST /deposit` body → DepositRequest (only wired when deposit is on).
+  const mapDeposit: DepositMapper | undefined = depositFn
+    ? (raw) => {
+        const b = raw as {
+          mint: string;
+          amount: string | number;
+          depositor_token_account: string;
+          tree_id?: number;
+        };
+        return {
+          tokenMint: Uint8Array.from(Buffer.from(b.mint, "hex")),
+          amount: BigInt(b.amount),
+          depositorTokenAccount: new PublicKey(b.depositor_token_account),
+          treeId: b.tree_id,
+        };
+      }
+    : undefined;
+
   const { server, port } = await startControlServer(
     {
       daemon,
       mapPlace,
+      mapDeposit,
       controlToken: process.env.NYX_DAEMON_CONTROL_TOKEN,
     },
     config.controlPort,

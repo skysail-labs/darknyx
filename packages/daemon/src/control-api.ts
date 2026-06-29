@@ -36,10 +36,22 @@ export type PlaceMapper = (body: unknown) => {
   note: StoredNote;
 };
 
+/** Parsed `POST /deposit` request (keeps web3.js/hex parsing out of the HTTP
+ *  layer — the caller supplies `mapDeposit`). */
+export interface DepositRequest {
+  tokenMint: Uint8Array;
+  amount: bigint;
+  depositorTokenAccount: import("@solana/web3.js").PublicKey;
+  treeId?: number;
+}
+export type DepositMapper = (body: unknown) => DepositRequest;
+
 export interface ControlApiOptions {
   daemon: Daemon;
   /** Maps the wire body → SDK intent + note (keeps SDK builders out of here). */
   mapPlace: PlaceMapper;
+  /** Maps the `POST /deposit` body → DepositRequest (optional; 404 without it). */
+  mapDeposit?: DepositMapper;
   /** Optional bearer token gating every route. */
   controlToken?: string;
 }
@@ -61,7 +73,7 @@ async function readJson(req: http.IncomingMessage): Promise<unknown> {
 }
 
 export function createControlServer(opts: ControlApiOptions): http.Server {
-  const { daemon, mapPlace, controlToken } = opts;
+  const { daemon, mapPlace, mapDeposit, controlToken } = opts;
 
   return http.createServer((req, res) => {
     void handle(req, res).catch((err) => {
@@ -109,6 +121,15 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
       const id = path.slice("/orders/".length);
       await daemon.cancelOrder(id);
       return send(res, 200, { ok: true });
+    }
+    if (method === "POST" && path === "/deposit") {
+      if (!mapDeposit) return send(res, 404, { error: "deposit not enabled" });
+      const r = mapDeposit(await readJson(req));
+      const out = await daemon.deposit(r);
+      return send(res, 200, {
+        commitment: out.commitment,
+        leaf_index: out.leafIndex.toString(),
+      });
     }
     if (method === "GET" && path === "/notes") {
       return send(res, 200, { notes: daemon.listNotes().map(serializeNote) });

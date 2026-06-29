@@ -15,10 +15,15 @@
  * CVM; `bin/daemon.ts` supplies the real implementations.
  */
 
+import { randomBytes } from "node:crypto";
+import type { PublicKey } from "@solana/web3.js";
 import {
   ANCHOR_POOL_SIZE,
   OrderSide,
   buildCancel,
+  depositNoteFromReceipt,
+  type DepositParams,
+  type DepositReceipt,
   type StoredNote,
   type ValidInputProver,
   type WebSocketFactory,
@@ -104,6 +109,10 @@ export interface DaemonDeps {
   settlementPollMs?: number;
   /** Seam for the tracker's `/tree/inclusion` fetch (tests). */
   fetchInclusion?: FetchInclusionFn;
+  /** SDK deposit fn (`getDepositFunction({ client })`). Enables `deposit`. */
+  depositFn?: (params: DepositParams) => Promise<DepositReceipt>;
+  /** The deposit fee-payer / depositor pubkey (matches `depositFn`'s payer). */
+  depositor?: PublicKey;
 }
 
 export class Daemon {
@@ -126,6 +135,10 @@ export class Daemon {
 
   private readonly settlementPollMs?: number;
   private readonly fetchInclusion?: FetchInclusionFn;
+  private readonly depositFn?: (
+    params: DepositParams,
+  ) => Promise<DepositReceipt>;
+  private readonly depositor?: PublicKey;
 
   private fills: FillsListener | null = null;
   private orders: OrdersListener | null = null;
@@ -148,6 +161,8 @@ export class Daemon {
     this.quoteVerifier = deps.quoteVerifier;
     this.settlementPollMs = deps.settlementPollMs;
     this.fetchInclusion = deps.fetchInclusion;
+    this.depositFn = deps.depositFn;
+    this.depositor = deps.depositor;
 
     const executor = new DaemonActionExecutor({
       keys: this.keystore,
@@ -289,6 +304,39 @@ export class Daemon {
       request,
     });
     return { orderId: orderIdHex, arrivalSlot: resp.arrival_slot };
+  }
+
+  /**
+   * Deposit `amount` of `tokenMint` (from `depositorTokenAccount`) into the
+   * vault, recording the minted note in the store so it's selectable as
+   * collateral. This is a DIRECT on-chain action signed by the operator's
+   * payer — distinct from order flow (which the TEE settles). Needs `depositFn`
+   * + `depositor` configured (the daemon-client); throws otherwise.
+   */
+  async deposit(req: {
+    tokenMint: Uint8Array;
+    amount: bigint;
+    depositorTokenAccount: PublicKey;
+    treeId?: number;
+  }): Promise<{ commitment: string; leafIndex: bigint }> {
+    if (!this.depositFn || !this.depositor) {
+      throw new Error("deposit not configured (no payer/RPC/program id)");
+    }
+    // A random per-deposit index seeds the note's inner_hash (recoverable by
+    // commitment, not by index — so no persisted counter is needed).
+    const depositIndex = randomBytes(8).readBigUInt64BE(0);
+    const receipt = await this.depositFn({
+      depositor: this.depositor,
+      treeId: req.treeId ?? this.treeId,
+      depositIndex,
+      tokenMint: req.tokenMint,
+      amount: req.amount,
+      depositorTokenAccount: req.depositorTokenAccount,
+    });
+    const note = depositNoteFromReceipt(receipt);
+    this.store.put(note);
+    this.emit({ type: "fill", note });
+    return { commitment: note.commitment, leafIndex: receipt.leafIndex };
   }
 
   /** Pick the best collateral note for a request, excluding notes already
