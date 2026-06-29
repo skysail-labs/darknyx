@@ -63,6 +63,7 @@ describe("Keystore — derivation", () => {
     expect(oc1).toBe(oc2); // deterministic
     const uc = await ks.userCommitment();
     expect(uc).toHaveLength(32);
+    expect(uc[0], "intake requires user_commitment top byte = 0").toBe(0);
   });
 
   it("derives distinct per-order trading keys; signatures verify", () => {

@@ -127,9 +127,16 @@ export class Keystore implements KeyProvider {
     return ownerCommitment(this.spend, this.identity.ownerBlinding);
   }
 
-  /** The account's 32-byte big-endian user commitment (Poseidon — async). */
-  userCommitment(): Promise<Uint8Array> {
-    return userCommitmentFromKeys({
+  /** The account's 32-byte big-endian user commitment (Poseidon — async).
+   *
+   *  The top byte is forced to 0: TEE intake requires it (it Poseidon-hashes
+   *  this when constructing change notes, and rejects a non-zero top byte), and
+   *  the matcher reconstructs change-note owners from the same zeroed value — so
+   *  client + TEE must agree. Mirrors the validated cvm-harness persona. (The
+   *  zeroing means this value is NOT a raw create_wallet Poseidon output; the
+   *  daemon's trade path never registers a wallet, matching cvm-settle-e2e.) */
+  async userCommitment(): Promise<Uint8Array> {
+    const uc = await userCommitmentFromKeys({
       rootKeyPubkey: this.identity.rootKeyPubkey,
       spendingKey: this.spend,
       viewingKey: this.view,
@@ -137,6 +144,8 @@ export class Keystore implements KeyProvider {
       r1: this.identity.r1,
       r2: this.identity.r2,
     });
+    uc[0] = 0;
+    return uc;
   }
 
   /** The Ed25519 keypair for the order at `index` (deterministic from the seed).
