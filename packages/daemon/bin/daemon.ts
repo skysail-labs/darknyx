@@ -15,11 +15,13 @@
  *   node dist/bin/daemon.js
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import {
   nodeValidInputProver,
   getDepositFunction,
+  getMergeFunction,
   limitPolicy,
   OrderSide,
 } from "@nyx/sdk";
@@ -28,6 +30,9 @@ import { loadConfig } from "../src/config.js";
 import { DaemonStore } from "../src/store.js";
 import { loadKeystore } from "../src/keystore.js";
 import { createDaemonClient } from "../src/daemon-client.js";
+import { createMergeClient } from "../src/merge-client.js";
+import { httpLeavesFetcher } from "../src/tree-merkle-provider.js";
+import { createMergeRunner } from "../src/merge-runner.js";
 import { Daemon } from "../src/daemon.js";
 import {
   startControlServer,
@@ -59,20 +64,62 @@ async function main(): Promise<void> {
     zkeyPath: required("NYX_DAEMON_VI_ZKEY"),
   });
 
-  // On-chain deposit is enabled only when a payer keypair is configured.
+  // Direct on-chain actions (deposit, auto-merge) are enabled only when a payer
+  // keypair is configured.
   const programId = new PublicKey(config.programId);
   let depositFn;
   let depositor;
+  let mergeRunner;
   if (config.payerKeypairPath) {
     const payer = loadKeypair(config.payerKeypairPath);
-    const client = createDaemonClient({
-      programId,
-      rpcUrl: config.rpcUrl,
-      payer,
-      keystore,
-    });
-    depositFn = getDepositFunction({ client });
     depositor = payer.publicKey;
+    depositFn = getDepositFunction({
+      client: createDaemonClient({
+        programId,
+        rpcUrl: config.rpcUrl,
+        payer,
+        keystore,
+      }),
+    });
+
+    // Auto-merge needs the merge circuit artifacts (snarkjs k=2/4) present.
+    const circuitsDir = process.env.NYX_DAEMON_CIRCUITS_DIR ?? "circuits/build";
+    const art = (k: 2 | 4) => ({
+      wasmPath: resolve(
+        circuitsDir,
+        `valid_merge_k${k}/circuit_js/circuit.wasm`,
+      ),
+      zkeyPath: resolve(circuitsDir, `valid_merge_k${k}/circuit_final.zkey`),
+    });
+    if (existsSync(art(2).wasmPath) && existsSync(art(2).zkeyPath)) {
+      const { client, merkleProvider } = createMergeClient({
+        programId,
+        rpcUrl: config.rpcUrl,
+        payer,
+        keystore,
+        artifacts: { k2: art(2), k4: art(4) },
+        leavesFetcher: httpLeavesFetcher({
+          gatewayUrl: config.gatewayUrl,
+          token: config.token,
+        }),
+      });
+      const rawMerge = getMergeFunction({ client });
+      // Refresh the tree snapshot before each merge so the proof's root is recent.
+      const mergeFn: typeof rawMerge = async (params) => {
+        await merkleProvider.refresh();
+        return rawMerge(params);
+      };
+      mergeRunner = createMergeRunner({
+        store,
+        payer: payer.publicKey,
+        ownerCommitment: await keystore.ownerCommitment(),
+        mergeFn,
+      });
+    } else {
+      console.warn(
+        "[daemon] merge circuit artifacts not found — auto-merge disabled",
+      );
+    }
   }
 
   const daemon = new Daemon({
@@ -82,6 +129,7 @@ async function main(): Promise<void> {
     prover,
     depositFn,
     depositor,
+    mergeRunner,
     // Attestation is on by default; NYX_DAEMON_SKIP_ATTEST=1 disables it (local
     // dstack-simulator, whose stub quotes can't be verified by design).
     verifyAttestation:
