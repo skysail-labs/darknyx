@@ -429,18 +429,19 @@ export interface BuildCreateWalletParams {
 export function buildCreateWalletInstruction(
   p: BuildCreateWalletParams,
 ): TransactionInstruction {
-  const [vaultPda] = vaultConfigPda(p.programId);
   const [walletPda] = walletEntryPda(p.programId, p.commitment);
   const data = cat(
     anchorDiscriminator("create_wallet"),
     fixed32(p.commitment),
     serializeProof(p.proof),
   );
+  // Accounts: [owner(signer,mut), wallet_entry(init,mut), system_program(ro)].
+  // CU-3 / audit F-07: the unused `vault_config` account was removed from the
+  // on-chain `CreateWallet` struct — keep this list in lockstep.
   return new TransactionInstruction({
     programId: p.programId,
     keys: [
       { pubkey: p.owner, isSigner: true, isWritable: true },
-      { pubkey: vaultPda, isSigner: false, isWritable: false },
       { pubkey: walletPda, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],

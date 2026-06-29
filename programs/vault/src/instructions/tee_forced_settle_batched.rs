@@ -34,7 +34,7 @@ use crate::errors::VaultError;
 use crate::instructions::tee_forced_settle::{
     canonical_payload_hash, verify_tee_signature, MatchResultPayload, TradeSettled,
 };
-use crate::merkle::append_leaf;
+use crate::merkle::append_leaves;
 use crate::state::*;
 use anchor_lang::prelude::*;
 use core::mem::size_of;
@@ -284,13 +284,19 @@ pub fn tee_forced_settle_batched_handler(
     // The signer must be one of the authorized TEE keys (the shard
     // fee-payer/authority set); the ed25519 sig is bound to THAT key.
     let tee_pubkey = ctx.accounts.tee_authority.key();
-    require!(
-        ctx.accounts
-            .vault_config
-            .load()?
-            .is_authorized_tee(&tee_pubkey),
-        VaultError::Unauthorized
-    );
+    // CU-2: one vault_config load yields everything the handler reads off it —
+    // the authorized-key gate, the empty-subtree roots the appends need, and
+    // whether a protocol owner is set (the fee-note gate) — instead of loading
+    // it again near the appends.
+    let (authorized, zsr, protocol_owner_set) = {
+        let cfg = ctx.accounts.vault_config.load()?;
+        (
+            cfg.is_authorized_tee(&tee_pubkey),
+            cfg.zero_subtree_roots,
+            cfg.protocol_owner_commitment != [0u8; 32],
+        )
+    };
+    require!(authorized, VaultError::Unauthorized);
 
     // Ed25519 precompile binds the TEE signature to the canonical hash
     // of the payload. Identical to the per-match flow.
@@ -314,10 +320,13 @@ pub fn tee_forced_settle_batched_handler(
     // the continuation NoteLock (note_e is quote, note_f is base) so the NEXT
     // batch that consumes the continuation reads back a correct mint. The locks
     // themselves are re-loaded further below for the order_id/amount validation.
-    let (lock_a_mint, lock_b_mint) = {
+    // CU-2: read every field we need off lock_a/lock_b in ONE load each (the
+    // mints for the leaf binding + relock stamping, AND the order_ids for the
+    // lock-binding check below), instead of re-loading the locks twice.
+    let (lock_a_mint, lock_b_mint, lock_a_order_id, lock_b_order_id) = {
         let la = ctx.accounts.note_lock_a.load()?;
         let lb = ctx.accounts.note_lock_b.load()?;
-        (la.token_mint, lb.token_mint)
+        (la.token_mint, lb.token_mint, la.order_id, lb.order_id)
     };
     {
         let leaf = compute_match_leaf(&payload)?;
@@ -360,14 +369,13 @@ pub fn tee_forced_settle_batched_handler(
     // shared inner function can wait until the old ix is retired.
     // ────────────────────────────────────────────────────────────────────
     {
-        let lock_a = ctx.accounts.note_lock_a.load()?;
-        let lock_b = ctx.accounts.note_lock_b.load()?;
+        // order_ids were cached from the single load above (CU-2) — no reload.
         require!(
-            lock_a.order_id == payload.order_id_a,
+            lock_a_order_id == payload.order_id_a,
             VaultError::NoteNotLockedForOrder
         );
         require!(
-            lock_b.order_id == payload.order_id_b,
+            lock_b_order_id == payload.order_id_b,
             VaultError::NoteNotLockedForOrder
         );
 
@@ -424,58 +432,75 @@ pub fn tee_forced_settle_batched_handler(
 
     // Append output leaves to THIS shard: note_c, note_d, note_e (if any),
     // note_f (if any), then the two batch fee notes (base, quote) if any.
-    // `zero_subtree_roots` + the protocol-owner gate come from the read-only
-    // global config; the appends mutate only `merkle_tree`.
-    let (zsr, protocol_owner_set) = {
-        let cfg = ctx.accounts.vault_config.load()?;
-        (
-            cfg.zero_subtree_roots,
-            cfg.protocol_owner_commitment != [0u8; 32],
-        )
-    };
+    // `zsr` (empty-subtree roots) + `protocol_owner_set` were read off
+    // vault_config at the top (CU-2); the appends mutate only `merkle_tree`.
+
+    // Two batch-level protocol fee notes, one per mint: base (seller-side fees)
+    // + quote (buyer-side fees). Only the first settlement in a batch carries
+    // them; both `[0;32]` otherwise. They mint only once a protocol owner is
+    // configured — gate it BEFORE touching the tree so a misconfig fails
+    // without leaving partial state. Settle never touches `outstanding` (value
+    // is conserved out of the consumed note_a/b; the fee note just lets the
+    // protocol claim its share via the normal VALID_SPEND path).
+    let has_fee_base = payload.note_fee_base_commitment != [0u8; 32];
+    let has_fee_quote = payload.note_fee_quote_commitment != [0u8; 32];
+    if has_fee_base || has_fee_quote {
+        require!(protocol_owner_set, VaultError::ProtocolOwnerUnset);
+    }
+
+    // Gather the output leaves in canonical order and append them in ONE pass.
+    // `append_leaves` shares the Merkle-path recomputation across all of them
+    // (CU-1): the sequential alternative re-walked all 20 levels per leaf, and
+    // for every leaf but the last that walk was provisional work the next leaf
+    // overwrote. note_c + note_d always mint; the change + fee notes mint only
+    // when non-zero. Each leaf lands at a consecutive index, so its leaf index
+    // is `start + its slot in the run`.
     let tree = &mut ctx.accounts.merkle_tree.load_mut()?;
-    let leaf_c = tree.leaf_count;
-    let _ = append_leaf(tree, &zsr, payload.note_c_commitment)?;
-    let leaf_d = tree.leaf_count;
-    let mut new_root = append_leaf(tree, &zsr, payload.note_d_commitment)?;
+    let start = tree.leaf_count;
+    let mut leaves = [[0u8; 32]; 6];
+    let mut n = 0usize;
+
+    let leaf_c = start; // note_c always at slot 0
+    leaves[n] = payload.note_c_commitment;
+    n += 1;
+    let leaf_d = start + 1; // note_d always at slot 1
+    leaves[n] = payload.note_d_commitment;
+    n += 1;
 
     let leaf_e = if payload.note_e_commitment != [0u8; 32] {
-        let idx = tree.leaf_count;
-        new_root = append_leaf(tree, &zsr, payload.note_e_commitment)?;
+        let idx = start + n as u64;
+        leaves[n] = payload.note_e_commitment;
+        n += 1;
         idx
     } else {
         u64::MAX
     };
     let leaf_f = if payload.note_f_commitment != [0u8; 32] {
-        let idx = tree.leaf_count;
-        new_root = append_leaf(tree, &zsr, payload.note_f_commitment)?;
+        let idx = start + n as u64;
+        leaves[n] = payload.note_f_commitment;
+        n += 1;
+        idx
+    } else {
+        u64::MAX
+    };
+    let leaf_fee_base = if has_fee_base {
+        let idx = start + n as u64;
+        leaves[n] = payload.note_fee_base_commitment;
+        n += 1;
+        idx
+    } else {
+        u64::MAX
+    };
+    let leaf_fee_quote = if has_fee_quote {
+        let idx = start + n as u64;
+        leaves[n] = payload.note_fee_quote_commitment;
+        n += 1;
         idx
     } else {
         u64::MAX
     };
 
-    // Two batch-level protocol fee notes, one per mint: base (seller-side
-    // fees) + quote (buyer-side fees). Only the first settlement in a batch
-    // carries them; both `[0;32]` otherwise. Symmetric to the per-match
-    // output leaves above — settle never touches `outstanding` (value is
-    // conserved out of the consumed note_a/b; the fee note just lets the
-    // protocol claim its share via the normal VALID_SPEND path).
-    let leaf_fee_base = if payload.note_fee_base_commitment != [0u8; 32] {
-        require!(protocol_owner_set, VaultError::ProtocolOwnerUnset);
-        let idx = tree.leaf_count;
-        new_root = append_leaf(tree, &zsr, payload.note_fee_base_commitment)?;
-        idx
-    } else {
-        u64::MAX
-    };
-    let leaf_fee_quote = if payload.note_fee_quote_commitment != [0u8; 32] {
-        require!(protocol_owner_set, VaultError::ProtocolOwnerUnset);
-        let idx = tree.leaf_count;
-        new_root = append_leaf(tree, &zsr, payload.note_fee_quote_commitment)?;
-        idx
-    } else {
-        u64::MAX
-    };
+    let new_root = append_leaves(tree, &zsr, &leaves[..n])?;
 
     // Re-locks LAST so a re-lock failure rolls back every preceding
     // state change.
