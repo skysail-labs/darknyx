@@ -227,6 +227,6 @@ describe("executor ↔ engine integration", () => {
     const got = store.getOrder(ORDER_ID)!;
     expect(got.anchorPoolSize).toBe(15);
     expect(got.topupInFlight).toBe(false);
-    expect(got.topupNonce).toBe(1);
+    expect(got.topupNonce).toBe(2); // 1-based default (1) → +1 on confirm
   });
 });

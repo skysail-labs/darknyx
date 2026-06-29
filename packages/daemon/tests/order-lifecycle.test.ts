@@ -180,7 +180,7 @@ describe("reduceOrder — auto anchor top-up", () => {
       orderId: o.orderId,
       startIndex: 10,
       count: DEFAULT_THRESHOLDS.anchorTopUpSize,
-      nonce: 0,
+      nonce: 1, // 1-based: the initial pool is nonce 0
     });
     expect(order.topupInFlight).toBe(true);
   });

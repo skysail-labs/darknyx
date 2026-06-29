@@ -115,6 +115,19 @@ const MERGE = (k: 2 | 4) => ({
 
 const withFee = (n: bigint) => n + (n * FEE_BPS) / 10_000n;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const SOL_USD_FEED =
+  "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
+/** The matcher clears at the oracle-anchored price, so orders must be priced
+ *  near it (a far-off fixed price never crosses) — same anchor cvm-settle-e2e uses. */
+async function oracleAnchor(): Promise<bigint> {
+  if (process.env.NYX_CVM_PRICE) return BigInt(process.env.NYX_CVM_PRICE);
+  const r = await fetch(
+    `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${SOL_USD_FEED}`,
+  );
+  const j = (await r.json()) as { parsed?: { price: { price: string } }[] };
+  if (!j.parsed?.length) throw new Error("Hermes returned no price");
+  return BigInt(j.parsed[0].price.price);
+}
 const loadKp = (rel: string) =>
   Keypair.fromSecretKey(
     Uint8Array.from(
@@ -173,6 +186,12 @@ maybe(
     let buyer: Daemon;
     let buyerStore: DaemonStore;
 
+    // Orders need a FUTURE expiry_slot — the matcher sweeps expiry_slot=0
+    // (limitPolicy's "GTC" default) as already-expired.
+    async function futureExpiry(): Promise<bigint> {
+      return BigInt((await conn.getSlot("confirmed")) + 100_000);
+    }
+
     // ── MatchDriver: deposit a base note for the seller + submit a crossing ask ──
     async function sellerAsk(qty: bigint, price: bigint): Promise<void> {
       const seed = new Uint8Array(64);
@@ -228,7 +247,10 @@ maybe(
         },
         symbol: SYMBOL,
         side: OrderSide.Ask,
-        policy: limitPolicy({ priceLimit: price }),
+        policy: limitPolicy({
+          priceLimit: price,
+          expirySlot: await futureExpiry(),
+        }),
         amount: qty,
         orderId: Uint8Array.from(
           Buffer.from(`${Date.now()}`.padStart(32, "0").slice(0, 32), "hex"),
@@ -244,12 +266,12 @@ maybe(
     }
 
     async function leafCount(): Promise<number> {
-      // VaultConfig leaf_count summed across shards via the transparency endpoint.
+      // The TEE mirror's leaf count, under reserves on /transparency.
       const r = await fetch(`${GATEWAY}/transparency`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      const j = (await r.json()) as { leaf_count?: number };
-      return j.leaf_count ?? 0;
+      const j = (await r.json()) as { reserves?: { leaf_count?: number } };
+      return j.reserves?.leaf_count ?? 0;
     }
 
     beforeAll(async () => {
@@ -339,10 +361,15 @@ maybe(
       expect(await buyer.tee.transparency()).toBeTruthy();
       expect(await buyer.tee.instruments()).toBeTruthy();
 
+      const anchor = await oracleAnchor();
+      const bidPrice = (anchor * 12n) / 10n; // above clearing
+      const askPrice = (anchor * 8n) / 10n; // below → crosses
       const SLICE = 1000n;
-      const price = 1_000_000n;
       const buyQty = SLICE * 10n; // resting bid covers many asks
-      const collateral = withFee(buyQty * price);
+      const collateral = withFee(buyQty * bidPrice);
+      console.log(
+        `  · anchor=${anchor} bid=${bidPrice} ask=${askPrice} buyQty=${buyQty}`,
+      );
       const buyerAta = await getAssociatedTokenAddress(
         quoteMint,
         buyerPayer.publicKey,
@@ -378,7 +405,10 @@ maybe(
         {
           symbol: SYMBOL,
           side: OrderSide.Bid,
-          policy: limitPolicy({ priceLimit: price }),
+          policy: limitPolicy({
+            priceLimit: bidPrice,
+            expirySlot: await futureExpiry(),
+          }),
           amount: buyQty,
         },
         note,
@@ -386,11 +416,34 @@ maybe(
       expect(buyer.getOrder(orderId)?.phase).toBe("open");
 
       // ── crossing ask → partial fill ──
-      await sellerAsk(SLICE, price);
-      await sleep(20_000); // matcher tick + settle + fills WS
-
-      // settle landed
-      expect(await leafCount(), "settle did not land").toBeGreaterThan(before);
+      await sellerAsk(SLICE, askPrice);
+      // poll for the settle to land on-chain. A deposit adds +1 leaf; a real
+      // settle appends note_c/d + the buyer change + fee notes (≥ +3 beyond the
+      // seller's deposit), so require before+3 to distinguish settle from deposit.
+      let after = before;
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        after = await leafCount();
+        if (after >= before + 3) break;
+        await sleep(3000);
+      }
+      expect(after, "settle did not land").toBeGreaterThanOrEqual(before + 3);
+      await sleep(5000); // let the fills WS memo + the daemon dispatch settle
+      // ── diagnostics ──
+      console.log(
+        `  · leaf ${before}→${after} | events=${JSON.stringify(
+          events.map((e) =>
+            e.type === "error" ? `err:${e.context}:${e.message}` : e.type,
+          ),
+        )}`,
+      );
+      console.log(`  · daemon notes=${buyer.listNotes().length}`);
+      const cvmOrder = await fetch(`${GATEWAY}/orders/${orderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      console.log(
+        `  · CVM order ${orderId.slice(0, 8)}: ${cvmOrder.status} ${(await cvmOrder.text()).slice(0, 240)}`,
+      );
       const o = buyer.getOrder(orderId)!;
       // /ws/fills drove a fill (anchor consumed) + auto-topup grew the pool
       expect(o.anchorsConsumed, "no fill observed").toBeGreaterThanOrEqual(1);

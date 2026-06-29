@@ -93,7 +93,9 @@ export function newManagedOrder(args: {
     phase: "pending",
     anchorPoolSize: args.anchorPoolSize,
     anchorsConsumed: 0,
-    topupNonce: 0,
+    // Topup nonces are 1-based: the TEE seeds the per-order "last accepted topup
+    // nonce" at 0 (the initial anchor pool), so the first top-up must be > 0.
+    topupNonce: 1,
     topupInFlight: false,
     mergeInFlight: false,
     pendingChangeNotes: 0,
