@@ -134,7 +134,10 @@ export async function fetchAttestation(
   fetchImpl: typeof fetch = fetch,
 ): Promise<AttestationQuote> {
   const url = new URL("/attestation", gatewayUrl);
-  url.searchParams.set("report_data", Buffer.from(nonce).toString("hex"));
+  // The TEE query param is camelCase `reportData` (serde rename); the response
+  // field is snake `report_data`. Sending the wrong name → the nonce is ignored
+  // (zero-filled) → the freshness check fails.
+  url.searchParams.set("reportData", Buffer.from(nonce).toString("hex"));
   const b = await getJson<{
     quote: string;
     report_data: string;

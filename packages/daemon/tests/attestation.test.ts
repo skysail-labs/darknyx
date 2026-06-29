@@ -46,7 +46,7 @@ function attestFetch(
   return vi.fn(async (input: string | URL) => {
     const url = new URL(String(input));
     if (url.pathname === "/attestation") {
-      const nonceHex = url.searchParams.get("report_data") ?? "";
+      const nonceHex = url.searchParams.get("reportData") ?? "";
       const nonce = Buffer.from(nonceHex, "hex");
       const rd = Buffer.alloc(64);
       if (!opts.staleNonce) nonce.copy(rd, 0);

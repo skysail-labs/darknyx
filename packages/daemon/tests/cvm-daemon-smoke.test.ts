@@ -210,6 +210,26 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       `  · deposited ${noteAmt} → leaf ${dep.leafIndex} (${dep.commitment.slice(0, 12)}…)`,
     );
 
+    // 2b. wait for the TEE mirror to sync the deposit — placeOrder fetches the
+    // VALID_INPUT witness from /tree/inclusion, which 404s until the mirror sees
+    // the leaf (the CVM polls the chain; there's a lag after our confirm).
+    await (async () => {
+      const deadline = Date.now() + 90_000;
+      for (;;) {
+        const u = new URL("/tree/inclusion", GATEWAY);
+        u.searchParams.set("commitment", dep.commitment);
+        u.searchParams.set("tree_id", "0");
+        const r = await fetch(u.toString(), {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (r.status === 200) break;
+        if (Date.now() > deadline)
+          throw new Error("TEE mirror did not sync the deposit within 90s");
+        await new Promise((res) => setTimeout(res, 3000));
+      }
+      console.log("  · deposit visible in TEE mirror");
+    })();
+
     // 3. place — real VALID_INPUT proof + /orders accept.
     const { orderId, arrivalSlot } = await daemon.placeOrder(
       {

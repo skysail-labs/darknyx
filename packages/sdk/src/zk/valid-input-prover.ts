@@ -75,7 +75,9 @@ export async function fetchInclusionProof(
 ): Promise<InclusionWitness> {
   const f = opts.fetchImpl ?? fetch;
   const url = new URL("/tree/inclusion", opts.baseUrl);
-  url.searchParams.set("note_commitment", noteCommitmentHex);
+  // The TEE `/tree/inclusion` query param is `commitment` (see vault tree API);
+  // `note_commitment` is the RESPONSE field, not the request param.
+  url.searchParams.set("commitment", noteCommitmentHex);
   url.searchParams.set("tree_id", String(opts.treeId ?? 0));
   const res = await f(url.toString(), {
     headers: { authorization: `Bearer ${opts.token}` },
