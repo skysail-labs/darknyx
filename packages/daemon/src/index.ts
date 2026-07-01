@@ -1,0 +1,28 @@
+// Public @nyx/daemon exports — the reference market-maker/fund daemon that
+// wraps the SDK with an order-lifecycle state machine, auto anchor top-up,
+// auto-merge, and a local control API. Keys + proving stay on-device.
+export * from "./types.js";
+export * from "./order-lifecycle.js";
+export * from "./config.js";
+export * from "./store.js";
+export * from "./lifecycle-engine.js";
+export * from "./action-executor.js";
+export * from "./fills-listener.js";
+export * from "./orders-listener.js";
+export * from "./order-placer.js";
+export * from "./place.js";
+export * from "./keystore.js";
+export * from "./build-place-request.js";
+export * from "./merge-runner.js";
+export * from "./note-select.js";
+export * from "./tee-read.js";
+export * from "./settlement-tracker.js";
+export * from "./solana-providers.js";
+export * from "./daemon-client.js";
+export * from "./merkle-tree.js";
+export * from "./tree-merkle-provider.js";
+export * from "./merge-prover.js";
+export * from "./merge-client.js";
+export * from "./attestation.js";
+export * from "./daemon.js";
+export * from "./control-api.js";

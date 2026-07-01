@@ -48,6 +48,87 @@ fn seed_single_match(h: &mut Harness, tag: u8) -> (MatchResultPayload, [[u8; 32]
     (p, proof, root)
 }
 
+// ---------------------------------------------------------------------------
+// CU profiling — TRUE WORST CASE: a single settle that appends all SIX output
+// leaves (note_c, note_d, buyer change note_e, seller change note_f, base-fee
+// note, quote-fee note) AND creates BOTH continuation re-lock PDAs (buyer +
+// seller change). This is the absolute upper bound the on-chain settle pays,
+// and the figure nyx-tee's SETTLE_COMPUTE_UNIT_LIMIT must cover. Pairs with
+// `test_two_matches_share_one_marker`'s 2-leaf print so we bracket the range.
+// ---------------------------------------------------------------------------
+#[test]
+fn cu_profile_worst_case_settle() {
+    let mut h = Harness::setup();
+    // Fee notes require a set protocol owner (handler `require!(protocol_owner_set)`).
+    set_vault_fee_config(&mut h, fr_safe(0x9A, 0x01), 30);
+
+    let note_a = fr_safe(0xA0, 0x77);
+    let note_b = fr_safe(0xB0, 0x77);
+    let oid_a = [0x10u8; 16];
+    let oid_b = [0x11u8; 16];
+    seed_note_lock(&mut h, &note_a, &oid_a, u64::MAX / 2, 6_000); // quote
+    seed_note_lock(&mut h, &note_b, &oid_b, u64::MAX / 2, 200); // base
+
+    // All six output commitments non-zero → all six leaves append.
+    let mut p = MatchResultPayload::exact_fill(
+        [0xE0u8; 16],
+        note_a,
+        note_b,
+        fr_safe(0xC0, 0x77),
+        fr_safe(0xD0, 0x77),
+        [0xF0u8; 32],
+        [0xF1u8; 32],
+        oid_a,
+        oid_b,
+        100,
+        5_000,
+    );
+    p.note_e_commitment = fr_safe(0xE5, 0x77);
+    p.note_f_commitment = fr_safe(0xF5, 0x77);
+    p.note_fee_base_commitment = fr_safe(0xFB, 0x77);
+    p.note_fee_quote_commitment = fr_safe(0xFC, 0x77);
+    // BOTH continuation re-locks fire too — note_lock_e/f are freshly init'd by
+    // `create_relock_pda` (we never seed them), so this also pays the two
+    // system-CPI account creations the production worst case incurs.
+    p.buyer_relock_order_id = [0x31u8; 16];
+    p.buyer_relock_expiry = u64::MAX / 2;
+    p.seller_relock_order_id = [0x32u8; 16];
+    p.seller_relock_expiry = u64::MAX / 2;
+
+    let mint = read_note_lock_mint(&h, &note_a);
+    let leaf = compute_match_leaf_for(&p, &mint, &mint);
+    let mut leaves = [[0u8; 32]; 16];
+    leaves[0] = leaf;
+    let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
+    seed_batch_validity_marker(&mut h, &root, u64::MAX / 2);
+
+    let before = vault_leaf_count(&h);
+    let tx = build_settle_batched_tx(&h, 0, &p, 0, &proof, &root);
+    let meta = h
+        .svm
+        .send_transaction(tx)
+        .expect("worst-case settle succeeds");
+    eprintln!(
+        "CU_PROFILE tee_forced_settle_batched(6-leaf+2-relock) consumed={}",
+        meta.compute_units_consumed
+    );
+    // This is the figure nyx-tee's SETTLE_COMPUTE_UNIT_LIMIT must cover
+    // (crates/nyx-tee/src/settle/pipeline.rs). Post-CU-1 the worst case is far
+    // below the old ~165k; the sentinel guards a regression that would erode
+    // the headroom a lowered limit relies on.
+    assert!(
+        meta.compute_units_consumed < 110_000,
+        "settle worst-case CU {} regressed; re-measure + re-check nyx-tee \
+         SETTLE_COMPUTE_UNIT_LIMIT margin",
+        meta.compute_units_consumed
+    );
+    // All six leaves landed.
+    assert_eq!(vault_leaf_count(&h), before + 6);
+    // Both continuation re-locks were created.
+    assert!(note_lock_exists(&h, &p.note_e_commitment));
+    assert!(note_lock_exists(&h, &p.note_f_commitment));
+}
+
 // NOTE: the on-chain fee-FLOOR + conservation regression test that lived here
 // was removed with P3a — both checks moved IN-CIRCUIT (amount-privacy), so the
 // settle handler no longer reads plaintext amounts to enforce them. The floor's
@@ -140,21 +221,21 @@ fn test_two_matches_share_one_marker() {
     // shard 0 here — the shared-marker invariant is tree-independent.
     let tx0 = build_settle_batched_tx(&h, 0, &p0, 0, &proof0, &merkle_root);
     let meta0 = h.svm.send_transaction(tx0).expect("match 0 settles");
-    // CU profiling + regression guard for nyx-tee's SETTLE_COMPUTE_UNIT_LIMIT
-    // (187_000 = 162,145×1.15 in crates/nyx-tee/src/settle/pipeline.rs). NOTE:
-    // this path appends only note_c + note_d (2 leaves, ~100k CU); a production
-    // settle adds a buyer change note + base/quote fee notes → up to 5 leaves
-    // (~162k CU on devnet, ~20.4k/extra-leaf — append_leaf is constant per leaf).
-    // The 125k sentinel keeps the extrapolated 5-leaf worst case (2-leaf +
-    // 3×20.4k) under the 187k limit: 2-leaf must stay < 187k − 61.3k ≈ 125.6k.
+    // CU profiling for the 2-leaf (note_c + note_d only) path. Since CU-1
+    // (the multi-leaf batch-append in merkle.rs), leaf count barely moves the
+    // needle — the dominant cost is the fixed per-settle overhead (Ed25519
+    // verify + canonical-hash recompute + marker check + the consumed/nullifier
+    // PDA inits), and `append_leaves` shares the Merkle path across all output
+    // leaves. The true worst case (6 leaves) is guarded directly by
+    // `cu_profile_six_leaf_settle` below — no extrapolation needed. Baselines
+    // (litesvm, pre/post CU-1): 2-leaf 93,112 → 77,135; 6-leaf 165,355 → 80,230.
     eprintln!(
         "CU_PROFILE tee_forced_settle_batched(2-leaf) consumed={}",
         meta0.compute_units_consumed
     );
     assert!(
-        meta0.compute_units_consumed < 125_000,
-        "settle(2-leaf) CU {} regressed — extrapolated 5-leaf worst case risks \
-         breaching nyx-tee SETTLE_COMPUTE_UNIT_LIMIT (187_000); re-measure",
+        meta0.compute_units_consumed < 90_000,
+        "settle(2-leaf) CU {} regressed past the post-CU-1 baseline (~77k); re-measure",
         meta0.compute_units_consumed
     );
 

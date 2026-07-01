@@ -192,11 +192,13 @@ fn test_user_commitment_registration() {
     // layout that #[program] expects.
     BorshSerialize::serialize(&args, &mut cw_data).unwrap();
 
+    // Accounts: [owner(signer,mut), wallet_entry(init,mut), system_program(ro)].
+    // CU-3 / audit F-07: the unused `vault_config` account was dropped from
+    // `CreateWallet` — this list mirrors the new on-chain struct.
     let ix = Instruction {
         program_id,
         accounts: vec![
             AccountMeta::new(admin.pubkey(), true),
-            AccountMeta::new_readonly(vault_pda, false),
             AccountMeta::new(wallet_pda, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],
