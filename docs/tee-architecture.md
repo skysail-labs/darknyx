@@ -1195,7 +1195,7 @@ User's wallet (spending key, NEVER sent to the TEE)
    │
    ├──► On-chain: signs create_wallet / deposit / withdraw
    │
-   └──► Derives user_commitment = Poseidon2(spending_key, r_owner)
+   └──► Derives owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
             │
             └──► Goes into each order body as 32 opaque bytes.
                  The TEE cannot invert this to recover the wallet.

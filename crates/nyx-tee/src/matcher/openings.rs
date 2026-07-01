@@ -129,7 +129,7 @@ pub enum OpeningError {
 
 impl NoteOpening {
     /// Re-derive this note's commitment from its opening fields,
-    /// using the exact same `darkpool_crypto::note::commitment_from_fields`
+    /// using the exact same `darkpool_crypto::note::commitment_from_fields_v2`
     /// the deposit path + the on-chain verifier + the TS SDK agree
     /// on. Errors if any field isn't a valid BN254 Fr element.
     pub fn commitment(&self) -> Result<[u8; 32], OpeningError> {

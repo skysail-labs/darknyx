@@ -1,42 +1,43 @@
 //! UTXO note structure and commitment derivation.
 //!
-//! Note commitment formula (must be byte-identical across Rust, circom, on-chain):
-//!
-//! Domain tag DOMAIN_NOTE=2 is prepended as the first Poseidon input to prevent
-//! second-preimage collisions with the owner-commitment and nullifier Poseidon
-//! uses (which use DOMAIN_OWNER=1 and DOMAIN_NULL=3 respectively).
+//! **The live construction is v2 (`inner_hash`)** — a SINGLE per-note blinding
+//! that anchors both the commitment AND the nullifier (see
+//! [`crate::nullifier::nullifier_v2`]), so a client can PRE-SUPPLY the nullifier
+//! of a change note it has not yet received (the per-order "anchor pool"). Domain
+//! tag DOMAIN_NOTE=2 is prepended to prevent second-preimage collisions with the
+//! owner-commitment and nullifier Poseidon uses (DOMAIN_OWNER=1, DOMAIN_NULL=3).
 //!
 //! ```text
-//!     C(note) = Poseidon7(
+//!     C_v2(note) = Poseidon6(
 //!         DOMAIN_NOTE=2,        // domain separation tag
 //!         token_mint_lo_u128,   // Solana pubkey low 128 bits
 //!         token_mint_hi_u128,   // Solana pubkey high 128 bits
 //!         amount_u64,
 //!         owner_commitment_fr,  // = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
-//!         nonce_fr,
-//!         blinding_r_fr,
+//!         inner_hash_fr,        // single per-note blinding (replaces nonce+blinding_r)
 //!     )
 //! ```
 //!
-//! ## v2 (inner_hash) construction
+//! Byte-identical across Rust [`commitment_from_fields_v2`], circom
+//! (`valid_input`/`valid_spend`), on-chain `deposit`, and the TS SDK
+//! `noteCommitmentV2`. The deposit + settle paths both use v2.
 //!
-//! The inner_hash migration collapses the two per-note randomness fields
-//! (`nonce`, `blinding_r`) into a SINGLE `inner_hash`, and re-anchors the
-//! nullifier on that `inner_hash` instead of the commitment (see
-//! [`crate::nullifier::nullifier_v2`]). This decouples the nullifier from the
-//! note amount so a client can PRE-SUPPLY the nullifier of a change note it has
-//! not yet received (the per-order "anchor pool"). The mint binding is kept:
+//! ## Legacy v1 (`Poseidon7`) — retained ONLY for parity, not on any live path
+//!
+//! The pre-v2 construction had two separate per-note randomness fields
+//! (`nonce`, `blinding_r`) and a 7-input commitment:
 //!
 //! ```text
-//!     C_v2(note) = Poseidon6(
-//!         DOMAIN_NOTE=2,        // same domain tag
-//!         token_mint_lo_u128,
-//!         token_mint_hi_u128,
-//!         amount_u64,
-//!         owner_commitment_fr,
-//!         inner_hash_fr,        // replaces (nonce, blinding_r)
-//!     )
+//!     C_v1(note) = Poseidon7(DOMAIN_NOTE=2, mint_lo, mint_hi, amount,
+//!                            owner_commitment_fr, nonce_fr, blinding_r_fr)
 //! ```
+//!
+//! The [`Note`] struct + [`commitment_from_fields`] below still implement v1, but
+//! they are exercised ONLY by `note-commitment-parity.test.ts` (+ its CI build in
+//! `.github/workflows/pr-checks.yml`) to keep the cross-language v1 contract
+//! pinned. Nothing in the deposit / settle / matcher path constructs a v1 [`Note`]
+//! — use the `*_v2` functions for anything live. (Do not delete the v1 path
+//! without also removing that parity test + its CI reference.)
 //!
 //! Reference: Section 23.1.2 of darkpool_protocol_spec_v3_changed.md +
 //! `~/.claude/plans/agile-chasing-parnas.md`
@@ -56,7 +57,7 @@ pub struct Note {
     pub token_mint: [u8; 32],
     /// Amount in base units (lamports for SOL, 1e6 for USDC, etc.).
     pub amount: u64,
-    /// Owner commitment = Poseidon(spending_key, r_owner).
+    /// Owner commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner).
     pub owner_commitment: [u8; 32],
     /// Unique per-note nonce.
     pub nonce: [u8; 32],

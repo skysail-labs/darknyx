@@ -9,16 +9,18 @@
  * snarkjs/circom stack uses internally. It is byte-compatible with light-poseidon
  * when both are run with BN254 + CIRCOM parameters.
  *
- * Domain tags (must match circuit.circom and crates/darkpool-crypto exactly):
+ * Domain tags (must match circuit.circom and crates/darkpool-crypto exactly).
+ * The LIVE construction is v2 (inner_hash) — a single per-note blinding that
+ * anchors BOTH the commitment and the nullifier (amount-independent, so a client
+ * can pre-supply change-note nullifiers):
  *   DOMAIN_OWNER = 1n  — owner_commitment = Poseidon3(1, spendingKey, r_owner)
- *   DOMAIN_NOTE  = 2n  — noteCommitment   = Poseidon7(2, mint_lo, mint_hi, amount, owner, nonce, r)
- *   DOMAIN_NULL  = 3n  — nullifier        = Poseidon3(3, spendingKey, noteCommitment)
+ *   DOMAIN_NOTE  = 2n  — noteCommitmentV2 = Poseidon6(2, mint_lo, mint_hi, amount, owner, inner_hash)
+ *   DOMAIN_NULL  = 3n  — nullifierV2      = Poseidon3(3, spendingKey, inner_hash)
  *
- * v2 (inner_hash) construction — collapses (nonce, r) into a single inner_hash
- * and re-anchors the nullifier on inner_hash (amount-independent, so a client
- * can pre-supply change-note nullifiers). Mint binding kept:
- *   noteCommitmentV2 = Poseidon6(2, mint_lo, mint_hi, amount, owner, inner_hash)
- *   nullifierV2      = Poseidon3(3, spendingKey, inner_hash)
+ * Legacy v1 (Poseidon7 note + nullifier-over-commitment) is retained ONLY for the
+ * note-commitment / nullifier parity tests, NOT on any live path:
+ *   noteCommitment(v1) = Poseidon7(2, mint_lo, mint_hi, amount, owner, nonce, r)
+ *   nullifier(v1)      = Poseidon3(3, spendingKey, noteCommitment)
  */
 
 import { buildPoseidon } from "circomlibjs";

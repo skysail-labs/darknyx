@@ -195,8 +195,9 @@ master_seed (64 bytes, CSPRNG or wallet-signature derived)
   ├── HKDF-SHA256("darkpool_spend_key_v1", 512b) → mod p     → spending_key (Fr)
   └── KMAC256("darkpool_viewing_key_v1", 512b) → mod p       → viewing_key   (Fr)
 
-Per-note blinding (independent from the above):
-  KMAC256("note_blinding_v1" ‖ counter_u64_le, 512b) → mod p → blinding_r(counter) (Fr)
+Per-deposit-note inner_hash (v2; independent from the above; keyed by leaf index):
+  KMAC256("note_blinding_v1" ‖ leaf_index_u64_le, 512b) → mod p → inner_hash(leaf_index) (Fr)
+  (change / trade / fee / continuation notes derive inner_hash differently — see §5.)
 ```
 
 The 512-bit→mod-p path is statistically uniform per the sampling note in §3.
@@ -209,7 +210,7 @@ in proofs:
 #### `owner_commitment`
 
 ```
-owner_commitment = Poseidon2(spending_key, r_owner)
+owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
 ```
 
 Where `r_owner` (alternately `ownerCommitmentBlinding`) is a wallet-level
@@ -221,7 +222,7 @@ only to this owner_commitment). It's revealed never — it's a private witness
 to every proof.
 
 Why a single `r_owner` (rather than per-note `r_owner`)? Cryptographically,
-the per-note `blinding_r` already provides note-level unlinkability. A
+the per-note `inner_hash` already provides note-level unlinkability. A
 shared `r_owner` simplifies key management (no need to track per-note
 ownership blinders). Two notes from the same user *would* be linkable if an
 attacker had their `spending_key` — but in that case the attacker has full
@@ -230,11 +231,11 @@ authority anyway, so no marginal damage.
 #### `user_commitment`
 
 ```
-rootHash    = Poseidon3(root_pubkey_lo, root_pubkey_hi, r0)
-spendHash   = Poseidon2(spending_key, r1)
-viewHash    = Poseidon2(viewing_key, r2)
-leafPair    = Poseidon2(rootHash, spendHash)
-user_commitment = Poseidon2(leafPair, viewHash)
+rootHash    = Poseidon4(DOMAIN_ROOT=10,  root_pubkey_lo, root_pubkey_hi, r0)
+spendHash   = Poseidon3(DOMAIN_SPEND=11, spending_key, r1)
+viewHash    = Poseidon3(DOMAIN_VIEW=12,  viewing_key, r2)
+leafPair    = Poseidon3(DOMAIN_LEAF=13,  rootHash, spendHash)
+user_commitment = Poseidon3(DOMAIN_TOP=14, leafPair, viewHash)
 ```
 
 A Merkle-like 3-leaf commitment binding all three "long-lived" keys (root,
@@ -284,7 +285,7 @@ its 32-byte Poseidon commitment.
 struct Note {
     token_mint:       Pubkey,    // 32B — SPL mint
     amount:           u64,
-    owner_commitment: [u8; 32],  // Fr — Poseidon2(spending_key, r_owner)
+    owner_commitment: [u8; 32],  // Fr — Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
     inner_hash:       [u8; 32],  // Fr — the single per-note blinding (v2)
 }
 ```
@@ -604,11 +605,11 @@ mainnet/devnet path) and consumes ~200k CU per proof.
 **Constraints**:
 
 ```
-rootHash    = Poseidon3(rootKey[0], rootKey[1], r0)
-spendHash   = Poseidon2(spendingKey, r1)
-viewHash    = Poseidon2(viewingKey, r2)
-leafPair    = Poseidon2(rootHash, spendHash)
-userCommitment === Poseidon2(leafPair, viewHash)
+rootHash    = Poseidon4(DOMAIN_ROOT=10,  rootKey[0], rootKey[1], r0)
+spendHash   = Poseidon3(DOMAIN_SPEND=11, spendingKey, r1)
+viewHash    = Poseidon3(DOMAIN_VIEW=12,  viewingKey, r2)
+leafPair    = Poseidon3(DOMAIN_LEAF=13,  rootHash, spendHash)
+userCommitment === Poseidon3(DOMAIN_TOP=14, leafPair, viewHash)
 ```
 
 Use case: a user proves they know the (root, spending, viewing) tuple
@@ -627,26 +628,26 @@ exist).
 **Public inputs** (5):
 1. `merkleRoot` — the tree root the proof was generated against (must be in
    the recent-roots ring buffer)
-2. `nullifier` — `Poseidon2(spending_key, note_commitment)`, revealed to
+2. `nullifier` — `Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash)`, revealed to
    the chain's nullifier set
 3. `tokenMint[0]` — low 128 bits of the SPL mint pubkey
 4. `tokenMint[1]` — high 128 bits
 5. `amount` — u64, the amount the chain will SPL-transfer out
 
-**Private witnesses** (~24):
+**Private witnesses**:
 - `spendingKey`, `ownerCommitmentBlinding` (= r_owner)
-- `nonce`, `blindingR` (per-note)
+- `innerHash` (per-note; v2 — replaces the old `nonce`/`blindingR` pair)
 - `merklePath[20]`, `merkleIndices[20]` — Merkle witness
 
 **Constraints**:
 
 ```circom
-owner_commitment = Poseidon2(spendingKey, ownerCommitmentBlinding)
+owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, ownerCommitmentBlinding)
 note_commitment  = Poseidon6(DOMAIN_NOTE, tokenMint[0], tokenMint[1],
                              amount, owner_commitment, innerHash)
 MerkleTreeChecker(20)(leaf = note_commitment, root = merkleRoot,
                       pathElements = merklePath, pathIndices = merkleIndices)
-nullifier        === Poseidon2(spendingKey, note_commitment)
+nullifier        === Poseidon3(DOMAIN_NULL=3, spendingKey, innerHash)
 ```
 
 What this proves to the chain: "I know a note whose Poseidon-commitment is
@@ -670,7 +671,7 @@ verification in `programs/vault/src/instructions/withdraw.rs:131-144`.
 **Constraints**:
 
 ```circom
-owner_commitment = Poseidon2(spendingKey, ownerCommitmentBlinding)
+owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, ownerCommitmentBlinding)
 noteHash         = Poseidon6(DOMAIN_NOTE, tokenMint[0], tokenMint[1],
                              amount, owner_commitment, innerHash)
 noteCommitment   === noteHash
@@ -702,19 +703,19 @@ verification in `programs/vault/src/instructions/lock_note.rs:80-115`.
 
 #### Why VALID_INPUT keeps the ownership constraint
 
-You might think you could drop the `owner_commitment = Poseidon2(spending_key, r_owner)`
+You might think you could drop the `owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`
 constraint, since lock_note doesn't need to prove ownership (the proof is
 just attesting that the leaf exists). But:
 
-**Attack without ownership constraint**: a deposit's `owner_commitment`,
-`nonce`, and `blinding_r` are all *public* on L1 (they're args to
+**Attack without ownership constraint**: a deposit's `owner_commitment`
+and `inner_hash` are both *public* on L1 (they're args to
 `vault::deposit`). Anyone reading the deposit tx can reconstruct the note
 opening. Without an ownership constraint, anyone could generate a
 VALID_INPUT proof for Alice's note and lock it against an arbitrary order —
 DoS griefing at minimum, potentially full theft if combined with a clever
 match construction.
 
-By requiring the prover know `spending_key` such that `Poseidon2(sk, r_owner)
+By requiring the prover know `spending_key` such that `Poseidon3(DOMAIN_OWNER=1, sk, r_owner)
 == owner_commitment` (where `owner_commitment` is itself a private witness
 because it goes into the note's preimage), the proof can only be generated
 by someone who knows the spending key. The note's actual `owner_commitment`
@@ -913,7 +914,7 @@ She picks blinding factors `r0`, `r1`, `r2`, `r_owner` (random Fr each).
 
 She computes:
 
-- `owner_commitment = Poseidon2(spending_key, r_owner)`
+- `owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`
 - `user_commitment` via the three-leaf Poseidon Merkle described in §4
 
 Nothing on-chain yet. The seed lives on her device. The `r_owner` is the
@@ -968,8 +969,7 @@ quote-per-base (so 5,000 + 15 fee = 5,015 total). She sends:
 vault::deposit(
     amount:           u64       = 5_015,
     owner_commitment: [u8; 32]  = ALICE_OWNER_COMMIT,
-    nonce:            [u8; 32]  = nonce_from_leaf_count,
-    blinding_r:       [u8; 32]  = KMAC256("note_blinding_v1" ‖ leaf_count_le, 512b) mod p,
+    inner_hash:       [u8; 32]  = inner_hash_from_leaf_count,  // v2: replaces (nonce, blinding_r)
 )
 ```
 
@@ -995,7 +995,7 @@ What happens in the handler:
 - **Per-mint solvency counter** maintained as an on-chain invariant.
 
 **Why**: this is the entry point for value into the darkpool. The
-deposit's args (`owner_commitment`, `nonce`, `blinding_r`) ARE public —
+deposit's args (`owner_commitment`, `inner_hash`) ARE public —
 that's an intentional design choice. The privacy comes later: the on-chain
 note is just the 32-byte commitment, and any future spending of this note
 requires a VALID_SPEND proof that doesn't reveal which specific deposit
@@ -1300,7 +1300,7 @@ Handler walkthrough:
 
 8. **Nullifier allocation**: same pattern with `NullifierEntry` PDAs.
    Note: the chain stores `payload.nullifier_a` / `_b` without verifying
-   they're the actual `Poseidon2(spending_key, note_a_commitment)`. The
+   they're the actual `Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash_a)`. The
    chain doesn't have spending_key. This is fine because the consumed-note
    PDAs are the real double-spend guard; the nullifier PDA is
    belt-and-suspenders for the future case where withdraw uses the *user-
@@ -2034,7 +2034,7 @@ Sorted roughly by cryptographic impact:
 - **Self-trade prevention — DONE (owner-level, note-bound).** The matcher
   (`darkpool_matcher::algorithm::generate_matches`) never crosses two orders from
   the same owner, keyed on the note-**bound** `owner_commitment`
-  (`Poseidon2(spending_key, r_owner)`, pinned to the collateral note at intake by
+  (`Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`, pinned to the collateral note at intake by
   `verify_commitment`, reused across all of a user's notes). So it catches one
   user trading under *two trading keys* (a free `offset` rotation, deliberately
   NOT part of the owner identity), and — because `owner_commitment` is bound, not
