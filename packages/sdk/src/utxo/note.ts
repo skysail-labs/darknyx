@@ -17,10 +17,8 @@
  *   DOMAIN_NOTE  = 2n  — noteCommitmentV2 = Poseidon6(2, mint_lo, mint_hi, amount, owner, inner_hash)
  *   DOMAIN_NULL  = 3n  — nullifierV2      = Poseidon3(3, spendingKey, inner_hash)
  *
- * Legacy v1 (Poseidon7 note + nullifier-over-commitment) is retained ONLY for the
- * note-commitment / nullifier parity tests, NOT on any live path:
- *   noteCommitment(v1) = Poseidon7(2, mint_lo, mint_hi, amount, owner, nonce, r)
- *   nullifier(v1)      = Poseidon3(3, spendingKey, noteCommitment)
+ * (The pre-v2 v1 construction — a Poseidon7 note with separate nonce/blindingR
+ * fields + a nullifier over the note commitment — has been fully retired.)
  */
 
 import { buildPoseidon } from "circomlibjs";
@@ -62,14 +60,6 @@ export function pubkeyToFrPair(pk: Uint8Array): [bigint, bigint] {
   return [lo, hi];
 }
 
-export interface Note {
-  tokenMint: Uint8Array; // 32 bytes
-  amount: bigint;
-  ownerCommitment: bigint;
-  nonce: bigint;
-  blindingR: bigint;
-}
-
 // Domain tags — must match circuits/valid_spend/circuit.circom and
 // crates/darkpool-crypto/src/{note,nullifier}.rs exactly.
 const DOMAIN_OWNER = 1n;
@@ -84,34 +74,6 @@ export async function ownerCommitment(
   const p = await getPoseidon();
   const packed = p([DOMAIN_OWNER, spendingKey, blinding]);
   return p.F.toObject(packed);
-}
-
-/** Compute the 32-byte BE note commitment = Poseidon7(DOMAIN_NOTE, mint_lo, mint_hi, amount, ownerCommit, nonce, blindingR). */
-export async function noteCommitment(note: Note): Promise<Uint8Array> {
-  const [lo, hi] = pubkeyToFrPair(note.tokenMint);
-  return poseidonHashBytesBE([
-    DOMAIN_NOTE,
-    lo,
-    hi,
-    note.amount,
-    note.ownerCommitment,
-    note.nonce,
-    note.blindingR,
-  ]);
-}
-
-/** Compute nullifier = Poseidon3(DOMAIN_NULL, spendingKey, noteCommitmentBigint). */
-export async function nullifier(
-  spendingKey: bigint,
-  commitmentBE: Uint8Array,
-): Promise<Uint8Array> {
-  if (commitmentBE.length !== 32)
-    throw new Error("commitment must be 32 bytes");
-  let cBig = 0n;
-  for (const b of commitmentBE) cBig = (cBig << 8n) | BigInt(b);
-  const p = await getPoseidon();
-  const packed = p([DOMAIN_NULL, spendingKey, cBig]);
-  return bn254ToBE32(p.F.toObject(packed));
 }
 
 export interface NoteV2 {

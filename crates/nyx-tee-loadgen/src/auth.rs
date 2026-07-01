@@ -82,8 +82,8 @@ pub fn build_signed_place_body(
 
     // Build a synthetic input-note opening + the matching commitment so
     // the order passes the TEE intake's opening verification (4g.7a/c):
-    // intake recomputes `commitment_from_fields(mint, note_amount,
-    // owner, nonce, blinding)` and asserts it equals `note_commitment`.
+    // intake recomputes `commitment_from_fields_v2(mint, note_amount,
+    // owner, inner_hash)` and asserts it equals `note_commitment`.
     //
     // `note_amount` MUST mirror intake's derivation EXACTLY (orders.rs):
     // a fee-inclusive collateral `nominal + floor(nominal * fee_rate_bps

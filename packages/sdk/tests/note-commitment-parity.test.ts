@@ -1,20 +1,20 @@
 /**
- * Cross-environment parity for the Note Commitment formula.
+ * Cross-environment parity for the v2 (inner_hash) Note Commitment formula.
  *
- * Formula (must match `circuits/valid_spend/circuit.circom`):
+ * Formula (must match `circuits/valid_spend/circuit.circom` v2 + the on-chain
+ * hasher):
  *
- *   noteCommitment = Poseidon7(
+ *   noteCommitmentV2 = Poseidon6(
  *     DOMAIN_NOTE=2,        // domain separation tag
  *     token_mint_lo_u128,
  *     token_mint_hi_u128,
  *     amount_u64,
  *     owner_commitment_fr,  // = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
- *     nonce_fr,
- *     blinding_r_fr,
+ *     inner_hash_fr,        // single per-note blinding (v2 — replaced nonce+blinding_r)
  *   )
  *
- * The TS `noteCommitment()` must produce the same 32-byte hex as the Rust
- * `commitment_from_fields()`. If they diverge, every shielded deposit ⇄
+ * The TS `noteCommitmentV2()` must produce the same 32-byte hex as the Rust
+ * `commitment_from_fields_v2()`. If they diverge, every shielded deposit ⇄
  * withdraw becomes unspendable from the other environment.
  *
  * This is the highest-leverage parity test we could add — note_commitment is
@@ -27,23 +27,22 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { existsSync } from "node:fs";
 
-import { noteCommitment } from "../src/utxo/note.js";
+import { noteCommitmentV2 } from "../src/utxo/note.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
-const helper = resolve(repoRoot, "target/debug/examples/note-commitment");
+const helper = resolve(repoRoot, "target/debug/examples/note-commitment-v2");
 
 function rustHelper(
   mintHex: string,
   amount: bigint,
   ownerHex: string,
-  nonceHex: string,
-  blindingHex: string,
+  innerHex: string,
 ): string {
-  if (!existsSync(helper)) throw new Error("note-commitment helper missing");
+  if (!existsSync(helper)) throw new Error("note-commitment-v2 helper missing");
   const res = spawnSync(
     helper,
-    [mintHex, amount.toString(), ownerHex, nonceHex, blindingHex],
+    [mintHex, amount.toString(), ownerHex, innerHex],
     { encoding: "utf8" },
   );
   if (res.status !== 0) throw new Error(res.stderr || "helper failed");
@@ -69,7 +68,7 @@ function bigintFromHex32(hex: string): bigint {
   return n;
 }
 
-describe("Note commitment parity (TS vs Rust)", () => {
+describe("Note commitment parity — v2 (TS vs Rust)", () => {
   const available = existsSync(helper);
   const ait = (name: string, fn: () => Promise<void>) =>
     available ? it(name, fn) : it.skip(name, fn);
@@ -80,50 +79,44 @@ describe("Note commitment parity (TS vs Rust)", () => {
     const mintHex = "01".repeat(32);
     const amount = 1_000_000_000n;
     const ownerHex = "0a".repeat(32);
-    const nonceHex = "0b".repeat(32);
-    const blindingHex = "0c".repeat(32);
+    const innerHex = "0b".repeat(32);
 
     const tsHex = hex32(
-      await noteCommitment({
+      await noteCommitmentV2({
         tokenMint: bytesFromHex32(mintHex),
         amount,
         ownerCommitment: bigintFromHex32(ownerHex),
-        nonce: bigintFromHex32(nonceHex),
-        blindingR: bigintFromHex32(blindingHex),
+        innerHash: bigintFromHex32(innerHex),
       }),
     );
-    const rsHex = rustHelper(mintHex, amount, ownerHex, nonceHex, blindingHex);
+    const rsHex = rustHelper(mintHex, amount, ownerHex, innerHex);
     expect(tsHex).toBe(rsHex);
   });
 
   ait("changes when each input changes (witness sensitivity)", async () => {
-    // All field elements MUST be < BN254 r = 0x30644e72e131a029b85045b68181585d…
-    // Using high-bytes ≤ 0x10 keeps everything safely in-field for the strict
-    // Rust path (see field.rs::fr_from_be_bytes). circomlibjs silently mod-
-    // reduces, so picking out-of-field values here would mask divergence
-    // rather than expose it.
+    // All field elements MUST be < BN254 r. Using high-bytes ≤ 0x10 keeps
+    // everything safely in-field for the strict Rust path (see
+    // field.rs::fr_from_be_bytes). circomlibjs silently mod-reduces, so picking
+    // out-of-field values here would mask divergence rather than expose it.
     const base = {
       mintHex: "11".repeat(32),
       amount: 42n,
       ownerHex: "10".repeat(32),
-      nonceHex: "0f".repeat(32),
-      blindingHex: "0e".repeat(32),
+      innerHex: "0f".repeat(32),
     };
     const baseTs = hex32(
-      await noteCommitment({
+      await noteCommitmentV2({
         tokenMint: bytesFromHex32(base.mintHex),
         amount: base.amount,
         ownerCommitment: bigintFromHex32(base.ownerHex),
-        nonce: bigintFromHex32(base.nonceHex),
-        blindingR: bigintFromHex32(base.blindingHex),
+        innerHash: bigintFromHex32(base.innerHex),
       }),
     );
     const baseRs = rustHelper(
       base.mintHex,
       base.amount,
       base.ownerHex,
-      base.nonceHex,
-      base.blindingHex,
+      base.innerHex,
     );
     expect(baseTs).toBe(baseRs);
 
@@ -132,26 +125,18 @@ describe("Note commitment parity (TS vs Rust)", () => {
       { ...base, mintHex: "12".repeat(32) },
       { ...base, amount: 43n },
       { ...base, ownerHex: "0d".repeat(32) },
-      { ...base, nonceHex: "0c".repeat(32) },
-      { ...base, blindingHex: "0b".repeat(32) },
+      { ...base, innerHex: "0e".repeat(32) },
     ];
     for (const v of variants) {
       const ts = hex32(
-        await noteCommitment({
+        await noteCommitmentV2({
           tokenMint: bytesFromHex32(v.mintHex),
           amount: v.amount,
           ownerCommitment: bigintFromHex32(v.ownerHex),
-          nonce: bigintFromHex32(v.nonceHex),
-          blindingR: bigintFromHex32(v.blindingHex),
+          innerHash: bigintFromHex32(v.innerHex),
         }),
       );
-      const rs = rustHelper(
-        v.mintHex,
-        v.amount,
-        v.ownerHex,
-        v.nonceHex,
-        v.blindingHex,
-      );
+      const rs = rustHelper(v.mintHex, v.amount, v.ownerHex, v.innerHex);
       expect(ts).toBe(rs);
       expect(ts).not.toBe(baseTs);
     }
@@ -159,9 +144,7 @@ describe("Note commitment parity (TS vs Rust)", () => {
 
   // Documents the deliberate strict-vs-lenient asymmetry between Rust
   // (`fr_from_be_bytes` rejects out-of-field) and TS (circomlibjs silently
-  // mod-reduces). The TS surface SHOULD eventually mirror the strict Rust
-  // behaviour — see the open punch-list item in the cryptography review.
-  // Until then, this test pins the current behaviour so any future change is
+  // mod-reduces). This test pins the current behaviour so any future change is
   // intentional.
   ait(
     "Rust strictly rejects out-of-field inputs; TS silently reduces",
@@ -171,12 +154,11 @@ describe("Note commitment parity (TS vs Rust)", () => {
       const mintHex = "01".repeat(32);
 
       // TS path silently reduces and produces a hash without throwing.
-      const tsOK = await noteCommitment({
+      const tsOK = await noteCommitmentV2({
         tokenMint: bytesFromHex32(mintHex),
         amount: 1n,
         ownerCommitment: bigintFromHex32(outOfFieldHex),
-        nonce: 1n,
-        blindingR: 1n,
+        innerHash: 1n,
       });
       expect(tsOK).toBeInstanceOf(Uint8Array);
       expect(tsOK.length).toBe(32);
@@ -184,7 +166,7 @@ describe("Note commitment parity (TS vs Rust)", () => {
       // Rust path rejects with NotInField.
       const res = spawnSync(
         helper,
-        [mintHex, "1", outOfFieldHex, "01".repeat(32), "01".repeat(32)],
+        [mintHex, "1", outOfFieldHex, "01".repeat(32)],
         { encoding: "utf8" },
       );
       expect(res.status).not.toBe(0);
@@ -195,20 +177,18 @@ describe("Note commitment parity (TS vs Rust)", () => {
   ait("matches on amount = 0 and large u64", async () => {
     const mintHex = "ff".repeat(16) + "00".repeat(16); // mixed high/low halves
     const ownerHex = "0d".repeat(32);
-    const nonceHex = "0e".repeat(32);
-    const blindingHex = "0f".repeat(32);
+    const innerHex = "0e".repeat(32);
 
     for (const amount of [0n, 1n, 18446744073709551615n /* u64::MAX */]) {
       const ts = hex32(
-        await noteCommitment({
+        await noteCommitmentV2({
           tokenMint: bytesFromHex32(mintHex),
           amount,
           ownerCommitment: bigintFromHex32(ownerHex),
-          nonce: bigintFromHex32(nonceHex),
-          blindingR: bigintFromHex32(blindingHex),
+          innerHash: bigintFromHex32(innerHex),
         }),
       );
-      const rs = rustHelper(mintHex, amount, ownerHex, nonceHex, blindingHex);
+      const rs = rustHelper(mintHex, amount, ownerHex, innerHex);
       expect(ts).toBe(rs);
     }
   });

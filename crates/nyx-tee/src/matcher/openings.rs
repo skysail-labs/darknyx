@@ -13,7 +13,7 @@
 //!
 //! Why this is safe to accept over the wire: the trading key signs
 //! `note_commitment` (via `OrderCanonical`). We then check
-//! `commitment_from_fields(opening) == note_commitment`. Poseidon is
+//! `commitment_from_fields_v2(opening) == note_commitment`. Poseidon is
 //! collision-resistant, so a caller cannot substitute a different
 //! opening that still hashes to the signed commitment — the opening
 //! is cryptographically pinned to the signature WITHOUT having to

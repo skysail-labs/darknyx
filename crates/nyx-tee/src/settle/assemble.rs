@@ -538,7 +538,7 @@ mod tests {
     }
 
     /// Build a self-consistent match: the input-note commitments equal
-    /// `commitment_from_fields(opening)`, so the resulting witness is
+    /// `commitment_from_fields_v2(opening)`, so the resulting witness is
     /// provable (note_a/b reconstruct).
     fn scenario(
         base_amt: u64,

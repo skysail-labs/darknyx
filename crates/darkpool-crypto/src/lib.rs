@@ -44,10 +44,8 @@ pub use keys::{
     derive_blinding_factor, derive_inner_hash, derive_master_viewing_key, derive_spending_key,
     derive_trading_key_at_offset, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
 };
-pub use note::{
-    commitment_from_fields, commitment_from_fields_v2, Note, NoteCommitment, NOTE_COMMITMENT_BYTES,
-};
-pub use nullifier::{nullifier, nullifier_v2, Nullifier, NULLIFIER_BYTES};
+pub use note::{commitment_from_fields_v2, NoteCommitment, NOTE_COMMITMENT_BYTES};
+pub use nullifier::{nullifier_v2, Nullifier, NULLIFIER_BYTES};
 pub use poseidon::{poseidon_hash, poseidon_hash_bytes};
 pub use price_commitment::price_commitment;
 #[cfg(not(target_os = "solana"))]

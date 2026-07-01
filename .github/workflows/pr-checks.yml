@@ -155,8 +155,8 @@ jobs:
           path: |
             target/debug/examples/poseidon-hash
             target/debug/examples/user-commitment
-            target/debug/examples/note-commitment
-            target/debug/examples/nullifier
+            target/debug/examples/note-commitment-v2
+            target/debug/examples/nullifier-v2
             target/debug/examples/derive-keys
           if-no-files-found: error
           retention-days: 1
