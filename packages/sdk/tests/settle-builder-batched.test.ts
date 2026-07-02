@@ -99,30 +99,31 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     });
 
     expect(ix.programId.toBase58()).toBe(PROGRAM_ID.toBase58());
-    // 13 accounts: tee + vault_config + locks(a,b) + consumed(a,b)
-    //            + null(a,b) + locks(e,f) + sysvar + batch_marker + system.
-    expect(ix.keys.length).toBe(14);
+    // 12 accounts: tee + vault_config + merkle_tree + locks(a,b) + consumed(a,b)
+    //            + locks(e,f) + sysvar + batch_marker + system. (The two
+    //            nullifier_entry accounts were removed with the freeze fix.)
+    expect(ix.keys.length).toBe(12);
 
     // Slot 0: tee_authority (mut, signer).
     expect(ix.keys[0].pubkey.toBase58()).toBe(tee.publicKey.toBase58());
     expect(ix.keys[0].isSigner).toBe(true);
     expect(ix.keys[0].isWritable).toBe(true);
 
-    // Slot 11: instructions sysvar.
-    expect(ix.keys[11].pubkey.toBase58()).toBe(
+    // Slot 9: instructions sysvar.
+    expect(ix.keys[9].pubkey.toBase58()).toBe(
       SYSVAR_INSTRUCTIONS_PUBKEY.toBase58(),
     );
-    expect(ix.keys[11].isWritable).toBe(false);
+    expect(ix.keys[9].isWritable).toBe(false);
 
-    // Slot 12: batch_validity_marker (mut — left open; closed by a separate ix).
-    expect(ix.keys[12].isWritable).toBe(true);
+    // Slot 10: batch_validity_marker (mut — left open; closed by a separate ix).
+    expect(ix.keys[10].isWritable).toBe(true);
 
-    // Slot 13: system_program.
-    expect(ix.keys[13].pubkey.toBase58()).toBe(
+    // Slot 11: system_program.
+    expect(ix.keys[11].pubkey.toBase58()).toBe(
       SystemProgram.programId.toBase58(),
     );
-    expect(ix.keys[13].isSigner).toBe(false);
-    expect(ix.keys[13].isWritable).toBe(false);
+    expect(ix.keys[11].isSigner).toBe(false);
+    expect(ix.keys[11].isWritable).toBe(false);
   });
 
   it("[settle_batched_anchor_discriminator_present] data starts with sha256('global:tee_forced_settle_batched')[..8]", () => {
@@ -214,7 +215,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(dropMatchByte(ix0.data)).toEqual(dropMatchByte(ix15.data));
   });
 
-  it('[settle_batched_marker_pda_derivation] account 12 = PDA([b"batch_validity", merkleRoot])', () => {
+  it('[settle_batched_marker_pda_derivation] account 10 = PDA([b"batch_validity", merkleRoot])', () => {
     const tee = Keypair.generate();
     const merkleRoot = filled(32, 0x77);
     const ix = buildSettleBatchedIx({
@@ -227,7 +228,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleRoot,
     });
     const [expected] = batchValidityMarkerPda(PROGRAM_ID, merkleRoot);
-    expect(ix.keys[12].pubkey.toBase58()).toBe(expected.toBase58());
+    expect(ix.keys[10].pubkey.toBase58()).toBe(expected.toBase58());
 
     // Marker is keyed by the root, so a different root → different PDA.
     const ix2 = buildSettleBatchedIx({
@@ -239,8 +240,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0x88),
     });
-    expect(ix2.keys[12].pubkey.toBase58()).not.toBe(
-      ix.keys[12].pubkey.toBase58(),
+    expect(ix2.keys[10].pubkey.toBase58()).not.toBe(
+      ix.keys[10].pubkey.toBase58(),
     );
   });
 
@@ -262,8 +263,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleRoot: filled(32, 0xf0),
     });
     const [zeroLock] = noteLockPda(PROGRAM_ID, ZERO_COMMITMENT);
-    expect(ixExact.keys[9].pubkey.toBase58()).toBe(zeroLock.toBase58());
-    expect(ixExact.keys[10].pubkey.toBase58()).toBe(zeroLock.toBase58());
+    expect(ixExact.keys[7].pubkey.toBase58()).toBe(zeroLock.toBase58());
+    expect(ixExact.keys[8].pubkey.toBase58()).toBe(zeroLock.toBase58());
 
     // Change-note variant: noteE non-zero → lock_e diverges from lock_f.
     const withChange: MatchResultPayload = {
@@ -280,9 +281,9 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleRoot: filled(32, 0xf0),
     });
     const [lockE] = noteLockPda(PROGRAM_ID, withChange.noteEcommitment);
-    expect(ixChange.keys[9].pubkey.toBase58()).toBe(lockE.toBase58());
-    expect(ixChange.keys[9].pubkey.toBase58()).not.toBe(
-      ixChange.keys[10].pubkey.toBase58(),
+    expect(ixChange.keys[7].pubkey.toBase58()).toBe(lockE.toBase58());
+    expect(ixChange.keys[7].pubkey.toBase58()).not.toBe(
+      ixChange.keys[8].pubkey.toBase58(),
     );
   });
 

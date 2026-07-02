@@ -30,7 +30,6 @@ import {
   consumedNotePda,
   merkleTreePda,
   noteLockPda,
-  nullifierEntryPda,
   vaultConfigPda,
 } from "../idl/vault-client.js";
 
@@ -277,15 +276,19 @@ export interface BuildSettleBatchedIxParams {
  *   2  merkle_tree[treeId]     (mut — the output-shard append)
  *   3  note_lock_a             (mut, close)
  *   4  note_lock_b             (mut, close)
- *   5  consumed_a              (init)
+ *   5  consumed_a              (init — the consume-once guard, shared w/ withdraw)
  *   6  consumed_b              (init)
- *   7  nullifier_a_entry       (init)
- *   8  nullifier_b_entry       (init)
- *   9  note_lock_e             (mut — relock; dummy when no buyer change)
- *  10  note_lock_f             (mut — relock; dummy when no seller change)
- *  11  instructions_sysvar
- *  12  batch_validity_marker   (mut — left open; closed by a separate ix)
- *  13  system_program
+ *   7  note_lock_e             (mut — relock; dummy when no buyer change)
+ *   8  note_lock_f             (mut — relock; dummy when no seller change)
+ *   9  instructions_sysvar
+ *  10  batch_validity_marker   (mut — left open; closed by a separate ix)
+ *  11  system_program
+ *
+ * The two per-match `nullifier_entry` accounts were REMOVED: `payload.nullifier_a/b`
+ * are TEE-supplied + unconstrained (not bound by VALID_MATCH_BATCH), so writing
+ * them was unsound-adjacent (a griefing freeze vector) and redundant — the
+ * commitment-keyed `consumed_a/b` are the real double-spend guard. They're still
+ * carried in the payload + signed (canonical hash unchanged), just not written.
  *
  * ix data = disc(8) || tree_id(1) || payload(Borsh) || match_index(1) || 4×32 siblings.
  */
@@ -326,8 +329,6 @@ export function buildSettleBatchedIx(
   const [lockB] = noteLockPda(p.programId, p.payload.noteBcommitment);
   const [consumedA] = consumedNotePda(p.programId, p.payload.noteAcommitment);
   const [consumedB] = consumedNotePda(p.programId, p.payload.noteBcommitment);
-  const [nullA] = nullifierEntryPda(p.programId, p.payload.nullifierA);
-  const [nullB] = nullifierEntryPda(p.programId, p.payload.nullifierB);
   const [lockE] = noteLockPda(p.programId, p.payload.noteEcommitment);
   const [lockF] = noteLockPda(p.programId, p.payload.noteFcommitment);
   const [batchMarker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
@@ -355,8 +356,6 @@ export function buildSettleBatchedIx(
       { pubkey: lockB, isSigner: false, isWritable: true },
       { pubkey: consumedA, isSigner: false, isWritable: true },
       { pubkey: consumedB, isSigner: false, isWritable: true },
-      { pubkey: nullA, isSigner: false, isWritable: true },
-      { pubkey: nullB, isSigner: false, isWritable: true },
       { pubkey: lockE, isSigner: false, isWritable: true },
       { pubkey: lockF, isSigner: false, isWritable: true },
       {

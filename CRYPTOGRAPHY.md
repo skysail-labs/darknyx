@@ -81,7 +81,7 @@ through a Phala CVM (`cvm-settle-e2e`).
 |---|---|---|
 | Anonymous L1 observer | Front-running of unmatched orders | Order intent never on L1 (lives in the CVM) |
 | Anonymous L1 observer | Linking deposits to withdrawals | Poseidon-commitment Merkle tree; Groth16 hides spending key |
-| L1 anyone | Replay of TEE-signed settlement | `ConsumedNoteEntry` + `NullifierEntry` + `BatchValidityMarker` PDAs (init-time PDA collision) |
+| L1 anyone | Replay of TEE-signed settlement | `ConsumedNoteEntry` + `BatchValidityMarker` PDAs (init-time PDA collision) |
 | L1 anyone | Withdraw without ownership proof | `VALID_SPEND` Groth16 verified on-chain |
 | Compromised TEE | Phantom-lock a fake note commitment | `VALID_INPUT` proof at lock time (v2) |
 | Compromised TEE | Forever-lock a real note (censorship) | `MAX_LOCK_TTL_SLOTS` cap (v2) |
@@ -113,11 +113,15 @@ Every state-transitioning instruction maintains:
 3. **Mint binding**: `lock.token_mint` is cryptographically pinned to the
    Merkle leaf via `VALID_INPUT`; recorded in the lock PDA; propagated into
    change-note relocks; bound into the `VALID_MATCH_BATCH` slot leaf.
-4. **Single-spend per note**: a note's `commitment` can either be consumed
-   by `tee_forced_settle_batched` (records a `ConsumedNoteEntry` keyed by
-   commitment) or spent by `withdraw` (records a `NullifierEntry` keyed by
-   nullifier), but not both. Cross-direction: `withdraw` refuses while a
-   `NoteLock` or `ConsumedNoteEntry` is present.
+4. **Single-spend per note**: a note's `commitment` can be consumed by
+   `tee_forced_settle_batched` OR spent by `withdraw`, but not both, in either
+   order. BOTH paths `init` the SAME commitment-keyed `ConsumedNoteEntry`
+   (`[b"consumed_note", commitment]`), so whichever runs first blocks the other
+   via an init-time PDA collision. Keying the guard on the commitment (public +
+   circuit-bound) rather than the nullifier (TEE-supplied + unconstrained at
+   settle) is what makes this symmetric — settle also records a `NullifierEntry`
+   no longer, so it can't be relied on cross-path. `withdraw` additionally
+   refuses while a `NoteLock` is present.
 5. **Bounded TTL**: every `NoteLock` and `BatchValidityMarker` has an
    `expiry_slot ≤ clock.slot + MAX_*_TTL_SLOTS`. No state hangs forever.
 
@@ -1219,7 +1223,7 @@ proven in-circuit by VALID_MATCH_BATCH (conservation + fee floor over private,
 range-checked amounts) and bound by the note commitments. The Rust struct
 definition is in `programs/vault/src/instructions/tee_forced_settle.rs`.
 
-Accounts (14 total, in this exact order — must match the Rust struct).
+Accounts (12 total, in this exact order — must match the Rust struct).
 Post-sharding `vault_config` is **read-only** and the writable tree state is
 `merkle_tree[tree_id]` at slot 2:
 
@@ -1230,15 +1234,24 @@ Post-sharding `vault_config` is **read-only** and the writable tree state is
 | 2 | `merkle_tree[tree_id]` | **mut** — the output-shard the notes append to |
 | 3 | `note_lock_a` | mut, close — input lock from step 7 |
 | 4 | `note_lock_b` | mut, close — input lock from step 7 |
-| 5 | `consumed_a` | init — replay protection for note_a |
-| 6 | `consumed_b` | init — replay protection for note_b |
-| 7 | `nullifier_a_entry` | init — nullifier recorded (belt-and-suspenders) |
-| 8 | `nullifier_b_entry` | init — nullifier recorded |
-| 9 | `note_lock_e` | unchecked, mut — relock destination for buyer's change |
-| 10 | `note_lock_f` | unchecked, mut — relock destination for seller's change |
-| 11 | `instructions_sysvar` | sysvar — for finding the Ed25519 precompile |
-| 12 | `batch_validity_marker` | the 1:N marker from step 8 — checked, NOT closed here |
-| 13 | `system_program` | for CPIs |
+| 5 | `consumed_a` | init — the consume-once guard for note_a (shared with `withdraw`) |
+| 6 | `consumed_b` | init — the consume-once guard for note_b |
+| 7 | `note_lock_e` | unchecked, mut — relock destination for buyer's change |
+| 8 | `note_lock_f` | unchecked, mut — relock destination for seller's change |
+| 9 | `instructions_sysvar` | sysvar — for finding the Ed25519 precompile |
+| 10 | `batch_validity_marker` | the 1:N marker from step 8 — checked, NOT closed here |
+| 11 | `system_program` | for CPIs |
+
+> The two per-match `nullifier_{a,b}_entry` accounts (formerly slots 7–8) were
+> **removed**. `payload.nullifier_a/b` are TEE-supplied and unconstrained (no
+> nullifier signal in VALID_MATCH_BATCH; the leaf binds only commitments +
+> `batch_slot`), so writing them provided no soundness — and it enabled a
+> griefing **freeze**: a compromised TEE could `init` a `NullifierEntry` at a
+> victim's future withdraw nullifier, permanently blocking that withdraw (whose
+> own `nullifier_entry` init would then collide). The commitment-keyed
+> `consumed_a/b` are the real double-spend guard, and `withdraw` now writes a
+> matching `ConsumedNoteEntry` so the guard is symmetric across both paths.
+> Dropping the two inits also reclaims 2 accounts + 2 CPIs off the tight Tx D.
 
 ix data = disc(8) ‖ tree_id(1) ‖ payload(424) ‖ match_index(1) ‖ 4×32 siblings = 562 B.
 
@@ -1296,16 +1309,17 @@ Handler walkthrough:
 
 7. **Consumed-note allocation**: `ConsumedNoteEntry` PDAs at
    `[b"consumed_note", note_a_commitment]` and `[b"consumed_note", note_b_commitment]`.
-   `init` constraint → second-settle of the same input collides here.
+   `init` constraint → a second settle of the same input collides here. This is
+   also the **cross-path** guard: `withdraw` now `init`s the same
+   commitment-keyed PDA, so a settle cannot consume an already-withdrawn note
+   (and vice-versa). The commitment is public AND circuit-bound, unlike the
+   nullifier, which is why it — not the nullifier — is the trustless guard.
 
-8. **Nullifier allocation**: same pattern with `NullifierEntry` PDAs.
-   Note: the chain stores `payload.nullifier_a` / `_b` without verifying
-   they're the actual `Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash_a)`. The
-   chain doesn't have spending_key. This is fine because the consumed-note
-   PDAs are the real double-spend guard; the nullifier PDA is
-   belt-and-suspenders for the future case where withdraw uses the *user-
-   computed* nullifier (which would naturally collide with this PDA if the
-   note were spent legitimately).
+8. **(removed)** — the per-match `NullifierEntry` writes were deleted. See the
+   note under the account table above: `payload.nullifier_a/b` are unconstrained
+   and writing them served no soundness purpose while enabling a freeze-griefing
+   vector. They're still carried in the payload + signed (canonical hash
+   unchanged) but no longer written on-chain.
 
 9. **Append output leaves to the Merkle tree**: in this order:
    - `note_c` (always)
@@ -1438,7 +1452,7 @@ Accounts (10):
 - `payer` (signer — anyone can pay)
 - `vault_config` (mut)
 - `token_mint`, `vault_token_account` (mut), `destination_token_account` (mut)
-- `consumed_note_slot` (CHECK: must not exist)
+- `consumed_note` (init — the commitment-keyed consume-once guard)
 - `note_lock_slot` (CHECK: must not exist)
 - `nullifier_entry` (init)
 - `outstanding_mint` (mut)
@@ -1447,10 +1461,13 @@ Accounts (10):
 Handler:
 
 1. `amount > 0`.
-2. **Layer-3 guard**: if `consumed_note_slot.owner == program_id`, this
-   note was consumed by `tee_forced_settle`. Reject with `NoteAlreadyConsumed`.
-   (This is exactly the "you can't spend a note that was already swapped
-   for trade output legs" guard.)
+2. **Layer-3 guard (now an `init`)**: the `consumed_note` account is `init`'d
+   at `[b"consumed_note", note_commitment]`. If the note was already consumed —
+   by a prior `withdraw` OR by `tee_forced_settle_batched` (which `init`s the
+   SAME PDA) — the init collides and the withdraw reverts. This closes the
+   double-spend in BOTH directions (the old code only *read* this PDA, so it
+   caught settle→withdraw but NOT withdraw→settle: a settle could still consume
+   an already-withdrawn note because withdraw left no consume guard).
 3. **Layer-1 guard**: if `note_lock_slot.owner == program_id`, the note is
    currently locked to an active order. Reject with `NoteAlreadyLocked`.
 4. **Recency check**: `vault_config.contains_root(&merkle_root)` — must be
@@ -1459,8 +1476,9 @@ Handler:
    `outstanding_mint.outstanding >= amount`. (If it were less, the TEE
    created a phantom note for this mint and the counter rejects the
    withdraw before the SPL transfer-out.)
-6. Allocate the `NullifierEntry` PDA (its `init` constraint guards against
-   double-withdraw).
+6. Allocate the `NullifierEntry` PDA (guards against double-withdraw via the
+   nullifier) AND write the `consumed_note` entry from step 2 (the shared,
+   commitment-keyed consume-once guard).
 7. Decrement `outstanding_mint.outstanding -= amount`.
 8. **Verify the Groth16 proof** against `vk_valid_spend`:
    `public_inputs = [merkle_root, nullifier, mint_lo, mint_hi, u64_be32(amount)]`.
@@ -1512,7 +1530,7 @@ VERIFY_MATCH_BATCH (L1, 1 Groth16 per batch)
 TEE_FORCED_SETTLE_BATCHED (L1, v0 + stacked ALTs)
     │  Ed25519 + canonical hash
     │  Leaf hash + depth-4 Merkle inclusion path to the marker
-    │  Conservation + structural checks; Consumed/Nullifier PDAs
+    │  Conservation + structural checks; ConsumedNoteEntry PDAs
     │  Up to 6 output leaves (note_c/d + change + base/quote fee)
     │  Atomic re-lock of the change note (if the order continues)
     │  Marker NOT closed (it's 1:N)
@@ -1637,7 +1655,7 @@ the settle tx are:
 | `tee_authority` (signer) | varies | NO — signers can't be ALT'd |
 | `vault_config` | always | ✅ |
 | `note_lock_a/b/e/f` | per-match | NO |
-| `consumed_a/b`, `nullifier_a/b_entry` | per-match | NO |
+| `consumed_a/b` | per-match | NO |
 | `instructions_sysvar` | always | ✅ |
 | `batch_validity_marker` | per-batch (derivable from the payload) | ✅ per-batch ALT |
 | `system_program` | always | ✅ |
@@ -1681,7 +1699,7 @@ churn is needed.
 The settle adds a 1-byte `match_index` + 4 × 32-byte Merkle
 siblings = 129 bytes to ix.data. That pushed `tee_forced_settle_batched`
 over the 1232-byte cap even with the static settle ALT. Fix: stack a
-second ALT, created once per batch, holding the **9 PDAs** that vary
+second ALT, created once per batch, holding the **7 PDAs** that vary
 per match but are derivable from the payload alone:
 
 | Account | Why it's in the per-batch ALT |
@@ -1690,20 +1708,20 @@ per match but are derivable from the payload alone:
 | `note_lock_b` | derived from `payload.note_b_commitment` |
 | `note_lock_e` | derived from `payload.note_e_commitment` (or zero) |
 | `note_lock_f` | derived from `payload.note_f_commitment` (or zero) |
-| `consumed_note_a` | derived from `payload.note_a_commitment` (TEE-consume guard) |
+| `consumed_note_a` | derived from `payload.note_a_commitment` (consume-once guard) |
 | `consumed_note_b` | derived from `payload.note_b_commitment` |
-| `nullifier_a` | derived from `payload.nullifier_a` |
-| `nullifier_b` | derived from `payload.nullifier_b` |
 | `batch_validity_marker` | derived from the batch's `merkle_root` |
 
-Folding the consumed-note + nullifier PDAs into the ALT (they were
-inline before) is what keeps the **continuation/change-note** settle —
-where `note_lock_e/f` are non-zero so the exact-fill dedup disappears
-and the tx grows — under the cap. The settle tx lands at **≤ 1160 B**
-(was ~1226 B for one match before this folding), comfortably under 1232
-for both exact-fill and change-note paths.
+(The two `nullifier_{a,b}` PDAs were dropped from both the settle tx and
+this ALT — see §9's account-table note.) Folding the consumed-note PDAs
+into the ALT (they were inline before) is what keeps the
+**continuation/change-note** settle — where `note_lock_e/f` are non-zero
+so the exact-fill dedup disappears and the tx grows — under the cap. The
+settle tx lands comfortably under 1232 for both exact-fill and
+change-note paths (with even more headroom now that the two nullifier
+accounts are gone).
 
-Because the per-batch ALT now carries 9 addresses per match (and a
+Because the per-batch ALT now carries 7 addresses per match (and a
 batch packs up to N=16 matches → well past the ~30-address ceiling a
 single `extendLookupTable` tx can hold), the extend is **chunked**:
 `MAX_EXTEND_ADDRESSES = 25` addresses per extend tx (`settle/alt.rs::

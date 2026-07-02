@@ -17,7 +17,7 @@
 //!   4. Asserts the BatchValidityMarker PDA exists at the
 //!      [b"batch_validity", root]-derived address + non-expired.
 //!   5. Applies the same conservation laws + state mutations as the
-//!      per-match handler. (Lock + consumed-note + nullifier writes +
+//!      per-match handler. (Lock + consumed-note writes +
 //!      Merkle-tree appends + optional re-locks.)
 //!   6. Closes the marker, refunding rent to `tee_authority`.
 //!
@@ -216,24 +216,16 @@ pub struct TeeForcedSettleBatched<'info> {
     )]
     pub consumed_b: AccountLoader<'info, ConsumedNoteEntry>,
 
-    #[account(
-        init,
-        payer = tee_authority,
-        space = 8 + size_of::<NullifierEntry>(),
-        seeds = [NullifierEntry::SEED, payload.nullifier_a.as_ref()],
-        bump,
-    )]
-    pub nullifier_a_entry: AccountLoader<'info, NullifierEntry>,
-
-    #[account(
-        init,
-        payer = tee_authority,
-        space = 8 + size_of::<NullifierEntry>(),
-        seeds = [NullifierEntry::SEED, payload.nullifier_b.as_ref()],
-        bump,
-    )]
-    pub nullifier_b_entry: AccountLoader<'info, NullifierEntry>,
-
+    // NOTE: the two per-match `NullifierEntry` inits were REMOVED here. The
+    // TEE-supplied `payload.nullifier_a/b` are unconstrained (no nullifier
+    // signal in VALID_MATCH_BATCH; `compute_match_leaf` binds only the note
+    // commitments + batch_slot), so writing them served no soundness purpose
+    // and enabled a griefing freeze (a compromised TEE could pre-claim a
+    // victim's future withdraw nullifier) while leaving the real double-spend
+    // guard to the commitment-keyed `consumed_a/b` above (which `withdraw` now
+    // also writes). Dropping them also reclaims 2 `init` CPIs + 2 accounts off
+    // the ~100-B-from-cap Tx D (CLAUDE.md §6). `payload.nullifier_a/b` are
+    // still carried + signed (canonical hash unchanged) but no longer written.
     /// CHECK: Seeds validated in handler when re-lock is requested.
     #[account(mut)]
     pub note_lock_e: UncheckedAccount<'info>,
@@ -362,7 +354,7 @@ pub fn tee_forced_settle_batched_handler(
 
     // ────────────────────────────────────────────────────────────────────
     // From here down, IDENTICAL to `tee_forced_settle_handler` — lock
-    // checks, conservation laws, consumed-note / nullifier writes,
+    // checks, conservation laws, consumed-note writes,
     // Merkle-tree appends, optional re-locks. We duplicate rather than
     // share via a helper because the parent Context<T> types differ
     // (TeeForcedSettle vs TeeForcedSettleBatched); a refactor into a
@@ -417,18 +409,8 @@ pub fn tee_forced_settle_batched_handler(
     cb.bump = ctx.bumps.consumed_b;
     cb._padding = [0u8; 7];
 
-    // Mark nullifiers spent.
-    let na = &mut ctx.accounts.nullifier_a_entry.load_init()?;
-    na.nullifier = payload.nullifier_a;
-    na.spent_slot = clock.slot;
-    na.bump = ctx.bumps.nullifier_a_entry;
-    na._padding = [0u8; 7];
-
-    let nb = &mut ctx.accounts.nullifier_b_entry.load_init()?;
-    nb.nullifier = payload.nullifier_b;
-    nb.spent_slot = clock.slot;
-    nb.bump = ctx.bumps.nullifier_b_entry;
-    nb._padding = [0u8; 7];
+    // (Nullifier writes removed — see the account-struct note above. The
+    // commitment-keyed `consumed_a/b` are the consume-once guard.)
 
     // Append output leaves to THIS shard: note_c, note_d, note_e (if any),
     // note_f (if any), then the two batch fee notes (base, quote) if any.

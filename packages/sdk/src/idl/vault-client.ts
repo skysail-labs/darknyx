@@ -631,7 +631,9 @@ export function buildWithdrawInstruction(
       { pubkey: p.tokenMint, isSigner: false, isWritable: false },
       { pubkey: vaultTokenAcct, isSigner: false, isWritable: true },
       { pubkey: p.destinationTokenAccount, isSigner: false, isWritable: true },
-      { pubkey: consumedNote, isSigner: false, isWritable: false },
+      // consumed_note is now `init`'d by withdraw (the commitment-keyed
+      // consume-once guard shared with TEE settle) → writable.
+      { pubkey: consumedNote, isSigner: false, isWritable: true },
       { pubkey: noteLock, isSigner: false, isWritable: false },
       { pubkey: nullifierEntry, isSigner: false, isWritable: true },
       { pubkey: outstandingMint, isSigner: false, isWritable: true },

@@ -48,6 +48,161 @@ fn seed_single_match(h: &mut Harness, tag: u8) -> (MatchResultPayload, [[u8; 32]
     (p, proof, root)
 }
 
+// ===========================================================================
+// Regression — withdraw→settle double-spend is CLOSED (the consume-guard fix).
+//
+// Before the fix a withdrawn note left NO commitment-keyed consume guard:
+// `withdraw` only inited `NullifierEntry[nullifier]` + *read* (never wrote)
+// `ConsumedNoteEntry[commitment]`, while settle consumes a note by its
+// COMMITMENT (`consumed_a`) and inited a `NullifierEntry` at the TEE-supplied,
+// UNCONSTRAINED `payload.nullifier_a`. So an already-withdrawn note could still
+// be settled: the settle's `consumed_a` found no prior entry, and its nullifier
+// was attacker-chosen so it never collided with the withdraw's real one. The
+// same note paid out twice. (A litesvm PoC confirmed this reproduces on the
+// pre-fix code before the fix landed.)
+//
+// The fix: `withdraw` now ALSO inits `ConsumedNoteEntry[commitment]`, making
+// the commitment-keyed entry the single trustless consume-once guard shared by
+// both paths. This test runs a REAL end-to-end withdraw (real SPL mint +
+// deposit + snarkjs VALID_SPEND proof) and asserts a subsequent settle of the
+// same note now REVERTS on the `consumed_a` init collision.
+// ===========================================================================
+#[test]
+fn withdraw_then_settle_double_spend_is_blocked() {
+    let mut h = Harness::setup();
+
+    // ── Deposit note X into a fresh shard (leaf 0) with a real SPL mint ──
+    let mint = create_spl_mint(&mut h, 6);
+    let depositor = Keypair::new();
+    h.svm
+        .airdrop(&depositor.pubkey(), 10_000_000_000)
+        .expect("airdrop depositor");
+    let secret = NoteSecret::from_seeds(0x41, 0x42, 0x43);
+    let note = deposit_note(&mut h, &depositor, 0, secret, &mint, 1_234_567);
+
+    // ── Withdraw X with a real VALID_SPEND proof. Tokens leave the vault. ──
+    let dest = create_spl_token_account(&mut h, &mint, &depositor.pubkey(), 0);
+    let wtx = build_withdraw_tx(&h, &note, &depositor, &dest);
+    h.svm
+        .send_transaction(wtx)
+        .expect("withdraw of X must succeed");
+
+    // THE FIX: withdraw wrote the commitment-keyed consume guard for X.
+    assert!(
+        consumed_note_exists(&h, &note.commitment),
+        "withdraw must init ConsumedNoteEntry[X] (the shared consume-once guard)",
+    );
+
+    // ── A malicious matcher now tries to settle a batch CONSUMING withdrawn X ──
+    // (Seed a NoteLock for X — the attacker locks the already-withdrawn note —
+    // plus a counterparty note.)
+    let note_b = fr_safe(0xB0, 0x01);
+    let oid_a = [0x10u8; 16];
+    let oid_b = [0x11u8; 16];
+    seed_note_lock(&mut h, &note.commitment, &oid_a, 1_000_000, 5_000);
+    seed_note_lock(&mut h, &note_b, &oid_b, 1_000_000, 100);
+    let p = MatchResultPayload::exact_fill(
+        [0xE0u8; 16],
+        note.commitment,
+        note_b,
+        fr_safe(0xC0, 0x01),
+        fr_safe(0xD0, 0x01),
+        [0xF0u8; 32], // attacker-chosen nullifier_a …
+        [0xF1u8; 32], // … distinct from the real nullifier(X).
+        oid_a,
+        oid_b,
+        100,
+        5_000,
+    );
+    assert_ne!(p.nullifier_a, note.nullifier);
+
+    let m = read_note_lock_mint(&h, &note.commitment);
+    let leaf = compute_match_leaf_for(&p, &m, &m);
+    let mut leaves = [[0u8; 32]; 16];
+    leaves[0] = leaf;
+    let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
+    seed_batch_validity_marker(&mut h, &root, u64::MAX / 2);
+
+    let stx = build_settle_batched_tx(&h, 0, &p, 0, &proof, &root);
+    let res = h.svm.send_transaction(stx);
+
+    // POST-FIX: the settle REVERTS — `consumed_a` init collides with the entry
+    // withdraw wrote, so the already-withdrawn note cannot be consumed again.
+    assert!(
+        res.is_err(),
+        "withdraw→settle double-spend must be blocked (settle's consumed_a init \
+         collides with the withdraw's ConsumedNoteEntry[X]); got Ok",
+    );
+}
+
+// ===========================================================================
+// Regression — settle→withdraw double-spend is CLOSED.
+//
+// The mirror direction: a note consumed by a settle (which inits
+// `ConsumedNoteEntry[X]`) can no longer be withdrawn. Post-fix withdraw's own
+// `consumed_note` init collides on that PDA (pre-fix it was the manual Layer-3
+// check; the guarantee is unchanged, but the guard is now a single `init`).
+// ===========================================================================
+#[test]
+fn settle_then_withdraw_double_spend_is_blocked() {
+    let mut h = Harness::setup();
+
+    // Deposit note X (real mint) so it's a spendable leaf with a real proof.
+    let mint = create_spl_mint(&mut h, 6);
+    let depositor = Keypair::new();
+    h.svm
+        .airdrop(&depositor.pubkey(), 10_000_000_000)
+        .expect("airdrop depositor");
+    let secret = NoteSecret::from_seeds(0x51, 0x52, 0x53);
+    let note = deposit_note(&mut h, &depositor, 0, secret, &mint, 2_222_222);
+
+    // ── Settle a batch that consumes X first ──
+    let note_b = fr_safe(0xB0, 0x02);
+    let oid_a = [0x20u8; 16];
+    let oid_b = [0x21u8; 16];
+    seed_note_lock(&mut h, &note.commitment, &oid_a, 1_000_000, 5_000);
+    seed_note_lock(&mut h, &note_b, &oid_b, 1_000_000, 100);
+    let p = MatchResultPayload::exact_fill(
+        [0xE0u8; 16],
+        note.commitment,
+        note_b,
+        fr_safe(0xC0, 0x02),
+        fr_safe(0xD0, 0x02),
+        [0xF0u8; 32],
+        [0xF1u8; 32],
+        oid_a,
+        oid_b,
+        100,
+        5_000,
+    );
+    let m = read_note_lock_mint(&h, &note.commitment);
+    let leaf = compute_match_leaf_for(&p, &m, &m);
+    let mut leaves = [[0u8; 32]; 16];
+    leaves[0] = leaf;
+    let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
+    seed_batch_validity_marker(&mut h, &root, u64::MAX / 2);
+    h.svm
+        .send_transaction(build_settle_batched_tx(&h, 0, &p, 0, &proof, &root))
+        .expect("settle consuming X succeeds");
+    assert!(consumed_note_exists(&h, &note.commitment));
+
+    // FREEZE-VECTOR CHECK: the settle wrote NO NullifierEntry (the accounts were
+    // removed) — so a compromised TEE can no longer pre-claim a victim's future
+    // withdraw nullifier via the settle path.
+    assert!(
+        !nullifier_exists(&h, &p.nullifier_a),
+        "settle must not write NullifierEntry[payload.nullifier_a] (freeze vector removed)",
+    );
+
+    // ── Now withdrawing the already-consumed X must REVERT ──
+    let dest = create_spl_token_account(&mut h, &mint, &depositor.pubkey(), 0);
+    let wtx = build_withdraw_tx(&h, &note, &depositor, &dest);
+    assert!(
+        h.svm.send_transaction(wtx).is_err(),
+        "withdraw of an already-settle-consumed note must be blocked",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // CU profiling — TRUE WORST CASE: a single settle that appends all SIX output
 // leaves (note_c, note_d, buyer change note_e, seller change note_f, base-fee
