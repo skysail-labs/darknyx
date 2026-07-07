@@ -441,8 +441,11 @@ loop {
 Three structural constraints force batched matching:
 
 1. **`VALID_MATCH_BATCH` is a batch primitive.** The N=16 circuit
-   binds *one* clearing price, *one* Merkle root, *one* oracle TWAP,
-   *one* expiry, *one* fee rate to a Poseidon-hashed batch root.
+   folds up to 16 matches into ONE proof over ONE Poseidon-hashed
+   batch Merkle root — its public inputs are just that root + the fee
+   rate + the protocol-owner commitment (there is NO oracle TWAP or
+   clearing-price band bound in the proof; price fairness is
+   matcher-side, see "What a malicious TEE could actually do" below).
    Continuous matching would degenerate it to N=1 — which is the
    v3.1 per-match `VALID_CREATE` + `VALID_PRICE` shape we deleted in
    Phase 1c-hard. Not going back.
@@ -737,14 +740,29 @@ is a genuine Pyth value. The trust is rooted in:
 
 #### What a malicious TEE could actually do
 
-A compromised TEE *could* claim a false `pyth_twap`, but the
-worst it can do is **defeat the circuit breaker** — clear a
-batch when the real Pyth says it shouldn't. The
-note-conservation invariant (`note.amount == trade_leg +
-change_leg + fee`) holds independently of `pyth_twap` because
-it's enforced inside VALID_MATCH_BATCH against the matcher's
-own claimed amounts. So no funds are lost; the worst-case
-attack is "the TEE lets a non-economic batch through."
+A compromised TEE *could* claim a false `pyth_twap` and, more
+importantly, pick an **unfair clearing price**. Both the oracle
+circuit breaker AND the traders' limit prices are enforced only
+by the in-enclave matcher (trusted code), NOT by
+`VALID_MATCH_BATCH`: the batch proof binds output-note
+construction + per-leg conservation + range + fee floor, and its
+only in-circuit price constraint is the definitional
+`quote == base·price` — nothing ties the price to a limit or an
+oracle band. So conservation holding does **not** bound the
+price. A compromised TEE colluding with a counterparty leg (its
+own note as `note_b`) can clear a victim's order outside its
+limit and route the surplus to the colluding leg, extracting
+value up to the order size — settlement is still atomic and the
+proof still verifies.
+
+The proof DOES prevent value *inflation* (nothing is minted from
+nothing — conservation + 64-bit range checks) and bounds the TEE
+to no-inflation + liveness-denial. But **execution-price fairness
+is TEE-trusted**, not proof-enforced. Client-side fill-memo
+inspection *detects* such a fill after the fact; it does not
+prevent the on-chain settlement. Binding the traders' signed
+limit prices into the circuit is a pre-mainnet item (see
+CRYPTOGRAPHY.md §2 non-goals + audit_1 F-04).
 
 This is the v2 trade-off we accepted to skip the per-batch
 on-chain Pyth-verification cost. v3 closes the gap: attach a

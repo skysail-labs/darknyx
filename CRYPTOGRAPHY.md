@@ -54,14 +54,17 @@ The on-chain trust surface is tightened so the TEE can deny liveness but
   solvency counter. Closes phantom-locking, forever-locking, mint lies.
 - **Settle-time proof.** `verify_match_batch` checks ONE `VALID_MATCH_BATCH`
   Groth16 covering up to N=16 matches — proving output-note construction
-  (right mint/amount/owner), the clearing-price band, and per-leg
-  conservation, all hashed into one batch Merkle root. It writes ONE
-  `BatchValidityMarker` (keyed by that root); each `tee_forced_settle_batched`
-  walks a depth-4 inclusion path against it; `close_batch_validity_marker`
-  reclaims the marker's rent after the batch. Closes "TEE misroutes a leg /
-  mis-mints / clears at a bad price." (Earlier designs split this into
-  separate per-match `VALID_CREATE` + `VALID_PRICE` circuits; those were
-  folded into the batched proof and removed.)
+  (right mint/amount/owner), per-leg conservation, no value inflation (every
+  amount range-checked to 64 bits), and the fee floor, all hashed into one
+  batch Merkle root. It writes ONE `BatchValidityMarker` (keyed by that root);
+  each `tee_forced_settle_batched` walks a depth-4 inclusion path against it;
+  `close_batch_validity_marker` reclaims the marker's rent after the batch.
+  Closes "TEE misroutes a leg / mis-mints / inflates value." It does **not**
+  prove execution-price fairness — the clearing price is bound only to
+  `quote == base·price` (definitional), with no limit or oracle band, so price
+  fairness stays **TEE-trusted** (see the §2 non-goals row). (Earlier designs
+  split this into separate per-match `VALID_CREATE` + `VALID_PRICE` circuits;
+  those were folded into the batched proof and removed.)
 - **Signer pinning.** Every TEE-authority ix checks the signer against
   `VaultConfig.tee_pubkeys` (the set of K authorized shard fee-payer keys),
   each rotated to a CVM dstack-derived key; clients verify the enclave's TDX
@@ -94,7 +97,7 @@ through a Phala CVM (`cvm-settle-e2e`).
 
 | Threat | Status |
 |---|---|
-| TEE clears at a bad price | **Closed** — the clearing-price band is a constraint inside `VALID_MATCH_BATCH`, verified on-chain by `verify_match_batch`. |
+| TEE clears at a bad price | **TEE-trusted (open)** — price fairness is enforced ONLY by the in-enclave matcher (limit-price matching + Pyth-TWAP circuit breaker), NOT by the proof. `VALID_MATCH_BATCH` binds the clearing price only to `quote == base·price` (definitional) + conservation + range + fee floor — there is NO limit/oracle band in-circuit, and no trader limit price is bound on-chain (orders never touch L1). A compromised TEE colluding with a counterparty leg can therefore clear a victim's order outside its limit and route the surplus to the colluding leg, extracting value up to the order size; the proof still bounds the TEE to no-inflation + liveness. Client-side fill-memo inspection *detects* (does not prevent) it. Pre-mainnet: bind signed limits in-circuit or accept as TEE-trusted — tracked alongside the external circuit audit (audit_1 F-04). |
 | TEE-binary substitution | **Open** — `tee_pubkeys` are software Ed25519 keys. Production must pin them to an attested enclave. |
 | Trusted-setup ceremony soundness | **Open** — all four Groth16 circuits use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
 | Aggregate trade analytics from settle txs | **By design** — match volume + clearing price are public per settled batch. |
@@ -564,12 +567,16 @@ The depth is enforced consistently in:
 
 Four trade-path Groth16 circuits ship, plus the auxiliary `VALID_MERGE(K)`
 consolidation circuit (§7.5). The matching/settlement validity proof,
-`VALID_MATCH_BATCH`, proves **output-note construction + price-band +
-conservation** for an entire batch (≤ N=16 matches) in one proof — it is
-what earlier designs split across separate `VALID_CREATE` (output-note
-correctness) and `VALID_PRICE` (oracle band) circuits, now folded inline
-and verified on-chain by `verify_match_batch`. Those two standalone
-circuits were removed.
+`VALID_MATCH_BATCH`, proves **output-note construction + per-leg conservation
++ no-inflation range checks + the fee floor** for an entire batch (≤ N=16
+matches) in one proof — it is what earlier designs split across separate
+`VALID_CREATE` (output-note correctness) and `VALID_PRICE` circuits, now folded
+inline and verified on-chain by `verify_match_batch`. Those two standalone
+circuits were removed. **NOTE:** the in-circuit `VALID_PRICE` part is only the
+definitional `quote == base·price` + range checks — it does **not** enforce an
+oracle band or the traders' limit prices. That price-fairness check lives in
+the in-enclave matcher (TEE-trusted), so a compromised TEE is not bound to a
+fair execution price by the proof (see the §2 non-goals row).
 
 | Circuit | Constraints | Public inputs | Purpose |
 |---|---|---|---|
