@@ -344,7 +344,15 @@ pub fn tee_forced_settle_batched_handler(
             marker_data.len() >= 8 + 32 + 8,
             VaultError::InvalidBatchBinding
         );
-        let expiry_slot = u64::from_le_bytes(marker_data[8 + 32..8 + 32 + 8].try_into().unwrap());
+        // The length check above guarantees this fixed 8-byte slice exists, so
+        // the conversion is infallible; map to a typed error instead of
+        // `.unwrap()` to keep panics out of the handler (a panic would fail the
+        // tx with an opaque error rather than a program error code).
+        let expiry_slot = u64::from_le_bytes(
+            marker_data[8 + 32..8 + 32 + 8]
+                .try_into()
+                .map_err(|_| error!(VaultError::InvalidBatchBinding))?,
+        );
         drop(marker_data);
         require!(
             clock.slot < expiry_slot,

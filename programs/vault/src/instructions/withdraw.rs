@@ -204,8 +204,15 @@ pub fn withdraw_handler(
     c._padding = [0u8; 7];
 
     // ----- Decrement outstanding counter -----
-    // Subtract is safe because of the InsufficientOutstanding check above.
-    ctx.accounts.outstanding_mint.outstanding -= amount;
+    // The InsufficientOutstanding check above already guarantees no underflow;
+    // `checked_sub` makes that defense-in-depth explicit (and mirrors deposit's
+    // `checked_add`) so a future reorder of the guard can't silently wrap.
+    ctx.accounts.outstanding_mint.outstanding = ctx
+        .accounts
+        .outstanding_mint
+        .outstanding
+        .checked_sub(amount)
+        .ok_or(error!(VaultError::InsufficientOutstanding))?;
 
     // ----- Transfer tokens out -----
     let bump = ctx.accounts.vault_config.load()?.bump;
