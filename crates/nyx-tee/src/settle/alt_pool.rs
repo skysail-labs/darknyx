@@ -1,11 +1,11 @@
 //! Rolling Address Lookup Table pool for the settle worker.
 //!
-//! Each batch's settle tx (Tx D) hoists 5 derivable per-batch PDAs
-//! (`note_lock_a/b/e/f` + `batch_validity_marker`) into an ALT to stay
-//! under the 1232-byte cap. The naive approach — create a throwaway ALT
+//! Each batch's settle tx (Tx D) hoists 7 derivable per-batch PDAs
+//! (`note_lock_a/b/e/f` + `consumed_a/b` + `batch_validity_marker`) into an ALT
+//! to stay under the 1232-byte cap. The naive approach — create a throwaway ALT
 //! per batch — burns a `create` tx + rent every batch and never reclaims
 //! it. This pool instead keeps a **long-lived `current` ALT** and just
-//! `extend`s it with each batch's 5 addresses, rotating to a fresh ALT
+//! `extend`s it with each batch's 7 addresses, rotating to a fresh ALT
 //! (and deactivating the old one) only when it nears Solana's 256-address
 //! cap. See `docs/v3.5-migration.md` §"Rolling-ALT pool".
 //!
@@ -27,7 +27,7 @@ use solana_message::AddressLookupTableAccount;
 /// Soft cap on addresses per ALT before the pool rotates to a fresh one.
 /// Solana's HARD cap is 256 addresses/ALT; we rotate at 246 for a
 /// deliberate 10-slot slack (not an arbitrary number). That slack (a)
-/// guarantees a worst-case 5-address single match can always be appended
+/// guarantees a worst-case 7-address single match can always be appended
 /// without crossing 256 mid-batch — rotation happens BEFORE the extend,
 /// never part-way through one — and (b) leaves headroom for a modest
 /// future batch-size bump (e.g. two small batches, or a few extra

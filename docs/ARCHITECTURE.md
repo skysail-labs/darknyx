@@ -349,8 +349,8 @@ verification + the change-note store, and the hand-coded `vault-client.ts`
 
 Plus the per-mint `vault_token_account` PDAs (the actual SPL custody) and a
 rolling per-batch Address Lookup Table (managed by the settle worker) holding
-the payload-derivable settle PDAs — the note-lock, consumed-note, nullifier,
-and marker accounts — so each Tx D references them by 1-byte index. The K
+the payload-derivable settle PDAs — the note-lock, consumed-note, and marker
+accounts — so each Tx D references them by 1-byte index. The K
 `MerkleTree` PDAs live in the static settle ALT alongside `vault_config` +
 sysvar + system program.
 

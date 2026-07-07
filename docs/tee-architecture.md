@@ -802,7 +802,7 @@ For each batch with ≥1 real matches:
    - **Tx B — `verify_match_batch(merkle_root, expiry, proof)`** — once
      per batch.
    - **Tx C — per-batch ALT create + chunked extend**: the per-batch ALT
-     now holds 9 PDAs/match (locks + consumed + nullifier + marker), so
+     now holds 7 PDAs/match (locks + consumed + marker), so
      the extend is **chunked** (`MAX_EXTEND_ADDRESSES = 25`) and the
      chunks fired **concurrently**; the worker re-reads the ALT's
      canonical on-chain address order before building any settle tx (see

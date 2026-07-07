@@ -37,8 +37,8 @@ fn to_address(p: &Pubkey) -> Address {
 /// per address inline; with the tx envelope (sig + header + ~4 account keys +
 /// blockhash + ix overhead ≈ 250 B) that caps a single extend tx at ~30
 /// addresses under Solana's 1232-byte limit. 25 leaves a safety margin — a
-/// batch needing more addresses (e.g. N=16 with the lock + consumed + nullifier
-/// PDAs) is split across SEQUENTIAL extend txs (order matters: the ALT's index
+/// batch needing more addresses (e.g. N=16 with the lock + consumed PDAs) is
+/// split across SEQUENTIAL extend txs (order matters: the ALT's index
 /// mapping must mirror the in-memory address list).
 pub const MAX_EXTEND_ADDRESSES: usize = 25;
 
@@ -187,7 +187,7 @@ mod tests {
     fn extend_chunks_split_large_address_sets() {
         let auth = dummy_authority();
         let alt = Address::new_from_array([0x99; 32]);
-        // 98 addresses (≈ N=16 with lock+consumed+nullifier PDAs) → ceil(98/25)
+        // 98 addresses (≈ N=16 with lock+consumed PDAs) → ceil(98/25)
         // = 4 extend txs, none over the per-tx address cap.
         let addrs: Vec<Address> = (0u16..98)
             .map(|i| Address::new_from_array([(i % 251) as u8; 32]))

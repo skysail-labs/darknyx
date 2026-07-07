@@ -502,9 +502,10 @@ param, a longer payload field — risks the cap.
 * **Static accounts go in the settle ALT** (created at devnet-setup,
   `.devnet/e2e-config.json::settleLookupTable`): `vault_config`,
   `instructions_sysvar`, `system_program`.
-* **Per-batch ALT** holds the 5 PDAs derivable from the payload
-  (`note_lock_a/b/e/f` + `batch_validity_marker`). The CVM settle worker
-  builds a rolling pool of these (ALT deactivation has a ~512-slot cooldown).
+* **Per-batch ALT** holds the 7 PDAs derivable from the payload
+  (`note_lock_a/b/e/f` + `consumed_a/b` + `batch_validity_marker`). The CVM
+  settle worker builds a rolling pool of these (ALT deactivation has a ~512-slot
+  cooldown).
 * **`createLookupTable` `recentSlot`** must come from
   `getLatestBlockhashAndContext().context.slot`, NOT `getSlot("confirmed")`
   (which can return a leader-skipped slot → "is not a recent slot").

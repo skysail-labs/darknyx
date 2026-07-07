@@ -58,17 +58,23 @@ pub struct Withdraw<'info> {
     )]
     pub destination_token_account: Account<'info, TokenAccount>,
 
-    /// If the note has been consumed, this account must exist; we assert
-    /// `consumed_note` is NOT found on the *alternate* path, but because Anchor
-    /// requires all accounts up-front, we use `AccountInfo` + manual deref to
-    /// reject only if it is initialized.
-    /// (Layer-3 guard before ZK verification — Section 19.4 of the spec.)
+    /// Consume-once guard. `init` makes the commitment-keyed `ConsumedNoteEntry`
+    /// the single trustless double-spend guard SHARED with TEE settle
+    /// (`tee_forced_settle_batched::consumed_a/b`): a note withdrawn here can no
+    /// longer be consumed by a later settle (that settle's `consumed_a` init
+    /// collides on this PDA), and a settle-consumed note can no longer be
+    /// withdrawn (this init collides). Keying on the note COMMITMENT — which is
+    /// public AND circuit-bound — closes the gap that keying on the nullifier
+    /// left open: the settle's nullifier is TEE-supplied + unconstrained, so it
+    /// could never be relied on to block a cross-path double-spend.
     #[account(
+        init,
+        payer = payer,
+        space = 8 + size_of::<ConsumedNoteEntry>(),
         seeds = [ConsumedNoteEntry::SEED, note_commitment.as_ref()],
         bump,
     )]
-    /// CHECK: validated manually in the handler.
-    pub consumed_note_slot: UncheckedAccount<'info>,
+    pub consumed_note: AccountLoader<'info, ConsumedNoteEntry>,
 
     /// Same pattern for note lock — must not be initialized.
     #[account(
@@ -115,14 +121,9 @@ pub fn withdraw_handler(
     require!(amount > 0, VaultError::ZeroAmount);
 
     // ----- Layer 3: consumed-notes guard -----
-    // If the slot is already initialized (owner == program_id, has data), reject.
-    {
-        let info = &ctx.accounts.consumed_note_slot;
-        // Uninitialized PDA: owner = system_program, data empty.
-        if info.owner == ctx.program_id {
-            return err!(VaultError::NoteAlreadyConsumed);
-        }
-    }
+    // Enforced by the `consumed_note` `init` constraint (a second withdraw OR a
+    // prior settle-consume of this commitment makes the init fail). The entry is
+    // written near the bottom of the handler, alongside the nullifier.
 
     // ----- Layer 1: note-lock guard -----
     {
@@ -185,15 +186,33 @@ pub fn withdraw_handler(
     );
 
     // ----- Mark nullifier as spent -----
+    let slot = Clock::get()?.slot;
     let n = &mut ctx.accounts.nullifier_entry.load_init()?;
     n.nullifier = nullifier;
-    n.spent_slot = Clock::get()?.slot;
+    n.spent_slot = slot;
     n.bump = ctx.bumps.nullifier_entry;
     n._padding = [0u8; 7];
 
+    // ----- Mark the note consumed (commitment-keyed) -----
+    // The shared consume-once guard with TEE settle. `match_id` is the all-zero
+    // sentinel — there is no match on the withdraw path.
+    let c = &mut ctx.accounts.consumed_note.load_init()?;
+    c.note_commitment = note_commitment;
+    c.match_id = [0u8; 16];
+    c.consumed_slot = slot;
+    c.bump = ctx.bumps.consumed_note;
+    c._padding = [0u8; 7];
+
     // ----- Decrement outstanding counter -----
-    // Subtract is safe because of the InsufficientOutstanding check above.
-    ctx.accounts.outstanding_mint.outstanding -= amount;
+    // The InsufficientOutstanding check above already guarantees no underflow;
+    // `checked_sub` makes that defense-in-depth explicit (and mirrors deposit's
+    // `checked_add`) so a future reorder of the guard can't silently wrap.
+    ctx.accounts.outstanding_mint.outstanding = ctx
+        .accounts
+        .outstanding_mint
+        .outstanding
+        .checked_sub(amount)
+        .ok_or(error!(VaultError::InsufficientOutstanding))?;
 
     // ----- Transfer tokens out -----
     let bump = ctx.accounts.vault_config.load()?.bump;

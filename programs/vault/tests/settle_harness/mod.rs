@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use ark_bn254::Fr;
+use ark_ff::{BigInteger, PrimeField};
 use borsh::BorshSerialize;
 use litesvm::LiteSVM;
 use solana_address::Address;
@@ -1415,8 +1417,6 @@ pub fn build_settle_batched_ix_for(
     let (lock_b, _) = note_lock_pda(&h.vault_id, &payload.note_b_commitment);
     let (consumed_a, _) = consumed_note_pda(&h.vault_id, &payload.note_a_commitment);
     let (consumed_b, _) = consumed_note_pda(&h.vault_id, &payload.note_b_commitment);
-    let (null_a, _) = nullifier_pda(&h.vault_id, &payload.nullifier_a);
-    let (null_b, _) = nullifier_pda(&h.vault_id, &payload.nullifier_b);
     let (lock_e, _) = note_lock_pda(&h.vault_id, &payload.note_e_commitment);
     let (lock_f, _) = note_lock_pda(&h.vault_id, &payload.note_f_commitment);
 
@@ -1448,8 +1448,6 @@ pub fn build_settle_batched_ix_for(
             AccountMeta::new(lock_b, false),
             AccountMeta::new(consumed_a, false),
             AccountMeta::new(consumed_b, false),
-            AccountMeta::new(null_a, false),
-            AccountMeta::new(null_b, false),
             AccountMeta::new(lock_e, false),
             AccountMeta::new(lock_f, false),
             AccountMeta::new_readonly(instructions_sysvar, false),
@@ -1663,4 +1661,559 @@ pub fn build_close_batch_validity_marker_ix(
         ],
         data,
     }
+}
+
+// ============================================================================
+// Real SPL + deposit/withdraw harness — for the withdraw⇄settle consume-guard
+// double-spend PoC.
+//
+// Unlike the settle scaffolding above (which fabricates PDAs via `set_account`
+// to skip proving), the withdraw path here is END-TO-END: a real SPL mint +
+// funded token accounts, a real on-chain `deposit` that appends the note leaf,
+// and a REAL snarkjs VALID_SPEND proof driving `withdraw`. This is the ONLY
+// faithful way to reproduce the double-spend, because withdraw's on-chain
+// `ConsumedNoteEntry` footprint (the guard the fix adds) only persists if the
+// whole withdraw tx — Groth16 verify + SPL `transfer_checked` — succeeds; a
+// garbage-proof withdraw would revert the inits along with everything else.
+//
+// The proof-generation + Merkle-witness plumbing mirrors `zk_spend_roundtrip.rs`
+// (the pure-verifier round-trip) but drives it through the on-chain `withdraw`
+// instruction inside LiteSVM. Requires the `valid_spend` circuit artefacts
+// (CI's vault-litesvm job downloads them + has snarkjs via `npm ci`).
+// ============================================================================
+
+const TREE_DEPTH: usize = 20;
+
+/// Classic SPL Token program id (loaded into LiteSVM by `with_default_programs`).
+pub fn spl_token_id() -> Pubkey {
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        .parse()
+        .unwrap()
+}
+
+fn rent_sysvar_id() -> Pubkey {
+    "SysvarRent111111111111111111111111111111111"
+        .parse()
+        .unwrap()
+}
+
+fn vault_token_pda(h: &Harness, mint: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"vault_token", mint.as_ref()], &h.vault_id)
+}
+
+fn outstanding_mint_pda(h: &Harness, mint: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"outstanding_mint", mint.as_ref()], &h.vault_id)
+}
+
+/// SPL Mint (82 bytes): `mint_authority = Some(authority)`, `decimals`, initialised.
+fn pack_spl_mint(authority: &Pubkey, decimals: u8) -> Vec<u8> {
+    let mut d = vec![0u8; 82];
+    d[0..4].copy_from_slice(&1u32.to_le_bytes()); // COption::Some(mint_authority)
+    d[4..36].copy_from_slice(&authority.to_bytes());
+    // supply (36..44) = 0
+    d[44] = decimals;
+    d[45] = 1; // is_initialized
+               // freeze_authority COption::None (46..82) = 0
+    d
+}
+
+/// SPL token Account (165 bytes): `state = Initialized`, no delegate/native/close.
+fn pack_spl_token_account(mint: &Pubkey, owner: &Pubkey, amount: u64) -> Vec<u8> {
+    let mut d = vec![0u8; 165];
+    d[0..32].copy_from_slice(&mint.to_bytes());
+    d[32..64].copy_from_slice(&owner.to_bytes());
+    d[64..72].copy_from_slice(&amount.to_le_bytes());
+    // delegate COption::None (72..108) = 0
+    d[108] = 1; // AccountState::Initialized
+                // is_native COption::None (109..121), delegated_amount (121..129),
+                // close_authority COption::None (129..165) all zero.
+    d
+}
+
+fn set_spl_account(h: &mut Harness, addr: &Pubkey, data: Vec<u8>) {
+    use solana_account::Account as SolAccount;
+    let lamports = h.svm.minimum_balance_for_rent_exemption(data.len());
+    let acct = SolAccount {
+        lamports,
+        data,
+        owner: spl_token_id(),
+        executable: false,
+        rent_epoch: 0,
+    };
+    h.svm.set_account(*addr, acct).unwrap();
+}
+
+/// Create a real SPL mint (authority = `h.admin`). Returns the mint pubkey.
+pub fn create_spl_mint(h: &mut Harness, decimals: u8) -> Pubkey {
+    let mint = Keypair::new().pubkey();
+    let data = pack_spl_mint(&h.admin.pubkey(), decimals);
+    set_spl_account(h, &mint, data);
+    mint
+}
+
+/// Create a real SPL token account for `owner`/`mint` prefunded with `amount`.
+pub fn create_spl_token_account(
+    h: &mut Harness,
+    mint: &Pubkey,
+    owner: &Pubkey,
+    amount: u64,
+) -> Pubkey {
+    let ta = Keypair::new().pubkey();
+    let data = pack_spl_token_account(mint, owner, amount);
+    set_spl_account(h, &ta, data);
+    ta
+}
+
+/// The secret openings behind a note — everything the VALID_SPEND circuit needs.
+/// `owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`.
+pub struct NoteSecret {
+    pub spending_key: Fr,
+    pub r_owner: Fr,
+    pub inner_hash: Fr,
+    pub owner_commitment: Fr,
+}
+
+impl NoteSecret {
+    pub fn from_seeds(sk_seed: u8, r_owner_seed: u8, inner_seed: u8) -> Self {
+        use darkpool_crypto::field::fr_from_uniform_bytes;
+        use darkpool_crypto::poseidon::poseidon_hash;
+        let spending_key = fr_from_uniform_bytes(&[sk_seed; 32]);
+        let r_owner = fr_from_uniform_bytes(&[r_owner_seed; 32]);
+        let inner_hash = fr_from_uniform_bytes(&[inner_seed; 32]);
+        let owner_commitment = poseidon_hash(&[Fr::from(1u64), spending_key, r_owner]).unwrap();
+        Self {
+            spending_key,
+            r_owner,
+            inner_hash,
+            owner_commitment,
+        }
+    }
+}
+
+/// A note deposited on-chain via a real `deposit` ix, carrying everything the
+/// subsequent real `withdraw` needs (its commitment, nullifier, and the
+/// single-leaf Merkle witness + root).
+pub struct DepositedNote {
+    pub commitment: [u8; 32],
+    pub nullifier: [u8; 32],
+    pub amount: u64,
+    pub mint: Pubkey,
+    pub tree_id: u8,
+    pub secret: NoteSecret,
+    pub merkle_root: [u8; 32],
+    pub siblings: Vec<[u8; 32]>,
+    pub path_indices: Vec<u8>,
+}
+
+/// Deposit a note into a FRESH shard (must be empty → the note lands at leaf
+/// index 0, giving a trivial single-leaf inclusion witness). Sends a real
+/// `deposit` ix signed by `depositor` (funds a prefunded token account for it),
+/// then returns the on-chain-anchored `DepositedNote`.
+pub fn deposit_note(
+    h: &mut Harness,
+    depositor: &Keypair,
+    tree_id: u8,
+    secret: NoteSecret,
+    mint: &Pubkey,
+    amount: u64,
+) -> DepositedNote {
+    use darkpool_crypto::field::fr_to_be_bytes;
+    use darkpool_crypto::note::commitment_from_fields_v2;
+    use darkpool_crypto::poseidon::poseidon_hash;
+
+    let owner_commitment_bytes = fr_to_be_bytes(&secret.owner_commitment);
+    let inner_hash_bytes = fr_to_be_bytes(&secret.inner_hash);
+    let mint_bytes = mint.to_bytes();
+    let commitment = commitment_from_fields_v2(
+        &mint_bytes,
+        amount,
+        &owner_commitment_bytes,
+        &inner_hash_bytes,
+    )
+    .expect("note fields are Fr-safe (Poseidon outputs)");
+    // nullifier = Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash)
+    let nullifier = fr_to_be_bytes(
+        &poseidon_hash(&[Fr::from(3u64), secret.spending_key, secret.inner_hash]).unwrap(),
+    );
+
+    assert_eq!(
+        tree_leaf_count(h, tree_id),
+        0,
+        "deposit_note expects a fresh (empty) shard so the note is leaf 0",
+    );
+
+    let depositor_ta = create_spl_token_account(h, mint, &depositor.pubkey(), amount);
+
+    let (vault_pda, _) = vault_config_pda(&h.vault_id);
+    let (tree_pda, _) = merkle_tree_pda(&h.vault_id, tree_id);
+    let (vault_token, _) = vault_token_pda(h, mint);
+    let (outstanding, _) = outstanding_mint_pda(h, mint);
+
+    // deposit(tree_id: u8, amount: u64, owner_commitment: [u8;32], inner_hash: [u8;32])
+    let mut data = anchor_disc("deposit").to_vec();
+    data.push(tree_id);
+    data.extend_from_slice(&amount.to_le_bytes());
+    data.extend_from_slice(&owner_commitment_bytes);
+    data.extend_from_slice(&inner_hash_bytes);
+
+    let ix = Instruction {
+        program_id: h.vault_id,
+        accounts: vec![
+            AccountMeta::new(depositor.pubkey(), true),
+            AccountMeta::new_readonly(vault_pda, false),
+            AccountMeta::new(tree_pda, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(depositor_ta, false),
+            AccountMeta::new(vault_token, false),
+            AccountMeta::new(outstanding, false),
+            AccountMeta::new_readonly(spl_token_id(), false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(rent_sysvar_id(), false),
+        ],
+        data,
+    };
+    let tx = Transaction::new(
+        &[depositor],
+        Message::new(&[ix], Some(&depositor.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    h.svm.send_transaction(tx).expect("deposit failed");
+
+    // Single-leaf inclusion witness (index 0) → root matches the on-chain append.
+    let (siblings, path_indices, root) = merkle_witness(&[commitment], 0);
+    assert_eq!(
+        root,
+        tree_current_root(h, tree_id),
+        "witness root diverged from the on-chain post-deposit root",
+    );
+
+    DepositedNote {
+        commitment,
+        nullifier,
+        amount,
+        mint: *mint,
+        tree_id,
+        secret,
+        merkle_root: root,
+        siblings,
+        path_indices,
+    }
+}
+
+/// Read the `current_root` field out of a per-shard `MerkleTree` account.
+/// Layout: 8 disc + 8 leaf_count + 32 current_root + ...
+pub fn tree_current_root(h: &Harness, tree_id: u8) -> [u8; 32] {
+    let (pda, _) = merkle_tree_pda(&h.vault_id, tree_id);
+    let acct = h.svm.get_account(&pda).expect("merkle_tree");
+    let mut root = [0u8; 32];
+    root.copy_from_slice(&acct.data[16..48]);
+    root
+}
+
+/// Build a real `withdraw` tx driving a snarkjs VALID_SPEND proof for `note`,
+/// paid + signed by `payer`, crediting `destination_ta`.
+///
+/// NOTE on the `consumed_note` account writability: it's passed WRITABLE
+/// unconditionally. Pre-fix the handler reads it as a non-mut `UncheckedAccount`
+/// (extra writability is harmless); post-fix it is `init`'d (writability is
+/// required). One builder therefore serves both sides of the fix.
+pub fn build_withdraw_tx(
+    h: &Harness,
+    note: &DepositedNote,
+    payer: &Keypair,
+    destination_ta: &Pubkey,
+) -> Transaction {
+    let proof = build_valid_spend_proof(note);
+
+    let (vault_pda, _) = vault_config_pda(&h.vault_id);
+    let (tree_pda, _) = merkle_tree_pda(&h.vault_id, note.tree_id);
+    let (vault_token, _) = vault_token_pda(h, &note.mint);
+    let (consumed, _) = consumed_note_pda(&h.vault_id, &note.commitment);
+    let (note_lock, _) = note_lock_pda(&h.vault_id, &note.commitment);
+    let (null_entry, _) = nullifier_pda(&h.vault_id, &note.nullifier);
+    let (outstanding, _) = outstanding_mint_pda(h, &note.mint);
+
+    // withdraw(tree_id, note_commitment, nullifier, merkle_root, amount, proof)
+    let mut data = anchor_disc("withdraw").to_vec();
+    data.push(note.tree_id);
+    data.extend_from_slice(&note.commitment);
+    data.extend_from_slice(&note.nullifier);
+    data.extend_from_slice(&note.merkle_root);
+    data.extend_from_slice(&note.amount.to_le_bytes());
+    // Groth16Proof Borsh = pi_a[64] ‖ pi_b[128] ‖ pi_c[64] (fixed arrays, no len prefix).
+    data.extend_from_slice(&proof.pi_a);
+    data.extend_from_slice(&proof.pi_b);
+    data.extend_from_slice(&proof.pi_c);
+
+    let ix = Instruction {
+        program_id: h.vault_id,
+        accounts: vec![
+            AccountMeta::new(payer.pubkey(), true),
+            AccountMeta::new_readonly(vault_pda, false),
+            AccountMeta::new_readonly(tree_pda, false),
+            AccountMeta::new_readonly(note.mint, false),
+            AccountMeta::new(vault_token, false),
+            AccountMeta::new(*destination_ta, false),
+            AccountMeta::new(consumed, false),
+            AccountMeta::new_readonly(note_lock, false),
+            AccountMeta::new(null_entry, false),
+            AccountMeta::new(outstanding, false),
+            AccountMeta::new_readonly(spl_token_id(), false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ],
+        data,
+    };
+    Transaction::new(
+        &[payer],
+        Message::new(&[ix], Some(&payer.pubkey())),
+        h.svm.latest_blockhash(),
+    )
+}
+
+// ── snarkjs VALID_SPEND proof generation (lifted from zk_spend_roundtrip.rs) ──
+
+fn build_valid_spend_proof(note: &DepositedNote) -> vault::zk::verifier::Groth16Proof {
+    use darkpool_crypto::field::pubkey_to_fr_pair;
+    use std::fs;
+    use std::process::Command;
+
+    let root = repo_root();
+    let build = root.join("circuits/build/valid_spend");
+    let wasm = build.join("circuit_js/circuit.wasm");
+    let zkey = build.join("circuit_final.zkey");
+    assert!(
+        wasm.exists(),
+        "missing {wasm:?} — run scripts/build-circuits.sh"
+    );
+    assert!(
+        zkey.exists(),
+        "missing {zkey:?} — run scripts/build-circuits.sh"
+    );
+
+    let [mint_lo, mint_hi] = pubkey_to_fr_pair(&note.mint.to_bytes());
+
+    let tag: String = note.commitment[..6]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let tmp = std::env::temp_dir().join(format!("nyx_ds_poc_{tag}"));
+    fs::create_dir_all(&tmp).unwrap();
+    let input_path = tmp.join("input.json");
+    let proof_path = tmp.join("proof.json");
+    let public_path = tmp.join("public.json");
+
+    let siblings_dec: Vec<String> = note
+        .siblings
+        .iter()
+        .map(|s| fr_to_dec(&Fr::from_be_bytes_mod_order(s)))
+        .collect();
+    let indices_dec: Vec<String> = note.path_indices.iter().map(|i| i.to_string()).collect();
+
+    let input_json = format!(
+        "{{\n\
+           \"merkleRoot\": \"{mr}\",\n\
+           \"nullifier\": \"{nl}\",\n\
+           \"tokenMint\": [\"{mlo}\", \"{mhi}\"],\n\
+           \"amount\": \"{amt}\",\n\
+           \"spendingKey\": \"{sk}\",\n\
+           \"ownerCommitmentBlinding\": \"{ocb}\",\n\
+           \"innerHash\": \"{ih}\",\n\
+           \"merklePath\": [{sibs}],\n\
+           \"merkleIndices\": [{idxs}]\n\
+         }}",
+        mr = fr_to_dec(&Fr::from_be_bytes_mod_order(&note.merkle_root)),
+        nl = fr_to_dec(&Fr::from_be_bytes_mod_order(&note.nullifier)),
+        mlo = fr_to_dec(&mint_lo),
+        mhi = fr_to_dec(&mint_hi),
+        amt = note.amount,
+        sk = fr_to_dec(&note.secret.spending_key),
+        ocb = fr_to_dec(&note.secret.r_owner),
+        ih = fr_to_dec(&note.secret.inner_hash),
+        sibs = siblings_dec
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(", "),
+        idxs = indices_dec
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    fs::write(&input_path, &input_json).unwrap();
+
+    let snarkjs = root.join("node_modules/.bin/snarkjs");
+    let status = Command::new(&snarkjs)
+        .arg("groth16")
+        .arg("fullprove")
+        .arg(&input_path)
+        .arg(&wasm)
+        .arg(&zkey)
+        .arg(&proof_path)
+        .arg(&public_path)
+        .status()
+        .expect("failed to spawn snarkjs (run `npm ci` at repo root)");
+    assert!(status.success(), "snarkjs fullprove failed for VALID_SPEND");
+
+    let proof_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&proof_path).unwrap()).unwrap();
+    let pi_a = negate_g1(&groth16_g1_bytes(&proof_json["pi_a"]));
+    let pi_b = groth16_g2_bytes(&proof_json["pi_b"]);
+    let pi_c = groth16_g1_bytes(&proof_json["pi_c"]);
+    vault::zk::verifier::Groth16Proof { pi_a, pi_b, pi_c }
+}
+
+/// Build a single-leaf-aware Merkle inclusion witness for `target_index` in a
+/// tree populated with `leaves`, padded with zero-subtree roots at deeper
+/// levels. Returns (siblings[TREE_DEPTH], path_indices[TREE_DEPTH], root).
+/// Byte-identical to `zk_spend_roundtrip.rs::merkle_witness`.
+fn merkle_witness(leaves: &[[u8; 32]], target_index: usize) -> (Vec<[u8; 32]>, Vec<u8>, [u8; 32]) {
+    assert!(target_index < leaves.len());
+    let zero_subtree = vault::merkle::compute_zero_subtree_roots().unwrap();
+    let mut siblings = vec![[0u8; 32]; TREE_DEPTH];
+    let mut path_indices = vec![0u8; TREE_DEPTH];
+
+    let n = leaves.len();
+    let small_depth: usize = {
+        let mut d = 0;
+        while (1usize << d) < n {
+            d += 1;
+        }
+        d.max(1)
+    };
+    let padded_len = 1usize << small_depth;
+
+    let mut level: Vec<[u8; 32]> = leaves.to_vec();
+    level.resize(padded_len, [0u8; 32]);
+
+    let mut idx = target_index;
+    for (d, sib) in siblings.iter_mut().enumerate().take(small_depth) {
+        let sibling_idx = idx ^ 1;
+        *sib = level[sibling_idx];
+        path_indices[d] = (idx & 1) as u8;
+        idx >>= 1;
+
+        let mut next = Vec::with_capacity(level.len() / 2);
+        for pair in level.chunks(2) {
+            next.push(vault::merkle::poseidon2(&pair[0], &pair[1]).unwrap());
+        }
+        level = next;
+    }
+
+    let mut current = level[0];
+    for d in small_depth..TREE_DEPTH {
+        siblings[d] = zero_subtree[d];
+        path_indices[d] = 0;
+        current = vault::merkle::poseidon2(&current, &zero_subtree[d]).unwrap();
+    }
+
+    (siblings, path_indices, current)
+}
+
+fn fr_to_dec(fr: &Fr) -> String {
+    let bytes = fr.into_bigint().to_bytes_be();
+    num_bigint_decstring(&bytes)
+}
+
+fn num_bigint_decstring(bytes: &[u8]) -> String {
+    let mut n: Vec<u32> = Vec::new();
+    for &b in bytes {
+        let mut carry = b as u64;
+        for limb in n.iter_mut() {
+            let v = (*limb as u64) * 256 + carry;
+            *limb = (v % 1_000_000_000) as u32;
+            carry = v / 1_000_000_000;
+        }
+        while carry > 0 {
+            n.push((carry % 1_000_000_000) as u32);
+            carry /= 1_000_000_000;
+        }
+    }
+    if n.is_empty() {
+        return "0".into();
+    }
+    let mut out = String::new();
+    for (i, limb) in n.iter().rev().enumerate() {
+        if i == 0 {
+            out.push_str(&limb.to_string());
+        } else {
+            out.push_str(&format!("{limb:09}"));
+        }
+    }
+    out
+}
+
+fn dec_to_be32(s: &str) -> [u8; 32] {
+    let mut digits: Vec<u8> = s.bytes().map(|b| b - b'0').collect();
+    let mut out = [0u8; 32];
+    let mut byte_idx = 32;
+    while !digits.is_empty() && byte_idx > 0 {
+        let mut rem: u32 = 0;
+        let mut new_digits: Vec<u8> = Vec::with_capacity(digits.len());
+        for d in &digits {
+            let cur = rem * 10 + *d as u32;
+            let q = cur / 256;
+            rem = cur % 256;
+            if !(new_digits.is_empty() && q == 0) {
+                new_digits.push(q as u8);
+            }
+        }
+        byte_idx -= 1;
+        out[byte_idx] = rem as u8;
+        digits = new_digits;
+    }
+    out
+}
+
+fn groth16_g1_bytes(v: &serde_json::Value) -> [u8; 64] {
+    let x = dec_to_be32(v[0].as_str().unwrap());
+    let y = dec_to_be32(v[1].as_str().unwrap());
+    let mut out = [0u8; 64];
+    out[0..32].copy_from_slice(&x);
+    out[32..64].copy_from_slice(&y);
+    out
+}
+
+fn groth16_g2_bytes(v: &serde_json::Value) -> [u8; 128] {
+    let x0 = dec_to_be32(v[0][0].as_str().unwrap());
+    let x1 = dec_to_be32(v[0][1].as_str().unwrap());
+    let y0 = dec_to_be32(v[1][0].as_str().unwrap());
+    let y1 = dec_to_be32(v[1][1].as_str().unwrap());
+    let mut out = [0u8; 128];
+    out[0..32].copy_from_slice(&x1);
+    out[32..64].copy_from_slice(&x0);
+    out[64..96].copy_from_slice(&y1);
+    out[96..128].copy_from_slice(&y0);
+    out
+}
+
+fn negate_g1(point: &[u8; 64]) -> [u8; 64] {
+    const P_BYTES: [u8; 32] = [
+        0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58,
+        0x5d, 0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d, 0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c,
+        0xfd, 0x47,
+    ];
+    let mut out = [0u8; 64];
+    out[0..32].copy_from_slice(&point[0..32]);
+    let mut y = [0u8; 32];
+    y.copy_from_slice(&point[32..64]);
+    let y_neg = sub_be(&P_BYTES, &y);
+    out[32..64].copy_from_slice(&y_neg);
+    out
+}
+
+fn sub_be(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let mut borrow: i16 = 0;
+    for i in (0..32).rev() {
+        let diff = a[i] as i16 - b[i] as i16 - borrow;
+        if diff < 0 {
+            out[i] = (diff + 256) as u8;
+            borrow = 1;
+        } else {
+            out[i] = diff as u8;
+            borrow = 0;
+        }
+    }
+    out
 }
