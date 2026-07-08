@@ -2181,7 +2181,7 @@ npm install && bash scripts/download-ptau.sh && bash scripts/build-circuits.sh
 cargo build --examples -p darkpool-crypto
 
 # the "everything green" gate (no devnet, no CVM)
-cargo build-sbf --manifest-path programs/vault/Cargo.toml
+cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin  # F-01/F-02: OFF by default for mainnet
 cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check
 cargo test --workspace
 ( cd packages/sdk && ../../node_modules/.bin/tsc -p tsconfig.json --noEmit && ../../node_modules/.bin/vitest run )

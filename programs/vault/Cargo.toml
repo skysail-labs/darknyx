@@ -20,6 +20,12 @@ custom-heap = []
 custom-panic = []
 # Host-side testing (disables BPF-only code paths).
 test-sbf = []
+# Compiles the DEV-NET-ONLY admin backdoors — `reset_merkle_tree` +
+# `close_vault_config` (audit_1 F-01/F-02). OFF by default so a mainnet build
+# (`cargo build-sbf`, no features) has NEITHER instruction discriminator and
+# cannot freeze/brick funds. Dev, test, and devnet builds MUST pass
+# `--features devnet-admin` (deploy-devnet.sh + the litesvm suites depend on it).
+devnet-admin = []
 
 [dependencies]
 anchor-lang = { workspace = true, features = ["init-if-needed"] }

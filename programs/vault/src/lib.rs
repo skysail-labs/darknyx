@@ -22,6 +22,7 @@ pub mod zk;
 // root lets the macro resolve everything correctly even though our source lives
 // under `programs/vault/src/instructions/`.
 pub use instructions::close_batch_validity_marker;
+#[cfg(feature = "devnet-admin")]
 pub use instructions::close_vault_config;
 pub use instructions::create_wallet;
 pub use instructions::deposit;
@@ -29,6 +30,7 @@ pub use instructions::initialize;
 pub use instructions::lock_note;
 pub use instructions::merge;
 pub use instructions::release_lock;
+#[cfg(feature = "devnet-admin")]
 pub use instructions::reset_merkle_tree;
 pub use instructions::rotate_root_key;
 pub use instructions::set_protocol_config;
@@ -246,14 +248,20 @@ pub mod vault {
     }
 
     /// DEV-NET-ONLY: reset a Merkle-tree shard to empty. Admin-gated. See
-    /// instructions/reset_merkle_tree.rs for rationale + caveats.
+    /// instructions/reset_merkle_tree.rs for rationale + caveats. Compiled ONLY
+    /// under `--features devnet-admin` (audit_1 F-01) — a mainnet build has no
+    /// such discriminator.
+    #[cfg(feature = "devnet-admin")]
     pub fn reset_merkle_tree(ctx: Context<ResetMerkleTree>, tree_id: u8) -> Result<()> {
         reset_merkle_tree::reset_merkle_tree_handler(ctx, tree_id)
     }
 
     /// DEV-NET-ONLY: close the `VaultConfig` PDA so it can be re-`initialize`d
     /// under a new layout (e.g. after the tree-sharding split). Admin-gated.
-    /// See instructions/close_vault_config.rs.
+    /// See instructions/close_vault_config.rs. Compiled ONLY under
+    /// `--features devnet-admin` (audit_1 F-02) — a mainnet build has no such
+    /// discriminator.
+    #[cfg(feature = "devnet-admin")]
     pub fn close_vault_config(ctx: Context<CloseVaultConfig>) -> Result<()> {
         close_vault_config::close_vault_config_handler(ctx)
     }

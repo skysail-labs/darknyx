@@ -88,7 +88,9 @@ bash scripts/download-ptau.sh
 bash scripts/build-circuits.sh
 
 # 3. Build the on-chain program
-cargo build-sbf --manifest-path programs/vault/Cargo.toml
+#    (--features devnet-admin builds the dev/devnet admin ixs the litesvm tests
+#     use; a mainnet build omits it — audit_1 F-01/F-02)
+cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin
 
 # 4. Run the full test gate (Rust unit/integ + SDK unit; env-gated devnet/CVM tests auto-skip)
 cargo test --workspace

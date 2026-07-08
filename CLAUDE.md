@@ -144,7 +144,11 @@ as `InvalidProof (6000)`, not "you forgot the VK."
 
 ```sh
 # 1. BPF (required for litesvm tests AND for devnet deploy)
-cargo build-sbf --manifest-path programs/vault/Cargo.toml
+#    `--features devnet-admin` compiles the dev/devnet admin ixs
+#    (`reset_merkle_tree` + `close_vault_config`) the litesvm suite +
+#    reset-merkle-tree.mjs use. OFF by default (audit_1 F-01/F-02) so a MAINNET
+#    build (plain `cargo build-sbf`, no feature) ships neither backdoor.
+cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin
 
 # 2. Pre-commit gate (host-side)
 cargo clippy --workspace --all-targets -- -D warnings   # MUST pass, zero warnings
@@ -197,7 +201,7 @@ RUN_DEVNET_E2E=1 \
 ```sh
 set -e
 cargo fmt --all && cargo fmt --all -- --check       # CI fails on one un-fmt'd line
-cargo build-sbf --manifest-path programs/vault/Cargo.toml   # litesvm + deploy need it
+cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin  # litesvm + devnet deploy need it (F-01/F-02: OFF by default for mainnet)
 cargo build --examples -p darkpool-crypto           # parity tests shell out to these
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                              # unit + litesvm integration
@@ -445,7 +449,7 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
 — in the **same commit**:
 
 1. `bash scripts/build-circuits.sh` (regenerate `.zkey` + `.wasm` + `vk_*.rs`).
-2. `cargo build-sbf --manifest-path programs/vault/Cargo.toml`.
+2. `cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin`.
 3. Pass all four:
    - `cargo test --workspace`
    - `cargo test -p vault --test zk_roundtrip --test zk_spend_roundtrip`
