@@ -469,6 +469,15 @@ jobs:
           done
           echo "OK: reset_merkle_tree + close_vault_config are gated behind devnet-admin"
 
+      # Compile the MAINNET artifact (no feature) first. Nothing consumes it —
+      # it's a compile guard: the mainnet build is where F-01/F-02 are absent and
+      # where F-03's upgrade-authority-bound `initialize` variant lives, so a
+      # break there (that the devnet-admin build wouldn't catch) fails CI here.
+      # The devnet-admin build below overwrites vault.so with the artifact the
+      # litesvm jobs actually load.
+      - name: cargo build-sbf — vault (mainnet build; compile-guards F-01/F-02 + F-03)
+        run: cargo build-sbf --manifest-path programs/vault/Cargo.toml
+
       - name: cargo build-sbf — vault (devnet build for the litesvm suite)
         run: cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin
 
