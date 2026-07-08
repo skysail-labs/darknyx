@@ -97,11 +97,60 @@ through a Phala CVM (`cvm-settle-e2e`).
 
 | Threat | Status |
 |---|---|
-| TEE clears at a bad price | **TEE-trusted (open)** — price fairness is enforced ONLY by the in-enclave matcher (limit-price matching + Pyth-TWAP circuit breaker), NOT by the proof. `VALID_MATCH_BATCH` binds the clearing price only to `quote == base·price` (definitional) + conservation + range + fee floor — there is NO limit/oracle band in-circuit, and no trader limit price is bound on-chain (orders never touch L1). A compromised TEE colluding with a counterparty leg can therefore clear a victim's order outside its limit and route the surplus to the colluding leg, extracting value up to the order size; the proof still bounds the TEE to no-inflation + liveness. Client-side fill-memo inspection *detects* (does not prevent) it. Pre-mainnet: bind signed limits in-circuit or accept as TEE-trusted — tracked alongside the external circuit audit (audit_1 F-04). |
+| TEE clears at a bad price | **TEE-trusted (accepted design decision)** — price fairness (limit compliance + the oracle band) is enforced inside the attested enclave by the `darkpool-matcher`, NOT by the proof. `VALID_MATCH_BATCH` binds only `quote == base·price` (definitional) + conservation + range + fee floor, so it bounds a compromised TEE to no-inflation + liveness, not execution price. This is a *deliberate* trade-off, not an oversight — see **"Accepted design decision — price fairness is TEE-trusted"** below for the full rationale + compensating controls. |
 | TEE-binary substitution | **Open** — `tee_pubkeys` are software Ed25519 keys. Production must pin them to an attested enclave. |
 | Trusted-setup ceremony soundness | **Open** — all four Groth16 circuits use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
 | Aggregate trade analytics from settle txs | **By design** — match volume + clearing price are public per settled batch. |
 | Network-level traffic analysis | Partially mitigated by TLS to the CVM + bearer auth; not fully eliminated. |
+
+### Accepted design decision — price fairness is TEE-trusted
+
+**Decision (2026-07-08).** Execution-price fairness — that a match respects each
+trader's signed limit, and that the clearing price sits within the Pyth-TWAP band —
+is enforced **inside the attested enclave** (the `darkpool-matcher`), **not** by
+`VALID_MATCH_BATCH`. We evaluated binding it on-chain and deliberately chose not to.
+This is an **accepted trust assumption**, recorded here so it is not mistaken for an
+oversight. The proof still bounds a compromised TEE to **no value inflation +
+liveness** (conservation + 64-bit range checks are proof-enforced); what it does not
+bind is the *price* at which two consenting notes clear.
+
+**Why the on-chain alternatives were rejected:**
+
+- **Bind the traders' signed limits in-circuit.** The `clearing_price ≤ limit`
+  comparison is trivial; the hard part is proving the limit is the one the trader
+  actually *signed*. Verifying the Ed25519 order signature in-circuit is infeasible
+  (~1.5M+ constraints per signature × 2 legs × 16 matches → tens of millions of
+  constraints; the N=16 proof would blow up from ~6.7 s to minutes–hours). The only
+  alternative is committing a client-signed limit **on L1**, which erodes the
+  protocol's core property that **orders never touch L1** (privacy + no per-order
+  gas). That is a deposit/lock **redesign**, not a circuit tweak.
+- **Bind the oracle band on-chain.** Matching happens at T0 (the matcher's TWAP);
+  `verify_match_batch` runs at T1 = T0 + lock + ~6.7 s prove + tx latency, when the
+  Pyth price has already moved. A TEE-supplied T0 price is circular (TEE-trusted). A
+  *real* on-chain price requires posting the Pyth pull-oracle update on-chain —
+  net-new Pyth infra + extra verify CU + 1–2 more accounts on a settle Tx D already
+  ~100 B from the 1232-byte cap — and the T0→T1 drift forces either a loose band
+  (weak guarantee) or settle **failures** when the market moves (a liveness
+  regression). And it still would not give per-trader limit compliance.
+
+**Compensating controls that make TEE-trust acceptable:**
+
+1. **Enclave attestation.** The matcher runs in an attested Intel TDX CVM whose
+   `compose_hash`/MRTD is pinned to a governance allowlist — so "compromised TEE"
+   means breaking TDX or subverting governance, not merely running modified code
+   (see the *TEE-binary substitution* row + `docs/tee-attestation-flow.md`).
+2. **Client-side detection.** Every fill carries a memo; the client recomputes its
+   own fill and can reject/dispute a price outside its limit (the Vuln-4 memo
+   guard) — detection + economic/legal/reputation deterrence even without on-chain
+   prevention.
+3. **Bounded loss.** A bad clear extracts at most the victim's order size; it can
+   never inflate value or drain the vault (that IS proof-enforced).
+
+**When we would revisit.** If institutional counterparties require *prevention* (not
+detection) of limit violations, the path is a deliberate deposit/lock redesign that
+commits a client-signed limit on-chain (accepting the privacy/UX cost), scoped with
+the external circuit auditors — not a VK bump. Until then the honest posture is:
+**price fairness is TEE-trusted, and that trust is anchored by enclave attestation.**
 
 ### Invariants the on-chain code maintains
 

@@ -760,17 +760,25 @@ nothing — conservation + 64-bit range checks) and bounds the TEE
 to no-inflation + liveness-denial. But **execution-price fairness
 is TEE-trusted**, not proof-enforced. Client-side fill-memo
 inspection *detects* such a fill after the fact; it does not
-prevent the on-chain settlement. Binding the traders' signed
-limit prices into the circuit is a pre-mainnet item (see
-CRYPTOGRAPHY.md §2 non-goals + audit_1 F-04).
+prevent the on-chain settlement. This is a **deliberate, accepted
+trust assumption** — see CRYPTOGRAPHY.md §2 "Accepted design
+decision — price fairness is TEE-trusted" for the full rationale +
+the compensating controls (enclave attestation, client fill-memo
+detection, bounded loss).
 
-This is the v2 trade-off we accepted to skip the per-batch
-on-chain Pyth-verification cost. v3 closes the gap: attach a
-fresh Pyth `PriceUpdateV2` to `verify_match_batch`, have the
-vault read the on-chain Pyth account directly, compare to the
-`pyth_at_match` claimed in the payload. ~100k CU + one ALT
-entry per batch — the architecture supports it whenever we
-decide to enable it.
+We evaluated closing it on-chain and chose not to. The obvious
+sketch — attach a fresh Pyth `PriceUpdateV2` to
+`verify_match_batch`, read the on-chain Pyth account, compare to
+the match's price (~100k CU + one ALT entry per batch) — runs into
+two problems it does NOT solve: (1) the price is set at T0 (match)
+but the on-chain read is at T1 = T0 + lock + prove + tx latency,
+so the two prices differ and a tight band fails legitimate settles
+(a liveness regression); (2) comparing to a `pyth_at_match` value
+*claimed in the payload* is circular — a compromised TEE simply
+claims a favourable one. Binding per-trader **limit** compliance
+(the stronger property) is harder still: it would require putting
+a client-signed limit on L1, eroding the "orders never touch L1"
+design. So this stays TEE-trusted **by decision, not by omission**.
 
 #### Module layout (to land in PR 4)
 

@@ -368,8 +368,14 @@ sysvar + system program.
   verified proof.
 * **TEE trust.** The vault trusts only the keys in `VaultConfig.tee_pubkeys`.
   Clients verify the enclave's TDX attestation before sending order data. A
-  misbehaving TEE cannot steal (spending keys never enter it) and is caught
-  substituting note data by the client's settle-memo integrity check.
+  misbehaving TEE **cannot** inflate value or drain the vault (conservation +
+  64-bit range checks are proof-enforced), cannot learn spending keys (they never
+  enter it), and cannot substitute note data undetected (the client's settle-memo
+  integrity check). It **can**, by accepted design decision, clear a match at an
+  unfair price — **execution-price fairness is TEE-trusted**, not proof-enforced:
+  bounded to the victim's order size, detectable post-hoc via the fill memo, and
+  anchored by enclave attestation. Full rationale + the alternatives we rejected:
+  `CRYPTOGRAPHY.md` §2 "Accepted design decision — price fairness is TEE-trusted."
 * **Privacy.** Order intent never leaves the enclave except as settlement
   referencing already-public note commitments.
 
