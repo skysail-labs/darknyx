@@ -46,6 +46,14 @@ pub fn set_tee_pubkey_handler(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> 
         !keys.is_empty() && keys.len() <= MAX_TEE_KEYS,
         VaultError::InvalidKeyCount
     );
+    // F-09: reject the zero key + duplicates. A zero (default) key is an unusable
+    // slot that would never authorize a signer; a duplicate silently shrinks the
+    // effective authorized set AND corrupts the shard→key round-robin (keys[j]
+    // settles shard j). n ≤ MAX_TEE_KEYS (16) → the O(n²) dup scan is trivial.
+    for (i, k) in keys.iter().enumerate() {
+        require!(*k != Pubkey::default(), VaultError::InvalidTeeKey);
+        require!(!keys[..i].contains(k), VaultError::InvalidTeeKey);
+    }
 
     let old = cfg.tee_pubkeys[0];
     cfg.tee_pubkeys = [Pubkey::default(); MAX_TEE_KEYS];

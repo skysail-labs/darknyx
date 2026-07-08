@@ -164,3 +164,74 @@ fn set_tee_pubkey_rejects_non_admin_signer() {
         "non-admin must be rejected, but set_tee_pubkey succeeded"
     );
 }
+
+/// Build a `set_tee_pubkey` ix over an arbitrary K-key set (Borsh `Vec<Pubkey>`).
+fn build_set_tee_pubkeys_ix(
+    program_id: &Pubkey,
+    admin: &Pubkey,
+    vault_pda: &Pubkey,
+    keys: &[[u8; 32]],
+) -> Instruction {
+    let mut data = common::anchor_disc("set_tee_pubkey").to_vec();
+    data.extend_from_slice(&(keys.len() as u32).to_le_bytes());
+    for k in keys {
+        data.extend_from_slice(k);
+    }
+    Instruction {
+        program_id: *program_id,
+        accounts: vec![
+            AccountMeta::new_readonly(*admin, true),
+            AccountMeta::new(*vault_pda, false),
+        ],
+        data,
+    }
+}
+
+// F-09: the zero (default) key is unusable — it would never authorize a real
+// signer — so `set_tee_pubkey` must reject it.
+#[test]
+fn set_tee_pubkey_rejects_zero_key() {
+    if !program_so_path().exists() {
+        return;
+    }
+    let (mut svm, program_id) = load_svm();
+    let admin = Keypair::new();
+    svm.airdrop(&admin.pubkey(), 1_000_000_000).unwrap();
+    let (vault_pda, _) = initialize(&mut svm, &admin, &program_id);
+
+    let ix = build_set_tee_pubkeys_ix(&program_id, &admin.pubkey(), &vault_pda, &[[0u8; 32]]);
+    let tx = Transaction::new(
+        &[&admin],
+        Message::new(&[ix], Some(&admin.pubkey())),
+        svm.latest_blockhash(),
+    );
+    assert!(
+        svm.send_transaction(tx).is_err(),
+        "the zero tee_pubkey must be rejected",
+    );
+}
+
+// F-09: a duplicate key silently shrinks the effective authorized set + corrupts
+// the shard→key round-robin (keys[j] settles shard j) — reject it.
+#[test]
+fn set_tee_pubkey_rejects_duplicate_keys() {
+    if !program_so_path().exists() {
+        return;
+    }
+    let (mut svm, program_id) = load_svm();
+    let admin = Keypair::new();
+    svm.airdrop(&admin.pubkey(), 1_000_000_000).unwrap();
+    let (vault_pda, _) = initialize(&mut svm, &admin, &program_id);
+
+    let k = Keypair::new().pubkey().to_bytes();
+    let ix = build_set_tee_pubkeys_ix(&program_id, &admin.pubkey(), &vault_pda, &[k, k]);
+    let tx = Transaction::new(
+        &[&admin],
+        Message::new(&[ix], Some(&admin.pubkey())),
+        svm.latest_blockhash(),
+    );
+    assert!(
+        svm.send_transaction(tx).is_err(),
+        "a duplicate tee_pubkey must be rejected",
+    );
+}
