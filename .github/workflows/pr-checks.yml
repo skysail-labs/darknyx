@@ -43,6 +43,11 @@ concurrency:
 
 permissions:
   contents: read
+  # `dorny/paths-filter` (the `changes` job) calls the GitHub API to list a PR's
+  # changed files on `pull_request` events — that needs `pull-requests: read`.
+  # Without it the token (restricted to exactly the scopes listed here) 403s with
+  # "Resource not accessible by integration". Read-only; no write scope added.
+  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
