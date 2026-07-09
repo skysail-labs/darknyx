@@ -210,7 +210,12 @@ async function tryReadVaultConfig(
   vaultPda: PublicKey,
 ): Promise<boolean> {
   const info = await connection.getAccountInfo(vaultPda, "confirmed");
-  return !!info;
+  // A closed VaultConfig (post `close_vault_config`) can briefly linger as a
+  // 0-lamport, program- or System-owned shell on some RPCs even though it's been
+  // reclaimed. Only a FUNDED, vault-program-owned account is genuinely
+  // initialized — an existence-only check would wrongly skip `initialize` during
+  // a re-foundation (VaultConfig layout change) and then fail at reset_merkle_tree.
+  return !!info && info.lamports > 0 && info.owner.equals(VAULT_PROGRAM_ID);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -406,12 +411,22 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         tx(`reset_merkle_tree(${treeId}) (devnet-only)`, resetSig);
       }
 
+      // Publish the matcher-governance params on-chain (single-place config in
+      // VaultConfig). The TEE adopts each non-zero value over its env/dev default
+      // at boot (0 = unset). Non-zero here so a CVM run can prove the on-chain
+      // read fired (look for "adopting on-chain matcher param" in the boot log).
+      const ON_CHAIN_TICK_SIZE = 5n;
+      const ON_CHAIN_MIN_ORDER_SIZE = 1_000n;
+      const ON_CHAIN_CIRCUIT_BREAKER_BPS = 250n;
       const spcTx = new Transaction().add(
         buildSetProtocolConfigInstruction({
           programId: VAULT_PROGRAM_ID,
           admin: admin.publicKey,
           protocolOwnerCommitment,
           feeRateBps: PROTOCOL_FEE_BPS,
+          tickSize: ON_CHAIN_TICK_SIZE,
+          minOrderSize: ON_CHAIN_MIN_ORDER_SIZE,
+          circuitBreakerBps: ON_CHAIN_CIRCUIT_BREAKER_BPS,
         }),
       );
       const spcSig = await sendAndConfirmTransaction(
@@ -422,7 +437,11 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           commitment: "confirmed",
         },
       );
-      tx(`set_protocol_config(fee_rate=${PROTOCOL_FEE_BPS}bps)`, spcSig);
+      tx(
+        `set_protocol_config(fee_rate=${PROTOCOL_FEE_BPS}bps, tick=${ON_CHAIN_TICK_SIZE}, ` +
+          `min_order=${ON_CHAIN_MIN_ORDER_SIZE}, cb=${ON_CHAIN_CIRCUIT_BREAKER_BPS}bps)`,
+        spcSig,
+      );
 
       // ────────────────────────────────────────────────────────────────────
       step(4, "Create Address Lookup Table for settle txs (size relief)");
