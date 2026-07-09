@@ -62,6 +62,9 @@ solana-system-interface = "3.0.0"
 sha2 = "0.10"
 borsh = { workspace = true, features = ["derive"] }
 darkpool-crypto = { path = "../../crates/darkpool-crypto" }
+# Property-based fuzzing of the Merkle index handling (tests/merkle_fuzz.rs):
+# randomized + shrinking sweeps of append_leaves / walk_merkle_path_n16.
+proptest = "1"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

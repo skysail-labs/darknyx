@@ -558,6 +558,7 @@ jobs:
             --test zk_spend_roundtrip \
             --test merge_verify \
             --test merkle_host \
+            --test merkle_fuzz \
             -- --nocapture
 
   # ------------------------------------------------------------------

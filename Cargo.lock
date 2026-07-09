@@ -9483,6 +9483,7 @@ dependencies = [
  "groth16-solana",
  "light-poseidon 0.4.0",
  "litesvm",
+ "proptest",
  "serde_json",
  "sha2 0.10.9",
  "solana-account",
