@@ -413,11 +413,20 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
 
       // Publish the matcher-governance params on-chain (single-place config in
       // VaultConfig). The TEE adopts each non-zero value over its env/dev default
-      // at boot (0 = unset). Non-zero here so a CVM run can prove the on-chain
-      // read fired (look for "adopting on-chain matcher param" in the boot log).
+      // at boot (0 = unset). Non-zero + != the env defaults so a CVM run proves
+      // the on-chain read fired (look for "adopting on-chain matcher param" in
+      // the boot log).
+      //
+      // circuit_breaker_bps is 5000 (50% band), NOT a tight production value:
+      // cvm-settle-e2e submits synthetic bid=1.2x / ask=0.8x oracle spreads, so
+      // the clearing price deviates ~20% from the Pyth TWAP. A band below that
+      // (e.g. 250) correctly TRIPS the breaker (deviates_by_more_than_bps →
+      // cb_tripped, no matches) and nothing settles — validated live 2026-07-10.
+      // 5000 comfortably clears the ~20% synthetic deviation while still being a
+      // meaningful non-default that exercises the adopt path.
       const ON_CHAIN_TICK_SIZE = 5n;
       const ON_CHAIN_MIN_ORDER_SIZE = 1_000n;
-      const ON_CHAIN_CIRCUIT_BREAKER_BPS = 250n;
+      const ON_CHAIN_CIRCUIT_BREAKER_BPS = 5_000n;
       const spcTx = new Transaction().add(
         buildSetProtocolConfigInstruction({
           programId: VAULT_PROGRAM_ID,
