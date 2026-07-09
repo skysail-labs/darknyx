@@ -57,7 +57,24 @@ permissions:
   contents: read
 
 jobs:
+  # Build the tee image from the CURRENT main SHA so the e2e runs against main's
+  # ACTUAL tee code (not whatever tag deploy/docker-compose.yaml happens to pin).
+  # Reuses tee-image.yml via workflow_call. Skipped when a manual dispatch pins
+  # an existing tag through the image_tag input.
+  build-image:
+    if: ${{ inputs.image_tag == '' }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/tee-image.yml
+    with:
+      tag: cvm-e2e-${{ github.sha }}
+
   cvm-e2e:
+    needs: build-image
+    # Run even if build-image was SKIPPED (a dispatch pinned an existing tag);
+    # do NOT run if the build failed or was cancelled.
+    if: ${{ !cancelled() && needs.build-image.result != 'failure' }}
     runs-on: ubuntu-latest
     # Runner cap (does NOT stop CVM billing on its own — the teardown step does;
     # this just bounds a hung job so it can't run forever before teardown).
@@ -141,10 +158,14 @@ jobs:
             echo "NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
           } > /tmp/nyx.env
 
-      - name: Optionally override the image tag
-        if: inputs.image_tag != ''
+      - name: Select the image to deploy (built-from-main, or the dispatch override)
         run: |
-          sed -i "s#\(image: ghcr.io/skysail-labs/nyx-tee:\).*#\1${{ inputs.image_tag }}#" deploy/docker-compose.yaml
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            sed -i "s#\(image: ghcr.io/skysail-labs/nyx-tee:\).*#\1${{ inputs.image_tag }}#" deploy/docker-compose.yaml
+          else
+            sed -i "s#image: ghcr.io/skysail-labs/nyx-tee:.*#image: ${{ needs.build-image.outputs.image }}#" deploy/docker-compose.yaml
+          fi
+          grep -E 'image: ghcr' deploy/docker-compose.yaml
 
       # ── deploy (re-pulls the pinned image) + wait for the gateway ──
       - name: Deploy to the nightly CVM
@@ -225,11 +246,10 @@ jobs:
             phala cvms stop "$CVM" || echo "::warning::phala cvms stop failed — VERIFY MANUALLY in the dashboard"
           fi
 
-# TODO (belt-and-suspenders, follow-up): a separate tiny scheduled workflow that
-# runs `phala cvms stop nyx-nightly-ci` a few times a day unconditionally, to
-# catch the rare case where a job is force-cancelled before its `if: always()`
-# teardown fires (a hard-cancel can skip even always() steps).
+# Belt-and-suspenders teardown lives in cvm-sweeper.yml: it unconditionally stops
+# this CVM a few times a day, in the SAME concurrency group as this workflow so it
+# can never race a live nightly — covering the force-cancel edge where a hard
+# cancel skips even the `if: always()` teardown above.
 #
-# TODO (honesty enhancement): to test main's ACTUAL tee code (not just the tag
-# pinned in compose), add the tee-image build as an upstream `needs:` job that
-# tags + pushes an image from the current SHA, then pass that tag via image_tag.
+# Build-from-main honesty is handled by the `build-image` job (reuses
+# tee-image.yml via workflow_call), so the e2e runs against main's actual tee code.

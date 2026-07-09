@@ -49,6 +49,24 @@ on:
   push:
     tags:
       - "tee-*"
+  # Reusable: the nightly cvm-e2e workflow calls this to build the image from
+  # the CURRENT main SHA, so the e2e tests run against main's ACTUAL tee code
+  # (not whatever tag deploy/docker-compose.yaml happens to pin). Additive — the
+  # push/dispatch paths above are unchanged.
+  workflow_call:
+    inputs:
+      tag:
+        description: "Image tag to push"
+        required: true
+        type: string
+      enable_cuda:
+        type: boolean
+        required: false
+        default: false
+    outputs:
+      image:
+        description: "Full ghcr image ref that was built + pushed"
+        value: ${{ jobs.build-push.outputs.image }}
 
 permissions:
   contents: read
@@ -57,6 +75,8 @@ permissions:
 jobs:
   build-push:
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
