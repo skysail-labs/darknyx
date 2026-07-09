@@ -45,6 +45,22 @@ rather than the on-chain settle path.
 | **Mainnet deployment** | Custody, governance, and operational hardening for production funds. |
 | **Deeper market structure** | More instruments and order types on top of the batch-auction core. |
 
+:::note On-chain attestation — the deferral, and when we revisit it
+Today the enclave-key rotation is gated by a **process control**: a governance
+multisig independently verifies the TDX quote off-chain before authorizing a new
+signer. Moving that check on-chain is fully specced in the attestation deep-dive
+(`docs/tee-attestation-flow.md` §11) — a `set_tee_pubkey_attested` instruction
+that verifies the quote in-program via Solana's `secp256r1` precompile plus a BPF
+port of `dcap-qvl`, then binds the new signer to a governance-approved
+measurement set. It's a **trust-minimization** step, not an economic-safety one:
+settlement conservation is already enforced by the proofs and the consume-once
+PDAs, so this only closes the "the multisig itself is dishonest" threat. So it
+stays deferred until the **mainnet gate**, and is worth pulling forward the moment
+either trigger fires: (a) a public Solana `dcap-qvl` / on-chain DCAP verifier
+lands — collapsing the ~4–6-week BPF port into a short integration — or (b) an
+auditor or integrator specifically requires chain-enforced rotation.
+:::
+
 ## What Nyx is deliberately not
 
 A few things are out of scope by design, so the trust story stays simple:

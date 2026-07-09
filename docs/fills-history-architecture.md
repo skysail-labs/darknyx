@@ -38,6 +38,15 @@
 >   amounts. `startFillsSync` does "tail then backfill" (live WS + chain
 >   backfill). **The old durable per-account memo log + `GET /fills/replay` (P7)
 >   were RETIRED** — the chain is the permanent source, so they added no value.
+> - **The off-TEE indexer is OPTIONAL — see
+>   [`packages/indexer/README.md`](../packages/indexer/README.md).** With the
+>   chain as the durable source, a client can rediscover its own fills WITHOUT any
+>   indexer via `packages/sdk/src/fills/chain-history.ts::backfillHistoryFromChain`
+>   (returns the same `BackfillResult` as the indexer path; `startFillsSync` picks
+>   whichever source is configured). The daemon uses live streams + chain reads
+>   and touches no indexer. **Decision (2026-07-10):** keep the indexer code as an
+>   optional light-client accelerator; don't deploy/invest until a browser or
+>   deep-mainnet-history client actually needs by-order_id point queries.
 >
 > The sections below are the original decision record (pinned 2026-06-04).
 > **NOTE: where they say the chain / `MatchResultPayload` carries the change
@@ -147,11 +156,13 @@ login →  GET /account/history?since=<lastCursor>   # backfill the gap
 cursor is a per-account monotonic sequence number the indexer assigns;
 the client stores only that single integer (or rediscovers via §1 gap-scan).
 
-> **As-built (P7):** the gap-recovery call is now `GET /fills/replay?since=<seq>`
-> (the TEE's durable memo log), NOT `/account/history` (the indexer, which after
-> amount-privacy carries no amounts). The cursor is the per-account memo `seq`.
-> `startFillsSync` does replay-then-tail; the by-order_id indexer is the
-> secondary commitment locator for gap-detection.
+> **As-built (SUPERSEDED — see the top-of-doc delta):** P7 briefly made the
+> gap-recovery call `GET /fills/replay` (a durable TEE memo log). That log +
+> endpoint were **RETIRED** (Proposal C, commit `345681c`). The durable
+> gap-recovery source is now the **on-chain** encrypted `change_amount`
+> (Proposal B), decrypted by the SDK's `recoverChangeFromChain`.
+> `startFillsSync` does live-tail (`/ws/fills`) + chain backfill; the by-order_id
+> indexer is the OPTIONAL commitment locator for gap-detection.
 
 ## What this explicitly does NOT need
 
@@ -161,12 +172,13 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 - No user-managed order-id state.
 - No history DB inside the TEE (the TEE stays a pure engine; the chain +
   indexer are the record).
-  > **As-built (P7) deviation:** amount-privacy forced a small, bounded
-  > exception — the TEE now keeps a durable per-account *fill-memo log*
-  > (`persistence/fills.rs`, ring + TTL capped) for `GET /fills/replay`. It is
-  > NOT a full history DB (it holds only the recent change-note memos, the one
-  > thing with no other durable home once amounts left the chain); the chain +
-  > indexer remain the record of *which* notes exist.
+  > **As-built (final):** P7 briefly added a bounded exception (a durable
+  > per-account fill-memo log for `GET /fills/replay`) — but Proposal B put the
+  > encrypted `change_amount` permanently ON-CHAIN, giving the amount a durable
+  > home, so that log + endpoint were **RETIRED** (Proposal C, `345681c`;
+  > `persistence/fills.rs` + `api/fills.rs` removed). The TEE keeps NO history
+  > DB; the chain is the durable record of both *which* notes exist and their
+  > amounts.
 
 ## Build order when resumed
 
@@ -182,13 +194,15 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 
 - Current fail-closed WS: `crates/nyx-tee/src/api/ws.rs` +
   `build_protected_router` (gated behind `debug_endpoints`).
-- `FillMemo`: `crates/nyx-tee/src/matcher/fills.rs` (carries `seq`, P7).
-- Durable memo log + replay (P7): `crates/nyx-tee/src/persistence/fills.rs`
-  (`FillLog`, ring + TTL), `api/state.rs::{route_fill, replay_fills}`,
-  `api/fills.rs` (`GET /fills/replay`).
+- `FillMemo`: `crates/nyx-tee/src/matcher/fills.rs` (live `/ws/fills` push).
+- Durable amount recovery (Proposal B): `darkpool-crypto/src/fill_encryption.rs`
+  + `nyx-tee/src/settle/fill_recovery.rs` (on-chain ciphertext) →
+  `packages/sdk/src/fills/recover.ts` (`recoverChangeFromChain`). (The old P7
+  memo log + `api/fills.rs` `GET /fills/replay` + `sdk/.../fills/replay.ts` were
+  RETIRED — Proposal C, `345681c`.)
 - Client memo verify/store: `packages/sdk/src/orders/fill-memo.ts`,
   `packages/sdk/src/utxo/note-store.ts`.
-- Client replay-then-tail (P7): `packages/sdk/src/fills/replay.ts`
-  (`replayFills`) + `fills/ws-client.ts` (`startFillsSync`); the indexer locator
-  is `fills/history.ts` (`backfillHistory`).
+- Client live-tail + chain-backfill: `fills/ws-client.ts` (`startFillsSync`);
+  the OPTIONAL by-order_id indexer locator is `fills/history.ts`
+  (`backfillHistory`).
 - Settle payload: `tee_forced_settle.rs::MatchResultPayload`.

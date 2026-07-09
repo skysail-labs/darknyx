@@ -17,6 +17,10 @@ import {
   type BackfillOptions,
   type BackfillResult,
 } from "./history.js";
+import {
+  backfillHistoryFromChain,
+  type ChainBackfillOptions,
+} from "./chain-history.js";
 import { recoverChangeFromChain } from "./recover.js";
 
 export interface WebSocketLike {
@@ -100,8 +104,14 @@ export interface FillsSyncOptions
    *  order id), and — when `baseMint`/`quoteMint` are set — recovers each
    *  amount/opening from the PERMANENT on-chain ciphertext (change-amount
    *  recovery, Proposal B) via `recoverChangeFromChain`. Omit to skip backfill
-   *  entirely (live tail only). */
+   *  entirely (live tail only), or use `chainBackfill` for the indexer-free path. */
   indexerBaseUrl?: string;
+  /** Indexer-FREE backfill: rediscover fills by scanning the vault program's
+   *  settle history directly (`backfillHistoryFromChain`). Use this when no
+   *  indexer is deployed — the daemon/light-client path. Ignored when
+   *  `indexerBaseUrl` is also set (the indexer is preferred: O(my order ids)
+   *  point queries vs an O(all settles) chain walk). */
+  chainBackfill?: Omit<ChainBackfillOptions, "masterSeed" | "gapLimit">;
   /** Market mints (32 bytes each). Required to recover located fills from the
    *  chain; without them the backfill only LOCATES commitments (gap-detect). */
   baseMint?: Uint8Array;
@@ -132,12 +142,21 @@ export async function startFillsSync(
   let located: BackfillResult | undefined;
 
   const backfill = async () => {
-    if (!opts.indexerBaseUrl) return;
     try {
-      located = await backfillHistory({
-        ...opts,
-        baseUrl: opts.indexerBaseUrl,
-      });
+      if (opts.indexerBaseUrl) {
+        located = await backfillHistory({
+          ...opts,
+          baseUrl: opts.indexerBaseUrl,
+        });
+      } else if (opts.chainBackfill) {
+        located = await backfillHistoryFromChain({
+          ...opts.chainBackfill,
+          masterSeed: opts.masterSeed,
+          gapLimit: opts.gapLimit,
+        });
+      } else {
+        return; // no backfill source — live tail only.
+      }
       if (!opts.baseMint || !opts.quoteMint) return; // locate-only (no mints).
       for (const fill of located.located) {
         const note = await recoverChangeFromChain(fill, {

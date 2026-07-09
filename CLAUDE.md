@@ -37,9 +37,15 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   directly.
 * **Client (TypeScript SDK + snarkjs prover)** — `packages/sdk/` is the
   integration surface: clients build VALID_INPUT proofs and `POST`
-  orders to the CVM. `crates/darkpool-crypto/` is the host-side Rust
-  crypto crate with byte-identical Poseidon / nullifier / note / key
-  derivation that the TS SDK has parity tests against.
+  orders to the CVM. `packages/daemon/` (`nyx-daemon`) is the reference
+  **non-custodial market-maker daemon** built on the SDK (keys + proving
+  on-device; drives order lifecycle off the live `/ws/fills` + `/ws/orders`
+  streams and on-chain reads, with auto anchor-topup + auto-merge). It is
+  deliberately **lean — it does NOT depend on the off-TEE indexer**; live TEE
+  streams + chain reads are its source of truth (merged, live-CVM smoke-tested).
+  `crates/darkpool-crypto/` is the host-side Rust crypto crate with
+  byte-identical Poseidon / nullifier / note / key derivation that the TS SDK
+  has parity tests against.
 
 Supporting crates: `crates/darkpool-matcher/` (the matching algorithm +
 the order/cancel/anchor-topup canonical signing — single source of
@@ -84,8 +90,13 @@ You will not write correct code here without the mental model. Required:
   verbatim. Helper scripts: `scripts/reset-merkle-tree.mjs`,
   `scripts/rotate-tee-pubkey.mjs`, `scripts/deploy-devnet.sh`.
 * **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)**
-  — the decided-but-unbuilt fills-delivery + trade-history design
-  (deterministic HD order_ids + per-account WS + off-TEE indexer).
+  — the fills-delivery + trade-history design, now **implemented**
+  (deterministic HD order_ids + per-account `/ws/fills`). Post amount-privacy +
+  on-chain change-amount recovery (Proposal B), the off-TEE `packages/indexer`
+  is an **OPTIONAL by-order_id commitment LOCATOR** with no consumer today (the
+  daemon uses live streams instead) — the durable amount source is the chain.
+  Read the top-of-doc as-built deltas; the lower half is the superseded original
+  decision record.
 * **[`docs/throughput-roadmap.md`](docs/throughput-roadmap.md)** — the log of
   settle/throughput optimizations deliberately DEFERRED behind platform gates
   (🟢 GPU proving, 🔵 Alpenglow finality) + 🟡 real volume, with the measured
