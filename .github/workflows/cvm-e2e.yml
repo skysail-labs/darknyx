@@ -202,19 +202,29 @@ jobs:
             echo "deploy busy — retry $d in 20s"; sleep 20
           done
           shred -u /tmp/nyx.env || rm -f /tmp/nyx.env
-          GW="https://${APP_ID}-8080.dstack-pha-prod5.phala.network"
+          # The dstack gateway node (prodN) is assigned PER CVM — do NOT hardcode
+          # it (nightly-test-cvm is on prod9, nyx-hardening-3c2 on prod5). Resolve
+          # the app's gateway base_domain and route the 8080 service through the
+          # <app_id>-8080.<base_domain> subdomain.
+          BASE=$(phala cvms get "$CVM" --json 2>/dev/null | sed -n '/{/,$p' \
+                 | jq -r '.. | objects | .base_domain // empty' 2>/dev/null | grep . | head -1)
+          [ -n "$BASE" ] || { echo "::error::could not resolve gateway base_domain for $CVM"; exit 1; }
+          GW="https://${APP_ID}-8080.${BASE}"
+          echo "gateway: $GW"
           echo "GATEWAY=$GW" >> "$GITHUB_ENV"
 
       - name: Wait for the CVM to be healthy
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          for i in $(seq 1 40); do
+          # First cold boot on a fresh CVM includes a full ~GB image pull, so give
+          # it up to ~10 min. (Warm redeploys in the tree-loop are much faster.)
+          for i in $(seq 1 60); do
             if curl -fsS "$GATEWAY/info" > /tmp/info.json 2>/dev/null; then
-              echo "CVM healthy"; cat /tmp/info.json | jq -r '.tee_pubkey' > /dev/null; break
+              echo "CVM healthy after ~$((i*10))s"; jq -e -r '.tee_pubkey' /tmp/info.json > /dev/null; break
             fi
-            sleep 6
-            [ "$i" = 40 ] && { echo "::error::CVM did not become healthy"; exit 1; }
+            sleep 10
+            [ "$i" = 60 ] && { echo "::error::CVM did not become healthy at $GATEWAY"; exit 1; }
           done
 
       # ── rotate `tee_pubkeys` to the K shard signers from the boot log + fund.
@@ -233,7 +243,11 @@ jobs:
           echo "shard signers: $KEYS"
           SOLANA_RPC_URL="$HELIUS_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             node scripts/rotate-tee-pubkey.mjs $KEYS
+          # 0.5 SOL/signer — a night of tests spends well under that, and it keeps
+          # the funder from draining (and limits stranded SOL when build-from-main
+          # rotates to new signers). Override with FUND_TARGET_SOL.
           SOLANA_RPC_URL="$HELIUS_RPC" FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
+            FUND_TARGET_SOL="${FUND_TARGET_SOL:-0.5}" \
             node scripts/fund-tee-keys.mjs $KEYS
 
       # ── the actual tests ──
