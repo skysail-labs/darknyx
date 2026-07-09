@@ -109,8 +109,20 @@ jobs:
         with:
           path: |
             circuits/build
-            circuits/ptau
+            scripts/ptau
           key: circuits-${{ hashFiles('circuits/**/*.circom', 'circuits/templates/*.circom', 'scripts/build-circuits.sh') }}
+      # build-circuits.sh shells out to `circom` (compile) + snarkjs (setup +
+      # DETERMINISTIC contribute → byte-identical to the committed circuit_final.zkey,
+      # so client proofs still verify against the deployed program's VK). Install
+      # circom first — it isn't on the runner (tee-image.yml installs it the same way).
+      - name: Install circom 2.2.2 (cache miss only)
+        if: steps.cache-circuits.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL https://github.com/iden3/circom/releases/download/v2.2.2/circom-linux-amd64 \
+            -o /usr/local/bin/circom
+          chmod +x /usr/local/bin/circom
+          circom --version
+
       - name: Build circuits (cache miss only)
         if: steps.cache-circuits.outputs.cache-hit != 'true'
         run: |
