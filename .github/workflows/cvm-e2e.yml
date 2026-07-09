@@ -156,6 +156,7 @@ jobs:
             echo "NYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
             echo "NYX_TEE_FEE_RATE_BPS=30"
             echo "NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
+            echo "NYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
           } > /tmp/nyx.env
 
       - name: Select the image to deploy (built-from-main, or the dispatch override)
@@ -167,15 +168,28 @@ jobs:
           fi
           grep -E 'image: ghcr' deploy/docker-compose.yaml
 
-      # ── deploy (re-pulls the pinned image) + wait for the gateway ──
+      # ── initial bring-up (re-pulls the image + derives signers) ──
+      # NOTE: `phala cvms start` is async; issuing `phala deploy` while it is
+      # still in flight fails with "Another operation is already in progress".
+      # So: start → WAIT until status=running → deploy (with a busy-retry).
       - name: Deploy to the nightly CVM
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          phala cvms start "$CVM" || true   # no-op if already running
-          phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/nyx.env --wait
-          shred -u /tmp/nyx.env || rm -f /tmp/nyx.env
           APP_ID="${CVM#app_}"
+          phala cvms start "$CVM" || true
+          for i in $(seq 1 40); do
+            ST=$(phala cvms list 2>/dev/null | awk -v a="$APP_ID" '$1==a{print $3}')
+            [ "$ST" = "running" ] && { echo "CVM running"; break; }
+            sleep 6
+          done
+          for d in $(seq 1 6); do
+            OUT=$(phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/nyx.env --wait 2>&1)
+            echo "$OUT"
+            echo "$OUT" | grep -q "already in progress" || break
+            echo "deploy busy — retry $d in 20s"; sleep 20
+          done
+          shred -u /tmp/nyx.env || rm -f /tmp/nyx.env
           GW="https://${APP_ID}-8080.dstack-pha-prod5.phala.network"
           echo "GATEWAY=$GW" >> "$GITHUB_ENV"
 
@@ -198,9 +212,10 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          # The boot log prints "derived K-shard TEE signer set: [k0, k1, …]".
-          KEYS=$(phala cvms logs "$CVM" | grep -oE 'nyx/ed25519-signer[^ ]*|[1-9A-HJ-NP-Za-km-z]{43,44}' \
-                 | grep -E '^[1-9A-HJ-NP-Za-km-z]{43,44}$' | tail -8 | tr '\n' ' ')
+          # The boot log line is: shard_pubkeys=["k0","k1",…] "derived K-shard
+          # TEE signer set …" — grep that line, then pull the base58 keys.
+          KEYS=$(phala cvms logs "$CVM" | grep -F 'derived K-shard TEE signer set' \
+                 | grep -oE '[1-9A-HJ-NP-Za-km-z]{43,44}' | tr '\n' ' ')
           # Fall back to the /info primary if the log grep came up empty.
           [ -z "$KEYS" ] && KEYS=$(jq -r '.tee_pubkey' /tmp/info.json)
           echo "shard signers: $KEYS"
@@ -210,26 +225,71 @@ jobs:
             node scripts/fund-tee-keys.mjs $KEYS
 
       # ── the actual tests ──
-      - name: Devnet round-trips (no CVM needed)
+      # Keypair env vars resolve against REPO_ROOT (resolve(__dirname,"../../..")),
+      # so they must be REPO-ROOT-relative (".devnet/…"), NOT relative to the
+      # packages/sdk cwd — a "../../" prefix climbs ABOVE the repo (a bug the live
+      # validation caught: "/Users/.devnet/keypairs/admin.json").
+      - name: Devnet round-trip (deposit → withdraw; no CVM needed)
         run: |
           cd packages/sdk
           RUN_DEVNET_DW=1 SOLANA_RPC_URL="$HELIUS_RPC" \
-            ADMIN_KEYPAIR=../../.devnet/keypairs/admin.json \
-            FUNDER_KEYPAIR=../../.devnet/keypairs/funder.json \
+            ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+            FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
             ../../node_modules/.bin/vitest run tests/devnet-deposit-withdraw.test.ts
 
-      - name: CVM settle + self-trade + api-surface e2e
+      # api-surface asserts NO on-chain tree state (auth / rate-limit / settings /
+      # ws), so it needs no fresh tree — run it once against the live CVM.
+      - name: CVM API-surface e2e
         run: |
           cd packages/sdk
           RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
-            FUNDER_KEYPAIR=../../.devnet/keypairs/funder.json \
-            ADMIN_KEYPAIR=../../.devnet/keypairs/admin.json \
-            ../../node_modules/.bin/vitest run \
-              tests/cvm-settle-e2e.test.ts \
-              tests/cvm-self-trade.test.ts \
-              tests/cvm-api-surface.test.ts \
-              tests/cvm-multimatch-settle.test.ts \
-              tests/cvm-merge-then-order.test.ts
+            FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
+            ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+            ../../node_modules/.bin/vitest run tests/cvm-api-surface.test.ts
+
+      # Each of these asserts startCount==0 then deposits+settles, so they CANNOT
+      # share a tree — every one needs its own reset + a CVM-mirror cold-boot (a
+      # redeploy re-reads NYX_TEE_SYNC_FROM_SLOT). So: reset → redeploy → run, per
+      # test. Signers are unchanged across same-image redeploys, so the earlier
+      # rotate+fund still holds (no re-rotate needed).
+      - name: CVM tree-consuming e2e (reset + redeploy per test)
+        env:
+          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
+        run: |
+          set -uo pipefail
+          redeploy_fresh() {
+            SOLANA_RPC_URL="$HELIUS_RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+              node scripts/reset-merkle-tree.mjs
+            umask 077
+            FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
+            {
+              echo "NYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+              echo "NYX_TEE_SYNC_FROM_SLOT=$FLOOR"
+              echo "NYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
+              echo "NYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
+              echo "NYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
+              echo "NYX_TEE_FEE_RATE_BPS=30"
+              echo "NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
+              echo "NYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
+            } > /tmp/nyx.env
+            for d in $(seq 1 6); do
+              OUT=$(phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/nyx.env --wait 2>&1)
+              echo "$OUT" | grep -q "already in progress" || break
+              echo "deploy busy — retry $d in 20s"; sleep 20
+            done
+            rm -f /tmp/nyx.env
+            for i in $(seq 1 40); do curl -fsS "$GATEWAY/info" -o /tmp/info.json 2>/dev/null && break; sleep 6; done
+          }
+          FAILED=""
+          for T in cvm-settle-e2e cvm-self-trade cvm-multimatch-settle cvm-merge-then-order; do
+            echo "::group::$T"
+            redeploy_fresh
+            ( cd packages/sdk && RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+                FUNDER_KEYPAIR=.devnet/keypairs/funder.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+                ../../node_modules/.bin/vitest run tests/$T.test.ts ) || FAILED="$FAILED $T"
+            echo "::endgroup::"
+          done
+          [ -z "$FAILED" ] || { echo "::error::CVM tests failed:$FAILED"; exit 1; }
 
       # ═══════════════════════════════════════════════════════════════════════
       # TEARDOWN — ALWAYS. Stops CVM billing whether the tests passed, failed,
