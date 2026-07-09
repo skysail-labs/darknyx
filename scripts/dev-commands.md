@@ -84,7 +84,7 @@ npm install                                            # SDK + snarkjs + circoml
 bash scripts/download-ptau.sh                          # pot16 (~80 MB) + pot18 (~288 MB)
 bash scripts/build-circuits.sh                         # compile 8 circom circuits; writes vk_*.rs
 cargo build --examples -p darkpool-crypto              # TS↔Rust parity helper binaries
-cargo build-sbf --manifest-path programs/vault/Cargo.toml          # BPF (litesvm + deploy)
+cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin  # BPF (litesvm + devnet deploy; F-01/F-02 admin ixs OFF by default for mainnet)
 ```
 
 The CVM image build (§5) is **amd64-only via CI** — never built locally on
@@ -205,7 +205,7 @@ Run before every commit / PR. Mirrors `.github/workflows/pr-checks.yml`.
 ```sh
 set -e
 cargo fmt --all && cargo fmt --all -- --check
-cargo build-sbf --manifest-path programs/vault/Cargo.toml
+cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin  # devnet-admin: litesvm reset/close tests need it (mainnet build omits it)
 cargo build --examples -p darkpool-crypto
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

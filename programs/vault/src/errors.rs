@@ -107,4 +107,6 @@ pub enum VaultError {
     InvalidTreeCount,
     #[msg("tee_pubkeys count out of range (must be in 1..=MAX_TEE_KEYS)")]
     InvalidKeyCount,
+    #[msg("tee_pubkey is the zero key or a duplicate of another key in the set")]
+    InvalidTeeKey,
 }

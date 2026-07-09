@@ -344,6 +344,16 @@ pub fn tee_forced_settle_batched_handler(
             marker_data.len() >= 8 + 32 + 8,
             VaultError::InvalidBatchBinding
         );
+        // F-08: this is a RAW read (the marker is an UncheckedAccount so the
+        // handler can accept ANY batch's marker by root), so validate the Anchor
+        // account discriminator explicitly — owner + length + PDA address are
+        // checked above, but the discriminator is what proves the bytes are a
+        // `BatchValidityMarker` and not some other program-owned account of the
+        // right size.
+        require!(
+            &marker_data[..8] == BatchValidityMarker::DISCRIMINATOR,
+            VaultError::InvalidBatchBinding
+        );
         // The length check above guarantees this fixed 8-byte slice exists, so
         // the conversion is infallible; map to a typed error instead of
         // `.unwrap()` to keep panics out of the handler (a panic would fail the

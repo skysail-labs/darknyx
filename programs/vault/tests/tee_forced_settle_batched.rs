@@ -204,6 +204,35 @@ fn settle_then_withdraw_double_spend_is_blocked() {
 }
 
 // ---------------------------------------------------------------------------
+// F-08 regression: the settle handler reads `batch_validity_marker` raw (it's an
+// UncheckedAccount), so it must validate the Anchor discriminator — not just the
+// owner + length + PDA address. Tamper only the discriminator byte (everything
+// else stays valid) and assert the settle is rejected.
+// ---------------------------------------------------------------------------
+#[test]
+fn settle_rejects_marker_with_tampered_discriminator() {
+    let mut h = Harness::setup();
+    let (p, proof, root) = seed_single_match(&mut h, 0x44);
+
+    // Corrupt byte 0 of the marker's 8-byte discriminator; leave payer/expiry/
+    // owner/length/PDA-address intact.
+    let (marker_pda, _) = batch_validity_marker_pda(&h, &root);
+    let mut acct = h.svm.get_account(&marker_pda).expect("marker seeded");
+    acct.data[0] ^= 0xFF;
+    h.svm.set_account(marker_pda, acct).unwrap();
+
+    let tx = build_settle_batched_tx(&h, 0, &p, 0, &proof, &root);
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "settle must reject a marker whose Anchor discriminator was tampered",
+    );
+    assert!(
+        !consumed_note_exists(&h, &p.note_a_commitment),
+        "the rejected settle must not have consumed its input note",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // CU profiling — TRUE WORST CASE: a single settle that appends all SIX output
 // leaves (note_c, note_d, buyer change note_e, seller change note_f, base-fee
 // note, quote-fee note) AND creates BOTH continuation re-lock PDAs (buyer +

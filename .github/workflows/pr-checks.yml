@@ -43,6 +43,11 @@ concurrency:
 
 permissions:
   contents: read
+  # `dorny/paths-filter` (the `changes` job) calls the GitHub API to list a PR's
+  # changed files on `pull_request` events — that needs `pull-requests: read`.
+  # Without it the token (restricted to exactly the scopes listed here) 403s with
+  # "Resource not accessible by integration". Read-only; no write scope added.
+  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -111,6 +116,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       # Pinned to match rust-toolchain.toml. Bump both together.
       - name: Install Rust 1.89.0
@@ -179,6 +186,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Install Rust 1.89.0 (for circom build)
         uses: dtolnay/rust-toolchain@1.89.0
@@ -401,6 +410,8 @@ jobs:
       SOLANA_CLI_VERSION: v3.1.12
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Cache Solana CLI install
         id: cache-solana
@@ -442,8 +453,33 @@ jobs:
       # invoke build-sbf per-program with an explicit manifest path. Do
       # that here so the artefact downstream litesvm jobs consume holds
       # two real binaries.
-      - name: cargo build-sbf — vault
+      # F-01/F-02: the devnet admin ixs (`reset_merkle_tree`,
+      # `close_vault_config`) are `#[cfg(feature = "devnet-admin")]`-gated OFF by
+      # default. The litesvm suite exercises reset, so the ARTIFACT this job
+      # uploads is the devnet build (feature ON). A mainnet build is plain
+      # `cargo build-sbf` (no feature) and ships neither backdoor — the guard
+      # step below asserts they stay gated.
+      - name: F-01/F-02 — admin backdoors stay devnet-admin-gated
+        run: |
+          set -euo pipefail
+          for ix in reset_merkle_tree close_vault_config; do
+            grep -Pzoq "#\[cfg\(feature = \"devnet-admin\"\)\]\s*\n\s*pub fn $ix" \
+              programs/vault/src/lib.rs \
+              || { echo "::error file=programs/vault/src/lib.rs::$ix must stay #[cfg(feature=\"devnet-admin\")]-gated (audit_1 F-01/F-02)"; exit 1; }
+          done
+          echo "OK: reset_merkle_tree + close_vault_config are gated behind devnet-admin"
+
+      # Compile the MAINNET artifact (no feature) first. Nothing consumes it —
+      # it's a compile guard: the mainnet build is where F-01/F-02 are absent and
+      # where F-03's upgrade-authority-bound `initialize` variant lives, so a
+      # break there (that the devnet-admin build wouldn't catch) fails CI here.
+      # The devnet-admin build below overwrites vault.so with the artifact the
+      # litesvm jobs actually load.
+      - name: cargo build-sbf — vault (mainnet build; compile-guards F-01/F-02 + F-03)
         run: cargo build-sbf --manifest-path programs/vault/Cargo.toml
+
+      - name: cargo build-sbf — vault (devnet build for the litesvm suite)
+        run: cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin
 
       - name: Sanity-check .so size (must be > 100 KB)
         shell: bash
@@ -489,6 +525,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@1.89.0
@@ -520,6 +558,7 @@ jobs:
             --test zk_spend_roundtrip \
             --test merge_verify \
             --test merkle_host \
+            --test merkle_fuzz \
             -- --nocapture
 
   # ------------------------------------------------------------------
@@ -545,6 +584,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@1.89.0

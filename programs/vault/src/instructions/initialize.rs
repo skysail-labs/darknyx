@@ -4,6 +4,55 @@ use crate::state::*;
 use anchor_lang::prelude::*;
 use core::mem::size_of;
 
+/// Initialize accounts — **mainnet** build (default; no `devnet-admin` feature).
+///
+/// F-03: the initializer is bound to the program's **upgrade authority**, so a
+/// third party cannot front-run `initialize` on a freshly deployed program and
+/// install themselves as `admin`. `program.programdata_address()` proves the
+/// supplied `program_data` really is *this* program's loader data, and its
+/// `upgrade_authority_address` must equal the `admin` signer.
+///
+/// The dev/test/devnet build (`devnet-admin` feature, below) uses the plain
+/// admin signer instead: front-running isn't a threat where we control the
+/// deploy, and the litesvm harness loads the program non-upgradeably (there is
+/// no ProgramData account to bind against). This mirrors the F-01/F-02 gate —
+/// the mainnet artifact carries the guard, the dev artifact stays testable.
+#[cfg(not(feature = "devnet-admin"))]
+#[derive(Accounts)]
+#[instruction(tee_pubkey: Pubkey, root_key: Pubkey, num_trees: u8)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + size_of::<VaultConfig>(),
+        seeds = [VaultConfig::SEED],
+        bump,
+    )]
+    pub vault_config: AccountLoader<'info, VaultConfig>,
+
+    /// This program — used only to derive/verify its ProgramData address.
+    #[account(
+        constraint = program.programdata_address()? == Some(program_data.key())
+            @ VaultError::Unauthorized,
+    )]
+    pub program: Program<'info, crate::program::Vault>,
+
+    /// The upgradeable-loader ProgramData; its upgrade authority MUST be `admin`.
+    #[account(
+        constraint = program_data.upgrade_authority_address == Some(admin.key())
+            @ VaultError::Unauthorized,
+    )]
+    pub program_data: Account<'info, ProgramData>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Initialize accounts — dev/test/devnet build (`devnet-admin`). Plain admin
+/// signer, no upgrade-authority binding (see the mainnet variant above for why).
+#[cfg(feature = "devnet-admin")]
 #[derive(Accounts)]
 #[instruction(tee_pubkey: Pubkey, root_key: Pubkey, num_trees: u8)]
 pub struct Initialize<'info> {

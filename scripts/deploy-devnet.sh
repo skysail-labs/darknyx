@@ -25,8 +25,9 @@ VAULT_KP="target/deploy/vault-keypair.json"
 for f in "$VAULT_SO" "$VAULT_KP"; do
   if [[ ! -f "$f" ]]; then
     echo "MISSING: $f"
-    echo "run:"
-    echo "  cargo build-sbf --manifest-path programs/vault/Cargo.toml"
+    echo "run (devnet build — NEEDS the admin ixs for reset-merkle-tree.mjs /"
+    echo "close-vault-config.mjs; audit_1 F-01/F-02 gate them off by default):"
+    echo "  cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin"
     exit 1
   fi
 done
