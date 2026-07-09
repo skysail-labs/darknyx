@@ -1,4 +1,7 @@
-# Nightly CVM + devnet end-to-end.
+# Twice-weekly CVM + devnet end-to-end.
+# (Historical note: the concurrency group `cvm-e2e-nightly`, the repo var
+# `NYX_NIGHTLY_CVM_ID`, and the CVM name `nightly-test-cvm` keep their original
+# "nightly" names — they are stable identifiers, not the cadence.)
 #
 # Runs the REAL settle path against a live Phala CVM on Solana devnet: deposit
 # real notes, POST crossing orders to the enclave, and assert it matches AND
@@ -35,11 +38,13 @@
 # tops up their funding every run (idempotent), so a changed image (new
 # compose_hash → new signers) is handled automatically.
 
-name: cvm-e2e (nightly)
+name: cvm-e2e (twice-weekly)
 
 on:
   schedule:
-    - cron: "0 7 * * *" # 07:00 UTC nightly
+    # Twice a week: 07:00 UTC on Monday and Thursday. Fewer runs than nightly →
+    # less Actions-minutes + less build-from-main signer/tag churn.
+    - cron: "0 7 * * 1,4"
   workflow_dispatch:
     inputs:
       image_tag:

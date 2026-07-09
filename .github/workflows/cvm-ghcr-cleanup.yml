@@ -1,0 +1,77 @@
+# Prune old cvm-e2e-* images from ghcr.io/skysail-labs/nyx-tee.
+#
+# The twice-weekly cvm-e2e run (cvm-e2e.yml) pushes a fresh `cvm-e2e-<sha>` image for
+# every distinct main SHA it builds, so those accumulate over time. This keeps
+# only the newest N and prunes the rest.
+#
+# SAFETY — it NEVER touches the hand-curated `tee-v3-hardening-*` release tags or
+# `buildcache`: it only selects versions whose tags are ALL `cvm-e2e-*` (and
+# non-empty). A version that also carries any other tag is skipped entirely.
+#
+# AUTH — the run-scoped GITHUB_TOKEN with `packages: write` can delete versions of
+# a package the repo has write on (tee-image.yml pushes here with the same token).
+# If a DELETE returns 403, set a PAT with `delete:packages` as a secret and use it
+# for GH_TOKEN below.
+
+name: cvm-ghcr-cleanup (prune old cvm-e2e-* images)
+
+on:
+  schedule:
+    - cron: "0 5 * * 0" # weekly, Sunday 05:00 UTC
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "How many newest cvm-e2e-* images to keep"
+        required: false
+        default: "3"
+        type: string
+      dry_run:
+        description: "List what would be deleted, but delete nothing"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  packages: write
+
+concurrency:
+  group: cvm-ghcr-cleanup
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ORG: skysail-labs
+      PKG: nyx-tee
+      KEEP: ${{ inputs.keep || '3' }}
+      DRY: ${{ inputs.dry_run || 'false' }}
+    steps:
+      - name: Prune old cvm-e2e-* container versions (keep newest N)
+        run: |
+          set -euo pipefail
+          # All package versions (paginated), reduced to {id, created, tags},
+          # filtered to those whose tags are ALL cvm-e2e-* (non-empty), newest
+          # first. `jq -s 'add'` merges the paginated pages robustly.
+          gh api --paginate "/orgs/$ORG/packages/container/$PKG/versions" \
+            | jq -s 'add
+                     | map({id, created: .created_at, tags: (.metadata.container.tags // [])})
+                     | map(select((.tags | length > 0) and (all(.tags[]; startswith("cvm-e2e-")))))
+                     | sort_by(.created) | reverse' > /tmp/v.json
+          TOTAL=$(jq 'length' /tmp/v.json)
+          echo "cvm-e2e-* versions: $TOTAL (keeping newest $KEEP; dry_run=$DRY)"
+          jq -r '.[] | "  \(.created)  id=\(.id)  tags=\(.tags | join(","))"' /tmp/v.json
+          DELIDS=$(jq -r ".[$KEEP:][].id" /tmp/v.json)
+          if [ -z "$DELIDS" ]; then echo "nothing to prune"; exit 0; fi
+          for id in $DELIDS; do
+            tags=$(jq -r ".[] | select(.id==$id) | .tags | join(\",\")" /tmp/v.json)
+            if [ "$DRY" = "true" ]; then
+              echo "[dry-run] would delete version $id (tags: $tags)"
+            else
+              echo "deleting version $id (tags: $tags)"
+              gh api -X DELETE "/orgs/$ORG/packages/container/$PKG/versions/$id"
+            fi
+          done
+          echo "done"
