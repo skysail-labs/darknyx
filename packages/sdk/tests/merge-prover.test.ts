@@ -21,12 +21,24 @@ import { proveValidMerge, type MergeSlot } from "./helpers/merge-prover.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
+// Guard on BOTH the .zkey AND the .wasm. circuit_final.zkey is committed, but
+// circuit.wasm is gitignored (built by scripts/build-circuits.sh / downloaded
+// from the circuits CI job). On an SDK-only PR the circuits job is skipped, so
+// the .wasm is absent while the .zkey is present — checking only the .zkey would
+// wrongly run and then fail snarkjs "cannot find circuit.wasm" (matches how
+// valid-input-prover.test.ts guards).
 const HAVE_ARTIFACTS =
   existsSync(
     resolve(REPO_ROOT, "circuits/build/valid_merge_k2/circuit_final.zkey"),
   ) &&
   existsSync(
+    resolve(REPO_ROOT, "circuits/build/valid_merge_k2/circuit_js/circuit.wasm"),
+  ) &&
+  existsSync(
     resolve(REPO_ROOT, "circuits/build/valid_merge_k4/circuit_final.zkey"),
+  ) &&
+  existsSync(
+    resolve(REPO_ROOT, "circuits/build/valid_merge_k4/circuit_js/circuit.wasm"),
   );
 
 const maybe = HAVE_ARTIFACTS ? describe : describe.skip;
