@@ -180,11 +180,17 @@ pub mod vault {
         ctx: Context<SetProtocolConfig>,
         protocol_owner_commitment: [u8; 32],
         fee_rate_bps: u16,
+        tick_size: u64,
+        min_order_size: u64,
+        circuit_breaker_bps: u64,
     ) -> Result<()> {
         set_protocol_config::set_protocol_config_handler(
             ctx,
             protocol_owner_commitment,
             fee_rate_bps,
+            tick_size,
+            min_order_size,
+            circuit_breaker_bps,
         )
     }
 

@@ -693,8 +693,22 @@ it after; never commit a secret).**
 > intake derives this (`orders.rs`); the loadgen + e2e harness mirror it — or
 > the matcher rejects the match as conservation-breaking. The CVM fee rate is
 > `NYX_TEE_FEE_RATE_BPS` (default 30); fees-on without
-> `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` warns (unclaimable). `VaultConfig.fee_rate_bps`
-> is vestigial for the TEE settle path.
+> `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` warns (unclaimable).
+
+> **On-chain governance config (single place = `VaultConfig`).** `VaultConfig`
+> is the one on-chain home for TEE-adopted config: `fee_rate_bps` (an ENFORCED
+> fee FLOOR in `tee_forced_settle_batched` — NOT vestigial) + `protocol_owner_commitment`
+> + the matcher params `tick_size` / `min_order_size` / `circuit_breaker_bps`.
+> All are set by the admin ix `set_protocol_config` (SDK
+> `buildSetProtocolConfigInstruction` — keep the arg order in lockstep, §7/§8.3).
+> The TEE reads them in ONE fetch **at boot** (`main.rs::read_on_chain_vault_config`
+> → `solana_rpc::vault_config`): it adopts the on-chain `fee_rate_bps` (fee floor)
+> and, for each matcher param, adopts a non-zero on-chain value over the env/dev
+> default (`0 = unset`). This is a **boot read only** — a live re-poll is
+> deliberately deferred. New `VaultConfig` fields append after `_padding`, so the
+> byte offsets the SDK (`vault-client.ts`) + TEE (`vault_config.rs`, pinned by a
+> unit test) parse must move in lockstep; growing the zero-copy account needs a
+> devnet re-foundation (`close_vault_config` → `initialize`).
 
 > **CodeRabbit** reviews via `.coderabbit.yaml` (path instructions encode the
 > §5/§6/§7/§8 invariants). Treat its findings like any review — verify each

@@ -61,8 +61,21 @@ pub struct VaultConfig {
     /// Number of Merkle-tree shards the matcher round-robins across.
     pub num_trees: u8,
     pub bump: u8,
-    /// Explicit trailing padding so the zero-copy Pod layout has no implicit padding.
+    /// Explicit alignment padding so the following `u64` config fields start
+    /// 8-aligned with no implicit padding (zero-copy Pod requirement).
     pub _padding: [u8; 3],
+    /// Matcher governance params (single-place config). Read by the TEE **at
+    /// boot only** (never on the settle hot path). `0 = unset` ⇒ the TEE keeps
+    /// its env/dev default, so governance can publish only the params it cares
+    /// about. A live re-poll is intentionally deferred.
+    ///
+    /// Smallest price increment in base units (`MatchConfig::tick_size`).
+    pub tick_size: u64,
+    /// Minimum order size in base units (`MatchConfig::min_order_size`).
+    pub min_order_size: u64,
+    /// Circuit-breaker band: max |clearing − twap| / twap in bps
+    /// (`MatchConfig::circuit_breaker_bps`).
+    pub circuit_breaker_bps: u64,
 }
 
 impl VaultConfig {

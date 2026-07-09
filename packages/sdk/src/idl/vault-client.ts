@@ -291,6 +291,11 @@ export interface BuildSetProtocolConfigParams {
   admin: PublicKey;
   protocolOwnerCommitment: Uint8Array; // 32B Poseidon commitment
   feeRateBps: number; // 0..=10_000
+  // Matcher governance params (single-place config in VaultConfig, adopted by
+  // the TEE at boot). 0 = unset ⇒ the TEE keeps its env/dev default. Default 0.
+  tickSize?: bigint;
+  minOrderSize?: bigint;
+  circuitBreakerBps?: bigint;
 }
 
 function u16LE(v: number): Uint8Array {
@@ -306,10 +311,15 @@ export function buildSetProtocolConfigInstruction(
     throw new Error(`feeRateBps out of range: ${p.feeRateBps}`);
   }
   const [vaultPda] = vaultConfigPda(p.programId);
+  // Arg order MUST match the on-chain handler:
+  // protocol_owner_commitment, fee_rate_bps, tick_size, min_order_size, circuit_breaker_bps.
   const data = cat(
     anchorDiscriminator("set_protocol_config"),
     fixed32(p.protocolOwnerCommitment),
     u16LE(p.feeRateBps),
+    u64LE(p.tickSize ?? 0n),
+    u64LE(p.minOrderSize ?? 0n),
+    u64LE(p.circuitBreakerBps ?? 0n),
   );
   return new TransactionInstruction({
     programId: p.programId,
