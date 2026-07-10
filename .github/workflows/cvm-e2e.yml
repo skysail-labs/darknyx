@@ -88,14 +88,14 @@ jobs:
       HELIUS_RPC: "https://devnet.helius-rpc.com/?api-key=${{ secrets.HELIUS_API_KEY }}"
       CVM: ${{ vars.NYX_NIGHTLY_CVM_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive # nyx-tee icicle-snark path dep (see pr-checks.yml)
 
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@1.89.0
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -110,7 +110,7 @@ jobs:
       #    .wasm + .zkey. Cache the ptau (pot16/pot18 ~370 MB) + built circuits. ──
       - name: Cache circuit artifacts
         id: cache-circuits
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             circuits/build

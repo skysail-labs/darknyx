@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # No step pushes to git (npm/circom/cargo only), so don't leave the
           # write-capable token in .git/config (mirrors tee-image.yml).
@@ -33,7 +33,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -48,7 +48,7 @@ jobs:
 
       - name: Cache circom binary
         id: cache-circom
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/circom
           key: circom-${{ runner.os }}-v2.2.2
