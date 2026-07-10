@@ -123,7 +123,8 @@ impl PlaceOrderBuilder {
             amount: 10_000_000,
             price_limit: 150_000_000,
             min_fill_size: 0,
-            expiry_slot: 1_000_000,
+            // Within MAX_LOCK_TTL_SLOTS (4_500, F-05) of the test current_slot (1).
+            expiry_slot: 4_000,
             order_id: {
                 let mut o = [0u8; 16];
                 o[0] = 0xAA;
@@ -594,6 +595,27 @@ async fn place_rejects_zero_price_bid() {
     b.price_limit = 0;
     let resp = place(&app, &bearer, b.sign(&key)).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn place_rejects_expiry_beyond_lock_ttl_cap() {
+    // F-05: the settler stamps the note lock with the order's expiry_slot, and
+    // the vault caps the lock window at MAX_LOCK_TTL_SLOTS. Intake rejects an
+    // order whose expiry exceeds current_slot + cap up front (clean 400), so it
+    // can't match only to fail later at settle-time lock_note.
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let mut b = PlaceOrderBuilder::new();
+    // Test state's current_slot is 1; MAX_LOCK_TTL_SLOTS is 4_500 — well past it.
+    b.expiry_slot = 5_000_000;
+    let resp = place(&app, &bearer, b.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = read_json(resp).await;
+    assert_eq!(json["code"], 1007); // expiry_too_far
+                                    // And it never landed in the book.
+    let get_resp = get_order(&app, &bearer, &hex::encode(b.order_id)).await;
+    assert_eq!(get_resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

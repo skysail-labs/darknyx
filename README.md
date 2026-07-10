@@ -27,7 +27,7 @@ auth'd fill memo (`/ws/fills`, with durable replay), never an L1 transaction.
 | TEE can't lock a note it doesn't own | `VALID_INPUT` Groth16 verified at `lock_note` time              |
 | TEE can't misroute outputs      | `VALID_MATCH_BATCH` Groth16 verified at `verify_match_batch` time (N=16/batch) |
 | Per-mint solvency invariant     | `outstanding[mint] ≤ vault_token_account.amount` after every ix      |
-| Bounded censorship window       | `MAX_LOCK_TTL_SLOTS` (~24h) ceiling on note locks                    |
+| Bounded censorship window       | `MAX_LOCK_TTL_SLOTS` (~30 min) ceiling on note locks                 |
 | Trustless withdrawal            | Groth16 `VALID_SPEND` proof — no operator can move user funds        |
 | Front-running protection        | Uniform clearing price + Pyth oracle band per batch                  |
 | Partial-fill continuation       | A per-order anchor pool lets the matcher rotate the residual + re-match it with no client roundtrip |

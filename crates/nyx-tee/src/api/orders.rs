@@ -317,6 +317,15 @@ struct PreparedOrder {
     canonical_digest: [u8; 32],
 }
 
+/// Hand-mirror of `vault::state::MAX_LOCK_TTL_SLOTS` (F-05) — the TEE doesn't
+/// depend on the vault BPF crate, so keep this in lockstep with
+/// `programs/vault/src/state.rs`. The settler stamps each note lock with the
+/// order's `expiry_slot`, and the vault's `lock_note` caps that at
+/// `current_slot + MAX_LOCK_TTL_SLOTS`; intake rejects orders beyond it up front
+/// (see `prepare_order`) so the cap is a clean placement error, not a
+/// settle-time failure. 4_500 ≈ 30 min at 400 ms slots (→ ~15 min post-Alpenglow).
+const MAX_LOCK_TTL_SLOTS: u64 = 4_500;
+
 /// Verify + build an order WITHOUT touching the book (decode, Fr-checks,
 /// canonical-signature verify, collateral/fee derivation, opening verify, Order
 /// construction). Lock-free so the Poseidon work doesn't block a matcher tick;
@@ -446,6 +455,17 @@ async fn prepare_order(
     //    pathological "zero" case the matcher never sees in
     //    practice.
     let arrival_slot = state.current_slot.load(Ordering::Relaxed);
+    // F-05: the settler stamps the note lock with THIS order's `expiry_slot`,
+    // and the vault caps the lock window at `MAX_LOCK_TTL_SLOTS`. An order valid
+    // beyond that could never settle (the settle-time `lock_note` would revert),
+    // so reject it here for a clean placement error. (Already-expired orders are
+    // handled by the matcher's expiry sweep, not here.)
+    if req.expiry_slot > arrival_slot.saturating_add(MAX_LOCK_TTL_SLOTS) {
+        return Err(ApiError::expiry_too_far(format!(
+            "expiry_slot {} exceeds current_slot {} + MAX_LOCK_TTL_SLOTS {} (~30 min)",
+            req.expiry_slot, arrival_slot, MAX_LOCK_TTL_SLOTS
+        )));
+    }
     // A bid's collateral is `amount * price_limit` (quote units). A
     // zero price_limit is economically meaningless (buy at price 0)
     // and would collapse to the base-unit `amount` fallback below —

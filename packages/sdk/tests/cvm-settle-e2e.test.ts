@@ -381,7 +381,10 @@ maybeDescribe(
 
         // ── 4. build + sign the two orders ─────────────────────────────
         const slot = await conn.getSlot("confirmed");
-        const expirySlot = BigInt(slot + 50_000);
+        // Within MAX_LOCK_TTL_SLOTS (4_500 ≈ 30 min; F-05) so intake accepts it
+        // and the settle-time lock_note doesn't hit the cap. Far more than the
+        // ~90 s the test needs, with margin for TEE/client slot-view skew.
+        const expirySlot = BigInt(slot + 3_000);
 
         async function buildOrder(
           p: Persona,
