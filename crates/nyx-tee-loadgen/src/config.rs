@@ -200,15 +200,16 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 3)]
     pub real_multi_anchor_asks: u8,
 
-    /// Slot every generated order expires at. The TEE matcher sweeps
-    /// orders whose `expiry_slot < current_slot`, where `current_slot`
-    /// is the REAL Solana slot from the TEE's slot poller (~466M+ on
-    /// devnet). So this MUST sit comfortably above the live slot for
-    /// the whole run, else every order is swept as expired before it
-    /// can match (0 matches, though intake still 2xx-accepts them).
-    /// Default 2_000_000_000 is ~19 years out at devnet cadence; bump
-    /// it before ~2040 or when targeting a faster cluster.
-    #[arg(long, default_value_t = 2_000_000_000)]
+    /// Absolute slot every generated order expires at. Must sit ABOVE the live
+    /// slot (else swept as expired → 0 matches) but WITHIN
+    /// `MAX_LOCK_TTL_SLOTS` (~4_500 ≈ 30 min, F-05) of it — intake now rejects
+    /// orders beyond that (`expiry_too_far`), so the old "~19 years out" value
+    /// would 4xx every order.
+    ///
+    /// **Default 0 = auto**: resolve to the TEE's live `current_slot` + a safe
+    /// offset (well inside the cap), read from `/system/status`. Set an explicit
+    /// value only if you know the live slot and want a fixed one.
+    #[arg(long, default_value_t = 0)]
     pub expiry_slot: u64,
 }
 

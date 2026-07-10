@@ -381,7 +381,10 @@ maybeDescribe(
 
         // ── 4. build + sign the two orders ─────────────────────────────
         const slot = await conn.getSlot("confirmed");
-        const expirySlot = BigInt(slot + 50_000);
+        // Within MAX_LOCK_TTL_SLOTS (4_500 ≈ 30 min; F-05) so intake accepts it
+        // and the settle-time lock_note doesn't hit the cap. Far more than the
+        // ~90 s the test needs, with margin for TEE/client slot-view skew.
+        const expirySlot = BigInt(slot + 3_000);
 
         async function buildOrder(
           p: Persona,
@@ -391,7 +394,11 @@ maybeDescribe(
           vi: { proofBytes: Uint8Array; root: Uint8Array },
           orderIndex: number,
           qty: bigint,
+          expiryOverride?: bigint,
         ) {
+          // F-05: an over-cap expiry lets us assert intake rejects it; normal
+          // orders use the within-cap module `expirySlot`.
+          const exp = expiryOverride ?? expirySlot;
           // Deterministic per (seed, n) — buyer + seller have distinct seeds, so
           // the same n yields distinct ids. Recoverable by the fills gap-scan.
           const orderId = deriveOrderId(p.masterSeed, orderIndex);
@@ -409,7 +416,7 @@ maybeDescribe(
             amount: qty,
             priceLimit,
             minFillSize: 0n,
-            expirySlot,
+            expirySlot: exp,
             orderId,
             noteCommitment: note.commitment,
             userCommitment: p.userCommitment,
@@ -424,7 +431,7 @@ maybeDescribe(
             amount: Number(qty),
             price_limit: Number(priceLimit),
             min_fill_size: 0,
-            expiry_slot: Number(expirySlot),
+            expiry_slot: Number(exp),
             order_id: hex(orderId),
             note_commitment: hex(note.commitment),
             user_commitment: hex(p.userCommitment),
@@ -485,6 +492,39 @@ maybeDescribe(
         expect(tokRes.status, "auth/token failed").toBe(200);
         const token = ((await tokRes.json()) as { access_token: string })
           .access_token;
+
+        // ── F-05: intake rejects an over-cap expiry (never enters the book) ──
+        const overCapOrder = await buildOrder(
+          buyer,
+          OrderSide.Bid,
+          bidPrice,
+          buyerNote,
+          buyerVI,
+          ORDER_N + 777, // distinct order id
+          BASE_QTY,
+          BigInt(slot + 100_000), // ≫ MAX_LOCK_TTL_SLOTS (~4_500)
+        );
+        const overCapResp = await t.step(
+          "F-05: over-cap expiry rejected at intake",
+          () =>
+            gwFetch(`${GATEWAY}/orders`, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify(overCapOrder),
+            }),
+        );
+        expect(
+          overCapResp.status,
+          "over-cap expiry must be rejected at intake (F-05)",
+        ).toBe(400);
+        const overCapJson = (await overCapResp.json()) as { code?: number };
+        expect(overCapJson.code, "expected expiry_too_far (1007)").toBe(1007);
+        console.log(
+          "  · F-05: over-cap order rejected at intake (400 expiry_too_far)",
+        );
 
         // Fills (live): open the per-account WS BEFORE submitting. The matcher
         // emits the FillMemo at MATCH time (broadcast, not buffered for late

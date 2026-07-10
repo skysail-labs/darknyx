@@ -39,11 +39,15 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
     let quote_mint = cfg.quote_mint_bytes()?;
 
     // ─── 0. Status preflight — fail fast on a degraded / misconfigured CVM ──
+    // Also capture the live current_slot so `--expiry-slot 0` (auto) can place
+    // orders within MAX_LOCK_TTL_SLOTS of it (F-05).
+    let mut live_slot: Option<u64> = None;
     if cfg.status_preflight {
         let url = format!("{}/system/status", cfg.endpoint);
         match http.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                live_slot = body.get("current_slot").and_then(|v| v.as_u64());
                 let degraded = body
                     .get("degraded")
                     .and_then(|v| v.as_bool())
@@ -132,6 +136,37 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
         tracing::info!(feed_id = cfg.feed_id, "oracle seeded via debug endpoint");
     }
 
+    // Resolve the order expiry. `--expiry-slot 0` (default) = auto: the live
+    // slot + a safe offset inside MAX_LOCK_TTL_SLOTS (F-05), so intake accepts
+    // it (`expiry_too_far` otherwise). An explicit value is used as-is.
+    const AUTO_EXPIRY_OFFSET_SLOTS: u64 = 4_000; // < MAX_LOCK_TTL_SLOTS (4_500)
+    let order_expiry_slot = if cfg.expiry_slot == 0 {
+        let slot = match live_slot {
+            Some(s) => s,
+            None => {
+                let body: serde_json::Value = http
+                    .get(format!("{}/system/status", cfg.endpoint))
+                    .send()
+                    .await?
+                    .json()
+                    .await
+                    .unwrap_or_default();
+                body.get("current_slot")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "could not read current_slot to auto-resolve order expiry; \
+                             pass --expiry-slot <live_slot + up to 4000> explicitly"
+                        )
+                    })?
+            }
+        };
+        slot + AUTO_EXPIRY_OFFSET_SLOTS
+    } else {
+        cfg.expiry_slot
+    };
+    tracing::info!(order_expiry_slot, "resolved order expiry (F-05 cap-aware)");
+
     // ─── 3. Spawn traders ─────────────────────────────────────────
     let cfg_arc = Arc::new(cfg.clone());
     let metrics = RunMetrics::new();
@@ -143,7 +178,7 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
         let workload = make_workload(
             cfg.scenario,
             cfg.oracle_twap,
-            cfg.expiry_slot,
+            order_expiry_slot,
             cfg.symbol.clone(),
             cfg.over_collateral_bps,
             idx as u64,

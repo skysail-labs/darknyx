@@ -138,7 +138,9 @@ fn sign_order(
         amount: 10_000_000,
         price_limit,
         min_fill_size: 0,
-        expiry_slot: 1_000_000,
+        // Within MAX_LOCK_TTL_SLOTS (4_500, F-05) of the test's current_slot (1)
+        // so intake accepts it; still far past current_slot so it isn't swept.
+        expiry_slot: 4_000,
         order_id,
         note_commitment,
         user_commitment,
@@ -156,7 +158,7 @@ fn sign_order(
         "amount": 10_000_000u64,
         "price_limit": price_limit,
         "min_fill_size": 0u64,
-        "expiry_slot": 1_000_000u64,
+        "expiry_slot": 4_000u64,
         "order_id": hex::encode(order_id),
         "note_commitment": hex::encode(note_commitment),
         "user_commitment": hex::encode(user_commitment),

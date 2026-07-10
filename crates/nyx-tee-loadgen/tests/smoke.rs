@@ -138,9 +138,10 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         // Matches the in-process MatchConfig (fee_rate_bps = 0) so the
         // synthetic note_amount = nominal (fee-free) lines up with intake.
         fee_rate_bps: 0,
-        // Far above the in-process matcher's current_slot so orders
-        // aren't swept as expired before they match.
-        expiry_slot: 2_000_000_000,
+        // Above the in-process matcher's current_slot (1) so orders aren't swept
+        // as expired, but WITHIN MAX_LOCK_TTL_SLOTS (4_500, F-05) so intake
+        // accepts them (an over-cap expiry now 400s at intake).
+        expiry_slot: 4_000,
     };
 
     let outcome = run_load_gen(cfg).await.expect("loadgen run completed");

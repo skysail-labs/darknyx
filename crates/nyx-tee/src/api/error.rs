@@ -79,6 +79,12 @@ impl ApiError {
     pub fn bad_opening(m: impl Into<String>) -> Self {
         Self::new(1006, StatusCode::BAD_REQUEST, m)
     }
+    /// The order's `expiry_slot` is further out than `MAX_LOCK_TTL_SLOTS`
+    /// (F-05): the settler stamps the note lock with this expiry, and the vault
+    /// caps the lock window, so an order this long-lived could never settle.
+    pub fn expiry_too_far(m: impl Into<String>) -> Self {
+        Self::new(1007, StatusCode::BAD_REQUEST, m)
+    }
 
     // 1100–1199 — auth (401/403)
     /// Missing / invalid / expired / revoked bearer token, or bad credentials.

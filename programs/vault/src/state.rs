@@ -15,11 +15,19 @@ pub const MERKLE_DEPTH: u8 = 20;
 pub const ROOT_HISTORY_SIZE: usize = 64;
 
 /// Hard ceiling on how far in the future a `NoteLock`'s `expiry_slot` may
-/// sit. ~216_000 slots ≈ 24h at 400ms slots. Prevents a malicious TEE from
-/// effectively burning a note by locking it for `u64::MAX` slots (the
+/// sit. The settler stamps the lock with the ORDER's `expiry_slot`, so this is
+/// simultaneously the **max order lifetime** and the **censorship window**: the
 /// `withdraw` ix refuses while a lock exists, even an expired one, until
-/// `release_lock` is called — so the lock window is the censorship window).
-pub const MAX_LOCK_TTL_SLOTS: u64 = 216_000;
+/// `release_lock` is called (F-05).
+///
+/// 4_500 slots ≈ **30 min at today's 400 ms slots**. Placement→settlement is
+/// ≤ ~30 s in practice, so this is ~60× headroom. It's a FIXED slot count, so
+/// after Alpenglow halves slot times to ~200 ms it naturally becomes ~15 min of
+/// wall-clock — the intended tightening, with no code change. Intake rejects
+/// orders whose `expiry_slot` exceeds `current + MAX_LOCK_TTL_SLOTS` up front
+/// (`api/orders.rs`), so the cap surfaces as a clean placement error rather than
+/// a settle-time `lock_note` failure.
+pub const MAX_LOCK_TTL_SLOTS: u64 = 4_500;
 
 /// Max authorized TEE signer keys (= max shard fee-payers). Each settles a
 /// shard; round-robined so concurrent settles use DISTINCT fee-payers (no

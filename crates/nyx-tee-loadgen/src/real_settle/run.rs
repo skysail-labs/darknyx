@@ -368,7 +368,8 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
     // 4. Build + sign both orders. Salt the order_ids per run (see
     // `salted_order_id`): even though this single-pair path is exact-fill (no
     // anchors consumed), fixed order_ids are a latent cross-run collision.
-    let expiry_slot = rpc.slot().await? + 50_000;
+    // Within MAX_LOCK_TTL_SLOTS (4_500 ≈ 30 min; F-05) so intake accepts it.
+    let expiry_slot = rpc.slot().await? + 3_000;
     let pair_nonce = run_nonce();
     let buyer_order = build_order_body(
         &buyer,
@@ -915,7 +916,8 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     let token = acquire_bearer(&http, &p.gateway, &p.api_key, &p.api_secret, &p.passphrase)
         .await
         .map_err(|e| anyhow!("auth: {e}"))?;
-    let expiry_slot = rpc.slot().await? + 50_000;
+    // Within MAX_LOCK_TTL_SLOTS (4_500 ≈ 30 min; F-05) so intake accepts it.
+    let expiry_slot = rpc.slot().await? + 3_000;
     let submit_nonce = run_nonce();
     let mut bodies = Vec::with_capacity(orders.len());
     for (i, o) in orders.iter().enumerate() {

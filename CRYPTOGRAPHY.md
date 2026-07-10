@@ -1163,7 +1163,9 @@ Handler steps (v2):
 2. Assert `merkle_root` is in `merkle_tree.contains_root()` (current root
    or any of the previous 32 on that shard).
 3. Assert `expiry_slot > clock.slot` AND `expiry_slot ≤ clock.slot + MAX_LOCK_TTL_SLOTS`
-   (= 216,000 slots ≈ 24h on 400ms-slot devnet).
+   (= 4,500 slots ≈ 30 min at 400 ms slots; a fixed slot count, so it naturally
+   tightens to ~15 min after Alpenglow's 200 ms slots — F-05). Intake rejects
+   orders beyond this up front, so the cap is a placement error, not a settle failure.
 4. Assert `amount > 0`.
 5. Construct the VALID_INPUT public inputs:
    `[merkle_root, note_commitment, mint_lo, mint_hi, u64_be32(amount)]`.
@@ -1654,7 +1656,7 @@ requirements:
 
 The multi-tx flow is **not atomic across txs** — a TEE that lands locks
 but never settles leaves rent-locked PDAs until expiry. But the PDAs have
-TTLs (locks ~24h, markers ~2 min), so abandoned state self-cleans.
+TTLs (locks ~30 min, markers ~2 min), so abandoned state self-cleans.
 
 ### The marker PDA construction (binding by seed)
 
