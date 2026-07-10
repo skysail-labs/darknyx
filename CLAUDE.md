@@ -37,9 +37,15 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   directly.
 * **Client (TypeScript SDK + snarkjs prover)** — `packages/sdk/` is the
   integration surface: clients build VALID_INPUT proofs and `POST`
-  orders to the CVM. `crates/darkpool-crypto/` is the host-side Rust
-  crypto crate with byte-identical Poseidon / nullifier / note / key
-  derivation that the TS SDK has parity tests against.
+  orders to the CVM. `packages/daemon/` (`nyx-daemon`) is the reference
+  **non-custodial market-maker daemon** built on the SDK (keys + proving
+  on-device; drives order lifecycle off the live `/ws/fills` + `/ws/orders`
+  streams and on-chain reads, with auto anchor-topup + auto-merge). It is
+  deliberately **lean — it does NOT depend on the off-TEE indexer**; live TEE
+  streams + chain reads are its source of truth (merged, live-CVM smoke-tested).
+  `crates/darkpool-crypto/` is the host-side Rust crypto crate with
+  byte-identical Poseidon / nullifier / note / key derivation that the TS SDK
+  has parity tests against.
 
 Supporting crates: `crates/darkpool-matcher/` (the matching algorithm +
 the order/cancel/anchor-topup canonical signing — single source of
@@ -84,8 +90,13 @@ You will not write correct code here without the mental model. Required:
   verbatim. Helper scripts: `scripts/reset-merkle-tree.mjs`,
   `scripts/rotate-tee-pubkey.mjs`, `scripts/deploy-devnet.sh`.
 * **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)**
-  — the decided-but-unbuilt fills-delivery + trade-history design
-  (deterministic HD order_ids + per-account WS + off-TEE indexer).
+  — the fills-delivery + trade-history design, now **implemented**
+  (deterministic HD order_ids + per-account `/ws/fills`). Post amount-privacy +
+  on-chain change-amount recovery (Proposal B), the off-TEE `packages/indexer`
+  is an **OPTIONAL by-order_id commitment LOCATOR** with no consumer today (the
+  daemon uses live streams instead) — the durable amount source is the chain.
+  Read the top-of-doc as-built deltas; the lower half is the superseded original
+  decision record.
 * **[`docs/throughput-roadmap.md`](docs/throughput-roadmap.md)** — the log of
   settle/throughput optimizations deliberately DEFERRED behind platform gates
   (🟢 GPU proving, 🔵 Alpenglow finality) + 🟡 real volume, with the measured
@@ -682,8 +693,22 @@ it after; never commit a secret).**
 > intake derives this (`orders.rs`); the loadgen + e2e harness mirror it — or
 > the matcher rejects the match as conservation-breaking. The CVM fee rate is
 > `NYX_TEE_FEE_RATE_BPS` (default 30); fees-on without
-> `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` warns (unclaimable). `VaultConfig.fee_rate_bps`
-> is vestigial for the TEE settle path.
+> `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` warns (unclaimable).
+
+> **On-chain governance config (single place = `VaultConfig`).** `VaultConfig`
+> is the one on-chain home for TEE-adopted config: `fee_rate_bps` (an ENFORCED
+> fee FLOOR in `tee_forced_settle_batched` — NOT vestigial) + `protocol_owner_commitment`
+> + the matcher params `tick_size` / `min_order_size` / `circuit_breaker_bps`.
+> All are set by the admin ix `set_protocol_config` (SDK
+> `buildSetProtocolConfigInstruction` — keep the arg order in lockstep, §7/§8.3).
+> The TEE reads them in ONE fetch **at boot** (`main.rs::read_on_chain_vault_config`
+> → `solana_rpc::vault_config`): it adopts the on-chain `fee_rate_bps` (fee floor)
+> and, for each matcher param, adopts a non-zero on-chain value over the env/dev
+> default (`0 = unset`). This is a **boot read only** — a live re-poll is
+> deliberately deferred. New `VaultConfig` fields append after `_padding`, so the
+> byte offsets the SDK (`vault-client.ts`) + TEE (`vault_config.rs`, pinned by a
+> unit test) parse must move in lockstep; growing the zero-copy account needs a
+> devnet re-foundation (`close_vault_config` → `initialize`).
 
 > **CodeRabbit** reviews via `.coderabbit.yaml` (path instructions encode the
 > §5/§6/§7/§8 invariants). Treat its findings like any review — verify each

@@ -1181,6 +1181,11 @@ pub fn vault_protocol_owner(h: &Harness) -> [u8; 32] {
 ///   1  num_trees (u8)
 ///   1  bump (u8)
 ///   3  _padding
+///   8  tick_size (u64)            ← appended (matcher governance)
+///   8  min_order_size (u64)       ← appended
+///   8  circuit_breaker_bps (u64)  ← appended
+/// The three appended u64s don't shift PROTOCOL_OWNER_OFFSET (computed from the
+/// start), so this helper is layout-stable.
 pub mod vault_layout {
     pub const MAX_TEE_KEYS: usize = 16;
     pub const MERKLE_DEPTH: usize = 20;

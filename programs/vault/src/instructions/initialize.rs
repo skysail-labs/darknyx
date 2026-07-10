@@ -98,6 +98,11 @@ pub fn initialize_handler(
     cfg.protocol_owner_commitment = [0u8; 32];
     cfg.fee_rate_bps = 0;
     cfg._padding = [0u8; 3];
+    // Matcher params unset at init (0 ⇒ TEE keeps its env/dev default);
+    // governance sets them later via `set_protocol_config`.
+    cfg.tick_size = 0;
+    cfg.min_order_size = 0;
+    cfg.circuit_breaker_bps = 0;
     let _ = VaultError::ZeroAmount; // keep errors linked in
     Ok(())
 }

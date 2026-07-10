@@ -75,7 +75,7 @@ pub struct Config {
     /// (≤ 10_000, enforced by set_protocol_config) so the matcher's
     /// charge matches what settlement conservation expects. On a real
     /// boot the TEE reads the authoritative on-chain rate and OVERRIDES
-    /// this env value (see `main.rs::read_on_chain_fee_rate_bps`), since
+    /// this env value (see `main.rs::read_on_chain_vault_config`), since
     /// the batched-settle handler enforces a fee FLOOR against it — so
     /// this acts only as a fallback (degraded boot / config absent).
     pub fee_rate_bps: u64,
