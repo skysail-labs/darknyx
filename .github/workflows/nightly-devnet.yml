@@ -247,7 +247,7 @@ jobs:
     steps:
       # For issue_comment, github.ref is the default branch — we need
       # the PR's head SHA explicitly. preflight resolved it for us.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.preflight.outputs.sha }}
 
@@ -287,7 +287,7 @@ jobs:
       # node script so we don't have to install solana CLI just for
       # this. Threshold is 0.05 SOL = 50_000_000 lamports.
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -365,7 +365,7 @@ jobs:
       # circom version + PTAU filename.
       - name: Cache circom binary
         id: cache-circom
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/circom
           key: circom-${{ runner.os }}-v2.2.2
@@ -383,7 +383,7 @@ jobs:
 
       - name: Cache PTAU file
         id: cache-ptau
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: scripts/ptau/powersOfTau28_hez_final_16.ptau
           key: ptau-hez-final-16

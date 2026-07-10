@@ -77,10 +77,10 @@ jobs:
       sdk: ${{ steps.filter.outputs.sdk }}
       indexer: ${{ steps.filter.outputs.indexer }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -115,7 +115,7 @@ jobs:
       needs.changes.outputs.rust == 'true'
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
@@ -156,7 +156,7 @@ jobs:
         run: cargo build -p darkpool-crypto --examples
 
       - name: Upload example binaries for the sdk job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: darkpool-crypto-examples
           path: |
@@ -185,7 +185,7 @@ jobs:
       needs.changes.outputs.rust == 'true'
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
@@ -193,7 +193,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Install Node.js (for snarkjs)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -206,7 +206,7 @@ jobs:
       # restore it instantly.
       - name: Cache circom binary
         id: cache-circom
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/circom
           key: circom-${{ runner.os }}-v2.2.2
@@ -231,7 +231,7 @@ jobs:
       # prover tests actually consume: `.wasm` and `.zkey`. We don't
       # need the `.r1cs` / `.sym` / `verification_key.json` downstream.
       - name: Upload circuit build artefacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: circuit-build
           path: |
@@ -255,10 +255,10 @@ jobs:
       needs.circuits.result != 'failure'
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -276,7 +276,7 @@ jobs:
       # (e.g. SDK-only change). The prover / parity tests self-skip via
       # RUN_* env checks when wasm/zkey/binaries are absent.
       - name: Download Rust example binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           name: darkpool-crypto-examples
@@ -286,7 +286,7 @@ jobs:
         run: chmod +x target/debug/examples/* 2>/dev/null || true
 
       - name: Download circuit build artefacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         continue-on-error: true
         with:
           name: circuit-build
@@ -311,13 +311,13 @@ jobs:
       )
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Node 22 so the built-in `node:sqlite` is available (the indexer's
       # zero-native-dep DB). The DB tests self-skip on older runtimes; the
       # decode parity gate runs regardless.
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -340,7 +340,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: declare_id!() <-> Anchor.toml parity
         shell: bash
@@ -409,13 +409,13 @@ jobs:
       # platform-tools v1.52 with rustc/cargo 1.89.0.
       SOLANA_CLI_VERSION: v3.1.12
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Cache Solana CLI install
         id: cache-solana
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.local/share/solana/install
           key: solana-${{ runner.os }}-${{ env.SOLANA_CLI_VERSION }}
@@ -494,7 +494,7 @@ jobs:
           fi
 
       - name: Upload program .so file for litesvm jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: sbf-programs
           path: |
@@ -524,7 +524,7 @@ jobs:
       ) && needs.circuits.result != 'failure'
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
@@ -532,7 +532,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Install Node.js (for snarkjs)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -546,7 +546,7 @@ jobs:
           shared-key: pr-checks-rust
 
       - name: Download circuit build artefacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: circuit-build
           path: circuits/build
@@ -583,7 +583,7 @@ jobs:
       needs.circuits.result != 'failure'
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
@@ -591,7 +591,7 @@ jobs:
         uses: dtolnay/rust-toolchain@1.89.0
 
       - name: Install Node.js (for snarkjs)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
@@ -605,13 +605,13 @@ jobs:
           shared-key: pr-checks-rust
 
       - name: Download SBF programs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: sbf-programs
           path: target/deploy
 
       - name: Download circuit build artefacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: circuit-build
           path: circuits/build
