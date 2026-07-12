@@ -16,12 +16,15 @@
  */
 
 import { randomBytes } from "node:crypto";
-import type { PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import {
   ANCHOR_POOL_SIZE,
   OrderSide,
+  assertTeePubkeysMatch,
   buildCancel,
   depositNoteFromReceipt,
+  vaultConfigPda,
+  vaultConfigTeePubkeys,
   type DepositParams,
   type DepositReceipt,
   type StoredNote,
@@ -65,6 +68,24 @@ const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
   Uint8Array.from(Buffer.from(h, "hex"));
 
+/** Reads on-chain `vault_config.tee_pubkeys` (base58, active set), or `null` if
+ *  the config account is absent. Injectable so the attestation cross-check is
+ *  testable without a live RPC. */
+export type OnchainTeePubkeysReader = (
+  rpcUrl: string,
+  programId: string,
+) => Promise<string[] | null>;
+
+const defaultOnchainTeePubkeys: OnchainTeePubkeysReader = async (
+  rpcUrl,
+  programId,
+) => {
+  const conn = new Connection(rpcUrl, "confirmed");
+  const [pda] = vaultConfigPda(new PublicKey(programId));
+  const acct = await conn.getAccountInfo(pda);
+  return acct ? vaultConfigTeePubkeys(acct.data) : null;
+};
+
 /** An event the daemon pushes to subscribers (the control-API stream). */
 export type DaemonEvent =
   | { type: "order"; order: ManagedOrder }
@@ -106,6 +127,9 @@ export interface DaemonDeps {
   verifyAttestation?: typeof verifyAttestation | false;
   /** Optional DCAP quote verifier (full Intel TCB) handed to the attestation. */
   quoteVerifier?: QuoteVerifier;
+  /** Reads on-chain `vault_config.tee_pubkeys` for the attestation cross-check.
+   *  Defaults to a `Connection`-based read from `config.rpcUrl`. */
+  onchainTeePubkeys?: OnchainTeePubkeysReader;
   /** Settlement-tracker poll interval (ms) for resolving change-note leaves. */
   settlementPollMs?: number;
   /** Seam for the tracker's `/tree/inclusion` fetch (tests). */
@@ -134,6 +158,7 @@ export class Daemon {
 
   private readonly verifyAttestationFn: typeof verifyAttestation | false;
   private readonly quoteVerifier?: QuoteVerifier;
+  private readonly onchainTeePubkeysFn: OnchainTeePubkeysReader;
   private attestationResult: AttestationResult | null = null;
 
   private readonly settlementPollMs?: number;
@@ -162,6 +187,8 @@ export class Daemon {
     // Attest by default (non-custody is the point); inject `false` to skip.
     this.verifyAttestationFn = deps.verifyAttestation ?? verifyAttestation;
     this.quoteVerifier = deps.quoteVerifier;
+    this.onchainTeePubkeysFn =
+      deps.onchainTeePubkeys ?? defaultOnchainTeePubkeys;
     this.settlementPollMs = deps.settlementPollMs;
     this.fetchInclusion = deps.fetchInclusion;
     this.depositFn = deps.depositFn;
@@ -207,6 +234,40 @@ export class Daemon {
   // ── lifecycle ──
 
   /**
+   * Reconcile the attested (quote-bound) tee_pubkeys set against on-chain
+   * `vault_config.tee_pubkeys`. A mismatch throws (the daemon refuses to start —
+   * the vault trusts a key the enclave doesn't hold, or vice versa). An RPC/
+   * missing-account error warns + proceeds so RPC flakiness can't block trading.
+   */
+  private async crossCheckOnchainTeePubkeys(attested: string[]): Promise<void> {
+    let onchain: string[] | null;
+    try {
+      onchain = await this.onchainTeePubkeysFn(
+        this.config.rpcUrl,
+        this.config.programId,
+      );
+    } catch (e) {
+      console.warn(
+        `[daemon] on-chain tee_pubkeys cross-check skipped (RPC error): ${
+          e instanceof Error ? e.message : e
+        }`,
+      );
+      return;
+    }
+    if (!onchain) {
+      console.warn(
+        "[daemon] vault_config not found — on-chain tee_pubkeys cross-check skipped",
+      );
+      return;
+    }
+    // Throws AttestationError('pubkey_mismatch') on any difference → refuses.
+    assertTeePubkeysMatch(attested, onchain);
+    console.log(
+      `[daemon] on-chain tee_pubkeys cross-check OK (${onchain.length} keys match)`,
+    );
+  }
+
+  /**
    * Verify the gateway's TEE attestation (unless disabled), then open the TEE
    * streams + resume the next HD index. Idempotent. If attestation fails the
    * daemon does NOT start — it refuses to send order flow to an unverified
@@ -224,6 +285,18 @@ export class Daemon {
         fetchImpl: this.fetchImpl,
         strict: this.config.attestationStrict,
       });
+      // Reconcile the attested (now quote-bound) tee_pubkeys set against the
+      // authoritative on-chain governance set — so the vault can't be trusting a
+      // key the enclave doesn't hold. A mismatch refuses to start; an RPC error
+      // warns + proceeds (don't let RPC flakiness block trading).
+      if (
+        this.attestationResult?.dcapVerified &&
+        this.config.attestOnchainCheck
+      ) {
+        await this.crossCheckOnchainTeePubkeys(
+          this.attestationResult.teePubkeys,
+        );
+      }
     }
 
     this.started = true;

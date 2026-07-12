@@ -64,3 +64,4 @@ export * from "./settlement/settlement-watcher.js";
 export * from "./tee/verify-core.js";
 export * from "./tee/dcap.js";
 export * from "./tee/attestation.js";
+export * from "./tee/vault-config.js";

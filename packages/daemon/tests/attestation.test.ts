@@ -292,6 +292,7 @@ describe("Daemon — attestation gate", () => {
     keystorePath: "x",
     thresholds: DEFAULT_THRESHOLDS,
     attestationStrict: true,
+    attestOnchainCheck: true,
     programId: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
   });
 
@@ -338,13 +339,52 @@ describe("Daemon — attestation gate", () => {
       subscribeOrders: (() => ({ close() {} })) as never,
       verifyAttestation: async () => ({
         teePubkey: TEE_PUBKEY_B58,
+        teePubkeys: [TEE_PUBKEY_B58],
         composeHash: COMPOSE,
         mrtd: MRTD,
         quote: "q",
         dcapVerified: true,
       }),
+      // on-chain governance set matches the attested set → passes.
+      onchainTeePubkeys: async () => [TEE_PUBKEY_B58],
     });
     await daemon.start();
     expect(daemon.getAttestation()?.teePubkey).toBe(TEE_PUBKEY_B58);
+  });
+
+  it("refuses to start when on-chain tee_pubkeys don't match the attested set", async () => {
+    const daemon = new Daemon({
+      config: config(),
+      keystore: keystore(),
+      store,
+      prover: (async () => ({
+        proofBytes: new Uint8Array(256),
+        merkleRoot: new Uint8Array(32),
+      })) as never,
+      placer: {
+        place: vi.fn(),
+        cancel: vi.fn(),
+        modify: vi.fn(),
+        close: vi.fn(),
+      } as never,
+      subscribeFills: (() => ({ close() {} })) as never,
+      subscribeOrders: (() => ({ close() {} })) as never,
+      verifyAttestation: async () => ({
+        teePubkey: TEE_PUBKEY_B58,
+        teePubkeys: [TEE_PUBKEY_B58],
+        composeHash: COMPOSE,
+        mrtd: MRTD,
+        quote: "q",
+        dcapVerified: true,
+      }),
+      // Vault trusts an extra key the enclave doesn't hold → refuse.
+      onchainTeePubkeys: async () => [
+        TEE_PUBKEY_B58,
+        Keypair.generate().publicKey.toBase58(),
+      ],
+    });
+    await expect(daemon.start()).rejects.toMatchObject({
+      kind: "pubkey_mismatch",
+    });
   });
 });
