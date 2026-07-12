@@ -18,6 +18,7 @@
 use anyhow::{Context, Result};
 use dstack_sdk::dstack_client::DstackClient;
 use ed25519_dalek::SigningKey;
+use sha2::{Digest, Sha256};
 use solana_keypair::Keypair;
 
 /// The canonical derivation-path PREFIX. The K per-shard signers live at
@@ -75,6 +76,25 @@ impl DerivedSigner {
         // airdrop to both.
         Keypair::new_from_array(self.key.to_bytes())
     }
+
+    /// The raw 32-byte Ed25519 public key.
+    pub fn pubkey_bytes(&self) -> [u8; 32] {
+        self.key.verifying_key().to_bytes()
+    }
+}
+
+/// SHA-256 over the K shard signer pubkeys, concatenated in shard order
+/// (`pk_0 ‖ pk_1 ‖ … ‖ pk_{K-1}`, raw 32-byte each). This is the value the
+/// attestation `report_data` right-half commits to, so a client can bind the
+/// ENTIRE settle-authorizing key set to the DCAP-verified quote — not just the
+/// primary. For a single-shard TEE this is exactly `SHA-256(pk_0)`, so the
+/// binding is backward-compatible with the shard-0-only scheme.
+pub fn signer_set_hash(signers: &[DerivedSigner]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    for s in signers {
+        h.update(s.pubkey_bytes());
+    }
+    h.finalize().into()
 }
 
 /// Derive shard `index`'s signer from dstack's KDF.

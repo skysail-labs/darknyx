@@ -89,6 +89,12 @@ pub struct ApiState {
     /// it against on-chain governance. Defaults to `[signer_pubkey_base58]`
     /// until `main.rs` supplies the derived set via `with_shard_pubkeys`.
     pub signer_pubkeys_base58: Vec<String>,
+    /// SHA-256 over the concatenated raw pubkeys of the FULL K-shard set
+    /// (shard order) — the value `/attestation` puts in `report_data[32..64]`
+    /// so a client binds the ENTIRE settle-key set to the DCAP-verified quote,
+    /// not just shard 0. For a single-shard TEE this equals `SHA-256(pk_0)`
+    /// (backward-compatible). Set by `main.rs` via `with_signer_set_hash`.
+    pub signer_set_hash: [u8; 32],
     /// `None` when the dstack socket isn't reachable (degraded
     /// boot or test mode). `/attestation` returns 503 in that
     /// case; `/health` + `/info` still work.
@@ -353,8 +359,11 @@ impl ApiState {
             signer_pubkey_base58: signer.pubkey_base58.clone(),
             signer_pubkey_hex: signer.pubkey_hex.clone(),
             // Defaults to the primary; `main.rs` overrides with the full derived
-            // K-shard set via `with_shard_pubkeys`.
+            // K-shard set via `with_shard_pubkeys` + `with_signer_set_hash`.
             signer_pubkeys_base58: vec![signer.pubkey_base58.clone()],
+            signer_set_hash: crate::keys::ed25519::signer_set_hash(
+                std::slice::from_ref(signer),
+            ),
             dstack: Some(dstack),
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
@@ -409,6 +418,17 @@ impl ApiState {
         if !keys.is_empty() {
             self.signer_pubkeys_base58 = keys;
         }
+        self
+    }
+
+    /// Bind the FULL K-shard signer set into the attestation `report_data`
+    /// right-half: `report_data[32..64] = SHA-256(pk_0 ‖ … ‖ pk_{K-1})`. Called
+    /// once by `main.rs` with `keys::ed25519::signer_set_hash(&signers)` so a
+    /// client verifies the whole settle-key set against the DCAP-verified quote,
+    /// not just shard 0. Must be kept in shard order + lockstep with
+    /// `with_shard_pubkeys` (same source `signers`).
+    pub fn with_signer_set_hash(mut self, hash: [u8; 32]) -> Self {
+        self.signer_set_hash = hash;
         self
     }
 
@@ -482,6 +502,7 @@ impl ApiState {
             signer_pubkey_base58: "stub-pubkey".to_string(),
             signer_pubkey_hex: "00".repeat(32),
             signer_pubkeys_base58: vec!["stub-pubkey".to_string()],
+            signer_set_hash: [0u8; 32],
             dstack: None,
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),

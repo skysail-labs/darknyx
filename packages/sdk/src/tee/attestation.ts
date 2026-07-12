@@ -22,6 +22,7 @@ import {
   type ExpectedMeasurements,
   composeHashFromEventLog,
   parseEventLog,
+  teeKeySetBytes,
   verifyReportAgainstExpected,
 } from "./verify-core.js";
 import { createDcapQuoteVerifier, type QuoteVerifier } from "./dcap.js";
@@ -119,35 +120,8 @@ export async function verifyTeeAttestation(
     tee_pubkey: string;
   }>(attUrl.toString(), opts.token, fetchImpl);
 
-  let pubkeyBytes: Uint8Array;
-  try {
-    pubkeyBytes = new PublicKey(att.tee_pubkey).toBytes();
-  } catch {
-    throw new AttestationError("tee_pubkey not valid base58", "malformed");
-  }
-
-  // Real Intel-TCB verification, then the shared post-DCAP checks.
-  const report = await verifier(fromHex(att.quote));
-  const eventLog = parseEventLog(att.event_log);
-  const expected: ExpectedMeasurements = {
-    composeHash: expectedComposeHash,
-    teePubkey: opts.expectedTeePubkey ?? att.tee_pubkey,
-    mrtd: opts.expectedMrtd,
-  };
-  const fail = verifyReportAgainstExpected({
-    report,
-    eventLog,
-    nonce,
-    teePubkeyBytes: pubkeyBytes,
-    teePubkeyBase58: att.tee_pubkey,
-    expected,
-    tcbAllowlist: opts.tcbAllowlist ?? DEFAULT_TCB_ALLOWLIST,
-    strict: true,
-  });
-  if (fail) throw new AttestationError(`attestation rejected: ${fail}`, fail);
-
-  // /info is a convenience cross-check (tie shard-0 to the attestation) + the
-  // full K-shard set the caller should reconcile with on-chain governance.
+  // /info gives the full K-shard set the quote's report_data binds. Fetch it up
+  // front, tie shard 0 to the attestation, and build the bound key-set bytes.
   const info = await getJson<{
     compose_hash: string;
     tee_pubkey: string;
@@ -159,11 +133,49 @@ export async function verifyTeeAttestation(
       "pubkey_mismatch",
     );
   }
+  const teePubkeys = info.tee_pubkeys?.length
+    ? info.tee_pubkeys
+    : [att.tee_pubkey];
+  if (teePubkeys[0] !== att.tee_pubkey) {
+    throw new AttestationError(
+      "/info tee_pubkeys[0] != /attestation tee_pubkey (shard-0 mismatch)",
+      "pubkey_mismatch",
+    );
+  }
+  let boundKeySetBytes: Uint8Array;
+  try {
+    boundKeySetBytes = teeKeySetBytes(
+      teePubkeys.map((k) => new PublicKey(k).toBytes()),
+    );
+  } catch {
+    throw new AttestationError("tee_pubkeys not all valid base58", "malformed");
+  }
+
+  // Real Intel-TCB verification, then the shared post-DCAP checks (the binding
+  // covers the WHOLE K-shard set, so /info.tee_pubkeys is now quote-bound).
+  const report = await verifier(fromHex(att.quote));
+  const eventLog = parseEventLog(att.event_log);
+  const expected: ExpectedMeasurements = {
+    composeHash: expectedComposeHash,
+    teePubkey: opts.expectedTeePubkey ?? att.tee_pubkey,
+    mrtd: opts.expectedMrtd,
+  };
+  const fail = verifyReportAgainstExpected({
+    report,
+    eventLog,
+    nonce,
+    boundKeySetBytes,
+    teePubkeyBase58: att.tee_pubkey,
+    expected,
+    tcbAllowlist: opts.tcbAllowlist ?? DEFAULT_TCB_ALLOWLIST,
+    strict: true,
+  });
+  if (fail) throw new AttestationError(`attestation rejected: ${fail}`, fail);
 
   const composeHash = composeHashFromEventLog(eventLog) ?? info.compose_hash;
   return {
     teePubkey: att.tee_pubkey,
-    teePubkeys: info.tee_pubkeys ?? [att.tee_pubkey],
+    teePubkeys,
     composeHash,
     mrtd: report.mrtd,
     quote: att.quote,

@@ -12,13 +12,15 @@ import {
 
 const BASE = "https://gw.example";
 const teeKp = Keypair.generate();
+const kp1 = Keypair.generate();
 const TEE_B58 = teeKp.publicKey.toBase58();
-const TEE_HASH = createHash("sha256")
-  .update(teeKp.publicKey.toBytes())
-  .digest();
 const COMPOSE = "c0ffeec0ffee";
 const MRTD = "aa".repeat(48);
-const KEYS = [TEE_B58, Keypair.generate().publicKey.toBase58()];
+const KEYS = [TEE_B58, kp1.publicKey.toBase58()];
+// The quote binds SHA-256 of the FULL set (shard order), not just shard 0.
+const KEYSET_HASH = createHash("sha256")
+  .update(Buffer.concat([teeKp.publicKey.toBytes(), kp1.publicKey.toBytes()]))
+  .digest();
 
 const EVENT_LOG: EventLogEntry[] = [
   {
@@ -48,7 +50,7 @@ function fakeFetch(opts: { composeHash?: string } = {}): typeof fetch {
       );
       const rd = Buffer.alloc(64);
       nonce.copy(rd, 0);
-      TEE_HASH.copy(rd, 32);
+      KEYSET_HASH.copy(rd, 32);
       return new Response(
         JSON.stringify({
           quote: rd.toString("hex"),

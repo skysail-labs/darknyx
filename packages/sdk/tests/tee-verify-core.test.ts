@@ -8,6 +8,7 @@ import {
   composeHashFromEventLog,
   parseEventLog,
   replayEventLogRtmr,
+  teeKeySetBytes,
   verifyReportAgainstExpected,
 } from "../src/tee/verify-core.js";
 
@@ -135,6 +136,24 @@ describe("checkReportDataBinding", () => {
       checkReportDataBinding(goodReportData(), nonce, randomBytes(32)),
     ).toBe("binding");
   });
+
+  it("binds the FULL K-shard set (not just shard 0)", () => {
+    const k0 = randomBytes(32);
+    const k1 = randomBytes(32);
+    const set = teeKeySetBytes([k0, k1]);
+    const rd = Buffer.concat([
+      nonce,
+      createHash("sha256").update(set).digest(),
+    ]);
+    // Correct: bound to the concatenated set.
+    expect(checkReportDataBinding(rd, nonce, set)).toBeNull();
+    // A report that binds only shard-0 must NOT satisfy the set binding.
+    const shard0Only = Buffer.concat([
+      nonce,
+      createHash("sha256").update(k0).digest(),
+    ]);
+    expect(checkReportDataBinding(shard0Only, nonce, set)).toBe("binding");
+  });
 });
 
 describe("verifyReportAgainstExpected", () => {
@@ -168,7 +187,8 @@ describe("verifyReportAgainstExpected", () => {
     report: baseReport(),
     eventLog,
     nonce,
-    teePubkeyBytes,
+    // single-shard: the bound set concat is just the one pubkey
+    boundKeySetBytes: teePubkeyBytes,
     teePubkeyBase58,
     expected: { composeHash: "c0ffee", teePubkey: teePubkeyBase58 },
     strict: true,

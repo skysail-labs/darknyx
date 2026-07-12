@@ -172,18 +172,31 @@ export function composeHashFromEventLog(
 }
 
 /**
- * report_data binding: the verified quote must carry `nonce ‖ SHA-256(pubkey)`.
- * Returns the failure kind, or `null` on success.
+ * Concatenate the raw K-shard signer pubkeys (shard order) into the byte string
+ * the quote's `report_data` right-half commits to. For a single-shard TEE this
+ * is just the one pubkey.
+ */
+export function teeKeySetBytes(pubkeys: Uint8Array[]): Uint8Array {
+  return Buffer.concat(pubkeys.map((p) => Buffer.from(p)));
+}
+
+/**
+ * report_data binding: the verified quote must carry
+ * `nonce ‖ SHA-256(pk_0 ‖ … ‖ pk_{K-1})`. `boundKeySetBytes` is the raw K-shard
+ * pubkeys concatenated in shard order (see {@link teeKeySetBytes}); the TEE puts
+ * SHA-256 of exactly those bytes in `report_data[32..64]`, so this binds the
+ * ENTIRE settle-key set — not just shard 0 — to the verified quote. Returns the
+ * failure kind, or `null` on success.
  */
 export function checkReportDataBinding(
   reportData: Uint8Array,
   nonce: Uint8Array,
-  teePubkeyBytes: Uint8Array,
+  boundKeySetBytes: Uint8Array,
 ): AttestationFailure | null {
   if (reportData.length !== 64) return "malformed";
   if (!eq(reportData.subarray(0, 32), nonce)) return "freshness";
   const expected = createHash("sha256")
-    .update(Buffer.from(teePubkeyBytes))
+    .update(Buffer.from(boundKeySetBytes))
     .digest();
   if (!eq(reportData.subarray(32, 64), expected)) return "binding";
   return null;
@@ -196,9 +209,10 @@ export interface VerifyReportOptions {
   eventLog: EventLogEntry[];
   /** The nonce this client sent in `reportData`. */
   nonce: Uint8Array;
-  /** Raw 32-byte TEE signer pubkey (base58-decoded). */
-  teePubkeyBytes: Uint8Array;
-  /** Base58 TEE signer pubkey (for the pin comparison). */
+  /** The raw K-shard signer pubkeys concatenated in shard order (the set the
+   *  quote's report_data binds — see {@link teeKeySetBytes}). */
+  boundKeySetBytes: Uint8Array;
+  /** Base58 shard-0 (primary) signer pubkey (for the pin comparison). */
   teePubkeyBase58: string;
   /** Source-pinned expected measurements. */
   expected?: ExpectedMeasurements;
@@ -220,7 +234,7 @@ export interface VerifyReportOptions {
 export function verifyReportAgainstExpected(
   opts: VerifyReportOptions,
 ): AttestationFailure | null {
-  const { report, eventLog, nonce, teePubkeyBytes, teePubkeyBase58, strict } =
+  const { report, eventLog, nonce, boundKeySetBytes, teePubkeyBase58, strict } =
     opts;
   const expected = opts.expected ?? {};
   const tcbAllowlist = opts.tcbAllowlist ?? DEFAULT_TCB_ALLOWLIST;
@@ -234,7 +248,7 @@ export function verifyReportAgainstExpected(
   const binding = checkReportDataBinding(
     report.reportData,
     nonce,
-    teePubkeyBytes,
+    boundKeySetBytes,
   );
   if (binding) return binding;
 

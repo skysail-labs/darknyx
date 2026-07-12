@@ -118,6 +118,8 @@ async fn main() -> Result<()> {
             let signers = nyx_tee::keys::ed25519::derive_set(&client, cfg.num_trees).await?;
             let shard_pubkeys: Vec<String> =
                 signers.iter().map(|s| s.pubkey_base58.clone()).collect();
+            // Bind the WHOLE settle-key set into the attestation report_data.
+            let signer_set_hash = nyx_tee::keys::ed25519::signer_set_hash(&signers);
             tracing::info!(
                 num_trees = cfg.num_trees,
                 shard_pubkeys = ?shard_pubkeys,
@@ -158,7 +160,8 @@ async fn main() -> Result<()> {
                     jwt_secret,
                     cfg.num_trees,
                 )
-                .with_shard_pubkeys(shard_pubkeys),
+                .with_shard_pubkeys(shard_pubkeys)
+                .with_signer_set_hash(signer_set_hash),
                 Some(signer_pubkey),
                 settle_signer,
             )

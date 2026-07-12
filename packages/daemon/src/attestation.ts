@@ -33,6 +33,7 @@ import {
   checkReportDataBinding,
   composeHashFromEventLog,
   parseEventLog,
+  teeKeySetBytes,
   verifyReportAgainstExpected,
 } from "@nyx/sdk";
 
@@ -53,7 +54,8 @@ export interface TeeInfo {
   appId: string;
   composeHash: string;
   mrtd?: string;
-  teePubkey: string; // base58
+  teePubkey: string; // base58 (shard-0 primary)
+  teePubkeys: string[]; // full K-shard set, shard order
 }
 
 export interface AttestationQuote {
@@ -65,6 +67,8 @@ export interface AttestationQuote {
 
 export interface AttestationResult {
   teePubkey: string;
+  /** The full K-shard signer set, bound to the quote (strict) / from /info. */
+  teePubkeys: string[];
   composeHash: string;
   mrtd?: string;
   /** Raw hex quote (for an out-of-band audit). */
@@ -108,12 +112,14 @@ export async function fetchInfo(
     tcb_info?: { mrtd?: string };
     mrtd?: string;
     tee_pubkey: string;
+    tee_pubkeys?: string[];
   }>(new URL("/info", gatewayUrl).toString(), token, fetchImpl);
   return {
     appId: b.app_id,
     composeHash: b.compose_hash,
     mrtd: b.tcb_info?.mrtd ?? b.mrtd,
     teePubkey: b.tee_pubkey,
+    teePubkeys: b.tee_pubkeys ?? [b.tee_pubkey],
   };
 }
 
@@ -171,12 +177,29 @@ export async function verifyAttestation(
     nonce,
     fetchImpl,
   );
-
-  let pubkeyBytes: Uint8Array;
+  // /info gives the full K-shard set the quote's report_data binds. Fetch it up
+  // front (both paths need it), and tie shard 0 to the attestation.
+  const info = await fetchInfo(opts.gatewayUrl, opts.token, fetchImpl);
+  if (info.teePubkey !== att.teePubkey) {
+    throw new AttestationError(
+      "/info tee_pubkey != /attestation tee_pubkey",
+      "pubkey_mismatch",
+    );
+  }
+  const teePubkeys = info.teePubkeys.length ? info.teePubkeys : [att.teePubkey];
+  if (teePubkeys[0] !== att.teePubkey) {
+    throw new AttestationError(
+      "/info tee_pubkeys[0] != /attestation tee_pubkey (shard-0 mismatch)",
+      "pubkey_mismatch",
+    );
+  }
+  let boundKeySetBytes: Uint8Array;
   try {
-    pubkeyBytes = new PublicKey(att.teePubkey).toBytes();
+    boundKeySetBytes = teeKeySetBytes(
+      teePubkeys.map((k) => new PublicKey(k).toBytes()),
+    );
   } catch {
-    throw new AttestationError("tee_pubkey not valid base58", "malformed");
+    throw new AttestationError("tee_pubkeys not all valid base58", "malformed");
   }
 
   if (strict) {
@@ -190,13 +213,14 @@ export async function verifyAttestation(
     //    a bad signature / QE identity / expired TCB / a fabricated quote.
     const report = await opts.quoteVerifier(fromHex(att.quote));
 
-    // 2. Post-DCAP checks over the *verified* report + event log.
+    // 2. Post-DCAP checks over the *verified* report + event log. The binding
+    //    covers the WHOLE K-shard set, so /info.tee_pubkeys is now quote-bound.
     const eventLog = parseEventLog(att.eventLog);
     const fail = verifyReportAgainstExpected({
       report,
       eventLog,
       nonce,
-      teePubkeyBytes: pubkeyBytes,
+      boundKeySetBytes,
       teePubkeyBase58: att.teePubkey,
       expected: opts.expected,
       tcbAllowlist: opts.tcbAllowlist ?? DEFAULT_TCB_ALLOWLIST,
@@ -206,18 +230,10 @@ export async function verifyAttestation(
       throw new AttestationError(`attestation rejected: ${fail}`, fail);
     }
 
-    // 3. /info is a convenience cross-check only — the authoritative compose
-    //    hash comes from the attested event log, not this self-reported field.
-    const info = await fetchInfo(opts.gatewayUrl, opts.token, fetchImpl);
-    if (info.teePubkey !== att.teePubkey) {
-      throw new AttestationError(
-        "/info tee_pubkey != /attestation tee_pubkey",
-        "pubkey_mismatch",
-      );
-    }
     const composeHash = composeHashFromEventLog(eventLog);
     return {
       teePubkey: att.teePubkey,
+      teePubkeys,
       composeHash: composeHash ?? info.composeHash,
       mrtd: report.mrtd,
       quote: att.quote,
@@ -226,22 +242,15 @@ export async function verifyAttestation(
   }
 
   // ── dev-partial (strict:false): NOT a security guarantee. ──
-  // Legacy nonce + key-binding + self-reported /info pins. Defeats replay and
-  // key-substitution against an honest enclave, but NOT a malicious operator.
+  // Legacy nonce + key-set-binding + self-reported /info pins. Defeats replay
+  // and key-substitution against an honest enclave, but NOT a malicious operator.
   const binding = checkReportDataBinding(
     fromHex(att.reportData),
     nonce,
-    pubkeyBytes,
+    boundKeySetBytes,
   );
   if (binding) {
     throw new AttestationError(`report_data ${binding}`, binding);
-  }
-  const info = await fetchInfo(opts.gatewayUrl, opts.token, fetchImpl);
-  if (info.teePubkey !== att.teePubkey) {
-    throw new AttestationError(
-      "/info tee_pubkey != /attestation tee_pubkey",
-      "pubkey_mismatch",
-    );
   }
   const exp = opts.expected;
   if (exp?.teePubkey && exp.teePubkey !== att.teePubkey) {
@@ -255,6 +264,7 @@ export async function verifyAttestation(
   }
   return {
     teePubkey: att.teePubkey,
+    teePubkeys,
     composeHash: info.composeHash,
     mrtd: info.mrtd,
     quote: att.quote,
