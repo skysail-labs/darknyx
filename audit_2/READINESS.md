@@ -86,20 +86,23 @@ These were sampled and hold up — worth recording so the formal audit can depri
 | **Category** | Trust root / attestation |
 | **Status** | **RESOLVED (client-side)** — real DCAP enforced in the daemon + browser SDK (branch `attestation-dcap-enforcement`). On-chain trustless gating (zkDCAP) deferred to a tracked Phase 3. |
 
-> **Remediation (2026-07 — commits `9ec68f8`, `ac5b999`, `4ab5bfe`).** The client now
-> verifies the TDX quote with the **pure-JS `@phala/dcap-qvl`** (>= 0.3.9; the WASM
-> `-node`/`-web` builds are unpatched per CVE-2026-22696 — QE-identity verification
-> missing — so we deliberately use the pure-JS package) before trusting the gateway.
-> `packages/sdk/src/tee/verify-core.ts` runs the parts DCAP doesn't: `report_data`
+> **Remediation (2026-07 — commits `9ec68f8`, `ac5b999`, `4ab5bfe`, `b024504`, `b8ac4aa`).**
+> The client now verifies the TDX quote with the **pure-JS `@phala/dcap-qvl`** (>= 0.3.9;
+> the WASM `-node`/`-web` builds are unpatched per CVE-2026-22696 — QE-identity
+> verification missing — so we deliberately use the pure-JS package) before trusting the
+> gateway. `packages/sdk/src/tee/verify-core.ts` runs the parts DCAP doesn't: `report_data`
 > binding, **event-log RTMR3 replay** (compose-hash bound to the *verified quote*, not
 > self-reported `/info`), and a secure-by-default TCB allowlist. The daemon enforces
 > **strict by default** (`packages/daemon/src/attestation.ts`) — no DCAP or missing pins
 > ⇒ refuses to trade; the browser gets `verifyTeeAttestation()`
-> (`packages/sdk/src/tee/attestation.ts`). `/info` now advertises the full K-shard
-> `tee_pubkeys` set. **Residual (tracked):** the quote binds only shard-0's key (1/K of
-> the settle keys) and there's no automated on-chain `vault_config.tee_pubkeys`
-> cross-check yet; full closure = bind the whole set in `report_data` and/or the on-chain
-> check, plus the deferred on-chain zkDCAP gate. The findings below describe the
+> (`packages/sdk/src/tee/attestation.ts`).
+>
+> **K-shard residual CLOSED:** `report_data[32..64]` now binds `SHA-256` of the **whole
+> K-shard signer set** (not just shard-0), so the quote covers every settle-authorizing
+> key; and the daemon **cross-checks the attested set against on-chain
+> `vault_config.tee_pubkeys`** at start (mismatch ⇒ refuse). `/info` advertises the full
+> set. **Remaining (tracked, NOT a formal-audit blocker):** the deferred on-chain zkDCAP
+> gate (Phase 3) + a live-CVM end-to-end DCAP validation. The findings below describe the
 > pre-remediation state.
 
 **What I found.** The client-side verifier (`verifyAttestation`, described in its own
