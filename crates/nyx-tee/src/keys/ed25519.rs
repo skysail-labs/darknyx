@@ -21,9 +21,10 @@ use ed25519_dalek::SigningKey;
 use solana_keypair::Keypair;
 
 /// The canonical derivation-path PREFIX. The K per-shard signers live at
-/// `"{SIGNER_PATH}/{i}"`. Mirrored byte-for-byte in
-/// `packages/sdk/src/tee/attestation.ts` so client-side verifier
-/// scripts know which keys to check against `vault_config.tee_pubkeys`.
+/// `"{SIGNER_PATH}/{i}"`. Clients do NOT re-derive these (they can't — the seed
+/// is dstack-sealed); instead the enclave advertises the derived set on `/info`
+/// (`tee_pubkeys`), which `packages/sdk/src/tee/attestation.ts` reads and a
+/// client reconciles against on-chain `vault_config.tee_pubkeys`.
 pub const SIGNER_PATH: &str = "nyx/ed25519-signer/v1";
 
 /// The dstack derivation path for shard `index`'s signer.

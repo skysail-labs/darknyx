@@ -204,7 +204,7 @@ components:
         a few convenience fields the SDK's verifyTeeAttestation()
         helper needs. Clients run the verification chain documented
         in docs/tee-attestation-flow.md §4.
-      required: [quote, event_log, report_data, vm_config, tee_pubkey]
+      required: [quote, event_log, report_data, tee_pubkey]
       properties:
         quote:
           type: string
@@ -212,9 +212,11 @@ components:
         event_log:
           type: string
           description: |
-            Hex-encoded JSON event log. Replayed against RTMR3 to
-            verify the recorded compose-hash + instance-id +
-            key-provider events.
+            The dstack event log as a JSON STRING (an array of measured
+            events — NOT hex-encoded). A client replays it against the
+            DCAP-verified quote's RTMR3 to bind the recorded compose-hash
+            + instance-id + key-provider events
+            (packages/sdk/src/tee/verify-core.ts).
         report_data:
           type: string
           description: |
@@ -225,8 +227,9 @@ components:
         vm_config:
           type: object
           description: |
-            VM hardware configuration the quote attests to. Required
-            by dstack-verifier for the OS measurement re-computation.
+            OPTIONAL. VM hardware configuration the quote attests to
+            (dstack `getQuote` may include it). The nyx-tee handler does
+            not currently return this field — do not rely on it.
           properties:
             cpu_count: { type: integer }
             memory_mb: { type: integer }
@@ -265,9 +268,11 @@ components:
         compose_hash:
           type: string
           description: |
-            SHA-256 of canonicalised app-compose.json. SDK-side
-            EXPECTED_COMPOSE_HASH constant must equal this for the
-            attestation check to pass.
+            SHA-256 of canonicalised app-compose.json. CONVENIENCE ONLY —
+            the client's attestation check pins its EXPECTED_COMPOSE_HASH
+            against the compose-hash read from the DCAP-VERIFIED quote's
+            RTMR3 event log, NOT against this self-reported field (a
+            malicious gateway can put anything here).
         tcb_info:
           type: object
           description: TCB version + os-image hash + event_log payload.
@@ -290,6 +295,14 @@ components:
             on-chain `vault_config.tee_pubkeys` set via one
             `set_tee_pubkey` rotation, and each is a shard settle
             fee-payer. The attestation report-data binds this primary key.
+        tee_pubkeys:
+          type: array
+          items: { type: string }
+          description: |
+            The FULL K-shard signer set (base58, shard order) — every key
+            the vault accepts settle payloads from. A client reconciles this
+            against on-chain `vault_config.tee_pubkeys`. `tee_pubkey`
+            (singular) is `tee_pubkeys[0]`.
         nyx_version:
           type: string
           description: Semver tag of the nyx-tee build (e.g. v0.4.2).

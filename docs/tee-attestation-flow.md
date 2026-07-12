@@ -240,6 +240,19 @@ caches the result, re-verifies on cert renewal.
 
 ### 4.3 What the SDK actually ships
 
+> **AS BUILT (2026-07, audit_2 A-1).** This section's design is now implemented.
+> Real DCAP verification uses the **pure-JS `@phala/dcap-qvl`** (>= 0.3.9; the WASM
+> `-node`/`-web` builds are unpatched per CVE-2026-22696, so we use the pure-JS
+> package, which also runs in the browser). The shared, environment-agnostic core is
+> `packages/sdk/src/tee/verify-core.ts` (report_data binding + event-log RTMR3 replay
+> + measurement pinning + TCB allowlist); the DCAP adapter is
+> `packages/sdk/src/tee/dcap.ts`; the browser entrypoint is
+> `packages/sdk/src/tee/attestation.ts::verifyTeeAttestation(apiBaseUrl,
+> expectedComposeHash, opts?)`; and the node daemon enforces it **strict-by-default**
+> (`packages/daemon/src/attestation.ts`). The as-built return type is
+> `{ teePubkey, teePubkeys, composeHash, mrtd, quote }` (the full K-shard set comes
+> from `/info`). The sketch below is the original design and is kept for intent.
+
 New module `packages/sdk/src/tee/attestation.ts`:
 
 ```ts

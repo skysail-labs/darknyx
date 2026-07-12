@@ -49,8 +49,10 @@ pub struct AttestationParams {
 pub struct AttestationResponse {
     /// Hex-encoded TDX quote.
     pub quote: String,
-    /// Hex-encoded JSON event log. Replayed against RTMR3 to
-    /// verify recorded compose-hash + instance-id + key-provider.
+    /// The dstack event log as a **JSON string** (an array of measured
+    /// events — NOT hex-encoded). A client replays it against the
+    /// DCAP-verified quote's RTMR3 to bind the compose-hash + instance-id
+    /// + key-provider. See `packages/sdk/src/tee/verify-core.ts`.
     pub event_log: String,
     /// Hex of the 64-byte `report_data` field embedded in the
     /// quote. Layout as documented above.
