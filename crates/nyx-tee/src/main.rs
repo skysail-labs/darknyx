@@ -116,9 +116,11 @@ async fn main() -> Result<()> {
             // extra shard fee-payers the settle Tx D's round-robin across. ALL K
             // must be registered in vault_config.tee_pubkeys + funded.
             let signers = nyx_tee::keys::ed25519::derive_set(&client, cfg.num_trees).await?;
+            let shard_pubkeys: Vec<String> =
+                signers.iter().map(|s| s.pubkey_base58.clone()).collect();
             tracing::info!(
                 num_trees = cfg.num_trees,
-                shard_pubkeys = ?signers.iter().map(|s| s.pubkey_base58.clone()).collect::<Vec<_>>(),
+                shard_pubkeys = ?shard_pubkeys,
                 "derived K-shard TEE signer set — register ALL in vault_config.tee_pubkeys + fund each"
             );
 
@@ -155,7 +157,8 @@ async fn main() -> Result<()> {
                     dstack,
                     jwt_secret,
                     cfg.num_trees,
-                ),
+                )
+                .with_shard_pubkeys(shard_pubkeys),
                 Some(signer_pubkey),
                 settle_signer,
             )

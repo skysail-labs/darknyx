@@ -118,6 +118,13 @@ async fn info_returns_stub_app_fields() {
     assert!(json["tcb_info"].is_object());
     assert!(json["tcb_info"]["mrtd"].is_string());
     assert!(json["tee_pubkey"].is_string());
+    // The full K-shard signer set (shard order); back-compat `tee_pubkey`
+    // is its shard-0 entry.
+    assert!(json["tee_pubkeys"].is_array());
+    let set = json["tee_pubkeys"].as_array().unwrap();
+    assert!(!set.is_empty());
+    assert_eq!(set[0], json["tee_pubkey"]);
+    assert!(set.iter().all(|k| k.is_string()));
     assert!(json["nyx_version"].is_string());
 }
 

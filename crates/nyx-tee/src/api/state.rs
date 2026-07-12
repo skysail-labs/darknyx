@@ -82,6 +82,13 @@ pub struct ApiState {
     /// Hex encoding of the same pubkey — useful for the
     /// `report_data` binding when clients call `get_quote`.
     pub signer_pubkey_hex: String,
+    /// The FULL K-shard TEE signer set (base58, shard order) — `signers[j]`
+    /// is shard `j`'s Solana fee-payer/authority. The vault accepts settle
+    /// payloads from EVERY key in `vault_config.tee_pubkeys`, so `/info`
+    /// advertises the whole set (not just shard 0) and a client cross-checks
+    /// it against on-chain governance. Defaults to `[signer_pubkey_base58]`
+    /// until `main.rs` supplies the derived set via `with_shard_pubkeys`.
+    pub signer_pubkeys_base58: Vec<String>,
     /// `None` when the dstack socket isn't reachable (degraded
     /// boot or test mode). `/attestation` returns 503 in that
     /// case; `/health` + `/info` still work.
@@ -345,6 +352,9 @@ impl ApiState {
             app_info,
             signer_pubkey_base58: signer.pubkey_base58.clone(),
             signer_pubkey_hex: signer.pubkey_hex.clone(),
+            // Defaults to the primary; `main.rs` overrides with the full derived
+            // K-shard set via `with_shard_pubkeys`.
+            signer_pubkeys_base58: vec![signer.pubkey_base58.clone()],
             dstack: Some(dstack),
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
@@ -389,6 +399,17 @@ impl ApiState {
     /// Number of shard mirrors (== `num_trees`).
     pub fn num_mirror_shards(&self) -> usize {
         self.merkle_mirrors.len()
+    }
+
+    /// Advertise the full K-shard TEE signer set (base58, shard order) on
+    /// `/info`. Called once by `main.rs` with the `derive_set` output so a
+    /// client can cross-check the WHOLE set the vault trusts, not just the
+    /// primary. An empty vec is ignored (keeps the `from_boot` default).
+    pub fn with_shard_pubkeys(mut self, keys: Vec<String>) -> Self {
+        if !keys.is_empty() {
+            self.signer_pubkeys_base58 = keys;
+        }
+        self
     }
 
     /// Attach the Solana RPC client. Called by `main.rs` after
@@ -460,6 +481,7 @@ impl ApiState {
             app_info: BootAppInfo::stub(),
             signer_pubkey_base58: "stub-pubkey".to_string(),
             signer_pubkey_hex: "00".repeat(32),
+            signer_pubkeys_base58: vec!["stub-pubkey".to_string()],
             dstack: None,
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
