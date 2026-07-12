@@ -222,6 +222,7 @@ export class Daemon {
         expected: this.config.attestation,
         quoteVerifier: this.quoteVerifier,
         fetchImpl: this.fetchImpl,
+        strict: this.config.attestationStrict,
       });
     }
 
