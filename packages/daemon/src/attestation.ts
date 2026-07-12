@@ -28,7 +28,7 @@ import {
   AttestationError,
   type AttestationFailure,
   type ExpectedMeasurements,
-  type VerifiedQuoteReport,
+  type QuoteVerifier,
   DEFAULT_TCB_ALLOWLIST,
   checkReportDataBinding,
   composeHashFromEventLog,
@@ -36,12 +36,14 @@ import {
   verifyReportAgainstExpected,
 } from "@nyx/sdk";
 
-// Re-export the shared types so existing daemon imports (config.ts, daemon.ts)
-// keep resolving through this module.
+// Re-export the shared types so existing daemon imports (config.ts, daemon.ts,
+// bin/daemon.ts) keep resolving through this module. QuoteVerifier +
+// createDcapQuoteVerifier now live in the SDK (shared with the browser client).
 export {
   AttestationError,
   type AttestationFailure,
   type ExpectedMeasurements,
+  type QuoteVerifier,
 } from "@nyx/sdk";
 
 const fromHex = (h: string): Uint8Array =>
@@ -70,13 +72,6 @@ export interface AttestationResult {
   /** True when the result came from full DCAP verification (strict path). */
   dcapVerified: boolean;
 }
-
-/**
- * A real DCAP quote verifier: verifies the raw quote (Intel signature + PCK
- * chain + QE identity + TCB) and resolves the *verified* report, or throws
- * {@link AttestationError} (kind `quote_invalid`) on failure. See `./dcap.ts`.
- */
-export type QuoteVerifier = (quote: Uint8Array) => Promise<VerifiedQuoteReport>;
 
 async function getJson<T>(
   url: string,

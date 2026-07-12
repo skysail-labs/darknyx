@@ -24,6 +24,7 @@ import {
   getMergeFunction,
   limitPolicy,
   OrderSide,
+  createDcapQuoteVerifier,
 } from "@nyx/sdk";
 
 import { loadConfig } from "../src/config.js";
@@ -34,7 +35,6 @@ import { createMergeClient } from "../src/merge-client.js";
 import { httpLeavesFetcher } from "../src/tree-merkle-provider.js";
 import { createMergeRunner } from "../src/merge-runner.js";
 import { Daemon } from "../src/daemon.js";
-import { createDcapQuoteVerifier } from "../src/dcap.js";
 import {
   startControlServer,
   type PlaceMapper,

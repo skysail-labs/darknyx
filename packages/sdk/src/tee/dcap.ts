@@ -1,20 +1,18 @@
 /**
- * Real Intel-TCB DCAP quote verifier for the daemon.
+ * Real Intel-TCB DCAP quote verifier — shared by the node daemon and the
+ * browser SDK (the pure-JS `@phala/dcap-qvl` runs in both).
  *
- * Wraps `@phala/dcap-qvl` — the **pure-JS** DCAP verifier. We deliberately use
- * the pure-JS package, NOT the WASM `@phala/dcap-qvl-node`/`-web` builds:
- * per GHSA-796p-j2gh-9m2q / CVE-2026-22696 the WASM builds are unpatched
- * (<= 0.3.3, no QE-identity verification) and Phala's guidance is to use
+ * We deliberately use the pure-JS package, NOT the WASM `@phala/dcap-qvl-node`/
+ * `-web` builds: per GHSA-796p-j2gh-9m2q / CVE-2026-22696 the WASM builds are
+ * unpatched (<= 0.3.3, no QE-identity verification); Phala's guidance is to use
  * `@phala/dcap-qvl` (patched in 0.3.9 — QE-identity signature + MRSIGNER /
- * ISVPRODID / ISVSVN enforcement). The pure-JS package also runs in both Node
- * and the browser, so the daemon and the (Phase-2) browser SDK share one verifier.
+ * ISVPRODID / ISVSVN enforcement).
  *
  * `getCollateralAndVerify` fetches the quote's collateral from Phala's PCCS and
  * runs the full Intel verification (signature + PCK chain + QE identity + TCB).
- * It THROWS on any failure — we surface that as `quote_invalid`. On success we
- * map its `VerifiedReport` into the SDK's environment-agnostic
- * {@link VerifiedQuoteReport}, which `verify-core` then checks (report_data
- * binding, event-log RTMR3 replay, measurement pinning, TCB allowlist).
+ * It THROWS on any failure — surfaced as `quote_invalid`. On success the
+ * `VerifiedReport` is mapped into the environment-agnostic
+ * {@link VerifiedQuoteReport}, which `verify-core` then checks.
  */
 
 import {
@@ -22,12 +20,16 @@ import {
   PHALA_PCCS_URL,
   type VerifiedReport,
 } from "@phala/dcap-qvl";
-import { AttestationError, type VerifiedQuoteReport } from "@nyx/sdk";
 
-import type { QuoteVerifier } from "./attestation.js";
+import { AttestationError, type VerifiedQuoteReport } from "./verify-core.js";
+
+/**
+ * Verify a raw TDX quote and resolve the mapped report, or throw
+ * {@link AttestationError} (kind `quote_invalid`) if Intel verification fails.
+ */
+export type QuoteVerifier = (quote: Uint8Array) => Promise<VerifiedQuoteReport>;
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
-
 const errMsg = (e: unknown): string =>
   e instanceof Error ? e.message : String(e);
 
@@ -37,11 +39,6 @@ export interface DcapVerifierOptions {
   pccsUrl?: string;
 }
 
-/**
- * Build a {@link QuoteVerifier} backed by real DCAP. The returned function
- * verifies the raw quote and resolves the mapped report, or throws
- * {@link AttestationError} with kind `quote_invalid` if verification fails.
- */
 export function createDcapQuoteVerifier(
   opts: DcapVerifierOptions = {},
 ): QuoteVerifier {
