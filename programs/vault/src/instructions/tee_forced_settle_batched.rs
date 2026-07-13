@@ -19,7 +19,10 @@
 //!   5. Applies the same conservation laws + state mutations as the
 //!      per-match handler. (Lock + consumed-note writes +
 //!      Merkle-tree appends + optional re-locks.)
-//!   6. Closes the marker, refunding rent to `tee_authority`.
+//!   6. Leaves the marker OPEN — one `BatchValidityMarker` covers all N
+//!      matches in the batch, so a separate `close_batch_validity_marker`
+//!      ix reclaims its rent exactly once, after every match settles.
+//!      (Closing it here would brick every match after the first — see §8.2.)
 //!
 //! Coexists with `tee_forced_settle` during the cutover window. The
 //! matcher chooses which path to use; once the batched path proves
