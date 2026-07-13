@@ -241,7 +241,8 @@ async function defaultBatch(N: BatchSize): Promise<MatchSlotWitness[]> {
         sellerChange: 0n,
         buyerFee: 0n,
         sellerFee: 0n,
-        batchSlot: 1_000_000n,
+        // C-08: batch_slot === slot index.
+        batchSlot: BigInt(i),
         slotIdx: i,
       }),
     );
@@ -300,13 +301,17 @@ const ready2 = artefactsReady(2);
         baseMint,
         buyerOwnerCommit: buyerCommit,
         sellerOwnerCommit: sellerCommit,
-        baseAmount: 25n,
+        // C-04 (exact fee): fee == ⌊quote·rate/10000⌋. Slot 0 stays fee-free by
+        // keeping its notional tiny (quote = 1·200 = 200 ⇒ ⌊200·30/10000⌋ = 0),
+        // so buyerFee 0 is exact at the batch rate 30.
+        baseAmount: 1n,
         clearingPrice: 200n,
         buyerChange: 0n,
         sellerChange: 0n,
         buyerFee: 0n,
         sellerFee: 0n,
-        batchSlot: 1_000_001n,
+        feeRateBps: 30n,
+        batchSlot: 0n, // C-08: batch_slot === slot index
         slotIdx: 0,
       }),
       await buildSlot({
@@ -314,13 +319,15 @@ const ready2 = artefactsReady(2);
         baseMint,
         buyerOwnerCommit: buyerCommit,
         sellerOwnerCommit: sellerCommit,
+        // quote = 25·200 = 5000 ⇒ exact fee ⌊5000·30/10000⌋ = 15.
         baseAmount: 25n,
         clearingPrice: 200n,
         buyerChange: 1_000n,
         sellerChange: 0n,
         buyerFee: 15n,
         sellerFee: 0n,
-        batchSlot: 1_000_001n,
+        feeRateBps: 30n,
+        batchSlot: 1n, // C-08: batch_slot === slot index
         slotIdx: 1,
       }),
     ];
@@ -345,7 +352,9 @@ const ready2 = artefactsReady(2);
 });
 
 // ---------------------------------------------------------------------------
-// Fee floor (amount-privacy, P1b) — in-circuit `(fee+1)*10000 > notional*rate`.
+// Exact fee (amount-privacy P1b + C-04) — in-circuit floor `(fee+1)*10000 >
+// notional*rate` AND ceiling `fee*10000 <= notional*rate` ⇒ fee is pinned to
+// exactly ⌊notional*rate/10000⌋.
 // ---------------------------------------------------------------------------
 
 (ready2 ? describe : describe.skip)("v3.5 — N=2 fee floor", () => {
@@ -369,7 +378,7 @@ const ready2 = artefactsReady(2);
         sellerChange: 0n,
         buyerFee,
         sellerFee: 0n,
-        batchSlot: 2_000_000n,
+        batchSlot: BigInt(idx), // C-08: batch_slot === slot index
         slotIdx: idx,
         feeRateBps: 30n,
       });
@@ -397,9 +406,19 @@ const ready2 = artefactsReady(2);
 
   it("[fee_below_floor] under-charging is UNPROVABLE at rate=30", async () => {
     // buyerFee=2 < floor 3 ⇒ (2+1)*10000 = 30000 is NOT > 1000*30 = 30000,
-    // so the in-circuit GreaterThan fails witness generation.
+    // so the in-circuit GreaterThan (floor) fails witness generation.
     await expect(
       proveMatchBatch({ repoRoot: REPO_ROOT, slots: await feeBatch(2n) }),
+    ).rejects.toThrow();
+  }, 60_000);
+
+  it("[fee_above_floor] over-charging is UNPROVABLE at rate=30 (C-04 ceiling)", async () => {
+    // buyerFee=4 > exact fee 3 ⇒ 4*10000 = 40000 is NOT <= 1000*30 = 30000, so
+    // the in-circuit LessEqThan (ceiling) fails witness generation. Without the
+    // C-04 ceiling this would prove — a malicious TEE could confiscate the trade
+    // into the protocol fee notes.
+    await expect(
+      proveMatchBatch({ repoRoot: REPO_ROOT, slots: await feeBatch(4n) }),
     ).rejects.toThrow();
   }, 60_000);
 });

@@ -42,8 +42,9 @@ export interface MergeInputs {
   merkleRoot: bigint;
   tokenMint: [bigint, bigint];
   outputCommitment: bigint;
-  /** K public nullifiers — real (non-zero) for active slots, 0 for dummy. */
-  nullifiers: bigint[];
+  // C-01: the K input-note commitments are now the circuit's PUBLIC OUTPUTS
+  // (computed from the witness), no longer a nullifier input — so the witness
+  // carries no `nullifiers` field.
   // ── shared owner ──
   spendingKey: bigint;
   ownerCommitmentBlinding: bigint;

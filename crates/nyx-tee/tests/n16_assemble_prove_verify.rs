@@ -113,7 +113,9 @@ fn one_real_match() -> (MatchPair, NoteOpening, NoteOpening) {
         seller_relock_expiry: 0,
         price: 100,
         pyth_at_match: 100,
-        batch_slot: 7,
+        // C-08: VALID_MATCH_BATCH now binds `batch_slot === slot index`; this
+        // lone real match lands at pad index 0, so its batch_slot must be 0.
+        batch_slot: 0,
         match_id: 42,
         status: MatchStatus::Filled,
     };

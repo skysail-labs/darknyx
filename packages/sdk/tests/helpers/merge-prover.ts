@@ -12,11 +12,10 @@ import { resolve } from "node:path";
 import { type Groth16OnChainProof } from "../../src/idl/vault-client.js";
 import {
   noteCommitmentV2,
-  nullifierV2,
   ownerCommitment,
   pubkeyToFrPair,
 } from "../../src/utxo/note.js";
-import { be32ToBigInt, be32ToDec } from "./e2e-helpers.js";
+import { be32ToDec } from "./e2e-helpers.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";
 
 export interface MergeSlot {
@@ -46,7 +45,7 @@ export interface MergeProveParams {
 
 export interface MergeProveResult {
   proof: Groth16OnChainProof;
-  /** [outputCommitment, merkleRoot, mint_lo, mint_hi, nullifiers[0..k-1]] (32B BE each). */
+  /** [outputCommitment, inputCommitments[0..k-1], merkleRoot, mint_lo, mint_hi] (32B BE each). */
   publicInputsBE: Uint8Array[];
   /** The merged-note commitment (32B BE). */
   outputCommitmentBE: Uint8Array;
@@ -81,7 +80,6 @@ export async function proveValidMerge(
   const innerHash: string[] = [];
   const merklePath: string[][] = [];
   const merkleIndices: string[][] = [];
-  const nullifiers: string[] = [];
   let sum = 0n;
 
   for (let i = 0; i < k; i++) {
@@ -92,11 +90,6 @@ export async function proveValidMerge(
       innerHash.push(s.innerHash.toString());
       merklePath.push(s.pathElements.map((e) => e.toString()));
       merkleIndices.push(s.pathIndices.map((x) => x.toString()));
-      nullifiers.push(
-        be32ToBigInt(
-          await nullifierV2(args.spendingKey, s.innerHash),
-        ).toString(),
-      );
       sum += s.amount;
     } else {
       isActive.push("0");
@@ -104,7 +97,6 @@ export async function proveValidMerge(
       innerHash.push("0");
       merklePath.push(ZERO_PATH.map((e) => e.toString()));
       merkleIndices.push(ZERO_IDX.map((x) => x.toString()));
-      nullifiers.push("0");
     }
   }
 
@@ -118,7 +110,6 @@ export async function proveValidMerge(
   const inputs = {
     merkleRoot: be32ToDec(args.merkleRootBE),
     tokenMint: [mintLo.toString(), mintHi.toString()],
-    nullifiers,
     spendingKey: args.spendingKey.toString(),
     ownerCommitmentBlinding: args.ownerCommitmentBlinding.toString(),
     outputInnerHash: args.outputInnerHash.toString(),

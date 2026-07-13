@@ -445,7 +445,7 @@ fn test_two_matches_share_one_marker() {
     let oid_b1 = [0x21u8; 16];
     seed_note_lock(&mut h, &note_a1, &oid_a1, 1_000_000, 5_000);
     seed_note_lock(&mut h, &note_b1, &oid_b1, 1_000_000, 100);
-    let p1 = MatchResultPayload::exact_fill(
+    let mut p1 = MatchResultPayload::exact_fill(
         [0xE1u8; 16],
         note_a1,
         note_b1,
@@ -458,6 +458,10 @@ fn test_two_matches_share_one_marker() {
         100,
         5_000,
     );
+    // C-08: match 1 settles at match_index 1, and the handler now asserts
+    // `payload.batch_slot == match_index`. Set it (+ it flows into leaf1 below so
+    // the marker root binds the slot-1 leaf built with batch_slot=1).
+    p1.batch_slot = 1;
 
     // Both matches sit on the same market, so `compute_match_leaf`
     // sees the same (quote_mint, base_mint) pair for both.

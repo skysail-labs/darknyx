@@ -43,7 +43,6 @@ export function nodeMergeProver(
         const witness = {
           merkleRoot: inputs.merkleRoot.toString(),
           tokenMint: inputs.tokenMint.map((x) => x.toString()),
-          nullifiers: inputs.nullifiers.map((x) => x.toString()),
           spendingKey: inputs.spendingKey.toString(),
           ownerCommitmentBlinding: inputs.ownerCommitmentBlinding.toString(),
           outputInnerHash: inputs.outputInnerHash.toString(),

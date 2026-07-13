@@ -16,7 +16,7 @@ import { PublicKey } from "@solana/web3.js";
 import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
-import { noteCommitmentV2, nullifierV2, pubkeyToFrPair } from "./note.js";
+import { noteCommitmentV2, pubkeyToFrPair } from "./note.js";
 import { deriveMergeInnerHash } from "../keys/key-generators.js";
 import { buildMergeInstruction } from "../idl/vault-client.js";
 import { readNoteMergedLeafIndex } from "./leaf-index.js";
@@ -118,35 +118,36 @@ export function getMergeFunction({
       innerHash: outputInnerHash,
     });
 
-    // Per-slot witness, padded to k with dummies (inactive, zero nullifier).
+    // Per-slot witness, padded to k with dummies (inactive slots contribute
+    // nothing and emit a zero input-commitment — C-01).
     const isActive: number[] = [];
     const amount: bigint[] = [];
     const innerHash: bigint[] = [];
     const merklePath: bigint[][] = [];
     const merkleIndices: number[][] = [];
-    const nullifiers: bigint[] = [];
-    const nullifierBytes: Uint8Array[] = [];
+    // The K public input commitments the circuit binds: the real note commitment
+    // for active slots, all-zero for dummies. These key the on-chain
+    // ConsumedNoteEntry guard (C-01); active slots equal the circuit's
+    // internally-computed commitment, so the on-chain proof check agrees.
+    const inputCommitmentBytes: Uint8Array[] = [];
     const zero32 = new Uint8Array(32);
 
     for (let i = 0; i < k; i++) {
       if (i < m) {
         const inp = params.inputs[i];
-        const nf = await nullifierV2(spendingKey, inp.innerHash);
         isActive.push(1);
         amount.push(inp.amount);
         innerHash.push(inp.innerHash);
         merklePath.push(proofs[i].siblings.map(u8ToBigBE));
         merkleIndices.push(proofs[i].pathIndices);
-        nullifiers.push(u8ToBigBE(nf));
-        nullifierBytes.push(nf);
+        inputCommitmentBytes.push(inp.commitment);
       } else {
         isActive.push(0);
         amount.push(0n);
         innerHash.push(0n);
         merklePath.push(Array.from({ length: 20 }, () => 0n));
         merkleIndices.push(Array.from({ length: 20 }, () => 0));
-        nullifiers.push(0n);
-        nullifierBytes.push(zero32);
+        inputCommitmentBytes.push(zero32);
       }
     }
 
@@ -160,7 +161,6 @@ export function getMergeFunction({
         merkleRoot: u8ToBigBE(merkleRoot),
         tokenMint: [mintLo, mintHi],
         outputCommitment: u8ToBigBE(outputCommitment),
-        nullifiers,
         spendingKey,
         ownerCommitmentBlinding: ownerBlinding,
         outputInnerHash,
@@ -182,7 +182,7 @@ export function getMergeFunction({
       programId: client.programId,
       treeId,
       payer: params.payer,
-      nullifiers: nullifierBytes,
+      inputCommitments: inputCommitmentBytes,
       outputCommitment,
       tokenMint: new PublicKey(params.tokenMint),
       merkleRoot,

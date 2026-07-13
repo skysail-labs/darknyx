@@ -7,10 +7,14 @@
 //!
 //! Conservation: K notes consumed + 1 minted, same mint, same total ⇒ the
 //! per-mint `OutstandingMint` counter is UNCHANGED (the pool owes the user the
-//! same total). Replay is guarded by the per-input `NullifierEntry` PDA — created
-//! manually here (fails if it already exists), the same guard `withdraw` uses via
-//! `init`. Dummy padding slots carry a public nullifier of 0 (the circuit binds
-//! them inactive), so they create no PDA and can't smuggle a spend.
+//! same total). Replay is guarded by the per-input `ConsumedNoteEntry` PDA
+//! (commitment-keyed) — created manually here (fails if it already exists), the
+//! SAME consume-once guard `withdraw` + TEE settle use. This closes C-01 (audit):
+//! merge previously keyed a `NullifierEntry`, a guard DISJOINT from settle's
+//! commitment-keyed `ConsumedNoteEntry`, so the same note could be consumed once
+//! by merge and once by settle (double-spend). Dummy padding slots emit a public
+//! input-commitment of 0 (the circuit binds them inactive), so they create no PDA
+//! and can't smuggle a spend.
 
 use crate::errors::VaultError;
 use crate::merkle::append_leaf;
@@ -50,15 +54,15 @@ pub struct Merge<'info> {
     pub merkle_tree: AccountLoader<'info, MerkleTree>,
 
     pub system_program: Program<'info, System>,
-    // The NullifierEntry PDAs for the NON-ZERO input nullifiers are passed as
-    // `remaining_accounts` (writable, uninitialised), in nullifier order.
+    // The ConsumedNoteEntry PDAs for the NON-ZERO input commitments are passed as
+    // `remaining_accounts` (writable, uninitialised), in input-commitment order.
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn merge_handler<'info>(
     ctx: Context<'info, Merge<'info>>,
     tree_id: u8,
-    nullifiers: Vec<[u8; 32]>,
+    input_commitments: Vec<[u8; 32]>,
     output_commitment: [u8; 32],
     token_mint: Pubkey,
     merkle_root: [u8; 32],
@@ -66,7 +70,7 @@ pub fn merge_handler<'info>(
     proof: Groth16Proof,
 ) -> Result<()> {
     require!(
-        (k == 2 || k == 4) && nullifiers.len() == k as usize,
+        (k == 2 || k == 4) && input_commitments.len() == k as usize,
         VaultError::InvalidMergeK
     );
 
@@ -77,18 +81,20 @@ pub fn merge_handler<'info>(
     );
 
     // ----- Verify the VALID_MERGE proof (VK chosen by K) -----
-    // Public signals (circom output-first order):
-    //   [outputCommitment, merkleRoot, mint_lo, mint_hi, nullifiers[0..K-1]]
+    // Public signals (snarkjs order: outputs first, then public inputs):
+    //   [outputCommitment, inputCommitments[0..K-1], merkleRoot, mint_lo, mint_hi]
+    // (C-01: the input commitments are now PUBLIC outputs, right after
+    // outputCommitment, replacing the trailing nullifiers.)
     let [mint_lo, mint_hi] = pubkey_pair_be32(&token_mint.to_bytes());
     match k {
         2 => {
             let pi: [[u8; 32]; 6] = [
                 output_commitment,
+                input_commitments[0],
+                input_commitments[1],
                 merkle_root,
                 mint_lo,
                 mint_hi,
-                nullifiers[0],
-                nullifiers[1],
             ];
             let vk = make_vk(
                 &VALID_MERGE_K2_ALPHA_G1,
@@ -102,13 +108,13 @@ pub fn merge_handler<'info>(
         4 => {
             let pi: [[u8; 32]; 8] = [
                 output_commitment,
+                input_commitments[0],
+                input_commitments[1],
+                input_commitments[2],
+                input_commitments[3],
                 merkle_root,
                 mint_lo,
                 mint_hi,
-                nullifiers[0],
-                nullifiers[1],
-                nullifiers[2],
-                nullifiers[3],
             ];
             let vk = make_vk(
                 &VALID_MERGE_K4_ALPHA_G1,
@@ -122,25 +128,25 @@ pub fn merge_handler<'info>(
         _ => return err!(VaultError::InvalidMergeK),
     }
 
-    // ----- Consume each non-zero (active) input by creating its nullifier PDA -----
-    // The proof binds zero-nullifier slots to inactive, so a padded slot creates
-    // no PDA. `remaining_accounts` holds exactly one PDA per non-zero nullifier,
-    // in order.
+    // ----- Consume each non-zero (active) input by creating its ConsumedNoteEntry -----
+    // The proof binds inactive slots to a zero input-commitment, so a padded slot
+    // creates no PDA. `remaining_accounts` holds exactly one PDA per non-zero
+    // input commitment, in order.
     let zero = [0u8; 32];
     let spent_slot = Clock::get()?.slot;
     let mut accts = ctx.remaining_accounts.iter();
-    for nf in nullifiers.iter() {
-        if *nf == zero {
+    for commitment in input_commitments.iter() {
+        if *commitment == zero {
             continue;
         }
         let ai = accts
             .next()
             .ok_or(error!(VaultError::MergeAccountMismatch))?;
-        create_nullifier_pda(
+        create_consumed_note_pda(
             ai,
             &ctx.accounts.payer,
             &ctx.accounts.system_program,
-            nf,
+            commitment,
             spent_slot,
         )?;
     }
@@ -173,28 +179,33 @@ pub fn merge_handler<'info>(
     Ok(())
 }
 
-/// Manually create + populate a `NullifierEntry` PDA (zero-copy). Mirrors
-/// `tee_forced_settle::create_relock_pda`. Fails if the PDA already exists
-/// (double-spend / double-merge guard).
-fn create_nullifier_pda<'info>(
+/// Manually create + populate a `ConsumedNoteEntry` PDA (zero-copy), keyed on
+/// the note COMMITMENT — the SAME consume-once guard `withdraw` inits and TEE
+/// settle inits (`consumed_a/b`). Mirrors `tee_forced_settle::create_relock_pda`.
+/// Fails if the PDA already exists (a prior withdraw / settle / merge already
+/// consumed this note → double-spend). `match_id` is the all-zero sentinel
+/// (merge is not a match), matching `withdraw`'s `ConsumedNoteEntry`.
+fn create_consumed_note_pda<'info>(
     ai: &AccountInfo<'info>,
     payer: &Signer<'info>,
     system_program: &Program<'info, System>,
-    nullifier: &[u8; 32],
-    spent_slot: u64,
+    note_commitment: &[u8; 32],
+    consumed_slot: u64,
 ) -> Result<()> {
-    let (expected, bump) =
-        Pubkey::find_program_address(&[NullifierEntry::SEED, nullifier.as_ref()], &crate::ID);
+    let (expected, bump) = Pubkey::find_program_address(
+        &[ConsumedNoteEntry::SEED, note_commitment.as_ref()],
+        &crate::ID,
+    );
     require_keys_eq!(ai.key(), expected, VaultError::MergeAccountMismatch);
     require!(
         ai.data_is_empty() && ai.lamports() == 0,
         VaultError::NoteAlreadyConsumed
     );
 
-    let space = 8 + size_of::<NullifierEntry>();
+    let space = 8 + size_of::<ConsumedNoteEntry>();
     let lamports = Rent::get()?.minimum_balance(space);
     let bump_arr = [bump];
-    let seeds: &[&[u8]] = &[NullifierEntry::SEED, nullifier.as_ref(), &bump_arr];
+    let seeds: &[&[u8]] = &[ConsumedNoteEntry::SEED, note_commitment.as_ref(), &bump_arr];
     let signer_seeds = &[seeds];
 
     system_program::create_account(
@@ -212,13 +223,14 @@ fn create_nullifier_pda<'info>(
     )?;
 
     let mut data = ai.try_borrow_mut_data()?;
-    data[..8].copy_from_slice(NullifierEntry::DISCRIMINATOR);
+    data[..8].copy_from_slice(ConsumedNoteEntry::DISCRIMINATOR);
     let (_head, body) = data.split_at_mut(8);
-    let n: &mut NullifierEntry = bytemuck::from_bytes_mut(body);
-    n.nullifier = *nullifier;
-    n.spent_slot = spent_slot;
-    n.bump = bump;
-    n._padding = [0u8; 7];
+    let c: &mut ConsumedNoteEntry = bytemuck::from_bytes_mut(body);
+    c.note_commitment = *note_commitment;
+    c.match_id = [0u8; 16];
+    c.consumed_slot = consumed_slot;
+    c.bump = bump;
+    c._padding = [0u8; 7];
     Ok(())
 }
 

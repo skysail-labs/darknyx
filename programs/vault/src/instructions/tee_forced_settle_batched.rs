@@ -320,6 +320,15 @@ pub fn tee_forced_settle_batched_handler(
         let lb = ctx.accounts.note_lock_b.load()?;
         (la.token_mint, lb.token_mint, la.order_id, lb.order_id)
     };
+    // C-08: `payload.batch_slot` feeds the leaf hash, and VALID_MATCH_BATCH now
+    // binds `batch_slot === slot index`. The leaf is proven included at position
+    // `match_index`, so the payload's batch_slot MUST equal match_index — pin it
+    // here so a settle can't recompute a valid-looking leaf carrying a different
+    // slot value than the position it proves inclusion at.
+    require!(
+        payload.batch_slot == match_index as u64,
+        VaultError::InvalidBatchBinding
+    );
     {
         let leaf = compute_match_leaf(&payload)?;
         let computed_root = walk_merkle_path_n16(&leaf, match_index, &merkle_proof)?;

@@ -111,10 +111,10 @@ Settlement is atomic and replay-proof by construction:
 
 - **Proof-gated.** No settle without a verified `VALID_MATCH_BATCH` proof and
   the enclave's registered signature.
-- **One-touch notes.** Each consumed note creates a spent-note PDA and a
-  nullifier PDA; a second attempt to touch it simply fails to initialize. The
-  same note can never be settled, withdrawn, or merged twice — these paths share
-  the nullifier guard.
+- **One-touch notes.** Each consumed note creates a commitment-keyed spent-note
+  PDA; a second attempt to touch it simply fails to initialize. The same note can
+  never be settled, withdrawn, or merged twice — these paths all share that
+  commitment-keyed spent-note guard.
 - **The marker is 1:N.** One validity marker authorizes the whole batch and is
   closed exactly once, after every match in it settles.
 - **Conservation.** Both legs pay their own protocol fee and both fee notes
