@@ -107,7 +107,7 @@ gate("live CVM attestation (real DCAP)", () => {
   it("rejects a tampered quote", async () => {
     const att = await fetchAttestation(Uint8Array.from(randomBytes(32)));
     const bytes = fromHex(att.quote);
-    bytes[bytes.length - 1] ^= 0xff; // flip a byte in the signature region
+    bytes[100] ^= 0xff; // flip a byte in the SIGNED TD-report body (offset 100)
     await expect(verifier(bytes)).rejects.toThrow();
   });
 

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -84,6 +85,35 @@ describe("replayEventLogRtmr (dstack parity)", () => {
     const short = "abcd"; // 2 bytes
     const log = [evt(3, "s", short)];
     expect(replayEventLogRtmr(log, 3)).toBe(referenceReplay([short]));
+  });
+});
+
+describe("replayEventLogRtmr — real dstack CVM fixture", () => {
+  // Captured from a live Phala CVM (tee-v3-hardening-46). dstack leaves the
+  // app-event (RTMR3) digests EMPTY and computes them from (event_type, event,
+  // payload) — the exact case a synthetic log can't cover. Regression guard.
+  const fx = JSON.parse(
+    readFileSync(
+      new URL("./fixtures/dstack-eventlog.json", import.meta.url),
+      "utf8",
+    ),
+  ) as {
+    compose_hash: string;
+    rtmr0: string;
+    rtmr3: string;
+    event_log: EventLogEntry[];
+  };
+
+  it("reproduces the real quote's RTMR3 (computed app-event digests)", () => {
+    expect(replayEventLogRtmr(fx.event_log, 3)).toBe(fx.rtmr3);
+  });
+
+  it("still reproduces RTMR0 (pre-filled boot-event digests)", () => {
+    expect(replayEventLogRtmr(fx.event_log, 0)).toBe(fx.rtmr0);
+  });
+
+  it("extracts the compose hash from the real RTMR3 log", () => {
+    expect(composeHashFromEventLog(fx.event_log)).toBe(fx.compose_hash);
   });
 });
 

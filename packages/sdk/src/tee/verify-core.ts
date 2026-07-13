@@ -113,6 +113,15 @@ export const DEFAULT_TCB_ALLOWLIST: readonly string[] = ["UpToDate"];
 /** dstack event name carrying the compose hash in RTMR3. */
 export const COMPOSE_HASH_EVENT = "compose-hash";
 
+/**
+ * dstack runtime-event type (the app measurements in RTMR3: compose-hash,
+ * app-id, instance-id, key-provider, …). For these events the event log's
+ * `digest` field is EMPTY and the digest that was extended into the RTMR must be
+ * COMPUTED from the event; all other (firmware/boot) events carry a pre-filled
+ * `digest`. See `dstack/cc-eventlog/src/{tdx,runtime_events}.rs`.
+ */
+export const DSTACK_RUNTIME_EVENT_TYPE = 0x08000001;
+
 const RTMR_INIT = Buffer.alloc(48, 0);
 
 const eq = (a: Uint8Array, b: Uint8Array): boolean =>
@@ -133,29 +142,51 @@ export function parseEventLog(eventLogJson: string): EventLogEntry[] {
 }
 
 /**
- * Replay a single RTMR from the event log, reproducing dstack `replay_rtmr`
- * byte-for-byte. Returns the lowercase hex RTMR value.
+ * The 48-byte digest an event extends into its RTMR. dstack runtime events
+ * (app measurements) COMPUTE it as
+ * `SHA-384( LE32(event_type) ‖ ":" ‖ event ‖ ":" ‖ payload )`
+ * (`event_payload` hex-decoded to raw bytes); every other event carries a
+ * pre-filled `digest`, padded up to 48 bytes. Mirrors dstack
+ * `cc-eventlog::TdxEventLog::digest`.
+ */
+function eventDigest(e: EventLogEntry): Buffer {
+  if (e.event_type === DSTACK_RUNTIME_EVENT_TYPE) {
+    const t = Buffer.alloc(4);
+    t.writeUInt32LE(e.event_type >>> 0, 0);
+    return createHash("sha384")
+      .update(
+        Buffer.concat([
+          t,
+          Buffer.from(":"),
+          Buffer.from(e.event, "utf8"),
+          Buffer.from(":"),
+          Buffer.from(normHex(e.event_payload), "hex"),
+        ]),
+      )
+      .digest();
+  }
+  const d = Buffer.from(normHex(e.digest), "hex");
+  if (d.length >= 48) return d;
+  const padded = Buffer.alloc(48, 0); // dstack pads up, never truncates
+  d.copy(padded);
+  return padded;
+}
+
+/**
+ * Replay a single RTMR from the event log, reproducing dstack's
+ * `TdxEventLog::digest` + `replay_rtmr` byte-for-byte. Returns lowercase hex.
  */
 export function replayEventLogRtmr(
   eventLog: EventLogEntry[],
   imr: number,
 ): string {
-  const digests = eventLog
-    .filter((e) => e.imr === imr)
-    .map((e) => normHex(e.digest));
-  if (digests.length === 0) return RTMR_INIT.toString("hex");
+  const events = eventLog.filter((e) => e.imr === imr);
+  if (events.length === 0) return RTMR_INIT.toString("hex");
 
   let mr: Buffer = RTMR_INIT;
-  for (const dHex of digests) {
-    let d = Buffer.from(dHex, "hex");
-    if (d.length < 48) {
-      // dstack resizes (pads) up to 48 — it never truncates a longer digest.
-      const padded = Buffer.alloc(48, 0);
-      d.copy(padded);
-      d = padded;
-    }
+  for (const e of events) {
     mr = createHash("sha384")
-      .update(Buffer.concat([mr, d]))
+      .update(Buffer.concat([mr, eventDigest(e)]))
       .digest();
   }
   return mr.toString("hex");
