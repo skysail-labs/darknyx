@@ -308,6 +308,9 @@ maybe(
           anchorTopUpSize: 5,
           mergeThreshold: 2,
         },
+        // Functional lifecycle test — dev-partial attestation (not strict DCAP).
+        attestationStrict: false,
+        attestOnchainCheck: false,
         programId: cfg.vaultProgramId,
       };
       const { client, merkleProvider } = createMergeClient({

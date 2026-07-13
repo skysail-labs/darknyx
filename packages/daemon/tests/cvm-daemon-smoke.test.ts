@@ -142,6 +142,11 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       controlPort: 0,
       keystorePath: "",
       thresholds: DEFAULT_THRESHOLDS,
+      // Functional smoke — run attestation in dev-partial (nonce+binding+/info),
+      // not strict DCAP. Real-DCAP live validation is a separate pinned step
+      // (NYX_DAEMON_EXPECT_COMPOSE_HASH/_TEE_PUBKEY against the deployed image).
+      attestationStrict: false,
+      attestOnchainCheck: false,
       programId: cfg.vaultProgramId,
     };
     const programId = new PublicKey(cfg.vaultProgramId);

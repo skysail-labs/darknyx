@@ -1,90 +1,81 @@
 /**
  * Attestation-on-connect — the non-custody trust anchor.
  *
- * Before trading, the daemon verifies the gateway it's about to send order flow
- * to is the TEE it expects. The TEE exposes `GET /attestation` (a TDX quote
- * whose `report_data` binds a caller nonce + the signer key) and `GET /info`
- * (the `compose_hash` + `mrtd` measurements + `tee_pubkey`). This module checks,
- * client-side:
+ * Before trading, the daemon proves the gateway it is about to send order flow
+ * to is a genuine Intel TDX enclave running our audited build — not a normal
+ * server that fabricates JSON. It does this client-side:
  *
- *   1. **Freshness** — `report_data[0..32]` echoes our random nonce (the quote
- *      was produced for THIS request, not replayed).
- *   2. **Key binding** — `report_data[32..64] == SHA-256(tee_pubkey bytes)`, so
- *      the quote commits to the same Ed25519 key that signs settle payloads
- *      (the TEE decodes the base58 `tee_pubkey` → 32 bytes → SHA-256).
- *   3. **Pinned measurements** — `compose_hash` / `mrtd` / `tee_pubkey` match the
- *      operator-vetted expected values (the "I audited this exact CVM build"
- *      check).
+ *   1. Fetch `GET /attestation?reportData=<nonce>` → a fresh TDX quote whose
+ *      `report_data = nonce ‖ SHA-256(tee_pubkey)`, plus the `event_log`.
+ *   2. **Real DCAP** (`quoteVerifier`, backed by `@phala/dcap-qvl`): verify
+ *      Intel's signature + PCK chain + QE identity + TCB status over the quote.
+ *   3. Hand the *verified* report to the SDK's `verify-core`, which enforces the
+ *      TCB allowlist, the `report_data` binding, replays the event log to bind
+ *      RTMR3, reads the `compose-hash` from that now-trusted log, and matches it
+ *      (+ optional MRTD + tee_pubkey) against source-pinned expected values.
  *
- * HONEST LIMIT: without a DCAP verifier (`dcap-qvl` is Rust) this does NOT verify
- * Intel's signature over the quote. The binding + nonce defeat key-substitution
- * and replay; pinning defeats a wrong build. For full TCB verification, inject a
- * {@link QuoteVerifier} (a real DCAP backend) — the raw quote is handed to it.
+ * **Strict mode (default):** trading requires a working DCAP verifier AND the
+ * governance pins (`compose_hash` + `tee_pubkey`). Without DCAP, every field the
+ * client inspects is self-reported by the gateway (audit_2 finding A-1). Set
+ * `strict: false` ONLY for local dstack-simulator dev (its stub quotes cannot be
+ * DCAP-verified by design); it downgrades to the legacy nonce+binding+`/info`
+ * pin check, which is NOT a security guarantee against a malicious operator.
  */
 
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { PublicKey } from "@solana/web3.js";
+import {
+  AttestationError,
+  type AttestationFailure,
+  type ExpectedMeasurements,
+  type QuoteVerifier,
+  DEFAULT_TCB_ALLOWLIST,
+  checkReportDataBinding,
+  composeHashFromEventLog,
+  parseEventLog,
+  teeKeySetBytes,
+  verifyReportAgainstExpected,
+} from "@nyx/sdk";
+
+// Re-export the shared types so existing daemon imports (config.ts, daemon.ts,
+// bin/daemon.ts) keep resolving through this module. QuoteVerifier +
+// createDcapQuoteVerifier now live in the SDK (shared with the browser client).
+export {
+  AttestationError,
+  type AttestationFailure,
+  type ExpectedMeasurements,
+  type QuoteVerifier,
+} from "@nyx/sdk";
 
 const fromHex = (h: string): Uint8Array =>
   Uint8Array.from(Buffer.from(h.replace(/^0x/, ""), "hex"));
-const sha256 = (b: Uint8Array): Uint8Array =>
-  Uint8Array.from(createHash("sha256").update(b).digest());
-const eq = (a: Uint8Array, b: Uint8Array): boolean =>
-  a.length === b.length && Buffer.from(a).equals(Buffer.from(b));
 
 export interface TeeInfo {
   appId: string;
   composeHash: string;
   mrtd?: string;
-  teePubkey: string; // base58
+  teePubkey: string; // base58 (shard-0 primary)
+  teePubkeys: string[]; // full K-shard set, shard order
 }
 
 export interface AttestationQuote {
   quote: string; // hex TDX quote
+  eventLog: string; // JSON string of measured events (NOT hex)
   reportData: string; // hex, 64 bytes
   teePubkey: string; // base58
 }
 
-/** Operator-pinned values the gateway MUST match (any subset). */
-export interface ExpectedMeasurements {
-  composeHash?: string;
-  mrtd?: string;
-  teePubkey?: string; // base58
-}
-
 export interface AttestationResult {
   teePubkey: string;
+  /** The full K-shard signer set, bound to the quote (strict) / from /info. */
+  teePubkeys: string[];
   composeHash: string;
   mrtd?: string;
-  /** Raw hex quote (for an out-of-band DCAP audit). */
+  /** Raw hex quote (for an out-of-band audit). */
   quote: string;
+  /** True when the result came from full DCAP verification (strict path). */
+  dcapVerified: boolean;
 }
-
-export type AttestationFailure =
-  | "fetch"
-  | "malformed"
-  | "freshness"
-  | "binding"
-  | "pubkey_mismatch"
-  | "compose_mismatch"
-  | "mrtd_mismatch"
-  | "quote_invalid";
-
-export class AttestationError extends Error {
-  constructor(
-    message: string,
-    readonly kind: AttestationFailure,
-  ) {
-    super(message);
-    this.name = "AttestationError";
-  }
-}
-
-/** A real DCAP quote verifier (Intel TCB). Resolves true iff the quote is valid. */
-export type QuoteVerifier = (
-  quote: Uint8Array,
-  reportData: Uint8Array,
-) => Promise<boolean>;
 
 async function getJson<T>(
   url: string,
@@ -116,14 +107,19 @@ export async function fetchInfo(
   const b = await getJson<{
     app_id: string;
     compose_hash: string;
+    // B-1: the server nests mrtd under `tcb_info`. We read that; the legacy
+    // top-level `mrtd` is accepted as a forward-compat fallback.
+    tcb_info?: { mrtd?: string };
     mrtd?: string;
     tee_pubkey: string;
+    tee_pubkeys?: string[];
   }>(new URL("/info", gatewayUrl).toString(), token, fetchImpl);
   return {
     appId: b.app_id,
     composeHash: b.compose_hash,
-    mrtd: b.mrtd,
+    mrtd: b.tcb_info?.mrtd ?? b.mrtd,
     teePubkey: b.tee_pubkey,
+    teePubkeys: b.tee_pubkeys ?? [b.tee_pubkey],
   };
 }
 
@@ -140,23 +136,38 @@ export async function fetchAttestation(
   url.searchParams.set("reportData", Buffer.from(nonce).toString("hex"));
   const b = await getJson<{
     quote: string;
+    event_log: string;
     report_data: string;
     tee_pubkey: string;
   }>(url.toString(), token, fetchImpl);
-  return { quote: b.quote, reportData: b.report_data, teePubkey: b.tee_pubkey };
+  return {
+    quote: b.quote,
+    eventLog: b.event_log,
+    reportData: b.report_data,
+    teePubkey: b.tee_pubkey,
+  };
 }
 
-/**
- * Fetch + verify the gateway's attestation. Throws {@link AttestationError} on
- * any failure (the daemon refuses to trade). Returns the verified identity.
- */
-export async function verifyAttestation(opts: {
+export interface VerifyAttestationOptions {
   gatewayUrl: string;
   token: string;
   expected?: ExpectedMeasurements;
   quoteVerifier?: QuoteVerifier;
   fetchImpl?: typeof fetch;
-}): Promise<AttestationResult> {
+  /** Require real DCAP + governance pins. Defaults to true (secure-by-default). */
+  strict?: boolean;
+  /** Accepted TCB statuses. Defaults to {@link DEFAULT_TCB_ALLOWLIST}. */
+  tcbAllowlist?: readonly string[];
+}
+
+/**
+ * Fetch + verify the gateway's attestation. Throws {@link AttestationError} on
+ * any failure (the daemon then refuses to trade). Returns the verified identity.
+ */
+export async function verifyAttestation(
+  opts: VerifyAttestationOptions,
+): Promise<AttestationResult> {
+  const strict = opts.strict ?? true;
   const fetchImpl = opts.fetchImpl ?? fetch;
   const nonce = Uint8Array.from(randomBytes(32));
 
@@ -166,37 +177,80 @@ export async function verifyAttestation(opts: {
     nonce,
     fetchImpl,
   );
-  const reportData = fromHex(att.reportData);
-  if (reportData.length !== 64) {
-    throw new AttestationError(
-      `report_data is ${reportData.length} bytes; expected 64`,
-      "malformed",
-    );
-  }
-
-  // 1. Freshness — our nonce sits in the left half.
-  if (!eq(reportData.subarray(0, 32), nonce)) {
-    throw new AttestationError("report_data nonce mismatch", "freshness");
-  }
-
-  // 2. Key binding — right half == SHA-256(tee_pubkey bytes).
-  let pubkeyBytes: Uint8Array;
-  try {
-    pubkeyBytes = new PublicKey(att.teePubkey).toBytes();
-  } catch {
-    throw new AttestationError("tee_pubkey not valid base58", "malformed");
-  }
-  if (!eq(reportData.subarray(32, 64), sha256(pubkeyBytes))) {
-    throw new AttestationError("report_data key binding mismatch", "binding");
-  }
-
-  // 3. Pinned measurements (+ /info consistency).
+  // /info gives the full K-shard set the quote's report_data binds. Fetch it up
+  // front (both paths need it), and tie shard 0 to the attestation.
   const info = await fetchInfo(opts.gatewayUrl, opts.token, fetchImpl);
   if (info.teePubkey !== att.teePubkey) {
     throw new AttestationError(
       "/info tee_pubkey != /attestation tee_pubkey",
       "pubkey_mismatch",
     );
+  }
+  const teePubkeys = info.teePubkeys.length ? info.teePubkeys : [att.teePubkey];
+  if (teePubkeys[0] !== att.teePubkey) {
+    throw new AttestationError(
+      "/info tee_pubkeys[0] != /attestation tee_pubkey (shard-0 mismatch)",
+      "pubkey_mismatch",
+    );
+  }
+  let boundKeySetBytes: Uint8Array;
+  try {
+    boundKeySetBytes = teeKeySetBytes(
+      teePubkeys.map((k) => new PublicKey(k).toBytes()),
+    );
+  } catch {
+    throw new AttestationError("tee_pubkeys not all valid base58", "malformed");
+  }
+
+  if (strict) {
+    if (!opts.quoteVerifier) {
+      throw new AttestationError(
+        "strict attestation requires a DCAP quote verifier (set NYX_DAEMON_SKIP_ATTEST=1 only for local simulator)",
+        "quote_invalid",
+      );
+    }
+    // 1. Real Intel-TCB verification of the raw quote. Throws quote_invalid on
+    //    a bad signature / QE identity / expired TCB / a fabricated quote.
+    const report = await opts.quoteVerifier(fromHex(att.quote));
+
+    // 2. Post-DCAP checks over the *verified* report + event log. The binding
+    //    covers the WHOLE K-shard set, so /info.tee_pubkeys is now quote-bound.
+    const eventLog = parseEventLog(att.eventLog);
+    const fail = verifyReportAgainstExpected({
+      report,
+      eventLog,
+      nonce,
+      boundKeySetBytes,
+      teePubkeyBase58: att.teePubkey,
+      expected: opts.expected,
+      tcbAllowlist: opts.tcbAllowlist ?? DEFAULT_TCB_ALLOWLIST,
+      strict: true,
+    });
+    if (fail) {
+      throw new AttestationError(`attestation rejected: ${fail}`, fail);
+    }
+
+    const composeHash = composeHashFromEventLog(eventLog);
+    return {
+      teePubkey: att.teePubkey,
+      teePubkeys,
+      composeHash: composeHash ?? info.composeHash,
+      mrtd: report.mrtd,
+      quote: att.quote,
+      dcapVerified: true,
+    };
+  }
+
+  // ── dev-partial (strict:false): NOT a security guarantee. ──
+  // Legacy nonce + key-set-binding + self-reported /info pins. Defeats replay
+  // and key-substitution against an honest enclave, but NOT a malicious operator.
+  const binding = checkReportDataBinding(
+    fromHex(att.reportData),
+    nonce,
+    boundKeySetBytes,
+  );
+  if (binding) {
+    throw new AttestationError(`report_data ${binding}`, binding);
   }
   const exp = opts.expected;
   if (exp?.teePubkey && exp.teePubkey !== att.teePubkey) {
@@ -208,22 +262,12 @@ export async function verifyAttestation(opts: {
   if (exp?.mrtd && exp.mrtd !== info.mrtd) {
     throw new AttestationError("mrtd != expected", "mrtd_mismatch");
   }
-
-  // 4. Optional full DCAP verification (Intel TCB).
-  if (opts.quoteVerifier) {
-    const ok = await opts.quoteVerifier(fromHex(att.quote), reportData);
-    if (!ok) {
-      throw new AttestationError(
-        "DCAP quote verification failed",
-        "quote_invalid",
-      );
-    }
-  }
-
   return {
     teePubkey: att.teePubkey,
+    teePubkeys,
     composeHash: info.composeHash,
     mrtd: info.mrtd,
     quote: att.quote,
+    dcapVerified: false,
   };
 }

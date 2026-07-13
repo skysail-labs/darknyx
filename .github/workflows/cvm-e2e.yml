@@ -7,6 +7,9 @@
 # real notes, POST crossing orders to the enclave, and assert it matches AND
 # settles on-chain (cvm-settle-e2e, cvm-self-trade, cvm-multimatch-settle,
 # cvm-merge-then-order, cvm-api-surface) plus the non-billable devnet round-trips.
+# ALSO runs cvm-attestation-e2e: real @phala/dcap-qvl verification of the live
+# TDX quote (the one thing offline mocks can't do) — report_data K-shard
+# set-binding + event-log RTMR3 replay + the on-chain tee_pubkeys cross-check.
 #
 # WHY NIGHTLY, NOT PER-PUSH: this spins a BILLABLE CVM and spends devnet SOL on
 # every run (deploy + K-shard settles). Per-push would bill on every commit and
@@ -31,6 +34,9 @@
 #   2. Run devnet-setup ONCE to mint the stable base/quote mints + settle ALT +
 #      protocol config, producing `.devnet/e2e-config.json`. Base64 it into the
 #      secret `DEVNET_E2E_CONFIG_B64`. (Stable mints — the CVM is pinned to them.)
+#      Found it with numTrees>=2 (RUN_DEVNET_E2E + NUM_TREES=2) to have the
+#      attestation e2e exercise the multi-key K-shard report_data binding; at
+#      numTrees=1 the multi-key concat is only unit-tested.
 #   3. Base64 the admin + funder devnet keypairs into `DEVNET_ADMIN_KEYPAIR_B64`
 #      and `DEVNET_FUNDER_KEYPAIR_B64`.
 #   4. Add secrets `PHALA_CLOUD_API_KEY` and `HELIUS_API_KEY`.
@@ -277,6 +283,19 @@ jobs:
             FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
             ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             ../../node_modules/.bin/vitest run tests/cvm-api-surface.test.ts
+
+      # Attestation is STATELESS (no on-chain tree state) — real Intel-TCB DCAP
+      # verification of the live quote via @phala/dcap-qvl, the report_data
+      # set-binding, and the on-chain vault_config.tee_pubkeys cross-check. Must
+      # run AFTER the rotate step so vault_config.tee_pubkeys == /info.tee_pubkeys.
+      # With numTrees>=2 in the founded e2e-config this also exercises the
+      # multi-key (K-shard) report_data binding end-to-end; at numTrees=1 it
+      # validates the single-key case (the multi-key concat is unit-tested).
+      - name: CVM attestation e2e (real DCAP)
+        run: |
+          cd packages/sdk
+          RUN_CVM_ATTEST=1 NYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+            ../../node_modules/.bin/vitest run tests/cvm-attestation-e2e.test.ts
 
       # Each of these asserts startCount==0 then deposits+settles, so they CANNOT
       # share a tree — every one needs its own reset + a CVM-mirror cold-boot (a

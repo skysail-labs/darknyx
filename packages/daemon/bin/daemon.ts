@@ -24,6 +24,7 @@ import {
   getMergeFunction,
   limitPolicy,
   OrderSide,
+  createDcapQuoteVerifier,
 } from "@nyx/sdk";
 
 import { loadConfig } from "../src/config.js";
@@ -122,6 +123,10 @@ async function main(): Promise<void> {
     }
   }
 
+  // Attestation is on by default; NYX_DAEMON_SKIP_ATTEST=1 disables it entirely
+  // (local dstack-simulator, whose stub quotes can't be DCAP-verified by design).
+  // Otherwise we wire the real Intel-TCB DCAP verifier so strict mode can enforce.
+  const skipAttest = process.env.NYX_DAEMON_SKIP_ATTEST === "1";
   const daemon = new Daemon({
     config,
     keystore,
@@ -130,19 +135,22 @@ async function main(): Promise<void> {
     depositFn,
     depositor,
     mergeRunner,
-    // Attestation is on by default; NYX_DAEMON_SKIP_ATTEST=1 disables it (local
-    // dstack-simulator, whose stub quotes can't be verified by design).
-    verifyAttestation:
-      process.env.NYX_DAEMON_SKIP_ATTEST === "1" ? false : undefined,
+    verifyAttestation: skipAttest ? false : undefined,
+    quoteVerifier: skipAttest
+      ? undefined
+      : createDcapQuoteVerifier({ pccsUrl: config.pccsUrl }),
   });
   await daemon.start();
   const att = daemon.getAttestation();
   if (att) {
     console.log(
-      `[daemon] attested gateway: tee_pubkey ${att.teePubkey} compose ${att.composeHash}`,
+      `[daemon] attested gateway: tee_pubkey ${att.teePubkey} compose ${att.composeHash} ` +
+        `(dcap ${att.dcapVerified ? "verified" : "SKIPPED — not a security guarantee"})`,
     );
   } else {
-    console.warn("[daemon] WARNING: attestation skipped");
+    console.warn(
+      "[daemon] WARNING: attestation skipped (NYX_DAEMON_SKIP_ATTEST) — do NOT use against a production gateway",
+    );
   }
 
   // Map a control-API `POST /orders` body → SDK intent + the note to spend.

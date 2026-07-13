@@ -33,6 +33,17 @@ export interface DaemonConfig {
   /** Operator-pinned TEE measurements to enforce on connect (any subset). When
    *  set, the daemon refuses to trade unless the gateway's attestation matches. */
   attestation?: ExpectedMeasurements;
+  /** Require real DCAP verification + governance pins (secure-by-default). Set
+   *  `NYX_DAEMON_ATTEST_STRICT=0` to downgrade to the legacy partial check
+   *  (dev only — NOT a security guarantee). Ignored when attestation is skipped. */
+  attestationStrict: boolean;
+  /** Cross-check the attested (quote-bound) tee_pubkeys set against on-chain
+   *  `vault_config.tee_pubkeys` at start. Default true; `NYX_DAEMON_ATTEST_ONCHAIN_CHECK=0`
+   *  disables. A mismatch refuses to trade; an RPC error warns + proceeds. */
+  attestOnchainCheck: boolean;
+  /** PCCS endpoint for DCAP collateral. Defaults to Phala's PCCS in the verifier;
+   *  override for a self-hosted/offline PCCS. Never taken from gateway input. */
+  pccsUrl?: string;
   /** Vault program id (base58). Default = the devnet vault. */
   programId: string;
   /** Path to the operator's Solana payer keypair (enables on-chain deposit). */
@@ -102,6 +113,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
       ),
     },
     attestation: parseExpected(env),
+    attestationStrict: env.NYX_DAEMON_ATTEST_STRICT !== "0",
+    attestOnchainCheck: env.NYX_DAEMON_ATTEST_ONCHAIN_CHECK !== "0",
+    pccsUrl: env.NYX_DAEMON_PCCS_URL,
     programId: env.NYX_DAEMON_PROGRAM_ID ?? DEFAULT_PROGRAM_ID,
     payerKeypairPath: env.NYX_DAEMON_PAYER_KEYPAIR,
   };

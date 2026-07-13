@@ -58,3 +58,10 @@ export * from "./utxo/change-note.js";
 export * from "./fills/ws-client.js";
 export * from "./settlement/settle-builder.js";
 export * from "./settlement/settlement-watcher.js";
+// TEE attestation — shared verification core (event-log RTMR3 replay,
+// report_data binding, measurement pinning) used by the daemon + browser SDK,
+// the real DCAP verifier (@phala/dcap-qvl), and the browser client entrypoint.
+export * from "./tee/verify-core.js";
+export * from "./tee/dcap.js";
+export * from "./tee/attestation.js";
+export * from "./tee/vault-config.js";

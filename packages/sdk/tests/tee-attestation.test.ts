@@ -1,0 +1,132 @@
+import { createHash, randomBytes } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import { Keypair } from "@solana/web3.js";
+
+import {
+  type EventLogEntry,
+  type QuoteVerifier,
+  type VerifiedQuoteReport,
+  replayEventLogRtmr,
+  verifyTeeAttestation,
+} from "../src/index.js";
+
+const BASE = "https://gw.example";
+const teeKp = Keypair.generate();
+const kp1 = Keypair.generate();
+const TEE_B58 = teeKp.publicKey.toBase58();
+const COMPOSE = "c0ffeec0ffee";
+const MRTD = "aa".repeat(48);
+const KEYS = [TEE_B58, kp1.publicKey.toBase58()];
+// The quote binds SHA-256 of the FULL set (shard order), not just shard 0.
+const KEYSET_HASH = createHash("sha256")
+  .update(Buffer.concat([teeKp.publicKey.toBytes(), kp1.publicKey.toBytes()]))
+  .digest();
+
+const EVENT_LOG: EventLogEntry[] = [
+  {
+    imr: 3,
+    event_type: 1,
+    digest: createHash("sha384").update("app").digest("hex"),
+    event: "app-id",
+    event_payload: "app",
+  },
+  {
+    imr: 3,
+    event_type: 1,
+    digest: createHash("sha384").update("ch").digest("hex"),
+    event: "compose-hash",
+    event_payload: COMPOSE,
+  },
+];
+const RTMR3 = replayEventLogRtmr(EVENT_LOG, 3);
+
+function fakeFetch(opts: { composeHash?: string } = {}): typeof fetch {
+  return vi.fn(async (input: string | URL) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/attestation") {
+      const nonce = Buffer.from(
+        url.searchParams.get("reportData") ?? "",
+        "hex",
+      );
+      const rd = Buffer.alloc(64);
+      nonce.copy(rd, 0);
+      KEYSET_HASH.copy(rd, 32);
+      return new Response(
+        JSON.stringify({
+          quote: rd.toString("hex"),
+          event_log: JSON.stringify(EVENT_LOG),
+          report_data: rd.toString("hex"),
+          tee_pubkey: TEE_B58,
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.pathname === "/info") {
+      return new Response(
+        JSON.stringify({
+          compose_hash: opts.composeHash ?? COMPOSE,
+          tee_pubkey: TEE_B58,
+          tee_pubkeys: KEYS,
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response("nope", { status: 404 });
+  }) as unknown as typeof fetch;
+}
+
+function goodVerifier(over: Partial<VerifiedQuoteReport> = {}): QuoteVerifier {
+  return async (quote) => ({
+    reportData: quote,
+    mrtd: MRTD,
+    rtmr0: "00".repeat(48),
+    rtmr1: "00".repeat(48),
+    rtmr2: "00".repeat(48),
+    rtmr3: RTMR3,
+    tcbStatus: "UpToDate",
+    advisoryIds: [],
+    ...over,
+  });
+}
+
+describe("verifyTeeAttestation (SDK / browser)", () => {
+  it("verifies a good attestation and returns the full K-shard set", async () => {
+    const r = await verifyTeeAttestation(BASE, COMPOSE, {
+      quoteVerifier: goodVerifier(),
+      fetchImpl: fakeFetch(),
+    });
+    expect(r.teePubkey).toBe(TEE_B58);
+    expect(r.teePubkeys).toEqual(KEYS);
+    expect(r.composeHash).toBe(COMPOSE);
+    expect(r.mrtd).toBe(MRTD);
+  });
+
+  it("refuses an unpinned build (empty expectedComposeHash)", async () => {
+    await expect(
+      verifyTeeAttestation(BASE, "", {
+        quoteVerifier: goodVerifier(),
+        fetchImpl: fakeFetch(),
+      }),
+    ).rejects.toMatchObject({ kind: "pin_required" });
+  });
+
+  it("rejects a fake gateway whose quote DCAP can't verify", async () => {
+    await expect(
+      verifyTeeAttestation(BASE, COMPOSE, {
+        quoteVerifier: async () => {
+          throw new Error("bad quote");
+        },
+        fetchImpl: fakeFetch(),
+      }),
+    ).rejects.toBeInstanceOf(Error);
+  });
+
+  it("rejects a compose hash that doesn't match the pin", async () => {
+    await expect(
+      verifyTeeAttestation(BASE, "deadbeef", {
+        quoteVerifier: goodVerifier(),
+        fetchImpl: fakeFetch(),
+      }),
+    ).rejects.toMatchObject({ kind: "compose_mismatch" });
+  });
+});

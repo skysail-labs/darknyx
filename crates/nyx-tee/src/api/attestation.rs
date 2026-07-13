@@ -9,12 +9,14 @@
 //!
 //! ```text
 //!   report_data[0..32]  = caller-supplied bytes (nonce, etc.)
-//!   report_data[32..64] = SHA-256(tee_pubkey)
+//!   report_data[32..64] = SHA-256(pk_0 ‖ pk_1 ‖ … ‖ pk_{K-1})
 //! ```
 //!
-//! The right-half binding is what lets the client verify "this
-//! quote was issued by the same TEE that signs settle payloads
-//! with `tee_pubkey`" without needing a separate channel.
+//! The right-half binds the SHA-256 of the FULL K-shard signer set
+//! (`/info.tee_pubkeys`, raw pubkeys concatenated in shard order).
+//! This lets a client tie EVERY settle-authorizing key — not just
+//! shard 0 — to this quote, closing the "attestation covers 1/K
+//! keys" gap. For a single-shard TEE it is exactly `SHA-256(pk_0)`.
 //!
 //! Failure modes:
 //!   - dstack socket unreachable (degraded boot / test mode)
@@ -31,7 +33,6 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::state::ApiState;
 
@@ -49,8 +50,10 @@ pub struct AttestationParams {
 pub struct AttestationResponse {
     /// Hex-encoded TDX quote.
     pub quote: String,
-    /// Hex-encoded JSON event log. Replayed against RTMR3 to
-    /// verify recorded compose-hash + instance-id + key-provider.
+    /// The dstack event log as a **JSON string** (an array of measured
+    /// events — NOT hex-encoded). A client replays it against the
+    /// DCAP-verified quote's RTMR3 to bind the compose-hash + instance-id
+    /// + key-provider. See `packages/sdk/src/tee/verify-core.ts`.
     pub event_log: String,
     /// Hex of the 64-byte `report_data` field embedded in the
     /// quote. Layout as documented above.
@@ -94,20 +97,14 @@ pub async fn handler(
     };
 
     // 3. Build the 64-byte report_data layout: caller bytes
-    //    (zero-padded on the right to 32) || SHA-256(tee_pubkey).
+    //    (zero-padded on the right to 32) || SHA-256(the FULL K-shard signer
+    //    set, concatenated in shard order). Binding the whole set — not just
+    //    shard 0 — lets a client tie EVERY settle-authorizing key to this
+    //    DCAP-verified quote (see `packages/sdk/src/tee/verify-core.ts`). For a
+    //    single-shard TEE this is exactly SHA-256(pk_0).
     let mut report_data = [0u8; 64];
     report_data[..caller_bytes.len()].copy_from_slice(&caller_bytes);
-    let pubkey_bytes = hex::decode(&state.signer_pubkey_hex).map_err(|e| {
-        // Log the detail internally; return a generic message so the
-        // wire response doesn't echo internal error strings.
-        tracing::error!(error = %e, "attestation: signer pubkey hex malformed");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal error".to_string(),
-        )
-    })?;
-    let pubkey_hash = Sha256::digest(&pubkey_bytes);
-    report_data[32..].copy_from_slice(&pubkey_hash);
+    report_data[32..].copy_from_slice(&state.signer_set_hash);
 
     // 4. Fetch the quote.
     let quote = dstack.get_quote(report_data.to_vec()).await.map_err(|e| {
