@@ -144,6 +144,23 @@ pub(crate) fn create_relock_pda<'info>(
         VaultError::NoteAlreadyLocked
     );
 
+    // C-02: cap the relock expiry exactly as `lock_note` caps a fresh lock.
+    // `withdraw` rejects while ANY NoteLock exists — even an expired one — so
+    // the lock window IS the censorship window. `lock_note.rs` enforces this
+    // bound on the initial lock, but the re-lock path (used for partial-fill
+    // continuations) previously set `expiry_slot` unchecked, letting a
+    // malicious TEE stamp an arbitrarily distant expiry and freeze the note
+    // indefinitely. The settler stamps the relock with the order's expiry,
+    // which intake already caps to `current + MAX_LOCK_TTL_SLOTS` at
+    // `prepare_order`, so this is on-chain defense-in-depth (a legit relock is
+    // always within cap: its expiry was bounded at an earlier slot).
+    let clock = Clock::get()?;
+    require!(expiry_slot > clock.slot, VaultError::InvalidExpirySlot);
+    require!(
+        expiry_slot <= clock.slot.saturating_add(MAX_LOCK_TTL_SLOTS),
+        VaultError::InvalidExpirySlot
+    );
+
     let space = 8 + size_of::<NoteLock>();
     let lamports = Rent::get()?.minimum_balance(space);
     let bump_arr = [bump];
