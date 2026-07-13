@@ -361,9 +361,7 @@ impl ApiState {
             // Defaults to the primary; `main.rs` overrides with the full derived
             // K-shard set via `with_shard_pubkeys` + `with_signer_set_hash`.
             signer_pubkeys_base58: vec![signer.pubkey_base58.clone()],
-            signer_set_hash: crate::keys::ed25519::signer_set_hash(
-                std::slice::from_ref(signer),
-            ),
+            signer_set_hash: crate::keys::ed25519::signer_set_hash(std::slice::from_ref(signer)),
             dstack: Some(dstack),
             start: Instant::now(),
             nyx_version: env!("CARGO_PKG_VERSION"),
