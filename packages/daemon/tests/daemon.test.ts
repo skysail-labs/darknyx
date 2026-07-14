@@ -128,6 +128,7 @@ function mkDaemon(
     subscribeFills: capture().fn as never,
     subscribeOrders: capture().fn as never,
     verifyAttestation: false, // attestation covered in attestation.test.ts
+    verifyRoot: false, // on-chain root gate has dedicated SDK/daemon tests
     ...extra,
   });
 }
@@ -167,6 +168,24 @@ describe("Daemon — placeOrder", () => {
     expect(a.orderId).not.toBe(b.orderId);
     const idxs = daemon.listOrders().map((o) => o.seedIndex);
     expect(new Set(idxs).size).toBe(2);
+  });
+
+  it("runs the root-ring verifier before proving a placement", async () => {
+    const verifyRoot = vi.fn(async () => {});
+    const daemon = mkDaemon({ verifyRoot });
+    await daemon.placeOrder(
+      {
+        symbol: "SOL-USDC",
+        side: OrderSide.Bid,
+        policy: limitPolicy({ priceLimit: 100n }),
+        amount: 500n,
+      },
+      note,
+    );
+    expect(verifyRoot).toHaveBeenCalledOnce();
+    expect(Buffer.from(verifyRoot.mock.calls[0][0])).toEqual(
+      Buffer.from(new Uint8Array(32).fill(0xbb)),
+    );
   });
 });
 

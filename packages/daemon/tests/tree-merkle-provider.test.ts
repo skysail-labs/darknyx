@@ -35,12 +35,18 @@ const leafHex = (n: number) =>
 
 /** A fake /tree/leaves over an in-memory leaf set, paginated. */
 function fakeFetcher(leaves: string[], pageSize: number): LeavesFetcher {
+  const root = LocalMerkleTree.fromLeaves(
+    leaves.map((h) => Uint8Array.from(Buffer.from(h, "hex"))),
+  ).then((tree) => tree.root());
   return vi.fn(async (from: number, to: number) => {
     const slice = leaves
       .slice(from, Math.min(to, leaves.length))
       .map((value, i) => ({ leaf_index: from + i, value }));
     void pageSize;
-    return { leaves: slice, merkle_root: "00".repeat(32) };
+    return {
+      leaves: slice,
+      merkle_root: Buffer.from(await root).toString("hex"),
+    };
   });
 }
 
@@ -86,5 +92,55 @@ describe("TreeLeavesMerkleProvider", () => {
     expect((fetcher as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3);
     const proof = await provider.getInclusionProof(6n);
     expect(proof.siblings).toHaveLength(TREE_DEPTH);
+  });
+
+  it("verifies the reconstructed snapshot root against the on-chain ring", async () => {
+    const leaves = [leafHex(7), leafHex(8)];
+    const verifyRoot = vi.fn(async () => {});
+    const provider = new TreeLeavesMerkleProvider({
+      fetcher: fakeFetcher(leaves, 500),
+      verifyRoot,
+      treeId: 3,
+    });
+    await provider.refresh();
+    expect(verifyRoot).toHaveBeenCalledOnce();
+    expect(verifyRoot.mock.calls[0][1]).toBe(3);
+  });
+
+  it("rejects a snapshot whose advertised root changes between pages", async () => {
+    const leaves = [leafHex(1), leafHex(2), leafHex(3)];
+    const good = fakeFetcher(leaves, 2);
+    const fetcher: LeavesFetcher = vi.fn(async (from, to, treeId) => {
+      const page = await good(from, to, treeId);
+      return from === 0 ? page : { ...page, merkle_root: "ff".repeat(32) };
+    });
+    const provider = new TreeLeavesMerkleProvider({
+      fetcher,
+      pageSize: 2,
+    });
+    await expect(provider.refresh()).rejects.toThrow(/root changed/);
+  });
+
+  it("rejects fabricated leaves that do not reconstruct the advertised root", async () => {
+    const fetcher: LeavesFetcher = vi.fn(async () => ({
+      leaves: [{ leaf_index: 0, value: leafHex(1) }],
+      merkle_root: "ee".repeat(32),
+    }));
+    const provider = new TreeLeavesMerkleProvider({ fetcher });
+    await expect(provider.refresh()).rejects.toThrow(/does not match/);
+  });
+
+  it("rejects gapped leaf indices and invalid pagination parameters", async () => {
+    const fetcher: LeavesFetcher = vi.fn(async () => ({
+      leaves: [{ leaf_index: 1, value: leafHex(1) }],
+      merkle_root: "ee".repeat(32),
+    }));
+    const provider = new TreeLeavesMerkleProvider({ fetcher });
+    await expect(provider.refresh()).rejects.toThrow(
+      /expected leaf_index 0, got 1/,
+    );
+    expect(
+      () => new TreeLeavesMerkleProvider({ fetcher, pageSize: 0 }),
+    ).toThrow(/page size must be a positive integer/);
   });
 });

@@ -66,6 +66,7 @@ describe("buildPlaceRequest", () => {
   it("assembles a signed body keyed to the HD order id + trading key", async () => {
     const ks = keystore();
     const seedIndex = 4;
+    const verifyRoot = vi.fn(async () => {});
 
     const { request, orderId } = await buildPlaceRequest({
       keystore: ks,
@@ -81,6 +82,7 @@ describe("buildPlaceRequest", () => {
       token: "tok",
       prover: fakeProver,
       fetchImpl: fakeFetch(),
+      verifyRoot,
     });
 
     const expectId = deriveOrderId(ks.masterSeed, seedIndex);
@@ -97,6 +99,10 @@ describe("buildPlaceRequest", () => {
     expect(request.anchors).toHaveLength(10);
     // signed with a non-empty trading-key signature
     expect(request.trading_key_signature).toMatch(/^[0-9a-f]{128}$/);
+    expect(verifyRoot).toHaveBeenCalledOnce();
+    expect(Buffer.from(verifyRoot.mock.calls[0][0])).toEqual(
+      Buffer.from(new Uint8Array(32).fill(0xbb)),
+    );
   });
 
   it("derives different order ids for different seed indices", async () => {

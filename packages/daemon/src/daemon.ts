@@ -23,10 +23,12 @@ import {
   assertTeePubkeysMatch,
   buildCancel,
   depositNoteFromReceipt,
+  onchainRootVerifier,
   vaultConfigPda,
   vaultConfigTeePubkeys,
   type DepositParams,
   type DepositReceipt,
+  type RootVerifier,
   type StoredNote,
   type ValidInputProver,
   type WebSocketFactory,
@@ -68,9 +70,12 @@ const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
   Uint8Array.from(Buffer.from(h, "hex"));
 
-/** Reads on-chain `vault_config.tee_pubkeys` (base58, active set), or `null` if
- *  the config account is absent. Injectable so the attestation cross-check is
- *  testable without a live RPC. */
+export const DEFAULT_TEE_KEY_REFRESH_MS = 60_000;
+export const DEFAULT_TEE_KEY_STALE_MS = 5 * 60_000;
+
+/** Reads finalized on-chain `vault_config.tee_pubkeys` (base58, active set), or
+ *  `null` if the config account is absent. Injectable so the attestation
+ *  cross-check is testable without a live RPC. */
 export type OnchainTeePubkeysReader = (
   rpcUrl: string,
   programId: string,
@@ -80,9 +85,15 @@ const defaultOnchainTeePubkeys: OnchainTeePubkeysReader = async (
   rpcUrl,
   programId,
 ) => {
-  const conn = new Connection(rpcUrl, "confirmed");
-  const [pda] = vaultConfigPda(new PublicKey(programId));
-  const acct = await conn.getAccountInfo(pda);
+  const owner = new PublicKey(programId);
+  const conn = new Connection(rpcUrl, "finalized");
+  const [pda] = vaultConfigPda(owner);
+  const acct = await conn.getAccountInfo(pda, "finalized");
+  if (acct && !acct.owner.equals(owner)) {
+    throw new Error(
+      `vault_config is owned by ${acct.owner.toBase58()}, not ${owner.toBase58()}`,
+    );
+  }
   return acct ? vaultConfigTeePubkeys(acct.data) : null;
 };
 
@@ -97,6 +108,15 @@ export interface Balance {
   mint: string; // hex
   amount: string; // decimal (bigint)
   notes: number;
+}
+
+/** Security state exposed through the local control API. A paused daemon keeps
+ *  streams, cancellation, and settlement reconciliation alive. */
+export interface DaemonTrustStatus {
+  tradingEnabled: boolean;
+  pauseReason: string | null;
+  lastFinalizedKeyRefreshMs: number | null;
+  onchainKeyMonitoring: boolean;
 }
 
 /** A MergeRunner that refuses — the default until the on-chain merge path is
@@ -130,6 +150,15 @@ export interface DaemonDeps {
   /** Reads on-chain `vault_config.tee_pubkeys` for the attestation cross-check.
    *  Defaults to a `Connection`-based read from `config.rpcUrl`. */
   onchainTeePubkeys?: OnchainTeePubkeysReader;
+  /** Root-ring verifier for order proofs. Defaults to a finalized on-chain
+   *  check; `false` is reserved for isolated tests. */
+  verifyRoot?: RootVerifier | false;
+  /** Finalized TEE-key refresh interval; defaults to one minute. */
+  teeKeyRefreshMs?: number;
+  /** Maximum age of the last successful finalized read; defaults to 5 min. */
+  teeKeyStaleMs?: number;
+  /** Clock seam for deterministic trust-state tests. */
+  now?: () => number;
   /** Settlement-tracker poll interval (ms) for resolving change-note leaves. */
   settlementPollMs?: number;
   /** Seam for the tracker's `/tree/inclusion` fetch (tests). */
@@ -159,7 +188,16 @@ export class Daemon {
   private readonly verifyAttestationFn: typeof verifyAttestation | false;
   private readonly quoteVerifier?: QuoteVerifier;
   private readonly onchainTeePubkeysFn: OnchainTeePubkeysReader;
+  private readonly verifyRootFn?: RootVerifier;
+  private readonly teeKeyRefreshMs: number;
+  private readonly teeKeyStaleMs: number;
+  private readonly now: () => number;
   private attestationResult: AttestationResult | null = null;
+  private expectedTeePubkeys: string[] | null = null;
+  private lastFinalizedKeyRefreshMs: number | null = null;
+  private tradingPauseReason: string | null = null;
+  private teeKeyRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private teeKeyRefreshInFlight = false;
 
   private readonly settlementPollMs?: number;
   private readonly fetchInclusion?: FetchInclusionFn;
@@ -189,20 +227,51 @@ export class Daemon {
     this.quoteVerifier = deps.quoteVerifier;
     this.onchainTeePubkeysFn =
       deps.onchainTeePubkeys ?? defaultOnchainTeePubkeys;
+    this.verifyRootFn =
+      deps.verifyRoot === false
+        ? undefined
+        : (deps.verifyRoot ??
+          onchainRootVerifier({
+            connection: new Connection(this.config.rpcUrl, "finalized"),
+            programId: new PublicKey(this.config.programId),
+          }));
+    this.teeKeyRefreshMs = deps.teeKeyRefreshMs ?? DEFAULT_TEE_KEY_REFRESH_MS;
+    this.teeKeyStaleMs = deps.teeKeyStaleMs ?? DEFAULT_TEE_KEY_STALE_MS;
+    this.now = deps.now ?? Date.now;
+    if (
+      this.teeKeyRefreshMs <= 0 ||
+      this.teeKeyStaleMs <= 0 ||
+      this.teeKeyStaleMs < this.teeKeyRefreshMs
+    ) {
+      throw new Error(
+        "TEE key intervals must be positive and stale must not be shorter than refresh",
+      );
+    }
+    if (this.verifyAttestationFn) {
+      this.tradingPauseReason = "attestation has not completed";
+    }
     this.settlementPollMs = deps.settlementPollMs;
     this.fetchInclusion = deps.fetchInclusion;
     this.depositFn = deps.depositFn;
     this.depositor = deps.depositor;
 
+    const anchorPoster =
+      deps.anchorPoster ??
+      new HttpAnchorTopUpPoster({
+        baseUrl: this.config.gatewayUrl,
+        token: this.config.token,
+        fetchImpl: this.fetchImpl,
+      });
     const executor = new DaemonActionExecutor({
       keys: this.keystore,
-      anchors:
-        deps.anchorPoster ??
-        new HttpAnchorTopUpPoster({
-          baseUrl: this.config.gatewayUrl,
-          token: this.config.token,
-          fetchImpl: this.fetchImpl,
-        }),
+      // Anchor top-up mutates a resting order, so it shares the same trust gate
+      // as placement. Cancellation and on-chain merge remain available.
+      anchors: {
+        post: async (orderId, body) => {
+          this.assertTradingEnabled();
+          await anchorPoster.post(orderId, body);
+        },
+      },
       merge: deps.mergeRunner ?? UNCONFIGURED_MERGE,
     });
 
@@ -233,38 +302,110 @@ export class Daemon {
 
   // ── lifecycle ──
 
-  /**
-   * Reconcile the attested (quote-bound) tee_pubkeys set against on-chain
-   * `vault_config.tee_pubkeys`. A mismatch throws (the daemon refuses to start —
-   * the vault trusts a key the enclave doesn't hold, or vice versa). An RPC/
-   * missing-account error warns + proceeds so RPC flakiness can't block trading.
-   */
-  private async crossCheckOnchainTeePubkeys(attested: string[]): Promise<void> {
-    let onchain: string[] | null;
-    try {
-      onchain = await this.onchainTeePubkeysFn(
-        this.config.rpcUrl,
-        this.config.programId,
-      );
-    } catch (e) {
-      console.warn(
-        `[daemon] on-chain tee_pubkeys cross-check skipped (RPC error): ${
-          e instanceof Error ? e.message : e
-        }`,
-      );
-      return;
-    }
-    if (!onchain) {
-      console.warn(
-        "[daemon] vault_config not found — on-chain tee_pubkeys cross-check skipped",
-      );
-      return;
-    }
-    // Throws AttestationError('pubkey_mismatch') on any difference → refuses.
-    assertTeePubkeysMatch(attested, onchain);
-    console.log(
-      `[daemon] on-chain tee_pubkeys cross-check OK (${onchain.length} keys match)`,
+  /** Strict startup requires one successful finalized governance read. */
+  private async requireFinalizedTeePubkeys(attested: string[]): Promise<void> {
+    const onchain = await this.onchainTeePubkeysFn(
+      this.config.rpcUrl,
+      this.config.programId,
     );
+    if (!onchain) {
+      throw new Error(
+        "vault_config not found at finalized commitment — refusing to start",
+      );
+    }
+    assertTeePubkeysMatch(attested, onchain);
+    this.lastFinalizedKeyRefreshMs = this.now();
+    console.log(
+      `[daemon] finalized tee_pubkeys cross-check OK (${onchain.length} keys match)`,
+    );
+  }
+
+  private pauseTrading(reason: string): void {
+    if (this.tradingPauseReason === reason) return;
+    this.tradingPauseReason = reason;
+    this.emitError("trust", new Error(reason));
+  }
+
+  private resumeTrading(): void {
+    this.tradingPauseReason = null;
+  }
+
+  private pauseIfFinalizedKeysStale(): void {
+    if (this.expectedTeePubkeys) {
+      const age =
+        this.lastFinalizedKeyRefreshMs === null
+          ? Number.POSITIVE_INFINITY
+          : this.now() - this.lastFinalizedKeyRefreshMs;
+      if (age >= this.teeKeyStaleMs) {
+        this.pauseTrading(
+          `finalized tee_pubkeys are stale (${age}ms since last successful refresh)`,
+        );
+      }
+    }
+  }
+
+  private assertTradingEnabled(): void {
+    this.pauseIfFinalizedKeysStale();
+    if (this.tradingPauseReason) {
+      throw new Error(`trading paused: ${this.tradingPauseReason}`);
+    }
+  }
+
+  private startTeeKeyRefresh(): void {
+    if (!this.expectedTeePubkeys || this.teeKeyRefreshTimer) return;
+    this.teeKeyRefreshTimer = setInterval(() => {
+      void this.refreshTrustNow();
+    }, this.teeKeyRefreshMs);
+    this.teeKeyRefreshTimer.unref?.();
+  }
+
+  /** Refresh the finalized governance key set. A mismatch or missing config
+   *  pauses new trading immediately. RPC failures retain the last good state
+   *  only until its five-minute freshness budget expires. */
+  async refreshTrustNow(): Promise<void> {
+    if (!this.expectedTeePubkeys || this.teeKeyRefreshInFlight) return;
+    this.teeKeyRefreshInFlight = true;
+    try {
+      let onchain: string[] | null;
+      try {
+        onchain = await this.onchainTeePubkeysFn(
+          this.config.rpcUrl,
+          this.config.programId,
+        );
+      } catch (error) {
+        const age =
+          this.lastFinalizedKeyRefreshMs === null
+            ? Number.POSITIVE_INFINITY
+            : this.now() - this.lastFinalizedKeyRefreshMs;
+        if (age >= this.teeKeyStaleMs) {
+          this.pauseTrading(
+            `finalized tee_pubkeys are stale (${age}ms since last successful refresh)`,
+          );
+        }
+        this.emitError("tee-key-refresh", error);
+        return;
+      }
+      if (!onchain) {
+        this.pauseTrading(
+          "vault_config missing at finalized commitment; new trading is paused",
+        );
+        return;
+      }
+      try {
+        assertTeePubkeysMatch(this.expectedTeePubkeys, onchain);
+      } catch (error) {
+        this.pauseTrading(
+          error instanceof Error
+            ? error.message
+            : "attested and on-chain tee_pubkeys differ",
+        );
+        return;
+      }
+      this.lastFinalizedKeyRefreshMs = this.now();
+      this.resumeTrading();
+    } finally {
+      this.teeKeyRefreshInFlight = false;
+    }
   }
 
   /**
@@ -277,6 +418,11 @@ export class Daemon {
     if (this.started) return;
 
     if (this.verifyAttestationFn) {
+      if (this.config.attestationStrict && !this.config.attestOnchainCheck) {
+        throw new Error(
+          "strict attestation requires the finalized on-chain TEE-key check; set NYX_DAEMON_ATTEST_STRICT=0 only for development",
+        );
+      }
       this.attestationResult = await this.verifyAttestationFn({
         gatewayUrl: this.config.gatewayUrl,
         token: this.config.token,
@@ -285,18 +431,13 @@ export class Daemon {
         fetchImpl: this.fetchImpl,
         strict: this.config.attestationStrict,
       });
-      // Reconcile the attested (now quote-bound) tee_pubkeys set against the
-      // authoritative on-chain governance set — so the vault can't be trusting a
-      // key the enclave doesn't hold. A mismatch refuses to start; an RPC error
-      // warns + proceeds (don't let RPC flakiness block trading).
-      if (
-        this.attestationResult?.dcapVerified &&
-        this.config.attestOnchainCheck
-      ) {
-        await this.crossCheckOnchainTeePubkeys(
-          this.attestationResult.teePubkeys,
-        );
+      if (this.config.attestOnchainCheck) {
+        this.expectedTeePubkeys = [...this.attestationResult.teePubkeys];
+        await this.requireFinalizedTeePubkeys(this.expectedTeePubkeys);
+      } else {
+        this.expectedTeePubkeys = null;
       }
+      this.resumeTrading();
     }
 
     this.started = true;
@@ -342,12 +483,15 @@ export class Daemon {
     this.fills.start();
     this.orders.start();
     this.tracker.start();
+    if (this.config.attestOnchainCheck) this.startTeeKeyRefresh();
   }
 
   stop(): void {
     this.fills?.stop();
     this.orders?.stop();
     this.tracker?.stop();
+    if (this.teeKeyRefreshTimer) clearInterval(this.teeKeyRefreshTimer);
+    this.teeKeyRefreshTimer = null;
     this.placer.close();
     this.started = false;
   }
@@ -359,6 +503,7 @@ export class Daemon {
     intent: OrderIntent,
     note: StoredNote,
   ): Promise<{ orderId: string; arrivalSlot: number }> {
+    this.assertTradingEnabled();
     const seedIndex = this.nextIndex++;
     const { request, orderId } = await buildPlaceRequest({
       keystore: this.keystore,
@@ -370,6 +515,7 @@ export class Daemon {
       prover: this.prover,
       treeId: this.treeId,
       fetchImpl: this.fetchImpl,
+      verifyRoot: this.verifyRootFn,
     });
     const orderIdHex = toHex(orderId);
     const managed = newManagedOrder({
@@ -508,6 +654,16 @@ export class Daemon {
    *  attestation was skipped or hasn't run yet). */
   getAttestation(): AttestationResult | null {
     return this.attestationResult;
+  }
+
+  getTrustStatus(): DaemonTrustStatus {
+    this.pauseIfFinalizedKeysStale();
+    return {
+      tradingEnabled: this.tradingPauseReason === null,
+      pauseReason: this.tradingPauseReason,
+      lastFinalizedKeyRefreshMs: this.lastFinalizedKeyRefreshMs,
+      onchainKeyMonitoring: this.expectedTeePubkeys !== null,
+    };
   }
 
   /** Aggregate unspent notes into per-mint balances. */
