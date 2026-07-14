@@ -57,15 +57,19 @@ fn app_from(state: Arc<ApiState>) -> Router {
 }
 
 fn fresh_bearer() -> String {
+    bearer_for(TEST_API_KEY, "test-jti")
+}
+
+fn bearer_for(account_id: &str, jti: &str) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
     let claims = Claims {
-        sub: TEST_API_KEY.to_string(),
+        sub: account_id.to_string(),
         iat: now,
         exp: now + 60,
-        jti: "test-jti".to_string(),
+        jti: jti.to_string(),
     };
     encode(
         &Header::default(),
@@ -813,6 +817,52 @@ async fn place_is_idempotent_on_same_body_but_409s_on_a_different_body_reusing_t
 }
 
 #[tokio::test]
+async fn collateral_commitment_is_reserved_until_the_order_is_cancelled() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    let a = PlaceOrderBuilder::new();
+    assert_eq!(
+        place(&app, &bearer, a.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    // Different order id, byte-identical collateral opening. It must not
+    // overwrite A's OpeningStore record.
+    let mut b = PlaceOrderBuilder::new();
+    b.order_id = [0xBB; 16];
+    let conflict = place(&app, &bearer, b.sign(&key)).await;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(read_json(conflict).await["code"], 1204);
+    assert_eq!(
+        get_order(&app, &bearer, &hex::encode(a.order_id))
+            .await
+            .status(),
+        StatusCode::OK,
+        "the original reservation must remain intact"
+    );
+
+    // Cancellation releases both the book entry and its collateral
+    // reservation, after which B can use the note.
+    assert_eq!(
+        cancel(
+            &app,
+            &bearer,
+            &hex::encode(a.order_id),
+            cancel_body(&key, a.order_id, 1),
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        place(&app, &bearer, b.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+}
+
+#[tokio::test]
 async fn place_rejects_missing_bearer_with_401() {
     let app = app_from(state());
     let key = fresh_signing_key();
@@ -972,6 +1022,33 @@ async fn get_returns_404_when_not_in_book() {
     };
     let resp = get_order(&app, &bearer, &hex::encode(unknown)).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_returns_the_same_404_for_foreign_and_unknown_orders() {
+    let app = app_from(state());
+    let owner_bearer = fresh_bearer();
+    let foreign_bearer = bearer_for("foreign-account", "foreign-jti");
+    let key = fresh_signing_key();
+    let order = PlaceOrderBuilder::new();
+    let order_id_hex = hex::encode(order.order_id);
+
+    assert_eq!(
+        place(&app, &owner_bearer, order.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    let foreign = get_order(&app, &foreign_bearer, &order_id_hex).await;
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    let foreign_body = read_json(foreign).await;
+
+    let unknown = get_order(&app, &foreign_bearer, &hex::encode([0xCC; 16])).await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    let unknown_body = read_json(unknown).await;
+
+    assert_eq!(foreign_body, unknown_body);
+    assert_eq!(foreign_body["code"], 1301);
+    assert_eq!(foreign_body["message"], "order not found");
 }
 
 #[tokio::test]
@@ -1168,6 +1245,53 @@ async fn modify_non_owner_is_forbidden() {
             .status(),
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn modify_collateral_conflict_leaves_both_existing_orders_untouched() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    let a = PlaceOrderBuilder::new();
+    assert_eq!(
+        place(&app, &bearer, a.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    let mut b = PlaceOrderBuilder::new();
+    b.order_id = [0xB2; 16];
+    b.note_inner_hash = {
+        let mut inner = [0x62; 32];
+        inner[0] = 0;
+        inner
+    };
+    assert_eq!(
+        place(&app, &bearer, b.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    // C targets B's already-reserved collateral. The modify must reject before
+    // cancelling A, preserving the atomic cancel+replace contract.
+    let mut c = PlaceOrderBuilder::new();
+    c.order_id = [0xC3; 16];
+    c.note_inner_hash = b.note_inner_hash;
+    let resp = modify(
+        &app,
+        &bearer,
+        &hex::encode(a.order_id),
+        modify_body(&key, a.order_id, 1, c.sign(&key)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(read_json(resp).await["code"], 1204);
+
+    for id in [a.order_id, b.order_id] {
+        assert_eq!(
+            get_order(&app, &bearer, &hex::encode(id)).await.status(),
+            StatusCode::OK
+        );
+    }
 }
 
 // ─── error envelope + request-id correlation (Phase 1) ──────────────────────

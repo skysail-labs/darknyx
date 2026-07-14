@@ -12,7 +12,7 @@
 //!
 //! - `POST /__debug/oracle/seed` — writes a `CachedPrice` into the
 //!   in-process `OracleCache`. Returns 200 on success, 503 when no
-//!   cache is attached (degraded boot mode), 400 on malformed body.
+//!   cache is attached (matcher-less test state), 400 on malformed body.
 //!
 //! Compilation is gated at the module-declaration site
 //! (`api/mod.rs`'s `#[cfg(feature = "debug_endpoints")] pub mod

@@ -57,6 +57,7 @@ Codes are grouped by class. The HTTP status is derived from the class.
 | `1201` | 409 | Duplicate order id (a different order already holds it). |
 | `1202` | 409 | A replay-protection nonce did not advance. |
 | `1203` | 409 | A modify's replacement id is already booked. |
+| `1204` | 409 | The collateral note commitment is already reserved by a live or settlement-pending order. |
 | `1301` | 404 | No such order / batch / instrument / note. |
 | `1401` | 429 | Rate limited; back off and retry. |
 | `5001` | 503 | A required subsystem (matching / settlement) is unavailable. |
@@ -72,7 +73,7 @@ Codes are stable: branch on the number, not the message text (which may change).
 | `401 Unauthorized` | Auth | Missing bearer token; expired or revoked token; invalid credentials on `POST /auth/token`. |
 | `403 Forbidden` | Ownership | The trading-key signature did not verify over the canonical body; the trading key does not own the order being cancelled / modified / topped up. |
 | `404 Not Found` | Missing resource | No such order (already filled / expired / cancelled), batch, or instrument. |
-| `409 Conflict` | State conflict | Duplicate `order_id`; a modify whose replacement id is already booked; a top-up nonce that did not advance. |
+| `409 Conflict` | State conflict | Duplicate `order_id`; collateral already reserved; a modify whose replacement id is already booked; a top-up nonce that did not advance. |
 | `429 Too Many Requests` | Rate limit | Operational rate limit exceeded; back off and retry. |
 | `503 Service Unavailable` | Subsystem down | Matching or settlement is not available; see [`/system/status`](./system-status). |
 
@@ -87,7 +88,8 @@ Codes are stable: branch on the number, not the message text (which may change).
   with zero price, an opening that does not match the signed commitment, or
   collateral below the required (nominal + fee) floor.
 - `403`: the trading-key signature does not verify.
-- `409`: the `order_id` is already in the book.
+- `409`: the `order_id` is already in the book, or the collateral commitment is
+  reserved by another live/pending order.
 
 ### Cancel / modify / top-up
 - `403`: signature does not verify, or the key does not own the order.
@@ -97,7 +99,8 @@ Codes are stable: branch on the number, not the message text (which may change).
 
 ### Reads (orders, settlement, tree)
 - `400`: malformed id / parameter hex.
-- `404`: unknown order / batch / note.
+- `404`: unknown order / batch / note. `GET /orders/{id}` intentionally returns
+  this same response for a foreign account's order.
 
 ## Handling errors
 

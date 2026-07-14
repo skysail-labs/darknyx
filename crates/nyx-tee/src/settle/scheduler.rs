@@ -167,7 +167,7 @@ pub struct SettleDriverConfig {
 
 /// The live-settle driver. Present only when the TEE is fully
 /// configured (signer + RPC + prover); `None` leaves the scheduler in
-/// enqueue-only mode (degraded boot / unit tests).
+/// enqueue-only mode (unit tests / explicit local test mode).
 pub struct SettleDriver {
     /// The worker context (RPC, TEE keypair, signer, prover, the same
     /// `SettleSchedulerState` the scheduler holds, confirm timeout).

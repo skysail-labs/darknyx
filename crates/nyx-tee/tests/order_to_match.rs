@@ -325,6 +325,30 @@ async fn http_submit_two_crossing_orders_produces_match() {
         "clearing_price {} not in [ask_price, bid_price] = [149M, 151M]",
         output.clearing_price
     );
+
+    // Fully-filled orders have left the book, but their input openings remain
+    // reserved until settlement confirms and evicts them. Reusing the buyer's
+    // exact collateral under a fresh order id must therefore still conflict.
+    {
+        let st = matcher_state.read().await;
+        assert_eq!(st.book().len(), 0);
+        assert_eq!(st.openings().len(), 2, "both inputs pending settlement");
+    }
+    let reuse = sign_order(&buyer, OrderSide::Bid, 151_000_000, 0xCC, 3);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/orders")
+                .header("authorization", format!("Bearer {bearer}"))
+                .header("content-type", "application/json")
+                .body(Body::from(reuse.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]

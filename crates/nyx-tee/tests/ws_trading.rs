@@ -33,17 +33,18 @@ fn fr_safe(b: u8) -> [u8; 32] {
 /// Mirrors the `orders_surface` builder's happy path (zeroed test market, exact
 /// collateral, zero fee), deserialized into the typed request the core takes.
 fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
+    let salt = order_id[15];
     let amount = 10_000_000u64;
     let price_limit = 150_000_000u64;
     let note_amount = amount.saturating_mul(price_limit).max(1); // bid floor, no fee
     let owner_commitment = fr_safe(0x44);
-    let note_inner_hash = fr_safe(0x55);
-    let nullifier = [0x77u8; 32];
+    let note_inner_hash = fr_safe(0x55u8.wrapping_add(salt));
+    let nullifier = [0x77u8.wrapping_add(salt); 32];
     let user_commitment = fr_safe(0x33);
     let anchors: Vec<Anchor> = (0..ANCHOR_POOL_SIZE)
         .map(|i| Anchor {
-            inner_hash: fr_safe(0x10 + i as u8),
-            nullifier: [0x90 + i as u8; 32],
+            inner_hash: fr_safe(0x10u8.wrapping_add(i as u8).wrapping_add(salt)),
+            nullifier: [0x90u8.wrapping_add(i as u8).wrapping_add(salt); 32],
         })
         .collect();
 

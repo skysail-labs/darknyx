@@ -16,10 +16,9 @@
 //! through to the settle-pipeline + the API server's `/info`
 //! endpoint.
 //!
-//! Phase-1 simplification: if the dstack socket isn't reachable
-//! we log a warning and exit cleanly. The full v2 path
-//! (cross-check against on-chain vault_config) lands later when
-//! the matching loop + Solana client wiring arrive.
+//! A failed handshake is returned to `main`, which fails production startup.
+//! Only an explicitly configured local simulator test mode may substitute test
+//! state after this function returns an error.
 
 use anyhow::Result;
 
@@ -37,11 +36,11 @@ pub async fn probe_dstack() -> Result<DerivedSigner> {
     let info = match client.info().await {
         Ok(i) => i,
         Err(e) => {
-            tracing::warn!(
+            tracing::error!(
                 error = %e,
-                "dstack.info() failed — assuming no dstack socket is reachable. \
-                 This is fine for local dev without the simulator running. \
-                 In a real CVM this would be a fatal boot error."
+                "dstack.info() failed; production startup must terminate. \
+                 Local development requires a running simulator and explicit \
+                 NYX_TEE_ALLOW_TEST_AUTH=1 for test-state fallback."
             );
             anyhow::bail!("dstack unreachable: {}", e);
         }

@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-48
+    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-49
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -66,17 +66,12 @@ services:
       # disabled (in-memory only). See crate::persistence::auth.
       NYX_TEE_STATE_DIR: "/var/lib/nyx-tee"
 
-      # BOOTSTRAP admin (dev/bench). Seeds the first ADMIN account so the
-      # loadgen can acquire a bearer AND so there's a registrar for
-      # POST /admin/accounts. With persistence on (above) this is merged
-      # into the loaded accounts.db only if its api_key is absent — the
-      # snapshot is authoritative once it exists, so rotating these after
-      # first boot needs the API or wiping the volume. Throwaway test
-      # credentials (match the loadgen's CLI defaults); argon2id-hashed
-      # on load, never stored in plaintext. NOT a real secret.
-      NYX_TEE_API_KEY: "nyx-test-api-key"
-      NYX_TEE_API_SECRET: "nyx-test-secret"
-      NYX_TEE_PASSPHRASE: "nyx-test-passphrase"
+      # BOOTSTRAP admin. All three values come from the encrypted deploy env;
+      # known public TEST_* values are rejected unless explicit local simulator
+      # mode is enabled (which this production compose never sets).
+      NYX_TEE_API_KEY: ${NYX_TEE_API_KEY}
+      NYX_TEE_API_SECRET: ${NYX_TEE_API_SECRET}
+      NYX_TEE_PASSPHRASE: ${NYX_TEE_PASSPHRASE}
 
       # Secret + per-deploy values are SUBSTITUTED from the encrypted
       # env, NOT hardcoded here — `${VAR}` is interpolated by dstack

@@ -320,6 +320,9 @@ secret: write it `umask 077` under the gitignored `.devnet/` directory,
 ```sh
 umask 077
 HELIUS="https://devnet.helius-rpc.com/?api-key=<key>"
+export NYX_TEE_API_KEY="nyx-$(openssl rand -hex 16)"
+export NYX_TEE_API_SECRET="$(openssl rand -hex 32)"
+export NYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
@@ -328,6 +331,9 @@ K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 node scripts/reset-merkle-tree.mjs   # FIRST — so the mirror cold-boots an empty tree
 FLOOR=$(solana slot --url "$HELIUS")
 cat > .devnet/nyx-deploy.env <<EOF
+NYX_TEE_API_KEY=$NYX_TEE_API_KEY
+NYX_TEE_API_SECRET=$NYX_TEE_API_SECRET
+NYX_TEE_PASSPHRASE=$NYX_TEE_PASSPHRASE
 NYX_TEE_SOLANA_RPC_URL=$HELIUS
 NYX_TEE_SYNC_FROM_SLOT=$FLOOR
 NYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen regime
@@ -339,7 +345,9 @@ NYX_TEE_NUM_TREES=$K
 EOF
 ```
 
-A **malformed** (non-empty) value fails startup (fail-fast); an **empty**
+A production boot rejects the public `nyx-test-*` credentials. Keep the fresh
+credential variables exported for the CVM harness/loadgen. A **malformed**
+(non-empty) value fails startup (fail-fast); an **empty**
 `${VAR}` falls back to the default. `NYX_TEE_FEE_RATE_BPS` (default 30) must
 equal the loadgen's `--fee-rate-bps` (intake derives fee-inclusive
 collateral; a mismatch → every synthetic note fails `verify_commitment`).
@@ -422,7 +430,9 @@ cargo run -q -p nyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
 It bills while running. `phala cvms stop "$CVM"` (preserves
 `app_id`/signer/volume; halts billing). **Never leave a billable CVM up.**
 
-The no-CVM half of devnet validation: `devnet-deposit-withdraw.test.ts`
+After the test window, also `unset NYX_TEE_API_KEY NYX_TEE_API_SECRET
+NYX_TEE_PASSPHRASE`. The no-CVM half of devnet validation:
+`devnet-deposit-withdraw.test.ts`
 (`RUN_DEVNET_DW=1`) verifies the v2 deposit + VALID_SPEND withdraw round-trip
 on devnet in isolation — no CVM, no TEE authority. Use it to test vault
 crypto changes cheaply before spending on a CVM.

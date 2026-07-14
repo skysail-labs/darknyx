@@ -7,9 +7,10 @@ description: Read the current status of one order, including its state, filled q
 # Get Order
 
 :::info TL;DR
-`GET /orders/{order_id}` returns the current state of one order: its status,
-filled quantity, and remaining size. For live updates without polling, subscribe
-to the [Orders Channel](../websocket/orders-channel) instead.
+`GET /orders/{order_id}` returns the current state of one order owned by the
+authenticated API account: its status, filled quantity, and remaining size. For
+live updates without polling, subscribe to the
+[Orders Channel](../websocket/orders-channel) instead.
 :::
 
 ```text
@@ -75,7 +76,11 @@ without a request per check.
 |---|---|
 | Malformed `order_id` hex | `400` |
 | Missing or invalid bearer token | `401` |
-| No order with that id is currently tracked | `404` |
+| No owned order with that id is currently tracked | `404` |
+
+An order owned by another account returns the same `404` code and body as an
+unknown id. This prevents callers from probing whether another account has a
+particular order.
 
 :::note Terminal orders age out
 The book tracks resting and recently-terminal orders. A long-since-filled,

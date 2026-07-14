@@ -25,11 +25,11 @@ image** — deploying the old tag runs stale code.
    image `ghcr.io/skysail-labs/nyx-tee:<tag>`. Watch CI on
    `skysail-labs/darknyx`, not `origin`.
 
-3. **The bootstrap creds are HARDCODED in `docker-compose.yaml`, not `${VAR}`.**
-   `NYX_TEE_API_KEY=nyx-test-api-key`, `NYX_TEE_API_SECRET=nyx-test-secret`,
-   `NYX_TEE_PASSPHRASE=nyx-test-passphrase` are literals (they bake into
-   `compose_hash`). A `-e NYX_TEE_API_KEY=…` is **ignored** — auth with these
-   exact values (the cvm-harness defaults already match).
+3. **Bootstrap credentials are encrypted per deploy.** The compose references
+   `${NYX_TEE_API_KEY}`, `${NYX_TEE_API_SECRET}`, and
+   `${NYX_TEE_PASSPHRASE}`. Generate fresh values in the protected `-e` file
+   and export the same values for the CVM harness/loadgen. The public
+   `nyx-test-*` fixtures are rejected by a production boot.
 
 4. **The nvm shim can shadow `node`.** If `_load_nvm` recursion errors appear,
    invoke `node`/`phala` by absolute path, e.g.
@@ -98,6 +98,9 @@ fresh each deploy under the gitignored `.devnet/` directory, `umask 077`,
 
 ```sh
 umask 077
+export NYX_TEE_API_KEY="nyx-$(openssl rand -hex 16)"
+export NYX_TEE_API_SECRET="$(openssl rand -hex 32)"
+export NYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
@@ -106,6 +109,9 @@ K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 node scripts/reset-merkle-tree.mjs     # FIRST — so the mirror cold-boots an empty tree (all K shards)
 FLOOR=$(solana slot --url "$SOLANA_RPC_URL")
 cat > .devnet/nyx-deploy.env <<EOF
+NYX_TEE_API_KEY=$NYX_TEE_API_KEY
+NYX_TEE_API_SECRET=$NYX_TEE_API_SECRET
+NYX_TEE_PASSPHRASE=$NYX_TEE_PASSPHRASE
 NYX_TEE_SOLANA_RPC_URL=$SOLANA_RPC_URL
 NYX_TEE_SYNC_FROM_SLOT=$FLOOR
 NYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen (placeholder-mint) regime
@@ -117,6 +123,8 @@ NYX_TEE_NUM_TREES=$K
 EOF
 ```
 
+> Keep the three credential variables exported in the shell that runs the CVM
+> tests/loadgen; live harnesses now fail fast when they are missing.
 > `NYX_TEE_FEE_RATE_BPS` (default 30) must equal the cvm-harness/loadgen fee rate
 > (intake derives fee-inclusive collateral; a mismatch → every note fails
 > `verify_commitment`). `NYX_TEE_NUM_TREES` must equal the on-chain `numTrees`.
@@ -221,6 +229,7 @@ It bills while running.
 
 ```sh
 phala cvms stop "$CVM"   # preserves app_id / signer / volume; halts billing
+unset NYX_TEE_API_KEY NYX_TEE_API_SECRET NYX_TEE_PASSPHRASE
 ```
 
 **Never leave a billable CVM up.** The no-CVM half of devnet validation

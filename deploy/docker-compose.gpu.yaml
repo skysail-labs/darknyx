@@ -49,11 +49,11 @@ services:
       NYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
       NYX_TEE_STATE_DIR: "/var/lib/nyx-tee"
 
-      # BOOTSTRAP admin (dev/bench) — throwaway test creds, argon2id-hashed on
-      # load, NOT a real secret. Same as the base compose.
-      NYX_TEE_API_KEY: "nyx-test-api-key"
-      NYX_TEE_API_SECRET: "nyx-test-secret"
-      NYX_TEE_PASSPHRASE: "nyx-test-passphrase"
+      # BOOTSTRAP admin from the encrypted deploy env. Public test credentials
+      # are rejected outside explicit local simulator mode.
+      NYX_TEE_API_KEY: ${NYX_TEE_API_KEY}
+      NYX_TEE_API_SECRET: ${NYX_TEE_API_SECRET}
+      NYX_TEE_PASSPHRASE: ${NYX_TEE_PASSPHRASE}
 
       # Secret + per-deploy values from the encrypted -e env (never hardcoded).
       NYX_TEE_SOLANA_RPC_URL: ${NYX_TEE_SOLANA_RPC_URL}

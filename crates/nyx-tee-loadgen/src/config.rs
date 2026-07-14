@@ -132,22 +132,23 @@ pub struct RunConfig {
     #[arg(long)]
     pub report: Option<PathBuf>,
 
-    /// Override `api_key` used for bearer acquisition. Defaults
-    /// to the seeded test account; overrideable so the same
-    /// binary can target a production CVM where credentials were
-    /// registered out of band.
-    #[arg(long, default_value = "nyx-test-api-key")]
+    /// Override `api_key` used for bearer acquisition. Reads
+    /// `NYX_TEE_API_KEY` first; the public fixture default is only suitable for
+    /// an explicitly configured local simulator.
+    #[arg(long, env = "NYX_TEE_API_KEY", default_value = "nyx-test-api-key")]
     pub api_key: String,
 
-    /// Override `api_secret`. Plaintext on the CLI is fine for
-    /// dev-machine runs against a local simulator — for Phala
-    /// devnet runs, read from a file via shell expansion
-    /// (`--api-secret "$(cat secret.txt)"`).
-    #[arg(long, default_value = "nyx-test-secret")]
+    /// Override `api_secret`. Prefer the `NYX_TEE_API_SECRET` environment
+    /// variable for a Phala run so the secret is not exposed in process args.
+    #[arg(long, env = "NYX_TEE_API_SECRET", default_value = "nyx-test-secret")]
     pub api_secret: String,
 
-    /// Override `passphrase`.
-    #[arg(long, default_value = "nyx-test-passphrase")]
+    /// Override `passphrase`; reads `NYX_TEE_PASSPHRASE` first.
+    #[arg(
+        long,
+        env = "NYX_TEE_PASSPHRASE",
+        default_value = "nyx-test-passphrase"
+    )]
     pub passphrase: String,
 
     /// Protocol fee rate (bps) the target CVM is running
