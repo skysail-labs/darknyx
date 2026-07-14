@@ -69,7 +69,19 @@ pub struct MatchAssemblyInputs<'a> {
     /// Slot the fee note's (nonce, blinding) derives against. The
     /// protocol re-derives fee-note openings from (fee_slot,
     /// FEE_ROLE_*), so this must be a value the protocol can recover.
+    /// This is the batch's `now_slot` — distinct across batches, which is
+    /// what keeps the aggregated fee notes globally unique. Do NOT conflate
+    /// it with [`Self::slot_index`] below.
     pub fee_slot: u64,
+    /// This match's **position within the batch** (0..N-1). C-08:
+    /// VALID_MATCH_BATCH binds `batch_slot[i] === i`, and the on-chain settle
+    /// asserts `payload.batch_slot == match_index`, so the leaf/payload
+    /// `batch_slot` MUST be the slot index — NOT the matcher's `now_slot`
+    /// (which stays in [`Self::fee_slot`] for fee-note uniqueness). Mixing
+    /// these up is the bug the live CVM caught: the matcher sets
+    /// `MatchPair.batch_slot = now_slot`, so feeding that into the leaf makes
+    /// witness generation abort on `batch_slot[i] === i`.
+    pub slot_index: u64,
     /// For a CONTINUING buyer (the match's `buyer_relock_order_id` is
     /// set), the `inner_hash` of the consumed anchor — the change note
     /// note_e must be built with this (not `derive_inner`) so its
@@ -277,7 +289,9 @@ pub fn assemble_match(
         seller_change_amt: m.seller_change_amt,
         buyer_fee_amt: m.buyer_fee_amt,
         seller_fee_amt: m.seller_fee_amt,
-        batch_slot: m.batch_slot,
+        // C-08: the leaf's slot field is the batch INDEX, not `m.batch_slot`
+        // (= now_slot). The circuit binds `batch_slot[i] === i`.
+        batch_slot: inp.slot_index,
         a_owner_commit: inp.buyer_opening.owner_commitment,
         b_owner_commit: inp.seller_opening.owner_commitment,
         a_amount,
@@ -327,7 +341,9 @@ pub fn assemble_match(
         buyer_relock_expiry: m.buyer_relock_expiry,
         seller_relock_order_id: m.seller_relock_order_id,
         seller_relock_expiry: m.seller_relock_expiry,
-        batch_slot: m.batch_slot,
+        // C-08: on-chain settle asserts `payload.batch_slot == match_index`,
+        // so this MUST be the batch index (matches the leaf witness above).
+        batch_slot: inp.slot_index,
         // Change-amount recovery (Proposal B): zero here; `assemble_batch`
         // fills it from the openings' viewing keys (it has the OrderOpenings;
         // this per-match fn only sees the NoteOpenings). Zero = no ciphertext.
@@ -424,6 +440,9 @@ pub fn assemble_batch(
             quote_mint: params.quote_mint,
             protocol_owner_commitment: params.protocol_owner_commitment,
             fee_slot: params.fee_slot,
+            // C-08: the leaf/payload batch_slot is this match's index in the
+            // batch (0..N-1), which the circuit + on-chain settle both require.
+            slot_index: idx as u64,
             fee_rate_bps: params.fee_rate_bps,
             buyer_change_inner,
             seller_change_inner,
@@ -615,6 +634,11 @@ mod tests {
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
             fee_slot: 1234,
+            // Default to index 0 (single-match). The scenario's MatchPair
+            // carries batch_slot=7 (a now_slot stand-in) on purpose, so tests
+            // that assert on the leaf/payload batch_slot prove it tracks
+            // slot_index, not m.batch_slot (see the C-08 regression test).
+            slot_index: 0,
             fee_rate_bps: 0,
             buyer_change_inner: None,
             seller_change_inner: None,
@@ -638,6 +662,32 @@ mod tests {
         // clearing = quote/base. Amount-privacy (P3b): the clearing price lives
         // only in the witness now (the payload no longer carries it).
         assert_eq!(w.clearing_price, 100);
+    }
+
+    #[test]
+    fn batch_slot_tracks_slot_index_not_matcher_now_slot() {
+        // Regression for the C-08 gap the live CVM caught. The matcher stamps
+        // `MatchPair.batch_slot` with the on-chain `now_slot` (scenario uses 7),
+        // but VALID_MATCH_BATCH binds `batch_slot[i] === i` and the on-chain
+        // settle asserts `payload.batch_slot == match_index`. So the assembled
+        // leaf + payload MUST carry the slot INDEX, never `m.batch_slot`.
+        // Before the fix, feeding `m.batch_slot` here made live witness
+        // generation abort on `batch_slot[i] === i`.
+        let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
+        assert_eq!(m.batch_slot, 7, "scenario stamps a now_slot-like value");
+
+        let mut inp = inputs(&m, &buyer, &seller);
+        inp.slot_index = 3; // deliberately != m.batch_slot
+        let (w, p) = assemble_match(inp).unwrap();
+
+        assert_eq!(
+            w.batch_slot, 3,
+            "witness leaf batch_slot must be slot_index"
+        );
+        assert_eq!(p.batch_slot, 3, "payload batch_slot must be slot_index");
+        // The fee note still derives from fee_slot (now_slot), untouched — so
+        // fee-note uniqueness across batches is preserved.
+        assert_eq!(w.fee_base_inner, derive_inner(1234, FEE_ROLE_BASE));
     }
 
     #[test]
