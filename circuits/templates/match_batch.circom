@@ -244,25 +244,42 @@ template MatchSlot() {
     quote_amount === base_amount * clearing_price;
 
     // ─────────────────────────────────────────────────────────────────
-    // FEE FLOOR (amount-privacy, P1b) — moved in-circuit from the on-chain
-    // settle (which loses the plaintext amounts it needed). The matcher FLOORS
-    // each leg's fee: `fee = ⌊notional·rate/10000⌋`. The exact division-free
-    // equivalent of the on-chain check `fee ≥ ⌊notional·rate/10000⌋` is
-    // `(fee+1)·10000 > notional·rate` (proof in
-    // docs/settlement-amount-privacy-p0-soundness.md §8). `fee_rate_bps` is a
+    // EXACT FEE (amount-privacy P1b + C-04 audit) — the fee is pinned to
+    // EXACTLY `⌊notional·rate/10000⌋`, not merely floored. `fee_rate_bps` is a
     // PUBLIC input bound to VaultConfig.fee_rate_bps, so the verifier pins the
-    // rate. rate=0 ⇒ RHS=0 ⇒ `(fee+1)·10000 > 0` holds for any fee≥0, so the
-    // default fee-free path needs no special-casing. GreaterThan(96): both
-    // operands are < 2^80 (fee/notional < 2^64 range-checked, rate < 2^16).
+    // rate.
+    //
+    // FLOOR  `(fee+1)·10000 > notional·rate`  ⇒ fee ≥ ⌊notional·rate/10000⌋
+    // CEIL   `fee·10000 <= notional·rate`      ⇒ fee ≤ ⌊notional·rate/10000⌋
+    // together ⇒ fee == ⌊notional·rate/10000⌋ (proof of the floor half in
+    // docs/settlement-amount-privacy-p0-soundness.md §8; the ceil is symmetric).
+    //
+    // C-04: WITHOUT the ceiling the circuit only lower-bounds the fee, so a
+    // malicious TEE could set a fee as large as the whole input note and
+    // confiscate up to ~100% of the trade into the protocol-owned fee notes
+    // (conservation still holds — the value just goes to fees). The ceiling
+    // removes that band; the matcher already charges exactly the floor, so no
+    // honest path changes. rate=0 ⇒ RHS=0 ⇒ floor holds for any fee≥0 AND the
+    // ceiling forces fee==0, so the fee-free path is exact too.
+    // GreaterThan/LessEqThan(96): both operands are < 2^80 (fee/notional < 2^64
+    // range-checked, rate < 2^16).
     component buyerFeeFloor = GreaterThan(96);
     buyerFeeFloor.in[0] <== buyer_fee_amt * 10000 + 10000;
     buyerFeeFloor.in[1] <== quote_amount * fee_rate_bps;
     buyerFeeFloor.out === 1;
+    component buyerFeeCeil = LessEqThan(96);
+    buyerFeeCeil.in[0] <== buyer_fee_amt * 10000;
+    buyerFeeCeil.in[1] <== quote_amount * fee_rate_bps;
+    buyerFeeCeil.out === 1;
 
     component sellerFeeFloor = GreaterThan(96);
     sellerFeeFloor.in[0] <== seller_fee_amt * 10000 + 10000;
     sellerFeeFloor.in[1] <== base_amount * fee_rate_bps;
     sellerFeeFloor.out === 1;
+    component sellerFeeCeil = LessEqThan(96);
+    sellerFeeCeil.in[0] <== seller_fee_amt * 10000;
+    sellerFeeCeil.in[1] <== base_amount * fee_rate_bps;
+    sellerFeeCeil.out === 1;
 
     // ─────────────────────────────────────────────────────────────────
     // LEAF HASH — commitment-only (amount-privacy, P1b).
@@ -414,6 +431,15 @@ template MatchBatch(N) {
         slot[i].seller_change_amt <== seller_change_amt[i];
         slot[i].buyer_fee_amt     <== buyer_fee_amt[i];
         slot[i].seller_fee_amt    <== seller_fee_amt[i];
+        // C-08: pin each slot's `batch_slot` to its index. It feeds the leaf
+        // hash, and the on-chain settle recomputes the leaf from
+        // `payload.batch_slot` while proving inclusion at position `match_index`
+        // — so binding `batch_slot[i] === i` here (+ the on-chain
+        // `payload.batch_slot == match_index` assert) makes the value a reliable
+        // slot identifier instead of a free per-slot input. ALL slots, including
+        // dummy pad slots, must carry `batch_slot = i` (the prover pad path sets
+        // it; previously pads used 0).
+        batch_slot[i] === i;
         slot[i].batch_slot        <== batch_slot[i];
         slot[i].fee_rate_bps      <== fee_rate_bps;
         slot[i].a_owner_commit    <== a_owner_commit[i];

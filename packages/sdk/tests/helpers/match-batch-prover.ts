@@ -213,7 +213,11 @@ export async function padBatch(
   if (realSlots.length === N) return realSlots;
   const dummy = await dummySlot();
   const padded = [...realSlots];
-  while (padded.length < N) padded.push(dummy);
+  // C-08: VALID_MATCH_BATCH now binds `batch_slot === slot index`, so each pad
+  // slot must carry its position (real slots already carry theirs). Spread the
+  // shared dummy into a fresh object per position with the right batchSlot.
+  while (padded.length < N)
+    padded.push({ ...dummy, batchSlot: BigInt(padded.length) });
   return padded;
 }
 

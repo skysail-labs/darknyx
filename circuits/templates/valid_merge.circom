@@ -12,30 +12,39 @@ include "./merkle.circom";
 // used as an over-collateralized order; the trade returns any surplus as change.
 //
 // DUMMY-SLOT PADDING. A K-slot circuit can merge FEWER than K real notes: an
-// inactive slot (`isActive[i] == 0`) skips its membership + nullifier binding,
-// contributes 0 to the sum, and MUST carry a public nullifier of 0 (a real
-// nullifier is a Poseidon3 output, never 0). So K=4 can merge 2–4 notes, and the
-// wallet pads; orders larger than K notes chain merges.
+// inactive slot (`isActive[i] == 0`) skips its membership binding, contributes
+// 0 to the sum, and emits a public input-commitment of 0 (a real commitment is
+// a Poseidon6 output, never 0). So K=4 can merge 2–4 notes, and the wallet pads;
+// orders larger than K notes chain merges.
 //
 // SHARED OWNER. A single (spendingKey, ownerCommitmentBlinding) proves all
 // active inputs belong to the same owner. Each slot has its own
 // (amount, innerHash, Merkle path).
 //
 // Domain tags (match VALID_SPEND / darkpool-crypto):
-//   DOMAIN_OWNER = 1, DOMAIN_NOTE = 2, DOMAIN_NULL = 3.
+//   DOMAIN_OWNER = 1, DOMAIN_NOTE = 2.
 //
 // Public signals (snarkjs order: outputs first, then public inputs):
-//   outputCommitment, merkleRoot, tokenMint[0], tokenMint[1], nullifiers[0..K-1]
+//   outputCommitment, inputCommitments[0..K-1], merkleRoot, tokenMint[0], tokenMint[1]
 //   → NR = 4 + K  (K=2 → 6, K=4 → 8).
+//
+// C-01 (audit): the K input-note commitments are PUBLIC outputs (dummy slots
+// emit 0) so the on-chain merge inits a commitment-keyed `ConsumedNoteEntry`
+// per active input — the SAME consume-once guard `withdraw` + settle use.
+// Previously merge exposed per-input NULLIFIERS and keyed a `NullifierEntry`, a
+// guard disjoint from settle's `ConsumedNoteEntry`, so the same note could be
+// consumed once by merge and once by settle (double-spend). The nullifier is
+// unnecessary here: ownership is proven by the owner-bound note commitment's
+// Merkle membership, and double-spend is now guarded on the commitment.
 
 template ValidMerge(K, merkleDepth) {
     // ----- Public inputs -----
     signal input merkleRoot;
     signal input tokenMint[2];      // [lo_u128, hi_u128] — one mint for all
-    signal input nullifiers[K];     // active slots: real; dummy slots: 0
 
-    // ----- Public output -----
-    signal output outputCommitment; // the merged note (= sum of active inputs)
+    // ----- Public outputs -----
+    signal output outputCommitment;      // the merged note (= sum of active inputs)
+    signal output inputCommitments[K];   // active slots: the note commitment; dummy slots: 0
 
     // ----- Private witnesses -----
     signal input spendingKey;             // shared owner
@@ -58,11 +67,9 @@ template ValidMerge(K, merkleDepth) {
     component amtBits[K];
     component noteHash[K];
     component rootFromLeaf[K];
-    component nullHash[K];
 
     signal computedNote[K];
     signal computedRoot[K];
-    signal computedNull[K];
     signal contrib[K];
     signal sumAcc[K + 1];
     sumAcc[0] <== 0;
@@ -95,15 +102,10 @@ template ValidMerge(K, merkleDepth) {
         computedRoot[i] <== rootFromLeaf[i].root;
         isActive[i] * (computedRoot[i] - merkleRoot) === 0;
 
-        // Nullifier = Poseidon(DOMAIN_NULL, sk, inner). Active: must equal the
-        // public nullifier. Inactive: the public nullifier must be 0.
-        nullHash[i] = Poseidon(3);
-        nullHash[i].inputs[0] <== 3; // DOMAIN_NULL
-        nullHash[i].inputs[1] <== spendingKey;
-        nullHash[i].inputs[2] <== innerHash[i];
-        computedNull[i] <== nullHash[i].out;
-        isActive[i] * (computedNull[i] - nullifiers[i]) === 0;
-        (1 - isActive[i]) * nullifiers[i] === 0;
+        // C-01: PUBLIC input commitment. Active slot → the real note commitment
+        // (a non-zero Poseidon6 output the on-chain guard consumes); dummy slot
+        // → 0 (skipped on-chain, mirroring the old zero-nullifier convention).
+        inputCommitments[i] <== isActive[i] * computedNote[i];
 
         // Sum only active amounts.
         contrib[i] <== isActive[i] * amount[i];

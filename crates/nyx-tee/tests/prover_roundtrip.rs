@@ -74,8 +74,14 @@ async fn prove_and_verify_n2_dummy_batch() {
     // Two all-zero dummy slots: conservation holds trivially
     // (0 = 0*0; 0 = 0+0+0), and the note openings collapse to the
     // dummy Poseidon7 hash the circuit recomputes. This is the
-    // simplest circuit-valid witness.
-    let slots = vec![dummy_slot(), dummy_slot()];
+    // simplest circuit-valid witness. C-08: the circuit binds
+    // `batch_slot === slot index`, so each slot carries its position
+    // (dummy_slot() defaults batch_slot=0; pad_batch would set these,
+    // but this test builds the vec directly).
+    let mut slots = vec![dummy_slot(), dummy_slot()];
+    for (i, s) in slots.iter_mut().enumerate() {
+        s.batch_slot = i as u64;
+    }
 
     // 1. Prove (raw ark proof + public inputs).
     let (proof, public) = prover.prove_ark(&slots).expect("prove n2 dummy batch");

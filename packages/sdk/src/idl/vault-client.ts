@@ -702,7 +702,8 @@ export function buildVerifyMatchBatchInstruction(
 
 // ---------------------------------------------------------------------------
 // merge — in-pool note consolidation (VALID_MERGE K=2/4). Consumes K input
-// notes (their nullifier PDAs), appends ONE summed output leaf. No transfer.
+// notes (their commitment-keyed ConsumedNoteEntry PDAs — C-01), appends ONE
+// summed output leaf. No transfer.
 // ---------------------------------------------------------------------------
 
 export interface BuildMergeParams {
@@ -710,8 +711,12 @@ export interface BuildMergeParams {
   /** Which Merkle-tree shard the inputs live in + the merged output appends to. */
   treeId: number;
   payer: PublicKey;
-  /** K nullifiers in circuit order — real (non-zero) for active slots, all-zero for dummies. */
-  nullifiers: Uint8Array[];
+  /**
+   * K input note commitments in circuit order — the real commitment for active
+   * slots, all-zero for dummy pad slots (C-01: these are the VALID_MERGE public
+   * outputs the circuit binds; each active one gets a ConsumedNoteEntry).
+   */
+  inputCommitments: Uint8Array[];
   outputCommitment: Uint8Array;
   tokenMint: PublicKey;
   merkleRoot: Uint8Array;
@@ -723,7 +728,7 @@ export interface BuildMergeParams {
  * Wire format (matches `programs/vault/src/instructions/merge.rs`):
  *
  *   data = disc(8) || tree_id(1)
- *        || nullifiers(Vec<[u8;32]>: u32 LE len ++ len*32)
+ *        || input_commitments(Vec<[u8;32]>: u32 LE len ++ len*32)
  *        || output_commitment(32) || token_mint(32) || merkle_root(32)
  *        || k(u8) || pi_a(64) || pi_b(128) || pi_c(64)
  *
@@ -732,7 +737,7 @@ export interface BuildMergeParams {
  *     [1] vault_config   (ro — provides zero_subtree_roots)
  *     [2] merkle_tree    (mut — inputs' shard + the merged-output append)
  *     [3] system_program (ro)
- *     [4..] one NullifierEntry PDA per NON-ZERO nullifier (mut), in order
+ *     [4..] one ConsumedNoteEntry PDA per NON-ZERO input commitment (mut), in order
  */
 export function buildMergeInstruction(
   p: BuildMergeParams,
@@ -740,18 +745,21 @@ export function buildMergeInstruction(
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const isZero = (b: Uint8Array) => b.every((x) => x === 0);
-  const nullifierPdas = p.nullifiers
-    .filter((n) => !isZero(n))
-    .map((n) => nullifierEntryPda(p.programId, n)[0]);
+  const consumedPdas = p.inputCommitments
+    .filter((c) => !isZero(c))
+    .map((c) => consumedNotePda(p.programId, c)[0]);
 
   const lenLE = new Uint8Array(4);
-  new DataView(lenLE.buffer).setUint32(0, p.nullifiers.length, true);
-  const nullifiersBytes = cat(lenLE, ...p.nullifiers.map((n) => fixed32(n)));
+  new DataView(lenLE.buffer).setUint32(0, p.inputCommitments.length, true);
+  const commitmentsBytes = cat(
+    lenLE,
+    ...p.inputCommitments.map((c) => fixed32(c)),
+  );
 
   const data = cat(
     anchorDiscriminator("merge"),
     new Uint8Array([p.treeId & 0xff]),
-    nullifiersBytes,
+    commitmentsBytes,
     fixed32(p.outputCommitment),
     p.tokenMint.toBytes(),
     fixed32(p.merkleRoot),
@@ -766,7 +774,7 @@ export function buildMergeInstruction(
       { pubkey: vaultPda, isSigner: false, isWritable: false },
       { pubkey: merkleTree, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ...nullifierPdas.map((pubkey) => ({
+      ...consumedPdas.map((pubkey) => ({
         pubkey,
         isSigner: false,
         isWritable: true,

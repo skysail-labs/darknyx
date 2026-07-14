@@ -146,20 +146,20 @@ fn prove_merge(
     let mut is_active = vec![];
     let mut amount_s = vec![];
     let mut inner_s = vec![];
-    let mut nullifiers = vec![]; // BE32 (what merge.rs passes)
-    let mut nullifiers_dec = vec![];
+    // C-01: the K input note commitments are the circuit's PUBLIC OUTPUTS —
+    // active slots emit their real commitment (BE32), dummies emit 0. These are
+    // what merge.rs consumes as commitment-keyed ConsumedNoteEntry guards.
+    let mut input_commitments: Vec<[u8; 32]> = vec![];
     let mut paths: Vec<Vec<String>> = vec![];
     let mut indices: Vec<Vec<String>> = vec![];
 
     for i in 0..k {
         if i < num_real {
             let (sib, idx) = merkle_witness(&commitments, i);
-            let nf = poseidon_hash(&[Fr::from(3u64), sk, inners[i]]).unwrap();
             is_active.push("1".to_string());
             amount_s.push(amounts[i].to_string());
             inner_s.push(fr_to_dec(&inners[i]));
-            nullifiers.push(fr_to_be_bytes(&nf));
-            nullifiers_dec.push(fr_to_dec(&nf));
+            input_commitments.push(commitments[i]);
             paths.push(
                 sib.iter()
                     .map(|s| fr_to_dec(&Fr::from_be_bytes_mod_order(s)))
@@ -170,8 +170,7 @@ fn prove_merge(
             is_active.push("0".to_string());
             amount_s.push("0".to_string());
             inner_s.push("0".to_string());
-            nullifiers.push([0u8; 32]);
-            nullifiers_dec.push("0".to_string());
+            input_commitments.push([0u8; 32]);
             paths.push(vec!["0".to_string(); TREE_DEPTH]);
             indices.push(vec!["0".to_string(); TREE_DEPTH]);
         }
@@ -193,7 +192,6 @@ fn prove_merge(
         "{{\n\
            \"merkleRoot\": \"{mr}\",\n\
            \"tokenMint\": [\"{mlo}\", \"{mhi}\"],\n\
-           \"nullifiers\": [{nulls}],\n\
            \"spendingKey\": \"{sk}\",\n\
            \"ownerCommitmentBlinding\": \"{ocb}\",\n\
            \"outputInnerHash\": \"{oih}\",\n\
@@ -206,7 +204,6 @@ fn prove_merge(
         mr = fr_to_dec(&Fr::from_be_bytes_mod_order(&root)),
         mlo = fr_to_dec(&mint_lo),
         mhi = fr_to_dec(&mint_hi),
-        nulls = arr(&nullifiers_dec),
         sk = fr_to_dec(&sk),
         ocb = fr_to_dec(&r_owner),
         oih = fr_to_dec(&output_inner),
@@ -244,23 +241,29 @@ fn prove_merge(
         root,
         fr_to_be_bytes(&mint_lo),
         fr_to_be_bytes(&mint_hi),
-        nullifiers,
+        input_commitments,
     )
 }
 
 #[test]
 fn merge_k2_verifies_and_public_order_matches() {
-    let (proof, public_inputs, out_c, root, mlo, mhi, nulls) = prove_merge(2, 2);
+    let (proof, public_inputs, out_c, root, mlo, mhi, ics) = prove_merge(2, 2);
 
-    // Public-signal order (must match merge.rs):
-    //   [outputCommitment, merkleRoot, mint_lo, mint_hi, nullifiers[0], nullifiers[1]]
+    // Public-signal order (must match merge.rs — C-01, outputs first):
+    //   [outputCommitment, inputCommitments[0], inputCommitments[1], merkleRoot, mint_lo, mint_hi]
     assert_eq!(public_inputs.len(), 6);
     assert_eq!(public_inputs[0], out_c, "signal 0 must be outputCommitment");
-    assert_eq!(public_inputs[1], root, "signal 1 must be merkleRoot");
-    assert_eq!(public_inputs[2], mlo);
-    assert_eq!(public_inputs[3], mhi);
-    assert_eq!(public_inputs[4], nulls[0]);
-    assert_eq!(public_inputs[5], nulls[1]);
+    assert_eq!(
+        public_inputs[1], ics[0],
+        "signal 1 must be inputCommitments[0]"
+    );
+    assert_eq!(
+        public_inputs[2], ics[1],
+        "signal 2 must be inputCommitments[1]"
+    );
+    assert_eq!(public_inputs[3], root, "signal 3 must be merkleRoot");
+    assert_eq!(public_inputs[4], mlo);
+    assert_eq!(public_inputs[5], mhi);
 
     let pi: [[u8; 32]; 6] = public_inputs.try_into().unwrap();
     let vk = make_vk(
@@ -276,15 +279,18 @@ fn merge_k2_verifies_and_public_order_matches() {
 #[test]
 fn merge_k4_padded_verifies() {
     // 2 real notes + 2 dummy slots.
-    let (proof, public_inputs, out_c, root, _mlo, _mhi, nulls) = prove_merge(4, 2);
+    let (proof, public_inputs, out_c, root, _mlo, _mhi, ics) = prove_merge(4, 2);
+    // Order (C-01): [outputCommitment, inputCommitments[0..3], merkleRoot, mint_lo, mint_hi]
     assert_eq!(public_inputs.len(), 8);
     assert_eq!(public_inputs[0], out_c);
-    assert_eq!(public_inputs[1], root);
-    // Dummy slots' public nullifiers are zero.
-    assert_eq!(nulls[2], [0u8; 32]);
-    assert_eq!(nulls[3], [0u8; 32]);
-    assert_eq!(public_inputs[6], [0u8; 32]);
-    assert_eq!(public_inputs[7], [0u8; 32]);
+    assert_eq!(public_inputs[1], ics[0]);
+    assert_eq!(public_inputs[2], ics[1]);
+    // Dummy slots' public input-commitments are zero.
+    assert_eq!(ics[2], [0u8; 32]);
+    assert_eq!(ics[3], [0u8; 32]);
+    assert_eq!(public_inputs[3], [0u8; 32]);
+    assert_eq!(public_inputs[4], [0u8; 32]);
+    assert_eq!(public_inputs[5], root);
 
     let pi: [[u8; 32]; 8] = public_inputs.try_into().unwrap();
     let vk = make_vk(

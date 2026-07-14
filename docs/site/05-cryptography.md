@@ -86,14 +86,18 @@ larger consolidations chain.
 Every note touch leaves a one-time on-chain marker, so nothing can be spent
 twice — across *any* path:
 
-- spending a note (withdraw) creates its **nullifier** record;
-- settling a note (a trade) creates a **spent-note** record *and* its nullifier;
-- merging a note creates its nullifier.
+- spending a note (withdraw) creates its commitment-keyed **spent-note** record
+  (plus, belt-and-suspenders, a nullifier record);
+- settling a note (a trade) creates its **spent-note** record;
+- merging a note creates its **spent-note** record.
 
-A second attempt to touch the same note simply fails to create the marker. Spend
-and settle and merge all share the nullifier guard, so a note consumed one way
-can't be consumed another. The note locks added during settlement add a second
-layer: a note pinned for a trade can't be withdrawn out from under it.
+A second attempt to touch the same note simply fails to create the marker.
+Withdraw, settle, and merge all share the **commitment-keyed spent-note guard**,
+so a note consumed one way can't be consumed another. (The guard is keyed on the
+note commitment — which is public and circuit-bound — rather than the nullifier,
+so it holds even across paths that don't reveal a nullifier.) The note locks
+added during settlement add a second layer: a note pinned for a trade can't be
+withdrawn out from under it.
 
 ## Domain separation
 

@@ -165,7 +165,13 @@ pub fn pad_batch(
     out.extend_from_slice(real_slots);
     let dummy = dummy_slot();
     while out.len() < n {
-        out.push(dummy.clone());
+        let mut d = dummy.clone();
+        // C-08: VALID_MATCH_BATCH now binds `batch_slot === slot index`, so each
+        // pad slot must carry its position (real slots already carry their
+        // scheduler-assigned index). Distinct pad batch_slots mean pad leaves are
+        // no longer identical, but only the real match's leaf is checked on-chain.
+        d.batch_slot = out.len() as u64;
+        out.push(d);
     }
     Ok(out)
 }
