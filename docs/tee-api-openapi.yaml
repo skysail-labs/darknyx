@@ -1082,7 +1082,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Order' }
         '404':
-          description: Unknown order.
+          description: |
+            Unknown order or an order owned by another account. Both cases use
+            the same response so this endpoint is not an order-existence oracle.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

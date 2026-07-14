@@ -15,7 +15,7 @@ use tokio::sync::broadcast::error::RecvError;
 use super::state::ApiState;
 
 /// Spawn the router task. No-op (returns without spawning) when there is no
-/// matcher (degraded boot) — there are no memos to route.
+/// matcher (isolated test state) — there are no memos to route.
 pub fn spawn_fills_router(state: Arc<ApiState>) {
     let Some(matcher) = state.matcher.clone() else {
         return;

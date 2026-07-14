@@ -22,18 +22,16 @@
 //!   7. Bind the configured HTTP socket + `axum::serve(...)` until
 //!      Ctrl-C / listener drop.
 //!
-//! Degraded boot: if the dstack socket isn't reachable, we still
-//! spin up the matcher (the orders handlers stay live) and skip
-//! oracle sync; `/attestation` returns 503; `/info` serves stub
-//! values. This is the standard dev-machine experience without a
-//! running simulator.
+//! Fail-closed boot: a dstack/KMS probe failure terminates production startup.
+//! The test-only `ApiState::for_tests()` fallback is available solely when
+//! `NYX_TEE_ALLOW_TEST_AUTH=1` and `DSTACK_SIMULATOR_ENDPOINT` are both set.
 
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use darkpool_matcher::config::MatchConfig;
 use darkpool_matcher::match_result::RunBatchOutput;
 use dstack_sdk::dstack_client::DstackClient;
@@ -167,11 +165,16 @@ async fn main() -> Result<()> {
             )
         }
         Err(e) => {
+            if !cfg.allow_test_auth {
+                return Err(e).context(
+                    "dstack/KMS probe failed; refusing production startup (test auth is disabled)",
+                );
+            }
             tracing::warn!(
                 error = %e,
-                "dstack probe failed; entering degraded boot. /health + /info \
-                 will serve stub data; /attestation returns 503. The settle \
-                 pipeline is also disabled — no TEE signer available."
+                "dstack simulator probe failed with NYX_TEE_ALLOW_TEST_AUTH=1; \
+                 entering EXPLICIT LOCAL TEST MODE with public fixture credentials. \
+                 Never set this flag in a CVM."
             );
             (nyx_tee::api::ApiState::for_tests(), None, None)
         }
@@ -191,7 +194,7 @@ async fn main() -> Result<()> {
     //   * matcher params (`tick_size` / `min_order_size` / `circuit_breaker_bps`):
     //     boot read only — a live re-poll is intentionally DEFERRED. `0 = unset`
     //     ⇒ keep the env/dev default. NOT enforced on-chain at settle.
-    // Best-effort + real-boot only (degraded boot has no live cluster).
+    // Best-effort + real-boot only (explicit simulator test mode has no live cluster).
     if tee_signer_pubkey.is_some() {
         match read_on_chain_vault_config(&cfg).await {
             Ok(Some(oc)) => {
@@ -326,7 +329,7 @@ async fn main() -> Result<()> {
     // configured (signer + RPC + N=16 prover) a `SettleDriver` drives
     // each batch through the full on-chain pipeline (lock → prove →
     // verify → ALT → settle → close) and evicts the spent openings.
-    // Missing any dependency (degraded boot, prover zkey absent in a
+    // Missing any dependency (explicit simulator test mode, prover zkey absent in a
     // local dev run) → enqueue-only, logged below.
     let settle_state = Arc::new(RwLock::new(SettleSchedulerState::default()));
     let settle_driver: Option<SettleDriver> = match settle_signer {
@@ -360,7 +363,9 @@ async fn main() -> Result<()> {
             })
         }
         None => {
-            tracing::warn!("no TEE signer derived (degraded boot); settle pipeline disabled");
+            tracing::warn!(
+                "no TEE signer derived (explicit local test mode); settle pipeline disabled"
+            );
             None
         }
     };
@@ -404,7 +409,7 @@ async fn main() -> Result<()> {
     // settle driver's). Best-effort: a failure here only means /tree/*
     // serves an empty/stale mirror — clients can always read
     // VaultConfig directly. Gated on a real boot (signer present) since
-    // degraded boot has no real cluster to sync against.
+    // explicit simulator test mode has no real cluster to sync against.
     if tee_signer_pubkey.is_some() {
         match SolanaRpcClient::new(&cfg.solana_rpc_url) {
             Ok(rpc) => {
@@ -547,12 +552,12 @@ async fn main() -> Result<()> {
 
     // ─── 7d. Spawn the fills router ───────────────────────────────────
     // Fans the matcher's global FillMemo broadcast into per-account channels
-    // (the leak guard behind `/ws/fills`). No-op in degraded boot (no matcher).
+    // (the leak guard behind `/ws/fills`). No-op only in matcher-less test state.
     nyx_tee::api::fills_router::spawn_fills_router(api_state.clone());
 
     // ─── 7e. Spawn the order-lifecycle router ─────────────────────────
     // Fans the matcher's global OrderUpdate broadcast into per-account channels
-    // (behind `/ws/orders`). No-op in degraded boot (no matcher).
+    // (behind `/ws/orders`). No-op only in matcher-less test state.
     nyx_tee::api::order_router::spawn_order_router(api_state.clone());
 
     // ─── 8. Build router + bind listener + serve ──────────────────────

@@ -43,15 +43,15 @@ runbooks have landed.
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
-| N-01 | High | TEE | `remediation/tee-intake` | Production exits on dstack/KMS probe failure; test auth requires explicit simulator mode; production rejects test credentials | Open |
+| N-01 | High | TEE | `remediation/tee-intake` | Production exits on dstack/KMS probe failure; test auth requires explicit simulator mode; production rejects test credentials | Closed |
 | N-02 | High | Matcher + TEE | `remediation/settlement-outcomes`, `remediation/finality-gated-book` | Book/fills commit only after per-match settlement outcome; ambiguous results reconcile/redrive; rejected matches are terminal and never auto-rebooked | Open |
 | N-03 | High | Matcher | `remediation/matcher-correctness` | Zero-limit market asks remain eligible but are not price candidates; bid@150/ask@0 clears positively | Open |
 | N-04 | High liveness | Vault + SDK | `remediation/vault-lifecycle` | Merge proves every active input's NoteLock PDA absent; locked-note negative tests | Open |
-| N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Open |
-| N-06 | Medium | TEE | `remediation/tee-intake` | One collateral commitment reserves at most one live or pending order; lifecycle release tests | Open |
+| N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Closed |
+| N-06 | Medium | TEE | `remediation/tee-intake` | One collateral commitment reserves at most one live or pending order; lifecycle release tests | Closed |
 | N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Open |
 | N-08 | Medium | TEE + SDK + daemon | `remediation/stream-consolidation` | Only in-band-authenticated `/v1/stream` remains; gap detection, refresh, reconnect, and cancel-on-disconnect preserved | Open |
-| N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Open |
+| N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Closed |
 | N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Open |
 | N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Open |
 | N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker is closable only after expiry; rent returns to recorded payer; early-close tests reject every signer | Open |
@@ -74,6 +74,56 @@ Every remediation PR must record:
 - Rollback instructions, including whether rollback invalidates notes, roots,
   orders, payloads, proofs, or deployed circuit artifacts.
 - Tracker rows moved only as far as the available evidence supports.
+
+## Remediation evidence in progress
+
+### `remediation/tee-intake` — N-01, N-05, N-06, N-09
+
+- **Invariant restored.** Production startup exits before serving HTTP when any
+  dstack/KMS probe fails. Test-state auth fallback requires both
+  `NYX_TEE_ALLOW_TEST_AUTH=1` and `DSTACK_SIMULATOR_ENDPOINT`; production
+  rejects public test credentials and scrubs the historical test API key from
+  persisted auth snapshots. `GET /orders/{id}` checks the authenticated account
+  and gives byte-identical 404 bodies for foreign and absent ids. Collateral
+  commitments are reserved under the matcher write lock through pending
+  settlement and released on cancellation; modify checks conflicts before
+  cancelling the old order. Matcher info logs no longer include clearing price.
+- **Wire/config impact.** Adds stable API error `1204` for reserved collateral;
+  foreign order reads change from `200` to indistinguishable `404`. Bootstrap
+  credentials move from compose literals to encrypted env substitutions. No
+  account-layout, canonical-domain, circuit, proof, or on-chain change. CPU CVM
+  image pin advances from `tee-v3-hardening-48` to `tee-v3-hardening-49`.
+- **Local evidence.** `cargo build-sbf --manifest-path
+  programs/vault/Cargo.toml --features devnet-admin`; `cargo test --workspace`;
+  `cargo clippy --workspace --all-targets -- -D warnings`; `cargo fmt --all --
+  --check`; SDK and indexer `tsc --noEmit`; SDK Vitest (214 passed, 22
+  environment-gated skips) and indexer Vitest (23 passed). Executable negative
+  boots for public test credentials, test-auth-without-simulator, and missing
+  production dstack all exit 1 before bind. Adversarial order tests cover
+  foreign-vs-unknown 404 equality, duplicate collateral while live and
+  settlement-pending, release after cancel, and atomic modify conflict.
+- **Live CVM evidence (2026-07-14).** GitHub Actions run `29328881299` built
+  and pushed `ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-49` from commit
+  `c2d9ab42f4d48bcbdb5fa23532b25bf97553d321`. After devnet tree reset tx
+  `X5iMbnyp8mfMsgCRn31tY2Rv71xGF7GsUY9ssnJSfFzDq88Nm4wqUVKShkuj7ocvU83AjXTYVQrDDaCDEUSTgSf`,
+  CVM `app_634b2ab4c250466311f0cf09f772b6fd60b5be11` cold-booted instance
+  `f5cd2f294d1127d241d18e44dbb76b6910aa2a54` with compose hash
+  `e9ec726e122ec1e27deac9cfe824143075fca5743bf57ca96b6311abb97d3a66`.
+  Boot logs show successful dstack/KMS signer derivation, removal of the
+  historical test account, Merkle cold boot, N=16 proving-key/native-witness
+  load, and an enabled settle pipeline; no clearing-price field appears in the
+  captured production logs. `/health` and `/info` returned 200, while the
+  historical public credentials returned generic `1101`/401. The live
+  API/WebSocket suite passed 9/9. Real Intel DCAP validation passed 5/5,
+  including nonce freshness, tamper rejection, RTMR3 compose-hash replay,
+  signer-set report-data binding, and equality with the finalized on-chain
+  `tee_pubkeys`. The protected deploy/auth files were securely deleted and all
+  Phala CVMs were confirmed `stopped` after the test window. This closing PR
+  carries the code and every item of evidence required by these four rows.
+- **Rollback.** Revert this PR and redeploy image 48. This does not invalidate
+  notes, roots, orders, payloads, signatures, or proofs, but it reopens N-01,
+  N-05, N-06, and N-09. The one-way snapshot scrub does not restore the public
+  test account; provision fresh encrypted bootstrap credentials instead.
 
 ## Mainnet release gates
 

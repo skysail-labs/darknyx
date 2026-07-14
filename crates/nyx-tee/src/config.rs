@@ -5,7 +5,9 @@
 //! `vault_config.tee_pubkey` on Solana. See
 //! `docs/tee-architecture.md` §11.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
+
+use crate::api::auth::{TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE};
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Phase 1 stub: fields are read once the api/settle modules wire in.
@@ -23,6 +25,13 @@ pub struct Config {
     /// `DSTACK_SIMULATOR_ENDPOINT` is set we use that; otherwise
     /// `/var/run/dstack.sock`.
     pub dstack_socket: Option<String>,
+
+    /// Explicitly permit the test-only auth/state fallback when the configured
+    /// dstack simulator cannot be reached. This is accepted only when
+    /// `DSTACK_SIMULATOR_ENDPOINT` is also set, so a production CVM can never
+    /// fall through to `ApiState::for_tests()` after a dstack/KMS failure.
+    /// `NYX_TEE_ALLOW_TEST_AUTH`, default false.
+    pub allow_test_auth: bool,
 
     /// Comma-separated list of Pyth Hermes feed ids the oracle
     /// sync task should refresh on every tick. Empty by default —
@@ -77,7 +86,7 @@ pub struct Config {
     /// boot the TEE reads the authoritative on-chain rate and OVERRIDES
     /// this env value (see `main.rs::read_on_chain_vault_config`), since
     /// the batched-settle handler enforces a fee FLOOR against it — so
-    /// this acts only as a fallback (degraded boot / config absent).
+    /// this acts only as a fallback (explicit simulator mode / config absent).
     pub fee_rate_bps: u64,
     /// Owner commitment the protocol fee notes are minted to (32 bytes).
     /// `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` (hex), default `[0;32]`. Set
@@ -225,6 +234,66 @@ fn parse_u64_env(var: &str, default: u64) -> Result<u64> {
         .map_err(|e| anyhow::anyhow!("{var}: invalid u64 ({e})"))
 }
 
+/// Parse a strict boolean env var. Empty/unset uses `default`; accepted values
+/// are `1`/`true` and `0`/`false` (case-insensitive).
+fn parse_bool_env(var: &str, default: bool) -> Result<bool> {
+    let Ok(s) = std::env::var(var) else {
+        return Ok(default);
+    };
+    parse_bool_value(var, &s, default)
+}
+
+fn parse_bool_value(var: &str, value: &str, default: bool) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => Ok(default),
+        "1" | "true" => Ok(true),
+        "0" | "false" => Ok(false),
+        _ => bail!("{var}: invalid boolean (use 1/true or 0/false)"),
+    }
+}
+
+fn env_nonempty(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn is_known_test_credential(var: &str, value: &str) -> bool {
+    matches!(
+        (var, value),
+        ("NYX_TEE_API_KEY", TEST_API_KEY)
+            | ("NYX_TEE_API_SECRET", TEST_API_SECRET)
+            | ("NYX_TEE_PASSPHRASE", TEST_PASSPHRASE)
+    )
+}
+
+/// Enforce the boundary between explicit local simulator fixtures and a real
+/// CVM boot. Known public test credentials are never accepted outside that
+/// simulator mode.
+fn validate_auth_mode(dstack_socket: Option<&str>, allow_test_auth: bool) -> Result<()> {
+    if allow_test_auth && dstack_socket.is_none() {
+        bail!("NYX_TEE_ALLOW_TEST_AUTH is permitted only with DSTACK_SIMULATOR_ENDPOINT");
+    }
+
+    if !allow_test_auth {
+        for var in [
+            "NYX_TEE_API_KEY",
+            "NYX_TEE_API_SECRET",
+            "NYX_TEE_PASSPHRASE",
+        ] {
+            if env_nonempty(var)
+                .as_deref()
+                .is_some_and(|value| is_known_test_credential(var, value))
+            {
+                bail!("{var} uses a known public test credential; production startup refused");
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let feed_ids = std::env::var("NYX_TEE_FEED_IDS")
@@ -237,6 +306,13 @@ impl Config {
             })
             .unwrap_or_default();
 
+        let dstack_socket = std::env::var("DSTACK_SIMULATOR_ENDPOINT")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let allow_test_auth = parse_bool_env("NYX_TEE_ALLOW_TEST_AUTH", false)?;
+        validate_auth_mode(dstack_socket.as_deref(), allow_test_auth)?;
+
         Ok(Self {
             http_bind: env_string_or("NYX_TEE_HTTP_BIND", "0.0.0.0:8080"),
             // Empty (compose `${VAR}` with no value) → the default, NOT a
@@ -245,9 +321,8 @@ impl Config {
                 "NYX_TEE_SOLANA_RPC_URL",
                 "https://api.devnet.solana.com",
             ),
-            dstack_socket: std::env::var("DSTACK_SIMULATOR_ENDPOINT")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
+            dstack_socket,
+            allow_test_auth,
             feed_ids,
             sync_from_slot: parse_u64_env("NYX_TEE_SYNC_FROM_SLOT", 0)?,
             base_mint: parse_mint_env("NYX_TEE_BASE_MINT", default_base_mint())?,
@@ -268,5 +343,44 @@ impl Config {
             // value falls back to a single shard (the safe, pre-sharding path).
             num_trees: parse_u64_env("NYX_TEE_NUM_TREES", 1)?.clamp(1, 16) as u8,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_auth_requires_an_explicit_simulator_endpoint() {
+        let err = validate_auth_mode(None, true).unwrap_err();
+        assert!(err.to_string().contains("DSTACK_SIMULATOR_ENDPOINT"));
+        validate_auth_mode(Some("/tmp/dstack.sock"), true).unwrap();
+    }
+
+    #[test]
+    fn strict_bool_parser_rejects_ambiguous_values() {
+        assert!(parse_bool_value("FLAG", "1", false).unwrap());
+        assert!(parse_bool_value("FLAG", "TRUE", false).unwrap());
+        assert!(!parse_bool_value("FLAG", "0", true).unwrap());
+        assert!(!parse_bool_value("FLAG", "false", true).unwrap());
+        assert!(parse_bool_value("FLAG", "", true).unwrap());
+        assert!(parse_bool_value("FLAG", "yes", false).is_err());
+    }
+
+    #[test]
+    fn public_test_credentials_are_recognised_by_field() {
+        assert!(is_known_test_credential("NYX_TEE_API_KEY", TEST_API_KEY));
+        assert!(is_known_test_credential(
+            "NYX_TEE_API_SECRET",
+            TEST_API_SECRET
+        ));
+        assert!(is_known_test_credential(
+            "NYX_TEE_PASSPHRASE",
+            TEST_PASSPHRASE
+        ));
+        assert!(!is_known_test_credential(
+            "NYX_TEE_API_KEY",
+            "fresh-production-key"
+        ));
     }
 }

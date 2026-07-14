@@ -25,7 +25,9 @@ use dstack_sdk::dstack_client::DstackClient;
 use serde::Serialize;
 use tokio::sync::{broadcast, RwLock, Semaphore};
 
-use super::auth::{test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_JWT_SECRET};
+use super::auth::{
+    test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_API_KEY, TEST_JWT_SECRET,
+};
 use super::instruments::InstrumentInfo;
 use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::{FillMemo, MatcherState};
@@ -56,7 +58,7 @@ pub struct BootAppInfo {
 
 impl BootAppInfo {
     /// Stub used by integration tests + by the production binary
-    /// when the dstack socket isn't reachable (degraded boot).
+    /// in isolated tests without a dstack client.
     pub fn stub() -> Self {
         Self {
             app_id: "stub-app-id".to_string(),
@@ -171,7 +173,7 @@ pub struct ApiState {
     /// (PR 4e.4); advanced manually in tests via `set_current_slot`.
     pub current_slot: Arc<std::sync::atomic::AtomicU64>,
     /// Shared oracle cache the `MatcherDriver` reads on every tick.
-    /// `None` in degraded boot — same convention as `matcher`. The
+    /// `None` in matcher-less tests — same convention as `matcher`. The
     /// `debug_endpoints` cargo feature uses this to back the
     /// `POST /__debug/oracle/seed` endpoint; in production it's
     /// written by `spawn_oracle_sync` (PR 4b) and read by the
@@ -187,7 +189,7 @@ pub struct ApiState {
 
     // ── Solana RPC (PR 4g.2 / walk-back in 4g.3) ────────────────
     /// Hand-rolled JSON-RPC client pointed at the configured
-    /// Solana cluster URL. `None` in degraded boot; populated by
+    /// Solana cluster URL. `None` in isolated tests; populated by
     /// `main.rs` after construction. Cloneable cheaply (the inner
     /// reqwest::Client is internally Arc) — stage workers in
     /// 4g.3+ clone it into their per-job tasks.
@@ -488,10 +490,9 @@ impl ApiState {
         self
     }
 
-    /// Build degraded state when dstack isn't reachable. Used by
-    /// integration tests + by the dev-mode binary that falls back
-    /// to serving `/health` + a stub `/info` when no simulator
-    /// is running. `/attestation` returns 503; auth uses
+    /// Build isolated test state. Used by integration tests and only by the
+    /// binary's explicit local simulator fallback
+    /// (`NYX_TEE_ALLOW_TEST_AUTH=1`). `/attestation` returns 503; auth uses
     /// `TEST_JWT_SECRET` + the single seeded account from
     /// [`super::auth::test_registry`].
     pub fn for_tests() -> Self {
@@ -556,6 +557,17 @@ impl ApiState {
     /// Record `order_id → account_id` at accepted intake. Idempotent.
     pub async fn record_order_owner(&self, order_id: String, account_id: String) {
         self.order_owner.write().await.insert(order_id, account_id);
+    }
+
+    /// Return whether `order_id` belongs to `account_id`. Callers deliberately
+    /// receive only a boolean so missing and foreign orders share one response
+    /// path and cannot become an order-existence oracle.
+    pub async fn account_owns_order(&self, order_id: &str, account_id: &str) -> bool {
+        self.order_owner
+            .read()
+            .await
+            .get(order_id)
+            .is_some_and(|owner| owner == account_id)
     }
 
     /// Drop an order's owner mapping. Called on explicit cancel AND by the
@@ -693,10 +705,9 @@ impl ApiState {
     }
 
     /// Boot-time auth load (Phase 1b). Loads the `accounts.db`
-    /// snapshot from `state_dir` if present, merges in the env
-    /// bootstrap admin if its key is absent, and — when seeding added
-    /// the admin to a previously-absent/empty snapshot — persists the
-    /// result so the admin survives the next restart. Returns the
+    /// snapshot from `state_dir` if present, removes the historical public test
+    /// account, merges in the env bootstrap admin if its key is absent, and
+    /// persists either migration so it survives the next restart. Returns the
     /// `(registry, revoked_jtis)` to install on `ApiState`.
     ///
     /// `state_dir == None` (persistence disabled) falls back to the
@@ -725,10 +736,18 @@ impl ApiState {
             None => (AccountRegistry::new(), HashSet::new()),
         };
 
-        // Merge the env admin (no-op if a persisted account already
-        // owns that api_key). Persist immediately on first-boot seed so
-        // a crash before the first registration doesn't lose the admin.
-        if registry.ensure_admin() {
+        // Older compose revisions seeded a public test account into the
+        // persistent snapshot. Scrub it before accepting traffic, then merge
+        // the fresh encrypted-env admin. Persist either migration immediately.
+        let removed_test_account = registry.remove(TEST_API_KEY);
+        if removed_test_account {
+            tracing::warn!(
+                api_key = TEST_API_KEY,
+                "removed historical public test account from auth snapshot"
+            );
+        }
+        let seeded_admin = registry.ensure_admin();
+        if removed_test_account || seeded_admin {
             let snapshot = persistence::AuthSnapshot::new(registry.snapshot(), &revoked);
             if let Err(e) = persistence::save_auth_snapshot(&path, &snapshot) {
                 tracing::warn!(error = %e, path = %path.display(), "first-boot auth persist failed (best-effort)");
@@ -799,8 +818,12 @@ mod persist_tests {
         assert!(!bob.is_admin);
         // The per-account setting survived the snapshot round-trip.
         assert!(bob.settings.cancel_on_disconnect_default);
-        // The seeded test admin also persisted.
-        assert!(registry.lookup(crate::api::auth::TEST_API_KEY).is_some());
+        // Production boot scrubs the historical public test admin from an old
+        // snapshot while preserving non-test accounts.
+        assert!(registry.lookup(crate::api::auth::TEST_API_KEY).is_none());
+        let (reloaded, _) = ApiState::load_or_seed_auth(Some(dir.path()));
+        assert!(reloaded.lookup(crate::api::auth::TEST_API_KEY).is_none());
+        assert!(reloaded.lookup("bob").is_some());
         // The revocation survived too.
         assert!(revoked.contains("jti-xyz"));
     }

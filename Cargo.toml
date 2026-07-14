@@ -149,7 +149,7 @@ argon2 = "0.5"
 # nyx-tee-loadgen — synthetic order traffic generator.
 # CLI parser. v4 is the stable major; derives keep the main.rs CLI
 # definition declarative.
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 # hdrhistogram for percentile-aware latency tracking. Records
 # microseconds in a fixed window; cheap recording, O(1) querying.
 hdrhistogram = "7"

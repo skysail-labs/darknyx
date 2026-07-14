@@ -17,7 +17,7 @@
 //! |-------|-------|----------|
 //! | 1000–1099 | request validation (400) | 1001 malformed, 1002 fr_unsafe, 1003 below_collateral, 1004 min_notional |
 //! | 1100–1199 | auth (401/403) | 1101 unauthorized, 1102 sig_invalid, 1103 not_owner |
-//! | 1200–1299 | conflict (409) | 1201 duplicate, 1202 stale_nonce, 1203 id_in_use |
+//! | 1200–1299 | conflict (409) | 1201 duplicate, 1202 stale_nonce, 1203 id_in_use, 1204 collateral_in_use |
 //! | 1300–1399 | not found (404) | 1301 not_found |
 //! | 1400–1499 | rate limit (429) | 1401 rate_limited |
 //! | 5000+ | server | 5000 internal, 5001 degraded |
@@ -116,6 +116,11 @@ impl ApiError {
     /// A modify's replacement order id is already booked.
     pub fn id_in_use(m: impl Into<String>) -> Self {
         Self::new(1203, StatusCode::CONFLICT, m)
+    }
+    /// A collateral note commitment is already reserved by another live or
+    /// settlement-pending order.
+    pub fn collateral_in_use(m: impl Into<String>) -> Self {
+        Self::new(1204, StatusCode::CONFLICT, m)
     }
 
     // 1300–1399 — not found (404)

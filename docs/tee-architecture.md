@@ -1306,6 +1306,10 @@ anyone mint operational credentials.
   creds after first boot requires the API or a snapshot wipe. If the
   env vars are unset and no snapshot exists, the registry is empty and
   auth rejects everything.
+  The production boot rejects the public `nyx-test-*` fixtures. Test-state
+  fallback requires both `NYX_TEE_ALLOW_TEST_AUTH=1` and an explicit
+  `DSTACK_SIMULATOR_ENDPOINT`; the production compose sets neither flag nor
+  hardcoded credential.
 - **Registration.** `POST /admin/accounts` (admin-gated) registers
   further accounts. The admin check is **authoritative against the live
   registry**, not trusted from a JWT claim, so an admin demotion takes
@@ -1323,6 +1327,8 @@ anyone mint operational credentials.
   state via an atomic write-tmp→fsync→rename, so a registration or
   revocation survives a restart. Boot loads the snapshot, then merges
   the env admin if absent (first boot seeds + persists immediately).
+  Production boot also removes the historical `nyx-test-api-key` account from
+  older snapshots before serving traffic, then persists the scrubbed registry.
   Persistence is **best-effort** (§8): a failed write logs but never
   fails the request — auth is off-chain, so the worst case on data loss
   is the admin re-registering. When `NYX_TEE_STATE_DIR` is unset (no
@@ -1442,6 +1448,7 @@ cd ~/dstack/sdk/simulator
 # Each session — start it in the background
 ~/dstack/sdk/simulator/dstack-simulator > /tmp/sim.log 2>&1 &
 export DSTACK_SIMULATOR_ENDPOINT=$(realpath ~/dstack/sdk/simulator/dstack.sock)
+export NYX_TEE_ALLOW_TEST_AUTH=1
 
 # Then in the repo
 cd ~/nyx-monorepo

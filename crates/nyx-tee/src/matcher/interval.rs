@@ -601,7 +601,6 @@ impl MatcherDriver {
             }
 
             tracing::info!(
-                clearing_price = output.clearing_price,
                 count = output.matches.len(),
                 page,
                 "matcher tick: produced matches (page)"

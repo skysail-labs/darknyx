@@ -258,6 +258,12 @@ impl AccountRegistry {
         self.by_api_key.get(api_key)
     }
 
+    /// Remove an account by API key. Production boot uses this to scrub the
+    /// historical public test account from persisted snapshots.
+    pub(crate) fn remove(&mut self, api_key: &str) -> bool {
+        self.by_api_key.remove(api_key).is_some()
+    }
+
     /// Replace an account's [`AccountSettings`]. Returns `true` if the account
     /// existed (and was updated). The caller persists the registry afterwards.
     pub fn set_settings(&mut self, api_key: &str, settings: AccountSettings) -> bool {

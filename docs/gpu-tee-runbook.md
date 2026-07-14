@@ -115,10 +115,10 @@ services:
       NYX_TEE_HTTP_BIND: "0.0.0.0:8080"
       NYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
       NYX_TEE_STATE_DIR: "/var/lib/nyx-tee"
-      NYX_TEE_API_KEY: "nyx-test-api-key"
-      NYX_TEE_API_SECRET: "nyx-test-secret"
-      NYX_TEE_PASSPHRASE: "nyx-test-passphrase"
-      NYX_TEE_SOLANA_RPC_URL: ${NYX_TEE_SOLANA_RPC_URL}   # the ONLY secret (encrypted-secrets UI)
+      NYX_TEE_API_KEY: ${NYX_TEE_API_KEY}
+      NYX_TEE_API_SECRET: ${NYX_TEE_API_SECRET}
+      NYX_TEE_PASSPHRASE: ${NYX_TEE_PASSPHRASE}
+      NYX_TEE_SOLANA_RPC_URL: ${NYX_TEE_SOLANA_RPC_URL}
       NYX_TEE_SYNC_FROM_SLOT: "<REFRESH: solana slot>"
       NYX_TEE_BASE_MINT: "sGzG6XyTiHiY9G2dC18GXoV7W4YKPXcM8soDS79jPjn"
       NYX_TEE_QUOTE_MINT: "FEzPrxcwgYvwWYceZdJEMwWj9tB4hcR7iXmkZTunVoX6"
@@ -136,9 +136,10 @@ volumes:
   nyx_state:
 ```
 
-4. **Advanced → Encrypted Secrets:** add **one** — KEY `NYX_TEE_SOLANA_RPC_URL`, value = the Helius
-   URL (`SOLANA_RPC_URL=...` line in `packages/sdk/.env`). E2E-encrypted in the browser; never
-   enters the compose hash.
+4. **Advanced → Encrypted Secrets:** add the Helius URL plus fresh
+   `NYX_TEE_API_KEY`, `NYX_TEE_API_SECRET`, and `NYX_TEE_PASSPHRASE` values.
+   These are E2E-encrypted in the browser and never enter the compose hash. The
+   public `nyx-test-*` fixtures are rejected outside explicit simulator mode.
 5. **Advanced → SSH Authorization → Public Key:** paste `~/.ssh/id_ed25519.pub`.
 6. Deploy.
 
@@ -146,12 +147,18 @@ volumes:
 
 ```sh
 umask 077
+export NYX_TEE_API_KEY="nyx-$(openssl rand -hex 16)"
+export NYX_TEE_API_SECRET="$(openssl rand -hex 32)"
+export NYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
 BASE=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 FLOOR=$(solana slot --url "$RPC")
 cat > .env.deploy <<EOF      # .env.deploy matches gitignored .env.* — never commit
+NYX_TEE_API_KEY=$NYX_TEE_API_KEY
+NYX_TEE_API_SECRET=$NYX_TEE_API_SECRET
+NYX_TEE_PASSPHRASE=$NYX_TEE_PASSPHRASE
 NYX_TEE_SOLANA_RPC_URL=$RPC
 NYX_TEE_SYNC_FROM_SLOT=$FLOOR
 NYX_TEE_BASE_MINT=$BASE

@@ -15,7 +15,7 @@
 //! reports the settle-scheduler counters tracked today (24h windows +
 //! finality timing are a later addition).
 //!
-//! Best-effort: a missing Solana RPC client (degraded boot / tests)
+//! Best-effort: a missing Solana RPC client in isolated tests
 //! yields empty `per_mint` reserves rather than failing the endpoint —
 //! the mirror + identity + stats are still served.
 

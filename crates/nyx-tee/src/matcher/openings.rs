@@ -249,11 +249,19 @@ impl OpeningStore {
         self.anchor_pools.remove(order_id)
     }
 
-    /// Record an order's settle inputs, keyed by collateral note
-    /// commitment. Overwrites any prior entry for the same commitment
-    /// (a re-lock rotation reuses the slot with a fresh opening).
+    /// Record an order's settle inputs, keyed by collateral note commitment.
+    /// Intake checks [`Self::is_reserved`] under the same matcher write lock
+    /// before calling this; internal continuation rotation may replace the
+    /// record for the same logical order.
     pub fn insert(&mut self, note_commitment: [u8; 32], record: OrderOpening) {
         self.map.insert(note_commitment, record);
+    }
+
+    /// Whether an order currently reserves a collateral commitment. A record
+    /// remains present while settlement is pending, so intake cannot book the
+    /// same note twice between matching and confirmed consumption.
+    pub fn is_reserved(&self, note_commitment: &[u8; 32]) -> bool {
+        self.map.contains_key(note_commitment)
     }
 
     /// Fetch a clone of the record for a collateral note commitment

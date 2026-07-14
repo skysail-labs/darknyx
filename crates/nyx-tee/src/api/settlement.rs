@@ -12,7 +12,7 @@
 //!   200 + `BatchSettleStatus` JSON when the batch exists.
 //!   404 when the batch is unknown to the scheduler (either it
 //!     never happened or it was evicted — see 4g.6 retention).
-//!   503 when no scheduler is wired (degraded boot, or in tests
+//!   503 when no scheduler is wired (for example, in tests
 //!     that opt out of spawning the scheduler).
 
 use std::sync::Arc;

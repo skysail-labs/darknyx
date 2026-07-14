@@ -45,16 +45,32 @@ import { MerkleShadow } from "./merkle-shadow.js";
 import { proveValidInput } from "./valid-input-prover.js";
 import { be32ToBigInt, loadOrCreateKeypair } from "./e2e-helpers.js";
 
-// ── Market + auth constants (match deploy/docker-compose.yaml + e2e-config) ──
+// ── Market + auth constants (match encrypted deploy env + e2e-config) ──
 export const SYMBOL = "SOL-USDC";
 export const SOL_USD_FEED =
   "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
-/** CVM bootstrap admin creds — HARDCODED in docker-compose.yaml (NOT `${VAR}`),
- *  so these defaults match the deployed CVM. See docs/cvm-run-runbook.md. */
-export const API_KEY = process.env.NYX_TEE_API_KEY ?? "nyx-test-api-key";
-export const API_SECRET = process.env.NYX_TEE_API_SECRET ?? "nyx-test-secret";
-export const PASSPHRASE =
-  process.env.NYX_TEE_PASSPHRASE ?? "nyx-test-passphrase";
+function cvmCredential(name: string, localFixture: string): string {
+  const value = process.env[name];
+  if (process.env.RUN_CVM_E2E === "1" && !value) {
+    throw new Error(
+      `${name} is required for live CVM tests; load the encrypted-deploy credentials`,
+    );
+  }
+  return value ?? localFixture;
+}
+
+/** Live CVM credentials are generated per test window and injected through the
+ * encrypted deploy env. Public fixture defaults remain only for non-live local
+ * simulator tests. See docs/cvm-run-runbook.md. */
+export const API_KEY = cvmCredential("NYX_TEE_API_KEY", "nyx-test-api-key");
+export const API_SECRET = cvmCredential(
+  "NYX_TEE_API_SECRET",
+  "nyx-test-secret",
+);
+export const PASSPHRASE = cvmCredential(
+  "NYX_TEE_PASSPHRASE",
+  "nyx-test-passphrase",
+);
 
 /** Protocol fee bps — MUST match the CVM's NYX_TEE_FEE_RATE_BPS (default 30). */
 export const FEE_RATE_BPS = BigInt(process.env.NYX_CVM_FEE_RATE_BPS ?? "30");

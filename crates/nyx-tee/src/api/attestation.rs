@@ -19,7 +19,7 @@
 //! keys" gap. For a single-shard TEE it is exactly `SHA-256(pk_0)`.
 //!
 //! Failure modes:
-//!   - dstack socket unreachable (degraded boot / test mode)
+//!   - isolated test state has no dstack client
 //!     → 503 Service Unavailable
 //!   - `reportData` query param is malformed hex / too long
 //!     → 400 Bad Request

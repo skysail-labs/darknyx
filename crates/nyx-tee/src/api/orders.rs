@@ -605,6 +605,21 @@ fn commit_order(
     p: PreparedOrder,
     expiry_slot: u64,
 ) -> Result<(), ApiError> {
+    // Check every conflict before mutating the book. In particular, a note
+    // opening is a reservation that survives while settlement is pending; a
+    // second order may not overwrite it and double-book the same collateral.
+    if st.book().get(&p.order_id).is_some() {
+        return Err(ApiError::duplicate(format!(
+            "order {} already exists",
+            hex::encode(p.order_id)
+        )));
+    }
+    if st.openings().is_reserved(&p.note_commitment) {
+        return Err(ApiError::collateral_in_use(
+            "collateral note is already reserved",
+        ));
+    }
+
     st.book_mut().submit(p.order).map_err(|e| match e {
         BookError::Duplicate(_, _) => ApiError::duplicate(e.to_string()),
         BookError::ZeroOrderId => ApiError::malformed(e.to_string()),
@@ -885,7 +900,7 @@ pub async fn modify_core(
     //     reprice in place, where cancelling the old frees the id first).
     {
         let mut st = matcher.write().await;
-        match st.book().get(&old_order_id) {
+        let old_collateral = match st.book().get(&old_order_id) {
             None => {
                 return Err(ApiError::not_found(format!(
                     "order {old_order_id_hex} not found"
@@ -894,13 +909,24 @@ pub async fn modify_core(
             Some(o) if o.trading_key != trading_key => {
                 return Err(ApiError::not_owner("not the order owner"))
             }
-            Some(_) => {}
-        }
+            Some(o) => o.collateral_note,
+        };
         if new_order_id != old_order_id && st.book().get(&new_order_id).is_some() {
             return Err(ApiError::id_in_use(format!(
                 "replacement order_id {} already exists",
                 hex::encode(new_order_id)
             )));
+        }
+        // Reusing the old order's current collateral is safe because the
+        // cancel below releases that exact reservation. Any other existing
+        // reservation—including an earlier input still pending settlement—is
+        // a hard conflict. Check before cancelling to keep modify atomic.
+        if prepared.note_commitment != old_collateral
+            && st.openings().is_reserved(&prepared.note_commitment)
+        {
+            return Err(ApiError::collateral_in_use(
+                "replacement collateral is already reserved",
+            ));
         }
         // Preconditions hold → both mutations succeed.
         cancel_in_book(&mut st, trading_key, old_order_id)?;
@@ -1051,20 +1077,32 @@ pub async fn topup_anchors(
 
 pub async fn get_order(
     State(state): State<Arc<ApiState>>,
-    Extension(_auth): Extension<Authorized>,
+    Extension(auth): Extension<Authorized>,
     Path(order_id_hex): Path<String>,
 ) -> Result<Json<OrderStatusResponse>, ApiError> {
     let matcher = matcher_or_503(&state)?;
     let order_id: [u8; 16] = decode_hex(&order_id_hex, "order_id (path)")?;
+    let canonical_order_id = hex::encode(order_id);
+
+    // Do not reveal whether a well-formed id belongs to another account. The
+    // owner map is populated only after accepted intake and removed when the
+    // order becomes terminal, so both foreign and absent ids take this exact
+    // response path.
+    if !state
+        .account_owns_order(&canonical_order_id, &auth.account_id)
+        .await
+    {
+        return Err(ApiError::not_found("order not found"));
+    }
 
     let st = matcher.read().await;
     let order = st
         .book()
         .get(&order_id)
-        .ok_or_else(|| ApiError::not_found(format!("no order with id {order_id_hex}")))?;
+        .ok_or_else(|| ApiError::not_found("order not found"))?;
 
     Ok(Json(OrderStatusResponse {
-        order_id: order_id_hex,
+        order_id: canonical_order_id,
         side: match order.side {
             OrderSide::Bid => "bid",
             OrderSide::Ask => "ask",

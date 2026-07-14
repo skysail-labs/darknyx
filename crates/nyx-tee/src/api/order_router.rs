@@ -70,7 +70,7 @@ fn to_msg(u: &OrderUpdate) -> (String, OrderUpdateMsg, bool) {
     (order_id, msg, terminal)
 }
 
-/// Spawn the order-update router. No-op when there is no matcher (degraded boot).
+/// Spawn the order-update router. No-op in matcher-less test state.
 pub fn spawn_order_router(state: Arc<ApiState>) {
     let Some(matcher) = state.matcher.clone() else {
         return;
