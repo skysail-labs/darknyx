@@ -18,6 +18,7 @@ import {
   deriveRootKey,
   deriveTradingKeyAtOffset,
   deriveBlindingFactor,
+  nyxShakeKdfV1,
   bn254ToBE32,
   MASTER_SEED_BYTES,
 } from "../src/keys/key-generators.js";
@@ -55,6 +56,18 @@ describe("key derivation parity", () => {
     const a = deriveSpendingKey(s);
     const b = deriveSpendingKey(s);
     expect(a).toBe(b);
+  });
+
+  it("NyxShakeKdfV1 bytes are frozen by the cross-language KAT", () => {
+    const actual = nyxShakeKdfV1(
+      new Uint8Array(32).fill(0x40),
+      new TextEncoder().encode("nyx-vk"),
+      new Uint8Array(),
+      64,
+    );
+    expect(Buffer.from(actual).toString("hex")).toBe(
+      "04231d3443c254da661ec74db44829b738448e984fd116256af83767c11c2e2451fcde3dfcaf18088b7552cb2cb4f0b3f1e5c799ebbafd2f353334d954dc77e4",
+    );
   });
 
   it("spending key matches hex when fixed seed", () => {

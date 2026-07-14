@@ -53,6 +53,15 @@ describe("fill-memo integrity", () => {
     expect(rec.innerHash).toBe(deriveInnerHash(SEED, ORDER_ID, 3));
   });
 
+  it("compares commitments as bytes and returns canonical hex", async () => {
+    const memo = await goodMemo(3, 1500n);
+    const canonical = memo.change_note_commitment;
+    memo.change_note_commitment = canonical.toUpperCase();
+
+    const rec = await verifyFillMemo(memo, SEED, OWNER);
+    expect(rec.commitment).toBe(canonical);
+  });
+
   it("rejects a tampered commitment (commitment_mismatch)", async () => {
     const memo = await goodMemo(0, 100n);
     // Flip a byte of the commitment.

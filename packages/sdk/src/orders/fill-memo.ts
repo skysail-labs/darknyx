@@ -117,7 +117,11 @@ export async function verifyFillMemoExact(
   const orderId = fromHex(memo.order_id, "order_id", 16);
   const mint = fromHex(memo.mint, "mint", 32);
   const memoInner = fromHex(memo.inner_hash, "inner_hash", 32);
-  fromHex(memo.change_note_commitment, "change_note_commitment", 32); // full hex validation
+  const memoCommitment = fromHex(
+    memo.change_note_commitment,
+    "change_note_commitment",
+    32,
+  );
   const anchorIndex = requireU32Index(memo.anchor_index);
 
   // (1) inner_hash binding — the TEE must have used OUR derived inner_hash.
@@ -143,7 +147,9 @@ export async function verifyFillMemoExact(
     innerHash: innerBig,
   });
   const recomputedHex = Buffer.from(recomputed).toString("hex");
-  if (recomputedHex !== memo.change_note_commitment) {
+  if (
+    Buffer.compare(Buffer.from(recomputed), Buffer.from(memoCommitment)) !== 0
+  ) {
     throw new FillMemoError(
       `commitment mismatch: recomputed ${recomputedHex} != reported ${memo.change_note_commitment}`,
       "commitment_mismatch",
@@ -151,7 +157,7 @@ export async function verifyFillMemoExact(
   }
 
   return {
-    commitment: memo.change_note_commitment,
+    commitment: recomputedHex,
     tokenMint: mint,
     amount: changeAmount,
     ownerCommitment,

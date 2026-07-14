@@ -117,7 +117,6 @@ function makeClient(
       return b;
     },
     store: async () => {},
-    generate: async () => new Uint8Array(64),
   };
   return new DarkPoolClient({
     programId: PROGRAM_ID,

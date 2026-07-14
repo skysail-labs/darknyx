@@ -403,15 +403,15 @@ settle-under-load is bounded by RPC capacity (Helius 429s), not the matcher.
 ### Building a production client (the recoverability contract)
 
 A production client (browser/mobile wallet, not the stale `apps/demo`) wires
-three SDK entry points so a user's notes are recoverable on any device from
-their wallet alone — no stored secret, surviving a CVM redeploy:
+three SDK entry points so a user's notes survive a CVM redeploy and remain
+recoverable on a replacement device with an authenticated backup:
 
-1. **Deterministic seed (Proposal A).** Derive the 64-byte master seed from a
-   wallet signature, never a stored CSPRNG blob:
-   `resolveMasterSeed({ type: "wallet-signature", signMessage })` — or, if you
-   verify the signature server-side first, `seedFromWalletSignature(sig)` over
-   `MASTER_SEED_MESSAGE` (`"NYX_DARKPOOL_SEED_V1"`). Both are the SAME derivation
-   (`SHA-512(sig)[:64]`); pinned by `master-seed-wallet-signature.test.ts`.
+1. **Random seed + encrypted backup.** `resolveMasterSeed` generates a 64-byte
+   CSPRNG seed and persists it through the client's secure `MasterSeedStorage`.
+   Export a portable, versioned AES-256-GCM/scrypt envelope with
+   `exportEncryptedMasterSeed`, store its passphrase separately, and restore it
+   with `importEncryptedMasterSeed`. Wallet-message signatures are deliberately
+   not a Nyx spend authority.
 2. **Viewing-encryption key on every order (Proposal B).** Send
    `deriveViewingEncKeypair(seed).publicKey` as the order's `viewing_pubkey`
    (`buildOrder` defaults to it). The TEE encrypts each fill's `change_amount`
@@ -422,8 +422,9 @@ their wallet alone — no stored secret, surviving a CVM redeploy:
    indexer URL + mints. The full client journey is covered (no live CVM) by
    `packages/indexer/tests/change-recovery-e2e.test.ts`.
 
-NOTE: `apps/demo` predates this and is intentionally not updated — treat the SDK
-functions above + that e2e test as the reference for the real client.
+NOTE: `apps/demo` predates this and is not a production custody reference —
+treat the SDK functions above + that e2e test as the reference for the real
+client.
 
 ---
 

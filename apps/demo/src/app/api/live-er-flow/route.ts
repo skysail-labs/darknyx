@@ -188,7 +188,6 @@ function makeClient(
   const storage = {
     load: async () => seed,
     store: async () => undefined,
-    generate: async () => seed,
   };
   return getDarkPoolClient({
     programId: vaultProgramId,

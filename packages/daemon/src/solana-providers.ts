@@ -87,7 +87,6 @@ export function fixedSeedMode(seed: Uint8Array): MasterSeedMode {
     storage: {
       load: async () => seed,
       store: async () => {},
-      generate: async () => seed,
     },
   };
 }

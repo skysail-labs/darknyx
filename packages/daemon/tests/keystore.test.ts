@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import nacl from "tweetnacl";
+import { exportEncryptedMasterSeed, importEncryptedMasterSeed } from "@nyx/sdk";
 
 import {
   Keystore,
@@ -136,6 +137,25 @@ describe("account identity derivation", () => {
       new Keystore(id).spendingKey,
     );
     expect(recreated.ownerBlinding).toBe(id.ownerBlinding);
+  });
+
+  it("restores the same identity from an authenticated seed backup", async () => {
+    const id = generateAccountIdentity(rootKey);
+    const backup = exportEncryptedMasterSeed(
+      id.masterSeed,
+      "separate backup passphrase",
+    );
+    const restoredSeed = importEncryptedMasterSeed(
+      JSON.stringify(backup),
+      "separate backup passphrase",
+    );
+    const restored = deriveAccountIdentity(restoredSeed, rootKey);
+    const before = new Keystore(id);
+    const after = new Keystore(restored);
+
+    expect(after.spendingKey).toBe(before.spendingKey);
+    expect(await after.ownerCommitment()).toBe(await before.ownerCommitment());
+    expect(await after.userCommitment()).toEqual(await before.userCommitment());
   });
 });
 

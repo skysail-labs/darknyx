@@ -2,6 +2,7 @@
 export * from "./errors.js";
 export * from "./providers.js";
 export * from "./keys/key-generators.js";
+export * from "./keys/master-seed-backup.js";
 export * from "./keys/fill-encryption.js";
 export * from "./keys/user-commitment.js";
 export * from "./utxo/note.js";

@@ -7,13 +7,13 @@
 //! 1. **Root / Vault Key**     — Ed25519 (Solana native). Cold wallet.
 //! 2. **Trading Key**          — Ed25519 (Solana native). Hot wallet. Offset-rotatable.
 //! 3. **Shielded Spending Key**— BN254 scalar. Cold / HSM.
-//! 4. **Master Viewing Key**   — BN254 scalar (derived from KMAC256). Compliance.
+//! 4. **Master Viewing Key**   — BN254 scalar (derived from NyxShakeKdfV1). Compliance.
 //!
 //! Derivation contracts (must match the on-chain `create_wallet` verifier):
 //!
 //! ```text
 //! spending_key   = reduce_mod_r( HKDF-SHA256(master_seed, b"darkpool_spend_key_v1", 512) )
-//! viewing_key    = reduce_mod_r( KMAC256(master_seed, b"darkpool_viewing_key_v1", 512) )
+//! viewing_key    = reduce_mod_r( NyxShakeKdfV1(master_seed, b"darkpool_viewing_key_v1", 512) )
 //! trading_key(n) = Ed25519::from_seed( HKDF-SHA256(master_seed,
 //!                    b"darkpool_trading_key_v1" || offset_u64_le, 32) )
 //! root_key       = Ed25519::from_seed( HKDF-SHA256(master_seed,
@@ -21,17 +21,17 @@
 //!                  [used only when user does not bring their own Solana wallet]
 //! ```
 //!
-//! Blinding factor derivation (Umbra KMAC256 pattern):
+//! Blinding factor derivation (versioned Nyx SHAKE KDF):
 //!
 //! ```text
-//! blinding_r(i) = reduce_mod_r( KMAC256(master_seed, b"note_blinding_v1" || i_u64_le, 512) )
+//! blinding_r(i) = reduce_mod_r( NyxShakeKdfV1(master_seed, b"note_blinding_v1" || i_u64_le, 512) )
 //! ```
 //!
 //! Inner-hash derivation (v2 note construction — the per-order anchor pool):
 //!
 //! ```text
 //! inner_hash(order_id, j) =
-//!     reduce_mod_r( KMAC256(master_seed, b"nyx-inner-hash-v1" || order_id[16] || j_u32_le, 512) )
+//!     reduce_mod_r( NyxShakeKdfV1(master_seed, b"nyx-inner-hash-v1" || order_id[16] || j_u32_le, 512) )
 //! ```
 //!
 //! `inner_hash` replaces the (nonce, blinding_r) pair in a v2 note commitment
@@ -142,9 +142,9 @@ pub fn derive_spending_key(seed: &MasterSeed) -> Result<Fr, CryptoError> {
     Ok(fr_from_uniform_bytes(&bytes))
 }
 
-/// Derive the BN254-scalar Master Viewing Key via KMAC256.
+/// Derive the BN254-scalar Master Viewing Key via NyxShakeKdfV1.
 pub fn derive_master_viewing_key(seed: &MasterSeed) -> Result<Fr, CryptoError> {
-    let bytes = kmac256(seed.as_bytes(), INFO_VIEWING, &[], 64);
+    let bytes = nyx_shake_kdf_v1(seed.as_bytes(), INFO_VIEWING, &[], 64);
     Ok(fr_from_uniform_bytes(&bytes))
 }
 
@@ -183,7 +183,7 @@ pub fn derive_blinding_factor(seed: &MasterSeed, counter: u64) -> Fr {
     let mut info = Vec::with_capacity(INFO_BLINDING.len() + 8);
     info.extend_from_slice(INFO_BLINDING);
     info.extend_from_slice(&counter.to_le_bytes());
-    let bytes = kmac256(seed.as_bytes(), &info, &[], 64);
+    let bytes = nyx_shake_kdf_v1(seed.as_bytes(), &info, &[], 64);
     fr_from_uniform_bytes(&bytes)
 }
 
@@ -194,7 +194,7 @@ pub fn derive_blinding_factor(seed: &MasterSeed, counter: u64) -> Fr {
 /// element. `order_id` is the 16-byte client-chosen order identifier (see
 /// `OrderCanonical::order_id`); `index` is the 0-based slot within the pool.
 ///
-/// KMAC custom-info = `INFO_INNER_HASH || order_id[16] || index_u32_le` — all
+/// NyxShakeKdfV1 custom-info = `INFO_INNER_HASH || order_id[16] || index_u32_le` — all
 /// fields fixed-width so the encoding is unambiguous. Mirrored in TS by
 /// `deriveInnerHash` (`packages/sdk/src/keys/key-generators.ts`).
 pub fn derive_inner_hash(seed: &MasterSeed, order_id: &[u8; 16], index: u32) -> Fr {
@@ -202,7 +202,7 @@ pub fn derive_inner_hash(seed: &MasterSeed, order_id: &[u8; 16], index: u32) -> 
     info.extend_from_slice(INFO_INNER_HASH);
     info.extend_from_slice(order_id);
     info.extend_from_slice(&index.to_le_bytes());
-    let bytes = kmac256(seed.as_bytes(), &info, &[], 64);
+    let bytes = nyx_shake_kdf_v1(seed.as_bytes(), &info, &[], 64);
     fr_from_uniform_bytes(&bytes)
 }
 
@@ -216,12 +216,14 @@ fn hkdf_expand_64(ikm: &[u8], info: &[u8]) -> Result<[u8; 64], CryptoError> {
     Ok(okm)
 }
 
-/// KMAC256 via SHAKE256 with NIST SP 800-185 encoding.
-/// We implement just enough of KMAC to meet the spec contract — not a
-/// general-purpose KMAC implementation.
-fn kmac256(key: &[u8], custom_info: &[u8], data: &[u8], out_len: usize) -> Vec<u8> {
+/// Nyx-specific, versioned SHAKE256 KDF retained byte-for-byte for existing
+/// notes and keys. This feeds SP 800-185-style encodings into raw SHAKE256; it
+/// is deliberately not claimed to be NIST KMAC or cSHAKE.
+pub fn nyx_shake_kdf_v1(key: &[u8], custom_info: &[u8], data: &[u8], out_len: usize) -> Vec<u8> {
     // bytepad(encode_string("KMAC") || encode_string(custom_info), 136) || bytepad(encode_string(key), 136) || X || right_encode(out_len_bits)
     let mut hasher = Shake256::default();
+    // Preserve the historical literal bytes for compatibility. They do not
+    // make raw SHAKE256 a standards-conformant KMAC construction.
     let name = b"KMAC";
 
     let mut header = Vec::new();
@@ -311,6 +313,15 @@ mod tests {
         assert_eq!(b1.viewing_key, b2.viewing_key);
         assert_eq!(b1.trading_key.to_bytes(), b2.trading_key.to_bytes());
         assert_eq!(b1.root_key.to_bytes(), b2.root_key.to_bytes());
+    }
+
+    #[test]
+    fn nyx_shake_kdf_v1_known_answer_is_frozen() {
+        let actual = nyx_shake_kdf_v1(&[0x40; 32], b"nyx-vk", &[], 64);
+        assert_eq!(
+            hex::encode(actual),
+            "04231d3443c254da661ec74db44829b738448e984fd116256af83767c11c2e2451fcde3dfcaf18088b7552cb2cb4f0b3f1e5c799ebbafd2f353334d954dc77e4"
+        );
     }
 
     #[test]

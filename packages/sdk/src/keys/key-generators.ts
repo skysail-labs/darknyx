@@ -80,50 +80,22 @@ export function generateMasterSeed(): Uint8Array {
   return new Uint8Array(crypto.randomBytes(MASTER_SEED_BYTES));
 }
 
-/**
- * Derive the deterministic master seed from a wallet's Ed25519 signature over the
- * seed-derivation message — `SHA-512(signature)[:64]`. This is the canonical
- * `wallet-signature` derivation (Proposal A): the seed is recoverable on any
- * device from the wallet alone, with no stored secret. The CALLER is responsible
- * for having signed the fixed message (`MASTER_SEED_MESSAGE`) + verifying the
- * signature against the expected pubkey before trusting the seed.
- *
- * THIS is the single source of truth for the derivation — `resolveMasterSeed`'s
- * wallet-signature branch calls it, and any production client deriving the seed
- * server-side (e.g. a verify-then-derive endpoint behind a `signMessage` UI)
- * should call it too, so they cannot drift. Recoverability of a change note
- * (change-amount recovery, Proposal B) depends on this seed being reproduced
- * byte-for-byte, since the viewing-encryption keypair derives from it
- * ([`deriveViewingEncKeypair`]).
- */
-export function seedFromWalletSignature(signature: Uint8Array): Uint8Array {
-  const hash = crypto
-    .createHash("sha512")
-    .update(Buffer.from(signature))
-    .digest();
-  return new Uint8Array(hash.subarray(0, MASTER_SEED_BYTES));
-}
-
-/** The fixed message a wallet signs to derive its master seed (Proposal A). */
-export const MASTER_SEED_MESSAGE = new TextEncoder().encode(
-  "NYX_DARKPOOL_SEED_V1",
-);
-
 /** Resolve a `MasterSeedMode` to actual seed bytes. */
 export async function resolveMasterSeed(
   mode: MasterSeedMode,
 ): Promise<Uint8Array> {
-  if (mode.type === "csprng") {
-    const existing = await mode.storage.load();
-    if (existing) return existing;
-    const fresh = generateMasterSeed();
-    await mode.storage.store(fresh);
-    return fresh;
+  const existing = await mode.storage.load();
+  if (existing) {
+    if (existing.length !== MASTER_SEED_BYTES) {
+      throw new Error(
+        `stored master seed must be ${MASTER_SEED_BYTES} bytes, got ${existing.length}`,
+      );
+    }
+    return existing;
   }
-  // wallet-signature: sign the fixed message, derive via the canonical helper.
-  const msg = mode.message ?? MASTER_SEED_MESSAGE;
-  const sig = await mode.signMessage(msg);
-  return seedFromWalletSignature(sig);
+  const fresh = generateMasterSeed();
+  await mode.storage.store(fresh);
+  return fresh;
 }
 
 export function deriveSpendingKey(seed: Uint8Array): bigint {
@@ -132,7 +104,7 @@ export function deriveSpendingKey(seed: Uint8Array): bigint {
 }
 
 export function deriveMasterViewingKey(seed: Uint8Array): bigint {
-  const okm = kmac256(seed, INFO_VIEWING, new Uint8Array(), 64);
+  const okm = nyxShakeKdfV1(seed, INFO_VIEWING, new Uint8Array(), 64);
   return reduceMod(okm);
 }
 
@@ -170,7 +142,7 @@ export function deriveBlindingFactor(
   const info = new Uint8Array(INFO_BLINDING.length + 8);
   info.set(INFO_BLINDING, 0);
   info.set(new Uint8Array(offsetBuf), INFO_BLINDING.length);
-  const okm = kmac256(seed, info, new Uint8Array(), 64);
+  const okm = nyxShakeKdfV1(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
 }
 
@@ -180,7 +152,7 @@ export function deriveBlindingFactor(
  * `(seed, orderId, index)` so the whole anchor pool — and the matching
  * nullifiers via `nullifierV2` — is regenerable without persisted state.
  *
- * KMAC custom-info = `INFO_INNER_HASH || orderId[16] || index_u32_le`.
+ * NyxShakeKdfV1 custom-info = `INFO_INNER_HASH || orderId[16] || index_u32_le`.
  */
 export function deriveInnerHash(
   seed: Uint8Array,
@@ -198,7 +170,7 @@ export function deriveInnerHash(
   info.set(INFO_INNER_HASH, 0);
   info.set(orderId, INFO_INNER_HASH.length);
   info.set(new Uint8Array(idxBuf), INFO_INNER_HASH.length + 16);
-  const okm = kmac256(seed, info, new Uint8Array(), 64);
+  const okm = nyxShakeKdfV1(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
 }
 
@@ -234,7 +206,7 @@ export function deriveOrderId(seed: Uint8Array, n: number): Uint8Array {
  * consolidated note can be reconstructed + spent from the seed. A distinct info
  * string (`nyx-merge-inner-v1`) keeps it in its own domain.
  *
- * `reduce_mod_r(KMAC256(seed, "nyx-merge-inner-v1" || n_u32_le, 512))`.
+ * `reduce_mod_r(NyxShakeKdfV1(seed, "nyx-merge-inner-v1" || n_u32_le, 512))`.
  */
 export function deriveMergeInnerHash(seed: Uint8Array, n: number): bigint {
   if (!Number.isInteger(n) || n < 0 || n > 0xffff_ffff) {
@@ -245,7 +217,7 @@ export function deriveMergeInnerHash(seed: Uint8Array, n: number): bigint {
   const info = new Uint8Array(INFO_MERGE_INNER.length + 4);
   info.set(INFO_MERGE_INNER, 0);
   info.set(new Uint8Array(nBuf), INFO_MERGE_INNER.length);
-  const okm = kmac256(seed, info, new Uint8Array(), 64);
+  const okm = nyxShakeKdfV1(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
 }
 
@@ -283,8 +255,9 @@ export function bn254ToBE32(x: bigint): Uint8Array {
   return bigintToBE32(x);
 }
 
-// ------ KMAC256 implementation (matches Rust side exactly) ------
-// NIST SP 800-185 encoding on top of SHAKE256.
+// ------ NyxShakeKdfV1 (matches Rust side exactly) ------
+// This legacy, versioned construction feeds SP 800-185-style encodings into
+// raw SHAKE256. It is intentionally NOT named or claimed to be NIST KMAC/cSHAKE.
 
 function leftEncode(x: bigint): Uint8Array {
   if (x === 0n) return new Uint8Array([1, 0]);
@@ -331,13 +304,15 @@ function bytepad(x: Uint8Array, w: number): Uint8Array {
   return out;
 }
 
-function kmac256(
+export function nyxShakeKdfV1(
   key: Uint8Array,
   customInfo: Uint8Array,
   data: Uint8Array,
   outLen: number,
 ): Uint8Array {
   const shake = crypto.createHash("shake256", { outputLength: outLen });
+  // Preserve the historical literal bytes for byte compatibility. They do not
+  // make raw SHAKE256 a standards-conformant KMAC construction.
   const name = new TextEncoder().encode("KMAC");
   const header = new Uint8Array([
     ...encodeString(name),
@@ -354,4 +329,4 @@ function kmac256(
   return new Uint8Array(shake.digest());
 }
 
-export const __testing = { kmac256, hkdfExpand, reduceMod };
+export const __testing = { hkdfExpand, reduceMod };

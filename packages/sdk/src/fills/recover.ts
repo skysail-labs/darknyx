@@ -50,6 +50,13 @@ export interface RecoverParams {
 const fromHex = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
 const toHex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
+function fromHexExact(value: string, bytes: number): Uint8Array | null {
+  if (value.length !== bytes * 2 || !/^[0-9a-fA-F]+$/.test(value)) {
+    return null;
+  }
+  return Uint8Array.from(Buffer.from(value, "hex"));
+}
+
 function be32ToBig(b: Uint8Array): bigint {
   let n = 0n;
   for (const x of b) n = (n << 8n) | BigInt(x);
@@ -88,7 +95,9 @@ export async function recoverChangeFromChain(
 
   const tokenMint = fill.side === "buyer" ? params.quoteMint : params.baseMint;
   const role = fill.side === "buyer" ? CHANGE_ROLE_BUYER : CHANGE_ROLE_SELLER;
-  const target = fill.changeNoteCommitment;
+  const targetBytes = fromHexExact(fill.changeNoteCommitment, 32);
+  if (!targetBytes) return null;
+  const target = toHex(targetBytes);
 
   const recomputes = async (innerHash: bigint): Promise<boolean> => {
     const c = await noteCommitmentV2({
@@ -97,7 +106,7 @@ export async function recoverChangeFromChain(
       ownerCommitment: params.ownerCommitment,
       innerHash,
     });
-    return toHex(c) === target;
+    return Buffer.compare(Buffer.from(c), Buffer.from(targetBytes)) === 0;
   };
 
   const note = (innerHash: bigint, anchorIndex?: number): StoredNote => ({
