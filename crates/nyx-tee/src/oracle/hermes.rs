@@ -74,16 +74,22 @@ pub enum HermesError {
 #[derive(Debug, Clone)]
 pub struct HermesPriceUpdate {
     pub feed_id: String,
-    /// EMA price as u64. Pyth itself returns it as i64 — we reject
-    /// non-positive values at parse time (a defensive check that
-    /// matches the on-chain `OracleNegativePrice` error).
-    pub ema_price: u64,
-    pub confidence: u64,
-    pub exponent: i32,
-    pub publish_time_ms: u64,
-    /// Decoded VAA bytes from `binary.data[0]`. Passed straight to
-    /// `vaa::verify(...)` by the caller.
-    pub vaa: Vec<u8>,
+    /// Raw `AccumulatorUpdateData` (PNAU) bytes from `binary.data[0]` — the
+    /// **trusted** price source. The caller (`sync.rs`) verifies the VAA
+    /// guardian signatures, extracts the guardian-signed Merkle root, proves
+    /// the price message's inclusion under it, and decodes the price from
+    /// THIS binary — not from the JSON fields below (C-05 / A-2).
+    pub accumulator: Vec<u8>,
+    /// EMA price as reported by Hermes's JSON `parsed[]`. Used **only** as a
+    /// cross-check against the binary-proven value; never cached directly. A
+    /// malicious/buggy Hermes could put a fabricated value here, so it is not
+    /// trusted — it exists to catch a JSON-vs-binary split (and our own decode
+    /// bugs) loudly.
+    pub json_ema_price: u64,
+    /// Hermes JSON EMA exponent — cross-check only.
+    pub json_exponent: i32,
+    /// Hermes JSON EMA publish time (ms) — cross-check only.
+    pub json_publish_time_ms: u64,
 }
 
 #[derive(Clone)]
@@ -147,9 +153,13 @@ impl HermesClient {
                 source,
             })?;
 
-        // Extract the VAA bytes from the AccumulatorUpdateData
-        // wrapper. Hermes returns hex strings in `binary.data[]`;
-        // we take the first one (single-feed queries have one VAA).
+        // Keep the raw `AccumulatorUpdateData` (PNAU) bytes intact. Hermes
+        // returns hex strings in `binary.data[]`; we take the first one
+        // (single-feed queries have one). `sync.rs` parses + verifies it: it
+        // extracts the VAA, checks the guardian signatures, proves the price
+        // message's Merkle inclusion under the guardian-signed root, and
+        // decodes the price from the binary. This is the C-05 fix — we no
+        // longer trust the JSON `parsed[]` price as the source.
         let accum_hex =
             parsed
                 .binary
@@ -159,17 +169,10 @@ impl HermesClient {
                 .ok_or_else(|| HermesError::MissingVaa {
                     feed_id: feed_id.to_string(),
                 })?;
-        let accum_bytes = hex::decode(accum_hex)?;
+        let accumulator = hex::decode(accum_hex)?;
 
-        // Hermes returns Pyth's `AccumulatorUpdateData` wrapper,
-        // not a raw VAA. Strip the wrapper to extract just the
-        // VAA bytes for `vaa::verify`. The Merkle update payload
-        // after the VAA is not consumed in v2 (we trust the
-        // `parsed[]` price); a future v3 path would also Merkle-
-        // verify each price feed against the VAA's attested root.
-        let vaa = extract_vaa_from_accumulator(&accum_bytes, feed_id)?;
-
-        // Find the parsed entry for our feed.
+        // The JSON `parsed[]` entry is kept ONLY as a cross-check against the
+        // binary-proven value (`sync.rs` rejects a JSON-vs-binary mismatch).
         let raw_entry = parsed
             .parsed
             .into_iter()
@@ -178,8 +181,8 @@ impl HermesClient {
                 feed_id: feed_id.to_string(),
             })?;
 
-        // Pyth's `price` field is a string-encoded i64 ("Pyth-native"
-        // fixed point per `expo`). The EMA shares the same scaling.
+        // Pyth's `price` field is a string-encoded i64 ("Pyth-native" fixed
+        // point per `expo`). The EMA shares the same scaling.
         let raw_price: i64 = raw_entry
             .ema_price
             .price
@@ -191,26 +194,14 @@ impl HermesClient {
         if raw_price <= 0 {
             return Err(HermesError::NonPositivePrice(raw_price));
         }
-        // Fail on a malformed confidence the same way `price` does,
-        // rather than silently substituting 0 — `conf` feeds the
-        // VALID_PRICE binding work, so a quiet zero would corrupt it.
-        let raw_conf: u64 = raw_entry
-            .ema_price
-            .conf
-            .parse()
-            .map_err(|_| HermesError::Json {
-                url: url.clone(),
-                source: serde::de::Error::custom("ema_price.conf not a valid u64"),
-            })?;
 
         Ok(HermesPriceUpdate {
             feed_id: raw_entry.id,
-            ema_price: raw_price as u64,
-            confidence: raw_conf,
-            exponent: raw_entry.ema_price.expo,
+            accumulator,
+            json_ema_price: raw_price as u64,
+            json_exponent: raw_entry.ema_price.expo,
             // Hermes returns publish_time as seconds; convert to ms.
-            publish_time_ms: raw_entry.ema_price.publish_time * 1000,
-            vaa,
+            json_publish_time_ms: raw_entry.ema_price.publish_time * 1000,
         })
     }
 }
@@ -242,99 +233,10 @@ struct RawParsedEntry {
 #[derive(Debug, Deserialize)]
 struct RawPrice {
     price: String,
-    conf: String,
     expo: i32,
     publish_time: u64,
 }
 
-// ─────── Pyth AccumulatorUpdateData wrapper extraction ──────────────────────
-//
-// Hermes returns each `binary.data[]` entry as Pyth's
-// `AccumulatorUpdateData` envelope, not a raw VAA. Layout:
-//
-// ```text
-//   bytes 0-3   magic                ("PNAU" = 0x504e4155)
-//   byte  4     major_version        (1)
-//   byte  5     minor_version        (0)
-//   byte  6     trailing_header_size (currently 0; skip that many bytes)
-//   byte  7     proof_type           (0 = WormholeMerkle)
-//   bytes 8-9   vaa_length (BE u16)
-//   bytes 10..  vaa
-//   ...         num_updates + updates[] (Merkle proofs — v2 ignores)
-// ```
-//
-// Source: https://github.com/pyth-network/pyth-crosschain/blob/main/pythnet/pythnet_sdk/src/wire.rs::AccumulatorUpdateData
-//
-// We extract just the VAA bytes and discard the Merkle update
-// section — that section is what a v3 on-chain verifier would
-// consume to bind a specific price feed to the attested Merkle
-// root. v2 trusts the `parsed[]` Hermes response for the price.
-
-const ACCUM_MAGIC: &[u8; 4] = b"PNAU";
-
-fn extract_vaa_from_accumulator(bytes: &[u8], feed_id: &str) -> Result<Vec<u8>, HermesError> {
-    if bytes.len() < 10 || &bytes[0..4] != ACCUM_MAGIC {
-        return Err(HermesError::Json {
-            url: format!("(extracting VAA for feed {feed_id})"),
-            source: serde::de::Error::custom(
-                "Hermes binary.data is not an AccumulatorUpdateData (missing 'PNAU' magic)",
-            ),
-        });
-    }
-    // bytes[4]: major, bytes[5]: minor, bytes[6]: trailing_header_size,
-    // bytes[7]: proof_type. We accept any major/minor for now (Pyth has
-    // stayed at 1.0); reject any proof_type other than WormholeMerkle (0).
-    if bytes[7] != 0 {
-        return Err(HermesError::Json {
-            url: format!("(extracting VAA for feed {feed_id})"),
-            source: serde::de::Error::custom(format!(
-                "unsupported AccumulatorUpdateData proof_type {} (expected 0 = WormholeMerkle)",
-                bytes[7]
-            )),
-        });
-    }
-    let trailing = bytes[6] as usize;
-    let vaa_len_offset = 8 + trailing;
-    if bytes.len() < vaa_len_offset + 2 {
-        return Err(HermesError::Json {
-            url: format!("(extracting VAA for feed {feed_id})"),
-            source: serde::de::Error::custom("AccumulatorUpdateData truncated at vaa_length"),
-        });
-    }
-    let vaa_len = u16::from_be_bytes([bytes[vaa_len_offset], bytes[vaa_len_offset + 1]]) as usize;
-    let vaa_start = vaa_len_offset + 2;
-    let vaa_end = vaa_start + vaa_len;
-    if bytes.len() < vaa_end {
-        return Err(HermesError::Json {
-            url: format!("(extracting VAA for feed {feed_id})"),
-            source: serde::de::Error::custom(format!(
-                "AccumulatorUpdateData declares VAA of {vaa_len} bytes but buffer is only {} bytes long",
-                bytes.len() - vaa_start
-            )),
-        });
-    }
-    Ok(bytes[vaa_start..vaa_end].to_vec())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_vaa_from_fixture() {
-        let bytes = include_bytes!("../../tests/fixtures/sol_usd_vaa.bin");
-        let vaa = extract_vaa_from_accumulator(bytes, "sol_usd").expect("extract");
-        // Sanity: VAA starts with version=1.
-        assert_eq!(vaa[0], 1, "VAA version byte");
-        // The captured fixture is signed against set 7 (per
-        // vaa::MAINNET_GUARDIAN_SET_INDEX). Its second-through-
-        // fifth bytes encode the guardian_set_index BE u32.
-        assert_eq!(&vaa[1..5], &[0, 0, 0, 7], "guardian_set_index");
-    }
-
-    #[test]
-    fn rejects_non_pnau_magic() {
-        let bad = vec![0xde, 0xad, 0xbe, 0xef, 1, 0, 0, 0, 0, 0];
-        assert!(extract_vaa_from_accumulator(&bad, "test").is_err());
-    }
-}
+// The `AccumulatorUpdateData` (PNAU) wrapper is parsed + Merkle-verified in
+// `oracle::accumulator` (owned there so the wire format lives in one place);
+// `fetch` above returns the raw bytes untouched.
