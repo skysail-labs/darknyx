@@ -1,7 +1,8 @@
 # CLAUDE.md — agent onboarding for Nyx Darkpool
 
 > This file is the contract between you (the agent) and the project.
-> Read it before touching code. It also doubles as `AGENTS.md`.
+> Read it before touching code. `AGENTS.md` is a **symlink to this file** —
+> edit here, never there (they can never diverge).
 >
 > If you only read one section, read **[§2 — the build/validate
 > cycle](#2-the-buildvalidate-cycle)** and **[§3 — the Phala CVM:
