@@ -10,7 +10,12 @@
  */
 
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { getDarkPoolClient, type DarkPoolClient } from "@nyx/sdk";
+import {
+  getDarkPoolClient,
+  onchainRootVerifier,
+  type DarkPoolClient,
+  type RootVerifier,
+} from "@nyx/sdk";
 
 import type { Keystore } from "./keystore.js";
 import {
@@ -34,6 +39,8 @@ export interface MergeClientOptions {
   artifacts: MergeCircuitArtifacts;
   leavesFetcher: LeavesFetcher;
   treeId?: number;
+  /** Override the finalized on-chain root-ring gate; `false` is test-only. */
+  verifyRoot?: RootVerifier | false;
 }
 
 export function createMergeClient(opts: MergeClientOptions): {
@@ -44,6 +51,11 @@ export function createMergeClient(opts: MergeClientOptions): {
   const merkleProvider = new TreeLeavesMerkleProvider({
     fetcher: opts.leavesFetcher,
     treeId: opts.treeId,
+    verifyRoot:
+      opts.verifyRoot === false
+        ? undefined
+        : (opts.verifyRoot ??
+          onchainRootVerifier({ connection, programId: opts.programId })),
   });
   const client = getDarkPoolClient({
     programId: opts.programId,

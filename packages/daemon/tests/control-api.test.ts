@@ -43,6 +43,12 @@ function fakeDaemon() {
     balances: vi.fn(() => [
       { mint: "09".repeat(32), amount: "1000", notes: 1 },
     ]),
+    getTrustStatus: vi.fn(() => ({
+      tradingEnabled: true,
+      pauseReason: null,
+      lastFinalizedKeyRefreshMs: 123,
+      onchainKeyMonitoring: true,
+    })),
     placeOrder: vi.fn(async () => ({
       orderId: "cd".repeat(8),
       arrivalSlot: 9,
@@ -99,7 +105,15 @@ describe("control-api — routes", () => {
 
   it("GET /health", async () => {
     const r = await fetch(`${base}/health`);
-    expect(await r.json()).toEqual({ ok: true });
+    expect(await r.json()).toEqual({
+      ok: true,
+      trading_enabled: true,
+      trust: {
+        pause_reason: null,
+        last_finalized_key_refresh_ms: 123,
+        onchain_key_monitoring: true,
+      },
+    });
   });
 
   it("GET /orders + /orders/:id", async () => {

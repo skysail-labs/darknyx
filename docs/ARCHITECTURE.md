@@ -375,7 +375,13 @@ sysvar + system program.
   verified proof.
 * **TEE trust.** The vault trusts only the keys in `VaultConfig.tee_pubkeys`.
   Clients verify the enclave's TDX attestation before sending order data. A
-  misbehaving TEE **cannot** inflate value or drain the vault (conservation +
+  strict daemon also matches the quote-bound key set to a finalized on-chain
+  `VaultConfig` at startup and every minute; mismatch pauses new trading
+  immediately, and five minutes without a successful finalized refresh pauses
+  it for staleness while cancellation and reconciliation continue. Merkle roots
+  returned by the TEE are checked against the finalized on-chain shard root ring
+  before the daemon proves an order or merge. A misbehaving TEE **cannot**
+  inflate value or drain the vault (conservation +
   64-bit range checks are proof-enforced), cannot learn spending keys (they never
   enter it), and cannot substitute note data undetected (the client's settle-memo
   integrity check). It **can**, by accepted design decision, clear a match at an

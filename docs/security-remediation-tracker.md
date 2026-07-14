@@ -27,7 +27,7 @@ runbooks have landed.
 | CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Open |
 | CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Open |
 | CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Open |
-| CS-13 | Medium | Daemon | `remediation/daemon-trust` | Strict startup fails closed; finalized TEE keys refresh each minute; mismatch/staleness pauses placement while reconciliation continues | Open |
+| CS-13 | Medium | Daemon | `remediation/daemon-trust` | Strict startup fails closed; finalized TEE keys refresh each minute; mismatch/staleness pauses placement while reconciliation continues | Closed |
 | CS-14 | Low | Crypto + SDK | `remediation/client-custody` | Existing bytes retained under `nyxShakeKdfV1`; fixed Rust/TS KATs; no NIST KMAC claim | Open |
 
 ## Performance findings
@@ -57,7 +57,7 @@ runbooks have landed.
 | N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker closes only after expiry; rent returns to recorded payer; boundary tests and live async sweep | Closed |
 | N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Open |
 | N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
-| N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Open |
+| N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Closed |
 | N-16 | Low | SDK | `remediation/client-custody` | Commitment equality is byte-based; mixed-case encoding regression | Open |
 | N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Open |
 | N-18 | Critical mainnet gate | Governance + ZK | `remediation/release-assurance` | Public Phase-2 ceremony with at least five independent contributors, transcript/hashes, random beacon, reproducible verify, auditor sign-off, post-ceremony settle | Open |
@@ -345,6 +345,48 @@ Every remediation PR must record:
   rollback requires another clean devnet re-foundation and invalidates the new
   MarketConfig account/config wire. No circuit artifact changed in this slice,
   but rollback reopens N-10/N-11 and removes CS-02/N-19 infrastructure.
+
+### `remediation/daemon-trust` — CS-13, N-15
+
+- **Invariant restored.** Strict daemon startup now requires a successful
+  `finalized` read of the program-owned `VaultConfig` and exact equality between
+  its complete signer set and the quote-bound enclave signer set. RPC failure,
+  missing/malformed config, mismatch, or an attempt to disable the check in
+  strict mode aborts startup. The finalized set refreshes every minute;
+  missing/mismatched governance state pauses placement and anchor top-up
+  immediately, and RPC failure may use the last successful read for no more
+  than five minutes. Exact recovery resumes trading. Streams, signed
+  cancellation, settlement tracking, and on-chain merge stay active while
+  paused. Order VALID_INPUT proving and auto-merge snapshots now require the
+  reconstructed root to appear in the finalized on-chain shard root ring by
+  default.
+- **Wire/circuit impact.** No TEE API, order canonical bytes, Borsh payload,
+  account layout, circuit, proving key, verifier key, N=16 fixture, or deployed
+  program changes. The local daemon `GET /health` response gains
+  `trading_enabled` and trust freshness fields. The SDK exports a `RootVerifier`
+  type and hardens the existing on-chain verifier to require finalized data,
+  exact account size/discriminator, program ownership, and the embedded shard
+  id. Merge leaf pagination now rejects malformed/gapped leaves, changing page
+  roots, and reconstructed-root mismatch before proving.
+- **Local evidence.** Prettier and both SDK/daemon TypeScript no-emit checks
+  pass. Full daemon Vitest passes 156 tests with 2 environment-gated skips;
+  full SDK Vitest passes 229 tests with 22 environment-gated skips. Adversarial
+  coverage includes startup RPC/null/mismatch failure, strict-check disable
+  rejection, the exact one-minute refresh boundary, five-minute staleness and
+  recovery, immediate placement/anchor-top-up pause with cancellation/merge
+  continuity, finalized RPC commitment, wrong owner/layout/discriminator/shard,
+  unknown/all-zero roots, changing paginated roots, and fabricated leaf
+  snapshots.
+- **Devnet/CVM evidence.** Not applicable. This slice changes the off-chain SDK
+  and reference daemon only; it does not change a CVM image input, TEE boot or
+  dstack/KMS path, enclave HTTP/WS surface, on-chain program, circuit artifact,
+  transaction layout, or deployed state. A billable CVM run would exercise the
+  same unchanged gateway/chain data sources without adding coverage beyond the
+  deterministic fail-closed tests.
+- **Rollback.** Revert this PR. No notes, roots, orders, signatures, proofs, or
+  deployed artifacts are invalidated, but rollback reopens CS-13/N-15: strict
+  startup again skips unavailable governance state and daemon proofs again
+  trust TEE-supplied roots unless each caller remembers an optional hook.
 
 ## Mainnet release gates
 

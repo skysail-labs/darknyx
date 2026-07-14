@@ -39,8 +39,19 @@ const MERKLE_DEPTH = 20;
 //   +8  leaf_count(u64)  +16 current_root[32]  +48 roots[ROOT_HISTORY_SIZE][32]
 // Mirrors `programs/vault/src/state.rs::MerkleTree` — keep in lockstep.
 const ROOT_HISTORY_SIZE = 64;
+const MERKLE_TREE_ACCOUNT_LEN = 2_744;
 const CURRENT_ROOT_OFFSET = 8 + 8;
 const ROOTS_RING_OFFSET = CURRENT_ROOT_OFFSET + 32;
+const TREE_ID_OFFSET =
+  ROOTS_RING_OFFSET + ROOT_HISTORY_SIZE * 32 + MERKLE_DEPTH * 32 + 1;
+// sha256("account:MerkleTree")[0..8], pinned as bytes so this prover module
+// remains browser-compatible (no node:crypto import).
+const MERKLE_TREE_DISCRIMINATOR = Uint8Array.from([
+  98, 51, 51, 226, 162, 20, 73, 212,
+]);
+
+/** Verify that a Merkle root is accepted by the specified on-chain shard. */
+export type RootVerifier = (root: Uint8Array, treeId: number) => Promise<void>;
 
 /**
  * C-09: build a `verifyRoot` hook that asserts a TEE-supplied inclusion root is
@@ -55,17 +66,45 @@ const ROOTS_RING_OFFSET = CURRENT_ROOT_OFFSET + 32;
 export function onchainRootVerifier(deps: {
   connection: Connection;
   programId: PublicKey;
-}): (root: Uint8Array, treeId: number) => Promise<void> {
+}): RootVerifier {
   return async (root, treeId) => {
     if (root.length !== 32) throw new Error("root must be 32 bytes");
+    if (root.every((byte) => byte === 0)) {
+      throw new Error("refusing to verify an all-zero Merkle root");
+    }
+    if (!Number.isInteger(treeId) || treeId < 0 || treeId > 255) {
+      throw new Error(`tree id must be a u8, got ${treeId}`);
+    }
     const [pda] = merkleTreePda(deps.programId, treeId);
-    const acct = await deps.connection.getAccountInfo(pda);
+    const acct = await deps.connection.getAccountInfo(pda, "finalized");
     if (!acct) {
       throw new Error(
         `merkle tree shard ${treeId} not found on-chain (${pda.toBase58()})`,
       );
     }
     const data = acct.data;
+    if (!acct.owner.equals(deps.programId)) {
+      throw new Error(
+        `merkle tree shard ${treeId} is owned by ${acct.owner.toBase58()}, not ${deps.programId.toBase58()}`,
+      );
+    }
+    if (data.length !== MERKLE_TREE_ACCOUNT_LEN) {
+      throw new Error(
+        `merkle tree shard ${treeId} account length must be ${MERKLE_TREE_ACCOUNT_LEN}, got ${data.length}`,
+      );
+    }
+    if (
+      !data
+        .subarray(0, 8)
+        .every((value, index) => value === MERKLE_TREE_DISCRIMINATOR[index])
+    ) {
+      throw new Error(`invalid MerkleTree discriminator for shard ${treeId}`);
+    }
+    if (data[TREE_ID_OFFSET] !== treeId) {
+      throw new Error(
+        `merkle tree PDA shard ${treeId} contains tree_id ${data[TREE_ID_OFFSET]}`,
+      );
+    }
     const matchesAt = (off: number): boolean => {
       if (off + 32 > data.length) return false;
       for (let i = 0; i < 32; i++) if (data[off + i] !== root[i]) return false;
@@ -123,7 +162,7 @@ export interface InclusionFetchOptions {
    * {@link onchainRootVerifier}. Omitted ⇒ the caller trusts the engine's root
    * (e.g. offline tests); production callers should supply it.
    */
-  verifyRoot?: (root: Uint8Array, treeId: number) => Promise<void>;
+  verifyRoot?: RootVerifier;
 }
 
 /** Path bits from a leaf index: bit `i` selects the sibling side at level `i`. */
@@ -271,7 +310,7 @@ export async function proveAndBuildOrder(
     fetchImpl?: typeof fetch;
     /** C-09: cross-check the engine root against the on-chain ring — see
      *  {@link onchainRootVerifier}. */
-    verifyRoot?: (root: Uint8Array, treeId: number) => Promise<void>;
+    verifyRoot?: RootVerifier;
   },
 ): Promise<PlaceOrderRequest> {
   const noteCommitmentHex = Buffer.from(args.note.commitment).toString("hex");

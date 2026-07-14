@@ -14,7 +14,10 @@ import { createHash } from "node:crypto";
 import { Keypair } from "@solana/web3.js";
 
 import {
+  limitPolicy,
+  OrderSide,
   type EventLogEntry,
+  type StoredNote,
   type VerifiedQuoteReport,
   replayEventLogRtmr,
 } from "@nyx/sdk";
@@ -23,11 +26,12 @@ import {
   AttestationError,
   type QuoteVerifier,
 } from "../src/attestation.js";
-import { Daemon } from "../src/daemon.js";
+import { Daemon, DEFAULT_TEE_KEY_REFRESH_MS } from "../src/daemon.js";
 import { DaemonStore } from "../src/store.js";
 import { Keystore, type AccountIdentity } from "../src/keystore.js";
 import { DEFAULT_THRESHOLDS } from "../src/order-lifecycle.js";
 import type { DaemonConfig } from "../src/config.js";
+import { newManagedOrder } from "../src/types.js";
 
 const GW = "https://gw.example";
 const TOKEN = "tok";
@@ -282,7 +286,7 @@ describe("Daemon — attestation gate", () => {
     };
     return new Keystore(id);
   }
-  const config = (): DaemonConfig => ({
+  const config = (overrides: Partial<DaemonConfig> = {}): DaemonConfig => ({
     gatewayUrl: GW,
     gatewayWsUrl: "wss://gw",
     token: TOKEN,
@@ -294,6 +298,16 @@ describe("Daemon — attestation gate", () => {
     attestationStrict: true,
     attestOnchainCheck: true,
     programId: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+    ...overrides,
+  });
+
+  const verifiedIdentity = () => ({
+    teePubkey: TEE_PUBKEY_B58,
+    teePubkeys: [TEE_PUBKEY_B58],
+    composeHash: COMPOSE,
+    mrtd: MRTD,
+    quote: "q",
+    dcapVerified: true,
   });
 
   it("refuses to start when attestation fails", async () => {
@@ -315,6 +329,7 @@ describe("Daemon — attestation gate", () => {
       verifyAttestation: async () => {
         throw new AttestationError("bad", "binding");
       },
+      verifyRoot: false,
     });
     await expect(daemon.start()).rejects.toThrow(/bad/);
     expect(daemon.getAttestation()).toBeNull();
@@ -337,19 +352,18 @@ describe("Daemon — attestation gate", () => {
       } as never,
       subscribeFills: (() => ({ close() {} })) as never,
       subscribeOrders: (() => ({ close() {} })) as never,
-      verifyAttestation: async () => ({
-        teePubkey: TEE_PUBKEY_B58,
-        teePubkeys: [TEE_PUBKEY_B58],
-        composeHash: COMPOSE,
-        mrtd: MRTD,
-        quote: "q",
-        dcapVerified: true,
-      }),
+      verifyAttestation: async () => verifiedIdentity(),
       // on-chain governance set matches the attested set → passes.
       onchainTeePubkeys: async () => [TEE_PUBKEY_B58],
+      verifyRoot: false,
     });
     await daemon.start();
     expect(daemon.getAttestation()?.teePubkey).toBe(TEE_PUBKEY_B58);
+    expect(daemon.getTrustStatus()).toMatchObject({
+      tradingEnabled: true,
+      onchainKeyMonitoring: true,
+    });
+    daemon.stop();
   });
 
   it("refuses to start when on-chain tee_pubkeys don't match the attested set", async () => {
@@ -369,22 +383,257 @@ describe("Daemon — attestation gate", () => {
       } as never,
       subscribeFills: (() => ({ close() {} })) as never,
       subscribeOrders: (() => ({ close() {} })) as never,
-      verifyAttestation: async () => ({
-        teePubkey: TEE_PUBKEY_B58,
-        teePubkeys: [TEE_PUBKEY_B58],
-        composeHash: COMPOSE,
-        mrtd: MRTD,
-        quote: "q",
-        dcapVerified: true,
-      }),
+      verifyAttestation: async () => verifiedIdentity(),
       // Vault trusts an extra key the enclave doesn't hold → refuse.
       onchainTeePubkeys: async () => [
         TEE_PUBKEY_B58,
         Keypair.generate().publicKey.toBase58(),
       ],
+      verifyRoot: false,
     });
     await expect(daemon.start()).rejects.toMatchObject({
       kind: "pubkey_mismatch",
     });
+  });
+
+  it("fails strict startup on an RPC error or missing VaultConfig", async () => {
+    const common = {
+      config: config(),
+      keystore: keystore(),
+      store,
+      prover: vi.fn() as never,
+      placer: {
+        place: vi.fn(),
+        cancel: vi.fn(),
+        modify: vi.fn(),
+        close: vi.fn(),
+      } as never,
+      subscribeFills: (() => ({ close() {} })) as never,
+      subscribeOrders: (() => ({ close() {} })) as never,
+      verifyAttestation: async () => verifiedIdentity(),
+      verifyRoot: false as const,
+    };
+    const rpcFailure = new Daemon({
+      ...common,
+      onchainTeePubkeys: async () => {
+        throw new Error("RPC unavailable");
+      },
+    });
+    await expect(rpcFailure.start()).rejects.toThrow(/RPC unavailable/);
+
+    const missing = new Daemon({
+      ...common,
+      onchainTeePubkeys: async () => null,
+    });
+    await expect(missing.start()).rejects.toThrow(/vault_config not found/);
+  });
+
+  it("does not permit the on-chain key check to be disabled in strict mode", async () => {
+    const attest = vi.fn(async () => verifiedIdentity());
+    const daemon = new Daemon({
+      config: config({ attestOnchainCheck: false }),
+      keystore: keystore(),
+      store,
+      prover: vi.fn() as never,
+      placer: {
+        place: vi.fn(),
+        cancel: vi.fn(),
+        modify: vi.fn(),
+        close: vi.fn(),
+      } as never,
+      subscribeFills: (() => ({ close() {} })) as never,
+      subscribeOrders: (() => ({ close() {} })) as never,
+      verifyAttestation: attest,
+      verifyRoot: false,
+    });
+    await expect(daemon.start()).rejects.toThrow(
+      /strict attestation requires the finalized on-chain TEE-key check/,
+    );
+    expect(attest).not.toHaveBeenCalled();
+  });
+
+  it("pauses placement immediately on key mismatch but keeps cancellation and streams live", async () => {
+    let onchain = [TEE_PUBKEY_B58];
+    let fillsClosed = false;
+    let ordersClosed = false;
+    const prover = vi.fn();
+    const anchorPoster = { post: vi.fn(async () => {}) };
+    const mergeRunner = { run: vi.fn(async () => 1) };
+    const placer = {
+      place: vi.fn(),
+      cancel: vi.fn(async (orderId: string) => ({
+        order_id: orderId,
+        status: "cancelled",
+      })),
+      modify: vi.fn(),
+      close: vi.fn(),
+    };
+    const daemon = new Daemon({
+      config: config(),
+      keystore: keystore(),
+      store,
+      prover: prover as never,
+      placer: placer as never,
+      subscribeFills: (() => ({
+        close() {
+          fillsClosed = true;
+        },
+      })) as never,
+      subscribeOrders: (() => ({
+        close() {
+          ordersClosed = true;
+        },
+      })) as never,
+      verifyAttestation: async () => verifiedIdentity(),
+      onchainTeePubkeys: async () => onchain,
+      anchorPoster,
+      mergeRunner,
+      verifyRoot: false,
+    });
+    await daemon.start();
+
+    onchain = [Keypair.generate().publicKey.toBase58()];
+    await daemon.refreshTrustNow();
+    expect(daemon.getTrustStatus().tradingEnabled).toBe(false);
+    expect(daemon.getTrustStatus().pauseReason).toMatch(/on-chain/);
+    expect(fillsClosed).toBe(false);
+    expect(ordersClosed).toBe(false);
+
+    const collateral: StoredNote = {
+      commitment: "11".repeat(32),
+      tokenMint: new Uint8Array(32).fill(9),
+      amount: 1_000n,
+      ownerCommitment: 1n,
+      innerHash: 2n,
+      leafIndex: 0n,
+    };
+    await expect(
+      daemon.placeOrder(
+        {
+          symbol: "SOL-USDC",
+          side: OrderSide.Bid,
+          policy: limitPolicy({ priceLimit: 100n }),
+          amount: 10n,
+        },
+        collateral,
+      ),
+    ).rejects.toThrow(/trading paused/);
+    expect(prover).not.toHaveBeenCalled();
+
+    const orderId = "ab".repeat(16);
+    store.putOrder({
+      ...newManagedOrder({
+        orderId,
+        seedIndex: 0,
+        side: "bid",
+        priceRaw: 100n,
+        sizeRaw: 10n,
+        anchorPoolSize: 10,
+      }),
+      phase: "open",
+    });
+    await (
+      daemon as unknown as {
+        engine: { dispatch: (id: string, event: unknown) => Promise<unknown> };
+      }
+    ).engine.dispatch(orderId, {
+      type: "fill",
+      anchorIndex: 9,
+      producedChangeNote: true,
+    });
+    await vi.waitFor(() => {
+      expect(store.getOrder(orderId)?.topupInFlight).toBe(false);
+    });
+    expect(anchorPoster.post).not.toHaveBeenCalled();
+
+    await daemon.cancelOrder(orderId);
+    expect(placer.cancel).toHaveBeenCalledOnce();
+    expect(store.getOrder(orderId)?.phase).toBe("cancelled");
+    await vi.waitFor(() => expect(mergeRunner.run).toHaveBeenCalledOnce());
+    daemon.stop();
+  });
+
+  it("uses the last finalized key set for at most five minutes, then recovers on a matching refresh", async () => {
+    let now = 1_000;
+    let rpcFails = false;
+    const daemon = new Daemon({
+      config: config(),
+      keystore: keystore(),
+      store,
+      prover: vi.fn() as never,
+      placer: {
+        place: vi.fn(),
+        cancel: vi.fn(),
+        modify: vi.fn(),
+        close: vi.fn(),
+      } as never,
+      subscribeFills: (() => ({ close() {} })) as never,
+      subscribeOrders: (() => ({ close() {} })) as never,
+      verifyAttestation: async () => verifiedIdentity(),
+      onchainTeePubkeys: async () => {
+        if (rpcFails) throw new Error("temporary RPC failure");
+        return [TEE_PUBKEY_B58];
+      },
+      verifyRoot: false,
+      now: () => now,
+      teeKeyStaleMs: 300_000,
+    });
+    await daemon.start();
+    expect(daemon.getTrustStatus().lastFinalizedKeyRefreshMs).toBe(1_000);
+
+    rpcFails = true;
+    now = 300_999;
+    await daemon.refreshTrustNow();
+    expect(daemon.getTrustStatus().tradingEnabled).toBe(true);
+
+    now = 301_000;
+    await daemon.refreshTrustNow();
+    expect(daemon.getTrustStatus()).toMatchObject({
+      tradingEnabled: false,
+      pauseReason: expect.stringMatching(/stale/),
+    });
+
+    rpcFails = false;
+    now = 302_000;
+    await daemon.refreshTrustNow();
+    expect(daemon.getTrustStatus()).toMatchObject({
+      tradingEnabled: true,
+      pauseReason: null,
+      lastFinalizedKeyRefreshMs: 302_000,
+    });
+    daemon.stop();
+  });
+
+  it("refreshes the finalized key set every minute", async () => {
+    vi.useFakeTimers();
+    const reader = vi.fn(async () => [TEE_PUBKEY_B58]);
+    const daemon = new Daemon({
+      config: config(),
+      keystore: keystore(),
+      store,
+      prover: vi.fn() as never,
+      placer: {
+        place: vi.fn(),
+        cancel: vi.fn(),
+        modify: vi.fn(),
+        close: vi.fn(),
+      } as never,
+      subscribeFills: (() => ({ close() {} })) as never,
+      subscribeOrders: (() => ({ close() {} })) as never,
+      verifyAttestation: async () => verifiedIdentity(),
+      onchainTeePubkeys: reader,
+      verifyRoot: false,
+    });
+    try {
+      await daemon.start();
+      expect(reader).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(DEFAULT_TEE_KEY_REFRESH_MS - 1);
+      expect(reader).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reader).toHaveBeenCalledTimes(2);
+    } finally {
+      daemon.stop();
+      vi.useRealTimers();
+    }
   });
 });

@@ -6,7 +6,7 @@
  * server keeps it dependency-free and is the right shape — commands are REST
  * request/response, the stream is one-way daemon → strategy.
  *
- *   GET  /health                 → { ok }
+ *   GET  /health                 → { ok, trading_enabled, trust }
  *   GET  /orders                 → { orders: ManagedOrder[] }
  *   GET  /orders/:id             → ManagedOrder | 404
  *   POST /orders                 → { order_id, arrival_slot }  (body: see below)
@@ -96,7 +96,16 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
     const method = req.method ?? "GET";
 
     if (method === "GET" && path === "/health") {
-      return send(res, 200, { ok: true });
+      const trust = daemon.getTrustStatus();
+      return send(res, 200, {
+        ok: true,
+        trading_enabled: trust.tradingEnabled,
+        trust: {
+          pause_reason: trust.pauseReason,
+          last_finalized_key_refresh_ms: trust.lastFinalizedKeyRefreshMs,
+          onchain_key_monitoring: trust.onchainKeyMonitoring,
+        },
+      });
     }
     if (method === "GET" && path === "/orders") {
       return send(res, 200, { orders: serializeOrders(daemon.listOrders()) });

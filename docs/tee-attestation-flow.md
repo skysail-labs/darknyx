@@ -253,6 +253,31 @@ caches the result, re-verifies on cert renewal.
 > `{ teePubkey, teePubkeys, composeHash, mrtd, quote }` (the full K-shard set comes
 > from `/info`). The sketch below is the original design and is kept for intent.
 
+#### Ongoing daemon enforcement
+
+Strict attestation is a trading gate, not a one-time log message. After DCAP and
+measurement verification, the stock daemon must successfully read the
+program-owned `VaultConfig` at `finalized` commitment and match its complete TEE
+key set before it opens order flow. An RPC error, missing account, malformed
+account, or key mismatch aborts startup. Strict mode cannot disable this check;
+the only bypass is the explicit non-strict development/simulator configuration.
+
+While running, the daemon refreshes the finalized governance key set every
+minute. A missing account or mismatch pauses placement and anchor top-up
+immediately. Transient RPC failure may use the last successful finalized read
+for at most five minutes, after which new trading pauses until an exact key-set
+match is observed again. Fill/order streams, settlement reconciliation,
+on-chain merge, and signed cancellation remain active during the pause. The
+local `GET /health` response exposes `trading_enabled`, the pause reason, and
+the timestamp of the last finalized key refresh.
+
+The same fail-fast policy applies to Merkle data used for proving. The daemon's
+order path enables `onchainRootVerifier` by default; it validates the finalized
+MerkleTree PDA owner, discriminator, exact layout, embedded shard id, and recent
+root ring before VALID_INPUT proving. Auto-merge reconstructs every paginated
+leaf snapshot, rejects changing or inconsistent advertised roots, and applies
+the same finalized root-ring check before producing a merge proof.
+
 New module `packages/sdk/src/tee/attestation.ts`:
 
 ```ts

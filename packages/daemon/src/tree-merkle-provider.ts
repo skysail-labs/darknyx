@@ -13,12 +13,22 @@
  * The fetch is injectable so the provider is unit-testable without a gateway.
  */
 
-import type { MerkleProofProvider } from "@nyx/sdk";
+import type { MerkleProofProvider, RootVerifier } from "@nyx/sdk";
 
-import { LocalMerkleTree } from "./merkle-tree.js";
+import { LocalMerkleTree, TREE_DEPTH } from "./merkle-tree.js";
 
-const fromHex = (h: string): Uint8Array =>
-  Uint8Array.from(Buffer.from(h.replace(/^0x/, ""), "hex"));
+const MAX_LEAVES = 1 << TREE_DEPTH;
+
+const fromHex32 = (value: string, label: string): Uint8Array => {
+  const hex = value.replace(/^0x/, "");
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new Error(`${label} must be exactly 32 bytes of hex`);
+  }
+  return Uint8Array.from(Buffer.from(hex, "hex"));
+};
+
+const equalBytes = (a: Uint8Array, b: Uint8Array): boolean =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
 
 /** One `/tree/leaves` page response. */
 export interface LeavesPage {
@@ -58,6 +68,9 @@ export interface TreeLeavesMerkleProviderOptions {
   treeId?: number;
   /** Page size for `/tree/leaves` pagination (the TEE caps this). */
   pageSize?: number;
+  /** Final trust gate: require the reconstructed snapshot root to appear in
+   *  the on-chain shard's finalized recent-root ring. */
+  verifyRoot?: RootVerifier;
 }
 
 export class TreeLeavesMerkleProvider implements MerkleProofProvider {
@@ -68,11 +81,24 @@ export class TreeLeavesMerkleProvider implements MerkleProofProvider {
   constructor(private readonly opts: TreeLeavesMerkleProviderOptions) {
     this.treeId = opts.treeId ?? 0;
     this.pageSize = opts.pageSize ?? 500;
+    if (
+      !Number.isInteger(this.treeId) ||
+      this.treeId < 0 ||
+      this.treeId > 255
+    ) {
+      throw new Error(`tree id must be a u8, got ${this.treeId}`);
+    }
+    if (!Number.isInteger(this.pageSize) || this.pageSize <= 0) {
+      throw new Error(
+        `page size must be a positive integer, got ${this.pageSize}`,
+      );
+    }
   }
 
   /** Pull a fresh full-shard snapshot into a local tree. Call before a merge. */
   async refresh(): Promise<void> {
     const all: Uint8Array[] = [];
+    let advertisedRoot: Uint8Array | null = null;
     let from = 0;
     for (;;) {
       const page = await this.opts.fetcher(
@@ -80,11 +106,47 @@ export class TreeLeavesMerkleProvider implements MerkleProofProvider {
         from + this.pageSize,
         this.treeId,
       );
-      for (const e of page.leaves) all[e.leaf_index] = fromHex(e.value);
+      if (page.leaves.length > this.pageSize) {
+        throw new Error(
+          `/tree/leaves returned ${page.leaves.length} entries for a ${this.pageSize}-entry page`,
+        );
+      }
+      const pageRoot = fromHex32(page.merkle_root, "merkle_root");
+      if (advertisedRoot && !equalBytes(advertisedRoot, pageRoot)) {
+        throw new Error("/tree/leaves root changed while paging the snapshot");
+      }
+      advertisedRoot ??= pageRoot;
+      for (let i = 0; i < page.leaves.length; i++) {
+        const entry = page.leaves[i];
+        const expectedIndex = from + i;
+        if (expectedIndex >= MAX_LEAVES) {
+          throw new Error(
+            `/tree/leaves exceeds the ${MAX_LEAVES}-leaf capacity`,
+          );
+        }
+        if (entry.leaf_index !== expectedIndex) {
+          throw new Error(
+            `/tree/leaves expected leaf_index ${expectedIndex}, got ${entry.leaf_index}`,
+          );
+        }
+        all[entry.leaf_index] = fromHex32(
+          entry.value,
+          `leaf ${entry.leaf_index}`,
+        );
+      }
       if (page.leaves.length < this.pageSize) break;
       from += this.pageSize;
+      if (from === MAX_LEAVES) break;
     }
-    this.tree = await LocalMerkleTree.fromLeaves(all);
+    const nextTree = await LocalMerkleTree.fromLeaves(all);
+    const computedRoot = await nextTree.root();
+    if (!advertisedRoot || !equalBytes(computedRoot, advertisedRoot)) {
+      throw new Error(
+        "reconstructed /tree/leaves root does not match the TEE snapshot root",
+      );
+    }
+    await this.opts.verifyRoot?.(computedRoot, this.treeId);
+    this.tree = nextTree;
   }
 
   async getInclusionProof(leafIndex: bigint): Promise<{

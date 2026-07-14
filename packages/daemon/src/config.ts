@@ -38,8 +38,11 @@ export interface DaemonConfig {
    *  (dev only — NOT a security guarantee). Ignored when attestation is skipped. */
   attestationStrict: boolean;
   /** Cross-check the attested (quote-bound) tee_pubkeys set against on-chain
-   *  `vault_config.tee_pubkeys` at start. Default true; `NYX_DAEMON_ATTEST_ONCHAIN_CHECK=0`
-   *  disables. A mismatch refuses to trade; an RPC error warns + proceeds. */
+   *  `vault_config.tee_pubkeys` at finalized commitment on startup and every
+   *  minute. Default true. `NYX_DAEMON_ATTEST_ONCHAIN_CHECK=0` is accepted only
+   *  together with non-strict development mode. Startup fails on RPC, missing
+   *  config, or mismatch; runtime mismatch pauses immediately and RPC staleness
+   *  pauses new trading after five minutes. */
   attestOnchainCheck: boolean;
   /** PCCS endpoint for DCAP collateral. Defaults to Phala's PCCS in the verifier;
    *  override for a self-hosted/offline PCCS. Never taken from gateway input. */

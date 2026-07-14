@@ -23,6 +23,7 @@ import {
   type ExecutionPolicy,
   type OrderSide,
   type PlaceOrderRequest,
+  type RootVerifier,
   type StoredNote,
   type ValidInputProver,
 } from "@nyx/sdk";
@@ -61,6 +62,8 @@ export interface BuildPlaceRequestArgs {
   /** Merkle-tree shard the note lives in (default 0). */
   treeId?: number;
   fetchImpl?: typeof fetch;
+  /** Finalized on-chain recent-root-ring gate. Production daemon supplies it. */
+  verifyRoot?: RootVerifier;
 }
 
 export interface BuiltPlaceRequest {
@@ -105,6 +108,7 @@ export async function buildPlaceRequest(
     tokenMint: note.tokenMint,
     treeId: args.treeId,
     fetchImpl: args.fetchImpl,
+    verifyRoot: args.verifyRoot,
   });
 
   return { request, orderId };
