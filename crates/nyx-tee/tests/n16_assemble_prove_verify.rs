@@ -113,9 +113,14 @@ fn one_real_match() -> (MatchPair, NoteOpening, NoteOpening) {
         seller_relock_expiry: 0,
         price: 100,
         pyth_at_match: 100,
-        // C-08: VALID_MATCH_BATCH now binds `batch_slot === slot index`; this
-        // lone real match lands at pad index 0, so its batch_slot must be 0.
-        batch_slot: 0,
+        // The matcher stamps MatchPair.batch_slot with the actual on-chain
+        // `now_slot` (a large value), NOT the batch index. C-08 binds
+        // `batch_slot[i] === i` in-circuit, so the assembler MUST override this
+        // with the slot index — feeding this now_slot into the leaf is exactly
+        // the bug the live CVM caught (witness gen aborted on the assertion).
+        // This value stays here on purpose so the prove below regresses that
+        // the assembler uses `slot_index`, not `m.batch_slot`.
+        batch_slot: 476_000_000,
         match_id: 42,
         status: MatchStatus::Filled,
     };
@@ -159,6 +164,10 @@ async fn assembler_witness_proves_and_verifies_n16() {
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
         fee_slot: 1234,
+        // This lone real match lands at batch index 0. The circuit binds
+        // `batch_slot[0] === 0`; the assembler uses THIS, not the matcher's
+        // `now_slot` above, so the proof succeeds.
+        slot_index: 0,
         // Zero-fee exact-fill match → fee_rate_bps MUST be 0, or the in-circuit
         // fee floor `(fee+1)*10000 > notional*rate` would reject it (fee=0).
         fee_rate_bps: 0,
