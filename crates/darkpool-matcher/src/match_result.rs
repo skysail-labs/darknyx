@@ -149,8 +149,9 @@ pub struct RunBatchOutput {
     /// also feeds them into the change-note flush.
     pub fee_buckets: [crate::fee::FeeBucket; 2],
 
-    /// Slot the matcher was invoked at — copied onto every emitted
-    /// MatchPair as `batch_slot`.
+    /// Slot the matcher was invoked at — copied onto every emitted MatchPair.
+    /// Until the per-match fee cutover, this is also the fee-note identifier:
+    /// consumers must use this recorded value and never re-sample a slot.
     pub batch_slot: u64,
 }
 

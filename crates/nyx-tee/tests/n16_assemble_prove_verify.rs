@@ -163,7 +163,7 @@ async fn assembler_witness_proves_and_verifies_n16() {
         base_mint: base_mint(),
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
-        fee_slot: 1234,
+        fee_identifier: 1234,
         // This lone real match lands at batch index 0. The circuit binds
         // `batch_slot[0] === 0`; the assembler uses THIS, not the matcher's
         // `now_slot` above, so the proof succeeds.

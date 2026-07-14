@@ -20,7 +20,7 @@ runbooks have landed.
 | CS-03 | High | ZK + SDK + TEE | `remediation/match-batch-v3` | User and fee output inners are constrained, deterministic, and recoverable from consumed inputs; arbitrary-inner witness rejected | Open |
 | CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Open |
 | CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Open |
-| CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Open |
+| CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
 | CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Open |
 | CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Open |
 | CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm tests | Open |
@@ -155,6 +155,42 @@ Every remediation PR must record:
   reopens N-03 and N-07 and again permits zero-price market-ask fills and
   matcher/assembler output divergence when user metadata differs from the
   note-bound owner.
+
+### `remediation/fee-identifier` — CS-06
+
+- **Invariant restored.** The fee-note commitments and proof witness now use
+  the same identifier recorded in `RunBatchOutput.batch_slot`. Settlement
+  assembly obtains that value directly from the matcher output. The scheduler
+  no longer carries a slot source and `BatchAssemblyParams` deliberately has no
+  caller-supplied fee identifier, removing the race by construction instead of
+  relying on call-site discipline. CS-08 remains open for the v3 replacement of
+  this interim slot-derived identifier with collision-resistant per-match fee
+  derivation.
+- **Wire/circuit impact.** Internal Rust naming changes `fee_slot` to
+  `fee_identifier`; no API, Borsh field order, account layout, canonical domain,
+  circuit, proving key, verifier key, proof fixture, or transaction layout
+  changes. Existing devnet notes, orders, proofs, and deployed artifacts remain
+  compatible.
+- **Local evidence.** `cargo fmt --all -- --check` and `cargo clippy
+  --workspace --all-targets -- -D warnings` pass. `cargo test -p
+  darkpool-matcher`, `cargo test -p nyx-tee`, and `cargo test --workspace` all
+  pass, including the real N=2 proof round-trip, committed N=16 assembler
+  fixture, on-chain N=16 verifier, scheduler integration, load-generator smoke,
+  and vault property tests. The adversarial regression constructs matcher fee
+  commitments at slot S, identifies S+1 as the old scheduler race value, and
+  proves that both witness inners and signed payload commitments remain bound
+  to S. SBF and TypeScript gates were not rerun because this slice changes no
+  on-chain or TypeScript source and those gates passed on the immediately
+  preceding merged remediation branch.
+- **Devnet/CVM evidence.** Not applicable: the fix is confined to host-side
+  settlement assembly and its internal scheduler interface. It changes no
+  deployed program, circuit artifact, API/transport, boot path, dstack/KMS
+  handshake, or attestation surface, so a billable CVM run would add no distinct
+  coverage beyond the local matcher-to-witness regression and proof tests.
+- **Rollback.** Revert this PR. No notes, roots, orders, payloads, canonical
+  signatures, proofs, or deployed artifacts are invalidated, but reverting
+  restores the scheduler's ability to sample a later slot and can make every
+  nonzero-fee match in an otherwise valid batch unprovable.
 
 ## Mainnet release gates
 

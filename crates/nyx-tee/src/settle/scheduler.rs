@@ -20,7 +20,6 @@
 //! eviction policy (keep last N batches, or last T minutes).
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use darkpool_matcher::match_result::RunBatchOutput;
@@ -175,8 +174,6 @@ pub struct SettleDriver {
     /// The matcher state — read for the opening store at assembly,
     /// written to evict openings after a batch settles.
     pub matcher_state: Arc<RwLock<MatcherState>>,
-    /// Slot source for the fee-note derivation + marker expiry.
-    pub current_slot: Arc<AtomicU64>,
     pub cfg: SettleDriverConfig,
 }
 
@@ -329,13 +326,11 @@ async fn drive_batch(
     batch_id: BatchId,
     output: &RunBatchOutput,
 ) {
-    let now_slot = driver.current_slot.load(Ordering::Relaxed);
     let params = BatchAssemblyParams {
         batch_id,
         base_mint: driver.cfg.base_mint,
         quote_mint: driver.cfg.quote_mint,
         protocol_owner_commitment: driver.cfg.protocol_owner_commitment,
-        fee_slot: now_slot,
         fee_rate_bps: driver.cfg.fee_rate_bps,
         circuit_n: driver.cfg.circuit_n,
     };
@@ -404,6 +399,7 @@ async fn fail_batch(
 mod tests {
     use super::*;
     use darkpool_matcher::match_result::{MatchPair, MatchStatus};
+    use std::sync::atomic::AtomicU64;
 
     fn dummy_match(slot: u64) -> MatchPair {
         MatchPair {
@@ -688,7 +684,6 @@ mod tests {
         let driver = SettleDriver {
             ctx,
             matcher_state: matcher_state.clone(),
-            current_slot: Arc::new(AtomicU64::new(1000)),
             cfg: SettleDriverConfig {
                 base_mint,
                 quote_mint,
