@@ -50,7 +50,7 @@ runbooks have landed.
 | N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Closed |
 | N-06 | Medium | TEE | `remediation/tee-intake` | One collateral commitment reserves at most one live or pending order; lifecycle release tests | Closed |
 | N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Closed |
-| N-08 | Medium | TEE + SDK + daemon | `remediation/stream-consolidation` | Only in-band-authenticated `/v1/stream` remains; gap detection, refresh, reconnect, and cancel-on-disconnect preserved | Code complete |
+| N-08 | Medium | TEE + SDK + daemon | `remediation/stream-consolidation` | Only in-band-authenticated `/v1/stream` remains; gap detection, refresh, reconnect, and cancel-on-disconnect preserved | Closed |
 | N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Closed |
 | N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Closed |
 | N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Closed |
@@ -438,7 +438,8 @@ Every remediation PR must record:
 
 ### `remediation/stream-consolidation` — N-08
 
-- **Status.** Code complete; live image-53 API/attestation evidence is pending.
+- **Status.** Closed. PR #46 contains the implementation and the local and
+  live validation evidence recorded below.
 - **Invariant restored.** `/v1/stream` is the sole WebSocket route. Bearer
   authentication and refresh happen in-band, every server frame shares one
   connection-global sequence, and one reconnecting SDK session carries order
@@ -466,10 +467,20 @@ Every remediation PR must record:
   short-lived-token refresh on the same socket, reconnect + resubscribe,
   cancel-on-disconnect propagation, lag-triggered fill backfill, and shared
   daemon-session reuse.
-- **Devnet/CVM evidence.** Pending image `tee-v3-hardening-53`. This slice needs
-  the reset-free `cvm-api-surface` and attestation checks only; settlement,
-  circuits, vault instructions, and transaction layouts are unchanged, so a
-  billable settle would add no relevant coverage.
+- **Devnet/CVM evidence.** Image `tee-v3-hardening-53` booted successfully on
+  Phala app `634b2ab4c250466311f0cf09f772b6fd60b5be11`, instance
+  `f5cd2f294d1127d241d18e44dbb76b6910aa2a54`, with compose hash
+  `f1478996a0a3a89fa87ed6da1d7badaf518d13567af3df6df6ec9016551982a2`,
+  MRTD
+  `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`,
+  and primary TEE key `KgFsjoP9fDy78xgmEjn2DtRbPZ6G7t5AWDkPo1AAjsa`.
+  The reset-free live API suite passed 10/10, including in-band stream login
+  and 404 responses from every removed route. The real DCAP/attestation suite
+  passed 5/5, including full attested-key-set comparison with on-chain state
+  through the private Helius RPC. The CVM was stopped immediately after these
+  checks and the temporary deploy environment was securely deleted.
+  Settlement, circuits, vault instructions, and transaction layouts are
+  unchanged, so a billable settlement run would add no relevant coverage.
 - **Rollback.** Revert this PR and redeploy image 52. No notes, roots, orders,
   payloads, signatures, proofs, or deployed vault artifacts are invalidated,
   but rollback reopens N-08 and restores three token-in-query sockets plus the
