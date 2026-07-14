@@ -259,7 +259,8 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
       const takerAskVI = await harness.viProof(REPO_ROOT, taker, takerAskNote);
 
       const slot = await conn.getSlot("confirmed");
-      const expirySlot = BigInt(slot + 50_000);
+      // Production intake caps lock TTLs at 4,500 slots.
+      const expirySlot = BigInt(slot + 3_000);
 
       // Build a signed limit-order body (a plain-limit subset of the settle
       // test's inline builder — no fills/re-match knobs needed here).

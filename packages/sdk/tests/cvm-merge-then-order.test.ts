@@ -326,7 +326,10 @@ maybeDescribe(
 
         // ── 6. build + sign the two orders (mirrors cvm-settle-e2e) ──
         const slot = await conn.getSlot("confirmed");
-        const expirySlot = BigInt(slot + 50_000);
+        // Production intake caps lock TTLs at 4,500 slots. Keep the live
+        // fixture comfortably inside that boundary so it exercises settlement
+        // instead of the intended long-expiry rejection path.
+        const expirySlot = BigInt(slot + 3_000);
         async function buildOrder(
           p: Persona,
           side: OrderSide,
