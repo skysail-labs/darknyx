@@ -31,14 +31,16 @@
 //! matches the guardian at the given index. Quorum is 13/19 for
 //! mainnet set 7 (see `MAINNET_GUARDIAN_SET_INDEX`).
 //!
-//! **NOT verified at this layer**: the Pyth-internal Merkle-proof
-//! inclusion of a specific price feed in the attested Merkle
-//! root. That's a Pyth-Wormhole-Accumulator-protocol concern; we
-//! treat the Hermes-supplied `parsed[]` price as the truth bound
-//! to the attested VAA root in v2. See
-//! `docs/tee-architecture.md` §5.6 "What a malicious TEE could
-//! actually do" — the trade-off is documented and closed in v3
-//! when on-chain Pyth verification lands.
+//! **NOT verified at this layer** (but verified one layer up): the
+//! Pyth-internal Merkle-proof inclusion of a specific price feed
+//! under the attested Merkle root. This module proves *the
+//! guardians signed a VAA*; `oracle::accumulator` proves *the price
+//! we use is committed under that VAA's root*, and `oracle::sync`
+//! chains them (guardian-verify → root from the verified payload →
+//! Merkle inclusion → decode the binary price). That closed the
+//! C-05 / A-2 gap where the price was taken from Hermes's untrusted
+//! JSON `parsed[]` instead of the guardian-signed binary. See
+//! `docs/oracle-accumulator-notes.md` for the confirmed wire spec.
 
 use anyhow::{Context, Result};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};

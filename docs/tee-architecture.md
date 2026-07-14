@@ -634,8 +634,12 @@ the result for the matching tick to consume.
 │  tokio interval (~1 s):                              │
 │    GET https://hermes.pyth.network/v2/updates/       │
 │        price/latest?ids[]=<feed_id>                  │
-│    → parse VAA (Wormhole guardian signed)            │
-│    → verify signature against guardian set (cached)  │
+│    → parse AccumulatorUpdateData (PNAU) envelope     │
+│    → verify VAA guardian sigs (Wormhole set, cached) │
+│    → extract Merkle root from the VERIFIED payload   │
+│    → prove the price message's Keccak160 Merkle      │
+│      inclusion under that root; decode the BINARY    │
+│      price (C-05 — not Hermes's untrusted JSON)      │
 │    → write cache: {                                  │
 │        twap, confidence, exponent,                   │
 │        publish_time, publish_slot                    │
@@ -676,6 +680,14 @@ someone pushes an update tx, which costs CU and tx fees. In v2:
   in-process. The TEE doesn't need to trust Pyth's web infra;
   it only needs to trust the guardian set (whose pubkeys are
   baked into the TEE binary, covered by compose-hash).
+- The price is bound to those signatures: `oracle::accumulator`
+  proves the consumed price message is Merkle-included under the
+  guardian-signed root and decodes the price from that binary
+  message. Hermes's JSON `parsed[]` price is used only as a
+  cross-check (a JSON-vs-binary split is rejected). A malicious
+  Hermes (or a MITM without RA-TLS) therefore cannot substitute a
+  fabricated price alongside a genuine VAA — the C-05 / A-2 fix.
+  Confirmed wire spec: `docs/oracle-accumulator-notes.md`.
 
 #### Cache structure
 

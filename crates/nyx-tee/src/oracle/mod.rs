@@ -7,11 +7,13 @@
 //! See `docs/tee-architecture.md` §5.6 for the full design + the
 //! v2-vs-v3 trust trade-off discussion.
 
+pub mod accumulator;
 pub mod cache;
 pub mod hermes;
 pub mod sync;
 pub mod vaa;
 
+pub use accumulator::{AccumulatorError, AccumulatorUpdate, PriceFeedMessage, PriceUpdate};
 pub use cache::{CachedPrice, OracleCache, OracleSnapshot};
 pub use hermes::{HermesClient, HermesError, HermesPriceUpdate};
 pub use sync::{spawn_oracle_sync, SyncConfig};
