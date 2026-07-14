@@ -27,6 +27,7 @@ pub use instructions::close_vault_config;
 pub use instructions::create_wallet;
 pub use instructions::deposit;
 pub use instructions::initialize;
+pub use instructions::initialize_market;
 pub use instructions::lock_note;
 pub use instructions::merge;
 pub use instructions::release_lock;
@@ -37,6 +38,7 @@ pub use instructions::set_protocol_config;
 pub use instructions::set_tee_pubkey;
 pub use instructions::tee_forced_settle;
 pub use instructions::tee_forced_settle_batched;
+pub use instructions::update_market_config;
 pub use instructions::verify_match_batch;
 pub use instructions::withdraw;
 
@@ -53,11 +55,30 @@ pub mod vault {
     /// Merkle-tree shards are created separately via `initialize_tree`.
     pub fn initialize(
         ctx: Context<Initialize>,
-        tee_pubkey: Pubkey,
+        operations_admin: Pubkey,
+        tee_pubkeys: Vec<Pubkey>,
         root_key: Pubkey,
         num_trees: u8,
     ) -> Result<()> {
-        initialize::initialize_handler(ctx, tee_pubkey, root_key, num_trees)
+        initialize::initialize_handler(ctx, operations_admin, tee_pubkeys, root_key, num_trees)
+    }
+
+    /// Initialize one enabled mint-pair market. Mint decimals are read from the
+    /// SPL accounts and scaled-price parameters are governance-bounded.
+    pub fn initialize_market(
+        ctx: Context<InitializeMarket>,
+        price_scale: u64,
+        tick_size: u64,
+        min_order_size: u64,
+        circuit_breaker_bps: u64,
+    ) -> Result<()> {
+        initialize_market::initialize_market_handler(
+            ctx,
+            price_scale,
+            tick_size,
+            min_order_size,
+            circuit_breaker_bps,
+        )
     }
 
     /// Initialize one Merkle-tree shard account (`tree_id < num_trees`).
@@ -180,14 +201,28 @@ pub mod vault {
         ctx: Context<SetProtocolConfig>,
         protocol_owner_commitment: [u8; 32],
         fee_rate_bps: u16,
-        tick_size: u64,
-        min_order_size: u64,
-        circuit_breaker_bps: u64,
     ) -> Result<()> {
         set_protocol_config::set_protocol_config_handler(
             ctx,
             protocol_owner_commitment,
             fee_rate_bps,
+        )
+    }
+
+    /// Update or pause an existing market. Its mint identity and snapshotted
+    /// decimals remain immutable.
+    pub fn update_market_config(
+        ctx: Context<UpdateMarketConfig>,
+        enabled: bool,
+        price_scale: u64,
+        tick_size: u64,
+        min_order_size: u64,
+        circuit_breaker_bps: u64,
+    ) -> Result<()> {
+        update_market_config::update_market_config_handler(
+            ctx,
+            enabled,
+            price_scale,
             tick_size,
             min_order_size,
             circuit_breaker_bps,

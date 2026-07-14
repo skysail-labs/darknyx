@@ -1,13 +1,8 @@
-//! Admin-gated mutator for the protocol-fee + matcher-governance fields of
-//! `VaultConfig` (the single on-chain home for TEE-adopted config).
+//! Admin-gated mutator for the global protocol-fee fields of `VaultConfig`.
 //!
-//! `protocol_owner_commitment` + `fee_rate_bps` + `tick_size` +
-//! `min_order_size` + `circuit_breaker_bps` are all zero at `initialize`
-//! time; this ix is the post-deployment setter so governance can (a) enable
-//! protocol fees on a live deployment without a full re-initialisation,
-//! (b) rotate the commitment that protocol-fee notes are addressed to, and
-//! (c) publish the matcher params the TEE adopts at boot (0 = leave the TEE
-//! on its env/dev default).
+//! `protocol_owner_commitment` + `fee_rate_bps` are zero at `initialize` time;
+//! this ix enables or updates fees without a re-initialisation. Mint identity,
+//! price scale, tick, minimum size, and breaker bounds live in `MarketConfig`.
 //!
 //! Authorisation: only `vault_config.admin` can call this. `fee_rate_bps`
 //! is clamped to 10_000 (= 100%) to keep floor-division safe.
@@ -37,9 +32,6 @@ pub fn set_protocol_config_handler(
     ctx: Context<SetProtocolConfig>,
     protocol_owner_commitment: [u8; 32],
     fee_rate_bps: u16,
-    tick_size: u64,
-    min_order_size: u64,
-    circuit_breaker_bps: u64,
 ) -> Result<()> {
     require!(fee_rate_bps <= MAX_FEE_RATE_BPS, VaultError::InvalidFeeRate);
 
@@ -53,11 +45,6 @@ pub fn set_protocol_config_handler(
     let old_rate = cfg.fee_rate_bps;
     cfg.protocol_owner_commitment = protocol_owner_commitment;
     cfg.fee_rate_bps = fee_rate_bps;
-    // Matcher governance params (single-place config in VaultConfig). Not
-    // enforced on the settle hot path — the TEE adopts them at boot; 0 = unset.
-    cfg.tick_size = tick_size;
-    cfg.min_order_size = min_order_size;
-    cfg.circuit_breaker_bps = circuit_breaker_bps;
 
     emit!(ProtocolConfigUpdated {
         admin: ctx.accounts.admin.key(),
@@ -65,9 +52,6 @@ pub fn set_protocol_config_handler(
         new_protocol_owner_commitment: protocol_owner_commitment,
         old_fee_rate_bps: old_rate,
         new_fee_rate_bps: fee_rate_bps,
-        new_tick_size: tick_size,
-        new_min_order_size: min_order_size,
-        new_circuit_breaker_bps: circuit_breaker_bps,
     });
     Ok(())
 }
@@ -79,7 +63,4 @@ pub struct ProtocolConfigUpdated {
     pub new_protocol_owner_commitment: [u8; 32],
     pub old_fee_rate_bps: u16,
     pub new_fee_rate_bps: u16,
-    pub new_tick_size: u64,
-    pub new_min_order_size: u64,
-    pub new_circuit_breaker_bps: u64,
 }

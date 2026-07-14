@@ -293,13 +293,14 @@ place). Run `cargo build-sbf` first if you touched a program.
 ### 4.4 Fresh devnet state — `devnet-setup.test.ts`
 
 This is the canonical "start clean" step. It: creates a **fresh BASE +
-QUOTE SPL mint pair**, `vault::initialize(numTrees)`, loops
+QUOTE SPL mint pair**, `vault::initialize(operationsAdmin, teePubkeys, rootKey,
+numTrees)`, initializes the mint-pair **`MarketConfig`**, loops
 **`initialize_tree(j)`** for j∈0..K, **`reset_merkle_tree(j)`** per shard,
 `set_protocol_config` (owner commitment + 30 bps fee), creates the **static
 settle ALT** (`[vault_config, sysvar, system, merkle_tree(0..K-1)]` — the
 `settleLookupTable` the CVM needs), and writes everything to
 **`.devnet/e2e-config.json`** (mints, settle ALT, protocol config,
-**`numTrees`**, **`merkleTreePdas[]`**).
+**`numTrees`**, **`merkleTreePdas[]`**, and governed market fields).
 
 ```sh
 SOLANA_RPC_URL="$HELIUS" \

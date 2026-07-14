@@ -698,12 +698,11 @@ A longer error catalogue is in `scripts/dev-commands.md §10`.
 
 ## 11. Committing
 
-Every commit uses `git commit -s` (adds `Signed-off-by` from `user.email`),
-then amend the AI co-author trailer:
+Every commit uses `git commit -s` (adds `Signed-off-by` from `user.email`).
+Do not add model, agent, or AI co-author trailers.
 
 ```
 git commit -s ...
-git commit --amend --no-edit --trailer "Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
 Subject: `<type>(<scope>): <imperative summary>`. Body: the **why** (the
@@ -737,24 +736,22 @@ it after; never commit a secret).**
 > `NYX_TEE_FEE_RATE_BPS` (default 30); fees-on without
 > `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` warns (unclaimable).
 
-> **On-chain governance config (single place = `VaultConfig`).** `VaultConfig`
-> is the one on-chain home for TEE-adopted config: `fee_rate_bps` (a fee floor
+> **On-chain governance config.** Global authority and fee state lives in
+> `VaultConfig`: `fee_rate_bps` (a fee floor
 > enforced IN-CIRCUIT by VALID_MATCH_BATCH — it's a public input bound on-chain
 > via `verify_match_batch`; `tee_forced_settle_batched` no longer re-derives it
 > from plaintext amounts, which is what let those amounts leave the payload
 > (amount-privacy P1b). NOT vestigial; the C-04 audit fix tightens the circuit
-> constraint from a floor to an EXACT fee) + `protocol_owner_commitment`
-> + the matcher params `tick_size` / `min_order_size` / `circuit_breaker_bps`.
-> All are set by the admin ix `set_protocol_config` (SDK
-> `buildSetProtocolConfigInstruction` — keep the arg order in lockstep, §7/§8.3).
-> The TEE reads them in ONE fetch **at boot** (`main.rs::read_on_chain_vault_config`
-> → `solana_rpc::vault_config`): it adopts the on-chain `fee_rate_bps` (fee floor)
-> and, for each matcher param, adopts a non-zero on-chain value over the env/dev
-> default (`0 = unset`). This is a **boot read only** — a live re-poll is
-> deliberately deferred. New `VaultConfig` fields append after `_padding`, so the
-> byte offsets the SDK (`vault-client.ts`) + TEE (`vault_config.rs`, pinned by a
-> unit test) parse must move in lockstep; growing the zero-copy account needs a
-> devnet re-foundation (`close_vault_config` → `initialize`).
+> constraint from a floor to an EXACT fee) and `protocol_owner_commitment`, set
+> through `set_protocol_config`. Mint-pair identity, mint decimals,
+> `price_scale`, tick, minimum size, circuit-breaker bounds, and the trading kill
+> switch live in the `[b"market_config", base_mint, quote_mint]` `MarketConfig`
+> PDA, initialized and updated by the operations admin. The TEE reads both
+> accounts at boot and refuses an explicitly disabled market. A live finalized
+> re-poll is delivered by the later daemon-trust remediation slice. Keep the
+> Rust/TypeScript account parsers and instruction builders byte-identical to the
+> on-chain layouts; a `VaultConfig` layout change requires a clean devnet
+> re-foundation (`close_vault_config` → `initialize`).
 
 > **CodeRabbit** reviews via `.coderabbit.yaml` (path instructions encode the
 > §5/§6/§7/§8 invariants). Treat its findings like any review — verify each
@@ -762,7 +759,7 @@ it after; never commit a secret).**
 
 ---
 
-*Last updated: 2026-06-04 — current architecture: vault (only on-chain
+*Last updated: 2026-07-14 — current architecture: vault (only on-chain
 program) + the in-CVM matcher/settler (`crates/nyx-tee`) on Phala, validated
 end-to-end on devnet (`cvm-settle-e2e` real settle + loadgen). The
 `matching_engine` / MagicBlock-ER / PER path has been removed. Note model is

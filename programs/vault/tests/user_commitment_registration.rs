@@ -66,7 +66,8 @@ struct RawGroth16Proof {
 
 #[derive(BorshSerialize)]
 struct InitializeArgs {
-    tee_pubkey: [u8; 32],
+    operations_admin: [u8; 32],
+    tee_pubkeys: Vec<[u8; 32]>,
     root_key: [u8; 32],
     num_trees: u8,
 }
@@ -107,7 +108,8 @@ fn test_user_commitment_registration() {
 
     let mut init_data = common::anchor_disc("initialize").to_vec();
     let init_args = InitializeArgs {
-        tee_pubkey: tee_kp.pubkey().to_bytes(),
+        operations_admin: admin.pubkey().to_bytes(),
+        tee_pubkeys: vec![tee_kp.pubkey().to_bytes()],
         root_key: root_kp.pubkey().to_bytes(),
         num_trees: 1,
     };

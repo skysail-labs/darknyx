@@ -28,7 +28,13 @@ pub fn rotate_root_key_handler(ctx: Context<RotateRootKey>, new_root_key: Pubkey
         ctx.accounts.current_root_key.key() == cfg.root_key,
         VaultError::Unauthorized
     );
-    require!(new_root_key != Pubkey::default(), VaultError::Unauthorized);
+    require!(
+        new_root_key != Pubkey::default()
+            && new_root_key != cfg.root_key
+            && new_root_key != cfg.admin
+            && !cfg.is_authorized_tee(&new_root_key),
+        VaultError::InvalidRootKey
+    );
     cfg.root_key = new_root_key;
 
     emit!(RootKeyRotated {

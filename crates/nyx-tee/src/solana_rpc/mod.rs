@@ -29,6 +29,7 @@
 
 pub mod client;
 pub mod error;
+pub mod market_config;
 pub mod vault_config;
 
 pub use client::{

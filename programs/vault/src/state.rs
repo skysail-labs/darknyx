@@ -39,6 +39,11 @@ pub const MAX_TEE_KEYS: usize = 16;
 /// of them per block.
 pub const MAX_TREES: u8 = 16;
 
+/// Governance ceiling for a market's circuit-breaker band. 10_000 bps is a
+/// 100% move from the oracle anchor; larger values no longer provide a useful
+/// safety bound and make configuration mistakes harder to detect.
+pub const MAX_CIRCUIT_BREAKER_BPS: u64 = 10_000;
+
 /// Global vault configuration. The Merkle-tree STATE lives in the per-tree
 /// [`MerkleTree`] accounts (sharded); this account holds only the
 /// tree-independent config + the precomputed empty-subtree roots (identical for
@@ -69,21 +74,8 @@ pub struct VaultConfig {
     /// Number of Merkle-tree shards the matcher round-robins across.
     pub num_trees: u8,
     pub bump: u8,
-    /// Explicit alignment padding so the following `u64` config fields start
-    /// 8-aligned with no implicit padding (zero-copy Pod requirement).
+    /// Explicit tail padding so the zero-copy struct has no implicit padding.
     pub _padding: [u8; 3],
-    /// Matcher governance params (single-place config). Read by the TEE **at
-    /// boot only** (never on the settle hot path). `0 = unset` ⇒ the TEE keeps
-    /// its env/dev default, so governance can publish only the params it cares
-    /// about. A live re-poll is intentionally deferred.
-    ///
-    /// Smallest price increment in base units (`MatchConfig::tick_size`).
-    pub tick_size: u64,
-    /// Minimum order size in base units (`MatchConfig::min_order_size`).
-    pub min_order_size: u64,
-    /// Circuit-breaker band: max |clearing − twap| / twap in bps
-    /// (`MatchConfig::circuit_breaker_bps`).
-    pub circuit_breaker_bps: u64,
 }
 
 impl VaultConfig {
@@ -94,6 +86,38 @@ impl VaultConfig {
         let n = (self.num_tee_keys as usize).min(MAX_TEE_KEYS);
         self.tee_pubkeys[..n].contains(key)
     }
+}
+
+/// One governed trading market. Asset identity and scaled-price parameters
+/// live in their own PDA so VALID_MATCH_BATCH can bind every proof slot to one
+/// unambiguous mint pair without making `VaultConfig` market-specific.
+///
+/// PDA seeds: `[b"market_config", base_mint, quote_mint]`.
+#[account]
+#[derive(Default)]
+pub struct MarketConfig {
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    /// Fixed-point denominator in
+    /// `quote_amount = floor(base_amount * clearing_price / price_scale)`.
+    pub price_scale: u64,
+    /// Smallest permitted price increment in scaled price units.
+    pub tick_size: u64,
+    /// Minimum order quantity in base-asset atomic units.
+    pub min_order_size: u64,
+    /// Max `|clearing_price - oracle_twap| / oracle_twap`, in bps.
+    pub circuit_breaker_bps: u64,
+    /// Snapshotted from the SPL mint accounts at initialization.
+    pub base_decimals: u8,
+    pub quote_decimals: u8,
+    /// Governance kill switch. A disabled market must not accept new trading.
+    pub enabled: bool,
+    pub bump: u8,
+}
+
+impl MarketConfig {
+    pub const SEED: &'static [u8] = b"market_config";
+    pub const SPACE: usize = 8 + 32 + 32 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 1;
 }
 
 /// One Merkle-tree shard: an append-only incremental tree + its recent-root

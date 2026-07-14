@@ -25,7 +25,7 @@ use crate::oracle::{
 pub struct SyncConfig {
     /// Feed ids to refresh on every tick. One entry per market.
     /// Currently hardcoded at startup; later PRs will read this
-    /// from on-chain `MatchingConfig` per market.
+    /// from the governed on-chain `MarketConfig` per mint pair.
     pub feed_ids: Vec<String>,
     /// Refresh cadence. Default 1 s — fast enough that the
     /// matcher's 2 s tick always sees a fresh value, slow enough

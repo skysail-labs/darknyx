@@ -503,8 +503,9 @@ reconstructs them deterministically and withdraws via standard `VALID_SPEND`.
 
 Each order must lock **at least** `nominal + its own fee` collateral (intake
 derives this floor in `orders.rs`) or `run_batch` rejects the match as
-conservation-breaking. The CVM fee rate is `NYX_TEE_FEE_RATE_BPS` (default 30);
-`VaultConfig.fee_rate_bps` is vestigial for the TEE settle path.
+conservation-breaking. `VaultConfig.fee_rate_bps` is the authoritative
+on-chain fee rate; the CVM adopts it at boot over the
+`NYX_TEE_FEE_RATE_BPS` fallback (default 30).
 
 **Over-collateralization.** An order MAY lock a note larger than that floor —
 e.g. point a 500-USDC deposit at a 50-USDC order. The client declares the
@@ -2008,6 +2009,7 @@ or via withdraw (layer 3 alone).
 | `zk_spend_roundtrip.rs` | VALID_SPEND (v2 inner_hash) end-to-end + Poseidon parity vs circomlib |
 | `user_commitment_registration.rs` | `create_wallet` flow with proof verification |
 | `set_protocol_config.rs` / `set_tee_pubkey.rs` | admin-gated config + TEE-signer rotation (the whole K-key `tee_pubkeys` set in one ix) |
+| `initialize_governance.rs` / `market_config.rs` | split-authority bootstrap, exact K-key invariant, and mint/decimal/scale/bounds governance |
 | `merkle_host.rs` | pure-Rust Merkle invariants (poseidon2, zero-subtree, append) |
 | `tee_forced_settle_batched.rs` | 1:N `BatchValidityMarker` lifecycle (two matches share one marker; the close-after-every-match regression) |
 | `match_batch_verify.rs` | real N=16 proof → on-chain `verify_match_batch` acceptance (committed fixture) |

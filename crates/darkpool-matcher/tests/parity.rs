@@ -106,6 +106,7 @@ fn config(circuit_breaker_bps: u64, min_order_size: u64) -> MatchConfig {
     MatchConfig {
         base_mint,
         quote_mint,
+        price_scale: 100_000_000,
         tick_size: 1,
         min_order_size,
         circuit_breaker_bps,

@@ -100,7 +100,7 @@ pub fn build_signed_place_body(
     // merkle_root / VALID_INPUT proof are not verified at intake (only
     // stored), so synthetic values are fine.
     // TODO(loadgen): take mints via --base-mint/--quote-mint once the TEE
-    // reads its market from the on-chain MatchingConfig PDA.
+    // reads its market from the on-chain MarketConfig PDA.
     let nominal = match side {
         OrderSide::Bid => amount.saturating_mul(price_limit).max(amount),
         OrderSide::Ask => amount,

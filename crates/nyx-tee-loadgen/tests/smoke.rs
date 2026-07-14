@@ -213,6 +213,7 @@ fn dev_match_config() -> MatchConfig {
     MatchConfig {
         base_mint,
         quote_mint,
+        price_scale: 100_000_000,
         tick_size: 1,
         min_order_size: 0,
         circuit_breaker_bps: 100_000,

@@ -2,7 +2,7 @@
  * Phase-5 Nyx Darkpool — one-time devnet bootstrap for the E2E trade flow.
  *
  * This file is meant to run ONCE per environment (or whenever the token pair
- * changes / the market is reset). It is idempotent where possible — init_market
+ * changes / the market is reset). It is idempotent where possible — initialize_market
  * against an existing market will fail, so we key the market PDA off the
  * (base_mint, quote_mint) pair and only re-create if the config is absent.
  *
@@ -13,17 +13,17 @@
  *   3. Creates two fresh SPL mints (BASE + QUOTE share the same decimal count,
  *      default 6 each — override with DEMO_MINT_DECIMALS=0..9) and records them.
  *   4. Initialises the vault (if not already done) with the deployed program.
- *   5. Calls `set_protocol_config` to enable a 30 bps protocol fee, addressed
- *      to a synthetic protocol-owner commitment.
- *   6. Chooses a "market" pubkey (a fresh Keypair.publicKey) and calls
- *      `init_market` on matching_engine with that pair.
- *   7. Writes everything to `.devnet/e2e-config.json` so the flow test can
+ *   5. Creates every configured Merkle-tree shard and resets it to empty.
+ *   6. Initializes the mint-pair `MarketConfig` and sets the global 30 bps
+ *      protocol fee to a synthetic protocol-owner commitment.
+ *   7. Creates the static settlement address lookup table.
+ *   8. Writes everything to `.devnet/e2e-config.json` so the flow test can
  *      consume it without duplicating PDA derivation.
  *
  * NOT done here (intentionally, to keep this test focused on setup):
  *   - Creating end-user Alice / Bob keypairs or depositing.
- *   - Calling `delegate_dark_clob` — the flow test runs `run_batch` directly
- *     on L1 (a deliberate shortcut; see §9 of dev-commands.md).
+ *   - Deploying or starting the CVM; follow `docs/cvm-run-runbook.md` after
+ *     this foundation is finalized.
  *
  * Run:
  *   RUN_DEVNET_E2E=1 \
@@ -57,13 +57,19 @@ import {
 
 import {
   buildInitializeInstruction,
+  buildInitializeMarketInstruction,
   buildInitializeTreeInstruction,
   buildResetMerkleTreeInstruction,
   buildSetProtocolConfigInstruction,
+  marketConfigPda,
   merkleTreePda,
   staticSettleAltAddresses,
   vaultConfigPda,
 } from "../src/idl/vault-client.js";
+import {
+  VAULT_CONFIG_ACCOUNT_LEN,
+  vaultConfigTeePubkeys,
+} from "../src/tee/vault-config.js";
 
 // ────────────────────────────────────────────────────────────────────────────
 // env + keypair loading
@@ -77,13 +83,17 @@ const maybeDescribe = RUN ? describe : describe.skip;
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
 
-const L1_RPC_URL = process.env.L1_RPC_URL ?? "https://api.devnet.solana.com";
+const L1_RPC_URL =
+  process.env.SOLANA_RPC_URL ??
+  process.env.L1_RPC_URL ??
+  "https://api.devnet.solana.com";
 const VAULT_PROGRAM_ID = new PublicKey(
   process.env.VAULT_PROGRAM_ID ??
     "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
 const PROTOCOL_FEE_BPS = Number(process.env.PROTOCOL_FEE_BPS ?? "30");
+const PRICE_SCALE = BigInt(process.env.NYX_PRICE_SCALE ?? "100000000");
 
 /** Number of Merkle-tree shards to provision. The CVM settle worker
  *  round-robins settles across K shards + K fee-payer keys; this must equal
@@ -180,6 +190,14 @@ export interface E2EConfig {
     ownerCommitmentHex: string;
     feeRateBps: number;
   };
+  marketConfigPda: string;
+  market: {
+    enabled: boolean;
+    priceScale: string;
+    tickSize: string;
+    minOrderSize: string;
+    circuitBreakerBps: string;
+  };
   vaultConfigPda: string;
   /** Number of Merkle-tree shards provisioned. The CVM's NYX_TEE_NUM_TREES
    *  must equal this. */
@@ -208,6 +226,8 @@ function saveConfig(cfg: E2EConfig) {
 async function tryReadVaultConfig(
   connection: Connection,
   vaultPda: PublicKey,
+  expectedAdmin: PublicKey,
+  expectedRootKey: PublicKey,
 ): Promise<boolean> {
   const info = await connection.getAccountInfo(vaultPda, "confirmed");
   // A closed VaultConfig (post `close_vault_config`) can briefly linger as a
@@ -215,7 +235,31 @@ async function tryReadVaultConfig(
   // reclaimed. Only a FUNDED, vault-program-owned account is genuinely
   // initialized — an existence-only check would wrongly skip `initialize` during
   // a re-foundation (VaultConfig layout change) and then fail at reset_merkle_tree.
-  return !!info && info.lamports > 0 && info.owner.equals(VAULT_PROGRAM_ID);
+  if (!info || info.lamports === 0 || !info.owner.equals(VAULT_PROGRAM_ID)) {
+    return false;
+  }
+  if (info.data.length !== VAULT_CONFIG_ACCOUNT_LEN) {
+    throw new Error(
+      `VaultConfig has stale ${info.data.length}-byte layout; run close-vault-config.mjs before this clean re-foundation`,
+    );
+  }
+  const teePubkeys = vaultConfigTeePubkeys(info.data);
+  if (teePubkeys.length !== NUM_TREES) {
+    throw new Error(
+      `existing VaultConfig has ${teePubkeys.length} trees/signers but NYX_NUM_TREES=${NUM_TREES}; close and re-found it`,
+    );
+  }
+  const storedAdmin = new PublicKey(info.data.subarray(8, 40));
+  const storedRootKey = new PublicKey(info.data.subarray(552, 584));
+  if (
+    !storedAdmin.equals(expectedAdmin) ||
+    !storedRootKey.equals(expectedRootKey)
+  ) {
+    throw new Error(
+      "existing VaultConfig governance does not match the supplied admin/root keypairs; refusing an implicit authority change",
+    );
+  }
+  return true;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -318,15 +362,35 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // ────────────────────────────────────────────────────────────────────
       const [vaultPda] = vaultConfigPda(VAULT_PROGRAM_ID);
       bullet(`vault_config PDA:   ${vaultPda.toBase58()}`);
-      const alreadyInit = await tryReadVaultConfig(connection, vaultPda);
+      const alreadyInit = await tryReadVaultConfig(
+        connection,
+        vaultPda,
+        admin.publicKey,
+        rootKey.publicKey,
+      );
       if (alreadyInit) {
         bullet("vault_config exists; skipping initialize");
       } else {
+        const initialTeePubkeys = (() => {
+          if (NUM_TREES === 1) return [tee.publicKey];
+          const raw = (process.env.NYX_INITIAL_TEE_PUBKEYS ?? "")
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean)
+            .map((value) => new PublicKey(value));
+          if (raw.length !== NUM_TREES) {
+            throw new Error(
+              `NYX_INITIAL_TEE_PUBKEYS must contain ${NUM_TREES} keys for a ${NUM_TREES}-shard initialization`,
+            );
+          }
+          return raw;
+        })();
         const initTx = new Transaction().add(
           buildInitializeInstruction({
             programId: VAULT_PROGRAM_ID,
-            admin: admin.publicKey,
-            teePubkey: tee.publicKey,
+            initializer: admin.publicKey,
+            operationsAdmin: admin.publicKey,
+            teePubkeys: initialTeePubkeys,
             rootKey: rootKey.publicKey,
             numTrees: NUM_TREES,
           }),
@@ -374,7 +438,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       }
 
       // ────────────────────────────────────────────────────────────────────
-      step(3, "Set protocol-fee config (30 bps, synthetic owner commitment)");
+      step(3, "Initialize market + set protocol-fee config");
       // ────────────────────────────────────────────────────────────────────
       // Protocol-owner commitment is an opaque 32-byte field; treat it as the
       // Poseidon commitment of the protocol multisig's viewing-key family.
@@ -382,8 +446,8 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // here we use a deterministic constant so the test is reproducible.
       // NOTE: Poseidon requires inputs < BN254 Fr modulus (first byte <= 0x30).
       // "nyx-protocol-owner-v1" starts with 0x6e which exceeds the field — we
-      // zero the top byte to keep the commitment in-range. Mirrors the
-      // `user_commitment[0] = 0` pattern in the matching_engine Rust harness.
+      // zero the top byte to keep the commitment in-range, matching the
+      // field-safe fixtures used by the Rust/TypeScript parity harnesses.
       const protocolOwnerCommitment = new Uint8Array(32);
       const tag = new TextEncoder().encode("nyx-protocol-owner-v1");
       protocolOwnerCommitment.set(tag.slice(0, 32));
@@ -411,11 +475,9 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
         tx(`reset_merkle_tree(${treeId}) (devnet-only)`, resetSig);
       }
 
-      // Publish the matcher-governance params on-chain (single-place config in
-      // VaultConfig). The TEE adopts each non-zero value over its env/dev default
-      // at boot (0 = unset). Non-zero + != the env defaults so a CVM run proves
-      // the on-chain read fired (look for "adopting on-chain matcher param" in
-      // the boot log).
+      // Publish mint-pair matcher governance in its MarketConfig PDA. The TEE
+      // adopts these values over its env/dev defaults at boot. Non-default
+      // values make the governed read visible in the CVM boot log.
       //
       // circuit_breaker_bps is 5000 (50% band), NOT a tight production value:
       // cvm-settle-e2e submits synthetic bid=1.2x / ask=0.8x oracle spreads, so
@@ -427,15 +489,39 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       const ON_CHAIN_TICK_SIZE = 5n;
       const ON_CHAIN_MIN_ORDER_SIZE = 1_000n;
       const ON_CHAIN_CIRCUIT_BREAKER_BPS = 5_000n;
+      const [marketPda] = marketConfigPda(
+        VAULT_PROGRAM_ID,
+        baseMint.publicKey,
+        quoteMint.publicKey,
+      );
+      const marketExists = await connection.getAccountInfo(marketPda);
+      if (!marketExists) {
+        const marketTx = new Transaction().add(
+          buildInitializeMarketInstruction({
+            programId: VAULT_PROGRAM_ID,
+            admin: admin.publicKey,
+            baseMint: baseMint.publicKey,
+            quoteMint: quoteMint.publicKey,
+            priceScale: PRICE_SCALE,
+            tickSize: ON_CHAIN_TICK_SIZE,
+            minOrderSize: ON_CHAIN_MIN_ORDER_SIZE,
+            circuitBreakerBps: ON_CHAIN_CIRCUIT_BREAKER_BPS,
+          }),
+        );
+        const marketSig = await sendAndConfirmTransaction(
+          connection,
+          marketTx,
+          [admin],
+          { commitment: "confirmed" },
+        );
+        tx("initialize_market(base/quote)", marketSig);
+      }
       const spcTx = new Transaction().add(
         buildSetProtocolConfigInstruction({
           programId: VAULT_PROGRAM_ID,
           admin: admin.publicKey,
           protocolOwnerCommitment,
           feeRateBps: PROTOCOL_FEE_BPS,
-          tickSize: ON_CHAIN_TICK_SIZE,
-          minOrderSize: ON_CHAIN_MIN_ORDER_SIZE,
-          circuitBreakerBps: ON_CHAIN_CIRCUIT_BREAKER_BPS,
         }),
       );
       const spcSig = await sendAndConfirmTransaction(
@@ -446,11 +532,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
           commitment: "confirmed",
         },
       );
-      tx(
-        `set_protocol_config(fee_rate=${PROTOCOL_FEE_BPS}bps, tick=${ON_CHAIN_TICK_SIZE}, ` +
-          `min_order=${ON_CHAIN_MIN_ORDER_SIZE}, cb=${ON_CHAIN_CIRCUIT_BREAKER_BPS}bps)`,
-        spcSig,
-      );
+      tx(`set_protocol_config(fee_rate=${PROTOCOL_FEE_BPS}bps)`, spcSig);
 
       // ────────────────────────────────────────────────────────────────────
       step(4, "Create Address Lookup Table for settle txs (size relief)");
@@ -522,6 +604,14 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
             "hex",
           ),
           feeRateBps: PROTOCOL_FEE_BPS,
+        },
+        marketConfigPda: marketPda.toBase58(),
+        market: {
+          enabled: true,
+          priceScale: PRICE_SCALE.toString(),
+          tickSize: ON_CHAIN_TICK_SIZE.toString(),
+          minOrderSize: ON_CHAIN_MIN_ORDER_SIZE.toString(),
+          circuitBreakerBps: ON_CHAIN_CIRCUIT_BREAKER_BPS.toString(),
         },
         vaultConfigPda: vaultPda.toBase58(),
         numTrees: NUM_TREES,

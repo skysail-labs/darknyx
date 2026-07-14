@@ -36,7 +36,8 @@ fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
 
 #[derive(BorshSerialize)]
 struct InitializeArgs {
-    tee_pubkey: [u8; 32],
+    operations_admin: [u8; 32],
+    tee_pubkeys: Vec<[u8; 32]>,
     root_key: [u8; 32],
     num_trees: u8,
 }
@@ -45,9 +46,6 @@ struct InitializeArgs {
 struct SetProtocolConfigArgs {
     protocol_owner_commitment: [u8; 32],
     fee_rate_bps: u16,
-    tick_size: u64,
-    min_order_size: u64,
-    circuit_breaker_bps: u64,
 }
 
 fn initialize(svm: &mut LiteSVM, admin: &Keypair, program_id: &Pubkey) -> Pubkey {
@@ -57,7 +55,8 @@ fn initialize(svm: &mut LiteSVM, admin: &Keypair, program_id: &Pubkey) -> Pubkey
 
     let mut data = common::anchor_disc("initialize").to_vec();
     InitializeArgs {
-        tee_pubkey: tee_kp.pubkey().to_bytes(),
+        operations_admin: admin.pubkey().to_bytes(),
+        tee_pubkeys: vec![tee_kp.pubkey().to_bytes()],
         root_key: root_kp.pubkey().to_bytes(),
         num_trees: 1,
     }
@@ -82,24 +81,17 @@ fn initialize(svm: &mut LiteSVM, admin: &Keypair, program_id: &Pubkey) -> Pubkey
     vault_pda
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_set_protocol_config_ix(
     program_id: &Pubkey,
     admin: &Pubkey,
     vault_pda: &Pubkey,
     commitment: [u8; 32],
     fee_rate_bps: u16,
-    tick_size: u64,
-    min_order_size: u64,
-    circuit_breaker_bps: u64,
 ) -> Instruction {
     let mut data = common::anchor_disc("set_protocol_config").to_vec();
     SetProtocolConfigArgs {
         protocol_owner_commitment: commitment,
         fee_rate_bps,
-        tick_size,
-        min_order_size,
-        circuit_breaker_bps,
     }
     .serialize(&mut data)
     .unwrap();
@@ -132,16 +124,8 @@ fn set_protocol_config_happy_path_writes_all_fields() {
     let vault_pda = initialize(&mut svm, &admin, &program_id);
 
     let new_commitment = [0xCD; 32];
-    let ix = build_set_protocol_config_ix(
-        &program_id,
-        &admin.pubkey(),
-        &vault_pda,
-        new_commitment,
-        42,
-        5,     // tick_size
-        1_000, // min_order_size
-        250,   // circuit_breaker_bps
-    );
+    let ix =
+        build_set_protocol_config_ix(&program_id, &admin.pubkey(), &vault_pda, new_commitment, 42);
     let tx = Transaction::new(
         &[&admin],
         Message::new(&[ix], Some(&admin.pubkey())),
@@ -150,25 +134,15 @@ fn set_protocol_config_happy_path_writes_all_fields() {
     svm.send_transaction(tx)
         .expect("set_protocol_config failed");
 
-    // Re-read the account raw and check the tail. VaultConfig layout tail:
-    // protocol_owner_commitment([u8;32]) + fee_rate_bps(u16) + num_tee_keys(u8)
-    // + num_trees(u8) + bump(u8) + _padding([u8;3]) + tick_size(u64)
-    // + min_order_size(u64) + circuit_breaker_bps(u64)
-    // = 32 + 2 + 1 + 1 + 1 + 3 + 8 + 8 + 8 = 64 trailing bytes; walk from the
-    // end so we don't have to track Anchor's 8-byte disc.
+    // Re-read the account raw and check the tail. VaultConfig layout tail is
+    // owner(32) + fee(2) + key/tree/bump(3) + explicit padding(3) = 40 bytes.
     let acct = svm.get_account(&vault_pda).expect("vault config");
     let d = &acct.data;
     let len = d.len();
-    let tail_commitment = &d[len - 64..len - 32];
-    let tail_rate = u16::from_le_bytes(d[len - 32..len - 30].try_into().unwrap());
-    let tick = u64::from_le_bytes(d[len - 24..len - 16].try_into().unwrap());
-    let min_order = u64::from_le_bytes(d[len - 16..len - 8].try_into().unwrap());
-    let cb = u64::from_le_bytes(d[len - 8..len].try_into().unwrap());
+    let tail_commitment = &d[len - 40..len - 8];
+    let tail_rate = u16::from_le_bytes(d[len - 8..len - 6].try_into().unwrap());
     assert_eq!(tail_commitment, new_commitment);
     assert_eq!(tail_rate, 42);
-    assert_eq!(tick, 5);
-    assert_eq!(min_order, 1_000);
-    assert_eq!(cb, 250);
 }
 
 #[test]
@@ -189,16 +163,8 @@ fn set_protocol_config_rejects_non_admin_signer() {
     svm.airdrop(&impostor.pubkey(), 1_000_000_000).unwrap();
     let vault_pda = initialize(&mut svm, &admin, &program_id);
 
-    let ix = build_set_protocol_config_ix(
-        &program_id,
-        &impostor.pubkey(),
-        &vault_pda,
-        [0x99; 32],
-        10,
-        0,
-        0,
-        0,
-    );
+    let ix =
+        build_set_protocol_config_ix(&program_id, &impostor.pubkey(), &vault_pda, [0x99; 32], 10);
     let tx = Transaction::new(
         &[&impostor],
         Message::new(&[ix], Some(&impostor.pubkey())),
@@ -233,9 +199,6 @@ fn set_protocol_config_rejects_fee_rate_above_max() {
         &vault_pda,
         [0xAB; 32],
         10_001, // MAX + 1
-        0,
-        0,
-        0,
     );
     let tx = Transaction::new(
         &[&admin],

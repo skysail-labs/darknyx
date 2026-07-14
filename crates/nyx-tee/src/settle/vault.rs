@@ -20,6 +20,8 @@ pub const SYSTEM_PROGRAM_ID: Address = Address::new_from_array([0u8; 32]);
 
 /// Vault `VaultConfig::SEED` — mirrors `programs/vault/src/state.rs::VaultConfig::SEED`.
 pub const VAULT_CONFIG_SEED: &[u8] = b"vault_config";
+/// Vault `MarketConfig::SEED` — one PDA per ordered base/quote pair.
+pub const MARKET_CONFIG_SEED: &[u8] = b"market_config";
 
 /// Vault `MerkleTree::SEED` — mirrors `programs/vault/src/state.rs::MerkleTree::SEED`.
 /// One `MerkleTree` shard account per `tree_id`.
@@ -61,6 +63,14 @@ pub fn vault_program_id() -> Address {
 /// program, so the result is stable across calls.
 pub fn vault_config_pda() -> (Address, u8) {
     Address::find_program_address(&[VAULT_CONFIG_SEED], &vault_program_id())
+}
+
+/// PDA: `[b"market_config", base_mint, quote_mint]`.
+pub fn market_config_pda(base_mint: &[u8; 32], quote_mint: &[u8; 32]) -> (Address, u8) {
+    Address::find_program_address(
+        &[MARKET_CONFIG_SEED, base_mint, quote_mint],
+        &vault_program_id(),
+    )
 }
 
 /// PDA: `merkle_tree` shard `tree_id`. Seeds = `[b"merkle_tree", &[tree_id]]`.
@@ -134,6 +144,13 @@ mod tests {
         let (b, bb) = vault_config_pda();
         assert_eq!(a, b);
         assert_eq!(ba, bb);
+    }
+
+    #[test]
+    fn market_config_pda_binds_mint_order() {
+        let (market, _) = market_config_pda(&[0x11; 32], &[0x22; 32]);
+        let (reversed, _) = market_config_pda(&[0x22; 32], &[0x11; 32]);
+        assert_ne!(market, reversed);
     }
 
     #[test]

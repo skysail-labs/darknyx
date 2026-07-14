@@ -3,8 +3,8 @@
 //! these inputs.
 //!
 //! Field-for-field mirrors the on-chain types that supply them:
-//!   * `MatchConfig` ← `MatchingConfig` (mints, oracle params,
-//!     tick, circuit breaker) PLUS `vault_config.fee_rate_bps` +
+//!   * `MatchConfig` ← mint-pair `MarketConfig` (mints, price scale,
+//!     tick, minimum size, circuit breaker) PLUS `vault_config.fee_rate_bps` +
 //!     `vault_config.protocol_owner_commitment`.
 //!   * `OracleSnapshot` ← output of `read_oracle_price()`. Pyth
 //!     EMA or our mock — at this layer it's just a u64.
@@ -26,6 +26,10 @@ pub struct MatchConfig {
     /// so the byte layout MUST equal `Pubkey::to_bytes()`.
     pub base_mint: [u8; 32],
     pub quote_mint: [u8; 32],
+    /// Fixed-point denominator for scaled clearing-price arithmetic. The v3
+    /// circuit consumes this directly; the current matcher carries it as
+    /// governed market identity without changing its comparison arithmetic.
+    pub price_scale: u64,
 
     // ─── Per-market matching params ────────────────────────────
     /// Smallest price increment, in base units. 0 = unchecked at

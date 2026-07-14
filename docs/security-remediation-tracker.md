@@ -16,7 +16,7 @@ runbooks have landed.
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
 | CS-01 | Critical | ZK + vault + TEE | `remediation/match-batch-v3` | Every fee note is per-match and issued atomically with consumption of that match's real inputs; negative phantom-slot proof; regenerated zkey/VK/N=16 fixture; live settle | Open |
-| CS-02 | High | ZK + vault | `remediation/governance-markets`, `remediation/match-batch-v3` | Every active slot is bound to one enabled on-chain market, its mint halves, and price scale; mixed-market proof rejected | Open |
+| CS-02 | High | ZK + vault | `remediation/governance-markets`, `remediation/match-batch-v3` | Every active slot is bound to one enabled on-chain market, its mint halves, and price scale; mixed-market proof rejected | In progress |
 | CS-03 | High | ZK + SDK + TEE | `remediation/match-batch-v3` | User and fee output inners are constrained, deterministic, and recoverable from consumed inputs; arbitrary-inner witness rejected | Open |
 | CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Open |
 | CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Open |
@@ -52,8 +52,8 @@ runbooks have landed.
 | N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Closed |
 | N-08 | Medium | TEE + SDK + daemon | `remediation/stream-consolidation` | Only in-band-authenticated `/v1/stream` remains; gap detection, refresh, reconnect, and cancel-on-disconnect preserved | Open |
 | N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Closed |
-| N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Open |
-| N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Open |
+| N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Closed |
+| N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Closed |
 | N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker closes only after expiry; rent returns to recorded payer; boundary tests and live async sweep | Closed |
 | N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Open |
 | N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
@@ -61,7 +61,7 @@ runbooks have landed.
 | N-16 | Low | SDK | `remediation/client-custody` | Commitment equality is byte-based; mixed-case encoding regression | Open |
 | N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Open |
 | N-18 | Critical mainnet gate | Governance + ZK | `remediation/release-assurance` | Public Phase-2 ceremony with at least five independent contributors, transcript/hashes, random beacon, reproducible verify, auditor sign-off, post-ceremony settle | Open |
-| N-19 | High mainnet gate | Governance | `remediation/governance-markets`, `remediation/release-assurance` | Split Squads rehearsal: operations 3-of-5 admin and cold root/upgrade 4-of-7; independent attestation verification before rotations | Open |
+| N-19 | High mainnet gate | Governance | `remediation/governance-markets`, `remediation/release-assurance` | Split Squads rehearsal: operations 3-of-5 admin and cold root/upgrade 4-of-7; independent attestation verification before rotations | In progress |
 
 ## Pull request evidence template
 
@@ -273,6 +273,78 @@ Every remediation PR must record:
   extra accounts must be rebuilt for the old interface. Rollback reopens all
   four findings, restores payer early-close, and restores the batch-wide Tx D
   write conflict.
+
+### `remediation/governance-markets` — CS-02 infrastructure, N-10, N-11, N-19 infrastructure
+
+- **Invariant restored.** Initialization atomically installs exactly one
+  non-default, unique TEE signer per Merkle-tree shard and rejects default
+  operations/root keys or reuse of the operations admin as the root authority.
+  Mainnet initialization remains bound to the current upgrade authority but
+  accepts and enforces a distinct operations admin, supporting operations
+  3-of-5 and cold root/upgrade 4-of-7 Squads vaults. Each ordered base/quote
+  mint pair has an operations-admin-governed `MarketConfig` PDA with immutable
+  mint identity and snapshotted decimals, nonzero price scale/tick/minimum,
+  bounded circuit breaker, and an enabled kill switch. Rotation replaces the
+  full signer set and must keep its cardinality equal to `num_trees`.
+- **Wire/account impact.** `initialize` now serializes
+  `operations_admin, Vec<tee_pubkeys>, root_key, num_trees`; the mainnet account
+  list names the upgrade authority and includes the program/ProgramData proof.
+  `set_protocol_config` shrinks to owner commitment plus fee bps. New
+  `initialize_market` and `update_market_config` instructions create/update the
+  108-byte `[b"market_config", base_mint, quote_mint]` account; moving matcher
+  fields out restores the global `VaultConfig` to its exact 1264-byte layout.
+  New governance/market errors are appended so prior error codes do not move.
+  The clean reset policy intentionally provides no old initialization/config compatibility.
+  `VALID_MATCH_BATCH` does not consume the account until the v3 circuit slice,
+  so CS-02 remains in progress. The CPU image pin advances from 51 to 52 for
+  the TEE's governed boot reader.
+- **Local evidence.** Both plain-mainnet and `devnet-admin` SBF builds pass,
+  as do `cargo fmt --all -- --check`, workspace clippy with warnings denied,
+  the darkpool-crypto example build, and `cargo test --workspace`. Targeted
+  litesvm passes 18/18 across split initialization,
+  MarketConfig, protocol config, and signer rotation, including default,
+  duplicate, partial-set, authority-reuse, invalid-mint, out-of-bounds, pause,
+  and impostor cases. TEE fixed-layout account parsing rejects the old long
+  layout, bad discriminators, and bad account ownership. SDK governance
+  transport/account parsing passes 16/16; full SDK Vitest passes 226 with 22
+  environment-gated skips, indexer Vitest passes 23, and both TypeScript
+  no-emit checks and updated devnet helper syntax checks pass.
+- **Devnet/CVM evidence.** Image 52 built and pushed successfully from commit
+  `cdb80d4` in private workflow run `29366224503`; an anonymous GHCR manifest
+  request returned HTTP 200. Its artifact-upload annotation is the known
+  organization quota exhaustion and did not fail the image job. The reviewed
+  devnet program deployed at slot 476283761
+  (`5tZBgbeoD4pMiGb1pZNQ8JJug5nDGPCvSfUJEwk9fpyWgLZw9AeYdufovLv6fJdoz1rymRDFAibsQQmhZbcvsJd1`),
+  then the stale 1288-byte VaultConfig was closed
+  (`2YAunujYimGivxbso6PEGRtVggQeHWKiqvaBbNUwaHDaMf71tNZEp11YN8dqX3q2M9VckKpANLc7wVhXtmKbm6jL`)
+  and cleanly re-founded; the final pre-boot tree reset confirmed as
+  `2yLeYsxtFqpf8uwvWaUVDsAT3NiH3RY2UYAsxgL4pdmcr4VA6NFEPpV4bmrKrdiZJy9kQp7h82wBKMrHoykS1kM4`.
+  Independent on-chain readback pinned the new VaultConfig to 1264
+  bytes with `num_tee_keys == num_trees == 1`, and MarketConfig to 108 bytes
+  with the intended mint pair, 6/6 decimals, scale 100000000, tick 5, minimum
+  1000, breaker 5000, and `enabled = true`. Image 52 cold-booted with compose
+  hash `f72d3bb022e061158eb8eb71d1eb8c478a1a0ec81640bd32a17367ce71bc694a`,
+  adopted every governed market field plus the
+  30-bps fee, and enabled the live settle pipeline. Exact K-key rotation
+  confirmed
+  (`v2fRkvgxrqHzv5yd5fD3kKv3PtfhiDghNnmCq9rcSpUcuG7PV59mgnr16jgdpaYueqm7JLHH129ZKXbEjCvtdyV`).
+  The targeted real-mint `cvm-settle-e2e` passed 1/1 in 37.34 seconds: deposits
+  `roQS4VWBK3JVRpgTjtM3VLztbTfkuCsqxd2mqUhw4HUWFznin5FrYpHShkAQh9X85f1bWWj4cCD5FbAhVpBJwyU`
+  and `inqGmEW5RnN98xqKy6MB6SDChujXrbUuTmRDVYad6YcPGLiHrFj3o783T9JGZzexvAajcCvN8FxXCprFbUCVX77`;
+  locks `2jTcoqAVTeawa2KQNK2trLhQg8Lfi1wNmEncXkJvQU76ajeujWZ7719JisMn5P3Gzgx4DXxwu2pEzDBtcu1xnY8W`
+  and `31Qjy4s3gqFSvfT4sqsjwjYkboWUzbuSdUbsTxfFrQs3JvzJtXcmPVEmJJH7QwrpyMwnanoM6etLRNaKBqwzrL2j`;
+  verification `2tD6J6jEWiZqV6xGLa4XsaR63SCmCXpJgHHZfvNyXgjQcJfxZYHdT2mvewzFykgvBUkYoVgeSgYvJc5VwF1eGFgR`;
+  and Tx D `2SstKbUHFuEjxzvB82z6mQDaqN5jar5NbFnGHZ4poq3wBgh56GCGyGRDne2VJuZP2pQryUNUbZxYSLSrunUbjtPG`
+  at slot 476286313 all confirmed with no error. Shard 0
+  ended at leaf count 7. All three Phala CVMs were then confirmed stopped and
+  the in-memory test credentials were unset. This closes N-10/N-11. CS-02
+  remains in progress until VALID_MATCH_BATCH v3 consumes MarketConfig, and
+  the split Squads 3-of-5/4-of-7 rehearsal remains the N-19 release gate.
+- **Rollback.** Revert this PR and redeploy image 51 with the preceding vault
+  binary. Because the initialization and account model intentionally changed,
+  rollback requires another clean devnet re-foundation and invalidates the new
+  MarketConfig account/config wire. No circuit artifact changed in this slice,
+  but rollback reopens N-10/N-11 and removes CS-02/N-19 infrastructure.
 
 ## Mainnet release gates
 

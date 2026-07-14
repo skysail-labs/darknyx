@@ -22,7 +22,7 @@ end-to-end:
 | D2 | **TEE pubkey rotation gate** | Admin multisig only | The multisig verifies the TDX quote off-chain (via `dstack-verifier` Docker image) before signing `set_tee_pubkey`. On-chain `dcap-qvl` port deferred to v3. |
 | D3 | **API edge** | Custom domain via dstack-ingress | `api.nyx.example.com` with ACME inside the TEE, `/evidences/` endpoint for RA-TLS verification, CAA-locked Let's Encrypt account. Branding ours, end-to-end TLS into the enclave. |
 | D4 | **Prover location** | Inside the TEE | Witness never leaves the enclave. ~5-10% TDX overhead on top of ~0.7s Groth16 time is within budget. Benchmark in Phase 1 — if memory-encryption pushes us above 3s, fall back to TEE-signed-public-input + external prover. |
-| D5 | **Matching cadence** | Frequent-batch-auction with `BATCH_MS = 2000` default, tunable per market via on-chain `MatchingConfig` | Settle-latency floor (~2-3 s) means ticks faster than that pipeline up. 2 s is the aggressive setting; per-market tunable so we can dial liquid markets faster and thin markets slower without a code change. **Hot order book, batched clearing** — orders are visible the moment they arrive over WS; only the actual matching is batched. See §5.4. |
+| D5 | **Matching cadence** | Frequent-batch-auction with `BATCH_MS = 2000` default | Settle-latency floor (~2-3 s) means ticks faster than that pipeline up. **Hot order book, batched clearing** — orders are visible the moment they arrive over WS; only the actual matching is batched. Mint-pair price scale/tick/minimum/breaker settings live in on-chain `MarketConfig`; cadence remains a TEE deployment parameter. See §5.4. |
 | D6 | **Indexer architecture** | Inside the TEE, shared in-memory state via `tokio RwLock` | The TEE already holds the Merkle mirror + nullifier set + lock state in RAM to do matching — exposing `/tree/*` over the same state is essentially free. One deployment, one attestation chain. Clients who don't trust the TEE retain the trustless fallback (read `MerkleTree[tree_id].current_root` + PDAs directly from Solana). See §5.5. |
 
 Everything below assumes those six choices. Section 14 documents the
@@ -467,10 +467,10 @@ The lower bound is **settle finality** ≈ 2-3 s end-to-end:
 - `close_batch_validity_marker`: 1 slot
 
 Ticking faster than that just queues batches in memory (`settle_scheduler.enqueue`
-backs up). Per market we expose `batch_ms` in the on-chain
-`MatchingConfig` so liquid markets can run tighter (2 s) and thin
-markets can run looser (10 s) without a TEE redeploy. The default
-across new markets is 2 s.
+backs up). The current CVM cadence is a 2 s build default, not part of
+`MarketConfig`; changing it requires a reviewed TEE configuration/code release.
+Mint-pair price scale, tick, minimum size, circuit breaker, and enabled state
+are the values governed independently on-chain.
 
 If the Phase-1 benchmark on TDX-Lab shows settle finality
 consistently above 3 s under load, bump the default to 3 s and
@@ -1551,7 +1551,7 @@ The six locked-in choices have explicit re-evaluation triggers:
 | **D2 (Admin multisig rotation)** | (a) we ship a working `dcap-qvl` port to Solana BPF (community work or our own), OR (b) we get a finding that the multisig is the actual concentration of risk in our threat model, OR (c) Solana ships a higher-CU-budget tx mode that makes on-chain quote verification cheap. |
 | **D3 (Custom domain)** | (a) we want to support hardware wallets that pin the dstack-gateway domain natively — gateway domain becomes viable; OR (b) we want per-user subdomains for routing (custom only). |
 | **D4 (In-TEE prover)** | The Phase-1 benchmark shows ≥3× slowdown vs bare metal, or memory pressure forces a TEE host size > 32 GB RAM. Flip to external-prover. |
-| **D5 (`BATCH_MS = 2000` default)** | (a) the Phase-1 settle-pipeline benchmark shows finality consistently above 3 s — bump the default to 3 s or 5 s; (b) a specific market needs faster fills (sub-second) — investigate the queue-batching pattern or split that market to its own circuit instantiation; (c) a market is very thin and the fixed 2 s tick wastes RPC — tune that market's `batch_ms` in `MatchingConfig` higher (10-30 s). The per-market knob is in place from day one; the default is just the new-market template. |
+| **D5 (`BATCH_MS = 2000` default)** | (a) the settle-pipeline benchmark shows finality consistently above 3 s — bump the reviewed default to 3 s or 5 s; (b) a market needs faster fills — investigate queue batching or split it to its own circuit/CVM before adding a governed cadence field. |
 | **D6 (TEE-as-indexer)** | (a) TEE host RAM hits 70%+ utilisation on the indexer side under load — split the indexer to its own service; (b) we want read-replica scaling for hot devnets / mainnet → run multiple `nyx-tee` containers behind a load balancer (all derive the same dstack keys; matcher leader-election needed); (c) a non-Nyx app wants to consume our indexer reads — expose a public read-only mirror. |
 
 Each flip is small-scoped — none of them change the wire contract,

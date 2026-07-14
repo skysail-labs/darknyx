@@ -36,17 +36,24 @@ import {
 
 // Collect signer args from argv (space-separated) and/or TEE_PUBKEYS
 // (comma-separated), in order — keys[j] is shard j's fee-payer/authority.
-const raw = [...process.argv.slice(2), ...(process.env.TEE_PUBKEYS ?? "").split(",")]
+const raw = [
+  ...process.argv.slice(2),
+  ...(process.env.TEE_PUBKEYS ?? "").split(","),
+]
   .flatMap((s) => s.split(","))
   .map((s) => s.trim())
   .filter(Boolean);
 if (raw.length === 0) {
   console.error("usage: node scripts/rotate-tee-pubkey.mjs <key0> [key1 ...]");
-  console.error("  (the K shard signers from the CVM boot log, in shard order)");
+  console.error(
+    "  (the K shard signers from the CVM boot log, in shard order)",
+  );
   process.exit(1);
 }
 if (raw.length > 16) {
-  console.error(`too many keys (${raw.length}); the vault allows at most 16 (MAX_TEE_KEYS)`);
+  console.error(
+    `too many keys (${raw.length}); the vault allows at most 16 (MAX_TEE_KEYS)`,
+  );
   process.exit(1);
 }
 let teePubkeys;
@@ -56,22 +63,67 @@ try {
   console.error("one of the signer keys is not a valid base58 Solana pubkey");
   process.exit(1);
 }
+if (
+  teePubkeys.some((key) => key.equals(PublicKey.default)) ||
+  new Set(teePubkeys.map((key) => key.toBase58())).size !== teePubkeys.length
+) {
+  console.error("TEE signer keys must be non-default and unique");
+  process.exit(1);
+}
 
 const RPC = process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
 const ADMIN_KP = process.env.ADMIN_KEYPAIR ?? ".devnet/keypairs/admin.json";
 const VAULT = new PublicKey(
-  process.env.VAULT_PROGRAM_ID ?? "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+  process.env.VAULT_PROGRAM_ID ??
+    "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 );
 
-const admin = Keypair.fromSecretKey(new Uint8Array(JSON.parse(readFileSync(ADMIN_KP, "utf8"))));
+const admin = Keypair.fromSecretKey(
+  new Uint8Array(JSON.parse(readFileSync(ADMIN_KP, "utf8"))),
+);
 const conn = new Connection(RPC, "confirmed");
-const [vaultConfig] = PublicKey.findProgramAddressSync([Buffer.from("vault_config")], VAULT);
+const [vaultConfig] = PublicKey.findProgramAddressSync(
+  [Buffer.from("vault_config")],
+  VAULT,
+);
+const vaultAccount = await conn.getAccountInfo(vaultConfig, "confirmed");
+if (!vaultAccount || vaultAccount.owner.toBase58() !== VAULT.toBase58()) {
+  throw new Error(
+    `VaultConfig ${vaultConfig.toBase58()} is missing or has the wrong owner`,
+  );
+}
+const NUM_TREES_OFFSET = 1259;
+if (vaultAccount.data.length !== 1264) {
+  throw new Error(
+    `VaultConfig layout mismatch: expected 1264 bytes, got ${vaultAccount.data.length}`,
+  );
+}
+const numTrees = vaultAccount.data[NUM_TREES_OFFSET];
+if (teePubkeys.length !== numTrees) {
+  throw new Error(
+    `refusing partial signer rotation: got ${teePubkeys.length} keys for num_trees=${numTrees}`,
+  );
+}
+const operationsAdmin = new PublicKey(vaultAccount.data.subarray(8, 40));
+const rootKey = new PublicKey(vaultAccount.data.subarray(552, 584));
+if (
+  teePubkeys.some((key) => key.equals(operationsAdmin) || key.equals(rootKey))
+) {
+  throw new Error("TEE signer keys must be distinct from admin and root_key");
+}
 
 // data = disc("global:set_tee_pubkey")[..8] || Vec<Pubkey> (u32 LE len ++ len*32).
-const disc = createHash("sha256").update("global:set_tee_pubkey").digest().subarray(0, 8);
+const disc = createHash("sha256")
+  .update("global:set_tee_pubkey")
+  .digest()
+  .subarray(0, 8);
 const lenLE = Buffer.alloc(4);
 lenLE.writeUInt32LE(teePubkeys.length, 0);
-const data = Buffer.concat([disc, lenLE, ...teePubkeys.map((k) => Buffer.from(k.toBytes()))]);
+const data = Buffer.concat([
+  disc,
+  lenLE,
+  ...teePubkeys.map((k) => Buffer.from(k.toBytes())),
+]);
 
 const ix = new TransactionInstruction({
   programId: VAULT,
@@ -82,8 +134,13 @@ const ix = new TransactionInstruction({
   data,
 });
 
-const sig = await sendAndConfirmTransaction(conn, new Transaction().add(ix), [admin]);
+const sig = await sendAndConfirmTransaction(conn, new Transaction().add(ix), [
+  admin,
+]);
 console.log(`set_tee_pubkey ok: ${sig}`);
-teePubkeys.forEach((k, j) => console.log(`  tee_pubkeys[${j}] -> ${k.toBase58()}`));
+teePubkeys.forEach((k, j) =>
+  console.log(`  tee_pubkeys[${j}] -> ${k.toBase58()}`),
+);
+console.log(`  num_trees      ${numTrees}`);
 console.log(`  vault          ${VAULT.toBase58()}`);
 console.log(`  admin          ${admin.publicKey.toBase58()}`);

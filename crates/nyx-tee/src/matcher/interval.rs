@@ -386,7 +386,7 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
 /// the design down.
 pub struct DriverConfig {
     /// `MatchConfig` passed to `darkpool_matcher::run_batch(...)`.
-    /// Constructed from the on-chain `MatchingConfig` + the v2
+    /// Constructed from the on-chain `MarketConfig` + the v2
     /// `VaultConfig.fee_rate_bps` + `protocol_owner_commitment`
     /// snapshot at startup. Bumping this requires a daemon
     /// restart (later PR: hot-reload from on-chain).

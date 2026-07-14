@@ -1,4 +1,4 @@
-//! Admin-gated rotation of `VaultConfig.tee_pubkey`.
+//! Operations-admin-gated rotation of `VaultConfig.tee_pubkeys`.
 //!
 //! `tee_pubkey` is the attested TEE Ed25519 signer every TEE ix
 //! (`lock_note`, `verify_match_batch`, `tee_forced_settle_batched`)
@@ -9,12 +9,9 @@
 //!
 //! Authorisation: only `vault_config.admin` can call this.
 //!
-//! NOTE (devnet-simplified): production rotation is gated by the
-//! governance multisig AND only after the new TEE's attestation has
-//! been verified against the approved measurement set (see
-//! docs/tee-attestation-flow.md §5). This admin-only setter is the
-//! devnet/spot-check form; do not ship it as the sole rotation path to
-//! mainnet without the multisig + attestation gate.
+//! On mainnet `VaultConfig.admin` is the operations Squads account. Operators
+//! must independently verify the new TEE attestation before that multisig
+//! approves this instruction (see `docs/tee-attestation-flow.md` §5).
 
 use crate::errors::VaultError;
 use crate::state::*;
@@ -43,7 +40,7 @@ pub fn set_tee_pubkey_handler(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> 
         VaultError::Unauthorized
     );
     require!(
-        !keys.is_empty() && keys.len() <= MAX_TEE_KEYS,
+        keys.len() == cfg.num_trees as usize && keys.len() <= MAX_TEE_KEYS,
         VaultError::InvalidKeyCount
     );
     // F-09: reject the zero key + duplicates. A zero (default) key is an unusable
@@ -51,7 +48,10 @@ pub fn set_tee_pubkey_handler(ctx: Context<SetTeePubkey>, keys: Vec<Pubkey>) -> 
     // effective authorized set AND corrupts the shard→key round-robin (keys[j]
     // settles shard j). n ≤ MAX_TEE_KEYS (16) → the O(n²) dup scan is trivial.
     for (i, k) in keys.iter().enumerate() {
-        require!(*k != Pubkey::default(), VaultError::InvalidTeeKey);
+        require!(
+            *k != Pubkey::default() && *k != cfg.admin && *k != cfg.root_key,
+            VaultError::InvalidTeeKey
+        );
         require!(!keys[..i].contains(k), VaultError::InvalidTeeKey);
     }
 
