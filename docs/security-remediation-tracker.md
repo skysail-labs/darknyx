@@ -23,7 +23,7 @@ runbooks have landed.
 | CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
 | CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Open |
 | CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Open |
-| CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm tests | In progress |
+| CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm and live settle tests | Closed |
 | CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Open |
 | CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Open |
 | CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Open |
@@ -34,7 +34,7 @@ runbooks have landed.
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
-| P-01 | Perf | Vault + SDK + TEE | `remediation/vault-lifecycle` | Batch marker is read-only in every Tx D builder; distinct-shard Tx Ds share no writable key | In progress |
+| P-01 | Perf | Vault + SDK + TEE | `remediation/vault-lifecycle` | Batch marker is read-only in every Tx D builder and live Tx D; distinct-shard Tx Ds share no writable key | Closed |
 | P-02 | Perf | TEE | `remediation/settlement-efficiency` | Build the N=16 tree once and extract every path; hash-count regression/benchmark | Open |
 | P-03 | Perf | Matcher | `remediation/matcher-performance` | Price-level aggregates and reusable demand curves preserve FIFO, tie-breaking, IOC/FOK/AON under differential properties | Open |
 | P-04 | Perf | TEE RPC | `remediation/settlement-efficiency` | Poll all pending signatures in one RPC request; remove confirmed entries; rebroadcast only overdue transactions | Open |
@@ -46,7 +46,7 @@ runbooks have landed.
 | N-01 | High | TEE | `remediation/tee-intake` | Production exits on dstack/KMS probe failure; test auth requires explicit simulator mode; production rejects test credentials | Closed |
 | N-02 | High | Matcher + TEE | `remediation/settlement-outcomes`, `remediation/finality-gated-book` | Book/fills commit only after per-match settlement outcome; ambiguous results reconcile/redrive; rejected matches are terminal and never auto-rebooked | Open |
 | N-03 | High | Matcher | `remediation/matcher-correctness` | Zero-limit market asks remain eligible but are not price candidates; bid@150/ask@0 clears positively | Closed |
-| N-04 | High liveness | Vault + SDK | `remediation/vault-lifecycle` | Merge proves every active input's NoteLock PDA absent; locked-note negative tests | In progress |
+| N-04 | High liveness | Vault + SDK | `remediation/vault-lifecycle` | Merge proves every active input's NoteLock PDA absent; negative tests plus live merge-to-settle | Closed |
 | N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Closed |
 | N-06 | Medium | TEE | `remediation/tee-intake` | One collateral commitment reserves at most one live or pending order; lifecycle release tests | Closed |
 | N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Closed |
@@ -54,7 +54,7 @@ runbooks have landed.
 | N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Closed |
 | N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Open |
 | N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Open |
-| N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker is closable only after expiry; rent returns to recorded payer; early-close tests reject every signer | In progress |
+| N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker closes only after expiry; rent returns to recorded payer; boundary tests and live async sweep | Closed |
 | N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Open |
 | N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
 | N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Open |
@@ -229,10 +229,44 @@ Every remediation PR must record:
   full SDK Vitest passes 216 with 22 environment-gated skips and full indexer
   Vitest passes 23. The SDK's 18 affected transport tests include Rust/TS
   account-meta parity. The workspace run also covers the N=16 fixture/verifier,
-  serialized Tx D cap assertion, and worst-case settle CU profile.
-- **Devnet/CVM evidence.** Pending the post-local-gate deploy and live CVM
-  rehearsal. The four tracker rows remain in progress until that evidence is
-  attached and the PR is merged.
+  serialized Tx D cap assertion, and worst-case settle CU profile. After the
+  boot-log regression was added, `cargo test -p nyx-tee` passes 254 unit tests
+  plus every integration target, and the SDK TypeScript gate passes after the
+  three environment-gated leaf-count fixtures were corrected to stay inside
+  the production 4,500-slot order TTL.
+- **Devnet program evidence.** The guarded deploy upgraded the canonical vault
+  `C63v...VWZx` at finalized signature
+  `4k3coLKTTsQzSjbaFcLW2mheLxodWmjopX1jjdvACFtQMKDSZKtmh4ffGyVKVQacfvNJ3vw2NPBHHwLUKbAyT7oN`
+  (slot 476260803). A stale regenerated `target/deploy/vault-keypair.json` had
+  first caused an accidental fresh `5SDF...` program deploy; that unused
+  program was permanently closed and all 3.9767004 SOL reclaimed without
+  touching `C63v...VWZx`. `deploy-devnet.sh` now fails before deployment when
+  the keypair pubkey differs from `declare_id!()`. The final clean-tree reset is
+  finalized as
+  `3VmokGZTPhtoMdyRmmgZdccqbpKk6DLoyjxJrQnhTuGvVbD6Cjo2XwD4juwrbKAyGTp6ayWPVku9rGyXkt6DV1Ly`
+  (slot 476265794).
+- **CVM evidence.** GitHub Actions run `29359843816` built public-pullable CPU
+  image `tee-v3-hardening-51` from commit `7d2c4417`; its GHCR manifest returned
+  HTTP 200. CVM `app_634b2ab4c250466311f0cf09f772b6fd60b5be11`
+  cold-booted instance `f5cd2f294d1127d241d18e44dbb76b6910aa2a54`
+  with compose hash
+  `6777498574d9f29e6257d699599d59e1594e4afb8ba2c19397ddc46e8e3b2c79`
+  and signer `KgFs...1AAjsa`. Boot logs showed the N=16 rapidsnark/native
+  proving path, empty Merkle cold boot, expiry-gated sweeper, and enabled live
+  settle pipeline, with no API-key identifier/value attached to auth logs.
+  Against test-harness commit `220886b`, `cvm-merge-then-order` passed 1/1 in
+  36.82 s. Its K=2 merge finalized at
+  `AUYBeQmAcAZQ5fSeJ4sUD6fhzKi4QrMumLLunga3NMyje8EAaW9uAxsf5AyUbgjUBMT9GQ5ZoX7Ljwv2aJFFTJF`
+  (slot 476266196). Tx D finalized at
+  `2fmeC9sDw4H2uQge7Z6BFNPsKpBPY2voHXpGVfdPx7Ueo9rVDrMFhTQd6EPXNmav2pHC4dpcocuYL1x2aSxsfH3Y`
+  (slot 476266253, 71,930 CU); its per-batch ALT placed the marker in the
+  read-only lookup run. The sweeper did not close in the settlement pipeline
+  (`close_ms=0`) and later finalized the post-expiry close at
+  `2SibncLQaDuEVGuTsg9SYU2Y7ucRevieWGg6KhzwMa7gZg1m1nyQLLwbs72cwziauDgnHvx5eXZWuL9L7zLFPewh`
+  (slot 476266481). Both one-time CVM env files were securely deleted and every
+  Phala CVM was confirmed stopped. A verbose Solana evidence command did echo
+  the local Helius query credential; it was never committed, but that devnet
+  key must be rotated before the next run.
 - **Rollback.** Revert this PR and redeploy the preceding vault program and TEE
   image together. Existing notes, roots, orders, payloads, signatures, and
   proofs remain byte-compatible, but an in-flight merge assembled with the new
