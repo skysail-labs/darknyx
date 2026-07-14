@@ -43,15 +43,15 @@ runbooks have landed.
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
-| N-01 | High | TEE | `remediation/tee-intake` | Production exits on dstack/KMS probe failure; test auth requires explicit simulator mode; production rejects test credentials | Code complete |
+| N-01 | High | TEE | `remediation/tee-intake` | Production exits on dstack/KMS probe failure; test auth requires explicit simulator mode; production rejects test credentials | Closed |
 | N-02 | High | Matcher + TEE | `remediation/settlement-outcomes`, `remediation/finality-gated-book` | Book/fills commit only after per-match settlement outcome; ambiguous results reconcile/redrive; rejected matches are terminal and never auto-rebooked | Open |
 | N-03 | High | Matcher | `remediation/matcher-correctness` | Zero-limit market asks remain eligible but are not price candidates; bid@150/ask@0 clears positively | Open |
 | N-04 | High liveness | Vault + SDK | `remediation/vault-lifecycle` | Merge proves every active input's NoteLock PDA absent; locked-note negative tests | Open |
-| N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Code complete |
-| N-06 | Medium | TEE | `remediation/tee-intake` | One collateral commitment reserves at most one live or pending order; lifecycle release tests | Code complete |
+| N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Closed |
+| N-06 | Medium | TEE | `remediation/tee-intake` | One collateral commitment reserves at most one live or pending order; lifecycle release tests | Closed |
 | N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Open |
 | N-08 | Medium | TEE + SDK + daemon | `remediation/stream-consolidation` | Only in-band-authenticated `/v1/stream` remains; gap detection, refresh, reconnect, and cancel-on-disconnect preserved | Open |
-| N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Code complete |
+| N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Closed |
 | N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Open |
 | N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Open |
 | N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker is closable only after expiry; rent returns to recorded payer; early-close tests reject every signer | Open |
@@ -118,8 +118,8 @@ Every remediation PR must record:
   including nonce freshness, tamper rejection, RTMR3 compose-hash replay,
   signer-set report-data binding, and equality with the finalized on-chain
   `tee_pubkeys`. The protected deploy/auth files were securely deleted and all
-  Phala CVMs were confirmed `stopped` after the test window. Rows remain `Code
-  complete` until the remediation PR merges.
+  Phala CVMs were confirmed `stopped` after the test window. This closing PR
+  carries the code and every item of evidence required by these four rows.
 - **Rollback.** Revert this PR and redeploy image 48. This does not invalidate
   notes, roots, orders, payloads, signatures, or proofs, but it reopens N-01,
   N-05, N-06, and N-09. The one-way snapshot scrub does not restore the public
