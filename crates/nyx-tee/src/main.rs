@@ -738,11 +738,11 @@ fn build_settle_driver(
     // per-batch verify/ALT/close txs, so it is every marker's `payer`).
     let tee_keypairs = tee_keypairs.into_iter().map(Arc::new).collect::<Vec<_>>();
 
-    // The marker close (Tx E) runs ASYNCHRONOUSLY, off the settle critical path:
-    // the worker enqueues each settled batch's root; this background sweeper
-    // batches + retries the rent-reclaim closes and replays any un-closed roots
-    // from the LUKS volume on restart. Closing nothing user-facing, it must never
-    // block the next batch (the old inline close did, under SETTLE_CONCURRENCY=1).
+    // The marker close (Tx E) runs ASYNCHRONOUSLY after marker expiry: the worker
+    // enqueues each settled batch's root; this background sweeper reads the
+    // on-chain expiry, batches eligible rent-reclaim closes, and replays any
+    // unclosed roots from the LUKS volume on restart. It never attempts the old
+    // payer early-close path and never blocks the next batch.
     let (marker_sweep_tx, marker_sweep_rx) = tokio::sync::mpsc::unbounded_channel();
     nyx_tee::settle::spawn_marker_sweeper(
         rpc.clone(),
@@ -751,7 +751,7 @@ fn build_settle_driver(
         nyx_tee::persistence::state_dir_from_env(),
         Duration::from_secs(60),
     );
-    tracing::info!("marker sweeper spawned (async Tx E close — off the settle critical path)");
+    tracing::info!("marker sweeper spawned (expiry-gated async Tx E close)");
 
     let ctx = SettleWorkerCtx {
         rpc,

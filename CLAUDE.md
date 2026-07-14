@@ -629,12 +629,14 @@ don't change it to `init_if_needed` without thinking about replay.**
 
 `verify_match_batch` writes ONE `BatchValidityMarker` (seeded by the batch
 Merkle root) covering all N matches in the batch. `tee_forced_settle_batched`
-**must leave it open**; a separate `close_batch_validity_marker` ix reclaims
-the rent once, after all matches settle.
+**must leave it open and read-only**; a separate
+`close_batch_validity_marker` ix reclaims the rent once, only at or after
+expiry. No signer—including the recorded payer—has an early-close path.
 
-If you see `try_borrow_mut_lamports` against `batch_validity_marker` in
-`tee_forced_settle_batched.rs`, you've re-introduced the bug that bricks
-every match after the first. The regression test
+If a Tx D builder marks `batch_validity_marker` writable, or you see
+`try_borrow_mut_lamports` against it in `tee_forced_settle_batched.rs`, you've
+re-introduced a cross-shard write conflict or the bug that bricks every match
+after the first. The regression test
 `vault/tests/tee_forced_settle_batched.rs::test_two_matches_share_one_marker`
 catches it — keep it passing.
 

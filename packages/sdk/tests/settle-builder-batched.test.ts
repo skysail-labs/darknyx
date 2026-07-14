@@ -115,8 +115,11 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     );
     expect(ix.keys[9].isWritable).toBe(false);
 
-    // Slot 10: batch_validity_marker (mut — left open; closed by a separate ix).
-    expect(ix.keys[10].isWritable).toBe(true);
+    // Slots 7/8 are dummy relock destinations on an exact fill, and slot 10 is
+    // the shared marker. All three are read-only on Tx D.
+    expect(ix.keys[7].isWritable).toBe(false);
+    expect(ix.keys[8].isWritable).toBe(false);
+    expect(ix.keys[10].isWritable).toBe(false);
 
     // Slot 11: system_program.
     expect(ix.keys[11].pubkey.toBase58()).toBe(
@@ -124,6 +127,45 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     );
     expect(ix.keys[11].isSigner).toBe(false);
     expect(ix.keys[11].isWritable).toBe(false);
+  });
+
+  it("[settle_batched_distinct_shards_no_shared_writes] distinct-shard Tx Ds share no writable account", () => {
+    const payload0 = exactFillFixture();
+    const payload1: MatchResultPayload = {
+      ...exactFillFixture(),
+      noteAcommitment: filled(32, 0xa2),
+      noteBcommitment: filled(32, 0xb2),
+      noteCcommitment: filled(32, 0xc2),
+      noteDcommitment: filled(32, 0xd2),
+    };
+    const args = {
+      programId: PROGRAM_ID,
+      merkleProof: fourSiblings(),
+      merkleRoot: filled(32, 0xf0),
+    };
+    const ix0 = buildSettleBatchedIx({
+      ...args,
+      treeId: 0,
+      teeAuthority: Keypair.generate().publicKey,
+      payload: payload0,
+      matchIndex: 0,
+    });
+    const ix1 = buildSettleBatchedIx({
+      ...args,
+      treeId: 1,
+      teeAuthority: Keypair.generate().publicKey,
+      payload: payload1,
+      matchIndex: 1,
+    });
+    const writable0 = new Set(
+      [ix0.keys[0], ...ix0.keys.filter((k) => k.isWritable)].map((k) =>
+        k.pubkey.toBase58(),
+      ),
+    );
+    const shared = [ix1.keys[0], ...ix1.keys.filter((k) => k.isWritable)]
+      .map((k) => k.pubkey.toBase58())
+      .filter((key) => writable0.has(key));
+    expect(shared).toEqual([]);
   });
 
   it("[settle_batched_anchor_discriminator_present] data starts with sha256('global:tee_forced_settle_batched')[..8]", () => {
@@ -265,6 +307,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const [zeroLock] = noteLockPda(PROGRAM_ID, ZERO_COMMITMENT);
     expect(ixExact.keys[7].pubkey.toBase58()).toBe(zeroLock.toBase58());
     expect(ixExact.keys[8].pubkey.toBase58()).toBe(zeroLock.toBase58());
+    expect(ixExact.keys[7].isWritable).toBe(false);
+    expect(ixExact.keys[8].isWritable).toBe(false);
 
     // Change-note variant: noteE non-zero → lock_e diverges from lock_f.
     const withChange: MatchResultPayload = {
@@ -285,6 +329,9 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(ixChange.keys[7].pubkey.toBase58()).not.toBe(
       ixChange.keys[8].pubkey.toBase58(),
     );
+    // A change note is not necessarily continued as an order. Without a
+    // relock id its destination PDA remains read-only.
+    expect(ixChange.keys[7].isWritable).toBe(false);
   });
 
   it("[settle_batched_match_index_validation] rejects matchIndex < 0 or > 15", () => {
@@ -467,7 +514,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     // signer may sweep the rent — but the refund still flows to
     // `marker.payer` (enforced via Anchor `has_one`). The builder
     // simply lays out the accounts; the on-chain handler checks
-    // `clock.slot > marker.expiry_slot` when authority != payer.
+    // `clock.slot >= marker.expiry_slot` for every authority.
     const payer = Keypair.generate();
     const sweeper = Keypair.generate();
     const merkleRoot = filled(32, 0x99);
@@ -508,6 +555,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xf0),
     });
+    expect(ix.keys[7].isWritable).toBe(true);
+    expect(ix.keys[8].isWritable).toBe(false);
     const payloadBytes = new Uint8Array(ix.data).slice(9, 9 + 552);
     expect(payloadBytes).toEqual(serializePayload(relock));
   });

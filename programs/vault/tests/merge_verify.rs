@@ -8,6 +8,7 @@
 //! pins the proof/VK chain, which is the part that breaks silently.
 
 mod common;
+mod settle_harness;
 
 use ark_bn254::Fr;
 use ark_ff::PrimeField;
@@ -19,6 +20,15 @@ use vault::merkle::{append_leaf, compute_zero_subtree_roots, empty_root};
 use vault::state::{MerkleTree, MERKLE_DEPTH, ROOT_HISTORY_SIZE};
 use vault::zk::verifier::{make_vk, Groth16Proof};
 use vault::zk::verify_groth16_proof;
+
+use settle_harness::{
+    anchor_disc, consumed_note_exists, consumed_note_pda, merkle_tree_pda, note_lock_pda,
+    seed_note_lock, tree_leaf_count, vault_config_pda, Harness, Pubkey, SYSTEM_PROGRAM_ID,
+};
+use solana_instruction::{AccountMeta, Instruction};
+use solana_message::Message;
+use solana_signer::Signer;
+use solana_transaction::Transaction;
 
 const TREE_DEPTH: usize = 20;
 
@@ -245,6 +255,74 @@ fn prove_merge(
     )
 }
 
+fn install_merge_input_tree(h: &mut Harness, commitments: &[[u8; 32]]) -> [u8; 32] {
+    let (mut tree, zsr) = fresh_tree();
+    let mut root = tree.current_root;
+    for commitment in commitments.iter().filter(|c| **c != [0u8; 32]) {
+        root = append_leaf(&mut tree, &zsr, *commitment).unwrap();
+    }
+    let (tree_pda, bump) = merkle_tree_pda(&h.vault_id, 0);
+    tree.bump = bump;
+    let mut account = h.svm.get_account(&tree_pda).expect("merkle tree account");
+    let body = bytemuck::bytes_of(&tree);
+    assert_eq!(account.data.len(), 8 + body.len());
+    account.data[8..].copy_from_slice(body);
+    h.svm.set_account(tree_pda, account).unwrap();
+    root
+}
+
+fn build_merge_ix(
+    h: &Harness,
+    proof: &Groth16Proof,
+    input_commitments: &[[u8; 32]],
+    output_commitment: [u8; 32],
+    merkle_root: [u8; 32],
+) -> Instruction {
+    let payer = h.trader.pubkey();
+    let token_mint = Pubkey::from([0x07u8; 32]);
+    let (vault_config, _) = vault_config_pda(&h.vault_id);
+    let (merkle_tree, _) = merkle_tree_pda(&h.vault_id, 0);
+    let active: Vec<_> = input_commitments
+        .iter()
+        .filter(|commitment| **commitment != [0u8; 32])
+        .collect();
+
+    let mut data = anchor_disc("merge").to_vec();
+    data.push(0); // tree_id
+    data.extend_from_slice(&(input_commitments.len() as u32).to_le_bytes());
+    for commitment in input_commitments {
+        data.extend_from_slice(commitment);
+    }
+    data.extend_from_slice(&output_commitment);
+    data.extend_from_slice(token_mint.as_ref());
+    data.extend_from_slice(&merkle_root);
+    data.push(input_commitments.len() as u8); // k
+    data.extend_from_slice(&proof.pi_a);
+    data.extend_from_slice(&proof.pi_b);
+    data.extend_from_slice(&proof.pi_c);
+
+    let mut accounts = vec![
+        AccountMeta::new(payer, true),
+        AccountMeta::new_readonly(vault_config, false),
+        AccountMeta::new(merkle_tree, false),
+        AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+    ];
+    accounts.extend(
+        active.iter().map(|commitment| {
+            AccountMeta::new(consumed_note_pda(&h.vault_id, commitment).0, false)
+        }),
+    );
+    accounts.extend(active.iter().map(|commitment| {
+        AccountMeta::new_readonly(note_lock_pda(&h.vault_id, commitment).0, false)
+    }));
+
+    Instruction {
+        program_id: h.vault_id,
+        accounts,
+        data,
+    }
+}
+
 #[test]
 fn merge_k2_verifies_and_public_order_matches() {
     let (proof, public_inputs, out_c, root, mlo, mhi, ics) = prove_merge(2, 2);
@@ -319,4 +397,45 @@ fn merge_rejects_tampered_proof() {
         verify_groth16_proof::<6>(&vk, &proof, &pi).is_err(),
         "a mutated proof must not verify"
     );
+}
+
+#[test]
+fn merge_rejects_locked_input_before_consuming_any_note() {
+    let (proof, _public_inputs, output, root, _mlo, _mhi, commitments) = prove_merge(2, 2);
+
+    let mut locked = Harness::setup();
+    assert_eq!(install_merge_input_tree(&mut locked, &commitments), root);
+    seed_note_lock(&mut locked, &commitments[0], &[0x44u8; 16], 1_000_000, 0);
+    let locked_ix = build_merge_ix(&locked, &proof, &commitments, output, root);
+    let locked_tx = Transaction::new(
+        &[&locked.trader],
+        Message::new(&[locked_ix], Some(&locked.trader.pubkey())),
+        locked.svm.latest_blockhash(),
+    );
+    assert!(
+        locked.svm.send_transaction(locked_tx).is_err(),
+        "merge must reject when any active input has a NoteLock"
+    );
+    assert_eq!(tree_leaf_count(&locked, 0), 2);
+    assert!(!consumed_note_exists(&locked, &commitments[0]));
+    assert!(!consumed_note_exists(&locked, &commitments[1]));
+
+    // The same proof and inputs succeed when both required NoteLock PDAs are
+    // absent, proving the negative result above is the lifecycle guard rather
+    // than a malformed proof/root/account layout.
+    let mut unlocked = Harness::setup();
+    assert_eq!(install_merge_input_tree(&mut unlocked, &commitments), root);
+    let unlocked_ix = build_merge_ix(&unlocked, &proof, &commitments, output, root);
+    let unlocked_tx = Transaction::new(
+        &[&unlocked.trader],
+        Message::new(&[unlocked_ix], Some(&unlocked.trader.pubkey())),
+        unlocked.svm.latest_blockhash(),
+    );
+    unlocked
+        .svm
+        .send_transaction(unlocked_tx)
+        .expect("merge without locks must succeed");
+    assert_eq!(tree_leaf_count(&unlocked, 0), 3);
+    assert!(consumed_note_exists(&unlocked, &commitments[0]));
+    assert!(consumed_note_exists(&unlocked, &commitments[1]));
 }

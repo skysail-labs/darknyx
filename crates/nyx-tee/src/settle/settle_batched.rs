@@ -102,10 +102,18 @@ pub fn build_settle_batched_ix(
         AccountMeta::new(lock_b, false),        // 4 note_lock_b (mut, close)
         AccountMeta::new(consumed_a, false),    // 5 consumed_a (init)
         AccountMeta::new(consumed_b, false),    // 6 consumed_b (init)
-        AccountMeta::new(lock_e, false),        // 7 note_lock_e (mut, unchecked)
-        AccountMeta::new(lock_f, false),        // 8 note_lock_f (mut, unchecked)
+        if payload.buyer_relock_order_id != [0u8; 16] {
+            AccountMeta::new(lock_e, false) // 7 note_lock_e (conditional relock write)
+        } else {
+            AccountMeta::new_readonly(lock_e, false)
+        },
+        if payload.seller_relock_order_id != [0u8; 16] {
+            AccountMeta::new(lock_f, false) // 8 note_lock_f (conditional relock write)
+        } else {
+            AccountMeta::new_readonly(lock_f, false)
+        },
         AccountMeta::new_readonly(INSTRUCTIONS_SYSVAR_ID, false), // 9
-        AccountMeta::new(marker, false),        // 10 batch_validity_marker (mut)
+        AccountMeta::new_readonly(marker, false), // 10 batch_validity_marker (readonly)
         AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false), // 11
     ];
 
@@ -234,8 +242,12 @@ mod tests {
         }
     }
 
+    fn dummy_addr(byte: u8) -> Address {
+        bs58::encode([byte; 32]).into_string().parse().unwrap()
+    }
+
     fn dummy_tee() -> Address {
-        bs58::encode([0xEEu8; 32]).into_string().parse().unwrap()
+        dummy_addr(0xEE)
     }
 
     fn proof() -> [[u8; 32]; 4] {
@@ -344,7 +356,11 @@ mod tests {
         // Marker [10] matches the PDA for the given root.
         let (marker, _) = batch_validity_marker_pda(&[0xAB; 32]);
         assert_eq!(ix.accounts[10].pubkey, marker);
-        assert!(ix.accounts[10].is_writable);
+        assert!(!ix.accounts[10].is_writable);
+        // Exact-fill dummy relock destinations are also read-only; otherwise
+        // their shared zero-commitment PDA would serialize distinct-shard Tx Ds.
+        assert!(!ix.accounts[7].is_writable);
+        assert!(!ix.accounts[8].is_writable);
     }
 
     #[test]
@@ -358,6 +374,42 @@ mod tests {
             build_settle_batched_ix(&dummy_tee(), 0, &dummy_payload(), 0, &proof(), &[0xAB; 32]);
         // note_lock_e [7] and note_lock_f [8] collide for an exact fill.
         assert_eq!(ix.accounts[7].pubkey, ix.accounts[8].pubkey);
+        assert!(!ix.accounts[7].is_writable);
+        assert!(!ix.accounts[8].is_writable);
+    }
+
+    #[test]
+    fn distinct_shard_settles_share_no_writable_accounts() {
+        let p0 = dummy_payload();
+        let mut p1 = dummy_payload();
+        p1.note_a_commitment = [0xA2; 32];
+        p1.note_b_commitment = [0xB2; 32];
+        p1.note_c_commitment = [0xC2; 32];
+        p1.note_d_commitment = [0xD2; 32];
+        let ix0 = build_settle_batched_ix(&dummy_addr(0xE0), 0, &p0, 0, &proof(), &[0xAB; 32]);
+        let ix1 = build_settle_batched_ix(&dummy_addr(0xE1), 1, &p1, 1, &proof(), &[0xAB; 32]);
+        let writable0: Vec<_> = ix0
+            .accounts
+            .iter()
+            .filter(|meta| meta.is_writable)
+            .map(|meta| meta.pubkey)
+            .chain(std::iter::once(ix0.accounts[0].pubkey)) // transaction fee payer
+            .collect();
+        let writable1: Vec<_> = ix1
+            .accounts
+            .iter()
+            .filter(|meta| meta.is_writable)
+            .map(|meta| meta.pubkey)
+            .chain(std::iter::once(ix1.accounts[0].pubkey))
+            .collect();
+        let shared: Vec<_> = writable0
+            .iter()
+            .filter(|key| writable1.contains(key))
+            .collect();
+        assert!(
+            shared.is_empty(),
+            "shared writable Tx D accounts: {shared:?}"
+        );
     }
 
     #[test]

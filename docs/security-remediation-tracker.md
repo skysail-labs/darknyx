@@ -23,7 +23,7 @@ runbooks have landed.
 | CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
 | CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Open |
 | CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Open |
-| CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm tests | Open |
+| CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm tests | In progress |
 | CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Open |
 | CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Open |
 | CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Open |
@@ -34,7 +34,7 @@ runbooks have landed.
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
-| P-01 | Perf | Vault + SDK + TEE | `remediation/vault-lifecycle` | Batch marker is read-only in every Tx D builder; batch Tx Ds share no writable key | Open |
+| P-01 | Perf | Vault + SDK + TEE | `remediation/vault-lifecycle` | Batch marker is read-only in every Tx D builder; distinct-shard Tx Ds share no writable key | In progress |
 | P-02 | Perf | TEE | `remediation/settlement-efficiency` | Build the N=16 tree once and extract every path; hash-count regression/benchmark | Open |
 | P-03 | Perf | Matcher | `remediation/matcher-performance` | Price-level aggregates and reusable demand curves preserve FIFO, tie-breaking, IOC/FOK/AON under differential properties | Open |
 | P-04 | Perf | TEE RPC | `remediation/settlement-efficiency` | Poll all pending signatures in one RPC request; remove confirmed entries; rebroadcast only overdue transactions | Open |
@@ -46,7 +46,7 @@ runbooks have landed.
 | N-01 | High | TEE | `remediation/tee-intake` | Production exits on dstack/KMS probe failure; test auth requires explicit simulator mode; production rejects test credentials | Closed |
 | N-02 | High | Matcher + TEE | `remediation/settlement-outcomes`, `remediation/finality-gated-book` | Book/fills commit only after per-match settlement outcome; ambiguous results reconcile/redrive; rejected matches are terminal and never auto-rebooked | Open |
 | N-03 | High | Matcher | `remediation/matcher-correctness` | Zero-limit market asks remain eligible but are not price candidates; bid@150/ask@0 clears positively | Closed |
-| N-04 | High liveness | Vault + SDK | `remediation/vault-lifecycle` | Merge proves every active input's NoteLock PDA absent; locked-note negative tests | Open |
+| N-04 | High liveness | Vault + SDK | `remediation/vault-lifecycle` | Merge proves every active input's NoteLock PDA absent; locked-note negative tests | In progress |
 | N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Closed |
 | N-06 | Medium | TEE | `remediation/tee-intake` | One collateral commitment reserves at most one live or pending order; lifecycle release tests | Closed |
 | N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Closed |
@@ -54,7 +54,7 @@ runbooks have landed.
 | N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Closed |
 | N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Open |
 | N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Open |
-| N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker is closable only after expiry; rent returns to recorded payer; early-close tests reject every signer | Open |
+| N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker is closable only after expiry; rent returns to recorded payer; early-close tests reject every signer | In progress |
 | N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Open |
 | N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
 | N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Open |
@@ -191,6 +191,51 @@ Every remediation PR must record:
   signatures, proofs, or deployed artifacts are invalidated, but reverting
   restores the scheduler's ability to sample a later slot and can make every
   nonzero-fee match in an otherwise valid batch unprovable.
+
+### `remediation/vault-lifecycle` — CS-09, P-01, N-04, N-12
+
+- **Invariant restored.** Tx D rejects before mutation when the current slot is
+  at or beyond either input lock's individual expiry. Merge requires the
+  correct `NoteLock` PDA for every active input and proves each is absent before
+  proof verification or consumption. `BatchValidityMarker` and inactive relock
+  destinations are read-only in every Rust and TypeScript Tx D builder, so
+  distinct-shard settles have no shared writable account. Every signer,
+  including the recorded payer, is rejected before marker expiry; at the exact
+  expiry boundary any signer may close and rent still returns to the payer. The
+  durable TEE sweeper reads marker state and submits only expired closes.
+- **Wire/account impact.** The merge instruction's `remaining_accounts` now
+  contains two equal ordered runs for active inputs: writable
+  `ConsumedNoteEntry` PDAs followed by read-only `NoteLock` PDAs. Tx D keeps its
+  account order and instruction data but changes marker and inactive relock
+  account metas to read-only. `NoteLockExpired` is appended to the vault error
+  enum, preserving every existing error code. No Borsh payload, canonical
+  domain, circuit, proving key, verifier key, N=16 fixture, or note construction
+  changes; the clean devnet reset policy means no compatibility shim is added.
+  The CPU CVM image pin advances from `tee-v3-hardening-49` to
+  `tee-v3-hardening-50` so Phala cannot reuse the old cached builders/sweeper.
+- **Local evidence.** Both plain-mainnet and `devnet-admin` SBF builds pass;
+  `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo build --examples -p darkpool-crypto`, and `cargo test
+  --workspace` pass. Targeted litesvm passes 13/13 batched-settle lifecycle
+  tests and 4/4 merge-verifier tests, including exact lock/marker expiry
+  boundaries, payer and third-party early-close rejection, rent refund,
+  locked-input merge rejection before any consume/tree mutation, and an
+  unlocked control using the same real K=2 proof. Rust Tx D layout tests pass
+  9/9, including two distinct-shard transactions with no shared writable
+  account; marker-sweeper tests pass 4/4. SDK and indexer TypeScript checks pass;
+  full SDK Vitest passes 216 with 22 environment-gated skips and full indexer
+  Vitest passes 23. The SDK's 18 affected transport tests include Rust/TS
+  account-meta parity. The workspace run also covers the N=16 fixture/verifier,
+  serialized Tx D cap assertion, and worst-case settle CU profile.
+- **Devnet/CVM evidence.** Pending the post-local-gate deploy and live CVM
+  rehearsal. The four tracker rows remain in progress until that evidence is
+  attached and the PR is merged.
+- **Rollback.** Revert this PR and redeploy the preceding vault program and TEE
+  image together. Existing notes, roots, orders, payloads, signatures, and
+  proofs remain byte-compatible, but an in-flight merge assembled with the new
+  extra accounts must be rebuilt for the old interface. Rollback reopens all
+  four findings, restores payer early-close, and restores the batch-wide Tx D
+  write conflict.
 
 ## Mainnet release gates
 

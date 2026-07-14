@@ -450,10 +450,10 @@ Three structural constraints force batched matching:
    v3.1 per-match `VALID_CREATE` + `VALID_PRICE` shape we deleted in
    Phase 1c-hard. Not going back.
 2. **`BatchValidityMarker` PDA is keyed by `[seed, merkle_root]`.**
-   Two batches racing on the same root collide on the PDA. The
-   serialised pipeline is structural: one batch's `close_batch_validity_marker`
-   must confirm before the next batch's `verify_match_batch` can run
-   (because the next batch's root binds to the new tree state).
+   Two batches racing on the same root collide on the PDA. Tx D treats the
+   marker and dummy relock destinations as read-only, so distinct shard settles
+   have no shared writable account. No signer can close the marker until
+   expiry; the next batch's root still binds to the resulting tree state.
 3. **Uniform-clearing-price is, by definition, a batch construct.**
    All trades in a batch fill at the same price. UCP is the privacy
    pattern dark pools rely on — continuous matching would leak fill
@@ -849,12 +849,14 @@ For each batch with ≥1 real matches:
    - **Tx D — `tee_forced_settle_batched(tree_id, payload, match_index,
      merkle_proof)`** — once per real match, all fired **concurrently**
      (bounded by `NYX_TEE_SETTLE_SEND_CONCURRENCY`, default 16). Because
-     each carries a distinct `(tee_keypairs[j], merkle_tree[j])`, the
-     concurrent Tx D's share **zero** writable accounts, so the leader
-     co-includes them in one block instead of spreading them across
-     slots (the single-tree, single-fee-payer plateau).
-   - **Tx E — `close_batch_validity_marker(merkle_root)`** — once per
-     batch, after all settles confirm.
+     different shards carry distinct `(tee_keypairs[j], merkle_tree[j])`, those
+     Tx D's share **zero** writable accounts, so the leader can co-include up to
+     K independent shard writes per block instead of hitting the single-tree,
+     single-fee-payer plateau.
+   - **Tx E — `close_batch_validity_marker(merkle_root)`** — once per batch,
+     asynchronously at or after marker expiry. The durable sweeper reads the
+     on-chain marker first and retains pre-expiry entries without submitting a
+     transaction.
 6. **Update the local Merkle mirrors** — route each appended leaf to
    `mirrors[tree_id]` (we know the leaf hashes ahead of time — compose
    them locally as the on-chain code does). §8.

@@ -99,9 +99,9 @@ pub enum VaultError {
     InsufficientFeeCharge,
 
     // ---- Note merge ----
-    #[msg("Merge K must be 2 or 4 and match the nullifier count")]
+    #[msg("Merge K must be 2 or 4 and match the input commitment count")]
     InvalidMergeK,
-    #[msg("Merge nullifier account missing or does not match the derived PDA")]
+    #[msg("Merge consumed-note or note-lock account is missing or does not match its derived PDA")]
     MergeAccountMismatch,
     #[msg("num_trees out of range (must be in 1..=MAX_TREES)")]
     InvalidTreeCount,
@@ -109,4 +109,6 @@ pub enum VaultError {
     InvalidKeyCount,
     #[msg("tee_pubkey is the zero key or a duplicate of another key in the set")]
     InvalidTeeKey,
+    #[msg("Input note lock has expired")]
+    NoteLockExpired,
 }

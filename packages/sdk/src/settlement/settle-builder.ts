@@ -278,10 +278,10 @@ export interface BuildSettleBatchedIxParams {
  *   4  note_lock_b             (mut, close)
  *   5  consumed_a              (init — the consume-once guard, shared w/ withdraw)
  *   6  consumed_b              (init)
- *   7  note_lock_e             (mut — relock; dummy when no buyer change)
- *   8  note_lock_f             (mut — relock; dummy when no seller change)
+ *   7  note_lock_e             (mut only when buyer relock is requested)
+ *   8  note_lock_f             (mut only when seller relock is requested)
  *   9  instructions_sysvar
- *  10  batch_validity_marker   (mut — left open; closed by a separate ix)
+ *  10  batch_validity_marker   (ro — left open; swept after expiry)
  *  11  system_program
  *
  * The two per-match `nullifier_entry` accounts were REMOVED: `payload.nullifier_a/b`
@@ -332,6 +332,8 @@ export function buildSettleBatchedIx(
   const [lockE] = noteLockPda(p.programId, p.payload.noteEcommitment);
   const [lockF] = noteLockPda(p.programId, p.payload.noteFcommitment);
   const [batchMarker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
+  const buyerRelock = p.payload.buyerRelockOrderId.some((x) => x !== 0);
+  const sellerRelock = p.payload.sellerRelockOrderId.some((x) => x !== 0);
 
   // ix data = anchor disc + payload (Borsh) + match_index (u8) + 4 × 32 sibling bytes.
   // Anchor's [[u8; 32]; 4] is encoded as 128 contiguous bytes (no length prefix).
@@ -356,14 +358,14 @@ export function buildSettleBatchedIx(
       { pubkey: lockB, isSigner: false, isWritable: true },
       { pubkey: consumedA, isSigner: false, isWritable: true },
       { pubkey: consumedB, isSigner: false, isWritable: true },
-      { pubkey: lockE, isSigner: false, isWritable: true },
-      { pubkey: lockF, isSigner: false, isWritable: true },
+      { pubkey: lockE, isSigner: false, isWritable: buyerRelock },
+      { pubkey: lockF, isSigner: false, isWritable: sellerRelock },
       {
         pubkey: SYSVAR_INSTRUCTIONS_PUBKEY,
         isSigner: false,
         isWritable: false,
       },
-      { pubkey: batchMarker, isSigner: false, isWritable: true },
+      { pubkey: batchMarker, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(data),
@@ -376,14 +378,11 @@ export function buildSettleBatchedIx(
 
 export interface BuildCloseBatchValidityMarkerIxParams {
   programId: PublicKey;
-  /** Caller. Either equals `marker.payer` (close-anytime) or any
-   *  signer if the marker has already passed `expiry_slot`. */
+  /** Any signer may sweep once the marker reaches `expiry_slot`. */
   authority: PublicKey;
   /** Refund target — MUST equal `marker.payer` recorded by
    *  `verify_match_batch`. Anchor's `has_one = payer` check on the
-   *  marker enforces this. For the matcher's standard fast-path
-   *  (close immediately after the last settle in the batch), pass
-   *  the same key as `authority`. */
+   *  marker enforces this. */
   payer: PublicKey;
   /** The batch's Merkle root — seeds the marker PDA. */
   merkleRoot: Uint8Array;
@@ -391,9 +390,8 @@ export interface BuildCloseBatchValidityMarkerIxParams {
 
 /**
  * Build the `close_batch_validity_marker` Anchor ix. Caller should
- * land this once per batch, after the last `tee_forced_settle_batched`
- * succeeds; the ix refunds the marker's rent (~49 bytes worth) to
- * `marker.payer`.
+ * land this once per batch at or after marker expiry; the ix refunds the
+ * marker's rent (~49 bytes worth) to `marker.payer`.
  *
  * Accounts order MUST match `CloseBatchValidityMarker<'info>`:
  *   0  authority   (signer)

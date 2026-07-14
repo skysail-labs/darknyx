@@ -115,8 +115,9 @@ Settlement is atomic and replay-proof by construction:
   PDA; a second attempt to touch it simply fails to initialize. The same note can
   never be settled, withdrawn, or merged twice — these paths all share that
   commitment-keyed spent-note guard.
-- **The marker is 1:N.** One validity marker authorizes the whole batch and is
-  closed exactly once, after every match in it settles.
+- **The marker is 1:N.** One read-only validity marker authorizes the whole
+  batch. No signer can close it before expiry; at or after expiry it is swept
+  exactly once and its rent returns to the recorded payer.
 - **Conservation.** Both legs pay their own protocol fee and both fee notes
   mint; the proof rejects any match where value in ≠ value out.
 

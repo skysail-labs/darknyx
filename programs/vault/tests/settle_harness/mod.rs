@@ -1453,10 +1453,18 @@ pub fn build_settle_batched_ix_for(
             AccountMeta::new(lock_b, false),
             AccountMeta::new(consumed_a, false),
             AccountMeta::new(consumed_b, false),
-            AccountMeta::new(lock_e, false),
-            AccountMeta::new(lock_f, false),
+            if payload.buyer_relock_order_id != [0u8; 16] {
+                AccountMeta::new(lock_e, false)
+            } else {
+                AccountMeta::new_readonly(lock_e, false)
+            },
+            if payload.seller_relock_order_id != [0u8; 16] {
+                AccountMeta::new(lock_f, false)
+            } else {
+                AccountMeta::new_readonly(lock_f, false)
+            },
             AccountMeta::new_readonly(instructions_sysvar, false),
-            AccountMeta::new(marker_pda, false),
+            AccountMeta::new_readonly(marker_pda, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],
         data,
@@ -1644,9 +1652,7 @@ pub fn seed_marker_and_build_settle_batched_ix(
 }
 
 /// Build a `close_batch_validity_marker` ix.
-/// `authority == payer` is the fast-path (matcher closes immediately
-/// after the last settle); `authority != payer` is the expiry-GC path
-/// (anyone can sweep an expired marker; rent still flows to payer).
+/// Any authority may sweep at or after expiry; rent always flows to payer.
 pub fn build_close_batch_validity_marker_ix(
     h: &Harness,
     merkle_root: &[u8; 32],

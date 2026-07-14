@@ -127,8 +127,9 @@ reserves-vs-liabilities comparison — verifiable by anyone against the chain.
 
 ### Validity marker
 
-A short-lived on-chain authorization that a settlement consumes. One marker
-covers a whole batch and is closed once, after every match in it settles.
+A short-lived on-chain authorization that settlement reads. One marker covers a
+whole batch, remains read-only across its per-match transactions, and is
+closable only at or after expiry.
 
 ### Vault
 
