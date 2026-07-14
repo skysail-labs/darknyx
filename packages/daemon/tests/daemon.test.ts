@@ -232,7 +232,7 @@ describe("Daemon — balances + streams", () => {
     expect(byMint["02".repeat(32)].amount).toBe("3");
   });
 
-  it("start() opens both streams; stop() closes the placer", async () => {
+  it("start() shares one multiplexed session across both channels", async () => {
     const fills = capture();
     const orders = capture();
     const daemon = mkDaemon({
@@ -242,6 +242,9 @@ describe("Daemon — balances + streams", () => {
     await daemon.start();
     expect(fills.cap.opts).toBeDefined();
     expect(orders.cap.opts).toBeDefined();
+    expect((fills.cap.opts as { streamClient?: unknown }).streamClient).toBe(
+      (orders.cap.opts as { streamClient?: unknown }).streamClient,
+    );
     daemon.stop();
     expect((placer.close as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
       1,

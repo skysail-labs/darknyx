@@ -708,7 +708,7 @@ maybeDescribe(
           );
           expect(
             memoRec,
-            "live /ws/fills did not deliver+verify the buyer FillMemo for the located commitment (is the CVM built from the fills commit?)",
+            "live fills channel did not deliver+verify the buyer FillMemo for the located commitment (is the CVM built from the stream commit?)",
           ).toBeTruthy();
 
           // The memo's amount is the authoritative (off-chain) change amount.

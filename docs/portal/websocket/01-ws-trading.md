@@ -1,31 +1,35 @@
 ---
 sidebar_position: 1
-title: WebSocket Trading
-description: Submit orders over a single warm, pre-authenticated socket using framed place / cancel / modify, with optional cancel-on-disconnect.
+title: Order Operations
+description: Submit framed place, cancel, and modify requests on the multiplexed session stream.
 ---
 
-# WebSocket Trading
+# Order Operations
 
 :::info TL;DR
-`/ws/trading` is a bidirectional socket for order submission. Stream framed
+`/v1/stream` is the sole bidirectional WebSocket. Authenticate in-band, stream framed
 `order.place` / `order.cancel` / `order.modify` requests and receive one reply
 per frame, dispatched to the **same** intake and verification the REST endpoints
-use. The wins over REST: one warm, pre-authenticated connection (no TLS + bearer
-round-trip per request) and **cancel-on-disconnect** for market makers.
+use. The same session carries `orders`, `fills`, and `tree` subscriptions,
+short-lived-token refresh, and **cancel-on-disconnect** for market makers.
 :::
 
 ## Connect
 
 ```text
-wss://<gateway-host>/ws/trading?token=<access_token>
+wss://<gateway-host>/v1/stream
 ```
 
-The socket self-authenticates with the bearer token as `?token=` (an
-`Authorization: Bearer` header is also accepted). To enable cancel-on-disconnect,
-add `&cancel_on_disconnect=true`.
+The socket upgrades without credentials in the URL. Its first authenticated
+operation is a `login` frame. Set `cancel_on_disconnect` in that frame:
 
-```text
-wss://<gateway-host>/ws/trading?token=<access_token>&cancel_on_disconnect=true
+```json
+{
+  "op": "login",
+  "request_id": "login-1",
+  "token": "<access_token>",
+  "cancel_on_disconnect": true
+}
 ```
 
 :::caution The order signature is still required
@@ -44,6 +48,8 @@ reply echoes so a client can correlate responses on the multiplexed socket.
 
 | `op` | Fields | Equivalent REST |
 |---|---|---|
+| `login` | `request_id?`, `token`, `cancel_on_disconnect?` | establishes or refreshes session auth |
+| `subscribe` | `request_id?`, `channels` | subscribes to `orders`, `fills`, or `tree` |
 | `order.place` | `request_id?`, `params` (a full [Place Order](../orders/place-order) body) | `POST /orders` |
 | `order.cancel` | `request_id?`, `order_id`, `params` (`trading_key`, `cancel_nonce`, `trading_key_signature`) | `DELETE /orders/{id}` |
 | `order.modify` | `request_id?`, `order_id`, `params` (a [Modify Order](../orders/modify-order) body) | `PUT /orders/{id}` |
@@ -64,6 +70,7 @@ can detect a dropped frame.
 | `order.cancel` | `seq`, `request_id?`, `result` | Order cancelled. |
 | `order.modify` | `seq`, `request_id?`, `result` | Order modified. |
 | `pong` | `seq`, `request_id?` | Heartbeat reply. |
+| `auth_expired` | `seq`, `expires_at` | Refresh the token with another `login` before expiry. |
 | `error` | `seq`, `request_id?`, `code`, `message` | A frame failed. `code` is the stable numeric [error code](../reference/error-codes); `message` is the same reason the REST path would have returned. |
 
 ```json
@@ -76,15 +83,15 @@ can detect a dropped frame.
 
 ## Cancel-on-disconnect
 
-When you connect with `?cancel_on_disconnect=true`, the engine tracks the orders
+When you login with `cancel_on_disconnect: true`, the engine tracks the orders
 placed on **this** socket and, when the socket closes, cancels the ones still
 resting. This protects a market maker that loses connectivity from leaving stale
 quotes crossing.
 
 You can also set an **account-wide default** so every socket gets the behavior
-without the query param: `PUT /account/settings` with
-`{ "cancel_on_disconnect_default": true }`. An explicit `?cancel_on_disconnect=`
-on a socket always overrides the account default for that connection.
+without setting it in each login: `PUT /account/settings` with
+`{ "cancel_on_disconnect_default": true }`. An explicit login value overrides
+the account default for that connection.
 
 The teardown is a server-initiated cancel using each order's own booked key. It
 needs no client signature, because the order was placed on this authenticated
@@ -109,16 +116,28 @@ also answered.
 ## Example
 
 ```javascript
-const ws = new WebSocket(`${WSS}/ws/trading?token=${TOKEN}&cancel_on_disconnect=true`);
+const ws = new WebSocket(`${WSS}/v1/stream`);
 let id = 0;
 const next = () => `r-${++id}`;
 
 ws.onopen = () => {
-  ws.send(JSON.stringify({ op: "order.place", request_id: next(), params: order }));
+  ws.send(JSON.stringify({
+    op: "login",
+    request_id: next(),
+    token: TOKEN,
+    cancel_on_disconnect: true,
+  }));
 };
 
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
+  if (msg.op === "login") {
+    ws.send(JSON.stringify({ op: "subscribe", request_id: next(), channels: ["orders", "fills"] }));
+    ws.send(JSON.stringify({ op: "order.place", request_id: next(), params: order }));
+  }
+  if (msg.op === "auth_expired") refreshToken().then((token) => {
+    ws.send(JSON.stringify({ op: "login", request_id: next(), token }));
+  });
   if (msg.op === "error") console.error("rejected", msg.code, msg.message);
   else if (msg.op === "order.place") console.log("accepted", msg.result.order_id);
 };
@@ -128,12 +147,12 @@ setInterval(() => ws.send(JSON.stringify({ op: "ping", request_id: next() })), 2
 
 ## REST vs. WebSocket
 
-| Aspect | REST | WebSocket trading |
+| Aspect | REST | Session stream |
 |---|---|---|
 | Latency | Higher (TLS + HTTP per request) | Lower (one persistent socket) |
-| Auth | Bearer header per request | Token once at connect; order signature per frame |
+| Auth | Bearer header per request | In-band login/refresh; order signature per frame |
 | Disconnect safety | None | Optional cancel-on-disconnect |
 | Best for | One-off calls, cold starts | Long-running trading clients, market makers |
 
-For live order *state* (fills, expiries), pair this socket with the
-[Orders Channel](./orders-channel) and the [Fills Channel](./fills-channel).
+For live order state and fill memos, subscribe to the [Orders Channel](./orders-channel)
+and [Fills Channel](./fills-channel) on this same socket.

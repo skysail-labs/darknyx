@@ -43,6 +43,7 @@ interface FakeClientOpts {
 /** A fake TradingClient whose connect/place behaviour the test scripts. */
 class FakeClient implements TradingClientLike {
   connected = false;
+  connectCalls = 0;
   closed = false;
   constructor(
     public readonly opts: FakeClientOpts,
@@ -52,6 +53,7 @@ class FakeClient implements TradingClientLike {
     } = {},
   ) {}
   async connect(): Promise<void> {
+    this.connectCalls += 1;
     if (this.behavior.connect) return this.behavior.connect();
     this.connected = true;
   }
@@ -127,6 +129,29 @@ describe("WsOrderPlacer", () => {
     expect(resp).toEqual(ACCEPT);
     expect(built).toHaveLength(2); // rebuilt after the transport error
     expect(built[0].closed).toBe(true); // dead client was closed
+  });
+
+  it("reconnects the shared multiplexed client without permanently closing it", async () => {
+    let calls = 0;
+    const shared = new FakeClient(
+      {},
+      {
+        place: () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.reject(new Error("stream closed (code 1006)"))
+            : Promise.resolve(ACCEPT);
+        },
+      },
+    );
+    const placer = new WsOrderPlacer({
+      gatewayWsUrl: "wss://gw",
+      token: "t",
+      client: shared,
+    });
+    await expect(placer.place(REQ)).resolves.toEqual(ACCEPT);
+    expect(shared.connectCalls).toBe(2);
+    expect(shared.closed).toBe(false);
   });
 
   it("does NOT retry a NyxApiError (definitive server reply)", async () => {

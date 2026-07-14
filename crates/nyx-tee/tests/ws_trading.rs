@@ -1,10 +1,10 @@
-//! `/ws/trading` core — the transport-agnostic intake the socket dispatches to,
+//! `/v1/stream` order core — the transport-agnostic intake the socket dispatches to,
 //! plus the cancel-on-disconnect teardown. We exercise
 //! `orders::{place_core, cancel_core, cancel_resting_unchecked}` directly
 //! against a real `ApiState` + `MatcherState` (the exact functions the
-//! `trading_ws` handler calls per frame), so we cover the order-management
+//! stream handler calls per frame), so we cover the order-management
 //! semantics without binding a socket. The frame (de)serialization is unit-
-//! tested in `api::trading`.
+//! tested in `api::stream`.
 
 use std::sync::Arc;
 

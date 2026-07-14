@@ -60,14 +60,42 @@ function fakeIndexer(rows: Record<string, IndexerFill[]>): typeof fetch {
 
 class FakeWs implements WebSocketLike {
   private handlers: Record<string, Array<(ev?: unknown) => void>> = {};
+  private serverSeq = 0;
+  sent: string[] = [];
   // `any` callback param: a single mock signature can't satisfy the interface's
   // four typed addEventListener overloads otherwise (callback contravariance).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   addEventListener(type: string, cb: (ev: any) => void): void {
     (this.handlers[type] ??= []).push(cb as (ev?: unknown) => void);
   }
+  send(data: string): void {
+    this.sent.push(data);
+    const frame = JSON.parse(data) as {
+      op: string;
+      request_id?: string;
+      channels?: string[];
+    };
+    if (frame.op === "login") {
+      this.server({
+        op: "login",
+        request_id: frame.request_id,
+        account_id: "acct",
+      });
+    } else if (frame.op === "subscribe") {
+      this.server({
+        op: "subscribed",
+        request_id: frame.request_id,
+        channels: frame.channels,
+      });
+    }
+  }
   close(): void {
     this.emit("close", { code: 1000 });
+  }
+  server(frame: Record<string, unknown>): void {
+    this.emit("message", {
+      data: JSON.stringify({ ...frame, seq: ++this.serverSeq }),
+    });
   }
   emit(type: string, ev?: unknown): void {
     for (const h of this.handlers[type] ?? []) h(ev);
@@ -158,7 +186,9 @@ describe("backfill then tail", () => {
       });
     });
 
-    ws.emit("message", { data: JSON.stringify(memo) });
+    ws.emit("open");
+    await Promise.resolve();
+    ws.server({ ...memo, channel: "fills" });
     await done;
 
     expect(fills).toEqual([b.commitment]);
@@ -189,15 +219,17 @@ describe("backfill then tail", () => {
         onFill: () => resolve(),
       });
     });
-    ws2.emit("message", { data: JSON.stringify(aMemo) });
+    ws2.emit("open");
+    await Promise.resolve();
+    ws2.server({ ...aMemo, channel: "fills" });
     await done2;
     expect(await store.list()).toHaveLength(2); // still 2 — commitment-keyed
   });
 
-  it("surfaces a 1011 resync close to the caller", () => {
+  it("surfaces a 1011 resync close to the caller", async () => {
     const ws = new FakeWs();
     let resync: string | undefined;
-    subscribeFills({
+    const sub = subscribeFills({
       gatewayWsUrl: "wss://gw.test",
       token: "tok",
       masterSeed: SEED,
@@ -208,7 +240,10 @@ describe("backfill then tail", () => {
         resync = reason;
       },
     });
+    ws.emit("open");
+    await Promise.resolve();
     ws.emit("close", { code: 1011, reason: "lagged: 5 memos skipped" });
     expect(resync).toContain("lagged");
+    sub.close();
   });
 });

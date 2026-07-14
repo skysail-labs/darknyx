@@ -1,9 +1,9 @@
 /**
  * Order-lifecycle reducer unit tests — pure, no CVM.
  *
- * Event model is decoupled: `fill` (from /ws/fills) drives ONLY anchor
+ * Event model is decoupled: `fill` (from the fills channel) drives ONLY anchor
  * consumption + residual counting; phase comes from `filled` / `cancelled` /
- * `expired` / `accepted` (from /ws/orders + placement). Covers both, plus the
+ * `expired` / `accepted` (from the orders channel + placement). Covers both, plus the
  * two automation decisions (auto anchor top-up, auto-merge).
  */
 

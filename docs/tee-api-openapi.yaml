@@ -631,8 +631,8 @@ components:
         cancel_on_disconnect_default:
           type: boolean
           description: |
-            Account-wide default for `/ws/trading` cancel-on-disconnect. A
-            socket's explicit `?cancel_on_disconnect=` query param overrides it.
+            Account-wide default for `/v1/stream` cancel-on-disconnect. A
+            login frame's explicit `cancel_on_disconnect` value overrides it.
           default: false
 
     TreeRoot:
@@ -1238,7 +1238,7 @@ paths:
       description: |
         Replaces the settings wholesale (omitted fields default), then persists.
         Used e.g. to set the cancel-on-disconnect default for all future
-        `/ws/trading` sockets.
+        `/v1/stream` sessions.
       security: [{ BearerAuth: [] }]
       requestBody:
         required: true
@@ -1258,7 +1258,7 @@ paths:
   # field), so an offline client recovers the amount + opening from the indexer's
   # located ciphertext via the SDK `recoverChangeFromChain` (decrypt + Vuln-4
   # self-verify) — durable across a CVM redeploy, unlike the old log. Only the
-  # live `/ws/fills` push remains in this API. See docs/fills-history-architecture.md.
+  # live `/v1/stream` fills push remains in this API. See docs/fills-history-architecture.md.
 
   # ───── tree ────────────────────────────────────────────────────────────────
 
@@ -1489,186 +1489,22 @@ paths:
 # protocol as a series of message schemas)
 # ─────────────────────────────────────────────────────────────────────────────
 
-x-websocket-implemented:
-  # The CURRENTLY IMPLEMENTED WS surface. Two dedicated, per-account streams
-  # (fill-memos + order-lifecycle), the bidirectional `/ws/trading` order
-  # socket, AND the multiplexed `/v1/stream` superset below (now LIVE — it
-  # subsumes all three plus a global live `tree` channel; see `api::stream`).
-  # The dedicated sockets share the same self-auth + per-account routing.
-  auth: |
-    Bearer token from POST /auth/token, passed as the `?token=` query param
-    (browsers + the global WebSocket can't set an Authorization header on the
-    upgrade; a `Authorization: Bearer` header is also accepted). Every stream is
-    PER-ACCOUNT: a subscriber only ever receives events for orders it placed
-    (routed via the intake-time order_id→account map).
-
-    SEQUENCING: every server message carries a top-level `seq` — a per-connection
-    monotonic counter starting at 1. A gap in `seq` (or a 1011 lag-close) means
-    the client missed messages; recover by reconciling (GET /orders/:id for the
-    orders stream; for fills, the change_amount is recoverable from the on-chain
-    ciphertext via the indexer + SDK `recoverChangeFromChain` — change-amount
-    recovery, Proposal B — the durable source after amount-privacy).
-  streams:
-    /ws/fills:
-      description: |
-        Per-account continuation-fill memos (the live "tail" — a low-latency fast
-        path). Earlier fills (before the socket opened, or after a lag-close /
-        restart) are recovered from the PERMANENT on-chain ciphertext: the indexer
-        locates the fill + surfaces its `fill_recovery` bytes, and the SDK
-        `recoverChangeFromChain` decrypts + self-verifies the amount/opening
-        (change-amount recovery, Proposal B). This replaced the retired durable
-        memo-replay log; it survives a CVM redeploy.
-      server_messages:
-        FillMemo:
-          description: One continuation fill. The client verifies it (inner_hash +
-            commitment binding) then stores the change note. See docs/fills-history-architecture.md.
-          message:
-            type: object
-            required: [order_id, anchor_index, change_amount, change_note_commitment, mint, inner_hash]
-            properties:
-              seq: { type: integer, format: uint64, description: Optional per-connection monotonic counter (live gap-detect); no longer a durable replay cursor. }
-              order_id: { type: string, description: 16-byte hex. }
-              anchor_index: { type: integer }
-              change_amount: { type: integer, format: uint64 }
-              change_note_commitment: { type: string, description: 32-byte hex. }
-              mint: { type: string, description: 32-byte hex. }
-              inner_hash: { type: string, description: 32-byte hex. }
-    /ws/orders:
-      description: |
-        Per-account order-lifecycle events. The matcher emits an update each
-        time one of the account's orders changes state in a tick
-        (partial/full fill, expiry); an explicit DELETE /orders/{id} (and the
-        cancel leg of a PUT /orders/{id} modify) also emits a synthetic
-        `cancelled`. Terminal events (fully_filled / cancelled / expired) are the
-        order's last; the server then drops its routing entry.
-      server_messages:
-        OrderUpdate:
-          description: One order state transition. `filled_quantity` is present on fills;
-            `new_amount` / `new_note_amount` are present on a partial fill (the residual
-            that keeps resting).
-          message:
-            type: object
-            required: [seq, order_id, kind]
-            properties:
-              seq: { type: integer, format: uint64, description: Per-connection monotonic sequence (gap detection). }
-              order_id: { type: string, description: 16-byte hex. }
-              kind:
-                type: string
-                enum: [partially_filled, fully_filled, cancelled, expired]
-              filled_quantity: { type: integer, format: uint64 }
-              new_amount: { type: integer, format: uint64, description: Residual base amount after a partial fill. }
-              new_note_amount: { type: integer, format: uint64, description: Residual collateral-note amount after a partial fill. }
-    /ws/trading:
-      description: |
-        BIDIRECTIONAL order-submission socket. One warm, pre-authenticated
-        connection over which a client streams framed `order.place` /
-        `order.cancel` / `order.modify` requests and gets one reply per frame —
-        each dispatched to the SAME intake the REST `POST/DELETE/PUT /orders`
-        handlers use, so there is no second verification path. The win over
-        REST is the avoided per-request TLS + bearer round-trip and
-        **cancel-on-disconnect**.
-
-        AUTH: the socket self-authenticates at upgrade (bearer via `?token=` or
-        the Authorization header). The per-order trading-key SIGNATURE is still
-        required on every place/cancel/modify frame (the JWT identifies the
-        account; the trading_key is the cryptographic owner) — an authed socket
-        cannot move another key's orders.
-
-        CANCEL-ON-DISCONNECT: open with `?cancel_on_disconnect=true`. The TEE
-        tracks the orders placed on THIS socket and, when it closes, cancels
-        the ones still resting. That teardown is server-initiated (no client
-        signature — the order was placed on this authenticated session, and a
-        cancel only removes a resting order, never settles). A market maker
-        that loses connectivity therefore doesn't leave stale quotes crossing.
-      client_messages:
-        # Each frame is internally tagged by `op`; `request_id` (optional) is
-        # echoed on the reply so a client can correlate on the multiplexed socket.
-        order.place:
-          message:
-            type: object
-            required: [op, params]
-            properties:
-              op: { type: string, enum: [order.place] }
-              request_id: { type: string }
-              params: { $ref: '#/components/schemas/PlaceOrderRequest' }
-        order.cancel:
-          message:
-            type: object
-            required: [op, order_id, params]
-            properties:
-              op: { type: string, enum: [order.cancel] }
-              request_id: { type: string }
-              order_id: { type: string, description: 16-byte hex. }
-              params:
-                type: object
-                description: Same body as DELETE /orders/{id} (trading-key cancel signature).
-                required: [trading_key, cancel_nonce, trading_key_signature]
-                properties:
-                  trading_key: { type: string }
-                  cancel_nonce: { type: integer }
-                  trading_key_signature: { type: string }
-        order.modify:
-          message:
-            type: object
-            required: [op, order_id, params]
-            properties:
-              op: { type: string, enum: [order.modify] }
-              request_id: { type: string }
-              order_id: { type: string, description: The OLD order id (hex) to replace. }
-              params:
-                type: object
-                required: [cancel_signature, cancel_nonce, replacement]
-                properties:
-                  cancel_signature: { type: string }
-                  cancel_nonce: { type: integer }
-                  replacement: { $ref: '#/components/schemas/PlaceOrderRequest' }
-        ping:
-          message:
-            type: object
-            required: [op]
-            properties:
-              op: { type: string, enum: [ping] }
-              request_id: { type: string }
-      server_messages:
-        Reply:
-          description: |
-            One reply per request frame. `op` echoes the request's
-            (`order.place` / `order.cancel` / `order.modify`) with a `result`
-            body identical to the REST response, or `pong` for a ping. A failed
-            frame returns `op: error` with the same numeric `code` + `message`
-            the REST error envelope would have returned (see the Error Codes
-            reference).
-          message:
-            type: object
-            required: [op, seq]
-            properties:
-              op: { type: string, enum: [order.place, order.cancel, order.modify, pong, error] }
-              seq: { type: integer, format: uint64, description: Per-connection monotonic sequence (every reply frame). }
-              request_id: { type: string }
-              result: { type: object, description: Present on success; mirrors the REST response body. }
-              code: { type: integer, description: "Present on `error` — the stable numeric error code." }
-              message: { type: string, description: Present on `error`. }
-  close_codes:
-    1011: Lagged past the per-account buffer — reopen and re-backfill any gap from the on-chain ciphertext (SDK recoverChangeFromChain).
-
 x-websocket:
 
   url: /v1/stream
   description: |
-    LIVE multiplexed superset (`api::stream`) of the dedicated
-    `/ws/fills`, `/ws/orders`, and `/ws/trading` sockets, plus a global
-    live `tree` channel. One socket per session. Authenticate IN-BAND with
-    `op: login` (carrying a bearer token from POST /auth/token) — unlike
-    the dedicated sockets, which auth at upgrade via `?token=` — then
-    subscribe to channels. The order.place/cancel/modify ops dispatch to
-    the SAME intake core as `/ws/trading` + the REST path.
+    The sole WebSocket surface (`api::stream`): one socket per session for
+    order operations plus the `orders`, `fills`, and `tree` channels.
+    Authenticate IN-BAND with `op: login` carrying a bearer token from
+    POST /auth/token, then subscribe to channels. Bearer tokens never appear
+    in the URL. The order.place/cancel/modify ops dispatch to the same intake
+    core as the REST path.
 
     Served channels: `orders`, `fills` (per-account), `tree` (global
     leaf-appends). NOT served: `account` (mirrors GET /account 501),
     `settlement` (no event plumbing yet) — a subscribe to either returns
-    an error frame. `account.info` + `tree.inclusion` reply
-    not-implemented (use the `tree` channel + your keys, or
-    GET /tree/inclusion).
+    an error frame. `account.info` replies not-implemented; use the `tree`
+    channel plus your keys, or GET /tree/inclusion.
 
     There is no in-band session-encryption envelope. The previous
     draft of this spec had X25519 ECDH + AES-256-GCM ops
@@ -1768,11 +1604,18 @@ x-websocket:
       description: Cancel an open order.
       message:
         type: object
-        required: [op, request_id, order_id]
+        required: [op, request_id, order_id, params]
         properties:
           op: { type: string, enum: [order.cancel] }
           request_id: { type: string }
           order_id: { type: string }
+          params:
+            type: object
+            required: [trading_key, cancel_nonce, trading_key_signature]
+            properties:
+              trading_key: { type: string }
+              cancel_nonce: { type: integer }
+              trading_key_signature: { type: string }
 
     order.modify:
       description: |
@@ -1780,14 +1623,18 @@ x-websocket:
         OLD order and rest a fully-signed replacement under one matcher lock.
       message:
         type: object
-        required: [op, request_id, order_id, cancel_signature, cancel_nonce, replacement]
+        required: [op, request_id, order_id, params]
         properties:
           op: { type: string, enum: [order.modify] }
           request_id: { type: string }
           order_id: { type: string, description: The OLD order id (hex) to replace. }
-          cancel_signature: { type: string }
-          cancel_nonce: { type: integer }
-          replacement: { $ref: '#/components/schemas/PlaceOrderRequest' }
+          params:
+            type: object
+            required: [cancel_signature, cancel_nonce, replacement]
+            properties:
+              cancel_signature: { type: string }
+              cancel_nonce: { type: integer }
+              replacement: { $ref: '#/components/schemas/PlaceOrderRequest' }
 
     # order.mass_quote was SHELVED (see POST /orders/mass-quote and
     # docs/api-surface-roadmap.md): a mass-quote needs a one-note-backs-many-
@@ -1809,19 +1656,6 @@ x-websocket:
         properties:
           op: { type: string, enum: [account.info] }
           request_id: { type: string }
-
-    tree.inclusion:
-      description: |
-        Pull-style inclusion proof over WS (lower latency than
-        REST round-trip when building VALID_SPEND proofs in a
-        tight loop).
-      message:
-        type: object
-        required: [op, request_id, commitment]
-        properties:
-          op: { type: string, enum: [tree.inclusion] }
-          request_id: { type: string }
-          commitment: { type: string }
 
   server_channels:
 

@@ -30,7 +30,7 @@ cd /path/to/repo/root
 >    signed order canonical (domain bumped `nyx-order-v1` → `v2`). The SDK
 >    builders are `buildAnchorPool` / `anchorsToJson` / `buildAnchorTopUp`
 >    (`packages/sdk/src/orders/anchor-pool.ts`); top-ups go to
->    `POST /orders/{id}/anchors`; fills stream over `GET /ws/fills`
+>    `POST /orders/{id}/anchors`; fills stream over `/v1/stream`'s `fills` channel
 >    (`verifyFillMemo` runs the integrity check, then store the change note).
 >    `cvm-settle-e2e.test.ts` is wired to this shape.
 
@@ -564,10 +564,10 @@ phala cvms logs "$CVM" | grep -E "settle co-inclusion|settle pipeline timing"
 #   lock_ms / prove_ms / alt_tx_ms / settle_ms = per-stage wall time
 ```
 
-### 6.1 Validate fills delivery — the off-TEE indexer + per-account WS
+### 6.1 Validate fills delivery — the off-TEE indexer + per-account stream channel
 
 The same settle that mints `note_e` (above) is a **continuation fill**: the CVM
-emits a `FillMemo` over `GET /ws/fills` (live) and the on-chain settle tx carries
+emits a `FillMemo` over `/v1/stream`'s `fills` channel (live) and the on-chain settle tx carries
 the change note's `order_id` + amount + commitment (durable). `cvm-settle-e2e`
 asserts BOTH automatically when `NYX_INDEXER_URL` is set — order ids are
 deterministic (`deriveOrderId`), so the test queries the indexer by the exact id
@@ -587,7 +587,7 @@ RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" NYX_INDEXER_URL="http://127.0.0.1:8090" \
   bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts'
 ```
 
-> **The WS half needs a CVM built from the fills commit** (per-account `/ws/fills`,
+> **The WS half needs a CVM built from the fills commit** (per-account `fills` channel,
 > un-gated). The **indexer half works against any deployed CVM** — it only reads the
 > chain. Without `NYX_INDEXER_URL` the test runs exactly as before (settle only).
 > In the SDK the equivalent client one-liner is `startFillsSync({ indexerBaseUrl,

@@ -119,8 +119,11 @@ per-account fill stream. The connection is **per-account**: you only ever
 receive fills for orders you placed.
 
 ```text
-wss://<gateway>/ws/fills?token=<bearer>
+wss://<gateway>/v1/stream
 ```
+
+Authenticate with an in-band `login` frame, then subscribe to `fills`; do not
+put bearer credentials in the URL.
 
 Each message is a `FillMemo` carrying everything you need to reconstruct and
 store the resulting change note. If the stream lags past its buffer, the server

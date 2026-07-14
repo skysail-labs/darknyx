@@ -3,17 +3,16 @@
  *
  * Placement is transport-agnostic: the SDK builds + signs the body the same way
  * for both paths (`proveAndBuildOrder` / `buildCancel`); only the wire differs.
- * Per the finalized policy, the **default is `/ws/trading`** (a warm,
- * pre-authenticated socket with cancel-on-disconnect — the right transport for a
+ * Per the finalized policy, the **default is `/v1/stream`** (a warm,
+ * in-band-authenticated session with cancel-on-disconnect — the right transport for a
  * market maker, since a crashed daemon auto-pulls its resting quotes), with
  * **REST `POST/DELETE/PUT /orders` as a thin fallback** for bring-up/debug or a
  * flapping socket.
  *
  * Both TEE paths dispatch to the SAME intake core (one verification path), so
  * the choice is purely operational. The one piece of machinery the WS path needs
- * — and that REST doesn't — is **reconnect**: `TradingClient` is a single socket
- * that dies on close, so {@link WsOrderPlacer} owns rebuilding it. That's exactly
- * the kind of long-lived-session machinery the daemon exists to own.
+ * — and that REST doesn't — is reconnect and exact request correlation, both
+ * owned by the shared `TradingClient` session.
  */
 
 import {
@@ -115,15 +114,15 @@ export interface WsOrderPlacerOptions {
   maxRetries?: number;
   /** Factory seam; defaults to building a real `TradingClient`. */
   clientFactory?: (opts: TradingClientOptions) => TradingClientLike;
+  /** Existing multiplexed session shared with fills and order updates. */
+  client?: TradingClientLike;
 }
 
 /**
- * WS {@link OrderPlacer} over `/ws/trading`. Lazily connects one
- * `TradingClient`, reuses it across calls, and — because the socket dies on
- * close with no auto-reconnect — rebuilds it on a transport failure and retries
- * (up to `maxRetries`). A {@link NyxApiError} is a definitive server answer and
- * is NOT retried (e.g. a nonce reuse, or a cancel for an order the
- * cancel-on-disconnect sweep already pulled). The default transport.
+ * WS {@link OrderPlacer} over `/v1/stream`. It reuses the daemon's multiplexed
+ * client when supplied; otherwise it lazily creates one. Transport failures are
+ * retried up to `maxRetries`; a {@link NyxApiError} is a definitive server answer
+ * and is never retried.
  */
 export class WsOrderPlacer implements OrderPlacer {
   private client: TradingClientLike | null = null;
@@ -135,12 +134,14 @@ export class WsOrderPlacer implements OrderPlacer {
   }
 
   private build(): TradingClientLike {
+    if (this.opts.client) return this.opts.client;
     const factory = this.opts.clientFactory ?? ((o) => new TradingClient(o));
     const created = factory({
       gatewayWsUrl: this.opts.gatewayWsUrl,
       token: this.opts.token,
       cancelOnDisconnect: this.opts.cancelOnDisconnect ?? true,
       webSocketFactory: this.opts.webSocketFactory,
+      autoReconnect: false,
       onClose: (code, reason) => {
         // Drop a dead idle connection so the next call rebuilds eagerly.
         if (this.client === created) this.client = null;
@@ -178,11 +179,13 @@ export class WsOrderPlacer implements OrderPlacer {
         // A NyxApiError is the server's definitive reply — never retry it.
         if (err instanceof NyxApiError || attempt >= this.maxRetries) throw err;
         attempt += 1;
-        // Transport failure: discard the dead client + reconnect on the loop.
-        try {
-          c.close();
-        } catch {
-          /* best effort */
+        // A shared stream reconnects itself; a private one is rebuilt here.
+        if (!this.opts.client) {
+          try {
+            c.close();
+          } catch {
+            /* best effort */
+          }
         }
         if (this.client === c) this.client = null;
       }

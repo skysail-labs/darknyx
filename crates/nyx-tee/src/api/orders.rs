@@ -672,7 +672,7 @@ fn cancel_in_book(
 
 /// Place an order: verify + build (lock-free) then commit it under the matcher
 /// write lock + record its owner for per-account routing. The transport-agnostic
-/// core shared by `POST /orders` (`place_order`) and the `/ws/trading`
+/// core shared by `POST /orders` (`place_order`) and the `/v1/stream`
 /// `order.place` frame — both already hold the authenticated `account_id`.
 pub async fn place_core(
     state: &ApiState,
@@ -740,10 +740,10 @@ pub async fn place_order(
 // DELETE /orders/{order_id}
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Route a synthetic `Cancelled` onto `/ws/orders` then drop the order's
+/// Route a synthetic `Cancelled` onto the `/v1/stream` orders channel then drop the order's
 /// routing entry. Explicit/server cancels bypass the matcher tick (so they
 /// never reach the `order_updates` broadcast); this mirrors them so
-/// `/ws/orders` subscribers still see the order leave, and bounds the
+/// orders-channel subscribers still see the order leave, and bounds the
 /// `order_owner` map. Shared by every cancel path.
 async fn announce_cancel(state: &ApiState, order_id_hex: &str) {
     state
@@ -763,7 +763,7 @@ async fn announce_cancel(state: &ApiState, order_id_hex: &str) {
 
 /// Cancel an order after verifying a fresh trading-key signature over its id.
 /// The transport-agnostic core shared by `DELETE /orders/{id}` (`cancel_order`)
-/// and the `/ws/trading` `order.cancel` frame.
+/// and the `/v1/stream` `order.cancel` frame.
 pub async fn cancel_core(
     state: &ApiState,
     matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
@@ -795,7 +795,7 @@ pub async fn cancel_core(
 
 /// Server-initiated cancel of a still-resting order — the cancel-on-disconnect
 /// path. Cancels using the order's OWN booked `trading_key` (no client
-/// signature): the order was placed on an authenticated `/ws/trading` session,
+/// signature): the order was placed on an authenticated `/v1/stream` session,
 /// so the session's authority covers tearing it down when the socket closes.
 /// A no-op (returns `false`) if the order already left the book
 /// (filled/expired/already cancelled). Cancelling only removes a resting order
@@ -865,7 +865,7 @@ pub struct ModifyOrderResponse {
 }
 
 /// Atomic cancel + replace. The transport-agnostic core shared by
-/// `PUT /orders/{id}` (`modify_order`) and the `/ws/trading` `order.modify`
+/// `PUT /orders/{id}` (`modify_order`) and the `/v1/stream` `order.modify`
 /// frame.
 pub async fn modify_core(
     state: &ApiState,
@@ -933,7 +933,7 @@ pub async fn modify_core(
         commit_order(&mut st, prepared, req.replacement.expiry_slot)?;
     }
 
-    // The old order left the book → emit a Cancelled on `/ws/orders` + drop its
+    // The old order left the book → emit a Cancelled on the orders channel + drop its
     // owner mapping, UNLESS the id is reused (a reprice keeps the logical order).
     if new_order_id != old_order_id {
         announce_cancel(state, old_order_id_hex).await;

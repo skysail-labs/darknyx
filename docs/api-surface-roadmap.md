@@ -45,11 +45,11 @@ Two facts flow from this and gate the whole roadmap:
 
 | Channel | GoDark | Nyx (today) | Action |
 |---|---|---|---|
-| **Order lifecycle** | `/ws/orders` | ✅ `/ws/orders` (per-account lifecycle events) | **✅ done (Tier 1, A1)** |
-| **Order submission** | `/ws/trading` (`place/cancel/modify`) | ✅ `/ws/trading` (framed place/cancel/modify + cancel-on-disconnect) | **✅ done (Phase B)** |
+| **Order lifecycle** | `/ws/orders` | ✅ `/v1/stream` `orders` channel | **✅ done (Tier 1, A1)** |
+| **Order submission** | `/ws/trading` (`place/cancel/modify`) | ✅ `/v1/stream` framed ops + cancel-on-disconnect | **✅ done (Phase B)** |
 | User events / positions | `/ws/user` | ❌ (positions N/A) | later |
 | External market data | `/ws/gomarket` | ❌ (oracle is internal) | not planned |
-| Fills | (part of orders) | ✅ `/ws/fills` (per-account, Vuln-4 integrity check) | — |
+| Fills | (part of orders) | ✅ `/v1/stream` `fills` channel (per-account, Vuln-4 integrity check) | — |
 
 **The biggest gap:** the matcher *already computes* `OrderUpdate`s (FullyFilled /
 PartiallyFilled / Cancelled / Expired, `darkpool-matcher/src/book.rs`) and **drops them**
@@ -104,7 +104,7 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
 ## 6. Roadmap
 
 ### Tier 1 — high value, feasible, aligned — ✅ DONE
-- **A1 — `/ws/orders` order-lifecycle channel.** ✅ Streams the `OrderUpdate`s the matcher
+- **A1 — `orders` order-lifecycle channel.** ✅ Streams the `OrderUpdate`s the matcher
   emits; reuses the `fills_router` per-account fan-out (`api/order_router.rs`).
 - **A2 — market / AON / GTT sugar** (SDK builders, `packages/sdk/src/orders/builders.ts`) +
   **`GET /time`** (server slot + unix, for GTT conversion). ✅
@@ -117,25 +117,23 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
   both preconditions checked first. Win = atomicity (no cancel/replace gap) + one round-trip.
   The new order carries its own note + `VALID_INPUT` proof (may reuse the same note+proof while
   the root is in the 64-root window).
-- **Phase B — `/ws/trading` submission + cancel-on-disconnect.** ✅ A bidirectional socket
+- **Phase B — `/v1/stream` submission + cancel-on-disconnect.** ✅ A bidirectional socket
   streams framed `order.place/cancel/modify`, each dispatched to the SAME intake the REST
   handlers call (`orders::{place,cancel,modify}_core` — no second verification path). With
-  `?cancel_on_disconnect=true`, the handler tracks `session → {order_id}` and tears down the
+  `login { cancel_on_disconnect: true }`, the handler tracks `session → {order_id}` and tears down the
   session's still-resting orders on close via a server-initiated cancel (no client sig — the
   order was placed on this authed session; a cancel only un-rests, never settles). The
   per-order trading-key signature is still required on every place/cancel/modify frame.
-  - *Deferred:* an **account-level** cancel-on-disconnect default (today it's per-session opt-in
-    via the query param). That needs an account-config store the registry doesn't have yet —
-    revisit alongside any `/account` settings work.
+  - ✅ An account-level cancel-on-disconnect default is available through
+    `PUT /account/settings`; an explicit login value overrides it per session.
   - ✅ *Done:* the **SDK order-submission layer** (`buildOrder` + REST `order-client` + the
-    `TradingClient` `/ws/trading` send-client + the VALID_INPUT prover/witness fetch). The SDK
+    multiplexed `TradingClient` + the VALID_INPUT prover/witness fetch). The SDK
     now builds, signs, and submits orders end to end; `buildOrder`'s canonical digest is byte-parity
     guarded against the Rust matcher (`build-order-parity.test.ts`). The `snarkjs` prover is a
     dynamically-imported Node adapter (pluggable), so it isn't forced on browser consumers.
 
-> **Status:** Phase A + Phase B shipped on the `tree-sharding` branch. `/v1/stream` (the
-> multiplexed superset in the OpenAPI) remains planned; its order ops already live on
-> `/ws/trading`.
+> **Status:** Phase A + Phase B are consolidated on the sole `/v1/stream`
+> session; the dedicated legacy sockets are deleted.
 
 ## 7. What we already do better (differentiators)
 

@@ -10,8 +10,8 @@
  *
  * Scenario matrix (each step asserts daemon state + on-chain/endpoint effects):
  *   1. attest + deposit (quote collateral, sized for many slices)
- *   2. place a big resting bid over /ws/trading
- *   3. seller ask #1 crosses → partial fill: /ws/fills change note + /ws/orders
+ *   2. place a big resting bid over /v1/stream
+ *   3. seller ask #1 crosses → partial fill: fills change note + orders update
  *      partially_filled + auto-topup (POST /orders/{id}/anchors) + leaf_count↑
  *   4. settlement-tracker resolves the residual's leaf (/tree/inclusion)
  *   5. a 2nd buyer order, partially filled then cancelled, leaves a 2nd residual
@@ -448,7 +448,7 @@ maybe(
         `  · CVM order ${orderId.slice(0, 8)}: ${cvmOrder.status} ${(await cvmOrder.text()).slice(0, 240)}`,
       );
       const o = buyer.getOrder(orderId)!;
-      // /ws/fills drove a fill (anchor consumed) + auto-topup grew the pool
+      // The fills channel drove a fill (anchor consumed) + auto-topup grew the pool
       expect(o.anchorsConsumed, "no fill observed").toBeGreaterThanOrEqual(1);
       expect(o.anchorPoolSize, "auto-topup did not fire").toBeGreaterThan(10);
       expect(

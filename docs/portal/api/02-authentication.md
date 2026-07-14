@@ -96,12 +96,19 @@ curl -s "$GATEWAY/orders/$ORDER_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-On the WebSocket routes, pass it as a query parameter (the upgrade cannot carry
-a header from a browser); the `Authorization` header is also accepted:
+Open the sole WebSocket endpoint without credentials in the URL, then send the
+token in an in-band `login` frame:
 
 ```text
-wss://<gateway-host>/ws/orders?token=<access_token>
+wss://<gateway-host>/v1/stream
 ```
+
+```json
+{ "op": "login", "request_id": "login-1", "token": "<access_token>" }
+```
+
+The server emits `auth_expired` shortly before expiry. Obtain a fresh token and
+send another `login` frame on the same session; subscriptions remain active.
 
 ## Token expiry and revocation
 

@@ -1,5 +1,5 @@
 /**
- * FillsListener tests — the /ws/fills edge, no live socket.
+ * FillsListener tests — the `/v1/stream` fills channel, no live socket.
  *
  * `subscribeFills` is injected as a fake that captures the options, so a test
  * can invoke the captured `onFill` with a synthetic change-note record and

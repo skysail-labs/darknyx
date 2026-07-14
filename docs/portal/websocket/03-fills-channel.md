@@ -7,7 +7,7 @@ description: A per-account stream of continuation-fill memos, the secret materia
 # Fills Channel
 
 :::info TL;DR
-`/ws/fills` streams a **fill memo** per continuation fill: the data you need to
+The `fills` channel on `/v1/stream` streams a **fill memo** per continuation fill: the data you need to
 recover the change note a partial fill produced. You verify each memo against
 your own keys before storing it, so a misbehaving engine cannot slip you a note you
 do not control. The stream is per-account.
@@ -28,11 +28,11 @@ spend it.
 ## Connect
 
 ```text
-wss://<gateway-host>/ws/fills?token=<access_token>
+wss://<gateway-host>/v1/stream
 ```
 
-Self-authenticating with the bearer token as `?token=`. Per-account: you only
-receive memos for orders you placed.
+Login in-band, then send `{"op":"subscribe","channels":["fills"]}`. The
+channel is per-account: you only receive memos for orders you placed.
 
 ## Memo shape
 
@@ -88,7 +88,7 @@ Recovery is therefore "backfill then tail":
    or while it was down, the SDK reads the on-chain ciphertext for your settled
    orders, decrypts each change amount with your viewing key, and **self-verifies**
    it by recomputing the change-note commitment. No trust in the engine is needed.
-2. **Tail the live stream.** Open `/ws/fills` for low-latency memos of new fills.
+2. **Tail the live stream.** Subscribe to `fills` for low-latency memos of new fills.
 
 Because the note store is keyed by commitment, a note seen in both the backfill
 and the live stream is simply de-duplicated, so a dropped connection never loses a
@@ -105,10 +105,19 @@ on the live memo, so connect the socket if you omit it.
 ## Example
 
 ```javascript
-const ws = new WebSocket(`${WSS}/ws/fills?token=${TOKEN}`);
+const ws = new WebSocket(`${WSS}/v1/stream`);
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({ op: "login", request_id: "login-1", token: TOKEN }));
+};
 
 ws.onmessage = async (e) => {
   const memo = JSON.parse(e.data);
+  if (memo.op === "login") {
+    ws.send(JSON.stringify({ op: "subscribe", channels: ["fills"] }));
+    return;
+  }
+  if (memo.channel !== "fills") return;
   // The SDK verifies (anchor + commitment binding) then stores the change note.
   await sdk.receiveFillMemo(memo);   // throws on a memo that fails verification
 };

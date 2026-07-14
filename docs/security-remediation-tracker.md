@@ -50,7 +50,7 @@ runbooks have landed.
 | N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Closed |
 | N-06 | Medium | TEE | `remediation/tee-intake` | One collateral commitment reserves at most one live or pending order; lifecycle release tests | Closed |
 | N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Closed |
-| N-08 | Medium | TEE + SDK + daemon | `remediation/stream-consolidation` | Only in-band-authenticated `/v1/stream` remains; gap detection, refresh, reconnect, and cancel-on-disconnect preserved | Open |
+| N-08 | Medium | TEE + SDK + daemon | `remediation/stream-consolidation` | Only in-band-authenticated `/v1/stream` remains; gap detection, refresh, reconnect, and cancel-on-disconnect preserved | Code complete |
 | N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Closed |
 | N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Closed |
 | N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Closed |
@@ -75,7 +75,7 @@ Every remediation PR must record:
   orders, payloads, proofs, or deployed circuit artifacts.
 - Tracker rows moved only as far as the available evidence supports.
 
-## Remediation evidence in progress
+## Remediation PR evidence
 
 ### `remediation/tee-intake` — N-01, N-05, N-06, N-09
 
@@ -390,6 +390,8 @@ Every remediation PR must record:
 
 ### `remediation/client-custody` — CS-05, CS-14, N-16
 
+- **Status.** Closed. PR #45 is merged into `main`; CS-05, CS-14, and N-16
+  are closed with the local evidence recorded below.
 - **Invariant restored.** The public SDK accepts only a securely persisted
   64-byte CSPRNG master seed; the fixed wallet-message signature mode, message,
   helper, and plaintext daemon seed import/export are removed. Recovery uses a
@@ -433,6 +435,45 @@ Every remediation PR must record:
   require this PR's importer. Rollback reopens CS-05/CS-14/N-16 and must not be
   used for real-value clients because it restores the portable wallet-signature
   spend authority and case-sensitive commitment comparison.
+
+### `remediation/stream-consolidation` — N-08
+
+- **Status.** Code complete; live image-53 API/attestation evidence is pending.
+- **Invariant restored.** `/v1/stream` is the sole WebSocket route. Bearer
+  authentication and refresh happen in-band, every server frame shares one
+  connection-global sequence, and one reconnecting SDK session carries order
+  operations plus the `orders`, `fills`, and `tree` subscriptions. The daemon
+  shares that session across placement and both account channels with
+  cancel-on-disconnect enabled. A lag or sequence gap triggers reconciliation,
+  reconnect, and resubscription; fills additionally re-run chain backfill.
+- **Wire/circuit impact.** `GET /ws/fills`, `GET /ws/orders`, and
+  `GET /ws/trading` are removed without compatibility aliases. `/v1/stream`
+  gains enforced heartbeat/token expiry and a sequenced `auth_expired` warning.
+  The SDK's injectable WebSocket interface is now bidirectional and its legacy
+  fills/orders helpers are channel wrappers over `TradingClient`. The daemon
+  accepts an optional refresh-token provider; its CLI can mint refreshed tokens
+  from all-or-none API credential environment variables. No REST order shape,
+  canonical signature, Borsh payload, account layout, circuit, proving/verifier
+  key, N=16 fixture, transaction, note, or root changes.
+- **Local evidence.** OpenAPI YAML parsing and the deleted-module reference
+  check pass. `cargo fmt --all -- --check`, full workspace clippy with warnings
+  denied, and `cargo test --workspace` pass, including 253 TEE library tests and
+  the route regression proving all three legacy paths return 404 while
+  `/v1/stream` remains mounted. SDK, SDK-test, daemon, and indexer TypeScript
+  no-emit checks pass. Full SDK Vitest passes 239 tests with 23 environment-gated
+  skips; daemon passes 158 with 2 skips; indexer passes 23. Adversarial transport
+  coverage includes bearer exclusion from URLs, failed/missing sequencing,
+  short-lived-token refresh on the same socket, reconnect + resubscribe,
+  cancel-on-disconnect propagation, lag-triggered fill backfill, and shared
+  daemon-session reuse.
+- **Devnet/CVM evidence.** Pending image `tee-v3-hardening-53`. This slice needs
+  the reset-free `cvm-api-surface` and attestation checks only; settlement,
+  circuits, vault instructions, and transaction layouts are unchanged, so a
+  billable settle would add no relevant coverage.
+- **Rollback.** Revert this PR and redeploy image 52. No notes, roots, orders,
+  payloads, signatures, proofs, or deployed vault artifacts are invalidated,
+  but rollback reopens N-08 and restores three token-in-query sockets plus the
+  daemon's three-session transport.
 
 ## Mainnet release gates
 

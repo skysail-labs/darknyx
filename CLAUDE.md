@@ -40,8 +40,9 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   integration surface: clients build VALID_INPUT proofs and `POST`
   orders to the CVM. `packages/daemon/` (`nyx-daemon`) is the reference
   **non-custodial market-maker daemon** built on the SDK (keys + proving
-  on-device; drives order lifecycle off the live `/ws/fills` + `/ws/orders`
-  streams and on-chain reads, with auto anchor-topup + auto-merge). It is
+  on-device; drives order lifecycle off the `fills` + `orders` channels on the
+  shared `/v1/stream` session and on-chain reads, with auto anchor-topup +
+  auto-merge). It is
   deliberately **lean — it does NOT depend on the off-TEE indexer**; live TEE
   streams + chain reads are its source of truth (merged, live-CVM smoke-tested).
   `crates/darkpool-crypto/` is the host-side Rust crypto crate with
@@ -92,7 +93,7 @@ You will not write correct code here without the mental model. Required:
   `scripts/rotate-tee-pubkey.mjs`, `scripts/deploy-devnet.sh`.
 * **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)**
   — the fills-delivery + trade-history design, now **implemented**
-  (deterministic HD order_ids + per-account `/ws/fills`). Post amount-privacy +
+  (deterministic HD order_ids + the per-account `/v1/stream` fills channel). Post amount-privacy +
   on-chain change-amount recovery (Proposal B), the off-TEE `packages/indexer`
   is an **OPTIONAL by-order_id commitment LOCATOR** with no consumer today (the
   daemon uses live streams instead) — the durable amount source is the chain.

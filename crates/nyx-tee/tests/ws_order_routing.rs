@@ -1,5 +1,5 @@
-//! Per-account order-lifecycle routing — the same leak guard `/ws/fills` has,
-//! for `/ws/orders`. Exercises `ApiState`'s routing methods directly (the exact
+//! Per-account order-lifecycle routing — the same leak guard the fills channel has,
+//! for the orders channel. Exercises `ApiState`'s routing methods directly (the exact
 //! code the WS handler + the order router subscribe through).
 
 use std::sync::Arc;

@@ -186,14 +186,14 @@ binds the commitments/nullifiers/order_ids.
 - `settlement/settle-builder.ts`: `serializePayload` (drop amounts), `canonicalPayloadHash` (new
   layout/domain), `buildSettleBatchedIx` (smaller payload).
 - Client memo-integrity guard (Vuln-4): the client recomputes the change-note commitment from the
-  **FillMemo** (`change_amount` + `inner_hash`, delivered over `/ws/fills`) rather than the public
+  **FillMemo** (`change_amount` + `inner_hash`, delivered on `/v1/stream`'s fills channel) rather than the public
   payload — the memo is already the private channel for the user's own amounts.
 
 ### 6.7 Indexer + fills model (the biggest ripple — and it's *more* private)
 `packages/indexer/src/decode.ts` currently reads `change_amount`/`clearing_price` from the payload.
 After this change **the untrusted off-TEE indexer can no longer see amounts** (correct — it never
 should). It indexes commitments + `order_id` for routing; **amounts move to the per-account
-`FillMemo`** over the authenticated `/ws/fills` channel, decryptable by the user with their keys.
+`FillMemo`** over the authenticated `/v1/stream` fills channel, decryptable by the user with their keys.
 `fills-history-architecture.md` shifts to "indexer = commitment locator; amounts = client-
 reconstructed." `FillRow.change_amount`/`clearing_price` columns go away (or become null). The
 `change_amount > 0` assertion in `cvm-settle-e2e` moves to the **memo** side.

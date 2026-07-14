@@ -225,6 +225,36 @@ async fn wrong_method_returns_405() {
     assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
+#[tokio::test]
+async fn only_the_multiplexed_websocket_route_is_mounted() {
+    let app = build_app().await;
+    for legacy in ["/ws/fills", "/ws/orders", "/ws/trading"] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(legacy).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "legacy WebSocket route {legacy} must stay deleted"
+        );
+    }
+
+    // The route exists; without the WebSocket upgrade headers Axum rejects the
+    // handshake as a bad request instead of falling through to 404.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 // ─────── /system/status + /time ──────────────────────────────────────────────
 
 #[tokio::test]

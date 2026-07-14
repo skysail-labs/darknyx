@@ -5,8 +5,8 @@
 //! `account` registration (Phase 1a); `tree/*` over the Merkle mirror
 //! (Phase 2a/2b); `instruments` + `transparency` (Phase 2c). `account`
 //! is mounted but deferred-by-design (501 — see `api::account`).
-//! Remaining: `ws` (multiplexed sessions + channels, incl. the live
-//! `tree` channel).
+//! WebSockets are consolidated on the in-band-authenticated `/v1/stream`
+//! multiplexed session (orders, fills, trading ops, and live tree events).
 
 pub mod account;
 pub mod attestation;
@@ -25,10 +25,8 @@ pub mod settlement;
 pub mod state;
 pub mod stream;
 pub mod system;
-pub mod trading;
 pub mod transparency;
 pub mod tree;
-pub mod ws;
 
 use std::sync::Arc;
 
@@ -89,22 +87,8 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
         // Liveness/degraded-mode snapshot + server time (for GTT slot conversion).
         .route("/system/status", get(system::get_status))
         .route("/time", get(system::get_time))
-        // Per-account fill-memo stream. Self-authenticating (token via
-        // `?token=` or Bearer header), so it is mounted on the PUBLIC router
-        // (outside the header-only bearer middleware) yet only ever streams the
-        // authenticated account's own memos — see `api::ws` + `api::fills_router`.
-        .route("/ws/fills", get(ws::fills_ws))
-        // Per-account order-lifecycle stream — same self-auth + per-account
-        // routing as `/ws/fills` (see `api::ws::orders_ws` + `api::order_router`).
-        .route("/ws/orders", get(ws::orders_ws))
-        // Bidirectional order-submission socket — framed place/cancel/modify
-        // over one warm authenticated connection + cancel-on-disconnect. Same
-        // self-auth (`?token=`) as the streams above (see `api::trading`).
-        .route("/ws/trading", get(trading::trading_ws))
-        // Multiplexed session socket — the superset of the three sockets above
-        // (login/subscribe/order ops + the orders/fills/tree channels) on one
-        // connection. Auth is IN-BAND (`op: login`), so like them it is mounted
-        // on the PUBLIC router (see `api::stream`).
+        // The sole WebSocket surface. Auth is IN-BAND (`op: login`), then one
+        // session multiplexes orders/fills/tree subscriptions and trading ops.
         .route("/v1/stream", get(stream::stream_ws));
 
     // Debug endpoints — only compiled in when the `debug_endpoints`
@@ -172,10 +156,6 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // further admin-gated inside the handler (see auth.rs).
         .route("/auth/token/revoke", post(auth::revoke_token_handler))
         .route("/admin/accounts", post(auth::register_account_handler));
-
-    // NOTE: `/ws/fills` is mounted on the PUBLIC router (it self-authenticates
-    // via `?token=`/Bearer and routes per-account) — NOT here, because the
-    // header-only `bearer_middleware` can't see a query-param token.
 
     // Two route_layers. The LAST-added is OUTERMOST, so `bearer_middleware`
     // runs first (injecting `Authorized`), then `rate_limit_middleware` runs

@@ -1,5 +1,5 @@
 //! Order-lifecycle router: fan the matcher's global `OrderUpdate` broadcast out
-//! to per-account `/ws/orders` channels.
+//! to per-account `orders` subscriptions on `/v1/stream`.
 //!
 //! Same bridge as [`super::fills_router`]: the matcher is account-agnostic
 //! (keys updates by `order_id`); this task maps each to its owning account via

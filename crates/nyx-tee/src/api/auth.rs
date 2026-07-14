@@ -120,6 +120,9 @@ pub struct RegisterAccountResponse {
 pub struct Authorized {
     pub account_id: String,
     pub jti: String,
+    /// JWT expiry as Unix seconds. Long-lived transports use this to require
+    /// an in-band refresh instead of remaining authorized past token expiry.
+    pub exp: u64,
 }
 
 /// One account's stored credentials. The `api_secret` and
@@ -147,7 +150,7 @@ pub struct ApiCredentials {
 /// Persisted in the `accounts.db` snapshot alongside the credential hashes.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountSettings {
-    /// Account-wide default for `/ws/trading` cancel-on-disconnect. A socket's
+    /// Account-wide default for `/v1/stream` cancel-on-disconnect. A session's
     /// explicit `?cancel_on_disconnect=` query param overrides this; absent, the
     /// account default applies.
     #[serde(default)]
@@ -520,9 +523,8 @@ pub async fn bearer_middleware(
 
 /// Validate a raw JWT string against the signing secret + revocation denylist,
 /// returning the caller's [`Authorized`] identity. Shared by
-/// [`bearer_middleware`] (header-based) and the `/ws/fills` handler (which takes
-/// the token as a `?token=` query param, since browsers + the global
-/// `WebSocket` can't set an Authorization header on the upgrade request).
+/// [`bearer_middleware`] (header-based) and the `/v1/stream` login op (which
+/// carries the token inside the first authenticated JSON frame).
 pub async fn validate_token(
     state: &ApiState,
     token: &str,
@@ -545,6 +547,7 @@ pub async fn validate_token(
     Ok(Authorized {
         account_id: claims.sub,
         jti: claims.jti,
+        exp: claims.exp,
     })
 }
 

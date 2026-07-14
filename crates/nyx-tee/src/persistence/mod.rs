@@ -11,7 +11,7 @@
 //!
 //! (The P7 durable per-account fill-memo log + `GET /fills/replay` were retired
 //! once change-amount recovery (Proposal B) put the amount on-chain encrypted —
-//! the chain is now the permanent recovery source, so only the live `/ws/fills`
+//! the chain is now the permanent recovery source, so only the live `fills`
 //! push remains.)
 
 pub mod auth;

@@ -1,7 +1,8 @@
 /**
  * Fill-memo reception + settle-memo integrity check (Phase 8).
  *
- * The CVM streams a `FillMemo` per continuation fill over `GET /ws/fills`.
+ * The CVM streams a `FillMemo` per continuation fill on `/v1/stream`'s
+ * per-account `fills` channel.
  * Before storing the change note the client MUST verify the memo — this is
  * the guard against a misbehaving TEE (design-doc Vulnerability 4):
  *

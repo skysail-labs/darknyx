@@ -53,21 +53,21 @@ export const DEFAULT_THRESHOLDS: LifecycleThresholds = {
 
 /**
  * Events the daemon feeds the reducer. Two streams drive distinct concerns:
- * `/ws/fills` → anchor consumption (`fill`); `/ws/orders` → phase
+ * `fills` channel → anchor consumption (`fill`); `orders` channel → phase
  * (`accepted` / `filled` / `cancelled` / `expired`). They're deliberately
  * decoupled so neither stream double-drives the other.
  */
 export type LifecycleEvent =
-  // ── phase (placement ack + /ws/orders) ──
+  // ── phase (placement ack + orders channel) ──
   | { type: "accepted"; arrivalSlot: number }
   | { type: "rejected"; reason: string }
   | { type: "filled" }
   | { type: "cancelled" }
   | { type: "expired" }
-  // ── anchor consumption (/ws/fills) ──
+  // ── anchor consumption (fills channel) ──
   /** A continuation fill consumed anchor `anchorIndex`. `producedChangeNote`
    *  is false on an exact fill (no residual minted). This carries NO phase
-   *  meaning — the terminal `filled` comes from `/ws/orders`. */
+   *  meaning — the terminal `filled` comes from the orders channel. */
   | { type: "fill"; anchorIndex: number; producedChangeNote: boolean }
   // ── action outcomes ──
   | { type: "topup-confirmed"; count: number }
@@ -120,7 +120,7 @@ export function reduceOrder(
       break;
 
     case "filled":
-      // Terminal matching (from /ws/orders `fully_filled`). Accept a still-
+      // Terminal matching (from orders-channel `fully_filled`). Accept a still-
       // `pending` order too: a fully_filled implies it was accepted + filled.
       if (order.phase === "pending" || order.phase === "open") {
         next.phase = "filled";
@@ -137,7 +137,7 @@ export function reduceOrder(
 
     case "fill": {
       // Anchor consumption ONLY — no phase meaning (the terminal `filled`
-      // comes from /ws/orders). anchorsConsumed is the high-water mark, since
+      // comes from the orders channel). anchorsConsumed is the high-water mark, since
       // fills can arrive out of order.
       next.anchorsConsumed = Math.max(
         order.anchorsConsumed,

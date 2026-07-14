@@ -1,13 +1,13 @@
 /**
  * CVM API/WS surface coverage — the first AUTOMATED check of the 5-phase
  * hardening (error envelope + x-request-id, system endpoints, rate limiting,
- * account view + settings, the WS seq stamp, and the /ws/trading send-client)
+ * account view + settings, and the multiplexed `/v1/stream` lifecycle)
  * against a LIVE enclave. Everything before this was hit by hand with curl.
  *
  * These assertions are deliberately CHEAP — no on-chain deposit / proof — so the
  * test runs in seconds and exercises the surface, not the settle pipeline. The
  * order-dependent bits (min_notional on a real order, POST /orders idempotency,
- * WS seq on /ws/orders + /ws/fills, account-default cancel-on-disconnect) need a
+ * order/fill channel pushes and account-default cancel-on-disconnect need a
  * real note + proof and are covered by cvm-settle-e2e / cvm-merge-then-order.
  *
  * Gate: RUN_CVM_E2E=1 + NYX_TEE_GATEWAY. Run:
@@ -190,9 +190,10 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
     });
   });
 
-  it("/ws/trading: ping → pong echoes request_id and carries a numeric seq", async () => {
-    const wsUrl = `${GATEWAY.replace(/^http/, "ws")}/ws/trading?token=${encodeURIComponent(token)}`;
+  it("/v1/stream: in-band login then ping → sequenced pong", async () => {
+    const wsUrl = `${GATEWAY.replace(/^http/, "ws")}/v1/stream`;
     const ws = new WebSocket(wsUrl);
+    const loginId = `login-${Date.now()}`;
     const requestId = `ping-${Date.now()}`;
 
     const frame = await new Promise<Record<string, unknown>>(
@@ -202,7 +203,14 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
           15_000,
         );
         ws.addEventListener("open", () => {
-          ws.send(JSON.stringify({ op: "ping", request_id: requestId }));
+          ws.send(
+            JSON.stringify({
+              op: "login",
+              request_id: loginId,
+              token,
+              cancel_on_disconnect: true,
+            }),
+          );
         });
         ws.addEventListener("message", (ev) => {
           try {
@@ -210,6 +218,16 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
               string,
               unknown
             >;
+            if (msg.op === "login" && msg.request_id === loginId) {
+              if (msg.seq !== 1) {
+                clearTimeout(timer);
+                reject(
+                  new Error(`login seq was ${String(msg.seq)}, expected 1`),
+                );
+                return;
+              }
+              ws.send(JSON.stringify({ op: "ping", request_id: requestId }));
+            }
             if (msg.op === "pong") {
               clearTimeout(timer);
               resolve(msg);
@@ -231,6 +249,14 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
     expect(typeof frame.seq, "every frame carries a monotonic seq").toBe(
       "number",
     );
+    expect(frame.seq).toBe(2);
+  });
+
+  it("legacy dedicated WebSocket routes are gone", async () => {
+    for (const path of ["/ws/fills", "/ws/orders", "/ws/trading"]) {
+      const response = await gwFetch(`${GATEWAY}${path}`);
+      expect(response.status, `${path} must stay deleted`).toBe(404);
+    }
   });
 
   // Run LAST: this drains the per-account token bucket, which is shared with the
