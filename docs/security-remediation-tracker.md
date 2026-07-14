@@ -102,9 +102,24 @@ Every remediation PR must record:
   production dstack all exit 1 before bind. Adversarial order tests cover
   foreign-vs-unknown 404 equality, duplicate collateral while live and
   settlement-pending, release after cancel, and atomic modify conflict.
-- **Live evidence pending.** A Phala boot/API spot-check and real attestation for
-  image 49 require an explicitly approved billable CVM window; keep these rows
-  at `Code complete` until that evidence is attached.
+- **Live CVM evidence (2026-07-14).** GitHub Actions run `29328881299` built
+  and pushed `ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-49` from commit
+  `c2d9ab42f4d48bcbdb5fa23532b25bf97553d321`. After devnet tree reset tx
+  `X5iMbnyp8mfMsgCRn31tY2Rv71xGF7GsUY9ssnJSfFzDq88Nm4wqUVKShkuj7ocvU83AjXTYVQrDDaCDEUSTgSf`,
+  CVM `app_634b2ab4c250466311f0cf09f772b6fd60b5be11` cold-booted instance
+  `f5cd2f294d1127d241d18e44dbb76b6910aa2a54` with compose hash
+  `e9ec726e122ec1e27deac9cfe824143075fca5743bf57ca96b6311abb97d3a66`.
+  Boot logs show successful dstack/KMS signer derivation, removal of the
+  historical test account, Merkle cold boot, N=16 proving-key/native-witness
+  load, and an enabled settle pipeline; no clearing-price field appears in the
+  captured production logs. `/health` and `/info` returned 200, while the
+  historical public credentials returned generic `1101`/401. The live
+  API/WebSocket suite passed 9/9. Real Intel DCAP validation passed 5/5,
+  including nonce freshness, tamper rejection, RTMR3 compose-hash replay,
+  signer-set report-data binding, and equality with the finalized on-chain
+  `tee_pubkeys`. The protected deploy/auth files were securely deleted and all
+  Phala CVMs were confirmed `stopped` after the test window. Rows remain `Code
+  complete` until the remediation PR merges.
 - **Rollback.** Revert this PR and redeploy image 48. This does not invalidate
   notes, roots, orders, payloads, signatures, or proofs, but it reopens N-01,
   N-05, N-06, and N-09. The one-way snapshot scrub does not restore the public
