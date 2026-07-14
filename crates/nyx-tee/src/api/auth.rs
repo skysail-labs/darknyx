@@ -328,7 +328,6 @@ impl AccountRegistry {
         match env_admin_credentials() {
             Some(creds) => {
                 tracing::warn!(
-                    api_key = %creds.api_key,
                     "BOOTSTRAP auth: seeding the ADMIN account from NYX_TEE_API_* env \
                      (argon2id-hashed). Register further accounts via POST /admin/accounts."
                 );
@@ -353,7 +352,6 @@ impl AccountRegistry {
         match env_admin_credentials() {
             Some(creds) if self.lookup(&creds.api_key).is_none() => {
                 tracing::warn!(
-                    api_key = %creds.api_key,
                     "BOOTSTRAP auth: admin not in persisted registry — seeding from \
                      NYX_TEE_API_* env (argon2id-hashed)."
                 );
@@ -659,7 +657,6 @@ pub async fn register_account_handler(
     state.persist_auth().await;
 
     tracing::info!(
-        api_key = %req.api_key,
         is_admin = req.is_admin,
         registered_by = %authorized.account_id,
         "registered new API account"
@@ -747,6 +744,21 @@ mod tests {
         let c2 = creds("k", "super-secret", "pass-phrase");
         assert_ne!(c.secret_hash, c2.secret_hash);
         assert!(c2.verify_credentials("super-secret", "pass-phrase"));
+    }
+
+    #[test]
+    fn auth_logs_never_attach_api_key_fields() {
+        // API keys are credentials, not observability identifiers. Pin the
+        // source-level invariant because tracing output is otherwise hard to
+        // exhaustively capture across bootstrap and async HTTP handlers.
+        let source = include_str!("auth.rs");
+        for suffix in [" = %", " = ?"] {
+            let forbidden = ["api_key", suffix].concat();
+            assert!(
+                !source.contains(&forbidden),
+                "auth tracing must not attach an api_key field"
+            );
+        }
     }
 
     #[test]

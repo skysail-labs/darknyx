@@ -212,7 +212,10 @@ Every remediation PR must record:
   domain, circuit, proving key, verifier key, N=16 fixture, or note construction
   changes; the clean devnet reset policy means no compatibility shim is added.
   The CPU CVM image pin advances from `tee-v3-hardening-49` to
-  `tee-v3-hardening-50` so Phala cannot reuse the old cached builders/sweeper.
+  `tee-v3-hardening-51` so Phala cannot reuse the old cached builders/sweeper.
+  Image-50 boot inspection found that the bootstrap warning still included the
+  API-key identifier; image 51 removes API keys from bootstrap and account
+  registration logs and rotates the short-lived rehearsal credentials.
 - **Local evidence.** Both plain-mainnet and `devnet-admin` SBF builds pass;
   `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
   warnings`, `cargo build --examples -p darkpool-crypto`, and `cargo test
