@@ -185,15 +185,15 @@ async fn main() -> Result<()> {
     // shared MatcherState — the order intake needs them to verify
     // each input-note opening against the signed commitment (4g.7a).
     let mut match_config = dev_match_config(&cfg);
-    // Adopt the on-chain VaultConfig governance fields at boot — the single
-    // source of truth for TEE-adopted config. ONE fetch reconciles both:
-    //   * `fee_rate_bps` (#11a): the batched-settle handler enforces a fee
+    // Adopt authoritative governance at boot:
+    //   * `VaultConfig.fee_rate_bps`: the batched-settle handler enforces a fee
     //     FLOOR against it (commit d86a3be); charging a LOWER rate than the
     //     chain expects rejects every settle, so adopt the authoritative
     //     on-chain rate (overriding NYX_TEE_FEE_RATE_BPS) and warn on drift.
-    //   * matcher params (`tick_size` / `min_order_size` / `circuit_breaker_bps`):
-    //     boot read only — a live re-poll is intentionally DEFERRED. `0 = unset`
-    //     ⇒ keep the env/dev default. NOT enforced on-chain at settle.
+    //   * mint-pair `MarketConfig`: identity, price scale, tick, minimum size,
+    //     circuit breaker, decimals, and the enabled kill switch. A live re-poll
+    //     is intentionally deferred; VALID_MATCH_BATCH v3 will also bind this
+    //     account into every proof.
     // Best-effort + real-boot only (explicit simulator test mode has no live cluster).
     if tee_signer_pubkey.is_some() {
         match read_on_chain_vault_config(&cfg).await {
@@ -207,17 +207,6 @@ async fn main() -> Result<()> {
                     );
                 }
                 match_config.fee_rate_bps = oc.fee_rate_bps;
-                adopt_on_chain_param(&mut match_config.tick_size, oc.tick_size, "tick_size");
-                adopt_on_chain_param(
-                    &mut match_config.min_order_size,
-                    oc.min_order_size,
-                    "min_order_size",
-                );
-                adopt_on_chain_param(
-                    &mut match_config.circuit_breaker_bps,
-                    oc.circuit_breaker_bps,
-                    "circuit_breaker_bps",
-                );
             }
             Ok(None) => tracing::warn!(
                 env_fee_rate_bps = match_config.fee_rate_bps,
@@ -227,6 +216,42 @@ async fn main() -> Result<()> {
                 error = %e,
                 env_fee_rate_bps = match_config.fee_rate_bps,
                 "could not read on-chain VaultConfig; using NYX_TEE_* env/dev config"
+            ),
+        }
+        match read_on_chain_market_config(&cfg).await {
+            Ok(Some(market)) => {
+                if !market.enabled {
+                    anyhow::bail!("on-chain MarketConfig is disabled; refusing to start trading");
+                }
+                adopt_on_chain_param(
+                    &mut match_config.price_scale,
+                    market.price_scale,
+                    "price_scale",
+                );
+                adopt_on_chain_param(&mut match_config.tick_size, market.tick_size, "tick_size");
+                adopt_on_chain_param(
+                    &mut match_config.min_order_size,
+                    market.min_order_size,
+                    "min_order_size",
+                );
+                adopt_on_chain_param(
+                    &mut match_config.circuit_breaker_bps,
+                    market.circuit_breaker_bps,
+                    "circuit_breaker_bps",
+                );
+                tracing::info!(
+                    base_decimals = market.base_decimals,
+                    quote_decimals = market.quote_decimals,
+                    price_scale = market.price_scale,
+                    "adopted enabled on-chain MarketConfig"
+                );
+            }
+            Ok(None) => tracing::warn!(
+                "MarketConfig not found or malformed; using NYX_TEE_* env/dev market config"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "could not read on-chain MarketConfig; using NYX_TEE_* env/dev market config"
             ),
         }
     }
@@ -783,7 +808,7 @@ fn build_settle_driver(
 }
 
 /// Hardcoded dev `MatchConfig`. Production reads this from the
-/// on-chain `MatchingConfig` PDA per market — a separate Solana
+/// on-chain `MarketConfig` PDA per mint pair — a separate Solana
 /// RPC poller (later PR) keeps it in sync. The numbers here are
 /// the same ones the litesvm regression tests use, so dev matches
 /// reproduce on devnet without surprises:
@@ -805,6 +830,7 @@ fn dev_match_config(cfg: &nyx_tee::config::Config) -> MatchConfig {
     MatchConfig {
         base_mint: cfg.base_mint,
         quote_mint: cfg.quote_mint,
+        price_scale: 100_000_000,
         tick_size: cfg.tick_size,
         min_order_size: cfg.min_order_size,
         circuit_breaker_bps: 100_000,
@@ -815,20 +841,15 @@ fn dev_match_config(cfg: &nyx_tee::config::Config) -> MatchConfig {
     }
 }
 
-/// The on-chain `VaultConfig` governance fields the TEE adopts at boot.
+/// The global on-chain `VaultConfig` fields the TEE adopts at boot.
 struct OnChainVaultCfg {
     fee_rate_bps: u16,
-    tick_size: u64,
-    min_order_size: u64,
-    circuit_breaker_bps: u64,
 }
 
-/// Read the on-chain `VaultConfig` governance fields in ONE fetch (#11a + the
-/// matcher params). Returns `Ok(Some(..))` on a successful read, `Ok(None)` if
+/// Read the on-chain global fee configuration. Returns `Ok(Some(..))` on a
+/// successful read, `Ok(None)` if
 /// the config account isn't present, or an `Err` on an RPC/transport failure;
 /// callers treat all three as best-effort and fall back to the env/dev config.
-/// The matcher params `unwrap_or(0)` so an OLD (pre-re-foundation) account that
-/// predates those fields reads them as `unset`.
 async fn read_on_chain_vault_config(
     cfg: &nyx_tee::config::Config,
 ) -> Result<Option<OnChainVaultCfg>, nyx_tee::solana_rpc::RpcError> {
@@ -838,22 +859,52 @@ async fn read_on_chain_vault_config(
     let Some(acc) = rpc.get_account_info(&config_pda).await? else {
         return Ok(None);
     };
+    if acc.owner != nyx_tee::settle::vault::vault_program_id() {
+        return Ok(None);
+    }
     // A parseable fee_rate_bps ⇒ a present, well-formed VaultConfig.
     let Some(fee_rate_bps) = vc::parse_fee_rate_bps(&acc.data) else {
         return Ok(None);
     };
-    Ok(Some(OnChainVaultCfg {
-        fee_rate_bps,
-        tick_size: vc::parse_tick_size(&acc.data).unwrap_or(0),
-        min_order_size: vc::parse_min_order_size(&acc.data).unwrap_or(0),
-        circuit_breaker_bps: vc::parse_circuit_breaker_bps(&acc.data).unwrap_or(0),
-    }))
+    Ok(Some(OnChainVaultCfg { fee_rate_bps }))
 }
 
-/// Adopt a non-zero on-chain matcher param over the boot/env default, logging
-/// the override. `0 = unset` leaves the field on its env/dev default.
+async fn read_on_chain_market_config(
+    cfg: &nyx_tee::config::Config,
+) -> Result<
+    Option<nyx_tee::solana_rpc::market_config::OnChainMarketConfig>,
+    nyx_tee::solana_rpc::RpcError,
+> {
+    use nyx_tee::settle::vault::{market_config_pda, vault_program_id};
+    use nyx_tee::solana_rpc::market_config::parse_market_config;
+
+    let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
+    let (market_pda, _) = market_config_pda(&cfg.base_mint, &cfg.quote_mint);
+    let Some(account) = rpc.get_account_info(&market_pda).await? else {
+        return Ok(None);
+    };
+    if account.owner != vault_program_id() {
+        return Ok(None);
+    }
+    let Some(market) = parse_market_config(&account.data) else {
+        return Ok(None);
+    };
+    if market.base_mint != cfg.base_mint
+        || market.quote_mint != cfg.quote_mint
+        || market.price_scale == 0
+        || market.tick_size == 0
+        || market.min_order_size == 0
+        || !(1..=10_000).contains(&market.circuit_breaker_bps)
+    {
+        return Ok(None);
+    }
+    Ok(Some(market))
+}
+
+/// Adopt a validated on-chain matcher parameter over the boot/env default,
+/// logging the override.
 fn adopt_on_chain_param(field: &mut u64, on_chain: u64, name: &'static str) {
-    if on_chain == 0 || on_chain == *field {
+    if on_chain == *field {
         return;
     }
     tracing::info!(

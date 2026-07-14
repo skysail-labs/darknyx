@@ -1,4 +1,4 @@
-//! Shared helpers for matching_engine integration tests.
+//! Shared helpers for vault litesvm integration tests.
 #![allow(dead_code)]
 
 use std::path::PathBuf;
@@ -67,7 +67,8 @@ pub const HARNESS_NUM_TREES: u8 = 2;
 
 #[derive(BorshSerialize)]
 pub struct InitializeArgs {
-    pub tee_pubkey: [u8; 32],
+    pub operations_admin: [u8; 32],
+    pub tee_pubkeys: Vec<[u8; 32]>,
     pub root_key: [u8; 32],
     pub num_trees: u8,
 }
@@ -84,8 +85,7 @@ pub struct InitMarketArgs {
     pub min_order_size: u64,
 }
 
-/// Borsh shape of the privacy-fix `submit_order` args. Mirrors
-/// `programs/matching_engine/src/instructions/submit_order.rs::SubmitOrderArgs`.
+/// Retired on-chain order-intake fixture retained only for old harness helpers.
 #[derive(BorshSerialize, Clone, Copy)]
 pub struct SubmitOrderArgs {
     pub market: [u8; 32],
@@ -214,7 +214,8 @@ impl Harness {
         let (vault_pda, _) = vault_config_pda(&vault_id);
         let mut init_data = anchor_disc("initialize").to_vec();
         InitializeArgs {
-            tee_pubkey: tee.pubkey().to_bytes(),
+            operations_admin: admin.pubkey().to_bytes(),
+            tee_pubkeys: vec![tee.pubkey().to_bytes(), Keypair::new().pubkey().to_bytes()],
             root_key: root.pubkey().to_bytes(),
             num_trees: HARNESS_NUM_TREES,
         }
@@ -441,8 +442,7 @@ impl Harness {
 // — the slot effectively starts pre-delegated for the program to read.
 // ============================================================================
 
-/// Layout MUST match
-/// programs/matching_engine/src/state/pending_order.rs::PendingOrder.
+/// Retired PendingOrder fixture layout.
 pub const PENDING_ORDER_DATA_SIZE: usize = 32  // trading_key
     + 32  // market
     + 1   // status
@@ -616,8 +616,7 @@ pub fn read_pending_amount(h: &Harness, pda: &Pubkey) -> u64 {
 // by privacy-fix tests).
 // ============================================================================
 
-/// Layout must match `OrderRecord` in
-/// programs/matching_engine/src/state/order_record.rs — keep in sync.
+/// Retired on-chain OrderRecord fixture layout.
 /// Phase 5: +note_amount, +total_quantity, +filled_quantity, +user_commitment;
 /// renamed note_commitment → collateral_note.
 pub const ORDER_RECORD_SIZE: usize = 8    // seq_no

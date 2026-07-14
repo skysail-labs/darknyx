@@ -1,19 +1,24 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { Keypair } from "@solana/web3.js";
 
 import {
   NUM_TEE_KEYS_OFFSET,
+  NUM_TREES_OFFSET,
   TEE_PUBKEYS_OFFSET,
+  VAULT_CONFIG_ACCOUNT_LEN,
   assertTeePubkeysMatch,
   vaultConfigTeePubkeys,
 } from "../src/index.js";
 
-const ACCOUNT_LEN = 1288; // VaultConfig after the appended matcher params
-
 function buildVaultConfig(pubkeys: Uint8Array[]): Uint8Array {
-  const data = new Uint8Array(ACCOUNT_LEN);
+  const data = new Uint8Array(VAULT_CONFIG_ACCOUNT_LEN);
+  data.set(
+    createHash("sha256").update("account:VaultConfig").digest().subarray(0, 8),
+  );
   pubkeys.forEach((pk, i) => data.set(pk, TEE_PUBKEYS_OFFSET + i * 32));
   data[NUM_TEE_KEYS_OFFSET] = pubkeys.length;
+  data[NUM_TREES_OFFSET] = pubkeys.length;
   return data;
 }
 
@@ -21,6 +26,8 @@ describe("vaultConfigTeePubkeys", () => {
   it("pins the on-chain offsets (mirror of VaultConfig)", () => {
     expect(TEE_PUBKEYS_OFFSET).toBe(40);
     expect(NUM_TEE_KEYS_OFFSET).toBe(1258);
+    expect(NUM_TREES_OFFSET).toBe(1259);
+    expect(VAULT_CONFIG_ACCOUNT_LEN).toBe(1264);
   });
 
   it("reads exactly num_tee_keys pubkeys in order", () => {
@@ -36,15 +43,37 @@ describe("vaultConfigTeePubkeys", () => {
     );
   });
 
-  it("rejects a short buffer and an out-of-range count", () => {
+  it("rejects wrong layout, discriminator, and out-of-range counts", () => {
     expect(() => vaultConfigTeePubkeys(new Uint8Array(100))).toThrow(
-      /too short/,
+      /account length/,
+    );
+    const wrongDiscriminator = buildVaultConfig([
+      Keypair.generate().publicKey.toBytes(),
+    ]);
+    wrongDiscriminator[0] ^= 1;
+    expect(() => vaultConfigTeePubkeys(wrongDiscriminator)).toThrow(
+      /discriminator/,
     );
     const bad = buildVaultConfig([Keypair.generate().publicKey.toBytes()]);
     bad[NUM_TEE_KEYS_OFFSET] = 0;
     expect(() => vaultConfigTeePubkeys(bad)).toThrow(/out of range/);
     bad[NUM_TEE_KEYS_OFFSET] = 17;
     expect(() => vaultConfigTeePubkeys(bad)).toThrow(/out of range/);
+  });
+
+  it("rejects signer/tree mismatch, zero keys, and duplicate keys", () => {
+    const key = Keypair.generate().publicKey.toBytes();
+    const mismatch = buildVaultConfig([key]);
+    mismatch[NUM_TREES_OFFSET] = 2;
+    expect(() => vaultConfigTeePubkeys(mismatch)).toThrow(/count mismatch/);
+
+    const zero = buildVaultConfig([new Uint8Array(32)]);
+    expect(() => vaultConfigTeePubkeys(zero)).toThrow(/zero or duplicated/);
+
+    const duplicate = buildVaultConfig([key, key]);
+    expect(() => vaultConfigTeePubkeys(duplicate)).toThrow(
+      /zero or duplicated/,
+    );
   });
 });
 

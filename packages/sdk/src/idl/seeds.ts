@@ -6,6 +6,8 @@
 const enc = (s: string) => new TextEncoder().encode(s);
 
 export const VAULT_CONFIG_SEED = enc("vault_config");
+/** Mint-pair market seed: `[b"market_config", base_mint, quote_mint]`. */
+export const MARKET_CONFIG_SEED = enc("market_config");
 /** Per-shard `MerkleTree` account seed: `[b"merkle_tree", &[tree_id]]`. */
 export const MERKLE_TREE_SEED = enc("merkle_tree");
 export const WALLET_SEED = enc("wallet");

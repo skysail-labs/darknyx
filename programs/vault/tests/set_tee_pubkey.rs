@@ -38,22 +38,36 @@ fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
 
 #[derive(BorshSerialize)]
 struct InitializeArgs {
-    tee_pubkey: [u8; 32],
+    operations_admin: [u8; 32],
+    tee_pubkeys: Vec<[u8; 32]>,
     root_key: [u8; 32],
     num_trees: u8,
 }
 
 /// Initialise, returning `(vault_pda, initial_tee_pubkey)`.
 fn initialize(svm: &mut LiteSVM, admin: &Keypair, program_id: &Pubkey) -> (Pubkey, [u8; 32]) {
-    let tee_kp = Keypair::new();
+    initialize_with_num_trees(svm, admin, program_id, 1)
+}
+
+fn initialize_with_num_trees(
+    svm: &mut LiteSVM,
+    admin: &Keypair,
+    program_id: &Pubkey,
+    num_trees: u8,
+) -> (Pubkey, [u8; 32]) {
+    let tee_pubkeys: Vec<[u8; 32]> = (0..num_trees)
+        .map(|_| Keypair::new().pubkey().to_bytes())
+        .collect();
+    let initial = tee_pubkeys[0];
     let root_kp = Keypair::new();
     let (vault_pda, _) = vault_config_pda(program_id);
 
     let mut data = common::anchor_disc("initialize").to_vec();
     InitializeArgs {
-        tee_pubkey: tee_kp.pubkey().to_bytes(),
+        operations_admin: admin.pubkey().to_bytes(),
+        tee_pubkeys,
         root_key: root_kp.pubkey().to_bytes(),
-        num_trees: 1,
+        num_trees,
     }
     .serialize(&mut data)
     .unwrap();
@@ -73,7 +87,7 @@ fn initialize(svm: &mut LiteSVM, admin: &Keypair, program_id: &Pubkey) -> (Pubke
         svm.latest_blockhash(),
     );
     svm.send_transaction(tx).expect("initialize failed");
-    (vault_pda, tee_kp.pubkey().to_bytes())
+    (vault_pda, initial)
 }
 
 fn build_set_tee_pubkey_ix(
@@ -165,6 +179,29 @@ fn set_tee_pubkey_rejects_non_admin_signer() {
     );
 }
 
+#[test]
+fn set_tee_pubkey_rejects_count_that_differs_from_num_trees() {
+    if !program_so_path().exists() {
+        return;
+    }
+    let (mut svm, program_id) = load_svm();
+    let admin = Keypair::new();
+    svm.airdrop(&admin.pubkey(), 1_000_000_000).unwrap();
+    let (vault_pda, _) = initialize_with_num_trees(&mut svm, &admin, &program_id, 2);
+
+    let one_key = [Keypair::new().pubkey().to_bytes()];
+    let ix = build_set_tee_pubkeys_ix(&program_id, &admin.pubkey(), &vault_pda, &one_key);
+    let tx = Transaction::new(
+        &[&admin],
+        Message::new(&[ix], Some(&admin.pubkey())),
+        svm.latest_blockhash(),
+    );
+    assert!(
+        svm.send_transaction(tx).is_err(),
+        "TEE key count must equal num_trees",
+    );
+}
+
 /// Build a `set_tee_pubkey` ix over an arbitrary K-key set (Borsh `Vec<Pubkey>`).
 fn build_set_tee_pubkeys_ix(
     program_id: &Pubkey,
@@ -211,6 +248,30 @@ fn set_tee_pubkey_rejects_zero_key() {
     );
 }
 
+#[test]
+fn set_tee_pubkey_rejects_operations_admin_as_signer() {
+    if !program_so_path().exists() {
+        return;
+    }
+    let (mut svm, program_id) = load_svm();
+    let admin = Keypair::new();
+    svm.airdrop(&admin.pubkey(), 1_000_000_000).unwrap();
+    let (vault_pda, _) = initialize(&mut svm, &admin, &program_id);
+
+    let ix = build_set_tee_pubkeys_ix(
+        &program_id,
+        &admin.pubkey(),
+        &vault_pda,
+        &[admin.pubkey().to_bytes()],
+    );
+    let tx = Transaction::new(
+        &[&admin],
+        Message::new(&[ix], Some(&admin.pubkey())),
+        svm.latest_blockhash(),
+    );
+    assert!(svm.send_transaction(tx).is_err());
+}
+
 // F-09: a duplicate key silently shrinks the effective authorized set + corrupts
 // the shard→key round-robin (keys[j] settles shard j) — reject it.
 #[test]
@@ -221,7 +282,7 @@ fn set_tee_pubkey_rejects_duplicate_keys() {
     let (mut svm, program_id) = load_svm();
     let admin = Keypair::new();
     svm.airdrop(&admin.pubkey(), 1_000_000_000).unwrap();
-    let (vault_pda, _) = initialize(&mut svm, &admin, &program_id);
+    let (vault_pda, _) = initialize_with_num_trees(&mut svm, &admin, &program_id, 2);
 
     let k = Keypair::new().pubkey().to_bytes();
     let ix = build_set_tee_pubkeys_ix(&program_id, &admin.pubkey(), &vault_pda, &[k, k]);

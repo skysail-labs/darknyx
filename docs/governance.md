@@ -14,24 +14,24 @@
 
 ## 0. TL;DR
 
-There are **four** privileged authorities over a live Nyx deployment. Today
-(devnet) each is a single keypair. The mainnet target is to put all four behind
-one **Squads v4** M-of-N multisig, so no single key can freeze funds, hijack the
-program, or rotate the TEE signer without a quorum that has independently
-verified the enclave attestation.
+There are **four** privileged authorities over a live Nyx deployment. Devnet
+uses single keypairs. Mainnet deliberately uses **two** Squads v4 multisigs:
+an operations 3-of-5 for routine protocol/market/TEE-key changes and a cold
+root/upgrade 4-of-7 for catastrophic authority. No single key can freeze
+funds, replace the program, or rotate a trusted TEE signer.
 
 | Authority | Controls | Set / rotated by | Devnet holder | Mainnet target |
 |---|---|---|---|---|
-| **Program upgrade authority** | Replacing the on-chain program bytecode (BPFLoaderUpgradeable) | `solana program set-upgrade-authority` | `~/.config/solana/id.json` | Squads vault PDA |
-| **`VaultConfig.admin`** | `set_tee_pubkey` (TEE signer rotation), `set_protocol_config` | Fixed at `initialize` (no transfer ix — see §3) | `initialize` signer | Squads vault PDA |
-| **`VaultConfig.root_key`** | `rotate_root_key` (self-signed), is the `create_wallet` owner | `initialize` param, then self-rotating | `root_key` param | Squads vault PDA (or a separate cold quorum) |
+| **Program upgrade authority** | Replacing the on-chain program bytecode (BPFLoaderUpgradeable) | `solana program set-upgrade-authority` | `~/.config/solana/id.json` | Cold root/upgrade 4-of-7 vault PDA |
+| **`VaultConfig.admin`** | TEE signer rotation, global fee config, Merkle-tree and `MarketConfig` administration | `operations_admin` argument at `initialize` (no transfer ix) | `initialize` signer | Operations 3-of-5 vault PDA |
+| **`VaultConfig.root_key`** | `rotate_root_key` (self-signed), is the `create_wallet` owner | `initialize` param, then self-rotating | `root_key` param | Cold root/upgrade 4-of-7 vault PDA |
 | **Phala compose-hash allowlist** | Which CVM image the KMS releases keys to | Phala Cloud dashboard | deploy team | deploy team (out of multisig — see §4) |
 
-The point of F-10: **the program upgrade authority and `admin` are the two
+The point of F-10/N-19: **the program upgrade authority and `admin` are the two
 single points of total compromise** (upgrade → arbitrary code incl. draining
 custody; `admin` → rotate the TEE signer to an attacker-controlled key). A
-single leaked key = game over. A 3-of-5 multisig raises that to "3 independent
-signers colluding or compromised."
+single leaked key = game over. Split quorums separate frequent operations from
+the colder authority that can replace code or the protocol root.
 
 ---
 
@@ -42,9 +42,10 @@ signers colluding or compromised."
   arbitrary notes, drain the token accounts). Nothing on-chain constrains a
   program upgrade beyond holding this key. This is why it must be the
   hardest-quorum authority.
-- **`admin`** — rotates the TEE Ed25519 signer set (`set_tee_pubkey`) and sets
-  the protocol config (`set_protocol_config`). A malicious `admin` can point
-  `tee_pubkeys` at a key it controls, then forge settle payloads → **this is the
+- **`admin`** — the operations authority. It rotates the TEE Ed25519 signer set
+  (`set_tee_pubkey`), sets global fee config (`set_protocol_config`), and
+  initializes/updates/pauses mint-pair `MarketConfig` PDAs. A malicious admin
+  can point `tee_pubkeys` at a key it controls, then forge settle payloads → **this is the
   F-10 attack the attestation gate (§5 of the attestation flow) closes.**
 - **`root_key`** — the protocol "root" governance key. It is the `owner` that
   signs `create_wallet`, and it self-rotates via `rotate_root_key` (only the
@@ -58,30 +59,22 @@ signers colluding or compromised."
 
 ---
 
-## 2. Recommended structure — one Squads v4 multisig
+## 2. Required structure — split Squads quorums
 
 Use **[Squads v4](https://squads.so)** — the de-facto audited Solana multisig.
-Its **vault PDA** is a normal `Pubkey`, so it drops in as `admin` / `root_key` /
-upgrade authority with **zero program changes** (the vault already treats all
-three as opaque pubkeys). Squads executes an arbitrary instruction by CPI with
-its vault PDA as a signer, which is exactly what `set_tee_pubkey`,
-`rotate_root_key`, and `initialize` need.
+Each Squads **vault PDA** is a normal `Pubkey`, so it can sign the corresponding
+vault instructions by CPI:
 
-**Default:** one 3-of-5 multisig; its vault PDA is the upgrade authority +
-`admin` + `root_key`.
+- **Operations: 3-of-5.** Stored as `VaultConfig.admin`. It handles TEE-key
+  rotations, fees, tree initialization, and market initialization/updates.
+- **Cold root/upgrade: 4-of-7.** Installed as both program upgrade authority
+  and `VaultConfig.root_key`. It executes the one-time mainnet `initialize`
+  because that entrypoint is bound to the current upgrade authority.
 
-**Optional separation** (recommended for a large deployment): a second,
-higher-threshold / colder multisig for `root_key` and the upgrade authority
-(rarely exercised, catastrophic if abused), leaving the day-to-day `admin`
-(TEE rotation, which happens on every image upgrade) on the 3-of-5 operations
-multisig. Pick the split before `initialize` — `admin` cannot be changed after
-(§3).
-
-Threshold guidance: **≥ 3-of-5** for operations; consider 4-of-7 for the
-root/upgrade quorum. Signers on independent hardware wallets, geographically
-and organizationally distinct (the attestation ceremony's independence
-assumption in §5.2 of the attestation flow only holds if the signers really are
-independent).
+The on-chain initializer rejects an operations admin equal to the root key and,
+in a mainnet build, rejects an operations admin equal to the upgrade-authority
+signer. Signers should use independent hardware and independent attestation
+verification; shared signers across the two groups weaken the intended split.
 
 ---
 
@@ -94,17 +87,16 @@ to the **program upgrade authority**:
 ```
 # mainnet Initialize (programs/vault/src/instructions/initialize.rs, no devnet-admin feature)
 program:      Program<Vault>       constraint: program.programdata_address() == program_data
-program_data: Account<ProgramData> constraint: program_data.upgrade_authority_address == admin
+program_data: Account<ProgramData> constraint: program_data.upgrade_authority_address == upgrade_authority
 ```
 
 So `initialize` can only be called by the current upgrade authority. Two
 consequences for the bootstrap order:
 
 1. **There is no `set_admin` / `transfer_admin` instruction.** `admin` is fixed
-   at `initialize` for the life of the config. The *only* way to make `admin`
-   the multisig is to have the multisig (as upgrade authority) execute
-   `initialize`. → **Transfer the upgrade authority to the multisig BEFORE
-   calling `initialize`** (§4, step 3).
+   at `initialize`. The cold upgrade multisig executes `initialize` while the
+   distinct operations vault PDA is passed as `operations_admin`. Transfer the
+   upgrade authority to the cold multisig before initialization.
 2. The dev/test/devnet build (`--features devnet-admin`) keeps the old
    plain-signer `initialize` (no ProgramData binding) — the litesvm harness
    loads the program non-upgradeably, and front-running isn't a threat where we
@@ -117,14 +109,13 @@ consequences for the bootstrap order:
 
 ## 4. Mainnet bootstrap runbook (order matters)
 
-Illustrated with Squads v4. `PROGRAM_ID` = the deployed `vault` program;
-`VAULT_PDA` = the Squads multisig **vault** PDA (not the multisig account
-itself).
+Illustrated with Squads v4. `PROGRAM_ID` is the deployed vault program;
+`OPS_VAULT` and `COLD_VAULT` are the two Squads **vault PDAs** (not the
+multisig account addresses).
 
 ```sh
-# 1. Create the Squads multisig (UI or CLI). Record its VAULT PDA.
-#    Fund the vault PDA with SOL (it is the fee-payer/rent-payer for the
-#    instructions it will execute).
+# 1. Create operations 3-of-5 and cold root/upgrade 4-of-7 Squads multisigs.
+#    Record and fund OPS_VAULT and COLD_VAULT.
 
 # 2. Deploy the MAINNET program artifact (no devnet-admin feature → F-01/F-02
 #    backdoors absent, F-03 binding present). Deployer keypair is the
@@ -132,37 +123,38 @@ itself).
 cargo build-sbf --manifest-path programs/vault/Cargo.toml     # NO --features
 solana program deploy target/deploy/vault.so --program-id <PROGRAM_KEYPAIR>
 
-# 3. Transfer the upgrade authority to the multisig vault PDA. MUST happen
+# 3. Transfer the upgrade authority to the cold vault PDA. MUST happen
 #    before initialize (F-03: the initialize signer must be the upgrade
-#    authority, and we want that to be the multisig).
+#    authority).
 solana program set-upgrade-authority "$PROGRAM_ID" \
-  --new-upgrade-authority "$VAULT_PDA"
+  --new-upgrade-authority "$COLD_VAULT"
 
-# 4. From Squads, propose + execute `initialize` with the vault PDA as `admin`.
-#    Accounts: admin = VAULT_PDA (signer, via Squads CPI), vault_config (init),
+# 4. From the cold Squads, propose + execute `initialize`.
+#    Accounts: upgrade_authority = COLD_VAULT (signer), vault_config (init),
 #    program = PROGRAM_ID, program_data = <PROGRAM_ID's ProgramData PDA>,
-#    system_program. Args: tee_pubkey (the attested shard-0 signer), root_key
-#    (VAULT_PDA, or the separate root quorum's vault PDA), num_trees (K).
-#    → cfg.admin = VAULT_PDA. F-03 constraint passes (admin == upgrade authority).
+#    system_program. Args: operations_admin = OPS_VAULT,
+#    tee_pubkeys = exactly K independently attested shard signers,
+#    root_key = COLD_VAULT, num_trees = K.
+#    → cfg.admin = OPS_VAULT while root/upgrade remain COLD_VAULT.
 
-# 5. Create the K per-shard trees (`initialize_tree` ×K) and the settle ALT,
-#    then register + fund the full K-shard TEE signer set. TEE-key rotation
+# 5. Through the operations Squads, create K trees (`initialize_tree` ×K),
+#    initialize each mint-pair MarketConfig, set the global fee config, and
+#    create the settle ALT. Later TEE-key rotation
 #    (set_tee_pubkey) runs through the ATTESTATION CEREMONY — see
 #    tee-attestation-flow.md §5 (verify MRTD/compose-hash/report_data off-chain,
 #    THEN the multisig signs). Never rubber-stamp a key (§5.2 there).
 ```
 
-**Do NOT** call `initialize` with the deployer as admin and expect to hand off
-later — there is no admin-transfer path (§3.1). Get the order right the first
-time.
+**Do NOT** initialize with a deployer key or reuse `COLD_VAULT` as
+`operations_admin`; there is no admin-transfer path. Get the split right once.
 
 ---
 
 ## 5. Attestation-gated TEE rotation (the other half of F-10)
 
-`set_tee_pubkey` is `admin`-only on-chain. Under this governance model `admin`
-is the multisig, and the multisig **must** run the attestation verification
-before signing — this is the compensating control for the accepted
+`set_tee_pubkey` is operations-admin-only on-chain. The operations multisig
+**must** run the attestation verification before signing — this is the
+compensating control for the accepted
 TEE-trusted-price decision (F-11) and the freeze/forge risk in F-10.
 
 The full ceremony (fetch a fresh quote bound to the new pubkey via
@@ -181,17 +173,21 @@ a verification claim, not a rubber-stamp.**
 ## 6. Verification — confirm the authorities are the multisig
 
 ```sh
-# Upgrade authority == the multisig vault PDA:
-solana program show "$PROGRAM_ID"        # "Authority" line must equal VAULT_PDA
+# Upgrade authority == COLD_VAULT:
+solana program show "$PROGRAM_ID"
 
-# admin / root_key == the multisig vault PDA: read VaultConfig and compare.
+# Read VaultConfig and compare admin == OPS_VAULT, root_key == COLD_VAULT,
+# num_tee_keys == num_trees, with every key non-default and unique.
 # (SDK: read the VaultConfig account; admin is the first pubkey field,
 #  root_key follows tee_pubkeys[MAX_TEE_KEYS]. See programs/vault/src/state.rs.)
+
+# Read every MarketConfig and verify the mint pair, mint decimals, nonzero
+# price_scale/tick/minimum size, bounded breaker, and intended enabled state.
 ```
 
-Re-audit checklist item (audit_1): *"Admin/root/upgrade authority = multisig
-(verify `solana program show`)"* — satisfied when all three above resolve to the
-multisig vault PDA(s).
+N-19 is satisfied only after the 3-of-5 and 4-of-7 execution paths are rehearsed
+and every signer independently verifies the proposed TEE attestation before a
+rotation.
 
 ---
 

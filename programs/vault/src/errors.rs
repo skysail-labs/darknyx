@@ -67,7 +67,7 @@ pub enum VaultError {
     InvalidBatchBinding,
     #[msg("BatchValidityMarker has expired")]
     BatchValidityMarkerExpired,
-    #[msg("BatchValidityMarker has not yet expired — only the original payer can close it before expiry")]
+    #[msg("BatchValidityMarker has not yet reached its expiry slot")]
     BatchValidityMarkerNotExpired,
 
     // ---- Arithmetic / overflow ----
@@ -107,8 +107,16 @@ pub enum VaultError {
     InvalidTreeCount,
     #[msg("tee_pubkeys count out of range (must be in 1..=MAX_TEE_KEYS)")]
     InvalidKeyCount,
-    #[msg("tee_pubkey is the zero key or a duplicate of another key in the set")]
+    #[msg("tee_pubkey is zero, duplicated, or reuses a governance authority")]
     InvalidTeeKey,
     #[msg("Input note lock has expired")]
     NoteLockExpired,
+    #[msg("Operations admin is default or not distinct from cold governance")]
+    InvalidAdminKey,
+    #[msg("Protocol root key is default, unchanged, or reuses another authority")]
+    InvalidRootKey,
+    #[msg("Market base and quote mints must be distinct")]
+    InvalidMarketMints,
+    #[msg("Market price scale, tick size, minimum size, and circuit-breaker bounds are invalid")]
+    InvalidMarketParameters,
 }

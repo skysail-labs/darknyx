@@ -32,6 +32,7 @@ import { createHash } from "node:crypto";
 
 import {
   VAULT_CONFIG_SEED,
+  MARKET_CONFIG_SEED,
   MERKLE_TREE_SEED,
   WALLET_SEED,
   NULLIFIER_SEED,
@@ -99,6 +100,18 @@ function serializeProof(p: Groth16OnChainProof): Uint8Array {
 
 export function vaultConfigPda(programId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([VAULT_CONFIG_SEED], programId);
+}
+
+/** One market per ordered base/quote mint pair. */
+export function marketConfigPda(
+  programId: PublicKey,
+  baseMint: PublicKey,
+  quoteMint: PublicKey,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [MARKET_CONFIG_SEED, baseMint.toBytes(), quoteMint.toBytes()],
+    programId,
+  );
 }
 
 /** Per-shard `MerkleTree` PDA. Seed `[b"merkle_tree", &[treeId]]`. */
@@ -222,30 +235,182 @@ export function batchValidityMarkerPda(
 
 export interface BuildInitializeParams {
   programId: PublicKey;
-  admin: PublicKey;
-  teePubkey: PublicKey;
+  /** Upgrade authority on mainnet; plain initializer/payer on devnet-admin. */
+  initializer: PublicKey;
+  /** Stored as `VaultConfig.admin`; may differ from the upgrade authority. */
+  operationsAdmin: PublicKey;
+  /** Exactly one non-default, unique signer per Merkle-tree shard. */
+  teePubkeys: PublicKey[];
   rootKey: PublicKey;
   /** Number of Merkle-tree shards (1..=16). Each shard is then created with
    *  its own `initialize_tree(treeId)` call. */
   numTrees: number;
+  /** Mainnet only: this program's upgradeable-loader ProgramData account. */
+  programData?: PublicKey;
 }
 
 export function buildInitializeInstruction(
   p: BuildInitializeParams,
 ): TransactionInstruction {
+  if (p.numTrees < 1 || p.numTrees > 16) {
+    throw new Error(`numTrees must be in 1..=16, got ${p.numTrees}`);
+  }
+  if (p.teePubkeys.length !== p.numTrees) {
+    throw new Error(
+      `teePubkeys length ${p.teePubkeys.length} must equal numTrees ${p.numTrees}`,
+    );
+  }
+  if (p.operationsAdmin.equals(PublicKey.default)) {
+    throw new Error("operationsAdmin must not be the default public key");
+  }
+  if (p.rootKey.equals(PublicKey.default)) {
+    throw new Error("rootKey must not be the default public key");
+  }
+  if (p.operationsAdmin.equals(p.rootKey)) {
+    throw new Error("operationsAdmin must be distinct from rootKey");
+  }
+  if (p.programData && p.operationsAdmin.equals(p.initializer)) {
+    throw new Error(
+      "mainnet operationsAdmin must be distinct from the upgrade authority",
+    );
+  }
+  const teeSet = new Set(p.teePubkeys.map((key) => key.toBase58()));
+  if (
+    teeSet.size !== p.teePubkeys.length ||
+    p.teePubkeys.some(
+      (key) =>
+        key.equals(PublicKey.default) ||
+        key.equals(p.operationsAdmin) ||
+        key.equals(p.rootKey),
+    )
+  ) {
+    throw new Error(
+      "teePubkeys must be non-default, unique, and distinct from governance keys",
+    );
+  }
   const [vaultPda] = vaultConfigPda(p.programId);
+  const lenLE = new Uint8Array(4);
+  new DataView(lenLE.buffer).setUint32(0, p.teePubkeys.length, true);
   const data = cat(
     anchorDiscriminator("initialize"),
-    p.teePubkey.toBytes(),
+    p.operationsAdmin.toBytes(),
+    lenLE,
+    ...p.teePubkeys.map((key) => key.toBytes()),
     p.rootKey.toBytes(),
     new Uint8Array([p.numTrees & 0xff]),
+  );
+  const keys = [
+    { pubkey: p.initializer, isSigner: true, isWritable: true },
+    { pubkey: vaultPda, isSigner: false, isWritable: true },
+  ];
+  if (p.programData) {
+    keys.push(
+      { pubkey: p.programId, isSigner: false, isWritable: false },
+      { pubkey: p.programData, isSigner: false, isWritable: false },
+    );
+  }
+  keys.push({
+    pubkey: SystemProgram.programId,
+    isSigner: false,
+    isWritable: false,
+  });
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys,
+    data: Buffer.from(data),
+  });
+}
+
+export interface BuildInitializeMarketParams {
+  programId: PublicKey;
+  admin: PublicKey;
+  baseMint: PublicKey;
+  quoteMint: PublicKey;
+  priceScale: bigint;
+  tickSize: bigint;
+  minOrderSize: bigint;
+  circuitBreakerBps: bigint;
+}
+
+function validateMarketParams(p: {
+  priceScale: bigint;
+  tickSize: bigint;
+  minOrderSize: bigint;
+  circuitBreakerBps: bigint;
+}): void {
+  if (
+    p.priceScale <= 0n ||
+    p.tickSize <= 0n ||
+    p.minOrderSize <= 0n ||
+    p.circuitBreakerBps <= 0n ||
+    p.circuitBreakerBps > 10_000n
+  ) {
+    throw new Error("invalid market parameters");
+  }
+}
+
+export function buildInitializeMarketInstruction(
+  p: BuildInitializeMarketParams,
+): TransactionInstruction {
+  validateMarketParams(p);
+  if (p.baseMint.equals(p.quoteMint)) {
+    throw new Error("baseMint and quoteMint must be distinct");
+  }
+  const [vaultPda] = vaultConfigPda(p.programId);
+  const [marketPda] = marketConfigPda(p.programId, p.baseMint, p.quoteMint);
+  const data = cat(
+    anchorDiscriminator("initialize_market"),
+    u64LE(p.priceScale),
+    u64LE(p.tickSize),
+    u64LE(p.minOrderSize),
+    u64LE(p.circuitBreakerBps),
   );
   return new TransactionInstruction({
     programId: p.programId,
     keys: [
       { pubkey: p.admin, isSigner: true, isWritable: true },
-      { pubkey: vaultPda, isSigner: false, isWritable: true },
+      { pubkey: vaultPda, isSigner: false, isWritable: false },
+      { pubkey: p.baseMint, isSigner: false, isWritable: false },
+      { pubkey: p.quoteMint, isSigner: false, isWritable: false },
+      { pubkey: marketPda, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
+export interface BuildUpdateMarketConfigParams {
+  programId: PublicKey;
+  admin: PublicKey;
+  baseMint: PublicKey;
+  quoteMint: PublicKey;
+  enabled: boolean;
+  priceScale: bigint;
+  tickSize: bigint;
+  minOrderSize: bigint;
+  circuitBreakerBps: bigint;
+}
+
+export function buildUpdateMarketConfigInstruction(
+  p: BuildUpdateMarketConfigParams,
+): TransactionInstruction {
+  validateMarketParams(p);
+  const [vaultPda] = vaultConfigPda(p.programId);
+  const [marketPda] = marketConfigPda(p.programId, p.baseMint, p.quoteMint);
+  const data = cat(
+    anchorDiscriminator("update_market_config"),
+    new Uint8Array([p.enabled ? 1 : 0]),
+    u64LE(p.priceScale),
+    u64LE(p.tickSize),
+    u64LE(p.minOrderSize),
+    u64LE(p.circuitBreakerBps),
+  );
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.admin, isSigner: true, isWritable: false },
+      { pubkey: vaultPda, isSigner: false, isWritable: false },
+      { pubkey: marketPda, isSigner: false, isWritable: true },
     ],
     data: Buffer.from(data),
   });
@@ -291,11 +456,6 @@ export interface BuildSetProtocolConfigParams {
   admin: PublicKey;
   protocolOwnerCommitment: Uint8Array; // 32B Poseidon commitment
   feeRateBps: number; // 0..=10_000
-  // Matcher governance params (single-place config in VaultConfig, adopted by
-  // the TEE at boot). 0 = unset ⇒ the TEE keeps its env/dev default. Default 0.
-  tickSize?: bigint;
-  minOrderSize?: bigint;
-  circuitBreakerBps?: bigint;
 }
 
 function u16LE(v: number): Uint8Array {
@@ -311,15 +471,11 @@ export function buildSetProtocolConfigInstruction(
     throw new Error(`feeRateBps out of range: ${p.feeRateBps}`);
   }
   const [vaultPda] = vaultConfigPda(p.programId);
-  // Arg order MUST match the on-chain handler:
-  // protocol_owner_commitment, fee_rate_bps, tick_size, min_order_size, circuit_breaker_bps.
+  // Arg order MUST match the on-chain handler.
   const data = cat(
     anchorDiscriminator("set_protocol_config"),
     fixed32(p.protocolOwnerCommitment),
     u16LE(p.feeRateBps),
-    u64LE(p.tickSize ?? 0n),
-    u64LE(p.minOrderSize ?? 0n),
-    u64LE(p.circuitBreakerBps ?? 0n),
   );
   return new TransactionInstruction({
     programId: p.programId,
@@ -337,6 +493,7 @@ export interface BuildSetTeePubkeyParams {
   /** The FULL authorized TEE signer set (the K shard fee-payer/authority keys).
    *  Replaces `vault_config.tee_pubkeys` wholesale. 1..=16 keys. */
   teePubkeys: PublicKey[];
+  numTrees: number;
 }
 
 /**
@@ -349,10 +506,21 @@ export interface BuildSetTeePubkeyParams {
 export function buildSetTeePubkeyInstruction(
   p: BuildSetTeePubkeyParams,
 ): TransactionInstruction {
-  if (p.teePubkeys.length < 1 || p.teePubkeys.length > 16) {
+  if (
+    p.teePubkeys.length < 1 ||
+    p.teePubkeys.length > 16 ||
+    p.teePubkeys.length !== p.numTrees
+  ) {
     throw new Error(
-      `teePubkeys must have 1..=16 entries, got ${p.teePubkeys.length}`,
+      `teePubkeys must have exactly numTrees entries (1..=16), got ${p.teePubkeys.length} for ${p.numTrees} trees`,
     );
+  }
+  const teeSet = new Set(p.teePubkeys.map((key) => key.toBase58()));
+  if (
+    teeSet.size !== p.teePubkeys.length ||
+    p.teePubkeys.some((key) => key.equals(PublicKey.default))
+  ) {
+    throw new Error("teePubkeys must be non-default and unique");
   }
   const [vaultPda] = vaultConfigPda(p.programId);
   const lenLE = new Uint8Array(4);
@@ -414,6 +582,12 @@ export interface BuildRotateRootKeyParams {
 export function buildRotateRootKeyInstruction(
   p: BuildRotateRootKeyParams,
 ): TransactionInstruction {
+  if (
+    p.newRootKey.equals(PublicKey.default) ||
+    p.newRootKey.equals(p.currentRootKey)
+  ) {
+    throw new Error("newRootKey must be non-default and different");
+  }
   const [vaultPda] = vaultConfigPda(p.programId);
   const data = cat(
     anchorDiscriminator("rotate_root_key"),

@@ -71,14 +71,16 @@ nyx-monorepo/
 ├── programs/vault/                  # The ONLY on-chain program (Anchor 0.32)
 │   ├── src/
 │   │   ├── lib.rs                    # #[program] entrypoints
-│   │   ├── state.rs                  # VaultConfig (global: tee_pubkeys[16], num_trees,
-│   │   │                             #   zero_subtree_roots), MerkleTree (per-shard tree
+│   │   ├── state.rs                  # VaultConfig (global authorities/fees), MarketConfig
+│   │   │                             #   (mint pair/scale/bounds), MerkleTree (per-shard tree
 │   │   │                             #   state), WalletEntry, NullifierEntry,
 │   │   │                             #   ConsumedNoteEntry, NoteLock, OutstandingMint,
 │   │   │                             #   BatchValidityMarker
 │   │   ├── merkle.rs                 # Incremental Poseidon Merkle tree (depth 20), per shard
 │   │   ├── instructions/
-│   │   │   ├── initialize.rs                  # Create the global VaultConfig (num_trees)
+│   │   │   ├── initialize.rs                  # Upgrade-authority init; distinct operations admin
+│   │   │   ├── initialize_market.rs           # Create governed mint-pair MarketConfig
+│   │   │   ├── update_market_config.rs        # Operations-admin parameters + kill switch
 │   │   │   ├── initialize_tree.rs             # Create one MerkleTree shard [tree_id]
 │   │   │   ├── create_wallet.rs               # VALID_WALLET_CREATE proof → WalletEntry
 │   │   │   ├── deposit.rs                      # Pull SPL → append note to merkle_tree[id] + outstanding[mint]++
@@ -106,7 +108,8 @@ nyx-monorepo/
 │       ├── match_batch_verify.rs               # real N=16 proof → on-chain verify
 │       ├── merge_verify.rs                      # VALID_MERGE(K=2/4) verify roundtrip
 │       ├── zk_roundtrip.rs  zk_spend_roundtrip.rs  merkle_host.rs
-│       └── set_protocol_config.rs  set_tee_pubkey.rs  user_commitment_registration.rs
+│       └── initialize_governance.rs  market_config.rs  set_protocol_config.rs
+│           set_tee_pubkey.rs  user_commitment_registration.rs
 │
 ├── crates/
 │   ├── darkpool-crypto/              # Host-side Poseidon / note / nullifier / keys
@@ -342,6 +345,7 @@ verification + the change-note store, and the hand-coded `vault-client.ts`
 | PDA | Seeds | Purpose |
 |---|---|---|
 | `VaultConfig` | `[b"vault_config"]` | Global singleton: `tee_pubkeys[16]` + `num_tee_keys`, `num_trees`, `zero_subtree_roots`, admin, root key, protocol-owner commitment, fee bps. Read-only on the settle hot path (no tree state). |
+| `MarketConfig` | `[b"market_config", base_mint, quote_mint]` | One enabled/paused market: immutable mint identity + decimals and operations-admin-governed price scale, tick, minimum size, and circuit-breaker bound. |
 | `MerkleTree` | `[b"merkle_tree", &[tree_id]]` | **Per-shard** (K of them): `leaf_count` (offset 8), `current_root` (offset 16), the 64-root ring, the depth-20 right-path. Settles to different shards write distinct accounts. |
 | `WalletEntry` | `[b"wallet", user_commitment]` | Registered user commitment (1:1; `init` = replay guard) |
 | `NullifierEntry` | `[b"nullifier", nullifier]` | A VALID_SPEND / merge-consumed note |
