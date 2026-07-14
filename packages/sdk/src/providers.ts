@@ -39,25 +39,14 @@ export interface MerkleProofProvider {
 export interface MasterSeedStorage {
   load(): Promise<Uint8Array | null>;
   store(seed: Uint8Array): Promise<void>;
-  generate(): Promise<Uint8Array>;
 }
 
 /**
- * Master-seed mode controls where the 64-byte seed comes from. Two modes per
- * spec Section 4.5:
- *  - "csprng" — generate locally via crypto.getRandomValues, store via
- *               `MasterSeedStorage`. Backup responsibility is on the user.
- *  - "wallet-signature" — derive seed from an Ed25519 signature over a fixed
- *                         message. No separate backup needed; rebind on each
- *                         session via the user's Solana wallet.
+ * Master-seed mode supports only a locally generated 64-byte CSPRNG seed held
+ * by secure storage. A portable wallet signature must never be a spending
+ * authority. Use the versioned encrypted seed-backup helpers for recovery.
  */
-export type MasterSeedMode =
-  | { type: "csprng"; storage: MasterSeedStorage }
-  | {
-      type: "wallet-signature";
-      signMessage: (msg: Uint8Array) => Promise<Uint8Array>;
-      message?: Uint8Array;
-    };
+export type MasterSeedMode = { type: "csprng"; storage: MasterSeedStorage };
 
 export interface SolanaConnectionProvider {
   connection: Connection;

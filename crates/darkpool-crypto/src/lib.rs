@@ -4,8 +4,8 @@
 //! - Poseidon hashing over BN254 (note commitments, nullifiers, owner commitments)
 //! - Note/UTXO structure + commitment formula
 //! - Nullifier derivation
-//! - Blinding factor derivation (Umbra KMAC256 pattern)
-//! - Four-key hierarchy derivation (HKDF, KMAC256)
+//! - Blinding factor derivation (NyxShakeKdfV1)
+//! - Four-key hierarchy derivation (HKDF + NyxShakeKdfV1)
 //! - Hierarchical viewing key tree (MVK -> PairVK -> MonthlyVK)
 //!
 //! All functions MUST produce byte-identical output in:
@@ -42,7 +42,7 @@ pub use fill_encryption::{
 #[cfg(not(target_os = "solana"))]
 pub use keys::{
     derive_blinding_factor, derive_inner_hash, derive_master_viewing_key, derive_spending_key,
-    derive_trading_key_at_offset, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
+    derive_trading_key_at_offset, nyx_shake_kdf_v1, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
 };
 pub use note::{commitment_from_fields_v2, NoteCommitment, NOTE_COMMITMENT_BYTES};
 pub use nullifier::{nullifier_v2, Nullifier, NULLIFIER_BYTES};

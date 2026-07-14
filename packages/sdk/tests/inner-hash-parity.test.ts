@@ -6,7 +6,7 @@
  *
  *   1. inner_hash derivation
  *        inner_hash(order_id, j) = reduce_mod_r(
- *          KMAC256(seed, "nyx-inner-hash-v1" || order_id[16] || j_u32_le, 512))
+ *          NyxShakeKdfV1(seed, "nyx-inner-hash-v1" || order_id[16] || j_u32_le, 512))
  *      TS  `deriveInnerHash`  ⇄  Rust `derive_inner_hash`
  *
  *   2. v2 note commitment

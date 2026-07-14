@@ -31,10 +31,11 @@ The SDK also ships:
   without any extra work.
 - **Stream clients**: per-account order-lifecycle and fill subscriptions, with
   the fill-memo verification built in.
-- **Recovery helpers**: derive a deterministic master seed from a wallet
-  signature (`seedFromWalletSignature`, over `MASTER_SEED_MESSAGE`) so the same
-  wallet reproduces your keys on any device, and recover change notes from the
-  on-chain ciphertext (`recoverChangeFromChain`) when backfilling.
+- **Recovery helpers**: generate and securely store a CSPRNG master seed, export
+  or import its authenticated versioned backup with
+  `exportEncryptedMasterSeed` / `importEncryptedMasterSeed`, and recover change
+  notes from on-chain ciphertext (`recoverChangeFromChain`) when backfilling.
+  Wallet-message signatures are not used as spend authority.
 - **System helpers**: server time (for slot-based expiry) and the degraded-mode
   status.
 

@@ -103,7 +103,6 @@ function makeClient(
       return b;
     },
     store: async () => {},
-    generate: async () => new Uint8Array(64),
   };
   const conn: SolanaConnectionProvider = {
     connection: {} as never,

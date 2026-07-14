@@ -116,7 +116,6 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
         storage: {
           load: async () => masterSeed,
           store: async () => {},
-          generate: async () => masterSeed,
         },
       },
       connectionProvider: { connection: conn, perRpcUrl: cfg.l1RpcUrl },

@@ -19,7 +19,7 @@ runbooks have landed.
 | CS-02 | High | ZK + vault | `remediation/governance-markets`, `remediation/match-batch-v3` | Every active slot is bound to one enabled on-chain market, its mint halves, and price scale; mixed-market proof rejected | In progress |
 | CS-03 | High | ZK + SDK + TEE | `remediation/match-batch-v3` | User and fee output inners are constrained, deterministic, and recoverable from consumed inputs; arbitrary-inner witness rejected | Open |
 | CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Open |
-| CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Open |
+| CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Closed |
 | CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
 | CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Open |
 | CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Open |
@@ -28,7 +28,7 @@ runbooks have landed.
 | CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Open |
 | CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Open |
 | CS-13 | Medium | Daemon | `remediation/daemon-trust` | Strict startup fails closed; finalized TEE keys refresh each minute; mismatch/staleness pauses placement while reconciliation continues | Closed |
-| CS-14 | Low | Crypto + SDK | `remediation/client-custody` | Existing bytes retained under `nyxShakeKdfV1`; fixed Rust/TS KATs; no NIST KMAC claim | Open |
+| CS-14 | Low | Crypto + SDK | `remediation/client-custody` | Existing bytes retained under `nyxShakeKdfV1`; fixed Rust/TS KATs; no NIST KMAC claim | Closed |
 
 ## Performance findings
 
@@ -58,7 +58,7 @@ runbooks have landed.
 | N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Open |
 | N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
 | N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Closed |
-| N-16 | Low | SDK | `remediation/client-custody` | Commitment equality is byte-based; mixed-case encoding regression | Open |
+| N-16 | Low | SDK | `remediation/client-custody` | Commitment equality is byte-based; mixed-case encoding regression | Closed |
 | N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Open |
 | N-18 | Critical mainnet gate | Governance + ZK | `remediation/release-assurance` | Public Phase-2 ceremony with at least five independent contributors, transcript/hashes, random beacon, reproducible verify, auditor sign-off, post-ceremony settle | Open |
 | N-19 | High mainnet gate | Governance | `remediation/governance-markets`, `remediation/release-assurance` | Split Squads rehearsal: operations 3-of-5 admin and cold root/upgrade 4-of-7; independent attestation verification before rotations | In progress |
@@ -387,6 +387,52 @@ Every remediation PR must record:
   deployed artifacts are invalidated, but rollback reopens CS-13/N-15: strict
   startup again skips unavailable governance state and daemon proofs again
   trust TEE-supplied roots unless each caller remembers an optional hook.
+
+### `remediation/client-custody` — CS-05, CS-14, N-16
+
+- **Invariant restored.** The public SDK accepts only a securely persisted
+  64-byte CSPRNG master seed; the fixed wallet-message signature mode, message,
+  helper, and plaintext daemon seed import/export are removed. Recovery uses a
+  versioned seed-only envelope with fixed scrypt parameters, fresh salt and IV,
+  AES-256-GCM authentication, strict parsing, and a separately supplied backup
+  passphrase. The historical raw-SHAKE construction is now exposed as
+  `nyxShakeKdfV1` / `nyx_shake_kdf_v1`, explicitly disclaims NIST KMAC/cSHAKE,
+  and retains byte-identical output under a shared fixed KAT. Fill-memo and
+  chain-recovery commitment equality parse exact 32-byte encodings and compare
+  bytes, accepting mixed-case hex while returning canonical lowercase.
+- **Wire/circuit impact.** `MasterSeedMode` loses `wallet-signature` and
+  `MasterSeedStorage` loses its redundant `generate` callback. The SDK adds the
+  `nyx-master-seed-backup` version-1 JSON envelope and backup import/export
+  helpers; `nyx-keystore-init` replaces plaintext `--seed` and stdout seed
+  disclosure with mutually exclusive `--backup-out` / `--import-backup` flows.
+  Rust and TypeScript KDF function names change without changing any derived
+  bytes. No TEE API, order canonical, Borsh payload, account layout, circuit,
+  proving/verifier key, N=16 fixture, transaction, note, or root changes.
+- **Local evidence.** `cargo fmt --all -- --check`, workspace clippy with
+  warnings denied, `cargo build --examples -p darkpool-crypto`, and `cargo test
+--workspace` pass, including 37 darkpool-crypto unit tests and the fixed Rust
+  KAT. SDK, daemon, and indexer TypeScript no-emit checks pass. Full SDK Vitest
+  passes 236 tests with 22 environment-gated skips; full daemon Vitest passes
+  157 with 2 skips; indexer Vitest passes 23. Adversarial tests cover corrupt
+  stored seed length, fresh CSPRNG persistence, randomized backup salt/IV,
+  object and JSON recovery, wrong passphrase, ciphertext tamper, unsafe scrypt
+  parameters, malformed fields, short passphrases, same-identity daemon
+  recovery, the shared Rust/TS KDF KAT, and mixed-case commitments in both live
+  fill-memo and durable chain-recovery paths. A built `nyx-keystore-init` smoke
+  generated a backup, restored a second keystore with byte-identical owner/user
+  commitments, and confirmed both keystores and the backup were mode `0600`.
+- **Devnet/CVM evidence.** Not applicable. This slice changes client/daemon
+  custody interfaces, host-side naming, and SDK comparison logic only. It does
+  not change the deployed vault, circuit artifacts, TEE image inputs, boot or
+  dstack/KMS path, enclave API/transport, transaction layout, or devnet state;
+  a billable CVM settle would execute unchanged settlement code and add no
+  coverage beyond the local byte-parity and recovery tests.
+- **Rollback.** Revert this PR to restore the prior API. Existing notes, roots,
+  orders, payloads, signatures, proofs, and encrypted daemon keystores remain
+  byte-compatible because KDF output did not change. Version-1 seed backup files
+  require this PR's importer. Rollback reopens CS-05/CS-14/N-16 and must not be
+  used for real-value clients because it restores the portable wallet-signature
+  spend authority and case-sensitive commitment comparison.
 
 ## Mainnet release gates
 

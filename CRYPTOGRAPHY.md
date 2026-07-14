@@ -187,7 +187,7 @@ Every state-transitioning instruction maintains:
 | **Poseidon over BN254 Fr** | All note / nullifier / owner / user commitments + Merkle internal hash | SNARK-efficient (sub-100 constraints per round vs. thousands for SHA). Identical Rust (`light-poseidon`) and circom (`circomlib`) implementations — parity verified. |
 | **SHA-256** | TEE-signed canonical payload hash, the batch leaf/root hashing, prover-input encoding | Off-circuit ambient hash. Solana-native (no syscall surprises). |
 | **HKDF-SHA256** | Spending key, root Ed25519 seed, trading-key offset derivation | RFC 5869 standard. 512-bit output → mod-p for BN254 keys, 256-bit output → Ed25519 seed. |
-| **KMAC256** | Viewing key + per-note blinding factor | NIST SP 800-185. Used in lieu of HKDF for the viewing chain to match Umbra's pattern (KMAC256 is XOF-style — long outputs are cleaner). |
+| **NyxShakeKdfV1** | Viewing key + per-note blinding factor | Versioned Nyx-specific SHAKE256 construction retained byte-for-byte for existing keys and notes. It uses SP 800-185-style encodings but is not NIST KMAC or cSHAKE; fixed Rust/TS KATs pin its bytes. |
 | **Ed25519** | TEE signature on match payload, trading-key signatures | Solana-native (built-in precompile for verification). |
 | **Groth16** (BN254, snarkjs / `groth16-solana`) | All four ZK circuits | Constant-size proofs (256 bytes on-chain), constant-time verification, well-supported tooling. The proof system that fits Solana's CU budget. |
 
@@ -212,12 +212,12 @@ down everywhere:
 
 ### Sampling soundness
 
-- Keys derived from the 64-byte master seed go through HKDF or KMAC256
+- Keys derived from the 64-byte master seed go through HKDF or NyxShakeKdfV1
   outputting **512 bits**, then `mod p` reduction. For BN254 r ≈ 2^254, this
   gives a statistical bias of < 2^-256 — indistinguishable from uniform in
-  practice. The choice of 64-byte master seed is mostly to ensure adequate
-  initial entropy from any source.
-- Blinding factors per note use the same 512-bit derivation (KMAC256 with a
+  practice. The 64-byte master seed is sampled directly from a CSPRNG and kept
+  in secure client storage, with only authenticated encrypted backups exported.
+- Blinding factors per note use the same 512-bit derivation (NyxShakeKdfV1 with a
   per-note counter), so each note has independent randomness even when
   derived from the same master seed.
 - The spending key and viewing key use disjoint info strings
@@ -244,15 +244,15 @@ in `crates/darkpool-crypto/src/keys.rs` and mirrors in
 ### Derivation chain
 
 ```
-master_seed (64 bytes, CSPRNG or wallet-signature derived)
+master_seed (64 bytes, CSPRNG; securely stored and backed up encrypted)
   │
   ├── HKDF-SHA256("darkpool_root_key_v1", 32B)              → root_key (Ed25519 seed)
   ├── HKDF-SHA256("darkpool_trading_key_v1" ‖ offset_u64_le, 32B) → trading_key(offset) (Ed25519 seed)
   ├── HKDF-SHA256("darkpool_spend_key_v1", 512b) → mod p     → spending_key (Fr)
-  └── KMAC256("darkpool_viewing_key_v1", 512b) → mod p       → viewing_key   (Fr)
+  └── NyxShakeKdfV1("darkpool_viewing_key_v1", 512b) → mod p → viewing_key   (Fr)
 
 Per-deposit-note inner_hash (v2; independent from the above; keyed by leaf index):
-  KMAC256("note_blinding_v1" ‖ leaf_index_u64_le, 512b) → mod p → inner_hash(leaf_index) (Fr)
+  NyxShakeKdfV1("note_blinding_v1" ‖ leaf_index_u64_le, 512b) → mod p → inner_hash(leaf_index) (Fr)
   (change / trade / fee / continuation notes derive inner_hash differently — see §5.)
 ```
 
@@ -983,7 +983,7 @@ Alice generates a 64-byte master seed (CSPRNG). From it she derives via
 `packages/sdk/src/keys/key-generators.ts`:
 
 - `spending_key` (Fr) via HKDF-SHA256
-- `viewing_key` (Fr) via KMAC256
+- `viewing_key` (Fr) via NyxShakeKdfV1
 - `trading_key(offset=0)` (Ed25519) via HKDF-SHA256 with offset 0
 - `root_key` (Ed25519) via HKDF-SHA256 (skipped if she's bringing her own
   Solana keypair — the demo dapp uses Phantom)
@@ -2158,7 +2158,7 @@ nyx-monorepo/
 │   │   ├── src/poseidon.rs                    light-poseidon BN254 wrapper
 │   │   ├── src/note.rs                        commitment_from_fields_v2 (Poseidon6)
 │   │   ├── src/nullifier.rs                   Poseidon3(DOMAIN_NULL, sk, inner_hash)
-│   │   ├── src/keys.rs                        HKDF-SHA256 + KMAC256 + deriveBlindingFactor
+│   │   ├── src/keys.rs                        HKDF-SHA256 + NyxShakeKdfV1 + deriveBlindingFactor
 │   │   ├── src/user_commitment.rs  src/field.rs  examples/*
 │   ├── darkpool-matcher/                       run_batch(_capped) + order_canonical + change_note
 │   ├── nyx-tee/                                the in-CVM engine (api/matcher/settle/prover/merkle/…)

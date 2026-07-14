@@ -112,6 +112,22 @@ describe("recoverChangeFromChain (B.4)", () => {
     expect(hex(note!.tokenMint)).toBe(hex(QUOTE_MINT));
   });
 
+  it("compares commitments as bytes and returns canonical hex", async () => {
+    const innerHash = be32ToBig(deriveChangeInner(42n, CHANGE_ROLE_BUYER));
+    const fill = await makeFill({
+      side: "buyer",
+      innerHash,
+      amount: 250n,
+      matchId: 42n,
+    });
+    const canonical = fill.changeNoteCommitment!;
+    fill.changeNoteCommitment = canonical.toUpperCase();
+
+    const note = await recoverChangeFromChain(fill, params);
+    expect(note).not.toBeNull();
+    expect(note!.commitment).toBe(canonical);
+  });
+
   it("recovers a CONTINUATION note (anchor inner_hash) + its anchor index", async () => {
     const innerHash = deriveInnerHash(SEED, ORDER_ID, 3);
     const fill = await makeFill({

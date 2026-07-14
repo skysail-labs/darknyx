@@ -1,11 +1,11 @@
 /**
- * Change-amount recovery — CLIENT-SIDE end-to-end (Proposals A + B).
+ * Change-amount recovery — CLIENT-SIDE end-to-end (Proposal B).
  *
  * Stitches the whole user-side journey together with the REAL SDK + indexer
  * functions, no live CVM, proving the cross-package byte agreement
  * (settle-builder ENCODE → indexer DECODE → SDK RECOVER):
  *
- *   A   seed       = seedFromWalletSignature(walletSig)              (deterministic, recoverable)
+ *   seed           = securely stored CSPRNG output                    (backed up encrypted)
  *   B.1 viewing kp = deriveViewingEncKeypair(seed)                   (the order's viewing_pubkey)
  *   B.3 (TEE sim)  = encryptChangeAmount(eph, viewing.pub, amount)   (the on-chain ciphertext)
  *   B.5a payload   = MatchResultPayload{ note_e, fill_recovery } → serializePayload → settle ix data
@@ -20,7 +20,6 @@ import { describe, it, expect } from "vitest";
 import crypto from "node:crypto";
 import nacl from "tweetnacl";
 import {
-  seedFromWalletSignature,
   deriveViewingEncKeypair,
   deriveInnerHash,
 } from "../../sdk/src/keys/key-generators.js";
@@ -47,8 +46,8 @@ const be32ToBig = (b: Uint8Array) => {
   return x;
 };
 
-// Deterministic seed from a (fake) wallet signature — Proposal A.
-const SEED = seedFromWalletSignature(new Uint8Array(64).fill(0x42));
+// Deterministic stand-in for a securely stored 64-byte CSPRNG seed.
+const SEED = new Uint8Array(64).fill(0x42);
 const VIEWING = deriveViewingEncKeypair(SEED);
 const OWNER = 0x1234_5678n;
 const QUOTE_MINT = fill(32, 0x9e);
@@ -142,7 +141,7 @@ async function buyerChangeIx(
 }
 
 describe("change-amount recovery — client-side e2e", () => {
-  it("seed → viewing key → the recipient the TEE encrypts to (A → B.1)", () => {
+  it("seed → viewing key → the recipient the TEE encrypts to (B.1)", () => {
     // The order's viewing_pubkey (what intake carries + the TEE encrypts to) is
     // exactly the seed-derived key the recovering client regenerates.
     expect(hex(VIEWING.publicKey)).toBe(
@@ -189,7 +188,7 @@ describe("change-amount recovery — client-side e2e", () => {
     expect(note!.anchorIndex).toBe(k);
   });
 
-  it("a different wallet's seed cannot recover the note (isolation)", async () => {
+  it("a different account seed cannot recover the note (isolation)", async () => {
     const matchId = 7n;
     const inner = be32ToBig(deriveChangeInner(matchId, CHANGE_ROLE_BUYER));
     const data = await buyerChangeIx(inner, 250n, matchId);
@@ -197,7 +196,7 @@ describe("change-amount recovery — client-side e2e", () => {
 
     const stranger = {
       ...recoverParams,
-      masterSeed: seedFromWalletSignature(new Uint8Array(64).fill(0x99)),
+      masterSeed: new Uint8Array(64).fill(0x99),
     };
     expect(await recoverChangeFromChain(buyer, stranger)).toBeNull();
   });

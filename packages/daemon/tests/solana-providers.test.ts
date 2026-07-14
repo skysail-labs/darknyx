@@ -102,7 +102,10 @@ describe("fixedSeedMode", () => {
     expect(mode.type).toBe("csprng");
     if (mode.type === "csprng") {
       expect(await mode.storage.load()).toBe(seed);
-      expect(await mode.storage.generate()).toBe(seed);
+      await expect(
+        mode.storage.store(new Uint8Array(64)),
+      ).resolves.toBeUndefined();
+      expect(await mode.storage.load()).toBe(seed);
     }
   });
 });
