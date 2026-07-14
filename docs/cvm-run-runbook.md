@@ -155,19 +155,47 @@ SOLANA_RPC_URL="$SOLANA_RPC_URL" FUNDER_KEYPAIR=~/.config/solana/id.json \
 
 `NYX_TEE_GATEWAY` + `SOLANA_RPC_URL` come from `.env`; export the run flag inline.
 
+> ### ⚠️ ONE fresh tree per leaf-count test — do NOT run the whole bucket in one shot
+>
+> Every `cvm-*` leaf-count test (`cvm-settle-e2e`, `cvm-multimatch-settle`,
+> `cvm-self-trade`, `cvm-merge-then-order`) **deposits into the single shared
+> on-chain Merkle tree and asserts an absolute leaf_count from an EMPTY start**
+> (`cvm-multimatch-settle` literally asserts `startCount === 0` — "trees not
+> empty — reset the merkle trees first"). So:
+>
+> * **They cannot share a tree.** The 2nd test in a run sees the 1st's leaves and
+>   fails the empty-start check — this is by design, not a flake.
+> * **A mid-run reset does NOT rescue it**: the CVM's Merkle mirror is
+>   append-only and can't rewind, so resetting the on-chain tree under a running
+>   CVM desyncs the mirror. A fresh tree needs a reset **+ a CVM cold-boot**
+>   (an env-only `phala deploy` restart, §3–§4).
+> * The `cvm` vitest project is pinned to `fileParallelism: false`
+>   (`packages/sdk/vitest.config.ts`) so a bucket run at least fails
+>   deterministically with the "reset first" message instead of a race — but
+>   that only removes the race, it does NOT make the bucket pass.
+>
+> **Correct loop for each leaf-count test:** reset tree (§3) → env-only redeploy
+> (§4, cold-boots the mirror empty) → run that ONE test file → repeat.
+>
+> The **non-leaf** tests (`cvm-api-surface`, `cvm-attestation-e2e`) don't touch
+> the tree, so those can run against any live CVM without a reset.
+
+Run ONE leaf-count test file against a freshly-reset + cold-booted CVM:
+
 ```sh
+# after: reset tree (§3) + env-only `phala deploy` (§4) so the mirror cold-boots empty
 RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" \
   FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-  ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm )
+  ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm tests/cvm-settle-e2e.test.ts )
 ```
 
-This runs the whole `cvm` bucket: `cvm-settle-e2e` (deposit→match→settle, leaf
-+5), `cvm-multimatch-settle` (M pairs across K shards), `cvm-merge-then-order`
-(deposit→merge→order off the merged note), `cvm-api-surface` (error envelope +
-x-request-id, /system/status, /time, rate-limit 429, min_notional, idempotency,
-/account + settings, WS seq + /ws/trading + cancel-on-disconnect). Target one
-file by appending its path. **Re-run after every image bump** — the tree must be
-freshly reset (§3) so each shard's shadow cold-boots empty.
+Bucket contents: `cvm-settle-e2e` (deposit→match→settle, leaf +5),
+`cvm-multimatch-settle` (M pairs across K shards), `cvm-merge-then-order`
+(deposit→merge→order off the merged note), `cvm-self-trade` (no self-match then a
+cross-owner settle), `cvm-api-surface` (error envelope + x-request-id,
+/system/status, /time, rate-limit 429, min_notional, idempotency, /account +
+settings, WS seq + /ws/trading + cancel-on-disconnect). **Re-run after every
+image bump.**
 
 The loadgen needs the placeholder-mint regime (omit the mint vars, §3) — see
 `crates/nyx-tee-loadgen/BENCHMARK.md`.

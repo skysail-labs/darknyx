@@ -374,6 +374,7 @@ SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
 # cvm-settle-e2e: deposit 2 real notes → POST a crossing bid+ask → the CVM
 # matches AND settles on devnet → assert leaf_count grows +5 (note_c/d +
 # buyer change + base+quote fee notes). Needs the REAL-MINT regime.
+# Run ONE leaf-count cvm test per fresh tree — see the note below.
 RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
   FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts )
@@ -386,6 +387,20 @@ RAW=$(curl -s "https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6
 cargo run -q -p nyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
   --fee-rate-bps 30 --traders 10 --duration-secs 25
 ```
+
+> **Run each leaf-count cvm test ONE AT A TIME against a freshly-reset tree — do
+> NOT `vitest run --project cvm` the whole bucket.** Every leaf-count test
+> (`cvm-settle-e2e`, `cvm-multimatch-settle`, `cvm-self-trade`,
+> `cvm-merge-then-order`) deposits into the single shared on-chain tree and
+> asserts an absolute `leaf_count` from an EMPTY start, so the 2nd test in a run
+> fails the empty-start check (by design). And the CVM Merkle mirror is
+> append-only — it can't rewind — so a fresh tree needs a reset **+ a CVM
+> cold-boot** (env-only `phala deploy` restart), not just a reset. The loop is:
+> reset tree → env-only redeploy → run ONE test file → repeat. The `cvm` vitest
+> project is pinned `fileParallelism: false` (`packages/sdk/vitest.config.ts`) so
+> a bucket run fails deterministically (with the "reset first" message) instead
+> of racing. Only the non-leaf tests (`cvm-api-surface`, `cvm-attestation-e2e`)
+> are reset-free. Full workflow: **[`docs/cvm-run-runbook.md`](docs/cvm-run-runbook.md) §5**.
 
 ### 3.5 STOP THE CVM when done
 
