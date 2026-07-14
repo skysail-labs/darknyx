@@ -16,9 +16,9 @@ image** — deploying the old tag runs stale code.
 1. **Secrets live in `packages/sdk/.env`, NOT `/tmp`.** The Helius RPC key goes
    in the gitignored `packages/sdk/.env` (`SOLANA_RPC_URL=…`, see
    `packages/sdk/.env.example`); the SDK tests load it via `tests/setup-env.ts`.
-   For the deploy `-e` file (§3) build it from that env var, never commit it,
-   and `shred -u` it after deploy. Never paste the key into a CLI arg or a
-   `/tmp/*.env` you forget to delete.
+   For the deploy `-e` file (§3) build it from that env var under the gitignored
+   `.devnet/` directory, never commit it, and securely delete it after deploy.
+   Never paste the key into a CLI arg or a `/tmp/*.env` you forget to delete.
 
 2. **The git remote redirects.** `origin` (`Nyx-Privacy/nyx`) **redirects to the
    canonical `skysail-labs/darknyx`**. CI runs there and publishes the public
@@ -93,7 +93,8 @@ RUN_DEVNET_E2E=1 \
 ## 3. The encrypted `-e` env + the REGIME
 
 `docker-compose.yaml` references per-deploy secrets as `${VAR}`; build the file
-fresh each deploy, `umask 077`, **shred after, never commit.**
+fresh each deploy under the gitignored `.devnet/` directory, `umask 077`,
+**securely delete after, never commit.**
 
 ```sh
 umask 077
@@ -104,7 +105,7 @@ OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 node scripts/reset-merkle-tree.mjs     # FIRST — so the mirror cold-boots an empty tree (all K shards)
 FLOOR=$(solana slot --url "$SOLANA_RPC_URL")
-cat > .deploy.env <<EOF
+cat > .devnet/nyx-deploy.env <<EOF
 NYX_TEE_SOLANA_RPC_URL=$SOLANA_RPC_URL
 NYX_TEE_SYNC_FROM_SLOT=$FLOOR
 NYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen (placeholder-mint) regime
@@ -126,12 +127,20 @@ EOF
 
 ```sh
 CVM=app_<id>      # phala cvms list
-phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e .deploy.env --wait
-shred -u .deploy.env
+phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e .devnet/nyx-deploy.env --wait
+# GNU/Linux has shred; macOS has rm -P. Confirm the file is gone either way.
+if command -v shred >/dev/null 2>&1; then
+  shred -u .devnet/nyx-deploy.env
+else
+  rm -P .devnet/nyx-deploy.env
+fi
+test ! -e .devnet/nyx-deploy.env
 
 GW="https://<app_id>-8080.dstack-pha-prod5.phala.network"
-phala cvms logs "$CVM" | tail -60   # watch: proving key load, "merkle cold-boot complete … shards=K",
-                                     #   "derived K-shard TEE signer set" (← COPY ALL K keys), "settle pipeline ENABLED"
+phala ps "$CVM"                     # find the nyx-tee container name (normally dstack-nyx-tee-1)
+phala logs dstack-nyx-tee-1 --cvm-id "$CVM" --stderr -n 60
+# Watch for: proving key load, "merkle cold-boot complete … shards=K",
+# "derived K-shard TEE signer set" (COPY ALL K keys), "settle pipeline ENABLED".
 ```
 
 Register ALL K signers in shard order (`keys[j]` settles shard j) + fund each
@@ -184,9 +193,13 @@ Run ONE leaf-count test file against a freshly-reset + cold-booted CVM:
 
 ```sh
 # after: reset tree (§3) + env-only `phala deploy` (§4) so the mirror cold-boots empty
-RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" \
-  FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-  ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm tests/cvm-settle-e2e.test.ts )
+(
+  cd packages/sdk
+  RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" \
+    FUNDER_KEYPAIR="$HOME/.config/solana/id.json" \
+    ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+    ../../node_modules/.bin/vitest run --project cvm tests/cvm-settle-e2e.test.ts
+)
 ```
 
 Bucket contents: `cvm-settle-e2e` (deposit→match→settle, leaf +5),

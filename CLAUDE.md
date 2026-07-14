@@ -300,7 +300,8 @@ curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" \
 `deploy/docker-compose.yaml` references secrets as `${VAR}`; `phala deploy
 -e <file>` injects them as encrypted env (the value never enters the
 `compose_hash`). Build the file fresh each deploy — the Helius key is a
-secret: write it `umask 077`, **shred it after deploy, never commit it.**
+secret: write it `umask 077` under the gitignored `.devnet/` directory,
+**securely delete it after deploy, never commit it.**
 
 > **⚠️ The two CVM regimes are mutually exclusive — this is the loadgen
 > hiccup that wasted a deploy.** Whether you set the mint env vars decides
@@ -323,9 +324,10 @@ BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
+K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 node scripts/reset-merkle-tree.mjs   # FIRST — so the mirror cold-boots an empty tree
 FLOOR=$(solana slot --url "$HELIUS")
-cat > /tmp/nyx.env <<EOF
+cat > .devnet/nyx-deploy.env <<EOF
 NYX_TEE_SOLANA_RPC_URL=$HELIUS
 NYX_TEE_SYNC_FROM_SLOT=$FLOOR
 NYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen regime
@@ -333,6 +335,7 @@ NYX_TEE_QUOTE_MINT=$QUOTE
 NYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 NYX_TEE_FEE_RATE_BPS=30
 NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
+NYX_TEE_NUM_TREES=$K
 EOF
 ```
 
@@ -345,13 +348,20 @@ collateral; a mismatch → every synthetic note fails `verify_commitment`).
 
 ```sh
 CVM=app_634b2ab4c250466311f0cf09f772b6fd60b5be11   # phala cvms list
-phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/nyx.env --wait
-shred -u /tmp/nyx.env
+phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e .devnet/nyx-deploy.env --wait
+if command -v shred >/dev/null 2>&1; then
+  shred -u .devnet/nyx-deploy.env
+else
+  rm -P .devnet/nyx-deploy.env  # macOS
+fi
+test ! -e .devnet/nyx-deploy.env
 
 GW="https://<app_id>-8080.dstack-pha-prod5.phala.network"
 curl -s "$GW/info" | jq -r .tee_pubkey          # the PRIMARY (shard-0) Ed25519 signer
-phala cvms logs "$CVM" | tail -40               # watch boot: proving key load, merkle cold-boot,
-                                                #   "derived K-shard TEE signer set" (← copy all K), "settle pipeline ENABLED"
+phala ps "$CVM"                                 # find the container name (normally dstack-nyx-tee-1)
+phala logs dstack-nyx-tee-1 --cvm-id "$CVM" --stderr -n 40
+# Watch for proving key load, merkle cold-boot, "derived K-shard TEE signer set",
+# and "settle pipeline ENABLED".
 ```
 
 Under tree-sharding the CVM derives **K = `num_trees`** shard signers
@@ -376,9 +386,13 @@ SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
 # matches AND settles on devnet → assert leaf_count grows +5 (note_c/d +
 # buyer change + base+quote fee notes). Needs the REAL-MINT regime.
 # Run ONE leaf-count cvm test per fresh tree — see the note below.
-RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
-  FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-  ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts )
+(
+  cd packages/sdk
+  RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+    FUNDER_KEYPAIR="$HOME/.config/solana/id.json" \
+    ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+    ../../node_modules/.bin/vitest run --project cvm tests/cvm-settle-e2e.test.ts
+)
 
 # loadgen: intake throughput + matcher paging (≤16/batch). Needs the
 # PLACEHOLDER-MINT regime. Synthetic orders carry stub proofs, so their
