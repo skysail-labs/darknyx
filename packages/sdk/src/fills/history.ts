@@ -6,7 +6,7 @@
  * matchId, isPartialFill, changeNoteCommitment, batchSlot }`. The amount, the
  * `inner_hash`/`anchor_index`, and therefore the *spendable* change-note
  * opening come ONLY from the per-account `FillMemo` (the authenticated live
- * `/ws/fills` channel, verified in `orders/fill-memo.ts`). A change note's
+ * `/v1/stream` fills channel, verified in `orders/fill-memo.ts`). A change note's
  * amount is never on-chain, so it cannot be rebuilt from the chain/indexer
  * alone — the same note-plaintext requirement every shielded pool has.
  *
@@ -26,7 +26,7 @@
  * surfaced here as `IndexerFill.{ephemeralPubkey, changeEnc}`, which
  * `recoverChangeFromChain` (`fills/recover.ts`) decrypts + self-verifies into a
  * spendable note. It survives a CVM redeploy, so it's the durable backstop; the
- * live `/ws/fills` push is the low-latency fast path. (The old durable
+ * live fills-channel push is the low-latency fast path. (The old durable
  * memo-replay log + `GET /fills/replay` were retired in favour of this.)
  */
 

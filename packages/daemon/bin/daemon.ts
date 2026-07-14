@@ -8,6 +8,8 @@
  *
  *   NYX_DAEMON_GATEWAY_URL=https://<app>-8080.dstack-…  \
  *   NYX_DAEMON_TOKEN=<jwt>  NYX_DAEMON_RPC_URL=$HELIUS   \
+ *   NYX_DAEMON_API_KEY=<key> NYX_DAEMON_API_SECRET=<secret> \
+ *   NYX_DAEMON_API_PASSPHRASE=<passphrase>               \
  *   NYX_DAEMON_KEYSTORE=./nyx-keystore.json             \
  *   NYX_DAEMON_KEYSTORE_PASSPHRASE=<passphrase>         \
  *   NYX_DAEMON_VI_WASM=circuits/build/valid_input/circuit_js/circuit.wasm \
@@ -45,6 +47,50 @@ function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is required`);
   return v;
+}
+
+/** Build the stream's short-lived-token refresh callback when long-lived API
+ * credentials are supplied. Credentials are all-or-none and never logged. */
+function streamTokenProvider(
+  gatewayUrl: string,
+): (() => Promise<string>) | undefined {
+  const apiKey = process.env.NYX_DAEMON_API_KEY;
+  const apiSecret = process.env.NYX_DAEMON_API_SECRET;
+  const passphrase = process.env.NYX_DAEMON_API_PASSPHRASE;
+  const supplied = [apiKey, apiSecret, passphrase].filter(Boolean).length;
+  if (supplied === 0) return undefined;
+  if (supplied !== 3) {
+    throw new Error(
+      "NYX_DAEMON_API_KEY, NYX_DAEMON_API_SECRET, and NYX_DAEMON_API_PASSPHRASE must be supplied together",
+    );
+  }
+  return async () => {
+    const response = await fetch(
+      `${gatewayUrl.replace(/\/$/, "")}/auth/token`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          api_key: apiKey,
+          api_secret: apiSecret,
+          passphrase,
+        }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `stream token refresh failed with HTTP ${response.status}`,
+      );
+    }
+    const body = (await response.json()) as { access_token?: unknown };
+    if (
+      typeof body.access_token !== "string" ||
+      body.access_token.length === 0
+    ) {
+      throw new Error("stream token refresh returned no access_token");
+    }
+    return body.access_token;
+  };
 }
 
 /** Load a Solana keypair from a `solana-keygen` JSON file (array of bytes). */
@@ -135,6 +181,7 @@ async function main(): Promise<void> {
     depositFn,
     depositor,
     mergeRunner,
+    streamTokenProvider: streamTokenProvider(config.gatewayUrl),
     verifyAttestation: skipAttest ? false : undefined,
     quoteVerifier: skipAttest
       ? undefined

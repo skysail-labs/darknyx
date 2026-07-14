@@ -75,13 +75,10 @@ the orders and fills channels for push updates.
 
 | Path | Direction | Purpose |
 |---|---|---|
-| `/ws/trading` | bidirectional | Stream framed `order.place` / `order.cancel` / `order.modify`; optional cancel-on-disconnect |
-| `/ws/orders` | server → client | Per-account order-lifecycle events (partial / filled / cancelled / expired) |
-| `/ws/fills` | server → client | Per-account continuation-fill memos |
+| `/v1/stream` | bidirectional | In-band login; framed order operations; `orders`, `fills`, and `tree` subscriptions; cancel-on-disconnect |
 
-WebSocket sockets self-authenticate with the bearer token as a `?token=` query
-parameter (browsers and the global `WebSocket` cannot set an `Authorization`
-header on the upgrade); an `Authorization: Bearer` header is also accepted.
+Open `/v1/stream` without query credentials and authenticate with an `op: login`
+frame. The SDK multiplexes all channels and order operations on that session.
 
 ## Quick start
 

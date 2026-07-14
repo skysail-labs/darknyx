@@ -5,7 +5,7 @@
 //! store the change note for later withdrawal.
 //!
 //! Emitted by the matcher tick when it assigns a continuation anchor to
-//! a relocking side (Phase 6/7), broadcast over the `GET /ws/fills`
+//! a relocking side (Phase 6/7), broadcast over the `/v1/stream` `fills`
 //! channel (Phase 7). The memo is NOT secret (it's the user's own fill
 //! info; TLS-encrypted on the wire), and it carries nothing the TEE
 //! could forge in a way that fools the client — the integrity check is

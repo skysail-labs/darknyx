@@ -35,7 +35,7 @@ We are **keeping this package** but treating it as an optional reference /
 light-client accelerator, **not** a pending deliverable:
 
 - **The daemon proves it's not load-bearing.** `packages/daemon` (the serious
-  client) drives everything off the live `/ws/fills` + `/ws/orders` streams + TEE
+  client) drives everything off the `fills` + `orders` channels on `/v1/stream` + TEE
   read endpoints + on-chain reads, with **zero references to this package**. Lean
   by construction is the right design for an always-on client.
 - **The durable path no longer needs it.** Post-Proposal-B the SDK recovers

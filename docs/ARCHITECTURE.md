@@ -138,7 +138,7 @@ nyx-monorepo/
 src/
 ├── boot.rs        # dstack handshake → derive the shard-0 Ed25519 signer; cold-boot the mirrors
 ├── config.rs      # env-driven config (num_trees, prover backend, send concurrency), fail-fast
-├── api/           # axum HTTP/WS: /health /info /attestation /auth/token /orders /ws/fills /tree
+├── api/           # axum HTTP/WS: REST endpoints + the sole /v1/stream socket
 ├── keys/          # dstack-derived key material (K shard signers at nyx/ed25519-signer/v1/{i})
 ├── matcher/       # the order book + the interval driver (tick → match → page → settle);
 │                  #   the anchor pool + fill memos
@@ -189,7 +189,7 @@ close. Those are now gone from L1; the proof is the sole binder:
 * **Amounts reach the trader off-chain, via the fill memo.** The owner of each
   order receives a per-account **`FillMemo`** (`order_id`, `anchor_index`,
   `change_amount`, `change_note_commitment`, `inner_hash`) over the auth'd
-  `/ws/fills` channel — the only place a trade's change amount appears. The
+  `fills` channel on `/v1/stream` — the live place a trade's change amount appears. The
   client's **Vuln-4 guard** (`sdk/src/orders/fill-memo.ts`) recomputes the
   commitment from the memo (`Poseidon6(mint, change_amount, owner, inner_hash)`)
   and rejects a TEE that lied. The live socket is a low-latency fast path; the
@@ -330,7 +330,7 @@ verification + the change-note store, and the hand-coded `vault-client.ts`
    base+quote protocol fee notes are appended to the tree.
 7. **Fill memo (CVM → client) + on-chain backstop.** Since plaintext amounts
    left L1, the change amount reaches the owner two ways: live as a per-account
-   `FillMemo` over `/ws/fills` (the fast path), and durably as the on-chain
+   `FillMemo` over the `/v1/stream` fills channel (the fast path), and durably as the on-chain
    `fill_recovery` ciphertext (encrypted to the order's viewing key) that
    `recoverChangeFromChain` decrypts after a missed memo / redeploy. Either way
    the client runs the Vuln-4 integrity check (recompute the commitment), then
@@ -392,7 +392,7 @@ sysvar + system program.
 * **Privacy.** Order intent never leaves the enclave except as settlement
   referencing already-public note commitments.
 
-The `/ws/fills` channel is **per-account routed** (each order's memo goes only
+The `/v1/stream` fills channel is **per-account routed** (each order's memo goes only
 to its owner's channel) and **self-healing**: a memo that arrives while no
 client is attached is not lost — the change amount rides the settle ix encrypted
 on-chain, so the client recovers it on reconnect from the indexer + on-chain

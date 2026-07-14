@@ -215,7 +215,7 @@ Bucket contents: `cvm-settle-e2e` (deposit→match→settle, leaf +5),
 (deposit→merge→order off the merged note), `cvm-self-trade` (no self-match then a
 cross-owner settle), `cvm-api-surface` (error envelope + x-request-id,
 /system/status, /time, rate-limit 429, min_notional, idempotency, /account +
-settings, WS seq + /ws/trading + cancel-on-disconnect). **Re-run after every
+settings, `/v1/stream` login/sequence + legacy-route deletion). **Re-run after every
 image bump.**
 
 The loadgen needs the placeholder-mint regime (omit the mint vars, §3) — see

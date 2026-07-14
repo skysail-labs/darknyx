@@ -1,27 +1,21 @@
 ---
 sidebar_position: 4
 title: Session Stream
-description: One authenticated WebSocket that supersets the orders, fills, and trading sockets, with in-band login and dynamic channel subscriptions.
+description: The sole authenticated WebSocket, with in-band login, order operations, and dynamic channel subscriptions.
 ---
 
 # Session Stream
 
 :::info TL;DR
-`/v1/stream` is a single multiplexed socket that does everything the dedicated
-sockets do on one connection: place, cancel, and modify orders, and receive
+`/v1/stream` is the sole multiplexed socket: place, cancel, and modify orders, and receive
 order, fill, and tree-append pushes. You authenticate **in-band** with an
 `op: login` frame (not a `?token=` query param), then subscribe to the channels
 you want.
 :::
 
-## When to use it
-
-The dedicated sockets ([trading](./ws-trading), [orders](./orders-channel),
-[fills](./fills-channel)) each do one job and authenticate at the upgrade with
-`?token=`. The session stream folds all of them into one connection, which is the
-simpler choice for a full client that submits orders and consumes events at the
-same time. The dedicated sockets remain available if you prefer one socket per
-concern.
+The legacy `/ws/trading`, `/ws/orders`, and `/ws/fills` routes are removed. The
+[order operations](./ws-trading), [orders channel](./orders-channel), and
+[fills channel](./fills-channel) pages document facets of this one session.
 
 ## Connect and log in
 
@@ -54,7 +48,7 @@ dropping your subscriptions. The server emits an `auth_expired` reminder about
 
 | Channel | Scope | What it pushes |
 |---|---|---|
-| `orders` | Per-account | Your order-lifecycle events (placed, partial, filled, cancelled, expired). Same payloads as the [Orders Channel](./orders-channel). |
+| `orders` | Per-account | Your order-lifecycle events (partial, filled, cancelled, expired). Same payloads as the [Orders Channel](./orders-channel). |
 | `fills` | Per-account | Your continuation-fill memos. Same payloads, and the same verify-before-store rule, as the [Fills Channel](./fills-channel). |
 | `tree` | Global | Leaf-append events, for keeping an incremental view of the note tree (for example, live portfolio state). |
 
@@ -64,16 +58,18 @@ top-level `channel` field so you can route it.
 ## Submit orders
 
 The order ops dispatch to the **same** intake and verification as
-[`POST /orders`](../orders/place-order) and the [trading socket](./ws-trading), so
+[`POST /orders`](../orders/place-order) and the [order operations](./ws-trading), so
 the bodies are identical and an order-level trading-key signature is still
 required on every frame. Each carries a `request_id` the server echoes in its
 reply; later state changes arrive on the `orders` channel.
 
 ```json
 { "op": "order.place",  "request_id": "r1", "params": { /* a Place Order body */ } }
-{ "op": "order.cancel", "request_id": "r2", "order_id": "aa00…01" }
+{ "op": "order.cancel", "request_id": "r2", "order_id": "aa00…01",
+  "params": { "trading_key": "…", "cancel_nonce": 2, "trading_key_signature": "…" } }
 { "op": "order.modify", "request_id": "r3", "order_id": "aa00…01",
-  "cancel_signature": "…", "cancel_nonce": 2, "replacement": { /* a Place Order body */ } }
+  "params": { "cancel_signature": "…", "cancel_nonce": 2,
+    "replacement": { /* a Place Order body */ } } }
 ```
 
 `order.modify` is an atomic cancel-and-replace under one matcher lock, the same as

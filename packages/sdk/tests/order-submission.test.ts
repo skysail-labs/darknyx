@@ -1,7 +1,7 @@
 /**
  * Order-submission surface (Phase 5 / D2): the inclusion-proof fetch, the
- * prove→build orchestrator (with a stub prover), and the `/ws/trading`
- * send-client driven by an injected socket.
+ * prove→build orchestrator (with a stub prover), and the `/v1/stream`
+ * client driven by an injected socket.
  */
 
 import { describe, it, expect } from "vitest";
@@ -24,6 +24,9 @@ import { OrderSide } from "../src/orders/canonical.js";
 import { noteCommitmentV2, ownerCommitment } from "../src/utxo/note.js";
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+const flushMicrotasks = async () => {
+  for (let i = 0; i < 4; i += 1) await Promise.resolve();
+};
 
 describe("inclusion proof fetch", () => {
   it("parses the witness and derives path bits from the leaf index", async () => {
@@ -145,7 +148,7 @@ class FakeSocket implements SendableWebSocketLike {
   }
 }
 
-describe("TradingClient (/ws/trading send-client)", () => {
+describe("TradingClient (/v1/stream session)", () => {
   async function connected(): Promise<{
     client: TradingClient;
     sock: FakeSocket;
@@ -154,10 +157,22 @@ describe("TradingClient (/ws/trading send-client)", () => {
     const client = new TradingClient({
       gatewayWsUrl: "wss://x",
       token: "t",
+      autoReconnect: false,
       webSocketFactory: () => sock,
     });
     const p = client.connect();
     sock.fire("open");
+    await flushMicrotasks();
+    const login = sock.lastFrame();
+    expect(login).toMatchObject({ op: "login", token: "t" });
+    sock.fire("message", {
+      data: JSON.stringify({
+        op: "login",
+        seq: 1,
+        request_id: login.request_id,
+        account_id: "acct",
+      }),
+    });
     await p;
     return { client, sock };
   }
@@ -167,12 +182,13 @@ describe("TradingClient (/ws/trading send-client)", () => {
     const placeP = client.place({
       symbol: "SOL-USDC",
     } as unknown as PlaceOrderRequest);
+    await flushMicrotasks();
     const frame = sock.lastFrame();
     expect(frame.op).toBe("order.place");
     sock.fire("message", {
       data: JSON.stringify({
         op: "order.place",
-        seq: 1,
+        seq: 2,
         request_id: frame.request_id,
         result: { order_id: "ab", status: "accepted", arrival_slot: 5 },
       }),
@@ -188,6 +204,7 @@ describe("TradingClient (/ws/trading send-client)", () => {
       cancel_nonce: 1,
       trading_key_signature: "00",
     });
+    await flushMicrotasks();
     const frame = sock.lastFrame();
     sock.fire("message", {
       data: JSON.stringify({
@@ -205,7 +222,127 @@ describe("TradingClient (/ws/trading send-client)", () => {
   it("fails in-flight requests when the socket closes", async () => {
     const { client, sock } = await connected();
     const p = client.ping();
+    await flushMicrotasks();
     sock.fire("close", { code: 1006 });
     await expect(p).rejects.toThrow(/closed/);
+  });
+
+  it("keeps the bearer token out of the URL and refreshes in-band", async () => {
+    const sock = new FakeSocket();
+    const urls: string[] = [];
+    const tokens = ["initial", "refreshed"];
+    const client = new TradingClient({
+      gatewayWsUrl: "wss://x/",
+      token: "unused",
+      tokenProvider: async () => tokens.shift() ?? "refreshed",
+      autoReconnect: false,
+      webSocketFactory: (url) => {
+        urls.push(url);
+        return sock;
+      },
+    });
+    const connected = client.connect();
+    sock.fire("open");
+    await flushMicrotasks();
+    const login = sock.lastFrame();
+    expect(urls).toEqual(["wss://x/v1/stream"]);
+    expect(urls[0]).not.toContain("initial");
+    sock.fire("message", {
+      data: JSON.stringify({
+        op: "login",
+        seq: 1,
+        request_id: login.request_id,
+        account_id: "acct",
+      }),
+    });
+    await connected;
+
+    sock.fire("message", {
+      data: JSON.stringify({ op: "auth_expired", seq: 2, expires_at: 100 }),
+    });
+    await flushMicrotasks();
+    const refresh = sock.lastFrame();
+    expect(refresh).toMatchObject({ op: "login", token: "refreshed" });
+    sock.fire("message", {
+      data: JSON.stringify({
+        op: "login",
+        seq: 3,
+        request_id: refresh.request_id,
+        account_id: "acct",
+      }),
+    });
+    client.close();
+  });
+
+  it("closes for resync on a connection-global sequence gap", async () => {
+    const resync: string[] = [];
+    const { client, sock } = await connected();
+    client.subscribeChannel("fills", () => undefined, {
+      onResync: (reason) => resync.push(reason),
+    });
+    sock.fire("message", {
+      data: JSON.stringify({ op: "pong", seq: 4 }),
+    });
+    expect(resync[0]).toContain("expected 2, received 4");
+    client.close();
+  });
+
+  it("reconnects, logs in with cancel-on-disconnect, and resubscribes", async () => {
+    const sockets: FakeSocket[] = [];
+    const client = new TradingClient({
+      gatewayWsUrl: "wss://x",
+      token: "t",
+      cancelOnDisconnect: true,
+      reconnectDelayMs: 0,
+      webSocketFactory: () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    const sub = client.subscribeChannel("fills", () => undefined);
+    const ready = client.connect();
+    const first = sockets[0];
+    first.fire("open");
+    await flushMicrotasks();
+    const firstLogin = first.lastFrame();
+    expect(firstLogin).toMatchObject({
+      op: "login",
+      cancel_on_disconnect: true,
+    });
+    first.fire("message", {
+      data: JSON.stringify({
+        op: "login",
+        seq: 1,
+        request_id: firstLogin.request_id,
+        account_id: "acct",
+      }),
+    });
+    await ready;
+    expect(first.sent.map((raw) => JSON.parse(raw).op)).toContain("subscribe");
+
+    first.fire("close", { code: 1006, reason: "network loss" });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(sockets).toHaveLength(2);
+    const second = sockets[1];
+    second.fire("open");
+    await flushMicrotasks();
+    const secondLogin = second.lastFrame();
+    expect(secondLogin).toMatchObject({
+      op: "login",
+      cancel_on_disconnect: true,
+    });
+    second.fire("message", {
+      data: JSON.stringify({
+        op: "login",
+        seq: 1,
+        request_id: secondLogin.request_id,
+        account_id: "acct",
+      }),
+    });
+    await flushMicrotasks();
+    expect(second.sent.map((raw) => JSON.parse(raw).op)).toContain("subscribe");
+    sub.close();
+    client.close();
   });
 });

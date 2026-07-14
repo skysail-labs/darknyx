@@ -69,9 +69,10 @@ Two distinct needs, currently (wrongly) conflated onto one WebSocket:
    and "I was disconnected when a fill landed, backfill the gap." Needs
    persistence + query, NOT a socket.
 
-The current single-`tokio::broadcast` `/ws/fills` is fail-closed behind the
-`debug_endpoints` feature precisely because it tried to be both and leaked
-every user's memos to every authenticated subscriber.
+The original single global fills socket was fail-closed behind the
+`debug_endpoints` feature because it tried to be both and leaked every user's
+memos to every authenticated subscriber. The implemented transport is now the
+per-account `fills` channel on `/v1/stream`.
 
 ## Key facts that drive the design
 
@@ -113,7 +114,7 @@ the seed, persist nothing. Consequences:
 
 The TEE knows `account → order_id` at intake, so it routes each `FillMemo`
 to the owning account's channel (NOT a global broadcast). Replaces the
-current fail-closed global `/ws/fills`. Per-account filtering closes the
+historical fail-closed global fills socket. Per-account filtering closes the
 leak. (A bug here = a leak, so prefer per-account *channels* over
 post-delivery filtering when implementing.)
 
@@ -161,7 +162,7 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 > endpoint were **RETIRED** (Proposal C, commit `345681c`). The durable
 > gap-recovery source is now the **on-chain** encrypted `change_amount`
 > (Proposal B), decrypted by the SDK's `recoverChangeFromChain`.
-> `startFillsSync` does live-tail (`/ws/fills`) + chain backfill; the by-order_id
+> `startFillsSync` does live-tail (`fills` on `/v1/stream`) + chain backfill; the by-order_id
 > indexer is the OPTIONAL commitment locator for gap-detection.
 
 ## What this explicitly does NOT need
@@ -185,16 +186,16 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 1. SDK: deterministic `order_id` derivation (one KDF where `randomBytes` is
    today) + `getHistory({since})` pager + "backfill then tail" sequencing.
 2. TEE: at accepted intake, emit `{account_id, order_id, market, slot}` to
-   the indexer feed; switch `/ws/fills` from global broadcast to per-account
+   the indexer feed; switch fills delivery from global broadcast to per-account
    channels (and drop the `debug_endpoints` gate once filtered).
 3. Indexer (new service): settle-tx watcher → fills-by-order_id store +
    per-account cursor; `GET /account/history`.
 
 ## Cross-refs
 
-- Current fail-closed WS: `crates/nyx-tee/src/api/ws.rs` +
-  `build_protected_router` (gated behind `debug_endpoints`).
-- `FillMemo`: `crates/nyx-tee/src/matcher/fills.rs` (live `/ws/fills` push).
+- Live session handler: `crates/nyx-tee/src/api/stream.rs` (in-band auth,
+  per-account `fills` subscription).
+- `FillMemo`: `crates/nyx-tee/src/matcher/fills.rs` (live fills-channel push).
 - Durable amount recovery (Proposal B): `darkpool-crypto/src/fill_encryption.rs`
   + `nyx-tee/src/settle/fill_recovery.rs` (on-chain ciphertext) →
   `packages/sdk/src/fills/recover.ts` (`recoverChangeFromChain`). (The old P7

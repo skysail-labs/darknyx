@@ -13,7 +13,7 @@
  * UNTRUSTED, so this is by design — it sees only commitments + order ids and
  * acts as a by-order_id COMMITMENT LOCATOR. Each client reconstructs its own
  * amounts from the per-account FillMemo (delivered over the authenticated
- * `/ws/fills` channel); partial-fill is signalled by change-note presence.
+ * `/v1/stream` fills channel); partial-fill is signalled by change-note presence.
  *
  * BYTE-LAYOUT CONTRACT: the 552-byte payload mirrors
  * `programs/vault/src/instructions/tee_forced_settle.rs::MatchResultPayload`

@@ -26,8 +26,8 @@ WebSocket wss://<gateway-host>
 ```
 
 - REST paths are mounted at the root (`/auth/token`, `/orders`, `/instruments`, …).
-- WebSocket paths are mounted at the same root (`/ws/trading`, `/ws/orders`,
-  `/ws/fills`); connect with the `wss://` scheme.
+- The sole WebSocket path is `/v1/stream`; connect with the `wss://` scheme and
+  authenticate in-band with `op: login`.
 
 The exact host for a given deployment is published with that deployment. The
 identity of the code behind the host is independently verifiable. See
@@ -40,8 +40,8 @@ identity of the code behind the host is independently verifiable. See
 | `Authorization` | authenticated requests | `Bearer <access_token>` from `POST /auth/token` |
 | `Content-Type` | requests with a body | `application/json` |
 
-WebSocket upgrades cannot set an `Authorization` header from a browser, so the
-WebSocket routes also accept the bearer token as a `?token=` query parameter.
+The `/v1/stream` WebSocket upgrades without credentials; authenticate afterward
+with an in-band `login` frame so bearer tokens never appear in URLs.
 
 ## Response conventions
 

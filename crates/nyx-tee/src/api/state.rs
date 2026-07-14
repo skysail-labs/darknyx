@@ -208,12 +208,12 @@ pub struct ApiState {
     /// indexer is account-agnostic by design.
     pub order_owner: Arc<RwLock<HashMap<String, String>>>,
     /// `account_id → per-account fill-memo broadcast`. Created lazily when an
-    /// account opens `/ws/fills`. The fills router fans the matcher's global
+    /// account subscribes to `fills` on `/v1/stream`. The fills router fans the matcher's global
     /// broadcast into these per-account channels, so a subscriber sees ONLY
     /// its own order's memos (the leak guard that gated the old global route).
     pub fills_routes: Arc<RwLock<HashMap<String, broadcast::Sender<FillMemo>>>>,
     /// `account_id → per-account order-lifecycle broadcast`. Same per-account
-    /// fan-out as `fills_routes`, but for `/ws/orders`: the order router fans
+    /// fan-out as `fills_routes`, but for the `orders` channel: the order router fans
     /// the matcher's global `OrderUpdate` broadcast into these channels keyed
     /// by `order_owner`, so a subscriber sees ONLY its own orders' updates.
     pub order_routes: Arc<RwLock<HashMap<String, broadcast::Sender<OrderUpdateMsg>>>>,
@@ -289,7 +289,7 @@ impl TokenBucket {
     }
 }
 
-/// Wire form of a `darkpool_matcher::book::OrderUpdate` streamed on `/ws/orders`.
+/// Wire form of a `darkpool_matcher::book::OrderUpdate` streamed on the `orders` channel.
 /// `kind` is the lifecycle tag; the numeric fields are present only for the
 /// kinds that carry them (flattened from `OrderUpdateKind`).
 #[derive(Clone, Debug, Serialize)]
@@ -309,9 +309,9 @@ pub struct OrderUpdateMsg {
     pub new_note_amount: Option<u64>,
 }
 
-/// Per-account fill-memo channel depth. A CONNECTED-but-slow `/ws/fills` client
+/// Per-account fill-memo channel depth. A connected-but-slow `fills` subscriber
 /// that lags past this is closed with a 1011 resync. The live channel is a
-/// low-latency fast path only — a memo sent while no `/ws/fills` client is
+/// low-latency fast path only — a memo sent while no `fills` subscriber is
 /// attached is NOT a loss: the change-note amount is recoverable from the
 /// permanent on-chain ciphertext (change-amount recovery, Proposal B) via the
 /// indexer + `recoverChangeFromChain`, which is why the durable per-account memo
@@ -588,7 +588,7 @@ impl ApiState {
     /// tails this channel + backfills any gap from the chain.
     pub async fn subscribe_account_fills(&self, account_id: &str) -> broadcast::Receiver<FillMemo> {
         let mut routes = self.fills_routes.write().await;
-        // Opportunistic GC: drop channels whose `/ws/fills` subscribers have all
+        // Opportunistic GC: drop channels whose `fills` subscribers have all
         // disconnected (`receiver_count() == 0`), so the map stays bounded by the
         // number of CURRENTLY-connected accounts rather than every account ever
         // seen. Safe because we hold the write lock here — `subscribe` is the only
@@ -604,7 +604,7 @@ impl ApiState {
         tx.subscribe()
     }
 
-    /// Route one memo to its owning account's live `/ws/fills` channel. Returns
+    /// Route one memo to its owning account's live `fills` channel. Returns
     /// true when delivered to at least one LIVE subscriber; false when the order
     /// is unknown or no client is currently attached.
     ///
@@ -654,7 +654,7 @@ impl ApiState {
         tx.subscribe()
     }
 
-    /// Route one order-update to its owning account's `/ws/orders` channel.
+    /// Route one order-update to its owning account's `orders` channel.
     /// Returns true when delivered to ≥1 live subscriber. `order_id` is the
     /// update's 16-byte order id, hex-encoded (the `order_owner` key).
     pub async fn route_order_update(&self, order_id: &str, msg: &OrderUpdateMsg) -> bool {
@@ -858,7 +858,7 @@ mod persist_tests {
 
     /// `route_fill` is a live-only fast path (the durable per-account memo log
     /// was retired in favour of the on-chain ciphertext, Proposal B). It returns
-    /// false when no `/ws/fills` client is attached, and delivers to a live
+    /// false when no `fills` subscriber is attached, and delivers to a live
     /// subscriber when one is. A dropped live memo is not a loss — the amount is
     /// recoverable from the chain.
     #[tokio::test]

@@ -576,12 +576,12 @@ async fn main() -> Result<()> {
 
     // ─── 7d. Spawn the fills router ───────────────────────────────────
     // Fans the matcher's global FillMemo broadcast into per-account channels
-    // (the leak guard behind `/ws/fills`). No-op only in matcher-less test state.
+    // (the leak guard behind the `fills` channel). No-op only in matcher-less test state.
     nyx_tee::api::fills_router::spawn_fills_router(api_state.clone());
 
     // ─── 7e. Spawn the order-lifecycle router ─────────────────────────
     // Fans the matcher's global OrderUpdate broadcast into per-account channels
-    // (behind `/ws/orders`). No-op only in matcher-less test state.
+    // (behind the `orders` channel). No-op only in matcher-less test state.
     nyx_tee::api::order_router::spawn_order_router(api_state.clone());
 
     // ─── 8. Build router + bind listener + serve ──────────────────────

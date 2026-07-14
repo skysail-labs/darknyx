@@ -3,7 +3,7 @@
  * ciphertext (change-amount recovery, Proposal B) — no FillMemo required.
  *
  * The amount-privacy revamp left a fill's `change_amount` only in the live
- * `/ws/fills` memo + a TTL log that a CVM redeploy wipes. The settle ix now also
+ * live fills-channel memo + a TTL log that a CVM redeploy wipes. The settle ix now also
  * carries the amount ENCRYPTED to the order owner's X25519 viewing key
  * (`fill_recovery`), which the indexer surfaces opaquely as
  * `IndexerFill.{ephemeralPubkey, changeEnc}`. This module turns that back into a

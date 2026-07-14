@@ -22,7 +22,7 @@ export type OrderPhase =
   | "filled"
   /** Cancelled by the strategy or by cancel-on-disconnect. */
   | "cancelled"
-  /** Left the book on its time-in-force (TEE `/ws/orders` `expired`). */
+  /** Left the book on its time-in-force (TEE `orders` channel `expired`). */
   | "expired"
   /** CVM rejected the order at intake. */
   | "rejected"

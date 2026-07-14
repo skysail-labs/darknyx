@@ -1,7 +1,7 @@
 /**
  * SettlementTracker — resolves change notes' on-chain leaf indices.
  *
- * Continuation change notes arrive from `/ws/fills` with their opening but NO
+ * Continuation change notes arrive from the `/v1/stream` fills channel with their opening but NO
  * leaf index — the TEE mints them as it settles, and the index is only knowable
  * once the settle tx lands. A note can't be merged (or spent) without its leaf
  * index (the Merkle witness needs it), so the {@link DaemonMergeRunner} skips

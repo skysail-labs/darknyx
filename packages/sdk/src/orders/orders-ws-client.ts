@@ -1,5 +1,6 @@
 /**
- * Live order-lifecycle transport — the per-account `GET /ws/orders` stream.
+ * Live order-lifecycle transport — the per-account `orders` channel on the
+ * multiplexed `/v1/stream` session.
  *
  * The matcher emits an `OrderUpdate` each time one of the account's orders
  * changes state in a tick (partial/full fill, expiry); an explicit cancel
@@ -7,19 +8,17 @@
  * synthetic `cancelled`. Terminal kinds (`fully_filled` / `cancelled` /
  * `expired`) are the order's last event.
  *
- * Same self-auth + injectable-WebSocket shape as `fills/ws-client.ts`: the
- * token rides as `?token=` (the global `WebSocket` can't set an Authorization
- * header), and the TEE routes per-account so a subscriber only ever sees its
- * own orders. Unlike fills, an order update carries no secret-bearing memo to
- * verify — it's a state-transition notice keyed by `order_id`.
+ * Authentication is in-band and the TEE routes per-account so a subscriber
+ * only ever sees its own orders. Unlike fills, an order update carries no
+ * secret-bearing memo to verify — it's a state-transition notice keyed by
+ * `order_id`.
  */
 
-import type { WebSocketLike, WebSocketFactory } from "../fills/ws-client.js";
-
-const defaultWsFactory: WebSocketFactory = (url) =>
-  new (globalThis as { WebSocket: new (u: string) => WebSocketLike }).WebSocket(
-    url,
-  );
+import type { WebSocketFactory } from "../fills/ws-client.js";
+import {
+  TradingClient,
+  type StreamTokenProvider,
+} from "./trading-ws-client.js";
 
 /** Wire shape of one order-lifecycle event (mirrors `OrderUpdateMsg`). */
 export interface OrderUpdate {
@@ -44,50 +43,55 @@ export function isTerminalUpdate(u: OrderUpdate): boolean {
 }
 
 export interface SubscribeOrderUpdatesOptions {
-  /** Gateway WS origin, e.g. `wss://<app>-8080.dstack-…`. `/ws/orders` is appended. */
+  /** Gateway WS origin. `/v1/stream` is appended. */
   gatewayWsUrl: string;
   token: string;
+  tokenProvider?: StreamTokenProvider;
   onUpdate: (u: OrderUpdate) => void;
   onError?: (err: Error) => void;
   /** Server closed with 1011 (lagged past the buffer) — caller should resync from the indexer. */
   onResync?: (reason: string) => void;
   onClose?: (code: number, reason?: string) => void;
   webSocketFactory?: WebSocketFactory;
+  /** Reuse an existing multiplexed session (recommended for daemons). */
+  streamClient?: TradingClient;
 }
 
 export interface OrderUpdatesSubscription {
   close(): void;
 }
 
-/** Open one per-account order-lifecycle WebSocket. Single connection. */
+/** Subscribe to the per-account order-lifecycle channel. */
 export function subscribeOrderUpdates(
   opts: SubscribeOrderUpdatesOptions,
 ): OrderUpdatesSubscription {
-  const base = opts.gatewayWsUrl.replace(/\/$/, "");
-  const url = `${base}/ws/orders?token=${encodeURIComponent(opts.token)}`;
-  const ws = (opts.webSocketFactory ?? defaultWsFactory)(url);
-  let closedByCaller = false;
-
-  ws.addEventListener("message", (ev) => {
-    try {
-      const text = typeof ev.data === "string" ? ev.data : String(ev.data);
-      const update = JSON.parse(text) as OrderUpdate;
-      opts.onUpdate(update);
-    } catch (e) {
-      opts.onError?.(e as Error);
-    }
-  });
-  ws.addEventListener("error", (e) => opts.onError?.(e as Error));
-  ws.addEventListener("close", (ev) => {
-    if (closedByCaller) return;
-    if (ev.code === 1011) opts.onResync?.(ev.reason ?? "lagged");
-    opts.onClose?.(ev.code, ev.reason);
-  });
+  const owned = !opts.streamClient;
+  const stream =
+    opts.streamClient ??
+    new TradingClient({
+      gatewayWsUrl: opts.gatewayWsUrl,
+      token: opts.token,
+      tokenProvider: opts.tokenProvider,
+      webSocketFactory: opts.webSocketFactory,
+      onError: opts.onError,
+    });
+  const channel = stream.subscribeChannel(
+    "orders",
+    (frame) => {
+      try {
+        const update = frame as OrderUpdate;
+        opts.onUpdate(update);
+      } catch (e) {
+        opts.onError?.(e as Error);
+      }
+    },
+    { onResync: opts.onResync, onClose: opts.onClose },
+  );
 
   return {
     close() {
-      closedByCaller = true;
-      ws.close();
+      channel.close();
+      if (owned) stream.close();
     },
   };
 }

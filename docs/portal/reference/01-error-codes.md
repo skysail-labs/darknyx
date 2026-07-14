@@ -22,7 +22,7 @@ A failed REST request returns a non-2xx HTTP status and the envelope:
 { "code": 1102, "message": "trading_key_signature does not verify against the canonical body" }
 ```
 
-A failed `/ws/trading` frame returns an `error` reply carrying the **same**
+A failed `/v1/stream` order frame returns an `error` reply carrying the **same**
 numeric `code` and `message` the REST path would have returned:
 
 ```json

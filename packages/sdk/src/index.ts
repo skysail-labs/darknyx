@@ -47,7 +47,7 @@ export * from "./orders/builders.js";
 export * from "./orders/orders-ws-client.js";
 export * from "./system/system-client.js";
 // Order submission (Phase 5 / D2): buildOrder assembly, the VALID_INPUT prover
-// + witness fetch, and the REST + /ws/trading submit clients.
+// + witness fetch, and the REST + multiplexed /v1/stream clients.
 export * from "./orders/build-order.js";
 export * from "./orders/order-client.js";
 export * from "./orders/trading-ws-client.js";

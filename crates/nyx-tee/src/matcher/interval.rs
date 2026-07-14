@@ -76,14 +76,14 @@ pub struct MatcherState {
     /// its own collateral. 0 (default) → fee-free, collateral = nominal.
     fee_rate_bps: u16,
     /// Broadcast of [`FillMemo`]s — one per continuation anchor the tick
-    /// consumes. The `GET /ws/fills` handler subscribes; the client uses
+    /// consumes. The `/v1/stream` fills channel subscribes; the client uses
     /// the memo to correlate the anchor + run the integrity check + store
     /// the change note. Kept alive even with no subscribers (send just
     /// returns `Err`, which the tick ignores).
     fills_tx: tokio::sync::broadcast::Sender<FillMemo>,
     /// Broadcast of [`OrderUpdate`]s — the order-lifecycle events the tick
     /// produces (fully-filled / partially-filled / cancelled / expired). The
-    /// `GET /ws/orders` handler subscribes (via `api::order_router`) and fans
+    /// `/v1/stream` orders channel subscribes (via `api::order_router`) and fans
     /// each to the owning account. Kept alive with no subscribers (the tick
     /// ignores the send `Err`). Account-agnostic here — keyed by `order_id`;
     /// the API layer maps `order_id → account` (same bridge fills use).
@@ -576,7 +576,7 @@ impl MatcherDriver {
                 // Evict the anchor pool of any order that left the book
                 // (full fill / cancel / IOC-or-exhaustion residual / expiry);
                 // a continuing PartiallyFilled keeps its pool. Also publish
-                // every update on the order-lifecycle broadcast so `/ws/orders`
+                // every update on the order-lifecycle broadcast so `orders` subscribers
                 // can stream it (best-effort; no subscriber → send `Err`, ignored).
                 for u in &output.order_updates {
                     let _ = state.order_updates_tx.send(u.clone());

@@ -1,10 +1,8 @@
 //! `GET /v1/stream` — the multiplexed session socket. Wire contract:
 //! `docs/tee-api-openapi.yaml` (`/v1/stream`).
 //!
-//! One authenticated WebSocket that SUPERSETS the dedicated `/ws/fills`,
-//! `/ws/orders`, and `/ws/trading` sockets: a client logs in IN-BAND
-//! (`op: login` carrying a bearer token — not a `?token=` upgrade like the
-//! dedicated sockets), subscribes to a dynamic set of channels, places/cancels/
+//! The sole authenticated WebSocket surface. A client logs in IN-BAND
+//! (`op: login` carrying a bearer token), subscribes to channels, places/cancels/
 //! modifies orders, and receives both per-request replies and channel pushes on
 //! the one connection.
 //!
@@ -19,22 +17,27 @@
 //! OPS (client → server): `login`, `logout`, `ping`, `subscribe`,
 //! `unsubscribe`, `order.place`, `order.cancel`, `order.modify`. The order ops
 //! dispatch to the SAME `orders::{place,cancel,modify}_core` the REST + the
-//! `/ws/trading` paths call, so there is no second intake/verification path to
-//! keep in sync. `account.info` + `tree.inclusion` reply not-implemented
-//! (clients use the `tree` channel + their keys, or `GET /tree/inclusion`).
+//! REST paths call, so there is no second intake/verification path to keep in
+//! sync. `account.info` replies not-implemented; clients use the `tree` channel
+//! plus their keys, or `GET /tree/inclusion`.
 //!
 //! AUTH: in-band. The socket upgrades unauthenticated; every op except `ping`
 //! is rejected until a successful `op: login`. A later `login` on the same
 //! socket refreshes the token (auto-renewal) but may not switch account. The
 //! order-level trading-key signature is STILL required on every place/cancel/
-//! modify frame, exactly as on `/ws/trading`.
+//! modify frame, exactly as on the REST order endpoints.
+//!
+//! TOKEN LIFECYCLE: the server emits `auth_expired` 60 seconds before the JWT
+//! expires. A fresh `login` for the same account refreshes the session without
+//! dropping subscriptions; an actually expired token closes the socket.
 //!
 //! CANCEL-ON-DISCONNECT: `login { cancel_on_disconnect: true }` (or the
 //! account's stored default) makes the handler sweep this session's still-
-//! resting orders when the socket closes — same teardown as `/ws/trading`.
+//! resting orders when the socket closes.
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::{
@@ -45,6 +48,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::{error::RecvError, Receiver};
+use tokio::time::{interval, Duration, Instant, MissedTickBehavior};
 
 use super::auth::validate_token;
 use super::orders::{
@@ -53,7 +57,6 @@ use super::orders::{
     PlaceOrderResponse,
 };
 use super::state::{ApiState, OrderUpdateMsg};
-use super::ws::seq_json;
 use crate::matcher::{FillMemo, MatcherState};
 use crate::merkle::TreeAppendEvent;
 
@@ -134,6 +137,8 @@ pub enum StreamResponse {
     },
     #[serde(rename = "pong")]
     Pong { request_id: Option<String> },
+    #[serde(rename = "auth_expired")]
+    AuthExpired { expires_at: u64 },
     #[serde(rename = "subscribed")]
     Subscribed {
         request_id: Option<String>,
@@ -191,6 +196,8 @@ enum Action {
 struct Session {
     /// `Some(account_id)` once `op: login` succeeded.
     authed: Option<String>,
+    token_exp: Option<u64>,
+    auth_expired_warned: bool,
     cancel_on_disconnect: bool,
     /// Order ids placed on THIS socket and not yet known-terminal (drives
     /// cancel-on-disconnect).
@@ -205,6 +212,15 @@ struct Session {
 /// like the other WS routes.
 pub async fn stream_ws(State(state): State<Arc<ApiState>>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| handle_stream(socket, state))
+}
+
+/// Serialize a reply and inject the connection-global monotonic sequence.
+fn seq_json<T: Serialize>(msg: &T, seq: u64) -> Result<String, serde_json::Error> {
+    let mut v = serde_json::to_value(msg)?;
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("seq".to_string(), serde_json::Value::from(seq));
+    }
+    serde_json::to_string(&v)
 }
 
 /// Serialize a channel push, injecting a top-level `channel` + `seq`. Keeps the
@@ -236,11 +252,15 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
     let matcher = state.matcher.clone();
     let mut s = Session::default();
     let mut seq: u64 = 0;
+    let mut last_activity = Instant::now();
+    let mut lifecycle_tick = interval(Duration::from_secs(1));
+    lifecycle_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
             inbound = socket.recv() => match inbound {
                 Some(Ok(Message::Text(txt))) => {
+                    last_activity = Instant::now();
                     let action = handle_frame(&state, &matcher, &mut s, &txt).await;
                     let (frames, close) = match action {
                         Action::Reply(f) => (f, false),
@@ -262,6 +282,7 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
                 }
                 // Reply to a transport ping so a half-open socket is detected.
                 Some(Ok(Message::Ping(p))) => {
+                    last_activity = Instant::now();
                     if socket.send(Message::Pong(p)).await.is_err() { break; }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
@@ -276,6 +297,35 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
             }
             r = opt_recv(&mut s.sub_tree) => {
                 if push_or_close(&mut socket, "tree", r, &mut seq).await { break; }
+            }
+
+            _ = lifecycle_tick.tick() => {
+                if last_activity.elapsed() > Duration::from_secs(60) {
+                    let _ = socket.send(Message::Close(Some(CloseFrame {
+                        code: 1008,
+                        reason: "heartbeat timeout".into(),
+                    }))).await;
+                    break;
+                }
+                if let Some(exp) = s.token_exp {
+                    let now = now_unix_seconds();
+                    if now >= exp {
+                        let _ = socket.send(Message::Close(Some(CloseFrame {
+                            code: 1008,
+                            reason: "bearer token expired; reconnect and login".into(),
+                        }))).await;
+                        break;
+                    }
+                    if exp.saturating_sub(now) <= 60 && !s.auth_expired_warned {
+                        s.auth_expired_warned = true;
+                        seq += 1;
+                        let frame = StreamResponse::AuthExpired { expires_at: exp };
+                        let json = seq_json(&frame, seq).unwrap_or_else(|e| {
+                            format!(r#"{{"op":"error","code":5000,"message":"serialize: {e}","seq":{seq}}}"#)
+                        });
+                        if socket.send(Message::Text(json)).await.is_err() { break; }
+                    }
+                }
             }
         }
     }
@@ -297,6 +347,13 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
             }
         }
     }
+}
+
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 /// Send one channel push (or close the socket on lag). Returns `true` if the
@@ -385,6 +442,13 @@ async fn handle_frame(
             request_id,
             channels,
         } => {
+            if s.authed.is_none() {
+                return Action::Reply(vec![StreamResponse::error(
+                    request_id,
+                    4010,
+                    "login required",
+                )]);
+            }
             for ch in &channels {
                 match ch.as_str() {
                     "orders" => s.sub_orders = None,
@@ -420,12 +484,22 @@ async fn handle_frame(
             modify(state, matcher, s, request_id, &order_id, &params).await,
         ]),
 
-        StreamRequest::AccountInfo { request_id } => Action::Reply(vec![StreamResponse::error(
-            request_id,
-            5010,
-            "account.info not implemented — reconstruct account state client-side from the `tree` \
-             channel + your keys (mirrors GET /account 501)",
-        )]),
+        StreamRequest::AccountInfo { request_id } => {
+            if s.authed.is_none() {
+                Action::Reply(vec![StreamResponse::error(
+                    request_id,
+                    4010,
+                    "login required",
+                )])
+            } else {
+                Action::Reply(vec![StreamResponse::error(
+                    request_id,
+                    5010,
+                    "account.info not implemented — reconstruct account state client-side from the `tree` \
+                     channel + your keys (mirrors GET /account 501)",
+                )])
+            }
+        }
     }
 }
 
@@ -436,10 +510,11 @@ async fn login(
     token: &str,
     cancel_on_disconnect: Option<bool>,
 ) -> StreamResponse {
-    let account_id = match validate_token(state, token).await {
-        Ok(auth) => auth.account_id,
+    let authorized = match validate_token(state, token).await {
+        Ok(auth) => auth,
         Err(e) => return StreamResponse::error(request_id, e.code, e.message),
     };
+    let account_id = authorized.account_id;
     // A re-login refreshes the token but must not switch identity on a socket
     // that already placed/subscribed under another account.
     if let Some(existing) = &s.authed {
@@ -451,6 +526,7 @@ async fn login(
             );
         }
     }
+    let previous_exp = s.token_exp;
     s.cancel_on_disconnect = match cancel_on_disconnect {
         Some(v) => v,
         None => state
@@ -462,6 +538,13 @@ async fn login(
             .unwrap_or(false),
     };
     s.authed = Some(account_id.clone());
+    s.token_exp = Some(authorized.exp);
+    if match previous_exp {
+        None => true,
+        Some(old) => authorized.exp > old,
+    } {
+        s.auth_expired_warned = false;
+    }
     StreamResponse::Login {
         request_id,
         account_id,
@@ -663,6 +746,15 @@ mod tests {
         let e = serde_json::to_value(StreamResponse::error(None, 4010, "login required")).unwrap();
         assert_eq!(e["op"], "error");
         assert_eq!(e["code"], 4010);
+    }
+
+    #[test]
+    fn auth_expiry_warning_is_sequenced() {
+        let encoded = seq_json(&StreamResponse::AuthExpired { expires_at: 123 }, 7).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(value["op"], "auth_expired");
+        assert_eq!(value["expires_at"], 123);
+        assert_eq!(value["seq"], 7);
     }
 
     #[test]

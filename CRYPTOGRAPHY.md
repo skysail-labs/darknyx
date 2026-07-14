@@ -2118,13 +2118,12 @@ Sorted roughly by cryptographic impact:
 
 ### Recently shipped (formerly in this list)
 
-- **Fills delivery + trade history — DONE (P4/P7).** `/ws/fills` is a public,
-  self-authenticating, **per-account-routed** channel (each order's `FillMemo`
-  goes only to its owner's socket), with deterministic HD `order_id`s
-  (`deriveOrderId`), an off-TEE commitment-locator indexer (`packages/indexer`),
-  and durable **`GET /fills/replay?since=<seq>`** backfill-then-tail recovery.
-  After amount-privacy the memo is the *only* place a trade's change amount
-  appears. See
+- **Fills delivery + trade history — DONE (P4/P7).** The `fills` subscription on
+  `/v1/stream` is **per-account routed** (each order's `FillMemo` goes only to
+  its owner's authenticated session), with deterministic HD `order_id`s
+  (`deriveOrderId`) and an optional off-TEE commitment-locator indexer
+  (`packages/indexer`). Durable recovery comes from the settlement's on-chain
+  encrypted recovery field; the live memo is the low-latency path. See
   [`docs/fills-history-architecture.md`](docs/fills-history-architecture.md).
 
 - **Self-trade prevention — DONE (owner-level, note-bound).** The matcher

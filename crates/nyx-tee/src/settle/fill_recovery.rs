@@ -2,7 +2,7 @@
 //! Proposal B, B.3 — the TEE-side encryption at settle).
 //!
 //! The amount-privacy revamp removed plaintext amounts from the settle ix, so a
-//! fill's `change_amount` lives only in the live `/ws/fills` memo + the P7 TTL
+//! fill's `change_amount` lives only in the live `/v1/stream` fills memo + the P7 TTL
 //! log — both wiped on a CVM redeploy, after which the on-chain change note is
 //! visible-but-unspendable. This module builds the permanent on-chain backstop:
 //! for each match it encrypts each side's `change_amount` to that side's X25519

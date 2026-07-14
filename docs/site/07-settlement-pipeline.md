@@ -130,7 +130,7 @@ Because order intent never appears on-chain, you follow a fill through the
 enclave, not by scanning Solana:
 
 - `GET /settlement/status/{batch_id}` maps a batch to its on-chain signatures.
-- The per-account `/ws/fills` stream pushes each fill the moment it settles.
+- The per-account `fills` channel on `/v1/stream` pushes each fill the moment it settles.
 - An off-enclave indexer serves your fill history by order ID for backfill.
 
 See the [API reference](./api-reference) for all three.

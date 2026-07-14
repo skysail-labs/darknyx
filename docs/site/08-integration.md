@@ -68,7 +68,7 @@ including the change notes that pile up from partial fills.
 
 Order intent never appears on-chain, so you follow fills through the enclave:
 
-- Subscribe to the per-account `/ws/fills` WebSocket — each fill arrives the
+- Subscribe to the per-account `fills` channel on `/v1/stream` — each fill arrives the
   moment it settles, with everything needed to store the resulting change note.
 - For history or to recover after a disconnect, the off-enclave indexer serves
   your fills **by order ID** (derived from your own seed), so the SDK can

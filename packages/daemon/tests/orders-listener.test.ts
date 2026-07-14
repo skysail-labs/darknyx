@@ -1,5 +1,5 @@
 /**
- * OrdersListener tests — the /ws/orders edge, no live socket.
+ * OrdersListener tests — the `/v1/stream` orders channel, no live socket.
  *
  * `subscribeOrderUpdates` is injected as a fake that captures the options, so a
  * test can push synthetic OrderUpdates and assert the listener maps them to the
@@ -128,7 +128,7 @@ describe("OrdersListener", () => {
     engine.register(openOrder());
     listener.start();
 
-    // The TEE routes a synthetic `cancelled` onto /ws/orders when it sweeps a
+    // The TEE routes a synthetic `cancelled` onto the orders channel when it sweeps a
     // session's resting orders on disconnect.
     cap.captured.opts!.onUpdate({ order_id: ORDER_ID, kind: "cancelled" });
     await flush();

@@ -93,7 +93,7 @@ async fn no_subscriber_means_no_delivery_but_no_error() {
     state
         .record_order_owner("order_a".into(), "acct_a".into())
         .await;
-    // Owner known, but no /ws/fills client attached → not delivered LIVE
+    // Owner known, but no fills-channel subscriber attached → not delivered LIVE
     // (recoverable via the durable fill log / memo replay, P7), and routing does
     // not panic.
     assert!(!state.route_fill(&memo("order_a")).await);

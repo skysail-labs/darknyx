@@ -4,9 +4,9 @@
  * Wires every slice into one long-running object: the {@link DaemonStore} (UTXO
  * + managed orders), the {@link LifecycleEngine} driving a
  * {@link DaemonActionExecutor} (auto anchor top-up via the keystore + the
- * gateway, auto-merge via the {@link MergeRunner}), the two TEE streams
- * ({@link FillsListener} `/ws/fills`, {@link OrdersListener} `/ws/orders`), and
- * the {@link OrderPlacer} (WS by default). It exposes the high-level operations
+ * gateway, auto-merge via the {@link MergeRunner}), the multiplexed TEE stream
+ * channels ({@link FillsListener} fills, {@link OrdersListener} orders), and
+ * the {@link OrderPlacer}. It exposes the high-level operations
  * a control surface needs — `placeOrder` / `cancelOrder` / `listOrders` /
  * `balances` — plus a `subscribe` stream of order + fill events.
  *
@@ -26,6 +26,7 @@ import {
   onchainRootVerifier,
   vaultConfigPda,
   vaultConfigTeePubkeys,
+  TradingClient,
   type DepositParams,
   type DepositReceipt,
   type RootVerifier,
@@ -33,6 +34,7 @@ import {
   type ValidInputProver,
   type WebSocketFactory,
   type SendableWebSocketFactory,
+  type StreamTokenProvider,
 } from "@nyx/sdk";
 
 import type { DaemonConfig } from "./config.js";
@@ -141,6 +143,10 @@ export interface DaemonDeps {
   subscribeOrders?: SubscribeOrderUpdatesFn;
   webSocketFactory?: WebSocketFactory;
   sendableWebSocketFactory?: SendableWebSocketFactory;
+  /** Refreshable bearer source for the long-lived `/v1/stream` session. */
+  streamTokenProvider?: StreamTokenProvider;
+  /** Existing multiplexed stream session (tests or advanced embedding). */
+  streamClient?: TradingClient;
   fetchImpl?: typeof fetch;
   /** Verify the gateway's TEE attestation on start. Defaults to the real
    *  {@link verifyAttestation}; pass `false` to skip (tests/local-sim). */
@@ -183,7 +189,7 @@ export class Daemon {
 
   private readonly subscribeFillsFn?: SubscribeFillsFn;
   private readonly subscribeOrdersFn?: SubscribeOrderUpdatesFn;
-  private readonly webSocketFactory?: WebSocketFactory;
+  private readonly streamClient: TradingClient;
 
   private readonly verifyAttestationFn: typeof verifyAttestation | false;
   private readonly quoteVerifier?: QuoteVerifier;
@@ -221,7 +227,18 @@ export class Daemon {
     this.fetchImpl = deps.fetchImpl;
     this.subscribeFillsFn = deps.subscribeFills;
     this.subscribeOrdersFn = deps.subscribeOrders;
-    this.webSocketFactory = deps.webSocketFactory;
+    const streamSocketFactory =
+      deps.sendableWebSocketFactory ?? deps.webSocketFactory;
+    this.streamClient =
+      deps.streamClient ??
+      new TradingClient({
+        gatewayWsUrl: this.config.gatewayWsUrl,
+        token: this.config.token,
+        tokenProvider: deps.streamTokenProvider,
+        cancelOnDisconnect: true,
+        webSocketFactory: streamSocketFactory,
+        onError: (error) => this.emitError("stream", error),
+      });
     // Attest by default (non-custody is the point); inject `false` to skip.
     this.verifyAttestationFn = deps.verifyAttestation ?? verifyAttestation;
     this.quoteVerifier = deps.quoteVerifier;
@@ -290,7 +307,7 @@ export class Daemon {
         gatewayWsUrl: this.config.gatewayWsUrl,
         token: this.config.token,
         cancelOnDisconnect: true,
-        webSocketFactory: deps.sendableWebSocketFactory,
+        client: this.streamClient,
       });
 
     this.tee = new TeeReadClient({
@@ -451,7 +468,7 @@ export class Daemon {
       token: this.config.token,
       masterSeed: this.keystore.masterSeed,
       ownerCommitment,
-      webSocketFactory: this.webSocketFactory,
+      streamClient: this.streamClient,
       subscribeFn: this.subscribeFillsFn,
       onFill: (note) => {
         this.pruneSupersededContinuations(note);
@@ -463,7 +480,7 @@ export class Daemon {
       engine: this.engine,
       gatewayWsUrl: this.config.gatewayWsUrl,
       token: this.config.token,
-      webSocketFactory: this.webSocketFactory,
+      streamClient: this.streamClient,
       subscribeFn: this.subscribeOrdersFn,
       onError: (e) => this.emitError("orders", e),
     });
@@ -493,6 +510,7 @@ export class Daemon {
     if (this.teeKeyRefreshTimer) clearInterval(this.teeKeyRefreshTimer);
     this.teeKeyRefreshTimer = null;
     this.placer.close();
+    this.streamClient.close();
     this.started = false;
   }
 

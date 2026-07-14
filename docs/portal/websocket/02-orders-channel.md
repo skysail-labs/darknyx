@@ -7,7 +7,7 @@ description: A per-account push stream of order-lifecycle events: partial fills,
 # Orders Channel
 
 :::info TL;DR
-`/ws/orders` streams **order-lifecycle events** for your account: each time one
+The `orders` channel on `/v1/stream` streams **order-lifecycle events** for your account: each time one
 of your orders changes state (partial fill, full fill, cancellation, expiry), the
 engine pushes an event. The stream is per-account: you only ever see your own
 orders. Use it instead of polling `GET /orders/{id}`.
@@ -16,11 +16,12 @@ orders. Use it instead of polling `GET /orders/{id}`.
 ## Connect
 
 ```text
-wss://<gateway-host>/ws/orders?token=<access_token>
+wss://<gateway-host>/v1/stream
 ```
 
-Self-authenticating with the bearer token as `?token=` (the `Authorization`
-header is also accepted). The stream is **per-account**: events are routed to you
+Login in-band, then send `{"op":"subscribe","channels":["orders"]}` on the
+same session used for order operations and fills. The channel is
+**per-account**: events are routed to you
 by the order-id → account mapping the engine records at intake, so a subscriber
 only ever receives events for orders it placed.
 
@@ -87,10 +88,19 @@ is a low-latency notifier, not a durable log.
 ## Example
 
 ```javascript
-const ws = new WebSocket(`${WSS}/ws/orders?token=${TOKEN}`);
+const ws = new WebSocket(`${WSS}/v1/stream`);
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({ op: "login", request_id: "login-1", token: TOKEN }));
+};
 
 ws.onmessage = (e) => {
   const ev = JSON.parse(e.data);
+  if (ev.op === "login") {
+    ws.send(JSON.stringify({ op: "subscribe", channels: ["orders"] }));
+    return;
+  }
+  if (ev.channel !== "orders") return;
   switch (ev.kind) {
     case "partially_filled":
       console.log(`partial: ${ev.filled_quantity} filled, ${ev.new_amount} resting`);

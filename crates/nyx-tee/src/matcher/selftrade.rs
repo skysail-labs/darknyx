@@ -25,4 +25,4 @@
 //! our tick is a uniform-clearing-price batch auction, so there is no
 //! maker/taker ordering *within* a tick for those modes to act on. The skip
 //! never cancels the resting order, so there's nothing to surface on the
-//! `/ws/orders` channel beyond the normal lifecycle events.
+//! `orders` channel beyond the normal lifecycle events.

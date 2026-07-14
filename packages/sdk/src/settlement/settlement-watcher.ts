@@ -19,7 +19,7 @@
  *  Amount-privacy (P3b): the trade amounts / change / fees / clearing price
  *  were removed from the event (they were a public leak). The event now carries
  *  only leaf indices + relock flags + root; a client reconstructs its own
- *  amounts from the per-account FillMemo (`/ws/fills`). */
+ *  amounts from the per-account FillMemo (`fills` on `/v1/stream`). */
 export interface TradeSettledEvent {
   matchId: Uint8Array;
   noteCleaf: bigint;

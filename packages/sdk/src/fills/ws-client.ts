@@ -1,11 +1,10 @@
 /**
  * Live fills transport — the "tail" half of "tail then backfill".
  *
- * Opens an authenticated per-account WebSocket to the CVM's `GET /ws/fills`,
- * verifies each `FillMemo` (the Vuln-4 integrity check in `fill-memo.ts`), and
- * stores the change note. The token is passed as `?token=` (the global
- * `WebSocket` — browser + Node 22+ — can't set an Authorization header); the TEE
- * accepts it on the WS route either way.
+ * Subscribes to the `fills` channel on the CVM's authenticated `/v1/stream`
+ * session, verifies each `FillMemo` (the Vuln-4 integrity check in
+ * `fill-memo.ts`), and stores the change note. Authentication is in-band, so a
+ * bearer token never appears in the WebSocket URL.
  *
  * `WebSocket` is injectable so tests can drive frames without a server.
  */
@@ -22,28 +21,22 @@ import {
   type ChainBackfillOptions,
 } from "./chain-history.js";
 import { recoverChangeFromChain } from "./recover.js";
+import {
+  TradingClient,
+  type SendableWebSocketFactory,
+  type SendableWebSocketLike,
+  type StreamTokenProvider,
+} from "../orders/trading-ws-client.js";
 
-export interface WebSocketLike {
-  addEventListener(type: "open", cb: () => void): void;
-  addEventListener(type: "message", cb: (ev: { data: unknown }) => void): void;
-  addEventListener(
-    type: "close",
-    cb: (ev: { code: number; reason?: string }) => void,
-  ): void;
-  addEventListener(type: "error", cb: (ev: unknown) => void): void;
-  close(): void;
-}
-export type WebSocketFactory = (url: string) => WebSocketLike;
-
-const defaultWsFactory: WebSocketFactory = (url) =>
-  new (globalThis as { WebSocket: new (u: string) => WebSocketLike }).WebSocket(
-    url,
-  );
+/** Backwards-compatible aliases for the now-bidirectional stream transport. */
+export type WebSocketLike = SendableWebSocketLike;
+export type WebSocketFactory = SendableWebSocketFactory;
 
 export interface SubscribeFillsOptions {
-  /** Gateway WS origin, e.g. `wss://<app>-8080.dstack-…`. `/ws/fills` is appended. */
+  /** Gateway WS origin. `/v1/stream` is appended. */
   gatewayWsUrl: string;
   token: string;
+  tokenProvider?: StreamTokenProvider;
   masterSeed: Uint8Array;
   ownerCommitment: bigint;
   store: NoteStore;
@@ -53,47 +46,51 @@ export interface SubscribeFillsOptions {
   onResync?: (reason: string) => void;
   onClose?: (code: number, reason?: string) => void;
   webSocketFactory?: WebSocketFactory;
+  /** Reuse an existing multiplexed session (recommended for daemons). */
+  streamClient?: TradingClient;
 }
 
 export interface FillsSubscription {
   close(): void;
 }
 
-/** Open one per-account fills WebSocket. Single connection; surfaces lifecycle. */
+/** Subscribe to the per-account fills channel; surfaces session lifecycle. */
 export function subscribeFills(opts: SubscribeFillsOptions): FillsSubscription {
-  const base = opts.gatewayWsUrl.replace(/\/$/, "");
-  const url = `${base}/ws/fills?token=${encodeURIComponent(opts.token)}`;
-  const ws = (opts.webSocketFactory ?? defaultWsFactory)(url);
-  let closedByCaller = false;
-
-  ws.addEventListener("message", (ev) => {
-    void (async () => {
-      try {
-        const text = typeof ev.data === "string" ? ev.data : String(ev.data);
-        const memo = JSON.parse(text) as FillMemo;
-        const rec = await receiveFillMemo(
-          memo,
-          opts.masterSeed,
-          opts.ownerCommitment,
-          opts.store,
-        );
-        opts.onFill?.(rec);
-      } catch (e) {
-        opts.onError?.(e as Error);
-      }
-    })();
-  });
-  ws.addEventListener("error", (e) => opts.onError?.(e as Error));
-  ws.addEventListener("close", (ev) => {
-    if (closedByCaller) return;
-    if (ev.code === 1011) opts.onResync?.(ev.reason ?? "lagged");
-    opts.onClose?.(ev.code, ev.reason);
-  });
+  const owned = !opts.streamClient;
+  const stream =
+    opts.streamClient ??
+    new TradingClient({
+      gatewayWsUrl: opts.gatewayWsUrl,
+      token: opts.token,
+      tokenProvider: opts.tokenProvider,
+      webSocketFactory: opts.webSocketFactory,
+      onError: opts.onError,
+    });
+  const channel = stream.subscribeChannel(
+    "fills",
+    (frame) => {
+      void (async () => {
+        try {
+          const memo = frame as FillMemo;
+          const rec = await receiveFillMemo(
+            memo,
+            opts.masterSeed,
+            opts.ownerCommitment,
+            opts.store,
+          );
+          opts.onFill?.(rec);
+        } catch (e) {
+          opts.onError?.(e as Error);
+        }
+      })();
+    },
+    { onResync: opts.onResync, onClose: opts.onClose },
+  );
 
   return {
     close() {
-      closedByCaller = true;
-      ws.close();
+      channel.close();
+      if (owned) stream.close();
     },
   };
 }
@@ -126,7 +123,7 @@ export interface FillsSync {
 }
 
 /**
- * "Tail then backfill", self-healing: open the live `/ws/fills` tail AND backfill
+ * "Tail then backfill", self-healing: subscribe to the live `fills` channel AND backfill
  * any gap from the chain. The durable recovery source is the PERMANENT on-chain
  * ciphertext (Proposal B) — for each fill the indexer locates,
  * `recoverChangeFromChain` decrypts + self-verifies the spendable opening into
@@ -134,7 +131,8 @@ export interface FillsSync {
  * (`GET /fills/replay`), which a CVM redeploy used to wipe.
  *
  * The `NoteStore` is commitment-keyed, so overlapping backfill/live delivery just
- * re-puts. On a 1011 resync we re-backfill from the chain and reopen.
+ * re-puts. On a lag or sequence-gap resync we re-backfill while the shared
+ * stream session reconnects and resubscribes.
  */
 export async function startFillsSync(
   opts: FillsSyncOptions,
@@ -177,27 +175,18 @@ export async function startFillsSync(
 
   await backfill();
 
-  let sub: FillsSubscription | null = null;
-  let closed = false;
-
-  const open = () => {
-    if (closed) return;
-    sub = subscribeFills({
-      ...opts,
-      onResync: async (reason) => {
-        opts.onResync?.(reason);
-        await backfill(); // re-recover the gap from the chain, then reopen.
-        if (!closed) open();
-      },
-    });
-  };
-  open();
+  const sub = subscribeFills({
+    ...opts,
+    onResync: (reason) => {
+      opts.onResync?.(reason);
+      void backfill();
+    },
+  });
 
   return {
     located,
     close() {
-      closed = true;
-      sub?.close();
+      sub.close();
     },
   };
 }

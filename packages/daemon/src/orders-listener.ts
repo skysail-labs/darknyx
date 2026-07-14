@@ -1,5 +1,5 @@
 /**
- * OrdersListener — the daemon's `/ws/orders` edge (order PHASE).
+ * OrdersListener — the daemon's `/v1/stream` orders channel (order PHASE).
  *
  * Wraps the SDK `subscribeOrderUpdates`: the TEE emits one `OrderUpdate` per
  * state transition of this account's orders (`partially_filled` / `fully_filled`
@@ -10,14 +10,14 @@
  *   partially_filled → `accepted`  (idempotent: only advances a still-`pending`
  *                                   order to `open`; otherwise a no-op — the
  *                                   anchor/residual bookkeeping comes from
- *                                   `/ws/fills`, NOT from here)
+ *                                   the `fills` channel, NOT from here)
  *   fully_filled     → `filled`
  *   cancelled        → `cancelled`
  *   expired          → `expired`
  *
  * This is also how the daemon learns its quotes were pulled by
  * **cancel-on-disconnect**: the TEE's sweep routes a synthetic `cancelled`
- * onto `/ws/orders` (`announce_cancel`), so after a reconnect the strategy sees
+ * onto the `orders` channel (`announce_cancel`), so after a reconnect the strategy sees
  * the order go `cancelled` and can re-quote — no server change, fully observable.
  *
  * `subscribeOrderUpdates` is injected (a seam) so the listener is unit-testable
@@ -30,6 +30,7 @@ import {
   subscribeOrderUpdates,
   type OrderUpdate,
   type OrderUpdatesSubscription,
+  type TradingClient,
   type WebSocketFactory,
 } from "@nyx/sdk";
 
@@ -41,10 +42,11 @@ export type SubscribeOrderUpdatesFn = typeof subscribeOrderUpdates;
 
 export interface OrdersListenerOptions {
   engine: LifecycleEngine;
-  /** Gateway WS origin (`/ws/orders` is appended by the SDK). */
+  /** Gateway WS origin (`/v1/stream` is appended by the SDK). */
   gatewayWsUrl: string;
   token: string;
   webSocketFactory?: WebSocketFactory;
+  streamClient?: TradingClient;
   /** Fired after each update is mapped + dispatched. */
   onUpdate?: (u: OrderUpdate) => void;
   onError?: (err: Error) => void;
@@ -55,7 +57,7 @@ export interface OrdersListenerOptions {
   subscribeFn?: SubscribeOrderUpdatesFn;
 }
 
-/** Map an `/ws/orders` update kind to the lifecycle phase event, or `null` if
+/** Map an `orders` channel update kind to the lifecycle phase event, or `null` if
  *  it carries no phase transition the reducer needs. */
 export function updateToEvent(u: OrderUpdate): LifecycleEvent | null {
   switch (u.kind) {
@@ -85,6 +87,7 @@ export class OrdersListener {
       gatewayWsUrl: this.opts.gatewayWsUrl,
       token: this.opts.token,
       webSocketFactory: this.opts.webSocketFactory,
+      streamClient: this.opts.streamClient,
       onUpdate: (u) => {
         void this.handleUpdate(u);
       },
