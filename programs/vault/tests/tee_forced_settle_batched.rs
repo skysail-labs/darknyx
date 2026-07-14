@@ -274,10 +274,13 @@ fn cu_profile_worst_case_settle() {
     // BOTH continuation re-locks fire too — note_lock_e/f are freshly init'd by
     // `create_relock_pda` (we never seed them), so this also pays the two
     // system-CPI account creations the production worst case incurs.
+    // Re-lock expiries must sit within `MAX_LOCK_TTL_SLOTS` (=4_500) of the
+    // current slot (litesvm genesis = slot 0) — `create_relock_pda` now caps
+    // them (C-02), same as `lock_note`.
     p.buyer_relock_order_id = [0x31u8; 16];
-    p.buyer_relock_expiry = u64::MAX / 2;
+    p.buyer_relock_expiry = 4_000;
     p.seller_relock_order_id = [0x32u8; 16];
-    p.seller_relock_expiry = u64::MAX / 2;
+    p.seller_relock_expiry = 4_000;
 
     let mint = read_note_lock_mint(&h, &note_a);
     let leaf = compute_match_leaf_for(&p, &mint, &mint);
@@ -311,6 +314,81 @@ fn cu_profile_worst_case_settle() {
     // Both continuation re-locks were created.
     assert!(note_lock_exists(&h, &p.note_e_commitment));
     assert!(note_lock_exists(&h, &p.note_f_commitment));
+}
+
+// ---------------------------------------------------------------------------
+// C-02 regression: `create_relock_pda` must cap a continuation re-lock's expiry
+// at `current_slot + MAX_LOCK_TTL_SLOTS`, exactly as `lock_note` caps a fresh
+// lock. Before the fix the re-lock path set `expiry_slot` unchecked, so a
+// malicious TEE could stamp an arbitrarily distant expiry — and because
+// `withdraw` rejects while ANY NoteLock exists (even an expired one), that
+// freezes the note indefinitely (censorship). This mirrors the passing
+// worst-case settle above; the ONLY change is the buyer re-lock expiry is set
+// beyond the cap, so the whole settle must revert atomically.
+// ---------------------------------------------------------------------------
+#[test]
+fn settle_rejects_relock_expiry_beyond_ttl_cap() {
+    let mut h = Harness::setup();
+    set_vault_fee_config(&mut h, fr_safe(0x9A, 0x02), 30);
+
+    let note_a = fr_safe(0xA0, 0x78);
+    let note_b = fr_safe(0xB0, 0x78);
+    let oid_a = [0x12u8; 16];
+    let oid_b = [0x13u8; 16];
+    seed_note_lock(&mut h, &note_a, &oid_a, u64::MAX / 2, 6_000); // quote
+    seed_note_lock(&mut h, &note_b, &oid_b, u64::MAX / 2, 200); // base
+
+    let mut p = MatchResultPayload::exact_fill(
+        [0xE2u8; 16],
+        note_a,
+        note_b,
+        fr_safe(0xC0, 0x78),
+        fr_safe(0xD0, 0x78),
+        [0xF0u8; 32],
+        [0xF1u8; 32],
+        oid_a,
+        oid_b,
+        100,
+        5_000,
+    );
+    p.note_e_commitment = fr_safe(0xE5, 0x78);
+    p.note_f_commitment = fr_safe(0xF5, 0x78);
+    p.note_fee_base_commitment = fr_safe(0xFB, 0x78);
+    p.note_fee_quote_commitment = fr_safe(0xFC, 0x78);
+    p.buyer_relock_order_id = [0x33u8; 16];
+    p.seller_relock_order_id = [0x34u8; 16];
+    // Seller re-lock is within cap; buyer re-lock is OVER the cap (genesis slot
+    // 0, cap = MAX_LOCK_TTL_SLOTS = 4_500). The over-cap buyer re-lock is the
+    // sole reason the settle must fail.
+    p.seller_relock_expiry = 4_000;
+    p.buyer_relock_expiry = u64::MAX / 2;
+
+    let mint = read_note_lock_mint(&h, &note_a);
+    let leaf = compute_match_leaf_for(&p, &mint, &mint);
+    let mut leaves = [[0u8; 32]; 16];
+    leaves[0] = leaf;
+    let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
+    seed_batch_validity_marker(&mut h, &root, u64::MAX / 2);
+
+    let tx = build_settle_batched_tx(&h, 0, &p, 0, &proof, &root);
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "settle must reject a continuation re-lock whose expiry exceeds MAX_LOCK_TTL_SLOTS",
+    );
+    // Atomic revert: the input note must stay unconsumed and NEITHER re-lock
+    // (over-cap buyer, within-cap seller) may have been created.
+    assert!(
+        !consumed_note_exists(&h, &p.note_a_commitment),
+        "rejected settle must not consume its input note",
+    );
+    assert!(
+        !note_lock_exists(&h, &p.note_e_commitment),
+        "rejected settle must not create the over-cap buyer re-lock",
+    );
+    assert!(
+        !note_lock_exists(&h, &p.note_f_commitment),
+        "rejected settle must roll back the within-cap seller re-lock too (atomicity)",
+    );
 }
 
 // NOTE: the on-chain fee-FLOOR + conservation regression test that lived here
@@ -511,7 +589,10 @@ fn test_relocked_note_consumable_across_second_batch() {
     );
     p0.note_e_commitment = note_e;
     p0.buyer_relock_order_id = oid_relock;
-    p0.buyer_relock_expiry = far_future;
+    // Within `MAX_LOCK_TTL_SLOTS` of genesis slot 0 — the re-lock path now caps
+    // this (C-02). The input-lock + marker seeds above stay far-future (they're
+    // written directly, bypassing the cap).
+    p0.buyer_relock_expiry = 4_000;
 
     let tx0 = seed_marker_and_build_settle_batched_tx(&mut h, &p0);
     h.svm
