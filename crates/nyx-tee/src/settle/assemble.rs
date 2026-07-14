@@ -536,7 +536,12 @@ fn lock_inputs(
 mod tests {
     use super::*;
     use crate::prover::compute_batch_leaf;
+    use darkpool_matcher::book::{Order, OrderBook, OrderSide, OrderStatus, OrderType};
+    use darkpool_matcher::config::{MatchConfig, OracleSnapshot};
     use darkpool_matcher::match_result::MatchStatus;
+    use darkpool_matcher::run_batch;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     fn fr_safe(b: u8) -> [u8; 32] {
         let mut v = [b; 32];
@@ -554,6 +559,13 @@ mod tests {
         m[0] = 1;
         m[31] = 0x9e;
         m
+    }
+
+    fn fr_safe_pair(domain: u8, salt: u8) -> [u8; 32] {
+        let mut value = [0u8; 32];
+        value[30] = domain;
+        value[31] = salt;
+        value
     }
 
     /// Build a self-consistent match: the input-note commitments equal
@@ -745,6 +757,136 @@ mod tests {
         assert_eq!(w.buyer_fee_amt, 50);
         assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
         assert_eq!(p.note_fee_quote_commitment, [0u8; 32]);
+    }
+
+    #[test]
+    fn randomized_matcher_change_outputs_equal_assembler_outputs() {
+        // N-07 regression: the pure matcher and settlement assembler must bind
+        // note_e/note_f to the SAME note-proven owner even when signed
+        // `user_commitment` metadata differs. A fixed seed makes all 256 cases
+        // reproducible while still covering varied prices, sizes, change, and
+        // owner identities.
+        let mut rng = StdRng::seed_from_u64(0x004e_5958_2d4e_3037);
+
+        for case in 0u64..256 {
+            let price = rng.gen_range(1u64..10_000);
+            let amount = rng.gen_range(1u64..10_000);
+            let buyer_change = rng.gen_range(1u64..1_000_000);
+            let seller_change = rng.gen_range(1u64..1_000_000);
+            let salt = rng.gen::<u8>();
+
+            let buyer_owner = fr_safe_pair(0x20, salt);
+            let seller_owner = fr_safe_pair(0x40, salt);
+            let buyer_opening = NoteOpening {
+                token_mint: quote_mint(),
+                amount: amount * price + buyer_change,
+                owner_commitment: buyer_owner,
+                inner_hash: fr_safe_pair(0x51, salt),
+                nullifier: fr_safe_pair(0x61, salt),
+            };
+            let seller_opening = NoteOpening {
+                token_mint: base_mint(),
+                amount: amount + seller_change,
+                owner_commitment: seller_owner,
+                inner_hash: fr_safe_pair(0x52, salt),
+                nullifier: fr_safe_pair(0x62, salt),
+            };
+
+            let bid = Order {
+                trading_key: fr_safe_pair(0x71, salt),
+                side: OrderSide::Bid,
+                order_type: OrderType::Limit,
+                status: OrderStatus::Pending,
+                arrival_slot: 1,
+                expiry_slot: 1_000_000,
+                price_limit: price,
+                amount,
+                total_quantity: amount,
+                filled_quantity: 0,
+                min_fill_qty: 0,
+                note_amount: buyer_opening.amount,
+                collateral_note: buyer_opening.commitment().unwrap(),
+                user_commitment: fr_safe_pair(0x10, salt),
+                owner_commitment: buyer_owner,
+                order_id: [0x01; 16],
+                order_inclusion_commitment: fr_safe_pair(0x81, salt),
+            };
+            let ask = Order {
+                trading_key: fr_safe_pair(0x72, salt),
+                side: OrderSide::Ask,
+                order_type: OrderType::Limit,
+                status: OrderStatus::Pending,
+                arrival_slot: 2,
+                expiry_slot: 1_000_000,
+                price_limit: price,
+                amount,
+                total_quantity: amount,
+                filled_quantity: 0,
+                min_fill_qty: 0,
+                note_amount: seller_opening.amount,
+                collateral_note: seller_opening.commitment().unwrap(),
+                user_commitment: fr_safe_pair(0x30, salt),
+                owner_commitment: seller_owner,
+                order_id: [0x02; 16],
+                order_inclusion_commitment: fr_safe_pair(0x82, salt),
+            };
+            let config = MatchConfig {
+                base_mint: base_mint(),
+                quote_mint: quote_mint(),
+                tick_size: 1,
+                min_order_size: 0,
+                circuit_breaker_bps: 100_000,
+                batch_ms: 2_000,
+                fee_rate_bps: 0,
+                protocol_owner_commitment: [0u8; 32],
+            };
+            let oracle = OracleSnapshot {
+                twap: price,
+                confidence: 0,
+                exponent: 0,
+                publish_slot: 1,
+            };
+            let output = run_batch(
+                &OrderBook {
+                    orders: vec![bid, ask],
+                },
+                &oracle,
+                &config,
+                1,
+                case,
+            )
+            .unwrap();
+            assert_eq!(output.matches.len(), 1, "case {case}");
+            let matched = &output.matches[0];
+
+            let (witness, payload) = assemble_match(MatchAssemblyInputs {
+                match_pair: matched,
+                buyer_opening: &buyer_opening,
+                seller_opening: &seller_opening,
+                order_id_a: [0x01; 16],
+                order_id_b: [0x02; 16],
+                base_mint: base_mint(),
+                quote_mint: quote_mint(),
+                protocol_owner_commitment: [0u8; 32],
+                fee_rate_bps: 0,
+                fee_slot: 1,
+                slot_index: 0,
+                buyer_change_inner: None,
+                seller_change_inner: None,
+            })
+            .unwrap();
+
+            assert_eq!(
+                matched.note_e_commitment, witness.note_e_commitment,
+                "buyer change parity failed in case {case}"
+            );
+            assert_eq!(
+                matched.note_f_commitment, witness.note_f_commitment,
+                "seller change parity failed in case {case}"
+            );
+            assert_eq!(payload.note_e_commitment, witness.note_e_commitment);
+            assert_eq!(payload.note_f_commitment, witness.note_f_commitment);
+        }
     }
 
     #[test]

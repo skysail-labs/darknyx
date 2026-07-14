@@ -1,31 +1,16 @@
 //! Pure matching algorithm for the Nyx dark pool.
 //!
 //! Uniform-clearing-price batch auction with FIFO tie-break and
-//! Pyth-band circuit breaker. The same algorithm currently lives in
-//! `programs/matching_engine/src/instructions/run_batch.rs`. This
-//! crate is the v2 lift target: the algorithm moves here, both the
-//! existing litesvm `run_batch` test AND the new in-TEE matcher
-//! (`crates/nyx-tee`) consume this single source of truth.
+//! Pyth-band circuit breaker. This crate is the single source of truth
+//! consumed by the in-TEE matcher (`crates/nyx-tee`).
 //!
-//! # Status
-//!
-//! **PR 1 — type surface only.** The public Borsh types are stable
-//! and byte-equivalent to their on-chain counterparts (PR-2 ports
-//! the algorithm body; PR-3 cuts the on-chain ix over to call this
-//! crate).
-//!
-//! # Invariants the lift must preserve
-//!
-//! See `programs/matching_engine/src/instructions/run_batch.rs` for
-//! the authoritative implementation. When lifting (PR 2):
+//! # Invariants
 //!
 //! * Uniform clearing price across the batch.
 //! * FIFO tie-break at each price level.
 //! * Pyth-TWAP circuit breaker (`circuit_breaker_bps`).
-//! * Fee accumulator drain rules from `state/fee_accumulator.rs`.
 //! * Change-note construction parity with `change_note::derive_*`
-//!   (byte-equality with both the on-chain Rust AND the TS port
-//!   in `packages/sdk/tests/helpers/e2e-helpers.ts`).
+//!   and the TS port in `packages/sdk/tests/helpers/e2e-helpers.ts`.
 //! * No floating point anywhere.
 //! * Deterministic across runs given the same inputs (no clock
 //!   reads inside the matcher; pass `current_slot` as input).
@@ -60,7 +45,7 @@ pub use order_canonical::{
 /// can extract from this book + the per-order updates the caller
 /// must apply.
 ///
-/// Steps (mirror the on-chain `run_batch_handler` exactly):
+/// Steps:
 ///
 ///   1. Validate the oracle is non-zero (else refuse to clear).
 ///   2. Partition the book into bids / asks / expired / below-min,
@@ -79,19 +64,18 @@ pub use order_canonical::{
 ///      residuals, FOK sentinels, and expired orders.
 ///  10. Optionally flush the fee accumulators into protocol-owned
 ///      change notes (only if `protocol_owner_commitment != [0;32]`
-///      AND circuit breaker did NOT trip — matches the on-chain
-///      gating).
+///      AND circuit breaker did NOT trip).
 ///  11. Return everything packaged in `RunBatchOutput`.
 ///
-/// `start_match_id` is the value of `BatchResults.next_match_id`
-/// before this batch — the caller increments it past the highest
+/// `start_match_id` is the caller's durable counter before this batch;
+/// the caller increments it past the highest
 /// `match_id` emitted in `output.matches` after this returns.
 /// Match-all convenience wrapper: runs the batch auction with no cap on
 /// the number of matches produced. Signature-identical to the original
 /// so the byte-equality parity tests (`tests/parity.rs`,
 /// `tests/change_note_parity.rs`) are unaffected. Production callers —
-/// the in-TEE matcher and the on-chain `run_batch` adapter — use
-/// [`run_batch_capped`] with the N=16 circuit bound instead.
+/// the in-TEE matcher uses [`run_batch_capped`] with the N=16 circuit
+/// bound instead.
 pub fn run_batch(
     book: &OrderBook,
     oracle: &OracleSnapshot,
@@ -121,7 +105,7 @@ pub fn run_batch(
 /// identical regardless of the cap. Unmatched-but-crossable orders are
 /// left untouched in the book (no `OrderUpdate` emitted) and drained by
 /// a later call ("paged matching": the in-TEE matcher loops this within
-/// a tick; the on-chain adapter pages across `run_batch` calls).
+/// a tick).
 ///
 /// `inclusion_root` is unaffected by the cap — it is the Merkle root of
 /// all *eligible orders* (a transparency root from `partition_book`),
@@ -133,8 +117,8 @@ pub fn run_batch(
 /// order to one fill per batch — no intra-batch relock chain — so every
 /// match consumes an original input note whose opening + nullifier are
 /// in the settle store, never a TEE-created change note (whose nullifier
-/// needs the user spending key the TEE doesn't hold). The on-chain
-/// matcher passes `false`.
+/// needs the user spending key the TEE doesn't hold). The uncapped
+/// compatibility wrapper passes `false`.
 pub fn run_batch_capped(
     book: &OrderBook,
     oracle: &OracleSnapshot,
@@ -144,8 +128,7 @@ pub fn run_batch_capped(
     max_matches: usize,
     single_fill_per_order: bool,
 ) -> Result<RunBatchOutput, MatchError> {
-    // Step 1 — oracle validity gate. Matches the on-chain
-    // `require!(pyth_twap > 0, MatchingError::OracleZeroPrice)`.
+    // Step 1 — oracle validity gate.
     if oracle.twap == 0 {
         return Err(MatchError::OracleStale {
             publish: oracle.publish_slot,
@@ -197,8 +180,7 @@ pub fn run_batch_capped(
         clearing_price = 0;
     }
 
-    // Step 8 — inclusion root. Done regardless of CB state — the
-    // on-chain code publishes it on every batch.
+    // Step 8 — inclusion root. Done regardless of CB state.
     let inclusion_root = algorithm::merkle_root_sha256(&inclusion_leaves);
 
     // Step 9 — OrderUpdates. Two passes:
@@ -215,8 +197,7 @@ pub fn run_batch_capped(
     }
 
     // Step 10 — fee-note flush. Only when CB didn't trip AND a
-    // protocol owner commitment is configured (matches the on-chain
-    // `if protocol_owner_commitment != [0; 32] && cb_tripped == 0`).
+    // protocol owner commitment is configured.
     if cb_tripped == 0 && config.protocol_owner_commitment != [0u8; 32] {
         algorithm::flush_fee_notes(
             &mut fee_buckets,

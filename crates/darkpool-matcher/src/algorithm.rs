@@ -1,13 +1,9 @@
 //! The matching algorithm itself. Pure functions over the
 //! `darkpool_matcher::book` + `darkpool_matcher::match_result` types.
 //!
-//! Lifted from
-//! `programs/matching_engine/src/instructions/run_batch.rs`. The lift
-//! is gated by:
-//!   * Per-function unit tests in this module (the same 5 inline
-//!     tests that lived under `#[cfg(test)] mod tests` in run_batch.rs)
-//!   * Integration scenarios in `tests/parity.rs` (8 scenarios
-//!     translated from `programs/matching_engine/tests/run_batch.rs`)
+//! This is the single source of truth consumed by the in-TEE matcher.
+//! Behaviour is gated by per-function unit tests in this module and
+//! end-to-end auction scenarios in `tests/parity.rs`.
 //!
 //! No Anchor / no `solana_program` imports. The one place the
 //! on-chain code used `solana_program::hash::hashv` was inside
@@ -65,8 +61,8 @@ pub fn deviates_by_more_than_bps(p: u64, reference: u64, bps: u64) -> bool {
 /// **NOT the v3.5 Poseidon batch root** that VALID_MATCH_BATCH
 /// attests to. That root lives in `programs/vault/src/merkle.rs`
 /// and uses Poseidon over a Light-Protocol incremental tree. THIS
-/// root is published in `BatchResults.last_inclusion_root` as an
-/// audit log over the per-batch `order_inclusion_commitment`s so
+/// root is returned as an audit log over the per-batch
+/// `order_inclusion_commitment`s so
 /// users can prove the matcher accepted their order — entirely
 /// separate from the ZK circuit's Merkle.
 pub fn merkle_root_sha256(leaves: &[[u8; 32]]) -> [u8; 32] {
@@ -171,8 +167,13 @@ impl OrderSnapshot {
 
 /// Uniform-clearing-price computation. Returns `Some((p*, matched))`
 /// where p* is the price that maximises `min(demand, supply)` across
-/// the candidate-price set `{all distinct bid/ask price_limits}`,
-/// with ties broken by the lowest price (deterministic).
+/// all distinct bid limits and positive ask limits, with ties broken
+/// by the lowest price (deterministic).
+///
+/// A zero-limit ask is a market sell: it remains eligible supply at
+/// every positive candidate price, but zero itself is not a candidate.
+/// Including zero would let a bid at 150 and market ask at 0 clear at
+/// zero under the lowest-price tie-break, creating a free fill.
 ///
 /// `None` iff either side is empty (no crossing possible).
 ///
@@ -193,7 +194,9 @@ pub(crate) fn compute_clearing_price(
         candidates.push(b.price_limit);
     }
     for a in asks.iter() {
-        candidates.push(a.price_limit);
+        if a.price_limit > 0 {
+            candidates.push(a.price_limit);
+        }
     }
     candidates.sort();
     candidates.dedup();
@@ -263,7 +266,7 @@ pub(crate) fn generate_matches(
     // key), and the settle assembler has no opening for it. The residual
     // of a partially-filled order still relocks on-chain (note_e) and is
     // dropped from the in-TEE book to await client re-submission. The
-    // on-chain matcher passes `false` (unchanged chaining behaviour).
+    // uncapped compatibility wrapper passes `false` (chaining behaviour).
     single_fill_per_order: bool,
     out_matches: &mut Vec<MatchPair>,
     fee_buckets: &mut [FeeBucket; 2],
@@ -396,17 +399,15 @@ pub(crate) fn generate_matches(
 
         let match_id = next_match_id;
 
-        // Change-note commitments. Bytes match the on-chain Poseidon
-        // construction because `commitment_from_fields` is shared
-        // via the `darkpool-crypto` crate AND `change_note::derive_*`
-        // is byte-equal to the on-chain hashv version (gated by
-        // `tests/change_note_parity.rs`).
+        // Change-note commitments bind to the identity proven by the input
+        // note opening. `user_commitment` is client-asserted metadata and can
+        // differ; settlement reconstructs outputs from `owner_commitment`.
         let note_e_commitment = if buyer_change_amt > 0 {
             let inner = change_note::derive_inner(match_id, change_note::CHANGE_ROLE_BUYER);
             commitment_from_fields_v2(
                 quote_mint,
                 buyer_change_amt,
-                &bids[bi].user_commitment,
+                &bids[bi].owner_commitment,
                 &inner,
             )
             .map_err(|_| MatchError::Internal("Poseidon failed for buyer change note"))?
@@ -418,7 +419,7 @@ pub(crate) fn generate_matches(
             commitment_from_fields_v2(
                 base_mint,
                 seller_change_amt,
-                &asks[ai].user_commitment,
+                &asks[ai].owner_commitment,
                 &inner,
             )
             .map_err(|_| MatchError::Internal("Poseidon failed for seller change note"))?
@@ -476,9 +477,8 @@ pub(crate) fn generate_matches(
         });
         next_match_id = next_match_id.saturating_add(1);
 
-        // Fee buckets: bucket 0 = base (seller side fee), bucket 1 =
-        // quote (buyer side fee). Matches the on-chain layout in
-        // BatchResults.fee_accumulators[].
+        // Fee buckets: bucket 0 = base (seller-side fee), bucket 1 =
+        // quote (buyer-side fee).
         fee_buckets[0].add(seller_fee_amt);
         fee_buckets[1].add(buyer_fee_amt);
 
@@ -524,8 +524,7 @@ pub(crate) fn generate_matches(
 //
 // Walk the (post-match) snapshot vectors + the pre-batch order book
 // snapshot, emit one `OrderUpdate` per touched order. The caller
-// (on-chain ix in PR 3 / in-TEE matcher) applies these to the source
-// of truth (PendingOrder PDAs or in-memory book).
+// applies these to its source of truth.
 //
 // Mirrors the four cases in `run_batch::apply_slot_updates`:
 //   - cancelled_sentinel → Cancelled
@@ -862,10 +861,19 @@ mod tests {
     }
 
     #[test]
+    fn zero_limit_market_ask_is_eligible_but_not_a_price_candidate() {
+        // Both p=0 and p=150 would match all 10 units if zero were admitted as
+        // a candidate. The deterministic lowest-price tie-break would then
+        // choose zero. A market ask instead contributes supply at the bid's
+        // positive candidate, so the pair clears at 150.
+        let bids = vec![snap(OrderSide::Bid, 150, 10)];
+        let asks = vec![snap(OrderSide::Ask, 0, 10)];
+        assert_eq!(compute_clearing_price(&bids, &asks), Some((150, 10)));
+    }
+
+    #[test]
     fn clearing_price_uniform_across_book() {
-        // Mirrors the public scenario in
-        // programs/matching_engine/tests/run_batch.rs::
-        //   test_uniform_clearing_price:
+        // Mirrors the public uniform-clearing-price scenario:
         // 5 bids @150..146 + 3 asks @144..146, amount=10 each.
         // At p=146: demand = 50, supply = 30 → matched = 30.
         // At p=145: demand = 40, supply = 20 → matched = 20.

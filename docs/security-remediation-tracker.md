@@ -45,11 +45,11 @@ runbooks have landed.
 |---|---|---|---|---|---|
 | N-01 | High | TEE | `remediation/tee-intake` | Production exits on dstack/KMS probe failure; test auth requires explicit simulator mode; production rejects test credentials | Closed |
 | N-02 | High | Matcher + TEE | `remediation/settlement-outcomes`, `remediation/finality-gated-book` | Book/fills commit only after per-match settlement outcome; ambiguous results reconcile/redrive; rejected matches are terminal and never auto-rebooked | Open |
-| N-03 | High | Matcher | `remediation/matcher-correctness` | Zero-limit market asks remain eligible but are not price candidates; bid@150/ask@0 clears positively | Open |
+| N-03 | High | Matcher | `remediation/matcher-correctness` | Zero-limit market asks remain eligible but are not price candidates; bid@150/ask@0 clears positively | Closed |
 | N-04 | High liveness | Vault + SDK | `remediation/vault-lifecycle` | Merge proves every active input's NoteLock PDA absent; locked-note negative tests | Open |
 | N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Closed |
 | N-06 | Medium | TEE | `remediation/tee-intake` | One collateral commitment reserves at most one live or pending order; lifecycle release tests | Closed |
-| N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Open |
+| N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Closed |
 | N-08 | Medium | TEE + SDK + daemon | `remediation/stream-consolidation` | Only in-band-authenticated `/v1/stream` remains; gap detection, refresh, reconnect, and cancel-on-disconnect preserved | Open |
 | N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Closed |
 | N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Open |
@@ -124,6 +124,37 @@ Every remediation PR must record:
   notes, roots, orders, payloads, signatures, or proofs, but it reopens N-01,
   N-05, N-06, and N-09. The one-way snapshot scrub does not restore the public
   test account; provision fresh encrypted bootstrap credentials instead.
+
+### `remediation/matcher-correctness` — N-03, N-07
+
+- **Invariant restored.** Zero-limit market asks remain eligible supply at every
+  positive price but no longer inject zero into the clearing-price candidate
+  set; the pinned bid-at-150/ask-at-zero case clears 10 units at 150 and a
+  nonzero quote amount. Buyer and seller change-note commitments now bind to
+  the `owner_commitment` proven by each consumed note opening, never the
+  client-asserted `user_commitment` metadata.
+- **Wire/circuit impact.** No API, Borsh field order, account layout, canonical
+  domain, circuit, proving key, verifier key, fixture, or transaction layout
+  changes. Existing orders and notes remain compatible. Stale documentation
+  for the deleted on-chain matching program was removed from the matcher crate.
+- **Local evidence.** `cargo test -p darkpool-matcher` passes the full matcher
+  suite, including the deterministic positive-price regression and a Proptest
+  property over randomized prices, quantities, surplus amounts, and distinct
+  metadata/owner commitments. `cargo test -p nyx-tee` passes the full TEE suite.
+  A deterministic 256-case randomized parity test runs a real matcher output
+  through `assemble_match` and asserts byte equality for both change-note
+  commitments and the signed settlement payload. Formatting and clippy are
+  included in the closing branch gate.
+- **Devnet/CVM evidence.** Not applicable: this slice changes the pure matcher
+  and adds consumer parity coverage without changing a deployed program,
+  circuit artifact, transaction, API, boot path, dstack handshake, or transport
+  surface. The next CVM image that contains this commit will inherit the same
+  matcher tests in its build gate.
+- **Rollback.** Revert this PR. No notes, roots, orders, payloads, canonical
+  signatures, proofs, or deployed artifacts are invalidated, but reverting
+  reopens N-03 and N-07 and again permits zero-price market-ask fills and
+  matcher/assembler output divergence when user metadata differs from the
+  note-bound owner.
 
 ## Mainnet release gates
 

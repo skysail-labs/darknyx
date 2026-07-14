@@ -15,8 +15,6 @@ use borsh::{BorshDeserialize, BorshSerialize};
 /// matcher's `current_slot` are drained before matching, not
 /// included in any match. Gives the follow-up settle pipeline
 /// enough runway to confirm before the implicit settle deadline.
-/// Lifted unchanged from
-/// `programs/matching_engine/src/instructions/run_batch.rs::SETTLEMENT_BUFFER_SLOTS`.
 pub const SETTLEMENT_BUFFER_SLOTS: u64 = 20;
 
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
