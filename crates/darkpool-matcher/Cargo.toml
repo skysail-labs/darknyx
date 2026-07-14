@@ -2,7 +2,7 @@
 name = "darkpool-matcher"
 version.workspace = true
 edition.workspace = true
-description = "Pure matching algorithm for the Nyx dark pool. Uniform-clearing-price batch auction with FIFO tie-break and Pyth-band circuit breaker. No Anchor / no Solana / no Anchor-Lang deps — same crate consumed by both the in-TEE matcher (nyx-tee) and the existing on-chain run_batch litesvm parity tests."
+description = "Pure matching algorithm for the Nyx dark pool. Uniform-clearing-price batch auction with FIFO tie-break and Pyth-band circuit breaker. No Anchor or Solana runtime dependencies; consumed by the in-TEE matcher."
 
 [lib]
 crate-type = ["rlib"]
@@ -12,10 +12,7 @@ borsh = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 hex = { workspace = true }
 
-# SHA-256 backend for `change_note::derive_*`. The on-chain side uses
-# `solana_program::hash::hashv`; we use `sha2::Sha256` here so the
-# matcher stays Anchor-free. Byte-equivalence between the two is
-# gated by `tests/change_note_parity.rs`.
+# SHA-256 backend for `change_note::derive_*`.
 sha2 = { workspace = true }
 
 # Cryptographic primitives — re-used so all hashing stays byte-identical
@@ -24,8 +21,7 @@ darkpool-crypto = { path = "../darkpool-crypto" }
 
 [dev-dependencies]
 proptest = { workspace = true }
-# litesvm-and-friends-free reference impl of the on-chain hash. Used
-# only by `tests/change_note_parity.rs` to assert byte-equality.
+# Independent Solana SHA-256 backend used by `tests/change_note_parity.rs`.
 solana-program = { workspace = true }
 
 [lints.rust]

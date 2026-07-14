@@ -1,41 +1,22 @@
-//! Parity tests gating the run_batch lift.
+//! End-to-end behaviour tests for the shared matcher.
 //!
-//! Each scenario below mirrors one in
-//! `programs/matching_engine/tests/run_batch.rs` — input book +
-//! oracle + config constructed the same way, expected outputs
-//! asserted the same way. If the matcher's `run_batch` produces a
-//! different `RunBatchOutput` than the on-chain handler would
-//! produce on the equivalent PendingOrder PDAs, exactly one of
-//! these tests fails.
-//!
-//! We intentionally skip three scenarios from the litesvm file:
-//!   - test_cancel_flips_pending_to_cancelled
-//!   - test_cancel_unauthorized_caller_rejected
-//!   - test_run_batch_rejects_non_tee_signer
-//!
-//! All three test instruction-level concerns (cancel ix auth, TEE
-//! signer gate) that don't exist at the algorithm layer.
+//! These scenarios pin uniform clearing, price-time priority, circuit
+//! breaking, expiry, order constraints, output commitments, and paging.
 //!
 //! `cargo test -p darkpool-matcher --test parity`
 
+use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_matcher::book::{
     Order, OrderBook, OrderSide, OrderStatus, OrderType, OrderUpdateKind,
 };
+use darkpool_matcher::change_note::{derive_inner, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER};
 use darkpool_matcher::config::{MatchConfig, OracleSnapshot};
 use darkpool_matcher::{run_batch, run_batch_capped};
+use proptest::prelude::*;
 
-// ─────── Fixture helpers (mirror PendingSeed construction) ──────────────────
-//
-// The litesvm harness builds PendingSeeds via `make_pending_seed`
-// and then sets a few fields directly. We replicate the same
-// derivation here so the inputs are byte-identical: same
-// collateral_note layout, same user_commitment (with byte 0
-// zeroed for Fr safety), same order_id, same
-// order_inclusion_commitment.
+// ─────── Fixture helpers ────────────────────────────────────────────────────
 
-/// Mirrors `programs/matching_engine/tests/run_batch.rs::pseed`.
-/// Returns an `Order` with the same field-by-field bytes the
-/// litesvm test would seed into a PendingOrder PDA.
+/// Returns a deterministic, Fr-safe matcher order fixture.
 fn pseed(idx: u8, side_u8: u8, price: u64, amount: u64, expiry: u64) -> Order {
     let mut tk = [0u8; 32];
     tk[1..9].copy_from_slice(&(idx as u64).to_le_bytes());
@@ -90,6 +71,13 @@ fn pseed(idx: u8, side_u8: u8, price: u64, amount: u64, expiry: u64) -> Order {
     }
 }
 
+fn fr_safe(domain: u8, salt: u8) -> [u8; 32] {
+    let mut value = [0u8; 32];
+    value[30] = domain;
+    value[31] = salt;
+    value
+}
+
 /// Default MatchConfig matching the litesvm `init_market_full` call:
 /// random mints, `tick_size = 1`, `fee_rate_bps = 0` (no fees in
 /// any of the litesvm scenarios), `protocol_owner_commitment =
@@ -142,7 +130,6 @@ fn book_of(orders: Vec<Order>) -> OrderBook {
 
 // ─────── Scenario 1: uniform clearing price ─────────────────────────────────
 //
-// programs/matching_engine/tests/run_batch.rs::test_uniform_clearing_price
 //   5 bids @ 150..146 + 3 asks @ 144..146, amount = 10 each.
 //   At P=146: demand=50, supply=30 → matched=30.
 //   At P=145: demand=40, supply=20 → matched=20.
@@ -170,6 +157,109 @@ fn parity_1_uniform_clearing_price() {
         "expected 3 fills (supply=30 base units / 10 per ask)"
     );
     assert!(out.matches.iter().all(|m| m.price == 146));
+}
+
+// ─────── N-03: market asks do not inject a zero clearing candidate ─────────
+
+#[test]
+fn market_ask_at_zero_clears_at_the_positive_bid() {
+    let bid = pseed(0, 0, 150, 10, 1_000_000);
+    let mut market_ask = pseed(1, 1, 0, 10, 1_000_000);
+    market_ask.order_type = OrderType::Ioc;
+
+    let out = run_batch(
+        &book_of(vec![bid, market_ask]),
+        &oracle(150),
+        &config(100_000, 0),
+        1,
+        0,
+    )
+    .expect("market ask should match");
+
+    assert_eq!(out.clearing_price, 150);
+    assert_eq!(out.matches.len(), 1);
+    assert_eq!(out.matches[0].base_amt, 10);
+    assert_eq!(out.matches[0].quote_amt, 1_500);
+    assert!(
+        out.matches[0].quote_amt > 0,
+        "market sell must not fill for free"
+    );
+}
+
+// ─────── N-07: output commitments use note-bound owners ────────────────────
+
+proptest! {
+    #[test]
+    fn randomized_change_outputs_match_note_bound_owner(
+        price in 1u64..10_000,
+        amount in 1u64..10_000,
+        buyer_extra in 1u64..1_000_000,
+        seller_extra in 1u64..1_000_000,
+        salt in any::<u8>(),
+    ) {
+        let mut bid = pseed(0, 0, price, amount, 1_000_000);
+        let mut ask = pseed(1, 1, price, amount, 1_000_000);
+
+        // Model the production distinction: `user_commitment` is signed
+        // metadata, while `owner_commitment` is pinned to the consumed note.
+        bid.user_commitment = fr_safe(0x10, salt);
+        bid.owner_commitment = fr_safe(0x20, salt);
+        ask.user_commitment = fr_safe(0x30, salt);
+        ask.owner_commitment = fr_safe(0x40, salt);
+        bid.note_amount = amount * price + buyer_extra;
+        ask.note_amount = amount + seller_extra;
+
+        let cfg = config(100_000, 0);
+        let out = run_batch(
+            &book_of(vec![bid.clone(), ask.clone()]),
+            &oracle(price),
+            &cfg,
+            1,
+            0,
+        )
+        .expect("owner-bound match");
+        prop_assert_eq!(out.matches.len(), 1);
+        let m = &out.matches[0];
+
+        let buyer_inner = derive_inner(m.match_id, CHANGE_ROLE_BUYER);
+        let seller_inner = derive_inner(m.match_id, CHANGE_ROLE_SELLER);
+        let expected_e = commitment_from_fields_v2(
+            &cfg.quote_mint,
+            buyer_extra,
+            &bid.owner_commitment,
+            &buyer_inner,
+        )
+        .expect("Fr-safe buyer owner");
+        let expected_f = commitment_from_fields_v2(
+            &cfg.base_mint,
+            seller_extra,
+            &ask.owner_commitment,
+            &seller_inner,
+        )
+        .expect("Fr-safe seller owner");
+
+        prop_assert_eq!(m.buyer_change_amt, buyer_extra);
+        prop_assert_eq!(m.seller_change_amt, seller_extra);
+        prop_assert_eq!(m.note_e_commitment, expected_e);
+        prop_assert_eq!(m.note_f_commitment, expected_f);
+
+        let wrong_e = commitment_from_fields_v2(
+            &cfg.quote_mint,
+            buyer_extra,
+            &bid.user_commitment,
+            &buyer_inner,
+        )
+        .expect("Fr-safe buyer metadata");
+        let wrong_f = commitment_from_fields_v2(
+            &cfg.base_mint,
+            seller_extra,
+            &ask.user_commitment,
+            &seller_inner,
+        )
+        .expect("Fr-safe seller metadata");
+        prop_assert_ne!(m.note_e_commitment, wrong_e);
+        prop_assert_ne!(m.note_f_commitment, wrong_f);
+    }
 }
 
 // ─────── Capped matching: run_batch_capped bounds the fill count ────────────
@@ -290,7 +380,6 @@ fn single_fill_mode_caps_one_fill_per_order() {
 
 // ─────── Scenario 2: intra-batch ordering irrelevant ────────────────────────
 //
-// programs/matching_engine/tests/run_batch.rs::test_intra_batch_ordering_irrelevant
 //   2 bids @ 105/100, 2 asks @ 95/100, amount = 5.
 //   Run twice — once with default arrival_slots, once with two of
 //   them swapped — and assert (clearing_price, match_count) is
@@ -320,7 +409,6 @@ fn parity_2_intra_batch_ordering_irrelevant() {
 
 // ─────── Scenario 3: circuit breaker trips ──────────────────────────────────
 //
-// programs/matching_engine/tests/run_batch.rs::test_circuit_breaker_pauses_batch
 //   Oracle=100, circuit_breaker_bps=300 (3%).
 //   Bid @ 150, Ask @ 140 → P* ~ 145, deviation 45% → trip.
 //   Expected: cb_tripped=1, match_count=0, clearing_price=0.
@@ -347,7 +435,6 @@ fn parity_3_circuit_breaker_pauses_batch() {
 
 // ─────── Scenario 4: per-market isolation (CB tripping in A) ────────────────
 //
-// programs/matching_engine/tests/run_batch.rs::test_circuit_breaker_does_not_affect_other_pairs
 //   Two markets, two run_batch calls. The matcher is pure so
 //   "isolation" reduces to "two independent run_batch calls with
 //   different inputs produce different outputs". Both halves
@@ -377,7 +464,6 @@ fn parity_4_per_market_isolation() {
 
 // ─────── Scenario 5: expired orders drained ─────────────────────────────────
 //
-// programs/matching_engine/tests/run_batch.rs::test_expired_orders_drained
 //   Bid expires at slot 5, ask at 1M. now_slot = 100 (warped).
 //   The bid is drained (Expired); the ask stays Pending; no
 //   matches (no counterparty).
@@ -409,7 +495,6 @@ fn parity_5_expired_orders_drained() {
 
 // ─────── Scenario 6: min_fill_qty enforced ──────────────────────────────────
 //
-// programs/matching_engine/tests/run_batch.rs::test_min_fill_qty_enforced
 //   Bid amount=20 with min_fill_qty=10. Ask amount=5.
 //   crossable = min(20, 5) = 5, but 5 < 10 → skip.
 //   Expected: match_count=0, both stay Pending.
@@ -432,7 +517,6 @@ fn parity_6_min_fill_qty_enforced() {
 
 // ─────── Scenario 7: inclusion root published ───────────────────────────────
 //
-// programs/matching_engine/tests/run_batch.rs::test_inclusion_root_published
 //   3 orders (s0 bid @105, s1 bid @100, s2 ask @95). After
 //   matching, the matcher publishes a SHA-256 binary Merkle root
 //   over the 3 order_inclusion_commitments (padded to 4 by
@@ -483,7 +567,6 @@ fn parity_7_inclusion_root_published() {
 
 // ─────── Scenario 8: partial fill keeps slot pending ────────────────────────
 //
-// programs/matching_engine/tests/run_batch.rs::test_partial_fill_keeps_slot_pending
 //   Bid amount=20, ask amount=5, both @ 100.
 //   crossable = 5 → one fill of 5. Bid residual=15 (Pending),
 //   ask filled (Matched).

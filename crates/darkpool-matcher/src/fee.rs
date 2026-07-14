@@ -1,16 +1,10 @@
-//! Per-mint fee accumulator used during one batch tick. Field-for-
-//! field byte-equivalent to
-//! `programs/matching_engine/src/state/fee_accumulator.rs::FeeAccumulator`
-//! minus the Anchor zero-copy attributes, so the PR-3 on-chain
-//! adapter is `impl From<FeeBucket> for FeeAccumulator` and back.
+//! Per-mint fee accumulator used during one batch tick.
 //!
 //! Lifetime model: the matcher resets two buckets (one base, one
 //! quote) at the start of every `run_batch` call, adds per-leg
 //! `buyer_fee_amt` / `seller_fee_amt` as it generates matches, and
-//! emits them on `RunBatchOutput.fee_buckets`. The caller decides
-//! when to flush them into protocol-owned change notes (on-chain
-//! ix does this inline; in-TEE matcher emits a flush event so the
-//! settle scheduler can include the note in the next batch).
+//! emits them on `RunBatchOutput.fee_buckets`. The in-TEE matcher
+//! exposes the flush commitments to the settlement scheduler.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -22,17 +16,13 @@ pub struct FeeBucket {
     /// Cumulative fee for this mint across the current batch.
     /// Reset to 0 at the start of every `run_batch` call.
     pub accumulated_fees: u64,
-    /// Batch slot this bucket was last touched at. The on-chain
-    /// `FeeAccumulator` uses this to detect stale (older than
-    /// `BatchResults.last_batch_slot`) values; we propagate it
-    /// here so the on-chain adapter is field-for-field.
+    /// Batch slot this bucket was last touched at.
     pub batch_slot: u64,
     /// Poseidon commitment of the flushed fee note for this batch.
     /// Populated by the matcher iff `accumulated_fees > 0` AND
     /// `MatchConfig.protocol_owner_commitment != [0u8;32]` AND the
     /// circuit breaker did NOT trip. All-zero means "nothing to
-    /// flush" (matches the on-chain `FeeAccumulator.flushed_commitment`
-    /// semantics).
+    /// flush.
     pub flushed_commitment: [u8; 32],
 }
 
@@ -57,12 +47,7 @@ impl FeeBucket {
         }
     }
 
-    /// Saturating add — matches the on-chain
-    /// `accumulated_fees.saturating_add(seller_fee_amt)` semantics
-    /// so overflow can't silently corrupt the accumulator (a
-    /// u64-overflowing batch would already be a protocol bug
-    /// elsewhere, but the saturating behaviour is the audited
-    /// shape and we mirror it).
+    /// Saturating add prevents overflow from wrapping fee accounting.
     pub fn add(&mut self, delta: u64) {
         self.accumulated_fees = self.accumulated_fees.saturating_add(delta);
     }

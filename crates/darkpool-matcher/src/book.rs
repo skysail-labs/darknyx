@@ -1,16 +1,7 @@
 //! Order-book primitives. Pure data; no async, no I/O, no Anchor.
 //!
-//! Field-for-field byte-equivalent to
-//! `programs/matching_engine/src/state/pending_order.rs::PendingOrder`,
-//! minus the PDA bookkeeping (slot_idx, bump, market, _padding). The
-//! on-chain ix's job in PR 3 is to convert each `PendingOrder` PDA
-//! it reads from `remaining_accounts` into one of these on the way
-//! in, and to apply matcher-emitted updates on the way out.
-//!
 //! Wire format: Borsh. `OrderSide` / `OrderType` / `OrderStatus` are
-//! `#[repr(u8)]` so their discriminants match the on-chain u8
-//! constants (`PENDING_SIDE_BID = 0`, etc.) without any runtime
-//! conversion.
+//! `#[repr(u8)]` so their discriminants remain explicit and stable.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -54,15 +45,12 @@ pub enum OrderStatus {
     Cancelled = 4,
 }
 
-// ─────── Order — the matcher-side equivalent of PendingOrder ────────────────
+// ─────── Order ──────────────────────────────────────────────────────────────
 
 /// A single open order. The matcher consumes a `Vec<Order>` (via
 /// `OrderBook`), produces matches, and emits a `Vec<OrderUpdate>`
 /// telling the caller how to mutate the originals.
 ///
-/// Fields removed from the on-chain `PendingOrder`:
-///   * `market`, `slot_idx`, `bump`, `_padding_a`, `_padding_b` —
-///     PDA bookkeeping. Out of scope for a pure matcher.
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct Order {
     // ─── Identity ───────────────────────────────────────────────
@@ -126,12 +114,7 @@ pub struct Order {
 
 // ─────── OrderBook — the matcher's input collection ─────────────────────────
 
-/// Phase-1 shape: flat `Vec<Order>`. The matching algorithm reads
-/// from this directly; in `darkpool_matcher::algorithm` (Phase-1
-/// Step 3) we'll add a price-indexed view derived from it.
-///
-/// The on-chain ix builds one of these by iterating
-/// `ctx.remaining_accounts` and reading each `PendingOrder` PDA.
+/// Flat `Vec<Order>` snapshot consumed directly by the matching algorithm.
 /// The in-TEE matcher (`crates/nyx-tee`) builds one by snapshotting
 /// its long-lived `BTreeMap<Price, FifoQueue<OrderId>>` at each
 /// batch tick — see `docs/tee-architecture.md` §5.1.
@@ -170,10 +153,8 @@ impl OrderBook {
 
 // ─────── OrderUpdate — matcher output instruction ───────────────────────────
 
-/// Tells the caller what to do with each `Order` after matching.
-/// The on-chain ix translates these into writes against the
-/// corresponding `PendingOrder` PDA; the in-TEE matcher applies
-/// them directly to the in-memory book.
+/// Tells the caller what to do with each `Order` after matching. The
+/// in-TEE matcher applies these directly to the in-memory book.
 ///
 /// Carries the order's `trading_key + order_id` so the caller can
 /// look up the source PDA (or in-memory book entry) without

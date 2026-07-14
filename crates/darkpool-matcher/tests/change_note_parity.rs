@@ -1,21 +1,15 @@
-//! Cross-language byte-equality parity for `change_note::derive_*`.
+//! Cross-language and cross-backend byte equality for `change_note::derive_*`.
 //!
-//! This test exists because three independent implementations of the
-//! same SHA-256 derivation must produce byte-identical output:
+//! This test exists because independent implementations of the same
+//! SHA-256 derivation must produce byte-identical output:
 //!
 //! 1. **`darkpool_matcher::change_note::derive_*`** — pure Rust,
 //!    `sha2::Sha256` backend. The one under test.
-//! 2. **`programs/matching_engine/src/state/change_note.rs::derive_*`**
-//!    — on-chain Rust, `solana_program::hash::hashv` backend. Until
-//!    PR 3 cuts the on-chain ix over to call us, this is the active
-//!    on-chain implementation. We assert byte-equality against it
-//!    HERE so PR 3's caller swap is provably safe.
+//! 2. **An independent Solana SHA-256 backend** —
+//!    `solana_program::hash::hashv`, checked here.
 //! 3. **`packages/sdk/tests/helpers/e2e-helpers.ts::deriveNonce` /
 //!    `deriveBlinding`** — TypeScript SDK, Node `crypto.createHash`
-//!    backend. Already gated by SDK tests (`change-note-flow.test.ts`)
-//!    against the on-chain output; by virtue of transitivity, when
-//!    THIS test passes, the matcher port is also byte-identical to
-//!    the TS port.
+//!    backend, pinned by the same fixed known-answer vectors.
 //!
 //! # Fixed-input table
 //!
@@ -31,14 +25,10 @@ use darkpool_matcher::change_note::{
 };
 use solana_program::hash::hashv;
 
-// ─────── Reference (on-chain) implementation ────────────────────────────────
+// ─────── Independent Solana-backend reference ──────────────────────────────
 //
-// Copy of the body in
-// `programs/matching_engine/src/state/change_note.rs::derive_inner` so this
-// test is dependency-free w.r.t. the matching_engine crate (we don't want to
-// depend on Anchor here). It uses the `solana_program::hash::hashv` backend;
-// the matcher port uses `sha2::Sha256`. Same algorithm → byte-identical, GATED
-// here rather than assumed.
+// The matcher uses `sha2::Sha256`; this reference uses
+// `solana_program::hash::hashv`. Same algorithm, separately implemented.
 
 fn reference_derive_inner(match_id: u64, role: u8) -> [u8; 32] {
     let mut h = hashv(&[b"nyx-change-inner", &match_id.to_le_bytes(), &[role]]).to_bytes();
@@ -94,7 +84,7 @@ fn roles() -> &'static [u8] {
 }
 
 #[test]
-fn inner_parity_against_on_chain() {
+fn inner_parity_against_solana_sha256_backend() {
     for &mid in match_ids() {
         for &role in roles() {
             let matcher = derive_inner(mid, role);
@@ -103,7 +93,7 @@ fn inner_parity_against_on_chain() {
                 matcher,
                 reference,
                 "derive_inner mismatch at (match_id={mid:#x}, role={role:#x}): \
-                 matcher={} on-chain={}",
+                 matcher={} solana_backend={}",
                 hex::encode(matcher),
                 hex::encode(reference),
             );

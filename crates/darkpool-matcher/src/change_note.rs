@@ -1,31 +1,21 @@
-//! Deterministic change-note derivation. Anchor-free port of
-//! `programs/matching_engine/src/state/change_note.rs`.
+//! Deterministic note-inner derivation used by the matcher and settler.
 //!
 //! # Cross-language byte-equality contract
 //!
-//! These functions must produce byte-identical output to:
+//! These functions must produce byte-identical output to the TypeScript SDK:
 //!
-//! * **The on-chain Rust** —
-//!   `programs/matching_engine/src/state/change_note.rs::derive_nonce`
-//!   / `derive_blinding`, which uses `solana_program::hash::hashv`.
-//!   Pinned by `tests/change_note_parity.rs`.
-//!
-//! * **The TypeScript SDK** —
+//! * **TypeScript** —
 //!   `packages/sdk/tests/helpers/e2e-helpers.ts::deriveNonce` /
 //!   `deriveBlinding`, which uses Node's `crypto.createHash("sha256")`.
-//!   Pinned by ad-hoc fixtures in `change-note-flow.test.ts` and
-//!   `devnet-trade-flow.test.ts`.
+//!   Pinned by fixed vectors in the Rust and SDK parity tests.
 //!
 //! All three implementations:
 //!   1. SHA-256 over: `domain_tag ‖ match_id_le ‖ role_byte`
 //!   2. Set output byte 0 = 0, output byte 1 &= 0x0f (BN254 Fr safety
 //!      — keeps the 32-byte value strictly below the Fr modulus).
 //!
-//! The matcher port uses `sha2::Sha256` rather than
-//! `solana_program::hash::hashv` because the latter is a Solana-only
-//! crate. SHA-256 is the same algorithm under both backends, so the
-//! output is byte-identical — but we GATE that with the parity test,
-//! we don't ASSUME it.
+//! `tests/change_note_parity.rs` also checks an independent Solana SHA-256
+//! backend so backend changes cannot silently alter the bytes.
 //!
 //! ## v2 (inner_hash)
 //!
@@ -39,9 +29,8 @@ use sha2::{Digest, Sha256};
 
 // ─────── Role tags ──────────────────────────────────────────────────────────
 //
-// These constants MUST equal the on-chain consts at
-// `programs/matching_engine/src/state/change_note.rs` AND the TS
-// consts at `packages/sdk/tests/helpers/e2e-helpers.ts`.
+// These constants MUST equal the TS constants at
+// `packages/sdk/tests/helpers/e2e-helpers.ts`.
 //
 // CLAUDE.md §6 lists this as a cross-language byte-equality contract;
 // changing any of these requires touching all three sites + bumping
