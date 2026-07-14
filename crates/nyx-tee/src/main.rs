@@ -343,7 +343,6 @@ async fn main() -> Result<()> {
                 signing_keys,
                 settle_state.clone(),
                 matcher_state.clone(),
-                current_slot.clone(),
                 current_priority_fee.clone(),
                 settle_base_mint,
                 settle_quote_mint,
@@ -624,7 +623,6 @@ fn build_settle_driver(
     signing_keys: Vec<ed25519_dalek::SigningKey>,
     settle_state: Arc<RwLock<SettleSchedulerState>>,
     matcher_state: Arc<RwLock<MatcherState>>,
-    current_slot: Arc<AtomicU64>,
     current_priority_fee: Arc<AtomicU64>,
     base_mint: [u8; 32],
     quote_mint: [u8; 32],
@@ -774,7 +772,6 @@ fn build_settle_driver(
     Ok(SettleDriver {
         ctx,
         matcher_state,
-        current_slot,
         cfg: SettleDriverConfig {
             base_mint,
             quote_mint,

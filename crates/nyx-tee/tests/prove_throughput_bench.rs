@@ -121,7 +121,7 @@ fn build_slots() -> Vec<MatchSlotWitness> {
         base_mint: base_mint(),
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
-        fee_slot: 1234,
+        fee_identifier: 1234,
         // Single real match → batch index 0 (C-08: batch_slot[0] === 0).
         slot_index: 0,
         fee_rate_bps: 0,

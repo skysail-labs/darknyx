@@ -22,7 +22,8 @@
 //!   - note_e / note_f (change, conditional on change_amt > 0):
 //!     derive_*(match_id, CHANGE_ROLE_*).
 //!   - note_fee (protocol cut, payload-only — NOT a circuit witness):
-//!     owner = protocol_owner_commitment; derive_*(fee_slot, FEE_ROLE_QUOTE).
+//!     owner = protocol_owner_commitment;
+//!     derive_*(fee_identifier, FEE_ROLE_QUOTE).
 //!
 //! Conservation is enforced up front (the same equalities the circuit
 //! constrains), so a malformed match fails here with a named error
@@ -66,18 +67,18 @@ pub struct MatchAssemblyInputs<'a> {
     /// Protocol fee rate (bps) — the circuit's fee-floor public input
     /// (`VaultConfig.fee_rate_bps`). Stamped into every slot's witness.
     pub fee_rate_bps: u64,
-    /// Slot the fee note's (nonce, blinding) derives against. The
-    /// protocol re-derives fee-note openings from (fee_slot,
-    /// FEE_ROLE_*), so this must be a value the protocol can recover.
-    /// This is the batch's `now_slot` — distinct across batches, which is
-    /// what keeps the aggregated fee notes globally unique. Do NOT conflate
-    /// it with [`Self::slot_index`] below.
-    pub fee_slot: u64,
+    /// Identifier the fee-note inners derive against. During the interim
+    /// batch-fee design this is the matcher's recorded `RunBatchOutput.batch_slot`.
+    /// It must be copied from the matcher output, never sampled again by a
+    /// consumer. CS-08 separately replaces this slot-derived identifier with a
+    /// globally unique per-batch/page value.
+    pub fee_identifier: u64,
     /// This match's **position within the batch** (0..N-1). C-08:
     /// VALID_MATCH_BATCH binds `batch_slot[i] === i`, and the on-chain settle
     /// asserts `payload.batch_slot == match_index`, so the leaf/payload
     /// `batch_slot` MUST be the slot index — NOT the matcher's `now_slot`
-    /// (which stays in [`Self::fee_slot`] for fee-note uniqueness). Mixing
+    /// (which stays in [`Self::fee_identifier`] for the fee-note opening).
+    /// Mixing
     /// these up is the bug the live CVM caught: the matcher sets
     /// `MatchPair.batch_slot = now_slot`, so feeding that into the leaf makes
     /// witness generation abort on `batch_slot[i] === i`.
@@ -309,10 +310,10 @@ pub fn assemble_match(
         note_fee_quote_commitment: [0u8; 32],
         fee_rate_bps: inp.fee_rate_bps,
         protocol_owner_commitment: inp.protocol_owner_commitment,
-        // Fee-note inner_hashes — MUST match the matcher's flush_fee_notes
-        // (`derive_inner(fee_slot, FEE_ROLE_*)`, fee_slot == batch_slot).
-        fee_base_inner: derive_inner(inp.fee_slot, FEE_ROLE_BASE),
-        fee_quote_inner: derive_inner(inp.fee_slot, FEE_ROLE_QUOTE),
+        // Fee-note inner_hashes — MUST use the exact identifier recorded by
+        // the matcher when `flush_fee_notes` built the commitments.
+        fee_base_inner: derive_inner(inp.fee_identifier, FEE_ROLE_BASE),
+        fee_quote_inner: derive_inner(inp.fee_identifier, FEE_ROLE_QUOTE),
     };
 
     let payload = MatchResultPayload {
@@ -361,8 +362,8 @@ pub struct BatchAssemblyParams {
     pub base_mint: [u8; 32],
     pub quote_mint: [u8; 32],
     pub protocol_owner_commitment: [u8; 32],
-    /// Slot the fee-note openings derive against.
-    pub fee_slot: u64,
+    // Fee identifier is intentionally absent: `assemble_batch` must copy the
+    // value recorded on `RunBatchOutput`, so callers cannot re-sample it.
     /// Protocol fee rate (bps) — the circuit fee-floor public input
     /// (`VaultConfig.fee_rate_bps`).
     pub fee_rate_bps: u64,
@@ -439,7 +440,10 @@ pub fn assemble_batch(
             base_mint: params.base_mint,
             quote_mint: params.quote_mint,
             protocol_owner_commitment: params.protocol_owner_commitment,
-            fee_slot: params.fee_slot,
+            // CS-06: the matcher used output.batch_slot when it built the fee
+            // commitments. Copy that recorded identifier; a scheduler/RPC slot
+            // sampled here can tick forward and make the witness unprovable.
+            fee_identifier: output.batch_slot,
             // C-08: the leaf/payload batch_slot is this match's index in the
             // batch (0..N-1), which the circuit + on-chain settle both require.
             slot_index: idx as u64,
@@ -645,7 +649,7 @@ mod tests {
             base_mint: base_mint(),
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
-            fee_slot: 1234,
+            fee_identifier: 1234,
             // Default to index 0 (single-match). The scenario's MatchPair
             // carries batch_slot=7 (a now_slot stand-in) on purpose, so tests
             // that assert on the leaf/payload batch_slot prove it tracks
@@ -697,8 +701,8 @@ mod tests {
             "witness leaf batch_slot must be slot_index"
         );
         assert_eq!(p.batch_slot, 3, "payload batch_slot must be slot_index");
-        // The fee note still derives from fee_slot (now_slot), untouched — so
-        // fee-note uniqueness across batches is preserved.
+        // The fee note derives from the matcher-recorded identifier, untouched
+        // by the per-match leaf slot index.
         assert_eq!(w.fee_base_inner, derive_inner(1234, FEE_ROLE_BASE));
     }
 
@@ -869,7 +873,7 @@ mod tests {
                 quote_mint: quote_mint(),
                 protocol_owner_commitment: [0u8; 32],
                 fee_rate_bps: 0,
-                fee_slot: 1,
+                fee_identifier: 1,
                 slot_index: 0,
                 buyer_change_inner: None,
                 seller_change_inner: None,
@@ -1017,7 +1021,6 @@ mod tests {
             base_mint: base_mint(),
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
-            fee_slot: 1234,
             fee_rate_bps: 0,
             circuit_n: 16,
         }
@@ -1052,6 +1055,56 @@ mod tests {
         // Payload carries the resolved order ids.
         assert_eq!(ms.payload.order_id_a, [0x01; 16]);
         assert_eq!(ms.payload.order_id_b, [0x02; 16]);
+    }
+
+    #[test]
+    fn assemble_batch_uses_the_matcher_recorded_fee_identifier() {
+        // CS-06 race regression: commitments were created at S, while the old
+        // scheduler could sample S+1 before assembly. Batch assembly no longer
+        // accepts a caller-supplied fee identifier, so both witness inners must
+        // come from output.batch_slot (S).
+        let recorded = 476_000_000u64;
+        let would_be_resampled = recorded + 1;
+        let protocol_owner = fr_safe(0x07);
+        let (m, buyer, seller) = scenario(1_000, 100_000, 0, 0, 300, 3);
+        let mut store = OpeningStore::new();
+        store.insert(m.note_buyer, order_rec(buyer, [0x01; 16]));
+        store.insert(m.note_seller, order_rec(seller, [0x02; 16]));
+
+        let base_inner = derive_inner(recorded, FEE_ROLE_BASE);
+        let quote_inner = derive_inner(recorded, FEE_ROLE_QUOTE);
+        let base_fee_commitment =
+            commitment_from_fields_v2(&base_mint(), 3, &protocol_owner, &base_inner).unwrap();
+        let quote_fee_commitment =
+            commitment_from_fields_v2(&quote_mint(), 300, &protocol_owner, &quote_inner).unwrap();
+
+        let mut output = RunBatchOutput::empty(recorded, 100, 0);
+        output.matches = vec![m];
+        output.fee_buckets[0].accumulated_fees = 3;
+        output.fee_buckets[0].flushed_commitment = base_fee_commitment;
+        output.fee_buckets[1].accumulated_fees = 300;
+        output.fee_buckets[1].flushed_commitment = quote_fee_commitment;
+
+        let mut params = batch_params();
+        params.fee_rate_bps = 30;
+        let assembled = assemble_batch(&output, &store, params).unwrap();
+        let witness = &assembled.witnesses[0];
+        let payload = &assembled.matches[0].payload;
+
+        assert_eq!(witness.fee_base_inner, base_inner);
+        assert_eq!(witness.fee_quote_inner, quote_inner);
+        assert_ne!(
+            witness.fee_base_inner,
+            derive_inner(would_be_resampled, FEE_ROLE_BASE)
+        );
+        assert_ne!(
+            witness.fee_quote_inner,
+            derive_inner(would_be_resampled, FEE_ROLE_QUOTE)
+        );
+        assert_eq!(witness.note_fee_base_commitment, base_fee_commitment);
+        assert_eq!(witness.note_fee_quote_commitment, quote_fee_commitment);
+        assert_eq!(payload.note_fee_base_commitment, base_fee_commitment);
+        assert_eq!(payload.note_fee_quote_commitment, quote_fee_commitment);
     }
 
     #[test]

@@ -157,7 +157,7 @@ async fn icicle_cpu_proves_and_verifies_n16() {
         base_mint: base_mint(),
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
-        fee_slot: 1234,
+        fee_identifier: 1234,
         // Single real match → batch index 0 (C-08: batch_slot[0] === 0).
         slot_index: 0,
         // Zero-fee exact-fill match → fee_rate_bps MUST be 0, or the in-circuit
