@@ -52,8 +52,8 @@ runbooks have landed.
 | N-07 | Medium | Matcher | `remediation/matcher-correctness` | Matcher output construction uses note-bound `owner_commitment`; randomized assembler parity | Closed |
 | N-08 | Medium | TEE + SDK + daemon | `remediation/stream-consolidation` | Only in-band-authenticated `/v1/stream` remains; gap detection, refresh, reconnect, and cancel-on-disconnect preserved | Open |
 | N-09 | Medium privacy | TEE | `remediation/tee-intake` | Clearing prices are absent from production info logs | Closed |
-| N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Code complete |
-| N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Code complete |
+| N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Closed |
+| N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Closed |
 | N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker closes only after expiry; rent returns to recorded payer; boundary tests and live async sweep | Closed |
 | N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Open |
 | N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
@@ -312,14 +312,34 @@ Every remediation PR must record:
 - **Devnet/CVM evidence.** Image 52 built and pushed successfully from commit
   `cdb80d4` in private workflow run `29366224503`; an anonymous GHCR manifest
   request returned HTTP 200. Its artifact-upload annotation is the known
-  organization quota exhaustion and did not fail the image job. Live evidence
-  remains pending a rotated devnet RPC credential: the prior credential was
-  exposed in local verbose command output and will not be reused. Closure
-  requires a clean VaultConfig re-foundation, creation and byte-for-byte
-  readback of MarketConfig, exact K-key rotation, image-52 cold boot showing
-  governed adoption, a targeted settlement, and a confirmed CVM stop. The
-  split Squads 3-of-5/4-of-7 rehearsal remains a release-assurance gate;
-  supporting code and runbook do not close N-19 by themselves.
+  organization quota exhaustion and did not fail the image job. The reviewed
+  devnet program deployed at slot 476283761
+  (`5tZBgbeoD4pMiGb1pZNQ8JJug5nDGPCvSfUJEwk9fpyWgLZw9AeYdufovLv6fJdoz1rymRDFAibsQQmhZbcvsJd1`),
+  then the stale 1288-byte VaultConfig was closed
+  (`2YAunujYimGivxbso6PEGRtVggQeHWKiqvaBbNUwaHDaMf71tNZEp11YN8dqX3q2M9VckKpANLc7wVhXtmKbm6jL`)
+  and cleanly re-founded; the final pre-boot tree reset confirmed as
+  `2yLeYsxtFqpf8uwvWaUVDsAT3NiH3RY2UYAsxgL4pdmcr4VA6NFEPpV4bmrKrdiZJy9kQp7h82wBKMrHoykS1kM4`.
+  Independent on-chain readback pinned the new VaultConfig to 1264
+  bytes with `num_tee_keys == num_trees == 1`, and MarketConfig to 108 bytes
+  with the intended mint pair, 6/6 decimals, scale 100000000, tick 5, minimum
+  1000, breaker 5000, and `enabled = true`. Image 52 cold-booted with compose
+  hash `f72d3bb022e061158eb8eb71d1eb8c478a1a0ec81640bd32a17367ce71bc694a`,
+  adopted every governed market field plus the
+  30-bps fee, and enabled the live settle pipeline. Exact K-key rotation
+  confirmed
+  (`v2fRkvgxrqHzv5yd5fD3kKv3PtfhiDghNnmCq9rcSpUcuG7PV59mgnr16jgdpaYueqm7JLHH129ZKXbEjCvtdyV`).
+  The targeted real-mint `cvm-settle-e2e` passed 1/1 in 37.34 seconds: deposits
+  `roQS4VWBK3JVRpgTjtM3VLztbTfkuCsqxd2mqUhw4HUWFznin5FrYpHShkAQh9X85f1bWWj4cCD5FbAhVpBJwyU`
+  and `inqGmEW5RnN98xqKy6MB6SDChujXrbUuTmRDVYad6YcPGLiHrFj3o783T9JGZzexvAajcCvN8FxXCprFbUCVX77`;
+  locks `2jTcoqAVTeawa2KQNK2trLhQg8Lfi1wNmEncXkJvQU76ajeujWZ7719JisMn5P3Gzgx4DXxwu2pEzDBtcu1xnY8W`
+  and `31Qjy4s3gqFSvfT4sqsjwjYkboWUzbuSdUbsTxfFrQs3JvzJtXcmPVEmJJH7QwrpyMwnanoM6etLRNaKBqwzrL2j`;
+  verification `2tD6J6jEWiZqV6xGLa4XsaR63SCmCXpJgHHZfvNyXgjQcJfxZYHdT2mvewzFykgvBUkYoVgeSgYvJc5VwF1eGFgR`;
+  and Tx D `2SstKbUHFuEjxzvB82z6mQDaqN5jar5NbFnGHZ4poq3wBgh56GCGyGRDne2VJuZP2pQryUNUbZxYSLSrunUbjtPG`
+  at slot 476286313 all confirmed with no error. Shard 0
+  ended at leaf count 7. All three Phala CVMs were then confirmed stopped and
+  the in-memory test credentials were unset. This closes N-10/N-11. CS-02
+  remains in progress until VALID_MATCH_BATCH v3 consumes MarketConfig, and
+  the split Squads 3-of-5/4-of-7 rehearsal remains the N-19 release gate.
 - **Rollback.** Revert this PR and redeploy image 51 with the preceding vault
   binary. Because the initialization and account model intentionally changed,
   rollback requires another clean devnet re-foundation and invalidates the new
