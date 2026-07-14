@@ -4,20 +4,13 @@
 //! Why this exists: `tee_forced_settle_batched` deliberately does NOT
 //! close the marker — one marker covers all N matches in the batch
 //! (it's keyed by the batch's Merkle root), so closing it after the
-//! first match would brick matches 1..N-1. Instead the matcher calls
-//! this ix once, after the last settle, to reclaim the ~49-byte rent.
+//! first match would brick matches 1..N-1. Instead a sweeper calls this ix once
+//! at or after marker expiry to reclaim the ~49-byte rent.
 //!
-//! Authorisation:
-//!   - The marker's original `payer` (the address recorded by
-//!     `verify_match_batch`) can close at ANY time. Typical flow:
-//!     the matcher pays for `verify_match_batch`, lands all N
-//!     `tee_forced_settle_batched` txs, then signs this ix to
-//!     reclaim rent.
-//!   - ANY signer can close ONCE the marker has passed its
-//!     `expiry_slot`. This is the garbage-collection path — if the
-//!     matcher crashes mid-batch and never reclaims, an expired
-//!     marker can be swept by anyone (rent still goes to the
-//!     original payer, so the sweeper just spends tx fees).
+//! Authorisation: ANY signer may close only once the marker reaches its
+//! `expiry_slot`. The original payer has no early-close privilege: allowing the
+//! TEE payer to close while some Tx Ds are still pending can brick the rest of
+//! the batch. Rent always returns to the recorded payer.
 //!
 //! Rent always flows back to `marker.payer` regardless of which
 //! authority triggered the close (the `close = payer` Anchor
@@ -30,8 +23,7 @@ use anchor_lang::prelude::*;
 #[derive(Accounts)]
 #[instruction(merkle_root: [u8; 32])]
 pub struct CloseBatchValidityMarker<'info> {
-    /// Caller. Either equals `marker.payer` (close-anytime path) or
-    /// any other signer (expiry-GC path — must be past `expiry_slot`).
+    /// Caller. Any signer may sweep once the marker has expired.
     pub authority: Signer<'info>,
 
     /// Refund target on close. MUST equal `marker.payer` (set by
@@ -59,20 +51,14 @@ pub fn close_batch_validity_marker_handler(
 ) -> Result<()> {
     let marker = &ctx.accounts.marker;
     let authority = ctx.accounts.authority.key();
-
-    // Two valid paths:
-    //   1) authority == marker.payer — original payer, can close
-    //      immediately (matcher's expected fast-path after the last
-    //      settle in the batch).
-    //   2) authority != marker.payer — anyone else, allowed only
-    //      after expiry as garbage collection.
-    if authority != marker.payer {
-        let clock = Clock::get()?;
-        require!(
-            clock.slot > marker.expiry_slot,
-            VaultError::BatchValidityMarkerNotExpired,
-        );
-    }
+    let clock = Clock::get()?;
+    // The marker is unusable by Tx D at E (`clock.slot < expiry_slot`), so it is
+    // safe and unambiguous to reclaim at E. No signer, including the payer, has
+    // an early-close path.
+    require!(
+        clock.slot >= marker.expiry_slot,
+        VaultError::BatchValidityMarkerNotExpired,
+    );
 
     emit!(BatchValidityMarkerClosed {
         payer: marker.payer,

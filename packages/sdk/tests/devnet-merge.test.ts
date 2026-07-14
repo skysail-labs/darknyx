@@ -213,9 +213,6 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         slots,
       }),
     );
-    const nf0 = await nullifierV2(spendingKey, notes[0].innerHash);
-    const nf1 = await nullifierV2(spendingKey, notes[1].innerHash);
-
     const mergeSig = await t.step("merge ix submit + confirm", () =>
       sendAndConfirmTransaction(
         conn,
@@ -225,7 +222,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
             programId: VAULT_ID,
             treeId: 0,
             payer: admin.publicKey,
-            nullifiers: [nf0, nf1],
+            inputCommitments: [notes[0].commitment, notes[1].commitment],
             outputCommitment: mergeRes.outputCommitmentBE,
             tokenMint: mint,
             merkleRoot: root,

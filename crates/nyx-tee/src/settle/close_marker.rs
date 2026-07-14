@@ -1,11 +1,11 @@
 //! `close_batch_validity_marker` instruction builder (Tx E).
 //!
 //! Reclaims the rent locked in the `BatchValidityMarker` PDA after
-//! ALL matches in a batch have settled. Separate from Tx D because
+//! its expiry has been reached. Separate from Tx D because
 //! the marker is 1:N (one per batch) — closing it during a per-match
 //! settle would brick every subsequent match in the same batch
-//! (CLAUDE.md §7.4). The matcher's fast path closes it once, after
-//! the last settle, with `authority == payer == the TEE keypair`.
+//! (CLAUDE.md §8.2). The background sweeper waits until expiry, then
+//! closes with `authority == payer == the primary TEE keypair`.
 //!
 //! On-chain reference:
 //! `programs/vault/src/instructions/close_batch_validity_marker.rs`.
@@ -13,9 +13,7 @@
 //! Args: `merkle_root: [u8; 32]` (seeds the marker PDA).
 //!
 //! Accounts (mirror `CloseBatchValidityMarker<'info>`):
-//!   `[0]` authority  — signer (readonly). Must equal `marker.payer`
-//!                      for the close-anytime path; any signer after
-//!                      `expiry_slot` for the GC path.
+//!   `[0]` authority  — signer (readonly). Any signer at/after expiry.
 //!   `[1]` payer      — writable, non-signer. Refund target; the
 //!                      marker's `has_one = payer` enforces it equals
 //!                      `marker.payer`.
@@ -38,9 +36,8 @@ pub static CLOSE_MARKER_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
     out
 });
 
-/// Build the close ix. For the matcher fast-path, `authority` and
-/// `payer` are both the TEE pubkey (it paid the marker rent in Tx
-/// B and reclaims it here).
+/// Build the expiry-only close ix. The in-TEE sweeper uses the primary TEE
+/// pubkey for both authority and payer because it funded Tx B.
 pub fn build_close_marker_ix(
     authority: &Address,
     payer: &Address,

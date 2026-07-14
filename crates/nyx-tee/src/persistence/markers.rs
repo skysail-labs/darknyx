@@ -1,8 +1,8 @@
 //! Best-effort persistence of the settle pipeline's PENDING marker roots — the
 //! batch Merkle roots whose `BatchValidityMarker` PDA has settled but not yet
-//! been rent-reclaimed (closed). The settle worker enqueues a root the moment
-//! its batch's Tx D's confirm — taking the close (Tx E) OFF the settle critical
-//! path — and [`super::super::settle::marker_sweep`] closes them asynchronously.
+//! been rent-reclaimed. The settle worker enqueues a root when its Tx Ds confirm;
+//! [`super::super::settle::marker_sweep`] reads the on-chain expiry and closes it
+//! asynchronously only once it is no longer usable.
 //!
 //! This log lets the sweep survive a CVM restart / redeploy: on boot the sweeper
 //! replays the un-closed roots and reclaims their rent. Pure bookkeeping — never

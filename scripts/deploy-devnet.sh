@@ -39,6 +39,19 @@ if [[ "$CONFIG_URL" != *"devnet"* ]]; then
 fi
 
 VAULT_ID=$(solana-keygen pubkey "$VAULT_KP")
+DECLARED_ID=$(sed -n 's/.*declare_id!("\([^"]*\)").*/\1/p' programs/vault/src/lib.rs | head -1)
+
+# `cargo build-sbf` generates a fresh target/deploy keypair if that file is
+# missing. Deploying it would create a new, unusable program whose address does
+# not match `declare_id!()` or the SDK. Fail before spending rent or changing
+# devnet state; restore the canonical program-id keypair and rebuild instead.
+if [[ -z "$DECLARED_ID" || "$VAULT_ID" != "$DECLARED_ID" ]]; then
+  echo "ERROR: vault program-id keypair does not match the compiled declare_id!."
+  echo "  target/deploy/vault-keypair.json: $VAULT_ID"
+  echo "  programs/vault/src/lib.rs:        ${DECLARED_ID:-<missing>}"
+  echo "Restore the canonical program-id keypair before deploying."
+  exit 1
+fi
 
 echo "Deploying to devnet (upgrade authority = local wallet)"
 echo "  vault  program id: $VAULT_ID"

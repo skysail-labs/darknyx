@@ -125,10 +125,9 @@ pub struct SettleWorkerCtx {
     /// throughput lever — vs sending one-at-a-time and paying ~1.13s
     /// confirmation per match). `NYX_TEE_SETTLE_SEND_CONCURRENCY`.
     pub settle_send_concurrency: usize,
-    /// Enqueues a settled batch's Merkle root for ASYNCHRONOUS marker close
-    /// (Tx E). Taking the close off the batch's critical path is what lets the
-    /// serial pipeline start the next batch without waiting on a confirmation
-    /// for a pure rent-reclaim tx. Drained by `marker_sweep::spawn_marker_sweeper`.
+    /// Enqueues a settled batch's Merkle root for ASYNCHRONOUS, expiry-gated
+    /// marker close (Tx E). The sweeper reads the on-chain expiry and never
+    /// submits early. Drained by `marker_sweep::spawn_marker_sweeper`.
     pub marker_sweep_tx: mpsc::UnboundedSender<[u8; 32]>,
 }
 
@@ -621,9 +620,11 @@ async fn run_batch_settle_inner(
         for (i, s) in path.siblings.iter().take(4).enumerate() {
             siblings[i] = *s;
         }
-        // Round-robin (key[j], merkle_tree[j]) per match → the concurrent Tx
-        // D's share NO writable account (distinct shard append + distinct
-        // fee-payer/authority), so the leader can co-include + parallelize them.
+        // Round-robin (key[j], merkle_tree[j]) per match. Tx Ds routed to
+        // different shards share no writable account (distinct append target +
+        // distinct fee-payer/authority), so the leader can co-include up to K
+        // independent shard writes. Matches that wrap to the same shard remain
+        // serialized by that shard's tree/key as intended.
         // The shard's key is the tx fee-payer AND `tee_authority` AND the
         // Ed25519 settle-signer (one key, one signature). With num_trees=1 this
         // collapses to the single-key path. The merkle_tree[j] account is
@@ -716,13 +717,14 @@ async fn run_batch_settle_inner(
     let settle_ms = t.elapsed().as_millis() as u64;
     t = Instant::now();
 
-    // ── 5. Enqueue the marker close (Tx E) — ASYNC, OFF the critical path ──
+    // ── 5. Enqueue expiry-gated marker sweep (Tx E) — ASYNC ──
     // The marker is 1:N rent-reclaim bookkeeping; nothing downstream depends on
     // it (the next batch has a different Merkle root → a different marker PDA).
     // Sending + confirming it INLINE used to block the serial pipeline's next
     // batch on a full confirmation for a tx that touches no user funds. Hand the
-    // root to the background sweeper (`marker_sweep::spawn_marker_sweeper`) and
-    // return immediately. A closed `marker_sweep_tx` (sweeper gone) is a
+    // root to the background sweeper (`marker_sweep::spawn_marker_sweeper`),
+    // which reads the marker expiry and waits until E before closing. A closed
+    // `marker_sweep_tx` (sweeper gone) is a
     // best-effort no-op — the marker stays open until a later boot replays it
     // from the persisted pending set.
     ctx.set_all_stages(batch_id, n, SettleJobStage::Closing)

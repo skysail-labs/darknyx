@@ -525,7 +525,10 @@ it's spendable like a deposit. The wallet's `consolidate` greedily merges the
 largest notes (fewest inputs → cheapest proof) and **chains** for >K, then the
 merged note feeds an over-collateralized order. `VALID_MERGE` pads unused slots
 (an `isActive[i]` flag, public nullifier 0) so K=4 merges 2–4 notes; both K fit
-pot16. See §7.5.
+pot16. For every active commitment the instruction also requires the
+corresponding `NoteLock` PDA to be absent before proof verification or state
+mutation, so a wallet cannot merge collateral reserved by a live order. See
+§7.5.
 
 **Tracking balance.** There is no account→balance server mapping (a privacy
 choice). A user's balance is the sum of their own UNSPENT notes — deposits
@@ -939,8 +942,11 @@ same Switcher/Poseidon2 ladder, but it *outputs* the root) and binds it
 conditionally: `isActive[i]·(root_i − merkleRoot) === 0`. An inactive slot
 sets `isActive[i]=0`, must carry public `nullifiers[i]===0` (a real nullifier
 is a Poseidon output, never 0), and contributes 0 to the sum. The on-chain
-`merge` ix creates a `NullifierEntry` PDA only for each **non-zero**
-nullifier (the replay guard), so a padded slot can't smuggle a spend.
+`merge` ix creates a `ConsumedNoteEntry` PDA only for each **non-zero** input
+commitment (the replay guard), so a padded slot can't smuggle a spend. Its
+remaining accounts are two ordered runs: the writable consumed-note PDAs,
+followed by the read-only `NoteLock` PDAs whose absence is required for those
+same active commitments.
 
 Conservation: K notes consumed + 1 minted, same mint, same total ⇒ **no
 `OutstandingMint` change** (unlike withdraw — the pool still owes the same
@@ -1305,10 +1311,10 @@ Post-sharding `vault_config` is **read-only** and the writable tree state is
 | 4 | `note_lock_b` | mut, close — input lock from step 7 |
 | 5 | `consumed_a` | init — the consume-once guard for note_a (shared with `withdraw`) |
 | 6 | `consumed_b` | init — the consume-once guard for note_b |
-| 7 | `note_lock_e` | unchecked, mut — relock destination for buyer's change |
-| 8 | `note_lock_f` | unchecked, mut — relock destination for seller's change |
+| 7 | `note_lock_e` | unchecked — writable only when buyer relock is requested |
+| 8 | `note_lock_f` | unchecked — writable only when seller relock is requested |
 | 9 | `instructions_sysvar` | sysvar — for finding the Ed25519 precompile |
-| 10 | `batch_validity_marker` | the 1:N marker from step 8 — checked, NOT closed here |
+| 10 | `batch_validity_marker` | **ro** — the 1:N marker from step 8, checked and never closed here |
 | 11 | `system_program` | for CPIs |
 
 > The two per-match `nullifier_{a,b}_entry` accounts (formerly slots 7–8) were
@@ -1338,9 +1344,11 @@ Handler walkthrough:
    has already done the signature-bytes verification — the vault just
    binds it to the right key + message.
 
-3. **Lock binding**: load `note_lock_a` and `note_lock_b`, assert their
-   stored `order_id`s match the payload's. Capture
-   `lock_a.token_mint` and `lock_b.token_mint` for later use.
+3. **Lock binding and lifetime**: load `note_lock_a` and `note_lock_b`, assert
+   their stored `order_id`s match the payload's, and require the current slot
+   to be strictly less than **both** individual `expiry_slot`s. Settlement is
+   invalid at the exact expiry boundary where `release_lock` becomes valid.
+   Capture `lock_a.token_mint` and `lock_b.token_mint` for later use.
 
 4. **Validity marker check**:
    - Recompute the per-slot Merkle leaf via the same single Poseidon10 the
@@ -1359,10 +1367,11 @@ Handler walkthrough:
    - Derive the expected marker PDA at `[b"batch_validity", computed_root]`,
      assert the supplied `batch_validity_marker.key()` matches, and assert
      it's owned-by-us + non-expired.
-   - **Do NOT close it.** The marker covers all N matches in the batch and
+   - The marker is read-only in every Tx D builder. **Do NOT close it.** It
+     covers all N matches in the batch and
      must remain present for matches `match_index + 1 .. N-1`. Reclaiming
-     its rent is the job of `close_batch_validity_marker` once the batch is
-     fully settled (Step 9.5).
+     its rent is the job of `close_batch_validity_marker` at or after expiry
+     (Step 9.5).
 
 5. **Conservation law** (existing):
    - `lock_a.amount == quote_amount + buyer_change_amt + buyer_fee_amt`
@@ -1411,10 +1420,11 @@ Handler walkthrough:
     - Same pattern for `seller_relock_order_id` → `note_lock_f` with
       `lock_b.token_mint`.
 
-11. **Marker lifecycle** — do NOT touch the `BatchValidityMarker` here.
+11. **Marker lifecycle** — do not write the `BatchValidityMarker` here.
     It's 1:N (one PDA keyed by the batch's Merkle root, covering up to 16
-    matches). Closing it would brick every subsequent match in the batch.
-    Rent reclamation is the job of `close_batch_validity_marker` (Step 9.5).
+    matches). It stays read-only across concurrent Tx Ds, eliminating the
+    batch-wide writable-account conflict. Rent reclamation is the job of
+    `close_batch_validity_marker` at or after expiry (Step 9.5).
 
 12. **Emit** `TradeSettled` event with all the leaf indices and new root.
 
@@ -1457,36 +1467,33 @@ See §9 for why the v0/ALT stacking was specifically required.
 
 ### Step 9.5 — `close_batch_validity_marker` (L1)
 
-Lands once per batch after the last `tee_forced_settle_batched`
-succeeds. Reclaims the marker's ~49-byte rent.
+Lands once per batch at or after the marker's expiry. Reclaims the marker's
+~49-byte rent without creating a payer-controlled early-close race against
+pending Tx Ds.
 
 ```rust
 vault::close_batch_validity_marker(merkle_root: [u8; 32])
 ```
 
 Accounts (3):
-- `authority` (signer — either equals `marker.payer` for the
-  fast-path, or any signer for the expiry-GC path)
+- `authority` (any signer; no signer has a pre-expiry privilege)
 - `payer` (mut — refund recipient, must equal `marker.payer`;
   Anchor `has_one = payer` enforces this)
 - `marker` (mut, `close = payer`, seeded by `[b"batch_validity",
   merkle_root]`, validated via `bump = marker.bump`)
 
 Handler:
-1. If `authority.key() == marker.payer`, succeed immediately (fast
-   path — the matcher closes its own marker right after the last
-   settle).
-2. Else, require `clock.slot > marker.expiry_slot` — anyone can
-   sweep an expired marker, but the rent still flows back to
-   `marker.payer` via the `has_one` constraint. This is the
-   liveness-GC path: if the matcher crashes mid-batch and never
-   closes, the marker isn't stranded forever.
-3. Anchor's `close = payer` constraint moves the marker's lamports
+1. Require `clock.slot >= marker.expiry_slot` for every authority, including
+   the recorded payer. Tx D already requires `clock.slot < expiry_slot`, so
+   the exact boundary is disjoint and safe.
+2. Anchor's `close = payer` constraint moves the marker's lamports
    to `payer` and zeros the data.
-4. Emit `BatchValidityMarkerClosed { payer, closed_by, expiry_slot }`.
+3. Emit `BatchValidityMarkerClosed { payer, closed_by, expiry_slot }`.
 
-The new `VaultError::BatchValidityMarkerNotExpired` covers the
-"third-party signer tries to close before expiry" failure mode.
+`VaultError::BatchValidityMarkerNotExpired` covers every pre-expiry attempt,
+whether submitted by the payer or a third party. The TEE sweeper reads each
+marker and queues only expired accounts; missing accounts are removed from its
+durable cleanup queue and transient RPC/layout failures are retried.
 
 **Why this is a separate ix (not folded into settle).** The marker
 is keyed by `merkle_root` — identical across all N matches in the
@@ -1606,8 +1613,8 @@ TEE_FORCED_SETTLE_BATCHED (L1, v0 + stacked ALTs)
     ▼ (once per batch)
 CLOSE_BATCH_VALIDITY_MARKER (L1)
     Reclaims ~49 B rent to marker.payer.
-    Pre-expiry: payer-only fast path.
-    Post-expiry: any signer can sweep (rent still flows to payer).
+    Pre-expiry: rejected for every signer.
+    At/post-expiry: any signer can sweep (rent still flows to payer).
 ─────────────────────────────────────────────────────────────
         ▼
 WITHDRAW (L1, VALID_SPEND proof)

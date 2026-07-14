@@ -52,7 +52,7 @@ Three layers, three trust boundaries:
         + note_e/f (change, on partial fill) + base/quote fee notes to merkle_tree[tree_id].
         Each match round-robins (shard key[j], merkle_tree[j]) so the leader co-includes
         the batch's Tx D's in ONE block. v0 + stacked ALTs.
-  Tx E  vault::close_batch_validity_marker     ── ONCE after the batch; reclaims rent
+  Tx E  vault::close_batch_validity_marker     ── ONCE at/after marker expiry; reclaims rent
          │
          │  withdraw (L1, VALID_SPEND proof)
          ▼
@@ -244,11 +244,14 @@ PDA sets. Verifies the Groth16 circuits on-chain (`VALID_WALLET_CREATE`,
 embedded `groth16-solana` verifier. The settle path
 (`lock_note → verify_match_batch → tee_forced_settle_batched → close`) is
 TEE-authority-gated (any of the K registered `tee_pubkeys`) and processes up to
-N=16 matches per batch under one `BatchValidityMarker`. Each settle appends its
-output notes to `merkle_tree[tree_id]`; rotating the output shard per match is
-what lets the leader co-include a batch's settles in one block. Also home to
+N=16 matches per batch under one read-only `BatchValidityMarker`. Each settle
+appends its output notes to `merkle_tree[tree_id]`; rotating the output shard per
+match and keeping dummy relock destinations read-only is what lets the leader
+co-include a batch's settles in one block. Marker rent is swept only at or after
+expiry. Also home to
 the in-pool **`merge`** ix (`VALID_MERGE(K=2/4)`): consolidate K fragmented
-notes into one so an order can exceed any single note.
+notes into one so an order can exceed any single note; every active merge input
+must have no live `NoteLock` PDA.
 
 ### `crates/nyx-tee` — the in-CVM engine
 
@@ -345,7 +348,7 @@ verification + the change-note store, and the hand-coded `vault-client.ts`
 | `ConsumedNoteEntry` | `[b"consumed_note", note_commitment]` | A TEE-settle-consumed input note |
 | `NoteLock` | `[b"note_lock", note_commitment]` | The pin between match and settle (TTL-bounded) |
 | `OutstandingMint` | `[b"outstanding_mint", mint]` | Per-mint solvency counter (`deposit++`, `withdraw--`; `merge` is value-preserving → unchanged) |
-| `BatchValidityMarker` | `[b"batch_validity", batch_merkle_root]` | **1:N** — one per batch, written by `verify_match_batch`, closed by `close_batch_validity_marker` |
+| `BatchValidityMarker` | `[b"batch_validity", batch_merkle_root]` | **1:N** — one per batch, written by `verify_match_batch`, read-only in Tx D, closable only at/after expiry |
 
 Plus the per-mint `vault_token_account` PDAs (the actual SPL custody) and a
 rolling per-batch Address Lookup Table (managed by the settle worker) holding

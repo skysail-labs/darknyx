@@ -11,6 +11,7 @@
 
 mod settle_harness;
 
+use anchor_lang::prelude::Clock;
 use settle_harness::*;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
@@ -46,6 +47,46 @@ fn seed_single_match(h: &mut Harness, tag: u8) -> (MatchResultPayload, [[u8; 32]
     let (root, proof) = build_merkle_root_and_path_n16(&leaves, 0);
     seed_batch_validity_marker(h, &root, u64::MAX / 2);
     (p, proof, root)
+}
+
+// CS-09 boundary: release_lock is valid at E, therefore settle must already be
+// invalid at E. Exercise both input sides and assert rejection occurs before
+// any consume guard, tree append, lock close, or marker mutation.
+#[test]
+fn settle_rejects_at_or_after_either_input_lock_expiry() {
+    for (tag, expire_a, past_boundary) in [(0x31, true, false), (0x32, false, true)] {
+        let mut h = Harness::setup();
+        if past_boundary {
+            h.svm.warp_to_slot(10);
+        }
+        let (p, proof, root) = seed_single_match(&mut h, tag);
+        let now = h.svm.get_sysvar::<Clock>().slot;
+        let expiry = if past_boundary {
+            now.saturating_sub(1)
+        } else {
+            now
+        };
+        if expire_a {
+            seed_note_lock(&mut h, &p.note_a_commitment, &p.order_id_a, expiry, 0);
+        } else {
+            seed_note_lock(&mut h, &p.note_b_commitment, &p.order_id_b, expiry, 0);
+        }
+
+        let before = tree_leaf_count(&h, 0);
+        let tx = build_settle_batched_tx(&h, 0, &p, 0, &proof, &root);
+        let result = h.svm.send_transaction(tx);
+        assert!(
+            result.is_err(),
+            "settle must reject {} lock at slot {now} with expiry {expiry}",
+            if expire_a { "A" } else { "B" }
+        );
+        assert_eq!(tree_leaf_count(&h, 0), before);
+        assert!(!consumed_note_exists(&h, &p.note_a_commitment));
+        assert!(!consumed_note_exists(&h, &p.note_b_commitment));
+        assert!(note_lock_exists(&h, &p.note_a_commitment));
+        assert!(note_lock_exists(&h, &p.note_b_commitment));
+        assert!(batch_validity_marker_exists(&h, &root));
+    }
 }
 
 // ===========================================================================
@@ -668,18 +709,19 @@ fn test_relocked_note_consumable_across_second_batch() {
 }
 
 // ---------------------------------------------------------------------------
-// `close_batch_validity_marker` — fast-path: marker.payer closes it
-// immediately, no expiry wait. Rent is refunded to the payer.
+// `close_batch_validity_marker` — the payer has no early-close privilege.
+// At E the marker is no longer usable for settle and may be reclaimed.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_close_marker_by_payer_refunds_rent() {
+fn test_close_marker_by_payer_requires_expiry_and_refunds_rent() {
     let mut h = Harness::setup();
 
     // Synthesise a marker against an arbitrary root. We don't need
     // any settles for the close path — only marker + payer state.
     let merkle_root = [0xCDu8; 32];
-    seed_batch_validity_marker(&mut h, &merkle_root, u64::MAX / 2);
+    let expiry = h.svm.get_sysvar::<Clock>().slot + 10;
+    seed_batch_validity_marker(&mut h, &merkle_root, expiry);
     assert!(batch_validity_marker_exists(&h, &merkle_root));
 
     // Snapshot the payer's lamports before the close so we can
@@ -688,6 +730,21 @@ fn test_close_marker_by_payer_refunds_rent() {
     let before = h.svm.get_account(&payer).map(|a| a.lamports).unwrap_or(0);
 
     let close_ix = build_close_batch_validity_marker_ix(&h, &merkle_root, &payer, &payer);
+    let early_tx = solana_transaction::Transaction::new(
+        &[&h.tee],
+        solana_message::Message::new(std::slice::from_ref(&close_ix), Some(&payer)),
+        h.svm.latest_blockhash(),
+    );
+    assert!(
+        h.svm.send_transaction(early_tx).is_err(),
+        "marker payer must not close before expiry"
+    );
+    assert!(batch_validity_marker_exists(&h, &merkle_root));
+
+    h.svm.warp_to_slot(expiry);
+    // The early and boundary messages are otherwise byte-identical. Rotate the
+    // litesvm blockhash so the boundary attempt is not rejected as a replay.
+    h.svm.expire_blockhash();
     let tx = solana_transaction::Transaction::new(
         &[&h.tee],
         solana_message::Message::new(&[close_ix], Some(&payer)),
@@ -718,19 +775,16 @@ fn test_close_marker_by_payer_refunds_rent() {
 }
 
 // ---------------------------------------------------------------------------
-// `close_batch_validity_marker` — pre-expiry close by a NON-payer signer
-// must fail with `BatchValidityMarkerNotExpired`. The expiry-GC path is
-// only available once `clock.slot > marker.expiry_slot`.
+// `close_batch_validity_marker` — a non-payer follows the same boundary:
+// reject before E, permit at E, and refund the marker payer.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_close_marker_by_third_party_pre_expiry_rejects() {
-    use solana_keypair::Keypair;
-
+fn test_close_marker_by_third_party_requires_expiry_and_refunds_payer() {
     let mut h = Harness::setup();
     let merkle_root = [0xEFu8; 32];
-    // Far-future expiry — the third-party path should be blocked.
-    seed_batch_validity_marker(&mut h, &merkle_root, u64::MAX / 2);
+    let expiry = h.svm.get_sysvar::<Clock>().slot + 10;
+    seed_batch_validity_marker(&mut h, &merkle_root, expiry);
     let sweeper = Keypair::new();
     h.svm
         .airdrop(&sweeper.pubkey(), 100_000_000)
@@ -739,15 +793,29 @@ fn test_close_marker_by_third_party_pre_expiry_rejects() {
     let payer = h.tee.pubkey();
     let close_ix =
         build_close_batch_validity_marker_ix(&h, &merkle_root, &sweeper.pubkey(), &payer);
+    let early_tx = solana_transaction::Transaction::new(
+        &[&sweeper],
+        solana_message::Message::new(std::slice::from_ref(&close_ix), Some(&sweeper.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    let res = h.svm.send_transaction(early_tx);
+    assert!(res.is_err(), "third-party close pre-expiry must fail");
+    assert!(batch_validity_marker_exists(&h, &merkle_root));
+
+    let before = h.svm.get_account(&payer).map(|a| a.lamports).unwrap_or(0);
+    h.svm.warp_to_slot(expiry);
+    h.svm.expire_blockhash();
     let tx = solana_transaction::Transaction::new(
         &[&sweeper],
         solana_message::Message::new(&[close_ix], Some(&sweeper.pubkey())),
         h.svm.latest_blockhash(),
     );
-    let res = h.svm.send_transaction(tx);
-    assert!(res.is_err(), "third-party close pre-expiry must fail");
-    // Marker must still be intact after the rejected attempt.
-    assert!(batch_validity_marker_exists(&h, &merkle_root));
+    h.svm
+        .send_transaction(tx)
+        .expect("third-party close at expiry");
+    assert!(!batch_validity_marker_exists(&h, &merkle_root));
+    let after = h.svm.get_account(&payer).map(|a| a.lamports).unwrap_or(0);
+    assert!(after > before, "marker rent must return to recorded payer");
 }
 
 // ---------------------------------------------------------------------------

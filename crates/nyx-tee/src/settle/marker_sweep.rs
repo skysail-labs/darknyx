@@ -10,8 +10,9 @@
 //! always has a different Merkle root → a different marker PDA (the tree is
 //! monotonic), and `verify_match_batch` inits a fresh marker per root.
 //!
-//! Now the worker enqueues the root (≈0 ms) and this background task batches the
-//! closes: every [`MARKER_SWEEP_INTERVAL`] it packs up to
+//! Now the worker enqueues the root (≈0 ms) and this background task waits for
+//! the on-chain marker expiry, then batches the closes: every
+//! [`MARKER_SWEEP_INTERVAL`] it packs up to
 //! [`MARKER_SWEEP_MAX_PER_TX`] close ixs into one tx, confirms, and persists the
 //! pending set ([`PendingMarkers`]) so a CVM restart / redeploy replays any
 //! un-closed roots and reclaims their rent.
@@ -21,7 +22,7 @@
 //! single stale root can never poison a packed (atomic) close tx.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use solana_keypair::Keypair;
@@ -31,7 +32,7 @@ use tokio::task::JoinHandle;
 
 use super::close_marker::build_close_marker_ix;
 use super::submit::{confirm_signatures, submit_ixs};
-use super::vault::batch_validity_marker_pda;
+use super::vault::{batch_validity_marker_pda, vault_program_id};
 use crate::persistence::PendingMarkers;
 use crate::solana_rpc::SolanaRpcClient;
 
@@ -42,6 +43,37 @@ pub const MARKER_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 /// discriminator + 32-byte root), so 8 stays well under the 1232-byte cap while
 /// cutting the close-tx count ~8× vs the old one-per-batch path.
 pub const MARKER_SWEEP_MAX_PER_TX: usize = 8;
+
+// Anchor account layout: discriminator(8) || payer(32) || expiry_slot(8 LE)
+// || bump(1). The sweeper needs only expiry; the on-chain close revalidates the
+// full account, seed, bump, and payer relationship.
+const MARKER_EXPIRY_OFFSET: usize = 8 + 32;
+const MARKER_EXPIRY_END: usize = MARKER_EXPIRY_OFFSET + 8;
+static MARKER_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(b"account:BatchValidityMarker");
+    let mut discriminator = [0u8; 8];
+    discriminator.copy_from_slice(&hash[..8]);
+    discriminator
+});
+
+fn marker_expiry_slot(account: &crate::solana_rpc::RpcAccountInfo) -> Option<u64> {
+    if account.owner != vault_program_id()
+        || account.data.len() < MARKER_EXPIRY_END
+        || account.data[..8] != *MARKER_DISCRIMINATOR
+    {
+        return None;
+    }
+    Some(u64::from_le_bytes(
+        account.data[MARKER_EXPIRY_OFFSET..MARKER_EXPIRY_END]
+            .try_into()
+            .ok()?,
+    ))
+}
+
+fn marker_has_expired(current_slot: u64, expiry_slot: u64) -> bool {
+    current_slot >= expiry_slot
+}
 
 /// Spawn the background marker sweeper.
 ///
@@ -94,8 +126,8 @@ async fn run(
     }
 }
 
-/// One sweep pass: drop already-closed roots, then close the rest in packed
-/// chunks. Failures stay pending and retry on the next tick.
+/// One sweep pass: drop already-closed roots, retain live pre-expiry roots, and
+/// close only expired markers in packed chunks. Failures stay pending.
 async fn sweep(
     rpc: &SolanaRpcClient,
     keypair: &Arc<Keypair>,
@@ -107,27 +139,46 @@ async fn sweep(
         return;
     }
 
-    // Skip markers that no longer exist (already closed) — reclaims them from
-    // the set for free AND prevents a stale root from failing a packed tx.
-    let mut live: Vec<[u8; 32]> = Vec::with_capacity(roots.len());
+    // N-12: the on-chain instruction has no payer early-close path. Read the
+    // current confirmed slot once and submit only markers that have reached E;
+    // this avoids a failing transaction every sweep tick during the marker TTL.
+    let current_slot = match rpc.get_latest_blockhash().await {
+        Ok(blockhash) => blockhash.context_slot,
+        Err(e) => {
+            tracing::warn!(error = %e, "marker sweep slot read failed; will retry");
+            return;
+        }
+    };
+
+    // Skip markers that no longer exist (already closed) and retain valid
+    // pre-expiry markers without attempting a close.
+    let mut expired: Vec<[u8; 32]> = Vec::with_capacity(roots.len());
     for root in roots {
         let (marker, _) = batch_validity_marker_pda(&root);
         match rpc.get_account_info(&marker).await {
             Ok(None) => pending.remove(&root),
-            Ok(Some(_)) => live.push(root),
+            Ok(Some(account)) => match marker_expiry_slot(&account) {
+                Some(expiry_slot) if marker_has_expired(current_slot, expiry_slot) => {
+                    expired.push(root)
+                }
+                Some(_) => {}
+                None => tracing::warn!(
+                    marker = %marker,
+                    "marker account layout/owner invalid; retaining for retry"
+                ),
+            },
             Err(e) => {
-                // Treat an existence-check error as "still live" — retry later.
+                // Retain on existence-check errors and retry later.
                 tracing::warn!(error = %e, "marker existence check failed; will retry");
-                live.push(root);
             }
         }
     }
-    if live.is_empty() {
+    if expired.is_empty() {
         return;
     }
 
     let primary = keypair.pubkey();
-    for chunk in live.chunks(MARKER_SWEEP_MAX_PER_TX) {
+    for chunk in expired.chunks(MARKER_SWEEP_MAX_PER_TX) {
         let ixs: Vec<_> = chunk
             .iter()
             .map(|r| build_close_marker_ix(&primary, &primary, r))
@@ -161,6 +212,33 @@ mod tests {
         let (m1, _) = batch_validity_marker_pda(&[1u8; 32]);
         let (m2, _) = batch_validity_marker_pda(&[2u8; 32]);
         assert_ne!(m1, m2);
+    }
+
+    #[test]
+    fn marker_expiry_parser_pins_layout_owner_and_boundary() {
+        let expiry = 42_424u64;
+        let mut data = vec![0u8; 49];
+        data[..8].copy_from_slice(&*MARKER_DISCRIMINATOR);
+        data[MARKER_EXPIRY_OFFSET..MARKER_EXPIRY_END].copy_from_slice(&expiry.to_le_bytes());
+        let mut account = crate::solana_rpc::RpcAccountInfo {
+            lamports: 1,
+            owner: vault_program_id(),
+            data,
+            executable: false,
+            rent_epoch: 0,
+        };
+        assert_eq!(marker_expiry_slot(&account), Some(expiry));
+        account.owner = batch_validity_marker_pda(&[9u8; 32]).0;
+        assert_eq!(marker_expiry_slot(&account), None);
+        account.owner = vault_program_id();
+        account.data[0] ^= 0xFF;
+        assert_eq!(marker_expiry_slot(&account), None);
+        account.data[0] ^= 0xFF;
+        account.data.truncate(MARKER_EXPIRY_END - 1);
+        assert_eq!(marker_expiry_slot(&account), None);
+        assert!(!marker_has_expired(expiry - 1, expiry));
+        assert!(marker_has_expired(expiry, expiry));
+        assert!(marker_has_expired(expiry + 1, expiry));
     }
 
     // The packing math the sweep loop relies on: N roots → ceil(N / MAX) txs.

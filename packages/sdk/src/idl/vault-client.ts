@@ -737,7 +737,8 @@ export interface BuildMergeParams {
  *     [1] vault_config   (ro — provides zero_subtree_roots)
  *     [2] merkle_tree    (mut — inputs' shard + the merged-output append)
  *     [3] system_program (ro)
- *     [4..] one ConsumedNoteEntry PDA per NON-ZERO input commitment (mut), in order
+ *     [4..4+A)   one ConsumedNoteEntry PDA per active input (mut), in order
+ *     [4+A..4+2A) the corresponding NoteLock PDAs (ro, must be absent)
  */
 export function buildMergeInstruction(
   p: BuildMergeParams,
@@ -745,9 +746,13 @@ export function buildMergeInstruction(
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const isZero = (b: Uint8Array) => b.every((x) => x === 0);
-  const consumedPdas = p.inputCommitments
-    .filter((c) => !isZero(c))
-    .map((c) => consumedNotePda(p.programId, c)[0]);
+  const activeCommitments = p.inputCommitments.filter((c) => !isZero(c));
+  const consumedPdas = activeCommitments.map(
+    (c) => consumedNotePda(p.programId, c)[0],
+  );
+  const noteLockPdas = activeCommitments.map(
+    (c) => noteLockPda(p.programId, c)[0],
+  );
 
   const lenLE = new Uint8Array(4);
   new DataView(lenLE.buffer).setUint32(0, p.inputCommitments.length, true);
@@ -778,6 +783,11 @@ export function buildMergeInstruction(
         pubkey,
         isSigner: false,
         isWritable: true,
+      })),
+      ...noteLockPdas.map((pubkey) => ({
+        pubkey,
+        isSigner: false,
+        isWritable: false,
       })),
     ],
     data: Buffer.from(data),

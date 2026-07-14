@@ -229,17 +229,16 @@ pub struct TeeForcedSettleBatched<'info> {
     // also writes). Dropping them also reclaims 2 `init` CPIs + 2 accounts off
     // the ~100-B-from-cap Tx D (CLAUDE.md §6). `payload.nullifier_a/b` are
     // still carried + signed (canonical hash unchanged) but no longer written.
-    /// CHECK: Seeds validated in handler when re-lock is requested.
-    #[account(mut)]
+    /// CHECK: Seeds validated in handler when re-lock is requested. The account
+    /// is writable only when the instruction builder sees a non-zero buyer
+    /// relock order id; exact-fill/dummy destinations stay read-only.
     pub note_lock_e: UncheckedAccount<'info>,
 
     /// CHECK: Seeds validated in handler when re-lock is requested.
     /// `dup`: on an exact-fill settle, note_lock_e/f both derive from the
-    /// `[0;32]` sentinel → the same PDA, so the encoder passes one pubkey for
-    /// both slots (CLAUDE.md §6). Anchor 1.0 rejects duplicate mutable accounts
-    /// by default; `dup` restores the 0.32 behavior. Harmless on partial fills
-    /// (distinct PDAs).
-    #[account(mut, dup)]
+    /// `[0;32]` sentinel. Both are read-only in that case; the attribute keeps
+    /// the duplicate-account intent explicit for Anchor 1.0.
+    #[account(dup)]
     pub note_lock_f: UncheckedAccount<'info>,
 
     /// Instructions sysvar — for Ed25519 precompile inspection.
@@ -262,7 +261,6 @@ pub struct TeeForcedSettleBatched<'info> {
     /// CHECK: Validated via the binding check in the handler (PDA
     /// address recomputed from `[SEED, merkle_root]`; existence +
     /// expiry asserted before any state mutation).
-    #[account(mut)]
     pub batch_validity_marker: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
@@ -318,11 +316,25 @@ pub fn tee_forced_settle_batched_handler(
     // CU-2: read every field we need off lock_a/lock_b in ONE load each (the
     // mints for the leaf binding + relock stamping, AND the order_ids for the
     // lock-binding check below), instead of re-loading the locks twice.
-    let (lock_a_mint, lock_b_mint, lock_a_order_id, lock_b_order_id) = {
+    let (lock_a_mint, lock_b_mint, lock_a_order_id, lock_b_order_id, lock_a_expiry, lock_b_expiry) = {
         let la = ctx.accounts.note_lock_a.load()?;
         let lb = ctx.accounts.note_lock_b.load()?;
-        (la.token_mint, lb.token_mint, la.order_id, lb.order_id)
+        (
+            la.token_mint,
+            lb.token_mint,
+            la.order_id,
+            lb.order_id,
+            la.expiry_slot,
+            lb.expiry_slot,
+        )
     };
+    // CS-09: release_lock treats a lock as expired at E, so settlement must be
+    // invalid at E too. Check both inputs before any consumed-note allocation,
+    // Merkle append, or relock CPI.
+    require!(
+        clock.slot < lock_a_expiry && clock.slot < lock_b_expiry,
+        VaultError::NoteLockExpired
+    );
     // C-08: `payload.batch_slot` feeds the leaf hash, and VALID_MATCH_BATCH now
     // binds `batch_slot === slot index`. The leaf is proven included at position
     // `match_index`, so the payload's batch_slot MUST equal match_index — pin it

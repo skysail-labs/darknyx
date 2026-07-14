@@ -54,8 +54,10 @@ pub struct Merge<'info> {
     pub merkle_tree: AccountLoader<'info, MerkleTree>,
 
     pub system_program: Program<'info, System>,
-    // The ConsumedNoteEntry PDAs for the NON-ZERO input commitments are passed as
-    // `remaining_accounts` (writable, uninitialised), in input-commitment order.
+    // `remaining_accounts` contains two same-length runs, each in active
+    // input-commitment order: first the writable, uninitialised
+    // ConsumedNoteEntry PDAs; then the read-only NoteLock PDAs that must be
+    // absent. Dummy zero commitments contribute no accounts.
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -73,6 +75,31 @@ pub fn merge_handler<'info>(
         (k == 2 || k == 4) && input_commitments.len() == k as usize,
         VaultError::InvalidMergeK
     );
+
+    // N-04: merge and settlement share the commitment-keyed consume guard, but
+    // merge must also respect the order pin. Otherwise an owner can merge a
+    // live order's input, making its later settle fail and griefing the
+    // counterparty until lock expiry. Require exactly one absent NoteLock PDA
+    // for every active input before proof verification or state mutation.
+    let active_commitments: Vec<&[u8; 32]> = input_commitments
+        .iter()
+        .filter(|commitment| **commitment != [0u8; 32])
+        .collect();
+    let active_len = active_commitments.len();
+    require!(
+        ctx.remaining_accounts.len() == active_len.saturating_mul(2),
+        VaultError::MergeAccountMismatch
+    );
+    let (consumed_accounts, note_lock_accounts) = ctx.remaining_accounts.split_at(active_len);
+    for (commitment, note_lock) in active_commitments.iter().zip(note_lock_accounts) {
+        let (expected, _) =
+            Pubkey::find_program_address(&[NoteLock::SEED, commitment.as_ref()], &crate::ID);
+        require_keys_eq!(note_lock.key(), expected, VaultError::MergeAccountMismatch);
+        require!(
+            note_lock.owner != ctx.program_id,
+            VaultError::NoteAlreadyLocked
+        );
+    }
 
     // Merkle root must be recent in THIS shard (membership proofs built against it).
     require!(
@@ -132,16 +159,8 @@ pub fn merge_handler<'info>(
     // The proof binds inactive slots to a zero input-commitment, so a padded slot
     // creates no PDA. `remaining_accounts` holds exactly one PDA per non-zero
     // input commitment, in order.
-    let zero = [0u8; 32];
     let spent_slot = Clock::get()?.slot;
-    let mut accts = ctx.remaining_accounts.iter();
-    for commitment in input_commitments.iter() {
-        if *commitment == zero {
-            continue;
-        }
-        let ai = accts
-            .next()
-            .ok_or(error!(VaultError::MergeAccountMismatch))?;
+    for (commitment, ai) in active_commitments.iter().zip(consumed_accounts) {
         create_consumed_note_pda(
             ai,
             &ctx.accounts.payer,
@@ -150,8 +169,6 @@ pub fn merge_handler<'info>(
             spent_slot,
         )?;
     }
-    // No extra accounts should remain.
-    require!(accts.next().is_none(), VaultError::MergeAccountMismatch);
 
     // ----- Mint the output note: append its commitment as a new leaf -----
     // Capture the leaf_index the same way `deposit` does (the slot the leaf
