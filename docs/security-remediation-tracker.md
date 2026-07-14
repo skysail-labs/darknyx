@@ -309,13 +309,17 @@ Every remediation PR must record:
   transport/account parsing passes 16/16; full SDK Vitest passes 226 with 22
   environment-gated skips, indexer Vitest passes 23, and both TypeScript
   no-emit checks and updated devnet helper syntax checks pass.
-- **Devnet/CVM evidence.** Pending a rotated devnet RPC credential. The prior
-  credential was exposed in local verbose command output and will not be
-  reused. Live closure requires a clean VaultConfig re-foundation, creation and
-  byte-for-byte readback of MarketConfig, exact K-key rotation, image-52 cold
-  boot showing governed adoption, a targeted settlement, and a confirmed CVM
-  stop. The split Squads 3-of-5/4-of-7 rehearsal remains a release-assurance
-  gate; supporting code and runbook do not close N-19 by themselves.
+- **Devnet/CVM evidence.** Image 52 built and pushed successfully from commit
+  `cdb80d4` in private workflow run `29366224503`; an anonymous GHCR manifest
+  request returned HTTP 200. Its artifact-upload annotation is the known
+  organization quota exhaustion and did not fail the image job. Live evidence
+  remains pending a rotated devnet RPC credential: the prior credential was
+  exposed in local verbose command output and will not be reused. Closure
+  requires a clean VaultConfig re-foundation, creation and byte-for-byte
+  readback of MarketConfig, exact K-key rotation, image-52 cold boot showing
+  governed adoption, a targeted settlement, and a confirmed CVM stop. The
+  split Squads 3-of-5/4-of-7 rehearsal remains a release-assurance gate;
+  supporting code and runbook do not close N-19 by themselves.
 - **Rollback.** Revert this PR and redeploy image 51 with the preceding vault
   binary. Because the initialization and account model intentionally changed,
   rollback requires another clean devnet re-foundation and invalidates the new
