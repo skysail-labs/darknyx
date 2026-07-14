@@ -274,8 +274,19 @@ blinding factor. **Reused across every note the user creates.**
 
 This is the field-element value the chain knows you by. It's part of every
 note's preimage (so the chain can't link your notes to your Solana pubkey,
-only to this owner_commitment). It's revealed never — it's a private witness
-to every proof.
+only to this owner_commitment). In the spend / order / merge proofs it's a
+**private witness — never revealed there**.
+
+> **Exception — the deposit boundary (audit C-06).** `deposit` takes
+> `owner_commitment` (and the note's `inner_hash`) as **cleartext instruction
+> args**, so a deposit tx publicly ties that commitment to the depositing Solana
+> pubkey (the signer). Because `r_owner` is reused across all your notes, that
+> one linkage lets an observer associate the owner_commitment — and hence the
+> owner field of every note you build from it — with your on-chain identity.
+> Amounts stay hidden (amount-privacy) and `inner_hash` is per-note, but owner
+> unlinkability is not preserved at the deposit boundary. A deposit-with-proof
+> flow (hiding these args behind a ZK proof) is the long-term fix; short-term
+> this is a documented design limitation.
 
 Why a single `r_owner` (rather than per-note `r_owner`)? Cryptographically,
 the per-note `inner_hash` already provides note-level unlinkability. A
@@ -632,7 +643,7 @@ fair execution price by the proof (see the §2 non-goals row).
 | `VALID_WALLET_CREATE` | ~250 | 1 | Bind a `user_commitment` to (root, spending, viewing) keys |
 | `VALID_SPEND` | ~7,000 | 5 | Prove note ownership + Merkle inclusion at withdraw time |
 | `VALID_INPUT` | ~5,500 | 5 | Prove note ownership + Merkle inclusion at **lock** time, without revealing a nullifier |
-| `VALID_MATCH_BATCH` | 162,947 (N=16) | 1 | Output-note construction + price band + conservation for every match in a batch, hashed into one batch Merkle root (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
+| `VALID_MATCH_BATCH` | 162,947 (N=16) | 3 | Output-note construction + price band + conservation for every match in a batch, hashed into one batch Merkle root; the 3 public inputs are `[merkle_root, fee_rate_bps, protocol_owner_commitment]` (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
 | `VALID_MERGE` (K=2) | ~26,000 | 6 | In-pool note consolidation: K inputs (same owner+mint, Merkle-proven) → one summed output note (§5 / §7.5) |
 | `VALID_MERGE` (K=4) | ~50,000 | 8 | Same, up to 4 inputs (dummy-padded for 2–3); chained for >4 |
 

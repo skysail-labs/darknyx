@@ -696,8 +696,12 @@ it after; never commit a secret).**
 > `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` warns (unclaimable).
 
 > **On-chain governance config (single place = `VaultConfig`).** `VaultConfig`
-> is the one on-chain home for TEE-adopted config: `fee_rate_bps` (an ENFORCED
-> fee FLOOR in `tee_forced_settle_batched` — NOT vestigial) + `protocol_owner_commitment`
+> is the one on-chain home for TEE-adopted config: `fee_rate_bps` (a fee floor
+> enforced IN-CIRCUIT by VALID_MATCH_BATCH — it's a public input bound on-chain
+> via `verify_match_batch`; `tee_forced_settle_batched` no longer re-derives it
+> from plaintext amounts, which is what let those amounts leave the payload
+> (amount-privacy P1b). NOT vestigial; the C-04 audit fix tightens the circuit
+> constraint from a floor to an EXACT fee) + `protocol_owner_commitment`
 > + the matcher params `tick_size` / `min_order_size` / `circuit_breaker_bps`.
 > All are set by the admin ix `set_protocol_config` (SDK
 > `buildSetProtocolConfigInstruction` — keep the arg order in lockstep, §7/§8.3).
