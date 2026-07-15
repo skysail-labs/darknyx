@@ -57,7 +57,6 @@ import {
   deriveViewingEncKeypair,
 } from "../src/keys/key-generators.js";
 import { nullifierV2 } from "../src/utxo/note.js";
-import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
 import { vaultConfigPda } from "../src/idl/vault-client.js";
 import {
   orderCanonicalDigest,
@@ -70,6 +69,7 @@ import {
   makePersona,
   gwFetch,
   fetchOracleAnchor,
+  fetchBootSessionId,
   authToken,
   hex,
   withFee,
@@ -96,6 +96,7 @@ const SETTLE_TIMEOUT_MS = Number(
 maybeDescribe("Perf — multi-match concurrent settle profile", () => {
   it(`deposits ${MATCHES} crossing pairs and settles them (read per-Tx-D timing from CVM logs)`, async () => {
     const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as E2EConfig;
+    const bootSessionId = await fetchBootSessionId(GATEWAY);
     const conn = new Connection(
       process.env.SOLANA_RPC_URL ?? "https://api.devnet.solana.com",
       "confirmed",
@@ -252,7 +253,14 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       qty: bigint,
     ) {
       const orderId = deriveOrderId(p.masterSeed, orderIndex);
-      const pool = await buildAnchorPool(p.masterSeed, p.spendingKey, orderId);
+      const viewingPubkey = deriveViewingEncKeypair(p.masterSeed).publicKey;
+      // Each concurrently-submitted fixture gets a distinct trading key, so
+      // per-key nonce monotonicity is deterministic even when HTTP arrivals
+      // reorder. Owner commitment—not trading key—drives self-trade policy.
+      const tradingSeed = new Uint8Array(32);
+      tradingSeed.set(orderId, 0);
+      tradingSeed.set(orderId, 16);
+      const trading = nacl.sign.keyPair.fromSeed(tradingSeed);
       const vi = await harness.viProof(REPO_ROOT, p, note);
       const digest = orderCanonicalDigest({
         symbol: new TextEncoder().encode(SYMBOL),
@@ -266,9 +274,10 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
         noteCommitment: note.commitment,
         userCommitment: p.userCommitment,
         arrivalNonce: 1n,
-        anchorPoolHash: pool.poolHash,
+        viewingPubkey,
+        sessionId: bootSessionId,
       });
-      const sig = nacl.sign.detached(digest, p.trading.secretKey);
+      const sig = nacl.sign.detached(digest, trading.secretKey);
       return {
         symbol: SYMBOL,
         side: side === OrderSide.Bid ? "bid" : "ask",
@@ -281,7 +290,7 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
         note_commitment: hex(note.commitment),
         user_commitment: hex(p.userCommitment),
         arrival_nonce: 1,
-        trading_key: hex(p.trading.publicKey.toBytes()),
+        trading_key: hex(trading.publicKey),
         trading_key_signature: hex(sig),
         owner_commitment: hex(bn254ToBE32(p.ownerCommit)),
         note_inner_hash: hex(bn254ToBE32(note.innerHash)),
@@ -290,10 +299,8 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
         valid_input_proof: hex(vi.proofBytes),
         collateral_amount: Number(note.amount),
         tree_id: note.treeId,
-        // Change-amount recovery (Proposal B): the seed-derived viewing key the
-        // TEE encrypts this order's change_amount to on-chain. NOT signed.
-        viewing_pubkey: hex(deriveViewingEncKeypair(p.masterSeed).publicKey),
-        anchors: anchorsToJson(pool.anchors),
+        viewing_pubkey: hex(viewingPubkey),
+        session_id: hex(bootSessionId),
       };
     }
 

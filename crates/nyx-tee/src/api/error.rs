@@ -85,6 +85,10 @@ impl ApiError {
     pub fn expiry_too_far(m: impl Into<String>) -> Self {
         Self::new(1007, StatusCode::BAD_REQUEST, m)
     }
+    /// Required X25519 viewing key is a low-order/non-contributory point.
+    pub fn invalid_viewing_key(m: impl Into<String>) -> Self {
+        Self::new(1008, StatusCode::BAD_REQUEST, m)
+    }
 
     // 1100–1199 — auth (401/403)
     /// Missing / invalid / expired / revoked bearer token, or bad credentials.
@@ -121,6 +125,10 @@ impl ApiError {
     /// settlement-pending order.
     pub fn collateral_in_use(m: impl Into<String>) -> Self {
         Self::new(1204, StatusCode::CONFLICT, m)
+    }
+    /// Signed order targets a prior or unrelated CVM boot session.
+    pub fn stale_session(m: impl Into<String>) -> Self {
+        Self::new(1205, StatusCode::CONFLICT, m)
     }
 
     // 1300–1399 — not found (404)

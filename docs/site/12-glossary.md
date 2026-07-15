@@ -8,14 +8,6 @@ description: The terms and acronyms used across the Nyx documentation, in plain 
 
 A quick reference for the concepts and names used throughout these docs.
 
-### Anchor pool
-
-A small set of pre-committed continuation tags (the nullifiers for your *future*
-change notes) you submit with each order. It lets a partial fill roll forward
-inside the enclave with no client round-trip — the matcher rotates your residual
-in place using the next anchor. Possible because a note's spend-tag doesn't
-depend on its amount. See [Matching layer](./matching-layer).
-
 ### Attestation
 
 A signed statement from Intel's TDX hardware describing exactly what code is
@@ -55,13 +47,14 @@ machine cannot read inside it. Used interchangeably with *enclave* and *TEE*
 ### Continuation
 
 The mechanism by which a partially-filled order keeps working across batches
-without resubmission, using the anchor pool.
+without resubmission. The circuit derives the residual from the consumed input
+inner and the matcher re-locks it atomically.
 
 ### Inner hash
 
 An amount-independent value that both a note's commitment and its nullifier are
-anchored on. Decoupling the spend-tag from the amount is what makes the anchor
-pool — and round-free partial fills — possible. See [Cryptography](./cryptography).
+anchored on. Match outputs derive their inner hash from the consumed input inner
+and a role byte. See [Cryptography](./cryptography).
 
 ### Merge
 

@@ -10,7 +10,8 @@
  *   3. runs `proveAndBuildOrder` — fetch the note's Merkle witness from
  *      `/tree/inclusion`, produce the VALID_INPUT proof via the injected
  *      {@link ValidInputProver} (the in-process node prover by default, ~0.83s),
- *      then assemble + sign the body (incl. the deterministic anchor pool).
+ *      then assemble + sign the body, including the viewing key and current
+ *      CVM boot session.
  *
  * The prover is injected so the heavy/Node-only snarkjs path stays optional and
  * tests can supply a fake. Returns the request plus the 16-byte `order_id`, so
@@ -53,6 +54,8 @@ export interface BuildPlaceRequestArgs {
   note: StoredNote;
   /** HD index for this order — derives `order_id` + the per-order trading key. */
   seedIndex: number;
+  /** Current 32-byte CVM boot session id fetched from `/info`. */
+  sessionId: Uint8Array;
   intent: OrderIntent;
   /** Gateway origin (the SDK appends `/tree/inclusion`). */
   gatewayUrl: string;
@@ -98,6 +101,7 @@ export async function buildPlaceRequest(
     policy: intent.policy,
     amount: intent.amount,
     orderId,
+    sessionId: args.sessionId,
     collateralAmount: intent.collateralAmount,
     arrivalNonce: intent.arrivalNonce,
     // proving + transport

@@ -34,14 +34,12 @@ function openOrder(overrides: Partial<ManagedOrder> = {}): ManagedOrder {
     side: "bid",
     priceRaw: 100n,
     sizeRaw: 1000n,
-    anchorPoolSize: 10,
     now: 1000,
   });
   return { ...o, phase: "open", ...overrides };
 }
 
 const noopExecutor = {
-  topup: async () => ({ type: "topup-confirmed" as const, count: 5 }),
   merge: async () => ({ type: "merge-confirmed" as const, consumed: 0 }),
 };
 

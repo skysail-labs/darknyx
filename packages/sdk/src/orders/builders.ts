@@ -25,7 +25,7 @@
  *
  * The returned `ExecutionPolicy` is merged into a full `OrderCanonical` by
  * the caller (who supplies `symbol`, `orderId`, `noteCommitment`,
- * `userCommitment`, `arrivalNonce`, `anchorPoolHash`).
+ * `userCommitment`, `arrivalNonce`, `viewingPubkey`, `sessionId`).
  */
 
 import { OrderSide, OrderType, CanonicalError } from "./canonical.js";

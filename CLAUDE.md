@@ -41,10 +41,7 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   orders to the CVM. `packages/daemon/` (`nyx-daemon`) is the reference
   **non-custodial market-maker daemon** built on the SDK (keys + proving
   on-device; drives order lifecycle off the `fills` + `orders` channels on the
-  shared `/v1/stream` session and on-chain reads, with auto-merge). The current
-  order wire still carries transitional anchor/top-up fields pending canonical
-  order v2 removal, but VALID_MATCH_BATCH v3 does not use them to construct
-  outputs. It is
+  shared `/v1/stream` session and on-chain reads, with auto-merge). It is
   deliberately **lean — it does NOT depend on the off-TEE indexer**; live TEE
   streams + chain reads are its source of truth (merged, live-CVM smoke-tested).
   `crates/darkpool-crypto/` is the host-side Rust crypto crate with
@@ -53,7 +50,7 @@ VM (a "CVM") on Phala Cloud**. Three layers:
 
 Supporting crates: `crates/darkpool-matcher/` (the matching algorithm +
 the order/cancel canonical signing — single source of truth, used by the
-in-TEE matcher; legacy anchor-topup signing remains until canonical order v2)
+in-TEE matcher)
 and `crates/nyx-tee-loadgen/` (a host
 binary that load-tests the CVM's intake).
 
@@ -466,7 +463,7 @@ TEE work runs across three targets; using the wrong one wastes money or trust.
   compose, `Cargo.toml`, `crates/nyx-tee/src/`).
 
 `crates/nyx-tee` has ~180 lib + integration tests (`cargo test -p nyx-tee`)
-covering the matcher / settle pipeline / anchor pool / Merkle mirror /
+covering the matcher / settle pipeline / continuation derivation / Merkle mirror /
 HTTP+auth / RPC client — run them on any `crates/nyx-tee` change.
 
 ---
@@ -687,10 +684,10 @@ A longer error catalogue is in `scripts/dev-commands.md §10`.
 * `*-prover.test.ts` — snarkjs round-trips (need built circuit artifacts).
 * `*-transport.test.ts` / `*-builder.test.ts` — wire-format / discriminator / Borsh.
 * `*-watcher.test.ts` — event decoding (`settlement-watcher` = vault `TradeSettled`).
-* `anchor-pool-build` / `settle-memo-integrity` — the v2 client anchor-pool +
-  fill-memo integrity check (the Vuln-4 guard: the client recomputes the
-  change-note commitment from the memo's `inner_hash` and rejects a TEE that
-  substituted one).
+* `settle-memo-integrity` — the v3 fill-memo integrity check (the Vuln-4
+  guard): the client resolves the exact consumed input, derives
+  `Poseidon3(24, input_inner, role)`, and rejects substituted inners or
+  commitments.
 * `helpers/` — `e2e-helpers.ts` (keypairs, `deriveInner`, byte conv),
   `merkle-shadow.ts`, `match-batch-prover.ts`, `valid-input-prover.ts`,
   `snarkjs-prover.ts`.
@@ -766,8 +763,10 @@ it after; never commit a secret).**
 
 ---
 
-*Last updated: 2026-07-14 — current architecture: vault (only on-chain
+*Last updated: 2026-07-16 — current architecture: vault (only on-chain
 program) + the in-CVM matcher/settler (`crates/nyx-tee`) on Phala, validated
 end-to-end on devnet (`cvm-settle-e2e` real settle + loadgen). The
 `matching_engine` / MagicBlock-ER / PER path has been removed. Note model is
-v2 `inner_hash` with the per-order continuation anchor pool.*
+v2 `inner_hash`; canonical orders sign the viewing key, boot session, and a
+strictly increasing per-trading-key nonce. Output inners derive from consumed
+input inners, with no continuation anchor pool.*

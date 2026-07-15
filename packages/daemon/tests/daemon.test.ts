@@ -61,7 +61,22 @@ const fakeProver: ValidInputProver = async (p) => ({
 });
 
 function fakeFetch(): typeof fetch {
-  return vi.fn(async () => {
+  return vi.fn(async (input: string | URL | Request) => {
+    const url = new URL(
+      typeof input === "string" || input instanceof URL ? input : input.url,
+    );
+    if (url.pathname === "/info") {
+      return new Response(
+        JSON.stringify({
+          app_id: "app_test",
+          compose_hash: "11".repeat(32),
+          tee_pubkey: PublicKey.default.toBase58(),
+          tee_pubkeys: [PublicKey.default.toBase58()],
+          boot_session_id: "5a".repeat(32),
+        }),
+        { status: 200 },
+      );
+    }
     const body = {
       leaf_index: 0,
       merkle_root: "bb".repeat(32),
@@ -133,9 +148,17 @@ function mkDaemon(
   });
 }
 
+async function readyDaemon(
+  extra: Partial<Parameters<typeof Daemon.prototype.constructor>[0]> = {},
+): Promise<Daemon> {
+  const daemon = mkDaemon(extra);
+  await daemon.start();
+  return daemon;
+}
+
 describe("Daemon — placeOrder", () => {
   it("builds, places, and moves the order to open; emits an order event", async () => {
-    const daemon = mkDaemon();
+    const daemon = await readyDaemon();
     const events: DaemonEvent[] = [];
     daemon.subscribe((e) => events.push(e));
 
@@ -156,7 +179,7 @@ describe("Daemon — placeOrder", () => {
   });
 
   it("allocates a fresh HD seed index per order", async () => {
-    const daemon = mkDaemon();
+    const daemon = await readyDaemon();
     const intent = {
       symbol: "SOL-USDC",
       side: OrderSide.Bid,
@@ -172,7 +195,7 @@ describe("Daemon — placeOrder", () => {
 
   it("runs the root-ring verifier before proving a placement", async () => {
     const verifyRoot = vi.fn(async () => {});
-    const daemon = mkDaemon({ verifyRoot });
+    const daemon = await readyDaemon({ verifyRoot });
     await daemon.placeOrder(
       {
         symbol: "SOL-USDC",
@@ -191,7 +214,7 @@ describe("Daemon — placeOrder", () => {
 
 describe("Daemon — cancelOrder", () => {
   it("signs + sends a cancel and drives the order to cancelled", async () => {
-    const daemon = mkDaemon();
+    const daemon = await readyDaemon();
     const { orderId } = await daemon.placeOrder(
       {
         symbol: "SOL-USDC",
@@ -207,7 +230,7 @@ describe("Daemon — cancelOrder", () => {
   });
 
   it("rejects an unknown order", async () => {
-    const daemon = mkDaemon();
+    const daemon = await readyDaemon();
     await expect(daemon.cancelOrder("ab".repeat(8))).rejects.toThrow(
       /unknown order/,
     );
@@ -283,7 +306,7 @@ describe("Daemon — collateral selection + pruning", () => {
   });
 
   it("excludes a note already locked by a resting order", async () => {
-    const daemon = mkDaemon();
+    const daemon = await readyDaemon();
     const n = spendable(BIG, 1000n);
     store.put(n);
     // place an order spending it → it becomes locked (order open)
@@ -292,20 +315,19 @@ describe("Daemon — collateral selection + pruning", () => {
   });
 
   it("prunes the collateral note once a fill consumes it", async () => {
-    const daemon = mkDaemon();
+    const daemon = await readyDaemon();
     const n = spendable(COLL, 1000n);
     store.put(n);
     const { orderId } = await daemon.placeOrder(intent, n);
     expect(store.get(COLL)).toBeDefined(); // still there while resting
 
-    // a fill consumes anchor 0 → the collateral note is rotated/spent
+    // a fill consumes and rotates the collateral note
     await (
       daemon as unknown as {
         engine: { dispatch: (id: string, e: unknown) => Promise<unknown> };
       }
     ).engine.dispatch(orderId, {
       type: "fill",
-      anchorIndex: 0,
       producedChangeNote: true,
     });
     expect(store.get(COLL)).toBeUndefined(); // pruned
@@ -366,15 +388,17 @@ describe("Daemon — deposit", () => {
 describe("Daemon — note-lifecycle hygiene (rolling residual)", () => {
   const MINT = new Uint8Array(32).fill(9);
   const OID = "ab".repeat(8);
-  const change = (commitment: string, anchorIndex: number): StoredNote => ({
+  const change = (
+    commitment: string,
+    consumedCommitment: string,
+  ): StoredNote => ({
     commitment,
     tokenMint: MINT,
     amount: 100n,
     ownerCommitment: 9n,
     innerHash: 7n,
     orderId: OID,
-    anchorIndex,
-    leafIndex: BigInt(anchorIndex),
+    consumedCommitment,
   });
   const openMgr = (orderId: string): ManagedOrder => ({
     orderId,
@@ -383,10 +407,6 @@ describe("Daemon — note-lifecycle hygiene (rolling residual)", () => {
     priceRaw: 1n,
     sizeRaw: 1n,
     phase: "open",
-    anchorPoolSize: 10,
-    anchorsConsumed: 0,
-    topupNonce: 0,
-    topupInFlight: false,
     mergeInFlight: false,
     pendingChangeNotes: 0,
     createdAt: 0,
@@ -396,7 +416,7 @@ describe("Daemon — note-lifecycle hygiene (rolling residual)", () => {
   it("selectNote excludes an open order's re-locked rolling residual", () => {
     const daemon = mkDaemon();
     store.putOrder(openMgr(OID));
-    store.put(change("res", 0)); // the open order's rolling residual
+    store.put(change("res", "input")); // the open order's rolling residual
     // locked while the order is open → not selectable
     expect(daemon.selectNote({ mint: MINT, minAmount: 1n })).toBeUndefined();
   });
@@ -407,11 +427,13 @@ describe("Daemon — note-lifecycle hygiene (rolling residual)", () => {
     store.putOrder(openMgr(OID));
     await daemon.start();
     // the SDK stores each memo's note before onFill; simulate that + drive onFill.
-    store.put(change("c0", 0));
-    store.put(change("c1", 1));
-    store.put(change("c2", 2));
-    c.cap.opts!.onFill!(change("c2", 2));
-    expect(store.get("c0")).toBeUndefined(); // superseded → pruned
+    store.put(change("c0", "input"));
+    c.cap.opts!.onFill!(change("c0", "input"));
+    store.put(change("c1", "c0"));
+    c.cap.opts!.onFill!(change("c1", "c0"));
+    store.put(change("c2", "c1"));
+    c.cap.opts!.onFill!(change("c2", "c1"));
+    expect(store.get("c0")).toBeUndefined();
     expect(store.get("c1")).toBeUndefined();
     expect(store.get("c2")).toBeDefined(); // latest kept
     daemon.stop();

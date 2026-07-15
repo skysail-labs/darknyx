@@ -1,6 +1,6 @@
 // Public @nyx/daemon exports — the reference market-maker/fund daemon that
-// wraps the SDK with an order-lifecycle state machine, auto anchor top-up,
-// auto-merge, and a local control API. Keys + proving stay on-device.
+// wraps the SDK with an order-lifecycle state machine, auto-merge, settlement
+// reconciliation, and a local control API. Keys + proving stay on-device.
 export * from "./types.js";
 export * from "./order-lifecycle.js";
 export * from "./config.js";

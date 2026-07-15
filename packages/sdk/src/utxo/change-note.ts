@@ -3,11 +3,10 @@
  * `darkpool_matcher::change_note::derive_inner` (and the on-chain
  * `tee_forced_settle`/assembler use of it).
  *
- * A FINAL change note (full-fill price improvement, IOC residual, over-collateral
- * surplus — i.e. a non-continuation fill) gets its `inner_hash` from
- * `derive_inner(match_id, role)` rather than the client's anchor pool. The
- * change-amount recovery path (Proposal B) needs to reproduce it client-side to
- * self-verify a decrypted amount against the on-chain `note_e/f` commitment.
+ * This SHA-based helper pins the legacy pure-matcher's provisional commitment
+ * construction. The live VALID_MATCH_BATCH v3 settlement instead uses
+ * `utxo/match-output.ts::deriveMatchOutputInner`, derived from the consumed
+ * input inner, for every final and continuing output.
  *
  *   inner_hash = SHA-256("nyx-change-inner" ‖ match_id_u64_le ‖ role) , Fr-safe
  *                masked (byte 0 = 0, byte 1 high-nibble cleared).

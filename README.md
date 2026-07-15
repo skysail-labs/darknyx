@@ -30,7 +30,7 @@ auth'd fill memo (`fills` on `/v1/stream`, with on-chain recovery), never an L1 
 | Bounded censorship window       | `MAX_LOCK_TTL_SLOTS` (~30 min) ceiling on note locks                 |
 | Trustless withdrawal            | Groth16 `VALID_SPEND` proof — no operator can move user funds        |
 | Front-running protection        | Uniform clearing price + Pyth oracle band per batch                  |
-| Partial-fill continuation       | A per-order anchor pool lets the matcher rotate the residual + re-match it with no client roundtrip |
+| Partial-fill continuation       | The circuit derives the residual from the consumed input inner; the matcher re-locks and re-matches it without a client roundtrip |
 
 For the full cryptographic walkthrough (key model, the four ZK
 circuits, lifecycle, settlement mechanics) see
@@ -51,7 +51,7 @@ Three layers:
 * **TEE (`crates/nyx-tee/`)** — the in-enclave matcher + settler. It owns
   hidden order intake, uniform-clearing-price matching, the full settle
   pipeline (signed by its dstack-derived Ed25519 key), a Merkle-mirror
-  indexer, the per-order continuation anchor pool, and the auth'd HTTP/WS
+  indexer, deterministic consumed-input-derived continuations, and the auth'd HTTP/WS
   surface.
 * **Client (TypeScript SDK + snarkjs prover)** — `packages/sdk/` builds
   VALID_INPUT proofs and `POST`s orders to the CVM. `crates/darkpool-crypto/`

@@ -62,7 +62,6 @@ import {
   deriveViewingEncKeypair,
 } from "../src/keys/key-generators.js";
 import { nullifierV2 } from "../src/utxo/note.js";
-import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
 import { vaultConfigPda } from "../src/idl/vault-client.js";
 import {
   orderCanonicalDigest,
@@ -90,6 +89,7 @@ import {
   makePersona,
   gwFetch,
   fetchOracleAnchor,
+  fetchBootSessionId,
   hex,
   withFee,
   scaledQuote,
@@ -202,12 +202,10 @@ maybeDescribe(
         const bidPrice = (anchor * 12n) / 10n;
         const askPrice = (anchor * 8n) / 10n;
         const PRICE_SCALE = BigInt(cfg.market.priceScale);
-        // In FILLS mode we validate the anchor-pool partial-fill CONTINUATION: the
+        // In FILLS mode we validate a derived partial-fill CONTINUATION: the
         // buyer over-buys (bids 2× the seller's qty) so only BASE_QTY crosses and
-        // the residual relocks onto anchor[0]. That relock is the ONLY path that
-        // rewrites note_e to an anchor-based change note (reconstructChangeNote)
-        // AND emits a live FillMemo (assign_continuation_anchors) — both fills
-        // assertions are continuation-only, so a full fill can't exercise them.
+        // the residual relocks onto a change note derived from the consumed
+        // input inner. This exercises the live memo's consumed-input binding.
         // Without FILLS we keep the simpler full-fill settle check (BUY_QTY=BASE_QTY).
         // Override the multiplier with NYX_CVM_BUY_MULT.
         const BUY_MULT = BigInt(
@@ -390,6 +388,7 @@ maybeDescribe(
         // and the settle-time lock_note doesn't hit the cap. Far more than the
         // ~90 s the test needs, with margin for TEE/client slot-view skew.
         const expirySlot = BigInt(slot + 3_000);
+        const bootSessionId = await fetchBootSessionId(GATEWAY);
 
         async function buildOrder(
           p: Persona,
@@ -407,13 +406,9 @@ maybeDescribe(
           // Deterministic per (seed, n) — buyer + seller have distinct seeds, so
           // the same n yields distinct ids. Recoverable by the fills gap-scan.
           const orderId = deriveOrderId(p.masterSeed, orderIndex);
-          // v2: the order carries a fixed continuation anchor pool whose hash
-          // is bound into the signed (v2) canonical digest.
-          const pool = await buildAnchorPool(
+          const viewingPubkey = deriveViewingEncKeypair(
             p.masterSeed,
-            p.spendingKey,
-            orderId,
-          );
+          ).publicKey;
           const digest = orderCanonicalDigest({
             symbol: new TextEncoder().encode(SYMBOL),
             side,
@@ -426,7 +421,8 @@ maybeDescribe(
             noteCommitment: note.commitment,
             userCommitment: p.userCommitment,
             arrivalNonce: 1n,
-            anchorPoolHash: pool.poolHash,
+            viewingPubkey,
+            sessionId: bootSessionId,
           });
           const sig = nacl.sign.detached(digest, p.trading.secretKey);
           return {
@@ -453,14 +449,8 @@ maybeDescribe(
             // it's larger and intake accepts note ≥ required.
             collateral_amount: Number(note.amount),
             tree_id: note.treeId,
-            // Change-amount recovery (Proposal B): the seed-derived viewing key
-            // the TEE encrypts this order's change_amount to on-chain. NOT in the
-            // signed canonical (so the digest above is unchanged). Without it the
-            // TEE writes the all-zero fill_recovery sentinel and recovery can't run.
-            viewing_pubkey: hex(
-              deriveViewingEncKeypair(p.masterSeed).publicKey,
-            ),
-            anchors: anchorsToJson(pool.anchors),
+            viewing_pubkey: hex(viewingPubkey),
+            session_id: hex(bootSessionId),
           };
         }
         const buyerOrder = await buildOrder(
@@ -536,6 +526,14 @@ maybeDescribe(
         // subscribers), so we must be connected first. Verifies + stores via the
         // real client path (buyer keys — the buyer is the side that changes).
         const wsStore = new InMemoryNoteStore();
+        await wsStore.put({
+          commitment: hex(buyerNote.commitment),
+          tokenMint: buyerNote.mint.toBytes(),
+          amount: buyerNote.amount,
+          ownerCommitment: buyer.ownerCommit,
+          innerHash: buyerNote.innerHash,
+          leafIndex: BigInt(buyerNote.leafIndex),
+        });
         const wsFills: ChangeNoteRecord[] = [];
         let wsSub: FillsSubscription | undefined;
         if (FILLS) {
@@ -731,21 +729,18 @@ maybeDescribe(
             ).toBeGreaterThanOrEqual(BUYER_SURPLUS);
           }
 
-          // The continuation consumed an anchor from the pool (index ≥ 0) —
-          // the whole point of the anchor pool (the buyer's residual relocked
-          // onto an anchor and keeps trading).
-          expect(
-            memoRec!.anchorIndex,
-            "continuation did not consume an anchor",
-          ).toBeGreaterThanOrEqual(0);
+          // The memo must name the exact deposited input that v3 consumed.
+          expect(memoRec!.consumedCommitment).toBe(
+            hex(buyerNote.commitment),
+          );
           console.log(
-            `  · fills OK — indexer located + WS memo verified buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}… (amount ${memoRec!.amount}, anchor ${memoRec!.anchorIndex})`,
+            `  · fills OK — indexer located + WS memo verified buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}… (amount ${memoRec!.amount}, consumed ${memoRec!.consumedCommitment!.slice(0, 12)}…)`,
           );
 
           // ── 7b. ON-CHAIN CHANGE-AMOUNT RECOVERY (Proposal B) ─────────
           // The live memo above proves the WS tail. This proves the PERMANENT
-          // backstop: a FRESH client with only the seed recovers the SAME change
-          // note (amount + opening) by DECRYPTING the on-chain ciphertext the
+          // backstop: a client with the seed + consumed input opening recovers
+          // the SAME change note by decrypting the on-chain ciphertext the
           // indexer surfaced (`change.ephemeralPubkey` + `change.changeEnc`) and
           // self-verifying it against the on-chain commitment — no memo, no live
           // WS, surviving a CVM redeploy. This replaced the retired durable
@@ -754,9 +749,18 @@ maybeDescribe(
             "on-chain change-amount recovery (Proposal B)",
             async () => {
               const coldStore = new InMemoryNoteStore();
+              const inputRecord = {
+                commitment: hex(buyerNote.commitment),
+                tokenMint: buyerNote.mint.toBytes(),
+                amount: buyerNote.amount,
+                ownerCommitment: buyer.ownerCommit,
+                innerHash: buyerNote.innerHash,
+                leafIndex: BigInt(buyerNote.leafIndex),
+              };
+              await coldStore.put(inputRecord);
               const recovered = await recoverChangeFromChain(change!, {
                 masterSeed: buyer.masterSeed,
-                ownerCommitment: buyer.ownerCommit,
+                candidateInputs: [inputRecord],
                 baseMint: baseMint.toBytes(),
                 quoteMint: quoteMint.toBytes(),
               });
@@ -766,12 +770,12 @@ maybeDescribe(
               ).toBeTruthy();
               // The chain-recovered amount must match the live memo byte-for-byte.
               expect(recovered!.amount).toBe(memoRec!.amount);
-              // And it lands spendable in a cold store (recovered from chain alone).
+              // And it lands spendable in a cold store.
               await coldStore.put(recovered!);
               const stored = await coldStore.get(change!.changeNoteCommitment!);
               expect(stored?.amount).toBe(memoRec!.amount);
               console.log(
-                `  · on-chain recovery OK — decrypted + self-verified amount ${recovered!.amount} into a cold store (no memo)`,
+                `  · on-chain recovery OK — decrypted + input-derived amount ${recovered!.amount} into a cold store (no memo)`,
               );
             },
           );

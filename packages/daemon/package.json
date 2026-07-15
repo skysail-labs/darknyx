@@ -2,7 +2,7 @@
   "name": "@nyx/daemon",
   "version": "0.1.0",
   "private": true,
-  "description": "Nyx reference daemon — long-running client for market makers + funds. Wraps the SDK: order-lifecycle state machine, auto anchor top-up, auto-merge, settlement reconciliation, local control API. Keys + proving stay on-device.",
+  "description": "Nyx reference daemon — long-running client for market makers + funds. Wraps the SDK: order lifecycle, auto-merge, settlement reconciliation, local control API. Keys + proving stay on-device.",
   "type": "module",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",

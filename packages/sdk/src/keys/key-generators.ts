@@ -18,7 +18,6 @@ const INFO_VIEWING = new TextEncoder().encode("darkpool_viewing_key_v1");
 const INFO_TRADING = new TextEncoder().encode("darkpool_trading_key_v1");
 const INFO_ROOT = new TextEncoder().encode("darkpool_root_key_v1");
 const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
-const INFO_INNER_HASH = new TextEncoder().encode("nyx-inner-hash-v1");
 const INFO_ORDER_ID = new TextEncoder().encode("nyx-order-id-v1");
 const INFO_VIEWING_ENC = new TextEncoder().encode("nyx-viewing-enc-v1");
 
@@ -146,38 +145,10 @@ export function deriveBlindingFactor(
 }
 
 /**
- * Derive the `inner_hash` for anchor `index` of a given order. Mirrors
- * `darkpool_crypto::keys::derive_inner_hash`. Deterministic from
- * `(seed, orderId, index)` so the whole anchor pool — and the matching
- * nullifiers via `nullifierV2` — is regenerable without persisted state.
- *
- * NyxShakeKdfV1 custom-info = `INFO_INNER_HASH || orderId[16] || index_u32_le`.
- */
-export function deriveInnerHash(
-  seed: Uint8Array,
-  orderId: Uint8Array,
-  index: number,
-): bigint {
-  if (orderId.length !== 16)
-    throw new Error(`orderId must be 16 bytes; got ${orderId.length}`);
-  if (!Number.isInteger(index) || index < 0 || index > 0xffff_ffff) {
-    throw new Error(`index must be a u32; got ${index}`);
-  }
-  const idxBuf = new ArrayBuffer(4);
-  new DataView(idxBuf).setUint32(0, index, true); // little-endian
-  const info = new Uint8Array(INFO_INNER_HASH.length + 16 + 4);
-  info.set(INFO_INNER_HASH, 0);
-  info.set(orderId, INFO_INNER_HASH.length);
-  info.set(new Uint8Array(idxBuf), INFO_INNER_HASH.length + 16);
-  const okm = nyxShakeKdfV1(seed, info, new Uint8Array(), 64);
-  return reduceMod(okm);
-}
-
-/**
  * Derive the deterministic 16-byte order id for the `n`-th order of this seed.
  *
- * Same philosophy as the anchor pool + note blinding: derive everything from
- * the seed, persist nothing. The client regenerates order ids on demand, and a
+ * Derive identifiers from the seed and persist no order-id counter state. The
+ * client regenerates order ids on demand, and a
  * fresh device rebuilds full trade history by gap-scanning `deriveOrderId(seed,
  * 0), [1], …` against the indexer until a run of empties. A distinct info
  * string (`nyx-order-id-v1`) keeps order ids in a separate domain from note

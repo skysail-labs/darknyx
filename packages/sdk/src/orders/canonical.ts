@@ -18,43 +18,12 @@
 import { createHash } from "node:crypto";
 
 export const ORDER_DOMAIN: Uint8Array = new TextEncoder().encode(
-  "nyx-order-v2",
+  "nyx-order-v3",
 );
 export const CANCEL_DOMAIN: Uint8Array = new TextEncoder().encode(
   "nyx-cancel-v1",
 );
-export const ANCHOR_TOPUP_DOMAIN: Uint8Array = new TextEncoder().encode(
-  "nyx-anchor-topup-v1",
-);
 export const SYMBOL_MAX_LEN = 32;
-
-/** Fixed number of continuation anchors a client supplies per order.
- *  Mirrors `darkpool_matcher::order_canonical::ANCHOR_POOL_SIZE`. */
-export const ANCHOR_POOL_SIZE = 10;
-/** Anchors added per WebSocket top-up when a pool drains. */
-export const ANCHOR_TOPUP_SIZE = 5;
-
-/** One continuation anchor: the (inner_hash, nullifier) pair for one
- *  future change note. Both 32-byte BE field elements. */
-export interface Anchor {
-  innerHash: Uint8Array;
-  nullifier: Uint8Array;
-}
-
-/** SHA-256 over the ordered anchor pool: for each anchor,
- *  innerHash ‖ nullifier. Mirrors `anchor_pool_hash` in the Rust matcher. */
-export function anchorPoolHash(anchors: Anchor[]): Uint8Array {
-  const h = createHash("sha256");
-  for (const a of anchors) {
-    if (a.innerHash.length !== 32)
-      throw new CanonicalError("anchor.innerHash must be 32 bytes");
-    if (a.nullifier.length !== 32)
-      throw new CanonicalError("anchor.nullifier must be 32 bytes");
-    h.update(Buffer.from(a.innerHash));
-    h.update(Buffer.from(a.nullifier));
-  }
-  return new Uint8Array(h.digest());
-}
 
 /**
  * `OrderSide` byte discriminants. Wire bytes are `0` (bid) / `1` (ask)
@@ -93,8 +62,10 @@ export interface OrderCanonical {
   /** 32 bytes. */
   userCommitment: Uint8Array;
   arrivalNonce: bigint;
-  /** 32 bytes — SHA-256 over the order's anchor pool (see `anchorPoolHash`). */
-  anchorPoolHash: Uint8Array;
+  /** 32-byte X25519 viewing-encryption public key. */
+  viewingPubkey: Uint8Array;
+  /** 32-byte boot session id advertised by `/info`. */
+  sessionId: Uint8Array;
 }
 
 export interface CancelCanonical {
@@ -139,7 +110,7 @@ function concat(parts: Uint8Array[]): Uint8Array {
  * `S` = symbol bytes length):
  *
  * ```
- *   0..12        ORDER_DOMAIN              ("nyx-order-v2")
+ *   0..12        ORDER_DOMAIN              ("nyx-order-v3")
  *   12..13       symbol_len : u8
  *   13..13+S     symbol bytes
  *   +0..+1       side       : u8           (0 = bid, 1 = ask)
@@ -152,10 +123,11 @@ function concat(parts: Uint8Array[]): Uint8Array {
  *   +50..+82     note_commitment : [u8; 32]
  *   +82..+114    user_commitment : [u8; 32]
  *   +114..+122   arrival_nonce : u64 LE
- *   +122..+154   anchor_pool_hash : [u8; 32]
+ *   +122..+154   viewing_pubkey : [u8; 32]
+ *   +154..+186   session_id : [u8; 32]
  * ```
  *
- * Total length: `167 + S` bytes.
+ * Total length: `199 + S` bytes.
  */
 export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
   if (o.symbol.length > SYMBOL_MAX_LEN) {
@@ -178,9 +150,14 @@ export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
       `userCommitment must be 32 bytes; got ${o.userCommitment.length}`,
     );
   }
-  if (o.anchorPoolHash.length !== 32) {
+  if (o.viewingPubkey.length !== 32) {
     throw new CanonicalError(
-      `anchorPoolHash must be 32 bytes; got ${o.anchorPoolHash.length}`,
+      `viewingPubkey must be 32 bytes; got ${o.viewingPubkey.length}`,
+    );
+  }
+  if (o.sessionId.length !== 32) {
+    throw new CanonicalError(
+      `sessionId must be 32 bytes; got ${o.sessionId.length}`,
     );
   }
 
@@ -198,7 +175,8 @@ export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
     o.noteCommitment,
     o.userCommitment,
     u64LE(o.arrivalNonce),
-    o.anchorPoolHash,
+    o.viewingPubkey,
+    o.sessionId,
   ]);
 }
 
@@ -236,52 +214,5 @@ export function cancelCanonicalBytes(c: CancelCanonical): Uint8Array {
 export function cancelCanonicalDigest(c: CancelCanonical): Uint8Array {
   return new Uint8Array(
     createHash("sha256").update(cancelCanonicalBytes(c)).digest(),
-  );
-}
-
-export interface AnchorTopUpCanonical {
-  /** 16 bytes — the order being topped up. */
-  orderId: Uint8Array;
-  /** 32 bytes — SHA-256 over the NEW anchors (see `anchorPoolHash`). */
-  anchorPoolHash: Uint8Array;
-  /** Strictly-increasing per-order counter. */
-  topupNonce: bigint;
-}
-
-/**
- * Anchor-pool top-up canonical view — mirrors
- * `darkpool_matcher::order_canonical::AnchorTopUpCanonical`. Layout:
- *
- * ```
- *   0..19       ANCHOR_TOPUP_DOMAIN  ("nyx-anchor-topup-v1")
- *   19..35      order_id      : [u8; 16]
- *   35..67      anchor_pool_hash : [u8; 32]
- *   67..75      topup_nonce   : u64 LE
- * ```
- */
-export function anchorTopUpCanonicalBytes(t: AnchorTopUpCanonical): Uint8Array {
-  if (t.orderId.length !== 16) {
-    throw new CanonicalError(
-      `orderId must be 16 bytes; got ${t.orderId.length}`,
-    );
-  }
-  if (t.anchorPoolHash.length !== 32) {
-    throw new CanonicalError(
-      `anchorPoolHash must be 32 bytes; got ${t.anchorPoolHash.length}`,
-    );
-  }
-  return concat([
-    ANCHOR_TOPUP_DOMAIN,
-    t.orderId,
-    t.anchorPoolHash,
-    u64LE(t.topupNonce),
-  ]);
-}
-
-export function anchorTopUpCanonicalDigest(
-  t: AnchorTopUpCanonical,
-): Uint8Array {
-  return new Uint8Array(
-    createHash("sha256").update(anchorTopUpCanonicalBytes(t)).digest(),
   );
 }

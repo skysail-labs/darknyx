@@ -46,6 +46,8 @@ pub struct TraderCtx {
     pub base_mint: [u8; 32],
     /// BID-side collateral mint (parsed from `--quote-mint`).
     pub quote_mint: [u8; 32],
+    /// Fresh process-boot session fetched from `/info` for this run.
+    pub boot_session_id: [u8; 32],
 }
 
 pub async fn trader_task(ctx: TraderCtx, mut workload: Box<dyn Workload>, deadline: TokioInstant) {
@@ -118,6 +120,7 @@ pub async fn trader_task(ctx: TraderCtx, mut workload: Box<dyn Workload>, deadli
             &ctx.base_mint,
             &ctx.quote_mint,
             intent.collateral_surplus_bps,
+            ctx.boot_session_id,
         );
         arrival_nonce = arrival_nonce.wrapping_add(1);
 

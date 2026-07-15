@@ -26,18 +26,15 @@ import {
   type LifecycleThresholds,
 } from "./order-lifecycle.js";
 
-type TopupAction = Extract<LifecycleAction, { type: "topup" }>;
 type MergeAction = Extract<LifecycleAction, { type: "merge" }>;
 
 /**
  * Executes the reducer's side-effecting intents against the CVM/SDK. Each
- * method resolves with the **follow-up event** to fold back in (e.g. a `topup`
- * resolves to `topup-confirmed` on success or `topup-failed` otherwise) — so a
+ * method resolves with the **follow-up event** to fold back in — so a
  * throw is never required for the unhappy path, though the engine also catches
  * throws and converts them to the matching `*-failed` event.
  */
 export interface ActionExecutor {
-  topup(order: ManagedOrder, action: TopupAction): Promise<LifecycleEvent>;
   merge(order: ManagedOrder, action: MergeAction): Promise<LifecycleEvent>;
 }
 
@@ -101,8 +98,7 @@ export class LifecycleEngine {
     this.onTransition?.(order, event);
 
     for (const action of actions) {
-      // Detached — the engine doesn't block one order's fills on its top-up
-      // POST. Errors are caught inside runAction.
+      // Detached — one order's merge does not block other lifecycle events.
       void this.runAction(order, action);
     }
     return order;
@@ -113,19 +109,11 @@ export class LifecycleEngine {
     action: LifecycleAction,
   ): Promise<void> {
     try {
-      const followUp =
-        action.type === "topup"
-          ? await this.executor.topup(order, action)
-          : await this.executor.merge(order, action);
+      const followUp = await this.executor.merge(order, action);
       await this.dispatch(order.orderId, followUp);
     } catch (err) {
       this.onError(err, `executor.${action.type} for ${order.orderId}`);
-      // Convert a throw into the matching failure event so the in-flight latch
-      // clears and the next fill can retry.
-      const failure: LifecycleEvent =
-        action.type === "topup"
-          ? { type: "topup-failed" }
-          : { type: "merge-failed" };
+      const failure: LifecycleEvent = { type: "merge-failed" };
       try {
         await this.dispatch(order.orderId, failure);
       } catch (e2) {

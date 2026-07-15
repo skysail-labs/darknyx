@@ -226,7 +226,6 @@ describe("placeManagedOrder", () => {
   afterEach(() => store.close());
 
   const noopExecutor = {
-    topup: async () => ({ type: "topup-confirmed" as const, count: 5 }),
     merge: async () => ({ type: "merge-confirmed" as const, consumed: 0 }),
   };
 
@@ -237,7 +236,6 @@ describe("placeManagedOrder", () => {
       side: "bid",
       priceRaw: 100n,
       sizeRaw: 1000n,
-      anchorPoolSize: 10,
       now: 1000,
     });
 

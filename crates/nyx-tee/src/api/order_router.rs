@@ -5,8 +5,9 @@
 //! (keys updates by `order_id`); this task maps each to its owning account via
 //! the intake-time `order_id → account` map and forwards. It also bounds that
 //! map — after routing a TERMINAL update (fully-filled / cancelled / expired)
-//! the order will never produce another event, so we `forget_order` it (the
-//! same growth guard the fills-routes GC applies on the channel side).
+//! the order will never produce another order event, so we archive its owner in
+//! the bounded terminal routing cache. That cache lets the independent fills
+//! router deliver a final change memo even if this task wins the race.
 
 use std::sync::Arc;
 
@@ -82,10 +83,10 @@ pub fn spawn_order_router(state: Arc<ApiState>) {
                 Ok(update) => {
                     let (order_id, msg, terminal) = to_msg(&update);
                     state.route_order_update(&order_id, &msg).await;
-                    // A terminal update is the order's last event — drop its
-                    // owner mapping so the map stays bounded.
+                    // Archive before removing the live ownership entry so the
+                    // independent fills router cannot observe a routing gap.
                     if terminal {
-                        state.forget_order(&order_id).await;
+                        state.archive_order_owner(&order_id).await;
                     }
                 }
                 Err(RecvError::Lagged(skipped)) => {

@@ -250,7 +250,7 @@ caches the result, re-verifies on cert renewal.
 > `packages/sdk/src/tee/attestation.ts::verifyTeeAttestation(apiBaseUrl,
 > expectedComposeHash, opts?)`; and the node daemon enforces it **strict-by-default**
 > (`packages/daemon/src/attestation.ts`). The as-built return type is
-> `{ teePubkey, teePubkeys, composeHash, mrtd, quote }` (the full K-shard set comes
+> `{ teePubkey, teePubkeys, composeHash, mrtd, quote, bootSessionId }` (the full K-shard set comes
 > from `/info`). The sketch below is the original design and is kept for intent.
 
 #### Ongoing daemon enforcement
@@ -263,8 +263,8 @@ account, or key mismatch aborts startup. Strict mode cannot disable this check;
 the only bypass is the explicit non-strict development/simulator configuration.
 
 While running, the daemon refreshes the finalized governance key set every
-minute. A missing account or mismatch pauses placement and anchor top-up
-immediately. Transient RPC failure may use the last successful finalized read
+minute. A missing account or mismatch pauses placement immediately. Transient
+RPC failure may use the last successful finalized read
 for at most five minutes, after which new trading pauses until an exact key-set
 match is observed again. Fill/order streams, settlement reconciliation,
 on-chain merge, and signed cancellation remain active during the pause. The

@@ -20,62 +20,20 @@ use sha2::{Digest, Sha256};
 /// the canonical bytes so an `OrderCanonical` and a `CancelCanonical`
 /// with the same `order_id` can never collide on digest.
 ///
-/// `v2` (was `v1`): the canonical body now binds a 32-byte
-/// `anchor_pool_hash` — a SHA-256 over the order's pre-supplied
-/// anchor pool (the `(inner_hash, nullifier)` pairs the in-TEE matcher
-/// uses to settle partial-fill continuations). Signing the hash (not
-/// the 640-byte pool inline) keeps the signed body compact while still
-/// cryptographically pinning the pool to the trading-key signature.
-pub const ORDER_DOMAIN: &[u8] = b"nyx-order-v2";
+/// `v3` is the clean canonical-order-v2 cutover: continuation anchors were
+/// removed after VALID_MATCH_BATCH began deriving every output inner from the
+/// consumed input inner. The signed body now binds the required X25519 viewing
+/// key and the CVM's 32-byte boot session id. Old v2 signatures are therefore
+/// invalid by construction.
+pub const ORDER_DOMAIN: &[u8] = b"nyx-order-v3";
 
 /// Domain-separation tag for order cancel. See [`ORDER_DOMAIN`].
 pub const CANCEL_DOMAIN: &[u8] = b"nyx-cancel-v1";
-
-/// Domain-separation tag for an anchor-pool top-up (Phase 7 WS). A
-/// top-up appends [`ANCHOR_TOPUP_SIZE`] fresh anchors to a live order's
-/// pool when it drains; the trading key signs over the new pool's hash
-/// so the matcher can't be fed forged anchors. Distinct domain so a
-/// top-up can never be replayed as an order submit or cancel.
-pub const ANCHOR_TOPUP_DOMAIN: &[u8] = b"nyx-anchor-topup-v1";
 
 /// Cap on symbol length. 32 bytes covers every market identifier
 /// we expect to ever ship (`SOL-USDC`, `SOL-USDC-PERP-A`, etc.) and
 /// fits cleanly in a `u8` length prefix.
 pub const SYMBOL_MAX_LEN: usize = 32;
-
-/// Fixed number of continuation anchors a client supplies with each
-/// order. Bounds the per-order memory the CVM holds and the signed
-/// pool size. When exhausted (a 10th partial fill) the matcher pauses
-/// the order and requests a [`ANCHOR_TOPUP_SIZE`]-anchor top-up over WS.
-pub const ANCHOR_POOL_SIZE: usize = 10;
-
-/// Number of anchors added per WebSocket top-up when a pool is drained.
-pub const ANCHOR_TOPUP_SIZE: usize = 5;
-
-/// One pre-supplied continuation anchor: the `inner_hash` a future
-/// change note will be built with, plus the `nullifier =
-/// Poseidon3(DOMAIN_NULL, spending_key, inner_hash)` the client
-/// precomputed for when that change note is later spent. Both are
-/// 32-byte BE field elements. The CVM cannot forge either (it lacks
-/// the spending key); it only consumes them in order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Anchor {
-    pub inner_hash: [u8; 32],
-    pub nullifier: [u8; 32],
-}
-
-/// SHA-256 over the ordered anchor pool: `H(a0.inner ‖ a0.null ‖ a1.inner
-/// ‖ a1.null ‖ …)`. This is the value bound into [`OrderCanonical`] and
-/// re-checked at intake against the full pool in the request body.
-/// Mirrored in TS by `anchorPoolHash` (`packages/sdk/src/orders/canonical.ts`).
-pub fn anchor_pool_hash(anchors: &[Anchor]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    for a in anchors {
-        h.update(a.inner_hash);
-        h.update(a.nullifier);
-    }
-    h.finalize().into()
-}
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum CanonicalError {
@@ -113,12 +71,12 @@ pub struct OrderCanonical<'a> {
     /// Client-supplied monotonic counter, scoped per trading key.
     /// Used by the TEE to reject submit-replay.
     pub arrival_nonce: u64,
-    /// SHA-256 over the order's anchor pool (the ordered
-    /// `(inner_hash ‖ nullifier)` pairs). Binds the pre-supplied
-    /// continuation anchors to the signature without inlining the
-    /// 640-byte pool in the signed body. The intake handler verifies
-    /// the full pool in the request body hashes to this value.
-    pub anchor_pool_hash: [u8; 32],
+    /// Required X25519 viewing-encryption public key. Signing it prevents an
+    /// intermediary from redirecting the durable fill-recovery ciphertext.
+    pub viewing_pubkey: [u8; 32],
+    /// Random 32-byte id generated once per CVM boot and advertised by `/info`.
+    /// Binding it makes every pre-reboot order signature stale after restart.
+    pub session_id: [u8; 32],
 }
 
 impl<'a> OrderCanonical<'a> {
@@ -126,7 +84,7 @@ impl<'a> OrderCanonical<'a> {
     /// running totals; `S` = symbol bytes length):
     ///
     /// ```text
-    ///   0..12        ORDER_DOMAIN              ("nyx-order-v2")
+    ///   0..12        ORDER_DOMAIN              ("nyx-order-v3")
     ///   12..13       symbol_len : u8
     ///   13..13+S     symbol bytes
     ///   +0..+1       side       : u8           (0 = bid, 1 = ask)
@@ -139,18 +97,18 @@ impl<'a> OrderCanonical<'a> {
     ///   +50..+82     note_commitment : [u8; 32]
     ///   +82..+114    user_commitment : [u8; 32]
     ///   +114..+122   arrival_nonce : u64 LE
-    ///   +122..+154   anchor_pool_hash : [u8; 32]
+    ///   +122..+154   viewing_pubkey : [u8; 32]
+    ///   +154..+186   session_id : [u8; 32]
     /// ```
     ///
-    /// Total length: `12 + 1 + S + 1 + 1 + 32 + 16 + 32 + 32 + 8 + 32`
-    /// = `167 + S` bytes.
+    /// Total length: `199 + S` bytes.
     pub fn to_bytes(&self) -> Result<Vec<u8>, CanonicalError> {
         if self.symbol.len() > SYMBOL_MAX_LEN {
             return Err(CanonicalError::SymbolTooLong(self.symbol.len()));
         }
         let symbol_len = self.symbol.len() as u8;
 
-        let mut buf = Vec::with_capacity(ORDER_DOMAIN.len() + 1 + self.symbol.len() + 154);
+        let mut buf = Vec::with_capacity(ORDER_DOMAIN.len() + 1 + self.symbol.len() + 186);
         buf.extend_from_slice(ORDER_DOMAIN);
         buf.push(symbol_len);
         buf.extend_from_slice(self.symbol);
@@ -164,7 +122,8 @@ impl<'a> OrderCanonical<'a> {
         buf.extend_from_slice(&self.note_commitment);
         buf.extend_from_slice(&self.user_commitment);
         buf.extend_from_slice(&self.arrival_nonce.to_le_bytes());
-        buf.extend_from_slice(&self.anchor_pool_hash);
+        buf.extend_from_slice(&self.viewing_pubkey);
+        buf.extend_from_slice(&self.session_id);
         Ok(buf)
     }
 
@@ -210,43 +169,6 @@ impl CancelCanonical {
     }
 }
 
-/// Anchor-pool top-up canonical view. Layout:
-///
-/// ```text
-///   0..19       ANCHOR_TOPUP_DOMAIN  ("nyx-anchor-topup-v1")
-///   19..35      order_id      : [u8; 16]
-///   35..67      anchor_pool_hash : [u8; 32]   (SHA-256 over the NEW anchors)
-///   67..75      topup_nonce   : u64 LE
-/// ```
-///
-/// `anchor_pool_hash` is [`anchor_pool_hash`] over ONLY the newly-added
-/// anchors (not the whole pool) — the handler appends them after the
-/// signature verifies. `topup_nonce` is a per-order monotonic counter so
-/// a top-up can't be replayed (the matcher tracks the last accepted
-/// nonce per order). `trading_key` is attested implicitly by the Ed25519
-/// signature, as in [`OrderCanonical`].
-#[derive(Clone, Debug)]
-pub struct AnchorTopUpCanonical {
-    pub order_id: [u8; 16],
-    pub anchor_pool_hash: [u8; 32],
-    pub topup_nonce: u64,
-}
-
-impl AnchorTopUpCanonical {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(ANCHOR_TOPUP_DOMAIN.len() + 16 + 32 + 8);
-        buf.extend_from_slice(ANCHOR_TOPUP_DOMAIN);
-        buf.extend_from_slice(&self.order_id);
-        buf.extend_from_slice(&self.anchor_pool_hash);
-        buf.extend_from_slice(&self.topup_nonce.to_le_bytes());
-        buf
-    }
-
-    pub fn digest(&self) -> [u8; 32] {
-        Sha256::digest(self.to_bytes()).into()
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -262,7 +184,7 @@ mod tests {
     /// If you intentionally change the layout, regenerate this hex
     /// AND the TS-side fixture in the same commit.
     const FIXTURE_DIGEST_HEX: &str =
-        "03c9cb7db15bd91461dc5f21788ff975adb11351cb77e386ea5ca66ff07235ae";
+        "86e585b1c0f2229e61ebbd9d724714577c78359539b6662a5b88b90ec543942a";
 
     /// Pinned cancel-fixture digest. Same parity rule applies.
     const CANCEL_FIXTURE_DIGEST_HEX: &str =
@@ -281,7 +203,8 @@ mod tests {
             note_commitment: [0x22; 32],
             user_commitment: [0x33; 32],
             arrival_nonce: 42,
-            anchor_pool_hash: [0x44; 32],
+            viewing_pubkey: [0x44; 32],
+            session_id: [0x66; 32],
         }
     }
 
@@ -304,9 +227,9 @@ mod tests {
     }
 
     #[test]
-    fn fixture_length_is_167_plus_symbol() {
+    fn fixture_length_is_199_plus_symbol() {
         let bytes = fixture().to_bytes().unwrap();
-        assert_eq!(bytes.len(), 167 + 8); // SOL-USDC = 8 bytes
+        assert_eq!(bytes.len(), 199 + 8); // SOL-USDC = 8 bytes
     }
 
     #[test]
@@ -358,56 +281,8 @@ mod tests {
         perturb!(note_commitment = [0x23; 32]);
         perturb!(user_commitment = [0x34; 32]);
         perturb!(arrival_nonce = 43);
-        perturb!(anchor_pool_hash = [0x45; 32]);
-    }
-
-    #[test]
-    fn anchor_topup_canonical_is_deterministic_and_domain_separated() {
-        let t = AnchorTopUpCanonical {
-            order_id: [0x11; 16],
-            anchor_pool_hash: [0x44; 32],
-            topup_nonce: 7,
-        };
-        // Deterministic.
-        assert_eq!(t.digest(), t.digest());
-        // Layout length: 19 (domain) + 16 + 32 + 8.
-        assert_eq!(t.to_bytes().len(), 19 + 16 + 32 + 8);
-        // Domain-separated from an order submit + a cancel with the same id.
-        let order = OrderCanonical {
-            order_id: t.order_id,
-            anchor_pool_hash: t.anchor_pool_hash,
-            ..fixture()
-        };
-        assert_ne!(t.digest(), order.digest().unwrap());
-        let cancel = CancelCanonical {
-            order_id: t.order_id,
-            trading_key: [0; 32],
-            cancel_nonce: 7,
-        };
-        assert_ne!(t.digest(), cancel.digest());
-        // nonce + pool-hash both affect the digest.
-        let mut t2 = t.clone();
-        t2.topup_nonce = 8;
-        assert_ne!(t.digest(), t2.digest());
-        let mut t3 = t.clone();
-        t3.anchor_pool_hash = [0x45; 32];
-        assert_ne!(t.digest(), t3.digest());
-    }
-
-    #[test]
-    fn anchor_pool_hash_is_order_sensitive() {
-        let a = Anchor {
-            inner_hash: [1u8; 32],
-            nullifier: [2u8; 32],
-        };
-        let b = Anchor {
-            inner_hash: [3u8; 32],
-            nullifier: [4u8; 32],
-        };
-        // Swapping the order of two distinct anchors changes the hash.
-        assert_ne!(anchor_pool_hash(&[a, b]), anchor_pool_hash(&[b, a]));
-        // Deterministic.
-        assert_eq!(anchor_pool_hash(&[a, b]), anchor_pool_hash(&[a, b]));
+        perturb!(viewing_pubkey = [0x45; 32]);
+        perturb!(session_id = [0x67; 32]);
     }
 
     #[test]

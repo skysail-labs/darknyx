@@ -119,6 +119,20 @@ export async function gwFetch(
   throw last;
 }
 
+/** Fetch and validate the fresh 32-byte process-boot session that every order
+ * signature must bind. A CVM restart intentionally invalidates old bodies. */
+export async function fetchBootSessionId(gateway: string): Promise<Uint8Array> {
+  const response = await gwFetch(`${gateway.replace(/\/$/, "")}/info`);
+  if (!response.ok) {
+    throw new Error(`/info returned ${response.status}: ${await response.text()}`);
+  }
+  const body = (await response.json()) as { boot_session_id?: string };
+  if (!body.boot_session_id?.match(/^[0-9a-f]{64}$/i)) {
+    throw new Error("/info boot_session_id must be 32-byte hex");
+  }
+  return Uint8Array.from(Buffer.from(body.boot_session_id, "hex"));
+}
+
 /** Fetch the live raw SOL/USD price integer the CVM's oracle uses. */
 export async function fetchOracleAnchor(): Promise<bigint> {
   if (process.env.NYX_CVM_PRICE) return BigInt(process.env.NYX_CVM_PRICE);

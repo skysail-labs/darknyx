@@ -1,53 +1,41 @@
 /**
- * Recover a change note's spendable opening from the PERMANENT ON-CHAIN
- * ciphertext (change-amount recovery, Proposal B) — no FillMemo required.
+ * Recover a v3 change note from the permanent on-chain ciphertext.
  *
- * The amount-privacy revamp left a fill's `change_amount` only in the live
- * live fills-channel memo + a TTL log that a CVM redeploy wipes. The settle ix now also
- * carries the amount ENCRYPTED to the order owner's X25519 viewing key
- * (`fill_recovery`), which the indexer surfaces opaquely as
- * `IndexerFill.{ephemeralPubkey, changeEnc}`. This module turns that back into a
- * spendable note on any device that has the seed.
+ * The ciphertext reveals the private amount only. The output inner is not
+ * settlement-id- or anchor-derived: VALID_MATCH_BATCH v3 derives it from the
+ * consumed input opening. Recovery therefore tests the caller's known input
+ * notes, derives `Poseidon3(24, input_inner, role)`, and accepts only the one
+ * whose recomputed commitment equals the on-chain output bytes.
  *
- * Two checks, in order:
- *   1. Decrypt `changeEnc` with `deriveViewingEncKeypair(seed)`. A wrong key or a
- *      tampered ciphertext fails the AEAD tag → `null` (not ours / corrupt).
- *   2. Self-verify (Vuln-4): the decrypted amount must recompute the on-chain
- *      `changeNoteCommitment` under the correct `inner_hash`. We don't know a
- *      priori whether the note was a FINAL change note (`derive_inner(match_id,
- *      role)`) or a CONTINUATION (one of the order's anchor `inner_hash`es), so
- *      we try the final case then probe the anchor pool; the match also recovers
- *      the spendable `inner_hash`. A decrypted amount that recomputes NO known
- *      commitment is rejected (a misbehaving TEE that encrypted a wrong amount).
+ * The later durable-recovery slice expands the 128-byte envelope to recover
+ * trade outputs and seed-plus-chain cold starts. This function already avoids
+ * the retired anchor/session assumptions and safely reconstructs change chains
+ * when their initial input opening is present locally.
  */
 
 import {
   deriveViewingEncKeypair,
-  deriveInnerHash,
+  bn254ToBE32,
 } from "../keys/key-generators.js";
 import { decryptChangeAmount } from "../keys/fill-encryption.js";
 import {
-  deriveChangeInner,
-  CHANGE_ROLE_BUYER,
-  CHANGE_ROLE_SELLER,
-} from "../utxo/change-note.js";
+  deriveMatchOutputInner,
+  MATCH_ROLE_CHANGE_BUYER,
+  MATCH_ROLE_CHANGE_SELLER,
+} from "../utxo/match-output.js";
 import { noteCommitmentV2 } from "../utxo/note.js";
 import type { StoredNote } from "../utxo/note-store.js";
 import type { IndexerFill } from "./history.js";
 
 export interface RecoverParams {
   masterSeed: Uint8Array;
-  /** The order's note owner commitment (`Poseidon2(spending_key, r_owner)`). */
-  ownerCommitment: bigint;
-  /** 32-byte base + quote mints. Buyer change is quote-denominated; seller base. */
+  /** Known spendable inputs. Recovery derives candidate v3 outputs from these. */
+  candidateInputs: Iterable<StoredNote>;
+  /** Buyer change is quote-denominated; seller change is base-denominated. */
   baseMint: Uint8Array;
   quoteMint: Uint8Array;
-  /** Anchor-pool indices to probe for a CONTINUATION note (the initial 10 plus
-   *  any top-ups). Default 64. */
-  anchorProbeLimit?: number;
 }
 
-const fromHex = (h: string) => Uint8Array.from(Buffer.from(h, "hex"));
 const toHex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
 function fromHexExact(value: string, bytes: number): Uint8Array | null {
@@ -63,76 +51,73 @@ function be32ToBig(b: Uint8Array): bigint {
   return n;
 }
 
-/** Extract the u64 `match_id` from the 16-byte payload field (low 8 bytes, LE). */
-function matchIdU64(matchIdHex: string): bigint {
-  const b = fromHex(matchIdHex);
-  if (b.length !== 16)
-    throw new Error(`matchId must be 16 bytes; got ${b.length}`);
-  return new DataView(b.buffer, b.byteOffset, 16).getBigUint64(8, true);
-}
+const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
+  Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0;
 
 /**
- * Attempt to recover the spendable change note for one located fill. Returns the
- * `StoredNote` on success, or `null` if the fill carries no ciphertext, isn't
- * ours, or doesn't self-verify.
+ * Attempt to recover one change note. Returns `null` when the fill is exact,
+ * the ciphertext is malformed/not ours, or none of the supplied input notes
+ * derives the on-chain commitment.
  */
 export async function recoverChangeFromChain(
   fill: IndexerFill,
   params: RecoverParams,
 ): Promise<StoredNote | null> {
   if (!fill.changeNoteCommitment || !fill.ephemeralPubkey || !fill.changeEnc) {
-    return null; // exact fill / no recovery ciphertext.
+    return null;
   }
 
-  // (1) Decrypt — AEAD tag failure ⇒ not our key, or tampered.
+  const ephemeralPubkey = fromHexExact(fill.ephemeralPubkey, 32);
+  const changeEnc = fromHexExact(fill.changeEnc, 36);
+  const targetBytes = fromHexExact(fill.changeNoteCommitment, 32);
+  if (!ephemeralPubkey || !changeEnc || !targetBytes) return null;
+
   const { secretKey } = deriveViewingEncKeypair(params.masterSeed);
-  const amount = decryptChangeAmount(
-    secretKey,
-    fromHex(fill.ephemeralPubkey),
-    fromHex(fill.changeEnc),
-  );
+  const amount = decryptChangeAmount(secretKey, ephemeralPubkey, changeEnc);
   if (amount === null) return null;
 
   const tokenMint = fill.side === "buyer" ? params.quoteMint : params.baseMint;
-  const role = fill.side === "buyer" ? CHANGE_ROLE_BUYER : CHANGE_ROLE_SELLER;
-  const targetBytes = fromHexExact(fill.changeNoteCommitment, 32);
-  if (!targetBytes) return null;
-  const target = toHex(targetBytes);
+  const role =
+    fill.side === "buyer"
+      ? MATCH_ROLE_CHANGE_BUYER
+      : MATCH_ROLE_CHANGE_SELLER;
 
-  const recomputes = async (innerHash: bigint): Promise<boolean> => {
-    const c = await noteCommitmentV2({
+  for (const input of params.candidateInputs) {
+    if (!sameBytes(input.tokenMint, tokenMint)) continue;
+
+    const inputBytes = fromHexExact(input.commitment, 32);
+    if (!inputBytes) continue;
+    const recomputedInput = await noteCommitmentV2({
+      tokenMint: input.tokenMint,
+      amount: input.amount,
+      ownerCommitment: input.ownerCommitment,
+      innerHash: input.innerHash,
+    });
+    if (!sameBytes(recomputedInput, inputBytes)) continue;
+
+    const outputInnerBytes = await deriveMatchOutputInner(
+      bn254ToBE32(input.innerHash),
+      role,
+    );
+    const outputInner = be32ToBig(outputInnerBytes);
+    const output = await noteCommitmentV2({
       tokenMint,
       amount,
-      ownerCommitment: params.ownerCommitment,
-      innerHash,
+      ownerCommitment: input.ownerCommitment,
+      innerHash: outputInner,
     });
-    return Buffer.compare(Buffer.from(c), Buffer.from(targetBytes)) === 0;
-  };
+    if (!sameBytes(output, targetBytes)) continue;
 
-  const note = (innerHash: bigint, anchorIndex?: number): StoredNote => ({
-    commitment: target,
-    tokenMint,
-    amount,
-    ownerCommitment: params.ownerCommitment,
-    innerHash,
-    orderId: fill.orderId,
-    anchorIndex,
-  });
-
-  // (2a) FINAL change note: inner_hash = derive_inner(match_id, role).
-  const finalInner = be32ToBig(
-    deriveChangeInner(matchIdU64(fill.matchId), role),
-  );
-  if (await recomputes(finalInner)) return note(finalInner);
-
-  // (2b) CONTINUATION note: inner_hash is one of the order's anchor inner_hashes.
-  const probe = params.anchorProbeLimit ?? 64;
-  const orderId = fromHex(fill.orderId);
-  for (let i = 0; i < probe; i++) {
-    const inner = deriveInnerHash(params.masterSeed, orderId, i);
-    if (await recomputes(inner)) return note(inner, i);
+    return {
+      commitment: toHex(output),
+      tokenMint,
+      amount,
+      ownerCommitment: input.ownerCommitment,
+      innerHash: outputInner,
+      orderId: fill.orderId.toLowerCase(),
+      consumedCommitment: toHex(inputBytes),
+    };
   }
 
-  // Decrypted but self-verify failed under every candidate — reject.
   return null;
 }

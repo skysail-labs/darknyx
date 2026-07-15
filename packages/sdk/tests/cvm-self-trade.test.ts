@@ -57,7 +57,6 @@ import {
   deriveViewingEncKeypair,
 } from "../src/keys/key-generators.js";
 import { nullifierV2 } from "../src/utxo/note.js";
-import { buildAnchorPool, anchorsToJson } from "../src/orders/anchor-pool.js";
 import { vaultConfigPda } from "../src/idl/vault-client.js";
 import {
   orderCanonicalDigest,
@@ -71,6 +70,7 @@ import {
   gwFetch,
   authToken,
   fetchOracleAnchor,
+  fetchBootSessionId,
   hex,
   withFee,
   scaledQuote,
@@ -263,6 +263,7 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
       const slot = await conn.getSlot("confirmed");
       // Production intake caps lock TTLs at 4,500 slots.
       const expirySlot = BigInt(slot + 3_000);
+      const bootSessionId = await fetchBootSessionId(GATEWAY);
 
       // Build a signed limit-order body (a plain-limit subset of the settle
       // test's inline builder — no fills/re-match knobs needed here).
@@ -273,13 +274,10 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
         note: DepositedNote,
         vi: { proofBytes: Uint8Array; root: Uint8Array },
         orderIndex: number,
+        arrivalNonce: bigint = 1n,
       ) {
         const orderId = deriveOrderId(p.masterSeed, orderIndex);
-        const pool = await buildAnchorPool(
-          p.masterSeed,
-          p.spendingKey,
-          orderId,
-        );
+        const viewingPubkey = deriveViewingEncKeypair(p.masterSeed).publicKey;
         const digest = orderCanonicalDigest({
           symbol: new TextEncoder().encode(SYMBOL),
           side,
@@ -291,8 +289,9 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
           orderId,
           noteCommitment: note.commitment,
           userCommitment: p.userCommitment,
-          arrivalNonce: 1n,
-          anchorPoolHash: pool.poolHash,
+          arrivalNonce,
+          viewingPubkey,
+          sessionId: bootSessionId,
         });
         const sig = nacl.sign.detached(digest, p.trading.secretKey);
         return {
@@ -308,7 +307,7 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
             order_id: hex(orderId),
             note_commitment: hex(note.commitment),
             user_commitment: hex(p.userCommitment),
-            arrival_nonce: 1,
+            arrival_nonce: Number(arrivalNonce),
             trading_key: hex(p.trading.publicKey.toBytes()),
             trading_key_signature: hex(sig),
             owner_commitment: hex(bn254ToBE32(p.ownerCommit)),
@@ -318,10 +317,8 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
             valid_input_proof: hex(vi.proofBytes),
             collateral_amount: Number(note.amount),
             tree_id: note.treeId,
-            viewing_pubkey: hex(
-              deriveViewingEncKeypair(p.masterSeed).publicKey,
-            ),
-            anchors: anchorsToJson(pool.anchors),
+            viewing_pubkey: hex(viewingPubkey),
+            session_id: hex(bootSessionId),
           },
         };
       }
@@ -341,6 +338,7 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
         selfAskNote,
         selfAskVI,
         N + 1,
+        2n,
       );
       const takerAsk = await buildOrder(
         taker,

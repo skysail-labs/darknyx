@@ -1,33 +1,28 @@
 /**
- * Fill-memo reception + settle-memo integrity check (Phase 8).
+ * Anchor-free fill-memo reception + integrity verification.
  *
- * The CVM streams a `FillMemo` per continuation fill on `/v1/stream`'s
- * per-account `fills` channel.
- * Before storing the change note the client MUST verify the memo — this is
- * the guard against a misbehaving TEE (design-doc Vulnerability 4):
- *
- *   1. inner_hash binding: the memo's `inner_hash` must equal the client's
- *      OWN deterministically-derived `deriveInnerHash(seed, orderId,
- *      anchor_index)`. A TEE that substituted a different inner_hash (so it
- *      could later forge a nullifier it controls) is caught here.
- *   2. commitment binding: Poseidon6(mint, change_amount, owner, inner_hash)
- *      must equal the reported `change_note_commitment`.
- *
- * Only a memo that passes BOTH becomes a `ChangeNoteRecord`.
+ * VALID_MATCH_BATCH v3 derives a change output as
+ * `Poseidon3(24, consumed_input_inner, role)`. The live memo therefore names
+ * the exact consumed commitment and role. The client resolves that opening
+ * from its NoteStore, derives the expected inner itself, and recomputes both
+ * the consumed and output commitments before storing anything.
  */
 
-import { deriveInnerHash, bn254ToBE32 } from "../keys/key-generators.js";
+import { bn254ToBE32 } from "../keys/key-generators.js";
+import {
+  deriveMatchOutputInner,
+  MATCH_ROLE_CHANGE_BUYER,
+  MATCH_ROLE_CHANGE_SELLER,
+} from "../utxo/match-output.js";
 import { noteCommitmentV2 } from "../utxo/note.js";
 import type { ChangeNoteRecord, NoteStore } from "../utxo/note-store.js";
 
 /** Wire shape of a fill memo (mirrors `nyx_tee::matcher::FillMemo`). */
 export interface FillMemo {
-  /** Per-connection monotonic sequence. A gap means missed memos — recover via
-   *  the indexer backfill ("backfill then tail"). Present on the live stream. */
-  seq?: number;
   order_id: string; // 16-byte hex
-  anchor_index: number;
-  change_amount: number; // u64 fits a JS number for realistic amounts; see note below
+  consumed_note_commitment: string; // 32-byte hex
+  output_role: number; // buyer/seller change role byte
+  change_amount: number;
   change_note_commitment: string; // 32-byte hex
   mint: string; // 32-byte hex
   inner_hash: string; // 32-byte hex
@@ -36,7 +31,12 @@ export interface FillMemo {
 export class FillMemoError extends Error {
   constructor(
     message: string,
-    readonly kind: "inner_hash_mismatch" | "commitment_mismatch" | "malformed",
+    readonly kind:
+      | "input_note_missing"
+      | "input_note_mismatch"
+      | "inner_hash_mismatch"
+      | "commitment_mismatch"
+      | "malformed",
   ) {
     super(message);
     this.name = "FillMemoError";
@@ -44,8 +44,7 @@ export class FillMemoError extends Error {
 }
 
 function fromHex(hex: string, label: string, len: number): Uint8Array {
-  // Validate FULLY: Buffer.from(hex,"hex") silently truncates at the first
-  // non-hex char, so length-only checks let malformed input through.
+  // Buffer.from(hex, "hex") silently truncates at the first non-hex byte.
   if (
     typeof hex !== "string" ||
     hex.length !== len * 2 ||
@@ -53,31 +52,30 @@ function fromHex(hex: string, label: string, len: number): Uint8Array {
   ) {
     throw new FillMemoError(`${label}: expected ${len}-byte hex`, "malformed");
   }
-  const bytes = Uint8Array.from(Buffer.from(hex, "hex"));
-  if (bytes.length !== len)
-    throw new FillMemoError(`${label}: expected ${len} bytes`, "malformed");
-  return bytes;
-}
-
-/** A non-negative safe-integer field; throws FillMemoError otherwise. */
-function requireU32Index(n: number): number {
-  if (!Number.isInteger(n) || n < 0 || n > 0xffff_ffff) {
-    throw new FillMemoError(
-      `anchor_index must be a u32; got ${n}`,
-      "malformed",
-    );
-  }
-  return n;
+  return Uint8Array.from(Buffer.from(hex, "hex"));
 }
 
 function requireAmount(n: number): bigint {
-  if (!Number.isInteger(n) || n < 0) {
+  if (!Number.isSafeInteger(n) || n < 0) {
     throw new FillMemoError(
-      `change_amount must be a non-negative integer; got ${n}`,
+      `change_amount must be a non-negative safe integer; got ${n}`,
       "malformed",
     );
   }
   return BigInt(n);
+}
+
+function requireOutputRole(role: number): number {
+  if (
+    role !== MATCH_ROLE_CHANGE_BUYER &&
+    role !== MATCH_ROLE_CHANGE_SELLER
+  ) {
+    throw new FillMemoError(
+      `output_role must be a change role; got ${role}`,
+      "malformed",
+    );
+  }
+  return role;
 }
 
 function be32ToBig(b: Uint8Array): bigint {
@@ -86,36 +84,29 @@ function be32ToBig(b: Uint8Array): bigint {
   return n;
 }
 
-/**
- * Verify a fill memo against the client's own keys + build the change-note
- * record. `masterSeed` + `orderId` (in the memo) reproduce the expected
- * inner_hash; `ownerCommitment` is the order's note owner. Throws
- * `FillMemoError` on any mismatch.
- *
- * `change_amount` arrives as a JSON number — exact for amounts below 2^53.
- * For larger amounts pass the memo through a bigint-preserving JSON parser
- * and call `verifyFillMemoExact` with an explicit `changeAmount` instead.
- */
+const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
+  Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0;
+
+/** Verify a JSON-number memo. Use `verifyFillMemoExact` for amounts above 2^53. */
 export async function verifyFillMemo(
   memo: FillMemo,
-  masterSeed: Uint8Array,
-  ownerCommitment: bigint,
+  store: NoteStore,
 ): Promise<ChangeNoteRecord> {
-  return verifyFillMemoExact(
-    memo,
-    masterSeed,
-    ownerCommitment,
-    requireAmount(memo.change_amount),
-  );
+  return verifyFillMemoExact(memo, store, requireAmount(memo.change_amount));
 }
 
+/** Verify a memo with an exact bigint amount supplied by the caller. */
 export async function verifyFillMemoExact(
   memo: FillMemo,
-  masterSeed: Uint8Array,
-  ownerCommitment: bigint,
+  store: NoteStore,
   changeAmount: bigint,
 ): Promise<ChangeNoteRecord> {
-  const orderId = fromHex(memo.order_id, "order_id", 16);
+  fromHex(memo.order_id, "order_id", 16);
+  const consumed = fromHex(
+    memo.consumed_note_commitment,
+    "consumed_note_commitment",
+    32,
+  );
   const mint = fromHex(memo.mint, "mint", 32);
   const memoInner = fromHex(memo.inner_hash, "inner_hash", 32);
   const memoCommitment = fromHex(
@@ -123,59 +114,77 @@ export async function verifyFillMemoExact(
     "change_note_commitment",
     32,
   );
-  const anchorIndex = requireU32Index(memo.anchor_index);
+  const outputRole = requireOutputRole(memo.output_role);
+  if (changeAmount < 0n || changeAmount > 0xffff_ffff_ffff_ffffn) {
+    throw new FillMemoError("change_amount must fit u64", "malformed");
+  }
 
-  // (1) inner_hash binding — the TEE must have used OUR derived inner_hash.
-  const expectedInner = bn254ToBE32(
-    deriveInnerHash(masterSeed, orderId, anchorIndex),
-  );
-  if (
-    Buffer.compare(Buffer.from(expectedInner), Buffer.from(memoInner)) !== 0
-  ) {
+  const consumedHex = Buffer.from(consumed).toString("hex");
+  const input = await store.get(consumedHex);
+  if (!input) {
     throw new FillMemoError(
-      `inner_hash mismatch at anchor_index ${anchorIndex}: ` +
-        `TEE used ${memo.inner_hash}, client derived ${Buffer.from(expectedInner).toString("hex")}`,
+      `consumed input ${consumedHex} is not present in the NoteStore`,
+      "input_note_missing",
+    );
+  }
+
+  // Reject corrupted or mismatched local openings before using one as the
+  // derivation authority for the output.
+  const recomputedInput = await noteCommitmentV2({
+    tokenMint: input.tokenMint,
+    amount: input.amount,
+    ownerCommitment: input.ownerCommitment,
+    innerHash: input.innerHash,
+  });
+  if (!sameBytes(recomputedInput, consumed) || !sameBytes(input.tokenMint, mint)) {
+    throw new FillMemoError(
+      "consumed input opening or change mint does not match the memo",
+      "input_note_mismatch",
+    );
+  }
+
+  const expectedInner = await deriveMatchOutputInner(
+    bn254ToBE32(input.innerHash),
+    outputRole,
+  );
+  if (!sameBytes(expectedInner, memoInner)) {
+    throw new FillMemoError(
+      `inner_hash mismatch: TEE used ${memo.inner_hash}, client derived ${Buffer.from(expectedInner).toString("hex")}`,
       "inner_hash_mismatch",
     );
   }
 
-  // (2) commitment binding — recompute + compare.
-  const innerBig = be32ToBig(memoInner);
-  const recomputed = await noteCommitmentV2({
+  const innerHash = be32ToBig(memoInner);
+  const recomputedOutput = await noteCommitmentV2({
     tokenMint: mint,
     amount: changeAmount,
-    ownerCommitment,
-    innerHash: innerBig,
+    ownerCommitment: input.ownerCommitment,
+    innerHash,
   });
-  const recomputedHex = Buffer.from(recomputed).toString("hex");
-  if (
-    Buffer.compare(Buffer.from(recomputed), Buffer.from(memoCommitment)) !== 0
-  ) {
+  if (!sameBytes(recomputedOutput, memoCommitment)) {
     throw new FillMemoError(
-      `commitment mismatch: recomputed ${recomputedHex} != reported ${memo.change_note_commitment}`,
+      `commitment mismatch: recomputed ${Buffer.from(recomputedOutput).toString("hex")} != reported ${memo.change_note_commitment}`,
       "commitment_mismatch",
     );
   }
 
   return {
-    commitment: recomputedHex,
+    commitment: Buffer.from(recomputedOutput).toString("hex"),
     tokenMint: mint,
     amount: changeAmount,
-    ownerCommitment,
-    innerHash: innerBig,
-    orderId: memo.order_id,
-    anchorIndex,
+    ownerCommitment: input.ownerCommitment,
+    innerHash,
+    orderId: memo.order_id.toLowerCase(),
+    consumedCommitment: consumedHex,
   };
 }
 
 /** Verify a memo and, on success, persist the change note. */
 export async function receiveFillMemo(
   memo: FillMemo,
-  masterSeed: Uint8Array,
-  ownerCommitment: bigint,
   store: NoteStore,
 ): Promise<ChangeNoteRecord> {
-  const rec = await verifyFillMemo(memo, masterSeed, ownerCommitment);
+  const rec = await verifyFillMemo(memo, store);
   await store.put(rec);
   return rec;
 }

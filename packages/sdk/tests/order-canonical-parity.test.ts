@@ -33,7 +33,7 @@ import {
 // ─── Pinned hex digests — must match the Rust constants ─────────────────────
 
 const FIXTURE_DIGEST_HEX =
-  "03c9cb7db15bd91461dc5f21788ff975adb11351cb77e386ea5ca66ff07235ae";
+  "86e585b1c0f2229e61ebbd9d724714577c78359539b6662a5b88b90ec543942a";
 
 const CANCEL_FIXTURE_DIGEST_HEX =
   "da322b3d5d025a9dade32876d05798346e0ebbe69e391d274daa3bd34fcf7962";
@@ -53,7 +53,8 @@ function fixture(): OrderCanonical {
     noteCommitment: new Uint8Array(32).fill(0x22),
     userCommitment: new Uint8Array(32).fill(0x33),
     arrivalNonce: 42n,
-    anchorPoolHash: new Uint8Array(32).fill(0x44),
+    viewingPubkey: new Uint8Array(32).fill(0x44),
+    sessionId: new Uint8Array(32).fill(0x66),
   };
 }
 
@@ -75,9 +76,9 @@ describe("order canonical encoder — Rust parity", () => {
     expect(actual).toBe(FIXTURE_DIGEST_HEX);
   });
 
-  test("fixture byte length is 167 + symbol.length", () => {
+  test("fixture byte length is 199 + symbol.length", () => {
     const bytes = orderCanonicalBytes(fixture());
-    expect(bytes.length).toBe(167 + "SOL-USDC".length);
+    expect(bytes.length).toBe(199 + "SOL-USDC".length);
   });
 
   test("each field perturbation changes the digest", () => {
@@ -109,8 +110,12 @@ describe("order canonical encoder — Rust parity", () => {
     );
     perturb((o) => (o.arrivalNonce = 43n), "arrivalNonce");
     perturb(
-      (o) => (o.anchorPoolHash = new Uint8Array(32).fill(0x45)),
-      "anchorPoolHash",
+      (o) => (o.viewingPubkey = new Uint8Array(32).fill(0x45)),
+      "viewingPubkey",
+    );
+    perturb(
+      (o) => (o.sessionId = new Uint8Array(32).fill(0x67)),
+      "sessionId",
     );
   });
 
@@ -142,13 +147,13 @@ describe("order canonical encoder — Rust parity", () => {
       /userCommitment must be 32 bytes/,
     );
 
-    const o4 = { ...fixture(), anchorPoolHash: new Uint8Array(31) };
+    const o4 = { ...fixture(), viewingPubkey: new Uint8Array(31) };
     expect(() => orderCanonicalBytes(o4)).toThrow(
-      /anchorPoolHash must be 32 bytes/,
+      /viewingPubkey must be 32 bytes/,
     );
-    const o5 = { ...fixture(), anchorPoolHash: new Uint8Array(33) };
+    const o5 = { ...fixture(), sessionId: new Uint8Array(33) };
     expect(() => orderCanonicalBytes(o5)).toThrow(
-      /anchorPoolHash must be 32 bytes/,
+      /sessionId must be 32 bytes/,
     );
   });
 

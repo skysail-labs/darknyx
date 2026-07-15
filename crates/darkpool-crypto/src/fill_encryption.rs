@@ -55,6 +55,18 @@ pub const SIDE_BLOB_LEN: usize = NONCE_LEN + AMOUNT_LEN + TAG_LEN; // 36
 /// X25519 public-key / shared-secret length.
 pub const X25519_LEN: usize = 32;
 
+/// Return true only when `public_key` contributes to X25519 Diffie-Hellman.
+/// RFC 7748 requires protocols to reject the all-zero shared secret; doing the
+/// check at order intake prevents low-order points from turning the supposedly
+/// owner-only recovery ciphertext into a public, attacker-chosen key stream.
+pub fn is_contributory_x25519_public_key(public_key: &[u8; X25519_LEN]) -> bool {
+    // Any fixed non-zero scalar is sufficient for the low-order test. X25519
+    // clamps it internally; this value is not secret and never reused for data.
+    let probe = StaticSecret::from([0x42; X25519_LEN]);
+    let shared = probe.diffie_hellman(&PublicKey::from(*public_key));
+    shared.as_bytes().iter().any(|byte| *byte != 0)
+}
+
 /// Compute the on-chain ephemeral public key for a given ephemeral secret.
 ///
 /// The secret is generated once per fill; this public is shared across both
@@ -76,6 +88,11 @@ pub fn encrypt_change_amount(
     amount: u64,
     nonce12: &[u8; NONCE_LEN],
 ) -> Result<[u8; SIDE_BLOB_LEN], CryptoError> {
+    if !is_contributory_x25519_public_key(recipient_pub) {
+        return Err(CryptoError::Aead(
+            "fill enc recipient is a non-contributory X25519 point".to_string(),
+        ));
+    }
     let eph = StaticSecret::from(*ephemeral_secret);
     let eph_pub = PublicKey::from(&eph);
     let shared = eph.diffie_hellman(&PublicKey::from(*recipient_pub));
@@ -104,6 +121,9 @@ pub fn decrypt_change_amount(
     ephemeral_pub: &[u8; X25519_LEN],
     blob: &[u8; SIDE_BLOB_LEN],
 ) -> Option<u64> {
+    if !is_contributory_x25519_public_key(ephemeral_pub) {
+        return None;
+    }
     let secret = StaticSecret::from(*viewing_secret);
     let my_pub = PublicKey::from(&secret);
     let shared = secret.diffie_hellman(&PublicKey::from(*ephemeral_pub));
@@ -230,4 +250,31 @@ mod tests {
         "13be4feaeaf204c7fd3358fc9c00721881d174278128227ec674f37f7fe97b6d";
     const EXPECTED_BLOB_HEX: &str =
         "101112131415161718191a1bf38cd2533492baadb9e66ce516a13d47fca255f1f877cb1e";
+
+    #[test]
+    fn rejects_low_order_x25519_points() {
+        // The seven canonical/non-canonical low-order encodings blacklisted by
+        // deployed X25519 implementations. Keep this list in byte parity with
+        // the SDK KAT.
+        let low_order = [
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0100000000000000000000000000000000000000000000000000000000000000",
+            "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+            "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+            "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+            "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+            "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        ];
+        for encoded in low_order {
+            let point: [u8; 32] = hex::decode(encoded).unwrap().try_into().unwrap();
+            assert!(
+                !is_contributory_x25519_public_key(&point),
+                "accepted low-order point {encoded}"
+            );
+        }
+        assert!(is_contributory_x25519_public_key(&recipient_pub()));
+        let zero = [0u8; 32];
+        assert!(encrypt_change_amount(&EPH_SECRET, &zero, AMOUNT, &NONCE).is_err());
+        assert!(decrypt_change_amount(&RECIPIENT_SECRET, &zero, &[0; SIDE_BLOB_LEN]).is_none());
+    }
 }

@@ -131,7 +131,7 @@ order's trading key, in addition to the bearer token.
 
 - **Place.** Sign the canonical order body. The signature binds every economic
   field of the order (symbol, side, type, amount, price limit, expiry, the
-  collateral-note commitment, the continuation anchor-pool hash, and a nonce) so
+  collateral-note commitment, viewing key, boot session, and nonce) so
   the venue can attribute the order to your key without any per-order on-chain
   transaction.
 - **Cancel.** Sign a canonical cancel body over the order id, your trading key,

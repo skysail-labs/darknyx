@@ -3,17 +3,17 @@
  *
  * Amount-privacy (P3b): the indexer is a COMMITMENT LOCATOR (no amounts), so
  * `backfillHistory` LOCATES change-note fills (order_id + commitment + slot) but
- * does NOT reconstruct openings. The spendable opening — amount + `inner_hash`/
- * `anchor_index` — comes from the WS `FillMemo`, which lands in the
+ * does NOT reconstruct openings. The spendable opening comes from the WS
+ * `FillMemo`, verified against the named consumed input in the
  * commitment-keyed NoteStore (so re-delivery is deduped).
  */
 
 import { describe, it, expect } from "vitest";
+import { deriveOrderId, bn254ToBE32 } from "../src/keys/key-generators.js";
 import {
-  deriveOrderId,
-  deriveInnerHash,
-  bn254ToBE32,
-} from "../src/keys/key-generators.js";
+  deriveMatchOutputInner,
+  MATCH_ROLE_CHANGE_BUYER,
+} from "../src/utxo/match-output.js";
 import { noteCommitmentV2 } from "../src/utxo/note.js";
 import { InMemoryNoteStore } from "../src/utxo/note-store.js";
 import { backfillHistory, type IndexerFill } from "../src/fills/history.js";
@@ -27,21 +27,50 @@ const OWNER =
 const QUOTE_MINT = new Uint8Array(32).fill(0x22);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
-/** Build the buyer (quote-side) change-note commitment for order n, anchor k. */
+const be32ToBig = (b: Uint8Array): bigint => {
+  let n = 0n;
+  for (const x of b) n = (n << 8n) | BigInt(x);
+  return n;
+};
+
+/** Build a buyer change output from one consumed quote note. */
 async function buyerCommitment(
   n: number,
-  k: number,
   amount: bigint,
-): Promise<{ orderId: string; commitment: string; inner: bigint }> {
+): Promise<{
+  orderId: string;
+  commitment: string;
+  inner: bigint;
+  inputCommitment: string;
+  inputInner: bigint;
+}> {
   const orderId = deriveOrderId(SEED, n);
-  const inner = deriveInnerHash(SEED, orderId, k);
+  const inputInner = BigInt(100 + n);
+  const inputCommitment = await noteCommitmentV2({
+    tokenMint: QUOTE_MINT,
+    amount: 1_000n,
+    ownerCommitment: OWNER,
+    innerHash: inputInner,
+  });
+  const inner = be32ToBig(
+    await deriveMatchOutputInner(
+      bn254ToBE32(inputInner),
+      MATCH_ROLE_CHANGE_BUYER,
+    ),
+  );
   const c = await noteCommitmentV2({
     tokenMint: QUOTE_MINT,
     amount,
     ownerCommitment: OWNER,
     innerHash: inner,
   });
-  return { orderId: hex(orderId), commitment: hex(c), inner };
+  return {
+    orderId: hex(orderId),
+    commitment: hex(c),
+    inner,
+    inputCommitment: hex(inputCommitment),
+    inputInner,
+  };
 }
 
 /** A fake fetch that serves a single order's fills by order_id query param. */
@@ -106,8 +135,7 @@ describe("backfill then tail", () => {
   it("backfillHistory gap-scans and locates change-note fills (no amounts)", async () => {
     const amount = 500n;
     const n = 3;
-    const k = 2;
-    const { orderId, commitment } = await buyerCommitment(n, k, amount);
+    const { orderId, commitment } = await buyerCommitment(n, amount);
 
     const rows: Record<string, IndexerFill[]> = {
       [orderId]: [
@@ -143,23 +171,22 @@ describe("backfill then tail", () => {
     const store = new InMemoryNoteStore();
     const n = 1;
 
-    // Pre-store a note from an earlier verified memo (anchor 0).
-    const a = await buyerCommitment(n, 0, 200n);
+    // The consumed input opening is already in the wallet's local UTXO set.
+    const b = await buyerCommitment(n, 150n);
     await store.put({
-      commitment: a.commitment,
+      commitment: b.inputCommitment,
       tokenMint: QUOTE_MINT,
-      amount: 200n,
+      amount: 1_000n,
       ownerCommitment: OWNER,
-      innerHash: a.inner,
-      orderId: a.orderId,
-      anchorIndex: 0,
+      innerHash: b.inputInner,
+      leafIndex: 1n,
     });
 
-    // A NEW live continuation fill (anchor 1) over the WS.
-    const b = await buyerCommitment(n, 1, 150n);
+    // A live continuation fill names that exact input and the v3 change role.
     const memo: FillMemo = {
       order_id: b.orderId,
-      anchor_index: 1,
+      consumed_note_commitment: b.inputCommitment,
+      output_role: MATCH_ROLE_CHANGE_BUYER,
       change_amount: 150,
       change_note_commitment: b.commitment,
       mint: hex(QUOTE_MINT),
@@ -195,15 +222,7 @@ describe("backfill then tail", () => {
     const all = await store.list();
     expect(all).toHaveLength(2); // backfilled + live, no dup
 
-    // Re-delivering the backfilled note over WS does not duplicate it.
-    const aMemo: FillMemo = {
-      order_id: a.orderId,
-      anchor_index: 0,
-      change_amount: 200,
-      change_note_commitment: a.commitment,
-      mint: hex(QUOTE_MINT),
-      inner_hash: hex(bn254ToBE32(a.inner)),
-    };
+    // Re-delivering the same verified output does not duplicate it.
     // A re-subscribe is a NEW connection — use a fresh FakeWs so the first
     // subscription's still-registered message handler doesn't also fire on this
     // emit (same-instance reuse double-processes aMemo).
@@ -221,7 +240,7 @@ describe("backfill then tail", () => {
     });
     ws2.emit("open");
     await Promise.resolve();
-    ws2.server({ ...aMemo, channel: "fills" });
+    ws2.server({ ...memo, channel: "fills" });
     await done2;
     expect(await store.list()).toHaveLength(2); // still 2 — commitment-keyed
   });

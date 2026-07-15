@@ -27,7 +27,7 @@ const changeNote = (commitment: string, leafIndex?: bigint): StoredNote => ({
   ownerCommitment: 9n,
   innerHash: 7n,
   orderId: "ab".repeat(8),
-  anchorIndex: 0,
+  consumedCommitment: "cd".repeat(32),
   leafIndex,
 });
 

@@ -49,12 +49,11 @@ the note spent, and the chain rejects any second use. Crucially, the nullifier
 depends on `inner_hash` but **not** on the amount.
 
 :::tip Why decouple the nullifier from the amount
-Because the spend-tag doesn't depend on value, you can **pre-commit** the
-nullifiers for your *future* change notes before you know their size. That's
-what lets a partial fill roll forward inside the enclave — the matcher rotates
-your residual in place and re-matches it, with no client round-trip. The
-pre-committed set is the **anchor pool** you submit with each order (see
-[Matching layer](./matching-layer)).
+The amount-independent inner hash gives every note one stable opening for both
+commitment and spend authorization. Match outputs use a stricter rule: the
+circuit derives each output inner from the consumed input inner and a role byte.
+That lets a partial fill roll forward without caller-selected output randomness
+or a client round-trip (see [Matching layer](./matching-layer)).
 :::
 
 ## The circuits

@@ -18,10 +18,10 @@ Get Started        - what Nyx is, the network, programmatic access
 API                - base URLs, authentication, transport & attestation
 Reference Data     - instruments
 Account            - account model, Merkle proofs, transparency, settlement status
-Orders             - place / cancel / modify / get / anchor top-up
+Orders             - place / cancel / modify / get
 WebSocket API      - trading socket, orders channel, fills channel
 Trading Concepts   - order types, TIF, execution attributes, clearing price,
-                     STP, the anchor pool, order compatibility
+                     STP and order compatibility
 SDK                - TypeScript client example
 How It Works       - trade flow, TEE architecture, privacy & attestation,
                      shielded pool, settlement, fee structure

@@ -56,6 +56,7 @@ export interface TeeInfo {
   mrtd?: string;
   teePubkey: string; // base58 (shard-0 primary)
   teePubkeys: string[]; // full K-shard set, shard order
+  bootSessionId: string; // 32-byte hex, fresh per CVM boot
 }
 
 export interface AttestationQuote {
@@ -75,6 +76,7 @@ export interface AttestationResult {
   quote: string;
   /** True when the result came from full DCAP verification (strict path). */
   dcapVerified: boolean;
+  bootSessionId: string;
 }
 
 async function getJson<T>(
@@ -113,13 +115,18 @@ export async function fetchInfo(
     mrtd?: string;
     tee_pubkey: string;
     tee_pubkeys?: string[];
+    boot_session_id: string;
   }>(new URL("/info", gatewayUrl).toString(), token, fetchImpl);
+  if (!/^[0-9a-fA-F]{64}$/.test(b.boot_session_id)) {
+    throw new AttestationError("invalid /info boot_session_id", "malformed");
+  }
   return {
     appId: b.app_id,
     composeHash: b.compose_hash,
     mrtd: b.tcb_info?.mrtd ?? b.mrtd,
     teePubkey: b.tee_pubkey,
     teePubkeys: b.tee_pubkeys ?? [b.tee_pubkey],
+    bootSessionId: b.boot_session_id,
   };
 }
 
@@ -238,6 +245,7 @@ export async function verifyAttestation(
       mrtd: report.mrtd,
       quote: att.quote,
       dcapVerified: true,
+      bootSessionId: info.bootSessionId,
     };
   }
 
@@ -269,5 +277,6 @@ export async function verifyAttestation(
     mrtd: info.mrtd,
     quote: att.quote,
     dcapVerified: false,
+    bootSessionId: info.bootSessionId,
   };
 }

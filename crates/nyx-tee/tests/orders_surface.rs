@@ -28,10 +28,7 @@ use axum::{
     Router,
 };
 use darkpool_matcher::book::{OrderSide, OrderType};
-use darkpool_matcher::order_canonical::{
-    anchor_pool_hash, Anchor, AnchorTopUpCanonical, CancelCanonical, OrderCanonical,
-    ANCHOR_POOL_SIZE, ANCHOR_TOPUP_SIZE,
-};
+use darkpool_matcher::order_canonical::{CancelCanonical, OrderCanonical};
 use ed25519_dalek::{Signer, SigningKey};
 use http_body_util::BodyExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
@@ -104,7 +101,8 @@ struct PlaceOrderBuilder {
     owner_commitment: [u8; 32],
     note_inner_hash: [u8; 32],
     nullifier: [u8; 32],
-    anchors: Vec<Anchor>,
+    viewing_pubkey: [u8; 32],
+    session_id: [u8; 32],
     /// Over-collateralization: when set, the collateral note carries this
     /// amount (≥ the derived floor) and the JSON declares `collateral_amount`.
     /// `None` ⇒ exact collateral (the opening amount == the derived floor).
@@ -146,12 +144,8 @@ impl PlaceOrderBuilder {
             owner_commitment: fr_safe(0x44),
             note_inner_hash: fr_safe(0x55),
             nullifier: [0x77; 32],
-            anchors: (0..ANCHOR_POOL_SIZE)
-                .map(|i| Anchor {
-                    inner_hash: fr_safe(0x10 + i as u8),
-                    nullifier: [0x90 + i as u8; 32],
-                })
-                .collect(),
+            viewing_pubkey: darkpool_crypto::ephemeral_public(&[0x21; 32]),
+            session_id: [0x5A; 32],
             collateral_amount: None,
         }
     }
@@ -219,7 +213,8 @@ impl PlaceOrderBuilder {
             note_commitment,
             user_commitment: self.user_commitment,
             arrival_nonce: self.arrival_nonce,
-            anchor_pool_hash: anchor_pool_hash(&self.anchors),
+            viewing_pubkey: self.viewing_pubkey,
+            session_id: self.session_id,
         };
         let digest = canonical.digest().unwrap();
         let sig = key.sign(&digest);
@@ -253,10 +248,8 @@ impl PlaceOrderBuilder {
             "valid_input_proof": hex::encode([0u8; 256]),
             // null when None (handler's `#[serde(default)]` → exact collateral).
             "collateral_amount": self.collateral_amount,
-            "anchors": self.anchors.iter().map(|a| json!({
-                "inner_hash": hex::encode(a.inner_hash),
-                "nullifier": hex::encode(a.nullifier),
-            })).collect::<Vec<_>>(),
+            "viewing_pubkey": hex::encode(self.viewing_pubkey),
+            "session_id": hex::encode(self.session_id),
         })
     }
 }
@@ -312,133 +305,6 @@ async fn cancel(
 async fn read_json(resp: axum::response::Response) -> serde_json::Value {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&body).unwrap()
-}
-
-async fn topup(
-    app: &Router,
-    bearer: &str,
-    order_id_hex: &str,
-    body: serde_json::Value,
-) -> axum::response::Response {
-    app.clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/orders/{order_id_hex}/anchors"))
-                .header("authorization", format!("Bearer {bearer}"))
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap()
-}
-
-/// Build a signed anchor-pool top-up body with `ANCHOR_TOPUP_SIZE` fresh
-/// (Fr-safe) anchors derived from `salt`.
-fn topup_body(
-    key: &SigningKey,
-    order_id: [u8; 16],
-    topup_nonce: u64,
-    salt: u8,
-) -> serde_json::Value {
-    let trading_key = key.verifying_key().to_bytes();
-    let anchors: Vec<Anchor> = (0..ANCHOR_TOPUP_SIZE)
-        .map(|i| {
-            let mut inner = [0u8; 32];
-            inner[31] = salt.wrapping_add(i as u8);
-            Anchor {
-                inner_hash: inner,
-                nullifier: [salt.wrapping_add(0x40 + i as u8); 32],
-            }
-        })
-        .collect();
-    let canonical = AnchorTopUpCanonical {
-        order_id,
-        anchor_pool_hash: anchor_pool_hash(&anchors),
-        topup_nonce,
-    };
-    let sig = key.sign(&canonical.digest());
-    json!({
-        "anchors": anchors.iter().map(|a| json!({
-            "inner_hash": hex::encode(a.inner_hash),
-            "nullifier": hex::encode(a.nullifier),
-        })).collect::<Vec<_>>(),
-        "topup_nonce": topup_nonce,
-        "trading_key": hex::encode(trading_key),
-        "trading_key_signature": hex::encode(sig.to_bytes()),
-    })
-}
-
-#[tokio::test]
-async fn anchor_topup_happy_path_then_replay_and_wrong_owner_rejected() {
-    let app = app_from(state());
-    let bearer = fresh_bearer();
-    let key = fresh_signing_key();
-    let builder = PlaceOrderBuilder::new();
-    let oid_hex = hex::encode(builder.order_id);
-    assert_eq!(
-        place(&app, &bearer, builder.sign(&key)).await.status(),
-        StatusCode::ACCEPTED
-    );
-
-    // Happy path: a correctly-signed top-up appends ANCHOR_TOPUP_SIZE anchors.
-    let resp = topup(
-        &app,
-        &bearer,
-        &oid_hex,
-        topup_body(&key, builder.order_id, 1, 0x10),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let j = read_json(resp).await;
-    assert_eq!(j["status"], "topped_up");
-    // Pool started at ANCHOR_POOL_SIZE (none consumed), now + ANCHOR_TOPUP_SIZE.
-    assert_eq!(
-        j["remaining"],
-        (ANCHOR_POOL_SIZE + ANCHOR_TOPUP_SIZE) as u64
-    );
-
-    // Replay: the same nonce is rejected (409).
-    let resp = topup(
-        &app,
-        &bearer,
-        &oid_hex,
-        topup_body(&key, builder.order_id, 1, 0x20),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
-
-    // A higher nonce is accepted.
-    let resp = topup(
-        &app,
-        &bearer,
-        &oid_hex,
-        topup_body(&key, builder.order_id, 2, 0x30),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    // Wrong owner: a different trading key over a valid-looking body → 403.
-    let other = fresh_signing_key();
-    let resp = topup(
-        &app,
-        &bearer,
-        &oid_hex,
-        topup_body(&other, builder.order_id, 3, 0x40),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-
-    // Unknown order → 404.
-    let resp = topup(
-        &app,
-        &bearer,
-        &hex::encode([0xAB; 16]),
-        topup_body(&key, [0xAB; 16], 1, 0x50),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 fn cancel_body(key: &SigningKey, order_id: [u8; 16], cancel_nonce: u64) -> serde_json::Value {
@@ -718,24 +584,35 @@ async fn place_rejects_opening_not_matching_commitment() {
 }
 
 #[tokio::test]
-async fn place_rejects_anchor_tampered_after_signing() {
-    // The anchor pool is bound into the signed canonical via its SHA-256
-    // (anchor_pool_hash). Tampering an anchor AFTER signing changes the hash
-    // the handler recomputes from the submitted pool, so the trading-key
-    // signature no longer verifies → 403 (signature mismatch).
+async fn place_rejects_viewing_key_tampered_after_signing() {
     let app = app_from(state());
     let bearer = fresh_bearer();
     let key = fresh_signing_key();
     let b = PlaceOrderBuilder::new();
     let mut body = b.sign(&key);
-    // Mutate anchors[0].inner_hash to a different Fr-safe value.
-    body["anchors"][0]["inner_hash"] = json!(hex::encode({
-        let mut v = [0u8; 32];
-        v[31] = 0xEE;
-        v
-    }));
+    body["viewing_pubkey"] = json!(hex::encode(darkpool_crypto::ephemeral_public(&[0x22; 32])));
     let resp = place(&app, &bearer, body).await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn place_rejects_low_order_viewing_key_and_stale_session() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    let mut low = PlaceOrderBuilder::new();
+    low.viewing_pubkey = [0u8; 32];
+    let resp = place(&app, &bearer, low.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(read_json(resp).await["code"], 1008);
+
+    let mut stale = PlaceOrderBuilder::new();
+    stale.order_id[1] = 1;
+    stale.session_id = [0x6B; 32];
+    let resp = place(&app, &bearer, stale.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(read_json(resp).await["code"], 1205);
 }
 
 // ─── POST /orders — signature checks ────────────────────────────────────────
@@ -832,6 +709,7 @@ async fn collateral_commitment_is_reserved_until_the_order_is_cancelled() {
     // overwrite A's OpeningStore record.
     let mut b = PlaceOrderBuilder::new();
     b.order_id = [0xBB; 16];
+    b.arrival_nonce = 2;
     let conflict = place(&app, &bearer, b.sign(&key)).await;
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
     assert_eq!(read_json(conflict).await["code"], 1204);
@@ -858,6 +736,41 @@ async fn collateral_commitment_is_reserved_until_the_order_is_cancelled() {
     );
     assert_eq!(
         place(&app, &bearer, b.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+}
+
+#[tokio::test]
+async fn arrival_nonce_strictly_increases_after_exact_idempotency() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    let first = PlaceOrderBuilder::new();
+    let exact = first.sign(&key);
+    assert_eq!(
+        place(&app, &bearer, exact.clone()).await.status(),
+        StatusCode::ACCEPTED
+    );
+    // Exact retry is checked before the nonce high-water mark.
+    assert_eq!(
+        place(&app, &bearer, exact).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    let mut stale = PlaceOrderBuilder::new();
+    stale.order_id = [0xBC; 16];
+    // Same key + same nonce, but a different canonical body.
+    let resp = place(&app, &bearer, stale.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(read_json(resp).await["code"], 1202);
+
+    stale.order_id = [0xBD; 16];
+    stale.arrival_nonce = 2;
+    // Give it distinct collateral so the replay check is the only conflict.
+    stale.note_inner_hash[31] = 0x56;
+    assert_eq!(
+        place(&app, &bearer, stale.sign(&key)).await.status(),
         StatusCode::ACCEPTED
     );
 }
@@ -1142,6 +1055,7 @@ async fn modify_swaps_old_order_for_new_atomically() {
         v[0] = 0;
         v
     };
+    b.arrival_nonce = 2;
 
     let resp = modify(
         &app,
@@ -1188,6 +1102,7 @@ async fn modify_reprice_in_place_keeps_the_same_id() {
     // min_fill instead to prove the canonical body was re-signed + re-committed.
     let mut b = PlaceOrderBuilder::new();
     b.min_fill_size = 1;
+    b.arrival_nonce = 2;
 
     let resp = modify(
         &app,
@@ -1266,6 +1181,7 @@ async fn modify_collateral_conflict_leaves_both_existing_orders_untouched() {
         inner[0] = 0;
         inner
     };
+    b.arrival_nonce = 2;
     assert_eq!(
         place(&app, &bearer, b.sign(&key)).await.status(),
         StatusCode::ACCEPTED
@@ -1276,6 +1192,7 @@ async fn modify_collateral_conflict_leaves_both_existing_orders_untouched() {
     let mut c = PlaceOrderBuilder::new();
     c.order_id = [0xC3; 16];
     c.note_inner_hash = b.note_inner_hash;
+    c.arrival_nonce = 3;
     let resp = modify(
         &app,
         &bearer,

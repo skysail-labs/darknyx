@@ -1,11 +1,11 @@
 /**
  * buildOrder assembly + signature parity.
  *
- * buildOrder signs the v2 canonical digest, which is itself pinned to the Rust
+ * buildOrder signs the v3 canonical digest, which is itself pinned to the Rust
  * matcher by `order-canonical-parity.test.ts` — so this test guards that
  * buildOrder (a) maps every wire field correctly and (b) signs the EXACT digest
  * a verifier recomputes. A regression in the assembly (wrong field, wrong
- * digest inputs, wrong anchor-pool hash) breaks the signature check here before
+ * digest inputs, wrong viewing key or session id) breaks the signature check here before
  * it ever reaches the enclave.
  */
 
@@ -15,7 +15,6 @@ import nacl from "tweetnacl";
 import { buildOrder } from "../src/orders/build-order.js";
 import { limitPolicy } from "../src/orders/builders.js";
 import { OrderSide, orderCanonicalDigest } from "../src/orders/canonical.js";
-import { buildAnchorPool } from "../src/orders/anchor-pool.js";
 import { noteCommitmentV2, ownerCommitment } from "../src/utxo/note.js";
 import { deriveViewingEncKeypair } from "../src/keys/key-generators.js";
 
@@ -54,6 +53,7 @@ describe("buildOrder", () => {
 
     const kp = nacl.sign.keyPair();
     const policy = limitPolicy({ priceLimit: 150_000_000n });
+    const sessionId = new Uint8Array(32).fill(0x66);
 
     const body = await buildOrder({
       masterSeed,
@@ -72,6 +72,7 @@ describe("buildOrder", () => {
       policy,
       amount,
       orderId,
+      sessionId,
     });
 
     // ── Field mapping ──
@@ -88,16 +89,15 @@ describe("buildOrder", () => {
     expect(body.merkle_root).toBe("dd".repeat(32));
     expect(body.valid_input_proof).toBe("00".repeat(256));
     expect(body.collateral_amount).toBe(10_000_000);
-    expect(body.anchors).toHaveLength(10);
+    expect(body.session_id).toBe(toHex(sessionId));
     // Recovery on by default: viewing_pubkey is the seed-derived X25519 key.
-    // It is NOT in the signed canonical (the digest recomputed below omits it,
-    // yet the signature still verifies).
+    // It is bound into the signed canonical body.
     expect(body.viewing_pubkey).toBe(
       toHex(deriveViewingEncKeypair(masterSeed).publicKey),
     );
 
     // ── Signature parity: verify against the INDEPENDENTLY recomputed digest ──
-    const pool = await buildAnchorPool(masterSeed, spendingKey, orderId);
+    const viewingPubkey = deriveViewingEncKeypair(masterSeed).publicKey;
     const digest = orderCanonicalDigest({
       symbol: new TextEncoder().encode("SOL-USDC"),
       side: OrderSide.Bid,
@@ -110,7 +110,8 @@ describe("buildOrder", () => {
       noteCommitment: note.commitment,
       userCommitment,
       arrivalNonce: 1n,
-      anchorPoolHash: pool.poolHash,
+      viewingPubkey,
+      sessionId,
     });
     const sig = fromHex(body.trading_key_signature);
     expect(nacl.sign.detached.verify(digest, sig, kp.publicKey)).toBe(true);
@@ -145,6 +146,7 @@ describe("buildOrder", () => {
         policy: limitPolicy({ priceLimit: 1n }),
         amount: 2n ** 60n,
         orderId: new Uint8Array(16).fill(1),
+        sessionId: new Uint8Array(32).fill(0x66),
       }),
     ).rejects.toThrow(/2\^53/);
   });

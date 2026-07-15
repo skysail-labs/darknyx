@@ -79,9 +79,8 @@ pub struct MatcherState {
     /// own fee) so a filled order can pay its own protocol fee out of
     /// its own collateral. 0 (default) → fee-free, collateral = nominal.
     fee_rate_bps: u16,
-    /// Legacy fill-memo broadcast retained until canonical order v2 removes
-    /// anchor/top-up transport. Derived continuations no longer depend on this
-    /// channel for output safety; chain recovery is the durable source.
+    /// Live, per-fill recovery records. Each memo binds the derived change
+    /// output to its consumed input commitment and circuit role.
     fills_tx: tokio::sync::broadcast::Sender<FillMemo>,
     /// Broadcast of [`OrderUpdate`]s — the order-lifecycle events the tick
     /// produces (fully-filled / partially-filled / cancelled / expired). The
@@ -200,11 +199,12 @@ fn assign_derived_continuations(state: &mut MatcherState, output: &mut RunBatchO
     // `matches` is borrowed mut): order_id -> Some(new_collateral_note) to
     // rewrite the PartiallyFilled, or None to downgrade to Cancelled.
     let mut update_edits: Vec<([u8; 16], Option<[u8; 32]>)> = Vec::new();
+    let mut fill_memos = Vec::new();
 
     for m in output.matches.iter_mut() {
         // ── buyer side → note_e (QUOTE collateral) ──
-        if m.buyer_relock_order_id != RELOCK_ORDER_ID_NONE && m.buyer_change_amt > 0 {
-            let oid = m.buyer_relock_order_id;
+        if m.buyer_change_amt > 0 {
+            let relock_oid = m.buyer_relock_order_id;
             let prior = state.openings().get(&m.note_buyer);
             match prior {
                 Some(prior) => {
@@ -219,56 +219,69 @@ fn assign_derived_continuations(state: &mut MatcherState, output: &mut RunBatchO
                             &inner,
                         ) {
                             m.note_e_commitment = note_e;
-                            let opening = OrderOpening {
-                                opening: NoteOpening {
-                                    token_mint: quote_mint,
-                                    amount: m.buyer_change_amt,
-                                    owner_commitment: owner,
-                                    inner_hash: inner,
-                                    // Settlement replay protection is commitment-
-                                    // keyed. The user's spending key derives the
-                                    // real nullifier when it later withdraws.
-                                    nullifier: [0u8; 32],
-                                },
-                                order_id: oid,
-                                expiry_slot: prior.expiry_slot,
-                                // The relock (created when THIS batch settles)
-                                // pins note_e on-chain, so the continuation
-                                // re-consumes it without a fresh VALID_INPUT
-                                // proof; these carry forward the prior values.
-                                merkle_root: prior.merkle_root,
-                                // Carried forward; unused — `from_relock` skips lock_note.
-                                tree_id: prior.tree_id,
-                                valid_input_proof: prior.valid_input_proof.clone(),
-                                // note_e is locked by THIS batch's re-lock — the
-                                // NEXT batch that consumes it must skip lock_note.
-                                from_relock: true,
-                                // The continuation note returns to the same owner —
-                                // carry the viewing key so the residual stays
-                                // recoverable across re-locks (Proposal B).
-                                viewing_pubkey: prior.viewing_pubkey,
-                            };
-                            state.openings_mut().insert(note_e, opening);
-                            update_edits.push((oid, Some(note_e)));
-                        } else {
+                            fill_memos.push(FillMemo::new(
+                                prior.order_id,
+                                m.note_buyer,
+                                CHANGE_ROLE_BUYER,
+                                m.buyer_change_amt,
+                                note_e,
+                                quote_mint,
+                                inner,
+                            ));
+                            if relock_oid != RELOCK_ORDER_ID_NONE {
+                                let opening = OrderOpening {
+                                    opening: NoteOpening {
+                                        token_mint: quote_mint,
+                                        amount: m.buyer_change_amt,
+                                        owner_commitment: owner,
+                                        inner_hash: inner,
+                                        // Settlement replay protection is commitment-
+                                        // keyed. The user's spending key derives the
+                                        // real nullifier when it later withdraws.
+                                        nullifier: [0u8; 32],
+                                    },
+                                    order_id: relock_oid,
+                                    expiry_slot: prior.expiry_slot,
+                                    // The relock (created when THIS batch settles)
+                                    // pins note_e on-chain, so the continuation
+                                    // re-consumes it without a fresh VALID_INPUT
+                                    // proof; these carry forward the prior values.
+                                    merkle_root: prior.merkle_root,
+                                    // Carried forward; unused — `from_relock` skips lock_note.
+                                    tree_id: prior.tree_id,
+                                    valid_input_proof: prior.valid_input_proof.clone(),
+                                    // note_e is locked by THIS batch's re-lock — the
+                                    // NEXT batch that consumes it must skip lock_note.
+                                    from_relock: true,
+                                    // The continuation note returns to the same owner —
+                                    // carry the viewing key so the residual stays
+                                    // recoverable across re-locks (Proposal B).
+                                    viewing_pubkey: prior.viewing_pubkey,
+                                };
+                                state.openings_mut().insert(note_e, opening);
+                                update_edits.push((relock_oid, Some(note_e)));
+                            }
+                        } else if relock_oid != RELOCK_ORDER_ID_NONE {
                             m.buyer_relock_order_id = RELOCK_ORDER_ID_NONE;
-                            update_edits.push((oid, None));
+                            update_edits.push((relock_oid, None));
                         }
-                    } else {
+                    } else if relock_oid != RELOCK_ORDER_ID_NONE {
                         m.buyer_relock_order_id = RELOCK_ORDER_ID_NONE;
-                        update_edits.push((oid, None));
+                        update_edits.push((relock_oid, None));
                     }
                 }
                 None => {
-                    m.buyer_relock_order_id = RELOCK_ORDER_ID_NONE;
-                    update_edits.push((oid, None));
+                    if relock_oid != RELOCK_ORDER_ID_NONE {
+                        m.buyer_relock_order_id = RELOCK_ORDER_ID_NONE;
+                        update_edits.push((relock_oid, None));
+                    }
                 }
             }
         }
 
         // ── seller side → note_f (BASE collateral) ──
-        if m.seller_relock_order_id != RELOCK_ORDER_ID_NONE && m.seller_change_amt > 0 {
-            let oid = m.seller_relock_order_id;
+        if m.seller_change_amt > 0 {
+            let relock_oid = m.seller_relock_order_id;
             let prior = state.openings().get(&m.note_seller);
             match prior {
                 Some(prior) => {
@@ -283,40 +296,53 @@ fn assign_derived_continuations(state: &mut MatcherState, output: &mut RunBatchO
                             &inner,
                         ) {
                             m.note_f_commitment = note_f;
-                            let opening = OrderOpening {
-                                opening: NoteOpening {
-                                    token_mint: base_mint,
-                                    amount: m.seller_change_amt,
-                                    owner_commitment: owner,
-                                    inner_hash: inner,
-                                    nullifier: [0u8; 32],
-                                },
-                                order_id: oid,
-                                expiry_slot: prior.expiry_slot,
-                                merkle_root: prior.merkle_root,
-                                // Carried forward; unused — `from_relock` skips lock_note.
-                                tree_id: prior.tree_id,
-                                valid_input_proof: prior.valid_input_proof.clone(),
-                                // note_f is locked by THIS batch's re-lock.
-                                from_relock: true,
-                                // Carry the viewing key forward (Proposal B) so the
-                                // seller's continuation residual stays recoverable.
-                                viewing_pubkey: prior.viewing_pubkey,
-                            };
-                            state.openings_mut().insert(note_f, opening);
-                            update_edits.push((oid, Some(note_f)));
-                        } else {
+                            fill_memos.push(FillMemo::new(
+                                prior.order_id,
+                                m.note_seller,
+                                CHANGE_ROLE_SELLER,
+                                m.seller_change_amt,
+                                note_f,
+                                base_mint,
+                                inner,
+                            ));
+                            if relock_oid != RELOCK_ORDER_ID_NONE {
+                                let opening = OrderOpening {
+                                    opening: NoteOpening {
+                                        token_mint: base_mint,
+                                        amount: m.seller_change_amt,
+                                        owner_commitment: owner,
+                                        inner_hash: inner,
+                                        nullifier: [0u8; 32],
+                                    },
+                                    order_id: relock_oid,
+                                    expiry_slot: prior.expiry_slot,
+                                    merkle_root: prior.merkle_root,
+                                    // Carried forward; unused — `from_relock` skips lock_note.
+                                    tree_id: prior.tree_id,
+                                    valid_input_proof: prior.valid_input_proof.clone(),
+                                    // note_f is locked by THIS batch's re-lock.
+                                    from_relock: true,
+                                    // Carry the viewing key forward (Proposal B) so the
+                                    // seller's continuation residual stays recoverable.
+                                    viewing_pubkey: prior.viewing_pubkey,
+                                };
+                                state.openings_mut().insert(note_f, opening);
+                                update_edits.push((relock_oid, Some(note_f)));
+                            }
+                        } else if relock_oid != RELOCK_ORDER_ID_NONE {
                             m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
-                            update_edits.push((oid, None));
+                            update_edits.push((relock_oid, None));
                         }
-                    } else {
+                    } else if relock_oid != RELOCK_ORDER_ID_NONE {
                         m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
-                        update_edits.push((oid, None));
+                        update_edits.push((relock_oid, None));
                     }
                 }
                 None => {
-                    m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
-                    update_edits.push((oid, None));
+                    if relock_oid != RELOCK_ORDER_ID_NONE {
+                        m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
+                        update_edits.push((relock_oid, None));
+                    }
                 }
             }
         }
@@ -344,6 +370,10 @@ fn assign_derived_continuations(state: &mut MatcherState, output: &mut RunBatchO
                 }
             }
         }
+    }
+
+    for memo in fill_memos {
+        let _ = state.fills_tx.send(memo);
     }
 }
 
@@ -526,21 +556,10 @@ impl MatcherDriver {
                 let mut state = self.state.write().await;
                 assign_derived_continuations(&mut state, &mut output);
                 state.book_mut().apply_updates(&output.order_updates);
-                // Evict the anchor pool of any order that left the book
-                // (full fill / cancel / IOC-or-exhaustion residual / expiry);
-                // a continuing PartiallyFilled keeps its pool. Also publish
-                // every update on the order-lifecycle broadcast so `orders` subscribers
+                // Publish every update on the order-lifecycle broadcast so `orders` subscribers
                 // can stream it (best-effort; no subscriber → send `Err`, ignored).
                 for u in &output.order_updates {
                     let _ = state.order_updates_tx.send(u.clone());
-                    if matches!(
-                        u.kind,
-                        OrderUpdateKind::FullyFilled { .. }
-                            | OrderUpdateKind::Cancelled
-                            | OrderUpdateKind::Expired
-                    ) {
-                        state.openings_mut().remove_anchor_pool(&u.order_id);
-                    }
                 }
                 state.next_match_id = state
                     .next_match_id
@@ -675,6 +694,7 @@ mod tests {
         let mut output = RunBatchOutput::empty(10, 100, 0);
         output.matches = vec![m];
 
+        let mut fills = state.subscribe_fills();
         assign_derived_continuations(&mut state, &mut output);
 
         // The rotated opening is keyed by the freshly-computed note_e.
@@ -690,5 +710,11 @@ mod tests {
             Some(viewing),
             "viewing pubkey carried onto the continuation opening"
         );
+        let memo = fills.try_recv().expect("derived fill memo emitted");
+        assert_eq!(memo.order_id, hex::encode(bid_id));
+        assert_eq!(memo.consumed_note_commitment, hex::encode(note_buyer));
+        assert_eq!(memo.output_role, CHANGE_ROLE_BUYER);
+        assert_eq!(memo.change_note_commitment, hex::encode(note_e));
+        assert_eq!(memo.inner_hash, hex::encode(rotated.opening.inner_hash));
     }
 }

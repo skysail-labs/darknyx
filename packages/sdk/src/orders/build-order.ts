@@ -3,12 +3,12 @@
  * note, your keys, and an intent (an {@link ExecutionPolicy} from `builders.ts`).
  *
  * This is the SDK's order-submission assembly: it mirrors, byte-for-byte, the
- * order body the enclave verifies. The trading-key signature covers the v2
+ * order body the enclave verifies. The trading-key signature covers the v3
  * canonical digest ({@link orderCanonicalDigest}) — which is itself pinned to
  * the Rust matcher by `order-canonical-parity.test.ts`, so a correct
- * `buildOrder` inherits that byte-equality. The continuation anchor pool is
- * derived deterministically from your seed (so it's recoverable) and its hash is
- * bound into the signed digest.
+ * `buildOrder` inherits that byte-equality. The signed body binds the viewing
+ * key and current boot session so neither can be substituted or replayed after
+ * a CVM restart.
  *
  * Signing is provided by a **callback** (`sign`) rather than a key, so the SDK
  * stays agnostic to your Ed25519 implementation (a web3.js `Keypair` + tweetnacl,
@@ -20,7 +20,6 @@
  * (see `proveAndBuildOrder` / `nodeValidInputProver`), or relay one you have.
  */
 
-import { buildAnchorPool, anchorsToJson } from "./anchor-pool.js";
 import { orderCanonicalDigest, OrderSide, OrderType } from "./canonical.js";
 import type { ExecutionPolicy } from "./builders.js";
 import {
@@ -28,6 +27,7 @@ import {
   deriveViewingEncKeypair,
 } from "../keys/key-generators.js";
 import { nullifierV2 } from "../utxo/note.js";
+import { isContributoryX25519PublicKey } from "../keys/fill-encryption.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 
@@ -56,9 +56,9 @@ export type OrderSigner = (
 
 export interface BuildOrderArgs {
   // ── identity / keys ──
-  /** Master seed (derives the deterministic anchor pool). */
+  /** Master seed (derives the default viewing-encryption key). */
   masterSeed: Uint8Array;
-  /** Spending key (derives anchor nullifiers + this order's note nullifier). */
+  /** Spending key (derives this order's note nullifier). */
   spendingKey: bigint;
   /** The note's owner commitment (a BN254 Fr bigint). */
   ownerCommitment: bigint;
@@ -83,6 +83,9 @@ export interface BuildOrderArgs {
   /** 16-byte client order id (e.g. `deriveOrderId(masterSeed, n)`). */
   orderId: Uint8Array;
 
+  /** 32-byte boot session id advertised by the CVM's `/info` endpoint. */
+  sessionId: Uint8Array;
+
   /** Per-order nonce bound into the signature. Default `1`. */
   arrivalNonce?: bigint;
   /** The note's actual value when over-collateralizing. Default `note.amount`. */
@@ -94,7 +97,7 @@ export interface BuildOrderArgs {
    *  Proposal B). The TEE encrypts this order's change_amounts to it on-chain so
    *  they survive a CVM redeploy. Defaults to
    *  `deriveViewingEncKeypair(masterSeed).publicKey` (recovery on by default).
-   *  NOT signed — a wrong key only self-harms (own change unrecoverable). */
+   *  This key is bound into the order signature. */
   viewingPubkey?: Uint8Array;
 }
 
@@ -123,7 +126,8 @@ export interface PlaceOrderRequest {
   tree_id: number;
   /** 32-byte X25519 viewing-encryption pubkey, hex (change-amount recovery). */
   viewing_pubkey: string;
-  anchors: { inner_hash: string; nullifier: string }[];
+  /** 32-byte CVM boot session id, hex. */
+  session_id: string;
 }
 
 const sideTag = (s: OrderSide): "bid" | "ask" =>
@@ -143,8 +147,7 @@ function u64(v: bigint, field: string): number {
 
 /**
  * Assemble + sign a `POST /orders` body. Pure: no network, no prover — the
- * VALID_INPUT proof is supplied. Deterministic given its inputs (the anchor
- * pool and digest derive from the seed + order id).
+ * VALID_INPUT proof is supplied. Deterministic given its inputs.
  */
 export async function buildOrder(
   args: BuildOrderArgs,
@@ -158,26 +161,23 @@ export async function buildOrder(
     throw new Error("note.commitment must be 32 bytes");
   if (args.validInput.merkleRoot.length !== 32)
     throw new Error("merkleRoot must be 32 bytes");
+  if (args.sessionId.length !== 32)
+    throw new Error("sessionId must be 32 bytes");
   if (args.treeId != null && args.treeId < 0)
     throw new Error("treeId must be non-negative");
 
   const arrivalNonce = args.arrivalNonce ?? 1n;
   const collateralAmount = args.collateralAmount ?? args.note.amount;
   // Recovery on by default: derive the viewing-enc pubkey from the seed unless
-  // the caller overrides it. NOT in the signed canonical (see emit below).
+  // the caller overrides it. The canonical signature binds this exact key.
   const viewingPubkey =
     args.viewingPubkey ?? deriveViewingEncKeypair(args.masterSeed).publicKey;
   if (viewingPubkey.length !== 32)
     throw new Error("viewingPubkey must be 32 bytes");
+  if (!isContributoryX25519PublicKey(viewingPubkey))
+    throw new Error("viewingPubkey is a non-contributory X25519 point");
 
-  // Deterministic continuation anchor pool (recoverable from the seed alone).
-  const pool = await buildAnchorPool(
-    args.masterSeed,
-    args.spendingKey,
-    args.orderId,
-  );
-
-  // The signed v2 canonical digest — byte-identical to the matcher's encoder.
+  // The signed v3 canonical digest — byte-identical to the matcher's encoder.
   const digest = orderCanonicalDigest({
     symbol: new TextEncoder().encode(args.symbol),
     side: args.side,
@@ -190,7 +190,8 @@ export async function buildOrder(
     noteCommitment: args.note.commitment,
     userCommitment: args.userCommitment,
     arrivalNonce,
-    anchorPoolHash: pool.poolHash,
+    viewingPubkey,
+    sessionId: args.sessionId,
   });
 
   const signature = await args.sign(digest);
@@ -221,6 +222,6 @@ export async function buildOrder(
     collateral_amount: u64(collateralAmount, "collateral_amount"),
     tree_id: args.treeId ?? 0,
     viewing_pubkey: toHex(viewingPubkey),
-    anchors: anchorsToJson(pool.anchors),
+    session_id: toHex(args.sessionId),
   };
 }

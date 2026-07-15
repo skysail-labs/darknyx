@@ -72,12 +72,7 @@ export function subscribeFills(opts: SubscribeFillsOptions): FillsSubscription {
       void (async () => {
         try {
           const memo = frame as FillMemo;
-          const rec = await receiveFillMemo(
-            memo,
-            opts.masterSeed,
-            opts.ownerCommitment,
-            opts.store,
-          );
+          const rec = await receiveFillMemo(memo, opts.store);
           opts.onFill?.(rec);
         } catch (e) {
           opts.onError?.(e as Error);
@@ -156,16 +151,39 @@ export async function startFillsSync(
         return; // no backfill source — live tail only.
       }
       if (!opts.baseMint || !opts.quoteMint) return; // locate-only (no mints).
-      for (const fill of located.located) {
-        const note = await recoverChangeFromChain(fill, {
-          masterSeed: opts.masterSeed,
-          ownerCommitment: opts.ownerCommitment,
-          baseMint: opts.baseMint,
-          quoteMint: opts.quoteMint,
-        });
-        if (note) {
-          await opts.store.put(note);
-          opts.onFill?.(note);
+      // A later continuation derives from the prior continuation opening. Run
+      // a fixpoint so indexer/chain result ordering cannot strand a recoverable
+      // chain: every recovered note becomes a candidate input for the next pass.
+      const pending = [...located.located];
+      let advanced = true;
+      while (pending.length > 0 && advanced) {
+        advanced = false;
+        for (let i = pending.length - 1; i >= 0; i--) {
+          const fill = pending[i];
+          if (!fill.changeNoteCommitment) {
+            pending.splice(i, 1);
+            continue;
+          }
+          const existing = await opts.store.get(
+            fill.changeNoteCommitment.toLowerCase(),
+          );
+          if (existing) {
+            pending.splice(i, 1);
+            advanced = true;
+            continue;
+          }
+          const note = await recoverChangeFromChain(fill, {
+            masterSeed: opts.masterSeed,
+            candidateInputs: await opts.store.list(),
+            baseMint: opts.baseMint,
+            quoteMint: opts.quoteMint,
+          });
+          if (note) {
+            await opts.store.put(note);
+            opts.onFill?.(note);
+            pending.splice(i, 1);
+            advanced = true;
+          }
         }
       }
     } catch (e) {

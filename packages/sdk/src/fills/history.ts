@@ -3,12 +3,9 @@
  *
  * Amount-privacy (P3b): the off-TEE indexer (`packages/indexer`) is now a pure
  * COMMITMENT LOCATOR. Its rows carry no amounts — only `{ orderId, side,
- * matchId, isPartialFill, changeNoteCommitment, batchSlot }`. The amount, the
- * `inner_hash`/`anchor_index`, and therefore the *spendable* change-note
- * opening come ONLY from the per-account `FillMemo` (the authenticated live
- * `/v1/stream` fills channel, verified in `orders/fill-memo.ts`). A change note's
- * amount is never on-chain, so it cannot be rebuilt from the chain/indexer
- * alone — the same note-plaintext requirement every shielded pool has.
+ * matchId, isPartialFill, changeNoteCommitment, batchSlot }`. The private amount
+ * is encrypted in the settlement recovery envelope. A live `FillMemo` names
+ * the exact consumed input so the SDK can derive and verify the v3 output.
  *
  * So this module's job is narrowed:
  *
@@ -17,9 +14,8 @@
  *      (order_id + change-note commitment + slot) from the seed alone — no
  *      persisted order-id list (HD-wallet style).
  *   2. Return the located fills + a coarse slot cursor for "tail from here".
- *      The client populates its `NoteStore` from FillMemos; the located
- *      commitments let it detect gaps (a located commitment it has no memo/note
- *      for = a fill whose memo it still needs to replay).
+ *      The client populates its `NoteStore` from verified live memos or by
+ *      decrypting located ciphertext and deriving outputs from known inputs.
  *
  * Gap recovery for a fill the client was offline for (memo missed) comes from
  * the PERMANENT on-chain ciphertext (change-amount recovery, Proposal B):
@@ -35,8 +31,7 @@ import { deriveOrderId } from "../keys/key-generators.js";
 /** One located fill as served by the indexer's `GET /fills`.
  *
  *  COMMITMENT LOCATOR shape (amount-privacy P3b): it tells you THAT an order
- *  had a fill and the change-note commitment, but NOT the amount — that comes
- *  from the FillMemo. */
+ *  had a fill and surfaces the opaque recovery ciphertext. */
 export interface IndexerFill {
   orderId: string;
   side: "buyer" | "seller";
@@ -85,9 +80,10 @@ export interface BackfillOptions {
 }
 
 export interface BackfillResult {
-  /** Located change-note fills (order_id + commitment + slot), NOT spendable
-   *  openings — the amount/opening for each comes from the FillMemo. Only fills
-   *  that minted a change note are included (exact fills carry no note). */
+  /** Located change-note fills (order_id + commitment + slot + opaque recovery
+   *  ciphertext). `startFillsSync` turns recoverable entries into spendable
+   *  openings when their consumed input is known locally. Only fills that
+   *  minted a change note are included (exact fills carry no change note). */
   located: IndexerFill[];
   /** Highest order index that returned any fills (for a future incremental scan). */
   highestUsedIndex: number;
@@ -97,9 +93,9 @@ export interface BackfillResult {
 
 /**
  * Gap-scan order ids from the seed and LOCATE every change-note fill (commitment
- * + order_id + slot). Does not reconstruct spendable openings — amounts live
- * only in the FillMemo (amount-privacy P3b), so the live tail
- * (`subscribeFills`) is what populates the `NoteStore`.
+ * + order_id + slot + recovery ciphertext). This locator alone does not
+ * reconstruct spendable openings; `startFillsSync` decrypts and verifies them
+ * against known consumed inputs, while `subscribeFills` supplies the live path.
  *
  * Idempotent + stateless: order ids are HD-derived, so re-running (or running
  * with a `since` cursor) just re-locates the same set.

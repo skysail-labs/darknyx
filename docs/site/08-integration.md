@@ -55,7 +55,7 @@ your wallet view and coin-selection can see it.
 
 Build an order — symbol, side, size, limit price — and sign its canonical body
 with your **trading key**. The order also carries the opening of the note backing
-it and a small **anchor pool** (pre-committed continuation tags). Submit it to
+it, a signed contributory viewing key, and the current boot session. Submit it to
 the enclave; it rests in the hidden book until a batch auction crosses it.
 
 :::tip Orders larger than one note

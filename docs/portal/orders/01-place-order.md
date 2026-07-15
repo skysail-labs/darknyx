@@ -10,8 +10,9 @@ description: Submit a hidden, fully-collateralized order, covering the request b
 `POST /orders` submits a new order. The body carries the usual economic fields
 (symbol, side, type, amount, price) **plus** the cryptographic backing that makes
 the order private and trustless: the collateral-note commitment, a zero-knowledge
-input proof, an owner-commitment opening, a continuation **anchor pool**, and a
-trading-key signature over the whole canonical body. The **SDK builds and signs
+input proof, an owner-commitment opening, a signed contributory viewing key, the
+current boot session, and a trading-key
+signature over the whole canonical body. The **SDK builds and signs
 all of this** from your keys and a deposited note.
 :::
 
@@ -31,14 +32,14 @@ and it is *private*, so the request also carries:
   note the in-enclave prover needs;
 - a **zero-knowledge input proof** that the note exists in the on-chain tree and
   is yours to spend;
-- a **continuation anchor pool** that lets the engine settle partial fills and
-  keep the remainder working without a round-trip to you per fill;
+- a signed **X25519 viewing key** for private recovery data;
+- the current 32-byte **boot session id**, so a signed order cannot be replayed
+  into a restarted engine;
 - an **Ed25519 signature** from your trading key over the canonical body, so the
   engine can attribute, and ultimately settle, the order to you without any
   per-order on-chain transaction;
-- *(optional)* a **viewing key** the engine uses to store each change amount
-  **encrypted on-chain**, so a partial fill's change note stays recoverable on
-  any device and after an engine redeploy.
+- deterministic partial-fill continuation: the settlement circuit derives each
+  change inner from the consumed input inner, so no pre-supplied pool is needed.
 
 You do not assemble these by hand. The SDK takes your keys and a spendable note
 and produces a ready-to-sign request. The full field reference is here so the
@@ -58,7 +59,7 @@ wire contract is unambiguous.
 | `min_fill_size` | integer | No | Reject fills smaller than this. Set equal to `amount` for all-or-none. Default `0` (any partial fill). See [Execution Attributes](../trading-concepts/execution-attributes). |
 | `expiry_slot` | integer | Yes | Solana slot past which the order auto-expires. Bounded by the market's max expiry. See [Time in Force](../trading-concepts/time-in-force). |
 | `order_id` | string | Yes | A client-chosen 16-byte id, hex. Must be unique and non-zero. The SDK can derive ids deterministically from your seed (`deriveOrderId`), so you can reconcile or recover your order set on a fresh device. |
-| `arrival_nonce` | integer | Yes | A per-order nonce bound into the signature. |
+| `arrival_nonce` | integer | Yes | A strictly increasing u64 per trading key. Exact byte-identical idempotent retries are handled before this replay check. |
 
 ### Collateral, opening, and proof
 
@@ -73,24 +74,19 @@ wire contract is unambiguous.
 | `merkle_root` | string | Yes | 32-byte hex. The tree root the input proof was generated against. Must still be in the on-chain root window at settlement time. |
 | `valid_input_proof` | string | Yes | 256-byte hex. The zero-knowledge proof that the collateral note is in the tree and spendable. The engine relays it unverified; the on-chain program verifies it at lock time. |
 
-### Continuation anchor pool
+### Recovery and replay binding
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `anchors` | array | Yes | Exactly **10** continuation anchors. Each is an `{ inner_hash, nullifier }` pair (both 32-byte hex) for a future change note, so the engine can settle a partial fill and re-lock the remainder without asking you for a new note per fill. The hash of the pool is bound into the signature. See [The Anchor Pool](../trading-concepts/anchor-pool). |
-
-### Change-amount recovery (optional)
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `viewing_pubkey` | string | No | 32-byte hex. An X25519 viewing-encryption public key the SDK derives from your seed. When present, the engine encrypts each of this order's change amounts to it and stores the ciphertext **on-chain** at settlement, so a change note stays recoverable permanently, even after an engine redeploy clears the live fill memo. It is **not** part of the signed canonical body: a wrong key only affects your own recoverability, and the ciphertext is self-verifying when you decrypt it. The SDK populates it by default; omit it to rely only on the live [Fills Channel](../websocket/fills-channel) memo. See [Recovering your notes](../account/account-model#recovering-your-notes). |
+| `viewing_pubkey` | string | Yes | 32-byte contributory X25519 public key derived by the SDK. It is signed in the canonical body. Low-order/non-contributory points are rejected before booking. |
+| `session_id` | string | Yes | 32-byte current `/info.boot_session_id`, signed in the canonical body. A CVM restart changes it and invalidates stale orders. |
 
 ### Signature
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `trading_key` | string | Yes | 32-byte hex. The Ed25519 public key that owns this order. |
-| `trading_key_signature` | string | Yes | 64-byte hex. Signature over the canonical encoding of the body: every economic field plus the anchor-pool hash and `arrival_nonce`. |
+| `trading_key_signature` | string | Yes | 64-byte hex. Signature over the canonical v3 encoding, including every economic field, `viewing_pubkey`, `session_id`, and `arrival_nonce`. |
 
 ## Example
 
@@ -119,7 +115,7 @@ curl -s -X POST "$GATEWAY/orders" \
     "merkle_root": "…",
     "valid_input_proof": "…",
     "viewing_pubkey": "…",
-    "anchors": [ { "inner_hash": "…", "nullifier": "…" }, "… 10 total …" ]
+    "session_id": "…"
   }'
 ```
 
@@ -183,7 +179,9 @@ Every order is verified before it enters the book. A non-`202` response carries 
 | The note opening re-derives the signed `note_commitment` | `400` | 1006 |
 | The collateral covers the order's nominal cost plus its own fee | `400` | 1003 |
 | The trading-key signature verifies over the canonical body | `403` | 1102 |
+| The viewing key is contributory and the session matches this boot | `400` | 1001 |
 | The `order_id` is not reused for a different order | `409` | 1201 |
+| The nonce is strictly greater than the last accepted nonce for this trading key | `409` | 1202 |
 | Per-account rate limit not exceeded | `429` | 1401 |
 
 Because the opening is checked against the *signed* commitment, the secret

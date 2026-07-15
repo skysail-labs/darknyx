@@ -44,7 +44,7 @@ pub struct RunConfig {
 
     /// Order-shape scenario the workload generates. Steers intake +
     /// matcher coverage across the spectrum from "never crosses" to
-    /// "high partial-fill / anchor-rotation pressure". See [`Scenario`].
+    /// "high partial-fill continuation pressure". See [`Scenario`].
     #[arg(long, value_enum, default_value_t = Scenario::Uniform, alias = "workload")]
     pub scenario: Scenario,
 
@@ -195,15 +195,14 @@ pub struct RunConfig {
     /// `exact-match:50,partial-fill:20,merge:20,over-collateral:5,ioc-fok:5`.
     /// One scenario INSTANCE per `--traders`; each instance produces a
     /// self-crossing order group. Scenarios: `exact-match`, `over-collateral`,
-    /// `partial-fill` (1 big bid + M small asks → M anchors over M batches),
+    /// `partial-fill` (1 big bid + M small asks → M batches),
     /// `merge` (deposit 2 → merge → order off merged note), `ioc-fok`.
     #[arg(long, default_value = "exact-match:100")]
     pub real_mix: String,
 
-    /// `partial-fill` scenario: number of small asks crossing the one big bid
-    /// (= anchors consumed over that many batches).
+    /// `partial-fill` scenario: number of small asks crossing the one big bid.
     #[arg(long, default_value_t = 3)]
-    pub real_multi_anchor_asks: u8,
+    pub real_partial_fill_asks: u8,
 
     /// Absolute slot every generated order expires at. Must sit ABOVE the live
     /// slot (else swept as expired → 0 matches) but WITHIN
@@ -229,8 +228,8 @@ pub enum Scenario {
     /// the matcher's batch path (and the settle-attempt path) hard.
     ExactMatch,
     /// Like `exact-match` but bids are 2× the ask size, so each match
-    /// leaves a residual that relocks onto an anchor — stresses the
-    /// continuation/anchor-rotation path at a high rate.
+    /// leaves a residual that is derived from the consumed input inner —
+    /// stresses the continuation path at a high rate.
     PartialFill,
     /// Crossing pairs whose orders are a mix of `limit`/`ioc`/`fok` —
     /// exercises the immediate-or-cancel / fill-or-kill execution policies.

@@ -115,12 +115,13 @@ describe("proveAndBuildOrder", () => {
       policy: limitPolicy({ priceLimit: 100n }),
       amount,
       orderId: new Uint8Array(16).fill(2),
+      sessionId: new Uint8Array(32).fill(0x66),
     });
 
     expect(body.merkle_root).toBe("ee".repeat(32));
     expect(body.valid_input_proof).toBe("01".repeat(256));
     expect(body.note_commitment).toBe(hex(commitment));
-    expect(body.anchors).toHaveLength(10);
+    expect(body.session_id).toBe("66".repeat(32));
   });
 });
 

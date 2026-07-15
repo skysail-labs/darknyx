@@ -16,7 +16,13 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { gwFetch, authToken } from "./helpers/cvm-harness.js";
+import { deriveViewingEncKeypair } from "../src/keys/key-generators.js";
+import {
+  gwFetch,
+  authToken,
+  fetchBootSessionId,
+  hex,
+} from "./helpers/cvm-harness.js";
 
 const GATEWAY = (process.env.NYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const READY = process.env.RUN_CVM_E2E === "1" && GATEWAY !== "";
@@ -33,9 +39,11 @@ async function json(res: Response): Promise<Record<string, unknown>> {
 
 maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
   let token: string;
+  let bootSessionId: string;
 
   beforeAll(async () => {
     token = await authToken(GATEWAY);
+    bootSessionId = hex(await fetchBootSessionId(GATEWAY));
   });
 
   /** A COMPLETE, serde-valid PlaceOrderRequest (so it passes axum's JSON
@@ -63,10 +71,10 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
       nullifier: z32,
       merkle_root: z32,
       valid_input_proof: "00".repeat(256),
-      anchors: Array.from({ length: 10 }, () => ({
-        inner_hash: z32,
-        nullifier: z32,
-      })),
+      viewing_pubkey: hex(
+        deriveViewingEncKeypair(new Uint8Array(64).fill(7)).publicKey,
+      ),
+      session_id: bootSessionId,
       ...overrides,
     };
   }

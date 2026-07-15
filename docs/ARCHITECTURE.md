@@ -115,7 +115,7 @@ nyx-monorepo/
 │   ├── darkpool-crypto/              # Host-side Poseidon / note / nullifier / keys
 │   │                                 #   (byte-identical to the TS SDK, parity-tested)
 │   ├── darkpool-matcher/             # The matching algorithm (single source of truth) +
-│   │                                 #   order/cancel/anchor-topup canonical signing +
+│   │                                 #   order/cancel canonical signing +
 │   │                                 #   change_note::derive_inner
 │   ├── nyx-tee/                      # The in-CVM engine (see below)
 │   └── nyx-tee-loadgen/              # Host binary: load-tests the CVM's /orders intake
@@ -141,7 +141,7 @@ src/
 ├── api/           # axum HTTP/WS: REST endpoints + the sole /v1/stream socket
 ├── keys/          # dstack-derived key material (K shard signers at nyx/ed25519-signer/v1/{i})
 ├── matcher/       # the order book + the interval driver (tick → match → page → settle);
-│                  #   the anchor pool + fill memos
+│                  #   input-inner-derived continuations + fill memos
 ├── merkle/        # K per-shard Merkle mirrors (cold-boot sync + live poll, routed by tree_id)
 ├── oracle/        # Pyth Hermes price feed
 ├── prover/        # in-enclave Groth16 prover (VALID_MATCH_BATCH, N=16) — ark | rapidsnark backend
@@ -189,10 +189,11 @@ close. Those are now gone from L1; the proof is the sole binder:
   amounts; the chain never sees them.
 * **Recovery data is private.** The settle payload retains a 128-byte
   X25519-ECIES envelope for each side's private recovery data. VALID_MATCH_BATCH
-  v3 derives the output inner from the consumed opening, so the old
-  anchor-index `FillMemo` is no longer an authority for output construction.
-  The follow-on canonical-order/durable-recovery cutover removes that legacy
-  stream schema and upgrades seed-plus-chain cold recovery before mainnet.
+  v3 derives the output inner from the consumed opening. The live `FillMemo`
+  identifies that exact consumed commitment and output role; the SDK accepts
+  the output only after re-deriving its inner and commitment byte-for-byte.
+  Full seed-plus-chain cold recovery across every output class remains a
+  separate pre-mainnet durable-recovery slice.
 * **The off-TEE indexer is a commitment LOCATOR + opaque ciphertext store.** With
   plaintext amounts gone from the payload + event, `packages/indexer` decodes the
   settle ix to locate commitments AND surface the opaque `fill_recovery`
@@ -222,9 +223,9 @@ Intel TDX confidential VM:
   CVM's dstack-derived signer set via the admin `set_tee_pubkey(Vec<Pubkey>)` ix.
 
 The client's guard against a *misbehaving* TEE is the **settle-memo
-integrity check** (`sdk/src/orders/fill-memo.ts`): the client recomputes
-each change-note commitment from the reported `inner_hash` and rejects a
-TEE that substituted one.
+integrity check** (`sdk/src/orders/fill-memo.ts`): the client resolves the
+reported consumed commitment from its own note store, derives the output
+inner from that opening and role, and rejects any output commitment mismatch.
 
 ---
 
@@ -280,7 +281,8 @@ arity / domain tag here without mirroring it in TS breaks the parity test.
 `run_batch` / `run_batch_capped` is the single source of truth for
 uniform-clearing-price matching (price-time priority, circuit breaker, FIFO
 tie-break, per-side fee-inclusive collateral, both fee notes). Also home to
-`order_canonical.rs` (the order / cancel / anchor-topup signing contract,
+`order_canonical.rs` (the order/cancel signing contract, including the viewing
+key, boot session, and arrival nonce,
 parity-tested against the TS SDK) and `change_note::derive_inner` (the
 amount-independent `inner_hash` derivation, triple-ported to TS + the
 on-chain hashers).
@@ -307,9 +309,6 @@ deposit/withdraw flows, the VALID_INPUT prover wrapper, match-output derivation,
 order canonical signing, and the hand-coded `vault-client.ts`
 (every discriminator + Borsh layout, no Anchor IDL runtime).
 
-Legacy anchor/top-up helpers remain only for the transitional order wire and
-are removed by canonical order v2; they do not select v3 circuit outputs.
-
 ---
 
 ## End-to-end flow (one trade)
@@ -320,9 +319,10 @@ are removed by canonical order v2; they do not select v3 circuit outputs.
 3. **`deposit` (L1).** Pull SPL into the vault; a note commitment is appended
    to the Merkle tree; `outstanding[mint]++`.
 4. **`POST /orders` (CVM).** Client builds a VALID_INPUT proof for its note,
-   signs the order canonical, and posts to the CVM. Intake verifies the
-   signature + note opening, then books it. The transitional wire still carries
-   legacy anchors, but output construction ignores them.
+   fetches the current `/info.boot_session_id`, signs the economic fields,
+   contributory X25519 viewing key, session, and nonce, then posts to the CVM.
+   Intake verifies the signature + note opening, rejects stale sessions and
+   non-increasing per-trading-key nonces, then books it.
 5. **Match (CVM).** The interval tick finds a crossing pair at the uniform
    clearing price; if a side partially fills, the matcher derives the change
    inner from the consumed input and rotates the residual to continue.
@@ -410,10 +410,11 @@ recoverable on a replacement device with an authenticated backup:
    `exportEncryptedMasterSeed`, store its passphrase separately, and restore it
    with `importEncryptedMasterSeed`. Wallet-message signatures are deliberately
    not a Nyx spend authority.
-2. **Viewing-encryption key on every order (Proposal B).** Send
+2. **Viewing-encryption key + boot session on every order.** Send
    `deriveViewingEncKeypair(seed).publicKey` as the order's `viewing_pubkey`
-   (`buildOrder` defaults to it). The TEE encrypts each fill's `change_amount`
-   to it on-chain.
+   (`buildOrder` defaults to it) and the current 32-byte session from `/info`.
+   Both are signed. The TEE rejects low-order X25519 points and encrypts each
+   fill's private recovery data to the signed key on-chain.
 3. **Recover on reconnect.** Backfill located fills from the indexer
    (`backfillHistory`) and decrypt+self-verify each via `recoverChangeFromChain`;
    `startFillsSync` does this "tail then backfill" automatically when given the

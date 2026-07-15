@@ -16,13 +16,10 @@ export * from "./zk/groth16-format.js";
 export * from "./idl/vault-client.js";
 export * from "./idl/seeds.js";
 export * from "./client.js";
-// Order canonical encoders + the anchor-pool / fill-memo client surface.
+// Order canonical encoders + the consumed-input-bound fill-memo surface.
 export {
   ORDER_DOMAIN,
   CANCEL_DOMAIN,
-  ANCHOR_TOPUP_DOMAIN,
-  ANCHOR_POOL_SIZE,
-  ANCHOR_TOPUP_SIZE,
   SYMBOL_MAX_LEN,
   CanonicalError,
   OrderSide,
@@ -31,15 +28,9 @@ export {
   orderCanonicalDigest,
   cancelCanonicalBytes,
   cancelCanonicalDigest,
-  anchorPoolHash,
-  anchorTopUpCanonicalBytes,
-  anchorTopUpCanonicalDigest,
   type OrderCanonical,
   type CancelCanonical,
-  type AnchorTopUpCanonical,
-  type Anchor,
 } from "./orders/canonical.js";
-export * from "./orders/anchor-pool.js";
 export * from "./orders/fill-memo.js";
 // Order-builder sugar (market / AON / FOK / GTT presets) + the per-account
 // order-lifecycle WS client + the public system endpoints.
@@ -58,6 +49,7 @@ export * from "./fills/recover.js";
 export * from "./utxo/change-note.js";
 export * from "./utxo/match-output.js";
 export * from "./fills/ws-client.js";
+export { isContributoryX25519PublicKey } from "./keys/fill-encryption.js";
 export * from "./settlement/settle-builder.js";
 export * from "./settlement/settlement-watcher.js";
 // TEE attestation — shared verification core (event-log RTMR3 replay,

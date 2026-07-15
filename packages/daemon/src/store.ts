@@ -10,7 +10,7 @@
  *     orders.
  *
  * The chain + the keystore remain the durable roots of truth; this DB is a
- * local cache that can be rebuilt by re-syncing fills and re-deriving anchors
+ * local cache that can be rebuilt by re-syncing chain recovery data
  * from the master seed. bigints are stored as decimal TEXT (sqlite has no
  * native 256-bit integer); byte arrays as lowercase hex TEXT.
  */
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS notes (
   inner_hash        TEXT NOT NULL,
   leaf_index        TEXT,
   order_id          TEXT,
-  anchor_index      INTEGER
+  consumed_commitment TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_notes_order ON notes (order_id);
 
@@ -44,10 +44,6 @@ CREATE TABLE IF NOT EXISTS orders (
   price_raw           TEXT NOT NULL,
   size_raw            TEXT NOT NULL,
   phase               TEXT NOT NULL,
-  anchor_pool_size    INTEGER NOT NULL,
-  anchors_consumed    INTEGER NOT NULL,
-  topup_nonce         INTEGER NOT NULL,
-  topup_in_flight     INTEGER NOT NULL,
   merge_in_flight     INTEGER NOT NULL,
   pending_change_notes INTEGER NOT NULL,
   collateral_commitment TEXT,
@@ -65,7 +61,7 @@ interface NoteRow {
   inner_hash: string;
   leaf_index: string | null;
   order_id: string | null;
-  anchor_index: number | null;
+  consumed_commitment: string | null;
 }
 
 interface OrderRow {
@@ -75,10 +71,6 @@ interface OrderRow {
   price_raw: string;
   size_raw: string;
   phase: string;
-  anchor_pool_size: number;
-  anchors_consumed: number;
-  topup_nonce: number;
-  topup_in_flight: number;
   merge_in_flight: number;
   pending_change_notes: number;
   collateral_commitment: string | null;
@@ -96,7 +88,9 @@ function rowToNote(r: NoteRow): StoredNote {
   };
   if (r.leaf_index !== null) note.leafIndex = BigInt(r.leaf_index);
   if (r.order_id !== null) note.orderId = r.order_id;
-  if (r.anchor_index !== null) note.anchorIndex = r.anchor_index;
+  if (r.consumed_commitment !== null) {
+    note.consumedCommitment = r.consumed_commitment;
+  }
   return note;
 }
 
@@ -108,10 +102,6 @@ function rowToOrder(r: OrderRow): ManagedOrder {
     priceRaw: BigInt(r.price_raw),
     sizeRaw: BigInt(r.size_raw),
     phase: r.phase as OrderPhase,
-    anchorPoolSize: r.anchor_pool_size,
-    anchorsConsumed: r.anchors_consumed,
-    topupNonce: r.topup_nonce,
-    topupInFlight: r.topup_in_flight === 1,
     mergeInFlight: r.merge_in_flight === 1,
     pendingChangeNotes: r.pending_change_notes,
     collateralCommitment: r.collateral_commitment ?? undefined,
@@ -132,6 +122,14 @@ export class DaemonStore implements NoteStore {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    // Existing development databases may predate the anchor-free memo schema.
+    // Add the new provenance column without trusting or reusing anchor indices.
+    const columns = this.db
+      .prepare("PRAGMA table_info(notes)")
+      .all() as unknown as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "consumed_commitment")) {
+      this.db.exec("ALTER TABLE notes ADD COLUMN consumed_commitment TEXT");
+    }
   }
 
   // ── NoteStore ──
@@ -141,7 +139,7 @@ export class DaemonStore implements NoteStore {
       .prepare(
         `INSERT INTO notes
            (commitment, token_mint, amount, owner_commitment, inner_hash,
-            leaf_index, order_id, anchor_index)
+            leaf_index, order_id, consumed_commitment)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(commitment) DO UPDATE SET
            token_mint = excluded.token_mint,
@@ -150,7 +148,7 @@ export class DaemonStore implements NoteStore {
            inner_hash = excluded.inner_hash,
            leaf_index = excluded.leaf_index,
            order_id = excluded.order_id,
-           anchor_index = excluded.anchor_index`,
+           consumed_commitment = excluded.consumed_commitment`,
       )
       .run(
         rec.commitment,
@@ -160,7 +158,7 @@ export class DaemonStore implements NoteStore {
         rec.innerHash.toString(),
         rec.leafIndex !== undefined ? rec.leafIndex.toString() : null,
         rec.orderId ?? null,
-        rec.anchorIndex ?? null,
+        rec.consumedCommitment ?? null,
       );
   }
 
@@ -197,20 +195,15 @@ export class DaemonStore implements NoteStore {
       .prepare(
         `INSERT INTO orders
            (order_id, seed_index, side, price_raw, size_raw, phase,
-            anchor_pool_size, anchors_consumed, topup_nonce, topup_in_flight,
             merge_in_flight, pending_change_notes, collateral_commitment,
             created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(order_id) DO UPDATE SET
            seed_index = excluded.seed_index,
            side = excluded.side,
            price_raw = excluded.price_raw,
            size_raw = excluded.size_raw,
            phase = excluded.phase,
-           anchor_pool_size = excluded.anchor_pool_size,
-           anchors_consumed = excluded.anchors_consumed,
-           topup_nonce = excluded.topup_nonce,
-           topup_in_flight = excluded.topup_in_flight,
            merge_in_flight = excluded.merge_in_flight,
            pending_change_notes = excluded.pending_change_notes,
            collateral_commitment = excluded.collateral_commitment,
@@ -223,10 +216,6 @@ export class DaemonStore implements NoteStore {
         o.priceRaw.toString(),
         o.sizeRaw.toString(),
         o.phase,
-        o.anchorPoolSize,
-        o.anchorsConsumed,
-        o.topupNonce,
-        o.topupInFlight ? 1 : 0,
         o.mergeInFlight ? 1 : 0,
         o.pendingChangeNotes,
         o.collateralCommitment ?? null,

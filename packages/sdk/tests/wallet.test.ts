@@ -37,7 +37,7 @@ function fill(
     ownerCommitment: 1n,
     innerHash: 2n,
     orderId: "ab".repeat(8),
-    anchorIndex: 0,
+    consumedCommitment: "cd".repeat(32),
   };
 }
 

@@ -29,20 +29,19 @@ function openOrder(overrides: Partial<ManagedOrder> = {}): ManagedOrder {
     side: "bid",
     priceRaw: 100n,
     sizeRaw: 1000n,
-    anchorPoolSize: 10,
     now: 1000,
   });
   return { ...o, phase: "open", ...overrides };
 }
 
-const fillNote = (anchorIndex: number, amount: bigint): StoredNote => ({
-  commitment: `c${anchorIndex}`,
+const fillNote = (index: number, amount: bigint): StoredNote => ({
+  commitment: `c${index}`,
   tokenMint: Uint8Array.from([1, 2]),
   amount,
   ownerCommitment: 9n,
   innerHash: 7n,
   orderId: ORDER_ID,
-  anchorIndex,
+  consumedCommitment: `input${index}`,
 });
 
 /** A fake subscribeFills that captures the options it was called with. */
@@ -68,7 +67,6 @@ describe("FillsListener", () => {
   it("subscribes with the gateway/token/account material", () => {
     const { captured, fn } = captureSubscribe();
     const engine = new LifecycleEngine(store, {
-      topup: async () => ({ type: "topup-confirmed", count: 5 }),
       merge: async () => ({ type: "merge-confirmed", consumed: 0 }),
     });
     engine.register(openOrder());
@@ -91,10 +89,9 @@ describe("FillsListener", () => {
     expect(captured.closed).toBe(true);
   });
 
-  it("dispatches a fill event per change note (advances anchors + counts residual)", async () => {
+  it("dispatches a fill event per change note and counts residuals", async () => {
     const { captured, fn } = captureSubscribe();
     const engine = new LifecycleEngine(store, {
-      topup: async () => ({ type: "topup-confirmed", count: 5 }),
       merge: async () => ({ type: "merge-confirmed", consumed: 0 }),
     });
     engine.register(openOrder());
@@ -117,44 +114,13 @@ describe("FillsListener", () => {
     await flush();
 
     const got = store.getOrder(ORDER_ID)!;
-    expect(got.anchorsConsumed).toBe(2); // high-water of anchorIndex+1
     expect(got.pendingChangeNotes).toBe(1); // only the amount>0 note counts
     expect(seen).toHaveLength(2);
-  });
-
-  it("a fill near pool exhaustion triggers the engine's top-up", async () => {
-    const { captured, fn } = captureSubscribe();
-    const topup = vi.fn(async () => ({
-      type: "topup-confirmed" as const,
-      count: 5,
-    }));
-    const engine = new LifecycleEngine(store, {
-      topup,
-      merge: async () => ({ type: "merge-confirmed", consumed: 0 }),
-    });
-    engine.register(openOrder({ anchorsConsumed: 6 }));
-
-    new FillsListener({
-      engine,
-      store,
-      gatewayWsUrl: "wss://gw",
-      token: "t",
-      masterSeed: new Uint8Array(64),
-      ownerCommitment: 1n,
-      subscribeFn: fn,
-    }).start();
-
-    captured.opts!.onFill!(fillNote(6, 50n)); // remaining → 3
-    await flush();
-
-    expect(topup).toHaveBeenCalledOnce();
-    expect(store.getOrder(ORDER_ID)!.anchorPoolSize).toBe(15);
   });
 
   it("an unknown-order fill surfaces an error but does not throw out of the handler", async () => {
     const { captured, fn } = captureSubscribe();
     const engine = new LifecycleEngine(store, {
-      topup: async () => ({ type: "topup-confirmed", count: 5 }),
       merge: async () => ({ type: "merge-confirmed", consumed: 0 }),
     });
     // NOTE: no order registered.
@@ -182,7 +148,6 @@ describe("FillsListener", () => {
   it("passes resync/close through", () => {
     const { captured, fn } = captureSubscribe();
     const engine = new LifecycleEngine(store, {
-      topup: async () => ({ type: "topup-confirmed", count: 5 }),
       merge: async () => ({ type: "merge-confirmed", consumed: 0 }),
     });
     const onResync = vi.fn();

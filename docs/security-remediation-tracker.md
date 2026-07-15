@@ -18,14 +18,14 @@ runbooks have landed.
 | CS-01 | Critical | ZK + vault + TEE | `remediation/match-batch-v3` | Every fee note is per-match and issued atomically with consumption of that match's real inputs; negative phantom-slot proof; regenerated zkey/VK/N=16 fixture; live settle | Closed |
 | CS-02 | High | ZK + vault | `remediation/governance-markets`, `remediation/match-batch-v3` | Every active slot is bound to one enabled on-chain market, its mint halves, and price scale; mixed-market proof rejected | Closed |
 | CS-03 | High | ZK + SDK + TEE | `remediation/match-batch-v3` | User and fee output inners are constrained, deterministic, and recoverable from consumed inputs; arbitrary-inner witness rejected | Closed |
-| CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Open |
+| CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Code complete |
 | CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Closed |
 | CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
 | CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Closed |
 | CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Closed |
 | CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm and live settle tests | Closed |
-| CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Open |
-| CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Open |
+| CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Code complete |
+| CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Code complete |
 | CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Closed |
 | CS-13 | Medium | Daemon | `remediation/daemon-trust` | Strict startup fails closed; finalized TEE keys refresh each minute; mismatch/staleness pauses placement while reconciliation continues | Closed |
 | CS-14 | Low | Crypto + SDK | `remediation/client-custody` | Existing bytes retained under `nyxShakeKdfV1`; fixed Rust/TS KATs; no NIST KMAC claim | Closed |
@@ -353,8 +353,8 @@ Every remediation PR must record:
   its complete signer set and the quote-bound enclave signer set. RPC failure,
   missing/malformed config, mismatch, or an attempt to disable the check in
   strict mode aborts startup. The finalized set refreshes every minute;
-  missing/mismatched governance state pauses placement and anchor top-up
-  immediately, and RPC failure may use the last successful read for no more
+  missing/mismatched governance state pauses placement immediately, and RPC
+  failure may use the last successful read for no more
   than five minutes. Exact recovery resumes trading. Streams, signed
   cancellation, settlement tracking, and on-chain merge stay active while
   paused. Order VALID_INPUT proving and auto-merge snapshots now require the
@@ -373,7 +373,7 @@ Every remediation PR must record:
   full SDK Vitest passes 229 tests with 22 environment-gated skips. Adversarial
   coverage includes startup RPC/null/mismatch failure, strict-check disable
   rejection, the exact one-minute refresh boundary, five-minute staleness and
-  recovery, immediate placement/anchor-top-up pause with cancellation/merge
+  recovery, immediate placement pause with cancellation/merge
   continuity, finalized RPC commitment, wrong owner/layout/discriminator/shard,
   unknown/all-zero roots, changing paginated roots, and fabricated leaf
   snapshots.
@@ -728,6 +728,53 @@ Every remediation PR must record:
   in-flight orders/proofs and clean-reset devnet before restarting the prior
   image. Generic note commitments remain VALID_SPEND-compatible, but no mixed
   old/new matching deployment is supported.
+
+### `remediation/canonical-order-v2` — CS-04, CS-10, CS-11
+
+- **Status.** Code complete; live CVM evidence and merge are still required
+  before these rows move to `Closed`.
+- **Invariant restored.** Settlement ids are the first 16 bytes of a
+  domain-separated SHA-256 over the boot session, monotonic match counter, and
+  both order ids. Output inners and commitments remain exclusively
+  input-and-role-derived, so identifier uniqueness is not a soundness
+  assumption. The signed order now binds a required contributory X25519 viewing
+  key and the current 32-byte boot session. Intake performs exact-idempotency
+  handling before a linearizable, strictly increasing per-trading-key nonce
+  high-water check; high-water marks are never evicted, and reboot rotates the
+  signed session so old signatures cannot exploit a process restart.
+- **Wire/circuit impact.** The canonical signature domain moves from
+  `nyx-order-v2` to `nyx-order-v3`; order requests delete `anchors` and add
+  required signed `viewing_pubkey` and `session_id`. The anchor top-up API and
+  SDK/daemon anchor-pool state are deleted. Live fill memos replace
+  `anchor_index` with `consumed_note_commitment` and `output_role`; clients
+  accept an output only after resolving that exact input and recomputing the
+  v3 inner and commitment byte-for-byte. `/info` adds `boot_session_id`.
+  There is no account-layout, Borsh payload, circuit, zkey, VK, N=16 fixture,
+  or on-chain program change. Existing orders and signatures are intentionally
+  invalidated. The CPU image pin moves from `tee-v3-hardening-56` to
+  `tee-v3-hardening-57`.
+- **Local evidence.** Formatting, the `devnet-admin` SBF build, Rust/TS parity
+  helper build, workspace clippy with warnings denied, and the full Rust
+  workspace pass. The final Rust run includes 253 TEE library tests, 38 order
+  surface tests, six private fill-routing tests, three WebSocket trading tests,
+  and every LiteSVM/ZK target. SDK, SDK-test, indexer, and daemon TypeScript
+  no-emit checks pass. Full Vitest passes SDK 250 tests with 23
+  environment-gated skips, indexer 23 tests, and daemon 144 tests with two
+  environment-gated skips. Adversarial cases cover stale sessions, exact retry
+  before nonce rejection, concurrent/replayed nonces, all seven low-order
+  X25519 encodings, substituted self-consistent output inners,
+  missing/mismatched consumed openings, terminal-update/final-fill routing
+  races, reboot/counter/order-id settlement collisions, and identical outputs
+  under deliberately different settlement ids.
+- **Devnet/CVM evidence.** Pending. The live test must cold-boot image 57,
+  confirm the advertised boot session is used by the SDK, and complete the
+  isolated real-mint settlement path. No program upgrade is needed because this
+  slice changes no on-chain code or verifier artifact.
+- **Rollback.** Revert the PR and redeploy image 56 with its matching SDK and
+  daemon. Do not mix v2/v3 order clients: canonical bodies, live fill memos,
+  and in-memory order state are incompatible. Notes, roots, vault accounts,
+  settlement payloads, circuits, and proofs remain valid; discard all in-flight
+  orders and reconnect against the new boot session.
 
 ## Mainnet release gates
 

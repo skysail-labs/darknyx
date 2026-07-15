@@ -32,7 +32,6 @@ const order = (): ManagedOrder => ({
     side: "bid",
     priceRaw: 1n,
     sizeRaw: 1n,
-    anchorPoolSize: 10,
   }),
   phase: "filled",
 });
@@ -50,7 +49,7 @@ function changeNote(
     ownerCommitment: 99n,
     innerHash: 7n,
     orderId: ORDER_ID,
-    anchorIndex: 0,
+    consumedCommitment: "ab".repeat(32),
     leafIndex,
   };
 }

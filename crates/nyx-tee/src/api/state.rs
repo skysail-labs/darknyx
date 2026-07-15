@@ -21,9 +21,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dstack_sdk::dstack_client::DstackClient;
+use rand::RngCore;
 
 use serde::Serialize;
-use tokio::sync::{broadcast, RwLock, Semaphore};
+use tokio::sync::{broadcast, Mutex, RwLock, Semaphore};
 
 use super::auth::{
     test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_API_KEY, TEST_JWT_SECRET,
@@ -76,6 +77,9 @@ impl BootAppInfo {
 /// in `Arc` and cloned cheaply into each request's State extractor.
 pub struct ApiState {
     pub app_info: BootAppInfo,
+    /// Fresh random identifier generated once per process boot. Every order
+    /// signature binds it, invalidating queued requests after a restart.
+    pub boot_session_id: [u8; 32],
     /// Solana base58 encoding of the TEE-derived Ed25519 pubkey.
     /// This is what an operator would register as
     /// `vault_config.tee_pubkey` via the multisig rotation
@@ -207,6 +211,11 @@ pub struct ApiState {
     /// in-memory in the enclave and NEVER persisted off-TEE — the off-TEE
     /// indexer is account-agnostic by design.
     pub order_owner: Arc<RwLock<HashMap<String, String>>>,
+    /// Bounded routing-only cache for terminal orders. The fill and order
+    /// routers are independent tasks, so a terminal order update can race the
+    /// final change memo. Archiving here preserves that memo without keeping a
+    /// terminal order visible through authenticated order lookup.
+    recent_order_owner: Arc<RwLock<HashMap<String, String>>>,
     /// `account_id → per-account fill-memo broadcast`. Created lazily when an
     /// account subscribes to `fills` on `/v1/stream`. The fills router fans the matcher's global
     /// broadcast into these per-account channels, so a subscriber sees ONLY
@@ -227,14 +236,10 @@ pub struct ApiState {
     /// (protect the small CVM) but per-account + weighted. Created lazily.
     pub rate_buckets: Arc<RwLock<HashMap<String, TokenBucket>>>,
 
-    // ── Idempotency (POST /orders safe retries) ─────────────────
-    /// `order_id (hex) → (canonical_digest, arrival_slot)` recorded at accept
-    /// time. A duplicate `order_id` whose signed body hashes to the SAME digest
-    /// is a true retry → return the original acceptance; a DIFFERENT digest is a
-    /// real conflict → `409`. Persists past order terminal (so a retry after a
-    /// fill still de-dupes rather than re-booking a consumed-note order), bounded
-    /// by [`IDEMPOTENCY_CAP`].
-    pub idempotency: Arc<RwLock<HashMap<String, IdempotencyRecord>>>,
+    // ── Idempotency + nonce replay protection ───────────────────
+    /// One lock makes exact-idempotency and strict per-trading-key nonce checks
+    /// linearizable under concurrent place/modify requests.
+    pub submission_replay: Arc<Mutex<SubmissionReplayState>>,
 
     // ── Live tree channel (/v1/stream `tree`) ───────────────────
     /// GLOBAL leaf-append broadcast feeding the multiplexed `/v1/stream`
@@ -250,6 +255,12 @@ pub struct ApiState {
 /// What an accepted order records for idempotent-retry detection:
 /// `(canonical_digest, arrival_slot)`.
 pub type IdempotencyRecord = ([u8; 32], u64);
+
+#[derive(Default, Debug)]
+pub struct SubmissionReplayState {
+    pub idempotency: HashMap<String, IdempotencyRecord>,
+    pub last_arrival_nonce: HashMap<[u8; 32], u64>,
+}
 
 /// A simple per-account token bucket: `tokens` refill at `RATE_REFILL_PER_SEC`
 /// up to `RATE_CAPACITY` (the burst), and each request costs a route weight.
@@ -328,6 +339,7 @@ const TREE_CHANNEL_CAP: usize = 4096;
 /// Max retained idempotency records (order_id → accepted body). Bounds the map;
 /// the oldest entries age out (best-effort retry window).
 const IDEMPOTENCY_CAP: usize = 16_384;
+const RECENT_ORDER_OWNER_CAP: usize = 16_384;
 
 /// Max concurrent Argon2id hash/verify jobs allowed across the auth
 /// handlers. Sized to the host's parallelism (clamped) so legitimate
@@ -356,8 +368,11 @@ impl ApiState {
     ) -> Self {
         let state_dir = persistence::state_dir_from_env();
         let (registry, revoked) = Self::load_or_seed_auth(state_dir.as_deref());
+        let mut boot_session_id = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut boot_session_id);
         Self {
             app_info,
+            boot_session_id,
             signer_pubkey_base58: signer.pubkey_base58.clone(),
             signer_pubkey_hex: signer.pubkey_hex.clone(),
             // Defaults to the primary; `main.rs` overrides with the full derived
@@ -388,10 +403,11 @@ impl ApiState {
             settle_state: None,
             solana_rpc: None,
             order_owner: Arc::new(RwLock::new(HashMap::new())),
+            recent_order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
-            idempotency: Arc::new(RwLock::new(HashMap::new())),
+            submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
         }
     }
@@ -498,6 +514,7 @@ impl ApiState {
     pub fn for_tests() -> Self {
         Self {
             app_info: BootAppInfo::stub(),
+            boot_session_id: [0x5A; 32],
             signer_pubkey_base58: "stub-pubkey".to_string(),
             signer_pubkey_hex: "00".repeat(32),
             signer_pubkeys_base58: vec!["stub-pubkey".to_string()],
@@ -544,10 +561,11 @@ impl ApiState {
             // `with_solana_rpc(...)`.
             solana_rpc: None,
             order_owner: Arc::new(RwLock::new(HashMap::new())),
+            recent_order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
-            idempotency: Arc::new(RwLock::new(HashMap::new())),
+            submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
         }
     }
@@ -570,12 +588,29 @@ impl ApiState {
             .is_some_and(|owner| owner == account_id)
     }
 
-    /// Drop an order's owner mapping. Called on explicit cancel AND by the
-    /// order-update router on any TERMINAL matcher update (fully-filled /
-    /// cancelled / expired — see `order_router::spawn_order_router`), so the
-    /// `order_owner` map stays bounded over the engine's lifetime.
+    /// Archive a terminal order's routing identity before removing it from the
+    /// live ownership map. Insertion happens first, so `route_fill` can always
+    /// resolve one of the two maps even when the independent routers race.
+    pub async fn archive_order_owner(&self, order_id: &str) {
+        let account = self.order_owner.read().await.get(order_id).cloned();
+        let Some(account) = account else { return };
+
+        {
+            let mut recent = self.recent_order_owner.write().await;
+            if recent.len() >= RECENT_ORDER_OWNER_CAP && !recent.contains_key(order_id) {
+                if let Some(evicted) = recent.keys().next().cloned() {
+                    recent.remove(&evicted);
+                }
+            }
+            recent.insert(order_id.to_string(), account);
+        }
+        self.order_owner.write().await.remove(order_id);
+    }
+
+    /// Drop all owner routing for an explicitly cancelled order.
     pub async fn forget_order(&self, order_id: &str) {
         self.order_owner.write().await.remove(order_id);
+        self.recent_order_owner.write().await.remove(order_id);
     }
 
     /// Get-or-create the caller account's fill-memo channel and subscribe. A
@@ -616,6 +651,15 @@ impl ApiState {
     /// retired once the chain became the permanent source.
     pub async fn route_fill(&self, memo: &FillMemo) -> bool {
         let account = self.order_owner.read().await.get(&memo.order_id).cloned();
+        let account = match account {
+            Some(account) => Some(account),
+            None => self
+                .recent_order_owner
+                .read()
+                .await
+                .get(&memo.order_id)
+                .cloned(),
+        };
         let Some(account) = account else { return false };
 
         let tx = self.fills_routes.read().await.get(&account).cloned();
@@ -680,28 +724,28 @@ impl ApiState {
             .try_spend(cost)
     }
 
-    /// Look up a prior acceptance for `order_id_hex` — `(canonical_digest,
-    /// arrival_slot)` if this id was accepted before.
-    pub async fn idempotency_lookup(&self, order_id_hex: &str) -> Option<([u8; 32], u64)> {
-        self.idempotency.read().await.get(order_id_hex).copied()
-    }
-
-    /// Record an accepted order for idempotent-retry detection. Bounded: when
-    /// the map is at [`IDEMPOTENCY_CAP`], an arbitrary old entry is evicted (the
-    /// dedup window is best-effort, like a TTL).
-    pub async fn idempotency_record(
-        &self,
+    /// Record an accepted canonical body while the caller holds
+    /// [`Self::submission_replay`]. Nonce high-water marks are not evicted:
+    /// expiry of the nicer exact-retry cache must not revive stale signatures.
+    pub fn record_submission_locked(
+        replay: &mut SubmissionReplayState,
         order_id_hex: String,
         digest: [u8; 32],
         arrival_slot: u64,
+        trading_key: [u8; 32],
+        arrival_nonce: u64,
     ) {
-        let mut m = self.idempotency.write().await;
-        if m.len() >= IDEMPOTENCY_CAP && !m.contains_key(&order_id_hex) {
-            if let Some(k) = m.keys().next().cloned() {
-                m.remove(&k);
+        if replay.idempotency.len() >= IDEMPOTENCY_CAP
+            && !replay.idempotency.contains_key(&order_id_hex)
+        {
+            if let Some(k) = replay.idempotency.keys().next().cloned() {
+                replay.idempotency.remove(&k);
             }
         }
-        m.insert(order_id_hex, (digest, arrival_slot));
+        replay
+            .idempotency
+            .insert(order_id_hex, (digest, arrival_slot));
+        replay.last_arrival_nonce.insert(trading_key, arrival_nonce);
     }
 
     /// Boot-time auth load (Phase 1b). Loads the `accounts.db`
@@ -867,8 +911,15 @@ mod persist_tests {
         let order_id = [0xABu8; 16];
         st.record_order_owner(hex::encode(order_id), "alice".to_string())
             .await;
-        let memo =
-            crate::matcher::FillMemo::new(order_id, 3, 777, [0xCC; 32], [0x11; 32], [0x22; 32]);
+        let memo = crate::matcher::FillMemo::new(
+            order_id,
+            [0xAA; 32],
+            darkpool_matcher::change_note::CHANGE_ROLE_BUYER,
+            777,
+            [0xCC; 32],
+            [0x11; 32],
+            [0x22; 32],
+        );
 
         // No subscriber attached → not delivered live (no error; just false).
         assert!(!st.route_fill(&memo).await, "no subscriber → false");
@@ -878,6 +929,10 @@ mod persist_tests {
         assert!(st.route_fill(&memo).await, "live subscriber → delivered");
         let got = rx.try_recv().expect("memo on the live channel");
         assert_eq!(got.change_amount, 777);
-        assert_eq!(got.anchor_index, 3);
+        assert_eq!(got.consumed_note_commitment, "aa".repeat(32));
+        assert_eq!(
+            got.output_role,
+            darkpool_matcher::change_note::CHANGE_ROLE_BUYER
+        );
     }
 }

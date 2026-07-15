@@ -33,9 +33,7 @@ use axum::{
 };
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::config::MatchConfig;
-use darkpool_matcher::order_canonical::{
-    anchor_pool_hash, Anchor, OrderCanonical, ANCHOR_POOL_SIZE,
-};
+use darkpool_matcher::order_canonical::OrderCanonical;
 use ed25519_dalek::{Signer, SigningKey};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use nyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
@@ -119,17 +117,8 @@ fn sign_order(
     };
     let note_commitment = opening.commitment().expect("Fr-safe opening");
 
-    let anchors: Vec<Anchor> = (0..ANCHOR_POOL_SIZE)
-        .map(|i| {
-            let mut inner = [0u8; 32];
-            inner[0] = 0;
-            inner[31] = 0x10 + i as u8;
-            Anchor {
-                inner_hash: inner,
-                nullifier: [0x90 + i as u8; 32],
-            }
-        })
-        .collect();
+    let viewing_pubkey = darkpool_crypto::ephemeral_public(&[0x21; 32]);
+    let session_id = [0x5A; 32];
 
     let canonical = OrderCanonical {
         symbol: b"SOL-USDC",
@@ -145,7 +134,8 @@ fn sign_order(
         note_commitment,
         user_commitment,
         arrival_nonce,
-        anchor_pool_hash: anchor_pool_hash(&anchors),
+        viewing_pubkey,
+        session_id,
     };
     let digest = canonical.digest().unwrap();
     let sig = key.sign(&digest);
@@ -170,10 +160,8 @@ fn sign_order(
         "nullifier": hex::encode(opening.nullifier),
         "merkle_root": hex::encode([0xDDu8; 32]),
         "valid_input_proof": hex::encode([0u8; 256]),
-        "anchors": anchors.iter().map(|a| json!({
-            "inner_hash": hex::encode(a.inner_hash),
-            "nullifier": hex::encode(a.nullifier),
-        })).collect::<Vec<_>>(),
+        "viewing_pubkey": hex::encode(viewing_pubkey),
+        "session_id": hex::encode(session_id),
     })
 }
 

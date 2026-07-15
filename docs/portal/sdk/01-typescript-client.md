@@ -10,15 +10,15 @@ description: A worked TypeScript client that authenticates, reads markets, build
 A reference client that ties the pieces together: get a bearer token, read
 markets and server time, use the SDK's **order builders** to assemble a signed
 order from a deposited note, submit it, and subscribe to the order and fill
-streams. The SDK owns the cryptography (note commitments, the input proof, and
-the anchor pool) so your code works in economic terms.
+streams. The SDK owns the cryptography (note commitments, the input proof,
+viewing-key derivation, and canonical signing) so your code works in economic terms.
 :::
 
 ## What the SDK does for you
 
 The hard part of a Nyx order is its cryptographic backing: the collateral-note
-commitment, the zero-knowledge input proof, the owner-commitment opening, and the
-continuation anchor pool (see [Place Order](../orders/place-order)). The SDK
+commitment, the zero-knowledge input proof, the owner-commitment opening, the
+signed viewing key, and the current boot session (see [Place Order](../orders/place-order)). The SDK
 derives all of it from your seed and a spendable note, and signs the canonical
 body with your trading key. You supply the *intent* (side, amount, price,
 time-in-force) and get back a ready-to-send order.
@@ -101,7 +101,7 @@ class NyxClient {
   // ── Orders ───────────────────────────────────────────────────────────
   // `order` is a fully-built, signed wire body, produced by the SDK's
   // order-builder from your keys + a spendable note (it fills the note
-  // commitment, the VALID_INPUT proof, the anchor pool, and the signature).
+  // commitment, VALID_INPUT proof, viewing key, session, and signature).
   placeOrder(order: object) {
     return fetch(`${this.gateway}/orders`, {
       method: "POST",
@@ -160,7 +160,7 @@ const aon = aonPolicy({ amount: 10_000_000n, priceLimit: 150_000_000n });
 
 // `proveAndBuildOrder` does the whole flow: fetch the note's inclusion witness
 // from /tree/inclusion, generate the VALID_INPUT proof, then assemble + sign the
-// wire body (note commitment, proof, anchor pool, trading-key signature). The
+// wire body (note commitment, proof, viewing key, session, trading signature). The
 // prover is pluggable: `nodeValidInputProver` runs the compiled circuit via
 // snarkjs in Node; a browser app supplies its own WASM prover.
 const order = await proveAndBuildOrder({
@@ -181,6 +181,7 @@ const order = await proveAndBuildOrder({
   policy: gttPolicy,
   amount: 10_000_000n,
   orderId: deriveOrderId(masterSeed, 0),
+  sessionId: Uint8Array.from(Buffer.from(info.boot_session_id, "hex")),
 });
 
 // Submit over REST...

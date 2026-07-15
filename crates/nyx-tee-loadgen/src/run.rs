@@ -18,7 +18,7 @@ use reqwest::Client;
 use serde_json::json;
 use tokio::time::Instant as TokioInstant;
 
-use crate::auth::acquire_bearer;
+use crate::auth::{acquire_bearer, fetch_boot_session_id};
 use crate::config::{AuthMode, RunConfig};
 use crate::metrics::RunMetrics;
 use crate::report::{render_markdown, ReportInputs};
@@ -37,6 +37,7 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
 
     let base_mint = cfg.base_mint_bytes()?;
     let quote_mint = cfg.quote_mint_bytes()?;
+    let boot_session_id = fetch_boot_session_id(&http, &cfg.endpoint).await?;
 
     // ─── 0. Status preflight — fail fast on a degraded / misconfigured CVM ──
     // Also capture the live current_slot so `--expiry-slot 0` (auto) can place
@@ -193,6 +194,7 @@ pub async fn run_load_gen(cfg: RunConfig) -> Result<RunOutcome> {
             metrics: metrics.clone(),
             base_mint,
             quote_mint,
+            boot_session_id,
         };
         handles.push(tokio::spawn(trader_task(ctx, workload, deadline)));
     }

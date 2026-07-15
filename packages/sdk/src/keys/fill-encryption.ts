@@ -33,6 +33,20 @@ export const TAG_LEN = 16;
 export const SIDE_BLOB_LEN = NONCE_LEN + AMOUNT_LEN + TAG_LEN; // 36
 export const X25519_LEN = 32;
 
+/** Reject low-order X25519 encodings by applying a fixed probe scalar and
+ * requiring a non-zero shared secret (RFC 7748 contributory check). */
+export function isContributoryX25519PublicKey(
+  publicKey: Uint8Array,
+): boolean {
+  if (publicKey.length !== X25519_LEN) return false;
+  try {
+    const shared = nacl.scalarMult(new Uint8Array(32).fill(0x42), publicKey);
+    return shared.some((byte) => byte !== 0);
+  } catch {
+    return false;
+  }
+}
+
 /** HKDF-SHA256 → 32-byte ChaCha20-Poly1305 key, binding both pubkeys into `info`. */
 function deriveAeadKey(
   shared: Uint8Array,
@@ -61,6 +75,8 @@ export function encryptChangeAmount(
 ): Uint8Array {
   if (nonce12.length !== NONCE_LEN)
     throw new Error(`nonce must be ${NONCE_LEN} bytes`);
+  if (!isContributoryX25519PublicKey(recipientPub))
+    throw new Error("recipientPub is a non-contributory X25519 point");
   const ephPub = nacl.scalarMult.base(ephemeralSecret);
   const shared = nacl.scalarMult(ephemeralSecret, recipientPub);
   const key = deriveAeadKey(shared, ephPub, recipientPub);
@@ -98,14 +114,14 @@ export function decryptChangeAmount(
   blob: Uint8Array,
 ): bigint | null {
   if (blob.length !== SIDE_BLOB_LEN) return null;
-  const myPub = nacl.scalarMult.base(viewingSecret);
-  const shared = nacl.scalarMult(viewingSecret, ephemeralPub);
-  const key = deriveAeadKey(shared, ephemeralPub, myPub);
-
-  const nonce = blob.subarray(0, NONCE_LEN);
-  const ct = blob.subarray(NONCE_LEN, NONCE_LEN + AMOUNT_LEN);
-  const tag = blob.subarray(NONCE_LEN + AMOUNT_LEN);
+  if (!isContributoryX25519PublicKey(ephemeralPub)) return null;
   try {
+    const myPub = nacl.scalarMult.base(viewingSecret);
+    const shared = nacl.scalarMult(viewingSecret, ephemeralPub);
+    const key = deriveAeadKey(shared, ephemeralPub, myPub);
+    const nonce = blob.subarray(0, NONCE_LEN);
+    const ct = blob.subarray(NONCE_LEN, NONCE_LEN + AMOUNT_LEN);
+    const tag = blob.subarray(NONCE_LEN + AMOUNT_LEN);
     const decipher = crypto.createDecipheriv(
       "chacha20-poly1305",
       Buffer.from(key),
