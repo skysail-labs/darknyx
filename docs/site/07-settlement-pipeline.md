@@ -44,8 +44,8 @@ settle step consumes.
 
 **3 — Pack.** Solana caps a transaction at 1232 bytes, and the settle
 transaction sits right at that edge. The accounts a settle touches that are
-*derivable from its payload* (the note locks, the spent-note and nullifier
-guards, the marker) are placed in a per-batch **Address Lookup Table**, which
+*derivable from its payload* (the note locks, commitment-keyed consumed-note
+guards, and the marker) are placed in a per-batch **Address Lookup Table**, which
 compresses each 32-byte account reference to a 1-byte index. The table is
 extended in chunks, fired concurrently, so building it costs about one block,
 not one per chunk.

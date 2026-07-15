@@ -219,16 +219,17 @@ pub struct TeeForcedSettleBatched<'info> {
     )]
     pub consumed_b: AccountLoader<'info, ConsumedNoteEntry>,
 
-    // NOTE: the two per-match `NullifierEntry` inits were REMOVED here. The
-    // TEE-supplied `payload.nullifier_a/b` are unconstrained (no nullifier
-    // signal in VALID_MATCH_BATCH; `compute_match_leaf` binds only the note
-    // commitments + batch_slot), so writing them served no soundness purpose
+    // NOTE: the two per-match `NullifierEntry` inits were removed here. The
+    // TEE-supplied nullifiers were unconstrained (no nullifier signal in
+    // VALID_MATCH_BATCH; `compute_match_leaf` binds only the note commitments
+    // + batch_slot), so writing them served no soundness purpose
     // and enabled a griefing freeze (a compromised TEE could pre-claim a
     // victim's future withdraw nullifier) while leaving the real double-spend
     // guard to the commitment-keyed `consumed_a/b` above (which `withdraw` now
-    // also writes). Dropping them also reclaims 2 `init` CPIs + 2 accounts off
-    // the ~100-B-from-cap Tx D (CLAUDE.md §6). `payload.nullifier_a/b` are
-    // still carried + signed (canonical hash unchanged) but no longer written.
+    // also writes). Dropping them also reclaimed 2 `init` CPIs + 2 accounts off
+    // Tx D. Settlement payload v9 removes the now-vestigial nullifier fields
+    // from the signed instruction data too, restoring another 64 bytes of
+    // transaction headroom.
     /// CHECK: Seeds validated in handler when re-lock is requested. The account
     /// is writable only when the instruction builder sees a non-zero buyer
     /// relock order id; exact-fill/dummy destinations stay read-only.

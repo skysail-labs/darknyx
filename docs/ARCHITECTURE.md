@@ -183,9 +183,10 @@ close. Those are now gone from L1; the proof is the sole binder:
   **commitment-only** — `Poseidon10` over the six note commitments + the two
   fee-note commitments + `batch_slot`, hashing no amounts.
 * **The settle ix + event carry no amounts.** `MatchResultPayload` dropped its
-  seven amount/price fields (480 → 424 bytes; canonical-hash domain
-  `nyx-match-v6` → `v7`), and the `TradeSettled` event dropped them too. The
-  note commitments bind the amounts; the chain never sees them.
+  seven amount/price fields in v7, gained the 128-byte recovery ciphertext in
+  v8, then dropped two vestigial nullifiers in v9 (552 → 488 bytes). The
+  `TradeSettled` event dropped the amounts too. Note commitments bind the
+  amounts; the chain never sees them.
 * **Amounts reach the trader off-chain, via the fill memo.** The owner of each
   order receives a per-account **`FillMemo`** (`order_id`, `anchor_index`,
   `change_amount`, `change_note_commitment`, `inner_hash`) over the auth'd

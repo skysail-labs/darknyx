@@ -928,8 +928,6 @@ pub struct MatchResultPayload {
     pub note_d_commitment: [u8; 32],
     pub note_e_commitment: [u8; 32],
     pub note_f_commitment: [u8; 32],
-    pub nullifier_a: [u8; 32],
-    pub nullifier_b: [u8; 32],
     pub order_id_a: [u8; 16],
     pub order_id_b: [u8; 16],
     pub note_fee_base_commitment: [u8; 32],
@@ -971,8 +969,6 @@ impl MatchResultPayload {
         note_b: [u8; 32],
         note_c: [u8; 32],
         note_d: [u8; 32],
-        nullifier_a: [u8; 32],
-        nullifier_b: [u8; 32],
         order_id_a: [u8; 16],
         order_id_b: [u8; 16],
         // Amount-privacy (P3b): amounts no longer ride the payload. Kept as
@@ -989,8 +985,6 @@ impl MatchResultPayload {
             note_d_commitment: note_d,
             note_e_commitment: [0u8; 32],
             note_f_commitment: [0u8; 32],
-            nullifier_a,
-            nullifier_b,
             order_id_a,
             order_id_b,
             note_fee_base_commitment: [0u8; 32],
@@ -1010,7 +1004,7 @@ impl MatchResultPayload {
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    h.update(b"nyx-match-v8");
+    h.update(b"nyx-match-v9");
     h.update(p.match_id);
     h.update(p.note_a_commitment);
     h.update(p.note_b_commitment);
@@ -1020,8 +1014,6 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     h.update(p.note_f_commitment);
     h.update(p.note_fee_base_commitment);
     h.update(p.note_fee_quote_commitment);
-    h.update(p.nullifier_a);
-    h.update(p.nullifier_b);
     h.update(p.order_id_a);
     h.update(p.order_id_b);
     h.update(p.buyer_relock_order_id);
@@ -1309,8 +1301,6 @@ fn to_onchain_payload(
         note_d_commitment: p.note_d_commitment,
         note_e_commitment: p.note_e_commitment,
         note_f_commitment: p.note_f_commitment,
-        nullifier_a: p.nullifier_a,
-        nullifier_b: p.nullifier_b,
         order_id_a: p.order_id_a,
         order_id_b: p.order_id_b,
         note_fee_base_commitment: p.note_fee_base_commitment,

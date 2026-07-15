@@ -68,7 +68,9 @@ export const ZERO_PROOF: Groth16Proof = {
  *  quoteAmount, buyer/sellerChangeAmt, buyer/sellerFeeAmt, clearingPrice) were
  *  removed — they're proven in-circuit + bound by the note commitments, and
  *  putting them in the (public, on-chain) settle ix leaked every trade size.
- *  The canonical-hash domain bumped `v6`→`v7`. */
+ *  The canonical-hash domain bumped `v6`→`v7`. Settlement payload v9 removes
+ *  the two unused nullifiers; commitment-keyed consumed-note PDAs are the
+ *  replay guard shared by settlement and withdrawal. */
 export interface MatchResultPayload {
   matchId: Uint8Array; // [u8; 16]
   noteAcommitment: Uint8Array; // [u8; 32]
@@ -77,8 +79,6 @@ export interface MatchResultPayload {
   noteDcommitment: Uint8Array;
   noteEcommitment: Uint8Array; // [0;32] when no buyer change
   noteFcommitment: Uint8Array; // [0;32] when no seller change
-  nullifierA: Uint8Array;
-  nullifierB: Uint8Array;
   orderIdA: Uint8Array; // [u8; 16]
   orderIdB: Uint8Array;
   // Per-batch protocol fee notes, one per mint ([0;32] = none). Both set
@@ -134,8 +134,6 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     fixed(p.noteDcommitment, 32),
     fixed(p.noteEcommitment, 32),
     fixed(p.noteFcommitment, 32),
-    fixed(p.nullifierA, 32),
-    fixed(p.nullifierB, 32),
     fixed(p.orderIdA, 16),
     fixed(p.orderIdB, 16),
     fixed(p.noteFeeBaseCommitment, 32),
@@ -165,7 +163,8 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   const h = createHash("sha256");
   // v7: amount-privacy (P3b) dropped the seven plaintext amount fields.
   // v8: change-amount recovery (Proposal B) appended the 128-byte fill_recovery.
-  h.update(Buffer.from("nyx-match-v8"));
+  // v9: removed the two vestigial nullifiers.
+  h.update(Buffer.from("nyx-match-v9"));
   h.update(fixed(p.matchId, 16));
   h.update(fixed(p.noteAcommitment, 32));
   h.update(fixed(p.noteBcommitment, 32));
@@ -175,8 +174,6 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   h.update(fixed(p.noteFcommitment, 32));
   h.update(fixed(p.noteFeeBaseCommitment, 32));
   h.update(fixed(p.noteFeeQuoteCommitment, 32));
-  h.update(fixed(p.nullifierA, 32));
-  h.update(fixed(p.nullifierB, 32));
   h.update(fixed(p.orderIdA, 16));
   h.update(fixed(p.orderIdB, 16));
   h.update(fixed(p.buyerRelockOrderId, 16));
@@ -284,11 +281,9 @@ export interface BuildSettleBatchedIxParams {
  *  10  batch_validity_marker   (ro — left open; swept after expiry)
  *  11  system_program
  *
- * The two per-match `nullifier_entry` accounts were REMOVED: `payload.nullifier_a/b`
- * are TEE-supplied + unconstrained (not bound by VALID_MATCH_BATCH), so writing
- * them was unsound-adjacent (a griefing freeze vector) and redundant — the
- * commitment-keyed `consumed_a/b` are the real double-spend guard. They're still
- * carried in the payload + signed (canonical hash unchanged), just not written.
+ * The two per-match `nullifier_entry` accounts and their payload fields are
+ * removed. The commitment-keyed `consumed_a/b` PDAs are the replay guard shared
+ * with withdrawal.
  *
  * ix data = disc(8) || tree_id(1) || payload(Borsh) || match_index(1) || 4×32 siblings.
  */
@@ -441,8 +436,6 @@ export function exactFillPayload(args: {
   noteBcommitment: Uint8Array;
   noteCcommitment: Uint8Array;
   noteDcommitment: Uint8Array;
-  nullifierA: Uint8Array;
-  nullifierB: Uint8Array;
   orderIdA: Uint8Array;
   orderIdB: Uint8Array;
   baseAmount?: bigint;
@@ -458,8 +451,6 @@ export function exactFillPayload(args: {
     noteDcommitment: args.noteDcommitment,
     noteEcommitment: ZERO_COMMITMENT,
     noteFcommitment: ZERO_COMMITMENT,
-    nullifierA: args.nullifierA,
-    nullifierB: args.nullifierB,
     orderIdA: args.orderIdA,
     orderIdB: args.orderIdB,
     noteFeeBaseCommitment: ZERO_COMMITMENT,

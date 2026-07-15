@@ -59,7 +59,7 @@ runbooks have landed.
 | N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
 | N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Closed |
 | N-16 | Low | SDK | `remediation/client-custody` | Commitment equality is byte-based; mixed-case encoding regression | Closed |
-| N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Open |
+| N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Code complete |
 | N-18 | Critical mainnet gate | Governance + ZK | `remediation/release-assurance` | Public Phase-2 ceremony with at least five independent contributors, transcript/hashes, random beacon, reproducible verify, auditor sign-off, post-ceremony settle | Open |
 | N-19 | High mainnet gate | Governance | `remediation/governance-markets`, `remediation/release-assurance` | Split Squads rehearsal: operations 3-of-5 admin and cold root/upgrade 4-of-7; independent attestation verification before rotations | In progress |
 
@@ -485,6 +485,41 @@ Every remediation PR must record:
   payloads, signatures, proofs, or deployed vault artifacts are invalidated,
   but rollback reopens N-08 and restores three token-in-query sockets plus the
   daemon's three-session transport.
+
+### `remediation/settlement-payload-v9` — N-17
+
+- **Status.** Code complete; coordinated devnet vault + image-54 settlement
+  evidence is pending.
+- **Invariant restored.** Tx D no longer serializes or signs two TEE-supplied
+  nullifiers that the vault never reads. Commitment-keyed `ConsumedNoteEntry`
+  PDAs remain the single replay guard shared by settlement and withdrawal.
+- **Wire/circuit impact.** `MatchResultPayload` shrinks from 552 to 488 bytes;
+  `tee_forced_settle_batched` instruction data shrinks from 690 to 626 bytes.
+  The canonical signature domain moves from `nyx-match-v8` to
+  `nyx-match-v9`, intentionally invalidating every v8 payload and signature.
+  Rust/Anchor/TEE/SDK serializers, direct-chain and indexer decoders, fixed
+  vectors, offsets, and size assertions move atomically. Account layouts, ALT
+  address membership, REST/order shapes, circuits, zkeys, verifier keys, N=16
+  fixtures, note commitments, nullifiers used by withdrawal, and Merkle roots
+  are unchanged.
+- **Local evidence.** Mainnet and `devnet-admin` SBF builds pass. Formatting,
+  the host parity-example build, workspace clippy with warnings denied, and
+  `cargo test --workspace` pass. The v9 cross-language fixed vector is
+  `63a10a281ed28632d4fee9c71b38f926f2cda8be6f78850d4f7926655ec8cfa2`
+  in the vault, TEE, and SDK. The production-shaped worst-case v0 Tx D is
+  1109 bytes, leaving 123 bytes below Solana's 1232-byte cap. Litesvm measures
+  63,172 CU for the two-leaf path and 78,388 CU for the six-leaf plus two-relock
+  worst case against the unchanged 115,000-CU limit. SDK, SDK-test, indexer,
+  and daemon TypeScript no-emit checks pass. Full Vitest passes SDK 240 tests
+  with 23 environment-gated skips, indexer 23, and daemon 158 with 2 skips.
+- **Devnet/CVM evidence.** Pending vault upgrade plus
+  `tee-v3-hardening-54`. This wire change requires a real deposit → match →
+  settle after the coordinated cutover; API-only evidence is insufficient.
+- **Rollback.** Revert this PR and coordinate a vault downgrade with image 53
+  and the v8 SDK. Notes, circuit proofs, roots, and account layouts remain
+  valid, but v9 payloads/signatures and any in-flight settlement jobs are
+  incompatible with v8 and must be discarded and resubmitted. Rolling back
+  only one component fails closed at deserialization/signature verification.
 
 ## Mainnet release gates
 

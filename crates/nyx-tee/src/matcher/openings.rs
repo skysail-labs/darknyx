@@ -95,7 +95,7 @@ impl AnchorPool {
 
 /// The full opening of one input note — everything the
 /// VALID_MATCH_BATCH circuit needs to re-derive its commitment, plus
-/// the user-supplied nullifier the settle payload carries.
+/// the user-supplied nullifier retained by the current order schema.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoteOpening {
     /// SPL mint of the collateral note (quote mint for a bid, base
@@ -112,7 +112,8 @@ pub struct NoteOpening {
     /// blinding pair). Anchors both the commitment and the nullifier.
     pub inner_hash: [u8; 32],
     /// `Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash)`,
-    /// precomputed by the user. Opaque to the matcher.
+    /// precomputed by the user. Opaque to the matcher and intentionally absent
+    /// from settlement payload v9; Tx D replay protection is commitment-keyed.
     pub nullifier: [u8; 32],
 }
 

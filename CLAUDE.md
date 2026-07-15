@@ -548,7 +548,7 @@ Solana caps a tx at 1232 bytes. The settle path is right at the edge:
 | lock_note ×2 (Tx A) | ~1050 B | ~180 B |
 | verify_match_batch (Tx B) | ~640 B | comfortable |
 | per-batch ALT create+extend (Tx C) | ~250 B | comfortable |
-| tee_forced_settle_batched (Tx D, v0 + 2 ALTs) | ~1130 B | **~100 B** |
+| tee_forced_settle_batched (Tx D, v0 + 2 ALTs) | **1109 B** | **123 B** |
 | close_batch_validity_marker (Tx E) | ~250 B | comfortable |
 
 Anything that adds bytes to the settle path — a new account, an extra ix
@@ -611,8 +611,9 @@ but `light-poseidon`'s `hash_bytes_be` rejects values ≥ the modulus →
   256-bit pubkey can't fit one Fr element.
 * **Owner commitments + nullifiers are Poseidon outputs** → Fr-safe by
   construction. Intake Fr-validates the order's `inner_hash` + every anchor
-  `inner_hash` (they're hashed); the nullifier is NOT hashed by the TEE (it's
-  a PDA seed + a SHA-256 payload field) so it's only length-checked.
+  `inner_hash` (they're hashed). The nullifier is used by the withdraw path;
+  payload v9 removed it from Tx D because settlement replay protection is
+  commitment-keyed.
 
 ---
 

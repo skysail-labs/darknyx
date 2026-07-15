@@ -324,8 +324,6 @@ pub fn assemble_match(
         note_d_commitment: note_d,
         note_e_commitment: note_e,
         note_f_commitment: note_f,
-        nullifier_a: inp.buyer_opening.nullifier,
-        nullifier_b: inp.seller_opening.nullifier,
         order_id_a: inp.order_id_a,
         order_id_b: inp.order_id_b,
         // Amount-privacy (P3b): the amounts (base/quote/change/fee/price) stay

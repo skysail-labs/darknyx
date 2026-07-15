@@ -15,13 +15,14 @@
  * amounts from the per-account FillMemo (delivered over the authenticated
  * `/v1/stream` fills channel); partial-fill is signalled by change-note presence.
  *
- * BYTE-LAYOUT CONTRACT: the 552-byte payload mirrors
+ * BYTE-LAYOUT CONTRACT: the 488-byte payload mirrors
  * `programs/vault/src/instructions/tee_forced_settle.rs::MatchResultPayload`
  * and the TS encoder `@nyx/sdk` `settle-builder.ts::serializePayload`. The
  * `decode.test.ts` round-trips against that encoder so the two can't drift.
  *
  * One settle ix = ONE match (one payload). A batch is N such ixs sharing a
- * marker. ix data = disc(8) ‖ payload(552) ‖ match_index(1) ‖ siblings(128).
+ * marker. ix data = disc(8) ‖ tree_id(1) ‖ payload(488) ‖ match_index(1) ‖
+ * siblings(128).
  */
 
 import { createHash } from "node:crypto";
@@ -37,10 +38,8 @@ export const SETTLE_IX_NAME = "tee_forced_settle_batched";
 export const SETTLE_DISCRIMINATOR = anchorDiscriminator(SETTLE_IX_NAME);
 
 /** Borsh-serialized `MatchResultPayload` is exactly this many bytes.
- *  v8 (change-amount recovery, Proposal B) appended the 128-byte `fill_recovery`
- *  field to the v7 424-byte layout → 552. The locator fields this indexer reads
- *  all precede it, so their offsets are unchanged. */
-export const PAYLOAD_LEN = 552;
+ *  v9 removed two vestigial nullifiers from v8's 552-byte layout → 488. */
+export const PAYLOAD_LEN = 488;
 
 const ZERO32 = "0".repeat(64);
 
@@ -69,8 +68,8 @@ export interface MatchPayload {
   sellerEnc: string | null;
 }
 
-/** Offsets into the 128-byte fill_recovery bundle (which itself starts at 424). */
-const FILL_RECOVERY_OFFSET = 424;
+/** Offsets into the 128-byte fill_recovery bundle (which itself starts at 360). */
+const FILL_RECOVERY_OFFSET = 360;
 const isZero = (b: Uint8Array) => b.every((x) => x === 0);
 const hexOrNull = (b: Uint8Array) => (isZero(b) ? null : hex(b));
 
@@ -90,16 +89,16 @@ export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
   const eph = payload.subarray(r, r + 32);
   return {
     matchId: hex(payload.subarray(0, 16)),
-    // 6 × 32-byte commitments + 2 × 32-byte nullifiers precede the order ids.
+    // Six 32-byte note commitments precede the order ids in payload v9.
     noteEcommitment: hex(payload.subarray(144, 176)),
     noteFcommitment: hex(payload.subarray(176, 208)),
-    orderIdA: hex(payload.subarray(272, 288)),
-    orderIdB: hex(payload.subarray(288, 304)),
-    // After order_id_b: note_fee_base (304..336) + note_fee_quote (336..368) +
-    // buyer_relock_order_id (368..384) + buyer_relock_expiry (384..392) +
-    // seller_relock_order_id (392..408) + seller_relock_expiry (408..416) +
-    // batch_slot (416..424) + fill_recovery (424..552).
-    batchSlot: u64(v, 416),
+    orderIdA: hex(payload.subarray(208, 224)),
+    orderIdB: hex(payload.subarray(224, 240)),
+    // After order_id_b: note_fee_base (240..272) + note_fee_quote (272..304) +
+    // buyer_relock_order_id (304..320) + buyer_relock_expiry (320..328) +
+    // seller_relock_order_id (328..344) + seller_relock_expiry (344..352) +
+    // batch_slot (352..360) + fill_recovery (360..488).
+    batchSlot: u64(v, 352),
     ephemeralPubkey: hexOrNull(eph),
     buyerEnc: hexOrNull(payload.subarray(r + 32, r + 68)),
     sellerEnc: hexOrNull(payload.subarray(r + 68, r + 104)),

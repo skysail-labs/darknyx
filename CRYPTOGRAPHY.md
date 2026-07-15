@@ -1278,7 +1278,7 @@ The tx contains **three ixs**:
 
 It's sent as a **VersionedTransaction with stacked Address Lookup Tables**
 (one static settle ALT created at devnet-setup + one per-batch ALT holding
-the 5 derivable PDAs — see below).
+the 7 derivable PDAs per match — see below).
 
 The settle ix is:
 
@@ -1291,13 +1291,14 @@ vault::tee_forced_settle_batched(
 )
 ```
 
-The payload is a 424-byte Borsh struct (v7: amount-privacy P3b — the 7
-plaintext amount fields were removed) carrying 7 note commitments + 2 protocol
-fee-note commitments, 2 nullifiers, 2 order IDs, 2 re-lock (order_id + expiry)
-pairs, and batch_slot. The amounts are no longer on-chain at all — they're
-proven in-circuit by VALID_MATCH_BATCH (conservation + fee floor over private,
-range-checked amounts) and bound by the note commitments. The Rust struct
-definition is in `programs/vault/src/instructions/tee_forced_settle.rs`.
+The payload is a 488-byte Borsh struct (v9). It carries six user-note
+commitments, two protocol fee-note commitments, two order IDs, two re-lock
+(order_id + expiry) pairs, `batch_slot`, and the 128-byte fill-recovery
+ciphertext. The seven plaintext amount fields were removed in v7, and the two
+vestigial nullifiers were removed in v9. Amounts remain private circuit
+witnesses; commitment-keyed `ConsumedNoteEntry` PDAs provide replay protection.
+The Rust struct definition is in
+`programs/vault/src/instructions/tee_forced_settle.rs`.
 
 Accounts (12 total, in this exact order — must match the Rust struct).
 Post-sharding `vault_config` is **read-only** and the writable tree state is
@@ -1318,18 +1319,19 @@ Post-sharding `vault_config` is **read-only** and the writable tree state is
 | 10 | `batch_validity_marker` | **ro** — the 1:N marker from step 8, checked and never closed here |
 | 11 | `system_program` | for CPIs |
 
-> The two per-match `nullifier_{a,b}_entry` accounts (formerly slots 7–8) were
-> **removed**. `payload.nullifier_a/b` are TEE-supplied and unconstrained (no
-> nullifier signal in VALID_MATCH_BATCH; the leaf binds only commitments +
-> `batch_slot`), so writing them provided no soundness — and it enabled a
+> The two per-match `nullifier_{a,b}_entry` accounts (formerly slots 7–8) and
+> their vestigial payload fields are **removed**. Those TEE-supplied values were
+> unconstrained (no nullifier signal in VALID_MATCH_BATCH; the leaf binds only
+> commitments + `batch_slot`), so writing them provided no soundness — and it enabled a
 > griefing **freeze**: a compromised TEE could `init` a `NullifierEntry` at a
 > victim's future withdraw nullifier, permanently blocking that withdraw (whose
 > own `nullifier_entry` init would then collide). The commitment-keyed
 > `consumed_a/b` are the real double-spend guard, and `withdraw` now writes a
 > matching `ConsumedNoteEntry` so the guard is symmetric across both paths.
-> Dropping the two inits also reclaims 2 accounts + 2 CPIs off the tight Tx D.
+> Dropping the two inits reclaimed 2 accounts + 2 CPIs. Payload v9 then removed
+> the dead signed values themselves, reclaiming another 64 wire bytes.
 
-ix data = disc(8) ‖ tree_id(1) ‖ payload(424) ‖ match_index(1) ‖ 4×32 siblings = 562 B.
+ix data = disc(8) ‖ tree_id(1) ‖ payload(488) ‖ match_index(1) ‖ 4×32 siblings = 626 B.
 
 Handler walkthrough:
 
@@ -1394,11 +1396,9 @@ Handler walkthrough:
    (and vice-versa). The commitment is public AND circuit-bound, unlike the
    nullifier, which is why it — not the nullifier — is the trustless guard.
 
-8. **(removed)** — the per-match `NullifierEntry` writes were deleted. See the
-   note under the account table above: `payload.nullifier_a/b` are unconstrained
-   and writing them served no soundness purpose while enabling a freeze-griefing
-   vector. They're still carried in the payload + signed (canonical hash
-   unchanged) but no longer written on-chain.
+8. **(removed)** — the per-match `NullifierEntry` writes and payload nullifier
+   fields were deleted. See the note under the account table above. Payload v9
+   bumps the canonical signature domain, so no older signed layout is accepted.
 
 9. **Append output leaves to the Merkle tree**: in this order:
    - `note_c` (always)
@@ -1439,14 +1439,14 @@ Handler walkthrough:
 
 **Why this is split across THREE txs (lock + verify + settle)**: tx size.
 Each Groth16 proof is 256 bytes; combining lock proofs + a settle proof +
-the canonical-hash Ed25519 precompile + all the account keys + the 424-byte
+the canonical-hash Ed25519 precompile + all the account keys + the 488-byte
 payload would be ~1800 bytes total — way over the 1232 cap. By splitting:
 - Tx A (lock): 2 lock_notes with embedded VALID_INPUT proofs, ~1100 B.
 - Tx B (verify): 1 verify_match_batch with the embedded VALID_MATCH_BATCH
   proof, ~640 B.
 - Tx D (settle, V0 + stacked ALTs): Ed25519 precompile + tee_forced_settle_batched
-  + the depth-4 inclusion proof, ~1075 B (amount-privacy P3b shaved 56 B off the
-  payload — extra headroom under the 1232 cap).
+  + the depth-4 inclusion proof, 1109 B in the worst-case v9 regression fixture
+  (123 B of headroom under the 1232-byte cap).
 
 See §9 for why the v0/ALT stacking was specifically required.
 
@@ -1458,7 +1458,7 @@ See §9 for why the v0/ALT stacking was specifically required.
   canonical hash byte-equality with the Rust fixed vector, Ed25519 layout, account order).
 - `tests/settle-builder-batched.test.ts` — settle ix wire-format
   unit tests for `buildSettleBatchedIx` + `buildCloseBatchValidityMarkerIx`:
-  13-account ordering, 585-byte ix data (disc + payload + match_index +
+  12-account ordering, 626-byte ix data (disc + tree_id + payload + match_index +
   4×32 siblings), Anchor `[[u8; 32]; 4]` encoding, `BatchValidityMarker`
   PDA derivation, `match_index` boundary validation [0, 15].
 - `programs/vault/tests/tee_forced_settle_batched.rs` (litesvm)
@@ -1648,7 +1648,7 @@ precompile, settle} is well over the cap. Napkin math:
 | `lock_note` accounts (4 × 32) | 128 |
 | `verify_match_batch` ix data (8 disc + 32 root + 8 expiry + 256 proof) | ~304 |
 | Ed25519 precompile ix (header + pubkey + sig + 32-byte msg) | ~150 |
-| `tee_forced_settle_batched` ix data (8 disc + 424 payload + 1 match_index + 4×32 siblings) | ~561 |
+| `tee_forced_settle_batched` ix data (8 disc + 1 tree + 488 payload + 1 match_index + 4×32 siblings) | 626 |
 | Account keys for everything together (~13 distinct) | 416 |
 | **TOTAL** | **~2000+** |
 
@@ -1658,8 +1658,8 @@ So the settle is split into a pipeline, per batch (≤ N=16 matches):
 |---|---|---|---|
 | **Tx A — lock** | compute_budget + lock_note(a) + lock_note(b) | ~1050 B | N per batch (one per match) |
 | **Tx B — verify_match_batch** | compute_budget + verify_match_batch (1 Groth16, 1 marker init) | ~640 B | 1 per batch |
-| **Tx C — per-batch ALT** | createLookupTable + extendLookupTable(5 PDAs) | ~250 B | 1 per batch |
-| **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | ~1075 B | N per batch |
+| **Tx C — per-batch ALT** | createLookupTable + chunked extendLookupTable(7 PDAs per match) | amortized | 1 per batch |
+| **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | 1109 B worst case (v9) | N per batch |
 | **Tx E — close** | compute_budget + close_batch_validity_marker | ~250 B | 1 per batch |
 
 All fit under 1232 B. Atomic dependency is enforced by account-existence
@@ -1795,8 +1795,8 @@ into the ALT (they were inline before) is what keeps the
 **continuation/change-note** settle — where `note_lock_e/f` are non-zero
 so the exact-fill dedup disappears and the tx grows — under the cap. The
 settle tx lands comfortably under 1232 for both exact-fill and
-change-note paths (with even more headroom now that the two nullifier
-accounts are gone).
+change-note paths. Payload v9 also removes the two dead nullifier values,
+pinning the worst-case regression fixture at 1109 bytes (123 bytes headroom).
 
 Because the per-batch ALT now carries 7 addresses per match (and a
 batch packs up to N=16 matches → well past the ~30-address ceiling a
@@ -1858,31 +1858,28 @@ e2e flows route their settle through it.
 | Test | Legacy tx size | v0 + ALT tx size |
 |---|---|---|
 | devnet-trade-flow (exact fill) | ~1180 | ~1100 |
-| change + relock (the largest variant) | **1243 ❌** | ~1162 ✅ |
+| change + relock (the largest v9 variant) | **1243 ❌** | **1109 ✅** (123 B headroom) |
 
 All five change-note tests now pass.
 
 ### The canonical payload hash
 
 The TEE's Ed25519 signature is over a 32-byte SHA-256 hash, not the
-424-byte payload directly. The hash construction (current version: `v7`, after
-amount-privacy P3b removed the seven plaintext amount fields; the prior `v6`
-had split the single fee note into base + quote, and `v5` was the pre-split
-single-fee-note form):
+488-byte payload directly. The current construction is v9: v8 added the
+128-byte fill-recovery ciphertext, and v9 removes the two unused nullifiers.
 
 ```rust
 canonical_payload_hash(p) = SHA256(
-    b"nyx-match-v7",
+    b"nyx-match-v9",
     p.match_id,
     p.note_a_commitment, p.note_b_commitment,
     p.note_c_commitment, p.note_d_commitment,
     p.note_e_commitment, p.note_f_commitment,
     p.note_fee_base_commitment, p.note_fee_quote_commitment,
-    p.nullifier_a, p.nullifier_b,
     p.order_id_a, p.order_id_b,
     p.buyer_relock_order_id,  p.buyer_relock_expiry.to_le_bytes(),
     p.seller_relock_order_id, p.seller_relock_expiry.to_le_bytes(),
-    p.batch_slot.to_le_bytes(),
+    p.batch_slot.to_le_bytes(), p.fill_recovery,
 )
 ```
 
@@ -1895,7 +1892,7 @@ mirror in `packages/sdk/src/settlement/settle-builder.ts::canonicalPayloadHash`.
 Cross-environment parity is locked down by a fixed-vector test in both:
 
 - Rust: `canonical_payload_hash_fixed_vector` expects
-  `0x38D661...4C2D` for a specific input.
+  `0x63A10A...CFA2` for a specific input.
 - TS: `[hash_cross_env_parity]` in `settle-builder-batched.test.ts` asserts the same
   bytes from the TS implementation.
 
@@ -1905,8 +1902,8 @@ or settlements will start failing across the board.
 #### Why the v6 payload mints got reverted
 
 > **Historical** — the `v5`/`v6` tags below are from this earlier mints-revert
-> episode. The tag has since advanced: `v6` (base/quote fee-note split) →
-> **`v7`** (amount-privacy P3b dropped the plaintext amounts). The CURRENT
+> episode. The tag has since advanced through v7 (amount privacy), v8
+> (fill recovery), and **v9** (dead-nullifier removal). The CURRENT
 > canonical hash is in *The canonical payload hash* above.
 
 The first cut of v3 added `quote_mint` and `base_mint` as fields in
