@@ -18,14 +18,14 @@ runbooks have landed.
 | CS-01 | Critical | ZK + vault + TEE | `remediation/match-batch-v3` | Every fee note is per-match and issued atomically with consumption of that match's real inputs; negative phantom-slot proof; regenerated zkey/VK/N=16 fixture; live settle | Closed |
 | CS-02 | High | ZK + vault | `remediation/governance-markets`, `remediation/match-batch-v3` | Every active slot is bound to one enabled on-chain market, its mint halves, and price scale; mixed-market proof rejected | Closed |
 | CS-03 | High | ZK + SDK + TEE | `remediation/match-batch-v3` | User and fee output inners are constrained, deterministic, and recoverable from consumed inputs; arbitrary-inner witness rejected | Closed |
-| CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Code complete |
+| CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Closed |
 | CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Closed |
 | CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
 | CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Closed |
 | CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Closed |
 | CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm and live settle tests | Closed |
-| CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Code complete |
-| CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Code complete |
+| CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Closed |
+| CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Closed |
 | CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Closed |
 | CS-13 | Medium | Daemon | `remediation/daemon-trust` | Strict startup fails closed; finalized TEE keys refresh each minute; mismatch/staleness pauses placement while reconciliation continues | Closed |
 | CS-14 | Low | Crypto + SDK | `remediation/client-custody` | Existing bytes retained under `nyxShakeKdfV1`; fixed Rust/TS KATs; no NIST KMAC claim | Closed |
@@ -731,8 +731,7 @@ Every remediation PR must record:
 
 ### `remediation/canonical-order-v2` — CS-04, CS-10, CS-11
 
-- **Status.** Code complete; live CVM evidence and merge are still required
-  before these rows move to `Closed`.
+- **Status.** Closed by PR #50 with local, devnet, and live CVM evidence.
 - **Invariant restored.** Settlement ids are the first 16 bytes of a
   domain-separated SHA-256 over the boot session, monotonic match counter, and
   both order ids. Output inners and commitments remain exclusively
@@ -766,9 +765,28 @@ Every remediation PR must record:
   missing/mismatched consumed openings, terminal-update/final-fill routing
   races, reboot/counter/order-id settlement collisions, and identical outputs
   under deliberately different settlement ids.
-- **Devnet/CVM evidence.** Pending. The live test must cold-boot image 57,
-  confirm the advertised boot session is used by the SDK, and complete the
-  isolated real-mint settlement path. No program upgrade is needed because this
+- **Devnet/CVM evidence (2026-07-16).** The isolated real-mint run reset shard
+  0, cold-booted public image `tee-v3-hardening-57`, and logged an empty Merkle
+  mirror, loaded N=16 proving key/native witness generator, and enabled live
+  settlement. `/info` advertised compose hash
+  `8f0bfaa17de298676bdba849b44bd737c259206c455dc1a53ab86ce99d3343c8`,
+  MRTD
+  `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`,
+  a fresh 32-byte boot session
+  `41081c373727a0bbb1c314f4237440de93b7be51e51f8c07bae55b262efb338a`,
+  and signer `KgFsjoP9fDy78xgmEjn2DtRbPZ6G7t5AWDkPo1AAjsa`. Signer rotation finalized at
+  `3FdyRK6Q3F6gbX5cDVQGn8s1Zjf3zLh3tGowoC2Q7ZCbB8mirw2orpeExwPCU4Qv8h4RE9r7CVrScV4BfWQ3zr39`;
+  it already held 2.455 devnet SOL. The SDK fetched that boot session, signed
+  two canonical-v3 crossing orders, and the flagship deposit → match → settle
+  test passed in 39.76 seconds. Atomic Tx D finalized with `err=null` at slot
+  476547417 as
+  `2LAa3PvvadqENACsFZzczDT8QynRsxvhRLjv1Zk4X6GxeMafwD2PUacGxSVGk2ycxaNjTBWUHuXyxAMcStjwDoSc`;
+  the shard ended at the expected seven leaves. The reset-free API/stream and
+  real-DCAP suites then passed 15/15 checks, including compose-hash replay,
+  quote tamper rejection, report-data key-set binding, and equality with the
+  finalized on-chain signer set. The protected deploy environment was securely
+  deleted, temporary credentials were removed, and the CVM was stopped
+  immediately after validation. No program upgrade was needed because this
   slice changes no on-chain code or verifier artifact.
 - **Rollback.** Revert the PR and redeploy image 56 with its matching SDK and
   daemon. Do not mix v2/v3 order clients: canonical bodies, live fill memos,
