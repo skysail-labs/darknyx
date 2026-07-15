@@ -15,9 +15,8 @@
  * first group with ≥ 2, capped at 4 (K=4). Fewer than 2 → returns 0 (clean
  * no-op; retried on the next quiescence as residuals accumulate across orders).
  *
- * `mergeFn` (the heavy DarkPoolClient-backed path) + `nextMergeIndex` are
- * injected, so this stays unit-testable without devnet; `bin/daemon.ts` supplies
- * the real implementations.
+ * `mergeFn` (the heavy DarkPoolClient-backed path) is injected, so this stays
+ * unit-testable without devnet; `bin/daemon.ts` supplies the real implementation.
  */
 
 import { PublicKey } from "@solana/web3.js";
@@ -43,36 +42,29 @@ export interface DaemonMergeRunnerOptions {
   /** The account's shared owner commitment (all change notes carry it). */
   ownerCommitment: bigint;
   mergeFn: MergeFn;
-  /** Monotone unique index for each merged output (recoverable from the seed). */
-  nextMergeIndex: () => number;
   /** Merkle-tree shard the inputs live in + the output appends to (default 0). */
   treeId?: number;
 }
 
 /**
  * Compose a {@link DaemonMergeRunner} from an SDK `mergeFn` (the
- * `getMergeFunction({ client })` output) + the account context, with a simple
- * monotone merge-index counter starting at `startMergeIndex`. The
+ * `getMergeFunction({ client })` output) + the account context. The
  * `mergeFn`/`payer`/`ownerCommitment` come from a real `DarkPoolClient` the
- * caller builds (the provider stack — connection, tx forwarder, merge zk-prover
- * — is constructed + devnet-validated at integration time, which is why bin
- * leaves merge unconfigured until then).
+ * caller builds. The output inner is commitment-derived inside the SDK, so the
+ * daemon has no restart-sensitive counter to persist or reserve.
  */
 export function createMergeRunner(args: {
   store: DaemonStore;
   payer: PublicKey;
   ownerCommitment: bigint;
   mergeFn: MergeFn;
-  startMergeIndex?: number;
   treeId?: number;
 }): DaemonMergeRunner {
-  let mergeIndex = args.startMergeIndex ?? 0;
   return new DaemonMergeRunner({
     store: args.store,
     payer: args.payer,
     ownerCommitment: args.ownerCommitment,
     mergeFn: args.mergeFn,
-    nextMergeIndex: () => mergeIndex++,
     treeId: args.treeId,
   });
 }
@@ -101,7 +93,6 @@ export class DaemonMergeRunner implements MergeRunner {
       })),
       tokenMint: batch[0].tokenMint,
       ownerCommitment: this.opts.ownerCommitment,
-      mergeIndex: this.opts.nextMergeIndex(),
     };
 
     const receipt = await this.opts.mergeFn(params);

@@ -40,7 +40,7 @@ export interface DepositParams {
    *  (`deriveBlindingFactor(seed, depositIndex)`) — INDEPENDENT of the leaf
    *  position, so a concurrent on-chain append can't desync the opening from
    *  where the leaf lands. Recover the note by commitment, not by index. The
-   *  caller owns the counter (one per deposit, like `merge`'s `mergeIndex`). */
+   *  caller owns the counter; merge outputs no longer use counters. */
   depositIndex: bigint;
   /** 32-byte SPL mint. */
   tokenMint: Uint8Array;

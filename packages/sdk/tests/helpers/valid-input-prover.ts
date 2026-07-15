@@ -3,7 +3,7 @@
  *
  * The on-chain `lock_note` ix (post-v2) requires a Groth16 proof attesting:
  *   (a) the note exists in the Merkle tree at a known recent root,
- *   (b) its (mint, amount, commitment) match what's being passed to lock_note,
+ *   (b) its public mint + commitment and private positive-u64 amount agree,
  *   (c) the prover knows the spending key whose owner_commitment hashes into
  *       the note (i.e. is the actual owner).
  *
@@ -45,12 +45,13 @@ export interface ValidInputProveParams {
   ownerCommitmentBlinding: bigint;
   /** v2: single inner_hash replacing the old (nonce, blindingR) pair. */
   innerHash: bigint;
+  /** Private positive-u64 note amount. */
+  amount: bigint;
   merkleWitness: MerkleWitnessFr20;
 
   // ----- circuit public inputs -----
   /** 32-byte mint pubkey (raw bytes, NOT a `PublicKey` wrapper). */
   tokenMint: Uint8Array;
-  amount: bigint;
   /** 32-byte big-endian Merkle root the proof is being generated against. */
   merkleRootBE: Uint8Array;
 }
@@ -60,7 +61,7 @@ export interface ValidInputProveResult {
   /**
    * Public inputs in the EXACT byte layout the on-chain verifier consumes,
    * in circuit-declaration order:
-   *   [merkleRoot, noteCommitment, tokenMint_lo, tokenMint_hi, amount]
+   *   [merkleRoot, noteCommitment, tokenMint_lo, tokenMint_hi]
    * Each 32 bytes BE. Returned for assertion / debugging convenience.
    */
   publicInputsBE: Uint8Array[];
@@ -81,6 +82,9 @@ export interface ValidInputProveResult {
 export async function proveValidInput(
   args: ValidInputProveParams,
 ): Promise<ValidInputProveResult> {
+  if (args.amount <= 0n || args.amount > 0xffff_ffff_ffff_ffffn) {
+    throw new Error("VALID_INPUT amount must be a positive u64");
+  }
   if (args.tokenMint.length !== 32) {
     throw new Error("tokenMint must be 32 bytes");
   }

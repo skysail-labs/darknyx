@@ -8,16 +8,15 @@
 //!     (PDA, read-only), `merkle_tree[tree_id]` (PDA, read-only — the
 //!     shard whose recent-roots ring the `merkle_root` is checked
 //!     against), `note_lock` (PDA, writable — init), `system_program`.
-//!   - 8 instruction-data args, Anchor-style (8-byte discriminator
+//!   - 7 instruction-data args, Anchor-style (8-byte discriminator
 //!     + Borsh-encoded args in declaration order):
 //!       1. `tree_id: u8` (post-sharding: selects the `merkle_tree` account)
 //!       2. `note_commitment: [u8; 32]`
 //!       3. `order_id: [u8; 16]`
 //!       4. `expiry_slot: u64`
-//!       5. `amount: u64`
-//!       6. `token_mint: Pubkey` (32 bytes)
-//!       7. `merkle_root: [u8; 32]`
-//!       8. `proof: Groth16Proof` (256 bytes — pi_a 64 + pi_b 128 + pi_c 64)
+//!       5. `token_mint: Pubkey` (32 bytes)
+//!       6. `merkle_root: [u8; 32]`
+//!       7. `proof: Groth16Proof` (256 bytes — pi_a 64 + pi_b 128 + pi_c 64)
 //!
 //! The handler enforces `tee_authority ∈ vault_config.tee_pubkeys`
 //! and verifies the VALID_INPUT Groth16 proof against the merkle
@@ -94,7 +93,6 @@ pub struct LockNoteArgs {
     pub note_commitment: [u8; 32],
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
-    pub amount: u64,
     /// `token_mint` is the 32-byte Solana mint pubkey, NOT the
     /// `(lo, hi)` Fr-pair the VALID_INPUT circuit uses internally.
     /// The handler does the split itself.
@@ -104,8 +102,8 @@ pub struct LockNoteArgs {
 }
 
 impl LockNoteArgs {
-    /// Total Borsh-encoded width: 1 + 32 + 16 + 8 + 8 + 32 + 32 + 256 = 385 bytes.
-    pub const WIRE_LEN: usize = 1 + 32 + 16 + 8 + 8 + 32 + 32 + Groth16ProofBytes::WIRE_LEN;
+    /// Total Borsh-encoded width: 1 + 32 + 16 + 8 + 32 + 32 + 256 = 377 bytes.
+    pub const WIRE_LEN: usize = 1 + 32 + 16 + 8 + 32 + 32 + Groth16ProofBytes::WIRE_LEN;
 }
 
 /// Build the full `Instruction`. Caller composes this into a
@@ -160,7 +158,6 @@ mod tests {
             note_commitment: [0xAA; 32],
             order_id: [0xBB; 16],
             expiry_slot: 1_000_000,
-            amount: 5_000_000_000,
             token_mint: [0xCC; 32],
             merkle_root: [0xDD; 32],
             proof: Groth16ProofBytes {
@@ -202,9 +199,9 @@ mod tests {
     #[test]
     fn ix_data_total_length_matches_wire_spec() {
         let ix = build_lock_note_ix(&dummy_tee_authority(), dummy_args());
-        // 8 disc + 1 tree_id + 32 + 16 + 8 + 8 + 32 + 32 + 256 = 393 bytes.
+        // 8 disc + 1 tree_id + 32 + 16 + 8 + 32 + 32 + 256 = 385 bytes.
         assert_eq!(ix.data.len(), 8 + LockNoteArgs::WIRE_LEN);
-        assert_eq!(ix.data.len(), 393);
+        assert_eq!(ix.data.len(), 385);
     }
 
     #[test]
@@ -228,9 +225,6 @@ mod tests {
         off += 16;
         // expiry_slot (u64 LE)
         assert_eq!(&body[off..off + 8], &1_000_000u64.to_le_bytes());
-        off += 8;
-        // amount (u64 LE)
-        assert_eq!(&body[off..off + 8], &5_000_000_000u64.to_le_bytes());
         off += 8;
         // token_mint
         assert_eq!(&body[off..off + 32], &[0xCC; 32]);

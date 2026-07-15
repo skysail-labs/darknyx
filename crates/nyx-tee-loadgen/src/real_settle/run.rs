@@ -809,12 +809,10 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                     .ok_or_else(|| anyhow!("merge prover not loaded"))?;
                 let w0 = harness.shadow_witness(shard, n0.leaf_index)?;
                 let w1 = harness.shadow_witness(shard, n1.leaf_index)?;
-                let out_ih = fr_to_be_bytes(&Fr::from(seed_base ^ 0x3900));
                 let mproof = mp
                     .prove(
                         &sp.spending_key,
                         &sp.owner_blinding,
-                        &out_ih,
                         &p.base_mint,
                         &[
                             MergeInput {
@@ -830,12 +828,10 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                         ],
                     )
                     .map_err(|e| anyhow!("merge prove: {e}"))?;
-                let nf0 = nullifier_v2(&sp.spending_key, &ih0).map_err(|e| anyhow!("nf0: {e}"))?;
-                let nf1 = nullifier_v2(&sp.spending_key, &ih1).map_err(|e| anyhow!("nf1: {e}"))?;
                 let merge_ix = super::vault::build_merge_ix(
                     shard,
                     &admin.pubkey(),
-                    &[nf0, nf1],
+                    &[c0, c1],
                     &mproof.output_commitment,
                     &base,
                     &w0.root,
@@ -848,7 +844,7 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 let merged_note = DepositedNote {
                     mint: p.base_mint,
                     amount: mproof.output_amount,
-                    inner_hash: out_ih,
+                    inner_hash: mproof.output_inner_hash,
                     commitment: mproof.output_commitment,
                     tree_id: mtree,
                     leaf_index: mleaf,

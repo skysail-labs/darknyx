@@ -37,7 +37,6 @@ import {
   deriveSpendingKey,
   bn254ToBE32,
   deriveBlindingFactor,
-  deriveMergeInnerHash,
 } from "../src/keys/key-generators.js";
 import {
   noteCommitmentV2,
@@ -200,14 +199,12 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
       }),
     );
     const root = await tree.computeRoot();
-    const outputInnerHash = deriveMergeInnerHash(masterSeed, 0);
     const mergeRes = await t.step("VALID_MERGE prove (K=2, snarkjs)", () =>
       proveValidMerge({
         repoRoot: REPO_ROOT,
         k: 2,
         spendingKey,
         ownerCommitmentBlinding: ownerBlinding,
-        outputInnerHash,
         tokenMint: mint.toBytes(),
         merkleRootBE: root,
         slots,
@@ -247,7 +244,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const mergedLeaf = 2;
     const w = await tree.witness(mergedLeaf);
     const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
-    const mergedNull = await nullifierV2(spendingKey, outputInnerHash);
+    const mergedNull = await nullifierV2(spendingKey, mergeRes.outputInnerHash);
     const { proof } = await t.step("VALID_SPEND prove (snarkjs)", async () =>
       snarkjsFullProve(
         {
@@ -257,7 +254,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
           amount: SUM.toString(),
           spendingKey: spendingKey.toString(),
           ownerCommitmentBlinding: ownerBlinding.toString(),
-          innerHash: outputInnerHash.toString(),
+          innerHash: mergeRes.outputInnerHash.toString(),
           merklePath: w.siblings.map((s) => be32ToDec(s)),
           merkleIndices: w.indices.map((i) => i.toString()),
         },

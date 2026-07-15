@@ -14,7 +14,8 @@ use ark_bn254::Fr;
 use ark_ff::PrimeField;
 
 use common::{fr_to_dec, repo_root, snarkjs_fullprove};
-use darkpool_crypto::field::{fr_to_be_bytes, pubkey_to_fr_pair, u64_to_fr};
+use darkpool_crypto::field::{fr_from_be_bytes, fr_to_be_bytes, pubkey_to_fr_pair, u64_to_fr};
+use darkpool_crypto::merge_output_inner_hash;
 use darkpool_crypto::poseidon::poseidon_hash;
 use vault::merkle::{append_leaf, compute_zero_subtree_roots, empty_root};
 use vault::state::{MerkleTree, MERKLE_DEPTH, ROOT_HISTORY_SIZE};
@@ -23,7 +24,8 @@ use vault::zk::verify_groth16_proof;
 
 use settle_harness::{
     anchor_disc, consumed_note_exists, consumed_note_pda, merkle_tree_pda, note_lock_pda,
-    seed_note_lock, tree_leaf_count, vault_config_pda, Harness, Pubkey, SYSTEM_PROGRAM_ID,
+    seed_note_lock, tree_current_root, tree_leaf_count, vault_config_pda, Harness, Pubkey,
+    SYSTEM_PROGRAM_ID,
 };
 use solana_instruction::{AccountMeta, Instruction};
 use solana_message::Message;
@@ -139,19 +141,7 @@ fn prove_merge(
     }
 
     // Per-slot witnesses (real) + dummies.
-    let output_inner = Fr::from(0xabcu64);
     let sum: u64 = amounts.iter().sum();
-    let output_commitment = fr_to_be_bytes(
-        &poseidon_hash(&[
-            Fr::from(2u64),
-            mint_lo,
-            mint_hi,
-            u64_to_fr(sum),
-            owner,
-            output_inner,
-        ])
-        .unwrap(),
-    );
 
     let mut is_active = vec![];
     let mut amount_s = vec![];
@@ -186,6 +176,23 @@ fn prove_merge(
         }
     }
 
+    let mut merge_slots = [[0u8; 32]; 4];
+    merge_slots[..k].copy_from_slice(&input_commitments);
+    let active_bitmap = (1u8 << num_real) - 1;
+    let output_inner_bytes = merge_output_inner_hash(&merge_slots, active_bitmap).unwrap();
+    let output_inner = fr_from_be_bytes(&output_inner_bytes).unwrap();
+    let output_commitment = fr_to_be_bytes(
+        &poseidon_hash(&[
+            Fr::from(2u64),
+            mint_lo,
+            mint_hi,
+            u64_to_fr(sum),
+            owner,
+            output_inner,
+        ])
+        .unwrap(),
+    );
+
     let arr = |v: &[String]| {
         v.iter()
             .map(|s| format!("\"{s}\""))
@@ -204,7 +211,6 @@ fn prove_merge(
            \"tokenMint\": [\"{mlo}\", \"{mhi}\"],\n\
            \"spendingKey\": \"{sk}\",\n\
            \"ownerCommitmentBlinding\": \"{ocb}\",\n\
-           \"outputInnerHash\": \"{oih}\",\n\
            \"isActive\": [{act}],\n\
            \"amount\": [{amt}],\n\
            \"innerHash\": [{inr}],\n\
@@ -216,7 +222,6 @@ fn prove_merge(
         mhi = fr_to_dec(&mint_hi),
         sk = fr_to_dec(&sk),
         ocb = fr_to_dec(&r_owner),
-        oih = fr_to_dec(&output_inner),
         act = arr(&is_active),
         amt = arr(&amount_s),
         inr = arr(&inner_s),
@@ -438,4 +443,23 @@ fn merge_rejects_locked_input_before_consuming_any_note() {
     assert_eq!(tree_leaf_count(&unlocked, 0), 3);
     assert!(consumed_note_exists(&unlocked, &commitments[0]));
     assert!(consumed_note_exists(&unlocked, &commitments[1]));
+}
+
+#[test]
+fn merge_rejects_all_dummy_transport_before_tree_append() {
+    let mut h = Harness::setup();
+    let root = tree_current_root(&h, 0);
+    let proof = Groth16Proof {
+        pi_a: [0u8; 64],
+        pi_b: [0u8; 128],
+        pi_c: [0u8; 64],
+    };
+    let ix = build_merge_ix(&h, &proof, &[[0u8; 32]; 2], [1u8; 32], root);
+    let tx = Transaction::new(
+        &[&h.trader],
+        Message::new(&[ix], Some(&h.trader.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    assert!(h.svm.send_transaction(tx).is_err());
+    assert_eq!(tree_leaf_count(&h, 0), 0);
 }

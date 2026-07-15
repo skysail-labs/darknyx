@@ -21,12 +21,12 @@ runbooks have landed.
 | CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Open |
 | CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Closed |
 | CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
-| CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Open |
+| CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Code complete |
 | CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Open |
 | CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm and live settle tests | Closed |
 | CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Open |
 | CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Open |
-| CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Open |
+| CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Code complete |
 | CS-13 | Medium | Daemon | `remediation/daemon-trust` | Strict startup fails closed; finalized TEE keys refresh each minute; mismatch/staleness pauses placement while reconciliation continues | Closed |
 | CS-14 | Low | Crypto + SDK | `remediation/client-custody` | Existing bytes retained under `nyxShakeKdfV1`; fixed Rust/TS KATs; no NIST KMAC claim | Closed |
 
@@ -55,8 +55,8 @@ runbooks have landed.
 | N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Closed |
 | N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Closed |
 | N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker closes only after expiry; rent returns to recorded payer; boundary tests and live async sweep | Closed |
-| N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Open |
-| N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
+| N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Code complete |
+| N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Code complete |
 | N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Closed |
 | N-16 | Low | SDK | `remediation/client-custody` | Commitment equality is byte-based; mixed-case encoding regression | Closed |
 | N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Closed |
@@ -541,6 +541,55 @@ Every remediation PR must record:
   valid, but v9 payloads/signatures and any in-flight settlement jobs are
   incompatible with v8 and must be discarded and resubmitted. Rolling back
   only one component fails closed at deserialization/signature verification.
+
+### `remediation/input-merge-v3` — CS-07, CS-12, N-13, N-14
+
+- **Status.** Code complete; rows remain short of `Closed` until the coordinated
+  devnet upgrade/reset and isolated billable CVM merge→order settlement are
+  recorded below.
+- **Invariant restored.** VALID_INPUT binds `amount` only as a private witness,
+  constrains it to `1..2^64-1`, and exposes four public signals: root,
+  commitment, and two mint halves. The vault/TEE/SDK `lock_note` wire and
+  `NoteLocked` event carry no amount. VALID_MERGE requires at least one active,
+  positive-u64 input, canonical zero-amount dummy slots, and a positive u64
+  sum. Its output inner is derived in-circuit as
+  `Poseidon6(26, c0, c1, c2, c3, active_bitmap)`; the SDK, daemon, and Rust
+  real-settle loadgen no longer use a restart-sensitive merge counter or a
+  caller-selected output-inner witness. The vault independently rejects an
+  all-dummy instruction before proof verification or tree mutation.
+- **Wire/circuit impact.** `lock_note` instruction data shrinks by eight bytes,
+  from 393 to 385 bytes including the Anchor discriminator. VALID_INPUT public
+  signals move from five to four; VALID_MERGE keeps six/eight public signals but
+  replaces its output-inner witness with commitment-derived logic and positive
+  active-slot constraints. The VALID_INPUT, K=2, and K=4 circuit sources,
+  zkeys, and Rust VK constants change atomically. `build-circuits.sh` now
+  regenerates Rust verifier constants itself. Existing circuit proofs and old
+  lock instruction payloads are intentionally incompatible; the devnet rollout
+  uses a clean tree reset and a newly tagged CVM image.
+- **Local evidence.** Deterministic generation completed for every circuit
+  managed by `build-circuits.sh`, and all three changed zkeys pass independent
+  `snarkjs zkey verify`. `snarkjs r1cs info` reports VALID_INPUT 12,058
+  constraints/four public inputs, K=2 merge 25,532 constraints/six public
+  signals, and K=4 merge 48,458 constraints/eight public signals. Focused
+  snarkjs tests pass 13/13,
+  including private-amount public-signal ordering, zero and `2^64` input
+  rejection, all-dummy/active-zero/overflow merge rejection, and K=2/K=4
+  round trips. Rust/TS merge-inner parity pins
+  `1ed62782faeb9cd43f741e189ade09a0406a22f9c633cb9311b00e692c1458d5`.
+  Mainnet and `devnet-admin` SBF builds pass. Formatting, the host parity-helper
+  build, workspace clippy with warnings denied, and the full Rust workspace pass;
+  the feature-gated real-settle loadgen adds 17/17 tests against the regenerated
+  ark-circom artifacts. Targeted litesvm passes K=2/K=4/tamper/locked/all-dummy
+  merge tests 5/5, batched settlement 13/13, N=16 verifier 2/2, and wallet/spend
+  proof round trips. SDK, SDK-test, indexer, and daemon TypeScript no-emit checks
+  pass. Full Vitest passes SDK 248 tests with 23 environment-gated skips, indexer
+  23, and daemon 158 with 2 skips. Transport regressions pin the 385-byte lock
+  instruction and a production-shaped signed lock transaction below 800 bytes.
+- **Devnet/CVM evidence.** Pending the closing validation window.
+- **Rollback.** Revert this PR and coordinate a vault downgrade with the prior
+  CVM image and SDK. The old/new lock wire and all three proving/verifier keys
+  are incompatible, so discard in-flight orders/proofs and perform another
+  clean devnet reset. Do not mix v2 and v3 circuit artifacts.
 
 ## Mainnet release gates
 

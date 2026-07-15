@@ -19,9 +19,26 @@ import { ownerCommitment, noteCommitmentV2 } from "../src/utxo/note.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { be32ToBigInt } from "./helpers/e2e-helpers.js";
 import { proveValidMerge, type MergeSlot } from "./helpers/merge-prover.js";
+import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
+const K2_ZKEY = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_merge_k2/circuit_final.zkey",
+);
+const K2_WASM = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_merge_k2/circuit_js/circuit.wasm",
+);
+const K4_ZKEY = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_merge_k4/circuit_final.zkey",
+);
+const K4_WASM = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_merge_k4/circuit_js/circuit.wasm",
+);
 // Guard on BOTH the .zkey AND the .wasm. circuit_final.zkey is committed, but
 // circuit.wasm is gitignored (built by scripts/build-circuits.sh / downloaded
 // from the circuits CI job). On an SDK-only PR the circuits job is skipped, so
@@ -29,18 +46,10 @@ const REPO_ROOT = resolve(here, "..", "..", "..");
 // wrongly run and then fail snarkjs "cannot find circuit.wasm" (matches how
 // valid-input-prover.test.ts guards).
 const HAVE_ARTIFACTS =
-  existsSync(
-    resolve(REPO_ROOT, "circuits/build/valid_merge_k2/circuit_final.zkey"),
-  ) &&
-  existsSync(
-    resolve(REPO_ROOT, "circuits/build/valid_merge_k2/circuit_js/circuit.wasm"),
-  ) &&
-  existsSync(
-    resolve(REPO_ROOT, "circuits/build/valid_merge_k4/circuit_final.zkey"),
-  ) &&
-  existsSync(
-    resolve(REPO_ROOT, "circuits/build/valid_merge_k4/circuit_js/circuit.wasm"),
-  );
+  existsSync(K2_ZKEY) &&
+  existsSync(K2_WASM) &&
+  existsSync(K4_ZKEY) &&
+  existsSync(K4_WASM);
 
 const maybe = HAVE_ARTIFACTS ? describe : describe.skip;
 
@@ -83,14 +92,11 @@ maybe("VALID_MERGE circuit", () => {
       { amount: 200n, innerHash: 0x22n },
     ];
     const { slots, root } = await buildTree(notes);
-    const outputInnerHash = 0xabcn;
-
     const r = await proveValidMerge({
       repoRoot: REPO_ROOT,
       k: 2,
       spendingKey: SK,
       ownerCommitmentBlinding: BLINDING,
-      outputInnerHash,
       tokenMint: MINT,
       merkleRootBE: root,
       slots,
@@ -116,7 +122,6 @@ maybe("VALID_MERGE circuit", () => {
       k: 4,
       spendingKey: SK,
       ownerCommitmentBlinding: BLINDING,
-      outputInnerHash: 0xdefn,
       tokenMint: MINT,
       merkleRootBE: root,
       slots, // only 2 real → 2 dummy slots padded
@@ -147,7 +152,64 @@ maybe("VALID_MERGE circuit", () => {
         k: 2,
         spendingKey: SK,
         ownerCommitmentBlinding: BLINDING,
-        outputInnerHash: 0xabcn,
+        tokenMint: MINT,
+        merkleRootBE: root,
+        slots,
+      }),
+    ).rejects.toThrow();
+  }, 120_000);
+
+  it("rejects an all-dummy witness in-circuit", () => {
+    const zeroPath = Array.from({ length: 20 }, () => "0");
+    const witness = {
+      merkleRoot: "1",
+      tokenMint: ["1", "2"],
+      spendingKey: SK.toString(),
+      ownerCommitmentBlinding: BLINDING.toString(),
+      isActive: ["0", "0"],
+      amount: ["0", "0"],
+      innerHash: ["0", "0"],
+      merklePath: [zeroPath, zeroPath],
+      merkleIndices: [zeroPath, zeroPath],
+    };
+    expect(() =>
+      snarkjsFullProve(
+        witness as unknown as Record<string, string | string[]>,
+        {
+          repoRoot: REPO_ROOT,
+          circuitWasmPath: K2_WASM,
+          circuitZkeyPath: K2_ZKEY,
+        },
+      ),
+    ).toThrow();
+  }, 120_000);
+
+  it("rejects an active zero-amount input and zero output", async () => {
+    const { slots, root } = await buildTree([{ amount: 0n, innerHash: 0x55n }]);
+    await expect(
+      proveValidMerge({
+        repoRoot: REPO_ROOT,
+        k: 2,
+        spendingKey: SK,
+        ownerCommitmentBlinding: BLINDING,
+        tokenMint: MINT,
+        merkleRootBE: root,
+        slots,
+      }),
+    ).rejects.toThrow();
+  }, 120_000);
+
+  it("rejects a merged output that overflows u64", async () => {
+    const { slots, root } = await buildTree([
+      { amount: 0xffff_ffff_ffff_ffffn, innerHash: 0x66n },
+      { amount: 1n, innerHash: 0x77n },
+    ]);
+    await expect(
+      proveValidMerge({
+        repoRoot: REPO_ROOT,
+        k: 2,
+        spendingKey: SK,
+        ownerCommitmentBlinding: BLINDING,
         tokenMint: MINT,
         merkleRootBE: root,
         slots,

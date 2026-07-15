@@ -2,6 +2,8 @@ pragma circom 2.2.2;
 
 include "../../node_modules/circomlib/circuits/poseidon.circom";
 include "../../node_modules/circomlib/circuits/switcher.circom";
+include "../../node_modules/circomlib/circuits/bitify.circom";
+include "../../node_modules/circomlib/circuits/comparators.circom";
 
 // Merkle tree membership proof using Poseidon(arity=2) per level.
 // Identical to the equivalent template in valid_spend/circuit.circom — kept
@@ -42,8 +44,8 @@ template MerkleTreeChecker(depth) {
 //   1. The prover OWNS the note (knows the spending key whose
 //      owner_commitment hashes into the note).
 //   2. The note exists in the on-chain Merkle tree at a known recent root.
-//   3. The note's (mint, amount, commitment) match what's being declared
-//      publicly to `lock_note`.
+//   3. The note's mint + commitment match what's being declared publicly to
+//      `lock_note`, while its positive u64 amount remains private.
 //
 // This is the input-side counterpart to VALID_SPEND. The difference from
 // VALID_SPEND:
@@ -54,14 +56,12 @@ template MerkleTreeChecker(depth) {
 //     instruction uses it as the seed for the NoteLock PDA, so it must agree
 //     with the proof. (In VALID_SPEND it's a private intermediate.)
 //
-// The mint, amount, and merkle_root leak at lock time — the same information
-// is anyway about to be revealed by `tee_forced_settle`. The owner_commitment
-// stays private; the lock does not deanonymise the user beyond what the
-// match itself reveals.
+// The mint + merkle_root leak at lock time. The amount and owner_commitment stay
+// private; settlement conservation is proven separately by VALID_MATCH_BATCH.
 //
 // Public inputs:  merkleRoot, noteCommitment, tokenMint[2] (lo|hi 128-bit
-//                 halves of the Solana mint pubkey), amount
-// Private inputs: spendingKey, ownerCommitmentBlinding, innerHash,
+//                 halves of the Solana mint pubkey)
+// Private inputs: amount, spendingKey, ownerCommitmentBlinding, innerHash,
 //                 merklePath[depth], merkleIndices[depth]
 //
 // v2 change: (nonce, blindingR) collapse into a single `innerHash`; the
@@ -72,14 +72,22 @@ template ValidInput(merkleDepth) {
     signal input merkleRoot;
     signal input noteCommitment;
     signal input tokenMint[2];   // [lo_u128, hi_u128]
-    signal input amount;
 
     // ----- Private -----
+    signal input amount;
     signal input spendingKey;
     signal input ownerCommitmentBlinding;  // r_owner used in owner_commitment
     signal input innerHash;
     signal input merklePath[merkleDepth];
     signal input merkleIndices[merkleDepth];
+
+    // The instruction no longer carries amount as a u64, so the circuit must
+    // enforce the same domain itself: a real locked note has 1..2^64-1 units.
+    component amountBits = Num2Bits(64);
+    amountBits.in <== amount;
+    component amountIsZero = IsZero();
+    amountIsZero.in <== amount;
+    amountIsZero.out === 0;
 
     // owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, ownerCommitmentBlinding)
     // Domain tag matches crates/darkpool-crypto/src/note.rs::DOMAIN_OWNER.
@@ -112,4 +120,4 @@ template ValidInput(merkleDepth) {
 }
 
 // Tree depth 20 — must match programs/vault/src/state.rs::MERKLE_DEPTH.
-component main { public [merkleRoot, noteCommitment, tokenMint, amount] } = ValidInput(20);
+component main { public [merkleRoot, noteCommitment, tokenMint] } = ValidInput(20);

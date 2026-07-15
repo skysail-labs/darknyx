@@ -20,7 +20,6 @@ const INFO_ROOT = new TextEncoder().encode("darkpool_root_key_v1");
 const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
 const INFO_INNER_HASH = new TextEncoder().encode("nyx-inner-hash-v1");
 const INFO_ORDER_ID = new TextEncoder().encode("nyx-order-id-v1");
-const INFO_MERGE_INNER = new TextEncoder().encode("nyx-merge-inner-v1");
 const INFO_VIEWING_ENC = new TextEncoder().encode("nyx-viewing-enc-v1");
 
 /** BN254 scalar field modulus r. */
@@ -198,27 +197,6 @@ export function deriveOrderId(seed: Uint8Array, n: number): Uint8Array {
   info.set(INFO_ORDER_ID, 0);
   info.set(new Uint8Array(nBuf), INFO_ORDER_ID.length);
   return hkdfExpand(seed, info, 16);
-}
-
-/**
- * Derive the `inner_hash` (BN254 Fr) for the `n`-th merged output note of this
- * seed. Deterministic + recoverable like the anchor / order-id derivations, so a
- * consolidated note can be reconstructed + spent from the seed. A distinct info
- * string (`nyx-merge-inner-v1`) keeps it in its own domain.
- *
- * `reduce_mod_r(NyxShakeKdfV1(seed, "nyx-merge-inner-v1" || n_u32_le, 512))`.
- */
-export function deriveMergeInnerHash(seed: Uint8Array, n: number): bigint {
-  if (!Number.isInteger(n) || n < 0 || n > 0xffff_ffff) {
-    throw new Error(`n must be a u32; got ${n}`);
-  }
-  const nBuf = new ArrayBuffer(4);
-  new DataView(nBuf).setUint32(0, n, true); // little-endian
-  const info = new Uint8Array(INFO_MERGE_INNER.length + 4);
-  info.set(INFO_MERGE_INNER, 0);
-  info.set(new Uint8Array(nBuf), INFO_MERGE_INNER.length);
-  const okm = nyxShakeKdfV1(seed, info, new Uint8Array(), 64);
-  return reduceMod(okm);
 }
 
 export interface X25519Keypair {

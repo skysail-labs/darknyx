@@ -720,7 +720,6 @@ export interface BuildLockNoteParams {
   /** 16-byte order id used for `tee_forced_settle` cross-check. */
   orderId: Uint8Array;
   expirySlot: bigint;
-  amount: bigint;
   /**
    * v2: SPL mint of the note being locked. Bound cryptographically to the
    * Merkle leaf by the VALID_INPUT proof — the TEE cannot misrepresent it.
@@ -737,10 +736,10 @@ export interface BuildLockNoteParams {
 }
 
 /**
- * v2 wire format (matches `programs/vault/src/instructions/lock_note.rs`):
+ * v3 wire format (matches `programs/vault/src/instructions/lock_note.rs`):
  *
  *   data = disc(8) || tree_id(1) || note_commitment(32) || order_id(16)
- *        || expiry_slot(u64 LE) || amount(u64 LE) || token_mint(32)
+ *        || expiry_slot(u64 LE) || token_mint(32)
  *        || merkle_root(32) || pi_a(64) || pi_b(128) || pi_c(64)
  *
  *   accounts:
@@ -765,7 +764,6 @@ export function buildLockNoteInstruction(
     fixed32(p.noteCommitment),
     new Uint8Array(p.orderId),
     u64LE(p.expirySlot),
-    u64LE(p.amount),
     p.tokenMint.toBytes(),
     fixed32(p.merkleRoot),
     serializeProof(p.proof),
@@ -917,10 +915,16 @@ export interface BuildMergeParams {
 export function buildMergeInstruction(
   p: BuildMergeParams,
 ): TransactionInstruction {
+  if ((p.k !== 2 && p.k !== 4) || p.inputCommitments.length !== p.k) {
+    throw new Error("merge k must be 2 or 4 and match commitment slot count");
+  }
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const isZero = (b: Uint8Array) => b.every((x) => x === 0);
   const activeCommitments = p.inputCommitments.filter((c) => !isZero(c));
+  if (activeCommitments.length === 0) {
+    throw new Error("merge must contain at least one active commitment");
+  }
   const consumedPdas = activeCommitments.map(
     (c) => consumedNotePda(p.programId, c)[0],
   );

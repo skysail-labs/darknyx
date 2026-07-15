@@ -86,6 +86,10 @@ pub fn merge_handler<'info>(
         .filter(|commitment| **commitment != [0u8; 32])
         .collect();
     let active_len = active_commitments.len();
+    // N-14 defense-in-depth: reject the all-dummy transport before proof work
+    // or a tree append. The circuit independently requires at least one active,
+    // positive input and a positive output amount.
+    require!(active_len > 0, VaultError::EmptyMerge);
     require!(
         ctx.remaining_accounts.len() == active_len.saturating_mul(2),
         VaultError::MergeAccountMismatch

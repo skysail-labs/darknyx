@@ -254,8 +254,11 @@ match and keeping dummy relock destinations read-only is what lets the leader
 co-include a batch's settles in one block. Marker rent is swept only at or after
 expiry. Also home to
 the in-pool **`merge`** ix (`VALID_MERGE(K=2/4)`): consolidate K fragmented
-notes into one so an order can exceed any single note; every active merge input
-must have no live `NoteLock` PDA.
+notes into one so an order can exceed any single note. Every active input has a
+positive u64 amount and must have no live `NoteLock` PDA; the circuit rejects
+all-dummy merges and derives the output inner as
+`Poseidon6(26, c0, c1, c2, c3, active_bitmap)` from the public consumed-note
+commitments.
 
 ### `crates/nyx-tee` — the in-CVM engine
 
@@ -273,7 +276,8 @@ a batch; the settle Tx D's round-robin the K shard keys (each is fee-payer +
 ### `crates/darkpool-crypto` — host-side crypto
 
 Poseidon, note commitment, nullifier, key derivation, user commitment, the
-field-element split for mints. **Byte-identical to the TS SDK** — every
+field-element split for mints, and commitment-derived merge output inners.
+**Byte-identical to the TS SDK** — every
 primitive has a parity test (`packages/sdk/tests/*-parity.test.ts`) that
 shells out to example binaries and compares fixtures. Changing a Poseidon
 arity / domain tag here without mirroring it in TS breaks the parity test.
@@ -294,9 +298,9 @@ on-chain hashers).
 |---|---|---|
 | `VALID_WALLET_CREATE` | a well-formed user commitment | on-chain (`create_wallet`) |
 | `VALID_SPEND` | knowledge of a note's opening + its Merkle inclusion + correct nullifier | on-chain (`withdraw`) |
-| `VALID_INPUT` | a note's opening + inclusion (gates `lock_note`) | on-chain (`lock_note`) |
+| `VALID_INPUT` | a note's opening + inclusion with a private positive-u64 amount (gates `lock_note`) | on-chain (`lock_note`) |
 | `VALID_MATCH_BATCH` (N=16) | conservation + 64-bit range-checks + an in-circuit fee floor over PRIVATE amounts, + correct output-note construction for ≤16 matches, hashed into one **commitment-only** batch Merkle root | in-enclave prove → on-chain `verify_match_batch` |
-| `VALID_MERGE` (K=2/4) | K input notes (same owner+mint, each included) consolidate into one output note of the same total | on-chain (`merge`) |
+| `VALID_MERGE` (K=2/4) | positive active input notes (same owner+mint, each included) consolidate into one output whose inner is derived from consumed commitments; all-dummy witnesses are impossible | on-chain (`merge`) |
 
 (`MatchBatch(N)` is also instantiated at N=2/4 for dev/test only.) The
 in-enclave `VALID_MATCH_BATCH` prover has two interchangeable backends — `ark`

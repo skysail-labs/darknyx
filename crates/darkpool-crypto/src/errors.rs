@@ -22,4 +22,7 @@ pub enum CryptoError {
 
     #[error("AEAD error: {0}")]
     Aead(String),
+
+    #[error("invalid merge commitment slots or active bitmap")]
+    InvalidMergeInput,
 }

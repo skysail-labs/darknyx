@@ -180,7 +180,6 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
               k: inputs.k,
               spendingKey: inputs.spendingKey,
               ownerCommitmentBlinding: inputs.ownerCommitmentBlinding,
-              outputInnerHash: inputs.outputInnerHash,
               tokenMint: mint.toBytes(),
               merkleRootBE: bn254ToBE32(inputs.merkleRoot),
               slots,
@@ -256,7 +255,6 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
       })),
       tokenMint: mint.toBytes(),
       ownerCommitment: owner,
-      mergeIndex: 0,
     });
 
     // The merge read its output index from the NoteMerged event — the two inputs

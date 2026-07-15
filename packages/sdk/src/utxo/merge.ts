@@ -2,8 +2,8 @@
  * getMergeFunction — in-pool note consolidation (VALID_MERGE K=2/4).
  *
  * Consumes 2–4 input notes (same owner + mint) and mints ONE output note = their
- * sum — no external transfer. The merged note is a normal tree leaf, recoverable
- * from the seed via `deriveMergeInnerHash`, so it's spendable like a deposit.
+ * sum — no external transfer. Its inner hash is derived from the consumed
+ * commitments, so recovery does not depend on a persisted merge counter.
  *
  * Store-agnostic (like `getWithdrawFunction`): it returns the merged note +
  * `spentCommitments`; the wallet's `consolidate` wires this into a `MergeFn` that
@@ -16,8 +16,11 @@ import { PublicKey } from "@solana/web3.js";
 import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
-import { noteCommitmentV2, pubkeyToFrPair } from "./note.js";
-import { deriveMergeInnerHash } from "../keys/key-generators.js";
+import {
+  noteCommitmentV2,
+  poseidonHashBytesBE,
+  pubkeyToFrPair,
+} from "./note.js";
 import { buildMergeInstruction } from "../idl/vault-client.js";
 import { readNoteMergedLeafIndex } from "./leaf-index.js";
 import type { StoredNote } from "./note-store.js";
@@ -41,8 +44,6 @@ export interface MergeParams {
   tokenMint: Uint8Array;
   /** Shared owner commitment of all inputs (and the output). */
   ownerCommitment: bigint;
-  /** Index for `deriveMergeInnerHash` — the merged note's recoverable inner_hash. */
-  mergeIndex: number;
   callbacks?: TransactionCallbacks;
 }
 
@@ -61,6 +62,45 @@ const u8ToBigBE = (x: Uint8Array): bigint => {
   for (const b of x) acc = (acc << 8n) | BigInt(b);
   return acc;
 };
+
+const DOMAIN_MERGE_INNER = 26n;
+
+/**
+ * Derive `Poseidon6(26, c0, c1, c2, c3, active_bitmap)` exactly as
+ * VALID_MERGE does. The input is the K=2/K=4 public commitment vector; zero
+ * entries are canonical inactive padding and K=2 is padded to four slots.
+ */
+export async function deriveMergeOutputInnerHash(
+  inputCommitments: readonly Uint8Array[],
+): Promise<bigint> {
+  if (inputCommitments.length !== 2 && inputCommitments.length !== 4) {
+    throw new Error("merge commitments must contain exactly 2 or 4 slots");
+  }
+  const slots = Array.from({ length: MAX_K }, () => 0n);
+  let activeBitmap = 0;
+  for (let i = 0; i < inputCommitments.length; i++) {
+    const commitment = inputCommitments[i];
+    if (commitment.length !== 32) {
+      throw new Error(`merge commitment ${i} must be 32 bytes`);
+    }
+    const value = u8ToBigBE(commitment);
+    slots[i] = value;
+    if (value !== 0n) activeBitmap |= 1 << i;
+  }
+  if (activeBitmap === 0) {
+    throw new Error("merge must contain at least one active commitment");
+  }
+  return u8ToBigBE(
+    await poseidonHashBytesBE([
+      DOMAIN_MERGE_INNER,
+      slots[0],
+      slots[1],
+      slots[2],
+      slots[3],
+      BigInt(activeBitmap),
+    ]),
+  );
+}
 
 export function getMergeFunction({
   client,
@@ -104,19 +144,13 @@ export function getMergeFunction({
       }
     }
 
-    // --- build the merged output note ---
-    await params.callbacks?.pre?.("note-build");
     const sum = params.inputs.reduce((s, i) => s + i.amount, 0n);
-    const outputInnerHash = deriveMergeInnerHash(
-      (await client.getResolvedKeys()).masterSeed,
-      params.mergeIndex,
-    );
-    const outputCommitment = await noteCommitmentV2({
-      tokenMint: params.tokenMint,
-      amount: sum,
-      ownerCommitment: params.ownerCommitment,
-      innerHash: outputInnerHash,
-    });
+    if (params.inputs.some((input) => input.amount <= 0n)) {
+      throw new DarkPoolError("parameter", "merge inputs must be positive");
+    }
+    if (sum > 0xffff_ffff_ffff_ffffn) {
+      throw new DarkPoolError("parameter", "merged amount exceeds u64");
+    }
 
     // Per-slot witness, padded to k with dummies (inactive slots contribute
     // nothing and emit a zero input-commitment — C-01).
@@ -151,6 +185,17 @@ export function getMergeFunction({
       }
     }
 
+    // --- build the merged output note from the exact public commitment slots ---
+    await params.callbacks?.pre?.("note-build");
+    const outputInnerHash =
+      await deriveMergeOutputInnerHash(inputCommitmentBytes);
+    const outputCommitment = await noteCommitmentV2({
+      tokenMint: params.tokenMint,
+      amount: sum,
+      ownerCommitment: params.ownerCommitment,
+      innerHash: outputInnerHash,
+    });
+
     // --- prove ---
     await params.callbacks?.pre?.("proof-generation");
     const { ownerBlinding } = await client.getResolvedKeys();
@@ -160,10 +205,8 @@ export function getMergeFunction({
         k,
         merkleRoot: u8ToBigBE(merkleRoot),
         tokenMint: [mintLo, mintHi],
-        outputCommitment: u8ToBigBE(outputCommitment),
         spendingKey,
         ownerCommitmentBlinding: ownerBlinding,
-        outputInnerHash,
         isActive,
         amount,
         innerHash,

@@ -214,8 +214,8 @@ export async function fetchInclusionProof(
   return witness;
 }
 
-/** The note opening + public inputs a VALID_INPUT proof needs (the witness
- *  comes separately). */
+/** The note opening a VALID_INPUT proof needs (the witness comes separately).
+ * `amount` is a private positive-u64 circuit witness. */
 export interface ValidInputProveParams {
   spendingKey: bigint;
   ownerCommitmentBlinding: bigint;
@@ -243,6 +243,9 @@ export function nodeValidInputProver(artifacts: {
   zkeyPath: string;
 }): ValidInputProver {
   return async (params: ValidInputProveParams): Promise<ValidInputRelay> => {
+    if (params.amount <= 0n || params.amount > 0xffff_ffff_ffff_ffffn) {
+      throw new Error("VALID_INPUT amount must be a positive u64");
+    }
     // Recompute the note commitment from the opening (a circuit public input).
     const owner = await ownerCommitment(
       params.spendingKey,
