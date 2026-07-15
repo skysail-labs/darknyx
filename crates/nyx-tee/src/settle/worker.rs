@@ -990,8 +990,6 @@ mod tests {
             note_d_commitment: [seed.wrapping_add(3); 32],
             note_e_commitment: [0; 32],
             note_f_commitment: [0; 32],
-            nullifier_a: [seed.wrapping_add(4); 32],
-            nullifier_b: [seed.wrapping_add(5); 32],
             order_id_a: [seed; 16],
             order_id_b: [seed.wrapping_add(1); 16],
             note_fee_base_commitment: [0; 32],

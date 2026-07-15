@@ -37,14 +37,14 @@ import type { IndexerFill, BackfillResult } from "./history.js";
 /** `sha256("global:tee_forced_settle_batched")[..8]`. */
 const SETTLE_DISCRIMINATOR = anchorDiscriminator("tee_forced_settle_batched");
 
-/** Borsh `MatchResultPayload` length (v8, 552 B). Mirrors decode.ts::PAYLOAD_LEN. */
-const PAYLOAD_LEN = 552;
-/** ix data = disc(8) ‖ tree_id(u8) ‖ payload(552) ‖ match_index(1) ‖ siblings(128).
+/** Borsh `MatchResultPayload` length (v9, 488 B). Mirrors decode.ts::PAYLOAD_LEN. */
+const PAYLOAD_LEN = 488;
+/** ix data = disc(8) ‖ tree_id(u8) ‖ payload(488) ‖ match_index(1) ‖ siblings(128).
  *  The payload starts AFTER the discriminator AND the leading `tree_id` byte. */
 const PAYLOAD_OFFSET = 8 + 1;
-/** `fill_recovery` bundle starts at 424 within the payload:
+/** `fill_recovery` bundle starts at 360 within the payload:
  *  eph(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ pad(24). */
-const FILL_RECOVERY_OFFSET = 424;
+const FILL_RECOVERY_OFFSET = 360;
 
 const ZERO32 = "0".repeat(64);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
@@ -68,12 +68,12 @@ export function decodeSettleFills(
   const v = new DataView(p.buffer, p.byteOffset, p.byteLength);
 
   const matchId = hex(p.subarray(0, 16));
-  // 6 × 32-byte commitments + 2 × 32-byte nullifiers precede the order ids.
+  // Six 32-byte note commitments precede the order ids in payload v9.
   const noteE = hex(p.subarray(144, 176)); // buyer change ([0;32] = exact fill)
   const noteF = hex(p.subarray(176, 208)); // seller change
-  const orderIdA = hex(p.subarray(272, 288)); // buyer
-  const orderIdB = hex(p.subarray(288, 304)); // seller
-  const batchSlot = v.getBigUint64(416, true).toString();
+  const orderIdA = hex(p.subarray(208, 224)); // buyer
+  const orderIdB = hex(p.subarray(224, 240)); // seller
+  const batchSlot = v.getBigUint64(352, true).toString();
 
   const r = FILL_RECOVERY_OFFSET;
   const eph = hexOrNull(p.subarray(r, r + 32));

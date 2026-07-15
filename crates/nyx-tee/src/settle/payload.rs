@@ -2,7 +2,7 @@
 //! of a CLAUDE.md §6 byte-equality contract.
 //!
 //! This Rust port MUST produce, for any payload:
-//!   - the SAME 552-byte Borsh serialization as the on-chain
+//!   - the SAME 488-byte Borsh serialization as the on-chain
 //!     `vault::instructions::tee_forced_settle::MatchResultPayload`
 //!     (AnchorSerialize) and the SDK's
 //!     `settle-builder.ts::serializePayload`;
@@ -23,7 +23,8 @@
 //! commitments, and putting them in the (public, on-chain) settle ix leaked
 //! every trade size. The domain tag bumped `v6`→`v7`. Change-amount recovery
 //! (Proposal B) then appended the 128-byte `fill_recovery` field and bumped
-//! `v7`→`v8` (424→552 bytes).
+//! `v7`→`v8` (424→552 bytes). Settlement payload v9 removed the two
+//! vestigial nullifiers, shrinking the wire shape to 488 bytes.
 //!
 //! ## Two distinct field orderings (do not conflate)
 //!
@@ -31,7 +32,7 @@
 //!   fee-note fields `note_fee_base_commitment` + `note_fee_quote_commitment`
 //!   right after `order_id_b`.
 //! - **Canonical hash**: the same hand-ordered concatenation, domain-tagged
-//!   `b"nyx-match-v8"`.
+//!   `b"nyx-match-v9"`.
 //!
 //! Both orderings are reproduced verbatim below from the on-chain
 //! source + the SDK.
@@ -43,8 +44,9 @@ use sha2::{Digest, Sha256};
 /// verification rejects any hash computed with a different tag. Bumped
 /// `v6`→`v7` when amount-privacy (P3b) dropped the seven plaintext amounts;
 /// `v7`→`v8` when change-amount recovery (Proposal B) appended the 128-byte
-/// `fill_recovery` field (the on-chain encrypted change_amount backstop).
-pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v8";
+/// `fill_recovery` field (the on-chain encrypted change_amount backstop);
+/// `v8`→`v9` when the two unused nullifiers left the settle payload.
+pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v9";
 
 /// Settle payload. Field order is the on-chain struct's declaration order —
 /// `#[derive(BorshSerialize)]` then produces byte-identical output to
@@ -62,8 +64,6 @@ pub struct MatchResultPayload {
     pub note_d_commitment: [u8; 32],
     pub note_e_commitment: [u8; 32],
     pub note_f_commitment: [u8; 32],
-    pub nullifier_a: [u8; 32],
-    pub nullifier_b: [u8; 32],
     pub order_id_a: [u8; 16],
     pub order_id_b: [u8; 16],
     pub note_fee_base_commitment: [u8; 32],
@@ -82,10 +82,10 @@ pub struct MatchResultPayload {
 }
 
 impl MatchResultPayload {
-    /// Total Borsh-encoded width: 16 + 6×32 + 2×32 + 2×16 +
+    /// Total Borsh-encoded width: 16 + 6×32 + 2×16 +
     /// 2×32 (base+quote fee notes) + 16 + 8 + 16 + 8 + 8 + 128
-    /// (fill_recovery) = 552 bytes.
-    pub const WIRE_LEN: usize = 552;
+    /// (fill_recovery) = 488 bytes.
+    pub const WIRE_LEN: usize = 488;
 
     /// Borsh serialization — the bytes that go into the
     /// `tee_forced_settle_batched` ix data. Byte-identical to the
@@ -110,8 +110,6 @@ impl MatchResultPayload {
         h.update(self.note_f_commitment);
         h.update(self.note_fee_base_commitment); // <- moved up vs Borsh order
         h.update(self.note_fee_quote_commitment);
-        h.update(self.nullifier_a);
-        h.update(self.nullifier_b);
         h.update(self.order_id_a);
         h.update(self.order_id_b);
         h.update(self.buyer_relock_order_id);
@@ -140,8 +138,6 @@ mod tests {
             note_d_commitment: [0xD1; 32],
             note_e_commitment: [0; 32],
             note_f_commitment: [0; 32],
-            nullifier_a: [0xEA; 32],
-            nullifier_b: [0xEB; 32],
             order_id_a: [0x01; 16],
             order_id_b: [0x02; 16],
             note_fee_base_commitment: [0; 32],
@@ -161,9 +157,9 @@ mod tests {
     #[test]
     fn canonical_hash_matches_onchain_fixed_vector() {
         let expected: [u8; 32] = [
-            0x32, 0x4C, 0xA2, 0x82, 0x93, 0x52, 0x9A, 0xDA, 0x1D, 0x68, 0x34, 0xC1, 0x63, 0x43,
-            0xE2, 0xA0, 0x59, 0x3E, 0x0A, 0x50, 0xBB, 0x2D, 0x7B, 0x9D, 0x63, 0xFB, 0xDE, 0xF1,
-            0x2F, 0xBC, 0x26, 0x88,
+            0x63, 0xA1, 0x0A, 0x28, 0x1E, 0xD2, 0x86, 0x32, 0xD4, 0xFE, 0xE9, 0xC7, 0x1B, 0x38,
+            0xF9, 0x26, 0xF2, 0xCD, 0xA8, 0xBE, 0x6F, 0x78, 0x85, 0x0D, 0x4F, 0x79, 0x26, 0x65,
+            0x5E, 0xC8, 0xCF, 0xA2,
         ];
         let got = fixed_vector_payload().canonical_hash();
         assert_eq!(
@@ -173,12 +169,12 @@ mod tests {
     }
 
     #[test]
-    fn borsh_serialization_is_552_bytes() {
+    fn borsh_serialization_is_488_bytes() {
         let bytes = fixed_vector_payload().serialize();
         assert_eq!(bytes.len(), MatchResultPayload::WIRE_LEN);
-        assert_eq!(bytes.len(), 552);
+        assert_eq!(bytes.len(), 488);
         // The appended fill_recovery field occupies the last 128 bytes.
-        assert_eq!(&bytes[424..552], &[0u8; 128]);
+        assert_eq!(&bytes[360..488], &[0u8; 128]);
     }
 
     #[test]
@@ -192,9 +188,9 @@ mod tests {
         assert_eq!(&bytes[48..80], &[0xB1; 32]); // note_b
                                                  // Amount-privacy (P3b): the amount block is gone, so the two fee-note
                                                  // commitments now sit right after order_id_b at offset
-                                                 // 16 + 6*32 + 2*32 + 2*16 = 304 (both [0;32] in the fixture).
-        assert_eq!(&bytes[304..336], &[0u8; 32]); // note_fee_base_commitment
-        assert_eq!(&bytes[336..368], &[0u8; 32]); // note_fee_quote_commitment
+                                                 // 16 + 6*32 + 2*16 = 240 (both [0;32] in the fixture).
+        assert_eq!(&bytes[240..272], &[0u8; 32]); // note_fee_base_commitment
+        assert_eq!(&bytes[272..304], &[0u8; 32]); // note_fee_quote_commitment
     }
 
     #[test]
@@ -234,7 +230,6 @@ mod tests {
         }
         perturb!(match_id = [0x12; 16]);
         perturb!(note_a_commitment = [0xA2; 32]);
-        perturb!(nullifier_a = [0xE0; 32]);
         perturb!(order_id_b = [0x03; 16]);
         perturb!(note_fee_base_commitment = [0x77; 32]);
         perturb!(batch_slot = 1);

@@ -51,8 +51,6 @@ const payload: MatchResultPayload = {
   noteDcommitment: fill(32, 0xa4),
   noteEcommitment: noteE,
   noteFcommitment: fill(32, 0x00), // seller change zero ⇒ exact fill
-  nullifierA: fill(32, 0xc1),
-  nullifierB: fill(32, 0xc2),
   orderIdA,
   orderIdB,
   noteFeeBaseCommitment: fill(32, 0xf1),
@@ -65,7 +63,7 @@ const payload: MatchResultPayload = {
   fillRecovery: cat(eph, buyerEnc, sellerEnc, fill(24, 0x00)),
 };
 
-// Realistic ix data: disc(8) ‖ tree_id(1) ‖ payload(552) ‖ match_index(1) ‖ siblings(128).
+// Realistic ix data: disc(8) ‖ tree_id(1) ‖ payload(488) ‖ match_index(1) ‖ siblings(128).
 const ixData = cat(
   anchorDiscriminator("tee_forced_settle_batched"),
   new Uint8Array([0]), // tree_id

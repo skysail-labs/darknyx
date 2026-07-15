@@ -14,12 +14,12 @@
 //! Args (after the 8-byte discriminator):
 //!   - `tree_id: u8`                  — which `merkle_tree` shard the
 //!     output notes append to (post-sharding; first arg)
-//!   - `payload: MatchResultPayload`  — 424-byte Borsh ([`super::payload`])
+//!   - `payload: MatchResultPayload`  — 488-byte Borsh ([`super::payload`])
 //!   - `match_index: u8`              — position in the batch (0..15)
 //!   - `merkle_proof: [[u8;32]; 4]`   — 128 contiguous bytes, the
 //!     depth-4 inclusion path (leaf-level sibling first)
 //!
-//! ix data total = 8 + 1 + 424 + 1 + 128 = 562 bytes.
+//! ix data total = 8 + 1 + 488 + 1 + 128 = 626 bytes.
 //!
 //! `merkle_root` is NOT in the ix data — it only derives the
 //! `batch_validity_marker` PDA address. The handler recomputes the
@@ -92,8 +92,8 @@ pub fn build_settle_batched_ix(
     // vault_config is READ-ONLY (key/owner/zsr source) and the writable tree
     // state moved to `merkle_tree` (slot 2). The two per-match nullifier_entry
     // accounts were REMOVED (the commitment-keyed consumed_a/b are now the sole
-    // consume-once guard — see the vault handler); their `payload.nullifier_a/b`
-    // are still signed but no longer written on-chain.
+    // consume-once guard — see the vault handler). The vestigial nullifier
+    // fields left the v9 payload entirely.
     let accounts = vec![
         AccountMeta::new(*tee_authority, true), // 0 tee_authority (signer, mut)
         AccountMeta::new_readonly(vault_config, false), // 1 vault_config (readonly)
@@ -227,8 +227,6 @@ mod tests {
             note_d_commitment: [0xD1; 32],
             note_e_commitment: [0; 32],
             note_f_commitment: [0; 32],
-            nullifier_a: [0xEA; 32],
-            nullifier_b: [0xEB; 32],
             order_id_a: [0x01; 16],
             order_id_b: [0x02; 16],
             note_fee_base_commitment: [0; 32],
@@ -305,10 +303,10 @@ mod tests {
     fn ix_data_total_length() {
         let ix =
             build_settle_batched_ix(&dummy_tee(), 0, &dummy_payload(), 3, &proof(), &[0xAB; 32]);
-        // 8 disc + 1 tree_id + 552 payload (v8: v7's 424 + 128 fill_recovery)
-        // + 1 match_index + 128 siblings = 690.
-        assert_eq!(ix.data.len(), 8 + 1 + 552 + 1 + 128);
-        assert_eq!(ix.data.len(), 690);
+        // 8 disc + 1 tree_id + 488 payload (v9 removed two nullifiers)
+        // + 1 match_index + 128 siblings = 626.
+        assert_eq!(ix.data.len(), 8 + 1 + 488 + 1 + 128);
+        assert_eq!(ix.data.len(), 626);
     }
 
     #[test]
@@ -316,14 +314,14 @@ mod tests {
         let ix =
             build_settle_batched_ix(&dummy_tee(), 5, &dummy_payload(), 7, &proof(), &[0xAB; 32]);
         assert_eq!(&ix.data[..8], &*SETTLE_BATCHED_DISCRIMINATOR);
-        // tree_id at 8; payload occupies [9, 561); match_index at 561;
-        // siblings [562, 690).
+        // tree_id at 8; payload occupies [9, 497); match_index at 497;
+        // siblings [498, 626).
         assert_eq!(ix.data[8], 5); // tree_id
-        assert_eq!(ix.data[561], 7); // match_index
-        assert_eq!(&ix.data[562..594], &[0x01; 32]); // sibling 0
-        assert_eq!(&ix.data[594..626], &[0x02; 32]); // sibling 1
-        assert_eq!(&ix.data[626..658], &[0x03; 32]);
-        assert_eq!(&ix.data[658..690], &[0x04; 32]);
+        assert_eq!(ix.data[497], 7); // match_index
+        assert_eq!(&ix.data[498..530], &[0x01; 32]); // sibling 0
+        assert_eq!(&ix.data[530..562], &[0x02; 32]); // sibling 1
+        assert_eq!(&ix.data[562..594], &[0x03; 32]);
+        assert_eq!(&ix.data[594..626], &[0x04; 32]);
     }
 
     #[test]

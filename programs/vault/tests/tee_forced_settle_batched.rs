@@ -33,8 +33,6 @@ fn seed_single_match(h: &mut Harness, tag: u8) -> (MatchResultPayload, [[u8; 32]
         note_b,
         fr_safe(0xC0, tag),
         fr_safe(0xD0, tag),
-        [0xF0u8 ^ tag; 32],
-        [0xF1u8 ^ tag; 32],
         oid_a,
         oid_b,
         100,
@@ -95,12 +93,10 @@ fn settle_rejects_at_or_after_either_input_lock_expiry() {
 // Before the fix a withdrawn note left NO commitment-keyed consume guard:
 // `withdraw` only inited `NullifierEntry[nullifier]` + *read* (never wrote)
 // `ConsumedNoteEntry[commitment]`, while settle consumes a note by its
-// COMMITMENT (`consumed_a`) and inited a `NullifierEntry` at the TEE-supplied,
-// UNCONSTRAINED `payload.nullifier_a`. So an already-withdrawn note could still
-// be settled: the settle's `consumed_a` found no prior entry, and its nullifier
-// was attacker-chosen so it never collided with the withdraw's real one. The
-// same note paid out twice. (A litesvm PoC confirmed this reproduces on the
-// pre-fix code before the fix landed.)
+// COMMITMENT (`consumed_a`). A TEE-chosen nullifier used to ride the settle
+// payload and could avoid colliding with the withdraw's real one, so the same
+// note paid out twice. (A litesvm PoC confirmed this reproduces on the pre-fix
+// code before the fix landed.)
 //
 // The fix: `withdraw` now ALSO inits `ConsumedNoteEntry[commitment]`, making
 // the commitment-keyed entry the single trustless consume-once guard shared by
@@ -148,15 +144,11 @@ fn withdraw_then_settle_double_spend_is_blocked() {
         note_b,
         fr_safe(0xC0, 0x01),
         fr_safe(0xD0, 0x01),
-        [0xF0u8; 32], // attacker-chosen nullifier_a …
-        [0xF1u8; 32], // … distinct from the real nullifier(X).
         oid_a,
         oid_b,
         100,
         5_000,
     );
-    assert_ne!(p.nullifier_a, note.nullifier);
-
     let m = read_note_lock_mint(&h, &note.commitment);
     let leaf = compute_match_leaf_for(&p, &m, &m);
     let mut leaves = [[0u8; 32]; 16];
@@ -209,8 +201,6 @@ fn settle_then_withdraw_double_spend_is_blocked() {
         note_b,
         fr_safe(0xC0, 0x02),
         fr_safe(0xD0, 0x02),
-        [0xF0u8; 32],
-        [0xF1u8; 32],
         oid_a,
         oid_b,
         100,
@@ -227,12 +217,12 @@ fn settle_then_withdraw_double_spend_is_blocked() {
         .expect("settle consuming X succeeds");
     assert!(consumed_note_exists(&h, &note.commitment));
 
-    // FREEZE-VECTOR CHECK: the settle wrote NO NullifierEntry (the accounts were
-    // removed) — so a compromised TEE can no longer pre-claim a victim's future
-    // withdraw nullifier via the settle path.
+    // FREEZE-VECTOR CHECK: the settle wrote NO NullifierEntry — so a compromised
+    // TEE can no longer pre-claim a victim's future withdraw nullifier via the
+    // settle path. Payload v9 cannot carry an alternate nullifier at all.
     assert!(
-        !nullifier_exists(&h, &p.nullifier_a),
-        "settle must not write NullifierEntry[payload.nullifier_a] (freeze vector removed)",
+        !nullifier_exists(&h, &note.nullifier),
+        "settle must not write a NullifierEntry (freeze vector removed)",
     );
 
     // ── Now withdrawing the already-consumed X must REVERT ──
@@ -301,8 +291,6 @@ fn cu_profile_worst_case_settle() {
         note_b,
         fr_safe(0xC0, 0x77),
         fr_safe(0xD0, 0x77),
-        [0xF0u8; 32],
-        [0xF1u8; 32],
         oid_a,
         oid_b,
         100,
@@ -385,8 +373,6 @@ fn settle_rejects_relock_expiry_beyond_ttl_cap() {
         note_b,
         fr_safe(0xC0, 0x78),
         fr_safe(0xD0, 0x78),
-        [0xF0u8; 32],
-        [0xF1u8; 32],
         oid_a,
         oid_b,
         100,
@@ -457,8 +443,7 @@ fn test_two_matches_share_one_marker() {
     // ── Match 0 — exact-fill, no change ──────────────────────────
     // Notes a..f all get Poseidon-hashed inside `compute_match_leaf`,
     // so every commitment must be a valid BN254 Fr (top byte == 0x00).
-    // `fr_safe` enforces that; nullifiers stay raw (only PDA-seeded,
-    // not Poseidon-hashed).
+    // `fr_safe` enforces that.
     let note_a0 = fr_safe(0xA0, 0x01);
     let note_b0 = fr_safe(0xB0, 0x01);
     let oid_a0 = [0x10u8; 16];
@@ -471,8 +456,6 @@ fn test_two_matches_share_one_marker() {
         note_b0,
         fr_safe(0xC0, 0x01),
         fr_safe(0xD0, 0x01),
-        [0xF0u8; 32],
-        [0xF1u8; 32],
         oid_a0,
         oid_b0,
         100,
@@ -492,8 +475,6 @@ fn test_two_matches_share_one_marker() {
         note_b1,
         fr_safe(0xC1, 0x02),
         fr_safe(0xD1, 0x02),
-        [0xF2u8; 32],
-        [0xF3u8; 32],
         oid_a1,
         oid_b1,
         100,
@@ -625,8 +606,6 @@ fn test_relocked_note_consumable_across_second_batch() {
         note_b0,
         fr_safe(0xC0, 0x11),
         fr_safe(0xD0, 0x11),
-        [0xF0u8; 32],
-        [0xF1u8; 32],
         oid_a0,
         oid_b0,
         100,
@@ -669,8 +648,6 @@ fn test_relocked_note_consumable_across_second_batch() {
         note_b1,
         fr_safe(0xC1, 0x22),
         fr_safe(0xD1, 0x22),
-        [0xF4u8; 32],
-        [0xF5u8; 32],
         oid_relock,
         oid_b1,
         100,
@@ -850,8 +827,6 @@ fn test_settles_to_distinct_shards_advance_independently() {
             note_b,
             fr_safe(0xC0, tag),
             fr_safe(0xD0, tag),
-            [0xF0u8 ^ tag; 32],
-            [0xF1u8 ^ tag; 32],
             oid_a,
             oid_b,
             100,

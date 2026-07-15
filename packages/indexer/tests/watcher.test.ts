@@ -49,8 +49,6 @@ function payload(): MatchResultPayload {
     noteDcommitment: fill(32, 0xd),
     noteEcommitment: fill(32, 0xee),
     noteFcommitment: fill(32, 0xff),
-    nullifierA: fill(32, 0x1a),
-    nullifierB: fill(32, 0x1b),
     orderIdA: fill(16, 0xaa),
     orderIdB: fill(16, 0xbb),
     noteFeeBaseCommitment: fill(32, 0),

@@ -427,10 +427,10 @@ Already implemented and shipped (since v2 / before v3.5). Just
 recapping the flow for completeness.
 
 ```
-[TEE constructs MatchResultPayload (24 fields, 448 B Borsh)]
+[TEE constructs MatchResultPayload (v9, 488 B Borsh)]
     │
     │ msg = canonical_payload_hash(payload)
-    │     = SHA-256("nyx-match-v5" || field_bytes...)
+    │     = SHA-256("nyx-match-v9" || field_bytes...)
     │
     ▼
 [TEE signs with Ed25519 signer key]

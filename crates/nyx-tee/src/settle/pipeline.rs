@@ -88,13 +88,20 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 //   The true worst case (all 6 output notes + both continuation re-lock CPIs)
 //   is now 90,381 — guarded by `cu_profile_worst_case_settle` in
 //   programs/vault/tests/tee_forced_settle_batched.rs.
+//
+// Re-measured 2026-07-15 after settlement payload v9 removed 64 signed/wire
+// bytes (current branch, devnet-admin SBF consumed by litesvm):
+//   2-leaf settle                 63,172 CU
+//   6-leaf + 2 relock worst case 78,388 CU
+// The 115k ceiling therefore retains >31% margin against its own limit and
+// >46% margin over measured consumption.
 // (Stale-comment fix: MERKLE_DEPTH is 20, not 26 as the 2026-06-08 notes said.)
 // Regression-guarded by the `CU_PROFILE`/assert lines in
 // programs/vault/tests/{match_batch_verify,tee_forced_settle_batched}.rs.
 
 /// CU ceiling for the settle tx (Tx D). Post-CU-1 the true worst case (6
-/// output leaves + both continuation re-locks) is 90,381; this is 90,381 ×
-/// ~1.27 ≈ 115k — down from the old 187k (pre-CU-1 5-leaf 162,145 × 1.15).
+/// output leaves + both continuation re-locks) is 78,388 after payload v9;
+/// 115k leaves a deliberately conservative >46% margin over that measurement.
 /// Lowering it cuts the settle priority fee (= price × requested_limit) by
 /// ~38%. NOTE: must be confirmed by a `cvm-settle-e2e` run on a redeployed CVM
 /// image before the reduced fee is relied on — a too-low limit fails the
@@ -192,7 +199,7 @@ pub fn build_settle_v0_tx_b64(
                 inline = ?inline,
                 "settle Tx D over the 1232-byte cap — accounts that should be \
                  ALT-referenced are inline; check the per-batch ALT covers this \
-                 batch's locks/consumed/nullifier PDAs",
+                 batch's locks/consumed PDAs",
             );
         }
         return Err(RpcError::Schema(format!(
@@ -212,14 +219,12 @@ const SOLANA_TX_SIZE_CAP: usize = 1232;
 /// `VersionedTransaction` (for tests that want to inspect the
 /// compiled message — account count, ALT lookups, wire size).
 ///
-/// NOTE: the settle tx (Tx D) deliberately carries ONLY the right-sized
-/// `SetComputeUnitLimit` ix — NOT a `SetComputeUnitPrice` priority-fee ix.
-/// The worst-case settle tx (non-zero change note + 2 ALTs) is ~1226 B against
-/// Solana's 1232-byte cap (CLAUDE.md §6); a price ix (~12 B) overflows it
-/// (1238 B). That's an acceptable omission: Tx D's confirmation latency is
-/// bound by per-batch ALT activation, not by priority (a fee can't make a
-/// leader load an ALT that isn't rooted yet — see settle::submit). Priority
-/// fees go on the room-to-spare txs: lock (Tx A), verify (Tx B), close (Tx E).
+/// NOTE: the settle tx (Tx D) deliberately carries only the right-sized
+/// `SetComputeUnitLimit` ix. Payload v9 restores at least 112 bytes of wire
+/// headroom; keeping the price ix off Tx D preserves that regression margin.
+/// Tx D confirmation latency is bound by per-batch ALT activation, not by
+/// priority (a fee cannot make a leader load an ALT that is not rooted yet).
+/// Priority fees remain on the other settle-path transactions.
 pub fn build_settle_v0_tx(
     tee_keypair: &Keypair,
     ed25519_ix: Instruction,
@@ -259,8 +264,6 @@ mod tests {
             note_d_commitment: [0xD1; 32],
             note_e_commitment: [0xE1; 32],
             note_f_commitment: [0xF1; 32],
-            nullifier_a: [0xEA; 32],
-            nullifier_b: [0xEB; 32],
             order_id_a: [0x01; 16],
             order_id_b: [0x02; 16],
             note_fee_base_commitment: [0; 32],
@@ -290,7 +293,7 @@ mod tests {
         // Production stacks BOTH ALTs (worker.rs): the static settle ALT
         // (vault_config + sysvar + system program + K merkle_tree shards) under
         // the per-batch ALT (the 5 derivable PDAs). Both are needed to keep the
-        // worst-case (change-note, no PDA dedup) settle tx under the 1232-byte cap.
+        // worst-case (change-note, no PDA dedup) settle tx under 1120 bytes.
         let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses(4));
         let alt = alt_account(
             Address::new_from_array([0x55; 32]),
@@ -306,17 +309,27 @@ mod tests {
         )
         .expect("v0 compile + sign");
 
-        // Serialized wire size must be under Solana's 1232-byte cap. This is the
-        // worst case: a change-note fill (note_e/f distinct) on a sharded settle,
-        // now carrying the full 128-byte change-amount-recovery bundle (Proposal
-        // B, +128 B vs the pre-recovery 1049 B → ~1177 B; still ~55 B under cap).
-        // Assert a tight bound so a regression that drops an account back inline
-        // (≈ −32 B/account of margin) trips here, not on devnet.
+        // This is the worst case: distinct change notes, all accounts present,
+        // a full recovery bundle, four tree shards in the static ALT, and both
+        // production ALTs. Payload v9 removes 64 vestigial nullifier bytes.
+        // Pin both the target size and the resulting Solana packet headroom.
         let wire = bincode::serialize(&tx).unwrap();
+        const MAX_TX_D_WIRE_LEN: usize = 1120;
+        const MIN_TX_D_HEADROOM: usize = 112;
+        eprintln!(
+            "TX_D_WIRE_SIZE_V9 bytes={} headroom={}",
+            wire.len(),
+            SOLANA_TX_SIZE_CAP - wire.len()
+        );
         assert!(
-            wire.len() <= 1184,
-            "settle v0 tx is {} bytes — lost ALT headroom (an account fell inline?)",
+            wire.len() <= MAX_TX_D_WIRE_LEN,
+            "settle v0 tx is {} bytes (max {MAX_TX_D_WIRE_LEN}) — payload or ALT headroom regressed",
             wire.len()
+        );
+        assert!(
+            SOLANA_TX_SIZE_CAP - wire.len() >= MIN_TX_D_HEADROOM,
+            "settle v0 tx has only {} bytes of headroom (min {MIN_TX_D_HEADROOM})",
+            SOLANA_TX_SIZE_CAP - wire.len()
         );
 
         // It's a v0 message with one signature (the TEE keypair).

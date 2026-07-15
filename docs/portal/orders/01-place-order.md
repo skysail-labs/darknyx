@@ -69,7 +69,7 @@ wire contract is unambiguous.
 | `owner_commitment` | string | Yes | 32-byte hex. The collateral note's owner commitment, part of the secret opening the in-enclave prover re-derives the commitment from. Distinct from `user_commitment`. Held in enclave memory only. |
 | `note_inner_hash` | string | Yes | 32-byte hex. The note's amount-independent inner hash (an opening field that anchors both the commitment and the nullifier). |
 | `user_commitment` | string | Yes | 32-byte hex. Binds the order's output notes to the correct owner on-chain. |
-| `nullifier` | string | Yes | 32-byte hex. Precomputed client-side (it needs the spending key, which never enters the enclave). Opaque to the engine; carried into the settlement payload. |
+| `nullifier` | string | Yes | 32-byte hex. Precomputed client-side (it needs the spending key, which never enters the enclave). Retained by the current order schema but absent from settlement payload v9; Tx D replay protection is commitment-keyed. |
 | `merkle_root` | string | Yes | 32-byte hex. The tree root the input proof was generated against. Must still be in the on-chain root window at settlement time. |
 | `valid_input_proof` | string | Yes | 256-byte hex. The zero-knowledge proof that the collateral note is in the tree and spendable. The engine relays it unverified; the on-chain program verifies it at lock time. |
 

@@ -37,8 +37,8 @@ use anchor_lang::prelude::*;
 /// (range-checked), and the note commitments bind the amounts transitively.
 /// Putting them in the settle ix (which lands on-chain in plaintext) was a
 /// public leak — competitors could read every trade size + execution price.
-/// The payload now carries ONLY commitments, nullifiers, order ids, relock
-/// fields, and the batch slot. Each client reconstructs its own amounts from
+/// The payload now carries ONLY commitments, order ids, relock fields, and the
+/// batch slot. Each client reconstructs its own amounts from
 /// the per-account FillMemo.
 ///
 /// `note_e_commitment` / `note_f_commitment` carry the Poseidon-hashed
@@ -55,8 +55,6 @@ pub struct MatchResultPayload {
     pub note_d_commitment: [u8; 32],
     pub note_e_commitment: [u8; 32],
     pub note_f_commitment: [u8; 32],
-    pub nullifier_a: [u8; 32],
-    pub nullifier_b: [u8; 32],
     pub order_id_a: [u8; 16],
     pub order_id_b: [u8; 16],
     /// Batch-level protocol fee notes — ONE PER MINT. `[0u8;32]` = no fee
@@ -95,7 +93,9 @@ pub struct MatchResultPayload {
     // longer needs to ride in the (public) settle ix. The domain tag bumped
     // `nyx-match-v6` → `nyx-match-v7` for this layout change, then
     // `nyx-match-v7` → `nyx-match-v8` when change-amount recovery (Proposal B)
-    // appended the `fill_recovery` field above.
+    // appended the `fill_recovery` field above. Settlement payload v9 then
+    // removed the two vestigial nullifiers: commitment-keyed
+    // `ConsumedNoteEntry` PDAs are the sole settle/withdraw replay guard.
     //
     // v3.1 note: `price_proof` and `price_commitment` had previously been
     // factored out into a preceding `verify_valid_price` ix; that path was
@@ -241,9 +241,10 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         // (base/quote/buyer_change/seller_change/buyer_fee/seller_fee/price)
         // from the payload — they're proven in-circuit + bound by the note
         // commitments. v8: change-amount recovery (Proposal B) appended the
-        // 128-byte `fill_recovery` ciphertext bundle. Bumping the tag
-        // invalidates every signature over an older layout.
-        b"nyx-match-v8",
+        // 128-byte `fill_recovery` ciphertext bundle. v9 removed the two
+        // vestigial nullifiers. Bumping the tag invalidates every signature
+        // over an older layout.
+        b"nyx-match-v9",
         p.match_id.as_ref(),
         p.note_a_commitment.as_ref(),
         p.note_b_commitment.as_ref(),
@@ -253,8 +254,6 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         p.note_f_commitment.as_ref(),
         p.note_fee_base_commitment.as_ref(),
         p.note_fee_quote_commitment.as_ref(),
-        p.nullifier_a.as_ref(),
-        p.nullifier_b.as_ref(),
         p.order_id_a.as_ref(),
         p.order_id_b.as_ref(),
         p.buyer_relock_order_id.as_ref(),
@@ -376,8 +375,6 @@ mod tests {
             note_d_commitment: [0xD1u8; 32],
             note_e_commitment: [0u8; 32],
             note_f_commitment: [0u8; 32],
-            nullifier_a: [0xEAu8; 32],
-            nullifier_b: [0xEBu8; 32],
             order_id_a: [0x01u8; 16],
             order_id_b: [0x02u8; 16],
             note_fee_base_commitment: [0u8; 32],
@@ -394,9 +391,9 @@ mod tests {
         // `[hash_cross_env_parity]`. When the payload shape changes, update
         // BOTH sides — any divergence breaks the TEE signature verification.
         let expected: [u8; 32] = [
-            0x32, 0x4C, 0xA2, 0x82, 0x93, 0x52, 0x9A, 0xDA, 0x1D, 0x68, 0x34, 0xC1, 0x63, 0x43,
-            0xE2, 0xA0, 0x59, 0x3E, 0x0A, 0x50, 0xBB, 0x2D, 0x7B, 0x9D, 0x63, 0xFB, 0xDE, 0xF1,
-            0x2F, 0xBC, 0x26, 0x88,
+            0x63, 0xA1, 0x0A, 0x28, 0x1E, 0xD2, 0x86, 0x32, 0xD4, 0xFE, 0xE9, 0xC7, 0x1B, 0x38,
+            0xF9, 0x26, 0xF2, 0xCD, 0xA8, 0xBE, 0x6F, 0x78, 0x85, 0x0D, 0x4F, 0x79, 0x26, 0x65,
+            0x5E, 0xC8, 0xCF, 0xA2,
         ];
         if hash != expected {
             panic!("canonical_payload_hash drifted — got {:02X?}", hash);

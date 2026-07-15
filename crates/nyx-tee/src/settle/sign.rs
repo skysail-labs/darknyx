@@ -47,8 +47,6 @@ mod tests {
             note_d_commitment: [0xD1; 32],
             note_e_commitment: [0; 32],
             note_f_commitment: [0; 32],
-            nullifier_a: [0xEA; 32],
-            nullifier_b: [0xEB; 32],
             order_id_a: [0x01; 16],
             order_id_b: [0x02; 16],
             note_fee_base_commitment: [0; 32],

@@ -59,7 +59,7 @@ runbooks have landed.
 | N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
 | N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Closed |
 | N-16 | Low | SDK | `remediation/client-custody` | Commitment equality is byte-based; mixed-case encoding regression | Closed |
-| N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Open |
+| N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Closed |
 | N-18 | Critical mainnet gate | Governance + ZK | `remediation/release-assurance` | Public Phase-2 ceremony with at least five independent contributors, transcript/hashes, random beacon, reproducible verify, auditor sign-off, post-ceremony settle | Open |
 | N-19 | High mainnet gate | Governance | `remediation/governance-markets`, `remediation/release-assurance` | Split Squads rehearsal: operations 3-of-5 admin and cold root/upgrade 4-of-7; independent attestation verification before rotations | In progress |
 
@@ -485,6 +485,62 @@ Every remediation PR must record:
   payloads, signatures, proofs, or deployed vault artifacts are invalidated,
   but rollback reopens N-08 and restores three token-in-query sockets plus the
   daemon's three-session transport.
+
+### `remediation/settlement-payload-v9` — N-17
+
+- **Status.** Closed. PR #47.
+- **Invariant restored.** Tx D no longer serializes or signs two TEE-supplied
+  nullifiers that the vault never reads. Commitment-keyed `ConsumedNoteEntry`
+  PDAs remain the single replay guard shared by settlement and withdrawal.
+- **Wire/circuit impact.** `MatchResultPayload` shrinks from 552 to 488 bytes;
+  `tee_forced_settle_batched` instruction data shrinks from 690 to 626 bytes.
+  The canonical signature domain moves from `nyx-match-v8` to
+  `nyx-match-v9`, intentionally invalidating every v8 payload and signature.
+  Rust/Anchor/TEE/SDK serializers, direct-chain and indexer decoders, fixed
+  vectors, offsets, and size assertions move atomically. Account layouts, ALT
+  address membership, REST/order shapes, circuits, zkeys, verifier keys, N=16
+  fixtures, note commitments, nullifiers used by withdrawal, and Merkle roots
+  are unchanged.
+- **Local evidence.** Mainnet and `devnet-admin` SBF builds pass. Formatting,
+  the host parity-example build, workspace clippy with warnings denied, and
+  `cargo test --workspace` pass. The v9 cross-language fixed vector is
+  `63a10a281ed28632d4fee9c71b38f926f2cda8be6f78850d4f7926655ec8cfa2`
+  in the vault, TEE, and SDK. The production-shaped worst-case v0 Tx D is
+  1109 bytes, leaving 123 bytes below Solana's 1232-byte cap. Litesvm measures
+  63,172 CU for the two-leaf path and 78,388 CU for the six-leaf plus two-relock
+  worst case against the unchanged 115,000-CU limit. SDK, SDK-test, indexer,
+  and daemon TypeScript no-emit checks pass. Full Vitest passes SDK 240 tests
+  with 23 environment-gated skips, indexer 23, and daemon 158 with 2 skips.
+- **Devnet/CVM evidence.** The v9 vault was upgraded through the private Helius
+  endpoint at signature
+  `ogUEFzyBmft8xCP7atcwiZ9jLS74pS24yrczuBEho2SS2dfqQiAPUtTYdqczzNx6MoHo5YPJXFqmJdgr3nZVxbR`
+  (deploy slot 476318833), then the single shard was reset at
+  `5zjTy2vWadovXw6Qvm6b3x4fSLMZcLz8iC67eeAiGXb5fcuZipgFMRqJZUcibSctHv29LEakAhtaYXgRWBpbdpKu`.
+  `tee-v3-hardening-54` cold-booted app
+  `app_634b2ab4c250466311f0cf09f772b6fd60b5be11`, instance
+  `f5cd2f294d1127d241d18e44dbb76b6910aa2a54`, compose hash
+  `1220b1a548a6daf3321be88371373fa672bf10238c01e19d2b3955e91dee15be`,
+  MRTD
+  `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`,
+  and signer `KgFsjoP9fDy78xgmEjn2DtRbPZ6G7t5AWDkPo1AAjsa` with an empty Merkle mirror
+  and the settlement pipeline enabled. The isolated real-mint
+  `cvm-settle-e2e` passed 1/1 in 40.26 seconds. Its successful on-chain path
+  was lock A
+  `BRAySrgjcZwsBb2eCkiu8g1t8Tm9ZVXk5KoLW5HcTTkPa3iYkopLXGE2oD6KvJ5T2xKs3BzKdyP68S3biXqMqF1`,
+  lock B
+  `57fuPdKHq8mXagN8xvTj7AFcwDGkaTzVhEo2zc14S6TdU3JwqeRFVnQeYAffuWX1zC8gmQzq3HBve7oCxQkA5YZR`,
+  verify
+  `4oUfji6Ajii1QDxUfWQsGG1HCjoRwyjgriiYfAgks3NdMk3mXe5cpYJZDsyG5eKGtP7VZozSKKJwW6o84jwDqBtL`,
+  and v9 settle
+  `43Jcio2Js71kEcSdD5pi72p9t9g43GkVXmejBBA7zCbTjepr3FwNDP8uQ9XYuuAk1xoM7mAwRhhJ8SqfTc3vuyMh`;
+  the intervening signer transaction created the per-batch ALT. The billable
+  CVM was confirmed stopped and the mode-0600 deployment environment was
+  securely deleted immediately after the run.
+- **Rollback.** Revert this PR and coordinate a vault downgrade with image 53
+  and the v8 SDK. Notes, circuit proofs, roots, and account layouts remain
+  valid, but v9 payloads/signatures and any in-flight settlement jobs are
+  incompatible with v8 and must be discarded and resubmitted. Rolling back
+  only one component fails closed at deserialization/signature verification.
 
 ## Mainnet release gates
 

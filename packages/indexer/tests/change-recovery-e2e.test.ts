@@ -130,8 +130,6 @@ async function buyerChangeIx(
     noteBcommitment: fill(32, 0xb1),
     noteCcommitment: fill(32, 0xc1),
     noteDcommitment: fill(32, 0xd1),
-    nullifierA: fill(32, 0xea),
-    nullifierB: fill(32, 0xeb),
     orderIdA: ORDER_ID,
     orderIdB: fill(16, 0xcd),
   });
@@ -219,8 +217,6 @@ describe("change-amount recovery — client-side e2e", () => {
       noteBcommitment: fill(32, 0xb1),
       noteCcommitment: fill(32, 0xc1),
       noteDcommitment: fill(32, 0xd1),
-      nullifierA: fill(32, 0xea),
-      nullifierB: fill(32, 0xeb),
       orderIdA: fill(16, 0xcd),
       orderIdB: ORDER_ID, // the seller order
     });

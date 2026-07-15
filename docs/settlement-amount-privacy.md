@@ -5,7 +5,7 @@
 > describes the *before* state and was accurate as of 2026-06-20. The work has since
 > landed: the leaf is a single commitment-only `Poseidon10(DOMAIN_LEAF_V2=23, …)`, the
 > 7 plaintext amounts are gone from `MatchResultPayload` (canonical tag now
-> `nyx-match-v8`), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
+> `nyx-match-v9` after the later dead-nullifier removal), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
 > binding are in the circuit, and `verify_match_batch` takes 3 public inputs
 > `[merkle_root, fee_rate_bps, protocol_owner_commitment]`. For current behavior see
 > `CRYPTOGRAPHY.md` + the circuit/handler code; read the plan below as lineage only.
