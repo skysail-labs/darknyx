@@ -215,7 +215,7 @@ export function outstandingMintPda(
 
 /**
  * v3.5 — BatchValidityMarker PDA. Seed is the Merkle root committed by
- * the verify_match_batch proof's single public input. Created by
+ * the verify_match_batch proof's first public input. Created by
  * `verify_match_batch` and consumed by `tee_forced_settle_batched`.
  */
 export function batchValidityMarkerPda(
@@ -827,11 +827,10 @@ export function buildWithdrawInstruction(
 }
 
 // ---------------------------------------------------------------------------
-// v3.5 — verify_match_batch. Lands in its own tx before the N (≤ 16)
-// tee_forced_settle_batched txs in a batch. One Groth16 attesting both
-// VALID_CREATE + VALID_PRICE for every match in the batch; the proof's
-// single public input (a Merkle root over per-slot leaves) becomes the
-// BatchValidityMarker PDA's seed. The settle txs that follow each
+// v3 — verify_match_batch. Lands in its own tx before the N (≤ 16)
+// tee_forced_settle_batched txs in a batch. One Groth16 binds active slots,
+// output construction, scaled pricing, fees, and the governed market. Its
+// public Merkle root becomes the BatchValidityMarker PDA's seed. The settle txs that follow each
 // supply a Merkle inclusion path against this marker.
 // ---------------------------------------------------------------------------
 
@@ -839,7 +838,10 @@ export interface BuildVerifyMatchBatchParams {
   programId: PublicKey;
   /** Anyone can pay rent / submit the proof. Authorization is the proof itself. */
   payer: PublicKey;
-  /** Merkle root over the N=16 per-slot leaves — the proof's one public input. */
+  /** Ordered governed market pair bound into public inputs 4..7. */
+  baseMint: PublicKey;
+  quoteMint: PublicKey;
+  /** Merkle root over the N=16 per-slot leaves — public input 1. */
   merkleRoot: Uint8Array;
   /** Slot past which the marker becomes claimable as stale. */
   expirySlot: bigint;
@@ -853,6 +855,12 @@ export function buildVerifyMatchBatchInstruction(
     throw new Error("merkleRoot must be 32 bytes");
   }
   const [marker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
+  const [vaultConfig] = vaultConfigPda(p.programId);
+  const [marketConfig] = marketConfigPda(
+    p.programId,
+    p.baseMint,
+    p.quoteMint,
+  );
 
   const data = cat(
     anchorDiscriminator("verify_match_batch"),
@@ -865,6 +873,8 @@ export function buildVerifyMatchBatchInstruction(
     programId: p.programId,
     keys: [
       { pubkey: p.payer, isSigner: true, isWritable: true },
+      { pubkey: vaultConfig, isSigner: false, isWritable: false },
+      { pubkey: marketConfig, isSigner: false, isWritable: false },
       { pubkey: marker, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],

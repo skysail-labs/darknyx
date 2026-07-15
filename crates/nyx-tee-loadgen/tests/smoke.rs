@@ -46,7 +46,9 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
     // made every submit 400 before.
     let match_config = dev_match_config();
     let matcher_state = Arc::new(RwLock::new(
-        MatcherState::new().with_market(match_config.base_mint, match_config.quote_mint),
+        MatcherState::new()
+            .with_market(match_config.base_mint, match_config.quote_mint)
+            .with_price_scale(match_config.price_scale),
     ));
     let oracle = OracleCache::new();
     let current_slot = Arc::new(AtomicU64::new(1));
@@ -138,6 +140,7 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         // Matches the in-process MatchConfig (fee_rate_bps = 0) so the
         // synthetic note_amount = nominal (fee-free) lines up with intake.
         fee_rate_bps: 0,
+        price_scale: 100_000_000,
         // Above the in-process matcher's current_slot (1) so orders aren't swept
         // as expired, but WITHIN MAX_LOCK_TTL_SLOTS (4_500, F-05) so intake
         // accepts them (an over-cap expiry now 400s at intake).

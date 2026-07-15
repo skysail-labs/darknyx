@@ -21,9 +21,8 @@
 //!     owner_commitment; derive_*(match_id, TRADE_ROLE_SELLER).
 //!   - note_e / note_f (change, conditional on change_amt > 0):
 //!     derive_*(match_id, CHANGE_ROLE_*).
-//!   - note_fee (protocol cut, payload-only — NOT a circuit witness):
-//!     owner = protocol_owner_commitment;
-//!     derive_*(fee_identifier, FEE_ROLE_QUOTE).
+//!   - note_fee (protocol cut): owner = protocol_owner_commitment;
+//!     inner = Poseidon3(25, consumed_input_commitment, fee_role).
 //!
 //! Conservation is enforced up front (the same equalities the circuit
 //! constrains), so a malformed match fails here with a named error
@@ -36,11 +35,12 @@
 //! unit-testable without a matcher tick or a real proof.
 
 use darkpool_crypto::note::commitment_from_fields_v2;
+use darkpool_crypto::{match_fee_inner_hash, match_output_inner_hash};
 use darkpool_matcher::change_note::{
-    derive_inner, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, FEE_ROLE_BASE, FEE_ROLE_QUOTE,
-    TRADE_ROLE_BUYER, TRADE_ROLE_SELLER,
+    CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, FEE_ROLE_BASE, FEE_ROLE_QUOTE, TRADE_ROLE_BUYER,
+    TRADE_ROLE_SELLER,
 };
-use darkpool_matcher::match_result::{MatchPair, RunBatchOutput, RELOCK_ORDER_ID_NONE};
+use darkpool_matcher::match_result::{MatchPair, RunBatchOutput};
 
 use crate::matcher::openings::{NoteOpening, OpeningStore};
 use crate::prover::{pad_batch, MatchSlotWitness};
@@ -67,31 +67,17 @@ pub struct MatchAssemblyInputs<'a> {
     /// Protocol fee rate (bps) — the circuit's fee-floor public input
     /// (`VaultConfig.fee_rate_bps`). Stamped into every slot's witness.
     pub fee_rate_bps: u64,
-    /// Identifier the fee-note inners derive against. During the interim
-    /// batch-fee design this is the matcher's recorded `RunBatchOutput.batch_slot`.
-    /// It must be copied from the matcher output, never sampled again by a
-    /// consumer. CS-08 separately replaces this slot-derived identifier with a
-    /// globally unique per-batch/page value.
-    pub fee_identifier: u64,
+    /// Governed fixed-point price denominator.
+    pub price_scale: u64,
     /// This match's **position within the batch** (0..N-1). C-08:
     /// VALID_MATCH_BATCH binds `batch_slot[i] === i`, and the on-chain settle
     /// asserts `payload.batch_slot == match_index`, so the leaf/payload
     /// `batch_slot` MUST be the slot index — NOT the matcher's `now_slot`
-    /// (which stays in [`Self::fee_identifier`] for the fee-note opening).
     /// Mixing
     /// these up is the bug the live CVM caught: the matcher sets
     /// `MatchPair.batch_slot = now_slot`, so feeding that into the leaf makes
     /// witness generation abort on `batch_slot[i] === i`.
     pub slot_index: u64,
-    /// For a CONTINUING buyer (the match's `buyer_relock_order_id` is
-    /// set), the `inner_hash` of the consumed anchor — the change note
-    /// note_e must be built with this (not `derive_inner`) so its
-    /// pre-supplied nullifier lets the matcher re-match the residual.
-    /// `None` when the buyer does not relock (note_e is a final change
-    /// note → `derive_inner`).
-    pub buyer_change_inner: Option<[u8; 32]>,
-    /// Same as [`Self::buyer_change_inner`] for the seller's note_f.
-    pub seller_change_inner: Option<[u8; 32]>,
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
@@ -174,22 +160,26 @@ pub fn assemble_match(
         )));
     }
 
-    // ── 2. Clearing price — the circuit constrains
-    //   quote_amount === base_amount * clearing_price
-    // so clearing_price = quote / base must be exact.
-    if m.base_amt == 0 {
+    // ── 2. Scaled floor pricing.
+    if m.base_amt == 0 || m.price == 0 || inp.price_scale == 0 {
         return Err(AssembleError::Conservation("base_amount is zero".into()));
     }
-    let clearing_price = m.quote_amt / m.base_amt;
-    if m.base_amt.checked_mul(clearing_price) != Some(m.quote_amt) {
+    let clearing_price = m.price;
+    let numerator = (m.base_amt as u128)
+        .checked_mul(clearing_price as u128)
+        .ok_or_else(|| AssembleError::Conservation("scaled price product overflow".into()))?;
+    let expected_quote = numerator / inp.price_scale as u128;
+    let price_remainder = numerator % inp.price_scale as u128;
+    if expected_quote != m.quote_amt as u128 {
         return Err(AssembleError::Conservation(format!(
-            "quote ({}) is not an exact multiple of base ({}) — no integer clearing price",
-            m.quote_amt, m.base_amt
+            "quote ({}) != floor(base ({}) * price ({}) / scale ({}))",
+            m.quote_amt, m.base_amt, clearing_price, inp.price_scale
         )));
     }
 
     // ── 3. Output notes c (buyer, BASE) + d (seller, QUOTE).
-    let c_inner = derive_inner(mid, TRADE_ROLE_BUYER);
+    let c_inner = match_output_inner_hash(&inp.buyer_opening.inner_hash, TRADE_ROLE_BUYER)
+        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
     let note_c = commit(
         &inp.base_mint,
         m.base_amt,
@@ -197,7 +187,8 @@ pub fn assemble_match(
         &c_inner,
     )?;
 
-    let d_inner = derive_inner(mid, TRADE_ROLE_SELLER);
+    let d_inner = match_output_inner_hash(&inp.seller_opening.inner_hash, TRADE_ROLE_SELLER)
+        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
     let note_d = commit(
         &inp.quote_mint,
         m.quote_amt,
@@ -211,25 +202,11 @@ pub fn assemble_match(
     // circuit's IsZero gate bypasses the reconstruction constraint,
     // matching the TS exact-fill witness.
     //
-    // inner_hash source:
-    //   - CONTINUING side (relock_order_id set): the consumed anchor's
-    //     inner_hash (`*_change_inner`), so the change note carries the
-    //     client's pre-supplied nullifier and the matcher can re-match it.
-    //   - non-continuing side (full fill / IOC): `derive_inner(mid, role)`
-    //     — a final change note, recoverable by the client from match_id.
-    let buyer_relocks = m.buyer_relock_order_id != RELOCK_ORDER_ID_NONE;
-    let seller_relocks = m.seller_relock_order_id != RELOCK_ORDER_ID_NONE;
-
+    // The inner is derived from the consumed input inner for both final and
+    // continuing outputs; relocking no longer depends on an anchor pool.
     let (note_e, e_inner) = if m.buyer_change_amt > 0 {
-        let inner = if buyer_relocks {
-            inp.buyer_change_inner.ok_or_else(|| {
-                AssembleError::Conservation(
-                    "buyer relocks but no continuation anchor inner_hash supplied".into(),
-                )
-            })?
-        } else {
-            derive_inner(mid, CHANGE_ROLE_BUYER)
-        };
+        let inner = match_output_inner_hash(&inp.buyer_opening.inner_hash, CHANGE_ROLE_BUYER)
+            .map_err(|e| AssembleError::Crypto(e.to_string()))?;
         let c = commit(
             &inp.quote_mint,
             m.buyer_change_amt,
@@ -242,15 +219,8 @@ pub fn assemble_match(
     };
 
     let (note_f, f_inner) = if m.seller_change_amt > 0 {
-        let inner = if seller_relocks {
-            inp.seller_change_inner.ok_or_else(|| {
-                AssembleError::Conservation(
-                    "seller relocks but no continuation anchor inner_hash supplied".into(),
-                )
-            })?
-        } else {
-            derive_inner(mid, CHANGE_ROLE_SELLER)
-        };
+        let inner = match_output_inner_hash(&inp.seller_opening.inner_hash, CHANGE_ROLE_SELLER)
+            .map_err(|e| AssembleError::Crypto(e.to_string()))?;
         let c = commit(
             &inp.base_mint,
             m.seller_change_amt,
@@ -262,13 +232,31 @@ pub fn assemble_match(
         (ZERO32, ZERO32)
     };
 
-    // ── 5. Fee notes are PER-BATCH, not per-match (payload-only, NOT a
-    // circuit witness). The matcher's `flush_fee_notes` computes one base
-    // + one quote protocol fee note for the WHOLE batch; `assemble_batch`
-    // attaches them to the FIRST match's payload and leaves them zero on
-    // every other match. So a per-match payload carries none here.
-    let note_fee_base_commitment = ZERO32;
-    let note_fee_quote_commitment = ZERO32;
+    // ── 5. Per-match fee notes, atomically appended by this match's Tx D.
+    let fee_base_inner = match_fee_inner_hash(&m.note_seller, FEE_ROLE_BASE)
+        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+    let fee_quote_inner = match_fee_inner_hash(&m.note_buyer, FEE_ROLE_QUOTE)
+        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+    let note_fee_base_commitment = if m.seller_fee_amt == 0 {
+        ZERO32
+    } else {
+        commit(
+            &inp.base_mint,
+            m.seller_fee_amt,
+            &inp.protocol_owner_commitment,
+            &fee_base_inner,
+        )?
+    };
+    let note_fee_quote_commitment = if m.buyer_fee_amt == 0 {
+        ZERO32
+    } else {
+        commit(
+            &inp.quote_mint,
+            m.buyer_fee_amt,
+            &inp.protocol_owner_commitment,
+            &fee_quote_inner,
+        )?
+    };
 
     // ── 6. match_id → [u8; 16]: zero high… low LE in bytes [8,16).
     // Mirrors the TS `asU8a16` (DataView.setBigUint64(8, x, true)).
@@ -293,6 +281,7 @@ pub fn assemble_match(
         // C-08: the leaf's slot field is the batch INDEX, not `m.batch_slot`
         // (= now_slot). The circuit binds `batch_slot[i] === i`.
         batch_slot: inp.slot_index,
+        is_active: true,
         a_owner_commit: inp.buyer_opening.owner_commitment,
         b_owner_commit: inp.seller_opening.owner_commitment,
         a_amount,
@@ -304,16 +293,14 @@ pub fn assemble_match(
         e_inner,
         f_inner,
         clearing_price,
-        // Per-match witnesses carry NO fee note (zeroed). The batch-aggregated
-        // fee notes are stamped onto slot 0 by `assemble_batch` after the flush.
-        note_fee_base_commitment: [0u8; 32],
-        note_fee_quote_commitment: [0u8; 32],
+        price_remainder: price_remainder as u64,
+        note_fee_base_commitment,
+        note_fee_quote_commitment,
         fee_rate_bps: inp.fee_rate_bps,
         protocol_owner_commitment: inp.protocol_owner_commitment,
-        // Fee-note inner_hashes — MUST use the exact identifier recorded by
-        // the matcher when `flush_fee_notes` built the commitments.
-        fee_base_inner: derive_inner(inp.fee_identifier, FEE_ROLE_BASE),
-        fee_quote_inner: derive_inner(inp.fee_identifier, FEE_ROLE_QUOTE),
+        price_scale: inp.price_scale,
+        fee_base_inner,
+        fee_quote_inner,
     };
 
     let payload = MatchResultPayload {
@@ -332,8 +319,6 @@ pub fn assemble_match(
         // the note commitments bind them, so the on-chain settle ix carries no
         // plaintext amounts.
         //
-        // Per-match payloads carry no fee note; assemble_batch attaches the
-        // batch's base+quote fee notes to the FIRST match only.
         note_fee_base_commitment,
         note_fee_quote_commitment,
         buyer_relock_order_id: m.buyer_relock_order_id,
@@ -365,6 +350,7 @@ pub struct BatchAssemblyParams {
     /// Protocol fee rate (bps) — the circuit fee-floor public input
     /// (`VaultConfig.fee_rate_bps`).
     pub fee_rate_bps: u64,
+    pub price_scale: u64,
     /// Circuit instantiation N (production = 16) — the witness set is
     /// padded with dummy slots up to this.
     pub circuit_n: usize,
@@ -409,26 +395,6 @@ pub fn assemble_batch(
                 commitment: hex::encode(m.note_seller),
             })?;
 
-        // For a continuing side (relock_order_id set), the tick already
-        // built note_e/note_f from the consumed anchor and inserted the
-        // rotated opening keyed by the change-note commitment. Resolve the
-        // anchor's inner_hash from that opening so the witness reconstructs
-        // the exact same commitment the matcher emitted + the book rotated to.
-        let buyer_change_inner = if m.buyer_relock_order_id != RELOCK_ORDER_ID_NONE {
-            store
-                .get(&m.note_e_commitment)
-                .map(|o| o.opening.inner_hash)
-        } else {
-            None
-        };
-        let seller_change_inner = if m.seller_relock_order_id != RELOCK_ORDER_ID_NONE {
-            store
-                .get(&m.note_f_commitment)
-                .map(|o| o.opening.inner_hash)
-        } else {
-            None
-        };
-
         let (witness, mut payload) = assemble_match(MatchAssemblyInputs {
             match_pair: m,
             buyer_opening: &buyer.opening,
@@ -438,16 +404,11 @@ pub fn assemble_batch(
             base_mint: params.base_mint,
             quote_mint: params.quote_mint,
             protocol_owner_commitment: params.protocol_owner_commitment,
-            // CS-06: the matcher used output.batch_slot when it built the fee
-            // commitments. Copy that recorded identifier; a scheduler/RPC slot
-            // sampled here can tick forward and make the witness unprovable.
-            fee_identifier: output.batch_slot,
             // C-08: the leaf/payload batch_slot is this match's index in the
             // batch (0..N-1), which the circuit + on-chain settle both require.
             slot_index: idx as u64,
             fee_rate_bps: params.fee_rate_bps,
-            buyer_change_inner,
-            seller_change_inner,
+            price_scale: params.price_scale,
         })?;
 
         let buyer_lock = lock_inputs(m.note_buyer, &buyer);
@@ -473,25 +434,6 @@ pub fn assemble_batch(
             match_index: idx as u8,
         });
         witnesses.push(witness);
-    }
-
-    // Attach the per-batch protocol fee notes (base + quote), computed
-    // once by the matcher's `flush_fee_notes` over the whole batch, to the
-    // FIRST match's payload — every other match keeps [0;32]. A [0;32]
-    // here means the matcher had nothing to flush (zero fee rate, or no
-    // protocol owner configured, or the circuit breaker tripped). This is
-    // what mints the base-mint (seller-side) fee, which the per-match path
-    // charged but never credited. See partial_fill_and_fee_notes §2.4.
-    if let Some(first) = matches.first_mut() {
-        first.payload.note_fee_base_commitment = output.fee_buckets[0].flushed_commitment;
-        first.payload.note_fee_quote_commitment = output.fee_buckets[1].flushed_commitment;
-    }
-    // The leaf binds the fee notes (amount-privacy, P1b), so slot 0's WITNESS
-    // must carry the same commitments the circuit's slot-0 binding reproduces
-    // from the batch fee sums (kept in lockstep with the payload above).
-    if let Some(first) = witnesses.first_mut() {
-        first.note_fee_base_commitment = output.fee_buckets[0].flushed_commitment;
-        first.note_fee_quote_commitment = output.fee_buckets[1].flushed_commitment;
     }
 
     // Pad the witness set to the circuit's N with dummy slots.
@@ -646,15 +588,13 @@ mod tests {
             base_mint: base_mint(),
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
-            fee_identifier: 1234,
+            price_scale: 1,
             // Default to index 0 (single-match). The scenario's MatchPair
             // carries batch_slot=7 (a now_slot stand-in) on purpose, so tests
             // that assert on the leaf/payload batch_slot prove it tracks
             // slot_index, not m.batch_slot (see the C-08 regression test).
             slot_index: 0,
             fee_rate_bps: 0,
-            buyer_change_inner: None,
-            seller_change_inner: None,
         }
     }
 
@@ -668,8 +608,7 @@ mod tests {
         assert_eq!(w.note_f_commitment, [0u8; 32]);
         assert_eq!(w.e_inner, [0u8; 32]);
         assert_eq!(w.f_inner, [0u8; 32]);
-        // Per-match payloads never carry fee notes (they're per-batch,
-        // set by assemble_batch on the first match).
+        // This zero-fee match has canonical zero fee commitments.
         assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
         assert_eq!(p.note_fee_quote_commitment, [0u8; 32]);
         // clearing = quote/base. Amount-privacy (P3b): the clearing price lives
@@ -698,9 +637,10 @@ mod tests {
             "witness leaf batch_slot must be slot_index"
         );
         assert_eq!(p.batch_slot, 3, "payload batch_slot must be slot_index");
-        // The fee note derives from the matcher-recorded identifier, untouched
-        // by the per-match leaf slot index.
-        assert_eq!(w.fee_base_inner, derive_inner(1234, FEE_ROLE_BASE));
+        assert_eq!(
+            w.fee_base_inner,
+            match_fee_inner_hash(&m.note_seller, FEE_ROLE_BASE).unwrap()
+        );
     }
 
     #[test]
@@ -721,8 +661,7 @@ mod tests {
         let (w, p) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
 
         // note_c: buyer receives BASE, owner = buyer's note owner,
-        // inner_hash = derive_inner(match_id=42, TRADE_ROLE_BUYER).
-        let ci = derive_inner(42, TRADE_ROLE_BUYER);
+        let ci = match_output_inner_hash(&buyer.inner_hash, TRADE_ROLE_BUYER).unwrap();
         let expected_c =
             commitment_from_fields_v2(&base_mint(), 10, &buyer.owner_commitment, &ci).unwrap();
         assert_eq!(w.note_c_commitment, expected_c);
@@ -730,43 +669,34 @@ mod tests {
         assert_eq!(w.c_inner, ci);
 
         // note_d: seller receives QUOTE, owner = seller's note owner.
-        let di = derive_inner(42, TRADE_ROLE_SELLER);
+        let di = match_output_inner_hash(&seller.inner_hash, TRADE_ROLE_SELLER).unwrap();
         let expected_d =
             commitment_from_fields_v2(&quote_mint(), 1000, &seller.owner_commitment, &di).unwrap();
         assert_eq!(w.note_d_commitment, expected_d);
     }
 
     #[test]
-    fn with_change_derives_e_but_no_per_match_fee_note() {
+    fn with_change_derives_e_and_per_match_quote_fee_note() {
         // base=10, quote=1000, buyer keeps 150 change + pays 50 fee
         // (a_amount = 1000 + 150 + 50 = 1200); seller exact.
         let (m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
         let (w, p) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
 
-        let ei = derive_inner(42, CHANGE_ROLE_BUYER);
+        let ei = match_output_inner_hash(&buyer.inner_hash, CHANGE_ROLE_BUYER).unwrap();
         let expected_e =
             commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &ei).unwrap();
         assert_eq!(w.note_e_commitment, expected_e);
         assert_eq!(w.e_inner, ei);
         assert_eq!(w.buyer_change_amt, 150);
 
-        // The fee AMOUNT is still in the WITNESS (conservation), but the fee
-        // NOTE is per-batch now — assemble_match leaves both fee-note slots
-        // zero even when this match has a fee. assemble_batch attaches the
-        // batch's base+quote fee notes to the first match. (Amount-privacy
-        // P3b: the fee amount no longer rides the payload.)
+        // Fee notes are per-match and circuit-bound to the consumed input.
         assert_eq!(w.buyer_fee_amt, 50);
         assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
-        assert_eq!(p.note_fee_quote_commitment, [0u8; 32]);
+        assert_ne!(p.note_fee_quote_commitment, [0u8; 32]);
     }
 
     #[test]
-    fn randomized_matcher_change_outputs_equal_assembler_outputs() {
-        // N-07 regression: the pure matcher and settlement assembler must bind
-        // note_e/note_f to the SAME note-proven owner even when signed
-        // `user_commitment` metadata differs. A fixed seed makes all 256 cases
-        // reproducible while still covering varied prices, sizes, change, and
-        // owner identities.
+    fn randomized_assembler_outputs_use_consumed_openings() {
         let mut rng = StdRng::seed_from_u64(0x004e_5958_2d4e_3037);
 
         for case in 0u64..256 {
@@ -834,13 +764,13 @@ mod tests {
             let config = MatchConfig {
                 base_mint: base_mint(),
                 quote_mint: quote_mint(),
-                price_scale: 100_000_000,
                 tick_size: 1,
                 min_order_size: 0,
                 circuit_breaker_bps: 100_000,
                 batch_ms: 2_000,
                 fee_rate_bps: 0,
                 protocol_owner_commitment: [0u8; 32],
+                price_scale: 1,
             };
             let oracle = OracleSnapshot {
                 twap: price,
@@ -871,65 +801,36 @@ mod tests {
                 quote_mint: quote_mint(),
                 protocol_owner_commitment: [0u8; 32],
                 fee_rate_bps: 0,
-                fee_identifier: 1,
+                price_scale: 1,
                 slot_index: 0,
-                buyer_change_inner: None,
-                seller_change_inner: None,
             })
             .unwrap();
 
-            assert_eq!(
-                matched.note_e_commitment, witness.note_e_commitment,
-                "buyer change parity failed in case {case}"
-            );
-            assert_eq!(
-                matched.note_f_commitment, witness.note_f_commitment,
-                "seller change parity failed in case {case}"
-            );
             assert_eq!(payload.note_e_commitment, witness.note_e_commitment);
             assert_eq!(payload.note_f_commitment, witness.note_f_commitment);
         }
     }
 
     #[test]
-    fn relocking_buyer_change_uses_anchor_inner_not_derive_inner() {
-        // Continuation (Phase 6): when the buyer relocks, note_e's
-        // inner_hash MUST be the consumed anchor's inner_hash (so the
-        // client's pre-supplied nullifier matches), NOT derive_inner.
+    fn relocking_buyer_change_uses_consumed_input_inner() {
         let (mut m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
-        m.buyer_relock_order_id = [0xAB; 16]; // buyer relocks → continuation
-        let anchor_inner = fr_safe(0xC3);
+        m.buyer_relock_order_id = [0xAB; 16];
 
-        let mut inp = inputs(&m, &buyer, &seller);
-        inp.buyer_change_inner = Some(anchor_inner);
-        let (w, _) = assemble_match(inp).unwrap();
+        let (w, _) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
+        let derived = match_output_inner_hash(&buyer.inner_hash, CHANGE_ROLE_BUYER).unwrap();
 
         let expected_e =
-            commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &anchor_inner)
+            commitment_from_fields_v2(&quote_mint(), 150, &buyer.owner_commitment, &derived)
                 .unwrap();
         assert_eq!(w.note_e_commitment, expected_e);
-        assert_eq!(w.e_inner, anchor_inner, "must use the anchor inner_hash");
-        // And it must NOT equal the derive_inner value a non-relock fill uses.
-        let derive_e = commitment_from_fields_v2(
-            &quote_mint(),
-            150,
-            &buyer.owner_commitment,
-            &derive_inner(42, CHANGE_ROLE_BUYER),
-        )
-        .unwrap();
-        assert_ne!(w.note_e_commitment, derive_e);
+        assert_eq!(w.e_inner, derived);
     }
 
     #[test]
-    fn relocking_buyer_without_anchor_inner_errors() {
-        // A relocking side with no supplied anchor inner_hash is a wiring
-        // bug (the tick must have consumed + inserted the opening). Fail
-        // loud rather than silently fall back to an unmatchable derive_inner.
+    fn relocking_buyer_needs_no_anchor() {
         let (mut m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
         m.buyer_relock_order_id = [0xAB; 16];
-        let inp = inputs(&m, &buyer, &seller); // buyer_change_inner = None
-        let err = assemble_match(inp).unwrap_err();
-        assert!(matches!(err, AssembleError::Conservation(_)));
+        assert!(assemble_match(inputs(&m, &buyer, &seller)).is_ok());
     }
 
     #[test]
@@ -966,8 +867,9 @@ mod tests {
     }
 
     #[test]
-    fn non_integer_clearing_price_is_rejected() {
-        // quote not divisible by base → no exact clearing price.
+    fn inconsistent_scaled_floor_price_is_rejected() {
+        // Changing base without changing quote/price breaks the governed
+        // floor equation (scale=1 in this fixture).
         let (mut m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
         m.base_amt = 7; // 1000 / 7 is not exact
         m.buyer_note_value = 1000;
@@ -1020,6 +922,7 @@ mod tests {
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
             fee_rate_bps: 0,
+            price_scale: 1,
             circuit_n: 16,
         }
     }
@@ -1056,21 +959,16 @@ mod tests {
     }
 
     #[test]
-    fn assemble_batch_uses_the_matcher_recorded_fee_identifier() {
-        // CS-06 race regression: commitments were created at S, while the old
-        // scheduler could sample S+1 before assembly. Batch assembly no longer
-        // accepts a caller-supplied fee identifier, so both witness inners must
-        // come from output.batch_slot (S).
+    fn assemble_batch_derives_per_match_fee_from_consumed_commitments() {
         let recorded = 476_000_000u64;
-        let would_be_resampled = recorded + 1;
         let protocol_owner = fr_safe(0x07);
         let (m, buyer, seller) = scenario(1_000, 100_000, 0, 0, 300, 3);
         let mut store = OpeningStore::new();
         store.insert(m.note_buyer, order_rec(buyer, [0x01; 16]));
         store.insert(m.note_seller, order_rec(seller, [0x02; 16]));
 
-        let base_inner = derive_inner(recorded, FEE_ROLE_BASE);
-        let quote_inner = derive_inner(recorded, FEE_ROLE_QUOTE);
+        let base_inner = match_fee_inner_hash(&m.note_seller, FEE_ROLE_BASE).unwrap();
+        let quote_inner = match_fee_inner_hash(&m.note_buyer, FEE_ROLE_QUOTE).unwrap();
         let base_fee_commitment =
             commitment_from_fields_v2(&base_mint(), 3, &protocol_owner, &base_inner).unwrap();
         let quote_fee_commitment =
@@ -1078,10 +976,6 @@ mod tests {
 
         let mut output = RunBatchOutput::empty(recorded, 100, 0);
         output.matches = vec![m];
-        output.fee_buckets[0].accumulated_fees = 3;
-        output.fee_buckets[0].flushed_commitment = base_fee_commitment;
-        output.fee_buckets[1].accumulated_fees = 300;
-        output.fee_buckets[1].flushed_commitment = quote_fee_commitment;
 
         let mut params = batch_params();
         params.fee_rate_bps = 30;
@@ -1091,14 +985,6 @@ mod tests {
 
         assert_eq!(witness.fee_base_inner, base_inner);
         assert_eq!(witness.fee_quote_inner, quote_inner);
-        assert_ne!(
-            witness.fee_base_inner,
-            derive_inner(would_be_resampled, FEE_ROLE_BASE)
-        );
-        assert_ne!(
-            witness.fee_quote_inner,
-            derive_inner(would_be_resampled, FEE_ROLE_QUOTE)
-        );
         assert_eq!(witness.note_fee_base_commitment, base_fee_commitment);
         assert_eq!(witness.note_fee_quote_commitment, quote_fee_commitment);
         assert_eq!(payload.note_fee_base_commitment, base_fee_commitment);

@@ -161,6 +161,10 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 30)]
     pub fee_rate_bps: u16,
 
+    /// Governed market fixed-point denominator. Must equal MarketConfig.
+    #[arg(long, default_value_t = 100_000_000)]
+    pub price_scale: u64,
+
     /// Drive a REAL on-chain settle (deposit→prove→order→settle) instead of the
     /// synthetic load. Requires building with `--features real-settle-chain` +
     /// `--rpc-url`/`--admin-keypair`. A crossing pair against the live CVM.

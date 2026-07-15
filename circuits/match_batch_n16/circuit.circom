@@ -2,7 +2,6 @@ pragma circom 2.2.2;
 
 include "../templates/match_batch.circom";
 
-// N=16 — production batch size. Matches `BATCH_RESULTS_CAPACITY` in
-// programs/matching_engine/src/state/batch_results.rs (the on-chain
-// batch buffer is sized for 16 matches per `run_batch` call).
-component main { public [merkle_root, fee_rate_bps, protocol_owner_commitment] } = MatchBatch(16);
+// N=16 — production batch size. The in-TEE matcher pages at most 16 matches
+// into one proof/marker batch.
+component main { public [merkle_root, fee_rate_bps, protocol_owner_commitment, base_mint_lo, base_mint_hi, quote_mint_lo, quote_mint_hi, price_scale] } = MatchBatch(16);

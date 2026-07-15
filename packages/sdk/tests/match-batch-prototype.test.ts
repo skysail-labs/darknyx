@@ -23,6 +23,11 @@ import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 
 import { noteCommitmentV2 } from "../src/utxo/note.js";
+import { bn254ToBE32 } from "../src/keys/key-generators.js";
+import {
+  deriveMatchFeeInner,
+  deriveMatchOutputInner,
+} from "../src/utxo/match-output.js";
 import {
   proveMatchBatch,
   computeBatchLeaf,
@@ -47,6 +52,9 @@ function artefactsReady(N: BatchSize): boolean {
   return existsSync(wasm) && existsSync(zkey) && existsSync(vk);
 }
 
+const bytesToBigIntBE = (bytes: Uint8Array): bigint =>
+  bytes.reduce((acc, byte) => (acc << 8n) | BigInt(byte), 0n);
+
 /**
  * Build a fully-valid match-slot witness. Note commitments are computed
  * from the witness so the per-slot VALID_CREATE openings hold by
@@ -70,8 +78,12 @@ async function buildSlot(args: {
   /** Circuit fee-floor PUBLIC input (bps). Defaults to 0 (floor is a
    *  no-op). Batch-level: every slot must carry the same value. */
   feeRateBps?: bigint;
+  priceScale?: bigint;
 }): Promise<MatchSlotWitness> {
-  const quoteAmount = args.baseAmount * args.clearingPrice;
+  const priceScale = args.priceScale ?? 1n;
+  const numerator = args.baseAmount * args.clearingPrice;
+  const quoteAmount = numerator / priceScale;
+  const priceRemainder = numerator % priceScale;
   const aAmount = quoteAmount + args.buyerChange + args.buyerFee;
   const bAmount = args.baseAmount + args.sellerChange + args.sellerFee;
 
@@ -79,10 +91,10 @@ async function buildSlot(args: {
   const I = (idx: number) => BigInt(0xa0a0 + args.slotIdx * 100 + idx);
   const aInner = I(1);
   const bInner = I(2);
-  const cInner = I(3);
-  const dInner = I(4);
-  const eInner = I(5);
-  const fInner = I(6);
+  const cInner = bytesToBigIntBE(await deriveMatchOutputInner(bn254ToBE32(aInner), 0xc1));
+  const dInner = bytesToBigIntBE(await deriveMatchOutputInner(bn254ToBE32(bInner), 0xd1));
+  const eInner = bytesToBigIntBE(await deriveMatchOutputInner(bn254ToBE32(aInner), 0xb1));
+  const fInner = bytesToBigIntBE(await deriveMatchOutputInner(bn254ToBE32(bInner), 0x5e));
 
   const noteA = await noteCommitmentV2({
     tokenMint: args.quoteMint,
@@ -144,6 +156,7 @@ async function buildSlot(args: {
     buyerFeeAmt: args.buyerFee,
     sellerFeeAmt: args.sellerFee,
     batchSlot: args.batchSlot,
+    isActive: true,
     aOwnerCommit: args.buyerOwnerCommit,
     bOwnerCommit: args.sellerOwnerCommit,
     aAmount,
@@ -155,23 +168,20 @@ async function buildSlot(args: {
     eInner,
     fInner,
     clearingPrice: args.clearingPrice,
-    // Fee notes default to none; `bindFeeNotes` sets slot 0's aggregate for
-    // fee-bearing batches.
+    priceRemainder,
+    // Fee notes default to none; `bindFeeNotes` fills each fee-bearing match.
     noteFeeBaseCommitment: new Uint8Array(32),
     noteFeeQuoteCommitment: new Uint8Array(32),
     feeRateBps: args.feeRateBps ?? 0n,
     protocolOwnerCommitment: 0n,
+    priceScale,
     feeBaseInner: 0n,
     feeQuoteInner: 0n,
   };
 }
 
 /**
- * Bind the batch-aggregated protocol fee notes onto slot 0 (matching the
- * circuit's slot-0 fee-note binding): slot0.noteFeeQuote = Poseidon6 over the
- * SUM of buyer fees, slot0.noteFeeBase = sum of seller fees; all slots carry
- * the same protocol_owner + fee inners. Without this a fee-bearing batch won't
- * satisfy the in-circuit binding.
+ * Bind each match's protocol fee notes to its consumed input commitments.
  */
 async function bindFeeNotes(
   slots: MatchSlotWitness[],
@@ -179,38 +189,32 @@ async function bindFeeNotes(
     quoteMint: Uint8Array;
     baseMint: Uint8Array;
     protocolOwner: bigint;
-    feeBaseInner: bigint;
-    feeQuoteInner: bigint;
   },
 ): Promise<void> {
-  const totalBuyerFee = slots.reduce((a, s) => a + s.buyerFeeAmt, 0n);
-  const totalSellerFee = slots.reduce((a, s) => a + s.sellerFeeAmt, 0n);
   const zero = new Uint8Array(32);
-  const feeQuote =
-    totalBuyerFee === 0n
-      ? zero
-      : await noteCommitmentV2({
-          tokenMint: args.quoteMint,
-          amount: totalBuyerFee,
-          ownerCommitment: args.protocolOwner,
-          innerHash: args.feeQuoteInner,
-        });
-  const feeBase =
-    totalSellerFee === 0n
-      ? zero
-      : await noteCommitmentV2({
-          tokenMint: args.baseMint,
-          amount: totalSellerFee,
-          ownerCommitment: args.protocolOwner,
-          innerHash: args.feeBaseInner,
-        });
-  slots.forEach((s, i) => {
+  for (const s of slots) {
     s.protocolOwnerCommitment = args.protocolOwner;
-    s.feeBaseInner = args.feeBaseInner;
-    s.feeQuoteInner = args.feeQuoteInner;
-    s.noteFeeBaseCommitment = i === 0 ? feeBase : zero;
-    s.noteFeeQuoteCommitment = i === 0 ? feeQuote : zero;
-  });
+    s.feeBaseInner = bytesToBigIntBE(await deriveMatchFeeInner(s.noteBcommitment, 0xfb));
+    s.feeQuoteInner = bytesToBigIntBE(await deriveMatchFeeInner(s.noteAcommitment, 0xfc));
+    s.noteFeeBaseCommitment =
+      s.sellerFeeAmt === 0n
+        ? zero
+        : await noteCommitmentV2({
+            tokenMint: args.baseMint,
+            amount: s.sellerFeeAmt,
+            ownerCommitment: args.protocolOwner,
+            innerHash: s.feeBaseInner,
+          });
+    s.noteFeeQuoteCommitment =
+      s.buyerFeeAmt === 0n
+        ? zero
+        : await noteCommitmentV2({
+            tokenMint: args.quoteMint,
+            amount: s.buyerFeeAmt,
+            ownerCommitment: args.protocolOwner,
+            innerHash: s.feeQuoteInner,
+          });
+  }
 }
 
 function rand32(seed: number): Uint8Array {
@@ -264,7 +268,7 @@ for (const N of [2, 4, 16] as const) {
       const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots });
 
       // [merkle_root, fee_rate_bps].
-      expect(result.publicInputsBE.length).toBe(3);
+      expect(result.publicInputsBE.length).toBe(8);
       expect(result.publicInputsBE[0]).toEqual(result.merkleRoot);
 
       // TS-side leaf + root reproduce the circuit's internal computation.
@@ -331,19 +335,16 @@ const ready2 = artefactsReady(2);
         slotIdx: 1,
       }),
     ];
-    // slot 1 charges a buyer fee → the batch mints an aggregate quote fee note
-    // on slot 0; bind it so the in-circuit fee-note constraint holds.
+    // Slot 1 charges a buyer fee; bind its per-match fee note.
     await bindFeeNotes(slots, {
       quoteMint,
       baseMint,
       protocolOwner: 0x07070707n,
-      feeBaseInner: 0xb1b1n,
-      feeQuoteInner: 0x9e9en,
     });
 
     const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots });
 
-    expect(result.publicInputsBE.length).toBe(3);
+    expect(result.publicInputsBE.length).toBe(8);
     expect(result.leaves[0]).not.toEqual(result.leaves[1]); // distinct shapes → distinct leaves.
 
     const tsRoot = await computeBatchRoot(result.leaves);
@@ -387,8 +388,6 @@ const ready2 = artefactsReady(2);
       quoteMint,
       baseMint,
       protocolOwner: 0x07070707n,
-      feeBaseInner: 0xb1b1n,
-      feeQuoteInner: 0x9e9en,
     });
     return slots;
   }
@@ -399,7 +398,7 @@ const ready2 = artefactsReady(2);
       slots: await feeBatch(3n),
     });
     // fee_rate_bps is the 2nd public input (value 30).
-    expect(result.publicInputsBE.length).toBe(3);
+    expect(result.publicInputsBE.length).toBe(8);
     const fee = result.publicInputsBE[1];
     expect(fee[31]).toBe(30);
   }, 60_000);
@@ -437,7 +436,7 @@ const ready2 = artefactsReady(2);
 
     await expect(
       proveMatchBatch({ repoRoot: REPO_ROOT, slots }),
-    ).rejects.toThrow(/quote .* !== base .* \* price/);
+    ).rejects.toThrow(/scaled floor equation/);
   }, 30_000);
 
   it("[bad_conservation] prover precondition rejects a_amount != quote + change + fee", async () => {
@@ -465,5 +464,78 @@ const ready2 = artefactsReady(2);
     await expect(
       proveMatchBatch({ repoRoot: REPO_ROOT, slots }),
     ).rejects.toThrow();
+  }, 60_000);
+
+  it("[CS-03] rejects a user output built with arbitrary inner randomness", async () => {
+    const slots = await defaultBatch(2);
+    slots[0].noteCcommitment = await noteCommitmentV2({
+      tokenMint: slots[0].baseMint,
+      amount: slots[0].baseAmount,
+      ownerCommitment: slots[0].aOwnerCommit,
+      innerHash: 0xdeadbeefn,
+    });
+    slots[0].cInner = 0xdeadbeefn; // ignored: no such circuit witness in v3.
+    await expect(
+      proveMatchBatch({ repoRoot: REPO_ROOT, slots }),
+    ).rejects.toThrow();
+  }, 60_000);
+
+  it("[CS-02] rejects a slot whose notes use a different market mint", async () => {
+    const slots = await defaultBatch(2);
+    const otherBase = rand32(0x41);
+    slots[1] = await buildSlot({
+      quoteMint: slots[0].quoteMint,
+      baseMint: otherBase,
+      buyerOwnerCommit: slots[1].aOwnerCommit,
+      sellerOwnerCommit: slots[1].bOwnerCommit,
+      baseAmount: 15n,
+      clearingPrice: 100n,
+      buyerChange: 0n,
+      sellerChange: 0n,
+      buyerFee: 0n,
+      sellerFee: 0n,
+      batchSlot: 1n,
+      slotIdx: 1,
+    });
+    await expect(
+      proveMatchBatch({ repoRoot: REPO_ROOT, slots }),
+    ).rejects.toThrow();
+  }, 60_000);
+
+  it("[CS-01] rejects a phantom inactive slot carrying commitments or fees", async () => {
+    const slots = await defaultBatch(2);
+    slots[1].isActive = false;
+    await expect(
+      proveMatchBatch({ repoRoot: REPO_ROOT, slots }),
+    ).rejects.toThrow();
+  }, 60_000);
+
+  it("[scaled_floor] accepts a non-zero constrained remainder", async () => {
+    const quoteMint = rand32(0x51);
+    const baseMint = rand32(0x61);
+    const slots = await Promise.all(
+      [0, 1].map((slotIdx) =>
+        buildSlot({
+          quoteMint,
+          baseMint,
+          buyerOwnerCommit: 11n,
+          sellerOwnerCommit: 12n,
+          baseAmount: 7n,
+          clearingPrice: 10n,
+          priceScale: 3n,
+          buyerChange: 0n,
+          sellerChange: 0n,
+          buyerFee: 0n,
+          sellerFee: 0n,
+          batchSlot: BigInt(slotIdx),
+          slotIdx,
+        }),
+      ),
+    );
+    expect(slots[0].quoteAmount).toBe(23n);
+    expect(slots[0].priceRemainder).toBe(1n);
+    await expect(
+      proveMatchBatch({ repoRoot: REPO_ROOT, slots }),
+    ).resolves.toBeDefined();
   }, 60_000);
 });

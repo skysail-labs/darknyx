@@ -759,7 +759,7 @@ by the in-enclave matcher (trusted code), NOT by
 `VALID_MATCH_BATCH`: the batch proof binds output-note
 construction + per-leg conservation + range + fee floor, and its
 only in-circuit price constraint is the definitional
-`quote == base·price` — nothing ties the price to a limit or an
+`quote = floor(base·price/price_scale)` — nothing ties the price to a limit or an
 oracle band. So conservation holding does **not** bound the
 price. A compromised TEE colluding with a counterparty leg (its
 own note as `note_b`) can clear a victim's order outside its
@@ -971,9 +971,9 @@ TEE crash, which is the safe default.
 > backed by `prover::ark_prover::ArkMatchBatchProver` (ark-circom), with
 > optional `rapidsnark` + `icicle` backends selectable via `NYX_TEE_PROVER`.
 > There is no `NotYetWiredProver` stub anymore. The leaf is a single
-> commitment-only `Poseidon10` (not the two-stage hash this plan described),
-> and the verifier takes 3 public inputs (`[merkle_root, fee_rate_bps,
-> protocol_owner_commitment]`), not one. The plan text below is kept as
+> commitment-only `Poseidon11` with an active-slot bit (not the two-stage hash
+> this plan described), and the verifier takes 8 public inputs (`[root, fee,
+> owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]`), not one. The plan text below is kept as
 > design lineage.
 
 The prover is built in two stages so the byte-equality-critical
@@ -989,18 +989,15 @@ Pure-Rust port of the byte-critical pieces of
 - `prover/witness.rs` — `MatchSlotWitness` type + `dummy_slot` +
   `pad_batch`. All Poseidon goes through `darkpool-crypto` for
   parity.
-- `prover/leaf.rs` — single commitment-only Poseidon10 leaf hash +
+- `prover/leaf.rs` — single commitment-only Poseidon11 leaf hash +
   Merkle root + inclusion path. Pinned regression hex for the
   dummy-slot leaf. (Originally a two-stage Poseidon12→Poseidon9 hash;
-  collapsed to one Poseidon10 by amount-privacy P1b.)
+  collapsed to one Poseidon11 by amount-privacy P1b and active-slot binding.)
 - `prover/constraints.rs` — conservation validators (quote = base
   × price; a/b-amount sums) surfacing named errors before the
   circuit ever sees a bad witness.
 - `prover/inputs.rs` — the snarkjs-format public-input vector.
-  (Now 3 elements: `[merkle_root, fee_rate_bps,
-  protocol_owner_commitment]` — was a single element, the batch
-  Merkle root, before amount-privacy P1b added the fee floor +
-  fee-note binding.)
+  (Now 8 elements: root, fee/owner config, mint halves, and price scale.)
 - `prover/groth16.rs` — the `Prover` trait (the real impl is
   `prover::ark_prover::ArkMatchBatchProver`).
 

@@ -56,6 +56,7 @@ export * from "./fills/history.js";
 export * from "./fills/chain-history.js";
 export * from "./fills/recover.js";
 export * from "./utxo/change-note.js";
+export * from "./utxo/match-output.js";
 export * from "./fills/ws-client.js";
 export * from "./settlement/settle-builder.js";
 export * from "./settlement/settlement-watcher.js";

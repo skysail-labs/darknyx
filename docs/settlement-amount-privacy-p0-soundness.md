@@ -4,8 +4,10 @@
 > analysis doc, accurate as of 2026-06-20. The circuit now range-checks all six
 > previously-unbound terms (`buyer/seller_change_amt`, `buyer/seller_fee_amt`,
 > `a_amount`, `b_amount`), binds the two protocol fee notes in-circuit (closing the §7
-> over-mint gap), uses a commitment-only `Poseidon10` leaf, and exposes 3 public inputs
-> `[merkle_root, fee_rate_bps, protocol_owner_commitment]`. "P1a in progress" / future
+> over-mint gap), uses a commitment-only `Poseidon11` leaf with an activation bit,
+> derives output/fee inners in-circuit, and exposes 8 public inputs
+> `[root, fee_rate, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]`.
+> "P1a in progress" / future
 > tense below is lineage only — see `match_batch.circom` + `CRYPTOGRAPHY.md` for the
 > as-built state. (The external circuit audit remains the one open pre-mainnet item.)
 >

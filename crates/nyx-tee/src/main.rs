@@ -279,12 +279,14 @@ async fn main() -> Result<()> {
     // driver feeds the circuit fee-floor public input — must equal what the
     // matcher charges.
     let settle_fee_rate_bps = match_config.fee_rate_bps as u64;
+    let settle_price_scale = match_config.price_scale;
     // Also for the /instruments metadata (captured before the move).
     let market_tick_size = match_config.tick_size;
     let market_min_order_size = match_config.min_order_size;
     let matcher_state = Arc::new(RwLock::new(
         MatcherState::new()
             .with_market(match_config.base_mint, match_config.quote_mint)
+            .with_price_scale(match_config.price_scale)
             .with_fee_rate_bps(match_config.fee_rate_bps),
     ));
     let oracle = OracleCache::new();
@@ -373,6 +375,7 @@ async fn main() -> Result<()> {
                 settle_quote_mint,
                 settle_protocol_owner,
                 settle_fee_rate_bps,
+                settle_price_scale,
             )
             .map(|d| {
                 tracing::info!(
@@ -653,6 +656,7 @@ fn build_settle_driver(
     quote_mint: [u8; 32],
     protocol_owner_commitment: [u8; 32],
     fee_rate_bps: u64,
+    price_scale: u64,
 ) -> anyhow::Result<SettleDriver> {
     let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
     let circuits_dir =
@@ -802,6 +806,7 @@ fn build_settle_driver(
             quote_mint,
             protocol_owner_commitment,
             fee_rate_bps,
+            price_scale,
             circuit_n: PRODUCTION_BATCH_N,
         },
     })

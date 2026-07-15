@@ -18,10 +18,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/circuits/build"
-PTAU="$ROOT/scripts/ptau/powersOfTau28_hez_final_16.ptau"
+PTAU16="$ROOT/scripts/ptau/powersOfTau28_hez_final_16.ptau"
+PTAU18="$ROOT/scripts/ptau/powersOfTau28_hez_final_18.ptau"
 SNARKJS="$ROOT/node_modules/.bin/snarkjs"
 
-if [ ! -f "$PTAU" ]; then
+if [ ! -f "$PTAU16" ] || [ ! -f "$PTAU18" ]; then
     echo "[build] ptau not found; running download-ptau.sh"
     bash "$ROOT/scripts/download-ptau.sh"
 fi
@@ -33,6 +34,8 @@ fi
 
 build_circuit() {
     local name="$1"
+    local ptau="${2:-$PTAU16}"
+    local emit_rust_vk="${3:-yes}"
     local src="$ROOT/circuits/$name/circuit.circom"
     local out="$BUILD_DIR/$name"
 
@@ -51,7 +54,7 @@ build_circuit() {
     local r1cs="$out/circuit.r1cs"
 
     echo "[$name] groth16 setup"
-    "$SNARKJS" groth16 setup "$r1cs" "$PTAU" "$out/circuit_0000.zkey"
+    "$SNARKJS" groth16 setup "$r1cs" "$ptau" "$out/circuit_0000.zkey"
 
     # Deterministic dev contribution via `zkey beacon`. Unlike `zkey
     # contribute -e=...`, which mixes user entropy with crypto.randomBytes()
@@ -74,13 +77,15 @@ build_circuit() {
     echo "[$name] export verification key"
     "$SNARKJS" zkey export verificationkey "$out/circuit_final.zkey" "$out/verification_key.json"
 
-    echo "[$name] generate Rust verifier constants"
-    local const_prefix
-    const_prefix="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
-    node "$ROOT/scripts/parse-vk-to-rust.js" \
-        "$out/verification_key.json" \
-        "$ROOT/programs/vault/src/zk/vk_${name}.rs" \
-        "$const_prefix"
+    if [ "$emit_rust_vk" = "yes" ]; then
+        echo "[$name] generate Rust verifier constants"
+        local const_prefix
+        const_prefix="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
+        node "$ROOT/scripts/parse-vk-to-rust.js" \
+            "$out/verification_key.json" \
+            "$ROOT/programs/vault/src/zk/vk_${name}.rs" \
+            "$const_prefix"
+    fi
 
     # Clean intermediate artifact.
     rm -f "$out/circuit_0000.zkey"
@@ -94,11 +99,11 @@ build_circuit valid_input
 # In-pool note merge (K=2/4). Both fit pot16 (~26k / ~50k constraints).
 build_circuit valid_merge_k2
 build_circuit valid_merge_k4
-# v3.1 valid_create + valid_price circuits were removed in Phase 1c-hard.
-# They've been subsumed by the v3.5 batched-validity circuit (see
-# circuits/match_batch_n*). The N=16 instantiation requires pot18 and is
-# built/setup manually for now (no entry here); add it to this list once
-# the build script learns to pick the right PTAU per-circuit.
+# VALID_MATCH_BATCH v3. N=2/4 are host-test circuits and do not have on-chain
+# Rust verifier modules. N=16 is the deployed verifier and requires pot18.
+build_circuit match_batch_n2 "$PTAU16" no
+build_circuit match_batch_n4 "$PTAU16" no
+build_circuit match_batch_n16 "$PTAU18" yes
 
 echo ""
 echo "All circuits built. Artifacts in $BUILD_DIR/"

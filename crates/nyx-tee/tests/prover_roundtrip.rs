@@ -86,12 +86,16 @@ async fn prove_and_verify_n2_dummy_batch() {
     // 1. Prove (raw ark proof + public inputs).
     let (proof, public) = prover.prove_ark(&slots).expect("prove n2 dummy batch");
 
-    // 2. The public input vector is [merkle_root, fee_rate_bps,
-    //    protocol_owner_commitment] (P1b-2: in-circuit fee floor +
-    //    fee-note binding added fee_rate_bps + protocol_owner as the 2nd/3rd
-    //    public inputs). The dummy slots carry fee_rate_bps=0 / owner=0.
-    assert_eq!(public.public_inputs_be.len(), 3);
+    // 2. The v3 public vector has eight elements. Canonical dummy slots carry
+    // zero fee/owner/mints and price_scale=1.
+    assert_eq!(public.public_inputs_be.len(), 8);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
+    assert_eq!(public.public_inputs_be[1], [0u8; 32]);
+    assert_eq!(public.public_inputs_be[2], [0u8; 32]);
+    assert!(public.public_inputs_be[3..7]
+        .iter()
+        .all(|value| *value == [0u8; 32]));
+    assert_eq!(public.public_inputs_be[7][31], 1);
 
     // 3. Verify the proof against the zkey's own VK, in-ark. This
     //    is the load-bearing assertion: if input pushing, witness

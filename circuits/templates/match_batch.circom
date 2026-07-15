@@ -8,22 +8,16 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 // match_batch — parameterised batched validity templates
 // ============================================================================
 //
-// Shared template body for the v3.5 batched validity proofs. Per-N main
+// Shared template body for the VALID_MATCH_BATCH v3 proofs. Per-N main
 // files (`match_batch_n2/`, `match_batch_n4/`, `match_batch_n16/`) just
 // instantiate `MatchBatch(N)` at their chosen size. The same MatchSlot
 // body services every batch size — only the Merkle tree depth changes.
 //
-// Constraint budget (measured on the N=16 instantiation —
-// `circuits/match_batch_n16/`):
-//   - VALID_CREATE constraints (6 Poseidon6 note hashes + IsZero
-//     selectors + per-leg conservation)             ~2,100
-//   - VALID_PRICE  constraints (3 Num2Bits(64), one mul check)
-//                                                   ~  200
-//   - Leaf hash    (single Poseidon(10), commitment-only — see the
-//     leaf-hash section below + CRYPTOGRAPHY.md)     ~  600
-//   ──────────────────────────────────────────────────────
-//   Per slot total (dominated by VALID_PRICE 64-bit decomp) ~ 10 k
-//   N=16 batch + Merkle (15 internal nodes × Poseidon3) ≈ 163 k
+// Constraint budget (measured on the N=16 instantiation):
+//   100,969 nonlinear + 131,837 linear = 232,806 constraints,
+//   with 8 public inputs and 232,284 wires. Output-inner derivation,
+//   per-match fee notes, activation bits, and scaled-floor pricing are
+//   included in that total.
 //
 // Setup requirements by N:
 //   - N=2  / N=4   → pot16 (`powersOfTau28_hez_final_16.ptau`,
@@ -31,16 +25,17 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 //                    `match-batch-prototype.test.ts` only.
 //   - N=16         → **pot18 required** (`powersOfTau28_hez_final_18.ptau`,
 //                    ~288 MB, 2^18 cap) — total constraints
-//                    (162,947) exceed the pot16 ceiling.
+//                    (232,806) exceed the pot16 ceiling.
 //                    `scripts/download-ptau.sh` fetches both files
 //                    automatically; the build script picks the right
 //                    one per circuit instantiation.
 //
-// Leaf-hash arity (single Poseidon10, commitment-only — amount-privacy P1b):
+// Leaf-hash arity (single Poseidon11, commitment-only — amount-privacy P1b):
 //   The on-chain Poseidon implementation is `light-poseidon`, which
 //   caps Poseidon arity at 12 inputs (its `MAX_X5_LEN = 13` limit).
 //   The leaf binds only the 6 note commitments + 2 fee-note commitments
-//   + batch_slot + a domain tag = 10 inputs ≤ 12, so a SINGLE Poseidon(10)
+//   + active bit + batch_slot + a domain tag = 11 inputs ≤ 12, so a SINGLE
+//   Poseidon(11)
 //   fits — no two-stage split needed. The note commitments are each a
 //   Poseidon6 of (mint, amount, owner, inner), so they bind the
 //   amounts/mints/price transitively; the leaf no longer hashes the
@@ -52,7 +47,8 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 //
 // Why the plaintext (clearing_price, amounts) are not in the leaf:
 //   They're proven in-circuit (conservation + range checks + the headline
-//   `quote === base*price`) and bound inside the note commitments, so the
+//   `base*price = quote*scale + remainder`, `remainder < scale`) and bound
+//   inside the note commitments, so the
 //   leaf doesn't need them and the on-chain handler can recompute it from
 //   the amount-free payload.
 //
@@ -61,7 +57,9 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 // on-chain leaf walker in
 // `programs/vault/src/instructions/tee_forced_settle_batched.rs`):
 //   DOMAIN_NOTE       =  2   (note commitment Poseidon6 v2 — inner_hash)
-//   DOMAIN_LEAF_V2    = 23   (single Poseidon(10) commitment-only leaf)
+//   DOMAIN_LEAF_V2    = 23   (single Poseidon(11) commitment-only leaf)
+//   DOMAIN_OUTPUT_INNER = 24 (output inner from consumed input inner + role)
+//   DOMAIN_FEE_INNER    = 25 (fee inner from consumed input commitment + role)
 //   DOMAIN_BATCH_ROOT = 22   (Merkle internal node, Poseidon(3))
 //   (DOMAIN_LEAF_INNER=20 / DOMAIN_LEAF_TOP=21 = the retired two-stage leaf.)
 
@@ -82,12 +80,14 @@ template MatchSlot() {
     signal input note_d_commitment;
     signal input note_e_commitment;
     signal input note_f_commitment;
-    // Protocol fee notes (amount-privacy, P1b). Per-slot inputs but non-zero
-    // only on the batch's flush slot (slot 0); bound to the batch fee sums at
-    // the MatchBatch level. Hashed into the leaf so the on-chain settle's
-    // append of these commitments is proof-backed.
+    // Per-match protocol fee notes (amount-privacy, P1b). Each active slot
+    // derives them from that match's consumed commitments. A zero fee has a
+    // canonical zero commitment. Hashed into the leaf so Tx D's atomic append
+    // is proof-backed.
     signal input note_fee_base_commitment;
     signal input note_fee_quote_commitment;
+    // Market identity is fanned in from the MatchBatch PUBLIC inputs. There
+    // are no prover-selected per-slot mint signals in v3.
     signal input quote_mint_lo;
     signal input quote_mint_hi;
     signal input base_mint_lo;
@@ -104,7 +104,12 @@ template MatchSlot() {
     // longer binds them (amount-privacy, P1b) — the per-slot conservation +
     // range constraints prove them, and the note commitments bind them.
     signal input clearing_price;
+    // `base * price = quote * scale + remainder`, 0 <= remainder < scale.
+    signal input price_remainder;
     signal input batch_slot;
+    // Private activation bit, hashed into the leaf. Tx D always recomputes a
+    // leaf with active=1, so canonical inactive padding can never be settled.
+    signal input is_active;
     // Protocol fee rate (basis points), a MatchBatch-level PUBLIC input fanned
     // to every slot, bound on-chain to VaultConfig.fee_rate_bps. Drives the
     // in-circuit fee floor below.
@@ -117,10 +122,8 @@ template MatchSlot() {
     signal input b_amount;
     signal input a_inner;
     signal input b_inner;
-    signal input c_inner;
-    signal input d_inner;
-    signal input e_inner;
-    signal input f_inner;
+    signal input price_scale;
+    signal input protocol_owner_commitment;
 
     // ============================================================
     // OUTPUT: leaf hash binding all per-slot fields the on-chain
@@ -141,7 +144,7 @@ template MatchSlot() {
     hashA.inputs[3] <== a_amount;
     hashA.inputs[4] <== a_owner_commit;
     hashA.inputs[5] <== a_inner;
-    note_a_commitment === hashA.out;
+    is_active * (note_a_commitment - hashA.out) === 0;
 
     component hashB = Poseidon(6);
     hashB.inputs[0] <== 2;
@@ -150,10 +153,30 @@ template MatchSlot() {
     hashB.inputs[3] <== b_amount;
     hashB.inputs[4] <== b_owner_commit;
     hashB.inputs[5] <== b_inner;
-    note_b_commitment === hashB.out;
+    is_active * (note_b_commitment - hashB.out) === 0;
 
-    a_amount === quote_amount + buyer_change_amt + buyer_fee_amt;
-    b_amount === base_amount + seller_change_amt + seller_fee_amt;
+    is_active * (a_amount - quote_amount - buyer_change_amt - buyer_fee_amt) === 0;
+    is_active * (b_amount - base_amount - seller_change_amt - seller_fee_amt) === 0;
+
+    // User output inners are no longer free witnesses. They are derived from
+    // the exact consumed input opening and a role tag:
+    //   Poseidon3(DOMAIN_OUTPUT_INNER=24, input_inner, role).
+    component cInnerHash = Poseidon(3);
+    cInnerHash.inputs[0] <== 24;
+    cInnerHash.inputs[1] <== a_inner;
+    cInnerHash.inputs[2] <== 0xC1;
+    component dInnerHash = Poseidon(3);
+    dInnerHash.inputs[0] <== 24;
+    dInnerHash.inputs[1] <== b_inner;
+    dInnerHash.inputs[2] <== 0xD1;
+    component eInnerHash = Poseidon(3);
+    eInnerHash.inputs[0] <== 24;
+    eInnerHash.inputs[1] <== a_inner;
+    eInnerHash.inputs[2] <== 0xB1;
+    component fInnerHash = Poseidon(3);
+    fInnerHash.inputs[0] <== 24;
+    fInnerHash.inputs[1] <== b_inner;
+    fInnerHash.inputs[2] <== 0x5E;
 
     component hashC = Poseidon(6);
     hashC.inputs[0] <== 2;
@@ -161,8 +184,8 @@ template MatchSlot() {
     hashC.inputs[2] <== base_mint_hi;
     hashC.inputs[3] <== base_amount;
     hashC.inputs[4] <== a_owner_commit;
-    hashC.inputs[5] <== c_inner;
-    note_c_commitment === hashC.out;
+    hashC.inputs[5] <== cInnerHash.out;
+    is_active * (note_c_commitment - hashC.out) === 0;
 
     component hashD = Poseidon(6);
     hashD.inputs[0] <== 2;
@@ -170,8 +193,8 @@ template MatchSlot() {
     hashD.inputs[2] <== quote_mint_hi;
     hashD.inputs[3] <== quote_amount;
     hashD.inputs[4] <== b_owner_commit;
-    hashD.inputs[5] <== d_inner;
-    note_d_commitment === hashD.out;
+    hashD.inputs[5] <== dInnerHash.out;
+    is_active * (note_d_commitment - hashD.out) === 0;
 
     component buyerChangeIsZero = IsZero();
     buyerChangeIsZero.in <== buyer_change_amt;
@@ -181,10 +204,10 @@ template MatchSlot() {
     hashE.inputs[2] <== quote_mint_hi;
     hashE.inputs[3] <== buyer_change_amt;
     hashE.inputs[4] <== a_owner_commit;
-    hashE.inputs[5] <== e_inner;
+    hashE.inputs[5] <== eInnerHash.out;
     signal expectedNoteE;
     expectedNoteE <== (1 - buyerChangeIsZero.out) * hashE.out;
-    note_e_commitment === expectedNoteE;
+    is_active * (note_e_commitment - expectedNoteE) === 0;
 
     component sellerChangeIsZero = IsZero();
     sellerChangeIsZero.in <== seller_change_amt;
@@ -194,10 +217,10 @@ template MatchSlot() {
     hashF.inputs[2] <== base_mint_hi;
     hashF.inputs[3] <== seller_change_amt;
     hashF.inputs[4] <== b_owner_commit;
-    hashF.inputs[5] <== f_inner;
+    hashF.inputs[5] <== fInnerHash.out;
     signal expectedNoteF;
     expectedNoteF <== (1 - sellerChangeIsZero.out) * hashF.out;
-    note_f_commitment === expectedNoteF;
+    is_active * (note_f_commitment - expectedNoteF) === 0;
 
     // ─────────────────────────────────────────────────────────────────
     // VALID_PRICE constraints — range checks + headline mul check.
@@ -212,6 +235,8 @@ template MatchSlot() {
     baseBits.in <== base_amount;
     component quoteBits = Num2Bits(64);
     quoteBits.in <== quote_amount;
+    component remainderBits = Num2Bits(64);
+    remainderBits.in <== price_remainder;
 
     // ── Amount-privacy soundness gate (P1a, see
     //    docs/settlement-amount-privacy-p0-soundness.md) ──────────────────
@@ -241,7 +266,24 @@ template MatchSlot() {
     component bAmountBits = Num2Bits(64);
     bAmountBits.in <== b_amount;
 
-    quote_amount === base_amount * clearing_price;
+    signal price_product;
+    price_product <== base_amount * clearing_price;
+    signal scaled_quote;
+    scaled_quote <== quote_amount * price_scale;
+    price_product === scaled_quote + price_remainder;
+    component remainderBelowScale = LessThan(64);
+    remainderBelowScale.in[0] <== price_remainder;
+    remainderBelowScale.in[1] <== price_scale;
+    remainderBelowScale.out === 1;
+
+    // An active match must consume a positive base quantity at a positive
+    // scaled price. Inactive slots are canonical all-zero padding.
+    component baseIsZero = IsZero();
+    baseIsZero.in <== base_amount;
+    is_active * baseIsZero.out === 0;
+    component priceIsZero = IsZero();
+    priceIsZero.in <== clearing_price;
+    is_active * priceIsZero.out === 0;
 
     // ─────────────────────────────────────────────────────────────────
     // EXACT FEE (amount-privacy P1b + C-04 audit) — the fee is pinned to
@@ -281,10 +323,76 @@ template MatchSlot() {
     sellerFeeCeil.in[1] <== base_amount * fee_rate_bps;
     sellerFeeCeil.out === 1;
 
+    // Per-match protocol fee notes. Their inners are derived from the consumed
+    // commitment, so paging/reboots cannot reuse a slot-derived fee opening.
+    component quoteFeeInner = Poseidon(3);
+    quoteFeeInner.inputs[0] <== 25;
+    quoteFeeInner.inputs[1] <== note_a_commitment;
+    quoteFeeInner.inputs[2] <== 0xFC;
+    component buyerFeeIsZero = IsZero();
+    buyerFeeIsZero.in <== buyer_fee_amt;
+    component feeQuoteHash = Poseidon(6);
+    feeQuoteHash.inputs[0] <== 2;
+    feeQuoteHash.inputs[1] <== quote_mint_lo;
+    feeQuoteHash.inputs[2] <== quote_mint_hi;
+    feeQuoteHash.inputs[3] <== buyer_fee_amt;
+    feeQuoteHash.inputs[4] <== protocol_owner_commitment;
+    feeQuoteHash.inputs[5] <== quoteFeeInner.out;
+    signal expectedFeeQuote;
+    expectedFeeQuote <== (1 - buyerFeeIsZero.out) * feeQuoteHash.out;
+    is_active * (note_fee_quote_commitment - expectedFeeQuote) === 0;
+
+    component baseFeeInner = Poseidon(3);
+    baseFeeInner.inputs[0] <== 25;
+    baseFeeInner.inputs[1] <== note_b_commitment;
+    baseFeeInner.inputs[2] <== 0xFB;
+    component sellerFeeIsZero = IsZero();
+    sellerFeeIsZero.in <== seller_fee_amt;
+    component feeBaseHash = Poseidon(6);
+    feeBaseHash.inputs[0] <== 2;
+    feeBaseHash.inputs[1] <== base_mint_lo;
+    feeBaseHash.inputs[2] <== base_mint_hi;
+    feeBaseHash.inputs[3] <== seller_fee_amt;
+    feeBaseHash.inputs[4] <== protocol_owner_commitment;
+    feeBaseHash.inputs[5] <== baseFeeInner.out;
+    signal expectedFeeBase;
+    expectedFeeBase <== (1 - sellerFeeIsZero.out) * feeBaseHash.out;
+    is_active * (note_fee_base_commitment - expectedFeeBase) === 0;
+
+    // Canonical inactive padding: every leaf-visible commitment and every
+    // private amount/opening is zero. This prevents padding from hiding a
+    // second market or fee claim while keeping the active path fully checked.
+    is_active * (is_active - 1) === 0;
+    signal inactive;
+    inactive <== 1 - is_active;
+    inactive * note_a_commitment === 0;
+    inactive * note_b_commitment === 0;
+    inactive * note_c_commitment === 0;
+    inactive * note_d_commitment === 0;
+    inactive * note_e_commitment === 0;
+    inactive * note_f_commitment === 0;
+    inactive * note_fee_base_commitment === 0;
+    inactive * note_fee_quote_commitment === 0;
+    inactive * base_amount === 0;
+    inactive * quote_amount === 0;
+    inactive * buyer_change_amt === 0;
+    inactive * seller_change_amt === 0;
+    inactive * buyer_fee_amt === 0;
+    inactive * seller_fee_amt === 0;
+    inactive * clearing_price === 0;
+    inactive * price_remainder === 0;
+    inactive * a_owner_commit === 0;
+    inactive * b_owner_commit === 0;
+    inactive * a_amount === 0;
+    inactive * b_amount === 0;
+    inactive * a_inner === 0;
+    inactive * b_inner === 0;
+
     // ─────────────────────────────────────────────────────────────────
     // LEAF HASH — commitment-only (amount-privacy, P1b).
     //
-    // The leaf binds ONLY the six note commitments + batch_slot — NOT
+    // The leaf binds ONLY the activation bit, eight note commitments, and
+    // batch_slot — NOT
     // the plaintext amounts/mints/price the old two-stage leaf hashed.
     // Each note commitment is itself a Poseidon6 of (mint, amount, owner,
     // inner_hash), so the commitments transitively bind the amounts +
@@ -293,28 +401,29 @@ template MatchSlot() {
     // on-chain handler recompute the leaf from the (amount-free) settle
     // payload, so the amounts can leave the payload entirely (P3).
     //
-    // Single Poseidon10 (1 domain + 8 commitments + batch_slot = 10 ≤ 12,
+    // Single Poseidon11 (1 domain + active + 8 commitments + batch_slot = 11 ≤ 12,
     // the light-poseidon width cap), so no two-stage split is needed. The two
-    // fee-note commitments are included so the on-chain settle's append of them
-    // (slot 0 only) is bound by the proof.
+    // fee-note commitments are included so every match's atomic fee-note append
+    // is bound by the proof.
     //
-    //   leaf = Poseidon10(DOMAIN_LEAF_V2=23,
+    //   leaf = Poseidon11(DOMAIN_LEAF_V2=23, active,
     //                     note_a, note_b, note_c, note_d, note_e, note_f,
     //                     note_fee_base, note_fee_quote,
     //                     batch_slot)
     // ─────────────────────────────────────────────────────────────────
 
-    component leafH = Poseidon(10);
+    component leafH = Poseidon(11);
     leafH.inputs[0] <== 23;   // DOMAIN_LEAF_V2
-    leafH.inputs[1] <== note_a_commitment;
-    leafH.inputs[2] <== note_b_commitment;
-    leafH.inputs[3] <== note_c_commitment;
-    leafH.inputs[4] <== note_d_commitment;
-    leafH.inputs[5] <== note_e_commitment;
-    leafH.inputs[6] <== note_f_commitment;
-    leafH.inputs[7] <== note_fee_base_commitment;
-    leafH.inputs[8] <== note_fee_quote_commitment;
-    leafH.inputs[9] <== batch_slot;
+    leafH.inputs[1] <== is_active;
+    leafH.inputs[2] <== note_a_commitment;
+    leafH.inputs[3] <== note_b_commitment;
+    leafH.inputs[4] <== note_c_commitment;
+    leafH.inputs[5] <== note_d_commitment;
+    leafH.inputs[6] <== note_e_commitment;
+    leafH.inputs[7] <== note_f_commitment;
+    leafH.inputs[8] <== note_fee_base_commitment;
+    leafH.inputs[9] <== note_fee_quote_commitment;
+    leafH.inputs[10] <== batch_slot;
 
     leaf <== leafH.out;
 }
@@ -351,16 +460,16 @@ template MerkleRoot(N) {
 }
 
 // ----------------------------------------------------------------------------
-// MatchBatch(N) — main template for N=2/4/8/16 batches. Single public
-// input (merkle_root); the prover supplies it and the circuit re-derives
-// it from the slot leaves, asserting equality. Standard "computed value
-// as public input" pattern.
+// MatchBatch(N) — main template for N=2/4/8/16 batches. Eight public
+// inputs bind the computed root plus governed protocol/market configuration.
+// The prover supplies the root and the circuit re-derives it from the slot
+// leaves, asserting equality.
 // ----------------------------------------------------------------------------
 template MatchBatch(N) {
     signal input merkle_root;
     // Protocol fee rate (bps), PUBLIC — bound on-chain to
     // VaultConfig.fee_rate_bps. Declared right after merkle_root so the public
-    // signal order is [merkle_root, fee_rate_bps]. Range-bound to 16 bits so the
+    // signal order begins [merkle_root, fee_rate_bps]. Range-bound to 16 bits so the
     // per-slot fee-floor products stay < 2^80.
     signal input fee_rate_bps;
     component feeRateBits = Num2Bits(16);
@@ -370,9 +479,18 @@ template MatchBatch(N) {
     // pay the protocol's owner. Public order:
     // [merkle_root, fee_rate_bps, protocol_owner_commitment].
     signal input protocol_owner_commitment;
-    // Fee-note inner_hashes (private; meaningful only on the flush slot).
-    signal input fee_base_inner;
-    signal input fee_quote_inner;
+    // Governed MarketConfig values, PUBLIC. Public order is exactly:
+    // root, fee rate, protocol owner, base lo/hi, quote lo/hi, price scale.
+    signal input base_mint_lo;
+    signal input base_mint_hi;
+    signal input quote_mint_lo;
+    signal input quote_mint_hi;
+    signal input price_scale;
+    component priceScaleBits = Num2Bits(64);
+    priceScaleBits.in <== price_scale;
+    component priceScaleIsZero = IsZero();
+    priceScaleIsZero.in <== price_scale;
+    priceScaleIsZero.out === 0;
 
     // ----- Per-slot public-bound fields -----
     signal input note_a_commitment[N];
@@ -383,10 +501,6 @@ template MatchBatch(N) {
     signal input note_f_commitment[N];
     signal input note_fee_base_commitment[N];
     signal input note_fee_quote_commitment[N];
-    signal input quote_mint_lo[N];
-    signal input quote_mint_hi[N];
-    signal input base_mint_lo[N];
-    signal input base_mint_hi[N];
     signal input base_amount[N];
     signal input quote_amount[N];
     signal input buyer_change_amt[N];
@@ -394,6 +508,7 @@ template MatchBatch(N) {
     signal input buyer_fee_amt[N];
     signal input seller_fee_amt[N];
     signal input batch_slot[N];
+    signal input is_active[N];
 
     // ----- VALID_CREATE private witnesses (v2: one inner_hash per note) -----
     signal input a_owner_commit[N];
@@ -402,13 +517,10 @@ template MatchBatch(N) {
     signal input b_amount[N];
     signal input a_inner[N];
     signal input b_inner[N];
-    signal input c_inner[N];
-    signal input d_inner[N];
-    signal input e_inner[N];
-    signal input f_inner[N];
 
     // ----- VALID_PRICE private witness -----
     signal input clearing_price[N];
+    signal input price_remainder[N];
 
     component slot[N];
     for (var i = 0; i < N; i++) {
@@ -421,10 +533,10 @@ template MatchBatch(N) {
         slot[i].note_f_commitment <== note_f_commitment[i];
         slot[i].note_fee_base_commitment  <== note_fee_base_commitment[i];
         slot[i].note_fee_quote_commitment <== note_fee_quote_commitment[i];
-        slot[i].quote_mint_lo     <== quote_mint_lo[i];
-        slot[i].quote_mint_hi     <== quote_mint_hi[i];
-        slot[i].base_mint_lo      <== base_mint_lo[i];
-        slot[i].base_mint_hi      <== base_mint_hi[i];
+        slot[i].quote_mint_lo     <== quote_mint_lo;
+        slot[i].quote_mint_hi     <== quote_mint_hi;
+        slot[i].base_mint_lo      <== base_mint_lo;
+        slot[i].base_mint_hi      <== base_mint_hi;
         slot[i].base_amount       <== base_amount[i];
         slot[i].quote_amount      <== quote_amount[i];
         slot[i].buyer_change_amt  <== buyer_change_amt[i];
@@ -441,80 +553,18 @@ template MatchBatch(N) {
         // it; previously pads used 0).
         batch_slot[i] === i;
         slot[i].batch_slot        <== batch_slot[i];
+        slot[i].is_active         <== is_active[i];
         slot[i].fee_rate_bps      <== fee_rate_bps;
+        slot[i].price_scale       <== price_scale;
+        slot[i].protocol_owner_commitment <== protocol_owner_commitment;
         slot[i].a_owner_commit    <== a_owner_commit[i];
         slot[i].b_owner_commit    <== b_owner_commit[i];
         slot[i].a_amount          <== a_amount[i];
         slot[i].b_amount          <== b_amount[i];
         slot[i].a_inner           <== a_inner[i];
         slot[i].b_inner           <== b_inner[i];
-        slot[i].c_inner           <== c_inner[i];
-        slot[i].d_inner           <== d_inner[i];
-        slot[i].e_inner           <== e_inner[i];
-        slot[i].f_inner           <== f_inner[i];
         slot[i].clearing_price    <== clearing_price[i];
-    }
-
-    // ── Fee-note binding (amount-privacy, P1b) ────────────────────────────
-    // The protocol fee notes are batch-aggregated — the matcher's
-    // flush_fee_notes mints ONE note per mint over the whole batch and attaches
-    // both to the FIRST match (slot 0). Bind those commitments to the batch fee
-    // sums so a malicious/buggy prover can't mint a fee note worth more than the
-    // fees conservation accounts for, nor to a non-protocol owner (the over-mint
-    // / wrong-owner inflation gap surfaced in the P0 audit §7).
-    signal partialBuyerFee[N];
-    signal partialSellerFee[N];
-    partialBuyerFee[0]  <== buyer_fee_amt[0];
-    partialSellerFee[0] <== seller_fee_amt[0];
-    for (var i = 1; i < N; i++) {
-        partialBuyerFee[i]  <== partialBuyerFee[i-1]  + buyer_fee_amt[i];
-        partialSellerFee[i] <== partialSellerFee[i-1] + seller_fee_amt[i];
-    }
-    signal total_buyer_fee;
-    signal total_seller_fee;
-    total_buyer_fee  <== partialBuyerFee[N-1];
-    total_seller_fee <== partialSellerFee[N-1];
-    // The minted fee note's amount must be a u64 to stay spendable: each
-    // per-slot fee is 64-bit (MatchSlot range checks), but a sum of up to N
-    // could in principle exceed 2^64 — range-check the totals too.
-    component totalBuyerFeeBits = Num2Bits(64);
-    totalBuyerFeeBits.in <== total_buyer_fee;
-    component totalSellerFeeBits = Num2Bits(64);
-    totalSellerFeeBits.in <== total_seller_fee;
-
-    // Slot 0's quote fee note === Poseidon6(DOMAIN_NOTE, quote_mint, total_buyer_fee,
-    // protocol_owner, fee_quote_inner), zeroed when there are no fees (same
-    // IsZero gate note_e/note_f use → a zero-fee batch mints [0;32]).
-    component buyerFeeIsZero = IsZero();
-    buyerFeeIsZero.in <== total_buyer_fee;
-    component feeQuoteHash = Poseidon(6);
-    feeQuoteHash.inputs[0] <== 2;                       // DOMAIN_NOTE
-    feeQuoteHash.inputs[1] <== quote_mint_lo[0];
-    feeQuoteHash.inputs[2] <== quote_mint_hi[0];
-    feeQuoteHash.inputs[3] <== total_buyer_fee;
-    feeQuoteHash.inputs[4] <== protocol_owner_commitment;
-    feeQuoteHash.inputs[5] <== fee_quote_inner;
-    signal expectedFeeQuote;
-    expectedFeeQuote <== (1 - buyerFeeIsZero.out) * feeQuoteHash.out;
-    note_fee_quote_commitment[0] === expectedFeeQuote;
-
-    component sellerFeeIsZero = IsZero();
-    sellerFeeIsZero.in <== total_seller_fee;
-    component feeBaseHash = Poseidon(6);
-    feeBaseHash.inputs[0] <== 2;                        // DOMAIN_NOTE
-    feeBaseHash.inputs[1] <== base_mint_lo[0];
-    feeBaseHash.inputs[2] <== base_mint_hi[0];
-    feeBaseHash.inputs[3] <== total_seller_fee;
-    feeBaseHash.inputs[4] <== protocol_owner_commitment;
-    feeBaseHash.inputs[5] <== fee_base_inner;
-    signal expectedFeeBase;
-    expectedFeeBase <== (1 - sellerFeeIsZero.out) * feeBaseHash.out;
-    note_fee_base_commitment[0] === expectedFeeBase;
-
-    // Non-flush slots (1..N-1) carry no fee notes.
-    for (var i = 1; i < N; i++) {
-        note_fee_base_commitment[i] === 0;
-        note_fee_quote_commitment[i] === 0;
+        slot[i].price_remainder   <== price_remainder[i];
     }
 
     component merkle = MerkleRoot(N);

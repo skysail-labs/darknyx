@@ -1,4 +1,4 @@
-//! v3.5 — TEE-forced atomic settlement, batched-marker variant.
+//! v3 — TEE-forced atomic settlement, batched-marker variant.
 //!
 //! Mirror of `tee_forced_settle` (per-match `ValidCreateMarker` +
 //! `ValidPriceMarker` flow) except the two markers are collapsed into
@@ -10,7 +10,7 @@
 //!   1. Verifies the TEE Ed25519 signature over canonical_payload_hash
 //!      (identical to the per-match flow).
 //!   2. Recomputes the per-slot leaf from the payload's note commitments
-//!      (single commitment-only Poseidon10 — must byte-match the
+//!      (single commitment-only Poseidon11 — must byte-match the
 //!      circuit's `MatchSlot` template).
 //!   3. Walks a fixed-depth-4 Merkle inclusion path (N=16) using the
 //!      provided sibling hashes + match_index.
@@ -92,7 +92,7 @@ fn u64_be32(v: u64) -> [u8; 32] {
 /// Compute the per-slot leaf hash. MUST byte-match `template MatchSlot()` in
 /// `circuits/templates/match_batch.circom`:
 ///
-///   leaf = Poseidon10(DOMAIN_LEAF_V2=23,
+///   leaf = Poseidon11(DOMAIN_LEAF_V2=23, active=1,
 ///                     note_a, note_b, note_c, note_d, note_e, note_f,
 ///                     note_fee_base, note_fee_quote, batch_slot)
 ///
@@ -110,6 +110,7 @@ pub fn compute_match_leaf(payload: &MatchResultPayload) -> Result<[u8; 32]> {
 
     let leaf = poseidon_n(&[
         &domain,
+        &u64_be32(1), // Tx D can only settle an active proof slot.
         payload.note_a_commitment.as_ref(),
         payload.note_b_commitment.as_ref(),
         payload.note_c_commitment.as_ref(),

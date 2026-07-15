@@ -114,6 +114,7 @@ pub async fn trader_task(ctx: TraderCtx, mut workload: Box<dyn Workload>, deadli
             arrival_nonce,
             &intent.symbol,
             ctx.cfg.fee_rate_bps,
+            ctx.cfg.price_scale,
             &ctx.base_mint,
             &ctx.quote_mint,
             intent.collateral_surplus_bps,

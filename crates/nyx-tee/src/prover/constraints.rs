@@ -4,7 +4,7 @@
 //! invoking snarkjs:
 //!
 //! ```ts
-//! quote_amount === base_amount * clearing_price
+//! quote_amount === floor(base_amount * clearing_price / price_scale)
 //! a_amount     === quote_amount + buyer_change_amt + buyer_fee_amt
 //! b_amount     === base_amount  + seller_change_amt + seller_fee_amt
 //! ```
@@ -26,11 +26,11 @@ use super::witness::MatchSlotWitness;
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum ConstraintError {
-    /// `quote_amount != base_amount * clearing_price`. Either the
-    /// matcher emitted an inconsistent slot or an overflow happened
-    /// in `base_amount * clearing_price`.
+    /// `quote_amount != floor(base_amount * clearing_price / price_scale)`.
+    /// Either the matcher emitted an inconsistent slot or an overflow happened
+    /// in the scaled product.
     #[error(
-        "slot {slot_idx}: quote (got {got}) != base ({base}) * price ({price}) (expected {expected})"
+        "slot {slot_idx}: quote (got {got}) != floor(base ({base}) * price ({price}) / scale) (expected {expected})"
     )]
     Quote {
         slot_idx: usize,
@@ -39,6 +39,8 @@ pub enum ConstraintError {
         got: u64,
         expected: u128,
     },
+    #[error("slot {slot_idx}: price scale is zero or remainder is not canonical")]
+    PriceScale { slot_idx: usize },
     /// `a_amount != quote + buyer_change + buyer_fee`.
     #[error(
         "slot {slot_idx}: a_amount ({a}) != quote ({quote}) + buyer_change ({change}) + buyer_fee ({fee}) (expected {expected})"
@@ -72,8 +74,15 @@ pub fn validate_conservation(slots: &[MatchSlotWitness]) -> Result<(), Constrain
     for (i, s) in slots.iter().enumerate() {
         // Use u128 for the math so overflow surfaces as a violation
         // rather than wrapping silently.
-        let expected_quote = (s.base_amount as u128) * (s.clearing_price as u128);
-        if (s.quote_amount as u128) != expected_quote {
+        if s.price_scale == 0 {
+            return Err(ConstraintError::PriceScale { slot_idx: i });
+        }
+        let numerator = (s.base_amount as u128) * (s.clearing_price as u128);
+        let expected_quote = numerator / s.price_scale as u128;
+        let expected_remainder = numerator % s.price_scale as u128;
+        if (s.quote_amount as u128) != expected_quote
+            || s.price_remainder as u128 != expected_remainder
+        {
             return Err(ConstraintError::Quote {
                 slot_idx: i,
                 base: s.base_amount,
@@ -121,6 +130,7 @@ mod tests {
             base_amount: 10,
             clearing_price: 20,
             quote_amount: 200,
+            price_scale: 1,
             a_amount: 200,
             b_amount: 10,
             ..MatchSlotWitness::default()

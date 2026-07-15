@@ -62,10 +62,8 @@ pub use order_canonical::{
 ///      `order_inclusion_commitment`s.
 ///   9. Emit `OrderUpdate`s for full-fills, partial-fills, IOC
 ///      residuals, FOK sentinels, and expired orders.
-///  10. Optionally flush the fee accumulators into protocol-owned
-///      change notes (only if `protocol_owner_commitment != [0;32]`
-///      AND circuit breaker did NOT trip).
-///  11. Return everything packaged in `RunBatchOutput`.
+///  10. Return everything packaged in `RunBatchOutput`; fee buckets are
+///      metrics only because settlement creates per-match fee notes.
 ///
 /// `start_match_id` is the caller's durable counter before this batch;
 /// the caller increments it past the highest
@@ -109,9 +107,8 @@ pub fn run_batch(
 ///
 /// `inclusion_root` is unaffected by the cap — it is the Merkle root of
 /// all *eligible orders* (a transparency root from `partition_book`),
-/// not of the matches. `fee_buckets` accumulate only over the matches
-/// actually produced this call, which is correct: the remaining matches
-/// accrue their fees on the call that produces them.
+/// not of the matches. `fee_buckets` are accounting summaries only;
+/// settlement creates one fee note per match from that match's consumed input.
 ///
 /// `single_fill_per_order` (the in-TEE matcher passes `true`) caps each
 /// order to one fill per batch — no intra-batch relock chain — so every
@@ -168,6 +165,7 @@ pub fn run_batch_capped(
                 current_slot,
                 &config.base_mint,
                 &config.quote_mint,
+                config.price_scale,
                 config.fee_rate_bps as u64,
                 start_match_id,
                 max_matches,
@@ -196,19 +194,8 @@ pub fn run_batch_capped(
         });
     }
 
-    // Step 10 — fee-note flush. Only when CB didn't trip AND a
-    // protocol owner commitment is configured.
-    if cb_tripped == 0 && config.protocol_owner_commitment != [0u8; 32] {
-        algorithm::flush_fee_notes(
-            &mut fee_buckets,
-            &config.base_mint,
-            &config.quote_mint,
-            &config.protocol_owner_commitment,
-            current_slot,
-        )?;
-    }
-
-    // Step 11 — pack and return.
+    // Step 10 — pack and return. Fee commitments are deliberately absent here:
+    // settlement derives each one from that match's consumed input commitment.
     Ok(RunBatchOutput {
         matches,
         order_updates,

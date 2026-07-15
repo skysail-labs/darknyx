@@ -239,7 +239,7 @@ pub mod vault {
 
     /// v3.5 — verify a single Groth16 attesting VALID_CREATE +
     /// VALID_PRICE for ALL N matches in a batch. Writes a
-    /// `BatchValidityMarker` PDA seeded by the proof's public input
+    /// `BatchValidityMarker` PDA seeded by the proof's root public input
     /// (the Merkle root over per-slot leaves). The N
     /// `tee_forced_settle_batched` txs that follow each carry a
     /// Merkle inclusion proof against this marker. See

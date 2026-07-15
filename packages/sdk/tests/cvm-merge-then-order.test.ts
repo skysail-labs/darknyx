@@ -75,6 +75,7 @@ import {
   authToken,
   hex,
   withFee,
+  scaledQuote,
   FEE_RATE_BPS,
   SYMBOL,
   type Persona,
@@ -147,6 +148,7 @@ maybeDescribe(
         const anchor = await t.step("oracle anchor", () => fetchOracleAnchor());
         const bidPrice = (anchor * 12n) / 10n;
         const askPrice = (anchor * 8n) / 10n;
+        const PRICE_SCALE = BigInt(cfg.market.priceScale);
 
         // Q (= ask qty). The merged note must equal withFee(Q) so it exactly
         // covers the ask's fee-inclusive collateral. Per-run-unique commitments.
@@ -156,7 +158,7 @@ maybeDescribe(
         const mergedAmt = withFee(Q); // = A0 + A1
         const A1 = mergedAmt / 2n;
         const A0 = mergedAmt - A1; // A0 + A1 === mergedAmt exactly
-        const buyerNoteAmt = withFee(Q * bidPrice);
+        const buyerNoteAmt = withFee(scaledQuote(Q, bidPrice, PRICE_SCALE));
         const ORDER_N = Number(
           process.env.NYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),
         );

@@ -43,23 +43,16 @@ pub const CHANGE_ROLE_SELLER: u8 = 0x5E;
 
 // ─── Trade-output + fee note roles (4g.7) ─────────────────────────────────────
 //
-// note_c / note_d are the full-fill output notes the buyer / seller
-// receive; the fee notes hold the protocol's cut. Their `inner_hash` is
-// derived the SAME way as the change notes — only the role byte differs —
-// so the user (and the protocol, for fee notes) can re-derive the opening
-// to spend the note later. Mirror of the TS SDK's `TRADE_ROLE_*` /
-// `FEE_ROLE_*` in `packages/sdk/tests/helpers/e2e-helpers.ts`. Cross-language
-// equality follows from the shared `derive_inner` body (parity-pinned by
-// `tests/change_note_parity.rs`): same SHA-256(domain ‖ match_id_le ‖ role),
-// only the role byte changes.
+// These role bytes are also consumed by VALID_MATCH_BATCH v3's Poseidon
+// derivations. User outputs use Poseidon3(24, consumed_input_inner, role), and
+// fee outputs use Poseidon3(25, consumed_input_commitment, role). The legacy
+// `derive_inner(match_id, role)` helper remains for pre-cutover note families.
 
-/// Role tag for the buyer's full-fill output note (`note_c`),
-/// derived against `match_id`.
+/// Role tag for the buyer's full-fill output note (`note_c`).
 pub const TRADE_ROLE_BUYER: u8 = 0xC1;
 /// Role tag for the seller's full-fill output note (`note_d`).
 pub const TRADE_ROLE_SELLER: u8 = 0xD1;
-/// Role tag for a base-asset protocol fee note, derived against the
-/// settle slot (NOT match_id — fees flush per slot).
+/// Role tag for a base-asset protocol fee note.
 pub const FEE_ROLE_BASE: u8 = 0xFB;
 /// Role tag for a quote-asset protocol fee note.
 pub const FEE_ROLE_QUOTE: u8 = 0xFC;

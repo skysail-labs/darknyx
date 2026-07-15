@@ -15,14 +15,14 @@ runbooks have landed.
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
-| CS-01 | Critical | ZK + vault + TEE | `remediation/match-batch-v3` | Every fee note is per-match and issued atomically with consumption of that match's real inputs; negative phantom-slot proof; regenerated zkey/VK/N=16 fixture; live settle | Open |
-| CS-02 | High | ZK + vault | `remediation/governance-markets`, `remediation/match-batch-v3` | Every active slot is bound to one enabled on-chain market, its mint halves, and price scale; mixed-market proof rejected | In progress |
-| CS-03 | High | ZK + SDK + TEE | `remediation/match-batch-v3` | User and fee output inners are constrained, deterministic, and recoverable from consumed inputs; arbitrary-inner witness rejected | Open |
+| CS-01 | Critical | ZK + vault + TEE | `remediation/match-batch-v3` | Every fee note is per-match and issued atomically with consumption of that match's real inputs; negative phantom-slot proof; regenerated zkey/VK/N=16 fixture; live settle | Closed |
+| CS-02 | High | ZK + vault | `remediation/governance-markets`, `remediation/match-batch-v3` | Every active slot is bound to one enabled on-chain market, its mint halves, and price scale; mixed-market proof rejected | Closed |
+| CS-03 | High | ZK + SDK + TEE | `remediation/match-batch-v3` | User and fee output inners are constrained, deterministic, and recoverable from consumed inputs; arbitrary-inner witness rejected | Closed |
 | CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Open |
 | CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Closed |
 | CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
 | CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Closed |
-| CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Open |
+| CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Closed |
 | CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm and live settle tests | Closed |
 | CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Open |
 | CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Open |
@@ -636,6 +636,98 @@ Every remediation PR must record:
   CVM image and SDK. The old/new lock wire and all three proving/verifier keys
   are incompatible, so discard in-flight orders/proofs and perform another
   clean devnet reset. Do not mix v2 and v3 circuit artifacts.
+
+### `remediation/match-batch-v3` — CS-01, CS-02, CS-03, CS-08
+
+- **Status.** Closed by the code, artifact, adversarial, devnet, and isolated
+  real-mint CVM evidence below. This closing PR carries the implementation and
+  evidence atomically.
+- **Invariant restored.** Every active match derives its user-output inners as
+  `Poseidon3(24, consumed_input_inner, role)` and its fee inners as
+  `Poseidon3(25, consumed_input_commitment, role)`. Each match's Tx D appends
+  its nonzero base/quote fee notes atomically with the consumption of those
+  exact inputs; aggregate fee flushes and slot/reboot identifiers are gone.
+  Private boolean activation bits make padding canonical and un-settleable.
+  All active slots share the enabled governed market's mint halves and nonzero
+  price scale, and prove
+  `base * price = quote * price_scale + remainder` with
+  `0 <= remainder < price_scale`.
+- **Wire/circuit impact.** VALID_MATCH_BATCH moves from three to eight public
+  inputs in the exact order root, fee rate, protocol owner, base mint lo/hi,
+  quote mint lo/hi, and price scale. Its commitment-only leaf moves from
+  Poseidon10 to Poseidon11 by adding `is_active`. Tx B gains one read-only
+  `MarketConfig` account while retaining its 304-byte instruction data. Tx D,
+  payload v9, canonical signature domain, account layout, and ALT membership do
+  not change; its worst-case transaction remains 1109 bytes. Match prices and
+  bid collateral adopt governed fixed-point floor semantics. N=2/N=4/N=16
+  zkeys, the N=16 Rust VK, and the committed real N=16 proof fixture change
+  atomically, intentionally invalidating old batch proofs. CPU image pin moves
+  from `tee-v3-hardening-55` to `tee-v3-hardening-56`. Legacy anchor fields
+  remain only as transitional order-wire data; they no longer select or gate a
+  v3 output and are deleted by canonical order v2.
+- **Local evidence.** Independent `snarkjs zkey verify` passes for N=2, N=4,
+  and N=16. The production R1CS has 232,806 constraints, 232,284 wires, 384
+  private inputs, and eight public inputs. Real snarkjs proofs pass at N=2/4/16;
+  the regenerated N=16 ark proof verifies both host-side and in LiteSVM, where
+  Tx B measures 132,519 CU under the raised 180,000-CU limit. Adversarial tests
+  reject an inactive phantom fee slot, mixed-market commitments, an arbitrary
+  output inner, a disabled market, and a proof made for the wrong price scale;
+  scaled-floor remainder and all-dummy padding cases are pinned. Rust/TS KATs
+  pin output-inner
+  `13e02ab830905bd6a94bbf1c9c1d231150db9ee480d9cd2b596a1fc425c6dde0`
+  and fee-inner
+  `18b28713db5e2e0ebd3a8382ca32d363811d5d2bf4244e916330204be6484c74`.
+  Mainnet and `devnet-admin` SBF builds, formatting, parity-helper build,
+  workspace clippy with warnings denied, and the full Rust workspace pass.
+  SDK, SDK-test, indexer, and daemon TypeScript no-emit checks pass. Full
+  Vitest passes SDK 256 tests with 23 environment-gated skips, indexer 23, and
+  daemon 158 with 2 skips. The full Rust gate includes 254 TEE library tests,
+  4/4 N=16 verifier tests, 13/13 batched-settlement tests, the feature-gated
+  real-settle loadgen smoke, and the 1109-byte Tx D regression (123 bytes of
+  headroom).
+- **Devnet program evidence (2026-07-16).** The canonical vault
+  `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` was upgraded in place from
+  the locally validated 615,680-byte `devnet-admin` binary (SHA-256
+  `560e321d3fae047578a989dcca7f275dcc1b6629b33e850817ef3cfff307094f`)
+  at finalized signature
+  `3kGuNwaguY6XAb8SLj6BfNHFxymRCsmkZqJVM8qiiB9FfGGeCjWPd2GbnvSK8hbQRfg5HEmwDtBSW7EwMQYRnqew`
+  (slot 476523752). The clean one-shard tree reset finalized at
+  `e46RHfnrfgMoGNP4KE69WBsqSCnBAzY2LYtsmmhDrkbFpVbFvpCR49HL9eMRrp24mh9D4aXMrbsVQiBSFSMGiqp`.
+- **CVM evidence (2026-07-16).** GitHub Actions run `29451691084` built and
+  pushed public-pullable CPU image `tee-v3-hardening-56` from commit
+  `ebe7ce6b31f13a046b68d699b5392470b3acb9f8`; its GHCR manifest returned HTTP
+  200. CVM `app_634b2ab4c250466311f0cf09f772b6fd60b5be11` cold-booted instance
+  `f5cd2f294d1127d241d18e44dbb76b6910aa2a54` with compose hash
+  `c8ce6e69abc34d9a52fb067b9e6ad8bd27a57bcda78757e7a5d777a23e961f39`,
+  MRTD
+  `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`,
+  and signer `KgFsjoP9fDy78xgmEjn2DtRbPZ6G7t5AWDkPo1AAjsa`. Boot logs showed a
+  successful dstack/KMS handshake, adoption of the enabled 6/6-decimal market
+  at price scale 100,000,000, empty Merkle cold boot, N=16 rapidsnark/native
+  witness loading, and an enabled live settle pipeline. The signer matched the
+  finalized on-chain K=1 set and already held 2.460691280 devnet SOL, so no key
+  rotation or funding transaction was sent.
+- **Live settlement evidence.** The isolated real-mint `cvm-settle-e2e` passed
+  1/1 in 44.30 seconds using only devnet test-mint deposits. The per-batch ALT
+  finalized at
+  `2juC7cP13WFXGCBpThr8mKQ9R8JkN8ZvEjCJSA7acbKEasjxFjZHNroiPXZT1WqXxGakX4JKwuWDjwnacXEFHzRP`;
+  the two locks finalized at
+  `2NN4R83wcxMUDrYvxYSpKtwwGAQ2Vt6uRN6g9oKfeLY4NQcvyewHJqPnnKcT2WqezYgXf3r6HM1iwhX2GwTYuj8s`
+  and
+  `5UrzYUZnq7kjxMgYKnBSFsb3svDQV2atDfLfNm7LeMMEAosPXGN7aBUAMdCMcR3aGgHgpdcCXfFzcwbnVz9n6chv`
+  (108,338 CU each); N=16 verification finalized at
+  `2mJy1mw9rLN5raC8d7JSuanu8DUdTUtqjvLPQAXaSBmRcLxdexY48FPJZidSepTq9GfVLaECeH6XqTpyiFC3bXVZ`
+  (134,000 CU); and atomic Tx D finalized at
+  `NumV16wTbsg6yi4D2iMTMuk1dbchAfS91Z1quxxjuteyhzx4rKgi9d7Depk1ArQNys1uooH4NddEBhXgvJcGmXk`
+  (70,364 CU). Every transaction has `err=null`; shard 0 ended at the expected
+  seven leaves (two deposits plus five settlement outputs). The protected
+  deployment environment was securely deleted, credentials were unset, and
+  all three Phala CVMs were confirmed stopped immediately after the test.
+- **Rollback.** Revert the PR and coordinate the prior vault, image, SDK, and
+  N=16 artifact set. Old and v3 batch proofs/VKs are incompatible; discard all
+  in-flight orders/proofs and clean-reset devnet before restarting the prior
+  image. Generic note commitments remain VALID_SPEND-compatible, but no mixed
+  old/new matching deployment is supported.
 
 ## Mainnet release gates
 

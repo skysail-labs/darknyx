@@ -400,6 +400,8 @@ async fn run_batch_settle_inner(
         let marker_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
         let verify_ix = build_verify_match_batch_ix(
             &tee_pubkey,
+            &inputs.witnesses[0].base_mint,
+            &inputs.witnesses[0].quote_mint,
             VerifyMatchBatchArgs {
                 merkle_root,
                 expiry_slot: marker_slot.saturating_add(MARKER_EXPIRY_MARGIN_SLOTS),

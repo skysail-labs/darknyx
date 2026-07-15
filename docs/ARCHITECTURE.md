@@ -22,8 +22,8 @@ Three layers, three trust boundaries:
 | Layer | Tech | Owns |
 |---|---|---|
 | **L1 (Solana)** | `programs/vault` (Anchor 0.32) | Custody, the incremental note Merkle tree, the nullifier / consumed-note / lock PDA sets, the Groth16 verifier, atomic batched settlement |
-| **TEE (CVM)** | `crates/nyx-tee` in a TDX CVM on Phala | Hidden order intake (`POST /orders`), uniform-clearing-price matching, the settle pipeline (signs with its dstack-derived key), the Merkle-mirror indexer, the per-order continuation anchor pool, the auth'd HTTP/WS surface |
-| **Client** | `packages/sdk` (TypeScript) + snarkjs | Key derivation, VALID_INPUT proof generation, the anchor pool, ix builders, `POST` to the CVM |
+| **TEE (CVM)** | `crates/nyx-tee` in a TDX CVM on Phala | Hidden order intake (`POST /orders`), uniform-clearing-price matching, consumed-input-derived outputs, the settle pipeline, Merkle mirrors, and auth'd HTTP/WS |
+| **Client** | `packages/sdk` (TypeScript) + snarkjs | Key derivation, VALID_INPUT proof generation, deterministic output recovery helpers, ix builders, `POST` to the CVM |
 
 ```
   ┌──────────────┐  deposit (L1)            ┌────────────────────┐
@@ -180,26 +180,19 @@ close. Those are now gone from L1; the proof is the sole binder:
   (`Num2Bits(64)`) and enforces the **protocol fee floor in-circuit**
   (`fee_rate_bps` is a public input that `verify_match_batch` binds to the
   authoritative `VaultConfig.fee_rate_bps`). The per-match Merkle leaf is
-  **commitment-only** — `Poseidon10` over the six note commitments + the two
-  fee-note commitments + `batch_slot`, hashing no amounts.
+  **commitment-only** — `Poseidon11` over `active`, the six note commitments,
+  the two per-match fee-note commitments, and `batch_slot`, hashing no amounts.
 * **The settle ix + event carry no amounts.** `MatchResultPayload` dropped its
   seven amount/price fields in v7, gained the 128-byte recovery ciphertext in
   v8, then dropped two vestigial nullifiers in v9 (552 → 488 bytes). The
   `TradeSettled` event dropped the amounts too. Note commitments bind the
   amounts; the chain never sees them.
-* **Amounts reach the trader off-chain, via the fill memo.** The owner of each
-  order receives a per-account **`FillMemo`** (`order_id`, `anchor_index`,
-  `change_amount`, `change_note_commitment`, `inner_hash`) over the auth'd
-  `fills` channel on `/v1/stream` — the live place a trade's change amount appears. The
-  client's **Vuln-4 guard** (`sdk/src/orders/fill-memo.ts`) recomputes the
-  commitment from the memo (`Poseidon6(mint, change_amount, owner, inner_hash)`)
-  and rejects a TEE that lied. The live socket is a low-latency fast path; the
-  **durable** recovery source is the **on-chain encrypted `change_amount`**
-  (change-amount recovery, Proposal B): the settle ix carries the amount
-  X25519-ECIES-encrypted to the order's viewing key, so an offline client
-  recovers it from the chain via `recoverChangeFromChain` (decrypt + the same
-  Vuln-4 self-verify) — surviving a CVM redeploy. (This replaced the old durable
-  per-account memo log + `GET /fills/replay`, which a redeploy wiped.)
+* **Recovery data is private.** The settle payload retains a 128-byte
+  X25519-ECIES envelope for each side's private recovery data. VALID_MATCH_BATCH
+  v3 derives the output inner from the consumed opening, so the old
+  anchor-index `FillMemo` is no longer an authority for output construction.
+  The follow-on canonical-order/durable-recovery cutover removes that legacy
+  stream schema and upgrades seed-plus-chain cold recovery before mainnet.
 * **The off-TEE indexer is a commitment LOCATOR + opaque ciphertext store.** With
   plaintext amounts gone from the payload + event, `packages/indexer` decodes the
   settle ix to locate commitments AND surface the opaque `fill_recovery`
@@ -310,10 +303,12 @@ by `NYX_TEE_PROVER` on the SAME image. Witness gen is ark-circom either way.
 ### `packages/sdk` — TypeScript client
 
 Key derivation, note construction (`noteCommitmentV2` / `nullifierV2`),
-deposit/withdraw flows, the VALID_INPUT prover wrapper, the order canonical
-signing + the anchor pool (`buildAnchorPool` / `buildAnchorTopUp`), fill-memo
-verification + the change-note store, and the hand-coded `vault-client.ts`
+deposit/withdraw flows, the VALID_INPUT prover wrapper, match-output derivation,
+order canonical signing, and the hand-coded `vault-client.ts`
 (every discriminator + Borsh layout, no Anchor IDL runtime).
+
+Legacy anchor/top-up helpers remain only for the transitional order wire and
+are removed by canonical order v2; they do not select v3 circuit outputs.
 
 ---
 
@@ -324,22 +319,20 @@ verification + the change-note store, and the hand-coded `vault-client.ts`
 2. **`create_wallet` (L1).** Register the user commitment (VALID_WALLET_CREATE).
 3. **`deposit` (L1).** Pull SPL into the vault; a note commitment is appended
    to the Merkle tree; `outstanding[mint]++`.
-4. **`POST /orders` (CVM).** Client builds a VALID_INPUT proof for its note +
-   signs the order canonical (binding the 10-anchor continuation pool) + posts
-   to the CVM. Intake verifies the sig + the note opening, then books it.
+4. **`POST /orders` (CVM).** Client builds a VALID_INPUT proof for its note,
+   signs the order canonical, and posts to the CVM. Intake verifies the
+   signature + note opening, then books it. The transitional wire still carries
+   legacy anchors, but output construction ignores them.
 5. **Match (CVM).** The interval tick finds a crossing pair at the uniform
-   clearing price; if a side partially fills, the matcher consumes an anchor +
-   rotates the residual to continue.
+   clearing price; if a side partially fills, the matcher derives the change
+   inner from the consumed input and rotates the residual to continue.
 6. **Settle (CVM → L1).** The settle pipeline drives Tx A–E (above) on L1: the
    matched output notes (note_c/d), any change notes (note_e/f), and the
    base+quote protocol fee notes are appended to the tree.
-7. **Fill memo (CVM → client) + on-chain backstop.** Since plaintext amounts
-   left L1, the change amount reaches the owner two ways: live as a per-account
-   `FillMemo` over the `/v1/stream` fills channel (the fast path), and durably as the on-chain
-   `fill_recovery` ciphertext (encrypted to the order's viewing key) that
-   `recoverChangeFromChain` decrypts after a missed memo / redeploy. Either way
-   the client runs the Vuln-4 integrity check (recompute the commitment), then
-   stores the change note for later spending.
+7. **Private recovery.** The on-chain `fill_recovery` envelope carries encrypted
+   private recovery material. The durable-recovery slice completes cold
+   seed-plus-chain reconstruction for these newly derived trade/change outputs;
+   that is a required mainnet gate, not a legacy anchor-memo dependency.
 8. **`withdraw` (L1).** Client spends an output note via a VALID_SPEND proof;
    the nullifier is recorded; SPL leaves the vault.
 

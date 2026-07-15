@@ -15,8 +15,6 @@
 //!     `(lo, hi)` Fr-pair at hashing time via
 //!     `darkpool_crypto::pubkey_to_fr_pair`.
 
-use darkpool_crypto::poseidon_hash_bytes;
-
 /// All inputs the circuit needs for ONE match slot. Counts: 6 note
 /// commitments + 2 mints + 8 amount-like fields + 1 slot + 17
 /// private witnesses. The TS `proveMatchBatch` builds a record of
@@ -46,6 +44,9 @@ pub struct MatchSlotWitness {
 
     // ── VALID_PRICE-equivalent public fields ──
     pub batch_slot: u64,
+    /// Private activation bit. Real matches are true; canonical padding is
+    /// false and cannot be settled because Tx D recomputes an active leaf.
+    pub is_active: bool,
 
     // ── VALID_CREATE private witnesses ──
     pub a_owner_commit: [u8; 32],
@@ -54,11 +55,9 @@ pub struct MatchSlotWitness {
     pub b_amount: u64,
     // v2: one inner_hash per note (replaces the old nonce+blinding pair).
     // inner_hashes are full BN254 Fr elements (32-byte BE), NOT u64: the
-    // trade/change/fee output-note inner_hashes come from
-    // `change_note::derive_inner` (a masked SHA-256, up to ~2^252) and the
-    // input-note inner_hashes come from the user's anchor/opening — neither
-    // fits in a u64. Feeding a truncated value would make the circuit
-    // reconstruct a different note commitment, so the proof would fail.
+    // output-note inner_hashes are derived in-circuit from these two consumed
+    // input inners. The canonical output values below are retained for recovery
+    // and parity assertions but are NOT circuit witness signals.
     pub a_inner: [u8; 32],
     pub b_inner: [u8; 32],
     pub c_inner: [u8; 32],
@@ -70,11 +69,12 @@ pub struct MatchSlotWitness {
 
     // ── VALID_PRICE private witness ──
     pub clearing_price: u64,
+    pub price_remainder: u64,
 
-    // ── Protocol fee notes (per-slot; non-zero only on the flush slot 0) ──
-    /// Base-mint fee note commitment (seller fees). `[0;32]` off slot 0 / no fee.
+    // ── Per-match protocol fee notes ──
+    /// Base-mint fee note commitment (seller fees). `[0;32]` when no fee.
     pub note_fee_base_commitment: [u8; 32],
-    /// Quote-mint fee note commitment (buyer fees). `[0;32]` off slot 0 / no fee.
+    /// Quote-mint fee note commitment (buyer fees). `[0;32]` when no fee.
     pub note_fee_quote_commitment: [u8; 32],
 
     // ── Batch-level fields (same across every slot in a batch) ──
@@ -85,33 +85,28 @@ pub struct MatchSlotWitness {
     /// Protocol fee-note owner, a MatchBatch-level PUBLIC input bound on-chain
     /// to `VaultConfig.protocol_owner_commitment`. Read from `slots[0]`.
     pub protocol_owner_commitment: [u8; 32],
-    /// Fee-note inner_hashes (`derive_inner(batch_slot, FEE_ROLE_*)`), private
-    /// witnesses for the slot-0 fee-note binding. Read from `slots[0]`.
+    /// Governed fixed-point denominator, a MatchBatch-level PUBLIC input.
+    pub price_scale: u64,
+    /// Canonical derived fee inners retained for recovery/parity. The circuit
+    /// derives them itself from note_a/note_b commitments.
     pub fee_base_inner: [u8; 32],
     pub fee_quote_inner: [u8; 32],
 }
 
-/// Build a fully-valid all-zero "dummy" slot. Used to pad a batch
+/// Build a canonical inactive all-zero slot. Used to pad a batch
 /// up to `N` when the matcher produced fewer than `N` real matches.
 ///
 /// Mirrors `dummySlot()` in `match-batch-prover.ts`. The dummy
-/// note commitment is `Poseidon6(2, 0, 0, 0, 0, 0)` — the value
-/// every v2 Poseidon6 note opening collapses to with all-zero inputs.
-/// Two dummy slots in the same batch produce identical leaves; the
-/// Merkle root still uniquely commits to the real matches.
+/// The v3 circuit gates note-opening constraints with `is_active` and requires
+/// every leaf-visible commitment in an inactive slot to be zero.
 pub fn dummy_slot() -> MatchSlotWitness {
-    let mut domain = [0u8; 32];
-    domain[31] = 2; // BE-encoded Fr(2)
-    let zero = [0u8; 32];
-    let dummy_note = poseidon_hash_bytes(&[domain, zero, zero, zero, zero, zero])
-        .expect("Poseidon6 over (tag=2, five zeros) cannot fail");
     let zero32 = [0u8; 32];
 
     MatchSlotWitness {
-        note_a_commitment: dummy_note,
-        note_b_commitment: dummy_note,
-        note_c_commitment: dummy_note,
-        note_d_commitment: dummy_note,
+        note_a_commitment: zero32,
+        note_b_commitment: zero32,
+        note_c_commitment: zero32,
+        note_d_commitment: zero32,
         note_e_commitment: zero32,
         note_f_commitment: zero32,
         quote_mint: zero32,
@@ -123,6 +118,7 @@ pub fn dummy_slot() -> MatchSlotWitness {
         buyer_fee_amt: 0,
         seller_fee_amt: 0,
         batch_slot: 0,
+        is_active: false,
         a_owner_commit: zero32,
         b_owner_commit: zero32,
         a_amount: 0,
@@ -134,10 +130,12 @@ pub fn dummy_slot() -> MatchSlotWitness {
         e_inner: zero32,
         f_inner: zero32,
         clearing_price: 0,
+        price_remainder: 0,
         note_fee_base_commitment: zero32,
         note_fee_quote_commitment: zero32,
         fee_rate_bps: 0,
         protocol_owner_commitment: zero32,
+        price_scale: 1,
         fee_base_inner: zero32,
         fee_quote_inner: zero32,
     }
@@ -210,7 +208,7 @@ mod tests {
         let a = dummy_slot();
         let b = dummy_slot();
         assert_eq!(a.note_a_commitment, b.note_a_commitment);
-        // All four "input" notes share the same dummy hash.
+        // All commitments in canonical inactive padding are zero.
         assert_eq!(a.note_a_commitment, a.note_b_commitment);
         assert_eq!(a.note_a_commitment, a.note_c_commitment);
         assert_eq!(a.note_a_commitment, a.note_d_commitment);
@@ -220,14 +218,10 @@ mod tests {
     }
 
     #[test]
-    fn dummy_slot_note_commitment_is_nonzero() {
-        // Poseidon(2, 0, 0, 0, 0, 0, 0) is a non-zero field element
-        // — if this ever produces all-zero, the dummy padding would
-        // accidentally collide with an "unused" sentinel in the
-        // on-chain handler. Pin the assertion so a future Poseidon
-        // refactor surfaces here.
+    fn dummy_slot_is_inactive() {
         let d = dummy_slot();
-        assert_ne!(d.note_a_commitment, [0u8; 32]);
+        assert!(!d.is_active);
+        assert_eq!(d.note_a_commitment, [0u8; 32]);
     }
 
     #[test]
@@ -240,10 +234,11 @@ mod tests {
         assert_eq!(padded.len(), 4);
         // The first slot is the real one.
         assert_eq!(padded[0].base_amount, 42);
-        // The padding slots are dummy notes — non-zero, identical.
+        // The padding slots are canonical inactive zeros.
         for i in 1..4 {
             assert_eq!(padded[i].note_a_commitment, padded[1].note_a_commitment);
-            assert_ne!(padded[i].note_a_commitment, [0u8; 32]);
+            assert_eq!(padded[i].note_a_commitment, [0u8; 32]);
+            assert!(!padded[i].is_active);
             assert_eq!(padded[i].base_amount, 0);
         }
     }

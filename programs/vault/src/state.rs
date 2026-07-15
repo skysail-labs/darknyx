@@ -63,9 +63,9 @@ pub struct VaultConfig {
     /// Precomputed empty-subtree roots at each level (0 = leaf, depth-1 = root's
     /// children). Tree-independent, so global; the per-tree append reads these.
     pub zero_subtree_roots: [[u8; 32]; MERKLE_DEPTH as usize],
-    /// Phase-5 protocol-owned shielded identity. Every fee note flushed at batch
-    /// close carries `owner_commitment = protocol_owner_commitment`. Zero until
-    /// initialised — fee accrual paused while unset.
+    /// Protocol-owned shielded identity. Every per-match fee note carries
+    /// `owner_commitment = protocol_owner_commitment` and is issued atomically
+    /// by the Tx D that consumes that match's inputs.
     pub protocol_owner_commitment: [u8; 32],
     /// Protocol fee rate in basis points of notional (e.g. `30 = 0.30 %`).
     pub fee_rate_bps: u16,
@@ -272,8 +272,8 @@ impl OutstandingMint {
 
 /// v3.5 — BATCH validity marker. Written by `verify_match_batch` after
 /// it verifies a single Groth16 proof attesting VALID_CREATE +
-/// VALID_PRICE for ALL N matches in a batch. The proof's one public
-/// input is a Merkle root over the per-slot leaves; the marker's PDA
+/// VALID_PRICE for ALL N matches in a batch. The proof's first of eight public
+/// inputs is a Merkle root over the per-slot leaves; the marker's PDA
 /// is seeded by that same root. `tee_forced_settle` then takes a
 /// Merkle inclusion proof per match, recomputes the leaf from the
 /// settle payload, walks up to the root, and asserts the marker

@@ -57,11 +57,10 @@ pub struct MatchResultPayload {
     pub note_f_commitment: [u8; 32],
     pub order_id_a: [u8; 16],
     pub order_id_b: [u8; 16],
-    /// Batch-level protocol fee notes — ONE PER MINT. `[0u8;32]` = no fee
-    /// note for that mint. Populated by the TEE only on the settlement
-    /// chosen to carry the batch flush — the first settlement in the batch
-    /// (see `partial_fill_and_fee_notes.md §2.4`). Both come straight from
-    /// the matcher's per-batch `flush_fee_notes`:
+    /// This match's protocol fee notes — one per input leg. `[0u8;32]` means
+    /// that leg's exact fee is zero. VALID_MATCH_BATCH derives each inner from
+    /// the consumed input commitment, and this match's Tx D appends the note
+    /// atomically with consuming that input:
     ///   - `note_fee_base_commitment`  — seller-side fees (base mint/units)
     ///   - `note_fee_quote_commitment` — buyer-side fees (quote mint/units)
     ///
@@ -89,7 +88,7 @@ pub struct MatchResultPayload {
     pub fill_recovery: [u8; 128],
     // Amount-privacy (P3b): `clearing_price` was removed alongside the other
     // plaintext amounts — the price is proven in-circuit
-    // (`quote === base*price`) and bound inside the note commitments, so it no
+    // (`quote === floor(base*price/price_scale)`) and bound inside the note commitments, so it no
     // longer needs to ride in the (public) settle ix. The domain tag bumped
     // `nyx-match-v6` → `nyx-match-v7` for this layout change, then
     // `nyx-match-v7` → `nyx-match-v8` when change-amount recovery (Proposal B)

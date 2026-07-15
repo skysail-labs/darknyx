@@ -111,7 +111,8 @@ pub struct PlaceOrderRequest {
 
     /// OPTIONAL over-collateralization: the actual amount the collateral note
     /// carries, when it exceeds the order's nominal locked amount
-    /// (`amount*price_limit + fee` for a bid, `amount + fee` for an ask). Lets a
+    /// (`floor(amount*price_limit/price_scale) + fee` for a bid,
+    /// `amount + fee` for an ask). Lets a
     /// user point a large note (e.g. a 500-USDC deposit) at a small order and
     /// get the surplus back as a change note. A plaintext opening field — it is
     /// NOT in the signed canonical body, because the signed `note_commitment`
@@ -450,7 +451,7 @@ async fn prepare_order(
 
     // 4. Construct the on-book Order. `note_amount` equals the full
     //    value the collateral note carries, which for a bid is
-    //    amount * price_limit (quote units) and for an ask is
+    //    floor(amount * price_limit / price_scale) (quote units) and for an ask is
     //    `amount` (base units). The .max guards collapse the
     //    pathological "zero" case the matcher never sees in
     //    practice.
@@ -466,7 +467,7 @@ async fn prepare_order(
             req.expiry_slot, arrival_slot, MAX_LOCK_TTL_SLOTS
         )));
     }
-    // A bid's collateral is `amount * price_limit` (quote units). A
+    // A bid's collateral is scaled floor quote collateral. A
     // zero price_limit is economically meaningless (buy at price 0)
     // and would collapse to the base-unit `amount` fallback below —
     // a silent unit confusion. Reject it. (An ask may legitimately
@@ -479,23 +480,24 @@ async fn prepare_order(
     // Collateral mints + the protocol fee rate, read together under one
     // lock. (Done before deriving note_amount so the fee can be folded
     // into the required collateral.)
-    let (base_mint, quote_mint, fee_rate_bps) = {
+    let (base_mint, quote_mint, fee_rate_bps, price_scale) = {
         let st = matcher.read().await;
         let (b, q) = st.market_mints();
-        (b, q, st.fee_rate_bps())
+        (b, q, st.fee_rate_bps(), st.price_scale())
     };
 
-    // Nominal collateral: a bid locks `amount * price_limit` quote, an
-    // ask locks `amount` base. Reject a bid whose `amount * price_limit`
-    // overflows u64 (mirrors the price_limit == 0 reject above) rather
-    // than saturating to a nonsense collateral the deposit can never
-    // match. price_limit > 0 is already enforced for bids, so the
-    // product is >= amount — no `.max` fallback needed.
+    // Nominal collateral: a bid locks
+    // `floor(amount * price_limit / price_scale)` quote, while an ask locks
+    // `amount` base. The u128 intermediate makes the scaled product exact;
+    // reject only if the final quote amount cannot fit u64.
     let nominal = match side {
-        OrderSide::Bid => req
-            .amount
-            .checked_mul(req.price_limit)
-            .ok_or_else(|| ApiError::malformed("amount * price_limit overflows u64"))?,
+        OrderSide::Bid => u64::try_from(
+            (req.amount as u128)
+                .checked_mul(req.price_limit as u128)
+                .ok_or_else(|| ApiError::malformed("amount * price_limit overflows u128"))?
+                / price_scale as u128,
+        )
+        .map_err(|_| ApiError::malformed("scaled bid collateral overflows u64"))?,
         OrderSide::Ask => req.amount,
     };
     // ...PLUS the order's own protocol fee. The matcher charges each leg

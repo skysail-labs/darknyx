@@ -1,10 +1,10 @@
-//! Per-mint fee accumulator used during one batch tick.
+//! Per-mint fee accounting summary used during one batch tick.
 //!
 //! Lifetime model: the matcher resets two buckets (one base, one
 //! quote) at the start of every `run_batch` call, adds per-leg
 //! `buyer_fee_amt` / `seller_fee_amt` as it generates matches, and
-//! emits them on `RunBatchOutput.fee_buckets`. The in-TEE matcher
-//! exposes the flush commitments to the settlement scheduler.
+//! emits them on `RunBatchOutput.fee_buckets`. These totals are metrics only:
+//! settlement issues per-match fee notes derived from each consumed input.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -18,12 +18,6 @@ pub struct FeeBucket {
     pub accumulated_fees: u64,
     /// Batch slot this bucket was last touched at.
     pub batch_slot: u64,
-    /// Poseidon commitment of the flushed fee note for this batch.
-    /// Populated by the matcher iff `accumulated_fees > 0` AND
-    /// `MatchConfig.protocol_owner_commitment != [0u8;32]` AND the
-    /// circuit breaker did NOT trip. All-zero means "nothing to
-    /// flush.
-    pub flushed_commitment: [u8; 32],
 }
 
 impl FeeBucket {
@@ -33,17 +27,15 @@ impl FeeBucket {
         token_mint: [0u8; 32],
         accumulated_fees: 0,
         batch_slot: 0,
-        flushed_commitment: [0u8; 32],
     };
 
-    /// Initialise a bucket bound to `(mint, batch_slot)` with zero
-    /// accumulated fees and no flush commitment yet.
+    /// Initialise a metrics bucket bound to `(mint, batch_slot)` with zero
+    /// accumulated fees.
     pub fn new(token_mint: [u8; 32], batch_slot: u64) -> Self {
         Self {
             token_mint,
             accumulated_fees: 0,
             batch_slot,
-            flushed_commitment: [0u8; 32],
         }
     }
 

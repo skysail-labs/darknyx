@@ -163,7 +163,7 @@ async fn assembler_witness_proves_and_verifies_n16() {
         base_mint: base_mint(),
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
-        fee_identifier: 1234,
+        price_scale: 1,
         // This lone real match lands at batch index 0. The circuit binds
         // `batch_slot[0] === 0`; the assembler uses THIS, not the matcher's
         // `now_slot` above, so the proof succeeds.
@@ -171,8 +171,6 @@ async fn assembler_witness_proves_and_verifies_n16() {
         // Zero-fee exact-fill match → fee_rate_bps MUST be 0, or the in-circuit
         // fee floor `(fee+1)*10000 > notional*rate` would reject it (fee=0).
         fee_rate_bps: 0,
-        buyer_change_inner: None,
-        seller_change_inner: None,
     })
     .expect("assemble the match");
 
@@ -187,15 +185,17 @@ async fn assembler_witness_proves_and_verifies_n16() {
         .prove_ark(&slots)
         .expect("prove the assembled N=16 batch");
 
-    // 4. The single public input is the batch Merkle root, and it
-    //    must equal our off-circuit root over the leaves (the prover
-    //    already cross-checks this internally; assert it here too).
-    // [merkle_root, fee_rate_bps, protocol_owner]. fee_rate_bps = 0 (zero-fee
-    // match); protocol_owner = the assemble's fr_safe(0x07).
-    assert_eq!(public.public_inputs_be.len(), 3);
+    // 4. Pin the v3 public-input order. The prover already cross-checks the
+    // root internally; assert the governed market fields here too.
+    assert_eq!(public.public_inputs_be.len(), 8);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
     assert_eq!(public.public_inputs_be[1], [0u8; 32]);
     assert_eq!(public.public_inputs_be[2], fr_safe(0x07));
+    assert_eq!(&public.public_inputs_be[3][16..], &base_mint()[16..]);
+    assert_eq!(&public.public_inputs_be[4][16..], &base_mint()[..16]);
+    assert_eq!(&public.public_inputs_be[5][16..], &quote_mint()[16..]);
+    assert_eq!(&public.public_inputs_be[6][16..], &quote_mint()[..16]);
+    assert_eq!(public.public_inputs_be[7][31], 1);
     assert_eq!(
         public.merkle_root,
         compute_batch_root(&public.leaves).expect("recompute root"),

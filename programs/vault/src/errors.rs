@@ -119,6 +119,8 @@ pub enum VaultError {
     InvalidMarketMints,
     #[msg("Market price scale, tick size, minimum size, and circuit-breaker bounds are invalid")]
     InvalidMarketParameters,
+    #[msg("Market is disabled")]
+    MarketDisabled,
     #[msg("Merge must contain at least one active positive input")]
     EmptyMerge,
 }

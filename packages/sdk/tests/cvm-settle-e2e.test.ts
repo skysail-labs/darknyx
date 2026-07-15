@@ -92,6 +92,7 @@ import {
   fetchOracleAnchor,
   hex,
   withFee,
+  scaledQuote,
   FEE_RATE_BPS,
   SYMBOL,
   API_KEY,
@@ -177,7 +178,8 @@ maybeDescribe(
         // note would collide ("Allocate: account already in use") on the
         // second run. Override with NYX_CVM_BASE_QTY for a fixed value.
         //
-        // Capped at 250k: the buyer's collateral is BUY_QTY×bidPrice×(1+fee),
+        // Capped at 250k: the buyer's collateral is
+        // floor(BUY_QTY×bidPrice/priceScale)×(1+fee),
         // and in FILLS mode BUY_QTY = 2×BASE_QTY. The order body sends
         // `collateral_amount` as a JSON number, so it must stay ≤ 2^53
         // (Number.MAX_SAFE_INTEGER ≈ 9.007e15) or `Number(noteAmt)` rounds it and
@@ -199,6 +201,7 @@ maybeDescribe(
         );
         const bidPrice = (anchor * 12n) / 10n;
         const askPrice = (anchor * 8n) / 10n;
+        const PRICE_SCALE = BigInt(cfg.market.priceScale);
         // In FILLS mode we validate the anchor-pool partial-fill CONTINUATION: the
         // buyer over-buys (bids 2× the seller's qty) so only BASE_QTY crosses and
         // the residual relocks onto anchor[0]. That relock is the ONLY path that
@@ -269,7 +272,8 @@ maybeDescribe(
         );
         // Each side locks NOMINAL collateral + its OWN protocol fee, matching
         // the intake derivation (orders.rs: note_amount = nominal + nominal *
-        // bps / 10_000, floored). Bid nominal = qty × price (quote); ask
+        // bps / 10_000, floored). Bid nominal is
+        // floor(qty × price / priceScale) quote; ask
         // nominal = qty (base). With fees off (bps=0) both collapse to the
         // nominal, unchanged. Floor division must match intake exactly so the
         // re-derived commitment lines up. (`withFee` is shared from cvm-harness.)
@@ -278,7 +282,8 @@ maybeDescribe(
         // collateral_amount; intake accepts note ≥ required and the matcher returns
         // the surplus as an (even bigger) change note. Default 0 ⇒ exact-at-limit.
         const BUYER_SURPLUS = BigInt(process.env.NYX_CVM_BUYER_SURPLUS ?? "0");
-        const buyerNoteAmt = withFee(BUY_QTY * bidPrice) + BUYER_SURPLUS;
+        const buyerNoteAmt =
+          withFee(scaledQuote(BUY_QTY, bidPrice, PRICE_SCALE)) + BUYER_SURPLUS;
         const sellerNoteAmt = withFee(BASE_QTY);
 
         await t.step("mint collateral (ATAs + mintTo)", () =>

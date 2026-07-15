@@ -111,6 +111,17 @@ pub fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"vault_config"], program_id)
 }
 
+pub fn test_market_config_pda(
+    program_id: &Pubkey,
+    base_mint: &Pubkey,
+    quote_mint: &Pubkey,
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[b"market_config", base_mint.as_ref(), quote_mint.as_ref()],
+        program_id,
+    )
+}
+
 /// Per-shard Merkle-tree PDA. Seed `[b"merkle_tree", &[tree_id]]` — mirrors
 /// `vault::state::MerkleTree::SEED`.
 pub fn merkle_tree_pda(program_id: &Pubkey, tree_id: u8) -> (Pubkey, u8) {
@@ -1274,6 +1285,38 @@ pub fn seed_batch_validity_marker(h: &mut Harness, merkle_root: &[u8; 32], expir
     h.svm.set_account(pda, acct).unwrap();
 }
 
+/// Seed a governed MarketConfig for proof-verifier fixtures. This avoids
+/// requiring real SPL mint accounts in tests that exercise only Groth16.
+pub fn seed_market_config(
+    h: &mut Harness,
+    base_mint: &Pubkey,
+    quote_mint: &Pubkey,
+    price_scale: u64,
+    enabled: bool,
+) {
+    use solana_account::Account as SolAccount;
+
+    let (pda, bump) = test_market_config_pda(&h.vault_id, base_mint, quote_mint);
+    let mut data = vec![0u8; 108];
+    data[..8].copy_from_slice(&anchor_acct_disc("MarketConfig"));
+    data[8..40].copy_from_slice(base_mint.as_ref());
+    data[40..72].copy_from_slice(quote_mint.as_ref());
+    data[72..80].copy_from_slice(&price_scale.to_le_bytes());
+    data[80..88].copy_from_slice(&1u64.to_le_bytes());
+    data[88..96].copy_from_slice(&1u64.to_le_bytes());
+    data[96..104].copy_from_slice(&1u64.to_le_bytes());
+    data[106] = u8::from(enabled);
+    data[107] = bump;
+    let account = SolAccount {
+        lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
+        data,
+        owner: h.vault_id,
+        executable: false,
+        rent_epoch: 0,
+    };
+    h.svm.set_account(pda, account).unwrap();
+}
+
 /// Whether the marker PDA still has any data — used to assert that
 /// `close_batch_validity_marker` actually wiped it.
 pub fn batch_validity_marker_exists(h: &Harness, merkle_root: &[u8; 32]) -> bool {
@@ -1472,22 +1515,26 @@ pub fn build_settle_batched_ix_for(
 pub fn build_verify_match_batch_ix(
     h: &Harness,
     payer: &Pubkey,
+    base_mint: &Pubkey,
+    quote_mint: &Pubkey,
     merkle_root: &[u8; 32],
     expiry_slot: u64,
     proof_bytes: &[u8; 256],
 ) -> Instruction {
     let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
     let (vault_pda, _) = vault_config_pda(&h.vault_id);
+    let (market_pda, _) = test_market_config_pda(&h.vault_id, base_mint, quote_mint);
     let mut data = anchor_disc("verify_match_batch").to_vec();
     data.extend_from_slice(merkle_root);
     data.extend_from_slice(&expiry_slot.to_le_bytes());
     data.extend_from_slice(proof_bytes);
     Instruction {
         program_id: h.vault_id,
-        // Order MUST match VerifyMatchBatch: payer, vault_config, marker, system.
+        // Order: payer, vault_config, market_config, marker, system.
         accounts: vec![
             AccountMeta::new(*payer, true),
             AccountMeta::new_readonly(vault_pda, false),
+            AccountMeta::new_readonly(market_pda, false),
             AccountMeta::new(marker_pda, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
         ],

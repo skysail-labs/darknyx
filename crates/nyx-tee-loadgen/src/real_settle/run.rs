@@ -37,6 +37,7 @@ pub struct RealSettleParams {
     pub quote_mint: [u8; 32],
     pub symbol: String,
     pub fee_rate_bps: u16,
+    pub price_scale: u64,
     pub oracle_twap: u64,
     pub qty: u64,
     pub api_key: String,
@@ -69,6 +70,7 @@ impl RealSettleParams {
             quote_mint: cfg.quote_mint_bytes()?,
             symbol: cfg.symbol.clone(),
             fee_rate_bps: cfg.fee_rate_bps,
+            price_scale: cfg.price_scale,
             oracle_twap: cfg.oracle_twap,
             qty: cfg.real_qty,
             api_key: cfg.api_key.clone(),
@@ -83,6 +85,17 @@ impl RealSettleParams {
 
 fn with_fee(nominal: u64, fee_bps: u16) -> u64 {
     nominal + ((nominal as u128) * fee_bps as u128 / 10_000) as u64
+}
+
+fn scaled_quote(base: u64, price: u64, price_scale: u64) -> Result<u64> {
+    if price_scale == 0 {
+        return Err(anyhow!("price scale is zero"));
+    }
+    let quote = (base as u128)
+        .checked_mul(price as u128)
+        .ok_or_else(|| anyhow!("scaled quote product overflow"))?
+        / price_scale as u128;
+    u64::try_from(quote).map_err(|_| anyhow!("scaled quote exceeds u64"))
 }
 
 /// Deterministic, BN254-Fr-safe (top byte 0) 32-byte field for a synthetic
@@ -263,7 +276,10 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
 
     let bid_price = p.oracle_twap.saturating_mul(12) / 10;
     let ask_price = p.oracle_twap.saturating_mul(8) / 10;
-    let buyer_note_amt = with_fee(p.qty.saturating_mul(bid_price), p.fee_rate_bps);
+    let buyer_note_amt = with_fee(
+        scaled_quote(p.qty, bid_price, p.price_scale)?,
+        p.fee_rate_bps,
+    );
     let seller_note_amt = with_fee(p.qty, p.fee_rate_bps);
     let base = Address::new_from_array(p.base_mint);
     let quote = Address::new_from_array(p.quote_mint);
@@ -650,13 +666,14 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 } else {
                     (OrderType::Limit, OrderType::Limit)
                 };
+                let bid_nominal = scaled_quote(p.qty, bid_price, p.price_scale)?;
                 let surplus = if scenario == RealScenario::OverCollateral {
-                    with_fee(p.qty.saturating_mul(bid_price), p.fee_rate_bps) / 5
+                    with_fee(bid_nominal, p.fee_rate_bps) / 5
                 // +20%
                 } else {
                     0
                 };
-                let bid_amt = with_fee(p.qty.saturating_mul(bid_price), p.fee_rate_bps) + surplus;
+                let bid_amt = with_fee(bid_nominal, p.fee_rate_bps) + surplus;
                 let ask_amt = with_fee(p.qty, p.fee_rate_bps);
                 let (bp, bn) = mint_deposit!(
                     OrderSide::Bid,
@@ -693,7 +710,10 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 // One big bid (M×qty) + M small asks (qty each) → M anchors over M batches.
                 let m = p.multi_anchor_asks.max(1) as u64;
                 let big_qty = p.qty.saturating_mul(m);
-                let bid_amt = with_fee(big_qty.saturating_mul(bid_price), p.fee_rate_bps);
+                let bid_amt = with_fee(
+                    scaled_quote(big_qty, bid_price, p.price_scale)?,
+                    p.fee_rate_bps,
+                );
                 let (bp, bn) = mint_deposit!(
                     OrderSide::Bid,
                     p.quote_mint,
@@ -730,7 +750,10 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
             }
             RealScenario::Merge => {
                 // Bid (normal) + ask whose note is the MERGE of two sub-threshold notes.
-                let bid_amt = with_fee(p.qty.saturating_mul(bid_price), p.fee_rate_bps);
+                let bid_amt = with_fee(
+                    scaled_quote(p.qty, bid_price, p.price_scale)?,
+                    p.fee_rate_bps,
+                );
                 let (bp, bn) = mint_deposit!(
                     OrderSide::Bid,
                     p.quote_mint,
