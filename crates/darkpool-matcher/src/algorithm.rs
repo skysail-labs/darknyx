@@ -20,11 +20,6 @@ use crate::fee::FeeBucket;
 use crate::match_result::{MatchPair, MatchStatus, RELOCK_ORDER_ID_NONE};
 use darkpool_crypto::note::commitment_from_fields_v2;
 
-// Fee role tags live in `change_note` (the single source of the
-// parity-sensitive role bytes); see `change_note::FEE_ROLE_BASE` /
-// `FEE_ROLE_QUOTE`. The cross-language mirrors are the on-chain
-// `run_batch.rs` + the TS `packages/sdk/tests/helpers/e2e-helpers.ts`.
-
 // ─────── Constants ──────────────────────────────────────────────────────────
 
 // `SETTLEMENT_BUFFER_SLOTS` lives in `crate::config` — the single
@@ -252,6 +247,7 @@ pub(crate) fn generate_matches(
     now_slot: u64,
     base_mint: &[u8; 32],
     quote_mint: &[u8; 32],
+    price_scale: u64,
     fee_rate_bps: u64,
     start_match_id: u64,
     // Stop after this many matches (paged matching — see
@@ -353,9 +349,13 @@ pub(crate) fn generate_matches(
         }
 
         // Trade legs.
-        let quote_amt_u128 = (crossable as u128)
+        if price_scale == 0 {
+            return Err(MatchError::Internal("price scale is zero"));
+        }
+        let quote_numerator = (crossable as u128)
             .checked_mul(p_star as u128)
             .ok_or(MatchError::Internal("notional overflow"))?;
+        let quote_amt_u128 = quote_numerator / price_scale as u128;
         if quote_amt_u128 > u64::MAX as u128 {
             return Err(MatchError::Internal("notional overflow (u64)"));
         }
@@ -593,49 +593,6 @@ pub(crate) fn apply_slot_updates(
         }
         // else: untouched — slot.amount unchanged. No OrderUpdate.
     }
-}
-
-// ─────── flush_fee_notes ────────────────────────────────────────────────────
-//
-// Compute the Poseidon commitments for the protocol-owned fee notes
-// at batch close. Matches the on-chain block:
-//   - protocol_owner_commitment != [0;32]
-//   - circuit breaker did NOT trip
-// for both base + quote sides. Mutates `fee_buckets[].flushed_commitment`
-// in place; returns `Ok(())` on success.
-//
-// Caller (`lib.rs::run_batch`) decides when to call this — same
-// gating as on-chain.
-pub(crate) fn flush_fee_notes(
-    fee_buckets: &mut [FeeBucket; 2],
-    base_mint: &[u8; 32],
-    quote_mint: &[u8; 32],
-    protocol_owner_commitment: &[u8; 32],
-    now_slot: u64,
-) -> Result<(), MatchError> {
-    if fee_buckets[0].accumulated_fees > 0 {
-        let inner = change_note::derive_inner(now_slot, change_note::FEE_ROLE_BASE);
-        let c = commitment_from_fields_v2(
-            base_mint,
-            fee_buckets[0].accumulated_fees,
-            protocol_owner_commitment,
-            &inner,
-        )
-        .map_err(|_| MatchError::Internal("Poseidon failed for base fee note"))?;
-        fee_buckets[0].flushed_commitment = c;
-    }
-    if fee_buckets[1].accumulated_fees > 0 {
-        let inner = change_note::derive_inner(now_slot, change_note::FEE_ROLE_QUOTE);
-        let c = commitment_from_fields_v2(
-            quote_mint,
-            fee_buckets[1].accumulated_fees,
-            protocol_owner_commitment,
-            &inner,
-        )
-        .map_err(|_| MatchError::Internal("Poseidon failed for quote fee note"))?;
-        fee_buckets[1].flushed_commitment = c;
-    }
-    Ok(())
 }
 
 // ─────── partition_into_bids_asks_and_expired ───────────────────────────────

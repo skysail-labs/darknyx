@@ -1,9 +1,10 @@
 /**
  * v3.5 — batched match-validity prover (parameterised over N).
  *
- * Single Groth16 proof attesting that VALID_CREATE + VALID_PRICE hold
- * for all N matches in a batch. The proof's one public input is the
- * Merkle root over the per-slot leaves; the on-chain
+ * Single Groth16 proof attesting that output construction, market binding,
+ * scaled pricing, conservation, and per-match fees hold for all active
+ * matches in a batch. Its eight public inputs include the Merkle root plus
+ * governed fee/market values; the on-chain
  * `tee_forced_settle` handler recomputes the leaf for the match it
  * sees, walks a log2(N)-depth inclusion path, and asserts the root
  * matches the `BatchValidityMarker` PDA seed.
@@ -14,14 +15,14 @@
  * as scaling-validation steps and fast unit-test instances.
  *
  * Leaf-hash layout — MUST match `template MatchSlot()` in
- * `circuits/templates/match_batch.circom`. Single Poseidon10 (10 inputs ≤ 12
+ * `circuits/templates/match_batch.circom`. Single Poseidon11 (11 inputs ≤ 12
  * = light-poseidon's MAX_X5_LEN-1, so the on-chain handler can re-derive this
  * hash via solana_poseidon::hashv). Commitment-only (amount-privacy, P1b): the
  * note commitments bind the amounts/mints/price transitively, so the leaf no
  * longer hashes them (the old two-stage Poseidon12+Poseidon9 leaf, tags
  * 20/21, is retired).
  *
- *   leaf = Poseidon10(DOMAIN_LEAF_V2=23,
+ *   leaf = Poseidon11(DOMAIN_LEAF_V2=23, active,
  *                     note_a, note_b, note_c, note_d, note_e, note_f,
  *                     note_fee_base, note_fee_quote,
  *                     batch_slot)
@@ -80,6 +81,7 @@ export interface MatchSlotWitness {
   sellerFeeAmt: bigint;
   // ── VALID_PRICE-equivalent fields ──
   batchSlot: bigint;
+  isActive: boolean;
   // ── VALID_CREATE private witnesses (v2: one inner_hash per note) ──
   aOwnerCommit: bigint;
   bOwnerCommit: bigint;
@@ -95,16 +97,19 @@ export interface MatchSlotWitness {
   fInner: bigint;
   // ── VALID_PRICE private witness ──
   clearingPrice: bigint;
-  // ── Protocol fee notes (per-slot; non-zero only on the flush slot 0) ──
-  /** Base-mint (seller) fee note commitment; all-zero off slot 0 / no fee. */
+  priceRemainder: bigint;
+  // ── Per-match protocol fee notes ──
+  /** Base-mint (seller) fee note commitment; all-zero when the fee is zero. */
   noteFeeBaseCommitment: Uint8Array;
-  /** Quote-mint (buyer) fee note commitment; all-zero off slot 0 / no fee. */
+  /** Quote-mint (buyer) fee note commitment; all-zero when the fee is zero. */
   noteFeeQuoteCommitment: Uint8Array;
   // ── Batch-level (same on every slot; the prover reads slots[0]) ──
   /** Protocol fee rate (bps) — the circuit fee-floor PUBLIC input. */
   feeRateBps: bigint;
   /** Protocol fee-note owner — the fee-note-binding PUBLIC input. */
   protocolOwnerCommitment: bigint;
+  /** Governed fixed-point denominator — a circuit PUBLIC input. */
+  priceScale: bigint;
   /** Fee-note inner_hashes (derive_inner(batch_slot, FEE_ROLE_*)). */
   feeBaseInner: bigint;
   feeQuoteInner: bigint;
@@ -112,11 +117,11 @@ export interface MatchSlotWitness {
 
 export interface BatchProveResult {
   proof: Groth16OnChainProof;
-  /** 32-byte Merkle root — the single public input. */
+  /** 32-byte Merkle root — the first of eight public inputs. */
   merkleRoot: Uint8Array;
   /** Per-slot leaves in input order. */
   leaves: Uint8Array[];
-  /** snarkjs public-inputs vector. Single 32-byte element (== merkleRoot). */
+  /** Eight-element snarkjs public-input vector in canonical circuit order. */
   publicInputsBE: Uint8Array[];
 }
 
@@ -156,16 +161,12 @@ function pubkeyToFrPair(pk: Uint8Array): [bigint, bigint] {
  * so this is safe.
  */
 export async function dummySlot(): Promise<MatchSlotWitness> {
-  const p = await getPoseidon();
-  // Poseidon6(DOMAIN_NOTE=2, mint_lo=0, mint_hi=0, amount=0,
-  //           owner_commit=0, inner_hash=0)
-  const dummyNote = bn254ToBE32(p.F.toObject(p([2n, 0n, 0n, 0n, 0n, 0n])));
   const zero32 = new Uint8Array(32);
   return {
-    noteAcommitment: dummyNote,
-    noteBcommitment: dummyNote,
-    noteCcommitment: dummyNote,
-    noteDcommitment: dummyNote,
+    noteAcommitment: zero32,
+    noteBcommitment: zero32,
+    noteCcommitment: zero32,
+    noteDcommitment: zero32,
     noteEcommitment: zero32,
     noteFcommitment: zero32,
     quoteMint: zero32,
@@ -177,6 +178,7 @@ export async function dummySlot(): Promise<MatchSlotWitness> {
     buyerFeeAmt: 0n,
     sellerFeeAmt: 0n,
     batchSlot: 0n,
+    isActive: false,
     aOwnerCommit: 0n,
     bOwnerCommit: 0n,
     aAmount: 0n,
@@ -188,10 +190,12 @@ export async function dummySlot(): Promise<MatchSlotWitness> {
     eInner: 0n,
     fInner: 0n,
     clearingPrice: 0n,
+    priceRemainder: 0n,
     noteFeeBaseCommitment: zero32,
     noteFeeQuoteCommitment: zero32,
     feeRateBps: 0n,
     protocolOwnerCommitment: 0n,
+    priceScale: 1n,
     feeBaseInner: 0n,
     feeQuoteInner: 0n,
   };
@@ -229,13 +233,14 @@ export async function computeBatchLeaf(
   slot: MatchSlotWitness,
 ): Promise<Uint8Array> {
   const p = await getPoseidon();
-  // Commitment-only leaf (amount-privacy, P1b): Poseidon10(DOMAIN_LEAF_V2,
-  // note_a..note_f, note_fee_base, note_fee_quote, batch_slot). The
+  // Commitment-only leaf (amount-privacy, P1b): Poseidon11(DOMAIN_LEAF_V2,
+  // active, note_a..note_f, note_fee_base, note_fee_quote, batch_slot). The
   // amounts/mints/price are bound transitively via the note commitments, so
   // they leave the leaf.
   const leaf = p.F.toObject(
     p([
       DOMAIN_LEAF_V2,
+      slot.isActive ? 1n : 0n,
       bigintFromBE32(slot.noteAcommitment),
       bigintFromBE32(slot.noteBcommitment),
       bigintFromBE32(slot.noteCcommitment),
@@ -353,10 +358,21 @@ export async function proveMatchBatch(
 
   // Sanity-check the headline constraints before invoking snarkjs.
   args.slots.forEach((slot, i) => {
-    if (slot.quoteAmount !== slot.baseAmount * slot.clearingPrice) {
+    if (
+      slot.baseAmount * slot.clearingPrice !==
+      slot.quoteAmount * slot.priceScale + slot.priceRemainder
+    ) {
       throw new Error(
-        `match-batch-prover[slot${i}]: quote (${slot.quoteAmount}) !== ` +
-          `base (${slot.baseAmount}) * price (${slot.clearingPrice})`,
+        `match-batch-prover[slot${i}]: scaled floor equation failed`,
+      );
+    }
+    if (
+      slot.priceScale <= 0n ||
+      slot.priceRemainder < 0n ||
+      slot.priceRemainder >= slot.priceScale
+    ) {
+      throw new Error(
+        `match-batch-prover[slot${i}]: invalid price scale/remainder`,
       );
     }
     if (
@@ -385,11 +401,15 @@ export async function proveMatchBatch(
   const inputs: Record<string, string | string[]> = {
     merkle_root: bigintFromBE32(merkleRoot).toString(),
     // Batch-level PUBLIC/private inputs (single values, read from slot 0).
-    // Circuit `main` public order: [merkle_root, fee_rate_bps, protocol_owner].
+    // Circuit public order: root, fee rate, protocol owner, four mint halves,
+    // then price scale.
     fee_rate_bps: args.slots[0].feeRateBps.toString(),
     protocol_owner_commitment: args.slots[0].protocolOwnerCommitment.toString(),
-    fee_base_inner: args.slots[0].feeBaseInner.toString(),
-    fee_quote_inner: args.slots[0].feeQuoteInner.toString(),
+    base_mint_lo: pubkeyToFrPair(args.slots[0].baseMint)[0].toString(),
+    base_mint_hi: pubkeyToFrPair(args.slots[0].baseMint)[1].toString(),
+    quote_mint_lo: pubkeyToFrPair(args.slots[0].quoteMint)[0].toString(),
+    quote_mint_hi: pubkeyToFrPair(args.slots[0].quoteMint)[1].toString(),
+    price_scale: args.slots[0].priceScale.toString(),
     // VALID_CREATE-equivalent public fields
     note_a_commitment: args.slots.map((s) =>
       bigintFromBE32(s.noteAcommitment).toString(),
@@ -415,18 +435,6 @@ export async function proveMatchBatch(
     note_fee_quote_commitment: args.slots.map((s) =>
       bigintFromBE32(s.noteFeeQuoteCommitment).toString(),
     ),
-    quote_mint_lo: args.slots.map((s) =>
-      pubkeyToFrPair(s.quoteMint)[0].toString(),
-    ),
-    quote_mint_hi: args.slots.map((s) =>
-      pubkeyToFrPair(s.quoteMint)[1].toString(),
-    ),
-    base_mint_lo: args.slots.map((s) =>
-      pubkeyToFrPair(s.baseMint)[0].toString(),
-    ),
-    base_mint_hi: args.slots.map((s) =>
-      pubkeyToFrPair(s.baseMint)[1].toString(),
-    ),
     base_amount: args.slots.map((s) => s.baseAmount.toString()),
     quote_amount: args.slots.map((s) => s.quoteAmount.toString()),
     buyer_change_amt: args.slots.map((s) => s.buyerChangeAmt.toString()),
@@ -434,6 +442,7 @@ export async function proveMatchBatch(
     buyer_fee_amt: args.slots.map((s) => s.buyerFeeAmt.toString()),
     seller_fee_amt: args.slots.map((s) => s.sellerFeeAmt.toString()),
     batch_slot: args.slots.map((s) => s.batchSlot.toString()),
+    is_active: args.slots.map((s) => (s.isActive ? "1" : "0")),
     // VALID_CREATE private witnesses
     a_owner_commit: args.slots.map((s) => s.aOwnerCommit.toString()),
     b_owner_commit: args.slots.map((s) => s.bOwnerCommit.toString()),
@@ -441,12 +450,9 @@ export async function proveMatchBatch(
     b_amount: args.slots.map((s) => s.bAmount.toString()),
     a_inner: args.slots.map((s) => s.aInner.toString()),
     b_inner: args.slots.map((s) => s.bInner.toString()),
-    c_inner: args.slots.map((s) => s.cInner.toString()),
-    d_inner: args.slots.map((s) => s.dInner.toString()),
-    e_inner: args.slots.map((s) => s.eInner.toString()),
-    f_inner: args.slots.map((s) => s.fInner.toString()),
     // VALID_PRICE private witness
     clearing_price: args.slots.map((s) => s.clearingPrice.toString()),
+    price_remainder: args.slots.map((s) => s.priceRemainder.toString()),
   };
 
   // (witness-gen bench, Step 1) Dump the circom input.json so the native C++

@@ -160,6 +160,8 @@ pub struct SettleDriverConfig {
     /// Protocol fee rate (bps) — the circuit fee-floor public input
     /// (`VaultConfig.fee_rate_bps`, reconciled at boot).
     pub fee_rate_bps: u64,
+    /// Governed fixed-point price denominator.
+    pub price_scale: u64,
     /// Circuit instantiation N the witness set is padded to (16).
     pub circuit_n: usize,
 }
@@ -332,6 +334,7 @@ async fn drive_batch(
         quote_mint: driver.cfg.quote_mint,
         protocol_owner_commitment: driver.cfg.protocol_owner_commitment,
         fee_rate_bps: driver.cfg.fee_rate_bps,
+        price_scale: driver.cfg.price_scale,
         circuit_n: driver.cfg.circuit_n,
     };
 
@@ -689,6 +692,7 @@ mod tests {
                 quote_mint,
                 protocol_owner_commitment: fr_safe(0x07),
                 fee_rate_bps: 0,
+                price_scale: 1,
                 circuit_n: 2,
             },
         };

@@ -25,7 +25,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use darkpool_crypto::match_output_inner_hash;
 use darkpool_crypto::note::commitment_from_fields_v2;
+use darkpool_matcher::change_note::{CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER};
 use darkpool_matcher::{
     book::{OrderUpdate, OrderUpdateKind},
     config::{MatchConfig, OracleSnapshot},
@@ -69,17 +71,17 @@ pub struct MatcherState {
     /// tests that don't exercise the opening path.
     base_mint: [u8; 32],
     quote_mint: [u8; 32],
+    /// Fixed-point denominator for bid collateral and match pricing.
+    price_scale: u64,
     /// Protocol fee rate (bps) — mirrors the driver's
     /// `MatchConfig.fee_rate_bps`. Intake uses it to derive the
     /// *fee-inclusive* collateral each order must lock (nominal +
     /// own fee) so a filled order can pay its own protocol fee out of
     /// its own collateral. 0 (default) → fee-free, collateral = nominal.
     fee_rate_bps: u16,
-    /// Broadcast of [`FillMemo`]s — one per continuation anchor the tick
-    /// consumes. The `/v1/stream` fills channel subscribes; the client uses
-    /// the memo to correlate the anchor + run the integrity check + store
-    /// the change note. Kept alive even with no subscribers (send just
-    /// returns `Err`, which the tick ignores).
+    /// Legacy fill-memo broadcast retained until canonical order v2 removes
+    /// anchor/top-up transport. Derived continuations no longer depend on this
+    /// channel for output safety; chain recovery is the durable source.
     fills_tx: tokio::sync::broadcast::Sender<FillMemo>,
     /// Broadcast of [`OrderUpdate`]s — the order-lifecycle events the tick
     /// produces (fully-filled / partially-filled / cancelled / expired). The
@@ -102,6 +104,7 @@ impl Default for MatcherState {
             openings: super::openings::OpeningStore::default(),
             base_mint: [0u8; 32],
             quote_mint: [0u8; 32],
+            price_scale: 1,
             fee_rate_bps: 0,
             fills_tx,
             order_updates_tx,
@@ -141,6 +144,15 @@ impl MatcherState {
         self
     }
 
+    pub fn with_price_scale(mut self, price_scale: u64) -> Self {
+        self.price_scale = price_scale.max(1);
+        self
+    }
+
+    pub fn price_scale(&self) -> u64 {
+        self.price_scale
+    }
+
     /// Protocol fee rate (bps) for this market.
     pub fn fee_rate_bps(&self) -> u16 {
         self.fee_rate_bps
@@ -172,27 +184,17 @@ impl MatcherState {
     }
 }
 
-/// Assign continuation anchors for the relocking sides of a freshly
-/// matched batch (Phase 6). For each match whose buyer/seller relocks
-/// (a Limit partial fill that will continue), consume that order's next
-/// pre-supplied anchor, rebuild the change note (note_e / note_f) with
-/// the anchor's `inner_hash` against the order's `owner_commitment`,
-/// override the match commitment + the order update's
-/// `new_collateral_note`, and insert the rotated opening (keyed by the
-/// change-note commitment) carrying the anchor's `inner_hash` +
-/// pre-computed `nullifier`. The book rotation (`apply_updates`) then
-/// points the residual at it, and the settle assembler reads the opening
-/// for the witness — so the residual re-matches WITHOUT a client
-/// roundtrip (the matcher's old `single_fill` workaround dropped it).
+/// Build deterministic continuation outputs for relocking sides of a freshly
+/// matched batch. Each change inner is `Poseidon3(24, input_inner, role)`, so
+/// no client-supplied anchor or process-local settlement id can influence it.
+/// The rotated opening remains inside the enclave because Tx D creates its
+/// relock atomically; the next page consumes that locked commitment directly.
 ///
-/// On anchor-pool exhaustion (or a missing buyer/seller opening) the side
-/// is DOWNGRADED: the relock flag is cleared (so note_e becomes a final
-/// `derive_inner` change note the assembler builds + the client withdraws)
-/// and the order update is rewritten to `Cancelled` (residual leaves the
-/// book), with the pool flagged `paused` for the Phase 7 WS top-up.
+/// A missing input opening downgrades the residual to cancelled rather than
+/// emitting an output whose circuit opening the scheduler cannot reconstruct.
 ///
 /// Must run under the matcher write lock, BEFORE `apply_updates`.
-fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOutput) {
+fn assign_derived_continuations(state: &mut MatcherState, output: &mut RunBatchOutput) {
     let (base_mint, quote_mint) = state.market_mints();
     // Collected post-loop edits to `order_updates` (can't borrow it while
     // `matches` is borrowed mut): order_id -> Some(new_collateral_note) to
@@ -203,82 +205,62 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
         // ── buyer side → note_e (QUOTE collateral) ──
         if m.buyer_relock_order_id != RELOCK_ORDER_ID_NONE && m.buyer_change_amt > 0 {
             let oid = m.buyer_relock_order_id;
-            let owner = state
-                .openings()
-                .get(&m.note_buyer)
-                .map(|o| o.opening.owner_commitment);
             let prior = state.openings().get(&m.note_buyer);
-            let anchor = state
-                .openings_mut()
-                .anchor_pool_mut(&oid)
-                .and_then(|p| p.consume_next());
-            match (owner, prior, anchor) {
-                (Some(owner), Some(prior), Some((anchor_index, anchor))) => {
-                    if let Ok(note_e) = commitment_from_fields_v2(
-                        &quote_mint,
-                        m.buyer_change_amt,
-                        &owner,
-                        &anchor.inner_hash,
-                    ) {
-                        m.note_e_commitment = note_e;
-                        let opening = OrderOpening {
-                            opening: NoteOpening {
-                                token_mint: quote_mint,
-                                amount: m.buyer_change_amt,
-                                owner_commitment: owner,
-                                inner_hash: anchor.inner_hash,
-                                nullifier: anchor.nullifier,
-                            },
-                            order_id: oid,
-                            expiry_slot: prior.expiry_slot,
-                            // The relock (created when THIS batch settles)
-                            // pins note_e on-chain, so the continuation
-                            // re-consumes it without a fresh VALID_INPUT
-                            // proof; these carry forward the prior values.
-                            merkle_root: prior.merkle_root,
-                            // Carried forward; unused — `from_relock` skips lock_note.
-                            tree_id: prior.tree_id,
-                            valid_input_proof: prior.valid_input_proof.clone(),
-                            // note_e is locked by THIS batch's re-lock — the
-                            // NEXT batch that consumes it must skip lock_note.
-                            from_relock: true,
-                            // The continuation note returns to the same owner —
-                            // carry the viewing key so the residual stays
-                            // recoverable across re-locks (Proposal B).
-                            viewing_pubkey: prior.viewing_pubkey,
-                        };
-                        state.openings_mut().insert(note_e, opening);
-                        update_edits.push((oid, Some(note_e)));
-                        let _ = state.fills_tx.send(FillMemo::new(
-                            oid,
-                            anchor_index,
+            match prior {
+                Some(prior) => {
+                    let owner = prior.opening.owner_commitment;
+                    let inner =
+                        match_output_inner_hash(&prior.opening.inner_hash, CHANGE_ROLE_BUYER);
+                    if let Ok(inner) = inner {
+                        if let Ok(note_e) = commitment_from_fields_v2(
+                            &quote_mint,
                             m.buyer_change_amt,
-                            note_e,
-                            quote_mint,
-                            anchor.inner_hash,
-                        ));
-                        // Drained the last anchor → pause: the residual
-                        // stays in the book but won't match again until a
-                        // WS top-up replenishes the pool (the NEXT fill
-                        // would have no anchor for its change note).
-                        if let Some(p) = state.openings_mut().anchor_pool_mut(&oid) {
-                            if p.remaining() == 0 {
-                                p.paused = true;
-                            }
+                            &owner,
+                            &inner,
+                        ) {
+                            m.note_e_commitment = note_e;
+                            let opening = OrderOpening {
+                                opening: NoteOpening {
+                                    token_mint: quote_mint,
+                                    amount: m.buyer_change_amt,
+                                    owner_commitment: owner,
+                                    inner_hash: inner,
+                                    // Settlement replay protection is commitment-
+                                    // keyed. The user's spending key derives the
+                                    // real nullifier when it later withdraws.
+                                    nullifier: [0u8; 32],
+                                },
+                                order_id: oid,
+                                expiry_slot: prior.expiry_slot,
+                                // The relock (created when THIS batch settles)
+                                // pins note_e on-chain, so the continuation
+                                // re-consumes it without a fresh VALID_INPUT
+                                // proof; these carry forward the prior values.
+                                merkle_root: prior.merkle_root,
+                                // Carried forward; unused — `from_relock` skips lock_note.
+                                tree_id: prior.tree_id,
+                                valid_input_proof: prior.valid_input_proof.clone(),
+                                // note_e is locked by THIS batch's re-lock — the
+                                // NEXT batch that consumes it must skip lock_note.
+                                from_relock: true,
+                                // The continuation note returns to the same owner —
+                                // carry the viewing key so the residual stays
+                                // recoverable across re-locks (Proposal B).
+                                viewing_pubkey: prior.viewing_pubkey,
+                            };
+                            state.openings_mut().insert(note_e, opening);
+                            update_edits.push((oid, Some(note_e)));
+                        } else {
+                            m.buyer_relock_order_id = RELOCK_ORDER_ID_NONE;
+                            update_edits.push((oid, None));
                         }
                     } else {
-                        // Fr-safety failure (shouldn't happen — anchor
-                        // inner_hash validated at intake). Downgrade.
                         m.buyer_relock_order_id = RELOCK_ORDER_ID_NONE;
                         update_edits.push((oid, None));
                     }
                 }
-                _ => {
-                    // Exhausted pool or missing opening → downgrade.
+                None => {
                     m.buyer_relock_order_id = RELOCK_ORDER_ID_NONE;
-                    if let Some(p) = state.openings_mut().anchor_pool_mut(&oid) {
-                        p.paused = true;
-                    }
                     update_edits.push((oid, None));
                 }
             }
@@ -287,69 +269,53 @@ fn assign_continuation_anchors(state: &mut MatcherState, output: &mut RunBatchOu
         // ── seller side → note_f (BASE collateral) ──
         if m.seller_relock_order_id != RELOCK_ORDER_ID_NONE && m.seller_change_amt > 0 {
             let oid = m.seller_relock_order_id;
-            let owner = state
-                .openings()
-                .get(&m.note_seller)
-                .map(|o| o.opening.owner_commitment);
             let prior = state.openings().get(&m.note_seller);
-            let anchor = state
-                .openings_mut()
-                .anchor_pool_mut(&oid)
-                .and_then(|p| p.consume_next());
-            match (owner, prior, anchor) {
-                (Some(owner), Some(prior), Some((anchor_index, anchor))) => {
-                    if let Ok(note_f) = commitment_from_fields_v2(
-                        &base_mint,
-                        m.seller_change_amt,
-                        &owner,
-                        &anchor.inner_hash,
-                    ) {
-                        m.note_f_commitment = note_f;
-                        let opening = OrderOpening {
-                            opening: NoteOpening {
-                                token_mint: base_mint,
-                                amount: m.seller_change_amt,
-                                owner_commitment: owner,
-                                inner_hash: anchor.inner_hash,
-                                nullifier: anchor.nullifier,
-                            },
-                            order_id: oid,
-                            expiry_slot: prior.expiry_slot,
-                            merkle_root: prior.merkle_root,
-                            // Carried forward; unused — `from_relock` skips lock_note.
-                            tree_id: prior.tree_id,
-                            valid_input_proof: prior.valid_input_proof.clone(),
-                            // note_f is locked by THIS batch's re-lock.
-                            from_relock: true,
-                            // Carry the viewing key forward (Proposal B) so the
-                            // seller's continuation residual stays recoverable.
-                            viewing_pubkey: prior.viewing_pubkey,
-                        };
-                        state.openings_mut().insert(note_f, opening);
-                        update_edits.push((oid, Some(note_f)));
-                        let _ = state.fills_tx.send(FillMemo::new(
-                            oid,
-                            anchor_index,
+            match prior {
+                Some(prior) => {
+                    let owner = prior.opening.owner_commitment;
+                    let inner =
+                        match_output_inner_hash(&prior.opening.inner_hash, CHANGE_ROLE_SELLER);
+                    if let Ok(inner) = inner {
+                        if let Ok(note_f) = commitment_from_fields_v2(
+                            &base_mint,
                             m.seller_change_amt,
-                            note_f,
-                            base_mint,
-                            anchor.inner_hash,
-                        ));
-                        if let Some(p) = state.openings_mut().anchor_pool_mut(&oid) {
-                            if p.remaining() == 0 {
-                                p.paused = true;
-                            }
+                            &owner,
+                            &inner,
+                        ) {
+                            m.note_f_commitment = note_f;
+                            let opening = OrderOpening {
+                                opening: NoteOpening {
+                                    token_mint: base_mint,
+                                    amount: m.seller_change_amt,
+                                    owner_commitment: owner,
+                                    inner_hash: inner,
+                                    nullifier: [0u8; 32],
+                                },
+                                order_id: oid,
+                                expiry_slot: prior.expiry_slot,
+                                merkle_root: prior.merkle_root,
+                                // Carried forward; unused — `from_relock` skips lock_note.
+                                tree_id: prior.tree_id,
+                                valid_input_proof: prior.valid_input_proof.clone(),
+                                // note_f is locked by THIS batch's re-lock.
+                                from_relock: true,
+                                // Carry the viewing key forward (Proposal B) so the
+                                // seller's continuation residual stays recoverable.
+                                viewing_pubkey: prior.viewing_pubkey,
+                            };
+                            state.openings_mut().insert(note_f, opening);
+                            update_edits.push((oid, Some(note_f)));
+                        } else {
+                            m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
+                            update_edits.push((oid, None));
                         }
                     } else {
                         m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
                         update_edits.push((oid, None));
                     }
                 }
-                _ => {
+                None => {
                     m.seller_relock_order_id = RELOCK_ORDER_ID_NONE;
-                    if let Some(p) = state.openings_mut().anchor_pool_mut(&oid) {
-                        p.paused = true;
-                    }
                     update_edits.push((oid, None));
                 }
             }
@@ -511,18 +477,7 @@ impl MatcherDriver {
             // match so submitters aren't blocked across it.
             let (book_snap, start_match_id) = {
                 let state = self.state.read().await;
-                let mut snap = state.book().snapshot();
-                // Skip orders whose anchor pool is drained + awaiting a WS
-                // top-up (Phase 7): they stay in the book (their current
-                // change-note collateral is valid) but must NOT match again
-                // until topped up — the next fill would have no anchor for
-                // its change note. Unpaused by `POST /orders/:id/anchors`.
-                snap.orders.retain(|o| {
-                    !state
-                        .openings()
-                        .anchor_pool(&o.order_id)
-                        .is_some_and(|p| p.paused)
-                });
+                let snap = state.book().snapshot();
                 (snap, state.next_match_id())
             };
             if book_snap.orders.is_empty() {
@@ -564,14 +519,12 @@ impl MatcherDriver {
             };
 
             // Apply this page's updates + advance the match-id counter
-            // under a brief write lock. `assign_continuation_anchors`
-            // first consumes a pre-supplied anchor for each relocking side
-            // (rebuilding note_e/note_f from it + inserting the rotated
-            // opening) so the residual that `apply_updates` keeps in the
-            // book is re-matchable on a later page/tick without a roundtrip.
+            // under a brief write lock. `assign_derived_continuations` first
+            // rebuilds note_e/note_f from the consumed input inner and inserts
+            // the rotated opening, so the circuit and next relock agree.
             {
                 let mut state = self.state.write().await;
-                assign_continuation_anchors(&mut state, &mut output);
+                assign_derived_continuations(&mut state, &mut output);
                 state.book_mut().apply_updates(&output.order_updates);
                 // Evict the anchor pool of any order that left the book
                 // (full fill / cancel / IOC-or-exhaustion residual / expiry);
@@ -640,10 +593,9 @@ impl From<crate::oracle::cache::OracleSnapshot> for MatcherOracleSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::matcher::openings::{AnchorPool, NoteOpening, OrderOpening};
+    use crate::matcher::openings::{NoteOpening, OrderOpening};
     use crate::settle::lock_note::Groth16ProofBytes;
     use darkpool_matcher::match_result::{MatchPair, MatchStatus};
-    use darkpool_matcher::order_canonical::Anchor;
 
     fn fr_safe(tag: u8) -> [u8; 32] {
         // Top byte zero ⇒ < BN254 modulus (safe to Poseidon-hash).
@@ -655,7 +607,8 @@ mod tests {
     /// Proposal B: the viewing-encryption pubkey on a partially-filled order's
     /// input opening must carry verbatim onto the rotated continuation opening,
     /// so a multi-fill residual's change stays recoverable. Guards the
-    /// `viewing_pubkey: prior.viewing_pubkey` carry in `assign_continuation_anchors`.
+    /// `viewing_pubkey: prior.viewing_pubkey` carry in
+    /// `assign_derived_continuations`.
     #[test]
     fn viewing_pubkey_survives_continuation_relock() {
         let base_mint = [0xb1u8; 32];
@@ -691,15 +644,6 @@ mod tests {
                 viewing_pubkey: Some(viewing),
             },
         );
-        // One continuation anchor for the bid.
-        state.openings_mut().insert_anchor_pool(
-            bid_id,
-            AnchorPool::new(vec![Anchor {
-                inner_hash: fr_safe(0x22),
-                nullifier: [0x88u8; 32],
-            }]),
-        );
-
         // A partial fill that relocks the buyer's residual (note_e).
         let m = MatchPair {
             note_buyer,
@@ -731,7 +675,7 @@ mod tests {
         let mut output = RunBatchOutput::empty(10, 100, 0);
         output.matches = vec![m];
 
-        assign_continuation_anchors(&mut state, &mut output);
+        assign_derived_continuations(&mut state, &mut output);
 
         // The rotated opening is keyed by the freshly-computed note_e.
         let note_e = output.matches[0].note_e_commitment;

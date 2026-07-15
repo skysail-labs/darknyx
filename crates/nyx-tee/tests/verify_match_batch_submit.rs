@@ -121,7 +121,7 @@ async fn verify_match_batch_submits_one_tx() {
         use solana_signer::Signer;
         kp.pubkey()
     };
-    let ix = build_verify_match_batch_ix(&payer, args());
+    let ix = build_verify_match_batch_ix(&payer, &[0x44; 32], &[0x55; 32], args());
     let sig = submit_ixs(&client, &kp, &[ix]).await.unwrap();
     assert_eq!(sig, "verify-sig-aaaa");
 

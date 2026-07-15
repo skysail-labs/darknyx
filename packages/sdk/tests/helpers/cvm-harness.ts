@@ -90,6 +90,16 @@ export const hex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 export const withFee = (nominal: bigint): bigint =>
   nominal + (nominal * FEE_RATE_BPS) / 10_000n;
 
+/** Governed fixed-point quote conversion used by matcher, intake, and circuit. */
+export const scaledQuote = (
+  baseAmount: bigint,
+  price: bigint,
+  priceScale: bigint,
+): bigint => {
+  if (priceScale <= 0n) throw new Error("priceScale must be positive");
+  return (baseAmount * price) / priceScale;
+};
+
 /** fetch with retries — the dstack gateway can transiently close the socket
  *  (UND_ERR_SOCKET) for the first minute after a CVM restart. */
 export async function gwFetch(

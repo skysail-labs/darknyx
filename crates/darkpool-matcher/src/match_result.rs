@@ -143,15 +143,11 @@ pub struct RunBatchOutput {
     /// VALID_MATCH_BATCH; this one is for off-chain auditability.
     pub inclusion_root: [u8; 32],
 
-    /// Per-mint fee totals accumulated this batch. The on-chain ix
-    /// translates these into `FeeAccumulator` PDA writes; the
-    /// in-TEE matcher emits them on the `account` WS channel and
-    /// also feeds them into the change-note flush.
+    /// Per-mint fee totals accumulated this batch for metrics. Settlement
+    /// creates proof-bound fee notes per match instead of flushing this sum.
     pub fee_buckets: [crate::fee::FeeBucket; 2],
 
     /// Slot the matcher was invoked at — copied onto every emitted MatchPair.
-    /// Until the per-match fee cutover, this is also the fee-note identifier:
-    /// consumers must use this recorded value and never re-sample a slot.
     pub batch_slot: u64,
 }
 

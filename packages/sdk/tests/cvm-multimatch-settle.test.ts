@@ -73,6 +73,7 @@ import {
   authToken,
   hex,
   withFee,
+  scaledQuote,
   FEE_RATE_BPS,
   SYMBOL,
   type Persona,
@@ -126,6 +127,7 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     const anchor = await fetchOracleAnchor();
     const bidPrice = (anchor * 12n) / 10n;
     const askPrice = (anchor * 8n) / 10n;
+    const PRICE_SCALE = BigInt(cfg.market.priceScale);
     // SAME qty for every pair → the uniform-price match is cleanly pairwise
     // (M bids × M asks, all full fills, NO partial-fill residual/relock) so all
     // M matches land in ONE batch — exactly what we want for a clean per-batch
@@ -164,7 +166,9 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       baseMint,
       seller.payer.publicKey,
     );
-    const buyerNoteAmts = qtys.map((q) => withFee(q * bidPrice));
+    const buyerNoteAmts = qtys.map((q) =>
+      withFee(scaledQuote(q, bidPrice, PRICE_SCALE)),
+    );
     const sellerNoteAmts = qtys.map((q) => withFee(q));
 
     // Mint enough collateral for all M notes per side (one ATA per side).

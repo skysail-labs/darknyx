@@ -74,6 +74,7 @@ pub fn build_signed_place_body(
     arrival_nonce: u64,
     symbol: &str,
     fee_rate_bps: u16,
+    price_scale: u64,
     base_mint: &[u8; 32],
     quote_mint: &[u8; 32],
     collateral_surplus_bps: u16,
@@ -87,7 +88,8 @@ pub fn build_signed_place_body(
     //
     // `note_amount` MUST mirror intake's derivation EXACTLY (orders.rs):
     // a fee-inclusive collateral `nominal + floor(nominal * fee_rate_bps
-    // / 10_000)`, where nominal = amount × price (bid) or amount (ask).
+    // / 10_000)`, where nominal = floor(amount × price / price_scale) for a
+    // bid or amount for an ask.
     // The fee term is what lets a filled order pay its OWN protocol fee
     // out of its own collateral; intake re-derives the commitment with
     // this same amount, so an OLD nominal-only value would fail
@@ -102,7 +104,10 @@ pub fn build_signed_place_body(
     // TODO(loadgen): take mints via --base-mint/--quote-mint once the TEE
     // reads its market from the on-chain MarketConfig PDA.
     let nominal = match side {
-        OrderSide::Bid => amount.saturating_mul(price_limit).max(amount),
+        OrderSide::Bid => u64::try_from(
+            (amount as u128).saturating_mul(price_limit as u128) / price_scale.max(1) as u128,
+        )
+        .unwrap_or(u64::MAX),
         OrderSide::Ask => amount,
     };
     let fee = ((nominal as u128) * (fee_rate_bps as u128) / 10_000u128) as u64;

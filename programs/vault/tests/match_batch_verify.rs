@@ -1,5 +1,5 @@
 //! Real N=16 proof → on-chain `verify_match_batch` acceptance
-//! (TEE v2 PR 4g.7 — real-N16 step 2).
+//! (VALID_MATCH_BATCH v3 real-N16 step 2).
 //!
 //! Step 1 (`crates/nyx-tee/tests/n16_assemble_prove_verify.rs`) proved
 //! the settle assembler's witness yields a Groth16 proof that verifies
@@ -42,6 +42,16 @@ fn fixture_protocol_owner() -> [u8; 32] {
     v
 }
 
+fn fixture_mints() -> (Pubkey, Pubkey) {
+    let mut base = [0u8; 32];
+    base[0] = 1;
+    base[31] = 0xb1;
+    let mut quote = [0u8; 32];
+    quote[0] = 1;
+    quote[31] = 0x9e;
+    (Pubkey::new_from_array(base), Pubkey::new_from_array(quote))
+}
+
 fn fixture() -> ([u8; 256], [u8; 32]) {
     assert_eq!(
         FIXTURE.len(),
@@ -62,13 +72,23 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
     // The 3rd public input (protocol_owner) is read from VaultConfig; seed it
     // to the value the fixture proved with.
     set_vault_fee_config(&mut h, fixture_protocol_owner(), 0);
+    let (base_mint, quote_mint) = fixture_mints();
+    seed_market_config(&mut h, &base_mint, &quote_mint, 1, true);
 
     // Marker absent before verify.
     assert!(!batch_validity_marker_exists(&h, &root));
 
     // expiry ∈ (clock.slot, slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS=300];
     // litesvm boots at slot 0, so 200 sits safely inside the window.
-    let ix = build_verify_match_batch_ix(&h, &h.tee.pubkey(), &root, 200, &proof);
+    let ix = build_verify_match_batch_ix(
+        &h,
+        &h.tee.pubkey(),
+        &base_mint,
+        &quote_mint,
+        &root,
+        200,
+        &proof,
+    );
     let tx = Transaction::new(
         &[&h.tee],
         Message::new(&[ix], Some(&h.tee.pubkey())),
@@ -81,18 +101,21 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
 
     // CU profiling + regression guard for nyx-tee's per-tx ComputeUnitLimit
     // right-sizing (VERIFY_COMPUTE_UNIT_LIMIT in crates/nyx-tee/src/settle/pipeline.rs,
-    // now 140_000). litesvm measures ~100,533 here; the on-chain limit carries
-    // extra margin because devnet's alt_bn128/groth16 syscalls run hotter than
-    // litesvm (a 101,000 limit died ComputationalBudgetExceeded on devnet). This
-    // guard trips earlier than the on-chain limit so a heavier verify ix prompts
-    // a re-measure + headroom check before it can exceed the devnet budget.
+    // now 180_000). v3's eight public inputs measure ~132.5k CU in litesvm.
+    // The higher transaction limit preserves >20% headroom and covers the
+    // modest devnet/runtime delta observed in prior verifier measurements.
     eprintln!(
         "CU_PROFILE verify_match_batch consumed={}",
         meta.compute_units_consumed
     );
     assert!(
-        meta.compute_units_consumed < 115_000,
-        "verify_match_batch CU {} grew — re-measure + re-check VERIFY_COMPUTE_UNIT_LIMIT (140_000) headroom vs devnet",
+        meta.compute_units_consumed < 150_000,
+        "verify_match_batch CU {} grew — re-measure + re-check VERIFY_COMPUTE_UNIT_LIMIT (180_000) headroom vs devnet",
+        meta.compute_units_consumed
+    );
+    assert!(
+        meta.compute_units_consumed.saturating_mul(120) < 180_000 * 100,
+        "verify_match_batch CU {} has less than 20% limit headroom",
         meta.compute_units_consumed
     );
 
@@ -108,8 +131,18 @@ fn tampered_proof_rejected_no_marker() {
     let mut h = Harness::setup();
     let (mut proof, root) = fixture();
     proof[0] ^= 0x01; // corrupt the pi_a G1 point
+    let (base_mint, quote_mint) = fixture_mints();
+    seed_market_config(&mut h, &base_mint, &quote_mint, 1, true);
 
-    let ix = build_verify_match_batch_ix(&h, &h.tee.pubkey(), &root, 200, &proof);
+    let ix = build_verify_match_batch_ix(
+        &h,
+        &h.tee.pubkey(),
+        &base_mint,
+        &quote_mint,
+        &root,
+        200,
+        &proof,
+    );
     let tx = Transaction::new(
         &[&h.tee],
         Message::new(&[ix], Some(&h.tee.pubkey())),
@@ -123,4 +156,63 @@ fn tampered_proof_rejected_no_marker() {
         !batch_validity_marker_exists(&h, &root),
         "no marker may be created for a rejected proof"
     );
+}
+
+#[test]
+fn disabled_market_rejected_before_marker_creation() {
+    let mut h = Harness::setup();
+    let (proof, root) = fixture();
+    set_vault_fee_config(&mut h, fixture_protocol_owner(), 0);
+    let (base_mint, quote_mint) = fixture_mints();
+    seed_market_config(&mut h, &base_mint, &quote_mint, 1, false);
+
+    let ix = build_verify_match_batch_ix(
+        &h,
+        &h.tee.pubkey(),
+        &base_mint,
+        &quote_mint,
+        &root,
+        200,
+        &proof,
+    );
+    let tx = Transaction::new(
+        &[&h.tee],
+        Message::new(&[ix], Some(&h.tee.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "a proof for a disabled market must be rejected"
+    );
+    assert!(!batch_validity_marker_exists(&h, &root));
+}
+
+#[test]
+fn proof_bound_to_different_price_scale_rejected() {
+    let mut h = Harness::setup();
+    let (proof, root) = fixture();
+    set_vault_fee_config(&mut h, fixture_protocol_owner(), 0);
+    let (base_mint, quote_mint) = fixture_mints();
+    // The fixture proves scale=1. A governed scale change must invalidate it.
+    seed_market_config(&mut h, &base_mint, &quote_mint, 2, true);
+
+    let ix = build_verify_match_batch_ix(
+        &h,
+        &h.tee.pubkey(),
+        &base_mint,
+        &quote_mint,
+        &root,
+        200,
+        &proof,
+    );
+    let tx = Transaction::new(
+        &[&h.tee],
+        Message::new(&[ix], Some(&h.tee.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "a proof for a different governed price scale must be rejected"
+    );
+    assert!(!batch_validity_marker_exists(&h, &root));
 }

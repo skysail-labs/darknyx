@@ -10,9 +10,8 @@
 //!     SAME representation `ArkMatchBatchProver` produces, so the single
 //!     [`super::convert::proof_to_onchain_bytes`] converter applies to all three
 //!     backends).
-//!   - [`assert_public_root`] — the native path's drift guard: the proof's
-//!     single public input (the circuit's computed Merkle root) must equal our
-//!     off-circuit `merkle_root`.
+//!   - [`assert_public_inputs`] — the native path's drift guard over all eight
+//!     circuit public inputs.
 //!
 //! Keeping these in one place means a proof-format fix (e.g. a Fq2 limb-order
 //! correction) lands once for every backend, and the n16 parity test guards them.
@@ -114,36 +113,42 @@ pub(crate) fn native_witness_wtns(bin: &Path, input_json: &str) -> Result<Vec<u8
     std::fs::read(&out_path).map_err(|e| ProverError::WitnessGen(format!("read .wtns: {e}")))
 }
 
-/// Assert the proof's single public input (the circuit's computed Merkle root)
-/// equals our off-circuit `merkle_root`. snarkjs-format backends return the
+/// Assert all eight proof public inputs (computed root plus governed config)
+/// equal the off-circuit vector. snarkjs-format backends return the
 /// public inputs as a JSON array of decimal strings; the root is Fr-safe so it
 /// fits 32 BE bytes. This is the native witness path's equivalent of the wasmer
 /// path's in-circuit drift guard.
-pub(crate) fn assert_public_root(
+pub(crate) fn assert_public_inputs(
     public_json: &str,
-    expected: &[u8; 32],
+    expected: &[[u8; 32]],
 ) -> Result<(), ProverError> {
     let pubs: Vec<String> = serde_json::from_str(public_json)
         .map_err(|e| ProverError::Prove(format!("parse public json: {e}")))?;
-    let first = pubs
-        .first()
-        .ok_or_else(|| ProverError::Prove("prover returned no public inputs".into()))?;
-    let got = num_bigint::BigUint::parse_bytes(first.as_bytes(), 10)
-        .ok_or_else(|| ProverError::Prove(format!("bad public decimal: {first}")))?;
-    let got_be = got.to_bytes_be();
-    if got_be.len() > 32 {
-        return Err(ProverError::RootMismatch {
-            circuit: hex::encode(&got_be),
-            computed: hex::encode(expected),
-        });
+    if pubs.len() != expected.len() {
+        return Err(ProverError::Prove(format!(
+            "prover returned {} public inputs, expected {}",
+            pubs.len(),
+            expected.len()
+        )));
     }
-    let mut got32 = [0u8; 32];
-    got32[32 - got_be.len()..].copy_from_slice(&got_be);
-    if &got32 != expected {
-        return Err(ProverError::RootMismatch {
-            circuit: hex::encode(got32),
-            computed: hex::encode(expected),
-        });
+    for (index, (value, want)) in pubs.iter().zip(expected).enumerate() {
+        let got = num_bigint::BigUint::parse_bytes(value.as_bytes(), 10)
+            .ok_or_else(|| ProverError::Prove(format!("bad public decimal: {value}")))?;
+        let got_be = got.to_bytes_be();
+        if got_be.len() > 32 {
+            return Err(ProverError::Prove(format!(
+                "public input[{index}] exceeds 32 bytes"
+            )));
+        }
+        let mut got32 = [0u8; 32];
+        got32[32 - got_be.len()..].copy_from_slice(&got_be);
+        if &got32 != want {
+            return Err(ProverError::WitnessGen(format!(
+                "public input[{index}] mismatch: prover {} != computed {}",
+                hex::encode(got32),
+                hex::encode(want)
+            )));
+        }
     }
     Ok(())
 }

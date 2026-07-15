@@ -106,7 +106,7 @@ fn config(circuit_breaker_bps: u64, min_order_size: u64) -> MatchConfig {
     MatchConfig {
         base_mint,
         quote_mint,
-        price_scale: 100_000_000,
+        price_scale: 1,
         tick_size: 1,
         min_order_size,
         circuit_breaker_bps,
@@ -185,6 +185,25 @@ fn market_ask_at_zero_clears_at_the_positive_bid() {
         out.matches[0].quote_amt > 0,
         "market sell must not fill for free"
     );
+}
+
+#[test]
+fn scaled_price_uses_governed_floor_semantics() {
+    let mut bid = pseed(0, 0, 10, 7, 1_000_000);
+    let mut ask = pseed(1, 1, 10, 7, 1_000_000);
+    // floor(7 * 10 / 3) = 23, remainder 1. Match collateral is expressed in
+    // quote/base atomic units, not raw scaled-price units.
+    bid.note_amount = 23;
+    ask.note_amount = 7;
+    let mut cfg = config(100_000, 0);
+    cfg.price_scale = 3;
+
+    let out =
+        run_batch(&book_of(vec![bid, ask]), &oracle(10), &cfg, 1, 0).expect("scaled-floor match");
+    assert_eq!(out.matches.len(), 1);
+    assert_eq!(out.matches[0].base_amt, 7);
+    assert_eq!(out.matches[0].price, 10);
+    assert_eq!(out.matches[0].quote_amt, 23);
 }
 
 // ─────── N-07: output commitments use note-bound owners ────────────────────

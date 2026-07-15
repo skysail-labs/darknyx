@@ -73,6 +73,7 @@ import {
   fetchOracleAnchor,
   hex,
   withFee,
+  scaledQuote,
   FEE_RATE_BPS,
   SYMBOL,
   type Persona,
@@ -142,6 +143,7 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
       const anchor = await fetchOracleAnchor();
       const bidPrice = (anchor * 12n) / 10n; // high → crosses the ask
       const askPrice = (anchor * 8n) / 10n; //  low → crossed by the bid
+      const PRICE_SCALE = BigInt(cfg.market.priceScale);
       console.log(
         `  · QTY=${QTY} bid=${bidPrice} ask=${askPrice} feeBps=${FEE_RATE_BPS}`,
       );
@@ -175,7 +177,7 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
 
       // ── collateral: self needs a QUOTE note (bid) + a BASE note (ask);
       //    taker needs a BASE note (its crossing ask) ─────────────────────
-      const bidNoteAmt = withFee(QTY * bidPrice); // quote
+      const bidNoteAmt = withFee(scaledQuote(QTY, bidPrice, PRICE_SCALE)); // quote
       const askNoteAmt = withFee(QTY); // base
       const selfQuoteAta = await getAssociatedTokenAddress(
         quoteMint,

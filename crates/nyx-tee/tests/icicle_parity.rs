@@ -157,14 +157,12 @@ async fn icicle_cpu_proves_and_verifies_n16() {
         base_mint: base_mint(),
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),
-        fee_identifier: 1234,
+        price_scale: 1,
         // Single real match → batch index 0 (C-08: batch_slot[0] === 0).
         slot_index: 0,
         // Zero-fee exact-fill match → fee_rate_bps MUST be 0, or the in-circuit
         // fee floor `(fee+1)*10000 > notional*rate` would reject it (fee=0).
         fee_rate_bps: 0,
-        buyer_change_inner: None,
-        seller_change_inner: None,
     })
     .expect("assemble the match");
     let slots = pad_batch(&[witness], PRODUCTION_BATCH_N).expect("pad to N=16");
@@ -189,12 +187,16 @@ async fn icicle_cpu_proves_and_verifies_n16() {
     let icicle_ms = t1.elapsed().as_millis();
 
     // 4. Byte-correctness gate: the icicle proof verifies against the zkey VK.
-    // Public inputs are [merkle_root, fee_rate_bps, protocol_owner] — fee_rate_bps
-    // = 0 (zero-fee exact-fill match), protocol_owner = the assemble's fr_safe(0x07).
-    assert_eq!(public.public_inputs_be.len(), 3);
+    // Public inputs are root, fee config, market mint halves, and price scale.
+    assert_eq!(public.public_inputs_be.len(), 8);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
     assert_eq!(public.public_inputs_be[1], [0u8; 32]);
     assert_eq!(public.public_inputs_be[2], fr_safe(0x07));
+    assert_eq!(&public.public_inputs_be[3][16..], &base_mint()[16..]);
+    assert_eq!(&public.public_inputs_be[4][16..], &base_mint()[..16]);
+    assert_eq!(&public.public_inputs_be[5][16..], &quote_mint()[16..]);
+    assert_eq!(&public.public_inputs_be[6][16..], &quote_mint()[..16]);
+    assert_eq!(public.public_inputs_be[7][31], 1);
     assert_eq!(
         public.merkle_root,
         compute_batch_root(&public.leaves).expect("recompute root"),

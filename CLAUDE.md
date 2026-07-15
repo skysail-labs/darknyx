@@ -32,8 +32,8 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   rapidsnark backend, `NYX_TEE_PROVER`] → verify → per-batch ALT →
   `tee_forced_settle_batched` → close, **concurrent sends round-robined
   across K shard fee-payer keys + K trees** so the leader co-includes a
-  batch's settles in one block), K Merkle-mirror indexers, the per-order
-  continuation **anchor pool**, and the auth'd HTTP/WS surface. Order
+  batch's settles in one block), K Merkle-mirror indexers, deterministic
+  consumed-input-derived continuation outputs, and the auth'd HTTP/WS surface. Order
   intent never touches an L1 tx; the enclave drives the vault settle ixs
   directly.
 * **Client (TypeScript SDK + snarkjs prover)** — `packages/sdk/` is the
@@ -41,8 +41,10 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   orders to the CVM. `packages/daemon/` (`nyx-daemon`) is the reference
   **non-custodial market-maker daemon** built on the SDK (keys + proving
   on-device; drives order lifecycle off the `fills` + `orders` channels on the
-  shared `/v1/stream` session and on-chain reads, with auto anchor-topup +
-  auto-merge). It is
+  shared `/v1/stream` session and on-chain reads, with auto-merge). The current
+  order wire still carries transitional anchor/top-up fields pending canonical
+  order v2 removal, but VALID_MATCH_BATCH v3 does not use them to construct
+  outputs. It is
   deliberately **lean — it does NOT depend on the off-TEE indexer**; live TEE
   streams + chain reads are its source of truth (merged, live-CVM smoke-tested).
   `crates/darkpool-crypto/` is the host-side Rust crypto crate with
@@ -50,8 +52,9 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   has parity tests against.
 
 Supporting crates: `crates/darkpool-matcher/` (the matching algorithm +
-the order/cancel/anchor-topup canonical signing — single source of
-truth, used by the in-TEE matcher) and `crates/nyx-tee-loadgen/` (a host
+the order/cancel canonical signing — single source of truth, used by the
+in-TEE matcher; legacy anchor-topup signing remains until canonical order v2)
+and `crates/nyx-tee-loadgen/` (a host
 binary that load-tests the CVM's intake).
 
 **The note model (v2 / `inner_hash`).** Every note commitment AND its
@@ -62,11 +65,11 @@ commitment = Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi, amount, owner_commitment, 
 nullifier  = Poseidon3(DOMAIN_NULL, spending_key, inner_hash)
 ```
 
-Decoupling the nullifier from the (amount-dependent) commitment is what
-lets a client **pre-supply** the nullifiers for its future change notes
-(a 10-entry "anchor pool" submitted with each order), so the matcher can
-settle partial-fill continuations — rotate the residual in place and
-re-match it — without a per-fill client roundtrip.
+VALID_MATCH_BATCH v3 derives user-output inners as
+`Poseidon3(24, consumed_input_inner, role)` and fee inners as
+`Poseidon3(25, consumed_input_commitment, role)`. This removes caller-selected
+output randomness and lets the matcher rotate partial-fill residuals without a
+client roundtrip or anchor-dependent liveness.
 
 > **There is no legacy CLOB / MagicBlock-ER / `matching_engine` program
 > anymore.** It was deleted. If you find a reference to `matching_engine`,
@@ -514,15 +517,16 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
 ### 5.3 Specific traps
 
 * **Leaf-hash arity cap.** `light-poseidon` (on-chain) caps Poseidon at 12
-  inputs (`MAX_X5_LEN = 13`). The leaf is a **single `Poseidon10`** —
-  `Poseidon10(DOMAIN_LEAF_V2=23, note_a..note_f, note_fee_base,
+  inputs (`MAX_X5_LEN = 13`). The leaf is a **single `Poseidon11`** —
+  `Poseidon11(DOMAIN_LEAF_V2=23, active, note_a..note_f, note_fee_base,
   note_fee_quote, batch_slot)` — **commitment-only** (amount-privacy P1b): the
   six note commitments + two fee notes bind the amounts/mints/price
-  transitively, so the leaf no longer hashes plaintext amounts. 10 inputs ≤ 12,
+  transitively, so the leaf no longer hashes plaintext amounts. 11 inputs ≤ 12,
   so no split is needed. **Keep it ≤ 12** — re-introducing bound fields (e.g.
   plaintext amounts) would force the old two-stage Poseidon12+Poseidon9 split
   back (that's why it used to be two-stage).
 * **Domain tags.** `DOMAIN_LEAF_V2 = 23` (the active leaf tag),
+  `DOMAIN_MATCH_OUTPUT_INNER = 24`, `DOMAIN_MATCH_FEE_INNER = 25`,
   `DOMAIN_BATCH_ROOT = 22`, `DOMAIN_NOTE = 2`, `DOMAIN_NULL = 3` — each
   appears in Rust + TS + circom; keep them in lockstep. (`DOMAIN_LEAF_INNER =
   20` / `DOMAIN_LEAF_TOP = 21` are the **retired** two-stage-leaf tags — dead

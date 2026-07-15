@@ -55,18 +55,15 @@ pub struct MatchConfig {
     // ─── Fee parameters (from vault_config) ────────────────────
     /// Protocol fee in basis points of notional, applied per leg.
     pub fee_rate_bps: u16,
-    /// Protocol-owned shielded identity. Every flushed fee note
-    /// is bound to this commitment so the protocol treasury can
-    /// later VALID_SPEND it. All-zero ⇒ fee flushing is paused
-    /// (matches the on-chain
-    /// `protocol_owner_commitment != [0u8; 32]` guard).
+    /// Protocol-owned shielded identity. Every per-match fee note is bound to
+    /// this commitment so the protocol treasury can later VALID_SPEND it.
     pub protocol_owner_commitment: [u8; 32],
 }
 
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct OracleSnapshot {
-    /// Pyth EMA / TWAP in quote-units-per-base, fixed-point per
-    /// `exponent`. **Must be > 0** — the matcher rejects zero/
+    /// Pyth EMA / TWAP in quote-units-per-base, fixed-point using the market's
+    /// `price_scale`. **Must be > 0** — the matcher rejects zero/
     /// negative TWAPs as stale and refuses to compute a clearing
     /// price.
     pub twap: u64,

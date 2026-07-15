@@ -33,7 +33,7 @@ use super::ark_prover::{build_circom_and_check, circom_input_json, load_circom_c
 use super::convert::proof_to_onchain_bytes;
 use super::groth16::{ProofWithInputs, Prover, ProverError};
 use super::inputs::{build_batch_public_inputs, BatchPublicInputs};
-use super::snarkjs::{assert_public_root, native_witness_wtns, parse_snarkjs_proof};
+use super::snarkjs::{assert_public_inputs, native_witness_wtns, parse_snarkjs_proof};
 use super::witness::MatchSlotWitness;
 use super::wtns::serialize_wtns;
 
@@ -214,7 +214,7 @@ impl IcicleMatchBatchProver {
         // Drift guard: the native witness path doesn't see the in-circuit root,
         // so assert the PROOF's public input (merkle_root) equals our off-circuit
         // root. Cheap + strict either way.
-        assert_public_root(&public_json, &public.merkle_root)?;
+        assert_public_inputs(&public_json, &public.public_inputs_be)?;
         let proof = parse_snarkjs_proof(&proof_json)?;
         let prove_step_ms = t_p.elapsed().as_millis();
         tracing::info!(

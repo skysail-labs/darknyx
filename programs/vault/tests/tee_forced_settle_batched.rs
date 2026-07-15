@@ -1,4 +1,4 @@
-//! v3.5 — integration tests for `vault::tee_forced_settle_batched` +
+//! v3 — integration tests for `vault::tee_forced_settle_batched` +
 //! `vault::close_batch_validity_marker`.
 //!
 //! The TS-side devnet tests always land exactly ONE real settle per

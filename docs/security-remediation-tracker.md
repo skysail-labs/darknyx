@@ -15,14 +15,14 @@ runbooks have landed.
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
-| CS-01 | Critical | ZK + vault + TEE | `remediation/match-batch-v3` | Every fee note is per-match and issued atomically with consumption of that match's real inputs; negative phantom-slot proof; regenerated zkey/VK/N=16 fixture; live settle | Open |
-| CS-02 | High | ZK + vault | `remediation/governance-markets`, `remediation/match-batch-v3` | Every active slot is bound to one enabled on-chain market, its mint halves, and price scale; mixed-market proof rejected | In progress |
-| CS-03 | High | ZK + SDK + TEE | `remediation/match-batch-v3` | User and fee output inners are constrained, deterministic, and recoverable from consumed inputs; arbitrary-inner witness rejected | Open |
+| CS-01 | Critical | ZK + vault + TEE | `remediation/match-batch-v3` | Every fee note is per-match and issued atomically with consumption of that match's real inputs; negative phantom-slot proof; regenerated zkey/VK/N=16 fixture; live settle | Code complete |
+| CS-02 | High | ZK + vault | `remediation/governance-markets`, `remediation/match-batch-v3` | Every active slot is bound to one enabled on-chain market, its mint halves, and price scale; mixed-market proof rejected | Code complete |
+| CS-03 | High | ZK + SDK + TEE | `remediation/match-batch-v3` | User and fee output inners are constrained, deterministic, and recoverable from consumed inputs; arbitrary-inner witness rejected | Code complete |
 | CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Open |
 | CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Closed |
 | CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
 | CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Closed |
-| CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Open |
+| CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Code complete |
 | CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm and live settle tests | Closed |
 | CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Open |
 | CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Open |
@@ -636,6 +636,64 @@ Every remediation PR must record:
   CVM image and SDK. The old/new lock wire and all three proving/verifier keys
   are incompatible, so discard in-flight orders/proofs and perform another
   clean devnet reset. Do not mix v2 and v3 circuit artifacts.
+
+### `remediation/match-batch-v3` — CS-01, CS-02, CS-03, CS-08
+
+- **Status.** Code complete. Local artifact, proof, SBF, LiteSVM, Rust, and
+  TypeScript gates pass. Devnet upgrade/reset and the isolated billable CVM
+  settlement remain before merge and closure.
+- **Invariant restored.** Every active match derives its user-output inners as
+  `Poseidon3(24, consumed_input_inner, role)` and its fee inners as
+  `Poseidon3(25, consumed_input_commitment, role)`. Each match's Tx D appends
+  its nonzero base/quote fee notes atomically with the consumption of those
+  exact inputs; aggregate fee flushes and slot/reboot identifiers are gone.
+  Private boolean activation bits make padding canonical and un-settleable.
+  All active slots share the enabled governed market's mint halves and nonzero
+  price scale, and prove
+  `base * price = quote * price_scale + remainder` with
+  `0 <= remainder < price_scale`.
+- **Wire/circuit impact.** VALID_MATCH_BATCH moves from three to eight public
+  inputs in the exact order root, fee rate, protocol owner, base mint lo/hi,
+  quote mint lo/hi, and price scale. Its commitment-only leaf moves from
+  Poseidon10 to Poseidon11 by adding `is_active`. Tx B gains one read-only
+  `MarketConfig` account while retaining its 304-byte instruction data. Tx D,
+  payload v9, canonical signature domain, account layout, and ALT membership do
+  not change; its worst-case transaction remains 1109 bytes. Match prices and
+  bid collateral adopt governed fixed-point floor semantics. N=2/N=4/N=16
+  zkeys, the N=16 Rust VK, and the committed real N=16 proof fixture change
+  atomically, intentionally invalidating old batch proofs. CPU image pin moves
+  from `tee-v3-hardening-55` to `tee-v3-hardening-56`. Legacy anchor fields
+  remain only as transitional order-wire data; they no longer select or gate a
+  v3 output and are deleted by canonical order v2.
+- **Local evidence.** Independent `snarkjs zkey verify` passes for N=2, N=4,
+  and N=16. The production R1CS has 232,806 constraints, 232,284 wires, 384
+  private inputs, and eight public inputs. Real snarkjs proofs pass at N=2/4/16;
+  the regenerated N=16 ark proof verifies both host-side and in LiteSVM, where
+  Tx B measures 132,519 CU under the raised 180,000-CU limit. Adversarial tests
+  reject an inactive phantom fee slot, mixed-market commitments, an arbitrary
+  output inner, a disabled market, and a proof made for the wrong price scale;
+  scaled-floor remainder and all-dummy padding cases are pinned. Rust/TS KATs
+  pin output-inner
+  `13e02ab830905bd6a94bbf1c9c1d231150db9ee480d9cd2b596a1fc425c6dde0`
+  and fee-inner
+  `18b28713db5e2e0ebd3a8382ca32d363811d5d2bf4244e916330204be6484c74`.
+  Mainnet and `devnet-admin` SBF builds, formatting, parity-helper build,
+  workspace clippy with warnings denied, and the full Rust workspace pass.
+  SDK, SDK-test, indexer, and daemon TypeScript no-emit checks pass. Full
+  Vitest passes SDK 256 tests with 23 environment-gated skips, indexer 23, and
+  daemon 158 with 2 skips. The full Rust gate includes 254 TEE library tests,
+  4/4 N=16 verifier tests, 13/13 batched-settlement tests, the feature-gated
+  real-settle loadgen smoke, and the 1109-byte Tx D regression (123 bytes of
+  headroom).
+- **Devnet/CVM evidence.** Pending the coordinated program upgrade, clean tree
+  reset, image-56 cold boot, signer/config check, and one isolated real-mint
+  `cvm-settle-e2e`. The billable CVM must be stopped and the encrypted deploy
+  environment securely deleted immediately afterward.
+- **Rollback.** Revert the PR and coordinate the prior vault, image, SDK, and
+  N=16 artifact set. Old and v3 batch proofs/VKs are incompatible; discard all
+  in-flight orders/proofs and clean-reset devnet before restarting the prior
+  image. Generic note commitments remain VALID_SPEND-compatible, but no mixed
+  old/new matching deployment is supported.
 
 ## Mainnet release gates
 

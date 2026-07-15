@@ -174,8 +174,8 @@ pub(crate) fn load_circom_cfg(
 }
 
 /// Build the ark-circom witness for `slots` (using the CACHED `CircomConfig`)
-/// and cross-check that the circuit's single public input (its
-/// internally-computed Merkle root) equals our off-circuit
+/// and cross-check that the circuit's eight public inputs (its
+/// internally-computed Merkle root plus governed values) equal our off-circuit
 /// `build_batch_public_inputs` root. Returns the built `CircomCircuit` (whose
 /// `.witness` is the full assignment) so BOTH backends share one witness-gen +
 /// drift guard:
@@ -230,7 +230,7 @@ pub(crate) fn build_circom_and_check(
         .ok_or_else(|| ProverError::WitnessGen("circuit produced no public inputs".into()))?;
     if circuit_public.len() != public.public_inputs_be.len() {
         return Err(ProverError::WitnessGen(format!(
-            "expected {} public inputs ([merkle_root, fee_rate_bps, protocol_owner]), got {}",
+            "expected {} public inputs ([root, fee_rate, owner, base lo/hi, quote lo/hi, scale]), got {}",
             public.public_inputs_be.len(),
             circuit_public.len()
         )));
@@ -281,8 +281,11 @@ pub(crate) fn circom_input_json(
         "merkle_root",
         "fee_rate_bps",
         "protocol_owner_commitment",
-        "fee_base_inner",
-        "fee_quote_inner",
+        "base_mint_lo",
+        "base_mint_hi",
+        "quote_mint_lo",
+        "quote_mint_hi",
+        "price_scale",
     ];
     let mut obj = serde_json::Map::with_capacity(inputs.len());
     for (name, vals) in inputs {
@@ -339,8 +342,13 @@ fn push_all_inputs(
         "protocol_owner_commitment",
         be32_to_bigint(&slots[0].protocol_owner_commitment)
     );
-    push!("fee_base_inner", be32_to_bigint(&slots[0].fee_base_inner));
-    push!("fee_quote_inner", be32_to_bigint(&slots[0].fee_quote_inner));
+    let (base_lo, base_hi) = mint_lo_hi(&slots[0].base_mint);
+    let (quote_lo, quote_hi) = mint_lo_hi(&slots[0].quote_mint);
+    push!("base_mint_lo", base_lo);
+    push!("base_mint_hi", base_hi);
+    push!("quote_mint_lo", quote_lo);
+    push!("quote_mint_hi", quote_hi);
+    push!("price_scale", BigInt::from(slots[0].price_scale));
 
     macro_rules! push_u64 {
         ($name:literal, $field:ident) => {
@@ -367,19 +375,6 @@ fn push_all_inputs(
     push_be32!("note_fee_base_commitment", note_fee_base_commitment);
     push_be32!("note_fee_quote_commitment", note_fee_quote_commitment);
 
-    // Mint halves. lo = bytes[16..32], hi = bytes[0..16] — matches
-    // `darkpool_crypto::pubkey_to_fr_pair` and the TS `pubkeyToFrPair`.
-    for s in slots {
-        let (lo, hi) = mint_lo_hi(&s.quote_mint);
-        push!("quote_mint_lo", lo);
-        push!("quote_mint_hi", hi);
-    }
-    for s in slots {
-        let (lo, hi) = mint_lo_hi(&s.base_mint);
-        push!("base_mint_lo", lo);
-        push!("base_mint_hi", hi);
-    }
-
     push_u64!("base_amount", base_amount);
     push_u64!("quote_amount", quote_amount);
     push_u64!("buyer_change_amt", buyer_change_amt);
@@ -387,6 +382,9 @@ fn push_all_inputs(
     push_u64!("buyer_fee_amt", buyer_fee_amt);
     push_u64!("seller_fee_amt", seller_fee_amt);
     push_u64!("batch_slot", batch_slot);
+    for s in slots {
+        push!("is_active", BigInt::from(u8::from(s.is_active)));
+    }
 
     // VALID_CREATE private witnesses.
     push_be32!("a_owner_commit", a_owner_commit);
@@ -397,13 +395,9 @@ fn push_all_inputs(
     // MatchSlotWitness. Keys match the circuit's `*_inner` signal names.
     push_be32!("a_inner", a_inner);
     push_be32!("b_inner", b_inner);
-    push_be32!("c_inner", c_inner);
-    push_be32!("d_inner", d_inner);
-    push_be32!("e_inner", e_inner);
-    push_be32!("f_inner", f_inner);
-
     // VALID_PRICE private witness.
     push_u64!("clearing_price", clearing_price);
+    push_u64!("price_remainder", price_remainder);
 }
 
 fn be32_to_bigint(b: &[u8; 32]) -> BigInt {
