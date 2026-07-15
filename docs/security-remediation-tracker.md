@@ -59,7 +59,7 @@ runbooks have landed.
 | N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Open |
 | N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Closed |
 | N-16 | Low | SDK | `remediation/client-custody` | Commitment equality is byte-based; mixed-case encoding regression | Closed |
-| N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Code complete |
+| N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Closed |
 | N-18 | Critical mainnet gate | Governance + ZK | `remediation/release-assurance` | Public Phase-2 ceremony with at least five independent contributors, transcript/hashes, random beacon, reproducible verify, auditor sign-off, post-ceremony settle | Open |
 | N-19 | High mainnet gate | Governance | `remediation/governance-markets`, `remediation/release-assurance` | Split Squads rehearsal: operations 3-of-5 admin and cold root/upgrade 4-of-7; independent attestation verification before rotations | In progress |
 
@@ -488,8 +488,7 @@ Every remediation PR must record:
 
 ### `remediation/settlement-payload-v9` — N-17
 
-- **Status.** Code complete; coordinated devnet vault + image-54 settlement
-  evidence is pending.
+- **Status.** Closed. PR #47.
 - **Invariant restored.** Tx D no longer serializes or signs two TEE-supplied
   nullifiers that the vault never reads. Commitment-keyed `ConsumedNoteEntry`
   PDAs remain the single replay guard shared by settlement and withdrawal.
@@ -512,9 +511,31 @@ Every remediation PR must record:
   worst case against the unchanged 115,000-CU limit. SDK, SDK-test, indexer,
   and daemon TypeScript no-emit checks pass. Full Vitest passes SDK 240 tests
   with 23 environment-gated skips, indexer 23, and daemon 158 with 2 skips.
-- **Devnet/CVM evidence.** Pending vault upgrade plus
-  `tee-v3-hardening-54`. This wire change requires a real deposit → match →
-  settle after the coordinated cutover; API-only evidence is insufficient.
+- **Devnet/CVM evidence.** The v9 vault was upgraded through the private Helius
+  endpoint at signature
+  `ogUEFzyBmft8xCP7atcwiZ9jLS74pS24yrczuBEho2SS2dfqQiAPUtTYdqczzNx6MoHo5YPJXFqmJdgr3nZVxbR`
+  (deploy slot 476318833), then the single shard was reset at
+  `5zjTy2vWadovXw6Qvm6b3x4fSLMZcLz8iC67eeAiGXb5fcuZipgFMRqJZUcibSctHv29LEakAhtaYXgRWBpbdpKu`.
+  `tee-v3-hardening-54` cold-booted app
+  `app_634b2ab4c250466311f0cf09f772b6fd60b5be11`, instance
+  `f5cd2f294d1127d241d18e44dbb76b6910aa2a54`, compose hash
+  `1220b1a548a6daf3321be88371373fa672bf10238c01e19d2b3955e91dee15be`,
+  MRTD
+  `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`,
+  and signer `KgFsjoP9fDy78xgmEjn2DtRbPZ6G7t5AWDkPo1AAjsa` with an empty Merkle mirror
+  and the settlement pipeline enabled. The isolated real-mint
+  `cvm-settle-e2e` passed 1/1 in 40.26 seconds. Its successful on-chain path
+  was lock A
+  `BRAySrgjcZwsBb2eCkiu8g1t8Tm9ZVXk5KoLW5HcTTkPa3iYkopLXGE2oD6KvJ5T2xKs3BzKdyP68S3biXqMqF1`,
+  lock B
+  `57fuPdKHq8mXagN8xvTj7AFcwDGkaTzVhEo2zc14S6TdU3JwqeRFVnQeYAffuWX1zC8gmQzq3HBve7oCxQkA5YZR`,
+  verify
+  `4oUfji6Ajii1QDxUfWQsGG1HCjoRwyjgriiYfAgks3NdMk3mXe5cpYJZDsyG5eKGtP7VZozSKKJwW6o84jwDqBtL`,
+  and v9 settle
+  `43Jcio2Js71kEcSdD5pi72p9t9g43GkVXmejBBA7zCbTjepr3FwNDP8uQ9XYuuAk1xoM7mAwRhhJ8SqfTc3vuyMh`;
+  the intervening signer transaction created the per-batch ALT. The billable
+  CVM was confirmed stopped and the mode-0600 deployment environment was
+  securely deleted immediately after the run.
 - **Rollback.** Revert this PR and coordinate a vault downgrade with image 53
   and the v8 SDK. Notes, circuit proofs, roots, and account layouts remain
   valid, but v9 payloads/signatures and any in-flight settlement jobs are
