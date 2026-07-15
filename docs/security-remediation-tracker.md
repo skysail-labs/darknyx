@@ -21,12 +21,12 @@ runbooks have landed.
 | CS-04 | High | TEE + matcher | `remediation/canonical-order-v2` | Settlement IDs include boot session and counter; reboot/page collision tests; output safety does not rely on identifier uniqueness | Open |
 | CS-05 | High | SDK + daemon | `remediation/client-custody` | Wallet-signature seed mode removed; versioned encrypted CSPRNG seed export/import and migration tests | Closed |
 | CS-06 | High | Matcher + TEE | `remediation/fee-identifier` then `remediation/match-batch-v3` | Matcher-recorded identifier is used by commitment and witness; no consumer re-samples a Solana slot | Closed |
-| CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Code complete |
+| CS-07 | Medium | ZK + vault + SDK | `remediation/input-merge-v3` | Lock amount is a private 64-bit witness and absent from instruction/event data; artifacts regenerated | Closed |
 | CS-08 | Medium | Matcher + ZK | `remediation/match-batch-v3` | Per-match fees cannot reuse an inner/nullifier across pages or reboots; collision regression tests | Open |
 | CS-09 | Medium | Vault | `remediation/vault-lifecycle` | Tx D rejects at and after either input lock's expiry; boundary litesvm and live settle tests | Closed |
 | CS-10 | Medium | Matcher + TEE + SDK | `remediation/canonical-order-v2` | Viewing key is signed; non-contributory X25519 points rejected; low-order KATs | Open |
 | CS-11 | Medium | TEE | `remediation/canonical-order-v2` | Exact idempotency is handled before a durable strictly-increasing per-trading-key nonce check | Open |
-| CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Code complete |
+| CS-12 | Medium | SDK + daemon + ZK | `remediation/input-merge-v3` | Merge output inner derives from consumed commitments; no restart-sensitive merge counter | Closed |
 | CS-13 | Medium | Daemon | `remediation/daemon-trust` | Strict startup fails closed; finalized TEE keys refresh each minute; mismatch/staleness pauses placement while reconciliation continues | Closed |
 | CS-14 | Low | Crypto + SDK | `remediation/client-custody` | Existing bytes retained under `nyxShakeKdfV1`; fixed Rust/TS KATs; no NIST KMAC claim | Closed |
 
@@ -55,8 +55,8 @@ runbooks have landed.
 | N-10 | Medium ops | Vault | `remediation/governance-markets` | Initialization rejects default root and TEE keys; negative litesvm tests | Closed |
 | N-11 | Medium ops | Vault | `remediation/governance-markets` | Authorized TEE key count equals tree count at initialization and rotation | Closed |
 | N-12 | Medium | Vault | `remediation/vault-lifecycle` | Marker closes only after expiry; rent returns to recorded payer; boundary tests and live async sweep | Closed |
-| N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Code complete |
-| N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Code complete |
+| N-13 | Medium | ZK | `remediation/input-merge-v3` | VALID_INPUT amount is range-constrained to 64 bits while private | Closed |
+| N-14 | Medium | ZK + vault | `remediation/input-merge-v3` | Merge has at least one active positive input/output; all-dummy/zero proofs and on-chain calls rejected | Closed |
 | N-15 | Low-Medium | SDK + daemon | `remediation/daemon-trust` | On-chain Merkle-root-ring verification is default-on in daemon proving | Closed |
 | N-16 | Low | SDK | `remediation/client-custody` | Commitment equality is byte-based; mixed-case encoding regression | Closed |
 | N-17 | Perf | Vault + TEE + SDK | `remediation/settlement-payload-v9` | Dead nullifiers removed; canonical domain bumped; worst-case Tx D <=1120 bytes with >=112 bytes headroom | Closed |
@@ -544,9 +544,8 @@ Every remediation PR must record:
 
 ### `remediation/input-merge-v3` — CS-07, CS-12, N-13, N-14
 
-- **Status.** Code complete; rows remain short of `Closed` until the coordinated
-  devnet upgrade/reset and isolated billable CVM merge→order settlement are
-  recorded below.
+- **Status.** Closed by the coordinated devnet upgrade/reset and isolated
+  billable CVM merge→order settlement recorded below.
 - **Invariant restored.** VALID_INPUT binds `amount` only as a private witness,
   constrains it to `1..2^64-1`, and exposes four public signals: root,
   commitment, and two mint halves. The vault/TEE/SDK `lock_note` wire and
@@ -585,7 +584,54 @@ Every remediation PR must record:
   pass. Full Vitest passes SDK 248 tests with 23 environment-gated skips, indexer
   23, and daemon 158 with 2 skips. Transport regressions pin the 385-byte lock
   instruction and a production-shaped signed lock transaction below 800 bytes.
-- **Devnet/CVM evidence.** Pending the closing validation window.
+- **Devnet/CVM evidence (2026-07-16).** The guarded deployment script verified
+  that both the local program keypair and `declare_id!` were
+  `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`, then upgraded that canonical
+  program at slot 476508026 with signature
+  `2Tko5Q6eTKa4J87SHvZZ9E712tbrCxGZNfBffHw3s9HdsaTJXfrs7BZRaSLCgwNX5AoZzRWpiDJh6nN2DdSVyoBf`
+  through the private devnet RPC. The no-CVM `devnet-merge` round trip passed
+  1/1 in 11.85 seconds: reset
+  `4LFkr2xahkFrLhLyWThVTcHqEvAF8hXAp6QUr4YiiqugBpMwBYkaB93DLKE7NBNdg8KuH8s34vr6URtNBdegAS7s`,
+  deposits
+  `bkcTfoD92qW3e4gpCHyBBDZdASCYC1CY2euwCSKzt4Nt4YpjWC16P63ieUBS6f9W5pc5cTPgegfCDMNjt7z47H7`
+  and
+  `5kfVkhBpGkW25vxGcvcVZEbSPK1RFxhWpPBpwEXLAHBCZDnwm7n2kqcwN5B7Eyit96hhjvGEuyT9wRKWizaZqiQk`,
+  K=2 merge
+  `3QwwLKBEbHLMM4r84fWTkMTff6kRtLS8VRpAawKbpuP2c1KgkRfJvMbkaPWEfW5K3Jgei6fwJj5X1vDqEzmdCPWg`,
+  and consolidated-note withdrawal
+  `Z4D7snBka9sBRn9baL6tdQqRHkhnV7GUvtYt5KyowAjprGjr44DPDefKKtvFAHAWBPqSNvWSoLrPieFPfhXtp1E`.
+  After final reset
+  `4UefNvMYLyy4E13iH42UDLsFvCh8JJmTKVMERpn5HpEpwD3GJTdWqsnPf76gTKFCZQwph5cLtYYWxiNQQsdgTTV8`,
+  public GHCR manifest `tee-v3-hardening-55` cold-booted CVM
+  `app_634b2ab4c250466311f0cf09f772b6fd60b5be11` from floor slot 476508505.
+  Boot logs show signer
+  `KgFsjoP9fDy78xgmEjn2DtRbPZ6G7t5AWDkPo1AAjsa`, an empty one-shard mirror,
+  the rapidsnark N=16 proving key loaded, and the live settlement pipeline
+  enabled; signer rotation was confirmed by
+  `4EoojjwXL2k6LoBxnBAEftHahcgfCbZRiec3YfqVaa4wrGSdbQSEsHEGCamq2LG6m1HBkt3qhBpoGAomYAVm5kZQ`.
+  The isolated real-mint `cvm-merge-then-order` passed 1/1 in 37.65 seconds.
+  Its on-chain path was deposits
+  `2yu43zJb9YimW7KtTf6tzo4p7DH33wV5baK9SvCmtE1rMvyScNUpewJHYH5wqFCVngiJeboUE9UYRgqJVbGARCJ`,
+  `JaTW2qnnXSgpf98bjzxfAXgt4Ej1Zsnw4ZCGwnMm6wKnr9EaVyFJJC7Eh6mUrVV4KmTV1KcNytvuezkY9DELxoQ`,
+  and
+  `29haBQqBsHp8zqTfmVCcRfkDxQJWNz77GFV3z72FuZG2xPKidHeXiB8aGHruoqUWbCDPUG4DFEwNrr5DGgXSBVJR`;
+  K=2 merge
+  `5NYzMsYUZaPcHKU639V5n4jPip6uTziQjoehCfoyQCxUuzzXpwzUNKfS5ku9aJ31MxmNFeA2HWTkq7dENmm2k8Kq`;
+  locks
+  `5te7XBqfkXcXpKzGGtFZVYBtfh9gwvHKwuSg5kFrHgUBv4aGhNYxMahp5M5j8vX17p2hVzt2K8UucjwqsyQqsNbt`
+  and
+  `4Qso2rUXq2UvZ4GC5M1ksMxfYNBfMQtqR35SZJpP4T1SJEUevesDyxLZbLXtfsHfxkPGjqN31snTR2NMx4bZuh8q`;
+  N=16 verify
+  `3F5QGXnSf6LxiecCJcXWQT3GimuEUpA55JCXYMNRfNRTn9XX8CvB8PSY7CHd1dointGvGoNBrqBAvozUH4T3HkiH`;
+  and settle
+  `2ebhrAvpc3orvDb3zYx5cTEoKBbHVrHUK373vsdCwdTXqvXkQFACLwvNq4Aa9nP5HUrEurApW3jJ5swoH6WKHFvB`.
+  The protected deploy environment was securely deleted and all three Phala
+  CVMs were confirmed stopped. During rollout rehearsal, an unguarded manual
+  command briefly created an unused program after `cargo clean` regenerated a
+  random target keypair; it never touched the canonical vault, was immediately
+  closed permanently, and 4.28060184 SOL was reclaimed. This PR hardens the
+  deployment script to honor the private RPC while retaining the canonical-id
+  guard that prevented recurrence.
 - **Rollback.** Revert this PR and coordinate a vault downgrade with the prior
   CVM image and SDK. The old/new lock wire and all three proving/verifier keys
   are incompatible, so discard in-flight orders/proofs and perform another
