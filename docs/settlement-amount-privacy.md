@@ -7,7 +7,9 @@
 > 7 plaintext amounts are gone from `MatchResultPayload` (canonical tag now
 > `nyx-match-v9` after the later dead-nullifier removal), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
 > binding are in the circuit, and `verify_match_batch` takes 3 public inputs
-> `[merkle_root, fee_rate_bps, protocol_owner_commitment]`. For current behavior see
+> `[merkle_root, fee_rate_bps, protocol_owner_commitment]`. VALID_INPUT v3 also
+> keeps the positive u64 lock amount private and removes it from `lock_note`
+> instruction/event data. For current behavior see
 > `CRYPTOGRAPHY.md` + the circuit/handler code; read the plan below as lineage only.
 >
 > **Status:** PROPOSED (design + phased plan). No code changed yet.

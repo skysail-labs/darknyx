@@ -74,6 +74,14 @@ build_circuit() {
     echo "[$name] export verification key"
     "$SNARKJS" zkey export verificationkey "$out/circuit_final.zkey" "$out/verification_key.json"
 
+    echo "[$name] generate Rust verifier constants"
+    local const_prefix
+    const_prefix="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
+    node "$ROOT/scripts/parse-vk-to-rust.js" \
+        "$out/verification_key.json" \
+        "$ROOT/programs/vault/src/zk/vk_${name}.rs" \
+        "$const_prefix"
+
     # Clean intermediate artifact.
     rm -f "$out/circuit_0000.zkey"
 

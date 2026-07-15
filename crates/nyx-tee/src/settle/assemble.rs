@@ -524,7 +524,6 @@ fn lock_inputs(
         note_commitment,
         order_id: rec.order_id,
         expiry_slot: rec.expiry_slot,
-        amount: rec.opening.amount,
         token_mint: rec.opening.token_mint,
         merkle_root: rec.merkle_root,
         proof: rec.valid_input_proof.clone(),

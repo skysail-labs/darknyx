@@ -973,7 +973,6 @@ mod tests {
             note_commitment: [seed; 32],
             order_id: [seed; 16],
             expiry_slot: 2000,
-            amount: 100,
             token_mint: [0xCC; 32],
             merkle_root: [0xDD; 32],
             proof: proof_bytes(),

@@ -83,13 +83,12 @@ function fakeMerge(): { fn: MergeFn; calls: MergeParams[] } {
   return { fn, calls };
 }
 
-function runner(fn: MergeFn, nextMergeIndex = () => 0): DaemonMergeRunner {
+function runner(fn: MergeFn): DaemonMergeRunner {
   return new DaemonMergeRunner({
     store,
     payer: PublicKey.default,
     ownerCommitment: 99n,
     mergeFn: fn,
-    nextMergeIndex,
   });
 }
 
@@ -108,7 +107,7 @@ describe("DaemonMergeRunner", () => {
     expect(consumed).toBe(3);
     expect(calls).toHaveLength(1);
     expect(calls[0].inputs).toHaveLength(3);
-    expect(calls[0].mergeIndex).toBe(0);
+    expect(calls[0]).not.toHaveProperty("mergeIndex");
     // inputs pruned, merged output present
     expect(store.get(c1.commitment)).toBeUndefined();
     expect(store.get(c2.commitment)).toBeUndefined();
@@ -195,7 +194,7 @@ describe("DaemonMergeRunner — spendability (cross-order)", () => {
 });
 
 describe("createMergeRunner", () => {
-  it("advances the merge index monotonically across runs", async () => {
+  it("needs no restart-sensitive merge index across runs", async () => {
     store.put(changeNote("a", MINT_A, 10n, 0n));
     store.put(changeNote("b", MINT_A, 20n, 1n));
     const { fn, calls } = fakeMerge();
@@ -204,14 +203,14 @@ describe("createMergeRunner", () => {
       payer: PublicKey.default,
       ownerCommitment: 99n,
       mergeFn: fn,
-      startMergeIndex: 5,
     });
     await r.run(order(), 2);
     // a fresh pair to merge again
     store.put(changeNote("d", MINT_A, 1n, 3n));
     store.put(changeNote("e", MINT_A, 2n, 4n));
     await r.run(order(), 2);
-    expect(calls[0].mergeIndex).toBe(5);
-    expect(calls[1].mergeIndex).toBe(6);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).not.toHaveProperty("mergeIndex");
+    expect(calls[1]).not.toHaveProperty("mergeIndex");
   });
 });

@@ -47,7 +47,6 @@ import {
 import {
   deriveOrderId,
   bn254ToBE32,
-  deriveMergeInnerHash,
   deriveViewingEncKeypair,
 } from "../src/keys/key-generators.js";
 import { nullifierV2 } from "../src/utxo/note.js";
@@ -245,14 +244,12 @@ maybeDescribe(
         const w0 = await shadow.witness(sellerNote0.leafIndex);
         const w1 = await shadow.witness(sellerNote1.leafIndex);
         const root = await shadow.computeRoot();
-        const outputInnerHash = deriveMergeInnerHash(seller.masterSeed, 0);
         const mergeRes = await t.step("VALID_MERGE prove (K=2)", () =>
           proveValidMerge({
             repoRoot: REPO_ROOT,
             k: 2,
             spendingKey: seller.spendingKey,
             ownerCommitmentBlinding: seller.ownerBlinding,
-            outputInnerHash,
             tokenMint: baseMint.toBytes(),
             merkleRootBE: root,
             slots: [
@@ -309,7 +306,7 @@ maybeDescribe(
         const mergedNote: DepositedNote = {
           mint: baseMint,
           amount: mergeRes.outputAmount,
-          innerHash: outputInnerHash,
+          innerHash: mergeRes.outputInnerHash,
           commitment: mergeRes.outputCommitmentBE,
           treeId: 0,
           leafIndex: mergedLeaf,

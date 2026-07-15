@@ -12,7 +12,9 @@ import {
 const filled = (length: number, byte: number): Uint8Array =>
   new Uint8Array(length).fill(byte);
 
-const PROGRAM_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
+const PROGRAM_ID = new PublicKey(
+  "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
+);
 
 describe("merge transport lifecycle accounts", () => {
   it("passes consumed PDAs then absent NoteLock PDAs for active inputs only", () => {
@@ -60,13 +62,29 @@ describe("merge transport lifecycle accounts", () => {
     expect(ix.keys[4].isWritable).toBe(true);
     expect(ix.keys[5].isWritable).toBe(true);
 
-    expect(ix.keys[6].pubkey.equals(noteLockPda(PROGRAM_ID, c0)[0])).toBe(
-      true,
-    );
-    expect(ix.keys[7].pubkey.equals(noteLockPda(PROGRAM_ID, c1)[0])).toBe(
-      true,
-    );
+    expect(ix.keys[6].pubkey.equals(noteLockPda(PROGRAM_ID, c0)[0])).toBe(true);
+    expect(ix.keys[7].pubkey.equals(noteLockPda(PROGRAM_ID, c1)[0])).toBe(true);
     expect(ix.keys[6].isWritable).toBe(false);
     expect(ix.keys[7].isWritable).toBe(false);
+  });
+
+  it("rejects an all-dummy transport before submission", () => {
+    expect(() =>
+      buildMergeInstruction({
+        programId: PROGRAM_ID,
+        treeId: 0,
+        payer: Keypair.generate().publicKey,
+        inputCommitments: [new Uint8Array(32), new Uint8Array(32)],
+        outputCommitment: filled(32, 0x21),
+        tokenMint: Keypair.generate().publicKey,
+        merkleRoot: filled(32, 0x31),
+        k: 2,
+        proof: {
+          piA: filled(64, 0x41),
+          piB: filled(128, 0x42),
+          piC: filled(64, 0x43),
+        },
+      }),
+    ).toThrow(/at least one active/);
   });
 });

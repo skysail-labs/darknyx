@@ -15,19 +15,12 @@ fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
     [lo, hi]
 }
 
-fn u64_be32(v: u64) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[24..32].copy_from_slice(&v.to_be_bytes());
-    out
-}
-
 #[derive(Accounts)]
 #[instruction(
     tree_id: u8,
     note_commitment: [u8; 32],
     order_id: [u8; 16],
     expiry_slot: u64,
-    amount: u64,
     token_mint: Pubkey,
     merkle_root: [u8; 32],
     proof: Groth16Proof,
@@ -42,7 +35,8 @@ pub struct LockNote<'info> {
     /// the Merkle tree, with any amount it wanted (see §4.1 of the v2
     /// migration brief). The VALID_INPUT proof closes that hole — the TEE
     /// now must relay a user-generated ZK proof attesting that the
-    /// commitment exists in the tree with the declared (mint, amount).
+    /// commitment exists in the tree with the declared mint and a private,
+    /// positive, range-constrained amount.
     #[account(mut)]
     pub tee_authority: Signer<'info>,
 
@@ -79,7 +73,6 @@ pub fn lock_note_handler(
     note_commitment: [u8; 32],
     order_id: [u8; 16],
     expiry_slot: u64,
-    amount: u64,
     token_mint: Pubkey,
     merkle_root: [u8; 32],
     proof: Groth16Proof,
@@ -109,20 +102,13 @@ pub fn lock_note_handler(
         expiry_slot <= clock.slot.saturating_add(MAX_LOCK_TTL_SLOTS),
         VaultError::InvalidExpirySlot
     );
-    require!(amount > 0, VaultError::ZeroAmount);
-
     // VALID_INPUT public inputs, in the order declared by the circom
-    // `component main { public [merkleRoot, noteCommitment, tokenMint, amount] }`.
-    // `tokenMint[2]` expands as two entries (`lo`, `hi`) — five total.
+    // `component main { public [merkleRoot, noteCommitment, tokenMint] }`.
+    // `tokenMint[2]` expands as two entries (`lo`, `hi`) — four total. Amount
+    // remains a private positive u64 witness constrained inside the proof.
     let mint_bytes = token_mint.to_bytes();
     let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
-    let public_inputs: [[u8; 32]; 5] = [
-        merkle_root,
-        note_commitment,
-        mint_lo,
-        mint_hi,
-        u64_be32(amount),
-    ];
+    let public_inputs: [[u8; 32]; 4] = [merkle_root, note_commitment, mint_lo, mint_hi];
 
     let vk = make_vk(
         &VALID_INPUT_ALPHA_G1,
@@ -131,7 +117,7 @@ pub fn lock_note_handler(
         &VALID_INPUT_DELTA_G2,
         &VALID_INPUT_IC,
     );
-    verify_groth16_proof::<5>(&vk, &proof, &public_inputs)?;
+    verify_groth16_proof::<4>(&vk, &proof, &public_inputs)?;
 
     // Proof verified — every field of the lock is now cryptographically bound
     // to a real Merkle leaf owned by the proof generator. Write the lock.
@@ -141,10 +127,6 @@ pub fn lock_note_handler(
     lock.order_id = order_id;
     lock.expiry_slot = expiry_slot;
     lock.locked_by = ctx.accounts.tee_authority.key();
-    // NoteLock.amount removed (amount-privacy P3b) — the lock no longer stores
-    // the note value. `amount` is still a VALID_INPUT public input above (it
-    // binds the lock to the real Merkle leaf) and rides the NoteLocked event,
-    // a separate boundary surface out of this change's scope.
     lock.bump = ctx.bumps.note_lock;
     lock._padding = [0u8; 7];
 
@@ -153,7 +135,6 @@ pub fn lock_note_handler(
         token_mint,
         order_id,
         expiry_slot,
-        amount,
     });
     Ok(())
 }
@@ -164,5 +145,4 @@ pub struct NoteLocked {
     pub token_mint: Pubkey,
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
-    pub amount: u64,
 }

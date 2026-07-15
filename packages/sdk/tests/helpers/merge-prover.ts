@@ -15,6 +15,7 @@ import {
   ownerCommitment,
   pubkeyToFrPair,
 } from "../../src/utxo/note.js";
+import { deriveMergeOutputInnerHash } from "../../src/utxo/merge.js";
 import { be32ToDec } from "./e2e-helpers.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";
 
@@ -33,8 +34,6 @@ export interface MergeProveParams {
   /** Shared owner. */
   spendingKey: bigint;
   ownerCommitmentBlinding: bigint;
-  /** Recoverable inner_hash of the merged output note. */
-  outputInnerHash: bigint;
   /** 32-byte mint (all inputs + output share it). */
   tokenMint: Uint8Array;
   /** 32-byte BE merkle root the active slots prove membership against. */
@@ -49,6 +48,8 @@ export interface MergeProveResult {
   publicInputsBE: Uint8Array[];
   /** The merged-note commitment (32B BE). */
   outputCommitmentBE: Uint8Array;
+  /** Commitment-derived merged-note inner hash. */
+  outputInnerHash: bigint;
   outputAmount: bigint;
 }
 
@@ -80,6 +81,7 @@ export async function proveValidMerge(
   const innerHash: string[] = [];
   const merklePath: string[][] = [];
   const merkleIndices: string[][] = [];
+  const inputCommitments: Uint8Array[] = [];
   let sum = 0n;
 
   for (let i = 0; i < k; i++) {
@@ -90,6 +92,14 @@ export async function proveValidMerge(
       innerHash.push(s.innerHash.toString());
       merklePath.push(s.pathElements.map((e) => e.toString()));
       merkleIndices.push(s.pathIndices.map((x) => x.toString()));
+      inputCommitments.push(
+        await noteCommitmentV2({
+          tokenMint: args.tokenMint,
+          amount: s.amount,
+          ownerCommitment: owner,
+          innerHash: s.innerHash,
+        }),
+      );
       sum += s.amount;
     } else {
       isActive.push("0");
@@ -97,14 +107,16 @@ export async function proveValidMerge(
       innerHash.push("0");
       merklePath.push(ZERO_PATH.map((e) => e.toString()));
       merkleIndices.push(ZERO_IDX.map((x) => x.toString()));
+      inputCommitments.push(new Uint8Array(32));
     }
   }
 
+  const outputInnerHash = await deriveMergeOutputInnerHash(inputCommitments);
   const outputCommitmentBE = await noteCommitmentV2({
     tokenMint: args.tokenMint,
     amount: sum,
     ownerCommitment: owner,
-    innerHash: args.outputInnerHash,
+    innerHash: outputInnerHash,
   });
 
   const inputs = {
@@ -112,7 +124,6 @@ export async function proveValidMerge(
     tokenMint: [mintLo.toString(), mintHi.toString()],
     spendingKey: args.spendingKey.toString(),
     ownerCommitmentBlinding: args.ownerCommitmentBlinding.toString(),
-    outputInnerHash: args.outputInnerHash.toString(),
     isActive,
     amount,
     innerHash,
@@ -129,5 +140,11 @@ export async function proveValidMerge(
     },
   );
 
-  return { proof, publicInputsBE, outputCommitmentBE, outputAmount: sum };
+  return {
+    proof,
+    publicInputsBE,
+    outputCommitmentBE,
+    outputInnerHash,
+    outputAmount: sum,
+  };
 }

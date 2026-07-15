@@ -2,6 +2,7 @@ pragma circom 2.2.2;
 
 include "../../node_modules/circomlib/circuits/poseidon.circom";
 include "../../node_modules/circomlib/circuits/bitify.circom";
+include "../../node_modules/circomlib/circuits/comparators.circom";
 include "./merkle.circom";
 
 // VALID_MERGE(K) — in-pool note consolidation (K inputs → 1 output).
@@ -49,7 +50,6 @@ template ValidMerge(K, merkleDepth) {
     // ----- Private witnesses -----
     signal input spendingKey;             // shared owner
     signal input ownerCommitmentBlinding; // r_owner (shared)
-    signal input outputInnerHash;         // recoverable inner_hash of the merged note
     signal input isActive[K];             // 1 = real note, 0 = dummy padding
     signal input amount[K];
     signal input innerHash[K];
@@ -65,6 +65,7 @@ template ValidMerge(K, merkleDepth) {
     ownerCommit <== ownerHash.out;
 
     component amtBits[K];
+    component amountIsZero[K];
     component noteHash[K];
     component rootFromLeaf[K];
 
@@ -72,7 +73,11 @@ template ValidMerge(K, merkleDepth) {
     signal computedRoot[K];
     signal contrib[K];
     signal sumAcc[K + 1];
+    signal activeAcc[K + 1];
+    signal bitmapAcc[K + 1];
     sumAcc[0] <== 0;
+    activeAcc[0] <== 0;
+    bitmapAcc[0] <== 0;
 
     for (var i = 0; i < K; i++) {
         // isActive is boolean.
@@ -81,6 +86,12 @@ template ValidMerge(K, merkleDepth) {
         // Amount must fit 64 bits (dummy slots set amount = 0).
         amtBits[i] = Num2Bits(64);
         amtBits[i].in <== amount[i];
+        amountIsZero[i] = IsZero();
+        amountIsZero[i].in <== amount[i];
+        // Every active input must carry positive value; inactive padding is
+        // canonical (zero amount), so it cannot hide witness-only value.
+        isActive[i] * amountIsZero[i].out === 0;
+        (1 - isActive[i]) * amount[i] === 0;
 
         // Input note commitment = Poseidon(DOMAIN_NOTE, mint, amount, owner, inner).
         noteHash[i] = Poseidon(6);
@@ -110,13 +121,40 @@ template ValidMerge(K, merkleDepth) {
         // Sum only active amounts.
         contrib[i] <== isActive[i] * amount[i];
         sumAcc[i + 1] <== sumAcc[i] + contrib[i];
+        activeAcc[i + 1] <== activeAcc[i] + isActive[i];
+        bitmapAcc[i + 1] <== bitmapAcc[i] + isActive[i] * (1 << i);
     }
+
+    // Reject an all-dummy witness before it can append a zero-value tree leaf.
+    component noActive = IsZero();
+    noActive.in <== activeAcc[K];
+    noActive.out === 0;
 
     // Output note: same owner + mint, amount = Σ active inputs (≤ 2^64).
     signal outputAmount;
     outputAmount <== sumAcc[K];
     component outAmtBits = Num2Bits(64);
     outAmtBits.in <== outputAmount;
+    component outputIsZero = IsZero();
+    outputIsZero.in <== outputAmount;
+    outputIsZero.out === 0;
+
+    // CS-12: the merged note's inner is a pure function of the consumed
+    // commitments and active-slot bitmap, so restarts cannot reuse a daemon
+    // counter. K=2 is zero-padded to the same four-commitment domain as K=4.
+    //   Poseidon6(DOMAIN_MERGE_INNER=26, c0, c1, c2, c3, active_bitmap)
+    component outputInner = Poseidon(6);
+    outputInner.inputs[0] <== 26;
+    for (var i = 0; i < 4; i++) {
+        if (i < K) {
+            outputInner.inputs[i + 1] <== inputCommitments[i];
+        } else {
+            outputInner.inputs[i + 1] <== 0;
+        }
+    }
+    outputInner.inputs[5] <== bitmapAcc[K];
+    signal outputInnerHash;
+    outputInnerHash <== outputInner.out;
 
     component outHash = Poseidon(6);
     outHash.inputs[0] <== 2; // DOMAIN_NOTE

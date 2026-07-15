@@ -24,6 +24,7 @@ import {
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { be32ToBigInt } from "./helpers/e2e-helpers.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
+import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -79,9 +80,9 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       expect(result.proof.piB.length).toBe(128);
       expect(result.proof.piC.length).toBe(64);
 
-      // Five public inputs in circuit-declaration order:
-      //   [merkleRoot, noteCommitment, tokenMint_lo, tokenMint_hi, amount]
-      expect(result.publicInputsBE.length).toBe(5);
+      // Four public inputs in circuit-declaration order. Amount is private:
+      //   [merkleRoot, noteCommitment, tokenMint_lo, tokenMint_hi]
+      expect(result.publicInputsBE.length).toBe(4);
       for (const pi of result.publicInputsBE) expect(pi.length).toBe(32);
 
       // Sanity: returned commitment matches what the tree saw.
@@ -103,9 +104,6 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       const [expLo, expHi] = pubkeyToFrPair(tokenMint);
       expect(be32ToBigInt(result.publicInputsBE[2])).toBe(expLo);
       expect(be32ToBigInt(result.publicInputsBE[3])).toBe(expHi);
-
-      // Sanity: public input 4 is the amount.
-      expect(be32ToBigInt(result.publicInputsBE[4])).toBe(amount);
     },
   );
 
@@ -146,4 +144,48 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
     // Silence unused warning if helper is moved.
     void ownerCommitFr;
   });
+
+  for (const [label, amount] of [
+    ["zero", 0n],
+    ["2^64", 1n << 64n],
+  ] as const) {
+    ait(`rejects private ${label} amount in-circuit`, async () => {
+      const spendingKey = 11n;
+      const ownerBlinding = 12n;
+      const innerHash = 13n;
+      const tokenMint = Keypair.generate().publicKey.toBytes();
+      const owner = await ownerCommitment(spendingKey, ownerBlinding);
+      const commitment = await noteCommitmentV2({
+        tokenMint,
+        amount,
+        ownerCommitment: owner,
+        innerHash,
+      });
+      const tree = await MerkleShadow.create();
+      await tree.append(commitment);
+      const witness = await tree.witness(0);
+      const [mintLo, mintHi] = pubkeyToFrPair(tokenMint);
+      const inputs = {
+        merkleRoot: be32ToBigInt(witness.root).toString(),
+        noteCommitment: be32ToBigInt(commitment).toString(),
+        tokenMint: [mintLo.toString(), mintHi.toString()],
+        amount: amount.toString(),
+        spendingKey: spendingKey.toString(),
+        ownerCommitmentBlinding: ownerBlinding.toString(),
+        innerHash: innerHash.toString(),
+        merklePath: witness.siblings.map((s) => be32ToBigInt(s).toString()),
+        merkleIndices: witness.indices.map(String),
+      };
+      expect(() =>
+        snarkjsFullProve(
+          inputs as unknown as Record<string, string | string[]>,
+          {
+            repoRoot,
+            circuitWasmPath: wasm,
+            circuitZkeyPath: zkey,
+          },
+        ),
+      ).toThrow();
+    });
+  }
 });

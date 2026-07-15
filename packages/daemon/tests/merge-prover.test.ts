@@ -18,7 +18,6 @@ import { nodeMergeProver } from "../src/merge-prover.js";
 import { LocalMerkleTree } from "../src/merkle-tree.js";
 import {
   noteCommitmentV2,
-  nullifierV2,
   ownerCommitment,
   pubkeyToFrPair,
   type MergeInputs,
@@ -85,27 +84,12 @@ describe("nodeMergeProver (real VALID_MERGE k=2)", () => {
     const root = witnesses[0].root;
 
     const [mintLo, mintHi] = pubkeyToFrPair(tokenMint);
-    const sum = notes[0].amount + notes[1].amount;
-    const outputInnerHash = 555n;
-    const outputCommitment = await noteCommitmentV2({
-      tokenMint,
-      amount: sum,
-      ownerCommitment: owner,
-      innerHash: outputInnerHash,
-    });
-    const nullifiers = await Promise.all(
-      notes.map((n) => nullifierV2(spendingKey, n.innerHash)),
-    );
-
     const inputs: MergeInputs = {
       k: 2,
       merkleRoot: beToBig(root),
       tokenMint: [mintLo, mintHi],
-      outputCommitment: beToBig(outputCommitment),
-      nullifiers: nullifiers.map(beToBig),
       spendingKey,
       ownerCommitmentBlinding: ownerBlinding,
-      outputInnerHash,
       isActive: [1, 1],
       amount: notes.map((n) => n.amount),
       innerHash: notes.map((n) => n.innerHash),

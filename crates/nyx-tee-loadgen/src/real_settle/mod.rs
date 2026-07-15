@@ -33,7 +33,8 @@ use num_bigint::{BigInt, Sign};
 
 use darkpool_crypto::note::owner_commitment;
 use darkpool_crypto::{
-    commitment_from_fields_v2, fr_to_be_bytes, nullifier_v2, poseidon_hash_bytes, pubkey_to_fr_pair,
+    commitment_from_fields_v2, fr_to_be_bytes, merge_output_inner_hash, poseidon_hash_bytes,
+    pubkey_to_fr_pair,
 };
 
 /// Depth of the vault's incremental Merkle tree (the VALID_INPUT witness is 20
@@ -340,8 +341,10 @@ pub struct MergeInput {
 /// A built VALID_MERGE proof + the merged output note it produces.
 pub struct MergeProof {
     pub proof_bytes: [u8; 256],
-    /// The merged note's commitment (Σ input amounts, output_inner_hash).
+    /// The merged note's commitment (Σ input amounts, commitment-derived inner).
     pub output_commitment: [u8; 32],
+    /// `Poseidon6(26, c0, c1, c2, c3, active_bitmap)` derived by the circuit.
+    pub output_inner_hash: [u8; 32],
     /// The merged note's amount (Σ active input amounts).
     pub output_amount: u64,
 }
@@ -379,26 +382,22 @@ impl MergeProver {
     }
 
     /// Prove a K-slot merge of `inputs` (M ≤ K real notes, same owner + mint, all
-    /// under `inputs[0].witness.root`) into one output note carrying their sum +
-    /// `output_inner_hash`. Returns the 256-byte on-chain proof + the merged note.
+    /// under `inputs[0].witness.root`) into one output note carrying their sum.
+    /// The output inner is derived from the consumed commitments, exactly as the
+    /// circuit does. Returns the 256-byte on-chain proof + the merged note.
     pub fn prove(
         &self,
         spending_key: &Fr,
         owner_blinding: &Fr,
-        output_inner_hash: &[u8; 32],
         token_mint: &[u8; 32],
         inputs: &[MergeInput],
     ) -> Result<MergeProof, RealSettleError> {
-        let (proof, output_commitment, output_amount) = self.prove_ark(
-            spending_key,
-            owner_blinding,
-            output_inner_hash,
-            token_mint,
-            inputs,
-        )?;
+        let (proof, output_commitment, output_inner_hash, output_amount) =
+            self.prove_ark(spending_key, owner_blinding, token_mint, inputs)?;
         Ok(MergeProof {
             proof_bytes: proof_to_onchain_bytes(&proof),
             output_commitment,
+            output_inner_hash,
             output_amount,
         })
     }
@@ -408,10 +407,9 @@ impl MergeProver {
         &self,
         spending_key: &Fr,
         owner_blinding: &Fr,
-        output_inner_hash: &[u8; 32],
         token_mint: &[u8; 32],
         inputs: &[MergeInput],
-    ) -> Result<(Proof<Bn254>, [u8; 32], u64), RealSettleError> {
+    ) -> Result<(Proof<Bn254>, [u8; 32], [u8; 32], u64), RealSettleError> {
         if inputs.is_empty() || inputs.len() > self.k {
             return Err(RealSettleError::Prove(format!(
                 "merge needs 1..{} real slots; got {}",
@@ -422,9 +420,25 @@ impl MergeProver {
         let owner = owner_commitment(spending_key, owner_blinding)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let merkle_root = inputs[0].witness.root;
-        let sum: u64 = inputs.iter().map(|s| s.amount).sum();
+        if inputs.iter().any(|input| input.amount == 0) {
+            return Err(RealSettleError::Prove(
+                "merge inputs must carry positive amounts".to_string(),
+            ));
+        }
+        let sum = inputs.iter().try_fold(0u64, |acc, input| {
+            acc.checked_add(input.amount)
+                .ok_or_else(|| RealSettleError::Prove("merged amount exceeds u64".to_string()))
+        })?;
+        let mut input_commitments = [[0u8; 32]; 4];
+        for (slot, input) in input_commitments.iter_mut().zip(inputs) {
+            *slot = commitment_from_fields_v2(token_mint, input.amount, &owner, &input.inner_hash)
+                .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+        }
+        let active_bitmap = (1u8 << inputs.len()) - 1;
+        let output_inner_hash = merge_output_inner_hash(&input_commitments, active_bitmap)
+            .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let output_commitment =
-            commitment_from_fields_v2(token_mint, sum, &owner, output_inner_hash)
+            commitment_from_fields_v2(token_mint, sum, &owner, &output_inner_hash)
                 .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
 
         let cfg = CircomConfig::<Fr>::new(&self.wasm_path, &self.r1cs_path)
@@ -435,21 +449,8 @@ impl MergeProver {
         b.push_input("merkleRoot", be32_to_bigint(&merkle_root));
         b.push_input("tokenMint", fr_to_bigint(&mint_lo));
         b.push_input("tokenMint", fr_to_bigint(&mint_hi));
-        // Public nullifiers[k] (active: nullifier_v2; dummy: 0).
-        for i in 0..self.k {
-            let nf = match inputs.get(i) {
-                Some(s) => {
-                    let n = nullifier_v2(spending_key, &s.inner_hash)
-                        .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
-                    be32_to_bigint(&n)
-                }
-                None => BigInt::from(0),
-            };
-            b.push_input("nullifiers", nf);
-        }
         b.push_input("spendingKey", fr_to_bigint(spending_key));
         b.push_input("ownerCommitmentBlinding", fr_to_bigint(owner_blinding));
-        b.push_input("outputInnerHash", be32_to_bigint(output_inner_hash));
         // Per-slot private witnesses, padded to k with dummies.
         for i in 0..self.k {
             b.push_input("isActive", BigInt::from(inputs.get(i).is_some() as u8));
@@ -502,7 +503,7 @@ impl MergeProver {
             circom, &self.pk, &mut rng,
         )
         .map_err(|e| RealSettleError::Prove(format!("merge groth16 prove: {e}")))?;
-        Ok((proof, output_commitment, sum))
+        Ok((proof, output_commitment, output_inner_hash, sum))
     }
 }
 
@@ -586,7 +587,6 @@ mod tests {
             fr_from_be_bytes(&commitment).unwrap(),
             mint_lo,
             mint_hi,
-            Fr::from(amount),
         ];
         let pvk = ark_groth16::prepare_verifying_key(prover.verifying_key());
         let ok = Groth16::<Bn254>::verify_proof(&pvk, &proof, &public_inputs)
@@ -638,24 +638,24 @@ mod tests {
                 witness: tree.witness(1).unwrap(),
             },
         ];
-        let out_ih = fr_to_be_bytes(&Fr::from(99u64));
-        let (proof, out_commit, sum) = prover
-            .prove_ark(&sk, &ob, &out_ih, &mint, &inputs)
+        let (proof, out_commit, out_ih, sum) = prover
+            .prove_ark(&sk, &ob, &mint, &inputs)
             .expect("merge prove");
         assert_eq!(sum, a0 + a1);
+        let expected_inner = merge_output_inner_hash(&[c0, c1, [0u8; 32], [0u8; 32]], 3)
+            .expect("derive output inner");
+        assert_eq!(out_ih, expected_inner);
 
-        // Public inputs (circuit order): [outputCommitment, merkleRoot,
-        // mint_lo, mint_hi, nullifiers[0..k-1]].
+        // Public inputs (circuit order): [outputCommitment,
+        // inputCommitments[0..k-1], merkleRoot, mint_lo, mint_hi].
         let [mint_lo, mint_hi] = pubkey_to_fr_pair(&mint);
-        let nf0 = nullifier_v2(&sk, &ih0).unwrap();
-        let nf1 = nullifier_v2(&sk, &ih1).unwrap();
         let public = vec![
             fr_from_be_bytes(&out_commit).unwrap(),
+            fr_from_be_bytes(&c0).unwrap(),
+            fr_from_be_bytes(&c1).unwrap(),
             fr_from_be_bytes(&tree.root().unwrap()).unwrap(),
             mint_lo,
             mint_hi,
-            fr_from_be_bytes(&nf0).unwrap(),
-            fr_from_be_bytes(&nf1).unwrap(),
         ];
         let pvk = ark_groth16::prepare_verifying_key(prover.verifying_key());
         assert!(

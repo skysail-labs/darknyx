@@ -45,7 +45,6 @@ export function nodeMergeProver(
           tokenMint: inputs.tokenMint.map((x) => x.toString()),
           spendingKey: inputs.spendingKey.toString(),
           ownerCommitmentBlinding: inputs.ownerCommitmentBlinding.toString(),
-          outputInnerHash: inputs.outputInnerHash.toString(),
           isActive: inputs.isActive.map((x) => x.toString()),
           amount: inputs.amount.map((x) => x.toString()),
           innerHash: inputs.innerHash.map((x) => x.toString()),

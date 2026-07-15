@@ -9,6 +9,8 @@
 #
 # Usage:
 #   ./scripts/deploy-devnet.sh
+#   SOLANA_RPC_URL=https://devnet.helius-rpc.com/?api-key=... \
+#     ./scripts/deploy-devnet.sh
 #
 # Prereqs:
 #   - cargo build-sbf has produced target/deploy/vault.so
@@ -32,9 +34,9 @@ for f in "$VAULT_SO" "$VAULT_KP"; do
   fi
 done
 
-CONFIG_URL=$(solana config get json_rpc_url | awk '{print $NF}')
-if [[ "$CONFIG_URL" != *"devnet"* ]]; then
-  echo "ERROR: Solana CLI is not pointing at devnet."
+RPC_URL="${SOLANA_RPC_URL:-$(solana config get json_rpc_url | awk '{print $NF}')}"
+if [[ "$RPC_URL" != *"devnet"* ]]; then
+  echo "ERROR: deployment RPC is not a devnet endpoint."
   exit 1
 fi
 
@@ -61,11 +63,12 @@ echo "-> vault"
 solana program deploy "$VAULT_SO" \
   --program-id "$VAULT_KP" \
   --upgrade-authority "$HOME/.config/solana/id.json" \
+  --url "$RPC_URL" \
   --commitment confirmed
 
 echo
 echo "verifying..."
-solana program show "$VAULT_ID" --output json-compact | head -c 400; echo
+solana program show "$VAULT_ID" --url "$RPC_URL" --output json-compact | head -c 400; echo
 
 echo
 echo "vault deployed."

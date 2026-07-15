@@ -31,7 +31,8 @@ const VAULT_CONFIG_SEED: &[u8] = b"vault_config";
 const MERKLE_TREE_SEED: &[u8] = b"merkle_tree";
 const VAULT_TOKEN_SEED: &[u8] = b"vault_token";
 const OUTSTANDING_MINT_SEED: &[u8] = b"outstanding_mint";
-const NULLIFIER_SEED: &[u8] = b"nullifier";
+const CONSUMED_NOTE_SEED: &[u8] = b"consumed_note";
+const NOTE_LOCK_SEED: &[u8] = b"note_lock";
 
 fn parse_id(b58: &str) -> Address {
     b58.parse().expect("hardcoded base58 program id is valid")
@@ -62,8 +63,11 @@ pub fn outstanding_mint_pda(mint: &Address) -> Address {
     )
     .0
 }
-pub fn nullifier_entry_pda(nullifier: &[u8; 32]) -> Address {
-    Address::find_program_address(&[NULLIFIER_SEED, nullifier], &vault_program_id()).0
+pub fn consumed_note_pda(commitment: &[u8; 32]) -> Address {
+    Address::find_program_address(&[CONSUMED_NOTE_SEED, commitment], &vault_program_id()).0
+}
+pub fn note_lock_pda(commitment: &[u8; 32]) -> Address {
+    Address::find_program_address(&[NOTE_LOCK_SEED, commitment], &vault_program_id()).0
 }
 
 /// The associated token account for `owner` + `mint` under the SPL ATA program:
@@ -132,14 +136,15 @@ pub fn build_deposit_ix(
 }
 
 /// Build the vault `merge` ix (VALID_MERGE K=2/4). Mirrors the SDK's
-/// `buildMergeInstruction`: data = disc(8) ‖ tree_id(1) ‖ Borsh-Vec<nullifiers>
+/// `buildMergeInstruction`: data = disc(8) ‖ tree_id(1) ‖ Borsh-Vec<commitments>
 /// (u32 LE len ‖ k×32) ‖ output_commitment(32) ‖ token_mint(32) ‖ merkle_root(32)
 /// ‖ k(1) ‖ proof(256); accounts = payer, vault_config, merkle_tree[tree_id],
-/// system, + one NullifierEntry PDA per NON-ZERO nullifier.
+/// system, then one ConsumedNoteEntry PDA and one absent NoteLock PDA per
+/// non-zero input commitment.
 pub fn build_merge_ix(
     tree_id: u8,
     payer: &Address,
-    nullifiers: &[[u8; 32]],
+    input_commitments: &[[u8; 32]],
     output_commitment: &[u8; 32],
     token_mint: &Address,
     merkle_root: &[u8; 32],
@@ -149,9 +154,9 @@ pub fn build_merge_ix(
     let mut data = Vec::new();
     data.extend_from_slice(&anchor_discriminator("merge"));
     data.push(tree_id);
-    data.extend_from_slice(&(nullifiers.len() as u32).to_le_bytes());
-    for n in nullifiers {
-        data.extend_from_slice(n);
+    data.extend_from_slice(&(input_commitments.len() as u32).to_le_bytes());
+    for commitment in input_commitments {
+        data.extend_from_slice(commitment);
     }
     data.extend_from_slice(output_commitment);
     data.extend_from_slice(&token_mint.to_bytes());
@@ -165,9 +170,14 @@ pub fn build_merge_ix(
         AccountMeta::new(merkle_tree_pda(tree_id), false),
         AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
     ];
-    // One NullifierEntry PDA per non-zero nullifier (dummies are [0;32]).
-    for n in nullifiers.iter().filter(|n| n.iter().any(|&b| b != 0)) {
-        accounts.push(AccountMeta::new(nullifier_entry_pda(n), false));
+    let active = input_commitments
+        .iter()
+        .filter(|commitment| commitment.iter().any(|&b| b != 0));
+    for commitment in active.clone() {
+        accounts.push(AccountMeta::new(consumed_note_pda(commitment), false));
+    }
+    for commitment in active {
+        accounts.push(AccountMeta::new_readonly(note_lock_pda(commitment), false));
     }
 
     Instruction {
@@ -343,8 +353,8 @@ mod tests {
         assert_eq!(&ix.data[9..13], &2u32.to_le_bytes()); // Borsh Vec len
                                                           // disc(8)+tree_id(1)+veclen(4)+2×32 nf+commit(32)+mint(32)+root(32)+k(1)+proof(256)
         assert_eq!(ix.data.len(), 8 + 1 + 4 + 64 + 32 + 32 + 32 + 1 + 256);
-        // 4 fixed accounts + 2 non-zero nullifier PDAs.
-        assert_eq!(ix.accounts.len(), 6);
+        // 4 fixed accounts + 2 consumed-note PDAs + 2 absent note-lock PDAs.
+        assert_eq!(ix.accounts.len(), 8);
         assert!(ix.accounts[0].is_signer);
     }
 }

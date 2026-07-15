@@ -156,9 +156,10 @@ the external circuit auditors — not a VK bump. Until then the honest posture i
 
 Every state-transitioning instruction maintains:
 
-1. **Conservation per-leg**:
-   `lock_a.amount == quote_amount + buyer_change_amt + buyer_fee_amt`
-   (and symmetrically for `lock_b`). Enforced with `u64::checked_add`.
+1. **Conservation per-leg**: each private input amount equals the corresponding
+   trade output + change + fee. `VALID_MATCH_BATCH` enforces this against the
+   commitment-bound private openings; `NoteLock` does not store or reveal the
+   amount.
 2. **Conservation per-mint**:
    `outstanding[mint] ≤ vault_token_account.amount` for every mint, after
    every deposit / withdraw.
@@ -521,12 +522,16 @@ surplus rides the anchor-pool/fills path and is client-recoverable.
 primitive (`vault::merge` + the `VALID_MERGE(K)` circuit, K∈{2,4}): consume K
 input notes (same owner + mint, each proven in the tree) and mint ONE output
 note = their sum — no external transfer, `OutstandingMint` unchanged. The output
-is a normal tree leaf, recoverable from the seed (`deriveMergeInnerHash`), so
-it's spendable like a deposit. The wallet's `consolidate` greedily merges the
+is a normal tree leaf whose inner is derived from the consumed commitments as
+`Poseidon6(26, c0, c1, c2, c3, active_bitmap)`, so recovery needs no mutable
+merge counter and the note is spendable like a deposit. The wallet's
+`consolidate` greedily merges the
 largest notes (fewest inputs → cheapest proof) and **chains** for >K, then the
 merged note feeds an over-collateralized order. `VALID_MERGE` pads unused slots
-(an `isActive[i]` flag, public nullifier 0) so K=4 merges 2–4 notes; both K fit
-pot16. For every active commitment the instruction also requires the
+(an `isActive[i]` flag, public commitment 0) so K=4 merges 2–4 notes; every
+active amount is positive and u64-range-constrained, inactive amounts are
+zero, and an all-dummy merge is impossible. Both K fit pot16. For every active
+commitment the instruction also requires the
 corresponding `NoteLock` PDA to be absent before proof verification or state
 mutation, so a wallet cannot merge collateral reserved by a live order. See
 §7.5.
@@ -646,10 +651,10 @@ fair execution price by the proof (see the §2 non-goals row).
 |---|---|---|---|
 | `VALID_WALLET_CREATE` | ~250 | 1 | Bind a `user_commitment` to (root, spending, viewing) keys |
 | `VALID_SPEND` | ~7,000 | 5 | Prove note ownership + Merkle inclusion at withdraw time |
-| `VALID_INPUT` | ~5,500 | 5 | Prove note ownership + Merkle inclusion at **lock** time, without revealing a nullifier |
+| `VALID_INPUT` | 12,058 | 4 | Prove note ownership + Merkle inclusion at **lock** time while keeping the positive u64 amount and nullifier private |
 | `VALID_MATCH_BATCH` | 162,947 (N=16) | 3 | Output-note construction + price band + conservation for every match in a batch, hashed into one batch Merkle root; the 3 public inputs are `[merkle_root, fee_rate_bps, protocol_owner_commitment]` (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
-| `VALID_MERGE` (K=2) | ~26,000 | 6 | In-pool note consolidation: K inputs (same owner+mint, Merkle-proven) → one summed output note (§5 / §7.5) |
-| `VALID_MERGE` (K=4) | ~50,000 | 8 | Same, up to 4 inputs (dummy-padded for 2–3); chained for >4 |
+| `VALID_MERGE` (K=2) | 25,532 | 6 | In-pool note consolidation: positive active inputs (same owner+mint, Merkle-proven) → one summed output with commitment-derived inner (§5 / §7.5) |
+| `VALID_MERGE` (K=4) | 48,458 | 8 | Same, up to 4 inputs (dummy-padded for 2–3); chained for >4 |
 
 The trade-path circuits are the first four; `VALID_MERGE(K)` is an auxiliary
 consolidation circuit (its own ix, `vault::merge`, not part of settle).
@@ -734,14 +739,15 @@ verification in `programs/vault/src/instructions/withdraw.rs:131-144`.
 
 ### 7.3 `VALID_INPUT`
 
-**Public inputs** (5):
+**Public inputs** (4):
 1. `merkleRoot`
 2. `noteCommitment` — exposed as public so the on-chain `lock_note`'s PDA
    seed matches
 3. `tokenMint[0]`, `tokenMint[1]`
-4. `amount`
 
-**Private witnesses** (~24): same as VALID_SPEND minus the nullifier.
+**Private witnesses**: `amount`, the owner opening, and the 20-level Merkle
+path. `amount` is constrained to `1..2^64-1` with `Num2Bits(64)` plus a
+nonzero constraint.
 
 **Constraints**:
 
@@ -750,13 +756,16 @@ owner_commitment = Poseidon3(DOMAIN_OWNER=1, spendingKey, ownerCommitmentBlindin
 noteHash         = Poseidon6(DOMAIN_NOTE, tokenMint[0], tokenMint[1],
                              amount, owner_commitment, innerHash)
 noteCommitment   === noteHash
+Num2Bits(64)(amount)
+amount != 0
 MerkleTreeChecker(20)(leaf = noteCommitment, root = merkleRoot, ...)
 ```
 
 Difference from VALID_SPEND: **no nullifier is computed or revealed**.
 This is critical for the lock-then-match-then-settle flow:
 - A user submits an order with a VALID_INPUT proof.
-- The TEE locks the note via `lock_note(commitment, mint, amount, proof, merkleRoot)`.
+- The TEE locks the note via `lock_note(commitment, mint, proof, merkleRoot)`;
+  the amount never enters instruction or event data.
 - If the order doesn't match, the lock expires and the note remains
   spendable. No nullifier was burned.
 - If the order does match, `tee_forced_settle` consumes the note via
@@ -765,13 +774,14 @@ This is critical for the lock-then-match-then-settle flow:
   note would fail at the `consumed_note_slot` guard, so no double-spend
   risk.
 
-What this proves to the chain at lock time: "I know an unspent note in the
-tree, with these declared `mint` + `amount` + `commitment`, owned by me."
+What this proves to the chain at lock time: "I know a note in the tree, with
+this declared mint and commitment, owned by me, whose private amount is a
+positive u64."
 
 The TEE then *relays* this proof but cannot forge it (no spending key).
 The TEE can choose **whether** to lock a user's note (liveness) but not
-**which** commitment / amount / mint to lock — those are cryptographically
-pinned by the proof.
+**which** commitment / mint to lock or substitute an invalid amount — those are
+cryptographically pinned by the proof while the amount remains hidden.
 
 Reference: `circuits/valid_input/circuit.circom` (118 lines), on-chain
 verification in `programs/vault/src/instructions/lock_note.rs:80-115`.
@@ -915,34 +925,38 @@ spare slots are dummy-padded), and **chains** merges for >4.
             │  root_i := MerkleRootFromLeaf(commit_i,     │  ← compute-only;
             │              path[i], idx[i])               │     no hard assert
             │  isActive[i]·(root_i − merkleRoot) === 0    │  ← conditional bind
-            │  null_i := Poseidon3(DOMAIN_NULL,           │
-            │              spendingKey, innerHash[i])     │
-            │  isActive[i]·(null_i − nullifiers[i]) === 0 │
-            │  (1−isActive[i])·nullifiers[i] === 0        │  ← dummy ⇒ public 0
+            │  inputCommitments[i] :=                     │
+            │     isActive[i]·commit_i                    │  ← dummy ⇒ public 0
             │  Num2Bits(64)(amount[i])                    │
+            │  active ⇒ amount[i] > 0                     │
+            │  inactive ⇒ amount[i] = 0                   │
             └────────────────┬───────────────────────────┘
                              ▼
             outputAmount := Σ isActive[i]·amount[i]   (Num2Bits(64))
+            require Σ isActive[i] > 0 and outputAmount > 0
+            outputInner := Poseidon6(26, c0, c1, c2, c3, active_bitmap)
             outputCommitment === Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi,
                                   outputAmount, owner_commitment,
-                                  outputInnerHash)
+                                  outputInner)
 ```
 
 Public signals (circom output-first order, matching `merge.rs`'s `pi`
-array): `outputCommitment` (the single `signal output`), then the public
-inputs `merkleRoot`, `tokenMint[2]` (mint_lo, mint_hi), `nullifiers[K]`
-— **6 for K=2, 8 for K=4**. Private: one shared
+array): `outputCommitment`, `inputCommitments[K]`, then the public inputs
+`merkleRoot`, `tokenMint[2]` (mint_lo, mint_hi) — **6 for K=2, 8 for K=4**.
+Private: one shared
 `spendingKey` + `ownerCommitmentBlinding` (this is what enforces *all K notes
-belong to the same owner*), `outputInnerHash`, and per-slot `isActive`,
-`amount`, `innerHash`, `merklePath[20]`, `merkleIndices[20]`.
+belong to the same owner*) and per-slot `isActive`, `amount`, `innerHash`,
+`merklePath[20]`, `merkleIndices[20]`. There is no caller-selected output-inner
+witness.
 
 The one real subtlety is the **dummy slots**. `MerkleTreeChecker` (used by
 VALID_SPEND/INPUT) hard-asserts `root === computed`, which a padded slot
 can't satisfy — so merge uses a compute-only `MerkleRootFromLeaf(depth)` (the
 same Switcher/Poseidon2 ladder, but it *outputs* the root) and binds it
 conditionally: `isActive[i]·(root_i − merkleRoot) === 0`. An inactive slot
-sets `isActive[i]=0`, must carry public `nullifiers[i]===0` (a real nullifier
-is a Poseidon output, never 0), and contributes 0 to the sum. The on-chain
+sets `isActive[i]=0`, has zero amount, emits `inputCommitments[i]===0`, and
+contributes 0 to the sum. The circuit rejects an all-dummy or zero-output
+witness. The on-chain
 `merge` ix creates a `ConsumedNoteEntry` PDA only for each **non-zero** input
 commitment (the replay guard), so a padded slot can't smuggle a spend. Its
 remaining accounts are two ordered runs: the writable consumed-note PDAs,
@@ -951,10 +965,10 @@ same active commitments.
 
 Conservation: K notes consumed + 1 minted, same mint, same total ⇒ **no
 `OutstandingMint` change** (unlike withdraw — the pool still owes the same
-total). The output note is a normal tree leaf with a seed-recoverable
-`inner_hash` (`deriveMergeInnerHash`), so it's spendable exactly like a
-deposit — no tree reset (merge ADDS a circuit, reusing the v2 note
-construction).
+total). The output note is a normal tree leaf with a commitment-derived
+`inner_hash`, so it is recoverable without a restart-sensitive counter and is
+spendable exactly like a deposit. This v3 circuit/VK cutover intentionally
+requires a clean devnet tree reset; old merge proofs are invalid.
 
 **Tests**:
 [`merge-prover.test.ts`](../packages/sdk/tests/merge-prover.test.ts)
@@ -1148,20 +1162,20 @@ change note relocked by one batch is on-chain before a later batch consumes
 it). The enclave's dstack-derived Ed25519 key signs each settle payload and
 pays the fees. Everything from here is on L1.
 
-### Step 7 — `lock_note` × 2 (L1, v2-hardened)
+### Step 7 — `lock_note` × 2 (L1, v3 private-amount)
 
-For each match, the TEE-operated relayer submits **one L1 tx with two
-`lock_note` ixs**, one per side. Each ix:
+For each match, the TEE-operated relayer submits **two independent L1
+transactions**, each containing one `lock_note` ix (buyer and seller are sent
+concurrently). Each ix:
 
 ```rust
 vault::lock_note(
     note_commitment: [u8; 32],
     order_id:        [u8; 16],
     expiry_slot:     u64,
-    amount:          u64,
-    token_mint:      Pubkey,        // v2 NEW
-    merkle_root:     [u8; 32],      // v2 NEW
-    proof:           Groth16Proof,  // v2 NEW
+    token_mint:      Pubkey,
+    merkle_root:     [u8; 32],
+    proof:           Groth16Proof,
 )
 ```
 
@@ -1175,7 +1189,7 @@ Accounts:
 (`tree_id` is a new leading ix arg under tree-sharding; back-compat
 default 0.)
 
-Handler steps (v2):
+Handler steps (v3):
 
 1. Assert `tee_authority.key() ∈ vault_config.tee_pubkeys`.
 2. Assert `merkle_root` is in `merkle_tree.contains_root()` (current root
@@ -1184,18 +1198,17 @@ Handler steps (v2):
    (= 4,500 slots ≈ 30 min at 400 ms slots; a fixed slot count, so it naturally
    tightens to ~15 min after Alpenglow's 200 ms slots — F-05). Intake rejects
    orders beyond this up front, so the cap is a placement error, not a settle failure.
-4. Assert `amount > 0`.
-5. Construct the VALID_INPUT public inputs:
-   `[merkle_root, note_commitment, mint_lo, mint_hi, u64_be32(amount)]`.
-6. **Verify the Groth16 proof** against `vk_valid_input` (~88k CU).
-7. Write the lock:
+4. Construct the VALID_INPUT public inputs:
+   `[merkle_root, note_commitment, mint_lo, mint_hi]`.
+5. **Verify the Groth16 proof** against `vk_valid_input`; the proof privately
+   enforces `amount ∈ [1, 2^64-1]` and binds it into `note_commitment`.
+6. Write the lock:
    ```rust
    lock.note_commitment = note_commitment;
    lock.token_mint      = token_mint;          // v2 NEW
    lock.order_id        = order_id;
    lock.expiry_slot     = expiry_slot;
    lock.locked_by       = tee_authority.key();
-   lock.amount          = amount;
    lock.bump            = ctx.bumps.note_lock;
    ```
 
@@ -1211,8 +1224,9 @@ allocation. This is layer-1 of the multi-layered replay protection (§11).
 
 **Why VALID_INPUT was added**: pre-v2, `lock_note` accepted any 32-byte
 "commitment" with any u64 amount — the TEE could lie about both. The
-post-v2 chain knows the commitment is a real Merkle leaf with that mint
-and amount, owned by someone with the spending key.
+post-v3 chain knows the commitment is a real Merkle leaf with that mint and a
+private positive-u64 amount, owned by someone with the spending key. Neither
+the instruction nor `NoteLocked` event reveals the amount.
 
 **Why a per-tx CU budget of 400k**: two Groth16 verifications (~88k each)
 + overhead. Set via a `ComputeBudgetProgram.setComputeUnitLimit` ix at the
@@ -1644,7 +1658,7 @@ precompile, settle} is well over the cap. Napkin math:
 |---|---|
 | Tx headers + signature(s) + blockhash | ~80 |
 | `ComputeBudgetProgram.setComputeUnitLimit` ix | ~20 |
-| `lock_note` ix data (8 disc + 32 commit + 16 order_id + 8 expiry + 8 amount + 32 mint + 32 root + 256 proof) | 392 |
+| `lock_note` ix data (8 disc + 1 tree + 32 commit + 16 order_id + 8 expiry + 32 mint + 32 root + 256 proof) | 385 |
 | `lock_note` accounts (4 × 32) | 128 |
 | `verify_match_batch` ix data (8 disc + 32 root + 8 expiry + 256 proof) | ~304 |
 | Ed25519 precompile ix (header + pubkey + sig + 32-byte msg) | ~150 |
@@ -1656,7 +1670,7 @@ So the settle is split into a pipeline, per batch (≤ N=16 matches):
 
 | Tx | Contents | Approx size | Cardinality |
 |---|---|---|---|
-| **Tx A — lock** | compute_budget + lock_note(a) + lock_note(b) | ~1050 B | N per batch (one per match) |
+| **Tx A — lock** | compute_budget + one lock_note (buyer/seller sent independently) | size-guarded below 800 B | 2N per batch |
 | **Tx B — verify_match_batch** | compute_budget + verify_match_batch (1 Groth16, 1 marker init) | ~640 B | 1 per batch |
 | **Tx C — per-batch ALT** | createLookupTable + chunked extendLookupTable(7 PDAs per match) | amortized | 1 per batch |
 | **Tx D — settle_batched** | compute_budget + ed25519_precompile + tee_forced_settle_batched (v0 + stacked ALTs) | 1109 B worst case (v9) | N per batch |

@@ -5,14 +5,14 @@
 //! buyer's input + the seller's input). PR 4g.3 ships these as
 //! **two separate transactions**, NOT batched. The reason:
 //!
-//!   - Batching into one tx is feasible (~1050 B per CLAUDE.md §5)
+//!   - Batching into one tx is feasible but consumes much more headroom
 //!     but only with ALT-based account deduplication. The ALT
 //!     plumbing lands in 4g.5; pre-ALT, two txs is the only path
 //!     that stays under the 1232 B tx-size cap.
 //!   - Two txs are independent. If one fails (proof rejected,
 //!     blockhash expired), the other has already landed and we
 //!     can resubmit just the failed one. With a batched tx, a
-//!     single-side failure aborts both and we re-send 1050 B of
+//!     single-side failure aborts both and we re-send both proofs instead of
 //!     valid bytes.
 //!
 //! When PR 4g.5 introduces the per-batch ALT, this module can be
@@ -37,8 +37,8 @@ use super::pipeline::{budget_ixs, LOCK_COMPUTE_UNIT_LIMIT};
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
 /// Per-side inputs the TEE needs to construct one `lock_note` ix.
-/// `note_commitment` + `amount` typically come from the `MatchPair`
-/// the matcher emitted; `token_mint` + `expiry_slot` are config-
+/// `note_commitment` typically comes from the `MatchPair` the matcher emitted;
+/// `token_mint` + `expiry_slot` are config-
 /// or order-derived; `merkle_root` + `proof` are the user-supplied
 /// VALID_INPUT inputs the TEE relays (see 4g.3 doc on the proof
 /// integration gap).
@@ -53,7 +53,6 @@ pub struct LockSideInputs {
     pub note_commitment: [u8; 32],
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
-    pub amount: u64,
     pub token_mint: [u8; 32],
     pub merkle_root: [u8; 32],
     pub proof: Groth16ProofBytes,
@@ -72,7 +71,6 @@ impl From<LockSideInputs> for LockNoteArgs {
             note_commitment: s.note_commitment,
             order_id: s.order_id,
             expiry_slot: s.expiry_slot,
-            amount: s.amount,
             token_mint: s.token_mint,
             merkle_root: s.merkle_root,
             proof: s.proof,
@@ -294,7 +292,6 @@ mod tests {
             note_commitment: [0xAA; 32],
             order_id: [0xBB; 16],
             expiry_slot: 1_000_000,
-            amount: 100,
             token_mint: [0xCC; 32],
             merkle_root: [0xDD; 32],
             proof: dummy_proof(),
@@ -308,7 +305,6 @@ mod tests {
             note_commitment: [0x55; 32],
             order_id: [0x66; 16],
             expiry_slot: 1_000_000,
-            amount: 10,
             token_mint: [0x77; 32],
             merkle_root: [0xDD; 32],
             proof: dummy_proof(),
@@ -323,7 +319,6 @@ mod tests {
         assert_eq!(args.note_commitment, buyer.note_commitment);
         assert_eq!(args.order_id, buyer.order_id);
         assert_eq!(args.expiry_slot, buyer.expiry_slot);
-        assert_eq!(args.amount, buyer.amount);
         assert_eq!(args.token_mint, buyer.token_mint);
         assert_eq!(args.merkle_root, buyer.merkle_root);
     }
@@ -336,5 +331,26 @@ mod tests {
         // The PDA derivation is what makes these distinct on-chain;
         // verifying the input commitments differ is the test layer
         // assertion we can make without a runtime.
+    }
+
+    #[test]
+    fn private_amount_lock_tx_retains_wire_headroom() {
+        let keypair = Keypair::new();
+        let encoded = build_lock_tx_b64(
+            &keypair,
+            Hash::new_from_array([7u8; 32]),
+            &dummy_buyer_inputs(),
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        let wire = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        assert!(
+            wire.len() <= 800,
+            "lock tx is {} bytes; expected at least 432 bytes of cap headroom",
+            wire.len()
+        );
     }
 }
