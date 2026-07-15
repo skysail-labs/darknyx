@@ -30,8 +30,6 @@ fn route_cost(method: &Method, path: &str) -> f64 {
     match *method {
         // order.place
         Method::POST if path == "/orders" => 1.0,
-        // anchor top-up
-        Method::POST if is_order_subpath && path.ends_with("/anchors") => 0.5,
         // order.cancel
         Method::DELETE if is_order_subpath => 0.2,
         // order.modify (atomic cancel + replace)
@@ -86,7 +84,6 @@ mod tests {
         assert_eq!(route_cost(&Method::POST, "/orders"), 1.0);
         assert_eq!(route_cost(&Method::DELETE, "/orders/abc"), 0.2);
         assert_eq!(route_cost(&Method::PUT, "/orders/abc"), 1.2);
-        assert_eq!(route_cost(&Method::POST, "/orders/abc/anchors"), 0.5);
         assert_eq!(route_cost(&Method::GET, "/orders/abc"), 0.1);
         assert_eq!(route_cost(&Method::GET, "/tree/leaves"), 0.1);
     }

@@ -59,7 +59,6 @@ the orders and fills channels for push updates.
 | `DELETE` | `/orders/{order_id}` | bearer + sig | Cancel an order |
 | `PUT` | `/orders/{order_id}` | bearer + sig | Modify (atomic cancel + replace) |
 | `GET` | `/orders/{order_id}` | bearer | Order status |
-| `POST` | `/orders/{order_id}/anchors` | bearer + sig | Top up an order's continuation anchor pool |
 | `GET` | `/tree/root` | public | Current Merkle root of a shard |
 | `GET` | `/tree/inclusion` | bearer | Inclusion proof for a note commitment |
 | `GET` | `/tree/leaves` | bearer | Paginated leaf read |
@@ -96,7 +95,7 @@ curl -s "$GATEWAY/instruments" | jq .
 curl -s "$GATEWAY/system/status" | jq .
 
 # 4. Place an order. The body carries the collateral-note commitment, the
-#    VALID_INPUT proof, the continuation anchor pool, and a trading-key
+#    VALID_INPUT proof, signed viewing key + boot session, and a trading-key
 #    signature over the canonical body. The SDK builds all of these. See
 #    Orders → Place Order for the full field reference.
 curl -s -X POST "$GATEWAY/orders" \
@@ -107,8 +106,8 @@ curl -s -X POST "$GATEWAY/orders" \
 
 :::tip Use the SDK
 A raw place-order body is large: it includes a note commitment, a 256-byte
-zero-knowledge input proof, an owner-commitment opening, and a ten-entry
-continuation anchor pool, all of which the **TypeScript SDK** derives and signs
+zero-knowledge input proof, an owner-commitment opening, a contributory viewing
+key, and the current boot session, all of which the **TypeScript SDK** signs
 for you from your keys and a deposited note. Hand-building the body is possible
 (the wire contract is documented), but the SDK is the intended path. See
 [SDK → TypeScript Client](../sdk/typescript-client).

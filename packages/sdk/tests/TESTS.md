@@ -39,7 +39,6 @@ Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
 | `settle-builder-batched.test.ts`   | batched settle payload + canonical hash                  |
 | `settlement-watcher.test.ts`       | `TradeSettled` event decode                              |
 | `settle-memo-integrity.test.ts`    | Vuln-4 client change-note memo guard                     |
-| `anchor-pool-build.test.ts`        | v2 client anchor-pool construction                       |
 | `order-builders.test.ts`           | ExecutionPolicy / order builder helpers                  |
 | `order-canonical-parity.test.ts`   | (see above)                                              |
 | `order-id.test.ts`                 | deterministic HD order_id derivation                     |

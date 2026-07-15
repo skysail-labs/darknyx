@@ -9,9 +9,7 @@
 use std::sync::Arc;
 
 use darkpool_matcher::book::{OrderSide, OrderType};
-use darkpool_matcher::order_canonical::{
-    anchor_pool_hash, Anchor, CancelCanonical, OrderCanonical, ANCHOR_POOL_SIZE,
-};
+use darkpool_matcher::order_canonical::{CancelCanonical, OrderCanonical};
 use ed25519_dalek::{Signer, SigningKey};
 use nyx_tee::api::orders::{
     cancel_core, cancel_resting_unchecked, place_core, CancelOrderRequest, PlaceOrderRequest,
@@ -41,12 +39,9 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
     let note_inner_hash = fr_safe(0x55u8.wrapping_add(salt));
     let nullifier = [0x77u8.wrapping_add(salt); 32];
     let user_commitment = fr_safe(0x33);
-    let anchors: Vec<Anchor> = (0..ANCHOR_POOL_SIZE)
-        .map(|i| Anchor {
-            inner_hash: fr_safe(0x10u8.wrapping_add(i as u8).wrapping_add(salt)),
-            nullifier: [0x90u8.wrapping_add(i as u8).wrapping_add(salt); 32],
-        })
-        .collect();
+    let viewing_pubkey = darkpool_crypto::ephemeral_public(&[0x21; 32]);
+    let session_id = [0x5A; 32];
+    let arrival_nonce = u64::from(salt);
 
     let opening = NoteOpening {
         token_mint: [0u8; 32],
@@ -68,8 +63,9 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
         order_id,
         note_commitment,
         user_commitment,
-        arrival_nonce: 1,
-        anchor_pool_hash: anchor_pool_hash(&anchors),
+        arrival_nonce,
+        viewing_pubkey,
+        session_id,
     };
     let sig = key.sign(&canonical.digest().unwrap());
 
@@ -84,7 +80,7 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
         "order_id": hex::encode(order_id),
         "note_commitment": hex::encode(note_commitment),
         "user_commitment": hex::encode(user_commitment),
-        "arrival_nonce": 1,
+        "arrival_nonce": arrival_nonce,
         "trading_key": hex::encode(key.verifying_key().to_bytes()),
         "trading_key_signature": hex::encode(sig.to_bytes()),
         "owner_commitment": hex::encode(owner_commitment),
@@ -93,10 +89,8 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
         "merkle_root": hex::encode([0xDDu8; 32]),
         "valid_input_proof": hex::encode([0u8; 256]),
         "collateral_amount": serde_json::Value::Null,
-        "anchors": anchors.iter().map(|a| json!({
-            "inner_hash": hex::encode(a.inner_hash),
-            "nullifier": hex::encode(a.nullifier),
-        })).collect::<Vec<_>>(),
+        "viewing_pubkey": hex::encode(viewing_pubkey),
+        "session_id": hex::encode(session_id),
     });
     serde_json::from_value(body).expect("valid PlaceOrderRequest")
 }

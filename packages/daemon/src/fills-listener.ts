@@ -5,17 +5,15 @@
  * continuation change note for this account; the SDK recomputes + self-verifies
  * the note opening (the Vuln-4 integrity check) and writes it to the
  * {@link NoteStore} (here, the daemon's sqlite store). For each delivered note
- * this listener then dispatches a lifecycle `fill` event into the engine —
- * advancing the consumed-anchor high-water mark (which drives auto anchor
- * top-up) and counting the residual (which drives auto-merge).
+ * this listener then dispatches a lifecycle `fill` event into the engine and
+ * counts the residual (which drives auto-merge).
  *
  * Division of labour with the orders channel: `fills` is the source of the
- * change-note OPENINGS + anchor consumption (the `fill` event carries NO phase
+ * change-note OPENINGS (the `fill` event carries NO phase
  * meaning); the order's PHASE transitions (accepted / filled / cancelled /
  * expired) come from the `orders` channel (the {@link OrdersListener}). The
- * channels share one authenticated session but neither double-drives the other (`anchorsConsumed` is a
- * max() high-water so it's idempotent; `pendingChangeNotes` is counted only
- * here).
+ * channels share one authenticated session but neither double-drives the other;
+ * `pendingChangeNotes` is counted only here.
  *
  * `subscribeFills` is injected so the listener is unit-testable without forging
  * a cryptographically-valid memo: tests pass a fake that hands back synthetic
@@ -86,12 +84,11 @@ export class FillsListener {
   private async handleFill(rec: StoredNote): Promise<void> {
     this.opts.onFill?.(rec);
     // Only continuation (fill) notes drive the lifecycle; a deposit note (no
-    // orderId/anchorIndex) wouldn't arrive here, but guard anyway.
-    if (rec.orderId === undefined || rec.anchorIndex === undefined) return;
+    // orderId) wouldn't arrive here, but guard anyway.
+    if (rec.orderId === undefined) return;
     try {
       await this.opts.engine.dispatch(rec.orderId, {
         type: "fill",
-        anchorIndex: rec.anchorIndex,
         producedChangeNote: rec.amount > 0n,
       });
     } catch (err) {

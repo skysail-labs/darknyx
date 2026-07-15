@@ -67,20 +67,18 @@ thin conditions.
 
 A large order rarely fills in one batch. Traditionally that means a round-trip:
 the venue fills part, hands you a residual, and you re-submit. Nyx removes the
-round-trip with the **anchor pool**.
+round-trip with deterministic consumed-input derivation.
 
-When you place an order, you submit a small set of pre-committed continuation
-tags (the nullifiers for your *future* change notes — possible because the
-spend-tag is amount-independent; see [Cryptography](./cryptography)). If the
-order fills partially, the matcher rotates the residual **in place** using the
-next anchor and re-matches it on the following tick — no client involvement, no
-new order. You learn about each fill over the live fills stream and the SDK
-reconstructs the change notes.
+If an order fills partially, VALID_MATCH_BATCH derives the residual's inner hash
+as `Poseidon3(24, consumed_input_inner, role)`. The matcher re-locks that output
+**in place** and re-matches it on the following tick, with no client involvement
+and no pre-supplied pool. The live fills stream names the consumed input so the
+SDK independently reconstructs the same change note.
 
 :::tip This is what makes hidden continuous trading practical
 Without it, every partial fill would leak a fresh order and a fresh round-trip.
-The anchor pool lets a single hidden order keep working across many batches as
-quietly as it started.
+Consumed-input derivation lets a single hidden order keep working across many
+batches as quietly as it started.
 :::
 
 ## Trading larger than any single note

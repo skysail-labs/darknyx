@@ -99,16 +99,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     ),
     keystorePath: env.NYX_DAEMON_KEYSTORE ?? "./nyx-keystore.json",
     thresholds: {
-      anchorTopUpThreshold: intFromEnv(
-        env,
-        "NYX_DAEMON_ANCHOR_TOPUP_THRESHOLD",
-        DEFAULT_THRESHOLDS.anchorTopUpThreshold,
-      ),
-      anchorTopUpSize: intFromEnv(
-        env,
-        "NYX_DAEMON_ANCHOR_TOPUP_SIZE",
-        DEFAULT_THRESHOLDS.anchorTopUpSize,
-      ),
       mergeThreshold: intFromEnv(
         env,
         "NYX_DAEMON_MERGE_THRESHOLD",

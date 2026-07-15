@@ -12,9 +12,7 @@ use anyhow::{anyhow, Result};
 use darkpool_crypto::note::owner_commitment;
 use darkpool_crypto::{ephemeral_public, fr_to_be_bytes, nullifier_v2, Fr};
 use darkpool_matcher::book::{OrderSide, OrderType};
-use darkpool_matcher::order_canonical::{
-    anchor_pool_hash, Anchor, OrderCanonical, ANCHOR_POOL_SIZE,
-};
+use darkpool_matcher::order_canonical::OrderCanonical;
 use ed25519_dalek::{Signer, SigningKey};
 use solana_address::Address;
 use solana_signer::Signer as _;
@@ -23,7 +21,7 @@ use super::flow::{load_keypair, DepositedNote, RealSettleHarness};
 use super::rpc::RpcClient;
 use super::vault::associated_token_address;
 use super::{spl, ValidInputProof};
-use crate::auth::acquire_bearer;
+use crate::auth::{acquire_bearer, fetch_boot_session_id};
 use crate::config::RunConfig;
 
 /// Knobs for one real-settle round (a single crossing pair).
@@ -48,8 +46,8 @@ pub struct RealSettleParams {
     pub traders: usize,
     /// Weighted scenario mix, e.g. "exact-match:50,merge:20,partial-fill:30".
     pub mix: String,
-    /// `partial-fill`: small asks crossing the one big bid (= anchors consumed).
-    pub multi_anchor_asks: u8,
+    /// `partial-fill`: small asks crossing the one big bid.
+    pub partial_fill_asks: u8,
 }
 
 impl RealSettleParams {
@@ -78,7 +76,7 @@ impl RealSettleParams {
             passphrase: cfg.passphrase.clone(),
             traders: cfg.traders,
             mix: cfg.real_mix.clone(),
-            multi_anchor_asks: cfg.real_multi_anchor_asks,
+            partial_fill_asks: cfg.real_partial_fill_asks,
         })
     }
 }
@@ -98,21 +96,8 @@ fn scaled_quote(base: u64, price: u64, price_scale: u64) -> Result<u64> {
     u64::try_from(quote).map_err(|_| anyhow!("scaled quote exceeds u64"))
 }
 
-/// Deterministic, BN254-Fr-safe (top byte 0) 32-byte field for a synthetic
-/// anchor entry — anchors aren't consumed by an exact fill, so synthetic is
-/// fine; the pool_hash just has to be consistent with what we sign.
-fn fr_safe(order_id: &[u8; 16], tag: u8) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = order_id[i % 16] ^ tag ^ (i as u8);
-    }
-    out[0] = 0;
-    out
-}
-
 /// A per-run sub-second nonce (ms since epoch) — the salt that makes every
-/// run's `order_id`s (and thus its anchor `inner_hash`/`nullifier`s, which are
-/// `fr_safe(order_id, …)`) unique. Sub-second so back-to-back runs don't collide.
+/// run's `order_id`s unique. Sub-second so back-to-back runs don't collide.
 fn run_nonce() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -122,16 +107,9 @@ fn run_nonce() -> u64 {
 
 /// Build a unique `order_id`: `[run_nonce (8 LE) | order index (8 LE)]`.
 ///
-/// CRITICAL: the anchor pool is `fr_safe(order_id, …)`, and a partial fill's
-/// continuation residual note takes its nullifier DIRECTLY from a consumed
-/// anchor (the matcher's `assign_continuation_anchors`). That nullifier is
-/// registered on-chain as a `NullifierEntry` PDA, which is the permanent
-/// replay-protection backbone and is NOT cleared by `reset-merkle-tree.mjs`.
-/// So a fixed (index-only) `order_id` reuses the same anchor nullifiers every
-/// run → the SECOND run's continuation settle hits `Allocate: already in use`
-/// (custom error 0) on that `NullifierEntry`, which cascades to `3007` on the
-/// next continuation batch. Folding `run_nonce()` in makes each run's anchors
-/// fresh. (Personas were already salted; the anchors/`order_id` were the gap.)
+/// The settlement ID derivation also binds the two order IDs. Output safety no
+/// longer depends on their uniqueness, but unique IDs keep run observability and
+/// exact-idempotency semantics unambiguous.
 fn salted_order_id(nonce: u64, index: u64) -> [u8; 16] {
     let mut oid = [0u8; 16];
     oid[..8].copy_from_slice(&nonce.to_le_bytes());
@@ -181,14 +159,9 @@ fn build_order_body(
     qty: u64,
     expiry_slot: u64,
     symbol: &str,
+    boot_session_id: [u8; 32],
 ) -> Result<serde_json::Value> {
-    let anchors: Vec<Anchor> = (0..ANCHOR_POOL_SIZE)
-        .map(|i| Anchor {
-            inner_hash: fr_safe(&order_id, 0x10 + i as u8),
-            nullifier: fr_safe(&order_id, 0x80 + i as u8),
-        })
-        .collect();
-    let pool_hash = anchor_pool_hash(&anchors);
+    let viewing_pubkey = ephemeral_public(&p.trading.to_bytes());
 
     let canonical = OrderCanonical {
         symbol: symbol.as_bytes(),
@@ -202,18 +175,13 @@ fn build_order_body(
         note_commitment: note.commitment,
         user_commitment: p.user_commitment,
         arrival_nonce: 1,
-        anchor_pool_hash: pool_hash,
+        viewing_pubkey,
+        session_id: boot_session_id,
     };
     let digest = canonical.digest().map_err(|e| anyhow!("digest: {e}"))?;
     let sig = p.trading.sign(&digest);
     let nullifier =
         nullifier_v2(&p.spending_key, &note.inner_hash).map_err(|e| anyhow!("nullifier: {e}"))?;
-    // Change-amount recovery (Proposal B): a valid per-persona X25519 viewing
-    // pubkey the TEE encrypts this order's change_amount to on-chain. Stand-in
-    // derived from the trading key (the loadgen doesn't itself recover — a real
-    // client would use the seed-derived `deriveViewingEncKeypair`). NOT signed.
-    let viewing_pubkey = ephemeral_public(&p.trading.to_bytes());
-
     Ok(serde_json::json!({
         "symbol": symbol,
         "side": match side { OrderSide::Bid => "bid", OrderSide::Ask => "ask" },
@@ -233,6 +201,7 @@ fn build_order_body(
         "trading_key": hex::encode(p.trading.verifying_key().to_bytes()),
         "trading_key_signature": hex::encode(sig.to_bytes()),
         "viewing_pubkey": hex::encode(viewing_pubkey),
+        "session_id": hex::encode(boot_session_id),
         "owner_commitment": hex::encode(p.owner_commit),
         "note_inner_hash": hex::encode(note.inner_hash),
         "nullifier": hex::encode(nullifier),
@@ -242,16 +211,14 @@ fn build_order_body(
         // Which shard the input note lives in — lets the CVM route lock_note to
         // the right merkle_tree so a batch's inputs can span shards (cross-shard fix).
         "tree_id": note.tree_id,
-        "anchors": anchors.iter().map(|a| serde_json::json!({
-            "inner_hash": hex::encode(a.inner_hash),
-            "nullifier": hex::encode(a.nullifier),
-        })).collect::<Vec<_>>(),
     }))
 }
 
 /// Run a single real crossing pair end-to-end: mint → deposit → prove → POST →
 /// watch settle. Returns the on-chain leaf-count growth.
 pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
+    let http = reqwest::Client::new();
+    let boot_session_id = fetch_boot_session_id(&http, &p.gateway).await?;
     let rpc = RpcClient::new(p.rpc_url.clone());
     let mut harness = RealSettleHarness::new(rpc.clone(), &p.circuits_dir, p.num_trees)?;
     let admin = load_keypair(&p.admin_keypair)?;
@@ -382,8 +349,7 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
     let seller_proof = harness.prove(&seller.spending_key, &seller.owner_blinding, &seller_note)?;
 
     // 4. Build + sign both orders. Salt the order_ids per run (see
-    // `salted_order_id`): even though this single-pair path is exact-fill (no
-    // anchors consumed), fixed order_ids are a latent cross-run collision.
+    // `salted_order_id`) for clear idempotency and settlement observability.
     // Within MAX_LOCK_TTL_SLOTS (4_500 ≈ 30 min; F-05) so intake accepts it.
     let expiry_slot = rpc.slot().await? + 3_000;
     let pair_nonce = run_nonce();
@@ -398,6 +364,7 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
         p.qty,
         expiry_slot,
         &p.symbol,
+        boot_session_id,
     )?;
     let seller_order = build_order_body(
         &seller,
@@ -410,10 +377,10 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
         p.qty,
         expiry_slot,
         &p.symbol,
+        boot_session_id,
     )?;
 
     // 5. Auth + submit both.
-    let http = reqwest::Client::new();
     let token = acquire_bearer(&http, &p.gateway, &p.api_key, &p.api_secret, &p.passphrase)
         .await
         .map_err(|e| anyhow!("auth: {e}"))?;
@@ -472,7 +439,7 @@ pub enum RealScenario {
     ExactMatch,
     /// Bid note larger than required (surplus → change note).
     OverCollateral,
-    /// 1 big bid + M small asks → M fills over M batches → consumes M anchors.
+    /// 1 big bid + M small asks → M fills over M batches.
     PartialFill,
     /// Deposit 2 sub-threshold notes → VALID_MERGE → ask off the merged note.
     Merge,
@@ -546,6 +513,8 @@ struct LiveOrder {
 /// (concurrent) → drain the settle. Reports client prove-rate + end-to-end
 /// settled-matches/sec — the prover-bottleneck evidence.
 pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
+    let http = reqwest::Client::new();
+    let boot_session_id = fetch_boot_session_id(&http, &p.gateway).await?;
     let mix = parse_mix(&p.mix)?;
     let needs_merge = mix.iter().any(|(s, _)| *s == RealScenario::Merge);
     let rpc = RpcClient::new(p.rpc_url.clone());
@@ -707,8 +676,8 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 });
             }
             RealScenario::PartialFill => {
-                // One big bid (M×qty) + M small asks (qty each) → M anchors over M batches.
-                let m = p.multi_anchor_asks.max(1) as u64;
+                // One big bid (M×qty) + M small asks (qty each) → M batches.
+                let m = p.partial_fill_asks.max(1) as u64;
                 let big_qty = p.qty.saturating_mul(m);
                 let bid_amt = with_fee(
                     scaled_quote(big_qty, bid_price, p.price_scale)?,
@@ -931,7 +900,6 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     );
 
     // ── Phase 3: submit all orders concurrently ──
-    let http = reqwest::Client::new();
     let token = acquire_bearer(&http, &p.gateway, &p.api_key, &p.api_secret, &p.passphrase)
         .await
         .map_err(|e| anyhow!("auth: {e}"))?;
@@ -952,6 +920,7 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
             o.qty,
             expiry_slot,
             &p.symbol,
+            boot_session_id,
         )?);
     }
     let submit_start = Instant::now();

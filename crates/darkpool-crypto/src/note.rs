@@ -2,8 +2,7 @@
 //!
 //! **The live construction is v2 (`inner_hash`)** — a SINGLE per-note blinding
 //! that anchors both the commitment AND the nullifier (see
-//! [`crate::nullifier::nullifier_v2`]), so a client can PRE-SUPPLY the nullifier
-//! of a change note it has not yet received (the per-order "anchor pool"). Domain
+//! [`crate::nullifier::nullifier_v2`]). Domain
 //! tag DOMAIN_NOTE=2 is prepended to prevent second-preimage collisions with the
 //! owner-commitment and nullifier Poseidon uses (DOMAIN_OWNER=1, DOMAIN_NULL=3).
 //!
@@ -52,8 +51,8 @@ pub fn owner_commitment(spending_key: &Fr, r_owner: &Fr) -> Result<[u8; 32], Cry
 /// pair) while keeping the mint binding. Pairs with
 /// [`crate::nullifier::nullifier_v2`].
 ///
-/// `inner_hash` is a canonical BN254 `Fr` (32 BE bytes) — typically derived
-/// client-side via [`crate::keys::derive_inner_hash`].
+/// `inner_hash` is a canonical BN254 `Fr` (32 BE bytes). Deposits derive it
+/// client-side; match and merge outputs constrain their own derivations.
 pub fn commitment_from_fields_v2(
     token_mint: &[u8; 32],
     amount: u64,

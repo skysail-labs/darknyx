@@ -18,7 +18,6 @@ const ORDER: ManagedOrder = {
     side: "bid",
     priceRaw: 100n,
     sizeRaw: 500n,
-    anchorPoolSize: 10,
   }),
   phase: "open",
 };

@@ -11,12 +11,6 @@ A quick reference for the terms that recur across these docs. Most link back to
 the page that explains them in depth.
 :::
 
-### Anchor / anchor pool
-Pre-supplied secret material for an order's future change notes. Each anchor is an
-`{ inner_hash, nullifier }` pair; the pool lets the engine settle partial fills and
-re-lock the remainder without a per-fill round-trip. See
-[The Anchor Pool](../trading-concepts/anchor-pool).
-
 ### Attestation
 A hardware-signed measurement of the running enclave that a client verifies to
 confirm it is talking to the genuine, expected engine. See
@@ -58,7 +52,8 @@ Its memory is encrypted and its keys are bound to its measured image. See
 
 ### Inner hash
 A note's amount-independent value that anchors both its commitment and its
-nullifier. Decoupling the two is what enables the anchor pool. See
+nullifier. Match outputs derive their inner hash from the consumed input inner,
+so clients can verify and recover continuations without pre-supplied pools. See
 [Shielded Pool](../how-it-works/shielded-pool).
 
 ### Merkle tree
@@ -81,7 +76,7 @@ revealing which note was spent. See [Shielded Pool](../how-it-works/shielded-poo
 
 ### Order id
 A client-chosen 16-byte identifier for an order, supplied at placement and used on
-cancel, modify, get, and top-up.
+cancel, modify, and get. Settlement output safety does not depend on its uniqueness.
 
 ### Settlement
 The on-chain process that makes a matched trade final: lock, verify the batch

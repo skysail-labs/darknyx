@@ -13,10 +13,10 @@ cd /path/to/repo/root
 
 > **⚠️ note-construction v2 (`inner_hash`) — read before any devnet run.**
 > The note commitment + nullifier were re-anchored on a single `inner_hash`
-> (Poseidon6 commitment; nullifier over `inner_hash`, not the commitment), and
-> every order now carries a fixed **anchor pool** of 10 `(inner_hash, nullifier)`
-> pairs that lets the matcher settle partial-fill continuations without a
-> roundtrip. Two operational consequences:
+> (Poseidon6 commitment; nullifier over `inner_hash`, not the commitment).
+> VALID_MATCH_BATCH v3 derives every user output inner from the consumed input
+> inner, so partial-fill continuations need no client-supplied anchor pool.
+> Two operational consequences:
 >
 > 1. **A `reset_merkle_tree` is MANDATORY before the first v2 devnet run.** The
 >    migration UNIFIED all notes onto the arity-6 construction, so every
@@ -24,15 +24,13 @@ cd /path/to/repo/root
 >    every `lock_note` / settle fail with `InvalidProof`. Run
 >    `node scripts/reset-merkle-tree.mjs` (§4.5 / §9.2), then redeploy the BPF
 >    (the circuits + `vk_*.rs` changed — `cargo build-sbf` + `deploy-devnet.sh`).
-> 2. **The `POST /orders` body changed.** `note_nonce` + `note_blinding` →
->    a single `note_inner_hash`; a new `anchors` array (exactly 10
->    `{inner_hash, nullifier}`) is required and its SHA-256 is bound into the
->    signed order canonical (domain bumped `nyx-order-v1` → `v2`). The SDK
->    builders are `buildAnchorPool` / `anchorsToJson` / `buildAnchorTopUp`
->    (`packages/sdk/src/orders/anchor-pool.ts`); top-ups go to
->    `POST /orders/{id}/anchors`; fills stream over `/v1/stream`'s `fills` channel
->    (`verifyFillMemo` runs the integrity check, then store the change note).
->    `cvm-settle-e2e.test.ts` is wired to this shape.
+> 2. **The `POST /orders` body changed.** `note_nonce` + `note_blinding` became
+>    `note_inner_hash`; canonical order v2 (`nyx-order-v3` domain) removes
+>    `anchors`, requires a signed contributory X25519 `viewing_pubkey`, and
+>    requires the signed 32-byte `/info.boot_session_id`. After exact-body
+>    idempotency, `arrival_nonce` must strictly increase per trading key. The
+>    anchor top-up endpoint no longer exists. Fills stream over `/v1/stream`.
+>    `cvm-settle-e2e.test.ts` fetches and signs the live boot session.
 
 > **⚠️ tree-sharding (settle-throughput scaling) — read before any K>1 run.**
 > The Merkle-tree STATE was split out of `VaultConfig` into **K per-shard

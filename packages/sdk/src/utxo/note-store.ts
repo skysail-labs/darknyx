@@ -10,7 +10,8 @@
  *
  * The wallet (`wallet/wallet.ts`) reads this set to compute balances + select
  * collateral. Provenance fields are optional + mutually exclusive: a deposit
- * note carries `leafIndex`; a fill note carries `orderId` + `anchorIndex`.
+ * note carries `leafIndex`; a fill note carries `orderId` plus the exact
+ * consumed input commitment that derived it.
  */
 
 export interface StoredNote {
@@ -27,13 +28,13 @@ export interface StoredNote {
   leafIndex?: bigint;
   /** Fill (continuation change) note: the order it continued (16-byte hex). */
   orderId?: string;
-  /** Fill note: the anchor-pool index that produced it. */
-  anchorIndex?: number;
+  /** Fill note: exact input commitment consumed to produce it. */
+  consumedCommitment?: string;
 }
 
 /**
  * Back-compat alias — the fills path constructs records with `orderId` +
- * `anchorIndex` set. Prefer `StoredNote` for new code.
+ * `consumedCommitment` set. Prefer `StoredNote` for new code.
  */
 export type ChangeNoteRecord = StoredNote;
 

@@ -33,8 +33,7 @@ use axum::{
 };
 use darkpool_matcher::book::{Order, OrderSide, OrderStatus, OrderType};
 use darkpool_matcher::order_canonical::{
-    anchor_pool_hash, Anchor, AnchorTopUpCanonical, CancelCanonical, CanonicalError,
-    OrderCanonical, ANCHOR_POOL_SIZE, ANCHOR_TOPUP_SIZE, SYMBOL_MAX_LEN,
+    CancelCanonical, CanonicalError, OrderCanonical, SYMBOL_MAX_LEN,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -133,33 +132,16 @@ pub struct PlaceOrderRequest {
     #[serde(default)]
     pub tree_id: u8,
 
-    /// OPTIONAL 32-byte X25519 viewing-encryption public key, hex
+    /// Required 32-byte contributory X25519 viewing-encryption public key, hex
     /// (`deriveViewingEncKeypair().publicKey`). When present, the settle
     /// assembler encrypts each of this order's change_amounts to it and writes
     /// the ciphertext on-chain, so the change note stays recoverable after a CVM
     /// redeploy wipes the live fill memo (change-amount recovery, Proposal B).
-    /// NOT in the signed canonical body — it pins nothing the signature must
-    /// cover; a wrong key only makes the owner's OWN change unrecoverable
-    /// (self-harm), and the ciphertext is self-verifying client-side. Absent ⇒
-    /// no on-chain ciphertext (back-compatible). Any 32 bytes are accepted (an
-    /// X25519 point, not a Poseidon input — no Fr check).
-    #[serde(default)]
-    pub viewing_pubkey: Option<String>,
+    /// and bound into the canonical signature. Low-order points are rejected.
+    pub viewing_pubkey: String,
 
-    /// The order's continuation anchor pool — exactly
-    /// `ANCHOR_POOL_SIZE` `(inner_hash, nullifier)` pairs the client
-    /// pre-supplied so the matcher can settle partial-fill
-    /// continuations without a per-fill roundtrip. The SHA-256 over
-    /// these (`anchor_pool_hash`) is bound into the signed canonical
-    /// body, so the matcher checks the pool against the signature.
-    pub anchors: Vec<AnchorJson>,
-}
-
-/// One `(inner_hash, nullifier)` continuation anchor, hex-encoded.
-#[derive(Debug, Deserialize)]
-pub struct AnchorJson {
-    pub inner_hash: String,
-    pub nullifier: String,
+    /// 32-byte boot session id from `/info`, hex, bound into the signature.
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -307,11 +289,10 @@ struct PreparedOrder {
     /// Merkle-tree shard the collateral note lives in (selects the lock_note
     /// `merkle_tree` account). From `PlaceOrderRequest::tree_id`.
     tree_id: u8,
-    /// The owner's X25519 viewing-encryption pubkey, if supplied — recipient for
+    /// The owner's required X25519 viewing-encryption pubkey — recipient for
     /// the on-chain change_amount ciphertext (Proposal B). Stored on the opening.
-    viewing_pubkey: Option<[u8; 32]>,
+    viewing_pubkey: [u8; 32],
     valid_input_proof: crate::settle::lock_note::Groth16ProofBytes,
-    anchors: Vec<Anchor>,
     arrival_slot: u64,
     /// SHA-256 of the signed canonical body. Identifies "the same order" for
     /// idempotent-retry detection on a duplicate `order_id` (see `place_core`).
@@ -346,39 +327,18 @@ async fn prepare_order(
     let owner_commitment: [u8; 32] = decode_hex(&req.owner_commitment, "owner_commitment")?;
     let note_inner_hash: [u8; 32] = decode_hex(&req.note_inner_hash, "note_inner_hash")?;
     let nullifier: [u8; 32] = decode_hex(&req.nullifier, "nullifier")?;
-    // Optional X25519 viewing-encryption pubkey (Proposal B). Length-checked
-    // only — it's an X25519 point, not a Poseidon input, so no Fr safety check.
-    let viewing_pubkey: Option<[u8; 32]> = match req.viewing_pubkey.as_deref() {
-        Some(h) => Some(decode_hex(h, "viewing_pubkey")?),
-        None => None,
-    };
-
-    // Anchor pool: exactly ANCHOR_POOL_SIZE (inner_hash, nullifier) pairs.
-    // Each inner_hash is Poseidon-hashed into a future change-note
-    // commitment, so it MUST be a canonical BN254 Fr (fail fast here, like
-    // the order's own note_inner_hash). The nullifier is opaque to the TEE
-    // (it can't verify it without the spending key) — only length-checked.
-    if req.anchors.len() != ANCHOR_POOL_SIZE {
-        return Err(ApiError::malformed(format!(
-            "anchors: expected exactly {ANCHOR_POOL_SIZE} continuation anchors, got {}",
-            req.anchors.len()
-        )));
+    let viewing_pubkey: [u8; 32] = decode_hex(&req.viewing_pubkey, "viewing_pubkey")?;
+    if !darkpool_crypto::is_contributory_x25519_public_key(&viewing_pubkey) {
+        return Err(ApiError::invalid_viewing_key(
+            "viewing_pubkey is a non-contributory X25519 point",
+        ));
     }
-    let mut anchors: Vec<Anchor> = Vec::with_capacity(ANCHOR_POOL_SIZE);
-    for (i, a) in req.anchors.iter().enumerate() {
-        let inner_hash: [u8; 32] = decode_hex(&a.inner_hash, "anchor.inner_hash")?;
-        let null: [u8; 32] = decode_hex(&a.nullifier, "anchor.nullifier")?;
-        darkpool_crypto::fr_from_be_bytes(&inner_hash).map_err(|_| {
-            ApiError::fr_unsafe(format!(
-                "anchors[{i}].inner_hash is not a canonical BN254 field element"
-            ))
-        })?;
-        anchors.push(Anchor {
-            inner_hash,
-            nullifier: null,
-        });
+    let session_id: [u8; 32] = decode_hex(&req.session_id, "session_id")?;
+    if session_id != state.boot_session_id {
+        return Err(ApiError::stale_session(
+            "session_id does not match the current CVM boot session",
+        ));
     }
-    let pool_hash = anchor_pool_hash(&anchors);
     let lock_merkle_root: [u8; 32] = decode_hex(&req.merkle_root, "merkle_root")?;
     let valid_input_proof_bytes: [u8; 256] =
         decode_hex(&req.valid_input_proof, "valid_input_proof")?;
@@ -442,7 +402,8 @@ async fn prepare_order(
         note_commitment,
         user_commitment,
         arrival_nonce: req.arrival_nonce,
-        anchor_pool_hash: pool_hash,
+        viewing_pubkey,
+        session_id,
     };
     let digest = canonical
         .digest()
@@ -591,7 +552,6 @@ async fn prepare_order(
         tree_id: req.tree_id,
         viewing_pubkey,
         valid_input_proof,
-        anchors,
         arrival_slot,
         canonical_digest: digest,
     })
@@ -599,7 +559,7 @@ async fn prepare_order(
 
 /// Commit a prepared order to the book under the matcher write lock: submit it,
 /// store the opening (keyed by note commitment so the settle assembler resolves
-/// both sides of a match), and stash the continuation anchor pool. Both
+/// both sides of a match). Both
 /// mutations happen under the same lock the caller holds, so an observer never
 /// sees a booked order without its opening.
 fn commit_order(
@@ -638,17 +598,13 @@ fn commit_order(
             valid_input_proof: p.valid_input_proof,
             // A fresh deposit: lock_note must run for it (no prior re-lock).
             from_relock: false,
-            viewing_pubkey: p.viewing_pubkey,
+            viewing_pubkey: Some(p.viewing_pubkey),
         },
-    );
-    st.openings_mut().insert_anchor_pool(
-        p.order_id,
-        crate::matcher::openings::AnchorPool::new(p.anchors),
     );
     Ok(())
 }
 
-/// Remove an order + its opening + anchor pool from the book under the matcher
+/// Remove an order + its opening from the book under the matcher
 /// write lock (the lock-held half of `cancel_order`, reused by `modify_order`).
 fn cancel_in_book(
     st: &mut crate::matcher::MatcherState,
@@ -668,7 +624,6 @@ fn cancel_in_book(
     if let Some(note) = collateral_note {
         st.openings_mut().remove(&note);
     }
-    st.openings_mut().remove_anchor_pool(&order_id);
     Ok(())
 }
 
@@ -686,14 +641,16 @@ pub async fn place_core(
     let order_id = prepared.order_id;
     let arrival_slot = prepared.arrival_slot;
     let digest = prepared.canonical_digest;
+    let trading_key = prepared.order.trading_key;
+    let arrival_nonce = req.arrival_nonce;
     let order_id_hex = hex::encode(order_id);
 
-    // Idempotency: if this order_id was accepted before, a retry of the SAME
-    // signed body returns the original acceptance (not a 409); a DIFFERENT body
-    // reusing the id is a real conflict. Checked before the write lock; the rare
-    // concurrent-double-submit race still resolves to one acceptance + one 409
-    // (the book's `submit` is the hard dedup).
-    if let Some((prev_digest, prev_slot)) = state.idempotency_lookup(&order_id_hex).await {
+    // Exact-idempotency and nonce advancement share one lock, held through the
+    // matcher commit. Concurrent submissions therefore have one deterministic
+    // order: an exact retry wins before nonce validation; every new body must
+    // strictly advance the per-trading-key high-water mark.
+    let mut replay = state.submission_replay.lock().await;
+    if let Some((prev_digest, prev_slot)) = replay.idempotency.get(&order_id_hex).copied() {
         if prev_digest == digest {
             return Ok(PlaceOrderResponse {
                 order_id: order_id_hex,
@@ -705,18 +662,28 @@ pub async fn place_core(
             "order_id already used with a different order",
         ));
     }
+    if let Some(last) = replay.last_arrival_nonce.get(&trading_key).copied() {
+        if arrival_nonce <= last {
+            return Err(ApiError::stale_nonce(format!(
+                "arrival_nonce {arrival_nonce} is not greater than last accepted {last}"
+            )));
+        }
+    }
 
     {
         let mut st = matcher.write().await;
         commit_order(&mut st, prepared, req.expiry_slot)?;
     }
 
-    // Record the acceptance for idempotent retries, then the order→account
-    // mapping for per-account routing. After dropping the matcher lock so we
-    // never hold it across the other map locks.
-    state
-        .idempotency_record(order_id_hex.clone(), digest, arrival_slot)
-        .await;
+    ApiState::record_submission_locked(
+        &mut replay,
+        order_id_hex.clone(),
+        digest,
+        arrival_slot,
+        trading_key,
+        arrival_nonce,
+    );
+    drop(replay);
     state
         .record_order_owner(order_id_hex.clone(), account_id.to_string())
         .await;
@@ -894,6 +861,35 @@ pub async fn modify_core(
     let prepared = prepare_order(state, matcher, &req.replacement).await?;
     let new_order_id = prepared.order_id;
     let arrival_slot = prepared.arrival_slot;
+    let digest = prepared.canonical_digest;
+    let arrival_nonce = req.replacement.arrival_nonce;
+    let new_order_id_hex = hex::encode(new_order_id);
+
+    let mut replay = state.submission_replay.lock().await;
+    if let Some((prev_digest, prev_slot)) = replay.idempotency.get(&new_order_id_hex).copied() {
+        if prev_digest == digest {
+            return Ok(ModifyOrderResponse {
+                old_order_id: old_order_id_hex.to_string(),
+                order_id: new_order_id_hex,
+                status: "modified",
+                arrival_slot: prev_slot,
+            });
+        }
+        // Reprice-in-place deliberately reuses the old id; a different new id
+        // may never overwrite an earlier accepted canonical body.
+        if new_order_id != old_order_id {
+            return Err(ApiError::duplicate(
+                "replacement order_id already used with a different order",
+            ));
+        }
+    }
+    if let Some(last) = replay.last_arrival_nonce.get(&trading_key).copied() {
+        if arrival_nonce <= last {
+            return Err(ApiError::stale_nonce(format!(
+                "arrival_nonce {arrival_nonce} is not greater than last accepted {last}"
+            )));
+        }
+    }
 
     // Atomic swap under ONE write lock. Check BOTH preconditions before mutating
     // so neither side partially applies (no "user has neither order" window):
@@ -935,18 +931,28 @@ pub async fn modify_core(
         commit_order(&mut st, prepared, req.replacement.expiry_slot)?;
     }
 
+    ApiState::record_submission_locked(
+        &mut replay,
+        new_order_id_hex.clone(),
+        digest,
+        arrival_slot,
+        trading_key,
+        arrival_nonce,
+    );
+    drop(replay);
+
     // The old order left the book → emit a Cancelled on the orders channel + drop its
     // owner mapping, UNLESS the id is reused (a reprice keeps the logical order).
     if new_order_id != old_order_id {
         announce_cancel(state, old_order_id_hex).await;
     }
     state
-        .record_order_owner(hex::encode(new_order_id), account_id.to_string())
+        .record_order_owner(new_order_id_hex.clone(), account_id.to_string())
         .await;
 
     Ok(ModifyOrderResponse {
         old_order_id: old_order_id_hex.to_string(),
-        order_id: hex::encode(new_order_id),
+        order_id: new_order_id_hex,
         status: "modified",
         arrival_slot,
     })
@@ -964,114 +970,8 @@ pub async fn modify_order(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /orders/{order_id}/anchors  — anchor-pool top-up (Phase 7)
+// Retired in canonical-order v2: continuation anchors/top-ups no longer exist.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Body for `POST /orders/{order_id}/anchors`. Appends a fresh batch of
-/// continuation anchors to a live order whose pool drained (the matcher
-/// paused it). The trading key signs over the new pool's hash + a
-/// per-order monotonic `topup_nonce`.
-#[derive(Debug, Deserialize)]
-pub struct AnchorTopUpRequest {
-    /// Exactly `ANCHOR_TOPUP_SIZE` new `(inner_hash, nullifier)` anchors.
-    pub anchors: Vec<AnchorJson>,
-    /// Strictly-increasing per-order counter (replay protection).
-    pub topup_nonce: u64,
-    /// 32-byte trading key (must own the order), hex.
-    pub trading_key: String,
-    /// 64-byte Ed25519 signature over the top-up canonical digest, hex.
-    pub trading_key_signature: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AnchorTopUpResponse {
-    pub order_id: String,
-    pub status: &'static str,
-    /// Anchors not yet consumed after the append.
-    pub remaining: usize,
-}
-
-pub async fn topup_anchors(
-    State(state): State<Arc<ApiState>>,
-    Extension(_auth): Extension<Authorized>,
-    Path(order_id_hex): Path<String>,
-    Json(req): Json<AnchorTopUpRequest>,
-) -> Result<(StatusCode, Json<AnchorTopUpResponse>), ApiError> {
-    let matcher = matcher_or_503(&state)?;
-
-    let order_id: [u8; 16] = decode_hex(&order_id_hex, "order_id (path)")?;
-    let trading_key: [u8; 32] = decode_hex(&req.trading_key, "trading_key")?;
-    let signature: [u8; 64] = decode_hex(&req.trading_key_signature, "trading_key_signature")?;
-
-    // Validate + decode the new anchors (same rules as intake).
-    if req.anchors.len() != ANCHOR_TOPUP_SIZE {
-        return Err(ApiError::malformed(format!(
-            "anchors: expected exactly {ANCHOR_TOPUP_SIZE} top-up anchors, got {}",
-            req.anchors.len()
-        )));
-    }
-    let mut anchors: Vec<Anchor> = Vec::with_capacity(ANCHOR_TOPUP_SIZE);
-    for (i, a) in req.anchors.iter().enumerate() {
-        let inner_hash: [u8; 32] = decode_hex(&a.inner_hash, "anchor.inner_hash")?;
-        let null: [u8; 32] = decode_hex(&a.nullifier, "anchor.nullifier")?;
-        darkpool_crypto::fr_from_be_bytes(&inner_hash).map_err(|_| {
-            ApiError::fr_unsafe(format!(
-                "anchors[{i}].inner_hash is not a canonical BN254 field element"
-            ))
-        })?;
-        anchors.push(Anchor {
-            inner_hash,
-            nullifier: null,
-        });
-    }
-
-    // Verify the trading-key signature over (order_id, new-pool hash, nonce).
-    let canonical = AnchorTopUpCanonical {
-        order_id,
-        anchor_pool_hash: anchor_pool_hash(&anchors),
-        topup_nonce: req.topup_nonce,
-    };
-    verify_sig(&canonical.digest(), &trading_key, &signature)?;
-
-    let mut st = matcher.write().await;
-    // Authorize: the top-up's trading key must own the order. (A missing
-    // order → 404: it filled / cancelled / expired, so its pool is gone.)
-    match st.book().get(&order_id) {
-        None => {
-            return Err(ApiError::not_found(
-                "order not found (filled / cancelled / expired)",
-            ))
-        }
-        Some(o) if o.trading_key != trading_key => {
-            return Err(ApiError::not_owner("trading key does not own this order"))
-        }
-        Some(_) => {}
-    }
-
-    let pool = st
-        .openings_mut()
-        .anchor_pool_mut(&order_id)
-        .ok_or_else(|| ApiError::not_found("order has no anchor pool"))?;
-    // Replay protection: the nonce must strictly increase.
-    if req.topup_nonce <= pool.last_topup_nonce {
-        return Err(ApiError::stale_nonce(format!(
-            "topup_nonce {} not greater than last accepted {}",
-            req.topup_nonce, pool.last_topup_nonce
-        )));
-    }
-    pool.last_topup_nonce = req.topup_nonce;
-    pool.append(anchors); // also clears `paused` → the matcher resumes it
-    let remaining = pool.remaining();
-
-    Ok((
-        StatusCode::OK,
-        Json(AnchorTopUpResponse {
-            order_id: hex::encode(order_id),
-            status: "topped_up",
-            remaining,
-        }),
-    ))
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /orders/{order_id}

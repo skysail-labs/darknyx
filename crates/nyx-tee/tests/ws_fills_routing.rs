@@ -14,9 +14,9 @@ use nyx_tee::matcher::FillMemo;
 
 fn memo(order_id: &str) -> FillMemo {
     FillMemo {
-        seq: None, // assigned by route_fill
         order_id: order_id.to_string(),
-        anchor_index: 0,
+        consumed_note_commitment: "11".repeat(32),
+        output_role: darkpool_matcher::change_note::CHANGE_ROLE_BUYER,
         change_amount: 100,
         change_note_commitment: "ab".repeat(32),
         mint: "cd".repeat(32),
@@ -88,14 +88,33 @@ async fn forgetting_an_order_stops_its_routing() {
 }
 
 #[tokio::test]
+async fn terminal_owner_archive_preserves_final_fill_routing() {
+    let state = Arc::new(ApiState::for_tests());
+    state
+        .record_order_owner("order_a".into(), "acct_a".into())
+        .await;
+    let mut rx_a = state.subscribe_account_fills("acct_a").await;
+
+    state.archive_order_owner("order_a").await;
+    assert!(
+        !state.account_owns_order("order_a", "acct_a").await,
+        "terminal order must not remain visible as live ownership"
+    );
+
+    let fill = memo("order_a");
+    assert!(state.route_fill(&fill).await);
+    assert_eq!(rx_a.recv().await.unwrap(), fill);
+}
+
+#[tokio::test]
 async fn no_subscriber_means_no_delivery_but_no_error() {
     let state = Arc::new(ApiState::for_tests());
     state
         .record_order_owner("order_a".into(), "acct_a".into())
         .await;
-    // Owner known, but no fills-channel subscriber attached → not delivered LIVE
-    // (recoverable via the durable fill log / memo replay, P7), and routing does
-    // not panic.
+    // Owner known, but no fills-channel subscriber attached → not delivered
+    // LIVE (recoverable from the encrypted on-chain recovery envelope), and
+    // routing does not panic.
     assert!(!state.route_fill(&memo("order_a")).await);
 }
 

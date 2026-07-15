@@ -9,10 +9,8 @@
 //! ```
 //!
 //! The nullifier anchors on the note's amount-independent `inner_hash` (not its
-//! commitment), so the owner can compute it BEFORE the note's amount is known —
-//! which is what lets a client pre-supply the nullifiers of change notes it has
-//! not yet received (the per-order anchor pool). Only the note owner (who knows
-//! the spending key) can compute it. Pairs with
+//! commitment). Only the note owner (who knows the spending key) can compute
+//! it. Pairs with
 //! [`crate::note::commitment_from_fields_v2`]. (The pre-v2 v1 nullifier — anchored
 //! on the note commitment — has been fully retired.)
 
@@ -27,8 +25,7 @@ const DOMAIN_NULL: u64 = 3;
 
 /// v2 nullifier: `Poseidon3(DOMAIN_NULL, spending_key, inner_hash)`. Anchored on
 /// the amount-independent `inner_hash` (32 BE bytes, a canonical BN254 `Fr`)
-/// rather than the commitment, so it can be precomputed before the note amount
-/// is known. See the module docs.
+/// rather than the commitment. See the module docs.
 pub fn nullifier_v2(spending_key: &Fr, inner_hash: &[u8; 32]) -> Result<Nullifier, CryptoError> {
     let inner_fr = fr_from_be_bytes(inner_hash)?;
     let h = poseidon_hash(&[Fr::from(DOMAIN_NULL), *spending_key, inner_fr])?;

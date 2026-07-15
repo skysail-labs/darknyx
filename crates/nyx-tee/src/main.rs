@@ -179,6 +179,7 @@ async fn main() -> Result<()> {
             (nyx_tee::api::ApiState::for_tests(), None, None)
         }
     };
+    let boot_session_id = api_state.boot_session_id;
 
     // ─── 2. Shared runtime ───────────────────────────────────────────
     // Build the match config up front so its mints can seed the
@@ -376,6 +377,7 @@ async fn main() -> Result<()> {
                 settle_protocol_owner,
                 settle_fee_rate_bps,
                 settle_price_scale,
+                boot_session_id,
             )
             .map(|d| {
                 tracing::info!(
@@ -657,6 +659,7 @@ fn build_settle_driver(
     protocol_owner_commitment: [u8; 32],
     fee_rate_bps: u64,
     price_scale: u64,
+    boot_session_id: [u8; 32],
 ) -> anyhow::Result<SettleDriver> {
     let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
     let circuits_dir =
@@ -802,6 +805,7 @@ fn build_settle_driver(
         ctx,
         matcher_state,
         cfg: SettleDriverConfig {
+            boot_session_id,
             base_mint,
             quote_mint,
             protocol_owner_commitment,

@@ -139,8 +139,8 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
 
 - **Trustless per-order collateral** — the `VALID_INPUT` proof means collateral can't be
   phantom-locked.
-- **Anchor-pool continuations** — partial fills re-lock the residual without a client
-  round-trip (no analog on GoDark's surface).
+- **Input-derived continuations** — partial fills deterministically derive and
+  re-lock the residual from the consumed input without a client round-trip.
 - **Note-merge** for collateral consolidation.
 - **Single attested hop** (RA-TLS to the enclave) vs gateway-then-committee.
 - **`/transparency`** proof-of-reserves (per-mint outstanding vs vault balance) — public and

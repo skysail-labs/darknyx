@@ -31,7 +31,7 @@ const depositNote = (suffix: string): StoredNote => ({
 const fillNote = (
   suffix: string,
   orderId: string,
-  idx: number,
+  consumedCommitment: string,
 ): StoredNote => ({
   commitment: `fill${suffix}`,
   tokenMint: Uint8Array.from([9, 9]),
@@ -39,7 +39,7 @@ const fillNote = (
   ownerCommitment: 99n,
   innerHash: 555n,
   orderId,
-  anchorIndex: idx,
+  consumedCommitment,
 });
 
 describe("DaemonStore — NoteStore", () => {
@@ -54,16 +54,16 @@ describe("DaemonStore — NoteStore", () => {
     expect(got!.leafIndex).toBe(42n);
     expect(Buffer.from(got!.tokenMint)).toEqual(Buffer.from(n.tokenMint));
     expect(got!.orderId).toBeUndefined();
-    expect(got!.anchorIndex).toBeUndefined();
+    expect(got!.consumedCommitment).toBeUndefined();
   });
 
   it("round-trips a fill (continuation) note with provenance", () => {
     const oid = "ab".repeat(8);
-    const n = fillNote("B", oid, 3);
+    const n = fillNote("B", oid, "aa".repeat(32));
     store.put(n);
     const got = store.get(n.commitment)!;
     expect(got.orderId).toBe(oid);
-    expect(got.anchorIndex).toBe(3);
+    expect(got.consumedCommitment).toBe("aa".repeat(32));
     expect(got.leafIndex).toBeUndefined();
   });
 
@@ -86,12 +86,15 @@ describe("DaemonStore — NoteStore", () => {
 
   it("queries notes by originating order", () => {
     const oid = "cd".repeat(8);
-    store.put(fillNote("1", oid, 0));
-    store.put(fillNote("2", oid, 1));
-    store.put(fillNote("3", "ef".repeat(8), 0));
+    store.put(fillNote("1", oid, "01".repeat(32)));
+    store.put(fillNote("2", oid, "02".repeat(32)));
+    store.put(fillNote("3", "ef".repeat(8), "03".repeat(32)));
     const byOrder = store.notesByOrder(oid);
     expect(byOrder).toHaveLength(2);
-    expect(byOrder.map((n) => n.anchorIndex).sort()).toEqual([0, 1]);
+    expect(byOrder.map((n) => n.consumedCommitment).sort()).toEqual([
+      "01".repeat(32),
+      "02".repeat(32),
+    ]);
   });
 });
 
@@ -103,7 +106,6 @@ describe("DaemonStore — managed orders", () => {
       side: "bid",
       priceRaw: 100n,
       sizeRaw: 5000n,
-      anchorPoolSize: 10,
       now: 1000 + idx,
     });
 
@@ -111,9 +113,6 @@ describe("DaemonStore — managed orders", () => {
     const o: ManagedOrder = {
       ...mk("11".repeat(8), 0),
       phase: "open",
-      anchorsConsumed: 4,
-      topupNonce: 1,
-      topupInFlight: true,
       mergeInFlight: false,
       pendingChangeNotes: 2,
     };

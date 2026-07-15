@@ -126,7 +126,7 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         real_num_trees: 4,
         real_qty: 2000,
         real_mix: "exact-match:100".to_string(),
-        real_multi_anchor_asks: 3,
+        real_partial_fill_asks: 3,
         cancel_rate: 0.20,
         auth_mode: AuthMode::PerTrader,
         feed_id: FEED_ID.to_string(),

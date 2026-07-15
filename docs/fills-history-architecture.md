@@ -1,7 +1,8 @@
 # Fills delivery + trade history — architecture
 
-> Status: **IMPLEMENTED** (local tests green; live devnet smoke is the one
-> remaining manual step — see `scripts/dev-commands.md §6.1`).
+> Status: **LIVE PATH IMPLEMENTED**. Canonical-order v2 replaces the retired
+> anchor memo with a consumed-input-bound v3 memo. Full cold seed-plus-chain
+> recovery of every output remains the next mainnet-gated remediation slice.
 >
 > **As-built deltas from the original design below:**
 > - **The account↔order_id registry (§4) was DROPPED.** Because order ids are
@@ -22,9 +23,10 @@
 >   is now `{ order_id, side, match_id, is_partial_fill, change_note_commitment,
 >   batch_slot }` PLUS the opaque on-chain recovery ciphertext (next bullet).
 >   `backfillHistory` LOCATES fills (which order_ids minted which change-note
->   commitments); the live `FillMemo` (`orders/fill-memo.ts`, `verifyFillMemo`)
->   is the low-latency way to populate the `NoteStore`.
-> - **On-chain change-amount recovery (Proposal B) — the durable source.** The
+>   commitments); the live `FillMemo` names the exact consumed input commitment
+>   and role. `verifyFillMemo` derives `Poseidon3(24, input_inner, role)` and
+>   reproduces both commitments before the note enters the `NoteStore`.
+> - **On-chain change-amount recovery (Proposal B) — durable amount source.** The
 >   change `amount` no longer lives ONLY in the (ephemeral) FillMemo. The settle
 >   ix carries it ENCRYPTED on-chain in the 128-byte `fill_recovery` field
 >   (X25519-ECIES to the order's `viewing_pubkey`; crypto in
@@ -32,15 +34,17 @@
 >   `nyx-tee/src/settle/fill_recovery.rs`). The indexer surfaces the opaque
 >   ciphertext (`ephemeral_pubkey` + per-side `change_enc`); the SDK
 >   `recoverChangeFromChain` (`fills/recover.ts`) decrypts it with the
->   seed-derived viewing key and self-verifies (Vuln-4) against the on-chain
->   commitment → a spendable note, **on any device, surviving a CVM redeploy**.
->   So "rebuild from chain alone" now recovers BOTH which notes you own AND their
->   amounts. `startFillsSync` does "tail then backfill" (live WS + chain
->   backfill). **The old durable per-account memo log + `GET /fills/replay` (P7)
+>   seed-derived viewing key, derives the v3 output from a known consumed input
+>   opening, and self-verifies against the on-chain commitment. A fixpoint pass
+>   reconstructs multi-fill continuation chains regardless of result order. The
+>   current envelope does not yet recover trade outputs or bootstrap every input
+>   opening from seed plus chain; that is the following durable-recovery slice.
+>   `startFillsSync` does "tail then backfill". **The old durable per-account memo
+>   log + `GET /fills/replay` (P7)
 >   were RETIRED** — the chain is the permanent source, so they added no value.
 > - **The off-TEE indexer is OPTIONAL — see
 >   [`packages/indexer/README.md`](../packages/indexer/README.md).** With the
->   chain as the durable source, a client can rediscover its own fills WITHOUT any
+>   chain as the durable locator, a client can rediscover its own fills WITHOUT any
 >   indexer via `packages/sdk/src/fills/chain-history.ts::backfillHistoryFromChain`
 >   (returns the same `BackfillResult` as the indexer path; `startFillsSync` picks
 >   whichever source is configured). The daemon uses live streams + chain reads
@@ -99,7 +103,7 @@ per-account `fills` channel on `/v1/stream`.
 order_id[n] = HKDF(masterSeed, "nyx-order-id" ‖ u32(n))[:16]
 ```
 
-Same philosophy as the anchor pool + note blinding: derive everything from
+Same philosophy as deterministic note derivation: derive everything from
 the seed, persist nothing. Consequences:
 
 - The user never tracks order ids — the SDK regenerates them from the seed.

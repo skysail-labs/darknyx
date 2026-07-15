@@ -2,7 +2,7 @@
 
 > A protocol-engineer's tour through the cryptography of Nyx in its
 > current TEE architecture (vault + the in-CVM matcher/settler; v2
-> `inner_hash` notes + the per-order anchor pool). Written for readers
+> `inner_hash` notes + consumed-input-derived outputs). Written for readers
 > comfortable with ZK proofs and field arithmetic who have not seen this
 > codebase before. Pairs with
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (system-level overview)
@@ -42,7 +42,7 @@ matcher/settler)** + **client (TypeScript SDK + snarkjs prover)**:
 |---|---|---|
 | **L1** (`programs/vault`) | Custody, Merkle tree, ZK verifiers, atomic settlement | Trustless |
 | **TEE** (CVM, `crates/nyx-tee`) | Hidden order intake, uniform-clearing-price match, signs the settle | Trusted for fairness + liveness, **NOT** for custody; attested via TDX quote |
-| **Client** | Key derivation, proof generation, the anchor pool, ix builders | Local user trust |
+| **Client** | Key derivation, proof generation, order signing, ix builders | Local user trust |
 
 The on-chain trust surface is tightened so the TEE can deny liveness but
 **never steal custody**:
@@ -477,9 +477,8 @@ On-chain, `tee_forced_settle_batched` creates a fresh `NoteLock` PDA
    continues into the next batch.
 
 Output safety and liveness no longer depend on an anchor pool, a batch slot, or
-a process-local counter. The current canonical-order wire still carries legacy
-anchors during the clean cutover; canonical order v2 removes those fields and
-the top-up endpoint. Seed-plus-chain cold recovery is completed by the durable
+a process-local counter. Canonical order v2 removed anchor fields and the
+top-up endpoint. Seed-plus-chain cold recovery is completed by the durable
 recovery slice; a live client that retains the consumed opening can already
 derive the new opening directly.
 
@@ -1101,20 +1100,20 @@ it came from.
 Alice submits her order over TLS directly to the enclave's HTTP surface —
 it never touches any L1 transaction. The request body carries the order
 intent (`side`, `price_limit`, `amount`, `note_commitment`,
-`user_commitment`, `expiry_slot`, `arrival_nonce`), the input-note opening
+`user_commitment`, `expiry_slot`, `arrival_nonce`), a required contributory
+X25519 `viewing_pubkey`, the current 32-byte `/info.boot_session_id`, the input-note opening
 (`owner_commitment`, `note_inner_hash`, `nullifier`, `merkle_root`) + a
-relayed **VALID_INPUT** Groth16 proof. During the clean cutover the v2 order
-wire still carries the legacy fixed anchor pool and binds its hash, but match
-output construction ignores it; canonical order v2 removes it.
+relayed **VALID_INPUT** Groth16 proof.
 
 Intake (`crates/nyx-tee/src/api/orders.rs`):
 
-1. Verifies the trading-key Ed25519 signature over the canonical digest.
+1. Verifies the trading-key Ed25519 signature over the canonical digest,
+   including the viewing key, boot session, and arrival nonce.
 2. Re-derives the note commitment from the opening (`commitment_from_fields_v2`)
    and asserts it equals the signed `note_commitment` — pinning the opening
    to the signature + enforcing `note_amount == committed amount`.
-3. Transitional only: validates the legacy anchor payload until canonical
-   order v2 deletes that wire field.
+3. Rejects stale boot sessions, non-contributory X25519 keys, and—after exact
+   idempotency—non-increasing nonces for the same trading key.
 4. Derives the fee-inclusive collateral (`nominal + own fee`) + books the order.
 
 The trading key is rotatable via offset (§4) so a user can burn a per-session
@@ -1122,9 +1121,10 @@ key and break long-term linkage. **Why it's private:** order intent lives only
 in enclave memory; L1 observers see deposits + settled outputs, never the
 resting book. The anonymity set is every order in the book that didn't settle.
 
-**Tests:** `tests/order-canonical-parity.test.ts` (the v2 canonical, byte-equal
+**Tests:** `tests/order-canonical-parity.test.ts` (the canonical order v2 wire,
+byte-equal
 to Rust) + `crates/nyx-tee/tests/orders_surface.rs` (intake: sig / opening /
-anchor validation, the top-up endpoint).
+session / viewing-key / nonce validation).
 
 ### Step 5 — Matching (in the CVM)
 
@@ -2010,7 +2010,7 @@ or via withdraw (layer 3 alone).
 |---|---|
 | `programs/vault/src/lib.rs` | `test_id` (program ID smoke), `canonical_payload_hash_fixed_vector` (canonical hash byte-stability) |
 | `crates/darkpool-crypto/src/{poseidon,note,nullifier,user_commitment,field,keys}.rs` | Poseidon round-trips, v2 note commitment + nullifier determinism/sensitivity, user commitment, `fr_from_be_bytes` strictness, the key-derivation chain |
-| `crates/darkpool-matcher/` | the matching algorithm (`run_batch`/`run_batch_capped`), `order_canonical` (order/cancel/anchor-topup signing), `change_note::derive_inner` KAT |
+| `crates/darkpool-matcher/` | the matching algorithm (`run_batch`/`run_batch_capped`), `order_canonical` (order/cancel signing), `change_note::derive_inner` KAT |
 
 ### Rust integration tests (litesvm — `programs/vault/tests/`)
 
@@ -2031,9 +2031,9 @@ or via withdraw (layer 3 alone).
 ### `nyx-tee` tests (`cargo test -p nyx-tee`)
 
 ~180 lib + integration tests: the matcher tick + partial-fill continuation,
-the settle pipeline + ALT pool, the Merkle mirror, the anchor pool, the
-HTTP/auth surface (`orders_surface.rs`: intake sig/opening/anchor validation +
-the top-up endpoint), the RPC client, and `n16_assemble_prove_verify.rs` (the
+the settle pipeline + ALT pool, the Merkle mirror, the
+HTTP/auth surface (`orders_surface.rs`: intake sig/opening/session/nonce/X25519
+validation), the RPC client, and `n16_assemble_prove_verify.rs` (the
 in-enclave N=16 prove → fixture dump).
 
 ### SDK parity tests (TypeScript ↔ Rust byte equality)
@@ -2046,7 +2046,7 @@ in-enclave N=16 prove → fixture dump).
 | `note-commitment-parity.test.ts` | v2 `noteCommitmentV2` (canonical inputs, amount edges, field strictness) |
 | `nullifier-parity.test.ts` | v2 `nullifierV2` (sk/inner_hash sensitivity) |
 | `inner-hash-parity.test.ts` + `change-note-inner-parity.test.ts` | the `inner_hash` / `derive_inner` derivation (KAT) |
-| `order-canonical-parity.test.ts` | the order/cancel/anchor-topup canonical digests + wrong-width guards |
+| `order-canonical-parity.test.ts` | the order/cancel canonical digests + signed viewing/session fields + wrong-width guards |
 
 ### SDK ZK prover tests
 
@@ -2061,7 +2061,7 @@ in-enclave N=16 prove → fixture dump).
 | File | Pins |
 |---|---|
 | `settle-builder-batched.test.ts` | `buildSettleBatchedIx` account layout + ix.data + Merkle-siblings + `BatchValidityMarker` PDA + `match_index` bounds + `buildCloseBatchValidityMarkerIx` |
-| `anchor-pool-build.test.ts` | deterministic anchor-pool derivation + pool-hash parity + top-up digest signing |
+| `build-order-parity.test.ts` | signed order assembly, viewing-key/session binding, and Rust canonical parity |
 | `settle-memo-integrity.test.ts` | the fill-memo integrity check (incl. the Vuln-4 inner_hash-substitution catch) |
 | `settlement-watcher.test.ts` | vault `TradeSettled` event decoding |
 | `deposit-transport.test.ts` / `withdraw-transport.test.ts` | deposit + VALID_SPEND withdraw ix builders (v2) |
@@ -2190,7 +2190,7 @@ nyx-monorepo/
 ├── packages/sdk/
 │   ├── src/idl/{vault-client,seeds}.ts        hand-rolled ix builders + PDA seeds
 │   ├── src/keys/*.ts  src/utxo/{note,deposit,withdraw,note-store}.ts
-│   ├── src/orders/{canonical,anchor-pool,fill-memo}.ts
+│   ├── src/orders/{canonical,build-order,fill-memo}.ts
 │   ├── src/settlement/{settle-builder,settlement-watcher}.ts
 │   └── tests/                                  the suite enumerated in §12
 │
@@ -2241,9 +2241,9 @@ comment for the full devnet E2E.
 
 ---
 
-*Last updated: 2026-06-04 — current TEE architecture: `vault` (the only
+*Last updated: 2026-07-16 — current TEE architecture: `vault` (the only
 on-chain program) + the in-CVM matcher/settler (`crates/nyx-tee`), validated
-end-to-end on devnet through a Phala CVM. v2 `inner_hash` note model + the
-per-order continuation anchor pool. The `matching_engine` / MagicBlock-ER /
+end-to-end on devnet through a Phala CVM. v2 `inner_hash` note model with
+consumed-input-derived outputs and canonical order v2. The `matching_engine` / MagicBlock-ER /
 PER path and the standalone `VALID_CREATE` / `VALID_PRICE` circuits have been
 removed.*

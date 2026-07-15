@@ -2,16 +2,8 @@
  * Order-lifecycle state machine — the daemon's automation core.
  *
  * A **pure reducer**: `reduceOrder(order, event) -> { order, actions }`. It owns
- * the two decisions that make a persistent client worth running (vs. a one-shot
- * `POST /orders`):
- *
- *   1. **Auto anchor top-up.** The `inner_hash`/anchor-pool design lets one
- *      VALID_INPUT proof back many partial fills (`ANCHOR_POOL_SIZE=10`
- *      continuations rotate the residual with no new proof). When the remaining
- *      anchors fall to the threshold the reducer emits a `topup` intent so
- *      matching never stalls on an exhausted pool (`POST /orders/{id}/anchors`,
- *      `ANCHOR_TOPUP_SIZE=5`).
- *   2. **Auto-merge.** Partial fills shed residual change notes; left alone they
+ * the auto-merge decision that makes a persistent client worth running:
+ * Partial fills shed residual change notes; left alone they
  *      fragment the UTXO set and force a fresh proof per future order. When
  *      enough accumulate (or the order goes quiescent with residuals left) the
  *      reducer emits a `merge` intent to consolidate them via VALID_MERGE,
@@ -21,10 +13,8 @@
  * so it's unit-testable with no CVM, and the daemon can replay events to
  * reconstruct state after a crash. The reducer never performs I/O — it returns
  * *intents*; the daemon executes them and feeds the result back as a follow-up
- * event (`topup-confirmed` / `topup-failed` / `merge-confirmed` / `merge-failed`).
+ * event (`merge-confirmed` / `merge-failed`).
  */
-
-import { ANCHOR_TOPUP_SIZE } from "@nyx/sdk";
 
 import {
   type ManagedOrder,
@@ -34,26 +24,18 @@ import {
 
 /** Tunable automation thresholds (from {@link DaemonConfig}). */
 export interface LifecycleThresholds {
-  /** Top up when remaining anchors (`poolSize - consumed`) ≤ this. */
-  anchorTopUpThreshold: number;
-  /** Anchors requested per top-up (mirrors the SDK `ANCHOR_TOPUP_SIZE`). */
-  anchorTopUpSize: number;
   /** Consolidate once this many residual change notes accumulate. */
   mergeThreshold: number;
 }
 
 export const DEFAULT_THRESHOLDS: LifecycleThresholds = {
-  // Top up with 3 anchors of headroom left — covers the ~1-2 fills that can
-  // land while the async top-up round-trips.
-  anchorTopUpThreshold: 3,
-  anchorTopUpSize: ANCHOR_TOPUP_SIZE,
   // VALID_MERGE consolidates K=2/4; 4 residuals = one K=4 merge.
   mergeThreshold: 4,
 };
 
 /**
  * Events the daemon feeds the reducer. Two streams drive distinct concerns:
- * `fills` channel → anchor consumption (`fill`); `orders` channel → phase
+ * `fills` channel → recovered residuals (`fill`); `orders` channel → phase
  * (`accepted` / `filled` / `cancelled` / `expired`). They're deliberately
  * decoupled so neither stream double-drives the other.
  */
@@ -64,14 +46,12 @@ export type LifecycleEvent =
   | { type: "filled" }
   | { type: "cancelled" }
   | { type: "expired" }
-  // ── anchor consumption (fills channel) ──
-  /** A continuation fill consumed anchor `anchorIndex`. `producedChangeNote`
-   *  is false on an exact fill (no residual minted). This carries NO phase
+  // ── fill recovery (fills channel) ──
+  /** A continuation fill produced a recoverable change note.
+   * `producedChangeNote` is false on an exact fill. This carries NO phase
    *  meaning — the terminal `filled` comes from the orders channel. */
-  | { type: "fill"; anchorIndex: number; producedChangeNote: boolean }
+  | { type: "fill"; producedChangeNote: boolean }
   // ── action outcomes ──
-  | { type: "topup-confirmed"; count: number }
-  | { type: "topup-failed" }
   | { type: "merge-confirmed"; consumed: number }
   | { type: "merge-failed" }
   /** Settlement reconciled + residuals consolidated → terminal `closed`. */
@@ -79,15 +59,7 @@ export type LifecycleEvent =
 
 /** Side-effecting intents the daemon must execute (then report back). */
 export type LifecycleAction =
-  | {
-      type: "topup";
-      orderId: string;
-      /** Anchor index to start the new batch at (continues the sequence). */
-      startIndex: number;
-      count: number;
-      nonce: number;
-    }
-  | { type: "merge"; orderId: string; noteCount: number };
+  { type: "merge"; orderId: string; noteCount: number };
 
 export interface ReduceResult {
   order: ManagedOrder;
@@ -136,29 +108,11 @@ export function reduceOrder(
       break;
 
     case "fill": {
-      // Anchor consumption ONLY — no phase meaning (the terminal `filled`
-      // comes from the orders channel). anchorsConsumed is the high-water mark, since
-      // fills can arrive out of order.
-      next.anchorsConsumed = Math.max(
-        order.anchorsConsumed,
-        event.anchorIndex + 1,
-      );
       if (event.producedChangeNote) {
         next.pendingChangeNotes = order.pendingChangeNotes + 1;
       }
       break;
     }
-
-    case "topup-confirmed":
-      next.anchorPoolSize = order.anchorPoolSize + event.count;
-      next.topupInFlight = false;
-      next.topupNonce = order.topupNonce + 1;
-      break;
-
-    case "topup-failed":
-      // Clear the in-flight latch so the next fill can re-emit the intent.
-      next.topupInFlight = false;
-      break;
 
     case "merge-confirmed":
       next.pendingChangeNotes = Math.max(
@@ -182,35 +136,14 @@ export function reduceOrder(
   // Intents are EDGE-triggered: derived only from events that represent new
   // matching activity (`fill`) or the order going quiescent (`filled` /
   // `cancelled` / `expired`), NOT from action outcomes. This is what prevents a
-  // permanently-failing top-up from hot-looping — clearing the in-flight latch
-  // on `topup-failed` does NOT immediately re-fire the intent; the retry rides
-  // the next fill (which only pushes `remaining` lower, so it WILL re-trigger).
-  // Same for merge.
+  // a permanently-failing merge from hot-looping — clearing its in-flight
+  // latch does not immediately re-fire the intent. The retry rides the next
+  // fill or quiescent lifecycle transition.
   const triggersIntents =
     event.type === "fill" ||
     event.type === "filled" ||
     event.type === "cancelled" ||
     event.type === "expired";
-
-  // Auto anchor top-up: only while the order can still match, and only one
-  // top-up in flight at a time (the latch prevents a burst of fills from each
-  // firing a redundant POST).
-  const remaining = next.anchorPoolSize - next.anchorsConsumed;
-  if (
-    triggersIntents &&
-    next.phase === "open" &&
-    !next.topupInFlight &&
-    remaining <= thresholds.anchorTopUpThreshold
-  ) {
-    actions.push({
-      type: "topup",
-      orderId: next.orderId,
-      startIndex: next.anchorPoolSize,
-      count: thresholds.anchorTopUpSize,
-      nonce: next.topupNonce,
-    });
-    next.topupInFlight = true;
-  }
 
   // Auto-merge: consolidate once enough residuals accumulate, or as soon as the
   // order stops matching (filled/cancelled/expired) with any residual left — no

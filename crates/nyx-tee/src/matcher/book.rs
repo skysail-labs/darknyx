@@ -157,21 +157,10 @@ impl OrderBook {
                     new_note_amount,
                     filled_quantity,
                 } => {
-                    // Continuation (inner_hash / anchor pool): the residual
-                    // relocked to a change note (note_e) whose `inner_hash`
-                    // came from the order's pre-supplied anchor pool, so the
-                    // TEE KNOWS its nullifier (the client pre-computed it and
-                    // it's stored in the rotated opening). The residual
-                    // therefore STAYS in the book with its collateral rotated
-                    // to that change note, and re-matches on a later
-                    // tick/page without a client roundtrip. The tick
-                    // (`assign_continuation_anchors`) has already overwritten
-                    // `new_collateral_note` with the anchor-based note_e and
-                    // inserted its opening; here we only mutate the in-book
-                    // order to point at it. (On anchor-pool exhaustion the
-                    // tick downgrades this update to `Cancelled`, so a
-                    // `PartiallyFilled` that reaches here is always
-                    // continuable.) Price + expiry are unchanged, so the
+                    // The residual relocks to a change note whose inner is
+                    // derived from the consumed input inner. The tick has
+                    // already inserted that derived opening; here we only
+                    // rotate the in-book collateral pointer. Price + expiry are unchanged, so the
                     // price/expiry/trader indices need no re-keying — only
                     // the `by_id` entry's fields rotate.
                     if let Some(order) = self.by_id.get_mut(&upd.order_id) {
@@ -376,8 +365,8 @@ mod tests {
 
     #[test]
     fn apply_updates_partial_fill_rotates_and_keeps() {
-        // Continuation (inner_hash / anchor pool): a partial fill rotates
-        // the residual's collateral to the anchor-based change note and
+        // Continuation: a partial fill rotates the residual's collateral to
+        // the consumed-input-derived change note and
         // KEEPS it in the book (Pending), so it re-matches without a client
         // roundtrip. (Pre-continuation this removed the order — "Option A".)
         let mut book = OrderBook::new();

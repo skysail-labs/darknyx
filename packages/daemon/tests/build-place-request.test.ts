@@ -2,8 +2,8 @@
  * buildPlaceRequest tests — the proving + body-build wiring, no live CVM.
  *
  * Injects a fake VALID_INPUT prover + a fake `/tree/inclusion` fetch, so the
- * test exercises the REAL keystore signing + SDK buildOrder (anchor pool,
- * canonical digest) without snarkjs or a gateway, and asserts the produced
+ * test exercises the real keystore signing + SDK buildOrder (viewing key,
+ * boot session, canonical digest) without snarkjs or a gateway and asserts the
  * `POST /orders` body is keyed to the right order id + trading key.
  */
 
@@ -72,6 +72,7 @@ describe("buildPlaceRequest", () => {
       keystore: ks,
       note,
       seedIndex,
+      sessionId: new Uint8Array(32).fill(0x5a),
       intent: {
         symbol: "SOL-USDC",
         side: OrderSide.Bid,
@@ -95,8 +96,8 @@ describe("buildPlaceRequest", () => {
     expect(request.note_commitment).toBe(note.commitment);
     // VALID_INPUT proof = 256 bytes (512 hex chars)
     expect(request.valid_input_proof).toHaveLength(512);
-    // the deterministic anchor pool rides along
-    expect(request.anchors).toHaveLength(10);
+    expect(request.session_id).toBe("5a".repeat(32));
+    expect(request.viewing_pubkey).toMatch(/^[0-9a-f]{64}$/);
     // signed with a non-empty trading-key signature
     expect(request.trading_key_signature).toMatch(/^[0-9a-f]{128}$/);
     expect(verifyRoot).toHaveBeenCalledOnce();
@@ -110,6 +111,7 @@ describe("buildPlaceRequest", () => {
     const common = {
       keystore: ks,
       note,
+      sessionId: new Uint8Array(32).fill(0x5a),
       intent: {
         symbol: "SOL-USDC",
         side: OrderSide.Bid,

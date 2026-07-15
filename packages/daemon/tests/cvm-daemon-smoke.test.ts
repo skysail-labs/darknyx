@@ -5,7 +5,7 @@
  * can't reach — attestation, the on-chain deposit path, and the place path
  * (real VALID_INPUT proof → /orders accept) — by driving a real `Daemon`
  * against a deployed CVM + devnet. It deliberately does NOT need a counterparty
- * or a settle: the fill → auto-topup → settle/leaf-resolve → auto-merge loop is
+ * or a settle: the fill → settle/leaf-resolve → auto-merge loop is
  * engine logic covered offline (132 unit tests) + by the SDK `cvm-settle-e2e`.
  *
  *   1. attestation — `daemon.start()` verifies the live `/attestation` + `/info`

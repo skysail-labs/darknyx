@@ -79,6 +79,7 @@ function attestFetch(
     teePubkeyB58?: string;
     bindWrongKey?: boolean;
     staleNonce?: boolean;
+    bootSessionId?: string;
   } = {},
 ): typeof fetch {
   const composeHash = opts.composeHash ?? COMPOSE;
@@ -111,6 +112,7 @@ function attestFetch(
         JSON.stringify({
           app_id: "app_x",
           compose_hash: composeHash,
+          boot_session_id: opts.bootSessionId ?? "5a".repeat(32),
           tcb_info: { mrtd: MRTD }, // B-1: nested, not top-level
           tee_pubkey: teePubkey,
         }),
@@ -151,6 +153,19 @@ describe("verifyAttestation — strict DCAP", () => {
     expect(r.teePubkey).toBe(TEE_PUBKEY_B58);
     expect(r.composeHash).toBe(COMPOSE);
     expect(r.dcapVerified).toBe(true);
+  });
+
+  it("rejects a malformed boot session before trading", async () => {
+    await expect(
+      verifyAttestation({
+        gatewayUrl: GW,
+        token: TOKEN,
+        fetchImpl: attestFetch({ bootSessionId: `${"5a".repeat(32)}z` }),
+        quoteVerifier: goodVerifier(),
+        expected: { ...PINS, mrtd: MRTD },
+        strict: true,
+      }),
+    ).rejects.toMatchObject({ kind: "malformed" });
   });
 
   it("THE decisive test: rejects a fake gateway whose quote DCAP can't verify", async () => {
@@ -305,6 +320,7 @@ describe("Daemon — attestation gate", () => {
     teePubkey: TEE_PUBKEY_B58,
     teePubkeys: [TEE_PUBKEY_B58],
     composeHash: COMPOSE,
+    bootSessionId: "5a".repeat(32),
     mrtd: MRTD,
     quote: "q",
     dcapVerified: true,
@@ -528,7 +544,6 @@ describe("Daemon — attestation gate", () => {
         side: "bid",
         priceRaw: 100n,
         sizeRaw: 10n,
-        anchorPoolSize: 10,
       }),
       phase: "open",
     });
@@ -538,11 +553,7 @@ describe("Daemon — attestation gate", () => {
       }
     ).engine.dispatch(orderId, {
       type: "fill",
-      anchorIndex: 9,
       producedChangeNote: true,
-    });
-    await vi.waitFor(() => {
-      expect(store.getOrder(orderId)?.topupInFlight).toBe(false);
     });
     expect(anchorPoster.post).not.toHaveBeenCalled();
 

@@ -153,6 +153,9 @@ impl SettleSchedulerState {
 /// Static per-market context the settle driver needs that a single
 /// `RunBatchOutput` doesn't carry.
 pub struct SettleDriverConfig {
+    /// Same random boot id advertised by `/info` and bound into order
+    /// signatures; also domains the 16-byte settlement identifiers.
+    pub boot_session_id: [u8; 32],
     pub base_mint: [u8; 32],
     pub quote_mint: [u8; 32],
     /// Owner commitment the protocol's fee notes pay to.
@@ -330,6 +333,7 @@ async fn drive_batch(
 ) {
     let params = BatchAssemblyParams {
         batch_id,
+        boot_session_id: driver.cfg.boot_session_id,
         base_mint: driver.cfg.base_mint,
         quote_mint: driver.cfg.quote_mint,
         protocol_owner_commitment: driver.cfg.protocol_owner_commitment,
@@ -688,6 +692,7 @@ mod tests {
             ctx,
             matcher_state: matcher_state.clone(),
             cfg: SettleDriverConfig {
+                boot_session_id: [0x5A; 32],
                 base_mint,
                 quote_mint,
                 protocol_owner_commitment: fr_safe(0x07),

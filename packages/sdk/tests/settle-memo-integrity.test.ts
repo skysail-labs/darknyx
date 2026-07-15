@@ -1,7 +1,4 @@
-/**
- * Settle-memo integrity check (Phase 8) — the client's guard against a
- * misbehaving TEE (design-doc Vulnerability 4).
- */
+/** Anchor-free fill-memo integrity checks for VALID_MATCH_BATCH v3 outputs. */
 
 import { describe, expect, it } from "vitest";
 
@@ -12,127 +9,159 @@ import {
   type FillMemo,
 } from "../src/orders/fill-memo.js";
 import { InMemoryNoteStore } from "../src/utxo/note-store.js";
-import { deriveInnerHash, bn254ToBE32 } from "../src/keys/key-generators.js";
+import { bn254ToBE32 } from "../src/keys/key-generators.js";
+import {
+  deriveMatchOutputInner,
+  MATCH_ROLE_CHANGE_BUYER,
+  MATCH_ROLE_CHANGE_SELLER,
+} from "../src/utxo/match-output.js";
 import { noteCommitmentV2 } from "../src/utxo/note.js";
 
-const SEED = new Uint8Array(64).map((_, i) => (i * 7) & 0xff);
 const ORDER_ID = new Uint8Array(16).fill(0xab);
 const OWNER = 0x1234567890abcdefn;
 const MINT = new Uint8Array(32).fill(0x01);
+const INPUT_INNER = 0x1234n;
+const INPUT_AMOUNT = 4_000n;
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+const be32ToBig = (b: Uint8Array): bigint => {
+  let n = 0n;
+  for (const x of b) n = (n << 8n) | BigInt(x);
+  return n;
+};
 
-/** Build a well-formed memo for anchor `index` + `amount`. */
-async function goodMemo(index: number, amount: bigint): Promise<FillMemo> {
-  const innerBig = deriveInnerHash(SEED, ORDER_ID, index);
+async function fixture(
+  amount: bigint,
+  role = MATCH_ROLE_CHANGE_BUYER,
+): Promise<{ memo: FillMemo; store: InMemoryNoteStore; consumed: string }> {
+  const store = new InMemoryNoteStore();
+  const inputCommitment = await noteCommitmentV2({
+    tokenMint: MINT,
+    amount: INPUT_AMOUNT,
+    ownerCommitment: OWNER,
+    innerHash: INPUT_INNER,
+  });
+  const consumed = hex(inputCommitment);
+  store.put({
+    commitment: consumed,
+    tokenMint: MINT,
+    amount: INPUT_AMOUNT,
+    ownerCommitment: OWNER,
+    innerHash: INPUT_INNER,
+    leafIndex: 7n,
+  });
+
+  const innerBytes = await deriveMatchOutputInner(
+    bn254ToBE32(INPUT_INNER),
+    role,
+  );
+  const innerHash = be32ToBig(innerBytes);
   const commitment = await noteCommitmentV2({
     tokenMint: MINT,
     amount,
     ownerCommitment: OWNER,
-    innerHash: innerBig,
+    innerHash,
   });
   return {
-    order_id: hex(ORDER_ID),
-    anchor_index: index,
-    change_amount: Number(amount),
-    change_note_commitment: hex(commitment),
-    mint: hex(MINT),
-    inner_hash: hex(bn254ToBE32(innerBig)),
+    store,
+    consumed,
+    memo: {
+      order_id: hex(ORDER_ID),
+      consumed_note_commitment: consumed,
+      output_role: role,
+      change_amount: Number(amount),
+      change_note_commitment: hex(commitment),
+      mint: hex(MINT),
+      inner_hash: hex(innerBytes),
+    },
   };
 }
 
 describe("fill-memo integrity", () => {
-  it("accepts a well-formed memo and builds the change-note record", async () => {
-    const memo = await goodMemo(3, 1500n);
-    const rec = await verifyFillMemo(memo, SEED, OWNER);
+  it("derives the output from the exact consumed input opening", async () => {
+    const { memo, store, consumed } = await fixture(1_500n);
+    const rec = await verifyFillMemo(memo, store);
     expect(rec.commitment).toBe(memo.change_note_commitment);
-    expect(rec.amount).toBe(1500n);
-    expect(rec.anchorIndex).toBe(3);
+    expect(rec.amount).toBe(1_500n);
+    expect(rec.consumedCommitment).toBe(consumed);
     expect(rec.ownerCommitment).toBe(OWNER);
-    // The stored inner_hash matches the client's own derivation.
-    expect(rec.innerHash).toBe(deriveInnerHash(SEED, ORDER_ID, 3));
+    expect(rec.innerHash).toBe(be32ToBig(Buffer.from(memo.inner_hash, "hex")));
   });
 
   it("compares commitments as bytes and returns canonical hex", async () => {
-    const memo = await goodMemo(3, 1500n);
+    const { memo, store } = await fixture(1_500n);
     const canonical = memo.change_note_commitment;
     memo.change_note_commitment = canonical.toUpperCase();
+    memo.consumed_note_commitment = memo.consumed_note_commitment.toUpperCase();
 
-    const rec = await verifyFillMemo(memo, SEED, OWNER);
+    const rec = await verifyFillMemo(memo, store);
     expect(rec.commitment).toBe(canonical);
   });
 
-  it("rejects a tampered commitment (commitment_mismatch)", async () => {
-    const memo = await goodMemo(0, 100n);
-    // Flip a byte of the commitment.
+  it("rejects a tampered output commitment", async () => {
+    const { memo, store } = await fixture(100n);
     const c = Buffer.from(memo.change_note_commitment, "hex");
     c[31] ^= 0x01;
     memo.change_note_commitment = c.toString("hex");
-    await expect(verifyFillMemo(memo, SEED, OWNER)).rejects.toThrow(
+    await expect(verifyFillMemo(memo, store)).rejects.toBeInstanceOf(
       FillMemoError,
     );
-    await expect(verifyFillMemo(memo, SEED, OWNER)).rejects.toMatchObject({
+    await expect(verifyFillMemo(memo, store)).rejects.toMatchObject({
       kind: "commitment_mismatch",
     });
   });
 
-  it("rejects a substituted inner_hash even if its commitment is self-consistent", async () => {
-    // A malicious TEE uses a DIFFERENT inner_hash (one it can forge a
-    // nullifier for) + a commitment that matches THAT inner_hash. The
-    // commitment check alone would pass; the inner_hash binding catches it.
-    const index = 5;
-    const evilInner = deriveInnerHash(SEED, ORDER_ID, 9999); // not anchor 5
-    const amount = 250n;
-    const evilCommitment = await noteCommitmentV2({
-      tokenMint: MINT,
-      amount,
-      ownerCommitment: OWNER,
-      innerHash: evilInner,
-    });
-    const memo: FillMemo = {
-      order_id: hex(ORDER_ID),
-      anchor_index: index,
-      change_amount: Number(amount),
-      change_note_commitment: hex(evilCommitment),
-      mint: hex(MINT),
-      inner_hash: hex(bn254ToBE32(evilInner)),
-    };
-    await expect(verifyFillMemo(memo, SEED, OWNER)).rejects.toMatchObject({
+  it("rejects a substituted inner even with a self-consistent commitment", async () => {
+    const { memo, store } = await fixture(250n);
+    const evilInnerBytes = await deriveMatchOutputInner(
+      bn254ToBE32(INPUT_INNER),
+      MATCH_ROLE_CHANGE_SELLER,
+    );
+    const evilInner = be32ToBig(evilInnerBytes);
+    memo.inner_hash = hex(evilInnerBytes);
+    memo.change_note_commitment = hex(
+      await noteCommitmentV2({
+        tokenMint: MINT,
+        amount: 250n,
+        ownerCommitment: OWNER,
+        innerHash: evilInner,
+      }),
+    );
+    await expect(verifyFillMemo(memo, store)).rejects.toMatchObject({
       kind: "inner_hash_mismatch",
     });
   });
 
-  it("rejects malformed memo fields with FillMemoError (not native errors)", async () => {
-    const base = await goodMemo(2, 100n);
-    // Non-hex inner_hash.
+  it("rejects a memo whose consumed input is unavailable", async () => {
+    const { memo } = await fixture(100n);
     await expect(
-      verifyFillMemo({ ...base, inner_hash: "zz".repeat(32) }, SEED, OWNER),
-    ).rejects.toMatchObject({ kind: "malformed" });
-    // Wrong-length commitment.
+      verifyFillMemo(memo, new InMemoryNoteStore()),
+    ).rejects.toMatchObject({ kind: "input_note_missing" });
+  });
+
+  it("rejects malformed fields with FillMemoError", async () => {
+    const { memo, store } = await fixture(100n);
     await expect(
-      verifyFillMemo({ ...base, change_note_commitment: "00" }, SEED, OWNER),
-    ).rejects.toMatchObject({ kind: "malformed" });
-    // Negative / fractional change_amount.
-    await expect(
-      verifyFillMemo({ ...base, change_amount: -1 }, SEED, OWNER),
+      verifyFillMemo({ ...memo, inner_hash: "zz".repeat(32) }, store),
     ).rejects.toMatchObject({ kind: "malformed" });
     await expect(
-      verifyFillMemo({ ...base, change_amount: 1.5 }, SEED, OWNER),
-    ).rejects.toMatchObject({ kind: "malformed" });
-    // Out-of-range anchor_index.
-    await expect(
-      verifyFillMemo({ ...base, anchor_index: -1 }, SEED, OWNER),
+      verifyFillMemo({ ...memo, change_note_commitment: "00" }, store),
     ).rejects.toMatchObject({ kind: "malformed" });
     await expect(
-      verifyFillMemo({ ...base, anchor_index: 2 ** 32 }, SEED, OWNER),
+      verifyFillMemo({ ...memo, change_amount: -1 }, store),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    await expect(
+      verifyFillMemo({ ...memo, change_amount: 1.5 }, store),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    await expect(
+      verifyFillMemo({ ...memo, output_role: 0xff }, store),
     ).rejects.toMatchObject({ kind: "malformed" });
   });
 
-  it("receiveFillMemo persists a verified note into the store", async () => {
-    const store = new InMemoryNoteStore();
-    const memo = await goodMemo(1, 777n);
-    const rec = await receiveFillMemo(memo, SEED, OWNER, store);
+  it("persists a verified note into the store", async () => {
+    const { memo, store } = await fixture(777n);
+    const rec = await receiveFillMemo(memo, store);
     expect(store.get(rec.commitment)).toEqual(rec);
-    expect(store.list()).toHaveLength(1);
+    expect(store.list()).toHaveLength(2);
   });
 });

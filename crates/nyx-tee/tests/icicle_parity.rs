@@ -154,6 +154,12 @@ async fn icicle_cpu_proves_and_verifies_n16() {
         seller_opening: &seller,
         order_id_a: [0x01; 16],
         order_id_b: [0x02; 16],
+        settlement_id: nyx_tee::settle::assemble::derive_settlement_id(
+            &[0x5A; 32],
+            m.match_id,
+            &[0x01; 16],
+            &[0x02; 16],
+        ),
         base_mint: base_mint(),
         quote_mint: quote_mint(),
         protocol_owner_commitment: fr_safe(0x07),

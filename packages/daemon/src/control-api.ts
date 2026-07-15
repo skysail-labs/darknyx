@@ -225,8 +225,6 @@ interface OrderJson {
   phase: string;
   price: string;
   size: string;
-  anchor_pool_size: number;
-  anchors_consumed: number;
   pending_change_notes: number;
 }
 function serializeOrder(o: ManagedOrder): OrderJson {
@@ -236,8 +234,6 @@ function serializeOrder(o: ManagedOrder): OrderJson {
     phase: o.phase,
     price: o.priceRaw.toString(),
     size: o.sizeRaw.toString(),
-    anchor_pool_size: o.anchorPoolSize,
-    anchors_consumed: o.anchorsConsumed,
     pending_change_notes: o.pendingChangeNotes,
   };
 }
@@ -250,7 +246,7 @@ function serializeNote(n: StoredNote): Record<string, unknown> {
     mint: Buffer.from(n.tokenMint).toString("hex"),
     amount: n.amount.toString(),
     order_id: n.orderId,
-    anchor_index: n.anchorIndex,
+    consumed_commitment: n.consumedCommitment,
   };
 }
 function serializeEvent(e: DaemonEvent): Record<string, unknown> {

@@ -51,9 +51,8 @@ sell into any clearing price.
 |---|---|
 | Cancel a resting order | Yes, [Cancel Order](../orders/cancel-order) |
 | Modify a resting order (atomic cancel + replace) | Yes, [Modify Order](../orders/modify-order) |
-| Top up a resting order's anchor pool | Yes, [Anchor Top-Up](../orders/anchor-topup) |
 
-IOC and FOK orders do not rest, so there is nothing to cancel, modify, or top up
+IOC and FOK orders do not rest, so there is nothing to cancel or modify
 after they execute.
 
 ## Quick validity examples

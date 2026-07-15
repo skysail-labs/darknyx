@@ -39,11 +39,12 @@ pub use errors::CryptoError;
 pub use field::{fr_from_be_bytes, fr_to_be_bytes, pubkey_to_fr_pair, Fr, FR_BYTES};
 #[cfg(not(target_os = "solana"))]
 pub use fill_encryption::{
-    decrypt_change_amount, encrypt_change_amount, ephemeral_public, SIDE_BLOB_LEN,
+    decrypt_change_amount, encrypt_change_amount, ephemeral_public,
+    is_contributory_x25519_public_key, SIDE_BLOB_LEN,
 };
 #[cfg(not(target_os = "solana"))]
 pub use keys::{
-    derive_blinding_factor, derive_inner_hash, derive_master_viewing_key, derive_spending_key,
+    derive_blinding_factor, derive_master_viewing_key, derive_spending_key,
     derive_trading_key_at_offset, nyx_shake_kdf_v1, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
 };
 pub use match_output::{

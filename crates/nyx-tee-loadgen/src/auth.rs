@@ -8,9 +8,7 @@
 use anyhow::{anyhow, Result};
 use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_matcher::book::{OrderSide, OrderType};
-use darkpool_matcher::order_canonical::{
-    anchor_pool_hash, Anchor, CancelCanonical, OrderCanonical, ANCHOR_POOL_SIZE,
-};
+use darkpool_matcher::order_canonical::{CancelCanonical, OrderCanonical};
 use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +26,35 @@ struct TokenResponse {
     token_type: String,
     #[allow(dead_code)]
     expires_in: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct InfoResponse {
+    boot_session_id: String,
+}
+
+/// Fetch the process-boot session that every canonical order must sign.
+/// A restart deliberately invalidates every order body prepared for the old
+/// process, so callers fetch this once immediately before a run.
+pub async fn fetch_boot_session_id(http: &reqwest::Client, endpoint: &str) -> Result<[u8; 32]> {
+    let url = format!("{endpoint}/info");
+    let resp = http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| anyhow!("GET {url}: {e}"))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow!("GET {url} returned {status}: {body}"));
+    }
+    let parsed: InfoResponse = serde_json::from_str(&body)
+        .map_err(|e| anyhow!("response body is not an InfoResponse: {e}; body={body}"))?;
+    let decoded = hex::decode(&parsed.boot_session_id)
+        .map_err(|e| anyhow!("/info boot_session_id is not hex: {e}"))?;
+    decoded
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow!("/info boot_session_id is {} bytes, expected 32", v.len()))
 }
 
 pub async fn acquire_bearer(
@@ -78,6 +105,7 @@ pub fn build_signed_place_body(
     base_mint: &[u8; 32],
     quote_mint: &[u8; 32],
     collateral_surplus_bps: u16,
+    boot_session_id: [u8; 32],
 ) -> serde_json::Value {
     let user_commitment = synthesised_user_commitment(key);
 
@@ -143,16 +171,9 @@ pub fn build_signed_place_body(
     let merkle_root = [0u8; 32];
     let valid_input_proof = [0u8; 256];
 
-    // Synthetic continuation anchor pool: ANCHOR_POOL_SIZE deterministic
-    // (inner_hash, nullifier) pairs derived from the order_id + index.
-    // Fr-safe inner_hashes (intake validates them); nullifiers are opaque.
-    let anchors: Vec<Anchor> = (0..ANCHOR_POOL_SIZE)
-        .map(|i| Anchor {
-            inner_hash: fr_safe_opening_field(&order_id, 0x10 + i as u8),
-            nullifier: fr_safe_opening_field(&order_id, 0x80 + i as u8),
-        })
-        .collect();
-    let pool_hash = anchor_pool_hash(&anchors);
+    // A valid per-trader X25519 viewing key. Both this key and the process
+    // boot session are signed, so neither can be substituted in transit.
+    let viewing_pubkey = darkpool_crypto::ephemeral_public(&key.to_bytes());
 
     let canonical = OrderCanonical {
         symbol: symbol.as_bytes(),
@@ -166,20 +187,12 @@ pub fn build_signed_place_body(
         note_commitment,
         user_commitment,
         arrival_nonce,
-        anchor_pool_hash: pool_hash,
+        viewing_pubkey,
+        session_id: boot_session_id,
     };
     let digest = canonical.digest().expect("symbol bounded by caller");
     let sig = key.sign(&digest);
     let trading_key = key.verifying_key().to_bytes();
-    // Change-amount recovery (Proposal B): a deterministic per-trader X25519
-    // viewing pubkey the TEE encrypts this order's change_amount to on-chain.
-    // Derived from the trading-key bytes so the whole trader's order stream
-    // shares one viewing key (like a real client). NOT in the signed canonical
-    // (a wrong key only self-harms); intake length-checks it. The synthetic
-    // loadgen settle never lands (stub VALID_INPUT proof), so this just exercises
-    // the intake decode + follows the order-submission convention.
-    let viewing_pubkey = darkpool_crypto::ephemeral_public(&key.to_bytes());
-
     let mut body = serde_json::json!({
         "symbol": symbol,
         "side": match side { OrderSide::Bid => "bid", OrderSide::Ask => "ask" },
@@ -198,19 +211,14 @@ pub fn build_signed_place_body(
         "arrival_nonce": arrival_nonce,
         "trading_key": hex::encode(trading_key),
         "trading_key_signature": hex::encode(sig.to_bytes()),
-        // Change-amount recovery (Proposal B): the order's viewing-encryption key.
         "viewing_pubkey": hex::encode(viewing_pubkey),
+        "session_id": hex::encode(boot_session_id),
         // Input-note opening + VALID_INPUT relay (required since 4g.7a/c).
         "owner_commitment": hex::encode(owner_commitment),
         "note_inner_hash": hex::encode(note_inner_hash),
         "nullifier": hex::encode(nullifier),
         "merkle_root": hex::encode(merkle_root),
         "valid_input_proof": hex::encode(valid_input_proof),
-        // Continuation anchor pool (Phase 5): ANCHOR_POOL_SIZE pairs.
-        "anchors": anchors.iter().map(|a| serde_json::json!({
-            "inner_hash": hex::encode(a.inner_hash),
-            "nullifier": hex::encode(a.nullifier),
-        })).collect::<Vec<_>>(),
     });
 
     // Over-collateral: declare the surplus collateral so intake takes the

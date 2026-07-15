@@ -17,6 +17,7 @@ import { describe, it, expect } from "vitest";
 import {
   encryptChangeAmount,
   decryptChangeAmount,
+  isContributoryX25519PublicKey,
   SIDE_BLOB_LEN,
 } from "../src/keys/fill-encryption.js";
 import { deriveViewingEncKeypair } from "../src/keys/key-generators.js";
@@ -66,6 +67,32 @@ describe("fill-encryption (change-amount recovery B.1)", () => {
     const blob = encryptChangeAmount(EPH_SECRET, recipientPub, AMOUNT, NONCE);
     expect(
       decryptChangeAmount(new Uint8Array(32).fill(0x09), ephPub, blob),
+    ).toBeNull();
+  });
+
+  it("rejects low-order X25519 encodings", () => {
+    const lowOrder = [
+      "00".repeat(32),
+      `01${"00".repeat(31)}`,
+      "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+      "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+      `ec${"ff".repeat(30)}7f`,
+      `ed${"ff".repeat(30)}7f`,
+      `ee${"ff".repeat(30)}7f`,
+    ].map((encoded) => Uint8Array.from(Buffer.from(encoded, "hex")));
+    for (const point of lowOrder) {
+      expect(isContributoryX25519PublicKey(point)).toBe(false);
+    }
+    const zero = lowOrder[0]!;
+    const one = lowOrder[1]!;
+    expect(() => encryptChangeAmount(EPH_SECRET, zero, AMOUNT, NONCE)).toThrow(
+      /non-contributory/,
+    );
+    expect(() => encryptChangeAmount(EPH_SECRET, one, AMOUNT, NONCE)).toThrow(
+      /non-contributory/,
+    );
+    expect(
+      decryptChangeAmount(RECIPIENT_SECRET, zero, new Uint8Array(SIDE_BLOB_LEN)),
     ).toBeNull();
   });
 

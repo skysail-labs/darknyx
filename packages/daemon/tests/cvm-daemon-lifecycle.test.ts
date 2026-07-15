@@ -4,7 +4,6 @@
  * Drives the daemon (buyer) through the whole order lifecycle against a deployed
  * CVM, with a MatchDriver (SDK seller) supplying crossing asks so the CVM
  * matches + settles. Tuned thresholds make the automations cheap to trigger:
- *   - anchorTopUpThreshold = 9 → auto-topup fires after the 1st partial fill,
  *   - mergeThreshold = 2 → auto-merge fires at 2 spendable residuals,
  *   - settlementPollMs small → leaf-resolve fast.
  *
@@ -12,7 +11,7 @@
  *   1. attest + deposit (quote collateral, sized for many slices)
  *   2. place a big resting bid over /v1/stream
  *   3. seller ask #1 crosses → partial fill: fills change note + orders update
- *      partially_filled + auto-topup (POST /orders/{id}/anchors) + leaf_count↑
+ *      partially_filled + leaf_count↑
  *   4. settlement-tracker resolves the residual's leaf (/tree/inclusion)
  *   5. a 2nd buyer order, partially filled then cancelled, leaves a 2nd residual
  *      → auto-merge consolidates them (VALID_MERGE on-chain)
@@ -172,7 +171,7 @@ async function waitForLeaf(commitment: string, token: string): Promise<void> {
 }
 
 maybe(
-  "daemon full lifecycle (fill → topup → leaf-resolve → merge → cancel)",
+  "daemon full lifecycle (fill → leaf-resolve → merge → cancel)",
   () => {
     let cfg: E2EConfig;
     let conn: Connection;
@@ -302,10 +301,8 @@ maybe(
         dbPath: ":memory:",
         controlPort: 0,
         keystorePath: "",
-        // tuned: topup after 1 fill, merge at 2 residuals
+        // tuned: merge at 2 residuals
         thresholds: {
-          anchorTopUpThreshold: 9,
-          anchorTopUpSize: 5,
           mergeThreshold: 2,
         },
         // Functional lifecycle test — dev-partial attestation (not strict DCAP).
@@ -354,7 +351,7 @@ maybe(
       });
     });
 
-    it("drives fill → auto-topup → leaf-resolve → auto-merge → cancel + read-surface", async () => {
+    it("drives fill → leaf-resolve → auto-merge → cancel + read-surface", async () => {
       const events: DaemonEvent[] = [];
       buyer.subscribe((e) => events.push(e));
       await buyer.start();
@@ -448,16 +445,11 @@ maybe(
         `  · CVM order ${orderId.slice(0, 8)}: ${cvmOrder.status} ${(await cvmOrder.text()).slice(0, 240)}`,
       );
       const o = buyer.getOrder(orderId)!;
-      // The fills channel drove a fill (anchor consumed) + auto-topup grew the pool
-      expect(o.anchorsConsumed, "no fill observed").toBeGreaterThanOrEqual(1);
-      expect(o.anchorPoolSize, "auto-topup did not fire").toBeGreaterThan(10);
       expect(
         events.some((e) => e.type === "fill"),
         "no fill event",
       ).toBe(true);
-      console.log(
-        `  · fill: consumed=${o.anchorsConsumed} pool=${o.anchorPoolSize}`,
-      );
+      console.log(`  · fill: pending residuals=${o.pendingChangeNotes}`);
 
       // ── cancel the resting order ──
       await buyer.cancelOrder(orderId);

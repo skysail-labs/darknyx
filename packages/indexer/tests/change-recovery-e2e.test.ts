@@ -12,8 +12,8 @@
  *   B.4 indexer    = decodeSettleIxData → IndexerFill{ ephemeralPubkey, changeEnc }
  *   B.4 client     = recoverChangeFromChain → spendable note (decrypt + Vuln-4 self-verify)
  *
- * Covers both a FINAL change note (derive_inner) and a CONTINUATION note (anchor
- * inner_hash) — the two inner_hash shapes the recoverer must handle.
+ * The output inner is derived from the consumed input opening exactly as in
+ * VALID_MATCH_BATCH v3; no settlement-id or anchor probing is involved.
  */
 
 import { describe, it, expect } from "vitest";
@@ -21,14 +21,15 @@ import crypto from "node:crypto";
 import nacl from "tweetnacl";
 import {
   deriveViewingEncKeypair,
-  deriveInnerHash,
+  bn254ToBE32,
 } from "../../sdk/src/keys/key-generators.js";
 import {
-  deriveChangeInner,
-  CHANGE_ROLE_BUYER,
-  CHANGE_ROLE_SELLER,
-} from "../../sdk/src/utxo/change-note.js";
+  deriveMatchOutputInner,
+  MATCH_ROLE_CHANGE_BUYER,
+  MATCH_ROLE_CHANGE_SELLER,
+} from "../../sdk/src/utxo/match-output.js";
 import { noteCommitmentV2 } from "../../sdk/src/utxo/note.js";
+import type { StoredNote } from "../../sdk/src/utxo/note-store.js";
 import { encryptChangeAmount } from "../../sdk/src/keys/fill-encryption.js";
 import {
   serializePayload,
@@ -104,19 +105,44 @@ function teeEncrypt(
   return { ephPub, blob };
 }
 
-const recoverParams = {
+const recoverParams = (candidateInputs: StoredNote[]) => ({
   masterSeed: SEED,
-  ownerCommitment: OWNER,
+  candidateInputs,
   baseMint: BASE_MINT,
   quoteMint: QUOTE_MINT,
-};
+});
+
+async function inputNote(side: "buyer" | "seller", innerHash: bigint) {
+  const tokenMint = side === "buyer" ? QUOTE_MINT : BASE_MINT;
+  const amount = 2_000n;
+  const commitment = await noteCommitmentV2({
+    tokenMint,
+    amount,
+    ownerCommitment: OWNER,
+    innerHash,
+  });
+  return {
+    commitment: hex(commitment),
+    tokenMint,
+    amount,
+    ownerCommitment: OWNER,
+    innerHash,
+    leafIndex: 0n,
+  } satisfies StoredNote;
+}
 
 /** Build the settle ix for a one-sided buyer change of `amount` under `inner`. */
 async function buyerChangeIx(
-  inner: bigint,
+  input: StoredNote,
   amount: bigint,
   matchId: bigint,
 ): Promise<Uint8Array> {
+  const inner = be32ToBig(
+    await deriveMatchOutputInner(
+      bn254ToBE32(input.innerHash),
+      MATCH_ROLE_CHANGE_BUYER,
+    ),
+  );
   const commitment = await noteCommitmentV2({
     tokenMint: QUOTE_MINT,
     amount,
@@ -126,7 +152,7 @@ async function buyerChangeIx(
   const { ephPub, blob } = teeEncrypt(VIEWING.publicKey, amount);
   const payload = exactFillPayload({
     matchId: matchIdBytes(matchId),
-    noteAcommitment: fill(32, 0xa1),
+    noteAcommitment: Uint8Array.from(Buffer.from(input.commitment, "hex")),
     noteBcommitment: fill(32, 0xb1),
     noteCcommitment: fill(32, 0xc1),
     noteDcommitment: fill(32, 0xd1),
@@ -148,10 +174,10 @@ describe("change-amount recovery — client-side e2e", () => {
     expect(VIEWING.publicKey.length).toBe(32);
   });
 
-  it("recovers a FINAL change note end-to-end (encode → decode → recover)", async () => {
+  it("recovers an input-derived change note end-to-end", async () => {
     const matchId = 42n;
-    const inner = be32ToBig(deriveChangeInner(matchId, CHANGE_ROLE_BUYER));
-    const data = await buyerChangeIx(inner, 250n, matchId);
+    const input = await inputNote("buyer", 0x1234n);
+    const data = await buyerChangeIx(input, 250n, matchId);
 
     // Indexer decodes the ix → surfaces the ciphertext opaquely.
     const fills = decodeSettleIxData(data)!;
@@ -164,36 +190,46 @@ describe("change-amount recovery — client-side e2e", () => {
     expect(seller.changeEnc).toBeNull();
 
     // Client recovers the spendable note from the chain alone.
-    const note = await recoverChangeFromChain(buyer, recoverParams);
+    const note = await recoverChangeFromChain(buyer, recoverParams([input]));
     expect(note).not.toBeNull();
     expect(note!.amount).toBe(250n);
-    expect(note!.innerHash).toBe(inner);
-    expect(note!.anchorIndex).toBeUndefined();
+    expect(note!.consumedCommitment).toBe(input.commitment);
     expect(note!.commitment).toBe(buyer.changeNoteCommitment);
   });
 
-  it("recovers a CONTINUATION note + its anchor index end-to-end", async () => {
+  it("recovers a second continuation from the first recovered opening", async () => {
     const matchId = 9n;
-    const k = 4;
-    const inner = deriveInnerHash(SEED, ORDER_ID, k); // anchor inner_hash
-    const data = await buyerChangeIx(inner, 777n, matchId);
+    const input = await inputNote("buyer", 0x2222n);
+    const firstData = await buyerChangeIx(input, 777n, matchId);
+    const firstFill = decodeSettleIxData(firstData)!.find(
+      (f) => f.side === "buyer",
+    )!;
+    const first = await recoverChangeFromChain(
+      firstFill,
+      recoverParams([input]),
+    );
+    expect(first).not.toBeNull();
+
+    const data = await buyerChangeIx(first!, 555n, matchId + 1n);
 
     const buyer = decodeSettleIxData(data)!.find((f) => f.side === "buyer")!;
-    const note = await recoverChangeFromChain(buyer, recoverParams);
+    const note = await recoverChangeFromChain(
+      buyer,
+      recoverParams([input, first!]),
+    );
     expect(note).not.toBeNull();
-    expect(note!.amount).toBe(777n);
-    expect(note!.innerHash).toBe(inner);
-    expect(note!.anchorIndex).toBe(k);
+    expect(note!.amount).toBe(555n);
+    expect(note!.consumedCommitment).toBe(first!.commitment);
   });
 
   it("a different account seed cannot recover the note (isolation)", async () => {
     const matchId = 7n;
-    const inner = be32ToBig(deriveChangeInner(matchId, CHANGE_ROLE_BUYER));
-    const data = await buyerChangeIx(inner, 250n, matchId);
+    const input = await inputNote("buyer", 0x3333n);
+    const data = await buyerChangeIx(input, 250n, matchId);
     const buyer = decodeSettleIxData(data)!.find((f) => f.side === "buyer")!;
 
     const stranger = {
-      ...recoverParams,
+      ...recoverParams([input]),
       masterSeed: new Uint8Array(64).fill(0x99),
     };
     expect(await recoverChangeFromChain(buyer, stranger)).toBeNull();
@@ -203,7 +239,13 @@ describe("change-amount recovery — client-side e2e", () => {
     // Seller change (base-denominated): note_f + the seller-side ciphertext slot.
     const matchId = 11n;
     const amount = 333n;
-    const inner = be32ToBig(deriveChangeInner(matchId, CHANGE_ROLE_SELLER));
+    const input = await inputNote("seller", 0x4444n);
+    const inner = be32ToBig(
+      await deriveMatchOutputInner(
+        bn254ToBE32(input.innerHash),
+        MATCH_ROLE_CHANGE_SELLER,
+      ),
+    );
     const commitment = await noteCommitmentV2({
       tokenMint: BASE_MINT,
       amount,
@@ -214,7 +256,7 @@ describe("change-amount recovery — client-side e2e", () => {
     const payload = exactFillPayload({
       matchId: matchIdBytes(matchId),
       noteAcommitment: fill(32, 0xa1),
-      noteBcommitment: fill(32, 0xb1),
+      noteBcommitment: Uint8Array.from(Buffer.from(input.commitment, "hex")),
       noteCcommitment: fill(32, 0xc1),
       noteDcommitment: fill(32, 0xd1),
       orderIdA: fill(16, 0xcd),
@@ -227,7 +269,7 @@ describe("change-amount recovery — client-side e2e", () => {
       (f) => f.side === "seller",
     )!;
     expect(seller.changeEnc).toBe(hex(blob));
-    const note = await recoverChangeFromChain(seller, recoverParams);
+    const note = await recoverChangeFromChain(seller, recoverParams([input]));
     expect(note!.amount).toBe(333n);
     expect(hex(note!.tokenMint)).toBe(hex(BASE_MINT));
   });

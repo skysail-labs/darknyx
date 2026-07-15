@@ -135,9 +135,6 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         .route("/orders/:order_id", get(orders::get_order))
         // Atomic cancel + replace (modify) — same path, PUT.
         .route("/orders/:order_id", put(orders::modify_order))
-        // Anchor-pool top-up (Phase 7): replenish a drained pool so the
-        // matcher resumes the paused residual.
-        .route("/orders/:order_id/anchors", post(orders::topup_anchors))
         .route("/settlement/status/:batch_id", get(settlement::get_status))
         // Merkle mirror — bearer-protected reads (inclusion proof +
         // leaf pagination). Root is public above.

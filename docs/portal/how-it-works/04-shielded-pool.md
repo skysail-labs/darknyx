@@ -75,12 +75,11 @@ attempt collides with the published nullifier.
 ## The amount-independent inner hash
 
 Each note's commitment and its nullifier are both anchored on a single
-amount-independent value, the note's **inner hash**. Decoupling the nullifier from
-the (amount-dependent) commitment is what lets you **pre-supply** the secret
-material for your future change notes (the continuation
-[anchor pool](../trading-concepts/anchor-pool)) so a partially-filled order can
-re-lock its remainder without a round-trip. The inner hash is the hinge that makes
-private, resting, repeatedly-fillable orders possible.
+amount-independent value, the note's **inner hash**. For a match output, the
+settlement circuit derives the new inner as
+`Poseidon3(24, consumed_input_inner, role)`. The matcher can therefore re-lock a
+partial-fill remainder without caller-selected output randomness or a per-fill
+round-trip, while the client can independently reproduce the same opening.
 
 ## Spending in zero knowledge
 

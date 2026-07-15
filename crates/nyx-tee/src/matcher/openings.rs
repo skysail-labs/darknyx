@@ -36,62 +36,8 @@
 use std::collections::HashMap;
 
 use darkpool_crypto::note::commitment_from_fields_v2;
-pub use darkpool_matcher::order_canonical::Anchor;
 
 use crate::settle::lock_note::Groth16ProofBytes;
-
-/// Per-order pool of pre-supplied continuation anchors. The client
-/// submits a fixed [`darkpool_matcher::order_canonical::ANCHOR_POOL_SIZE`]
-/// pool with each order; the settle assembler consumes one anchor per
-/// partial-fill change note (monotonic, single-use), so the residual's
-/// change note carries a client-known `inner_hash` + a pre-computed
-/// `nullifier` — which is what lets the matcher re-match the residual
-/// without a per-fill roundtrip (Phase 6). Keyed by `order_id` (NOT the
-/// collateral commitment, which rotates on each continuation).
-#[derive(Clone, Debug, Default)]
-pub struct AnchorPool {
-    anchors: Vec<Anchor>,
-    /// Index of the next unconsumed anchor (monotonic; single-use).
-    next_index: usize,
-    /// Set when the pool is exhausted and the matcher is awaiting a
-    /// WebSocket top-up (Phase 7). A paused order is skipped by the tick.
-    pub paused: bool,
-    /// Highest `topup_nonce` accepted so far (Phase 7 replay protection).
-    /// A top-up must carry a strictly greater nonce. 0 = none yet.
-    pub last_topup_nonce: u64,
-}
-
-impl AnchorPool {
-    pub fn new(anchors: Vec<Anchor>) -> Self {
-        Self {
-            anchors,
-            next_index: 0,
-            paused: false,
-            last_topup_nonce: 0,
-        }
-    }
-
-    /// Consume the next unconsumed anchor, advancing the cursor. Returns
-    /// `(index, anchor)` so the caller can report the consumed slot in a
-    /// fill memo; `None` (and the caller should pause) when exhausted.
-    pub fn consume_next(&mut self) -> Option<(usize, Anchor)> {
-        let idx = self.next_index;
-        let a = self.anchors.get(idx).copied()?;
-        self.next_index += 1;
-        Some((idx, a))
-    }
-
-    /// Append more anchors (a WebSocket top-up). Clears `paused`.
-    pub fn append(&mut self, more: impl IntoIterator<Item = Anchor>) {
-        self.anchors.extend(more);
-        self.paused = false;
-    }
-
-    /// Number of anchors not yet consumed.
-    pub fn remaining(&self) -> usize {
-        self.anchors.len().saturating_sub(self.next_index)
-    }
-}
 
 /// The full opening of one input note — everything the
 /// VALID_MATCH_BATCH circuit needs to re-derive its commitment, plus
@@ -190,20 +136,19 @@ pub struct OrderOpening {
     /// The client-generated VALID_INPUT Groth16 proof for `lock_note`.
     pub valid_input_proof: Groth16ProofBytes,
     /// True when this opening is a relocked CONTINUATION note (note_e/note_f
-    /// rotated in by `assign_continuation_anchors`): a prior batch's settle
+    /// rotated in by `assign_derived_continuations`): a prior batch's settle
     /// already created its `NoteLock` (the re-lock), so the settle worker must
     /// SKIP `lock_note` for it — re-locking would collide. False for a fresh
     /// deposit opening registered at intake.
     pub from_relock: bool,
-    /// The order owner's X25519 viewing-encryption public key, if supplied at
+    /// The order owner's signed, required X25519 viewing-encryption public key.
     /// intake (`PlaceOrderRequest::viewing_pubkey`). When set, the settle
     /// assembler encrypts THIS side's `change_amount` to it for the permanent
     /// on-chain recovery backstop (change-amount recovery, Proposal B): the
     /// change note returns to this same owner, so its input-note opening is the
     /// right recipient. Carried forward verbatim across continuation re-locks
-    /// (`assign_continuation_anchors`), so a multi-fill residual stays
-    /// recoverable. `None` ⇒ no on-chain ciphertext for this side (back-compatible
-    /// with clients that don't send a viewing key).
+    /// (`assign_derived_continuations`), so a multi-fill residual stays
+    /// recoverable. Internal tests may use `None`; accepted wire orders never do.
     pub viewing_pubkey: Option<[u8; 32]>,
 }
 
@@ -217,37 +162,11 @@ pub struct OrderOpening {
 #[derive(Default, Debug)]
 pub struct OpeningStore {
     map: HashMap<[u8; 32], OrderOpening>,
-    /// Per-order anchor pools, keyed by `order_id` (stable across the
-    /// collateral-note rotation a continuation performs). Inserted at
-    /// intake; consumed by the assembler on each partial fill; evicted
-    /// when the order leaves the book.
-    anchor_pools: HashMap<[u8; 16], AnchorPool>,
 }
 
 impl OpeningStore {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Record an order's anchor pool, keyed by `order_id`.
-    pub fn insert_anchor_pool(&mut self, order_id: [u8; 16], pool: AnchorPool) {
-        self.anchor_pools.insert(order_id, pool);
-    }
-
-    /// Mutable access to an order's anchor pool (for the assembler to
-    /// `consume_next`, or the WS handler to `append`).
-    pub fn anchor_pool_mut(&mut self, order_id: &[u8; 16]) -> Option<&mut AnchorPool> {
-        self.anchor_pools.get_mut(order_id)
-    }
-
-    /// Read-only access to an order's anchor pool.
-    pub fn anchor_pool(&self, order_id: &[u8; 16]) -> Option<&AnchorPool> {
-        self.anchor_pools.get(order_id)
-    }
-
-    /// Drop an order's anchor pool — on full fill / cancel / expiry.
-    pub fn remove_anchor_pool(&mut self, order_id: &[u8; 16]) -> Option<AnchorPool> {
-        self.anchor_pools.remove(order_id)
     }
 
     /// Record an order's settle inputs, keyed by collateral note commitment.
@@ -374,55 +293,6 @@ mod tests {
             from_relock: false,
             viewing_pubkey: None,
         }
-    }
-
-    #[test]
-    fn anchor_pool_consume_is_monotonic_and_single_use() {
-        let anchors: Vec<Anchor> = (0..3)
-            .map(|i| Anchor {
-                inner_hash: [i as u8; 32],
-                nullifier: [(i + 100) as u8; 32],
-            })
-            .collect();
-        let mut pool = AnchorPool::new(anchors.clone());
-        assert_eq!(pool.remaining(), 3);
-        assert_eq!(pool.consume_next(), Some((0, anchors[0])));
-        assert_eq!(pool.consume_next(), Some((1, anchors[1])));
-        assert_eq!(pool.remaining(), 1);
-        assert_eq!(pool.consume_next(), Some((2, anchors[2])));
-        // Exhausted → None (caller pauses the order).
-        assert_eq!(pool.consume_next(), None);
-        assert_eq!(pool.remaining(), 0);
-        // A top-up replenishes + unpauses.
-        pool.paused = true;
-        pool.append([Anchor {
-            inner_hash: [9u8; 32],
-            nullifier: [9u8; 32],
-        }]);
-        assert!(!pool.paused);
-        assert_eq!(pool.remaining(), 1);
-        assert!(pool.consume_next().is_some());
-    }
-
-    #[test]
-    fn store_anchor_pool_insert_consume_evict() {
-        let mut store = OpeningStore::new();
-        let oid = [0x42u8; 16];
-        store.insert_anchor_pool(
-            oid,
-            AnchorPool::new(vec![Anchor {
-                inner_hash: [1u8; 32],
-                nullifier: [2u8; 32],
-            }]),
-        );
-        assert!(store.anchor_pool(&oid).is_some());
-        assert!(store
-            .anchor_pool_mut(&oid)
-            .unwrap()
-            .consume_next()
-            .is_some());
-        assert!(store.remove_anchor_pool(&oid).is_some());
-        assert!(store.anchor_pool(&oid).is_none());
     }
 
     #[test]

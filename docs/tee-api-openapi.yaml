@@ -257,7 +257,7 @@ components:
         Mirrors what dstack-sdk `client.info()` returns plus a
         couple of Nyx-specific fields. Used in tandem with
         /attestation by the SDK's verifyTeeAttestation() helper.
-      required: [app_id, instance_id, compose_hash, tcb_info, tee_pubkey]
+      required: [app_id, instance_id, compose_hash, boot_session_id, tcb_info, tee_pubkey, tee_pubkeys]
       properties:
         app_id:
           type: string
@@ -273,6 +273,13 @@ components:
             against the compose-hash read from the DCAP-VERIFIED quote's
             RTMR3 event log, NOT against this self-reported field (a
             malicious gateway can put anything here).
+        boot_session_id:
+          type: string
+          pattern: '^[0-9a-fA-F]{64}$'
+          description: |
+            Fresh 32-byte process-boot session id, hex. Every canonical order
+            signature binds this value, so requests prepared before a CVM
+            restart cannot be replayed into the new process.
         tcb_info:
           type: object
           description: TCB version + os-image hash + event_log payload.
@@ -365,12 +372,13 @@ components:
     PlaceOrderRequest:
       type: object
       description: |
-        The v2 (`inner_hash`) order body. All 32/64/16-byte fields are
+        The canonical-order v2 body (`nyx-order-v3` signature domain). All
+        32/64/16-byte fields are
         hex-encoded strings; all numeric fields are JSON integers (u64).
         The trading-key signature covers the canonical encoding of the
-        economic fields + the anchor-pool hash + `arrival_nonce`; the
-        opening fields (`owner_commitment`, `note_inner_hash`) are pinned
-        to the signature indirectly — the matcher re-derives
+        economic fields, `viewing_pubkey`, `session_id`, and `arrival_nonce`;
+        the opening fields (`owner_commitment`, `note_inner_hash`) are pinned
+        indirectly because the matcher re-derives
         `note_commitment` from them and rejects a mismatch.
       required:
         - symbol
@@ -390,7 +398,8 @@ components:
         - nullifier
         - merkle_root
         - valid_input_proof
-        - anchors
+        - viewing_pubkey
+        - session_id
       properties:
         symbol:
           type: string
@@ -441,7 +450,10 @@ components:
         arrival_nonce:
           type: integer
           format: uint64
-          description: Per-order nonce bound into the signed canonical body.
+          description: |
+            Nonce bound into the signed canonical body. After exact-body
+            idempotency handling, it must be strictly greater than every prior
+            accepted nonce for the same trading key.
         trading_key:
           type: string
           description: 32-byte hex — the Ed25519 public key that owns this order.
@@ -499,30 +511,19 @@ components:
         viewing_pubkey:
           type: string
           description: |
-            Optional 32-byte X25519 viewing-encryption public key, hex
-            (`deriveViewingEncKeypair().publicKey`). When present, the TEE
+            Required 32-byte contributory X25519 viewing-encryption public key,
+            hex (`deriveViewingEncKeypair().publicKey`). The TEE
             encrypts each of this order's change_amounts to it and writes the
             ciphertext on-chain, so the change note stays recoverable after a
-            CVM redeploy wipes the live fill memo. NOT part of the signed
-            canonical body (a wrong key only makes the owner's own change
-            unrecoverable, and the ciphertext is self-verifying client-side).
-            Omit to skip the on-chain ciphertext (back-compatible).
-        anchors:
-          type: array
-          minItems: 10
-          maxItems: 10
+            CVM redeploy wipes the live fill memo. It is signed; low-order
+            encodings that yield an all-zero shared secret are rejected.
+        session_id:
+          type: string
+          pattern: '^[0-9a-fA-F]{64}$'
           description: |
-            Exactly 10 continuation anchors. Each is the
-            `(inner_hash, nullifier)` pair for a future change note, so the
-            matcher can settle partial fills and re-lock the remainder
-            without a per-fill round-trip. The SHA-256 over the pool is
-            bound into the signed canonical body.
-          items:
-            type: object
-            required: [inner_hash, nullifier]
-            properties:
-              inner_hash: { type: string, description: 32-byte hex (canonical BN254 Fr). }
-              nullifier: { type: string, description: 32-byte hex. }
+            Required 32-byte boot session id from `GET /info`, hex, bound into
+            the signature. A stale session is rejected even when every other
+            field and signature is valid.
 
     Order:
       type: object
@@ -861,7 +862,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RegisterAccountRequest' }
       responses:
-        '201':
+        '202':
           description: Account registered.
           content:
             application/json:
@@ -1666,7 +1667,13 @@ x-websocket:
         `partial` / `filled` / `cancelled` / `expired`).
 
     fills:
-      description: Per-fill events as matches happen.
+      description: |
+        Per-fill change-output events. Each event carries `seq`, `order_id`,
+        `consumed_note_commitment`, `output_role`, `change_amount`,
+        `change_note_commitment`, `mint`, and `inner_hash`. Clients must resolve
+        the consumed opening locally, derive
+        `Poseidon3(24, input_inner, output_role)`, and recompute the output
+        commitment before accepting it. A sequence gap triggers chain recovery.
 
     account:
       description: |

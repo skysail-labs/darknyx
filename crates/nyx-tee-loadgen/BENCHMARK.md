@@ -63,9 +63,9 @@ COMMON="--real-settle --endpoint $GW --rpc-url $SOLANA_RPC_URL \
 
 | ID | Command (append to `$COMMON`) | Captures | Why |
 |---|---|---|---|
-| **B1** | `--real-mix "partial-fill:1" --traders 1 --real-multi-anchor-asks 3` | clean per-batch `prove_ms` (3 serial n=1 batches), all stages | lowest-contention prove isolation (the isolation run already did this on ark: `prove_ms`≈4 s, `settle_ms`≈9 s) |
+| **B1** | `--real-mix "partial-fill:1" --traders 1 --real-partial-fill-asks 3` | clean per-batch `prove_ms` (3 serial n=1 batches), all stages | lowest-contention prove isolation (the isolation run already did this on ark: `prove_ms`≈4 s, `settle_ms`≈9 s) |
 | **B2** | `--real-mix "exact-match:100" --traders 16` | `prove_ms` for a **full / near-full N=16 batch** + within-batch co-inclusion settle | the production case — the prove cost the GPU must cut; the headline number |
-| **B3** | `--real-mix "exact-match:40,partial-fill:20,merge:10,over-collateral:20,ioc-fok:10" --traders 10 --real-multi-anchor-asks 3` | blended pipeline, cross-shard settle, client prove rate under realistic load | realism — the rig as the protocol test bed |
+| **B3** | `--real-mix "exact-match:40,partial-fill:20,merge:10,over-collateral:20,ioc-fok:10" --traders 10 --real-partial-fill-asks 3` | blended pipeline, cross-shard settle, client prove rate under realistic load | realism — the rig as the protocol test bed |
 | **B4** | re-run B2 twice with `NYX_TEE_PROVER=ark` then `=rapidsnark` (env-only flip) | ark-CPU vs rapidsnark-CPU `prove_ms` ratio | the third leg: ark-CPU / **rapidsnark-CPU (baseline)** / rapidsnark-GPU (future) |
 | **B5** *(opt)* | B2 with `NYX_TEE_SETTLE_SEND_CONCURRENCY ∈ {1,4,16}` | the co-inclusion (CONSENSUS/IO) win, isolated from prove | documents the IO portion Alpenglow addresses, kept separate from the prove story |
 
@@ -159,32 +159,12 @@ cleanly — is **met**.
 > `verifyTeeAttestation()` (order intent is processed on the GPU). That's the headline `prove_step`
 > win (~1.5 s → tens of ms).
 
-> **✅ Partial-fill "continuation failure" — ROOT-CAUSED + FIXED + validated (it was a loadgen bug,
-> not the protocol, not the prover).** Symptom: B1 (3 continuation batches) settled **only batch 0**;
-> batch 1 failed `Custom 0` ("Allocate … already in use"), batch 2 `3007` (cascade), leaf 4→9.
-> Two hypotheses were tested and BOTH refuted before the fix:
-> 1. *Prove speed?* No — a same-image `-32` A/B flipping only `NYX_TEE_PROVER` showed **ark and
->    rapidsnark fail identically** (settle code byte-identical `-31`→`-32`).
-> 2. *Cross-batch race?* No — deterministic, not timing.
->
-> **Real root cause (proven):** the loadgen built `order_id` from the order INDEX only (no salt),
-> so the per-order anchor pool (`inner_hash`/`nullifier = fr_safe(order_id, …)`) was **identical
-> every run**. A partial fill's continuation residual note takes its nullifier *directly* from a
-> consumed anchor (`matcher::assign_continuation_anchors`), and that nullifier is written on-chain
-> as a `NullifierEntry` PDA — the **permanent replay backbone, NOT cleared by
-> `reset-merkle-tree.mjs`** (only the Merkle tree resets). So the FIRST run to settle a continuation
-> created `NullifierEntry[anchor0]` forever; every run after collided. Verified: the failing PDA
-> `Dmg3tgEycfnepSojGuoXRAVGC7DEuBjHeDbzdqaM6s8o == findPDA(["nullifier", fr_safe(order_id_idx0, 0x80)])`
-> and exists on-chain owned by the vault. The `-31` 3/3 pass was **first-occurrence**, not luck;
-> batch 0 always settled because primary notes use *salted* persona keys — only anchors were unsalted.
->
-> **Fix** (`fix(loadgen): salt order_ids per run`): `order_id = [run_nonce(ms) | order index]` so each
-> run's anchors (and their `NullifierEntry` PDAs) are fresh. **Validated 2026-06-18 on `-32`/rapidsnark:
-> the partial-fill chain settled 3/3 — batch 0/1/2 each `Tx D confirmed` + `batch settled`, zero
-> `Custom 0`/`3007`, leaf 4→9→14→19.** The protocol continuation chain is correct (and settles on
-> rapidsnark). Method note: same-image env-only A/B (`phala deploy -e NYX_TEE_PROVER=…`) is the right
-> way to attribute a behavior change to the prover; deriving the failing PDA from first principles is
-> the right way to attribute a settle failure to a specific account.
+> **Historical pre-v3 note.** The June 2026 loadgen used client-supplied
+> continuation anchors and exposed an order-id reuse collision. Canonical order
+> v2 deletes that scheme: continuation inners are derived from the consumed
+> input, and settlement identifiers are bound to the boot session, a monotonic
+> counter, and both order ids. The current `--real-partial-fill-asks` scenario
+> exercises that input-derived chain.
 
 > **✅ Multi-scenario mix — a SECOND loadgen seed collision, root-caused + FIXED + validated.** After
 > the salt fix, the isolated partial-fill settled 3/3 but the full mix (`--traders 5`, all 5 scenarios)
@@ -311,7 +291,7 @@ batch can settle inputs from different shards.
 |---|---|---|
 | `exact-match` | bid + ask, equal qty | baseline full-fill settle |
 | `over-collateral` | bid note +20% over required → surplus change note | over-collateral path |
-| `partial-fill` | 1 big bid + M small asks (`--real-multi-anchor-asks`) → M fills over M batches | continuation / consumes M anchors |
+| `partial-fill` | 1 big bid + M small asks (`--real-partial-fill-asks`) → M fills over M batches | input-derived continuation across M batches |
 | `merge` | deposit 2 sub-threshold notes → VALID_MERGE → ask off the merged note | the merge→spend pathway |
 | `ioc-fok` | crossing pair, IOC bid / FOK ask | execution-policy plumbing |
 
@@ -385,7 +365,7 @@ time) respects both invariants. The within-batch co-inclusion
 ### Live re-validation — 2026-06-17, image `tee-v3-hardening-31` (SETTLE_CONCURRENCY=1)
 
 Same run (`--traders 5 --real-mix "exact-match:1,partial-fill:1,merge:1,over-collateral:1,ioc-fok:1"
---real-multi-anchor-asks 3`): 12/12 accepted, 7 matches across 3 batches.
+--real-partial-fill-asks 3`): 12/12 accepted, 7 matches across 3 batches.
 - **`leaf_count` 14→28 (+14 = 7 matches × 2 leaves)** — vs 14→14 on `-30`. Multi-batch
   settle now LANDS; the catastrophic 0/7 failure is resolved.
 - Batches settled ~7 s apart (serial), vs ~2 s concurrent on `-30` — the expected
@@ -397,7 +377,7 @@ Same run (`--traders 5 --real-mix "exact-match:1,partial-fill:1,merge:1,over-col
 
 ### Isolation run — 2026-06-17, image `-31`, the continuation chain is CLEAN
 
-Focused run (`--real-mix "partial-fill:1" --traders 1 --real-multi-anchor-asks 3`
+Focused run (`--real-mix "partial-fill:1" --traders 1 --real-partial-fill-asks 3`
 = 1 big bid + 3 small asks → **3 pure-continuation batches**, fresh-reset tree) to settle
 the ambiguity definitively. The CVM settle log (not just the leaf count):
 

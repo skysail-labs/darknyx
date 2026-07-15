@@ -48,6 +48,8 @@ export interface TeeAttestation {
   mrtd: string;
   /** Raw hex quote, for an out-of-band audit. */
   quote: string;
+  /** 32-byte boot-session id to bind into order signatures. */
+  bootSessionId: string;
 }
 
 export interface VerifyTeeAttestationOptions {
@@ -126,6 +128,7 @@ export async function verifyTeeAttestation(
     compose_hash: string;
     tee_pubkey: string;
     tee_pubkeys?: string[];
+    boot_session_id: string;
   }>(new URL("/info", apiBaseUrl).toString(), opts.token, fetchImpl);
   if (info.tee_pubkey !== att.tee_pubkey) {
     throw new AttestationError(
@@ -141,6 +144,9 @@ export async function verifyTeeAttestation(
       "/info tee_pubkeys[0] != /attestation tee_pubkey (shard-0 mismatch)",
       "pubkey_mismatch",
     );
+  }
+  if (!/^[0-9a-fA-F]{64}$/.test(info.boot_session_id)) {
+    throw new AttestationError("invalid /info boot_session_id", "malformed");
   }
   let boundKeySetBytes: Uint8Array;
   try {
@@ -179,5 +185,6 @@ export async function verifyTeeAttestation(
     composeHash,
     mrtd: report.mrtd,
     quote: att.quote,
+    bootSessionId: info.boot_session_id,
   };
 }

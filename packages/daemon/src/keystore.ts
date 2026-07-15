@@ -10,10 +10,6 @@
  *   - a per-order Ed25519 **trading key** at the order's `seedIndex`
  *     (`deriveTradingKeyAtOffset`) + a detached signer over a canonical digest
  *
- * It implements {@link KeyProvider}, so the {@link DaemonActionExecutor} pulls
- * the exact same trading key for an anchor top-up that the order was placed
- * under (the TEE verifies the signature against it).
- *
  * AT REST: the identity is sealed with AES-256-GCM under a scrypt-stretched
  * passphrase ({@link saveKeystore} / {@link loadKeystore}) — a stolen file is
  * useless without the passphrase. In memory the seed is plaintext (it has to be,
@@ -38,9 +34,6 @@ import {
   ownerCommitment,
   userCommitmentFromKeys,
 } from "@nyx/sdk";
-
-import type { KeyProvider, OrderKeys } from "./action-executor.js";
-import type { ManagedOrder } from "./types.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
@@ -94,7 +87,7 @@ export interface AccountIdentity {
   rootKeyPubkey: Uint8Array;
 }
 
-export class Keystore implements KeyProvider {
+export class Keystore {
   private readonly spend: bigint;
   private readonly view: bigint;
 
@@ -168,17 +161,6 @@ export class Keystore implements KeyProvider {
     return nacl.sign.detached(digest, this.tradingKeypair(index).secretKey);
   }
 
-  // ── KeyProvider ──
-  keysForOrder(order: ManagedOrder): OrderKeys {
-    const idx = order.seedIndex;
-    const kp = this.tradingKeypair(idx);
-    return {
-      masterSeed: this.identity.masterSeed,
-      spendingKey: this.spend,
-      tradingKeyPubkey: kp.publicKey,
-      sign: (digest) => nacl.sign.detached(digest, kp.secretKey),
-    };
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

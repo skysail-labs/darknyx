@@ -92,27 +92,24 @@ touch, double-spends are impossible regardless of what the engine does.
 
 ## Recovering your notes
 
-Because your balance is derived, not stored by the venue, you can rebuild it on
-any device from one secret: your **master seed**. Everything else follows from it.
+Because your balance is derived, not stored by the venue, custody begins with a
+securely generated **master seed** and its encrypted backup.
 
-- **A deterministic seed.** The SDK can derive your master seed from a **wallet
-  signature** over a fixed message, so the same wallet reproduces the same seed on
-  any device. There is no separate key file to back up or lose. (You can also use
-  a random seed you store yourself.)
+- **CSPRNG seed + encrypted backup.** Export the versioned authenticated backup
+  and import it on a new device. Wallet-message signatures are not a seed or
+  spend-authority mode.
 - **Keys and notes.** From the seed the SDK derives your trading, spending, and
-  viewing keys, scans the public Merkle tree to find the notes you own, and
-  regenerates each order's continuation
-  [anchors](../trading-concepts/anchor-pool).
+  viewing keys and reconstructs note openings from the recovery data it owns.
 - **Change notes.** A change note from a partial fill is recoverable from the
   **encrypted ciphertext stored on-chain at settlement**, written when the order
   was placed with a `viewing_pubkey`. The SDK decrypts the change amount with your
-  viewing key and self-verifies it against the on-chain commitment, so change
-  notes survive a lost local store, a fresh device, or an engine redeploy. See
+  viewing key and derives the output from its consumed input opening. Full cold
+  seed-plus-chain recovery is a mainnet gate. See
   [Fills Channel](../websocket/fills-channel).
 
-The upshot: sign with the same wallet on a new machine and the SDK reconstructs
-your full spendable balance from public on-chain data plus your keys. Nothing
-about your account lives only on the engine.
+The upshot: protect the encrypted seed backup. The engine never becomes your
+custodian, but current devnet recovery still depends on the recovery material
+described above.
 
 ## Trading keys vs. spending keys
 

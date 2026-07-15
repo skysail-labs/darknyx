@@ -15,12 +15,10 @@
 //! `change-note-flow.test.ts`), because the user must be able to
 //! re-derive the output notes' openings later to spend them:
 //!
-//!   - note_c (buyer's full-fill output, BASE): owner = buyer's note
-//!     owner_commitment; (nonce, r) = derive_*(match_id, TRADE_ROLE_BUYER).
-//!   - note_d (seller's output, QUOTE): owner = seller's
-//!     owner_commitment; derive_*(match_id, TRADE_ROLE_SELLER).
-//!   - note_e / note_f (change, conditional on change_amt > 0):
-//!     derive_*(match_id, CHANGE_ROLE_*).
+//!   - note_c/e (buyer outputs): owner = buyer input's owner commitment;
+//!     inner = Poseidon3(24, buyer_input_inner, output_role).
+//!   - note_d/f (seller outputs): owner = seller input's owner commitment;
+//!     inner = Poseidon3(24, seller_input_inner, output_role).
 //!   - note_fee (protocol cut): owner = protocol_owner_commitment;
 //!     inner = Poseidon3(25, consumed_input_commitment, fee_role).
 //!
@@ -41,6 +39,7 @@ use darkpool_matcher::change_note::{
     TRADE_ROLE_SELLER,
 };
 use darkpool_matcher::match_result::{MatchPair, RunBatchOutput};
+use sha2::{Digest, Sha256};
 
 use crate::matcher::openings::{NoteOpening, OpeningStore};
 use crate::prover::{pad_batch, MatchSlotWitness};
@@ -59,6 +58,9 @@ pub struct MatchAssemblyInputs<'a> {
     /// 16-byte ids of the two matched orders (payload fields).
     pub order_id_a: [u8; 16],
     pub order_id_b: [u8; 16],
+    /// Domain-separated 16-byte settlement identifier derived from the boot
+    /// session, the match counter, and both order ids.
+    pub settlement_id: [u8; 16],
     /// Market mints.
     pub base_mint: [u8; 32],
     pub quote_mint: [u8; 32],
@@ -104,6 +106,28 @@ pub enum AssembleError {
 }
 
 const ZERO32: [u8; 32] = [0u8; 32];
+const SETTLEMENT_ID_DOMAIN: &[u8] = b"nyx-settlement-id-v1";
+
+/// Derive the transport/event settlement id. Output-note safety does not rely
+/// on uniqueness: VALID_MATCH_BATCH derives every output inner exclusively
+/// from a consumed input commitment/inner plus a role tag.
+pub fn derive_settlement_id(
+    boot_session_id: &[u8; 32],
+    counter: u64,
+    order_id_a: &[u8; 16],
+    order_id_b: &[u8; 16],
+) -> [u8; 16] {
+    let mut h = Sha256::new();
+    h.update(SETTLEMENT_ID_DOMAIN);
+    h.update(boot_session_id);
+    h.update(counter.to_le_bytes());
+    h.update(order_id_a);
+    h.update(order_id_b);
+    let digest = h.finalize();
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&digest[..16]);
+    out
+}
 
 fn commit(
     mint: &[u8; 32],
@@ -120,7 +144,6 @@ pub fn assemble_match(
     inp: MatchAssemblyInputs,
 ) -> Result<(MatchSlotWitness, MatchResultPayload), AssembleError> {
     let m = inp.match_pair;
-    let mid = m.match_id;
 
     // ── 0. The openings must be for the correct collateral mints.
     // A bid locks QUOTE (note_a); an ask locks BASE (note_b).
@@ -258,11 +281,6 @@ pub fn assemble_match(
         )?
     };
 
-    // ── 6. match_id → [u8; 16]: zero high… low LE in bytes [8,16).
-    // Mirrors the TS `asU8a16` (DataView.setBigUint64(8, x, true)).
-    let mut match_id_bytes = [0u8; 16];
-    match_id_bytes[8..16].copy_from_slice(&mid.to_le_bytes());
-
     let witness = MatchSlotWitness {
         note_a_commitment: m.note_buyer,
         note_b_commitment: m.note_seller,
@@ -304,7 +322,7 @@ pub fn assemble_match(
     };
 
     let payload = MatchResultPayload {
-        match_id: match_id_bytes,
+        match_id: inp.settlement_id,
         note_a_commitment: m.note_buyer,
         note_b_commitment: m.note_seller,
         note_c_commitment: note_c,
@@ -342,6 +360,7 @@ pub fn assemble_match(
 pub struct BatchAssemblyParams {
     /// Scheduler-local batch id (keys the per-match jobs).
     pub batch_id: u64,
+    pub boot_session_id: [u8; 32],
     pub base_mint: [u8; 32],
     pub quote_mint: [u8; 32],
     pub protocol_owner_commitment: [u8; 32],
@@ -395,12 +414,19 @@ pub fn assemble_batch(
                 commitment: hex::encode(m.note_seller),
             })?;
 
+        let settlement_id = derive_settlement_id(
+            &params.boot_session_id,
+            m.match_id,
+            &buyer.order_id,
+            &seller.order_id,
+        );
         let (witness, mut payload) = assemble_match(MatchAssemblyInputs {
             match_pair: m,
             buyer_opening: &buyer.opening,
             seller_opening: &seller.opening,
             order_id_a: buyer.order_id,
             order_id_b: seller.order_id,
+            settlement_id,
             base_mint: params.base_mint,
             quote_mint: params.quote_mint,
             protocol_owner_commitment: params.protocol_owner_commitment,
@@ -585,6 +611,7 @@ mod tests {
             seller_opening: seller,
             order_id_a: [0x01; 16],
             order_id_b: [0x02; 16],
+            settlement_id: derive_settlement_id(&[0x5A; 32], m.match_id, &[0x01; 16], &[0x02; 16]),
             base_mint: base_mint(),
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),
@@ -797,6 +824,12 @@ mod tests {
                 seller_opening: &seller_opening,
                 order_id_a: [0x01; 16],
                 order_id_b: [0x02; 16],
+                settlement_id: derive_settlement_id(
+                    &[0x5A; 32],
+                    matched.match_id,
+                    &[0x01; 16],
+                    &[0x02; 16],
+                ),
                 base_mint: base_mint(),
                 quote_mint: quote_mint(),
                 protocol_owner_commitment: [0u8; 32],
@@ -834,15 +867,57 @@ mod tests {
     }
 
     #[test]
-    fn match_id_encoding_matches_as_u8a16() {
+    fn settlement_id_binds_session_counter_and_order_ids() {
         let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
         let (_, p) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
-        // match_id = 42 → bytes [8..16] = LE(42), [0..8] = 0.
-        let mut expected = [0u8; 16];
-        expected[8..16].copy_from_slice(&42u64.to_le_bytes());
+        let expected = derive_settlement_id(&[0x5A; 32], 42, &[0x01; 16], &[0x02; 16]);
         assert_eq!(p.match_id, expected);
-        assert_eq!(p.match_id[8], 42);
-        assert_eq!(p.match_id[0], 0);
+        assert_eq!(
+            expected,
+            derive_settlement_id(&[0x5A; 32], 42, &[0x01; 16], &[0x02; 16]),
+            "same boot/counter/order tuple is deterministic"
+        );
+        assert_ne!(
+            expected,
+            derive_settlement_id(&[0x5B; 32], 42, &[0x01; 16], &[0x02; 16]),
+            "a reboot session prevents cross-boot collisions"
+        );
+        assert_ne!(
+            expected,
+            derive_settlement_id(&[0x5A; 32], 43, &[0x01; 16], &[0x02; 16]),
+            "a new matcher counter prevents page collisions"
+        );
+        assert_ne!(
+            expected,
+            derive_settlement_id(&[0x5A; 32], 42, &[0x03; 16], &[0x02; 16]),
+            "the matched order pair is bound"
+        );
+    }
+
+    #[test]
+    fn output_safety_is_independent_of_settlement_id_uniqueness() {
+        let (m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
+        let mut first = inputs(&m, &buyer, &seller);
+        first.settlement_id = [0x11; 16];
+        let (w1, p1) = assemble_match(first).unwrap();
+
+        let mut second = inputs(&m, &buyer, &seller);
+        second.settlement_id = [0x22; 16];
+        let (w2, p2) = assemble_match(second).unwrap();
+
+        assert_ne!(p1.match_id, p2.match_id);
+        assert_eq!(
+            compute_batch_leaf(&w1).unwrap(),
+            compute_batch_leaf(&w2).unwrap()
+        );
+        assert_eq!(w1.c_inner, w2.c_inner);
+        assert_eq!(w1.d_inner, w2.d_inner);
+        assert_eq!(w1.e_inner, w2.e_inner);
+        assert_eq!(w1.f_inner, w2.f_inner);
+        assert_eq!(p1.note_c_commitment, p2.note_c_commitment);
+        assert_eq!(p1.note_d_commitment, p2.note_d_commitment);
+        assert_eq!(p1.note_e_commitment, p2.note_e_commitment);
+        assert_eq!(p1.note_f_commitment, p2.note_f_commitment);
     }
 
     #[test]
@@ -918,6 +993,7 @@ mod tests {
     fn batch_params() -> BatchAssemblyParams {
         BatchAssemblyParams {
             batch_id: 5,
+            boot_session_id: [0x5A; 32],
             base_mint: base_mint(),
             quote_mint: quote_mint(),
             protocol_owner_commitment: fr_safe(0x07),

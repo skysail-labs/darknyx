@@ -19,8 +19,6 @@ import {
   generateAccountIdentity,
   type AccountIdentity,
 } from "../src/keystore.js";
-import { newManagedOrder } from "../src/types.js";
-
 function identity(): AccountIdentity {
   const masterSeed = new Uint8Array(64);
   for (let i = 0; i < 64; i++) masterSeed[i] = (i * 7 + 3) & 0xff;
@@ -82,28 +80,6 @@ describe("Keystore — derivation", () => {
     expect(nacl.sign.detached.verify(digest, sig, pk1)).toBe(false);
   });
 
-  it("implements KeyProvider keyed by the order's seedIndex", () => {
-    const ks = new Keystore(identity());
-    const order = newManagedOrder({
-      orderId: "ab".repeat(8),
-      seedIndex: 5,
-      side: "bid",
-      priceRaw: 1n,
-      sizeRaw: 1n,
-      anchorPoolSize: 10,
-    });
-    const keys = ks.keysForOrder(order);
-    expect(keys.masterSeed).toBe(ks.masterSeed);
-    expect(keys.spendingKey).toBe(ks.spendingKey);
-    expect(Buffer.from(keys.tradingKeyPubkey)).toEqual(
-      Buffer.from(ks.tradingPublicKey(5)),
-    );
-    const digest = new Uint8Array(32).fill(7);
-    const sig = keys.sign(digest) as Uint8Array;
-    expect(nacl.sign.detached.verify(digest, sig, keys.tradingKeyPubkey)).toBe(
-      true,
-    );
-  });
 });
 
 describe("account identity derivation", () => {

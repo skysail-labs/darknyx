@@ -60,10 +60,10 @@ POST /orders
 Authorization: Bearer <token>
 ```
 
-The body carries the order parameters, the input note's opening, a continuation
-**anchor pool** (pre-supplied nullifiers that let the matcher roll a partial
-fill forward without a round-trip — see [Matching layer](./matching-layer)), and
-your trading-key signature over the canonical body.
+The body carries the order parameters, the input note's opening, a contributory
+X25519 viewing key, the current boot session, and your trading-key signature over
+the canonical v3 body. Partial fills derive their outputs from the consumed input
+inside the circuit (see [Matching layer](./matching-layer)).
 
 ```jsonc
 {
@@ -81,7 +81,8 @@ your trading-key signature over the canonical body.
   "trading_key_signature": "…",
   "merkle_root": "…",
   "valid_input_proof": "…",      // proves the collateral note is real
-  "anchors": [ /* continuation (inner_hash, nullifier) pairs */ ]
+  "viewing_pubkey": "…",         // signed contributory X25519 point
+  "session_id": "…"              // signed /info.boot_session_id
 }
 ```
 

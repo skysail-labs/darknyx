@@ -3,8 +3,7 @@
  *
  * Wires every slice into one long-running object: the {@link DaemonStore} (UTXO
  * + managed orders), the {@link LifecycleEngine} driving a
- * {@link DaemonActionExecutor} (auto anchor top-up via the keystore + the
- * gateway, auto-merge via the {@link MergeRunner}), the multiplexed TEE stream
+ * {@link DaemonActionExecutor} (auto-merge via the {@link MergeRunner}), the multiplexed TEE stream
  * channels ({@link FillsListener} fills, {@link OrdersListener} orders), and
  * the {@link OrderPlacer}. It exposes the high-level operations
  * a control surface needs — `placeOrder` / `cancelOrder` / `listOrders` /
@@ -18,7 +17,6 @@
 import { randomBytes } from "node:crypto";
 import { Connection, PublicKey } from "@solana/web3.js";
 import {
-  ANCHOR_POOL_SIZE,
   OrderSide,
   assertTeePubkeysMatch,
   buildCancel,
@@ -43,8 +41,6 @@ import { Keystore } from "./keystore.js";
 import { LifecycleEngine } from "./lifecycle-engine.js";
 import {
   DaemonActionExecutor,
-  HttpAnchorTopUpPoster,
-  type AnchorTopUpPoster,
   type MergeRunner,
 } from "./action-executor.js";
 import { FillsListener, type SubscribeFillsFn } from "./fills-listener.js";
@@ -57,6 +53,7 @@ import { placeManagedOrder } from "./place.js";
 import { buildPlaceRequest, type OrderIntent } from "./build-place-request.js";
 import { newManagedOrder, type ManagedOrder } from "./types.js";
 import {
+  fetchInfo,
   verifyAttestation,
   type AttestationResult,
   type QuoteVerifier,
@@ -137,7 +134,6 @@ export interface DaemonDeps {
   prover: ValidInputProver;
   // ── injectables (defaults built from config) ──
   placer?: OrderPlacer;
-  anchorPoster?: AnchorTopUpPoster;
   mergeRunner?: MergeRunner;
   subscribeFills?: SubscribeFillsFn;
   subscribeOrders?: SubscribeOrderUpdatesFn;
@@ -199,6 +195,7 @@ export class Daemon {
   private readonly teeKeyStaleMs: number;
   private readonly now: () => number;
   private attestationResult: AttestationResult | null = null;
+  private bootSessionId: Uint8Array | null = null;
   private expectedTeePubkeys: string[] | null = null;
   private lastFinalizedKeyRefreshMs: number | null = null;
   private tradingPauseReason: string | null = null;
@@ -272,31 +269,15 @@ export class Daemon {
     this.depositFn = deps.depositFn;
     this.depositor = deps.depositor;
 
-    const anchorPoster =
-      deps.anchorPoster ??
-      new HttpAnchorTopUpPoster({
-        baseUrl: this.config.gatewayUrl,
-        token: this.config.token,
-        fetchImpl: this.fetchImpl,
-      });
     const executor = new DaemonActionExecutor({
-      keys: this.keystore,
-      // Anchor top-up mutates a resting order, so it shares the same trust gate
-      // as placement. Cancellation and on-chain merge remain available.
-      anchors: {
-        post: async (orderId, body) => {
-          this.assertTradingEnabled();
-          await anchorPoster.post(orderId, body);
-        },
-      },
       merge: deps.mergeRunner ?? UNCONFIGURED_MERGE,
     });
 
     this.engine = new LifecycleEngine(this.store, executor, {
       thresholds: this.config.thresholds,
       onError: (err, ctx) => this.emitError(ctx, err),
-      onTransition: (order) => {
-        this.pruneConsumedCollateral(order);
+      onTransition: (order, event) => {
+        if (event.type === "fill") this.pruneConsumedCollateral(order);
         this.emit({ type: "order", order });
       },
     });
@@ -448,6 +429,7 @@ export class Daemon {
         fetchImpl: this.fetchImpl,
         strict: this.config.attestationStrict,
       });
+      this.bootSessionId = fromHex(this.attestationResult.bootSessionId);
       if (this.config.attestOnchainCheck) {
         this.expectedTeePubkeys = [...this.attestationResult.teePubkeys];
         await this.requireFinalizedTeePubkeys(this.expectedTeePubkeys);
@@ -455,6 +437,17 @@ export class Daemon {
         this.expectedTeePubkeys = null;
       }
       this.resumeTrading();
+    } else {
+      const info = await fetchInfo(
+        this.config.gatewayUrl,
+        this.config.token,
+        this.fetchImpl,
+      );
+      this.bootSessionId = fromHex(info.bootSessionId);
+    }
+
+    if (this.bootSessionId.length !== 32) {
+      throw new Error("/info boot_session_id must be 32 bytes");
     }
 
     this.started = true;
@@ -471,7 +464,7 @@ export class Daemon {
       streamClient: this.streamClient,
       subscribeFn: this.subscribeFillsFn,
       onFill: (note) => {
-        this.pruneSupersededContinuations(note);
+        this.pruneConsumedInput(note);
         this.emit({ type: "fill", note });
       },
       onError: (e) => this.emitError("fills", e),
@@ -523,10 +516,12 @@ export class Daemon {
   ): Promise<{ orderId: string; arrivalSlot: number }> {
     this.assertTradingEnabled();
     const seedIndex = this.nextIndex++;
+    if (!this.bootSessionId) throw new Error("daemon has not fetched the CVM boot session");
     const { request, orderId } = await buildPlaceRequest({
       keystore: this.keystore,
       note,
       seedIndex,
+      sessionId: this.bootSessionId,
       intent,
       gatewayUrl: this.config.gatewayUrl,
       token: this.config.token,
@@ -542,7 +537,6 @@ export class Daemon {
       side: intent.side === OrderSide.Bid ? "bid" : "ask",
       priceRaw: intent.policy.priceLimit,
       sizeRaw: intent.amount,
-      anchorPoolSize: ANCHOR_POOL_SIZE,
       // Lock the spent note to this order (excludes it from selection + lets a
       // fill prune it).
       collateralCommitment: note.commitment,
@@ -620,23 +614,18 @@ export class Daemon {
     return locked;
   }
 
-  /** When a continuation fill rotates the residual onto a new anchor, the prior
-   *  change note(s) for that order are consumed on-chain — drop them so neither
-   *  collateral selection nor merge ever picks a spent note. Keeps one (latest)
-   *  residual per order. */
-  private pruneSupersededContinuations(note: StoredNote): void {
-    if (note.orderId === undefined || note.anchorIndex === undefined) return;
-    for (const n of this.store.notesByOrder(note.orderId)) {
-      if (n.anchorIndex !== undefined && n.anchorIndex < note.anchorIndex) {
-        this.store.delete(n.commitment);
-      }
+  /** A v3 fill memo names the exact input consumed to derive this output. Drop
+   *  that note so collateral selection and merging never reuse spent state. */
+  private pruneConsumedInput(note: StoredNote): void {
+    if (note.consumedCommitment !== undefined) {
+      this.store.delete(note.consumedCommitment);
     }
   }
 
   /** Once a fill consumes the order's collateral note (the matcher rotates it
    *  into a change note), prune it from the UTXO set. Idempotent. */
   private pruneConsumedCollateral(order: ManagedOrder): void {
-    if (order.collateralCommitment && order.anchorsConsumed >= 1) {
+    if (order.collateralCommitment) {
       this.store.delete(order.collateralCommitment);
     }
   }

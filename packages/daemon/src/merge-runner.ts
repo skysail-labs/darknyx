@@ -73,8 +73,8 @@ export class DaemonMergeRunner implements MergeRunner {
   constructor(private readonly opts: DaemonMergeRunnerOptions) {}
 
   async run(_order: ManagedOrder, _noteCount: number): Promise<number> {
-    // Selection is ACCOUNT-level cross-mint, not per-order: the anchor-pool
-    // model keeps one ROLLING residual per order (each partial fill consumes
+    // Selection is ACCOUNT-level cross-mint, not per-order: v3 continuations
+    // keep one ROLLING residual per order (each partial fill consumes
     // the prior + rebuilds it), so a single order never has ≥2 spendable
     // residuals. The notes worth consolidating are the FINAL residuals of
     // terminated orders + deposit notes, accumulated across orders + same-mint.

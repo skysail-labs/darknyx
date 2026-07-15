@@ -67,6 +67,7 @@ function fakeFetch(opts: { composeHash?: string } = {}): typeof fetch {
           compose_hash: opts.composeHash ?? COMPOSE,
           tee_pubkey: TEE_B58,
           tee_pubkeys: KEYS,
+          boot_session_id: "5a".repeat(32),
         }),
         { status: 200 },
       );
@@ -99,6 +100,7 @@ describe("verifyTeeAttestation (SDK / browser)", () => {
     expect(r.teePubkeys).toEqual(KEYS);
     expect(r.composeHash).toBe(COMPOSE);
     expect(r.mrtd).toBe(MRTD);
+    expect(r.bootSessionId).toBe("5a".repeat(32));
   });
 
   it("refuses an unpinned build (empty expectedComposeHash)", async () => {
