@@ -18,6 +18,8 @@
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 
+use std::collections::HashMap;
+
 pub mod algorithm;
 pub mod book;
 pub mod change_note;
@@ -38,6 +40,184 @@ pub use match_result::{MatchPair, MatchStatus, RunBatchOutput, RELOCK_ORDER_ID_N
 pub use order_canonical::{
     CancelCanonical, CanonicalError, OrderCanonical, CANCEL_DOMAIN, ORDER_DOMAIN, SYMBOL_MAX_LEN,
 };
+
+#[derive(Clone, Copy, Debug)]
+enum PreparedSide {
+    Bid,
+    Ask,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PreparedLocation {
+    side: PreparedSide,
+    snapshot_idx: usize,
+    book_idx: usize,
+}
+
+/// One immutable order-book snapshot prepared for every settlement page in a
+/// matching tick. Sorting and price-level aggregation happen once. As pages
+/// reserve or cancel orders, this structure removes their original quantities
+/// from the aggregate curves and marks their snapshots inactive.
+///
+/// Orders submitted after construction intentionally wait for the next tick.
+/// This gives every page in a tick one deterministic view while preserving the
+/// existing per-page clearing-price recomputation over the remaining orders.
+pub struct PreparedMatchTick {
+    pre_batch: Vec<Order>,
+    bids: Vec<algorithm::OrderSnapshot>,
+    asks: Vec<algorithm::OrderSnapshot>,
+    expired_idxs: Vec<usize>,
+    active_by_book_idx: Vec<bool>,
+    locations: HashMap<([u8; 32], [u8; 16]), PreparedLocation>,
+    levels: algorithm::PriceLevelAggregates,
+    config: MatchConfig,
+    current_slot: u64,
+    expired_emitted: bool,
+}
+
+impl PreparedMatchTick {
+    /// Take ownership of a book snapshot and prepare its reusable sorted views
+    /// and price-level aggregates. Ownership avoids a second full-book clone in
+    /// the in-TEE driver.
+    pub fn new(book: OrderBook, config: MatchConfig, current_slot: u64) -> Self {
+        let pre_batch = book.orders;
+        let (bids, asks, expired_idxs, _inclusion_leaves) =
+            algorithm::partition_book(&pre_batch, current_slot, config.min_order_size);
+        let levels = algorithm::PriceLevelAggregates::from_snapshots(&bids, &asks);
+        let mut active_by_book_idx = vec![false; pre_batch.len()];
+        let mut locations = HashMap::with_capacity(bids.len() + asks.len());
+
+        for (snapshot_idx, order) in bids.iter().enumerate() {
+            active_by_book_idx[order.book_idx] = true;
+            locations.insert(
+                (order.trading_key, order.order_id),
+                PreparedLocation {
+                    side: PreparedSide::Bid,
+                    snapshot_idx,
+                    book_idx: order.book_idx,
+                },
+            );
+        }
+        for (snapshot_idx, order) in asks.iter().enumerate() {
+            active_by_book_idx[order.book_idx] = true;
+            locations.insert(
+                (order.trading_key, order.order_id),
+                PreparedLocation {
+                    side: PreparedSide::Ask,
+                    snapshot_idx,
+                    book_idx: order.book_idx,
+                },
+            );
+        }
+
+        Self {
+            pre_batch,
+            bids,
+            asks,
+            expired_idxs,
+            active_by_book_idx,
+            locations,
+            levels,
+            config,
+            current_slot,
+            expired_emitted: false,
+        }
+    }
+
+    /// Number of orders in the frozen source snapshot, including ineligible
+    /// orders. Exposed for operational metrics and error logs.
+    pub fn snapshot_len(&self) -> usize {
+        self.pre_batch.len()
+    }
+
+    /// Produce the next N-bounded settlement page. Production semantics always
+    /// allow at most one fill per order in a page; touched orders are removed
+    /// from all later pages in this prepared tick, just as reserving them in the
+    /// live book did before this optimization.
+    pub fn next_page(
+        &mut self,
+        oracle: &OracleSnapshot,
+        start_match_id: u64,
+        max_matches: usize,
+    ) -> Result<RunBatchOutput, MatchError> {
+        validate_oracle(oracle, self.current_slot)?;
+
+        let inclusion_leaves: Vec<[u8; 32]> = self
+            .pre_batch
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, order)| {
+                self.active_by_book_idx[idx].then_some(order.order_inclusion_commitment)
+            })
+            .collect();
+        let expired_idxs = if self.expired_emitted {
+            &[][..]
+        } else {
+            &self.expired_idxs
+        };
+
+        let output = run_partitioned_page(
+            &self.pre_batch,
+            &mut self.bids,
+            &mut self.asks,
+            expired_idxs,
+            &inclusion_leaves,
+            &self.levels,
+            oracle,
+            &self.config,
+            self.current_slot,
+            start_match_id,
+            max_matches,
+            true,
+        )?;
+        self.expired_emitted = true;
+        self.deactivate_updates(&output.order_updates);
+        Ok(output)
+    }
+
+    fn deactivate_updates(&mut self, updates: &[OrderUpdate]) {
+        for update in updates {
+            let Some(location) = self
+                .locations
+                .get(&(update.trading_key, update.order_id))
+                .copied()
+            else {
+                // Expired orders never entered a bid/ask snapshot.
+                continue;
+            };
+
+            let snapshot = match location.side {
+                PreparedSide::Bid => &mut self.bids[location.snapshot_idx],
+                PreparedSide::Ask => &mut self.asks[location.snapshot_idx],
+            };
+            if !snapshot.active {
+                continue;
+            }
+            snapshot.active = false;
+            self.active_by_book_idx[location.book_idx] = false;
+
+            let original = &self.pre_batch[location.book_idx];
+            match location.side {
+                PreparedSide::Bid => self
+                    .levels
+                    .remove_bid(original.price_limit, original.amount),
+                PreparedSide::Ask => self
+                    .levels
+                    .remove_ask(original.price_limit, original.amount),
+            }
+        }
+    }
+}
+
+fn validate_oracle(oracle: &OracleSnapshot, current_slot: u64) -> Result<(), MatchError> {
+    if oracle.twap == 0 {
+        return Err(MatchError::OracleStale {
+            publish: oracle.publish_slot,
+            now: current_slot,
+        });
+    }
+    Ok(())
+}
 
 /// The single public entry point. Given a book snapshot + oracle
 /// reading + market config + the current slot + a starting match-id
@@ -126,19 +306,46 @@ pub fn run_batch_capped(
     single_fill_per_order: bool,
 ) -> Result<RunBatchOutput, MatchError> {
     // Step 1 — oracle validity gate.
-    if oracle.twap == 0 {
-        return Err(MatchError::OracleStale {
-            publish: oracle.publish_slot,
-            now: current_slot,
-        });
-    }
+    validate_oracle(oracle, current_slot)?;
 
     // Step 2 — partition. Yields (bids, asks, expired_idxs,
     // inclusion_leaves). expired_idxs feed OrderUpdate::Expired
     // emissions below.
     let (mut bids, mut asks, expired_idxs, inclusion_leaves) =
         algorithm::partition_book(&book.orders, current_slot, config.min_order_size);
+    let levels = algorithm::PriceLevelAggregates::from_snapshots(&bids, &asks);
 
+    run_partitioned_page(
+        &book.orders,
+        &mut bids,
+        &mut asks,
+        &expired_idxs,
+        &inclusion_leaves,
+        &levels,
+        oracle,
+        config,
+        current_slot,
+        start_match_id,
+        max_matches,
+        single_fill_per_order,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_partitioned_page(
+    pre_batch: &[Order],
+    bids: &mut [algorithm::OrderSnapshot],
+    asks: &mut [algorithm::OrderSnapshot],
+    expired_idxs: &[usize],
+    inclusion_leaves: &[[u8; 32]],
+    levels: &algorithm::PriceLevelAggregates,
+    oracle: &OracleSnapshot,
+    config: &MatchConfig,
+    current_slot: u64,
+    start_match_id: u64,
+    max_matches: usize,
+    single_fill_per_order: bool,
+) -> Result<RunBatchOutput, MatchError> {
     // Step 4 — fee buckets. Step 3 (sort) happened inside
     // partition_book.
     let mut fee_buckets = algorithm::reset_fee_buckets(config, current_slot);
@@ -149,7 +356,7 @@ pub fn run_batch_capped(
     let clearing_price;
 
     // Step 5 + 6 — clearing price + circuit breaker.
-    if let Some((p_star, _matched)) = algorithm::compute_clearing_price(&bids, &asks) {
+    if let Some((p_star, _matched)) = levels.clearing_price() {
         if algorithm::deviates_by_more_than_bps(p_star, oracle.twap, config.circuit_breaker_bps) {
             cb_tripped = 1;
             clearing_price = 0;
@@ -158,8 +365,8 @@ pub fn run_batch_capped(
             // Step 7 — generate_matches. Mutates bids/asks/
             // fee_buckets in place; appends to `matches`.
             algorithm::generate_matches(
-                &mut bids,
-                &mut asks,
+                bids,
+                asks,
                 p_star,
                 oracle.twap,
                 current_slot,
@@ -179,14 +386,14 @@ pub fn run_batch_capped(
     }
 
     // Step 8 — inclusion root. Done regardless of CB state.
-    let inclusion_root = algorithm::merkle_root_sha256(&inclusion_leaves);
+    let inclusion_root = algorithm::merkle_root_sha256(inclusion_leaves);
 
     // Step 9 — OrderUpdates. Two passes:
     //   (a) algorithm::apply_slot_updates for bid/ask participants,
     //   (b) explicit Expired emissions for orders drained in step 2.
-    algorithm::apply_slot_updates(&bids, &asks, &book.orders, &mut order_updates);
-    for &idx in &expired_idxs {
-        let o = &book.orders[idx];
+    algorithm::apply_slot_updates(bids, asks, pre_batch, &mut order_updates);
+    for &idx in expired_idxs {
+        let o = &pre_batch[idx];
         order_updates.push(crate::book::OrderUpdate {
             trading_key: o.trading_key,
             order_id: o.order_id,

@@ -34,7 +34,7 @@ use darkpool_matcher::{
     book::{OrderUpdate, OrderUpdateKind},
     config::{MatchConfig, OracleSnapshot},
     match_result::{RunBatchOutput, RELOCK_ORDER_ID_NONE},
-    run_batch_capped as matcher_run_batch,
+    PreparedMatchTick,
 };
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
@@ -677,37 +677,26 @@ impl MatcherDriver {
         // The matcher can clear far more crossing pairs than the N=16
         // settle circuit absorbs in one batch (the loadgen saw 23-50
         // matches/tick, all dropped by the settle assembler). Page the
-        // book: each iteration matches up to `max_matches_per_batch`
-        // fills (run_batch_capped), reserves those orders, emits that ≤N
-        // RunBatchOutput as its own settle batch, and continues with the
-        // remaining unreserved orders. Batches settle sequentially downstream;
-        // a continuation can re-enter a later tick only after its Tx D confirms.
+        // book: prepare one sorted snapshot + price-level demand/supply curves,
+        // then each iteration matches up to `max_matches_per_batch` fills,
+        // reserves those orders, emits that ≤N RunBatchOutput as its own settle
+        // batch, and removes the touched levels from later pages. New orders
+        // arriving while this tick is paging wait for the next deterministic
+        // snapshot. Batches settle sequentially downstream; a continuation can
+        // re-enter a later tick only after its Tx D confirms.
         let max_per_batch = self.cfg.max_matches_per_batch.max(1);
-        for page in 0..MAX_PAGES_PER_TICK {
-            // Re-snapshot each page so orders reserved by the previous page are
-            // excluded. Read lock is released before matching so submitters
-            // aren't blocked across it.
-            let (book_snap, start_match_id) = {
-                let state = self.state.read().await;
-                let snap = state.book().snapshot();
-                (snap, state.next_match_id())
-            };
-            if book_snap.orders.is_empty() {
-                break;
-            }
+        let (book_snap, mut next_match_id) = {
+            let state = self.state.read().await;
+            (state.book().snapshot(), state.next_match_id())
+        };
+        if book_snap.orders.is_empty() {
+            return Ok(());
+        }
+        let mut prepared =
+            PreparedMatchTick::new(book_snap, self.cfg.match_config.clone(), now_slot);
 
-            let mut output = match matcher_run_batch(
-                &book_snap,
-                &oracle,
-                &self.cfg.match_config,
-                now_slot,
-                start_match_id,
-                max_per_batch,
-                // single_fill_per_order: each order fills at most once per
-                // batch. A confirmed partial fill rotates the resting order to
-                // its atomically relocked continuation before it can re-match.
-                true,
-            ) {
+        for page in 0..MAX_PAGES_PER_TICK {
+            let mut output = match prepared.next_page(&oracle, next_match_id, max_per_batch) {
                 Ok(out) => out,
                 Err(e) => {
                     // Production behaviour: log + stop paging — one bad
@@ -719,7 +708,7 @@ impl MatcherDriver {
                     // check; for now this is the catch-all.
                     tracing::warn!(
                         error = %e,
-                        orders_in_snapshot = book_snap.orders.len(),
+                        orders_in_snapshot = prepared.snapshot_len(),
                         page,
                         "matcher run_batch failed; ending tick"
                     );
@@ -764,6 +753,7 @@ impl MatcherDriver {
                     .next_match_id
                     .saturating_add(output.matches.len() as u64);
             }
+            next_match_id = next_match_id.saturating_add(output.matches.len() as u64);
 
             if output.matches.is_empty() {
                 // Book no longer crosses (circuit breaker, or no eligible

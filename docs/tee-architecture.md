@@ -378,7 +378,10 @@ Per D5: **hot order book, batched clearing.** The book is updated
 the moment any order arrives over WS; matching ticks fire every
 `BATCH_MS` (default 2 s, configurable per market) and run a
 uniform-clearing-price auction over whatever's in the book at the
-tick instant.
+tick instant. The tick freezes that one snapshot: bids/asks are sorted and
+aggregated by price once, and every ≤16-match settlement page reuses the
+ordered snapshots plus suffix-demand/prefix-supply level curves. Orders that
+arrive while a tick is paging wait for the next tick.
 
 #### Who triggers a batch (conceptual shift vs v3.5)
 
@@ -419,17 +422,26 @@ loop {
         // Sweep expired orders into a "cancelled" event stream.
         market.book().write().await.sweep_expired(now);
 
-        // Run uniform-clearing-price matching.
-        let result = darkpool_matcher::run_batch(
-            &market.book().read().await,
-            &oracle.pyth_twap(market).await,
-            market.config(),
+        // Freeze and prepare once; page the remaining price levels without
+        // cloning or sorting the full book again.
+        let snapshot = market.book().read().await.snapshot();
+        let mut tick = darkpool_matcher::PreparedMatchTick::new(
+            snapshot,
+            market.config().clone(),
             now,
         );
-
-        if !result.matches.is_empty() {
-            // Hand off to the settle pipeline. Async; the matcher
-            // continues immediately to the next interval.
+        let mut next_match_id = market.next_match_id();
+        for _ in 0..MAX_PAGES_PER_TICK {
+            let result = tick.next_page(
+                &oracle.pyth_twap(market).await,
+                next_match_id,
+                PRODUCTION_BATCH_N,
+            )?;
+            if result.matches.is_empty() {
+                break;
+            }
+            next_match_id += result.matches.len() as u64;
+            market.book().write().await.reserve(&result.matches)?;
             settle_scheduler.enqueue(market.id(), result).await;
         }
     }
@@ -656,7 +668,8 @@ the result for the matching tick to consume.
 │  if (now_slot − oracle.publish_slot) > MAX_STALE:    │
 │      tracing::warn!("oracle stale, skipping tick");  │
 │      continue                                         │
-│  darkpool_matcher::run_batch(book, oracle, ...)      │
+│  PreparedMatchTick::new(book_snapshot, config, slot) │
+│  → reuse ordered levels for every ≤16-match page     │
 └──────────────────────────────────────────────────────┘
 ```
 

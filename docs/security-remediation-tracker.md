@@ -36,7 +36,7 @@ runbooks have landed.
 |---|---|---|---|---|---|
 | P-01 | Perf | Vault + SDK + TEE | `remediation/vault-lifecycle` | Batch marker is read-only in every Tx D builder and live Tx D; distinct-shard Tx Ds share no writable key | Closed |
 | P-02 | Perf | TEE | `remediation/settlement-efficiency` | Build the N=16 tree once and extract every path; hash-count regression/benchmark | Closed |
-| P-03 | Perf | Matcher | `remediation/matcher-performance` | Price-level aggregates and reusable demand curves preserve FIFO, tie-breaking, IOC/FOK/AON under differential properties | Open |
+| P-03 | Perf | Matcher | `remediation/matcher-performance` | Price-level aggregates and reusable demand curves preserve FIFO, tie-breaking, IOC/FOK/AON under differential properties | Closed |
 | P-04 | Perf | TEE RPC | `remediation/settlement-efficiency` | Poll all pending signatures in one RPC request; remove confirmed entries; rebroadcast only overdue transactions | Closed |
 
 ## Residual findings
@@ -71,7 +71,7 @@ plan, not additional audit finding IDs.
 | ID | Owner | Planned remediation slice | Required evidence | Status |
 |---|---|---|---|---|
 | DR-01 | SDK + TEE + indexer | `remediation/durable-recovery` | The unchanged 128-byte field encrypts two u64s per side; seed + finalized chain reconstructs deposit, trade, change/continuation, and merge openings with commitment and leaf-position verification; exact-fill unit coverage plus a live partial-settle recovery drill | Closed |
-| PERF-INV-01 | TEE + Operations | Phala host diagnostics follow-up | Images 58/59 pin the anomaly: image 59 measured `witness_ms=1070`, `prove_step_ms=12854`, aggregate `prove_ms=13977`, and 1.78–2.54-second auth; Phala SSH now reaches the host but rejects the key, so obtain working host/container access and capture pre/post cgroup throttling, cpuset/affinity, CPU model/frequency, and OpenMP placement before release certification | Open |
+| PERF-INV-01 | TEE + Operations | Phala host diagnostics follow-up | Images 58/59/61 pin the anomaly: image 61 measured native witness at 1,066–1,315 ms, rapidsnark at 10,478–11,184 ms, and 1.79–2.08-second auth; Phala SSH reaches the host but rejects the key, so obtain working host/container access and capture pre/post cgroup throttling, cpuset/affinity, CPU model/frequency, and OpenMP placement before release certification | Open |
 
 ## Pull request evidence template
 
@@ -1070,6 +1070,84 @@ Every remediation PR must record:
   devnet program state are invalidated, but in-flight client lifecycle state
   should be reconciled from chain. Rollback reopens N-02 and again permits
   optimistic fills/book mutation before Tx D finality.
+
+### `remediation/matcher-performance` — P-03
+
+- **Status.** Closed by the image-61 placeholder-mint CVM loadgen after the
+  complete local Rust gate and differential performance suite passed.
+- **Invariant restored.** A matching tick freezes one book snapshot, partitions
+  and sorts it once, and retains exact u128 bid/ask totals by ordered price
+  level. Each settlement page computes its uniform price in one ascending
+  suffix-demand/prefix-supply sweep. Every matched, cancelled, or otherwise
+  touched order becomes inactive and subtracts its original quantity from the
+  reusable levels before the next page. Per-page price recomputation, FIFO,
+  lowest-price ties, zero-limit market asks, IOC/FOK/min-fill behavior,
+  single-fill-per-order, match IDs, lifecycle updates, and inclusion-root order
+  remain byte-identical. New orders arriving mid-page enter the next tick's
+  deterministic snapshot.
+- **Wire/circuit impact.** No API, order canonical, Borsh output, settlement
+  payload, instruction accounts/data, note/root construction, circuit, zkey,
+  VK, N=16 fixture, or vault program change. Existing notes, roots, signed
+  orders, and proofs remain compatible. The CPU image pin advances from
+  `tee-v3-hardening-60` to `tee-v3-hardening-61` so a live loadgen cannot reuse
+  the old matcher binary.
+- **Local evidence.** A 256-case property compares the level sweep against an
+  independent copy of the removed O(prices × orders) algorithm, including u64
+  saturation, inactive orders, zero prices, and lowest-price ties. A separate
+  192-case property compares every page's complete Borsh bytes against repeated
+  legacy `run_batch_capped` calls over randomized sides, order types, statuses,
+  limits, quantities, minimum fills, FIFO slots, expiry, and page caps. A
+  deterministic multi-page case and the TEE's 5-fill/2-cap integration pin
+  paging and finality reservations. On the local release build, the exact
+  clearing hotspot measured 69.927 ms versus 0.997 ms for 80,000 orders across
+  512 levels (70.17×); the portable operation-count regression pins more than
+  three orders of magnitude fewer visits. A 149-page cryptography-inclusive
+  run remained byte-identical and measured 850.224 ms versus 760.322 ms
+  (1.12×), with Poseidon output construction dominating the remainder.
+  `cargo fmt --all -- --check`, workspace clippy with warnings denied, and
+  `cargo test --workspace` pass. The first sandboxed workspace run's localhost
+  mock-RPC tests failed with `Operation not permitted`; the permitted rerun
+  passed all 259 TEE library tests, every TEE integration target, matcher/loadgen
+  coverage, and all vault litesvm/proof tests. SBF and TypeScript gates are not
+  rerun because this slice changes no program, circuit, transaction builder, or
+  TypeScript source.
+- **Devnet/CVM evidence.** GitHub image run `29474020305` built commit
+  `663f5f170e3fac7f21744d3e2ca86c829a94fb7e`; its functional image job passed
+  in 4m57s and the anonymous GHCR manifest probe returned HTTP 200 for
+  `tee-v3-hardening-61`. GitHub also emitted the known exhausted-artifact-quota
+  annotation, which did not fail or invalidate the image job. A short billable
+  run on CVM `app_634b2ab4c250466311f0cf09f772b6fd60b5be11` cold-booted that
+  exact image with instance
+  `f5cd2f294d1127d241d18e44dbb76b6910aa2a54`, compose hash
+  `dfccd5c0ddef2a9f385cfa7b991e4795ab4bdcb5f89a5642eb5e15f25cbca9ba`,
+  one shard, native witness generation, rapidsnark, and the settle pipeline
+  enabled. The authenticated status preflight reported `degraded=false`,
+  `matcher_running=true`, and `settle_enabled=true`.
+
+  The 25-second exact-match loadgen targeted 50 orders/s with 10 traders. It
+  submitted 523 orders: 487 were accepted (93.12%), all 36 rejects were HTTP
+  429 rate limits, and there were no 5xx or network errors. The matcher emitted
+  deterministic multi-page ticks throughout the run, including 16/7/1 and
+  16/6/1 page sequences. Submit latency was 316.67 ms p50, 627.71 ms p95,
+  945.66 ms p99, and 1,233.92 ms maximum. Synthetic loadgen notes intentionally
+  carry stub proofs; two attempted settlement batches therefore failed safely
+  at `lock_note` with `InvalidProof (6000)` and moved no assets. This slice
+  performed no program upgrade, tree reset, or real-value deposit.
+
+  The same window retained PERF-INV-01 evidence without closing it: five
+  sequential authenticated canaries measured 1,911, 2,012, 2,078, 1,818, and
+  1,792 ms; two synthetic batch proofs measured native witness generation at
+  1,315/1,066 ms and rapidsnark at 11,184/10,478 ms. Both requested pre/post
+  host snapshots reached the Phala SSH gateway but failed with
+  `Permission denied (publickey)`, so `cpu.max`, `cpu.stat`, cpuset/affinity,
+  CPU model/frequency, and OpenMP placement remain unavailable. Deploy
+  credentials existed only in process memory and were unset on exit; no env
+  file was written. The guarded cleanup completed, and all three organization
+  CVMs were independently confirmed `stopped` after the run.
+- **Rollback.** Revert this PR and redeploy image 60. No notes, roots, orders,
+  signatures, payloads, proofs, accounts, or devnet program state are
+  invalidated. Rollback reopens P-03 and restores repeated full-book
+  clone/partition/sort plus quadratic clearing scans across matcher pages.
 
 ## Mainnet release gates
 

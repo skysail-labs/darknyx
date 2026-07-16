@@ -1153,9 +1153,10 @@ session / viewing-key / nonce validation).
 The matcher interval driver (`crates/nyx-tee/src/matcher/interval.rs`) ticks
 on a cadence (`BATCH_MS`). Each tick, over the in-memory book:
 
-1. Sweeps expired orders and snapshots the book.
-2. Runs `darkpool_matcher::run_batch_capped`: sort bids desc / asks asc, find
-   the uniform clearing price maximising matched volume, FIFO tie-break.
+1. Sweeps expired orders and freezes one book snapshot for the complete tick.
+2. Builds `darkpool_matcher::PreparedMatchTick` once: sort bids desc / asks
+   asc, aggregate quantities by price, then find each page's uniform clearing
+   price with a suffix-demand/prefix-supply level sweep and FIFO tie-break.
 3. **Circuit breaker**: skip the batch if the clearing price deviates from the
    Pyth TWAP beyond the band.
 4. **Partial-fill continuation**: for a relocking side, derive note_e/f from
@@ -1163,7 +1164,9 @@ on a cadence (`BATCH_MS`). Each tick, over the in-memory book:
    rotated opening, and keep the order live. No anchor or reboot-local counter
    can influence the output.
 5. **Pages** the cleared matches into ≤ N=16 settle batches
-   (`MAX_PAGES_PER_TICK` guard) and enqueues each to the settle scheduler.
+   (`MAX_PAGES_PER_TICK` guard), subtracting every reserved/cancelled order from
+   the reusable level totals before the next page, and enqueues each to the
+   settle scheduler. Orders arriving during paging wait for the next tick.
 
 This is integer arithmetic + Poseidon over the change-note commitments — all
 in enclave memory. The cryptography lands at settle time (Step 7+) when these
