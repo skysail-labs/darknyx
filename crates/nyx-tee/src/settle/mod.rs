@@ -65,7 +65,7 @@ pub use assemble::{
 };
 pub use close_marker::{build_close_marker_ix, CLOSE_MARKER_DISCRIMINATOR};
 pub use ed25519::{build_ed25519_verify_ix, ED25519_PROGRAM_ID};
-pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage};
+pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage, SettlementOutcome};
 pub use lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
 pub use marker_sweep::{spawn_marker_sweeper, MARKER_SWEEP_INTERVAL, MARKER_SWEEP_MAX_PER_TX};
 pub use payload::{MatchResultPayload, CANONICAL_DOMAIN};
@@ -78,12 +78,13 @@ pub use settle_batched::{
 pub use sign::sign_payload;
 pub use submit::{
     confirm_signatures, send_and_confirm_many_with_rebroadcast, submit_ixs,
-    submit_ixs_with_blockhash, ConfirmedTransaction,
+    submit_ixs_with_blockhash, ConfirmedTransaction, TransactionConfirmationOutcome,
 };
 pub use submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockPairOutcome, LockSideInputs};
 pub use verify_match_batch::{
     build_verify_match_batch_ix, VerifyMatchBatchArgs, VERIFY_MATCH_BATCH_DISCRIMINATOR,
 };
 pub use worker::{
-    run_batch_settle, BatchSettleInputs, MatchSettleInputs, SettleWorkerCtx, WorkerError,
+    run_batch_settle, run_batch_settle_streaming, BatchSettleInputs, BatchSettlementReport,
+    MatchSettleInputs, MatchSettlementResult, SettleWorkerCtx, WorkerError,
 };

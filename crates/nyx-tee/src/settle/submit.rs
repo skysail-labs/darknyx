@@ -160,6 +160,43 @@ pub struct ConfirmedTransaction {
     pub rebroadcasts: u32,
 }
 
+/// Per-transaction result from the batched Tx D confirmation state machine.
+///
+/// A rejected transaction has a confirmed on-chain error and is safe to treat
+/// as terminal after the worker reconciles the two consumed-note PDAs. An
+/// ambiguous transaction covers transport/RPC failures, an initial send whose
+/// acceptance is unknown, or a confirmation timeout. The worker must reconcile
+/// those PDAs and may redrive the transaction while its batch marker and input
+/// locks remain valid.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TransactionConfirmationOutcome {
+    Confirmed(ConfirmedTransaction),
+    Rejected {
+        transaction_index: usize,
+        signature: String,
+        reason: String,
+    },
+    Ambiguous {
+        transaction_index: usize,
+        signature: Option<String>,
+        reason: String,
+    },
+}
+
+impl TransactionConfirmationOutcome {
+    pub fn transaction_index(&self) -> usize {
+        match self {
+            Self::Confirmed(tx) => tx.transaction_index,
+            Self::Rejected {
+                transaction_index, ..
+            }
+            | Self::Ambiguous {
+                transaction_index, ..
+            } => *transaction_index,
+        }
+    }
+}
+
 struct PendingTransaction {
     transaction_index: usize,
     tx_b64: String,
@@ -183,61 +220,92 @@ pub async fn send_and_confirm_many_with_rebroadcast(
     timeout: Duration,
     resend_every: Duration,
     send_concurrency: usize,
-) -> Result<Vec<ConfirmedTransaction>, RpcError> {
+) -> Vec<TransactionConfirmationOutcome> {
     if txs.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
     let batch_started_at = Instant::now();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(send_concurrency.max(1)));
     let mut initial_sends = tokio::task::JoinSet::new();
+    let mut outcomes = Vec::with_capacity(txs.len());
     for (transaction_index, tx_b64) in txs {
         let rpc = rpc.clone();
         let semaphore = semaphore.clone();
         initial_sends.spawn(async move {
             let started_at = Instant::now();
-            let _permit = semaphore
-                .acquire_owned()
-                .await
-                .map_err(|e| RpcError::Schema(format!("settle send semaphore closed: {e}")))?;
-            let signature = rpc.send_transaction(&tx_b64).await?;
-            Ok::<PendingTransaction, RpcError>(PendingTransaction {
-                transaction_index,
-                tx_b64,
-                signature,
-                started_at,
-                last_send: Instant::now(),
-                rebroadcasts: 0,
-            })
+            let result = match semaphore.acquire_owned().await {
+                Ok(_permit) => rpc.send_transaction(&tx_b64).await,
+                Err(e) => Err(RpcError::Schema(format!(
+                    "settle send semaphore closed: {e}"
+                ))),
+            };
+            (transaction_index, tx_b64, started_at, result)
         });
     }
 
     let mut pending = Vec::with_capacity(initial_sends.len());
     while let Some(joined) = initial_sends.join_next().await {
-        pending
-            .push(joined.map_err(|e| {
-                RpcError::Schema(format!("settle initial-send task failed: {e}"))
-            })??);
+        match joined {
+            Ok((transaction_index, tx_b64, started_at, Ok(signature))) => {
+                pending.push(PendingTransaction {
+                    transaction_index,
+                    tx_b64,
+                    signature,
+                    started_at,
+                    last_send: Instant::now(),
+                    rebroadcasts: 0,
+                });
+            }
+            Ok((transaction_index, _tx_b64, _started_at, Err(error))) => {
+                outcomes.push(TransactionConfirmationOutcome::Ambiguous {
+                    transaction_index,
+                    signature: None,
+                    reason: format!("initial send outcome unknown: {error}"),
+                });
+            }
+            Err(error) => {
+                // A task panic cannot be attributed to a stable transaction
+                // index. Keep gathering every attributable result; the worker
+                // notices any missing index and marks it ambiguous.
+                tracing::error!(%error, "settle initial-send task failed");
+            }
+        }
     }
     // RPC request order and error indices stay deterministic even though the
     // bounded initial sends can complete in any order.
     pending.sort_unstable_by_key(|tx| tx.transaction_index);
 
-    let mut confirmed = Vec::with_capacity(pending.len());
     let mut poll_interval = Duration::from_millis(250);
     while !pending.is_empty() {
         let signatures: Vec<String> = pending.iter().map(|tx| tx.signature.clone()).collect();
-        let statuses = rpc.get_signature_statuses(&signatures).await?;
+        let statuses = match rpc.get_signature_statuses(&signatures).await {
+            Ok(statuses) => statuses,
+            Err(error) => {
+                for tx in pending.drain(..) {
+                    outcomes.push(TransactionConfirmationOutcome::Ambiguous {
+                        transaction_index: tx.transaction_index,
+                        signature: Some(tx.signature),
+                        reason: format!("signature-status RPC failed: {error}"),
+                    });
+                }
+                break;
+            }
+        };
         let mut still_pending = Vec::with_capacity(pending.len());
 
         for (position, tx) in pending.into_iter().enumerate() {
             let status = statuses.get(position).and_then(Option::as_ref);
             match status {
                 Some(status) if status.err.is_some() => {
-                    return Err(RpcError::Schema(format!(
-                        "settle tx[{}] ({}) reverted: err={:?}",
-                        tx.transaction_index, tx.signature, status.err
-                    )));
+                    outcomes.push(TransactionConfirmationOutcome::Rejected {
+                        transaction_index: tx.transaction_index,
+                        signature: tx.signature.clone(),
+                        reason: format!(
+                            "settle tx[{}] ({}) reverted: err={:?}",
+                            tx.transaction_index, tx.signature, status.err
+                        ),
+                    });
                 }
                 Some(status) if status.confirmed_at_commitment == Some(true) => {
                     if tx.rebroadcasts > 0 {
@@ -249,13 +317,15 @@ pub async fn send_and_confirm_many_with_rebroadcast(
                             "settle tx confirmed after batched rebroadcast(s)"
                         );
                     }
-                    confirmed.push(ConfirmedTransaction {
-                        transaction_index: tx.transaction_index,
-                        signature: tx.signature,
-                        slot: status.slot,
-                        elapsed_ms: tx.started_at.elapsed().as_millis() as u64,
-                        rebroadcasts: tx.rebroadcasts,
-                    });
+                    outcomes.push(TransactionConfirmationOutcome::Confirmed(
+                        ConfirmedTransaction {
+                            transaction_index: tx.transaction_index,
+                            signature: tx.signature,
+                            slot: status.slot,
+                            elapsed_ms: tx.started_at.elapsed().as_millis() as u64,
+                            rebroadcasts: tx.rebroadcasts,
+                        },
+                    ));
                 }
                 _ => still_pending.push(tx),
             }
@@ -266,14 +336,17 @@ pub async fn send_and_confirm_many_with_rebroadcast(
             break;
         }
         if batch_started_at.elapsed() >= timeout {
-            let pending_summary: Vec<_> = pending
-                .iter()
-                .map(|tx| (tx.transaction_index, tx.signature.as_str(), tx.rebroadcasts))
-                .collect();
-            return Err(RpcError::Schema(format!(
-                "{} settle transaction(s) did not confirm within {timeout:?}: {pending_summary:?}",
-                pending.len()
-            )));
+            for tx in pending.drain(..) {
+                outcomes.push(TransactionConfirmationOutcome::Ambiguous {
+                    transaction_index: tx.transaction_index,
+                    signature: Some(tx.signature.clone()),
+                    reason: format!(
+                        "settle tx[{}] ({}) did not confirm within {timeout:?} ({} rebroadcast(s))",
+                        tx.transaction_index, tx.signature, tx.rebroadcasts
+                    ),
+                });
+            }
+            break;
         }
 
         // Mark the resend time before launching so a transient RPC failure
@@ -305,10 +378,14 @@ pub async fn send_and_confirm_many_with_rebroadcast(
             });
         }
         while let Some(joined) = rebroadcasts.join_next().await {
-            let (position, result) = joined
-                .map_err(|e| RpcError::Schema(format!("settle rebroadcast task failed: {e}")))?;
-            if result.is_ok() {
-                pending[position].rebroadcasts += 1;
+            match joined {
+                Ok((position, result)) if result.is_ok() => {
+                    pending[position].rebroadcasts += 1;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "settle rebroadcast task failed");
+                }
             }
         }
 
@@ -316,8 +393,8 @@ pub async fn send_and_confirm_many_with_rebroadcast(
         poll_interval = (poll_interval * 2).min(Duration::from_secs(1));
     }
 
-    confirmed.sort_unstable_by_key(|tx| tx.transaction_index);
-    Ok(confirmed)
+    outcomes.sort_unstable_by_key(TransactionConfirmationOutcome::transaction_index);
+    outcomes
 }
 
 /// Poll `getSignatureStatuses` until every signature in `sigs` is

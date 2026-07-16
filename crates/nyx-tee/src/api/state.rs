@@ -318,6 +318,13 @@ pub struct OrderUpdateMsg {
     /// New collateral-note value after a partial-fill re-lock (partially filled only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_note_amount: Option<u64>,
+    /// Present only for terminal `settlement_failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The earliest slot at which the failed order's locked collateral can be
+    /// used by a fresh signed order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_expiry_slot: Option<u64>,
 }
 
 /// Per-account fill-memo channel depth. A connected-but-slow `fills` subscriber

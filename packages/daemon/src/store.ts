@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS orders (
   merge_in_flight     INTEGER NOT NULL,
   pending_change_notes INTEGER NOT NULL,
   collateral_commitment TEXT,
+  settlement_failure_reason TEXT,
+  settlement_unlock_slot INTEGER,
   created_at          INTEGER NOT NULL,
   updated_at          INTEGER NOT NULL
 );
@@ -74,6 +76,8 @@ interface OrderRow {
   merge_in_flight: number;
   pending_change_notes: number;
   collateral_commitment: string | null;
+  settlement_failure_reason: string | null;
+  settlement_unlock_slot: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -105,6 +109,8 @@ function rowToOrder(r: OrderRow): ManagedOrder {
     mergeInFlight: r.merge_in_flight === 1,
     pendingChangeNotes: r.pending_change_notes,
     collateralCommitment: r.collateral_commitment ?? undefined,
+    settlementFailureReason: r.settlement_failure_reason ?? undefined,
+    settlementUnlockSlot: r.settlement_unlock_slot ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -129,6 +135,25 @@ export class DaemonStore implements NoteStore {
       .all() as unknown as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "consumed_commitment")) {
       this.db.exec("ALTER TABLE notes ADD COLUMN consumed_commitment TEXT");
+    }
+    const orderColumns = this.db
+      .prepare("PRAGMA table_info(orders)")
+      .all() as unknown as Array<{ name: string }>;
+    if (
+      !orderColumns.some(
+        (column) => column.name === "settlement_failure_reason",
+      )
+    ) {
+      this.db.exec(
+        "ALTER TABLE orders ADD COLUMN settlement_failure_reason TEXT",
+      );
+    }
+    if (
+      !orderColumns.some((column) => column.name === "settlement_unlock_slot")
+    ) {
+      this.db.exec(
+        "ALTER TABLE orders ADD COLUMN settlement_unlock_slot INTEGER",
+      );
     }
   }
 
@@ -196,8 +221,9 @@ export class DaemonStore implements NoteStore {
         `INSERT INTO orders
            (order_id, seed_index, side, price_raw, size_raw, phase,
             merge_in_flight, pending_change_notes, collateral_commitment,
-            created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            settlement_failure_reason, settlement_unlock_slot, created_at,
+            updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(order_id) DO UPDATE SET
            seed_index = excluded.seed_index,
            side = excluded.side,
@@ -207,6 +233,8 @@ export class DaemonStore implements NoteStore {
            merge_in_flight = excluded.merge_in_flight,
            pending_change_notes = excluded.pending_change_notes,
            collateral_commitment = excluded.collateral_commitment,
+           settlement_failure_reason = excluded.settlement_failure_reason,
+           settlement_unlock_slot = excluded.settlement_unlock_slot,
            updated_at = excluded.updated_at`,
       )
       .run(
@@ -219,6 +247,8 @@ export class DaemonStore implements NoteStore {
         o.mergeInFlight ? 1 : 0,
         o.pendingChangeNotes,
         o.collateralCommitment ?? null,
+        o.settlementFailureReason ?? null,
+        o.settlementUnlockSlot ?? null,
         o.createdAt,
         o.updatedAt,
       );
@@ -243,7 +273,7 @@ export class DaemonStore implements NoteStore {
     const rows = this.db
       .prepare(
         `SELECT * FROM orders
-          WHERE phase NOT IN ('cancelled', 'rejected', 'closed')
+          WHERE phase NOT IN ('cancelled', 'rejected', 'settlement_failed', 'closed')
           ORDER BY created_at ASC`,
       )
       .all() as unknown as OrderRow[];

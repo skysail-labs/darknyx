@@ -2,16 +2,18 @@
  * OrdersListener — the daemon's `/v1/stream` orders channel (order PHASE).
  *
  * Wraps the SDK `subscribeOrderUpdates`: the TEE emits one `OrderUpdate` per
- * state transition of this account's orders (`partially_filled` / `fully_filled`
- * / `cancelled` / `expired`). This listener maps each to the lifecycle phase
+ * state transition of this account's orders (`pending_settlement` /
+ * `partially_filled` / `fully_filled` / `settlement_failed` / `cancelled` /
+ * `expired`). This listener maps each to the lifecycle phase
  * event that drives the state machine's terminal transitions + the
  * merge-on-quiescence sweep:
  *
- *   partially_filled → `accepted`  (idempotent: only advances a still-`pending`
- *                                   order to `open`; otherwise a no-op — the
- *                                   anchor/residual bookkeeping comes from
- *                                   the `fills` channel, NOT from here)
+ *   pending_settlement → `settlement-pending` (reserve; no fill yet)
+ *   partially_filled → `partial-fill-confirmed` (advances the reserved order
+ *                                   back to `open`; residual-note bookkeeping
+ *                                   comes from the `fills` channel, NOT here)
  *   fully_filled     → `filled`
+ *   settlement_failed → `settlement-failed` (terminal; explicit resubmit)
  *   cancelled        → `cancelled`
  *   expired          → `expired`
  *
@@ -61,12 +63,21 @@ export interface OrdersListenerOptions {
  *  it carries no phase transition the reducer needs. */
 export function updateToEvent(u: OrderUpdate): LifecycleEvent | null {
   switch (u.kind) {
+    case "pending_settlement":
+      return {
+        type: "settlement-pending",
+        lockExpirySlot: u.lock_expiry_slot ?? 0,
+      };
     case "partially_filled":
-      // Confirms the order is live. `accepted` only advances a pending order;
-      // it's a no-op once open, so this is safe to send on every partial.
-      return { type: "accepted", arrivalSlot: 0 };
+      return { type: "partial-fill-confirmed" };
     case "fully_filled":
       return { type: "filled" };
+    case "settlement_failed":
+      return {
+        type: "settlement-failed",
+        reason: u.reason ?? "settlement failed",
+        lockExpirySlot: u.lock_expiry_slot ?? 0,
+      };
     case "cancelled":
       return { type: "cancelled" };
     case "expired":

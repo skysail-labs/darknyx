@@ -360,13 +360,27 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       `  · submitted ${orders.length} orders in ${Date.now() - submitStart}ms — ${accepted} accepted (2xx)`,
     );
     expect(accepted, "some orders rejected").toBe(orders.length);
+    const firstOrderId = (orders[0] as { order_id: string }).order_id;
 
-    // Each match appends ≥ note_c + note_d (2 leaves); wait for all M.
-    const wantLeaves = depositCount + 2 * MATCHES;
+    // This fixture fully fills both inputs at a positive 30-bps fee. Every
+    // confirmed match therefore appends note_c + note_d, one buyer quote
+    // change, and the base + quote fee notes (5 leaves). Waiting for the old
+    // two-leaf lower bound could observe an early sibling and query a later
+    // order before its independently-driven Tx D reached finality.
+    const outputLeavesPerMatch = 5;
+    const wantLeaves = depositCount + outputLeavesPerMatch * MATCHES;
     const settleStart = Date.now();
     let finalCount = depositCount;
+    let sawPendingSettlement = false;
     const deadline = Date.now() + SETTLE_TIMEOUT_MS;
     while (Date.now() < deadline) {
+      const orderStatus = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (orderStatus.status === 200) {
+        const body = (await orderStatus.json()) as { status?: string };
+        sawPendingSettlement ||= body.status === "pending_settlement";
+      }
       finalCount = await harness.leafCount();
       if (finalCount >= wantLeaves) break;
       await new Promise((r) => setTimeout(r, 2000));
@@ -374,7 +388,7 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     const settleWallMs = Date.now() - settleStart;
     console.log(
       `  · leaf_count ${depositCount} → ${finalCount} (wanted ≥${wantLeaves}) in ${settleWallMs}ms wall ` +
-        `→ ~${((finalCount - depositCount) / 2 / (settleWallMs / 1000)).toFixed(2)} matches/s end-to-end`,
+        `→ ~${((finalCount - depositCount) / outputLeavesPerMatch / (settleWallMs / 1000)).toFixed(2)} matches/s end-to-end`,
     );
     console.log(
       `  · READ PER-Tx-D + per-stage timing: phala cvms logs <cvm> | grep -E "settle Tx D confirmed|settle pipeline timing"`,
@@ -383,5 +397,16 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       finalCount,
       "not all matches settled — check CVM logs for the failing stage",
     ).toBeGreaterThanOrEqual(wantLeaves);
+    expect(
+      sawPendingSettlement,
+      "matched order never exposed the finality-gated pending state",
+    ).toBe(true);
+    const finalizedOrder = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(
+      finalizedOrder.status,
+      "confirmed exact-fill order should leave the live book",
+    ).toBe(404);
   }, 600_000);
 });

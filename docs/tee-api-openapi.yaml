@@ -546,10 +546,13 @@ components:
         order_type: { type: string, enum: [limit, ioc, fok] }
         status:
           type: string
-          enum: [empty, pending, matched, expired, cancelled]
+          enum: [empty, pending, pending_settlement, expired, cancelled]
           description: |
-            `pending` (resting), `matched` (settling/settled), `expired`,
-            `cancelled`, or `empty` (slot reclaimed).
+            `pending` (resting), `pending_settlement` (reserved while the TEE
+            reconciles Tx D), `expired`, `cancelled`, or `empty` (slot
+            reclaimed). Definitive failures leave the order lookup surface and
+            emit terminal `settlement_failed` on the authenticated orders
+            channel with a reason and lock expiry slot.
         amount:
           type: integer
           format: uint64
@@ -749,41 +752,46 @@ components:
 
     SettlementStatus:
       type: object
-      required: [batch_id, status, merkle_root]
+      required: [batch_id, jobs]
       properties:
-        batch_id: { type: string }
-        status:
-          type: string
-          enum:
-            - pending_proof
-            - pending_verify_match_batch
-            - pending_settles
-            - pending_close
-            - settled
-            - failed
-        merkle_root: { type: string }
-        verify_match_batch_signature:
-          type: string
-          nullable: true
-          description: L1 tx signature for the batch's verify tx.
-        settle_signatures:
+        batch_id: { type: integer, format: uint64 }
+        jobs:
           type: array
           description: |
-            Per-match settle tx signatures, in match-index order.
-          items: { type: string }
-        close_signature:
-          type: string
-          nullable: true
-        settled_at:
-          type: string
-          format: date-time
-          nullable: true
-        error:
-          type: string
-          nullable: true
-          description: |
-            Present iff status == failed. Human-readable failure
-            reason + correlation id for ops debugging.
+            Per-match status in match-index order. Confirmed siblings can reach
+            `done` while an ambiguous sibling remains `settling` and redrives.
+          items:
+            type: object
+            required: [batch_id, match_idx, stage, outcome, created_at_ms, last_transition_at_ms]
+            properties:
+              batch_id: { type: integer, format: uint64 }
+              match_idx: { type: integer, format: uint8 }
+              stage:
+                type: string
+                enum: [queued, locking_notes, proving, verifying, settling, closing, done, failed]
+              outcome:
+                type: object
+                required: [kind]
+                description: |
+                  `ambiguous` is non-terminal and remains reserved while the TEE
+                  reconciles both consumed-note PDAs and redrives within the
+                  marker/lock window. `rejected` is terminal.
+                properties:
+                  kind: { type: string, enum: [pending, confirmed, rejected, ambiguous] }
+                  signature: { type: string }
+                  slot: { type: integer, format: uint64 }
+                  reconciled_from_consumed_pdas: { type: boolean }
+                  reason: { type: string }
+              failed_reason: { type: string }
+              created_at_ms: { type: integer, format: uint64 }
+              last_transition_at_ms: { type: integer, format: uint64 }
+              lock_buyer_sig: { type: string }
+              lock_seller_sig: { type: string }
+              verify_sig: { type: string }
+              settle_sig: { type: string }
+              close_sig:
+                type: string
+                description: Normally absent because marker close is asynchronous.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # REST endpoints
@@ -1461,10 +1469,8 @@ paths:
     get:
       tags: [settlement]
       summary: |
-        Batch settlement status. Translates a TEE-internal batch
-        ID to the on-chain tx signatures of the
-        verify_match_batch + tee_forced_settle_batched +
-        close_batch_validity_marker chain.
+        Per-match settlement outcomes and on-chain signatures for one
+        TEE-internal batch ID.
       security: [{ BearerAuth: [] }]
       parameters:
         - name: batch_id
@@ -1662,8 +1668,11 @@ x-websocket:
     orders:
       description: |
         User's own order state. Server sends snapshot on
-        subscribe, then incremental updates (`event: placed` /
-        `partial` / `filled` / `cancelled` / `expired`).
+        subscribe, then incremental updates. A matched order first emits
+        `pending_settlement` without changing quantities. Its own confirmed Tx D
+        then emits `partially_filled` or `fully_filled`; a definitive failure
+        emits terminal `settlement_failed` with `reason` and
+        `lock_expiry_slot`. Failed orders are never auto-rebooked.
 
     fills:
       description: |
@@ -1746,8 +1755,9 @@ x-implementation-notes:
     that match in that batch reference it via `Order.batch_id`.
     Clients can correlate "this fill" → "this batch" → "this
     on-chain tx_signature" via /settlement/status. The
-    `channel: settlement` WS event fires once per batch as the
-    on-chain settle chain (verify → settles → close) finalizes.
+    The authenticated `orders` channel is the user-facing finality signal:
+    each match moves through `pending_settlement` to either its confirmed fill
+    update or terminal `settlement_failed` independently of its siblings.
 
   tree_consistency: |
     `/tree/root?tree_id=` returns the TEE's current view of that

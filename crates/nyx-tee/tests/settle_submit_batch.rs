@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
-use nyx_tee::settle::send_and_confirm_many_with_rebroadcast;
+use nyx_tee::settle::{send_and_confirm_many_with_rebroadcast, TransactionConfirmationOutcome};
 use nyx_tee::solana_rpc::SolanaRpcClient;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -24,6 +24,7 @@ struct MockState {
     appearances: HashMap<String, usize>,
     status_round: usize,
     revert_signature: Option<String>,
+    never_confirm_signature: Option<String>,
 }
 
 type Mock = Arc<Mutex<MockState>>;
@@ -84,6 +85,10 @@ async fn handle_rpc(
                         "err": { "InstructionError": [0, "Custom"] },
                         "slot": 999,
                     }));
+                    continue;
+                }
+                if state.never_confirm_signature.as_deref() == Some(signature.as_str()) {
+                    statuses.push(Value::Null);
                     continue;
                 }
                 let confirm_after = match signature.as_str() {
@@ -153,18 +158,20 @@ async fn polls_one_shrinking_pending_set_and_rebroadcasts_only_overdue() {
         Duration::ZERO,
         2,
     )
-    .await
-    .unwrap();
+    .await;
 
     assert_eq!(
         outcomes
             .iter()
-            .map(|outcome| (
-                outcome.transaction_index,
-                outcome.signature.as_str(),
-                outcome.slot,
-                outcome.rebroadcasts,
-            ))
+            .map(|outcome| match outcome {
+                TransactionConfirmationOutcome::Confirmed(outcome) => (
+                    outcome.transaction_index,
+                    outcome.signature.as_str(),
+                    outcome.slot,
+                    outcome.rebroadcasts,
+                ),
+                other => panic!("unexpected outcome: {other:?}"),
+            })
             .collect::<Vec<_>>(),
         vec![
             (0, "sig-a", Some(101), 0),
@@ -219,19 +226,59 @@ async fn polls_one_shrinking_pending_set_and_rebroadcasts_only_overdue() {
 async fn revert_reports_the_original_transaction_index() {
     let (endpoint, _state) = spawn_mock(Some("sig-b")).await;
     let client = SolanaRpcClient::new(endpoint).unwrap();
-    let error = send_and_confirm_many_with_rebroadcast(
+    let outcomes = send_and_confirm_many_with_rebroadcast(
         &client,
         vec![(3, "tx-a".to_string()), (7, "tx-b".to_string())],
         Duration::from_secs(2),
         Duration::from_secs(1),
         2,
     )
-    .await
-    .unwrap_err();
+    .await;
 
-    let message = error.to_string();
+    assert!(matches!(
+        &outcomes[0],
+        TransactionConfirmationOutcome::Confirmed(outcome)
+            if outcome.transaction_index == 3 && outcome.signature == "sig-a"
+    ));
+    let message = match &outcomes[1] {
+        TransactionConfirmationOutcome::Rejected {
+            transaction_index,
+            reason,
+            ..
+        } if *transaction_index == 7 => reason,
+        other => panic!("unexpected outcome: {other:?}"),
+    };
     assert!(
         message.contains("settle tx[7] (sig-b) reverted"),
         "{message}"
     );
+}
+
+#[tokio::test]
+async fn timeout_is_ambiguous_and_does_not_discard_confirmed_siblings() {
+    let (endpoint, state) = spawn_mock(None).await;
+    state.lock().await.never_confirm_signature = Some("sig-c".to_string());
+    let client = SolanaRpcClient::new(endpoint).unwrap();
+    let outcomes = send_and_confirm_many_with_rebroadcast(
+        &client,
+        vec![(0, "tx-a".to_string()), (2, "tx-c".to_string())],
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+        2,
+    )
+    .await;
+
+    assert!(matches!(
+        &outcomes[0],
+        TransactionConfirmationOutcome::Confirmed(outcome)
+            if outcome.transaction_index == 0
+    ));
+    assert!(matches!(
+        &outcomes[1],
+        TransactionConfirmationOutcome::Ambiguous {
+            transaction_index: 2,
+            signature: Some(signature),
+            reason,
+        } if signature == "sig-c" && reason.contains("did not confirm")
+    ));
 }

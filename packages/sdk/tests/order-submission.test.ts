@@ -21,12 +21,33 @@ import { NyxApiError } from "../src/orders/order-client.js";
 import type { PlaceOrderRequest } from "../src/orders/build-order.js";
 import { limitPolicy } from "../src/orders/builders.js";
 import { OrderSide } from "../src/orders/canonical.js";
+import { isTerminalUpdate } from "../src/orders/orders-ws-client.js";
 import { noteCommitmentV2, ownerCommitment } from "../src/utxo/note.js";
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 const flushMicrotasks = async () => {
   for (let i = 0; i < 4; i += 1) await Promise.resolve();
 };
+
+describe("order settlement lifecycle", () => {
+  it("keeps pending_settlement live and makes settlement_failed terminal", () => {
+    expect(
+      isTerminalUpdate({
+        order_id: "01".repeat(16),
+        kind: "pending_settlement",
+        lock_expiry_slot: 500,
+      }),
+    ).toBe(false);
+    expect(
+      isTerminalUpdate({
+        order_id: "01".repeat(16),
+        kind: "settlement_failed",
+        reason: "reverted",
+        lock_expiry_slot: 500,
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("inclusion proof fetch", () => {
   it("parses the witness and derives path bits from the leaf index", async () => {

@@ -39,6 +39,10 @@ pub enum BookError {
     #[error("trading_key mismatch on cancel: order owned by {} but caller is {}",
             hex::encode(.0), hex::encode(.1))]
     NotOwner(TradingKey, TradingKey),
+    #[error("order {} is pending settlement and cannot be cancelled or modified", hex::encode(.0))]
+    PendingSettlement(OrderId),
+    #[error("order {} is not resting and cannot be reserved", hex::encode(.0))]
+    NotResting(OrderId),
 }
 
 #[derive(Default, Debug)]
@@ -134,9 +138,46 @@ impl OrderBook {
         if order.trading_key != trading_key {
             return Err(BookError::NotOwner(order.trading_key, trading_key));
         }
+        if order.status == darkpool_matcher::book::OrderStatus::Matched {
+            return Err(BookError::PendingSettlement(order_id));
+        }
         Ok(self
             .remove_internal(&order_id)
             .expect("by_id said it exists"))
+    }
+
+    /// Atomically reserve every order participating in a settlement batch.
+    /// Reserved orders remain queryable but the pure matcher skips them because
+    /// their status is `Matched`. No quantities or collateral pointers change
+    /// until their individual Tx D outcome is confirmed.
+    pub fn reserve_for_settlement(&mut self, order_ids: &[OrderId]) -> Result<(), BookError> {
+        for order_id in order_ids {
+            let order = self
+                .by_id
+                .get(order_id)
+                .ok_or(BookError::NotFound(*order_id))?;
+            if order.status != darkpool_matcher::book::OrderStatus::Pending {
+                return Err(BookError::NotResting(*order_id));
+            }
+        }
+        for order_id in order_ids {
+            if let Some(order) = self.by_id.get_mut(order_id) {
+                order.status = darkpool_matcher::book::OrderStatus::Matched;
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove a definitively failed settlement from the book without applying
+    /// its proposed fill. The opening reservation is managed separately and is
+    /// retained until the input lock expires.
+    pub fn remove_pending_settlement(&mut self, order_id: &OrderId) -> Option<Order> {
+        match self.by_id.get(order_id) {
+            Some(order) if order.status == darkpool_matcher::book::OrderStatus::Matched => {
+                self.remove_internal(order_id)
+            }
+            _ => None,
+        }
     }
 
     /// Apply the matcher's emitted updates to the book. Mirrors
@@ -158,17 +199,16 @@ impl OrderBook {
                     filled_quantity,
                 } => {
                     // The residual relocks to a change note whose inner is
-                    // derived from the consumed input inner. The tick has
-                    // already inserted that derived opening; here we only
-                    // rotate the in-book collateral pointer. Price + expiry are unchanged, so the
-                    // price/expiry/trader indices need no re-keying — only
-                    // the `by_id` entry's fields rotate.
+                    // derived from the consumed input inner. The confirmed-
+                    // settlement commit has inserted that opening; here we
+                    // rotate the in-book collateral pointer. Price + expiry
+                    // are unchanged, so only the `by_id` fields rotate.
                     if let Some(order) = self.by_id.get_mut(&upd.order_id) {
                         order.amount = *new_amount;
                         order.collateral_note = *new_collateral_note;
                         order.note_amount = *new_note_amount;
                         order.filled_quantity = *filled_quantity;
-                        // Stays Pending — it remains a live, matchable order.
+                        order.status = darkpool_matcher::book::OrderStatus::Pending;
                     }
                 }
             }
@@ -190,10 +230,30 @@ impl OrderBook {
                 }
             }
         }
+        let mut retained_pending_settlement = Vec::new();
         for id in &expired {
-            let _ = self.remove_internal(id);
+            if self
+                .by_id
+                .get(id)
+                .is_some_and(|order| order.status == darkpool_matcher::book::OrderStatus::Matched)
+            {
+                retained_pending_settlement.push(*id);
+            } else {
+                let _ = self.remove_internal(id);
+            }
+        }
+        for id in &retained_pending_settlement {
+            if let Some(order) = self.by_id.get(id) {
+                self.by_expiry
+                    .entry(order.expiry_slot)
+                    .or_default()
+                    .insert(*id);
+            }
         }
         expired
+            .into_iter()
+            .filter(|id| !retained_pending_settlement.contains(id))
+            .collect()
     }
 
     /// Snapshot the entire book as a matcher input. Order in the
@@ -207,7 +267,9 @@ impl OrderBook {
         for (_price, q) in self.bids.iter().rev() {
             for id in &q.ids {
                 if let Some(o) = self.by_id.get(id) {
-                    orders.push(o.clone());
+                    if o.status == darkpool_matcher::book::OrderStatus::Pending {
+                        orders.push(o.clone());
+                    }
                 }
             }
         }
@@ -215,7 +277,9 @@ impl OrderBook {
         for (_price, q) in self.asks.iter() {
             for id in &q.ids {
                 if let Some(o) = self.by_id.get(id) {
-                    orders.push(o.clone());
+                    if o.status == darkpool_matcher::book::OrderStatus::Pending {
+                        orders.push(o.clone());
+                    }
                 }
             }
         }
@@ -412,5 +476,38 @@ mod tests {
             kind: OrderUpdateKind::FullyFilled { filled_quantity: 5 },
         }]);
         assert!(book.is_empty());
+    }
+
+    #[test]
+    fn settlement_reservation_is_atomic_skipped_and_not_cancellable() {
+        let mut book = OrderBook::new();
+        let a = mk_order(OrderSide::Bid, 1, 100, 5);
+        let b = mk_order(OrderSide::Ask, 2, 100, 5);
+        book.submit(a.clone()).unwrap();
+        book.submit(b.clone()).unwrap();
+        book.reserve_for_settlement(&[a.order_id, b.order_id])
+            .unwrap();
+
+        assert!(book.snapshot().orders.is_empty());
+        assert_eq!(book.get(&a.order_id).unwrap().amount, 5);
+        assert_eq!(
+            book.cancel(a.trading_key, a.order_id).unwrap_err(),
+            BookError::PendingSettlement(a.order_id)
+        );
+
+        let missing = [0xFE; 16];
+        let mut second = OrderBook::new();
+        second.submit(a.clone()).unwrap();
+        assert_eq!(
+            second
+                .reserve_for_settlement(&[a.order_id, missing])
+                .unwrap_err(),
+            BookError::NotFound(missing)
+        );
+        assert_eq!(
+            second.get(&a.order_id).unwrap().status,
+            darkpool_matcher::book::OrderStatus::Pending,
+            "failed reservation partially mutated the book"
+        );
     }
 }

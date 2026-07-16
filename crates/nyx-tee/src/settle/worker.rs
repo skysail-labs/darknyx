@@ -44,7 +44,7 @@ use super::alt::{
 };
 use super::alt_pool::{AltPlan, AltPool};
 use super::ed25519::build_ed25519_verify_ix;
-use super::job::{SettleJobId, SettleJobStage};
+use super::job::{SettleJobId, SettleJobStage, SettlementOutcome};
 use super::payload::MatchResultPayload;
 use super::pipeline::{budget_ixs, build_settle_v0_tx_b64, VERIFY_COMPUTE_UNIT_LIMIT};
 use super::scheduler::SettleSchedulerState;
@@ -53,10 +53,12 @@ use super::sign::sign_payload;
 use super::submit::{
     build_tx_b64, confirm_signatures, send_and_confirm_many_with_rebroadcast,
     send_and_confirm_with_rebroadcast, submit_ixs, submit_ixs_with_blockhash,
+    TransactionConfirmationOutcome,
 };
 use super::submit_lock::{build_lock_tx_b64, LockSideInputs};
 use super::verify_match_batch::{build_verify_match_batch_ix, VerifyMatchBatchArgs};
 use crate::prover::{build_batch_public_inputs, MatchSlotWitness, Prover};
+use crate::settle::vault::{consumed_note_pda, vault_program_id};
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
 /// Per-match inputs the worker needs to settle one match.
@@ -80,6 +82,19 @@ pub struct BatchSettleInputs {
     /// The padded N-slot witness set fed to the prover. Its leaves
     /// + root drive the per-match Merkle inclusion paths.
     pub witnesses: Vec<MatchSlotWitness>,
+}
+
+/// Final per-match result returned to the scheduler. The scheduler applies the
+/// corresponding order-book mutation independently for every match.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchSettlementResult {
+    pub match_index: usize,
+    pub outcome: SettlementOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchSettlementReport {
+    pub outcomes: Vec<MatchSettlementResult>,
 }
 
 /// Shared context the worker holds across a batch.
@@ -226,9 +241,111 @@ impl SettleWorkerCtx {
                 batch_id,
                 match_idx: idx as u8,
             };
-            st.update(&id, |j| j.fail(reason.clone()));
+            st.update(&id, |j| {
+                if matches!(
+                    j.outcome,
+                    SettlementOutcome::Pending | SettlementOutcome::Ambiguous { .. }
+                ) {
+                    j.fail(reason.clone());
+                }
+            });
         }
     }
+
+    async fn mark_ambiguous(&self, batch_id: u64, match_idx: usize, reason: String) {
+        let id = SettleJobId {
+            batch_id,
+            match_idx: match_idx as u8,
+        };
+        let mut state = self.settle_state.write().await;
+        state.update(&id, |job| {
+            job.outcome = SettlementOutcome::Ambiguous { reason };
+            job.transition(SettleJobStage::Settling);
+        });
+    }
+}
+
+async fn record_final_outcome(
+    ctx: &SettleWorkerCtx,
+    batch_id: u64,
+    match_idx: usize,
+    outcome: SettlementOutcome,
+    results: &mut [Option<SettlementOutcome>],
+    outcome_tx: Option<&mpsc::UnboundedSender<MatchSettlementResult>>,
+) {
+    if results[match_idx].is_some() {
+        return;
+    }
+    let id = SettleJobId {
+        batch_id,
+        match_idx: match_idx as u8,
+    };
+    {
+        let mut state = ctx.settle_state.write().await;
+        state.update(&id, |job| {
+            job.outcome = outcome.clone();
+            match &outcome {
+                SettlementOutcome::Confirmed { signature, .. } => {
+                    job.settle_sig = signature.clone();
+                    job.transition(SettleJobStage::Done);
+                }
+                SettlementOutcome::Rejected { reason } => {
+                    job.transition(SettleJobStage::Failed {
+                        reason: reason.clone(),
+                    });
+                }
+                SettlementOutcome::Ambiguous { .. } | SettlementOutcome::Pending => {
+                    job.transition(SettleJobStage::Settling);
+                }
+            }
+        });
+    }
+    results[match_idx] = Some(outcome.clone());
+    if let Some(tx) = outcome_tx {
+        let _ = tx.send(MatchSettlementResult {
+            match_index: match_idx,
+            outcome,
+        });
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ConsumedPdaState {
+    BothConsumed,
+    NeitherConsumed,
+    Inconsistent,
+}
+
+/// Reconcile a Tx D independently from its RPC signature status. Tx D creates
+/// both commitment-keyed consumed-note PDAs atomically, so both vault-owned
+/// accounts existing is durable proof that the match settled; neither means a
+/// redrive is still safe while the marker/locks are valid. Exactly one can only
+/// be an inconsistent RPC view or external consumption of one input and must
+/// never be guessed into a confirmed result.
+async fn reconcile_consumed_pdas(
+    rpc: &SolanaRpcClient,
+    match_inputs: &MatchSettleInputs,
+) -> Result<ConsumedPdaState, RpcError> {
+    let (buyer, _) = consumed_note_pda(&match_inputs.payload.note_a_commitment);
+    let (seller, _) = consumed_note_pda(&match_inputs.payload.note_b_commitment);
+    let buyer = rpc.get_account_info(&buyer).await?;
+    let seller = rpc.get_account_info(&seller).await?;
+    let vault = vault_program_id();
+    let buyer_consumed = buyer.as_ref().is_some_and(|account| account.owner == vault);
+    let seller_consumed = seller
+        .as_ref()
+        .is_some_and(|account| account.owner == vault);
+    Ok(match (buyer_consumed, seller_consumed) {
+        (true, true) => ConsumedPdaState::BothConsumed,
+        (false, false) => ConsumedPdaState::NeitherConsumed,
+        _ => ConsumedPdaState::Inconsistent,
+    })
+}
+
+fn settlement_deadline(match_inputs: &MatchSettleInputs, marker_expiry_slot: u64) -> u64 {
+    marker_expiry_slot
+        .min(match_inputs.buyer_lock.expiry_slot)
+        .min(match_inputs.seller_lock.expiry_slot)
 }
 
 /// Drive one batch through the full settle pipeline. On any error
@@ -237,14 +354,35 @@ impl SettleWorkerCtx {
 pub async fn run_batch_settle(
     ctx: &SettleWorkerCtx,
     inputs: BatchSettleInputs,
-) -> Result<(), WorkerError> {
+) -> Result<BatchSettlementReport, WorkerError> {
+    run_batch_settle_with_outcomes(ctx, inputs, None).await
+}
+
+/// Drive a batch while publishing each match's final outcome as soon as it is
+/// known. The scheduler uses this stream to commit confirmed siblings without
+/// waiting for an ambiguous match's reconciliation/redrive loop.
+pub async fn run_batch_settle_streaming(
+    ctx: &SettleWorkerCtx,
+    inputs: BatchSettleInputs,
+    outcome_tx: mpsc::UnboundedSender<MatchSettlementResult>,
+) -> Result<BatchSettlementReport, WorkerError> {
+    run_batch_settle_with_outcomes(ctx, inputs, Some(outcome_tx)).await
+}
+
+async fn run_batch_settle_with_outcomes(
+    ctx: &SettleWorkerCtx,
+    inputs: BatchSettleInputs,
+    outcome_tx: Option<mpsc::UnboundedSender<MatchSettlementResult>>,
+) -> Result<BatchSettlementReport, WorkerError> {
     let n = inputs.matches.len();
     if n == 0 {
-        return Ok(());
+        return Ok(BatchSettlementReport {
+            outcomes: Vec::new(),
+        });
     }
     let batch_id = inputs.batch_id;
 
-    let result = run_batch_settle_inner(ctx, &inputs).await;
+    let result = run_batch_settle_inner(ctx, &inputs, outcome_tx.as_ref()).await;
     if let Err(e) = &result {
         ctx.fail_all(batch_id, n, format!("{e}")).await;
     }
@@ -254,7 +392,8 @@ pub async fn run_batch_settle(
 async fn run_batch_settle_inner(
     ctx: &SettleWorkerCtx,
     inputs: &BatchSettleInputs,
-) -> Result<(), WorkerError> {
+    outcome_tx: Option<&mpsc::UnboundedSender<MatchSettlementResult>>,
+) -> Result<BatchSettlementReport, WorkerError> {
     let batch_id = inputs.batch_id;
     let n = inputs.matches.len();
     let tee_pubkey = ctx.tee_pubkey();
@@ -397,13 +536,14 @@ async fn run_batch_settle_inner(
         // settle runway after verify lands.
         const MARKER_EXPIRY_MARGIN_SLOTS: u64 = 250;
         let marker_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
+        let marker_expiry_slot = marker_slot.saturating_add(MARKER_EXPIRY_MARGIN_SLOTS);
         let verify_ix = build_verify_match_batch_ix(
             &tee_pubkey,
             &inputs.witnesses[0].base_mint,
             &inputs.witnesses[0].quote_mint,
             VerifyMatchBatchArgs {
                 merkle_root,
-                expiry_slot: marker_slot.saturating_add(MARKER_EXPIRY_MARGIN_SLOTS),
+                expiry_slot: marker_expiry_slot,
                 proof: proof_bytes,
             },
         );
@@ -426,7 +566,11 @@ async fn run_batch_settle_inner(
                 st.update(&id, |j| j.verify_sig = Some(verify_sig.clone()));
             }
         }
-        Ok::<(u64, u64), WorkerError>((prove_ms, t.elapsed().as_millis() as u64))
+        Ok::<(u64, u64, u64), WorkerError>((
+            prove_ms,
+            t.elapsed().as_millis() as u64,
+            marker_expiry_slot,
+        ))
     };
 
     // Branch C — per-batch ALT create/extend (Tx C) + activation wait.
@@ -591,7 +735,7 @@ async fn run_batch_settle_inner(
 
     let (lock_r, pv_r, alt_r) = tokio::join!(lock_branch, prove_verify_branch, alt_branch);
     let lock_ms = lock_r?;
-    let (prove_ms, verify_ms) = pv_r?;
+    let (prove_ms, verify_ms, marker_expiry_slot) = pv_r?;
     let (per_batch_alt, alt_tx_ms, alt_wait_ms) = alt_r?;
     let parallel_ms = t_par.elapsed().as_millis() as u64;
 
@@ -606,77 +750,277 @@ async fn run_batch_settle_inner(
     }
     alts.push(per_batch_alt);
 
-    // Pass 1 — build + sign every Tx D up front, sharing ONE blockhash (the
-    // settle txs are independent; one fetch suffices). Cheap + sequential: an
-    // Ed25519 sign + a Borsh+base64 serialize per match, no chain await.
-    let bh = ctx.rpc.get_latest_blockhash().await?;
-    let blockhash = Hash::new_from_array(bh.blockhash);
-    let mut txs: Vec<(usize, String)> = Vec::with_capacity(n);
-    for (idx, m) in inputs.matches.iter().enumerate() {
-        let siblings = batch_paths
-            .path(m.match_index as usize)
-            .map_err(|e| WorkerError::Leaf(format!("{e}")))?;
-        // Round-robin (key[j], merkle_tree[j]) per match. Tx Ds routed to
-        // different shards share no writable account (distinct append target +
-        // distinct fee-payer/authority), so the leader can co-include up to K
-        // independent shard writes. Matches that wrap to the same shard remain
-        // serialized by that shard's tree/key as intended.
-        // The shard's key is the tx fee-payer AND `tee_authority` AND the
-        // Ed25519 settle-signer (one key, one signature). With num_trees=1 this
-        // collapses to the single-key path. The merkle_tree[j] account is
-        // referenced via the static ALT (see static_alt_addresses).
-        let shard = idx % ctx.num_settle_shards();
-        let shard_keypair = &ctx.tee_keypairs[shard];
-        let (msg, sig) = sign_payload(&ctx.signing_keys[shard], &m.payload);
-        let ed_ix = build_ed25519_verify_ix(&shard_keypair.pubkey().to_bytes(), &sig, &msg);
-        let settle_ix = build_settle_batched_ix(
-            &shard_keypair.pubkey(),
-            shard as u8,
-            &m.payload,
-            m.match_index,
-            siblings,
-            &merkle_root,
-        );
-        // No priority-fee ix on Tx D — it's at the 1232-byte cap (see
-        // build_settle_v0_tx). lock/verify/close carry the priority fee instead.
-        let tx_b64 = build_settle_v0_tx_b64(shard_keypair, ed_ix, settle_ix, &alts, blockhash)?;
-        txs.push((idx, tx_b64));
+    // Each match now resolves independently. A round uses one fresh blockhash
+    // for only the unresolved matches, gathers every signature result, and
+    // reconciles ambiguous/rejected results against the two atomic consumed
+    // PDAs. Transient/ambiguous matches are redriven while BOTH their input
+    // locks and the shared batch marker remain valid.
+    let mut unresolved: Vec<usize> = (0..n).collect();
+    let mut results: Vec<Option<SettlementOutcome>> = vec![None; n];
+    let mut last_signatures: Vec<Option<String>> = vec![None; n];
+    let mut slots: Vec<u64> = Vec::with_capacity(n);
+    while !unresolved.is_empty() {
+        let bh = match ctx.rpc.get_latest_blockhash().await {
+            Ok(bh) => bh,
+            Err(error) => {
+                let reason = format!("cannot read settlement window: {error}");
+                for &idx in &unresolved {
+                    ctx.mark_ambiguous(batch_id, idx, reason.clone()).await;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+
+        // Expired windows cannot be redriven. Reconcile one final time: both
+        // PDAs means the prior send landed; neither is a definitive terminal
+        // rejection. A read failure stays ambiguous and is retried.
+        let mut active = Vec::with_capacity(unresolved.len());
+        for idx in unresolved.drain(..) {
+            if bh.context_slot < settlement_deadline(&inputs.matches[idx], marker_expiry_slot) {
+                active.push(idx);
+                continue;
+            }
+            let outcome = loop {
+                match reconcile_consumed_pdas(&ctx.rpc, &inputs.matches[idx]).await {
+                    Ok(ConsumedPdaState::BothConsumed) => {
+                        break SettlementOutcome::Confirmed {
+                            signature: last_signatures[idx].clone(),
+                            slot: None,
+                            reconciled_from_consumed_pdas: true,
+                        };
+                    }
+                    Ok(ConsumedPdaState::NeitherConsumed) => {
+                        break SettlementOutcome::Rejected {
+                            reason: format!(
+                                "settlement window expired at slot {} without consumed-note PDAs",
+                                settlement_deadline(&inputs.matches[idx], marker_expiry_slot)
+                            ),
+                        };
+                    }
+                    Ok(ConsumedPdaState::Inconsistent) => {
+                        break SettlementOutcome::Rejected {
+                            reason: "only one input was consumed; this match can no longer settle"
+                                .to_string(),
+                        };
+                    }
+                    Err(error) => {
+                        let reason = format!("final consumed-note reconciliation failed: {error}");
+                        ctx.mark_ambiguous(batch_id, idx, reason).await;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            };
+            record_final_outcome(ctx, batch_id, idx, outcome, &mut results, outcome_tx).await;
+        }
+        if active.is_empty() {
+            break;
+        }
+
+        let blockhash = Hash::new_from_array(bh.blockhash);
+        let mut txs: Vec<(usize, String)> = Vec::with_capacity(active.len());
+        let mut attempted = Vec::with_capacity(active.len());
+        for &idx in &active {
+            let m = &inputs.matches[idx];
+            let built = (|| -> Result<String, WorkerError> {
+                let siblings = batch_paths
+                    .path(m.match_index as usize)
+                    .map_err(|e| WorkerError::Leaf(format!("{e}")))?;
+                let shard = idx % ctx.num_settle_shards();
+                let shard_keypair = &ctx.tee_keypairs[shard];
+                let (msg, sig) = sign_payload(&ctx.signing_keys[shard], &m.payload);
+                let ed_ix = build_ed25519_verify_ix(&shard_keypair.pubkey().to_bytes(), &sig, &msg);
+                let settle_ix = build_settle_batched_ix(
+                    &shard_keypair.pubkey(),
+                    shard as u8,
+                    &m.payload,
+                    m.match_index,
+                    siblings,
+                    &merkle_root,
+                );
+                Ok(build_settle_v0_tx_b64(
+                    shard_keypair,
+                    ed_ix,
+                    settle_ix,
+                    &alts,
+                    blockhash,
+                )?)
+            })();
+            match built {
+                Ok(tx_b64) => {
+                    attempted.push(idx);
+                    txs.push((idx, tx_b64));
+                }
+                Err(error) => {
+                    record_final_outcome(
+                        ctx,
+                        batch_id,
+                        idx,
+                        SettlementOutcome::Rejected {
+                            reason: format!("cannot construct settle transaction: {error}"),
+                        },
+                        &mut results,
+                        outcome_tx,
+                    )
+                    .await;
+                }
+            }
+        }
+        if txs.is_empty() {
+            continue;
+        }
+
+        let round = send_and_confirm_many_with_rebroadcast(
+            &ctx.rpc,
+            txs,
+            ctx.confirm_timeout,
+            Duration::from_millis(1500),
+            ctx.settle_send_concurrency,
+        )
+        .await;
+        let mut seen = std::collections::HashSet::with_capacity(round.len());
+        let mut retry = Vec::new();
+        for raw in round {
+            let idx = raw.transaction_index();
+            seen.insert(idx);
+            let resolved = match raw {
+                TransactionConfirmationOutcome::Confirmed(outcome) => {
+                    if let Some(slot) = outcome.slot {
+                        slots.push(slot);
+                    }
+                    last_signatures[idx] = Some(outcome.signature.clone());
+                    tracing::info!(
+                        batch_id,
+                        match_idx = idx,
+                        settle_tx_ms = outcome.elapsed_ms,
+                        confirmed_slot = outcome.slot,
+                        rebroadcasts = outcome.rebroadcasts,
+                        "settle Tx D confirmed (per-match)"
+                    );
+                    Some(SettlementOutcome::Confirmed {
+                        signature: Some(outcome.signature),
+                        slot: outcome.slot,
+                        reconciled_from_consumed_pdas: false,
+                    })
+                }
+                TransactionConfirmationOutcome::Rejected {
+                    signature, reason, ..
+                } => {
+                    last_signatures[idx] = Some(signature);
+                    match reconcile_consumed_pdas(&ctx.rpc, &inputs.matches[idx]).await {
+                        Ok(ConsumedPdaState::BothConsumed) => Some(SettlementOutcome::Confirmed {
+                            signature: last_signatures[idx].clone(),
+                            slot: None,
+                            reconciled_from_consumed_pdas: true,
+                        }),
+                        Ok(_) => Some(SettlementOutcome::Rejected { reason }),
+                        Err(error) => {
+                            let reason =
+                                format!("{reason}; consumed-note reconciliation failed: {error}");
+                            ctx.mark_ambiguous(batch_id, idx, reason).await;
+                            retry.push(idx);
+                            None
+                        }
+                    }
+                }
+                TransactionConfirmationOutcome::Ambiguous {
+                    signature, reason, ..
+                } => {
+                    if signature.is_some() {
+                        last_signatures[idx] = signature;
+                    }
+                    ctx.mark_ambiguous(batch_id, idx, reason.clone()).await;
+                    match reconcile_consumed_pdas(&ctx.rpc, &inputs.matches[idx]).await {
+                        Ok(ConsumedPdaState::BothConsumed) => Some(SettlementOutcome::Confirmed {
+                            signature: last_signatures[idx].clone(),
+                            slot: None,
+                            reconciled_from_consumed_pdas: true,
+                        }),
+                        Ok(ConsumedPdaState::NeitherConsumed) => {
+                            match ctx.rpc.get_latest_blockhash().await {
+                                Ok(now)
+                                    if now.context_slot
+                                        < settlement_deadline(
+                                            &inputs.matches[idx],
+                                            marker_expiry_slot,
+                                        ) =>
+                                {
+                                    tracing::warn!(
+                                        batch_id,
+                                        match_idx = idx,
+                                        reason,
+                                        "ambiguous Tx D absent on-chain; redriving while valid"
+                                    );
+                                    retry.push(idx);
+                                    None
+                                }
+                                Ok(_) => Some(SettlementOutcome::Rejected {
+                                    reason: format!(
+                                        "{reason}; settlement window expired without consumed-note PDAs"
+                                    ),
+                                }),
+                                Err(error) => {
+                                    let reason = format!(
+                                        "{reason}; cannot determine remaining settlement window: {error}"
+                                    );
+                                    ctx.mark_ambiguous(batch_id, idx, reason).await;
+                                    retry.push(idx);
+                                    None
+                                }
+                            }
+                        }
+                        Ok(ConsumedPdaState::Inconsistent) => Some(SettlementOutcome::Rejected {
+                            reason: format!(
+                                "{reason}; only one input was consumed and the match cannot settle"
+                            ),
+                        }),
+                        Err(error) => {
+                            let reason =
+                                format!("{reason}; consumed-note reconciliation failed: {error}");
+                            ctx.mark_ambiguous(batch_id, idx, reason).await;
+                            retry.push(idx);
+                            None
+                        }
+                    }
+                }
+            };
+            if let Some(outcome) = resolved {
+                record_final_outcome(ctx, batch_id, idx, outcome, &mut results, outcome_tx).await;
+            }
+        }
+
+        // A panicked send task is not attributable inside the confirmation
+        // helper. Preserve every caller index by treating any missing result as
+        // ambiguous; the scheduler keeps those orders reserved.
+        for idx in attempted {
+            if !seen.contains(&idx) {
+                let reason = "settle send task ended without an attributable result".to_string();
+                ctx.mark_ambiguous(batch_id, idx, reason).await;
+                retry.push(idx);
+            }
+        }
+        unresolved = retry;
+        if !unresolved.is_empty() {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
     }
 
-    // Pass 2 — send all Tx D's independently (bounded), then poll the shrinking
-    // pending signature set in ONE RPC request per round. The ~1.13s is
-    // block-confirmation latency; firing the txs together lets the leader
-    // co-include them in one block. Confirmed entries leave the poll set and
-    // only overdue pending txs are rebroadcast.
-    let confirmed = send_and_confirm_many_with_rebroadcast(
-        &ctx.rpc,
-        txs,
-        ctx.confirm_timeout,
-        Duration::from_millis(1500),
-        ctx.settle_send_concurrency,
-    )
-    .await?;
-    let mut slots: Vec<u64> = Vec::with_capacity(n);
-    for outcome in confirmed {
-        if let Some(s) = outcome.slot {
-            slots.push(s);
+    for idx in 0..results.len() {
+        if results[idx].is_none() {
+            record_final_outcome(
+                ctx,
+                batch_id,
+                idx,
+                SettlementOutcome::Ambiguous {
+                    reason: "settlement result missing after reconciliation".to_string(),
+                },
+                &mut results,
+                outcome_tx,
+            )
+            .await;
         }
-        // Per-match Tx D confirm latency + the slot it landed in.
-        tracing::info!(
-            batch_id,
-            match_idx = outcome.transaction_index,
-            settle_tx_ms = outcome.elapsed_ms,
-            confirmed_slot = outcome.slot,
-            rebroadcasts = outcome.rebroadcasts,
-            "settle Tx D confirmed (per-match)"
-        );
-        let id = SettleJobId {
-            batch_id,
-            match_idx: outcome.transaction_index as u8,
-        };
-        let mut st = ctx.settle_state.write().await;
-        st.update(&id, |j| j.settle_sig = Some(outcome.signature.clone()));
     }
+    let normalized: Vec<SettlementOutcome> = results.into_iter().flatten().collect();
 
     // Co-inclusion factor = matches ÷ distinct_slots. Near n → the leader
     // batched the settles into one/few blocks (the concurrent-send win); near 1
@@ -709,8 +1053,6 @@ async fn run_batch_settle_inner(
     // `marker_sweep_tx` (sweeper gone) is a
     // best-effort no-op — the marker stays open until a later boot replays it
     // from the persisted pending set.
-    ctx.set_all_stages(batch_id, n, SettleJobStage::Closing)
-        .await;
     if ctx.marker_sweep_tx.send(merkle_root).is_err() {
         tracing::warn!(
             batch_id,
@@ -742,22 +1084,16 @@ async fn run_batch_settle_inner(
         "settle pipeline timing (per-stage ms)"
     );
 
-    // ── Done ────────────────────────────────────────────────────
-    {
-        let mut st = ctx.settle_state.write().await;
-        for idx in 0..n {
-            let id = SettleJobId {
-                batch_id,
-                match_idx: idx as u8,
-            };
-            st.update(&id, |j| {
-                // `close_sig` stays None — the marker close is async (the
-                // sweeper closes it off-batch). Settlement is final at Tx D.
-                j.transition(SettleJobStage::Done);
-            });
-        }
-    }
-    Ok(())
+    Ok(BatchSettlementReport {
+        outcomes: normalized
+            .into_iter()
+            .enumerate()
+            .map(|(match_index, outcome)| MatchSettlementResult {
+                match_index,
+                outcome,
+            })
+            .collect(),
+    })
 }
 
 #[cfg(test)]
@@ -1051,6 +1387,70 @@ mod tests {
             // harmless best-effort no-op (the marker-sweep path is unit-tested
             // separately in `marker_sweep`).
             marker_sweep_tx: mpsc::unbounded_channel().0,
+        }
+    }
+
+    async fn spawn_consumed_account_rpc(existing: Vec<Address>) -> String {
+        use axum::{extract::State, routing::post, Json, Router};
+        use serde_json::{json, Value};
+        use std::collections::HashSet;
+
+        async fn handle(
+            State(existing): State<Arc<HashSet<String>>>,
+            Json(req): Json<Value>,
+        ) -> Json<Value> {
+            let id = req.get("id").cloned().unwrap_or(json!(1));
+            let address = req["params"][0].as_str().unwrap_or_default();
+            let value = existing.contains(address).then(|| {
+                json!({
+                    "lamports": 1,
+                    "owner": vault_program_id().to_string(),
+                    "data": ["", "base64"],
+                    "executable": false,
+                    "rentEpoch": 0,
+                })
+            });
+            Json(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "context": { "slot": 10 }, "value": value },
+            }))
+        }
+
+        let existing = Arc::new(
+            existing
+                .into_iter()
+                .map(|address| address.to_string())
+                .collect(),
+        );
+        let app = Router::new().route("/", post(handle)).with_state(existing);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn consumed_pda_reconciliation_requires_the_atomic_pair() {
+        let match_inputs = MatchSettleInputs {
+            payload: payload(0xA0),
+            buyer_lock: lock_inputs(0x01),
+            seller_lock: lock_inputs(0x02),
+            match_index: 0,
+        };
+        let buyer = consumed_note_pda(&match_inputs.payload.note_a_commitment).0;
+        let seller = consumed_note_pda(&match_inputs.payload.note_b_commitment).0;
+
+        for (existing, expected) in [
+            (vec![buyer, seller], ConsumedPdaState::BothConsumed),
+            (vec![], ConsumedPdaState::NeitherConsumed),
+            (vec![buyer], ConsumedPdaState::Inconsistent),
+        ] {
+            let rpc = SolanaRpcClient::new(spawn_consumed_account_rpc(existing).await).unwrap();
+            assert_eq!(
+                reconcile_consumed_pdas(&rpc, &match_inputs).await.unwrap(),
+                expected
+            );
         }
     }
 

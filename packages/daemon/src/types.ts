@@ -17,6 +17,8 @@ export type OrderPhase =
   | "pending"
   /** Accepted by the CVM; resting or partially filled (still matchable). */
   | "open"
+  /** Matched and reserved; quantities/fills wait for Tx D finality. */
+  | "pending_settlement"
   /** Fully filled — no further matching; only settlement + residuals remain. */
   | "filled"
   /** Cancelled by the strategy or by cancel-on-disconnect. */
@@ -25,6 +27,8 @@ export type OrderPhase =
   | "expired"
   /** CVM rejected the order at intake. */
   | "rejected"
+  /** Tx D definitively failed; a fresh signed order is required after unlock. */
+  | "settlement_failed"
   /** Terminal: settled, reconciled, residual change notes consolidated. */
   | "closed";
 
@@ -33,6 +37,7 @@ export const TERMINAL_PHASES: ReadonlySet<OrderPhase> = new Set<OrderPhase>([
   "cancelled",
   "expired",
   "rejected",
+  "settlement_failed",
   "closed",
 ]);
 
@@ -57,6 +62,10 @@ export interface ManagedOrder {
    *  excluded from selection while the order rests, and pruned once a fill
    *  consumes it (rotated into a change note). */
   collateralCommitment?: string;
+  /** Terminal settlement failure detail surfaced by the TEE. */
+  settlementFailureReason?: string;
+  /** Earliest Solana slot at which the failed collateral lock expires. */
+  settlementUnlockSlot?: number;
   createdAt: number;
   updatedAt: number;
 }

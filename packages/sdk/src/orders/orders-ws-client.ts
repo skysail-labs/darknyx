@@ -5,8 +5,9 @@
  * The matcher emits an `OrderUpdate` each time one of the account's orders
  * changes state in a tick (partial/full fill, expiry); an explicit cancel
  * (DELETE /orders/:id, or the cancel leg of a PUT /orders/:id modify) emits a
- * synthetic `cancelled`. Terminal kinds (`fully_filled` / `cancelled` /
- * `expired`) are the order's last event.
+ * synthetic `cancelled`. A match first emits `pending_settlement`; only its
+ * confirmed Tx D emits a fill update. `settlement_failed` is terminal and the
+ * client must submit a fresh signed order after `lock_expiry_slot`.
  *
  * Authentication is in-band and the TEE routes per-account so a subscriber
  * only ever sees its own orders. Unlike fills, an order update carries no
@@ -26,19 +27,32 @@ export interface OrderUpdate {
    *  via `GET /orders/:id` (the channel is a notifier, not a durable log). */
   seq?: number;
   order_id: string; // 16-byte hex
-  kind: "partially_filled" | "fully_filled" | "cancelled" | "expired";
+  kind:
+    | "pending_settlement"
+    | "partially_filled"
+    | "fully_filled"
+    | "settlement_failed"
+    | "cancelled"
+    | "expired";
   /** Present on fills. */
   filled_quantity?: number;
   /** Present on a partial fill: the residual base amount still resting. */
   new_amount?: number;
   /** Present on a partial fill: the residual collateral-note amount. */
   new_note_amount?: number;
+  /** Present only on terminal `settlement_failed`. */
+  reason?: string;
+  /** Input NoteLock expiry; fresh collateral may be resubmitted after this slot. */
+  lock_expiry_slot?: number;
 }
 
 /** A terminal update is the order's last event (it has left the book). */
 export function isTerminalUpdate(u: OrderUpdate): boolean {
   return (
-    u.kind === "fully_filled" || u.kind === "cancelled" || u.kind === "expired"
+    u.kind === "fully_filled" ||
+    u.kind === "settlement_failed" ||
+    u.kind === "cancelled" ||
+    u.kind === "expired"
   );
 }
 

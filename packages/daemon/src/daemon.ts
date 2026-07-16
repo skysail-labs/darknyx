@@ -9,7 +9,7 @@
  * a control surface needs — `placeOrder` / `cancelOrder` / `listOrders` /
  * `balances` — plus a `subscribe` stream of order + fill events.
  *
- * Everything heavy is injectable (placer, anchor poster, merge runner, the WS
+ * Everything heavy is injectable (placer, merge runner, the WS
  * `subscribe*` fns, the prover, fetch) so the whole thing is testable without a
  * CVM; `bin/daemon.ts` supplies the real implementations.
  */
