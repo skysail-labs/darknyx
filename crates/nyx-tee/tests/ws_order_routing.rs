@@ -14,6 +14,8 @@ fn cancelled(order_id: &str) -> OrderUpdateMsg {
         filled_quantity: None,
         new_amount: None,
         new_note_amount: None,
+        reason: None,
+        lock_expiry_slot: None,
     }
 }
 

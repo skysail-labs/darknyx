@@ -43,6 +43,9 @@ export type LifecycleEvent =
   // ── phase (placement ack + orders channel) ──
   | { type: "accepted"; arrivalSlot: number }
   | { type: "rejected"; reason: string }
+  | { type: "settlement-pending"; lockExpirySlot: number }
+  | { type: "partial-fill-confirmed" }
+  | { type: "settlement-failed"; reason: string; lockExpirySlot: number }
   | { type: "filled" }
   | { type: "cancelled" }
   | { type: "expired" }
@@ -58,8 +61,11 @@ export type LifecycleEvent =
   | { type: "closed" };
 
 /** Side-effecting intents the daemon must execute (then report back). */
-export type LifecycleAction =
-  { type: "merge"; orderId: string; noteCount: number };
+export type LifecycleAction = {
+  type: "merge";
+  orderId: string;
+  noteCount: number;
+};
 
 export interface ReduceResult {
   order: ManagedOrder;
@@ -91,10 +97,38 @@ export function reduceOrder(
       if (order.phase === "pending") next.phase = "rejected";
       break;
 
+    case "settlement-pending":
+      if (order.phase === "pending" || order.phase === "open") {
+        next.phase = "pending_settlement";
+      }
+      break;
+
+    case "partial-fill-confirmed":
+      if (
+        order.phase === "pending" ||
+        order.phase === "open" ||
+        order.phase === "pending_settlement"
+      ) {
+        next.phase = "open";
+      }
+      break;
+
+    case "settlement-failed":
+      if (!isTerminal(order.phase)) {
+        next.phase = "settlement_failed";
+        next.settlementFailureReason = event.reason;
+        next.settlementUnlockSlot = event.lockExpirySlot;
+      }
+      break;
+
     case "filled":
       // Terminal matching (from orders-channel `fully_filled`). Accept a still-
       // `pending` order too: a fully_filled implies it was accepted + filled.
-      if (order.phase === "pending" || order.phase === "open") {
+      if (
+        order.phase === "pending" ||
+        order.phase === "open" ||
+        order.phase === "pending_settlement"
+      ) {
         next.phase = "filled";
       }
       break;
@@ -143,7 +177,8 @@ export function reduceOrder(
     event.type === "fill" ||
     event.type === "filled" ||
     event.type === "cancelled" ||
-    event.type === "expired";
+    event.type === "expired" ||
+    event.type === "settlement-failed";
 
   // Auto-merge: consolidate once enough residuals accumulate, or as soon as the
   // order stops matching (filled/cancelled/expired) with any residual left — no
@@ -151,7 +186,8 @@ export function reduceOrder(
   const quiescent =
     next.phase === "filled" ||
     next.phase === "cancelled" ||
-    next.phase === "expired";
+    next.phase === "expired" ||
+    next.phase === "settlement_failed";
   const shouldMerge =
     next.pendingChangeNotes >= thresholds.mergeThreshold ||
     (quiescent && next.pendingChangeNotes > 0);

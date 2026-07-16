@@ -59,8 +59,8 @@ use tokio::task::{JoinHandle, JoinSet};
 const SETTLE_CONCURRENCY: usize = 1;
 
 use super::assemble::{assemble_batch, BatchAssemblyParams};
-use super::job::{BatchId, JobStatus, MatchIdx, SettleJob, SettleJobId};
-use super::worker::{run_batch_settle, SettleWorkerCtx};
+use super::job::{BatchId, JobStatus, MatchIdx, SettleJob, SettleJobId, SettlementOutcome};
+use super::worker::{run_batch_settle_streaming, MatchSettlementResult, SettleWorkerCtx};
 use crate::matcher::MatcherState;
 
 /// Shared state exposed to status handlers + future stage workers.
@@ -176,8 +176,8 @@ pub struct SettleDriver {
     /// The worker context (RPC, TEE keypair, signer, prover, the same
     /// `SettleSchedulerState` the scheduler holds, confirm timeout).
     pub ctx: SettleWorkerCtx,
-    /// The matcher state — read for the opening store at assembly,
-    /// written to evict openings after a batch settles.
+    /// The matcher state — read for assembly and finalized independently as
+    /// each match confirms or definitively rejects.
     pub matcher_state: Arc<RwLock<MatcherState>>,
     pub cfg: SettleDriverConfig,
 }
@@ -321,10 +321,10 @@ impl SettleScheduler {
     }
 }
 
-/// Assemble + settle one batch, then evict its openings. Failures mark the
-/// batch's jobs `Failed` (assembly errors here; on-chain errors inside
-/// `run_batch_settle`). A free fn (not a method) so it can run in its own
-/// spawned task off `Arc<SettleDriver>` + the shared scheduler state.
+/// Assemble and settle one batch. Each final Tx D outcome is applied to the
+/// matcher as soon as it is known, so a confirmed sibling is never held behind
+/// another match's reconciliation/redrive loop. A free fn (not a method) so it
+/// can run in its own spawned task off `Arc<SettleDriver>` + shared state.
 async fn drive_batch(
     driver: &SettleDriver,
     state: &Arc<RwLock<SettleSchedulerState>>,
@@ -352,6 +352,10 @@ async fn drive_batch(
         Ok(i) => i,
         Err(e) => {
             tracing::error!(batch_id, error = %e, "settle: batch assembly failed");
+            {
+                let mut matcher = driver.matcher_state.write().await;
+                matcher.reject_batch(output, &format!("settlement assembly failed: {e}"));
+            }
             fail_batch(
                 state,
                 batch_id,
@@ -363,26 +367,68 @@ async fn drive_batch(
         }
     };
 
-    if let Err(e) = run_batch_settle(&driver.ctx, inputs).await {
-        // run_batch_settle already marked the jobs Failed. Debug-format
-        // so the RpcError `data` (preflight sim logs — which program +
-        // log line reverted) is captured, not just code+message.
-        tracing::error!(batch_id, error = ?e, "settle: batch settle failed");
-        return;
-    }
-
-    // Success — drop the now-spent openings (after close confirmed).
-    {
-        let mut st = driver.matcher_state.write().await;
-        for m in &output.matches {
-            st.openings_mut().remove(&m.note_buyer);
-            st.openings_mut().remove(&m.note_seller);
+    let (outcome_tx, mut outcome_rx) = mpsc::unbounded_channel::<MatchSettlementResult>();
+    let finalize_outcomes = async {
+        let mut counts = [0usize; 3];
+        while let Some(result) = outcome_rx.recv().await {
+            let mut matcher = driver.matcher_state.write().await;
+            match &result.outcome {
+                SettlementOutcome::Confirmed { .. } => {
+                    let settle_tree_id =
+                        (result.match_index % driver.ctx.tee_keypairs.len().max(1)) as u8;
+                    if let Err(error) =
+                        matcher.commit_confirmed_match(output, result.match_index, settle_tree_id)
+                    {
+                        tracing::error!(
+                            batch_id,
+                            match_idx = result.match_index,
+                            %error,
+                            "confirmed settlement could not commit matcher state"
+                        );
+                    } else {
+                        counts[0] += 1;
+                    }
+                }
+                SettlementOutcome::Rejected { reason } => {
+                    if let Err(error) = matcher.reject_match(output, result.match_index, reason) {
+                        tracing::error!(
+                            batch_id,
+                            match_idx = result.match_index,
+                            %error,
+                            "rejected settlement could not finalize matcher state"
+                        );
+                    }
+                    counts[1] += 1;
+                }
+                SettlementOutcome::Ambiguous { .. } | SettlementOutcome::Pending => {
+                    // Keep the matched orders and input openings reserved. They
+                    // are not rebooked and no fill/update is published.
+                    counts[2] += 1;
+                }
+            }
         }
+        counts
+    };
+    let (report, counts) = tokio::join!(
+        run_batch_settle_streaming(&driver.ctx, inputs, outcome_tx),
+        finalize_outcomes
+    );
+    if let Err(e) = report {
+        // A failure before per-match Tx D outcomes exist is terminal for every
+        // still-reserved order. Already-confirmed siblings were finalized by
+        // the outcome stream and are left untouched.
+        tracing::error!(batch_id, error = ?e, "settle: batch settle failed");
+        let mut matcher = driver.matcher_state.write().await;
+        matcher.reject_batch(output, &format!("settlement pipeline failed: {e:?}"));
+        return;
     }
     tracing::info!(
         batch_id,
         matches = output.matches.len(),
-        "settle: batch settled; openings evicted"
+        confirmed = counts[0],
+        rejected = counts[1],
+        ambiguous = counts[2],
+        "settle: batch outcomes finalized independently"
     );
 }
 
@@ -556,6 +602,9 @@ mod tests {
         use crate::settle::test_support::{spawn_mock_rpc, FakeProver};
         use crate::settle::worker::SettleWorkerCtx;
         use crate::solana_rpc::SolanaRpcClient;
+        use darkpool_matcher::book::{
+            Order, OrderSide, OrderStatus, OrderType, OrderUpdate, OrderUpdateKind,
+        };
         use ed25519_dalek::SigningKey;
         use solana_keypair::Keypair;
         use std::time::Duration;
@@ -633,6 +682,48 @@ mod tests {
                     viewing_pubkey: None,
                 },
             );
+            for order in [
+                Order {
+                    trading_key: [0x77; 32],
+                    side: OrderSide::Bid,
+                    order_type: OrderType::Limit,
+                    status: OrderStatus::Pending,
+                    arrival_slot: 1,
+                    expiry_slot: 2000,
+                    price_limit: 100,
+                    amount: 10,
+                    total_quantity: 10,
+                    filled_quantity: 0,
+                    min_fill_qty: 0,
+                    note_amount: 1000,
+                    collateral_note: note_buyer,
+                    user_commitment: [0x99; 32],
+                    owner_commitment: fr_safe(0x44),
+                    order_id: [0x01; 16],
+                    order_inclusion_commitment: [0x31; 32],
+                },
+                Order {
+                    trading_key: [0x88; 32],
+                    side: OrderSide::Ask,
+                    order_type: OrderType::Limit,
+                    status: OrderStatus::Pending,
+                    arrival_slot: 2,
+                    expiry_slot: 2000,
+                    price_limit: 100,
+                    amount: 10,
+                    total_quantity: 10,
+                    filled_quantity: 0,
+                    min_fill_qty: 0,
+                    note_amount: 10,
+                    collateral_note: note_seller,
+                    user_commitment: [0xAA; 32],
+                    owner_commitment: fr_safe(0x55),
+                    order_id: [0x02; 16],
+                    order_inclusion_commitment: [0x32; 32],
+                },
+            ] {
+                st.book_mut().submit(order).unwrap();
+            }
             assert_eq!(st.openings().len(), 2);
         }
 
@@ -707,6 +798,23 @@ mod tests {
 
         let mut output = RunBatchOutput::empty(7, 100, 0);
         output.matches = vec![m];
+        output.order_updates = vec![
+            OrderUpdate {
+                trading_key: [0x77; 32],
+                order_id: [0x01; 16],
+                kind: OrderUpdateKind::FullyFilled {
+                    filled_quantity: 10,
+                },
+            },
+            OrderUpdate {
+                trading_key: [0x88; 32],
+                order_id: [0x02; 16],
+                kind: OrderUpdateKind::FullyFilled {
+                    filled_quantity: 10,
+                },
+            },
+        ];
+        matcher_state.write().await.reserve_batch(&output).unwrap();
         tx.send(output).await.unwrap();
 
         // Poll until the single job reaches Done (the mock settle is
@@ -722,6 +830,7 @@ mod tests {
             if let Some(j) = st.get_job(&id) {
                 match &j.stage {
                     super::super::job::SettleJobStage::Done => {
+                        assert!(matches!(j.outcome, SettlementOutcome::Confirmed { .. }));
                         done = true;
                         break;
                     }

@@ -315,12 +315,28 @@ async fn http_submit_two_crossing_orders_produces_match() {
         output.clearing_price
     );
 
-    // Fully-filled orders have left the book, but their input openings remain
-    // reserved until settlement confirms and evicts them. Reusing the buyer's
-    // exact collateral under a fresh order id must therefore still conflict.
+    // Matching reserves both orders without changing quantities or publishing
+    // fills. They stay queryable as pending settlement but are absent from the
+    // next matcher snapshot. Reusing the buyer's exact collateral under a fresh
+    // order id must still conflict.
     {
         let st = matcher_state.read().await;
-        assert_eq!(st.book().len(), 0);
+        let order_id = |first| {
+            let mut id = [0u8; 16];
+            id[0] = first;
+            id[15] = 1;
+            id
+        };
+        assert_eq!(st.book().len(), 2);
+        assert!(st.book().snapshot().orders.is_empty());
+        assert!(st.book().get(&order_id(0xAA)).is_some_and(|order| {
+            order.status == darkpool_matcher::book::OrderStatus::Matched
+                && order.filled_quantity == 0
+        }));
+        assert!(st.book().get(&order_id(0xBB)).is_some_and(|order| {
+            order.status == darkpool_matcher::book::OrderStatus::Matched
+                && order.filled_quantity == 0
+        }));
         assert_eq!(st.openings().len(), 2, "both inputs pending settlement");
     }
     let reuse = sign_order(&buyer, OrderSide::Bid, 151_000_000, 0xCC, 3);

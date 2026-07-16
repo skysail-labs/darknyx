@@ -478,9 +478,9 @@ revisit.
 
 #### Implications for clients
 
-- **Order placement → fill notification**: worst-case `BATCH_MS + matching_time ≈ 2 s`. Best case (order arrives just before tick): low ms after the tick fires.
-- **Fill notification → on-chain finality**: ~3 s additional (the settle pipeline).
-- **The `orders` and `fills` WS channels** push state changes the instant they happen inside the TEE — so client UIs feel "live" even though clearing is batched. The `tree` WS channel pushes leaf-append events as `tee_forced_settle_batched` confirms, so balance views update without polling.
+- **Order placement → pending settlement**: worst-case `BATCH_MS + matching_time ≈ 2 s`. The `orders` channel emits `pending_settlement`, but quantities and fill memos remain unchanged.
+- **Pending settlement → confirmed fill**: ~3 s additional (the settle pipeline). Each match commits independently only after its own Tx D confirms or both consumed-note PDAs reconcile as present.
+- **The `orders` and `fills` channels are finality-gated**: a confirmed match publishes its partial/full update and any change memo; an ambiguous match stays reserved; a definitive failure publishes terminal `settlement_failed(reason, lock_expiry_slot)` and is never auto-rebooked. The `tree` channel pushes leaf-append events as `tee_forced_settle_batched` confirms, so balance views update without polling.
 
 ### 5.5 Indexer surface — same process, shared state
 

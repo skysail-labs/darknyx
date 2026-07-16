@@ -64,8 +64,15 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 describe("updateToEvent", () => {
   it("maps each OrderUpdate kind to the right phase event", () => {
     expect(
+      updateToEvent({
+        order_id: ORDER_ID,
+        kind: "pending_settlement",
+        lock_expiry_slot: 99,
+      }),
+    ).toEqual({ type: "settlement-pending", lockExpirySlot: 99 });
+    expect(
       updateToEvent({ order_id: ORDER_ID, kind: "partially_filled" }),
-    ).toEqual({ type: "accepted", arrivalSlot: 0 });
+    ).toEqual({ type: "partial-fill-confirmed" });
     expect(updateToEvent({ order_id: ORDER_ID, kind: "fully_filled" })).toEqual(
       {
         type: "filled",
@@ -76,6 +83,18 @@ describe("updateToEvent", () => {
     });
     expect(updateToEvent({ order_id: ORDER_ID, kind: "expired" })).toEqual({
       type: "expired",
+    });
+    expect(
+      updateToEvent({
+        order_id: ORDER_ID,
+        kind: "settlement_failed",
+        reason: "reverted",
+        lock_expiry_slot: 123,
+      }),
+    ).toEqual({
+      type: "settlement-failed",
+      reason: "reverted",
+      lockExpirySlot: 123,
     });
   });
 });
@@ -118,6 +137,33 @@ describe("OrdersListener", () => {
     cap.captured.opts!.onUpdate({ order_id: ORDER_ID, kind: "fully_filled" });
     await flush();
     expect(store.getOrder(ORDER_ID)!.phase).toBe("filled");
+  });
+
+  it("holds an order pending until finality and records terminal settlement failure", async () => {
+    const cap = captureSubscribe();
+    const { engine, listener } = mkListener(cap);
+    engine.register(openOrder());
+    listener.start();
+
+    cap.captured.opts!.onUpdate({
+      order_id: ORDER_ID,
+      kind: "pending_settlement",
+      lock_expiry_slot: 777,
+    });
+    await flush();
+    expect(store.getOrder(ORDER_ID)!.phase).toBe("pending_settlement");
+
+    cap.captured.opts!.onUpdate({
+      order_id: ORDER_ID,
+      kind: "settlement_failed",
+      reason: "Tx D reverted",
+      lock_expiry_slot: 777,
+    });
+    await flush();
+    const failed = store.getOrder(ORDER_ID)!;
+    expect(failed.phase).toBe("settlement_failed");
+    expect(failed.settlementFailureReason).toBe("Tx D reverted");
+    expect(failed.settlementUnlockSlot).toBe(777);
   });
 
   it("a cancel-on-disconnect sweep (synthetic cancelled) marks the order cancelled", async () => {

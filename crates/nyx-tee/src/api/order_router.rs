@@ -11,59 +11,95 @@
 
 use std::sync::Arc;
 
-use darkpool_matcher::book::{OrderUpdate, OrderUpdateKind};
+use darkpool_matcher::book::OrderUpdateKind;
 use tokio::sync::broadcast::error::RecvError;
 
 use super::state::{ApiState, OrderUpdateMsg};
+use crate::matcher::{OrderLifecycleEvent, OrderLifecycleKind};
 
 /// Convert a matcher `OrderUpdate` into its wire form. Returns the hex order id
 /// (the `order_owner` routing key) alongside the message, and whether the
 /// update is TERMINAL (the order leaves the book).
-fn to_msg(u: &OrderUpdate) -> (String, OrderUpdateMsg, bool) {
+fn to_msg(u: &OrderLifecycleEvent) -> (String, OrderUpdateMsg, bool) {
     let order_id = hex::encode(u.order_id);
-    let (msg, terminal) = match u.kind {
-        OrderUpdateKind::FullyFilled { filled_quantity } => (
+    let (msg, terminal) = match &u.kind {
+        OrderLifecycleKind::PendingSettlement { lock_expiry_slot } => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
-                kind: "fully_filled",
-                filled_quantity: Some(filled_quantity),
+                kind: "pending_settlement",
+                filled_quantity: None,
                 new_amount: None,
                 new_note_amount: None,
+                reason: None,
+                lock_expiry_slot: Some(*lock_expiry_slot),
+            },
+            false,
+        ),
+        OrderLifecycleKind::SettlementFailed {
+            reason,
+            lock_expiry_slot,
+        } => (
+            OrderUpdateMsg {
+                order_id: order_id.clone(),
+                kind: "settlement_failed",
+                filled_quantity: None,
+                new_amount: None,
+                new_note_amount: None,
+                reason: Some(reason.clone()),
+                lock_expiry_slot: Some(*lock_expiry_slot),
             },
             true,
         ),
-        OrderUpdateKind::PartiallyFilled {
+        OrderLifecycleKind::Settled(OrderUpdateKind::FullyFilled { filled_quantity }) => (
+            OrderUpdateMsg {
+                order_id: order_id.clone(),
+                kind: "fully_filled",
+                filled_quantity: Some(*filled_quantity),
+                new_amount: None,
+                new_note_amount: None,
+                reason: None,
+                lock_expiry_slot: None,
+            },
+            true,
+        ),
+        OrderLifecycleKind::Settled(OrderUpdateKind::PartiallyFilled {
             new_amount,
             new_note_amount,
             filled_quantity,
             ..
-        } => (
+        }) => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
                 kind: "partially_filled",
-                filled_quantity: Some(filled_quantity),
-                new_amount: Some(new_amount),
-                new_note_amount: Some(new_note_amount),
+                filled_quantity: Some(*filled_quantity),
+                new_amount: Some(*new_amount),
+                new_note_amount: Some(*new_note_amount),
+                reason: None,
+                lock_expiry_slot: None,
             },
             false,
         ),
-        OrderUpdateKind::Cancelled => (
+        OrderLifecycleKind::Settled(OrderUpdateKind::Cancelled) => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
                 kind: "cancelled",
                 filled_quantity: None,
                 new_amount: None,
                 new_note_amount: None,
+                reason: None,
+                lock_expiry_slot: None,
             },
             true,
         ),
-        OrderUpdateKind::Expired => (
+        OrderLifecycleKind::Settled(OrderUpdateKind::Expired) => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
                 kind: "expired",
                 filled_quantity: None,
                 new_amount: None,
                 new_note_amount: None,
+                reason: None,
+                lock_expiry_slot: None,
             },
             true,
         ),
@@ -102,11 +138,11 @@ pub fn spawn_order_router(state: Arc<ApiState>) {
 mod tests {
     use super::*;
 
-    fn upd(kind: OrderUpdateKind) -> OrderUpdate {
-        OrderUpdate {
+    fn upd(kind: OrderUpdateKind) -> OrderLifecycleEvent {
+        OrderLifecycleEvent {
             trading_key: [9u8; 32],
             order_id: [0xAB; 16],
-            kind,
+            kind: OrderLifecycleKind::Settled(kind),
         }
     }
 
@@ -139,5 +175,31 @@ mod tests {
             assert!(term);
             assert!(m.filled_quantity.is_none());
         }
+
+        let pending = OrderLifecycleEvent {
+            trading_key: [9; 32],
+            order_id: [0xAB; 16],
+            kind: OrderLifecycleKind::PendingSettlement {
+                lock_expiry_slot: 77,
+            },
+        };
+        let (_, m, terminal) = to_msg(&pending);
+        assert_eq!(m.kind, "pending_settlement");
+        assert_eq!(m.lock_expiry_slot, Some(77));
+        assert!(!terminal);
+
+        let failed = OrderLifecycleEvent {
+            trading_key: [9; 32],
+            order_id: [0xAB; 16],
+            kind: OrderLifecycleKind::SettlementFailed {
+                reason: "reverted".to_string(),
+                lock_expiry_slot: 88,
+            },
+        };
+        let (_, m, terminal) = to_msg(&failed);
+        assert_eq!(m.kind, "settlement_failed");
+        assert_eq!(m.reason.as_deref(), Some("reverted"));
+        assert_eq!(m.lock_expiry_slot, Some(88));
+        assert!(terminal);
     }
 }

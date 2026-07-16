@@ -44,7 +44,7 @@ runbooks have landed.
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
 | N-01 | High | TEE | `remediation/tee-intake` | Production exits on dstack/KMS probe failure; test auth requires explicit simulator mode; production rejects test credentials | Closed |
-| N-02 | High | Matcher + TEE | `remediation/settlement-outcomes`, `remediation/finality-gated-book` | Book/fills commit only after per-match settlement outcome; ambiguous results reconcile/redrive; rejected matches are terminal and never auto-rebooked | Open |
+| N-02 | High | Matcher + TEE | `remediation/settlement-outcomes`, `remediation/finality-gated-book` | Book/fills commit only after per-match settlement outcome; ambiguous results reconcile/redrive; rejected matches are terminal and never auto-rebooked | In progress |
 | N-03 | High | Matcher | `remediation/matcher-correctness` | Zero-limit market asks remain eligible but are not price candidates; bid@150/ask@0 clears positively | Closed |
 | N-04 | High liveness | Vault + SDK | `remediation/vault-lifecycle` | Merge proves every active input's NoteLock PDA absent; negative tests plus live merge-to-settle | Closed |
 | N-05 | Medium privacy | TEE | `remediation/tee-intake` | Order reads enforce account ownership and return indistinguishable 404s | Closed |
@@ -981,6 +981,54 @@ Every remediation PR must record:
   signatures, payloads, proofs, accounts, or devnet program state are
   invalidated. Rollback reopens P-02/P-04 and restores 240 per-batch path hashes
   plus one signature-status RPC loop per Tx D.
+
+### `remediation/settlement-outcomes` — N-02
+
+- **Status.** Code complete; live image-60 validation and merge evidence are
+  pending on this closing branch.
+- **Invariant restored.** A matcher tick reserves both participants as
+  `pending_settlement` without changing quantities, rotating collateral, or
+  publishing a fill. Tx D sends return an indexed `confirmed`, `rejected`, or
+  `ambiguous` result for every match instead of aborting at the first failure.
+  Each final result streams back to the matcher immediately, so a confirmed
+  sibling commits its book update, continuation opening, and recovery memo
+  without waiting for another match's reconciliation loop. Ambiguous results
+  require both atomic, vault-owned `ConsumedNoteEntry` PDAs for durable
+  confirmation and otherwise redrive with a fresh blockhash while the marker
+  and both NoteLocks remain valid. A definitive rejection removes the order,
+  preserves its collateral reservation through lock expiry, emits terminal
+  `settlement_failed(reason, lock_expiry_slot)`, and never auto-rebooks it.
+- **Wire/circuit impact.** The authenticated `orders` stream gains
+  `pending_settlement` and terminal `settlement_failed`; the latter carries a
+  reason and unlock slot. `GET /orders/{id}` exposes reserved matches as
+  `pending_settlement`, and per-match settlement status gains the tagged
+  `outcome` object. The SDK and daemon persist/route the new lifecycle states,
+  with a distinct confirmed-partial event so a late placement acknowledgement
+  cannot reopen a reserved order. No order-canonical bytes, settlement payload,
+  instruction data/accounts, note/root construction, circuit, zkey, VK, N=16
+  fixture, or vault program changes. The CPU image advances from 59 to 60.
+- **Local evidence.** `cargo fmt --all -- --check`, workspace clippy with
+  warnings denied, `cargo test -p nyx-tee`, and `cargo test --workspace` pass.
+  The TEE run covers 259 library tests and every integration target; the
+  adversarial cases retain confirmed siblings across a reverted or timed-out
+  Tx D, classify timeouts as ambiguous, require the complete consumed-PDA
+  pair, reserve atomically without fill mutation, exclude reservations from
+  subsequent snapshots/cancellation, preserve failed collateral until unlock,
+  route continuations to the actual settle shard, and make channel failure
+  terminal. SDK TypeScript and full Vitest pass 252 tests with 23 environment-
+  gated skips. Daemon TypeScript and full Vitest pass 147 tests with 2 skips,
+  including lifecycle persistence and the stale-placement-ack race. The first
+  daemon run's localhost control-API cases were sandbox-blocked with `EPERM`;
+  the permitted rerun passed all 147 tests.
+- **Devnet/CVM evidence.** Pending the isolated image-60 multi-match run. The
+  harness now requires a matched order to be observable as
+  `pending_settlement` before finality and absent from the live book only after
+  confirmed exact-fill settlement.
+- **Rollback.** Revert this PR and redeploy image 59 with the preceding SDK and
+  daemon. No notes, roots, canonical signatures, payloads, proofs, accounts, or
+  devnet program state are invalidated, but in-flight client lifecycle state
+  should be reconciled from chain. Rollback reopens N-02 and again permits
+  optimistic fills/book mutation before Tx D finality.
 
 ## Mainnet release gates
 

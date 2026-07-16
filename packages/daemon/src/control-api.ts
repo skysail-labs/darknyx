@@ -226,6 +226,8 @@ interface OrderJson {
   price: string;
   size: string;
   pending_change_notes: number;
+  settlement_failure_reason?: string;
+  settlement_unlock_slot?: number;
 }
 function serializeOrder(o: ManagedOrder): OrderJson {
   return {
@@ -235,6 +237,8 @@ function serializeOrder(o: ManagedOrder): OrderJson {
     price: o.priceRaw.toString(),
     size: o.sizeRaw.toString(),
     pending_change_notes: o.pendingChangeNotes,
+    settlement_failure_reason: o.settlementFailureReason,
+    settlement_unlock_slot: o.settlementUnlockSlot,
   };
 }
 function serializeOrders(os: ManagedOrder[]): OrderJson[] {

@@ -37,9 +37,9 @@ pub struct SettleJobId {
 /// scheduler is the only authority that mutates this; observers
 /// (status endpoint, future WS push) read clones.
 ///
-/// `Failed` carries a human-readable reason. The scheduler does
-/// not currently retry; operators consume the reason via
-/// `/settlement/status/{batch_id}` and decide what to do.
+/// `Failed` carries a human-readable reason. Ambiguous Tx D results remain in
+/// `Settling` while the worker reconciles consumed PDAs and redrives within the
+/// marker/lock window; only a definitive rejection reaches `Failed`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SettleJobStage {
@@ -56,12 +56,37 @@ pub enum SettleJobStage {
     Settling,
     /// Tx E (close_batch_validity_marker) in flight. PR 4g.6.
     Closing,
-    /// All five txs confirmed.
+    /// Tx D confirmed for this match. Marker close is asynchronous rent
+    /// bookkeeping and is not part of settlement finality.
     Done,
     /// Terminal error. The stage that failed is implied by the
     /// signatures filled in so far (`lock_buyer_sig=Some` +
     /// everything after `None` = failed at Verifying, etc.).
     Failed { reason: String },
+}
+
+/// Per-match settlement result. This is intentionally independent from the
+/// pipeline stage: a Tx D can be confirmed while siblings are still being
+/// reconciled, rejected with an on-chain error, or remain ambiguous after an
+/// RPC outage. Order-book finalization keys off this value, never off a
+/// batch-wide success boolean.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SettlementOutcome {
+    Pending,
+    Confirmed {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        slot: Option<u64>,
+        reconciled_from_consumed_pdas: bool,
+    },
+    Rejected {
+        reason: String,
+    },
+    Ambiguous {
+        reason: String,
+    },
 }
 
 impl SettleJobStage {
@@ -90,6 +115,7 @@ impl SettleJobStage {
 pub struct SettleJob {
     pub id: SettleJobId,
     pub stage: SettleJobStage,
+    pub outcome: SettlementOutcome,
     pub created_at: SystemTime,
     pub last_transition_at: SystemTime,
     /// The match this job is settling. Includes the buyer/seller
@@ -115,6 +141,7 @@ impl SettleJob {
         Self {
             id,
             stage: SettleJobStage::Queued,
+            outcome: SettlementOutcome::Pending,
             created_at: now,
             last_transition_at: now,
             match_pair,
@@ -137,9 +164,11 @@ impl SettleJob {
     /// Convenience: mark the job failed with a reason. Equivalent
     /// to `transition(SettleJobStage::Failed { reason })`.
     pub fn fail(&mut self, reason: impl Into<String>) {
-        self.transition(SettleJobStage::Failed {
-            reason: reason.into(),
-        });
+        let reason = reason.into();
+        self.outcome = SettlementOutcome::Rejected {
+            reason: reason.clone(),
+        };
+        self.transition(SettleJobStage::Failed { reason });
     }
 }
 
@@ -154,14 +183,14 @@ pub struct JobStatus {
     pub batch_id: BatchId,
     pub match_idx: MatchIdx,
     pub stage: &'static str,
+    pub outcome: SettlementOutcome,
     /// Present only when stage = "failed".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_reason: Option<String>,
     pub created_at_ms: u64,
     pub last_transition_at_ms: u64,
-    /// Confirmed on-chain tx signatures, populated as stages
-    /// complete. All five are `null` until the corresponding
-    /// stage lands.
+    /// Confirmed on-chain tx signatures, populated as stages complete.
+    /// `close_sig` normally remains absent because marker close is asynchronous.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lock_buyer_sig: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,6 +213,7 @@ impl From<&SettleJob> for JobStatus {
             batch_id: job.id.batch_id,
             match_idx: job.id.match_idx,
             stage: job.stage.label(),
+            outcome: job.outcome.clone(),
             failed_reason,
             created_at_ms: to_unix_ms(job.created_at),
             last_transition_at_ms: to_unix_ms(job.last_transition_at),

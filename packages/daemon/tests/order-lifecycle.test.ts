@@ -76,6 +76,47 @@ describe("reduceOrder — phase transitions", () => {
     expect(order.phase).toBe("filled");
   });
 
+  it("open → pending_settlement → open only after a confirmed partial fill", () => {
+    const pending = reduceOrder(
+      freshOpen(),
+      { type: "settlement-pending", lockExpirySlot: 500 },
+      DEFAULT_THRESHOLDS,
+      T0,
+    ).order;
+    expect(pending.phase).toBe("pending_settlement");
+    const stalePlacementAck = reduceOrder(
+      pending,
+      { type: "accepted", arrivalSlot: 10 },
+      DEFAULT_THRESHOLDS,
+      T0 + 1,
+    ).order;
+    expect(stalePlacementAck.phase).toBe("pending_settlement");
+    const confirmed = reduceOrder(
+      stalePlacementAck,
+      { type: "partial-fill-confirmed" },
+      DEFAULT_THRESHOLDS,
+      T0 + 2,
+    ).order;
+    expect(confirmed.phase).toBe("open");
+  });
+
+  it("settlement failure is terminal and retains reason plus unlock slot", () => {
+    const pending = freshOpen({ phase: "pending_settlement" });
+    const { order } = reduceOrder(
+      pending,
+      {
+        type: "settlement-failed",
+        reason: "on-chain revert",
+        lockExpirySlot: 900,
+      },
+      DEFAULT_THRESHOLDS,
+      T0,
+    );
+    expect(order.phase).toBe("settlement_failed");
+    expect(order.settlementFailureReason).toBe("on-chain revert");
+    expect(order.settlementUnlockSlot).toBe(900);
+  });
+
   it("pending → filled too (fully_filled implies it was accepted)", () => {
     const o = newManagedOrder({
       orderId: "ef".repeat(8),
@@ -111,6 +152,7 @@ describe("reduceOrder — phase transitions", () => {
       "cancelled",
       "expired",
       "rejected",
+      "settlement_failed",
     ] as const) {
       const { order } = reduceOrder(
         freshOpen({ phase: term }),

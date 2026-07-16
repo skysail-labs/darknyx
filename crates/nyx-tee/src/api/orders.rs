@@ -566,6 +566,7 @@ fn commit_order(
     p: PreparedOrder,
     expiry_slot: u64,
 ) -> Result<(), ApiError> {
+    st.release_failed_reservations(p.arrival_slot);
     // Check every conflict before mutating the book. In particular, a note
     // opening is a reservation that survives while settlement is pending; a
     // second order may not overwrite it and double-book the same collateral.
@@ -618,6 +619,7 @@ fn cancel_in_book(
         .map_err(|e| match e {
             BookError::NotFound(_) => ApiError::not_found(e.to_string()),
             BookError::NotOwner(_, _) => ApiError::not_owner(e.to_string()),
+            BookError::PendingSettlement(_) => ApiError::collateral_in_use(e.to_string()),
             e => ApiError::internal(e.to_string()),
         })?;
     if let Some(note) = collateral_note {
@@ -723,6 +725,8 @@ async fn announce_cancel(state: &ApiState, order_id_hex: &str) {
                 filled_quantity: None,
                 new_amount: None,
                 new_note_amount: None,
+                reason: None,
+                lock_expiry_slot: None,
             },
         )
         .await;
@@ -1016,7 +1020,7 @@ pub async fn get_order(
         status: match order.status {
             OrderStatus::Empty => "empty",
             OrderStatus::Pending => "pending",
-            OrderStatus::Matched => "matched",
+            OrderStatus::Matched => "pending_settlement",
             OrderStatus::Expired => "expired",
             OrderStatus::Cancelled => "cancelled",
         },

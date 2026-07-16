@@ -168,6 +168,7 @@ async fn status_returns_jobs_after_enqueue() {
         assert_eq!(j["batch_id"], 0);
         assert_eq!(j["match_idx"], i);
         assert_eq!(j["stage"], "queued");
+        assert_eq!(j["outcome"]["kind"], "pending");
         // 4g.1 hasn't wired any stage worker, so no tx sigs.
         // JobStatus serialises None as omitted, so accessing
         // `lock_buyer_sig` returns Null rather than a string.

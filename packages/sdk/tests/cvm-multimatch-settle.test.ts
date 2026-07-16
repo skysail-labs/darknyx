@@ -360,13 +360,22 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       `  · submitted ${orders.length} orders in ${Date.now() - submitStart}ms — ${accepted} accepted (2xx)`,
     );
     expect(accepted, "some orders rejected").toBe(orders.length);
+    const firstOrderId = (orders[0] as { order_id: string }).order_id;
 
     // Each match appends ≥ note_c + note_d (2 leaves); wait for all M.
     const wantLeaves = depositCount + 2 * MATCHES;
     const settleStart = Date.now();
     let finalCount = depositCount;
+    let sawPendingSettlement = false;
     const deadline = Date.now() + SETTLE_TIMEOUT_MS;
     while (Date.now() < deadline) {
+      const orderStatus = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (orderStatus.status === 200) {
+        const body = (await orderStatus.json()) as { status?: string };
+        sawPendingSettlement ||= body.status === "pending_settlement";
+      }
       finalCount = await harness.leafCount();
       if (finalCount >= wantLeaves) break;
       await new Promise((r) => setTimeout(r, 2000));
@@ -383,5 +392,16 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
       finalCount,
       "not all matches settled — check CVM logs for the failing stage",
     ).toBeGreaterThanOrEqual(wantLeaves);
+    expect(
+      sawPendingSettlement,
+      "matched order never exposed the finality-gated pending state",
+    ).toBe(true);
+    const finalizedOrder = await gwFetch(`${GATEWAY}/orders/${firstOrderId}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(
+      finalizedOrder.status,
+      "confirmed exact-fill order should leave the live book",
+    ).toBe(404);
   }, 600_000);
 });

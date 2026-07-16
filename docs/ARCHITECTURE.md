@@ -270,6 +270,16 @@ batched status poll drives all pending Tx D signatures; confirmed signatures
 are removed before the next poll and only overdue pending transactions are
 rebroadcast.
 
+Matching is **finality-gated per match**. The interval driver first marks both
+orders `pending_settlement` without changing quantities or publishing a fill.
+Each Tx D initial send and confirmation result is gathered independently. A
+confirmed match commits its book update and recovery memo immediately, even if
+a sibling is still ambiguous. Ambiguous results reconcile both atomic
+`ConsumedNoteEntry` PDAs and redrive with fresh blockhashes while the marker and
+both input locks remain valid. A definitive rejection removes the orders,
+emits terminal `settlement_failed(reason, lock_expiry_slot)`, retains their
+collateral reservation until unlock, and never silently rebooks them.
+
 ### `crates/darkpool-crypto` — host-side crypto
 
 Poseidon, note commitment, nullifier, key derivation, user commitment, the
@@ -326,12 +336,14 @@ order canonical signing, and the hand-coded `vault-client.ts`
    contributory X25519 viewing key, session, and nonce, then posts to the CVM.
    Intake verifies the signature + note opening, rejects stale sessions and
    non-increasing per-trading-key nonces, then books it.
-5. **Match (CVM).** The interval tick finds a crossing pair at the uniform
-   clearing price; if a side partially fills, the matcher derives the change
-   inner from the consumed input and rotates the residual to continue.
+5. **Match + reserve (CVM).** The interval tick finds a crossing pair at the
+   uniform clearing price, derives any proof-bound continuation commitment, and
+   marks both orders `pending_settlement` without applying quantities or fills.
 6. **Settle (CVM → L1).** The settle pipeline drives Tx A–E (above) on L1: the
    matched output notes (note_c/d), any change notes (note_e/f), and the
-   base+quote protocol fee notes are appended to the tree.
+   base+quote protocol fee notes are appended to the tree. Each confirmed Tx D
+   independently commits its order updates; ambiguous matches stay reserved and
+   redrive, while definitive failures are terminal and require a fresh order.
 7. **Private recovery.** The on-chain `fill_recovery` envelope carries encrypted
    `(trade, change)` amounts. Confirmed instructions/events plus the seed rebuild
    deposit, trade/change, continuation, and merge notes without live history.

@@ -356,7 +356,8 @@ async fn main() -> Result<()> {
     // The scheduler accumulates per-match jobs; when the TEE is fully
     // configured (signer + RPC + N=16 prover) a `SettleDriver` drives
     // each batch through the full on-chain pipeline (lock → prove →
-    // verify → ALT → settle → close) and evicts the spent openings.
+    // verify → ALT → settle → async close) and finalizes each match only from
+    // its own Tx D outcome.
     // Missing any dependency (explicit simulator test mode, prover zkey absent in a
     // local dev run) → enqueue-only, logged below.
     let settle_state = Arc::new(RwLock::new(SettleSchedulerState::default()));

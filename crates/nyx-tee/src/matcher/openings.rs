@@ -136,7 +136,7 @@ pub struct OrderOpening {
     /// The client-generated VALID_INPUT Groth16 proof for `lock_note`.
     pub valid_input_proof: Groth16ProofBytes,
     /// True when this opening is a relocked CONTINUATION note (note_e/note_f
-    /// rotated in by `assign_derived_continuations`): a prior batch's settle
+    /// installed after a confirmed match): a prior batch's settle
     /// already created its `NoteLock` (the re-lock), so the settle worker must
     /// SKIP `lock_note` for it — re-locking would collide. False for a fresh
     /// deposit opening registered at intake.
@@ -146,7 +146,7 @@ pub struct OrderOpening {
     /// assembler encrypts THIS side's `(trade, change)` output amounts to it for
     /// the permanent on-chain recovery backstop. Carried forward verbatim
     /// across continuation re-locks
-    /// (`assign_derived_continuations`), so a multi-fill residual stays
+    /// by the finality-gated continuation constructor, so a multi-fill residual stays
     /// recoverable. Internal tests may use `None`; accepted wire orders never do.
     pub viewing_pubkey: Option<[u8; 32]>,
 }

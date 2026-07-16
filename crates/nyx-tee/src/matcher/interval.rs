@@ -12,15 +12,17 @@
 //!      the per-expiry-slot index).
 //!   2. Snapshots the book + the oracle cache.
 //!   3. Calls `darkpool_matcher::run_batch(...)`.
-//!   4. Applies the emitted `OrderUpdate`s back to the book.
-//!   5. If any real matches landed, ships the `RunBatchOutput`
-//!      down an mpsc channel — the settle scheduler picks it up
-//!      from there in PR 4d.
+//!   4. Reserves matched orders as `pending_settlement` without changing
+//!      quantities or publishing fills.
+//!   5. Ships the `RunBatchOutput` to the settle scheduler. Each order update
+//!      is applied only after that match's Tx D confirms; rejected matches are
+//!      terminal and ambiguous matches stay reserved.
 //!
 //! Conceptual shift documented in `docs/tee-architecture.md`
 //! §5.4: nobody outside the TEE can trigger a match. The driver
 //! is wholly internal to the long-running daemon.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,6 +44,7 @@ use crate::oracle::cache::OracleCache;
 
 use super::book::OrderBook;
 use super::fills::FillMemo;
+use super::lifecycle::{OrderLifecycleEvent, OrderLifecycleKind};
 use super::openings::{NoteOpening, OrderOpening};
 
 /// Maximum age of an oracle cache entry the matcher will accept.
@@ -64,6 +67,10 @@ pub struct MatcherState {
     /// after the opening verifies against the signed commitment;
     /// read by the settle assembler; pruned on cancel / settle.
     openings: super::openings::OpeningStore,
+    /// Input openings retained after a definitive settlement failure. Their
+    /// orders are terminal, but the same collateral must not back a fresh
+    /// signed order until its NoteLock expires.
+    failed_reservations: HashMap<[u8; 32], u64>,
     /// This market's base + quote SPL mints. The order intake needs
     /// them to pick the collateral mint (bid → quote, ask → base)
     /// when re-deriving + verifying the note commitment. Zero until
@@ -88,7 +95,7 @@ pub struct MatcherState {
     /// each to the owning account. Kept alive with no subscribers (the tick
     /// ignores the send `Err`). Account-agnostic here — keyed by `order_id`;
     /// the API layer maps `order_id → account` (same bridge fills use).
-    order_updates_tx: tokio::sync::broadcast::Sender<OrderUpdate>,
+    order_updates_tx: tokio::sync::broadcast::Sender<OrderLifecycleEvent>,
 }
 
 impl Default for MatcherState {
@@ -101,6 +108,7 @@ impl Default for MatcherState {
             book: OrderBook::default(),
             next_match_id: 0,
             openings: super::openings::OpeningStore::default(),
+            failed_reservations: HashMap::new(),
             base_mint: [0u8; 32],
             quote_mint: [0u8; 32],
             price_scale: 1,
@@ -122,7 +130,7 @@ impl MatcherState {
     }
 
     /// Subscribe to the order-lifecycle broadcast (the WS `orders` channel).
-    pub fn subscribe_order_updates(&self) -> tokio::sync::broadcast::Receiver<OrderUpdate> {
+    pub fn subscribe_order_updates(&self) -> tokio::sync::broadcast::Receiver<OrderLifecycleEvent> {
         self.order_updates_tx.subscribe()
     }
 
@@ -186,20 +194,18 @@ impl MatcherState {
 /// Build deterministic continuation outputs for relocking sides of a freshly
 /// matched batch. Each change inner is `Poseidon3(24, input_inner, role)`, so
 /// no client-supplied anchor or process-local settlement id can influence it.
-/// The rotated opening remains inside the enclave because Tx D creates its
-/// relock atomically; the next page consumes that locked commitment directly.
+/// The rotated opening is inserted only after that match's Tx D confirms.
 ///
 /// A missing input opening downgrades the residual to cancelled rather than
 /// emitting an output whose circuit opening the scheduler cannot reconstruct.
 ///
-/// Must run under the matcher write lock, BEFORE `apply_updates`.
-fn assign_derived_continuations(state: &mut MatcherState, output: &mut RunBatchOutput) {
+/// Must run before orders are reserved and the batch is sent to settlement.
+fn prepare_derived_continuations(state: &MatcherState, output: &mut RunBatchOutput) {
     let (base_mint, quote_mint) = state.market_mints();
     // Collected post-loop edits to `order_updates` (can't borrow it while
     // `matches` is borrowed mut): order_id -> Some(new_collateral_note) to
     // rewrite the PartiallyFilled, or None to downgrade to Cancelled.
     let mut update_edits: Vec<([u8; 16], Option<[u8; 32]>)> = Vec::new();
-    let mut fill_memos = Vec::new();
 
     for m in output.matches.iter_mut() {
         // ── buyer side → note_e (QUOTE collateral) ──
@@ -219,46 +225,7 @@ fn assign_derived_continuations(state: &mut MatcherState, output: &mut RunBatchO
                             &inner,
                         ) {
                             m.note_e_commitment = note_e;
-                            fill_memos.push(FillMemo::new(
-                                prior.order_id,
-                                m.note_buyer,
-                                CHANGE_ROLE_BUYER,
-                                m.buyer_change_amt,
-                                note_e,
-                                quote_mint,
-                                inner,
-                            ));
                             if relock_oid != RELOCK_ORDER_ID_NONE {
-                                let opening = OrderOpening {
-                                    opening: NoteOpening {
-                                        token_mint: quote_mint,
-                                        amount: m.buyer_change_amt,
-                                        owner_commitment: owner,
-                                        inner_hash: inner,
-                                        // Settlement replay protection is commitment-
-                                        // keyed. The user's spending key derives the
-                                        // real nullifier when it later withdraws.
-                                        nullifier: [0u8; 32],
-                                    },
-                                    order_id: relock_oid,
-                                    expiry_slot: prior.expiry_slot,
-                                    // The relock (created when THIS batch settles)
-                                    // pins note_e on-chain, so the continuation
-                                    // re-consumes it without a fresh VALID_INPUT
-                                    // proof; these carry forward the prior values.
-                                    merkle_root: prior.merkle_root,
-                                    // Carried forward; unused — `from_relock` skips lock_note.
-                                    tree_id: prior.tree_id,
-                                    valid_input_proof: prior.valid_input_proof.clone(),
-                                    // note_e is locked by THIS batch's re-lock — the
-                                    // NEXT batch that consumes it must skip lock_note.
-                                    from_relock: true,
-                                    // The continuation note returns to the same owner —
-                                    // carry the viewing key so the residual stays
-                                    // recoverable across re-locks (Proposal B).
-                                    viewing_pubkey: prior.viewing_pubkey,
-                                };
-                                state.openings_mut().insert(note_e, opening);
                                 update_edits.push((relock_oid, Some(note_e)));
                             }
                         } else if relock_oid != RELOCK_ORDER_ID_NONE {
@@ -296,37 +263,7 @@ fn assign_derived_continuations(state: &mut MatcherState, output: &mut RunBatchO
                             &inner,
                         ) {
                             m.note_f_commitment = note_f;
-                            fill_memos.push(FillMemo::new(
-                                prior.order_id,
-                                m.note_seller,
-                                CHANGE_ROLE_SELLER,
-                                m.seller_change_amt,
-                                note_f,
-                                base_mint,
-                                inner,
-                            ));
                             if relock_oid != RELOCK_ORDER_ID_NONE {
-                                let opening = OrderOpening {
-                                    opening: NoteOpening {
-                                        token_mint: base_mint,
-                                        amount: m.seller_change_amt,
-                                        owner_commitment: owner,
-                                        inner_hash: inner,
-                                        nullifier: [0u8; 32],
-                                    },
-                                    order_id: relock_oid,
-                                    expiry_slot: prior.expiry_slot,
-                                    merkle_root: prior.merkle_root,
-                                    // Carried forward; unused — `from_relock` skips lock_note.
-                                    tree_id: prior.tree_id,
-                                    valid_input_proof: prior.valid_input_proof.clone(),
-                                    // note_f is locked by THIS batch's re-lock.
-                                    from_relock: true,
-                                    // Carry the viewing key forward (Proposal B) so the
-                                    // seller's continuation residual stays recoverable.
-                                    viewing_pubkey: prior.viewing_pubkey,
-                                };
-                                state.openings_mut().insert(note_f, opening);
                                 update_edits.push((relock_oid, Some(note_f)));
                             }
                         } else if relock_oid != RELOCK_ORDER_ID_NONE {
@@ -371,9 +308,255 @@ fn assign_derived_continuations(state: &mut MatcherState, output: &mut RunBatchO
             }
         }
     }
+}
 
-    for memo in fill_memos {
-        let _ = state.fills_tx.send(memo);
+impl MatcherState {
+    /// Reserve every matched order without applying quantities or publishing a
+    /// fill. `OrderStatus::Matched` is exposed as `pending_settlement` and is
+    /// skipped by subsequent matcher snapshots.
+    pub(crate) fn reserve_batch(&mut self, output: &RunBatchOutput) -> Result<(), String> {
+        let mut ids = Vec::with_capacity(output.matches.len() * 2);
+        let mut pending_events = Vec::with_capacity(output.matches.len() * 2);
+        for m in &output.matches {
+            let buyer = self
+                .openings
+                .get(&m.note_buyer)
+                .ok_or_else(|| format!("missing buyer opening {}", hex::encode(m.note_buyer)))?;
+            let seller = self
+                .openings
+                .get(&m.note_seller)
+                .ok_or_else(|| format!("missing seller opening {}", hex::encode(m.note_seller)))?;
+            ids.push(buyer.order_id);
+            ids.push(seller.order_id);
+            pending_events.push(OrderLifecycleEvent {
+                trading_key: m.owner_buyer,
+                order_id: buyer.order_id,
+                kind: OrderLifecycleKind::PendingSettlement {
+                    lock_expiry_slot: buyer.expiry_slot,
+                },
+            });
+            pending_events.push(OrderLifecycleEvent {
+                trading_key: m.owner_seller,
+                order_id: seller.order_id,
+                kind: OrderLifecycleKind::PendingSettlement {
+                    lock_expiry_slot: seller.expiry_slot,
+                },
+            });
+        }
+        let unique: HashSet<_> = ids.iter().copied().collect();
+        if unique.len() != ids.len() {
+            return Err("a settlement batch references one order more than once".to_string());
+        }
+        self.book
+            .reserve_for_settlement(&ids)
+            .map_err(|error| error.to_string())?;
+        for event in pending_events {
+            let _ = self.order_updates_tx.send(event);
+        }
+        Ok(())
+    }
+
+    fn continuation_opening(
+        prior: &OrderOpening,
+        token_mint: [u8; 32],
+        amount: u64,
+        inner_hash: [u8; 32],
+        order_id: [u8; 16],
+        tree_id: u8,
+    ) -> OrderOpening {
+        OrderOpening {
+            opening: NoteOpening {
+                token_mint,
+                amount,
+                owner_commitment: prior.opening.owner_commitment,
+                inner_hash,
+                nullifier: [0u8; 32],
+            },
+            order_id,
+            expiry_slot: prior.expiry_slot,
+            merkle_root: prior.merkle_root,
+            tree_id,
+            valid_input_proof: prior.valid_input_proof.clone(),
+            from_relock: true,
+            viewing_pubkey: prior.viewing_pubkey,
+        }
+    }
+
+    /// Apply one confirmed match. This is the only path that mutates filled
+    /// quantities, rotates continuation collateral, or publishes fill memos.
+    pub(crate) fn commit_confirmed_match(
+        &mut self,
+        output: &RunBatchOutput,
+        match_index: usize,
+        settle_tree_id: u8,
+    ) -> Result<(), String> {
+        let m = output
+            .matches
+            .get(match_index)
+            .ok_or_else(|| format!("match index {match_index} out of range"))?;
+        let buyer = self
+            .openings
+            .get(&m.note_buyer)
+            .ok_or_else(|| format!("missing buyer opening {}", hex::encode(m.note_buyer)))?;
+        let seller = self
+            .openings
+            .get(&m.note_seller)
+            .ok_or_else(|| format!("missing seller opening {}", hex::encode(m.note_seller)))?;
+        let updates: Vec<OrderUpdate> = output
+            .order_updates
+            .iter()
+            .filter(|update| {
+                update.order_id == buyer.order_id || update.order_id == seller.order_id
+            })
+            .cloned()
+            .collect();
+        if updates.len() != 2 {
+            return Err(format!(
+                "confirmed match {match_index} has {} participant updates, expected 2",
+                updates.len()
+            ));
+        }
+
+        self.openings.remove(&m.note_buyer);
+        self.openings.remove(&m.note_seller);
+        self.failed_reservations.remove(&m.note_buyer);
+        self.failed_reservations.remove(&m.note_seller);
+
+        let (base_mint, quote_mint) = self.market_mints();
+        if m.buyer_change_amt > 0 {
+            let inner = match_output_inner_hash(&buyer.opening.inner_hash, CHANGE_ROLE_BUYER)
+                .map_err(|error| error.to_string())?;
+            let _ = self.fills_tx.send(FillMemo::new(
+                buyer.order_id,
+                m.note_buyer,
+                CHANGE_ROLE_BUYER,
+                m.buyer_change_amt,
+                m.note_e_commitment,
+                quote_mint,
+                inner,
+            ));
+            if m.buyer_relock_order_id != RELOCK_ORDER_ID_NONE {
+                self.openings.insert(
+                    m.note_e_commitment,
+                    Self::continuation_opening(
+                        &buyer,
+                        quote_mint,
+                        m.buyer_change_amt,
+                        inner,
+                        m.buyer_relock_order_id,
+                        settle_tree_id,
+                    ),
+                );
+            }
+        }
+        if m.seller_change_amt > 0 {
+            let inner = match_output_inner_hash(&seller.opening.inner_hash, CHANGE_ROLE_SELLER)
+                .map_err(|error| error.to_string())?;
+            let _ = self.fills_tx.send(FillMemo::new(
+                seller.order_id,
+                m.note_seller,
+                CHANGE_ROLE_SELLER,
+                m.seller_change_amt,
+                m.note_f_commitment,
+                base_mint,
+                inner,
+            ));
+            if m.seller_relock_order_id != RELOCK_ORDER_ID_NONE {
+                self.openings.insert(
+                    m.note_f_commitment,
+                    Self::continuation_opening(
+                        &seller,
+                        base_mint,
+                        m.seller_change_amt,
+                        inner,
+                        m.seller_relock_order_id,
+                        settle_tree_id,
+                    ),
+                );
+            }
+        }
+
+        self.book.apply_updates(&updates);
+        for update in updates {
+            let _ = self.order_updates_tx.send(update.into());
+        }
+        Ok(())
+    }
+
+    /// Make a definitive settlement failure terminal without applying its
+    /// proposed fill. The input openings stay reserved until their NoteLocks
+    /// expire, preventing an immediately resubmitted order from reusing locked
+    /// collateral.
+    pub(crate) fn reject_match(
+        &mut self,
+        output: &RunBatchOutput,
+        match_index: usize,
+        reason: &str,
+    ) -> Result<(), String> {
+        let m = output
+            .matches
+            .get(match_index)
+            .ok_or_else(|| format!("match index {match_index} out of range"))?;
+        let buyer = self
+            .openings
+            .get(&m.note_buyer)
+            .ok_or_else(|| format!("missing buyer opening {}", hex::encode(m.note_buyer)))?;
+        let seller = self
+            .openings
+            .get(&m.note_seller)
+            .ok_or_else(|| format!("missing seller opening {}", hex::encode(m.note_seller)))?;
+
+        let _ = self.book.remove_pending_settlement(&buyer.order_id);
+        let _ = self.book.remove_pending_settlement(&seller.order_id);
+        self.failed_reservations
+            .insert(m.note_buyer, buyer.expiry_slot);
+        self.failed_reservations
+            .insert(m.note_seller, seller.expiry_slot);
+        for (trading_key, order_id, lock_expiry_slot) in [
+            (m.owner_buyer, buyer.order_id, buyer.expiry_slot),
+            (m.owner_seller, seller.order_id, seller.expiry_slot),
+        ] {
+            let _ = self.order_updates_tx.send(OrderLifecycleEvent {
+                trading_key,
+                order_id,
+                kind: OrderLifecycleKind::SettlementFailed {
+                    reason: reason.to_string(),
+                    lock_expiry_slot,
+                },
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reject_batch(&mut self, output: &RunBatchOutput, reason: &str) {
+        for idx in 0..output.matches.len() {
+            let m = &output.matches[idx];
+            if !self.openings.is_reserved(&m.note_buyer)
+                && !self.openings.is_reserved(&m.note_seller)
+            {
+                // This sibling already confirmed and its consumed openings
+                // were replaced/removed by `commit_confirmed_match`.
+                continue;
+            }
+            if let Err(error) = self.reject_match(output, idx, reason) {
+                tracing::error!(match_idx = idx, %error, "failed to reject settlement match");
+            }
+        }
+    }
+
+    /// Release only terminal failed reservations whose lock expiry has passed.
+    /// Ambiguous matches remain in the book as `Matched` and are never swept by
+    /// this path.
+    pub(crate) fn release_failed_reservations(&mut self, now_slot: u64) {
+        let expired: Vec<[u8; 32]> = self
+            .failed_reservations
+            .iter()
+            .filter_map(|(commitment, expiry)| (*expiry <= now_slot).then_some(*commitment))
+            .collect();
+        for commitment in expired {
+            self.failed_reservations.remove(&commitment);
+            self.openings.remove(&commitment);
+        }
     }
 }
 
@@ -480,6 +663,7 @@ impl MatcherDriver {
         // layer will publish on the `orders` WS channel.
         let expired_ids = {
             let mut state = self.state.write().await;
+            state.release_failed_reservations(now_slot);
             state.book_mut().sweep_expired(now_slot)
         };
         if !expired_ids.is_empty() {
@@ -494,17 +678,15 @@ impl MatcherDriver {
         // settle circuit absorbs in one batch (the loadgen saw 23-50
         // matches/tick, all dropped by the settle assembler). Page the
         // book: each iteration matches up to `max_matches_per_batch`
-        // fills (run_batch_capped), emits that ≤N RunBatchOutput as its
-        // own settle batch, applies the fills to the in-memory book,
-        // and loops until the book stops crossing. Batches settle
-        // SEQUENTIALLY downstream (the scheduler awaits each), so a
-        // relock / change note produced by one page is on-chain before
-        // a later page that consumes it as collateral settles.
+        // fills (run_batch_capped), reserves those orders, emits that ≤N
+        // RunBatchOutput as its own settle batch, and continues with the
+        // remaining unreserved orders. Batches settle sequentially downstream;
+        // a continuation can re-enter a later tick only after its Tx D confirms.
         let max_per_batch = self.cfg.max_matches_per_batch.max(1);
         for page in 0..MAX_PAGES_PER_TICK {
-            // Re-snapshot each page so the previous page's fills (applied
-            // below) are reflected. Read lock is released before the
-            // match so submitters aren't blocked across it.
+            // Re-snapshot each page so orders reserved by the previous page are
+            // excluded. Read lock is released before matching so submitters
+            // aren't blocked across it.
             let (book_snap, start_match_id) = {
                 let state = self.state.read().await;
                 let snap = state.book().snapshot();
@@ -521,12 +703,9 @@ impl MatcherDriver {
                 now_slot,
                 start_match_id,
                 max_per_batch,
-                // single_fill_per_order: each order fills at most once
-                // per batch. A partially-filled order's residual relocks
-                // on-chain and is dropped from the book (apply_updates) —
-                // re-matching it would consume a change note the TEE
-                // can't nullify (no spending key). Until the client
-                // re-submission relayer lands, residuals await re-submit.
+                // single_fill_per_order: each order fills at most once per
+                // batch. A confirmed partial fill rotates the resting order to
+                // its atomically relocked continuation before it can re-match.
                 true,
             ) {
                 Ok(out) => out,
@@ -548,18 +727,38 @@ impl MatcherDriver {
                 }
             };
 
-            // Apply this page's updates + advance the match-id counter
-            // under a brief write lock. `assign_derived_continuations` first
-            // rebuilds note_e/note_f from the consumed input inner and inserts
-            // the rotated opening, so the circuit and next relock agree.
+            // Prepare proof-bound continuation commitments, apply only updates
+            // unrelated to a real match (for example FOK cancellation), and
+            // reserve every matched order. Fill quantities, rotated openings,
+            // and fill broadcasts wait for each match's Tx D outcome.
             {
                 let mut state = self.state.write().await;
-                assign_derived_continuations(&mut state, &mut output);
-                state.book_mut().apply_updates(&output.order_updates);
-                // Publish every update on the order-lifecycle broadcast so `orders` subscribers
-                // can stream it (best-effort; no subscriber → send `Err`, ignored).
-                for u in &output.order_updates {
-                    let _ = state.order_updates_tx.send(u.clone());
+                prepare_derived_continuations(&state, &mut output);
+                let participant_ids: HashSet<[u8; 16]> = output
+                    .matches
+                    .iter()
+                    .flat_map(|m| {
+                        [
+                            state.openings().get(&m.note_buyer).map(|o| o.order_id),
+                            state.openings().get(&m.note_seller).map(|o| o.order_id),
+                        ]
+                    })
+                    .flatten()
+                    .collect();
+                let immediate: Vec<OrderUpdate> = output
+                    .order_updates
+                    .iter()
+                    .filter(|update| !participant_ids.contains(&update.order_id))
+                    .cloned()
+                    .collect();
+                state.book_mut().apply_updates(&immediate);
+                for update in immediate {
+                    let _ = state.order_updates_tx.send(update.into());
+                }
+                if !output.matches.is_empty() {
+                    state
+                        .reserve_batch(&output)
+                        .map_err(|error| anyhow::anyhow!("reserve settlement batch: {error}"))?;
                 }
                 state.next_match_id = state
                     .next_match_id
@@ -579,10 +778,12 @@ impl MatcherDriver {
             );
             // Forward to the settle scheduler. Returns Err if the
             // receiver dropped — meaning we should shut down.
-            self.matches_tx
-                .send(output)
-                .await
-                .map_err(|_| anyhow::anyhow!("matches channel closed"))?;
+            if let Err(send_error) = self.matches_tx.send(output).await {
+                let output = send_error.0;
+                let mut state = self.state.write().await;
+                state.reject_batch(&output, "settlement scheduler unavailable");
+                return Err(anyhow::anyhow!("matches channel closed"));
+            }
         }
         Ok(())
     }
@@ -614,6 +815,9 @@ mod tests {
     use super::*;
     use crate::matcher::openings::{NoteOpening, OrderOpening};
     use crate::settle::lock_note::Groth16ProofBytes;
+    use darkpool_matcher::book::{
+        Order, OrderSide, OrderStatus, OrderType, OrderUpdate, OrderUpdateKind,
+    };
     use darkpool_matcher::match_result::{MatchPair, MatchStatus};
 
     fn fr_safe(tag: u8) -> [u8; 32] {
@@ -627,7 +831,7 @@ mod tests {
     /// input opening must carry verbatim onto the rotated continuation opening,
     /// so a multi-fill residual's change stays recoverable. Guards the
     /// `viewing_pubkey: prior.viewing_pubkey` carry in
-    /// `assign_derived_continuations`.
+    /// finality-gated continuation constructor.
     #[test]
     fn viewing_pubkey_survives_continuation_relock() {
         let base_mint = [0xb1u8; 32];
@@ -694,27 +898,211 @@ mod tests {
         let mut output = RunBatchOutput::empty(10, 100, 0);
         output.matches = vec![m];
 
-        let mut fills = state.subscribe_fills();
-        assign_derived_continuations(&mut state, &mut output);
+        prepare_derived_continuations(&state, &mut output);
 
-        // The rotated opening is keyed by the freshly-computed note_e.
+        // Preparation derives the proof-bound commitment but does not insert or
+        // broadcast it before Tx D confirmation.
         let note_e = output.matches[0].note_e_commitment;
         assert_ne!(note_e, [0u8; 32], "note_e should have been rebuilt");
-        let rotated = state
-            .openings()
-            .get(&note_e)
-            .expect("rotated continuation opening present");
+        assert!(state.openings().get(&note_e).is_none());
+        let prior = state.openings().get(&note_buyer).unwrap();
+        let inner = match_output_inner_hash(&prior.opening.inner_hash, CHANGE_ROLE_BUYER).unwrap();
+        let rotated = MatcherState::continuation_opening(
+            &prior,
+            quote_mint,
+            output.matches[0].buyer_change_amt,
+            inner,
+            bid_id,
+            3,
+        );
         assert!(rotated.from_relock, "continuation is a relock");
         assert_eq!(
             rotated.viewing_pubkey,
             Some(viewing),
             "viewing pubkey carried onto the continuation opening"
         );
-        let memo = fills.try_recv().expect("derived fill memo emitted");
-        assert_eq!(memo.order_id, hex::encode(bid_id));
-        assert_eq!(memo.consumed_note_commitment, hex::encode(note_buyer));
-        assert_eq!(memo.output_role, CHANGE_ROLE_BUYER);
-        assert_eq!(memo.change_note_commitment, hex::encode(note_e));
-        assert_eq!(memo.inner_hash, hex::encode(rotated.opening.inner_hash));
+        assert_eq!(inner, rotated.opening.inner_hash);
+        assert_eq!(rotated.tree_id, 3, "continuation follows the settle shard");
+    }
+
+    #[test]
+    fn reservation_is_non_mutating_and_rejection_is_terminal_until_unlock() {
+        let base_mint = [0xb1u8; 32];
+        let quote_mint = [0x9eu8; 32];
+        let mut state = MatcherState::new().with_market(base_mint, quote_mint);
+        let buyer_id = [0x01; 16];
+        let seller_id = [0x02; 16];
+        let expiry = 5_000;
+        let proof = Groth16ProofBytes {
+            pi_a: [1; 64],
+            pi_b: [2; 128],
+            pi_c: [3; 64],
+        };
+        let buyer_opening = NoteOpening {
+            token_mint: quote_mint,
+            amount: 1_000,
+            owner_commitment: fr_safe(0x11),
+            inner_hash: fr_safe(0x12),
+            nullifier: [0; 32],
+        };
+        let seller_opening = NoteOpening {
+            token_mint: base_mint,
+            amount: 10,
+            owner_commitment: fr_safe(0x21),
+            inner_hash: fr_safe(0x22),
+            nullifier: [0; 32],
+        };
+        let note_buyer = buyer_opening.commitment().unwrap();
+        let note_seller = seller_opening.commitment().unwrap();
+        for (note, opening, order_id) in [
+            (note_buyer, buyer_opening.clone(), buyer_id),
+            (note_seller, seller_opening.clone(), seller_id),
+        ] {
+            state.openings_mut().insert(
+                note,
+                OrderOpening {
+                    opening,
+                    order_id,
+                    expiry_slot: expiry,
+                    merkle_root: [0x44; 32],
+                    tree_id: 0,
+                    valid_input_proof: proof.clone(),
+                    from_relock: false,
+                    viewing_pubkey: Some([0x55; 32]),
+                },
+            );
+        }
+        for order in [
+            Order {
+                trading_key: [0x31; 32],
+                side: OrderSide::Bid,
+                order_type: OrderType::Limit,
+                status: OrderStatus::Pending,
+                arrival_slot: 1,
+                expiry_slot: expiry,
+                price_limit: 100,
+                amount: 10,
+                total_quantity: 10,
+                filled_quantity: 0,
+                min_fill_qty: 0,
+                note_amount: 1_000,
+                collateral_note: note_buyer,
+                user_commitment: fr_safe(0x41),
+                owner_commitment: buyer_opening.owner_commitment,
+                order_id: buyer_id,
+                order_inclusion_commitment: [0x61; 32],
+            },
+            Order {
+                trading_key: [0x32; 32],
+                side: OrderSide::Ask,
+                order_type: OrderType::Limit,
+                status: OrderStatus::Pending,
+                arrival_slot: 2,
+                expiry_slot: expiry,
+                price_limit: 100,
+                amount: 10,
+                total_quantity: 10,
+                filled_quantity: 0,
+                min_fill_qty: 0,
+                note_amount: 10,
+                collateral_note: note_seller,
+                user_commitment: fr_safe(0x42),
+                owner_commitment: seller_opening.owner_commitment,
+                order_id: seller_id,
+                order_inclusion_commitment: [0x62; 32],
+            },
+        ] {
+            state.book_mut().submit(order).unwrap();
+        }
+
+        let m = MatchPair {
+            note_buyer,
+            note_seller,
+            note_e_commitment: [0; 32],
+            note_f_commitment: [0; 32],
+            owner_buyer: [0x31; 32],
+            owner_seller: [0x32; 32],
+            user_commitment_buyer: fr_safe(0x41),
+            user_commitment_seller: fr_safe(0x42),
+            buyer_note_value: 1_000,
+            seller_note_value: 10,
+            base_amt: 10,
+            quote_amt: 1_000,
+            buyer_change_amt: 0,
+            seller_change_amt: 0,
+            buyer_fee_amt: 0,
+            seller_fee_amt: 0,
+            buyer_relock_order_id: RELOCK_ORDER_ID_NONE,
+            buyer_relock_expiry: 0,
+            seller_relock_order_id: RELOCK_ORDER_ID_NONE,
+            seller_relock_expiry: 0,
+            price: 100,
+            pyth_at_match: 100,
+            batch_slot: 10,
+            match_id: 0,
+            status: MatchStatus::Filled,
+        };
+        let mut output = RunBatchOutput::empty(10, 100, 0);
+        output.matches = vec![m];
+        output.order_updates = vec![
+            OrderUpdate {
+                trading_key: [0x31; 32],
+                order_id: buyer_id,
+                kind: OrderUpdateKind::FullyFilled {
+                    filled_quantity: 10,
+                },
+            },
+            OrderUpdate {
+                trading_key: [0x32; 32],
+                order_id: seller_id,
+                kind: OrderUpdateKind::FullyFilled {
+                    filled_quantity: 10,
+                },
+            },
+        ];
+
+        let mut lifecycle = state.subscribe_order_updates();
+        let mut fills = state.subscribe_fills();
+        state.reserve_batch(&output).unwrap();
+        for id in [buyer_id, seller_id] {
+            let order = state.book().get(&id).unwrap();
+            assert_eq!(order.status, OrderStatus::Matched);
+            assert_eq!(order.amount, 10, "reservation mutated quantity");
+            assert_eq!(order.filled_quantity, 0, "reservation published fill");
+        }
+        assert!(state.book().snapshot().orders.is_empty());
+        for _ in 0..2 {
+            assert!(matches!(
+                lifecycle.try_recv().unwrap().kind,
+                OrderLifecycleKind::PendingSettlement {
+                    lock_expiry_slot: 5_000
+                }
+            ));
+        }
+        assert!(fills.try_recv().is_err(), "fill emitted before finality");
+
+        state.reject_match(&output, 0, "Tx D reverted").unwrap();
+        assert!(state.book().get(&buyer_id).is_none());
+        assert!(state.book().get(&seller_id).is_none());
+        assert!(state.openings().is_reserved(&note_buyer));
+        assert!(state.openings().is_reserved(&note_seller));
+        for _ in 0..2 {
+            match lifecycle.try_recv().unwrap().kind {
+                OrderLifecycleKind::SettlementFailed {
+                    reason,
+                    lock_expiry_slot,
+                } => {
+                    assert_eq!(reason, "Tx D reverted");
+                    assert_eq!(lock_expiry_slot, expiry);
+                }
+                other => panic!("unexpected lifecycle event: {other:?}"),
+            }
+        }
+        assert!(fills.try_recv().is_err(), "rejected match emitted a fill");
+        state.release_failed_reservations(expiry - 1);
+        assert!(state.openings().is_reserved(&note_buyer));
+        state.release_failed_reservations(expiry);
+        assert!(!state.openings().is_reserved(&note_buyer));
+        assert!(!state.openings().is_reserved(&note_seller));
     }
 }

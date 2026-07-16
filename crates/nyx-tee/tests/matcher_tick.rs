@@ -23,8 +23,9 @@ use darkpool_matcher::{
     book::{Order, OrderSide, OrderStatus, OrderType},
     config::MatchConfig,
 };
-use nyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState};
+use nyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, NoteOpening, OrderOpening};
 use nyx_tee::oracle::{cache::CachedPrice, OracleCache};
+use nyx_tee::settle::Groth16ProofBytes;
 use tokio::sync::{mpsc, RwLock};
 
 const FEED_ID: &str = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
@@ -85,6 +86,45 @@ fn mk_config() -> MatchConfig {
     }
 }
 
+fn mk_state() -> MatcherState {
+    let cfg = mk_config();
+    MatcherState::new().with_market(cfg.base_mint, cfg.quote_mint)
+}
+
+fn submit_with_opening(state: &mut tokio::sync::RwLockWriteGuard<'_, MatcherState>, order: Order) {
+    let cfg = mk_config();
+    let mint = match order.side {
+        OrderSide::Bid => cfg.quote_mint,
+        OrderSide::Ask => cfg.base_mint,
+    };
+    let mut inner_hash = [order.order_id[0].wrapping_add(1); 32];
+    inner_hash[0] = 0;
+    state.openings_mut().insert(
+        order.collateral_note,
+        OrderOpening {
+            opening: NoteOpening {
+                token_mint: mint,
+                amount: order.note_amount,
+                owner_commitment: order.owner_commitment,
+                inner_hash,
+                nullifier: [0; 32],
+            },
+            order_id: order.order_id,
+            expiry_slot: order.expiry_slot,
+            merkle_root: [0x44; 32],
+            tree_id: 0,
+            valid_input_proof: Groth16ProofBytes {
+                pi_a: [1; 64],
+                pi_b: [2; 128],
+                pi_c: [3; 64],
+            },
+            from_relock: false,
+            viewing_pubkey: Some([0x55; 32]),
+        },
+    );
+    state.book_mut().submit(order).unwrap();
+}
+
 async fn seed_oracle(cache: &OracleCache, twap: u64) {
     cache
         .upsert(
@@ -125,8 +165,8 @@ fn mk_driver(
 // ─────── Tests ──────────────────────────────────────────────────────────────
 
 /// The load-bearing case: book has a crossing pair, oracle is
-/// fresh, tick fires once, mpsc receiver gets the matches, book
-/// drains.
+/// fresh, tick fires once, mpsc receiver gets the matches, and both orders are
+/// reserved without applying the fill.
 ///
 /// Uses `try_recv` (not `recv().await`) so the test fails fast
 /// if `tick()` returns Ok but didn't push a match — the
@@ -136,23 +176,19 @@ fn mk_driver(
 /// that immediately.
 #[tokio::test]
 async fn tick_produces_matches_for_crossing_book() {
-    let state = Arc::new(RwLock::new(MatcherState::new()));
+    let state = Arc::new(RwLock::new(mk_state()));
     let oracle = OracleCache::new();
     let current_slot = Arc::new(AtomicU64::new(1));
     let (tx, mut rx) = mpsc::channel(8);
 
-    state
-        .write()
-        .await
-        .book_mut()
-        .submit(mk_order(OrderSide::Bid, 1, 100, 10))
-        .expect("submit bid");
-    state
-        .write()
-        .await
-        .book_mut()
-        .submit(mk_order(OrderSide::Ask, 2, 100, 10))
-        .expect("submit ask");
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Bid, 1, 100, 10),
+    );
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Ask, 2, 100, 10),
+    );
 
     seed_oracle(&oracle, 100).await;
 
@@ -167,7 +203,11 @@ async fn tick_produces_matches_for_crossing_book() {
     assert_eq!(output.matches[0].base_amt, 10);
 
     let final_state = state.read().await;
-    assert!(final_state.book().is_empty(), "book should be drained");
+    assert!(
+        final_state.book().snapshot().orders.is_empty(),
+        "reserved orders must not be matchable"
+    );
+    assert_eq!(final_state.book().len(), 2, "orders await Tx D finality");
     assert_eq!(final_state.next_match_id(), 1);
 }
 
@@ -177,28 +217,24 @@ async fn tick_produces_matches_for_crossing_book() {
 /// N=16 settle circuit can't absorb — the gap the Phala loadgen caught
 /// (23-50-match ticks dropped at settle assembly). 5 crossing pairs
 /// with a cap of 2 → 3 batches (2 + 2 + 1), 5 matches total, book
-/// drained across the pages, match-id counter at 5.
+/// reserved across the pages, match-id counter at 5.
 #[tokio::test]
 async fn tick_pages_oversized_match_set_into_capped_batches() {
-    let state = Arc::new(RwLock::new(MatcherState::new()));
+    let state = Arc::new(RwLock::new(mk_state()));
     let oracle = OracleCache::new();
     let current_slot = Arc::new(AtomicU64::new(1));
     let (tx, mut rx) = mpsc::channel(16);
 
     // 5 bids + 5 asks, all crossing at 100 (amount 10) → 5 fills.
     for i in 0..5u8 {
-        state
-            .write()
-            .await
-            .book_mut()
-            .submit(mk_order(OrderSide::Bid, 1 + 2 * i, 100, 10))
-            .expect("submit bid");
-        state
-            .write()
-            .await
-            .book_mut()
-            .submit(mk_order(OrderSide::Ask, 2 + 2 * i, 100, 10))
-            .expect("submit ask");
+        submit_with_opening(
+            &mut state.write().await,
+            mk_order(OrderSide::Bid, 1 + 2 * i, 100, 10),
+        );
+        submit_with_opening(
+            &mut state.write().await,
+            mk_order(OrderSide::Ask, 2 + 2 * i, 100, 10),
+        );
     }
     seed_oracle(&oracle, 100).await;
 
@@ -234,10 +270,8 @@ async fn tick_pages_oversized_match_set_into_capped_batches() {
     assert_eq!(total, 5, "every crossing pair matched across the pages");
 
     let final_state = state.read().await;
-    assert!(
-        final_state.book().is_empty(),
-        "book drained across all pages of the tick"
-    );
+    assert!(final_state.book().snapshot().orders.is_empty());
+    assert_eq!(final_state.book().len(), 10, "all orders await settlement");
     assert_eq!(final_state.next_match_id(), 5);
 }
 
@@ -245,23 +279,19 @@ async fn tick_pages_oversized_match_set_into_capped_batches() {
 /// land on the channel.
 #[tokio::test]
 async fn tick_skips_when_oracle_missing() {
-    let state = Arc::new(RwLock::new(MatcherState::new()));
+    let state = Arc::new(RwLock::new(mk_state()));
     let oracle = OracleCache::new(); // <-- no entry seeded
     let current_slot = Arc::new(AtomicU64::new(1));
     let (tx, mut rx) = mpsc::channel(8);
 
-    state
-        .write()
-        .await
-        .book_mut()
-        .submit(mk_order(OrderSide::Bid, 1, 100, 10))
-        .unwrap();
-    state
-        .write()
-        .await
-        .book_mut()
-        .submit(mk_order(OrderSide::Ask, 2, 100, 10))
-        .unwrap();
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Bid, 1, 100, 10),
+    );
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Ask, 2, 100, 10),
+    );
 
     let driver = mk_driver(state.clone(), oracle, current_slot, tx);
     driver.tick().await.expect("tick");
@@ -276,7 +306,7 @@ async fn tick_skips_when_oracle_missing() {
 /// Empty book → no tick output.
 #[tokio::test]
 async fn tick_skips_when_book_empty() {
-    let state = Arc::new(RwLock::new(MatcherState::new()));
+    let state = Arc::new(RwLock::new(mk_state()));
     let oracle = OracleCache::new();
     seed_oracle(&oracle, 100).await;
     let current_slot = Arc::new(AtomicU64::new(1));
@@ -291,14 +321,11 @@ async fn tick_skips_when_book_empty() {
     ));
 }
 
-/// Partial fill (option A): bid 20, ask 5 → 1 match of 5. The bid's
-/// 15-residual relocks on-chain and LEAVES the in-TEE book — the TEE
-/// can't re-match the change note (no spending key for its nullifier),
-/// so the residual awaits client re-submission. (Pre-option-A the bid
-/// stayed in the book with new_amount=15.)
+/// Partial fill: bid 20, ask 5 → 1 match of 5. Before Tx D finality both
+/// original orders remain unchanged and reserved.
 #[tokio::test]
 async fn tick_handles_partial_fill() {
-    let state = Arc::new(RwLock::new(MatcherState::new()));
+    let state = Arc::new(RwLock::new(mk_state()));
     let oracle = OracleCache::new();
     seed_oracle(&oracle, 100).await;
     let current_slot = Arc::new(AtomicU64::new(1));
@@ -308,8 +335,8 @@ async fn tick_handles_partial_fill() {
     let bid_id = bid.order_id;
     let ask = mk_order(OrderSide::Ask, 2, 100, 5);
 
-    state.write().await.book_mut().submit(bid).unwrap();
-    state.write().await.book_mut().submit(ask).unwrap();
+    submit_with_opening(&mut state.write().await, bid);
+    submit_with_opening(&mut state.write().await, ask);
 
     let driver = mk_driver(state.clone(), oracle, current_slot, tx);
     driver.tick().await.expect("tick");
@@ -319,42 +346,33 @@ async fn tick_handles_partial_fill() {
     assert_eq!(output.matches[0].base_amt, 5);
 
     let final_state = state.read().await;
-    assert!(
-        final_state.book().get(&bid_id).is_none(),
-        "partially-filled bid's residual relocked and left the in-TEE book"
-    );
-    assert!(
-        final_state.book().is_empty(),
-        "ask fully filled + bid residual relocked — book drained"
-    );
+    let pending_bid = final_state.book().get(&bid_id).unwrap();
+    assert_eq!(pending_bid.status, OrderStatus::Matched);
+    assert_eq!(pending_bid.amount, 20);
+    assert_eq!(pending_bid.filled_quantity, 0);
+    assert!(final_state.book().snapshot().orders.is_empty());
 }
 
 /// Two ticks in sequence, each a distinct full-fill pair. next_match_id
-/// advances 0 → 1 → 2 and the book drains each tick. (Pre-option-A this
-/// finished a single partially-filled bid across two ticks; under
-/// option A a partial fill relocks + leaves the book, so the counter is
-/// exercised with two independent full fills instead.)
+/// advances 0 → 1 → 2. The first pair stays reserved while the second fresh
+/// pair remains eligible on the next tick.
 #[tokio::test]
 async fn two_consecutive_ticks_advance_state() {
-    let state = Arc::new(RwLock::new(MatcherState::new()));
+    let state = Arc::new(RwLock::new(mk_state()));
     let oracle = OracleCache::new();
     seed_oracle(&oracle, 100).await;
     let current_slot = Arc::new(AtomicU64::new(1));
     let (tx, mut rx) = mpsc::channel(8);
 
     // Tick 1: bid(10) vs ask(10) — exact full fill, no relock.
-    state
-        .write()
-        .await
-        .book_mut()
-        .submit(mk_order(OrderSide::Bid, 1, 100, 10))
-        .unwrap();
-    state
-        .write()
-        .await
-        .book_mut()
-        .submit(mk_order(OrderSide::Ask, 2, 100, 10))
-        .unwrap();
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Bid, 1, 100, 10),
+    );
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Ask, 2, 100, 10),
+    );
 
     let driver = mk_driver(state.clone(), oracle.clone(), current_slot.clone(), tx);
     driver.tick().await.expect("first tick");
@@ -362,24 +380,18 @@ async fn two_consecutive_ticks_advance_state() {
     assert_eq!(out1.matches.len(), 1);
     assert_eq!(out1.matches[0].base_amt, 10);
     assert_eq!(out1.matches[0].match_id, 0, "first match gets id 0");
-    assert!(
-        state.read().await.book().is_empty(),
-        "first pair fully drained"
-    );
+    assert!(state.read().await.book().snapshot().orders.is_empty());
+    assert_eq!(state.read().await.book().len(), 2);
 
     // Tick 2: a fresh full-fill pair — the match-id counter continues.
-    state
-        .write()
-        .await
-        .book_mut()
-        .submit(mk_order(OrderSide::Bid, 3, 100, 10))
-        .unwrap();
-    state
-        .write()
-        .await
-        .book_mut()
-        .submit(mk_order(OrderSide::Ask, 4, 100, 10))
-        .unwrap();
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Bid, 3, 100, 10),
+    );
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Ask, 4, 100, 10),
+    );
 
     driver.tick().await.expect("second tick");
     let out2 = rx.try_recv().expect("second output");
@@ -387,14 +399,15 @@ async fn two_consecutive_ticks_advance_state() {
     assert_eq!(out2.matches[0].base_amt, 10);
     assert_eq!(out2.matches[0].match_id, 1, "second match gets id 1");
 
-    assert!(state.read().await.book().is_empty());
+    assert!(state.read().await.book().snapshot().orders.is_empty());
+    assert_eq!(state.read().await.book().len(), 4);
     assert_eq!(state.read().await.next_match_id(), 2);
 }
 
 /// Sanity: tick sweeps expired orders before matching.
 #[tokio::test]
 async fn tick_sweeps_expired_orders() {
-    let state = Arc::new(RwLock::new(MatcherState::new()));
+    let state = Arc::new(RwLock::new(mk_state()));
     let oracle = OracleCache::new();
     seed_oracle(&oracle, 100).await;
     let current_slot = Arc::new(AtomicU64::new(1000));
@@ -402,7 +415,7 @@ async fn tick_sweeps_expired_orders() {
 
     let mut order = mk_order(OrderSide::Bid, 1, 100, 10);
     order.expiry_slot = 50;
-    state.write().await.book_mut().submit(order).unwrap();
+    submit_with_opening(&mut state.write().await, order);
 
     let driver = mk_driver(state.clone(), oracle, current_slot, tx);
     driver.tick().await.expect("tick");
