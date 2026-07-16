@@ -51,12 +51,12 @@ use super::scheduler::SettleSchedulerState;
 use super::settle_batched::{batch_alt_addresses, build_settle_batched_ix};
 use super::sign::sign_payload;
 use super::submit::{
-    build_tx_b64, confirm_signatures, send_and_confirm_with_rebroadcast, submit_ixs,
-    submit_ixs_with_blockhash,
+    build_tx_b64, confirm_signatures, send_and_confirm_many_with_rebroadcast,
+    send_and_confirm_with_rebroadcast, submit_ixs, submit_ixs_with_blockhash,
 };
 use super::submit_lock::{build_lock_tx_b64, LockSideInputs};
 use super::verify_match_batch::{build_verify_match_batch_ix, VerifyMatchBatchArgs};
-use crate::prover::{build_batch_public_inputs, merkle_inclusion_path, MatchSlotWitness, Prover};
+use crate::prover::{build_batch_public_inputs, MatchSlotWitness, Prover};
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
 /// Per-match inputs the worker needs to settle one match.
@@ -130,10 +130,6 @@ pub struct SettleWorkerCtx {
     /// submits early. Drained by `marker_sweep::spawn_marker_sweeper`.
     pub marker_sweep_tx: mpsc::UnboundedSender<[u8; 32]>,
 }
-
-/// One concurrent settle Tx D's outcome: (match_idx, signature, confirmed_slot,
-/// confirm_latency_ms). Collected from the bounded `JoinSet` in the settle stage.
-type SettleSendResult = Result<(usize, String, Option<u64>, u64), WorkerError>;
 
 /// Fire a set of per-batch ALT `extend` ixs CONCURRENTLY (one tx each, bounded),
 /// confirming all. The extends write-conflict on the ALT account, so the leader
@@ -291,7 +287,10 @@ async fn run_batch_settle_inner(
     let public = build_batch_public_inputs(&inputs.witnesses)
         .map_err(|e| WorkerError::Prover(format!("public inputs: {e}")))?;
     let merkle_root = public.merkle_root;
-    let leaves = public.leaves;
+    // `build_batch_public_inputs` retained the exact levels it used for this
+    // root. Extract every Tx D path from that ONE 15-hash N=16 build instead of
+    // hashing the tree again per match (the old path performed 240 hashes).
+    let batch_paths = public.merkle_paths;
 
     // ── Stages 1-3 run CONCURRENTLY ─────────────────────────────
     // lock (Tx A), prove→verify (Tx B), and per-batch ALT create+activate
@@ -614,14 +613,9 @@ async fn run_batch_settle_inner(
     let blockhash = Hash::new_from_array(bh.blockhash);
     let mut txs: Vec<(usize, String)> = Vec::with_capacity(n);
     for (idx, m) in inputs.matches.iter().enumerate() {
-        let path = merkle_inclusion_path(&leaves, m.match_index as usize)
+        let siblings = batch_paths
+            .path(m.match_index as usize)
             .map_err(|e| WorkerError::Leaf(format!("{e}")))?;
-        // The on-chain ix takes a fixed [[u8;32];4]; pad the path (a smaller-N
-        // test tree has fewer levels — left-pad with zeros, ignored beyond depth).
-        let mut siblings = [[0u8; 32]; 4];
-        for (i, s) in path.siblings.iter().take(4).enumerate() {
-            siblings[i] = *s;
-        }
         // Round-robin (key[j], merkle_tree[j]) per match. Tx Ds routed to
         // different shards share no writable account (distinct append target +
         // distinct fee-payer/authority), so the leader can co-include up to K
@@ -640,7 +634,7 @@ async fn run_batch_settle_inner(
             shard as u8,
             &m.payload,
             m.match_index,
-            &siblings,
+            siblings,
             &merkle_root,
         );
         // No priority-fee ix on Tx D — it's at the 1232-byte cap (see
@@ -649,53 +643,39 @@ async fn run_batch_settle_inner(
         txs.push((idx, tx_b64));
     }
 
-    // Pass 2 — send + confirm all Tx D's CONCURRENTLY (bounded). The ~1.13s is
-    // BLOCK-confirmation latency; firing the txs together lets the leader
-    // co-include them in one block so they confirm in a single window instead
-    // of one-at-a-time. Each Tx D still rebroadcasts until it lands (the
-    // per-batch ALT activation is paid once — all share the now-active ALT).
-    let sem = Arc::new(tokio::sync::Semaphore::new(
-        ctx.settle_send_concurrency.max(1),
-    ));
-    let mut set: tokio::task::JoinSet<SettleSendResult> = tokio::task::JoinSet::new();
-    for (idx, tx_b64) in txs {
-        let rpc = ctx.rpc.clone();
-        let timeout = ctx.confirm_timeout;
-        let sem = sem.clone();
-        set.spawn(async move {
-            let _permit = sem.acquire_owned().await.expect("settle semaphore");
-            let t_tx = Instant::now();
-            let (sig, slot) = send_and_confirm_with_rebroadcast(
-                &rpc,
-                &tx_b64,
-                timeout,
-                Duration::from_millis(1500),
-            )
-            .await?;
-            Ok((idx, sig, slot, t_tx.elapsed().as_millis() as u64))
-        });
-    }
+    // Pass 2 — send all Tx D's independently (bounded), then poll the shrinking
+    // pending signature set in ONE RPC request per round. The ~1.13s is
+    // block-confirmation latency; firing the txs together lets the leader
+    // co-include them in one block. Confirmed entries leave the poll set and
+    // only overdue pending txs are rebroadcast.
+    let confirmed = send_and_confirm_many_with_rebroadcast(
+        &ctx.rpc,
+        txs,
+        ctx.confirm_timeout,
+        Duration::from_millis(1500),
+        ctx.settle_send_concurrency,
+    )
+    .await?;
     let mut slots: Vec<u64> = Vec::with_capacity(n);
-    while let Some(joined) = set.join_next().await {
-        let (idx, sig, slot, tx_ms) = joined
-            .map_err(|e| WorkerError::Rpc(RpcError::Schema(format!("settle send task: {e}"))))??;
-        if let Some(s) = slot {
+    for outcome in confirmed {
+        if let Some(s) = outcome.slot {
             slots.push(s);
         }
         // Per-match Tx D confirm latency + the slot it landed in.
         tracing::info!(
             batch_id,
-            match_idx = idx,
-            settle_tx_ms = tx_ms,
-            confirmed_slot = slot,
+            match_idx = outcome.transaction_index,
+            settle_tx_ms = outcome.elapsed_ms,
+            confirmed_slot = outcome.slot,
+            rebroadcasts = outcome.rebroadcasts,
             "settle Tx D confirmed (per-match)"
         );
         let id = SettleJobId {
             batch_id,
-            match_idx: idx as u8,
+            match_idx: outcome.transaction_index as u8,
         };
         let mut st = ctx.settle_state.write().await;
-        st.update(&id, |j| j.settle_sig = Some(sig.clone()));
+        st.update(&id, |j| j.settle_sig = Some(outcome.signature.clone()));
     }
 
     // Co-inclusion factor = matches ÷ distinct_slots. Near n → the leader

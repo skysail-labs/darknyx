@@ -264,7 +264,11 @@ lock→prove→verify→ALT→settle→close), the oracle sync, the slot poller,
 priority-fee poller, and the HTTP/WS server. The locks (Tx A), the per-batch
 ALT extends (Tx C), and the settle Tx D's are each fired **concurrently** within
 a batch; the settle Tx D's round-robin the K shard keys (each is fee-payer +
-`tee_authority` + Ed25519 settle-signer for its shard).
+`tee_authority` + Ed25519 settle-signer for its shard). Their N=16 inclusion
+paths come from one retained 15-node internal tree build, and one shrinking
+batched status poll drives all pending Tx D signatures; confirmed signatures
+are removed before the next poll and only overdue pending transactions are
+rebroadcast.
 
 ### `crates/darkpool-crypto` — host-side crypto
 

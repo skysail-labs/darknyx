@@ -76,7 +76,10 @@ pub use settle_batched::{
     SETTLE_BATCHED_DISCRIMINATOR,
 };
 pub use sign::sign_payload;
-pub use submit::{confirm_signatures, submit_ixs, submit_ixs_with_blockhash};
+pub use submit::{
+    confirm_signatures, send_and_confirm_many_with_rebroadcast, submit_ixs,
+    submit_ixs_with_blockhash, ConfirmedTransaction,
+};
 pub use submit_lock::{confirm_lock_pair, submit_lock_note_pair, LockPairOutcome, LockSideInputs};
 pub use verify_match_batch::{
     build_verify_match_batch_ix, VerifyMatchBatchArgs, VERIFY_MATCH_BATCH_DISCRIMINATOR,

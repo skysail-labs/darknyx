@@ -35,9 +35,9 @@ runbooks have landed.
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
 | P-01 | Perf | Vault + SDK + TEE | `remediation/vault-lifecycle` | Batch marker is read-only in every Tx D builder and live Tx D; distinct-shard Tx Ds share no writable key | Closed |
-| P-02 | Perf | TEE | `remediation/settlement-efficiency` | Build the N=16 tree once and extract every path; hash-count regression/benchmark | Open |
+| P-02 | Perf | TEE | `remediation/settlement-efficiency` | Build the N=16 tree once and extract every path; hash-count regression/benchmark | Closed |
 | P-03 | Perf | Matcher | `remediation/matcher-performance` | Price-level aggregates and reusable demand curves preserve FIFO, tie-breaking, IOC/FOK/AON under differential properties | Open |
-| P-04 | Perf | TEE RPC | `remediation/settlement-efficiency` | Poll all pending signatures in one RPC request; remove confirmed entries; rebroadcast only overdue transactions | Open |
+| P-04 | Perf | TEE RPC | `remediation/settlement-efficiency` | Poll all pending signatures in one RPC request; remove confirmed entries; rebroadcast only overdue transactions | Closed |
 
 ## Residual findings
 
@@ -71,7 +71,7 @@ plan, not additional audit finding IDs.
 | ID | Owner | Planned remediation slice | Required evidence | Status |
 |---|---|---|---|---|
 | DR-01 | SDK + TEE + indexer | `remediation/durable-recovery` | The unchanged 128-byte field encrypts two u64s per side; seed + finalized chain reconstructs deposit, trade, change/continuation, and merge openings with commitment and leaf-position verification; exact-fill unit coverage plus a live partial-settle recovery drill | Closed |
-| PERF-INV-01 | TEE + Operations | Phala host diagnostics follow-up | Image 58 pins the anomaly at `witness_ms=992`, `prove_step_ms=10857`, aggregate `prove_ms=11928`, 39.65-second E2E, and 1.84–2.21-second auth on an allocated 8-vCPU CVM; obtain working host/container access and capture pre/post cgroup throttling, cpuset/affinity, CPU model/frequency, and OpenMP placement before release certification | Open |
+| PERF-INV-01 | TEE + Operations | Phala host diagnostics follow-up | Images 58/59 pin the anomaly: image 59 measured `witness_ms=1070`, `prove_step_ms=12854`, aggregate `prove_ms=13977`, and 1.78–2.54-second auth; Phala SSH now reaches the host but rejects the key, so obtain working host/container access and capture pre/post cgroup throttling, cpuset/affinity, CPU model/frequency, and OpenMP placement before release certification | Open |
 
 ## Pull request evidence template
 
@@ -900,6 +900,87 @@ Every remediation PR must record:
   discard in-flight orders and locator DB state and clean-reset devnet before
   using the prior image. The on-chain payload width, accounts, note commitment
   formula, circuits, and existing generic VALID_SPEND notes are unchanged.
+
+### `remediation/settlement-efficiency` — P-02, P-04
+
+- **Status.** Closed by PR #52 with local and image-59 live multi-match
+  evidence.
+- **Invariant restored.** The TEE constructs the batch Merkle levels once and
+  extracts every fixed-width inclusion path from retained stack-backed storage.
+  A production N=16 batch therefore computes exactly 15 internal Poseidon
+  hashes instead of rebuilding the same tree for every match (240 hashes).
+  Tx D initial sends remain independent and bounded, but one confirmation state
+  machine polls the complete pending signature set per backoff round. It removes
+  confirmed entries immediately, reports reverts against the caller's original
+  match index, and rebroadcasts only overdue transactions still pending.
+- **Wire/circuit impact.** No HTTP/stream, order canonical, payload, account
+  layout, instruction data, ALT membership, circuit, zkey, VK, N=16 fixture,
+  note, root, or program change. This is an in-enclave computation/RPC
+  scheduling change only. Existing devnet state and in-flight wire artifacts
+  remain compatible. The CPU image pin advances from
+  `tee-v3-hardening-58` to `tee-v3-hardening-59`.
+- **Local evidence.** The optimized path builder matches the removed reference
+  algorithm byte-for-byte for every leaf at N=1/2/4/8/16, reconstructs the
+  public-input root, rejects N above the circuit maximum, and pins the N=16
+  internal hash count to 15 (versus the former 16 × 15 = 240). The in-process
+  RPC regression confirms the exact pending polls `[A,B,C] -> [B,C] -> [C]`,
+  proves A is never rebroadcast after confirmation, pins B/C rebroadcast counts
+  to one/two, and checks that a B revert is attributed to its original
+  transaction index. `cargo test -p nyx-tee` passes 256 library tests and every
+  integration target, including the new two-case batched-submit target and the
+  existing worker, real N=2 prover, N=16 fixture, transaction-size, scheduler,
+  HTTP, and stream coverage. `cargo test --workspace`, workspace clippy with
+  warnings denied, formatting, and diff hygiene pass. SBF and TypeScript gates
+  are not rerun because this slice changes no program or TypeScript source;
+  their relevant wire layouts remain covered by the Rust workspace regressions.
+- **Devnet/CVM evidence (2026-07-16).** GitHub Actions run `29467718694`
+  built and pushed public-pullable image `tee-v3-hardening-59` from commit
+  `6d7087cdf5dd055076032497ac83924b2c48049c`; the GHCR manifest returned HTTP
+  200. Reset transaction
+  `fbu6Q2d42xCqyU46BvQmqLSbsFimyUeHbi51qk7KtP48amocP1bUGtQwdF6T5r4i7hGZVdbgnL7yAP24sUpSbed`
+  cold-booted CVM `app_634b2ab4c250466311f0cf09f772b6fd60b5be11`
+  with compose hash
+  `dbc25797d16c9c89ecea799b29d705f28111a74d32353acef3368fc0330d9e8a`,
+  MRTD
+  `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`,
+  boot session
+  `85cb425969a4fadcca8b54cf2a5ec54068f80958baf092d5fbe0d7fd09dd63ad`,
+  and signer `KgFsjoP9fDy78xgmEjn2DtRbPZ6G7t5AWDkPo1AAjsa`. Signer rotation finalized at
+  `35Qp9cuDbTXsNZkTALikMyYh62xTZjw8JJGJBaJkVJhQuL2v9BAPrRqerZzhDGzFW2tYiJhJhfvWcpmxCFimzjL`;
+  it already held 2.436 devnet SOL, so funding was skipped.
+
+  The isolated four-pair `cvm-multimatch-settle` passed 1/1 in 51.89 seconds.
+  One N=16 batch reached `done` for every match; its four Tx Ds all confirmed
+  in slot 476581061 in 1,275–1,276 ms with zero application rebroadcasts and a
+  co-inclusion factor of four. The signatures and independently read Helius
+  results were: match 0
+  `5hfB8WzpTJSe7SMX3QGiU7vERrowuG9vTBMdu6QPTRCTAKhjLRqtgdrYtpzEYx8VFziX5TmoBv8dUKYy8iQA5KAe`
+  (`err=null`, 76,514 CU); match 1
+  `EDHe1eWiXJ9WMTX7Ac26hTbpDD8Lqd3diZQB6Eea4bszjaDxYC8zRU85XieSnhezTMMip2th5YmQKKseGbpjebg`
+  (`err=null`, 72,310 CU); match 2
+  `CdaGmddXZBN3nHoxhuhV46mBPjmbruWXQjCZYxvUn1cSVCBZndqaFA11rKnrQofgqrb6UGjVyDMn1bCtz52twKJ`
+  (`err=null`, 69,879 CU); and match 3
+  `dXrQKQZoUDNjv61nxgTXXxqoE6sCXuvprHuSqQAAvqGS8vByCSRBUV6p1HRKdiQq1DUkspEQZM2EGT4SniUaPD8`
+  (`err=null`, 67,501 CU). Tx B was shared at
+  `4vtJitiTmCkQrSTNwmaioXy7XJBz2zUybeB3FPoayko51aNU7uaEinwfeGB82mh18wAUfqojAbmMV3PQmvnvR1od`.
+  The settle phase took 1,386 ms and the full pipeline 16,786 ms; the shard
+  ended at 28 leaves with root
+  `2192b2dbeecf60d2b62ac5d7a3692bed93b31f4d09ce9553a6d68872275c8732`.
+
+  The bundled PERF-INV-01 sample still shows host-sensitive latency:
+  `witness_ms=1070`, `prove_step_ms=12854`, aggregate `prove_ms=13977`, and
+  five sequential auth calls at 2,016, 1,779, 2,536, 2,000, and 1,859 ms.
+  Both requested pre/post snapshots reached the Phala SSH gateway but failed
+  with `Permission denied (publickey)`, so `cpu.max`, `cpu.stat`, cpuset,
+  affinity, CPU model/frequency, and OpenMP placement remain unavailable and
+  PERF-INV-01 stays open. The protected deploy environment was securely
+  deleted, credentials were unset, and all three Phala CVMs were confirmed
+  stopped. No vault upgrade was needed because the on-chain program and proof
+  artifacts are unchanged.
+- **Rollback.** Revert this PR and redeploy image 58. No notes, roots, orders,
+  signatures, payloads, proofs, accounts, or devnet program state are
+  invalidated. Rollback reopens P-02/P-04 and restores 240 per-batch path hashes
+  plus one signature-status RPC loop per Tx D.
 
 ## Mainnet release gates
 

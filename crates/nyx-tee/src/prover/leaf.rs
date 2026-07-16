@@ -1,8 +1,8 @@
 //! Leaf + root + Merkle inclusion path computation for
 //! VALID_MATCH_BATCH.
 //!
-//! Rust port of `computeBatchLeaf`, `computeBatchRoot`, and
-//! `merkleInclusionPath` in
+//! Rust port of `computeBatchLeaf`, `computeBatchRoot`, and the batch
+//! inclusion-path construction in
 //! `packages/sdk/tests/helpers/match-batch-prover.ts`. Every
 //! Poseidon call goes through `darkpool_crypto::poseidon_hash_bytes`
 //! (which delegates to `light-poseidon` host-side, byte-equivalent
@@ -43,6 +43,11 @@ pub const DOMAIN_BATCH_ROOT: u8 = 22;
 /// overlap with the old two-stage leaf (the retired DOMAIN_LEAF_INNER=20 /
 /// DOMAIN_LEAF_TOP=21 tags, removed when the leaf collapsed to one Poseidon11).
 pub const DOMAIN_LEAF_V2: u8 = 23;
+/// The production circuit is instantiated at N=16. Smaller powers of two are
+/// used by unit/integration tests and share this implementation.
+pub const MAX_BATCH_LEAVES: usize = 16;
+/// log2(MAX_BATCH_LEAVES). The settle instruction carries this many siblings.
+pub const MAX_BATCH_DEPTH: usize = 4;
 
 #[derive(thiserror::Error, Debug)]
 pub enum LeafError {
@@ -50,6 +55,8 @@ pub enum LeafError {
     Poseidon(#[from] CryptoError),
     #[error("N (= {0}) must be a power of two and at least 1")]
     InvalidBatchSize(usize),
+    #[error("N (= {0}) exceeds the supported maximum of 16 leaves")]
+    BatchTooLarge(usize),
     #[error("index {idx} out of range for N={n}")]
     IndexOutOfRange { idx: usize, n: usize },
     #[error("slot {idx} does not match the batch market/protocol public inputs")]
@@ -109,25 +116,113 @@ pub fn compute_batch_root(leaves: &[[u8; 32]]) -> Result<[u8; 32], LeafError> {
     Ok(level[0])
 }
 
-/// Output of [`merkle_inclusion_path`].
+/// One batch tree's root and every inclusion path. Constructing this value
+/// hashes each internal node exactly once (15 hashes at production N=16), then
+/// extracts all paths from the retained levels. The prior per-index helper
+/// rebuilt the whole tree 16 times (240 hashes).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InclusionPath {
-    /// Sibling hash at each level. `siblings[0]` is the leaf-level
-    /// sibling; the last entry is the root's sibling.
-    pub siblings: Vec<[u8; 32]>,
-    /// 0 if the current node is the LEFT child at level i, 1 if
-    /// the RIGHT child. The on-chain settle handler uses this to
-    /// know how to combine each sibling.
-    pub indices: Vec<u8>,
+pub struct BatchMerklePaths {
+    root: [u8; 32],
+    paths: [[[u8; 32]; MAX_BATCH_DEPTH]; MAX_BATCH_LEAVES],
+    leaf_count: usize,
+    depth: usize,
+    internal_hash_count: usize,
 }
 
-/// Build the inclusion path for leaf at `index` against the N-leaf
-/// tree. Returns `(siblings, indices)` shaped exactly the way the
-/// on-chain `tee_forced_settle_batched` handler consumes them.
-pub fn merkle_inclusion_path(
+impl BatchMerklePaths {
+    pub fn root(&self) -> [u8; 32] {
+        self.root
+    }
+
+    /// Fixed-width sibling array consumed directly by Tx D. Entries beyond
+    /// `depth()` are zero for the smaller N=1/2/4/8 test circuits.
+    pub fn path(&self, index: usize) -> Result<&[[u8; 32]; MAX_BATCH_DEPTH], LeafError> {
+        if index >= self.leaf_count {
+            return Err(LeafError::IndexOutOfRange {
+                idx: index,
+                n: self.leaf_count,
+            });
+        }
+        Ok(&self.paths[index])
+    }
+
+    pub fn leaf_count(&self) -> usize {
+        self.leaf_count
+    }
+
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Exposed for the performance regression: a full binary tree has N-1
+    /// internal nodes and this builder hashes each one once.
+    pub fn internal_hash_count(&self) -> usize {
+        self.internal_hash_count
+    }
+}
+
+/// Build the binary tree once and extract every inclusion path from its saved
+/// levels. Storage is stack-backed for the maximum 16-leaf circuit: 16 leaves
+/// + 8 + 4 + 2 + 1 = 31 nodes.
+pub fn build_batch_merkle_paths(leaves: &[[u8; 32]]) -> Result<BatchMerklePaths, LeafError> {
+    let n = leaves.len();
+    if n == 0 || (n & (n - 1)) != 0 {
+        return Err(LeafError::InvalidBatchSize(n));
+    }
+    if n > MAX_BATCH_LEAVES {
+        return Err(LeafError::BatchTooLarge(n));
+    }
+
+    let tag = u8_tag_to_be32(DOMAIN_BATCH_ROOT);
+    let depth = n.trailing_zeros() as usize;
+    let mut nodes = [[0u8; 32]; 2 * MAX_BATCH_LEAVES - 1];
+    nodes[..n].copy_from_slice(leaves);
+    let mut level_offsets = [0usize; MAX_BATCH_DEPTH + 1];
+    let mut level_offset = 0usize;
+    let mut next_offset = n;
+    let mut width = n;
+    let mut internal_hash_count = 0usize;
+
+    for saved_offset in level_offsets.iter_mut().take(depth) {
+        *saved_offset = level_offset;
+        for pair in 0..(width / 2) {
+            let left = nodes[level_offset + pair * 2];
+            let right = nodes[level_offset + pair * 2 + 1];
+            nodes[next_offset + pair] = poseidon_hash_bytes(&[tag, left, right])?;
+            internal_hash_count += 1;
+        }
+        level_offset = next_offset;
+        width /= 2;
+        next_offset += width;
+    }
+    level_offsets[depth] = level_offset;
+
+    let root = nodes[level_offset];
+    let mut paths = [[[0u8; 32]; MAX_BATCH_DEPTH]; MAX_BATCH_LEAVES];
+    for (leaf_index, path) in paths.iter_mut().enumerate().take(n) {
+        let mut node_index = leaf_index;
+        for level in 0..depth {
+            path[level] = nodes[level_offsets[level] + (node_index ^ 1)];
+            node_index >>= 1;
+        }
+    }
+
+    Ok(BatchMerklePaths {
+        root,
+        paths,
+        leaf_count: n,
+        depth,
+        internal_hash_count,
+    })
+}
+
+/// Deliberately slow reference implementation retained only to prove the
+/// optimized all-path builder is byte-identical at every supported N/index.
+#[cfg(test)]
+fn merkle_inclusion_path_reference(
     leaves: &[[u8; 32]],
     index: usize,
-) -> Result<InclusionPath, LeafError> {
+) -> Result<(Vec<[u8; 32]>, Vec<u8>), LeafError> {
     let n = leaves.len();
     if n == 0 || (n & (n - 1)) != 0 {
         return Err(LeafError::InvalidBatchSize(n));
@@ -137,29 +232,21 @@ pub fn merkle_inclusion_path(
     }
 
     let tag = u8_tag_to_be32(DOMAIN_BATCH_ROOT);
-    let mut current_level: Vec<[u8; 32]> = leaves.to_vec();
+    let mut current_level = leaves.to_vec();
     let mut current_index = index;
-    let mut siblings: Vec<[u8; 32]> = Vec::new();
-    let mut indices: Vec<u8> = Vec::new();
-
+    let mut siblings = Vec::new();
+    let mut indices = Vec::new();
     while current_level.len() > 1 {
-        let sibling_index = current_index ^ 1;
-        siblings.push(current_level[sibling_index]);
+        siblings.push(current_level[current_index ^ 1]);
         indices.push((current_index & 1) as u8);
-
-        // Hash adjacent pairs to compute the next level. Use the
-        // same domain-tagged Poseidon3 the circuit's MerkleRoot
-        // template uses.
-        let mut next = Vec::with_capacity(current_level.len() / 2);
-        for chunk in current_level.chunks_exact(2) {
-            let parent = poseidon_hash_bytes(&[tag, chunk[0], chunk[1]])?;
-            next.push(parent);
-        }
-        current_level = next;
+        current_level = current_level
+            .chunks_exact(2)
+            .map(|pair| poseidon_hash_bytes(&[tag, pair[0], pair[1]]))
+            .collect::<Result<Vec<_>, _>>()?;
         current_index >>= 1;
     }
 
-    Ok(InclusionPath { siblings, indices })
+    Ok((siblings, indices))
 }
 
 #[cfg(test)]
@@ -226,47 +313,76 @@ mod tests {
         let leaf = compute_batch_leaf(&dummy_slot()).unwrap();
         // N=8 → depth=3.
         let leaves = vec![leaf; 8];
-        let path = merkle_inclusion_path(&leaves, 0).unwrap();
-        assert_eq!(path.siblings.len(), 3);
-        assert_eq!(path.indices.len(), 3);
+        let tree = build_batch_merkle_paths(&leaves).unwrap();
+        assert_eq!(tree.depth(), 3);
+        assert_eq!(tree.path(0).unwrap()[3], [0u8; 32]);
     }
 
     #[test]
     fn inclusion_path_index_out_of_range() {
         let leaf = compute_batch_leaf(&dummy_slot()).unwrap();
         let leaves = vec![leaf; 4];
-        let err = merkle_inclusion_path(&leaves, 4).unwrap_err();
+        let tree = build_batch_merkle_paths(&leaves).unwrap();
+        let err = tree.path(4).unwrap_err();
         assert!(matches!(err, LeafError::IndexOutOfRange { idx: 4, n: 4 }));
     }
 
     #[test]
-    fn inclusion_path_verifies_against_root() {
-        // For each index in a 4-leaf tree of distinct leaves,
-        // walk the returned inclusion path + assert it
-        // reconstructs the same root that `compute_batch_root`
-        // computes directly. This is the load-bearing invariant
-        // — the on-chain settle handler does this same walk.
-        let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(4);
-        for i in 0..4u8 {
-            let mut s = dummy_slot();
-            s.batch_slot = i as u64 + 1; // distinct leaves
-            leaves.push(compute_batch_leaf(&s).unwrap());
-        }
-        let root = compute_batch_root(&leaves).unwrap();
+    fn optimized_paths_match_reference_and_reconstruct_root() {
         let tag = u8_tag_to_be32(DOMAIN_BATCH_ROOT);
-        for idx in 0..4 {
-            let path = merkle_inclusion_path(&leaves, idx).unwrap();
-            let mut current = leaves[idx];
-            for (sib, dir) in path.siblings.iter().zip(path.indices.iter()) {
-                let (left, right) = if *dir == 0 {
-                    (current, *sib)
-                } else {
-                    (*sib, current)
-                };
-                current = poseidon_hash_bytes(&[tag, left, right]).unwrap();
+        for n in [1usize, 2, 4, 8, 16] {
+            let mut leaves = Vec::with_capacity(n);
+            for i in 0..n {
+                let mut slot = dummy_slot();
+                slot.batch_slot = i as u64 + 1;
+                leaves.push(compute_batch_leaf(&slot).unwrap());
             }
-            assert_eq!(current, root, "reconstructed root differs at idx={idx}");
+            let root = compute_batch_root(&leaves).unwrap();
+            let tree = build_batch_merkle_paths(&leaves).unwrap();
+            assert_eq!(tree.root(), root, "root differs at N={n}");
+
+            for idx in 0..n {
+                let (reference_siblings, reference_indices) =
+                    merkle_inclusion_path_reference(&leaves, idx).unwrap();
+                assert_eq!(
+                    &tree.path(idx).unwrap()[..tree.depth()],
+                    reference_siblings.as_slice(),
+                    "siblings differ at N={n}, index={idx}"
+                );
+
+                let mut current = leaves[idx];
+                for (level, sibling) in tree.path(idx).unwrap()[..tree.depth()].iter().enumerate() {
+                    let direction = ((idx >> level) & 1) as u8;
+                    assert_eq!(direction, reference_indices[level]);
+                    let (left, right) = if direction == 0 {
+                        (current, *sibling)
+                    } else {
+                        (*sibling, current)
+                    };
+                    current = poseidon_hash_bytes(&[tag, left, right]).unwrap();
+                }
+                assert_eq!(current, root, "path fails at N={n}, index={idx}");
+            }
         }
+    }
+
+    #[test]
+    fn n16_tree_hashes_each_internal_node_once() {
+        let leaf = compute_batch_leaf(&dummy_slot()).unwrap();
+        let tree = build_batch_merkle_paths(&[leaf; 16]).unwrap();
+        assert_eq!(tree.internal_hash_count(), 15);
+        assert_eq!(tree.leaf_count(), 16);
+        assert_eq!(tree.depth(), 4);
+        // The removed per-index construction performed this 15-hash build for
+        // every leaf: 16 * 15 = 240 hashes.
+        assert_eq!(16 * tree.internal_hash_count(), 240);
+    }
+
+    #[test]
+    fn all_path_builder_rejects_more_than_the_circuit_maximum() {
+        let leaf = compute_batch_leaf(&dummy_slot()).unwrap();
+        let err = build_batch_merkle_paths(&[leaf; 32]).unwrap_err();
+        assert!(matches!(err, LeafError::BatchTooLarge(32)));
     }
 
     #[test]
