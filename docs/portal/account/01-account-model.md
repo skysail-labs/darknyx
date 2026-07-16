@@ -100,16 +100,15 @@ securely generated **master seed** and its encrypted backup.
   spend-authority mode.
 - **Keys and notes.** From the seed the SDK derives your trading, spending, and
   viewing keys and reconstructs note openings from the recovery data it owns.
-- **Change notes.** A change note from a partial fill is recoverable from the
-  **encrypted ciphertext stored on-chain at settlement**, written when the order
-  was placed with a `viewing_pubkey`. The SDK decrypts the change amount with your
-  viewing key and derives the output from its consumed input opening. Full cold
-  seed-plus-chain recovery is a mainnet gate. See
+- **Settlement outputs.** Exact trade and partial-fill change notes are
+  recoverable from the **encrypted ciphertext stored on-chain at settlement**.
+  The SDK decrypts the two-amount tuple with your viewing key, derives outputs
+  from the consumed opening, and can rebuild deposit/fill/merge chains with
+  `recoverNotesFromChain`. A live recovery drill remains a mainnet gate. See
   [Fills Channel](../websocket/fills-channel).
 
 The upshot: protect the encrypted seed backup. The engine never becomes your
-custodian, but current devnet recovery still depends on the recovery material
-described above.
+custodian; the seed backup + finalized chain are the durable recovery material.
 
 ## Trading keys vs. spending keys
 

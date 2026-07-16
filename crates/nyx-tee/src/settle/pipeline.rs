@@ -63,7 +63,7 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 //   close_batch_validity_marker 3,546 CU (litesvm)
 //
 // Re-measured 2026-06-23 (image tee-v3-hardening-40, post amount-privacy +
-// change-amount-recovery):
+// encrypted output recovery):
 //   verify_match_batch       100,533 CU (litesvm) — up from 87,224: amount-privacy
 //     (P1b) added fee-binding + more public inputs to VALID_MATCH_BATCH, so the
 //     on-chain groth16 verify got heavier. DEVNET runs the alt_bn128 syscalls

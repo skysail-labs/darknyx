@@ -69,7 +69,7 @@ import {
   OrderType,
 } from "../src/orders/canonical.js";
 import { fetchOrderFills } from "../src/fills/history.js";
-import { recoverChangeFromChain } from "../src/fills/recover.js";
+import { recoverFillFromChain } from "../src/fills/recover.js";
 import {
   subscribeFills,
   type FillsSubscription,
@@ -737,16 +737,16 @@ maybeDescribe(
             `  · fills OK — indexer located + WS memo verified buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}… (amount ${memoRec!.amount}, consumed ${memoRec!.consumedCommitment!.slice(0, 12)}…)`,
           );
 
-          // ── 7b. ON-CHAIN CHANGE-AMOUNT RECOVERY (Proposal B) ─────────
+          // ── 7b. ON-CHAIN TRADE + CHANGE RECOVERY V2 ─────────────────
           // The live memo above proves the WS tail. This proves the PERMANENT
           // backstop: a client with the seed + consumed input opening recovers
-          // the SAME change note by decrypting the on-chain ciphertext the
-          // indexer surfaced (`change.ephemeralPubkey` + `change.changeEnc`) and
+          // the trade note AND the same change note by decrypting the on-chain
+          // ciphertext (`change.ephemeralPubkey` + `change.outputEnc`) and
           // self-verifying it against the on-chain commitment — no memo, no live
           // WS, surviving a CVM redeploy. This replaced the retired durable
           // memo-replay log (`GET /fills/replay`).
           await t.step(
-            "on-chain change-amount recovery (Proposal B)",
+            "on-chain trade + change recovery v2",
             async () => {
               const coldStore = new InMemoryNoteStore();
               const inputRecord = {
@@ -758,7 +758,7 @@ maybeDescribe(
                 leafIndex: BigInt(buyerNote.leafIndex),
               };
               await coldStore.put(inputRecord);
-              const recovered = await recoverChangeFromChain(change!, {
+              const recovered = await recoverFillFromChain(change!, {
                 masterSeed: buyer.masterSeed,
                 candidateInputs: [inputRecord],
                 baseMint: baseMint.toBytes(),
@@ -766,23 +766,25 @@ maybeDescribe(
               });
               expect(
                 recovered,
-                "recoverChangeFromChain did not recover the buyer change note from the on-chain ciphertext (is the CVM built from the recovery commits?)",
+                "recoverFillFromChain did not recover the buyer outputs from the on-chain ciphertext (is the CVM built from the recovery-v2 image?)",
               ).toBeTruthy();
+              expect(recovered!.trade.amount).toBe(BUY_QTY);
               // The chain-recovered amount must match the live memo byte-for-byte.
-              expect(recovered!.amount).toBe(memoRec!.amount);
+              expect(recovered!.change!.amount).toBe(memoRec!.amount);
               // And it lands spendable in a cold store.
-              await coldStore.put(recovered!);
+              await coldStore.put(recovered!.trade);
+              await coldStore.put(recovered!.change!);
               const stored = await coldStore.get(change!.changeNoteCommitment!);
               expect(stored?.amount).toBe(memoRec!.amount);
               console.log(
-                `  · on-chain recovery OK — decrypted + input-derived amount ${recovered!.amount} into a cold store (no memo)`,
+                `  · on-chain recovery OK — trade ${recovered!.trade.amount} + change ${recovered!.change!.amount} recovered into a cold store (no memo)`,
               );
             },
           );
 
           // ── 8. cross-batch RE-MATCH (opt-in) ─────────────────────────
-          // The buyer's residual relocked onto anchor[0] in batch 1 and stays in
-          // the book. Submit a SECOND ask: the matcher must re-match that
+          // The buyer's output-derived residual was relocked in batch 1 and
+          // stays in the book. Submit a SECOND ask: the matcher must re-match that
           // relocked note (note_e from batch 1) in a NEW batch and settle it
           // again — the real proof that a partial fill continues across batches,
           // not just that one continuation note is minted.

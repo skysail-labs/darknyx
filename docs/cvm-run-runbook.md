@@ -168,6 +168,93 @@ SOLANA_RPC_URL="$SOLANA_RPC_URL" FUNDER_KEYPAIR=~/.config/solana/id.json \
 
 ---
 
+## 4.1 Prover-latency evidence capture (mandatory on the next live run)
+
+The July 2026 runs exposed a split timing regression that must not be hidden by
+the end-to-end total:
+
+- the previously observed flagship duration was about 24–26 seconds, while
+  recent runs are about 40–44 seconds;
+- the more serious anomaly is internal: witness/prove timing was reported near
+  1.3 seconds before and about 12–13 seconds in a slow run;
+- the match circuit grew from 142,808 to 232,806 constraints, but same-machine
+  measurements moved only about 23–25%, so circuit growth alone does not explain
+  a roughly 10× internal compute jump;
+- one historical slow run also moved `/auth/token` from roughly 0.4 seconds to
+  5.7 seconds with identical auth/prover code, making host CPU scheduling,
+  cgroup throttling, effective-core count, or OpenMP placement the leading
+  hypotheses.
+
+Do not spend a standalone CVM session on this. Bundle the capture with the next
+image-required settle run. Set the actual container name from `phala ps`:
+
+```sh
+CONTAINER=dstack-nyx-tee-1
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+
+snapshot_cvm_cpu() {
+  phala ssh "$CVM" -- docker exec "$CONTAINER" sh -lc '
+    echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "nproc=$(nproc)"
+    for f in cpu.max cpu.stat cpuset.cpus.effective; do
+      echo "[$f]"
+      sed -n "1,80p" "/sys/fs/cgroup/$f" 2>/dev/null || echo unavailable
+    done
+    grep -E "^(Cpus_allowed_list|Mems_allowed_list):" /proc/1/status || true
+    command -v lscpu >/dev/null && lscpu | grep -E "^(CPU\(s\)|Model name|Thread|Core|Socket|CPU max MHz|CPU min MHz):" || true
+    grep -m1 -E "^(model name|Hardware|cpu MHz|flags)[[:space:]]*:" /proc/cpuinfo || true
+    tr "\000" "\n" </proc/1/environ | grep -E "^(OMP|GOMP|OPENBLAS|MKL)_[A-Z_]+=" || true
+  '
+}
+
+snapshot_cvm_cpu | tee ".devnet/cvm-perf-${STAMP}-pre.txt"
+```
+
+Use five sequential token issuances as a cheap Argon2/CPU canary. The script
+prints only status and duration; it never prints credentials or bearer tokens:
+
+```sh
+export NYX_TEE_GATEWAY="$GW"
+for i in 1 2 3 4 5; do
+  node -e '
+    const started = performance.now();
+    const body = {api_key: process.env.NYX_TEE_API_KEY,
+      api_secret: process.env.NYX_TEE_API_SECRET,
+      passphrase: process.env.NYX_TEE_PASSPHRASE};
+    fetch(`${process.env.NYX_TEE_GATEWAY}/auth/token`, {
+      method: "POST", headers: {"content-type": "application/json"},
+      body: JSON.stringify(body),
+    }).then(r => console.log(`status=${r.status} auth_ms=${Math.round(performance.now()-started)}`));
+  '
+done
+```
+
+Then run exactly one freshly reset `cvm-settle-e2e` (§5), capture the detailed
+native prover line and aggregate worker timing, and take the post-proof cgroup
+snapshot:
+
+```sh
+phala logs "$CONTAINER" --cvm-id "$CVM" --stderr -n 400 \
+  | grep -E "witness_ms|prove_step_ms|settle pipeline timing" \
+  | tee ".devnet/cvm-perf-${STAMP}-prover.txt"
+snapshot_cvm_cpu | tee ".devnet/cvm-perf-${STAMP}-post.txt"
+```
+
+Compare `cpu.stat` pre/post deltas, especially `nr_throttled` and
+`throttled_usec`, alongside `cpu.max`, `cpuset.cpus.effective`,
+`Cpus_allowed_list`, `nproc`, CPU model/frequency, OpenMP settings,
+`witness_ms`, `prove_step_ms`, and aggregate `prove_ms`.
+
+- Healthy CPU metadata and expected proof timing: continue the planned CVM
+  validation window.
+- Slow auth/proof with throttling or a reduced cpuset: stop validation, restart
+  or reschedule once, repeat the canary, preserve both captures, and report the
+  Phala node/instance metadata.
+- Healthy cgroups but slow native proof: do not certify the image; investigate
+  rapidsnark/OpenMP thread placement before further billable tests.
+
+---
+
 ## 5. Run the tests (real-mint regime)
 
 `NYX_TEE_GATEWAY` + `SOLANA_RPC_URL` come from `.env`; export the run flag inline.

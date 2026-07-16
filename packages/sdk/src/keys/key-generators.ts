@@ -21,6 +21,11 @@ const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
 const INFO_ORDER_ID = new TextEncoder().encode("nyx-order-id-v1");
 const INFO_VIEWING_ENC = new TextEncoder().encode("nyx-viewing-enc-v1");
 
+/** Wallet-level owner blinding counter, separated from ordinary deposit-note
+ * counters. This value was established by the daemon keystore and is now the
+ * canonical SDK derivation so seed-only recovery has no external secret. */
+export const ACCOUNT_OWNER_BLINDING_COUNTER = 0xacc0_0000_0000n;
+
 /** BN254 scalar field modulus r. */
 export const BN254_R =
   21888242871839275222246405745257275088548364400416034343698204186575808495617n;
@@ -144,6 +149,11 @@ export function deriveBlindingFactor(
   return reduceMod(okm);
 }
 
+/** Deterministic `r_owner` used by `ownerCommitment`. */
+export function deriveOwnerCommitmentBlinding(seed: Uint8Array): bigint {
+  return deriveBlindingFactor(seed, ACCOUNT_OWNER_BLINDING_COUNTER);
+}
+
 /**
  * Derive the deterministic 16-byte order id for the `n`-th order of this seed.
  *
@@ -177,11 +187,10 @@ export interface X25519Keypair {
 
 /**
  * Derive the X25519 viewing-encryption keypair from the master seed
- * (change-amount recovery, Proposal B). The client sends `publicKey` with each
- * order; the TEE encrypts each fill's `change_amount` to it on-chain, and only
+ * (durable output recovery v2). The client sends `publicKey` with each order;
+ * the TEE encrypts each fill's `(trade, change)` amounts to it on-chain, and only
  * `secretKey` — regenerable from the seed on any device — can decrypt it. This
- * is what makes a change note recoverable after a CVM redeploy wipes the live
- * fill memo.
+ * is what makes both output notes recoverable after a CVM redeploy.
  *
  * `secretKey = HKDF-SHA256-expand(seed, "nyx-viewing-enc-v1")[:32]`
  * `publicKey = X25519(secretKey · basepoint)` (tweetnacl clamps the scalar).

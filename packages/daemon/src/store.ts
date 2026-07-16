@@ -4,7 +4,7 @@
  * Two tables:
  *   - **notes** — the client's UTXO set. Implements the SDK `NoteStore`
  *     interface so the SDK's fills/settlement plumbing can write change notes
- *     straight through (`subscribeFills`, `recoverChangeFromChain`, deposits).
+ *     straight through (`subscribeFills`, `recoverFillFromChain`, deposits).
  *   - **orders** — the daemon's `ManagedOrder` records, so a crash + restart
  *     can rebuild the lifecycle state machines instead of losing in-flight
  *     orders.

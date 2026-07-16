@@ -71,6 +71,8 @@ describe("MatchResultPayload decode", () => {
     expect(p.matchId).toBe(hexN(0x11, 16));
     expect(p.orderIdA).toBe(hexN(0xaa, 16));
     expect(p.orderIdB).toBe(hexN(0xbb, 16));
+    expect(p.noteAcommitment).toBe(hexN(0x0a, 32));
+    expect(p.noteCcommitment).toBe(hexN(0x0c, 32));
     expect(p.noteEcommitment).toBe(hexN(0xee, 32));
     expect(p.noteFcommitment).toBe(hexN(0xff, 32));
     // Amount-privacy (P3b): no amounts on the wire anymore — only batch_slot
@@ -115,22 +117,23 @@ describe("MatchResultPayload decode", () => {
     expect(decodeSettleIxData(new Uint8Array(10))).toBeNull();
   });
 
-  it("decodes the change-amount recovery ciphertext per side (Proposal B)", () => {
-    // fill_recovery layout: eph(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ pad(24).
+  it("decodes the recovery-v2 ciphertext per side", () => {
+    // eph(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ trailer(8).
     const recovery = new Uint8Array(128);
     recovery.set(fill(32, 0xe1), 0);
-    recovery.set(fill(36, 0xb2), 32);
-    recovery.set(fill(36, 0xc3), 68);
+    recovery.set(fill(44, 0xb2), 32);
+    recovery.set(fill(44, 0xc3), 76);
+    recovery.set(new TextEncoder().encode("NYXREC02"), 120);
     const p = decodeMatchPayload(
       serializePayload(makePayload({ fillRecovery: recovery })),
     );
     expect(p.ephemeralPubkey).toBe(hexN(0xe1, 32));
-    expect(p.buyerEnc).toBe(hexN(0xb2, 36));
-    expect(p.sellerEnc).toBe(hexN(0xc3, 36));
+    expect(p.buyerEnc).toBe(hexN(0xb2, 44));
+    expect(p.sellerEnc).toBe(hexN(0xc3, 44));
     const [buyer, seller] = payloadToFills(p);
     expect(buyer.ephemeralPubkey).toBe(hexN(0xe1, 32));
-    expect(buyer.changeEnc).toBe(hexN(0xb2, 36));
-    expect(seller.changeEnc).toBe(hexN(0xc3, 36));
+    expect(buyer.outputEnc).toBe(hexN(0xb2, 44));
+    expect(seller.outputEnc).toBe(hexN(0xc3, 44));
   });
 
   it("treats an all-zero recovery bundle as no ciphertext (null)", () => {
@@ -138,7 +141,7 @@ describe("MatchResultPayload decode", () => {
       decodeMatchPayload(serializePayload(makePayload())),
     );
     expect(buyer.ephemeralPubkey).toBeNull();
-    expect(buyer.changeEnc).toBeNull();
-    expect(seller.changeEnc).toBeNull();
+    expect(buyer.outputEnc).toBeNull();
+    expect(seller.outputEnc).toBeNull();
   });
 });

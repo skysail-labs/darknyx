@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import type { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey, type Connection } from "@solana/web3.js";
 import {
   serializePayload,
   type MatchResultPayload,
@@ -18,6 +18,7 @@ import { deriveOrderId } from "../src/keys/key-generators.js";
 import {
   decodeSettleFills,
   backfillHistoryFromChain,
+  makeConnectionScan,
   type RawSettleTx,
 } from "../src/fills/chain-history.js";
 
@@ -40,8 +41,8 @@ const orderIdA = deriveOrderId(SEED, 0); // my order
 const orderIdB = fill(16, 0xbb); // counterparty
 const noteE = fill(32, 0xe5); // buyer change note (partial fill)
 const eph = fill(32, 0x11);
-const buyerEnc = fill(36, 0x22); // buyer change ciphertext
-const sellerEnc = fill(36, 0x00); // seller exact ⇒ zero ciphertext
+const buyerEnc = fill(44, 0x22); // buyer output tuple ciphertext
+const sellerEnc = fill(44, 0x00); // no seller viewing key
 
 const payload: MatchResultPayload = {
   matchId: fill(16, 0x01),
@@ -60,7 +61,12 @@ const payload: MatchResultPayload = {
   sellerRelockOrderId: fill(16, 0x00),
   sellerRelockExpiry: 0n,
   batchSlot: 123n,
-  fillRecovery: cat(eph, buyerEnc, sellerEnc, fill(24, 0x00)),
+  fillRecovery: cat(
+    eph,
+    buyerEnc,
+    sellerEnc,
+    new TextEncoder().encode("NYXREC02"),
+  ),
 };
 
 // Realistic ix data: disc(8) ‖ tree_id(1) ‖ payload(488) ‖ match_index(1) ‖ siblings(128).
@@ -74,24 +80,27 @@ const ixData = cat(
 
 describe("decodeSettleFills", () => {
   it("decodes both sides with the encoder's exact offsets", () => {
-    const fills = decodeSettleFills(ixData, "sig1");
+    const fills = decodeSettleFills(ixData, "sig1", 456);
     expect(fills).not.toBeNull();
     const [buyer, seller] = fills!;
 
     expect(buyer.orderId).toBe(hex(orderIdA));
     expect(buyer.side).toBe("buyer");
+    expect(buyer.inputNoteCommitment).toBe(hex(payload.noteAcommitment));
+    expect(buyer.tradeNoteCommitment).toBe(hex(payload.noteCcommitment));
     expect(buyer.isPartialFill).toBe(true);
     expect(buyer.changeNoteCommitment).toBe(hex(noteE));
     expect(buyer.ephemeralPubkey).toBe(hex(eph));
-    expect(buyer.changeEnc).toBe(hex(buyerEnc));
+    expect(buyer.outputEnc).toBe(hex(buyerEnc));
     expect(buyer.batchSlot).toBe("123");
     expect(buyer.signature).toBe("sig1");
+    expect(buyer.slot).toBe(456);
 
     expect(seller.orderId).toBe(hex(orderIdB));
     expect(seller.side).toBe("seller");
     expect(seller.isPartialFill).toBe(false); // exact ⇒ no change note
     expect(seller.changeNoteCommitment).toBeNull();
-    expect(seller.changeEnc).toBeNull(); // zero ciphertext ⇒ null
+    expect(seller.outputEnc).toBeNull(); // zero ciphertext ⇒ null
   });
 
   it("returns null for a non-settle ix (wrong discriminator)", () => {
@@ -105,9 +114,9 @@ describe("decodeSettleFills", () => {
 });
 
 describe("backfillHistoryFromChain", () => {
-  it("HD-gap-scans the seed and locates the account's own change-note fill", async () => {
+  it("HD-gap-scans the seed and locates the account's own fill", async () => {
     const scan = async (): Promise<RawSettleTx[]> => [
-      { signature: "sig1", slot: 123, ixDatas: [ixData] },
+      { signature: "sig1", slot: 456, ixDatas: [ixData] },
     ];
 
     const res = await backfillHistoryFromChain({
@@ -118,13 +127,13 @@ describe("backfillHistoryFromChain", () => {
       scan,
     });
 
-    expect(res.located).toHaveLength(1); // buyer partial; seller exact excluded
+    expect(res.located).toHaveLength(1); // only the buyer order id belongs to this seed
     expect(res.located[0].orderId).toBe(hex(orderIdA));
     expect(res.located[0].changeNoteCommitment).toBe(hex(noteE));
-    expect(res.located[0].changeEnc).toBe(hex(buyerEnc));
+    expect(res.located[0].outputEnc).toBe(hex(buyerEnc));
     expect(res.located[0].ephemeralPubkey).toBe(hex(eph));
     expect(res.highestUsedIndex).toBe(0);
-    expect(res.cursorSlot).toBe(123);
+    expect(res.cursorSlot).toBe(456);
   });
 
   it("returns an empty result when none of the HD order ids appear on-chain", async () => {
@@ -137,5 +146,56 @@ describe("backfillHistoryFromChain", () => {
     });
     expect(res.located).toHaveLength(0);
     expect(res.highestUsedIndex).toBe(-1);
+  });
+});
+
+describe("makeConnectionScan", () => {
+  it("pins both signature and transaction reads to finalized commitment", async () => {
+    const programId = new PublicKey(fill(32, 0x77));
+    const connection = {
+      getSignaturesForAddress: async (
+        address: PublicKey,
+        _opts: unknown,
+        commitment: string,
+      ) => {
+        expect(address.equals(programId)).toBe(true);
+        expect(commitment).toBe("finalized");
+        return [
+          {
+            signature: "sig-finalized",
+            slot: 456,
+            err: null,
+            memo: null,
+            blockTime: null,
+            confirmationStatus: "finalized",
+          },
+        ];
+      },
+      getTransaction: async (
+        signature: string,
+        config: { commitment: string },
+      ) => {
+        expect(signature).toBe("sig-finalized");
+        expect(config.commitment).toBe("finalized");
+        return {
+          slot: 456,
+          meta: { logMessages: ["Program log: finalized"] },
+          transaction: {
+            message: {
+              accountKeys: [programId],
+              compiledInstructions: [
+                { programIdIndex: 0, accountKeyIndexes: [], data: ixData },
+              ],
+            },
+          },
+        };
+      },
+    } as unknown as Connection;
+
+    const rows = await makeConnectionScan(connection, programId)({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0].slot).toBe(456);
+    expect(rows[0].ixDatas[0]).toEqual(ixData);
+    expect(rows[0].logMessages).toEqual(["Program log: finalized"]);
   });
 });

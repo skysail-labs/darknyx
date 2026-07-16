@@ -27,14 +27,15 @@ The SDK also ships:
 
 - **Order builders**: presets for market, all-or-none, and good-til-time orders
   over the native fields. They include the `viewing_pubkey` for on-chain
-  change-amount recovery **by default**, so a change note stays recoverable
-  without any extra work.
+  trade/change recovery **by default**, so exact and partial output notes stay
+  recoverable without extra work.
 - **Stream clients**: per-account order-lifecycle and fill subscriptions, with
   the fill-memo verification built in.
 - **Recovery helpers**: generate and securely store a CSPRNG master seed, export
   or import its authenticated versioned backup with
-  `exportEncryptedMasterSeed` / `importEncryptedMasterSeed`, and recover change
-  notes from on-chain ciphertext (`recoverChangeFromChain`) when backfilling.
+  `exportEncryptedMasterSeed` / `importEncryptedMasterSeed`, recover fill outputs
+  (`recoverFillFromChain`), or rebuild deposits, fills, continuations, and merges
+  from seed + chain (`recoverNotesFromChain`).
   Wallet-message signatures are not used as spend authority.
 - **System helpers**: server time (for slot-based expiry) and the degraded-mode
   status.

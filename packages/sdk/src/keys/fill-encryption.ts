@@ -1,19 +1,20 @@
 /**
- * Decrypt (and, for tests, encrypt) a fill's `change_amount` — the client side
- * of the on-chain recovery backstop (change-amount recovery, Proposal B).
+ * Decrypt (and, for tests, encrypt) one fill side's trade + change amounts —
+ * the client side of the on-chain recovery backstop.
  *
  * Mirrors `crates/darkpool-crypto/src/fill_encryption.rs`. The TEE encrypts each
- * side's 8-byte `change_amount` to that side's X25519 viewing-encryption public
+ * side's two u64 output amounts to that side's X25519 viewing-encryption public
  * key (`deriveViewingEncKeypair().publicKey`, sent with the order). One ephemeral
  * key per fill (multi-recipient ECIES): a single ephemeral public lands on-chain
- * plus one 36-byte blob per side. Only the matching viewing secret decrypts.
+ * plus one 44-byte blob per side. Only the matching viewing secret decrypts.
  *
  * Scheme (per side):
  *   shared   = X25519(ephemeral_secret, recipient_pub)
  *   aead_key = HKDF-SHA256(ikm = shared,
- *                          info = "nyx-fill-enc-v1" ‖ eph_pub ‖ recipient_pub)[:32]
- *   blob     = nonce(12) ‖ ChaCha20Poly1305(aead_key, nonce).encrypt(amount_le8)
- *            = 12 + 8 + 16 = 36 bytes
+ *                          info = "nyx-fill-enc-v2" ‖ eph_pub ‖ recipient_pub)[:32]
+ *   plaintext = trade_amount_le8 ‖ change_amount_le8
+ *   blob      = nonce(12) ‖ ChaCha20Poly1305(aead_key, nonce).encrypt(plaintext)
+ *             = 12 + 16 + 16 = 44 bytes
  *
  * X25519 via tweetnacl (`scalarMult`); HKDF + ChaCha20-Poly1305 via `node:crypto`
  * — no new dependency. The construction is pinned to the Rust encryptor by the
@@ -24,14 +25,21 @@ import crypto from "node:crypto";
 import nacl from "tweetnacl";
 import { hkdfExpand } from "./key-generators.js";
 
-const FILL_ENC_INFO = new TextEncoder().encode("nyx-fill-enc-v1");
+const FILL_ENC_INFO = new TextEncoder().encode("nyx-fill-enc-v2");
 
 export const NONCE_LEN = 12;
-export const AMOUNT_LEN = 8;
+export const AMOUNTS_LEN = 16;
 export const TAG_LEN = 16;
 /** One side's on-chain ciphertext blob: `nonce ‖ ct ‖ tag`. */
-export const SIDE_BLOB_LEN = NONCE_LEN + AMOUNT_LEN + TAG_LEN; // 36
+export const SIDE_BLOB_LEN = NONCE_LEN + AMOUNTS_LEN + TAG_LEN; // 44
 export const X25519_LEN = 32;
+
+/** Buyer semantics: trade=base, change=quote. Seller semantics: trade=quote,
+ * change=base. */
+export interface FillAmounts {
+  trade: bigint;
+  change: bigint;
+}
 
 /** Reject low-order X25519 encodings by applying a fixed probe scalar and
  * requiring a non-zero shared secret (RFC 7748 contributory check). */
@@ -62,15 +70,15 @@ function deriveAeadKey(
 }
 
 /**
- * Encrypt one side's `change_amount` to `recipientPub`. Caller supplies the
+ * Encrypt one side's trade + change amounts to `recipientPub`. Caller supplies the
  * fill's ephemeral secret (reused across both sides) and a unique 12-byte nonce.
  * Primarily a test/parity helper — in production the TEE encrypts; the client
- * only decrypts. Returns the 36-byte `nonce ‖ ct ‖ tag` blob.
+ * only decrypts. Returns the 44-byte `nonce ‖ ct ‖ tag` blob.
  */
-export function encryptChangeAmount(
+export function encryptFillAmounts(
   ephemeralSecret: Uint8Array,
   recipientPub: Uint8Array,
-  amount: bigint,
+  amounts: FillAmounts,
   nonce12: Uint8Array,
 ): Uint8Array {
   if (nonce12.length !== NONCE_LEN)
@@ -89,15 +97,16 @@ export function encryptChangeAmount(
       authTagLength: TAG_LEN,
     },
   );
-  const amt = Buffer.alloc(AMOUNT_LEN);
-  amt.writeBigUInt64LE(amount);
-  const ct = Buffer.concat([cipher.update(amt), cipher.final()]);
+  const plaintext = Buffer.alloc(AMOUNTS_LEN);
+  plaintext.writeBigUInt64LE(amounts.trade, 0);
+  plaintext.writeBigUInt64LE(amounts.change, 8);
+  const ct = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const tag = cipher.getAuthTag();
 
   const blob = new Uint8Array(SIDE_BLOB_LEN);
   blob.set(nonce12, 0);
   blob.set(ct, NONCE_LEN);
-  blob.set(tag, NONCE_LEN + AMOUNT_LEN);
+  blob.set(tag, NONCE_LEN + AMOUNTS_LEN);
   return blob;
 }
 
@@ -108,11 +117,11 @@ export function encryptChangeAmount(
  * (bound into the HKDF `info`) is recomputed from the secret, so it need not be
  * passed.
  */
-export function decryptChangeAmount(
+export function decryptFillAmounts(
   viewingSecret: Uint8Array,
   ephemeralPub: Uint8Array,
   blob: Uint8Array,
-): bigint | null {
+): FillAmounts | null {
   if (blob.length !== SIDE_BLOB_LEN) return null;
   if (!isContributoryX25519PublicKey(ephemeralPub)) return null;
   try {
@@ -120,8 +129,8 @@ export function decryptChangeAmount(
     const shared = nacl.scalarMult(viewingSecret, ephemeralPub);
     const key = deriveAeadKey(shared, ephemeralPub, myPub);
     const nonce = blob.subarray(0, NONCE_LEN);
-    const ct = blob.subarray(NONCE_LEN, NONCE_LEN + AMOUNT_LEN);
-    const tag = blob.subarray(NONCE_LEN + AMOUNT_LEN);
+    const ct = blob.subarray(NONCE_LEN, NONCE_LEN + AMOUNTS_LEN);
+    const tag = blob.subarray(NONCE_LEN + AMOUNTS_LEN);
     const decipher = crypto.createDecipheriv(
       "chacha20-poly1305",
       Buffer.from(key),
@@ -133,8 +142,11 @@ export function decryptChangeAmount(
       decipher.update(Buffer.from(ct)),
       decipher.final(),
     ]);
-    if (pt.length !== AMOUNT_LEN) return null;
-    return pt.readBigUInt64LE(0);
+    if (pt.length !== AMOUNTS_LEN) return null;
+    return {
+      trade: pt.readBigUInt64LE(0),
+      change: pt.readBigUInt64LE(8),
+    };
   } catch {
     return null;
   }

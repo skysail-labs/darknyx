@@ -1,5 +1,5 @@
 /**
- * Change-amount recovery (Proposal B), B.1 crypto foundation.
+ * Durable two-output recovery v2 crypto foundation.
  *
  * Two contracts:
  *  1. TS round-trips its own encrypt→decrypt (the client path).
@@ -7,7 +7,7 @@
  *     (`crates/darkpool-crypto/src/fill_encryption.rs::fixed_vector_is_stable`).
  *     Same inputs (RECIPIENT_SECRET, EPH_SECRET, NONCE, AMOUNT) must yield the
  *     SAME ephemeral pubkey (proving tweetnacl X25519 base-mult == x25519-dalek)
- *     and the SAME 36-byte blob, and that blob must decrypt back to AMOUNT.
+ *     and the SAME 44-byte blob, and that blob must decrypt both amounts.
  *     If this drifts, the TEE-encrypted on-chain ciphertext won't decrypt
  *     client-side. There is NO key-derivation parity test (the TEE only consumes
  *     the client's pubkey; it never re-derives it).
@@ -15,8 +15,8 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  encryptChangeAmount,
-  decryptChangeAmount,
+  encryptFillAmounts,
+  decryptFillAmounts,
   isContributoryX25519PublicKey,
   SIDE_BLOB_LEN,
 } from "../src/keys/fill-encryption.js";
@@ -29,21 +29,21 @@ const EPH_SECRET = new Uint8Array(32).fill(0x07);
 const NONCE = new Uint8Array([
   0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
 ]);
-const AMOUNT = 1_234_567_890_123n;
+const AMOUNTS = { trade: 1_234_567_890_123n, change: 98_765_432_101n };
 const EXPECTED_EPH_PUB_HEX =
   "13be4feaeaf204c7fd3358fc9c00721881d174278128227ec674f37f7fe97b6d";
 const EXPECTED_BLOB_HEX =
-  "101112131415161718191a1bf38cd2533492baadb9e66ce516a13d47fca255f1f877cb1e";
+  "101112131415161718191a1b20617bcbf11404a3bbc4cfcba3206c3e47cf2216af8d8a806e4c654ef4dcd7d3";
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
-describe("fill-encryption (change-amount recovery B.1)", () => {
+describe("fill-encryption recovery v2", () => {
   it("round-trips encrypt → decrypt", () => {
     const recipientPub = nacl.scalarMult.base(RECIPIENT_SECRET);
     const ephPub = nacl.scalarMult.base(EPH_SECRET);
-    const blob = encryptChangeAmount(EPH_SECRET, recipientPub, AMOUNT, NONCE);
+    const blob = encryptFillAmounts(EPH_SECRET, recipientPub, AMOUNTS, NONCE);
     expect(blob.length).toBe(SIDE_BLOB_LEN);
-    expect(decryptChangeAmount(RECIPIENT_SECRET, ephPub, blob)).toBe(AMOUNT);
+    expect(decryptFillAmounts(RECIPIENT_SECRET, ephPub, blob)).toEqual(AMOUNTS);
   });
 
   it("matches the Rust fixed vector (ephemeral pub + blob)", () => {
@@ -51,22 +51,22 @@ describe("fill-encryption (change-amount recovery B.1)", () => {
     expect(hex(nacl.scalarMult.base(EPH_SECRET))).toBe(EXPECTED_EPH_PUB_HEX);
 
     const recipientPub = nacl.scalarMult.base(RECIPIENT_SECRET);
-    const blob = encryptChangeAmount(EPH_SECRET, recipientPub, AMOUNT, NONCE);
+    const blob = encryptFillAmounts(EPH_SECRET, recipientPub, AMOUNTS, NONCE);
     expect(hex(blob)).toBe(EXPECTED_BLOB_HEX);
   });
 
   it("decrypts the Rust-produced blob back to the amount", () => {
     const ephPub = Buffer.from(EXPECTED_EPH_PUB_HEX, "hex");
     const blob = Buffer.from(EXPECTED_BLOB_HEX, "hex");
-    expect(decryptChangeAmount(RECIPIENT_SECRET, ephPub, blob)).toBe(AMOUNT);
+    expect(decryptFillAmounts(RECIPIENT_SECRET, ephPub, blob)).toEqual(AMOUNTS);
   });
 
   it("rejects a wrong key", () => {
     const recipientPub = nacl.scalarMult.base(RECIPIENT_SECRET);
     const ephPub = nacl.scalarMult.base(EPH_SECRET);
-    const blob = encryptChangeAmount(EPH_SECRET, recipientPub, AMOUNT, NONCE);
+    const blob = encryptFillAmounts(EPH_SECRET, recipientPub, AMOUNTS, NONCE);
     expect(
-      decryptChangeAmount(new Uint8Array(32).fill(0x09), ephPub, blob),
+      decryptFillAmounts(new Uint8Array(32).fill(0x09), ephPub, blob),
     ).toBeNull();
   });
 
@@ -85,23 +85,23 @@ describe("fill-encryption (change-amount recovery B.1)", () => {
     }
     const zero = lowOrder[0]!;
     const one = lowOrder[1]!;
-    expect(() => encryptChangeAmount(EPH_SECRET, zero, AMOUNT, NONCE)).toThrow(
+    expect(() => encryptFillAmounts(EPH_SECRET, zero, AMOUNTS, NONCE)).toThrow(
       /non-contributory/,
     );
-    expect(() => encryptChangeAmount(EPH_SECRET, one, AMOUNT, NONCE)).toThrow(
+    expect(() => encryptFillAmounts(EPH_SECRET, one, AMOUNTS, NONCE)).toThrow(
       /non-contributory/,
     );
     expect(
-      decryptChangeAmount(RECIPIENT_SECRET, zero, new Uint8Array(SIDE_BLOB_LEN)),
+      decryptFillAmounts(RECIPIENT_SECRET, zero, new Uint8Array(SIDE_BLOB_LEN)),
     ).toBeNull();
   });
 
   it("rejects a tampered blob", () => {
     const recipientPub = nacl.scalarMult.base(RECIPIENT_SECRET);
     const ephPub = nacl.scalarMult.base(EPH_SECRET);
-    const blob = encryptChangeAmount(EPH_SECRET, recipientPub, AMOUNT, NONCE);
+    const blob = encryptFillAmounts(EPH_SECRET, recipientPub, AMOUNTS, NONCE);
     blob[SIDE_BLOB_LEN - 1] ^= 0x01; // flip a tag byte
-    expect(decryptChangeAmount(RECIPIENT_SECRET, ephPub, blob)).toBeNull();
+    expect(decryptFillAmounts(RECIPIENT_SECRET, ephPub, blob)).toBeNull();
   });
 
   it("one ephemeral key serves both sides (multi-recipient)", () => {
@@ -110,24 +110,26 @@ describe("fill-encryption (change-amount recovery B.1)", () => {
     const ephSecret = new Uint8Array(32).fill(0x55);
     const ephPub = nacl.scalarMult.base(ephSecret);
 
-    const blobA = encryptChangeAmount(
+    const amountsA = { trade: 111n, change: 11n };
+    const amountsB = { trade: 222n, change: 22n };
+    const blobA = encryptFillAmounts(
       ephSecret,
       aliceKp.publicKey,
-      111n,
+      amountsA,
       new Uint8Array(12).fill(1),
     );
-    const blobB = encryptChangeAmount(
+    const blobB = encryptFillAmounts(
       ephSecret,
       bobKp.publicKey,
-      222n,
+      amountsB,
       new Uint8Array(12).fill(2),
     );
 
-    expect(decryptChangeAmount(aliceKp.secretKey, ephPub, blobA)).toBe(111n);
-    expect(decryptChangeAmount(bobKp.secretKey, ephPub, blobB)).toBe(222n);
+    expect(decryptFillAmounts(aliceKp.secretKey, ephPub, blobA)).toEqual(amountsA);
+    expect(decryptFillAmounts(bobKp.secretKey, ephPub, blobB)).toEqual(amountsB);
     // Cross-decrypt fails (recipient binding in HKDF info).
-    expect(decryptChangeAmount(aliceKp.secretKey, ephPub, blobB)).toBeNull();
-    expect(decryptChangeAmount(bobKp.secretKey, ephPub, blobA)).toBeNull();
+    expect(decryptFillAmounts(aliceKp.secretKey, ephPub, blobB)).toBeNull();
+    expect(decryptFillAmounts(bobKp.secretKey, ephPub, blobA)).toBeNull();
   });
 
   it("deriveViewingEncKeypair is deterministic from the seed", () => {

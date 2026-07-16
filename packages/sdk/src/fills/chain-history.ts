@@ -1,10 +1,10 @@
 /**
  * Direct-chain fills rediscovery — the indexer-FREE backfill path.
  *
- * `backfillHistory` (`./history.ts`) locates an account's change-note fills by
+ * `backfillHistory` (`./history.ts`) locates an account's fills by
  * querying the off-TEE `packages/indexer` by HD-derived order id. That indexer
  * is OPTIONAL infrastructure (see `packages/indexer/README.md`): post
- * amount-privacy + on-chain change-amount recovery (Proposal B) the durable
+ * amount-privacy + on-chain output recovery the durable
  * source of truth is the CHAIN, and a client can rediscover its own fills
  * without any indexer at all — by scanning the vault program's settle txs and
  * decoding the same `MatchResultPayload` the indexer decodes.
@@ -30,26 +30,80 @@ import {
   MessageV0,
   type VersionedTransactionResponse,
 } from "@solana/web3.js";
+import { createHash } from "node:crypto";
 import { anchorDiscriminator } from "../idl/vault-client.js";
 import { deriveOrderId } from "../keys/key-generators.js";
 import type { IndexerFill, BackfillResult } from "./history.js";
 
 /** `sha256("global:tee_forced_settle_batched")[..8]`. */
 const SETTLE_DISCRIMINATOR = anchorDiscriminator("tee_forced_settle_batched");
+const TRADE_SETTLED_DISCRIMINATOR = new Uint8Array(
+  createHash("sha256")
+    .update("event:TradeSettled")
+    .digest()
+    .subarray(0, 8),
+);
 
 /** Borsh `MatchResultPayload` length (v9, 488 B). Mirrors decode.ts::PAYLOAD_LEN. */
 const PAYLOAD_LEN = 488;
 /** ix data = disc(8) ‖ tree_id(u8) ‖ payload(488) ‖ match_index(1) ‖ siblings(128).
  *  The payload starts AFTER the discriminator AND the leading `tree_id` byte. */
 const PAYLOAD_OFFSET = 8 + 1;
-/** `fill_recovery` bundle starts at 360 within the payload:
- *  eph(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ pad(24). */
+/** `fill_recovery` v2 starts at 360 within the payload:
+ *  eph(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "NYXREC02". */
 const FILL_RECOVERY_OFFSET = 360;
+const RECOVERY_V2_TRAILER = Buffer.from("NYXREC02", "ascii");
 
 const ZERO32 = "0".repeat(64);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 const isZero = (b: Uint8Array) => b.every((x) => x === 0);
 const hexOrNull = (b: Uint8Array) => (isZero(b) ? null : hex(b));
+const NO_LEAF = 0xffff_ffff_ffff_ffffn;
+
+export interface TradeSettledLeaves {
+  matchId: string;
+  tradeBuyer: bigint;
+  tradeSeller: bigint;
+  changeBuyer: bigint | null;
+  changeSeller: bigint | null;
+}
+
+/** Decode every Anchor `TradeSettled` event in a transaction's logs. */
+export function decodeTradeSettledLeaves(
+  logs: readonly string[],
+): Map<string, TradeSettledLeaves> {
+  const out = new Map<string, TradeSettledLeaves>();
+  for (const line of logs) {
+    if (!line.startsWith("Program data: ")) continue;
+    let bytes: Buffer;
+    try {
+      bytes = Buffer.from(line.slice("Program data: ".length).trim(), "base64");
+    } catch {
+      continue;
+    }
+    if (bytes.length < 8 + 1 + 16 + 6 * 8) continue;
+    if (
+      !Buffer.from(bytes.subarray(0, 8)).equals(
+        Buffer.from(TRADE_SETTLED_DISCRIMINATOR),
+      )
+    ) {
+      continue;
+    }
+    const matchId = hex(bytes.subarray(9, 25));
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const leaf = (offset: number): bigint => view.getBigUint64(offset, true);
+    const change = (value: bigint): bigint | null =>
+      value === NO_LEAF ? null : value;
+    out.set(matchId, {
+      matchId,
+      tradeBuyer: leaf(25),
+      tradeSeller: leaf(33),
+      changeBuyer: change(leaf(41)),
+      changeSeller: change(leaf(49)),
+    });
+  }
+  return out;
+}
 
 /**
  * Decode one vault instruction's raw data into its two fill rows (buyer + seller),
@@ -59,6 +113,8 @@ const hexOrNull = (b: Uint8Array) => (isZero(b) ? null : hex(b));
 export function decodeSettleFills(
   ixData: Uint8Array,
   signature: string,
+  slot = 0,
+  leaves?: TradeSettledLeaves,
 ): IndexerFill[] | null {
   if (ixData.length < PAYLOAD_OFFSET + PAYLOAD_LEN) return null;
   for (let i = 0; i < 8; i++) {
@@ -69,6 +125,10 @@ export function decodeSettleFills(
 
   const matchId = hex(p.subarray(0, 16));
   // Six 32-byte note commitments precede the order ids in payload v9.
+  const noteA = hex(p.subarray(16, 48)); // buyer input (quote)
+  const noteB = hex(p.subarray(48, 80)); // seller input (base)
+  const noteC = hex(p.subarray(80, 112)); // buyer trade output (base)
+  const noteD = hex(p.subarray(112, 144)); // seller trade output (quote)
   const noteE = hex(p.subarray(144, 176)); // buyer change ([0;32] = exact fill)
   const noteF = hex(p.subarray(176, 208)); // seller change
   const orderIdA = hex(p.subarray(208, 224)); // buyer
@@ -76,9 +136,16 @@ export function decodeSettleFills(
   const batchSlot = v.getBigUint64(352, true).toString();
 
   const r = FILL_RECOVERY_OFFSET;
-  const eph = hexOrNull(p.subarray(r, r + 32));
-  const buyerEnc = hexOrNull(p.subarray(r + 32, r + 68));
-  const sellerEnc = hexOrNull(p.subarray(r + 68, r + 104));
+  const recoveryV2 = Buffer.from(p.subarray(r + 120, r + 128)).equals(
+    RECOVERY_V2_TRAILER,
+  );
+  const eph = recoveryV2 ? hexOrNull(p.subarray(r, r + 32)) : null;
+  const buyerEnc = recoveryV2
+    ? hexOrNull(p.subarray(r + 32, r + 76))
+    : null;
+  const sellerEnc = recoveryV2
+    ? hexOrNull(p.subarray(r + 76, r + 120))
+    : null;
 
   const buyerExact = noteE === ZERO32;
   const sellerExact = noteF === ZERO32;
@@ -88,22 +155,32 @@ export function decodeSettleFills(
       side: "buyer",
       matchId,
       signature,
+      slot,
+      inputNoteCommitment: noteA,
+      tradeNoteCommitment: noteC,
       isPartialFill: !buyerExact,
       changeNoteCommitment: buyerExact ? null : noteE,
       batchSlot,
       ephemeralPubkey: eph,
-      changeEnc: buyerEnc,
+      outputEnc: buyerEnc,
+      tradeLeafIndex: leaves?.tradeBuyer.toString() ?? null,
+      changeLeafIndex: leaves?.changeBuyer?.toString() ?? null,
     },
     {
       orderId: orderIdB,
       side: "seller",
       matchId,
       signature,
+      slot,
+      inputNoteCommitment: noteB,
+      tradeNoteCommitment: noteD,
       isPartialFill: !sellerExact,
       changeNoteCommitment: sellerExact ? null : noteF,
       batchSlot,
       ephemeralPubkey: eph,
-      changeEnc: sellerEnc,
+      outputEnc: sellerEnc,
+      tradeLeafIndex: leaves?.tradeSeller.toString() ?? null,
+      changeLeafIndex: leaves?.changeSeller?.toString() ?? null,
     },
   ];
 }
@@ -114,6 +191,8 @@ export interface RawSettleTx {
   slot: number;
   /** Raw data of every vault-program top-level ix in the tx. */
   ixDatas: Uint8Array[];
+  /** Anchor event logs used to recover exact output leaf positions. */
+  logMessages?: string[];
 }
 
 /** Injectable settle-tx scanner (defaults to a `Connection` walk; tests mock it). */
@@ -121,17 +200,18 @@ export type ChainScan = (opts: {
   sinceSlot?: number;
 }) => Promise<RawSettleTx[]>;
 
-/** Pull the vault program's top-level ix data out of a v0 tx.
- *  Settle txs are always v0 (they load ALTs — CLAUDE.md §6); legacy messages
- *  carry no settle ix here, so they're skipped. Program ids are ALWAYS static
- *  account keys (a program id can never come from an ALT), so no table lookup. */
+/** Pull the vault program's top-level ix data out of a v0 or legacy tx.
+ * Program ids are always static account keys, so no ALT lookup is needed. The
+ * legacy branch is required by deposit/merge cold recovery. */
 function extractVaultIxDatas(
   tx: VersionedTransactionResponse,
   programId: PublicKey,
 ): Uint8Array[] {
   const message = tx.transaction.message;
-  if (!(message instanceof MessageV0)) return [];
-  const keys = message.staticAccountKeys;
+  const keys =
+    message instanceof MessageV0
+      ? message.staticAccountKeys
+      : message.accountKeys;
   const out: Uint8Array[] = [];
   for (const ci of message.compiledInstructions) {
     const pid = keys[ci.programIdIndex];
@@ -150,10 +230,11 @@ export function makeConnectionScan(
     let before: string | undefined;
     for (;;) {
       // Newest-first, up to 1000 signatures per page.
-      const sigs = await conn.getSignaturesForAddress(programId, {
-        before,
-        limit: 1000,
-      });
+      const sigs = await conn.getSignaturesForAddress(
+        programId,
+        { before, limit: 1000 },
+        "finalized",
+      );
       if (sigs.length === 0) break;
       for (const s of sigs) {
         if (s.err) continue; // reverted tx — no settle applied.
@@ -161,13 +242,18 @@ export function makeConnectionScan(
         // every remaining one is too — stop the whole scan.
         if (sinceSlot !== undefined && s.slot < sinceSlot) return out;
         const tx = await conn.getTransaction(s.signature, {
-          commitment: "confirmed",
+          commitment: "finalized",
           maxSupportedTransactionVersion: 0,
         });
         if (!tx) continue;
         const ixDatas = extractVaultIxDatas(tx, programId);
         if (ixDatas.length > 0) {
-          out.push({ signature: s.signature, slot: tx.slot, ixDatas });
+          out.push({
+            signature: s.signature,
+            slot: tx.slot,
+            ixDatas,
+            logMessages: tx.meta?.logMessages ?? [],
+          });
         }
       }
       before = sigs[sigs.length - 1].signature;
@@ -190,7 +276,7 @@ export interface ChainBackfillOptions {
 }
 
 /**
- * Rediscover an account's change-note fills straight from the chain — no indexer.
+ * Rediscover an account's fills straight from finalized chain history — no indexer.
  * Scans the vault program's settle history, decodes each `MatchResultPayload`,
  * then HD-gap-scans `deriveOrderId(seed, 0..)` against the decoded set (same
  * gap-limit stop as `backfillHistory`). Returns the identical `BackfillResult`,
@@ -205,8 +291,15 @@ export async function backfillHistoryFromChain(
   // Index the decoded fills by order id (one client-side pass over history).
   const byOrder = new Map<string, IndexerFill[]>();
   for (const tx of txs) {
+    const leavesByMatch = decodeTradeSettledLeaves(tx.logMessages ?? []);
     for (const ixData of tx.ixDatas) {
-      const fills = decodeSettleFills(ixData, tx.signature);
+      const rawFills = decodeSettleFills(ixData, tx.signature, tx.slot);
+      const fillLeaves = rawFills?.[0]
+        ? leavesByMatch.get(rawFills[0].matchId)
+        : undefined;
+      const fills = fillLeaves
+        ? decodeSettleFills(ixData, tx.signature, tx.slot, fillLeaves)
+        : rawFills;
       if (!fills) continue;
       for (const f of fills) {
         const arr = byOrder.get(f.orderId);
@@ -233,10 +326,10 @@ export async function backfillHistoryFromChain(
       consecutiveEmpty = 0;
       highestUsedIndex = n;
       for (const fill of fills) {
-        // Guard a malformed batchSlot from poisoning the cursor (NaN via Math.max).
-        const slot = Number(fill.batchSlot);
-        if (Number.isFinite(slot)) cursorSlot = Math.max(cursorSlot, slot);
-        if (fill.changeNoteCommitment) located.push(fill);
+        if (Number.isSafeInteger(fill.slot) && fill.slot >= 0) {
+          cursorSlot = Math.max(cursorSlot, fill.slot);
+        }
+        located.push(fill);
       }
     }
     n += 1;

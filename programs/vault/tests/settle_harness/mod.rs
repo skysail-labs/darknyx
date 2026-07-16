@@ -1032,7 +1032,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     h.update(p.seller_relock_order_id);
     h.update(p.seller_relock_expiry.to_le_bytes());
     h.update(p.batch_slot.to_le_bytes());
-    h.update(p.fill_recovery); // v8: change-amount recovery bundle
+    h.update(p.fill_recovery); // v8: encrypted output-recovery bundle
     let out = h.finalize();
     let mut r = [0u8; 32];
     r.copy_from_slice(&out);

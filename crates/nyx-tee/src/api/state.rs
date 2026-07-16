@@ -323,9 +323,9 @@ pub struct OrderUpdateMsg {
 /// Per-account fill-memo channel depth. A connected-but-slow `fills` subscriber
 /// that lags past this is closed with a 1011 resync. The live channel is a
 /// low-latency fast path only — a memo sent while no `fills` subscriber is
-/// attached is NOT a loss: the change-note amount is recoverable from the
-/// permanent on-chain ciphertext (change-amount recovery, Proposal B) via the
-/// indexer + `recoverChangeFromChain`, which is why the durable per-account memo
+/// attached is NOT a loss: output amounts are recoverable from the permanent
+/// on-chain recovery-v2 ciphertext via the chain/indexer +
+/// `recoverFillFromChain`, which is why the durable per-account memo
 /// log (the old P7 `fill_log` + `GET /fills/replay`) was retired.
 const FILLS_CHANNEL_CAP: usize = 1024;
 
@@ -616,9 +616,9 @@ impl ApiState {
     /// Get-or-create the caller account's fill-memo channel and subscribe. A
     /// receiver created here only sees memos sent AFTER it subscribes — earlier
     /// fills (sent before this subscribe, or while the account was disconnected)
-    /// are recovered from the PERMANENT on-chain ciphertext (change-amount
-    /// recovery, Proposal B) via the indexer + `recoverChangeFromChain`, which is
-    /// where the change-note amount durably lives after amount-privacy made the
+    /// are recovered from the permanent on-chain recovery-v2 ciphertext via the
+    /// chain/indexer + `recoverFillFromChain`, which is where output amounts
+    /// durably live after amount-privacy made the
     /// off-TEE indexer a commitment-only locator. "Tail then backfill": the client
     /// tails this channel + backfills any gap from the chain.
     pub async fn subscribe_account_fills(&self, account_id: &str) -> broadcast::Receiver<FillMemo> {
@@ -629,8 +629,8 @@ impl ApiState {
         // seen. Safe because we hold the write lock here — `subscribe` is the only
         // path that inserts, so no concurrent caller can be mid-flight holding a
         // just-created receiver. Discarding a disconnected account's channel drops
-        // any in-flight broadcast memo, but that's not a loss: the amount is
-        // recoverable from the on-chain ciphertext (Proposal B). Cheap:
+        // any in-flight broadcast memo, but that's not a loss: the outputs are
+        // recoverable from the on-chain ciphertext. Cheap:
         // `receiver_count()` is an atomic load, subscribes are rare.
         routes.retain(|_, tx| tx.receiver_count() > 0);
         let tx = routes
@@ -644,9 +644,9 @@ impl ApiState {
     /// is unknown or no client is currently attached.
     ///
     /// The live channel is a low-latency fast path only. A `false` (no attached
-    /// client) is not a loss: the change-note amount rides the settle ix
-    /// ENCRYPTED on-chain (change-amount recovery, Proposal B), so an offline
-    /// client recovers it from the indexer + `recoverChangeFromChain`. The old
+    /// client) is not a loss: output amounts ride the settle ix ENCRYPTED
+    /// on-chain, so an offline client recovers them via
+    /// `recoverFillFromChain`/`recoverNotesFromChain`. The old
     /// durable per-account memo log (`fill_log` + `GET /fills/replay`, P7) was
     /// retired once the chain became the permanent source.
     pub async fn route_fill(&self, memo: &FillMemo) -> bool {

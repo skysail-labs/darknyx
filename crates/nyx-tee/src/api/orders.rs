@@ -133,11 +133,10 @@ pub struct PlaceOrderRequest {
     pub tree_id: u8,
 
     /// Required 32-byte contributory X25519 viewing-encryption public key, hex
-    /// (`deriveViewingEncKeypair().publicKey`). When present, the settle
-    /// assembler encrypts each of this order's change_amounts to it and writes
-    /// the ciphertext on-chain, so the change note stays recoverable after a CVM
-    /// redeploy wipes the live fill memo (change-amount recovery, Proposal B).
-    /// and bound into the canonical signature. Low-order points are rejected.
+    /// (`deriveViewingEncKeypair().publicKey`). The settle assembler encrypts
+    /// this order's `(trade, change)` output amounts to it and writes the
+    /// recovery-v2 ciphertext on-chain. It is bound into the canonical
+    /// signature; low-order points are rejected.
     pub viewing_pubkey: String,
 
     /// 32-byte boot session id from `/info`, hex, bound into the signature.
@@ -290,7 +289,7 @@ struct PreparedOrder {
     /// `merkle_tree` account). From `PlaceOrderRequest::tree_id`.
     tree_id: u8,
     /// The owner's required X25519 viewing-encryption pubkey — recipient for
-    /// the on-chain change_amount ciphertext (Proposal B). Stored on the opening.
+    /// the on-chain recovery-v2 output ciphertext. Stored on the opening.
     viewing_pubkey: [u8; 32],
     valid_input_proof: crate::settle::lock_note::Groth16ProofBytes,
     arrival_slot: u64,

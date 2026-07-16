@@ -12,14 +12,14 @@ import type { SettleFill } from "./decode.js";
 
 export interface FillRow extends SettleFill {
   signature: string;
+  slot: number;
 }
 
 // Amount-privacy (P3b): the on-chain settle ix no longer carries amounts, so
 // the indexer stores commitments + a partial-fill flag only (no change_amount /
-// clearing_price columns). Clients reconstruct amounts from the FillMemo, or —
-// change-amount recovery (Proposal B) — by decrypting the opaque on-chain
-// ciphertext stored in `ephemeral_pubkey` + `change_enc` (the indexer cannot
-// decrypt these; only the order owner's viewing key can).
+// clearing_price columns). Recovery v2 stores the exact consumed/trade/change
+// commitments plus an opaque `(trade, change)` ciphertext; only the order
+// owner's viewing key can decrypt it.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS fills (
   order_id              TEXT    NOT NULL,
@@ -28,10 +28,12 @@ CREATE TABLE IF NOT EXISTS fills (
   signature             TEXT    NOT NULL,
   slot                  INTEGER NOT NULL,
   is_partial_fill       INTEGER NOT NULL,
+  input_note_commitment TEXT    NOT NULL,
+  trade_note_commitment TEXT    NOT NULL,
   change_note_commitment TEXT,
   batch_slot            TEXT    NOT NULL,
   ephemeral_pubkey      TEXT,
-  change_enc            TEXT,
+  output_enc            TEXT,
   created_at            INTEGER NOT NULL,
   PRIMARY KEY (signature, match_id, side)
 );
@@ -50,6 +52,19 @@ export class FillsDb {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
+    // Rebuildable locator DBs created before recovery v2 may still exist. Add
+    // the new columns without pretending legacy rows are recoverable.
+    for (const statement of [
+      "ALTER TABLE fills ADD COLUMN input_note_commitment TEXT",
+      "ALTER TABLE fills ADD COLUMN trade_note_commitment TEXT",
+      "ALTER TABLE fills ADD COLUMN output_enc TEXT",
+    ]) {
+      try {
+        this.db.exec(statement);
+      } catch (error) {
+        if (!String(error).includes("duplicate column name")) throw error;
+      }
+    }
   }
 
   /** Idempotent insert of one settle ix's fill rows. */
@@ -57,8 +72,9 @@ export class FillsDb {
     const stmt = this.db.prepare(
       `INSERT OR IGNORE INTO fills
         (order_id, side, match_id, signature, slot, is_partial_fill,
-         change_note_commitment, batch_slot, ephemeral_pubkey, change_enc, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         input_note_commitment, trade_note_commitment, change_note_commitment,
+         batch_slot, ephemeral_pubkey, output_enc, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const now = Date.now();
     for (const f of fills) {
@@ -69,10 +85,12 @@ export class FillsDb {
         signature,
         slot,
         f.isPartialFill ? 1 : 0,
+        f.inputNoteCommitment,
+        f.tradeNoteCommitment,
         f.changeNoteCommitment,
         f.batchSlot,
         f.ephemeralPubkey,
-        f.changeEnc,
+        f.outputEnc,
         now,
       );
     }
@@ -83,9 +101,12 @@ export class FillsDb {
     const rows = this.db
       .prepare(
         `SELECT order_id, side, match_id, signature, slot, is_partial_fill,
-                change_note_commitment, batch_slot, ephemeral_pubkey, change_enc
+                input_note_commitment, trade_note_commitment,
+                change_note_commitment, batch_slot, ephemeral_pubkey, output_enc
            FROM fills
           WHERE order_id = ? AND slot >= ?
+            AND input_note_commitment IS NOT NULL
+            AND trade_note_commitment IS NOT NULL
           ORDER BY slot ASC, side ASC`,
       )
       .all(orderId, sinceSlot) as Array<Record<string, unknown>>;
@@ -94,11 +115,14 @@ export class FillsDb {
       side: r.side as "buyer" | "seller",
       matchId: r.match_id as string,
       signature: r.signature as string,
+      slot: r.slot as number,
       isPartialFill: (r.is_partial_fill as number) === 1,
+      inputNoteCommitment: r.input_note_commitment as string,
+      tradeNoteCommitment: r.trade_note_commitment as string,
       changeNoteCommitment: (r.change_note_commitment as string | null) ?? null,
       batchSlot: r.batch_slot as string,
       ephemeralPubkey: (r.ephemeral_pubkey as string | null) ?? null,
-      changeEnc: (r.change_enc as string | null) ?? null,
+      outputEnc: (r.output_enc as string | null) ?? null,
     }));
   }
 

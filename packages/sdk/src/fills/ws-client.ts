@@ -3,7 +3,8 @@
  *
  * Subscribes to the `fills` channel on the CVM's authenticated `/v1/stream`
  * session, verifies each `FillMemo` (the Vuln-4 integrity check in
- * `fill-memo.ts`), and stores the change note. Authentication is in-band, so a
+ * `fill-memo.ts`), and stores the low-latency continuation note. Durable chain
+ * backfill additionally restores trade notes. Authentication is in-band, so a
  * bearer token never appears in the WebSocket URL.
  *
  * `WebSocket` is injectable so tests can drive frames without a server.
@@ -20,7 +21,7 @@ import {
   backfillHistoryFromChain,
   type ChainBackfillOptions,
 } from "./chain-history.js";
-import { recoverChangeFromChain } from "./recover.js";
+import { recoverFillFromChain } from "./recover.js";
 import {
   TradingClient,
   type SendableWebSocketFactory,
@@ -92,10 +93,10 @@ export function subscribeFills(opts: SubscribeFillsOptions): FillsSubscription {
 
 export interface FillsSyncOptions
   extends Omit<BackfillOptions, "baseUrl">, SubscribeFillsOptions {
-  /** Indexer base URL. Locates the account's change-note fills (by HD-derived
+  /** Indexer base URL. Locates the account's fills (by HD-derived
    *  order id), and — when `baseMint`/`quoteMint` are set — recovers each
-   *  amount/opening from the PERMANENT on-chain ciphertext (change-amount
-   *  recovery, Proposal B) via `recoverChangeFromChain`. Omit to skip backfill
+   *  trade/change openings from the permanent on-chain recovery-v2 ciphertext.
+   *  Omit to skip backfill
    *  entirely (live tail only), or use `chainBackfill` for the indexer-free path. */
   indexerBaseUrl?: string;
   /** Indexer-FREE backfill: rediscover fills by scanning the vault program's
@@ -120,8 +121,8 @@ export interface FillsSync {
 /**
  * "Tail then backfill", self-healing: subscribe to the live `fills` channel AND backfill
  * any gap from the chain. The durable recovery source is the PERMANENT on-chain
- * ciphertext (Proposal B) — for each fill the indexer locates,
- * `recoverChangeFromChain` decrypts + self-verifies the spendable opening into
+ * recovery-v2 ciphertext — for each fill the indexer locates,
+ * `recoverFillFromChain` decrypts + self-verifies trade/change openings into
  * the `NoteStore`. This replaced the retired durable memo-replay log
  * (`GET /fills/replay`), which a CVM redeploy used to wipe.
  *
@@ -160,27 +161,35 @@ export async function startFillsSync(
         advanced = false;
         for (let i = pending.length - 1; i >= 0; i--) {
           const fill = pending[i];
-          if (!fill.changeNoteCommitment) {
-            pending.splice(i, 1);
-            continue;
-          }
-          const existing = await opts.store.get(
-            fill.changeNoteCommitment.toLowerCase(),
+          const tradeExisting = await opts.store.get(
+            fill.tradeNoteCommitment.toLowerCase(),
           );
-          if (existing) {
+          const changeExisting = fill.changeNoteCommitment
+            ? await opts.store.get(fill.changeNoteCommitment.toLowerCase())
+            : undefined;
+          if (
+            tradeExisting &&
+            (!fill.changeNoteCommitment || changeExisting)
+          ) {
             pending.splice(i, 1);
             advanced = true;
             continue;
           }
-          const note = await recoverChangeFromChain(fill, {
+          const outputs = await recoverFillFromChain(fill, {
             masterSeed: opts.masterSeed,
             candidateInputs: await opts.store.list(),
             baseMint: opts.baseMint,
             quoteMint: opts.quoteMint,
           });
-          if (note) {
-            await opts.store.put(note);
-            opts.onFill?.(note);
+          if (outputs) {
+            if (!tradeExisting) {
+              await opts.store.put(outputs.trade);
+              opts.onFill?.(outputs.trade);
+            }
+            if (outputs.change && !changeExisting) {
+              await opts.store.put(outputs.change);
+              opts.onFill?.(outputs.change);
+            }
             pending.splice(i, 1);
             advanced = true;
           }
@@ -191,8 +200,8 @@ export async function startFillsSync(
     }
   };
 
-  await backfill();
-
+  // Open the live tail first so fills finalized during a long history scan are
+  // buffered by the sequence-aware stream instead of falling into a gap.
   const sub = subscribeFills({
     ...opts,
     onResync: (reason) => {
@@ -200,6 +209,8 @@ export async function startFillsSync(
       void backfill();
     },
   });
+
+  await backfill();
 
   return {
     located,
