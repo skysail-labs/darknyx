@@ -55,6 +55,8 @@ import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { be32ToDec, be32ToBigInt, StepTimer } from "./helpers/e2e-helpers.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
+import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
+import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -70,11 +72,21 @@ const MERGE_ZKEY = resolve(
   REPO_ROOT,
   "circuits/build/valid_merge_k2/circuit_final.zkey",
 );
+const DEPOSIT_WASM = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_deposit/circuit_js/circuit.wasm",
+);
+const DEPOSIT_ZKEY = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_deposit/circuit_final.zkey",
+);
 const VAULT_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 const READY =
   process.env.RUN_DEVNET_MERGE === "1" &&
   existsSync(CONFIG_PATH) &&
+  existsSync(DEPOSIT_WASM) &&
+  existsSync(DEPOSIT_ZKEY) &&
   existsSync(MERGE_ZKEY) &&
   existsSync(SPEND_ZKEY);
 const d = READY ? describe : describe.skip;
@@ -140,6 +152,10 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     ).toBe(0);
 
     const tree = await MerkleShadow.create();
+    const depositProver = nodeValidDepositProver({
+      wasmPath: DEPOSIT_WASM,
+      zkeyPath: DEPOSIT_ZKEY,
+    });
     const notes: {
       amount: bigint;
       innerHash: bigint;
@@ -147,17 +163,33 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
       leafIndex: number;
     }[] = [];
     for (const [i, amount] of [A0, A1].entries()) {
-      const innerHash = deriveBlindingFactor(masterSeed, BigInt(i));
+      const recoveryNonce = deriveBlindingFactor(masterSeed, BigInt(i));
+      const innerHash = be32ToBigInt(
+        await deriveDepositInnerHash(
+          bn254ToBE32(owner),
+          bn254ToBE32(recoveryNonce),
+        ),
+      );
       const commitment = await noteCommitmentV2({
         tokenMint: mint.toBytes(),
         amount,
         ownerCommitment: owner,
         innerHash,
       });
+      const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
+      const depositProof = await depositProver.prove({
+        noteCommitment: be32ToBigInt(commitment),
+        tokenMint: [mintLo, mintHi],
+        amount,
+        recoveryNonce,
+        spendingKey,
+        ownerCommitmentBlinding: ownerBlinding,
+      });
       await t.step(`deposit note ${i}`, () =>
         sendAndConfirmTransaction(
           conn,
           new Transaction().add(
+            ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
             createAssociatedTokenAccountIdempotentInstruction(
               admin.publicKey,
               ata,
@@ -173,8 +205,9 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
               depositorTokenAccount: ata,
               tokenProgramId: TOKEN_PROGRAM_ID,
               amount,
-              ownerCommitment: bn254ToBE32(owner),
-              innerHash: bn254ToBE32(innerHash),
+              noteCommitment: commitment,
+              recoveryNonce: bn254ToBE32(recoveryNonce),
+              proof: depositProof,
             }),
           ),
           [admin],

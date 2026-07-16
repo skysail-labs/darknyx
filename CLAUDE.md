@@ -25,6 +25,9 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   **atomic batched settlement** path
   (`lock_note → verify_match_batch → tee_forced_settle_batched →
   close_batch_validity_marker`, N=16 matches per batch, `tree_id`-routed).
+  Deposits are gated by `VALID_DEPOSIT`, which keeps the wallet-wide owner
+  commitment + per-note inner private while binding mint, gross amount,
+  commitment, and a public recovery nonce.
   Devnet program id: `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`.
 * **TEE (`crates/nyx-tee/`)** — the in-enclave engine. It owns hidden
   order intake (`POST /orders`), uniform-clearing-price matching, the
@@ -129,7 +132,7 @@ Everything runs from the repo root.
 ```sh
 npm install                                        # SDK + snarkjs + circomlib
 bash scripts/download-ptau.sh                      # pot16 (~80 MB) + pot18 (~288 MB)
-bash scripts/build-circuits.sh                     # compile all 8 circom circuits;
+bash scripts/build-circuits.sh                     # compile all 9 circom circuits;
                                                    #   regenerates vk_*.rs Rust consts
 cargo build --examples -p darkpool-crypto          # TS↔Rust parity helper binaries
 ```
@@ -255,7 +258,7 @@ If anything matches, fix it in the SAME commit as the deletion.
 This is the flagship real-settle path: a deployed CVM matches AND settles
 a real crossing pair on devnet. The CVM binary is the **in-TEE matcher +
 settler**, so any change under `crates/nyx-tee/`, `Dockerfile`,
-`deploy/docker-compose.yaml`, or the circuits requires a **rebuilt image**
+`deploy/docker-compose.yaml`, or a TEE-proved circuit (`match_batch_*`) requires a **rebuilt image**
 — `phala cvms start` on the old image runs stale code.
 
 **The copy-paste runbook is [`docs/cvm-run-runbook.md`](docs/cvm-run-runbook.md)**
@@ -509,8 +512,10 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
    - `cargo test -p vault --test tee_forced_settle_batched --test match_batch_verify` (depend on `compute_match_leaf` byte-stability + the committed N=16 proof fixture)
    - `vitest run --root packages/sdk tests/valid-*-prover.test.ts tests/match-batch-prototype.test.ts`
 4. Commit `circuit.circom` + `circuit_final.zkey` + `vk_*.rs` together.
-5. After merge: `deploy-devnet.sh`, reset the tree, redeploy the CVM image
-   (the matcher embeds the proving key), validate via `cvm-settle-e2e`.
+5. After merge: `deploy-devnet.sh` and reset the tree. If the changed circuit
+   is TEE-proved (`match_batch_*`), also redeploy the CVM image (the matcher
+   embeds that proving key) and validate via `cvm-settle-e2e`. Client-only
+   circuits such as VALID_DEPOSIT use the no-CVM devnet deposit/withdraw gate.
 
 ### 5.3 Specific traps
 
@@ -525,7 +530,8 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
   back (that's why it used to be two-stage).
 * **Domain tags.** `DOMAIN_LEAF_V2 = 23` (the active leaf tag),
   `DOMAIN_MATCH_OUTPUT_INNER = 24`, `DOMAIN_MATCH_FEE_INNER = 25`,
-  `DOMAIN_BATCH_ROOT = 22`, `DOMAIN_NOTE = 2`, `DOMAIN_NULL = 3` — each
+  `DOMAIN_DEPOSIT_INNER = 27`, `DOMAIN_BATCH_ROOT = 22`, `DOMAIN_NOTE = 2`,
+  `DOMAIN_NULL = 3` — each
   appears in Rust + TS + circom; keep them in lockstep. (`DOMAIN_LEAF_INNER =
   20` / `DOMAIN_LEAF_TOP = 21` are the **retired** two-stage-leaf tags — dead
   constants, no longer hashed.)
@@ -588,6 +594,7 @@ check fails, or proofs don't verify.
 | Poseidon arities | `darkpool-crypto/src/poseidon.rs` | `sdk/src/zk/poseidon.ts` | `poseidon-parity.test.ts` |
 | Note commitment (v2) | `darkpool-crypto/src/note.rs::commitment_from_fields_v2` | `sdk/src/utxo/note.ts::noteCommitmentV2` | `note-commitment-parity.test.ts` |
 | Nullifier (v2) | `darkpool-crypto/src/nullifier.rs` | `sdk/src/utxo/note.ts::nullifierV2` | `nullifier-parity.test.ts` |
+| Deposit inner | `darkpool-crypto/src/deposit.rs::deposit_inner_hash` | `sdk/src/utxo/deposit-inner.ts::deriveDepositInnerHash` | `deposit-inner-parity.test.ts` + `valid-deposit-prover.test.ts` |
 | `inner_hash` (change/trade/fee) | `darkpool-matcher/src/change_note.rs::derive_inner` | `tests/helpers/e2e-helpers.ts::deriveInner` | `change-note-inner-parity.test.ts` + `inner-hash-parity.test.ts` |
 | Key derivation | `darkpool-crypto/src/keys.rs` | `sdk/src/keys/key-generators.ts` | `keys-parity.test.ts` |
 | User commitment | `darkpool-crypto/src/user_commitment.rs` | `sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |

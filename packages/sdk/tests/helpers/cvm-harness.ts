@@ -18,10 +18,13 @@
  */
 
 import { resolve } from "node:path";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   Connection,
+  ComputeBudgetProgram,
   Keypair,
   PublicKey,
   Transaction,
@@ -35,7 +38,11 @@ import {
   bn254ToBE32,
 } from "../../src/keys/key-generators.js";
 import { userCommitmentFromKeys } from "../../src/keys/user-commitment.js";
-import { ownerCommitment, noteCommitmentV2 } from "../../src/utxo/note.js";
+import {
+  ownerCommitment,
+  noteCommitmentV2,
+  pubkeyToFrPair,
+} from "../../src/utxo/note.js";
 import {
   merkleTreePda,
   buildDepositInstruction,
@@ -44,6 +51,23 @@ import { readNoteCreated } from "../../src/utxo/leaf-index.js";
 import { MerkleShadow } from "./merkle-shadow.js";
 import { proveValidInput } from "./valid-input-prover.js";
 import { be32ToBigInt, loadOrCreateKeypair } from "./e2e-helpers.js";
+import { deriveDepositInnerHash } from "../../src/utxo/deposit-inner.js";
+import { nodeValidDepositProver } from "../../src/zk/valid-deposit-prover.js";
+
+const REPO_ROOT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../..",
+);
+const DEPOSIT_PROVER = nodeValidDepositProver({
+  wasmPath: resolve(
+    REPO_ROOT,
+    "circuits/build/valid_deposit/circuit_js/circuit.wasm",
+  ),
+  zkeyPath: resolve(
+    REPO_ROOT,
+    "circuits/build/valid_deposit/circuit_final.zkey",
+  ),
+});
 
 // ── Market + auth constants (match encrypted deploy env + e2e-config) ──
 export const SYMBOL = "SOL-USDC";
@@ -295,15 +319,33 @@ export class CvmHarness {
     amount: bigint,
     treeId = 0,
   ): Promise<DepositedNote> {
-    // inner_hash is a deterministic per-deposit nonce baked into the leaf; the
-    // running total leaf count is unique per deposit within a run.
-    const nonce = await this.leafCount();
-    const innerHash = deriveBlindingFactor(p.masterSeed, BigInt(nonce));
+    // The public nonce is deterministic and pseudorandom; the hidden inner is
+    // derived from it plus the hidden owner commitment inside VALID_DEPOSIT.
+    const nonceIndex = await this.leafCount();
+    const recoveryNonce = deriveBlindingFactor(
+      p.masterSeed,
+      BigInt(nonceIndex),
+    );
+    const innerHash = be32ToBigInt(
+      await deriveDepositInnerHash(
+        bn254ToBE32(p.ownerCommit),
+        bn254ToBE32(recoveryNonce),
+      ),
+    );
     const commitment = await noteCommitmentV2({
       tokenMint: mint.toBytes(),
       amount,
       ownerCommitment: p.ownerCommit,
       innerHash,
+    });
+    const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
+    const proof = await DEPOSIT_PROVER.prove({
+      noteCommitment: be32ToBigInt(commitment),
+      tokenMint: [mintLo, mintHi],
+      amount,
+      recoveryNonce,
+      spendingKey: p.spendingKey,
+      ownerCommitmentBlinding: p.ownerBlinding,
     });
     const ix = buildDepositInstruction({
       programId: this.vaultProgramId,
@@ -313,12 +355,16 @@ export class CvmHarness {
       depositorTokenAccount: ata,
       tokenProgramId: TOKEN_PROGRAM_ID,
       amount,
-      ownerCommitment: bn254ToBE32(p.ownerCommit),
-      innerHash: bn254ToBE32(innerHash),
+      noteCommitment: commitment,
+      recoveryNonce: bn254ToBE32(recoveryNonce),
+      proof,
     });
     const sig = await sendAndConfirmTransaction(
       this.conn,
-      new Transaction().add(ix),
+      new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 300_000 }),
+        ix,
+      ),
       [p.payer],
     );
     const recovered = await readNoteCreated(this.conn, sig);

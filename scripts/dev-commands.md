@@ -224,7 +224,8 @@ echo "ALL GREEN — safe to push"
 ## 3. Circuits (circom / snarkjs)
 
 ```sh
-bash scripts/build-circuits.sh                    # compile all 8, run ceremony, write vk_*.rs
+bash scripts/build-circuits.sh                    # compile all 9, run ceremony, write vk_*.rs
+ls circuits/build/valid_deposit/                  # proof-bound private-owner deposit
 ls circuits/build/match_batch_n16/                # the production N=16 batched-validity circuit
 ls circuits/build/valid_merge_k2 valid_merge_k4   # in-pool note merge (K=2/4)
 
@@ -236,7 +237,8 @@ node scripts/parse-vk-to-rust.js \
 
 If you touch any circuit, Poseidon arity, or the `compute_match_leaf`
 shape, you MUST regenerate + commit the `.zkey` + `vk_*.rs` together and
-redeploy — see CLAUDE.md §4.
+redeploy the vault — see CLAUDE.md §5. Only a TEE-proved circuit change
+(`match_batch_*`) also requires a rebuilt CVM image.
 
 ---
 
@@ -661,11 +663,11 @@ creds), `--report <path.md>`.
 
 ## 8. Vault crypto on devnet (no CVM)
 
-`devnet-deposit-withdraw.test.ts` exercises the **vault deposit +
-VALID_SPEND withdraw round-trip on devnet in isolation** — no CVM, no TEE
-authority. It resets the tree, mints, deposits a v2 note, then withdraws it
-with a VALID_SPEND proof and asserts the round-trip. Use it to test vault
-crypto changes cheaply before spending on a CVM.
+`devnet-deposit-withdraw.test.ts` exercises the **VALID_DEPOSIT-gated vault
+deposit + VALID_SPEND withdraw round-trip on devnet in isolation** — no CVM,
+no TEE authority. It resets the tree, mints, proves and deposits a v2 note,
+then withdraws it with a VALID_SPEND proof and asserts the round-trip. Use it
+to test vault crypto changes without spending on a CVM.
 
 ```sh
 SOLANA_RPC_URL="$HELIUS" RUN_DEVNET_DW=1 \

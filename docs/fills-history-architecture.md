@@ -36,7 +36,9 @@
 >   `recoverFillFromChain` decrypts `(trade, change)` with the seed-derived
 >   viewing key, derives both outputs from the named consumed opening, and
 >   self-verifies their commitments. `recoverNotesFromChain` scans finalized
->   history, verifies seed-owned deposits, restores settlement leaf positions,
+>   history, reconstructs each hidden deposit inner as
+>   `Poseidon3(27, seed_owner, public_recovery_nonce)`, verifies the resulting
+>   commitment, restores settlement leaf positions,
 >   and reconstructs merge
 >   outputs. Its fixed-point pass handles scan-order inversions and chained
 >   continuations/merges without live stream history.

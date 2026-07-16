@@ -1,12 +1,12 @@
 use crate::errors::VaultError;
 use crate::merkle::append_leaf;
 use crate::state::*;
+use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_deposit::*, Groth16Proof};
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
-use darkpool_crypto::note::commitment_from_fields_v2;
 
 #[derive(Accounts)]
-#[instruction(tree_id: u8, amount: u64, owner_commitment: [u8; 32], inner_hash: [u8; 32])]
+#[instruction(tree_id: u8, amount: u64, note_commitment: [u8; 32], recovery_nonce: [u8; 32], proof: Groth16Proof)]
 pub struct Deposit<'info> {
     #[account(mut)]
     pub depositor: Signer<'info>,
@@ -68,10 +68,34 @@ pub fn deposit_handler(
     ctx: Context<Deposit>,
     _tree_id: u8,
     amount: u64,
-    owner_commitment: [u8; 32],
-    inner_hash: [u8; 32],
+    note_commitment: [u8; 32],
+    recovery_nonce: [u8; 32],
+    proof: Groth16Proof,
 ) -> Result<()> {
     require!(amount > 0, VaultError::ZeroAmount);
+
+    // VALID_DEPOSIT public inputs, in circuit declaration order. The mint is
+    // split into two u128 field elements; amount is the instruction's u64.
+    let mint_bytes = ctx.accounts.token_mint.key().to_bytes();
+    let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
+    let public_inputs: [[u8; 32]; 5] = [
+        note_commitment,
+        mint_lo,
+        mint_hi,
+        u64_be32(amount),
+        recovery_nonce,
+    ];
+    let vk = make_vk(
+        &VALID_DEPOSIT_ALPHA_G1,
+        &VALID_DEPOSIT_BETA_G2,
+        &VALID_DEPOSIT_GAMMA_G2,
+        &VALID_DEPOSIT_DELTA_G2,
+        &VALID_DEPOSIT_IC,
+    );
+
+    // Verify before the SPL transfer or any state mutation. An invalid proof
+    // therefore cannot move custody, increment outstanding, or append a leaf.
+    verify_groth16_proof::<5>(&vk, &proof, &public_inputs)?;
 
     // Transfer tokens in.
     let cpi_accounts = TransferChecked {
@@ -86,13 +110,6 @@ pub fn deposit_handler(
         ctx.accounts.token_mint.decimals,
     )?;
 
-    // Compute note commitment using the shared crypto crate (v2: single
-    // inner_hash replaces the old nonce + blinding_r pair; mint stays bound).
-    let token_mint_bytes: [u8; 32] = ctx.accounts.token_mint.key().to_bytes();
-    let commitment =
-        commitment_from_fields_v2(&token_mint_bytes, amount, &owner_commitment, &inner_hash)
-            .map_err(|_| error!(VaultError::MalformedPublicInputs))?;
-
     // Append into the shard's Merkle tree (zero_subtree_roots come from the
     // global config). Scoped so the borrows release before the accounts below.
     let (leaf_index, new_root) = {
@@ -101,7 +118,7 @@ pub fn deposit_handler(
         drop(cfg);
         let tree = &mut ctx.accounts.merkle_tree.load_mut()?;
         let leaf_index = tree.leaf_count;
-        let new_root = append_leaf(tree, &zsr, commitment)?;
+        let new_root = append_leaf(tree, &zsr, note_commitment)?;
         (leaf_index, new_root)
     };
 
@@ -128,13 +145,28 @@ pub fn deposit_handler(
     emit!(NoteCreated {
         tree_id: _tree_id,
         leaf_index,
-        commitment,
+        commitment: note_commitment,
         token_mint: ctx.accounts.token_mint.key(),
         amount,
         new_root,
     });
 
     Ok(())
+}
+
+/// Split a Solana pubkey into the exact two u128 public inputs used by Circom.
+fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
+    let mut lo = [0u8; 32];
+    lo[16..].copy_from_slice(&pk[16..]);
+    let mut hi = [0u8; 32];
+    hi[16..].copy_from_slice(&pk[..16]);
+    [lo, hi]
+}
+
+fn u64_be32(value: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[24..].copy_from_slice(&value.to_be_bytes());
+    out
 }
 
 #[event]

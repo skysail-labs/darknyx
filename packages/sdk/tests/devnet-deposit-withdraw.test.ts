@@ -50,7 +50,9 @@ import {
 } from "../src/idl/vault-client.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
-import { be32ToDec } from "./helpers/e2e-helpers.js";
+import { be32ToBigInt, be32ToDec } from "./helpers/e2e-helpers.js";
+import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
+import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -62,11 +64,21 @@ const SPEND_ZKEY = resolve(
   REPO_ROOT,
   "circuits/build/valid_spend/circuit_final.zkey",
 );
+const DEPOSIT_WASM = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_deposit/circuit_js/circuit.wasm",
+);
+const DEPOSIT_ZKEY = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_deposit/circuit_final.zkey",
+);
 const VAULT_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 const READY =
   process.env.RUN_DEVNET_DW === "1" &&
   existsSync(CONFIG_PATH) &&
+  existsSync(DEPOSIT_WASM) &&
+  existsSync(DEPOSIT_ZKEY) &&
   existsSync(SPEND_ZKEY);
 const d = READY ? describe : describe.skip;
 
@@ -111,7 +123,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       [admin],
       { commitment: "confirmed" },
     );
-    console.log(`  · reset_merkle_tree ${resetSig.slice(0, 8)}…`);
+    console.log(`  · reset_merkle_tree ${resetSig}`);
 
     // Read shard-0's per-shard leaf counter. Under tree sharding the global
     // leaf count lives in each `MerkleTree` shard account (`leaf_count` is its
@@ -131,12 +143,30 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     expect(leafIndex, "tree must be empty after reset").toBe(0);
 
     // ── 2. mint + deposit the v2 note ──
-    const innerHash = deriveBlindingFactor(masterSeed, BigInt(leafIndex));
+    const recoveryNonce = deriveBlindingFactor(masterSeed, BigInt(leafIndex));
+    const innerHash = be32ToBigInt(
+      await deriveDepositInnerHash(
+        bn254ToBE32(ownerCommit),
+        bn254ToBE32(recoveryNonce),
+      ),
+    );
     const commitment = await noteCommitmentV2({
       tokenMint: mint.toBytes(),
       amount: AMOUNT,
       ownerCommitment: ownerCommit,
       innerHash,
+    });
+    const [depositMintLo, depositMintHi] = pubkeyToFrPair(mint.toBytes());
+    const depositProof = await nodeValidDepositProver({
+      wasmPath: DEPOSIT_WASM,
+      zkeyPath: DEPOSIT_ZKEY,
+    }).prove({
+      noteCommitment: be32ToBigInt(commitment),
+      tokenMint: [depositMintLo, depositMintHi],
+      amount: AMOUNT,
+      recoveryNonce,
+      spendingKey,
+      ownerCommitmentBlinding: ownerBlinding,
     });
 
     const balBefore = await getAccount(conn, ata)
@@ -145,6 +175,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     const depositSig = await sendAndConfirmTransaction(
       conn,
       new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
         createAssociatedTokenAccountIdempotentInstruction(
           admin.publicKey,
           ata,
@@ -160,14 +191,15 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
           depositorTokenAccount: ata,
           tokenProgramId: TOKEN_PROGRAM_ID,
           amount: AMOUNT,
-          ownerCommitment: bn254ToBE32(ownerCommit),
-          innerHash: bn254ToBE32(innerHash),
+          noteCommitment: commitment,
+          recoveryNonce: bn254ToBE32(recoveryNonce),
+          proof: depositProof,
         }),
       ),
       [admin],
       { commitment: "confirmed" },
     );
-    console.log(`  · deposit ${depositSig.slice(0, 8)}… (note committed)`);
+    console.log(`  · deposit ${depositSig} (note committed)`);
 
     const tree = await MerkleShadow.create();
     await tree.append(commitment);
@@ -218,7 +250,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       { commitment: "confirmed" },
     );
     console.log(
-      `  · withdraw ${withdrawSig.slice(0, 8)}… (VALID_SPEND verified on-chain)`,
+      `  · withdraw ${withdrawSig} (VALID_SPEND verified on-chain)`,
     );
 
     // ── 4. assert the tokens round-tripped back ──

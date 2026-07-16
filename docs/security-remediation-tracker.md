@@ -72,6 +72,7 @@ plan, not additional audit finding IDs.
 |---|---|---|---|---|
 | DR-01 | SDK + TEE + indexer | `remediation/durable-recovery` | The unchanged 128-byte field encrypts two u64s per side; seed + finalized chain reconstructs deposit, trade, change/continuation, and merge openings with commitment and leaf-position verification; exact-fill unit coverage plus a live partial-settle recovery drill | Closed |
 | PERF-INV-01 | TEE + Operations | `perf-inv-01-host-diagnostic` | Boot-time in-binary host-CPU profile (no `phala ssh` needed) captures cgroup cpu.max/cpu.stat, cpuinfo model/MHz, visible cores, and a single-thread throughput microbench; root cause is node-specific host contention on prod5 (not the circuit, not a cgroup quota), verified by a real settle on prod9 restoring proving ~5.3×. Production placement on a good node before release certification remains an operational step | Closed |
+| PRIV-01 | ZK + vault + SDK | `remediation/deposit-privacy` | VALID_DEPOSIT binds commitment, mint, gross amount, and a recovery nonce while keeping owner commitment + inner hash private; altered public/private fields fail before custody or tree mutation; seed + chain cold recovery remains complete; proof latency, CU, and signed transaction size meet the recorded gates | Closed |
 
 ## Pull request evidence template
 
@@ -1220,6 +1221,68 @@ Every remediation PR must record:
 - **Rollback.** Revert this PR and redeploy image 61. No notes, roots, orders,
   signatures, payloads, proofs, accounts, circuits, or devnet program state are
   invalidated; the only loss is the boot host-CPU log line.
+
+### `remediation/deposit-privacy` — PRIV-01 / audit C-06
+
+- **Status.** Closed by the proof-before-custody implementation, measured local
+  gates, and isolated devnet deposit/withdraw round trip below.
+- **Invariant restored.** A deposit commitment must prove
+  `owner = Poseidon3(1, spending_key, r_owner)`,
+  `inner = Poseidon3(27, owner, recovery_nonce)`, and the canonical v2 note
+  construction for the account mint and instruction amount. The wallet-wide
+  owner commitment and per-note inner hash are private witnesses, so the
+  depositing Solana signer no longer reveals the identity field shared by its
+  shielded notes. Proof verification precedes SPL transfer, outstanding-counter
+  mutation, and Merkle append. Seed-plus-finalized-chain recovery reconstructs
+  the hidden opening from the public pseudorandom nonce and accepts it only
+  after recomputing the commitment byte-for-byte.
+- **Wire/circuit impact.** `deposit(tree_id, amount, owner_commitment,
+  inner_hash)` becomes `deposit(tree_id, amount, note_commitment,
+  recovery_nonce, proof)`. The new five-public-input `VALID_DEPOSIT` circuit,
+  pot16 proving key, embedded verifier key, Node/browser prover adapters, demo,
+  daemon, SDK builders, cold-recovery decoder, and devnet/CVM deposit helpers
+  land atomically. Existing note commitments and VALID_SPEND semantics are
+  unchanged, but old deposit instructions and clients are intentionally
+  rejected; the devnet tree is clean-reset after the verifier cutover. No TEE
+  binary, enclave API, order canonical domain, settlement payload, match
+  circuit, or N=16 fixture changes.
+- **Local evidence.** The generated circuit has 2,501 constraints. Ten measured
+  warm proofs give 50.86 ms p95 witness generation, 212.89 ms p95 proving, and
+  263.75 ms p95 end-to-end, below the 3-second spike gate. LiteSVM verifies a
+  real proof in a signed 845-byte transaction (including a 300k-CU budget ix)
+  at 150,910 CU, below the 900-byte and 240k-CU gates. The same test alters the
+  amount, commitment, recovery nonce, and mint and proves custody, outstanding,
+  and tree state remain unchanged; SDK full-prove negatives alter the private
+  key/blinding and every public field. Both mainnet and `devnet-admin` SBF
+  builds, `cargo test --workspace`, strict Clippy for the touched
+  `darkpool-crypto` and `vault` packages, formatting, SDK/daemon/indexer
+  TypeScript, full SDK Vitest (259 passed; 23 environment-gated skips), daemon
+  Vitest (147 passed; 2 skips), indexer Vitest (20 passed), Rust/TS deposit-inner
+  parity, and the explicit vault/circuit regression suites pass. Full-workspace
+  Clippy on the current Rust 1.91 host is blocked only by the pre-existing
+  `items_after_test_module` lint in unchanged `nyx-tee/src/boot.rs`; the touched
+  packages pass with warnings denied.
+- **Devnet evidence (2026-07-17).** The guarded upgrade of canonical program
+  `C63v...VWZx` finalized at slot 476749834 with signature
+  `4r25ovsoivmX8sFpNntJERAGGe5rwbVmfwfZBoNJtjpvUVo7vVfZiCKM7M1rxofqWgxnGAoak3uyd6QdgVwUpXaB`.
+  The mandatory verifier-cutover reset finalized as
+  `5uCq3nw9MoZFf4khMkSXyzAyvZh5wEX3BgsCEcSkXxGv3eninhZhdu6jnj5XuVHXHNYbe77kua3FRGMi6mD8humM`.
+  The isolated private-deposit-to-VALID_SPEND round trip then passed 1/1 in
+  7.25 seconds against the private Helius endpoint: its evidence reset was
+  `4F2p7xQyc4C62Pi5N298W6c2JqduAvBbg8mNxug4qqwyXrT74tafAf83vUUHBszeFCBZsrUvnHy2a6UdrQ4mZ7LA`,
+  proof-bound deposit
+  `5zUMcU6MwST6MipcsZ2TaA8pipRrixP5nEcWc2KTPE1hdaMjGNrNf6P4ADz15biDN5ncwBC1JMf1PFJ3bxhoSECf`,
+  and on-chain VALID_SPEND withdrawal
+  `5tmCL54XXFYQcsUsESBKTuugXVaXQNeo5n9gLfHewP3fnq9HNG6WXHgEsxTeAdKa4ZnHHC1apiCyq3T6oZS4Aqh3`.
+  A billable CVM run is not applicable because this slice changes neither the
+  TEE image nor its intake, matching, settlement, dstack/KMS, attestation, or
+  transport surfaces.
+- **Rollback.** Revert this PR and redeploy the preceding vault and clients
+  together, followed by a clean devnet reset. Notes already created through
+  VALID_DEPOSIT remain canonical v2 notes and are spendable by VALID_SPEND,
+  but new clients cannot use the reverted deposit wire and reverted cold
+  recovery cannot reconstruct the domain-27 deposit inner. Rollback therefore
+  reopens audit C-06 and must not be used for a privacy-preserving launch.
 
 ## Mainnet release gates
 

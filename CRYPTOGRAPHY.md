@@ -256,8 +256,9 @@ master_seed (64 bytes, CSPRNG; securely stored and backed up encrypted)
   ├── NyxShakeKdfV1("darkpool_viewing_key_v1", 512b) → mod p → viewing_key   (Fr)
   └── deriveBlindingFactor(0xacc0_0000_0000)          → mod p → r_owner       (Fr)
 
-Per-deposit-note inner_hash (v2; independent from the above; keyed by leaf index):
-  NyxShakeKdfV1("note_blinding_v1" ‖ leaf_index_u64_le, 512b) → mod p → inner_hash(leaf_index) (Fr)
+Per-deposit recovery nonce (v2; independent from the above; keyed by deposit index):
+  NyxShakeKdfV1("note_blinding_v1" ‖ deposit_index_u64_le, 512b) → mod p → recovery_nonce (Fr)
+  Poseidon3(DOMAIN_DEPOSIT_INNER=27, owner_commitment, recovery_nonce) → inner_hash (Fr)
   (change / trade / fee / continuation notes derive inner_hash differently — see §5.)
 ```
 
@@ -286,16 +287,13 @@ note's preimage (so the chain can't link your notes to your Solana pubkey,
 only to this owner_commitment). In the spend / order / merge proofs it's a
 **private witness — never revealed there**.
 
-> **Exception — the deposit boundary (audit C-06).** `deposit` takes
-> `owner_commitment` (and the note's `inner_hash`) as **cleartext instruction
-> args**, so a deposit tx publicly ties that commitment to the depositing Solana
-> pubkey (the signer). Because `r_owner` is reused across all your notes, that
-> one linkage lets an observer associate the owner_commitment — and hence the
-> owner field of every note you build from it — with your on-chain identity.
-> Amounts stay hidden (amount-privacy) and `inner_hash` is per-note, but owner
-> unlinkability is not preserved at the deposit boundary. A deposit-with-proof
-> flow (hiding these args behind a ZK proof) is the long-term fix; short-term
-> this is a documented design limitation.
+`owner_commitment` is never a deposit instruction argument. `VALID_DEPOSIT`
+proves the public note commitment was formed from the signer-held spending key
+and owner blinding while keeping both `owner_commitment` and `inner_hash`
+private. The public recovery nonce is pseudorandom and useful only together
+with the seed-derived owner commitment. This closes audit C-06: the depositing
+Solana signer is still public, as is the gross deposit amount, but the
+wallet-wide shielded owner identity is no longer exposed or clustered there.
 
 Why a single `r_owner` (rather than per-note `r_owner`)? Cryptographically,
 the per-note `inner_hash` already provides note-level unlinkability. A
@@ -412,12 +410,12 @@ the spending key plus that deterministic derived inner. Parity test:
 
 ### Deriving `inner_hash` (recoverable, never random)
 
-* **Deposit notes** — `inner_hash = deriveBlindingFactor(masterSeed,
-  depositIndex)` where `depositIndex` is the client's note counter, independent
-  of the eventual leaf position. The confirmed deposit instruction/event
-  publishes the exact inner, owner commitment, mint, amount, commitment, shard,
-  and leaf position; cold recovery accepts it only after deriving the canonical
-  owner identity from the seed and recomputing the commitment.
+* **Deposit notes** — `recovery_nonce = deriveBlindingFactor(masterSeed,
+  depositIndex)`, then `inner_hash = Poseidon3(27, owner_commitment,
+  recovery_nonce)`. The instruction publishes only the nonce, mint, gross
+  amount, and commitment; the owner and inner remain private witnesses. Cold
+  recovery derives the canonical owner from the seed, reconstructs the inner,
+  and accepts the event only after recomputing the commitment byte-for-byte.
 * **Match user outputs** — `Poseidon3(24, consumed_input_inner, role)` for
   trade and change roles.
 * **Match fee outputs** — `Poseidon3(25, consumed_input_commitment, role)` for
@@ -551,7 +549,7 @@ zero, and an all-dummy merge is impossible. Both K fit pot16. For every active
 commitment the instruction also requires the
 corresponding `NoteLock` PDA to be absent before proof verification or state
 mutation, so a wallet cannot merge collateral reserved by a live order. See
-§7.5.
+§7.6.
 
 **Tracking balance.** There is no account→balance server mapping (a privacy
 choice). A user's balance is the sum of their own UNSPENT deposit, trade/change,
@@ -651,8 +649,8 @@ The depth is enforced consistently in:
 
 ## 7. The ZK circuits
 
-Four trade-path Groth16 circuits ship, plus the auxiliary `VALID_MERGE(K)`
-consolidation circuit (§7.5). The matching/settlement validity proof,
+Five custody/trade-path Groth16 circuits ship, plus the auxiliary
+`VALID_MERGE(K)` consolidation circuit (§7.6). The matching/settlement validity proof,
 `VALID_MATCH_BATCH`, proves **output-note construction + per-leg conservation
 + no-inflation range checks + the fee floor** for an entire batch (≤ N=16
 matches) in one proof — it is what earlier designs split across separate
@@ -667,15 +665,17 @@ fair execution price by the proof (see the §2 non-goals row).
 | Circuit | Constraints | Public inputs | Purpose |
 |---|---|---|---|
 | `VALID_WALLET_CREATE` | ~250 | 1 | Bind a `user_commitment` to (root, spending, viewing) keys |
+| `VALID_DEPOSIT` | 2,501 | 5 | Bind a recoverable note commitment to the public mint, amount, and recovery nonce while hiding owner + inner |
 | `VALID_SPEND` | ~7,000 | 5 | Prove note ownership + Merkle inclusion at withdraw time |
 | `VALID_INPUT` | 12,058 | 4 | Prove note ownership + Merkle inclusion at **lock** time while keeping the positive u64 amount and nullifier private |
 | `VALID_MATCH_BATCH` | 232,806 (N=16) | 8 | Per-match fee notes, deterministic output inners, scaled floor pricing, conservation, and active-slot/market binding; public inputs are `[root, fee_rate_bps, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]` (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
-| `VALID_MERGE` (K=2) | 25,532 | 6 | In-pool note consolidation: positive active inputs (same owner+mint, Merkle-proven) → one summed output with commitment-derived inner (§5 / §7.5) |
+| `VALID_MERGE` (K=2) | 25,532 | 6 | In-pool note consolidation: positive active inputs (same owner+mint, Merkle-proven) → one summed output with commitment-derived inner (§5 / §7.6) |
 | `VALID_MERGE` (K=4) | 48,458 | 8 | Same, up to 4 inputs (dummy-padded for 2–3); chained for >4 |
 
-The trade-path circuits are the first four; `VALID_MERGE(K)` is an auxiliary
+The first five are custody/trade-path circuits; `VALID_MERGE(K)` is an auxiliary
 consolidation circuit (its own ix, `vault::merge`, not part of settle).
-The first three + both `VALID_MERGE` use the **`pot16` Powers-of-Tau** file
+`VALID_WALLET_CREATE`, `VALID_DEPOSIT`, `VALID_SPEND`, `VALID_INPUT`,
+and both `VALID_MERGE` variants use the **`pot16` Powers-of-Tau** file
 (`scripts/ptau/powersOfTau28_hez_final_16.ptau`, 2^16 capacity).
 `VALID_MATCH_BATCH` at N=16 needs **`pot18`** (~288 MB, 2^18 capacity)
 because its constraints exceed 2^16 — `scripts/download-ptau.sh` fetches
@@ -720,7 +720,36 @@ doesn't reference the wallet registry. The registry's purpose is more
 ergonomic than cryptographic (lets the chain know which `owner_commitment`s
 exist).
 
-### 7.2 `VALID_SPEND`
+### 7.2 `VALID_DEPOSIT`
+
+**Public inputs** (5), in exact verifier order:
+
+1. `noteCommitment`
+2. `tokenMint[0]`, `tokenMint[1]` — u128 halves
+3. `amount` — positive u64 gross deposit amount
+4. `recoveryNonce` — pseudorandom Fr derived from the seed + deposit index
+
+**Private witnesses**: `spendingKey`, `ownerCommitmentBlinding`.
+
+```circom
+owner = Poseidon3(1, spendingKey, ownerCommitmentBlinding)
+inner = Poseidon3(27, owner, recoveryNonce)
+noteCommitment === Poseidon6(2, mint_lo, mint_hi, amount, owner, inner)
+Num2Bits(128)(mint_lo); Num2Bits(128)(mint_hi)
+Num2Bits(64)(amount); amount != 0
+```
+
+The vault verifies this proof **before** transferring SPL tokens or mutating
+the Merkle tree/outstanding counter. Thus a tampered mint, amount, commitment,
+nonce, key, or owner blinding cannot move custody or append a leaf. The public
+nonce preserves seed-plus-chain recovery without publishing an ordered wallet
+counter or either hidden note field.
+
+Measured on the implementation spike: 2,501 constraints; 263.75 ms p95 full
+Node/snarkjs proof (50.86 ms witness, 212.89 ms prove); 150,910 CU for a first
+deposit; and an 845-byte signed transaction including a 300k-CU budget ix.
+
+### 7.3 `VALID_SPEND`
 
 **Public inputs** (5):
 1. `merkleRoot` — the tree root the proof was generated against (must be in
@@ -754,7 +783,7 @@ the nullifier — verify it isn't spent yet."
 Reference: `circuits/valid_spend/circuit.circom` (105 lines), on-chain
 verification in `programs/vault/src/instructions/withdraw.rs:131-144`.
 
-### 7.3 `VALID_INPUT`
+### 7.4 `VALID_INPUT`
 
 **Public inputs** (4):
 1. `merkleRoot`
@@ -823,7 +852,7 @@ because it goes into the note's preimage), the proof can only be generated
 by someone who knows the spending key. The note's actual `owner_commitment`
 becomes a tightly-bound private value, hence the prover must be the owner.
 
-### 7.4 `VALID_MATCH_BATCH`
+### 7.5 `VALID_MATCH_BATCH`
 
 Folds VALID_CREATE + VALID_PRICE for every match in a batch into one
 Groth16 + one marker. On a full N=16 batch this is a 32× reduction
@@ -923,7 +952,7 @@ catches the "close after every match" 1:N-marker regression).
 
 ---
 
-### 7.5 `VALID_MERGE(K)`
+### 7.6 `VALID_MERGE(K)`
 
 An **auxiliary** circuit (not part of settle): in-pool note consolidation.
 It backs the `vault::merge` instruction, which consumes K input notes and
@@ -1079,15 +1108,18 @@ quote-per-base (so 5,000 + 15 fee = 5,015 total). She sends:
 
 ```rust
 vault::deposit(
+    tree_id:          u8        = 0,
     amount:           u64       = 5_015,
-    owner_commitment: [u8; 32]  = ALICE_OWNER_COMMIT,
-    inner_hash:       [u8; 32]  = inner_hash_from_leaf_count,  // v2: replaces (nonce, blinding_r)
+    note_commitment:  [u8; 32],
+    recovery_nonce:   [u8; 32],
+    proof:            Groth16Proof,  // VALID_DEPOSIT
 )
 ```
 
 Accounts:
 - `depositor` (signer + payer)
-- `vault_config` (mut)
+- `vault_config` (read-only)
+- `merkle_tree[tree_id]` (mut)
 - `token_mint` (Account<Mint>)
 - `depositor_token_account` (ATA, mut)
 - `vault_token_account` (PDA at `[b"vault_token", mint]`, init_if_needed, mut)
@@ -1096,25 +1128,29 @@ Accounts:
 
 What happens in the handler:
 
-1. SPL `transfer_checked` 5,015 USDC from Alice → vault_token_account.
-2. Compute `note_commitment = Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi, amount, owner_commit, inner_hash)`.
+1. Bind the account mint + instruction amount/commitment/nonce into the five
+   `VALID_DEPOSIT` public inputs and verify the proof.
+2. SPL `transfer_checked` 5,015 USDC from Alice → vault_token_account.
 3. `append_leaf(note_commitment)` — incremental Merkle update.
 4. `outstanding_mint.outstanding += 5_015` (with `u64::checked_add`).
 5. Assert `outstanding_mint.outstanding ≤ vault_token_account.amount` (post-reload).
 
 **Cryptographic primitives**:
-- **Poseidon6** for the note commitment.
+- **VALID_DEPOSIT Groth16** for the hidden owner/inner construction.
+- **Poseidon3 + Poseidon6** inside the proof.
 - **Per-mint solvency counter** maintained as an on-chain invariant.
 
-**Why**: this is the entry point for value into the darkpool. The
-deposit's args (`owner_commitment`, `inner_hash`) ARE public —
-that's an intentional design choice. The privacy comes later: the on-chain
-note is just the 32-byte commitment, and any future spending of this note
-requires a VALID_SPEND proof that doesn't reveal which specific deposit
-it came from.
+**Why**: this is the entry point for value into the darkpool. L1 necessarily
+sees the depositing signer and gross SPL amount, but no longer sees the
+wallet-wide `owner_commitment` or per-note `inner_hash`. The public recovery
+nonce lets a replacement device reconstruct the hidden inner from seed + chain.
 
 **Tests**:
-- `tests/deposit-transport.test.ts` — ix builder byte layout
+- `tests/valid-deposit-prover.test.ts` — proof/public-input ordering and
+  adversarial opening-field rejection
+- `tests/deposit-transport.test.ts` — 337-byte ix builder layout
+- `programs/vault/tests/deposit_with_proof.rs` — real proof, custody atomicity,
+  845-byte transaction and 150,910-CU measurement gates
 - All three e2e flows exercise deposit end-to-end with real SPL transfers
 
 ### Step 4 — Order submission (`POST /orders` → the CVM)
@@ -1393,7 +1429,7 @@ Handler walkthrough:
 
 4. **Validity marker check**:
    - Recompute the per-slot Merkle leaf via the same single Poseidon11 the
-     circuit uses (see §7.4). Amount-privacy (P1b) made the leaf
+     circuit uses (see §7.5). Amount-privacy (P1b) made the leaf
      **commitment-only** — the note commitments transitively bind the
      amounts/mints/price, so the leaf no longer hashes them (it replaced the old
      two-stage Poseidon12+Poseidon9 that did):
@@ -2034,7 +2070,7 @@ or via withdraw (layer 3 alone).
 | File | Tests |
 |---|---|
 | `programs/vault/src/lib.rs` | `test_id` (program ID smoke), `canonical_payload_hash_fixed_vector` (canonical hash byte-stability) |
-| `crates/darkpool-crypto/src/{poseidon,note,nullifier,user_commitment,field,keys}.rs` | Poseidon round-trips, v2 note commitment + nullifier determinism/sensitivity, user commitment, `fr_from_be_bytes` strictness, the key-derivation chain |
+| `crates/darkpool-crypto/src/{poseidon,note,nullifier,deposit,user_commitment,field,keys}.rs` | Poseidon round-trips, v2 note commitment + nullifier determinism/sensitivity, recoverable deposit-inner derivation, user commitment, `fr_from_be_bytes` strictness, the key-derivation chain |
 | `crates/darkpool-matcher/` | the matching algorithm (`run_batch`/`run_batch_capped`), `order_canonical` (order/cancel signing), `change_note::derive_inner` KAT |
 
 ### Rust integration tests (litesvm — `programs/vault/tests/`)
@@ -2043,6 +2079,7 @@ or via withdraw (layer 3 alone).
 |---|---|
 | `zk_roundtrip.rs` | VALID_WALLET_CREATE end-to-end (off-chain prove → on-chain verify) |
 | `zk_spend_roundtrip.rs` | VALID_SPEND (v2 inner_hash) end-to-end + Poseidon parity vs circomlib |
+| `deposit_with_proof.rs` | VALID_DEPOSIT real proof + SPL/Merkle atomicity, wire-size and CU gates |
 | `user_commitment_registration.rs` | `create_wallet` flow with proof verification |
 | `set_protocol_config.rs` / `set_tee_pubkey.rs` | admin-gated config + TEE-signer rotation (the whole K-key `tee_pubkeys` set in one ix) |
 | `initialize_governance.rs` / `market_config.rs` | split-authority bootstrap, exact K-key invariant, and mint/decimal/scale/bounds governance |
@@ -2071,6 +2108,7 @@ in-enclave N=16 prove → fixture dump).
 | `note-commitment-parity.test.ts` | v2 `noteCommitmentV2` (canonical inputs, amount edges, field strictness) |
 | `nullifier-parity.test.ts` | v2 `nullifierV2` (sk/inner_hash sensitivity) |
 | `inner-hash-parity.test.ts` + `change-note-inner-parity.test.ts` | the `inner_hash` / `derive_inner` derivation (KAT) |
+| `deposit-inner-parity.test.ts` | `Poseidon3(27, owner, recovery_nonce)` Rust/TS byte equality |
 | `order-canonical-parity.test.ts` | the order/cancel canonical digests + signed viewing/session fields + wrong-width guards |
 
 ### SDK ZK prover tests
@@ -2078,6 +2116,7 @@ in-enclave N=16 prove → fixture dump).
 | File | Pins |
 |---|---|
 | `helpers/snarkjs-prover.test.ts` | VALID_WALLET_CREATE roundtrip via snarkjs-cli |
+| `valid-deposit-prover.test.ts` | VALID_DEPOSIT public-input order + altered mint/amount/commitment/nonce/key/blinding rejection |
 | `valid-input-prover.test.ts` | VALID_INPUT (exact + misroute-rejection + public-input ordering) |
 | `match-batch-prototype.test.ts` | VALID_MATCH_BATCH at N=2/4/16 (mixed-shape) + leaf-byte parity with on-chain `compute_match_leaf` |
 
@@ -2146,11 +2185,10 @@ Sorted roughly by cryptographic impact:
    `owner_commitment`; withdrawing them needs a real owner keypair wired up
    (the operator re-derives the fee notes via `derive_inner(slot, FEE_ROLE_*)`).
 
-4. **Browser prover** — the SDK's VALID_INPUT prover is a prover-agnostic
-   interface with a Node adapter that dynamically `import`s `snarkjs` at call
-   time (`packages/sdk/src/zk/valid-input-prover.ts`). Fine on a server; the
-   remaining work is an in-process browser/WASM prover behind the same
-   interface (wasm-bindgen or similar).
+4. **Production browser proving performance** — the demo Web Worker supports
+   VALID_WALLET_CREATE, VALID_DEPOSIT, and VALID_SPEND, while the SDK exposes
+   Node/snarkjs adapters. VALID_INPUT still needs a production-optimized browser
+   backend (or delegated attested proving) to eliminate its current UX latency.
 
 ### Recently shipped (formerly in this list)
 
@@ -2185,6 +2223,7 @@ Sorted roughly by cryptographic impact:
 nyx-monorepo/
 ├── circuits/
 │   ├── valid_wallet_create/circuit.circom    1 public input
+│   ├── valid_deposit/circuit.circom          5 public inputs (owner + inner private)
 │   ├── valid_spend/circuit.circom            5 public inputs (v2 inner_hash)
 │   ├── valid_input/circuit.circom            5 public inputs (v2 inner_hash)
 │   └── match_batch_n16/  (+ n2, n4 dev)      VALID_MATCH_BATCH, 8 public inputs

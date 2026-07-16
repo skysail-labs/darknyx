@@ -1816,6 +1816,7 @@ pub fn create_spl_token_account(
 pub struct NoteSecret {
     pub spending_key: Fr,
     pub r_owner: Fr,
+    pub recovery_nonce: Fr,
     pub inner_hash: Fr,
     pub owner_commitment: Fr,
 }
@@ -1826,11 +1827,14 @@ impl NoteSecret {
         use darkpool_crypto::poseidon::poseidon_hash;
         let spending_key = fr_from_uniform_bytes(&[sk_seed; 32]);
         let r_owner = fr_from_uniform_bytes(&[r_owner_seed; 32]);
-        let inner_hash = fr_from_uniform_bytes(&[inner_seed; 32]);
+        let recovery_nonce = fr_from_uniform_bytes(&[inner_seed; 32]);
         let owner_commitment = poseidon_hash(&[Fr::from(1u64), spending_key, r_owner]).unwrap();
+        let inner_hash =
+            poseidon_hash(&[Fr::from(27u64), owner_commitment, recovery_nonce]).unwrap();
         Self {
             spending_key,
             r_owner,
+            recovery_nonce,
             inner_hash,
             owner_commitment,
         }
@@ -1896,12 +1900,15 @@ pub fn deposit_note(
     let (vault_token, _) = vault_token_pda(h, mint);
     let (outstanding, _) = outstanding_mint_pda(h, mint);
 
-    // deposit(tree_id: u8, amount: u64, owner_commitment: [u8;32], inner_hash: [u8;32])
+    let proof = build_valid_deposit_proof(&secret, mint, amount, &commitment);
+
+    // deposit(tree_id, amount, note_commitment, recovery_nonce, proof)
     let mut data = anchor_disc("deposit").to_vec();
     data.push(tree_id);
     data.extend_from_slice(&amount.to_le_bytes());
-    data.extend_from_slice(&owner_commitment_bytes);
-    data.extend_from_slice(&inner_hash_bytes);
+    data.extend_from_slice(&commitment);
+    data.extend_from_slice(&fr_to_be_bytes(&secret.recovery_nonce));
+    proof.serialize(&mut data).unwrap();
 
     let ix = Instruction {
         program_id: h.vault_id,
@@ -1945,6 +1952,77 @@ pub fn deposit_note(
         siblings,
         path_indices,
     }
+}
+
+fn build_valid_deposit_proof(
+    secret: &NoteSecret,
+    mint: &Pubkey,
+    amount: u64,
+    commitment: &[u8; 32],
+) -> vault::zk::verifier::Groth16Proof {
+    use darkpool_crypto::field::pubkey_to_fr_pair;
+    use std::fs;
+    use std::process::Command;
+
+    let root = repo_root();
+    let build = root.join("circuits/build/valid_deposit");
+    let wasm = build.join("circuit_js/circuit.wasm");
+    let zkey = build.join("circuit_final.zkey");
+    assert!(
+        wasm.exists(),
+        "missing {wasm:?} — run scripts/build-circuits.sh"
+    );
+    assert!(
+        zkey.exists(),
+        "missing {zkey:?} — run scripts/build-circuits.sh"
+    );
+
+    let [mint_lo, mint_hi] = pubkey_to_fr_pair(&mint.to_bytes());
+    let input_json = format!(
+        "{{\n\
+           \"noteCommitment\": \"{commitment}\",\n\
+           \"tokenMint\": [\"{mint_lo}\", \"{mint_hi}\"],\n\
+           \"amount\": \"{amount}\",\n\
+           \"recoveryNonce\": \"{nonce}\",\n\
+           \"spendingKey\": \"{spending}\",\n\
+           \"ownerCommitmentBlinding\": \"{r_owner}\"\n\
+         }}",
+        commitment = fr_to_dec(&Fr::from_be_bytes_mod_order(commitment)),
+        mint_lo = fr_to_dec(&mint_lo),
+        mint_hi = fr_to_dec(&mint_hi),
+        nonce = fr_to_dec(&secret.recovery_nonce),
+        spending = fr_to_dec(&secret.spending_key),
+        r_owner = fr_to_dec(&secret.r_owner),
+    );
+    let tag: String = commitment[..6].iter().map(|b| format!("{b:02x}")).collect();
+    let tmp = std::env::temp_dir().join(format!("nyx_valid_deposit_{tag}"));
+    fs::create_dir_all(&tmp).unwrap();
+    let input_path = tmp.join("input.json");
+    let proof_path = tmp.join("proof.json");
+    let public_path = tmp.join("public.json");
+    fs::write(&input_path, input_json).unwrap();
+
+    let status = Command::new(root.join("node_modules/.bin/snarkjs"))
+        .arg("groth16")
+        .arg("fullprove")
+        .arg(&input_path)
+        .arg(&wasm)
+        .arg(&zkey)
+        .arg(&proof_path)
+        .arg(&public_path)
+        .status()
+        .expect("failed to spawn snarkjs (run `npm install` at repo root)");
+    assert!(
+        status.success(),
+        "snarkjs fullprove failed for VALID_DEPOSIT"
+    );
+
+    let proof_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&proof_path).unwrap()).unwrap();
+    let pi_a = negate_g1(&groth16_g1_bytes(&proof_json["pi_a"]));
+    let pi_b = groth16_g2_bytes(&proof_json["pi_b"]);
+    let pi_c = groth16_g1_bytes(&proof_json["pi_c"]);
+    vault::zk::verifier::Groth16Proof { pi_a, pi_b, pi_c }
 }
 
 /// Read the `current_root` field out of a per-shard `MerkleTree` account.

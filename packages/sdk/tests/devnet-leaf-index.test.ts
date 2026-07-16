@@ -42,6 +42,7 @@ import {
 import type { MergeInputs, Groth16ProofBytes } from "../src/zk/prover-suite.js";
 import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
+import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
@@ -49,11 +50,21 @@ const MERGE_ZKEY = resolve(
   REPO_ROOT,
   "circuits/build/valid_merge_k2/circuit_final.zkey",
 );
+const DEPOSIT_WASM = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_deposit/circuit_js/circuit.wasm",
+);
+const DEPOSIT_ZKEY = resolve(
+  REPO_ROOT,
+  "circuits/build/valid_deposit/circuit_final.zkey",
+);
 const VAULT_ID = new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");
 
 const READY =
   process.env.RUN_DEVNET_LEAF === "1" &&
   existsSync(CONFIG_PATH) &&
+  existsSync(DEPOSIT_WASM) &&
+  existsSync(DEPOSIT_ZKEY) &&
   existsSync(MERGE_ZKEY);
 const d = READY ? describe : describe.skip;
 
@@ -157,6 +168,10 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
             throw new Error("walletCreate prover unused in this test");
           },
         },
+        deposit: nodeValidDepositProver({
+          wasmPath: DEPOSIT_WASM,
+          zkeyPath: DEPOSIT_ZKEY,
+        }),
         spend: {
           prove: async () => {
             throw new Error("spend prover unused in this test");

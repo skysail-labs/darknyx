@@ -25,6 +25,7 @@ import {
   MATCH_ROLE_CHANGE_BUYER,
   MATCH_ROLE_TRADE_BUYER,
 } from "../src/utxo/match-output.js";
+import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
 import { deriveMergeOutputInnerHash } from "../src/utxo/merge.js";
 import { noteCommitmentV2, ownerCommitment } from "../src/utxo/note.js";
 import {
@@ -128,8 +129,14 @@ describe("recoverNotesFromChain", () => {
       deriveOwnerCommitmentBlinding(SEED),
     );
     const ownerBytes = bn254ToBE32(owner);
-    const quoteInner = deriveBlindingFactor(SEED, 0n);
-    const baseInner = deriveBlindingFactor(SEED, 1n);
+    const quoteNonce = deriveBlindingFactor(SEED, 0n);
+    const baseNonce = deriveBlindingFactor(SEED, 1n);
+    const quoteInner = be32ToBig(
+      await deriveDepositInnerHash(ownerBytes, bn254ToBE32(quoteNonce)),
+    );
+    const baseInner = be32ToBig(
+      await deriveDepositInnerHash(ownerBytes, bn254ToBE32(baseNonce)),
+    );
     const quoteDeposit = await noteCommitmentV2({
       tokenMint: QUOTE_MINT,
       amount: 2_000n,
@@ -145,7 +152,7 @@ describe("recoverNotesFromChain", () => {
     const depositTx = (
       mint: Uint8Array,
       amount: bigint,
-      inner: bigint,
+      recoveryNonce: bigint,
       commitment: Uint8Array,
       leaf: bigint,
     ): RawSettleTx => ({
@@ -160,8 +167,13 @@ describe("recoverNotesFromChain", () => {
           depositorTokenAccount: PAYER,
           tokenProgramId: PROGRAM_ID,
           amount,
-          ownerCommitment: ownerBytes,
-          innerHash: bn254ToBE32(inner),
+          noteCommitment: commitment,
+          recoveryNonce: bn254ToBE32(recoveryNonce),
+          proof: {
+            piA: bytes(64, 1),
+            piB: bytes(128, 2),
+            piC: bytes(64, 3),
+          },
         }).data,
       ],
       logMessages: [
@@ -268,8 +280,8 @@ describe("recoverNotesFromChain", () => {
     const scan = async (): Promise<RawSettleTx[]> => [
       mergeTx,
       settleTx,
-      depositTx(BASE_MINT, 300n, baseInner, baseDeposit, 1n),
-      depositTx(QUOTE_MINT, 2_000n, quoteInner, quoteDeposit, 0n),
+      depositTx(BASE_MINT, 300n, baseNonce, baseDeposit, 1n),
+      depositTx(QUOTE_MINT, 2_000n, quoteNonce, quoteDeposit, 0n),
     ];
     const result = await recoverNotesFromChain({
       connection: undefined as unknown as Connection,

@@ -2,8 +2,8 @@
  * IDarkPoolZkProverSuite — one interface per circuit. Swappable between
  * browser (snarkjs WASM) and relayer (ark-groth16 native).
  *
- * Only Phase 1 circuits are declared. Phase 4-5 circuits (VALID_CREATE,
- * VALID_PRICE, VALID_SOLVENCY) will extend this interface.
+ * Covers every client-side circuit used by the SDK. Settlement-batch proving
+ * remains TEE-owned and is intentionally outside this interface.
  */
 
 export interface Groth16ProofBytes {
@@ -36,6 +36,16 @@ export interface SpendInputs {
   merkleIndices: number[]; // length 20, 0 or 1
 }
 
+/** VALID_DEPOSIT witness + public values. The owner and inner stay private. */
+export interface DepositInputs {
+  noteCommitment: bigint;
+  tokenMint: [bigint, bigint];
+  amount: bigint;
+  recoveryNonce: bigint;
+  spendingKey: bigint;
+  ownerCommitmentBlinding: bigint;
+}
+
 /** VALID_MERGE(K) witness — K input slots (dummy-padded) → one summed output note. */
 export interface MergeInputs {
   k: 2 | 4;
@@ -59,6 +69,9 @@ export interface IDarkPoolZkProverSuite {
   walletCreate: {
     prove(inputs: WalletCreateInputs): Promise<Groth16ProofBytes>;
   };
+  deposit: {
+    prove(inputs: DepositInputs): Promise<Groth16ProofBytes>;
+  };
   spend: {
     prove(inputs: SpendInputs): Promise<Groth16ProofBytes>;
   };
@@ -70,7 +83,7 @@ export interface IDarkPoolZkProverSuite {
 /**
  * Placeholder prover that refuses to produce proofs. Useful when wiring an
  * SDK client that only exercises code paths which never call the prover
- * (e.g. deposit-only flows or unit tests). The real prover lands in
+ * (or unit tests that replace the relevant member). The real prover lands in
  * `packages/web-zk-prover` in Phase 3 — injecting this stub ensures the
  * typecheck passes while making it impossible to accidentally submit a
  * no-op proof.
@@ -85,6 +98,11 @@ export class UnimplementedProverSuite implements IDarkPoolZkProverSuite {
       throw new Error(
         `UnimplementedProverSuite.walletCreate.prove: ${this.reason}`,
       );
+    },
+  };
+  deposit = {
+    prove: async (): Promise<Groth16ProofBytes> => {
+      throw new Error(`UnimplementedProverSuite.deposit.prove: ${this.reason}`);
     },
   };
   spend = {

@@ -94,6 +94,7 @@ build_circuit() {
 }
 
 build_circuit valid_wallet_create
+build_circuit valid_deposit
 build_circuit valid_spend
 build_circuit valid_input
 # In-pool note merge (K=2/4). Both fit pot16 (~26k / ~50k constraints).
