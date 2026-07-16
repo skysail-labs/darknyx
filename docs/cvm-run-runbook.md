@@ -245,6 +245,19 @@ Compare `cpu.stat` pre/post deltas, especially `nr_throttled` and
 `Cpus_allowed_list`, `nproc`, CPU model/frequency, OpenMP settings,
 `witness_ms`, `prove_step_ms`, and aggregate `prove_ms`.
 
+Image-58 capture (2026-07-16): the 8-vCPU/16-GB CVM completed the ordinary
+flagship in 39.65 seconds with native `witness_ms=992`, rapidsnark
+`prove_step_ms=10857`, and aggregate `prove_ms=11928`. Five sequential auth
+canaries took 2,110, 2,206, 2,140, 1,952, and 1,838 ms. This confirms the slow
+host behavior persists even though native witness generation itself was under
+one second. Phala CLI v1.1.19 returned `Unknown API error` before both
+`phala ssh` snapshots, so the run did not obtain `cpu.max`, `cpu.stat`, cpuset,
+affinity, CPU model/frequency, or OpenMP placement. Do not close PERF-INV-01 or
+attribute the remaining ~10.9-second prove step to circuit growth from this
+sample. Before the next image-required window, verify SSH access against the
+stopped CVM or arrange an equivalent read-only container diagnostic path with
+Phala support; then repeat the pre/post snapshots around one proof.
+
 - Healthy CPU metadata and expected proof timing: continue the planned CVM
   validation window.
 - Slow auth/proof with throttling or a reduced cpuset: stop validation, restart

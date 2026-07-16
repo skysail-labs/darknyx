@@ -70,8 +70,8 @@ plan, not additional audit finding IDs.
 
 | ID | Owner | Planned remediation slice | Required evidence | Status |
 |---|---|---|---|---|
-| DR-01 | SDK + TEE + indexer | `remediation/durable-recovery` | The unchanged 128-byte field encrypts two u64s per side; seed + finalized chain reconstructs deposit, trade, change/continuation, and merge openings with commitment and leaf-position verification; exact-fill unit coverage plus a live partial-settle recovery drill | Code complete |
-| PERF-INV-01 | TEE + Operations | next image-required CVM run | Capture pre/post `cpu.max`, `cpu.stat`, `cpuset.cpus.effective`, process affinity, CPU model/frequency, OpenMP environment, repeated auth canary, `witness_ms`, `prove_step_ms`, and aggregate `prove_ms`; explain or eliminate the observed roughly 10× internal prover anomaly before release certification | Open |
+| DR-01 | SDK + TEE + indexer | `remediation/durable-recovery` | The unchanged 128-byte field encrypts two u64s per side; seed + finalized chain reconstructs deposit, trade, change/continuation, and merge openings with commitment and leaf-position verification; exact-fill unit coverage plus a live partial-settle recovery drill | Closed |
+| PERF-INV-01 | TEE + Operations | Phala host diagnostics follow-up | Image 58 pins the anomaly at `witness_ms=992`, `prove_step_ms=10857`, aggregate `prove_ms=11928`, 39.65-second E2E, and 1.84–2.21-second auth on an allocated 8-vCPU CVM; obtain working host/container access and capture pre/post cgroup throttling, cpuset/affinity, CPU model/frequency, and OpenMP placement before release certification | Open |
 
 ## Pull request evidence template
 
@@ -806,8 +806,10 @@ Every remediation PR must record:
 
 ### `remediation/durable-recovery` — DR-01
 
-- **Status.** Code complete; closure awaits the image-58 live recovery drill
-  bundled with the PERF-INV-01 measurements in `docs/cvm-run-runbook.md §4.1`.
+- **Status.** Closed by the image-58 partial-settlement recovery drill. The
+  associated prover-latency investigation remains independently open as
+  PERF-INV-01 because Phala's unstable SSH API did not expose the requested
+  host/container cgroup files during the billable window.
 - **Invariant restored.** Every fill side permanently encrypts both private
   amounts needed to rebuild its outputs: buyer `(trade_base, change_quote)` and
   seller `(trade_quote, change_base)`. Recovery resolves the exact consumed
@@ -842,11 +844,57 @@ Every remediation PR must record:
   locally (including 254 TEE library tests, N=16/prover round trips, and every
   LiteSVM target). SDK source + test, indexer, and daemon TypeScript no-emit
   checks pass. Full Vitest passes SDK 251 tests with 23 environment-gated skips,
-  indexer 20 tests, and daemon 144 tests with two environment-gated skips.
-- **Devnet/CVM evidence.** Pending one freshly reset real-mint image-58
-  `cvm-settle-e2e` run. The test now requires recovery of both buyer trade and
-  change outputs. The same billable window must capture PERF-INV-01 before and
-  after proof generation; no standalone performance-only CVM run is planned.
+  indexer 20 tests, and daemon 144 tests with two environment-gated skips. The
+  closing harness correction also passes SDK test TypeScript and the targeted
+  cold/fill recovery suites (7/7): `NYX_CVM_CHAIN_RECOVERY=1` makes the buyer
+  order partial and invokes the finalized-chain scanner without an indexer or
+  live memo. It also corrects the partial-fill trade assertion to the matched
+  seller quantity rather than the buyer's original larger order quantity.
+- **Devnet/CVM evidence (2026-07-16).** GitHub Actions run `29465041954`
+  built and pushed private image
+  `ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-58` from commit
+  `63d431362c8c35072bf959cde56c09e64efde7c2`; the manifest returned 200.
+  (The workflow succeeded despite the expected non-fatal artifact-quota
+  annotation.) Reset tx
+  `5roKBo1efYHnEkcoQfTfciUuUn1jWiYVw9W2epYi3PWwkihHs8yzAUEFJYokTEhiSqLJWXESnTVaCGe6HHdHaHYK`
+  cold-booted CVM `app_634b2ab4c250466311f0cf09f772b6fd60b5be11`,
+  instance `f5cd2f294d1127d241d18e44dbb76b6910aa2a54`, with compose hash
+  `8f67f068f3878d6d903a9d172eb180a3ded84b4290bf2024703101c294ef2070`,
+  MRTD
+  `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`,
+  boot session
+  `4a79d0e65bed0fa1f217bb3d1af19cd20d83593de2ae3de7685c4ffcd2b282ec`,
+  and finalized signer
+  `KgFsjoP9fDy78xgmEjn2DtRbPZ6G7t5AWDkPo1AAjsa`. Boot logs showed an empty
+  one-shard mirror, native witness generation, and the live settle pipeline.
+  The ordinary flagship passed in 39.65 seconds; Tx D confirmed at slot
+  476569460 as
+  `2Y862q8WisA547vb8FwxX7YYagw8LGkFBxJFc4kaWUWpjdhwwet4NwPeeQzmtqxpaHMYPNz9x3eiUA4FmingtBpn`
+  with `err=null` and 66,014 CU.
+
+  A second clean reset tx
+  `94FSR2cPamFF536YTgAx4dHDjiPGsRc6zVpGStAUnRQEepukyqr6kYd4qZVQsdyx4DSwJBCp5qvdJxuZaAUi4jY`
+  and cold boot (session
+  `b4de3c3bcdd7c77216fb7a4582e32f84c40297cb95a202fa25a1b57bbb63c7ce`)
+  ran the corrected indexer-free partial drill with deterministic quantity
+  42,000 and buyer multiplier 2. It passed in 51.74 seconds, grew the tree from
+  two deposit leaves to seven leaves, and reconstructed the buyer deposit,
+  42,000-unit trade output, and positive 5,185,364-unit continuation output
+  from seed plus finalized chain only in 10.98 seconds. Tx D confirmed at slot
+  476571554 as
+  `5TMd8joTPWa1M8iT3UUwPT3AssMAHs2cXZkZ8VPVzgKozbEUWHaoQ49bfoxYEFbRmU1igWeAxxU2WKSDTqBeRPGx`
+  with `err=null` and 76,573 CU. Both one-time deploy/test env files were
+  securely deleted and every Phala CVM was confirmed stopped. No program
+  upgrade was needed because this slice changes no on-chain code or verifier.
+- **PERF-INV-01 evidence (still open).** The same image-58 window measured five
+  sequential `/auth/token` calls at 2,110, 2,206, 2,140, 1,952, and 1,838 ms.
+  Enclave logs reported native `witness_ms=992`, rapidsnark
+  `prove_step_ms=10857`, aggregate `prove_ms=11928`, and total settle-pipeline
+  time 14,896 ms; Phala reported an 8-vCPU/16-GB allocation. `phala ssh` v1.1.19
+  returned `Unknown API error` before both requested container snapshots, so
+  `cpu.max`, `cpu.stat`, cpuset/affinity, CPU model/frequency, and OpenMP
+  placement were not observable. These timings confirm the anomaly persists
+  but do not identify its host-level cause; PERF-INV-01 therefore remains open.
 - **Rollback.** Revert the slice and redeploy image 57 with its matching SDK and
   locator schema. Recovery-v1/v2 envelopes are intentionally incompatible;
   discard in-flight orders and locator DB state and clean-reset devnet before
