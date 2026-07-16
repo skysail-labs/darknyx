@@ -9477,6 +9477,7 @@ dependencies = [
  "anchor-spl",
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
+ "bincode",
  "borsh",
  "bytemuck",
  "darkpool-crypto",

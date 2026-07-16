@@ -1,12 +1,13 @@
 import {
   bn254ToBE32,
-  deriveBlindingFactor,
+  deriveDepositInnerHash,
+  deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
-  noteCommitment,
-  nullifier as computeNullifier,
+  merkleTreePda,
+  noteCommitmentV2,
+  nullifierV2,
   ownerCommitment,
   pubkeyToFrPair,
-  vaultConfigPda,
 } from "@nyx/sdk";
 import { PublicKey } from "@solana/web3.js";
 import { NextResponse } from "next/server";
@@ -43,8 +44,8 @@ export async function POST(req: Request) {
       ownerPubkeyBase58?: string;
       tokenMintBase58?: string;
       amount?: string;
-      nonce?: string;
-      blindingR?: string;
+      recoveryNonce?: string;
+      innerHash?: string;
       leafIndex?: string;
       priorRightPathHex?: string[];
     };
@@ -53,8 +54,8 @@ export async function POST(req: Request) {
       !body.ownerPubkeyBase58 ||
       !body.tokenMintBase58 ||
       !body.amount ||
-      !body.nonce ||
-      !body.blindingR ||
+      !body.recoveryNonce ||
+      !body.innerHash ||
       body.leafIndex == null ||
       !body.priorRightPathHex ||
       body.priorRightPathHex.length !== MERKLE_DEPTH
@@ -77,28 +78,39 @@ export async function POST(req: Request) {
 
     const tokenMint = new PublicKey(body.tokenMintBase58);
     const amount = BigInt(body.amount);
-    const nonce = BigInt(body.nonce);
-    const blindingR = BigInt(body.blindingR);
+    const recoveryNonce = BigInt(body.recoveryNonce);
+    const innerHash = BigInt(body.innerHash);
     const leafIndex = BigInt(body.leafIndex);
 
     const spendingKey = deriveSpendingKey(seed);
-    const ownerBlinding = deriveBlindingFactor(seed, 0n);
+    const ownerBlinding = deriveOwnerCommitmentBlinding(seed);
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
+    const derivedInner = beBytesToBigInt(
+      await deriveDepositInnerHash(
+        bn254ToBE32(owner),
+        bn254ToBE32(recoveryNonce),
+      ),
+    );
+    if (derivedInner !== innerHash) {
+      return NextResponse.json(
+        { ok: false, error: "deposit recovery nonce does not derive inner hash" },
+        { status: 400 },
+      );
+    }
 
-    const commitment = await noteCommitment({
+    const commitment = await noteCommitmentV2({
       tokenMint: tokenMint.toBytes(),
       amount,
       ownerCommitment: owner,
-      nonce,
-      blindingR,
+      innerHash,
     });
 
-    const [vaultPda] = vaultConfigPda(vaultProgramId);
-    const info = await l1.getAccountInfo(vaultPda, "confirmed");
-    if (!info) throw new Error("vault_config missing on L1");
+    const [treePda] = merkleTreePda(vaultProgramId, 0);
+    const info = await l1.getAccountInfo(treePda, "confirmed");
+    if (!info) throw new Error("merkle_tree(0) missing on L1");
     const liveLeafCount = new DataView(
       info.data.buffer,
-      info.data.byteOffset + 104,
+      info.data.byteOffset + 8,
       8,
     ).getBigUint64(0, true);
     if (liveLeafCount !== leafIndex + 1n) {
@@ -123,7 +135,7 @@ export async function POST(req: Request) {
       priorRightPath,
     );
 
-    const liveCurrentRoot = info.data.subarray(112, 112 + 32);
+    const liveCurrentRoot = info.data.subarray(16, 48);
     if (
       Buffer.compare(
         Buffer.from(liveCurrentRoot),
@@ -140,7 +152,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const nullifierBytes = await computeNullifier(spendingKey, commitment);
+    const nullifierBytes = await nullifierV2(spendingKey, innerHash);
     const [mintLo, mintHi] = pubkeyToFrPair(tokenMint.toBytes());
 
     return NextResponse.json({
@@ -152,8 +164,7 @@ export async function POST(req: Request) {
         amount: amount.toString(),
         spendingKey: spendingKey.toString(),
         ownerCommitmentBlinding: ownerBlinding.toString(),
-        nonce: nonce.toString(),
-        blindingR: blindingR.toString(),
+        innerHash: innerHash.toString(),
         merklePath: witness.siblings.map((s) => beBytesToBigInt(s).toString()),
         merkleIndices: witness.indices.map((i) => i.toString()),
       },

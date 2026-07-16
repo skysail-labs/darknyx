@@ -95,7 +95,7 @@ stated trust model (sound circuits + honest-or-attested TEE for fairness).
 
 | ID | July-12 | Now | Evidence |
 |---|---|---|---|
-| **C-06** deposit opens owner+inner | Open / design | **Docs truth-up** (design residual) | Still public ix args (by construction); docs updated not to claim “never revealed” |
+| **C-06** deposit opens owner+inner | Open / design | **Closed** (`VALID_DEPOSIT`) | Deposit ix now carries commitment + recovery nonce + proof; owner and inner are private witnesses; invalid proof is state-atomic |
 | **C-09** inclusion root ring | Open | **Partial** | Optional `verifyRoot` on `fetchInclusionProof`; **not** auto-wired for every daemon/SDK path |
 
 ### 2.5 Performance (A5)
@@ -124,7 +124,7 @@ stated trust model (sound circuits + honest-or-attested TEE for fairness).
 4. [x] C-04 exact fee  
 5. [x] C-05 oracle inclusion  
 6. [ ] External circuit audit + Phase-2 ceremony  
-7. [~] C-06/C-08/C-09 — C-08 done; C-06 design; C-09 partial  
+7. [~] C-06/C-08/C-09 — C-06 and C-08 done; C-09 partial
 8. [ ] P-01 payload trim  
 9. [ ] Multisig / ceremony ops for mainnet admin  
 

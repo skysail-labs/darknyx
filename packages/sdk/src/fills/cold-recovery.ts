@@ -18,6 +18,7 @@ import {
   deriveSpendingKey,
 } from "../keys/key-generators.js";
 import { deriveMergeOutputInnerHash } from "../utxo/merge.js";
+import { deriveDepositInnerHash } from "../utxo/deposit-inner.js";
 import { noteCommitmentV2, ownerCommitment } from "../utxo/note.js";
 import type { StoredNote } from "../utxo/note-store.js";
 import {
@@ -80,8 +81,7 @@ export interface DepositRecoveryRecord {
   commitment: Uint8Array;
   tokenMint: Uint8Array;
   amount: bigint;
-  ownerCommitment: bigint;
-  innerHash: bigint;
+  recoveryNonce: Uint8Array;
 }
 
 /** Decode seed-independent deposit data + its matching NoteCreated event. */
@@ -97,21 +97,22 @@ export function decodeDeposits(tx: RawSettleTx): DepositRecoveryRecord[] {
     }));
   const out: DepositRecoveryRecord[] = [];
   for (const data of tx.ixDatas) {
-    if (!hasDisc(data, DEPOSIT_DISC) || data.length < 81) continue;
+    if (!hasDisc(data, DEPOSIT_DISC) || data.length < 337) continue;
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
     const treeId = data[8];
     const amount = view.getBigUint64(9, true);
-    const ownerBytes = data.subarray(17, 49);
-    const innerBytes = data.subarray(49, 81);
+    const commitment = data.subarray(17, 49);
+    const recoveryNonce = data.subarray(49, 81);
     const event = events.find(
       (candidate) =>
-        candidate.treeId === treeId && candidate.amount === amount,
+        candidate.treeId === treeId &&
+        candidate.amount === amount &&
+        same(candidate.commitment, commitment),
     );
     if (!event) continue;
     out.push({
       ...event,
-      ownerCommitment: be32ToBig(ownerBytes),
-      innerHash: be32ToBig(innerBytes),
+      recoveryNonce: Uint8Array.from(recoveryNonce),
     });
   }
   return out;
@@ -212,12 +213,16 @@ export async function recoverNotesFromChain(
 
   const deposits = txs.flatMap(decodeDeposits);
   for (const deposit of deposits) {
-    if (!same(bn254ToBE32(deposit.ownerCommitment), ownerBytes)) continue;
+    const innerBytes = await deriveDepositInnerHash(
+      ownerBytes,
+      deposit.recoveryNonce,
+    );
+    const innerHash = be32ToBig(innerBytes);
     const commitment = await noteCommitmentV2({
       tokenMint: deposit.tokenMint,
       amount: deposit.amount,
       ownerCommitment: owner,
-      innerHash: deposit.innerHash,
+      innerHash,
     });
     if (!same(commitment, deposit.commitment)) continue;
     const key = hex(commitment);
@@ -227,7 +232,7 @@ export async function recoverNotesFromChain(
       tokenMint: deposit.tokenMint,
       amount: deposit.amount,
       ownerCommitment: owner,
-      innerHash: deposit.innerHash,
+      innerHash,
       leafIndex: deposit.leafIndex,
       treeId: deposit.treeId,
     });

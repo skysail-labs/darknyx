@@ -24,6 +24,8 @@ import { noteCommitmentV2, ownerCommitment } from "./note.js";
 import { bn254ToBE32, deriveBlindingFactor } from "../keys/key-generators.js";
 import { buildDepositInstruction, merkleTreePda } from "../idl/vault-client.js";
 import { readNoteCreatedLeafIndex } from "./leaf-index.js";
+import { deriveDepositInnerHash } from "./deposit-inner.js";
+import { pubkeyToFrPair } from "./note.js";
 
 /** SPL Token program id (classic, not Token-2022). */
 const TOKEN_PROGRAM_ID = new PublicKey(
@@ -36,11 +38,8 @@ export interface DepositParams {
   /** Which Merkle-tree shard to deposit into (default 0). The note's actual
    *  leaf index is read back from the deposit's `NoteCreated` event. */
   treeId?: number;
-  /** Client-side monotonic counter that seeds this note's `inner_hash`
-   *  (`deriveBlindingFactor(seed, depositIndex)`) — INDEPENDENT of the leaf
-   *  position, so a concurrent on-chain append can't desync the opening from
-   *  where the leaf lands. Recover the note by commitment, not by index. The
-   *  caller owns the counter; merge outputs no longer use counters. */
+  /** Client-side nonce index. It derives a pseudorandom public recovery nonce;
+   *  the proof derives the hidden inner hash from that nonce + hidden owner. */
   depositIndex: bigint;
   /** 32-byte SPL mint. */
   tokenMint: Uint8Array;
@@ -62,8 +61,9 @@ export interface DepositReceipt {
     tokenMint: Uint8Array;
     amount: bigint;
     ownerCommitment: bigint;
-    /** v2: single inner_hash (deterministic from masterSeed + depositIndex). */
+    /** Poseidon3(27, ownerCommitment, recoveryNonce). */
     innerHash: bigint;
+    recoveryNonce: bigint;
   };
 }
 
@@ -121,13 +121,18 @@ export function getDepositFunction({
 
     // --- Stage: note-build ---
     await params.callbacks?.pre?.("note-build");
-    // The note's inner_hash is derived from a client-side `depositIndex`,
-    // NOT the leaf position — so the opening stays recoverable (by commitment)
-    // regardless of where the leaf actually lands. See DepositParams.depositIndex.
-    const innerHash = deriveBlindingFactor(masterSeed, params.depositIndex);
+    const recoveryNonce = deriveBlindingFactor(
+      masterSeed,
+      params.depositIndex,
+    );
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
-    const innerBytes = bn254ToBE32(innerHash);
     const ownerBytes = bn254ToBE32(owner);
+    const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
+    const innerBytes = await deriveDepositInnerHash(
+      ownerBytes,
+      recoveryNonceBytes,
+    );
+    const innerHash = bytesToBigIntBE(innerBytes);
 
     const commitment = await noteCommitmentV2({
       tokenMint: params.tokenMint,
@@ -135,6 +140,38 @@ export function getDepositFunction({
       ownerCommitment: owner,
       innerHash,
     });
+
+    // --- Stage: proof-generation ---
+    await params.callbacks?.pre?.("proof-generation");
+    let proof;
+    try {
+      const [mintLo, mintHi] = pubkeyToFrPair(params.tokenMint);
+      proof = await client.zkProver.deposit.prove({
+        noteCommitment: bytesToBigIntBE(commitment),
+        tokenMint: [mintLo, mintHi],
+        amount: params.amount,
+        recoveryNonce,
+        spendingKey,
+        ownerCommitmentBlinding: ownerBlinding,
+      });
+      const expectedPublic = [
+        commitment,
+        bn254ToBE32(mintLo),
+        bn254ToBE32(mintHi),
+        bn254ToBE32(params.amount),
+        recoveryNonceBytes,
+      ];
+      if (
+        proof.publicInputs.length !== expectedPublic.length ||
+        proof.publicInputs.some(
+          (value, index) => !bytesEqual(value, expectedPublic[index]),
+        )
+      ) {
+        throw new Error("VALID_DEPOSIT prover returned unexpected public inputs");
+      }
+    } catch (e) {
+      throw new DarkPoolError("proof-generation", (e as Error).message, e);
+    }
 
     // --- Stage: instruction-build ---
     await params.callbacks?.pre?.("instruction-build");
@@ -147,8 +184,9 @@ export function getDepositFunction({
       depositorTokenAccount: params.depositorTokenAccount,
       tokenProgramId: params.tokenProgramId ?? TOKEN_PROGRAM_ID,
       amount: params.amount,
-      ownerCommitment: ownerBytes,
-      innerHash: innerBytes,
+      noteCommitment: commitment,
+      recoveryNonce: recoveryNonceBytes,
+      proof: { piA: proof.piA, piB: proof.piB, piC: proof.piC },
     });
 
     // --- Stage: transaction-send ---
@@ -174,7 +212,18 @@ export function getDepositFunction({
         amount: params.amount,
         ownerCommitment: owner,
         innerHash,
+        recoveryNonce,
       },
     };
   };
+}
+
+function bytesToBigIntBE(bytes: Uint8Array): bigint {
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+  return value;
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
 }

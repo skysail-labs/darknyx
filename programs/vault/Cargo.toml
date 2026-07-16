@@ -65,6 +65,7 @@ darkpool-crypto = { path = "../../crates/darkpool-crypto" }
 # Property-based fuzzing of the Merkle index handling (tests/merkle_fuzz.rs):
 # randomized + shrinking sweeps of append_leaves / walk_merkle_path_n16.
 proptest = "1"
+bincode = { workspace = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

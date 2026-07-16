@@ -2,10 +2,14 @@ import {
   bn254ToBE32,
   buildDepositInstruction,
   deriveBlindingFactor,
+  deriveDepositInnerHash,
+  deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
-  noteCommitment,
+  merkleTreePda,
+  nodeValidDepositProver,
+  noteCommitmentV2,
   ownerCommitment,
-  vaultConfigPda,
+  pubkeyToFrPair,
 } from "@nyx/sdk";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
@@ -29,7 +33,7 @@ const TOKEN_PROGRAM_ID = new PublicKey(
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
 );
 
-const RIGHT_PATH_OFFSET = 1808;
+const RIGHT_PATH_OFFSET = 2_096;
 const MERKLE_DEPTH = 20;
 
 export async function POST(req: Request) {
@@ -68,7 +72,8 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
-    const nonce = body.nonce != null ? BigInt(body.nonce) : BigInt(Date.now());
+    const depositIndex =
+      body.nonce != null ? BigInt(body.nonce) : BigInt(Date.now());
 
     const repoRoot = resolveRepoRoot();
     const cfg = loadDemoE2eConfig(repoRoot);
@@ -78,15 +83,15 @@ export async function POST(req: Request) {
     const tokenMintBytes = tokenMint.toBytes();
 
     const spendingKey = deriveSpendingKey(seed);
-    const ownerBlinding = deriveBlindingFactor(seed, 0n);
+    const ownerBlinding = deriveOwnerCommitmentBlinding(seed);
 
-    const [vaultPda] = vaultConfigPda(vaultProgramId);
-    const info = await l1.getAccountInfo(vaultPda, "confirmed");
-    if (!info) throw new Error("vault_config missing on L1");
+    const [treePda] = merkleTreePda(vaultProgramId, 0);
+    const info = await l1.getAccountInfo(treePda, "confirmed");
+    if (!info) throw new Error("merkle_tree(0) missing on L1");
     const data = info.data;
     const leafCount = new DataView(
       data.buffer,
-      data.byteOffset + 104,
+      data.byteOffset + 8,
       8,
     ).getBigUint64(0, true);
 
@@ -99,19 +104,32 @@ export async function POST(req: Request) {
       priorRightPath.push(Buffer.from(slice).toString("hex"));
     }
 
-    const blindingR = deriveBlindingFactor(seed, leafCount);
+    const recoveryNonce = deriveBlindingFactor(seed, depositIndex);
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
-    const commitment = await noteCommitment({
+    const ownerBytes = bn254ToBE32(owner);
+    const innerBytes = await deriveDepositInnerHash(
+      ownerBytes,
+      bn254ToBE32(recoveryNonce),
+    );
+    const innerHash = bytesToBigInt(innerBytes);
+    const commitment = await noteCommitmentV2({
       tokenMint: tokenMintBytes,
       amount,
       ownerCommitment: owner,
-      nonce,
-      blindingR,
+      innerHash,
     });
-
-    const ownerBytes = bn254ToBE32(owner);
-    const nonceBytes = bn254ToBE32(nonce);
-    const blindingBytes = bn254ToBE32(blindingR);
+    const [mintLo, mintHi] = pubkeyToFrPair(tokenMintBytes);
+    const proof = await nodeValidDepositProver({
+      wasmPath: `${repoRoot}/circuits/build/valid_deposit/circuit_js/circuit.wasm`,
+      zkeyPath: `${repoRoot}/circuits/build/valid_deposit/circuit_final.zkey`,
+    }).prove({
+      noteCommitment: bytesToBigInt(commitment),
+      tokenMint: [mintLo, mintHi],
+      amount,
+      recoveryNonce,
+      spendingKey,
+      ownerCommitmentBlinding: ownerBlinding,
+    });
 
     const depositor = new PublicKey(body.ownerPubkeyBase58);
     const depositorTokenAccount = await getAssociatedTokenAddress(
@@ -128,14 +146,15 @@ export async function POST(req: Request) {
 
     const ix = buildDepositInstruction({
       programId: vaultProgramId,
+      treeId: 0,
       depositor,
       tokenMint,
       depositorTokenAccount,
       tokenProgramId: TOKEN_PROGRAM_ID,
       amount,
-      ownerCommitment: ownerBytes,
-      nonce: nonceBytes,
-      blindingR: blindingBytes,
+      noteCommitment: commitment,
+      recoveryNonce: bn254ToBE32(recoveryNonce),
+      proof,
     });
 
     return NextResponse.json({
@@ -146,8 +165,8 @@ export async function POST(req: Request) {
         priorLeafCount: leafCount.toString(),
         priorRightPathHex: priorRightPath,
         commitmentHex: Buffer.from(commitment).toString("hex"),
-        nonce: nonce.toString(),
-        blindingR: blindingR.toString(),
+        recoveryNonce: recoveryNonce.toString(),
+        innerHash: innerHash.toString(),
         amount: amount.toString(),
         side: body.side,
         tokenMintBase58: tokenMint.toBase58(),
@@ -159,4 +178,10 @@ export async function POST(req: Request) {
       { status: 500 },
     );
   }
+}
+
+function bytesToBigInt(bytes: Uint8Array): bigint {
+  let out = 0n;
+  for (const byte of bytes) out = (out << 8n) | BigInt(byte);
+  return out;
 }

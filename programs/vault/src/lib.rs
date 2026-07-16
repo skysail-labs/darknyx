@@ -102,16 +102,18 @@ pub mod vault {
         create_wallet::create_wallet_handler(ctx, commitment, proof)
     }
 
-    /// Deposit SPL tokens into the vault and insert a UTXO note commitment.
-    /// v2: a single `inner_hash` replaces the old (nonce, blinding_r) pair.
+    /// Deposit SPL tokens and insert a proof-bound UTXO note commitment.
+    /// The proof keeps owner_commitment + inner_hash private while binding the
+    /// public mint, amount, commitment, and recovery nonce.
     pub fn deposit(
         ctx: Context<Deposit>,
         tree_id: u8,
         amount: u64,
-        owner_commitment: [u8; 32],
-        inner_hash: [u8; 32],
+        note_commitment: [u8; 32],
+        recovery_nonce: [u8; 32],
+        proof: Groth16Proof,
     ) -> Result<()> {
-        deposit::deposit_handler(ctx, tree_id, amount, owner_commitment, inner_hash)
+        deposit::deposit_handler(ctx, tree_id, amount, note_commitment, recovery_nonce, proof)
     }
 
     /// Withdraw tokens using a VALID_SPEND proof.

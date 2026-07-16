@@ -14,8 +14,8 @@ type DepositTracking = {
   leafIndex: string;
   priorRightPathHex: string[];
   commitmentHex: string;
-  nonce: string;
-  blindingR: string;
+  recoveryNonce: string;
+  innerHash: string;
   amount: string;
   side: "base" | "quote";
   tokenMintBase58: string;
@@ -196,8 +196,8 @@ export function PrivateDepositWithdrawPanel() {
         ownerPubkeyBase58: s.ownerPubkeyBase58,
         tokenMintBase58: tracking.tokenMintBase58,
         amount: tracking.amount,
-        nonce: tracking.nonce,
-        blindingR: tracking.blindingR,
+        recoveryNonce: tracking.recoveryNonce,
+        innerHash: tracking.innerHash,
         leafIndex: tracking.leafIndex,
         priorRightPathHex: tracking.priorRightPathHex,
       }),
@@ -212,8 +212,7 @@ export function PrivateDepositWithdrawPanel() {
         amount: string;
         spendingKey: string;
         ownerCommitmentBlinding: string;
-        nonce: string;
-        blindingR: string;
+        innerHash: string;
         merklePath: string[];
         merkleIndices: string[];
       };
@@ -246,8 +245,7 @@ export function PrivateDepositWithdrawPanel() {
       ownerCommitmentBlinding: BigInt(
         prepJson.proverInputs.ownerCommitmentBlinding,
       ),
-      nonce: BigInt(prepJson.proverInputs.nonce),
-      blindingR: BigInt(prepJson.proverInputs.blindingR),
+      innerHash: BigInt(prepJson.proverInputs.innerHash),
       merklePath: prepJson.proverInputs.merklePath.map((p) => BigInt(p)),
       merkleIndices: prepJson.proverInputs.merkleIndices.map((i) => Number(i)),
     });

@@ -23,10 +23,10 @@ Three layers, three trust boundaries:
 |---|---|---|
 | **L1 (Solana)** | `programs/vault` (Anchor 0.32) | Custody, the incremental note Merkle tree, the nullifier / consumed-note / lock PDA sets, the Groth16 verifier, atomic batched settlement |
 | **TEE (CVM)** | `crates/nyx-tee` in a TDX CVM on Phala | Hidden order intake (`POST /orders`), uniform-clearing-price matching, consumed-input-derived outputs, the settle pipeline, Merkle mirrors, and auth'd HTTP/WS |
-| **Client** | `packages/sdk` (TypeScript) + snarkjs | Key derivation, VALID_INPUT proof generation, deterministic output recovery helpers, ix builders, `POST` to the CVM |
+| **Client** | `packages/sdk` (TypeScript) + snarkjs | Key derivation, VALID_DEPOSIT/VALID_INPUT proof generation, deterministic output recovery helpers, ix builders, `POST` to the CVM |
 
 ```
-  ┌──────────────┐  deposit (L1)            ┌────────────────────┐
+  ┌──────────────┐  deposit + proof (L1)    ┌────────────────────┐
   │  User wallet ├────────────────────────► │  vault::deposit    │  note → Merkle tree
   │  (browser)   │                          └────────────────────┘
   └──────┬───────┘
@@ -169,6 +169,12 @@ amount, owner_commitment, inner_hash)` — a hash that reveals nothing. Its
 **nullifier** is `Poseidon3(DOMAIN_NULL, spending_key, inner_hash)`,
 unlinkable to the commitment or the owner. See `CRYPTOGRAPHY.md` §4–§5.
 
+At deposit, `VALID_DEPOSIT` proves that the public commitment binds the public
+mint/gross amount and a seed-derived recovery nonce to a privately derived
+owner and inner hash. L1 still sees the funding signer and gross transfer, but
+does not see the wallet-wide `owner_commitment`; one deposit therefore no
+longer clusters every note owned by that shielded identity.
+
 ### Settlement amount privacy (amounts off-chain, via the fill memo)
 
 The settle tx used to reveal each trade's amounts + the clearing price in
@@ -199,7 +205,7 @@ close. Those are now gone from L1; the proof is the sole binder:
   ciphertext (it can't decrypt it); the client decrypts that to recover both
   spendable outputs, including exact fills.
 
-See `CRYPTOGRAPHY.md` §7.4 (the circuit + the commitment-only leaf) and §9 (the
+See `CRYPTOGRAPHY.md` §7.5 (the circuit + the commitment-only leaf) and §9 (the
 payload), and [`fills-history-architecture.md`](fills-history-architecture.md).
 
 ### Why a TEE/CVM (not an on-chain CLOB)?
@@ -237,7 +243,8 @@ incremental Merkle trees** of note commitments (each depth 20, Poseidon2, in
 its own `MerkleTree[tree_id]` account — the global `VaultConfig` keeps only the
 tree-independent config + the shared `zero_subtree_roots`), and the replay-guard
 PDA sets. Verifies the Groth16 circuits on-chain (`VALID_WALLET_CREATE`,
-`VALID_SPEND`, `VALID_INPUT`, `VALID_MATCH_BATCH`, `VALID_MERGE`) via the
+`VALID_DEPOSIT`, `VALID_SPEND`, `VALID_INPUT`, `VALID_MATCH_BATCH`,
+`VALID_MERGE`) via the
 embedded `groth16-solana` verifier. The settle path
 (`lock_note → verify_match_batch → tee_forced_settle_batched → close`) is
 TEE-authority-gated (any of the K registered `tee_pubkeys`) and processes up to
@@ -310,6 +317,7 @@ on-chain hashers).
 | Circuit | Proves | Verified |
 |---|---|---|
 | `VALID_WALLET_CREATE` | a well-formed user commitment | on-chain (`create_wallet`) |
+| `VALID_DEPOSIT` | a recoverable note commitment for the public mint + gross amount, with owner and inner private | client prove → on-chain (`deposit`) |
 | `VALID_SPEND` | knowledge of a note's opening + its Merkle inclusion + correct nullifier | on-chain (`withdraw`) |
 | `VALID_INPUT` | a note's opening + inclusion with a private positive-u64 amount (gates `lock_note`) | on-chain (`lock_note`) |
 | `VALID_MATCH_BATCH` (N=16) | conservation + 64-bit range-checks + an in-circuit fee floor over PRIVATE amounts, + correct output-note construction for ≤16 matches, hashed into one **commitment-only** batch Merkle root | in-enclave prove → on-chain `verify_match_batch` |
@@ -323,7 +331,7 @@ by `NYX_TEE_PROVER` on the SAME image. Witness gen is ark-circom either way.
 ### `packages/sdk` — TypeScript client
 
 Key derivation, note construction (`noteCommitmentV2` / `nullifierV2`),
-deposit/withdraw flows, the VALID_INPUT prover wrapper, match-output derivation,
+deposit/withdraw flows, VALID_DEPOSIT + VALID_INPUT prover wrappers, match-output derivation,
 order canonical signing, and the hand-coded `vault-client.ts`
 (every discriminator + Borsh layout, no Anchor IDL runtime).
 
@@ -334,8 +342,9 @@ order canonical signing, and the hand-coded `vault-client.ts`
 1. **Key gen (off-chain).** Client derives spending / viewing / trading keys
    + `user_commitment` from its master seed.
 2. **`create_wallet` (L1).** Register the user commitment (VALID_WALLET_CREATE).
-3. **`deposit` (L1).** Pull SPL into the vault; a note commitment is appended
-   to the Merkle tree; `outstanding[mint]++`.
+3. **`deposit` (L1).** Generate VALID_DEPOSIT locally; the vault verifies the
+   hidden owner/inner construction before pulling SPL, appending the commitment,
+   and incrementing `outstanding[mint]`.
 4. **`POST /orders` (CVM).** Client builds a VALID_INPUT proof for its note,
    fetches the current `/info.boot_session_id`, signs the economic fields,
    contributory X25519 viewing key, session, and nonce, then posts to the CVM.
@@ -431,12 +440,16 @@ recoverable on a replacement device with an authenticated backup:
    `exportEncryptedMasterSeed`, store its passphrase separately, and restore it
    with `importEncryptedMasterSeed`. Wallet-message signatures are deliberately
    not a Nyx spend authority.
-2. **Viewing-encryption key + boot session on every order.** Send
+2. **Proof-bound deposits.** `getDepositFunction` derives a pseudorandom public
+   recovery nonce and hidden `Poseidon3(27, owner, nonce)` inner, generates
+   VALID_DEPOSIT locally, and submits only the commitment + nonce. Cold recovery
+   derives the owner from the restored seed and reconstructs the opening.
+3. **Viewing-encryption key + boot session on every order.** Send
    `deriveViewingEncKeypair(seed).publicKey` as the order's `viewing_pubkey`
    (`buildOrder` defaults to it) and the current 32-byte session from `/info`.
    Both are signed. The TEE rejects low-order X25519 points and encrypts each
    fill's private recovery data to the signed key on-chain.
-3. **Recover on reconnect or a replacement device.** `startFillsSync` backfills
+4. **Recover on reconnect or a replacement device.** `startFillsSync` backfills
    locator rows and decrypts+self-verifies trade/change outputs via
    `recoverFillFromChain`. For a full cold restore, `recoverNotesFromChain`
    scans finalized vault history and rebuilds deposits, fills, continuations,

@@ -114,6 +114,7 @@ async function main(): Promise<void> {
   // Direct on-chain actions (deposit, auto-merge) are enabled only when a payer
   // keypair is configured.
   const programId = new PublicKey(config.programId);
+  const circuitsDir = process.env.NYX_DAEMON_CIRCUITS_DIR ?? "circuits/build";
   let depositFn;
   let depositor;
   let mergeRunner;
@@ -126,11 +127,20 @@ async function main(): Promise<void> {
         rpcUrl: config.rpcUrl,
         payer,
         keystore,
+        depositArtifacts: {
+          wasmPath: resolve(
+            circuitsDir,
+            "valid_deposit/circuit_js/circuit.wasm",
+          ),
+          zkeyPath: resolve(
+            circuitsDir,
+            "valid_deposit/circuit_final.zkey",
+          ),
+        },
       }),
     });
 
     // Auto-merge needs the merge circuit artifacts (snarkjs k=2/4) present.
-    const circuitsDir = process.env.NYX_DAEMON_CIRCUITS_DIR ?? "circuits/build";
     const art = (k: 2 | 4) => ({
       wasmPath: resolve(
         circuitsDir,

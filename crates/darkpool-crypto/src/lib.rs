@@ -18,6 +18,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+pub mod deposit;
 pub mod errors;
 pub mod field;
 #[cfg(not(target_os = "solana"))]
@@ -35,6 +36,7 @@ pub mod user_commitment;
 #[cfg(not(target_os = "solana"))]
 pub mod viewing_keys;
 
+pub use deposit::{deposit_inner_hash, DOMAIN_DEPOSIT_INNER};
 pub use errors::CryptoError;
 pub use field::{fr_from_be_bytes, fr_to_be_bytes, pubkey_to_fr_pair, Fr, FR_BYTES};
 #[cfg(not(target_os = "solana"))]

@@ -43,6 +43,11 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
       throw new Error("not used in withdraw test");
     },
   };
+  deposit = {
+    prove: async () => {
+      throw new Error("not used in withdraw test");
+    },
+  };
   spend = {
     prove: async (inputs: SpendInputs) => {
       this.capturedSpendInputs.push(inputs);

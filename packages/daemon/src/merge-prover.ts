@@ -36,6 +36,7 @@ export function nodeMergeProver(
 ): IDarkPoolZkProverSuite {
   return {
     walletCreate: stub("walletCreate"),
+    deposit: stub("deposit"),
     spend: stub("spend"),
     merge: {
       async prove(inputs: MergeInputs): Promise<Groth16ProofBytes> {

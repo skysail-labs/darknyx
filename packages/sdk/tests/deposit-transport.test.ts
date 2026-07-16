@@ -26,7 +26,11 @@ import type {
   TransactionForwarder,
 } from "../src/providers.js";
 import { DarkPoolClient } from "../src/client.js";
-import { UnimplementedProverSuite } from "../src/zk/prover-suite.js";
+import {
+  UnimplementedProverSuite,
+  type DepositInputs,
+} from "../src/zk/prover-suite.js";
+import { bn254ToBE32 } from "../src/keys/key-generators.js";
 import {
   anchorDiscriminator,
   vaultConfigPda,
@@ -118,12 +122,27 @@ function makeClient(
     },
     store: async () => {},
   };
+  const prover = new UnimplementedProverSuite();
+  prover.deposit = {
+    prove: async (inputs: DepositInputs) => ({
+      piA: new Uint8Array(64).fill(0xaa),
+      piB: new Uint8Array(128).fill(0xbb),
+      piC: new Uint8Array(64).fill(0xcc),
+      publicInputs: [
+        inputs.noteCommitment,
+        inputs.tokenMint[0],
+        inputs.tokenMint[1],
+        inputs.amount,
+        inputs.recoveryNonce,
+      ].map(bn254ToBE32),
+    }),
+  };
   return new DarkPoolClient({
     programId: PROGRAM_ID,
     seedMode: { type: "csprng", storage },
     connectionProvider: conn,
     providers,
-    zkProver: new UnimplementedProverSuite(),
+    zkProver: prover,
     ownerCommitmentBlinding: 1234n,
   });
 }
@@ -163,6 +182,7 @@ describe("getDepositFunction", () => {
     expect(stages).toEqual([
       "merkle-position-fetch",
       "note-build",
+      "proof-generation",
       "instruction-build",
       "transaction-send",
     ]);
@@ -180,6 +200,13 @@ describe("getDepositFunction", () => {
     // tree_id(1) at offset 8, then amount (u64 LE) at offset 9.
     expect((ix.data as NodeBuffer)[8]).toBe(0);
     expect((ix.data as NodeBuffer).readBigUInt64LE(9)).toBe(1_000_000n);
+    expect(ix.data).toHaveLength(337);
+    expect(Buffer.from(ix.data.subarray(17, 49))).toEqual(
+      Buffer.from(receipt.noteCommitment),
+    );
+    expect(Buffer.from(ix.data.subarray(81, 145))).toEqual(
+      Buffer.alloc(64, 0xaa),
+    );
   });
 
   it("throws parameter error on zero amount", async () => {

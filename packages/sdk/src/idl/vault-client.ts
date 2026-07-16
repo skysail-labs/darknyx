@@ -642,9 +642,10 @@ export interface BuildDepositParams {
   depositorTokenAccount: PublicKey;
   tokenProgramId: PublicKey;
   amount: bigint;
-  ownerCommitment: Uint8Array;
-  /** v2: single inner_hash replacing the old (nonce, blindingR) pair. */
-  innerHash: Uint8Array;
+  noteCommitment: Uint8Array;
+  /** Public pseudorandom Fr used to recover the hidden deposit inner hash. */
+  recoveryNonce: Uint8Array;
+  proof: Groth16OnChainProof;
 }
 
 export function buildDepositInstruction(
@@ -659,8 +660,9 @@ export function buildDepositInstruction(
     anchorDiscriminator("deposit"),
     new Uint8Array([p.treeId & 0xff]),
     u64LE(p.amount),
-    fixed32(p.ownerCommitment),
-    fixed32(p.innerHash),
+    fixed32(p.noteCommitment),
+    fixed32(p.recoveryNonce),
+    serializeProof(p.proof),
   );
 
   // Sysvar rent pubkey = SysvarRent111111111111111111111111111111111

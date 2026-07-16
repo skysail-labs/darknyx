@@ -13,6 +13,7 @@
 
 import {
   formatGroth16ForOnChain,
+  type DepositInputs,
   type Groth16ProofBytes,
   type IDarkPoolZkProverSuite,
   type SpendInputs,
@@ -26,6 +27,7 @@ import type {
 
 export interface WebProverAssets {
   walletCreate: { wasmUrl: string; zkeyUrl: string };
+  deposit: { wasmUrl: string; zkeyUrl: string };
   spend: { wasmUrl: string; zkeyUrl: string };
 }
 
@@ -33,6 +35,10 @@ const DEFAULT_ASSETS: WebProverAssets = {
   walletCreate: {
     wasmUrl: "/circuits/valid_wallet_create/circuit.wasm",
     zkeyUrl: "/circuits/valid_wallet_create/circuit.zkey",
+  },
+  deposit: {
+    wasmUrl: "/circuits/valid_deposit/circuit.wasm",
+    zkeyUrl: "/circuits/valid_deposit/circuit.zkey",
   },
   spend: {
     wasmUrl: "/circuits/valid_spend/circuit.wasm",
@@ -148,6 +154,26 @@ export class WebProverSuite implements IDarkPoolZkProverSuite {
     },
   };
 
+  deposit = {
+    prove: async (inputs: DepositInputs): Promise<Groth16ProofBytes> => {
+      const decimal: Record<string, string | string[]> = {
+        noteCommitment: inputs.noteCommitment.toString(),
+        tokenMint: inputs.tokenMint.map(String),
+        amount: inputs.amount.toString(),
+        recoveryNonce: inputs.recoveryNonce.toString(),
+        spendingKey: inputs.spendingKey.toString(),
+        ownerCommitmentBlinding:
+          inputs.ownerCommitmentBlinding.toString(),
+      };
+      const { proof } = await this.proveOne({
+        inputs: decimal,
+        wasmUrl: this.assets.deposit.wasmUrl,
+        zkeyUrl: this.assets.deposit.zkeyUrl,
+      });
+      return proof;
+    },
+  };
+
   spend = {
     prove: async (inputs: SpendInputs): Promise<Groth16ProofBytes> => {
       if (
@@ -168,8 +194,7 @@ export class WebProverSuite implements IDarkPoolZkProverSuite {
         amount: inputs.amount.toString(),
         spendingKey: inputs.spendingKey.toString(),
         ownerCommitmentBlinding: inputs.ownerCommitmentBlinding.toString(),
-        nonce: inputs.nonce.toString(),
-        blindingR: inputs.blindingR.toString(),
+        innerHash: inputs.innerHash.toString(),
         merklePath: inputs.merklePath.map((p) => p.toString()),
         merkleIndices: inputs.merkleIndices.map((i) => i.toString()),
       };

@@ -5,19 +5,21 @@
  * keypair + a Helius connection into the SDK client that backs the daemon's
  * direct on-chain actions.
  *
- * SCOPE: this client is wired for **deposit** only. `getDepositFunction` uses
- * just the connection / account-info / forwarder providers, so the `zkProver`
- * and `merkleProofProvider` are deliberate throwing stubs — MERGE / WITHDRAW
- * need a real merge zk-prover + a leaf-indexed Merkle-proof provider, built +
- * devnet-validated at integration time. Construct a fuller client for those.
+ * SCOPE: this client is wired for **deposit** only. Deposits generate a real
+ * VALID_DEPOSIT proof locally; MERGE / WITHDRAW retain throwing prover and
+ * Merkle-path stubs. Construct a fuller client for those actions.
  */
 
 import { Keypair, PublicKey } from "@solana/web3.js";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   getDarkPoolClient,
+  nodeValidDepositProver,
   UnimplementedProverSuite,
   type DarkPoolClient,
   type MerkleProofProvider,
+  type ValidDepositArtifacts,
 } from "@nyx/sdk";
 
 import type { Keystore } from "./keystore.js";
@@ -44,10 +46,24 @@ export interface DaemonClientOptions {
   rpcUrl: string;
   payer: Keypair;
   keystore: Keystore;
+  depositArtifacts?: ValidDepositArtifacts;
 }
 
 export function createDaemonClient(opts: DaemonClientOptions): DarkPoolClient {
   const connection = createConnection(opts.rpcUrl);
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+  const circuitsDir =
+    process.env.NYX_DAEMON_CIRCUITS_DIR ?? resolve(repoRoot, "circuits/build");
+  const stubs = new UnimplementedProverSuite("deposit-only daemon client");
+  const deposit = nodeValidDepositProver(
+    opts.depositArtifacts ?? {
+      wasmPath: resolve(
+        circuitsDir,
+        "valid_deposit/circuit_js/circuit.wasm",
+      ),
+      zkeyPath: resolve(circuitsDir, "valid_deposit/circuit_final.zkey"),
+    },
+  );
   return getDarkPoolClient({
     programId: opts.programId,
     seedMode: fixedSeedMode(opts.keystore.masterSeed),
@@ -57,7 +73,12 @@ export function createDaemonClient(opts: DaemonClientOptions): DarkPoolClient {
       transactionForwarder: keypairForwarder(connection, opts.payer),
       merkleProofProvider: STUB_MERKLE,
     },
-    zkProver: new UnimplementedProverSuite(),
+    zkProver: {
+      walletCreate: stubs.walletCreate,
+      deposit,
+      spend: stubs.spend,
+      merge: stubs.merge,
+    },
     ownerCommitmentBlinding: opts.keystore.ownerBlinding,
   });
 }

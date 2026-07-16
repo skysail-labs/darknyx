@@ -40,6 +40,7 @@ build_wasm() {
 }
 
 build_wasm valid_wallet_create
+build_wasm valid_deposit
 build_wasm valid_spend
 build_wasm valid_input
 # In-pool note merge (K=2/4) — wasm only; committed circuit_final.zkey.
