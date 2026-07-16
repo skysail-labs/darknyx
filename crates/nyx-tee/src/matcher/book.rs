@@ -258,9 +258,9 @@ impl OrderBook {
 
     /// Snapshot the entire book as a matcher input. Order in the
     /// returned Vec is: bids descending by price, asks ascending by
-    /// price, with FIFO tie-break. (The matcher re-sorts internally
-    /// via `partition_book`, so order here is informational — but
-    /// matching it cuts work.)
+    /// price, with FIFO tie-break. The matcher prepares and verifies this
+    /// ordering once per tick, then reuses the sorted snapshots across every
+    /// settlement page.
     pub fn snapshot(&self) -> MatcherOrderBook {
         let mut orders: Vec<Order> = Vec::with_capacity(self.by_id.len());
         // Bids descending.

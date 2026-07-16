@@ -293,7 +293,12 @@ arity / domain tag here without mirroring it in TS breaks the parity test.
 
 `run_batch` / `run_batch_capped` is the single source of truth for
 uniform-clearing-price matching (price-time priority, circuit breaker, FIFO
-tie-break, per-side fee-inclusive collateral, both fee notes). Also home to
+tie-break, per-side fee-inclusive collateral, both fee notes). Production ticks
+use `PreparedMatchTick`: one frozen book snapshot is partitioned and sorted
+once, then mutable price-level totals feed a suffix-demand/prefix-supply sweep
+for every ≤16-match page. Reserving or cancelling an order removes its original
+quantity from those totals in O(log levels); orders arriving during paging wait
+for the next tick. Also home to
 `order_canonical.rs` (the order/cancel signing contract, including the viewing
 key, boot session, and arrival nonce,
 parity-tested against the TS SDK) and `change_note::derive_inner` (the
@@ -336,9 +341,11 @@ order canonical signing, and the hand-coded `vault-client.ts`
    contributory X25519 viewing key, session, and nonce, then posts to the CVM.
    Intake verifies the signature + note opening, rejects stale sessions and
    non-increasing per-trading-key nonces, then books it.
-5. **Match + reserve (CVM).** The interval tick finds a crossing pair at the
-   uniform clearing price, derives any proof-bound continuation commitment, and
-   marks both orders `pending_settlement` without applying quantities or fills.
+5. **Match + reserve (CVM).** The interval tick freezes one book snapshot,
+   builds reusable price-level demand/supply curves, and pages crossing pairs at
+   a uniform clearing price. It derives any proof-bound continuation commitment
+   and marks both orders `pending_settlement` without applying quantities or
+   fills; orders submitted during paging enter the next tick.
 6. **Settle (CVM → L1).** The settle pipeline drives Tx A–E (above) on L1: the
    matched output notes (note_c/d), any change notes (note_e/f), and the
    base+quote protocol fee notes are appended to the tree. Each confirmed Tx D

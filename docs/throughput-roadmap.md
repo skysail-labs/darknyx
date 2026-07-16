@@ -68,7 +68,8 @@ sweeper (`settle::marker_sweep`, merged). Tx D is the remaining one.
 
 ### 4. Adaptive batch cadence / coalesce trailing partial batches
 **Gate: 🟡 VOLUME (and diminished by 🟢 GPU + item 1).** The matcher tick (`BATCH_MS=2000`,
-`matcher/interval.rs`) already pages the book greedily into `≤16` batches, so the only underfilled
+`matcher/interval.rs`) already freezes one snapshot and pages reusable price-level curves greedily
+into `≤16` batches, so the only underfilled
 batches are the **remainder page** of a multi-page tick or a **quiet tick** (<16 matches). The prove is
 fixed at N=16 (padded), but prove is only ~22 % of wall and overlapped, and `settle_ms` (~fixed per
 batch) dominates — so an underfilled batch really wastes the whole serial slot, not the prove. Coalescing

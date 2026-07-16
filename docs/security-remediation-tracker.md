@@ -36,7 +36,7 @@ runbooks have landed.
 |---|---|---|---|---|---|
 | P-01 | Perf | Vault + SDK + TEE | `remediation/vault-lifecycle` | Batch marker is read-only in every Tx D builder and live Tx D; distinct-shard Tx Ds share no writable key | Closed |
 | P-02 | Perf | TEE | `remediation/settlement-efficiency` | Build the N=16 tree once and extract every path; hash-count regression/benchmark | Closed |
-| P-03 | Perf | Matcher | `remediation/matcher-performance` | Price-level aggregates and reusable demand curves preserve FIFO, tie-breaking, IOC/FOK/AON under differential properties | Open |
+| P-03 | Perf | Matcher | `remediation/matcher-performance` | Price-level aggregates and reusable demand curves preserve FIFO, tie-breaking, IOC/FOK/AON under differential properties | Code complete |
 | P-04 | Perf | TEE RPC | `remediation/settlement-efficiency` | Poll all pending signatures in one RPC request; remove confirmed entries; rebroadcast only overdue transactions | Closed |
 
 ## Residual findings
@@ -1070,6 +1070,54 @@ Every remediation PR must record:
   devnet program state are invalidated, but in-flight client lifecycle state
   should be reconciled from chain. Rollback reopens N-02 and again permits
   optimistic fills/book mutation before Tx D finality.
+
+### `remediation/matcher-performance` — P-03
+
+- **Status.** Code complete; image-61 loadgen/CVM evidence remains before the
+  tracker row can move to `Closed`.
+- **Invariant restored.** A matching tick freezes one book snapshot, partitions
+  and sorts it once, and retains exact u128 bid/ask totals by ordered price
+  level. Each settlement page computes its uniform price in one ascending
+  suffix-demand/prefix-supply sweep. Every matched, cancelled, or otherwise
+  touched order becomes inactive and subtracts its original quantity from the
+  reusable levels before the next page. Per-page price recomputation, FIFO,
+  lowest-price ties, zero-limit market asks, IOC/FOK/min-fill behavior,
+  single-fill-per-order, match IDs, lifecycle updates, and inclusion-root order
+  remain byte-identical. New orders arriving mid-page enter the next tick's
+  deterministic snapshot.
+- **Wire/circuit impact.** No API, order canonical, Borsh output, settlement
+  payload, instruction accounts/data, note/root construction, circuit, zkey,
+  VK, N=16 fixture, or vault program change. Existing notes, roots, signed
+  orders, and proofs remain compatible. The CPU image pin advances from
+  `tee-v3-hardening-60` to `tee-v3-hardening-61` so a live loadgen cannot reuse
+  the old matcher binary.
+- **Local evidence.** A 256-case property compares the level sweep against an
+  independent copy of the removed O(prices × orders) algorithm, including u64
+  saturation, inactive orders, zero prices, and lowest-price ties. A separate
+  192-case property compares every page's complete Borsh bytes against repeated
+  legacy `run_batch_capped` calls over randomized sides, order types, statuses,
+  limits, quantities, minimum fills, FIFO slots, expiry, and page caps. A
+  deterministic multi-page case and the TEE's 5-fill/2-cap integration pin
+  paging and finality reservations. On the local release build, the exact
+  clearing hotspot measured 69.927 ms versus 0.997 ms for 80,000 orders across
+  512 levels (70.17×); the portable operation-count regression pins more than
+  three orders of magnitude fewer visits. A 149-page cryptography-inclusive
+  run remained byte-identical and measured 850.224 ms versus 760.322 ms
+  (1.12×), with Poseidon output construction dominating the remainder.
+  `cargo fmt --all -- --check`, workspace clippy with warnings denied, and
+  `cargo test --workspace` pass. The first sandboxed workspace run's localhost
+  mock-RPC tests failed with `Operation not permitted`; the permitted rerun
+  passed all 259 TEE library tests, every TEE integration target, matcher/loadgen
+  coverage, and all vault litesvm/proof tests. SBF and TypeScript gates are not
+  rerun because this slice changes no program, circuit, transaction builder, or
+  TypeScript source.
+- **Devnet/CVM evidence.** Pending explicit approval for a short billable
+  placeholder-mint image-61 loadgen window. No program upgrade or real-value
+  deposit is required.
+- **Rollback.** Revert this PR and redeploy image 60. No notes, roots, orders,
+  signatures, payloads, proofs, accounts, or devnet program state are
+  invalidated. Rollback reopens P-03 and restores repeated full-book
+  clone/partition/sort plus quadratic clearing scans across matcher pages.
 
 ## Mainnet release gates
 

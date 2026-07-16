@@ -10,6 +10,9 @@
 //! `merkle_root_sha256`; the port uses `sha2::Sha256` instead and
 //! a parity test pins the byte-equivalence.
 
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+
 use sha2::{Digest, Sha256};
 
 use crate::book::{Order, OrderSide, OrderType, OrderUpdate, OrderUpdateKind};
@@ -129,6 +132,11 @@ pub(crate) struct OrderSnapshot {
     pub order_id: [u8; 16],
     pub inclusion: [u8; 32],
 
+    /// Prepared ticks retain one sorted snapshot across every settlement page.
+    /// Orders touched by an earlier page are marked inactive instead of being
+    /// cloned, partitioned, and sorted again.
+    pub active: bool,
+
     /// Sentinel for FOK-too-small (and any other "this slot is now a
     /// cancellation"). Set to `true` when `generate_matches`
     /// decides to abandon a slot rather than fill it. `apply_slot_updates`
@@ -153,12 +161,122 @@ impl OrderSnapshot {
             trading_key: o.trading_key,
             order_id: o.order_id,
             inclusion: o.order_inclusion_commitment,
+            active: true,
             cancelled_sentinel: false,
         }
     }
 }
 
 // ─────── compute_clearing_price ─────────────────────────────────────────────
+
+/// Mutable price-level totals for one prepared matching tick. Totals use u128
+/// internally so removing an order after a saturated u64 aggregate recovers the
+/// exact remaining level instead of under-counting it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PriceLevelAggregates {
+    bids: BTreeMap<u64, u128>,
+    asks: BTreeMap<u64, u128>,
+}
+
+impl PriceLevelAggregates {
+    pub(crate) fn from_snapshots(bids: &[OrderSnapshot], asks: &[OrderSnapshot]) -> Self {
+        let mut levels = Self::default();
+        for bid in bids.iter().filter(|order| order.active) {
+            let total = levels.bids.entry(bid.price_limit).or_default();
+            *total = total.saturating_add(bid.amount as u128);
+        }
+        for ask in asks.iter().filter(|order| order.active) {
+            let total = levels.asks.entry(ask.price_limit).or_default();
+            *total = total.saturating_add(ask.amount as u128);
+        }
+        levels
+    }
+
+    pub(crate) fn remove_bid(&mut self, price: u64, amount: u64) {
+        Self::remove(&mut self.bids, price, amount);
+    }
+
+    pub(crate) fn remove_ask(&mut self, price: u64, amount: u64) {
+        Self::remove(&mut self.asks, price, amount);
+    }
+
+    fn remove(levels: &mut BTreeMap<u64, u128>, price: u64, amount: u64) {
+        if let Some(total) = levels.get_mut(&price) {
+            *total = total.saturating_sub(amount as u128);
+            if *total == 0 {
+                levels.remove(&price);
+            }
+        }
+    }
+
+    /// Evaluate all candidate prices in ascending order with one suffix-demand
+    /// and prefix-supply sweep. Every distinct level is visited at most once;
+    /// the old implementation rescanned every order for every candidate.
+    pub(crate) fn clearing_price(&self) -> Option<(u64, u64)> {
+        if self.bids.is_empty() || self.asks.is_empty() {
+            return None;
+        }
+
+        let mut demand = self
+            .bids
+            .values()
+            .fold(0u128, |sum, amount| sum.saturating_add(*amount));
+        let mut supply = 0u128;
+        let mut bid_levels = self.bids.iter().peekable();
+        let mut ask_levels = self.asks.iter().peekable();
+        let mut bid_candidates = self.bids.keys().copied().peekable();
+        let mut ask_candidates = self
+            .asks
+            .keys()
+            .copied()
+            .filter(|price| *price > 0)
+            .peekable();
+        let mut best_price = None;
+        let mut best_matched = 0u64;
+
+        loop {
+            let price = match (
+                bid_candidates.peek().copied(),
+                ask_candidates.peek().copied(),
+            ) {
+                (Some(bid), Some(ask)) => match bid.cmp(&ask) {
+                    Ordering::Less => bid_candidates.next().expect("peeked bid candidate"),
+                    Ordering::Greater => ask_candidates.next().expect("peeked ask candidate"),
+                    Ordering::Equal => {
+                        bid_candidates.next();
+                        ask_candidates.next().expect("peeked equal ask candidate")
+                    }
+                },
+                (Some(_), None) => bid_candidates.next().expect("peeked bid candidate"),
+                (None, Some(_)) => ask_candidates.next().expect("peeked ask candidate"),
+                (None, None) => break,
+            };
+
+            while bid_levels
+                .peek()
+                .is_some_and(|(bid_price, _)| **bid_price < price)
+            {
+                let (_, amount) = bid_levels.next().expect("peeked bid level");
+                demand = demand.saturating_sub(*amount);
+            }
+            while ask_levels
+                .peek()
+                .is_some_and(|(ask_price, _)| **ask_price <= price)
+            {
+                let (_, amount) = ask_levels.next().expect("peeked ask level");
+                supply = supply.saturating_add(*amount);
+            }
+
+            let matched = demand.min(supply).min(u64::MAX as u128) as u64;
+            if matched > best_matched {
+                best_matched = matched;
+                best_price = Some(price);
+            }
+        }
+
+        best_price.map(|price| (price, best_matched))
+    }
+}
 
 /// Uniform-clearing-price computation. Returns `Some((p*, matched))`
 /// where p* is the price that maximises `min(demand, supply)` across
@@ -177,43 +295,12 @@ impl OrderSnapshot {
 ///
 /// `pub(crate)` because the signature takes the internal
 /// `OrderSnapshot` type; external callers go through `run_batch`.
+#[cfg(test)]
 pub(crate) fn compute_clearing_price(
     bids: &[OrderSnapshot],
     asks: &[OrderSnapshot],
 ) -> Option<(u64, u64)> {
-    if bids.is_empty() || asks.is_empty() {
-        return None;
-    }
-    let mut candidates: Vec<u64> = Vec::with_capacity(bids.len() + asks.len());
-    for b in bids.iter() {
-        candidates.push(b.price_limit);
-    }
-    for a in asks.iter() {
-        if a.price_limit > 0 {
-            candidates.push(a.price_limit);
-        }
-    }
-    candidates.sort();
-    candidates.dedup();
-
-    let mut best_p: Option<u64> = None;
-    let mut best_matched: u64 = 0;
-    for &p in candidates.iter() {
-        let demand: u64 = bids
-            .iter()
-            .filter(|b| b.price_limit >= p)
-            .fold(0u64, |a, b| a.saturating_add(b.amount));
-        let supply: u64 = asks
-            .iter()
-            .filter(|a_| a_.price_limit <= p)
-            .fold(0u64, |a, b| a.saturating_add(b.amount));
-        let matched = demand.min(supply);
-        if matched > best_matched {
-            best_matched = matched;
-            best_p = Some(p);
-        }
-    }
-    best_p.map(|p| (p, best_matched))
+    PriceLevelAggregates::from_snapshots(bids, asks).clearing_price()
 }
 
 // ─────── generate_matches ──────────────────────────────────────────────────
@@ -273,6 +360,16 @@ pub(crate) fn generate_matches(
     let mut next_match_id = start_match_id;
 
     while produced < max_matches && bi < bids.len() && ai < asks.len() {
+        while bi < bids.len() && !bids[bi].active {
+            bi += 1;
+        }
+        while ai < asks.len() && !asks[ai].active {
+            ai += 1;
+        }
+        if bi >= bids.len() || ai >= asks.len() {
+            break;
+        }
+
         // Price-limit crossing must hold at P*.
         if bids[bi].price_limit < p_star || asks[ai].price_limit > p_star {
             if bids[bi].price_limit < p_star {
@@ -538,6 +635,9 @@ pub(crate) fn apply_slot_updates(
     out: &mut Vec<OrderUpdate>,
 ) {
     for s in bids.iter().chain(asks.iter()) {
+        if !s.active {
+            continue;
+        }
         let pre = &pre_batch[s.book_idx];
 
         // FOK / cancellation sentinel set during generate_matches.
@@ -684,6 +784,7 @@ pub(crate) fn reset_fee_buckets(config: &MatchConfig, now_slot: u64) -> [FeeBuck
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     // ─── deviates_by_more_than_bps ──────────────────────────────────────
 
@@ -786,8 +887,140 @@ mod tests {
             trading_key: [0; 32],
             order_id: [0; 16],
             inclusion: [0; 32],
+            active: true,
             cancelled_sentinel: false,
         }
+    }
+
+    /// Independent copy of the pre-P-03 O(prices × orders) algorithm. Keep it
+    /// deliberately straightforward: it is the semantic oracle for the level
+    /// sweep, not another implementation of the optimized path.
+    fn reference_clearing_price(
+        bids: &[OrderSnapshot],
+        asks: &[OrderSnapshot],
+    ) -> Option<(u64, u64)> {
+        let mut candidates = Vec::with_capacity(bids.len() + asks.len());
+        candidates.extend(
+            bids.iter()
+                .filter(|order| order.active)
+                .map(|order| order.price_limit),
+        );
+        candidates.extend(
+            asks.iter()
+                .filter(|order| order.active && order.price_limit > 0)
+                .map(|order| order.price_limit),
+        );
+        candidates.sort_unstable();
+        candidates.dedup();
+
+        let mut best_price = None;
+        let mut best_matched = 0u64;
+        for price in candidates {
+            let demand = bids
+                .iter()
+                .filter(|bid| bid.active && bid.price_limit >= price)
+                .fold(0u64, |sum, bid| sum.saturating_add(bid.amount));
+            let supply = asks
+                .iter()
+                .filter(|ask| ask.active && ask.price_limit <= price)
+                .fold(0u64, |sum, ask| sum.saturating_add(ask.amount));
+            let matched = demand.min(supply);
+            if matched > best_matched {
+                best_matched = matched;
+                best_price = Some(price);
+            }
+        }
+        best_price.map(|price| (price, best_matched))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn price_level_sweep_matches_quadratic_reference(
+            bid_specs in prop::collection::vec((0u16..=500, any::<u64>(), any::<bool>()), 0..80),
+            ask_specs in prop::collection::vec((0u16..=500, any::<u64>(), any::<bool>()), 0..80),
+        ) {
+            let bids: Vec<_> = bid_specs
+                .into_iter()
+                .map(|(price, amount, active)| {
+                    let mut order = snap(OrderSide::Bid, price as u64, amount);
+                    order.active = active;
+                    order
+                })
+                .collect();
+            let asks: Vec<_> = ask_specs
+                .into_iter()
+                .map(|(price, amount, active)| {
+                    let mut order = snap(OrderSide::Ask, price as u64, amount);
+                    order.active = active;
+                    order
+                })
+                .collect();
+
+            prop_assert_eq!(
+                PriceLevelAggregates::from_snapshots(&bids, &asks).clearing_price(),
+                reference_clearing_price(&bids, &asks),
+            );
+        }
+    }
+
+    #[test]
+    fn level_sweep_work_scales_with_levels_not_prices_times_orders() {
+        let bids: Vec<_> = (0..10_000)
+            .map(|idx| snap(OrderSide::Bid, 1_000 + idx % 100, 1))
+            .collect();
+        let asks: Vec<_> = (0..10_000)
+            .map(|idx| snap(OrderSide::Ask, 1_000 + idx % 100, 1))
+            .collect();
+        let levels = PriceLevelAggregates::from_snapshots(&bids, &asks);
+
+        assert_eq!(
+            levels.clearing_price(),
+            reference_clearing_price(&bids, &asks)
+        );
+
+        let candidate_count = 100usize;
+        let legacy_order_checks = candidate_count * (bids.len() + asks.len());
+        let level_sweep_visits = candidate_count + levels.bids.len() + levels.asks.len();
+        assert!(
+            legacy_order_checks > level_sweep_visits * 1_000,
+            "fixture must retain a three-order-of-magnitude work reduction"
+        );
+    }
+
+    /// Manual wall-clock evidence for the exact P-03 hotspot. The deterministic
+    /// operation-count assertion above is the portable CI guard; this ignored
+    /// test records host-specific release-mode measurements for the PR.
+    #[test]
+    #[ignore = "manual matcher performance measurement"]
+    fn benchmark_level_sweep_against_quadratic_reference() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let bids: Vec<_> = (0..40_000)
+            .map(|idx| snap(OrderSide::Bid, 1_000 + idx % 512, 1))
+            .collect();
+        let asks: Vec<_> = (0..40_000)
+            .map(|idx| snap(OrderSide::Ask, 1_000 + idx % 512, 1))
+            .collect();
+
+        let reference_started = Instant::now();
+        let expected = black_box(reference_clearing_price(&bids, &asks));
+        let reference_elapsed = reference_started.elapsed();
+
+        let sweep_started = Instant::now();
+        let actual = black_box(PriceLevelAggregates::from_snapshots(&bids, &asks).clearing_price());
+        let sweep_elapsed = sweep_started.elapsed();
+
+        assert_eq!(actual, expected);
+        eprintln!(
+            "clearing-price benchmark: orders={} levels=512 quadratic_ms={:.3} level_sweep_ms={:.3} speedup={:.2}x",
+            bids.len() + asks.len(),
+            reference_elapsed.as_secs_f64() * 1_000.0,
+            sweep_elapsed.as_secs_f64() * 1_000.0,
+            reference_elapsed.as_secs_f64() / sweep_elapsed.as_secs_f64(),
+        );
     }
 
     #[test]
