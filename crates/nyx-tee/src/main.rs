@@ -84,6 +84,13 @@ async fn main() -> Result<()> {
         "loaded config (solana_rpc_url redacted to host)"
     );
 
+    // Host-CPU profile (PERF-INV-01). Emitted before the handshake so a
+    // throttled/oversubscribed Phala host is visible in the boot log even if
+    // startup later fails. Compare `singlethread_mops_per_s` + `effective_cpus`
+    // + `nr_throttled` against the fast-baseline image to localize the 10×
+    // proving regression to the host without needing `phala ssh`.
+    nyx_tee::boot::log_host_cpu_profile();
+
     // ─── 1. dstack handshake ─────────────────────────────────────────
     // PR 4g.3 walk-back: the TEE Ed25519 signer (registered as
     // `vault_config.tee_pubkey`) doubles as the Solana fee-payer.
