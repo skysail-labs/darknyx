@@ -35,9 +35,9 @@ runbooks have landed.
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
 | P-01 | Perf | Vault + SDK + TEE | `remediation/vault-lifecycle` | Batch marker is read-only in every Tx D builder and live Tx D; distinct-shard Tx Ds share no writable key | Closed |
-| P-02 | Perf | TEE | `remediation/settlement-efficiency` | Build the N=16 tree once and extract every path; hash-count regression/benchmark | Open |
+| P-02 | Perf | TEE | `remediation/settlement-efficiency` | Build the N=16 tree once and extract every path; hash-count regression/benchmark | Code complete |
 | P-03 | Perf | Matcher | `remediation/matcher-performance` | Price-level aggregates and reusable demand curves preserve FIFO, tie-breaking, IOC/FOK/AON under differential properties | Open |
-| P-04 | Perf | TEE RPC | `remediation/settlement-efficiency` | Poll all pending signatures in one RPC request; remove confirmed entries; rebroadcast only overdue transactions | Open |
+| P-04 | Perf | TEE RPC | `remediation/settlement-efficiency` | Poll all pending signatures in one RPC request; remove confirmed entries; rebroadcast only overdue transactions | Code complete |
 
 ## Residual findings
 
@@ -900,6 +900,47 @@ Every remediation PR must record:
   discard in-flight orders and locator DB state and clean-reset devnet before
   using the prior image. The on-chain payload width, accounts, note commitment
   formula, circuits, and existing generic VALID_SPEND notes are unchanged.
+
+### `remediation/settlement-efficiency` — P-02, P-04
+
+- **Status.** Code complete; rows close after the image-59 live multi-match
+  evidence is attached and this PR merges.
+- **Invariant restored.** The TEE constructs the batch Merkle levels once and
+  extracts every fixed-width inclusion path from retained stack-backed storage.
+  A production N=16 batch therefore computes exactly 15 internal Poseidon
+  hashes instead of rebuilding the same tree for every match (240 hashes).
+  Tx D initial sends remain independent and bounded, but one confirmation state
+  machine polls the complete pending signature set per backoff round. It removes
+  confirmed entries immediately, reports reverts against the caller's original
+  match index, and rebroadcasts only overdue transactions still pending.
+- **Wire/circuit impact.** No HTTP/stream, order canonical, payload, account
+  layout, instruction data, ALT membership, circuit, zkey, VK, N=16 fixture,
+  note, root, or program change. This is an in-enclave computation/RPC
+  scheduling change only. Existing devnet state and in-flight wire artifacts
+  remain compatible. The CPU image pin advances from
+  `tee-v3-hardening-58` to `tee-v3-hardening-59`.
+- **Local evidence.** The optimized path builder matches the removed reference
+  algorithm byte-for-byte for every leaf at N=1/2/4/8/16, reconstructs the
+  public-input root, rejects N above the circuit maximum, and pins the N=16
+  internal hash count to 15 (versus the former 16 × 15 = 240). The in-process
+  RPC regression confirms the exact pending polls `[A,B,C] -> [B,C] -> [C]`,
+  proves A is never rebroadcast after confirmation, pins B/C rebroadcast counts
+  to one/two, and checks that a B revert is attributed to its original
+  transaction index. `cargo test -p nyx-tee` passes 256 library tests and every
+  integration target, including the new two-case batched-submit target and the
+  existing worker, real N=2 prover, N=16 fixture, transaction-size, scheduler,
+  HTTP, and stream coverage. `cargo test --workspace`, workspace clippy with
+  warnings denied, formatting, and diff hygiene pass. SBF and TypeScript gates
+  are not rerun because this slice changes no program or TypeScript source;
+  their relevant wire layouts remain covered by the Rust workspace regressions.
+- **Devnet/CVM evidence.** Pending image-59 live multi-match validation. No
+  vault upgrade or clean tree reset is required by the code itself because the
+  on-chain program and proof artifacts are unchanged; the isolated leaf-count
+  harness still starts from a clean reset/cold boot.
+- **Rollback.** Revert this PR and redeploy image 58. No notes, roots, orders,
+  signatures, payloads, proofs, accounts, or devnet program state are
+  invalidated. Rollback reopens P-02/P-04 and restores 240 per-batch path hashes
+  plus one signature-status RPC loop per Tx D.
 
 ## Mainnet release gates
 

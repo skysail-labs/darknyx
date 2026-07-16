@@ -7,7 +7,7 @@
 //! endian field-element encoding — the same shape `bn254ToBE32`
 //! produces on the TS side.
 
-use super::leaf::{compute_batch_leaf, compute_batch_root, LeafError};
+use super::leaf::{build_batch_merkle_paths, compute_batch_leaf, BatchMerklePaths, LeafError};
 use super::witness::{u64_to_be32, MatchSlotWitness};
 
 /// Computed leaves + root + the eight-element public-input vector,
@@ -18,6 +18,9 @@ pub struct BatchPublicInputs {
     pub leaves: Vec<[u8; 32]>,
     /// Merkle root over `leaves`. Equals `public_inputs_be[0]`.
     pub merkle_root: [u8; 32],
+    /// The same single tree build retained as all fixed-width settlement paths.
+    /// Consumers must not hash the levels again per match.
+    pub merkle_paths: BatchMerklePaths,
     /// snarkjs-format public input vector in circuit order.
     pub public_inputs_be: Vec<[u8; 32]>,
 }
@@ -36,7 +39,8 @@ pub fn build_batch_public_inputs(
         .iter()
         .map(compute_batch_leaf)
         .collect::<Result<Vec<_>, _>>()?;
-    let merkle_root = compute_batch_root(&leaves)?;
+    let merkle_paths = build_batch_merkle_paths(&leaves)?;
+    let merkle_root = merkle_paths.root();
     // Batch-level values (identical on every ACTIVE slot); read from slot 0.
     // Reject drift before the expensive witness/prove path. ORDER
     // must match the circuit `main` public list:
@@ -61,6 +65,7 @@ pub fn build_batch_public_inputs(
     Ok(BatchPublicInputs {
         leaves,
         merkle_root,
+        merkle_paths,
         public_inputs_be: vec![
             merkle_root,
             u64_to_be32(fee_rate_bps),
@@ -102,6 +107,8 @@ mod tests {
         slots[0].protocol_owner_commitment = owner;
         let pi = build_batch_public_inputs(&slots).unwrap();
         assert_eq!(pi.leaves.len(), 4);
+        assert_eq!(pi.merkle_paths.root(), pi.merkle_root);
+        assert_eq!(pi.merkle_paths.internal_hash_count(), 3);
         assert_eq!(pi.public_inputs_be.len(), 8);
         assert_eq!(pi.public_inputs_be[0], pi.merkle_root);
         let mut fee_be = [0u8; 32];

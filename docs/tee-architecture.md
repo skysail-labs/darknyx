@@ -852,7 +852,13 @@ For each batch with ≥1 real matches:
      different shards carry distinct `(tee_keypairs[j], merkle_tree[j])`, those
      Tx D's share **zero** writable accounts, so the leader can co-include up to
      K independent shard writes per block instead of hitting the single-tree,
-     single-fee-payer plateau.
+     single-fee-payer plateau. The worker builds the N=16 Merkle tree once (15
+     internal Poseidon hashes) and extracts all sixteen paths from the retained
+     levels; it does not rebuild the tree per match. Initial sends remain
+     independently bounded, while confirmation uses one shrinking
+     `getSignatureStatuses` request for all pending signatures per backoff
+     round. Confirmed entries leave the set immediately and only overdue
+     pending transactions are rebroadcast.
    - **Tx E — `close_batch_validity_marker(merkle_root)`** — once per batch,
      asynchronously at or after marker expiry. The durable sweeper reads the
      on-chain marker first and retains pre-expiry entries without submitting a

@@ -18,6 +18,8 @@ use solana_hash::Hash;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_transaction::Transaction;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
@@ -144,6 +146,178 @@ pub async fn send_and_confirm_with_rebroadcast(
         tokio::time::sleep(interval).await;
         interval = (interval * 2).min(std::time::Duration::from_secs(1));
     }
+}
+
+/// One confirmed transaction returned by
+/// [`send_and_confirm_many_with_rebroadcast`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfirmedTransaction {
+    /// Stable caller-provided index, used to map the result back to its match.
+    pub transaction_index: usize,
+    pub signature: String,
+    pub slot: Option<u64>,
+    pub elapsed_ms: u64,
+    pub rebroadcasts: u32,
+}
+
+struct PendingTransaction {
+    transaction_index: usize,
+    tx_b64: String,
+    signature: String,
+    started_at: Instant,
+    last_send: Instant,
+    rebroadcasts: u32,
+}
+
+/// Send independent signed transactions with bounded concurrency, then drive
+/// them through one shrinking confirmation state machine.
+///
+/// Every polling round makes exactly one `getSignatureStatuses` request for
+/// all transactions still pending. Confirmed entries are removed immediately,
+/// and only overdue pending transactions are rebroadcast (also with bounded
+/// concurrency). For N=16 Tx D this replaces up to sixteen independent status
+/// RPC loops with one batched request per backoff round.
+pub async fn send_and_confirm_many_with_rebroadcast(
+    rpc: &SolanaRpcClient,
+    txs: Vec<(usize, String)>,
+    timeout: Duration,
+    resend_every: Duration,
+    send_concurrency: usize,
+) -> Result<Vec<ConfirmedTransaction>, RpcError> {
+    if txs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let batch_started_at = Instant::now();
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(send_concurrency.max(1)));
+    let mut initial_sends = tokio::task::JoinSet::new();
+    for (transaction_index, tx_b64) in txs {
+        let rpc = rpc.clone();
+        let semaphore = semaphore.clone();
+        initial_sends.spawn(async move {
+            let started_at = Instant::now();
+            let _permit = semaphore
+                .acquire_owned()
+                .await
+                .map_err(|e| RpcError::Schema(format!("settle send semaphore closed: {e}")))?;
+            let signature = rpc.send_transaction(&tx_b64).await?;
+            Ok::<PendingTransaction, RpcError>(PendingTransaction {
+                transaction_index,
+                tx_b64,
+                signature,
+                started_at,
+                last_send: Instant::now(),
+                rebroadcasts: 0,
+            })
+        });
+    }
+
+    let mut pending = Vec::with_capacity(initial_sends.len());
+    while let Some(joined) = initial_sends.join_next().await {
+        pending
+            .push(joined.map_err(|e| {
+                RpcError::Schema(format!("settle initial-send task failed: {e}"))
+            })??);
+    }
+    // RPC request order and error indices stay deterministic even though the
+    // bounded initial sends can complete in any order.
+    pending.sort_unstable_by_key(|tx| tx.transaction_index);
+
+    let mut confirmed = Vec::with_capacity(pending.len());
+    let mut poll_interval = Duration::from_millis(250);
+    while !pending.is_empty() {
+        let signatures: Vec<String> = pending.iter().map(|tx| tx.signature.clone()).collect();
+        let statuses = rpc.get_signature_statuses(&signatures).await?;
+        let mut still_pending = Vec::with_capacity(pending.len());
+
+        for (position, tx) in pending.into_iter().enumerate() {
+            let status = statuses.get(position).and_then(Option::as_ref);
+            match status {
+                Some(status) if status.err.is_some() => {
+                    return Err(RpcError::Schema(format!(
+                        "settle tx[{}] ({}) reverted: err={:?}",
+                        tx.transaction_index, tx.signature, status.err
+                    )));
+                }
+                Some(status) if status.confirmed_at_commitment == Some(true) => {
+                    if tx.rebroadcasts > 0 {
+                        tracing::debug!(
+                            signature = %tx.signature,
+                            transaction_index = tx.transaction_index,
+                            rebroadcasts = tx.rebroadcasts,
+                            elapsed_ms = tx.started_at.elapsed().as_millis() as u64,
+                            "settle tx confirmed after batched rebroadcast(s)"
+                        );
+                    }
+                    confirmed.push(ConfirmedTransaction {
+                        transaction_index: tx.transaction_index,
+                        signature: tx.signature,
+                        slot: status.slot,
+                        elapsed_ms: tx.started_at.elapsed().as_millis() as u64,
+                        rebroadcasts: tx.rebroadcasts,
+                    });
+                }
+                _ => still_pending.push(tx),
+            }
+        }
+        pending = still_pending;
+
+        if pending.is_empty() {
+            break;
+        }
+        if batch_started_at.elapsed() >= timeout {
+            let pending_summary: Vec<_> = pending
+                .iter()
+                .map(|tx| (tx.transaction_index, tx.signature.as_str(), tx.rebroadcasts))
+                .collect();
+            return Err(RpcError::Schema(format!(
+                "{} settle transaction(s) did not confirm within {timeout:?}: {pending_summary:?}",
+                pending.len()
+            )));
+        }
+
+        // Mark the resend time before launching so a transient RPC failure
+        // cannot cause a tight resend loop. Failed rebroadcasts remain pending
+        // and are retried after the normal cadence.
+        let now = Instant::now();
+        let overdue: Vec<usize> = pending
+            .iter()
+            .enumerate()
+            .filter_map(|(position, tx)| {
+                (now.duration_since(tx.last_send) >= resend_every).then_some(position)
+            })
+            .collect();
+        let mut rebroadcasts = tokio::task::JoinSet::new();
+        for position in overdue {
+            pending[position].last_send = now;
+            let rpc = rpc.clone();
+            let tx_b64 = pending[position].tx_b64.clone();
+            let semaphore = semaphore.clone();
+            rebroadcasts.spawn(async move {
+                let permit = semaphore.acquire_owned().await;
+                let result = match permit {
+                    Ok(_permit) => rpc.send_transaction_opts(&tx_b64, true).await,
+                    Err(e) => Err(RpcError::Schema(format!(
+                        "settle rebroadcast semaphore closed: {e}"
+                    ))),
+                };
+                (position, result)
+            });
+        }
+        while let Some(joined) = rebroadcasts.join_next().await {
+            let (position, result) = joined
+                .map_err(|e| RpcError::Schema(format!("settle rebroadcast task failed: {e}")))?;
+            if result.is_ok() {
+                pending[position].rebroadcasts += 1;
+            }
+        }
+
+        tokio::time::sleep(poll_interval).await;
+        poll_interval = (poll_interval * 2).min(Duration::from_secs(1));
+    }
+
+    confirmed.sort_unstable_by_key(|tx| tx.transaction_index);
+    Ok(confirmed)
 }
 
 /// Poll `getSignatureStatuses` until every signature in `sigs` is

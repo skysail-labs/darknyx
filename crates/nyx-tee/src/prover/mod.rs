@@ -64,8 +64,8 @@ pub use groth16::{ProofWithInputs, Prover, ProverError, PRODUCTION_BATCH_N};
 pub use icicle_prover::IcicleMatchBatchProver;
 pub use inputs::{build_batch_public_inputs, BatchPublicInputs};
 pub use leaf::{
-    compute_batch_leaf, compute_batch_root, merkle_inclusion_path, InclusionPath, LeafError,
-    DOMAIN_BATCH_ROOT, DOMAIN_LEAF_V2,
+    build_batch_merkle_paths, compute_batch_leaf, compute_batch_root, BatchMerklePaths, LeafError,
+    DOMAIN_BATCH_ROOT, DOMAIN_LEAF_V2, MAX_BATCH_DEPTH, MAX_BATCH_LEAVES,
 };
 #[cfg(feature = "rapidsnark")]
 pub use rapidsnark_prover::RapidsnarkMatchBatchProver;
