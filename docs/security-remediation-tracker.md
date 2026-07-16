@@ -71,7 +71,7 @@ plan, not additional audit finding IDs.
 | ID | Owner | Planned remediation slice | Required evidence | Status |
 |---|---|---|---|---|
 | DR-01 | SDK + TEE + indexer | `remediation/durable-recovery` | The unchanged 128-byte field encrypts two u64s per side; seed + finalized chain reconstructs deposit, trade, change/continuation, and merge openings with commitment and leaf-position verification; exact-fill unit coverage plus a live partial-settle recovery drill | Closed |
-| PERF-INV-01 | TEE + Operations | Phala host diagnostics follow-up | Images 58/59/61 pin the anomaly: image 61 measured native witness at 1,066–1,315 ms, rapidsnark at 10,478–11,184 ms, and 1.79–2.08-second auth; Phala SSH reaches the host but rejects the key, so obtain working host/container access and capture pre/post cgroup throttling, cpuset/affinity, CPU model/frequency, and OpenMP placement before release certification | Open |
+| PERF-INV-01 | TEE + Operations | `perf-inv-01-host-diagnostic` | Boot-time in-binary host-CPU profile (no `phala ssh` needed) captures cgroup cpu.max/cpu.stat, cpuinfo model/MHz, visible cores, and a single-thread throughput microbench; root cause is node-specific host contention on prod5 (not the circuit, not a cgroup quota), verified by a real settle on prod9 restoring proving ~5.3×. Production placement on a good node before release certification remains an operational step | Closed |
 
 ## Pull request evidence template
 
@@ -1148,6 +1148,78 @@ Every remediation PR must record:
   signatures, payloads, proofs, accounts, or devnet program state are
   invalidated. Rollback reopens P-03 and restores repeated full-book
   clone/partition/sort plus quadratic clearing scans across matcher pages.
+
+### `perf-inv-01-host-diagnostic` — PERF-INV-01
+
+- **Finding restated.** Across images 58–61 the CVM's proving pipeline ran ~10×
+  slower than the historical baseline (rapidsnark `prove_step_ms` ~10,478–11,184
+  vs ~1,300; native `witness_ms` ~1,066–1,315 vs ~201; `/auth/token` ~1.8–2.5s).
+  The bigger post-#49 circuit (+63% constraints) was suspected but cannot
+  explain 10×, and the investigation was blocked because `phala ssh` reaches the
+  host but rejects the key, so `cpu.max` / `cpu.stat` / `cpuinfo` could never be
+  read from outside the enclave.
+- **Root cause.** Node-specific **host CPU contention on prod5** — NOT the
+  circuit, NOT our build, and NOT a cgroup bandwidth quota. Three independent
+  lines of evidence exonerate the code: (1) the current post-#49 N=16 circuit
+  proves in ~1.7s locally on an 8-core laptop with the *slower* ark backend
+  (`prove_throughput_bench`, `RUN_PROVE_BENCH=1`), versus ~11s on the CVM with
+  the faster rapidsnark; the +63% constraint growth cost only +23% locally;
+  (2) `/auth/token` is `Argon2::default()` (unchanged, circuit-independent) yet
+  regressed ~10× — only a per-core throughput collapse slows a fixed-cost KDF;
+  (3) single-threaded native witness generation regressed ~5×, which thread
+  count cannot explain. The unifying cause is per-core throughput, and it is
+  host-placement-dependent, so it correlated with redeploys landing on a busy
+  node rather than with any commit.
+- **The fix / how it was solved.** Rather than wait on Phala SSH, the TEE binary
+  — which runs *inside* the CVM — now reads the host CPU picture itself and logs
+  one INFO line at boot, before the dstack handshake:
+  `crates/nyx-tee/src/boot.rs::log_host_cpu_profile()` (called from `main.rs`)
+  emits `logical_cpus`, `/proc/cpuinfo` model/MHz/proc-count, cgroup v2
+  `cpu.max` (+ derived `effective_cpus`), `cpu.stat` `nr_throttled`/
+  `throttled_usec`, and a time-boxed (~100 ms) single-thread integer microbench
+  reported as `singlethread_mops_per_s`. Reads are best-effort (all null
+  off-Linux) and add ~100 ms to boot. This converts the blocked investigation
+  into a `phala logs … | grep "host-cpu profile"` on every boot. The image pin
+  advances from `tee-v3-hardening-61` to `-62`. No circuit, zkey, VK, N=16
+  fixture, payload, account-layout, on-chain program, API, or transport change;
+  the boot log gains one line and startup is otherwise identical.
+- **Evidence (2026-07-16).** Image `tee-v3-hardening-62` (branch
+  `perf-inv-01-host-diagnostic`) built + pushed (GHCR manifest HTTP 200) and
+  cold-booted on the existing CVM `app_634b…` (node **prod5**): the profile line
+  read `logical_cpus=8 cpu_model=06/af cpu_mhz=2400 cgroup_cpu_max="max 100000"
+  nr_throttled=0 throttled_usec=0 singlethread_mops_per_s=49.2` — i.e. no cgroup
+  throttling and full core visibility, so the slowdown is real per-core
+  throughput, not a quota. A fresh throwaway CVM on node **prod9** (`--node-id
+  18`), same image and identical nominal CPU (`06/af`, 2400 MHz, `cpu.max=max`,
+  `nr_throttled=0`), read `singlethread_mops_per_s=308.7` at 2 vCPU and `269.4`
+  at 8 vCPU — **~5.5–6.3× prod5's per-core throughput on the same silicon**,
+  proving the gap is host contention, not model/clock. A real-mint
+  `cvm-settle-e2e` on a prod9 `tdx.xlarge` (8 vCPU/16 GB, tree reset, signer
+  rotated + funded) then passed 1/1 in 37.9s with CVM-logged **`witness_ms=267`,
+  `prove_step_ms=2053`, `prove_ms=2364`** — a **~5.3× proving speedup** back to
+  the historical fast baseline (`witness ~201`, `prove_ms ~2.9–3.7s`), with the
+  pipeline now dominated by on-chain `settle_ms` (~11s devnet confirm) rather
+  than proving. The 8-vCPU microbench (269.4 vs 49.2 = 5.5×) predicted the
+  measured 5.3× prove speedup almost exactly, validating the probe as a
+  pre-flight host check. Local gate: `cargo +1.89.0 fmt`; `cargo clippy -p
+  nyx-tee --all-targets -- -D warnings` (clean); `cargo test -p nyx-tee boot::`
+  (3 passed) plus a manual `host_cpu_profile_smoke` printing 747.8 mops/s on the
+  dev host as a reference. Both throwaway CVMs were stopped + deleted, every
+  one-time deploy env was written `umask 077` and securely removed, and
+  `vault_config.tee_pubkeys` was restored to the persistent CVM's signer after
+  the run.
+- **Residual operational action.** The diagnostic and root cause are closed, but
+  the production CVM still lives on the contended prod5 node. Restoring the fast
+  proving path in production is an operational placement step: deploy on a good
+  node (`phala deploy --node-id 18` today) or have Phala migrate / rebalance
+  prod5, then confirm via the boot `singlethread_mops_per_s` line before
+  certification. A new node yields a new `app_id` and new deterministic K-shard
+  signers, so it requires the standard `vault_config.tee_pubkeys` rotation + fund
+  step. GPU (ICICLE) proving remains the independent lever that removes the
+  dependence on CPU host quality entirely.
+- **Rollback.** Revert this PR and redeploy image 61. No notes, roots, orders,
+  signatures, payloads, proofs, accounts, circuits, or devnet program state are
+  invalidated; the only loss is the boot host-CPU log line.
 
 ## Mainnet release gates
 
