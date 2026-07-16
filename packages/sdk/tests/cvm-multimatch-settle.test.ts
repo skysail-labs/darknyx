@@ -362,8 +362,13 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     expect(accepted, "some orders rejected").toBe(orders.length);
     const firstOrderId = (orders[0] as { order_id: string }).order_id;
 
-    // Each match appends ≥ note_c + note_d (2 leaves); wait for all M.
-    const wantLeaves = depositCount + 2 * MATCHES;
+    // This fixture fully fills both inputs at a positive 30-bps fee. Every
+    // confirmed match therefore appends note_c + note_d, one buyer quote
+    // change, and the base + quote fee notes (5 leaves). Waiting for the old
+    // two-leaf lower bound could observe an early sibling and query a later
+    // order before its independently-driven Tx D reached finality.
+    const outputLeavesPerMatch = 5;
+    const wantLeaves = depositCount + outputLeavesPerMatch * MATCHES;
     const settleStart = Date.now();
     let finalCount = depositCount;
     let sawPendingSettlement = false;
@@ -383,7 +388,7 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     const settleWallMs = Date.now() - settleStart;
     console.log(
       `  · leaf_count ${depositCount} → ${finalCount} (wanted ≥${wantLeaves}) in ${settleWallMs}ms wall ` +
-        `→ ~${((finalCount - depositCount) / 2 / (settleWallMs / 1000)).toFixed(2)} matches/s end-to-end`,
+        `→ ~${((finalCount - depositCount) / outputLeavesPerMatch / (settleWallMs / 1000)).toFixed(2)} matches/s end-to-end`,
     );
     console.log(
       `  · READ PER-Tx-D + per-stage timing: phala cvms logs <cvm> | grep -E "settle Tx D confirmed|settle pipeline timing"`,
