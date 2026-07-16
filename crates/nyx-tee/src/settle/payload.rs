@@ -21,10 +21,12 @@
 //! `buyer/seller_change_amt`, `buyer/seller_fee_amt`, `clearing_price`) were
 //! dropped from the payload — they're proven in-circuit + bound by the note
 //! commitments, and putting them in the (public, on-chain) settle ix leaked
-//! every trade size. The domain tag bumped `v6`→`v7`. Change-amount recovery
-//! (Proposal B) then appended the 128-byte `fill_recovery` field and bumped
+//! every trade size. The domain tag bumped `v6`→`v7`. Output recovery then
+//! appended the 128-byte `fill_recovery` field and bumped
 //! `v7`→`v8` (424→552 bytes). Settlement payload v9 removed the two
-//! vestigial nullifiers, shrinking the wire shape to 488 bytes.
+//! vestigial nullifiers, shrinking the wire shape to 488 bytes. Recovery v2
+//! repacks those same 128 bytes with two u64s per side; the payload size and
+//! canonical hash domain remain v9 because the signed bytes did not change.
 //!
 //! ## Two distinct field orderings (do not conflate)
 //!
@@ -43,8 +45,7 @@ use sha2::{Digest, Sha256};
 /// Domain tag for the canonical hash. **Do not change** — on-chain
 /// verification rejects any hash computed with a different tag. Bumped
 /// `v6`→`v7` when amount-privacy (P3b) dropped the seven plaintext amounts;
-/// `v7`→`v8` when change-amount recovery (Proposal B) appended the 128-byte
-/// `fill_recovery` field (the on-chain encrypted change_amount backstop);
+/// `v7`→`v8` when output recovery appended the 128-byte `fill_recovery` field;
 /// `v8`→`v9` when the two unused nullifiers left the settle payload.
 pub const CANONICAL_DOMAIN: &[u8] = b"nyx-match-v9";
 
@@ -73,11 +74,11 @@ pub struct MatchResultPayload {
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
     pub batch_slot: u64,
-    /// Change-amount recovery (Proposal B): the per-fill X25519-ECIES bundle
-    /// `ephemeral_pubkey(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ zero_pad(24)`
+    /// Recovery v2: the per-fill X25519-ECIES bundle
+    /// `ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "NYXREC02"`
     /// (see `crate::settle::fill_recovery::FillCiphertext::to_payload_bytes`).
-    /// All-zero when the fill has no recoverable change. 128 (not 104) because
-    /// Anchor's borsh 0.10 only serializes `[u8; N]` for `N ≤ 32` then 64/128.
+    /// Each side encrypts `(trade, change)`; all-zero only when neither order
+    /// supplies a viewing key.
     pub fill_recovery: [u8; 128],
 }
 
@@ -117,7 +118,7 @@ impl MatchResultPayload {
         h.update(self.seller_relock_order_id);
         h.update(self.seller_relock_expiry.to_le_bytes());
         h.update(self.batch_slot.to_le_bytes());
-        h.update(self.fill_recovery); // v8: change-amount recovery bundle
+        h.update(self.fill_recovery); // v8: encrypted output-recovery bundle
         h.finalize().into()
     }
 }

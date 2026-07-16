@@ -74,8 +74,9 @@ Order intent never appears on-chain, so you follow fills through the enclave:
   your fills **by order ID** (derived from your own seed), so the SDK can
   "backfill then tail."
 
-Partial fills continue on their own: the matcher rotates your residual forward
-using the next anchor and re-matches it on the following tick — no resubmission.
+Partial fills continue on their own: the matcher derives the residual from the
+consumed input, atomically re-locks it, and re-matches it on the following tick
+without resubmission.
 
 ### 5. Withdraw
 

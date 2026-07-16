@@ -69,7 +69,8 @@ import {
   OrderType,
 } from "../src/orders/canonical.js";
 import { fetchOrderFills } from "../src/fills/history.js";
-import { recoverChangeFromChain } from "../src/fills/recover.js";
+import { recoverNotesFromChain } from "../src/fills/cold-recovery.js";
+import { recoverFillFromChain } from "../src/fills/recover.js";
 import {
   subscribeFills,
   type FillsSubscription,
@@ -126,6 +127,13 @@ const SETTLE_TIMEOUT_MS = Number(
 // half works against any deployed CVM (it only reads the chain).
 const INDEXER_URL = (process.env.NYX_INDEXER_URL ?? "").replace(/\/$/, "");
 const FILLS = INDEXER_URL !== "";
+
+// Indexer-free disaster-recovery drill (opt-in because finalized-chain polling
+// lengthens the billable test). This deliberately makes the buyer order partial
+// and proves that seed + finalized Solana history alone reconstructs its
+// deposit, trade, and continuation openings. No live memo or indexer row is
+// supplied to the recovery routine.
+const CHAIN_RECOVERY = process.env.NYX_CVM_CHAIN_RECOVERY === "1";
 
 // Cross-batch re-match (opt-in, requires FILLS). After the buyer's residual
 // relocks onto an anchor in batch 1, submit a SECOND ask so the matcher
@@ -202,18 +210,20 @@ maybeDescribe(
         const bidPrice = (anchor * 12n) / 10n;
         const askPrice = (anchor * 8n) / 10n;
         const PRICE_SCALE = BigInt(cfg.market.priceScale);
-        // In FILLS mode we validate a derived partial-fill CONTINUATION: the
+        // In fills or chain-recovery mode we validate a derived partial-fill
+        // CONTINUATION: the
         // buyer over-buys (bids 2× the seller's qty) so only BASE_QTY crosses and
         // the residual relocks onto a change note derived from the consumed
         // input inner. This exercises the live memo's consumed-input binding.
-        // Without FILLS we keep the simpler full-fill settle check (BUY_QTY=BASE_QTY).
+        // Without either mode we keep the simpler full-fill settle check
+        // (BUY_QTY=BASE_QTY).
         // Override the multiplier with NYX_CVM_BUY_MULT.
         const BUY_MULT = BigInt(
-          process.env.NYX_CVM_BUY_MULT ?? (FILLS ? "2" : "1"),
+          process.env.NYX_CVM_BUY_MULT ?? (FILLS || CHAIN_RECOVERY ? "2" : "1"),
         );
         const BUY_QTY = BASE_QTY * BUY_MULT;
         console.log(
-          `  · BASE_QTY=${BASE_QTY} buyQty=${BUY_QTY} (mult ${BUY_MULT}${FILLS ? ", partial-fill continuation" : ""}) bid=${bidPrice} ask=${askPrice} feeBps=${FEE_RATE_BPS}`,
+          `  · BASE_QTY=${BASE_QTY} buyQty=${BUY_QTY} (mult ${BUY_MULT}${FILLS || CHAIN_RECOVERY ? ", partial-fill continuation" : ""}) bid=${bidPrice} ask=${askPrice} feeBps=${FEE_RATE_BPS}`,
         );
 
         // Number of Merkle shards (K). Deposits + settle outputs route across
@@ -230,6 +240,9 @@ maybeDescribe(
           startCount,
           "tree not empty — run devnet-setup (reset) first",
         ).toBe(0);
+        const recoveryFloorSlot = CHAIN_RECOVERY
+          ? await conn.getSlot("finalized")
+          : undefined;
 
         // For the cross-batch re-match we need a 2nd ask, so a 3rd deposit
         // (seller2). It's pre-deposited up-front: its VALID_INPUT root stays in
@@ -646,6 +659,71 @@ maybeDescribe(
           );
         }
 
+        // Permanent recovery backstop: scan finalized vault history from before
+        // the deposits, identify only notes owned by the buyer seed, decrypt the
+        // recovery-v2 settlement tuple, and rebuild the partial-fill DAG. This
+        // has no dependency on the live stream, mutable CVM state, or indexer.
+        if (CHAIN_RECOVERY) {
+          let recovered:
+            | Awaited<ReturnType<typeof recoverNotesFromChain>>
+            | undefined;
+          await t.step("seed + finalized-chain cold recovery", async () => {
+            const deadline = Date.now() + 120_000;
+            while (Date.now() < deadline) {
+              recovered = await recoverNotesFromChain({
+                connection: conn,
+                programId: vaultProgramId,
+                masterSeed: buyer.masterSeed,
+                baseMint: baseMint.toBytes(),
+                quoteMint: quoteMint.toBytes(),
+                ownerCommitmentBlinding: buyer.ownerBlinding,
+                sinceSlot: recoveryFloorSlot,
+              });
+              if (
+                recovered.recovered.deposits >= 1 &&
+                recovered.recovered.trade >= 1 &&
+                recovered.recovered.change >= 1
+              ) {
+                break;
+              }
+              await new Promise((r) => setTimeout(r, 3000));
+            }
+          });
+          expect(
+            recovered,
+            "cold recovery did not return a result",
+          ).toBeTruthy();
+          expect(recovered!.recovered.deposits).toBeGreaterThanOrEqual(1);
+          expect(recovered!.recovered.trade).toBeGreaterThanOrEqual(1);
+          expect(recovered!.recovered.change).toBeGreaterThanOrEqual(1);
+          expect(recovered!.unresolvedSettlements).toBe(0);
+
+          const trade = recovered!.notes.find(
+            (note) =>
+              note.orderId === buyerOrder.order_id &&
+              Buffer.from(note.tokenMint).equals(
+                Buffer.from(baseMint.toBytes()),
+              ),
+          );
+          const change = recovered!.notes.find(
+            (note) =>
+              note.orderId === buyerOrder.order_id &&
+              Buffer.from(note.tokenMint).equals(
+                Buffer.from(quoteMint.toBytes()),
+              ),
+          );
+          expect(trade?.amount).toBe(BASE_QTY);
+          expect(trade?.leafIndex).toBeDefined();
+          expect(
+            change?.amount,
+            "partial-fill change was not recovered",
+          ).toBeGreaterThan(0n);
+          expect(change?.leafIndex).toBeDefined();
+          console.log(
+            `  · cold recovery OK — deposit + trade ${trade!.amount} + change ${change!.amount} rebuilt from finalized chain only`,
+          );
+        }
+
         // ── 7. fills delivery (durable indexer + live WS) ──────────────
         if (FILLS) {
           const buyerId = buyerOrder.order_id;
@@ -737,16 +815,16 @@ maybeDescribe(
             `  · fills OK — indexer located + WS memo verified buyer change note ${change!.changeNoteCommitment!.slice(0, 12)}… (amount ${memoRec!.amount}, consumed ${memoRec!.consumedCommitment!.slice(0, 12)}…)`,
           );
 
-          // ── 7b. ON-CHAIN CHANGE-AMOUNT RECOVERY (Proposal B) ─────────
+          // ── 7b. ON-CHAIN TRADE + CHANGE RECOVERY V2 ─────────────────
           // The live memo above proves the WS tail. This proves the PERMANENT
           // backstop: a client with the seed + consumed input opening recovers
-          // the SAME change note by decrypting the on-chain ciphertext the
-          // indexer surfaced (`change.ephemeralPubkey` + `change.changeEnc`) and
+          // the trade note AND the same change note by decrypting the on-chain
+          // ciphertext (`change.ephemeralPubkey` + `change.outputEnc`) and
           // self-verifying it against the on-chain commitment — no memo, no live
           // WS, surviving a CVM redeploy. This replaced the retired durable
           // memo-replay log (`GET /fills/replay`).
           await t.step(
-            "on-chain change-amount recovery (Proposal B)",
+            "on-chain trade + change recovery v2",
             async () => {
               const coldStore = new InMemoryNoteStore();
               const inputRecord = {
@@ -758,7 +836,7 @@ maybeDescribe(
                 leafIndex: BigInt(buyerNote.leafIndex),
               };
               await coldStore.put(inputRecord);
-              const recovered = await recoverChangeFromChain(change!, {
+              const recovered = await recoverFillFromChain(change!, {
                 masterSeed: buyer.masterSeed,
                 candidateInputs: [inputRecord],
                 baseMint: baseMint.toBytes(),
@@ -766,23 +844,25 @@ maybeDescribe(
               });
               expect(
                 recovered,
-                "recoverChangeFromChain did not recover the buyer change note from the on-chain ciphertext (is the CVM built from the recovery commits?)",
+                "recoverFillFromChain did not recover the buyer outputs from the on-chain ciphertext (is the CVM built from the recovery-v2 image?)",
               ).toBeTruthy();
+              expect(recovered!.trade.amount).toBe(BASE_QTY);
               // The chain-recovered amount must match the live memo byte-for-byte.
-              expect(recovered!.amount).toBe(memoRec!.amount);
+              expect(recovered!.change!.amount).toBe(memoRec!.amount);
               // And it lands spendable in a cold store.
-              await coldStore.put(recovered!);
+              await coldStore.put(recovered!.trade);
+              await coldStore.put(recovered!.change!);
               const stored = await coldStore.get(change!.changeNoteCommitment!);
               expect(stored?.amount).toBe(memoRec!.amount);
               console.log(
-                `  · on-chain recovery OK — decrypted + input-derived amount ${recovered!.amount} into a cold store (no memo)`,
+                `  · on-chain recovery OK — trade ${recovered!.trade.amount} + change ${recovered!.change!.amount} recovered into a cold store (no memo)`,
               );
             },
           );
 
           // ── 8. cross-batch RE-MATCH (opt-in) ─────────────────────────
-          // The buyer's residual relocked onto anchor[0] in batch 1 and stays in
-          // the book. Submit a SECOND ask: the matcher must re-match that
+          // The buyer's output-derived residual was relocked in batch 1 and
+          // stays in the book. Submit a SECOND ask: the matcher must re-match that
           // relocked note (note_e from batch 1) in a NEW batch and settle it
           // again — the real proof that a partial fill continues across batches,
           // not just that one continuation note is minted.

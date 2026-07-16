@@ -93,8 +93,9 @@ You will not write correct code here without the mental model. Required:
   `scripts/rotate-tee-pubkey.mjs`, `scripts/deploy-devnet.sh`.
 * **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)**
   — the fills-delivery + trade-history design, now **implemented**
-  (deterministic HD order_ids + the per-account `/v1/stream` fills channel). Post amount-privacy +
-  on-chain change-amount recovery (Proposal B), the off-TEE `packages/indexer`
+  (deterministic HD order_ids + the per-account `/v1/stream` fills channel).
+  Recovery v2 restores deposit, trade, change/continuation, and merge openings
+  from seed + chain; the off-TEE `packages/indexer`
   is an **OPTIONAL by-order_id commitment LOCATOR** with no consumer today (the
   daemon uses live streams instead) — the durable amount source is the chain.
   Read the top-of-doc as-built deltas; the lower half is the superseded original
@@ -612,8 +613,8 @@ but `light-poseidon`'s `hash_bytes_be` rejects values ≥ the modulus →
 * **Mint pubkeys split into two 128-bit halves** (`pubkey_to_fr_pair`) — a
   256-bit pubkey can't fit one Fr element.
 * **Owner commitments + nullifiers are Poseidon outputs** → Fr-safe by
-  construction. Intake Fr-validates the order's `inner_hash` + every anchor
-  `inner_hash` (they're hashed). The nullifier is used by the withdraw path;
+  construction. Intake Fr-validates the order's consumed input `inner_hash`.
+  Match/merge output inners are Poseidon-derived. The nullifier is used by the withdraw path;
   payload v9 removed it from Tx D because settlement replay protection is
   commitment-keyed.
 
@@ -751,15 +752,18 @@ it after; never commit a secret).**
 > `price_scale`, tick, minimum size, circuit-breaker bounds, and the trading kill
 > switch live in the `[b"market_config", base_mint, quote_mint]` `MarketConfig`
 > PDA, initialized and updated by the operations admin. The TEE reads both
-> accounts at boot and refuses an explicitly disabled market. A live finalized
-> re-poll is delivered by the later daemon-trust remediation slice. Keep the
+> accounts at boot and refuses an explicitly disabled market. The daemon
+> refreshes finalized TEE keys every minute and pauses placement on mismatch or
+> stale attestation state. Keep the
 > Rust/TypeScript account parsers and instruction builders byte-identical to the
 > on-chain layouts; a `VaultConfig` layout change requires a clean devnet
 > re-foundation (`close_vault_config` → `initialize`).
 
-> **CodeRabbit** reviews via `.coderabbit.yaml` (path instructions encode the
-> §5/§6/§7/§8 invariants). Treat its findings like any review — verify each
-> against the code before acting.
+> **Temporary private-repo validation policy (2026-07).** Organization artifact
+> quota and private CodeRabbit review are unavailable. Run the reasonable
+> `.github/workflows/pr-checks.yml` equivalents locally before merging; do not
+> wait for, poll, or treat missing GitHub checks/CodeRabbit reviews as a blocker.
+> Resume those hosted gates only after the owner restores the plans.
 
 ---
 

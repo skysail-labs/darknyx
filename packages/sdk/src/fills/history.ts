@@ -1,29 +1,24 @@
 /**
  * Durable trade history — the "backfill" half of "backfill then tail".
  *
- * Amount-privacy (P3b): the off-TEE indexer (`packages/indexer`) is now a pure
- * COMMITMENT LOCATOR. Its rows carry no amounts — only `{ orderId, side,
- * matchId, isPartialFill, changeNoteCommitment, batchSlot }`. The private amount
- * is encrypted in the settlement recovery envelope. A live `FillMemo` names
- * the exact consumed input so the SDK can derive and verify the v3 output.
+ * Amount-privacy (P3b): the off-TEE indexer (`packages/indexer`) is a pure
+ * COMMITMENT LOCATOR. Its rows carry no amounts. Recovery v2 encrypts the
+ * side's trade + change tuple in the settlement envelope and locates the exact
+ * consumed input plus both output commitments.
  *
  * So this module's job is narrowed:
  *
  *   1. Gap-scan: derive `deriveOrderId(seed, 0..)`, query the indexer for each,
  *      stop after `gapLimit` consecutive empty order ids. Full set of FILLS
- *      (order_id + change-note commitment + slot) from the seed alone — no
+ *      (order_id + input/output commitments + finalized slot) from the seed
+ *      alone — no
  *      persisted order-id list (HD-wallet style).
- *   2. Return the located fills + a coarse slot cursor for "tail from here".
- *      The client populates its `NoteStore` from verified live memos or by
- *      decrypting located ciphertext and deriving outputs from known inputs.
+ *   2. Return the located fills + the finalized Solana slot cursor.
+ *      The client populates its `NoteStore` by decrypting located ciphertext
+ *      and deriving outputs from the consumed input opening.
  *
- * Gap recovery for a fill the client was offline for (memo missed) comes from
- * the PERMANENT on-chain ciphertext (change-amount recovery, Proposal B):
- * surfaced here as `IndexerFill.{ephemeralPubkey, changeEnc}`, which
- * `recoverChangeFromChain` (`fills/recover.ts`) decrypts + self-verifies into a
- * spendable note. It survives a CVM redeploy, so it's the durable backstop; the
- * live fills-channel push is the low-latency fast path. (The old durable
- * memo-replay log + `GET /fills/replay` were retired in favour of this.)
+ * The permanent on-chain ciphertext survives a CVM redeploy; the live
+ * fills-channel push remains only the low-latency fast path.
  */
 
 import { deriveOrderId } from "../keys/key-generators.js";
@@ -37,17 +32,25 @@ export interface IndexerFill {
   side: "buyer" | "seller";
   matchId: string;
   signature: string;
+  /** Finalized Solana transaction slot. This, not `batchSlot`, is the
+   * incremental history cursor. */
+  slot: number;
+  /** Exact consumed input and always-present trade output commitments. */
+  inputNoteCommitment: string;
+  tradeNoteCommitment: string;
   /** `true` when this side received a change note (partial fill). */
   isPartialFill: boolean;
   /** 32-byte hex of the minted change note, or `null` when the side filled exactly. */
   changeNoteCommitment: string | null;
   batchSlot: string;
-  /** Change-amount recovery (Proposal B): the shared ephemeral X25519 pubkey
-   *  (hex) and THIS side's 36-byte encrypted change_amount (hex). The amount is
-   *  recoverable from the chain alone via `recoverChangeFromChain` — no FillMemo
-   *  needed. `null` when this side carries no on-chain ciphertext. */
+  /** Recovery v2: shared ephemeral X25519 pubkey and THIS side's 44-byte
+   * encrypted `(trade, change)` tuple. */
   ephemeralPubkey?: string | null;
-  changeEnc?: string | null;
+  outputEnc?: string | null;
+  /** Leaf positions are available from direct-chain recovery, and may be
+   * omitted by a lightweight locator indexer. */
+  tradeLeafIndex?: string | null;
+  changeLeafIndex?: string | null;
 }
 
 /** Fetch an order's fills from the indexer. */
@@ -80,20 +83,17 @@ export interface BackfillOptions {
 }
 
 export interface BackfillResult {
-  /** Located change-note fills (order_id + commitment + slot + opaque recovery
-   *  ciphertext). `startFillsSync` turns recoverable entries into spendable
-   *  openings when their consumed input is known locally. Only fills that
-   *  minted a change note are included (exact fills carry no change note). */
+  /** Located fills (input/output commitments + opaque recovery ciphertext).
+   * Exact fills are included because their trade note is recoverable too. */
   located: IndexerFill[];
   /** Highest order index that returned any fills (for a future incremental scan). */
   highestUsedIndex: number;
-  /** Highest batch slot seen (a coarse cursor for "tail from here"). */
+  /** Highest finalized Solana transaction slot seen. */
   cursorSlot: number;
 }
 
 /**
- * Gap-scan order ids from the seed and LOCATE every change-note fill (commitment
- * + order_id + slot + recovery ciphertext). This locator alone does not
+ * Gap-scan order ids from the seed and LOCATE every fill. This locator alone does not
  * reconstruct spendable openings; `startFillsSync` decrypts and verifies them
  * against known consumed inputs, while `subscribeFills` supplies the live path.
  *
@@ -122,11 +122,12 @@ export async function backfillHistory(
       consecutiveEmpty = 0;
       highestUsedIndex = n;
       for (const fill of fills) {
-        // Guard against a malformed batchSlot poisoning the cursor: Math.max
-        // with NaN is NaN, which would break downstream incremental sync.
-        const slot = Number(fill.batchSlot);
-        if (Number.isFinite(slot)) cursorSlot = Math.max(cursorSlot, slot);
-        if (fill.changeNoteCommitment) located.push(fill);
+        // The payload's batchSlot is the circuit slot index (0..15), not a
+        // chain cursor. Fail closed on malformed locator metadata.
+        if (Number.isSafeInteger(fill.slot) && fill.slot >= 0) {
+          cursorSlot = Math.max(cursorSlot, fill.slot);
+        }
+        located.push(fill);
       }
     }
     n += 1;

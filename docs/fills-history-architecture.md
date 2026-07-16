@@ -1,8 +1,8 @@
 # Fills delivery + trade history — architecture
 
-> Status: **LIVE PATH IMPLEMENTED**. Canonical-order v2 replaces the retired
-> anchor memo with a consumed-input-bound v3 memo. Full cold seed-plus-chain
-> recovery of every output remains the next mainnet-gated remediation slice.
+> Status: **LIVE + COLD PATHS IMPLEMENTED**. Canonical-order v2 replaces the
+> retired anchor memo with a consumed-input-bound v3 memo; recovery v2 rebuilds
+> deposit, trade, change/continuation, and merge openings from seed + chain.
 >
 > **As-built deltas from the original design below:**
 > - **The account↔order_id registry (§4) was DROPPED.** Because order ids are
@@ -20,25 +20,26 @@
 >   settle ix no longer carries any plaintext amount (trade size / change / fee /
 >   price) — they're proven in-circuit and bound by the note commitments, so the
 >   untrusted off-TEE indexer can no longer see them (by design). An indexer row
->   is now `{ order_id, side, match_id, is_partial_fill, change_note_commitment,
->   batch_slot }` PLUS the opaque on-chain recovery ciphertext (next bullet).
->   `backfillHistory` LOCATES fills (which order_ids minted which change-note
->   commitments); the live `FillMemo` names the exact consumed input commitment
->   and role. `verifyFillMemo` derives `Poseidon3(24, input_inner, role)` and
->   reproduces both commitments before the note enters the `NoteStore`.
-> - **On-chain change-amount recovery (Proposal B) — durable amount source.** The
->   change `amount` no longer lives ONLY in the (ephemeral) FillMemo. The settle
->   ix carries it ENCRYPTED on-chain in the 128-byte `fill_recovery` field
+>   is now `{ order_id, side, match_id, signature, slot,
+>   input_note_commitment, trade_note_commitment, change_note_commitment,
+>   batch_slot }` PLUS the opaque on-chain recovery ciphertext. `slot` is the
+>   finalized Solana history cursor; `batch_slot` is only the circuit slot index.
+>   Exact fills remain in the locator because they still mint a recoverable
+>   trade note.
+> - **On-chain output recovery v2 — durable amount source.** Each side's trade
+>   and change amounts live ENCRYPTED on-chain in the unchanged 128-byte
+>   `fill_recovery` field
 >   (X25519-ECIES to the order's `viewing_pubkey`; crypto in
 >   `darkpool-crypto/src/fill_encryption.rs`, TEE-side in
 >   `nyx-tee/src/settle/fill_recovery.rs`). The indexer surfaces the opaque
->   ciphertext (`ephemeral_pubkey` + per-side `change_enc`); the SDK
->   `recoverChangeFromChain` (`fills/recover.ts`) decrypts it with the
->   seed-derived viewing key, derives the v3 output from a known consumed input
->   opening, and self-verifies against the on-chain commitment. A fixpoint pass
->   reconstructs multi-fill continuation chains regardless of result order. The
->   current envelope does not yet recover trade outputs or bootstrap every input
->   opening from seed plus chain; that is the following durable-recovery slice.
+>   recovery-v2 ciphertext (`ephemeral_pubkey` + per-side `output_enc`); the SDK
+>   `recoverFillFromChain` decrypts `(trade, change)` with the seed-derived
+>   viewing key, derives both outputs from the named consumed opening, and
+>   self-verifies their commitments. `recoverNotesFromChain` scans finalized
+>   history, verifies seed-owned deposits, restores settlement leaf positions,
+>   and reconstructs merge
+>   outputs. Its fixed-point pass handles scan-order inversions and chained
+>   continuations/merges without live stream history.
 >   `startFillsSync` does "tail then backfill". **The old durable per-account memo
 >   log + `GET /fills/replay` (P7)
 >   were RETIRED** — the chain is the permanent source, so they added no value.
@@ -56,7 +57,7 @@
 > **NOTE: where they say the chain / `MatchResultPayload` carries the change
 > `amount` in plaintext, that is pre-amount-privacy; and where they describe a
 > durable `/fills/replay` memo log, that was retired — see the deltas above. The
-> amount now rides the settle ix ENCRYPTED + is recovered from the chain.**
+> output amounts now ride the settle ix ENCRYPTED + are recovered from chain.**
 
 ## Problem
 
@@ -164,8 +165,8 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 > **As-built (SUPERSEDED — see the top-of-doc delta):** P7 briefly made the
 > gap-recovery call `GET /fills/replay` (a durable TEE memo log). That log +
 > endpoint were **RETIRED** (Proposal C, commit `345681c`). The durable
-> gap-recovery source is now the **on-chain** encrypted `change_amount`
-> (Proposal B), decrypted by the SDK's `recoverChangeFromChain`.
+> gap-recovery source is now the **on-chain** encrypted output tuple, decrypted
+> by the SDK's `recoverFillFromChain` / `recoverNotesFromChain`.
 > `startFillsSync` does live-tail (`fills` on `/v1/stream`) + chain backfill; the by-order_id
 > indexer is the OPTIONAL commitment locator for gap-detection.
 
@@ -179,7 +180,7 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
   indexer are the record).
   > **As-built (final):** P7 briefly added a bounded exception (a durable
   > per-account fill-memo log for `GET /fills/replay`) — but Proposal B put the
-  > encrypted `change_amount` permanently ON-CHAIN, giving the amount a durable
+  > encrypted output amounts permanently ON-CHAIN, giving them a durable
   > home, so that log + endpoint were **RETIRED** (Proposal C, `345681c`;
   > `persistence/fills.rs` + `api/fills.rs` removed). The TEE keeps NO history
   > DB; the chain is the durable record of both *which* notes exist and their
@@ -200,9 +201,10 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 - Live session handler: `crates/nyx-tee/src/api/stream.rs` (in-band auth,
   per-account `fills` subscription).
 - `FillMemo`: `crates/nyx-tee/src/matcher/fills.rs` (live fills-channel push).
-- Durable amount recovery (Proposal B): `darkpool-crypto/src/fill_encryption.rs`
+- Durable output recovery v2: `darkpool-crypto/src/fill_encryption.rs`
   + `nyx-tee/src/settle/fill_recovery.rs` (on-chain ciphertext) →
-  `packages/sdk/src/fills/recover.ts` (`recoverChangeFromChain`). (The old P7
+  `packages/sdk/src/fills/recover.ts` (`recoverFillFromChain`) +
+  `packages/sdk/src/fills/cold-recovery.ts` (`recoverNotesFromChain`). (The old P7
   memo log + `api/fills.rs` `GET /fills/replay` + `sdk/.../fills/replay.ts` were
   RETIRED — Proposal C, `345681c`.)
 - Client memo verify/store: `packages/sdk/src/orders/fill-memo.ts`,

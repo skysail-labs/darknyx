@@ -253,7 +253,8 @@ master_seed (64 bytes, CSPRNG; securely stored and backed up encrypted)
   ├── HKDF-SHA256("darkpool_root_key_v1", 32B)              → root_key (Ed25519 seed)
   ├── HKDF-SHA256("darkpool_trading_key_v1" ‖ offset_u64_le, 32B) → trading_key(offset) (Ed25519 seed)
   ├── HKDF-SHA256("darkpool_spend_key_v1", 512b) → mod p     → spending_key (Fr)
-  └── NyxShakeKdfV1("darkpool_viewing_key_v1", 512b) → mod p → viewing_key   (Fr)
+  ├── NyxShakeKdfV1("darkpool_viewing_key_v1", 512b) → mod p → viewing_key   (Fr)
+  └── deriveBlindingFactor(0xacc0_0000_0000)          → mod p → r_owner       (Fr)
 
 Per-deposit-note inner_hash (v2; independent from the above; keyed by leaf index):
   NyxShakeKdfV1("note_blinding_v1" ‖ leaf_index_u64_le, 512b) → mod p → inner_hash(leaf_index) (Fr)
@@ -274,7 +275,11 @@ owner_commitment = Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)
 ```
 
 Where `r_owner` (alternately `ownerCommitmentBlinding`) is a wallet-level
-blinding factor. **Reused across every note the user creates.**
+blinding factor. **Reused across every note the user creates.** Canonical SDK
+wallets derive it from the master seed at the reserved
+`0xacc0_0000_0000` counter, separated from ordinary deposit indices. A caller
+may override it only if that separate identity secret is backed up alongside
+the seed; seed-only recovery uses the canonical derivation.
 
 This is the field-element value the chain knows you by. It's part of every
 note's preimage (so the chain can't link your notes to your Solana pubkey,
@@ -408,8 +413,11 @@ the spending key plus that deterministic derived inner. Parity test:
 ### Deriving `inner_hash` (recoverable, never random)
 
 * **Deposit notes** — `inner_hash = deriveBlindingFactor(masterSeed,
-  leafIndex)`; the client regenerates it from its seed + the on-chain leaf
-  index.
+  depositIndex)` where `depositIndex` is the client's note counter, independent
+  of the eventual leaf position. The confirmed deposit instruction/event
+  publishes the exact inner, owner commitment, mint, amount, commitment, shard,
+  and leaf position; cold recovery accepts it only after deriving the canonical
+  owner identity from the seed and recomputing the commitment.
 * **Match user outputs** — `Poseidon3(24, consumed_input_inner, role)` for
   trade and change roles.
 * **Match fee outputs** — `Poseidon3(25, consumed_input_commitment, role)` for
@@ -478,9 +486,23 @@ On-chain, `tee_forced_settle_batched` creates a fresh `NoteLock` PDA
 
 Output safety and liveness no longer depend on an anchor pool, a batch slot, or
 a process-local counter. Canonical order v2 removed anchor fields and the
-top-up endpoint. Seed-plus-chain cold recovery is completed by the durable
-recovery slice; a live client that retains the consumed opening can already
-derive the new opening directly.
+top-up endpoint.
+
+**Durable recovery v2.** The unchanged 128-byte `fill_recovery` field is packed
+as `ephemeral_pubkey(32) || buyer_enc(44) || seller_enc(44) || "NYXREC02"`.
+Buyer plaintext is `(trade_base, change_quote)`; seller plaintext is
+`(trade_quote, change_base)`. Each 44-byte side blob is
+`nonce(12) || ChaCha20-Poly1305(ciphertext(16), tag(16))`, keyed by X25519 +
+HKDF domain `nyx-fill-enc-v2`. The version trailer makes the clean cutover
+reject legacy one-u64 blobs.
+
+`recoverFillFromChain` resolves the payload's exact consumed commitment,
+re-verifies that opening, decrypts the tuple, derives both output inners by role,
+and accepts only byte-equal recomputed commitments. `recoverNotesFromChain`
+then scans finalized vault instructions/events to bootstrap seed-owned deposits,
+restore trade/change shard + leaf positions, and reconstruct merge outputs from
+their consumed commitments. It iterates to a fixed point, so continuation and
+merge chains recover without live stream history or RPC result ordering.
 
 ### Protocol fee notes
 
@@ -532,12 +554,12 @@ mutation, so a wallet cannot merge collateral reserved by a live order. See
 §7.5.
 
 **Tracking balance.** There is no account→balance server mapping (a privacy
-choice). A user's balance is the sum of their own UNSPENT notes — deposits
-(recorded at deposit time) + trade-change (recovered via the fills indexer) —
-exactly like a wallet summing its UTXOs. "Unspent" is the on-chain note status
-(`ConsumedNote`/`NoteLock` PDAs). The SDK `Wallet` (`packages/sdk/src/wallet/`)
-exposes `getBalance` / `listNotes` / `selectCollateral`; everything is
-recoverable from the seed + the indexer.
+choice). A user's balance is the sum of their own UNSPENT deposit, trade/change,
+and merge notes, exactly like a wallet summing its UTXOs. "Unspent" is the
+on-chain note status (`ConsumedNote`/`NoteLock` PDAs). The SDK `Wallet`
+(`packages/sdk/src/wallet/`) exposes `getBalance` / `listNotes` /
+`selectCollateral`; `recoverNotesFromChain` rebuilds the openings from the seed
+and finalized chain history without an indexer.
 
 ---
 
@@ -2133,8 +2155,10 @@ Sorted roughly by cryptographic impact:
   `/v1/stream` is **per-account routed** (each order's `FillMemo` goes only to
   its owner's authenticated session), with deterministic HD `order_id`s
   (`deriveOrderId`) and an optional off-TEE commitment-locator indexer
-  (`packages/indexer`). Durable recovery comes from the settlement's on-chain
-  encrypted recovery field; the live memo is the low-latency path. See
+  (`packages/indexer`). Durable recovery v2 comes from the settlement's on-chain
+  encrypted `(trade, change)` tuples plus confirmed deposit/merge/settlement
+  instructions and events; `recoverNotesFromChain` rebuilds every user note
+  class from seed + chain. The live memo is the low-latency path. See
   [`docs/fills-history-architecture.md`](docs/fills-history-architecture.md).
 
 - **Self-trade prevention — DONE (owner-level, note-bound).** The matcher

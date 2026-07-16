@@ -93,9 +93,9 @@ export interface BuildOrderArgs {
   /** Which Merkle-tree shard the note lives in (selects the settle's lock_note
    *  shard so a batch's inputs can span shards). Default `0`. NOT signed. */
   treeId?: number;
-  /** 32-byte X25519 viewing-encryption public key (change-amount recovery,
-   *  Proposal B). The TEE encrypts this order's change_amounts to it on-chain so
-   *  they survive a CVM redeploy. Defaults to
+  /** 32-byte X25519 viewing-encryption public key (output recovery v2). The TEE
+   *  encrypts this order's `(trade, change)` amounts to it on-chain so they
+   *  survive a CVM redeploy. Defaults to
    *  `deriveViewingEncKeypair(masterSeed).publicKey` (recovery on by default).
    *  This key is bound into the order signature. */
   viewingPubkey?: Uint8Array;
@@ -124,7 +124,7 @@ export interface PlaceOrderRequest {
   collateral_amount: number;
   /** Which Merkle-tree shard the collateral note lives in. Default 0. */
   tree_id: number;
-  /** 32-byte X25519 viewing-encryption pubkey, hex (change-amount recovery). */
+  /** 32-byte X25519 viewing-encryption pubkey, hex (output recovery v2). */
   viewing_pubkey: string;
   /** 32-byte CVM boot session id, hex. */
   session_id: string;

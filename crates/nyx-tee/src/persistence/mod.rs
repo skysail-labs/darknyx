@@ -10,7 +10,7 @@
 //!   leaves + settle outbox, 5 s periodic. Lands in a later PR.
 //!
 //! (The P7 durable per-account fill-memo log + `GET /fills/replay` were retired
-//! once change-amount recovery (Proposal B) put the amount on-chain encrypted —
+//! once recovery v2 put both output amounts on-chain encrypted —
 //! the chain is now the permanent recovery source, so only the live `fills`
 //! push remains.)
 

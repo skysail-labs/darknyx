@@ -55,6 +55,7 @@ export interface DepositParams {
 
 export interface DepositReceipt {
   signature: string;
+  treeId: number;
   leafIndex: bigint;
   noteCommitment: Uint8Array;
   notePlaintext: {
@@ -69,9 +70,9 @@ export interface DepositReceipt {
 /**
  * Convert a deposit receipt into a storable wallet note. Call
  * `store.put(depositNoteFromReceipt(receipt))` after a deposit so the wallet's
- * balance + coin-selection see it. (Deposits aren't recoverable from the seed
- * alone on a fresh device — record them here; trade-change notes recover via the
- * fills indexer.)
+ * balance + coin-selection see it immediately. A replacement device can also
+ * reconstruct it from seed + finalized deposit instruction/event through
+ * `recoverNotesFromChain`.
  */
 export function depositNoteFromReceipt(receipt: DepositReceipt): StoredNote {
   return {
@@ -81,6 +82,7 @@ export function depositNoteFromReceipt(receipt: DepositReceipt): StoredNote {
     ownerCommitment: receipt.notePlaintext.ownerCommitment,
     innerHash: receipt.notePlaintext.innerHash,
     leafIndex: receipt.leafIndex,
+    treeId: receipt.treeId,
   };
 }
 
@@ -164,6 +166,7 @@ export function getDepositFunction({
 
     return {
       signature,
+      treeId,
       leafIndex,
       noteCommitment: commitment,
       notePlaintext: {

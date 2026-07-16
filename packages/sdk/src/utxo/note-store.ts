@@ -4,14 +4,15 @@
  * Every record is everything the client needs to later spend a note (the v2
  * opening + commitment) plus its provenance. The TEE never holds these. Two
  * sources flow in:
- *   - **fill** (continuation change notes): built from a verified `FillMemo`
- *     (`orders/fill-memo.ts`) or recovered from the indexer (`fills/history.ts`).
- *   - **deposit**: recorded by the client at deposit time (`utxo/deposit.ts`).
+ *   - **fill** (trade + continuation notes): built from a verified `FillMemo`
+ *     or the recovery-v2 chain envelope;
+ *   - **deposit/merge**: recorded live or rebuilt by `recoverNotesFromChain`.
  *
  * The wallet (`wallet/wallet.ts`) reads this set to compute balances + select
- * collateral. Provenance fields are optional + mutually exclusive: a deposit
- * note carries `leafIndex`; a fill note carries `orderId` plus the exact
- * consumed input commitment that derived it.
+ * collateral. A deposit or merge note carries its chain leaf position; a fill
+ * note additionally carries `orderId` plus the exact consumed input commitment
+ * that derived it. Every chain-recovered note carries its exact shard + leaf
+ * position when the event was available.
  */
 
 export interface StoredNote {
@@ -23,9 +24,11 @@ export interface StoredNote {
   ownerCommitment: bigint;
   /** v2 single inner_hash. */
   innerHash: bigint;
-  // ── provenance (exactly one group is set) ──
-  /** Deposit note: its leaf index in the on-chain tree. */
+  // ── provenance ──
+  /** Its leaf index in the on-chain tree, when known. */
   leafIndex?: bigint;
+  /** Merkle-tree shard containing `leafIndex`. */
+  treeId?: number;
   /** Fill (continuation change) note: the order it continued (16-byte hex). */
   orderId?: string;
   /** Fill note: exact input commitment consumed to produce it. */
@@ -38,9 +41,9 @@ export interface StoredNote {
  */
 export type ChangeNoteRecord = StoredNote;
 
-/** True for deposit-sourced notes (carry `leafIndex`). */
+/** True for deposit/merge-sourced notes (fill notes carry an `orderId`). */
 export function isDepositNote(n: StoredNote): boolean {
-  return n.leafIndex !== undefined;
+  return n.orderId === undefined;
 }
 
 /** Minimal pluggable store interface — back it with IndexedDB / a file / etc. */

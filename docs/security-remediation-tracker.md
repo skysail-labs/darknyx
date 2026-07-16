@@ -63,6 +63,16 @@ runbooks have landed.
 | N-18 | Critical mainnet gate | Governance + ZK | `remediation/release-assurance` | Public Phase-2 ceremony with at least five independent contributors, transcript/hashes, random beacon, reproducible verify, auditor sign-off, post-ceremony settle | Open |
 | N-19 | High mainnet gate | Governance | `remediation/governance-markets`, `remediation/release-assurance` | Split Squads rehearsal: operations 3-of-5 admin and cold root/upgrade 4-of-7; independent attestation verification before rotations | In progress |
 
+## Cross-cutting release deliverables
+
+These are architectural/mainnet-readiness commitments from the remediation
+plan, not additional audit finding IDs.
+
+| ID | Owner | Planned remediation slice | Required evidence | Status |
+|---|---|---|---|---|
+| DR-01 | SDK + TEE + indexer | `remediation/durable-recovery` | The unchanged 128-byte field encrypts two u64s per side; seed + finalized chain reconstructs deposit, trade, change/continuation, and merge openings with commitment and leaf-position verification; exact-fill unit coverage plus a live partial-settle recovery drill | Closed |
+| PERF-INV-01 | TEE + Operations | Phala host diagnostics follow-up | Image 58 pins the anomaly at `witness_ms=992`, `prove_step_ms=10857`, aggregate `prove_ms=11928`, 39.65-second E2E, and 1.84–2.21-second auth on an allocated 8-vCPU CVM; obtain working host/container access and capture pre/post cgroup throttling, cpuset/affinity, CPU model/frequency, and OpenMP placement before release certification | Open |
+
 ## Pull request evidence template
 
 Every remediation PR must record:
@@ -793,6 +803,103 @@ Every remediation PR must record:
   and in-memory order state are incompatible. Notes, roots, vault accounts,
   settlement payloads, circuits, and proofs remain valid; discard all in-flight
   orders and reconnect against the new boot session.
+
+### `remediation/durable-recovery` — DR-01
+
+- **Status.** Closed by the image-58 partial-settlement recovery drill. The
+  associated prover-latency investigation remains independently open as
+  PERF-INV-01 because Phala's unstable SSH API did not expose the requested
+  host/container cgroup files during the billable window.
+- **Invariant restored.** Every fill side permanently encrypts both private
+  amounts needed to rebuild its outputs: buyer `(trade_base, change_quote)` and
+  seller `(trade_quote, change_base)`. Recovery resolves the exact consumed
+  commitment, re-verifies its opening, derives trade/change inners from that
+  input and role, and compares recomputed commitments as bytes. A seed-plus-
+  finalized-chain fixed-point scan restores seed-owned deposits, exact and
+  partial trade outputs, continuation chains, and merge outputs, including
+  their shard and Anchor-event leaf positions. Live stream history and mutable
+  merge/deposit counters are not recovery dependencies.
+- **Wire/circuit impact.** `fill_recovery` remains exactly 128 bytes and the
+  v9 settle payload remains 488 bytes, so Tx D size/headroom and the canonical
+  signature domain do not change. Its internal clean-cutover layout becomes
+  `ephemeral_pubkey(32) || buyer_enc(44) || seller_enc(44) || "NYXREC02"`;
+  the HKDF domain becomes `nyx-fill-enc-v2`. The explicit trailer rejects
+  legacy 36-byte blobs instead of ambiguously decrypting them. Locator rows now
+  include the finalized transaction slot plus consumed-input and trade-output
+  commitments and rename `change_enc` to `output_enc`; exact fills are retained.
+  The Solana slot, not the circuit's `batch_slot`, drives incremental cursors.
+  No circuit, zkey, VK, N=16 fixture,
+  account layout, or on-chain instruction framing changes. The CPU image pin
+  moves from `tee-v3-hardening-57` to `tee-v3-hardening-58`.
+- **Local evidence.** Rust/TS fixed vectors pin the 44-byte ECIES construction;
+  low-order, wrong-key, and tamper cases fail closed. TEE unit coverage proves
+  buyer/seller tuples, exact-fill trade recovery, one-sided keys, versioned
+  packing, and assembly into the signed payload. SDK/indexer round trips cover
+  uppercase byte normalization, exact fills, both market sides, continuation
+  chains, legacy-layout rejection, and settle encoder → locator decoder → SDK
+  recovery. The cold drill deliberately reverses transaction order and rebuilds
+  a deposit → trade/change → merge graph to a fixed point with exact leaf
+  indices. Both mainnet and `devnet-admin` SBF builds, the Rust/TS parity-helper
+  build, workspace clippy with warnings denied, and the full Rust workspace pass
+  locally (including 254 TEE library tests, N=16/prover round trips, and every
+  LiteSVM target). SDK source + test, indexer, and daemon TypeScript no-emit
+  checks pass. Full Vitest passes SDK 251 tests with 23 environment-gated skips,
+  indexer 20 tests, and daemon 144 tests with two environment-gated skips. The
+  closing harness correction also passes SDK test TypeScript and the targeted
+  cold/fill recovery suites (7/7): `NYX_CVM_CHAIN_RECOVERY=1` makes the buyer
+  order partial and invokes the finalized-chain scanner without an indexer or
+  live memo. It also corrects the partial-fill trade assertion to the matched
+  seller quantity rather than the buyer's original larger order quantity.
+- **Devnet/CVM evidence (2026-07-16).** GitHub Actions run `29465041954`
+  built and pushed private image
+  `ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-58` from commit
+  `63d431362c8c35072bf959cde56c09e64efde7c2`; the manifest returned 200.
+  (The workflow succeeded despite the expected non-fatal artifact-quota
+  annotation.) Reset tx
+  `5roKBo1efYHnEkcoQfTfciUuUn1jWiYVw9W2epYi3PWwkihHs8yzAUEFJYokTEhiSqLJWXESnTVaCGe6HHdHaHYK`
+  cold-booted CVM `app_634b2ab4c250466311f0cf09f772b6fd60b5be11`,
+  instance `f5cd2f294d1127d241d18e44dbb76b6910aa2a54`, with compose hash
+  `8f67f068f3878d6d903a9d172eb180a3ded84b4290bf2024703101c294ef2070`,
+  MRTD
+  `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`,
+  boot session
+  `4a79d0e65bed0fa1f217bb3d1af19cd20d83593de2ae3de7685c4ffcd2b282ec`,
+  and finalized signer
+  `KgFsjoP9fDy78xgmEjn2DtRbPZ6G7t5AWDkPo1AAjsa`. Boot logs showed an empty
+  one-shard mirror, native witness generation, and the live settle pipeline.
+  The ordinary flagship passed in 39.65 seconds; Tx D confirmed at slot
+  476569460 as
+  `2Y862q8WisA547vb8FwxX7YYagw8LGkFBxJFc4kaWUWpjdhwwet4NwPeeQzmtqxpaHMYPNz9x3eiUA4FmingtBpn`
+  with `err=null` and 66,014 CU.
+
+  A second clean reset tx
+  `94FSR2cPamFF536YTgAx4dHDjiPGsRc6zVpGStAUnRQEepukyqr6kYd4qZVQsdyx4DSwJBCp5qvdJxuZaAUi4jY`
+  and cold boot (session
+  `b4de3c3bcdd7c77216fb7a4582e32f84c40297cb95a202fa25a1b57bbb63c7ce`)
+  ran the corrected indexer-free partial drill with deterministic quantity
+  42,000 and buyer multiplier 2. It passed in 51.74 seconds, grew the tree from
+  two deposit leaves to seven leaves, and reconstructed the buyer deposit,
+  42,000-unit trade output, and positive 5,185,364-unit continuation output
+  from seed plus finalized chain only in 10.98 seconds. Tx D confirmed at slot
+  476571554 as
+  `5TMd8joTPWa1M8iT3UUwPT3AssMAHs2cXZkZ8VPVzgKozbEUWHaoQ49bfoxYEFbRmU1igWeAxxU2WKSDTqBeRPGx`
+  with `err=null` and 76,573 CU. Both one-time deploy/test env files were
+  securely deleted and every Phala CVM was confirmed stopped. No program
+  upgrade was needed because this slice changes no on-chain code or verifier.
+- **PERF-INV-01 evidence (still open).** The same image-58 window measured five
+  sequential `/auth/token` calls at 2,110, 2,206, 2,140, 1,952, and 1,838 ms.
+  Enclave logs reported native `witness_ms=992`, rapidsnark
+  `prove_step_ms=10857`, aggregate `prove_ms=11928`, and total settle-pipeline
+  time 14,896 ms; Phala reported an 8-vCPU/16-GB allocation. `phala ssh` v1.1.19
+  returned `Unknown API error` before both requested container snapshots, so
+  `cpu.max`, `cpu.stat`, cpuset/affinity, CPU model/frequency, and OpenMP
+  placement were not observable. These timings confirm the anomaly persists
+  but do not identify its host-level cause; PERF-INV-01 therefore remains open.
+- **Rollback.** Revert the slice and redeploy image 57 with its matching SDK and
+  locator schema. Recovery-v1/v2 envelopes are intentionally incompatible;
+  discard in-flight orders and locator DB state and clean-reset devnet before
+  using the prior image. The on-chain payload width, accounts, note commitment
+  formula, circuits, and existing generic VALID_SPEND notes are unchanged.
 
 ## Mainnet release gates
 

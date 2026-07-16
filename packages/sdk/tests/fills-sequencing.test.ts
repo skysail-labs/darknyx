@@ -2,10 +2,10 @@
  * "Backfill then tail" — the durable (indexer) + live (WS) fills paths.
  *
  * Amount-privacy (P3b): the indexer is a COMMITMENT LOCATOR (no amounts), so
- * `backfillHistory` LOCATES change-note fills (order_id + commitment + slot) but
- * does NOT reconstruct openings. The spendable opening comes from the WS
- * `FillMemo`, verified against the named consumed input in the
- * commitment-keyed NoteStore (so re-delivery is deduped).
+ * `backfillHistory` locates exact and partial fills (input/output commitments,
+ * ciphertext, and finalized Solana slot) but does not reconstruct openings by
+ * itself. Recovery v2 or the low-latency WS `FillMemo` verifies outputs against
+ * the named consumed input in the commitment-keyed NoteStore.
  */
 
 import { describe, it, expect } from "vitest";
@@ -132,7 +132,7 @@ class FakeWs implements WebSocketLike {
 }
 
 describe("backfill then tail", () => {
-  it("backfillHistory gap-scans and locates change-note fills (no amounts)", async () => {
+  it("backfillHistory gap-scans and locates fills (no amounts)", async () => {
     const amount = 500n;
     const n = 3;
     const { orderId, commitment } = await buyerCommitment(n, amount);
@@ -144,9 +144,12 @@ describe("backfill then tail", () => {
           side: "buyer",
           matchId: "ab".repeat(8),
           signature: "sig1",
+          slot: 500,
+          inputNoteCommitment: "11".repeat(32),
+          tradeNoteCommitment: "22".repeat(32),
           isPartialFill: true,
           changeNoteCommitment: commitment,
-          batchSlot: "100",
+          batchSlot: "3",
         },
       ],
     };
@@ -158,13 +161,13 @@ describe("backfill then tail", () => {
       fetchImpl: fakeIndexer(rows),
     });
 
-    // Locator only: the fill + its commitment are found, but no opening is
-    // reconstructed (the amount isn't on the wire — it comes from the memo).
+    // Locator only: the fill + its commitments are found, but no opening is
+    // reconstructed until the recovery-v2 ciphertext is decrypted.
     expect(res.located).toHaveLength(1);
     expect(res.located[0].changeNoteCommitment).toBe(commitment);
     expect(res.located[0].orderId).toBe(orderId);
     expect(res.highestUsedIndex).toBe(n);
-    expect(res.cursorSlot).toBe(100);
+    expect(res.cursorSlot).toBe(500);
   });
 
   it("subscribeFills verifies + stores a live memo, then dedups against backfill", async () => {

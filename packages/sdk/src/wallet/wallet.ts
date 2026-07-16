@@ -4,11 +4,11 @@
  *
  * Nyx has no account→balance server mapping (a deliberate privacy choice): a
  * user's balance is the sum of their own unspent notes, exactly like a Bitcoin
- * wallet sums its UTXOs. Notes come from deposits (recorded at deposit time) and
- * trade-change (recovered via the fills WS/indexer) — both land in the same
- * `NoteStore`. "Unspent" is the on-chain note status (a note is spent once its
- * `ConsumedNote` PDA exists). Everything is recoverable from the seed + the
- * indexer, so nothing is owed to the user in a ledger we keep.
+ * wallet sums its UTXOs. Deposits, trade/change outputs, and merge outputs all
+ * land in the same `NoteStore`. "Unspent" is the on-chain note status (a note is
+ * spent once its `ConsumedNote` PDA exists). `recoverNotesFromChain` rebuilds
+ * their openings from the seed and finalized chain history, so nothing is owed
+ * to the user in a private server ledger.
  */
 
 import type { NoteStore, StoredNote } from "../utxo/note-store.js";

@@ -77,21 +77,19 @@ pub struct MatchResultPayload {
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
     pub batch_slot: u64,
-    /// Change-amount recovery (Proposal B): the per-fill X25519-ECIES bundle
-    /// `ephemeral_pubkey(32) ‖ buyer_enc(36) ‖ seller_enc(36) ‖ zero_pad(24)`.
-    /// The TEE encrypts each side's change_amount to that order's viewing key so
-    /// a change note stays recoverable after a CVM redeploy wipes the live fill
-    /// memo. Opaque to the program — it never reads or constrains these bytes;
+    /// Recovery v2: the per-fill X25519-ECIES bundle
+    /// `ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "NYXREC02"`.
+    /// The TEE encrypts each side's `(trade, change)` tuple to that order's
+    /// viewing key. Opaque to the program — it never reads these bytes;
     /// they ride the (signed) payload only to be persisted on-chain. All-zero
-    /// when the fill has no recoverable change. 128 (not 104) because borsh 0.10
-    /// only serializes `[u8; N]` for `N ≤ 32` then 64/128; the last 24 are zero.
+    /// only when neither side supplies a viewing key.
     pub fill_recovery: [u8; 128],
     // Amount-privacy (P3b): `clearing_price` was removed alongside the other
     // plaintext amounts — the price is proven in-circuit
     // (`quote === floor(base*price/price_scale)`) and bound inside the note commitments, so it no
     // longer needs to ride in the (public) settle ix. The domain tag bumped
     // `nyx-match-v6` → `nyx-match-v7` for this layout change, then
-    // `nyx-match-v7` → `nyx-match-v8` when change-amount recovery (Proposal B)
+    // `nyx-match-v7` → `nyx-match-v8` when encrypted output recovery
     // appended the `fill_recovery` field above. Settlement payload v9 then
     // removed the two vestigial nullifiers: commitment-keyed
     // `ConsumedNoteEntry` PDAs are the sole settle/withdraw replay guard.
@@ -239,7 +237,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         // v7: amount-privacy (P3b) dropped the seven plaintext amount fields
         // (base/quote/buyer_change/seller_change/buyer_fee/seller_fee/price)
         // from the payload — they're proven in-circuit + bound by the note
-        // commitments. v8: change-amount recovery (Proposal B) appended the
+        // commitments. v8: encrypted output recovery appended the
         // 128-byte `fill_recovery` ciphertext bundle. v9 removed the two
         // vestigial nullifiers. Bumping the tag invalidates every signature
         // over an older layout.
@@ -260,7 +258,7 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         p.seller_relock_order_id.as_ref(),
         &seller_relock_exp,
         &slot,
-        p.fill_recovery.as_ref(), // v8: change-amount recovery bundle
+        p.fill_recovery.as_ref(), // v8: encrypted output-recovery bundle
     ])
     .to_bytes()
 }

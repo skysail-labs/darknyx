@@ -97,12 +97,10 @@ and the live stream is simply de-duplicated, so a dropped connection never loses
 fill. If a slow consumer lags past the per-account buffer, the server closes with
 code **1011**; on 1011, re-run the backfill from the chain and reopen.
 
-:::note Cold recovery gate
-The current envelope permanently stores the private change amount. A local
-consumed-input opening is still required to derive the v3 output inner. The
-durable-recovery remediation slice repacks the same 128-byte envelope for full
-seed-plus-chain recovery of trade, change, merge, and deposit notes before
-mainnet.
+:::note Cold recovery
+Recovery v2 permanently stores each side's encrypted `(trade, change)` tuple.
+`recoverNotesFromChain` bootstraps seed-owned deposits, follows settlement
+continuations, and reconstructs merge outputs without live stream history.
 :::
 
 ## Example

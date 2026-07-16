@@ -24,10 +24,10 @@ they carry a valid zero-knowledge proof, so the chain, not the operator, is the
 final authority on whether a settlement is correct.
 
 :::note What a settlement reveals
-A settlement publishes note commitments, nullifiers, and the proof, not the
-trade's amounts or clearing price. The size and price of every trade stay private
+A settlement publishes note commitments, commitment-keyed consume guards, and
+the proof, not the trade's amounts or clearing price. The size and price stay private
 on-chain; you reconstruct your own amounts from the per-account fill memo or the
-on-chain change-amount ciphertext (see
+on-chain recovery-v2 ciphertext (see
 [Privacy & Attestation](./privacy-and-attestation) and
 [Fills Channel](../websocket/fills-channel)).
 :::

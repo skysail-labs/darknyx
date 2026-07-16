@@ -440,17 +440,20 @@ pub fn assemble_batch(
         let buyer_lock = lock_inputs(m.note_buyer, &buyer);
         let seller_lock = lock_inputs(m.note_seller, &seller);
 
-        // Change-amount recovery (Proposal B): encrypt each side's change_amount
-        // to its order's viewing key so the change note stays recoverable after
-        // a CVM redeploy. The change note returns to the same owner, so the
-        // input note's opening is the right recipient. The ciphertext rides the
-        // SIGNED payload (so the TEE signature binds it on-chain).
+        // Durable output recovery: encrypt both private output amounts to the
+        // order's viewing key. Buyer plaintext is (trade base, change quote);
+        // seller plaintext is (trade quote, change base). This makes exact
+        // fills and trade outputs recoverable after a cold start as well as
+        // continuations. The ciphertext rides the SIGNED payload.
         let fill_ciphertext = crate::settle::fill_recovery::build_fill_ciphertext(
             buyer.viewing_pubkey,
             seller.viewing_pubkey,
+            m.base_amt,
             m.buyer_change_amt,
+            m.quote_amt,
             m.seller_change_amt,
-        );
+        )
+        .map_err(|e| AssembleError::Crypto(format!("fill recovery: {e}")))?;
         payload.fill_recovery = fill_ciphertext.to_payload_bytes();
 
         matches.push(MatchSettleInputs {
@@ -971,7 +974,9 @@ mod tests {
 
     use crate::matcher::openings::OrderOpening;
     use crate::settle::lock_note::Groth16ProofBytes;
-    use darkpool_crypto::fill_encryption::{decrypt_change_amount, ephemeral_public};
+    use darkpool_crypto::fill_encryption::{
+        decrypt_fill_amounts, ephemeral_public, FillAmounts, SIDE_BLOB_LEN,
+    };
 
     fn order_rec(opening: NoteOpening, order_id: [u8; 16]) -> OrderOpening {
         OrderOpening {
@@ -1068,9 +1073,9 @@ mod tests {
     }
 
     #[test]
-    fn assemble_batch_encrypts_change_to_the_viewing_key() {
-        // A buyer partial fill (change 250) with a viewing key on its opening:
-        // assemble_batch must produce a recovery ciphertext the buyer decrypts.
+    fn assemble_batch_encrypts_trade_and_change_to_the_viewing_key() {
+        // A buyer partial fill (trade base 10, change quote 250) with a viewing
+        // key: assemble_batch must encrypt both amounts.
         let buyer_sk = [0x31u8; 32];
         let buyer_pub = ephemeral_public(&buyer_sk);
         let (m, buyer, seller) = scenario(10, 1000, 250, 0, 0, 0);
@@ -1091,15 +1096,18 @@ mod tests {
         );
         assert!(
             !ct.is_empty(),
-            "buyer change + viewing key → ciphertext present"
+            "buyer outputs + viewing key → ciphertext present"
         );
         assert_eq!(
-            decrypt_change_amount(&buyer_sk, &ct.ephemeral_pubkey, &ct.buyer_enc),
-            Some(250),
-            "buyer recovers its change_amount from the on-chain-bound ciphertext"
+            decrypt_fill_amounts(&buyer_sk, &ct.ephemeral_pubkey, &ct.buyer_enc),
+            Some(FillAmounts {
+                trade: 10,
+                change: 250,
+            }),
+            "buyer recovers trade + change from the on-chain-bound ciphertext"
         );
         // Seller had no viewing key → its blob stays zeroed.
-        assert_eq!(ct.seller_enc, [0u8; 36]);
+        assert_eq!(ct.seller_enc, [0u8; SIDE_BLOB_LEN]);
     }
 
     #[test]

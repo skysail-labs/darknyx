@@ -258,6 +258,7 @@ export function getMergeFunction({
       ownerCommitment: params.ownerCommitment,
       innerHash: outputInnerHash,
       leafIndex: outputLeafIndex,
+      treeId,
     };
 
     return {

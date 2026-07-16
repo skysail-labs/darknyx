@@ -12,8 +12,8 @@
  * (trade size / change / fees / clearing price). The off-TEE indexer is
  * UNTRUSTED, so this is by design — it sees only commitments + order ids and
  * acts as a by-order_id COMMITMENT LOCATOR. Each client reconstructs its own
- * amounts from the per-account FillMemo (delivered over the authenticated
- * `/v1/stream` fills channel); partial-fill is signalled by change-note presence.
+ * trade + change amounts from the encrypted recovery tuple; partial-fill is
+ * signalled by change-note presence.
  *
  * BYTE-LAYOUT CONTRACT: the 488-byte payload mirrors
  * `programs/vault/src/instructions/tee_forced_settle.rs::MatchResultPayload`
@@ -49,11 +49,15 @@ const u64 = (v: DataView, off: number) => v.getBigUint64(off, true);
 /** Field-level decode of a `MatchResultPayload` (PAYLOAD_LEN bytes).
  *
  *  Amount-privacy (P3b): commitments + order ids only — no plaintext amounts.
- *  Change-amount recovery (Proposal B, v8): plus the opaque 128-byte
- *  `fill_recovery` bundle (`ephemeral_pubkey(32) ‖ buyer_enc(36) ‖
- *  seller_enc(36) ‖ pad(24)`), which the indexer stores but cannot decrypt. */
+ *  Recovery v2: plus the opaque 128-byte `fill_recovery` bundle
+ *  (`ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "NYXREC02"`),
+ *  which the indexer stores but cannot decrypt. */
 export interface MatchPayload {
   matchId: string;
+  noteAcommitment: string; // buyer input (quote)
+  noteBcommitment: string; // seller input (base)
+  noteCcommitment: string; // buyer trade output (base)
+  noteDcommitment: string; // seller trade output (quote)
   orderIdA: string;
   orderIdB: string;
   noteEcommitment: string; // buyer change note ([0;32] = exact fill)
@@ -62,14 +66,15 @@ export interface MatchPayload {
   /** Shared ephemeral X25519 pubkey, hex — `null` when there's no recovery
    *  ciphertext (all-zero bundle). */
   ephemeralPubkey: string | null;
-  /** Buyer-side 36-byte encrypted change_amount, hex — `null` when zeroed. */
+  /** Buyer-side 44-byte encrypted `(trade_base, change_quote)`, hex. */
   buyerEnc: string | null;
-  /** Seller-side 36-byte encrypted change_amount, hex — `null` when zeroed. */
+  /** Seller-side 44-byte encrypted `(trade_quote, change_base)`, hex. */
   sellerEnc: string | null;
 }
 
 /** Offsets into the 128-byte fill_recovery bundle (which itself starts at 360). */
 const FILL_RECOVERY_OFFSET = 360;
+const RECOVERY_V2_TRAILER = Buffer.from("NYXREC02", "ascii");
 const isZero = (b: Uint8Array) => b.every((x) => x === 0);
 const hexOrNull = (b: Uint8Array) => (isZero(b) ? null : hex(b));
 
@@ -85,11 +90,17 @@ export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
     payload.byteLength,
   );
   const r = FILL_RECOVERY_OFFSET;
-  // fill_recovery internal layout: eph[0,32) buyer_enc[32,68) seller_enc[68,104).
+  // Recovery v2: eph[0,32) buyer_enc[32,76) seller_enc[76,120) trailer[120,128).
   const eph = payload.subarray(r, r + 32);
+  const trailer = payload.subarray(r + 120, r + 128);
+  const recoveryV2 = Buffer.from(trailer).equals(RECOVERY_V2_TRAILER);
   return {
     matchId: hex(payload.subarray(0, 16)),
     // Six 32-byte note commitments precede the order ids in payload v9.
+    noteAcommitment: hex(payload.subarray(16, 48)),
+    noteBcommitment: hex(payload.subarray(48, 80)),
+    noteCcommitment: hex(payload.subarray(80, 112)),
+    noteDcommitment: hex(payload.subarray(112, 144)),
     noteEcommitment: hex(payload.subarray(144, 176)),
     noteFcommitment: hex(payload.subarray(176, 208)),
     orderIdA: hex(payload.subarray(208, 224)),
@@ -99,9 +110,9 @@ export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
     // seller_relock_order_id (328..344) + seller_relock_expiry (344..352) +
     // batch_slot (352..360) + fill_recovery (360..488).
     batchSlot: u64(v, 352),
-    ephemeralPubkey: hexOrNull(eph),
-    buyerEnc: hexOrNull(payload.subarray(r + 32, r + 68)),
-    sellerEnc: hexOrNull(payload.subarray(r + 68, r + 104)),
+    ephemeralPubkey: recoveryV2 ? hexOrNull(eph) : null,
+    buyerEnc: recoveryV2 ? hexOrNull(payload.subarray(r + 32, r + 76)) : null,
+    sellerEnc: recoveryV2 ? hexOrNull(payload.subarray(r + 76, r + 120)) : null,
   };
 }
 
@@ -114,17 +125,18 @@ export interface SettleFill {
   orderId: string;
   side: "buyer" | "seller";
   matchId: string;
+  /** Consumed input and always-present trade output commitments. */
+  inputNoteCommitment: string;
+  tradeNoteCommitment: string;
   /** `true` when this side received a change note (partial fill). */
   isPartialFill: boolean;
   /** 32-byte hex of the minted change note, or `null` when the side filled exactly. */
   changeNoteCommitment: string | null;
   batchSlot: string;
-  /** Change-amount recovery (Proposal B): the shared ephemeral X25519 pubkey
-   *  (hex) and THIS side's 36-byte encrypted change_amount (hex). Opaque to the
-   *  indexer; the client decrypts with its viewing secret + self-verifies against
-   *  `changeNoteCommitment`. `null` when this side carries no recovery ciphertext. */
+  /** Recovery v2: shared ephemeral X25519 pubkey and THIS side's 44-byte
+   * encrypted output tuple. Opaque to the indexer. */
   ephemeralPubkey: string | null;
-  changeEnc: string | null;
+  outputEnc: string | null;
 }
 
 /** Project a decoded payload into one fill row per order side. */
@@ -136,21 +148,25 @@ export function payloadToFills(p: MatchPayload): SettleFill[] {
       orderId: p.orderIdA,
       side: "buyer",
       matchId: p.matchId,
+      inputNoteCommitment: p.noteAcommitment,
+      tradeNoteCommitment: p.noteCcommitment,
       isPartialFill: !buyerExact,
       changeNoteCommitment: buyerExact ? null : p.noteEcommitment,
       batchSlot: p.batchSlot.toString(),
       ephemeralPubkey: p.ephemeralPubkey,
-      changeEnc: p.buyerEnc,
+      outputEnc: p.buyerEnc,
     },
     {
       orderId: p.orderIdB,
       side: "seller",
       matchId: p.matchId,
+      inputNoteCommitment: p.noteBcommitment,
+      tradeNoteCommitment: p.noteDcommitment,
       isPartialFill: !sellerExact,
       changeNoteCommitment: sellerExact ? null : p.noteFcommitment,
       batchSlot: p.batchSlot.toString(),
       ephemeralPubkey: p.ephemeralPubkey,
-      changeEnc: p.sellerEnc,
+      outputEnc: p.sellerEnc,
     },
   ];
 }

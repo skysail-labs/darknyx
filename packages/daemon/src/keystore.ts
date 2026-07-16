@@ -30,6 +30,8 @@ import {
   deriveMasterViewingKey,
   deriveTradingKeyAtOffset,
   deriveBlindingFactor,
+  deriveOwnerCommitmentBlinding,
+  ACCOUNT_OWNER_BLINDING_COUNTER,
   generateMasterSeed,
   ownerCommitment,
   userCommitmentFromKeys,
@@ -45,7 +47,7 @@ const fromHex = (h: string): Uint8Array =>
  * (`deriveBlindingFactor`) blindings use — so the WHOLE identity is recoverable
  * from the seed alone (the keystore file is just an encrypted convenience).
  */
-const ACCOUNT_BLINDING_BASE = 0xacc0_0000_0000n;
+const ACCOUNT_BLINDING_BASE = ACCOUNT_OWNER_BLINDING_COUNTER;
 
 /**
  * Deterministically derive an {@link AccountIdentity} from a master seed + the
@@ -58,7 +60,7 @@ export function deriveAccountIdentity(
 ): AccountIdentity {
   return {
     masterSeed,
-    ownerBlinding: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE),
+    ownerBlinding: deriveOwnerCommitmentBlinding(masterSeed),
     r0: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE + 1n),
     r1: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE + 2n),
     r2: deriveBlindingFactor(masterSeed, ACCOUNT_BLINDING_BASE + 3n),

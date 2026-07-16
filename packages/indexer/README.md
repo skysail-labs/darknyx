@@ -16,12 +16,15 @@ TEE-fed intake registry. Three later changes hollowed that mandate out:
    (no TEE↔indexer coupling — the whole point of the design).
 2. **Amount-privacy (P3b)** stripped every plaintext amount/price/fee from the
    settle ix. The indexer is untrusted, so this is by design: it decodes down to
-   `{ order_id, side, match_id, is_partial_fill, change_note_commitment,
-   batch_slot }` + the **opaque** on-chain recovery ciphertext. It is now a pure
-   **commitment LOCATOR**, not a system of record.
-3. **On-chain change-amount recovery (Proposal B)** put the durable `change_amount`
-   ENCRYPTED on the chain, recovered directly by the SDK
-   (`fills/recover.ts::recoverChangeFromChain`). This retired the P7 `/fills/replay`
+   `{ order_id, side, match_id, signature, slot, input_note_commitment,
+   trade_note_commitment, change_note_commitment, batch_slot }` + the
+   **opaque** on-chain recovery ciphertext. It is now a pure
+   **commitment LOCATOR**, not a system of record. `slot` is the Solana history
+   cursor; `batch_slot` is the 0..15 circuit slot index and is never used as a
+   chain cursor.
+3. **On-chain output recovery v2** puts each side's `(trade, change)` amounts
+   ENCRYPTED on chain, recovered directly by the SDK
+   (`fills/recover.ts::recoverFillFromChain`). This retired the P7 `/fills/replay`
    memo log and, crucially, made the **chain** — not this service — the durable
    source of truth.
 
@@ -38,7 +41,7 @@ light-client accelerator, **not** a pending deliverable:
   client) drives everything off the `fills` + `orders` channels on `/v1/stream` + TEE
   read endpoints + on-chain reads, with **zero references to this package**. Lean
   by construction is the right design for an always-on client.
-- **The durable path no longer needs it.** Post-Proposal-B the SDK recovers
+- **The durable path no longer needs it.** The SDK recovers
   amounts straight from the chain, and can now also rediscover fills **without any
   indexer** via `packages/sdk/src/fills/chain-history.ts::backfillHistoryFromChain`
   (same `BackfillResult` shape as the indexer path — `startFillsSync` picks
@@ -65,7 +68,11 @@ Until then it stays a dormant reference implementation.
 the SDK encoder `packages/sdk/src/settlement/settle-builder.ts::serializePayload`,
 and the SDK decoder `packages/sdk/src/fills/chain-history.ts`. Change the payload
 layout in one place → change all four and re-run their round-trip tests
-(`decode.test.ts` here, `chain-history.test.ts` in the SDK).
+  (`decode.test.ts` here, `chain-history.test.ts` in the SDK).
+
+Recovery v2 repacks the unchanged 128-byte field as
+`ephemeral_pubkey(32) || buyer_enc(44) || seller_enc(44) || "NYXREC02"`.
+The explicit trailer makes the clean cutover fail closed on legacy v1 blobs.
 
 ## Run it locally
 

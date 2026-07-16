@@ -130,6 +130,7 @@ describe.skipIf(!HAS_SQLITE)("db + server", () => {
     expect(rows[0].isPartialFill).toBe(true);
     expect(rows[0].changeNoteCommitment).toBe(hexN(0xee, 32));
     expect(rows[0].signature).toBe("sigABC");
+    expect(rows[0].slot).toBe(500);
 
     const { server, port } = await startServer(db, 0);
     try {

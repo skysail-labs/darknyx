@@ -143,10 +143,9 @@ pub struct OrderOpening {
     pub from_relock: bool,
     /// The order owner's signed, required X25519 viewing-encryption public key.
     /// intake (`PlaceOrderRequest::viewing_pubkey`). When set, the settle
-    /// assembler encrypts THIS side's `change_amount` to it for the permanent
-    /// on-chain recovery backstop (change-amount recovery, Proposal B): the
-    /// change note returns to this same owner, so its input-note opening is the
-    /// right recipient. Carried forward verbatim across continuation re-locks
+    /// assembler encrypts THIS side's `(trade, change)` output amounts to it for
+    /// the permanent on-chain recovery backstop. Carried forward verbatim
+    /// across continuation re-locks
     /// (`assign_derived_continuations`), so a multi-fill residual stays
     /// recoverable. Internal tests may use `None`; accepted wire orders never do.
     pub viewing_pubkey: Option<[u8; 32]>,

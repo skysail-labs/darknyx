@@ -188,17 +188,16 @@ close. Those are now gone from L1; the proof is the sole binder:
   `TradeSettled` event dropped the amounts too. Note commitments bind the
   amounts; the chain never sees them.
 * **Recovery data is private.** The settle payload retains a 128-byte
-  X25519-ECIES envelope for each side's private recovery data. VALID_MATCH_BATCH
-  v3 derives the output inner from the consumed opening. The live `FillMemo`
-  identifies that exact consumed commitment and output role; the SDK accepts
-  the output only after re-deriving its inner and commitment byte-for-byte.
-  Full seed-plus-chain cold recovery across every output class remains a
-  separate pre-mainnet durable-recovery slice.
+  X25519-ECIES envelope containing each side's encrypted `(trade, change)`
+  tuple. VALID_MATCH_BATCH v3 derives output inners from the consumed opening;
+  the SDK accepts outputs only after re-deriving inners and commitments
+  byte-for-byte. `recoverNotesFromChain` bootstraps seed-owned deposits and
+  reconstructs trade, continuation, and merge outputs with event leaf positions.
 * **The off-TEE indexer is a commitment LOCATOR + opaque ciphertext store.** With
   plaintext amounts gone from the payload + event, `packages/indexer` decodes the
   settle ix to locate commitments AND surface the opaque `fill_recovery`
-  ciphertext (it can't decrypt it); the client decrypts that to recover the
-  spendable amount.
+  ciphertext (it can't decrypt it); the client decrypts that to recover both
+  spendable outputs, including exact fills.
 
 See `CRYPTOGRAPHY.md` §7.4 (the circuit + the commitment-only leaf) and §9 (the
 payload), and [`fills-history-architecture.md`](fills-history-architecture.md).
@@ -330,9 +329,8 @@ order canonical signing, and the hand-coded `vault-client.ts`
    matched output notes (note_c/d), any change notes (note_e/f), and the
    base+quote protocol fee notes are appended to the tree.
 7. **Private recovery.** The on-chain `fill_recovery` envelope carries encrypted
-   private recovery material. The durable-recovery slice completes cold
-   seed-plus-chain reconstruction for these newly derived trade/change outputs;
-   that is a required mainnet gate, not a legacy anchor-memo dependency.
+   `(trade, change)` amounts. Confirmed instructions/events plus the seed rebuild
+   deposit, trade/change, continuation, and merge notes without live history.
 8. **`withdraw` (L1).** Client spends an output note via a VALID_SPEND proof;
    the nullifier is recorded; SPL leaves the vault.
 
@@ -392,9 +390,9 @@ sysvar + system program.
 
 The `/v1/stream` fills channel is **per-account routed** (each order's memo goes only
 to its owner's channel) and **self-healing**: a memo that arrives while no
-client is attached is not lost — the change amount rides the settle ix encrypted
-on-chain, so the client recovers it on reconnect from the indexer + on-chain
-ciphertext (`recoverChangeFromChain`) — see
+client is attached is not lost — output amounts ride the settle ix encrypted
+on-chain, so the client recovers them on reconnect from the indexer/chain
+(`recoverFillFromChain`) — see
 [`fills-history-architecture.md`](fills-history-architecture.md). Known gap:
 settle-under-load is bounded by RPC capacity (Helius 429s), not the matcher.
 
@@ -415,11 +413,12 @@ recoverable on a replacement device with an authenticated backup:
    (`buildOrder` defaults to it) and the current 32-byte session from `/info`.
    Both are signed. The TEE rejects low-order X25519 points and encrypts each
    fill's private recovery data to the signed key on-chain.
-3. **Recover on reconnect.** Backfill located fills from the indexer
-   (`backfillHistory`) and decrypt+self-verify each via `recoverChangeFromChain`;
-   `startFillsSync` does this "tail then backfill" automatically when given the
-   indexer URL + mints. The full client journey is covered (no live CVM) by
-   `packages/indexer/tests/change-recovery-e2e.test.ts`.
+3. **Recover on reconnect or a replacement device.** `startFillsSync` backfills
+   locator rows and decrypts+self-verifies trade/change outputs via
+   `recoverFillFromChain`. For a full cold restore, `recoverNotesFromChain`
+   scans finalized vault history and rebuilds deposits, fills, continuations,
+   and merges to a fixed point. Offline coverage lives in
+   `packages/sdk/tests/cold-recovery.test.ts` and the cross-package indexer test.
 
 NOTE: `apps/demo` predates this and is not a production custody reference —
 treat the SDK functions above + that e2e test as the reference for the real

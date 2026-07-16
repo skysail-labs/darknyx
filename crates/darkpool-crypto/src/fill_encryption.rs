@@ -1,25 +1,26 @@
-//! Asymmetric encryption of a fill's `change_amount` — the permanent on-chain
-//! recovery backstop (change-amount recovery, Proposal B).
+//! Asymmetric encryption of a fill side's trade + change amounts — the
+//! permanent on-chain recovery backstop.
 //!
 //! Distinct from [`crate::viewing_keys`] (the symmetric compliance hierarchy
-//! MVK→PairVK→MonthlyVK). Here the **TEE** encrypts each side's 8-byte
-//! `change_amount` TO that side's X25519 viewing-encryption *public* key, so
+//! MVK→PairVK→MonthlyVK). Here the **TEE** encrypts each side's two `u64`
+//! output amounts TO that side's X25519 viewing-encryption *public* key, so
 //! only the holder of the matching secret — derived client-side from the master
 //! seed (`deriveViewingEncKeypair` in the SDK) — can recover it. This survives a
 //! CVM redeploy (the chain is permanent), curing the fund-stranding gap that the
 //! amount-privacy revamp opened.
 //!
 //! One ephemeral key per **fill**, not per side (multi-recipient ECIES): a single
-//! 32-byte ephemeral public goes on-chain, plus one 36-byte ciphertext blob per
-//! side. On-chain cost = 32 + 2×36 = **104 bytes**.
+//! 32-byte ephemeral public goes on-chain, plus one 44-byte ciphertext blob per
+//! side. On-chain cost = 32 + 2×44 = **120 bytes**.
 //!
 //! Scheme (per side):
 //! ```text
 //!   shared   = X25519(ephemeral_secret, recipient_pub)
 //!   aead_key = HKDF-SHA256(ikm = shared,
-//!                          info = "nyx-fill-enc-v1" || eph_pub || recipient_pub)[:32]
-//!   blob     = nonce(12) ‖ ChaCha20Poly1305(aead_key, nonce).encrypt(amount_le8)
-//!            = 12 + 8 + 16 = 36 bytes
+//!                          info = "nyx-fill-enc-v2" || eph_pub || recipient_pub)[:32]
+//!   plaintext = trade_amount_le8 ‖ change_amount_le8
+//!   blob      = nonce(12) ‖ ChaCha20Poly1305(aead_key, nonce).encrypt(plaintext)
+//!             = 12 + 16 + 16 = 44 bytes
 //! ```
 //!
 //! Binding the ephemeral + recipient pubkeys into the HKDF `info` hardens against
@@ -41,19 +42,28 @@ use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 /// HKDF `info` label domain-separating the per-fill AEAD key.
-pub const FILL_ENC_INFO: &[u8] = b"nyx-fill-enc-v1";
+pub const FILL_ENC_INFO: &[u8] = b"nyx-fill-enc-v2";
 
 /// ChaCha20-Poly1305 nonce length.
 pub const NONCE_LEN: usize = 12;
-/// Plaintext length — the `change_amount` as a little-endian `u64`.
-pub const AMOUNT_LEN: usize = 8;
+/// Plaintext length — `trade_amount || change_amount`, both little-endian u64.
+pub const AMOUNTS_LEN: usize = 16;
 /// Poly1305 tag length.
 pub const TAG_LEN: usize = 16;
 /// One side's on-chain ciphertext blob: `nonce ‖ ct ‖ tag`.
-pub const SIDE_BLOB_LEN: usize = NONCE_LEN + AMOUNT_LEN + TAG_LEN; // 36
+pub const SIDE_BLOB_LEN: usize = NONCE_LEN + AMOUNTS_LEN + TAG_LEN; // 44
 
 /// X25519 public-key / shared-secret length.
 pub const X25519_LEN: usize = 32;
+
+/// The private settlement amounts needed to reconstruct both outputs owned by
+/// one side. Buyer semantics are `(trade_base, change_quote)`; seller semantics
+/// are `(trade_quote, change_base)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FillAmounts {
+    pub trade: u64,
+    pub change: u64,
+}
 
 /// Return true only when `public_key` contributes to X25519 Diffie-Hellman.
 /// RFC 7748 requires protocols to reject the all-zero shared secret; doing the
@@ -76,16 +86,16 @@ pub fn ephemeral_public(ephemeral_secret: &[u8; X25519_LEN]) -> [u8; X25519_LEN]
     PublicKey::from(&eph).to_bytes()
 }
 
-/// Encrypt one side's `change_amount` to `recipient_pub`.
+/// Encrypt one side's trade + change amounts to `recipient_pub`.
 ///
 /// `ephemeral_secret` is the fill's ephemeral X25519 secret (reused across both
 /// sides), `nonce12` a unique 12-byte nonce. Both are caller-supplied randomness
 /// (the function is pure + deterministic given its inputs, so it stays testable
-/// with fixed vectors). Returns the 36-byte `nonce ‖ ct ‖ tag` blob.
-pub fn encrypt_change_amount(
+/// with fixed vectors). Returns the 44-byte `nonce ‖ ct ‖ tag` blob.
+pub fn encrypt_fill_amounts(
     ephemeral_secret: &[u8; X25519_LEN],
     recipient_pub: &[u8; X25519_LEN],
-    amount: u64,
+    amounts: FillAmounts,
     nonce12: &[u8; NONCE_LEN],
 ) -> Result<[u8; SIDE_BLOB_LEN], CryptoError> {
     if !is_contributory_x25519_public_key(recipient_pub) {
@@ -99,10 +109,13 @@ pub fn encrypt_change_amount(
 
     let aead_key = derive_aead_key(shared.as_bytes(), eph_pub.as_bytes(), recipient_pub)?;
     let cipher = ChaCha20Poly1305::new(&aead_key.into());
+    let mut plaintext = [0u8; AMOUNTS_LEN];
+    plaintext[..8].copy_from_slice(&amounts.trade.to_le_bytes());
+    plaintext[8..].copy_from_slice(&amounts.change.to_le_bytes());
     let ct = cipher
-        .encrypt(Nonce::from_slice(nonce12), &amount.to_le_bytes()[..])
+        .encrypt(Nonce::from_slice(nonce12), &plaintext[..])
         .map_err(|e| CryptoError::Aead(format!("fill enc encrypt: {e:?}")))?;
-    debug_assert_eq!(ct.len(), AMOUNT_LEN + TAG_LEN);
+    debug_assert_eq!(ct.len(), AMOUNTS_LEN + TAG_LEN);
 
     let mut blob = [0u8; SIDE_BLOB_LEN];
     blob[..NONCE_LEN].copy_from_slice(nonce12);
@@ -116,11 +129,11 @@ pub fn encrypt_change_amount(
 /// plaintext) — the canonical "this key cannot read this blob" signal. The
 /// recipient's own public key (bound into the HKDF `info`) is recomputed from
 /// the secret, so the caller need not pass it.
-pub fn decrypt_change_amount(
+pub fn decrypt_fill_amounts(
     viewing_secret: &[u8; X25519_LEN],
     ephemeral_pub: &[u8; X25519_LEN],
     blob: &[u8; SIDE_BLOB_LEN],
-) -> Option<u64> {
+) -> Option<FillAmounts> {
     if !is_contributory_x25519_public_key(ephemeral_pub) {
         return None;
     }
@@ -133,12 +146,17 @@ pub fn decrypt_change_amount(
     let pt = cipher
         .decrypt(Nonce::from_slice(&blob[..NONCE_LEN]), &blob[NONCE_LEN..])
         .ok()?;
-    if pt.len() != AMOUNT_LEN {
+    if pt.len() != AMOUNTS_LEN {
         return None;
     }
-    let mut amt = [0u8; AMOUNT_LEN];
-    amt.copy_from_slice(&pt);
-    Some(u64::from_le_bytes(amt))
+    let mut trade = [0u8; 8];
+    trade.copy_from_slice(&pt[..8]);
+    let mut change = [0u8; 8];
+    change.copy_from_slice(&pt[8..]);
+    Some(FillAmounts {
+        trade: u64::from_le_bytes(trade),
+        change: u64::from_le_bytes(change),
+    })
 }
 
 /// HKDF-SHA256 → 32-byte ChaCha20-Poly1305 key, binding both pubkeys into `info`.
@@ -172,7 +190,10 @@ mod tests {
     const NONCE: [u8; 12] = [
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
     ];
-    const AMOUNT: u64 = 1_234_567_890_123;
+    const AMOUNTS: FillAmounts = FillAmounts {
+        trade: 1_234_567_890_123,
+        change: 98_765_432_101,
+    };
 
     fn recipient_pub() -> [u8; 32] {
         PublicKey::from(&StaticSecret::from(RECIPIENT_SECRET)).to_bytes()
@@ -180,27 +201,27 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let blob = encrypt_change_amount(&EPH_SECRET, &recipient_pub(), AMOUNT, &NONCE).unwrap();
+        let blob = encrypt_fill_amounts(&EPH_SECRET, &recipient_pub(), AMOUNTS, &NONCE).unwrap();
         let eph_pub = ephemeral_public(&EPH_SECRET);
-        let got = decrypt_change_amount(&RECIPIENT_SECRET, &eph_pub, &blob).unwrap();
-        assert_eq!(got, AMOUNT);
+        let got = decrypt_fill_amounts(&RECIPIENT_SECRET, &eph_pub, &blob).unwrap();
+        assert_eq!(got, AMOUNTS);
     }
 
     #[test]
     fn wrong_key_fails() {
-        let blob = encrypt_change_amount(&EPH_SECRET, &recipient_pub(), AMOUNT, &NONCE).unwrap();
+        let blob = encrypt_fill_amounts(&EPH_SECRET, &recipient_pub(), AMOUNTS, &NONCE).unwrap();
         let eph_pub = ephemeral_public(&EPH_SECRET);
         let wrong = [0x09u8; 32];
-        assert!(decrypt_change_amount(&wrong, &eph_pub, &blob).is_none());
+        assert!(decrypt_fill_amounts(&wrong, &eph_pub, &blob).is_none());
     }
 
     #[test]
     fn tampered_blob_fails() {
         let mut blob =
-            encrypt_change_amount(&EPH_SECRET, &recipient_pub(), AMOUNT, &NONCE).unwrap();
+            encrypt_fill_amounts(&EPH_SECRET, &recipient_pub(), AMOUNTS, &NONCE).unwrap();
         let eph_pub = ephemeral_public(&EPH_SECRET);
         blob[SIDE_BLOB_LEN - 1] ^= 0x01; // flip a tag byte
-        assert!(decrypt_change_amount(&RECIPIENT_SECRET, &eph_pub, &blob).is_none());
+        assert!(decrypt_fill_amounts(&RECIPIENT_SECRET, &eph_pub, &blob).is_none());
     }
 
     #[test]
@@ -215,20 +236,28 @@ mod tests {
         let eph_pub = ephemeral_public(&EPH_SECRET);
         let n1 = [1u8; 12];
         let n2 = [2u8; 12];
-        let blob_a = encrypt_change_amount(&EPH_SECRET, &alice_pub, 111, &n1).unwrap();
-        let blob_b = encrypt_change_amount(&EPH_SECRET, &bob_pub, 222, &n2).unwrap();
+        let amounts_a = FillAmounts {
+            trade: 111,
+            change: 11,
+        };
+        let amounts_b = FillAmounts {
+            trade: 222,
+            change: 22,
+        };
+        let blob_a = encrypt_fill_amounts(&EPH_SECRET, &alice_pub, amounts_a, &n1).unwrap();
+        let blob_b = encrypt_fill_amounts(&EPH_SECRET, &bob_pub, amounts_b, &n2).unwrap();
 
         assert_eq!(
-            decrypt_change_amount(&alice_secret, &eph_pub, &blob_a),
-            Some(111)
+            decrypt_fill_amounts(&alice_secret, &eph_pub, &blob_a),
+            Some(amounts_a)
         );
         assert_eq!(
-            decrypt_change_amount(&bob_secret, &eph_pub, &blob_b),
-            Some(222)
+            decrypt_fill_amounts(&bob_secret, &eph_pub, &blob_b),
+            Some(amounts_b)
         );
         // Cross-decrypt must fail (wrong recipient binding).
-        assert!(decrypt_change_amount(&alice_secret, &eph_pub, &blob_b).is_none());
-        assert!(decrypt_change_amount(&bob_secret, &eph_pub, &blob_a).is_none());
+        assert!(decrypt_fill_amounts(&alice_secret, &eph_pub, &blob_b).is_none());
+        assert!(decrypt_fill_amounts(&bob_secret, &eph_pub, &blob_a).is_none());
     }
 
     #[test]
@@ -236,7 +265,7 @@ mod tests {
         // If this fails after a deliberate scheme change, update the vector here
         // AND in packages/sdk/tests/fill-encryption.test.ts in lockstep.
         let eph_pub = ephemeral_public(&EPH_SECRET);
-        let blob = encrypt_change_amount(&EPH_SECRET, &recipient_pub(), AMOUNT, &NONCE).unwrap();
+        let blob = encrypt_fill_amounts(&EPH_SECRET, &recipient_pub(), AMOUNTS, &NONCE).unwrap();
         // Print so the TS vector can be regenerated with `--nocapture`.
         println!("FILL_ENC eph_pub   = {}", hex::encode(eph_pub));
         println!("FILL_ENC recip_pub = {}", hex::encode(recipient_pub()));
@@ -249,7 +278,7 @@ mod tests {
     const EXPECTED_EPH_PUB_HEX: &str =
         "13be4feaeaf204c7fd3358fc9c00721881d174278128227ec674f37f7fe97b6d";
     const EXPECTED_BLOB_HEX: &str =
-        "101112131415161718191a1bf38cd2533492baadb9e66ce516a13d47fca255f1f877cb1e";
+        "101112131415161718191a1b20617bcbf11404a3bbc4cfcba3206c3e47cf2216af8d8a806e4c654ef4dcd7d3";
 
     #[test]
     fn rejects_low_order_x25519_points() {
@@ -274,7 +303,7 @@ mod tests {
         }
         assert!(is_contributory_x25519_public_key(&recipient_pub()));
         let zero = [0u8; 32];
-        assert!(encrypt_change_amount(&EPH_SECRET, &zero, AMOUNT, &NONCE).is_err());
-        assert!(decrypt_change_amount(&RECIPIENT_SECRET, &zero, &[0; SIDE_BLOB_LEN]).is_none());
+        assert!(encrypt_fill_amounts(&EPH_SECRET, &zero, AMOUNTS, &NONCE).is_err());
+        assert!(decrypt_fill_amounts(&RECIPIENT_SECRET, &zero, &[0; SIDE_BLOB_LEN]).is_none());
     }
 }

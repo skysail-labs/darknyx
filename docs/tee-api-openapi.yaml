@@ -513,9 +513,9 @@ components:
           description: |
             Required 32-byte contributory X25519 viewing-encryption public key,
             hex (`deriveViewingEncKeypair().publicKey`). The TEE
-            encrypts each of this order's change_amounts to it and writes the
-            ciphertext on-chain, so the change note stays recoverable after a
-            CVM redeploy wipes the live fill memo. It is signed; low-order
+            encrypts each fill's `(trade, change)` output amounts to it and
+            writes the ciphertext on-chain, so exact and partial output notes
+            remain recoverable after a CVM redeploy. It is signed; low-order
             encodings that yield an all-zero shared secret are rejected.
         session_id:
           type: string
@@ -1254,11 +1254,10 @@ paths:
               schema: { $ref: '#/components/schemas/AccountSettings' }
 
   # NOTE: `GET /fills/replay` (the durable per-account memo-replay backstop, P7)
-  # was REMOVED by change-amount recovery (Proposal B). A fill's change_amount now
-  # rides the settle ix ENCRYPTED on-chain (X25519-ECIES, the `fill_recovery`
-  # field), so an offline client recovers the amount + opening from the indexer's
-  # located ciphertext via the SDK `recoverChangeFromChain` (decrypt + Vuln-4
-  # self-verify) — durable across a CVM redeploy, unlike the old log. Only the
+  # was REMOVED once encrypted on-chain recovery landed. Each side's `(trade,
+  # change)` tuple rides the settle ix in `fill_recovery`, so an offline client
+  # recovers both openings via `recoverFillFromChain` or performs a full
+  # seed-plus-chain rebuild with `recoverNotesFromChain`. Only the
   # live `/v1/stream` fills push remains in this API. See docs/fills-history-architecture.md.
 
   # ───── tree ────────────────────────────────────────────────────────────────
