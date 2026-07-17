@@ -183,9 +183,11 @@ bash scripts/deploy-devnet.sh
 
 `deploy-devnet.sh` uses your local `~/.config/solana/id.json` as upgrade
 authority + fee payer (need ≥ 5 SOL on devnet). **Never regenerate the
-program-id keypair** unless you mean to — `declare_id!()` in
-`programs/vault/src/lib.rs` and `[programs.*]` in `Anchor.toml` must match,
-and the `consistency` CI job fails if they diverge.
+program-id keypair for an initial deployment** unless you mean to —
+`declare_id!()` in `programs/vault/src/lib.rs` and `[programs.*]` in
+`Anchor.toml` must match, and the `consistency` CI job fails if they diverge.
+Existing upgrades use the compiled program address and require only the upgrade
+authority; `deploy-devnet.sh` verifies the program exists before taking that path.
 
 ### 2.4 Re-initialise devnet state when the Merkle tree diverges
 
