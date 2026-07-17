@@ -58,9 +58,9 @@ pub struct AttestationResponse {
     /// Hex of the 64-byte `report_data` field embedded in the
     /// quote. Layout as documented above.
     pub report_data: String,
-    /// Base58 of the TEE's Ed25519 signer pubkey. The right-half
-    /// of `report_data` is `SHA-256` of THIS — the caller can
-    /// verify the binding without an out-of-band lookup.
+    /// Base58 of the shard-0 Ed25519 signer. The right half of
+    /// `report_data` binds the complete ordered signer set exposed by `/info`;
+    /// callers must verify that full set rather than this convenience field.
     pub tee_pubkey: String,
 }
 

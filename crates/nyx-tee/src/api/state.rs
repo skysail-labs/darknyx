@@ -307,7 +307,8 @@ impl TokenBucket {
 pub struct OrderUpdateMsg {
     /// 16-byte order id, hex.
     pub order_id: String,
-    /// `"fully_filled" | "partially_filled" | "cancelled" | "expired"`.
+    /// `"pending_settlement" | "partially_filled" | "fully_filled" |
+    /// "settlement_failed" | "cancelled" | "expired"`.
     pub kind: &'static str,
     /// Cumulative filled quantity (fully/partially filled only).
     #[serde(skip_serializing_if = "Option::is_none")]
