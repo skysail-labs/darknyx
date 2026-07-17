@@ -77,6 +77,7 @@ solana program deploy "$VAULT_SO" \
   --program-id "$PROGRAM_ID_ARG" \
   --upgrade-authority "$HOME/.config/solana/id.json" \
   --url "$RPC_URL" \
+  --use-rpc \
   --commitment confirmed
 
 echo
