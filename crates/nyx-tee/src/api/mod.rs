@@ -3,8 +3,8 @@
 //! Landed: `health`, `info`, `attestation` (PR 4d); `auth` + `orders`
 //! (PR 4e); `settlement` (PR 4g.1); `auth/token/revoke` + admin
 //! `account` registration (Phase 1a); `tree/*` over the Merkle mirror
-//! (Phase 2a/2b); `instruments` + `transparency` (Phase 2c). `account`
-//! is mounted but deferred-by-design (501 — see `api::account`).
+//! (Phase 2a/2b); `instruments` + `transparency` + the open-order account
+//! snapshot (Phase 2c).
 //! WebSockets are consolidated on the in-band-authenticated `/v1/stream`
 //! multiplexed session (orders, fills, trading ops, and live tree events).
 
@@ -63,7 +63,7 @@ pub use state::{ApiState, BootAppInfo};
 /// | GET    | `/tree/leaves` | bearer        | Phase 2a |
 /// | GET    | `/instruments` | public        | Phase 2c |
 /// | GET    | `/instruments/{symbol}` | public | Phase 2c |
-/// | GET    | `/account`     | bearer (501)  | Phase 2c |
+/// | GET    | `/account`     | bearer        | Phase 2c |
 /// | GET    | `/transparency` | public       | Phase 2c |
 ///
 /// `POST /auth/token` is intentionally public (rate-limited at the

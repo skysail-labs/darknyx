@@ -1,7 +1,7 @@
 ---
 sidebar_position: 4
 title: Get Order
-description: Read the current status of one order, including its state, filled quantity, and the batch it matched in.
+description: Read the current live status and filled quantity of an order owned by the authenticated account.
 ---
 
 # Get Order
@@ -55,7 +55,7 @@ curl -s "$GATEWAY/orders/$ORDER_ID" \
 | `order_id` | string | The order id. |
 | `side` | string | `"bid"` or `"ask"`. |
 | `order_type` | string | `"limit"`, `"ioc"`, or `"fok"`. |
-| `status` | string | `pending`, `matched`, `expired`, or `cancelled`. |
+| `status` | string | Usually `pending` or `pending_settlement` for a live tracked order. Terminal lifecycle is delivered on the orders stream and may already have aged out of this read. |
 | `amount` | integer | The order's original size, in base units. |
 | `filled_quantity` | integer | How much has filled so far. |
 | `price_limit` | integer | The worst acceptable price (quote units per base). |
@@ -85,6 +85,5 @@ particular order.
 :::note Terminal orders age out
 The book tracks resting and recently-terminal orders. A long-since-filled,
 expired, or cancelled order may no longer be queryable here; recover fill details
-from your durable fill history (see [Fills Channel](../websocket/fills-channel))
-and on-chain settlement status.
+from your seed plus finalized chain (see [Fills Channel](../websocket/fills-channel)).
 :::

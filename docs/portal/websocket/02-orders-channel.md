@@ -1,14 +1,14 @@
 ---
 sidebar_position: 2
 title: Orders Channel
-description: A per-account push stream of order-lifecycle events: partial fills, full fills, cancellations, and expiries.
+description: A per-account stream of settlement reservations, confirmed fills, terminal failures, cancellations, and expiries.
 ---
 
 # Orders Channel
 
 :::info TL;DR
 The `orders` channel on `/v1/stream` streams **order-lifecycle events** for your account: each time one
-of your orders changes state (partial fill, full fill, cancellation, expiry), the
+of your orders is reserved, confirms a fill, fails settlement, cancels, or expires, the
 engine pushes an event. The stream is per-account: you only ever see your own
 orders. Use it instead of polling `GET /orders/{id}`.
 :::
@@ -44,17 +44,21 @@ Each message is a JSON object describing one state transition:
 |---|---|---|---|
 | `seq` | integer | always | Per-connection monotonic sequence, starting at 1. A gap means missed events. |
 | `order_id` | string | always | The 16-byte order id, hex. |
-| `kind` | string | always | The transition: `partially_filled`, `fully_filled`, `cancelled`, or `expired`. |
+| `kind` | string | always | `pending_settlement`, `partially_filled`, `fully_filled`, `settlement_failed`, `cancelled`, or `expired`. |
 | `filled_quantity` | integer | on fills | Cumulative filled quantity. |
 | `new_amount` | integer | on partial fill | The residual base amount still resting. |
 | `new_note_amount` | integer | on partial fill | The residual collateral-note value after the fill re-locked the remainder. |
+| `reason` | string | settlement failure | Human-readable definitive rejection reason. |
+| `lock_expiry_slot` | integer | pending/failure | Earliest relevant unlock boundary. After failure, wait until this slot before reusing the input in a fresh order. |
 
 ## Event kinds
 
 | `kind` | Terminal? | Meaning |
 |---|---|---|
+| `pending_settlement` | No | A private match reserved the order. Quantities have not changed and no fill is final yet. |
 | `partially_filled` | No | Part of the order filled; the remainder keeps resting (re-locked into a new note). |
 | `fully_filled` | Yes | The order filled completely. |
+| `settlement_failed` | Yes | Settlement definitively failed. The old order is never auto-rebooked; submit a fresh signed order after `lock_expiry_slot`. |
 | `cancelled` | Yes | The order was cancelled, whether by you, by a modify, or on session disconnect. |
 | `expired` | Yes | The order reached its `expiry_slot` without fully filling. |
 
@@ -64,10 +68,10 @@ and produces no further events.
 ## Event flow
 
 ```text
-order.place ──► (rests) ──► partially_filled ──► partially_filled ──► fully_filled
+order.place ──► pending_settlement ──► partially_filled ──► … ──► fully_filled
                                                                        └── terminal
-            └──► (rests) ──► expired            (terminal)
-            └──► (rests) ──► cancelled          (terminal)
+                    └──► settlement_failed             (terminal; fresh order required)
+            └──► (rests) ──► expired / cancelled             (terminal)
 ```
 
 A partial fill carries the residual size so you always know how much is still
@@ -102,6 +106,9 @@ ws.onmessage = (e) => {
   }
   if (ev.channel !== "orders") return;
   switch (ev.kind) {
+    case "pending_settlement":
+      console.log(`reserved until settlement resolves: ${ev.order_id}`);
+      break;
     case "partially_filled":
       console.log(`partial: ${ev.filled_quantity} filled, ${ev.new_amount} resting`);
       break;
@@ -111,6 +118,9 @@ ws.onmessage = (e) => {
     case "cancelled":
     case "expired":
       console.log(`${ev.kind}: ${ev.order_id}`);
+      break;
+    case "settlement_failed":
+      console.error(ev.reason, `retry after slot ${ev.lock_expiry_slot}`);
       break;
   }
 };

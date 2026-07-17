@@ -1,27 +1,17 @@
 ---
 sidebar_position: 4
 title: Settlement Status
-description: Track a matched batch from proof through to on-chain finality, and resolve the Solana transaction signatures that settled your trade.
+description: Inspect the per-match jobs and Solana signatures associated with a TEE-local settlement batch handle.
 ---
 
 # Settlement Status
 
 :::info TL;DR
-When your order matches, it settles on Solana as part of a **batch**. `GET
-/settlement/status/{batch_id}` translates a batch id into its on-chain
-transaction signatures and tells you which stage of the settlement pipeline it is
-in. Use it to confirm finality and to get a Solana explorer link for your trade.
+`GET /settlement/status/{batch_id}` returns every per-match job in a settlement
+batch. A match can be pending, confirmed, rejected, or ambiguous independently
+of its siblings. This is an authenticated operational/debug surface; trader
+clients should treat the orders and fills streams as their primary lifecycle.
 :::
-
-A fill on Nyx is not final the instant the engine matches it. It is final when
-the settlement transaction lands on Solana. Settlement runs as a short on-chain
-pipeline per batch (lock the notes, verify the batch proof, execute the atomic
-transfers, then reclaim the batch marker). This endpoint surfaces where a batch is
-in that pipeline and the signatures it produced.
-
-You learn the `batch_id` for a matched order from the order's status (`GET
-/orders/{order_id}` returns the `batch_id` it matched in) or from the orders
-stream.
 
 ## GET /settlement/status/&#123;batch_id&#125;
 
@@ -29,9 +19,12 @@ stream.
 GET /settlement/status/{batch_id}
 ```
 
-Authenticated (bearer).
+`batch_id` is an unsigned integer local to the running engine. It is not an
+on-chain identifier and the order-read response does not promise a batch-id
+field. Use this endpoint when an operator or diagnostic response has supplied a
+known batch handle.
 
-### Example
+Authenticated with a bearer token:
 
 ```bash
 curl -s "$GATEWAY/settlement/status/$BATCH_ID" \
@@ -42,57 +35,52 @@ curl -s "$GATEWAY/settlement/status/$BATCH_ID" \
 
 ```json
 {
-  "batch_id": "batch_01H…",
-  "status": "settled",
-  "merkle_root": "…",
-  "verify_match_batch_signature": "5xQ…",
-  "settle_signatures": ["3aB…", "9kZ…"],
-  "close_signature": "7mP…",
-  "settled_at": "2026-04-20T10:30:02.880Z",
-  "error": null
+  "batch_id": 42,
+  "jobs": [
+    {
+      "batch_id": 42,
+      "match_idx": 0,
+      "stage": "done",
+      "outcome": {
+        "kind": "confirmed",
+        "signature": "5xQ…",
+        "slot": 309482113,
+        "reconciled_from_consumed_pdas": false
+      },
+      "created_at_ms": 1784271000000,
+      "last_transition_at_ms": 1784271002880,
+      "lock_buyer_sig": "2aB…",
+      "lock_seller_sig": "3cD…",
+      "verify_sig": "4eF…",
+      "settle_sig": "5xQ…"
+    }
+  ]
 }
 ```
 
-### Field reference
+Each job has a `match_idx`, current `stage`, independent `outcome`, timestamps,
+and whichever Solana signatures have confirmed so far. Optional fields are
+omitted until available.
 
-| Field | Type | Description |
-|---|---|---|
-| `batch_id` | string | The batch identifier. |
-| `status` | string | The current pipeline stage (see below). |
-| `merkle_root` | string | The note-tree root the batch settled against. |
-| `verify_match_batch_signature` | string \| null | Solana signature of the transaction that verified the batch's match proof. |
-| `settle_signatures` | string[] | Per-match settlement transaction signatures, in match order. |
-| `close_signature` | string \| null | Signature of the transaction that reclaimed the batch's on-chain marker. |
-| `settled_at` | string \| null | Timestamp the batch reached `settled`. |
-| `error` | string \| null | Present only when `status` is `failed`: a human-readable reason. |
+## Stages
 
-## Status values
+`stage` is one of `queued`, `locking_notes`, `proving`, `verifying`, `settling`,
+`closing`, `done`, or `failed`. A `done` match has confirmed even when the shared
+marker has not yet been reclaimed; marker close is asynchronous rent cleanup,
+not part of trade finality.
 
-The pipeline advances through these stages in order:
+## Outcomes
 
-| Status | Meaning |
+| `outcome.kind` | Meaning |
 |---|---|
-| `pending_proof` | The batch's zero-knowledge match proof is being generated. |
-| `pending_verify_match_batch` | The proof is generated; the on-chain verify transaction is in flight. |
-| `pending_settles` | The batch is verified; the per-match settlement transactions are being submitted. |
-| `pending_close` | All matches settled; the marker-close transaction is in flight. |
-| `settled` | Fully final on-chain. Funds have moved; output notes exist in the tree. |
-| `failed` | The pipeline could not complete; see `error`. |
+| `pending` | No final per-match result yet. |
+| `confirmed` | The settle transaction confirmed, or finalized consumed-note accounts proved it landed. |
+| `rejected` | A definitive error made the match terminal. |
+| `ambiguous` | RPC evidence is inconclusive; the engine keeps the match reserved while reconciling or safely redriving it. |
 
-## Verifying settlement yourself
+Do not infer that every match succeeded from a batch-wide stage. Inspect every
+job. The user-facing order lifecycle commits a fill only for `confirmed`; a
+definitive failure emits `settlement_failed` and requires a fresh order after
+the input lock expires.
 
-Each signature is a real Solana transaction you can inspect on any explorer.
-Because settlement is enforced on-chain by a zero-knowledge proof, a `settled`
-batch is a cryptographic guarantee that the transfers were conservation-correct
-and bound to the committed notes, not merely the engine's assertion. To confirm a
-trade independently:
-
-1. Read `settle_signatures` for the batch.
-2. Look each up on a Solana explorer.
-3. Confirm the transaction succeeded and updated the vault's note tree.
-
-The new notes created by settlement (your filled asset, any change note for an
-unfilled remainder) appear as fresh leaves in the tree, which the SDK picks up
-when it follows tree updates. See [Settlement](../how-it-works/settlement) for the
-full pipeline and [Fills Channel](../websocket/fills-channel) for the per-fill
-notifications that let you recover the change notes.
+See [Settlement](../how-it-works/settlement) for the finality model.

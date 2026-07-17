@@ -151,8 +151,8 @@ pub struct ApiCredentials {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountSettings {
     /// Account-wide default for `/v1/stream` cancel-on-disconnect. A session's
-    /// explicit `?cancel_on_disconnect=` query param overrides this; absent, the
-    /// account default applies.
+    /// explicit login-frame value overrides this; absent, the account default
+    /// applies.
     #[serde(default)]
     pub cancel_on_disconnect_default: bool,
 }

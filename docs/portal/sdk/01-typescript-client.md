@@ -131,7 +131,7 @@ class NyxClient {
     return fetch(`${this.gateway}/orders/${orderId}`, { headers: this.auth() }).then((r) => r.json());
   }
 
-  settlementStatus(batchId: string) {
+  settlementStatus(batchId: number) {
     return fetch(`${this.gateway}/settlement/status/${batchId}`, { headers: this.auth() }).then((r) => r.json());
   }
 }
@@ -199,7 +199,7 @@ directly. `proveAndBuildOrder` is just the fetch-prove-build convenience on top.
 ## Streaming order and fill events
 
 ```typescript
-// Per-account order lifecycle: partial / full fill, cancel, expiry.
+// Per-account order lifecycle: reservation, confirmed fills, failure, cancel, expiry.
 const orders = subscribeOrderUpdates({
   gatewayWsUrl: WSS,
   token: client["token"]!,
@@ -211,7 +211,7 @@ const orders = subscribeOrderUpdates({
 });
 
 // Per-account fills: verified change-note memos (the SDK checks each memo's
-// anchor + commitment binding before handing it to you).
+// consumed-input derivation + commitment binding before handing it to you).
 const fills = subscribeFills({
   gatewayWsUrl: WSS,
   token: client["token"]!,
@@ -225,8 +225,8 @@ const fills = subscribeFills({
 
 ## Submitting over the trading socket
 
-For a high-frequency client, submit orders over the [WebSocket trading
-socket](../websocket/ws-trading) instead of REST, using one warm connection plus
+For a high-frequency client, submit orders over the shared
+[`/v1/stream` session](../websocket/session-stream) instead of REST, using one warm connection plus
 cancel-on-disconnect. The `TradingClient` correlates each reply to its request
 and resolves a promise per call:
 
@@ -260,7 +260,7 @@ const status = await client.systemStatus();
 if (status.degraded) throw new Error("venue degraded, back off");
 
 const markets = await client.getInstruments();
-console.log(markets.instruments.map((m) => m.symbol));
+console.log(markets.map((m) => m.symbol));
 
 // build + place an order (see above), then watch its lifecycle on the streams.
 ```

@@ -72,8 +72,8 @@ curl -s -X DELETE "$GATEWAY/orders/$ORDER_ID" \
 | `order_id` | string | The cancelled order's id. |
 | `status` | string | `"cancelled"`. |
 
-When an order is cancelled, the engine releases its collateral note and drops
-the in-enclave continuation opening. A `cancelled` event is also emitted on the
+When an order is cancelled, the engine releases its collateral reservation and
+drops the in-enclave note opening. A `cancelled` event is also emitted on the
 [Orders Channel](../websocket/orders-channel) so a streaming client sees the
 order leave without polling.
 

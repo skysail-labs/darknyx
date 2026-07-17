@@ -7,17 +7,18 @@ description: A public, unauthenticated proof-of-reserves covering per-mint outst
 # Transparency
 
 :::info TL;DR
-`GET /transparency` is a **public proof-of-reserves**: for every mint it reports
+`GET /transparency` is a **public solvency snapshot**: for every mint it reports
 the outstanding note value (the venue's liability) against the actual SPL balance
-held in the vault (the assets). Anyone can verify the vault covers what it owes,
-with no login and no trust in the operator's word.
+held in the vault (the assets). Treat the endpoint as a convenience view and
+verify the same `OutstandingMint` and vault token accounts directly on Solana
+when making a trust decision.
 :::
 
 A dark pool hides individual orders and balances, but solvency should still be
 publicly checkable. Transparency squares that circle: it never reveals who owns
-what, but it proves, in aggregate, that the assets in custody cover the
-liabilities the notes represent, and it ties the response to a specific, measured
-engine.
+what, but it makes aggregate assets and liabilities easy to compare. The values
+remain independently verifiable from Solana, while engine identity is verified
+through a separate fresh attestation.
 
 ## GET /transparency
 
@@ -37,8 +38,8 @@ Public, with no authentication.
     "per_mint": [
       {
         "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-        "outstanding": "1250000.00",
-        "vault_balance": "1250000.00",
+        "outstanding": "1250000000000",
+        "vault_balance": "1250000000000",
         "stale": false
       }
     ]
@@ -60,11 +61,11 @@ Public, with no authentication.
 
 | Field | Type | Description |
 |---|---|---|
-| `reserves.merkle_root` | string | Root of the note tree the snapshot is taken against. |
+| `reserves.merkle_root` | string | Shard 0's Merkle root. There is no single global root; read every shard through `/tree/root`. |
 | `reserves.leaf_count` | integer | Total note commitments across all shards. |
 | `per_mint[].mint` | string | The SPL mint, base58. |
-| `per_mint[].outstanding` | string | Sum of unspent note value for this mint, the venue's liability. |
-| `per_mint[].vault_balance` | string | The actual SPL balance held in the vault for this mint, the assets. |
+| `per_mint[].outstanding` | string | Sum of unspent note value for this mint in smallest token units, the venue's liability. |
+| `per_mint[].vault_balance` | string | Actual SPL balance held in the vault in smallest token units, the assets. |
 | `per_mint[].stale` | boolean | `true` if an on-chain read was degraded; treat the numbers as unknown, not zero, when set. |
 
 **The solvency check is `vault_balance >= outstanding` for every mint.** When it
@@ -77,12 +78,15 @@ than read a transient `0` as insolvency.
 | Field | Description |
 |---|---|
 | `tee.app_id` | The deployment's application id. |
-| `tee.compose_hash` | The measured image hash, the same value you pin in attestation (see [Transport & Attestation](../api/transport-and-attestation)). |
+| `tee.compose_hash` | The server's convenience copy of its compose hash; use the quote-bound event log for verification. |
 | `tee.mrtd` | The TDX measurement of the running VM. |
 | `tee.signer_pubkey` | The enclave's on-chain settlement signer (base58). |
 
-These let you tie a transparency snapshot to a specific measured engine: the
-same engine whose attestation you can verify and whose signer settles on Solana.
+These fields identify what the server claims to be. They are **not** an
+attestation proof: derive the compose hash from the DCAP-verified quote event log
+and compare the quote-bound full signer set with finalized on-chain
+`VaultConfig.tee_pubkeys`. The transparency response exposes only the primary
+signer.
 
 ## Stats
 
@@ -98,7 +102,8 @@ reveal nothing about any individual order.
 
 - **Independent solvency monitoring.** Poll it and alert if any non-stale mint
   shows `vault_balance < outstanding`.
-- **Pre-trade trust check.** Before committing significant flow, confirm reserves
-  cover liabilities and the `compose_hash` matches the build you trust.
+- **Pre-trade trust check.** Confirm reserves cover liabilities, then perform the
+  independent quote, measurement, and full signer-set checks described in
+  [Transport & Attestation](../api/transport-and-attestation).
 - **Public dashboards.** Because it is unauthenticated and leaks nothing about
   individuals, it is safe to surface on a status page.

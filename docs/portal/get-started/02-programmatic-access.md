@@ -1,5 +1,5 @@
 ---
-sidebar_position: 2
+sidebar_position: 3
 title: Programmatic Access
 description: The Nyx API surface at a glance: the two-layer auth model, the REST and WebSocket endpoints, and a quick start.
 ---
@@ -7,11 +7,12 @@ description: The Nyx API surface at a glance: the two-layer auth model, the REST
 # Programmatic Access
 
 :::info TL;DR
-Nyx exposes a **REST + WebSocket API** served directly by the enclave over
-RA-TLS. Authentication is **two layers**: an account **bearer token** (who is
+Nyx exposes a **REST + WebSocket API** from the confidential-VM deployment.
+Authentication is **two layers**: an account **bearer token** (who is
 allowed to talk to the venue) plus a per-order **trading-key signature** (who
-cryptographically owns the order). Read endpoints are public; order management is
-authenticated.
+cryptographically owns the order). Market and health reads are public; private
+state and order management are authenticated. Attestation verifies the server
+before a client discloses order intent.
 :::
 
 ## The authentication model
@@ -38,12 +39,12 @@ See [Authentication](../api/authentication) for the full credential model and
 | Surface | Use it for |
 |---|---|
 | **REST** | One-off calls, cold starts, snapshots: auth, instruments, order management, account state via Merkle proofs, transparency, settlement status. |
-| **WebSocket** | Long-running clients: a bidirectional **trading** socket, a per-account **orders** lifecycle stream, and a per-account **fills** stream. |
+| **WebSocket** | Long-running clients: order operations plus `orders`, `fills`, and `tree` subscriptions multiplexed over one `/v1/stream` session. |
 
-REST is simplest to start with. A long-running trading client should move order
-submission to the WebSocket trading socket (one warm, pre-authenticated
-connection instead of a TLS + bearer round-trip per request) and subscribe to
-the orders and fills channels for push updates.
+REST is simplest to start with. A long-running trading client should use one
+warm, in-band-authenticated `/v1/stream` connection for order operations and
+subscribe to lifecycle and fill events. Sequence numbers let it detect gaps and
+reconcile after reconnecting.
 
 ## Endpoint map
 
@@ -59,6 +60,8 @@ the orders and fills channels for push updates.
 | `DELETE` | `/orders/{order_id}` | bearer + sig | Cancel an order |
 | `PUT` | `/orders/{order_id}` | bearer + sig | Modify (atomic cancel + replace) |
 | `GET` | `/orders/{order_id}` | bearer | Order status |
+| `GET` | `/account` | bearer | Open orders owned by the account |
+| `GET/PUT` | `/account/settings` | bearer | Account stream preferences |
 | `GET` | `/tree/root` | public | Current Merkle root of a shard |
 | `GET` | `/tree/inclusion` | bearer | Inclusion proof for a note commitment |
 | `GET` | `/tree/leaves` | bearer | Paginated leaf read |
@@ -106,8 +109,8 @@ curl -s -X POST "$GATEWAY/orders" \
 
 :::tip Use the SDK
 A raw place-order body is large: it includes a note commitment, a 256-byte
-zero-knowledge input proof, an owner-commitment opening, a contributory viewing
-key, and the current boot session, all of which the **TypeScript SDK** signs
+zero-knowledge input proof, the note opening needed for intake validation, a
+contributory viewing key, and the current boot session, all of which the **TypeScript SDK** signs
 for you from your keys and a deposited note. Hand-building the body is possible
 (the wire contract is documented), but the SDK is the intended path. See
 [SDK → TypeScript Client](../sdk/typescript-client).
@@ -117,7 +120,7 @@ for you from your keys and a deposited note. Hand-building the body is possible
 
 Read endpoints and authenticated order management are subject to operational
 rate limiting at the venue. Design clients to back off on `429` responses and to
-prefer the WebSocket trading socket for high-frequency order management, since one
-authenticated connection avoids the per-request handshake cost. See
+prefer the shared `/v1/stream` session for high-frequency order management,
+since one authenticated connection avoids per-request setup. See
 [System Status](../reference/system-status) for how the venue signals
 degradation.

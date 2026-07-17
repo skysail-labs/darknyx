@@ -34,7 +34,7 @@ a successful `login`:
 |---|---|---|
 | `op` | Yes | `"login"`. |
 | `token` | Yes | A bearer token from [`POST /auth/token`](../api/authentication). |
-| `cancel_on_disconnect` | No | If `true`, the engine cancels all of this account's open orders when the socket drops. Recommended for market makers. |
+| `cancel_on_disconnect` | No | If `true`, the engine cancels still-resting orders placed through this session when the socket drops. Recommended for market makers. |
 
 To refresh an expiring token, send another `login` on the same socket without
 dropping your subscriptions. The server emits an `auth_expired` reminder about
@@ -48,7 +48,7 @@ dropping your subscriptions. The server emits an `auth_expired` reminder about
 
 | Channel | Scope | What it pushes |
 |---|---|---|
-| `orders` | Per-account | Your order-lifecycle events (partial, filled, cancelled, expired). Same payloads as the [Orders Channel](./orders-channel). |
+| `orders` | Per-account | Settlement reservations, confirmed fills, terminal failures, cancellations, and expiries. Same payloads as the [Orders Channel](./orders-channel). |
 | `fills` | Per-account | Your continuation-fill memos. Same payloads, and the same verify-before-store rule, as the [Fills Channel](./fills-channel). |
 | `tree` | Global | Leaf-append events, for keeping an incremental view of the note tree (for example, live portfolio state). |
 

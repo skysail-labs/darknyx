@@ -9,10 +9,10 @@ description: Submit a hidden, fully-collateralized order, covering the request b
 :::info TL;DR
 `POST /orders` submits a new order. The body carries the usual economic fields
 (symbol, side, type, amount, price) **plus** the cryptographic backing that makes
-the order private and trustless: the collateral-note commitment, a zero-knowledge
-input proof, an owner-commitment opening, a signed contributory viewing key, the
-current boot session, and a trading-key
-signature over the whole canonical body. The **SDK builds and signs
+the order private and self-custodial: the collateral-note commitment, a zero-knowledge
+input proof, a note opening, a signed contributory viewing key, the current boot
+session, and a trading-key signature over the canonical order intent. The
+opening is pinned indirectly through the signed note commitment. The **SDK builds and signs
 all of this** from your keys and a deposited note.
 :::
 
@@ -73,6 +73,7 @@ wire contract is unambiguous.
 | `nullifier` | string | Yes | 32-byte hex. Precomputed client-side (it needs the spending key, which never enters the enclave). Retained by the current order schema but absent from settlement payload v9; Tx D replay protection is commitment-keyed. |
 | `merkle_root` | string | Yes | 32-byte hex. The tree root the input proof was generated against. Must still be in the on-chain root window at settlement time. |
 | `valid_input_proof` | string | Yes | 256-byte hex. The zero-knowledge proof that the collateral note is in the tree and spendable. The engine relays it unverified; the on-chain program verifies it at lock time. |
+| `tree_id` | integer | No | Merkle-tree shard containing the collateral note. Defaults to `0`; a wrong shard causes the on-chain lock to fail. |
 
 ### Recovery and replay binding
 
@@ -149,9 +150,11 @@ the book, **not** that it has filled. Track fills via
 | Status | Description |
 |---|---|
 | `pending` | Accepted and resting in the book. |
-| `matched` | Matched in a batch; settling or settled on-chain. |
-| `expired` | Reached `expiry_slot` without (fully) filling. |
-| `cancelled` | Cancelled by you, by a modify, or on session disconnect. |
+| `pending_settlement` | Reserved for a private match; no book quantity or fill is committed until Solana confirms it. |
+| `partially_filled` | Stream event emitted after a confirmed partial settlement; the derived continuation remains live. |
+| `fully_filled` | Stream event emitted after the final confirmed quantity. |
+| `settlement_failed` | Terminal definitive rejection. Includes a reason and lock-expiry slot; submit a fresh signed order after unlock. |
+| `expired` / `cancelled` | Terminal without a confirmed fill. |
 
 A market or fill-or-kill order that cannot execute in its arrival batch leaves the
 book immediately rather than resting.
@@ -179,7 +182,9 @@ Every order is verified before it enters the book. A non-`202` response carries 
 | The note opening re-derives the signed `note_commitment` | `400` | 1006 |
 | The collateral covers the order's nominal cost plus its own fee | `400` | 1003 |
 | The trading-key signature verifies over the canonical body | `403` | 1102 |
-| The viewing key is contributory and the session matches this boot | `400` | 1001 |
+| The viewing key is contributory | `400` | 1008 |
+| `expiry_slot` fits within the maximum on-chain lock lifetime | `400` | 1007 |
+| The signed session matches this boot | `409` | 1205 |
 | The `order_id` is not reused for a different order | `409` | 1201 |
 | The nonce is strictly greater than the last accepted nonce for this trading key | `409` | 1202 |
 | Per-account rate limit not exceeded | `429` | 1401 |
@@ -191,5 +196,6 @@ of the signed canonical body.
 :::note Rate limits are weighted
 Order management is rate-limited per account with a token bucket; cancels are
 cheap, place and modify cost more. A `429` includes a `Retry-After` header. For
-high-frequency management prefer the [WebSocket trading socket](../websocket/ws-trading).
+high-frequency management prefer the shared
+[`/v1/stream` session](../websocket/session-stream).
 :::

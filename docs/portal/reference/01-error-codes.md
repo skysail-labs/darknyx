@@ -44,12 +44,14 @@ Codes are grouped by class. The HTTP status is derived from the class.
 | Code | HTTP | Meaning |
 |---|---|---|
 | `1000` | 400 | Generic bad request. |
-| `1001` | 400 | Malformed input: bad hex, wrong width, zero/illegal id, wrong anchor count. |
+| `1001` | 400 | Malformed input: bad hex, wrong width, zero/illegal id, or invalid field combination. |
 | `1002` | 400 | A hashed field is not a canonical field element (BN254 Fr-unsafe). |
 | `1003` | 400 | Collateral below the order's nominal cost + fee. |
 | `1004` | 400 | Order amount below the market minimum. |
 | `1005` | 400 | A bid with a zero price limit. |
 | `1006` | 400 | The note opening does not re-derive the signed `note_commitment`. |
+| `1007` | 400 | `expiry_slot` exceeds the maximum lock lifetime. |
+| `1008` | 400 | The X25519 viewing key is low-order or otherwise non-contributory. |
 | `1101` | 401 | Missing / invalid / expired / revoked token, or bad credentials. |
 | `1102` | 403 | The trading-key signature did not verify. |
 | `1103` | 403 | The trading key does not own the targeted order. |
@@ -58,6 +60,7 @@ Codes are grouped by class. The HTTP status is derived from the class.
 | `1202` | 409 | A replay-protection nonce did not advance. |
 | `1203` | 409 | A modify's replacement id is already booked. |
 | `1204` | 409 | The collateral note commitment is already reserved by a live or settlement-pending order. |
+| `1205` | 409 | The order targets a stale or unrelated CVM boot session. |
 | `1301` | 404 | No such order / batch / instrument / note. |
 | `1401` | 429 | Rate limited; back off and retry. |
 | `5001` | 503 | A required subsystem (matching / settlement) is unavailable. |
@@ -69,11 +72,11 @@ Codes are stable: branch on the number, not the message text (which may change).
 
 | Status | Class | Typical conditions |
 |---|---|---|
-| `400 Bad Request` | Malformed input | Invalid hex; wrong field width; a hashed field that is not a valid field element; a zero `order_id`; a bid with `price_limit = 0`; an opening that does not re-derive the signed note commitment; collateral below the required floor; wrong anchor count. |
+| `400 Bad Request` | Malformed input | Invalid hex; wrong field width; a non-canonical field element; zero `order_id`; zero-price bid; invalid viewing key; excessive expiry; bad opening; or insufficient collateral. |
 | `401 Unauthorized` | Auth | Missing bearer token; expired or revoked token; invalid credentials on `POST /auth/token`. |
-| `403 Forbidden` | Ownership | The trading-key signature did not verify over the canonical body; the trading key does not own the order being cancelled / modified / topped up. |
+| `403 Forbidden` | Ownership | The trading-key signature did not verify over the canonical body, or the trading key does not own the order being cancelled or modified. |
 | `404 Not Found` | Missing resource | No such order (already filled / expired / cancelled), batch, or instrument. |
-| `409 Conflict` | State conflict | Duplicate `order_id`; collateral already reserved; a modify whose replacement id is already booked; a top-up nonce that did not advance. |
+| `409 Conflict` | State conflict | Duplicate `order_id`; stale arrival nonce or boot session; collateral already reserved; or a modify whose replacement id is already booked. |
 | `429 Too Many Requests` | Rate limit | Operational rate limit exceeded; back off and retry. |
 | `503 Service Unavailable` | Subsystem down | Matching or settlement is not available; see [`/system/status`](./system-status). |
 
@@ -91,11 +94,10 @@ Codes are stable: branch on the number, not the message text (which may change).
 - `409`: the `order_id` is already in the book, or the collateral commitment is
   reserved by another live/pending order.
 
-### Cancel / modify / top-up
+### Cancel / modify
 - `403`: signature does not verify, or the key does not own the order.
 - `404`: the order is not resting (filled / expired / cancelled).
 - `409` (modify): the replacement `order_id` is already booked.
-- `409` (top-up): the `topup_nonce` did not advance.
 
 ### Reads (orders, settlement, tree)
 - `400`: malformed id / parameter hex.
@@ -111,7 +113,7 @@ Codes are stable: branch on the number, not the message text (which may change).
 | `403` | Check you signed with the correct trading key over the correct canonical body. |
 | `404` (on cancel/modify) | Treat as "no longer resting"; reconcile via `GET /orders/{id}` or the orders stream. |
 | `409` | For a duplicate order id, use a fresh id; for a stale nonce, advance it. |
-| `429` | Back off with jitter; prefer the WebSocket trading socket for high-frequency management. |
+| `429` | Back off with jitter; prefer one shared `/v1/stream` session for high-frequency management. |
 | `503` | Poll `/system/status`; resume when matching/settlement is available. |
 
 :::tip Make cancels idempotent in your logic

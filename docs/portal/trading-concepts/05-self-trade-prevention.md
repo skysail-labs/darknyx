@@ -25,7 +25,7 @@ your bid  ✓  other ask    →  eligible to match
 other bid ✓  your ask     →  eligible to match
 ```
 
-The result: every execution you receive is against a *different* counterparty.
+The result: every execution you receive is against a *different trading key*.
 
 ## Why a single behavior
 
@@ -41,7 +41,7 @@ available to match against everyone else in the same batch.
 
 - **No accidental wash trades.** A market maker quoting both sides cannot
   accidentally trade with itself and manufacture fake volume or churn fees.
-- **Clean execution records.** Every fill is against a genuine third party.
+- **Cleaner execution records.** Every fill is against a distinct trading key.
 
 ## What it is not
 

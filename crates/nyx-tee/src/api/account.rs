@@ -86,7 +86,7 @@ pub async fn get_account(
                     status: match o.status {
                         OrderStatus::Empty => "empty",
                         OrderStatus::Pending => "pending",
-                        OrderStatus::Matched => "matched",
+                        OrderStatus::Matched => "pending_settlement",
                         OrderStatus::Expired => "expired",
                         OrderStatus::Cancelled => "cancelled",
                     },

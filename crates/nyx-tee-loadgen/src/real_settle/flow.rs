@@ -18,7 +18,9 @@ use solana_transaction::Transaction;
 
 use super::rpc::{parse_leaf_count, RpcClient};
 use super::vault::{self, NoteCreated};
-use super::{IncrementalTree, RealSettleError, ValidInputProof, ValidInputProver};
+use super::{
+    IncrementalTree, RealSettleError, ValidDepositProver, ValidInputProof, ValidInputProver,
+};
 
 use ark_bn254::Fr;
 
@@ -50,7 +52,8 @@ pub struct DepositedNote {
 /// together — the on-chain analogue of the SDK's `cvm-harness.ts`.
 pub struct RealSettleHarness {
     rpc: RpcClient,
-    prover: ValidInputProver,
+    input_prover: ValidInputProver,
+    deposit_prover: ValidDepositProver,
     shadows: Vec<IncrementalTree>,
     num_trees: u8,
 }
@@ -59,14 +62,16 @@ impl RealSettleHarness {
     /// `circuits_build_dir` resolves the valid_input artifacts; `num_trees` is
     /// the on-chain shard count (e2e-config `numTrees`).
     pub fn new(rpc: RpcClient, circuits_build_dir: &str, num_trees: u8) -> R<Self> {
-        let prover = ValidInputProver::load(circuits_build_dir)?;
+        let input_prover = ValidInputProver::load(circuits_build_dir)?;
+        let deposit_prover = ValidDepositProver::load(circuits_build_dir)?;
         let mut shadows = Vec::with_capacity(num_trees.max(1) as usize);
         for _ in 0..num_trees.max(1) {
             shadows.push(IncrementalTree::new()?);
         }
         Ok(Self {
             rpc,
-            prover,
+            input_prover,
+            deposit_prover,
             shadows,
             num_trees: num_trees.max(1),
         })
@@ -120,20 +125,28 @@ impl RealSettleHarness {
         mint: [u8; 32],
         depositor_token_account: &solana_address::Address,
         amount: u64,
-        owner_commitment: &[u8; 32],
-        inner_hash: &[u8; 32],
-        commitment: [u8; 32],
+        spending_key: &Fr,
+        owner_blinding: &Fr,
+        recovery_nonce: &[u8; 32],
         tree_id: u8,
     ) -> R<DepositedNote> {
         let mint_addr = solana_address::Address::new_from_array(mint);
+        let deposit = self.deposit_prover.prove(
+            spending_key,
+            owner_blinding,
+            &mint,
+            amount,
+            recovery_nonce,
+        )?;
         let ix = vault::build_deposit_ix(
             tree_id,
             &payer.pubkey(),
             &mint_addr,
             depositor_token_account,
             amount,
-            owner_commitment,
-            inner_hash,
+            &deposit.note_commitment,
+            &deposit.recovery_nonce,
+            &deposit.proof_bytes,
         );
         let sig = self.sign_send_confirm(payer, ix).await?;
         let logs = self.rpc.transaction_logs(&sig).await?;
@@ -141,12 +154,12 @@ impl RealSettleHarness {
             tree_id: actual_tree,
             leaf_index,
         } = vault::note_created_from_logs(&logs)?;
-        self.shadows[actual_tree as usize].append(commitment);
+        self.shadows[actual_tree as usize].append(deposit.note_commitment);
         Ok(DepositedNote {
             mint,
             amount,
-            inner_hash: *inner_hash,
-            commitment,
+            inner_hash: deposit.inner_hash,
+            commitment: deposit.note_commitment,
             tree_id: actual_tree,
             leaf_index,
         })
@@ -160,7 +173,7 @@ impl RealSettleHarness {
         note: &DepositedNote,
     ) -> R<ValidInputProof> {
         let witness = self.shadows[note.tree_id as usize].witness(note.leaf_index as usize)?;
-        self.prover.prove(
+        self.input_prover.prove(
             spending_key,
             owner_blinding,
             &note.inner_hash,

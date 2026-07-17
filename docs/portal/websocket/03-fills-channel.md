@@ -62,7 +62,7 @@ channel is per-account: you only receive memos for orders you placed.
 ## Verify before you store
 
 A fill memo is **untrusted input**. Verify it before adding the change note to
-your store. The SDK performs two checks:
+your store. The SDK performs three checks:
 
 1. **Consumed-input binding.** The named input must exist in your note store and
    its opening must reproduce `consumed_note_commitment` and the change mint.
@@ -71,7 +71,7 @@ your store. The SDK performs two checks:
 3. **Commitment binding.** Recomputing the output note from the verified owner,
    mint, amount, and derived inner must equal `change_note_commitment` as bytes.
 
-Only a memo that passes both becomes a stored, spendable change note. This is the
+Only a memo that passes all three becomes a stored, spendable change note. This is the
 guard that keeps a misbehaving engine from substituting a note you do not own.
 
 ## Durability and gap recovery

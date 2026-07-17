@@ -299,31 +299,17 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
         .await?;
 
     // 2. Deposit both notes into shard 0 (co-shard inputs).
-    let buyer_inner = fr_to_be_bytes(&Fr::from(salt ^ 0xB));
-    let seller_inner = fr_to_be_bytes(&Fr::from(salt ^ 0x5));
-    let buyer_commit = darkpool_crypto::commitment_from_fields_v2(
-        &p.quote_mint,
-        buyer_note_amt,
-        &buyer.owner_commit,
-        &buyer_inner,
-    )
-    .map_err(|e| anyhow!("commit: {e}"))?;
-    let seller_commit = darkpool_crypto::commitment_from_fields_v2(
-        &p.base_mint,
-        seller_note_amt,
-        &seller.owner_commit,
-        &seller_inner,
-    )
-    .map_err(|e| anyhow!("commit: {e}"))?;
+    let buyer_recovery_nonce = fr_to_be_bytes(&Fr::from(salt ^ 0xB));
+    let seller_recovery_nonce = fr_to_be_bytes(&Fr::from(salt ^ 0x5));
     let buyer_note = harness
         .deposit(
             &admin,
             p.quote_mint,
             &buyer_quote_ata,
             buyer_note_amt,
-            &buyer.owner_commit,
-            &buyer_inner,
-            buyer_commit,
+            &buyer.spending_key,
+            &buyer.owner_blinding,
+            &buyer_recovery_nonce,
             0,
         )
         .await?;
@@ -333,9 +319,9 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
             p.base_mint,
             &seller_base_ata,
             seller_note_amt,
-            &seller.owner_commit,
-            &seller_inner,
-            seller_commit,
+            &seller.spending_key,
+            &seller.owner_blinding,
+            &seller_recovery_nonce,
             0,
         )
         .await?;
@@ -593,14 +579,7 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 let persona = Persona::new($seed)?;
                 let shard = (g % k as usize) as u8;
                 g += 1;
-                let inner = fr_to_be_bytes(&Fr::from($seed ^ 0xA5A5));
-                let commit = darkpool_crypto::commitment_from_fields_v2(
-                    &$mint,
-                    $amount,
-                    &persona.owner_commit,
-                    &inner,
-                )
-                .map_err(|e| anyhow!("commit: {e}"))?;
+                let recovery_nonce = fr_to_be_bytes(&Fr::from($seed ^ 0xA5A5));
                 harness
                     .sign_send_confirm(
                         &admin,
@@ -618,9 +597,9 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                         $mint,
                         &$ata,
                         $amount,
-                        &persona.owner_commit,
-                        &inner,
-                        commit,
+                        &persona.spending_key,
+                        &persona.owner_blinding,
+                        &recovery_nonce,
                         shard,
                     )
                     .await?;
@@ -749,22 +728,8 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 // Distinct high-bit XORs (NOT 0x30/0x31 — they differ only in
                 // bit0, which a `|1` would clobber, making both inner_hashes —
                 // and thus both nullifiers — equal → merge NoteAlreadyConsumed).
-                let ih0 = fr_to_be_bytes(&Fr::from(seed_base ^ 0x1300));
-                let ih1 = fr_to_be_bytes(&Fr::from(seed_base ^ 0x2500));
-                let c0 = darkpool_crypto::commitment_from_fields_v2(
-                    &p.base_mint,
-                    a0,
-                    &sp.owner_commit,
-                    &ih0,
-                )
-                .map_err(|e| anyhow!("c0: {e}"))?;
-                let c1 = darkpool_crypto::commitment_from_fields_v2(
-                    &p.base_mint,
-                    a1,
-                    &sp.owner_commit,
-                    &ih1,
-                )
-                .map_err(|e| anyhow!("c1: {e}"))?;
+                let nonce0 = fr_to_be_bytes(&Fr::from(seed_base ^ 0x1300));
+                let nonce1 = fr_to_be_bytes(&Fr::from(seed_base ^ 0x2500));
                 harness
                     .sign_send_confirm(
                         &admin,
@@ -777,9 +742,9 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                         p.base_mint,
                         &base_ata,
                         a0,
-                        &sp.owner_commit,
-                        &ih0,
-                        c0,
+                        &sp.spending_key,
+                        &sp.owner_blinding,
+                        &nonce0,
                         shard,
                     )
                     .await?;
@@ -789,12 +754,16 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                         p.base_mint,
                         &base_ata,
                         a1,
-                        &sp.owner_commit,
-                        &ih1,
-                        c1,
+                        &sp.spending_key,
+                        &sp.owner_blinding,
+                        &nonce1,
                         shard,
                     )
                     .await?;
+                let ih0 = n0.inner_hash;
+                let ih1 = n1.inner_hash;
+                let c0 = n0.commitment;
+                let c1 = n1.commitment;
                 // Merge-prove + submit the merge ix.
                 let mp = merge_prover
                     .as_ref()

@@ -1,10 +1,10 @@
 {
   "label": "WebSocket API",
-  "position": 6,
+  "position": 9,
   "collapsed": true,
   "link": {
     "type": "generated-index",
     "title": "WebSocket API",
-    "description": "Low-latency, persistent connections: a bidirectional trading socket, a per-account order-lifecycle stream, a per-account fills stream, and a multiplexed session stream that combines them on one connection."
+    "description": "One authenticated /v1/stream connection for order operations, lifecycle events, fills, tree updates, reconnects, and cancel-on-disconnect."
   }
 }

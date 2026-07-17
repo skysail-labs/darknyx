@@ -1,103 +1,79 @@
 ---
 sidebar_position: 1
 title: Get Instruments
-description: List the markets Nyx supports and read a single market's parameters: mints, tick size, minimum order size, and the price oracle.
+description: List supported markets and read their mints, raw protocol units, and oracle feed identifier.
 ---
 
 # Get Instruments
 
-:::info TL;DR
-Instruments describe the markets you can trade: the base and quote token mints,
-the price increment, the minimum order size, and the **oracle** that anchors the
-clearing price. Both endpoints are public.
-:::
+The instrument endpoints are public. They describe the market metadata captured
+when the confidential matcher booted.
 
-Each Nyx market is a pair of SPL token mints (a base and a quote) together with
-the parameters the matching engine needs to clear it. Because Nyx clears each
-batch at a single oracle-anchored price (see
-[Clearing Price](../trading-concepts/clearing-price)), every instrument names the
-oracle that provides its reference price.
-
-## List all instruments
+## List instruments
 
 ```text
 GET /instruments
 ```
 
-Returns every tradable market. Public, with no authentication.
-
-### Example
-
-```bash
-curl -s "$GATEWAY/instruments" | jq .
-```
-
-### Response
+The response is a JSON **array**, not an object envelope:
 
 ```json
-{
-  "instruments": [
-    {
-      "symbol": "SOL-USDC",
-      "base_mint": "So11111111111111111111111111111111111111112",
-      "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      "tick_size": "0.001",
-      "min_order_size": "0.01",
-      "oracle": {
-        "type": "pyth_pull_v2",
-        "pubkey": "…",
-        "circuit_breaker_bps": 100
-      }
+[
+  {
+    "symbol": "SOL-USDC",
+    "base_mint": "So11111111111111111111111111111111111111112",
+    "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "tick_size": "1000",
+    "min_order_size": "10000000",
+    "oracle": {
+      "type": "pyth_pull_v2",
+      "pubkey": "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
     }
-  ]
-}
+  }
+]
 ```
 
-## Single instrument
+## Get one instrument
 
 ```text
 GET /instruments/{symbol}
 ```
 
-Returns one market by symbol. Returns `404` if the symbol is not listed.
+Returns the same object shape or `404` when the symbol is not configured.
 
-### Example
+## Fields
 
-```bash
-curl -s "$GATEWAY/instruments/SOL-USDC" | jq .
-```
-
-## Field reference
-
-| Field | Type | Description |
+| Field | Type | Meaning |
 |---|---|---|
-| `symbol` | string | Market identifier, e.g. `"SOL-USDC"`. Use it as the `symbol` on order requests. |
-| `base_mint` | string | Base asset SPL mint (base58). The asset you buy or sell. |
-| `quote_mint` | string | Quote asset SPL mint (base58). The asset prices are denominated in. |
-| `tick_size` | string | Decimal string; the smallest price increment. Prices must be a multiple of this. |
-| `min_order_size` | string | Decimal string; the minimum order amount in base units. |
-| `oracle.type` | string | The oracle family providing the reference price (for example, a Pyth pull feed). |
-| `oracle.pubkey` | string | The oracle account the engine reads. |
-| `oracle.circuit_breaker_bps` | integer | Maximum deviation, in basis points, from the oracle reference that the engine will clear at. The same bound is enforced inside the settlement proof, so a clearing price outside this band cannot settle. |
+| `symbol` | string | Market identifier used in order requests. |
+| `base_mint` | string | Base SPL mint, base58. Order `amount` is measured in this asset's smallest units. |
+| `quote_mint` | string | Quote SPL mint, base58. |
+| `tick_size` | string | Raw integer price increment in protocol price units. |
+| `min_order_size` | string | Raw integer minimum base amount in smallest token units. |
+| `oracle.type` | string | Oracle adapter used by the matcher. |
+| `oracle.pubkey` | string | Pyth feed identifier. Despite the wire name, this value may be a 32-byte hex feed id rather than a base58 Solana account. |
 
-## How the oracle is used
+Use the SDK's market helpers and the on-chain `MarketConfig` decimals and
+`price_scale` to format raw values for humans. Do not parse these strings as
+floating-point numbers.
 
-The oracle reference price is the anchor for the uniform clearing price of each
-batch. Two consequences matter to you as a trader:
+## Oracle and circuit breaker
 
-- **Fair reference.** Both sides of a match settle at the same oracle-anchored
-  clearing price; there is no maker/taker ordering within a batch to be gamed.
-- **A hard circuit breaker.** `circuit_breaker_bps` caps how far the clearing
-  price may move from the oracle. This bound is not just a server policy. It is
-  enforced inside the zero-knowledge settlement proof, so a settlement that
-  violates it is rejected on-chain. A market whose oracle is stale or wildly
-  off simply will not clear rather than clear at a bad price.
+The attested matcher reads the configured oracle and refuses clearing prices
+outside its configured circuit-breaker band. It also enforces every trader's
+limit and the uniform-clearing selection rule.
 
-See [Clearing Price](../trading-concepts/clearing-price) for how the single
-per-batch price is determined.
+Those market-policy checks are **not** re-executed inside VALID_MATCH_BATCH. The
+settlement proof binds the market mints and `price_scale`, proves scaled floor
+arithmetic, conservation, fees, and deterministic outputs. A client that relies
+on oracle and limit fairness therefore verifies the expected matcher image as
+described in [Privacy & Attestation](../how-it-works/privacy-and-attestation).
+
+The current REST object does not expose `circuit_breaker_bps`; read the finalized
+on-chain `MarketConfig` when that value is required for independent monitoring.
 
 ## Cache semantics
 
-Instrument metadata is static for the lifetime of a deployment: the mints, tick
-size, and oracle do not change underneath you mid-session. It is safe to fetch
-the list once at startup and cache it.
+Instrument metadata is a boot-time snapshot. Cache it for a connected session,
+then refresh after a reconnect or engine restart. Governance can update market
+configuration on-chain; a new engine boot reads the current configuration.

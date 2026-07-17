@@ -1,104 +1,112 @@
 ---
 sidebar_position: 2
 title: Confidential VM Architecture
-description: The matching engine runs inside a single attested Intel TDX confidential VM whose keys are bound to one measured image, the privacy and integrity root of the venue.
+description: Why Nyx matches inside an attested Intel TDX confidential VM, how that identity reaches Solana, and where the trust boundary remains.
 ---
 
 # Confidential VM Architecture
 
 :::info TL;DR
-Nyx matches orders inside a single **Intel TDX Confidential VM**, a hardware-
-isolated enclave whose memory the operator cannot read and whose signing keys are
-**derived from its measured image**. Change the code and the keys no longer
-derive, so a substituted engine cannot sign settlements or decrypt order intent.
-Privacy and integrity come from hardware attestation plus on-chain proof
-verification, not from trusting the operator.
+Nyx matches hidden orders inside an **Intel TDX confidential VM**. Hardware
+attestation lets a client identify the measured software before revealing an
+order, while Solana accepts settlement only from the registered signer set and
+only with a valid zero-knowledge proof. This reduces trust in the infrastructure
+operator, but does not erase it: clients still trust the approved measurement,
+Intel TDX, governance, and the matching policy implemented by that measured code.
 :::
 
-## Why a confidential VM
+## Why matching needs a confidential computer
 
-A dark pool's central problem is: who runs the matching engine, and why can't they
-cheat? Most private venues answer "an operator you have to trust" or "a committee
-of operators, most of whom you have to trust." Nyx answers with hardware: the
-engine runs inside an Intel TDX confidential VM (a "CVM"), an enclave the CPU
-isolates from everything else on the host, including the operator, the
-hypervisor, and other tenants.
+A central limit order book normally needs to see every order. Publishing those
+orders on-chain would reveal price limits, sizes, timing, and strategy before
+execution. Pure zero-knowledge matching can hide more of that trust boundary,
+but makes a feature-rich, low-latency book substantially harder to operate.
 
-Two properties matter:
+Nyx uses a confidential VM as the private execution environment:
 
-- **Confidentiality.** The enclave's memory is encrypted by the CPU. The operator
-  running the machine cannot read order intent out of RAM, logs, or a memory dump.
-- **Measured integrity.** The exact code running in the enclave is *measured* into
-  a hardware register at boot, and that measurement is part of a hardware-signed
-  attestation quote anyone can verify.
+- encrypted memory limits what the host and infrastructure operator can inspect;
+- a hardware-signed quote identifies the software measurement and boot state;
+- TLS terminates inside the confidential deployment, so order intent is encrypted
+  up to the measured service;
+- the service derives an ordered set of settlement signers, one per Merkle shard.
 
-## Keys bound to the image
+This preserves the familiar order-entry experience while keeping custody and
+settlement validity on Solana.
 
-The decisive property is **key binding**. The enclave's secrets (the TLS
-certificate key, the Ed25519 key it signs settlements with) are derived through a
-key-management flow that ties them to the enclave's measurement. A different
-image produces different keys.
+## From measurement to an accepted settlement
+
+Attestation is useful only when it is connected to authority. Nyx closes that
+loop in three checks:
 
 ```text
-   measured image (compose hash)
-            │  key derivation bound to the measurement
-            ▼
-   ┌──────────────────────────────────────────┐
-   │  enclave keys                              │
-   │   • TLS cert key (terminates TLS inside)   │
-   │   • Ed25519 settlement signer (on-chain)   │
-   └──────────────────────────────────────────┘
-            │
-   swap the code → different measurement → different keys →
-   can't decrypt the TLS channel, can't sign a settlement the
-   on-chain program accepts
+Intel TDX quote + measured event log
+               │
+               ▼
+client verifies the approved image and complete signer set
+               │
+               ▼
+finalized VaultConfig contains that same ordered signer set
+               │
+               ▼
+Solana accepts a settlement only with a registered signature
+and a valid Groth16 proof
 ```
 
-This is what makes attestation actionable. It is not enough to *measure* the code;
-the measurement has to *gate* the capability. On Nyx:
+The quote binds a fresh client challenge and a hash of the complete ordered
+signer set. The client also compares those signers with finalized on-chain
+configuration. Checking only the hostname, the self-reported compose hash, or
+the shard-0 key is insufficient.
 
-- The TLS key is bound to the image, so a substituted engine cannot terminate your
-  encrypted channel. You would be talking to a different key, detectable at
-  attestation.
-- The settlement signer is bound to the image **and registered on-chain**, so a
-  substituted engine cannot produce a settlement transaction the vault program
-  will accept.
+## Which layer guarantees what
 
-## What the operator can and cannot do
+| Layer | What it contributes | What it does not establish |
+|---|---|---|
+| Intel TDX | Isolation from the host and a signed measurement | That the measured application policy is fair or bug-free |
+| Client attestation | Approval of the measured release, boot freshness, and signer binding | Availability or future behavior after the check becomes stale |
+| Solana vault | Custody, replay protection, proof verification, and public state | Confidential order intake or price-time fairness |
+| Settlement proof | Market binding, scaled arithmetic, conservation, fees, and derived outputs | Whether the enclave chose the fairest eligible match or clearing price |
+| Multisig governance | Controlled upgrades, roots, market configuration, and signer rotation | Safety if its quorum approves a malicious configuration |
 
-| The operator can | The operator cannot |
-|---|---|
-| Run, restart, or stop the VM | Read order intent from enclave memory |
-| Control networking and uptime | Forge a settlement (the vault verifies a ZK proof + the registered signer) |
-| Deploy a new image (a new measurement) | Move user funds (custody is on-chain, gated by proofs) |
-| Observe encrypted traffic | Substitute the engine without changing the attestation a client checks |
+This separation is intentional. Asset validity is proof-enforced; matching
+policy remains an attested-code guarantee.
 
-The worst a malicious operator can do is **deny service**, that is, stop the VM.
-They cannot steal funds and cannot deanonymize orders, because neither capability
-lives on the machine they control: funds are guarded by on-chain proof
-verification, and order intent is sealed inside hardware-encrypted memory keyed to
-the measured image.
+## What an infrastructure operator can still do
 
-## Single enclave vs. a committee
+With an approved, correctly attested image and an uncompromised TDX platform, the
+host should not be able to read plaintext order memory or forge a proof-valid
+asset transition. It can still:
 
-Some private venues split the matching engine across a committee of operators so
-no single one sees an order. Nyx takes a different route: a single enclave, but one
-whose operator sees *nothing* and whose integrity is hardware-attested and
-on-chain-enforced. The trust assumption is the CPU vendor's attestation and the
-soundness of the zero-knowledge proofs, not the honesty of a quorum of operators.
-The practical consequences:
+- stop or restart the service;
+- delay, drop, or censor network traffic;
+- observe timing, volume, and other network metadata;
+- attempt to deploy a different image, which clients must reject unless it is an
+  approved release and governance has registered its signer set.
 
-- **No collusion surface.** There is no committee whose members could collude;
-  the privacy boundary is the silicon.
-- **Verifiable, not social.** You verify a measurement and a proof, not the
-  reputation or jurisdiction of node operators.
-- **Liveness is the operator's job.** A single VM means the operator's uptime
-  matters; the protection is that the operator can only ever halt, never cheat.
+A flaw in the measured application, the hardware, the attestation verifier, or
+the governance process can weaken these properties. Nyx therefore treats quote
+verification, finalized key refresh, independent circuit review, and split
+multisig control as launch requirements rather than optional operational polish.
 
-## How you rely on it
+## Why one CVM, not a committee
 
-As an integrator you do not have to take any of this on faith. You verify the
-running enclave against an expected measurement before trusting it with order
-intent, and you can confirm that the engine you talk to is the same engine that
-signs settlements on-chain. See [Privacy & Attestation](./privacy-and-attestation)
-for the verification chain.
+A committee can distribute trust, but adds coordination, latency, and a collusion
+threshold. Nyx currently chooses one confidential matching service with multiple
+shard signers derived inside it. The product tradeoff is straightforward:
+
+- faster private matching and a simpler client protocol;
+- one attested software release to evaluate;
+- a concentrated liveness boundary and dependence on TDX security.
+
+The result is not “trustless matching.” It is a narrower, inspectable trust model:
+trust the measured matcher for ordering and price policy; verify Solana and the
+proof system for custody and settlement validity.
+
+## What an integrator should verify
+
+Before sending private order intent, verify the fresh quote, replay the measured
+event log, approve the measured release, bind the complete signer set, and compare
+it with finalized on-chain configuration. Pause new trading when that evidence or
+the on-chain key view becomes stale.
+
+See [Privacy & Attestation](./privacy-and-attestation) for the verification chain
+and [Settlement](./settlement) for the proof boundary.

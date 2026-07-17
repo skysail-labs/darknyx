@@ -45,7 +45,7 @@ order_type: "ioc"
 ```
 
 Takes whatever it can in the batch it arrives in, then cancels any remainder. It
-never rests. Use it to cross the spread *now* without leaving a resting order
+never rests. Use it to seek immediate execution without leaving an order
 behind. A bid IOC names a `price_limit` as its worst price; an ask IOC may use `0`
 to accept any clearing price.
 

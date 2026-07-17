@@ -57,6 +57,11 @@ in-TEE matcher)
 and `crates/nyx-tee-loadgen/` (a host
 binary that load-tests the CVM's intake).
 
+> **Archived demo.** `apps/demo/` is historical and is not a product surface,
+> source of truth, or validation target. Do not propagate protocol, API,
+> circuit, SDK, or documentation changes into it unless the owner explicitly
+> asks to revive or remove that application.
+
 **The note model (v2 / `inner_hash`).** Every note commitment AND its
 nullifier are anchored on a single amount-independent `inner_hash`:
 
@@ -599,7 +604,7 @@ check fails, or proofs don't verify.
 | Key derivation | `darkpool-crypto/src/keys.rs` | `sdk/src/keys/key-generators.ts` | `keys-parity.test.ts` |
 | User commitment | `darkpool-crypto/src/user_commitment.rs` | `sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |
 | Merge output inner | `darkpool-crypto/src/merge.rs::merge_output_inner_hash` | `sdk/src/utxo/merge.ts::deriveMergeOutputInnerHash` | `merge-inner-parity.test.ts` + `merge-prover.test.ts` |
-| Order/cancel/topup canonical | `darkpool-matcher/src/order_canonical.rs` | `sdk/src/orders/canonical.ts` | `order-canonical-parity.test.ts` |
+| Order/cancel canonical | `darkpool-matcher/src/order_canonical.rs` | `sdk/src/orders/canonical.ts` | `order-canonical-parity.test.ts` |
 | Canonical payload hash | `vault::tee_forced_settle.rs::canonical_payload_hash` (shared) + `nyx-tee/src/settle/payload.rs` | `sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | Rust fixed-vector unit + `settle-builder-batched.test.ts` |
 | Match leaf hash | `tee_forced_settle_batched.rs::compute_match_leaf` | `tests/helpers/match-batch-prover.ts::computeBatchLeaf` | `match-batch-prototype.test.ts` leaf-byte assert |
 | Anchor discriminator | Anchor macro `sha256("global:<name>")[..8]` | `sdk/src/idl/vault-client.ts` | every `*-transport.test.ts` |

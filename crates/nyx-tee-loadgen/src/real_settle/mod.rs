@@ -33,8 +33,8 @@ use num_bigint::{BigInt, Sign};
 
 use darkpool_crypto::note::owner_commitment;
 use darkpool_crypto::{
-    commitment_from_fields_v2, fr_to_be_bytes, merge_output_inner_hash, poseidon_hash_bytes,
-    pubkey_to_fr_pair,
+    commitment_from_fields_v2, deposit_inner_hash, fr_to_be_bytes, merge_output_inner_hash,
+    poseidon_hash_bytes, pubkey_to_fr_pair,
 };
 
 /// Depth of the vault's incremental Merkle tree (the VALID_INPUT witness is 20
@@ -167,6 +167,119 @@ impl IncrementalTree {
 }
 
 // ── VALID_INPUT prover (ark-circom) ──────────────────────────────────────────
+
+/// A proof-gated deposit opening and the public values carried by the vault ix.
+pub struct ValidDepositProof {
+    pub proof_bytes: [u8; 256],
+    pub note_commitment: [u8; 32],
+    pub inner_hash: [u8; 32],
+    pub recovery_nonce: [u8; 32],
+}
+
+struct GeneratedDepositProof {
+    proof: Proof<Bn254>,
+    note_commitment: [u8; 32],
+    inner_hash: [u8; 32],
+}
+
+/// ark-circom VALID_DEPOSIT prover. The optional real-settle load rig is a
+/// client of the deposit circuit just like the TypeScript SDK, so it must prove
+/// the hidden owner/inner construction before transferring collateral.
+pub struct ValidDepositProver {
+    pk: ProvingKey<Bn254>,
+    wasm_path: PathBuf,
+    r1cs_path: PathBuf,
+}
+
+impl ValidDepositProver {
+    pub fn load(circuits_build_dir: impl AsRef<Path>) -> Result<Self, RealSettleError> {
+        let base = circuits_build_dir.as_ref().join("valid_deposit");
+        let zkey_path = base.join("circuit_final.zkey");
+        let mut zkey_file = std::fs::File::open(&zkey_path)
+            .map_err(|e| RealSettleError::Io(format!("open {}: {e}", zkey_path.display())))?;
+        let (pk, _matrices) = ark_circom::read_zkey(&mut zkey_file)
+            .map_err(|e| RealSettleError::Io(format!("read valid_deposit zkey: {e}")))?;
+        Ok(Self {
+            pk,
+            wasm_path: base.join("circuit_js").join("circuit.wasm"),
+            r1cs_path: base.join("circuit.r1cs"),
+        })
+    }
+
+    pub fn prove(
+        &self,
+        spending_key: &Fr,
+        owner_blinding: &Fr,
+        token_mint: &[u8; 32],
+        amount: u64,
+        recovery_nonce: &[u8; 32],
+    ) -> Result<ValidDepositProof, RealSettleError> {
+        let generated = self.prove_ark(
+            spending_key,
+            owner_blinding,
+            token_mint,
+            amount,
+            recovery_nonce,
+        )?;
+        Ok(ValidDepositProof {
+            proof_bytes: proof_to_onchain_bytes(&generated.proof),
+            note_commitment: generated.note_commitment,
+            inner_hash: generated.inner_hash,
+            recovery_nonce: *recovery_nonce,
+        })
+    }
+
+    fn prove_ark(
+        &self,
+        spending_key: &Fr,
+        owner_blinding: &Fr,
+        token_mint: &[u8; 32],
+        amount: u64,
+        recovery_nonce: &[u8; 32],
+    ) -> Result<GeneratedDepositProof, RealSettleError> {
+        if amount == 0 {
+            return Err(RealSettleError::Prove(
+                "VALID_DEPOSIT amount must be positive".to_string(),
+            ));
+        }
+        let owner = owner_commitment(spending_key, owner_blinding)
+            .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+        let inner_hash = deposit_inner_hash(&owner, recovery_nonce)
+            .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+        let note_commitment = commitment_from_fields_v2(token_mint, amount, &owner, &inner_hash)
+            .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
+
+        let cfg = CircomConfig::<Fr>::new(&self.wasm_path, &self.r1cs_path)
+            .map_err(|e| RealSettleError::Prove(format!("deposit CircomConfig::new: {e}")))?;
+        let mut builder = CircomBuilder::new(cfg);
+        let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
+        builder.push_input("noteCommitment", be32_to_bigint(&note_commitment));
+        builder.push_input("tokenMint", fr_to_bigint(&mint_lo));
+        builder.push_input("tokenMint", fr_to_bigint(&mint_hi));
+        builder.push_input("amount", BigInt::from(amount));
+        builder.push_input("recoveryNonce", be32_to_bigint(recovery_nonce));
+        builder.push_input("spendingKey", fr_to_bigint(spending_key));
+        builder.push_input("ownerCommitmentBlinding", fr_to_bigint(owner_blinding));
+
+        let circom = builder
+            .build()
+            .map_err(|e| RealSettleError::Prove(format!("deposit witness build: {e}")))?;
+        let mut rng = rand::thread_rng();
+        let proof = Groth16::<Bn254, CircomReduction>::create_random_proof_with_reduction(
+            circom, &self.pk, &mut rng,
+        )
+        .map_err(|e| RealSettleError::Prove(format!("deposit groth16 prove: {e}")))?;
+        Ok(GeneratedDepositProof {
+            proof,
+            note_commitment,
+            inner_hash,
+        })
+    }
+
+    pub fn verifying_key(&self) -> &ark_groth16::VerifyingKey<Bn254> {
+        &self.pk.vk
+    }
+}
 
 /// A built VALID_INPUT proof + the note commitment it attests.
 pub struct ValidInputProof {
@@ -543,6 +656,59 @@ mod tests {
     // ark-circom's wasmer-wasix witness calculator needs a Tokio reactor in
     // context (host_fs). In the real loadgen the prover runs inside the async
     // trader tasks, so this mirrors that; the test just provides the runtime.
+    #[tokio::test]
+    async fn valid_deposit_proof_verifies_against_zkey_vk() {
+        let Some(dir) = artifacts_dir() else {
+            eprintln!("skipping: circuits/build artifacts not present");
+            return;
+        };
+        if !dir.join("valid_deposit/circuit_final.zkey").exists() {
+            eprintln!("skipping: valid_deposit artifacts not present");
+            return;
+        }
+        let prover = ValidDepositProver::load(&dir).expect("load valid_deposit prover");
+        let spending_key = Fr::from(12_345u64);
+        let owner_blinding = Fr::from(67_890u64);
+        let recovery_nonce = fr_to_be_bytes(&Fr::from(2468u64));
+        let mut token_mint = [0u8; 32];
+        token_mint[0] = 1;
+        token_mint[31] = 0xb1;
+        let amount = 1_000_000u64;
+
+        let generated = prover
+            .prove_ark(
+                &spending_key,
+                &owner_blinding,
+                &token_mint,
+                amount,
+                &recovery_nonce,
+            )
+            .expect("prove");
+        let owner = owner_commitment(&spending_key, &owner_blinding).unwrap();
+        assert_eq!(
+            generated.inner_hash,
+            deposit_inner_hash(&owner, &recovery_nonce).unwrap()
+        );
+        assert_eq!(
+            generated.note_commitment,
+            commitment_from_fields_v2(&token_mint, amount, &owner, &generated.inner_hash,).unwrap()
+        );
+
+        let [mint_lo, mint_hi] = pubkey_to_fr_pair(&token_mint);
+        let public_inputs = vec![
+            fr_from_be_bytes(&generated.note_commitment).unwrap(),
+            mint_lo,
+            mint_hi,
+            Fr::from(amount),
+            fr_from_be_bytes(&recovery_nonce).unwrap(),
+        ];
+        let pvk = ark_groth16::prepare_verifying_key(prover.verifying_key());
+        assert!(Groth16::<Bn254>::verify_proof(&pvk, &generated.proof, &public_inputs).unwrap());
+        assert!(proof_to_onchain_bytes(&generated.proof)
+            .iter()
+            .any(|&b| b != 0));
+    }
+
     #[tokio::test]
     async fn valid_input_proof_verifies_against_zkey_vk() {
         let Some(dir) = artifacts_dir() else {

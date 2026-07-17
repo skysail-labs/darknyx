@@ -1,18 +1,16 @@
 ---
 sidebar_position: 1
 title: Overview
-description: Nyx is a privacy-preserving spot darkpool on Solana, with hidden orders matched inside an attested confidential VM and settled trustlessly with zero-knowledge proofs.
+description: Nyx is a privacy-preserving spot darkpool on Solana, with hidden orders matched inside an attested confidential VM and value movement proven on-chain.
 ---
 
 # Overview
 
 :::info TL;DR
-Nyx is a **privacy-preserving spot darkpool on Solana**. You submit hidden
-orders to a matching engine that runs **inside an attested Intel TDX Confidential
-VM** (a "CVM"). Settlement lands **trustlessly on Solana**, with a zero-knowledge
-proof binding every transfer to a committed note. Solana sees custody and
-proofs, never your order. The enclave sees your order but can never move your
-funds without an on-chain proof.
+Nyx is a **privacy-preserving spot darkpool on Solana**. Hidden orders match
+inside an attested Intel TDX Confidential VM (a "CVM"); custody and proven value
+movement remain on-chain. Solana sees deposits, withdrawals, commitments, and
+proofs, but never the order book or a settled trade's plaintext price and size.
 :::
 
 ## What Nyx is
@@ -22,19 +20,20 @@ size, and limit price never appear in a Solana transaction, a log, or an
 account. They live only inside a hardware-isolated enclave whose exact compiled
 code is measured and remotely verifiable.
 
-Unlike an off-chain matching desk, Nyx does not ask you to trust the operator
-with custody or with order intent:
+Unlike an off-chain matching desk, Nyx does not give one ordinary operator both
+custody and readable order flow:
 
-- **Custody is on-chain.** Funds sit in a Solana program. The only thing that
-  can move them is a zero-knowledge proof verified by that program.
+- **Custody is on-chain.** Funds sit in a Solana program. Withdrawals, merges,
+  and matched transfers must satisfy the corresponding proof and replay guards.
 - **Matching is in an attested enclave.** The operator runs the machine but
   cannot read enclave memory, and the enclave's signing keys are bound to one
   specific measured image. Swap the code and the keys no longer derive, and
   clients detect it at attestation time.
 
-The result is a venue where matching happens in private and settlement happens
-trustlessly, with no single party able to both see your order and move your
-money.
+The result is a venue where matching policy is enforced by code you can attest,
+while asset identity, arithmetic, conservation, fees, and output ownership are
+enforced by a proof the chain verifies. See [Why Nyx](./design-thesis) for the
+full trust decomposition.
 
 ## What "private" means here
 
@@ -43,11 +42,13 @@ Nyx enforces three distinct privacy properties, each by a separate mechanism.
 | Property | What is hidden | How |
 |---|---|---|
 | **Order privacy** | Side, size, limit price | Order intent exists only inside the attested TEE, never in any Solana tx, log, or account. |
-| **Trader privacy** | The link from a trade to your wallet | You authenticate and sign orders with a **trading key**, not your wallet. The wallet-to-trade link exists only inside your own withdraw proof. |
+| **Trader privacy** | The link from an order or trade to your wallet | You sign orders with a **trading key**, not your wallet. Deposits and withdrawals retain their unavoidable public transfer boundaries. |
 | **Position privacy** | What you hold | Balances are UTXO-style **notes** stored on-chain as Poseidon hashes. Owner, value, and token are sealed inside the hash until you spend it with a proof. |
 
-No single component (not Solana, not the operator, not a network observer)
-sees enough to deanonymize your trading.
+Deposits reveal the funding signer, mint, and gross amount; withdrawals reveal
+the destination, mint, and amount. VALID_DEPOSIT prevents the funding transaction
+from publishing the wallet-wide note owner, so that public boundary does not by
+itself label the rest of the wallet's notes.
 
 ## The three layers
 
@@ -57,8 +58,8 @@ Nyx is three layers that compose into one trust chain.
 ┌──────────────────────────────────────────────────────────────┐
 │  CUSTODY — the Solana "vault" program                         │
 │  Holds funds. Owns the Merkle tree of note commitments,       │
-│  the nullifier set, and the Groth16 verifier. The only        │
-│  layer that can move tokens — and only against a proof.       │
+│  replay guards, and the Groth16 verifier. The only layer     │
+│  that can move pooled tokens, subject to protocol rules.      │
 └──────────────────────────────────────────────────────────────┘
                          ▲  attested, signed settle txs + ZK proofs
 ┌──────────────────────────────────────────────────────────────┐
@@ -79,10 +80,10 @@ Nyx is three layers that compose into one trust chain.
   tree of note commitments, the nullifier and consumed-note sets that prevent
   double-spends, the Groth16 verifier, and the atomic batched-settlement path.
 - **Matching (the CVM).** The engine accepts orders over an authenticated
-  HTTPS/WebSocket surface, clears them at a single oracle-anchored price per
-  batch, proves each batch of matches, and submits the settlement transactions
-  to Solana itself. Your order never becomes a Solana transaction; the enclave
-  settles the *result*.
+  HTTPS/WebSocket surface, enforces limits and an oracle circuit-breaker policy,
+  clears crossing orders at one price per batch, proves the resulting value
+  movement, and submits settlement to Solana. Your order never becomes a Solana
+  transaction; the enclave settles the *result*.
 - **Client (the SDK).** Your software builds the collateral note, generates the
   zero-knowledge input proof, signs the order with your trading key, and (if you
   want the full guarantee) verifies the running enclave against an expected
@@ -108,6 +109,8 @@ margin, funding) simply are not part of the model.
 
 ## Next steps
 
+- [Why Nyx](./design-thesis): the product thesis, exact trust boundary, and
+  tradeoffs.
 - [Programmatic Access](./programmatic-access): the API surface, the auth
   model, and a quick start.
 - [Base URLs](../api/base-urls): where the endpoints live and the common

@@ -40,11 +40,13 @@ your spending key  +  the public Merkle tree of note commitments
 the notes you own  →  their amounts  →  your spendable balance
         │
         ▼
-which are unspent (no nullifier published)  →  what you can trade or withdraw
+which are unspent (no path-specific consume record)  →  what you can use
 ```
 
-This is the trustless design: the data you need is public, and only your keys
-turn it into a balance.
+This is the self-custodial design: the data needed for recovery is public, and
+only your keys turn it into a balance. Before sending private order intent, you
+still verify the enclave measurement and signer set; see
+[Privacy & Attestation](../how-it-works/privacy-and-attestation).
 
 ## What you read, and from where
 
@@ -73,17 +75,17 @@ record so a note can never be used twice:
    │                    │                        │
    ▼                    ▼                        ▼
  SPENDABLE  ───────►  LOCKED  ───────►  CONSUMED (and new notes created)
- (in tree,           (pinned by a       (nullified; its value now lives
-  no nullifier)       per-order lock)    in the output notes you own)
+ (in tree,           (pinned by a       (withdrawal nullifier or commitment-
+  no consume record)  per-note lock)     keyed guard prevents reuse)
 ```
 
-- **Spendable.** The note has an inclusion path in the current Merkle root and
-  no nullifier has been published for it. You can back an order with it or
+- **Spendable.** The note has an inclusion path in a recent Merkle root and no
+  applicable consume record exists. You can back an order with it or
   withdraw it.
 - **Locked.** An order references it as collateral; a per-order lock pins it
   between match and settlement so it cannot be double-committed.
-- **Consumed.** Settlement (or a withdrawal) has published its nullifier; the
-  note is spent. Its value now lives in freshly created output notes (a change
+- **Consumed.** Settlement/merge has created a commitment-keyed consumed-note
+  entry, or withdrawal has published its nullifier. Its value now lives in freshly created output notes (a change
   note for the unfilled remainder, the traded asset, and so on), each a new
   spendable note you own.
 
@@ -99,7 +101,9 @@ securely generated **master seed** and its encrypted backup.
   and import it on a new device. Wallet-message signatures are not a seed or
   spend-authority mode.
 - **Keys and notes.** From the seed the SDK derives your trading, spending, and
-  viewing keys and reconstructs note openings from the recovery data it owns.
+  viewing keys. A deposit's public recovery nonce reconstructs its hidden inner;
+  merge and settlement outputs are derived from consumed openings and finalized
+  chain data.
 - **Settlement outputs.** Exact trade and partial-fill change notes are
   recoverable from the **encrypted ciphertext stored on-chain at settlement**.
   The SDK decrypts the two-amount tuple with your viewing key, derives outputs
