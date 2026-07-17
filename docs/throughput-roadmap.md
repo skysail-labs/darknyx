@@ -17,6 +17,8 @@ the prerequisite work, and where the inline analysis lives.
   latency (the `settle_ms` / `verify_ms` / `alt_wait` IO terms → ~0).
 - **🟡 VOLUME** — not a platform gate; only worth doing once real order flow makes the system
   settle-bound (the settle queue actually backs up). Premature at low volume.
+- **🟠 CU-BUDGET** — not latency; the on-chain Groth16 **verify CU** axis. Only worth doing once a
+  Tx's compute budget becomes the binding constraint (currently it is not — see item 6).
 
 ## Cost model this roadmap is reasoned against
 
@@ -88,6 +90,65 @@ witness + ε ≈ 2.1 s — i.e. the prove speedup is capped at ~1.7× unless wit
 or swapped for a faster backend. Budget this as the immediate follow-on to the GPU prove work, or the GPU
 win is capped.
 **Source:** `BENCHMARK.md` finding #3; memory `proving_optimization`.
+
+### 6. On-chain Groth16 verify-CU — one remaining lever; the rest are already in place
+**Gate: 🟠 CU-BUDGET.** Full review of the suggested CU-reduction techniques against our actual verifier
+stack (`groth16-solana` 0.2.0 + `programs/vault/src/zk/`), across all **7 on-chain verify sites / 6
+circuits**:
+
+| Circuit | Instruction | Public inputs |
+|---|---|--:|
+| VALID_WALLET_CREATE | `create_wallet` | 1 |
+| VALID_INPUT | `lock_note` (settle-lock) | 4 |
+| VALID_DEPOSIT | `deposit` | 5 |
+| VALID_SPEND | `withdraw` | 6 |
+| VALID_MERGE K=2 | `merge` | 6 |
+| VALID_MERGE K=4 | `merge` | 8 |
+| VALID_MATCH_BATCH N=16 | `verify_match_batch` (Tx B) | 8 |
+
+Per verify: a fixed 4-pair pairing (~85k CU) **plus** `N × (~3.8k mul + ~334 add + tiny field-size check)`
+MSM over public inputs (`groth16.rs::prepare_inputs`, the `for input in public_inputs` loop).
+
+**Already satisfied — verified from source; do NOT re-investigate:**
+- **Single batched pairing syscall** — `verify_common` concatenates all four pairs and calls
+  `alt_bn128_pairing` exactly once (`groth16.rs:125-137`). ✓
+- **Embedded syscall-ready VK** — `vk_*.rs` are compile-time `[u8;64]`/`[u8;128]` const arrays fed
+  straight to the syscalls; `pi_a` is negated off-chain, so there is no runtime negation, JSON parse,
+  endianness flip, or generic-VK deserialization on-chain. ✓
+- **Uncompressed points** — proof + VK are 64 B G1 / 128 B G2; no on-chain decompression
+  (the crate's `decompression.rs` is unused). Settle tx already fits the 1232 B cap uncompressed. ✓
+- **Syscalls, not on-chain Arkworks** — the hot path is `alt_bn128_{multiplication,addition,pairing}`.
+  The only `BigUint` is the per-input field-size range check (`groth16.rs:147`), which is
+  soundness-critical (rejects non-canonical public inputs) — keep it (`verify()`, not `verify_unchecked()`). ✓
+- **Fixed-size proof parse** — `Groth16Proof` is three fixed byte arrays; Borsh decode ≈ a length-checked
+  memcpy (no nested structs, no `Vec` growth), so a hand-rolled fixed-offset parser buys ~nothing. ✓
+- **Verify/settle split where it matters** — the batch path already uses the receipt pattern
+  (`verify_match_batch` writes a `BatchValidityMarker` that `tee_forced_settle_batched` consumes),
+  forced by the 1232 B cap. The other six verifies are atomic single-tx and comfortably under budget,
+  so splitting them would only add replay/lifecycle cost. ✓
+
+So of the suggested techniques, **only public-input collapse (T1) has any headroom left** — and even that
+is second-order, because amount-privacy (P1b) + CS-01 already collapsed the 16 matches into one
+`batch_root` and removed amounts, putting us near the public-input floor.
+
+**The T1 lever (when the gate lifts):** shrink the `prepare_inputs` MSM by exposing fewer public inputs.
+Prime target = **`verify_match_batch` 8 → 2**: precompute `market_digest = Poseidon(fee_rate, owner,
+base_lo, base_hi, quote_lo, quote_hi, price_scale)` **once** in the `MarketConfig` account; the circuit
+computes the same digest internally and exposes `[batch_root, market_digest]`; on-chain reads the
+precomputed digest from the account (do **not** hash 8 fields on-chain per tx — that pays the saving back
+in `sol_poseidon`). Saves ~6 × ~4.2k ≈ **~25k CU** on Tx B at near-zero added cost. Minor secondary wins
+elsewhere: fold each `mint_lo/mint_hi` pair into one field on `lock_note`/`deposit`/`withdraw` (−1 input
+each).
+**Why gated (not now):** (1) no verify tx is CU-limited — Tx B is ~132k under a 180k budget (~48k
+headroom); (2) verify CU is off the end-to-end critical path (proving + `settle_ms` dominate — see cost
+model); (3) any public-input change is a full **§5 circuit ceremony** (regen zkey + VK + the committed
+N=16 fixture), a **new cross-language canonical-hash byte-equality contract** (§7 fragility + re-audit of
+the CS-01/02 soundness just closed), **more constraints → a slower prover**, and a devnet re-foundation +
+CVM revalidation. **Trigger:** a verify tx's CU budget becomes binding (accounts/data added, N raised
+above 16, or multi-proof-per-tx batching). Fold into the *next* circuit ceremony and use the
+`market_digest` variant.
+**Source:** 2026-07-16/17 on-chain verify-CU review; `groth16-solana` 0.2.0 `groth16.rs`;
+`programs/vault/src/zk/{verifier.rs,vk_*.rs}`; the 7 verify sites above.
 
 ---
 
