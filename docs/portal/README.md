@@ -11,21 +11,28 @@ hero TL;DR (`:::info`), a consistent heading hierarchy the right-rail TOC
 consumes, admonitions for callouts, and ASCII diagrams in fenced ```text```
 blocks (no Mermaid, for zero-friction conversion).
 
-## Sidebar groups
+## Information architecture
+
+The portal follows a product-first path: establish the problem and trust model,
+explain how trading works, then move into task guides and exact wire references.
+This gives a technical evaluator a coherent narrative without forcing an
+integrator to read internal implementation notes before finding an endpoint.
+
+`docs/portal/` and `docs/tee-api-openapi.yaml` are the only public-documentation
+sources of truth in this repository. Keep conceptual motivation in the portal
+and exact request/response shapes in the OpenAPI contract.
 
 ```text
-Get Started        - what Nyx is, the network, programmatic access
-API                - base URLs, authentication, transport & attestation
-Reference Data     - instruments
-Account            - account model, Merkle proofs, transparency, settlement status
-Orders             - place / cancel / modify / get
-WebSocket API      - trading socket, orders channel, fills channel
-Trading Concepts   - order types, TIF, execution attributes, clearing price,
-                     STP and order compatibility
-SDK                - TypeScript client example
-How It Works       - trade flow, TEE architecture, privacy & attestation,
-                     shielded pool, settlement, fee structure
-Reference          - error codes, system status, glossary
+Get Started        - product thesis, trust model, and first integration map
+How It Works       - trade flow, TEE architecture, privacy, settlement, and fees
+Trading Concepts   - order semantics, time in force, clearing, and compatibility
+Account            - custody, deposits, withdrawals, recovery, and chain reads
+Reference Data     - market configuration and instruments
+Orders             - place, cancel, modify, and inspect
+SDK                - TypeScript integration path
+API                - base URLs, authentication, transport, and attestation
+WebSocket API      - one session stream, order updates, fills, and tree events
+Reference          - error codes, status, and glossary
 ```
 
 ## Authoring conventions
@@ -42,6 +49,5 @@ Reference          - error codes, system status, glossary
 - **Voice**: professional, concrete, lead with "why it matters to you," then the
   mechanism.
 
-> This portal supersedes the thin flat pages under `docs/site/`. The conceptual
-> deep-dives there were the first pass; the content here is the verbose,
-> reference-grade version grouped for the public site.
+The retired `docs/site/` tree was removed so public behavior is never maintained
+in two places.

@@ -49,8 +49,9 @@ REST handlers return JSON. A successful read returns the resource directly; a
 successful write returns a small result object (for example, a placed order
 returns `{ "order_id", "status", "arrival_slot" }`).
 
-Errors return an HTTP status code that encodes the class of failure, with a
-plain-text or JSON message describing the specific reason:
+Errors return an HTTP status code plus a structured JSON
+`{ "code": <number>, "message": <string> }` body. Every REST response also
+carries `x-request-id` for support correlation.
 
 | Status | Meaning |
 |---|---|

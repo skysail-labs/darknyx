@@ -63,7 +63,7 @@ can read the on-chain account itself.
 An inclusion proof for a note commitment. Authenticated (bearer).
 
 ```text
-GET /tree/inclusion?note_commitment=<hex>&tree_id=0
+GET /tree/inclusion?commitment=<hex>&tree_id=0
 ```
 
 ### Response
@@ -91,11 +91,11 @@ withdrawal.
 
 :::caution Roots age out
 A proof is generated against a specific root. The on-chain program keeps a
-bounded ring buffer of recent roots, so a proof must be *used* (settled or
-withdrawn against) while its root is still in that window. In practice this means
-an order must settle within a bounded number of tree updates of when it was
-proven. The engine and SDK manage this; it is why a placed order carries the
-`merkle_root` it was proven against.
+bounded ring buffer of recent roots, so a proof must be *used* (locked for
+settlement or withdrawn against) while its root is still in that window. A
+long-resting order can outlive its proof root. If the eventual lock rejects that
+stale root, the settlement is terminal; rebuild the proof against a current root
+and submit a fresh signed order after the collateral unlocks.
 :::
 
 ## GET /tree/leaves
@@ -105,14 +105,13 @@ mirror of the tree from scratch (the "scan once, then follow updates" pattern th
 SDK uses to maintain your note store).
 
 ```text
-GET /tree/leaves?tree_id=0&from=0&limit=512
+GET /tree/leaves?tree_id=0&from=0&to=512
 ```
 
 ### Response
 
 ```json
 {
-  "tree_id": 0,
   "merkle_root": "…",
   "leaves": [
     { "leaf_index": 0, "value": "…" },
@@ -126,6 +125,9 @@ GET /tree/leaves?tree_id=0&from=0&limit=512
 | `leaves[].leaf_index` | integer | The leaf's position in the tree. |
 | `leaves[].value` | string | The leaf hash (a note commitment), hex. |
 | `merkle_root` | string | The root the page is consistent with. |
+
+The range is half-open, `[from, to)`. The server caps oversized ranges; advance
+`from` to the last returned index plus one when paging.
 
 A leaf value is a note *commitment*, an opaque hash. It tells you a note exists,
 not who owns it or what it is worth; only your spending key turns the leaves you

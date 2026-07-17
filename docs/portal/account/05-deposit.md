@@ -1,30 +1,36 @@
 ---
 sidebar_position: 5
 title: Deposit
-description: Move SPL tokens into the vault, where they become a private note you can trade or withdraw.
+description: Move SPL tokens into the vault through a proof-gated deposit that hides the shielded note owner and remains recoverable from seed plus chain.
 ---
 
 # Deposit
 
 :::info TL;DR
-A deposit is an on-chain transaction that moves SPL tokens into the vault and
-mints a private **note** for you, a commitment added to the Merkle tree. You sign
-it with your **wallet**, not your trading key, and the deposit never touches the
-matching engine. Record the resulting note locally: deposit notes are the one
-thing you must back up yourself.
+A deposit moves SPL tokens into the Solana vault and appends a new note
+commitment. Before custody changes, the vault verifies a VALID_DEPOSIT proof that
+the commitment contains the public mint and amount and a valid hidden owner. The
+transaction reveals the funding signer, mint, and gross amount, but not the
+wallet-wide note owner or the note's inner hash.
 :::
 
 ## What a deposit does
 
-Depositing transfers tokens from your SPL token account into the vault program and
-appends a note commitment to the on-chain tree. From that point your balance is
-the note, not a ledger entry: the amount, owner, and token are sealed inside the
-commitment, and only your keys can recognize and spend it (see
-[Account Model](./account-model)).
+The client constructs a recoverable note, proves it is well formed, and sends a
+direct Solana transaction. The vault verifies the proof first; an invalid proof
+cannot transfer tokens, increment liabilities, or append a leaf.
 
-A deposit is a direct **on-chain** action. It is not an API call to the engine,
-and it does not require a bearer token. The engine only ever sees the note later,
-as committed collateral when you place an order.
+The public transaction carries:
+
+- the destination tree shard;
+- token mint and deposit amount;
+- the opaque note commitment;
+- a field-safe recovery nonce; and
+- the Groth16 proof.
+
+The spending key, owner blinding, owner commitment, and inner hash remain private
+proof witnesses. This closes the old deposit-boundary link where publishing one
+wallet-wide owner commitment could cluster every note made by that wallet.
 
 ## Using the SDK
 
@@ -34,35 +40,40 @@ import { getDepositFunction } from "@nyx/sdk";
 const deposit = getDepositFunction({ client });
 
 const receipt = await deposit({
-  tokenMint,                    // 32-byte mint of the asset
-  amount: 100_000_000n,         // base units
-  depositorTokenAccount,        // your SPL token account for that mint
+  depositor,                     // fee payer and deposit authority
+  tokenMint,
+  amount: 100_000_000n,      // smallest token units
+  depositorTokenAccount,
+  depositIndex: 0n,           // increment for each deposit from this seed
 });
-// receipt carries the new note's commitment and its Merkle leaf index.
+// receipt includes signature, treeId, leafIndex, commitment, and note opening
 ```
 
-The SDK builds the note opening, sends the on-chain deposit transaction, and reads
-the new leaf back from the deposit event so the note is immediately spendable.
+The configured prover suite generates VALID_DEPOSIT locally. The SDK submits the
+transaction and reads the emitted tree shard and leaf index so the resulting
+note can immediately back an order, merge, or withdrawal.
 
-## Record your deposit notes
+## Recovery
 
-:::caution Deposit notes are not seed-recoverable
-A deposit note's secret opening comes from a per-deposit counter you own, not from
-a chain-readable ciphertext. That means a deposit note **cannot** be reconstructed
-from your seed alone on a fresh device. Store each deposit note in your local note
-store (the SDK exposes `depositNoteFromReceipt` for this) and keep that store
-backed up.
+Deposits are recoverable from the encrypted master-seed backup plus finalized
+chain history. During recovery, the client:
 
-This is the one exception to "recover everything from your seed." Trade **change
-notes** are recoverable from on-chain data (see [Fills Channel](../websocket/fills-channel)),
-but the original deposits are not.
-:::
+1. re-derives the wallet's hidden owner commitment from the seed;
+2. reads the public recovery nonce from the deposit instruction;
+3. derives the hidden deposit inner hash from those two values; and
+4. reconstructs and verifies the note commitment.
 
-## After depositing
+Keep a local note store for fast startup, but it is a cache rather than the only
+copy of the deposit opening. Use the versioned authenticated seed-backup format;
+wallet-message signatures are not a master-seed mode.
 
-The new note is **spendable**. You can:
+## Privacy boundary
 
-- back an order with it (see [Place Order](../orders/place-order)),
-- [merge](../how-it-works/shielded-pool#consolidating-notes) it with other notes
-  to form a larger one, or
-- [withdraw](./withdraw) it back to an SPL token account.
+Proof-gating does not hide the SPL transfer itself. A chain observer still sees
+which Solana account funded which mint and gross amount. What it removes is the
+reusable shielded-owner label: the public transaction no longer exposes the
+owner commitment or inner hash needed to associate that deposit with the
+wallet's other notes.
+
+See [Account Model](./account-model) for note recovery and
+[Withdraw](./withdraw) for the public exit boundary.

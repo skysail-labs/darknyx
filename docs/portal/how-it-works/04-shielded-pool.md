@@ -1,17 +1,17 @@
 ---
 sidebar_position: 4
 title: Shielded Pool
-description: How balances are held privately, as UTXO-style notes committed on-chain as hashes, with a Merkle tree, nullifiers, and zero-knowledge spends.
+description: How balances are held as shielded notes, accumulated in Merkle-tree shards and protected from replay by path-specific on-chain records.
 ---
 
 # Shielded Pool
 
 :::info TL;DR
-Your balance on Nyx is a set of **notes**, UTXO-style values committed on-chain as
-Poseidon hashes that seal the owner, amount, and token. The commitments live in a
-Merkle tree; spending a note publishes a **nullifier** that prevents reuse. You
-prove ownership and inclusion in zero knowledge, so the chain enforces correctness
-without ever learning what you hold.
+Your balance on Nyx is a set of **notes**, UTXO-style values committed on-chain
+as Poseidon hashes. Commitments live in Merkle-tree shards. Withdrawals use
+unlinkable nullifiers; TEE settlement and merges use commitment-keyed consumed
+records. Zero-knowledge proofs enforce valid state transitions without exposing
+shielded note openings.
 :::
 
 ## Notes, not balances
@@ -50,11 +50,11 @@ each with its own root), but conceptually it is one accumulator of all
 commitments. You read roots and inclusion paths through the
 [Merkle Proofs](../account/merkle-proofs) endpoints.
 
-## Nullifiers prevent double-spends
+## Replay guards prevent double-spends
 
-A commitment proves a note *exists*; a **nullifier** proves it has been *spent*.
-When a note is consumed (by a settlement or a withdrawal) a unique nullifier
-derived from it is published on-chain. The nullifier is computed so that:
+A commitment proves a note *exists*. A **nullifier** lets a private withdrawal
+prove that the same secret opening has not already been spent. It is computed so
+that:
 
 - it is **unlinkable** to the note commitment (publishing it does not reveal which
   note was spent), yet
@@ -68,9 +68,12 @@ spend note ──► publish nullifier(note)
    try to spend it again ──► same nullifier already on-chain ──► rejected
 ```
 
-This is the double-spend guard, and it is enforced on-chain independently of the
-enclave: even a misbehaving engine cannot spend your note twice, because the second
-attempt collides with the published nullifier.
+Settlement payload v9 does not publish input nullifiers. Instead, lock and
+settlement instructions derive PDAs from the input commitments; a second attempt
+collides with the existing lock or `ConsumedNoteEntry`. Merge uses the same
+commitment-keyed consume guard and proves every corresponding lock is absent. In
+every path, replay prevention is enforced on-chain rather than left to the
+matcher.
 
 ## The amount-independent inner hash
 
@@ -83,24 +86,25 @@ round-trip, while the client can independently reproduce the same opening.
 
 ## Spending in zero knowledge
 
-To move value out of the pool (settling a trade or withdrawing) you produce a
-zero-knowledge proof that:
+To withdraw or merge, the client produces a zero-knowledge proof. For matched
+trades, the attested engine produces a batch proof. Across these paths, the
+proofs establish the relevant combination of:
 
 1. the input note is a leaf under a recent tree root (it exists and is yours),
-2. the output notes conserve value (nothing is created or destroyed), and
-3. the spend is bound to the correct owner.
+2. output notes conserve value and use the configured assets and fees, and
+3. outputs are derived for the correct owner rather than chosen by the matcher.
 
-The on-chain program verifies the proof and applies the result: it publishes the
-input's nullifier, appends the output commitments, and (for a withdrawal) releases
-tokens. The chain learns that *a* valid spend happened, never whose, or for how
-much beyond what a withdrawal necessarily reveals.
+The program verifies the proof and applies the result: it records the appropriate
+replay guard, appends output commitments, and for a withdrawal releases tokens.
+The chain learns that a valid transition happened, not the shielded trade
+plaintext; a withdrawal necessarily reveals its transferred amount.
 
 ## Consolidating notes
 
 An order is backed by a single note, so to trade more than any one note holds you
 first **merge** several notes of the same token into one. A merge is a
 zero-knowledge operation against the pool, like a spend: it consumes its input
-notes (publishing their nullifiers) and appends one output note carrying their
+notes (creating commitment-keyed consume records) and appends one output note carrying their
 combined value, proven so nothing is created or destroyed. The SDK exposes it as a
 single call, leaving you one larger spendable note to back a bigger order.
 
@@ -111,7 +115,7 @@ single call, leaving you one larger spendable note to back a bigger order.
                 │
  place order ──► note pinned by a per-order lock (LOCKED)
                 │
- settle ──────► input nullified (CONSUMED); outputs appended:
+ settle ──────► input commitment marked consumed; outputs appended:
                   • your filled asset (a new note)
                   • a change note for any unfilled remainder
                   • fee notes
@@ -120,7 +124,7 @@ single call, leaving you one larger spendable note to back a bigger order.
 ```
 
 Every transition is gated on-chain by a distinct record (a wallet entry, a
-nullifier, a consumed-note marker, a note lock), so a note can never be used twice
+withdrawal nullifier, a consumed-note marker, a note lock), so a note can never be used twice
 regardless of what the engine does. See [Deposit](../account/deposit) and
 [Withdraw](../account/withdraw) for the on-ramp and off-ramp,
 [Account Model](../account/account-model) for how you reconstruct your spendable

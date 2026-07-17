@@ -15,10 +15,12 @@ protocol, so fees, like everything else, settle privately on-chain.
 
 ## The fee model
 
-Every trade pays a protocol fee proportional to its value:
+Each side pays in the asset it contributes to the trade. In raw protocol units:
 
 ```text
-fee = trade_value × fee_rate_bps / 10_000
+quote_amount = floor(base_amount × clearing_price / price_scale)
+buyer fee    = floor(quote_amount × fee_rate_bps / 10_000)  // quote asset
+seller fee   = floor(base_amount  × fee_rate_bps / 10_000)  // base asset
 ```
 
 Two principles define how it is applied:
@@ -33,16 +35,18 @@ Two principles define how it is applied:
 required collateral = nominal cost + fee
 ```
 
-where the nominal cost is `amount × price_limit` for a bid (quote units) or
-`amount` for an ask (base units). The engine derives this at intake. If an order's
-collateral note does not cover it, the order is rejected as conservation-breaking
-rather than allowed to under-pay.
+For a bid, the worst-case nominal quote cost is
+`floor(amount × price_limit / price_scale)`; for an ask it is the base `amount`.
+The engine derives the applicable floor-rounded fee at intake. If an order's
+collateral note does not cover both, the order is rejected rather than allowed
+to under-pay.
 
-:::note The SDK handles fee-inclusive collateral
-You do not compute the fee yourself. The SDK sizes an order's collateral note to
-cover the nominal cost plus the fee, so the order passes the conservation check.
-This is also why a place-order request is fully collateralized up front: the fee
-is already accounted for in the note you deposited.
+:::note Collateral must include the fee
+Read the finalized market and vault configuration when selecting a collateral
+note. The order request carries the note's actual amount; intake recomputes its
+commitment and rejects a note that cannot cover the worst-case nominal amount
+plus fee. Higher-level wallet software can automate that coin selection, but the
+wire-level SDK does not add value to an existing note.
 :::
 
 ## How fees are collected
@@ -63,14 +67,13 @@ settle a match ──► outputs:
 ```
 
 Because the fee is charged on the actual cleared amount, an order that locked
-fee-inclusive collateral on its worst-case (limit) price and then fills at a better
-clearing price gets the surplus back as part of its change note. You never overpay
-the fee on price improvement.
+fee-inclusive collateral on its worst-case limit and then fills at a better
+clearing price gets unused collateral back as part of its change note.
 
 ## Worked example
 
 Suppose the fee rate is 30 bps (0.30%) and you place a bid to buy `10` base at a
-limit of `150` quote each:
+limit of `150` quote each. Expressed here in human units for readability:
 
 ```text
 nominal cost   = 10 × 150        = 1500 quote
@@ -80,7 +83,8 @@ collateral     = 1500 + 4.5      = 1504.5 quote   ← what your note must cover
 
 If the batch clears at `148`, you pay `1480` for the fill, your fee is charged on
 the cleared amount, and the difference comes back to you as a change note, all in
-one settled, proven step.
+one settled, proven step. On-chain arithmetic uses smallest token units and the
+configured `price_scale`, with every division rounded down as shown above.
 
 ## Why fees settle as notes
 

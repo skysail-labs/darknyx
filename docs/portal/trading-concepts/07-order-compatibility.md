@@ -1,5 +1,5 @@
 ---
-sidebar_position: 7
+sidebar_position: 6
 title: Order Compatibility
 description: Which combinations of order type, time in force, execution attribute, and price field are valid.
 ---

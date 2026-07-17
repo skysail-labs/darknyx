@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Transport & Attestation
-description: How the Nyx transport is secured (RA-TLS terminating inside the enclave) and how a client verifies it is talking to the real, measured engine.
+description: How HTTPS reaches the confidential VM and how a client verifies the quote-bound image and complete on-chain signer set.
 ---
 
 # Transport & Attestation
@@ -64,6 +64,8 @@ GET /info
   "instance_id": "…",
   "compose_hash": "…",
   "tee_pubkey": "…",
+  "tee_pubkeys": ["…", "…"],
+  "boot_session_id": "…",
   "nyx_version": "…"
 }
 ```
@@ -72,8 +74,10 @@ GET /info
 |---|---|
 | `app_id` | Deterministic id derived from the deployer and the compose configuration. |
 | `instance_id` | Identifier of this specific VM instance. |
-| `compose_hash` | SHA-256 of the canonicalised deployment manifest. **This is the value a client pins**; it must equal the measurement the client expects for a trusted build. |
-| `tee_pubkey` | The enclave's Ed25519 signer (base58); the key that signs settlement payloads on-chain. |
+| `compose_hash` | Self-reported SHA-256 of the deployment manifest. Useful for display; the authoritative value comes from the quote-bound event log. |
+| `tee_pubkey` | Primary (shard-0) Ed25519 settlement signer, kept as a convenience field. |
+| `tee_pubkeys` | Full ordered signer set, one per tree shard. Verify the entire set against finalized `VaultConfig.tee_pubkeys`. |
+| `boot_session_id` | Fresh process-boot id signed into every canonical order, preventing cross-restart replay. |
 | `nyx_version` | Build version tag of the engine. |
 
 ### GET /attestation
@@ -86,16 +90,14 @@ GET /attestation?reportData=<optional-nonce>
 
 The quote is a hardware-signed measurement of the running VM. A client passing a
 fresh `reportData` nonce gets a quote bound to that nonce (freshness) and to the
-enclave's signing key (so the channel, the quote, and the on-chain signer are all
-the same engine).
+hash of the complete ordered signer set.
 
 | Field | Description |
 |---|---|
 | `quote` | Hex-encoded TDX quote (DCAP format), the hardware-signed measurement. |
 | `event_log` | The boot event log, replayed during verification to confirm the recorded compose hash and instance identity. |
-| `report_data` | 64 bytes bound into the quote: the caller's nonce in the first half, a hash of the enclave signing key in the second. |
-| `vm_config` | The VM hardware configuration the quote attests to (used to recompute the OS measurement). |
-| `tee_pubkey` | The enclave Ed25519 signer the quote binds to. |
+| `report_data` | 64 bytes bound into the quote: caller nonce in bytes 0–31, then `SHA-256(pk0 || … || pkK-1)` in bytes 32–63. |
+| `tee_pubkey` | Primary signer, for convenience. Fetch `/info.tee_pubkeys` to recompute the bound set hash. |
 
 ### The verification chain
 
@@ -103,11 +105,11 @@ A verifying client confirms, in order:
 
 1. The TDX quote's hardware signature is valid and the platform's trusted
    computing base is current (standard DCAP verification).
-2. The measured `compose_hash` equals the client's **expected** value for a build
-   it trusts. A different compose hash means different code. Stop.
-3. The quote's `report_data` binds the enclave's signing key, and that key equals
-   the on-chain settlement signer, so the engine you are talking to is the same
-   engine that settles on Solana.
+2. Replaying the returned event log reproduces the DCAP-verified quote's RTMR3;
+   the `compose-hash` event then equals the independently pinned release value.
+3. The quote's `report_data` binds the full ordered signer set advertised by
+   `/info`, and that exact set equals a **finalized** on-chain
+   `VaultConfig.tee_pubkeys` read.
 
 The SDK ships a helper that runs this chain for you against an expected
 measurement. Only when all three hold should a client trust the channel with
@@ -116,8 +118,8 @@ order intent.
 :::caution Pin the measurement, not the host
 The security guarantee comes from the **measurement**, not from the hostname.
 A client that connects over TLS but skips attestation has confidentiality to
-*some* machine; it has not verified that the machine runs the real engine. Pin an
-expected `compose_hash` and verify it.
+*some* machine; it has not verified that the machine runs the expected engine.
+Pin a release measurement independently, then verify the quote and event log.
 :::
 
 ### The TLS certificate is attested too
@@ -134,5 +136,5 @@ the key.
 | Guarantees | Does not guarantee |
 |---|---|
 | You are talking to the exact, measured engine build. | That you submitted the order you meant to (that is on your client). |
-| The engine that matches is the engine that signs settlements on-chain. | Anything about another party's order; privacy is per-order, enforced inside the enclave. |
+| The engine that matches controls the complete signer set accepted on-chain. | That matching obeyed an unmeasured policy or that the service will remain live. |
 | Order intent is confidential in transit and at rest inside the enclave. | Protection against losing your own keys; custody of the trading and spending keys is yours. |

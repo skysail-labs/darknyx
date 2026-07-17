@@ -1,100 +1,98 @@
 ---
 sidebar_position: 5
 title: Settlement
-description: How matched trades become final on Solana, the batched, proven, atomic settlement pipeline the enclave drives directly.
+description: How private matches become final on Solana, what the proof guarantees, and how Nyx handles partial or ambiguous outcomes.
 ---
 
 # Settlement
 
 :::info TL;DR
-The enclave settles matches on Solana **itself**, in batches. For each batch it
-locks the input notes, verifies a zero-knowledge **batch proof** on-chain,
-executes the per-match transfers atomically, then reclaims the batch marker. A
-trade is final when its settlement transactions land, guaranteed correct by a
-proof the chain verifies, not by the engine's word.
+One proof covers up to 16 matches, but each match reaches finality independently.
+Inputs are locked, the batch proof is verified on-chain, and each match is sent
+as its own atomic settlement. The book changes and fills publish only after a
+match confirms. A definitive failure is terminal; an ambiguous result stays
+reserved while the engine reconciles it with finalized chain state.
 :::
 
-## Settlement is on-chain and proven
+## From private match to public finality
 
-Matching happens privately inside the enclave, but the *result* is settled on
-Solana where anyone can verify it. The enclave does not ask a relayer or a user to
-submit anything. It holds an on-chain-registered signing key and drives the
-settlement transactions directly. Crucially, those transactions only succeed if
-they carry a valid zero-knowledge proof, so the chain, not the operator, is the
-final authority on whether a settlement is correct.
+Matching occurs inside the confidential VM. The result settles on Solana, where
+the vault verifies the proof and replay guards before appending any output note.
+The engine submits the transactions, but it cannot bypass those checks.
 
-:::note What a settlement reveals
-A settlement publishes note commitments, commitment-keyed consume guards, and
-the proof, not the trade's amounts or clearing price. The size and price stay private
-on-chain; you reconstruct your own amounts from the per-account fill memo or the
-on-chain recovery-v2 ciphertext (see
-[Privacy & Attestation](./privacy-and-attestation) and
-[Fills Channel](../websocket/fills-channel)).
-:::
+A settlement exposes commitments, signatures, and proof data. It does not expose
+the order book, traders' limits, or the match's plaintext price and amount.
 
-## The pipeline
-
-Settlement runs as a short sequence of on-chain transactions per batch:
+## The lifecycle
 
 ```text
-   ┌─ A ─ lock ─────────┐  pin the input notes of every match in the batch
-   │                     │  (a per-note lock blocks any double-commit)
-   ▼                     │
-   ┌─ B ─ verify ───────┐│  verify the batch's zero-knowledge match proof
-   │                     ││  on-chain (one proof covers all matches in the batch)
-   ▼                     ▼│
-   ┌─ C ─ settle ───────┐ │  execute the atomic transfers: nullify inputs,
-   │   (per match)       │ │  append output notes (filled asset, change, fees)
-   ▼                     ▼ │
-   ┌─ D ─ close ────────┐  │  reclaim the batch marker once every match settled
-   └─────────────────────┘ ┘
+reserve matched orders
+        │
+        ▼
+lock both input commitments before their expiry
+        │
+        ▼
+verify one batch proof on-chain
+        │
+        ├── send match 1 independently ──► confirmed / rejected / ambiguous
+        ├── send match 2 independently ──► confirmed / rejected / ambiguous
+        └── ...
+                                            │
+                    marker reclaimed only after its expiry
 ```
 
-| Stage | What it does |
+| Stage | User-visible meaning |
 |---|---|
-| **Lock** | Pins each match's input notes with a per-note lock, so nothing can be re-committed between match and settlement. |
-| **Verify** | Verifies the batch's match proof on-chain. One proof attests that *every* match in the batch is conservation-correct, bound to the committed notes, and within the oracle circuit-breaker band. |
-| **Settle** | For each match, nullifies the inputs and appends the output notes: the traded asset, a change note for any unfilled remainder, and the fee notes. |
-| **Close** | After all matches settle, reclaims the batch's on-chain marker. |
+| **Reserved** | The matched quantity is unavailable for another match, but the book has not yet committed a fill. |
+| **Locked** | On-chain commitment-keyed locks prevent either input from being reused while settlement is in flight. |
+| **Proof verified** | One batch proof authorizes its active matches until the batch marker expires. |
+| **Per-match settle** | Every match is atomic and independent of the others in the batch. One failure does not hide the results of the rest. |
+| **Cleanup** | The shared batch marker is read-only during settlement and can be closed only after expiry. Cleanup is not part of trade finality. |
 
-You track this per batch through [`GET /settlement/status/{batch_id}`](../account/settlement-status),
-which exposes each stage's transaction signatures.
+## Outcomes and order state
 
-## Batched and sharded for throughput
+Nyx distinguishes uncertainty from failure:
 
-Two design choices keep settlement fast without weakening the guarantees:
+- **Confirmed.** Solana confirmed the settlement. Only now does Nyx decrement
+  order quantities and publish the fill and recovery data.
+- **Ambiguous.** The RPC result is inconclusive. The orders remain
+  `pending_settlement`; the engine reconciles transaction signatures and
+  consumed-note accounts, and may safely redrive while the marker is valid.
+- **Rejected.** Chain state proves the match cannot settle. Nyx emits
+  `settlement_failed` with a reason and lock-expiry slot. It does not silently
+  put the old signed order back on the book.
 
-- **Batching.** Many matches settle under one verified proof, so the expensive
-  proof verification is amortized across the batch rather than paid per trade.
-- **Sharding.** The note tree is split into independent shards, each with its own
-  settlement lane and signing key. The engine settles across shards concurrently,
-  so throughput scales with the number of shards instead of being bottlenecked on
-  a single serialized path.
+After a definitive failure, wait for the input lock to expire and submit a fresh
+signed order. This explicit resubmission prevents a stale order from becoming
+live again after the trader believed it had failed.
 
-Neither changes what a settlement *means*: every transfer is still individually
-proven correct and bound to committed notes.
+## What the proof guarantees
 
-## What finality means
+For every active match, VALID_MATCH_BATCH binds:
 
-A fill is final when its settlement transactions confirm on Solana. Because each
-batch is gated by an on-chain-verified zero-knowledge proof:
+- the configured base and quote mints and price scale;
+- positive active amounts and scaled floor pricing with a bounded remainder;
+- exact conservation of both assets;
+- the on-chain fee rate and protocol fee-note owner;
+- user outputs derived from the consumed input inners; and
+- fee outputs derived from the consumed commitments.
 
-- **Conservation is guaranteed.** The proof attests that value is neither created
-  nor destroyed across the batch: the outputs exactly account for the inputs.
-- **Binding is guaranteed.** Each output note is bound to the right owner and the
-  match it came from, so the engine cannot redirect value to a note it controls.
-- **The price is bounded.** The clearing price is inside the oracle circuit-breaker
-  band, enforced inside the proof.
+These constraints stop the matcher from switching assets, inventing value,
+changing fees, or redirecting outputs even though amounts remain private.
 
-So a `settled` batch is not an assertion you trust. It is a fact the chain
-checked. Verify any trade yourself by inspecting its settlement signatures on a
-Solana explorer (see [Settlement Status](../account/settlement-status)).
+The proof does **not** re-run the order book. Limit-price compliance, uniform
+clearing selection, FIFO, execution attributes, and the oracle circuit-breaker
+policy are enforced by the attested matcher. Clients verify that code through
+[Privacy & Attestation](./privacy-and-attestation).
 
-## After settlement
+## Recovery after confirmation
 
-Settlement appends new notes to the tree: your filled asset, a change note for any
-unfilled remainder, and the protocol fee notes. The
-[Fills Channel](../websocket/fills-channel) delivers the secret material to recover
-your change note, and the SDK picks up the rest by following tree updates. Your new
-spendable balance is simply the notes you now own (see
-[Account Model](../account/account-model)).
+A confirmed settlement writes encrypted recovery data in the existing fixed-size
+envelope. Each side can recover its trade and change amounts with its viewing
+key, then deterministically derive the corresponding output openings from the
+consumed note. Seed plus finalized chain is the durable recovery source; the
+live fills stream is the fast notification path, not the only copy.
+
+See [Settlement Status](../account/settlement-status) for the operator-facing
+batch/job response and [Orders Channel](../websocket/orders-channel) for the
+trader lifecycle.

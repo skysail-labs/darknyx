@@ -80,7 +80,7 @@ cd /path/to/repo/root
 ```sh
 npm install                                            # SDK + snarkjs + circomlib
 bash scripts/download-ptau.sh                          # pot16 (~80 MB) + pot18 (~288 MB)
-bash scripts/build-circuits.sh                         # compile 8 circom circuits; writes vk_*.rs
+bash scripts/build-circuits.sh                         # compile 9 circom circuits; writes vk_*.rs
 cargo build --examples -p darkpool-crypto              # TS↔Rust parity helper binaries
 cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin  # BPF (litesvm + devnet deploy; F-01/F-02 admin ixs OFF by default for mainnet)
 ```
