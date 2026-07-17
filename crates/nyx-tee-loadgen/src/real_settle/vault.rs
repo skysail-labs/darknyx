@@ -98,22 +98,25 @@ pub fn anchor_discriminator(name: &str) -> [u8; 8] {
 
 /// Build the vault `deposit` ix appending a note to shard `tree_id`. Mirrors the
 /// SDK's `buildDepositInstruction` byte-for-byte: data = disc(8) ‖ tree_id(1) ‖
-/// amount(u64 LE) ‖ owner_commitment(32) ‖ inner_hash(32); 10 accounts in order.
+/// amount(u64 LE) ‖ note_commitment(32) ‖ recovery_nonce(32) ‖ proof(256);
+/// 10 accounts in order. The hidden owner and inner are bound by VALID_DEPOSIT.
 pub fn build_deposit_ix(
     tree_id: u8,
     depositor: &Address,
     token_mint: &Address,
     depositor_token_account: &Address,
     amount: u64,
-    owner_commitment: &[u8; 32],
-    inner_hash: &[u8; 32],
+    note_commitment: &[u8; 32],
+    recovery_nonce: &[u8; 32],
+    proof: &[u8; 256],
 ) -> Instruction {
-    let mut data = Vec::with_capacity(8 + 1 + 8 + 32 + 32);
+    let mut data = Vec::with_capacity(8 + 1 + 8 + 32 + 32 + 256);
     data.extend_from_slice(&anchor_discriminator("deposit"));
     data.push(tree_id);
     data.extend_from_slice(&amount.to_le_bytes());
-    data.extend_from_slice(owner_commitment);
-    data.extend_from_slice(inner_hash);
+    data.extend_from_slice(note_commitment);
+    data.extend_from_slice(recovery_nonce);
+    data.extend_from_slice(proof);
 
     let accounts = vec![
         AccountMeta::new(*depositor, true),
@@ -289,15 +292,25 @@ mod tests {
     }
 
     #[test]
-    fn deposit_data_layout_is_81_bytes_in_order() {
+    fn deposit_data_layout_carries_commitment_nonce_and_proof() {
         let mint = vault_token_account_pda(&SYSTEM_PROGRAM_ID); // any address
-        let ix = build_deposit_ix(3, &mint, &mint, &mint, 0xAABB, &[0x11; 32], &[0x22; 32]);
-        assert_eq!(ix.data.len(), 8 + 1 + 8 + 32 + 32);
+        let ix = build_deposit_ix(
+            3,
+            &mint,
+            &mint,
+            &mint,
+            0xAABB,
+            &[0x11; 32],
+            &[0x22; 32],
+            &[0x33; 256],
+        );
+        assert_eq!(ix.data.len(), 8 + 1 + 8 + 32 + 32 + 256);
         assert_eq!(&ix.data[..8], &anchor_discriminator("deposit"));
         assert_eq!(ix.data[8], 3); // tree_id
         assert_eq!(&ix.data[9..17], &0xAABBu64.to_le_bytes());
-        assert_eq!(&ix.data[17..49], &[0x11; 32]); // owner_commitment
-        assert_eq!(&ix.data[49..81], &[0x22; 32]); // inner_hash
+        assert_eq!(&ix.data[17..49], &[0x11; 32]); // note_commitment
+        assert_eq!(&ix.data[49..81], &[0x22; 32]); // recovery_nonce
+        assert_eq!(&ix.data[81..337], &[0x33; 256]); // Groth16 proof
         assert_eq!(ix.accounts.len(), 10);
         assert!(ix.accounts[0].is_signer); // depositor signs
         assert!(ix.accounts[2].is_writable); // merkle_tree[tree_id]
