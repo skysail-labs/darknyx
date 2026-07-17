@@ -27,7 +27,7 @@ import {
   type StoredNote,
   type TradingClient,
   type WebSocketFactory,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 import type { LifecycleEngine } from "./lifecycle-engine.js";
 

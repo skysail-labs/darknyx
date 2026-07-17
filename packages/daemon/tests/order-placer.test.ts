@@ -19,10 +19,10 @@ import { LifecycleEngine } from "../src/lifecycle-engine.js";
 import { DaemonStore } from "../src/store.js";
 import { newManagedOrder, type ManagedOrder } from "../src/types.js";
 import {
-  NyxApiError,
+  DarknyxApiError,
   type PlaceOrderRequest,
   type PlaceOrderResponse,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 const ORDER_ID = "00112233445566778899aabbccddeeff";
 
@@ -154,7 +154,7 @@ describe("WsOrderPlacer", () => {
     expect(shared.closed).toBe(false);
   });
 
-  it("does NOT retry a NyxApiError (definitive server reply)", async () => {
+  it("does NOT retry a DarknyxApiError (definitive server reply)", async () => {
     const built: FakeClient[] = [];
     const placer = new WsOrderPlacer({
       gatewayWsUrl: "wss://gw",
@@ -162,14 +162,14 @@ describe("WsOrderPlacer", () => {
       clientFactory: (o) => {
         const c = new FakeClient(o, {
           place: () =>
-            Promise.reject(new NyxApiError(4090, "nonce reuse", 409)),
+            Promise.reject(new DarknyxApiError(4090, "nonce reuse", 409)),
         });
         built.push(c);
         return c;
       },
     });
     await expect(placer.place(REQ)).rejects.toMatchObject({
-      name: "NyxApiError",
+      name: "DarknyxApiError",
       code: 4090,
     });
     expect(built).toHaveLength(1); // no rebuild/retry
@@ -256,7 +256,7 @@ describe("placeManagedOrder", () => {
     const engine = new LifecycleEngine(store, noopExecutor);
     const placer = {
       place: vi.fn(async () => {
-        throw new NyxApiError(4000, "bad proof", 400);
+        throw new DarknyxApiError(4000, "bad proof", 400);
       }),
     } as never;
     await expect(

@@ -65,7 +65,7 @@ const payload: MatchResultPayload = {
     eph,
     buyerEnc,
     sellerEnc,
-    new TextEncoder().encode("NYXREC02"),
+    new TextEncoder().encode("DNYXREC3"),
   ),
 };
 

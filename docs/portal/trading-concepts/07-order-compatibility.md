@@ -20,7 +20,7 @@ programmatically.
 | `ioc` | No; IOC never rests | Yes | n/a |
 | `fok` | No; FOK never rests | n/a | Yes |
 
-Time-in-force on Nyx is carried by the order type plus `expiry_slot`: a resting
+Time-in-force on Darknyx is carried by the order type plus `expiry_slot`: a resting
 order is a `limit` with an expiry; an immediate order is `ioc` or `fok`. See
 [Time in Force](./time-in-force).
 

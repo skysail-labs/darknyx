@@ -77,8 +77,8 @@ pub struct MatchResultPayload {
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
     pub batch_slot: u64,
-    /// Recovery v2: the per-fill X25519-ECIES bundle
-    /// `ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "NYXREC02"`.
+    /// Recovery v3: the per-fill X25519-ECIES bundle
+    /// `ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "DNYXREC3"`.
     /// The TEE encrypts each side's `(trade, change)` tuple to that order's
     /// viewing key. Opaque to the program — it never reads these bytes;
     /// they ride the (signed) payload only to be persisted on-chain. All-zero
@@ -88,11 +88,13 @@ pub struct MatchResultPayload {
     // plaintext amounts — the price is proven in-circuit
     // (`quote === floor(base*price/price_scale)`) and bound inside the note commitments, so it no
     // longer needs to ride in the (public) settle ix. The domain tag bumped
-    // `nyx-match-v6` → `nyx-match-v7` for this layout change, then
-    // `nyx-match-v7` → `nyx-match-v8` when encrypted output recovery
+    // settlement-domain v6 → v7 for this layout change, then v7 → v8 when
+    // encrypted output recovery
     // appended the `fill_recovery` field above. Settlement payload v9 then
     // removed the two vestigial nullifiers: commitment-keyed
-    // `ConsumedNoteEntry` PDAs are the sole settle/withdraw replay guard.
+    // `ConsumedNoteEntry` PDAs are the sole settle/withdraw replay guard. The
+    // Darknyx namespace cutover retains that layout and bumps the signed
+    // domain to v10.
     //
     // v3.1 note: `price_proof` and `price_commitment` had previously been
     // factored out into a preceding `verify_valid_price` ix; that path was
@@ -239,9 +241,9 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         // from the payload — they're proven in-circuit + bound by the note
         // commitments. v8: encrypted output recovery appended the
         // 128-byte `fill_recovery` ciphertext bundle. v9 removed the two
-        // vestigial nullifiers. Bumping the tag invalidates every signature
-        // over an older layout.
-        b"nyx-match-v9",
+        // vestigial nullifiers. v10 is the clean Darknyx namespace cutover.
+        // Bumping the tag invalidates every signature over an older domain.
+        b"darknyx-match-v10",
         p.match_id.as_ref(),
         p.note_a_commitment.as_ref(),
         p.note_b_commitment.as_ref(),
@@ -388,9 +390,9 @@ mod tests {
         // `[hash_cross_env_parity]`. When the payload shape changes, update
         // BOTH sides — any divergence breaks the TEE signature verification.
         let expected: [u8; 32] = [
-            0x63, 0xA1, 0x0A, 0x28, 0x1E, 0xD2, 0x86, 0x32, 0xD4, 0xFE, 0xE9, 0xC7, 0x1B, 0x38,
-            0xF9, 0x26, 0xF2, 0xCD, 0xA8, 0xBE, 0x6F, 0x78, 0x85, 0x0D, 0x4F, 0x79, 0x26, 0x65,
-            0x5E, 0xC8, 0xCF, 0xA2,
+            0x8F, 0x79, 0xC1, 0xCD, 0x05, 0xD1, 0x5B, 0x0B, 0xCF, 0xA8, 0x03, 0x9A, 0x74, 0x39,
+            0x72, 0x77, 0xA3, 0xCF, 0x6E, 0x4E, 0x62, 0xA8, 0x98, 0xC5, 0x9F, 0x07, 0xAA, 0x3D,
+            0xF0, 0x8D, 0x53, 0xD7,
         ];
         if hash != expected {
             panic!("canonical_payload_hash drifted — got {:02X?}", hash);

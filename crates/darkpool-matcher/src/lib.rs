@@ -1,8 +1,8 @@
-//! Pure matching algorithm for the Nyx dark pool.
+//! Pure matching algorithm for the Darknyx dark pool.
 //!
 //! Uniform-clearing-price batch auction with FIFO tie-break and
 //! Pyth-band circuit breaker. This crate is the single source of truth
-//! consumed by the in-TEE matcher (`crates/nyx-tee`).
+//! consumed by the in-TEE matcher (`crates/darknyx-tee`).
 //!
 //! # Invariants
 //!

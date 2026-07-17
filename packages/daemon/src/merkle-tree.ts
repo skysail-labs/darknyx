@@ -12,7 +12,7 @@
  * parity-validated `MerkleShadow`.
  */
 
-import { poseidonHashBytesBE } from "@nyx/sdk";
+import { poseidonHashBytesBE } from "@darknyx/sdk";
 
 export const TREE_DEPTH = 20;
 

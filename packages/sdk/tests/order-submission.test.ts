@@ -17,7 +17,7 @@ import {
   TradingClient,
   type SendableWebSocketLike,
 } from "../src/orders/trading-ws-client.js";
-import { NyxApiError } from "../src/orders/order-client.js";
+import { DarknyxApiError } from "../src/orders/order-client.js";
 import type { PlaceOrderRequest } from "../src/orders/build-order.js";
 import { limitPolicy } from "../src/orders/builders.js";
 import { OrderSide } from "../src/orders/canonical.js";
@@ -219,7 +219,7 @@ describe("TradingClient (/v1/stream session)", () => {
     expect(res.order_id).toBe("ab");
   });
 
-  it("rejects with NyxApiError on an error frame", async () => {
+  it("rejects with DarknyxApiError on an error frame", async () => {
     const { client, sock } = await connected();
     const cancelP = client.cancel("ab", {
       trading_key: "00",
@@ -237,8 +237,8 @@ describe("TradingClient (/v1/stream session)", () => {
         message: "not owner",
       }),
     });
-    await expect(cancelP).rejects.toBeInstanceOf(NyxApiError);
-    await cancelP.catch((e: NyxApiError) => expect(e.code).toBe(1103));
+    await expect(cancelP).rejects.toBeInstanceOf(DarknyxApiError);
+    await cancelP.catch((e: DarknyxApiError) => expect(e.code).toBe(1103));
   });
 
   it("fails in-flight requests when the socket closes", async () => {

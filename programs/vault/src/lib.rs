@@ -1,4 +1,4 @@
-//! Nyx dark pool — vault program (Phase 1).
+//! Darknyx dark pool — vault program (Phase 1).
 //!
 //! Responsibilities:
 //!   - SPL token custody via per-mint PDA token accounts.

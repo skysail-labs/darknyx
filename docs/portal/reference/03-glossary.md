@@ -1,7 +1,7 @@
 ---
 sidebar_position: 3
 title: Glossary
-description: Terms and acronyms used across the Nyx documentation.
+description: Terms and acronyms used across the Darknyx documentation.
 ---
 
 # Glossary

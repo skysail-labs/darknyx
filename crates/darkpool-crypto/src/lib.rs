@@ -1,11 +1,11 @@
-//! Shared cryptographic primitives for the Nyx dark pool.
+//! Shared cryptographic primitives for the Darknyx dark pool.
 //!
 //! This crate is the single source of truth for:
 //! - Poseidon hashing over BN254 (note commitments, nullifiers, owner commitments)
 //! - Note/UTXO structure + commitment formula
 //! - Nullifier derivation
-//! - Blinding factor derivation (NyxShakeKdfV1)
-//! - Four-key hierarchy derivation (HKDF + NyxShakeKdfV1)
+//! - Blinding factor derivation (DarknyxShakeKdfV1)
+//! - Four-key hierarchy derivation (HKDF + DarknyxShakeKdfV1)
 //! - Hierarchical viewing key tree (MVK -> PairVK -> MonthlyVK)
 //!
 //! All functions MUST produce byte-identical output in:
@@ -46,8 +46,8 @@ pub use fill_encryption::{
 };
 #[cfg(not(target_os = "solana"))]
 pub use keys::{
-    derive_blinding_factor, derive_master_viewing_key, derive_spending_key,
-    derive_trading_key_at_offset, nyx_shake_kdf_v1, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
+    darknyx_shake_kdf_v1, derive_blinding_factor, derive_master_viewing_key, derive_spending_key,
+    derive_trading_key_at_offset, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
 };
 pub use match_output::{
     match_fee_inner_hash, match_output_inner_hash, DOMAIN_MATCH_FEE_INNER,

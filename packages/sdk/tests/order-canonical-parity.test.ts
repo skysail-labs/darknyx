@@ -33,10 +33,10 @@ import {
 // ─── Pinned hex digests — must match the Rust constants ─────────────────────
 
 const FIXTURE_DIGEST_HEX =
-  "86e585b1c0f2229e61ebbd9d724714577c78359539b6662a5b88b90ec543942a";
+  "7a47d4c4dd854c36f394bfa3b6694f5c9b57b0e33da01cbda7c766cb6c757906";
 
 const CANCEL_FIXTURE_DIGEST_HEX =
-  "da322b3d5d025a9dade32876d05798346e0ebbe69e391d274daa3bd34fcf7962";
+  "0ede450bdd837821997c7d1353aa6cbccf2ddebd564c7c874014f561b0feefa7";
 
 // ─── Fixtures — same numeric inputs as the Rust `fixture()` fn ──────────────
 
@@ -76,9 +76,9 @@ describe("order canonical encoder — Rust parity", () => {
     expect(actual).toBe(FIXTURE_DIGEST_HEX);
   });
 
-  test("fixture byte length is 199 + symbol.length", () => {
+  test("fixture byte length is 203 + symbol.length", () => {
     const bytes = orderCanonicalBytes(fixture());
-    expect(bytes.length).toBe(199 + "SOL-USDC".length);
+    expect(bytes.length).toBe(203 + "SOL-USDC".length);
   });
 
   test("each field perturbation changes the digest", () => {

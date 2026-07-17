@@ -1,35 +1,35 @@
 #!/usr/bin/env node
 /**
- * nyx-keystore-init — create (or recreate) an encrypted daemon keystore.
+ * darknyx-keystore-init — create (or recreate) an encrypted daemon keystore.
  *
  * Generates a fresh account identity (random 64-byte master seed + the
  * seed-derived owner/user blindings) bound to the operator's root (payer)
  * Solana key, seals it under a passphrase, and writes a separate encrypted,
  * versioned seed backup. Plaintext seed import/export is deliberately absent.
  *
- *   NYX_DAEMON_KEYSTORE_PASSPHRASE=<passphrase> \
- *   NYX_DAEMON_SEED_BACKUP_PASSPHRASE=<distinct-passphrase> \
- *   nyx-keystore-init --root-key <BASE58_PUBKEY> [--out ./nyx-keystore.json] \
- *                     --backup-out ./nyx-seed-backup.json [--force]
+ *   DARKNYX_DAEMON_KEYSTORE_PASSPHRASE=<passphrase> \
+ *   DARKNYX_DAEMON_SEED_BACKUP_PASSPHRASE=<distinct-passphrase> \
+ *   darknyx-keystore-init --root-key <BASE58_PUBKEY> [--out ./darknyx-keystore.json] \
+ *                     --backup-out ./darknyx-seed-backup.json [--force]
  *
  *   # Disaster recovery onto a fresh keystore:
- *   nyx-keystore-init --root-key <BASE58_PUBKEY> \
- *                     --import-backup ./nyx-seed-backup.json [--force]
+ *   darknyx-keystore-init --root-key <BASE58_PUBKEY> \
+ *                     --import-backup ./darknyx-seed-backup.json [--force]
  *
  *   --root-key   (required) base58 pubkey of the funding/root wallet.
- *   --out        keystore path (default ./nyx-keystore.json).
+ *   --out        keystore path (default ./darknyx-keystore.json).
  *   --backup-out     encrypted backup destination when generating a new seed.
- *   --import-backup  encrypted backup v1 to restore; mutually exclusive with
+ *   --import-backup  encrypted backup v2 to restore; mutually exclusive with
  *                    --backup-out.
  *   --force      overwrite an existing --out file.
  *
- * The passphrase comes from NYX_DAEMON_KEYSTORE_PASSPHRASE (scriptable; never a
+ * The passphrase comes from DARKNYX_DAEMON_KEYSTORE_PASSPHRASE (scriptable; never a
  * CLI arg, so it doesn't land in shell history / the process table).
  */
 
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { PublicKey } from "@solana/web3.js";
-import { exportEncryptedMasterSeed, importEncryptedMasterSeed } from "@nyx/sdk";
+import { exportEncryptedMasterSeed, importEncryptedMasterSeed } from "@darknyx/sdk";
 
 import {
   Keystore,
@@ -49,13 +49,13 @@ function flag(name: string): boolean {
 async function main(): Promise<void> {
   const rootKeyB58 = arg("root-key");
   if (!rootKeyB58) throw new Error("--root-key <BASE58_PUBKEY> is required");
-  const out = arg("out") ?? "./nyx-keystore.json";
-  const passphrase = process.env.NYX_DAEMON_KEYSTORE_PASSPHRASE;
+  const out = arg("out") ?? "./darknyx-keystore.json";
+  const passphrase = process.env.DARKNYX_DAEMON_KEYSTORE_PASSPHRASE;
   if (!passphrase)
-    throw new Error("NYX_DAEMON_KEYSTORE_PASSPHRASE is required");
-  const backupPassphrase = process.env.NYX_DAEMON_SEED_BACKUP_PASSPHRASE;
+    throw new Error("DARKNYX_DAEMON_KEYSTORE_PASSPHRASE is required");
+  const backupPassphrase = process.env.DARKNYX_DAEMON_SEED_BACKUP_PASSPHRASE;
   if (!backupPassphrase) {
-    throw new Error("NYX_DAEMON_SEED_BACKUP_PASSPHRASE is required");
+    throw new Error("DARKNYX_DAEMON_SEED_BACKUP_PASSPHRASE is required");
   }
   if (backupPassphrase === passphrase) {
     throw new Error("seed-backup and keystore passphrases must be distinct");

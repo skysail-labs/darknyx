@@ -1,26 +1,26 @@
 ---
 sidebar_position: 1
 title: Overview
-description: Nyx is a privacy-preserving spot darkpool on Solana, with hidden orders matched inside an attested confidential VM and value movement proven on-chain.
+description: Darknyx is a privacy-preserving spot darkpool on Solana, with hidden orders matched inside an attested confidential VM and value movement proven on-chain.
 ---
 
 # Overview
 
 :::info TL;DR
-Nyx is a **privacy-preserving spot darkpool on Solana**. Hidden orders match
+Darknyx is a **privacy-preserving spot darkpool on Solana**. Hidden orders match
 inside an attested Intel TDX Confidential VM (a "CVM"); custody and proven value
 movement remain on-chain. Solana sees deposits, withdrawals, commitments, and
 proofs, but never the order book or a settled trade's plaintext price and size.
 :::
 
-## What Nyx is
+## What Darknyx is
 
-Nyx is a dark pool: an order book where resting orders are not public. Side,
+Darknyx is a dark pool: an order book where resting orders are not public. Side,
 size, and limit price never appear in a Solana transaction, a log, or an
 account. They live only inside a hardware-isolated enclave whose exact compiled
 code is measured and remotely verifiable.
 
-Unlike an off-chain matching desk, Nyx does not give one ordinary operator both
+Unlike an off-chain matching desk, Darknyx does not give one ordinary operator both
 custody and readable order flow:
 
 - **Custody is on-chain.** Funds sit in a Solana program. Withdrawals, merges,
@@ -32,12 +32,12 @@ custody and readable order flow:
 
 The result is a venue where matching policy is enforced by code you can attest,
 while asset identity, arithmetic, conservation, fees, and output ownership are
-enforced by a proof the chain verifies. See [Why Nyx](./design-thesis) for the
+enforced by a proof the chain verifies. See [Why Darknyx](./design-thesis) for the
 full trust decomposition.
 
 ## What "private" means here
 
-Nyx enforces three distinct privacy properties, each by a separate mechanism.
+Darknyx enforces three distinct privacy properties, each by a separate mechanism.
 
 | Property | What is hidden | How |
 |---|---|---|
@@ -52,7 +52,7 @@ itself label the rest of the wallet's notes.
 
 ## The three layers
 
-Nyx is three layers that compose into one trust chain.
+Darknyx is three layers that compose into one trust chain.
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
@@ -91,7 +91,7 @@ Nyx is three layers that compose into one trust chain.
 
 ## Spot, not perps
 
-Nyx is a **spot** venue. There are no positions, no leverage, no funding, and no
+Darknyx is a **spot** venue. There are no positions, no leverage, no funding, and no
 liquidations. Every order is fully collateralized up front by a note you already
 deposited, and a trade is an atomic swap of value between two notes. If you have
 traded a perps dark pool before, the concepts that carry over are order types,
@@ -109,7 +109,7 @@ margin, funding) simply are not part of the model.
 
 ## Next steps
 
-- [Why Nyx](./design-thesis): the product thesis, exact trust boundary, and
+- [Why Darknyx](./design-thesis): the product thesis, exact trust boundary, and
   tradeoffs.
 - [Programmatic Access](./programmatic-access): the API surface, the auth
   model, and a quick start.

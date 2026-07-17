@@ -1,10 +1,10 @@
 ---
 sidebar_position: 2
-title: Why Nyx
-description: The product thesis behind Nyx, the guarantees each layer provides, and the tradeoffs a technical evaluator should understand.
+title: Why Darknyx
+description: The product thesis behind Darknyx, the guarantees each layer provides, and the tradeoffs a technical evaluator should understand.
 ---
 
-# Why Nyx
+# Why Darknyx
 
 Public markets make price discovery transparent, but they also make intent a
 resource other participants can exploit. A large resting order advertises side,
@@ -12,7 +12,7 @@ size, urgency, and often strategy. Moving the book off-chain hides that intent,
 but usually replaces market transparency with trust in an operator that can see
 orders, control custody, or both.
 
-Nyx separates those powers:
+Darknyx separates those powers:
 
 - **Solana holds custody and verifies value movement.** The vault accepts only
   proof-valid deposits, withdrawals, merges, and settlements.
@@ -28,7 +28,7 @@ uniform batch clearing, on-chain custody, and recoverable shielded balances.
 
 ## The trust decomposition
 
-Nyx does not collapse every guarantee into the phrase "trustless." Each layer
+Darknyx does not collapse every guarantee into the phrase "trustless." Each layer
 has a narrower, inspectable job.
 
 | Property | Enforced by | What it means |
@@ -57,7 +57,7 @@ high-throughput chain.
 
 ## What privacy does and does not cover
 
-Nyx hides the live book, settled trade amounts and prices, shielded note owners,
+Darknyx hides the live book, settled trade amounts and prices, shielded note owners,
 and the link between commitments. It does not make the public edges of a token
 transfer disappear:
 
@@ -76,7 +76,7 @@ intelligence.
 
 ## Product boundaries
 
-Nyx is intentionally narrow today:
+Darknyx is intentionally narrow today:
 
 - spot assets only; no leverage, funding, liquidations, or unsecured credit;
 - fully collateralized orders backed by one shielded note;
@@ -87,7 +87,7 @@ Nyx is intentionally narrow today:
 - production launch remains gated on an external circuit audit, a public
   proving-key ceremony, governance rehearsal, and recovery drill.
 
-Those boundaries make the claim legible: Nyx is not trying to hide trust. It is
+Those boundaries make the claim legible: Darknyx is not trying to hide trust. It is
 trying to minimize it, isolate it, and make the remaining assumptions
 verifiable.
 

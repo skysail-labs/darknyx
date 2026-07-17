@@ -16,7 +16,7 @@ import {
   type Groth16ProofBytes,
   type IDarkPoolZkProverSuite,
   type MergeInputs,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 export interface MergeCircuitArtifacts {
   k2: { wasmPath: string; zkeyPath: string };

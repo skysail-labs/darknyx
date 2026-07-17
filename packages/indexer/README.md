@@ -1,4 +1,4 @@
-# @nyx/indexer — off-TEE by-order_id fills locator
+# @darknyx/indexer — off-TEE by-order_id fills locator
 
 > **Status: OPTIONAL, kept-not-deleted, no consumer today.**
 > This package is a standalone, off-TEE, read-only Solana indexer. It watches the
@@ -22,7 +22,7 @@ TEE-fed intake registry. Three later changes hollowed that mandate out:
    **commitment LOCATOR**, not a system of record. `slot` is the Solana history
    cursor; `batch_slot` is the 0..15 circuit slot index and is never used as a
    chain cursor.
-3. **On-chain output recovery v2** puts each side's `(trade, change)` amounts
+3. **On-chain output recovery v3** puts each side's `(trade, change)` amounts
    ENCRYPTED on chain, recovered directly by the SDK
    (`fills/recover.ts::recoverFillFromChain`). This retired the P7 `/fills/replay`
    memo log and, crucially, made the **chain** — not this service — the durable
@@ -70,8 +70,8 @@ and the SDK decoder `packages/sdk/src/fills/chain-history.ts`. Change the payloa
 layout in one place → change all four and re-run their round-trip tests
   (`decode.test.ts` here, `chain-history.test.ts` in the SDK).
 
-Recovery v2 repacks the unchanged 128-byte field as
-`ephemeral_pubkey(32) || buyer_enc(44) || seller_enc(44) || "NYXREC02"`.
+Recovery v3 repacks the unchanged 128-byte field as
+`ephemeral_pubkey(32) || buyer_enc(44) || seller_enc(44) || "DNYXREC3"`.
 The explicit trailer makes the clean cutover fail closed on legacy v1 blobs.
 
 ## Run it locally

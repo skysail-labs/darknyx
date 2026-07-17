@@ -2,7 +2,7 @@
  * Durable trade history — the "backfill" half of "backfill then tail".
  *
  * Amount-privacy (P3b): the off-TEE indexer (`packages/indexer`) is a pure
- * COMMITMENT LOCATOR. Its rows carry no amounts. Recovery v2 encrypts the
+ * COMMITMENT LOCATOR. Its rows carry no amounts. Recovery v3 encrypts the
  * side's trade + change tuple in the settlement envelope and locates the exact
  * consumed input plus both output commitments.
  *
@@ -43,7 +43,7 @@ export interface IndexerFill {
   /** 32-byte hex of the minted change note, or `null` when the side filled exactly. */
   changeNoteCommitment: string | null;
   batchSlot: string;
-  /** Recovery v2: shared ephemeral X25519 pubkey and THIS side's 44-byte
+  /** Recovery v3: shared ephemeral X25519 pubkey and THIS side's 44-byte
    * encrypted `(trade, change)` tuple. */
   ephemeralPubkey?: string | null;
   outputEnc?: string | null;

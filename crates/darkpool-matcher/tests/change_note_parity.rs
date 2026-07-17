@@ -31,7 +31,7 @@ use solana_program::hash::hashv;
 // `solana_program::hash::hashv`. Same algorithm, separately implemented.
 
 fn reference_derive_inner(match_id: u64, role: u8) -> [u8; 32] {
-    let mut h = hashv(&[b"nyx-change-inner", &match_id.to_le_bytes(), &[role]]).to_bytes();
+    let mut h = hashv(&[b"darknyx-change-inner-v2", &match_id.to_le_bytes(), &[role]]).to_bytes();
     h[0] = 0;
     h[1] &= 0x0f;
     h
@@ -124,15 +124,15 @@ fn inner_parity_against_solana_sha256_backend() {
 // referencing the TS computation directly.)
 
 // True known-answer values — computed INDEPENDENTLY of the
-// implementation (`printf 'nyx-change-inner' ‖ 42_le_u64 ‖ role |
+// implementation (`printf 'darknyx-change-inner-v2' ‖ 42_le_u64 ‖ role |
 // shasum -a 256`, then byte0=0, byte1 &= 0x0f). Hardcoding the bytes
 // (rather than calling reference_derive_inner) keeps these KATs an
 // independent oracle — they'd catch a bug that the reference impl
 // shared. The TS port pins the buyer value too
 // (`packages/sdk/tests/change-note-inner-parity.test.ts`).
-const KAT_INNER_BUYER_42: &str = "0003e743eb441d6b6f5363d7ad169cf3b8dd6621303ed9d47cb14ddf05de286b";
+const KAT_INNER_BUYER_42: &str = "0007c1605d5ab69620f81cbc8834c305a4f850011d482888629cb6c89d6024fb";
 const KAT_INNER_SELLER_42: &str =
-    "000e6d1cff8251e672fb9b1f84257ea0884095de985dadb2b8b6d2616cf90179";
+    "0007211d97074d5370ce8af33229f2e41329e9ec0382b7ddffe7d2082a626ed6";
 
 #[test]
 fn known_answer_inner_buyer_match42() {

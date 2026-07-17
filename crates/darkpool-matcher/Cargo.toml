@@ -2,7 +2,7 @@
 name = "darkpool-matcher"
 version.workspace = true
 edition.workspace = true
-description = "Pure matching algorithm for the Nyx dark pool. Uniform-clearing-price batch auction with FIFO tie-break and Pyth-band circuit breaker. No Anchor or Solana runtime dependencies; consumed by the in-TEE matcher."
+description = "Pure matching algorithm for the Darknyx dark pool. Uniform-clearing-price batch auction with FIFO tie-break and Pyth-band circuit breaker. No Anchor or Solana runtime dependencies; consumed by the in-TEE matcher."
 
 [lib]
 crate-type = ["rlib"]

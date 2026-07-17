@@ -117,13 +117,13 @@ describe("MatchResultPayload decode", () => {
     expect(decodeSettleIxData(new Uint8Array(10))).toBeNull();
   });
 
-  it("decodes the recovery-v2 ciphertext per side", () => {
+  it("decodes the recovery-v3 ciphertext per side", () => {
     // eph(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ trailer(8).
     const recovery = new Uint8Array(128);
     recovery.set(fill(32, 0xe1), 0);
     recovery.set(fill(44, 0xb2), 32);
     recovery.set(fill(44, 0xc3), 76);
-    recovery.set(new TextEncoder().encode("NYXREC02"), 120);
+    recovery.set(new TextEncoder().encode("DNYXREC3"), 120);
     const p = decodeMatchPayload(
       serializePayload(makePayload({ fillRecovery: recovery })),
     );

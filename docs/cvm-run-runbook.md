@@ -5,7 +5,7 @@
 > commands and the gotchas that have each cost a wasted deploy. Read §0 first.
 
 A billable CVM matches AND settles a real crossing pair on devnet. The CVM
-binary IS the in-TEE matcher+settler, so any change under `crates/nyx-tee/`,
+binary IS the in-TEE matcher+settler, so any change under `crates/darknyx-tee/`,
 `Dockerfile`, `deploy/docker-compose.yaml`, or the circuits needs a **rebuilt
 image** — deploying the old tag runs stale code.
 
@@ -20,16 +20,16 @@ image** — deploying the old tag runs stale code.
    `.devnet/` directory, never commit it, and securely delete it after deploy.
    Never paste the key into a CLI arg or a `/tmp/*.env` you forget to delete.
 
-2. **The git remote redirects.** `origin` (`Nyx-Privacy/nyx`) **redirects to the
+2. **The git remote redirects.** `origin` (`Darknyx-Privacy/darknyx`) **redirects to the
    canonical `skysail-labs/darknyx`**. CI runs there and publishes the public
-   image `ghcr.io/skysail-labs/nyx-tee:<tag>`. Watch CI on
+   image `ghcr.io/skysail-labs/darknyx-tee:<tag>`. Watch CI on
    `skysail-labs/darknyx`, not `origin`.
 
 3. **Bootstrap credentials are encrypted per deploy.** The compose references
-   `${NYX_TEE_API_KEY}`, `${NYX_TEE_API_SECRET}`, and
-   `${NYX_TEE_PASSPHRASE}`. Generate fresh values in the protected `-e` file
+   `${DARKNYX_TEE_API_KEY}`, `${DARKNYX_TEE_API_SECRET}`, and
+   `${DARKNYX_TEE_PASSPHRASE}`. Generate fresh values in the protected `-e` file
    and export the same values for the CVM harness/loadgen. The public
-   `nyx-test-*` fixtures are rejected by a production boot.
+   `darknyx-test-*` fixtures are rejected by a production boot.
 
 4. **The nvm shim can shadow `node`.** If `_load_nvm` recursion errors appear,
    invoke `node`/`phala` by absolute path, e.g.
@@ -51,17 +51,17 @@ image** — deploying the old tag runs stale code.
 
 ```sh
 # 1. bump the tag the compose pins:
-#    deploy/docker-compose.yaml → image: …nyx-tee:tee-v3-hardening-<N+1>
+#    deploy/docker-compose.yaml → image: …darknyx-tee:tee-v3-hardening-<N+1>
 # 2. commit, then tag + push (the tag carries your commits):
 git tag tee-v3-hardening-<N+1> && git push origin tee-v3-hardening-<N+1>
 # 3. watch CI (lives on skysail-labs/darknyx; origin redirects there):
 gh run watch "$(gh run list --repo skysail-labs/darknyx --limit 1 --json databaseId -q '.[0].databaseId')" \
   --repo skysail-labs/darknyx --exit-status
 # 4. confirm the manifest landed (want 200):
-TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/nyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/darknyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" \
   -H "Accept: application/vnd.oci.image.index.v1+json" \
-  "https://ghcr.io/v2/skysail-labs/nyx-tee/manifests/tee-v3-hardening-<N+1>"
+  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N+1>"
 ```
 
 If only env/regime changed (no code), skip §1 — an env-only `phala deploy -e` is
@@ -98,9 +98,9 @@ fresh each deploy under the gitignored `.devnet/` directory, `umask 077`,
 
 ```sh
 umask 077
-export NYX_TEE_API_KEY="nyx-$(openssl rand -hex 16)"
-export NYX_TEE_API_SECRET="$(openssl rand -hex 32)"
-export NYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
+export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
+export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
+export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
@@ -108,26 +108,26 @@ OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 node scripts/reset-merkle-tree.mjs     # FIRST — so the mirror cold-boots an empty tree (all K shards)
 FLOOR=$(solana slot --url "$SOLANA_RPC_URL")
-cat > .devnet/nyx-deploy.env <<EOF
-NYX_TEE_API_KEY=$NYX_TEE_API_KEY
-NYX_TEE_API_SECRET=$NYX_TEE_API_SECRET
-NYX_TEE_PASSPHRASE=$NYX_TEE_PASSPHRASE
-NYX_TEE_SOLANA_RPC_URL=$SOLANA_RPC_URL
-NYX_TEE_SYNC_FROM_SLOT=$FLOOR
-NYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen (placeholder-mint) regime
-NYX_TEE_QUOTE_MINT=$QUOTE
-NYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
-NYX_TEE_FEE_RATE_BPS=30
-NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
-NYX_TEE_NUM_TREES=$K
+cat > .devnet/darknyx-deploy.env <<EOF
+DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
+DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
+DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
+DARKNYX_TEE_SOLANA_RPC_URL=$SOLANA_RPC_URL
+DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
+DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen (placeholder-mint) regime
+DARKNYX_TEE_QUOTE_MINT=$QUOTE
+DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
+DARKNYX_TEE_FEE_RATE_BPS=30
+DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
+DARKNYX_TEE_NUM_TREES=$K
 EOF
 ```
 
 > Keep the three credential variables exported in the shell that runs the CVM
 > tests/loadgen; live harnesses now fail fast when they are missing.
-> `NYX_TEE_FEE_RATE_BPS` (default 30) must equal the cvm-harness/loadgen fee rate
+> `DARKNYX_TEE_FEE_RATE_BPS` (default 30) must equal the cvm-harness/loadgen fee rate
 > (intake derives fee-inclusive collateral; a mismatch → every note fails
-> `verify_commitment`). `NYX_TEE_NUM_TREES` must equal the on-chain `numTrees`.
+> `verify_commitment`). `DARKNYX_TEE_NUM_TREES` must equal the on-chain `numTrees`.
 
 ---
 
@@ -135,18 +135,18 @@ EOF
 
 ```sh
 CVM=app_<id>      # phala cvms list
-phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e .devnet/nyx-deploy.env --wait
+phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e .devnet/darknyx-deploy.env --wait
 # GNU/Linux has shred; macOS has rm -P. Confirm the file is gone either way.
 if command -v shred >/dev/null 2>&1; then
-  shred -u .devnet/nyx-deploy.env
+  shred -u .devnet/darknyx-deploy.env
 else
-  rm -P .devnet/nyx-deploy.env
+  rm -P .devnet/darknyx-deploy.env
 fi
-test ! -e .devnet/nyx-deploy.env
+test ! -e .devnet/darknyx-deploy.env
 
 GW="https://<app_id>-8080.dstack-pha-prod5.phala.network"
-phala ps "$CVM"                     # find the nyx-tee container name (normally dstack-nyx-tee-1)
-phala logs dstack-nyx-tee-1 --cvm-id "$CVM" --stderr -n 60
+phala ps "$CVM"                     # find the darknyx-tee container name (normally dstack-darknyx-tee-1)
+phala logs dstack-darknyx-tee-1 --cvm-id "$CVM" --stderr -n 60
 # Watch for: proving key load, "merkle cold-boot complete … shards=K",
 # "derived K-shard TEE signer set" (COPY ALL K keys), "settle pipeline ENABLED".
 ```
@@ -189,7 +189,7 @@ Do not spend a standalone CVM session on this. Bundle the capture with the next
 image-required settle run. Set the actual container name from `phala ps`:
 
 ```sh
-CONTAINER=dstack-nyx-tee-1
+CONTAINER=dstack-darknyx-tee-1
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 
 snapshot_cvm_cpu() {
@@ -214,14 +214,14 @@ Use five sequential token issuances as a cheap Argon2/CPU canary. The script
 prints only status and duration; it never prints credentials or bearer tokens:
 
 ```sh
-export NYX_TEE_GATEWAY="$GW"
+export DARKNYX_TEE_GATEWAY="$GW"
 for i in 1 2 3 4 5; do
   node -e '
     const started = performance.now();
-    const body = {api_key: process.env.NYX_TEE_API_KEY,
-      api_secret: process.env.NYX_TEE_API_SECRET,
-      passphrase: process.env.NYX_TEE_PASSPHRASE};
-    fetch(`${process.env.NYX_TEE_GATEWAY}/auth/token`, {
+    const body = {api_key: process.env.DARKNYX_TEE_API_KEY,
+      api_secret: process.env.DARKNYX_TEE_API_SECRET,
+      passphrase: process.env.DARKNYX_TEE_PASSPHRASE};
+    fetch(`${process.env.DARKNYX_TEE_GATEWAY}/auth/token`, {
       method: "POST", headers: {"content-type": "application/json"},
       body: JSON.stringify(body),
     }).then(r => console.log(`status=${r.status} auth_ms=${Math.round(performance.now()-started)}`));
@@ -270,7 +270,7 @@ Phala support; then repeat the pre/post snapshots around one proof.
 
 ## 5. Run the tests (real-mint regime)
 
-`NYX_TEE_GATEWAY` + `SOLANA_RPC_URL` come from `.env`; export the run flag inline.
+`DARKNYX_TEE_GATEWAY` + `SOLANA_RPC_URL` come from `.env`; export the run flag inline.
 
 > ### ⚠️ ONE fresh tree per leaf-count test — do NOT run the whole bucket in one shot
 >
@@ -303,7 +303,7 @@ Run ONE leaf-count test file against a freshly-reset + cold-booted CVM:
 # after: reset tree (§3) + env-only `phala deploy` (§4) so the mirror cold-boots empty
 (
   cd packages/sdk
-  RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" \
+  RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" \
     FUNDER_KEYPAIR="$HOME/.config/solana/id.json" \
     ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
     ../../node_modules/.bin/vitest run --project cvm tests/cvm-settle-e2e.test.ts
@@ -319,7 +319,7 @@ settings, `/v1/stream` login/sequence + legacy-route deletion). **Re-run after e
 image bump.**
 
 The loadgen needs the placeholder-mint regime (omit the mint vars, §3) — see
-`crates/nyx-tee-loadgen/BENCHMARK.md`.
+`crates/darknyx-tee-loadgen/BENCHMARK.md`.
 
 ---
 
@@ -329,7 +329,7 @@ It bills while running.
 
 ```sh
 phala cvms stop "$CVM"   # preserves app_id / signer / volume; halts billing
-unset NYX_TEE_API_KEY NYX_TEE_API_SECRET NYX_TEE_PASSPHRASE
+unset DARKNYX_TEE_API_KEY DARKNYX_TEE_API_SECRET DARKNYX_TEE_PASSPHRASE
 ```
 
 **Never leave a billable CVM up.** The no-CVM half of devnet validation

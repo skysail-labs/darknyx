@@ -10,8 +10,8 @@
  * order/fill channel pushes and account-default cancel-on-disconnect need a
  * real note + proof and are covered by cvm-settle-e2e / cvm-merge-then-order.
  *
- * Gate: RUN_CVM_E2E=1 + NYX_TEE_GATEWAY. Run:
- *   RUN_CVM_E2E=1 NYX_TEE_GATEWAY=$GW \
+ * Gate: RUN_CVM_E2E=1 + DARKNYX_TEE_GATEWAY. Run:
+ *   RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY=$GW \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm tests/cvm-api-surface.test.ts )
  */
 import { beforeAll, describe, expect, it } from "vitest";
@@ -24,7 +24,7 @@ import {
   hex,
 } from "./helpers/cvm-harness.js";
 
-const GATEWAY = (process.env.NYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
+const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const READY = process.env.RUN_CVM_E2E === "1" && GATEWAY !== "";
 const maybeDescribe = READY ? describe : describe.skip;
 
@@ -124,7 +124,7 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
       expect(typeof b[k], `status.${k} is a bool`).toBe("boolean");
     }
     expect(typeof b.current_slot).toBe("number");
-    expect(typeof b.nyx_version).toBe("string");
+    expect(typeof b.version).toBe("string");
   });
 
   it("GET /time returns slot + unix_ms", async () => {

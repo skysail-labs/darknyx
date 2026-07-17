@@ -13,7 +13,7 @@ import {
 } from "../src/merge-runner.js";
 import { DaemonStore } from "../src/store.js";
 import { newManagedOrder, type ManagedOrder } from "../src/types.js";
-import type { MergeParams, MergeReceipt, StoredNote } from "@nyx/sdk";
+import type { MergeParams, MergeReceipt, StoredNote } from "@darknyx/sdk";
 
 const ORDER_ID = "ab".repeat(8);
 const MINT_A = new Uint8Array(32).fill(1);

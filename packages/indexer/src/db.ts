@@ -17,7 +17,7 @@ export interface FillRow extends SettleFill {
 
 // Amount-privacy (P3b): the on-chain settle ix no longer carries amounts, so
 // the indexer stores commitments + a partial-fill flag only (no change_amount /
-// clearing_price columns). Recovery v2 stores the exact consumed/trade/change
+// clearing_price columns). Recovery v3 stores the exact consumed/trade/change
 // commitments plus an opaque `(trade, change)` ciphertext; only the order
 // owner's viewing key can decrypt it.
 const SCHEMA = `
@@ -52,7 +52,7 @@ export class FillsDb {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(SCHEMA);
-    // Rebuildable locator DBs created before recovery v2 may still exist. Add
+    // Rebuildable locator DBs created before recovery v3 may still exist. Add
     // the new columns without pretending legacy rows are recoverable.
     for (const statement of [
       "ALTER TABLE fills ADD COLUMN input_note_commitment TEXT",

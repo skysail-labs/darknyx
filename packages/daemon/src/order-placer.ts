@@ -20,7 +20,7 @@ import {
   placeOrder,
   cancelOrder,
   modifyOrder,
-  NyxApiError,
+  DarknyxApiError,
   type TradingClientOptions,
   type SendableWebSocketFactory,
   type PlaceOrderRequest,
@@ -29,7 +29,7 @@ import {
   type CancelOrderResponse,
   type ModifyOrderRequest,
   type ModifyOrderResponse,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 /** Transport for placing / cancelling / modifying orders against the TEE. */
 export interface OrderPlacer {
@@ -121,7 +121,7 @@ export interface WsOrderPlacerOptions {
 /**
  * WS {@link OrderPlacer} over `/v1/stream`. It reuses the daemon's multiplexed
  * client when supplied; otherwise it lazily creates one. Transport failures are
- * retried up to `maxRetries`; a {@link NyxApiError} is a definitive server answer
+ * retried up to `maxRetries`; a {@link DarknyxApiError} is a definitive server answer
  * and is never retried.
  */
 export class WsOrderPlacer implements OrderPlacer {
@@ -176,8 +176,8 @@ export class WsOrderPlacer implements OrderPlacer {
       try {
         return await fn(c);
       } catch (err) {
-        // A NyxApiError is the server's definitive reply — never retry it.
-        if (err instanceof NyxApiError || attempt >= this.maxRetries) throw err;
+        // A DarknyxApiError is the server's definitive reply — never retry it.
+        if (err instanceof DarknyxApiError || attempt >= this.maxRetries) throw err;
         attempt += 1;
         // A shared stream reconnects itself; a private one is rebuilt here.
         if (!this.opts.client) {

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Error Codes
-description: How Nyx signals failure, covering the HTTP status codes, the conditions that produce them, and how to handle them.
+description: How Darknyx signals failure, covering the HTTP status codes, the conditions that produce them, and how to handle them.
 ---
 
 # Error Codes

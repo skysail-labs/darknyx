@@ -86,25 +86,25 @@ function cvmCredential(name: string, localFixture: string): string {
 /** Live CVM credentials are generated per test window and injected through the
  * encrypted deploy env. Public fixture defaults remain only for non-live local
  * simulator tests. See docs/cvm-run-runbook.md. */
-export const API_KEY = cvmCredential("NYX_TEE_API_KEY", "nyx-test-api-key");
+export const API_KEY = cvmCredential("DARKNYX_TEE_API_KEY", "darknyx-test-api-key");
 export const API_SECRET = cvmCredential(
-  "NYX_TEE_API_SECRET",
-  "nyx-test-secret",
+  "DARKNYX_TEE_API_SECRET",
+  "darknyx-test-secret",
 );
 export const PASSPHRASE = cvmCredential(
-  "NYX_TEE_PASSPHRASE",
-  "nyx-test-passphrase",
+  "DARKNYX_TEE_PASSPHRASE",
+  "darknyx-test-passphrase",
 );
 
-/** Protocol fee bps — MUST match the CVM's NYX_TEE_FEE_RATE_BPS (default 30). */
-export const FEE_RATE_BPS = BigInt(process.env.NYX_CVM_FEE_RATE_BPS ?? "30");
+/** Protocol fee bps — MUST match the CVM's DARKNYX_TEE_FEE_RATE_BPS (default 30). */
+export const FEE_RATE_BPS = BigInt(process.env.DARKNYX_CVM_FEE_RATE_BPS ?? "30");
 
 /** Per-run salt so persona seed-derived keys (and the amount-independent v2
  *  nullifiers) are fresh each run — a fixed seed would collide the settle's
  *  NullifierEntry PDA ("Allocate: account already in use") on a 2nd run since
  *  reset_merkle_tree clears the tree but NOT those PDAs. */
 export const RUN_SALT = BigInt(
-  process.env.NYX_CVM_RUN_SALT ?? String(Date.now()),
+  process.env.DARKNYX_CVM_RUN_SALT ?? String(Date.now()),
 );
 
 export const hex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
@@ -159,7 +159,7 @@ export async function fetchBootSessionId(gateway: string): Promise<Uint8Array> {
 
 /** Fetch the live raw SOL/USD price integer the CVM's oracle uses. */
 export async function fetchOracleAnchor(): Promise<bigint> {
-  if (process.env.NYX_CVM_PRICE) return BigInt(process.env.NYX_CVM_PRICE);
+  if (process.env.DARKNYX_CVM_PRICE) return BigInt(process.env.DARKNYX_CVM_PRICE);
   const url = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${SOL_USD_FEED}`;
   const j = (await (await fetch(url)).json()) as {
     parsed?: { price: { price: string; expo: number } }[];

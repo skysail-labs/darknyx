@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 /**
- * nyx-daemon entrypoint.
+ * darknyx-daemon entrypoint.
  *
  * Loads config + the encrypted keystore, builds the in-process VALID_INPUT
  * prover, wires the Daemon, and serves the local control API. Keys + proving
  * stay on this host.
  *
- *   NYX_DAEMON_GATEWAY_URL=https://<app>-8080.dstack-…  \
- *   NYX_DAEMON_TOKEN=<jwt>  NYX_DAEMON_RPC_URL=$HELIUS   \
- *   NYX_DAEMON_API_KEY=<key> NYX_DAEMON_API_SECRET=<secret> \
- *   NYX_DAEMON_API_PASSPHRASE=<passphrase>               \
- *   NYX_DAEMON_KEYSTORE=./nyx-keystore.json             \
- *   NYX_DAEMON_KEYSTORE_PASSPHRASE=<passphrase>         \
- *   NYX_DAEMON_VI_WASM=circuits/build/valid_input/circuit_js/circuit.wasm \
- *   NYX_DAEMON_VI_ZKEY=circuits/build/valid_input/circuit_final.zkey      \
+ *   DARKNYX_DAEMON_GATEWAY_URL=https://<app>-8080.dstack-…  \
+ *   DARKNYX_DAEMON_TOKEN=<jwt>  DARKNYX_DAEMON_RPC_URL=$HELIUS   \
+ *   DARKNYX_DAEMON_API_KEY=<key> DARKNYX_DAEMON_API_SECRET=<secret> \
+ *   DARKNYX_DAEMON_API_PASSPHRASE=<passphrase>               \
+ *   DARKNYX_DAEMON_KEYSTORE=./darknyx-keystore.json             \
+ *   DARKNYX_DAEMON_KEYSTORE_PASSPHRASE=<passphrase>         \
+ *   DARKNYX_DAEMON_VI_WASM=circuits/build/valid_input/circuit_js/circuit.wasm \
+ *   DARKNYX_DAEMON_VI_ZKEY=circuits/build/valid_input/circuit_final.zkey      \
  *   node dist/bin/daemon.js
  */
 
@@ -27,7 +27,7 @@ import {
   limitPolicy,
   OrderSide,
   createDcapQuoteVerifier,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 import { loadConfig } from "../src/config.js";
 import { DaemonStore } from "../src/store.js";
@@ -54,14 +54,14 @@ function required(name: string): string {
 function streamTokenProvider(
   gatewayUrl: string,
 ): (() => Promise<string>) | undefined {
-  const apiKey = process.env.NYX_DAEMON_API_KEY;
-  const apiSecret = process.env.NYX_DAEMON_API_SECRET;
-  const passphrase = process.env.NYX_DAEMON_API_PASSPHRASE;
+  const apiKey = process.env.DARKNYX_DAEMON_API_KEY;
+  const apiSecret = process.env.DARKNYX_DAEMON_API_SECRET;
+  const passphrase = process.env.DARKNYX_DAEMON_API_PASSPHRASE;
   const supplied = [apiKey, apiSecret, passphrase].filter(Boolean).length;
   if (supplied === 0) return undefined;
   if (supplied !== 3) {
     throw new Error(
-      "NYX_DAEMON_API_KEY, NYX_DAEMON_API_SECRET, and NYX_DAEMON_API_PASSPHRASE must be supplied together",
+      "DARKNYX_DAEMON_API_KEY, DARKNYX_DAEMON_API_SECRET, and DARKNYX_DAEMON_API_PASSPHRASE must be supplied together",
     );
   }
   return async () => {
@@ -103,18 +103,18 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const keystore = loadKeystore(
     config.keystorePath,
-    required("NYX_DAEMON_KEYSTORE_PASSPHRASE"),
+    required("DARKNYX_DAEMON_KEYSTORE_PASSPHRASE"),
   );
   const store = new DaemonStore(config.dbPath);
   const prover = nodeValidInputProver({
-    wasmPath: required("NYX_DAEMON_VI_WASM"),
-    zkeyPath: required("NYX_DAEMON_VI_ZKEY"),
+    wasmPath: required("DARKNYX_DAEMON_VI_WASM"),
+    zkeyPath: required("DARKNYX_DAEMON_VI_ZKEY"),
   });
 
   // Direct on-chain actions (deposit, auto-merge) are enabled only when a payer
   // keypair is configured.
   const programId = new PublicKey(config.programId);
-  const circuitsDir = process.env.NYX_DAEMON_CIRCUITS_DIR ?? "circuits/build";
+  const circuitsDir = process.env.DARKNYX_DAEMON_CIRCUITS_DIR ?? "circuits/build";
   let depositFn;
   let depositor;
   let mergeRunner;
@@ -179,10 +179,10 @@ async function main(): Promise<void> {
     }
   }
 
-  // Attestation is on by default; NYX_DAEMON_SKIP_ATTEST=1 disables it entirely
+  // Attestation is on by default; DARKNYX_DAEMON_SKIP_ATTEST=1 disables it entirely
   // (local dstack-simulator, whose stub quotes can't be DCAP-verified by design).
   // Otherwise we wire the real Intel-TCB DCAP verifier so strict mode can enforce.
-  const skipAttest = process.env.NYX_DAEMON_SKIP_ATTEST === "1";
+  const skipAttest = process.env.DARKNYX_DAEMON_SKIP_ATTEST === "1";
   const daemon = new Daemon({
     config,
     keystore,
@@ -206,7 +206,7 @@ async function main(): Promise<void> {
     );
   } else {
     console.warn(
-      "[daemon] WARNING: attestation skipped (NYX_DAEMON_SKIP_ATTEST) — do NOT use against a production gateway",
+      "[daemon] WARNING: attestation skipped (DARKNYX_DAEMON_SKIP_ATTEST) — do NOT use against a production gateway",
     );
   }
 
@@ -284,7 +284,7 @@ async function main(): Promise<void> {
       daemon,
       mapPlace,
       mapDeposit,
-      controlToken: process.env.NYX_DAEMON_CONTROL_TOKEN,
+      controlToken: process.env.DARKNYX_DAEMON_CONTROL_TOKEN,
     },
     config.controlPort,
   );

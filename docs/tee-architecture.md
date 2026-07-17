@@ -1,12 +1,12 @@
-# Nyx TEE — Internal Architecture
+# Darknyx TEE — Internal Architecture
 
-> Design of the in-CVM matching engine + settler (`crates/nyx-tee/`).
+> Design of the in-CVM matching engine + settler (`crates/darknyx-tee/`).
 > Read with `docs/tee-api-openapi.yaml` (the wire contract). Pairs with
 > `docs/tee-attestation-flow.md` (the attestation deep-dive).
 >
 > **Status:** implemented and validated end-to-end on a live Phala CVM
 > (`cvm-settle-e2e` real settle + load generator).
-> **Branch:** `nyx-v2-onchain-hardening`.
+> **Branch:** `darknyx-v2-onchain-hardening`.
 
 ---
 
@@ -20,7 +20,7 @@ end-to-end:
 |---|---|---|---|
 | D1 | **Hosting** | Phala Cloud (managed) | Fastest path to a real attested deployment. Same container image runs on dstack-cloud / self-hosted bare metal later — Phala Cloud is the v2 deployment target, not a lock-in. |
 | D2 | **TEE pubkey rotation gate** | Admin multisig only | The multisig verifies the TDX quote off-chain (via `dstack-verifier` Docker image) before signing `set_tee_pubkey`. On-chain `dcap-qvl` port deferred to v3. |
-| D3 | **API edge** | Custom domain via dstack-ingress | `api.nyx.example.com` with ACME inside the TEE, `/evidences/` endpoint for RA-TLS verification, CAA-locked Let's Encrypt account. Branding ours, end-to-end TLS into the enclave. |
+| D3 | **API edge** | Custom domain via dstack-ingress | `api.darknyx.example.com` with ACME inside the TEE, `/evidences/` endpoint for RA-TLS verification, CAA-locked Let's Encrypt account. Branding ours, end-to-end TLS into the enclave. |
 | D4 | **Prover location** | Inside the TEE | Witness never leaves the enclave. ~5-10% TDX overhead on top of ~0.7s Groth16 time is within budget. Benchmark in Phase 1 — if memory-encryption pushes us above 3s, fall back to TEE-signed-public-input + external prover. |
 | D5 | **Matching cadence** | Frequent-batch-auction with `BATCH_MS = 2000` default | Settle-latency floor (~2-3 s) means ticks faster than that pipeline up. **Hot order book, batched clearing** — orders are visible the moment they arrive over WS; only the actual matching is batched. Mint-pair price scale/tick/minimum/breaker settings live in on-chain `MarketConfig`; cadence remains a TEE deployment parameter. See §5.4. |
 | D6 | **Indexer architecture** | Inside the TEE, shared in-memory state via `tokio RwLock` | The TEE already holds the Merkle mirror + nullifier set + lock state in RAM to do matching — exposing `/tree/*` over the same state is essentially free. One deployment, one attestation chain. Clients who don't trust the TEE retain the trustless fallback (read `MerkleTree[tree_id].current_root` + PDAs directly from Solana). See §5.5. |
@@ -34,7 +34,7 @@ trigger conditions that would flip any of them.
 
 ```
 ┌────────────────────── Client (browser / SDK) ────────────────────────────┐
-│ wss://api.nyx.example.com  (TLS 1.3, cert generated inside the TEE)      │
+│ wss://api.darknyx.example.com  (TLS 1.3, cert generated inside the TEE)      │
 │   - On connect: fetch GET /evidences/ → verify RA-TLS binding            │
 │   - On connect: fetch GET /attestation → verify TDX quote + compose-hash │
 │   - All order intent, all account reads, all WS messages go through this │
@@ -48,11 +48,11 @@ trigger conditions that would flip any of them.
 └──────────────────────────────────┬───────────────────────────────────────┘
                                    │ WireGuard
                                    ▼
-┌──────────────────── Our Nyx CVM (Intel TDX) ─────────────────────────────┐
+┌──────────────────── Our Darknyx CVM (Intel TDX) ─────────────────────────────┐
 │                                                                          │
 │  docker-compose.yaml (compose_hash committed to dstack governance)       │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
-│  │ Container: nyx-tee                                                  │ │
+│  │ Container: darknyx-tee                                                  │ │
 │  │ ─ Rust binary, single process, multi-threaded tokio runtime         │ │
 │  │ ─ Mounts /var/run/dstack.sock for KMS calls + attestation           │ │
 │  │ ─ Listens on :8443 (TLS) and :8444 (RA-HTTPS evidence)              │ │
@@ -90,16 +90,16 @@ trigger conditions that would flip any of them.
 
 ---
 
-## 2. The `nyx-tee` Rust binary
+## 2. The `darknyx-tee` Rust binary
 
 Single process, single container, multi-threaded tokio runtime. New
-crate at `crates/nyx-tee/`.
+crate at `crates/darknyx-tee/`.
 
 ### 2.1 Cargo skeleton
 
 ```toml
 [package]
-name = "nyx-tee"
+name = "darknyx-tee"
 version = "0.1.0"
 edition = "2021"
 
@@ -142,7 +142,7 @@ borsh = "0.10"
 ### 2.2 Modules
 
 ```
-crates/nyx-tee/src/
+crates/darknyx-tee/src/
 ├── main.rs              # entry: boot, configure dstack, start server
 ├── boot.rs              # KMS key derivation, attestation export, sanity checks
 ├── api/                 # HTTP + WS surface (mirrors docs/tee-api-openapi.yaml)
@@ -169,7 +169,7 @@ crates/nyx-tee/src/
 ├── prover/              # in-process Groth16 prover for VALID_MATCH_BATCH
 │   ├── mod.rs
 │   ├── witness.rs       # build witness from matcher output
-│   └── groth16.rs       # ark | rapidsnark backend (NYX_TEE_PROVER), N=16
+│   └── groth16.rs       # ark | rapidsnark backend (DARKNYX_TEE_PROVER), N=16
 ├── settle/              # on-chain settle pipeline
 │   ├── mod.rs
 │   ├── payload.rs       # MatchResultPayload construction
@@ -188,7 +188,7 @@ crates/nyx-tee/src/
 │   └── snapshot.rs
 ├── keys/                # dstack-derived keypair management
 │   ├── mod.rs
-│   └── ed25519.rs       # getKey("nyx/ed25519-signer/v1/{j}") → K Ed25519 keypairs
+│   └── ed25519.rs       # getKey("darknyx/ed25519-signer/v2/{j}") → K Ed25519 keypairs
 └── config.rs            # env-driven config (Helius URL, num_trees, prover, concurrency)
 ```
 
@@ -201,11 +201,11 @@ Anchor / Solana deps and can be unit-tested directly:
 - `crates/darkpool-matcher/` — the uniform-clearing-price + FIFO
   algorithm (`run_batch` / `run_batch_capped`) and adjacent state
   structs. No Anchor / Solana deps. Pure input (open orders) →
-  output (matches + fees + clearing price). `nyx-tee` consumes this
+  output (matches + fees + clearing price). `darknyx-tee` consumes this
   crate directly, and `tests/parity.rs` pins its behavior. **Single source of
   truth for the matching algorithm.**
 
-- `crates/nyx-tee-types/` — Borsh structs shared between the SDK
+- `crates/darknyx-tee-types/` — Borsh structs shared between the SDK
   TypeScript types (via `wasm-bindgen` for one-way generation) and
   the binary. `OrderIntent`, `MatchResultPayload` (re-exported from
   vault), tree-inclusion request/response types, etc.
@@ -236,16 +236,16 @@ A new CVM coming up under our compose-hash:
       • Sets CAA DNS record locking issuance to that account.
       • Publishes /evidences/{quote.json, cert.pem, sha256sum.txt,
         acme-account.json}.
-6.  nyx-tee container starts:
+6.  darknyx-tee container starts:
       • Calls `client.info()` — reads app_id, instance_id, RTMRs.
-      • Calls `client.get_key("nyx/ed25519-signer/v1/{j}")` for
+      • Calls `client.get_key("darknyx/ed25519-signer/v2/{j}")` for
         j∈0..num_trees — K deterministic 32-byte seeds.
       • Derives K Ed25519 keypairs (one per shard fee-payer). The
         pubkeys are stable for the lifetime of this compose-hash.
       • Loads persistence snapshot from LUKS disk (if present) and
         replays since the last snapshot.
       • Syncs the K Merkle mirrors from on-chain MerkleTree[0..K]
-        (cold-boot from NYX_TEE_SYNC_FROM_SLOT).
+        (cold-boot from DARKNYX_TEE_SYNC_FROM_SLOT).
       • Verifies each Ed25519 pubkey is registered in the on-chain
         vault_config.tee_pubkeys set. If not, refuses to settle until
         admin runs the rotation ceremony (§7).
@@ -274,16 +274,16 @@ With `num_trees = 1` this collapses to the single-signer case.
 ### 4.1 Derivation
 
 ```rust
-// crates/nyx-tee/src/keys/ed25519.rs
+// crates/darknyx-tee/src/keys/ed25519.rs
 use dstack_sdk::DstackClient;
 use ed25519_dalek::SigningKey;
 
-// One signer per shard: path nyx/ed25519-signer/v1/{j}, j ∈ 0..num_trees.
+// One signer per shard: path darknyx/ed25519-signer/v2/{j}, j ∈ 0..num_trees.
 pub async fn derive_signer(client: &DstackClient, tree_id: u8) -> Result<SigningKey> {
     // dstack returns 32 bytes of deterministic KDF output keyed by
     // (deployer_id, app_hash, path). Same compose-hash + path → same bytes;
     // distinct paths → independent keys, so each shard's fee-payer differs.
-    let path = format!("nyx/ed25519-signer/v1/{tree_id}");
+    let path = format!("darknyx/ed25519-signer/v2/{tree_id}");
     let key_resp = client.get_key(Some(path), None).await?;
     let seed: [u8; 32] = key_resp.decode_key().try_into()
         .expect("dstack getKey returned non-32-byte material");
@@ -304,7 +304,7 @@ pub async fn derive_signer(client: &DstackClient, tree_id: u8) -> Result<Signing
 | KMS root key full rotation (rare, security incident) | All app keys re-derive. All K signer pubkeys change. Admin multisig must run `set_tee_pubkey` with the new K-pubkey set. |
 | Image upgrade (new compose-hash) | New `app_hash` → KDF emits new seeds → new signer pubkeys. Admin runs the rotation ceremony (registers all K) before the new image can settle. |
 | `num_trees` increase | The new shards' signer paths (`…/v1/{j}` for the new j) derive fresh keys; admin registers the expanded K-pubkey set + funds the new fee-payers. |
-| Path change (e.g. `nyx/ed25519-signer/v2`) | Same as image upgrade — but we should bump the path ONLY when we want a clean break, never as a quiet operational reroll. |
+| Path change (e.g. `darknyx/ed25519-signer/v2`) | Same as image upgrade — but we should bump the path ONLY when we want a clean break, never as a quiet operational reroll. |
 
 ### 4.3 What is NOT used
 
@@ -496,14 +496,14 @@ revisit.
 
 ### 5.5 Indexer surface — same process, shared state
 
-Per D6: **the indexer is `nyx-tee` itself.** The TEE already holds
+Per D6: **the indexer is `darknyx-tee` itself.** The TEE already holds
 everything an indexer needs (Merkle mirror, nullifier set, lock set,
 order book) to do its matching job. The `/tree/*` + `/transparency`
 endpoints are read-only views over that same in-memory state.
 
 ```rust
 // Roughly:
-struct NyxTeeState {
+struct DarknyxTeeState {
     // Mutated by matcher + settle scheduler:
     books: HashMap<MarketId, Arc<RwLock<OrderBook>>>,
 
@@ -627,7 +627,7 @@ Trade-offs:
 At v2 scale (sub-1M leaves, sub-1k orders/sec sustained) the shared
 design wins. Re-evaluate when (a) TEE host RAM becomes a real
 constraint, (b) we want read replicas, or (c) we want to expose the
-indexer to non-Nyx consumers.
+indexer to non-Darknyx consumers.
 
 ### 5.6 Oracle sync — pull-pattern from Pyth Hermes
 
@@ -705,7 +705,7 @@ someone pushes an update tx, which costs CU and tx fees. In v2:
 #### Cache structure
 
 ```rust
-// crates/nyx-tee/src/oracle/cache.rs (PR 4)
+// crates/darknyx-tee/src/oracle/cache.rs (PR 4)
 pub struct OracleCache {
     /// Per-market entries — one Pyth feed per market.
     entries: HashMap<MarketId, CachedPrice>,
@@ -808,7 +808,7 @@ design. So this stays TEE-trusted **by decision, not by omission**.
 #### Module layout (to land in PR 4)
 
 ```
-crates/nyx-tee/src/oracle/
+crates/darknyx-tee/src/oracle/
 ├── mod.rs        Public surface: OracleCache + OracleSnapshot
 ├── cache.rs      Arc<RwLock> wrapper + staleness check
 ├── hermes.rs     HTTPS client for the Pyth Hermes API
@@ -830,7 +830,7 @@ For each batch with ≥1 real matches:
    today. Real matches first, dummy slots after.
 2. **Generate VALID_MATCH_BATCH Groth16 proof.**
    - In-process prover against `circuits/build/match_batch_n16/circuit_final.zkey`.
-   - Backend selectable at boot via `NYX_TEE_PROVER` = `ark` (default,
+   - Backend selectable at boot via `DARKNYX_TEE_PROVER` = `ark` (default,
      `ark-groth16`) | `rapidsnark` (FFI). The image ships both (built
      `--features rapidsnark`); see §9.4. Both emit byte-identical proofs.
    - The zkey is baked into the Docker image, so its bytes are
@@ -861,7 +861,7 @@ For each batch with ≥1 real matches:
      recycles tables past the 512-slot deactivation cooldown.
    - **Tx D — `tee_forced_settle_batched(tree_id, payload, match_index,
      merkle_proof)`** — once per real match, all fired **concurrently**
-     (bounded by `NYX_TEE_SETTLE_SEND_CONCURRENCY`, default 16). Because
+     (bounded by `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY`, default 16). Because
      different shards carry distinct `(tee_keypairs[j], merkle_tree[j])`, those
      Tx D's share **zero** writable accounts, so the leader can co-include up to
      K independent shard writes per block instead of hitting the single-tree,
@@ -910,7 +910,7 @@ When we ship a new version (new `compose-hash`):
        vault_config.tee_pubkeys set.
      • New CVM exposes all K pubkeys via GET /attestation + /info.
 5. Admin (one signer of the 3-of-5 multisig):
-     • Fetches the new attestation: curl https://api.nyx.example.com/attestation
+     • Fetches the new attestation: curl https://api.darknyx.example.com/attestation
      • Verifies the quote off-chain:
          docker run -p 8080:8080 dstacktee/dstack-verifier:latest &
          curl -d @quote.json localhost:8080/verify | jq
@@ -944,7 +944,7 @@ The TEE's authoritative state at any moment:
   `mirror.root()` against its `MerkleTree[j].current_root`. 32 B ×
   total leaf_count; transparency `leaf_count` = sum across shards.
 - **K Ed25519 signer keys** — `tee_keypairs[0..num_trees]`, derived from
-  indexed dstack paths `nyx/ed25519-signer/v1/{0..K-1}` (§4). Each is a
+  indexed dstack paths `darknyx/ed25519-signer/v2/{0..K-1}` (§4). Each is a
   shard fee-payer / `tee_authority` / settle-signer.
 - **Settle outbox** — pending L1 txs that haven't confirmed yet,
   needed for crash-recovery so we don't double-submit.
@@ -958,8 +958,8 @@ Persistence strategy (Phase 1):
 - LUKS-encrypted disk volume provisioned by dstack-kms at boot. Key
   is deterministic from `app_id` — survives instance migration, lost
   if the entire compose-hash is retired. Encryption-at-rest is
-  transparent to the app: it just does file I/O to `NYX_TEE_STATE_DIR`
-  (default `/var/lib/nyx-tee`).
+  transparent to the app: it just does file I/O to `DARKNYX_TEE_STATE_DIR`
+  (default `/var/lib/darknyx-tee`).
 - `bincode` for compact encoding. Atomic write-rename pattern
   (`*.tmp` → fsync → rename).
 - **Auth state (`accounts.db`) — live (Phase 1b).** The account
@@ -988,7 +988,7 @@ TEE crash, which is the safe default.
 
 > **STATUS (current):** both stages below are DONE. The `Prover` trait is
 > backed by `prover::ark_prover::ArkMatchBatchProver` (ark-circom), with
-> optional `rapidsnark` + `icicle` backends selectable via `NYX_TEE_PROVER`.
+> optional `rapidsnark` + `icicle` backends selectable via `DARKNYX_TEE_PROVER`.
 > There is no `NotYetWiredProver` stub anymore. The leaf is a single
 > commitment-only `Poseidon11` with an active-slot bit (not the two-stage hash
 > this plan described), and the verifier takes 8 public inputs (`[root, fee,
@@ -1070,7 +1070,7 @@ workspace. Decision recorded in PR 4g.4b's task.
 
 ### 9.4 Perf-swap — rapidsnark backend (LANDED), and what's left
 
-The prover backend is selectable at boot via `NYX_TEE_PROVER` = `ark`
+The prover backend is selectable at boot via `DARKNYX_TEE_PROVER` = `ark`
 (default) | `rapidsnark`, behind the same `Prover` trait — the swap is
 internal, the trait surface unchanged.
 
@@ -1104,7 +1104,7 @@ D3 chose custom domain via dstack-ingress. Concretely:
 
 ### 10.1 Domain setup (one-time)
 
-1. Buy `api.nyx.example.com` (or use a subdomain of a domain we own).
+1. Buy `api.darknyx.example.com` (or use a subdomain of a domain we own).
 2. Add DNS A record pointing at the dstack-gateway IP.
 3. Add CAA record: `0 issue "letsencrypt.org;validationmethods=dns-01"`.
 4. The dstack-ingress container, on first boot, registers its own
@@ -1117,7 +1117,7 @@ D3 chose custom domain via dstack-ingress. Concretely:
 
 ### 10.2 What clients see
 
-- TLS to `api.nyx.example.com:443`. Standard browser TLS.
+- TLS to `api.darknyx.example.com:443`. Standard browser TLS.
 - The certificate's public key is provable to be bound to a TEE-held
   private key, verifiable via the `/evidences/` directory:
   - `GET /evidences/quote.json` — TDX quote
@@ -1133,12 +1133,12 @@ D3 chose custom domain via dstack-ingress. Concretely:
 ### 10.3 Endpoint mapping inside the CVM
 
 - `dstack-ingress` container listens on `:443`, terminates TLS,
-  forwards plaintext over the CVM's loopback to `nyx-tee:8080`.
-- `nyx-tee` runs `axum` on `:8080`. **All app logic sees plaintext;
+  forwards plaintext over the CVM's loopback to `darknyx-tee:8080`.
+- `darknyx-tee` runs `axum` on `:8080`. **All app logic sees plaintext;
   the TLS termination is inside the encrypted CVM memory, so this
   is safe.**
 - The `/evidences/` path is served by `dstack-ingress` directly, not
-  by `nyx-tee`.
+  by `darknyx-tee`.
 
 ### 10.4 What we DROP from the prior OpenAPI design
 
@@ -1216,7 +1216,7 @@ body with their trading key:
 
 ```
 SHA-256(
-    b"nyx-order-v1"
+    b"darknyx-order-v4"
   || symbol_bytes
   || side_byte
   || order_type_byte
@@ -1293,11 +1293,11 @@ the user themselves holds the keys to link the three.
 
 | Concern | File | Lands in |
 |---|---|---|
-| JWT issuance (Layer A) | `crates/nyx-tee/src/api/auth.rs` | PR 4e |
-| Bearer-token middleware (Layer A) | `crates/nyx-tee/src/api/auth.rs` as a `tower::Layer` | PR 4e |
-| Argon2id credential hashing + admin registration + revocation (Layer A) | `crates/nyx-tee/src/api/auth.rs` (`register_account_handler`, `revoke_token_handler`, `ApiCredentials::{from_plaintext,verify_credentials}`) | Phase 1a |
-| Per-order signature verification (Layer B) | `crates/nyx-tee/src/api/orders.rs` POST handler | PR 4e |
-| `cancel_order` signature check (Layer B) | `crates/nyx-tee/src/api/orders.rs` DELETE handler | PR 4e |
+| JWT issuance (Layer A) | `crates/darknyx-tee/src/api/auth.rs` | PR 4e |
+| Bearer-token middleware (Layer A) | `crates/darknyx-tee/src/api/auth.rs` as a `tower::Layer` | PR 4e |
+| Argon2id credential hashing + admin registration + revocation (Layer A) | `crates/darknyx-tee/src/api/auth.rs` (`register_account_handler`, `revoke_token_handler`, `ApiCredentials::{from_plaintext,verify_credentials}`) | Phase 1a |
+| Per-order signature verification (Layer B) | `crates/darknyx-tee/src/api/orders.rs` POST handler | PR 4e |
+| `cancel_order` signature check (Layer B) | `crates/darknyx-tee/src/api/orders.rs` DELETE handler | PR 4e |
 | Canonical body encoding (cross-language) | `crates/darkpool-matcher/src/order_canonical.rs` (shared) + parity test against TS in `packages/sdk/tests/order-canonical-parity.test.ts` | PR 4e |
 
 The wire shapes are pinned by `docs/tee-api-openapi.yaml` (the
@@ -1316,16 +1316,16 @@ anyone mint operational credentials.
   PHC strings (random salt + params embedded). `POST /auth/token`
   verifies via argon2's own constant-time check.
 - **Bootstrap admin.** *Something* has to create the first account, so
-  the TEE seeds one **admin** account from the `NYX_TEE_API_KEY` /
-  `NYX_TEE_API_SECRET` / `NYX_TEE_PASSPHRASE` env at boot. The env
+  the TEE seeds one **admin** account from the `DARKNYX_TEE_API_KEY` /
+  `DARKNYX_TEE_API_SECRET` / `DARKNYX_TEE_PASSPHRASE` env at boot. The env
   plaintext is hashed and dropped. With persistence on (below), the env
   admin is *merged* into the loaded snapshot only if its `api_key` is
   absent — a persisted registry is authoritative, so rotating the env
   creds after first boot requires the API or a snapshot wipe. If the
   env vars are unset and no snapshot exists, the registry is empty and
   auth rejects everything.
-  The production boot rejects the public `nyx-test-*` fixtures. Test-state
-  fallback requires both `NYX_TEE_ALLOW_TEST_AUTH=1` and an explicit
+  The production boot rejects the public `darknyx-test-*` fixtures. Test-state
+  fallback requires both `DARKNYX_TEE_ALLOW_TEST_AUTH=1` and an explicit
   `DSTACK_SIMULATOR_ENDPOINT`; the production compose sets neither flag nor
   hardcoded credential.
 - **Registration.** `POST /admin/accounts` (admin-gated) registers
@@ -1339,17 +1339,17 @@ anyone mint operational credentials.
   bearer middleware rejects any denylisted token even while its
   signature + `exp` are still valid.
 - **Persistence (Phase 1b, live).** The registry + revocation denylist
-  are persisted to `accounts.db` under `NYX_TEE_STATE_DIR` (default
-  `/var/lib/nyx-tee`, the dstack LUKS mount — see §8). It's
+  are persisted to `accounts.db` under `DARKNYX_TEE_STATE_DIR` (default
+  `/var/lib/darknyx-tee`, the dstack LUKS mount — see §8). It's
   **write-on-change**: each `register` / `revoke` snapshots the full
   state via an atomic write-tmp→fsync→rename, so a registration or
   revocation survives a restart. Boot loads the snapshot, then merges
   the env admin if absent (first boot seeds + persists immediately).
-  Production boot also removes the historical `nyx-test-api-key` account from
+  Production boot also removes the historical `darknyx-test-api-key` account from
   older snapshots before serving traffic, then persists the scrubbed registry.
   Persistence is **best-effort** (§8): a failed write logs but never
   fails the request — auth is off-chain, so the worst case on data loss
-  is the admin re-registering. When `NYX_TEE_STATE_DIR` is unset (no
+  is the admin re-registering. When `DARKNYX_TEE_STATE_DIR` is unset (no
   mounted volume / tests), persistence is disabled and behaviour falls
   back to the in-memory Phase-1a path. Only argon2 hashes are written —
   never plaintext — and the file lives on the encrypted volume.
@@ -1395,7 +1395,7 @@ different slice of the dev cycle.
 
 | Slice | Where | What it tests | Cost / cycle |
 |---|---|---|---|
-| **Iterate locally** (≈ 90%) | `nyx-tee` binary + dstack-simulator on the dev machine | Handler logic, matcher tick, oracle parsing, HTTP shape, integration tests, deterministic key derivation | ~5–15 s rebuild |
+| **Iterate locally** (≈ 90%) | `darknyx-tee` binary + dstack-simulator on the dev machine | Handler logic, matcher tick, oracle parsing, HTTP shape, integration tests, deterministic key derivation | ~5–15 s rebuild |
 | **Spot-check on Phala** (≈ 5%) | Phala Cloud devnet CVM | Phala gateway latency, dstack-ingress RA-HTTPS termination, real `compose_hash` measurements, real dstack-kms key delivery | ~3 min round-trip, ~$0.003 / smoke deploy |
 | **Full ceremony rehearsal** (≈ 5%) | Phala Cloud devnet CVM + multisig signers | Real TDX quote signature, Intel TCB chain, MRTD vs governance-approved set, ACME RA-HTTPS binding, end-to-end client `verifyTeeAttestation()` | ~10 min, only when compose-hash changes |
 
@@ -1405,15 +1405,15 @@ different slice of the dev cycle.
   oracle module change, OpenAPI schema change. Default mode — should
   be where 9 out of 10 commits are written + validated.
 * **Spot-check on Phala** before opening a PR that touches the boot
-  path (`crates/nyx-tee/src/boot.rs`, `keys/`), the dstack handshake,
+  path (`crates/darknyx-tee/src/boot.rs`, `keys/`), the dstack handshake,
   the HTTP surface (`api/`), or anything that affects `compose_hash`.
   One smoke deploy is enough — confirm `info()` returns the
   governance-recorded measurements and `/attestation` returns a quote
   that the t16z Attestation Explorer accepts.
 * **Full ceremony rehearsal** only when the compose-hash has
   meaningfully changed (any change to `Dockerfile`,
-  `deploy/docker-compose.yaml`, `crates/nyx-tee/Cargo.toml`, or
-  `crates/nyx-tee/src/`). Runs the multisig rotation flow from
+  `deploy/docker-compose.yaml`, `crates/darknyx-tee/Cargo.toml`, or
+  `crates/darknyx-tee/src/`). Runs the multisig rotation flow from
   `docs/tee-attestation-flow.md` §5 against actually-attested
   measurements. Catches problems the simulator can't see.
 
@@ -1421,7 +1421,7 @@ different slice of the dev cycle.
 
 The simulator (built from `dstack/sdk/simulator/`) exposes the same
 Unix-socket API a real TDX CVM does. Same wire format, same JSON
-shapes, same error variants — so the `nyx-tee` code path is
+shapes, same error variants — so the `darknyx-tee` code path is
 **byte-identical** against simulator vs production. That's by design:
 it's the lever that lets us spend 90% of dev time off-hardware.
 
@@ -1466,22 +1466,22 @@ cd ~/dstack/sdk/simulator
 # Each session — start it in the background
 ~/dstack/sdk/simulator/dstack-simulator > /tmp/sim.log 2>&1 &
 export DSTACK_SIMULATOR_ENDPOINT=$(realpath ~/dstack/sdk/simulator/dstack.sock)
-export NYX_TEE_ALLOW_TEST_AUTH=1
+export DARKNYX_TEE_ALLOW_TEST_AUTH=1
 
 # Then in the repo
-cd ~/nyx-monorepo
-NYX_TEE_HTTP_BIND=127.0.0.1:8080 cargo run -p nyx-tee
+cd ~/darknyx-monorepo
+DARKNYX_TEE_HTTP_BIND=127.0.0.1:8080 cargo run -p darknyx-tee
 ```
 
 For spot-checking on Phala Cloud devnet:
 
 ```sh
 # Build + push the image, deploy a fresh CVM, smoke, tear down.
-phala deploy -c deploy/docker-compose.yaml -n nyx-tee-spike
-phala logs nyx-tee-spike                    # confirm boot
-phala cvms attestation nyx-tee-spike        # pull a real quote
-curl https://nyx-tee-spike.<custom-domain>/info | jq .
-phala cvms delete nyx-tee-spike             # stop billing
+phala deploy -c deploy/docker-compose.yaml -n darknyx-tee-spike
+phala logs darknyx-tee-spike                    # confirm boot
+phala cvms attestation darknyx-tee-spike        # pull a real quote
+curl https://darknyx-tee-spike.<custom-domain>/info | jq .
+phala cvms delete darknyx-tee-spike             # stop billing
 ```
 
 For TS SDK tests that depend on a running TEE, the SDK reads
@@ -1492,7 +1492,7 @@ For TS SDK tests that depend on a running TEE, the SDK reads
 (Plan; lands as PR 4f after PR 4e ships `POST /orders`.)
 
 The current single-order matcher tests
-(`crates/nyx-tee/tests/matcher_tick.rs`) are functional smoke tests,
+(`crates/darknyx-tee/tests/matcher_tick.rs`) are functional smoke tests,
 not performance tests. Before mainnet we need numbers on:
 
 - Sustained orders/sec throughput before backpressure
@@ -1508,7 +1508,7 @@ not performance tests. Before mainnet we need numbers on:
 **Design** (PR 4f):
 
 ```
-crates/nyx-tee-loadgen/                # dev-tool crate; not in production binary
+crates/darknyx-tee-loadgen/                # dev-tool crate; not in production binary
 ├── Cargo.toml
 └── src/
     ├── main.rs        # CLI: --traders N --rate λ --duration D --endpoint URL
@@ -1547,11 +1547,11 @@ Test files added as part of Phase 1:
 | File | Purpose |
 |---|---|
 | `crates/darkpool-matcher/tests/parity.rs` | **LANDED** (TEE v2 PR 2, 2026-05-27). 8 scenarios translated from `programs/matching_engine/tests/run_batch.rs`; all green. PR 3 cut the on-chain ix over to call the matcher; the 12 existing litesvm scenarios all still pass against the new shape (proves the lift is behavior-preserving end-to-end). |
-| `crates/nyx-tee/tests/http_surface.rs` | **LANDED** (TEE v2 PR 4d). 7 in-process tests over the PR-4d HTTP surface (`/health`, `/info`, `/attestation`) via `tower::ServiceExt::oneshot` — no TCP, deterministic across CI. |
-| `crates/nyx-tee/tests/matcher_tick.rs` | **LANDED** (TEE v2 PR 4c). 7 single-tick tests driving `MatcherDriver::tick()` directly (NOT via `tokio::time::pause` + spawn — that pattern deadlocks; see PR 4c commit). |
-| `crates/nyx-tee/tests/oracle_vaa.rs` | **LANDED** (TEE v2 PR 4b). 5 tests over a captured 1311-byte Hermes VAA, including the core "verifies under mainnet guardians" test + the negative cases that prove signature verification actually rejects tampering. |
-| `crates/nyx-tee/tests/boot.rs` | Planned (PR 4e). Spin up the simulator + nyx-tee; assert `/attestation`, `/info`, `/tree/root` return sane data end-to-end. |
-| `crates/nyx-tee/tests/settle.rs` | Planned. Drive the full pipeline (place orders → wait for match cycle → assert on-chain settle tx confirmed). Uses litesvm as the L1 mock. |
+| `crates/darknyx-tee/tests/http_surface.rs` | **LANDED** (TEE v2 PR 4d). 7 in-process tests over the PR-4d HTTP surface (`/health`, `/info`, `/attestation`) via `tower::ServiceExt::oneshot` — no TCP, deterministic across CI. |
+| `crates/darknyx-tee/tests/matcher_tick.rs` | **LANDED** (TEE v2 PR 4c). 7 single-tick tests driving `MatcherDriver::tick()` directly (NOT via `tokio::time::pause` + spawn — that pattern deadlocks; see PR 4c commit). |
+| `crates/darknyx-tee/tests/oracle_vaa.rs` | **LANDED** (TEE v2 PR 4b). 5 tests over a captured 1311-byte Hermes VAA, including the core "verifies under mainnet guardians" test + the negative cases that prove signature verification actually rejects tampering. |
+| `crates/darknyx-tee/tests/boot.rs` | Planned (PR 4e). Spin up the simulator + darknyx-tee; assert `/attestation`, `/info`, `/tree/root` return sane data end-to-end. |
+| `crates/darknyx-tee/tests/settle.rs` | Planned. Drive the full pipeline (place orders → wait for match cycle → assert on-chain settle tx confirmed). Uses litesvm as the L1 mock. |
 | `packages/sdk/tests/tee-attestation-verifier.test.ts` | Planned. Client-side: fetch `/attestation` from a real Phala CVM, assert `dcap-qvl` (Phala API or local) accepts the quote, compose-hash matches the governance-approved set. |
 | `packages/sdk/tests/tee-trade-flow.test.ts` (env-gated, replaces `er-trade-flow.test.ts`) | Planned. The full devnet flow against a Phala-deployed staging CVM. |
 
@@ -1568,7 +1568,7 @@ The six locked-in choices have explicit re-evaluation triggers:
 | **D3 (Custom domain)** | (a) we want to support hardware wallets that pin the dstack-gateway domain natively — gateway domain becomes viable; OR (b) we want per-user subdomains for routing (custom only). |
 | **D4 (In-TEE prover)** | The Phase-1 benchmark shows ≥3× slowdown vs bare metal, or memory pressure forces a TEE host size > 32 GB RAM. Flip to external-prover. |
 | **D5 (`BATCH_MS = 2000` default)** | (a) the settle-pipeline benchmark shows finality consistently above 3 s — bump the reviewed default to 3 s or 5 s; (b) a market needs faster fills — investigate queue batching or split it to its own circuit/CVM before adding a governed cadence field. |
-| **D6 (TEE-as-indexer)** | (a) TEE host RAM hits 70%+ utilisation on the indexer side under load — split the indexer to its own service; (b) we want read-replica scaling for hot devnets / mainnet → run multiple `nyx-tee` containers behind a load balancer (all derive the same dstack keys; matcher leader-election needed); (c) a non-Nyx app wants to consume our indexer reads — expose a public read-only mirror. |
+| **D6 (TEE-as-indexer)** | (a) TEE host RAM hits 70%+ utilisation on the indexer side under load — split the indexer to its own service; (b) we want read-replica scaling for hot devnets / mainnet → run multiple `darknyx-tee` containers behind a load balancer (all derive the same dstack keys; matcher leader-election needed); (c) a non-Darknyx app wants to consume our indexer reads — expose a public read-only mirror. |
 
 Each flip is small-scoped — none of them change the wire contract,
 the on-chain code, or the cryptographic invariants.

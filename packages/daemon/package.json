@@ -1,14 +1,14 @@
 {
-  "name": "@nyx/daemon",
+  "name": "@darknyx/daemon",
   "version": "0.1.0",
   "private": true,
-  "description": "Nyx reference daemon — long-running client for market makers + funds. Wraps the SDK: order lifecycle, auto-merge, settlement reconciliation, local control API. Keys + proving stay on-device.",
+  "description": "Darknyx reference daemon — long-running client for market makers + funds. Wraps the SDK: order lifecycle, auto-merge, settlement reconciliation, local control API. Keys + proving stay on-device.",
   "type": "module",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "bin": {
-    "nyx-daemon": "dist/bin/daemon.js",
-    "nyx-keystore-init": "dist/bin/keystore-init.js"
+    "darknyx-daemon": "dist/bin/daemon.js",
+    "darknyx-keystore-init": "dist/bin/keystore-init.js"
   },
   "files": [
     "dist"
@@ -20,7 +20,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@nyx/sdk": "0.1.0",
+    "@darknyx/sdk": "0.1.0",
     "@phala/dcap-qvl": "^0.3.9",
     "@solana/web3.js": "^1.98.0",
     "tweetnacl": "1.0.3"

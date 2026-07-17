@@ -7,13 +7,13 @@ import {
   importEncryptedMasterSeed,
   MASTER_SEED_BACKUP_FORMAT,
   MASTER_SEED_BACKUP_VERSION,
-  type EncryptedMasterSeedBackupV1,
+  type EncryptedMasterSeedBackupV2,
 } from "../src/keys/master-seed-backup.js";
 
 const PASSPHRASE = "correct horse battery staple";
 const seed = () => Uint8Array.from({ length: 64 }, (_, index) => index);
 
-describe("encrypted master-seed backup v1", () => {
+describe("encrypted master-seed backup v2", () => {
   it("round-trips from both the object and serialized JSON", () => {
     const original = seed();
     const backup = exportEncryptedMasterSeed(original, PASSPHRASE);
@@ -67,7 +67,7 @@ describe("encrypted master-seed backup v1", () => {
     unsafe.kdf.n = 1_048_576;
     expect(() =>
       importEncryptedMasterSeed(
-        unsafe as unknown as EncryptedMasterSeedBackupV1,
+        unsafe as unknown as EncryptedMasterSeedBackupV2,
         PASSPHRASE,
       ),
     ).toThrow(/unsupported/);

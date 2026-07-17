@@ -23,10 +23,10 @@
  * private RPC + sync floor, and `vault_config.tee_pubkeys` rotated to the CVM's
  * K shard signers (each funded). See docs/cvm-run-runbook.md.
  *
- * Gated on RUN_CVM_E2E=1 + NYX_TEE_GATEWAY=<https://…>.
+ * Gated on RUN_CVM_E2E=1 + DARKNYX_TEE_GATEWAY=<https://…>.
  *
  * Run:
- *   RUN_CVM_E2E=1 NYX_TEE_GATEWAY=https://<app_id>-8080.dstack-pha-prod5.phala.network \
+ *   RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY=https://<app_id>-8080.dstack-pha-prod5.phala.network \
  *     FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-self-trade.test.ts )
  */
@@ -83,7 +83,7 @@ import type { E2EConfig } from "./devnet-setup.test.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
-const GATEWAY = (process.env.NYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
+const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 
 const READY =
   process.env.RUN_CVM_E2E === "1" && GATEWAY !== "" && existsSync(CONFIG_PATH);
@@ -92,10 +92,10 @@ const maybeDescribe = READY ? describe : describe.skip;
 // How long to watch for a (forbidden) self-match before concluding it was
 // correctly prevented. The matcher ticks within seconds; a generous window
 // keeps the negative assertion robust without waiting a full settle timeout.
-const NO_MATCH_WINDOW_MS = Number(process.env.NYX_CVM_NO_MATCH_MS ?? "25000");
+const NO_MATCH_WINDOW_MS = Number(process.env.DARKNYX_CVM_NO_MATCH_MS ?? "25000");
 // How long to wait for the positive-control cross-owner settle to land.
 const SETTLE_TIMEOUT_MS = Number(
-  process.env.NYX_CVM_SETTLE_TIMEOUT_MS ?? "90000",
+  process.env.DARKNYX_CVM_SETTLE_TIMEOUT_MS ?? "90000",
 );
 
 maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
@@ -134,10 +134,10 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
     "refuses to match a same-owner crossing pair, then matches a cross-owner ask",
     async () => {
       const QTY = BigInt(
-        process.env.NYX_CVM_BASE_QTY ?? String((Date.now() % 250_000) + 1000),
+        process.env.DARKNYX_CVM_BASE_QTY ?? String((Date.now() % 250_000) + 1000),
       );
       const N = Number(
-        process.env.NYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),
+        process.env.DARKNYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),
       );
 
       const anchor = await fetchOracleAnchor();
@@ -437,6 +437,6 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
         "  · cross-owner match settled — self-trade prevention confirmed (matcher live, pair was matchable)",
       );
     },
-    Number(process.env.NYX_CVM_TEST_TIMEOUT_MS ?? "300000"),
+    Number(process.env.DARKNYX_CVM_TEST_TIMEOUT_MS ?? "300000"),
   );
 });

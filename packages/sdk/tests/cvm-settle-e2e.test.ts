@@ -18,20 +18,20 @@
  *      ring at lock time).
  *   3. A CVM deployed with the REAL e2e-config mints + a private RPC +
  *      the sync floor:
- *        phala deploy -e NYX_TEE_BASE_MINT=<base58> \
- *          -e NYX_TEE_QUOTE_MINT=<base58> \
- *          -e NYX_TEE_SOLANA_RPC_URL=<helius> \
- *          -e NYX_TEE_SYNC_FROM_SLOT=<reset slot> …
+ *        phala deploy -e DARKNYX_TEE_BASE_MINT=<base58> \
+ *          -e DARKNYX_TEE_QUOTE_MINT=<base58> \
+ *          -e DARKNYX_TEE_SOLANA_RPC_URL=<helius> \
+ *          -e DARKNYX_TEE_SYNC_FROM_SLOT=<reset slot> …
  *   4. `vault_config.tee_pubkey` rotated to the CVM's /info signer
  *      (set_tee_pubkey, admin keypair), and that signer funded with SOL
  *      (`solana transfer`).
  *
- * Gated on RUN_CVM_E2E=1 + NYX_TEE_GATEWAY=<https://…>. Pricing is
- * anchored to the live Hermes feed (override with NYX_CVM_PRICE);
- * NYX_CVM_BASE_QTY tunes the trade size.
+ * Gated on RUN_CVM_E2E=1 + DARKNYX_TEE_GATEWAY=<https://…>. Pricing is
+ * anchored to the live Hermes feed (override with DARKNYX_CVM_PRICE);
+ * DARKNYX_CVM_BASE_QTY tunes the trade size.
  *
  * Run:
- *   RUN_CVM_E2E=1 NYX_TEE_GATEWAY=https://<app_id>-8080.dstack-pha-prod5.phala.network \
+ *   RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY=https://<app_id>-8080.dstack-pha-prod5.phala.network \
  *     FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts )
  */
@@ -106,7 +106,7 @@ import type { E2EConfig } from "./devnet-setup.test.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
-const GATEWAY = (process.env.NYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
+const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 
 const READY =
   process.env.RUN_CVM_E2E === "1" && GATEWAY !== "" && existsSync(CONFIG_PATH);
@@ -116,16 +116,16 @@ const maybeDescribe = READY ? describe : describe.skip;
 // Persona/makePersona, and the shard-aware deposit/witness harness all live in
 // `./helpers/cvm-harness.ts` (shared across the cvm-* tests).
 const SETTLE_TIMEOUT_MS = Number(
-  process.env.NYX_CVM_SETTLE_TIMEOUT_MS ?? "60000",
+  process.env.DARKNYX_CVM_SETTLE_TIMEOUT_MS ?? "60000",
 );
 
-// Fills mode (opt-in): when NYX_INDEXER_URL points at a locally-running indexer
+// Fills mode (opt-in): when DARKNYX_INDEXER_URL points at a locally-running indexer
 // (`scripts/run-indexer-local.sh`), additionally assert the buyer's continuation
 // change note surfaces over BOTH paths — the durable off-TEE indexer
 // (GET /fills, decoded from the on-chain settle) and the live per-account WS
 // (FillMemo). The WS half needs a CVM built from the fills commit; the indexer
 // half works against any deployed CVM (it only reads the chain).
-const INDEXER_URL = (process.env.NYX_INDEXER_URL ?? "").replace(/\/$/, "");
+const INDEXER_URL = (process.env.DARKNYX_INDEXER_URL ?? "").replace(/\/$/, "");
 const FILLS = INDEXER_URL !== "";
 
 // Indexer-free disaster-recovery drill (opt-in because finalized-chain polling
@@ -133,14 +133,14 @@ const FILLS = INDEXER_URL !== "";
 // and proves that seed + finalized Solana history alone reconstructs its
 // deposit, trade, and continuation openings. No live memo or indexer row is
 // supplied to the recovery routine.
-const CHAIN_RECOVERY = process.env.NYX_CVM_CHAIN_RECOVERY === "1";
+const CHAIN_RECOVERY = process.env.DARKNYX_CVM_CHAIN_RECOVERY === "1";
 
 // Cross-batch re-match (opt-in, requires FILLS). After the buyer's residual
 // relocks onto an anchor in batch 1, submit a SECOND ask so the matcher
 // re-matches that relocked note in a NEW batch and settles it again — proving
 // a partial fill's continuation actually re-matches across batches, not just
 // that one continuation note is minted. Needs a 3rd (seller2) deposit up-front.
-const REMATCH = FILLS && process.env.NYX_CVM_REMATCH === "1";
+const REMATCH = FILLS && process.env.DARKNYX_CVM_REMATCH === "1";
 
 maybeDescribe(
   "Phase 3 — CVM-driven settle e2e (deposit → CVM match → CVM settle)",
@@ -184,7 +184,7 @@ maybeDescribe(
         // thus the NoteLock / ConsumedNote PDAs) are FRESH each run —
         // reset_merkle_tree clears the tree but NOT those PDAs, so a fixed
         // note would collide ("Allocate: account already in use") on the
-        // second run. Override with NYX_CVM_BASE_QTY for a fixed value.
+        // second run. Override with DARKNYX_CVM_BASE_QTY for a fixed value.
         //
         // Capped at 250k: the buyer's collateral is
         // floor(BUY_QTY×bidPrice/priceScale)×(1+fee),
@@ -194,14 +194,14 @@ maybeDescribe(
         // intake rejects it as 1 below the required floor. 2×250k×bidPrice(~7.4e9)
         // ≈ 3.7e15 — comfortably exact even if SOL's price doubles.
         const BASE_QTY = BigInt(
-          process.env.NYX_CVM_BASE_QTY ?? String((Date.now() % 250_000) + 1000),
+          process.env.DARKNYX_CVM_BASE_QTY ?? String((Date.now() % 250_000) + 1000),
         );
         // Run-unique order-id index. Order ids are now DETERMINISTIC
         // (`deriveOrderId(seed, n)`) so fills mode can query the indexer by the
         // exact id we used; the run-unique `n` keeps re-runs from colliding on the
         // same id (and lets the indexer's by-order_id rows stay per-run).
         const ORDER_N = Number(
-          process.env.NYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),
+          process.env.DARKNYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),
         );
         const t = new StepTimer();
         const anchor = await t.step("oracle anchor (Hermes)", () =>
@@ -217,9 +217,9 @@ maybeDescribe(
         // input inner. This exercises the live memo's consumed-input binding.
         // Without either mode we keep the simpler full-fill settle check
         // (BUY_QTY=BASE_QTY).
-        // Override the multiplier with NYX_CVM_BUY_MULT.
+        // Override the multiplier with DARKNYX_CVM_BUY_MULT.
         const BUY_MULT = BigInt(
-          process.env.NYX_CVM_BUY_MULT ?? (FILLS || CHAIN_RECOVERY ? "2" : "1"),
+          process.env.DARKNYX_CVM_BUY_MULT ?? (FILLS || CHAIN_RECOVERY ? "2" : "1"),
         );
         const BUY_QTY = BASE_QTY * BUY_MULT;
         console.log(
@@ -289,10 +289,10 @@ maybeDescribe(
         // nominal, unchanged. Floor division must match intake exactly so the
         // re-derived commitment lines up. (`withFee` is shared from cvm-harness.)
         // Over-collateralization knob: deposit a buyer note LARGER than the order
-        // needs (NYX_CVM_BUYER_SURPLUS quote units). The order declares its actual
+        // needs (DARKNYX_CVM_BUYER_SURPLUS quote units). The order declares its actual
         // collateral_amount; intake accepts note ≥ required and the matcher returns
         // the surplus as an (even bigger) change note. Default 0 ⇒ exact-at-limit.
-        const BUYER_SURPLUS = BigInt(process.env.NYX_CVM_BUYER_SURPLUS ?? "0");
+        const BUYER_SURPLUS = BigInt(process.env.DARKNYX_CVM_BUYER_SURPLUS ?? "0");
         const buyerNoteAmt =
           withFee(scaledQuote(BUY_QTY, bidPrice, PRICE_SCALE)) + BUYER_SURPLUS;
         const sellerNoteAmt = withFee(BASE_QTY);
@@ -661,7 +661,7 @@ maybeDescribe(
 
         // Permanent recovery backstop: scan finalized vault history from before
         // the deposits, identify only notes owned by the buyer seed, decrypt the
-        // recovery-v2 settlement tuple, and rebuild the partial-fill DAG. This
+        // recovery-v3 settlement tuple, and rebuild the partial-fill DAG. This
         // has no dependency on the live stream, mutable CVM state, or indexer.
         if (CHAIN_RECOVERY) {
           let recovered:
@@ -734,9 +734,9 @@ maybeDescribe(
           // ingests a settle once it finalizes (~13-30s) AND its poll cycle
           // reaches it. The leaf_count wait above already burned part of the
           // budget at CONFIRMED, so give finalization a generous window
-          // (override with NYX_CVM_INDEXER_TIMEOUT_MS).
+          // (override with DARKNYX_CVM_INDEXER_TIMEOUT_MS).
           const IDX_TIMEOUT_MS = Number(
-            process.env.NYX_CVM_INDEXER_TIMEOUT_MS ?? "120000",
+            process.env.DARKNYX_CVM_INDEXER_TIMEOUT_MS ?? "120000",
           );
           let idxFills = await fetchOrderFills(INDEXER_URL, buyerId);
           await t.step("indexer fill delivery (finalized lag)", async () => {
@@ -824,7 +824,7 @@ maybeDescribe(
           // WS, surviving a CVM redeploy. This replaced the retired durable
           // memo-replay log (`GET /fills/replay`).
           await t.step(
-            "on-chain trade + change recovery v2",
+            "on-chain trade + change recovery v3",
             async () => {
               const coldStore = new InMemoryNoteStore();
               const inputRecord = {
@@ -844,7 +844,7 @@ maybeDescribe(
               });
               expect(
                 recovered,
-                "recoverFillFromChain did not recover the buyer outputs from the on-chain ciphertext (is the CVM built from the recovery-v2 image?)",
+                "recoverFillFromChain did not recover the buyer outputs from the on-chain ciphertext (is the CVM built from the recovery-v3 image?)",
               ).toBeTruthy();
               expect(recovered!.trade.amount).toBe(BASE_QTY);
               // The chain-recovered amount must match the live memo byte-for-byte.

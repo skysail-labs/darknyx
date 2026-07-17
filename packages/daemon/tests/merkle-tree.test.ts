@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import { LocalMerkleTree, TREE_DEPTH } from "../src/merkle-tree.js";
-import { poseidonHashBytesBE } from "@nyx/sdk";
+import { poseidonHashBytesBE } from "@darknyx/sdk";
 
 const bytesToBigInt = (x: Uint8Array): bigint => {
   let hex = "0x";

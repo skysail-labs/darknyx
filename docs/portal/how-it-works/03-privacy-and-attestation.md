@@ -1,13 +1,13 @@
 ---
 sidebar_position: 3
 title: Privacy & Attestation
-description: What Nyx hides, what remains public, and how clients verify the confidential matcher and its complete on-chain signer set.
+description: What Darknyx hides, what remains public, and how clients verify the confidential matcher and its complete on-chain signer set.
 ---
 
 # Privacy & Attestation
 
 :::info TL;DR
-Nyx keeps order intent inside an attested confidential VM and balances inside
+Darknyx keeps order intent inside an attested confidential VM and balances inside
 on-chain commitments. The host operator should not be able to read protected
 memory, but this guarantee depends on Intel TDX and the exact image being run.
 Clients verify the hardware quote, image measurement, and complete on-chain
@@ -21,9 +21,9 @@ settlement-signer set before sending orders.
 | **Centralized exchange** | The operator | Can front-run, trade against you, or leak data. |
 | **On-chain order book** | The sequencer / validators, and anyone indexing the chain | Reorder, censor, sandwich (MEV); the leak is permanent and public. |
 | **Off-chain dark desk** | The operator | Custody and order intent both exposed to one party. |
-| **Nyx** | The measured matcher inside protected VM memory | The host and chain do not receive plaintext orders; clients verify the code allowed to read them. |
+| **Darknyx** | The measured matcher inside protected VM memory | The host and chain do not receive plaintext orders; clients verify the code allowed to read them. |
 
-The difference from "encrypted on-chain orders" is that on Nyx your order is
+The difference from "encrypted on-chain orders" is that on Darknyx your order is
 **never a transaction at all** (see [Trade Flow](./trade-flow)). What lands on
 Solana is the settled *result*, with a zero-knowledge proof, never the order.
 

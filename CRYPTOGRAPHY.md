@@ -1,6 +1,6 @@
-# Nyx Darkpool — Cryptographic Design Walkthrough
+# Darknyx Darkpool — Cryptographic Design Walkthrough
 
-> A protocol-engineer's tour through the cryptography of Nyx in its
+> A protocol-engineer's tour through the cryptography of Darknyx in its
 > current TEE architecture (vault + the in-CVM matcher/settler; v2
 > `inner_hash` notes + consumed-input-derived outputs). Written for readers
 > comfortable with ZK proofs and field arithmetic who have not seen this
@@ -30,7 +30,7 @@
 
 ## 1. Executive summary
 
-Nyx is a privacy-preserving CLOB-like darkpool on Solana. The custody side is
+Darknyx is a privacy-preserving CLOB-like darkpool on Solana. The custody side is
 shielded (UTXO notes, Groth16 proofs); the matching side runs in a TEE
 (currently a software Ed25519 key, eventually an attested enclave) that signs
 match payloads back to L1 for atomic settlement.
@@ -41,7 +41,7 @@ matcher/settler)** + **client (TypeScript SDK + snarkjs prover)**:
 | Layer | Responsibility | Trust |
 |---|---|---|
 | **L1** (`programs/vault`) | Custody, Merkle tree, ZK verifiers, atomic settlement | Trustless |
-| **TEE** (CVM, `crates/nyx-tee`) | Hidden order intake, uniform-clearing-price match, signs the settle | Trusted for fairness + liveness, **NOT** for custody; attested via TDX quote |
+| **TEE** (CVM, `crates/darknyx-tee`) | Hidden order intake, uniform-clearing-price match, signs the settle | Trusted for fairness + liveness, **NOT** for custody; attested via TDX quote |
 | **Client** | Key derivation, proof generation, order signing, ix builders | Local user trust |
 
 The on-chain trust surface is tightened so the TEE can deny liveness but
@@ -191,7 +191,7 @@ Every state-transitioning instruction maintains:
 | **Poseidon over BN254 Fr** | All note / nullifier / owner / user commitments + Merkle internal hash | SNARK-efficient (sub-100 constraints per round vs. thousands for SHA). Identical Rust (`light-poseidon`) and circom (`circomlib`) implementations — parity verified. |
 | **SHA-256** | TEE-signed canonical payload hash, the batch leaf/root hashing, prover-input encoding | Off-circuit ambient hash. Solana-native (no syscall surprises). |
 | **HKDF-SHA256** | Spending key, root Ed25519 seed, trading-key offset derivation | RFC 5869 standard. 512-bit output → mod-p for BN254 keys, 256-bit output → Ed25519 seed. |
-| **NyxShakeKdfV1** | Viewing key + per-note blinding factor | Versioned Nyx-specific SHAKE256 construction retained byte-for-byte for existing keys and notes. It uses SP 800-185-style encodings but is not NIST KMAC or cSHAKE; fixed Rust/TS KATs pin its bytes. |
+| **DarknyxShakeKdfV1** | Viewing key + per-note blinding factor | Versioned Darknyx-specific SHAKE256 construction retained byte-for-byte for existing keys and notes. It uses SP 800-185-style encodings but is not NIST KMAC or cSHAKE; fixed Rust/TS KATs pin its bytes. |
 | **Ed25519** | TEE signature on match payload, trading-key signatures | Solana-native (built-in precompile for verification). |
 | **Groth16** (BN254, snarkjs / `groth16-solana`) | All four ZK circuits | Constant-size proofs (256 bytes on-chain), constant-time verification, well-supported tooling. The proof system that fits Solana's CU budget. |
 
@@ -216,12 +216,12 @@ down everywhere:
 
 ### Sampling soundness
 
-- Keys derived from the 64-byte master seed go through HKDF or NyxShakeKdfV1
+- Keys derived from the 64-byte master seed go through HKDF or DarknyxShakeKdfV1
   outputting **512 bits**, then `mod p` reduction. For BN254 r ≈ 2^254, this
   gives a statistical bias of < 2^-256 — indistinguishable from uniform in
   practice. The 64-byte master seed is sampled directly from a CSPRNG and kept
   in secure client storage, with only authenticated encrypted backups exported.
-- Blinding factors per note use the same 512-bit derivation (NyxShakeKdfV1 with a
+- Blinding factors per note use the same 512-bit derivation (DarknyxShakeKdfV1 with a
   per-note counter), so each note has independent randomness even when
   derived from the same master seed.
 - The spending key and viewing key use disjoint info strings
@@ -253,11 +253,11 @@ master_seed (64 bytes, CSPRNG; securely stored and backed up encrypted)
   ├── HKDF-SHA256("darkpool_root_key_v1", 32B)              → root_key (Ed25519 seed)
   ├── HKDF-SHA256("darkpool_trading_key_v1" ‖ offset_u64_le, 32B) → trading_key(offset) (Ed25519 seed)
   ├── HKDF-SHA256("darkpool_spend_key_v1", 512b) → mod p     → spending_key (Fr)
-  ├── NyxShakeKdfV1("darkpool_viewing_key_v1", 512b) → mod p → viewing_key   (Fr)
+  ├── DarknyxShakeKdfV1("darkpool_viewing_key_v1", 512b) → mod p → viewing_key   (Fr)
   └── deriveBlindingFactor(0xacc0_0000_0000)          → mod p → r_owner       (Fr)
 
 Per-deposit recovery nonce (v2; independent from the above; keyed by deposit index):
-  NyxShakeKdfV1("note_blinding_v1" ‖ deposit_index_u64_le, 512b) → mod p → recovery_nonce (Fr)
+  DarknyxShakeKdfV1("note_blinding_v1" ‖ deposit_index_u64_le, 512b) → mod p → recovery_nonce (Fr)
   Poseidon3(DOMAIN_DEPOSIT_INNER=27, owner_commitment, recovery_nonce) → inner_hash (Fr)
   (change / trade / fee / continuation notes derive inner_hash differently — see §5.)
 ```
@@ -349,7 +349,7 @@ Every key derivation has byte-for-byte cross-environment parity tests:
 
 ## 5. The note system
 
-Nyx is a UTXO darkpool. Every shielded balance is a **note** — a logical
+Darknyx is a UTXO darkpool. Every shielded balance is a **note** — a logical
 record of one (mint, amount, owner) holding, identified on-chain only by
 its 32-byte Poseidon commitment.
 
@@ -486,12 +486,12 @@ Output safety and liveness no longer depend on an anchor pool, a batch slot, or
 a process-local counter. Canonical order v2 removed anchor fields and the
 top-up endpoint.
 
-**Durable recovery v2.** The unchanged 128-byte `fill_recovery` field is packed
-as `ephemeral_pubkey(32) || buyer_enc(44) || seller_enc(44) || "NYXREC02"`.
+**Durable recovery v3.** The unchanged 128-byte `fill_recovery` field is packed
+as `ephemeral_pubkey(32) || buyer_enc(44) || seller_enc(44) || "DNYXREC3"`.
 Buyer plaintext is `(trade_base, change_quote)`; seller plaintext is
 `(trade_quote, change_base)`. Each 44-byte side blob is
 `nonce(12) || ChaCha20-Poly1305(ciphertext(16), tag(16))`, keyed by X25519 +
-HKDF domain `nyx-fill-enc-v2`. The version trailer makes the clean cutover
+HKDF domain `darknyx-fill-enc-v3`. The version trailer makes the clean cutover
 reject legacy one-u64 blobs.
 
 `recoverFillFromChain` resolves the payload's exact consumed commitment,
@@ -521,7 +521,7 @@ Each order must lock **at least** `nominal + its own fee` collateral (intake
 derives this floor in `orders.rs`) or `run_batch` rejects the match as
 conservation-breaking. `VaultConfig.fee_rate_bps` is the authoritative
 on-chain fee rate; the CVM adopts it at boot over the
-`NYX_TEE_FEE_RATE_BPS` fallback (default 30).
+`DARKNYX_TEE_FEE_RATE_BPS` fallback (default 30).
 
 **Over-collateralization.** An order MAY lock a note larger than that floor —
 e.g. point a 500-USDC deposit at a 50-USDC order. The client declares the
@@ -680,7 +680,7 @@ and both `VALID_MERGE` variants use the **`pot16` Powers-of-Tau** file
 `VALID_MATCH_BATCH` at N=16 needs **`pot18`** (~288 MB, 2^18 capacity)
 because its constraints exceed 2^16 — `scripts/download-ptau.sh` fetches
 both. All circuits use the **same deterministic dev contribution**
-(seeded `"nyx-phase1-dev-contribution-$name"`); the batched zkeys also run
+(seeded `"darknyx-phase1-dev-contribution-$name"`); the batched zkeys also run
 `zkey beacon 0102…1f20 10` for 10 deterministic rounds so CI can rebuild
 byte-identical VK consts. For mainnet, every circuit needs a real Phase-2 MPC.
 
@@ -1046,7 +1046,7 @@ Alice generates a 64-byte master seed (CSPRNG). From it she derives via
 `packages/sdk/src/keys/key-generators.ts`:
 
 - `spending_key` (Fr) via HKDF-SHA256
-- `viewing_key` (Fr) via NyxShakeKdfV1
+- `viewing_key` (Fr) via DarknyxShakeKdfV1
 - `trading_key(offset=0)` (Ed25519) via HKDF-SHA256 with offset 0
 - `root_key` (Ed25519) via HKDF-SHA256 (skipped if she's bringing her own
   Solana keypair — the demo dapp uses Phantom)
@@ -1163,7 +1163,7 @@ X25519 `viewing_pubkey`, the current 32-byte `/info.boot_session_id`, the input-
 (`owner_commitment`, `note_inner_hash`, `nullifier`, `merkle_root`) + a
 relayed **VALID_INPUT** Groth16 proof.
 
-Intake (`crates/nyx-tee/src/api/orders.rs`):
+Intake (`crates/darknyx-tee/src/api/orders.rs`):
 
 1. Verifies the trading-key Ed25519 signature over the canonical digest,
    including the viewing key, boot session, and arrival nonce.
@@ -1181,12 +1181,12 @@ resting book. The anonymity set is every order in the book that didn't settle.
 
 **Tests:** `tests/order-canonical-parity.test.ts` (the canonical order v2 wire,
 byte-equal
-to Rust) + `crates/nyx-tee/tests/orders_surface.rs` (intake: sig / opening /
+to Rust) + `crates/darknyx-tee/tests/orders_surface.rs` (intake: sig / opening /
 session / viewing-key / nonce validation).
 
 ### Step 5 — Matching (in the CVM)
 
-The matcher interval driver (`crates/nyx-tee/src/matcher/interval.rs`) ticks
+The matcher interval driver (`crates/darknyx-tee/src/matcher/interval.rs`) ticks
 on a cadence (`BATCH_MS`). Each tick, over the in-memory book:
 
 1. Sweeps expired orders and freezes one book snapshot for the complete tick.
@@ -1207,12 +1207,12 @@ on a cadence (`BATCH_MS`). Each tick, over the in-memory book:
 This is integer arithmetic + Poseidon over the change-note commitments — all
 in enclave memory. The cryptography lands at settle time (Step 7+) when these
 matches hit L1. **Tests:** `cargo test -p darkpool-matcher` (the algorithm +
-parity) + `crates/nyx-tee/tests/{matcher_tick,order_to_match}.rs`.
+parity) + `crates/darknyx-tee/tests/{matcher_tick,order_to_match}.rs`.
 
 ### Step 6 — Settle handoff (the CVM drives the on-chain settle)
 
 The settle scheduler dequeues each ≤16-match batch and `assemble_batch`
-(`crates/nyx-tee/src/settle/assemble.rs`) builds the per-slot witnesses + the
+(`crates/darknyx-tee/src/settle/assemble.rs`) builds the per-slot witnesses + the
 `MatchResultPayload`s, then drives Steps 7–9.5 below **sequentially** (so a
 change note relocked by one batch is on-chain before a later batch consumes
 it). The enclave's dstack-derived Ed25519 key signs each settle payload and
@@ -1945,7 +1945,7 @@ The TEE's Ed25519 signature is over a 32-byte SHA-256 hash, not the
 
 ```rust
 canonical_payload_hash(p) = SHA256(
-    b"nyx-match-v9",
+    b"darknyx-match-v10",
     p.match_id,
     p.note_a_commitment, p.note_b_commitment,
     p.note_c_commitment, p.note_d_commitment,
@@ -1978,11 +1978,12 @@ or settlements will start failing across the board.
 
 > **Historical** — the `v5`/`v6` tags below are from this earlier mints-revert
 > episode. The tag has since advanced through v7 (amount privacy), v8
-> (fill recovery), and **v9** (dead-nullifier removal). The CURRENT
+> (fill recovery), **v9** (dead-nullifier removal), and **v10** (the Darknyx
+> namespace cutover). The CURRENT
 > canonical hash is in *The canonical payload hash* above.
 
 The first cut of v3 added `quote_mint` and `base_mint` as fields in
-`MatchResultPayload` and into the canonical hash (with a `b"nyx-match-v6"`
+`MatchResultPayload` and into the canonical hash (under settlement-domain v6
 tag). The settle tx was then 1242/1232 — over the cap — because two
 Pubkeys (64 bytes) had been added to the wire payload.
 
@@ -1993,7 +1994,7 @@ conservation work. Adding the mint to the payload (and to the canonical
 hash) was just duplicating information the chain could derive.
 
 So the revert: `MatchResultPayload` shape goes back to v5, tag stays
-`b"nyx-match-v5"`. Mints flow purely through the NoteLock PDAs. The
+settlement domain v5. Mints flow purely through the NoteLock PDAs. The
 binding hash for the marker PDA (which is computed entirely on-chain
 from payload + lock mints, see §8 step 8) is the one place mints are
 included — it's separated from the wire payload so it doesn't bloat tx
@@ -2090,7 +2091,7 @@ or via withdraw (layer 3 alone).
 (The last two + the `settle_harness/` were migrated from the deleted
 `matching_engine` crate.)
 
-### `nyx-tee` tests (`cargo test -p nyx-tee`)
+### `darknyx-tee` tests (`cargo test -p darknyx-tee`)
 
 ~180 lib + integration tests: the matcher tick + partial-fill continuation,
 the settle pipeline + ALT pool, the Merkle mirror, the
@@ -2139,7 +2140,7 @@ in-enclave N=16 prove → fixture dump).
 | `devnet-deposit-withdraw.test.ts` | `RUN_DEVNET_DW=1` | isolated v2 deposit → VALID_SPEND withdraw round-trip on devnet (no CVM) |
 | `cvm-settle-e2e.test.ts` | `RUN_CVM_E2E=1` | the flagship: deposit 2 notes → POST a crossing bid+ask to a live CVM → the CVM matches **and** settles → assert leaf_count grows |
 
-Plus the **loadgen** (`crates/nyx-tee-loadgen`, a host binary) for intake
+Plus the **loadgen** (`crates/darknyx-tee-loadgen`, a host binary) for intake
 throughput + matcher paging (`scripts/dev-commands.md §7`).
 
 ### Summary
@@ -2159,7 +2160,7 @@ Sorted roughly by cryptographic impact:
 
 1. **Real Phase-2 ceremony** — every shipped Groth16 circuit uses a
    deterministic dev contribution
-   (`echo "nyx-phase1-dev-contribution-$name" | snarkjs zkey contribute`),
+   (`echo "darknyx-phase1-dev-contribution-$name" | snarkjs zkey contribute`),
    plus the batched zkey runs `zkey beacon 0102…1f20 10`. The toxic waste
    is *recoverable from the build script* — fine for devnet, a hard
    mainnet blocker. Need a real MPC with ≥ 3 independent contributors and
@@ -2196,7 +2197,7 @@ Sorted roughly by cryptographic impact:
   `/v1/stream` is **per-account routed** (each order's `FillMemo` goes only to
   its owner's authenticated session), with deterministic HD `order_id`s
   (`deriveOrderId`) and an optional off-TEE commitment-locator indexer
-  (`packages/indexer`). Durable recovery v2 comes from the settlement's on-chain
+  (`packages/indexer`). Durable recovery v3 comes from the settlement's on-chain
   encrypted `(trade, change)` tuples plus confirmed deposit/merge/settlement
   instructions and events; `recoverNotesFromChain` rebuilds every user note
   class from seed + chain. The live memo is the low-latency path. See
@@ -2220,7 +2221,7 @@ Sorted roughly by cryptographic impact:
 ## Appendix A — File map
 
 ```
-nyx-monorepo/
+darknyx-monorepo/
 ├── circuits/
 │   ├── valid_wallet_create/circuit.circom    1 public input
 │   ├── valid_deposit/circuit.circom          5 public inputs (owner + inner private)
@@ -2234,11 +2235,11 @@ nyx-monorepo/
 │   │   ├── src/poseidon.rs                    light-poseidon BN254 wrapper
 │   │   ├── src/note.rs                        commitment_from_fields_v2 (Poseidon6)
 │   │   ├── src/nullifier.rs                   Poseidon3(DOMAIN_NULL, sk, inner_hash)
-│   │   ├── src/keys.rs                        HKDF-SHA256 + NyxShakeKdfV1 + deriveBlindingFactor
+│   │   ├── src/keys.rs                        HKDF-SHA256 + DarknyxShakeKdfV1 + deriveBlindingFactor
 │   │   ├── src/user_commitment.rs  src/field.rs  examples/*
 │   ├── darkpool-matcher/                       run_batch(_capped) + order_canonical + change_note
-│   ├── nyx-tee/                                the in-CVM engine (api/matcher/settle/prover/merkle/…)
-│   └── nyx-tee-loadgen/                        host load-tester
+│   ├── darknyx-tee/                                the in-CVM engine (api/matcher/settle/prover/merkle/…)
+│   └── darknyx-tee-loadgen/                        host load-tester
 │
 ├── programs/vault/                            the ONLY on-chain program
 │   ├── src/state.rs                           VaultConfig (global), MerkleTree (per-shard),
@@ -2295,7 +2296,7 @@ RUN_DEVNET_E2E=1 ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
 RUN_DEVNET_DW=1 ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/devnet-deposit-withdraw.test.ts )
 
 # the flagship: a live CVM matches AND settles (needs a deployed CVM — CLAUDE.md §3; STOP it after)
-RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
   FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts )
 ```
@@ -2308,7 +2309,7 @@ comment for the full devnet E2E.
 ---
 
 *Last updated: 2026-07-16 — current TEE architecture: `vault` (the only
-on-chain program) + the in-CVM matcher/settler (`crates/nyx-tee`), validated
+on-chain program) + the in-CVM matcher/settler (`crates/darknyx-tee`), validated
 end-to-end on devnet through a Phala CVM. v2 `inner_hash` note model with
 consumed-input-derived outputs and canonical order v2. The `matching_engine` / MagicBlock-ER /
 PER path and the standalone `VALID_CREATE` / `VALID_PRICE` circuits have been

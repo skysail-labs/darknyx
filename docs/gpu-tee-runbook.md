@@ -16,13 +16,14 @@
 The whole CUDA build + packaging track is committed on `revamp_proving` and **CI-validated with no
 GPU** (commit `0400776` + the `git`/`libatomic1` fixups):
 
-- **ICICLE backend** wired as a third prover (`NYX_TEE_PROVER=icicle`, device via
-  `NYX_TEE_ICICLE_DEVICE`). CPU byte-parity already proven (Phase 1, commit `4c9558c`).
-- **CUDA image** `ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-36-cuda` — built, pushed, and
-  CI-verified: the 3 backend `.so` ship under `/opt/icicle/lib/backend/**` and the binary's links
-  resolve. Cross-compiled for `sm_90` (H200/Hopper) **with no GPU on the builder**.
+- **ICICLE backend** wired as a third prover (`DARKNYX_TEE_PROVER=icicle`, device via
+  `DARKNYX_TEE_ICICLE_DEVICE`). CPU byte-parity already proven (Phase 1, commit `4c9558c`).
+- **Pre-cutover CUDA image** was built, pushed, and CI-verified: the 3 backend `.so` ship under
+  `/opt/icicle/lib/backend/**` and the binary's links resolve. Because the Darknyx namespace
+  cutover changes the crate, binary, image and KMS namespaces, build the planned
+  `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-63-cuda` tag before the next GPU session.
 - **`deploy/docker-compose.gpu.yaml`** — the GPU variant (nvidia device reservation + CUDA device).
-- Build knobs: `NYX_ICICLE_CUDA_ARCH` → cmake `-DCUDA_ARCH`; nyx-tee feature `icicle-cuda`;
+- Build knobs: `DARKNYX_ICICLE_CUDA_ARCH` → cmake `-DCUDA_ARCH`; darknyx-tee feature `icicle-cuda`;
   `deploy/Dockerfile` `ARG ENABLE_CUDA`; CI builds the CUDA image on a `-cuda`-suffixed tag.
 
 So the **only** remaining work is the live GPU session: deploy → confirm CC mode → measure the GPU
@@ -61,11 +62,11 @@ Two equivalent paths. **Path A (dashboard)** is what worked around the CLI capac
 ### Per-session values to refresh first
 
 ```sh
-cd "$NYX_REPO"   # the nyx-monorepo checkout root
+cd "$DARKNYX_REPO"   # the darknyx-monorepo checkout root
 RPC=$(grep '^SOLANA_RPC_URL=' packages/sdk/.env | head -1 | cut -d= -f2- | tr -d '"'\'' \r')
 # Reset the on-chain Merkle tree (all 4 shards) so the mirror cold-boots empty:
 SOLANA_RPC_URL="$RPC" ADMIN_KEYPAIR=.devnet/keypairs/admin.json "$NODE" scripts/reset-merkle-tree.mjs
-# Fresh sync-floor slot (put this in NYX_TEE_SYNC_FROM_SLOT below):
+# Fresh sync-floor slot (put this in DARKNYX_TEE_SYNC_FROM_SLOT below):
 solana slot --url "$RPC"
 # Your SSH pubkey (paste into the dashboard / used by `phala ssh`):
 cat ~/.ssh/id_ed25519.pub
@@ -75,12 +76,12 @@ Devnet config values (from `.devnet/e2e-config.json`, stable unless devnet-setup
 
 | var | value |
 |---|---|
-| `NYX_TEE_BASE_MINT` | `sGzG6XyTiHiY9G2dC18GXoV7W4YKPXcM8soDS79jPjn` |
-| `NYX_TEE_QUOTE_MINT` | `FEzPrxcwgYvwWYceZdJEMwWj9tB4hcR7iXmkZTunVoX6` |
-| `NYX_TEE_SETTLE_LOOKUP_TABLE` | `FpxZ3kts77NkR9sBja2eMujcXCdMDnfrWj6EEVKpcyRE` |
-| `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` | `0079782d70726f746f636f6c2d6f776e65722d76310000000000000000000000` |
-| `NYX_TEE_NUM_TREES` | `4` |
-| `NYX_TEE_FEE_RATE_BPS` | `30` |
+| `DARKNYX_TEE_BASE_MINT` | `sGzG6XyTiHiY9G2dC18GXoV7W4YKPXcM8soDS79jPjn` |
+| `DARKNYX_TEE_QUOTE_MINT` | `FEzPrxcwgYvwWYceZdJEMwWj9tB4hcR7iXmkZTunVoX6` |
+| `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` | `FpxZ3kts77NkR9sBja2eMujcXCdMDnfrWj6EEVKpcyRE` |
+| `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` | `0079782d70726f746f636f6c2d6f776e65722d76310000000000000000000000` |
+| `DARKNYX_TEE_NUM_TREES` | `4` |
+| `DARKNYX_TEE_FEE_RATE_BPS` | `30` |
 
 > If `.devnet/e2e-config.json` ever changes, re-read these with
 > `jq -r '.baseMint.pubkey, .quoteMint.pubkey, .settleLookupTable, .protocol.ownerCommitmentHex, .numTrees' .devnet/e2e-config.json`.
@@ -92,13 +93,13 @@ Devnet config values (from `.devnet/e2e-config.json`, stable unless devnet-setup
    SSH access — required for the CC-mode check + the 2b spike).
 3. **Template:** Custom Configuration. Paste the compose below (devnet values inlined; the **only**
    `${...}` reference is the Helius RPC, supplied as an encrypted secret). Refresh
-   `NYX_TEE_SYNC_FROM_SLOT` to the slot printed above.
+   `DARKNYX_TEE_SYNC_FROM_SLOT` to the slot printed above.
 
 ```yaml
 version: '3.8'
 services:
-  nyx-tee:
-    image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-36-cuda
+  darknyx-tee:
+    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-63-cuda
     restart: unless-stopped
     deploy:
       resources:
@@ -109,37 +110,37 @@ services:
               capabilities: [gpu]
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
-      - nyx_state:/var/lib/nyx-tee
+      - darknyx_state:/var/lib/darknyx-tee
     environment:
-      NYX_TEE_LOG: "info,nyx_tee::settle=debug,nyx_tee::oracle=info,nyx_tee::merkle=info"
-      NYX_TEE_HTTP_BIND: "0.0.0.0:8080"
-      NYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
-      NYX_TEE_STATE_DIR: "/var/lib/nyx-tee"
-      NYX_TEE_API_KEY: ${NYX_TEE_API_KEY}
-      NYX_TEE_API_SECRET: ${NYX_TEE_API_SECRET}
-      NYX_TEE_PASSPHRASE: ${NYX_TEE_PASSPHRASE}
-      NYX_TEE_SOLANA_RPC_URL: ${NYX_TEE_SOLANA_RPC_URL}
-      NYX_TEE_SYNC_FROM_SLOT: "<REFRESH: solana slot>"
-      NYX_TEE_BASE_MINT: "sGzG6XyTiHiY9G2dC18GXoV7W4YKPXcM8soDS79jPjn"
-      NYX_TEE_QUOTE_MINT: "FEzPrxcwgYvwWYceZdJEMwWj9tB4hcR7iXmkZTunVoX6"
-      NYX_TEE_SETTLE_LOOKUP_TABLE: "FpxZ3kts77NkR9sBja2eMujcXCdMDnfrWj6EEVKpcyRE"
-      NYX_TEE_FEE_RATE_BPS: "30"
-      NYX_TEE_PROTOCOL_OWNER_COMMITMENT: "0079782d70726f746f636f6c2d6f776e65722d76310000000000000000000000"
-      NYX_TEE_NUM_TREES: "4"
-      NYX_TEE_PROVER: "icicle"
-      NYX_TEE_WITNESS: "native"
-      NYX_TEE_ICICLE_DEVICE: "CUDA"
-      NYX_TEE_SETTLE_SEND_CONCURRENCY: "16"
+      DARKNYX_TEE_LOG: "info,darknyx_tee::settle=debug,darknyx_tee::oracle=info,darknyx_tee::merkle=info"
+      DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"
+      DARKNYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+      DARKNYX_TEE_STATE_DIR: "/var/lib/darknyx-tee"
+      DARKNYX_TEE_API_KEY: ${DARKNYX_TEE_API_KEY}
+      DARKNYX_TEE_API_SECRET: ${DARKNYX_TEE_API_SECRET}
+      DARKNYX_TEE_PASSPHRASE: ${DARKNYX_TEE_PASSPHRASE}
+      DARKNYX_TEE_SOLANA_RPC_URL: ${DARKNYX_TEE_SOLANA_RPC_URL}
+      DARKNYX_TEE_SYNC_FROM_SLOT: "<REFRESH: solana slot>"
+      DARKNYX_TEE_BASE_MINT: "sGzG6XyTiHiY9G2dC18GXoV7W4YKPXcM8soDS79jPjn"
+      DARKNYX_TEE_QUOTE_MINT: "FEzPrxcwgYvwWYceZdJEMwWj9tB4hcR7iXmkZTunVoX6"
+      DARKNYX_TEE_SETTLE_LOOKUP_TABLE: "FpxZ3kts77NkR9sBja2eMujcXCdMDnfrWj6EEVKpcyRE"
+      DARKNYX_TEE_FEE_RATE_BPS: "30"
+      DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT: "0079782d70726f746f636f6c2d6f776e65722d76310000000000000000000000"
+      DARKNYX_TEE_NUM_TREES: "4"
+      DARKNYX_TEE_PROVER: "icicle"
+      DARKNYX_TEE_WITNESS: "native"
+      DARKNYX_TEE_ICICLE_DEVICE: "CUDA"
+      DARKNYX_TEE_SETTLE_SEND_CONCURRENCY: "16"
     ports:
       - "8080:8080"
 volumes:
-  nyx_state:
+  darknyx_state:
 ```
 
 4. **Advanced → Encrypted Secrets:** add the Helius URL plus fresh
-   `NYX_TEE_API_KEY`, `NYX_TEE_API_SECRET`, and `NYX_TEE_PASSPHRASE` values.
+   `DARKNYX_TEE_API_KEY`, `DARKNYX_TEE_API_SECRET`, and `DARKNYX_TEE_PASSPHRASE` values.
    These are E2E-encrypted in the browser and never enter the compose hash. The
-   public `nyx-test-*` fixtures are rejected outside explicit simulator mode.
+   public `darknyx-test-*` fixtures are rejected outside explicit simulator mode.
 5. **Advanced → SSH Authorization → Public Key:** paste `~/.ssh/id_ed25519.pub`.
 6. Deploy.
 
@@ -147,37 +148,37 @@ volumes:
 
 ```sh
 umask 077
-export NYX_TEE_API_KEY="nyx-$(openssl rand -hex 16)"
-export NYX_TEE_API_SECRET="$(openssl rand -hex 32)"
-export NYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
+export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
+export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
+export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
 BASE=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 FLOOR=$(solana slot --url "$RPC")
 cat > .env.deploy <<EOF      # .env.deploy matches gitignored .env.* — never commit
-NYX_TEE_API_KEY=$NYX_TEE_API_KEY
-NYX_TEE_API_SECRET=$NYX_TEE_API_SECRET
-NYX_TEE_PASSPHRASE=$NYX_TEE_PASSPHRASE
-NYX_TEE_SOLANA_RPC_URL=$RPC
-NYX_TEE_SYNC_FROM_SLOT=$FLOOR
-NYX_TEE_BASE_MINT=$BASE
-NYX_TEE_QUOTE_MINT=$QUOTE
-NYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
-NYX_TEE_FEE_RATE_BPS=30
-NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
-NYX_TEE_NUM_TREES=4
-NYX_TEE_PROVER=icicle
-NYX_TEE_ICICLE_DEVICE=CUDA
+DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
+DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
+DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
+DARKNYX_TEE_SOLANA_RPC_URL=$RPC
+DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
+DARKNYX_TEE_BASE_MINT=$BASE
+DARKNYX_TEE_QUOTE_MINT=$QUOTE
+DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
+DARKNYX_TEE_FEE_RATE_BPS=30
+DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
+DARKNYX_TEE_NUM_TREES=4
+DARKNYX_TEE_PROVER=icicle
+DARKNYX_TEE_ICICLE_DEVICE=CUDA
 EOF
-"$PHALA" deploy -n nyx-gpu -c deploy/docker-compose.gpu.yaml -e .env.deploy \
+"$PHALA" deploy -n darknyx-gpu -c deploy/docker-compose.gpu.yaml -e .env.deploy \
   -t h200.small --kms phala --dev-os --ssh-pubkey ~/.ssh/id_ed25519.pub --wait
 rm -P .env.deploy            # shred the Helius key off disk (macOS has no `shred`)
 ```
 
-> **Image must be public:** Phala pulls `ghcr.io/skysail-labs/nyx-tee` anonymously. It was public
+> **Image must be public:** Phala pulls `ghcr.io/skysail-labs/darknyx-tee` anonymously. It was public
 > for the CPU runs (same package) — if a deploy errors on image pull, flip the ghcr package to
-> public (GitHub org → Packages → nyx-tee → visibility).
+> public (GitHub org → Packages → darknyx-tee → visibility).
 
 ---
 
@@ -216,7 +217,7 @@ SOLANA_RPC_URL="$RPC" FUNDER_KEYPAIR=~/.config/solana/id.json \
 The headline measurement. Run the flagship settle e2e against the GPU CVM:
 
 ```sh
-RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$RPC" \
+RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$RPC" \
   FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   ( cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts )
 ```
@@ -230,13 +231,13 @@ RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$RPC" \
   The number that matters is **`prove_step_ms`** — target tens of ms vs the rapidsnark-CPU ~1.5 s.
 
 **A/B on the SAME image** (no rebuild — just flip the prover and restart). Update the env (dashboard
-"Encrypted Secrets"/env edit, or `phala envs`/redeploy with `NYX_TEE_PROVER=rapidsnark`), re-run the
+"Encrypted Secrets"/env edit, or `phala envs`/redeploy with `DARKNYX_TEE_PROVER=rapidsnark`), re-run the
 same test, and compare `prove_step_ms`:
-- `NYX_TEE_PROVER=rapidsnark` → the CPU baseline.
-- `NYX_TEE_PROVER=icicle NYX_TEE_ICICLE_DEVICE=CPU` → icicle-CPU (sanity; should ≈ ark/rapidsnark).
-- `NYX_TEE_PROVER=icicle NYX_TEE_ICICLE_DEVICE=CUDA` → the GPU win.
+- `DARKNYX_TEE_PROVER=rapidsnark` → the CPU baseline.
+- `DARKNYX_TEE_PROVER=icicle DARKNYX_TEE_ICICLE_DEVICE=CPU` → icicle-CPU (sanity; should ≈ ark/rapidsnark).
+- `DARKNYX_TEE_PROVER=icicle DARKNYX_TEE_ICICLE_DEVICE=CUDA` → the GPU win.
 
-Record the table in `crates/nyx-tee-loadgen/BENCHMARK.md` (the ICICLE section already has the
+Record the table in `crates/darknyx-tee-loadgen/BENCHMARK.md` (the ICICLE section already has the
 Phase-1 CPU rows; add the CVM GPU row + the speedup).
 
 ---
@@ -248,7 +249,7 @@ the NVIDIA GPU attestation into our existing `/attestation` (which today returns
 quote) and build the client verifier.
 
 ### What we already know
-- Our `GET /attestation?reportData=<hex>` (`crates/nyx-tee/src/api/attestation.rs`) returns the TDX
+- Our `GET /attestation?reportData=<hex>` (`crates/darknyx-tee/src/api/attestation.rs`) returns the TDX
   quote with `report_data = [caller nonce | 0..32][SHA-256(tee_pubkey) | 32..64]`. This is
   **already nonce-compatible** with the dual-attestation binding (the TDX quote and the NVIDIA
   payload must bind the same fresh nonce).
@@ -276,7 +277,7 @@ dstack/Phala attestation API. Either way it likely needs a **second image build 
 the `/attestation` change.
 
 ### Step 2b.2 — implement (off-session, then a short re-validate session)
-- **TEE side** (`crates/nyx-tee/src/api/attestation.rs` + `state.rs`): add a `nvidia_payload` field
+- **TEE side** (`crates/darknyx-tee/src/api/attestation.rs` + `state.rs`): add a `nvidia_payload` field
   to `AttestationResponse`, gathered via the mechanism from 2b.1, bound to the **same** caller nonce.
 - **SDK client verifier** (`packages/sdk/src/...`, per `docs/tee-attestation-flow.md` §4 — currently
   spec-only): `verifyTeeAttestation(apiBaseUrl, expectedComposeHash)` that checks, against a fresh
@@ -303,19 +304,20 @@ the `/attestation` change.
 | Symptom | Cause / fix |
 |---|---|
 | `ERR-02-002: No teepod found matching h200.small` | GPU capacity out (our 2026-06-19 blocker). No CVM created, no billing. Use the dashboard / wait. |
-| Deploy errors on image pull | ghcr `nyx-tee` package not public → make it public. |
+| Deploy errors on image pull | ghcr `darknyx-tee` package not public → make it public. |
 | `set_device(CUDA)` fails at runtime | GPU driver (`libcuda.so.1`) not injected (GPU passthrough not wired) OR the CUDA-toolkit minor (12.6 baked) is newer than the H200 host driver. Check `nvidia-smi`; if a driver-version mismatch, rebuild the image pinning a CUDA minor within the host driver's window (`deploy/Dockerfile` `cuda-*-12-6` → adjust). |
 | CC mode `ConfComputeMode : OFF` | The instance isn't in CC mode — the privacy guarantee is void. Re-provision a CC-enabled H200 (this is the whole point; do not run real order intent on a non-CC GPU). |
 | Witness/settle errors but prove works | unrelated to GPU — same settle pipeline as CPU; check the mint regime + tree reset (step 2). |
-| `StaleMerkleRoot (6004)` | tree drifted — re-run `scripts/reset-merkle-tree.mjs` + bump `NYX_TEE_SYNC_FROM_SLOT`. |
-| Want to A/B without a rebuild | flip `NYX_TEE_PROVER` / `NYX_TEE_ICICLE_DEVICE` via env + restart — the image ships rapidsnark + icicle(CPU+CUDA). |
+| `StaleMerkleRoot (6004)` | tree drifted — re-run `scripts/reset-merkle-tree.mjs` + bump `DARKNYX_TEE_SYNC_FROM_SLOT`. |
+| Want to A/B without a rebuild | flip `DARKNYX_TEE_PROVER` / `DARKNYX_TEE_ICICLE_DEVICE` via env + restart — the image ships rapidsnark + icicle(CPU+CUDA). |
 
 ---
 
 ## 9. Re-validate the CUDA image only if these change
 
-The image `tee-v3-hardening-36-cuda` is current. Rebuild (new `-cuda` tag → CI) only if you touch:
-`crates/nyx-tee/src/**`, the circuits, `deploy/Dockerfile`, `third_party/icicle-snark/**`, or
+The planned image `tee-v3-hardening-63-cuda` must be built before this runbook is used. After that,
+rebuild with a new `-cuda` tag only if you touch:
+`crates/darknyx-tee/src/**`, the circuits, `deploy/Dockerfile`, `third_party/icicle-snark/**`, or
 `Cargo.lock`. Trigger: `git tag tee-v3-hardening-<N>-cuda && git push origin tee-v3-hardening-<N>-cuda`
 (CI builds the CUDA image on any `-cuda`-suffixed tag, no GPU runner needed), then point the compose
 `image:` at the new tag. The CI verify step re-checks the backend `.so` + linking.

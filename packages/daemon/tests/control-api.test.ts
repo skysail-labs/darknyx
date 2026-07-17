@@ -9,7 +9,7 @@ import type { Server } from "node:http";
 import { startControlServer, type PlaceMapper } from "../src/control-api.js";
 import type { Daemon, DaemonEvent } from "../src/daemon.js";
 import { newManagedOrder, type ManagedOrder } from "../src/types.js";
-import { limitPolicy, OrderSide, type StoredNote } from "@nyx/sdk";
+import { limitPolicy, OrderSide, type StoredNote } from "@darknyx/sdk";
 
 const ORDER: ManagedOrder = {
   ...newManagedOrder({

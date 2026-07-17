@@ -1,6 +1,6 @@
 /**
  * REST order client — thin wrappers over the authenticated order endpoints that
- * parse the Phase-1 error envelope into a typed {@link NyxApiError}.
+ * parse the Phase-1 error envelope into a typed {@link DarknyxApiError}.
  *
  * Bodies are built by the SDK: a place body by `buildOrder`, a cancel body by
  * {@link buildCancel}, a modify body by composing a cancel + a place. The client
@@ -14,7 +14,7 @@ const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 
 /** A structured API error (mirrors the REST error envelope `{ code, message }`
  *  + the `x-request-id` correlation header). */
-export class NyxApiError extends Error {
+export class DarknyxApiError extends Error {
   constructor(
     readonly code: number,
     message: string,
@@ -22,7 +22,7 @@ export class NyxApiError extends Error {
     readonly requestId?: string,
   ) {
     super(message);
-    this.name = "NyxApiError";
+    this.name = "DarknyxApiError";
   }
 }
 
@@ -76,7 +76,7 @@ async function decode<T>(res: Response): Promise<T> {
   } catch {
     // non-JSON error body — keep the status text
   }
-  throw new NyxApiError(code, message, res.status, requestId);
+  throw new DarknyxApiError(code, message, res.status, requestId);
 }
 
 function authHeaders(token: string): Record<string, string> {
@@ -86,7 +86,7 @@ function authHeaders(token: string): Record<string, string> {
   };
 }
 
-/** `POST /orders`. Returns the acceptance (or throws `NyxApiError`). */
+/** `POST /orders`. Returns the acceptance (or throws `DarknyxApiError`). */
 export async function placeOrder(
   opts: OrderClientOptions,
   order: PlaceOrderRequest,

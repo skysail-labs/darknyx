@@ -28,7 +28,7 @@ import http from "node:http";
 import type { Daemon, DaemonEvent } from "./daemon.js";
 import type { OrderIntent } from "./build-place-request.js";
 import type { ManagedOrder } from "./types.js";
-import type { StoredNote } from "@nyx/sdk";
+import type { StoredNote } from "@darknyx/sdk";
 
 /** Translate a `POST /orders` JSON body into the SDK intent + the note to spend. */
 export type PlaceMapper = (body: unknown) => {

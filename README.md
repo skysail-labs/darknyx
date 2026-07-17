@@ -1,4 +1,4 @@
-# Nyx Darkpool
+# Darknyx Darkpool
 
 A **dark pool on Solana** for SPL tokens. Order intent is matched and
 settled **inside an Intel TDX confidential VM (a "CVM") on Phala Cloud** —
@@ -48,7 +48,7 @@ Three layers:
   and the atomic batched settlement path (`lock_note → verify_match_batch
   → tee_forced_settle_batched → close_batch_validity_marker`, N=16
   matches per batch).
-* **TEE (`crates/nyx-tee/`)** — the in-enclave matcher + settler. It owns
+* **TEE (`crates/darknyx-tee/`)** — the in-enclave matcher + settler. It owns
   hidden order intake, uniform-clearing-price matching, the full settle
   pipeline (signed by its dstack-derived Ed25519 key), a Merkle-mirror
   indexer, deterministic consumed-input-derived continuations, and the auth'd HTTP/WS
@@ -108,9 +108,9 @@ real-settle path), see [`scripts/dev-commands.md`](scripts/dev-commands.md)
 | Path             | What's there                                                                |
 |------------------|------------------------------------------------------------------------------|
 | `programs/`      | On-chain Anchor program — `vault` (the only on-chain program)               |
-| `crates/`        | `darkpool-crypto` (host Poseidon/key/note crypto), `darkpool-matcher` (the matching algorithm), `nyx-tee` (the in-CVM matcher/settler), `nyx-tee-loadgen` |
+| `crates/`        | `darkpool-crypto` (host Poseidon/key/note crypto), `darkpool-matcher` (the matching algorithm), `darknyx-tee` (the in-CVM matcher/settler), `darknyx-tee-loadgen` |
 | `circuits/`      | Circom 2 ZK circuits — `valid_wallet_create`, `valid_spend`, `valid_input`, `valid_match_batch` |
-| `packages/sdk/`  | `@nyx/sdk` — TypeScript client (ix builders, prover, order/settlement)      |
+| `packages/sdk/`  | `@darknyx/sdk` — TypeScript client (ix builders, prover, order/settlement)      |
 | `deploy/`        | Dockerfile + `docker-compose.yaml` for the Phala CVM image                  |
 | `scripts/`       | Build / deploy / setup shell scripts + master dev cheat-sheet               |
 | `docs/`          | Deep-dive design docs + the documentation site under `docs/site/`           |

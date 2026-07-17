@@ -18,8 +18,8 @@ const INFO_VIEWING = new TextEncoder().encode("darkpool_viewing_key_v1");
 const INFO_TRADING = new TextEncoder().encode("darkpool_trading_key_v1");
 const INFO_ROOT = new TextEncoder().encode("darkpool_root_key_v1");
 const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
-const INFO_ORDER_ID = new TextEncoder().encode("nyx-order-id-v1");
-const INFO_VIEWING_ENC = new TextEncoder().encode("nyx-viewing-enc-v1");
+const INFO_ORDER_ID = new TextEncoder().encode("darknyx-order-id-v2");
+const INFO_VIEWING_ENC = new TextEncoder().encode("darknyx-viewing-enc-v2");
 
 /** Wallet-level owner blinding counter, separated from ordinary deposit-note
  * counters. This value was established by the daemon keystore and is now the
@@ -107,7 +107,7 @@ export function deriveSpendingKey(seed: Uint8Array): bigint {
 }
 
 export function deriveMasterViewingKey(seed: Uint8Array): bigint {
-  const okm = nyxShakeKdfV1(seed, INFO_VIEWING, new Uint8Array(), 64);
+  const okm = darknyxShakeKdfV1(seed, INFO_VIEWING, new Uint8Array(), 64);
   return reduceMod(okm);
 }
 
@@ -145,7 +145,7 @@ export function deriveBlindingFactor(
   const info = new Uint8Array(INFO_BLINDING.length + 8);
   info.set(INFO_BLINDING, 0);
   info.set(new Uint8Array(offsetBuf), INFO_BLINDING.length);
-  const okm = nyxShakeKdfV1(seed, info, new Uint8Array(), 64);
+  const okm = darknyxShakeKdfV1(seed, info, new Uint8Array(), 64);
   return reduceMod(okm);
 }
 
@@ -161,7 +161,7 @@ export function deriveOwnerCommitmentBlinding(seed: Uint8Array): bigint {
  * client regenerates order ids on demand, and a
  * fresh device rebuilds full trade history by gap-scanning `deriveOrderId(seed,
  * 0), [1], …` against the indexer until a run of empties. A distinct info
- * string (`nyx-order-id-v1`) keeps order ids in a separate domain from note
+ * string (`darknyx-order-id-v2`) keeps order ids in a separate domain from note
  * blinding / inner_hash so they can never collide.
  *
  * `HKDF-SHA256-expand(seed, INFO_ORDER_ID || n_u32_le)[:16]`. Client-only — the
@@ -187,12 +187,12 @@ export interface X25519Keypair {
 
 /**
  * Derive the X25519 viewing-encryption keypair from the master seed
- * (durable output recovery v2). The client sends `publicKey` with each order;
+ * (durable output recovery v3). The client sends `publicKey` with each order;
  * the TEE encrypts each fill's `(trade, change)` amounts to it on-chain, and only
  * `secretKey` — regenerable from the seed on any device — can decrypt it. This
  * is what makes both output notes recoverable after a CVM redeploy.
  *
- * `secretKey = HKDF-SHA256-expand(seed, "nyx-viewing-enc-v1")[:32]`
+ * `secretKey = HKDF-SHA256-expand(seed, "darknyx-viewing-enc-v2")[:32]`
  * `publicKey = X25519(secretKey · basepoint)` (tweetnacl clamps the scalar).
  *
  * Client-only: the TEE merely *consumes* `publicKey` (it never re-derives it),
@@ -213,7 +213,7 @@ export function bn254ToBE32(x: bigint): Uint8Array {
   return bigintToBE32(x);
 }
 
-// ------ NyxShakeKdfV1 (matches Rust side exactly) ------
+// ------ DarknyxShakeKdfV1 (matches Rust side exactly) ------
 // This legacy, versioned construction feeds SP 800-185-style encodings into
 // raw SHAKE256. It is intentionally NOT named or claimed to be NIST KMAC/cSHAKE.
 
@@ -262,7 +262,7 @@ function bytepad(x: Uint8Array, w: number): Uint8Array {
   return out;
 }
 
-export function nyxShakeKdfV1(
+export function darknyxShakeKdfV1(
   key: Uint8Array,
   customInfo: Uint8Array,
   data: Uint8Array,

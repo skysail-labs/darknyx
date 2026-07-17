@@ -3,7 +3,7 @@
  *
  * A scan supplies successful vault transactions (instruction bytes + Anchor
  * event logs). Deposits are recognized by the seed-derived owner commitment;
- * settlements decrypt recovery-v2 tuples and derive trade/change outputs from
+ * settlements decrypt recovery-v3 tuples and derive trade/change outputs from
  * the exact consumed opening; merges derive their output from recovered input
  * commitments. A fixed-point pass handles same-slot or scan-order inversions.
  */

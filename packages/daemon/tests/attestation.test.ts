@@ -20,7 +20,7 @@ import {
   type StoredNote,
   type VerifiedQuoteReport,
   replayEventLogRtmr,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 import {
   verifyAttestation,
   AttestationError,

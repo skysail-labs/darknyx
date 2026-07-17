@@ -95,7 +95,7 @@ export interface FillsSyncOptions
   extends Omit<BackfillOptions, "baseUrl">, SubscribeFillsOptions {
   /** Indexer base URL. Locates the account's fills (by HD-derived
    *  order id), and — when `baseMint`/`quoteMint` are set — recovers each
-   *  trade/change openings from the permanent on-chain recovery-v2 ciphertext.
+   *  trade/change openings from the permanent on-chain recovery-v3 ciphertext.
    *  Omit to skip backfill
    *  entirely (live tail only), or use `chainBackfill` for the indexer-free path. */
   indexerBaseUrl?: string;
@@ -121,7 +121,7 @@ export interface FillsSync {
 /**
  * "Tail then backfill", self-healing: subscribe to the live `fills` channel AND backfill
  * any gap from the chain. The durable recovery source is the PERMANENT on-chain
- * recovery-v2 ciphertext — for each fill the indexer locates,
+ * recovery-v3 ciphertext — for each fill the indexer locates,
  * `recoverFillFromChain` decrypts + self-verifies trade/change openings into
  * the `NoteStore`. This replaced the retired durable memo-replay log
  * (`GET /fills/replay`), which a CVM redeploy used to wipe.

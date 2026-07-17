@@ -5,7 +5,7 @@
  * opening + commitment) plus its provenance. The TEE never holds these. Two
  * sources flow in:
  *   - **fill** (trade + continuation notes): built from a verified `FillMemo`
- *     or the recovery-v2 chain envelope;
+ *     or the recovery-v3 chain envelope;
  *   - **deposit/merge**: recorded live or rebuilt by `recoverNotesFromChain`.
  *
  * The wallet (`wallet/wallet.ts`) reads this set to compute balances + select

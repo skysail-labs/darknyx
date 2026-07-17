@@ -20,15 +20,17 @@ use sha2::{Digest, Sha256};
 /// the canonical bytes so an `OrderCanonical` and a `CancelCanonical`
 /// with the same `order_id` can never collide on digest.
 ///
-/// `v3` is the clean canonical-order-v2 cutover: continuation anchors were
+/// `v4` is the clean Darknyx namespace cutover. The preceding v3 body removed
+/// continuation anchors after VALID_MATCH_BATCH began deriving every output
+/// inner from the
 /// removed after VALID_MATCH_BATCH began deriving every output inner from the
 /// consumed input inner. The signed body now binds the required X25519 viewing
 /// key and the CVM's 32-byte boot session id. Old v2 signatures are therefore
 /// invalid by construction.
-pub const ORDER_DOMAIN: &[u8] = b"nyx-order-v3";
+pub const ORDER_DOMAIN: &[u8] = b"darknyx-order-v4";
 
 /// Domain-separation tag for order cancel. See [`ORDER_DOMAIN`].
-pub const CANCEL_DOMAIN: &[u8] = b"nyx-cancel-v1";
+pub const CANCEL_DOMAIN: &[u8] = b"darknyx-cancel-v2";
 
 /// Cap on symbol length. 32 bytes covers every market identifier
 /// we expect to ever ship (`SOL-USDC`, `SOL-USDC-PERP-A`, etc.) and
@@ -84,9 +86,9 @@ impl<'a> OrderCanonical<'a> {
     /// running totals; `S` = symbol bytes length):
     ///
     /// ```text
-    ///   0..12        ORDER_DOMAIN              ("nyx-order-v3")
-    ///   12..13       symbol_len : u8
-    ///   13..13+S     symbol bytes
+    ///   0..16        ORDER_DOMAIN              ("darknyx-order-v4")
+    ///   16..17       symbol_len : u8
+    ///   17..17+S     symbol bytes
     ///   +0..+1       side       : u8           (0 = bid, 1 = ask)
     ///   +1..+2       order_type : u8           (0 = limit, 1 = ioc, 2 = fok)
     ///   +2..+10      amount        : u64 LE
@@ -101,7 +103,7 @@ impl<'a> OrderCanonical<'a> {
     ///   +154..+186   session_id : [u8; 32]
     /// ```
     ///
-    /// Total length: `199 + S` bytes.
+    /// Total length: `203 + S` bytes.
     pub fn to_bytes(&self) -> Result<Vec<u8>, CanonicalError> {
         if self.symbol.len() > SYMBOL_MAX_LEN {
             return Err(CanonicalError::SymbolTooLong(self.symbol.len()));
@@ -137,10 +139,10 @@ impl<'a> OrderCanonical<'a> {
 /// Cancel-order canonical view. Layout:
 ///
 /// ```text
-///   0..13       CANCEL_DOMAIN  ("nyx-cancel-v1")
-///   13..29      order_id      : [u8; 16]
-///   29..61      trading_key   : [u8; 32]
-///   61..69      cancel_nonce  : u64 LE
+///   0..17       CANCEL_DOMAIN  ("darknyx-cancel-v2")
+///   17..33      order_id      : [u8; 16]
+///   33..65      trading_key   : [u8; 32]
+///   65..73      cancel_nonce  : u64 LE
 /// ```
 ///
 /// `trading_key` is included here (unlike `OrderCanonical`) because
@@ -184,11 +186,11 @@ mod tests {
     /// If you intentionally change the layout, regenerate this hex
     /// AND the TS-side fixture in the same commit.
     const FIXTURE_DIGEST_HEX: &str =
-        "86e585b1c0f2229e61ebbd9d724714577c78359539b6662a5b88b90ec543942a";
+        "7a47d4c4dd854c36f394bfa3b6694f5c9b57b0e33da01cbda7c766cb6c757906";
 
     /// Pinned cancel-fixture digest. Same parity rule applies.
     const CANCEL_FIXTURE_DIGEST_HEX: &str =
-        "da322b3d5d025a9dade32876d05798346e0ebbe69e391d274daa3bd34fcf7962";
+        "0ede450bdd837821997c7d1353aa6cbccf2ddebd564c7c874014f561b0feefa7";
 
     fn fixture() -> OrderCanonical<'static> {
         OrderCanonical {
@@ -227,9 +229,9 @@ mod tests {
     }
 
     #[test]
-    fn fixture_length_is_199_plus_symbol() {
+    fn fixture_length_is_203_plus_symbol() {
         let bytes = fixture().to_bytes().unwrap();
-        assert_eq!(bytes.len(), 199 + 8); // SOL-USDC = 8 bytes
+        assert_eq!(bytes.len(), 203 + 8); // SOL-USDC = 8 bytes
     }
 
     #[test]

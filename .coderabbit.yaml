@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 #
-# CodeRabbit configuration for Nyx / darknyx — a privacy-preserving CLOB
+# CodeRabbit configuration for Darknyx / darknyx — a privacy-preserving CLOB
 # darkpool on Solana (Rust workspace + circom ZK circuits + a TS SDK + an
 # in-TDX-CVM matcher/settler). The repo's hard invariants live in
 # CLAUDE.md / AGENTS.md / CRYPTOGRAPHY.md; this file points the reviewer at
@@ -37,11 +37,9 @@ reviews:
     enabled: true
     auto_incremental_review: true
     drafts: false
-    # Review PRs into the active integration/hardening branches too, not
-    # only the default branch.
+    # Review PRs into the default branch and tagged TEE integration branches.
     base_branches:
       - "main"
-      - "nyx-v2-onchain-hardening"
       - "tee_v3.*"
 
   # Keep reviews on hand-written source; skip generated artifacts, vendored
@@ -119,7 +117,7 @@ reviews:
         compute_match_leaf is byte-identical to the circom MatchSlot template +
         the TS computeBatchLeaf; canonical_payload_hash + MatchResultPayload
         Borsh shape must match the SDK serializePayload + the fixed-vector test.
-    - path: "crates/nyx-tee/src/settle/**/*.rs"
+    - path: "crates/darknyx-tee/src/settle/**/*.rs"
       instructions: >-
         The in-TEE settle pipeline (lock → prove → verify_match_batch →
         per-batch ALT → tee_forced_settle_batched → close). Watch the
@@ -133,7 +131,7 @@ reviews:
         under 1232 B; a multi-match batch's ALT must union EVERY match's
         note_locks, not just matches[0]. Flag fee/collateral math that could
         break conservation (each side must lock nominal + its own fee).
-    - path: "crates/nyx-tee/src/config.rs"
+    - path: "crates/darknyx-tee/src/config.rs"
       instructions: >-
         CVM env config. Compose interpolates `${VAR}` to an empty string when
         unset, so an empty value MUST fall back to the default (not be used
@@ -142,7 +140,7 @@ reviews:
         dstack app-compose allowed_envs — a new var changes compose_hash and
         needs governance re-authorization. Never log secrets (solana_rpc_url may
         embed an API key).
-    - path: "crates/nyx-tee/src/api/**/*.rs"
+    - path: "crates/darknyx-tee/src/api/**/*.rs"
       instructions: >-
         The HTTP/auth surface, much of it PUBLIC + unauthenticated on a small
         (1 vCPU / 2 GB) CVM. Flag CPU/memory-heavy work (Argon2id is ~19 MiB +
@@ -163,7 +161,7 @@ reviews:
     - path: "{scripts/**,.github/workflows/**,deploy/**}"
       instructions: >-
         Build/deploy/CI surface. If a file under programs/*/tests/, circuits/,
-        crates/nyx-tee/**, or packages/sdk/tests/helpers/ was DELETED, the
+        crates/darknyx-tee/**, or packages/sdk/tests/helpers/ was DELETED, the
         same PR must remove its stale references in .github/workflows/*.yml and
         scripts/*.sh (CLAUDE.md §2.7) — cargo test --workspace won't catch a
         `--test <name>` that no longer exists, but CI will. For
@@ -200,7 +198,7 @@ reviews:
       mode: warning
       requirements: >-
         Conventional-commit style: `<type>(<scope>): <imperative summary>`
-        (e.g. feat(nyx-tee): …, fix(vault,v3.5): …). Concise and descriptive.
+        (e.g. feat(darknyx-tee): …, fix(vault,v3.5): …). Concise and descriptive.
     custom_checks:
       - name: "Circuit / VK lockstep"
         mode: warning
@@ -225,7 +223,7 @@ reviews:
 
   labeling_instructions:
     - label: "tee"
-      instructions: "Apply when the PR changes crates/nyx-tee or crates/nyx-tee-loadgen."
+      instructions: "Apply when the PR changes crates/darknyx-tee or crates/darknyx-tee-loadgen."
     - label: "vault"
       instructions: "Apply when the PR changes programs/vault."
     - label: "circuits"

@@ -43,7 +43,7 @@ export interface SnarkjsFullProveOpts {
   circuitZkeyPath: string;
   /** Repo root — used to find `node_modules/.bin/snarkjs`. */
   repoRoot: string;
-  /** Optional tmp dir; defaults to `<os.tmpdir>/nyx-snarkjs-<random>`. */
+  /** Optional tmp dir; defaults to `<os.tmpdir>/darknyx-snarkjs-<random>`. */
   tmpDir?: string;
 }
 
@@ -64,7 +64,7 @@ export function snarkjsFullProve(
     opts.tmpDir ??
     join(
       tmpdir(),
-      `nyx-snarkjs-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      `darknyx-snarkjs-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     );
   mkdirSync(tmp, { recursive: true });
   const inputPath = join(tmp, "input.json");

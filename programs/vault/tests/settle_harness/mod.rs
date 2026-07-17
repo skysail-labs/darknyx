@@ -295,12 +295,12 @@ impl Harness {
         }
     }
 
-    /// Write a mock oracle account with the `NYXMKPTH` magic + u64 twap at offset 8.
+    /// Write a mock oracle account with the `DNYXMPTH` magic + u64 twap at offset 8.
     pub fn write_mock_oracle(svm: &mut LiteSVM, addr: &Pubkey, twap: u64) {
         use solana_account::Account as SolAccount;
 
         let mut data = vec![0u8; 16];
-        data[0..8].copy_from_slice(b"NYXMKPTH");
+        data[0..8].copy_from_slice(b"DNYXMPTH");
         data[8..16].copy_from_slice(&twap.to_le_bytes());
         let acct = SolAccount {
             lamports: svm.minimum_balance_for_rent_exemption(data.len()),
@@ -1015,7 +1015,7 @@ impl MatchResultPayload {
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    h.update(b"nyx-match-v9");
+    h.update(b"darknyx-match-v10");
     h.update(p.match_id);
     h.update(p.note_a_commitment);
     h.update(p.note_b_commitment);
@@ -1995,7 +1995,7 @@ fn build_valid_deposit_proof(
         r_owner = fr_to_dec(&secret.r_owner),
     );
     let tag: String = commitment[..6].iter().map(|b| format!("{b:02x}")).collect();
-    let tmp = std::env::temp_dir().join(format!("nyx_valid_deposit_{tag}"));
+    let tmp = std::env::temp_dir().join(format!("darknyx_valid_deposit_{tag}"));
     fs::create_dir_all(&tmp).unwrap();
     let input_path = tmp.join("input.json");
     let proof_path = tmp.join("proof.json");
@@ -2121,7 +2121,7 @@ fn build_valid_spend_proof(note: &DepositedNote) -> vault::zk::verifier::Groth16
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let tmp = std::env::temp_dir().join(format!("nyx_ds_poc_{tag}"));
+    let tmp = std::env::temp_dir().join(format!("darknyx_ds_poc_{tag}"));
     fs::create_dir_all(&tmp).unwrap();
     let input_path = tmp.join("input.json");
     let proof_path = tmp.join("proof.json");

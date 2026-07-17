@@ -1,6 +1,6 @@
 # Twice-weekly CVM + devnet end-to-end.
 # (Historical note: the concurrency group `cvm-e2e-nightly`, the repo var
-# `NYX_NIGHTLY_CVM_ID`, and the CVM name `nightly-test-cvm` keep their original
+# `DARKNYX_NIGHTLY_CVM_ID`, and the CVM name `nightly-test-cvm` keep their original
 # "nightly" names — they are stable identifiers, not the cadence.)
 #
 # Runs the REAL settle path against a live Phala CVM on Solana devnet: deposit
@@ -29,8 +29,8 @@
 #
 # ONE-TIME SETUP (out of band — NOT done by this workflow, because signer
 # rotation/funding and mint creation are not things you want to re-run nightly):
-#   1. Provision a dedicated CVM named `nyx-nightly-ci` (phala cvms create …) and
-#      record its app_id → repo variable `NYX_NIGHTLY_CVM_ID` (e.g. app_xxxx).
+#   1. Provision a dedicated CVM named `darknyx-nightly-ci` (phala cvms create …) and
+#      record its app_id → repo variable `DARKNYX_NIGHTLY_CVM_ID` (e.g. app_xxxx).
 #   2. Run devnet-setup ONCE to mint the stable base/quote mints + settle ALT +
 #      protocol config, producing `.devnet/e2e-config.json`. Base64 it into the
 #      secret `DEVNET_E2E_CONFIG_B64`. (Stable mints — the CVM is pinned to them.)
@@ -54,7 +54,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Override the nyx-tee image tag to deploy (default: whatever deploy/docker-compose.yaml pins)"
+        description: "Override the darknyx-tee image tag to deploy (default: whatever deploy/docker-compose.yaml pins)"
         required: false
         type: string
 
@@ -92,11 +92,11 @@ jobs:
     timeout-minutes: 50
     env:
       HELIUS_RPC: "https://devnet.helius-rpc.com/?api-key=${{ secrets.HELIUS_API_KEY }}"
-      CVM: ${{ vars.NYX_NIGHTLY_CVM_ID }}
+      CVM: ${{ vars.DARKNYX_NIGHTLY_CVM_ID }}
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive # nyx-tee icicle-snark path dep (see pr-checks.yml)
+          submodules: recursive # darknyx-tee icicle-snark path dep (see pr-checks.yml)
 
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@1.89.0
@@ -154,7 +154,7 @@ jobs:
 
       - name: Preflight — CVM id + config present
         run: |
-          test -n "$CVM" || { echo "::error::repo variable NYX_NIGHTLY_CVM_ID is unset (one-time setup)"; exit 1; }
+          test -n "$CVM" || { echo "::error::repo variable DARKNYX_NIGHTLY_CVM_ID is unset (one-time setup)"; exit 1; }
           jq -e .baseMint.pubkey .devnet/e2e-config.json > /dev/null
 
       # ── reset the on-chain tree FIRST so the CVM mirror cold-boots empty and
@@ -172,22 +172,22 @@ jobs:
           umask 077
           FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
           {
-            echo "NYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
-            echo "NYX_TEE_SYNC_FROM_SLOT=$FLOOR"
-            echo "NYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
-            echo "NYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
-            echo "NYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
-            echo "NYX_TEE_FEE_RATE_BPS=30"
-            echo "NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
-            echo "NYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
-          } > /tmp/nyx.env
+            echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+            echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
+            echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
+            echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
+            echo "DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
+            echo "DARKNYX_TEE_FEE_RATE_BPS=30"
+            echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
+            echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
+          } > /tmp/darknyx.env
 
       - name: Select the image to deploy (built-from-main, or the dispatch override)
         run: |
           if [ -n "${{ inputs.image_tag }}" ]; then
-            sed -i "s#\(image: ghcr.io/skysail-labs/nyx-tee:\).*#\1${{ inputs.image_tag }}#" deploy/docker-compose.yaml
+            sed -i "s#\(image: ghcr.io/skysail-labs/darknyx-tee:\).*#\1${{ inputs.image_tag }}#" deploy/docker-compose.yaml
           else
-            sed -i "s#image: ghcr.io/skysail-labs/nyx-tee:.*#image: ${{ needs.build-image.outputs.image }}#" deploy/docker-compose.yaml
+            sed -i "s#image: ghcr.io/skysail-labs/darknyx-tee:.*#image: ${{ needs.build-image.outputs.image }}#" deploy/docker-compose.yaml
           fi
           grep -E 'image: ghcr' deploy/docker-compose.yaml
 
@@ -207,14 +207,14 @@ jobs:
             sleep 6
           done
           for d in $(seq 1 6); do
-            OUT=$(phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/nyx.env --wait 2>&1)
+            OUT=$(phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx.env --wait 2>&1)
             echo "$OUT"
             echo "$OUT" | grep -q "already in progress" || break
             echo "deploy busy — retry $d in 20s"; sleep 20
           done
-          shred -u /tmp/nyx.env || rm -f /tmp/nyx.env
+          shred -u /tmp/darknyx.env || rm -f /tmp/darknyx.env
           # The dstack gateway node (prodN) is assigned PER CVM — do NOT hardcode
-          # it (nightly-test-cvm is on prod9, nyx-hardening-3c2 on prod5). Resolve
+          # it (nightly-test-cvm is on prod9, darknyx-hardening-3c2 on prod5). Resolve
           # the app's gateway base_domain and route the 8080 service through the
           # <app_id>-8080.<base_domain> subdomain.
           BASE=$(phala cvms get "$CVM" --json 2>/dev/null | sed -n '/{/,$p' \
@@ -279,7 +279,7 @@ jobs:
       - name: CVM API-surface e2e
         run: |
           cd packages/sdk
-          RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+          RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
             FUNDER_KEYPAIR=.devnet/keypairs/funder.json \
             ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
             ../../node_modules/.bin/vitest run tests/cvm-api-surface.test.ts
@@ -294,12 +294,12 @@ jobs:
       - name: CVM attestation e2e (real DCAP)
         run: |
           cd packages/sdk
-          RUN_CVM_ATTEST=1 NYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+          RUN_CVM_ATTEST=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
             ../../node_modules/.bin/vitest run tests/cvm-attestation-e2e.test.ts
 
       # Each of these asserts startCount==0 then deposits+settles, so they CANNOT
       # share a tree — every one needs its own reset + a CVM-mirror cold-boot (a
-      # redeploy re-reads NYX_TEE_SYNC_FROM_SLOT). So: reset → redeploy → run, per
+      # redeploy re-reads DARKNYX_TEE_SYNC_FROM_SLOT). So: reset → redeploy → run, per
       # test. Signers are unchanged across same-image redeploys, so the earlier
       # rotate+fund still holds (no re-rotate needed).
       - name: CVM tree-consuming e2e (reset + redeploy per test)
@@ -313,28 +313,28 @@ jobs:
             umask 077
             FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
             {
-              echo "NYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
-              echo "NYX_TEE_SYNC_FROM_SLOT=$FLOOR"
-              echo "NYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
-              echo "NYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
-              echo "NYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
-              echo "NYX_TEE_FEE_RATE_BPS=30"
-              echo "NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
-              echo "NYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
-            } > /tmp/nyx.env
+              echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+              echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
+              echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
+              echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
+              echo "DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$(jq -r .settleLookupTable .devnet/e2e-config.json)"
+              echo "DARKNYX_TEE_FEE_RATE_BPS=30"
+              echo "DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)"
+              echo "DARKNYX_TEE_NUM_TREES=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)"
+            } > /tmp/darknyx.env
             for d in $(seq 1 6); do
-              OUT=$(phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/nyx.env --wait 2>&1)
+              OUT=$(phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx.env --wait 2>&1)
               echo "$OUT" | grep -q "already in progress" || break
               echo "deploy busy — retry $d in 20s"; sleep 20
             done
-            rm -f /tmp/nyx.env
+            rm -f /tmp/darknyx.env
             for i in $(seq 1 40); do curl -fsS "$GATEWAY/info" -o /tmp/info.json 2>/dev/null && break; sleep 6; done
           }
           FAILED=""
           for T in cvm-settle-e2e cvm-self-trade cvm-multimatch-settle cvm-merge-then-order; do
             echo "::group::$T"
             redeploy_fresh
-            ( cd packages/sdk && RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
+            ( cd packages/sdk && RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GATEWAY" SOLANA_RPC_URL="$HELIUS_RPC" \
                 FUNDER_KEYPAIR=.devnet/keypairs/funder.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
                 ../../node_modules/.bin/vitest run tests/$T.test.ts ) || FAILED="$FAILED $T"
             echo "::endgroup::"
@@ -351,7 +351,7 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          rm -f /tmp/nyx.env packages/sdk/.env
+          rm -f /tmp/darknyx.env packages/sdk/.env
           if [ -n "$CVM" ]; then
             phala cvms stop "$CVM" || echo "::warning::phala cvms stop failed — VERIFY MANUALLY in the dashboard"
           fi

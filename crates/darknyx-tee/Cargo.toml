@@ -1,0 +1,215 @@
+[package]
+name = "darknyx-tee"
+version.workspace = true
+edition.workspace = true
+description = "In-TEE matching engine for the Darknyx dark pool. Runs as a single-process Rust binary inside an Intel TDX Confidential VM on Phala Cloud / dstack-cloud. Owns the order book, the matching loop, the Groth16 prover, the settle scheduler, the Merkle mirror, and the /tree/* + /transparency indexer surface. See docs/tee-architecture.md for the full design."
+# build.rs only emits link directives when the `rapidsnark` feature is on
+# (otherwise a no-op); default builds (incl. local macOS dev) link nothing new.
+build = "build.rs"
+
+[lib]
+name = "darknyx_tee"
+path = "src/lib.rs"
+
+[[bin]]
+name = "darknyx-tee"
+path = "src/main.rs"
+
+[dependencies]
+# Local crates — always available.
+darkpool-crypto  = { path = "../darkpool-crypto" }
+darkpool-matcher = { path = "../darkpool-matcher" }
+
+# Phase-1 minimum: just what the boot harness in main.rs needs.
+# Add deps below as their owning modules are implemented; keeps the
+# initial compile fast and the dependency graph honest.
+tokio              = { workspace = true }
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# ─── PR 4b — oracle module (Hermes + VAA verify) ─────────────────────
+# reqwest: HTTPS client used to fetch from hermes.pyth.network.
+# Rustls-only TLS (no OpenSSL on the host).
+reqwest    = { workspace = true }
+# serde + serde_json: parse Hermes JSON responses.
+serde      = { workspace = true }
+serde_json = { workspace = true }
+# k256: pure-Rust secp256k1 used for ecrecover when verifying
+# Wormhole guardian signatures over VAA bodies.
+k256       = { workspace = true }
+# sha3: Keccak-256 over VAA bodies (Wormhole signs against keccak256,
+# not SHA-256 — same primitive Ethereum uses).
+sha3       = { workspace = true }
+# sha2: SHA-256 for the /attestation report_data pubkey binding
+# (the right half of the 64-byte report_data is SHA-256(tee_pubkey)).
+sha2       = { workspace = true }
+# thiserror: typed error variants for the oracle error chain.
+thiserror  = { workspace = true }
+# Already used by keys/; the oracle module needs it too for raw byte work.
+# Hex + serde are already pulled in above.
+
+# Borsh — Anchor uses it for ix data + state serialisation. PR 4g.3
+# uses it for `lock_note` ix args (the matcher's MatchPair is also
+# Borsh; coming online in 4g.5 for the settle payload).
+borsh = { workspace = true, features = ["derive"] }
+
+# ─── PR 4d — minimal HTTP surface (/health + /info + /attestation) ──
+# axum for the router + handlers. tower for the standard middleware
+# (we'll add request-id + tracing layers in PR 4e); tower-http for
+# the trace layer that bridges axum into our tracing setup.
+axum              = { workspace = true }
+tower             = { workspace = true }
+tower-http        = { workspace = true }
+http              = "1"
+# Used by integration tests to drive the router without binding a
+# real TCP port; production main.rs just calls axum::serve.
+http-body-util    = "0.1"
+# WS surface comes in PR 4f — keep this commented until then.
+# tokio-tungstenite = { workspace = true }
+
+# ─── PR 4e.2 — Layer A auth (JWT issuance + bearer middleware) ──────
+# HS256 JWT with a 32-byte secret derived from dstack via
+# get_key("darknyx/jwt-secret/v2", "jwt"). v9 of jsonwebtoken dropped
+# ring in favour of RustCrypto primitives — keeps the dep graph
+# aligned with the rest of the crate.
+jsonwebtoken      = { workspace = true }
+# ─── Phase 1a — Argon2id credential hashing + admin registration ────
+# Stored credentials are argon2id PHC hashes, not plaintext. `argon2`
+# provides salted hashing + its own constant-time verify (replacing
+# the plaintext `subtle` compare). The JWT `jti` (for revocation) uses
+# `rand` — already a dependency for the Groth16 prover's blinding RNG.
+argon2            = { workspace = true }
+
+# ─── PR 4g.2 — Solana RPC client + fee-payer derivation ─────────────
+# Modular Solana crates (same set programs/vault uses as dev-deps).
+# Deliberately NOT `solana-client` / `solana-sdk` 1.18 — those
+# conflict with ark-ec 0.5 on zeroize. See workspace Cargo.toml
+# for the full rationale.
+#
+# 4g.2 needs: Pubkey (solana-address), Keypair (solana-keypair),
+# Hash (solana-hash), Signature (solana-signature), Signer trait
+# (solana-signer). 4g.3+ pulls in Instruction / Message / Transaction
+# from the same family.
+solana-address          = { workspace = true }
+solana-hash             = { workspace = true }
+solana-keypair          = { workspace = true }
+solana-signature        = { workspace = true }
+solana-signer           = { workspace = true }
+# PR 4g.3 — ix / message / transaction construction.
+solana-instruction      = { workspace = true }
+solana-message          = { workspace = true }
+solana-transaction      = { workspace = true }
+solana-system-interface = { workspace = true }
+# PR 4g.5c — per-batch ALT create/extend (Tx C).
+solana-address-lookup-table-interface = { workspace = true }
+# The ALT interface uses `solana_pubkey::Pubkey` in its ix builders;
+# we convert at that boundary (alt.rs). Pinned to the same 3.x line.
+solana-pubkey = "3"
+# Base64 encoding for tx wire format (solana RPC's sendTransaction
+# takes base64-encoded tx bytes).
+base64                  = "0.22"
+# bincode — Solana tx serialise format. Needed alongside the
+# `serde` feature on solana-transaction.
+bincode                 = { workspace = true }
+
+# ─── PR 4a — keys + dstack handshake ─────────────────────────────────
+# DstackClient::new() + info() + get_key() + get_quote() — all the
+# Unix-socket calls that boot.rs makes against /var/run/dstack.sock
+# (or DSTACK_SIMULATOR_ENDPOINT in local dev).
+dstack-sdk    = { workspace = true }
+# Ed25519 signing key derivation from the dstack-supplied seed.
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+# Solana base58 encoding for logging the derived pubkey in the
+# canonical wire format (so log inspectors can match against
+# vault_config.tee_pubkey directly).
+bs58          = "0.5"
+hex           = { workspace = true }
+
+# ─── Phase-2+ deps (uncomment when wiring the settle pipeline) ───────
+# Note: solana-client 1.18 conflicts with ark-ec 0.5 on zeroize. When
+# turning the settle pipeline on, either bump to a Solana 2.x client
+# crate that's compatible OR keep prover + settle in separate
+# sub-binaries to avoid pulling both into one Cargo unit.
+# solana-client = { workspace = true }
+# solana-sdk    = { workspace = true }
+
+# ─── PR 4g.4a — in-TEE prover (deterministic foundation) ────────────
+# Reuses `darkpool-crypto`'s Poseidon helpers (already listed at top
+# of this file as `darkpool-crypto`). ark-bn254 + ark-ff cover field
+# arithmetic for leaf/root/constraint computation.
+ark-bn254 = { workspace = true }
+ark-ff    = { workspace = true }
+
+# ─── PR 4g.4b — in-TEE Groth16 prover (real wiring) ─────────────────
+# ark-circom bundles witness gen (wasmer 4.4) + zkey parse +
+# ark-groth16 prove. ark-ec / ark-groth16 / ark-serialize give us
+# the proof type + field-element extraction for the on-chain
+# byte-format converter (groth16-solana layout).
+ark-circom    = { workspace = true }
+ark-groth16   = { workspace = true }
+ark-ec        = { workspace = true }
+ark-serialize = { workspace = true }
+num-bigint    = { workspace = true }
+# Groth16 prove needs an RngCore + CryptoRng source for the
+# proof's blinding factors. rand 0.8 / rand_core 0.6 — same as
+# ark-std expects.
+rand          = { workspace = true }
+
+# ─── ICICLE GPU/CPU Groth16 prover (the `icicle` feature) ───────────
+# Vendored under third_party/icicle-snark (next to the rapidsnark submodule;
+# includes its nested icicle/ C++ tree). Optional — only the `icicle` feature
+# pulls it in, so a default build never triggers its cmake/native build.
+# Consumes our existing snarkjs .zkey + .wtns and emits a snarkjs-format proof
+# (same on-chain byte converter as the rapidsnark path). device="CPU" needs no
+# GPU (Phase 1); device="CUDA" (Phase 2) needs a confidential-GPU TEE + the
+# CUDA backend shipped in the image.
+icicle-snark  = { path = "../../third_party/icicle-snark", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+# Integration tests in tests/orders_surface.rs generate fresh
+# Ed25519 signing keys per test — needs an OsRng feeding into
+# `SigningKey::generate(...)`. Matches the version ed25519-dalek
+# pulls in, so there's no resolution divergence.
+rand = { workspace = true }
+# Phase 1b — persistence tests write snapshots to a throwaway dir.
+tempfile = "3"
+
+[features]
+default = []
+# Links the rapidsnark C++ Groth16 prover (FFI) as an alternative backend to
+# ark-groth16, selectable at runtime via DARKNYX_TEE_PROVER=rapidsnark. The image's
+# amd64 build enables it; local macOS dev can enable it too (rapidsnark builds
+# for macos_arm64). build.rs links prebuilt static libs from $RAPIDSNARK_LIB_DIR
+# — the rapidsnark build itself is a separate step (Docker layer / `make`), NOT
+# part of `cargo build`. Witness gen stays on ark-circom (circom-witness-rs was
+# ruled out by the Step-1 spike); only the PROVE step is rapidsnark.
+rapidsnark = []
+# The ICICLE-backed Groth16 prover (icicle-snark crate), selectable at runtime
+# via DARKNYX_TEE_PROVER=icicle. One backend, CPU or CUDA, chosen at prove time
+# (DARKNYX_TEE_ICICLE_DEVICE=CPU|CUDA, default CPU). CPU needs no GPU — that's the
+# Phase-1 validation path (byte-identical proof, A/B vs rapidsnark-CPU). CUDA
+# (Phase 2) needs a confidential-GPU TEE + the ICICLE CUDA backend in the image.
+# Witness gen stays shared (native circom --c / wasmer); only the PROVE differs.
+# `dep:icicle-snark` keeps the heavy cmake build OUT of default/`rapidsnark` builds.
+icicle = ["dep:icicle-snark"]
+# The ICICLE CUDA backend (Phase 2). Implies `icicle` and builds icicle-snark's
+# CUDA backend (.so loaded at runtime from ICICLE_BACKEND_INSTALL_DIR). Needs the
+# CUDA toolkit at build time (nvcc; no GPU if DARKNYX_ICICLE_CUDA_ARCH is set) and
+# libcudart/libcurand + the backend .so in the runtime image. The Dockerfile's
+# ENABLE_CUDA=1 path builds `--features rapidsnark,icicle-cuda`; default builds
+# never pull it. Runtime device is still chosen by DARKNYX_TEE_ICICLE_DEVICE=CUDA.
+icicle-cuda = ["icicle", "icicle-snark/cuda"]
+# Mounts `POST /__debug/oracle/seed`, used by `darknyx-tee-loadgen`
+# for deterministic local-simulator runs (no real Hermes traffic
+# required). MUST be off in any production build — there's no
+# auth on this route, so a feature-on production deploy would
+# let anyone overwrite the matcher's price view. CI guards
+# against this with `cargo build -p darknyx-tee` (default features
+# only); the loadgen smoke test builds with
+# `--features debug_endpoints` explicitly.
+debug_endpoints = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn" }

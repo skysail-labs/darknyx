@@ -4,7 +4,7 @@
  * Amount-privacy (P3b): the indexer is a COMMITMENT LOCATOR (no amounts), so
  * `backfillHistory` locates exact and partial fills (input/output commitments,
  * ciphertext, and finalized Solana slot) but does not reconstruct openings by
- * itself. Recovery v2 or the low-latency WS `FillMemo` verifies outputs against
+ * itself. Recovery v3 or the low-latency WS `FillMemo` verifies outputs against
  * the named consumed input in the commitment-keyed NoteStore.
  */
 
@@ -162,7 +162,7 @@ describe("backfill then tail", () => {
     });
 
     // Locator only: the fill + its commitments are found, but no opening is
-    // reconstructed until the recovery-v2 ciphertext is decrypted.
+    // reconstructed until the recovery-v3 ciphertext is decrypted.
     expect(res.located).toHaveLength(1);
     expect(res.located[0].changeNoteCommitment).toBe(commitment);
     expect(res.located[0].orderId).toBe(orderId);

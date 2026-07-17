@@ -127,7 +127,7 @@ export function merkleTreePda(
 
 /**
  * The addresses the STATIC settle ALT must hold, in order — mirrors the Rust
- * `nyx_tee::settle::settle_batched::static_alt_addresses(num_trees)`:
+ * `darknyx_tee::settle::settle_batched::static_alt_addresses(num_trees)`:
  * `[vault_config, instructions_sysvar, system_program, merkle_tree(0..K-1)]`.
  * Used by `devnet-setup` to build the ALT the CVM settle worker references.
  */

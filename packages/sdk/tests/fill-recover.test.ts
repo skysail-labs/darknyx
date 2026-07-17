@@ -134,7 +134,7 @@ const params = (candidateInputs: StoredNote[]) => ({
   quoteMint: QUOTE_MINT,
 });
 
-describe("recoverFillFromChain recovery v2", () => {
+describe("recoverFillFromChain recovery v3", () => {
   it("recovers buyer and seller trade + change outputs", async () => {
     for (const side of ["buyer", "seller"] as const) {
       const input = await inputNote(side);

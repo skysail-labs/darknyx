@@ -20,7 +20,7 @@
  */
 
 import { PublicKey } from "@solana/web3.js";
-import type { MergeParams, MergeReceipt, StoredNote } from "@nyx/sdk";
+import type { MergeParams, MergeReceipt, StoredNote } from "@darknyx/sdk";
 
 import type { MergeRunner } from "./action-executor.js";
 import type { DaemonStore } from "./store.js";

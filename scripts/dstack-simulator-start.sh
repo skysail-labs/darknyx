@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Start the dstack simulator for local nyx-tee development.
+# Start the dstack simulator for local darknyx-tee development.
 #
 # The simulator exposes the same Unix-socket interface (`/var/run/
 # dstack.sock` shape) that real TDX hardware exposes inside a Phala
-# Cloud CVM. With it running, `cargo run -p nyx-tee` against
+# Cloud CVM. With it running, `cargo run -p darknyx-tee` against
 # DSTACK_SIMULATOR_ENDPOINT behaves byte-equivalent to running
 # inside a real CVM — getKey() returns deterministic bytes,
 # getQuote() returns a stub-but-well-formed quote, info() returns

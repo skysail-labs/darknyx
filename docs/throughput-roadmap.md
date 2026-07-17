@@ -22,7 +22,7 @@ the prerequisite work, and where the inline analysis lives.
 
 ## Cost model this roadmap is reasoned against
 
-From `crates/nyx-tee-loadgen/BENCHMARK.md` (rapidsnark-CPU, 8 vCPU, full N=16 batch):
+From `crates/darknyx-tee-loadgen/BENCHMARK.md` (rapidsnark-CPU, 8 vCPU, full N=16 batch):
 
 | Term | ms | Nature | Killed by |
 |---|--:|---|---|
@@ -41,7 +41,7 @@ a ~17 s serial pipeline slot dominated by `settle_ms` IO.
 ## Backlog
 
 ### 1. Raise `SETTLE_CONCURRENCY` > 1 — pipeline batches concurrently
-**Gate: 🟢 GPU.** Today it is hard-pinned to `1` (`crates/nyx-tee/src/settle/scheduler.rs:30-60`).
+**Gate: 🟢 GPU.** Today it is hard-pinned to `1` (`crates/darknyx-tee/src/settle/scheduler.rs:30-60`).
 On CPU, ark/rapidsnark already saturate all cores on a *single* prove, so concurrent batch proves just
 contend — no gain, and `>1` is what corrupted the shared ALT in a live loadgen run (2026-06-17). Once
 GPU drops each prove to ~tens of ms, the bottleneck shifts to settle round-trips and overlapping batch

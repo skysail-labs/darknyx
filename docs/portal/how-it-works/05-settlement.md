@@ -1,7 +1,7 @@
 ---
 sidebar_position: 5
 title: Settlement
-description: How private matches become final on Solana, what the proof guarantees, and how Nyx handles partial or ambiguous outcomes.
+description: How private matches become final on Solana, what the proof guarantees, and how Darknyx handles partial or ambiguous outcomes.
 ---
 
 # Settlement
@@ -51,14 +51,14 @@ verify one batch proof on-chain
 
 ## Outcomes and order state
 
-Nyx distinguishes uncertainty from failure:
+Darknyx distinguishes uncertainty from failure:
 
-- **Confirmed.** Solana confirmed the settlement. Only now does Nyx decrement
+- **Confirmed.** Solana confirmed the settlement. Only now does Darknyx decrement
   order quantities and publish the fill and recovery data.
 - **Ambiguous.** The RPC result is inconclusive. The orders remain
   `pending_settlement`; the engine reconciles transaction signatures and
   consumed-note accounts, and may safely redrive while the marker is valid.
-- **Rejected.** Chain state proves the match cannot settle. Nyx emits
+- **Rejected.** Chain state proves the match cannot settle. Darknyx emits
   `settlement_failed` with a reason and lock-expiry slot. It does not silently
   put the old signed order back on the book.
 

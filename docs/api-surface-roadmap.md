@@ -1,7 +1,7 @@
 # Public API surface — roadmap & competitive analysis
 
 > Scope: the **public** endpoints the CVM serves traders — the HTTP/WS surface in
-> `crates/nyx-tee/src/api/` and the order model in `crates/darkpool-matcher/`. This
+> `crates/darknyx-tee/src/api/` and the order model in `crates/darkpool-matcher/`. This
 > doc compares us against a representative competitor (**GoDark**, `godarkdex_docs_md/`),
 > records what to add (and what *not* to), and is the reference the implementation
 > phases execute against. See also `docs/tee-api-openapi.yaml` (the wire contract) and
@@ -9,9 +9,9 @@
 
 ## 0. The framing that decides everything
 
-GoDark and Nyx are both "Solana dark pools," but they are **different products**:
+GoDark and Darknyx are both "Solana dark pools," but they are **different products**:
 
-| | **GoDark** | **Nyx** |
+| | **GoDark** | **Darknyx** |
 |---|---|---|
 | Instrument | **Perpetual futures** (positions, leverage 5–10×, funding, liquidation) | **Spot** |
 | Settlement | Encrypted commitments + margin accounting | **ZK notes (UTXO)** — every order is collateralized by *one deposited note*, locked with a `VALID_INPUT` proof |
@@ -23,12 +23,12 @@ Two facts flow from this and gate the whole roadmap:
 1. **Perp primitives (positions / margin / funding / TP-SL / liquidation) are N/A** — not
    gaps, a different product.
 2. **Note-collateral is the real constraint.** In GoDark a resting quote is just memory in
-   the MPC book — an MM reprices for free. In Nyx, *every resting order pins a locked note +
+   the MPC book — an MM reprices for free. In Darknyx, *every resting order pins a locked note +
    a 256-byte proof.* This single fact decides how far we can chase market-maker features.
 
 ## 1. HTTP endpoints
 
-| Capability | GoDark | Nyx (today) | Action |
+| Capability | GoDark | Darknyx (today) | Action |
 |---|---|---|---|
 | Auth (bearer) | `POST /auth/token`, `/revoke` | ✅ | — |
 | Place / Cancel / Get order | ✅ | ✅ `POST /orders`, `DELETE`/`GET /orders/:id` | — |
@@ -43,7 +43,7 @@ Two facts flow from this and gate the whole roadmap:
 
 ## 2. WebSocket
 
-| Channel | GoDark | Nyx (today) | Action |
+| Channel | GoDark | Darknyx (today) | Action |
 |---|---|---|---|
 | **Order lifecycle** | `/ws/orders` | ✅ `/v1/stream` `orders` channel | **✅ done (Tier 1, A1)** |
 | **Order submission** | `/ws/trading` (`place/cancel/modify`) | ✅ `/v1/stream` framed ops + cancel-on-disconnect | **✅ done (Phase B)** |
@@ -58,7 +58,7 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
 
 ## 3. Order types & execution attributes
 
-| Feature | GoDark | Nyx | Action |
+| Feature | GoDark | Darknyx | Action |
 |---|---|---|---|
 | Limit / IOC / FOK | ✅ | ✅ `OrderType::{Limit, Ioc, Fok}` | — |
 | GTC | ✅ | ✅ (Limit rests) | — |
@@ -81,7 +81,7 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
    that don't hold.
 2. **Resting liquidity costs collateral.** Their MMs reprice for free; ours pin a note per
    quote. Everything MM-facing (mass-quote, dense ladders, fast modify) hits this. Without a
-   *multi-quote-per-note* primitive, Nyx suits taker flow + periodic-auction / RFQ-style
+   *multi-quote-per-note* primitive, Darknyx suits taker flow + periodic-auction / RFQ-style
    making better than dense continuous quoting.
 
 ## 5. Explicitly shelved (with rationale)

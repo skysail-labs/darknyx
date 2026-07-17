@@ -1,7 +1,7 @@
-# Nyx Darkpool — developer command cheat sheet (TEE architecture)
+# Darknyx Darkpool — developer command cheat sheet (TEE architecture)
 
 > **What this covers.** Matching and settlement run **inside a TDX CVM**
-> (`crates/nyx-tee/`) on Phala Cloud, driving the on-chain `vault` program
+> (`crates/darknyx-tee/`) on Phala Cloud, driving the on-chain `vault` program
 > (the only on-chain program) over real devnet. There is no legacy
 > matching_engine / Ephemeral-Rollup path anymore.
 
@@ -25,7 +25,7 @@ cd /path/to/repo/root
 >    `node scripts/reset-merkle-tree.mjs` (§4.5 / §9.2), then redeploy the BPF
 >    (the circuits + `vk_*.rs` changed — `cargo build-sbf` + `deploy-devnet.sh`).
 > 2. **The `POST /orders` body changed.** `note_nonce` + `note_blinding` became
->    `note_inner_hash`; canonical order v2 (`nyx-order-v3` domain) removes
+>    `note_inner_hash`; canonical order v2 (`darknyx-order-v4` domain) removes
 >    `anchors`, requires a signed contributory X25519 `viewing_pubkey`, and
 >    requires the signed 32-byte `/info.boot_session_id`. After exact-body
 >    idempotency, `arrival_nonce` must strictly increase per trading key. The
@@ -35,7 +35,7 @@ cd /path/to/repo/root
 > **⚠️ tree-sharding (settle-throughput scaling) — read before any K>1 run.**
 > The Merkle-tree STATE was split out of `VaultConfig` into **K per-shard
 > `MerkleTree` accounts** (PDA `[b"merkle_tree", &[tree_id]]`). The settle worker
-> derives **K fee-payer keys** (`nyx/ed25519-signer/v1/{0..K-1}`) and
+> derives **K fee-payer keys** (`darknyx/ed25519-signer/v2/{0..K-1}`) and
 > round-robins each match across `(key[j], merkle_tree[j])` so the concurrent
 > settle Tx D's share no writable account → the leader co-includes them in one
 > block (8-match → 1 slot, vs the single-tree ~3/slot plateau). Operational
@@ -53,7 +53,7 @@ cd /path/to/repo/root
 >    A program upgrade leaves the old-layout PDA in place (wrong size → every ix
 >    fails `ConstraintSeeds`, and `initialize`'s `init` can't recreate it). Run
 >    `node scripts/close-vault-config.mjs` once, then `devnet-setup` rebuilds it.
-> 4. **Config is `NYX_TEE_NUM_TREES` (CVM) / `NYX_NUM_TREES` (devnet-setup),
+> 4. **Config is `DARKNYX_TEE_NUM_TREES` (CVM) / `DARKNYX_NUM_TREES` (devnet-setup),
 >    default 1.** Keep it at 1 for a single-shard run; set both to the same K
 >    (e.g. 4) for the sharded path. New scripts: `fund-tee-keys.mjs` (fund the K
 >    signers), `close-vault-config.mjs`; `reset-merkle-tree.mjs` takes
@@ -131,31 +131,31 @@ cargo test -p vault --test set_protocol_config
 cargo test -p vault canonical_payload_hash_fixed_vector
 ```
 
-### 1.2 `nyx-tee` (the in-TEE binary)
+### 1.2 `darknyx-tee` (the in-TEE binary)
 
 The TEE crate has the densest unit + integration coverage — matcher tick,
 order intake, settle assembler/worker, ALT pool, Merkle mirror, the HTTP
 surface, the RPC client, auth.
 
 ```sh
-cargo test -p nyx-tee --lib                       # ~180 unit tests (fast)
+cargo test -p darknyx-tee --lib                       # ~180 unit tests (fast)
 
 # Focused module runs
-cargo test -p nyx-tee --lib settle::              # settle worker + ALT pool + assemble + pipeline
-cargo test -p nyx-tee --lib merkle::              # mirror (O(depth) inclusion proof) + sync + events
-cargo test -p nyx-tee --lib api::auth             # argon2 + JWT + revocation + admin-gate
-cargo test -p nyx-tee --lib matcher::             # book + interval + openings
+cargo test -p darknyx-tee --lib settle::              # settle worker + ALT pool + assemble + pipeline
+cargo test -p darknyx-tee --lib merkle::              # mirror (O(depth) inclusion proof) + sync + events
+cargo test -p darknyx-tee --lib api::auth             # argon2 + JWT + revocation + admin-gate
+cargo test -p darknyx-tee --lib matcher::             # book + interval + openings
 
-# Integration tests (crates/nyx-tee/tests/, each boots the axum surface or
+# Integration tests (crates/darknyx-tee/tests/, each boots the axum surface or
 # a mock RPC; no devnet)
-cargo test -p nyx-tee --test http_surface         # /health /info /auth/* end-to-end
-cargo test -p nyx-tee --test orders_surface       # POST /orders intake (opening verify, fee-incl collateral)
-cargo test -p nyx-tee --test tree_surface         # /tree/root|inclusion|leaves
-cargo test -p nyx-tee --test transparency_surface # /transparency reserves + stale flag
-cargo test -p nyx-tee --test settle_status        # /settlement/status
-cargo test -p nyx-tee --test n16_assemble_prove_verify   # N=16 assemble → prove → verify (slow)
-cargo test -p nyx-tee --test matcher_tick         # single-order matcher smoke
-cargo test -p nyx-tee --test solana_rpc           # RPC client envelope parsing (incl null-result)
+cargo test -p darknyx-tee --test http_surface         # /health /info /auth/* end-to-end
+cargo test -p darknyx-tee --test orders_surface       # POST /orders intake (opening verify, fee-incl collateral)
+cargo test -p darknyx-tee --test tree_surface         # /tree/root|inclusion|leaves
+cargo test -p darknyx-tee --test transparency_surface # /transparency reserves + stale flag
+cargo test -p darknyx-tee --test settle_status        # /settlement/status
+cargo test -p darknyx-tee --test n16_assemble_prove_verify   # N=16 assemble → prove → verify (slow)
+cargo test -p darknyx-tee --test matcher_tick         # single-order matcher smoke
+cargo test -p darknyx-tee --test solana_rpc           # RPC client envelope parsing (incl null-result)
 ```
 
 ### 1.3 SDK (TypeScript)
@@ -179,11 +179,11 @@ The `RUN_*`-gated tests (`devnet-setup`, `devnet-deposit-withdraw`,
 `cvm-settle-e2e`) auto-skip without their env var. They're the devnet /
 CVM flows in §6–§8.
 
-### 1.4 Loadgen (`nyx-tee-loadgen`)
+### 1.4 Loadgen (`darknyx-tee-loadgen`)
 
 ```sh
-cargo test -p nyx-tee-loadgen                     # smoke.rs: in-process TEE + matcher, fee-free
-cargo build -p nyx-tee-loadgen --release          # the binary you run against a CVM (§7)
+cargo test -p darknyx-tee-loadgen                     # smoke.rs: in-process TEE + matcher, fee-free
+cargo build -p darknyx-tee-loadgen --release          # the binary you run against a CVM (§7)
 ```
 
 ### 1.5 Lint / format
@@ -207,14 +207,14 @@ cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admi
 cargo build --examples -p darkpool-crypto
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo test -p nyx-tee                                     # lib + integration (separate workspace member)
+cargo test -p darknyx-tee                                     # lib + integration (separate workspace member)
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit
 ( cd packages/sdk && ../../node_modules/.bin/vitest run )
 echo "ALL GREEN — safe to push"
 ```
 
 > **Deletion audit.** If you delete a file under `programs/*/tests/`,
-> `circuits/`, `crates/nyx-tee/**`, or `packages/sdk/tests/helpers/`, grep
+> `circuits/`, `crates/darknyx-tee/**`, or `packages/sdk/tests/helpers/`, grep
 > `.github/workflows/*.yml` + `scripts/*.sh` for the basename before
 > pushing — `cargo test --workspace` won't catch a stale `--test <name>`
 > reference, but CI's per-job `cargo test --test <name>` will.
@@ -305,7 +305,7 @@ settle ALT** (`[vault_config, sysvar, system, merkle_tree(0..K-1)]` — the
 ```sh
 SOLANA_RPC_URL="$HELIUS" \
 RUN_DEVNET_E2E=1 \
-  NYX_NUM_TREES=4 \                                # shard count (default 1); must equal the CVM's NYX_TEE_NUM_TREES
+  DARKNYX_NUM_TREES=4 \                                # shard count (default 1); must equal the CVM's DARKNYX_TEE_NUM_TREES
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   TEE_AUTHORITY_KEYPAIR=.devnet/keypairs/tee_authority.json \
   ROOT_KEY_KEYPAIR=.devnet/keypairs/root_key.json \
@@ -343,8 +343,8 @@ The mints live in `.devnet/e2e-config.json` (`baseMint.pubkey` /
 
 1. Re-run `devnet-setup.test.ts` (§4.4) — it mints a **fresh pair** and
    rewrites `e2e-config.json` + a new settle ALT.
-2. Re-deploy the CVM with the new mints (§5.3) — the `NYX_TEE_BASE_MINT` /
-   `NYX_TEE_QUOTE_MINT` env values must equal the on-chain mints the
+2. Re-deploy the CVM with the new mints (§5.3) — the `DARKNYX_TEE_BASE_MINT` /
+   `DARKNYX_TEE_QUOTE_MINT` env values must equal the on-chain mints the
    deposited notes use, or **intake rejects every order** on a mint
    mismatch (the commitment is re-derived with the configured mint).
 
@@ -354,14 +354,14 @@ There are two mint regimes:
 - **Placeholder dev mints** (`base[31]=0xb1` / `quote[31]=0x9e`, the
   `dev_match_config` defaults) → the **loadgen** (§7), whose synthetic
   orders hardcode those. You select the placeholder regime by simply
-  **omitting** `NYX_TEE_BASE_MINT`/`NYX_TEE_QUOTE_MINT` from the deploy
+  **omitting** `DARKNYX_TEE_BASE_MINT`/`DARKNYX_TEE_QUOTE_MINT` from the deploy
   env (empty `${VAR}` → config default).
 
 ---
 
 ## 5. The CVM (Phala TEE) — build image, deploy, env, signer
 
-The CVM runs the `nyx-tee` binary: matcher, prover, settle scheduler,
+The CVM runs the `darknyx-tee` binary: matcher, prover, settle scheduler,
 Merkle-sync indexer, and the HTTP/auth surface. One long-lived dev CVM is
 reused across sessions; stop it (don't delete) between sessions to preserve
 its app_id (→ deterministic signer) and stop billing.
@@ -370,21 +370,21 @@ its app_id (→ deterministic signer) and stop billing.
 
 The image is built by the `tee-image` GitHub workflow, triggered by pushing
 a `tee-v3-hardening-N` **git tag**. It builds linux/amd64 and pushes to
-`ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-N` with a **registry-backed
+`ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-N` with a **registry-backed
 layer cache** (`:buildcache`), so a fresh tag builds in ~4–5 min.
 
 ```sh
 # 1. Bump the image tag the compose pins:
-#    deploy/docker-compose.yaml  →  image: ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-<N>
+#    deploy/docker-compose.yaml  →  image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-<N>
 # 2. Commit, then tag + push to trigger the build:
 git tag tee-v3-hardening-<N> && git push origin tee-v3-hardening-<N>
 # 3. Watch it (repo: skysail-labs/darknyx):
 gh run watch "$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status
 # 4. Confirm it landed in ghcr:
-TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/nyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/darknyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" \
   -H "Accept: application/vnd.oci.image.index.v1+json" \
-  "https://ghcr.io/v2/skysail-labs/nyx-tee/manifests/tee-v3-hardening-<N>"   # want 200
+  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N>"   # want 200
 ```
 
 > **Always bump the tag** for a code change. `phala deploy --cvm-id` WITH a
@@ -398,7 +398,7 @@ phala cvms list                                   # find the CVM id + app id
 CVM=34fbcace-899b-4fa0-a008-d257f80d6592           # the dev CVM (example)
 
 phala cvms start "$CVM"                            # resume a stopped CVM
-phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/nyx.env   # update (re-pull on tag bump)
+phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx.env   # update (re-pull on tag bump)
 phala cvms stop  "$CVM"                            # stop (preserves app_id/signer/volume; stops billing)
 phala cvms logs  "$CVM" 2>&1 | tail -40            # logs
 phala cvms get   "$CVM"                            # status / app id
@@ -427,36 +427,36 @@ QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
 OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 FLOOR=$(solana slot --url "$HELIUS")              # cold-boot floor (so the sync rebuilds the CURRENT tree)
-cat > /tmp/nyx.env <<EOF
-NYX_TEE_SOLANA_RPC_URL=$HELIUS
-NYX_TEE_SYNC_FROM_SLOT=$FLOOR
-NYX_TEE_BASE_MINT=$BASE
-NYX_TEE_QUOTE_MINT=$QUOTE
-NYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
-NYX_TEE_FEE_RATE_BPS=30
-NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
-NYX_TEE_NUM_TREES=4                              # shard count; MUST equal e2e-config numTrees (1 = single-shard)
-NYX_TEE_SETTLE_SEND_CONCURRENCY=16               # concurrent settle Tx D's (co-inclusion lever)
-NYX_TEE_PROVER=ark                               # ark (default) | rapidsnark (both ship in the image)
+cat > /tmp/darknyx.env <<EOF
+DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
+DARKNYX_TEE_BASE_MINT=$BASE
+DARKNYX_TEE_QUOTE_MINT=$QUOTE
+DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
+DARKNYX_TEE_FEE_RATE_BPS=30
+DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
+DARKNYX_TEE_NUM_TREES=4                              # shard count; MUST equal e2e-config numTrees (1 = single-shard)
+DARKNYX_TEE_SETTLE_SEND_CONCURRENCY=16               # concurrent settle Tx D's (co-inclusion lever)
+DARKNYX_TEE_PROVER=ark                               # ark (default) | rapidsnark (both ship in the image)
 EOF
 # ... deploy ... then:
-shred -u /tmp/nyx.env
+shred -u /tmp/darknyx.env
 ```
 
-Every CVM env var (`crates/nyx-tee/src/config.rs`):
+Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 
 | Var | Used by | Notes |
 |---|---|---|
-| `NYX_TEE_SOLANA_RPC_URL` | Merkle sync + settle txs | **Helius** (public devnet 429s). Empty → public devnet default. |
-| `NYX_TEE_SYNC_FROM_SLOT` | Merkle cold-boot floor | Set to the current slot (or a reset slot) so the mirror rebuilds the live tree, not pre-reset leaves. |
-| `NYX_TEE_BASE_MINT` / `_QUOTE_MINT` | order intake | base58. **Omit → placeholder dev mints** (loadgen regime). Real e2e settle MUST set the `e2e-config` mints. |
-| `NYX_TEE_SETTLE_LOOKUP_TABLE` | settle worker | the `settleLookupTable` ALT. Without it the settle v0 tx exceeds 1232 B. |
-| `NYX_TEE_FEE_RATE_BPS` | matcher | default 30. Empty → 30. 0 = fees off. Charged on BOTH legs → 2 fee notes. |
-| `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` | matcher fee notes | 32-byte hex. Owner the fee notes mint to. Fees-on **without** it → a startup WARN (fees unclaimable). |
-| `NYX_TEE_NUM_TREES` | settle worker + K mirrors | shard count (1..=16, default 1). MUST equal the on-chain `num_trees` (`e2e-config.numTrees`). K>1 derives K fee-payer keys + K mirrors. |
-| `NYX_TEE_SETTLE_SEND_CONCURRENCY` | settle worker | max settle Tx D's (+ lock txs + ALT extends) fired CONCURRENTLY (default 16). Lets the leader co-include them in one block. |
-| `NYX_TEE_PROVER` | prover | `ark` (default) \| `rapidsnark`. The image ships both (`--features rapidsnark`); flip to A/B prove on the SAME image (no rebuild). |
-| `NYX_TEE_FEED_IDS` | oracle | Pyth Hermes SOL/USD id (set literally in the compose). |
+| `DARKNYX_TEE_SOLANA_RPC_URL` | Merkle sync + settle txs | **Helius** (public devnet 429s). Empty → public devnet default. |
+| `DARKNYX_TEE_SYNC_FROM_SLOT` | Merkle cold-boot floor | Set to the current slot (or a reset slot) so the mirror rebuilds the live tree, not pre-reset leaves. |
+| `DARKNYX_TEE_BASE_MINT` / `_QUOTE_MINT` | order intake | base58. **Omit → placeholder dev mints** (loadgen regime). Real e2e settle MUST set the `e2e-config` mints. |
+| `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` | settle worker | the `settleLookupTable` ALT. Without it the settle v0 tx exceeds 1232 B. |
+| `DARKNYX_TEE_FEE_RATE_BPS` | matcher | default 30. Empty → 30. 0 = fees off. Charged on BOTH legs → 2 fee notes. |
+| `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` | matcher fee notes | 32-byte hex. Owner the fee notes mint to. Fees-on **without** it → a startup WARN (fees unclaimable). |
+| `DARKNYX_TEE_NUM_TREES` | settle worker + K mirrors | shard count (1..=16, default 1). MUST equal the on-chain `num_trees` (`e2e-config.numTrees`). K>1 derives K fee-payer keys + K mirrors. |
+| `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` | settle worker | max settle Tx D's (+ lock txs + ALT extends) fired CONCURRENTLY (default 16). Lets the leader co-include them in one block. |
+| `DARKNYX_TEE_PROVER` | prover | `ark` (default) \| `rapidsnark`. The image ships both (`--features rapidsnark`); flip to A/B prove on the SAME image (no rebuild). |
+| `DARKNYX_TEE_FEED_IDS` | oracle | Pyth Hermes SOL/USD id (set literally in the compose). |
 
 A **malformed** (non-empty) value now **fails startup** (config fail-fast);
 an **empty** `${VAR}` falls back to the default.
@@ -470,7 +470,7 @@ Signers are deterministic per app_id → survives stop/start; redo only for a
 brand-new app_id (or a new K).
 
 With **K=1** (single shard) the CVM derives one signer; with **K>1** it derives
-K (`nyx/ed25519-signer/v1/{0..K-1}`), logged at boot as
+K (`darknyx/ed25519-signer/v2/{0..K-1}`), logged at boot as
 `derived K-shard TEE signer set … shard_pubkeys=[…]` (also `GET /info`).
 
 ```sh
@@ -516,9 +516,9 @@ SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json node scripts/
 **Run:**
 
 ```sh
-RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" \
+RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" \
   SOLANA_RPC_URL="$HELIUS" \
-  NYX_CVM_SETTLE_TIMEOUT_MS=150000 \
+  DARKNYX_CVM_SETTLE_TIMEOUT_MS=150000 \
   FUNDER_KEYPAIR="$HOME/.config/solana/id.json" \
   ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts'
@@ -529,10 +529,10 @@ RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" \
 price improvement), and **both fee notes** (`note_fee_base` +
 `note_fee_quote`). CVM logs show `settle: batch settled; openings evicted`.
 
-**Knobs:** `NYX_CVM_BASE_QTY` (per-run-unique trade size — defaults to
+**Knobs:** `DARKNYX_CVM_BASE_QTY` (per-run-unique trade size — defaults to
 `Date.now()%900000+1000` so re-runs don't collide on a NoteLock PDA),
-`NYX_CVM_PRICE` (override the Hermes anchor), `NYX_CVM_FEE_RATE_BPS` (must
-match the CVM's `NYX_TEE_FEE_RATE_BPS`), `NYX_CVM_SETTLE_TIMEOUT_MS`.
+`DARKNYX_CVM_PRICE` (override the Hermes anchor), `DARKNYX_CVM_FEE_RATE_BPS` (must
+match the CVM's `DARKNYX_TEE_FEE_RATE_BPS`), `DARKNYX_CVM_SETTLE_TIMEOUT_MS`.
 
 **Confirm on-chain afterwards** (post-sharding `leaf_count` is a u64 at offset
 **8** of each `MerkleTree[tree_id]` account — NOT `vault_config`; deposits go to
@@ -542,7 +542,7 @@ shard 0, settle outputs round-robin so sum across shards for the pool total):
 node -e 'import("@solana/web3.js").then(async ({Connection,PublicKey})=>{const c=new Connection(process.env.SOLANA_RPC_URL,"confirmed");const P=new PublicKey("C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx");const[t0]=PublicKey.findProgramAddressSync([Buffer.from("merkle_tree"),Buffer.from([0])],P);const i=await c.getAccountInfo(t0);console.log("shard0 leaf_count",new DataView(i.data.buffer,i.data.byteOffset+8,8).getBigUint64(0,true))})'
 ```
 
-**Teardown:** `phala cvms stop "$CVM"` + `shred -u /tmp/nyx.env`.
+**Teardown:** `phala cvms stop "$CVM"` + `shred -u /tmp/darknyx.env`.
 
 ### 6.2 Multi-match settle profiler — `cvm-multimatch-settle.test.ts`
 
@@ -554,7 +554,7 @@ single-tree ~2.67×). Same real-mint regime as §6.
 
 ```sh
 # Reset all shards first (the test asserts trees start empty), then:
-RUN_CVM_E2E=1 NYX_CVM_MATCHES=16 NYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+RUN_CVM_E2E=1 DARKNYX_CVM_MATCHES=16 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
   FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-multimatch-settle.test.ts'
 
@@ -569,7 +569,7 @@ phala cvms logs "$CVM" | grep -E "settle co-inclusion|settle pipeline timing"
 The same settle that mints `note_e` (above) is a **continuation fill**: the CVM
 emits a `FillMemo` over `/v1/stream`'s `fills` channel (live) and the on-chain settle tx carries
 the change note's `order_id` + amount + commitment (durable). `cvm-settle-e2e`
-asserts BOTH automatically when `NYX_INDEXER_URL` is set — order ids are
+asserts BOTH automatically when `DARKNYX_INDEXER_URL` is set — order ids are
 deterministic (`deriveOrderId`), so the test queries the indexer by the exact id
 it used and matches the WS memo to it. The indexer runs **locally**, reads the
 same devnet RPC, and the CVM never talks to it.
@@ -581,21 +581,21 @@ INDEXER_RPC_URL="$HELIUS" scripts/run-indexer-local.sh    # serves :8090 — GET
 # 2. Run cvm-settle-e2e with fills mode on. It mints note_e → asserts the buyer's
 #    change note over (a) the indexer GET /fills and (b) the live per-account WS,
 #    and reconstructs the spendable opening from the seed (the integrity check).
-RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" NYX_INDEXER_URL="http://127.0.0.1:8090" \
-  SOLANA_RPC_URL="$HELIUS" NYX_CVM_SETTLE_TIMEOUT_MS=150000 \
+RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" DARKNYX_INDEXER_URL="http://127.0.0.1:8090" \
+  SOLANA_RPC_URL="$HELIUS" DARKNYX_CVM_SETTLE_TIMEOUT_MS=150000 \
   FUNDER_KEYPAIR="$HOME/.config/solana/id.json" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
   bash -c 'cd packages/sdk && ../../node_modules/.bin/vitest run tests/cvm-settle-e2e.test.ts'
 ```
 
 > **The WS half needs a CVM built from the fills commit** (per-account `fills` channel,
 > un-gated). The **indexer half works against any deployed CVM** — it only reads the
-> chain. Without `NYX_INDEXER_URL` the test runs exactly as before (settle only).
+> chain. Without `DARKNYX_INDEXER_URL` the test runs exactly as before (settle only).
 > In the SDK the equivalent client one-liner is `startFillsSync({ indexerBaseUrl,
 > gatewayWsUrl, token, masterSeed, ownerCommitment, baseMint, quoteMint, store })`
 > (`packages/sdk/src/fills/`) — backfill history from the indexer, then tail the WS,
 > deduping by commitment.
 
-**Over-collateralization scenario:** add `NYX_CVM_BUYER_SURPLUS=<quote units>` to
+**Over-collateralization scenario:** add `DARKNYX_CVM_BUYER_SURPLUS=<quote units>` to
 deposit a buyer note larger than the order needs. The order auto-declares its
 `collateral_amount`, intake accepts `note ≥ required`, and the test asserts the
 indexer change-note's `changeAmount ≥ the surplus` (the surplus came back). Default
@@ -605,24 +605,24 @@ indexer change-note's `changeAmount ≥ the surplus` (the surplus came back). De
 
 ## 7. Devnet E2E #2 — loadgen against a CVM
 
-`crates/nyx-tee-loadgen/` is a host binary that hammers the CVM's
+`crates/darknyx-tee-loadgen/` is a host binary that hammers the CVM's
 `POST /orders` with cryptographically-valid synthetic orders. It validates
 **intake throughput + matcher behaviour** (NOT settle finality — synthetic
 orders carry no real VALID_INPUT proof, so their settles fail gracefully at
 `lock_note`; that's by design).
 
 **Prereqs:** deploy the CVM with the **placeholder dev mints** (omit
-`NYX_TEE_BASE_MINT`/`_QUOTE_MINT` from `-e`) + `NYX_TEE_FEE_RATE_BPS=30` +
+`DARKNYX_TEE_BASE_MINT`/`_QUOTE_MINT` from `-e`) + `DARKNYX_TEE_FEE_RATE_BPS=30` +
 Helius:
 
 ```sh
 umask 077
-cat > /tmp/nyx-lg.env <<EOF
-NYX_TEE_SOLANA_RPC_URL=$HELIUS
-NYX_TEE_SYNC_FROM_SLOT=$(solana slot --url "$HELIUS")
-NYX_TEE_FEE_RATE_BPS=30
+cat > /tmp/darknyx-lg.env <<EOF
+DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_SYNC_FROM_SLOT=$(solana slot --url "$HELIUS")
+DARKNYX_TEE_FEE_RATE_BPS=30
 EOF
-phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/nyx-lg.env
+phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx-lg.env
 # /instruments should now show the placeholder mints (…ioiQ / …ioi5).
 ```
 
@@ -633,7 +633,7 @@ matches), and `--fee-rate-bps` MUST equal the CVM's rate:
 ```sh
 RAW=$(curl -s "https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d" | jq -r '.parsed[0].price.price')
 
-cargo run -q -p nyx-tee-loadgen -- \
+cargo run -q -p darknyx-tee-loadgen -- \
   --endpoint "$GW" \
   --fee-rate-bps 30 \
   --oracle-twap "$RAW" \
@@ -649,7 +649,7 @@ synthetic settles fail gracefully at `lock_note` (no crash). Throughput is
 RTT-bound (~25–30 ord/s from a laptop; run from the CVM's region to measure
 the true intake ceiling).
 
-**Useful flags** (`crates/nyx-tee-loadgen/src/config.rs`):
+**Useful flags** (`crates/darknyx-tee-loadgen/src/config.rs`):
 `--traders`, `--orders-per-trader-per-sec`, `--duration-secs`,
 `--cancel-rate`, `--workload uniform`, `--oracle-twap <hermes raw>`,
 `--fee-rate-bps <= CVM rate>`, `--expiry-slot` (default 2e9 — must exceed
@@ -657,7 +657,7 @@ the live Solana slot or the matcher sweeps orders as expired),
 `--api-key/--api-secret/--passphrase` (default to the compose bootstrap
 creds), `--report <path.md>`.
 
-**Teardown:** `phala cvms stop "$CVM"` + `shred -u /tmp/nyx-lg.env`.
+**Teardown:** `phala cvms stop "$CVM"` + `shred -u /tmp/darknyx-lg.env`.
 
 ---
 
@@ -725,7 +725,7 @@ RUN_DEVNET_LEAF=1 \
 ```sh
 cargo clean
 rm -rf node_modules packages/sdk/dist circuits/build
-# Light: cargo clean -p vault -p nyx-tee && rm -rf packages/sdk/dist
+# Light: cargo clean -p vault -p darknyx-tee && rm -rf packages/sdk/dist
 ```
 
 ### 9.2 On-chain Merkle tree (devnet only)
@@ -746,21 +746,21 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | Symptom | Cause | Fix |
 |---|---|---|
 | CVM e2e: `tree not empty` | tree has stale leaves | `node scripts/reset-merkle-tree.mjs` before the run (§4.5) |
-| Intake **all 4xx** (`opening does not match note_commitment`) | CVM mints ≠ the deposited notes' mints, OR the order's `note_amount` ≠ intake's fee-inclusive derivation | redeploy CVM with the `e2e-config` mints; ensure `--fee-rate-bps` / `NYX_CVM_FEE_RATE_BPS` match `NYX_TEE_FEE_RATE_BPS` |
+| Intake **all 4xx** (`opening does not match note_commitment`) | CVM mints ≠ the deposited notes' mints, OR the order's `note_amount` ≠ intake's fee-inclusive derivation | redeploy CVM with the `e2e-config` mints; ensure `--fee-rate-bps` / `DARKNYX_CVM_FEE_RATE_BPS` match `DARKNYX_TEE_FEE_RATE_BPS` |
 | Loadgen: **0 matches**, logs show `swept expired orders` | `--expiry-slot` below the live Solana slot | use the default 2e9 (or `>` the live slot) |
 | Loadgen: **0 matches**, no sweep | orders mispriced vs the live oracle → circuit breaker | set `--oracle-twap` to the live Hermes raw price (§7) |
 | Settle: `InvalidMarkerExpiry (6018)` | marker expiry outside `clock.slot < e <= clock.slot+300` | margin is 250 in the worker; ensure the CVM's RPC slot is fresh (slot poller) |
 | Settle: `<slot> is not a recent slot` (CreateLookupTable) | ALT `recent_slot` ahead of the simulating replica | the worker backs off 32 slots; transient — retry |
 | Settle: `did not confirm … [None]` | ALT not active yet, or tx dropped | the worker waits a slot + rebroadcasts; a hard timeout now errors `AltNotActive` (retryable) |
-| Settle: `Transaction too large: …` (settle Tx D) | settle v0 tx > 1232 B | ensure `NYX_TEE_SETTLE_LOOKUP_TABLE` is set (static ALT stacked). The per-batch ALT now also hoists the consumed/nullifier PDAs; the worker logs the inline-account breakdown on overflow. |
+| Settle: `Transaction too large: …` (settle Tx D) | settle v0 tx > 1232 B | ensure `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` is set (static ALT stacked). The per-batch ALT now also hoists the consumed/nullifier PDAs; the worker logs the inline-account breakdown on overflow. |
 | Settle: `Transaction too large: …5224 B…` (ALT extend) | per-batch ALT extend not chunked for a big batch | fixed: extends chunk at ≤25 addr/tx + fire concurrently (image ≥ `tee-v3-hardening-26`) |
 | Settle stage ~13s wall despite co-inclusion | per-batch ALT activation finality wait (Tx D rebroadcasts until the freshly-extended ALT is loadable) | inherent pre-Alpenglow; concurrent extends collapse it to ONE activation window |
 | All ixs fail `ConstraintSeeds (2006)` after a redeploy | old-layout `VaultConfig` PDA (size/offset mismatch) | `node scripts/close-vault-config.mjs` then `devnet-setup` (§4.4) |
 | Settle signed by an unregistered key → `Unauthorized` | the CVM's K shard signers aren't all registered | `rotate-tee-pubkey.mjs <K0..Kn>` (the full set); `fund-tee-keys.mjs` |
-| `merkle reconcile DIVERGED` in CVM logs | trees reset on-chain underneath the append-only mirror (dev resets without CVM restart) | cosmetic for settle; restart the CVM (or bump `NYX_TEE_SYNC_FROM_SLOT`). Logged once per shard. |
+| `merkle reconcile DIVERGED` in CVM logs | trees reset on-chain underneath the append-only mirror (dev resets without CVM restart) | cosmetic for settle; restart the CVM (or bump `DARKNYX_TEE_SYNC_FROM_SLOT`). Logged once per shard. |
 | Matcher: `conservation broken … in=N out=N+fee` | order under-collateralized for its own fee | each side must lock `nominal + fee` (intake derives this; the e2e harness `withFee()` + loadgen do too) |
 | `phala deploy` didn't pick up code changes | same image tag (cached) | bump `tee-v3-hardening-N`, push the tag, rebuild (§5.1) |
-| Auth: 401 after a CVM restart | runtime-registered account lost (persistence volume perms) | use the env bootstrap admin; check `NYX_TEE_STATE_DIR` is a writable volume |
+| Auth: 401 after a CVM restart | runtime-registered account lost (persistence volume perms) | use the env bootstrap admin; check `DARKNYX_TEE_STATE_DIR` is a writable volume |
 | `solana transfer`/faucet rate-limited | devnet faucet 429 | use a pre-funded local wallet; fund the CVM signer via `solana transfer` (not airdrop) |
 | `npm`/`node` not found in a non-interactive shell | nvm lazy-load shim | use the full path, e.g. `~/.nvm/versions/node/<v>/bin/node` |
 
@@ -772,7 +772,7 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 |---|---|
 | Vault program id | `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` |
 | Matching-engine program id (retiring) | `6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe` |
-| CVM image | `ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-<N>` (built by the `tee-image` workflow on a `tee-v3-hardening-*` tag; GH repo `skysail-labs/darknyx`) |
+| CVM image | `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-<N>` (built by the `tee-image` workflow on a `tee-v3-hardening-*` tag; GH repo `skysail-labs/darknyx`) |
 | Gateway URL form | `https://<app_id>-8080.dstack-pha-prod5.phala.network` |
 | Pyth Hermes SOL/USD feed id | `ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
 | Placeholder dev mints | base `[1,0…,0xb1]`, quote `[1,0…,0x9e]` (loadgen regime) |

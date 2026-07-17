@@ -9,9 +9,9 @@ import process from "node:process";
 import * as circomlibjs from "circomlibjs";
 import * as snarkjs from "snarkjs";
 
-const RUNS = Number.parseInt(process.env.NYX_DEPOSIT_BENCH_RUNS ?? "10", 10);
+const RUNS = Number.parseInt(process.env.DARKNYX_DEPOSIT_BENCH_RUNS ?? "10", 10);
 if (!Number.isInteger(RUNS) || RUNS < 2) {
-  throw new Error("NYX_DEPOSIT_BENCH_RUNS must be an integer >= 2");
+  throw new Error("DARKNYX_DEPOSIT_BENCH_RUNS must be an integer >= 2");
 }
 
 const root = resolve(import.meta.dirname, "..");
@@ -21,7 +21,7 @@ const zkey = resolve(build, "circuit_final.zkey");
 const verificationKey = JSON.parse(
   await readFile(resolve(build, "verification_key.json"), "utf8"),
 );
-const scratch = resolve(tmpdir(), `nyx-valid-deposit-bench-${process.pid}`);
+const scratch = resolve(tmpdir(), `darknyx-valid-deposit-bench-${process.pid}`);
 await mkdir(scratch, { recursive: true });
 
 const poseidon = await circomlibjs.buildPoseidon();

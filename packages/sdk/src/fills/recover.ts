@@ -1,6 +1,6 @@
 /**
  * Recover both user-owned outputs of a VALID_MATCH_BATCH v3 fill from the
- * permanent on-chain recovery-v2 ciphertext.
+ * permanent on-chain recovery-v3 ciphertext.
  *
  * The payload names the exact consumed commitment and the trade/change output
  * commitments. After decrypting `(trade, change)`, the client resolves that

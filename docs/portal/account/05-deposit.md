@@ -35,7 +35,7 @@ wallet-wide owner commitment could cluster every note made by that wallet.
 ## Using the SDK
 
 ```typescript
-import { getDepositFunction } from "@nyx/sdk";
+import { getDepositFunction } from "@darknyx/sdk";
 
 const deposit = getDepositFunction({ client });
 

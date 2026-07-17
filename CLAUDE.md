@@ -1,4 +1,4 @@
-# CLAUDE.md — agent onboarding for Nyx Darkpool
+# CLAUDE.md — agent onboarding for Darknyx Darkpool
 
 > This file is the contract between you (the agent) and the project.
 > Read it before touching code. `AGENTS.md` is a **symlink to this file** —
@@ -12,7 +12,7 @@
 
 ## 0. What this repo is, in 60 seconds
 
-Nyx (aka **darknyx**) is a privacy-preserving CLOB-style darkpool on
+Darknyx (aka **darknyx**) is a privacy-preserving CLOB-style darkpool on
 Solana. Matching and settlement run **inside an Intel TDX confidential
 VM (a "CVM") on Phala Cloud**. Three layers:
 
@@ -29,10 +29,10 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   commitment + per-note inner private while binding mint, gross amount,
   commitment, and a public recovery nonce.
   Devnet program id: `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`.
-* **TEE (`crates/nyx-tee/`)** — the in-enclave engine. It owns hidden
+* **TEE (`crates/darknyx-tee/`)** — the in-enclave engine. It owns hidden
   order intake (`POST /orders`), uniform-clearing-price matching, the
   full settle pipeline (lock → prove N=16 VALID_MATCH_BATCH [ark or
-  rapidsnark backend, `NYX_TEE_PROVER`] → verify → per-batch ALT →
+  rapidsnark backend, `DARKNYX_TEE_PROVER`] → verify → per-batch ALT →
   `tee_forced_settle_batched` → close, **concurrent sends round-robined
   across K shard fee-payer keys + K trees** so the leader co-includes a
   batch's settles in one block), K Merkle-mirror indexers, deterministic
@@ -41,7 +41,7 @@ VM (a "CVM") on Phala Cloud**. Three layers:
   directly.
 * **Client (TypeScript SDK + snarkjs prover)** — `packages/sdk/` is the
   integration surface: clients build VALID_INPUT proofs and `POST`
-  orders to the CVM. `packages/daemon/` (`nyx-daemon`) is the reference
+  orders to the CVM. `packages/daemon/` (`darknyx-daemon`) is the reference
   **non-custodial market-maker daemon** built on the SDK (keys + proving
   on-device; drives order lifecycle off the `fills` + `orders` channels on the
   shared `/v1/stream` session and on-chain reads, with auto-merge). It is
@@ -54,7 +54,7 @@ VM (a "CVM") on Phala Cloud**. Three layers:
 Supporting crates: `crates/darkpool-matcher/` (the matching algorithm +
 the order/cancel canonical signing — single source of truth, used by the
 in-TEE matcher)
-and `crates/nyx-tee-loadgen/` (a host
+and `crates/darknyx-tee-loadgen/` (a host
 binary that load-tests the CVM's intake).
 
 > **Archived demo.** `apps/demo/` is historical and is not a product surface,
@@ -102,7 +102,7 @@ You will not write correct code here without the mental model. Required:
 * **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)**
   — the fills-delivery + trade-history design, now **implemented**
   (deterministic HD order_ids + the per-account `/v1/stream` fills channel).
-  Recovery v2 restores deposit, trade, change/continuation, and merge openings
+  Recovery v3 restores deposit, trade, change/continuation, and merge openings
   from seed + chain; the off-TEE `packages/indexer`
   is an **OPTIONAL by-order_id commitment LOCATOR** with no consumer today (the
   daemon uses live streams instead) — the durable amount source is the chain.
@@ -122,7 +122,7 @@ By domain, additionally:
 | A `vault` instruction | `CRYPTOGRAPHY.md` §8, `programs/vault/src/state.rs` (PDA layout), the litesvm test in `programs/vault/tests/`. |
 | `crates/darkpool-crypto` | The matching `*-parity.test.ts` under `packages/sdk/tests/`. **Every host-side primitive has a byte-equality contract with TS.** |
 | `crates/darkpool-matcher` | `tests/parity.rs` + `change_note_parity.rs` + `order_canonical.rs`'s tests. The matcher's `run_batch`/`run_batch_capped` is the single source of truth. A change to `change_note::derive_inner` triggers a triple-port (matcher Rust ↔ TS in `e2e-helpers.ts` ↔ the on-chain hashers). |
-| `crates/nyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). |
+| `crates/darknyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). |
 | The SDK | The corresponding `tests/*-transport.test.ts` / parity test. `idl/vault-client.ts` hand-codes every discriminator + Borsh layout (no Anchor IDL runtime) — keep it in sync with the on-chain structs by hand. |
 | Settlement plumbing | `CRYPTOGRAPHY.md` §9 (size analysis + ALT story). The 1232-byte cap is tight — see [§6](#6-the-1232-byte-transaction-size-budget). |
 
@@ -262,7 +262,7 @@ If anything matches, fix it in the SAME commit as the deletion.
 
 This is the flagship real-settle path: a deployed CVM matches AND settles
 a real crossing pair on devnet. The CVM binary is the **in-TEE matcher +
-settler**, so any change under `crates/nyx-tee/`, `Dockerfile`,
+settler**, so any change under `crates/darknyx-tee/`, `Dockerfile`,
 `deploy/docker-compose.yaml`, or a TEE-proved circuit (`match_batch_*`) requires a **rebuilt image**
 — `phala cvms start` on the old image runs stale code.
 
@@ -286,23 +286,23 @@ form (`app_<id>`).
 ### 3.1 Build a new image (tag → CI → ghcr)
 
 The `tee-image` GitHub workflow builds `linux/amd64` and pushes to
-`ghcr.io/skysail-labs/nyx-tee:tee-v3-hardening-<N>` (registry-cached, ~4–5 min).
+`ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-<N>` (registry-cached, ~4–5 min).
 **Always bump the tag for a code change** — `phala deploy` only re-pulls on
 a changed tag; a same-tag deploy reuses the cached image (you'd test stale
 code).
 
 ```sh
 # 1. bump the tag the compose pins:
-#    deploy/docker-compose.yaml → image: ...nyx-tee:tee-v3-hardening-<N+1>
+#    deploy/docker-compose.yaml → image: ...darknyx-tee:tee-v3-hardening-<N+1>
 # 2. commit, then tag + push (the tag carries your commits):
 git tag tee-v3-hardening-<N+1> && git push origin tee-v3-hardening-<N+1>
 # 3. watch it (CI lives on skysail-labs/darknyx; origin redirects there):
 gh run watch "$(gh run list --repo skysail-labs/darknyx --limit 1 --json databaseId -q '.[0].databaseId')" --repo skysail-labs/darknyx --exit-status
 # 4. confirm it landed (want 200):
-TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/nyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/darknyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" \
   -H "Accept: application/vnd.oci.image.index.v1+json" \
-  "https://ghcr.io/v2/skysail-labs/nyx-tee/manifests/tee-v3-hardening-<N+1>"
+  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N+1>"
 ```
 
 ### 3.2 The encrypted env (`-e` file) — and the REGIME you're deploying
@@ -317,11 +317,11 @@ secret: write it `umask 077` under the gitignored `.devnet/` directory,
 > hiccup that wasted a deploy.** Whether you set the mint env vars decides
 > which test the CVM can serve:
 >
-> * **Real-settle regime (`cvm-settle-e2e`)** — SET `NYX_TEE_BASE_MINT` +
->   `NYX_TEE_QUOTE_MINT` to the `.devnet/e2e-config.json` mints. Intake
+> * **Real-settle regime (`cvm-settle-e2e`)** — SET `DARKNYX_TEE_BASE_MINT` +
+>   `DARKNYX_TEE_QUOTE_MINT` to the `.devnet/e2e-config.json` mints. Intake
 >   re-derives each order's commitment against these, so real deposits
 >   match.
-> * **Loadgen regime (`nyx-tee-loadgen`)** — OMIT both mint vars. The CVM
+> * **Loadgen regime (`darknyx-tee-loadgen`)** — OMIT both mint vars. The CVM
 >   falls back to `dev_match_config()` placeholder mints (`…0x9e` quote /
 >   `…0xb1` base) that the loadgen hardcodes. **If you run the loadgen
 >   against a real-mint CVM you get 100% 4xx** (commitment mismatch) — and
@@ -330,9 +330,9 @@ secret: write it `umask 077` under the gitignored `.devnet/` directory,
 ```sh
 umask 077
 HELIUS="https://devnet.helius-rpc.com/?api-key=<key>"
-export NYX_TEE_API_KEY="nyx-$(openssl rand -hex 16)"
-export NYX_TEE_API_SECRET="$(openssl rand -hex 32)"
-export NYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
+export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
+export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
+export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
@@ -340,25 +340,25 @@ OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 K=$(jq -r '.numTrees // 1' .devnet/e2e-config.json)
 node scripts/reset-merkle-tree.mjs   # FIRST — so the mirror cold-boots an empty tree
 FLOOR=$(solana slot --url "$HELIUS")
-cat > .devnet/nyx-deploy.env <<EOF
-NYX_TEE_API_KEY=$NYX_TEE_API_KEY
-NYX_TEE_API_SECRET=$NYX_TEE_API_SECRET
-NYX_TEE_PASSPHRASE=$NYX_TEE_PASSPHRASE
-NYX_TEE_SOLANA_RPC_URL=$HELIUS
-NYX_TEE_SYNC_FROM_SLOT=$FLOOR
-NYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen regime
-NYX_TEE_QUOTE_MINT=$QUOTE
-NYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
-NYX_TEE_FEE_RATE_BPS=30
-NYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
-NYX_TEE_NUM_TREES=$K
+cat > .devnet/darknyx-deploy.env <<EOF
+DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
+DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
+DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
+DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
+DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen regime
+DARKNYX_TEE_QUOTE_MINT=$QUOTE
+DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
+DARKNYX_TEE_FEE_RATE_BPS=30
+DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
+DARKNYX_TEE_NUM_TREES=$K
 EOF
 ```
 
-A production boot rejects the public `nyx-test-*` credentials. Keep the fresh
+A production boot rejects the public `darknyx-test-*` credentials. Keep the fresh
 credential variables exported for the CVM harness/loadgen. A **malformed**
 (non-empty) value fails startup (fail-fast); an **empty**
-`${VAR}` falls back to the default. `NYX_TEE_FEE_RATE_BPS` (default 30) must
+`${VAR}` falls back to the default. `DARKNYX_TEE_FEE_RATE_BPS` (default 30) must
 equal the loadgen's `--fee-rate-bps` (intake derives fee-inclusive
 collateral; a mismatch → every synthetic note fails `verify_commitment`).
 
@@ -366,24 +366,24 @@ collateral; a mismatch → every synthetic note fails `verify_commitment`).
 
 ```sh
 CVM=app_634b2ab4c250466311f0cf09f772b6fd60b5be11   # phala cvms list
-phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e .devnet/nyx-deploy.env --wait
+phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e .devnet/darknyx-deploy.env --wait
 if command -v shred >/dev/null 2>&1; then
-  shred -u .devnet/nyx-deploy.env
+  shred -u .devnet/darknyx-deploy.env
 else
-  rm -P .devnet/nyx-deploy.env  # macOS
+  rm -P .devnet/darknyx-deploy.env  # macOS
 fi
-test ! -e .devnet/nyx-deploy.env
+test ! -e .devnet/darknyx-deploy.env
 
 GW="https://<app_id>-8080.dstack-pha-prod5.phala.network"
 curl -s "$GW/info" | jq -r .tee_pubkey          # the PRIMARY (shard-0) Ed25519 signer
-phala ps "$CVM"                                 # find the container name (normally dstack-nyx-tee-1)
-phala logs dstack-nyx-tee-1 --cvm-id "$CVM" --stderr -n 40
+phala ps "$CVM"                                 # find the container name (normally dstack-darknyx-tee-1)
+phala logs dstack-darknyx-tee-1 --cvm-id "$CVM" --stderr -n 40
 # Watch for proving key load, merkle cold-boot, "derived K-shard TEE signer set",
 # and "settle pipeline ENABLED".
 ```
 
 Under tree-sharding the CVM derives **K = `num_trees`** shard signers
-(`nyx/ed25519-signer/v1/{0..K-1}`), each the Solana fee-payer for its
+(`darknyx/ed25519-signer/v2/{0..K-1}`), each the Solana fee-payer for its
 shard's settle Tx D. `/info` surfaces only the primary; grab the full
 set from the boot log line "derived K-shard TEE signer set". Register
 ALL K in shard order (`keys[j]` settles shard j) + fund each
@@ -406,7 +406,7 @@ SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
 # Run ONE leaf-count cvm test per fresh tree — see the note below.
 (
   cd packages/sdk
-  RUN_CVM_E2E=1 NYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
+  RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" SOLANA_RPC_URL="$HELIUS" \
     FUNDER_KEYPAIR="$HOME/.config/solana/id.json" \
     ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
     ../../node_modules/.bin/vitest run --project cvm tests/cvm-settle-e2e.test.ts
@@ -417,7 +417,7 @@ SOLANA_RPC_URL="$HELIUS" FUNDER_KEYPAIR=~/.config/solana/id.json \
 # settles fail gracefully (and under a flood you'll see Helius 429s — an RPC
 # capacity limit, not a code bug). Validates intake + paging, NOT settle.
 RAW=$(curl -s "https://hermes.pyth.network/v2/updates/price/latest?ids[]=ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d" | jq -r '.parsed[0].price.price')
-cargo run -q -p nyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
+cargo run -q -p darknyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
   --fee-rate-bps 30 --traders 10 --duration-secs 25
 ```
 
@@ -440,8 +440,8 @@ cargo run -q -p nyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
 It bills while running. `phala cvms stop "$CVM"` (preserves
 `app_id`/signer/volume; halts billing). **Never leave a billable CVM up.**
 
-After the test window, also `unset NYX_TEE_API_KEY NYX_TEE_API_SECRET
-NYX_TEE_PASSPHRASE`. The no-CVM half of devnet validation:
+After the test window, also `unset DARKNYX_TEE_API_KEY DARKNYX_TEE_API_SECRET
+DARKNYX_TEE_PASSPHRASE`. The no-CVM half of devnet validation:
 `devnet-deposit-withdraw.test.ts`
 (`RUN_DEVNET_DW=1`) verifies the v2 deposit + VALID_SPEND withdraw round-trip
 on devnet in isolation — no CVM, no TEE authority. Use it to test vault
@@ -455,7 +455,7 @@ TEE work runs across three targets; using the wrong one wastes money or trust.
 
 | Slice | Where | Cost/cycle | Validates |
 |---|---|---|---|
-| **Iterate** (~90%) | `nyx-tee` binary + `dstack-simulator` locally | ~5–15 s | handler logic, matcher tick, oracle parsing, HTTP shape, key determinism |
+| **Iterate** (~90%) | `darknyx-tee` binary + `dstack-simulator` locally | ~5–15 s | handler logic, matcher tick, oracle parsing, HTTP shape, key determinism |
 | **Spot-check** (~5%) | Phala devnet CVM | ~3 min, ~$0.003 | real `compose_hash`, real dstack-kms key delivery, gateway latency, RA-HTTPS |
 | **Ceremony** (~5%) | Phala CVM + multisig | ~10 min | real Intel TCB sig, MRTD vs governance set, client `verifyTeeAttestation()`, rotation |
 
@@ -469,11 +469,11 @@ TEE work runs across three targets; using the wrong one wastes money or trust.
 * **Spot-check on Phala** before a PR that touches the boot path
   (`src/boot.rs`, `src/keys/`), the dstack handshake, or the HTTP/WS surface.
 * **Ceremony** only when `compose_hash` meaningfully changed (Dockerfile,
-  compose, `Cargo.toml`, `crates/nyx-tee/src/`).
+  compose, `Cargo.toml`, `crates/darknyx-tee/src/`).
 
-`crates/nyx-tee` has ~180 lib + integration tests (`cargo test -p nyx-tee`)
+`crates/darknyx-tee` has ~180 lib + integration tests (`cargo test -p darknyx-tee`)
 covering the matcher / settle pipeline / continuation derivation / Merkle mirror /
-HTTP+auth / RPC client — run them on any `crates/nyx-tee` change.
+HTTP+auth / RPC client — run them on any `crates/darknyx-tee` change.
 
 ---
 
@@ -546,7 +546,7 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
   to skip it.
 * **The committed N=16 proof fixture** lives at
   `programs/vault/tests/fixtures/match_batch_n16_proof.bin`; regenerate it
-  with `RUN_N16_PROVE=1 DUMP_N16_FIXTURE=1 cargo test -p nyx-tee --test
+  with `RUN_N16_PROVE=1 DUMP_N16_FIXTURE=1 cargo test -p darknyx-tee --test
   n16_assemble_prove_verify` after any circuit/converter change, then re-run
   `cargo test -p vault --test match_batch_verify`.
 
@@ -605,7 +605,7 @@ check fails, or proofs don't verify.
 | User commitment | `darkpool-crypto/src/user_commitment.rs` | `sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |
 | Merge output inner | `darkpool-crypto/src/merge.rs::merge_output_inner_hash` | `sdk/src/utxo/merge.ts::deriveMergeOutputInnerHash` | `merge-inner-parity.test.ts` + `merge-prover.test.ts` |
 | Order/cancel canonical | `darkpool-matcher/src/order_canonical.rs` | `sdk/src/orders/canonical.ts` | `order-canonical-parity.test.ts` |
-| Canonical payload hash | `vault::tee_forced_settle.rs::canonical_payload_hash` (shared) + `nyx-tee/src/settle/payload.rs` | `sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | Rust fixed-vector unit + `settle-builder-batched.test.ts` |
+| Canonical payload hash | `vault::tee_forced_settle.rs::canonical_payload_hash` (shared) + `darknyx-tee/src/settle/payload.rs` | `sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | Rust fixed-vector unit + `settle-builder-batched.test.ts` |
 | Match leaf hash | `tee_forced_settle_batched.rs::compute_match_leaf` | `tests/helpers/match-batch-prover.ts::computeBatchLeaf` | `match-batch-prototype.test.ts` leaf-byte assert |
 | Anchor discriminator | Anchor macro `sha256("global:<name>")[..8]` | `sdk/src/idl/vault-client.ts` | every `*-transport.test.ts` |
 
@@ -750,8 +750,8 @@ it after; never commit a secret).**
 > (base + quote) mint. Each order locks `nominal + its own fee` collateral —
 > intake derives this (`orders.rs`); the loadgen + e2e harness mirror it — or
 > the matcher rejects the match as conservation-breaking. The CVM fee rate is
-> `NYX_TEE_FEE_RATE_BPS` (default 30); fees-on without
-> `NYX_TEE_PROTOCOL_OWNER_COMMITMENT` warns (unclaimable).
+> `DARKNYX_TEE_FEE_RATE_BPS` (default 30); fees-on without
+> `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` warns (unclaimable).
 
 > **On-chain governance config.** Global authority and fee state lives in
 > `VaultConfig`: `fee_rate_bps` (a fee floor
@@ -780,7 +780,7 @@ it after; never commit a secret).**
 ---
 
 *Last updated: 2026-07-16 — current architecture: vault (only on-chain
-program) + the in-CVM matcher/settler (`crates/nyx-tee`) on Phala, validated
+program) + the in-CVM matcher/settler (`crates/darknyx-tee`) on Phala, validated
 end-to-end on devnet (`cvm-settle-e2e` real settle + loadgen). The
 `matching_engine` / MagicBlock-ER / PER path has been removed. Note model is
 v2 `inner_hash`; canonical orders sign the viewing key, boot session, and a

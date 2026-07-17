@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Nyx indexer entrypoint. Watches the vault's settle txs (finalized) and serves
+ * Darknyx indexer entrypoint. Watches the vault's settle txs (finalized) and serves
  * fills by order_id. Account-agnostic; the chain is the durable record.
  *
- *   INDEXER_RPC_URL=$HELIUS INDEXER_DB=/tmp/nyx-idx.sqlite node dist/bin/indexer.js
+ *   INDEXER_RPC_URL=$HELIUS INDEXER_DB=/tmp/darknyx-idx.sqlite node dist/bin/indexer.js
  *
  * The watcher scans via Helius `getTransactionsForAddress` (gTFA), so
  * INDEXER_RPC_URL MUST be a Helius endpoint — gTFA is not a standard Solana RPC

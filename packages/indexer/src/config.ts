@@ -30,7 +30,7 @@ export function loadConfig(
   return {
     rpcUrl,
     programId: env.INDEXER_PROGRAM_ID ?? DEFAULT_PROGRAM_ID,
-    dbPath: env.INDEXER_DB ?? "./nyx-indexer.sqlite",
+    dbPath: env.INDEXER_DB ?? "./darknyx-indexer.sqlite",
     port: Number(env.INDEXER_PORT ?? "8090"),
     pollMs: Number(env.INDEXER_POLL_MS ?? "3000"),
     startFromTip: env.INDEXER_START_FROM_TIP === "1",

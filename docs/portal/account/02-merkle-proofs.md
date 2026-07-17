@@ -15,7 +15,7 @@ generate the zero-knowledge input proof that backs an order or a withdrawal.
 
 ## Why you need these
 
-Two of the things you do on Nyx require proving a note exists in the tree:
+Two of the things you do on Darknyx require proving a note exists in the tree:
 
 - **Backing an order.** An order's collateral note must be provably in the tree;
   the input proof you attach to a place-order request is generated against an

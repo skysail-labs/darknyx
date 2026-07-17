@@ -9,7 +9,7 @@
  * {@link AttestationError} on any failure; a client must refuse to trade.
  *
  * This shares the exact verification core with the node daemon
- * (`@nyx/daemon`), so the two clients cannot drift. It runs in the browser
+ * (`@darknyx/daemon`), so the two clients cannot drift. It runs in the browser
  * because `@phala/dcap-qvl` is pure JS.
  */
 
@@ -28,7 +28,7 @@ import {
 import { createDcapQuoteVerifier, type QuoteVerifier } from "./dcap.js";
 
 /**
- * The compose hash of the audited, deployed `nyx-tee` image. **Committed in
+ * The compose hash of the audited, deployed `darknyx-tee` image. **Committed in
  * source and bumped in lockstep with the Docker image tag** — that is how a
  * client knows exactly which build it is trusting. Empty until the first
  * mainnet/devnet image is pinned; pass an explicit value to

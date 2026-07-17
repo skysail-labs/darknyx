@@ -68,9 +68,10 @@ export const ZERO_PROOF: Groth16Proof = {
  *  quoteAmount, buyer/sellerChangeAmt, buyer/sellerFeeAmt, clearingPrice) were
  *  removed — they're proven in-circuit + bound by the note commitments, and
  *  putting them in the (public, on-chain) settle ix leaked every trade size.
- *  The canonical-hash domain bumped `v6`→`v7`. Settlement payload v9 removes
+ *  The canonical-hash domain bumped `v6`→`v7`. Settlement payload v9 removed
  *  the two unused nullifiers; commitment-keyed consumed-note PDAs are the
- *  replay guard shared by settlement and withdrawal. */
+ *  replay guard shared by settlement and withdrawal. The Darknyx namespace
+ *  cutover retains the 488-byte layout and signs it under v10. */
 export interface MatchResultPayload {
   matchId: Uint8Array; // [u8; 16]
   noteAcommitment: Uint8Array; // [u8; 32]
@@ -91,8 +92,8 @@ export interface MatchResultPayload {
   sellerRelockOrderId: Uint8Array;
   sellerRelockExpiry: bigint;
   batchSlot: bigint;
-  /** Durable output recovery v2: `ephemeral_pubkey(32) ‖ buyer_enc(44) ‖
-   * seller_enc(44) ‖ "NYXREC02"`. Each side encrypts `(trade, change)`; an
+  /** Durable output recovery v3: `ephemeral_pubkey(32) ‖ buyer_enc(44) ‖
+   * seller_enc(44) ‖ "DNYXREC3"`. Each side encrypts `(trade, change)`; an
    * absent viewing key zeroes only that side's blob. */
   fillRecovery: Uint8Array; // [u8; 128]
 }
@@ -144,7 +145,7 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     u64LE(p.batchSlot),
     // Amount-privacy (P3b): the seven plaintext amount fields were removed
     // from the payload (proven in-circuit + bound by the note commitments).
-    // v8 added the fixed 128-byte recovery bundle; recovery v2 repacks it.
+    // v8 added the fixed 128-byte recovery bundle; recovery v3 repacks it.
     fixed(p.fillRecovery, 128),
   );
 }
@@ -163,7 +164,8 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   // v7: amount-privacy (P3b) dropped the seven plaintext amount fields.
   // v8 appended the 128-byte fill_recovery field (repacked internally in v2).
   // v9: removed the two vestigial nullifiers.
-  h.update(Buffer.from("nyx-match-v9"));
+  // v10: clean Darknyx namespace cutover; wire fields remain unchanged.
+  h.update(Buffer.from("darknyx-match-v10"));
   h.update(fixed(p.matchId, 16));
   h.update(fixed(p.noteAcommitment, 32));
   h.update(fixed(p.noteBcommitment, 32));

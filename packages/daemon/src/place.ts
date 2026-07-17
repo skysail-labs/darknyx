@@ -17,7 +17,7 @@
 import type { LifecycleEngine } from "./lifecycle-engine.js";
 import type { OrderPlacer } from "./order-placer.js";
 import type { ManagedOrder } from "./types.js";
-import type { PlaceOrderRequest, PlaceOrderResponse } from "@nyx/sdk";
+import type { PlaceOrderRequest, PlaceOrderResponse } from "@darknyx/sdk";
 
 export interface PlaceManagedOrderArgs {
   engine: LifecycleEngine;

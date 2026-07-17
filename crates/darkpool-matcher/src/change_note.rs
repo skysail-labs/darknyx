@@ -60,10 +60,10 @@ pub const FEE_ROLE_QUOTE: u8 = 0xFC;
 // ─────── Domain tag ──────────────────────────────────────────────────────────
 //
 // The single domain tag for the v2 inner_hash derivation. (The v1 split into
-// `nyx-change-nonce` / `nyx-change-blind` is gone — there is now one field per
+// `darknyx-change-nonce` / `darknyx-change-blind` is gone — there is now one field per
 // note.)
 
-const DOMAIN_INNER: &[u8] = b"nyx-change-inner";
+const DOMAIN_INNER: &[u8] = b"darknyx-change-inner-v2";
 
 // ─────── Derivation primitive ────────────────────────────────────────────────
 

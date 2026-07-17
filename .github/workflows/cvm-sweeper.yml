@@ -41,6 +41,6 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          CVM="${{ vars.NYX_NIGHTLY_CVM_ID }}"
-          test -n "$CVM" || { echo "::warning::NYX_NIGHTLY_CVM_ID unset — nothing to sweep"; exit 0; }
+          CVM="${{ vars.DARKNYX_NIGHTLY_CVM_ID }}"
+          test -n "$CVM" || { echo "::warning::DARKNYX_NIGHTLY_CVM_ID unset — nothing to sweep"; exit 0; }
           phala cvms stop "$CVM" || echo "::notice::phala cvms stop returned non-zero (likely already stopped)"

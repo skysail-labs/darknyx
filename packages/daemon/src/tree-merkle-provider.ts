@@ -13,7 +13,7 @@
  * The fetch is injectable so the provider is unit-testable without a gateway.
  */
 
-import type { MerkleProofProvider, RootVerifier } from "@nyx/sdk";
+import type { MerkleProofProvider, RootVerifier } from "@darknyx/sdk";
 
 import { LocalMerkleTree, TREE_DEPTH } from "./merkle-tree.js";
 

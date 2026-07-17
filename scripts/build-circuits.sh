@@ -72,7 +72,7 @@ build_circuit() {
     "$SNARKJS" zkey beacon \
         "$out/circuit_0000.zkey" "$out/circuit_final.zkey" \
         0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20 10 \
-        --name="nyx-dev-$name" -v
+        --name="darknyx-dev-$name" -v
 
     echo "[$name] export verification key"
     "$SNARKJS" zkey export verificationkey "$out/circuit_final.zkey" "$out/verification_key.json"

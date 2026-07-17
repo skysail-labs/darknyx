@@ -1,4 +1,4 @@
-# Build the nyx-tee CVM image for linux/amd64 and push it to ghcr.io.
+# Build the darknyx-tee CVM image for linux/amd64 and push it to ghcr.io.
 #
 # WHY THIS EXISTS — Phala TDX CVMs are x86_64. Cross-building amd64 on
 # an Apple-Silicon Mac via QEMU fails at link with
@@ -12,7 +12,7 @@
 #
 # ONE-TIME after the first push: ghcr packages are private by default.
 # For Phala to pull anonymously, flip the package to public once:
-#   Org (skysail-labs) -> Packages -> nyx-tee -> Package settings
+#   Org (skysail-labs) -> Packages -> darknyx-tee -> Package settings
 #   -> Change visibility -> Public.
 # (Or, to keep it private, add registry pull-credentials to the CVM
 #  deploy instead — not needed for the dev spot-check.)
@@ -28,9 +28,9 @@
 #     constraint, so prefer it until this lands on the default branch.
 #
 # After a successful run the image is at:
-#   ghcr.io/skysail-labs/nyx-tee:<tag>
+#   ghcr.io/skysail-labs/darknyx-tee:<tag>
 # Point deploy/docker-compose.yaml `image:` at that, then
-#   PATH=...nvm.../bin:$PATH phala deploy -c deploy/docker-compose.yaml -n nyx-tee-spot --wait
+#   PATH=...nvm.../bin:$PATH phala deploy -c deploy/docker-compose.yaml -n darknyx-tee-spot --wait
 
 name: tee-image
 
@@ -128,11 +128,11 @@ jobs:
           fi
           cache_suffix=""
           [ "$enable_cuda" = "1" ] && cache_suffix="-cuda"
-          echo "image=ghcr.io/${owner_lc}/nyx-tee:${tag}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${owner_lc}/darknyx-tee:${tag}" >> "$GITHUB_OUTPUT"
           # Stable, tag-independent build cache ref (see cache-from/to), per variant.
-          echo "cache=ghcr.io/${owner_lc}/nyx-tee:buildcache${cache_suffix}" >> "$GITHUB_OUTPUT"
+          echo "cache=ghcr.io/${owner_lc}/darknyx-tee:buildcache${cache_suffix}" >> "$GITHUB_OUTPUT"
           echo "enable_cuda=${enable_cuda}" >> "$GITHUB_OUTPUT"
-          echo "Building -> ghcr.io/${owner_lc}/nyx-tee:${tag} (ENABLE_CUDA=${enable_cuda})"
+          echo "Building -> ghcr.io/${owner_lc}/darknyx-tee:${tag} (ENABLE_CUDA=${enable_cuda})"
 
       # The N=16 settle prover needs circuit.wasm + circuit.r1cs alongside
       # the committed circuit_final.zkey, but those two are gitignored.
@@ -243,10 +243,10 @@ jobs:
             'ls /opt/icicle/lib/backend/cuda/libicicle_backend_cuda_device.so \
                 /opt/icicle/lib/backend/bn254/cuda/libicicle_backend_cuda_field_bn254.so \
                 /opt/icicle/lib/backend/bn254/cuda/libicicle_backend_cuda_curve_bn254.so'
-          echo "=== nyx-tee binary links resolve (frontend icicle .so via LD_LIBRARY_PATH) ==="
-          docker run --rm --entrypoint sh "$IMG" -c 'ldd /opt/nyx/nyx-tee | grep -i icicle'
+          echo "=== darknyx-tee binary links resolve (frontend icicle .so via LD_LIBRARY_PATH) ==="
+          docker run --rm --entrypoint sh "$IMG" -c 'ldd /opt/darknyx/darknyx-tee | grep -i icicle'
           docker run --rm --entrypoint sh "$IMG" -c \
-            'if ldd /opt/nyx/nyx-tee | grep -i "not found"; then echo "UNRESOLVED LIBS"; exit 1; fi; echo "all binary libs resolved"'
+            'if ldd /opt/darknyx/darknyx-tee | grep -i "not found"; then echo "UNRESOLVED LIBS"; exit 1; fi; echo "all binary libs resolved"'
 
       - name: Emit pull command
         run: |

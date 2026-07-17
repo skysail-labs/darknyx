@@ -4,15 +4,15 @@ members = [
     "programs/vault",
     "crates/darkpool-crypto",
     "crates/darkpool-matcher",
-    "crates/nyx-tee",
-    "crates/nyx-tee-loadgen",
+    "crates/darknyx-tee",
+    "crates/darknyx-tee-loadgen",
 ]
 exclude = [
     "darkpool",
     # Vendored ICICLE GPU/CPU Groth16 prover (icicle-snark + its nested
     # icicle/ C++ tree + wrappers/rust workspace), under third_party/ next to
     # the rapidsnark submodule. Pulled in only by the `icicle` feature of
-    # crates/nyx-tee as a path dep; kept OUT of our workspace so a default
+    # crates/darknyx-tee as a path dep; kept OUT of our workspace so a default
     # build never triggers its cmake/native build.
     "third_party/icicle-snark",
 ]
@@ -20,7 +20,7 @@ exclude = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Nyx Darkpool"]
+authors = ["Darknyx Darkpool"]
 
 
 [workspace.dependencies]
@@ -93,7 +93,7 @@ litesvm = "0.13.0"
 proptest = "1.4"
 hex = "0.4"
 
-# nyx-tee — async runtime + HTTP/WS server
+# darknyx-tee — async runtime + HTTP/WS server
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.7", features = ["ws", "macros"] }
 tower = "0.5"
@@ -110,7 +110,7 @@ serde_json = "1"
 # for reproducible builds — this is the rev Cargo.lock already resolves to.
 dstack-sdk = { git = "https://github.com/Dstack-TEE/dstack.git", rev = "f67b4f67ebabef0a27795705121698280a1038dc" }
 
-# Solana client (used by nyx-tee to submit settle txs from the TEE)
+# Solana client (used by darknyx-tee to submit settle txs from the TEE)
 solana-client = "1.18"
 solana-sdk = "1.18"
 
@@ -119,19 +119,19 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = "1"
 
-# HTTPS client — used by nyx-tee/oracle to pull from Hermes.
+# HTTPS client — used by darknyx-tee/oracle to pull from Hermes.
 # Pinned to rustls so we don't depend on the host OpenSSL (which
 # wouldn't exist inside our dstack-os runtime anyway).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
-# secp256k1 in pure Rust — needed by nyx-tee/oracle/vaa.rs for the
+# secp256k1 in pure Rust — needed by darknyx-tee/oracle/vaa.rs for the
 # ecrecover step that verifies Wormhole guardian signatures.
 # k256 is the RustCrypto implementation; same auditable surface as
 # the rest of the workspace's crypto.
 k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
 
-# JWT — nyx-tee/api/auth.rs uses HS256 with a 32-byte secret derived
-# from dstack via `get_key("nyx/jwt-secret/v1", "jwt")`. We pinned
+# JWT — darknyx-tee/api/auth.rs uses HS256 with a 32-byte secret derived
+# from dstack via `get_key("darknyx/jwt-secret/v2", "jwt")`. We pinned
 # v9 (the current major) which dropped the dependency on the
 # obsolete `ring` crate in favour of RustCrypto primitives.
 jsonwebtoken = { version = "9", default-features = false }
@@ -146,7 +146,7 @@ subtle = "2.5"
 # verify. Default features pull in `std` + `alloc`; no external C.
 argon2 = "0.5"
 
-# nyx-tee-loadgen — synthetic order traffic generator.
+# darknyx-tee-loadgen — synthetic order traffic generator.
 # CLI parser. v4 is the stable major; derives keep the main.rs CLI
 # definition declarative.
 clap = { version = "4", features = ["derive", "env"] }
@@ -157,7 +157,7 @@ hdrhistogram = "7"
 # by ed25519-dalek; this brings rand_distr for lognormal sampling.
 rand_distr = "0.4"
 
-# nyx-tee/solana_rpc — modular Solana crates (PR 4g.2+).
+# darknyx-tee/solana_rpc — modular Solana crates (PR 4g.2+).
 #
 # We deliberately AVOID `solana-client` / `solana-sdk` 1.18 because
 # they pull a `zeroize` major that conflicts with `ark-ec` 0.5.
@@ -174,13 +174,13 @@ rand_distr = "0.4"
 # Pins realigned to litesvm 0.13.0's requirements (the dev-dep that drives the
 # test graph): it demands solana-address =2.2.0, solana-hash ^4.2.0,
 # solana-instruction =3.2.0, solana-message =3.1.0, solana-signature ^3.3.0,
-# solana-transaction ^3.1.0. nyx-tee's runtime settle path shares these
+# solana-transaction ^3.1.0. darknyx-tee's runtime settle path shares these
 # `{ workspace = true }` pins, so the whole graph unifies on one version set
 # (a 3.x/4.x split is NOT resolvable — vault-dev's `=3.2.0` can't coexist with
-# nyx-tee's `~3.1`). The `copy` feature on solana-hash is REQUIRED: 4.x gates
+# darknyx-tee's `~3.1`). The `copy` feature on solana-hash is REQUIRED: 4.x gates
 # `impl Copy for Hash` behind `#[cfg_attr(feature = "copy", derive(Copy))]`, and
-# nyx-tee's settle path shares a single blockhash by value. Without it, the
-# image's `cargo build -p nyx-tee` (a narrow feature scope that doesn't pick up
+# darknyx-tee's settle path shares a single blockhash by value. Without it, the
+# image's `cargo build -p darknyx-tee` (a narrow feature scope that doesn't pick up
 # the feature transitively the way a `--workspace` build does) fails with
 # "use of moved value: blockhash" in settle/worker.rs.
 solana-address           = { version = "=2.2.0", features = ["curve25519"] }
@@ -207,12 +207,12 @@ solana-address-lookup-table-interface = { version = "=3.0.1", features = ["binco
 bincode                  = "1"
 
 # Dev builds: strip debuginfo from DEPENDENCIES only. The dependency
-# graph here (solana-sdk, ark-*, groth16-solana, wasmer in nyx-tee, …)
+# graph here (solana-sdk, ark-*, groth16-solana, wasmer in darknyx-tee, …)
 # is what makes target/debug balloon — each dep's unstripped debuginfo
 # dominates the artifact size, and cargo never GCs the stale copies left
 # by earlier builds. Stripping deps' debuginfo cuts target/debug roughly
 # in half while keeping full debuginfo for our own workspace crates, so
-# backtraces through Nyx code are unaffected. (See README / dev-commands
+# backtraces through Darknyx code are unaffected. (See README / dev-commands
 # for the periodic `cargo clean`/`cargo-sweep` GC story.)
 [profile.dev.package."*"]
 debug = false

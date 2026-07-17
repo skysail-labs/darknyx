@@ -33,7 +33,7 @@ import {
   type WebSocketFactory,
   type SendableWebSocketFactory,
   type StreamTokenProvider,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 import type { DaemonConfig } from "./config.js";
 import { DaemonStore } from "./store.js";
@@ -418,7 +418,7 @@ export class Daemon {
     if (this.verifyAttestationFn) {
       if (this.config.attestationStrict && !this.config.attestOnchainCheck) {
         throw new Error(
-          "strict attestation requires the finalized on-chain TEE-key check; set NYX_DAEMON_ATTEST_STRICT=0 only for development",
+          "strict attestation requires the finalized on-chain TEE-key check; set DARKNYX_DAEMON_ATTEST_STRICT=0 only for development",
         );
       }
       this.attestationResult = await this.verifyAttestationFn({

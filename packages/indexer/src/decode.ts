@@ -17,7 +17,7 @@
  *
  * BYTE-LAYOUT CONTRACT: the 488-byte payload mirrors
  * `programs/vault/src/instructions/tee_forced_settle.rs::MatchResultPayload`
- * and the TS encoder `@nyx/sdk` `settle-builder.ts::serializePayload`. The
+ * and the TS encoder `@darknyx/sdk` `settle-builder.ts::serializePayload`. The
  * `decode.test.ts` round-trips against that encoder so the two can't drift.
  *
  * One settle ix = ONE match (one payload). A batch is N such ixs sharing a
@@ -27,7 +27,7 @@
 
 import { createHash } from "node:crypto";
 
-/** Anchor discriminator: `sha256("global:<name>")[..8]`. Mirrors `@nyx/sdk` `anchorDiscriminator`. */
+/** Anchor discriminator: `sha256("global:<name>")[..8]`. Mirrors `@darknyx/sdk` `anchorDiscriminator`. */
 export function anchorDiscriminator(name: string): Uint8Array {
   return new Uint8Array(
     createHash("sha256").update(`global:${name}`).digest().subarray(0, 8),
@@ -49,8 +49,8 @@ const u64 = (v: DataView, off: number) => v.getBigUint64(off, true);
 /** Field-level decode of a `MatchResultPayload` (PAYLOAD_LEN bytes).
  *
  *  Amount-privacy (P3b): commitments + order ids only — no plaintext amounts.
- *  Recovery v2: plus the opaque 128-byte `fill_recovery` bundle
- *  (`ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "NYXREC02"`),
+ *  Recovery v3: plus the opaque 128-byte `fill_recovery` bundle
+ *  (`ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "DNYXREC3"`),
  *  which the indexer stores but cannot decrypt. */
 export interface MatchPayload {
   matchId: string;
@@ -74,7 +74,7 @@ export interface MatchPayload {
 
 /** Offsets into the 128-byte fill_recovery bundle (which itself starts at 360). */
 const FILL_RECOVERY_OFFSET = 360;
-const RECOVERY_V2_TRAILER = Buffer.from("NYXREC02", "ascii");
+const RECOVERY_V3_TRAILER = Buffer.from("DNYXREC3", "ascii");
 const isZero = (b: Uint8Array) => b.every((x) => x === 0);
 const hexOrNull = (b: Uint8Array) => (isZero(b) ? null : hex(b));
 
@@ -90,10 +90,10 @@ export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
     payload.byteLength,
   );
   const r = FILL_RECOVERY_OFFSET;
-  // Recovery v2: eph[0,32) buyer_enc[32,76) seller_enc[76,120) trailer[120,128).
+  // Recovery v3: eph[0,32) buyer_enc[32,76) seller_enc[76,120) trailer[120,128).
   const eph = payload.subarray(r, r + 32);
   const trailer = payload.subarray(r + 120, r + 128);
-  const recoveryV2 = Buffer.from(trailer).equals(RECOVERY_V2_TRAILER);
+  const recoveryV3 = Buffer.from(trailer).equals(RECOVERY_V3_TRAILER);
   return {
     matchId: hex(payload.subarray(0, 16)),
     // Six 32-byte note commitments precede the order ids in payload v9.
@@ -110,9 +110,9 @@ export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
     // seller_relock_order_id (328..344) + seller_relock_expiry (344..352) +
     // batch_slot (352..360) + fill_recovery (360..488).
     batchSlot: u64(v, 352),
-    ephemeralPubkey: recoveryV2 ? hexOrNull(eph) : null,
-    buyerEnc: recoveryV2 ? hexOrNull(payload.subarray(r + 32, r + 76)) : null,
-    sellerEnc: recoveryV2 ? hexOrNull(payload.subarray(r + 76, r + 120)) : null,
+    ephemeralPubkey: recoveryV3 ? hexOrNull(eph) : null,
+    buyerEnc: recoveryV3 ? hexOrNull(payload.subarray(r + 32, r + 76)) : null,
+    sellerEnc: recoveryV3 ? hexOrNull(payload.subarray(r + 76, r + 120)) : null,
   };
 }
 
@@ -133,7 +133,7 @@ export interface SettleFill {
   /** 32-byte hex of the minted change note, or `null` when the side filled exactly. */
   changeNoteCommitment: string | null;
   batchSlot: string;
-  /** Recovery v2: shared ephemeral X25519 pubkey and THIS side's 44-byte
+  /** Recovery v3: shared ephemeral X25519 pubkey and THIS side's 44-byte
    * encrypted output tuple. Opaque to the indexer. */
   ephemeralPubkey: string | null;
   outputEnc: string | null;

@@ -18,10 +18,10 @@
 import { createHash } from "node:crypto";
 
 export const ORDER_DOMAIN: Uint8Array = new TextEncoder().encode(
-  "nyx-order-v3",
+  "darknyx-order-v4",
 );
 export const CANCEL_DOMAIN: Uint8Array = new TextEncoder().encode(
-  "nyx-cancel-v1",
+  "darknyx-cancel-v2",
 );
 export const SYMBOL_MAX_LEN = 32;
 
@@ -110,9 +110,9 @@ function concat(parts: Uint8Array[]): Uint8Array {
  * `S` = symbol bytes length):
  *
  * ```
- *   0..12        ORDER_DOMAIN              ("nyx-order-v3")
- *   12..13       symbol_len : u8
- *   13..13+S     symbol bytes
+ *   0..16        ORDER_DOMAIN              ("darknyx-order-v4")
+ *   16..17       symbol_len : u8
+ *   17..17+S     symbol bytes
  *   +0..+1       side       : u8           (0 = bid, 1 = ask)
  *   +1..+2       order_type : u8           (0 = limit, 1 = ioc, 2 = fok)
  *   +2..+10      amount        : u64 LE
@@ -127,7 +127,7 @@ function concat(parts: Uint8Array[]): Uint8Array {
  *   +154..+186   session_id : [u8; 32]
  * ```
  *
- * Total length: `199 + S` bytes.
+ * Total length: `203 + S` bytes.
  */
 export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
   if (o.symbol.length > SYMBOL_MAX_LEN) {
@@ -191,10 +191,10 @@ export function orderCanonicalDigest(o: OrderCanonical): Uint8Array {
  * Cancel-order canonical view. Layout:
  *
  * ```
- *   0..13       CANCEL_DOMAIN  ("nyx-cancel-v1")
- *   13..29      order_id      : [u8; 16]
- *   29..61      trading_key   : [u8; 32]
- *   61..69      cancel_nonce  : u64 LE
+ *   0..17       CANCEL_DOMAIN  ("darknyx-cancel-v2")
+ *   17..33      order_id      : [u8; 16]
+ *   33..65      trading_key   : [u8; 32]
+ *   65..73      cancel_nonce  : u64 LE
  * ```
  */
 export function cancelCanonicalBytes(c: CancelCanonical): Uint8Array {

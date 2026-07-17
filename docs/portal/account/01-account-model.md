@@ -1,13 +1,13 @@
 ---
 sidebar_position: 1
 title: Account Model
-description: How balances work on Nyx, as UTXO-style notes you own on-chain, reconstructed client-side from Merkle proofs and your own keys.
+description: How balances work on Darknyx, as UTXO-style notes you own on-chain, reconstructed client-side from Merkle proofs and your own keys.
 ---
 
 # Account Model
 
 :::info TL;DR
-Nyx has no server-held balance ledger. Your assets are **UTXO-style notes**
+Darknyx has no server-held balance ledger. Your assets are **UTXO-style notes**
 committed on-chain as hashes. Only you, with your spending key, can determine
 which notes are yours and what they are worth. You reconstruct your account state
 **client-side** from the public Merkle tree plus your keys; the engine never sees
@@ -22,9 +22,9 @@ your **open orders** (the orders you placed that are still in the book). It does
 
 On a custodial venue the operator keeps your balance in a database and serves it
 on request. That only works because the operator can see what you hold, which is
-exactly the position privacy Nyx is built to remove.
+exactly the position privacy Darknyx is built to remove.
 
-On Nyx your balance is the set of **notes** you own. A note is committed on-chain
+On Darknyx your balance is the set of **notes** you own. A note is committed on-chain
 as a Poseidon hash that seals its owner, value, and token. Determining that a
 given note is *yours* and reading its amount requires your **spending key**, and
 that key never enters the enclave. So the engine *cannot* compute your balance

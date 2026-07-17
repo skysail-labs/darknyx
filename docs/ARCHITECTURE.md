@@ -1,6 +1,6 @@
-# Nyx Darkpool — Architecture
+# Darknyx Darkpool — Architecture
 
-Nyx (aka **darknyx**) is a privacy-preserving CLOB-style darkpool on
+Darknyx (aka **darknyx**) is a privacy-preserving CLOB-style darkpool on
 Solana. Order intent (side, price, amount, the note backing it) never
 appears on-chain, and **per-trade amounts + the execution price are hidden
 at settlement too** — the on-chain settle tx carries only note commitments,
@@ -22,7 +22,7 @@ Three layers, three trust boundaries:
 | Layer | Tech | Owns |
 |---|---|---|
 | **L1 (Solana)** | `programs/vault` (Anchor 0.32) | Custody, the incremental note Merkle tree, the nullifier / consumed-note / lock PDA sets, the Groth16 verifier, atomic batched settlement |
-| **TEE (CVM)** | `crates/nyx-tee` in a TDX CVM on Phala | Hidden order intake (`POST /orders`), uniform-clearing-price matching, consumed-input-derived outputs, the settle pipeline, Merkle mirrors, and auth'd HTTP/WS |
+| **TEE (CVM)** | `crates/darknyx-tee` in a TDX CVM on Phala | Hidden order intake (`POST /orders`), uniform-clearing-price matching, consumed-input-derived outputs, the settle pipeline, Merkle mirrors, and auth'd HTTP/WS |
 | **Client** | `packages/sdk` (TypeScript) + snarkjs | Key derivation, VALID_DEPOSIT/VALID_INPUT proof generation, deterministic output recovery helpers, ix builders, `POST` to the CVM |
 
 ```
@@ -34,7 +34,7 @@ Three layers, three trust boundaries:
          │  ★ side / price / amount / note_commitment NEVER touch any L1 tx
          ▼
   ┌─────────────────────────────────────────────────────────────┐
-  │  TEE / CVM (crates/nyx-tee)                                  │
+  │  TEE / CVM (crates/darknyx-tee)                                  │
   │   • intake: verify trading-key sig + the note opening        │
   │   • match:  uniform clearing price (darkpool-matcher)        │
   │   • settle pipeline, signed by the enclave's Ed25519 key:    │
@@ -67,7 +67,7 @@ in-CVM matcher replaced them. The only on-chain program is `vault`.
 ## Project layout
 
 ```
-nyx-monorepo/
+darknyx-monorepo/
 ├── programs/vault/                  # The ONLY on-chain program (Anchor 0.32)
 │   ├── src/
 │   │   ├── lib.rs                    # #[program] entrypoints
@@ -117,8 +117,8 @@ nyx-monorepo/
 │   ├── darkpool-matcher/             # The matching algorithm (single source of truth) +
 │   │                                 #   order/cancel canonical signing +
 │   │                                 #   change_note::derive_inner
-│   ├── nyx-tee/                      # The in-CVM engine (see below)
-│   └── nyx-tee-loadgen/              # Host binary: load-tests the CVM's /orders intake
+│   ├── darknyx-tee/                      # The in-CVM engine (see below)
+│   └── darknyx-tee-loadgen/              # Host binary: load-tests the CVM's /orders intake
 │
 ├── circuits/                        # circom + snarkjs Groth16 circuits
 │   ├── valid_wallet_create/  valid_spend/  valid_input/
@@ -132,14 +132,14 @@ nyx-monorepo/
 └── docs/                            # this file, tee-architecture, attestation-flow, the OpenAPI
 ```
 
-### `crates/nyx-tee` (the in-CVM engine)
+### `crates/darknyx-tee` (the in-CVM engine)
 
 ```
 src/
 ├── boot.rs        # dstack handshake → derive the shard-0 Ed25519 signer; cold-boot the mirrors
 ├── config.rs      # env-driven config (num_trees, prover backend, send concurrency), fail-fast
 ├── api/           # axum HTTP/WS: REST endpoints + the sole /v1/stream socket
-├── keys/          # dstack-derived key material (K shard signers at nyx/ed25519-signer/v1/{i})
+├── keys/          # dstack-derived key material (K shard signers at darknyx/ed25519-signer/v2/{i})
 ├── matcher/       # the order book + the interval driver (tick → match → page → settle);
 │                  #   input-inner-derived continuations + fill memos
 ├── merkle/        # K per-shard Merkle mirrors (cold-boot sync + live poll, routed by tree_id)
@@ -260,11 +260,11 @@ all-dummy merges and derives the output inner as
 `Poseidon6(26, c0, c1, c2, c3, active_bitmap)` from the public consumed-note
 commitments.
 
-### `crates/nyx-tee` — the in-CVM engine
+### `crates/darknyx-tee` — the in-CVM engine
 
 Runs inside the TDX CVM. On boot it does the dstack handshake (deriving its
 **K shard Ed25519 signers** + cold-booting the K Merkle mirrors), loads the
-N=16 proving key (`ark` or `rapidsnark` backend per `NYX_TEE_PROVER`), and
+N=16 proving key (`ark` or `rapidsnark` backend per `DARKNYX_TEE_PROVER`), and
 starts: the matcher interval driver (tick → match → page into ≤16 batches →
 enqueue settle), the settle scheduler (assembles + drives each batch through
 lock→prove→verify→ALT→settle→close), the oracle sync, the slot poller, the
@@ -326,7 +326,7 @@ on-chain hashers).
 (`MatchBatch(N)` is also instantiated at N=2/4 for dev/test only.) The
 in-enclave `VALID_MATCH_BATCH` prover has two interchangeable backends — `ark`
 (ark-circom, default) and `rapidsnark` (C++ FFI, ~1.4× on 8 vCPU) — selected
-by `NYX_TEE_PROVER` on the SAME image. Witness gen is ark-circom either way.
+by `DARKNYX_TEE_PROVER` on the SAME image. Witness gen is ark-circom either way.
 
 ### `packages/sdk` — TypeScript client
 
@@ -439,7 +439,7 @@ recoverable on a replacement device with an authenticated backup:
    Export a portable, versioned AES-256-GCM/scrypt envelope with
    `exportEncryptedMasterSeed`, store its passphrase separately, and restore it
    with `importEncryptedMasterSeed`. Wallet-message signatures are deliberately
-   not a Nyx spend authority.
+   not a Darknyx spend authority.
 2. **Proof-bound deposits.** `getDepositFunction` derives a pseudorandom public
    recovery nonce and hidden `Poseidon3(27, owner, nonce)` inner, generates
    VALID_DEPOSIT locally, and submits only the commitment + nonce. Cold recovery
@@ -473,13 +473,13 @@ and [`CLAUDE.md §2–§3`](../CLAUDE.md). Summary:
    programs/vault/Cargo.toml`; `bash scripts/deploy-devnet.sh` (idempotent
    upgrade; needs ≥ 5 devnet SOL).
 3. **Devnet state** — `vitest run tests/devnet-setup.test.ts` (`RUN_DEVNET_E2E=1`,
-   `NYX_NUM_TREES=K`) creates mints + the K `MerkleTree` shards + the K-tree
+   `DARKNYX_NUM_TREES=K`) creates mints + the K `MerkleTree` shards + the K-tree
    static settle ALT + protocol config + resets every shard, writing
    `.devnet/e2e-config.json` (incl. `numTrees` + `merkleTreePdas[]`). A tree
    reset is mandatory after any circuit/VK change or note-model migration; a
    `VaultConfig` layout change needs `close-vault-config.mjs` first (§4.4).
 4. **Build + deploy the CVM** — bump the image tag, push it (CI → ghcr),
-   `phala deploy -e <env>` (`NYX_TEE_NUM_TREES=K` matching), register the CVM's
+   `phala deploy -e <env>` (`DARKNYX_TEE_NUM_TREES=K` matching), register the CVM's
    K shard signers (`rotate-tee-pubkey.mjs <K0..Kn>`), fund each
    (`fund-tee-keys.mjs`). Mind the mint regime (real-mint for `cvm-settle-e2e`,
    placeholder for the loadgen) — see `CLAUDE.md §3`.

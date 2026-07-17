@@ -18,8 +18,8 @@
  * SUM is chosen to equal `withFee(Q)` so the merged note exactly covers the
  * ask's fee-inclusive collateral for qty Q (intake's `orders.rs` derivation).
  *
- * Gate: RUN_CVM_E2E=1 + NYX_TEE_GATEWAY + the VALID_MERGE artifacts. Run:
- *   RUN_CVM_E2E=1 NYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$HELIUS \
+ * Gate: RUN_CVM_E2E=1 + DARKNYX_TEE_GATEWAY + the VALID_MERGE artifacts. Run:
+ *   RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$HELIUS \
  *     FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm tests/cvm-merge-then-order.test.ts )
  */
@@ -89,7 +89,7 @@ const MERGE_ZKEY = resolve(
   REPO_ROOT,
   "circuits/build/valid_merge_k2/circuit_final.zkey",
 );
-const GATEWAY = (process.env.NYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
+const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const READY =
   process.env.RUN_CVM_E2E === "1" &&
   GATEWAY !== "" &&
@@ -98,7 +98,7 @@ const READY =
 const maybeDescribe = READY ? describe : describe.skip;
 
 const SETTLE_TIMEOUT_MS = Number(
-  process.env.NYX_CVM_SETTLE_TIMEOUT_MS ?? "120000",
+  process.env.DARKNYX_CVM_SETTLE_TIMEOUT_MS ?? "120000",
 );
 
 maybeDescribe(
@@ -153,14 +153,14 @@ maybeDescribe(
         // Q (= ask qty). The merged note must equal withFee(Q) so it exactly
         // covers the ask's fee-inclusive collateral. Per-run-unique commitments.
         const Q = BigInt(
-          process.env.NYX_CVM_BASE_QTY ?? String((Date.now() % 200_000) + 2000),
+          process.env.DARKNYX_CVM_BASE_QTY ?? String((Date.now() % 200_000) + 2000),
         );
         const mergedAmt = withFee(Q); // = A0 + A1
         const A1 = mergedAmt / 2n;
         const A0 = mergedAmt - A1; // A0 + A1 === mergedAmt exactly
         const buyerNoteAmt = withFee(scaledQuote(Q, bidPrice, PRICE_SCALE));
         const ORDER_N = Number(
-          process.env.NYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),
+          process.env.DARKNYX_CVM_ORDER_N ?? String(Date.now() % 1_000_000),
         );
         console.log(
           `  · Q=${Q} mergedAmt=${mergedAmt} (A0=${A0}+A1=${A1}) buyerNote=${buyerNoteAmt} bid=${bidPrice} ask=${askPrice} feeBps=${FEE_RATE_BPS}`,

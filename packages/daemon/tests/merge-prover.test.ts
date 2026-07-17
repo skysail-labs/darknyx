@@ -21,7 +21,7 @@ import {
   ownerCommitment,
   pubkeyToFrPair,
   type MergeInputs,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");

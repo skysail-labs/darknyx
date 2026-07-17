@@ -16,7 +16,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
-import type { NoteStore, StoredNote } from "@nyx/sdk";
+import type { NoteStore, StoredNote } from "@darknyx/sdk";
 
 import type { ManagedOrder, OrderPhase, Side } from "./types.js";
 

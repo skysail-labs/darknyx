@@ -17,7 +17,7 @@ import {
 import { LifecycleEngine } from "../src/lifecycle-engine.js";
 import { DaemonStore } from "../src/store.js";
 import { newManagedOrder, type ManagedOrder } from "../src/types.js";
-import type { OrderUpdate } from "@nyx/sdk";
+import type { OrderUpdate } from "@darknyx/sdk";
 
 const ORDER_ID = "00112233445566778899aabbccddeeff";
 

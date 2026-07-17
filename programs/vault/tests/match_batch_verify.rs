@@ -1,7 +1,7 @@
 //! Real N=16 proof → on-chain `verify_match_batch` acceptance
 //! (VALID_MATCH_BATCH v3 real-N16 step 2).
 //!
-//! Step 1 (`crates/nyx-tee/tests/n16_assemble_prove_verify.rs`) proved
+//! Step 1 (`crates/darknyx-tee/tests/n16_assemble_prove_verify.rs`) proved
 //! the settle assembler's witness yields a Groth16 proof that verifies
 //! in ARK. This closes the remaining gap: the ark→on-chain BYTE
 //! conversion (`prover::proof_to_onchain_bytes`) is accepted by the
@@ -15,7 +15,7 @@
 //! Regenerate after a circuit / converter change with:
 //!
 //! ```sh
-//! RUN_N16_PROVE=1 DUMP_N16_FIXTURE=1 cargo test -p nyx-tee --release \
+//! RUN_N16_PROVE=1 DUMP_N16_FIXTURE=1 cargo test -p darknyx-tee --release \
 //!   --test n16_assemble_prove_verify
 //! ```
 //!
@@ -99,8 +99,8 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
         .send_transaction(tx)
         .expect("on-chain groth16-solana must accept our real N=16 proof");
 
-    // CU profiling + regression guard for nyx-tee's per-tx ComputeUnitLimit
-    // right-sizing (VERIFY_COMPUTE_UNIT_LIMIT in crates/nyx-tee/src/settle/pipeline.rs,
+    // CU profiling + regression guard for darknyx-tee's per-tx ComputeUnitLimit
+    // right-sizing (VERIFY_COMPUTE_UNIT_LIMIT in crates/darknyx-tee/src/settle/pipeline.rs,
     // now 180_000). v3's eight public inputs measure ~132.5k CU in litesvm.
     // The higher transaction limit preserves >20% headroom and covers the
     // modest devnet/runtime delta observed in prior verifier measurements.

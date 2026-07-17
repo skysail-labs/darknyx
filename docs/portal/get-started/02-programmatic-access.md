@@ -1,13 +1,13 @@
 ---
 sidebar_position: 3
 title: Programmatic Access
-description: The Nyx API surface at a glance: the two-layer auth model, the REST and WebSocket endpoints, and a quick start.
+description: The Darknyx API surface at a glance: the two-layer auth model, the REST and WebSocket endpoints, and a quick start.
 ---
 
 # Programmatic Access
 
 :::info TL;DR
-Nyx exposes a **REST + WebSocket API** from the confidential-VM deployment.
+Darknyx exposes a **REST + WebSocket API** from the confidential-VM deployment.
 Authentication is **two layers**: an account **bearer token** (who is
 allowed to talk to the venue) plus a per-order **trading-key signature** (who
 cryptographically owns the order). Market and health reads are public; private

@@ -6,10 +6,10 @@
  *
  * Env-gated (auto-skips offline / in CI without a CVM):
  *   RUN_CVM_ATTEST=1
- *   NYX_TEE_GATEWAY=https://<app>-8080.dstack-...phala.network
- *   NYX_TEE_TOKEN=<bearer>            (if the gateway requires auth on /info)
+ *   DARKNYX_TEE_GATEWAY=https://<app>-8080.dstack-...phala.network
+ *   DARKNYX_TEE_TOKEN=<bearer>            (if the gateway requires auth on /info)
  *   SOLANA_RPC_URL=<helius>           (for the on-chain tee_pubkeys cross-check)
- *   NYX_VAULT_PROGRAM_ID=<base58>     (default: devnet vault)
+ *   DARKNYX_VAULT_PROGRAM_ID=<base58>     (default: devnet vault)
  *
  * The compose_hash pin is BOOTSTRAPPED from the first verified quote (replay the
  * event log → read the compose-hash event), then re-asserted through the full
@@ -32,11 +32,11 @@ import {
 } from "../src/index.js";
 
 const RUN = process.env.RUN_CVM_ATTEST === "1";
-const GATEWAY = process.env.NYX_TEE_GATEWAY ?? "";
+const GATEWAY = process.env.DARKNYX_TEE_GATEWAY ?? "";
 const RPC = process.env.SOLANA_RPC_URL ?? "";
-const TOKEN = process.env.NYX_TEE_TOKEN;
+const TOKEN = process.env.DARKNYX_TEE_TOKEN;
 const PROGRAM_ID =
-  process.env.NYX_VAULT_PROGRAM_ID ??
+  process.env.DARKNYX_VAULT_PROGRAM_ID ??
   "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
 
 const gate = RUN && GATEWAY ? describe : describe.skip;

@@ -17,7 +17,7 @@ import {
 import { noteCommitmentV2 } from "../utxo/note.js";
 import type { ChangeNoteRecord, NoteStore } from "../utxo/note-store.js";
 
-/** Wire shape of a fill memo (mirrors `nyx_tee::matcher::FillMemo`). */
+/** Wire shape of a fill memo (mirrors `darknyx_tee::matcher::FillMemo`). */
 export interface FillMemo {
   order_id: string; // 16-byte hex
   consumed_note_commitment: string; // 32-byte hex
