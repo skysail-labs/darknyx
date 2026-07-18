@@ -129,11 +129,9 @@ real-settle path), see [`scripts/dev-commands.md`](scripts/dev-commands.md)
 | **[`docs/tee-architecture.md`](docs/tee-architecture.md)**     | The in-TEE matcher/settler design (book, settle pipeline, auth) |
 | **[`docs/fills-history-architecture.md`](docs/fills-history-architecture.md)** | Fills delivery + trade history: deterministic order_ids + per-account `/v1/stream` fill memos (the low-latency path) + durable on-chain ciphertext recovery; the off-TEE indexer is a commitment locator only |
 | **[`docs/governance.md`](docs/governance.md)**                 | Authority model + the mainnet multisig runbook: upgrade / `admin` / `root_key` → Squads v4, the `initialize`-binding bootstrap order, attestation-gated TEE rotation (audit_1 F-03/F-10) |
-| **[`DeepWiki`](https://deepwiki.com/skysail-labs/darknyx)**    | Indexed, code-linked walkthrough of the repo                |
 
 The **authoritative** description of the live system is in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md),
-the indexed [DeepWiki](https://deepwiki.com/skysail-labs/darknyx), and the
-source under `programs/`, `crates/`, and `packages/sdk/src/`.
+and the source under `programs/`, `crates/`, and `packages/sdk/src/`.
 
 ---
