@@ -284,6 +284,15 @@ template MatchSlot() {
     component priceIsZero = IsZero();
     priceIsZero.in <== clearing_price;
     is_active * priceIsZero.out === 0;
+    // U-03: an active match must also produce a positive quote. Without this a
+    // clear whose scaled floor yields `quote_amount = 0` (base·price < scale)
+    // still verifies and mints a zero-amount quote note (`note_d`) that
+    // `withdraw` (`amount > 0`) can never spend — permanent dead Merkle weight.
+    // Mirror of `baseIsZero`. The matcher also refuses zero-quote clears (U-06),
+    // so no honest path ever hits this constraint.
+    component quoteIsZero = IsZero();
+    quoteIsZero.in <== quote_amount;
+    is_active * quoteIsZero.out === 0;
 
     // ─────────────────────────────────────────────────────────────────
     // EXACT FEE (amount-privacy P1b + C-04 audit) — the fee is pinned to

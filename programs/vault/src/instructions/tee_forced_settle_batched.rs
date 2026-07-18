@@ -100,7 +100,11 @@ fn u64_be32(v: u64) -> [u8; 32] {
 /// amounts/mints/price transitively (each is a Poseidon6 of its
 /// mint+amount+owner+inner), so the leaf no longer hashes — and the payload
 /// no longer needs to carry — the plaintext amounts. The two fee-note
-/// commitments are bound here so the slot-0 append of them is proof-backed.
+/// commitments are bound here so THIS match's fee-note append is proof-backed:
+/// fees are PER-MATCH (each active MatchSlot derives its own
+/// `note_fee_base/quote` from that match's consumed commitments), so every
+/// settle carries its own match's fee notes — not a batch-aggregate flushed by
+/// one slot.
 // Exposed for integration tests that need to fabricate a Merkle root
 // without running the full `verify_match_batch` Groth16 verifier (see
 // `programs/vault/tests/tee_forced_settle_batched.rs`).
@@ -461,13 +465,17 @@ pub fn tee_forced_settle_batched_handler(
     // `zsr` (empty-subtree roots) + `protocol_owner_set` were read off
     // vault_config at the top (CU-2); the appends mutate only `merkle_tree`.
 
-    // Two batch-level protocol fee notes, one per mint: base (seller-side fees)
-    // + quote (buyer-side fees). Only the first settlement in a batch carries
-    // them; both `[0;32]` otherwise. They mint only once a protocol owner is
-    // configured — gate it BEFORE touching the tree so a misconfig fails
-    // without leaving partial state. Settle never touches `outstanding` (value
-    // is conserved out of the consumed note_a/b; the fee note just lets the
-    // protocol claim its share via the normal VALID_SPEND path).
+    // This match's two protocol fee notes, one per mint: base (seller-side
+    // fees) + quote (buyer-side fees). Fees are PER-MATCH (amount-privacy P1b):
+    // each active MatchSlot derives its own `note_fee_base/quote` from that
+    // match's consumed commitments, so every settle in the batch appends its
+    // OWN fee notes — not a batch-aggregate that only slot 0 flushes. A leg
+    // whose exact fee is zero has a `[0;32]` commitment and is not appended.
+    // They mint only once a protocol owner is configured — gate it BEFORE
+    // touching the tree so a misconfig fails without leaving partial state.
+    // Settle never touches `outstanding` (value is conserved out of the
+    // consumed note_a/b; the fee note just lets the protocol claim its share
+    // via the normal VALID_SPEND path).
     let has_fee_base = payload.note_fee_base_commitment != [0u8; 32];
     let has_fee_quote = payload.note_fee_quote_commitment != [0u8; 32];
     if has_fee_base || has_fee_quote {

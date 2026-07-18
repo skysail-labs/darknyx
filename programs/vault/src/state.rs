@@ -100,12 +100,26 @@ pub struct MarketConfig {
     pub quote_mint: Pubkey,
     /// Fixed-point denominator in
     /// `quote_amount = floor(base_amount * clearing_price / price_scale)`.
+    /// `price_scale` (+ the mint pair) IS proof-bound: `verify_match_batch`
+    /// fans it in as a public input, so every active slot is pinned to it.
     pub price_scale: u64,
-    /// Smallest permitted price increment in scaled price units.
+    // ── U-01: TEE/matcher-enforced only, NOT proof-bound ────────────────────
+    // The three fields below are governance-set market rules the in-TEE matcher
+    // honours, but they are NOT public inputs to VALID_MATCH_BATCH and not
+    // bound into the leaf. `verify_match_batch` proof-enforces only market
+    // identity (mint pair) + `price_scale` + conservation + the EXACT fee; it
+    // does NOT check tick alignment, minimum size, or the circuit-breaker band.
+    // A buggy/compromised authorized TEE could therefore clear off-tick, under
+    // min size, or outside the breaker band and still produce a verifying
+    // proof — the same trust class as uniform-price/oracle-band fairness (a
+    // documented TEE-trusted non-goal; see CRYPTOGRAPHY.md). Do not describe
+    // these as "on-chain-enforced market rules". Binding them would require a
+    // lockstep circuit + VK + assembler change (deliberately not done).
+    /// Smallest permitted price increment in scaled price units. TEE-enforced.
     pub tick_size: u64,
-    /// Minimum order quantity in base-asset atomic units.
+    /// Minimum order quantity in base-asset atomic units. TEE-enforced.
     pub min_order_size: u64,
-    /// Max `|clearing_price - oracle_twap| / oracle_twap`, in bps.
+    /// Max `|clearing_price - oracle_twap| / oracle_twap`, in bps. TEE-enforced.
     pub circuit_breaker_bps: u64,
     /// Snapshotted from the SPL mint accounts at initialization.
     pub base_decimals: u8,

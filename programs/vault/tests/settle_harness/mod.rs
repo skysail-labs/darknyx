@@ -1211,6 +1211,29 @@ pub fn set_vault_fee_config(h: &mut Harness, owner_commitment: [u8; 32], fee_rat
     h.svm.set_account(pda, acct).unwrap();
 }
 
+/// Directly seed a `ConsumedNoteEntry` PDA for `note_commitment` (bypasses the
+/// real settle/withdraw path). Mimics a note that has already been consumed so
+/// tests can assert the U-02 `lock_note` re-lock guard. Layout mirrors
+/// `vault::state::ConsumedNoteEntry`: 8 disc + 32 commitment + 16 match_id
+/// + 8 consumed_slot + 1 bump + 7 pad = 72 bytes.
+pub fn seed_consumed_note(h: &mut Harness, note_commitment: &[u8; 32]) {
+    use solana_account::Account as SolAccount;
+    let (pda, bump) = consumed_note_pda(&h.vault_id, note_commitment);
+    let mut data = vec![0u8; 72];
+    data[0..8].copy_from_slice(&anchor_acct_disc("ConsumedNoteEntry"));
+    data[8..40].copy_from_slice(note_commitment);
+    // match_id (16) + consumed_slot (8) left zero — the sentinel a withdraw uses.
+    data[64] = bump;
+    let acct = SolAccount {
+        lamports: h.svm.minimum_balance_for_rent_exemption(data.len()),
+        data,
+        owner: h.vault_id,
+        executable: false,
+        rent_epoch: 0,
+    };
+    h.svm.set_account(pda, acct).unwrap();
+}
+
 /// True if the `consumed_note` PDA for `note_commitment` has been initialised.
 pub fn consumed_note_exists(h: &Harness, note_commitment: &[u8; 32]) -> bool {
     let (pda, _) = consumed_note_pda(&h.vault_id, note_commitment);

@@ -427,6 +427,51 @@ const ready2 = artefactsReady(2);
 // ---------------------------------------------------------------------------
 
 (ready2 ? describe : describe.skip)("v3.5 — N=2 negative paths", () => {
+  it("[zero_quote_active] active slot with quote_amount == 0 is UNPROVABLE (U-03)", async () => {
+    // priceScale=1000: slot 0 fills positively (base=1000, price=1 → quote=1);
+    // slot 1's notional floors to zero quote (base=1, price=1 → quote=0). Such a
+    // clear would mint an unspendable zero-amount note_d. The scaled-floor and
+    // conservation prechecks PASS (1 == 0*1000 + 1; aAmount == quote+change+fee),
+    // so this reaches witness generation and fails ONLY on the circuit's
+    // `is_active * quoteIsZero === 0` gate.
+    const quoteMint = rand32(0x3a);
+    const baseMint = rand32(0x3b);
+    const common = {
+      quoteMint,
+      baseMint,
+      buyerOwnerCommit: 0x1111n,
+      sellerOwnerCommit: 0x2222n,
+      sellerChange: 0n,
+      buyerFee: 0n,
+      sellerFee: 0n,
+      priceScale: 1000n,
+    };
+    const slots = [
+      await buildSlot({
+        ...common,
+        baseAmount: 1000n,
+        clearingPrice: 1n,
+        buyerChange: 0n,
+        batchSlot: 0n,
+        slotIdx: 0,
+      }),
+      await buildSlot({
+        ...common,
+        baseAmount: 1n,
+        clearingPrice: 1n,
+        // Keep aAmount positive so the failure is unambiguously the zero-quote
+        // gate, not an all-zero input note.
+        buyerChange: 5n,
+        batchSlot: 1n,
+        slotIdx: 1,
+      }),
+    ];
+    expect(slots[1].quoteAmount).toBe(0n);
+    await expect(
+      proveMatchBatch({ repoRoot: REPO_ROOT, slots }),
+    ).rejects.toThrow();
+  }, 30_000);
+
   it("[bad_price_math] prover precondition rejects quote != base × price", async () => {
     const slots = await defaultBatch(2);
     // Deliberately corrupt slot[0] so the headline VALID_PRICE constraint

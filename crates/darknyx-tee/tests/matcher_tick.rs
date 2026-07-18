@@ -76,7 +76,13 @@ fn mk_config() -> MatchConfig {
     MatchConfig {
         base_mint,
         quote_mint,
-        price_scale: 100_000_000,
+        // price_scale must be consistent with these toy prices/amounts: with
+        // clearing_price=100 and base amounts of 5–10, a price_scale of 1e8
+        // floored `quote = base*price/price_scale` to ZERO — a degenerate clear
+        // that mints an unspendable zero-amount quote note. The matcher now
+        // skips zero-quote clears (U-06) and the circuit rejects them (U-03), so
+        // the config must yield a positive quote. price_scale=100 → quote=base.
+        price_scale: 100,
         tick_size: 1,
         min_order_size: 0,
         circuit_breaker_bps: 100_000, // effectively disabled for the test
