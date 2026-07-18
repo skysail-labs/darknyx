@@ -207,6 +207,10 @@ async fn tick_produces_matches_for_crossing_book() {
     assert_eq!(output.matches.len(), 1);
     assert_eq!(output.clearing_price, 100);
     assert_eq!(output.matches[0].base_amt, 10);
+    // Pin a POSITIVE quote (base*price/price_scale = 10*100/100 = 10). Guards
+    // against a config that floors quote to zero — the degenerate clear U-06
+    // now skips and U-03 rejects in-circuit.
+    assert_eq!(output.matches[0].quote_amt, 10);
 
     let final_state = state.read().await;
     assert!(
@@ -271,6 +275,14 @@ async fn tick_pages_oversized_match_set_into_capped_batches() {
             .iter()
             .all(|b| !b.matches.is_empty() && b.matches.len() <= 2),
         "each emitted batch is non-empty and within the N cap"
+    );
+    // Every paged match carries a positive quote (no zero-quote clears survive
+    // U-06); base*price/price_scale = 10*100/100 = 10 for each pair.
+    assert!(
+        batches
+            .iter()
+            .all(|b| b.matches.iter().all(|m| m.quote_amt == 10)),
+        "every paged match has a positive quote"
     );
     let total: usize = batches.iter().map(|b| b.matches.len()).sum();
     assert_eq!(total, 5, "every crossing pair matched across the pages");
@@ -350,6 +362,8 @@ async fn tick_handles_partial_fill() {
     let output = rx.try_recv().expect("one tick");
     assert_eq!(output.matches.len(), 1);
     assert_eq!(output.matches[0].base_amt, 5);
+    // Positive quote: 5*100/100 = 5 (the partial fill still clears a real notional).
+    assert_eq!(output.matches[0].quote_amt, 5);
 
     let final_state = state.read().await;
     let pending_bid = final_state.book().get(&bid_id).unwrap();
@@ -385,6 +399,7 @@ async fn two_consecutive_ticks_advance_state() {
     let out1 = rx.try_recv().expect("first output");
     assert_eq!(out1.matches.len(), 1);
     assert_eq!(out1.matches[0].base_amt, 10);
+    assert_eq!(out1.matches[0].quote_amt, 10);
     assert_eq!(out1.matches[0].match_id, 0, "first match gets id 0");
     assert!(state.read().await.book().snapshot().orders.is_empty());
     assert_eq!(state.read().await.book().len(), 2);
@@ -403,6 +418,7 @@ async fn two_consecutive_ticks_advance_state() {
     let out2 = rx.try_recv().expect("second output");
     assert_eq!(out2.matches.len(), 1);
     assert_eq!(out2.matches[0].base_amt, 10);
+    assert_eq!(out2.matches[0].quote_amt, 10);
     assert_eq!(out2.matches[0].match_id, 1, "second match gets id 1");
 
     assert!(state.read().await.book().snapshot().orders.is_empty());
