@@ -40,7 +40,8 @@ use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
 
 use crate::settle::vault::{
-    merkle_tree_pda, note_lock_pda, vault_config_pda, vault_program_id, SYSTEM_PROGRAM_ID,
+    consumed_note_pda, merkle_tree_pda, note_lock_pda, vault_config_pda, vault_program_id,
+    SYSTEM_PROGRAM_ID,
 };
 
 /// Anchor discriminator for the `lock_note` instruction. Computed
@@ -121,18 +122,22 @@ impl LockNoteArgs {
 ///     &[tree_id]] — the shard whose recent-roots ring is checked.
 ///   - `[3]` `note_lock`: writable PDA (init), seeds=[b"note_lock",
 ///     note_commitment].
-///   - `[4]` `system_program`: read-only.
+///   - `[4]` `consumed_note`: read-only PDA (U-02 consume-once guard — must be
+///     ABSENT), seeds=[b"consumed_note", note_commitment].
+///   - `[5]` `system_program`: read-only.
 pub fn build_lock_note_ix(tee_authority: &Address, args: LockNoteArgs) -> Instruction {
     let program_id = vault_program_id();
     let (vault_cfg_pda, _) = vault_config_pda();
     let (merkle_tree, _) = merkle_tree_pda(args.tree_id);
     let (note_lock_pda_addr, _) = note_lock_pda(&args.note_commitment);
+    let (consumed_note_pda_addr, _) = consumed_note_pda(&args.note_commitment);
 
     let accounts = vec![
         AccountMeta::new(*tee_authority, true), // signer + writable
         AccountMeta::new_readonly(vault_cfg_pda, false),
         AccountMeta::new_readonly(merkle_tree, false), // shard recency source
         AccountMeta::new(note_lock_pda_addr, false),   // writable (init)
+        AccountMeta::new_readonly(consumed_note_pda_addr, false), // U-02: must be absent
         AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
     ];
 
@@ -247,10 +252,10 @@ mod tests {
     fn account_list_matches_anchor_struct_order() {
         // Mirror of programs/vault/src/instructions/lock_note.rs
         // LockNote<'info>: tee_authority, vault_config, merkle_tree,
-        // note_lock, system_program.
+        // note_lock, consumed_note, system_program.
         let tee = dummy_tee_authority();
         let ix = build_lock_note_ix(&tee, dummy_args());
-        assert_eq!(ix.accounts.len(), 5);
+        assert_eq!(ix.accounts.len(), 6);
 
         // [0] tee_authority: signer + writable
         assert_eq!(ix.accounts[0].pubkey, tee);
@@ -271,10 +276,15 @@ mod tests {
         assert!(!ix.accounts[3].is_signer);
         assert!(ix.accounts[3].is_writable);
 
-        // [4] system_program: readonly
-        assert_eq!(ix.accounts[4].pubkey, SYSTEM_PROGRAM_ID);
+        // [4] consumed_note: readonly (U-02 must-be-absent guard)
+        assert_eq!(ix.accounts[4].pubkey, consumed_note_pda(&[0xAA; 32]).0);
         assert!(!ix.accounts[4].is_signer);
         assert!(!ix.accounts[4].is_writable);
+
+        // [5] system_program: readonly
+        assert_eq!(ix.accounts[5].pubkey, SYSTEM_PROGRAM_ID);
+        assert!(!ix.accounts[5].is_signer);
+        assert!(!ix.accounts[5].is_writable);
     }
 
     #[test]

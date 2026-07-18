@@ -63,6 +63,22 @@ pub struct LockNote<'info> {
     )]
     pub note_lock: AccountLoader<'info, NoteLock>,
 
+    /// U-02 consume-once guard. The commitment-keyed `ConsumedNoteEntry` for
+    /// this note MUST be ABSENT: a note already settled
+    /// (`tee_forced_settle_batched::consumed_a/b`) or withdrawn
+    /// (`withdraw::consumed_note`) has this PDA initialized, and a retained
+    /// VALID_INPUT proof would otherwise let an authorized TEE re-lock it (rent
+    /// waste + stuck state). NOT `init` — this handler must not create it (the
+    /// real settle/withdraw own that lifecycle); the address is pinned by seeds
+    /// and existence is checked in the handler.
+    /// CHECK: seeds pin the address; the handler rejects a already-initialized
+    /// (program-owned) account.
+    #[account(
+        seeds = [ConsumedNoteEntry::SEED, note_commitment.as_ref()],
+        bump,
+    )]
+    pub consumed_note: UncheckedAccount<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -93,6 +109,16 @@ pub fn lock_note_handler(
             VaultError::StaleMerkleRoot
         );
     }
+
+    // U-02: reject re-locking an already-consumed note. If the commitment-keyed
+    // `ConsumedNoteEntry` exists (program-owned), the note was settled or
+    // withdrawn; the Merkle leaf survives, so a still-valid VALID_INPUT proof
+    // would otherwise pass below. Cheap check first — mirror of the inverted
+    // `withdraw` note-lock guard. A non-existent PDA is system-owned → allowed.
+    require!(
+        ctx.accounts.consumed_note.owner != ctx.program_id,
+        VaultError::NoteAlreadyConsumed
+    );
 
     require!(expiry_slot > clock.slot, VaultError::InvalidExpirySlot);
     // v2 hardening: cap how far in the future the lock can sit. The vault's

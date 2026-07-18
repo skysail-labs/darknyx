@@ -458,6 +458,23 @@ pub(crate) fn generate_matches(
         }
         let quote_amt = quote_amt_u128 as u64;
 
+        // U-06 (companion to the U-03 circuit gate): a clear whose notional
+        // floors to zero quote would mint a zero-amount quote note (`note_d`)
+        // that `withdraw` (`amount > 0`) can never spend — permanent dead Merkle
+        // weight. VALID_MATCH_BATCH now also rejects `quote_amount == 0` on an
+        // active slot, so producing this match would fail to prove regardless.
+        // Skip the pair (advance the smaller side, mirroring the min_fill_qty
+        // skip above); both orders stay in the book to be reconsidered against
+        // other counterparties next tick.
+        if quote_amt == 0 {
+            if bids[bi].amount <= asks[ai].amount {
+                bi += 1;
+            } else {
+                ai += 1;
+            }
+            continue;
+        }
+
         // fee = amount * bps / 10_000. With the on-chain invariant
         // `fee_rate_bps <= 10_000` (enforced by set_protocol_config)
         // the result is <= the amount and always fits u64 — but make
@@ -1077,5 +1094,62 @@ mod tests {
             .map(|p| snap(OrderSide::Ask, *p, 10))
             .collect();
         assert_eq!(compute_clearing_price(&bids, &asks), Some((146, 30)));
+    }
+
+    // ─── U-06: skip zero-quote clears ───────────────────────────────────
+
+    /// One crossing bid/ask with distinct trading keys (so the self-trade
+    /// guard doesn't fire first) at `price`/`amount`.
+    fn crossing_pair(price: u64, amount: u64) -> (Vec<OrderSnapshot>, Vec<OrderSnapshot>) {
+        let mut bid = snap(OrderSide::Bid, price, amount);
+        bid.trading_key = [1u8; 32];
+        let mut ask = snap(OrderSide::Ask, price, amount);
+        ask.trading_key = [2u8; 32];
+        (vec![bid], vec![ask])
+    }
+
+    fn run_pair(price_scale: u64) -> (usize, Vec<MatchPair>) {
+        let base_mint = [0xBBu8; 32];
+        let quote_mint = [0xCCu8; 32];
+        let (mut bids, mut asks) = crossing_pair(1, 1);
+        let mut out = Vec::new();
+        let mut fee_buckets = [FeeBucket::new(base_mint, 0), FeeBucket::new(quote_mint, 0)];
+        let n = generate_matches(
+            &mut bids,
+            &mut asks,
+            /* p_star */ 1,
+            /* pyth_twap */ 1,
+            /* now_slot */ 0,
+            &base_mint,
+            &quote_mint,
+            price_scale,
+            /* fee_rate_bps */ 0,
+            /* start_match_id */ 0,
+            /* max_matches */ 16,
+            /* single_fill_per_order */ true,
+            &mut out,
+            &mut fee_buckets,
+        )
+        .expect("generate_matches");
+        (n, out)
+    }
+
+    #[test]
+    fn generate_matches_skips_zero_quote_clear() {
+        // floor(crossable(1) * p_star(1) / price_scale(1_000_000)) == 0 → the
+        // clear would mint an unspendable zero-amount quote note. U-06 must
+        // skip it and produce NO match.
+        let (n, out) = run_pair(1_000_000);
+        assert_eq!(n, 0, "zero-quote clear must not produce a match");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn generate_matches_allows_positive_quote_clear() {
+        // Same pair with price_scale=1 → quote = 1 (positive) → one match. The
+        // guard is specific to the zero-quote degenerate case.
+        let (n, out) = run_pair(1);
+        assert_eq!(n, 1, "positive-quote clear must still match");
+        assert_eq!(out.len(), 1);
     }
 }

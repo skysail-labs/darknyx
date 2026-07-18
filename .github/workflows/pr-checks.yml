@@ -628,6 +628,7 @@ jobs:
             --test user_commitment_registration \
             --test tee_forced_settle_batched \
             --test match_batch_verify \
+            --test lock_note_consumed_guard \
             -- --nocapture
 
   # ------------------------------------------------------------------

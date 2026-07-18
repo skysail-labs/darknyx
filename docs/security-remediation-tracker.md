@@ -63,6 +63,23 @@ runbooks have landed.
 | N-18 | Critical mainnet gate | Governance + ZK | `remediation/release-assurance` | Public Phase-2 ceremony with at least five independent contributors, transcript/hashes, random beacon, reproducible verify, auditor sign-off, post-ceremony settle | Open |
 | N-19 | High mainnet gate | Governance | `remediation/governance-markets`, `remediation/release-assurance` | Split Squads rehearsal: operations 3-of-5 admin and cold root/upgrade 4-of-7; independent attestation verification before rotations | In progress |
 
+## Unique findings — 2026-07-18 delta pass
+
+Delta backlog from the 2026-07-18 defensive self-audit
+(`docs/audit-2026-07-18-unique-findings.md`), remediated on
+`remediation/audit-2026-07-18-unique` (one PR). All validated genuine against
+HEAD before fixing.
+
+| ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
+|---|---|---|---|---|---|
+| U-01 | Medium (in-model) | Vault + docs | `remediation/audit-2026-07-18-unique` | `MarketConfig.tick_size`/`min_order_size`/`circuit_breaker_bps` documented as TEE/matcher-enforced only (not proof-bound), same trust class as price fairness; no false "on-chain-enforced" claim remains | Closed |
+| U-02 | Low | Vault + SDK + TEE | `remediation/audit-2026-07-18-unique` | `lock_note` rejects an already-consumed commitment via a must-be-absent commitment-keyed `ConsumedNoteEntry` account (`NoteAlreadyConsumed`); differential litesvm test (consumed → reject, unconsumed → past guard); account order lockstep across on-chain/SDK/TEE builders | Closed |
+| U-03 | Low | ZK + vault | `remediation/audit-2026-07-18-unique` | VALID_MATCH_BATCH constrains `quote_amount ≠ 0` on active slots (no unspendable zero-amount `note_d` leaf); regenerated zkey + `vk_match_batch_n16.rs` + N=16 fixture; negative prover test; live settle | Closed |
+| U-04 | Low (in-model) | Vault + docs | `remediation/audit-2026-07-18-unique` | `fill_recovery` documented as a TEE-honesty (not cryptographic) assumption; live-stream + history backfill are the redundancy; no on-chain change | Closed |
+| U-05 | Low | Vault | `remediation/audit-2026-07-18-unique` | Settle fee-note comments rewritten to the per-match model (each active slot appends its own fee notes; no slot-0-aggregate language) | Closed |
+| U-06 | Perf-Nit | Matcher | `remediation/audit-2026-07-18-unique` | `generate_matches` skips zero-quote clears (companion front-line to U-03); unit test (zero-quote → no match, positive-quote → match) | Closed |
+| U-07 | Perf-Nit | — | — | Ed25519 precompile full-instruction scan is intentional (replaced a buggy `+8` window); bounded by the TEE-built tx's ix count; declined | Won't Fix |
+
 ## Cross-cutting release deliverables
 
 These are architectural/mainnet-readiness commitments from the remediation

@@ -83,6 +83,17 @@ pub struct MatchResultPayload {
     /// viewing key. Opaque to the program — it never reads these bytes;
     /// they ride the (signed) payload only to be persisted on-chain. All-zero
     /// only when neither side supplies a viewing key.
+    ///
+    /// U-04 — recovery integrity is a TEE-HONESTY assumption, not a
+    /// cryptographic guarantee. The program never validates this blob, and the
+    /// AEAD protects only confidentiality (a third party can't read it), NOT
+    /// correctness: a compromised TEE could sign a fully-conserved settle whose
+    /// `fill_recovery` is garbage, stranding a client that relies ONLY on
+    /// on-chain recovery (it would fail to decrypt or fail the commitment
+    /// recompute). The redundancy against that is the live `/v1/stream` fills
+    /// channel + trade-history backfill — chain recovery is the last-resort
+    /// path, not the sole one. (Ops follow-up: alert on recovery-decrypt
+    /// failure. No on-chain fix — it's inside the accepted TEE-honesty boundary.)
     pub fill_recovery: [u8; 128],
     // Amount-privacy (P3b): `clearing_price` was removed alongside the other
     // plaintext amounts — the price is proven in-circuit

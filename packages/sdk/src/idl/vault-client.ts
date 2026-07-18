@@ -749,7 +749,8 @@ export interface BuildLockNoteParams {
  *     [1] vault_config    (ro — handler reads tee_pubkeys + zsr)
  *     [2] merkle_tree     (ro — the shard whose root ring is checked)
  *     [3] note_lock       (init, mut)
- *     [4] system_program  (ro)
+ *     [4] consumed_note   (ro — U-02 must-be-absent consume-once guard)
+ *     [5] system_program  (ro)
  */
 export function buildLockNoteInstruction(
   p: BuildLockNoteParams,
@@ -757,6 +758,7 @@ export function buildLockNoteInstruction(
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
+  const [consumedNote] = consumedNotePda(p.programId, p.noteCommitment);
   if (p.orderId.length !== 16) {
     throw new Error(`orderId must be 16 bytes, got ${p.orderId.length}`);
   }
@@ -777,6 +779,7 @@ export function buildLockNoteInstruction(
       { pubkey: vaultPda, isSigner: false, isWritable: false },
       { pubkey: merkleTree, isSigner: false, isWritable: false },
       { pubkey: noteLock, isSigner: false, isWritable: true },
+      { pubkey: consumedNote, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: Buffer.from(data),
