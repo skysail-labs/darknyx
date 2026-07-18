@@ -18,7 +18,7 @@
 4. [The key model](#4-the-key-model)
 5. [The note system](#5-the-note-system)
 6. [The incremental Merkle tree](#6-the-incremental-merkle-tree)
-7. [The four ZK circuits](#7-the-four-zk-circuits)
+7. [The six ZK circuits](#7-the-zk-circuits)
 8. [Lifecycle walkthrough — wallet to withdraw](#8-lifecycle-walkthrough)
 9. [Settlement mechanics — what fits in a Solana tx and why](#9-settlement-mechanics)
 10. [Solvency invariant](#10-solvency-invariant)
@@ -102,7 +102,7 @@ through a Phala CVM (`cvm-settle-e2e`).
 |---|---|
 | TEE clears at a bad price | **TEE-trusted (accepted design decision)** — price fairness (limit compliance + the oracle band) is enforced inside the attested enclave by the `darkpool-matcher`, NOT by the proof. `VALID_MATCH_BATCH` binds `quote = floor(base·price/price_scale)` with a constrained remainder, conservation, ranges, market identity, and exact fees, but not the signed limits or oracle band. This is a *deliberate* trade-off, not an oversight — see **"Accepted design decision — price fairness is TEE-trusted"** below for the full rationale + compensating controls. |
 | TEE-binary substitution | **Open** — `tee_pubkeys` are software Ed25519 keys. Production must pin them to an attested enclave. |
-| Trusted-setup ceremony soundness | **Open** — all four Groth16 circuits use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
+| Trusted-setup ceremony soundness | **Open** — all six Groth16 circuits use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
 | Aggregate trade analytics from settle txs | **By design** — match volume + clearing price are public per settled batch. |
 | Network-level traffic analysis | Partially mitigated by TLS to the CVM + bearer auth; not fully eliminated. |
 
@@ -193,7 +193,7 @@ Every state-transitioning instruction maintains:
 | **HKDF-SHA256** | Spending key, root Ed25519 seed, trading-key offset derivation | RFC 5869 standard. 512-bit output → mod-p for BN254 keys, 256-bit output → Ed25519 seed. |
 | **DarknyxShakeKdfV1** | Viewing key + per-note blinding factor | Versioned Darknyx-specific SHAKE256 construction retained byte-for-byte for existing keys and notes. It uses SP 800-185-style encodings but is not NIST KMAC or cSHAKE; fixed Rust/TS KATs pin its bytes. |
 | **Ed25519** | TEE signature on match payload, trading-key signatures | Solana-native (built-in precompile for verification). |
-| **Groth16** (BN254, snarkjs / `groth16-solana`) | All four ZK circuits | Constant-size proofs (256 bytes on-chain), constant-time verification, well-supported tooling. The proof system that fits Solana's CU budget. |
+| **Groth16** (BN254, snarkjs / `groth16-solana`) | All six ZK circuits | Constant-size proofs (256 bytes on-chain), constant-time verification, well-supported tooling. The proof system that fits Solana's CU budget. |
 
 ### Field-element representations
 

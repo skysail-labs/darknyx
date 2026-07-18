@@ -32,7 +32,7 @@ auth'd fill memo (`fills` on `/v1/stream`, with on-chain recovery), never an L1 
 | Front-running protection        | Uniform clearing price + Pyth oracle band per batch                  |
 | Partial-fill continuation       | The circuit derives the residual from the consumed input inner; the matcher re-locks and re-matches it without a client roundtrip |
 
-For the full cryptographic walkthrough (key model, the four ZK
+For the full cryptographic walkthrough (key model, the six ZK
 circuits, lifecycle, settlement mechanics) see
 **[`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md)**.
 
@@ -109,7 +109,7 @@ real-settle path), see [`scripts/dev-commands.md`](scripts/dev-commands.md)
 |------------------|------------------------------------------------------------------------------|
 | `programs/`      | On-chain Anchor program — `vault` (the only on-chain program)               |
 | `crates/`        | `darkpool-crypto` (host Poseidon/key/note crypto), `darkpool-matcher` (the matching algorithm), `darknyx-tee` (the in-CVM matcher/settler), `darknyx-tee-loadgen` |
-| `circuits/`      | Circom 2 ZK circuits — `valid_wallet_create`, `valid_spend`, `valid_input`, `valid_match_batch` |
+| `circuits/`      | Circom 2 ZK circuits — `valid_wallet_create`, `valid_input`, `valid_deposit`, `valid_spend`, `valid_match_batch`, `valid_merge` |
 | `packages/sdk/`  | `@darknyx/sdk` — TypeScript client (ix builders, prover, order/settlement)      |
 | `deploy/`        | Dockerfile + `docker-compose.yaml` for the Phala CVM image                  |
 | `scripts/`       | Build / deploy / setup shell scripts + master dev cheat-sheet               |
@@ -122,7 +122,7 @@ real-settle path), see [`scripts/dev-commands.md`](scripts/dev-commands.md)
 
 | Document                                                       | Read it for…                                                |
 |----------------------------------------------------------------|-------------------------------------------------------------|
-| **[`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md)**                       | Cryptographic walkthrough — key model, the four ZK circuits, lifecycle, settlement mechanics. **Start here if you care about the crypto.** |
+| **[`CRYPTOGRAPHY.md`](CRYPTOGRAPHY.md)**                       | Cryptographic walkthrough — key model, the six ZK circuits, lifecycle, settlement mechanics. **Start here if you care about the crypto.** |
 | **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**             | System overview: every component, PDA, flow, threat model  |
 | **[`CLAUDE.md`](CLAUDE.md)**                                  | Agent / contributor onboarding: the build-validate cycle + the Phala CVM runbook + the byte-equality invariants |
 | **[`scripts/dev-commands.md`](scripts/dev-commands.md)**       | Master command cheat-sheet — build, test, deploy, troubleshoot |
