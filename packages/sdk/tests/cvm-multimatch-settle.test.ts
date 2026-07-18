@@ -28,7 +28,7 @@
  * treat them as a steady-state estimate, not a guaranteed single-batch measurement.
  *
  * Real-mint regime + a fresh tree reset (like cvm-settle-e2e). Run:
- *   RUN_CVM_E2E=1 NYX_CVM_MATCHES=4 NYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$HELIUS \
+ *   RUN_CVM_E2E=1 DARKNYX_CVM_MATCHES=4 DARKNYX_TEE_GATEWAY=$GW SOLANA_RPC_URL=$HELIUS \
  *     FUNDER_KEYPAIR=~/.config/solana/id.json ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/sdk && ../../node_modules/.bin/vitest run --project cvm tests/cvm-multimatch-settle.test.ts )
  */
@@ -83,14 +83,14 @@ import type { E2EConfig } from "./devnet-setup.test.js";
 
 const REPO_ROOT = resolve(__dirname, "../../..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
-const GATEWAY = (process.env.NYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
+const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const READY =
   process.env.RUN_CVM_E2E === "1" && GATEWAY !== "" && existsSync(CONFIG_PATH);
 const maybeDescribe = READY ? describe : describe.skip;
 
-const MATCHES = Number(process.env.NYX_CVM_MATCHES ?? "4");
+const MATCHES = Number(process.env.DARKNYX_CVM_MATCHES ?? "4");
 const SETTLE_TIMEOUT_MS = Number(
-  process.env.NYX_CVM_SETTLE_TIMEOUT_MS ?? "180000",
+  process.env.DARKNYX_CVM_SETTLE_TIMEOUT_MS ?? "180000",
 );
 
 maybeDescribe("Perf — multi-match concurrent settle profile", () => {

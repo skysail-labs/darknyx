@@ -35,7 +35,7 @@ import {
   parseEventLog,
   teeKeySetBytes,
   verifyReportAgainstExpected,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 // Re-export the shared types so existing daemon imports (config.ts, daemon.ts,
 // bin/daemon.ts) keep resolving through this module. QuoteVerifier +
@@ -45,7 +45,7 @@ export {
   type AttestationFailure,
   type ExpectedMeasurements,
   type QuoteVerifier,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 const fromHex = (h: string): Uint8Array =>
   Uint8Array.from(Buffer.from(h.replace(/^0x/, ""), "hex"));
@@ -212,7 +212,7 @@ export async function verifyAttestation(
   if (strict) {
     if (!opts.quoteVerifier) {
       throw new AttestationError(
-        "strict attestation requires a DCAP quote verifier (set NYX_DAEMON_SKIP_ATTEST=1 only for local simulator)",
+        "strict attestation requires a DCAP quote verifier (set DARKNYX_DAEMON_SKIP_ATTEST=1 only for local simulator)",
         "quote_invalid",
       );
     }

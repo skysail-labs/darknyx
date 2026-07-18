@@ -1,8 +1,8 @@
 {
-  "name": "@nyx/circuits",
+  "name": "@darknyx/circuits",
   "version": "0.1.0",
   "private": true,
-  "description": "Circom ZK circuits for the Nyx dark pool (VALID_SPEND, VALID_WALLET_CREATE, etc.)",
+  "description": "Circom ZK circuits for the Darknyx dark pool (VALID_SPEND, VALID_WALLET_CREATE, etc.)",
   "scripts": {
     "build": "bash ../scripts/build-circuits.sh",
     "test": "vitest run"

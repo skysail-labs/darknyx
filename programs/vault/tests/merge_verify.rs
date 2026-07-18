@@ -239,7 +239,7 @@ fn prove_merge(
     static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let uniq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = std::env::temp_dir().join(format!(
-        "nyx_merge_verify_k{k}_{num_real}_{}_{uniq}",
+        "darknyx_merge_verify_k{k}_{num_real}_{}_{uniq}",
         std::process::id()
     ));
     let (pb, public_inputs) = snarkjs_fullprove(&input_json, &build, &tmp);

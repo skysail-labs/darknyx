@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { selectCollateralNote, isSpendable } from "../src/note-select.js";
-import type { StoredNote } from "@nyx/sdk";
+import type { StoredNote } from "@darknyx/sdk";
 
 const MINT_A = new Uint8Array(32).fill(1);
 const MINT_B = new Uint8Array(32).fill(2);

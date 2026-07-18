@@ -15,7 +15,7 @@ import {
   onchainRootVerifier,
   type DarkPoolClient,
   type RootVerifier,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 import type { Keystore } from "./keystore.js";
 import {

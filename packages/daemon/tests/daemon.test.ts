@@ -18,7 +18,7 @@ import {
   type PlaceOrderResponse,
   type StoredNote,
   type ValidInputProver,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 function keystore(): Keystore {
   const masterSeed = new Uint8Array(64);

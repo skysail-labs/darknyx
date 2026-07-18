@@ -4,7 +4,7 @@
  * Daily clients should keep the 64-byte CSPRNG master seed in their secure
  * {@link MasterSeedStorage}. This format is the portable offline backup: scrypt
  * derives an AES-256-GCM wrapping key from a distinct backup passphrase, and a
- * fixed AAD domain binds the ciphertext to Nyx backup version 1.
+ * fixed AAD domain binds the ciphertext to Darknyx backup version 2.
  */
 
 import {
@@ -16,15 +16,15 @@ import {
 
 import { MASTER_SEED_BYTES } from "./key-generators.js";
 
-export const MASTER_SEED_BACKUP_FORMAT = "nyx-master-seed-backup" as const;
-export const MASTER_SEED_BACKUP_VERSION = 1 as const;
+export const MASTER_SEED_BACKUP_FORMAT = "darknyx-master-seed-backup" as const;
+export const MASTER_SEED_BACKUP_VERSION = 2 as const;
 
 const KDF = { name: "scrypt", n: 16_384, r: 8, p: 1 } as const;
 const CIPHER = "aes-256-gcm" as const;
-const AAD = Buffer.from("nyx/master-seed-backup/v1", "utf8");
+const AAD = Buffer.from("darknyx/master-seed-backup/v2", "utf8");
 const MIN_PASSPHRASE_LENGTH = 12;
 
-export interface EncryptedMasterSeedBackupV1 {
+export interface EncryptedMasterSeedBackupV2 {
   format: typeof MASTER_SEED_BACKUP_FORMAT;
   version: typeof MASTER_SEED_BACKUP_VERSION;
   kdf: {
@@ -70,11 +70,11 @@ function deriveBackupKey(passphrase: string, salt: Buffer): Buffer {
   });
 }
 
-/** Encrypt a 64-byte CSPRNG master seed into backup format version 1. */
+/** Encrypt a 64-byte CSPRNG master seed into backup format version 2. */
 export function exportEncryptedMasterSeed(
   masterSeed: Uint8Array,
   passphrase: string,
-): EncryptedMasterSeedBackupV1 {
+): EncryptedMasterSeedBackupV2 {
   if (masterSeed.length !== MASTER_SEED_BYTES) {
     throw new Error(
       `master seed must be ${MASTER_SEED_BYTES} bytes, got ${masterSeed.length}`,
@@ -113,8 +113,8 @@ export function exportEncryptedMasterSeed(
 }
 
 function parseBackup(
-  input: EncryptedMasterSeedBackupV1 | string,
-): EncryptedMasterSeedBackupV1 {
+  input: EncryptedMasterSeedBackupV2 | string,
+): EncryptedMasterSeedBackupV2 {
   let value: unknown = input;
   if (typeof input === "string") {
     try {
@@ -126,7 +126,7 @@ function parseBackup(
   if (!value || typeof value !== "object") {
     throw new Error("invalid encrypted seed-backup envelope");
   }
-  const backup = value as Partial<EncryptedMasterSeedBackupV1>;
+  const backup = value as Partial<EncryptedMasterSeedBackupV2>;
   const kdf = backup.kdf;
   const cipher = backup.cipher;
   if (
@@ -142,12 +142,12 @@ function parseBackup(
   ) {
     throw new Error("unsupported encrypted seed-backup format or parameters");
   }
-  return backup as EncryptedMasterSeedBackupV1;
+  return backup as EncryptedMasterSeedBackupV2;
 }
 
-/** Decrypt and authenticate backup v1, returning a new 64-byte seed copy. */
+/** Decrypt and authenticate backup v2, returning a new 64-byte seed copy. */
 export function importEncryptedMasterSeed(
-  input: EncryptedMasterSeedBackupV1 | string,
+  input: EncryptedMasterSeedBackupV2 | string,
   passphrase: string,
 ): Uint8Array {
   requirePassphrase(passphrase);

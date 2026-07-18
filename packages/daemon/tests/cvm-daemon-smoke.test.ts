@@ -19,10 +19,10 @@
  *
  * PREREQS (runbook): vault redeployed (CU-3) + tree reset; CVM deployed
  * (real-mint regime) + its signer(s) rotated/funded; `.devnet/e2e-config.json`
- * fresh. Gated on RUN_CVM_DAEMON=1 + NYX_TEE_GATEWAY + SOLANA_RPC_URL.
+ * fresh. Gated on RUN_CVM_DAEMON=1 + DARKNYX_TEE_GATEWAY + SOLANA_RPC_URL.
  *
  * Run (after the runbook's deploy/rotate/fund):
- *   RUN_CVM_DAEMON=1 NYX_TEE_GATEWAY=https://<app>-8080.dstack-… \
+ *   RUN_CVM_DAEMON=1 DARKNYX_TEE_GATEWAY=https://<app>-8080.dstack-… \
  *     SOLANA_RPC_URL=<helius> ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/daemon && ../../node_modules/.bin/vitest run tests/cvm-daemon-smoke.test.ts )
  */
@@ -50,7 +50,7 @@ import {
   getDepositFunction,
   limitPolicy,
   OrderSide,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 import {
   Daemon,
   DaemonStore,
@@ -65,7 +65,7 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
-const GATEWAY = (process.env.NYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
+const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const RPC = process.env.SOLANA_RPC_URL ?? "";
 
 const READY =
@@ -76,9 +76,9 @@ const READY =
 const maybe = READY ? describe : describe.skip;
 
 // Bootstrap creds are HARDCODED in docker-compose.yaml (runbook gotcha 3).
-const API_KEY = "nyx-test-api-key";
-const API_SECRET = "nyx-test-secret";
-const PASSPHRASE = "nyx-test-passphrase";
+const API_KEY = "darknyx-test-api-key";
+const API_SECRET = "darknyx-test-secret";
+const PASSPHRASE = "darknyx-test-passphrase";
 const FEE_RATE_BPS = 30n;
 const SYMBOL = "SOL-USDC";
 
@@ -144,7 +144,7 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       thresholds: DEFAULT_THRESHOLDS,
       // Functional smoke — run attestation in dev-partial (nonce+binding+/info),
       // not strict DCAP. Real-DCAP live validation is a separate pinned step
-      // (NYX_DAEMON_EXPECT_COMPOSE_HASH/_TEE_PUBKEY against the deployed image).
+      // (DARKNYX_DAEMON_EXPECT_COMPOSE_HASH/_TEE_PUBKEY against the deployed image).
       attestationStrict: false,
       attestOnchainCheck: false,
       programId: cfg.vaultProgramId,

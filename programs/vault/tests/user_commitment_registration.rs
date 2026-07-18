@@ -170,7 +170,7 @@ fn test_user_commitment_registration() {
     );
     let root = common::repo_root();
     let build = root.join("circuits/build/valid_wallet_create");
-    let tmp = std::env::temp_dir().join("nyx_user_commit_registration");
+    let tmp = std::env::temp_dir().join("darknyx_user_commit_registration");
     let (proof, public_inputs) = common::snarkjs_fullprove(&input_json, &build, &tmp);
     assert_eq!(public_inputs.len(), 1);
     let commitment_bytes: [u8; 32] = fr_to_be_bytes(&uc);

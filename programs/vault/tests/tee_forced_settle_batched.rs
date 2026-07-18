@@ -268,7 +268,7 @@ fn settle_rejects_marker_with_tampered_discriminator() {
 // leaves (note_c, note_d, buyer change note_e, seller change note_f, base-fee
 // note, quote-fee note) AND creates BOTH continuation re-lock PDAs (buyer +
 // seller change). This is the absolute upper bound the on-chain settle pays,
-// and the figure nyx-tee's SETTLE_COMPUTE_UNIT_LIMIT must cover. Pairs with
+// and the figure darknyx-tee's SETTLE_COMPUTE_UNIT_LIMIT must cover. Pairs with
 // `test_two_matches_share_one_marker`'s 2-leaf print so we bracket the range.
 // ---------------------------------------------------------------------------
 #[test]
@@ -328,13 +328,13 @@ fn cu_profile_worst_case_settle() {
         "CU_PROFILE tee_forced_settle_batched(6-leaf+2-relock) consumed={}",
         meta.compute_units_consumed
     );
-    // This is the figure nyx-tee's SETTLE_COMPUTE_UNIT_LIMIT must cover
-    // (crates/nyx-tee/src/settle/pipeline.rs). Post-CU-1 the worst case is far
+    // This is the figure darknyx-tee's SETTLE_COMPUTE_UNIT_LIMIT must cover
+    // (crates/darknyx-tee/src/settle/pipeline.rs). Post-CU-1 the worst case is far
     // below the old ~165k; the sentinel guards a regression that would erode
     // the headroom a lowered limit relies on.
     assert!(
         meta.compute_units_consumed < 110_000,
-        "settle worst-case CU {} regressed; re-measure + re-check nyx-tee \
+        "settle worst-case CU {} regressed; re-measure + re-check darknyx-tee \
          SETTLE_COMPUTE_UNIT_LIMIT margin",
         meta.compute_units_consumed
     );
@@ -576,7 +576,7 @@ fn test_two_matches_share_one_marker() {
 //
 // (The sibling TEE-side bug — re-issuing `lock_note` on the already-relocked
 // note → "Allocate: account already in use" — is guarded by
-// `submit_lock_note_pair_skips_relocked_side` in nyx-tee.)
+// `submit_lock_note_pair_skips_relocked_side` in darknyx-tee.)
 //
 // Batch 0's buyer partially fills + re-locks note_e; batch 1 consumes note_e.
 // Batch 1's marker is seeded from the TRUE mint (`h.test_mint`), NOT the
@@ -728,14 +728,14 @@ fn test_close_marker_by_payer_requires_expiry_and_refunds_rent() {
         h.svm.latest_blockhash(),
     );
     let close_meta = h.svm.send_transaction(tx).expect("close by payer");
-    // Regression guard for nyx-tee's CLOSE_COMPUTE_UNIT_LIMIT (5_000).
+    // Regression guard for darknyx-tee's CLOSE_COMPUTE_UNIT_LIMIT (5_000).
     eprintln!(
         "CU_PROFILE close_batch_validity_marker consumed={}",
         close_meta.compute_units_consumed
     );
     assert!(
         close_meta.compute_units_consumed < 5_000,
-        "close_batch_validity_marker CU {} exceeds nyx-tee CLOSE_COMPUTE_UNIT_LIMIT (5_000)",
+        "close_batch_validity_marker CU {} exceeds darknyx-tee CLOSE_COMPUTE_UNIT_LIMIT (5_000)",
         close_meta.compute_units_consumed
     );
 

@@ -1,13 +1,13 @@
 ---
 sidebar_position: 2
 title: Confidential VM Architecture
-description: Why Nyx matches inside an attested Intel TDX confidential VM, how that identity reaches Solana, and where the trust boundary remains.
+description: Why Darknyx matches inside an attested Intel TDX confidential VM, how that identity reaches Solana, and where the trust boundary remains.
 ---
 
 # Confidential VM Architecture
 
 :::info TL;DR
-Nyx matches hidden orders inside an **Intel TDX confidential VM**. Hardware
+Darknyx matches hidden orders inside an **Intel TDX confidential VM**. Hardware
 attestation lets a client identify the measured software before revealing an
 order, while Solana accepts settlement only from the registered signer set and
 only with a valid zero-knowledge proof. This reduces trust in the infrastructure
@@ -22,7 +22,7 @@ orders on-chain would reveal price limits, sizes, timing, and strategy before
 execution. Pure zero-knowledge matching can hide more of that trust boundary,
 but makes a feature-rich, low-latency book substantially harder to operate.
 
-Nyx uses a confidential VM as the private execution environment:
+Darknyx uses a confidential VM as the private execution environment:
 
 - encrypted memory limits what the host and infrastructure operator can inspect;
 - a hardware-signed quote identifies the software measurement and boot state;
@@ -35,7 +35,7 @@ settlement validity on Solana.
 
 ## From measurement to an accepted settlement
 
-Attestation is useful only when it is connected to authority. Nyx closes that
+Attestation is useful only when it is connected to authority. Darknyx closes that
 loop in three checks:
 
 ```text
@@ -83,14 +83,14 @@ asset transition. It can still:
   approved release and governance has registered its signer set.
 
 A flaw in the measured application, the hardware, the attestation verifier, or
-the governance process can weaken these properties. Nyx therefore treats quote
+the governance process can weaken these properties. Darknyx therefore treats quote
 verification, finalized key refresh, independent circuit review, and split
 multisig control as launch requirements rather than optional operational polish.
 
 ## Why one CVM, not a committee
 
 A committee can distribute trust, but adds coordination, latency, and a collusion
-threshold. Nyx currently chooses one confidential matching service with multiple
+threshold. Darknyx currently chooses one confidential matching service with multiple
 shard signers derived inside it. The product tradeoff is straightforward:
 
 - faster private matching and a simpler client protocol;

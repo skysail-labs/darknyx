@@ -14,7 +14,7 @@
 
 ## Why this exists (the finding)
 
-`crates/nyx-tee/src/oracle/vaa.rs` verifies the Wormhole guardian ECDSA
+`crates/darknyx-tee/src/oracle/vaa.rs` verifies the Wormhole guardian ECDSA
 signatures over the VAA body, but **never proves the price is included under the
 signed Pyth Merkle root**. Worse, the price actually used (`ema_price`) is read
 from Hermes's **JSON `parsed[]`** (`hermes.rs`), not extracted from the signed
@@ -106,7 +106,7 @@ fold is order-agnostic — do not add index/direction handling.
 
 ## Fixture
 
-`crates/nyx-tee/tests/fixtures/sol_usd_accumulator.bin` — a real Hermes SOL/USD
+`crates/darknyx-tee/tests/fixtures/sol_usd_accumulator.bin` — a real Hermes SOL/USD
 `AccumulatorUpdateData` (1311 bytes, guardian set 7, 1 update, proof depth 13).
 Recorded ground truth for the cross-check test:
 - `ema_price = 7471749900`, `exponent = -8`, `publish_time = 1783978363`
@@ -122,4 +122,4 @@ the `hermes.rs` VAA-extraction test.)
 serde format we don't need. The VAA verifier is already hand-rolled on
 `k256` + `sha3`; the accumulator parse + Keccak160 Merkle verify is ~150 lines
 in the same style with a tiny dep surface (`sha3` is already a dependency).
-Hand-roll it in `crates/nyx-tee/src/oracle/accumulator.rs`.
+Hand-roll it in `crates/darknyx-tee/src/oracle/accumulator.rs`.

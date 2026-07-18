@@ -1,4 +1,4 @@
-# Nyx TEE — Attestation Flow
+# Darknyx TEE — Attestation Flow
 
 > End-to-end attestation deep-dive for the in-CVM matching/settlement
 > layer. Read after `docs/tee-architecture.md` (the in-TEE design).
@@ -45,9 +45,9 @@ understanding the flow.
 | Key | Lives in | Used for | Lifecycle |
 |---|---|---|---|
 | **dstack-kms RootKey** | dstack-kms's TEE (Phala-managed). Multi-party in their MPC topology. | Master KDF input for *every* application's keys. | Rotated only on KMS-level security incidents. RootPubKey published on-chain in the EVM `DstackKms` contract. |
-| **Nyx App Root** | dstack-kms TEE, derived per `(app_hash, deployer_id)`. | KDF input for our per-purpose keys. | New value each time our `compose_hash` changes. |
-| **Ed25519 signer** | Our CVM's memory (TDX-encrypted). Derived via `getKey("nyx/ed25519-signer/v1")` → seed → Ed25519 key. | Signs `canonical_payload_hash(MatchResultPayload)` for `tee_forced_settle_batched`. | Stable for the lifetime of our `compose_hash`. |
-| **TLS cert private key** | dstack-ingress container's memory inside the CVM. Derived from our App Root via the TLS path. | TLS termination on `api.nyx.example.com`. | Rotated automatically on each Let's Encrypt renewal (every ~60 days). |
+| **Darknyx App Root** | dstack-kms TEE, derived per `(app_hash, deployer_id)`. | KDF input for our per-purpose keys. | New value each time our `compose_hash` changes. |
+| **Ed25519 signer** | Our CVM's memory (TDX-encrypted). Derived via `getKey("darknyx/ed25519-signer/v2")` → seed → Ed25519 key. | Signs `canonical_payload_hash(MatchResultPayload)` for `tee_forced_settle_batched`. | Stable for the lifetime of our `compose_hash`. |
+| **TLS cert private key** | dstack-ingress container's memory inside the CVM. Derived from our App Root via the TLS path. | TLS termination on `api.darknyx.example.com`. | Rotated automatically on each Let's Encrypt renewal (every ~60 days). |
 | **Admin multisig signing keys** | The 3-of-5 signers' hardware wallets / Ledgers / Yubikeys. **Outside the TEE.** | Sign `set_tee_pubkey` + governance txs. | Rotated per multisig membership changes (organisational, not technical). |
 
 What about the `root_key` field in `vault_config`? That's a long-lived
@@ -89,7 +89,7 @@ The full RTMR3 event log is fetched alongside the quote, as
 `event_log`. The verifier replays the chain to confirm the events
 are authentic.
 
-**For Nyx specifically**, the value we want to bind to `report_data`
+**For Darknyx specifically**, the value we want to bind to `report_data`
 when fetching a quote for client-side verification is:
 
 ```
@@ -172,7 +172,7 @@ This is the verification the SDK and a curious end-user perform.
 ### 4.1 What dstack-ingress publishes
 
 When the CVM is up, dstack-ingress publishes four files at
-`https://api.nyx.example.com/evidences/`:
+`https://api.darknyx.example.com/evidences/`:
 
 | File | Contents | Why |
 |---|---|---|
@@ -192,16 +192,16 @@ Plus, on the same domain:
 ### 4.2 The client-side verification chain
 
 ```
-[Client opens wss://api.nyx.example.com/v1/stream]
+[Client opens wss://api.darknyx.example.com/v1/stream]
     │
     │ TLS handshake → cert presented by dstack-ingress
     │
     ▼
 [Client (before sending any sensitive op) fetches]
-    GET https://api.nyx.example.com/evidences/sha256sum.txt
-    GET https://api.nyx.example.com/evidences/cert.pem
-    GET https://api.nyx.example.com/evidences/acme-account.json
-    GET https://api.nyx.example.com/evidences/quote.json
+    GET https://api.darknyx.example.com/evidences/sha256sum.txt
+    GET https://api.darknyx.example.com/evidences/cert.pem
+    GET https://api.darknyx.example.com/evidences/acme-account.json
+    GET https://api.darknyx.example.com/evidences/quote.json
     │
     │ Step A: verify TLS-cert binding to the served session:
     │   served_cert_pubkey == sha256sum.txt's referenced cert.pubkey
@@ -227,7 +227,7 @@ Plus, on the same domain:
     │     SDK-baked-in expected value (committed in source).
     │
     │ Step F: verify CAA + CT (optional, paranoid):
-    │   - dig CAA api.nyx.example.com → only Let's Encrypt
+    │   - dig CAA api.darknyx.example.com → only Let's Encrypt
     │   - crt.sh log query → only certs from our ACME account
     │
     ▼
@@ -322,7 +322,7 @@ SDK.
 | Step B fails | Evidence files tampered | Refuse, possibly stale cache — refresh and retry once |
 | Step C fails | Quote re-issued under a different cert | Refuse, alert |
 | Step D fails | Quote signature invalid → fake TDX or Intel cert revoked | Refuse, alert |
-| Step E fails | compose-hash mismatch → unexpected image deployed | Refuse, alert (very loud — this is "wrong version of Nyx is running") |
+| Step E fails | compose-hash mismatch → unexpected image deployed | Refuse, alert (very loud — this is "wrong version of Darknyx is running") |
 | Step F fails | CAA changed, or unauthorised cert in CT logs | Warning, not block; investigate |
 
 ---
@@ -336,7 +336,7 @@ Triggered manually on every image upgrade. The procedure encoded in
 
 ```
 T+0    Deploy team builds the new Docker image. Computes new
-       compose_hash. Tags as nyx-tee:v0.x.y. Pushes to a registry
+       compose_hash. Tags as darknyx-tee:v0.x.y. Pushes to a registry
        that's PINNED-by-digest in our docker-compose.yaml. The new
        app-compose.json embeds the new image digest, so the SHA-256
        of canonicalised app-compose is exactly new_compose_hash.
@@ -353,10 +353,10 @@ T+35m  Multisig signer #1 (call them Alice) runs the verification:
 
        # 1. Fetch fresh quote with new_pubkey as report_data
        NONCE=$(head -c 32 /dev/urandom | xxd -p -c 64)
-       PUBKEY_HEX=$(curl -s https://api.nyx.example.com/info |
+       PUBKEY_HEX=$(curl -s https://api.darknyx.example.com/info |
                     jq -r '.tee_pubkey')
        REPORT_DATA="${PUBKEY_HEX}${NONCE:0:64}"
-       curl -s "https://api.nyx.example.com/attestation?reportData=$REPORT_DATA" \
+       curl -s "https://api.darknyx.example.com/attestation?reportData=$REPORT_DATA" \
          > quote.json
 
        # 2. Verify via dstack-verifier (off-chain Docker)
@@ -398,7 +398,7 @@ verified that:*
 
 1. *The TDX quote is signed by Intel's TCB cert chain.*
 2. *The OS image hash is one we approve of.*
-3. *The compose-hash matches commit `<sha>` of `Nyx-Privacy/nyx`.*
+3. *The compose-hash matches commit `<sha>` of `Darknyx-Privacy/darknyx`.*
 4. *The Ed25519 pubkey I'm registering is the one bound to that
    quote (via `report_data`)."*
 
@@ -430,7 +430,7 @@ recapping the flow for completeness.
 [TEE constructs MatchResultPayload (v9, 488 B Borsh)]
     │
     │ msg = canonical_payload_hash(payload)
-    │     = SHA-256("nyx-match-v9" || field_bytes...)
+    │     = SHA-256("darknyx-match-v10" || field_bytes...)
     │
     ▼
 [TEE signs with Ed25519 signer key]

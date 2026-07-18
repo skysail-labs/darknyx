@@ -7,7 +7,7 @@ description: How balances are held as shielded notes, accumulated in Merkle-tree
 # Shielded Pool
 
 :::info TL;DR
-Your balance on Nyx is a set of **notes**, UTXO-style values committed on-chain
+Your balance on Darknyx is a set of **notes**, UTXO-style values committed on-chain
 as Poseidon hashes. Commitments live in Merkle-tree shards. Withdrawals use
 unlinkable nullifiers; TEE settlement and merges use commitment-keyed consumed
 records. Zero-knowledge proofs enforce valid state transitions without exposing
@@ -16,7 +16,7 @@ shielded note openings.
 
 ## Notes, not balances
 
-A custodial venue stores your balance as a number in a database. Nyx stores it as
+A custodial venue stores your balance as a number in a database. Darknyx stores it as
 a set of **notes**. A note is a commitment, a Poseidon hash, to four things:
 
 ```text

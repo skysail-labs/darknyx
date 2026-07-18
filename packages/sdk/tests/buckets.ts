@@ -10,7 +10,7 @@
  *              (e2e-config + keypairs). Gated by their own `RUN_DEVNET_*` env
  *              flag (they `describe.skip` themselves when unset).
  *   - CVM    : need a *running* Phala CVM gateway in addition to devnet.
- *              Gated by `RUN_CVM_E2E=1` + `NYX_TEE_GATEWAY`.
+ *              Gated by `RUN_CVM_E2E=1` + `DARKNYX_TEE_GATEWAY`.
  *
  * The convention is encoded as globs so a new `devnet-*.test.ts` /
  * `cvm-*.test.ts` is auto-classified; everything else is LOCAL. The per-file
@@ -27,7 +27,7 @@
 export const DEVNET_GLOBS = ["tests/devnet-*.test.ts"];
 
 /** Devnet + a running CVM — filename prefix `cvm-`. Gate: RUN_CVM_E2E=1 +
- *  NYX_TEE_GATEWAY. (cvm-settle-e2e, cvm-multimatch-settle, cvm-merge-then-order,
+ *  DARKNYX_TEE_GATEWAY. (cvm-settle-e2e, cvm-multimatch-settle, cvm-merge-then-order,
  *  cvm-api-surface.) */
 export const CVM_GLOBS = ["tests/cvm-*.test.ts"];
 

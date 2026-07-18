@@ -107,7 +107,7 @@ fn valid_wallet_create_roundtrip() {
     let user_commitment = poseidon_hash(&[Fr::from(14u64), leaf_root, viewing_hash]).unwrap();
 
     // Write input.json for snarkjs (all values decimal strings).
-    let tmp = std::env::temp_dir().join("nyx_wc_roundtrip");
+    let tmp = std::env::temp_dir().join("darknyx_wc_roundtrip");
     fs::create_dir_all(&tmp).unwrap();
     let input_path = tmp.join("input.json");
     let _witness_path = tmp.join("witness.wtns");

@@ -1,8 +1,8 @@
 {
-  "name": "@nyx/sdk",
+  "name": "@darknyx/sdk",
   "version": "0.1.0",
   "private": true,
-  "description": "Nyx dark pool TypeScript SDK — factory-function API, injectable providers, staged errors.",
+  "description": "Darknyx dark pool TypeScript SDK — factory-function API, injectable providers, staged errors.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

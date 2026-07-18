@@ -27,7 +27,7 @@ import {
   type RootVerifier,
   type StoredNote,
   type ValidInputProver,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 import type { Keystore } from "./keystore.js";
 

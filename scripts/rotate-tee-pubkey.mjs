@@ -11,7 +11,7 @@
 // The CVM signers are deterministic per app_id, so this is ONE-TIME per CVM
 // (they survive stop/start); only re-run for a brand-new app_id. Get the
 // shard signers from the running CVM boot log ("derived K-shard TEE signer
-// set") — they are derived at `nyx/ed25519-signer/v1/{0..K-1}`.
+// set") — they are derived at `darknyx/ed25519-signer/v2/{0..K-1}`.
 //
 // Usage:
 //   node scripts/rotate-tee-pubkey.mjs <key0> [key1 ...]

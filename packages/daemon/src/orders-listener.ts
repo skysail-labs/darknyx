@@ -34,7 +34,7 @@ import {
   type OrderUpdatesSubscription,
   type TradingClient,
   type WebSocketFactory,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 import type { LifecycleEngine } from "./lifecycle-engine.js";
 import type { LifecycleEvent } from "./order-lifecycle.js";

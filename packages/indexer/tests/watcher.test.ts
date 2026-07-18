@@ -101,7 +101,7 @@ const stubConn = { rpcEndpoint: "http://stub" } as unknown as Connection;
 
 const dbs: FillsDb[] = [];
 const dbPath = () =>
-  join(tmpdir(), `nyx-idx-test-${Math.random().toString(36).slice(2)}.sqlite`);
+  join(tmpdir(), `darknyx-idx-test-${Math.random().toString(36).slice(2)}.sqlite`);
 afterEach(() => {
   for (const d of dbs.splice(0)) d.close();
 });

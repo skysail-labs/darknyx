@@ -15,7 +15,7 @@
  * Daemon supplies the candidate list + the locked set.
  */
 
-import type { StoredNote } from "@nyx/sdk";
+import type { StoredNote } from "@darknyx/sdk";
 
 export interface CollateralRequest {
   /** 32-byte collateral mint. */

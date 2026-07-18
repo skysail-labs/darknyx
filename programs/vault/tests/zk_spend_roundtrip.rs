@@ -199,7 +199,7 @@ fn valid_spend_roundtrip() {
     let nullifier = poseidon_hash(&[Fr::from(3u64), spending_key, inner_hash]).unwrap();
 
     // ----- Write snarkjs input.json -----
-    let tmp = std::env::temp_dir().join("nyx_spend_roundtrip");
+    let tmp = std::env::temp_dir().join("darknyx_spend_roundtrip");
     fs::create_dir_all(&tmp).unwrap();
     let input_path = tmp.join("input.json");
     let proof_path = tmp.join("proof.json");

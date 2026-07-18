@@ -1,4 +1,4 @@
-# `deploy/` — Phala Cloud deployment artifacts for `nyx-tee`
+# `deploy/` — Phala Cloud deployment artifacts for `darknyx-tee`
 
 Three files here, all of which are hashed into the `compose_hash`
 recorded in RTMR3 inside the CVM:
@@ -30,16 +30,16 @@ Once you've authenticated the CLI (`phala login`):
 ```sh
 # Smoke-deploy under a disposable name (Phase 1 only — no real
 # liquidity, no rotation ceremony):
-phala deploy -c deploy/docker-compose.yaml -n nyx-tee-spike
+phala deploy -c deploy/docker-compose.yaml -n darknyx-tee-spike
 
 # Check status:
-phala cvms get nyx-tee-spike
+phala cvms get darknyx-tee-spike
 
 # Live logs:
-phala logs --cvm-id nyx-tee-spike
+phala logs --cvm-id darknyx-tee-spike
 
 # Tear down when done (saves storage credits):
-phala cvms delete nyx-tee-spike
+phala cvms delete darknyx-tee-spike
 ```
 
 For local iteration without burning credits, use the dstack

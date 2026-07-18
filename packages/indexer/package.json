@@ -1,13 +1,13 @@
 {
-  "name": "@nyx/indexer",
+  "name": "@darknyx/indexer",
   "version": "0.1.0",
   "private": true,
-  "description": "Nyx off-TEE Solana indexer — watches the vault's settle txs and serves fills by order_id. Account-agnostic; the durable record is the chain.",
+  "description": "Darknyx off-TEE Solana indexer — watches the vault's settle txs and serves fills by order_id. Account-agnostic; the durable record is the chain.",
   "type": "module",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "bin": {
-    "nyx-indexer": "dist/bin/indexer.js"
+    "darknyx-indexer": "dist/bin/indexer.js"
   },
   "files": [
     "dist"

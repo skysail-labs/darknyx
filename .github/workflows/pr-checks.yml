@@ -24,16 +24,15 @@
 #     `RUN_*=1`; promoted to a nightly cron in Phase 4).
 #
 # Required-for-merge status check: the aggregator `pr-checks success`.
-# Configure branch protection on `main` (and `nyx-v2-onchain-hardening`
-# until merged) to require it.
+# Configure branch protection on `main` to require it.
 
 name: pr-checks
 
 on:
   pull_request:
-    branches: [main, nyx-v2-onchain-hardening]
+    branches: [main]
   push:
-    branches: [main, nyx-v2-onchain-hardening]
+    branches: [main]
 
 # When a PR is force-pushed, kill the in-flight run for that ref to save
 # minutes. Push-to-main runs are never cancelled.
@@ -80,6 +79,8 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Reject stale pre-Darknyx namespaces
+        run: bash scripts/check-brand-namespace.sh
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -117,7 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
+          submodules: recursive  # darknyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       # Pinned to match rust-toolchain.toml. Bump both together.
       - name: Install Rust 1.89.0
@@ -187,7 +188,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
+          submodules: recursive  # darknyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Install Rust 1.89.0 (for circom build)
         uses: dtolnay/rust-toolchain@1.89.0
@@ -411,7 +412,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
+          submodules: recursive  # darknyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Cache Solana CLI install
         id: cache-solana
@@ -526,7 +527,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
+          submodules: recursive  # darknyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@1.89.0
@@ -585,7 +586,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          submodules: recursive  # nyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
+          submodules: recursive  # darknyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@1.89.0

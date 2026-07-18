@@ -7,13 +7,13 @@
 //! 1. **Root / Vault Key**     — Ed25519 (Solana native). Cold wallet.
 //! 2. **Trading Key**          — Ed25519 (Solana native). Hot wallet. Offset-rotatable.
 //! 3. **Shielded Spending Key**— BN254 scalar. Cold / HSM.
-//! 4. **Master Viewing Key**   — BN254 scalar (derived from NyxShakeKdfV1). Compliance.
+//! 4. **Master Viewing Key**   — BN254 scalar (derived from DarknyxShakeKdfV1). Compliance.
 //!
 //! Derivation contracts (must match the on-chain `create_wallet` verifier):
 //!
 //! ```text
 //! spending_key   = reduce_mod_r( HKDF-SHA256(master_seed, b"darkpool_spend_key_v1", 512) )
-//! viewing_key    = reduce_mod_r( NyxShakeKdfV1(master_seed, b"darkpool_viewing_key_v1", 512) )
+//! viewing_key    = reduce_mod_r( DarknyxShakeKdfV1(master_seed, b"darkpool_viewing_key_v1", 512) )
 //! trading_key(n) = Ed25519::from_seed( HKDF-SHA256(master_seed,
 //!                    b"darkpool_trading_key_v1" || offset_u64_le, 32) )
 //! root_key       = Ed25519::from_seed( HKDF-SHA256(master_seed,
@@ -21,10 +21,10 @@
 //!                  [used only when user does not bring their own Solana wallet]
 //! ```
 //!
-//! Blinding factor derivation (versioned Nyx SHAKE KDF):
+//! Blinding factor derivation (versioned Darknyx SHAKE KDF):
 //!
 //! ```text
-//! blinding_r(i) = reduce_mod_r( NyxShakeKdfV1(master_seed, b"note_blinding_v1" || i_u64_le, 512) )
+//! blinding_r(i) = reduce_mod_r( DarknyxShakeKdfV1(master_seed, b"note_blinding_v1" || i_u64_le, 512) )
 //! ```
 //!
 //! All KDF outputs are 512 bits (64 bytes) to make the reduction mod r statistically
@@ -126,9 +126,9 @@ pub fn derive_spending_key(seed: &MasterSeed) -> Result<Fr, CryptoError> {
     Ok(fr_from_uniform_bytes(&bytes))
 }
 
-/// Derive the BN254-scalar Master Viewing Key via NyxShakeKdfV1.
+/// Derive the BN254-scalar Master Viewing Key via DarknyxShakeKdfV1.
 pub fn derive_master_viewing_key(seed: &MasterSeed) -> Result<Fr, CryptoError> {
-    let bytes = nyx_shake_kdf_v1(seed.as_bytes(), INFO_VIEWING, &[], 64);
+    let bytes = darknyx_shake_kdf_v1(seed.as_bytes(), INFO_VIEWING, &[], 64);
     Ok(fr_from_uniform_bytes(&bytes))
 }
 
@@ -167,7 +167,7 @@ pub fn derive_blinding_factor(seed: &MasterSeed, counter: u64) -> Fr {
     let mut info = Vec::with_capacity(INFO_BLINDING.len() + 8);
     info.extend_from_slice(INFO_BLINDING);
     info.extend_from_slice(&counter.to_le_bytes());
-    let bytes = nyx_shake_kdf_v1(seed.as_bytes(), &info, &[], 64);
+    let bytes = darknyx_shake_kdf_v1(seed.as_bytes(), &info, &[], 64);
     fr_from_uniform_bytes(&bytes)
 }
 
@@ -181,10 +181,15 @@ fn hkdf_expand_64(ikm: &[u8], info: &[u8]) -> Result<[u8; 64], CryptoError> {
     Ok(okm)
 }
 
-/// Nyx-specific, versioned SHAKE256 KDF retained byte-for-byte for existing
+/// Darknyx-specific, versioned SHAKE256 KDF retained byte-for-byte for existing
 /// notes and keys. This feeds SP 800-185-style encodings into raw SHAKE256; it
 /// is deliberately not claimed to be NIST KMAC or cSHAKE.
-pub fn nyx_shake_kdf_v1(key: &[u8], custom_info: &[u8], data: &[u8], out_len: usize) -> Vec<u8> {
+pub fn darknyx_shake_kdf_v1(
+    key: &[u8],
+    custom_info: &[u8],
+    data: &[u8],
+    out_len: usize,
+) -> Vec<u8> {
     // bytepad(encode_string("KMAC") || encode_string(custom_info), 136) || bytepad(encode_string(key), 136) || X || right_encode(out_len_bits)
     let mut hasher = Shake256::default();
     // Preserve the historical literal bytes for compatibility. They do not
@@ -281,11 +286,11 @@ mod tests {
     }
 
     #[test]
-    fn nyx_shake_kdf_v1_known_answer_is_frozen() {
-        let actual = nyx_shake_kdf_v1(&[0x40; 32], b"nyx-vk", &[], 64);
+    fn darknyx_shake_kdf_v1_known_answer_is_frozen() {
+        let actual = darknyx_shake_kdf_v1(&[0x40; 32], b"darknyx-vk-v2", &[], 64);
         assert_eq!(
             hex::encode(actual),
-            "04231d3443c254da661ec74db44829b738448e984fd116256af83767c11c2e2451fcde3dfcaf18088b7552cb2cb4f0b3f1e5c799ebbafd2f353334d954dc77e4"
+            "d99fdc876dcd8ca6f4be42b7587b2147a4fd7b4846e1dad32adc3e0e8af63e4d461a0361e83a3acde5e58e878dcbe4fecea8dd60f1fe16b021940aeb1ae810a3"
         );
     }
 

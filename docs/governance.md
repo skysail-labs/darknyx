@@ -1,4 +1,4 @@
-# Nyx — Governance & Authority Model
+# Darknyx — Governance & Authority Model
 
 > **Status:** target model for a mainnet deployment. The live **devnet**
 > deployment uses single keypairs for all authorities (fine for devnet, where
@@ -14,7 +14,7 @@
 
 ## 0. TL;DR
 
-There are **four** privileged authorities over a live Nyx deployment. Devnet
+There are **four** privileged authorities over a live Darknyx deployment. Devnet
 uses single keypairs. Mainnet deliberately uses **two** Squads v4 multisigs:
 an operations 3-of-5 for routine protocol/market/TEE-key changes and a cold
 root/upgrade 4-of-7 for catastrophic authority. No single key can freeze

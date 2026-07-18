@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Base URLs
-description: Where the Nyx API lives, the common request and response conventions, and the health and time endpoints.
+description: Where the Darknyx API lives, the common request and response conventions, and the health and time endpoints.
 ---
 
 # Base URLs
@@ -15,7 +15,7 @@ inside the attested VM. Use the gateway origin for HTTPS and the same origin
 
 ## The gateway
 
-Nyx is served directly by the confidential VM behind a TLS endpoint whose
+Darknyx is served directly by the confidential VM behind a TLS endpoint whose
 certificate key is generated inside the enclave and never leaves it (see
 [Transport & Attestation](./transport-and-attestation)). A single origin serves
 everything:
@@ -100,7 +100,7 @@ and for clock-skew diagnostics.
 | `unix_ms` | integer | Server wall-clock time, milliseconds since the Unix epoch. |
 
 :::tip Order expiry is slot-based
-Nyx orders expire at a **Solana slot**, not a wall-clock timestamp. To place a
+Darknyx orders expire at a **Solana slot**, not a wall-clock timestamp. To place a
 "good for the next ten minutes" order, read `/time`, project the wall-clock
 target onto a slot using the current slot as the anchor (Solana targets roughly
 400 ms per slot), and pass that as `expiry_slot`. The SDK does this conversion

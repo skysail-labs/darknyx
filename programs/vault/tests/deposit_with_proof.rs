@@ -89,7 +89,7 @@ fn valid_deposit_proof(
         r_owner = common::fr_to_dec(&opening.r_owner),
     );
     let build = common::repo_root().join("circuits/build/valid_deposit");
-    let tmp = std::env::temp_dir().join("nyx_valid_deposit_litesvm");
+    let tmp = std::env::temp_dir().join("darknyx_valid_deposit_litesvm");
     let (proof, public) = common::snarkjs_fullprove(&input, &build, &tmp);
     let [mint_lo_bytes, mint_hi_bytes] = pubkey_pair_be32(&mint.to_bytes());
     let mut amount_bytes = [0u8; 32];

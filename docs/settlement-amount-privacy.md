@@ -6,7 +6,7 @@
 > landed: the leaf is a single commitment-only `Poseidon11(DOMAIN_LEAF_V2=23, …)` with
 > an activation bit, the
 > 7 plaintext amounts are gone from `MatchResultPayload` (canonical tag now
-> `nyx-match-v9` after the later dead-nullifier removal), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
+> `darknyx-match-v10` after the later dead-nullifier removal), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
 > binding are in the circuit, and `verify_match_batch` takes 8 public inputs
 > `[root, fee_rate, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]`.
 > Output and fee-note inners are derived in-circuit and fees are issued per match.
@@ -72,7 +72,7 @@ settle moment**, in three places:
    `base_amount`, `quote_amount`, `clearing_price`, `buyer/seller_change_amt`,
    `buyer/seller_fee_amt` (`programs/vault/src/instructions/tee_forced_settle.rs:42-97`).
 3. **The match leaf hashes those plaintext amounts** —
-   `crates/nyx-tee/src/prover/leaf.rs:60-97`:
+   `crates/darknyx-tee/src/prover/leaf.rs:60-97`:
    ```
    h1   = Poseidon12(DOMAIN_LEAF_INNER, note_a..note_f, qm_lo,qm_hi,bm_lo,bm_hi, base_amount)
    leaf = Poseidon9 (DOMAIN_LEAF_TOP,  h1, quote_amount, buyer_change, seller_change,
@@ -157,7 +157,7 @@ scope here (see §11).**
 
 ### 6.2 The leaf — 4-port byte-equality lockstep (the fragile part)
 Move all four to the commitment-only layout *in one commit*:
-`circuit` ↔ `crates/nyx-tee/src/prover/leaf.rs::compute_batch_leaf` ↔
+`circuit` ↔ `crates/darknyx-tee/src/prover/leaf.rs::compute_batch_leaf` ↔
 `packages/sdk/tests/helpers/match-batch-prover.ts::computeBatchLeaf` ↔
 `programs/vault/src/instructions/tee_forced_settle_batched.rs::compute_match_leaf`.
 
@@ -176,12 +176,12 @@ Move all four to the commitment-only layout *in one commit*:
 
 ### 6.4 Canonical payload hash (the TEE-signed message)
 `canonical_payload_hash` is over the payload; shrinking it changes the hash → **byte-equality
-cascade** across vault (`tee_forced_settle.rs`) + TEE (`crates/nyx-tee/src/settle/payload.rs`) + SDK
+cascade** across vault (`tee_forced_settle.rs`) + TEE (`crates/darknyx-tee/src/settle/payload.rs`) + SDK
 (`settle-builder.ts::canonicalPayloadHash`), with a **domain-tag bump** (precedent: the prior
-`nyx-match-v5 → v6`). The amounts don't need to be *signed* — the proof binds them; the signature
+settlement-domain v5 → v6). The amounts don't need to be *signed* — the proof binds them; the signature
 binds the commitments/nullifiers/order_ids.
 
-### 6.5 TEE — `crates/nyx-tee/`
+### 6.5 TEE — `crates/darknyx-tee/`
 - `settle/assemble.rs`: amounts stay in the **witness** (private inputs to the proof), leave the
   **payload**. `settle/payload.rs`: smaller payload + new canonical hash. The prover's public-inputs
   vector gains `fee_rate_bps`.
@@ -203,7 +203,7 @@ should). It indexes commitments + `order_id` for routing; **amounts move to the 
 reconstructed." `FillRow.change_amount`/`clearing_price` columns go away (or become null). The
 `change_amount > 0` assertion in `cvm-settle-e2e` moves to the **memo** side.
 
-### 6.8 Loadgen — `crates/nyx-tee-loadgen/`
+### 6.8 Loadgen — `crates/darknyx-tee-loadgen/`
 Minor — it submits orders; only its real-settle settle-builder mirror tracks the payload change.
 
 ---
@@ -299,7 +299,7 @@ Each phase is independently reviewable; the circuit change (P1-P2) lands as one 
 
 - Leak surface: `programs/vault/src/state.rs:180` (NoteLock.amount);
   `tee_forced_settle.rs:42-97` (MatchResultPayload);
-  `crates/nyx-tee/src/prover/leaf.rs:60-97` (leaf hashes amounts).
+  `crates/darknyx-tee/src/prover/leaf.rs:60-97` (leaf hashes amounts).
 - Already-in-circuit: `circuits/templates/match_batch.circom:144-145` (conservation),
   `:165-189` (change-note conditional), `:198-205` (range checks on base/quote/price + price mul).
 - On-chain plaintext readers: `tee_forced_settle_batched.rs:126-150` (leaf recompute),

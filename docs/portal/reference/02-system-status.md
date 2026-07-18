@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: System Status
-description: How Nyx signals readiness and degraded mode, so you can check it before trading and back off when subsystems are down.
+description: How Darknyx signals readiness and degraded mode, so you can check it before trading and back off when subsystems are down.
 ---
 
 # System Status
@@ -30,7 +30,7 @@ Public, with no authentication.
   "settle_enabled": true,
   "oracle_configured": true,
   "current_slot": 309482113,
-  "nyx_version": "…"
+  "version": "…"
 }
 ```
 
@@ -41,7 +41,7 @@ Public, with no authentication.
 | `settle_enabled` | boolean | The on-chain settlement pipeline is wired (matches will settle). |
 | `oracle_configured` | boolean | A price oracle is attached (the clearing-price reference). |
 | `current_slot` | integer | The engine's current view of the Solana slot. |
-| `nyx_version` | string | The running engine's build version. |
+| `version` | string | The running engine's build version. |
 
 ## When degradation occurs
 

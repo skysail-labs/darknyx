@@ -57,7 +57,7 @@ Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
 | `devnet-merge.test.ts`            | `RUN_DEVNET_MERGE=1` | deposit → merge(K=2) → withdraw                                  |
 | `devnet-leaf-index.test.ts`       | `RUN_DEVNET_LEAF=1`  | event-based leaf-index read vs real RPC                          |
 
-## cvm — needs a RUNNING Phala CVM gateway + devnet (`RUN_CVM_E2E=1` + `NYX_TEE_GATEWAY`)
+## cvm — needs a RUNNING Phala CVM gateway + devnet (`RUN_CVM_E2E=1` + `DARKNYX_TEE_GATEWAY`)
 
 | File                            | Asserts                                                                                                                                                   |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |

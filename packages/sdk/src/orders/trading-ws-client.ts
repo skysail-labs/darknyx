@@ -8,7 +8,7 @@
  * transport loss, and carries cancel-on-disconnect on every login.
  */
 
-import { NyxApiError } from "./order-client.js";
+import { DarknyxApiError } from "./order-client.js";
 import type {
   PlaceOrderResponse,
   CancelOrderResponse,
@@ -224,7 +224,7 @@ export class TradingClient {
 
     if (frame.request_id === this.loginRequestId) {
       if (frame.op === "error") {
-        const error = new NyxApiError(
+        const error = new DarknyxApiError(
           frame.code ?? 4010,
           frame.message ?? "stream login failed",
           401,
@@ -275,7 +275,7 @@ export class TradingClient {
     this.pending.delete(requestId!);
     if (frame.op === "error") {
       pending.reject(
-        new NyxApiError(
+        new DarknyxApiError(
           frame.code ?? 5000,
           frame.message ?? "stream request failed",
           frame.code ?? 0,

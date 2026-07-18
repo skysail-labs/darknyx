@@ -115,7 +115,7 @@ pub struct Order {
 // ─────── OrderBook — the matcher's input collection ─────────────────────────
 
 /// Flat `Vec<Order>` snapshot consumed directly by the matching algorithm.
-/// The in-TEE matcher (`crates/nyx-tee`) builds one by snapshotting
+/// The in-TEE matcher (`crates/darknyx-tee`) builds one by snapshotting
 /// its long-lived `BTreeMap<Price, FifoQueue<OrderId>>` at each
 /// batch tick — see `docs/tee-architecture.md` §5.1.
 #[derive(Clone, Debug, Default, BorshSerialize, BorshDeserialize)]

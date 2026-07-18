@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 #
-# nyx-tee Dockerfile — multi-stage Rust build → slim Debian runtime.
+# darknyx-tee Dockerfile — multi-stage Rust build → slim Debian runtime.
 #
 # This image gets deployed into a Phala Cloud Confidential VM via
 # `phala deploy -c deploy/docker-compose.yaml`. The image's SHA-256
@@ -23,8 +23,8 @@
 #     unless the build is also reproducible (those bake into the
 #     layer and shift compose-hash).
 #
-# Phase 1: the image runs the no-op skeleton (`cargo run -p nyx-tee`
-# just probes the dstack socket and exits). Once nyx-tee actually
+# Phase 1: the image runs the no-op skeleton (`cargo run -p darknyx-tee`
+# just probes the dstack socket and exits). Once darknyx-tee actually
 # serves traffic, expose port 8080 and add a HEALTHCHECK.
 # ─────────────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ WORKDIR /build
 # x86_64-linux builds of this binary (wasmer 4.4, pulled via ark-circom,
 # references that x86 stack-probe intrinsic which Rust 1.91 no longer
 # exports) is fixed at the source level in
-# crates/nyx-tee/src/probestack.rs — NOT with a linker/gc-sections
+# crates/darknyx-tee/src/probestack.rs — NOT with a linker/gc-sections
 # workaround here. Stock Rust defaults (rust-lld, --gc-sections) link
 # fine once the symbol is supplied. See memory `tee_binary_amd64_link`.
 ENV CARGO_PROFILE_RELEASE_LTO=off
@@ -80,10 +80,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── (optional) ICICLE CUDA backend toolchain — ENABLE_CUDA=1 ───
-# Only the GPU image (NYX_TEE_PROVER=icicle + NYX_TEE_ICICLE_DEVICE=CUDA) needs
+# Only the GPU image (DARKNYX_TEE_PROVER=icicle + DARKNYX_TEE_ICICLE_DEVICE=CUDA) needs
 # this; the default CPU/rapidsnark image leaves ENABLE_CUDA=0 and skips it.
 # nvcc + cudart-dev + curand-dev are enough to BUILD icicle's CUDA backend; no
-# physical GPU is required because the build forwards NYX_ICICLE_CUDA_ARCH so
+# physical GPU is required because the build forwards DARKNYX_ICICLE_CUDA_ARCH so
 # cmake skips its `native` GPU-arch probe (see the icicle build.rs change).
 # Built on bookworm so the produced .so match the bookworm-slim runtime ABI
 # (same glibc-match lesson as the native witness generator). The toolkit is
@@ -129,9 +129,9 @@ ENV RAPIDSNARK_LIB_DIR=/build/third_party/rapidsnark/build_prover/src \
     RAPIDSNARK_GMP_LIB_DIR=/build/third_party/rapidsnark/depends/gmp/package/lib
 
 # The vendored ICICLE prover (icicle-snark) is an OPTIONAL path dependency of
-# nyx-tee. Even the CPU-only (`--features rapidsnark`) build needs its manifest
+# darknyx-tee. Even the CPU-only (`--features rapidsnark`) build needs its manifest
 # tree present, because cargo resolves the full dependency graph (incl. disabled
-# optional deps) before building — without it, `cargo build -p nyx-tee` fails at
+# optional deps) before building — without it, `cargo build -p darknyx-tee` fails at
 # "failed to load source for dependency icicle-snark". The `icicle-cuda` build
 # additionally compiles its CUDA backend from this source. Copied before the
 # warmup so resolution succeeds; **/target is .dockerignore'd.
@@ -142,30 +142,30 @@ COPY third_party/icicle-snark/ third_party/icicle-snark/
 COPY Cargo.toml Cargo.lock ./
 COPY crates/darkpool-crypto/Cargo.toml  crates/darkpool-crypto/
 COPY crates/darkpool-matcher/Cargo.toml crates/darkpool-matcher/
-COPY crates/nyx-tee/Cargo.toml          crates/nyx-tee/
-# nyx-tee-loadgen is a workspace member, so cargo must be able to
+COPY crates/darknyx-tee/Cargo.toml          crates/darknyx-tee/
+# darknyx-tee-loadgen is a workspace member, so cargo must be able to
 # parse its manifest to resolve the workspace graph — even though the
-# warmup below only builds `-p nyx-tee`. Without this COPY the warmup
-# aborts with "failed to read .../nyx-tee-loadgen/Cargo.toml", losing
+# warmup below only builds `-p darknyx-tee`. Without this COPY the warmup
+# aborts with "failed to read .../darknyx-tee-loadgen/Cargo.toml", losing
 # the dependency-cache layer (the real build still succeeds, just
 # slower). It is NOT compiled into the runtime image.
-COPY crates/nyx-tee-loadgen/Cargo.toml  crates/nyx-tee-loadgen/
+COPY crates/darknyx-tee-loadgen/Cargo.toml  crates/darknyx-tee-loadgen/
 COPY programs/vault/Cargo.toml          programs/vault/
 
 # Create dummy main.rs/lib.rs so the dep build doesn't fail on
 # missing sources. The real sources come in the next COPY.
 RUN mkdir -p crates/darkpool-crypto/src crates/darkpool-matcher/src \
-             crates/nyx-tee/src crates/nyx-tee-loadgen/src \
+             crates/darknyx-tee/src crates/darknyx-tee-loadgen/src \
              programs/vault/src && \
-    echo 'fn main() {}' > crates/nyx-tee/src/main.rs && \
-    echo 'fn main() {}' > crates/nyx-tee-loadgen/src/main.rs && \
-    echo 'fn main() {}' > crates/nyx-tee/build.rs && \
-    touch crates/nyx-tee/src/lib.rs \
+    echo 'fn main() {}' > crates/darknyx-tee/src/main.rs && \
+    echo 'fn main() {}' > crates/darknyx-tee-loadgen/src/main.rs && \
+    echo 'fn main() {}' > crates/darknyx-tee/build.rs && \
+    touch crates/darknyx-tee/src/lib.rs \
           crates/darkpool-crypto/src/lib.rs \
           crates/darkpool-matcher/src/lib.rs \
-          crates/nyx-tee-loadgen/src/lib.rs \
+          crates/darknyx-tee-loadgen/src/lib.rs \
           programs/vault/src/lib.rs && \
-    cargo build --release -p nyx-tee || true
+    cargo build --release -p darknyx-tee || true
 
 # Now the real sources.
 COPY crates/ crates/
@@ -175,26 +175,26 @@ COPY programs/ programs/
 # The warmup above compiled the path-dep crates from EMPTY dummy
 # lib.rs files and cached those .rlibs. COPY preserves the build
 # context's (older) mtimes, so without this touch cargo considers the
-# cached empty crates "up to date" and links nyx-tee against empty
+# cached empty crates "up to date" and links darknyx-tee against empty
 # darkpool-crypto / darkpool-matcher — surfacing as a wall of
 # `unresolved import` / `fr_to_be_bytes not found` errors. Touching
 # forces a rebuild of just the workspace crates; the external-dep
 # cache (tokio, ark-*, …) is keyed separately and is preserved.
 # Build features depend on ENABLE_CUDA: the CPU image ships rapidsnark; the GPU
 # image additionally builds the ICICLE CUDA backend (icicle-cuda → icicle-snark
-# → cmake/nvcc, arch pinned via NYX_ICICLE_CUDA_ARCH=$CUDA_ARCH so no GPU is
+# → cmake/nvcc, arch pinned via DARKNYX_ICICLE_CUDA_ARCH=$CUDA_ARCH so no GPU is
 # needed at build). `mkdir -p $ICICLE_INSTALL_DIR/lib` unconditionally so the
 # runtime stage's COPY of the icicle libs always has a (possibly empty) source.
 RUN find crates programs -name '*.rs' -exec touch {} + && \
     mkdir -p "$ICICLE_INSTALL_DIR/lib" && \
     if [ "$ENABLE_CUDA" = "1" ]; then \
-        NYX_ICICLE_CUDA_ARCH="$CUDA_ARCH" \
-          cargo build --release -p nyx-tee --features rapidsnark,icicle-cuda; \
+        DARKNYX_ICICLE_CUDA_ARCH="$CUDA_ARCH" \
+          cargo build --release -p darknyx-tee --features rapidsnark,icicle-cuda; \
     else \
-        cargo build --release -p nyx-tee --features rapidsnark; \
+        cargo build --release -p darknyx-tee --features rapidsnark; \
     fi && \
-    cp /build/target/release/nyx-tee /nyx-tee && \
-    strip /nyx-tee
+    cp /build/target/release/darknyx-tee /darknyx-tee && \
+    strip /darknyx-tee
 
 # ─────────── Stage 2: runtime ───────────
 # debian:bookworm-slim — minimal Debian. We pick Debian (not Alpine)
@@ -248,68 +248,68 @@ RUN if [ "$ENABLE_CUDA" = "1" ]; then \
 
 # Run as a non-root user. UID/GID are fixed so the volume mounts
 # behave predictably across deploys.
-RUN groupadd -g 1100 nyx && useradd -u 1100 -g 1100 -M -s /sbin/nologin nyx
+RUN groupadd -g 1100 darknyx && useradd -u 1100 -g 1100 -M -s /sbin/nologin darknyx
 
-WORKDIR /opt/nyx
+WORKDIR /opt/darknyx
 
-# Binary. Owned by root, executable by everyone — running as nyx user.
-COPY --from=builder --chmod=755 /nyx-tee /opt/nyx/nyx-tee
+# Binary. Owned by root, executable by everyone — running as darknyx user.
+COPY --from=builder --chmod=755 /darknyx-tee /opt/darknyx/darknyx-tee
 
 # ICICLE shared libs (frontend + CUDA backend). For the CPU image the builder's
 # $ICICLE_INSTALL_DIR/lib is an empty dir (mkdir -p above), so this COPY is a
 # no-op; for the GPU image it carries libicicle_device.so + the bn254 field/curve
 # .so (frontend) and lib/backend/**/libicicle_backend_cuda_*.so (loaded at runtime
-# from ICICLE_BACKEND_INSTALL_DIR). The nyx-tee binary RPATHs the build-host install
+# from ICICLE_BACKEND_INSTALL_DIR). The darknyx-tee binary RPATHs the build-host install
 # dir (absent here), so LD_LIBRARY_PATH points the loader at the frontend .so.
 # Both ENVs are inert for the CPU image: the loader is only invoked when
-# NYX_TEE_ICICLE_DEVICE != CPU (icicle-snark lib.rs), and the dir is empty.
+# DARKNYX_TEE_ICICLE_DEVICE != CPU (icicle-snark lib.rs), and the dir is empty.
 COPY --from=builder /build/icicle-install/lib/ /opt/icicle/lib/
 ENV ICICLE_BACKEND_INSTALL_DIR=/opt/icicle/lib/backend \
     LD_LIBRARY_PATH=/opt/icicle/lib
 
-# N=16 settle-prover artifacts. The runtime reads NYX_TEE_CIRCUITS_DIR
+# N=16 settle-prover artifacts. The runtime reads DARKNYX_TEE_CIRCUITS_DIR
 # (default /circuits/build) and resolves
 # match_batch_n16/{circuit_final.zkey, circuit.r1cs, circuit_js/circuit.wasm}
-# (see crates/nyx-tee/src/prover/ark_prover.rs). Without these the settle
+# (see crates/darknyx-tee/src/prover/ark_prover.rs). Without these the settle
 # driver boots enqueue-only ("load N=16 prover ... No such file").
 #
 # Only circuit_final.zkey is git-tracked; circuit.r1cs + circuit.wasm are
 # gitignored and compiled in CI (circom, no ptau needed — the zkey's
 # ceremony is already committed) before this build. See
 # .github/workflows/tee-image.yml + .dockerignore.
-COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit_final.zkey \
+COPY --chown=darknyx:darknyx circuits/build/match_batch_n16/circuit_final.zkey \
      /circuits/build/match_batch_n16/circuit_final.zkey
-COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit.r1cs \
+COPY --chown=darknyx:darknyx circuits/build/match_batch_n16/circuit.r1cs \
      /circuits/build/match_batch_n16/circuit.r1cs
-COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit_js/circuit.wasm \
+COPY --chown=darknyx:darknyx circuits/build/match_batch_n16/circuit_js/circuit.wasm \
      /circuits/build/match_batch_n16/circuit_js/circuit.wasm
 
 # The native circom `--c` C++ witness generator (amd64 binary, built in CI from
-# `circom --c` + make on the runner). When NYX_TEE_WITNESS=native the prover
+# `circom --c` + make on the runner). When DARKNYX_TEE_WITNESS=native the prover
 # spawns this instead of wasmer (≈18× faster witness-gen; see witness-bench).
 # `circuit.dat` (the witness-gen constants) MUST sit next to the binary —
 # main.cpp loads `<argv[0]>.dat` at runtime. Gitignored + CI-built like the
 # wasm/r1cs above.
-COPY --chown=nyx:nyx --chmod=755 circuits/build/match_batch_n16/circuit_cpp/circuit \
+COPY --chown=darknyx:darknyx --chmod=755 circuits/build/match_batch_n16/circuit_cpp/circuit \
      /circuits/build/match_batch_n16/circuit_cpp/circuit
-COPY --chown=nyx:nyx circuits/build/match_batch_n16/circuit_cpp/circuit.dat \
+COPY --chown=darknyx:darknyx circuits/build/match_batch_n16/circuit_cpp/circuit.dat \
      /circuits/build/match_batch_n16/circuit_cpp/circuit.dat
 
 # Persistent state dir for the Phase-1b auth snapshot (accounts.db).
-# MUST be created + chowned to the runtime user BEFORE `USER nyx`: when
-# the empty `nyx_state` named volume (docker-compose.yaml) first mounts
+# MUST be created + chowned to the runtime user BEFORE `USER darknyx`: when
+# the empty `darknyx_state` named volume (docker-compose.yaml) first mounts
 # here, Docker initialises it with this mountpoint's ownership. Without
-# the chown the volume is root-owned, the `nyx` process gets EACCES on
+# the chown the volume is root-owned, the `darknyx` process gets EACCES on
 # every write, and persistence silently no-ops (best-effort) — exactly
-# the spot-check regression this fixes. See NYX_TEE_STATE_DIR.
-RUN mkdir -p /var/lib/nyx-tee && chown nyx:nyx /var/lib/nyx-tee
+# the spot-check regression this fixes. See DARKNYX_TEE_STATE_DIR.
+RUN mkdir -p /var/lib/darknyx-tee && chown darknyx:darknyx /var/lib/darknyx-tee
 
-USER nyx
+USER darknyx
 
-# nyx-tee listens on :8080 internally; dstack-ingress fronts it on
+# darknyx-tee listens on :8080 internally; dstack-ingress fronts it on
 # :443 over RA-HTTPS. Don't EXPOSE :443 here — that's
 # dstack-ingress's job (see docker-compose.yaml).
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/opt/nyx/nyx-tee"]
+CMD ["/opt/darknyx/darknyx-tee"]

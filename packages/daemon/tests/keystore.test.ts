@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import nacl from "tweetnacl";
-import { exportEncryptedMasterSeed, importEncryptedMasterSeed } from "@nyx/sdk";
+import { exportEncryptedMasterSeed, importEncryptedMasterSeed } from "@darknyx/sdk";
 
 import {
   Keystore,
@@ -39,7 +39,7 @@ afterEach(() => {
   tmpDirs.length = 0;
 });
 function tmpFile(): string {
-  const d = mkdtempSync(join(tmpdir(), "nyx-keystore-"));
+  const d = mkdtempSync(join(tmpdir(), "darknyx-keystore-"));
   tmpDirs.push(d);
   return join(d, "keystore.json");
 }

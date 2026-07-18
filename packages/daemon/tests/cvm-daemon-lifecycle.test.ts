@@ -21,13 +21,13 @@
  * MatchDriver (seller) builds its order the SAME way the daemon does
  * (proveAndBuildOrder → /tree/inclusion), so no shadow tree is needed.
  *
- * Gated on RUN_CVM_DAEMON_LIFECYCLE=1 + NYX_TEE_GATEWAY + SOLANA_RPC_URL.
+ * Gated on RUN_CVM_DAEMON_LIFECYCLE=1 + DARKNYX_TEE_GATEWAY + SOLANA_RPC_URL.
  * Like the smoke, this is offline-typechecked; expect to iterate timings against
  * a live CVM. Prereqs: tree reset, CVM deployed (real-mint), signers
  * rotated/funded (settles happen), buyer+seller payers funded.
  *
  * Run:
- *   RUN_CVM_DAEMON_LIFECYCLE=1 NYX_TEE_GATEWAY=https://<app>-8080.dstack-… \
+ *   RUN_CVM_DAEMON_LIFECYCLE=1 DARKNYX_TEE_GATEWAY=https://<app>-8080.dstack-… \
  *     SOLANA_RPC_URL=<helius> ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
  *     ( cd packages/daemon && ../../node_modules/.bin/vitest run tests/cvm-daemon-lifecycle.test.ts )
  */
@@ -60,7 +60,7 @@ import {
   OrderSide,
   depositNoteFromReceipt,
   type StoredNote,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 import {
   Daemon,
   DaemonStore,
@@ -78,7 +78,7 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, "..", "..", "..");
 const CONFIG_PATH = resolve(REPO_ROOT, ".devnet/e2e-config.json");
-const GATEWAY = (process.env.NYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
+const GATEWAY = (process.env.DARKNYX_TEE_GATEWAY ?? "").replace(/\/$/, "");
 const RPC = process.env.SOLANA_RPC_URL ?? "";
 const READY =
   process.env.RUN_CVM_DAEMON_LIFECYCLE === "1" &&
@@ -88,9 +88,9 @@ const READY =
 const maybe = READY ? describe : describe.skip;
 
 const API = {
-  key: "nyx-test-api-key",
-  secret: "nyx-test-secret",
-  pass: "nyx-test-passphrase",
+  key: "darknyx-test-api-key",
+  secret: "darknyx-test-secret",
+  pass: "darknyx-test-passphrase",
 };
 const FEE_BPS = 30n;
 const SYMBOL = "SOL-USDC";
@@ -119,7 +119,7 @@ const SOL_USD_FEED =
 /** The matcher clears at the oracle-anchored price, so orders must be priced
  *  near it (a far-off fixed price never crosses) — same anchor cvm-settle-e2e uses. */
 async function oracleAnchor(): Promise<bigint> {
-  if (process.env.NYX_CVM_PRICE) return BigInt(process.env.NYX_CVM_PRICE);
+  if (process.env.DARKNYX_CVM_PRICE) return BigInt(process.env.DARKNYX_CVM_PRICE);
   const r = await fetch(
     `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${SOL_USD_FEED}`,
   );

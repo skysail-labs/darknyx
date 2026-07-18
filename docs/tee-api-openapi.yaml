@@ -1,7 +1,7 @@
 openapi: 3.1.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Nyx TEE — API contract
+# Darknyx TEE — API contract
 #
 # Wire contract for the confidential matching and settlement service.
 #
@@ -31,21 +31,21 @@ openapi: 3.1.0
 # ─────────────────────────────────────────────────────────────────────────────
 
 info:
-  title: Nyx TEE API
-  version: 3.0.0
+  title: Darknyx TEE API
+  version: 4.0.0
   description: |
-    Public + authenticated REST and WebSocket API for the Nyx dark pool
+    Public + authenticated REST and WebSocket API for the Darknyx dark pool
     TEE matching layer. Pairs with the v2 on-chain custody program
     (vault, program ID `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`).
   contact:
-    name: Nyx engineering
+    name: Darknyx engineering
   license:
     name: Apache-2.0
 
 servers:
-  - url: https://api.nyx.example.com
+  - url: https://api.darknyx.example.com
     description: Mainnet placeholder; use the origin published with a deployment.
-  - url: https://api.devnet.nyx.example.com
+  - url: https://api.devnet.darknyx.example.com
     description: Devnet placeholder; use the origin published with a deployment.
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ tags:
     description: |
       TEE attestation quote retrieval + RA-TLS evidence bundle. Verify
       before any sensitive write. The /evidences/* endpoints under
-      this tag are served by dstack-ingress, not by nyx-tee directly,
+      this tag are served by dstack-ingress, not by darknyx-tee directly,
       but they're documented here for client-side completeness.
   - name: info
     description: |
@@ -225,9 +225,9 @@ components:
       description: |
         Application + instance metadata, returned by GET /info.
         Mirrors what dstack-sdk `client.info()` returns plus a
-        couple of Nyx-specific fields. Used in tandem with
+        couple of Darknyx-specific fields. Used in tandem with
         /attestation by the SDK's verifyTeeAttestation() helper.
-      required: [app_id, instance_id, app_name, device_id, compose_hash, boot_session_id, tcb_info, tee_pubkey, tee_pubkeys, nyx_version]
+      required: [app_id, instance_id, app_name, device_id, compose_hash, boot_session_id, tcb_info, tee_pubkey, tee_pubkeys, version]
       properties:
         app_id:
           type: string
@@ -268,7 +268,7 @@ components:
             Base58 Ed25519 pubkey (same as in AttestationQuote). This is
             the PRIMARY (shard-0) signer. Under tree-sharding the TEE
             derives K = num_trees signer keys (paths
-            nyx/ed25519-signer/v1/{0..K-1}); all K are registered in the
+            darknyx/ed25519-signer/v2/{0..K-1}); all K are registered in the
             on-chain `vault_config.tee_pubkeys` set via one
             `set_tee_pubkey` rotation, and each is a shard settle
             fee-payer. Prefer the complete set below.
@@ -281,9 +281,9 @@ components:
             against finalized on-chain `vault_config.tee_pubkeys`. The quote's
             report_data binds SHA-256 of their raw concatenation in shard order;
             `tee_pubkey` is `tee_pubkeys[0]`.
-        nyx_version:
+        version:
           type: string
-          description: Semver tag of the nyx-tee build (e.g. v0.4.2).
+          description: Semver tag of the darknyx-tee build (e.g. v0.4.2).
 
     RaTlsEvidence:
       type: object
@@ -336,7 +336,7 @@ components:
     PlaceOrderRequest:
       type: object
       description: |
-        The canonical-order v2 body (`nyx-order-v3` signature domain). All
+        The canonical-order v2 body (`darknyx-order-v4` signature domain). All
         32/64/16-byte fields are
         hex-encoded strings; all numeric fields are JSON integers (u64).
         The trading-key signature covers the canonical encoding of the
@@ -910,7 +910,7 @@ paths:
   /evidences/quote.json:
     get:
       tags: [attestation]
-      summary: (Served by dstack-ingress, not nyx-tee) TDX quote bundle.
+      summary: (Served by dstack-ingress, not darknyx-tee) TDX quote bundle.
       description: |
         Static evidence file in the TLS verification chain. Its digest is bound
         into the attested evidence bundle.
@@ -1296,11 +1296,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status, uptime_ms, nyx_version]
+                required: [status, uptime_ms, version]
                 properties:
                   status: { type: string, enum: [ok] }
                   uptime_ms: { type: integer, format: uint64 }
-                  nyx_version: { type: string }
+                  version: { type: string }
 
   /system/status:
     get:
@@ -1320,7 +1320,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [degraded, matcher_running, settle_enabled, oracle_configured, current_slot, nyx_version]
+                required: [degraded, matcher_running, settle_enabled, oracle_configured, current_slot, version]
                 properties:
                   degraded:
                     type: boolean
@@ -1333,7 +1333,7 @@ paths:
                     type: boolean
                     description: An oracle cache (clearing-price reference) is attached.
                   current_slot: { type: integer, format: uint64 }
-                  nyx_version: { type: string }
+                  version: { type: string }
 
   /time:
     get:

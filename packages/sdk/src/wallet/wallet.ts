@@ -2,7 +2,7 @@
  * Client-side UTXO wallet — balance + collateral coin-selection over the note
  * set.
  *
- * Nyx has no account→balance server mapping (a deliberate privacy choice): a
+ * Darknyx has no account→balance server mapping (a deliberate privacy choice): a
  * user's balance is the sum of their own unspent notes, exactly like a Bitcoin
  * wallet sums its UTXOs. Deposits, trade/change outputs, and merge outputs all
  * land in the same `NoteStore`. "Unspent" is the on-chain note status (a note is

@@ -1,7 +1,7 @@
 # Fills delivery + trade history — architecture
 
 > Status: **LIVE + COLD PATHS IMPLEMENTED**. Canonical-order v2 replaces the
-> retired anchor memo with a consumed-input-bound v3 memo; recovery v2 rebuilds
+> retired anchor memo with a consumed-input-bound v3 memo; recovery v3 rebuilds
 > deposit, trade, change/continuation, and merge openings from seed + chain.
 >
 > **As-built deltas from the original design below:**
@@ -26,13 +26,13 @@
 >   finalized Solana history cursor; `batch_slot` is only the circuit slot index.
 >   Exact fills remain in the locator because they still mint a recoverable
 >   trade note.
-> - **On-chain output recovery v2 — durable amount source.** Each side's trade
+> - **On-chain output recovery v3 — durable amount source.** Each side's trade
 >   and change amounts live ENCRYPTED on-chain in the unchanged 128-byte
 >   `fill_recovery` field
 >   (X25519-ECIES to the order's `viewing_pubkey`; crypto in
 >   `darkpool-crypto/src/fill_encryption.rs`, TEE-side in
->   `nyx-tee/src/settle/fill_recovery.rs`). The indexer surfaces the opaque
->   recovery-v2 ciphertext (`ephemeral_pubkey` + per-side `output_enc`); the SDK
+>   `darknyx-tee/src/settle/fill_recovery.rs`). The indexer surfaces the opaque
+>   recovery-v3 ciphertext (`ephemeral_pubkey` + per-side `output_enc`); the SDK
 >   `recoverFillFromChain` decrypts `(trade, change)` with the seed-derived
 >   viewing key, derives both outputs from the named consumed opening, and
 >   self-verifies their commitments. `recoverNotesFromChain` scans finalized
@@ -103,7 +103,7 @@ per-account `fills` channel on `/v1/stream`.
 ### 1. Deterministic, HD-derived order ids (replaces `randomBytes(16)`)
 
 ```
-order_id[n] = HKDF(masterSeed, "nyx-order-id" ‖ u32(n))[:16]
+order_id[n] = HKDF(masterSeed, "darknyx-order-id" ‖ u32(n))[:16]
 ```
 
 Same philosophy as deterministic note derivation: derive everything from
@@ -200,11 +200,11 @@ the client stores only that single integer (or rediscovers via §1 gap-scan).
 
 ## Cross-refs
 
-- Live session handler: `crates/nyx-tee/src/api/stream.rs` (in-band auth,
+- Live session handler: `crates/darknyx-tee/src/api/stream.rs` (in-band auth,
   per-account `fills` subscription).
-- `FillMemo`: `crates/nyx-tee/src/matcher/fills.rs` (live fills-channel push).
-- Durable output recovery v2: `darkpool-crypto/src/fill_encryption.rs`
-  + `nyx-tee/src/settle/fill_recovery.rs` (on-chain ciphertext) →
+- `FillMemo`: `crates/darknyx-tee/src/matcher/fills.rs` (live fills-channel push).
+- Durable output recovery v3: `darkpool-crypto/src/fill_encryption.rs`
+  + `darknyx-tee/src/settle/fill_recovery.rs` (on-chain ciphertext) →
   `packages/sdk/src/fills/recover.ts` (`recoverFillFromChain`) +
   `packages/sdk/src/fills/cold-recovery.ts` (`recoverNotesFromChain`). (The old P7
   memo log + `api/fills.rs` `GET /fills/replay` + `sdk/.../fills/replay.ts` were

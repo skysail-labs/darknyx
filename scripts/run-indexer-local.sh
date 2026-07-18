@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the Nyx fills indexer LOCALLY for testing.
+# Run the Darknyx fills indexer LOCALLY for testing.
 #
 # The indexer is an off-TEE, read-only Solana indexer. For testing it does NOT
 # need to be deployed anywhere: it runs on your machine, reads the SAME devnet
@@ -22,10 +22,10 @@ cd "$ROOT"
 
 RPC="${INDEXER_RPC_URL:-${HELIUS:-https://api.devnet.solana.com}}"
 PORT="${INDEXER_PORT:-8090}"
-DB="${INDEXER_DB:-$(mktemp -t nyx-idx.XXXXXX).sqlite}"
+DB="${INDEXER_DB:-$(mktemp -t darknyx-idx.XXXXXX).sqlite}"
 PROGRAM="${INDEXER_PROGRAM_ID:-C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx}"
 
-echo "building @nyx/indexer..."
+echo "building @darknyx/indexer..."
 ./node_modules/.bin/tsc -p packages/indexer/tsconfig.json
 
 # Live-tail by default for local testing: skip the (possibly days-long)

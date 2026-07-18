@@ -7,7 +7,7 @@
  * an `expiry_slot` without the client running its own Solana RPC.
  */
 
-/** Wire shape of `GET /system/status` (mirrors `nyx_tee::api::system::SystemStatus`). */
+/** Wire shape of `GET /system/status` (mirrors `darknyx_tee::api::system::SystemStatus`). */
 export interface SystemStatus {
   /** `true` when matching OR the settle pipeline is down. */
   degraded: boolean;
@@ -15,10 +15,10 @@ export interface SystemStatus {
   settle_enabled: boolean;
   oracle_configured: boolean;
   current_slot: number;
-  nyx_version: string;
+  version: string;
 }
 
-/** Wire shape of `GET /time` (mirrors `nyx_tee::api::system::ServerTime`). */
+/** Wire shape of `GET /time` (mirrors `darknyx_tee::api::system::ServerTime`). */
 export interface ServerTime {
   slot: number;
   /** Server unix time, milliseconds. */

@@ -19,10 +19,10 @@ image measurement.
 
 On many private venues, your connection terminates at a gateway or load balancer
 that sits *outside* the system's trust zone, and a separate in-band encryption
-handshake is layered inside TLS to defend against that gateway. Nyx does not have
+handshake is layered inside TLS to defend against that gateway. Darknyx does not have
 that gap.
 
-The TLS certificate Nyx serves is bound to a key the enclave generated and holds.
+The TLS certificate Darknyx serves is bound to a key the enclave generated and holds.
 TLS therefore terminates *inside* the confidential VM, the same boundary that
 runs the matching engine. There is no intermediate hop that sees plaintext, so
 there is no need for a second encryption layer:
@@ -46,7 +46,7 @@ What this gives you:
 ## Verifying the engine
 
 TLS proves you have a private channel to *something*. Attestation proves that
-something is the **specific, measured Nyx engine** and not a substituted binary.
+something is the **specific, measured Darknyx engine** and not a substituted binary.
 Verification is a client-side step you run once at connect (or whenever you want
 the strong guarantee).
 
@@ -66,7 +66,7 @@ GET /info
   "tee_pubkey": "…",
   "tee_pubkeys": ["…", "…"],
   "boot_session_id": "…",
-  "nyx_version": "…"
+  "version": "…"
 }
 ```
 
@@ -78,7 +78,7 @@ GET /info
 | `tee_pubkey` | Primary (shard-0) Ed25519 settlement signer, kept as a convenience field. |
 | `tee_pubkeys` | Full ordered signer set, one per tree shard. Verify the entire set against finalized `VaultConfig.tee_pubkeys`. |
 | `boot_session_id` | Fresh process-boot id signed into every canonical order, preventing cross-restart replay. |
-| `nyx_version` | Build version tag of the engine. |
+| `version` | Build version tag of the engine. |
 
 ### GET /attestation
 

@@ -49,10 +49,10 @@ const PAYLOAD_LEN = 488;
 /** ix data = disc(8) ‖ tree_id(u8) ‖ payload(488) ‖ match_index(1) ‖ siblings(128).
  *  The payload starts AFTER the discriminator AND the leading `tree_id` byte. */
 const PAYLOAD_OFFSET = 8 + 1;
-/** `fill_recovery` v2 starts at 360 within the payload:
- *  eph(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "NYXREC02". */
+/** `fill_recovery` v3 starts at 360 within the payload:
+ *  eph(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "DNYXREC3". */
 const FILL_RECOVERY_OFFSET = 360;
-const RECOVERY_V2_TRAILER = Buffer.from("NYXREC02", "ascii");
+const RECOVERY_V3_TRAILER = Buffer.from("DNYXREC3", "ascii");
 
 const ZERO32 = "0".repeat(64);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
@@ -136,14 +136,14 @@ export function decodeSettleFills(
   const batchSlot = v.getBigUint64(352, true).toString();
 
   const r = FILL_RECOVERY_OFFSET;
-  const recoveryV2 = Buffer.from(p.subarray(r + 120, r + 128)).equals(
-    RECOVERY_V2_TRAILER,
+  const recoveryV3 = Buffer.from(p.subarray(r + 120, r + 128)).equals(
+    RECOVERY_V3_TRAILER,
   );
-  const eph = recoveryV2 ? hexOrNull(p.subarray(r, r + 32)) : null;
-  const buyerEnc = recoveryV2
+  const eph = recoveryV3 ? hexOrNull(p.subarray(r, r + 32)) : null;
+  const buyerEnc = recoveryV3
     ? hexOrNull(p.subarray(r + 32, r + 76))
     : null;
-  const sellerEnc = recoveryV2
+  const sellerEnc = recoveryV3
     ? hexOrNull(p.subarray(r + 76, r + 120))
     : null;
 

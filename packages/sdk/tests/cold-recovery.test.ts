@@ -216,7 +216,7 @@ describe("recoverNotesFromChain", () => {
         crypto.randomBytes(12),
       ),
       bytes(44, 0),
-      new TextEncoder().encode("NYXREC02"),
+      new TextEncoder().encode("DNYXREC3"),
     );
     const matchId = bytes(16, 0x61);
     const payload = exactFillPayload({

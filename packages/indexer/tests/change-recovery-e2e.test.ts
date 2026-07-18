@@ -1,4 +1,4 @@
-/** Cross-package recovery v2: settle encode → indexer decode → SDK recover. */
+/** Cross-package recovery v3: settle encode → indexer decode → SDK recover. */
 
 import { describe, it, expect } from "vitest";
 import crypto from "node:crypto";
@@ -63,7 +63,7 @@ async function output(
   });
 }
 
-describe("recovery v2 cross-package e2e", () => {
+describe("recovery v3 cross-package e2e", () => {
   it("recovers trade and change from the indexer's opaque row", async () => {
     const inputCommitment = await noteCommitmentV2({
       tokenMint: QUOTE_MINT,
@@ -99,7 +99,7 @@ describe("recovery v2 cross-package e2e", () => {
       ephPub,
       buyerEnc,
       fill(44, 0),
-      new TextEncoder().encode("NYXREC02"),
+      new TextEncoder().encode("DNYXREC3"),
     );
     const payload = exactFillPayload({
       matchId: fill(16, 0x11),

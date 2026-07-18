@@ -1,13 +1,13 @@
 ---
 sidebar_position: 1
 title: Order Types
-description: The order types Nyx supports (limit, IOC, and FOK) plus the market and all-or-none conventions built on top of them.
+description: The order types Darknyx supports (limit, IOC, and FOK) plus the market and all-or-none conventions built on top of them.
 ---
 
 # Order Types
 
 :::info TL;DR
-Nyx has three native order types: **limit**, **IOC**, and **FOK**. A **market**
+Darknyx has three native order types: **limit**, **IOC**, and **FOK**. A **market**
 order is a convention (an IOC with a price cap) and an **all-or-none** order is
 a limit with its minimum fill size set to the full amount. Every order clears at
 the batch's single oracle-anchored price.
@@ -15,7 +15,7 @@ the batch's single oracle-anchored price.
 
 ## How matching works here
 
-Nyx is a **batch auction**, not a continuous order book. Each tick, the engine
+Darknyx is a **batch auction**, not a continuous order book. Each tick, the engine
 collects the resting orders that cross and clears them at a **single uniform
 price** anchored to the market's oracle (see [Clearing Price](./clearing-price)).
 There is no maker/taker ordering *within* a batch; both sides of every match get

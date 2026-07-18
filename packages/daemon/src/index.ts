@@ -1,4 +1,4 @@
-// Public @nyx/daemon exports — the reference market-maker/fund daemon that
+// Public @darknyx/daemon exports — the reference market-maker/fund daemon that
 // wraps the SDK with an order-lifecycle state machine, auto-merge, settlement
 // reconciliation, and a local control API. Keys + proving stay on-device.
 export * from "./types.js";

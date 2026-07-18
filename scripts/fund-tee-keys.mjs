@@ -2,7 +2,7 @@
 // Fund the K TEE shard signer addresses with SOL (DEVNET / STAGING).
 //
 // Each shard's settle Tx D is fee-paid by its own dstack-derived key
-// (`nyx/ed25519-signer/v1/{j}`), and those keys also pay rent for the
+// (`darknyx/ed25519-signer/v2/{j}`), and those keys also pay rent for the
 // per-settle PDAs (consumed-note / nullifier / re-lock) they init. So every
 // registered shard signer needs a SOL balance, not just shard 0. This tops up
 // each address to (at least) the target balance from your local funder.

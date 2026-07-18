@@ -8,7 +8,7 @@
  * `utxo/match-output.ts::deriveMatchOutputInner`, derived from the consumed
  * input inner, for every final and continuing output.
  *
- *   inner_hash = SHA-256("nyx-change-inner" ‖ match_id_u64_le ‖ role) , Fr-safe
+ *   inner_hash = SHA-256("darknyx-change-inner-v2" ‖ match_id_u64_le ‖ role) , Fr-safe
  *                masked (byte 0 = 0, byte 1 high-nibble cleared).
  *
  * Byte-identical to the matcher; pinned by the cross-language KAT in
@@ -33,7 +33,7 @@ export function deriveChangeInner(matchId: bigint, role: number): Uint8Array {
     throw new Error(`role must be a u8; got ${role}`);
   }
   const h = createHash("sha256");
-  h.update(Buffer.from("nyx-change-inner"));
+  h.update(Buffer.from("darknyx-change-inner-v2"));
   const mid = new Uint8Array(8);
   new DataView(mid.buffer).setBigUint64(0, matchId, true); // little-endian
   h.update(mid);

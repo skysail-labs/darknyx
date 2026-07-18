@@ -1,7 +1,7 @@
 /**
  * Concrete Solana providers for the SDK `DarkPoolClient`.
  *
- * `@nyx/sdk` ships only the provider INTERFACES (`providers.ts`); these are the
+ * `@darknyx/sdk` ships only the provider INTERFACES (`providers.ts`); these are the
  * daemon's implementations over a real `@solana/web3.js` Connection + the
  * operator's payer keypair. They back the daemon's DIRECT on-chain actions
  * (deposit; later merge/withdraw) — NOT order flow, which the TEE settles.
@@ -22,7 +22,7 @@ import type {
   MasterSeedMode,
   SolanaConnectionProvider,
   TransactionForwarder,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 /** Minimal Connection surface the forwarder + account reader use (for tests). */
 export interface ConnectionLike {

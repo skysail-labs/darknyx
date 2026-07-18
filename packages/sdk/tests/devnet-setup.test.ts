@@ -1,5 +1,5 @@
 /**
- * Phase-5 Nyx Darkpool — one-time devnet bootstrap for the E2E trade flow.
+ * Phase-5 Darknyx Darkpool — one-time devnet bootstrap for the E2E trade flow.
  *
  * This file is meant to run ONCE per environment (or whenever the token pair
  * changes / the market is reset). It is idempotent where possible — initialize_market
@@ -93,15 +93,15 @@ const VAULT_PROGRAM_ID = new PublicKey(
 );
 
 const PROTOCOL_FEE_BPS = Number(process.env.PROTOCOL_FEE_BPS ?? "30");
-const PRICE_SCALE = BigInt(process.env.NYX_PRICE_SCALE ?? "100000000");
+const PRICE_SCALE = BigInt(process.env.DARKNYX_PRICE_SCALE ?? "100000000");
 
 /** Number of Merkle-tree shards to provision. The CVM settle worker
  *  round-robins settles across K shards + K fee-payer keys; this must equal
- *  the CVM's `NYX_TEE_NUM_TREES`. Default 1 (single shard). */
+ *  the CVM's `DARKNYX_TEE_NUM_TREES`. Default 1 (single shard). */
 const NUM_TREES = (() => {
-  const n = Number(process.env.NYX_NUM_TREES ?? "1");
+  const n = Number(process.env.DARKNYX_NUM_TREES ?? "1");
   if (!Number.isInteger(n) || n < 1 || n > 16) {
-    throw new Error("NYX_NUM_TREES must be an integer 1..16");
+    throw new Error("DARKNYX_NUM_TREES must be an integer 1..16");
   }
   return n;
 })();
@@ -199,7 +199,7 @@ export interface E2EConfig {
     circuitBreakerBps: string;
   };
   vaultConfigPda: string;
-  /** Number of Merkle-tree shards provisioned. The CVM's NYX_TEE_NUM_TREES
+  /** Number of Merkle-tree shards provisioned. The CVM's DARKNYX_TEE_NUM_TREES
    *  must equal this. */
   numTrees: number;
   /** The K `MerkleTree` shard PDAs, indexed by tree_id. */
@@ -246,7 +246,7 @@ async function tryReadVaultConfig(
   const teePubkeys = vaultConfigTeePubkeys(info.data);
   if (teePubkeys.length !== NUM_TREES) {
     throw new Error(
-      `existing VaultConfig has ${teePubkeys.length} trees/signers but NYX_NUM_TREES=${NUM_TREES}; close and re-found it`,
+      `existing VaultConfig has ${teePubkeys.length} trees/signers but DARKNYX_NUM_TREES=${NUM_TREES}; close and re-found it`,
     );
   }
   const storedAdmin = new PublicKey(info.data.subarray(8, 40));
@@ -276,7 +276,7 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
     tee = loadKeypair(requireEnv("TEE_AUTHORITY_KEYPAIR"));
     rootKey = loadKeypair(requireEnv("ROOT_KEY_KEYPAIR"));
 
-    banner("NYX DARKPOOL — DEVNET E2E SETUP");
+    banner("DARKNYX DARKPOOL — DEVNET E2E SETUP");
     bullet(`RPC:                   ${rpcHostLabel(L1_RPC_URL)}`);
     bullet(`vault program:         ${VAULT_PROGRAM_ID.toBase58()}`);
     bullet(`admin:                 ${admin.publicKey.toBase58()}`);
@@ -373,14 +373,14 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       } else {
         const initialTeePubkeys = (() => {
           if (NUM_TREES === 1) return [tee.publicKey];
-          const raw = (process.env.NYX_INITIAL_TEE_PUBKEYS ?? "")
+          const raw = (process.env.DARKNYX_INITIAL_TEE_PUBKEYS ?? "")
             .split(",")
             .map((value) => value.trim())
             .filter(Boolean)
             .map((value) => new PublicKey(value));
           if (raw.length !== NUM_TREES) {
             throw new Error(
-              `NYX_INITIAL_TEE_PUBKEYS must contain ${NUM_TREES} keys for a ${NUM_TREES}-shard initialization`,
+              `DARKNYX_INITIAL_TEE_PUBKEYS must contain ${NUM_TREES} keys for a ${NUM_TREES}-shard initialization`,
             );
           }
           return raw;
@@ -445,11 +445,11 @@ maybeDescribe("Phase 5 devnet E2E — one-shot setup", () => {
       // In a real deployment this is derived from a dedicated governance seed;
       // here we use a deterministic constant so the test is reproducible.
       // NOTE: Poseidon requires inputs < BN254 Fr modulus (first byte <= 0x30).
-      // "nyx-protocol-owner-v1" starts with 0x6e which exceeds the field — we
+      // "darknyx-protocol-owner-v1" starts with 0x6e which exceeds the field — we
       // zero the top byte to keep the commitment in-range, matching the
       // field-safe fixtures used by the Rust/TypeScript parity harnesses.
       const protocolOwnerCommitment = new Uint8Array(32);
-      const tag = new TextEncoder().encode("nyx-protocol-owner-v1");
+      const tag = new TextEncoder().encode("darknyx-protocol-owner-v1");
       protocolOwnerCommitment.set(tag.slice(0, 32));
       protocolOwnerCommitment[0] = 0; // keep value < BN254 Fr
 

@@ -12,7 +12,7 @@ import {
   type FetchInclusionFn,
 } from "../src/settlement-tracker.js";
 import { DaemonStore } from "../src/store.js";
-import type { StoredNote } from "@nyx/sdk";
+import type { StoredNote } from "@darknyx/sdk";
 
 let store: DaemonStore;
 beforeEach(() => {

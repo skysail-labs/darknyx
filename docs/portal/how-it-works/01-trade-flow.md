@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Trade Flow
-description: The end-to-end lifecycle of a Nyx order, from deposit through hidden matching to on-chain settlement.
+description: The end-to-end lifecycle of a Darknyx order, from deposit through hidden matching to on-chain settlement.
 ---
 
 # Trade Flow
@@ -68,7 +68,7 @@ independently rejects settlements that violate the proof-enforced invariants.
 
 ## Why your order never hits the chain
 
-A common misconception is that a private DEX "encrypts orders on-chain." Nyx does
+A common misconception is that a private DEX "encrypts orders on-chain." Darknyx does
 something stronger: **your order is never a transaction at all.** It lives only
 inside the attested enclave. What lands on Solana is the *settlement*, a transfer
 of value between notes accompanied by a proof that the transfer is correct. An

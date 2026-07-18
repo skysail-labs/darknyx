@@ -2,7 +2,7 @@
 name = "darkpool-crypto"
 version.workspace = true
 edition.workspace = true
-description = "Shared cryptographic primitives (Poseidon, note commitments, nullifiers, key derivation) for the Nyx dark pool. Must produce byte-identical output on-chain and off-chain."
+description = "Shared cryptographic primitives (Poseidon, note commitments, nullifiers, key derivation) for the Darknyx dark pool. Must produce byte-identical output on-chain and off-chain."
 
 [lib]
 crate-type = ["rlib"]

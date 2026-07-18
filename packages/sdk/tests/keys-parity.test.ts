@@ -18,7 +18,7 @@ import {
   deriveRootKey,
   deriveTradingKeyAtOffset,
   deriveBlindingFactor,
-  nyxShakeKdfV1,
+  darknyxShakeKdfV1,
   bn254ToBE32,
   MASTER_SEED_BYTES,
 } from "../src/keys/key-generators.js";
@@ -58,15 +58,15 @@ describe("key derivation parity", () => {
     expect(a).toBe(b);
   });
 
-  it("NyxShakeKdfV1 bytes are frozen by the cross-language KAT", () => {
-    const actual = nyxShakeKdfV1(
+  it("DarknyxShakeKdfV1 bytes are frozen by the cross-language KAT", () => {
+    const actual = darknyxShakeKdfV1(
       new Uint8Array(32).fill(0x40),
-      new TextEncoder().encode("nyx-vk"),
+      new TextEncoder().encode("darknyx-vk-v2"),
       new Uint8Array(),
       64,
     );
     expect(Buffer.from(actual).toString("hex")).toBe(
-      "04231d3443c254da661ec74db44829b738448e984fd116256af83767c11c2e2451fcde3dfcaf18088b7552cb2cb4f0b3f1e5c799ebbafd2f353334d954dc77e4",
+      "d99fdc876dcd8ca6f4be42b7587b2147a4fd7b4846e1dad32adc3e0e8af63e4d461a0361e83a3acde5e58e878dcbe4fecea8dd60f1fe16b021940aeb1ae810a3",
     );
   });
 

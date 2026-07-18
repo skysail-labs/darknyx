@@ -11,7 +11,7 @@
  * Scheme (per side):
  *   shared   = X25519(ephemeral_secret, recipient_pub)
  *   aead_key = HKDF-SHA256(ikm = shared,
- *                          info = "nyx-fill-enc-v2" ‖ eph_pub ‖ recipient_pub)[:32]
+ *                          info = "darknyx-fill-enc-v3" ‖ eph_pub ‖ recipient_pub)[:32]
  *   plaintext = trade_amount_le8 ‖ change_amount_le8
  *   blob      = nonce(12) ‖ ChaCha20Poly1305(aead_key, nonce).encrypt(plaintext)
  *             = 12 + 16 + 16 = 44 bytes
@@ -25,7 +25,7 @@ import crypto from "node:crypto";
 import nacl from "tweetnacl";
 import { hkdfExpand } from "./key-generators.js";
 
-const FILL_ENC_INFO = new TextEncoder().encode("nyx-fill-enc-v2");
+const FILL_ENC_INFO = new TextEncoder().encode("darknyx-fill-enc-v3");
 
 export const NONCE_LEN = 12;
 export const AMOUNTS_LEN = 16;

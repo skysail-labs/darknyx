@@ -34,12 +34,12 @@ export interface DaemonConfig {
    *  set, the daemon refuses to trade unless the gateway's attestation matches. */
   attestation?: ExpectedMeasurements;
   /** Require real DCAP verification + governance pins (secure-by-default). Set
-   *  `NYX_DAEMON_ATTEST_STRICT=0` to downgrade to the legacy partial check
+   *  `DARKNYX_DAEMON_ATTEST_STRICT=0` to downgrade to the legacy partial check
    *  (dev only — NOT a security guarantee). Ignored when attestation is skipped. */
   attestationStrict: boolean;
   /** Cross-check the attested (quote-bound) tee_pubkeys set against on-chain
    *  `vault_config.tee_pubkeys` at finalized commitment on startup and every
-   *  minute. Default true. `NYX_DAEMON_ATTEST_ONCHAIN_CHECK=0` is accepted only
+   *  minute. Default true. `DARKNYX_DAEMON_ATTEST_ONCHAIN_CHECK=0` is accepted only
    *  together with non-strict development mode. Startup fails on RPC, missing
    *  config, or mismatch; runtime mismatch pauses immediately and RPC staleness
    *  pauses new trading after five minutes. */
@@ -79,38 +79,38 @@ function intFromEnv(
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
-  const gatewayUrl = env.NYX_DAEMON_GATEWAY_URL;
-  if (!gatewayUrl) throw new Error("NYX_DAEMON_GATEWAY_URL is required");
-  const token = env.NYX_DAEMON_TOKEN;
-  if (!token) throw new Error("NYX_DAEMON_TOKEN is required");
-  const rpcUrl = env.NYX_DAEMON_RPC_URL;
-  if (!rpcUrl) throw new Error("NYX_DAEMON_RPC_URL is required");
+  const gatewayUrl = env.DARKNYX_DAEMON_GATEWAY_URL;
+  if (!gatewayUrl) throw new Error("DARKNYX_DAEMON_GATEWAY_URL is required");
+  const token = env.DARKNYX_DAEMON_TOKEN;
+  if (!token) throw new Error("DARKNYX_DAEMON_TOKEN is required");
+  const rpcUrl = env.DARKNYX_DAEMON_RPC_URL;
+  if (!rpcUrl) throw new Error("DARKNYX_DAEMON_RPC_URL is required");
 
   return {
     gatewayUrl,
-    gatewayWsUrl: env.NYX_DAEMON_GATEWAY_WS_URL ?? httpToWs(gatewayUrl),
+    gatewayWsUrl: env.DARKNYX_DAEMON_GATEWAY_WS_URL ?? httpToWs(gatewayUrl),
     token,
     rpcUrl,
-    dbPath: env.NYX_DAEMON_DB ?? "./nyx-daemon.sqlite",
+    dbPath: env.DARKNYX_DAEMON_DB ?? "./darknyx-daemon.sqlite",
     controlPort: intFromEnv(
       env,
-      "NYX_DAEMON_CONTROL_PORT",
+      "DARKNYX_DAEMON_CONTROL_PORT",
       DEFAULT_CONTROL_PORT,
     ),
-    keystorePath: env.NYX_DAEMON_KEYSTORE ?? "./nyx-keystore.json",
+    keystorePath: env.DARKNYX_DAEMON_KEYSTORE ?? "./darknyx-keystore.json",
     thresholds: {
       mergeThreshold: intFromEnv(
         env,
-        "NYX_DAEMON_MERGE_THRESHOLD",
+        "DARKNYX_DAEMON_MERGE_THRESHOLD",
         DEFAULT_THRESHOLDS.mergeThreshold,
       ),
     },
     attestation: parseExpected(env),
-    attestationStrict: env.NYX_DAEMON_ATTEST_STRICT !== "0",
-    attestOnchainCheck: env.NYX_DAEMON_ATTEST_ONCHAIN_CHECK !== "0",
-    pccsUrl: env.NYX_DAEMON_PCCS_URL,
-    programId: env.NYX_DAEMON_PROGRAM_ID ?? DEFAULT_PROGRAM_ID,
-    payerKeypairPath: env.NYX_DAEMON_PAYER_KEYPAIR,
+    attestationStrict: env.DARKNYX_DAEMON_ATTEST_STRICT !== "0",
+    attestOnchainCheck: env.DARKNYX_DAEMON_ATTEST_ONCHAIN_CHECK !== "0",
+    pccsUrl: env.DARKNYX_DAEMON_PCCS_URL,
+    programId: env.DARKNYX_DAEMON_PROGRAM_ID ?? DEFAULT_PROGRAM_ID,
+    payerKeypairPath: env.DARKNYX_DAEMON_PAYER_KEYPAIR,
   };
 }
 
@@ -118,9 +118,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
 function parseExpected(
   env: NodeJS.ProcessEnv,
 ): ExpectedMeasurements | undefined {
-  const composeHash = env.NYX_DAEMON_EXPECT_COMPOSE_HASH;
-  const mrtd = env.NYX_DAEMON_EXPECT_MRTD;
-  const teePubkey = env.NYX_DAEMON_EXPECT_TEE_PUBKEY;
+  const composeHash = env.DARKNYX_DAEMON_EXPECT_COMPOSE_HASH;
+  const mrtd = env.DARKNYX_DAEMON_EXPECT_MRTD;
+  const teePubkey = env.DARKNYX_DAEMON_EXPECT_TEE_PUBKEY;
   if (!composeHash && !mrtd && !teePubkey) return undefined;
   return { composeHash, mrtd, teePubkey };
 }

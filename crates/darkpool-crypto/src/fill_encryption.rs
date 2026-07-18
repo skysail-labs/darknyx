@@ -17,7 +17,7 @@
 //! ```text
 //!   shared   = X25519(ephemeral_secret, recipient_pub)
 //!   aead_key = HKDF-SHA256(ikm = shared,
-//!                          info = "nyx-fill-enc-v2" || eph_pub || recipient_pub)[:32]
+//!                          info = "darknyx-fill-enc-v3" || eph_pub || recipient_pub)[:32]
 //!   plaintext = trade_amount_le8 ‖ change_amount_le8
 //!   blob      = nonce(12) ‖ ChaCha20Poly1305(aead_key, nonce).encrypt(plaintext)
 //!             = 12 + 16 + 16 = 44 bytes
@@ -42,7 +42,7 @@ use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 /// HKDF `info` label domain-separating the per-fill AEAD key.
-pub const FILL_ENC_INFO: &[u8] = b"nyx-fill-enc-v2";
+pub const FILL_ENC_INFO: &[u8] = b"darknyx-fill-enc-v3";
 
 /// ChaCha20-Poly1305 nonce length.
 pub const NONCE_LEN: usize = 12;
@@ -278,7 +278,7 @@ mod tests {
     const EXPECTED_EPH_PUB_HEX: &str =
         "13be4feaeaf204c7fd3358fc9c00721881d174278128227ec674f37f7fe97b6d";
     const EXPECTED_BLOB_HEX: &str =
-        "101112131415161718191a1b20617bcbf11404a3bbc4cfcba3206c3e47cf2216af8d8a806e4c654ef4dcd7d3";
+        "101112131415161718191a1b90b91ce896d093df943c6875cd06f2dd114d124486ffcedc672edf6cfb1b6bc3";
 
     #[test]
     fn rejects_low_order_x25519_points() {

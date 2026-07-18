@@ -1,7 +1,7 @@
 /**
  * Deterministic order-id derivation.
  *
- * `order_id[n] = HKDF-SHA256-expand(seed, "nyx-order-id-v1" || n_u32_le)[:16]`
+ * `order_id[n] = HKDF-SHA256-expand(seed, "darknyx-order-id-v2" || n_u32_le)[:16]`
  *
  * order_id is client-only (the TEE just echoes it back in the settle payload),
  * so there is no Rust parity vector — but determinism is load-bearing: a fresh
@@ -21,10 +21,10 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 // Pinned regression vectors (seed = [0,1,…,63]). If these change, every
 // client's history gap-scan breaks — treat a diff here as a breaking change.
 const VECTORS: Record<number, string> = {
-  0: "ea59c471259380fae2de21114aa5b994",
-  1: "c2362c3aef579b5ec5491873e7bb4402",
-  2: "7ae5f5782178d9427cbf463b6e2e266b",
-  255: "e070278900719ce9cd7480e62e1ca508",
+  0: "49e01ba74836cd2b89d17d19cfccb97f",
+  1: "d0e5e691ee849284b541c1a02c9d3d95",
+  2: "40cf0cee6293e65dd422958ed8e67403",
+  255: "906449c71d0b836ab19d0e6c824abd7d",
 };
 
 describe("deriveOrderId", () => {
@@ -51,7 +51,7 @@ describe("deriveOrderId", () => {
   });
 
   it("re-derives via the documented HKDF construction", () => {
-    const INFO = new TextEncoder().encode("nyx-order-id-v1");
+    const INFO = new TextEncoder().encode("darknyx-order-id-v2");
     const n = 42;
     const nBuf = new ArrayBuffer(4);
     new DataView(nBuf).setUint32(0, n, true);

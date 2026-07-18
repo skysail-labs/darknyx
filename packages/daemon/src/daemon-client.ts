@@ -20,7 +20,7 @@ import {
   type DarkPoolClient,
   type MerkleProofProvider,
   type ValidDepositArtifacts,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 import type { Keystore } from "./keystore.js";
 import {
@@ -53,7 +53,7 @@ export function createDaemonClient(opts: DaemonClientOptions): DarkPoolClient {
   const connection = createConnection(opts.rpcUrl);
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
   const circuitsDir =
-    process.env.NYX_DAEMON_CIRCUITS_DIR ?? resolve(repoRoot, "circuits/build");
+    process.env.DARKNYX_DAEMON_CIRCUITS_DIR ?? resolve(repoRoot, "circuits/build");
   const stubs = new UnimplementedProverSuite("deposit-only daemon client");
   const deposit = nodeValidDepositProver(
     opts.depositArtifacts ?? {

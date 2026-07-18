@@ -12,7 +12,7 @@ import { FillsListener, type SubscribeFillsFn } from "../src/fills-listener.js";
 import { LifecycleEngine } from "../src/lifecycle-engine.js";
 import { DaemonStore } from "../src/store.js";
 import { newManagedOrder, type ManagedOrder } from "../src/types.js";
-import type { StoredNote } from "@nyx/sdk";
+import type { StoredNote } from "@darknyx/sdk";
 
 const ORDER_ID = "00112233445566778899aabbccddeeff";
 

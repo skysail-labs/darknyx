@@ -26,7 +26,7 @@ export const CHANGE_ROLE_SELLER = 0x5e;
 // (the full-fill output notes) so the user can rebuild the plaintext and later
 // withdraw. The TEE does NOT emit these — they're deterministic from
 // (match_id, role), so the user re-derives them itself. The `/v1/stream` fills channel
-// (crates/nyx-tee/src/matcher/fills.rs) streams ONLY continuation change-note
+// (crates/darknyx-tee/src/matcher/fills.rs) streams ONLY continuation change-note
 // (note_e/f) memos. Defining the trade roles here mirrors change_note.rs's
 // domain-tag pattern for the test harness.
 export const TRADE_ROLE_BUYER = 0xc1; // note_c
@@ -38,12 +38,12 @@ export const FEE_ROLE_QUOTE = 0xfc;
 
 /**
  * Mirrors `change_note::derive_inner` (v2) in the matcher/on-chain program:
- * SHA-256("nyx-change-inner" ‖ match_id_le ‖ role), Fr-safe masked. This is
+ * SHA-256("darknyx-change-inner-v2" ‖ match_id_le ‖ role), Fr-safe masked. This is
  * the single per-note inner_hash that replaced the old (nonce, blinding) pair.
  */
 export function deriveInner(matchId: bigint, role: number): Uint8Array {
   const h = createHash("sha256");
-  h.update(Buffer.from("nyx-change-inner"));
+  h.update(Buffer.from("darknyx-change-inner-v2"));
   const mid = new Uint8Array(8);
   new DataView(mid.buffer).setBigUint64(0, matchId, true);
   h.update(mid);

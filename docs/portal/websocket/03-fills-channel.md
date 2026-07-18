@@ -98,7 +98,7 @@ fill. If a slow consumer lags past the per-account buffer, the server closes wit
 code **1011**; on 1011, re-run the backfill from the chain and reopen.
 
 :::note Cold recovery
-Recovery v2 permanently stores each side's encrypted `(trade, change)` tuple.
+Recovery v3 permanently stores each side's encrypted `(trade, change)` tuple.
 `recoverNotesFromChain` bootstraps seed-owned deposits, follows settlement
 continuations, and reconstructs merge outputs without live stream history.
 :::

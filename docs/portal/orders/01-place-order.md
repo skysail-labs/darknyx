@@ -22,10 +22,10 @@ POST /orders
 
 Auth: `Authorization: Bearer <token>` **and** a trading-key signature in the body.
 
-## How a Nyx order differs
+## How a Darknyx order differs
 
 On a transparent venue, placing an order is just sending its economic fields. On
-Nyx an order is *fully collateralized by a specific note you already deposited*,
+Darknyx an order is *fully collateralized by a specific note you already deposited*,
 and it is *private*, so the request also carries:
 
 - the **commitment** of the collateral note, and a secret **opening** of that

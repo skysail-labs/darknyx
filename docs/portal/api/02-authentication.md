@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2
 title: Authentication
-description: The two-layer Nyx auth model, account bearer tokens plus per-order trading-key signatures, and how to obtain and use them.
+description: The two-layer Darknyx auth model, account bearer tokens plus per-order trading-key signatures, and how to obtain and use them.
 ---
 
 # Authentication

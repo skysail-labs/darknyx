@@ -1,5 +1,5 @@
 /**
- * Durable two-output recovery v2 crypto foundation.
+ * Durable two-output recovery v3 crypto foundation.
  *
  * Two contracts:
  *  1. TS round-trips its own encrypt→decrypt (the client path).
@@ -33,11 +33,11 @@ const AMOUNTS = { trade: 1_234_567_890_123n, change: 98_765_432_101n };
 const EXPECTED_EPH_PUB_HEX =
   "13be4feaeaf204c7fd3358fc9c00721881d174278128227ec674f37f7fe97b6d";
 const EXPECTED_BLOB_HEX =
-  "101112131415161718191a1b20617bcbf11404a3bbc4cfcba3206c3e47cf2216af8d8a806e4c654ef4dcd7d3";
+  "101112131415161718191a1b90b91ce896d093df943c6875cd06f2dd114d124486ffcedc672edf6cfb1b6bc3";
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 
-describe("fill-encryption recovery v2", () => {
+describe("fill-encryption recovery v3", () => {
   it("round-trips encrypt → decrypt", () => {
     const recipientPub = nacl.scalarMult.base(RECIPIENT_SECRET);
     const ephPub = nacl.scalarMult.base(EPH_SECRET);

@@ -35,7 +35,7 @@ import {
   generateMasterSeed,
   ownerCommitment,
   userCommitmentFromKeys,
-} from "@nyx/sdk";
+} from "@darknyx/sdk";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>

@@ -1,13 +1,13 @@
 ---
 sidebar_position: 6
 title: Fee Structure
-description: How trading fees work on Nyx, a basis-point protocol fee both sides pay, collected as notes at settlement and pre-funded by each order's collateral.
+description: How trading fees work on Darknyx, a basis-point protocol fee both sides pay, collected as notes at settlement and pre-funded by each order's collateral.
 ---
 
 # Fee Structure
 
 :::info TL;DR
-Nyx charges a flat **protocol fee** in basis points (for example, 30 bps). **Both
+Darknyx charges a flat **protocol fee** in basis points (for example, 30 bps). **Both
 sides of a trade pay their own fee.** Each order pre-funds its fee as part of its
 collateral, and the fee is collected at settlement as a **fee note** minted to the
 protocol, so fees, like everything else, settle privately on-chain.

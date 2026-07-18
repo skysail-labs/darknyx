@@ -86,7 +86,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
   it("[hash_cross_env_parity] payload v9 canonical hash matches Rust and on-chain", () => {
     expect(
       Buffer.from(canonicalPayloadHash(exactFillFixture())).toString("hex"),
-    ).toBe("63a10a281ed28632d4fee9c71b38f926f2cda8be6f78850d4f7926655ec8cfa2");
+    ).toBe("8f79c1cd05d15b0bcfa8039a74397277a3cf6e4e62a898c59f07aa3df08d53d7");
   });
 
   it("[settle_batched_accounts_layout] account ordering matches TeeForcedSettleBatched", () => {

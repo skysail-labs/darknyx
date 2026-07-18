@@ -31,7 +31,7 @@ The result: every execution you receive is against a *different trading key*.
 
 On a continuous order book, self-trade prevention comes in flavors (cancel the
 resting side, cancel the incoming side, cancel both) because there is a maker and
-a taker to choose between. A Nyx batch has no maker/taker ordering: all crossing
+a taker to choose between. A Darknyx batch has no maker/taker ordering: all crossing
 orders clear together at one price (see [Clearing Price](./clearing-price)). There
 is no "resting vs. incoming" side to pick, so the honest behavior is a single
 rule, **two orders from one key never match each other**, and the orders remain

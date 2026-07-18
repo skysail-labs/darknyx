@@ -6,7 +6,7 @@
  * on-chain `hashv` reference — both pinned by
  * `crates/darkpool-matcher/tests/change_note_parity.rs` against the same spec:
  *
- *   SHA-256("nyx-change-inner" ‖ match_id_le_u64 ‖ role) then d[0]=0, d[1]&=0x0f
+ *   SHA-256("darknyx-change-inner-v2" ‖ match_id_le_u64 ‖ role) then d[0]=0, d[1]&=0x0f
  *
  * The expected hex below was computed independently of the TS code
  * (`printf ... | shasum -a 256`, then the mask applied), so this test pins the
@@ -27,7 +27,7 @@ describe("derive_inner — cross-language KAT", () => {
   it("matches the independently-computed spec value for (42, CHANGE_ROLE_BUYER)", () => {
     // raw sha256 = 0233e743...286b; mask → byte0=0x00, byte1=0x33&0x0f=0x03.
     const expected =
-      "0003e743eb441d6b6f5363d7ad169cf3b8dd6621303ed9d47cb14ddf05de286b";
+      "0007c1605d5ab69620f81cbc8834c305a4f850011d482888629cb6c89d6024fb";
     expect(hex(deriveInner(42n, CHANGE_ROLE_BUYER))).toBe(expected);
   });
 

@@ -6,7 +6,7 @@
  * versa) — a settlement-integrity red flag.
  *
  * Fixed-offset parser mirroring `programs/vault/src/state.rs::VaultConfig`
- * (and the TEE-side `crates/nyx-tee/src/solana_rpc/vault_config.rs`). Layout
+ * (and the TEE-side `crates/darknyx-tee/src/solana_rpc/vault_config.rs`). Layout
  * after the 8-byte discriminator: `admin` (32) then `tee_pubkeys: [Pubkey; 16]`
  * at offset 40; `num_tee_keys: u8` sits at offset 1258. Offsets are pinned by a
  * unit test. Per-market parameters live in the separate `MarketConfig` PDA.

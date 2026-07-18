@@ -16,7 +16,7 @@
  * tracker is unit-testable without a gateway.
  */
 
-import { fetchInclusionProof, type StoredNote } from "@nyx/sdk";
+import { fetchInclusionProof, type StoredNote } from "@darknyx/sdk";
 
 import type { DaemonStore } from "./store.js";
 
