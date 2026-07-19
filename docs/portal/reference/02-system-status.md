@@ -37,7 +37,7 @@ Public, with no authentication.
 | Field | Type | Description |
 |---|---|---|
 | `degraded` | boolean | `true` when matching **or** settlement is unavailable. The one flag to gate trading on. |
-| `matcher_running` | boolean | The matching tick is running (orders can be accepted and matched). |
+| `matcher_running` | boolean | The matching tick is ready to accept and match orders. It becomes `false` during a fail-closed governance pause. |
 | `settle_enabled` | boolean | The on-chain settlement pipeline is wired (matches will settle). |
 | `oracle_configured` | boolean | A price oracle is attached (the clearing-price reference). |
 | `current_slot` | integer | The engine's current view of the Solana slot. |
@@ -45,9 +45,11 @@ Public, with no authentication.
 
 ## When degradation occurs
 
-The venue is `degraded` when a core subsystem is not available, for example, the
-matching tick is not running, or the settlement pipeline is not wired. While
-degraded, order submission may fail with `503 Service Unavailable`.
+The venue is `degraded` when a core subsystem is not available—for example, the
+matching tick is paused, the settlement pipeline is not wired, or finalized
+`VaultConfig`/`MarketConfig` can no longer be verified against the boot snapshot.
+While degraded, new place/modify operations fail with `503 Service Unavailable`;
+cancellation and settlement reconciliation remain available.
 
 ## How it manifests
 

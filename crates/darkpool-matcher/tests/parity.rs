@@ -188,6 +188,39 @@ fn market_ask_at_zero_clears_at_the_positive_bid() {
 }
 
 #[test]
+fn governed_tick_skips_off_tick_limits_but_keeps_market_asks() {
+    let mut cfg = config(100_000, 0);
+    cfg.tick_size = 10;
+
+    let off_tick = run_batch(
+        &book_of(vec![
+            pseed(0, 0, 105, 10, 1_000_000),
+            pseed(1, 1, 100, 10, 1_000_000),
+        ]),
+        &oracle(100),
+        &cfg,
+        1,
+        0,
+    )
+    .expect("off-tick order is skipped, not fatal");
+    assert!(off_tick.matches.is_empty());
+
+    let market_ask = run_batch(
+        &book_of(vec![
+            pseed(2, 0, 110, 10, 1_000_000),
+            pseed(3, 1, 0, 10, 1_000_000),
+        ]),
+        &oracle(110),
+        &cfg,
+        1,
+        0,
+    )
+    .expect("zero-limit market ask remains eligible");
+    assert_eq!(market_ask.matches.len(), 1);
+    assert_eq!(market_ask.clearing_price, 110);
+}
+
+#[test]
 fn scaled_price_uses_governed_floor_semantics() {
     let mut bid = pseed(0, 0, 10, 7, 1_000_000);
     let mut ask = pseed(1, 1, 10, 7, 1_000_000);

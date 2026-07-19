@@ -715,7 +715,7 @@ pub(crate) fn apply_slot_updates(
 // ─────── partition_into_bids_asks_and_expired ───────────────────────────────
 //
 // Pre-matching pass: walks the book, splits into bids / asks /
-// expired-orders / below-min-size, populates the inclusion-leaf
+// expired-orders / below-min-size / off-tick orders, populates the inclusion-leaf
 // vector. Lifted from the first half of `run_batch_handler`.
 //
 // Returns: (bids, asks, expired_book_idxs, inclusion_leaves).
@@ -723,6 +723,7 @@ pub(crate) fn partition_book(
     book: &[Order],
     now_slot: u64,
     min_order_size: u64,
+    tick_size: u64,
 ) -> (
     Vec<OrderSnapshot>,
     Vec<OrderSnapshot>,
@@ -752,6 +753,16 @@ pub(crate) fn partition_book(
         // client may resubmit at a higher amount or the admin may
         // lower the floor.
         if min_order_size > 0 && o.amount < min_order_size {
+            continue;
+        }
+
+        // U-08 defense in depth: every non-zero limit must align to the
+        // governed tick. Intake rejects these orders before they reach the
+        // book, but the pure matcher is also called directly by tests/tools and
+        // must not silently clear a bypassed off-tick order. A zero-limit ask is
+        // the intentional market-sell encoding and remains aligned for every
+        // non-zero tick.
+        if tick_size > 1 && !o.price_limit.is_multiple_of(tick_size) {
             continue;
         }
 

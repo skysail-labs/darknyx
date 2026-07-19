@@ -1,4 +1,4 @@
-# Nyx security remediation tracker
+# Darknyx security remediation tracker
 
 This is the closure ledger for the independently validated findings in the
 2026-07-14 cryptography/systems review and residual sweep. A finding is not
@@ -66,9 +66,10 @@ runbooks have landed.
 ## Unique findings — 2026-07-18 delta pass
 
 Delta backlog from the 2026-07-18 defensive self-audit
-(`docs/audit-2026-07-18-unique-findings.md`), remediated on
-`remediation/audit-2026-07-18-unique` (one PR). All validated genuine against
-HEAD before fixing.
+(`docs/audit-2026-07-18-unique-findings.md`), remediated first on
+`remediation/audit-2026-07-18-unique` and then revalidated/followed up on
+`remediation/audit-2026-07-18-residuals`. All were validated genuine against
+the relevant `main` before fixing.
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
@@ -79,6 +80,9 @@ HEAD before fixing.
 | U-05 | Low | Vault | `remediation/audit-2026-07-18-unique` | Settle fee-note comments rewritten to the per-match model (each active slot appends its own fee notes; no slot-0-aggregate language) | Closed |
 | U-06 | Perf-Nit | Matcher | `remediation/audit-2026-07-18-unique` | `generate_matches` skips zero-quote clears (companion front-line to U-03); unit test (zero-quote → no match, positive-quote → match) | Closed |
 | U-07 | Perf-Nit | — | — | Ed25519 precompile full-instruction scan is intentional (replaced a buggy `+8` window); bounded by the TEE-built tx's ix count; declined | Won't Fix |
+| U-08 | Medium | TEE + matcher | `remediation/audit-2026-07-18-residuals` | Shared REST/WS intake rejects unknown symbols and off-tick nonzero limits; pure matcher independently excludes bypassed off-tick orders; tick=10 negative and zero-limit market-ask positive regressions | Code complete |
+| U-09 | Medium ops | TEE | `remediation/audit-2026-07-18-residuals` | Governed real-market boot requires finalized Vault/Market config and adopts owner+fee+market atomically; one-minute finalized refresh pauses place/modify+matching on RPC/drift/key mismatch while cancel/reconcile continue; placeholder loadgen cannot settle | Code complete |
+| U-10 | Low | TEE + vault + docs | `remediation/audit-2026-07-18-residuals` | Active comments and protocol diagrams describe exact fees, per-match fee notes, Poseidon11 leaves, and already-shipped eight-input market binding | Code complete |
 
 ## Cross-cutting release deliverables
 
@@ -104,6 +108,54 @@ Every remediation PR must record:
 - Tracker rows moved only as far as the available evidence supports.
 
 ## Remediation PR evidence
+
+### `remediation/audit-2026-07-18-residuals` — U-08, U-09, U-10
+
+- **Invariant restored.** Every advertised nonzero limit is aligned to the
+  finalized market tick at shared REST/WebSocket intake, with an independent
+  pure-matcher exclusion for bypassed orders; zero-limit market asks retain
+  their intended semantics. A real-mint CVM cannot accept trading from env
+  fallback governance: it requires finalized, exact-layout `VaultConfig` and
+  `MarketConfig`, adopts proof/policy inputs atomically, and revalidates them
+  every minute. Missing/invalid state, parameter drift, disabled markets,
+  unauthorized shard signers, or an unavailable settle driver pause place,
+  modify, and matching while cancellation and settlement reconciliation keep
+  running. Active protocol text now describes exact per-match fees and the
+  shipped eight-public-input market binding.
+- **Wire/config impact.** Adds stable validation error `1009` for an off-tick
+  nonzero limit and rejects unknown symbols instead of routing them into the
+  process's sole market. `/system/status.matcher_running` is false during a
+  governance pause. `DARKNYX_TEE_BASE_MINT` and `_QUOTE_MINT` must now be set
+  together: both select governed real-settlement mode; neither selects explicit
+  placeholder-loadgen mode with settlement disabled. No account layout,
+  instruction payload, canonical signature domain, circuit, zkey, VK, proof,
+  note, root, or settlement transaction layout changes. The CPU CVM image pin
+  advances from `tee-v3-hardening-64` to `tee-v3-hardening-65`.
+- **Local evidence (2026-07-19).** `cargo fmt --all -- --check`,
+  `cargo build-sbf --manifest-path programs/vault/Cargo.toml --features
+  devnet-admin`, `cargo build --examples -p darkpool-crypto`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test
+  --workspace` pass. The workspace run includes the in-process loadgen smoke,
+  264 TEE library tests (one manual diagnostic ignored), every TEE integration
+  target, all matcher properties, all vault/litesvm suites, and proof
+  round-trips. Targeted U-02/U-03 revalidation passes
+  `lock_note_consumed_guard`, `match_batch_verify`, the SDK lock transport, and
+  `match-batch-prototype` (17 tests). SDK/indexer TypeScript compilation passes;
+  SDK Vitest reports 261 passed / 23 environment-gated skips and indexer Vitest
+  reports 20 passed. U-08 negatives cover tick=10/off-tick rejection plus the
+  zero-limit ask exception. U-09 negatives cover unavailable settle state,
+  signer and immutable-parameter drift, enabled-fee/zero-owner rejection,
+  market disable, paused place/modify, paused matcher ticks, and cancellation
+  availability.
+- **Live CVM evidence.** Pending a billable Phala spot-check of image 65 because
+  this slice changes the production boot path, HTTP readiness/intake, and the
+  matcher driver. Rows remain `Code complete` until that image build, finalized
+  governance boot, real settle, and controlled mismatch/pause behavior are
+  recorded.
+- **Rollback.** Revert this PR and redeploy image 64. No notes, roots, orders,
+  payloads, signatures, proofs, accounts, or circuit artifacts are invalidated,
+  but rollback reopens U-08/U-09/U-10 and restores fail-open env governance plus
+  settlement-capable placeholder mode.
 
 ### `remediation/tee-intake` — N-01, N-05, N-06, N-09
 

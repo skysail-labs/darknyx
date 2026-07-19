@@ -449,10 +449,10 @@ Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 |---|---|---|
 | `DARKNYX_TEE_SOLANA_RPC_URL` | Merkle sync + settle txs | **Helius** (public devnet 429s). Empty → public devnet default. |
 | `DARKNYX_TEE_SYNC_FROM_SLOT` | Merkle cold-boot floor | Set to the current slot (or a reset slot) so the mirror rebuilds the live tree, not pre-reset leaves. |
-| `DARKNYX_TEE_BASE_MINT` / `_QUOTE_MINT` | order intake | base58. **Omit → placeholder dev mints** (loadgen regime). Real e2e settle MUST set the `e2e-config` mints. |
+| `DARKNYX_TEE_BASE_MINT` / `_QUOTE_MINT` | order intake | base58; supply both or neither. **Omit both → placeholder dev mints with settlement disabled** (loadgen regime). Real e2e settle MUST set the `e2e-config` mints and have finalized `VaultConfig` + `MarketConfig` available. |
 | `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` | settle worker | the `settleLookupTable` ALT. Without it the settle v0 tx exceeds 1232 B. |
-| `DARKNYX_TEE_FEE_RATE_BPS` | matcher | default 30. Empty → 30. 0 = fees off. Charged on BOTH legs → 2 fee notes. |
-| `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` | matcher fee notes | 32-byte hex. Owner the fee notes mint to. Fees-on **without** it → a startup WARN (fees unclaimable). |
+| `DARKNYX_TEE_FEE_RATE_BPS` | matcher | Simulator/loadgen default only (30; 0 disables fees there). Governed real-market boot adopts finalized `VaultConfig.fee_rate_bps`. Charged on BOTH legs → 2 fee notes. |
+| `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` | matcher fee notes | Simulator/loadgen default only (32-byte hex). Governed real-market boot adopts finalized `VaultConfig.protocol_owner_commitment`. |
 | `DARKNYX_TEE_NUM_TREES` | settle worker + K mirrors | shard count (1..=16, default 1). MUST equal the on-chain `num_trees` (`e2e-config.numTrees`). K>1 derives K fee-payer keys + K mirrors. |
 | `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` | settle worker | max settle Tx D's (+ lock txs + ALT extends) fired CONCURRENTLY (default 16). Lets the leader co-include them in one block. |
 | `DARKNYX_TEE_PROVER` | prover | `ark` (default) \| `rapidsnark`. The image ships both (`--features rapidsnark`); flip to A/B prove on the SAME image (no rebuild). |

@@ -40,9 +40,8 @@ pub struct VerifyMatchBatch<'info> {
     pub payer: Signer<'info>,
 
     /// Read-only — supplies `fee_rate_bps` as the circuit's 2nd PUBLIC input
-    /// (amount-privacy, P1b): the prover proved the in-circuit fee floor at THIS
-    /// rate, and binding it to the on-chain config is what makes the proof's
-    /// floor enforce the protocol's rate (not a prover-chosen one).
+    /// (amount-privacy, P1b): the prover proved the in-circuit exact fee at THIS
+    /// rate, and binding it to the on-chain config prevents a prover-chosen rate.
     #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
     pub vault_config: AccountLoader<'info, VaultConfig>,
 

@@ -32,9 +32,9 @@ pub struct MatchConfig {
     pub price_scale: u64,
 
     // ─── Per-market matching params ────────────────────────────
-    /// Smallest price increment, in base units. 0 = unchecked at
-    /// matcher level (the on-chain ix may still enforce it at
-    /// submit time).
+    /// Smallest permitted price increment, in scaled price units. Values greater
+    /// than one are enforced both at TEE intake and defensively when the matcher
+    /// partitions a book snapshot. `0`/`1` means every integer price is aligned.
     pub tick_size: u64,
     /// Minimum order size in base units. Orders below this are
     /// dropped at intake (the matcher skips them, mirroring the

@@ -6,6 +6,7 @@
 
 pub mod book;
 pub mod fills;
+pub mod gate;
 pub mod interval;
 pub mod lifecycle;
 pub mod openings;
@@ -13,6 +14,7 @@ pub mod selftrade;
 
 pub use book::{BookError, OrderBook};
 pub use fills::FillMemo;
+pub use gate::TradingGate;
 pub use interval::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
 pub use lifecycle::{OrderLifecycleEvent, OrderLifecycleKind};
 pub use openings::{NoteOpening, OpeningError, OpeningStore, OrderOpening};

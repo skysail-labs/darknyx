@@ -384,7 +384,8 @@ components:
           description: |
             Worst acceptable price, in quote units per base. Required for
             a bid (must be > 0); an ask may use `0` to accept any clearing
-            price.
+            price. Every non-zero value must be an integer multiple of the
+            instrument's `tick_size`.
         min_fill_size:
           type: integer
           format: uint64
@@ -1311,8 +1312,9 @@ paths:
         Reports whether the matching tick and the on-chain settle
         pipeline are wired, whether an oracle cache is attached, and the
         TEE's current Solana slot. `degraded` is `true` whenever the
-        matcher or the settle pipeline is down, so clients can back off before
-        they hit a write failure.
+        matcher or the settle pipeline is down, including a fail-closed pause
+        caused by unavailable or changed finalized governance, so clients can
+        back off before they hit a write failure.
       responses:
         '200':
           description: Engine status snapshot.
@@ -1324,7 +1326,7 @@ paths:
                 properties:
                   degraded:
                     type: boolean
-                    description: true when matching OR settle is down.
+                    description: true when matching, governance readiness, OR settle is down.
                   matcher_running: { type: boolean }
                   settle_enabled:
                     type: boolean

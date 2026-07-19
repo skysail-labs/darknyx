@@ -95,7 +95,7 @@ pub enum VaultError {
     FeeNoteInconsistent,
     #[msg("Fee rate exceeds the allowed maximum (10000 bps)")]
     InvalidFeeRate,
-    #[msg("Collected protocol fee is below the on-chain VaultConfig.fee_rate_bps floor")]
+    #[msg("Collected protocol fee does not match the exact governed fee rate")]
     InsufficientFeeCharge,
 
     // ---- Note merge ----

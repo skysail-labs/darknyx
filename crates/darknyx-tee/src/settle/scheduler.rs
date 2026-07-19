@@ -160,7 +160,7 @@ pub struct SettleDriverConfig {
     pub quote_mint: [u8; 32],
     /// Owner commitment the protocol's fee notes pay to.
     pub protocol_owner_commitment: [u8; 32],
-    /// Protocol fee rate (bps) — the circuit fee-floor public input
+    /// Protocol fee rate (bps) — the circuit exact-fee public input
     /// (`VaultConfig.fee_rate_bps`, reconciled at boot).
     pub fee_rate_bps: u64,
     /// Governed fixed-point price denominator.

@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-64
+    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-65
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -93,7 +93,8 @@ services:
       # opening's mint against these (bid→quote, ask→base), so for a REAL
       # settle they MUST equal the on-chain mints the deposited notes use
       # (the devnet-setup e2e-config mints). Empty/unset → placeholder
-      # dev mints (fine for the synthetic-order loadgen). See Config.
+      # dev mints (synthetic-order loadgen mode; settlement disabled). Supplying
+      # only one mint is rejected. See Config.
       DARKNYX_TEE_BASE_MINT: ${DARKNYX_TEE_BASE_MINT}
       DARKNYX_TEE_QUOTE_MINT: ${DARKNYX_TEE_QUOTE_MINT}
       # On-chain address of the STATIC settle ALT (vault_config +
@@ -108,13 +109,13 @@ services:
       # Protocol fee rate (basis points) the matcher charges per leg.
       # Empty/unset → the code default (30 bps = 0.3%), so fee notes
       # actually mint. Set to 0 to disable fees, or any value ≤ 10_000.
-      # Should mirror the on-chain VaultConfig.fee_rate_bps. See
-      # crate::config + darkpool-matcher flush_fee_notes.
+      # Real-market boot adopts the finalized on-chain value exactly; this env
+      # value is only a simulator/loadgen default. See crate::config.
       DARKNYX_TEE_FEE_RATE_BPS: ${DARKNYX_TEE_FEE_RATE_BPS}
-      # Owner commitment the fee notes are minted to (32-byte hex). Set
-      # to the on-chain protocol owner (e2e-config protocol.ownerCommitmentHex)
-      # so collected fees are spendable via VALID_SPEND; empty/unset →
-      # [0;32] (fee notes still mint + append but are unclaimable).
+      # Simulator/loadgen owner commitment default (32-byte hex). Governed
+      # real-market boot adopts the finalized VaultConfig value instead.
+      # Empty/unset in simulator/loadgen mode → [0;32] (fee notes still mint +
+      # append but are unclaimable).
       DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT: ${DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT}
       # Groth16 prover backend: rapidsnark (default) | ark. The image ships
       # both (built --features rapidsnark); flip this to A/B proving on the

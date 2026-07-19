@@ -75,5 +75,6 @@ on-chain `MarketConfig` when that value is required for independent monitoring.
 ## Cache semantics
 
 Instrument metadata is a boot-time snapshot. Cache it for a connected session,
-then refresh after a reconnect or engine restart. Governance can update market
-configuration on-chain; a new engine boot reads the current configuration.
+then refresh after a reconnect or engine restart. The engine revalidates finalized
+governance every minute and pauses new trading if the values drift; a restart
+atomically adopts the new configuration.

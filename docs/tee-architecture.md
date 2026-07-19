@@ -484,6 +484,16 @@ backs up). The current CVM cadence is a 2 s build default, not part of
 Mint-pair price scale, tick, minimum size, circuit breaker, and enabled state
 are the values governed independently on-chain.
 
+A real-market boot reads `VaultConfig` and the mint-pair `MarketConfig` at
+`finalized` commitment and fails closed if either is missing, malformed, or
+disabled. The fee rate and protocol owner are adopted together with the market
+parameters. A one-minute monitor then revalidates the snapshot and authorized
+signer set. RPC failure or drift pauses new place/modify operations and matcher
+ticks while cancellations and settlement reconciliation continue. Governance
+parameter changes require a process restart so matcher, prover, and settler adopt
+one atomic snapshot; signer rotation can resume in place once the derived set is
+finalized on-chain.
+
 If the Phase-1 benchmark on TDX-Lab shows settle finality
 consistently above 3 s under load, bump the default to 3 s and
 revisit.
@@ -770,7 +780,7 @@ importantly, pick an **unfair clearing price**. Both the oracle
 circuit breaker AND the traders' limit prices are enforced only
 by the in-enclave matcher (trusted code), NOT by
 `VALID_MATCH_BATCH`: the batch proof binds output-note
-construction + per-leg conservation + range + fee floor, and its
+construction + per-leg conservation + ranges + the exact governed fee, and its
 only in-circuit price constraint is the definitional
 `quote = floor(base·price/price_scale)` — nothing ties the price to a limit or an
 oracle band. So conservation holding does **not** bound the

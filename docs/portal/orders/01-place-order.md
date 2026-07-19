@@ -55,7 +55,7 @@ wire contract is unambiguous.
 | `side` | string | Yes | `"bid"` (buy base) or `"ask"` (sell base). |
 | `order_type` | string | Yes | `"limit"`, `"ioc"`, or `"fok"`. See [Order Types](../trading-concepts/order-types). |
 | `amount` | integer | Yes | Order size in base units. |
-| `price_limit` | integer | Conditional | Worst acceptable price, in quote units per base. Required for a bid; an ask may use `0` to accept any clearing price. |
+| `price_limit` | integer | Conditional | Worst acceptable price, in quote units per base. Non-zero values must be multiples of the instrument `tick_size`. Required for a bid; an ask may use `0` to accept any clearing price. |
 | `min_fill_size` | integer | No | Reject fills smaller than this. Set equal to `amount` for all-or-none. Default `0` (any partial fill). See [Execution Attributes](../trading-concepts/execution-attributes). |
 | `expiry_slot` | integer | Yes | Solana slot past which the order auto-expires. Bounded by the market's max expiry. See [Time in Force](../trading-concepts/time-in-force). |
 | `order_id` | string | Yes | A client-chosen 16-byte id, hex. Must be unique and non-zero. The SDK can derive ids deterministically from your seed (`deriveOrderId`), so you can reconcile or recover your order set on a fresh device. |
@@ -179,6 +179,7 @@ Every order is verified before it enters the book. A non-`202` response carries 
 | Hashed fields are canonical field elements | `400` | 1002 |
 | Order amount meets the market minimum | `400` | 1004 |
 | A bid has a positive price limit | `400` | 1005 |
+| A non-zero price limit is aligned to the market tick | `400` | 1009 |
 | The note opening re-derives the signed `note_commitment` | `400` | 1006 |
 | The collateral covers the order's nominal cost plus its own fee | `400` | 1003 |
 | The trading-key signature verifies over the canonical body | `403` | 1102 |

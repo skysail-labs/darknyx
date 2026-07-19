@@ -30,8 +30,8 @@ pub struct SystemStatus {
 }
 
 pub async fn get_status(State(state): State<Arc<ApiState>>) -> Json<SystemStatus> {
-    let matcher_running = state.matcher.is_some();
-    let settle_enabled = state.settle_state.is_some();
+    let matcher_running = state.matcher.is_some() && state.trading_gate.is_open();
+    let settle_enabled = state.settle_enabled;
     Json(SystemStatus {
         degraded: !(matcher_running && settle_enabled),
         matcher_running,

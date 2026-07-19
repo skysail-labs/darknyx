@@ -123,11 +123,20 @@ DARKNYX_TEE_NUM_TREES=$K
 EOF
 ```
 
+Omitting both mint variables selects the explicit placeholder-mint loadgen mode:
+intake and matcher paging remain available, but the on-chain settlement driver is
+disabled. Supplying only one mint is a startup error. With both real mints set,
+the CVM requires finalized, well-formed `VaultConfig` and `MarketConfig` accounts;
+it will not fall back to env market/fee values.
+
 > Keep the three credential variables exported in the shell that runs the CVM
 > tests/loadgen; live harnesses now fail fast when they are missing.
-> `DARKNYX_TEE_FEE_RATE_BPS` (default 30) must equal the cvm-harness/loadgen fee rate
-> (intake derives fee-inclusive collateral; a mismatch → every note fails
-> `verify_commitment`). `DARKNYX_TEE_NUM_TREES` must equal the on-chain `numTrees`.
+> In real-market mode, the CVM and e2e harness must use the finalized on-chain
+> fee rate (the CVM ignores the fee/owner env defaults after adopting governance).
+> In placeholder-loadgen mode, `DARKNYX_TEE_FEE_RATE_BPS` (default 30) must equal
+> the loadgen's fee rate. A mismatch changes fee-inclusive collateral and makes
+> every synthetic note fail `verify_commitment`. `DARKNYX_TEE_NUM_TREES` must
+> equal the on-chain `numTrees` in real-market mode.
 
 ---
 

@@ -81,8 +81,12 @@ impl PreparedMatchTick {
     /// the in-TEE driver.
     pub fn new(book: OrderBook, config: MatchConfig, current_slot: u64) -> Self {
         let pre_batch = book.orders;
-        let (bids, asks, expired_idxs, _inclusion_leaves) =
-            algorithm::partition_book(&pre_batch, current_slot, config.min_order_size);
+        let (bids, asks, expired_idxs, _inclusion_leaves) = algorithm::partition_book(
+            &pre_batch,
+            current_slot,
+            config.min_order_size,
+            config.tick_size,
+        );
         let levels = algorithm::PriceLevelAggregates::from_snapshots(&bids, &asks);
         let mut active_by_book_idx = vec![false; pre_batch.len()];
         let mut locations = HashMap::with_capacity(bids.len() + asks.len());
@@ -311,8 +315,12 @@ pub fn run_batch_capped(
     // Step 2 — partition. Yields (bids, asks, expired_idxs,
     // inclusion_leaves). expired_idxs feed OrderUpdate::Expired
     // emissions below.
-    let (mut bids, mut asks, expired_idxs, inclusion_leaves) =
-        algorithm::partition_book(&book.orders, current_slot, config.min_order_size);
+    let (mut bids, mut asks, expired_idxs, inclusion_leaves) = algorithm::partition_book(
+        &book.orders,
+        current_slot,
+        config.min_order_size,
+        config.tick_size,
+    );
     let levels = algorithm::PriceLevelAggregates::from_snapshots(&bids, &asks);
 
     run_partitioned_page(
