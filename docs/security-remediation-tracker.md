@@ -80,9 +80,9 @@ the relevant `main` before fixing.
 | U-05 | Low | Vault | `remediation/audit-2026-07-18-unique` | Settle fee-note comments rewritten to the per-match model (each active slot appends its own fee notes; no slot-0-aggregate language) | Closed |
 | U-06 | Perf-Nit | Matcher | `remediation/audit-2026-07-18-unique` | `generate_matches` skips zero-quote clears (companion front-line to U-03); unit test (zero-quote → no match, positive-quote → match) | Closed |
 | U-07 | Perf-Nit | — | — | Ed25519 precompile full-instruction scan is intentional (replaced a buggy `+8` window); bounded by the TEE-built tx's ix count; declined | Won't Fix |
-| U-08 | Medium | TEE + matcher | `remediation/audit-2026-07-18-residuals` | Shared REST/WS intake rejects unknown symbols and off-tick nonzero limits; pure matcher independently excludes bypassed off-tick orders; tick=10 negative and zero-limit market-ask positive regressions | Code complete |
-| U-09 | Medium ops | TEE | `remediation/audit-2026-07-18-residuals` | Governed real-market boot requires finalized Vault/Market config and adopts owner+fee+market atomically; one-minute finalized refresh pauses place/modify+matching on RPC/drift/key mismatch while cancel/reconcile continue; placeholder loadgen cannot settle | Code complete |
-| U-10 | Low | TEE + vault + docs | `remediation/audit-2026-07-18-residuals` | Active comments and protocol diagrams describe exact fees, per-match fee notes, Poseidon11 leaves, and already-shipped eight-input market binding | Code complete |
+| U-08 | Medium | TEE + matcher | `remediation/audit-2026-07-18-residuals` | Shared REST/WS intake rejects unknown symbols and off-tick nonzero limits; pure matcher independently excludes bypassed off-tick orders; tick=10 negative and zero-limit market-ask positive regressions | Closed |
+| U-09 | Medium ops | TEE | `remediation/audit-2026-07-18-residuals` | Governed real-market boot requires finalized Vault/Market config and adopts owner+fee+market atomically; one-minute finalized refresh pauses place/modify+matching on RPC/drift/key mismatch while cancel/reconcile continue; placeholder loadgen cannot settle | Closed |
+| U-10 | Low | TEE + vault + docs | `remediation/audit-2026-07-18-residuals` | Active comments and protocol diagrams describe exact fees, per-match fee notes, Poseidon11 leaves, and already-shipped eight-input market binding | Closed |
 
 ## Cross-cutting release deliverables
 
@@ -176,8 +176,8 @@ Every remediation PR must record:
   This boot's short CPU probe measured 187.4 Mops/s with the same unlimited,
   zero-throttle cgroup, documenting host variance without affecting the control
   transition. The protected deploy env was securely deleted and the CVM was
-  confirmed stopped after both sessions. Rows remain `Code complete` only until
-  this PR merges.
+  confirmed stopped after both sessions. PR #60 merged the remediation as
+  commit `226e4b7d3c9760028b2021e34bb6a03f715c9e4d`; U-08…U-10 are closed.
 - **Rollback.** Revert this PR and redeploy image 64. No notes, roots, orders,
   payloads, signatures, proofs, accounts, or circuit artifacts are invalidated,
   but rollback reopens U-08/U-09/U-10 and restores fail-open env governance plus
