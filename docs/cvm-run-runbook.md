@@ -177,10 +177,13 @@ SOLANA_RPC_URL="$SOLANA_RPC_URL" FUNDER_KEYPAIR=~/.config/solana/id.json \
 
 ---
 
-## 4.1 Prover-latency evidence capture (mandatory on the next live run)
+## 4.1 Prover-latency baseline and evidence capture
 
 The July 2026 runs exposed a split timing regression that must not be hidden by
-the end-to-end total:
+the end-to-end total. It was ultimately traced to slow prod5 host placement;
+prod9 restored the expected proof range. Keep capturing the internal phases on
+image-required runs so a future host regression is distinguished from circuit
+growth:
 
 - the previously observed flagship duration was about 24–26 seconds, while
   recent runs are about 40–44 seconds;
@@ -194,7 +197,7 @@ the end-to-end total:
   cgroup throttling, effective-core count, or OpenMP placement the leading
   hypotheses.
 
-Do not spend a standalone CVM session on this. Bundle the capture with the next
+Do not spend a standalone CVM session on this. Bundle the capture with an
 image-required settle run. Set the actual container name from `phala ps`:
 
 ```sh
@@ -261,11 +264,22 @@ canaries took 2,110, 2,206, 2,140, 1,952, and 1,838 ms. This confirms the slow
 host behavior persists even though native witness generation itself was under
 one second. Phala CLI v1.1.19 returned `Unknown API error` before both
 `phala ssh` snapshots, so the run did not obtain `cpu.max`, `cpu.stat`, cpuset,
-affinity, CPU model/frequency, or OpenMP placement. Do not close PERF-INV-01 or
-attribute the remaining ~10.9-second prove step to circuit growth from this
-sample. Before the next image-required window, verify SSH access against the
-stopped CVM or arrange an equivalent read-only container diagnostic path with
-Phala support; then repeat the pre/post snapshots around one proof.
+affinity, CPU model/frequency, or OpenMP placement. That historical sample alone
+did not justify attributing the ~10.9-second prove step to circuit growth.
+
+Image-65 prod9 baseline (2026-07-19): `cvm-settle-e2e` passed in 42.92 seconds.
+The enclave reported native `witness_ms=219`, rapidsnark
+`prove_step_ms=1967`, aggregate `prove_ms=2215`, lock 1,387 ms, verify 1,325 ms,
+ALT transaction/wait 1,271/283 ms, parallel phase 3,540 ms, Tx-D confirmation
+10,644 ms (four rebroadcasts), settlement 10,741 ms, and total pipeline 14,321
+ms. The boot probe saw 8 logical CPUs, model `06/af` at 2,400 MHz, unlimited
+`cpu.max`, zero `nr_throttled`/`throttled_usec`, and 356.5 single-thread Mops/s.
+Five sequential auth canaries took 1,586, 1,407, 1,320, 1,338, and 1,338 ms.
+This restored proof latency and confirmed the remaining wall-clock time was
+mostly client preparation/matching and devnet confirmation, not proving. A
+second cold boot measured 187.4 Mops/s under the same unlimited, zero-throttle
+cgroup; preserve such per-boot variance instead of treating one 100-ms probe as
+a stable host benchmark.
 
 - Healthy CPU metadata and expected proof timing: continue the planned CVM
   validation window.

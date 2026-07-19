@@ -393,6 +393,17 @@ No new fund-theft / inflation path beyond the known circuit-trust + TEE-trust mo
   the filesystem/network sandbox).
 - `cargo test -p darknyx-tee --test orders_surface --test matcher_tick --test http_surface`
   — shared intake, cancellation-during-pause, matcher pause, and readiness surface.
+- Phala image `tee-v3-hardening-65` — finalized governed real-mint boot and
+  `cvm-settle-e2e` passed on prod9. One match settled on devnet with internal
+  native witness/prove/aggregate proof timings of 219/1,967/2,215 ms and one
+  confirmed / zero rejected / zero ambiguous outcome. The harness aligns its
+  live Hermes limits to the finalized tick before signing, exercising the U-08
+  intake rule rather than bypassing it.
+- Controlled finalized signer drift — rotating away from the derived CVM signer
+  produced `params_match=true`, `signers_match=false`,
+  `/system/status.degraded=true`, and `matcher_running=false`; restoring the
+  signer resumed trading at the next one-minute refresh. The CVM was stopped
+  and its protected deploy environment securely deleted after validation.
 
 ---
 

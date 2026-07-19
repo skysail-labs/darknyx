@@ -74,6 +74,7 @@ import {
   hex,
   withFee,
   scaledQuote,
+  floorPriceToTick,
   FEE_RATE_BPS,
   SYMBOL,
   type Persona,
@@ -141,8 +142,9 @@ maybeDescribe("Phase 3 — CVM self-trade prevention", () => {
       );
 
       const anchor = await fetchOracleAnchor();
-      const bidPrice = (anchor * 12n) / 10n; // high → crosses the ask
-      const askPrice = (anchor * 8n) / 10n; //  low → crossed by the bid
+      const tickSize = BigInt(cfg.market.tickSize);
+      const bidPrice = floorPriceToTick((anchor * 12n) / 10n, tickSize); // high → crosses
+      const askPrice = floorPriceToTick((anchor * 8n) / 10n, tickSize); // low → crossed
       const PRICE_SCALE = BigInt(cfg.market.priceScale);
       console.log(
         `  · QTY=${QTY} bid=${bidPrice} ask=${askPrice} feeBps=${FEE_RATE_BPS}`,

@@ -76,6 +76,7 @@ import {
   hex,
   withFee,
   scaledQuote,
+  floorPriceToTick,
   FEE_RATE_BPS,
   SYMBOL,
   type Persona,
@@ -146,8 +147,9 @@ maybeDescribe(
         expect(startCount, "tree not empty — reset first").toBe(0);
 
         const anchor = await t.step("oracle anchor", () => fetchOracleAnchor());
-        const bidPrice = (anchor * 12n) / 10n;
-        const askPrice = (anchor * 8n) / 10n;
+        const tickSize = BigInt(cfg.market.tickSize);
+        const bidPrice = floorPriceToTick((anchor * 12n) / 10n, tickSize);
+        const askPrice = floorPriceToTick((anchor * 8n) / 10n, tickSize);
         const PRICE_SCALE = BigInt(cfg.market.priceScale);
 
         // Q (= ask qty). The merged note must equal withFee(Q) so it exactly

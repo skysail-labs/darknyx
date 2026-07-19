@@ -94,6 +94,7 @@ import {
   hex,
   withFee,
   scaledQuote,
+  floorPriceToTick,
   FEE_RATE_BPS,
   SYMBOL,
   API_KEY,
@@ -207,8 +208,9 @@ maybeDescribe(
         const anchor = await t.step("oracle anchor (Hermes)", () =>
           fetchOracleAnchor(),
         );
-        const bidPrice = (anchor * 12n) / 10n;
-        const askPrice = (anchor * 8n) / 10n;
+        const tickSize = BigInt(cfg.market.tickSize);
+        const bidPrice = floorPriceToTick((anchor * 12n) / 10n, tickSize);
+        const askPrice = floorPriceToTick((anchor * 8n) / 10n, tickSize);
         const PRICE_SCALE = BigInt(cfg.market.priceScale);
         // In fills or chain-recovery mode we validate a derived partial-fill
         // CONTINUATION: the

@@ -74,6 +74,7 @@ import {
   hex,
   withFee,
   scaledQuote,
+  floorPriceToTick,
   FEE_RATE_BPS,
   SYMBOL,
   type Persona,
@@ -126,8 +127,9 @@ maybeDescribe("Perf — multi-match concurrent settle profile", () => {
     );
 
     const anchor = await fetchOracleAnchor();
-    const bidPrice = (anchor * 12n) / 10n;
-    const askPrice = (anchor * 8n) / 10n;
+    const tickSize = BigInt(cfg.market.tickSize);
+    const bidPrice = floorPriceToTick((anchor * 12n) / 10n, tickSize);
+    const askPrice = floorPriceToTick((anchor * 8n) / 10n, tickSize);
     const PRICE_SCALE = BigInt(cfg.market.priceScale);
     // SAME qty for every pair → the uniform-price match is cleanly pairwise
     // (M bids × M asks, all full fills, NO partial-fill residual/relock) so all

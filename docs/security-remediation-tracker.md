@@ -141,17 +141,43 @@ Every remediation PR must record:
   round-trips. Targeted U-02/U-03 revalidation passes
   `lock_note_consumed_guard`, `match_batch_verify`, the SDK lock transport, and
   `match-batch-prototype` (17 tests). SDK/indexer TypeScript compilation passes;
-  SDK Vitest reports 261 passed / 23 environment-gated skips and indexer Vitest
+  SDK Vitest reports 264 passed / 23 environment-gated skips and indexer Vitest
   reports 20 passed. U-08 negatives cover tick=10/off-tick rejection plus the
   zero-limit ask exception. U-09 negatives cover unavailable settle state,
   signer and immutable-parameter drift, enabled-fee/zero-owner rejection,
   market disable, paused place/modify, paused matcher ticks, and cancellation
   availability.
-- **Live CVM evidence.** Pending a billable Phala spot-check of image 65 because
-  this slice changes the production boot path, HTTP readiness/intake, and the
-  matcher driver. Rows remain `Code complete` until that image build, finalized
-  governance boot, real settle, and controlled mismatch/pause behavior are
-  recorded.
+- **Live CVM evidence (2026-07-19).** GitHub Actions packaging run
+  `29696896207` built and published
+  `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-65` (the optional artifact
+  upload exhausted the organization quota, but the image-build job succeeded
+  and the GHCR manifest returned HTTP 200). A real-mint cold boot on Phala
+  prod9 (`tdx.xlarge`, 8 vCPU/16 GB) adopted finalized tick size 5, minimum size
+  1,000, breaker 5,000 bps, decimals 6/6, fee 30 bps, and the protocol owner;
+  the Merkle mirror started empty and `/system/status` reported healthy trading
+  with settlement enabled. The flagship `cvm-settle-e2e` passed in 42.92 s and
+  settled Tx D
+  `3yZaC1Hx7e32ZMhfKwDVZjRWVtL7dQ1LPMTGqfMBhzayrJZP9BddSWDRDgETMce5L8ZAWHkibPk1KfWnTYLCP21j`
+  at slot `477432274`, with one confirmed / zero rejected / zero ambiguous
+  outcomes. Internal timings were native witness 219 ms, rapidsnark proof 1,967
+  ms, aggregate proof 2,215 ms, lock 1,387 ms, verify 1,325 ms, ALT transaction
+  1,271 ms, ALT wait 283 ms, parallel phase 3,540 ms, Tx-D confirmation 10,644
+  ms (four rebroadcasts), settlement 10,741 ms, and total pipeline 14,321 ms.
+  The boot CPU probe showed unlimited `cpu.max`, zero throttling, and 356.5
+  single-thread Mops/s; five auth canaries took 1,586/1,407/1,320/1,338/1,338
+  ms. A second cold boot reconstructed all seven leaves. Rotating finalized
+  governance to the test signer in tx
+  `67R6ghRtsWJPen11b1m6KRubn48GLDfYW7RVEN9F4F95qWqbnDYD6Lx7mQib5YpGMyaFHXQF7W7PpoQmDFmz6zMb`
+  produced `params_match=true`, `signers_match=false`, paused matching, and
+  changed status to `degraded=true` / `matcher_running=false`. Restoring the
+  enclave signer in tx
+  `22VAiuTukozXyGwWHGpZ4DzoMv77we1sYr64vyAuHPNaVZfPgjGL6T8e87kXF7jihQpdmgcNH5YNv98PTu2ELvAY`
+  resumed trading at the next finalized refresh and returned status to healthy.
+  This boot's short CPU probe measured 187.4 Mops/s with the same unlimited,
+  zero-throttle cgroup, documenting host variance without affecting the control
+  transition. The protected deploy env was securely deleted and the CVM was
+  confirmed stopped after both sessions. Rows remain `Code complete` only until
+  this PR merges.
 - **Rollback.** Revert this PR and redeploy image 64. No notes, roots, orders,
   payloads, signatures, proofs, accounts, or circuit artifacts are invalidated,
   but rollback reopens U-08/U-09/U-10 and restores fail-open env governance plus

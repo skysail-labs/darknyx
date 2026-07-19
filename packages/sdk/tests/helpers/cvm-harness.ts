@@ -124,6 +124,17 @@ export const scaledQuote = (
   return (baseAmount * price) / priceScale;
 };
 
+/** Round a positive test price down to the finalized market tick. Live Hermes
+ *  prices are not guaranteed to be tick-aligned, while production intake now
+ *  rejects every off-tick nonzero limit (U-08). */
+export const floorPriceToTick = (price: bigint, tickSize: bigint): bigint => {
+  if (price <= 0n) throw new Error("price must be positive");
+  if (tickSize <= 0n) throw new Error("tickSize must be positive");
+  const aligned = price - (price % tickSize);
+  if (aligned === 0n) throw new Error("tickSize exceeds the positive price");
+  return aligned;
+};
+
 /** fetch with retries — the dstack gateway can transiently close the socket
  *  (UND_ERR_SOCKET) for the first minute after a CVM restart. */
 export async function gwFetch(
