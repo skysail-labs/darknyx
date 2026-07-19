@@ -317,6 +317,12 @@ async fn prepare_order(
     matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
     req: &PlaceOrderRequest,
 ) -> Result<PreparedOrder, ApiError> {
+    if !state.trading_gate.is_open() {
+        return Err(ApiError::degraded(
+            "new trading is paused while finalized on-chain governance is unavailable or changed",
+        ));
+    }
+
     // 1. Decode hex inputs.
     let order_id: [u8; 16] = decode_hex(&req.order_id, "order_id")?;
     let note_commitment: [u8; 32] = decode_hex(&req.note_commitment, "note_commitment")?;
@@ -366,20 +372,30 @@ async fn prepare_order(
             "user_commitment top byte must be zero (BN254 Fr safety)",
         ));
     }
-    // Minimum order size (dust floor). The market's `min_order_size` is static
-    // instrument metadata; reject a sub-minimum order here, before the expensive
-    // Ed25519 verify. An unlisted symbol has no floor (min 0) — the canonical
-    // verify below still binds the symbol, and the matcher rejects unknown
-    // markets downstream.
-    let min_order_size = state
+    // Governed intake policy. Resolve the symbol once, then enforce its minimum
+    // size and tick before the expensive Ed25519 verify. There is one market in
+    // the current process, so accepting an unlisted symbol would silently route
+    // it into that market's book.
+    let instrument = state
         .instruments
         .iter()
         .find(|i| i.symbol == req.symbol)
-        .map_or(0, |i| i.min_order_size);
-    if req.amount < min_order_size {
+        .ok_or_else(|| ApiError::malformed(format!("unknown market symbol {:?}", req.symbol)))?;
+    if req.amount < instrument.min_order_size {
         return Err(ApiError::min_notional(format!(
-            "amount {} is below the market minimum {min_order_size}",
-            req.amount
+            "amount {} is below the market minimum {}",
+            req.amount, instrument.min_order_size
+        )));
+    }
+    if instrument.tick_size == 0 {
+        return Err(ApiError::degraded(
+            "market tick_size is zero; refusing new trading",
+        ));
+    }
+    if !req.price_limit.is_multiple_of(instrument.tick_size) {
+        return Err(ApiError::off_tick(format!(
+            "price_limit {} is not aligned to market tick_size {}",
+            req.price_limit, instrument.tick_size
         )));
     }
 
@@ -670,6 +686,11 @@ pub async fn place_core(
             )));
         }
     }
+    if !state.trading_gate.is_open() {
+        return Err(ApiError::degraded(
+            "new trading paused while the order was being verified; retry after readiness recovers",
+        ));
+    }
 
     {
         let mut st = matcher.write().await;
@@ -892,6 +913,11 @@ pub async fn modify_core(
                 "arrival_nonce {arrival_nonce} is not greater than last accepted {last}"
             )));
         }
+    }
+    if !state.trading_gate.is_open() {
+        return Err(ApiError::degraded(
+            "new trading paused while the replacement was being verified; original order unchanged",
+        ));
     }
 
     // Atomic swap under ONE write lock. Check BOTH preconditions before mutating

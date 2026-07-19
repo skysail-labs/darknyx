@@ -66,7 +66,7 @@ pub struct MatchAssemblyInputs<'a> {
     pub quote_mint: [u8; 32],
     /// Owner commitment the protocol's fee notes pay to.
     pub protocol_owner_commitment: [u8; 32],
-    /// Protocol fee rate (bps) — the circuit's fee-floor public input
+    /// Protocol fee rate (bps) — the circuit's exact-fee public input
     /// (`VaultConfig.fee_rate_bps`). Stamped into every slot's witness.
     pub fee_rate_bps: u64,
     /// Governed fixed-point price denominator.
@@ -333,7 +333,7 @@ pub fn assemble_match(
         order_id_b: inp.order_id_b,
         // Amount-privacy (P3b): the amounts (base/quote/change/fee/price) stay
         // in the WITNESS (private prover inputs) but no longer ride the payload
-        // — VALID_MATCH_BATCH proves conservation + the fee floor over them and
+        // — VALID_MATCH_BATCH proves conservation + the exact fee over them and
         // the note commitments bind them, so the on-chain settle ix carries no
         // plaintext amounts.
         //
@@ -366,7 +366,7 @@ pub struct BatchAssemblyParams {
     pub protocol_owner_commitment: [u8; 32],
     // Fee identifier is intentionally absent: `assemble_batch` must copy the
     // value recorded on `RunBatchOutput`, so callers cannot re-sample it.
-    /// Protocol fee rate (bps) — the circuit fee-floor public input
+    /// Protocol fee rate (bps) — the circuit exact-fee public input
     /// (`VaultConfig.fee_rate_bps`).
     pub fee_rate_bps: u64,
     pub price_scale: u64,

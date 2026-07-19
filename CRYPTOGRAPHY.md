@@ -522,8 +522,10 @@ spendable through standard `VALID_SPEND`.
 Each order must lock **at least** `nominal + its own fee` collateral (intake
 derives this floor in `orders.rs`) or `run_batch` rejects the match as
 conservation-breaking. `VaultConfig.fee_rate_bps` is the authoritative
-on-chain fee rate; the CVM adopts it at boot over the
-`DARKNYX_TEE_FEE_RATE_BPS` fallback (default 30).
+on-chain fee rate; governed real-market boots adopt it from finalized state and
+pause new trading if a later finalized refresh differs. The
+`DARKNYX_TEE_FEE_RATE_BPS` default (30) applies only to simulator and
+placeholder-loadgen mode.
 
 **Over-collateralization.** An order MAY lock a note larger than that floor —
 e.g. point a 500-USDC deposit at a 50-USDC order. The client declares the
@@ -654,7 +656,7 @@ The depth is enforced consistently in:
 Five custody/trade-path Groth16 circuits ship, plus the auxiliary
 `VALID_MERGE(K)` consolidation circuit (§7.6). The matching/settlement validity proof,
 `VALID_MATCH_BATCH`, proves **output-note construction + per-leg conservation
-+ no-inflation range checks + the fee floor** for an entire batch (≤ N=16
++ no-inflation range checks + the exact governed fee** for an entire batch (≤ N=16
 matches) in one proof — it is what earlier designs split across separate
 `VALID_CREATE` (output-note correctness) and `VALID_PRICE` circuits, now folded
 inline and verified on-chain by `verify_match_batch`. Those two standalone
@@ -873,11 +875,12 @@ instead of 64 ~30 s per-match proofs).
             │      fee (+ seller leg)                 │
             │    • range checks: Num2Bits(64) on ALL │
             │      amounts (P1a — no inflation)       │
-            │    • fee floor: (fee+1)*10000 >        │
-            │      notional*fee_rate_bps (P1b)        │
-            │    • fee-note binding: slot-0 fee notes│
-            │      == Poseidon6(Σ fee, owner, …)     │
-            │    • leaf_i := H_leaf(commitments)     │
+            │    • exact fee: both inequalities pin  │
+            │      floor(notional*rate/10000) (P1b)  │
+            │    • per-match fee-note inners derived │
+            │      from each consumed commitment     │
+            │    • leaf_i := Poseidon11(active,      │
+            │      eight commitments, batch_slot)    │
             └────────────────┬───────────────────────┘
                              │
                              ▼     (leaves of size N, N ∈ {2, 4, 16})
@@ -899,7 +902,7 @@ Public inputs (8) — declaration order is load-bearing (matches the on-chain
 - `merkle_root` — the depth-`log2(N)` Poseidon Merkle root over the
   per-slot leaves. The on-chain `verify_match_batch` uses this as the
   PDA seed for `BatchValidityMarker` at `[b"batch_validity", merkle_root]`.
-- `fee_rate_bps` — the protocol fee floor the circuit enforces per slot;
+- `fee_rate_bps` — the exact protocol fee rate the circuit enforces per slot;
   `verify_match_batch` binds it to the authoritative `VaultConfig.fee_rate_bps`.
 - `protocol_owner_commitment` — the owner the batch's fee notes are bound to;
   `verify_match_batch` binds it to `VaultConfig.protocol_owner_commitment`.
@@ -939,7 +942,7 @@ slots 1..15 are dummies unless the matcher provides real data.
 Constraint count at N=16 is dominated by the Merkle tree + 16 × per-slot
 constraints. Amount-privacy (P1b) nets two opposing effects: the commitment-only
 leaf REMOVED the amount-hashing Poseidon12+Poseidon9 stages, while the per-amount
-`Num2Bits(64)` range checks + the in-circuit fee floor/binding ADDED constraints.
+`Num2Bits(64)` range checks + the in-circuit exact-fee binding ADDED constraints.
 Net total still exceeds 2^16 → `pot18` is required for setup (don't edit
 `download-ptau.sh` to skip it). On-host proof generation: ~6.7 s on a modern
 laptop, ~1.5 s on-chain verification.
@@ -1329,7 +1332,7 @@ Handler:
    verify the Groth16 against `vk_match_batch_n16` via
    `verify_groth16_proof::<8>` (~132.5k CU in litesvm — the verifier cost scales with
    public-input count, not constraint count). Binding the fee rate + owner here
-   is what makes the circuit's fee floor + fee-note binding enforce the
+   is what makes the circuit's exact-fee + fee-note binding enforce the
    protocol's actual config.
 3. Init `BatchValidityMarker { payer, expiry_slot, bump }`.
 

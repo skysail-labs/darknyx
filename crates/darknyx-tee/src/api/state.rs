@@ -31,7 +31,7 @@ use super::auth::{
 };
 use super::instruments::InstrumentInfo;
 use crate::keys::ed25519::DerivedSigner;
-use crate::matcher::{FillMemo, MatcherState};
+use crate::matcher::{FillMemo, MatcherState, TradingGate};
 use crate::merkle::{MerkleMirror, TreeAppendEvent};
 use crate::oracle::OracleCache;
 use crate::persistence;
@@ -171,6 +171,10 @@ pub struct ApiState {
     /// long-running `MatcherDriver`'s state on every production
     /// boot.
     pub matcher: Option<Arc<RwLock<MatcherState>>>,
+    /// Fail-closed switch shared with the matcher driver. Governance drift or a
+    /// finalized RPC read failure pauses place/modify + matching while cancels
+    /// and settlement reconciliation remain available.
+    pub trading_gate: TradingGate,
     /// Monotonic counter the orders handler reads to stamp
     /// `arrival_slot` on incoming orders before they land in the
     /// book. Driven by a separate Solana-RPC poller in production
@@ -190,6 +194,9 @@ pub struct ApiState {
     /// stage workers (4g.3 / 4g.5 / 4g.6) take brief write locks to
     /// advance jobs. `None` until `main.rs` spawns the scheduler.
     pub settle_state: Option<Arc<RwLock<SettleSchedulerState>>>,
+    /// Whether a live on-chain settle driver was constructed. A scheduler state
+    /// alone is not enough (simulator/loadgen boots are enqueue-only).
+    pub settle_enabled: bool,
 
     // ── Solana RPC (PR 4g.2 / walk-back in 4g.3) ────────────────
     /// Hand-rolled JSON-RPC client pointed at the configured
@@ -406,9 +413,11 @@ impl ApiState {
             // a separate construction path. Until then the orders
             // handlers see `None` and return 503.
             matcher: None,
+            trading_gate: TradingGate::default(),
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             oracle: None,
             settle_state: None,
+            settle_enabled: false,
             solana_rpc: None,
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             recent_order_owner: Arc::new(RwLock::new(HashMap::new())),
@@ -497,6 +506,11 @@ impl ApiState {
         self
     }
 
+    pub fn with_settle_enabled(mut self, enabled: bool) -> Self {
+        self.settle_enabled = enabled;
+        self
+    }
+
     /// Enable auth-state persistence to `dir`. `from_boot` sets this
     /// from `DARKNYX_TEE_STATE_DIR`; this builder is for tests + any caller
     /// that wants persistence on a state built via [`Self::for_tests`].
@@ -554,6 +568,7 @@ impl ApiState {
             }],
             merkle_mirrors: new_shard_mirrors(1),
             matcher: Some(Arc::new(RwLock::new(MatcherState::new()))),
+            trading_gate: TradingGate::default(),
             // Tests that exercise expiry need to bump this; the
             // default starting slot is 1 so an order with
             // `expiry_slot = 1_000_000` (the test default) lives
@@ -564,6 +579,7 @@ impl ApiState {
             // to drive the `/settlement/status/*` endpoint must
             // spawn one and call `with_settle_state(...)`.
             settle_state: None,
+            settle_enabled: false,
             // No Solana RPC client by default — tests that need
             // one construct it manually and attach via
             // `with_solana_rpc(...)`.

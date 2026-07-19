@@ -19,7 +19,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use darknyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, NoteOpening, OrderOpening};
+use darknyx_tee::matcher::{
+    DriverConfig, MatcherDriver, MatcherState, NoteOpening, OrderOpening, TradingGate,
+};
 use darknyx_tee::oracle::{cache::CachedPrice, OracleCache};
 use darknyx_tee::settle::Groth16ProofBytes;
 use darkpool_matcher::{
@@ -158,6 +160,7 @@ fn mk_driver(
         oracle,
         current_slot,
         matches_tx: tx,
+        trading_gate: TradingGate::default(),
         cfg: DriverConfig {
             match_config: mk_config(),
             feed_id: FEED_ID.to_string(),
@@ -221,6 +224,30 @@ async fn tick_produces_matches_for_crossing_book() {
     assert_eq!(final_state.next_match_id(), 1);
 }
 
+#[tokio::test]
+async fn governance_pause_makes_matcher_tick_a_no_op() {
+    let state = Arc::new(RwLock::new(mk_state()));
+    let oracle = OracleCache::new();
+    let current_slot = Arc::new(AtomicU64::new(1));
+    let (tx, mut rx) = mpsc::channel(8);
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Bid, 1, 100, 10),
+    );
+    submit_with_opening(
+        &mut state.write().await,
+        mk_order(OrderSide::Ask, 2, 100, 10),
+    );
+    seed_oracle(&oracle, 100).await;
+
+    let driver = mk_driver(state.clone(), oracle, current_slot, tx);
+    assert!(driver.trading_gate.pause());
+    driver.tick().await.expect("paused tick");
+
+    assert!(rx.try_recv().is_err());
+    assert_eq!(state.read().await.book().len(), 2);
+}
+
 /// Paged matching (C): a tick that clears more than
 /// `max_matches_per_batch` pairs must emit MULTIPLE ≤N RunBatchOutputs
 /// (one settle batch each) rather than a single oversized batch the
@@ -254,6 +281,7 @@ async fn tick_pages_oversized_match_set_into_capped_batches() {
         oracle,
         current_slot,
         matches_tx: tx,
+        trading_gate: TradingGate::default(),
         cfg: DriverConfig {
             match_config: mk_config(),
             feed_id: FEED_ID.to_string(),

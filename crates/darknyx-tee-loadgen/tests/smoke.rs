@@ -59,6 +59,7 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         current_slot.clone(),
         oracle.clone(),
     );
+    let trading_gate = api_state.trading_gate.clone();
     let app = build_router(Arc::new(api_state));
 
     // ─── 2. Spawn matcher driver ────────────────────────────────────
@@ -67,6 +68,7 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         oracle: oracle.clone(),
         current_slot: current_slot.clone(),
         matches_tx,
+        trading_gate,
         cfg: DriverConfig {
             match_config: match_config.clone(),
             feed_id: FEED_ID.to_string(),

@@ -13,8 +13,9 @@
 > price fairness, fill_recovery 128 B as accepted P-02, throughput-roadmap
 > 1–5, deposit C-06) are **excluded** even if restated.
 >
-> **Code ground truth:** current tree on `remediation/settlement-outcomes`
-> (post amount-privacy / per-match fee notes / market public inputs). Several
+> **Code ground truth:** current `main` plus
+> `remediation/audit-2026-07-18-residuals` (post amount-privacy / per-match fee
+> notes / market public inputs). Several
 > July-14 CS findings (CS-01…CS-03 class) describe a **pre-remediation** circuit
 > shape; this delta assumes the shipped MatchSlot with per-match fees,
 > Poseidon11 leaves, and 8 public inputs.
@@ -23,8 +24,9 @@
 
 **Severity:** Critical / High / Medium / Low / Perf-Nit / Info  
 **Status:** U-01…U-06 addressed on branch `remediation/audit-2026-07-18-unique`
-(one PR); U-07 **Won't Fix** (rationale below). All seven validated against HEAD
-before remediation.
+(merged PR #59); U-07 **Won't Fix** (rationale below); U-08…U-10 fixed on
+`remediation/audit-2026-07-18-residuals`. All findings were revalidated against
+current `main` before the residual remediation.
 
 > **Remediation outcome (2026-07-18).** Every finding here was code-validated as
 > genuine, then remediated as follows. See the per-finding sections for the
@@ -39,20 +41,30 @@ before remediation.
 > | U-05 | **Fixed (comments)** — settle fee-note comments rewritten to the per-match model. |
 > | U-06 | **Fixed** — matcher skips zero-quote clears (`generate_matches`, unit test). Front-line companion to U-03. |
 > | U-07 | **Won't Fix** — see §3. |
+> | U-08 | **Fixed** — non-zero limits are tick-checked at shared intake and defensively excluded by the pure matcher; zero-limit market asks remain eligible. |
+> | U-09 | **Fixed** — governed real-market boot requires finalized Vault/Market config, adopts owner+fee+market atomically, and a one-minute monitor pauses place/modify+matching on drift/read failure while cancel/reconcile continue. Placeholder loadgen mode is settlement-disabled. |
+> | U-10 | **Fixed (comments/docs)** — exact-fee and already-bound MarketConfig wording restored across active TEE/vault/protocol docs. |
+>
+> **Independent re-verify (2026-07-18, post-merge `main`).** See §7. U-01…U-04, U-06, U-07
+> match the claimed outcomes. U-05 had one residual stale `TradeSettled` fee-leaf
+> doc-comment (fixed in the re-verify pass). Second-pass residual items are **U-08…U-10**.
 
 ---
 
 ## 1. Severity-ranked backlog
 
-| ID | Severity | Category | Finding |
-|---|---|---|---|
-| U-01 | Medium | TEE-trust / Consensus | `MarketConfig` tick / min size / circuit-breaker are not proof-bound |
-| U-02 | Low–Medium | Replay / Liveness | `lock_note` does not reject already-consumed commitments |
-| U-03 | Low | Constraints (hygiene) | Active slots allow `quote_amount = 0` (zero-value `note_d` leaves) |
-| U-04 | Low | TEE-trust / recovery | Compromised TEE can strand on-chain fill recovery with garbage ciphertext |
-| U-05 | Low | Docs / comment drift | Settle comments still describe batch-slot-0-only fee flush |
-| U-06 | Perf-Nit | Allocation | Zero-quote / dust leaves waste Merkle capacity |
-| U-07 | Perf-Nit | CU | Ed25519 precompile scan walks every instruction in the settle tx |
+| ID | Severity | Category | Finding | Status |
+|---|---|---|---|---|
+| U-01 | Medium | TEE-trust / Consensus | `MarketConfig` tick / min size / circuit-breaker are not proof-bound | Doc (see U-08 for tick) |
+| U-02 | Low–Medium | Replay / Liveness | `lock_note` does not reject already-consumed commitments | **Fixed** |
+| U-03 | Low | Constraints (hygiene) | Active slots allow `quote_amount = 0` (zero-value `note_d` leaves) | **Fixed** |
+| U-04 | Low | TEE-trust / recovery | Compromised TEE can strand on-chain fill recovery with garbage ciphertext | Doc |
+| U-05 | Low | Docs / comment drift | Settle comments still describe batch-slot-0-only fee flush | **Fixed** (+ residual event docs) |
+| U-06 | Perf-Nit | Allocation | Zero-quote / dust leaves waste Merkle capacity | **Fixed** |
+| U-07 | Perf-Nit | CU | Ed25519 precompile scan walks every instruction in the settle tx | **Won't Fix** |
+| U-08 | Medium | TEE-trust | `tick_size` never enforced in matcher/intake | **Fixed** |
+| U-09 | Medium | Ops / TEE-trust | Boot fail-open + sticky market/fee config (no re-poll) | **Fixed** |
+| U-10 | Low | Docs | Stale fee-FLOOR / future-tense bind comments in TEE boot | **Fixed** |
 
 ---
 
@@ -256,4 +268,143 @@ Same class of residual as the July-14 CS review, still not new vulns:
 
 ---
 
-*Compiled 2026-07-18. Defensive first-party delta only; not a third-party formal audit certificate.*
+## 7. Independent re-verify + second-pass (post PR #59)
+
+Original re-verify ground truth: `main` after `874bad0` (merge of remediation PR
+#59), plus a one-line U-05 residual comment fix on `TradeSettled`. U-08…U-10
+were then remediated on `remediation/audit-2026-07-18-residuals`.
+
+### 7.1 U-01…U-07 verification matrix
+
+| ID | Claimed outcome | Code check | Result |
+|---|---|---|---|
+| **U-01** | Doc: TEE-enforced-only | `MarketConfig` field docs in `state.rs`; CRYPTOGRAPHY.md non-goals row for tick/min/breaker | **Pass** (doc) — but see **U-08**: `tick_size` is not actually enforced in matcher/intake |
+| **U-02** | `lock_note` must-be-absent consumed PDA | `lock_note.rs` seeds + `owner != program_id` → `NoteAlreadyConsumed`; SDK account[4]; TEE `lock_note.rs` AccountMeta; `programs/vault/tests/lock_note_consumed_guard.rs` | **Pass** |
+| **U-03** | Active `quote_amount ≠ 0` | `match_batch.circom` `quoteIsZero` + `is_active * quoteIsZero.out === 0`; SDK prototype test `[zero_quote_active]` | **Pass** (assumes zkey/VK rotated in same PR — regenerate gate if deploy drifts) |
+| **U-04** | Doc: recovery is TEE-honesty | `MatchResultPayload.fill_recovery` U-04 block; CRYPTOGRAPHY non-goals | **Pass** |
+| **U-05** | Per-match fee comments | Batched settle fee comments correct; **`TradeSettled` fee leaf docs still said “first settlement only”** | **Partial → fixed** in re-verify (event doc-comments only) |
+| **U-06** | Matcher skips zero-quote | `algorithm.rs` `if quote_amt == 0 { continue }`; unit test `generate_matches_skips_zero_quote_clear` | **Pass** |
+| **U-07** | Won't Fix | Full `0..total_ix_count` scan retained; comment documents prior `+8` footgun | **Accept Won't Fix** — rationale sound |
+
+Also confirmed closed elsewhere (not re-opened): merge refuses live `NoteLock` (N-04), market-ask zero excluded from price candidates (N-03), production dstack fail refuses boot unless `DARKNYX_TEE_ALLOW_TEST_AUTH=1` (N-01 class).
+
+### 7.2 Second-pass findings (new)
+
+#### U-08 — `tick_size` is config/API surface only; never enforced in matching
+
+| | |
+|---|---|
+| **Severity** | **Medium** (product honesty / residual of U-01) |
+| **Category** | TEE-trust / Other |
+| **Anchors** | `darkpool-matcher/src/config.rs` (`tick_size` field); adopted at boot (`darknyx-tee/src/main.rs`); exposed on `/instruments`; **no** `price_limit % tick_size` (or equivalent) in `algorithm.rs` or `api/orders.rs` |
+| **Status** | **Fixed (2026-07-19)** |
+
+**Failure scenario.** Governance sets `tick_size = 100`. Clients and instruments report that tick. Orders may still book and clear at off-tick limits (e.g. 150). Unlike min size / circuit breaker (which the matcher *does* apply), tick is dead weight for enforcement. U-01 docs said “TEE-enforced”; for tick that claim is currently **false**.
+
+**Recommended fix.** Enforce at intake and/or at clear: reject or snap limits to tick multiples when `tick_size > 1`. Add a unit test with `tick_size = 10` and off-tick limit. Or stop advertising tick as a market rule until implemented.
+
+**Lockstep:** No circuit change (remains TEE-only policy).
+
+**Remediation.** The common `prepare_order` path used by REST place/modify and
+`/v1/stream` now rejects unknown symbols and every non-zero limit that is not a
+multiple of the advertised tick (`ApiError` 1009). The pure matcher also skips
+off-tick snapshots as defense in depth. A price of zero remains valid only for
+the existing market-ask path; zero-price bids retain their separate rejection.
+Regressions cover intake rejection, an accepted zero-limit market ask, and a
+direct matcher bypass attempt with `tick_size = 10`.
+
+---
+
+#### U-09 — Boot fail-open + sticky MarketConfig / fee rate (no live re-poll)
+
+| | |
+|---|---|
+| **Severity** | **Medium** (liveness / ops; not custody) |
+| **Category** | TEE-trust / Ops |
+| **Anchors** | `darknyx-tee/src/main.rs` — on VaultConfig/MarketConfig read **None/Err**: warn and continue with env defaults; comment “live re-poll is intentionally deferred”; fee-rate adopt only at boot |
+| **Status** | **Fixed (2026-07-19)** |
+
+**Failure scenario.**
+
+1. **RPC blip at boot** with a real signer present: TEE starts on env `price_scale` / mints / fee rate while chain has different `MarketConfig` / `VaultConfig`. `verify_match_batch` binds the **on-chain** public inputs → every batch proof fails until CVM restart with working RPC and correct adopt.
+2. **Mid-life governance:** admin updates `price_scale` or `fee_rate_bps` on-chain; running CVM keeps boot snapshot → same hard settle failure until redeploy/restart.
+3. **Fail-open on missing market:** warns and trades against env market parameters (dev-shaped risk if a “prod” binary boots without a deployed MarketConfig).
+
+Contrast: `enabled == false` **does** hard-bail. Fee/scale mismatch does not.
+
+**Recommended fix.** Production: **fail closed** if MarketConfig missing/malformed when settle is enabled; optional periodic re-read of fee rate + market params (or hot-reload on mismatch log + pause placement). Document restart requirement after any `update_market_config` / `set_protocol_config`.
+
+**Lockstep:** No.
+
+**Remediation.** A real-market boot (both mint env vars present) now reads both
+accounts at `finalized` commitment and exits if either is missing, wrong-owner,
+malformed, disabled, or internally invalid. It adopts
+`protocol_owner_commitment` together with `fee_rate_bps` (the re-verify found
+that owner drift was the same proof-failure class), plus all market parameters.
+The full pinned `VaultConfig` reader is layout-tested.
+
+Every minute, the running CVM re-reads finalized governance. Any RPC/parse
+failure, immutable parameter drift, unavailable settle driver, or mismatch
+between the derived K signers and the active on-chain set closes a shared trading
+gate. Place/modify and matcher ticks stop; cancellation and settlement
+reconciliation remain live. Restoring the expected signer set resumes in place;
+fee/owner/market changes require a restart so matcher, prover, and settler adopt
+one atomic snapshot. `/system/status.degraded` reflects the pause.
+
+Omitting both mint env vars remains the explicitly documented synthetic loadgen
+regime, but it is now settlement-disabled; supplying only one mint is a startup
+error. This preserves intake/paging load tests without retaining a production
+env-fallback settle path.
+
+---
+
+#### U-10 — Stale “fee FLOOR” / future-tense MarketConfig comments in TEE boot
+
+| | |
+|---|---|
+| **Severity** | **Low** (docs only) |
+| **Category** | Docs / comment drift |
+| **Anchors** | `darknyx-tee/src/main.rs` boot block: “settle fee FLOOR”; “VALID_MATCH_BATCH v3 will also bind this account” (already binds mints + price_scale) |
+| **Status** | **Fixed (2026-07-19)** |
+
+**Failure scenario.** Maintainers re-implement floor-only fee or assume market binding is unfinished.
+
+**Recommended fix.** Comment truth-up to exact fee + already-bound public inputs.
+
+**Lockstep:** No.
+
+**Remediation.** Active boot, assembler, scheduler, vault-handler, OpenAPI, and
+cryptography prose now describe the exact governed fee (both inequalities) and
+the already-shipped 8-public-input market binding. The stale slot-0 aggregate
+fee diagram was also replaced with the per-match fee-note/Poseidon11 model.
+
+### 7.3 Second-pass: nothing Critical found
+
+No new fund-theft / inflation path beyond the known circuit-trust + TEE-trust model. Highest residual process gates remain July-14 **N-18** (ceremony) and **N-19** (multisig / attestation rotation ops) plus external circuit audit.
+
+### 7.4 Residual-remediation validation
+
+- `cargo test -p darkpool-matcher --test parity` — tick enforcement and
+  market-ask regression.
+- `cargo test -p darknyx-tee --bin darknyx-tee` — governance
+  snapshot/adoption policy.
+- `cargo test -p darknyx-tee --lib` — full TEE library suite, including full
+  VaultConfig parsing and the shared gate (localhost mock-RPC tests run outside
+  the filesystem/network sandbox).
+- `cargo test -p darknyx-tee --test orders_surface --test matcher_tick --test http_surface`
+  — shared intake, cancellation-during-pause, matcher pause, and readiness surface.
+- Phala image `tee-v3-hardening-65` — finalized governed real-mint boot and
+  `cvm-settle-e2e` passed on prod9. One match settled on devnet with internal
+  native witness/prove/aggregate proof timings of 219/1,967/2,215 ms and one
+  confirmed / zero rejected / zero ambiguous outcome. The harness aligns its
+  live Hermes limits to the finalized tick before signing, exercising the U-08
+  intake rule rather than bypassing it.
+- Controlled finalized signer drift — rotating away from the derived CVM signer
+  produced `params_match=true`, `signers_match=false`,
+  `/system/status.degraded=true`, and `matcher_running=false`; restoring the
+  signer resumed trading at the next one-minute refresh. The CVM was stopped
+  and its protected deploy environment securely deleted after validation.
+
+---
+
+*Compiled 2026-07-18; re-verified post PR #59 and residuals remediated 2026-07-19. Defensive first-party delta only; not a third-party formal audit certificate.*

@@ -34,7 +34,9 @@ use axum::{
 use darknyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
 use darknyx_tee::api::{build_router, ApiState};
 use darknyx_tee::matcher::openings::NoteOpening;
-use darknyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
+use darknyx_tee::matcher::{
+    DriverConfig, MatcherDriver, MatcherState, TradingGate, DEFAULT_MAX_ORACLE_AGE_MS,
+};
 use darknyx_tee::oracle::cache::{CachedPrice, OracleCache};
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::config::MatchConfig;
@@ -234,6 +236,7 @@ async fn http_submit_two_crossing_orders_produces_match() {
         oracle: oracle.clone(),
         current_slot: current_slot.clone(),
         matches_tx,
+        trading_gate: TradingGate::default(),
         cfg: DriverConfig {
             match_config: dev_match_config(),
             feed_id: FEED_ID.to_string(),
@@ -396,6 +399,7 @@ async fn http_submit_without_crossing_produces_no_match() {
         oracle: oracle.clone(),
         current_slot: current_slot.clone(),
         matches_tx,
+        trading_gate: TradingGate::default(),
         cfg: DriverConfig {
             match_config: dev_match_config(),
             feed_id: FEED_ID.to_string(),

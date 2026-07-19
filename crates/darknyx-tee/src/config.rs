@@ -62,6 +62,11 @@ pub struct Config {
     /// Market quote mint (32 bytes). BID-side openings verify against
     /// this. From `DARKNYX_TEE_QUOTE_MINT` (base58).
     pub quote_mint: [u8; 32],
+    /// `true` only when BOTH market mint env vars were supplied. This selects
+    /// the governed real-settlement mode. When both are omitted, the process is
+    /// in the documented placeholder-mint loadgen mode and settlement stays
+    /// disabled; supplying only one mint is rejected as a configuration error.
+    pub governed_market: bool,
     /// Price tick. `DARKNYX_TEE_TICK_SIZE`, default 1.
     pub tick_size: u64,
     /// Minimum order size. `DARKNYX_TEE_MIN_ORDER_SIZE`, default 0.
@@ -84,17 +89,15 @@ pub struct Config {
     /// (≤ 10_000, enforced by set_protocol_config) so the matcher's
     /// charge matches what settlement conservation expects. On a real
     /// boot the TEE reads the authoritative on-chain rate and OVERRIDES
-    /// this env value (see `main.rs::read_on_chain_vault_config`), since
-    /// the batched-settle handler enforces a fee FLOOR against it — so
-    /// this acts only as a fallback (explicit simulator mode / config absent).
+    /// this env value (see `main.rs::read_governance_snapshot`), since the
+    /// proof enforces the exact governed fee. This value is used only in
+    /// explicit simulator / placeholder-loadgen mode.
     pub fee_rate_bps: u64,
-    /// Owner commitment the protocol fee notes are minted to (32 bytes).
-    /// `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` (hex), default `[0;32]`. Set
-    /// it to the on-chain protocol owner commitment (e2e-config
-    /// `protocol.ownerCommitmentHex`) so the collected fee notes are
-    /// spendable by the protocol via the normal VALID_SPEND path; left
-    /// at zero the fee notes still mint + append but are unclaimable.
-    /// MUST be BN254-Fr-safe (it's a Poseidon-output commitment).
+    /// Simulator/placeholder-loadgen owner commitment (32-byte hex), from
+    /// `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT`; default `[0;32]`. Governed
+    /// real-market boot adopts the finalized `VaultConfig` value instead and
+    /// rejects a zero owner when fees are enabled. MUST be BN254-Fr-safe (it is
+    /// a Poseidon-output commitment).
     pub protocol_owner_commitment: [u8; 32],
     /// Max settle Tx D's the settle worker sends CONCURRENTLY within a batch.
     /// `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY`, default 16. Concurrent sends let the
@@ -312,6 +315,11 @@ impl Config {
             .filter(|s| !s.is_empty());
         let allow_test_auth = parse_bool_env("DARKNYX_TEE_ALLOW_TEST_AUTH", false)?;
         validate_auth_mode(dstack_socket.as_deref(), allow_test_auth)?;
+        let base_mint_set = env_nonempty("DARKNYX_TEE_BASE_MINT").is_some();
+        let quote_mint_set = env_nonempty("DARKNYX_TEE_QUOTE_MINT").is_some();
+        if base_mint_set != quote_mint_set {
+            bail!("DARKNYX_TEE_BASE_MINT and DARKNYX_TEE_QUOTE_MINT must be supplied together");
+        }
 
         Ok(Self {
             http_bind: env_string_or("DARKNYX_TEE_HTTP_BIND", "0.0.0.0:8080"),
@@ -327,6 +335,7 @@ impl Config {
             sync_from_slot: parse_u64_env("DARKNYX_TEE_SYNC_FROM_SLOT", 0)?,
             base_mint: parse_mint_env("DARKNYX_TEE_BASE_MINT", default_base_mint())?,
             quote_mint: parse_mint_env("DARKNYX_TEE_QUOTE_MINT", default_quote_mint())?,
+            governed_market: base_mint_set && quote_mint_set,
             tick_size: parse_u64_env("DARKNYX_TEE_TICK_SIZE", 1)?,
             min_order_size: parse_u64_env("DARKNYX_TEE_MIN_ORDER_SIZE", 0)?,
             settle_lookup_table: parse_pubkey_env("DARKNYX_TEE_SETTLE_LOOKUP_TABLE")?,

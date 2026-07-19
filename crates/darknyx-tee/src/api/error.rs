@@ -15,7 +15,7 @@
 //!
 //! | Range | Class | Examples |
 //! |-------|-------|----------|
-//! | 1000–1099 | request validation (400) | 1001 malformed, 1002 fr_unsafe, 1003 below_collateral, 1004 min_notional |
+//! | 1000–1099 | request validation (400) | 1001 malformed, 1002 fr_unsafe, 1003 below_collateral, 1004 min_notional, 1009 off_tick |
 //! | 1100–1199 | auth (401/403) | 1101 unauthorized, 1102 sig_invalid, 1103 not_owner |
 //! | 1200–1299 | conflict (409) | 1201 duplicate, 1202 stale_nonce, 1203 id_in_use, 1204 collateral_in_use |
 //! | 1300–1399 | not found (404) | 1301 not_found |
@@ -88,6 +88,10 @@ impl ApiError {
     /// Required X25519 viewing key is a low-order/non-contributory point.
     pub fn invalid_viewing_key(m: impl Into<String>) -> Self {
         Self::new(1008, StatusCode::BAD_REQUEST, m)
+    }
+    /// A non-zero order limit is not an integer multiple of the market tick.
+    pub fn off_tick(m: impl Into<String>) -> Self {
+        Self::new(1009, StatusCode::BAD_REQUEST, m)
     }
 
     // 1100–1199 — auth (401/403)

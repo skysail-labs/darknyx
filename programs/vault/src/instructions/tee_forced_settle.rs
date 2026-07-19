@@ -32,8 +32,8 @@ use anchor_lang::prelude::*;
 /// **Amount-privacy (P3b).** The plaintext amounts (`base_amount`,
 /// `quote_amount`, `buyer/seller_change_amt`, `buyer/seller_fee_amt`,
 /// `clearing_price`) USED to live here so the chain could re-check the
-/// conservation law + fee floor. They have been REMOVED: VALID_MATCH_BATCH
-/// now proves conservation + the fee floor in-circuit over PRIVATE amounts
+/// conservation law + fee. They have been REMOVED: VALID_MATCH_BATCH now proves
+/// conservation + the exact governed fee in-circuit over PRIVATE amounts
 /// (range-checked), and the note commitments bind the amounts transitively.
 /// Putting them in the settle ix (which lands on-chain in plaintext) was a
 /// public leak — competitors could read every trade size + execution price.
@@ -228,9 +228,10 @@ pub struct TradeSettled {
     pub note_e_leaf: u64,
     /// `u64::MAX` means no seller-change leaf was inserted (exact fill).
     pub note_f_leaf: u64,
-    /// `u64::MAX` means no base/quote batch fee note was flushed on this
-    /// settlement (only the first settlement in a batch carries them).
+    /// `u64::MAX` means this match's exact base-side fee was zero (no fee leaf
+    /// appended). Fees are per-match, not a batch-slot-0 aggregate flush.
     pub note_fee_base_leaf: u64,
+    /// `u64::MAX` means this match's exact quote-side fee was zero.
     pub note_fee_quote_leaf: u64,
     pub buyer_relock_active: bool,
     pub seller_relock_active: bool,

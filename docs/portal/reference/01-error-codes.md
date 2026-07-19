@@ -52,6 +52,7 @@ Codes are grouped by class. The HTTP status is derived from the class.
 | `1006` | 400 | The note opening does not re-derive the signed `note_commitment`. |
 | `1007` | 400 | `expiry_slot` exceeds the maximum lock lifetime. |
 | `1008` | 400 | The X25519 viewing key is low-order or otherwise non-contributory. |
+| `1009` | 400 | A non-zero order limit is not aligned to the market tick. |
 | `1101` | 401 | Missing / invalid / expired / revoked token, or bad credentials. |
 | `1102` | 403 | The trading-key signature did not verify. |
 | `1103` | 403 | The trading key does not own the targeted order. |
@@ -72,7 +73,7 @@ Codes are stable: branch on the number, not the message text (which may change).
 
 | Status | Class | Typical conditions |
 |---|---|---|
-| `400 Bad Request` | Malformed input | Invalid hex; wrong field width; a non-canonical field element; zero `order_id`; zero-price bid; invalid viewing key; excessive expiry; bad opening; or insufficient collateral. |
+| `400 Bad Request` | Malformed input | Invalid hex; wrong field width; a non-canonical field element; zero `order_id`; zero-price bid; off-tick limit; invalid viewing key; excessive expiry; bad opening; or insufficient collateral. |
 | `401 Unauthorized` | Auth | Missing bearer token; expired or revoked token; invalid credentials on `POST /auth/token`. |
 | `403 Forbidden` | Ownership | The trading-key signature did not verify over the canonical body, or the trading key does not own the order being cancelled or modified. |
 | `404 Not Found` | Missing resource | No such order (already filled / expired / cancelled), batch, or instrument. |

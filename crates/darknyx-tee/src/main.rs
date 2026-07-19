@@ -32,7 +32,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use darknyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
+use darknyx_tee::matcher::{
+    DriverConfig, MatcherDriver, MatcherState, TradingGate, DEFAULT_MAX_ORACLE_AGE_MS,
+};
 use darknyx_tee::merkle::{MerkleSync, MerkleSyncConfig};
 use darknyx_tee::oracle::cache::OracleCache;
 use darknyx_tee::oracle::hermes::HermesClient;
@@ -46,7 +48,7 @@ use darknyx_tee::settle::worker::SettleWorkerCtx;
 use darknyx_tee::settle::{
     alt_account, SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState,
 };
-use darknyx_tee::solana_rpc::SolanaRpcClient;
+use darknyx_tee::solana_rpc::{Commitment, SolanaRpcClient};
 use darkpool_matcher::config::MatchConfig;
 use darkpool_matcher::match_result::RunBatchOutput;
 use dstack_sdk::dstack_client::DstackClient;
@@ -99,9 +101,10 @@ async fn main() -> Result<()> {
     // devnet, one signature satisfies both the `tee_authority`
     // gate AND the tx-fee responsibility.
     #[allow(clippy::type_complexity)]
-    let (api_state, tee_signer_pubkey, settle_signer): (
+    let (api_state, tee_signer_pubkey, tee_signer_pubkeys, settle_signer): (
         _,
         Option<String>,
+        Option<Vec<[u8; 32]>>,
         Option<Vec<(solana_keypair::Keypair, ed25519_dalek::SigningKey)>>,
     ) = match darknyx_tee::boot::probe_dstack().await {
         Ok(signer) => {
@@ -123,6 +126,8 @@ async fn main() -> Result<()> {
             let signers = darknyx_tee::keys::ed25519::derive_set(&client, cfg.num_trees).await?;
             let shard_pubkeys: Vec<String> =
                 signers.iter().map(|s| s.pubkey_base58.clone()).collect();
+            let shard_pubkey_bytes: Vec<[u8; 32]> =
+                signers.iter().map(|s| s.pubkey_bytes()).collect();
             // Bind the WHOLE settle-key set into the attestation report_data.
             let signer_set_hash = darknyx_tee::keys::ed25519::signer_set_hash(&signers);
             tracing::info!(
@@ -168,6 +173,7 @@ async fn main() -> Result<()> {
                 .with_shard_pubkeys(shard_pubkeys)
                 .with_signer_set_hash(signer_set_hash),
                 Some(signer_pubkey),
+                Some(shard_pubkey_bytes),
                 settle_signer,
             )
         }
@@ -183,86 +189,48 @@ async fn main() -> Result<()> {
                  entering EXPLICIT LOCAL TEST MODE with public fixture credentials. \
                  Never set this flag in a CVM."
             );
-            (darknyx_tee::api::ApiState::for_tests(), None, None)
+            (darknyx_tee::api::ApiState::for_tests(), None, None, None)
         }
     };
     let boot_session_id = api_state.boot_session_id;
+    let trading_gate = api_state.trading_gate.clone();
 
     // ─── 2. Shared runtime ───────────────────────────────────────────
     // Build the match config up front so its mints can seed the
     // shared MatcherState — the order intake needs them to verify
     // each input-note opening against the signed commitment (4g.7a).
     let mut match_config = dev_match_config(&cfg);
-    // Adopt authoritative governance at boot:
-    //   * `VaultConfig.fee_rate_bps`: the batched-settle handler enforces a fee
-    //     FLOOR against it (commit d86a3be); charging a LOWER rate than the
-    //     chain expects rejects every settle, so adopt the authoritative
-    //     on-chain rate (overriding DARKNYX_TEE_FEE_RATE_BPS) and warn on drift.
-    //   * mint-pair `MarketConfig`: identity, price scale, tick, minimum size,
-    //     circuit breaker, decimals, and the enabled kill switch. A live re-poll
-    //     is intentionally deferred; VALID_MATCH_BATCH v3 will also bind this
-    //     account into every proof.
-    // Best-effort + real-boot only (explicit simulator test mode has no live cluster).
-    if tee_signer_pubkey.is_some() {
-        match read_on_chain_vault_config(&cfg).await {
-            Ok(Some(oc)) => {
-                if oc.fee_rate_bps != match_config.fee_rate_bps {
-                    tracing::warn!(
-                        env_fee_rate_bps = match_config.fee_rate_bps,
-                        on_chain_fee_rate_bps = oc.fee_rate_bps,
-                        "DARKNYX_TEE_FEE_RATE_BPS disagrees with on-chain VaultConfig.fee_rate_bps; \
-                         adopting the on-chain rate so the settle fee FLOOR is never violated"
-                    );
-                }
-                match_config.fee_rate_bps = oc.fee_rate_bps;
-            }
-            Ok(None) => tracing::warn!(
-                env_fee_rate_bps = match_config.fee_rate_bps,
-                "VaultConfig not found on-chain; using DARKNYX_TEE_* env/dev config"
-            ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                env_fee_rate_bps = match_config.fee_rate_bps,
-                "could not read on-chain VaultConfig; using DARKNYX_TEE_* env/dev config"
-            ),
+    // In a real-settlement boot, finalized on-chain governance is mandatory.
+    // VALID_MATCH_BATCH already binds the mint pair, price scale, exact fee, and
+    // protocol owner; using env fallbacks for any of them would make every proof
+    // fail. Tick/min/breaker remain TEE policy, but come from the same governed
+    // snapshot. Placeholder-mint loadgen mode is deliberately settlement-disabled.
+    let governance_snapshot = if tee_signer_pubkey.is_some() && cfg.governed_market {
+        let snapshot = read_governance_snapshot(&cfg)
+            .await
+            .context("finalized on-chain governance unavailable; refusing real-market startup")?;
+        apply_governance_snapshot(&mut match_config, &snapshot);
+
+        let derived_keys = tee_signer_pubkeys
+            .as_deref()
+            .expect("real signer boot carries the derived key set");
+        if !snapshot.authorizes_exact_signer_set(derived_keys) {
+            trading_gate.pause();
+            tracing::warn!(
+                "derived TEE signer set is not the finalized on-chain authorized set; \
+                 trading starts PAUSED until governance rotation completes"
+            );
         }
-        match read_on_chain_market_config(&cfg).await {
-            Ok(Some(market)) => {
-                if !market.enabled {
-                    anyhow::bail!("on-chain MarketConfig is disabled; refusing to start trading");
-                }
-                adopt_on_chain_param(
-                    &mut match_config.price_scale,
-                    market.price_scale,
-                    "price_scale",
-                );
-                adopt_on_chain_param(&mut match_config.tick_size, market.tick_size, "tick_size");
-                adopt_on_chain_param(
-                    &mut match_config.min_order_size,
-                    market.min_order_size,
-                    "min_order_size",
-                );
-                adopt_on_chain_param(
-                    &mut match_config.circuit_breaker_bps,
-                    market.circuit_breaker_bps,
-                    "circuit_breaker_bps",
-                );
-                tracing::info!(
-                    base_decimals = market.base_decimals,
-                    quote_decimals = market.quote_decimals,
-                    price_scale = market.price_scale,
-                    "adopted enabled on-chain MarketConfig"
-                );
-            }
-            Ok(None) => tracing::warn!(
-                "MarketConfig not found or malformed; using DARKNYX_TEE_* env/dev market config"
-            ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                "could not read on-chain MarketConfig; using DARKNYX_TEE_* env/dev market config"
-            ),
+        Some(snapshot)
+    } else {
+        if tee_signer_pubkey.is_some() {
+            tracing::warn!(
+                "placeholder-mint loadgen mode: finalized MarketConfig is not required and \
+                 the on-chain settle pipeline is DISABLED"
+            );
         }
-    }
+        None
+    };
     tracing::info!(
         fee_rate_bps = match_config.fee_rate_bps,
         protocol_owner_set = (match_config.protocol_owner_commitment != [0u8; 32]),
@@ -283,9 +251,8 @@ async fn main() -> Result<()> {
     let settle_base_mint = match_config.base_mint;
     let settle_quote_mint = match_config.quote_mint;
     let settle_protocol_owner = match_config.protocol_owner_commitment;
-    // The reconciled fee rate (on-chain VaultConfig value via #11a) the settle
-    // driver feeds the circuit fee-floor public input — must equal what the
-    // matcher charges.
+    // The finalized fee rate the settle driver feeds the circuit's exact-fee
+    // public input — must equal what the matcher charges.
     let settle_fee_rate_bps = match_config.fee_rate_bps as u64;
     let settle_price_scale = match_config.price_scale;
     // Also for the /instruments metadata (captured before the move).
@@ -318,6 +285,7 @@ async fn main() -> Result<()> {
         oracle: oracle.clone(),
         current_slot: current_slot.clone(),
         matches_tx,
+        trading_gate: trading_gate.clone(),
         cfg: DriverConfig {
             match_config,
             // First configured feed drives this single-market
@@ -368,44 +336,58 @@ async fn main() -> Result<()> {
     // Missing any dependency (explicit simulator test mode, prover zkey absent in a
     // local dev run) → enqueue-only, logged below.
     let settle_state = Arc::new(RwLock::new(SettleSchedulerState::default()));
-    let settle_driver: Option<SettleDriver> = match settle_signer {
-        Some(shard_signers) => {
-            // Split the K (keypair, signing_key) pairs into the two parallel
-            // Vecs the worker holds (tee_keypairs[j] pairs with signing_keys[j]).
-            let (tee_keypairs, signing_keys): (Vec<_>, Vec<_>) = shard_signers.into_iter().unzip();
-            build_settle_driver(
-                &cfg,
-                tee_keypairs,
-                signing_keys,
-                settle_state.clone(),
-                matcher_state.clone(),
-                current_priority_fee.clone(),
-                settle_base_mint,
-                settle_quote_mint,
-                settle_protocol_owner,
-                settle_fee_rate_bps,
-                settle_price_scale,
-                boot_session_id,
-            )
-            .map(|d| {
-                tracing::info!(
-                    tee_signer = ?tee_signer_pubkey,
-                    "settle driver constructed — live settle pipeline ENABLED"
+    let settle_driver: Option<SettleDriver> = if !cfg.governed_market {
+        None
+    } else {
+        match settle_signer {
+            Some(shard_signers) => {
+                // Split the K (keypair, signing_key) pairs into the two parallel
+                // Vecs the worker holds (tee_keypairs[j] pairs with signing_keys[j]).
+                let (tee_keypairs, signing_keys): (Vec<_>, Vec<_>) =
+                    shard_signers.into_iter().unzip();
+                let driver = build_settle_driver(
+                    &cfg,
+                    tee_keypairs,
+                    signing_keys,
+                    settle_state.clone(),
+                    matcher_state.clone(),
+                    current_priority_fee.clone(),
+                    settle_base_mint,
+                    settle_quote_mint,
+                    settle_protocol_owner,
+                    settle_fee_rate_bps,
+                    settle_price_scale,
+                    boot_session_id,
                 );
-                Some(d)
-            })
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "settle driver unavailable; scheduler is enqueue-only");
+                driver
+                    .map(|d| {
+                        tracing::info!(
+                            tee_signer = ?tee_signer_pubkey,
+                            "settle driver constructed — live settle pipeline ENABLED"
+                        );
+                        Some(d)
+                    })
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            error = %e,
+                            "settle driver unavailable; scheduler is enqueue-only"
+                        );
+                        None
+                    })
+            }
+            None => {
+                tracing::warn!(
+                    "no TEE signer derived (explicit local test mode); settle pipeline disabled"
+                );
                 None
-            })
-        }
-        None => {
-            tracing::warn!(
-                "no TEE signer derived (explicit local test mode); settle pipeline disabled"
-            );
-            None
+            }
         }
     };
+    let settle_enabled = settle_driver.is_some();
+    if cfg.governed_market && tee_signer_pubkey.is_some() && !settle_enabled {
+        trading_gate.pause();
+        tracing::warn!("governed real-market settle driver is unavailable; trading starts PAUSED");
+    }
     let _scheduler_handle =
         SettleScheduler::spawn_with_settle(matches_rx, settle_state.clone(), settle_driver);
 
@@ -436,9 +418,27 @@ async fn main() -> Result<()> {
     let api_state = api_state
         .with_matcher_runtime(matcher_state, current_slot, oracle.clone())
         .with_settle_state(settle_state)
+        .with_settle_enabled(settle_enabled)
         .with_instruments(instruments);
 
     let api_state = Arc::new(api_state);
+
+    // U-09: a real-settlement CVM re-reads both governance accounts at finalized
+    // commitment every minute. Any RPC/parse failure, parameter drift, disabled
+    // market, or signer-set mismatch pauses NEW trading and matching. Cancels and
+    // settlement reconciliation keep running. Parameter changes require a restart
+    // so every immutable matcher/prover/settler snapshot is adopted atomically;
+    // a signer rotation can resume in place once the derived set is authorized.
+    let _governance_monitor = match (governance_snapshot, tee_signer_pubkeys) {
+        (Some(expected), Some(derived_keys)) => Some(spawn_governance_monitor(
+            cfg.clone(),
+            expected,
+            derived_keys,
+            settle_enabled,
+            trading_gate,
+        )),
+        _ => None,
+    };
 
     // ─── 7b. Spawn the Merkle mirror sync (Phase 2b) ──────────────────
     // Cold-boots the mirror from the vault program's history, then
@@ -825,11 +825,10 @@ fn build_settle_driver(
     })
 }
 
-/// Hardcoded dev `MatchConfig`. Production reads this from the
-/// on-chain `MarketConfig` PDA per mint pair — a separate Solana
-/// RPC poller (later PR) keeps it in sync. The numbers here are
-/// the same ones the litesvm regression tests use, so dev matches
-/// reproduce on devnet without surprises:
+/// Dev/loadgen `MatchConfig` seed. A governed real-market boot replaces every
+/// proof- or policy-relevant value from a finalized on-chain snapshot before
+/// the matcher starts. The numbers here are the same ones the litesvm regression
+/// tests use, so explicit simulator/loadgen matches reproduce without surprises:
 ///
 ///   - `tick_size = 1`            (no per-market tick rounding)
 ///   - `min_order_size = 0`       (accept any size in dev)
@@ -859,20 +858,103 @@ fn dev_match_config(cfg: &darknyx_tee::config::Config) -> MatchConfig {
     }
 }
 
-/// The global on-chain `VaultConfig` fields the TEE adopts at boot.
-struct OnChainVaultCfg {
-    fee_rate_bps: u16,
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GovernanceSnapshot {
+    vault: darknyx_tee::solana_rpc::vault_config::OnChainVaultConfig,
+    market: darknyx_tee::solana_rpc::market_config::OnChainMarketConfig,
 }
 
-/// Read the on-chain global fee configuration. Returns `Ok(Some(..))` on a
-/// successful read, `Ok(None)` if
-/// the config account isn't present, or an `Err` on an RPC/transport failure;
-/// callers treat all three as best-effort and fall back to the env/dev config.
+impl GovernanceSnapshot {
+    fn validate_for_market(
+        &self,
+        base_mint: &[u8; 32],
+        quote_mint: &[u8; 32],
+        num_trees: u8,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.vault.fee_rate_bps <= 10_000,
+            "VaultConfig fee_rate_bps exceeds 10_000"
+        );
+        darkpool_crypto::fr_from_be_bytes(&self.vault.protocol_owner_commitment).context(
+            "VaultConfig protocol_owner_commitment is not a canonical BN254 field element",
+        )?;
+        anyhow::ensure!(
+            self.vault.fee_rate_bps == 0 || self.vault.protocol_owner_commitment != [0u8; 32],
+            "VaultConfig protocol_owner_commitment is zero while fees are enabled"
+        );
+        anyhow::ensure!(
+            self.vault.num_trees == num_trees,
+            "VaultConfig num_trees {} does not match DARKNYX_TEE_NUM_TREES {}",
+            self.vault.num_trees,
+            num_trees
+        );
+        anyhow::ensure!(
+            self.vault.num_tee_keys == self.vault.num_trees,
+            "VaultConfig num_tee_keys {} does not equal num_trees {}",
+            self.vault.num_tee_keys,
+            self.vault.num_trees
+        );
+        anyhow::ensure!(self.market.enabled, "MarketConfig is disabled");
+        anyhow::ensure!(
+            self.market.base_mint == *base_mint && self.market.quote_mint == *quote_mint,
+            "MarketConfig mint pair does not match configured mints"
+        );
+        anyhow::ensure!(
+            self.market.price_scale > 0,
+            "MarketConfig price_scale is zero"
+        );
+        anyhow::ensure!(self.market.tick_size > 0, "MarketConfig tick_size is zero");
+        anyhow::ensure!(
+            self.market.min_order_size > 0,
+            "MarketConfig min_order_size is zero"
+        );
+        anyhow::ensure!(
+            (1..=10_000).contains(&self.market.circuit_breaker_bps),
+            "MarketConfig circuit_breaker_bps is outside 1..=10_000"
+        );
+        Ok(())
+    }
+
+    fn authorizes_exact_signer_set(&self, derived_keys: &[[u8; 32]]) -> bool {
+        let active = self.vault.num_tee_keys as usize;
+        active == derived_keys.len()
+            && self.vault.tee_pubkeys[..active] == derived_keys[..]
+            && self.vault.num_trees as usize == derived_keys.len()
+    }
+
+    /// Values captured into immutable matcher/prover/settler state. Any drift
+    /// requires an atomic process restart rather than a partial hot reload.
+    fn runtime_params_match(&self, expected: &Self) -> bool {
+        self.vault.protocol_owner_commitment == expected.vault.protocol_owner_commitment
+            && self.vault.fee_rate_bps == expected.vault.fee_rate_bps
+            && self.vault.num_trees == expected.vault.num_trees
+            && self.market == expected.market
+    }
+
+    fn permits_trading(
+        &self,
+        expected: &Self,
+        derived_keys: &[[u8; 32]],
+        settle_enabled: bool,
+    ) -> bool {
+        settle_enabled
+            && self.runtime_params_match(expected)
+            && self.authorizes_exact_signer_set(derived_keys)
+    }
+}
+
+const GOVERNANCE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Read the finalized global VaultConfig account. Missing, wrong-owner, or
+/// malformed accounts are returned as `None`; governed boot promotes that to a
+/// fatal error and the live monitor promotes it to a trading pause.
 async fn read_on_chain_vault_config(
-    cfg: &darknyx_tee::config::Config,
-) -> Result<Option<OnChainVaultCfg>, darknyx_tee::solana_rpc::RpcError> {
+    rpc: &SolanaRpcClient,
+) -> Result<
+    Option<darknyx_tee::solana_rpc::vault_config::OnChainVaultConfig>,
+    darknyx_tee::solana_rpc::RpcError,
+> {
     use darknyx_tee::solana_rpc::vault_config as vc;
-    let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
     let (config_pda, _) = darknyx_tee::settle::vault::vault_config_pda();
     let Some(acc) = rpc.get_account_info(&config_pda).await? else {
         return Ok(None);
@@ -880,15 +962,12 @@ async fn read_on_chain_vault_config(
     if acc.owner != darknyx_tee::settle::vault::vault_program_id() {
         return Ok(None);
     }
-    // A parseable fee_rate_bps ⇒ a present, well-formed VaultConfig.
-    let Some(fee_rate_bps) = vc::parse_fee_rate_bps(&acc.data) else {
-        return Ok(None);
-    };
-    Ok(Some(OnChainVaultCfg { fee_rate_bps }))
+    Ok(vc::parse_vault_config(&acc.data))
 }
 
 async fn read_on_chain_market_config(
     cfg: &darknyx_tee::config::Config,
+    rpc: &SolanaRpcClient,
 ) -> Result<
     Option<darknyx_tee::solana_rpc::market_config::OnChainMarketConfig>,
     darknyx_tee::solana_rpc::RpcError,
@@ -896,7 +975,6 @@ async fn read_on_chain_market_config(
     use darknyx_tee::settle::vault::{market_config_pda, vault_program_id};
     use darknyx_tee::solana_rpc::market_config::parse_market_config;
 
-    let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?;
     let (market_pda, _) = market_config_pda(&cfg.base_mint, &cfg.quote_mint);
     let Some(account) = rpc.get_account_info(&market_pda).await? else {
         return Ok(None);
@@ -904,19 +982,111 @@ async fn read_on_chain_market_config(
     if account.owner != vault_program_id() {
         return Ok(None);
     }
-    let Some(market) = parse_market_config(&account.data) else {
-        return Ok(None);
-    };
-    if market.base_mint != cfg.base_mint
-        || market.quote_mint != cfg.quote_mint
-        || market.price_scale == 0
-        || market.tick_size == 0
-        || market.min_order_size == 0
-        || !(1..=10_000).contains(&market.circuit_breaker_bps)
-    {
-        return Ok(None);
+    Ok(parse_market_config(&account.data))
+}
+
+async fn read_governance_snapshot(
+    cfg: &darknyx_tee::config::Config,
+) -> anyhow::Result<GovernanceSnapshot> {
+    let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?.with_commitment(Commitment::Finalized);
+    let vault = read_on_chain_vault_config(&rpc)
+        .await?
+        .context("VaultConfig missing, wrong-owner, or malformed")?;
+    let market = read_on_chain_market_config(cfg, &rpc)
+        .await?
+        .context("MarketConfig missing, wrong-owner, or malformed")?;
+
+    let snapshot = GovernanceSnapshot { vault, market };
+    snapshot.validate_for_market(&cfg.base_mint, &cfg.quote_mint, cfg.num_trees)?;
+    Ok(snapshot)
+}
+
+fn apply_governance_snapshot(config: &mut MatchConfig, snapshot: &GovernanceSnapshot) {
+    if config.fee_rate_bps != snapshot.vault.fee_rate_bps {
+        tracing::info!(
+            env_value = config.fee_rate_bps,
+            on_chain_value = snapshot.vault.fee_rate_bps,
+            "adopting finalized VaultConfig fee_rate_bps"
+        );
     }
-    Ok(Some(market))
+    if config.protocol_owner_commitment != snapshot.vault.protocol_owner_commitment {
+        tracing::info!("adopting finalized VaultConfig protocol_owner_commitment");
+    }
+    config.fee_rate_bps = snapshot.vault.fee_rate_bps;
+    config.protocol_owner_commitment = snapshot.vault.protocol_owner_commitment;
+    config.base_mint = snapshot.market.base_mint;
+    config.quote_mint = snapshot.market.quote_mint;
+    adopt_on_chain_param(
+        &mut config.price_scale,
+        snapshot.market.price_scale,
+        "price_scale",
+    );
+    adopt_on_chain_param(
+        &mut config.tick_size,
+        snapshot.market.tick_size,
+        "tick_size",
+    );
+    adopt_on_chain_param(
+        &mut config.min_order_size,
+        snapshot.market.min_order_size,
+        "min_order_size",
+    );
+    adopt_on_chain_param(
+        &mut config.circuit_breaker_bps,
+        snapshot.market.circuit_breaker_bps,
+        "circuit_breaker_bps",
+    );
+    tracing::info!(
+        base_decimals = snapshot.market.base_decimals,
+        quote_decimals = snapshot.market.quote_decimals,
+        "adopted finalized enabled MarketConfig"
+    );
+}
+
+fn spawn_governance_monitor(
+    cfg: darknyx_tee::config::Config,
+    expected: GovernanceSnapshot,
+    derived_keys: Vec<[u8; 32]>,
+    settle_enabled: bool,
+    trading_gate: TradingGate,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(GOVERNANCE_REFRESH_INTERVAL).await;
+            match read_governance_snapshot(&cfg).await {
+                Ok(current) => {
+                    let params_match = current.runtime_params_match(&expected);
+                    let signers_match = current.authorizes_exact_signer_set(&derived_keys);
+                    if current.permits_trading(&expected, &derived_keys, settle_enabled) {
+                        if trading_gate.resume() {
+                            tracing::info!(
+                                "finalized governance matches the boot snapshot and signer set; \
+                                 trading RESUMED"
+                            );
+                        }
+                    } else {
+                        let transitioned = trading_gate.pause();
+                        tracing::warn!(
+                            params_match,
+                            signers_match,
+                            settle_enabled,
+                            newly_paused = transitioned,
+                            "finalized governance/runtime mismatch; trading PAUSED (restart after \
+                             parameter changes, or complete the signer rotation)"
+                        );
+                    }
+                }
+                Err(error) => {
+                    let transitioned = trading_gate.pause();
+                    tracing::warn!(
+                        error = %error,
+                        newly_paused = transitioned,
+                        "finalized governance refresh failed; trading PAUSED"
+                    );
+                }
+            }
+        }
+    })
 }
 
 /// Adopt a validated on-chain matcher parameter over the boot/env default,
@@ -932,4 +1102,116 @@ fn adopt_on_chain_param(field: &mut u64, on_chain: u64, name: &'static str) {
         "adopting on-chain matcher param over env/dev default"
     );
     *field = on_chain;
+}
+
+#[cfg(test)]
+mod governance_tests {
+    use super::*;
+    use darknyx_tee::solana_rpc::market_config::OnChainMarketConfig;
+    use darknyx_tee::solana_rpc::vault_config::OnChainVaultConfig;
+
+    fn snapshot() -> GovernanceSnapshot {
+        let mut tee_pubkeys = [[0u8; 32]; 16];
+        tee_pubkeys[0] = [0x11; 32];
+        tee_pubkeys[1] = [0x22; 32];
+        GovernanceSnapshot {
+            vault: OnChainVaultConfig {
+                tee_pubkeys,
+                protocol_owner_commitment: [0x03; 32],
+                fee_rate_bps: 30,
+                num_tee_keys: 2,
+                num_trees: 2,
+            },
+            market: OnChainMarketConfig {
+                base_mint: [0x04; 32],
+                quote_mint: [0x05; 32],
+                price_scale: 100_000_000,
+                tick_size: 10,
+                min_order_size: 1_000,
+                circuit_breaker_bps: 500,
+                base_decimals: 9,
+                quote_decimals: 6,
+                enabled: true,
+            },
+        }
+    }
+
+    #[test]
+    fn governance_snapshot_separates_runtime_params_from_signer_rotation() {
+        let expected = snapshot();
+        assert!(expected.authorizes_exact_signer_set(&[[0x11; 32], [0x22; 32]]));
+
+        let mut rotated = expected.clone();
+        rotated.vault.tee_pubkeys[1] = [0x33; 32];
+        assert!(rotated.runtime_params_match(&expected));
+        assert!(!rotated.authorizes_exact_signer_set(&[[0x11; 32], [0x22; 32]]));
+
+        let mut changed = expected.clone();
+        changed.vault.fee_rate_bps = 31;
+        assert!(!changed.runtime_params_match(&expected));
+
+        assert!(expected.permits_trading(&expected, &[[0x11; 32], [0x22; 32]], true));
+        assert!(!expected.permits_trading(&expected, &[[0x11; 32], [0x22; 32]], false));
+        assert!(!rotated.permits_trading(&expected, &[[0x11; 32], [0x22; 32]], true));
+        assert!(!changed.permits_trading(&expected, &[[0x11; 32], [0x22; 32]], true));
+    }
+
+    #[test]
+    fn governance_validation_rejects_unsettleable_fee_owner_and_disabled_market() {
+        let expected = snapshot();
+        assert!(expected
+            .validate_for_market(&expected.market.base_mint, &expected.market.quote_mint, 2)
+            .is_ok());
+
+        let mut zero_owner_with_fees = expected.clone();
+        zero_owner_with_fees.vault.protocol_owner_commitment = [0u8; 32];
+        assert!(zero_owner_with_fees
+            .validate_for_market(&expected.market.base_mint, &expected.market.quote_mint, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("owner_commitment is zero"));
+        zero_owner_with_fees.vault.fee_rate_bps = 0;
+        assert!(zero_owner_with_fees
+            .validate_for_market(&expected.market.base_mint, &expected.market.quote_mint, 2)
+            .is_ok());
+
+        let mut disabled = expected.clone();
+        disabled.market.enabled = false;
+        assert!(disabled
+            .validate_for_market(&expected.market.base_mint, &expected.market.quote_mint, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("disabled"));
+    }
+
+    #[test]
+    fn finalized_snapshot_overrides_every_immutable_match_parameter() {
+        let expected = snapshot();
+        let mut config = MatchConfig {
+            base_mint: [0; 32],
+            quote_mint: [0; 32],
+            price_scale: 1,
+            tick_size: 1,
+            min_order_size: 1,
+            circuit_breaker_bps: 1,
+            batch_ms: 2_000,
+            fee_rate_bps: 0,
+            protocol_owner_commitment: [0; 32],
+        };
+        apply_governance_snapshot(&mut config, &expected);
+        assert_eq!(config.base_mint, expected.market.base_mint);
+        assert_eq!(config.quote_mint, expected.market.quote_mint);
+        assert_eq!(config.price_scale, expected.market.price_scale);
+        assert_eq!(config.tick_size, expected.market.tick_size);
+        assert_eq!(config.min_order_size, expected.market.min_order_size);
+        assert_eq!(
+            config.circuit_breaker_bps,
+            expected.market.circuit_breaker_bps
+        );
+        assert_eq!(config.fee_rate_bps, expected.vault.fee_rate_bps);
+        assert_eq!(
+            config.protocol_owner_commitment,
+            expected.vault.protocol_owner_commitment
+        );
+    }
 }

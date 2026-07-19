@@ -44,6 +44,7 @@ use crate::oracle::cache::OracleCache;
 
 use super::book::OrderBook;
 use super::fills::FillMemo;
+use super::gate::TradingGate;
 use super::lifecycle::{OrderLifecycleEvent, OrderLifecycleKind};
 use super::openings::{NoteOpening, OrderOpening};
 
@@ -567,8 +568,8 @@ pub struct DriverConfig {
     /// `MatchConfig` passed to `darkpool_matcher::run_batch(...)`.
     /// Constructed from the on-chain `MarketConfig` + the v2
     /// `VaultConfig.fee_rate_bps` + `protocol_owner_commitment`
-    /// snapshot at startup. Bumping this requires a daemon
-    /// restart (later PR: hot-reload from on-chain).
+    /// snapshot at startup. The finalized governance monitor pauses trading on
+    /// drift; a process restart atomically adopts a changed parameter set.
     pub match_config: MatchConfig,
     /// Pyth feed id for this market — the matcher reads
     /// `oracle_cache.snapshot(feed_id, ...)` at each tick.
@@ -604,6 +605,9 @@ pub struct MatcherDriver {
     pub oracle: OracleCache,
     pub current_slot: Arc<AtomicU64>,
     pub matches_tx: mpsc::Sender<RunBatchOutput>,
+    /// Shared fail-closed governance gate. A paused tick is a no-op; existing
+    /// settlement jobs continue in the independent scheduler.
+    pub trading_gate: TradingGate,
     pub cfg: DriverConfig,
 }
 
@@ -638,6 +642,10 @@ impl MatcherDriver {
     /// Run one matching cycle. Public for tests that want to drive
     /// the ticker manually instead of advancing tokio time.
     pub async fn tick(&self) -> Result<(), anyhow::Error> {
+        if !self.trading_gate.is_open() {
+            tracing::debug!("trading paused — skipping matching tick");
+            return Ok(());
+        }
         let now_slot = self.current_slot.load(Ordering::Relaxed);
 
         // Read the oracle. If it's missing or too stale, log + skip
@@ -702,10 +710,10 @@ impl MatcherDriver {
                     // Production behaviour: log + stop paging — one bad
                     // order shouldn't kill the daemon. The most common
                     // failure today is `MatchError::Internal("Poseidon
-                    // failed for ... change note")` — usually an order
-                    // with a non-BN254-Fr-safe `user_commitment` that
-                    // slipped past intake. Future PR adds an intake-time
-                    // check; for now this is the catch-all.
+                    // failed for ... change note")` — usually corrupted
+                    // internal state or an order that bypassed intake. Intake
+                    // already rejects non-BN254-Fr-safe commitments; this is the
+                    // defense-in-depth catch-all.
                     tracing::warn!(
                         error = %e,
                         orders_in_snapshot = prepared.snapshot_len(),
@@ -715,6 +723,14 @@ impl MatcherDriver {
                     break;
                 }
             };
+
+            // Governance may have paused while the pure page calculation was
+            // running. Recheck immediately before reserving/mutating the book so
+            // a detected config transition cannot create a new settle batch.
+            if !self.trading_gate.is_open() {
+                tracing::warn!("trading paused during matcher tick; discarding computed page");
+                break;
+            }
 
             // Prepare proof-bound continuation commitments, apply only updates
             // unrelated to a real match (for example FOK cancellation), and

@@ -419,11 +419,12 @@ pub fn tee_forced_settle_batched_handler(
             VaultError::NoteNotLockedForOrder
         );
 
-        // Conservation + the fee FLOOR are now enforced IN-CIRCUIT
+        // Conservation + the exact governed fee are now enforced IN-CIRCUIT
         // (amount-privacy, P1a/P1b): VALID_MATCH_BATCH range-checks every amount
         // and proves `a_amount === quote+change+fee` (+ the seller leg) and
-        // `(fee+1)*10000 > notional*rate` over PRIVATE amounts, with fee_rate_bps
-        // bound to this config as a public input. So the chain no longer
+        // both fee inequalities over PRIVATE amounts, with fee_rate_bps bound to
+        // this config as a public input. Together they prove
+        // `fee == floor(notional*rate/10000)`. So the chain no longer
         // re-derives or re-checks any of it from plaintext — and the amounts
         // leave the payload entirely (P3b). The note commitments + the batch
         // proof bind the values; `NoteLock.amount` is no longer consulted.

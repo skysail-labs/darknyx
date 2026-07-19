@@ -468,6 +468,67 @@ async fn place_rejects_zero_price_bid() {
 }
 
 #[tokio::test]
+async fn place_enforces_governed_tick_and_keeps_zero_limit_market_asks() {
+    let market = InstrumentInfo {
+        symbol: "SOL-USDC".to_string(),
+        base_mint: [0u8; 32],
+        quote_mint: [0u8; 32],
+        tick_size: 10,
+        min_order_size: 0,
+        oracle_feed_id: "feed".to_string(),
+    };
+
+    let app = app_from(Arc::new(
+        ApiState::for_tests().with_instruments(vec![market.clone()]),
+    ));
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let mut off_tick = PlaceOrderBuilder::new();
+    off_tick.price_limit += 1;
+    let resp = place(&app, &bearer, off_tick.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(read_json(resp).await["code"], 1009);
+
+    let app = app_from(Arc::new(
+        ApiState::for_tests().with_instruments(vec![market]),
+    ));
+    let mut market_ask = PlaceOrderBuilder::new();
+    market_ask.side = OrderSide::Ask;
+    market_ask.price_limit = 0;
+    let resp = place(&app, &bearer, market_ask.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn governance_pause_rejects_place_but_keeps_cancel_available() {
+    let state = state();
+    let app = app_from(state.clone());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let order = PlaceOrderBuilder::new();
+
+    let resp = place(&app, &bearer, order.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    assert!(state.trading_gate.pause());
+
+    let mut replacement = PlaceOrderBuilder::new();
+    replacement.order_id[15] = 2;
+    replacement.arrival_nonce = 2;
+    let resp = place(&app, &bearer, replacement.sign(&key)).await;
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(read_json(resp).await["code"], 5001);
+
+    let resp = cancel(
+        &app,
+        &bearer,
+        &hex::encode(order.order_id),
+        cancel_body(&key, order.order_id, 1),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn place_rejects_expiry_beyond_lock_ttl_cap() {
     // F-05: the settler stamps the note lock with the order's expiry_slot, and
     // the vault caps the lock window at MAX_LOCK_TTL_SLOTS. Intake rejects an
