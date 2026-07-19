@@ -1,9 +1,0 @@
-<svg width="240" height="240" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
-  <defs><clipPath id="lv"><rect x="0" y="0" width="120" height="66"></rect></clipPath></defs>
-  <g transform="translate(60, 30)">
-    <circle cx="60" cy="60" r="36" fill="#0a0a0d" clip-path="url(#lv)"></circle>
-    <rect x="18" y="66" width="84" height="4" fill="#0a0a0d"></rect>
-    <rect x="18" y="78" width="60" height="4" fill="#0a0a0d" opacity="0.5"></rect>
-  </g>
-  <text x="120" y="200" text-anchor="middle" fill="#0a0a0d" font-family="Space Grotesk, sans-serif" font-size="32" font-weight="600" letter-spacing="-1.1">darknyx</text>
-</svg>

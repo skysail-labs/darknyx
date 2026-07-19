@@ -57,10 +57,16 @@ in-TEE matcher)
 and `crates/darknyx-tee-loadgen/` (a host
 binary that load-tests the CVM's intake).
 
-> **Archived demo.** `apps/demo/` is historical and is not a product surface,
-> source of truth, or validation target. Do not propagate protocol, API,
-> circuit, SDK, or documentation changes into it unless the owner explicitly
-> asks to revive or remove that application.
+> **Public docs are generated — edit `docs/portal/` only.** `docs/portal/`
+> (Docusaurus-style Markdown) is the **source of truth** for the public
+> documentation portal. `docs/gitbook/` is an **auto-generated**
+> GitBook-compatible render of it, produced by
+> **`scripts/convert-portal-to-gitbook.py`** (fixes YAML frontmatter, rewrites
+> `:::` admonitions → `{% hint %}`, de-numbers slug links, and emits
+> `SUMMARY.md` / `README.md` / `.gitbook.yaml`). **Never hand-edit
+> `docs/gitbook/`** — it is wiped and rebuilt from `docs/portal/` on every run,
+> and GitBook git-sync writes UI edits back, so hand-edits diverge. After any
+> `docs/portal/` change, regenerate: `python3 scripts/convert-portal-to-gitbook.py`.
 
 **The note model (v2 / `inner_hash`).** Every note commitment AND its
 nullifier are anchored on a single amount-independent `inner_hash`:

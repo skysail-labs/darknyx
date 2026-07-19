@@ -41,9 +41,9 @@ image, and reset the development deployment.
 
 ## Historical exclusions
 
-Original audit reports, the security-remediation evidence ledger, the archived
-`apps/demo` application, the captured pre-cutover dstack event-log fixture, and
-the external `icicle-snark` submodule branch retain their historical spelling.
+Original audit reports, the security-remediation evidence ledger, the captured
+pre-cutover dstack event-log fixture, and the external `icicle-snark` submodule
+branch retain their historical spelling.
 They are evidence or external identifiers, not current product surfaces.
 `scripts/check-brand-namespace.sh` excludes only those locations and rejects the
 former prefix everywhere else.

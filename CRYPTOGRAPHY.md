@@ -628,10 +628,9 @@ witness in `O(n * depth)` (fine for ≤ 2^20 leaves).
 
 In production, an indexer service walks the vault's transaction history
 (`vault::deposit` + `vault::tee_forced_settle` ixs) and rebuilds the tree
-incrementally. The demo dapp at `apps/demo` does this in the browser via
-`getSignaturesForAddress` paging — see `apps/demo/src/lib/dapp/vault-leaf-history.ts`.
-(There's a long section in `apps/demo/ARCHITECTURE.md` titled "the no-indexer
-tax" explaining why this exists and what an indexer would change.)
+incrementally. A browser client can do the same directly by paging
+`getSignaturesForAddress` (the SDK's chain-history backfill follows this path),
+so the off-TEE indexer stays optional.
 
 ### Why depth 20
 

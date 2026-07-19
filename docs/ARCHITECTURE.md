@@ -430,9 +430,9 @@ settle-under-load is bounded by RPC capacity (Helius 429s), not the matcher.
 
 ### Building a production client (the recoverability contract)
 
-A production client (browser/mobile wallet, not the stale `apps/demo`) wires
-three SDK entry points so a user's notes survive a CVM redeploy and remain
-recoverable on a replacement device with an authenticated backup:
+A production client (browser/mobile wallet) wires three SDK entry points so a
+user's notes survive a CVM redeploy and remain recoverable on a replacement
+device with an authenticated backup:
 
 1. **Random seed + encrypted backup.** `resolveMasterSeed` generates a 64-byte
    CSPRNG seed and persists it through the client's secure `MasterSeedStorage`.
@@ -456,9 +456,8 @@ recoverable on a replacement device with an authenticated backup:
    and merges to a fixed point. Offline coverage lives in
    `packages/sdk/tests/cold-recovery.test.ts` and the cross-package indexer test.
 
-NOTE: `apps/demo` predates this and is not a production custody reference —
-treat the SDK functions above + that e2e test as the reference for the real
-client.
+NOTE: treat the SDK functions above + that e2e test as the reference for the
+real client's custody + recovery contract.
 
 ---
 

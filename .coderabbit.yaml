@@ -59,7 +59,6 @@ reviews:
     - "!dstack/**"
     - "!godarkdex_docs_md/**"
     - "!tdx_vs_snp_papers/**"
-    - "!apps/demo/**"
     - "!**/*.png"
     - "!**/*.jpeg"
     - "!**/*.jpg"

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Search tracked text only. Historical evidence, the archived demo and the
-# externally-owned icicle-snark branch name intentionally retain the former
-# namespace; docs/brand-namespace.md records why.
+# Search tracked text only. Historical evidence and the externally-owned
+# icicle-snark branch name intentionally retain the former namespace;
+# docs/brand-namespace.md records why.
 if matches=$(git grep -nI -P '\b(?:Nyx|NYX|nyx)' -- \
-  ':!apps/demo/**' \
   ':!audit_1/**' \
   ':!audit_2/**' \
   ':!docs/audit-*.md' \
