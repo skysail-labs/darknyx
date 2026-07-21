@@ -22,7 +22,11 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-66
+    # ⚠️ GPU-VALIDATION PIN (branch `perf/gpu-prove-prep`): this is the `-cuda`
+    # image (ENABLE_CUDA=1, ships the icicle CUDA backend) for the H200 parity
+    # run. It only boots usefully on a GPU CVM. REVERT to the plain CPU tag
+    # before merging to main, or CPU deploys will pull a CUDA image.
+    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-67-cuda
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -124,6 +128,15 @@ services:
       # backend against, so it's the steady-state prover, not an opt-in. Set
       # `DARKNYX_TEE_PROVER=ark` to A/B against the ark backend on the same image.
       DARKNYX_TEE_PROVER: ${DARKNYX_TEE_PROVER:-rapidsnark}
+
+      # ICICLE compute device when DARKNYX_TEE_PROVER=icicle: CPU (default) | CUDA.
+      # MUST be declared here: compose only forwards variables it names, so
+      # without this line a GPU deploy that sets DARKNYX_TEE_ICICLE_DEVICE=CUDA in
+      # the -e env file would NOT reach the container — icicle would silently fall
+      # back to its CPU default and a green settle would prove nothing about the
+      # GPU. CUDA additionally requires a `-cuda` image (built ENABLE_CUDA=1, ships
+      # the icicle CUDA backend under ICICLE_BACKEND_INSTALL_DIR) on a GPU CVM.
+      DARKNYX_TEE_ICICLE_DEVICE: ${DARKNYX_TEE_ICICLE_DEVICE:-CPU}
 
       # Witness generator: native (default) | wasm (wasmer). `native` spawns the
       # circom --c C++ generator shipped in the image — CVM-validated, byte-
