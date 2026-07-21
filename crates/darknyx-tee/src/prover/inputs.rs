@@ -1,16 +1,17 @@
 //! Snarkjs-format public-input vector assembly.
 //!
-//! VALID_MATCH_BATCH v3 has eight public inputs: root, governed fee/protocol
-//! values, the base/quote mint halves, and the governed fixed-point scale.
+//! VALID_MATCH_BATCH exposes two public inputs: the batch root and a governed
+//! config digest over fee/protocol values, mint halves, and price scale.
 //!
 //! `groth16-solana` expects each public input as a 32-byte big-
 //! endian field-element encoding — the same shape `bn254ToBE32`
 //! produces on the TS side.
 
 use super::leaf::{build_batch_merkle_paths, compute_batch_leaf, BatchMerklePaths, LeafError};
-use super::witness::{u64_to_be32, MatchSlotWitness};
+use super::witness::MatchSlotWitness;
+use darkpool_crypto::match_config_digest;
 
-/// Computed leaves + root + the eight-element public-input vector,
+/// Computed leaves + root + the two-element public-input vector,
 /// in the wire shape `groth16-solana` consumes.
 #[derive(Debug, Clone)]
 pub struct BatchPublicInputs {
@@ -18,6 +19,8 @@ pub struct BatchPublicInputs {
     pub leaves: Vec<[u8; 32]>,
     /// Merkle root over `leaves`. Equals `public_inputs_be[0]`.
     pub merkle_root: [u8; 32],
+    /// Poseidon8 digest of the authoritative protocol + market preimage.
+    pub config_digest: [u8; 32],
     /// The same single tree build retained as all fixed-width settlement paths.
     /// Consumers must not hash the levels again per match.
     pub merkle_paths: BatchMerklePaths,
@@ -43,8 +46,7 @@ pub fn build_batch_public_inputs(
     let merkle_root = merkle_paths.root();
     // Batch-level values (identical on every ACTIVE slot); read from slot 0.
     // Reject drift before the expensive witness/prove path. ORDER
-    // must match the circuit `main` public list:
-    // [root, fee_rate, owner, base_lo, base_hi, quote_lo, quote_hi, scale].
+    // must match the config-digest preimage order.
     let fee_rate_bps = slots[0].fee_rate_bps;
     let protocol_owner = slots[0].protocol_owner_commitment;
     let base_mint = slots[0].base_mint;
@@ -60,31 +62,20 @@ pub fn build_batch_public_inputs(
             return Err(LeafError::MixedBatchConfig { idx });
         }
     }
-    let (base_lo, base_hi) = mint_halves_be(&base_mint);
-    let (quote_lo, quote_hi) = mint_halves_be(&quote_mint);
+    let config_digest = match_config_digest(
+        fee_rate_bps,
+        &protocol_owner,
+        &base_mint,
+        &quote_mint,
+        price_scale,
+    )?;
     Ok(BatchPublicInputs {
         leaves,
         merkle_root,
+        config_digest,
         merkle_paths,
-        public_inputs_be: vec![
-            merkle_root,
-            u64_to_be32(fee_rate_bps),
-            protocol_owner,
-            base_lo,
-            base_hi,
-            quote_lo,
-            quote_hi,
-            u64_to_be32(price_scale),
-        ],
+        public_inputs_be: vec![merkle_root, config_digest],
     })
-}
-
-fn mint_halves_be(mint: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    let mut lo = [0u8; 32];
-    lo[16..].copy_from_slice(&mint[16..]);
-    let mut hi = [0u8; 32];
-    hi[16..].copy_from_slice(&mint[..16]);
-    (lo, hi)
 }
 
 #[cfg(test)]
@@ -109,17 +100,13 @@ mod tests {
         assert_eq!(pi.leaves.len(), 4);
         assert_eq!(pi.merkle_paths.root(), pi.merkle_root);
         assert_eq!(pi.merkle_paths.internal_hash_count(), 3);
-        assert_eq!(pi.public_inputs_be.len(), 8);
+        assert_eq!(pi.public_inputs_be.len(), 2);
         assert_eq!(pi.public_inputs_be[0], pi.merkle_root);
-        let mut fee_be = [0u8; 32];
-        fee_be[31] = 30;
-        assert_eq!(pi.public_inputs_be[1], fee_be);
-        assert_eq!(pi.public_inputs_be[2], owner);
-        assert_eq!(pi.public_inputs_be[3][16..], [0x22; 16]);
-        assert_eq!(pi.public_inputs_be[4][16..], [0x22; 16]);
-        assert_eq!(pi.public_inputs_be[5][16..], [0x33; 16]);
-        assert_eq!(pi.public_inputs_be[6][16..], [0x33; 16]);
-        assert_eq!(pi.public_inputs_be[7], u64_to_be32(100_000_000));
+        assert_eq!(pi.public_inputs_be[1], pi.config_digest);
+        assert_eq!(
+            pi.config_digest,
+            match_config_digest(30, &owner, &[0x22; 32], &[0x33; 32], 100_000_000).unwrap()
+        );
     }
 
     #[test]

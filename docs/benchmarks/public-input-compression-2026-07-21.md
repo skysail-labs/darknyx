@@ -2,9 +2,9 @@
 
 ## Decision
 
-Proceed with a production `VALID_MATCH_BATCH` 8→2 design in the next circuit
-change. Keep `batch_root` public and replace the seven governed fee/market
-fields with one on-chain-recomputed Poseidon digest. The measured CU saving is
+The production `VALID_MATCH_BATCH` statement now uses the measured 8→2 design.
+It keeps `batch_root` public and replaces the seven governed fee/market fields
+with one on-chain-recomputed Poseidon digest. The measured CU saving is
 material, while the full N=16 proof path showed no proving regression outside
 noise.
 
@@ -25,8 +25,9 @@ Recompute it from the authoritative accounts during verification.
   valid Groth16 proofs under litesvm, so the delta isolates public-input MSM and
   Poseidon syscall work.
 
-The benchmark domains `1001`/`1002` are measurement-local and are not reserved
-protocol tags.
+The benchmark domains `1001`/`1002` were measurement-local and are not reserved
+protocol tags. Production uses `DOMAIN_MATCH_CONFIG = 28` and the two-input
+layout only.
 
 ## Circuit and prover results
 
@@ -57,33 +58,27 @@ Raw recorded samples (milliseconds):
 | Root + config digest | 90,570 | 29,369 |
 | Full digest | 85,979 | 33,960 |
 
-The real unchanged `verify_match_batch` instruction remained exactly 132,519
-CU in the same feature-gated SBF build. Applying the isolated deltas projects:
+The unchanged eight-input `verify_match_batch` instruction measured 132,519 CU.
+After the production cutover, the real two-input instruction with its
+authoritative byte-level Poseidon8 recomputation measured 103,346 CU:
 
-| Production layout | Projected CU | Whole-instruction reduction |
+| Production layout | Measured/projected CU | Whole-instruction reduction |
 |---|---:|---:|
-| Current 8 inputs | 132,519 | — |
-| Proposed 2 inputs | ~103,150 | ~22.2% |
-| Full digest comparison | ~98,559 | ~25.6% |
+| Previous 8 inputs (measured) | 132,519 | — |
+| Production root + config digest (measured) | 103,346 | 29,173 / 22.01% |
+| Full digest comparison (projected) | ~98,755 | ~25.48% |
 
 The 2→1 step buys only another 4,591 CU. Keeping the batch root explicit is the
-better first implementation and auditability tradeoff.
+better implementation and auditability tradeoff. The production hash helper
+uses the same byte-level Poseidon path as the CU probe; routing its preimage
+through generic Ark field conversions was measured and rejected because that
+host-oriented conversion work is prohibitively expensive under SBF.
 
-## Reproduction
+## Artifact disposition
 
-```sh
-bash scripts/build-public-input-benchmarks.sh all
-BENCH_RUNS=7 node scripts/benchmark-public-input-compression.mjs
-cargo build-sbf --manifest-path programs/vault/Cargo.toml \
-  --features devnet-admin,public-input-bench
-cargo test -p vault --features devnet-admin,public-input-bench \
-  --test public_input_compression_bench -- --nocapture
-cargo test -p vault --features devnet-admin,public-input-bench \
-  --test match_batch_verify real_n16_proof_accepted_onchain_creates_marker \
-  -- --nocapture
-```
-
-Heavy benchmark R1CS/wasm/zkeys and generated timing output remain ignored
-under `target/public-input-benchmarks/`. Production circuits, zkeys, VKs,
-fixtures, instruction layouts, and deployed behavior are unchanged by this
-benchmark branch.
+The one-off benchmark circuits, feature-gated instruction, synthetic proofs,
+and scripts were deliberately removed after the decision. This report keeps
+the method and raw samples without leaving a second set of security-sensitive
+circuit/VK code in the repository. Production source, zkeys, verifier key,
+prover helpers, and the committed N=16 fixture move together to the two-input
+statement; the instruction wire layout and accounts do not change.

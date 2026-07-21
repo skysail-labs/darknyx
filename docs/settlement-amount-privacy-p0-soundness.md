@@ -5,8 +5,9 @@
 > previously-unbound terms (`buyer/seller_change_amt`, `buyer/seller_fee_amt`,
 > `a_amount`, `b_amount`), binds the two protocol fee notes in-circuit (closing the §7
 > over-mint gap), uses a commitment-only `Poseidon11` leaf with an activation bit,
-> derives output/fee inners in-circuit, and exposes 8 public inputs
-> `[root, fee_rate, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]`.
+> derives output/fee inners in-circuit, and exposes two public inputs (`root`
+> plus an on-chain-recomputed governed-config digest). The digest preimage is
+> fee rate, protocol owner, mint halves, and price scale.
 > "P1a in progress" / future
 > tense below is lineage only — see `match_batch.circom` + `CRYPTOGRAPHY.md` for the
 > as-built state. (The external circuit audit remains the one open pre-mainnet item.)

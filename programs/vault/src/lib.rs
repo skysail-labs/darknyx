@@ -21,8 +21,6 @@ pub mod zk;
 // and similar helper modules. Re-exporting each instruction submodule at crate
 // root lets the macro resolve everything correctly even though our source lives
 // under `programs/vault/src/instructions/`.
-#[cfg(feature = "public-input-bench")]
-pub use instructions::benchmark_public_inputs;
 pub use instructions::close_batch_validity_marker;
 #[cfg(feature = "devnet-admin")]
 pub use instructions::close_vault_config;
@@ -257,18 +255,6 @@ pub mod vault {
         proof: Groth16Proof,
     ) -> Result<()> {
         verify_match_batch::verify_match_batch_handler(ctx, merkle_root, expiry_slot, proof)
-    }
-
-    /// BENCHMARK-ONLY: isolate Groth16 public-input preparation and on-chain
-    /// Poseidon costs. This discriminator is absent unless the explicit
-    /// `public-input-bench` feature is enabled.
-    #[cfg(feature = "public-input-bench")]
-    pub fn benchmark_public_inputs(
-        ctx: Context<BenchmarkPublicInputs>,
-        public_input_count: u8,
-        proof: Groth16Proof,
-    ) -> Result<()> {
-        benchmark_public_inputs::benchmark_public_inputs_handler(ctx, public_input_count, proof)
     }
 
     /// v3.5 — atomic TEE-forced settlement. Reads the batch's

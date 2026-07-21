@@ -86,16 +86,14 @@ async fn prove_and_verify_n2_dummy_batch() {
     // 1. Prove (raw ark proof + public inputs).
     let (proof, public) = prover.prove_ark(&slots).expect("prove n2 dummy batch");
 
-    // 2. The v3 public vector has eight elements. Canonical dummy slots carry
-    // zero fee/owner/mints and price_scale=1.
-    assert_eq!(public.public_inputs_be.len(), 8);
+    // 2. The compressed public vector is [root, governed-config digest].
+    assert_eq!(public.public_inputs_be.len(), 2);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
-    assert_eq!(public.public_inputs_be[1], [0u8; 32]);
-    assert_eq!(public.public_inputs_be[2], [0u8; 32]);
-    assert!(public.public_inputs_be[3..7]
-        .iter()
-        .all(|value| *value == [0u8; 32]));
-    assert_eq!(public.public_inputs_be[7][31], 1);
+    assert_eq!(public.public_inputs_be[1], public.config_digest);
+    assert_eq!(
+        public.config_digest,
+        darkpool_crypto::match_config_digest(0, &[0u8; 32], &[0u8; 32], &[0u8; 32], 1).unwrap()
+    );
 
     // 3. Verify the proof against the zkey's own VK, in-ark. This
     //    is the load-bearing assertion: if input pushing, witness

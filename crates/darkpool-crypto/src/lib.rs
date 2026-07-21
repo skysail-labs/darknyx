@@ -25,6 +25,7 @@ pub mod field;
 pub mod fill_encryption;
 #[cfg(not(target_os = "solana"))]
 pub mod keys;
+pub mod match_config;
 pub mod match_output;
 pub mod merge;
 pub mod note;
@@ -49,6 +50,7 @@ pub use keys::{
     darknyx_shake_kdf_v1, derive_blinding_factor, derive_master_viewing_key, derive_spending_key,
     derive_trading_key_at_offset, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
 };
+pub use match_config::{match_config_digest, DOMAIN_MATCH_CONFIG};
 pub use match_output::{
     match_fee_inner_hash, match_output_inner_hash, DOMAIN_MATCH_FEE_INNER,
     DOMAIN_MATCH_OUTPUT_INNER,

@@ -286,7 +286,7 @@ impl OutstandingMint {
 
 /// v3.5 — BATCH validity marker. Written by `verify_match_batch` after
 /// it verifies a single Groth16 proof attesting VALID_CREATE +
-/// VALID_PRICE for ALL N matches in a batch. The proof's first of eight public
+/// VALID_PRICE for ALL N matches in a batch. The proof's first of two public
 /// inputs is a Merkle root over the per-slot leaves; the marker's PDA
 /// is seeded by that same root. `tee_forced_settle` then takes a
 /// Merkle inclusion proof per match, recomputes the leaf from the

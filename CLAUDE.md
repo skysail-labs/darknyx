@@ -543,8 +543,8 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
   back (that's why it used to be two-stage).
 * **Domain tags.** `DOMAIN_LEAF_V2 = 23` (the active leaf tag),
   `DOMAIN_MATCH_OUTPUT_INNER = 24`, `DOMAIN_MATCH_FEE_INNER = 25`,
-  `DOMAIN_DEPOSIT_INNER = 27`, `DOMAIN_BATCH_ROOT = 22`, `DOMAIN_NOTE = 2`,
-  `DOMAIN_NULL = 3` — each
+  `DOMAIN_DEPOSIT_INNER = 27`, `DOMAIN_MATCH_CONFIG = 28`,
+  `DOMAIN_BATCH_ROOT = 22`, `DOMAIN_NOTE = 2`, `DOMAIN_NULL = 3` — each
   appears in Rust + TS + circom; keep them in lockstep. (`DOMAIN_LEAF_INNER =
   20` / `DOMAIN_LEAF_TOP = 21` are the **retired** two-stage-leaf tags — dead
   constants, no longer hashed.)
@@ -762,9 +762,9 @@ it after; never commit a secret).**
 > `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` warns (unclaimable).
 
 > **On-chain governance config.** Global authority and fee state lives in
-> `VaultConfig`: `fee_rate_bps` (a fee floor
-> enforced IN-CIRCUIT by VALID_MATCH_BATCH — it's a public input bound on-chain
-> via `verify_match_batch`; `tee_forced_settle_batched` no longer re-derives it
+> `VaultConfig`: `fee_rate_bps` (an exact fee
+> enforced IN-CIRCUIT by VALID_MATCH_BATCH — it is bound through the public
+> config digest recomputed by `verify_match_batch`; `tee_forced_settle_batched` no longer re-derives it
 > from plaintext amounts, which is what let those amounts leave the payload
 > (amount-privacy P1b). NOT vestigial; the C-04 audit fix tightens the circuit
 > constraint from a floor to an EXACT fee) and `protocol_owner_commitment`, set

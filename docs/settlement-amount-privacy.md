@@ -7,8 +7,9 @@
 > an activation bit, the
 > 7 plaintext amounts are gone from `MatchResultPayload` (canonical tag now
 > `darknyx-match-v10` after the later dead-nullifier removal), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
-> binding are in the circuit, and `verify_match_batch` takes 8 public inputs
-> `[root, fee_rate, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]`.
+> binding are in the circuit, and `verify_match_batch` takes two public inputs
+> `[root, config_digest]`; the digest is recomputed on-chain over fee rate,
+> protocol owner, mint halves, and price scale.
 > Output and fee-note inners are derived in-circuit and fees are issued per match.
 > VALID_INPUT v3 also
 > keeps the positive u64 lock amount private and removes it from `lock_note`

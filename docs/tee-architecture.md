@@ -454,8 +454,8 @@ Three structural constraints force batched matching:
 
 1. **`VALID_MATCH_BATCH` is a batch primitive.** The N=16 circuit
    folds up to 16 matches into ONE proof over ONE Poseidon-hashed
-   batch Merkle root — its public inputs are just that root + the fee
-   rate + the protocol-owner commitment (there is NO oracle TWAP or
+   batch Merkle root — its public inputs are that root + a digest of governed
+   fee, protocol-owner, mint, and price-scale fields (there is NO oracle TWAP or
    clearing-price band bound in the proof; price fairness is
    matcher-side, see "What a malicious TEE could actually do" below).
    Continuous matching would degenerate it to N=1 — which is the
@@ -1001,8 +1001,9 @@ TEE crash, which is the safe default.
 > optional `rapidsnark` + `icicle` backends selectable via `DARKNYX_TEE_PROVER`.
 > There is no `NotYetWiredProver` stub anymore. The leaf is a single
 > commitment-only `Poseidon11` with an active-slot bit (not the two-stage hash
-> this plan described), and the verifier takes 8 public inputs (`[root, fee,
-> owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]`), not one. The plan text below is kept as
+> this plan described), and the verifier takes two public inputs
+> (`[root, config_digest]`), not one. The digest binds fee, protocol owner, mint
+> halves, and price scale to authoritative on-chain configuration. The plan text below is kept as
 > design lineage.
 
 The prover is built in two stages so the byte-equality-critical

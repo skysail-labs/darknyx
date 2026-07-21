@@ -191,17 +191,16 @@ async fn assembler_witness_proves_and_verifies_n16() {
         .prove_ark(&slots)
         .expect("prove the assembled N=16 batch");
 
-    // 4. Pin the v3 public-input order. The prover already cross-checks the
-    // root internally; assert the governed market fields here too.
-    assert_eq!(public.public_inputs_be.len(), 8);
+    // 4. Pin the compressed public-input order. The prover cross-checks both
+    // the root and authoritative-config digest before proving.
+    assert_eq!(public.public_inputs_be.len(), 2);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
-    assert_eq!(public.public_inputs_be[1], [0u8; 32]);
-    assert_eq!(public.public_inputs_be[2], fr_safe(0x07));
-    assert_eq!(&public.public_inputs_be[3][16..], &base_mint()[16..]);
-    assert_eq!(&public.public_inputs_be[4][16..], &base_mint()[..16]);
-    assert_eq!(&public.public_inputs_be[5][16..], &quote_mint()[16..]);
-    assert_eq!(&public.public_inputs_be[6][16..], &quote_mint()[..16]);
-    assert_eq!(public.public_inputs_be[7][31], 1);
+    assert_eq!(public.public_inputs_be[1], public.config_digest);
+    assert_eq!(
+        public.config_digest,
+        darkpool_crypto::match_config_digest(0, &fr_safe(0x07), &base_mint(), &quote_mint(), 1)
+            .unwrap()
+    );
     assert_eq!(
         public.merkle_root,
         compute_batch_root(&public.leaves).expect("recompute root"),

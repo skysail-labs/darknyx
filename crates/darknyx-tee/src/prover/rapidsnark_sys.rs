@@ -108,7 +108,7 @@ impl RawProver {
     /// `(proof_json, public_json)` strings.
     pub fn prove(&self, wtns: &[u8]) -> Result<(String, String), String> {
         // Size the proof buffer from rapidsnark; the public-signals JSON for a
-        // eight public inputs are tiny, so a generous fixed buffer suffices (we
+        // two public inputs are tiny, so a generous fixed buffer suffices (we
         // still grow on SHORT_BUFFER to be safe).
         let mut proof_cap: u64 = 0;
         unsafe { groth16_proof_size(&mut proof_cap) };

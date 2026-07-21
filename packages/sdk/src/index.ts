@@ -51,6 +51,7 @@ export * from "./fills/recover.js";
 export * from "./fills/cold-recovery.js";
 export * from "./utxo/change-note.js";
 export * from "./utxo/match-output.js";
+export * from "./utxo/match-config.js";
 export * from "./fills/ws-client.js";
 export { isContributoryX25519PublicKey } from "./keys/fill-encryption.js";
 export * from "./settlement/settle-builder.js";

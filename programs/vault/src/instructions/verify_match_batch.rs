@@ -6,11 +6,11 @@
 //! batch of N (N ∈ {2, 4, 16}; only N=16 is wired on-chain for now —
 //! N=2 and N=4 are dev/test instances).
 //!
-//! Public inputs bind the Merkle root, fee config, market mint halves, and
-//! fixed-point price scale. The marker PDA is seeded by the root. Each subsequent `tee_forced_settle`
-//! tx recomputes its own match's leaf from the payload and walks a
-//! log2(N)-depth inclusion path up to the root, asserting the marker
-//! exists at the derived PDA address.
+//! The two public inputs bind the Merkle root and a digest of the fee config,
+//! market mint halves, and fixed-point price scale. The marker PDA is seeded by
+//! the root. Each subsequent `tee_forced_settle` tx recomputes its own match's
+//! leaf from the payload and walks a log2(N)-depth inclusion path up to the
+//! root, asserting the marker exists at the derived PDA address.
 //!
 //! Why this exists: one batched proof + one marker replaces 2 × N
 //! per-match markers (ValidCreateMarker + ValidPriceMarker per match)
@@ -30,6 +30,7 @@ use crate::state::{
 };
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_match_batch_n16::*, Groth16Proof};
 use anchor_lang::prelude::*;
+use darkpool_crypto::match_config_digest;
 
 #[derive(Accounts)]
 #[instruction(merkle_root: [u8; 32], expiry_slot: u64, proof: Groth16Proof)]
@@ -39,14 +40,13 @@ pub struct VerifyMatchBatch<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    /// Read-only — supplies `fee_rate_bps` as the circuit's 2nd PUBLIC input
-    /// (amount-privacy, P1b): the prover proved the in-circuit exact fee at THIS
-    /// rate, and binding it to the on-chain config prevents a prover-chosen rate.
+    /// Read-only — supplies the fee rate + protocol owner preimage for the
+    /// circuit's public governed-config digest.
     #[account(seeds = [VaultConfig::SEED], bump = vault_config.load()?.bump)]
     pub vault_config: AccountLoader<'info, VaultConfig>,
 
-    /// Governed market identity and fixed-point scale. These become public
-    /// inputs 4..8, so every active slot is pinned to this exact mint pair.
+    /// Governed market identity and fixed-point scale. These join the vault
+    /// fields in the public config digest, pinning every slot to this market.
     #[account(
         seeds = [
             MarketConfig::SEED,
@@ -90,31 +90,24 @@ pub fn verify_match_batch_handler(
         VaultError::InvalidMarkerExpiry
     );
 
-    // Public inputs, in circuit order:
-    // [root, fee_rate, owner, base_lo, base_hi, quote_lo, quote_hi, price_scale].
+    // Public inputs, in circuit order: [root, config_digest]. The digest is
+    // recomputed from authoritative accounts, never accepted from the prover.
     let (fee_rate_bps, protocol_owner) = {
         let cfg = ctx.accounts.vault_config.load()?;
         (cfg.fee_rate_bps as u64, cfg.protocol_owner_commitment)
     };
-    let mut fee_rate_be = [0u8; 32];
-    fee_rate_be[24..32].copy_from_slice(&fee_rate_bps.to_be_bytes());
     let market = &ctx.accounts.market_config;
     require!(market.enabled, VaultError::MarketDisabled);
     require!(market.price_scale > 0, VaultError::InvalidMarketParameters);
-    let (base_lo, base_hi) = pubkey_halves_be(&market.base_mint);
-    let (quote_lo, quote_hi) = pubkey_halves_be(&market.quote_mint);
-    let mut price_scale_be = [0u8; 32];
-    price_scale_be[24..].copy_from_slice(&market.price_scale.to_be_bytes());
-    let public_inputs: [[u8; 32]; 8] = [
-        merkle_root,
-        fee_rate_be,
-        protocol_owner,
-        base_lo,
-        base_hi,
-        quote_lo,
-        quote_hi,
-        price_scale_be,
-    ];
+    let config_digest = match_config_digest(
+        fee_rate_bps,
+        &protocol_owner,
+        &market.base_mint.to_bytes(),
+        &market.quote_mint.to_bytes(),
+        market.price_scale,
+    )
+    .map_err(|_| error!(VaultError::InvalidProof))?;
+    let public_inputs: [[u8; 32]; 2] = [merkle_root, config_digest];
 
     let vk = make_vk(
         &MATCH_BATCH_N16_ALPHA_G1,
@@ -123,7 +116,7 @@ pub fn verify_match_batch_handler(
         &MATCH_BATCH_N16_DELTA_G2,
         &MATCH_BATCH_N16_IC,
     );
-    verify_groth16_proof::<8>(&vk, &proof, &public_inputs)?;
+    verify_groth16_proof::<2>(&vk, &proof, &public_inputs)?;
 
     let marker = &mut ctx.accounts.marker;
     marker.payer = ctx.accounts.payer.key();
@@ -135,15 +128,6 @@ pub fn verify_match_batch_handler(
         expiry_slot,
     });
     Ok(())
-}
-
-fn pubkey_halves_be(pubkey: &Pubkey) -> ([u8; 32], [u8; 32]) {
-    let bytes = pubkey.to_bytes();
-    let mut lo = [0u8; 32];
-    lo[16..].copy_from_slice(&bytes[16..]);
-    let mut hi = [0u8; 32];
-    hi[16..].copy_from_slice(&bytes[..16]);
-    (lo, hi)
 }
 
 #[event]

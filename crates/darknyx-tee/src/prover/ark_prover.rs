@@ -174,9 +174,9 @@ pub(crate) fn load_circom_cfg(
 }
 
 /// Build the ark-circom witness for `slots` (using the CACHED `CircomConfig`)
-/// and cross-check that the circuit's eight public inputs (its
-/// internally-computed Merkle root plus governed values) equal our off-circuit
-/// `build_batch_public_inputs` root. Returns the built `CircomCircuit` (whose
+/// and cross-check that the circuit's two public inputs (its
+/// internally-computed Merkle root plus governed-config digest) equal our
+/// off-circuit values. Returns the built `CircomCircuit` (whose
 /// `.witness` is the full assignment) so BOTH backends share one witness-gen +
 /// drift guard:
 ///   - ark proves `circom` directly with `create_random_proof_with_reduction`,
@@ -193,7 +193,7 @@ pub(crate) fn build_circom_and_check(
 ) -> Result<CircomCircuit<Fr>, ProverError> {
     let mut inputs: std::collections::HashMap<String, Vec<BigInt>> =
         std::collections::HashMap::new();
-    push_all_inputs(&mut inputs, slots, &public.merkle_root);
+    push_all_inputs(&mut inputs, slots, public);
 
     let t_exec = std::time::Instant::now();
     let circom = {
@@ -230,7 +230,7 @@ pub(crate) fn build_circom_and_check(
         .ok_or_else(|| ProverError::WitnessGen("circuit produced no public inputs".into()))?;
     if circuit_public.len() != public.public_inputs_be.len() {
         return Err(ProverError::WitnessGen(format!(
-            "expected {} public inputs ([root, fee_rate, owner, base lo/hi, quote lo/hi, scale]), got {}",
+            "expected {} public inputs ([root, config_digest]), got {}",
             public.public_inputs_be.len(),
             circuit_public.len()
         )));
@@ -242,7 +242,7 @@ pub(crate) fn build_circom_and_check(
             computed: hex::encode(public.merkle_root),
         });
     }
-    // Remaining public inputs (fee_rate_bps, …) must match the off-circuit
+    // The config digest must match the off-circuit
     // vector IN ORDER, or the on-chain verifier would reject the proof.
     for (i, cp) in circuit_public.iter().enumerate().skip(1) {
         let got = fr_to_be32(cp);
@@ -260,18 +260,18 @@ pub(crate) fn build_circom_and_check(
 /// Serialize the circuit inputs for `slots` to a circom `input.json` string
 /// (consumed by the native C++ witness generator). Reuses `push_all_inputs`
 /// so the inputs are byte-for-byte the SAME as the wasmer path feeds — the
-/// only scalar signal is `merkle_root` (emitted as a string); every other
-/// signal is a length-N array of decimal strings. Mirrors the TS
+/// batch-level signals are emitted as bare strings; per-slot signals are
+/// length-N arrays of decimal strings. Mirrors the TS
 /// `match-batch-prover.ts` inputs object exactly.
 // Only the snarkjs-format backends' native witness path uses it.
 #[cfg(any(feature = "rapidsnark", feature = "icicle"))]
 pub(crate) fn circom_input_json(
     slots: &[MatchSlotWitness],
-    merkle_root: &[u8; 32],
+    public: &BatchPublicInputs,
 ) -> Result<String, ProverError> {
     let mut inputs: std::collections::HashMap<String, Vec<BigInt>> =
         std::collections::HashMap::new();
-    push_all_inputs(&mut inputs, slots, merkle_root);
+    push_all_inputs(&mut inputs, slots, public);
 
     // Batch-level `signal input` (no `[N]`) at the MatchBatch level → bare
     // scalar strings in input.json. Everything else is a per-slot array signal.
@@ -279,6 +279,7 @@ pub(crate) fn circom_input_json(
     // MatchBatch signal declarations.
     const SCALAR_INPUTS: &[&str] = &[
         "merkle_root",
+        "config_digest",
         "fee_rate_bps",
         "protocol_owner_commitment",
         "base_mint_lo",
@@ -324,7 +325,7 @@ fn fr_to_be32(fr: &Fr) -> [u8; 32] {
 fn push_all_inputs(
     inputs: &mut std::collections::HashMap<String, Vec<BigInt>>,
     slots: &[MatchSlotWitness],
-    merkle_root: &[u8; 32],
+    public: &BatchPublicInputs,
 ) {
     macro_rules! push {
         ($name:expr, $val:expr) => {
@@ -332,7 +333,8 @@ fn push_all_inputs(
         };
     }
     // Public inputs (order matches the circuit `main` list).
-    push!("merkle_root", be32_to_bigint(merkle_root));
+    push!("merkle_root", be32_to_bigint(&public.merkle_root));
+    push!("config_digest", be32_to_bigint(&public.config_digest));
     // Batch-level single (scalar) inputs — identical on every slot; read from
     // slot 0. These are `signal input` (no `[N]`) at the MatchBatch level, so
     // the native-witness JSON path must emit them as bare scalars (see

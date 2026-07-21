@@ -3,8 +3,8 @@
  *
  * Single Groth16 proof attesting that output construction, market binding,
  * scaled pricing, conservation, and per-match fees hold for all active
- * matches in a batch. Its eight public inputs include the Merkle root plus
- * governed fee/market values; the on-chain
+ * matches in a batch. Its two public inputs are the Merkle root plus a digest
+ * of governed fee/market values; the on-chain
  * `tee_forced_settle` handler recomputes the leaf for the match it
  * sees, walks a log2(N)-depth inclusion path, and asserts the root
  * matches the `BatchValidityMarker` PDA seed.
@@ -37,6 +37,7 @@ import { buildPoseidon } from "circomlibjs";
 
 import type { Groth16OnChainProof } from "../../src/idl/vault-client.js";
 import { bn254ToBE32 } from "../../src/keys/key-generators.js";
+import { matchConfigDigest } from "../../src/utxo/match-config.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";
 
 // Domain tags — MUST match the circuit constants.
@@ -104,11 +105,11 @@ export interface MatchSlotWitness {
   /** Quote-mint (buyer) fee note commitment; all-zero when the fee is zero. */
   noteFeeQuoteCommitment: Uint8Array;
   // ── Batch-level (same on every slot; the prover reads slots[0]) ──
-  /** Protocol fee rate (bps) — the circuit fee-floor PUBLIC input. */
+  /** Protocol fee rate (bps) — bound through the public config digest. */
   feeRateBps: bigint;
-  /** Protocol fee-note owner — the fee-note-binding PUBLIC input. */
+  /** Protocol fee-note owner — bound through the public config digest. */
   protocolOwnerCommitment: bigint;
-  /** Governed fixed-point denominator — a circuit PUBLIC input. */
+  /** Governed fixed-point denominator — bound through the public config digest. */
   priceScale: bigint;
   /** Fee-note inner_hashes (derive_inner(batch_slot, FEE_ROLE_*)). */
   feeBaseInner: bigint;
@@ -117,11 +118,11 @@ export interface MatchSlotWitness {
 
 export interface BatchProveResult {
   proof: Groth16OnChainProof;
-  /** 32-byte Merkle root — the first of eight public inputs. */
+  /** 32-byte Merkle root — the first of two public inputs. */
   merkleRoot: Uint8Array;
   /** Per-slot leaves in input order. */
   leaves: Uint8Array[];
-  /** Eight-element snarkjs public-input vector in canonical circuit order. */
+  /** `[merkle_root, config_digest]` in canonical circuit order. */
   publicInputsBE: Uint8Array[];
 }
 
@@ -340,6 +341,8 @@ export async function merkleInclusionPath(
 export interface MatchBatchProveParams {
   repoRoot: string;
   slots: MatchSlotWitness[];
+  /** Negative-test hook: replace the governed digest while retaining its preimage. */
+  configDigestOverride?: Uint8Array;
 }
 
 /**
@@ -397,12 +400,23 @@ export async function proveMatchBatch(
   // Compute leaves + root off-circuit; the circuit re-derives the same.
   const leaves = await Promise.all(args.slots.map(computeBatchLeaf));
   const merkleRoot = await computeBatchRoot(leaves);
+  const configDigest =
+    args.configDigestOverride ??
+    (await matchConfigDigest({
+      feeRateBps: args.slots[0].feeRateBps,
+      protocolOwnerCommitment: bn254ToBE32(
+        args.slots[0].protocolOwnerCommitment,
+      ),
+      baseMint: args.slots[0].baseMint,
+      quoteMint: args.slots[0].quoteMint,
+      priceScale: args.slots[0].priceScale,
+    }));
 
   const inputs: Record<string, string | string[]> = {
     merkle_root: bigintFromBE32(merkleRoot).toString(),
+    config_digest: bigintFromBE32(configDigest).toString(),
     // Batch-level PUBLIC/private inputs (single values, read from slot 0).
-    // Circuit public order: root, fee rate, protocol owner, four mint halves,
-    // then price scale.
+    // The governed preimage is private but constrained to config_digest.
     fee_rate_bps: args.slots[0].feeRateBps.toString(),
     protocol_owner_commitment: args.slots[0].protocolOwnerCommitment.toString(),
     base_mint_lo: pubkeyToFrPair(args.slots[0].baseMint)[0].toString(),

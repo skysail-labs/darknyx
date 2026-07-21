@@ -109,13 +109,11 @@ const COMPUTE_BUDGET_PROGRAM_ID: Address = Address::new_from_array([
 const SETTLE_COMPUTE_UNIT_LIMIT: u32 = 115_000;
 /// CU ceiling for each lock_note tx (Tx A). 117,943 × 1.15.
 pub(crate) const LOCK_COMPUTE_UNIT_LIMIT: u32 = 136_000;
-/// CU ceiling for the verify_match_batch tx (Tx B). litesvm measures 100,533;
-/// devnet's groth16 runs hotter (a 101,000 limit exceeded budget on devnet), so
-/// this carries ~1.4× headroom over the litesvm figure rather than the usual ×1.15.
-// VALID_MATCH_BATCH v3 verifies eight public inputs (up from three). LiteSVM
-// measures ~132.5k CU; 180k preserves >20% headroom and leaves room for the
-// modest devnet/runtime delta observed in prior verifier measurements.
-pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 180_000;
+/// CU ceiling for the verify_match_batch tx (Tx B). The two-public-input
+/// statement measures 103,346 CU in litesvm after paying for the authoritative
+/// Poseidon8 config digest. 140k retains >35% litesvm headroom and a generous
+/// buffer for the modest devnet/runtime delta observed in prior verifier runs.
+pub(crate) const VERIFY_COMPUTE_UNIT_LIMIT: u32 = 140_000;
 // (The close_batch_validity_marker tx (Tx E) no longer rides the settle worker's
 // budgeted path — it's closed asynchronously by `marker_sweep`, which packs
 // several closes per tx under the default CU budget. The old per-close
