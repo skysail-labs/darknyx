@@ -6,7 +6,7 @@
 #   CMake Error in backend/cuda/CMakeLists.txt:
 #     CUDA_ARCHITECTURES is set to "native", but no GPU was detected.
 # The Dockerfile had been renamed to DARKNYX_ICICLE_CUDA_ARCH during the
-# nyx->darknyx cutover while the vendored fork's build.rs still only read
+# Darknyx brand rename while the vendored fork's build.rs still only read
 # NYX_ICICLE_CUDA_ARCH. The name never matched, so `-DCUDA_ARCH` was never
 # defined, cmake fell back to probing for a GPU the CI builder does not have,
 # and the build failed.
