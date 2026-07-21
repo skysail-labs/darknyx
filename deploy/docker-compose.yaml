@@ -29,6 +29,24 @@ services:
     image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-68-cuda
     restart: unless-stopped
 
+    # GPU passthrough — REQUIRED for DARKNYX_TEE_ICICLE_DEVICE=CUDA. Without this
+    # the container sees no GPU: the ICICLE CUDA backend still LOADS from
+    # ICICLE_BACKEND_INSTALL_DIR (the .so files ship in the -cuda image), but
+    # `set_device("CUDA")` returns InvalidDevice and the prover thread panics
+    # (`icicle prove panicked — cache reset`), so every batch fails at the prove
+    # stage while matching/intake look perfectly healthy. Shape is from Phala's
+    # GPU TEE deployment guide; `count: 1` matches the h200.small instance
+    # (resource.gpus = 1). CPU-only CVMs ignore a reservation they can't satisfy
+    # only if the driver is absent — so this block belongs on the GPU pin, and
+    # comes out when the image pin reverts to the CPU tag before merge.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
     # /var/run/dstack.sock gives the container access to:
     #   - getKey(path)   — deterministic key derivation
     #   - getQuote(data) — TDX attestation quote
