@@ -47,3 +47,22 @@ branch retain their historical spelling.
 They are evidence or external identifiers, not current product surfaces.
 `scripts/check-brand-namespace.sh` excludes only those locations and rejects the
 former prefix everywhere else.
+
+> **⚠️ The submodule exclusion is narrow — it covers the fork's BRANCH NAME and
+> genuinely upstream identifiers, NOT interfaces we ourselves added to the fork.**
+> Anything we invented (env vars, build knobs, patches) is a current product
+> surface and **does follow the rename**, even though it lives under
+> `third_party/`.
+>
+> This distinction was not spelled out, and it cost a GPU image build on
+> 2026-07-21: `NYX_ICICLE_CUDA_ARCH` — a knob *we* added to the fork
+> (`build.rs`, "darknyx-monorepo addition over upstream icicle") — was treated as
+> an excluded external identifier and left un-renamed, while the Dockerfile that
+> feeds it was renamed. The name silently stopped matching, cmake fell back to
+> probing for a GPU, and the build failed.
+>
+> That var is now `DARKNYX_ICICLE_CUDA_ARCH` (the fork accepts the old spelling
+> as a deprecated, warning fallback so a stale submodule pointer cannot silently
+> break), and `scripts/check-icicle-cuda-arch-env.sh` fails CI if the Dockerfile
+> and the pinned `build.rs` ever disagree again. **When excluding a path from the
+> rename, exclude upstream identifiers — not your own interfaces.**

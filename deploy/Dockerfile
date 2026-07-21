@@ -185,6 +185,17 @@ COPY programs/ programs/
 # → cmake/nvcc, arch pinned via DARKNYX_ICICLE_CUDA_ARCH=$CUDA_ARCH so no GPU is
 # needed at build). `mkdir -p $ICICLE_INSTALL_DIR/lib` unconditionally so the
 # runtime stage's COPY of the icicle libs always has a (possibly empty) source.
+#
+# ⚠️ This var name MUST be one the PINNED submodule's build script actually reads
+# (third_party/icicle-snark/wrappers/rust/icicle-runtime/build.rs → `-DCUDA_ARCH`).
+# If it is not, the setting is silently dropped, cmake falls back to
+# `CUDA_ARCHITECTURES=native`, probes for a GPU the CI builder does not have, and
+# the build dies with `CUDA_ARCHITECTURES is set to "native", but no GPU was
+# detected` — exactly what happened on 2026-07-21, when this forwarded the
+# renamed variable while the pinned fork still only read the pre-rename
+# `NYX_ICICLE_CUDA_ARCH`. The fork now accepts BOTH (this canonical name, plus
+# the old one as a deprecated warning fallback) and
+# `scripts/check-icicle-cuda-arch-env.sh` pins the pairing in CI.
 RUN find crates programs -name '*.rs' -exec touch {} + && \
     mkdir -p "$ICICLE_INSTALL_DIR/lib" && \
     if [ "$ENABLE_CUDA" = "1" ]; then \

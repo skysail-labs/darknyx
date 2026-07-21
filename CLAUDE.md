@@ -454,10 +454,23 @@ cargo run -q -p darknyx-tee-loadgen -- --endpoint "$GW" --oracle-twap "$RAW" \
 > of racing. Only the non-leaf tests (`cvm-api-surface`, `cvm-attestation-e2e`)
 > are reset-free. Full workflow: **[`docs/cvm-run-runbook.md`](docs/cvm-run-runbook.md) §5**.
 
-### 3.5 STOP THE CVM when done
+### 3.5 STOP THE CVM when done — **CPU CVMs ONLY**
 
 It bills while running. `phala cvms stop "$CVM"` (preserves
-`app_id`/signer/volume; halts billing). **Never leave a billable CVM up.**
+`app_id`/signer/volume; halts billing). **Never leave a billable CPU CVM up.**
+
+> 🛑 **NEVER stop an on-demand GPU CVM.** GPU instances (`h200.*`,
+> `dstack-nvidia-*`, `resource.gpus >= 1`) are provisioned as a **fixed-duration
+> window billed in full up front**, and **stopping DEALLOCATES the instance
+> permanently** — it disappears from `phala cvms list`, the GPU returns to the
+> pool, and every remaining prepaid hour is forfeited. There is no restart. This
+> cost most of a paid 24 h H200 window on 2026-07-21 by applying the CPU rule
+> above. Idle time inside a prepaid GPU window is free; destroying it is not.
+>
+> **Check before stopping anything:**
+> `phala cvms get <app_id> --json | grep -E '"instance_type"|"gpus"'`
+> GPU ⇒ leave it running and plan the whole window's work up front. See
+> **[`docs/gpu-tee-runbook.md`](docs/gpu-tee-runbook.md)**.
 
 After the test window, also `unset DARKNYX_TEE_API_KEY DARKNYX_TEE_API_SECRET
 DARKNYX_TEE_PASSPHRASE`. The no-CVM half of devnet validation:

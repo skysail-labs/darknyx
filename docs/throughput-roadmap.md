@@ -11,8 +11,17 @@ the prerequisite work, and where the inline analysis lives.
 
 ## Gates
 
-- **🟢 GPU** — unblocked once GPU proving (rapidsnark + ICICLE) lands and `prove_ms` drops from
-  ~3.7 s → tens of ms. ICICLE is shelved while Phala has no GPU.
+- **🟢 GPU** — unblocked once GPU proving (ICICLE CUDA) lands and `prove_ms` drops from ~2.6 s
+  (witness 297 + prove_step 2214) toward the ~300 ms witness floor — a **~8×** ceiling, since
+  `prove_step` is now ~87% of prove time (item 5). Shelved while Phala has no GPU. The build side is
+  already done (`icicle-cuda` feature, Dockerfile `ENABLE_CUDA=1`, `-cuda` CI tag); the open gate is
+  the **CUDA parity run on real hardware** (`tests/icicle_cuda_parity.rs` — it asserts the CUDA proof
+  verifies against the committed zkey VK and that CUDA/ark agree on the public inputs; Groth16 is
+  randomized so byte-identical proofs are NOT the assertion) plus the confidential-GPU requirement —
+  the witness carries the private amounts, so a non-CC GPU would leak exactly what amount-privacy
+  protects.
+  **Target hardware: H200** (Hopper, compute capability 9.0 → `sm_90`), which matches the already
+  pinned `CUDA_ARCH=90` build ARG — no arch change needed. Confirmed 2026-07-20.
 - **🔵 ALPENGLOW** — unblocked once Solana fast-finality (Alpenglow) collapses on-chain confirmation
   latency (the `settle_ms` / `verify_ms` / `alt_wait` IO terms → ~0).
 - **🟡 VOLUME** — not a platform gate; only worth doing once real order flow makes the system
@@ -30,11 +39,18 @@ From `crates/darknyx-tee-loadgen/BENCHMARK.md` (rapidsnark-CPU, 8 vCPU, full N=1
 
 | Term | ms | Nature | Killed by |
 |---|--:|---|---|
-| `prove_ms` (witness 2124 + prove_step 1485) | ~3,661 | **fixed per batch** (padded N=16) | 🟢 GPU (prove_step; witness is the residual ceiling) |
+| `prove_ms` (witness **297** + prove_step **2214**) † | ~2,557 | **fixed per batch** (padded N=16) | 🟢 GPU (prove_step — now **~87%** of prove) |
 | `verify_ms` | ~1,119 | IO | 🔵 Alpenglow |
 | `settle_ms` (Tx D) | ~11,222 | IO — **dominant**; ~fixed per batch (co-inclusion) | 🔵 Alpenglow |
 | `alt_tx`+`alt_wait` | ~3,380 | IO — ALT create + slot-warmup | 🟣 TX-V1 (ALT eliminated, not Alpenglow — see item 7) |
 | `total_ms` (overlapped wall) | ~16,938 | — | — |
+
+> † **The `prove_ms` split was re-measured 2026-07-18** on a live CVM (prod9,
+> image `tee-v3-hardening-64`, rapidsnark backend) **after the native witness
+> generator landed**: `witness_ms=297`, `prove_step_ms=2214`. The older
+> BENCHMARK.md figure (witness 2124 + prove_step 1485) predates native
+> witness-gen and **must not be used to reason about the GPU ceiling** — see
+> item 5. The IO rows above are still the BENCHMARK.md numbers.
 
 Two facts drive everything below: (1) the pre-settle phase (lock ‖ prove+verify ‖ ALT) is **already
 overlapped** (`worker.rs` `tokio::join!`), and (2) under `SETTLE_CONCURRENCY=1` each batch monopolizes
@@ -87,13 +103,35 @@ which isn't the GPU path we're on.
 merge with the next tick. Hold until real volume shows the settle queue backing up.
 **Source:** the adaptive-batch-cadence assessment ("Priority 5"); `matcher/interval.rs:384-547`.
 
-### 5. Witness-generation acceleration (the GPU ceiling)
-**Gate: 🟢 GPU (immediate follow-on).** ICICLE accelerates the Groth16 `prove_step` (1485 ms → tens of
-ms) but **not** witness-gen (~2124 ms, ark-circom, ~single-threaded). So GPU best-case `prove_ms` ≈
-witness + ε ≈ 2.1 s — i.e. the prove speedup is capped at ~1.7× unless witness-gen is also parallelized
-or swapped for a faster backend. Budget this as the immediate follow-on to the GPU prove work, or the GPU
-win is capped.
-**Source:** `BENCHMARK.md` finding #3; memory `proving_optimization`.
+### 5. Witness-generation acceleration (the GPU ceiling) — ✅ LARGELY RESOLVED
+**Status: mostly done. Re-measure on GPU rather than budgeting new work.**
+
+**This item's original premise is obsolete.** It was written when witness-gen ran
+through ark-circom (~2124 ms, ~single-threaded) against a 1485 ms `prove_step`, so
+GPU best-case `prove_ms` ≈ witness + ε ≈ 2.1 s — a **~1.7× cap**, with witness as
+the residual ceiling.
+
+The **native witness generator has since landed** (C++ witness binary built into
+the image; boot logs `native witness generator ENABLED`). Re-measured 2026-07-18
+on a live CVM (prod9, image `-64`):
+
+| | old (ark-circom) | now (native) |
+|---|--:|--:|
+| `witness_ms` | ~2124 (59% of prove) | **297 (12%)** |
+| `prove_step_ms` | ~1485 | **2214 (87%)** |
+| GPU ceiling on `prove_ms` | ~1.7× | **~8×** |
+
+So witness-gen is **no longer the ceiling** — `prove_step`, exactly the term ICICLE
+accelerates, is now ~87% of prove time. **Do not budget witness-parallelization
+work off the old numbers.**
+
+Residual (small): once GPU lands, witness's 297 ms becomes the new floor — at that
+point re-measure the split and only then decide whether shaving witness further is
+worth anything. It is a ~300 ms floor against a term that should drop to tens of ms,
+so revisit *after* GPU, not before.
+
+**Source:** live CVM measurement 2026-07-18 (image `-64`, prod9, rapidsnark);
+supersedes `BENCHMARK.md` finding #3 and the older memory `proving_optimization`.
 
 ### 6. On-chain Groth16 verify-CU — MATCH implemented; INPUT deferred for browser data
 **Status: MATCH shipped; INPUT measurement-gated.** Full review of the suggested CU-reduction techniques against our actual verifier
