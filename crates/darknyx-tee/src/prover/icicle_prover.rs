@@ -157,6 +157,17 @@ impl IcicleMatchBatchProver {
         })
     }
 
+    /// The icicle compute device this prover was loaded for (`CPU` | `CUDA`),
+    /// resolved from `DARKNYX_TEE_ICICLE_DEVICE` at `load` time.
+    ///
+    /// Exposed so the CUDA parity gate can assert it actually got `CUDA`: the
+    /// env var is read once in `load`, so a test that sets it too late (or a
+    /// deploy that never sets it) would otherwise prove on CPU and report a
+    /// false pass. See `tests/icicle_cuda_parity.rs`.
+    pub fn device(&self) -> &str {
+        &self.device
+    }
+
     /// Core proving path returning the RAW ark `Proof` + public inputs (before
     /// the on-chain byte conversion). Exposed so tests can verify the icicle
     /// proof against the zkey VK in-ark (parallel to the other backends).
