@@ -121,6 +121,15 @@ You will not write correct code here without the mental model. Required:
   (🟢 GPU proving, 🔵 Alpenglow finality) + 🟡 real volume, with the measured
   cost model they're reasoned against. Pull items from here (don't re-derive)
   when a gate lifts; add new gated work there, not just in a code comment.
+* **[`docs/multi-market-architecture.md`](docs/multi-market-architecture.md)** —
+  **OPEN DECISION** (deferred): one CVM per market vs N books in one CVM. Today
+  the TEE is hard-wired to a SINGLE market (`MatcherState` has one book; the
+  `/instruments` symbol is hardcoded) while the vault is already market-agnostic
+  (`MarketConfig` is a per-pair PDA). Records the two binding constraints — the
+  circuit fixes one market per BATCH, and `vault_config.tee_pubkeys` is a global
+  set sized `== num_trees`, which assumes ONE TEE cluster per vault — plus the
+  UX/attestation tradeoffs and the tentative lean. **Read before adding a second
+  trading pair.**
 
 By domain, additionally:
 
