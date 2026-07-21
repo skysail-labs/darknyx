@@ -120,6 +120,14 @@ jobs:
         with:
           submodules: recursive  # darknyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
+      # Cheap guard, needs the submodule (hence this job, not `changes`): the
+      # CUDA-arch env var the Dockerfile forwards must be one the PINNED
+      # icicle-snark build.rs reads. A mismatch is silent until a `-cuda` image
+      # build dies late with `CUDA_ARCHITECTURES ... native, but no GPU was
+      # detected` (cost a GPU build on 2026-07-21).
+      - name: icicle CUDA-arch env consistency
+        run: bash scripts/check-icicle-cuda-arch-env.sh
+
       # Pinned to match rust-toolchain.toml. Bump both together.
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@1.89.0

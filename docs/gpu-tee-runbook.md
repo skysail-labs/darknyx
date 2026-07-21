@@ -32,10 +32,11 @@ GPU** (commit `0400776` + the `git`/`libatomic1` fixups):
 - **`deploy/docker-compose.gpu.yaml`** — the GPU variant (nvidia device reservation + CUDA device
   + `user: root` for the /dev/nvidia* permissions). **Always deploy GPU runs with
   `-c deploy/docker-compose.gpu.yaml`** — using the base compose silently yields `InvalidDevice`.
-- Build knobs: **`NYX_ICICLE_CUDA_ARCH`** → cmake `-DCUDA_ARCH` (note the `NYX_` prefix — it must
-  match the vendored fork, which is excluded from the brand rename; see §10.2); darknyx-tee feature
+- Build knobs: **`DARKNYX_ICICLE_CUDA_ARCH`** → cmake `-DCUDA_ARCH`; darknyx-tee feature
   `icicle-cuda`; `deploy/Dockerfile` `ARG ENABLE_CUDA`; CI builds the CUDA image on a
-  `-cuda`-suffixed tag.
+  `-cuda`-suffixed tag. The vendored fork accepts `DARKNYX_ICICLE_CUDA_ARCH` (canonical) and
+  `NYX_ICICLE_CUDA_ARCH` (deprecated, warns), and `scripts/check-icicle-cuda-arch-env.sh` fails CI
+  if the Dockerfile ever forwards a name the pinned submodule does not read — see §10.2.
 
 ✅ **Correctness (2a settle) is DONE** — see §10. Remaining: the **performance measurement**
 (§10.4, and note §10.5 — most of it does not need a *confidential* GPU) and the **2b GPU
@@ -369,7 +370,7 @@ drift.**
 
 | # | Symptom | Root cause | Fix |
 |---|---|---|---|
-| 1 | Build: `CUDA_ARCHITECTURES is set to "native", but no GPU was detected` | Dockerfile forwarded `DARKNYX_ICICLE_CUDA_ARCH`, but the vendored fork's `build.rs` reads **`NYX_ICICLE_CUDA_ARCH`** → `-DCUDA_ARCH`. The submodule is deliberately excluded from the nyx→darknyx rename (`docs/brand-namespace.md`), so the two drifted silently. | Dockerfile forwards `NYX_ICICLE_CUDA_ARCH`. **Do not "correct" the prefix** — it must match the pinned submodule. |
+| 1 | Build: `CUDA_ARCHITECTURES is set to "native", but no GPU was detected` | Dockerfile forwarded `DARKNYX_ICICLE_CUDA_ARCH`, but the vendored fork's `build.rs` only read `NYX_ICICLE_CUDA_ARCH` → `-DCUDA_ARCH`. The rename skipped the submodule, so the two drifted silently and the arch was never passed. | **Fixed at the source, not worked around.** The fork now reads `DARKNYX_ICICLE_CUDA_ARCH` (canonical) with the old spelling as a deprecated warning fallback (`icicle-snark@fb4797f`), the Dockerfile forwards the canonical name, and `scripts/check-icicle-cuda-arch-env.sh` fails CI on any future mismatch. |
 | 2 | Runtime: `InvalidDevice` | **Deployed with the wrong compose.** `deploy/docker-compose.gpu.yaml` (with the nvidia reservation) already existed; the base `docker-compose.yaml` was used instead, so the container got no GPU. | Always deploy GPU runs with `-c deploy/docker-compose.gpu.yaml`. Self-inflicted — check for existing GPU tooling before improvising. |
 | 3 | Runtime: `PermissionDenied` in icicle `pre_compute_keys` (`cache.rs:226`) | Image drops to `USER darknyx`; `/dev/nvidia*` is root-owned → EACCES. Surfaces **after** `set_device` succeeds, so it reads like a CUDA bug. | `user: root` in the GPU compose. **TODO(prod):** add the runtime user to `video`/`render` groups in the `-cuda` image and drop this. |
 

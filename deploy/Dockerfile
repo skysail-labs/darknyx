@@ -83,7 +83,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Only the GPU image (DARKNYX_TEE_PROVER=icicle + DARKNYX_TEE_ICICLE_DEVICE=CUDA) needs
 # this; the default CPU/rapidsnark image leaves ENABLE_CUDA=0 and skips it.
 # nvcc + cudart-dev + curand-dev are enough to BUILD icicle's CUDA backend; no
-# physical GPU is required because the build forwards NYX_ICICLE_CUDA_ARCH so
+# physical GPU is required because the build forwards DARKNYX_ICICLE_CUDA_ARCH so
 # cmake skips its `native` GPU-arch probe (see the icicle build.rs change).
 # Built on bookworm so the produced .so match the bookworm-slim runtime ABI
 # (same glibc-match lesson as the native witness generator). The toolkit is
@@ -182,24 +182,24 @@ COPY programs/ programs/
 # cache (tokio, ark-*, …) is keyed separately and is preserved.
 # Build features depend on ENABLE_CUDA: the CPU image ships rapidsnark; the GPU
 # image additionally builds the ICICLE CUDA backend (icicle-cuda → icicle-snark
-# → cmake/nvcc, arch pinned via NYX_ICICLE_CUDA_ARCH=$CUDA_ARCH so no GPU is
+# → cmake/nvcc, arch pinned via DARKNYX_ICICLE_CUDA_ARCH=$CUDA_ARCH so no GPU is
 # needed at build). `mkdir -p $ICICLE_INSTALL_DIR/lib` unconditionally so the
 # runtime stage's COPY of the icicle libs always has a (possibly empty) source.
 #
-# ⚠️ The env var is deliberately `NYX_`-prefixed, NOT `DARKNYX_`. It is read by
-# the VENDORED fork's build script
-# (third_party/icicle-snark/wrappers/rust/icicle-runtime/build.rs, which does
-# `env::var("NYX_ICICLE_CUDA_ARCH")` → `-DCUDA_ARCH`), and that submodule is
-# intentionally EXCLUDED from the nyx→darknyx brand rename (see
-# docs/brand-namespace.md "Historical exclusions"). Renaming this to DARKNYX_*
-# silently breaks the GPU build: the fork never sees the var, cmake falls back to
+# ⚠️ This var name MUST be one the PINNED submodule's build script actually reads
+# (third_party/icicle-snark/wrappers/rust/icicle-runtime/build.rs → `-DCUDA_ARCH`).
+# If it is not, the setting is silently dropped, cmake falls back to
 # `CUDA_ARCHITECTURES=native`, probes for a GPU the CI builder does not have, and
-# fails with `CUDA_ARCHITECTURES is set to "native", but no GPU was detected`.
-# Keep this name in lockstep with the pinned submodule commit.
+# the build dies with `CUDA_ARCHITECTURES is set to "native", but no GPU was
+# detected` — exactly what happened on 2026-07-21, when this forwarded the
+# renamed variable while the pinned fork still only read the pre-rename
+# `NYX_ICICLE_CUDA_ARCH`. The fork now accepts BOTH (this canonical name, plus
+# the old one as a deprecated warning fallback) and
+# `scripts/check-icicle-cuda-arch-env.sh` pins the pairing in CI.
 RUN find crates programs -name '*.rs' -exec touch {} + && \
     mkdir -p "$ICICLE_INSTALL_DIR/lib" && \
     if [ "$ENABLE_CUDA" = "1" ]; then \
-        NYX_ICICLE_CUDA_ARCH="$CUDA_ARCH" \
+        DARKNYX_ICICLE_CUDA_ARCH="$CUDA_ARCH" \
           cargo build --release -p darknyx-tee --features rapidsnark,icicle-cuda; \
     else \
         cargo build --release -p darknyx-tee --features rapidsnark; \
