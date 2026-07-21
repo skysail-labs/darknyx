@@ -26,7 +26,7 @@ services:
     # image (ENABLE_CUDA=1, ships the icicle CUDA backend) for the H200 parity
     # run. It only boots usefully on a GPU CVM. REVERT to the plain CPU tag
     # before merging to main, or CPU deploys will pull a CUDA image.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-67-cuda
+    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-68-cuda
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
