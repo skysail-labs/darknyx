@@ -24,10 +24,20 @@ services:
   darknyx-tee:
     # The ICICLE CUDA image (built by tee-image.yml with ENABLE_CUDA=1 — a
     # `-cuda`-suffixed tag). Bump per image iteration.
-    # Planned post-cutover CUDA image. Build this tag before the next GPU
-    # session; the CPU namespace cutover does not spend a GPU-image build.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-63-cuda
+    # -68-cuda is BUILT + on ghcr and is the image that passed the first real
+    # H200 settle (2026-07-21). The earlier -63-cuda tag was never built.
+    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-68-cuda
     restart: unless-stopped
+
+    # Device-node permissions. The image drops to `USER darknyx` (non-root) but
+    # /dev/nvidia* is root-owned, so the prover gets EACCES and icicle panics
+    # `PermissionDenied` inside pre_compute_keys — crucially AFTER set_device
+    # succeeds, which makes it read like a CUDA bug rather than a permissions
+    # one. Found the hard way on 2026-07-21.
+    # TODO(prod): add the runtime user to the `video`/`render` groups in the
+    # -cuda image and drop this. Running as root widens the container user and is
+    # tolerable only because the TDX CVM is the real trust boundary.
+    user: root
 
     # GPU passthrough — Phala injects the NVIDIA driver (libcuda.so.1) via the
     # nvidia container runtime; the image already ships libcudart/libcurand + the

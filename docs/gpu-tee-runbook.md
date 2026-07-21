@@ -1,10 +1,17 @@
 # GPU-TEE Runbook — ICICLE CUDA prover on a Phala H200 (Phase 2a perf + 2b attestation)
 
-> **Status (2026-06-19): SHELVED on Phala GPU capacity.** Phala support confirmed they are
-> out of GPU compute. Everything on our side is built + CI-validated and waiting. When H200
-> capacity returns (dashboard shows *On-Demand Available*, or `phala instance-types` matches a
-> GPU teepod), execute this runbook top-to-bottom in **one focused billable session** (~$3.80/
-> GPU/hr) and **STOP the CVM at the end**.
+> ## ✅ Status (2026-07-21): the correctness GO/NO-GO **PASSED** on a real H200.
+>
+> A CUDA-produced Groth16 proof was **verified ON-CHAIN** by `verify_match_batch`
+> against the committed `vk_match_batch_n16` (`cvm-settle-e2e` green, `device=CUDA`,
+> image `tee-v3-hardening-68-cuda`, `h200.small` / node `gpu-use1`). **GPU proving is
+> correctness-validated — that question is closed and needs no further GPU time.**
+>
+> **⚠️ No valid performance number yet.** See [§10](#10-session-log-2026-07-21--results-and-what-is-still-open).
+> Do not quote a speedup from that session.
+>
+> **🛑 The previous version of this doc said "STOP the CVM at the end". That advice
+> destroyed most of a prepaid 24 h window. See [§7](#7-do-not-stop-the-cvm--on-demand-gpu-windows-are-forfeited).**
 >
 > This is the GPU analogue of [`docs/cvm-run-runbook.md`](cvm-run-runbook.md). The CPU/rapidsnark
 > CVM flow is unchanged and unaffected — keep using it (see the last section).
@@ -18,16 +25,21 @@ GPU** (commit `0400776` + the `git`/`libatomic1` fixups):
 
 - **ICICLE backend** wired as a third prover (`DARKNYX_TEE_PROVER=icicle`, device via
   `DARKNYX_TEE_ICICLE_DEVICE`). CPU byte-parity already proven (Phase 1, commit `4c9558c`).
-- **Pre-cutover CUDA image** was built, pushed, and CI-verified: the 3 backend `.so` ship under
-  `/opt/icicle/lib/backend/**` and the binary's links resolve. Because the Darknyx namespace
-  cutover changes the crate, binary, image and KMS namespaces, build the planned
-  `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-63-cuda` tag before the next GPU session.
-- **`deploy/docker-compose.gpu.yaml`** — the GPU variant (nvidia device reservation + CUDA device).
-- Build knobs: `DARKNYX_ICICLE_CUDA_ARCH` → cmake `-DCUDA_ARCH`; darknyx-tee feature `icicle-cuda`;
-  `deploy/Dockerfile` `ARG ENABLE_CUDA`; CI builds the CUDA image on a `-cuda`-suffixed tag.
+- **CUDA image** — ✅ `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-68-cuda` is BUILT, on ghcr,
+  and is the image that passed the first real H200 settle (2026-07-21). The 3 backend `.so` ship
+  under `/opt/icicle/lib/backend/**` and the binary's links resolve. (The earlier planned
+  `-63-cuda` tag was never built — ignore references to it.)
+- **`deploy/docker-compose.gpu.yaml`** — the GPU variant (nvidia device reservation + CUDA device
+  + `user: root` for the /dev/nvidia* permissions). **Always deploy GPU runs with
+  `-c deploy/docker-compose.gpu.yaml`** — using the base compose silently yields `InvalidDevice`.
+- Build knobs: **`NYX_ICICLE_CUDA_ARCH`** → cmake `-DCUDA_ARCH` (note the `NYX_` prefix — it must
+  match the vendored fork, which is excluded from the brand rename; see §10.2); darknyx-tee feature
+  `icicle-cuda`; `deploy/Dockerfile` `ARG ENABLE_CUDA`; CI builds the CUDA image on a
+  `-cuda`-suffixed tag.
 
-So the **only** remaining work is the live GPU session: deploy → confirm CC mode → measure the GPU
-prove speedup + settle on-chain (2a) → wire the GPU attestation (2b) → stop.
+✅ **Correctness (2a settle) is DONE** — see §10. Remaining: the **performance measurement**
+(§10.4, and note §10.5 — most of it does not need a *confidential* GPU) and the **2b GPU
+attestation** work (§6). **Do NOT end the session by stopping the CVM — see §7.**
 
 **Tooling note:** an nvm `node`/`phala` shim can shadow the real binary — if so, point these at the
 absolute nvm path for YOUR node version (find it with `ls "$HOME/.nvm/versions/node"`):
@@ -288,14 +300,31 @@ the `/attestation` change.
 
 ---
 
-## 7. STOP the CVM (billing!)
+## 7. 🛑 DO NOT stop the CVM — on-demand GPU windows are forfeited
 
+> **This section previously said the opposite, and that advice cost us most of a
+> paid 24 h H200 window on 2026-07-21.**
+
+**NEVER run `phala cvms stop` on an on-demand GPU CVM.** GPU instances are
+provisioned as a **fixed-duration window billed in full up front**. Stopping
+**DEALLOCATES the instance permanently** — it disappears from `phala cvms list`,
+the GPU returns to the pool, and every remaining prepaid hour is forfeited.
+**There is no restart.** (Unlike a CPU CVM, where stop/start is free and correct.)
+
+| CVM type | How to tell | Rule |
+|---|---|---|
+| **CPU** | `dstack-pha-*`, `resource.gpus == 0` | **Stop when done** — bills per running hour |
+| **GPU** | `h200.*` / `dstack-nvidia-*`, `resource.gpus >= 1` | **LEAVE IT RUNNING** the whole window — idle time is already paid for; stopping destroys it |
+
+**Check before stopping anything:**
 ```sh
-"$PHALA" cvms stop --cvm-id "$CVM"     # or delete via the dashboard
-"$PHALA" cvms list                     # confirm stopped
+phala cvms get <app_id> --json | grep -E '"instance_type"|"gpus"'
 ```
-**Never leave the H200 running** — it bills at ~$3.80/GPU/hr. Stopping preserves the app_id / signer
-/ volume; deleting reclaims everything.
+
+Practical consequence: **plan the entire window's work up front** (see §10's
+"next session" list) — you cannot pause and resume. When the window expires the
+instance is reclaimed automatically; just shred the deploy env and `unset` the
+credential vars.
 
 ---
 
@@ -321,3 +350,84 @@ rebuild with a new `-cuda` tag only if you touch:
 `Cargo.lock`. Trigger: `git tag tee-v3-hardening-<N>-cuda && git push origin tee-v3-hardening-<N>-cuda`
 (CI builds the CUDA image on any `-cuda`-suffixed tag, no GPU runner needed), then point the compose
 `image:` at the new tag. The CI verify step re-checks the backend `.so` + linking.
+
+---
+
+## 10. Session log 2026-07-21 — results and what is still open
+
+First real GPU session. **Correctness passed; performance is still unmeasured.**
+
+### 10.1 What passed
+
+`cvm-settle-e2e` green end-to-end on `h200.small` with `device=CUDA`: deposit →
+match → **GPU prove** → `verify_match_batch` → `tee_forced_settle_batched` → leaf
+growth. Because the on-chain verifier holds the committed VK, this is a stronger
+parity gate than the unit test: **CUDA introduces no proof-format or public-input
+drift.**
+
+### 10.2 Three blockers hit (all now encoded in the configs)
+
+| # | Symptom | Root cause | Fix |
+|---|---|---|---|
+| 1 | Build: `CUDA_ARCHITECTURES is set to "native", but no GPU was detected` | Dockerfile forwarded `DARKNYX_ICICLE_CUDA_ARCH`, but the vendored fork's `build.rs` reads **`NYX_ICICLE_CUDA_ARCH`** → `-DCUDA_ARCH`. The submodule is deliberately excluded from the nyx→darknyx rename (`docs/brand-namespace.md`), so the two drifted silently. | Dockerfile forwards `NYX_ICICLE_CUDA_ARCH`. **Do not "correct" the prefix** — it must match the pinned submodule. |
+| 2 | Runtime: `InvalidDevice` | **Deployed with the wrong compose.** `deploy/docker-compose.gpu.yaml` (with the nvidia reservation) already existed; the base `docker-compose.yaml` was used instead, so the container got no GPU. | Always deploy GPU runs with `-c deploy/docker-compose.gpu.yaml`. Self-inflicted — check for existing GPU tooling before improvising. |
+| 3 | Runtime: `PermissionDenied` in icicle `pre_compute_keys` (`cache.rs:226`) | Image drops to `USER darknyx`; `/dev/nvidia*` is root-owned → EACCES. Surfaces **after** `set_device` succeeds, so it reads like a CUDA bug. | `user: root` in the GPU compose. **TODO(prod):** add the runtime user to `video`/`render` groups in the `-cuda` image and drop this. |
+
+> **Shared failure signature:** in all three runtime cases **intake and matching look
+> perfectly healthy** — orders accept, the matcher ticks, a batch is enqueued — and
+> only the prove stage dies. `cvm-settle-e2e` surfaces it as a flat `leaf_count`,
+> not an obvious error. When a settle silently fails to land, grep the CVM logs for
+> `icicle` / `panic` first.
+
+### 10.3 ⚠️ Why the timing from this session is NOT usable
+
+Logged: `witness_ms=180`, `prove_step_ms=1843` (`device=CUDA`). Against the prod9
+CPU baseline (`297` / `2214`) that looks like ~1.2× — **but the comparison is
+invalid** for two independent reasons:
+
+1. **Only one prove ran** (exactly one `prove breakdown` line). icicle builds its
+   preprocessed-zkey cache on the *first* prove, so this is **warmup**, not steady
+   state. `cvm-settle-e2e` runs a single batch, so it can only ever show warmup.
+2. **Two variables changed.** The GPU box's CPU benchmarks **466 Mops/s**
+   single-thread vs prod9's **131** — ~3.5× faster — so GPU *and* CPU moved at once.
+
+1843 ms is also implausibly slow for steady-state H200 Groth16 on a ~233k-constraint
+circuit, which is consistent with cache-build cost rather than compute.
+**The roadmap's ~8× estimate remains unvalidated in both directions.**
+
+### 10.4 Next session — run these, in this order
+
+1. **Steady state:** `cvm-multimatch-settle` (multiple batches) so proves 2..N
+   exclude the zkey-cache build. That is the real `prove_step`.
+2. **Same-box A/B:** env-only redeploy with `DARKNYX_TEE_PROVER=rapidsnark`, then a
+   third leg with `DARKNYX_TEE_ICICLE_DEVICE=CPU`. Holding the host constant
+   separates "icicle vs rapidsnark" from "CUDA vs CPU".
+3. **Confirm CC mode** (`nvidia-smi conf-compute -q` → `ConfComputeMode : ON`) —
+   §6/§8 already cover this and it was NOT verified in the 2026-07-21 session.
+4. Only then update `throughput-roadmap.md` item 5 / the 🟢 gate with a real number.
+
+### 10.5 💡 Most of the remaining work does not need a *confidential* GPU
+
+**Measuring `prove_step` needs *a* GPU, not a TEE.** `crates/darknyx-tee/tests/icicle_cuda_parity.rs`
+is a plain `cargo test` that already reports warmup vs steady **and** an ark-CPU A/B
+on the same box — exactly the isolation §10.4 asks for:
+
+```sh
+RUN_ICICLE_CUDA_PROVE=1 cargo test -p darknyx-tee --release \
+  --features icicle-cuda --test icicle_cuda_parity -- --nocapture
+```
+
+Run that on any commodity H100/H200 (RunPod / Lambda / vast.ai, a few $/hr) to get
+the performance answer cheaply. Reserve scarce **confidential**-GPU windows for what
+genuinely needs the TEE: end-to-end settle, CC-mode confirmation, GPU attestation
+(§6), and production deployment.
+
+### 10.6 Reference data
+
+| Item | Value |
+|---|---|
+| Instance | `h200.small` — 24 vCPU, 192 GB, 1 GPU, **$4.80/hr** (not the $3.80 quoted above) |
+| Node / OS | `gpu-use1` (US-EAST-1) / `dstack-nvidia-dev-0.5.9` |
+| Gateway | `https://<app_id>-8080.dstack-pha-use1.phala.network` — read `gateway.base_domain` from `phala cvms get --json`; do **not** assume the prod5/prod9 pattern |
+| Host CPU | `06/cf` @ 1900 MHz, 466 Mops/s single-thread, `nr_throttled=0` |
+| Settle stages | lock 1132 · prove 2032 · verify 1056 · alt 1340+585 · settle 10546 · **total 13644** |
