@@ -669,9 +669,9 @@ fair execution price by the proof (see the §2 non-goals row).
 |---|---|---|---|
 | `VALID_WALLET_CREATE` | ~250 | 1 | Bind a `user_commitment` to (root, spending, viewing) keys |
 | `VALID_DEPOSIT` | 2,501 | 5 | Bind a recoverable note commitment to the public mint, amount, and recovery nonce while hiding owner + inner |
-| `VALID_SPEND` | ~7,000 | 5 | Prove note ownership + Merkle inclusion at withdraw time |
+| `VALID_SPEND` | 12,662 | 6 | Prove note ownership + Merkle inclusion at withdraw time |
 | `VALID_INPUT` | 12,058 | 4 | Prove note ownership + Merkle inclusion at **lock** time while keeping the positive u64 amount and nullifier private |
-| `VALID_MATCH_BATCH` | 232,806 (N=16) | 8 | Per-match fee notes, deterministic output inners, scaled floor pricing, conservation, and active-slot/market binding; public inputs are `[root, fee_rate_bps, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]` (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
+| `VALID_MATCH_BATCH` | 232,854 (N=16) | 8 | Per-match fee notes, deterministic output inners, scaled floor pricing, conservation, and active-slot/market binding; public inputs are `[root, fee_rate_bps, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]` (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
 | `VALID_MERGE` (K=2) | 25,532 | 6 | In-pool note consolidation: positive active inputs (same owner+mint, Merkle-proven) → one summed output with commitment-derived inner (§5 / §7.6) |
 | `VALID_MERGE` (K=4) | 48,458 | 8 | Same, up to 4 inputs (dummy-padded for 2–3); chained for >4 |
 
@@ -2229,8 +2229,8 @@ darknyx-monorepo/
 ├── circuits/
 │   ├── valid_wallet_create/circuit.circom    1 public input
 │   ├── valid_deposit/circuit.circom          5 public inputs (owner + inner private)
-│   ├── valid_spend/circuit.circom            5 public inputs (v2 inner_hash)
-│   ├── valid_input/circuit.circom            5 public inputs (v2 inner_hash)
+│   ├── valid_spend/circuit.circom            6 public inputs (v2 inner_hash)
+│   ├── valid_input/circuit.circom            4 public inputs (v2 inner_hash)
 │   └── match_batch_n16/  (+ n2, n4 dev)      VALID_MATCH_BATCH, 8 public inputs
 │                                              (root, fee, owner, mint halves, scale)
 │

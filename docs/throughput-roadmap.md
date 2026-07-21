@@ -135,24 +135,32 @@ So of the suggested techniques, **only public-input collapse (T1) has any headro
 is second-order, because amount-privacy (P1b) + CS-01 already collapsed the 16 matches into one
 `batch_root` and removed amounts, putting us near the public-input floor.
 
-**The T1 lever (when the gate lifts):** shrink the `prepare_inputs` MSM by exposing fewer public inputs.
-Prime target = **`verify_match_batch` 8 → 2**: precompute `market_digest = Poseidon(fee_rate, owner,
-base_lo, base_hi, quote_lo, quote_hi, price_scale)` **once** in the `MarketConfig` account; the circuit
-computes the same digest internally and exposes `[batch_root, market_digest]`; on-chain reads the
-precomputed digest from the account (do **not** hash 8 fields on-chain per tx — that pays the saving back
-in `sol_poseidon`). Saves ~6 × ~4.2k ≈ **~25k CU** on Tx B at near-zero added cost. Minor secondary wins
-elsewhere: fold each `mint_lo/mint_hi` pair into one field on `lock_note`/`deposit`/`withdraw` (−1 input
-each).
-**Why gated (not now):** (1) no verify tx is CU-limited — Tx B is ~132k under a 180k budget (~48k
+**The T1 lever — benchmark passed 2026-07-21:** shrink the `prepare_inputs` MSM by exposing fewer public
+inputs. Prime target = **`verify_match_batch` 8 → 2** with public `[batch_root, config_digest]`, where
+`config_digest = Poseidon8(domain, fee_rate, owner, base_lo, base_hi, quote_lo, quote_hi, price_scale)`.
+The circuit constrains the same digest internally. Compute it on-chain from the authoritative
+`VaultConfig` + `MarketConfig` values; do **not** store a combined digest in `MarketConfig`, because the
+two accounts have independent update instructions and a stored cross-account cache can go stale.
+
+The earlier estimate that `sol_poseidon` would pay the MSM saving back was wrong. The feature-gated
+litesvm A/B measured 119,939 CU (8 direct inputs), 90,570 CU (root + Poseidon8 config digest), and
+85,979 CU (one Poseidon9 full digest): **8→2 saved 29,369 CU after paying for Poseidon**, while 2→1
+saved only another 4,591 CU. The unchanged real `verify_match_batch` remained 132,519 CU, projecting
+the 2-input production handler at ~103,150 CU (~22.2% lower). Full N=16 constraint/prover A/B:
+232,854 → 234,025 constraints (+0.503%); seven interleaved snarkjs samples measured a +29.31 ms
+witness delta but no proving regression outside noise (paired prove delta −0.94%, treated as noise).
+Detailed method/raw samples: `docs/benchmarks/public-input-compression-2026-07-21.md`.
+
+**Why the production cutover remains ceremony-gated:** (1) no verify tx is CU-limited — Tx B is ~132k under a 180k budget (~48k
 headroom); (2) verify CU is off the end-to-end critical path (proving + `settle_ms` dominate — see cost
 model); (3) any public-input change is a full **§5 circuit ceremony** (regen zkey + VK + the committed
 N=16 fixture), a **new cross-language canonical-hash byte-equality contract** (§7 fragility + re-audit of
-the CS-01/02 soundness just closed), **more constraints → a slower prover**, and a devnet re-foundation +
-CVM revalidation. **Trigger:** a verify tx's CU budget becomes binding (accounts/data added, N raised
-above 16, or multi-proof-per-tx batching). Fold into the *next* circuit ceremony and use the
-`market_digest` variant.
-**Source:** 2026-07-16/17 on-chain verify-CU review; `groth16-solana` 0.2.0 `groth16.rs`;
-`programs/vault/src/zk/{verifier.rs,vk_*.rs}`; the 7 verify sites above.
+the CS-01/02 soundness just closed), extra constraints/witness work, and a devnet re-foundation + CVM
+revalidation. The measurement gate is now satisfied; fold the 8→2 variant into the next circuit ceremony
+and external review rather than opening a one-off production ceremony solely for this CU saving.
+**Source:** 2026-07-16/17 on-chain verify-CU review; 2026-07-21 focused benchmark;
+`groth16-solana` 0.2.0 `groth16.rs`; `programs/vault/src/zk/{verifier.rs,vk_*.rs}`; the 7 verify sites
+above.
 
 ### 7. Drop ALTs: settle Tx D → v1 inline-address transaction (SIMD-0296 / SIMD-0385)
 **Gate: 🟣 TX-V1.** SIMD-0296 raises the tx cap 1232 → **4096 B** via the SIMD-0385 **v1 format**

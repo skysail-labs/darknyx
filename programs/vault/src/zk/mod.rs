@@ -5,6 +5,12 @@
 //! any circuit change.
 
 pub mod verifier;
+#[cfg(feature = "public-input-bench")]
+pub mod vk_benchmark_pi1;
+#[cfg(feature = "public-input-bench")]
+pub mod vk_benchmark_pi2;
+#[cfg(feature = "public-input-bench")]
+pub mod vk_benchmark_pi8;
 pub mod vk_match_batch_n16;
 pub mod vk_valid_deposit;
 pub mod vk_valid_input;

@@ -1,3 +1,5 @@
+#[cfg(feature = "public-input-bench")]
+pub mod benchmark_public_inputs;
 pub mod close_batch_validity_marker;
 #[cfg(feature = "devnet-admin")]
 pub mod close_vault_config;
@@ -23,6 +25,8 @@ pub mod withdraw;
 // Re-export every item from each instruction module, including the hidden
 // `__client_accounts_*` modules Anchor's `#[derive(Accounts)]` macro generates.
 // The program macro resolves them at `crate::<module>::__client_accounts_*`.
+#[cfg(feature = "public-input-bench")]
+pub use benchmark_public_inputs::*;
 pub use close_batch_validity_marker::*;
 #[cfg(feature = "devnet-admin")]
 pub use close_vault_config::*;

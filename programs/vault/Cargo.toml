@@ -26,6 +26,10 @@ test-sbf = []
 # cannot freeze/brick funds. Dev, test, and devnet builds MUST pass
 # `--features devnet-admin` (deploy-devnet.sh + the litesvm suites depend on it).
 devnet-admin = []
+# Benchmark-only Groth16 verifier probe. OFF in every normal devnet/mainnet
+# build; it exists solely to measure the CU delta from 8 -> 2 -> 1 public
+# inputs under litesvm with the real Solana BN254/Poseidon syscalls.
+public-input-bench = []
 
 [dependencies]
 anchor-lang = { workspace = true, features = ["init-if-needed"] }
