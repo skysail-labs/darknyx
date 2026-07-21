@@ -57,16 +57,18 @@ in-TEE matcher)
 and `crates/darknyx-tee-loadgen/` (a host
 binary that load-tests the CVM's intake).
 
-> **Public docs are generated — edit `docs/portal/` only.** `docs/portal/`
-> (Docusaurus-style Markdown) is the **source of truth** for the public
-> documentation portal. `docs/gitbook/` is an **auto-generated**
-> GitBook-compatible render of it, produced by
-> **`scripts/convert-portal-to-gitbook.py`** (fixes YAML frontmatter, rewrites
-> `:::` admonitions → `{% hint %}`, de-numbers slug links, and emits
-> `SUMMARY.md` / `README.md` / `.gitbook.yaml`). **Never hand-edit
-> `docs/gitbook/`** — it is wiped and rebuilt from `docs/portal/` on every run,
-> and GitBook git-sync writes UI edits back, so hand-edits diverge. After any
-> `docs/portal/` change, regenerate: `python3 scripts/convert-portal-to-gitbook.py`.
+> **Public docs live in `docs/gitbook/` — edit it directly.** `docs/gitbook/`
+> is the **single source of truth** for the public documentation portal, hosted
+> on GitBook via git-sync. It is GitBook-flavored Markdown: YAML frontmatter with
+> a quoted `description`, `{% hint style="info|warning|success" %}` callouts, a
+> root `SUMMARY.md` table of contents, `.md`-suffixed relative links, and a
+> `.gitbook.yaml` config. Edit these files directly; when you add, remove, rename,
+> or reorder a page, **update `SUMMARY.md` in the same change** (it drives the
+> nav). GitBook git-sync is **bidirectional** — edits made in the GitBook UI are
+> committed back here, so this directory is the canonical copy; never keep a
+> parallel generated source. (The former Docusaurus source `docs/portal/` and its
+> `scripts/convert-portal-to-gitbook.py` generator were retired 2026-07 in favor
+> of editing GitBook directly.)
 
 **The note model (v2 / `inner_hash`).** Every note commitment AND its
 nullifier are anchored on a single amount-independent `inner_hash`:
