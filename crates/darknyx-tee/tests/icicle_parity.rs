@@ -193,16 +193,10 @@ async fn icicle_cpu_proves_and_verifies_n16() {
     let icicle_ms = t1.elapsed().as_millis();
 
     // 4. Byte-correctness gate: the icicle proof verifies against the zkey VK.
-    // Public inputs are root, fee config, market mint halves, and price scale.
-    assert_eq!(public.public_inputs_be.len(), 8);
+    // Public inputs are the root and governed-config digest.
+    assert_eq!(public.public_inputs_be.len(), 2);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
-    assert_eq!(public.public_inputs_be[1], [0u8; 32]);
-    assert_eq!(public.public_inputs_be[2], fr_safe(0x07));
-    assert_eq!(&public.public_inputs_be[3][16..], &base_mint()[16..]);
-    assert_eq!(&public.public_inputs_be[4][16..], &base_mint()[..16]);
-    assert_eq!(&public.public_inputs_be[5][16..], &quote_mint()[16..]);
-    assert_eq!(&public.public_inputs_be[6][16..], &quote_mint()[..16]);
-    assert_eq!(public.public_inputs_be[7][31], 1);
+    assert_eq!(public.public_inputs_be[1], public.config_digest);
     assert_eq!(
         public.merkle_root,
         compute_batch_root(&public.leaves).expect("recompute root"),

@@ -183,9 +183,9 @@ close. Those are now gone from L1; the proof is the sole binder:
 
 * **The circuit guarantees soundness over PRIVATE amounts.** `VALID_MATCH_BATCH`
   already proved conservation; it now also **range-checks every amount**
-  (`Num2Bits(64)`) and enforces the **protocol fee floor in-circuit**
-  (`fee_rate_bps` is a public input that `verify_match_batch` binds to the
-  authoritative `VaultConfig.fee_rate_bps`). The per-match Merkle leaf is
+  (`Num2Bits(64)`) and enforces the **exact protocol fee in-circuit**
+  (`fee_rate_bps` is in the governed-config digest that `verify_match_batch`
+  recomputes from authoritative accounts). The per-match Merkle leaf is
   **commitment-only** — `Poseidon11` over `active`, the six note commitments,
   the two per-match fee-note commitments, and `batch_slot`, hashing no amounts.
 * **The settle ix + event carry no amounts.** `MatchResultPayload` dropped its
@@ -320,7 +320,7 @@ on-chain hashers).
 | `VALID_DEPOSIT` | a recoverable note commitment for the public mint + gross amount, with owner and inner private | client prove → on-chain (`deposit`) |
 | `VALID_SPEND` | knowledge of a note's opening + its Merkle inclusion + correct nullifier | on-chain (`withdraw`) |
 | `VALID_INPUT` | a note's opening + inclusion with a private positive-u64 amount (gates `lock_note`) | on-chain (`lock_note`) |
-| `VALID_MATCH_BATCH` (N=16) | conservation + 64-bit range-checks + an in-circuit fee floor over PRIVATE amounts, + correct output-note construction for ≤16 matches, hashed into one **commitment-only** batch Merkle root | in-enclave prove → on-chain `verify_match_batch` |
+| `VALID_MATCH_BATCH` (N=16) | conservation + 64-bit range-checks + the exact in-circuit fee over PRIVATE amounts, + correct output-note construction for ≤16 matches, hashed into one **commitment-only** batch Merkle root | in-enclave prove → on-chain `verify_match_batch` |
 | `VALID_MERGE` (K=2/4) | positive active input notes (same owner+mint, each included) consolidate into one output whose inner is derived from consumed commitments; all-dummy witnesses are impossible | on-chain (`merge`) |
 
 (`MatchBatch(N)` is also instantiated at N=2/4 for dev/test only.) The

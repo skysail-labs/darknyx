@@ -32,10 +32,9 @@ use solana_transaction::Transaction;
 const FIXTURE: &[u8] = include_bytes!("fixtures/match_batch_n16_proof.bin");
 
 /// The protocol_owner_commitment the fixture (n16_assemble_prove_verify) was
-/// proved with — `fr_safe(0x07)`. The on-chain verify reads this from
-/// VaultConfig as the 3rd public input, so the test must seed it to match or
-/// the proof's public inputs won't line up. (fee_rate_bps stays 0: the fixture
-/// match is zero-fee.)
+/// proved with — `fr_safe(0x07)`. The on-chain verify includes this value in
+/// the config digest, so the test must seed it to match. (fee_rate_bps stays 0:
+/// the fixture match is zero-fee.)
 fn fixture_protocol_owner() -> [u8; 32] {
     let mut v = [0x07u8; 32];
     v[0] = 0;
@@ -69,8 +68,8 @@ fn fixture() -> ([u8; 256], [u8; 32]) {
 fn real_n16_proof_accepted_onchain_creates_marker() {
     let mut h = Harness::setup();
     let (proof, root) = fixture();
-    // The 3rd public input (protocol_owner) is read from VaultConfig; seed it
-    // to the value the fixture proved with.
+    // The config-digest preimage is read from VaultConfig + MarketConfig; seed
+    // it to the values the fixture proved with.
     set_vault_fee_config(&mut h, fixture_protocol_owner(), 0);
     let (base_mint, quote_mint) = fixture_mints();
     seed_market_config(&mut h, &base_mint, &quote_mint, 1, true);
@@ -99,22 +98,20 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
         .send_transaction(tx)
         .expect("on-chain groth16-solana must accept our real N=16 proof");
 
-    // CU profiling + regression guard for darknyx-tee's per-tx ComputeUnitLimit
-    // right-sizing (VERIFY_COMPUTE_UNIT_LIMIT in crates/darknyx-tee/src/settle/pipeline.rs,
-    // now 180_000). v3's eight public inputs measure ~132.5k CU in litesvm.
-    // The higher transaction limit preserves >20% headroom and covers the
-    // modest devnet/runtime delta observed in prior verifier measurements.
+    // CU profiling + regression guard for darknyx-tee's per-tx
+    // ComputeUnitLimit. Update the measured value and limit together after
+    // regenerating the two-public-input verifier.
     eprintln!(
         "CU_PROFILE verify_match_batch consumed={}",
         meta.compute_units_consumed
     );
     assert!(
-        meta.compute_units_consumed < 150_000,
-        "verify_match_batch CU {} grew — re-measure + re-check VERIFY_COMPUTE_UNIT_LIMIT (180_000) headroom vs devnet",
+        meta.compute_units_consumed < 115_000,
+        "verify_match_batch CU {} grew — re-measure + re-check VERIFY_COMPUTE_UNIT_LIMIT (140_000) headroom vs devnet",
         meta.compute_units_consumed
     );
     assert!(
-        meta.compute_units_consumed.saturating_mul(120) < 180_000 * 100,
+        meta.compute_units_consumed.saturating_mul(120) < 140_000 * 100,
         "verify_match_batch CU {} has less than 20% limit headroom",
         meta.compute_units_consumed
     );
@@ -213,6 +210,37 @@ fn proof_bound_to_different_price_scale_rejected() {
     assert!(
         h.svm.send_transaction(tx).is_err(),
         "a proof for a different governed price scale must be rejected"
+    );
+    assert!(!batch_validity_marker_exists(&h, &root));
+}
+
+#[test]
+fn proof_bound_to_different_vault_config_rejected() {
+    let mut h = Harness::setup();
+    let (proof, root) = fixture();
+    let mut wrong_owner = fixture_protocol_owner();
+    wrong_owner[31] ^= 1;
+    set_vault_fee_config(&mut h, wrong_owner, 1);
+    let (base_mint, quote_mint) = fixture_mints();
+    seed_market_config(&mut h, &base_mint, &quote_mint, 1, true);
+
+    let ix = build_verify_match_batch_ix(
+        &h,
+        &h.tee.pubkey(),
+        &base_mint,
+        &quote_mint,
+        &root,
+        200,
+        &proof,
+    );
+    let tx = Transaction::new(
+        &[&h.tee],
+        Message::new(&[ix], Some(&h.tee.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "a proof for a different governed fee/owner config must be rejected"
     );
     assert!(!batch_validity_marker_exists(&h, &root));
 }

@@ -82,7 +82,7 @@ the relevant `main` before fixing.
 | U-07 | Perf-Nit | — | — | Ed25519 precompile full-instruction scan is intentional (replaced a buggy `+8` window); bounded by the TEE-built tx's ix count; declined | Won't Fix |
 | U-08 | Medium | TEE + matcher | `remediation/audit-2026-07-18-residuals` | Shared REST/WS intake rejects unknown symbols and off-tick nonzero limits; pure matcher independently excludes bypassed off-tick orders; tick=10 negative and zero-limit market-ask positive regressions | Closed |
 | U-09 | Medium ops | TEE | `remediation/audit-2026-07-18-residuals` | Governed real-market boot requires finalized Vault/Market config and adopts owner+fee+market atomically; one-minute finalized refresh pauses place/modify+matching on RPC/drift/key mismatch while cancel/reconcile continue; placeholder loadgen cannot settle | Closed |
-| U-10 | Low | TEE + vault + docs | `remediation/audit-2026-07-18-residuals` | Active comments and protocol diagrams describe exact fees, per-match fee notes, Poseidon11 leaves, and already-shipped eight-input market binding | Closed |
+| U-10 | Low | TEE + vault + docs | `remediation/audit-2026-07-18-residuals` | Active comments and protocol diagrams describe exact fees, per-match fee notes, Poseidon11 leaves, and the governed market binding (now root plus an on-chain-recomputed config digest) | Closed |
 
 ## Cross-cutting release deliverables
 
@@ -93,6 +93,7 @@ plan, not additional audit finding IDs.
 |---|---|---|---|---|
 | DR-01 | SDK + TEE + indexer | `remediation/durable-recovery` | The unchanged 128-byte field encrypts two u64s per side; seed + finalized chain reconstructs deposit, trade, change/continuation, and merge openings with commitment and leaf-position verification; exact-fill unit coverage plus a live partial-settle recovery drill | Closed |
 | PERF-INV-01 | TEE + Operations | `perf-inv-01-host-diagnostic` | Boot-time in-binary host-CPU profile (no `phala ssh` needed) captures cgroup cpu.max/cpu.stat, cpuinfo model/MHz, visible cores, and a single-thread throughput microbench; root cause is node-specific host contention on prod5 (not the circuit, not a cgroup quota), verified by a real settle on prod9 restoring proving ~5.3×. Production placement on a good node before release certification remains an operational step | Closed |
+| PERF-CU-01 | ZK + vault + TEE + SDK | `remediation/match-public-input-compression` | VALID_MATCH_BATCH keeps its root public and binds all seven governed configuration fields through a canonical Poseidon digest recomputed from authoritative accounts; production CU, prover, parity, adversarial, artifact, devnet, and CVM evidence | Closed |
 | PRIV-01 | ZK + vault + SDK | `remediation/deposit-privacy` | VALID_DEPOSIT binds commitment, mint, gross amount, and a recovery nonce while keeping owner commitment + inner hash private; altered public/private fields fail before custody or tree mutation; seed + chain cold recovery remains complete; proof latency, CU, and signed transaction size meet the recorded gates | Closed |
 
 ## Pull request evidence template
@@ -1378,6 +1379,111 @@ Every remediation PR must record:
   but new clients cannot use the reverted deposit wire and reverted cold
   recovery cannot reconstruct the domain-27 deposit inner. Rollback therefore
   reopens audit C-06 and must not be used for a privacy-preserving launch.
+
+### `remediation/match-public-input-compression` — PERF-CU-01
+
+- **Status.** Closed by the atomic circuit/artifact/vault/TEE/SDK cutover,
+  exhaustive local validation, the canonical devnet verifier upgrade, and an
+  isolated real-mint settlement from a cold-booted image-66 CVM.
+- **Invariant and circuit impact.** VALID_MATCH_BATCH moves from eight direct
+  public inputs to `[merkle_root, config_digest]`, where
+  `config_digest = Poseidon8(28, fee_rate_bps, protocol_owner_commitment,
+  base_mint_lo, base_mint_hi, quote_mint_lo, quote_mint_hi, price_scale)`.
+  The seven preimage fields remain private circuit inputs and constrain every
+  active slot. The vault recomputes the digest at verification time from the
+  authoritative `VaultConfig` and enabled `MarketConfig`; it is not cached in
+  either independently mutable account. Instruction accounts/data, settlement
+  payload v10, canonical order domain, note construction, Merkle leaves, and
+  Tx D layout do not change. Old VALID_MATCH_BATCH proofs are intentionally
+  invalid after the verifier cutover.
+- **Measured result.** The production N=16 circuit has 234,025 constraints,
+  +1,171 / 0.503% versus the eight-input benchmark body. Seven interleaved
+  snarkjs samples measured +29.31 ms witness generation and no end-to-end
+  proving regression outside noise. The real LiteSVM instruction fell from
+  132,519 CU to 103,346 CU, saving 29,173 CU / 22.01%; the verifier limit is
+  reduced from 180,000 to 140,000 CU and retains more than 35% headroom. The
+  one-input alternative saves only another projected 4,591 CU, so the Merkle
+  root stays explicit. Full raw samples and method are in
+  `docs/benchmarks/public-input-compression-2026-07-21.md`.
+- **VALID_INPUT decision.** The 4→2 and 4→1 spike is recorded separately in
+  `docs/benchmarks/valid-input-public-input-compression-2026-07-21.md`. The
+  two-input option projects a 9,709-CU saving per lock but measured a stable
+  +5.38% witness-plus-prove regression; the one-input option saves only another
+  5,091 CU. Production VALID_INPUT therefore remains at four public inputs
+  until representative desktop/mobile browser measurements and real block-CU
+  pressure justify a cutover.
+- **Local evidence (2026-07-21).** N=2/N=4/N=16 zkeys verify independently;
+  the regenerated N=16 ark fixture proves and verifies, with 537 ms witness and
+  1,218 ms prove-step timings on the release run. Rust/TypeScript digest KAT
+  and parity pin
+  `053d4a1e1aa0c604c482f58e4afb9327ac4793922fc6be567c2120459be10758`;
+  negatives bind every digest field and reject forged/wrong-account digests.
+  Ark, rapidsnark, and ICICLE builds pass. Both mainnet and `devnet-admin` SBF
+  builds, formatting, workspace Clippy with warnings denied, the full Rust
+  workspace, SDK/indexer/daemon TypeScript, and all three Vitest suites pass.
+  Targeted LiteSVM proof, batch-settlement, spend, and ZK round trips pass; the
+  production verifier measures 103,346 CU and worst-case Tx D remains within
+  its existing size/CU regressions. All one-off benchmark circuits, verifier
+  keys, feature gates, synthetic proofs, and scripts are deleted after their
+  measurements were preserved.
+- **Image and devnet cutover evidence (2026-07-21).** GitHub packaging run
+  `29793371641` built `tee-v3-hardening-66` from `c7f670d` and published
+  immutable digest
+  `sha256:83871594cc1fba9f5c18f7f9cc75b3fc12e815349694a229b204a6dac4b82749`;
+  the workflow succeeded despite the expected organization artifact-quota
+  annotation because the GHCR push is independent. The `devnet-admin` SBF was
+  rebuilt as SHA-256
+  `947556828a0e4412ef1b8aef9e116d235a2037f0c8584f44e8dbd533b3aecf25`.
+  Canonical program `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` upgraded
+  at finalized slot 477746541 with signature
+  `4N5pgJBbxrDRMvZ5Zfh3zkuTDCGTkChg9kSFUKf32duwRGUY1X95MvD8QBz6bRsQMcMBZX9hi3AniQ9ygowN23C4`.
+  The mandatory post-VK tree reset first simulated successfully at 6,118 CU,
+  then finalized as
+  `2KMaZXMWctPMHexCtWxQCEPeiEWhb5hX6P2e5f3jYVu16YX2naHQntd2K4duZixPRv1aPEiQULByA8JVQwaALiU5`;
+  the CVM cold-boot sync floor was slot 477746874.
+- **CVM boot evidence (2026-07-21).** The billable prod9 `tdx.xlarge` CVM
+  `app_9ca3cded105f16923afb0e3f62537882c14db637` pulled image 66 and booted
+  with compose hash
+  `048ae872a1a67dcc7e9b80e12c18885be806204896b823c73c425626d1a78543`
+  and MRTD
+  `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`.
+  The finalized governed K=1 signer already matched
+  `4F9aTxW18pxBYFTnqXi8P82FUY4255RQDCkysZyoSMRX`, so no rotation was needed;
+  its exact top-up simulated at 150 CU and finalized as
+  `3uCpHjBjqHnfX1FkjWBvuhHTkjSfJBs63QrQ2aCou5hFjTF983eLCDA3d5szUeteAbmdwDNhkXnnkvan6Cb1kbmD`.
+  Boot reported eight logical CPUs at 2.4 GHz, `cpu.max=max 100000`, zero
+  cgroup throttling, and 199.9 Mops/s single-thread throughput. Strict
+  dstack/KMS, native witness, rapidsnark, proving-key, finalized configuration,
+  empty Merkle cold-boot, and settlement-pipeline checks all passed;
+  authenticated status was non-degraded with matching and settlement enabled.
+- **Live settlement evidence (2026-07-21).** The isolated
+  `cvm-settle-e2e.test.ts` passed 1/1 in 38.28 seconds (test body 37.78
+  seconds). Native witness generation took 318 ms, rapidsnark's prove step
+  2,072 ms, and aggregate proving 2,425 ms. The settlement stages were lock
+  2,269 ms, verify 1,340 ms, ALT transaction 1,366 ms, ALT activation wait 800
+  ms, parallel work 3,766 ms, settle confirmation 10,652 ms, and 14,442 ms
+  total. The two lock transactions finalized as
+  `5ZZ2Xw6qk8ojXCXMXL6g9GAvNC2wazv8WvhDkwQ2ePm1aV98djKfaUVfRJ1eYCVS4nxwkK1bPzX3fE2QiJMRqGHD`
+  and
+  `4yyH5MswSm2gVB1cuNXn4sMTHFZBQ6x2bKfSQZVvFehSJ32QS2zoQg7RYyA9ia9T7WZjdEP7MLX2KQ8SUK6xckqD`.
+  Compressed Tx B finalized as
+  `36jSVo9vsZkiH1dG9KXKrNWpLiPVEYQiwwFkg6C7K393VvmVhVEykavK677p5Kd6oZijtiybm15k8g25eRkkVFRp`
+  and consumed 101,846 CU under its 139,850-CU transaction limit. Tx D
+  finalized at slot 477748259 as
+  `2Z6b72ACkkU9yt62YXRfVFwiBDgeNdXT9S6n5LYnTQ27aaMTpsiDqAuczvTDRCpKKrLkUoLPEosU8CxtsdQEeFr4`,
+  consuming 70,364 CU under its 114,850-CU limit. The terminal outcome was one
+  confirmed match with zero rejected or ambiguous matches; the expiry-gated
+  marker close later finalized as
+  `x8of3jyM6YKw5Koo87fSDYcU4SgV4MKJabTWxzmhqk2p84BYH8hktwDDiqMr3w11wiZJEzB2SzMUzLRoq1ohNJS`.
+  The encrypted deploy file was securely deleted, live credentials were
+  cleared, and the only organization CVM was verified `stopped` immediately
+  after evidence capture.
+- **Rollback.** Before new proof-bearing activity, revert the PR and redeploy
+  image 65 plus the preceding vault artifact together. After cutover, rollback
+  requires stopping intake, discarding in-flight orders/proofs, deploying the
+  old vault and TEE as one unit, and clean-resetting devnet again. Existing note
+  commitments are unchanged, but batch proofs are verifier-specific and cannot
+  cross either direction of the cutover.
 
 ## Mainnet release gates
 

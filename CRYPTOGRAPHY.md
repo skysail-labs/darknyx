@@ -671,7 +671,7 @@ fair execution price by the proof (see the §2 non-goals row).
 | `VALID_DEPOSIT` | 2,501 | 5 | Bind a recoverable note commitment to the public mint, amount, and recovery nonce while hiding owner + inner |
 | `VALID_SPEND` | 12,662 | 6 | Prove note ownership + Merkle inclusion at withdraw time |
 | `VALID_INPUT` | 12,058 | 4 | Prove note ownership + Merkle inclusion at **lock** time while keeping the positive u64 amount and nullifier private |
-| `VALID_MATCH_BATCH` | 232,854 (N=16) | 8 | Per-match fee notes, deterministic output inners, scaled floor pricing, conservation, and active-slot/market binding; public inputs are `[root, fee_rate_bps, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]` (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
+| `VALID_MATCH_BATCH` | 234,025 (N=16) | 2 | Per-match fee notes, deterministic output inners, scaled floor pricing, conservation, and active-slot/market binding; public inputs are `[root, config_digest]`, where `config_digest = Poseidon8(28, fee_rate_bps, protocol_owner, base_lo, base_hi, quote_lo, quote_hi, price_scale)` (N ∈ {2, 4, 16}; only N=16 wired on-chain) |
 | `VALID_MERGE` (K=2) | 25,532 | 6 | In-pool note consolidation: positive active inputs (same owner+mint, Merkle-proven) → one summed output with commitment-derived inner (§5 / §7.6) |
 | `VALID_MERGE` (K=4) | 48,458 | 8 | Same, up to 4 inputs (dummy-padded for 2–3); chained for >4 |
 
@@ -896,18 +896,17 @@ instead of 64 ~30 s per-match proofs).
                          merkle_root   ← public input
 ```
 
-Public inputs (8) — declaration order is load-bearing (matches the on-chain
-`verify_groth16_proof::<8>` in `verify_match_batch`):
+Public inputs (2) — declaration order is load-bearing (matches the on-chain
+`verify_groth16_proof::<2>` in `verify_match_batch`):
 - `merkle_root` — the depth-`log2(N)` Poseidon Merkle root over the
   per-slot leaves. The on-chain `verify_match_batch` uses this as the
   PDA seed for `BatchValidityMarker` at `[b"batch_validity", merkle_root]`.
-- `fee_rate_bps` — the exact protocol fee rate the circuit enforces per slot;
-  `verify_match_batch` binds it to the authoritative `VaultConfig.fee_rate_bps`.
-- `protocol_owner_commitment` — the owner the batch's fee notes are bound to;
-  `verify_match_batch` binds it to `VaultConfig.protocol_owner_commitment`.
-- `base_mint_lo`, `base_mint_hi`, `quote_mint_lo`, `quote_mint_hi` — the
-  two 128-bit field halves of the enabled `MarketConfig` mint pair.
-- `price_scale` — the nonzero governed fixed-point denominator from that market.
+- `config_digest` — `Poseidon8(DOMAIN_MATCH_CONFIG=28, fee_rate_bps,
+  protocol_owner_commitment, base_mint_lo, base_mint_hi, quote_mint_lo,
+  quote_mint_hi, price_scale)`. The preimage fields remain private circuit
+  inputs and drive every slot. The vault recomputes the digest from the
+  authoritative `VaultConfig` + `MarketConfig`; it is never accepted from the
+  prover or cached across those independently updated accounts.
 
 Leaf-hash construction. **Amount-privacy (P1b): the leaf is commitment-only.**
 The note commitments transitively bind the amounts/mints/price (each is a
@@ -1317,22 +1316,21 @@ vault::verify_match_batch(
 Accounts:
 - `payer` (signer — anyone can pay; auth is the proof)
 - `vault_config` (**ro** — source of the authoritative `fee_rate_bps` +
-  `protocol_owner_commitment` bound into the proof's public inputs)
-- `market_config` (**ro** — enabled mint pair + nonzero `price_scale` bound
-  into public inputs 4–8)
+  `protocol_owner_commitment` config-digest preimage)
+- `market_config` (**ro** — enabled mint pair + nonzero `price_scale`
+  config-digest preimage)
 - `marker` (PDA at `[b"batch_validity", merkle_root]`, **init**)
 - `system_program`
 
 Handler:
 1. Assert `expiry_slot ∈ (clock.slot, clock.slot + 300]` (≈ 2 min TTL).
 2. Read `fee_rate_bps` + `protocol_owner_commitment` from `vault_config`, require
-   the supplied market enabled with a nonzero scale, pack the 8 public inputs
-   `[root, fee_rate, owner, base_lo, base_hi, quote_lo, quote_hi, scale]`, and
-   verify the Groth16 against `vk_match_batch_n16` via
-   `verify_groth16_proof::<8>` (~132.5k CU in litesvm — the verifier cost scales with
-   public-input count, not constraint count). Binding the fee rate + owner here
-   is what makes the circuit's exact-fee + fee-note binding enforce the
-   protocol's actual config.
+   the supplied market enabled with a nonzero scale, recompute
+   `Poseidon8(28, fee, owner, base_lo, base_hi, quote_lo, quote_hi, scale)`, and
+   verify the Groth16 over `[root, config_digest]` against
+   `vk_match_batch_n16` via `verify_groth16_proof::<2>`. Binding the governed
+   preimage here is what makes the circuit's exact-fee, fee-note, mint, and
+   scaled-price constraints enforce the protocol's actual config.
 3. Init `BatchValidityMarker { payer, expiry_slot, bump }`.
 
 One marker covers all N matches sharing the same `merkle_root`. The matcher
@@ -1758,10 +1756,10 @@ TTLs (locks ~30 min, markers ~2 min), so abandoned state self-cleans.
 ### The marker PDA construction (binding by seed)
 
 The `BatchValidityMarker`'s *seed* is the batch Merkle root, not its data.
-`verify_match_batch` verifies the Groth16 over the 8 public inputs
-`[root, fee_rate, owner, base_lo, base_hi, quote_lo, quote_hi, price_scale]`
-(fee/owner bound to `VaultConfig`, market fields bound to `MarketConfig`) and
-inits the marker at `[b"batch_validity", merkle_root]`.
+`verify_match_batch` verifies the Groth16 over `[root, config_digest]`. It
+recomputes `config_digest` from fee/owner in `VaultConfig` and the mint halves +
+price scale in `MarketConfig`, then inits the marker at
+`[b"batch_validity", merkle_root]`.
 At settle, `tee_forced_settle_batched` recomputes the per-slot leaf from
 the payload commitments, walks the depth-4 inclusion path to a root, and
 requires the marker to exist at `[b"batch_validity", that_root]` — so a
@@ -2231,8 +2229,8 @@ darknyx-monorepo/
 │   ├── valid_deposit/circuit.circom          5 public inputs (owner + inner private)
 │   ├── valid_spend/circuit.circom            6 public inputs (v2 inner_hash)
 │   ├── valid_input/circuit.circom            4 public inputs (v2 inner_hash)
-│   └── match_batch_n16/  (+ n2, n4 dev)      VALID_MATCH_BATCH, 8 public inputs
-│                                              (root, fee, owner, mint halves, scale)
+│   └── match_batch_n16/  (+ n2, n4 dev)      VALID_MATCH_BATCH, 2 public inputs
+│                                              (root, governed-config digest)
 │
 ├── crates/
 │   ├── darkpool-crypto/                       single source of truth (host crypto)

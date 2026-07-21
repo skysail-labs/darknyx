@@ -20,9 +20,8 @@
 //!   `[0]` payer            — signer + writable (the TEE keypair;
 //!                            authorization is implicit in the proof,
 //!                            but the TEE pays rent + fee)
-//!   `[1]` vault_config     — readonly; supplies `fee_rate_bps` as the
-//!                            2nd public input (amount-privacy, P1b)
-//!   `[2]` market_config    — readonly; supplies mint halves + price scale
+//!   `[1]` vault_config     — readonly; supplies fee + owner digest preimage
+//!   `[2]` market_config    — readonly; supplies mint/scale digest preimage
 //!   `[3]` marker           — writable PDA (init), seeds
 //!                            `[b"batch_validity", merkle_root]`
 //!   `[4]` system_program   — readonly
@@ -79,7 +78,7 @@ pub fn build_verify_match_batch_ix(
     // Order MUST match: payer, vault_config, market_config, marker, system.
     let accounts = vec![
         AccountMeta::new(*payer, true), // payer: signer + writable
-        AccountMeta::new_readonly(vault_config, false), // vault_config (fee_rate_bps public input)
+        AccountMeta::new_readonly(vault_config, false), // config-digest preimage
         AccountMeta::new_readonly(market_config, false),
         AccountMeta::new(marker_pda, false), // marker: writable (init)
         AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
@@ -169,7 +168,7 @@ mod tests {
         assert!(ix.accounts[0].is_signer);
         assert!(ix.accounts[0].is_writable);
 
-        // [1] vault_config: readonly (fee_rate_bps public input)
+        // [1] vault_config: readonly (config-digest preimage)
         assert_eq!(ix.accounts[1].pubkey, vault_config_pda().0);
         assert!(!ix.accounts[1].is_signer);
         assert!(!ix.accounts[1].is_writable);

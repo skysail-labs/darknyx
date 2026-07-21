@@ -61,7 +61,7 @@ pub enum ProverError {
     /// Groth16 proof generation failed inside ark-groth16.
     #[error("prove: {0}")]
     Prove(String),
-    /// The circuit's computed Merkle root (the first of eight public inputs)
+    /// The circuit's computed Merkle root (the first of two public inputs)
     /// disagrees with our off-circuit `compute_batch_root`. Means
     /// `prover/leaf.rs` drifted from the circuit's `MatchSlot()` /
     /// `MerkleRoot()` templates — a proof would be silently rejected

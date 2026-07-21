@@ -14,8 +14,8 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 // body services every batch size — only the Merkle tree depth changes.
 //
 // Constraint budget (measured on the N=16 instantiation):
-//   100,969 nonlinear + 131,837 linear = 232,806 constraints,
-//   with 8 public inputs and 232,284 wires. Output-inner derivation,
+//   101,422 nonlinear + 132,603 linear = 234,025 constraints,
+//   with 2 public inputs. Output-inner derivation,
 //   per-match fee notes, activation bits, and scaled-floor pricing are
 //   included in that total.
 //
@@ -25,7 +25,7 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 //                    `match-batch-prototype.test.ts` only.
 //   - N=16         → **pot18 required** (`powersOfTau28_hez_final_18.ptau`,
 //                    ~288 MB, 2^18 cap) — total constraints
-//                    (232,806) exceed the pot16 ceiling.
+//                    (234,025) exceed the pot16 ceiling.
 //                    `scripts/download-ptau.sh` fetches both files
 //                    automatically; the build script picks the right
 //                    one per circuit instantiation.
@@ -61,6 +61,7 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 //   DOMAIN_OUTPUT_INNER = 24 (output inner from consumed input inner + role)
 //   DOMAIN_FEE_INNER    = 25 (fee inner from consumed input commitment + role)
 //   DOMAIN_BATCH_ROOT = 22   (Merkle internal node, Poseidon(3))
+//   DOMAIN_MATCH_CONFIG = 28 (governed config digest, Poseidon(8))
 //   (DOMAIN_LEAF_INNER=20 / DOMAIN_LEAF_TOP=21 = the retired two-stage leaf.)
 
 // ----------------------------------------------------------------------------
@@ -86,8 +87,8 @@ template MatchSlot() {
     // is proof-backed.
     signal input note_fee_base_commitment;
     signal input note_fee_quote_commitment;
-    // Market identity is fanned in from the MatchBatch PUBLIC inputs. There
-    // are no prover-selected per-slot mint signals in v3.
+    // Market identity is fanned in from the MatchBatch config-digest preimage.
+    // There are no prover-selected per-slot mint signals.
     signal input quote_mint_lo;
     signal input quote_mint_hi;
     signal input base_mint_lo;
@@ -110,9 +111,8 @@ template MatchSlot() {
     // Private activation bit, hashed into the leaf. Tx D always recomputes a
     // leaf with active=1, so canonical inactive padding can never be settled.
     signal input is_active;
-    // Protocol fee rate (basis points), a MatchBatch-level PUBLIC input fanned
-    // to every slot, bound on-chain to VaultConfig.fee_rate_bps. Drives the
-    // in-circuit fee floor below.
+    // Protocol fee rate (basis points), a MatchBatch-level digest-bound input
+    // fanned to every slot. Drives the in-circuit fee floor below.
     signal input fee_rate_bps;
 
     // ----- VALID_CREATE private witnesses (v2: one inner_hash per note) -----
@@ -296,9 +296,9 @@ template MatchSlot() {
 
     // ─────────────────────────────────────────────────────────────────
     // EXACT FEE (amount-privacy P1b + C-04 audit) — the fee is pinned to
-    // EXACTLY `⌊notional·rate/10000⌋`, not merely floored. `fee_rate_bps` is a
-    // PUBLIC input bound to VaultConfig.fee_rate_bps, so the verifier pins the
-    // rate.
+    // EXACTLY `⌊notional·rate/10000⌋`, not merely floored. `fee_rate_bps` is
+    // bound through config_digest to VaultConfig.fee_rate_bps, so the verifier
+    // pins the rate.
     //
     // FLOOR  `(fee+1)·10000 > notional·rate`  ⇒ fee ≥ ⌊notional·rate/10000⌋
     // CEIL   `fee·10000 <= notional·rate`      ⇒ fee ≤ ⌊notional·rate/10000⌋
@@ -469,27 +469,25 @@ template MerkleRoot(N) {
 }
 
 // ----------------------------------------------------------------------------
-// MatchBatch(N) — main template for N=2/4/8/16 batches. Eight public
-// inputs bind the computed root plus governed protocol/market configuration.
-// The prover supplies the root and the circuit re-derives it from the slot
-// leaves, asserting equality.
+// MatchBatch(N) — main template for N=2/4/8/16 batches. Two public inputs bind
+// the computed root plus a Poseidon digest of governed protocol/market
+// configuration. The preimage fields remain circuit inputs and drive every
+// slot; the vault recomputes the same digest from authoritative accounts.
 // ----------------------------------------------------------------------------
 template MatchBatch(N) {
     signal input merkle_root;
-    // Protocol fee rate (bps), PUBLIC — bound on-chain to
-    // VaultConfig.fee_rate_bps. Declared right after merkle_root so the public
-    // signal order begins [merkle_root, fee_rate_bps]. Range-bound to 16 bits so the
-    // per-slot fee-floor products stay < 2^80.
+    signal input config_digest;
+    // Protocol fee rate (bps), bound through config_digest to
+    // VaultConfig.fee_rate_bps. Range-bound to 16 bits so the per-slot
+    // fee-floor products stay < 2^80.
     signal input fee_rate_bps;
     component feeRateBits = Num2Bits(16);
     feeRateBits.in <== fee_rate_bps;
-    // Protocol fee-note owner, PUBLIC — bound on-chain to
+    // Protocol fee-note owner — bound through config_digest to
     // VaultConfig.protocol_owner_commitment so the minted fee notes can only
-    // pay the protocol's owner. Public order:
-    // [merkle_root, fee_rate_bps, protocol_owner_commitment].
+    // pay the protocol's owner.
     signal input protocol_owner_commitment;
-    // Governed MarketConfig values, PUBLIC. Public order is exactly:
-    // root, fee rate, protocol owner, base lo/hi, quote lo/hi, price scale.
+    // Governed MarketConfig values, bound through config_digest.
     signal input base_mint_lo;
     signal input base_mint_hi;
     signal input quote_mint_lo;
@@ -501,7 +499,21 @@ template MatchBatch(N) {
     priceScaleIsZero.in <== price_scale;
     priceScaleIsZero.out === 0;
 
-    // ----- Per-slot public-bound fields -----
+    // Public-statement compression: the vault recomputes this Poseidon8 from
+    // VaultConfig + MarketConfig before Groth16 verification. This preserves
+    // exact binding while shrinking the verifier MSM from eight inputs to two.
+    component configHash = Poseidon(8);
+    configHash.inputs[0] <== 28; // DOMAIN_MATCH_CONFIG
+    configHash.inputs[1] <== fee_rate_bps;
+    configHash.inputs[2] <== protocol_owner_commitment;
+    configHash.inputs[3] <== base_mint_lo;
+    configHash.inputs[4] <== base_mint_hi;
+    configHash.inputs[5] <== quote_mint_lo;
+    configHash.inputs[6] <== quote_mint_hi;
+    configHash.inputs[7] <== price_scale;
+    config_digest === configHash.out;
+
+    // ----- Per-slot root-bound fields -----
     signal input note_a_commitment[N];
     signal input note_b_commitment[N];
     signal input note_c_commitment[N];

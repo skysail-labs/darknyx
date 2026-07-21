@@ -28,6 +28,7 @@ import {
   deriveMatchFeeInner,
   deriveMatchOutputInner,
 } from "../src/utxo/match-output.js";
+import { matchConfigDigest } from "../src/utxo/match-config.js";
 import {
   proveMatchBatch,
   computeBatchLeaf,
@@ -75,7 +76,7 @@ async function buildSlot(args: {
   /** Salt the inner_hashes so multiple slots in the same batch
    *  don't accidentally collide commitments. */
   slotIdx: number;
-  /** Circuit fee-floor PUBLIC input (bps). Defaults to 0 (floor is a
+  /** Circuit fee-floor config input (bps). Defaults to 0 (floor is a
    *  no-op). Batch-level: every slot must carry the same value. */
   feeRateBps?: bigint;
   priceScale?: bigint;
@@ -267,9 +268,20 @@ for (const N of [2, 4, 16] as const) {
       const slots = await defaultBatch(N);
       const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots });
 
-      // [merkle_root, fee_rate_bps].
-      expect(result.publicInputsBE.length).toBe(8);
+      // [merkle_root, config_digest].
+      expect(result.publicInputsBE.length).toBe(2);
       expect(result.publicInputsBE[0]).toEqual(result.merkleRoot);
+      expect(result.publicInputsBE[1]).toEqual(
+        await matchConfigDigest({
+          feeRateBps: slots[0].feeRateBps,
+          protocolOwnerCommitment: bn254ToBE32(
+            slots[0].protocolOwnerCommitment,
+          ),
+          baseMint: slots[0].baseMint,
+          quoteMint: slots[0].quoteMint,
+          priceScale: slots[0].priceScale,
+        }),
+      );
 
       // TS-side leaf + root reproduce the circuit's internal computation.
       for (let i = 0; i < N; i++) {
@@ -344,7 +356,7 @@ const ready2 = artefactsReady(2);
 
     const result = await proveMatchBatch({ repoRoot: REPO_ROOT, slots });
 
-    expect(result.publicInputsBE.length).toBe(8);
+    expect(result.publicInputsBE.length).toBe(2);
     expect(result.leaves[0]).not.toEqual(result.leaves[1]); // distinct shapes → distinct leaves.
 
     const tsRoot = await computeBatchRoot(result.leaves);
@@ -393,14 +405,23 @@ const ready2 = artefactsReady(2);
   }
 
   it("[fee_at_floor] charging exactly the floor proves at rate=30", async () => {
+    const slots = await feeBatch(3n);
     const result = await proveMatchBatch({
       repoRoot: REPO_ROOT,
-      slots: await feeBatch(3n),
+      slots,
     });
-    // fee_rate_bps is the 2nd public input (value 30).
-    expect(result.publicInputsBE.length).toBe(8);
-    const fee = result.publicInputsBE[1];
-    expect(fee[31]).toBe(30);
+    expect(result.publicInputsBE.length).toBe(2);
+    expect(result.publicInputsBE[1]).toEqual(
+      await matchConfigDigest({
+        feeRateBps: 30n,
+        protocolOwnerCommitment: bn254ToBE32(
+          slots[0].protocolOwnerCommitment,
+        ),
+        baseMint,
+        quoteMint,
+        priceScale: 1n,
+      }),
+    );
   }, 60_000);
 
   it("[fee_below_floor] under-charging is UNPROVABLE at rate=30", async () => {
@@ -427,6 +448,19 @@ const ready2 = artefactsReady(2);
 // ---------------------------------------------------------------------------
 
 (ready2 ? describe : describe.skip)("v3.5 — N=2 negative paths", () => {
+  it("[config_digest] rejects a digest that does not match its governed preimage", async () => {
+    const slots = await defaultBatch(2);
+    const badDigest = new Uint8Array(32);
+    badDigest[31] = 1;
+    await expect(
+      proveMatchBatch({
+        repoRoot: REPO_ROOT,
+        slots,
+        configDigestOverride: badDigest,
+      }),
+    ).rejects.toThrow();
+  }, 60_000);
+
   it("[zero_quote_active] active slot with quote_amount == 0 is UNPROVABLE (U-03)", async () => {
     // priceScale=1000: slot 0 fills positively (base=1000, price=1 → quote=1);
     // slot 1's notional floors to zero quote (base=1, price=1 → quote=0). Such a

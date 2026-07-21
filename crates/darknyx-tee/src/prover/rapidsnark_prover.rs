@@ -129,7 +129,7 @@ impl RapidsnarkMatchBatchProver {
         let t_w = std::time::Instant::now();
         let wtns: Vec<u8> = match &self.native_witness_bin {
             Some(bin) => {
-                let input_json = circom_input_json(slots, &public.merkle_root)?;
+                let input_json = circom_input_json(slots, &public)?;
                 native_witness_wtns(bin, &input_json)?
             }
             None => {

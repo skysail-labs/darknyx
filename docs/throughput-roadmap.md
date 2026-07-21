@@ -95,8 +95,8 @@ or swapped for a faster backend. Budget this as the immediate follow-on to the G
 win is capped.
 **Source:** `BENCHMARK.md` finding #3; memory `proving_optimization`.
 
-### 6. On-chain Groth16 verify-CU — one remaining lever; the rest are already in place
-**Gate: 🟠 CU-BUDGET.** Full review of the suggested CU-reduction techniques against our actual verifier
+### 6. On-chain Groth16 verify-CU — MATCH implemented; INPUT deferred for browser data
+**Status: MATCH shipped; INPUT measurement-gated.** Full review of the suggested CU-reduction techniques against our actual verifier
 stack (`groth16-solana` 0.2.0 + `programs/vault/src/zk/`), across all **7 on-chain verify sites / 6
 circuits**:
 
@@ -108,7 +108,7 @@ circuits**:
 | VALID_SPEND | `withdraw` | 6 |
 | VALID_MERGE K=2 | `merge` | 6 |
 | VALID_MERGE K=4 | `merge` | 8 |
-| VALID_MATCH_BATCH N=16 | `verify_match_batch` (Tx B) | 8 |
+| VALID_MATCH_BATCH N=16 | `verify_match_batch` (Tx B) | 2 |
 
 Per verify: a fixed 4-pair pairing (~85k CU) **plus** `N × (~3.8k mul + ~334 add + tiny field-size check)`
 MSM over public inputs (`groth16.rs::prepare_inputs`, the `for input in public_inputs` loop).
@@ -135,29 +135,32 @@ So of the suggested techniques, **only public-input collapse (T1) has any headro
 is second-order, because amount-privacy (P1b) + CS-01 already collapsed the 16 matches into one
 `batch_root` and removed amounts, putting us near the public-input floor.
 
-**The T1 lever — benchmark passed 2026-07-21:** shrink the `prepare_inputs` MSM by exposing fewer public
-inputs. Prime target = **`verify_match_batch` 8 → 2** with public `[batch_root, config_digest]`, where
+**The T1 lever — benchmarked and implemented 2026-07-21:** shrink the `prepare_inputs` MSM by exposing fewer public
+inputs. `verify_match_batch` moved **8 → 2** with public `[batch_root, config_digest]`, where
 `config_digest = Poseidon8(domain, fee_rate, owner, base_lo, base_hi, quote_lo, quote_hi, price_scale)`.
 The circuit constrains the same digest internally. Compute it on-chain from the authoritative
 `VaultConfig` + `MarketConfig` values; do **not** store a combined digest in `MarketConfig`, because the
 two accounts have independent update instructions and a stored cross-account cache can go stale.
 
-The earlier estimate that `sol_poseidon` would pay the MSM saving back was wrong. The feature-gated
+The earlier estimate that `sol_poseidon` would pay the MSM saving back was wrong. The temporary feature-gated
 litesvm A/B measured 119,939 CU (8 direct inputs), 90,570 CU (root + Poseidon8 config digest), and
 85,979 CU (one Poseidon9 full digest): **8→2 saved 29,369 CU after paying for Poseidon**, while 2→1
-saved only another 4,591 CU. The unchanged real `verify_match_batch` remained 132,519 CU, projecting
-the 2-input production handler at ~103,150 CU (~22.2% lower). Full N=16 constraint/prover A/B:
+saved only another 4,591 CU. The unchanged real `verify_match_batch` measured
+132,519 CU; the production two-input handler now measures 103,346 CU, saving
+29,173 CU (22.01%). Full N=16 constraint/prover A/B:
 232,854 → 234,025 constraints (+0.503%); seven interleaved snarkjs samples measured a +29.31 ms
 witness delta but no proving regression outside noise (paired prove delta −0.94%, treated as noise).
-Detailed method/raw samples: `docs/benchmarks/public-input-compression-2026-07-21.md`.
+Detailed method/raw samples: `docs/benchmarks/public-input-compression-2026-07-21.md`. The production
+cutover uses protocol domain 28, recomputes the digest from `VaultConfig` + `MarketConfig`, pins the
+Rust/TypeScript bytes with a KAT, and removes the temporary benchmark circuits/instructions/features.
 
-**Why the production cutover remains ceremony-gated:** (1) no verify tx is CU-limited — Tx B is ~132k under a 180k budget (~48k
-headroom); (2) verify CU is off the end-to-end critical path (proving + `settle_ms` dominate — see cost
-model); (3) any public-input change is a full **§5 circuit ceremony** (regen zkey + VK + the committed
-N=16 fixture), a **new cross-language canonical-hash byte-equality contract** (§7 fragility + re-audit of
-the CS-01/02 soundness just closed), extra constraints/witness work, and a devnet re-foundation + CVM
-revalidation. The measurement gate is now satisfied; fold the 8→2 variant into the next circuit ceremony
-and external review rather than opening a one-off production ceremony solely for this CU saving.
+**`VALID_INPUT` remains deferred.** Its focused 21-round benchmark measured 4→2 at +6.10% constraints,
++23.13% witness time, +3.45% prove time, and +5.38% combined client proving time, in exchange for
+9,709 CU per `lock_note`. The one-input comparison saved another 5,091 CU but added slightly more
+client work. Because `lock_note` already has comfortable headroom and users generate this proof in the
+browser, do not cut it over until representative browser measurements quantify the UX cost and CU/block
+packing pressure makes the saving operationally useful. Detailed raw samples and the revisit gate:
+`docs/benchmarks/valid-input-public-input-compression-2026-07-21.md`.
 **Source:** 2026-07-16/17 on-chain verify-CU review; 2026-07-21 focused benchmark;
 `groth16-solana` 0.2.0 `groth16.rs`; `programs/vault/src/zk/{verifier.rs,vk_*.rs}`; the 7 verify sites
 above.

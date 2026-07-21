@@ -78,14 +78,14 @@ pub struct MatchSlotWitness {
     pub note_fee_quote_commitment: [u8; 32],
 
     // ── Batch-level fields (same across every slot in a batch) ──
-    /// Protocol fee rate (bps), a MatchBatch-level PUBLIC input bound on-chain
-    /// to `VaultConfig.fee_rate_bps`. Stored per-slot for convenience; the
-    /// prover reads it from `slots[0]` and pushes the single circuit input.
+    /// Protocol fee rate (bps), a MatchBatch-level config-digest preimage bound
+    /// on-chain to `VaultConfig.fee_rate_bps`. Stored per-slot for convenience;
+    /// the prover reads it from `slots[0]` and pushes one circuit input.
     pub fee_rate_bps: u64,
-    /// Protocol fee-note owner, a MatchBatch-level PUBLIC input bound on-chain
-    /// to `VaultConfig.protocol_owner_commitment`. Read from `slots[0]`.
+    /// Protocol fee-note owner, bound through the MatchBatch config digest to
+    /// `VaultConfig.protocol_owner_commitment`. Read from `slots[0]`.
     pub protocol_owner_commitment: [u8; 32],
-    /// Governed fixed-point denominator, a MatchBatch-level PUBLIC input.
+    /// Governed fixed-point denominator in the MatchBatch config preimage.
     pub price_scale: u64,
     /// Canonical derived fee inners retained for recovery/parity. The circuit
     /// derives them itself from note_a/note_b commitments.
