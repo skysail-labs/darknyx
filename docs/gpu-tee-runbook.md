@@ -282,9 +282,10 @@ cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
   --admin-keypair .devnet/keypairs/admin.json \
   --base-mint "$BASE_HEX" --quote-mint "$QUOTE_HEX" \
   --fee-rate-bps 30 --price-scale 100000000 \
-  --traders 12 --real-mix exact-match:70,partial-fill:30 \
+  --traders 16 --real-mix partial-fill:100 --real-partial-fill-asks 9 \
+  --real-submit-rate 15 --min-measured-batches 8 \
   --client-prove-concurrency 1 \
-  --settle-drain-timeout-secs 300 --warmup-batches 1 \
+  --settle-drain-timeout-secs 600 --warmup-batches 1 \
   --benchmark-label h200-icicle-cuda-c1 \
   --report docs/benchmarks/runs/h200-icicle-cuda-c1.md \
   --metrics-json docs/benchmarks/runs/h200-icicle-cuda-c1.json

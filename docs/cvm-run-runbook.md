@@ -361,8 +361,10 @@ cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
   --real-settle --endpoint "$GW" --rpc-url "$HELIUS" \
   --admin-keypair .devnet/keypairs/admin.json \
   --base-mint "$BASE_HEX" --quote-mint "$QUOTE_HEX" \
-  --traders 12 --real-mix exact-match:70,partial-fill:30 \
+  --traders 16 --real-mix partial-fill:100 --real-partial-fill-asks 9 \
+  --real-submit-rate 15 --min-measured-batches 8 \
   --client-prove-concurrency 1 \
+  --settle-drain-timeout-secs 600 \
   --benchmark-label prod9-rapidsnark-c1 --warmup-batches 1 \
   --report /tmp/prod9-rapidsnark-c1.md \
   --metrics-json /tmp/prod9-rapidsnark-c1.json

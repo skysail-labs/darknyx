@@ -124,6 +124,10 @@ pub struct BenchmarkArtifact {
     pub expected_matches: u64,
     pub submitted_orders: u64,
     pub accepted_orders: u64,
+    pub target_submit_rate_orders_per_second: f64,
+    pub submission_attempts: u64,
+    pub rate_limited_retries: u64,
+    pub transient_retries: u64,
     pub warmup_batches_excluded: usize,
     pub submitted_at_ms: u64,
     pub submission_completed_at_ms: u64,
@@ -206,8 +210,24 @@ impl BenchmarkArtifact {
         let _ = writeln!(out, "| accepted orders | {} |", self.accepted_orders);
         let _ = writeln!(
             out,
+            "| target order offer rate | {:.3} orders/s |",
+            self.target_submit_rate_orders_per_second
+        );
+        let _ = writeln!(
+            out,
             "| accepted-order offer rate | {offered_orders_per_second:.3} orders/s |"
         );
+        let _ = writeln!(
+            out,
+            "| submission attempts | {} |",
+            self.submission_attempts
+        );
+        let _ = writeln!(
+            out,
+            "| rate-limit retries | {} |",
+            self.rate_limited_retries
+        );
+        let _ = writeln!(out, "| transient retries | {} |", self.transient_retries);
         let _ = writeln!(
             out,
             "| steady-state window | {:.3} s |",
@@ -254,7 +274,14 @@ impl BenchmarkArtifact {
                 measured.iter().map(|b| b.timings.total_ms).collect(),
             ),
             (
-                "workload_submit_to_batch_terminal",
+                "workload_start_to_batch_terminal",
+                measured
+                    .iter()
+                    .map(|b| Some(b.completed_at_ms.saturating_sub(self.submitted_at_ms)))
+                    .collect(),
+            ),
+            (
+                "post_offer_drain_to_batch_terminal",
                 measured
                     .iter()
                     .map(|b| {
@@ -343,6 +370,10 @@ mod tests {
             expected_matches: 2,
             submitted_orders: 4,
             accepted_orders: 4,
+            target_submit_rate_orders_per_second: 15.0,
+            submission_attempts: 5,
+            rate_limited_retries: 1,
+            transient_retries: 0,
             warmup_batches_excluded: 1,
             submitted_at_ms: 0,
             submission_completed_at_ms: 10,
@@ -352,7 +383,9 @@ mod tests {
         let report = artifact.render_markdown();
         assert!(report.contains("warm-up batches excluded | 1"));
         assert!(report.contains("| prove_step | 1 | 50 | 50 | 50 | 50 |"));
-        assert!(report.contains("workload_submit_to_batch_terminal"));
+        assert!(report.contains("workload_start_to_batch_terminal"));
+        assert!(report.contains("post_offer_drain_to_batch_terminal"));
+        assert!(report.contains("rate-limit retries | 1"));
         assert!(report.contains("confirmed match throughput"));
     }
 }

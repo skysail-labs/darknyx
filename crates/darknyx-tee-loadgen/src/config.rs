@@ -219,6 +219,18 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 1)]
     pub client_prove_concurrency: usize,
 
+    /// Target order offer rate for the real-settle workload. The benchmark
+    /// authenticates as one account, whose production limiter sustains twenty
+    /// order placements per second; the portable default leaves headroom for
+    /// metrics reads and timing jitter.
+    #[arg(long, default_value_t = 15.0)]
+    pub real_submit_rate: f64,
+
+    /// Fail a real-settle benchmark that produces fewer steady-state batches
+    /// after warm-up exclusion. Set to eight for CPU/GPU comparison runs.
+    #[arg(long, default_value_t = 1)]
+    pub min_measured_batches: usize,
+
     /// Maximum time to wait for the real-settle queue to reach terminal
     /// outcomes. The load rig exits early once all expected matches are
     /// measured; this is only a safety ceiling.
@@ -351,6 +363,12 @@ impl RunConfig {
         }
         if !(1..=16).contains(&self.client_prove_concurrency) {
             anyhow::bail!("--client-prove-concurrency must be in 1..=16");
+        }
+        if !self.real_submit_rate.is_finite() || self.real_submit_rate <= 0.0 {
+            anyhow::bail!("--real-submit-rate must be finite and > 0");
+        }
+        if self.min_measured_batches == 0 {
+            anyhow::bail!("--min-measured-batches must be > 0");
         }
         if self.settlement_metrics_poll_ms < 100 {
             anyhow::bail!("--settlement-metrics-poll-ms must be at least 100");

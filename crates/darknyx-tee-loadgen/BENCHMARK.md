@@ -15,6 +15,11 @@
 > irreducible off-chain compute, and it's the throughput blocker once the on-chain
 > confirm/finality latency is taken out** (which is exactly what Alpenglow removes). The
 > GPU upgrade attacks `prove_ms` and nothing else, so `prove_ms` is THE comparison metric.
+>
+> **Current capacity contract:** this file preserves historical prover-isolation
+> results. New CPU/GPU capacity runs must use
+> [`docs/benchmarks/settlement-throughput-methodology.md`](../../docs/benchmarks/settlement-throughput-methodology.md),
+> including its paced 144-match fixture and eight measured-batch minimum.
 
 ### Why `prove_ms` is the metric (the stage taxonomy)
 

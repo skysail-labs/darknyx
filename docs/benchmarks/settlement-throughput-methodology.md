@@ -11,7 +11,8 @@ match can append a variable number of change and fee notes).
 | Metric | Definition | Why it matters |
 |---|---|---|
 | Confirmed match throughput | Confirmed Tx D match outcomes divided by the interval from the first measured batch start to the last measured batch completion | Venue capacity; one match normally represents two participating orders |
-| Workload submit-to-batch-terminal latency | Completion of the workload's concurrent HTTP submissions to each correlated batch's terminal metrics record; report P50/P95/P99 | Repeatable end-to-end venue latency for benchmark comparison |
+| Workload start-to-batch-terminal latency | First paced HTTP submission to each correlated batch's terminal metrics record; report P50/P95/P99 | Repeatable end-to-end venue latency at a fixed offered rate |
+| Post-offer drain latency | Completion of the final HTTP submission to each batch's terminal record (floored at zero for batches that finish while offering continues) | Shows how long the venue takes to drain after load stops |
 | Per-order client latency | A client timestamps its accepted submission and the authenticated `orders` event carrying the same `market_id` and `match_id` | User-visible execution friction; the wire correlation is implemented, while client-specific transport/network time is intentionally not mixed into the server benchmark |
 | Queue wait | Batch `started_at_ms - enqueued_at_ms`; report P50/P95/P99 and oldest queued age | Detects saturation before outright failures |
 | Stage latency | `witness`, `prove_step`, full `prove`, `verify`, ALT, Tx D settle, and total | Attributes gains and identifies the next bottleneck |
@@ -44,7 +45,8 @@ cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
   --real-settle --endpoint "$GW" --rpc-url "$RPC" \
   --admin-keypair .devnet/keypairs/admin.json \
   --base-mint "$BASE_HEX" --quote-mint "$QUOTE_HEX" \
-  --traders 12 --real-mix exact-match:70,partial-fill:30 \
+  --traders 16 --real-mix partial-fill:100 --real-partial-fill-asks 9 \
+  --real-submit-rate 15 --min-measured-batches 8 \
   --client-prove-concurrency 1 \
   --benchmark-label prod9-rapidsnark-c1 \
   --warmup-batches 1 \
@@ -72,6 +74,15 @@ Raising `--client-prove-concurrency` above the local machine's descriptor and
 native-thread capacity still invalidates the run before intake; do not confuse
 client fixture-generation concurrency with the TEE's
 `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY`.
+
+The fixed comparison fixture uses sixteen persistent partial-fill bids, each
+crossed by nine asks. It therefore offers 160 orders and expects 144 matched
+pairs: nine full N=16 pages, of which the first is warm-up. The loadgen preloads
+the bid side, paces the asks at fifteen placements per second (below the
+single-account twenty-per-second limiter), retries exact-idempotent 429/5xx
+responses, and records every retry. Any nonzero retry count is evidence to
+explain, not something to hide; any run with fewer than eight measured batches
+fails after writing its artifact.
 
 ## CPU baseline matrix
 

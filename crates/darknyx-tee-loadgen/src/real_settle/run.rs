@@ -50,6 +50,8 @@ pub struct RealSettleParams {
     /// `partial-fill`: small asks crossing the one big bid.
     pub partial_fill_asks: u8,
     pub client_prove_concurrency: usize,
+    pub real_submit_rate: f64,
+    pub min_measured_batches: usize,
     pub settle_drain_timeout_secs: u64,
     pub settlement_metrics_poll_ms: u64,
     pub warmup_batches: usize,
@@ -86,6 +88,8 @@ impl RealSettleParams {
             mix: cfg.real_mix.clone(),
             partial_fill_asks: cfg.real_partial_fill_asks,
             client_prove_concurrency: cfg.client_prove_concurrency,
+            real_submit_rate: cfg.real_submit_rate,
+            min_measured_batches: cfg.min_measured_batches,
             settle_drain_timeout_secs: cfg.settle_drain_timeout_secs,
             settlement_metrics_poll_ms: cfg.settlement_metrics_poll_ms,
             warmup_batches: cfg.warmup_batches,
@@ -509,6 +513,74 @@ struct LiveOrder {
     note: DepositedNote,
 }
 
+#[derive(Debug, Default)]
+struct SubmitResult {
+    status: u16,
+    attempts: u64,
+    rate_limited_retries: u64,
+    transient_retries: u64,
+}
+
+/// Submit an idempotent signed order, respecting the production per-account
+/// limiter. Retrying the exact body is safe because the canonical order id and
+/// signature are unchanged and intake resolves exact idempotency before nonce
+/// monotonicity.
+async fn submit_order_reliably(
+    http: reqwest::Client,
+    url: String,
+    token: String,
+    body: serde_json::Value,
+) -> SubmitResult {
+    const MAX_ATTEMPTS: u32 = 20;
+    let mut result = SubmitResult::default();
+    for attempt in 0..MAX_ATTEMPTS {
+        result.attempts += 1;
+        match http.post(&url).bearer_auth(&token).json(&body).send().await {
+            Ok(response) if response.status().is_success() => {
+                result.status = response.status().as_u16();
+                return result;
+            }
+            Ok(response) if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                result.rate_limited_retries += 1;
+                if attempt + 1 == MAX_ATTEMPTS {
+                    result.status = response.status().as_u16();
+                    return result;
+                }
+                let retry_secs = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(1)
+                    .clamp(1, 5);
+                tokio::time::sleep(std::time::Duration::from_secs(retry_secs)).await;
+            }
+            Ok(response) if response.status().is_server_error() => {
+                result.transient_retries += 1;
+                if attempt + 1 == MAX_ATTEMPTS {
+                    result.status = response.status().as_u16();
+                    return result;
+                }
+                let backoff_ms = 100u64.saturating_mul(1u64 << attempt.min(4)).min(2_000);
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            }
+            Ok(response) => {
+                result.status = response.status().as_u16();
+                return result;
+            }
+            Err(_) => {
+                result.transient_retries += 1;
+                if attempt + 1 == MAX_ATTEMPTS {
+                    return result;
+                }
+                let backoff_ms = 100u64.saturating_mul(1u64 << attempt.min(4)).min(2_000);
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            }
+        }
+    }
+    result
+}
+
 /// Run the multi-trader, multi-scenario load rig: N scenario instances → mint +
 /// deposit (+merge) all notes → prove all VALID_INPUT (concurrent) → submit all
 /// (concurrent) → drain the settle. Reports client prove-rate + end-to-end
@@ -843,6 +915,14 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         "deposited all notes; proving"
     );
 
+    // Preload the bid side before offering asks. For the throughput fixture this
+    // avoids arrival-order underpacking: every later ask sees the full set of
+    // persistent partial-fill bids, so steady-state pages can fill N=16.
+    orders.sort_by_key(|order| match order.side {
+        OrderSide::Bid => 0u8,
+        OrderSide::Ask => 1u8,
+    });
+
     // ── Phase 2: prove all VALID_INPUT concurrently (client prover load) ──
     let harness = Arc::new(harness);
     let prove_start = Instant::now();
@@ -923,29 +1003,39 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         .unwrap_or(0);
     let n_orders = bodies.len();
     let mut submit_handles = Vec::with_capacity(n_orders);
-    for b in bodies {
+    let submit_interval =
+        std::time::Duration::from_secs_f64(1.0 / p.real_submit_rate.max(f64::MIN_POSITIVE));
+    for (index, body) in bodies.into_iter().enumerate() {
         let http = http.clone();
         let token = token.clone();
         let url = format!("{}/orders", p.gateway);
         submit_handles.push(tokio::spawn(async move {
-            http.post(url)
-                .bearer_auth(&token)
-                .json(&b)
-                .send()
-                .await
-                .map(|r| r.status().as_u16())
-                .unwrap_or(0)
+            submit_order_reliably(http, url, token, body).await
         }));
+        if index + 1 < n_orders {
+            tokio::time::sleep(submit_interval).await;
+        }
     }
     let mut accepted = 0usize;
-    for h in submit_handles {
-        if (200..300).contains(&h.await.unwrap_or(0)) {
+    let mut submission_attempts = 0u64;
+    let mut rate_limited_retries = 0u64;
+    let mut transient_retries = 0u64;
+    for handle in submit_handles {
+        let result = handle.await.unwrap_or_default();
+        submission_attempts += result.attempts;
+        rate_limited_retries += result.rate_limited_retries;
+        transient_retries += result.transient_retries;
+        if (200..300).contains(&result.status) {
             accepted += 1;
         }
     }
     tracing::info!(
         submitted = n_orders,
         accepted,
+        submission_attempts,
+        rate_limited_retries,
+        transient_retries,
+        target_rate = p.real_submit_rate,
         ms = submit_start.elapsed().as_millis() as u64,
         "orders submitted"
     );
@@ -1035,6 +1125,10 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         expected_matches,
         submitted_orders: n_orders as u64,
         accepted_orders: accepted as u64,
+        target_submit_rate_orders_per_second: p.real_submit_rate,
+        submission_attempts,
+        rate_limited_retries,
+        transient_retries,
         warmup_batches_excluded: p.warmup_batches,
         submitted_at_ms,
         submission_completed_at_ms,
@@ -1050,6 +1144,13 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     if let Some(path) = &p.metrics_json {
         std::fs::write(path, serde_json::to_vec_pretty(&artifact)?)?;
         tracing::info!(?path, "wrote settlement benchmark JSON");
+    }
+    if artifact.measured_batches().len() < p.min_measured_batches {
+        return Err(anyhow!(
+            "benchmark invalid: only {} measured batches after warm-up; require at least {}",
+            artifact.measured_batches().len(),
+            p.min_measured_batches
+        ));
     }
     let rejected: u64 = artifact
         .batches
