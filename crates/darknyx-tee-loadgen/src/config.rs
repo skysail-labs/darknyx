@@ -212,6 +212,13 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 3)]
     pub real_partial_fill_asks: u8,
 
+    /// Maximum VALID_INPUT proofs generated concurrently by the real-settle
+    /// client. Each ark-circom/Wasmer prover consumes file descriptors and
+    /// native threads, so unbounded fan-out can exhaust the host before order
+    /// submission. Kept deliberately below the settlement batch size.
+    #[arg(long, default_value_t = 1)]
+    pub client_prove_concurrency: usize,
+
     /// Maximum time to wait for the real-settle queue to reach terminal
     /// outcomes. The load rig exits early once all expected matches are
     /// measured; this is only a safety ceiling.
@@ -341,6 +348,9 @@ impl RunConfig {
         }
         if self.settle_drain_timeout_secs == 0 {
             anyhow::bail!("--settle-drain-timeout-secs must be > 0");
+        }
+        if !(1..=16).contains(&self.client_prove_concurrency) {
+            anyhow::bail!("--client-prove-concurrency must be in 1..=16");
         }
         if self.settlement_metrics_poll_ms < 100 {
             anyhow::bail!("--settlement-metrics-poll-ms must be at least 100");

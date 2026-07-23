@@ -45,6 +45,7 @@ cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
   --admin-keypair .devnet/keypairs/admin.json \
   --base-mint "$BASE_HEX" --quote-mint "$QUOTE_HEX" \
   --traders 12 --real-mix exact-match:70,partial-fill:30 \
+  --client-prove-concurrency 1 \
   --benchmark-label prod9-rapidsnark-c1 \
   --warmup-batches 1 \
   --report docs/benchmarks/runs/prod9-rapidsnark-c1.md \
@@ -54,6 +55,23 @@ cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
 Benchmark artifacts under `docs/benchmarks/runs/` are evidence, not mutable
 golden fixtures. Do not commit credentials, RPC URLs containing API keys, raw
 order bodies, or CVM environment files.
+
+The client prover fan-out is bounded (portable default one). Each proof runs in
+a short-lived Wasmer runtime so its virtual-mio descriptors are released before
+the process continues. This fixes the 2026-07-23 baseline failure in which 42
+sequential deposits exhausted a macOS 256-FD soft limit and the first
+VALID_INPUT proof failed. Before a paid run, exercise the exact regression:
+
+```sh
+cargo test -p darknyx-tee-loadgen --release --lib \
+  --features real-settle-chain \
+  sequential_client_proofs_do_not_exhaust_descriptors -- --ignored
+```
+
+Raising `--client-prove-concurrency` above the local machine's descriptor and
+native-thread capacity still invalidates the run before intake; do not confuse
+client fixture-generation concurrency with the TEE's
+`DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY`.
 
 ## CPU baseline matrix
 

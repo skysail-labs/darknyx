@@ -271,12 +271,19 @@ Read [`benchmarks/settlement-throughput-methodology.md`](benchmarks/settlement-t
 before the window. Use at least eight completed batches after excluding warm-up:
 
 ```sh
+# Run locally before the paid GPU window: this guards the client proof
+# descriptor lifecycle so a host-side failure cannot consume GPU time.
+cargo test -p darknyx-tee-loadgen --release --lib \
+  --features real-settle-chain \
+  sequential_client_proofs_do_not_exhaust_descriptors -- --ignored
+
 cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
   --real-settle --endpoint "$GW" --rpc-url "$RPC" \
   --admin-keypair .devnet/keypairs/admin.json \
   --base-mint "$BASE_HEX" --quote-mint "$QUOTE_HEX" \
   --fee-rate-bps 30 --price-scale 100000000 \
   --traders 12 --real-mix exact-match:70,partial-fill:30 \
+  --client-prove-concurrency 1 \
   --settle-drain-timeout-secs 300 --warmup-batches 1 \
   --benchmark-label h200-icicle-cuda-c1 \
   --report docs/benchmarks/runs/h200-icicle-cuda-c1.md \

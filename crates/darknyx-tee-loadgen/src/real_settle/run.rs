@@ -49,6 +49,7 @@ pub struct RealSettleParams {
     pub mix: String,
     /// `partial-fill`: small asks crossing the one big bid.
     pub partial_fill_asks: u8,
+    pub client_prove_concurrency: usize,
     pub settle_drain_timeout_secs: u64,
     pub settlement_metrics_poll_ms: u64,
     pub warmup_batches: usize,
@@ -84,6 +85,7 @@ impl RealSettleParams {
             traders: cfg.traders,
             mix: cfg.real_mix.clone(),
             partial_fill_asks: cfg.real_partial_fill_asks,
+            client_prove_concurrency: cfg.client_prove_concurrency,
             settle_drain_timeout_secs: cfg.settle_drain_timeout_secs,
             settlement_metrics_poll_ms: cfg.settlement_metrics_poll_ms,
             warmup_batches: cfg.warmup_batches,
@@ -844,26 +846,32 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     // ── Phase 2: prove all VALID_INPUT concurrently (client prover load) ──
     let harness = Arc::new(harness);
     let prove_start = Instant::now();
-    let mut prove_handles = Vec::with_capacity(orders.len());
-    for o in &orders {
-        let h = harness.clone();
-        let (sk, ob, note) = (
-            o.persona.spending_key,
-            o.persona.owner_blinding,
-            o.note.clone(),
-        );
-        prove_handles.push(tokio::task::spawn_blocking(move || {
-            let t = Instant::now();
-            let proof = h.prove(&sk, &ob, &note);
-            (proof, t.elapsed().as_micros() as u64)
-        }));
-    }
     let mut proofs = Vec::with_capacity(orders.len());
     let mut prove_us: Vec<u64> = Vec::with_capacity(orders.len());
-    for handle in prove_handles {
-        let (proof, us) = handle.await.map_err(|e| anyhow!("prove task: {e}"))?;
-        proofs.push(proof.map_err(|e| anyhow!("VALID_INPUT prove: {e}"))?);
-        prove_us.push(us);
+    // Bound the actual number of spawn_blocking jobs, not merely entry to the
+    // prover: parking dozens of blocking tasks behind a semaphore still makes
+    // Tokio grow its blocking pool, and ark-circom/virtual-mio can exhaust a
+    // normal macOS `ulimit -n` before any order is submitted.
+    for order_chunk in orders.chunks(p.client_prove_concurrency) {
+        let mut prove_handles = Vec::with_capacity(order_chunk.len());
+        for order in order_chunk {
+            let h = harness.clone();
+            let (sk, ob, note) = (
+                order.persona.spending_key,
+                order.persona.owner_blinding,
+                order.note.clone(),
+            );
+            prove_handles.push(tokio::task::spawn_blocking(move || {
+                let t = Instant::now();
+                let proof = h.prove(&sk, &ob, &note);
+                (proof, t.elapsed().as_micros() as u64)
+            }));
+        }
+        for handle in prove_handles {
+            let (proof, us) = handle.await.map_err(|e| anyhow!("prove task: {e}"))?;
+            proofs.push(proof.map_err(|e| anyhow!("VALID_INPUT prove: {e}"))?);
+            prove_us.push(us);
+        }
     }
     let prove_wall = prove_start.elapsed();
     prove_us.sort_unstable();

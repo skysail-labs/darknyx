@@ -352,11 +352,17 @@ regime and the metrics-driven `--real-settle` load rig. It reads the admin-only
 on terminal matched-pair outcomes, and can write raw JSON plus Markdown:
 
 ```sh
+# Paid-run preflight: prove 48 deposits + one input proof in one process.
+cargo test -p darknyx-tee-loadgen --release --lib \
+  --features real-settle-chain \
+  sequential_client_proofs_do_not_exhaust_descriptors -- --ignored
+
 cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
   --real-settle --endpoint "$GW" --rpc-url "$HELIUS" \
   --admin-keypair .devnet/keypairs/admin.json \
   --base-mint "$BASE_HEX" --quote-mint "$QUOTE_HEX" \
   --traders 12 --real-mix exact-match:70,partial-fill:30 \
+  --client-prove-concurrency 1 \
   --benchmark-label prod9-rapidsnark-c1 --warmup-batches 1 \
   --report /tmp/prod9-rapidsnark-c1.md \
   --metrics-json /tmp/prod9-rapidsnark-c1.json

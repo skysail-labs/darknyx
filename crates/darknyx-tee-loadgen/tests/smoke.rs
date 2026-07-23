@@ -129,6 +129,7 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
         real_qty: 2000,
         real_mix: "exact-match:100".to_string(),
         real_partial_fill_asks: 3,
+        client_prove_concurrency: 4,
         settle_drain_timeout_secs: 180,
         settlement_metrics_poll_ms: 1_000,
         warmup_batches: 1,

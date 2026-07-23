@@ -37,6 +37,32 @@ use darkpool_crypto::{
     poseidon_hash_bytes, pubkey_to_fr_pair,
 };
 
+/// ark-circom's Wasmer/WASIX witness runtime retains virtual-mio descriptors
+/// for the lifetime of the host thread. A real-settle benchmark creates many
+/// independent client proofs in one process, so running them directly on
+/// Tokio's long-lived worker pool eventually exhausts the process descriptor
+/// limit. Give each client proof a short-lived current-thread runtime instead:
+/// exiting the thread deterministically drops the Wasmer reactor and all of its
+/// descriptors.
+fn prove_in_isolated_runtime<T: Send>(
+    label: &'static str,
+    prove: impl FnOnce() -> Result<T, RealSettleError> + Send,
+) -> Result<T, RealSettleError> {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| RealSettleError::Prove(format!("{label} witness runtime: {e}")))?;
+                let _runtime_guard = runtime.enter();
+                prove()
+            })
+            .join()
+    })
+    .map_err(|_| RealSettleError::Prove(format!("{label} witness thread panicked")))?
+}
+
 /// Depth of the vault's incremental Merkle tree (the VALID_INPUT witness is 20
 /// levels — see `MerkleWitnessFr20` in the SDK).
 pub const TREE_DEPTH: usize = 20;
@@ -214,13 +240,15 @@ impl ValidDepositProver {
         amount: u64,
         recovery_nonce: &[u8; 32],
     ) -> Result<ValidDepositProof, RealSettleError> {
-        let generated = self.prove_ark(
-            spending_key,
-            owner_blinding,
-            token_mint,
-            amount,
-            recovery_nonce,
-        )?;
+        let generated = prove_in_isolated_runtime("VALID_DEPOSIT", || {
+            self.prove_ark(
+                spending_key,
+                owner_blinding,
+                token_mint,
+                amount,
+                recovery_nonce,
+            )
+        })?;
         Ok(ValidDepositProof {
             proof_bytes: proof_to_onchain_bytes(&generated.proof),
             note_commitment: generated.note_commitment,
@@ -333,14 +361,16 @@ impl ValidInputProver {
         amount: u64,
         witness: &MerkleWitness,
     ) -> Result<ValidInputProof, RealSettleError> {
-        let (proof, note_commitment) = self.prove_ark(
-            spending_key,
-            owner_blinding,
-            inner_hash,
-            token_mint,
-            amount,
-            witness,
-        )?;
+        let (proof, note_commitment) = prove_in_isolated_runtime("VALID_INPUT", || {
+            self.prove_ark(
+                spending_key,
+                owner_blinding,
+                inner_hash,
+                token_mint,
+                amount,
+                witness,
+            )
+        })?;
         Ok(ValidInputProof {
             proof_bytes: proof_to_onchain_bytes(&proof),
             note_commitment,
@@ -506,7 +536,9 @@ impl MergeProver {
         inputs: &[MergeInput],
     ) -> Result<MergeProof, RealSettleError> {
         let (proof, output_commitment, output_inner_hash, output_amount) =
-            self.prove_ark(spending_key, owner_blinding, token_mint, inputs)?;
+            prove_in_isolated_runtime("VALID_MERGE", || {
+                self.prove_ark(spending_key, owner_blinding, token_mint, inputs)
+            })?;
         Ok(MergeProof {
             proof_bytes: proof_to_onchain_bytes(&proof),
             output_commitment,
@@ -763,6 +795,69 @@ mod tests {
         let onchain = proof_to_onchain_bytes(&proof);
         assert_eq!(onchain.len(), 256);
         assert!(onchain.iter().any(|&b| b != 0));
+    }
+
+    /// Manual regression for the real-settle benchmark's client proving phase.
+    ///
+    /// Before client proofs were isolated, 42 sequential VALID_DEPOSIT proofs
+    /// under macOS's default 256-FD soft limit left enough Wasmer virtual-mio
+    /// descriptors behind that the first VALID_INPUT `CircomConfig::new`
+    /// failed with `Too many open files`.
+    #[test]
+    #[ignore = "slow descriptor-lifecycle stress test; run before a CVM throughput pass"]
+    fn sequential_client_proofs_do_not_exhaust_descriptors() {
+        let Some(dir) = artifacts_dir() else {
+            eprintln!("skipping: circuits/build artifacts not present");
+            return;
+        };
+        if !dir.join("valid_deposit/circuit_final.zkey").exists() {
+            eprintln!("skipping: valid_deposit artifacts not present");
+            return;
+        }
+
+        let deposit_prover = ValidDepositProver::load(&dir).expect("load valid_deposit prover");
+        let spending_key = Fr::from(12_345u64);
+        let owner_blinding = Fr::from(67_890u64);
+        let mut token_mint = [0u8; 32];
+        token_mint[0] = 1;
+        token_mint[31] = 0xb1;
+        let amount = 1_000_000u64;
+        let mut final_deposit = None;
+
+        // Deliberately exceeds the 42-proof failure point observed by the
+        // billable CPU baseline loadgen.
+        for nonce in 1..=48u64 {
+            let recovery_nonce = fr_to_be_bytes(&Fr::from(nonce));
+            final_deposit = Some(
+                deposit_prover
+                    .prove(
+                        &spending_key,
+                        &owner_blinding,
+                        &token_mint,
+                        amount,
+                        &recovery_nonce,
+                    )
+                    .unwrap_or_else(|e| panic!("deposit proof {nonce} failed: {e}")),
+            );
+        }
+
+        // The exact transition that used to fail: initialize and run a
+        // different circuit after the deposit proof sequence.
+        let deposit = final_deposit.expect("at least one deposit proof");
+        let mut tree = IncrementalTree::new().unwrap();
+        tree.append(deposit.note_commitment);
+        let witness = tree.witness(0).unwrap();
+        ValidInputProver::load(&dir)
+            .expect("load valid_input prover")
+            .prove(
+                &spending_key,
+                &owner_blinding,
+                &deposit.inner_hash,
+                &token_mint,
+                amount,
+                &witness,
+            )
+            .expect("VALID_INPUT after 48 deposit proofs");
     }
 
     #[tokio::test]
