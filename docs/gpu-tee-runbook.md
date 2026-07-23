@@ -25,7 +25,10 @@ GPU** (commit `0400776` + the `git`/`libatomic1` fixups):
 
 - **ICICLE backend** wired as a third prover (`DARKNYX_TEE_PROVER=icicle`, device via
   `DARKNYX_TEE_ICICLE_DEVICE`). CPU byte-parity already proven (Phase 1, commit `4c9558c`).
-- **CUDA image** — ✅ `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-68-cuda` is BUILT, on ghcr,
+- **CUDA image** — the last validated image is
+  `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-68-cuda`; the
+  observability-ready candidate is `tee-v3-hardening-69-cuda` and must pass the
+  image-build check before the next allocation,
   and is the image that passed the first real H200 settle (2026-07-21). The 3 backend `.so` ship
   under `/opt/icicle/lib/backend/**` and the binary's links resolve. (The earlier planned
   `-63-cuda` tag was never built — ignore references to it.)
@@ -112,7 +115,7 @@ Devnet config values (from `.devnet/e2e-config.json`, stable unless devnet-setup
 version: '3.8'
 services:
   darknyx-tee:
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-63-cuda
+    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-69-cuda
     restart: unless-stopped
     deploy:
       resources:
@@ -136,6 +139,7 @@ services:
       DARKNYX_TEE_SYNC_FROM_SLOT: "<REFRESH: solana slot>"
       DARKNYX_TEE_BASE_MINT: "sGzG6XyTiHiY9G2dC18GXoV7W4YKPXcM8soDS79jPjn"
       DARKNYX_TEE_QUOTE_MINT: "FEzPrxcwgYvwWYceZdJEMwWj9tB4hcR7iXmkZTunVoX6"
+      DARKNYX_TEE_MARKET_SYMBOL: "SOL-USDC"
       DARKNYX_TEE_SETTLE_LOOKUP_TABLE: "FpxZ3kts77NkR9sBja2eMujcXCdMDnfrWj6EEVKpcyRE"
       DARKNYX_TEE_FEE_RATE_BPS: "30"
       DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT: "0079782d70726f746f636f6c2d6f776e65722d76310000000000000000000000"
@@ -144,6 +148,7 @@ services:
       DARKNYX_TEE_WITNESS: "native"
       DARKNYX_TEE_ICICLE_DEVICE: "CUDA"
       DARKNYX_TEE_SETTLE_SEND_CONCURRENCY: "16"
+      DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY: "1"
     ports:
       - "8080:8080"
 volumes:
@@ -177,6 +182,7 @@ DARKNYX_TEE_SOLANA_RPC_URL=$RPC
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
+DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
 DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 DARKNYX_TEE_FEE_RATE_BPS=30
 DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
@@ -253,6 +259,51 @@ same test, and compare `prove_step_ms`:
 Record the table in `crates/darknyx-tee-loadgen/BENCHMARK.md` (the ICICLE section already has the
 Phase-1 CPU rows; add the CVM GPU row + the speedup).
 
+### 5.1 The full throughput run (do not use single-pair e2e timings)
+
+`cvm-settle-e2e` remains the correctness ceremony, but it proves only one
+batch—the first/warm-up prove. Throughput and steady-state latency come from
+`darknyx-tee-loadgen --real-settle`, which now consumes the admin settlement
+metrics cursor and stops on terminal match outcomes rather than estimating from
+Merkle leaf growth.
+
+Read [`benchmarks/settlement-throughput-methodology.md`](benchmarks/settlement-throughput-methodology.md)
+before the window. Use at least eight completed batches after excluding warm-up:
+
+```sh
+cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
+  --real-settle --endpoint "$GW" --rpc-url "$RPC" \
+  --admin-keypair .devnet/keypairs/admin.json \
+  --base-mint "$BASE_HEX" --quote-mint "$QUOTE_HEX" \
+  --fee-rate-bps 30 --price-scale 100000000 \
+  --traders 12 --real-mix exact-match:70,partial-fill:30 \
+  --settle-drain-timeout-secs 300 --warmup-batches 1 \
+  --benchmark-label h200-icicle-cuda-c1 \
+  --report docs/benchmarks/runs/h200-icicle-cuda-c1.md \
+  --metrics-json docs/benchmarks/runs/h200-icicle-cuda-c1.json
+```
+
+`BASE_HEX`/`QUOTE_HEX` are the raw 32-byte mint pubkeys in hex; do not pass the
+base58 display values used in the compose file.
+
+Run this same-box sequence, resetting the tree and cold-booting the CVM between
+legs while **never stopping/deallocating the GPU instance**:
+
+1. rapidsnark CPU, batch concurrency 1;
+2. icicle CPU, batch concurrency 1;
+3. icicle CUDA, batch concurrency 1;
+4. icicle CUDA, batch concurrency 2;
+5. icicle CUDA, batch concurrency 4.
+
+Only the prover/device and
+`DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY` change. Keep image, machine, workload,
+RPC tier, shard count, send concurrency, and market config fixed. For each leg
+capture the JSON/Markdown artifacts, `cpu.max`, `cpu.stat`, `nvidia-smi`,
+gateway/host latency, app/compose/boot identity, and the exact Phala instance
+metadata. Reject a run if the metrics endpoint reports a cursor gap, any
+unexplained terminal rejection/ambiguity, or fewer terminal matches than the
+known workload.
+
 ---
 
 ## 6. Phase 2b — GPU attestation (the full trust model)
@@ -296,7 +347,7 @@ the `/attestation` change.
   spec-only): `verifyTeeAttestation(apiBaseUrl, expectedComposeHash)` that checks, against a fresh
   nonce: NRAS verdict ✔ + the TDX and NVIDIA streams bind the same nonce ✔ + dcap-qvl verifies the
   TDX quote ✔ + `compose_hash` matches ✔ + `tee_pubkey` binds ✔.
-- Rebuild a `tee-v3-hardening-37-cuda` image (bump the tag), redeploy, and run the verifier
+- Rebuild a fresh `tee-v3-hardening-<N>-cuda` image (bump the tag), redeploy, and run the verifier
   end-to-end against the live GPU CVM → single PASS.
 
 ---
@@ -345,8 +396,9 @@ credential vars.
 
 ## 9. Re-validate the CUDA image only if these change
 
-The planned image `tee-v3-hardening-63-cuda` must be built before this runbook is used. After that,
-rebuild with a new `-cuda` tag only if you touch:
+Use an observability-enabled CUDA image (currently
+`tee-v3-hardening-69-cuda`) for the next window. Rebuild with a new `-cuda` tag
+whenever you touch:
 `crates/darknyx-tee/src/**`, the circuits, `deploy/Dockerfile`, `third_party/icicle-snark/**`, or
 `Cargo.lock`. Trigger: `git tag tee-v3-hardening-<N>-cuda && git push origin tee-v3-hardening-<N>-cuda`
 (CI builds the CUDA image on any `-cuda`-suffixed tag, no GPU runner needed), then point the compose

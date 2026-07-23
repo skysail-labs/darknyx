@@ -23,6 +23,7 @@ use super::vault::associated_token_address;
 use super::{spl, ValidInputProof};
 use crate::auth::{acquire_bearer, fetch_boot_session_id};
 use crate::config::RunConfig;
+use crate::settlement_benchmark::{fetch_metrics, BenchmarkArtifact};
 
 /// Knobs for one real-settle round (a single crossing pair).
 pub struct RealSettleParams {
@@ -48,6 +49,12 @@ pub struct RealSettleParams {
     pub mix: String,
     /// `partial-fill`: small asks crossing the one big bid.
     pub partial_fill_asks: u8,
+    pub settle_drain_timeout_secs: u64,
+    pub settlement_metrics_poll_ms: u64,
+    pub warmup_batches: usize,
+    pub benchmark_label: String,
+    pub metrics_json: Option<std::path::PathBuf>,
+    pub report: Option<std::path::PathBuf>,
 }
 
 impl RealSettleParams {
@@ -77,6 +84,12 @@ impl RealSettleParams {
             traders: cfg.traders,
             mix: cfg.real_mix.clone(),
             partial_fill_asks: cfg.real_partial_fill_asks,
+            settle_drain_timeout_secs: cfg.settle_drain_timeout_secs,
+            settlement_metrics_poll_ms: cfg.settlement_metrics_poll_ms,
+            warmup_batches: cfg.warmup_batches,
+            benchmark_label: cfg.benchmark_label.clone(),
+            metrics_json: cfg.metrics_json.clone(),
+            report: cfg.report.clone(),
         })
     }
 }
@@ -872,6 +885,9 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     let token = acquire_bearer(&http, &p.gateway, &p.api_key, &p.api_secret, &p.passphrase)
         .await
         .map_err(|e| anyhow!("auth: {e}"))?;
+    let baseline_metrics = fetch_metrics(&http, &p.gateway, &token, None)
+        .await
+        .map_err(|e| anyhow!("settlement metrics preflight: {e}"))?;
     // Within MAX_LOCK_TTL_SLOTS (4_500 ≈ 30 min; F-05) so intake accepts it.
     let expiry_slot = rpc.slot().await? + 3_000;
     let submit_nonce = run_nonce();
@@ -893,6 +909,10 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         )?);
     }
     let submit_start = Instant::now();
+    let submitted_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
     let n_orders = bodies.len();
     let mut submit_handles = Vec::with_capacity(n_orders);
     for b in bodies {
@@ -921,25 +941,70 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         ms = submit_start.elapsed().as_millis() as u64,
         "orders submitted"
     );
+    if accepted != n_orders {
+        return Err(anyhow!(
+            "benchmark invalid: only {accepted}/{n_orders} orders accepted"
+        ));
+    }
+    let submission_completed_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(submitted_at_ms);
 
-    // ── Phase 4: drain the settle, measure settled-matches/sec ──
+    // ── Phase 4: drain using terminal settlement records ────────
+    // One ask contributes one match in every supported real-load scenario.
+    // Unlike leaf-count deltas this remains correct when a match emits change
+    // and/or fee notes.
+    let expected_matches = orders
+        .iter()
+        .filter(|order| order.side == OrderSide::Ask)
+        .count() as u64;
     let drain_start = Instant::now();
-    let mut last = deposit_leaves;
-    let deadline = Instant::now() + std::time::Duration::from_secs(180);
+    let deadline = Instant::now() + std::time::Duration::from_secs(p.settle_drain_timeout_secs);
+    let mut cursor = baseline_metrics.latest_seq;
+    let mut batches = Vec::new();
+    let mut last_progress = 0u64;
     while Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        let now = harness.leaf_count().await?;
-        if now > last {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            p.settlement_metrics_poll_ms,
+        ))
+        .await;
+        let snapshot = fetch_metrics(&http, &p.gateway, &token, Some(cursor)).await?;
+        cursor = snapshot.latest_seq.max(cursor);
+        batches.extend(snapshot.recent_batches);
+        let observed: u64 = batches
+            .iter()
+            .map(|batch| {
+                batch.outcomes.confirmed + batch.outcomes.rejected + batch.outcomes.ambiguous
+            })
+            .sum();
+        if observed > last_progress {
             tracing::info!(
-                leaf_count = now,
-                settled_matches_approx = (now - deposit_leaves) / 2,
-                "settle progress"
+                observed_matches = observed,
+                expected_matches,
+                queue_depth = snapshot.queue.depth,
+                "settlement metrics progress"
             );
-            last = now;
+            last_progress = observed;
+        }
+        if observed >= expected_matches && snapshot.queue.depth == 0 {
+            break;
         }
     }
     let final_count = harness.leaf_count().await?;
-    let settled_matches = (final_count.saturating_sub(deposit_leaves)) / 2;
+    batches.sort_by_key(|batch| batch.seq);
+    batches.dedup_by_key(|batch| batch.seq);
+    let settled_matches: u64 = batches.iter().map(|batch| batch.outcomes.confirmed).sum();
+    let observed_matches: u64 = batches
+        .iter()
+        .map(|batch| batch.outcomes.confirmed + batch.outcomes.rejected + batch.outcomes.ambiguous)
+        .sum();
+    if observed_matches < expected_matches {
+        return Err(anyhow!(
+            "settlement drain timed out after {}s: measured {observed_matches}/{expected_matches} settlement outcomes",
+            p.settle_drain_timeout_secs
+        ));
+    }
     let drain_s = drain_start.elapsed().as_secs_f64();
     tracing::info!(
         deposit_leaves,
@@ -948,15 +1013,67 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         settled_per_sec = settled_matches as f64 / drain_s.max(1e-9),
         "real-settle LOAD complete — settle throughput (prover-bound)"
     );
+    let collected_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let artifact = BenchmarkArtifact {
+        schema_version: 1,
+        label: p.benchmark_label.clone(),
+        endpoint: p.gateway.clone(),
+        app_id: baseline_metrics.app_id,
+        compose_hash: baseline_metrics.compose_hash,
+        boot_session_id: baseline_metrics.boot_session_id,
+        expected_matches,
+        submitted_orders: n_orders as u64,
+        accepted_orders: accepted as u64,
+        warmup_batches_excluded: p.warmup_batches,
+        submitted_at_ms,
+        submission_completed_at_ms,
+        collected_at_ms,
+        batches,
+    };
+    let markdown = artifact.render_markdown();
+    println!("\n{markdown}");
+    if let Some(path) = &p.report {
+        std::fs::write(path, &markdown)?;
+        tracing::info!(?path, "wrote settlement benchmark markdown");
+    }
+    if let Some(path) = &p.metrics_json {
+        std::fs::write(path, serde_json::to_vec_pretty(&artifact)?)?;
+        tracing::info!(?path, "wrote settlement benchmark JSON");
+    }
+    let rejected: u64 = artifact
+        .batches
+        .iter()
+        .map(|batch| batch.outcomes.rejected)
+        .sum();
+    let ambiguous: u64 = artifact
+        .batches
+        .iter()
+        .map(|batch| batch.outcomes.ambiguous)
+        .sum();
+    if rejected != 0 || ambiguous != 0 {
+        return Err(anyhow!(
+            "benchmark completed with unhealthy outcomes: rejected={rejected}, ambiguous={ambiguous}"
+        ));
+    }
     println!(
         "\n=== real-settle load summary ===\n\
          orders submitted: {} (accepted {})\n\
          client VALID_INPUT prove: {} proofs in {:.1}s ({:.2}/s)\n\
-         on-chain settled matches: {} in {:.1}s ({:.2} matches/s)\n\
-         → cross-reference the TEE prover: phala cvms logs <cvm> | grep -E \"prove breakdown|settle pipeline timing\"\n",
-        n_orders, accepted,
-        proofs.len(), prove_wall.as_secs_f64(), proofs.len() as f64 / prove_wall.as_secs_f64().max(1e-9),
-        settled_matches, drain_s, settled_matches as f64 / drain_s.max(1e-9),
+         measured confirmed matches: {} in {:.1}s ({:.2} matches/s)\n\
+         on-chain leaf count: {} → {}\n",
+        n_orders,
+        accepted,
+        proofs.len(),
+        prove_wall.as_secs_f64(),
+        proofs.len() as f64 / prove_wall.as_secs_f64().max(1e-9),
+        settled_matches,
+        drain_s,
+        settled_matches as f64 / drain_s.max(1e-9),
+        deposit_leaves,
+        final_count,
     );
     Ok(())
 }

@@ -10,6 +10,9 @@ use darknyx_tee::api::ApiState;
 fn cancelled(order_id: &str) -> OrderUpdateMsg {
     OrderUpdateMsg {
         order_id: order_id.to_string(),
+        market_id: "market-pda".to_string(),
+        match_id: None,
+        server_time_ms: 1,
         kind: "cancelled",
         filled_quantity: None,
         new_amount: None,

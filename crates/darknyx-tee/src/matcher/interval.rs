@@ -41,6 +41,7 @@ use tokio::task::JoinHandle;
 use tokio::time;
 
 use crate::oracle::cache::OracleCache;
+use crate::settle::vault::market_config_pda;
 
 use super::book::OrderBook;
 use super::fills::FillMemo;
@@ -183,6 +184,14 @@ impl MatcherState {
         (self.base_mint, self.quote_mint)
     }
 
+    /// Canonical base58 market identity, derived from the on-chain
+    /// `MarketConfig` PDA rather than a display symbol.
+    pub fn market_id(&self) -> String {
+        market_config_pda(&self.base_mint, &self.quote_mint)
+            .0
+            .to_string()
+    }
+
     pub fn openings(&self) -> &super::openings::OpeningStore {
         &self.openings
     }
@@ -318,6 +327,7 @@ impl MatcherState {
     pub(crate) fn reserve_batch(&mut self, output: &RunBatchOutput) -> Result<(), String> {
         let mut ids = Vec::with_capacity(output.matches.len() * 2);
         let mut pending_events = Vec::with_capacity(output.matches.len() * 2);
+        let market_id = self.market_id();
         for m in &output.matches {
             let buyer = self
                 .openings
@@ -332,6 +342,8 @@ impl MatcherState {
             pending_events.push(OrderLifecycleEvent {
                 trading_key: m.owner_buyer,
                 order_id: buyer.order_id,
+                market_id: market_id.clone(),
+                match_id: Some(m.match_id),
                 kind: OrderLifecycleKind::PendingSettlement {
                     lock_expiry_slot: buyer.expiry_slot,
                 },
@@ -339,6 +351,8 @@ impl MatcherState {
             pending_events.push(OrderLifecycleEvent {
                 trading_key: m.owner_seller,
                 order_id: seller.order_id,
+                market_id: market_id.clone(),
+                match_id: Some(m.match_id),
                 kind: OrderLifecycleKind::PendingSettlement {
                     lock_expiry_slot: seller.expiry_slot,
                 },
@@ -478,8 +492,13 @@ impl MatcherState {
         }
 
         self.book.apply_updates(&updates);
+        let market_id = self.market_id();
         for update in updates {
-            let _ = self.order_updates_tx.send(update.into());
+            let _ = self.order_updates_tx.send(OrderLifecycleEvent::settled(
+                update,
+                market_id.clone(),
+                Some(m.match_id),
+            ));
         }
         Ok(())
     }
@@ -520,6 +539,8 @@ impl MatcherState {
             let _ = self.order_updates_tx.send(OrderLifecycleEvent {
                 trading_key,
                 order_id,
+                market_id: self.market_id(),
+                match_id: Some(m.match_id),
                 kind: OrderLifecycleKind::SettlementFailed {
                     reason: reason.to_string(),
                     lock_expiry_slot,
@@ -757,8 +778,13 @@ impl MatcherDriver {
                     .cloned()
                     .collect();
                 state.book_mut().apply_updates(&immediate);
+                let market_id = state.market_id();
                 for update in immediate {
-                    let _ = state.order_updates_tx.send(update.into());
+                    let _ = state.order_updates_tx.send(OrderLifecycleEvent::settled(
+                        update,
+                        market_id.clone(),
+                        None,
+                    ));
                 }
                 if !output.matches.is_empty() {
                     state

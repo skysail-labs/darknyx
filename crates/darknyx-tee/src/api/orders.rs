@@ -737,11 +737,18 @@ pub async fn place_order(
 /// orders-channel subscribers still see the order leave, and bounds the
 /// `order_owner` map. Shared by every cancel path.
 async fn announce_cancel(state: &ApiState, order_id_hex: &str) {
+    let market_id = match &state.matcher {
+        Some(matcher) => matcher.read().await.market_id(),
+        None => "unconfigured".to_string(),
+    };
     state
         .route_order_update(
             order_id_hex,
             &OrderUpdateMsg {
                 order_id: order_id_hex.to_string(),
+                market_id,
+                match_id: None,
+                server_time_ms: crate::settle::metrics::unix_ms(),
                 kind: "cancelled",
                 filled_quantity: None,
                 new_amount: None,

@@ -42,6 +42,7 @@ pub mod ed25519;
 pub mod fill_recovery;
 pub mod lock_note;
 pub mod marker_sweep;
+pub mod metrics;
 pub mod payload;
 pub mod pipeline;
 pub mod priority;
@@ -68,6 +69,11 @@ pub use ed25519::{build_ed25519_verify_ix, ED25519_PROGRAM_ID};
 pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage, SettlementOutcome};
 pub use lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
 pub use marker_sweep::{spawn_marker_sweeper, MARKER_SWEEP_INTERVAL, MARKER_SWEEP_MAX_PER_TX};
+pub use metrics::{
+    emit_batch_record, BatchMetricsCompletion, SettlementBatchRecord, SettlementMetricsSnapshot,
+    SettlementMetricsState, SettlementOutcomeCounts, SettlementStageTimings,
+    SETTLEMENT_METRICS_SCHEMA_VERSION,
+};
 pub use payload::{MatchResultPayload, CANONICAL_DOMAIN};
 pub use pipeline::{build_settle_v0_tx, build_settle_v0_tx_b64};
 pub use scheduler::{SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState};

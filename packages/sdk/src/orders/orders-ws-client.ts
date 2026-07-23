@@ -27,6 +27,12 @@ export interface OrderUpdate {
    *  via `GET /orders/:id` (the channel is a notifier, not a durable log). */
   seq?: number;
   order_id: string; // 16-byte hex
+  /** Base58 on-chain MarketConfig PDA. */
+  market_id?: string;
+  /** Decimal u64 match id; absent for immediate cancellations/expiry. */
+  match_id?: string;
+  /** TEE emission time as Unix milliseconds. */
+  server_time_ms?: number;
   kind:
     | "pending_settlement"
     | "partially_filled"

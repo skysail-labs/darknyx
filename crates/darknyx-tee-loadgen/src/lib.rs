@@ -29,6 +29,7 @@ pub mod config;
 pub mod metrics;
 pub mod report;
 pub mod run;
+pub mod settlement_benchmark;
 pub mod trader;
 pub mod workload;
 

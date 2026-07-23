@@ -432,11 +432,13 @@ DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
+DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
 DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 DARKNYX_TEE_FEE_RATE_BPS=30
 DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
 DARKNYX_TEE_NUM_TREES=4                              # shard count; MUST equal e2e-config numTrees (1 = single-shard)
 DARKNYX_TEE_SETTLE_SEND_CONCURRENCY=16               # concurrent settle Tx D's (co-inclusion lever)
+DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1                # whole batches in flight (1..=8; benchmark before raising)
 DARKNYX_TEE_PROVER=ark                               # ark (default) | rapidsnark (both ship in the image)
 EOF
 # ... deploy ... then:
@@ -450,11 +452,13 @@ Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 | `DARKNYX_TEE_SOLANA_RPC_URL` | Merkle sync + settle txs | **Helius** (public devnet 429s). Empty → public devnet default. |
 | `DARKNYX_TEE_SYNC_FROM_SLOT` | Merkle cold-boot floor | Set to the current slot (or a reset slot) so the mirror rebuilds the live tree, not pre-reset leaves. |
 | `DARKNYX_TEE_BASE_MINT` / `_QUOTE_MINT` | order intake | base58; supply both or neither. **Omit both → placeholder dev mints with settlement disabled** (loadgen regime). Real e2e settle MUST set the `e2e-config` mints and have finalized `VaultConfig` + `MarketConfig` available. |
+| `DARKNYX_TEE_MARKET_SYMBOL` | API + signed order routing | Display/canonical order symbol for the configured mint pair (default `SOL-USDC`; 1–32 bytes). |
 | `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` | settle worker | the `settleLookupTable` ALT. Without it the settle v0 tx exceeds 1232 B. |
 | `DARKNYX_TEE_FEE_RATE_BPS` | matcher | Simulator/loadgen default only (30; 0 disables fees there). Governed real-market boot adopts finalized `VaultConfig.fee_rate_bps`. Charged on BOTH legs → 2 fee notes. |
 | `DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT` | matcher fee notes | Simulator/loadgen default only (32-byte hex). Governed real-market boot adopts finalized `VaultConfig.protocol_owner_commitment`. |
 | `DARKNYX_TEE_NUM_TREES` | settle worker + K mirrors | shard count (1..=16, default 1). MUST equal the on-chain `num_trees` (`e2e-config.numTrees`). K>1 derives K fee-payer keys + K mirrors. |
 | `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` | settle worker | max settle Tx D's (+ lock txs + ALT extends) fired CONCURRENTLY (default 16). Lets the leader co-include them in one block. |
+| `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY` | settle scheduler | whole batches driven concurrently (1..=8, default 1). Raise only under the benchmark methodology; CPU proof contention can erase the IO overlap. |
 | `DARKNYX_TEE_PROVER` | prover | `ark` (default) \| `rapidsnark`. The image ships both (`--features rapidsnark`); flip to A/B prove on the SAME image (no rebuild). |
 | `DARKNYX_TEE_FEED_IDS` | oracle | Pyth Hermes SOL/USD id (set literally in the compose). |
 

@@ -21,7 +21,7 @@ use ark_groth16::Proof;
 
 use super::ark_prover::{build_circom_and_check, circom_input_json, load_circom_cfg};
 use super::convert::proof_to_onchain_bytes;
-use super::groth16::{ProofWithInputs, Prover, ProverError};
+use super::groth16::{ProofWithInputs, Prover, ProverError, ProverTimings};
 use super::inputs::{build_batch_public_inputs, BatchPublicInputs};
 use super::rapidsnark_sys::RawProver;
 use super::snarkjs::{assert_public_inputs, native_witness_wtns, parse_snarkjs_proof};
@@ -110,6 +110,14 @@ impl RapidsnarkMatchBatchProver {
         &self,
         slots: &[MatchSlotWitness],
     ) -> Result<(Proof<Bn254>, BatchPublicInputs), ProverError> {
+        let (proof, public, _) = self.prove_to_ark_with_timings(slots)?;
+        Ok((proof, public))
+    }
+
+    fn prove_to_ark_with_timings(
+        &self,
+        slots: &[MatchSlotWitness],
+    ) -> Result<(Proof<Bn254>, BatchPublicInputs, ProverTimings), ProverError> {
         if slots.len() != self.n {
             return Err(ProverError::BatchSizeMismatch {
                 expected: self.n,
@@ -171,17 +179,32 @@ impl RapidsnarkMatchBatchProver {
             "prove breakdown (witness-gen vs rapidsnark prove)"
         );
 
-        Ok((proof, public))
+        Ok((
+            proof,
+            public,
+            ProverTimings {
+                backend: "rapidsnark".to_string(),
+                witness_backend: if self.native_witness_bin.is_some() {
+                    "native".to_string()
+                } else {
+                    "wasmer".to_string()
+                },
+                device: Some("CPU".to_string()),
+                witness_ms: witness_ms as u64,
+                prove_step_ms: prove_step_ms as u64,
+            },
+        ))
     }
 }
 
 impl Prover for RapidsnarkMatchBatchProver {
     fn prove(&self, slots: &[MatchSlotWitness]) -> Result<ProofWithInputs, ProverError> {
-        let (proof, public) = self.prove_to_ark(slots)?;
+        let (proof, public, timings) = self.prove_to_ark_with_timings(slots)?;
         // snarkjs JSON proof → ark Proof → on-chain bytes (the shared converter).
         Ok(ProofWithInputs {
             proof: proof_to_onchain_bytes(&proof),
             public,
+            timings,
         })
     }
 

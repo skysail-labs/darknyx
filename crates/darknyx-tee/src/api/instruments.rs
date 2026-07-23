@@ -4,9 +4,8 @@
 //! - `GET /instruments` — list every tradable instrument.
 //! - `GET /instruments/{symbol}` — one instrument, 404 if unknown.
 //!
-//! The data is static for the CVM's lifetime (one market per
-//! `MatcherDriver` for now), captured on `ApiState` at boot from the
-//! `MatchConfig` + the configured oracle feed.
+//! The data is static for the CVM's lifetime, captured on `ApiState` at boot
+//! from the governed market config + operator-owned display symbol/feed.
 
 use std::sync::Arc;
 

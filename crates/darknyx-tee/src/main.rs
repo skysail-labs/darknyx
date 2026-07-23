@@ -408,7 +408,7 @@ async fn main() -> Result<()> {
 
     // ─── 7. Attach matcher + settle state + instruments to ApiState ───
     let instruments = vec![darknyx_tee::api::instruments::InstrumentInfo {
-        symbol: "SOL-USDC".to_string(),
+        symbol: cfg.market_symbol.clone(),
         base_mint: settle_base_mint,
         quote_mint: settle_quote_mint,
         tick_size: market_tick_size,
@@ -807,6 +807,7 @@ fn build_settle_driver(
         confirm_timeout: Duration::from_secs(60),
         current_priority_fee: current_priority_fee.clone(),
         settle_send_concurrency: cfg.settle_send_concurrency as usize,
+        settle_batch_concurrency: cfg.settle_batch_concurrency as usize,
         marker_sweep_tx,
     };
 
@@ -821,6 +822,7 @@ fn build_settle_driver(
             fee_rate_bps,
             price_scale,
             circuit_n: PRODUCTION_BATCH_N,
+            settle_batch_concurrency: cfg.settle_batch_concurrency as usize,
         },
     })
 }

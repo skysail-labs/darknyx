@@ -45,6 +45,9 @@ use super::alt::{
 use super::alt_pool::{AltPlan, AltPool};
 use super::ed25519::build_ed25519_verify_ix;
 use super::job::{SettleJobId, SettleJobStage, SettlementOutcome};
+use super::metrics::{
+    emit_batch_record, BatchMetricsCompletion, SettlementOutcomeCounts, SettlementStageTimings,
+};
 use super::payload::MatchResultPayload;
 use super::pipeline::{budget_ixs, build_settle_v0_tx_b64, VERIFY_COMPUTE_UNIT_LIMIT};
 use super::scheduler::SettleSchedulerState;
@@ -140,6 +143,9 @@ pub struct SettleWorkerCtx {
     /// throughput lever — vs sending one-at-a-time and paying ~1.13s
     /// confirmation per match). `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY`.
     pub settle_send_concurrency: usize,
+    /// Whole settlement batches permitted by the scheduler. Retained here so
+    /// every benchmark record captures the actual experiment setting.
+    pub settle_batch_concurrency: usize,
     /// Enqueues a settled batch's Merkle root for ASYNCHRONOUS, expiry-gated
     /// marker close (Tx E). The sweeper reads the on-chain expiry and never
     /// submits early. Drained by `marker_sweep::spawn_marker_sweeper`.
@@ -385,6 +391,15 @@ async fn run_batch_settle_with_outcomes(
     let result = run_batch_settle_inner(ctx, &inputs, outcome_tx.as_ref()).await;
     if let Err(e) = &result {
         ctx.fail_all(batch_id, n, format!("{e}")).await;
+        let record = ctx.settle_state.write().await.metrics_mut().fail_batch(
+            batch_id,
+            ctx.settle_batch_concurrency,
+            ctx.settle_send_concurrency,
+            "settlement_pipeline_error".to_string(),
+        );
+        if let Some(record) = record {
+            emit_batch_record(&record);
+        }
     }
     result
 }
@@ -522,6 +537,7 @@ async fn run_batch_settle_inner(
             .map_err(|e| WorkerError::ProverPanic(e.to_string()))?
             .map_err(|e| WorkerError::Prover(format!("{e}")))?;
         let proof_bytes = proof_out.proof;
+        let prover_timings = proof_out.timings;
         let prove_ms = t.elapsed().as_millis() as u64;
 
         let t = Instant::now();
@@ -566,10 +582,11 @@ async fn run_batch_settle_inner(
                 st.update(&id, |j| j.verify_sig = Some(verify_sig.clone()));
             }
         }
-        Ok::<(u64, u64, u64), WorkerError>((
+        Ok::<_, WorkerError>((
             prove_ms,
             t.elapsed().as_millis() as u64,
             marker_expiry_slot,
+            prover_timings,
         ))
     };
 
@@ -735,7 +752,7 @@ async fn run_batch_settle_inner(
 
     let (lock_r, pv_r, alt_r) = tokio::join!(lock_branch, prove_verify_branch, alt_branch);
     let lock_ms = lock_r?;
-    let (prove_ms, verify_ms, marker_expiry_slot) = pv_r?;
+    let (prove_ms, verify_ms, marker_expiry_slot, prover_timings) = pv_r?;
     let (per_batch_alt, alt_tx_ms, alt_wait_ms) = alt_r?;
     let parallel_ms = t_par.elapsed().as_millis() as u64;
 
@@ -759,6 +776,7 @@ async fn run_batch_settle_inner(
     let mut results: Vec<Option<SettlementOutcome>> = vec![None; n];
     let mut last_signatures: Vec<Option<String>> = vec![None; n];
     let mut slots: Vec<u64> = Vec::with_capacity(n);
+    let mut rebroadcasts = 0u32;
     while !unresolved.is_empty() {
         let bh = match ctx.rpc.get_latest_blockhash().await {
             Ok(bh) => bh,
@@ -889,6 +907,7 @@ async fn run_batch_settle_inner(
                         slots.push(slot);
                     }
                     last_signatures[idx] = Some(outcome.signature.clone());
+                    rebroadcasts = rebroadcasts.saturating_add(outcome.rebroadcasts);
                     tracing::info!(
                         batch_id,
                         match_idx = idx,
@@ -1084,6 +1103,38 @@ async fn run_batch_settle_inner(
         "settle pipeline timing (per-stage ms)"
     );
 
+    let outcome_counts = SettlementOutcomeCounts::from_outcomes(&normalized);
+    let metrics_record = ctx.settle_state.write().await.metrics_mut().complete_batch(
+        batch_id,
+        BatchMetricsCompletion {
+            prover_backend: prover_timings.backend,
+            witness_backend: prover_timings.witness_backend,
+            prover_device: prover_timings.device,
+            settle_concurrency: ctx.settle_batch_concurrency,
+            settle_send_concurrency: ctx.settle_send_concurrency,
+            timings: SettlementStageTimings {
+                lock_ms: Some(lock_ms),
+                witness_ms: Some(prover_timings.witness_ms),
+                prove_step_ms: Some(prover_timings.prove_step_ms),
+                prove_ms: Some(prove_ms),
+                verify_ms: Some(verify_ms),
+                alt_tx_ms: Some(alt_tx_ms),
+                alt_wait_ms: Some(alt_wait_ms),
+                parallel_ms: Some(parallel_ms),
+                settle_ms: Some(settle_ms),
+                close_ms: Some(close_ms),
+                total_ms: Some(total_ms),
+            },
+            outcomes: outcome_counts,
+            confirmed_slots: slots.len(),
+            distinct_confirmed_slots: distinct_slots,
+            rebroadcasts,
+        },
+    );
+    if let Some(record) = metrics_record {
+        emit_batch_record(&record);
+    }
+
     Ok(BatchSettlementReport {
         outcomes: normalized
             .into_iter()
@@ -1099,7 +1150,9 @@ async fn run_batch_settle_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prover::{build_batch_public_inputs, dummy_slot, ProofWithInputs, ProverError};
+    use crate::prover::{
+        build_batch_public_inputs, dummy_slot, ProofWithInputs, ProverError, ProverTimings,
+    };
     use crate::settle::Groth16ProofBytes;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1128,6 +1181,13 @@ mod tests {
                     pi_c: [0x07; 64],
                 },
                 public,
+                timings: ProverTimings {
+                    backend: "fake".to_string(),
+                    witness_backend: "fake".to_string(),
+                    device: None,
+                    witness_ms: 0,
+                    prove_step_ms: 0,
+                },
             })
         }
         fn n(&self) -> usize {
@@ -1383,6 +1443,7 @@ mod tests {
             confirm_timeout: Duration::from_secs(5),
             current_priority_fee: Arc::new(AtomicU64::new(0)),
             settle_send_concurrency: 8,
+            settle_batch_concurrency: 1,
             // Throwaway sender — the rx is dropped, so the worker's enqueue is a
             // harmless best-effort no-op (the marker-sweep path is unit-tested
             // separately in `marker_sweep`).
@@ -1607,6 +1668,61 @@ mod tests {
             // off-batch), so the worker no longer records a close sig on the job.
             assert!(job.close_sig.is_none(), "match {idx} close is async");
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_batches_share_the_rolling_alt_without_index_corruption() {
+        let url = spawn_mock_rpc().await;
+        let state = Arc::new(RwLock::new(SettleSchedulerState::default()));
+        seed_jobs(&state, 0, 1).await;
+        seed_jobs(&state, 1, 1).await;
+        {
+            let mut scheduler = state.write().await;
+            scheduler
+                .metrics_mut()
+                .enqueue_batch(0, "market".to_string(), vec!["0".to_string()]);
+            scheduler
+                .metrics_mut()
+                .enqueue_batch(1, "market".to_string(), vec!["1".to_string()]);
+            scheduler.mark_batch_started(0, 2);
+            scheduler.mark_batch_started(1, 2);
+        }
+        let mut ctx = ctx_for(url, state.clone(), 2);
+        ctx.settle_batch_concurrency = 2;
+
+        let make_inputs = |batch_id, seed, buyer_seed, seller_seed| BatchSettleInputs {
+            batch_id,
+            matches: vec![MatchSettleInputs {
+                payload: payload(seed),
+                buyer_lock: lock_inputs(buyer_seed),
+                seller_lock: lock_inputs(seller_seed),
+                match_index: 0,
+            }],
+            witnesses: vec![dummy_slot(), dummy_slot()],
+        };
+        let (first, second) = tokio::join!(
+            run_batch_settle(&ctx, make_inputs(0, 0xA0, 0x01, 0x02)),
+            run_batch_settle(&ctx, make_inputs(1, 0xB0, 0x03, 0x04)),
+        );
+        first.expect("first concurrent batch");
+        second.expect("second concurrent batch");
+
+        let scheduler = state.read().await;
+        for batch_id in [0, 1] {
+            let job = scheduler
+                .get_job(&SettleJobId {
+                    batch_id,
+                    match_idx: 0,
+                })
+                .expect("job present");
+            assert_eq!(job.stage, SettleJobStage::Done);
+        }
+        let metrics = scheduler.metrics_snapshot(None, 10);
+        assert_eq!(metrics.recent_batches.len(), 2);
+        assert!(metrics
+            .recent_batches
+            .iter()
+            .all(|record| record.settle_concurrency == 2));
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -212,6 +212,30 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 3)]
     pub real_partial_fill_asks: u8,
 
+    /// Maximum time to wait for the real-settle queue to reach terminal
+    /// outcomes. The load rig exits early once all expected matches are
+    /// measured; this is only a safety ceiling.
+    #[arg(long, default_value_t = 180)]
+    pub settle_drain_timeout_secs: u64,
+
+    /// Poll interval for the admin settlement metrics cursor.
+    #[arg(long, default_value_t = 1_000)]
+    pub settlement_metrics_poll_ms: u64,
+
+    /// Number of earliest completed batches to exclude from steady-state
+    /// percentiles (ICICLE and rapidsnark both have first-prove warm-up).
+    #[arg(long, default_value_t = 1)]
+    pub warmup_batches: usize,
+
+    /// Stable label embedded in benchmark artifacts, e.g. `prod9-rapidsnark`
+    /// or `h200-icicle-cuda`.
+    #[arg(long, default_value = "unlabelled")]
+    pub benchmark_label: String,
+
+    /// Optional machine-readable settlement benchmark artifact.
+    #[arg(long)]
+    pub metrics_json: Option<PathBuf>,
+
     /// Absolute slot every generated order expires at. Must sit ABOVE the live
     /// slot (else swept as expired → 0 matches) but WITHIN
     /// `MAX_LOCK_TTL_SLOTS` (~4_500 ≈ 30 min, F-05) of it — intake now rejects
@@ -314,6 +338,12 @@ impl RunConfig {
                 "--poll-orders must be a probability in [0, 1] (got {})",
                 self.poll_orders
             );
+        }
+        if self.settle_drain_timeout_secs == 0 {
+            anyhow::bail!("--settle-drain-timeout-secs must be > 0");
+        }
+        if self.settlement_metrics_poll_ms < 100 {
+            anyhow::bail!("--settlement-metrics-poll-ms must be at least 100");
         }
         // Surface a bad mint at the parse boundary, not mid-run.
         self.base_mint_bytes()?;

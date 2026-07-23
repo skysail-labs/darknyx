@@ -59,7 +59,7 @@ mod snarkjs;
 pub use ark_prover::ArkMatchBatchProver;
 pub use constraints::{validate_conservation, ConstraintError};
 pub use convert::proof_to_onchain_bytes;
-pub use groth16::{ProofWithInputs, Prover, ProverError, PRODUCTION_BATCH_N};
+pub use groth16::{ProofWithInputs, Prover, ProverError, ProverTimings, PRODUCTION_BATCH_N};
 #[cfg(feature = "icicle")]
 pub use icicle_prover::IcicleMatchBatchProver;
 pub use inputs::{build_batch_public_inputs, BatchPublicInputs};

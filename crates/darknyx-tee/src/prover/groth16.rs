@@ -36,6 +36,19 @@ pub const PRODUCTION_BATCH_N: usize = 16;
 pub struct ProofWithInputs {
     pub proof: Groth16ProofBytes,
     pub public: BatchPublicInputs,
+    /// Backend-reported wall times for the two materially different proving
+    /// phases. Keeping these on the proof result lets the settlement metrics
+    /// endpoint report the exact split without scraping tracing output.
+    pub timings: ProverTimings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProverTimings {
+    pub backend: String,
+    pub witness_backend: String,
+    pub device: Option<String>,
+    pub witness_ms: u64,
+    pub prove_step_ms: u64,
 }
 
 #[derive(Error, Debug)]

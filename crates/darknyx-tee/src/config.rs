@@ -67,6 +67,9 @@ pub struct Config {
     /// in the documented placeholder-mint loadgen mode and settlement stays
     /// disabled; supplying only one mint is rejected as a configuration error.
     pub governed_market: bool,
+    /// Canonical API/order symbol for the configured mint pair.
+    /// `DARKNYX_TEE_MARKET_SYMBOL`, default `SOL-USDC`.
+    pub market_symbol: String,
     /// Price tick. `DARKNYX_TEE_TICK_SIZE`, default 1.
     pub tick_size: u64,
     /// Minimum order size. `DARKNYX_TEE_MIN_ORDER_SIZE`, default 0.
@@ -104,6 +107,11 @@ pub struct Config {
     /// leader co-include settles in one block so they confirm together (the
     /// on-chain throughput lever); 1 reproduces the old one-at-a-time behavior.
     pub settle_send_concurrency: u64,
+    /// Maximum whole settlement batches in flight. Default 1 preserves the
+    /// production baseline. Values 2..=8 are an explicit benchmark knob:
+    /// rolling-ALT mutations remain serialized and continuation notes cannot
+    /// re-enter the matcher until their parent Tx D confirms.
+    pub settle_batch_concurrency: u8,
     /// Number of Merkle-tree shards (`= vault_config.num_trees`). The settle
     /// worker derives K signer keys (`darknyx/ed25519-signer/v2/{i}`) and
     /// round-robins each match across `(key[j], merkle_tree[j])` so the
@@ -320,6 +328,15 @@ impl Config {
         if base_mint_set != quote_mint_set {
             bail!("DARKNYX_TEE_BASE_MINT and DARKNYX_TEE_QUOTE_MINT must be supplied together");
         }
+        let market_symbol = env_string_or("DARKNYX_TEE_MARKET_SYMBOL", "SOL-USDC");
+        if market_symbol.is_empty()
+            || market_symbol.len() > darkpool_matcher::order_canonical::SYMBOL_MAX_LEN
+        {
+            bail!(
+                "DARKNYX_TEE_MARKET_SYMBOL must be 1..={} bytes",
+                darkpool_matcher::order_canonical::SYMBOL_MAX_LEN
+            );
+        }
 
         Ok(Self {
             http_bind: env_string_or("DARKNYX_TEE_HTTP_BIND", "0.0.0.0:8080"),
@@ -336,6 +353,7 @@ impl Config {
             base_mint: parse_mint_env("DARKNYX_TEE_BASE_MINT", default_base_mint())?,
             quote_mint: parse_mint_env("DARKNYX_TEE_QUOTE_MINT", default_quote_mint())?,
             governed_market: base_mint_set && quote_mint_set,
+            market_symbol,
             tick_size: parse_u64_env("DARKNYX_TEE_TICK_SIZE", 1)?,
             min_order_size: parse_u64_env("DARKNYX_TEE_MIN_ORDER_SIZE", 0)?,
             settle_lookup_table: parse_pubkey_env("DARKNYX_TEE_SETTLE_LOOKUP_TABLE")?,
@@ -349,6 +367,8 @@ impl Config {
             )?,
             settle_send_concurrency: parse_u64_env("DARKNYX_TEE_SETTLE_SEND_CONCURRENCY", 16)?
                 .max(1),
+            settle_batch_concurrency: parse_u64_env("DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY", 1)?
+                .clamp(1, 8) as u8,
             // 1..=16 (vault MAX_TREES). Clamp rather than fail: a 0 or absurd
             // value falls back to a single shard (the safe, pre-sharding path).
             num_trees: parse_u64_env("DARKNYX_TEE_NUM_TREES", 1)?.clamp(1, 16) as u8,

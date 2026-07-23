@@ -314,6 +314,13 @@ impl TokenBucket {
 pub struct OrderUpdateMsg {
     /// 16-byte order id, hex.
     pub order_id: String,
+    /// Base58 `MarketConfig` PDA for the book that owns this order.
+    pub market_id: String,
+    /// Decimal u64 match id. String encoding preserves all bits in JavaScript.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_id: Option<String>,
+    /// Server emission time, Unix milliseconds.
+    pub server_time_ms: u64,
     /// `"pending_settlement" | "partially_filled" | "fully_filled" |
     /// "settlement_failed" | "cancelled" | "expired"`.
     pub kind: &'static str,
