@@ -928,10 +928,8 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     let prove_start = Instant::now();
     let mut proofs = Vec::with_capacity(orders.len());
     let mut prove_us: Vec<u64> = Vec::with_capacity(orders.len());
-    // Bound the actual number of spawn_blocking jobs, not merely entry to the
-    // prover: parking dozens of blocking tasks behind a semaphore still makes
-    // Tokio grow its blocking pool, and ark-circom/virtual-mio can exhaust a
-    // normal macOS `ulimit -n` before any order is submitted.
+    // Bound the actual number of spawn_blocking jobs. Native witnesses and
+    // ark-groth16 proofs are CPU/memory-heavy.
     for order_chunk in orders.chunks(p.client_prove_concurrency) {
         let mut prove_handles = Vec::with_capacity(order_chunk.len());
         for order in order_chunk {

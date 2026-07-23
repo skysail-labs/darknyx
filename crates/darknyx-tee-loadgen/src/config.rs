@@ -212,10 +212,9 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 3)]
     pub real_partial_fill_asks: u8,
 
-    /// Maximum VALID_INPUT proofs generated concurrently by the real-settle
-    /// client. Each ark-circom/Wasmer prover consumes file descriptors and
-    /// native threads, so unbounded fan-out can exhaust the host before order
-    /// submission. Kept deliberately below the settlement batch size.
+    /// Maximum native-witness + VALID_INPUT proof jobs generated concurrently
+    /// by the real-settle client. Keep this bounded because every job consumes
+    /// native CPU and memory.
     #[arg(long, default_value_t = 1)]
     pub client_prove_concurrency: usize,
 

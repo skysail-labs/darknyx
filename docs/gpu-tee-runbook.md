@@ -271,11 +271,13 @@ Read [`benchmarks/settlement-throughput-methodology.md`](benchmarks/settlement-t
 before the window. Use at least eight completed batches after excluding warm-up:
 
 ```sh
-# Run locally before the paid GPU window: this guards the client proof
-# descriptor lifecycle so a host-side failure cannot consume GPU time.
+# Run locally before the paid GPU window. This builds mandatory native C++
+# client witnesses and proves the complete 160-deposit + 160-input fixture.
+# The real-settle loadgen never invokes WASM/Wasmer and has no fallback.
+bash scripts/build-native-client-witnesses.sh
 cargo test -p darknyx-tee-loadgen --release --lib \
   --features real-settle-chain \
-  sequential_client_proofs_do_not_exhaust_descriptors -- --ignored
+  native_client_proofs_sustain_full_fixture -- --ignored
 
 cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
   --real-settle --endpoint "$GW" --rpc-url "$RPC" \

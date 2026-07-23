@@ -37,6 +37,7 @@ tests/fixtures/wallets/*.json
 circuits/build/**/*.r1cs
 circuits/build/**/*.sym
 circuits/build/**/*_js/
+circuits/build/**/circuit_cpp/
 circuits/build/**/*.zkey
 !circuits/build/**/circuit_final.zkey
 circuits/**/*.r1cs

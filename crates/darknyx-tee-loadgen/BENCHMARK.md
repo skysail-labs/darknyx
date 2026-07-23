@@ -19,7 +19,11 @@
 > **Current capacity contract:** this file preserves historical prover-isolation
 > results. New CPU/GPU capacity runs must use
 > [`docs/benchmarks/settlement-throughput-methodology.md`](../../docs/benchmarks/settlement-throughput-methodology.md),
-> including its paced 144-match fixture and eight measured-batch minimum.
+> including its paced 144-match fixture and eight measured-batch minimum. The
+> current real-settle client fixture uses native C++ witnesses; its 2026-07-23
+> 160-deposit + 160-input preflight completed in 21.06 s. The older Wasmer
+> client timings below are retained as historical evidence, not the current
+> loadgen path.
 
 ### Why `prove_ms` is the metric (the stage taxonomy)
 
@@ -47,7 +51,9 @@ backend logs the split, record both, because the GPU win is bounded by the prove
 - **`prove_ms` (absolute, per N=16 batch)** — the headline. GPU speedup = `prove_ms_cpu / prove_ms_gpu`.
 - **Finality-free per-batch latency** = `total_ms − (lock+verify+alt_tx+alt_wait+settle+close)` ≈ `prove_ms + ε`. Models the post-Alpenglow world; shows `prove_ms` dominates once IO →0.
 - **Projected post-Alpenglow settle throughput** ≈ `1 / (prove_ms + 6×~0.15 s)` batches/s → today prove-bound, so the GPU ratio passes ~1:1 into throughput.
-- **Client `VALID_INPUT` prove rate** (loadgen-side, ark-circom) — the order-submission ceiling; the same prover-bound story client-side.
+- **Client `VALID_INPUT` prove rate** (loadgen-side, native C++ witness +
+  ark-groth16) — the order-submission ceiling; the same prover-bound story
+  client-side.
 
 ### Fixed conditions (must hold across CPU baseline AND GPU re-run, or it's not comparable)
 
@@ -237,13 +243,14 @@ The Hybrid harness's second half: a small N of **real-note traders** that deposi
 on-chain, prove a real VALID_INPUT, POST a crossing order, and track the on-chain
 settle (leaf-count growth / `TradeSettled`) — the loadgen analogue of
 `cvm-settle-e2e`, plus a `merge-before-order` variant. Behind the `real-settle`
-cargo feature (keeps the default synthetic build lean — no ark-circom/wasmer).
+cargo feature (keeps the default synthetic build lean). The real-settle path
+requires native C++ witness generators and never invokes WASM/Wasmer.
 
 **Increment A — DONE (`src/real_settle.rs`).** The CVM-free, unit-tested core:
-- A **Rust VALID_INPUT prover** (`ValidInputProver`) — ark-circom against
-  `circuits/build/valid_input`, mirroring the SDK's `proveValidInput` (none
-  existed before: the TEE proves VALID_MATCH_BATCH, clients prove VALID_INPUT
-  via snarkjs). Emits the same 256-byte on-chain proof layout.
+- A **native-witness VALID_INPUT prover** (`ValidInputProver`) — the
+  Circom-generated C++ binary emits `.wtns`, then ark-groth16 proves against
+  `circuits/build/valid_input/circuit_final.zkey`. It mirrors the SDK's
+  `proveValidInput` and emits the same 256-byte on-chain proof layout.
 - A depth-20 Poseidon **`IncrementalTree`** + `MerkleWitness` (mirrors the SDK's
   `MerkleShadow`).
 - Validated by `cargo test -p darknyx-tee-loadgen --features real-settle`: a proof is
@@ -301,8 +308,8 @@ batch can settle inputs from different shards.
 | `ioc-fok` | crossing pair, IOC bid / FOK ask | execution-policy plumbing |
 
 **Phases:** plan → mint+deposit(+merge) all notes (sequential, shards round-robined)
-→ **prove all VALID_INPUT concurrently** (`spawn_blocking` across cores) → submit all
-concurrently → drain the settle.
+→ **prove all VALID_INPUT with bounded concurrency** (native C++ witness +
+ark-groth16 in `spawn_blocking`) → submit all concurrently → drain the settle.
 
 **Prover-bottleneck metrics** (loadgen-only + CVM-log cross-ref, per the decision):
 - **Client prove rate** — proofs/sec + p50/p95 of every VALID_INPUT/MERGE prove (the

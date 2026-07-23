@@ -352,10 +352,12 @@ regime and the metrics-driven `--real-settle` load rig. It reads the admin-only
 on terminal matched-pair outcomes, and can write raw JSON plus Markdown:
 
 ```sh
-# Paid-run preflight: prove 48 deposits + one input proof in one process.
+# Paid-run preflight: build the mandatory native C++ generators, then prove the
+# complete 160-deposit + 160-input fixture. There is no WASM/Wasmer fallback.
+bash scripts/build-native-client-witnesses.sh
 cargo test -p darknyx-tee-loadgen --release --lib \
   --features real-settle-chain \
-  sequential_client_proofs_do_not_exhaust_descriptors -- --ignored
+  native_client_proofs_sustain_full_fixture -- --ignored
 
 cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
   --real-settle --endpoint "$GW" --rpc-url "$HELIUS" \

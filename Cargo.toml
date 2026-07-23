@@ -56,10 +56,11 @@ ark-bn254 = "0.5.0"
 ark-ff = "0.5.0"
 ark-serialize = "0.5.0"
 ark-ec = "0.5.0"
-# In-TEE prover (PR 4g.4b): witness gen (wasmer-backed) + zkey parse
-# + ark-groth16 prove, in one dep. Published 0.5.0 uses ark-* 0.5
-# from crates.io with no [patch.crates-io] hack — clean fit for the
-# arkworks-0.5 workspace above.
+ark-relations = "0.5.1"
+# Zkey/R1CS parsing + the optional in-TEE Wasmer fallback, in one dep.
+# The real-settle loadgen uses native C++ witness generation and consumes only
+# ark-circom's zkey parser/reduction. Published 0.5.0 uses ark-* 0.5 from
+# crates.io and fits the arkworks-0.5 workspace above.
 ark-circom = "0.5.0"
 # num-bigint 0.4 — the type `ark_circom::CircomBuilder::push_input`
 # takes (`T: Into<num_bigint::BigInt>`). We construct BigInts from

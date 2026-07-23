@@ -41,6 +41,7 @@ The real-settle loadgen:
 Example:
 
 ```sh
+bash scripts/build-native-client-witnesses.sh
 cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
   --real-settle --endpoint "$GW" --rpc-url "$RPC" \
   --admin-keypair .devnet/keypairs/admin.json \
@@ -58,21 +59,32 @@ Benchmark artifacts under `docs/benchmarks/runs/` are evidence, not mutable
 golden fixtures. Do not commit credentials, RPC URLs containing API keys, raw
 order bodies, or CVM environment files.
 
-The client prover fan-out is bounded (portable default one). Each proof runs in
-a short-lived Wasmer runtime so its virtual-mio descriptors are released before
-the process continues. This fixes the 2026-07-23 baseline failure in which 42
-sequential deposits exhausted a macOS 256-FD soft limit and the first
-VALID_INPUT proof failed. Before a paid run, exercise the exact regression:
+The client prover fan-out is bounded (portable default one). VALID_DEPOSIT,
+VALID_INPUT, and VALID_MERGE use mandatory Circom-generated native C++ witness
+binaries; their `.wtns` assignments feed ark-groth16 directly. There is no
+WASM/Wasmer runtime or silent fallback in the real-settle loadgen. On Apple
+Silicon the script asks Circom for portable `--no_asm` C++ and builds direct
+arm64 binaries; Linux x86_64 retains Circom's optimized generated assembly.
+
+This replaces the 2026-07-23 baseline path in which sequential Wasmer
+calculators exhausted the macOS 256-FD soft limit. Before a paid run, exercise
+the exact 160-deposit + 160-input fixture:
 
 ```sh
+bash scripts/build-native-client-witnesses.sh
 cargo test -p darknyx-tee-loadgen --release --lib \
   --features real-settle-chain \
-  sequential_client_proofs_do_not_exhaust_descriptors -- --ignored
+  native_client_proofs_sustain_full_fixture -- --ignored
 ```
 
-Raising `--client-prove-concurrency` above the local machine's descriptor and
-native-thread capacity still invalidates the run before intake; do not confuse
-client fixture-generation concurrency with the TEE's
+Local Apple-Silicon preflight on 2026-07-23: all 320 proofs completed in
+**21.06 seconds** after the release build, and the focused deposit/input/merge
+proofs all verified against their committed zkey VKs. Treat this as a host
+fixture-health check, not a browser proving benchmark.
+
+Raising `--client-prove-concurrency` above the local machine's CPU/memory
+capacity still invalidates the run before intake; do not confuse client
+fixture-generation concurrency with the TEE's
 `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY`.
 
 The fixed comparison fixture uses sixteen persistent partial-fill bids, each
