@@ -311,7 +311,7 @@ struct PreparedOrder {
 /// `current_slot + MAX_LOCK_TTL_SLOTS`; intake rejects orders beyond it up front
 /// (see `prepare_order`) so the cap is a clean placement error, not a
 /// settle-time failure. 4_500 ≈ 30 min at 400 ms slots (→ ~15 min post-Alpenglow).
-const MAX_LOCK_TTL_SLOTS: u64 = 4_500;
+pub(crate) const MAX_LOCK_TTL_SLOTS: u64 = 4_500;
 
 /// Verify + build an order WITHOUT touching the book (decode, Fr-checks,
 /// canonical-signature verify, collateral/fee derivation, opening verify, Order
@@ -736,7 +736,7 @@ pub async fn place_core(
             "order_id already used with a different order",
         ));
     }
-    if let Some(last) = replay.last_arrival_nonce.get(&trading_key).copied() {
+    if let Some((last, _last_slot)) = replay.last_arrival_nonce.get(&trading_key).copied() {
         if arrival_nonce <= last {
             return Err(ApiError::stale_nonce(format!(
                 "arrival_nonce {arrival_nonce} is not greater than last accepted {last}"
@@ -964,7 +964,7 @@ pub async fn modify_core(
             ));
         }
     }
-    if let Some(last) = replay.last_arrival_nonce.get(&trading_key).copied() {
+    if let Some((last, _last_slot)) = replay.last_arrival_nonce.get(&trading_key).copied() {
         if arrival_nonce <= last {
             return Err(ApiError::stale_nonce(format!(
                 "arrival_nonce {arrival_nonce} is not greater than last accepted {last}"

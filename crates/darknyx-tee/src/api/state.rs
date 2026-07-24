@@ -15,7 +15,7 @@
 //! change for the lifetime of the CVM, so we pull them once and
 //! hand them to every `/info` request from memory.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -266,7 +266,18 @@ pub type IdempotencyRecord = ([u8; 32], u64);
 #[derive(Default, Debug)]
 pub struct SubmissionReplayState {
     pub idempotency: HashMap<String, IdempotencyRecord>,
-    pub last_arrival_nonce: HashMap<[u8; 32], u64>,
+    /// Insertion order of `idempotency` keys, oldest first (S-10).
+    ///
+    /// Eviction used to pick `idempotency.keys().next()` — HashMap iteration
+    /// order, which is arbitrary, not oldest. A burst therefore evicted *live*
+    /// records and turned a legitimate client retry into a `duplicate`
+    /// rejection: a correctness bug, not merely a capacity one. This queue
+    /// makes eviction FIFO so the record dropped is the least recently
+    /// recorded.
+    pub idempotency_order: VecDeque<String>,
+    /// Per-trading-key high-water nonce mark, with the slot it was last
+    /// advanced at so the map can be bounded (S-10).
+    pub last_arrival_nonce: HashMap<[u8; 32], (u64, u64)>,
 }
 
 /// A simple per-account token bucket: `tokens` refill at `RATE_REFILL_PER_SEC`
@@ -355,6 +366,23 @@ const TREE_CHANNEL_CAP: usize = 4096;
 /// the oldest entries age out (best-effort retry window).
 const IDEMPOTENCY_CAP: usize = 16_384;
 const RECENT_ORDER_OWNER_CAP: usize = 16_384;
+
+/// How long an untouched per-trading-key nonce mark is retained (S-10).
+///
+/// Twice `MAX_LOCK_TTL_SLOTS` (4_500, F-05) so a mark outlives the longest
+/// order that could reference it by a full safety margin before being dropped.
+const NONCE_MARK_TTL_SLOTS: u64 = 9_000;
+
+/// Only scan the nonce map for expiry once it is at least this large. Keeps
+/// the common path allocation- and scan-free while still bounding growth.
+const NONCE_MARK_PRUNE_THRESHOLD: usize = 4_096;
+
+/// Compile-time safety argument for expiring nonce marks at all: a mark is
+/// dropped only after going untouched for longer than the maximum order
+/// lifetime, so any signature referencing it has itself expired (F-05). If
+/// someone raises the intake expiry cap or lowers this TTL, the build breaks
+/// here rather than silently reopening a replay window.
+const _: () = assert!(NONCE_MARK_TTL_SLOTS > super::orders::MAX_LOCK_TTL_SLOTS);
 
 /// Max concurrent Argon2id hash/verify jobs allowed across the auth
 /// handlers. Sized to the host's parallelism (clamped) so legitimate
@@ -749,8 +777,25 @@ impl ApiState {
     }
 
     /// Record an accepted canonical body while the caller holds
-    /// [`Self::submission_replay`]. Nonce high-water marks are not evicted:
-    /// expiry of the nicer exact-retry cache must not revive stale signatures.
+    /// [`Self::submission_replay`].
+    ///
+    /// Both maps are bounded (S-10). Previously the idempotency cache evicted
+    /// an arbitrary entry and the nonce map was never evicted at all — one
+    /// entry per distinct trading key, forever. Trading keys rotate freely by
+    /// design (a free `offset` bump, deliberately outside `user_commitment`, so
+    /// users can break long-term linkage), so that map grew at whatever rate
+    /// the limiter allowed.
+    ///
+    /// Expiring a nonce mark is safe here, and the original comment's fear —
+    /// "expiry of the exact-retry cache must not revive stale signatures" — is
+    /// addressed by two independent guards rather than by unbounded retention:
+    ///
+    ///   1. `session_id` is bound into the canonical body (CS-11), so a
+    ///      signature from any earlier boot is already rejected outright.
+    ///   2. Intake caps `expiry_slot` at `now + MAX_LOCK_TTL_SLOTS` (F-05).
+    ///      A mark is only dropped once it has gone untouched for longer than
+    ///      that window, by which point every order signed against it has
+    ///      itself expired and would be rejected on its own terms.
     pub fn record_submission_locked(
         replay: &mut SubmissionReplayState,
         order_id_hex: String,
@@ -759,17 +804,42 @@ impl ApiState {
         trading_key: [u8; 32],
         arrival_nonce: u64,
     ) {
-        if replay.idempotency.len() >= IDEMPOTENCY_CAP
-            && !replay.idempotency.contains_key(&order_id_hex)
-        {
-            if let Some(k) = replay.idempotency.keys().next().cloned() {
-                replay.idempotency.remove(&k);
+        if !replay.idempotency.contains_key(&order_id_hex) {
+            // FIFO eviction: drop the OLDEST record, never a live one. Skip
+            // queue entries whose map entry is already gone (defensive; the two
+            // are kept in step below).
+            while replay.idempotency.len() >= IDEMPOTENCY_CAP {
+                match replay.idempotency_order.pop_front() {
+                    Some(oldest) => {
+                        replay.idempotency.remove(&oldest);
+                    }
+                    None => break,
+                }
             }
+            replay.idempotency_order.push_back(order_id_hex.clone());
         }
         replay
             .idempotency
             .insert(order_id_hex, (digest, arrival_slot));
-        replay.last_arrival_nonce.insert(trading_key, arrival_nonce);
+
+        replay
+            .last_arrival_nonce
+            .insert(trading_key, (arrival_nonce, arrival_slot));
+        Self::prune_nonce_marks(replay, arrival_slot);
+    }
+
+    /// Drop nonce high-water marks that have gone untouched for longer than a
+    /// full lock TTL — see the safety argument on
+    /// [`Self::record_submission_locked`]. Only runs once the map is large
+    /// enough to be worth scanning, so the common path stays O(1).
+    fn prune_nonce_marks(replay: &mut SubmissionReplayState, now_slot: u64) {
+        if replay.last_arrival_nonce.len() < NONCE_MARK_PRUNE_THRESHOLD {
+            return;
+        }
+        let cutoff = now_slot.saturating_sub(NONCE_MARK_TTL_SLOTS);
+        replay
+            .last_arrival_nonce
+            .retain(|_, (_, last_slot)| *last_slot >= cutoff);
     }
 
     /// Boot-time auth load (Phase 1b). Loads the `accounts.db`
@@ -957,6 +1027,114 @@ mod persist_tests {
         assert_eq!(
             got.output_role,
             darkpool_matcher::change_note::CHANGE_ROLE_BUYER
+        );
+    }
+
+    // ── S-10 (audit 2026-07-25): both replay maps are bounded ──────────────
+
+    #[test]
+    fn idempotency_eviction_is_fifo_not_arbitrary() {
+        // The bug: eviction picked `idempotency.keys().next()` — HashMap
+        // iteration order, which is arbitrary. Under a burst that evicted LIVE
+        // records, turning a legitimate client retry into a `duplicate`
+        // rejection. Eviction must drop the OLDEST record instead.
+        let mut replay = SubmissionReplayState::default();
+        for i in 0..IDEMPOTENCY_CAP {
+            ApiState::record_submission_locked(
+                &mut replay,
+                format!("order-{i}"),
+                [0u8; 32],
+                100,
+                [(i % 251) as u8; 32],
+                i as u64,
+            );
+        }
+        assert_eq!(replay.idempotency.len(), IDEMPOTENCY_CAP);
+        assert!(replay.idempotency.contains_key("order-0"));
+
+        // One more insertion must evict exactly the oldest.
+        ApiState::record_submission_locked(
+            &mut replay,
+            "order-new".to_string(),
+            [1u8; 32],
+            101,
+            [9u8; 32],
+            9_999,
+        );
+        assert_eq!(replay.idempotency.len(), IDEMPOTENCY_CAP);
+        assert!(
+            !replay.idempotency.contains_key("order-0"),
+            "the OLDEST record must be the one evicted"
+        );
+        assert!(
+            replay.idempotency.contains_key("order-1"),
+            "the second-oldest must survive"
+        );
+        assert!(replay.idempotency.contains_key("order-new"));
+    }
+
+    #[test]
+    fn re_recording_the_same_order_id_does_not_grow_the_queue() {
+        // A retry of the same order_id updates in place; it must not push a
+        // duplicate queue entry (which would make the queue outgrow the map and
+        // evict a live record early).
+        let mut replay = SubmissionReplayState::default();
+        for _ in 0..8 {
+            ApiState::record_submission_locked(
+                &mut replay,
+                "same-order".to_string(),
+                [2u8; 32],
+                100,
+                [3u8; 32],
+                1,
+            );
+        }
+        assert_eq!(replay.idempotency.len(), 1);
+        assert_eq!(replay.idempotency_order.len(), 1);
+    }
+
+    #[test]
+    fn nonce_marks_are_pruned_once_stale_but_fresh_ones_survive() {
+        // The nonce map used to grow forever — one entry per distinct trading
+        // key, never evicted — while trading keys rotate freely by design.
+        let mut replay = SubmissionReplayState::default();
+
+        // Fill past the prune threshold at an early slot.
+        for i in 0..NONCE_MARK_PRUNE_THRESHOLD {
+            let mut key = [0u8; 32];
+            key[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            ApiState::record_submission_locked(
+                &mut replay,
+                format!("old-{i}"),
+                [0u8; 32],
+                1_000,
+                key,
+                1,
+            );
+        }
+        assert!(replay.last_arrival_nonce.len() >= NONCE_MARK_PRUNE_THRESHOLD);
+
+        // A submission far in the future prunes everything older than the TTL.
+        let far_future = 1_000 + NONCE_MARK_TTL_SLOTS + 1;
+        let mut fresh_key = [0xFFu8; 32];
+        fresh_key[0] = 0xAB;
+        ApiState::record_submission_locked(
+            &mut replay,
+            "fresh".to_string(),
+            [0u8; 32],
+            far_future,
+            fresh_key,
+            1,
+        );
+
+        assert_eq!(
+            replay.last_arrival_nonce.len(),
+            1,
+            "marks untouched for longer than a full lock TTL must be dropped"
+        );
+        assert!(
+            replay.last_arrival_nonce.contains_key(&fresh_key),
+            "the just-written mark must survive its own prune"
         );
     }
 }
