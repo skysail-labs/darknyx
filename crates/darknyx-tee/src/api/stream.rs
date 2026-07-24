@@ -185,6 +185,33 @@ impl StreamResponse {
     }
 }
 
+/// Charge an order operation against the session account's rate bucket
+/// (AU-01). Returns `Some(error frame)` when the bucket is empty.
+///
+/// `cost` MUST mirror `super::rate_limit::route_cost` for the equivalent HTTP
+/// route (place 1.0, cancel 0.2, modify 1.2) so a client cannot get a cheaper
+/// allowance simply by switching transport.
+///
+/// Unauthenticated frames are let through here and rejected by the `*_core`
+/// login check immediately after — there is no account to charge, and
+/// pre-login frames are already bounded by the socket's own limits.
+async fn order_rate_guard(
+    state: &ApiState,
+    s: &Session,
+    request_id: Option<String>,
+    cost: f64,
+) -> Option<StreamResponse> {
+    let account = s.authed.as_ref()?;
+    match state.try_consume_rate(account, cost).await {
+        Ok(()) => None,
+        Err(retry_after_secs) => Some(StreamResponse::error(
+            request_id,
+            1401,
+            format!("rate limit exceeded; retry after {retry_after_secs:.1}s"),
+        )),
+    }
+}
+
 /// What `handle_frame` decided: reply with these frames, and/or close.
 enum Action {
     Reply(Vec<StreamResponse>),
@@ -466,23 +493,43 @@ async fn handle_frame(
         // Order ops require login + a live matcher; the trading-key signature in
         // `params` is still verified inside *_core (login auths the ACCOUNT, the
         // trading key is the cryptographic owner).
+        //
+        // AU-01 (audit 2026-07-25): each is rate-limited with the SAME
+        // per-account bucket and the SAME weights as its HTTP twin. `/v1/stream`
+        // is mounted on the PUBLIC router, so it never passed through
+        // `rate_limit_middleware` — the WebSocket order path bypassed the
+        // limiter entirely, which is exactly the throttle S-02's blast radius
+        // depends on. One credentialed client could place at line rate.
         StreamRequest::Place { request_id, params } => {
+            if let Some(e) = order_rate_guard(state, s, request_id.clone(), 1.0).await {
+                return Action::Reply(vec![e]);
+            }
             Action::Reply(vec![place(state, matcher, s, request_id, &params).await])
         }
         StreamRequest::Cancel {
             request_id,
             order_id,
             params,
-        } => Action::Reply(vec![
-            cancel(state, matcher, s, request_id, &order_id, &params).await,
-        ]),
+        } => {
+            if let Some(e) = order_rate_guard(state, s, request_id.clone(), 0.2).await {
+                return Action::Reply(vec![e]);
+            }
+            Action::Reply(vec![
+                cancel(state, matcher, s, request_id, &order_id, &params).await,
+            ])
+        }
         StreamRequest::Modify {
             request_id,
             order_id,
             params,
-        } => Action::Reply(vec![
-            modify(state, matcher, s, request_id, &order_id, &params).await,
-        ]),
+        } => {
+            if let Some(e) = order_rate_guard(state, s, request_id.clone(), 1.2).await {
+                return Action::Reply(vec![e]);
+            }
+            Action::Reply(vec![
+                modify(state, matcher, s, request_id, &order_id, &params).await,
+            ])
+        }
 
         StreamRequest::AccountInfo { request_id } => {
             if s.authed.is_none() {
@@ -771,5 +818,22 @@ mod tests {
         assert_eq!(v["seq"], 9);
         assert_eq!(v["tree_id"], 2);
         assert_eq!(v["leaf_index"], 5);
+    }
+
+    /// AU-01: the WebSocket order path must charge the SAME per-account cost
+    /// as its HTTP twin. If these drift, a client gets a cheaper allowance by
+    /// switching transport — which is how the bypass existed in the first
+    /// place (the WS route is on the public router and never saw the
+    /// rate-limit middleware at all).
+    #[test]
+    fn ws_order_costs_match_the_http_route_costs() {
+        use crate::api::rate_limit::route_cost;
+        use axum::http::Method;
+
+        // These literals are the ones passed to `order_rate_guard` in
+        // `handle_frame`; keep the three in lockstep.
+        assert_eq!(route_cost(&Method::POST, "/orders"), 1.0, "place");
+        assert_eq!(route_cost(&Method::DELETE, "/orders/abc"), 0.2, "cancel");
+        assert_eq!(route_cost(&Method::PUT, "/orders/abc"), 1.2, "modify");
     }
 }
