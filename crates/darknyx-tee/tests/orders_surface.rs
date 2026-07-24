@@ -1342,3 +1342,95 @@ async fn success_responses_also_carry_a_request_id_header() {
         "success body must not be enveloped"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S-02 (audit 2026-07-25) — intake verifies the relayed VALID_INPUT proof.
+//
+// Before this, `merkle_root` and `valid_input_proof` were decoded, stored, and
+// handed to `lock_note` at settle time without ever being checked. Any
+// credentialed client could book an order backed by a wholly fabricated note:
+// the matcher would cross it against a real resting order, the honest side's
+// lock would land, the fake side's would be rejected on-chain, and the batch
+// would die — pinning an innocent counterparty's note under a NoteLock for up
+// to MAX_LOCK_TTL_SLOTS at zero cost to the attacker.
+//
+// The checks are gated on `settle_enabled` because that is the same switch
+// deciding whether these proofs ever reach the chain; the third test pins that
+// the placeholder/loadgen path (stub proofs by design) is unaffected.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A state that can actually settle — the configuration where an unverified
+/// proof does real damage.
+fn settling_state() -> Arc<ApiState> {
+    Arc::new(ApiState::for_tests().with_settle_enabled(true))
+}
+
+#[tokio::test]
+async fn place_rejects_stale_merkle_root_when_settlement_is_live() {
+    // The builder's synthetic root was never in this mirror, so the cheap
+    // recency check must reject before any pairing work happens.
+    let app = app_from(settling_state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let body = PlaceOrderBuilder::new().sign(&key);
+
+    let resp = place(&app, &bearer, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let j = read_json(resp).await;
+    assert_eq!(
+        j["code"], 1010,
+        "an unknown merkle_root must surface as stale_merkle_root, got: {j}"
+    );
+}
+
+#[tokio::test]
+async fn place_rejects_stub_valid_input_proof_when_settlement_is_live() {
+    // Give the mirror a real root so the recency gate passes and the PROOF
+    // check is the thing under test. The all-zero stub proof the test harness
+    // (and the loadgen) sends must not verify.
+    let state = settling_state();
+    let known_root = {
+        let mirror = state.merkle_mirror(0);
+        let mut m = mirror.write().await;
+        let mut leaf = [0u8; 32];
+        leaf[31] = 0x11;
+        leaf[1] = 0x5A; // Fr-safe
+        m.append_leaf(leaf).expect("seed the mirror");
+        m.root()
+    };
+
+    let app = app_from(state);
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let mut body = PlaceOrderBuilder::new().sign(&key);
+    // `merkle_root` is not part of the signed canonical body, so overriding it
+    // after signing leaves the trading-key signature valid.
+    body["merkle_root"] = json!(hex::encode(known_root));
+
+    let resp = place(&app, &bearer, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let j = read_json(resp).await;
+    assert_eq!(
+        j["code"], 1011,
+        "a stub proof over a known root must surface as invalid_input_proof, got: {j}"
+    );
+}
+
+#[tokio::test]
+async fn place_accepts_stub_proof_when_settlement_is_disabled() {
+    // Placeholder/loadgen mode (U-09): no live settle driver, so the relayed
+    // proof can never produce a lock_note and verifying it would only reject
+    // traffic that is harmless by construction. This pins that the S-02 gate
+    // did not break the loadgen regime.
+    let app = app_from(state()); // for_tests() => settle_enabled == false
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let body = PlaceOrderBuilder::new().sign(&key);
+
+    let resp = place(&app, &bearer, body).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::ACCEPTED,
+        "stub proofs must still be accepted when settlement is disabled"
+    );
+}

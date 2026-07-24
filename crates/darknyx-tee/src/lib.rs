@@ -18,6 +18,7 @@ pub mod oracle;
 pub mod prover;
 pub mod settle;
 pub mod solana_rpc;
+pub mod verify;
 
 // Supplies the `__rust_probestack` symbol that wasmer 4.4 (via
 // ark-circom, in `prover`) references but Rust 1.91 no longer exports.

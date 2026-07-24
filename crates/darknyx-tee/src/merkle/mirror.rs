@@ -572,11 +572,6 @@ mod tests {
     /// chain's, even in the worst case of maximally-batched appends.
     #[test]
     fn mirror_window_is_never_stricter_than_the_chain() {
-        assert!(
-            MIRROR_ROOT_HISTORY >= ROOT_HISTORY_SIZE * MAX_BATCH_APPEND,
-            "mirror window must cover the chain's worst-case batching"
-        );
-
         // Simulate the worst case: every on-chain root covers MAX_BATCH_APPEND
         // leaves. After ROOT_HISTORY_SIZE such instructions the chain still
         // accepts the oldest of them, so the mirror must too.

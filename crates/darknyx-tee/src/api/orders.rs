@@ -98,12 +98,18 @@ pub struct PlaceOrderRequest {
     // `lock_note` (settle Tx A) requires a per-note VALID_INPUT
     // Groth16 proof. The TEE cannot generate it (it needs the user's
     // spending key + merkle witness), so the client generates it and
-    // relays it here. The matcher does NOT verify it (on-chain
-    // `lock_note` does, against the vault's 64-root ring buffer); it
-    // holds it in enclave memory until settle.
+    // relays it here, and holds it in enclave memory until settle.
+    //
+    // Intake DOES verify it (audit 2026-07-25, S-02) — against the same
+    // verifying key the on-chain `lock_note` uses, plus a recency check
+    // of `merkle_root` against the shard mirror's window. It used to be
+    // stored unverified, which let any credentialed client book an order
+    // backed by a fabricated note and freeze a real counterparty's
+    // collateral when the resulting batch died. On-chain verification
+    // remains authoritative; this is an early reject, not a replacement.
     /// 32-byte merkle root the VALID_INPUT proof was generated
     /// against, hex. Must still be in the vault's root history at
-    /// lock time (64-root window).
+    /// lock time (64-root window), and in the mirror's window at intake.
     pub merkle_root: String,
     /// 256-byte VALID_INPUT Groth16 proof (`pi_a ‖ pi_b ‖ pi_c`), hex.
     pub valid_input_proof: String,
@@ -530,6 +536,57 @@ async fn prepare_order(
     opening.verify_commitment(&note_commitment).map_err(|e| {
         ApiError::bad_opening(format!("note opening does not match note_commitment: {e}"))
     })?;
+
+    // 4d. Verify the RELAYED VALID_INPUT proof (audit 2026-07-25, S-02).
+    //
+    //     `verify_commitment` above only proves the opening is self-consistent
+    //     with a commitment the client signed — a client can invent an opening
+    //     from nothing, sign its Poseidon6, and attach 256 bytes of noise.
+    //     Everything up to here passes. The matcher then crosses that phantom
+    //     against a real resting order, both `lock_note` transactions fire
+    //     concurrently, the HONEST side's lock lands, the fake side's is
+    //     rejected on-chain, and the batch dies — leaving an innocent user's
+    //     note pinned by an on-chain NoteLock for up to MAX_LOCK_TTL_SLOTS at
+    //     zero cost to the attacker. Verifying here turns that into a 400.
+    //
+    //     Deliberately placed at the END of the lock-free prepare phase:
+    //     `place_core` takes the global `submission_replay` mutex and then the
+    //     matcher WRITE lock, so a pairing check performed there would
+    //     serialise behind — and stall — every matcher tick. Here it costs
+    //     nothing but the caller's own latency.
+    //
+    //     Root recency is checked FIRST: it is a hash-window lookup versus a
+    //     pairing, so the cheap reject runs before the expensive one.
+    //
+    //     Gated on `settle_enabled`, which is the same switch that decides
+    //     whether these proofs ever reach the chain at all. A boot without a
+    //     live settle driver (placeholder/loadgen mode per U-09, or the
+    //     simulator) is enqueue-only: its orders can never produce a
+    //     `lock_note`, and the loadgen deliberately sends stub proofs against
+    //     synthetic roots. Verifying there would reject traffic that is
+    //     harmless by construction. Every configuration that CAN settle
+    //     verifies — which is the direction that matters, since S-02's harm is
+    //     entirely on-chain.
+    if state.settle_enabled {
+        let mirror = state.merkle_mirror(req.tree_id as usize);
+        let known_root = mirror.read().await.contains_root(&lock_merkle_root);
+        if !known_root {
+            return Err(ApiError::stale_merkle_root(format!(
+                "valid_input proof references merkle_root {} which is not in shard \
+                 {}'s recent-root window; re-prove against a current root",
+                hex::encode(lock_merkle_root),
+                req.tree_id
+            )));
+        }
+
+        crate::verify::verify_valid_input(
+            &valid_input_proof,
+            &lock_merkle_root,
+            &note_commitment,
+            &token_mint,
+        )
+        .map_err(|e| ApiError::invalid_input_proof(e.to_string()))?;
+    }
 
     let order = Order {
         trading_key,

@@ -166,6 +166,14 @@ rand          = { workspace = true }
 # CUDA backend shipped in the image.
 icicle-snark  = { path = "../../third_party/icicle-snark", optional = true }
 
+# ─── S-02 — intake-side VALID_INPUT verification ────────────────────
+# The SAME verifier the on-chain `lock_note` runs. Using it here (rather
+# than an ark-groth16 re-implementation) means intake accepts exactly what
+# the vault accepts: no proof-format conversion, no pi_a-negation subtlety,
+# and no second verification code path that could drift. It works off-BPF —
+# `programs/vault/tests/zk_roundtrip.rs` already verifies on the host.
+groth16-solana = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 # Integration tests in tests/orders_surface.rs generate fresh
