@@ -86,6 +86,15 @@ do not infer a gain from configuration alone. Run the CPU baseline at 1 and 2,
 then the same-box GPU matrix at 1/2/4. Promote a value only if confirmed-match
 throughput rises without breaching the queue and latency thresholds in the
 settlement benchmark methodology.
+
+**CPU baseline closed 2026-07-23:** on one unchanged prod9/K=4 CVM and the
+fixed 144-match real-settle workload, C1 delivered 0.961 confirmed matches/s
+while C2 delivered 0.929 (-3.3%); C2 P95 total batch latency increased from
+17.101 s to 18.732 s (+9.5%). Keep the CPU default at 1. There is no CPU C4
+leg—run 1/2/4 only for icicle CUDA on the same GPU host. Both CPU legs exposed
+excessive rebroadcasting, so neither is a production-capacity promotion result.
+Evidence:
+[`docs/benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md`](benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md).
 **Source:** `scheduler.rs`, `worker.rs`, and
 `docs/benchmarks/settlement-throughput-methodology.md`.
 

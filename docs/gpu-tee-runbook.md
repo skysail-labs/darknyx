@@ -314,6 +314,11 @@ metadata. Reject a run if the metrics endpoint reports a cursor gap, any
 unexplained terminal rejection/ambiguity, or fewer terminal matches than the
 known workload.
 
+The prod9 rapidsnark control is already complete:
+[`benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md`](benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md).
+Concurrency 2 was slower than 1, so do not spend a CPU leg on concurrency 4.
+That setting remains useful only in the icicle-CUDA same-box sweep above.
+
 ---
 
 ## 6. Phase 2b — GPU attestation (the full trust model)
@@ -460,14 +465,19 @@ circuit, which is consistent with cache-build cost rather than compute.
 
 ### 10.4 Next session — run these, in this order
 
-1. **Steady state:** `cvm-multimatch-settle` (multiple batches) so proves 2..N
-   exclude the zkey-cache build. That is the real `prove_step`.
-2. **Same-box A/B:** env-only redeploy with `DARKNYX_TEE_PROVER=rapidsnark`, then a
-   third leg with `DARKNYX_TEE_ICICLE_DEVICE=CPU`. Holding the host constant
-   separates "icicle vs rapidsnark" from "CUDA vs CPU".
+1. **Correctness ceremony:** run `cvm-settle-e2e` once after confirming the
+   image/device. Do not use its one warm-up proof as a performance result.
+2. **Steady-state same-box A/B:** run the §5.1 real-settle loadgen for
+   rapidsnark CPU, icicle CPU, and icicle CUDA at concurrency 1, then icicle
+   CUDA at 2 and 4. It excludes warm-up and requires at least eight measured
+   batches. Holding the host constant separates backend, device, and scheduler
+   effects.
 3. **Confirm CC mode** (`nvidia-smi conf-compute -q` → `ConfComputeMode : ON`) —
    §6/§8 already cover this and it was NOT verified in the 2026-07-21 session.
-4. Only then update `throughput-roadmap.md` item 5 / the 🟢 gate with a real number.
+4. Capture `cpu.max`, before/after `cpu.stat`, `nvidia-smi`, host latency, and
+   Phala instance identity for every leg. Guest-agent load/memory metrics are a
+   fallback, not a substitute for cgroup throttling and GPU utilization.
+5. Only then update `throughput-roadmap.md` item 5 / the 🟢 gate with a real number.
 
 ### 10.5 💡 Most of the remaining work does not need a *confidential* GPU
 

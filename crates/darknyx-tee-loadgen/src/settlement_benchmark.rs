@@ -114,6 +114,17 @@ pub async fn fetch_metrics(
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct ClientProveSummary {
+    pub proof_count: u64,
+    pub concurrency: usize,
+    pub wall_us: u64,
+    pub p50_us: u64,
+    pub p95_us: u64,
+    pub p99_us: u64,
+    pub max_us: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct BenchmarkArtifact {
     pub schema_version: u16,
     pub label: String,
@@ -128,6 +139,7 @@ pub struct BenchmarkArtifact {
     pub submission_attempts: u64,
     pub rate_limited_retries: u64,
     pub transient_retries: u64,
+    pub client_prove: ClientProveSummary,
     pub warmup_batches_excluded: usize,
     pub submitted_at_ms: u64,
     pub submission_completed_at_ms: u64,
@@ -184,6 +196,14 @@ impl BenchmarkArtifact {
         } else {
             100.0 * (confirmed_slots.saturating_sub(distinct_slots)) as f64 / confirmed_slots as f64
         };
+        let rebroadcasts: u64 = measured.iter().map(|b| b.rebroadcasts as u64).sum();
+        let rebroadcasts_per_confirmed = if confirmed == 0 {
+            0.0
+        } else {
+            rebroadcasts as f64 / confirmed as f64
+        };
+        let client_proofs_per_second = self.client_prove.proof_count as f64
+            / (self.client_prove.wall_us as f64 / 1_000_000.0).max(1e-9);
 
         let mut out = String::new();
         let _ = writeln!(out, "# Darknyx settlement benchmark — {}", self.label);
@@ -239,10 +259,45 @@ impl BenchmarkArtifact {
         );
         let _ = writeln!(out, "| N=16 packing efficiency | {packing:.2}% |");
         let _ = writeln!(out, "| Tx D co-inclusion ratio | {co_inclusion:.2}% |");
+        let _ = writeln!(out, "| rebroadcasts | {rebroadcasts} |");
         let _ = writeln!(
             out,
-            "| rebroadcasts | {} |",
-            measured.iter().map(|b| b.rebroadcasts as u64).sum::<u64>()
+            "| rebroadcasts per confirmed match | {rebroadcasts_per_confirmed:.3} |"
+        );
+        let _ = writeln!(out);
+        let _ = writeln!(out, "## Client VALID_INPUT proving\n");
+        let _ = writeln!(out, "| Metric | Value |");
+        let _ = writeln!(out, "|---|---:|");
+        let _ = writeln!(out, "| proofs | {} |", self.client_prove.proof_count);
+        let _ = writeln!(out, "| concurrency | {} |", self.client_prove.concurrency);
+        let _ = writeln!(
+            out,
+            "| wall time | {:.3} s |",
+            self.client_prove.wall_us as f64 / 1_000_000.0
+        );
+        let _ = writeln!(
+            out,
+            "| throughput | {client_proofs_per_second:.3} proofs/s |"
+        );
+        let _ = writeln!(
+            out,
+            "| P50 | {:.3} ms |",
+            self.client_prove.p50_us as f64 / 1_000.0
+        );
+        let _ = writeln!(
+            out,
+            "| P95 | {:.3} ms |",
+            self.client_prove.p95_us as f64 / 1_000.0
+        );
+        let _ = writeln!(
+            out,
+            "| P99 | {:.3} ms |",
+            self.client_prove.p99_us as f64 / 1_000.0
+        );
+        let _ = writeln!(
+            out,
+            "| max | {:.3} ms |",
+            self.client_prove.max_us as f64 / 1_000.0
         );
         let _ = writeln!(out);
         let _ = writeln!(out, "## Batch latency (ms)\n");
@@ -253,6 +308,7 @@ impl BenchmarkArtifact {
                 "queue_wait",
                 measured.iter().map(|b| Some(b.queue_wait_ms)).collect(),
             ),
+            ("lock", measured.iter().map(|b| b.timings.lock_ms).collect()),
             (
                 "witness",
                 measured.iter().map(|b| b.timings.witness_ms).collect(),
@@ -266,8 +322,28 @@ impl BenchmarkArtifact {
                 measured.iter().map(|b| b.timings.prove_ms).collect(),
             ),
             (
+                "verify",
+                measured.iter().map(|b| b.timings.verify_ms).collect(),
+            ),
+            (
+                "alt_tx",
+                measured.iter().map(|b| b.timings.alt_tx_ms).collect(),
+            ),
+            (
+                "alt_wait",
+                measured.iter().map(|b| b.timings.alt_wait_ms).collect(),
+            ),
+            (
+                "parallel",
+                measured.iter().map(|b| b.timings.parallel_ms).collect(),
+            ),
+            (
                 "settle",
                 measured.iter().map(|b| b.timings.settle_ms).collect(),
+            ),
+            (
+                "close",
+                measured.iter().map(|b| b.timings.close_ms).collect(),
             ),
             (
                 "total",
@@ -361,7 +437,7 @@ mod tests {
     #[test]
     fn report_excludes_warmup_and_names_steady_state_metrics() {
         let artifact = BenchmarkArtifact {
-            schema_version: 1,
+            schema_version: 2,
             label: "gpu".to_string(),
             endpoint: "https://example".to_string(),
             app_id: "app".to_string(),
@@ -374,6 +450,15 @@ mod tests {
             submission_attempts: 5,
             rate_limited_retries: 1,
             transient_retries: 0,
+            client_prove: ClientProveSummary {
+                proof_count: 4,
+                concurrency: 1,
+                wall_us: 400_000,
+                p50_us: 95_000,
+                p95_us: 110_000,
+                p99_us: 110_000,
+                max_us: 110_000,
+            },
             warmup_batches_excluded: 1,
             submitted_at_ms: 0,
             submission_completed_at_ms: 10,
@@ -387,5 +472,9 @@ mod tests {
         assert!(report.contains("post_offer_drain_to_batch_terminal"));
         assert!(report.contains("rate-limit retries | 1"));
         assert!(report.contains("confirmed match throughput"));
+        assert!(report.contains("Client VALID_INPUT proving"));
+        assert!(report.contains("10.000 proofs/s"));
+        assert!(report.contains("| lock | 0 | — | — | — | — |"));
+        assert!(report.contains("rebroadcasts per confirmed match"));
     }
 }

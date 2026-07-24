@@ -38,6 +38,11 @@ The real-settle loadgen:
 4. excludes the configured number of earliest batches (default one) as warm-up;
 5. writes raw JSON plus a derived Markdown report.
 
+Artifact schema v2 also persists the native client VALID_INPUT proof count,
+concurrency, wall time, and P50/P95/P99/max distribution. Schema-v1 evidence
+predating that field remains valid and must not be rewritten; retain any
+separately captured client-prover log values in the adjacent Markdown report.
+
 Example:
 
 ```sh
@@ -96,6 +101,13 @@ responses, and records every retry. Any nonzero retry count is evidence to
 explain, not something to hide; any run with fewer than eight measured batches
 fails after writing its artifact.
 
+Before deposits, the loadgen fetches the live instrument and aligns both
+crossing prices to its nonzero tick. It also rejects workloads that can exceed
+the on-chain 64-root history on any shard: for this 144-match fixture,
+`ceil(144 / K) <= 64`, so K must be at least three (the controlled baseline
+uses K=4). These are validity preflights, not parameters to relax to make a run
+pass.
+
 ## CPU baseline matrix
 
 Run on one healthy prod9 CPU CVM and one unchanged image:
@@ -108,6 +120,12 @@ Run on one healthy prod9 CPU CVM and one unchanged image:
 Use at least eight completed batches after warm-up. Record `cpu.max`,
 `cpu.stat`, host model/single-thread score, image tag, `app_id`,
 `compose_hash`, Solana RPC provider/tier, and exact workload seed/mix.
+
+The completed 2026-07-23 prod9 comparison is recorded in
+[`runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md`](./runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md).
+C2 was 3.3% slower in confirmed throughput and had a 9.5% worse P95 total
+batch latency, so the CPU setting remains concurrency 1. Do not add a CPU C4
+leg: concurrency 4 is reserved for the same-box CUDA matrix.
 
 ## GPU same-box matrix
 
