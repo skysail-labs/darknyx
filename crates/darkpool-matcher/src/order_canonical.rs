@@ -143,26 +143,42 @@ impl<'a> OrderCanonical<'a> {
 ///   17..33      order_id      : [u8; 16]
 ///   33..65      trading_key   : [u8; 32]
 ///   65..73      cancel_nonce  : u64 LE
+///   73..105     session_id    : [u8; 32]
 /// ```
 ///
 /// `trading_key` is included here (unlike `OrderCanonical`) because
 /// a cancel must bind to the same trading key that owns the
 /// original order — including it in the signed bytes makes the
 /// binding explicit + audit-friendly.
+///
+/// `session_id` was added by audit 2026-07-25 S-07. `OrderCanonical` was
+/// hardened with a boot session + monotonic nonce by CS-11; the cancel side
+/// was not, so a captured cancel signature stayed valid FOREVER, in ANY boot
+/// session, for its `(order_id, trading_key, cancel_nonce)` triple. Because
+/// `order_id`s are deterministic HD values that clients are expected to
+/// re-derive, a stored cancel body could kill a legitimately re-placed order
+/// after a CVM restart — and anyone who ever handled that body (a logging
+/// proxy, a compromised client host, an operator's request logs, a backup)
+/// retained that ability indefinitely. Impact is liveness/griefing only, since
+/// a cancel never moves funds, but it was an authorisation outliving its
+/// intended scope by accident rather than by decision.
 #[derive(Clone, Debug)]
 pub struct CancelCanonical {
     pub order_id: [u8; 16],
     pub trading_key: [u8; 32],
     pub cancel_nonce: u64,
+    /// Boot session the cancel is scoped to — see the type doc (S-07).
+    pub session_id: [u8; 32],
 }
 
 impl CancelCanonical {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(CANCEL_DOMAIN.len() + 16 + 32 + 8);
+        let mut buf = Vec::with_capacity(CANCEL_DOMAIN.len() + 16 + 32 + 8 + 32);
         buf.extend_from_slice(CANCEL_DOMAIN);
         buf.extend_from_slice(&self.order_id);
         buf.extend_from_slice(&self.trading_key);
         buf.extend_from_slice(&self.cancel_nonce.to_le_bytes());
+        buf.extend_from_slice(&self.session_id);
         buf
     }
 
@@ -190,7 +206,7 @@ mod tests {
 
     /// Pinned cancel-fixture digest. Same parity rule applies.
     const CANCEL_FIXTURE_DIGEST_HEX: &str =
-        "0ede450bdd837821997c7d1353aa6cbccf2ddebd564c7c874014f561b0feefa7";
+        "3063a2f1f4a0f71aed1587ca7bd55dd82b78d0b9148e7ac08bbec25b20298f2c";
 
     fn fixture() -> OrderCanonical<'static> {
         OrderCanonical {
@@ -215,6 +231,7 @@ mod tests {
             order_id: [0x11; 16],
             trading_key: [0x55; 32],
             cancel_nonce: 7,
+            session_id: [0x66; 32],
         }
     }
 
@@ -250,6 +267,7 @@ mod tests {
             order_id: order.order_id,
             trading_key: [0; 32],
             cancel_nonce: 0,
+            session_id: [0; 32],
         };
         assert_ne!(order.digest().unwrap(), cancel.digest());
     }

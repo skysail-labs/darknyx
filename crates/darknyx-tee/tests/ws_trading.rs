@@ -98,11 +98,13 @@ fn signed_cancel(key: &SigningKey, order_id: [u8; 16], nonce: u64) -> CancelOrde
         order_id,
         trading_key,
         cancel_nonce: nonce,
+        session_id: [0x5A; 32],
     };
     let sig = key.sign(&canonical.digest());
     serde_json::from_value(json!({
         "trading_key": hex::encode(trading_key),
         "cancel_nonce": nonce,
+        "session_id": hex::encode([0x5Au8; 32]),
         "trading_key_signature": hex::encode(sig.to_bytes()),
     }))
     .unwrap()

@@ -495,10 +495,11 @@ components:
 
     CancelOrderRequest:
       type: object
-      required: [trading_key, cancel_nonce, trading_key_signature]
+      required: [trading_key, cancel_nonce, session_id, trading_key_signature]
       properties:
         trading_key: { type: string, description: 32-byte Ed25519 pubkey, hex. }
         cancel_nonce: { type: integer, format: uint64 }
+        session_id: { type: string, description: 32-byte hex boot session from /info; bound into the cancel signature so a captured body cannot be replayed in a later boot. }
         trading_key_signature: { type: string, description: 64-byte canonical cancel signature, hex. }
 
     CancelOrderResponse:
@@ -1502,7 +1503,7 @@ x-websocket:
           order_id: { type: string }
           params:
             type: object
-            required: [trading_key, cancel_nonce, trading_key_signature]
+            required: [trading_key, cancel_nonce, session_id, trading_key_signature]
             properties:
               trading_key: { type: string }
               cancel_nonce: { type: integer }

@@ -303,17 +303,22 @@ async fn read_json(resp: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&body).unwrap()
 }
 
+/// Matches `ApiState::for_tests()`'s boot session and the PlaceOrderBuilder.
+const TEST_SESSION_ID: [u8; 32] = [0x5A; 32];
+
 fn cancel_body(key: &SigningKey, order_id: [u8; 16], cancel_nonce: u64) -> serde_json::Value {
     let trading_key = key.verifying_key().to_bytes();
     let cancel = CancelCanonical {
         order_id,
         trading_key,
         cancel_nonce,
+        session_id: TEST_SESSION_ID,
     };
     let sig = key.sign(&cancel.digest());
     json!({
         "trading_key": hex::encode(trading_key),
         "cancel_nonce": cancel_nonce,
+        "session_id": hex::encode(TEST_SESSION_ID),
         "trading_key_signature": hex::encode(sig.to_bytes()),
     })
 }
@@ -1077,6 +1082,7 @@ fn modify_body(
         order_id: old_id,
         trading_key,
         cancel_nonce,
+        session_id: TEST_SESSION_ID,
     };
     let sig = key.sign(&cancel.digest());
     json!({
@@ -1428,4 +1434,111 @@ async fn place_accepts_stub_proof_when_settlement_is_disabled() {
         StatusCode::ACCEPTED,
         "stub proofs must still be accepted when settlement is disabled"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S-07 (audit 2026-07-25) — cancel signatures are scoped and non-replayable.
+//
+// `OrderCanonical` was hardened with a boot session + monotonic nonce by
+// CS-11; `CancelCanonical` was not. A captured cancel signature was therefore
+// valid FOREVER, in ANY boot session, for its (order_id, trading_key,
+// cancel_nonce) triple. Because order_ids are deterministic HD values clients
+// are expected to re-derive, a stored cancel body could kill a legitimately
+// re-placed order after a CVM restart — and anyone who ever handled that body
+// (a logging proxy, a compromised client host, an operator's request logs, a
+// backup) kept that ability indefinitely.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn cancel_from_a_different_boot_session_is_rejected() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let b = PlaceOrderBuilder::new();
+    let body = b.sign(&key);
+    assert_eq!(
+        place(&app, &bearer, body).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    // A cancel signed against a DIFFERENT boot session — the captured-body
+    // scenario, replayed after a restart.
+    let trading_key = key.verifying_key().to_bytes();
+    let foreign_session = [0xA7u8; 32];
+    let foreign_cancel = CancelCanonical {
+        order_id: b.order_id,
+        trading_key,
+        cancel_nonce: 1,
+        session_id: foreign_session,
+    };
+    let sig = key.sign(&foreign_cancel.digest());
+    let body = json!({
+        "trading_key": hex::encode(trading_key),
+        "cancel_nonce": 1,
+        "session_id": hex::encode(foreign_session),
+        "trading_key_signature": hex::encode(sig.to_bytes()),
+    });
+
+    let resp = cancel(&app, &bearer, &hex::encode(b.order_id), body).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "a cancel bound to another boot session must not be honoured"
+    );
+    let j = read_json(resp).await;
+    assert_eq!(j["code"], 1205, "expected stale_session, got: {j}");
+}
+
+#[tokio::test]
+async fn cancel_nonce_must_strictly_increase_per_trading_key() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    // First order + cancel at nonce 5.
+    let b1 = PlaceOrderBuilder::new();
+    assert_eq!(
+        place(&app, &bearer, b1.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+    let c1 = cancel(
+        &app,
+        &bearer,
+        &hex::encode(b1.order_id),
+        cancel_body(&key, b1.order_id, 5),
+    )
+    .await;
+    assert_eq!(c1.status(), StatusCode::OK);
+
+    // A second order, then a REPLAY of the same nonce. Session binding alone
+    // would not stop this — it is the monotonic nonce that does.
+    let mut b2 = PlaceOrderBuilder::new();
+    b2.order_id = [0xC2; 16];
+    b2.arrival_nonce = b1.arrival_nonce + 1;
+    assert_eq!(
+        place(&app, &bearer, b2.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+    let replay = cancel(
+        &app,
+        &bearer,
+        &hex::encode(b2.order_id),
+        cancel_body(&key, b2.order_id, 5),
+    )
+    .await;
+    assert_eq!(
+        replay.status(),
+        StatusCode::CONFLICT,
+        "a reused cancel_nonce must be rejected"
+    );
+
+    // A strictly greater nonce still works.
+    let ok = cancel(
+        &app,
+        &bearer,
+        &hex::encode(b2.order_id),
+        cancel_body(&key, b2.order_id, 6),
+    )
+    .await;
+    assert_eq!(ok.status(), StatusCode::OK);
 }

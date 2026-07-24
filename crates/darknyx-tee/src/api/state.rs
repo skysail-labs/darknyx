@@ -278,6 +278,11 @@ pub struct SubmissionReplayState {
     /// Per-trading-key high-water nonce mark, with the slot it was last
     /// advanced at so the map can be bounded (S-10).
     pub last_arrival_nonce: HashMap<[u8; 32], (u64, u64)>,
+    /// The same, for cancels (S-07). Placement has had a monotonic nonce since
+    /// CS-11; the cancel path had neither that nor a session binding, so a
+    /// captured cancel signature was replayable forever. Same shape and same
+    /// pruning as `last_arrival_nonce`.
+    pub last_cancel_nonce: HashMap<[u8; 32], (u64, u64)>,
 }
 
 /// A simple per-account token bucket: `tokens` refill at `RATE_REFILL_PER_SEC`
@@ -833,12 +838,17 @@ impl ApiState {
     /// [`Self::record_submission_locked`]. Only runs once the map is large
     /// enough to be worth scanning, so the common path stays O(1).
     fn prune_nonce_marks(replay: &mut SubmissionReplayState, now_slot: u64) {
-        if replay.last_arrival_nonce.len() < NONCE_MARK_PRUNE_THRESHOLD {
+        if replay.last_arrival_nonce.len() < NONCE_MARK_PRUNE_THRESHOLD
+            && replay.last_cancel_nonce.len() < NONCE_MARK_PRUNE_THRESHOLD
+        {
             return;
         }
         let cutoff = now_slot.saturating_sub(NONCE_MARK_TTL_SLOTS);
         replay
             .last_arrival_nonce
+            .retain(|_, (_, last_slot)| *last_slot >= cutoff);
+        replay
+            .last_cancel_nonce
             .retain(|_, (_, last_slot)| *last_slot >= cutoff);
     }
 

@@ -192,6 +192,10 @@ pub struct CancelOrderRequest {
     /// trading_key), hex.
     pub trading_key: String,
     pub cancel_nonce: u64,
+    /// 32-byte boot session id from `/info`, hex, bound into the signature
+    /// (S-07). Scopes the cancel to one CVM boot so a captured body cannot
+    /// kill a re-placed order after a restart.
+    pub session_id: String,
     /// 64-byte Ed25519 signature over
     /// `sha256(cancel_canonical_bytes)`, hex.
     pub trading_key_signature: String,
@@ -818,12 +822,40 @@ pub async fn cancel_core(
     let trading_key: [u8; 32] = decode_hex(&req.trading_key, "trading_key")?;
     let signature: [u8; 64] = decode_hex(&req.trading_key_signature, "trading_key_signature")?;
 
+    let session_id: [u8; 32] = decode_hex(&req.session_id, "session_id")?;
+    if session_id != state.boot_session_id {
+        return Err(ApiError::stale_session(
+            "session_id does not match the current CVM boot session",
+        ));
+    }
+
     let cancel = CancelCanonical {
         order_id,
         trading_key,
         cancel_nonce: req.cancel_nonce,
+        session_id,
     };
     verify_sig(&cancel.digest(), &trading_key, &signature)?;
+
+    // S-07: strictly increasing per trading key, mirroring the placement
+    // path's `arrival_nonce`. Session binding alone bounds a captured
+    // signature to one boot; this closes in-session replay as well, so the two
+    // sides of the order lifecycle now have the same replay posture.
+    let now_slot = state.current_slot.load(Ordering::Relaxed);
+    {
+        let mut replay = state.submission_replay.lock().await;
+        if let Some((last, _)) = replay.last_cancel_nonce.get(&trading_key).copied() {
+            if req.cancel_nonce <= last {
+                return Err(ApiError::stale_nonce(format!(
+                    "cancel_nonce {} is not greater than last accepted {last}",
+                    req.cancel_nonce
+                )));
+            }
+        }
+        replay
+            .last_cancel_nonce
+            .insert(trading_key, (req.cancel_nonce, now_slot));
+    }
 
     {
         let mut st = matcher.write().await;
@@ -924,10 +956,16 @@ pub async fn modify_core(
     let trading_key: [u8; 32] =
         decode_hex(&req.replacement.trading_key, "replacement.trading_key")?;
     let cancel_signature: [u8; 64] = decode_hex(&req.cancel_signature, "cancel_signature")?;
+    // The embedded cancel is scoped to the same boot session as the
+    // replacement it accompanies (S-07). `prepare_order` below independently
+    // rejects a replacement whose session is stale, so a modify cannot smuggle
+    // a cross-boot cancel in either half.
+    let session_id: [u8; 32] = decode_hex(&req.replacement.session_id, "replacement.session_id")?;
     let cancel = CancelCanonical {
         order_id: old_order_id,
         trading_key,
         cancel_nonce: req.cancel_nonce,
+        session_id,
     };
     verify_sig(&cancel.digest(), &trading_key, &cancel_signature)?;
 
