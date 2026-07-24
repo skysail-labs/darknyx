@@ -23,7 +23,7 @@
 //! §5.5). The mirror is fed by the sync task (`super::sync`, Phase 2b);
 //! until that wires up it simply starts empty.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use darkpool_crypto::poseidon::poseidon_hash_bytes;
 
@@ -32,6 +32,36 @@ use darkpool_crypto::poseidon::poseidon_hash_bytes;
 /// never match. Pinned by `parity_empty_root_matches_recompute` +
 /// the append-parity test below.
 pub const MERKLE_DEPTH: usize = 20;
+
+/// On-chain recent-roots window — MUST equal
+/// `programs/vault/src/state.rs::ROOT_HISTORY_SIZE`. Kept here only to size
+/// [`MIRROR_ROOT_HISTORY`]; the mirror never claims to be the authority.
+const ROOT_HISTORY_SIZE: usize = 64;
+
+/// Maximum leaves one on-chain instruction can append — MUST equal
+/// `programs/vault/src/merkle.rs::MAX_BATCH_APPEND`.
+const MAX_BATCH_APPEND: usize = 8;
+
+/// How many recent roots the mirror remembers.
+///
+/// **This is deliberately larger than the on-chain ring, and that asymmetry is
+/// the point — do not "fix" it down to `ROOT_HISTORY_SIZE`.**
+///
+/// On-chain, `append_leaves` performs exactly ONE `push_root` for a whole
+/// batch of up to `MAX_BATCH_APPEND` leaves (`merkle.rs:218`), so one ring slot
+/// can represent up to 8 leaves. The mirror is fed leaf-by-leaf by
+/// `super::sync`, which flattens leaves across transactions before applying
+/// them and therefore cannot see instruction boundaries. Pushing per leaf into
+/// a same-sized ring would evict real roots up to 8x faster than the chain
+/// does, making the mirror STRICTER than the vault — it would reject orders
+/// whose proofs the chain would still accept.
+///
+/// Sizing the mirror ring at `ROOT_HISTORY_SIZE * MAX_BATCH_APPEND` guarantees
+/// it covers at least the on-chain window in the worst case, so this check can
+/// only ever be permissive. That is the correct bias: the mirror is an early
+/// reject to stop a stale proof from freezing a counterparty's collateral, and
+/// `lock_note`'s `MerkleTree::contains_root` remains the authority.
+const MIRROR_ROOT_HISTORY: usize = ROOT_HISTORY_SIZE * MAX_BATCH_APPEND;
 
 /// Errors from mirror operations. The only failure mode is a Poseidon
 /// hash over a non-BN254-Fr-safe input — which never happens for
@@ -109,6 +139,13 @@ pub struct MerkleMirror {
     /// Solana slot at which the mirror was last synced from on-chain
     /// `VaultConfig`. Stamped by the sync task (Phase 2b); 0 until then.
     on_chain_slot: u64,
+    /// Roots this shard has held, most-recent-last, capped at
+    /// [`MIRROR_ROOT_HISTORY`]. Mirrors the intent of the on-chain
+    /// `MerkleTree.roots` ring so order intake can reject a proof built
+    /// against an aged-out root BEFORE it is relayed into `lock_note` — see
+    /// [`MerkleMirror::contains_root`]. Starts EMPTY rather than zero-filled,
+    /// so an unpopulated slot can never accidentally match an all-zero root.
+    recent_roots: VecDeque<[u8; 32]>,
 }
 
 impl Default for MerkleMirror {
@@ -135,6 +172,7 @@ impl MerkleMirror {
             root,
             index_by_commitment: HashMap::new(),
             on_chain_slot: 0,
+            recent_roots: VecDeque::new(),
         }
     }
 
@@ -185,8 +223,31 @@ impl MerkleMirror {
                 level.push(node);
             }
         }
+        // Retire the outgoing root into the recent-roots window before adopting
+        // the new one — the same ordering as the on-chain `push_root`, which
+        // stores the OLD `current_root` and then overwrites it. `contains_root`
+        // therefore checks the live root separately from this history.
+        if self.recent_roots.len() == MIRROR_ROOT_HISTORY {
+            self.recent_roots.pop_front();
+        }
+        self.recent_roots.push_back(self.root);
         self.root = self.internal[MERKLE_DEPTH - 1][0];
         Ok(leaf_index)
+    }
+
+    /// Whether `root` is this shard's current root or one it held recently.
+    ///
+    /// The intake-side counterpart of `MerkleTree::contains_root`
+    /// (`programs/vault/src/state.rs`). Used to reject an order whose relayed
+    /// `VALID_INPUT` proof was built against an aged-out root, which would
+    /// otherwise fail only at `lock_note` — after a match, ~30 s later, taking
+    /// the whole batch (and an honest counterparty's collateral) down with it.
+    ///
+    /// Deliberately permissive: see [`MIRROR_ROOT_HISTORY`]. A `true` here is
+    /// "the chain will probably still accept this", never a guarantee — the
+    /// on-chain check stays authoritative.
+    pub fn contains_root(&self, root: &[u8; 32]) -> bool {
+        &self.root == root || self.recent_roots.iter().any(|r| r == root)
     }
 
     /// Current Merkle root.
@@ -426,5 +487,115 @@ mod tests {
         let (start, page) = m.leaves_range(100, 200);
         assert_eq!(start, 5);
         assert!(page.is_empty());
+    }
+
+    /// Fr-safe leaf from a wide counter, for tests that need more than the 256
+    /// distinct values `fr_safe(u8)` can produce.
+    fn fr_safe_n(seed: usize) -> [u8; 32] {
+        let mut b = [0u8; 32];
+        b[24..32].copy_from_slice(&(seed as u64).to_be_bytes());
+        b[1] = 0xAB; // keep it non-trivial while leaving the top byte zero
+        b
+    }
+
+    #[test]
+    fn contains_root_matches_current_and_recent_roots() {
+        let mut m = MerkleMirror::new();
+        let empty_root = m.root();
+        assert!(
+            m.contains_root(&empty_root),
+            "the live root must always match"
+        );
+
+        let mut seen = vec![empty_root];
+        for i in 0..5 {
+            m.append_leaf(fr_safe_n(i)).unwrap();
+            seen.push(m.root());
+        }
+
+        // Every root this mirror has ever held is still recognised.
+        for (i, r) in seen.iter().enumerate() {
+            assert!(m.contains_root(r), "root {i} should still be in the window");
+        }
+        // The live root is the last one.
+        assert_eq!(m.root(), *seen.last().unwrap());
+    }
+
+    #[test]
+    fn contains_root_rejects_unknown_and_zero_roots() {
+        let mut m = MerkleMirror::new();
+        m.append_leaf(fr_safe(1)).unwrap();
+
+        assert!(
+            !m.contains_root(&fr_safe(0xEE)),
+            "never-held root must fail"
+        );
+        // The window starts empty rather than zero-filled, so an all-zero root
+        // cannot match an unpopulated slot. A tree root is a Poseidon output and
+        // is never zero, so this must always be false.
+        assert!(
+            !m.contains_root(&[0u8; 32]),
+            "all-zero root must never match an unpopulated window slot"
+        );
+    }
+
+    #[test]
+    fn recent_roots_window_is_bounded() {
+        let mut m = MerkleMirror::new();
+        let first_root = m.root();
+        for i in 0..(MIRROR_ROOT_HISTORY + 16) {
+            m.append_leaf(fr_safe_n(i)).unwrap();
+        }
+        assert_eq!(
+            m.recent_roots.len(),
+            MIRROR_ROOT_HISTORY,
+            "window must be capped, not unbounded"
+        );
+        assert!(
+            !m.contains_root(&first_root),
+            "a root evicted past the window must no longer match"
+        );
+        assert!(m.contains_root(&m.root()), "live root always matches");
+    }
+
+    /// The reason [`MIRROR_ROOT_HISTORY`] is a multiple of `ROOT_HISTORY_SIZE`
+    /// rather than equal to it.
+    ///
+    /// On-chain, one `append_leaves` instruction appends up to
+    /// `MAX_BATCH_APPEND` leaves but performs exactly ONE `push_root`. The
+    /// mirror is fed leaf-by-leaf and cannot see instruction boundaries, so it
+    /// pushes per leaf. If the two windows were the same size, the mirror would
+    /// forget a root while the chain still accepted it — and intake would
+    /// reject orders the vault would have honoured.
+    ///
+    /// This pins the invariant that the mirror's window covers at least the
+    /// chain's, even in the worst case of maximally-batched appends.
+    #[test]
+    fn mirror_window_is_never_stricter_than_the_chain() {
+        assert!(
+            MIRROR_ROOT_HISTORY >= ROOT_HISTORY_SIZE * MAX_BATCH_APPEND,
+            "mirror window must cover the chain's worst-case batching"
+        );
+
+        // Simulate the worst case: every on-chain root covers MAX_BATCH_APPEND
+        // leaves. After ROOT_HISTORY_SIZE such instructions the chain still
+        // accepts the oldest of them, so the mirror must too.
+        let mut m = MerkleMirror::new();
+        let mut chain_roots = Vec::new();
+        for batch in 0..ROOT_HISTORY_SIZE {
+            for k in 0..MAX_BATCH_APPEND {
+                m.append_leaf(fr_safe_n(batch * MAX_BATCH_APPEND + k))
+                    .unwrap();
+            }
+            // The root the chain would have pushed for this instruction.
+            chain_roots.push(m.root());
+        }
+        for (i, r) in chain_roots.iter().enumerate() {
+            assert!(
+                m.contains_root(r),
+                "chain root {i} is still in the on-chain ring; the mirror must not \
+                 have evicted it"
+            );
+        }
     }
 }
