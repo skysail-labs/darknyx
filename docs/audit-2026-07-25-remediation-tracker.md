@@ -34,7 +34,7 @@ backfill row at the end of this document.
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
 | S-01 | **Critical** | ZK + vault + SDK | `remediation/audit-2026-07-25-vault` | A `VALID_SPEND` proof authorises a destination, not merely a note: the withdraw destination is bound as a circuit public input, so a copied proof submitted with a substituted `destination_token_account` fails `InvalidProof (6000)`. Regenerated `.zkey` + `vk_valid_spend.rs`; negative roundtrip test; devnet redeploy + mandatory tree reset + `devnet-deposit-withdraw` | Open |
-| S-02 | High | TEE | `remediation/audit-2026-07-25-availability` | Order intake verifies the relayed `VALID_INPUT` Groth16 against the circuit VK and requires its `merkle_root` to be in the mirror's recent-root ring for the declared `tree_id`; a fabricated note, a garbage proof, or a stale root is rejected at intake with a 4xx instead of freezing an honest counterparty's collateral on-chain | Open |
+| S-02 | High | TEE | `remediation/audit-2026-07-25-availability` | Order intake verifies the relayed `VALID_INPUT` Groth16 against the circuit VK and requires its `merkle_root` to be in the mirror's recent-root ring for the declared `tree_id`; a fabricated note, a garbage proof, or a stale root is rejected at intake with a 4xx instead of freezing an honest counterparty's collateral on-chain | Code complete |
 | S-03 | High | Vault + SDK + TEE | `remediation/audit-2026-07-25-availability` (A/B), `remediation/audit-2026-07-25-vault` (C) | An expired `NoteLock` is recoverable through a shipped interface: SDK instruction builder + `Wallet.withdraw` pre-flight, a durable TEE sweeper, and `withdraw`/`merge` rejecting only on a **non-expired** lock. Litesvm `lock → expire → withdraw` and `→ release_lock → withdraw` (currently zero coverage) | Open |
 | S-04 | Medium | Vault + TEE + SDK | `remediation/audit-2026-07-25-vault` | The batch marker's TTL is not a caller-chosen value: `expiry_slot` is derived on-chain from `clock.slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS`. Litesvm regression proving a front-run replay with a 1-slot TTL is rejected | Open |
 | S-05 | Medium | Vault + SDK | `remediation/audit-2026-07-25-vault` | A duplicate note commitment cannot be deposited twice: a commitment-keyed `DepositedNoteEntry` `init` makes it structurally impossible and fails loudly at the point of the mistake. SDK seed + PDA helper per CLAUDE.md §8.3; litesvm duplicate-deposit rejection | Open |
@@ -130,6 +130,41 @@ parallel ones. Landing S-01 is therefore on the critical path *to* the ceremony,
 not blocked by it.
 
 ---
+
+## Implementation decisions worth recording
+
+**S-02 verification is gated on `settle_enabled`.** The check runs in every
+configuration that can actually settle, and is skipped where a live settle
+driver was never constructed — placeholder/loadgen mode (U-09) and the
+simulator. Those boots are enqueue-only: their orders can never produce a
+`lock_note`, and the loadgen sends stub proofs against synthetic roots by
+design. Verifying there would reject traffic that is harmless by construction
+while changing nothing about S-02, whose harm is entirely on-chain. The
+consequence to be aware of: **a loadgen run does not exercise the S-02 path**,
+so intake-verification latency must be measured with a real-mint CVM, not the
+loadgen.
+
+**The mirror's root window is intentionally 8x the on-chain ring.** On-chain,
+`append_leaves` performs one `push_root` per instruction for up to
+`MAX_BATCH_APPEND` leaves; the mirror is fed leaf-by-leaf and cannot see
+instruction boundaries. Equal sizing would make the mirror evict roots up to 8x
+faster than the chain, rejecting orders the vault would accept. The asymmetry
+guarantees the check is permissive-only, with `lock_note` authoritative.
+
+**S-02 reuses the on-chain verifier rather than an ark-groth16 port.** The
+verifying key is pulled from the vault's generated `vk_valid_input.rs` by
+`#[path]`, so it cannot drift, and the relayed proof bytes are consumed in
+their existing `groth16-solana` layout with no conversion. This removed the
+planned proof-decoder entirely — and with it the `pi_a`-negation and Fq2-swap
+failure modes.
+
+**Two findings the positive test caught that a negative-only suite would not.**
+The first fixture proved with ark's default `LibsnarkReduction` rather than
+`CircomReduction` and produced an invalid proof; a suite that only asserted
+"garbage is rejected" would have passed a verifier that rejected *every*
+legitimate order. Incidentally, the same test confirms the committed
+`vk_valid_input.rs` matches `circuit_final.zkey`, independently corroborating
+the audit's §2.1 no-drift finding.
 
 ## Pull request evidence template
 
