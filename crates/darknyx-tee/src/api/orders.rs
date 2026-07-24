@@ -89,10 +89,6 @@ pub struct PlaceOrderRequest {
     /// 32-byte v2 note `inner_hash`, hex (replaces the old note_nonce +
     /// note_blinding pair). Anchors both the commitment and the nullifier.
     pub note_inner_hash: String,
-    /// 32-byte nullifier `Poseidon3(3, spending_key, inner_hash)`,
-    /// hex. Precomputed by the client (needs the spending key, which
-    /// never enters the TEE); opaque to the matcher.
-    pub nullifier: String,
 
     // ─── VALID_INPUT proof relay (4g.7c) ─────────────────────────
     // `lock_note` (settle Tx A) requires a per-note VALID_INPUT
@@ -337,7 +333,6 @@ async fn prepare_order(
     let signature: [u8; 64] = decode_hex(&req.trading_key_signature, "trading_key_signature")?;
     let owner_commitment: [u8; 32] = decode_hex(&req.owner_commitment, "owner_commitment")?;
     let note_inner_hash: [u8; 32] = decode_hex(&req.note_inner_hash, "note_inner_hash")?;
-    let nullifier: [u8; 32] = decode_hex(&req.nullifier, "nullifier")?;
     let viewing_pubkey: [u8; 32] = decode_hex(&req.viewing_pubkey, "viewing_pubkey")?;
     if !darkpool_crypto::is_contributory_x25519_public_key(&viewing_pubkey) {
         return Err(ApiError::invalid_viewing_key(
@@ -531,7 +526,6 @@ async fn prepare_order(
         amount: note_amount,
         owner_commitment,
         inner_hash: note_inner_hash,
-        nullifier,
     };
     opening.verify_commitment(&note_commitment).map_err(|e| {
         ApiError::bad_opening(format!("note opening does not match note_commitment: {e}"))

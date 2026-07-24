@@ -20,14 +20,18 @@
 //! expand the canonical order encoding (and therefore without a
 //! cross-language signing-contract change — CLAUDE.md §6).
 //!
-//! The `nullifier` is the exception: `nullifier =
-//! Poseidon3(DOMAIN_NULL, spending_key, inner_hash)` needs the
-//! user's spending key, which must NEVER enter the TEE. The user
-//! precomputes it client-side and submits it; the matcher cannot
-//! verify it (it lacks the spending key). A wrong nullifier is
-//! self-harm only — on-chain replay protection keys the
-//! `ConsumedNoteEntry` PDA off the note commitment, not the
-//! nullifier, so a bad value cannot let anyone ELSE double-spend.
+//! The order schema used to carry a `nullifier` here too. It was
+//! removed (audit 2026-07-25, S-09): payload v9 dropped nullifiers
+//! from settlement and nothing ever read the intake copy, so the
+//! enclave was holding `Poseidon3(DOMAIN_NULL, spending_key,
+//! inner_hash)` for every collateral note and buying nothing with it.
+//! That value is exactly what the note's eventual `withdraw`
+//! publishes on-chain, so retaining it let anyone who could read
+//! enclave memory — a disclosure bug, a core dump captured by the
+//! host, a debug-endpoint regression — join intake nullifiers against
+//! published ones and deanonymise which orders became which
+//! withdrawals. That defeats unlinkability without any custody
+//! compromise, which is why holding it was worse than useless.
 //!
 //! Spending keys, viewing keys, and blinding-derivation seeds never
 //! appear here — only the per-note opening fields the circuit
@@ -40,8 +44,7 @@ use darkpool_crypto::note::commitment_from_fields_v2;
 use crate::settle::lock_note::Groth16ProofBytes;
 
 /// The full opening of one input note — everything the
-/// VALID_MATCH_BATCH circuit needs to re-derive its commitment, plus
-/// the user-supplied nullifier retained by the current order schema.
+/// VALID_MATCH_BATCH circuit needs to re-derive its commitment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoteOpening {
     /// SPL mint of the collateral note (quote mint for a bid, base
@@ -55,12 +58,9 @@ pub struct NoteOpening {
     /// from the wallet `user_commitment`.
     pub owner_commitment: [u8; 32],
     /// v2: the note's single `inner_hash` (replaces the old nonce +
-    /// blinding pair). Anchors both the commitment and the nullifier.
+    /// blinding pair). Anchors the commitment — and, off-enclave, the
+    /// nullifier the owner derives from it with their spending key.
     pub inner_hash: [u8; 32],
-    /// `Poseidon3(DOMAIN_NULL=3, spending_key, inner_hash)`,
-    /// precomputed by the user. Opaque to the matcher and intentionally absent
-    /// from settlement payload v9; Tx D replay protection is commitment-keyed.
-    pub nullifier: [u8; 32],
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
@@ -226,7 +226,6 @@ mod tests {
             amount,
             owner_commitment: owner,
             inner_hash,
-            nullifier: [0xAB; 32],
         }
     }
 

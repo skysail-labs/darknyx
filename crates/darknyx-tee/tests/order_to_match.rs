@@ -115,7 +115,6 @@ fn sign_order(
         amount: note_amount,
         owner_commitment,
         inner_hash: fr_safe(0x55),
-        nullifier: [0x77; 32],
     };
     let note_commitment = opening.commitment().expect("Fr-safe opening");
 
@@ -159,7 +158,6 @@ fn sign_order(
         "trading_key_signature": hex::encode(sig.to_bytes()),
         "owner_commitment": hex::encode(opening.owner_commitment),
         "note_inner_hash": hex::encode(opening.inner_hash),
-        "nullifier": hex::encode(opening.nullifier),
         "merkle_root": hex::encode([0xDDu8; 32]),
         "valid_input_proof": hex::encode([0u8; 256]),
         "viewing_pubkey": hex::encode(viewing_pubkey),

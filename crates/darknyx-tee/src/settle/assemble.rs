@@ -561,14 +561,12 @@ mod tests {
             amount: a_amount,
             owner_commitment: buyer_owner,
             inner_hash: fr_safe(0x11),
-            nullifier: [0xAA; 32],
         };
         let seller_opening = NoteOpening {
             token_mint: base_mint(),
             amount: b_amount,
             owner_commitment: seller_owner,
             inner_hash: fr_safe(0x33),
-            nullifier: [0xBB; 32],
         };
         let note_buyer = buyer_opening.commitment().unwrap();
         let note_seller = seller_opening.commitment().unwrap();
@@ -743,14 +741,12 @@ mod tests {
                 amount: amount * price + buyer_change,
                 owner_commitment: buyer_owner,
                 inner_hash: fr_safe_pair(0x51, salt),
-                nullifier: fr_safe_pair(0x61, salt),
             };
             let seller_opening = NoteOpening {
                 token_mint: base_mint(),
                 amount: amount + seller_change,
                 owner_commitment: seller_owner,
                 inner_hash: fr_safe_pair(0x52, salt),
-                nullifier: fr_safe_pair(0x62, salt),
             };
 
             let bid = Order {

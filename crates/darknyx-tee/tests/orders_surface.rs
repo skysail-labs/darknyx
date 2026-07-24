@@ -100,7 +100,6 @@ struct PlaceOrderBuilder {
     // override the emitted JSON directly.
     owner_commitment: [u8; 32],
     note_inner_hash: [u8; 32],
-    nullifier: [u8; 32],
     viewing_pubkey: [u8; 32],
     session_id: [u8; 32],
     /// Over-collateralization: when set, the collateral note carries this
@@ -143,7 +142,6 @@ impl PlaceOrderBuilder {
             arrival_nonce: 1,
             owner_commitment: fr_safe(0x44),
             note_inner_hash: fr_safe(0x55),
-            nullifier: [0x77; 32],
             viewing_pubkey: darkpool_crypto::ephemeral_public(&[0x21; 32]),
             session_id: [0x5A; 32],
             collateral_amount: None,
@@ -187,7 +185,6 @@ impl PlaceOrderBuilder {
             amount: self.effective_collateral(),
             owner_commitment: self.owner_commitment,
             inner_hash: self.note_inner_hash,
-            nullifier: self.nullifier,
         }
     }
 
@@ -240,7 +237,6 @@ impl PlaceOrderBuilder {
             "trading_key_signature": hex::encode(sig.to_bytes()),
             "owner_commitment": hex::encode(self.owner_commitment),
             "note_inner_hash": hex::encode(self.note_inner_hash),
-            "nullifier": hex::encode(self.nullifier),
             // VALID_INPUT proof relay (4g.7c). Intake stores these
             // opaquely (on-chain lock_note verifies the proof), so
             // dummy bytes are fine for the orders-surface tests.
@@ -420,7 +416,6 @@ async fn place_populates_opening_store_keyed_by_commitment_and_cancel_clears_it(
             .expect("opening stored under the collateral note commitment");
         assert_eq!(rec.order_id, b.order_id);
         assert_eq!(rec.expiry_slot, b.expiry_slot);
-        assert_eq!(rec.opening.nullifier, b.nullifier);
     }
 
     let c = cancel(

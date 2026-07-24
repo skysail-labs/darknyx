@@ -37,7 +37,6 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
     let note_amount = amount.saturating_mul(price_limit).max(1); // bid floor, no fee
     let owner_commitment = fr_safe(0x44);
     let note_inner_hash = fr_safe(0x55u8.wrapping_add(salt));
-    let nullifier = [0x77u8.wrapping_add(salt); 32];
     let user_commitment = fr_safe(0x33);
     let viewing_pubkey = darkpool_crypto::ephemeral_public(&[0x21; 32]);
     let session_id = [0x5A; 32];
@@ -48,7 +47,6 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
         amount: note_amount,
         owner_commitment,
         inner_hash: note_inner_hash,
-        nullifier,
     };
     let note_commitment = opening.commitment().expect("Fr-safe opening");
 
@@ -85,7 +83,6 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
         "trading_key_signature": hex::encode(sig.to_bytes()),
         "owner_commitment": hex::encode(owner_commitment),
         "note_inner_hash": hex::encode(note_inner_hash),
-        "nullifier": hex::encode(nullifier),
         "merkle_root": hex::encode([0xDDu8; 32]),
         "valid_input_proof": hex::encode([0u8; 256]),
         "collateral_amount": serde_json::Value::Null,
