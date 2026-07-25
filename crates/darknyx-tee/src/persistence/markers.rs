@@ -23,6 +23,13 @@ use serde::{Deserialize, Serialize};
 /// Snapshot file name within the configured state dir.
 pub const MARKERS_DB_FILE: &str = "pending_markers.db";
 
+/// Snapshot file for the pending-LOCK set (S-03(B)). A sibling file rather
+/// than a second module: the set is the same shape (32-byte keys awaiting a
+/// permissionless on-chain close), only the keys differ — batch roots vs note
+/// commitments — so it shares this crash-recovery code instead of duplicating
+/// it.
+pub const LOCKS_DB_FILE: &str = "pending_locks.db";
+
 /// Bumped on any non-backward-compatible change to [`MarkersSnapshot`].
 const SNAPSHOT_VERSION: u32 = 1;
 
@@ -38,18 +45,30 @@ pub fn markers_db_path(state_dir: &Path) -> PathBuf {
 }
 
 /// In-memory pending set + its backing file.
+///
+/// Used for both the batch-marker sweeper and the note-lock sweeper; the two
+/// keep SEPARATE files so a corrupt or version-skewed snapshot of one cannot
+/// take the other down.
 #[derive(Debug, Default)]
-pub struct PendingMarkers {
+pub struct PendingSet {
     /// `None` disables persistence (in-memory only).
     path: Option<PathBuf>,
     set: HashSet<[u8; 32]>,
 }
 
-impl PendingMarkers {
-    /// Load the pending set from `state_dir` (best-effort). `None` → an empty,
-    /// non-persistent set.
+/// Backwards-compatible alias — the marker sweeper's original name.
+pub type PendingMarkers = PendingSet;
+
+impl PendingSet {
+    /// Load the pending MARKER set from `state_dir` (best-effort). `None` → an
+    /// empty, non-persistent set.
     pub fn load(state_dir: Option<&Path>) -> Self {
-        let path = state_dir.map(markers_db_path);
+        Self::load_named(state_dir, MARKERS_DB_FILE)
+    }
+
+    /// Load a pending set backed by `file_name` within `state_dir`.
+    pub fn load_named(state_dir: Option<&Path>, file_name: &str) -> Self {
+        let path = state_dir.map(|d| d.join(file_name));
         let set = match &path {
             Some(p) => load_snapshot(p)
                 .map(|s| s.pending.into_iter().collect())

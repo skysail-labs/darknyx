@@ -794,6 +794,24 @@ fn build_settle_driver(
     );
     tracing::info!("marker sweeper spawned (expiry-gated async Tx E close)");
 
+    // S-03(B): the note-lock sweeper. Reclaims rent from locks stranded by a
+    // failed settle. NOT a liveness dependency — S-03(C) made `withdraw` and
+    // `merge` honour `expiry_slot`, so a stranded lock stops blocking anything
+    // once it expires whether or not this runs.
+    //
+    // Unlike the marker sweeper this does NOT need the primary key:
+    // `release_lock` has no `has_one = payer`, so any shard key can pay and
+    // receives the reclaimed rent.
+    let (lock_sweep_tx, lock_sweep_rx) = tokio::sync::mpsc::unbounded_channel();
+    darknyx_tee::settle::spawn_lock_sweeper(
+        rpc.clone(),
+        tee_keypairs[0].clone(),
+        lock_sweep_rx,
+        darknyx_tee::persistence::state_dir_from_env(),
+        Duration::from_secs(60),
+    );
+    tracing::info!("lock sweeper spawned (expiry-gated NoteLock rent reclamation)");
+
     let ctx = SettleWorkerCtx {
         rpc,
         tee_keypairs,
@@ -808,6 +826,7 @@ fn build_settle_driver(
         current_priority_fee: current_priority_fee.clone(),
         settle_send_concurrency: cfg.settle_send_concurrency as usize,
         marker_sweep_tx,
+        lock_sweep_tx,
     };
 
     Ok(SettleDriver {

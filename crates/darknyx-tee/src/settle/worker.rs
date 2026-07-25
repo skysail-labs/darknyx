@@ -144,6 +144,10 @@ pub struct SettleWorkerCtx {
     /// marker close (Tx E). The sweeper reads the on-chain expiry and never
     /// submits early. Drained by `marker_sweep::spawn_marker_sweeper`.
     pub marker_sweep_tx: mpsc::UnboundedSender<[u8; 32]>,
+    /// Note commitments whose `NoteLock` should be released once expired
+    /// (S-03(B)). Drained by `lock_sweep::spawn_lock_sweeper`. Rent
+    /// reclamation only — `withdraw`/`merge` honour the expiry regardless.
+    pub lock_sweep_tx: mpsc::UnboundedSender<[u8; 32]>,
 }
 
 /// Fire a set of per-batch ALT `extend` ixs CONCURRENTLY (one tx each, bounded),
@@ -454,6 +458,34 @@ async fn run_batch_settle_inner(
     // so they parallelize, exactly like Tx D.
     let lock_branch = async {
         let t = Instant::now();
+
+        // S-03(B): register every note we are about to lock with the lock
+        // sweeper, BEFORE sending. Registering optimistically (rather than
+        // hooking the rejection paths) is deliberate:
+        //
+        //   * the sweeper is idempotent — it reads each lock account and drops
+        //     entries that are already gone, so a lock closed by a SUCCESSFUL
+        //     settle costs one existence check and then disappears;
+        //   * it therefore covers the cases a rejection hook would miss —
+        //     batch-level `WorkerError`s, and a CVM crash between lock and
+        //     settle, since the pending set is persisted;
+        //   * and it never acts early, because it only releases once the lock
+        //     has reached its own on-chain `expiry_slot`.
+        //
+        // Rent reclamation only: S-03(C) made `withdraw`/`merge` honour the
+        // expiry, so a stranded lock blocks nothing regardless of this.
+        for m in inputs.matches.iter() {
+            for commitment in [m.payload.note_a_commitment, m.payload.note_b_commitment] {
+                if ctx.lock_sweep_tx.send(commitment).is_err() {
+                    tracing::warn!(
+                        batch_id,
+                        "lock sweeper channel closed; lock rent reclaim deferred to next boot"
+                    );
+                    break;
+                }
+            }
+        }
+
         // Pass 1 — build+sign every lock tx up front, sharing ONE blockhash.
         let bh = ctx.rpc.get_latest_blockhash().await?;
         let blockhash = Hash::new_from_array(bh.blockhash);
@@ -1392,6 +1424,7 @@ mod tests {
             // harmless best-effort no-op (the marker-sweep path is unit-tested
             // separately in `marker_sweep`).
             marker_sweep_tx: mpsc::unbounded_channel().0,
+            lock_sweep_tx: mpsc::unbounded_channel().0,
         }
     }
 
