@@ -14,6 +14,7 @@ use darkpool_crypto::{ephemeral_public, fr_to_be_bytes, nullifier_v2, Fr};
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::order_canonical::OrderCanonical;
 use ed25519_dalek::{Signer, SigningKey};
+use serde::Deserialize;
 use solana_address::Address;
 use solana_signer::Signer as _;
 
@@ -23,6 +24,7 @@ use super::vault::associated_token_address;
 use super::{spl, ValidInputProof};
 use crate::auth::{acquire_bearer, fetch_boot_session_id};
 use crate::config::RunConfig;
+use crate::settlement_benchmark::{fetch_metrics, BenchmarkArtifact, ClientProveSummary};
 
 /// Knobs for one real-settle round (a single crossing pair).
 pub struct RealSettleParams {
@@ -48,6 +50,15 @@ pub struct RealSettleParams {
     pub mix: String,
     /// `partial-fill`: small asks crossing the one big bid.
     pub partial_fill_asks: u8,
+    pub client_prove_concurrency: usize,
+    pub real_submit_rate: f64,
+    pub min_measured_batches: usize,
+    pub settle_drain_timeout_secs: u64,
+    pub settlement_metrics_poll_ms: u64,
+    pub warmup_batches: usize,
+    pub benchmark_label: String,
+    pub metrics_json: Option<std::path::PathBuf>,
+    pub report: Option<std::path::PathBuf>,
 }
 
 impl RealSettleParams {
@@ -77,6 +88,15 @@ impl RealSettleParams {
             traders: cfg.traders,
             mix: cfg.real_mix.clone(),
             partial_fill_asks: cfg.real_partial_fill_asks,
+            client_prove_concurrency: cfg.client_prove_concurrency,
+            real_submit_rate: cfg.real_submit_rate,
+            min_measured_batches: cfg.min_measured_batches,
+            settle_drain_timeout_secs: cfg.settle_drain_timeout_secs,
+            settlement_metrics_poll_ms: cfg.settlement_metrics_poll_ms,
+            warmup_batches: cfg.warmup_batches,
+            benchmark_label: cfg.benchmark_label.clone(),
+            metrics_json: cfg.metrics_json.clone(),
+            report: cfg.report.clone(),
         })
     }
 }
@@ -94,6 +114,58 @@ fn scaled_quote(base: u64, price: u64, price_scale: u64) -> Result<u64> {
         .ok_or_else(|| anyhow!("scaled quote product overflow"))?
         / price_scale as u128;
     u64::try_from(quote).map_err(|_| anyhow!("scaled quote exceeds u64"))
+}
+
+#[derive(Deserialize)]
+struct InstrumentWire {
+    tick_size: String,
+}
+
+async fn fetch_tick_size(http: &reqwest::Client, gateway: &str, symbol: &str) -> Result<u64> {
+    let response = http
+        .get(format!(
+            "{}/instruments/{symbol}",
+            gateway.trim_end_matches('/')
+        ))
+        .send()
+        .await?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow!(
+            "instrument preflight for {symbol} returned {status}: {}",
+            response
+                .text()
+                .await
+                .unwrap_or_default()
+                .chars()
+                .take(300)
+                .collect::<String>()
+        ));
+    }
+    let instrument: InstrumentWire = response.json().await?;
+    let tick_size = instrument
+        .tick_size
+        .parse::<u64>()
+        .map_err(|e| anyhow!("instrument {symbol} has invalid tick_size: {e}"))?;
+    if tick_size == 0 {
+        return Err(anyhow!("instrument {symbol} has zero tick_size"));
+    }
+    Ok(tick_size)
+}
+
+fn crossing_prices(oracle_twap: u64, tick_size: u64) -> Result<(u64, u64)> {
+    if tick_size == 0 {
+        return Err(anyhow!("tick size is zero"));
+    }
+    let align_down = |price: u64| price - price % tick_size;
+    let bid_price = align_down(oracle_twap.saturating_mul(12) / 10);
+    let ask_price = align_down(oracle_twap.saturating_mul(8) / 10);
+    if ask_price == 0 || bid_price <= ask_price {
+        return Err(anyhow!(
+            "cannot construct positive crossing prices from oracle_twap={oracle_twap}, tick_size={tick_size}"
+        ));
+    }
+    Ok((bid_price, ask_price))
 }
 
 /// A per-run sub-second nonce (ms since epoch) — the salt that makes every
@@ -219,6 +291,7 @@ fn build_order_body(
 pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
     let http = reqwest::Client::new();
     let boot_session_id = fetch_boot_session_id(&http, &p.gateway).await?;
+    let tick_size = fetch_tick_size(&http, &p.gateway, &p.symbol).await?;
     let rpc = RpcClient::new(p.rpc_url.clone());
     let mut harness = RealSettleHarness::new(rpc.clone(), &p.circuits_dir, p.num_trees)?;
     let admin = load_keypair(&p.admin_keypair)?;
@@ -241,8 +314,7 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
     let buyer = Persona::new(0x40_0000 ^ salt)?;
     let seller = Persona::new(0x80_0000 ^ salt)?;
 
-    let bid_price = p.oracle_twap.saturating_mul(12) / 10;
-    let ask_price = p.oracle_twap.saturating_mul(8) / 10;
+    let (bid_price, ask_price) = crossing_prices(p.oracle_twap, tick_size)?;
     let buyer_note_amt = with_fee(
         scaled_quote(p.qty, bid_price, p.price_scale)?,
         p.fee_rate_bps,
@@ -484,6 +556,28 @@ fn pick_scenario(mix: &[(RealScenario, u32)], i: usize, n: usize) -> RealScenari
     mix[0].0
 }
 
+const ON_CHAIN_ROOT_HISTORY_SIZE: u64 = 64;
+
+fn planned_matches(mix: &[(RealScenario, u32)], traders: usize, partial_fill_asks: u8) -> u64 {
+    (0..traders)
+        .map(|instance| match pick_scenario(mix, instance, traders) {
+            RealScenario::PartialFill => partial_fill_asks.max(1) as u64,
+            _ => 1,
+        })
+        .sum()
+}
+
+fn validate_root_history_budget(expected_matches: u64, num_trees: u8) -> Result<()> {
+    let shards = num_trees.max(1) as u64;
+    let max_root_updates_per_shard = expected_matches.div_ceil(shards);
+    if max_root_updates_per_shard > ON_CHAIN_ROOT_HISTORY_SIZE {
+        return Err(anyhow!(
+            "benchmark would stale placement-time VALID_INPUT roots: {expected_matches} matches across {shards} shard(s) can append {max_root_updates_per_shard} roots per shard, exceeding ROOT_HISTORY_SIZE={ON_CHAIN_ROOT_HISTORY_SIZE}; increase --real-num-trees or reduce the workload"
+        ));
+    }
+    Ok(())
+}
+
 /// One order, post-setup: ready to prove + submit.
 struct LiveOrder {
     persona: Persona,
@@ -494,6 +588,102 @@ struct LiveOrder {
     note: DepositedNote,
 }
 
+#[derive(Debug, Default)]
+struct SubmitResult {
+    status: u16,
+    attempts: u64,
+    rate_limited_retries: u64,
+    transient_retries: u64,
+    rejection: Option<String>,
+}
+
+/// Submit an idempotent signed order, respecting the production per-account
+/// limiter. Retrying the exact body is safe because the canonical order id and
+/// signature are unchanged and intake resolves exact idempotency before nonce
+/// monotonicity.
+async fn submit_order_reliably(
+    http: reqwest::Client,
+    url: String,
+    token: String,
+    body: serde_json::Value,
+) -> SubmitResult {
+    const MAX_ATTEMPTS: u32 = 20;
+    let mut result = SubmitResult::default();
+    for attempt in 0..MAX_ATTEMPTS {
+        result.attempts += 1;
+        match http.post(&url).bearer_auth(&token).json(&body).send().await {
+            Ok(response) if response.status().is_success() => {
+                result.status = response.status().as_u16();
+                return result;
+            }
+            Ok(response) if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                result.rate_limited_retries += 1;
+                if attempt + 1 == MAX_ATTEMPTS {
+                    result.status = response.status().as_u16();
+                    result.rejection = Some(
+                        response
+                            .text()
+                            .await
+                            .unwrap_or_default()
+                            .chars()
+                            .take(300)
+                            .collect(),
+                    );
+                    return result;
+                }
+                let retry_secs = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(1)
+                    .clamp(1, 5);
+                tokio::time::sleep(std::time::Duration::from_secs(retry_secs)).await;
+            }
+            Ok(response) if response.status().is_server_error() => {
+                result.transient_retries += 1;
+                if attempt + 1 == MAX_ATTEMPTS {
+                    result.status = response.status().as_u16();
+                    result.rejection = Some(
+                        response
+                            .text()
+                            .await
+                            .unwrap_or_default()
+                            .chars()
+                            .take(300)
+                            .collect(),
+                    );
+                    return result;
+                }
+                let backoff_ms = 100u64.saturating_mul(1u64 << attempt.min(4)).min(2_000);
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            }
+            Ok(response) => {
+                result.status = response.status().as_u16();
+                result.rejection = Some(
+                    response
+                        .text()
+                        .await
+                        .unwrap_or_default()
+                        .chars()
+                        .take(300)
+                        .collect(),
+                );
+                return result;
+            }
+            Err(_) => {
+                result.transient_retries += 1;
+                if attempt + 1 == MAX_ATTEMPTS {
+                    return result;
+                }
+                let backoff_ms = 100u64.saturating_mul(1u64 << attempt.min(4)).min(2_000);
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            }
+        }
+    }
+    result
+}
+
 /// Run the multi-trader, multi-scenario load rig: N scenario instances → mint +
 /// deposit (+merge) all notes → prove all VALID_INPUT (concurrent) → submit all
 /// (concurrent) → drain the settle. Reports client prove-rate + end-to-end
@@ -501,7 +691,10 @@ struct LiveOrder {
 pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     let http = reqwest::Client::new();
     let boot_session_id = fetch_boot_session_id(&http, &p.gateway).await?;
+    let tick_size = fetch_tick_size(&http, &p.gateway, &p.symbol).await?;
     let mix = parse_mix(&p.mix)?;
+    let expected_matches = planned_matches(&mix, p.traders, p.partial_fill_asks);
+    validate_root_history_budget(expected_matches, p.num_trees)?;
     let needs_merge = mix.iter().any(|(s, _)| *s == RealScenario::Merge);
     let rpc = RpcClient::new(p.rpc_url.clone());
     let mut harness = RealSettleHarness::new(rpc.clone(), &p.circuits_dir, p.num_trees)?;
@@ -522,8 +715,7 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    let bid_price = p.oracle_twap.saturating_mul(12) / 10;
-    let ask_price = p.oracle_twap.saturating_mul(8) / 10;
+    let (bid_price, ask_price) = crossing_prices(p.oracle_twap, tick_size)?;
     let base = Address::new_from_array(p.base_mint);
     let quote = Address::new_from_array(p.quote_mint);
     let base_ata = associated_token_address(&admin.pubkey(), &base);
@@ -603,6 +795,13 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                         shard,
                     )
                     .await?;
+                if g % 16 == 0 {
+                    tracing::info!(
+                        deposited_notes = g,
+                        num_trees = k,
+                        "real-settle deposit progress"
+                    );
+                }
                 (persona, note)
             }};
         }
@@ -828,29 +1027,41 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         "deposited all notes; proving"
     );
 
+    // Preload the bid side before offering asks. For the throughput fixture this
+    // avoids arrival-order underpacking: every later ask sees the full set of
+    // persistent partial-fill bids, so steady-state pages can fill N=16.
+    orders.sort_by_key(|order| match order.side {
+        OrderSide::Bid => 0u8,
+        OrderSide::Ask => 1u8,
+    });
+
     // ── Phase 2: prove all VALID_INPUT concurrently (client prover load) ──
     let harness = Arc::new(harness);
     let prove_start = Instant::now();
-    let mut prove_handles = Vec::with_capacity(orders.len());
-    for o in &orders {
-        let h = harness.clone();
-        let (sk, ob, note) = (
-            o.persona.spending_key,
-            o.persona.owner_blinding,
-            o.note.clone(),
-        );
-        prove_handles.push(tokio::task::spawn_blocking(move || {
-            let t = Instant::now();
-            let proof = h.prove(&sk, &ob, &note);
-            (proof, t.elapsed().as_micros() as u64)
-        }));
-    }
     let mut proofs = Vec::with_capacity(orders.len());
     let mut prove_us: Vec<u64> = Vec::with_capacity(orders.len());
-    for handle in prove_handles {
-        let (proof, us) = handle.await.map_err(|e| anyhow!("prove task: {e}"))?;
-        proofs.push(proof.map_err(|e| anyhow!("VALID_INPUT prove: {e}"))?);
-        prove_us.push(us);
+    // Bound the actual number of spawn_blocking jobs. Native witnesses and
+    // ark-groth16 proofs are CPU/memory-heavy.
+    for order_chunk in orders.chunks(p.client_prove_concurrency) {
+        let mut prove_handles = Vec::with_capacity(order_chunk.len());
+        for order in order_chunk {
+            let h = harness.clone();
+            let (sk, ob, note) = (
+                order.persona.spending_key,
+                order.persona.owner_blinding,
+                order.note.clone(),
+            );
+            prove_handles.push(tokio::task::spawn_blocking(move || {
+                let t = Instant::now();
+                let proof = h.prove(&sk, &ob, &note);
+                (proof, t.elapsed().as_micros() as u64)
+            }));
+        }
+        for handle in prove_handles {
+            let (proof, us) = handle.await.map_err(|e| anyhow!("prove task: {e}"))?;
+            proofs.push(proof.map_err(|e| anyhow!("VALID_INPUT prove: {e}"))?);
+            prove_us.push(us);
+        }
     }
     let prove_wall = prove_start.elapsed();
     prove_us.sort_unstable();
@@ -872,6 +1083,9 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
     let token = acquire_bearer(&http, &p.gateway, &p.api_key, &p.api_secret, &p.passphrase)
         .await
         .map_err(|e| anyhow!("auth: {e}"))?;
+    let baseline_metrics = fetch_metrics(&http, &p.gateway, &token, None)
+        .await
+        .map_err(|e| anyhow!("settlement metrics preflight: {e}"))?;
     // Within MAX_LOCK_TTL_SLOTS (4_500 ≈ 30 min; F-05) so intake accepts it.
     let expiry_slot = rpc.slot().await? + 3_000;
     let submit_nonce = run_nonce();
@@ -893,53 +1107,121 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         )?);
     }
     let submit_start = Instant::now();
+    let submitted_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
     let n_orders = bodies.len();
     let mut submit_handles = Vec::with_capacity(n_orders);
-    for b in bodies {
+    let submit_interval =
+        std::time::Duration::from_secs_f64(1.0 / p.real_submit_rate.max(f64::MIN_POSITIVE));
+    for (index, body) in bodies.into_iter().enumerate() {
         let http = http.clone();
         let token = token.clone();
         let url = format!("{}/orders", p.gateway);
         submit_handles.push(tokio::spawn(async move {
-            http.post(url)
-                .bearer_auth(&token)
-                .json(&b)
-                .send()
-                .await
-                .map(|r| r.status().as_u16())
-                .unwrap_or(0)
+            submit_order_reliably(http, url, token, body).await
         }));
+        if index + 1 < n_orders {
+            tokio::time::sleep(submit_interval).await;
+        }
     }
     let mut accepted = 0usize;
-    for h in submit_handles {
-        if (200..300).contains(&h.await.unwrap_or(0)) {
+    let mut submission_attempts = 0u64;
+    let mut rate_limited_retries = 0u64;
+    let mut transient_retries = 0u64;
+    let mut first_rejection = None;
+    for handle in submit_handles {
+        let result = handle.await.unwrap_or_default();
+        submission_attempts += result.attempts;
+        rate_limited_retries += result.rate_limited_retries;
+        transient_retries += result.transient_retries;
+        if (200..300).contains(&result.status) {
             accepted += 1;
+        } else if first_rejection.is_none() {
+            first_rejection = Some(format!(
+                "HTTP {}: {}",
+                result.status,
+                result.rejection.unwrap_or_default()
+            ));
         }
     }
     tracing::info!(
         submitted = n_orders,
         accepted,
+        submission_attempts,
+        rate_limited_retries,
+        transient_retries,
+        target_rate = p.real_submit_rate,
         ms = submit_start.elapsed().as_millis() as u64,
         "orders submitted"
     );
+    if accepted != n_orders {
+        return Err(anyhow!(
+            "benchmark invalid: only {accepted}/{n_orders} orders accepted; first rejection: {}",
+            first_rejection.unwrap_or_else(|| "transport failure without response".to_string())
+        ));
+    }
+    let submission_completed_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(submitted_at_ms);
 
-    // ── Phase 4: drain the settle, measure settled-matches/sec ──
+    // ── Phase 4: drain using terminal settlement records ────────
+    // One ask contributes one match in every supported real-load scenario.
+    // Unlike leaf-count deltas this remains correct when a match emits change
+    // and/or fee notes.
+    let assembled_expected_matches = orders
+        .iter()
+        .filter(|order| order.side == OrderSide::Ask)
+        .count() as u64;
+    debug_assert_eq!(assembled_expected_matches, expected_matches);
     let drain_start = Instant::now();
-    let mut last = deposit_leaves;
-    let deadline = Instant::now() + std::time::Duration::from_secs(180);
+    let deadline = Instant::now() + std::time::Duration::from_secs(p.settle_drain_timeout_secs);
+    let mut cursor = baseline_metrics.latest_seq;
+    let mut batches = Vec::new();
+    let mut last_progress = 0u64;
     while Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        let now = harness.leaf_count().await?;
-        if now > last {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            p.settlement_metrics_poll_ms,
+        ))
+        .await;
+        let snapshot = fetch_metrics(&http, &p.gateway, &token, Some(cursor)).await?;
+        cursor = snapshot.latest_seq.max(cursor);
+        batches.extend(snapshot.recent_batches);
+        let observed: u64 = batches
+            .iter()
+            .map(|batch| {
+                batch.outcomes.confirmed + batch.outcomes.rejected + batch.outcomes.ambiguous
+            })
+            .sum();
+        if observed > last_progress {
             tracing::info!(
-                leaf_count = now,
-                settled_matches_approx = (now - deposit_leaves) / 2,
-                "settle progress"
+                observed_matches = observed,
+                expected_matches,
+                queue_depth = snapshot.queue.depth,
+                "settlement metrics progress"
             );
-            last = now;
+            last_progress = observed;
+        }
+        if observed >= expected_matches && snapshot.queue.depth == 0 {
+            break;
         }
     }
     let final_count = harness.leaf_count().await?;
-    let settled_matches = (final_count.saturating_sub(deposit_leaves)) / 2;
+    batches.sort_by_key(|batch| batch.seq);
+    batches.dedup_by_key(|batch| batch.seq);
+    let settled_matches: u64 = batches.iter().map(|batch| batch.outcomes.confirmed).sum();
+    let observed_matches: u64 = batches
+        .iter()
+        .map(|batch| batch.outcomes.confirmed + batch.outcomes.rejected + batch.outcomes.ambiguous)
+        .sum();
+    if observed_matches < expected_matches {
+        return Err(anyhow!(
+            "settlement drain timed out after {}s: measured {observed_matches}/{expected_matches} settlement outcomes",
+            p.settle_drain_timeout_secs
+        ));
+    }
     let drain_s = drain_start.elapsed().as_secs_f64();
     tracing::info!(
         deposit_leaves,
@@ -948,15 +1230,87 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         settled_per_sec = settled_matches as f64 / drain_s.max(1e-9),
         "real-settle LOAD complete — settle throughput (prover-bound)"
     );
+    let collected_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let artifact = BenchmarkArtifact {
+        schema_version: 2,
+        label: p.benchmark_label.clone(),
+        endpoint: p.gateway.clone(),
+        app_id: baseline_metrics.app_id,
+        compose_hash: baseline_metrics.compose_hash,
+        boot_session_id: baseline_metrics.boot_session_id,
+        expected_matches,
+        submitted_orders: n_orders as u64,
+        accepted_orders: accepted as u64,
+        target_submit_rate_orders_per_second: p.real_submit_rate,
+        submission_attempts,
+        rate_limited_retries,
+        transient_retries,
+        client_prove: ClientProveSummary {
+            proof_count: proofs.len() as u64,
+            concurrency: p.client_prove_concurrency,
+            wall_us: prove_wall.as_micros().min(u64::MAX as u128) as u64,
+            p50_us: pct(&prove_us, 0.50),
+            p95_us: pct(&prove_us, 0.95),
+            p99_us: pct(&prove_us, 0.99),
+            max_us: prove_us.last().copied().unwrap_or(0),
+        },
+        warmup_batches_excluded: p.warmup_batches,
+        submitted_at_ms,
+        submission_completed_at_ms,
+        collected_at_ms,
+        batches,
+    };
+    let markdown = artifact.render_markdown();
+    println!("\n{markdown}");
+    if let Some(path) = &p.report {
+        std::fs::write(path, &markdown)?;
+        tracing::info!(?path, "wrote settlement benchmark markdown");
+    }
+    if let Some(path) = &p.metrics_json {
+        std::fs::write(path, serde_json::to_vec_pretty(&artifact)?)?;
+        tracing::info!(?path, "wrote settlement benchmark JSON");
+    }
+    if artifact.measured_batches().len() < p.min_measured_batches {
+        return Err(anyhow!(
+            "benchmark invalid: only {} measured batches after warm-up; require at least {}",
+            artifact.measured_batches().len(),
+            p.min_measured_batches
+        ));
+    }
+    let rejected: u64 = artifact
+        .batches
+        .iter()
+        .map(|batch| batch.outcomes.rejected)
+        .sum();
+    let ambiguous: u64 = artifact
+        .batches
+        .iter()
+        .map(|batch| batch.outcomes.ambiguous)
+        .sum();
+    if rejected != 0 || ambiguous != 0 {
+        return Err(anyhow!(
+            "benchmark completed with unhealthy outcomes: rejected={rejected}, ambiguous={ambiguous}"
+        ));
+    }
     println!(
         "\n=== real-settle load summary ===\n\
          orders submitted: {} (accepted {})\n\
          client VALID_INPUT prove: {} proofs in {:.1}s ({:.2}/s)\n\
-         on-chain settled matches: {} in {:.1}s ({:.2} matches/s)\n\
-         → cross-reference the TEE prover: phala cvms logs <cvm> | grep -E \"prove breakdown|settle pipeline timing\"\n",
-        n_orders, accepted,
-        proofs.len(), prove_wall.as_secs_f64(), proofs.len() as f64 / prove_wall.as_secs_f64().max(1e-9),
-        settled_matches, drain_s, settled_matches as f64 / drain_s.max(1e-9),
+         measured confirmed matches: {} in {:.1}s ({:.2} matches/s)\n\
+         on-chain leaf count: {} → {}\n",
+        n_orders,
+        accepted,
+        proofs.len(),
+        prove_wall.as_secs_f64(),
+        proofs.len() as f64 / prove_wall.as_secs_f64().max(1e-9),
+        settled_matches,
+        drain_s,
+        settled_matches as f64 / drain_s.max(1e-9),
+        deposit_leaves,
+        final_count,
     );
     Ok(())
 }
@@ -964,6 +1318,31 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+
+    use super::crossing_prices;
+
+    #[test]
+    fn live_oracle_crossing_prices_are_tick_aligned() {
+        let (bid, ask) = crossing_prices(7_713_464_441, 5).unwrap();
+        assert_eq!(bid, 9_256_157_325);
+        assert_eq!(ask, 6_170_771_550);
+        assert_eq!(bid % 5, 0);
+        assert_eq!(ask % 5, 0);
+        assert!(bid > ask);
+    }
+
+    #[test]
+    fn zero_tick_is_rejected() {
+        assert!(crossing_prices(150_000_000, 0).is_err());
+    }
+
+    #[test]
+    fn fixed_fixture_requires_enough_root_history_shards() {
+        assert!(super::validate_root_history_budget(144, 1).is_err());
+        assert!(super::validate_root_history_budget(144, 2).is_err());
+        super::validate_root_history_budget(144, 3).unwrap();
+        super::validate_root_history_budget(144, 4).unwrap();
+    }
 
     /// The current (fixed) seed_base layout: salt in bits 32+, inst in bits
     /// 16-31, leaving bits 0-15 for the per-order tag. MUST match the inline

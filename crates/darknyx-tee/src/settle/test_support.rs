@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::prover::{
     build_batch_public_inputs, MatchSlotWitness, ProofWithInputs, Prover, ProverError,
+    ProverTimings,
 };
 use crate::settle::lock_note::Groth16ProofBytes;
 
@@ -36,6 +37,13 @@ impl Prover for FakeProver {
                 pi_c: [0x07; 64],
             },
             public,
+            timings: ProverTimings {
+                backend: "fake".to_string(),
+                witness_backend: "fake".to_string(),
+                device: None,
+                witness_ms: 0,
+                prove_step_ms: 0,
+            },
         })
     }
     fn n(&self) -> usize {

@@ -43,6 +43,7 @@ pub mod fill_recovery;
 pub mod lock_note;
 pub mod lock_sweep;
 pub mod marker_sweep;
+pub mod metrics;
 pub mod payload;
 pub mod pipeline;
 pub mod priority;
@@ -72,6 +73,11 @@ pub use lock_sweep::{
     build_release_lock_ix, spawn_lock_sweeper, LOCK_SWEEP_INTERVAL, LOCK_SWEEP_MAX_PER_TX,
 };
 pub use marker_sweep::{spawn_marker_sweeper, MARKER_SWEEP_INTERVAL, MARKER_SWEEP_MAX_PER_TX};
+pub use metrics::{
+    emit_batch_record, BatchMetricsCompletion, SettlementBatchRecord, SettlementMetricsSnapshot,
+    SettlementMetricsState, SettlementOutcomeCounts, SettlementStageTimings,
+    SETTLEMENT_METRICS_SCHEMA_VERSION,
+};
 pub use payload::{MatchResultPayload, CANONICAL_DOMAIN};
 pub use pipeline::{build_settle_v0_tx, build_settle_v0_tx_b64};
 pub use scheduler::{SettleDriver, SettleDriverConfig, SettleScheduler, SettleSchedulerState};

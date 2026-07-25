@@ -97,6 +97,7 @@ services:
       # only one mint is rejected. See Config.
       DARKNYX_TEE_BASE_MINT: ${DARKNYX_TEE_BASE_MINT}
       DARKNYX_TEE_QUOTE_MINT: ${DARKNYX_TEE_QUOTE_MINT}
+      DARKNYX_TEE_MARKET_SYMBOL: ${DARKNYX_TEE_MARKET_SYMBOL:-SOL-USDC}
       # On-chain address of the STATIC settle ALT (vault_config +
       # instructions_sysvar + system_program) that devnet-setup creates
       # (e2e-config `settleLookupTable`). The settle worker stacks it
@@ -137,6 +138,7 @@ services:
       # confirm in a single ~1.13s window instead of one-at-a-time. Sweep this
       # (1/4/8/16/32) to find the on-chain settle throughput ceiling. `:-16`.
       DARKNYX_TEE_SETTLE_SEND_CONCURRENCY: ${DARKNYX_TEE_SETTLE_SEND_CONCURRENCY:-16}
+      DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY: ${DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY:-1}
 
       # Number of Merkle-tree shards. The settle worker derives K fee-payer
       # keys (darknyx/ed25519-signer/v2/{0..K-1}) and round-robins each match

@@ -24,14 +24,22 @@ pub enum OrderLifecycleKind {
 pub struct OrderLifecycleEvent {
     pub trading_key: [u8; 32],
     pub order_id: [u8; 16],
+    /// Base58 `MarketConfig` PDA. This is the canonical market identity used
+    /// for both metrics correlation and future multi-market routing.
+    pub market_id: String,
+    /// Match identifier when the lifecycle transition belongs to settlement.
+    /// Immediate expiry/FOK cancellation events have no match.
+    pub match_id: Option<u64>,
     pub kind: OrderLifecycleKind,
 }
 
-impl From<OrderUpdate> for OrderLifecycleEvent {
-    fn from(update: OrderUpdate) -> Self {
+impl OrderLifecycleEvent {
+    pub fn settled(update: OrderUpdate, market_id: String, match_id: Option<u64>) -> Self {
         Self {
             trading_key: update.trading_key,
             order_id: update.order_id,
+            market_id,
+            match_id,
             kind: OrderLifecycleKind::Settled(update.kind),
         }
     }

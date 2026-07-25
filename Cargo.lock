@@ -2588,6 +2588,7 @@ dependencies = [
  "ark-circom",
  "ark-ff 0.5.0",
  "ark-groth16",
+ "ark-relations",
  "axum 0.7.9",
  "base64 0.22.1",
  "bincode",

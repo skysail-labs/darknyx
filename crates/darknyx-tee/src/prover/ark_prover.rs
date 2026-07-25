@@ -37,7 +37,7 @@ use ark_groth16::{Groth16, Proof, ProvingKey};
 use num_bigint::{BigInt, Sign};
 
 use super::convert::proof_to_onchain_bytes;
-use super::groth16::{ProofWithInputs, Prover, ProverError};
+use super::groth16::{ProofWithInputs, Prover, ProverError, ProverTimings};
 use super::inputs::{build_batch_public_inputs, BatchPublicInputs};
 use super::witness::MatchSlotWitness;
 
@@ -97,6 +97,14 @@ impl ArkMatchBatchProver {
         &self,
         slots: &[MatchSlotWitness],
     ) -> Result<(Proof<Bn254>, BatchPublicInputs), ProverError> {
+        let (proof, public, _) = self.prove_ark_with_timings(slots)?;
+        Ok((proof, public))
+    }
+
+    fn prove_ark_with_timings(
+        &self,
+        slots: &[MatchSlotWitness],
+    ) -> Result<(Proof<Bn254>, BatchPublicInputs, ProverTimings), ProverError> {
         if slots.len() != self.n {
             return Err(ProverError::BatchSizeMismatch {
                 expected: self.n,
@@ -132,16 +140,27 @@ impl ArkMatchBatchProver {
             "prove breakdown (witness-gen vs groth16 prove)"
         );
 
-        Ok((proof, public))
+        Ok((
+            proof,
+            public,
+            ProverTimings {
+                backend: "ark".to_string(),
+                witness_backend: "wasmer".to_string(),
+                device: None,
+                witness_ms: witness_ms as u64,
+                prove_step_ms: prove_step_ms as u64,
+            },
+        ))
     }
 }
 
 impl Prover for ArkMatchBatchProver {
     fn prove(&self, slots: &[MatchSlotWitness]) -> Result<ProofWithInputs, ProverError> {
-        let (proof, public) = self.prove_ark(slots)?;
+        let (proof, public, timings) = self.prove_ark_with_timings(slots)?;
         Ok(ProofWithInputs {
             proof: proof_to_onchain_bytes(&proof),
             public,
+            timings,
         })
     }
 

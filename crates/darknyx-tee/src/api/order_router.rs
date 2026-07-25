@@ -22,10 +22,16 @@ use crate::matcher::{OrderLifecycleEvent, OrderLifecycleKind};
 /// update is TERMINAL (the order leaves the book).
 fn to_msg(u: &OrderLifecycleEvent) -> (String, OrderUpdateMsg, bool) {
     let order_id = hex::encode(u.order_id);
+    let market_id = u.market_id.clone();
+    let match_id = u.match_id.map(|value| value.to_string());
+    let server_time_ms = crate::settle::metrics::unix_ms();
     let (msg, terminal) = match &u.kind {
         OrderLifecycleKind::PendingSettlement { lock_expiry_slot } => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
+                market_id: market_id.clone(),
+                match_id: match_id.clone(),
+                server_time_ms,
                 kind: "pending_settlement",
                 filled_quantity: None,
                 new_amount: None,
@@ -41,6 +47,9 @@ fn to_msg(u: &OrderLifecycleEvent) -> (String, OrderUpdateMsg, bool) {
         } => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
+                market_id: market_id.clone(),
+                match_id: match_id.clone(),
+                server_time_ms,
                 kind: "settlement_failed",
                 filled_quantity: None,
                 new_amount: None,
@@ -53,6 +62,9 @@ fn to_msg(u: &OrderLifecycleEvent) -> (String, OrderUpdateMsg, bool) {
         OrderLifecycleKind::Settled(OrderUpdateKind::FullyFilled { filled_quantity }) => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
+                market_id: market_id.clone(),
+                match_id: match_id.clone(),
+                server_time_ms,
                 kind: "fully_filled",
                 filled_quantity: Some(*filled_quantity),
                 new_amount: None,
@@ -70,6 +82,9 @@ fn to_msg(u: &OrderLifecycleEvent) -> (String, OrderUpdateMsg, bool) {
         }) => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
+                market_id: market_id.clone(),
+                match_id: match_id.clone(),
+                server_time_ms,
                 kind: "partially_filled",
                 filled_quantity: Some(*filled_quantity),
                 new_amount: Some(*new_amount),
@@ -82,6 +97,9 @@ fn to_msg(u: &OrderLifecycleEvent) -> (String, OrderUpdateMsg, bool) {
         OrderLifecycleKind::Settled(OrderUpdateKind::Cancelled) => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
+                market_id: market_id.clone(),
+                match_id: match_id.clone(),
+                server_time_ms,
                 kind: "cancelled",
                 filled_quantity: None,
                 new_amount: None,
@@ -94,6 +112,9 @@ fn to_msg(u: &OrderLifecycleEvent) -> (String, OrderUpdateMsg, bool) {
         OrderLifecycleKind::Settled(OrderUpdateKind::Expired) => (
             OrderUpdateMsg {
                 order_id: order_id.clone(),
+                market_id,
+                match_id,
+                server_time_ms,
                 kind: "expired",
                 filled_quantity: None,
                 new_amount: None,
@@ -142,6 +163,8 @@ mod tests {
         OrderLifecycleEvent {
             trading_key: [9u8; 32],
             order_id: [0xAB; 16],
+            market_id: "market-pda".to_string(),
+            match_id: Some(17),
             kind: OrderLifecycleKind::Settled(kind),
         }
     }
@@ -179,6 +202,8 @@ mod tests {
         let pending = OrderLifecycleEvent {
             trading_key: [9; 32],
             order_id: [0xAB; 16],
+            market_id: "market-pda".to_string(),
+            match_id: Some(17),
             kind: OrderLifecycleKind::PendingSettlement {
                 lock_expiry_slot: 77,
             },
@@ -191,6 +216,8 @@ mod tests {
         let failed = OrderLifecycleEvent {
             trading_key: [9; 32],
             order_id: [0xAB; 16],
+            market_id: "market-pda".to_string(),
+            match_id: Some(17),
             kind: OrderLifecycleKind::SettlementFailed {
                 reason: "reverted".to_string(),
                 lock_expiry_slot: 88,

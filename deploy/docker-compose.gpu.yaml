@@ -26,7 +26,7 @@ services:
     # `-cuda`-suffixed tag). Bump per image iteration.
     # -68-cuda is BUILT + on ghcr and is the image that passed the first real
     # H200 settle (2026-07-21). The earlier -63-cuda tag was never built.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-68-cuda
+    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-69-cuda
     restart: unless-stopped
 
     # Device-node permissions. The image drops to `USER darknyx` (non-root) but
@@ -72,6 +72,7 @@ services:
       DARKNYX_TEE_SYNC_FROM_SLOT: ${DARKNYX_TEE_SYNC_FROM_SLOT}
       DARKNYX_TEE_BASE_MINT: ${DARKNYX_TEE_BASE_MINT}
       DARKNYX_TEE_QUOTE_MINT: ${DARKNYX_TEE_QUOTE_MINT}
+      DARKNYX_TEE_MARKET_SYMBOL: ${DARKNYX_TEE_MARKET_SYMBOL:-SOL-USDC}
       DARKNYX_TEE_SETTLE_LOOKUP_TABLE: ${DARKNYX_TEE_SETTLE_LOOKUP_TABLE}
       DARKNYX_TEE_FEE_RATE_BPS: ${DARKNYX_TEE_FEE_RATE_BPS}
       DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT: ${DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT}
@@ -91,6 +92,7 @@ services:
       DARKNYX_TEE_ICICLE_DEVICE: ${DARKNYX_TEE_ICICLE_DEVICE:-CUDA}
 
       DARKNYX_TEE_SETTLE_SEND_CONCURRENCY: ${DARKNYX_TEE_SETTLE_SEND_CONCURRENCY:-16}
+      DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY: ${DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY:-1}
       DARKNYX_TEE_NUM_TREES: ${DARKNYX_TEE_NUM_TREES:-1}
 
     ports:

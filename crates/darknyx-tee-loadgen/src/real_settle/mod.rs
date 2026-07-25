@@ -1,12 +1,12 @@
-//! Real-settle support (Increment A): a Rust VALID_INPUT prover + a Poseidon
-//! Merkle witness, so the loadgen can drive REAL on-chain settle instead of only
-//! synthetic intake. Gated behind the `real-settle` cargo feature.
+//! Real-settle support (Increment A): native C++ client-circuit witnesses,
+//! ark-groth16 proving, and a Poseidon Merkle witness, so the loadgen can drive
+//! real on-chain settlement instead of only synthetic intake. Gated behind the
+//! `real-settle` cargo feature.
 //!
 //! There is no reusable Rust VALID_INPUT prover elsewhere in the tree — the TEE
 //! proves VALID_MATCH_BATCH; clients prove VALID_INPUT via snarkjs. This mirrors
-//! `crates/darknyx-tee/src/prover/ark_prover.rs` (the proven ark-circom pattern) and
-//! the SDK's `tests/helpers/valid-input-prover.ts` (the exact circuit signals)
-//! to produce the same 256-byte on-chain proof in-process.
+//! the SDK's `tests/helpers/valid-input-prover.ts` signal layout and produces the
+//! same 256-byte on-chain proof without invoking a WASM witness runtime.
 //!
 //! Increment B (deposit on-chain → witness → POST order → track settle) layers
 //! the Solana glue on top of this (the `vault` + `rpc` submodules, behind the
@@ -26,9 +26,10 @@ pub mod vault;
 use std::path::{Path, PathBuf};
 
 use ark_bn254::{Bn254, Fq, Fr};
-use ark_circom::{CircomBuilder, CircomConfig, CircomReduction};
-use ark_ff::{BigInteger, PrimeField};
+use ark_circom::CircomReduction;
+use ark_ff::{BigInteger, PrimeField, UniformRand};
 use ark_groth16::{Groth16, Proof, ProvingKey};
+use ark_relations::r1cs::ConstraintMatrices;
 use num_bigint::{BigInt, Sign};
 
 use darkpool_crypto::note::owner_commitment;
@@ -59,6 +60,235 @@ pub enum RealSettleError {
     #[cfg(feature = "real-settle-chain")]
     #[error("event: {0}")]
     Event(String),
+}
+
+static NATIVE_WITNESS_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn decimal(value: BigInt) -> serde_json::Value {
+    serde_json::Value::String(value.to_str_radix(10))
+}
+
+fn decimal_be32(value: &[u8; 32]) -> serde_json::Value {
+    decimal(be32_to_bigint(value))
+}
+
+fn decimal_fr(value: &Fr) -> serde_json::Value {
+    decimal(fr_to_bigint(value))
+}
+
+fn decimal_u64(value: u64) -> serde_json::Value {
+    decimal(BigInt::from(value))
+}
+
+fn decimal_array(values: impl IntoIterator<Item = BigInt>) -> serde_json::Value {
+    serde_json::Value::Array(values.into_iter().map(decimal).collect())
+}
+
+fn required_native_witness(base: &Path) -> Result<PathBuf, RealSettleError> {
+    let path = base.join("circuit_cpp").join("native-witness");
+    if !path.is_file() {
+        return Err(RealSettleError::Prove(format!(
+            "native witness generator missing at {}; run scripts/build-native-client-witnesses.sh",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path)
+            .map_err(|e| {
+                RealSettleError::Io(format!("inspect native witness {}: {e}", path.display()))
+            })?
+            .permissions()
+            .mode();
+        if mode & 0o111 == 0 {
+            return Err(RealSettleError::Prove(format!(
+                "native witness generator is not executable at {}; rerun scripts/build-native-client-witnesses.sh",
+                path.display()
+            )));
+        }
+    }
+    Ok(path)
+}
+
+/// Run a mandatory native Circom witness generator and parse its `.wtns`
+/// assignment. The loadgen intentionally has no Wasmer fallback: a paid
+/// benchmark must fail before touching devnet if the native artifacts were not
+/// prepared by `scripts/build-native-client-witnesses.sh`.
+fn native_witness_assignment(
+    witness_bin: &Path,
+    input_json: &str,
+) -> Result<Vec<Fr>, RealSettleError> {
+    if !witness_bin.is_file() {
+        return Err(RealSettleError::Prove(format!(
+            "native witness generator missing at {}; run scripts/build-native-client-witnesses.sh",
+            witness_bin.display()
+        )));
+    }
+    let seq = NATIVE_WITNESS_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("darknyx-client-wtns-{}-{seq}", std::process::id()));
+    std::fs::create_dir(&dir)
+        .map_err(|e| RealSettleError::Io(format!("create native witness temp dir: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| RealSettleError::Io(format!("secure witness temp dir: {e}")))?;
+    }
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let input_path = dir.join("input.json");
+    let witness_path = dir.join("witness.wtns");
+    std::fs::write(&input_path, input_json)
+        .map_err(|e| RealSettleError::Io(format!("write native witness input: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&input_path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| RealSettleError::Io(format!("secure witness input: {e}")))?;
+    }
+
+    let output = std::process::Command::new(witness_bin)
+        .arg(&input_path)
+        .arg(&witness_path)
+        .output()
+        .map_err(|e| {
+            RealSettleError::Prove(format!(
+                "spawn native witness generator {}: {e}",
+                witness_bin.display()
+            ))
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.lines().last().unwrap_or("no generator detail");
+        return Err(RealSettleError::Prove(format!(
+            "native witness generator failed ({}): {detail}",
+            output.status
+        )));
+    }
+    let bytes = std::fs::read(&witness_path)
+        .map_err(|e| RealSettleError::Io(format!("read native .wtns: {e}")))?;
+    parse_wtns_assignment(&bytes)
+}
+
+fn read_u32_le(bytes: &[u8], offset: &mut usize) -> Result<u32, RealSettleError> {
+    let end = offset.saturating_add(4);
+    let value = bytes
+        .get(*offset..end)
+        .ok_or_else(|| RealSettleError::Prove("native .wtns truncated at u32".to_string()))?;
+    *offset = end;
+    Ok(u32::from_le_bytes(value.try_into().expect("four bytes")))
+}
+
+fn read_u64_le(bytes: &[u8], offset: &mut usize) -> Result<u64, RealSettleError> {
+    let end = offset.saturating_add(8);
+    let value = bytes
+        .get(*offset..end)
+        .ok_or_else(|| RealSettleError::Prove("native .wtns truncated at u64".to_string()))?;
+    *offset = end;
+    Ok(u64::from_le_bytes(value.try_into().expect("eight bytes")))
+}
+
+fn fr_modulus_le() -> [u8; 32] {
+    let mut bytes = Fr::MODULUS.to_bytes_le();
+    bytes.resize(32, 0);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    out
+}
+
+fn parse_wtns_assignment(bytes: &[u8]) -> Result<Vec<Fr>, RealSettleError> {
+    if bytes.get(0..4) != Some(&b"wtns"[..]) {
+        return Err(RealSettleError::Prove(
+            "native witness has invalid .wtns magic".to_string(),
+        ));
+    }
+    let mut offset = 4usize;
+    if read_u32_le(bytes, &mut offset)? != 2 || read_u32_le(bytes, &mut offset)? != 2 {
+        return Err(RealSettleError::Prove(
+            "native witness must be .wtns v2 with two sections".to_string(),
+        ));
+    }
+    if read_u32_le(bytes, &mut offset)? != 1 || read_u64_le(bytes, &mut offset)? != 40 {
+        return Err(RealSettleError::Prove(
+            "native witness has invalid header section".to_string(),
+        ));
+    }
+    if read_u32_le(bytes, &mut offset)? != 32 {
+        return Err(RealSettleError::Prove(
+            "native witness field width is not 32 bytes".to_string(),
+        ));
+    }
+    let prime_end = offset + 32;
+    if bytes.get(offset..prime_end) != Some(fr_modulus_le().as_slice()) {
+        return Err(RealSettleError::Prove(
+            "native witness field modulus is not BN254 Fr".to_string(),
+        ));
+    }
+    offset = prime_end;
+    let count = read_u32_le(bytes, &mut offset)? as usize;
+    if read_u32_le(bytes, &mut offset)? != 2 {
+        return Err(RealSettleError::Prove(
+            "native witness data section missing".to_string(),
+        ));
+    }
+    let section_bytes = read_u64_le(bytes, &mut offset)?;
+    let expected_bytes = (count as u64)
+        .checked_mul(32)
+        .ok_or_else(|| RealSettleError::Prove("native witness length overflow".to_string()))?;
+    if section_bytes != expected_bytes
+        || bytes.len().saturating_sub(offset) != expected_bytes as usize
+    {
+        return Err(RealSettleError::Prove(
+            "native witness data length mismatch".to_string(),
+        ));
+    }
+    Ok(bytes[offset..]
+        .chunks_exact(32)
+        .map(Fr::from_le_bytes_mod_order)
+        .collect())
+}
+
+fn native_ark_proof(
+    pk: &ProvingKey<Bn254>,
+    matrices: &ConstraintMatrices<Fr>,
+    witness_bin: &Path,
+    input_json: &str,
+) -> Result<Proof<Bn254>, RealSettleError> {
+    let assignment = native_witness_assignment(witness_bin, input_json)?;
+    let expected = matrices
+        .num_instance_variables
+        .checked_add(matrices.num_witness_variables)
+        // ark-circom's snarkjs zkey parser counts the implicit constant-one
+        // variable in both halves of this sum. A Circom `.wtns` contains it
+        // once, so its canonical assignment length is one smaller.
+        .and_then(|count| count.checked_sub(1))
+        .ok_or_else(|| RealSettleError::Prove("R1CS variable count overflow".to_string()))?;
+    if assignment.len() != expected {
+        return Err(RealSettleError::Prove(format!(
+            "native witness assignment has {} values; R1CS expects {expected}",
+            assignment.len()
+        )));
+    }
+    let mut rng = rand::thread_rng();
+    let r = Fr::rand(&mut rng);
+    let s = Fr::rand(&mut rng);
+    Groth16::<Bn254, CircomReduction>::create_proof_with_reduction_and_matrices(
+        pk,
+        r,
+        s,
+        matrices,
+        matrices.num_instance_variables,
+        matrices.num_constraints,
+        &assignment,
+    )
+    .map_err(|e| RealSettleError::Prove(format!("native-assignment Groth16 prove: {e}")))
 }
 
 // ── Incremental Poseidon Merkle tree (depth 20) ──────────────────────────────
@@ -166,7 +396,7 @@ impl IncrementalTree {
     }
 }
 
-// ── VALID_INPUT prover (ark-circom) ──────────────────────────────────────────
+// ── Native client-circuit provers ────────────────────────────────────────────
 
 /// A proof-gated deposit opening and the public values carried by the vault ix.
 pub struct ValidDepositProof {
@@ -182,13 +412,13 @@ struct GeneratedDepositProof {
     inner_hash: [u8; 32],
 }
 
-/// ark-circom VALID_DEPOSIT prover. The optional real-settle load rig is a
+/// Native-witness VALID_DEPOSIT prover. The optional real-settle load rig is a
 /// client of the deposit circuit just like the TypeScript SDK, so it must prove
 /// the hidden owner/inner construction before transferring collateral.
 pub struct ValidDepositProver {
     pk: ProvingKey<Bn254>,
-    wasm_path: PathBuf,
-    r1cs_path: PathBuf,
+    matrices: ConstraintMatrices<Fr>,
+    native_witness_bin: PathBuf,
 }
 
 impl ValidDepositProver {
@@ -197,12 +427,12 @@ impl ValidDepositProver {
         let zkey_path = base.join("circuit_final.zkey");
         let mut zkey_file = std::fs::File::open(&zkey_path)
             .map_err(|e| RealSettleError::Io(format!("open {}: {e}", zkey_path.display())))?;
-        let (pk, _matrices) = ark_circom::read_zkey(&mut zkey_file)
+        let (pk, matrices) = ark_circom::read_zkey(&mut zkey_file)
             .map_err(|e| RealSettleError::Io(format!("read valid_deposit zkey: {e}")))?;
         Ok(Self {
             pk,
-            wasm_path: base.join("circuit_js").join("circuit.wasm"),
-            r1cs_path: base.join("circuit.r1cs"),
+            matrices,
+            native_witness_bin: required_native_witness(&base)?,
         })
     }
 
@@ -249,26 +479,22 @@ impl ValidDepositProver {
         let note_commitment = commitment_from_fields_v2(token_mint, amount, &owner, &inner_hash)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
 
-        let cfg = CircomConfig::<Fr>::new(&self.wasm_path, &self.r1cs_path)
-            .map_err(|e| RealSettleError::Prove(format!("deposit CircomConfig::new: {e}")))?;
-        let mut builder = CircomBuilder::new(cfg);
         let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
-        builder.push_input("noteCommitment", be32_to_bigint(&note_commitment));
-        builder.push_input("tokenMint", fr_to_bigint(&mint_lo));
-        builder.push_input("tokenMint", fr_to_bigint(&mint_hi));
-        builder.push_input("amount", BigInt::from(amount));
-        builder.push_input("recoveryNonce", be32_to_bigint(recovery_nonce));
-        builder.push_input("spendingKey", fr_to_bigint(spending_key));
-        builder.push_input("ownerCommitmentBlinding", fr_to_bigint(owner_blinding));
-
-        let circom = builder
-            .build()
-            .map_err(|e| RealSettleError::Prove(format!("deposit witness build: {e}")))?;
-        let mut rng = rand::thread_rng();
-        let proof = Groth16::<Bn254, CircomReduction>::create_random_proof_with_reduction(
-            circom, &self.pk, &mut rng,
-        )
-        .map_err(|e| RealSettleError::Prove(format!("deposit groth16 prove: {e}")))?;
+        let input_json = serde_json::to_string(&serde_json::json!({
+            "noteCommitment": decimal_be32(&note_commitment),
+            "tokenMint": decimal_array([fr_to_bigint(&mint_lo), fr_to_bigint(&mint_hi)]),
+            "amount": decimal_u64(amount),
+            "recoveryNonce": decimal_be32(recovery_nonce),
+            "spendingKey": decimal_fr(spending_key),
+            "ownerCommitmentBlinding": decimal_fr(owner_blinding),
+        }))
+        .map_err(|e| RealSettleError::Prove(format!("encode deposit native inputs: {e}")))?;
+        let proof = native_ark_proof(
+            &self.pk,
+            &self.matrices,
+            &self.native_witness_bin,
+            &input_json,
+        )?;
         Ok(GeneratedDepositProof {
             proof,
             note_commitment,
@@ -292,32 +518,28 @@ pub struct ValidInputProof {
     pub merkle_root: [u8; 32],
 }
 
-/// ark-circom VALID_INPUT prover. Loads the proving key once; rebuilds the
-/// `CircomConfig` (wasm + r1cs) per prove (its wasmer `Store` is `!Sync`), same
-/// as `ArkMatchBatchProver`.
+/// Native-witness VALID_INPUT prover. Loads the proving key and constraint
+/// matrices once, then proves each native C++ assignment with ark-groth16.
 pub struct ValidInputProver {
     pk: ProvingKey<Bn254>,
-    wasm_path: PathBuf,
-    r1cs_path: PathBuf,
+    matrices: ConstraintMatrices<Fr>,
+    native_witness_bin: PathBuf,
 }
 
 impl ValidInputProver {
-    /// Resolve `valid_input/{circuit_final.zkey, circuit_js/circuit.wasm,
-    /// circuit.r1cs}` under `circuits/build`.
+    /// Resolve `valid_input/{circuit_final.zkey,circuit_cpp/native-witness}`
+    /// under `circuits/build`.
     pub fn load(circuits_build_dir: impl AsRef<Path>) -> Result<Self, RealSettleError> {
         let base = circuits_build_dir.as_ref().join("valid_input");
         let zkey_path = base.join("circuit_final.zkey");
-        let wasm_path = base.join("circuit_js").join("circuit.wasm");
-        let r1cs_path = base.join("circuit.r1cs");
-
         let mut zkey_file = std::fs::File::open(&zkey_path)
             .map_err(|e| RealSettleError::Io(format!("open {}: {e}", zkey_path.display())))?;
-        let (pk, _matrices) = ark_circom::read_zkey(&mut zkey_file)
+        let (pk, matrices) = ark_circom::read_zkey(&mut zkey_file)
             .map_err(|e| RealSettleError::Io(format!("read_zkey: {e}")))?;
         Ok(Self {
             pk,
-            wasm_path,
-            r1cs_path,
+            matrices,
+            native_witness_bin: required_native_witness(&base)?,
         })
     }
 
@@ -366,37 +588,27 @@ impl ValidInputProver {
             commitment_from_fields_v2(token_mint, amount, &owner, inner_hash)
                 .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
 
-        let cfg = CircomConfig::<Fr>::new(&self.wasm_path, &self.r1cs_path)
-            .map_err(|e| RealSettleError::Prove(format!("CircomConfig::new: {e}")))?;
-        let mut builder = CircomBuilder::new(cfg);
-
         let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
-
-        // Signal names + order mirror the SDK's proveValidInput inputs object.
-        builder.push_input("merkleRoot", be32_to_bigint(&witness.root));
-        builder.push_input("noteCommitment", be32_to_bigint(&note_commitment));
-        builder.push_input("tokenMint", fr_to_bigint(&mint_lo));
-        builder.push_input("tokenMint", fr_to_bigint(&mint_hi));
-        builder.push_input("amount", BigInt::from(amount));
-        builder.push_input("spendingKey", fr_to_bigint(spending_key));
-        builder.push_input("ownerCommitmentBlinding", fr_to_bigint(owner_blinding));
-        builder.push_input("innerHash", be32_to_bigint(inner_hash));
-        for sib in &witness.path_elements {
-            builder.push_input("merklePath", be32_to_bigint(sib));
-        }
-        for &bit in &witness.path_indices {
-            builder.push_input("merkleIndices", BigInt::from(bit));
-        }
-
-        let circom = builder
-            .build()
-            .map_err(|e| RealSettleError::Prove(format!("witness build (bad opening?): {e}")))?;
-
-        let mut rng = rand::thread_rng();
-        let proof = Groth16::<Bn254, CircomReduction>::create_random_proof_with_reduction(
-            circom, &self.pk, &mut rng,
-        )
-        .map_err(|e| RealSettleError::Prove(format!("groth16 prove: {e}")))?;
+        let input_json = serde_json::to_string(&serde_json::json!({
+            "merkleRoot": decimal_be32(&witness.root),
+            "noteCommitment": decimal_be32(&note_commitment),
+            "tokenMint": decimal_array([fr_to_bigint(&mint_lo), fr_to_bigint(&mint_hi)]),
+            "amount": decimal_u64(amount),
+            "spendingKey": decimal_fr(spending_key),
+            "ownerCommitmentBlinding": decimal_fr(owner_blinding),
+            "innerHash": decimal_be32(inner_hash),
+            "merklePath": decimal_array(witness.path_elements.iter().map(be32_to_bigint)),
+            "merkleIndices": decimal_array(
+                witness.path_indices.iter().map(|bit| BigInt::from(*bit))
+            ),
+        }))
+        .map_err(|e| RealSettleError::Prove(format!("encode input native inputs: {e}")))?;
+        let proof = native_ark_proof(
+            &self.pk,
+            &self.matrices,
+            &self.native_witness_bin,
+            &input_json,
+        )?;
 
         Ok((proof, note_commitment))
     }
@@ -441,7 +653,7 @@ fn fq_be32(fq: &Fq) -> [u8; 32] {
     out
 }
 
-// ── VALID_MERGE prover (ark-circom, K=2/4) ───────────────────────────────────
+// ── VALID_MERGE prover (K=2/4) ───────────────────────────────────────────────
 
 /// One real input note for a merge: its opening + Merkle witness (all active
 /// slots prove membership against the same `witness.root`).
@@ -462,30 +674,31 @@ pub struct MergeProof {
     pub output_amount: u64,
 }
 
-/// ark-circom VALID_MERGE prover for a fixed K (2 or 4). Mirrors
+/// Native-witness VALID_MERGE prover for a fixed K (2 or 4). Mirrors
 /// [`ValidInputProver`] + `tests/helpers/merge-prover.ts` (exact signals).
 pub struct MergeProver {
     pk: ProvingKey<Bn254>,
-    wasm_path: PathBuf,
-    r1cs_path: PathBuf,
+    matrices: ConstraintMatrices<Fr>,
+    native_witness_bin: PathBuf,
     k: usize,
 }
 
 impl MergeProver {
-    /// Resolve `valid_merge_k{k}/{circuit_final.zkey, circuit_js/circuit.wasm,
-    /// circuit.r1cs}` under `circuits/build`.
+    /// Resolve
+    /// `valid_merge_k{k}/{circuit_final.zkey,circuit_cpp/native-witness}`
+    /// under `circuits/build`.
     pub fn load(circuits_build_dir: impl AsRef<Path>, k: usize) -> Result<Self, RealSettleError> {
         let base = circuits_build_dir
             .as_ref()
             .join(format!("valid_merge_k{k}"));
         let mut zkey = std::fs::File::open(base.join("circuit_final.zkey"))
             .map_err(|e| RealSettleError::Io(format!("open merge zkey: {e}")))?;
-        let (pk, _m) = ark_circom::read_zkey(&mut zkey)
+        let (pk, matrices) = ark_circom::read_zkey(&mut zkey)
             .map_err(|e| RealSettleError::Io(format!("read merge zkey: {e}")))?;
         Ok(Self {
             pk,
-            wasm_path: base.join("circuit_js").join("circuit.wasm"),
-            r1cs_path: base.join("circuit.r1cs"),
+            matrices,
+            native_witness_bin: required_native_witness(&base)?,
             k,
         })
     }
@@ -554,68 +767,59 @@ impl MergeProver {
             commitment_from_fields_v2(token_mint, sum, &owner, &output_inner_hash)
                 .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
 
-        let cfg = CircomConfig::<Fr>::new(&self.wasm_path, &self.r1cs_path)
-            .map_err(|e| RealSettleError::Prove(format!("merge CircomConfig::new: {e}")))?;
-        let mut b = CircomBuilder::new(cfg);
         let [mint_lo, mint_hi] = pubkey_to_fr_pair(token_mint);
-
-        b.push_input("merkleRoot", be32_to_bigint(&merkle_root));
-        b.push_input("tokenMint", fr_to_bigint(&mint_lo));
-        b.push_input("tokenMint", fr_to_bigint(&mint_hi));
-        b.push_input("spendingKey", fr_to_bigint(spending_key));
-        b.push_input("ownerCommitmentBlinding", fr_to_bigint(owner_blinding));
-        // Per-slot private witnesses, padded to k with dummies.
-        for i in 0..self.k {
-            b.push_input("isActive", BigInt::from(inputs.get(i).is_some() as u8));
-        }
-        for i in 0..self.k {
-            b.push_input(
-                "amount",
-                BigInt::from(inputs.get(i).map(|s| s.amount).unwrap_or(0)),
-            );
-        }
-        for i in 0..self.k {
-            let ih = inputs.get(i).map(|s| s.inner_hash).unwrap_or([0u8; 32]);
-            b.push_input("innerHash", be32_to_bigint(&ih));
-        }
-        // merklePath[k][20] + merkleIndices[k][20], row-major.
-        for i in 0..self.k {
-            match inputs.get(i) {
-                Some(s) => {
-                    for sib in &s.witness.path_elements {
-                        b.push_input("merklePath", be32_to_bigint(sib));
+        let is_active = (0..self.k).map(|i| BigInt::from(inputs.get(i).is_some() as u8));
+        let amounts =
+            (0..self.k).map(|i| BigInt::from(inputs.get(i).map(|s| s.amount).unwrap_or(0)));
+        let inner_hashes = (0..self.k).map(|i| {
+            be32_to_bigint(
+                &inputs
+                    .get(i)
+                    .map(|slot| slot.inner_hash)
+                    .unwrap_or([0u8; 32]),
+            )
+        });
+        let merkle_paths = serde_json::Value::Array(
+            (0..self.k)
+                .map(|i| match inputs.get(i) {
+                    Some(slot) => {
+                        decimal_array(slot.witness.path_elements.iter().map(be32_to_bigint))
                     }
-                }
-                None => {
-                    for _ in 0..TREE_DEPTH {
-                        b.push_input("merklePath", BigInt::from(0));
-                    }
-                }
-            }
-        }
-        for i in 0..self.k {
-            match inputs.get(i) {
-                Some(s) => {
-                    for &bit in &s.witness.path_indices {
-                        b.push_input("merkleIndices", BigInt::from(bit));
-                    }
-                }
-                None => {
-                    for _ in 0..TREE_DEPTH {
-                        b.push_input("merkleIndices", BigInt::from(0));
-                    }
-                }
-            }
-        }
-
-        let circom = b
-            .build()
-            .map_err(|e| RealSettleError::Prove(format!("merge witness build: {e}")))?;
-        let mut rng = rand::thread_rng();
-        let proof = Groth16::<Bn254, CircomReduction>::create_random_proof_with_reduction(
-            circom, &self.pk, &mut rng,
-        )
-        .map_err(|e| RealSettleError::Prove(format!("merge groth16 prove: {e}")))?;
+                    None => decimal_array((0..TREE_DEPTH).map(|_| BigInt::from(0))),
+                })
+                .collect(),
+        );
+        let merkle_indices = serde_json::Value::Array(
+            (0..self.k)
+                .map(|i| match inputs.get(i) {
+                    Some(slot) => decimal_array(
+                        slot.witness
+                            .path_indices
+                            .iter()
+                            .map(|bit| BigInt::from(*bit)),
+                    ),
+                    None => decimal_array((0..TREE_DEPTH).map(|_| BigInt::from(0))),
+                })
+                .collect(),
+        );
+        let input_json = serde_json::to_string(&serde_json::json!({
+            "merkleRoot": decimal_be32(&merkle_root),
+            "tokenMint": decimal_array([fr_to_bigint(&mint_lo), fr_to_bigint(&mint_hi)]),
+            "spendingKey": decimal_fr(spending_key),
+            "ownerCommitmentBlinding": decimal_fr(owner_blinding),
+            "isActive": decimal_array(is_active),
+            "amount": decimal_array(amounts),
+            "innerHash": decimal_array(inner_hashes),
+            "merklePath": merkle_paths,
+            "merkleIndices": merkle_indices,
+        }))
+        .map_err(|e| RealSettleError::Prove(format!("encode merge native inputs: {e}")))?;
+        let proof = native_ark_proof(
+            &self.pk,
+            &self.matrices,
+            &self.native_witness_bin,
+            &input_json,
+        )?;
         Ok((proof, output_commitment, output_inner_hash, sum))
     }
 }
@@ -653,11 +857,8 @@ mod tests {
         assert_eq!(tree.witness(1).unwrap().path_indices[0], 1);
     }
 
-    // ark-circom's wasmer-wasix witness calculator needs a Tokio reactor in
-    // context (host_fs). In the real loadgen the prover runs inside the async
-    // trader tasks, so this mirrors that; the test just provides the runtime.
-    #[tokio::test]
-    async fn valid_deposit_proof_verifies_against_zkey_vk() {
+    #[test]
+    fn valid_deposit_proof_verifies_against_zkey_vk() {
         let Some(dir) = artifacts_dir() else {
             eprintln!("skipping: circuits/build artifacts not present");
             return;
@@ -709,8 +910,8 @@ mod tests {
             .any(|&b| b != 0));
     }
 
-    #[tokio::test]
-    async fn valid_input_proof_verifies_against_zkey_vk() {
+    #[test]
+    fn valid_input_proof_verifies_against_zkey_vk() {
         let Some(dir) = artifacts_dir() else {
             eprintln!("skipping: circuits/build/valid_input artifacts not present");
             return;
@@ -765,8 +966,68 @@ mod tests {
         assert!(onchain.iter().any(|&b| b != 0));
     }
 
-    #[tokio::test]
-    async fn valid_merge_proof_verifies_against_zkey_vk() {
+    /// Manual regression for the real-settle benchmark's client proving phase.
+    ///
+    /// Covers the exact fixed benchmark fixture: 160 deposits followed by 160
+    /// VALID_INPUT proofs. It is deliberately native-only and must complete
+    /// without descriptor growth or a hidden Wasmer fallback.
+    #[test]
+    #[ignore = "slow 160+160 native-proof preflight; run before a CVM throughput pass"]
+    fn native_client_proofs_sustain_full_fixture() {
+        let Some(dir) = artifacts_dir() else {
+            eprintln!("skipping: circuits/build artifacts not present");
+            return;
+        };
+        if !dir.join("valid_deposit/circuit_final.zkey").exists() {
+            eprintln!("skipping: valid_deposit artifacts not present");
+            return;
+        }
+
+        let deposit_prover = ValidDepositProver::load(&dir).expect("load valid_deposit prover");
+        let spending_key = Fr::from(12_345u64);
+        let owner_blinding = Fr::from(67_890u64);
+        let mut token_mint = [0u8; 32];
+        token_mint[0] = 1;
+        token_mint[31] = 0xb1;
+        let amount = 1_000_000u64;
+        let mut final_deposit = None;
+
+        for nonce in 1..=160u64 {
+            let recovery_nonce = fr_to_be_bytes(&Fr::from(nonce));
+            final_deposit = Some(
+                deposit_prover
+                    .prove(
+                        &spending_key,
+                        &owner_blinding,
+                        &token_mint,
+                        amount,
+                        &recovery_nonce,
+                    )
+                    .unwrap_or_else(|e| panic!("deposit proof {nonce} failed: {e}")),
+            );
+        }
+
+        let deposit = final_deposit.expect("at least one deposit proof");
+        let mut tree = IncrementalTree::new().unwrap();
+        tree.append(deposit.note_commitment);
+        let witness = tree.witness(0).unwrap();
+        let input_prover = ValidInputProver::load(&dir).expect("load valid_input prover");
+        for index in 1..=160 {
+            input_prover
+                .prove(
+                    &spending_key,
+                    &owner_blinding,
+                    &deposit.inner_hash,
+                    &token_mint,
+                    amount,
+                    &witness,
+                )
+                .unwrap_or_else(|e| panic!("input proof {index} failed: {e}"));
+        }
+    }
+
+    #[test]
+    fn valid_merge_proof_verifies_against_zkey_vk() {
         let Some(dir) = artifacts_dir() else {
             eprintln!("skipping: circuits/build artifacts not present");
             return;

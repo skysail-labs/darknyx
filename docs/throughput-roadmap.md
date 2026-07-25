@@ -53,30 +53,58 @@ From `crates/darknyx-tee-loadgen/BENCHMARK.md` (rapidsnark-CPU, 8 vCPU, full N=1
 > item 5. The IO rows above are still the BENCHMARK.md numbers.
 
 Two facts drive everything below: (1) the pre-settle phase (lock ‖ prove+verify ‖ ALT) is **already
-overlapped** (`worker.rs` `tokio::join!`), and (2) under `SETTLE_CONCURRENCY=1` each batch monopolizes
-a ~17 s serial pipeline slot dominated by `settle_ms` IO.
+overlapped** (`worker.rs` `tokio::join!`), and (2) at the production-default
+`DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1` each batch monopolizes a ~17 s serial
+pipeline slot dominated by `settle_ms` IO.
 
 ---
 
 ## Backlog
 
-### 1. Raise `SETTLE_CONCURRENCY` > 1 — pipeline batches concurrently
-**Gate: 🟢 GPU.** Today it is hard-pinned to `1` (`crates/darknyx-tee/src/settle/scheduler.rs:30-60`).
-On CPU, ark/rapidsnark already saturate all cores on a *single* prove, so concurrent batch proves just
-contend — no gain, and `>1` is what corrupted the shared ALT in a live loadgen run (2026-06-17). Once
-GPU drops each prove to ~tens of ms, the bottleneck shifts to settle round-trips and overlapping batch
-N+1's cheap prove+lock with batch N's settle-IO pays off.
-**Prerequisites (must land *with* the bump):**
-- a per-batch **distinct ALT** instead of the shared rolling pool (see item 2);
-- explicit **continuation-dependency ordering** — a child batch waits for its parent's on-chain re-lock
-  (the same dependency that forced `=1`).
-**Source:** `scheduler.rs:30-60`; memory `tree_sharding`.
+### 1. Raise settlement-batch concurrency — instrumented, default still 1
+**Gate for production >1: 🟢 GPU + measured benefit.** The scheduler now accepts
+`DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1..8`, records the actual value in every
+settlement benchmark row, and keeps `1` as the production default. This makes
+the next H200 window an env-only A/B rather than a code change.
+
+The two historical correctness blockers were re-audited before exposing the
+knob:
+
+- Rolling-ALT planning/mutation is held under one mutex across the complete
+  create/extend transaction. Each batch captures its table before releasing the
+  mutex and re-reads canonical on-chain ordering; later extends append without
+  changing earlier indices. Rotation deactivation retains the normal cooldown.
+  A two-batch concurrent regression now drives both workers through this shared
+  pool.
+- A partial-fill continuation is inserted into the opening store only after its
+  parent Tx D confirms. The fixed matcher snapshot used by a tick cannot select
+  that continuation for a sibling page, so there is no child batch to start
+  early.
+
+On CPU, rapidsnark already uses the host cores and `>1` may make proving slower;
+do not infer a gain from configuration alone. Run the CPU baseline at 1 and 2,
+then the same-box GPU matrix at 1/2/4. Promote a value only if confirmed-match
+throughput rises without breaching the queue and latency thresholds in the
+settlement benchmark methodology.
+
+**CPU baseline closed 2026-07-23:** on one unchanged prod9/K=4 CVM and the
+fixed 144-match real-settle workload, C1 delivered 0.961 confirmed matches/s
+while C2 delivered 0.929 (-3.3%); C2 P95 total batch latency increased from
+17.101 s to 18.732 s (+9.5%). Keep the CPU default at 1. There is no CPU C4
+leg—run 1/2/4 only for icicle CUDA on the same GPU host. Both CPU legs exposed
+excessive rebroadcasting, so neither is a production-capacity promotion result.
+Evidence:
+[`docs/benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md`](benchmarks/runs/prod9-rapidsnark-cpu-comparison-2026-07-23.md).
+**Source:** `scheduler.rs`, `worker.rs`, and
+`docs/benchmarks/settlement-throughput-methodology.md`.
 
 ### 2. Per-shard / per-worker ALT pools
-**Gate: 🟢 GPU (rides with item 1).** A single rolling ALT pool is correct *and cheaper* while batches
-are serial (`SETTLE_CONCURRENCY=1`). Distinct pools (per shard or per settle worker) only matter when
-batches run concurrently — they're the mechanism that avoids the shared-ALT corruption class. Premature
-standalone; build it as part of item 1.
+**Gate: measured contention.** The shared rolling pool is now correctness-safe
+for concurrent batches but intentionally serializes the Tx C branch. The admin
+metrics expose `alt_tx_ms`, `alt_wait_ms`, queue wait, and batch concurrency, so
+we can tell whether this mutex is material. Add distinct pools only if GPU A/B
+shows Tx C serialization limiting throughput; TX-v1 would delete this subsystem
+entirely, so avoid speculative complexity.
 **Source:** the ALT-infra assessment (the "Priority 3 / Option A" review); memory `settle_io_and_marker_sweep`.
 
 ### 3. Reduce Tx D confirmation dependencies (optimistic / async settle)

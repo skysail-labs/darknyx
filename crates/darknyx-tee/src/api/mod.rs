@@ -18,6 +18,7 @@ pub mod fills_router;
 pub mod health;
 pub mod info;
 pub mod instruments;
+pub mod metrics;
 pub mod order_router;
 pub mod orders;
 pub mod rate_limit;
@@ -65,6 +66,7 @@ pub use state::{ApiState, BootAppInfo};
 /// | GET    | `/instruments/{symbol}` | public | Phase 2c |
 /// | GET    | `/account`     | bearer        | Phase 2c |
 /// | GET    | `/transparency` | public       | Phase 2c |
+/// | GET    | `/admin/metrics/settlement` | bearer+admin | benchmark telemetry |
 ///
 /// `POST /auth/token` is intentionally public (rate-limited at the
 /// reverse-proxy layer in production); everything inside the
@@ -152,7 +154,11 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // denylists the caller's own token; `/admin/accounts` is
         // further admin-gated inside the handler (see auth.rs).
         .route("/auth/token/revoke", post(auth::revoke_token_handler))
-        .route("/admin/accounts", post(auth::register_account_handler));
+        .route("/admin/accounts", post(auth::register_account_handler))
+        .route(
+            "/admin/metrics/settlement",
+            get(metrics::get_settlement_metrics),
+        );
 
     // Two route_layers. The LAST-added is OUTERMOST, so `bearer_middleware`
     // runs first (injecting `Authorized`), then `rate_limit_middleware` runs

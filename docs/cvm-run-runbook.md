@@ -126,10 +126,12 @@ DARKNYX_TEE_SOLANA_RPC_URL=$SOLANA_RPC_URL
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen (placeholder-mint) regime
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
+DARKNYX_TEE_MARKET_SYMBOL=SOL-USDC
 DARKNYX_TEE_SETTLE_LOOKUP_TABLE=$ALT
 DARKNYX_TEE_FEE_RATE_BPS=30
 DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT=$OWNER
 DARKNYX_TEE_NUM_TREES=$K
+DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY=1
 EOF
 ```
 
@@ -353,6 +355,36 @@ image bump.**
 
 The loadgen needs the placeholder-mint regime (omit the mint vars, §3) — see
 `crates/darknyx-tee-loadgen/BENCHMARK.md`.
+
+For **real settlement throughput** (not synthetic intake), use the real-mint
+regime and the metrics-driven `--real-settle` load rig. It reads the admin-only
+`/admin/metrics/settlement` cursor, excludes first-batch prover warm-up, drains
+on terminal matched-pair outcomes, and can write raw JSON plus Markdown:
+
+```sh
+# Paid-run preflight: build the mandatory native C++ generators, then prove the
+# complete 160-deposit + 160-input fixture. There is no WASM/Wasmer fallback.
+bash scripts/build-native-client-witnesses.sh
+cargo test -p darknyx-tee-loadgen --release --lib \
+  --features real-settle-chain \
+  native_client_proofs_sustain_full_fixture -- --ignored
+
+cargo run -p darknyx-tee-loadgen --features real-settle-chain -- \
+  --real-settle --endpoint "$GW" --rpc-url "$HELIUS" \
+  --admin-keypair .devnet/keypairs/admin.json \
+  --base-mint "$BASE_HEX" --quote-mint "$QUOTE_HEX" \
+  --traders 16 --real-mix partial-fill:100 --real-partial-fill-asks 9 \
+  --real-submit-rate 15 --min-measured-batches 8 \
+  --client-prove-concurrency 1 \
+  --settle-drain-timeout-secs 600 \
+  --benchmark-label prod9-rapidsnark-c1 --warmup-batches 1 \
+  --report /tmp/prod9-rapidsnark-c1.md \
+  --metrics-json /tmp/prod9-rapidsnark-c1.json
+```
+
+The mint flags are raw 32-byte hex, not base58. Full metric definitions,
+warm-up rules, CPU/GPU matrices, and capacity thresholds are in
+[`benchmarks/settlement-throughput-methodology.md`](benchmarks/settlement-throughput-methodology.md).
 
 ---
 

@@ -212,6 +212,48 @@ pub struct RunConfig {
     #[arg(long, default_value_t = 3)]
     pub real_partial_fill_asks: u8,
 
+    /// Maximum native-witness + VALID_INPUT proof jobs generated concurrently
+    /// by the real-settle client. Keep this bounded because every job consumes
+    /// native CPU and memory.
+    #[arg(long, default_value_t = 1)]
+    pub client_prove_concurrency: usize,
+
+    /// Target order offer rate for the real-settle workload. The benchmark
+    /// authenticates as one account, whose production limiter sustains twenty
+    /// order placements per second; the portable default leaves headroom for
+    /// metrics reads and timing jitter.
+    #[arg(long, default_value_t = 15.0)]
+    pub real_submit_rate: f64,
+
+    /// Fail a real-settle benchmark that produces fewer steady-state batches
+    /// after warm-up exclusion. Set to eight for CPU/GPU comparison runs.
+    #[arg(long, default_value_t = 1)]
+    pub min_measured_batches: usize,
+
+    /// Maximum time to wait for the real-settle queue to reach terminal
+    /// outcomes. The load rig exits early once all expected matches are
+    /// measured; this is only a safety ceiling.
+    #[arg(long, default_value_t = 180)]
+    pub settle_drain_timeout_secs: u64,
+
+    /// Poll interval for the admin settlement metrics cursor.
+    #[arg(long, default_value_t = 1_000)]
+    pub settlement_metrics_poll_ms: u64,
+
+    /// Number of earliest completed batches to exclude from steady-state
+    /// percentiles (ICICLE and rapidsnark both have first-prove warm-up).
+    #[arg(long, default_value_t = 1)]
+    pub warmup_batches: usize,
+
+    /// Stable label embedded in benchmark artifacts, e.g. `prod9-rapidsnark`
+    /// or `h200-icicle-cuda`.
+    #[arg(long, default_value = "unlabelled")]
+    pub benchmark_label: String,
+
+    /// Optional machine-readable settlement benchmark artifact.
+    #[arg(long)]
+    pub metrics_json: Option<PathBuf>,
+
     /// Absolute slot every generated order expires at. Must sit ABOVE the live
     /// slot (else swept as expired → 0 matches) but WITHIN
     /// `MAX_LOCK_TTL_SLOTS` (~4_500 ≈ 30 min, F-05) of it — intake now rejects
@@ -314,6 +356,21 @@ impl RunConfig {
                 "--poll-orders must be a probability in [0, 1] (got {})",
                 self.poll_orders
             );
+        }
+        if self.settle_drain_timeout_secs == 0 {
+            anyhow::bail!("--settle-drain-timeout-secs must be > 0");
+        }
+        if !(1..=16).contains(&self.client_prove_concurrency) {
+            anyhow::bail!("--client-prove-concurrency must be in 1..=16");
+        }
+        if !self.real_submit_rate.is_finite() || self.real_submit_rate <= 0.0 {
+            anyhow::bail!("--real-submit-rate must be finite and > 0");
+        }
+        if self.min_measured_batches == 0 {
+            anyhow::bail!("--min-measured-batches must be > 0");
+        }
+        if self.settlement_metrics_poll_ms < 100 {
+            anyhow::bail!("--settlement-metrics-poll-ms must be at least 100");
         }
         // Surface a bad mint at the parse boundary, not mid-run.
         self.base_mint_bytes()?;

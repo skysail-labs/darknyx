@@ -26,40 +26,14 @@ use darkpool_matcher::match_result::RunBatchOutput;
 use tokio::sync::{mpsc, RwLock, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 
-/// Max batches the settle pipeline drives CONCURRENTLY.
-///
-/// **Must be 1.** Two batch-level invariants require serial batches, both of
-/// which `>1` violated (a live multi-scenario loadgen run, 2026-06-17, hit
-/// both): (a) the **rolling per-batch ALT** is shared + extended across batches
-/// (`worker.rs::alt_pool`, "settle batches run serially today") — concurrent
-/// batches extend the SAME ALT, so each batch's v0 settle tx is compiled
-/// against a shifting ALT → wrong account indices → the ed25519/settle ix
-/// fails; (b) a **partial-fill continuation** batch consumes a note whose
-/// NoteLock is created by the PRIOR batch's settle (the re-lock) — it must not
-/// settle until that prior batch lands, else `lock_note` is missing
-/// (`AccountOwnedByWrongProgram 3007`). The matcher emits the whole
-/// continuation chain in one tick (pages 0,1,2…), so dependent batches are
-/// already queued; serial FIFO processing settles them in dependency order.
-///
-/// The throughput win is the WITHIN-batch concurrency (locks + settles fire in
-/// parallel across a batch's matches + K shards — `settle_send_concurrency`,
-/// the tree-sharding co-inclusion, unchanged). Cross-batch pipelining is the
-/// lost optimization.
-///
-/// Re-enabling it is only worth it AFTER GPU proving: on CPU, ark/rapidsnark
-/// already multithread a single prove across all cores, so concurrent batch
-/// proves just contend — no gain (and it's what broke the shared ALT). Once a
-/// GPU backend (rapidsnark+ICICLE) drops each prove to ~tens of ms, the
-/// bottleneck shifts to the on-chain settle round-trips, and overlapping batch
-/// N+1's cheap prove+lock with batch N's settle-IO pays off. At that point set
-/// this `> 1` AND fix the two blockers: a per-batch DISTINCT ALT (not the shared
-/// rolling pool) + explicit continuation-dependency ordering (a child batch
-/// waits for its parent's relock). Acquiring a permit before each batch
-/// back-pressures the matcher channel.
-const SETTLE_CONCURRENCY: usize = 1;
+/// Conservative production default. Cross-batch pipelining is opt-in through
+/// `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY` and remains bounded to eight.
+pub(crate) const DEFAULT_SETTLE_CONCURRENCY: usize = 1;
 
 use super::assemble::{assemble_batch, BatchAssemblyParams};
 use super::job::{BatchId, JobStatus, MatchIdx, SettleJob, SettleJobId, SettlementOutcome};
+use super::metrics::{SettlementMetricsSnapshot, SettlementMetricsState};
+use super::vault::market_config_pda;
 use super::worker::{run_batch_settle_streaming, MatchSettlementResult, SettleWorkerCtx};
 use crate::matcher::MatcherState;
 
@@ -76,6 +50,10 @@ pub struct SettleSchedulerState {
     /// Next batch_id to assign. Bumped under the write lock so
     /// the scheduler doesn't need a separate atomic.
     next_batch_id: BatchId,
+    /// Bounded, privacy-preserving benchmark state. Unlike `jobs`, this has a
+    /// strict recent-record cap and never retains order ids, commitments,
+    /// amounts, prices or proof witnesses.
+    metrics: SettlementMetricsState,
 }
 
 impl SettleSchedulerState {
@@ -85,6 +63,22 @@ impl SettleSchedulerState {
 
     pub fn job_count(&self) -> usize {
         self.jobs.len()
+    }
+
+    pub fn metrics_snapshot(
+        &self,
+        after_seq: Option<u64>,
+        limit: usize,
+    ) -> SettlementMetricsSnapshot {
+        self.metrics.snapshot(after_seq, limit)
+    }
+
+    pub fn mark_batch_started(&mut self, batch_id: BatchId, padded_slots: usize) {
+        self.metrics.mark_started(batch_id, padded_slots);
+    }
+
+    pub fn metrics_mut(&mut self) -> &mut SettlementMetricsState {
+        &mut self.metrics
     }
 
     /// Snapshot of every job in the requested batch, in match-idx
@@ -167,6 +161,8 @@ pub struct SettleDriverConfig {
     pub price_scale: u64,
     /// Circuit instantiation N the witness set is padded to (16).
     pub circuit_n: usize,
+    /// Whole settlement batches allowed in flight.
+    pub settle_batch_concurrency: usize,
 }
 
 /// The live-settle driver. Present only when the TEE is fully
@@ -189,7 +185,7 @@ pub struct SettleScheduler {
     state: Arc<RwLock<SettleSchedulerState>>,
     /// `Some` drives each batch through the full on-chain pipeline;
     /// `None` is enqueue-only. `Arc` so each batch's pipeline runs in its own
-    /// spawned task (bounded concurrency — see [`SETTLE_CONCURRENCY`]).
+    /// spawned task (bounded concurrency from [`SettleDriverConfig`]).
     settle: Option<Arc<SettleDriver>>,
 }
 
@@ -232,8 +228,14 @@ impl SettleScheduler {
     }
 
     async fn run(mut self) {
+        let settle_concurrency = self
+            .settle
+            .as_ref()
+            .map(|driver| driver.cfg.settle_batch_concurrency.clamp(1, 8))
+            .unwrap_or(DEFAULT_SETTLE_CONCURRENCY);
         if self.settle.is_some() {
             tracing::info!(
+                settle_concurrency,
                 "settle scheduler: live driver attached — each batch is \
                  assembled + driven through lock→prove→verify→ALT→settle→close"
             );
@@ -245,16 +247,25 @@ impl SettleScheduler {
         }
 
         // Bounded settle pipeline: each batch is driven in its own task, up to
-        // SETTLE_CONCURRENCY at once. The semaphore permit is acquired BEFORE
+        // `settle_concurrency` at once. The semaphore permit is acquired BEFORE
         // spawning, so when the pipeline is full the recv loop blocks on
         // `acquire` — back-pressuring the matcher channel rather than fanning
         // out unbounded work. The JoinSet lets us drain in-flight batches when
         // the channel closes (so a shutdown — and tests — wait for completion).
-        let semaphore = Arc::new(Semaphore::new(SETTLE_CONCURRENCY));
+        let semaphore = Arc::new(Semaphore::new(settle_concurrency));
         let mut tasks: JoinSet<()> = JoinSet::new();
 
         while let Some(output) = self.rx.recv().await {
-            if let Some(batch_id) = self.enqueue_batch(&output).await {
+            let market_id = self
+                .settle
+                .as_ref()
+                .map(|driver| {
+                    market_config_pda(&driver.cfg.base_mint, &driver.cfg.quote_mint)
+                        .0
+                        .to_string()
+                })
+                .unwrap_or_else(|| "unconfigured".to_string());
+            if let Some(batch_id) = self.enqueue_batch(&output, market_id).await {
                 if let Some(driver) = self.settle.clone() {
                     // `acquire_owned` never errors here — the semaphore is never
                     // closed while the loop runs.
@@ -285,7 +296,7 @@ impl SettleScheduler {
 
     /// Insert per-match jobs for a batch. Returns the assigned
     /// `batch_id`, or `None` for an empty batch.
-    async fn enqueue_batch(&self, output: &RunBatchOutput) -> Option<BatchId> {
+    async fn enqueue_batch(&self, output: &RunBatchOutput, market_id: String) -> Option<BatchId> {
         let count = output.matches.len();
         if count == 0 {
             // The matcher only sends outputs with non-empty matches
@@ -304,6 +315,16 @@ impl SettleScheduler {
         let mut state = self.state.write().await;
         let batch_id = state.next_batch_id();
         let take = count.min(u8::MAX as usize);
+        state.metrics.enqueue_batch(
+            batch_id,
+            market_id,
+            output
+                .matches
+                .iter()
+                .take(take)
+                .map(|matched| matched.match_id.to_string())
+                .collect(),
+        );
         for (idx, match_pair) in output.matches.iter().take(take).enumerate() {
             let id = SettleJobId {
                 batch_id,
@@ -331,6 +352,10 @@ async fn drive_batch(
     batch_id: BatchId,
     output: &RunBatchOutput,
 ) {
+    state
+        .write()
+        .await
+        .mark_batch_started(batch_id, driver.cfg.circuit_n);
     let params = BatchAssemblyParams {
         batch_id,
         boot_session_id: driver.cfg.boot_session_id,
@@ -360,6 +385,9 @@ async fn drive_batch(
                 state,
                 batch_id,
                 output.matches.len(),
+                driver.cfg.settle_batch_concurrency,
+                driver.ctx.settle_send_concurrency,
+                "assembly_error".to_string(),
                 format!("assembly: {e}"),
             )
             .await;
@@ -436,7 +464,10 @@ async fn fail_batch(
     state: &Arc<RwLock<SettleSchedulerState>>,
     batch_id: BatchId,
     n: usize,
-    reason: String,
+    settle_batch_concurrency: usize,
+    settle_send_concurrency: usize,
+    metrics_failure: String,
+    job_reason: String,
 ) {
     let mut state = state.write().await;
     for idx in 0..n.min(u8::MAX as usize) {
@@ -444,7 +475,15 @@ async fn fail_batch(
             batch_id,
             match_idx: idx as u8,
         };
-        state.update(&id, |j| j.fail(reason.clone()));
+        state.update(&id, |j| j.fail(job_reason.clone()));
+    }
+    if let Some(record) = state.metrics_mut().fail_batch(
+        batch_id,
+        settle_batch_concurrency,
+        settle_send_concurrency,
+        metrics_failure,
+    ) {
+        super::metrics::emit_batch_record(&record);
     }
 }
 
@@ -774,6 +813,7 @@ mod tests {
             confirm_timeout: Duration::from_secs(5),
             current_priority_fee: Arc::new(AtomicU64::new(0)),
             settle_send_concurrency: 8,
+            settle_batch_concurrency: 1,
             // Throwaway sender (rx dropped) — enqueue is a best-effort no-op here.
             marker_sweep_tx: tokio::sync::mpsc::unbounded_channel().0,
             lock_sweep_tx: tokio::sync::mpsc::unbounded_channel().0,
@@ -789,6 +829,7 @@ mod tests {
                 fee_rate_bps: 0,
                 price_scale: 1,
                 circuit_n: 2,
+                settle_batch_concurrency: 1,
             },
         };
 

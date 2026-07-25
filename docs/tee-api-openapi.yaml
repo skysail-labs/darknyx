@@ -750,6 +750,147 @@ components:
                 type: string
                 description: Normally absent because marker close is asynchronous.
 
+    OrderLifecycleUpdate:
+      type: object
+      required: [order_id, market_id, server_time_ms, kind]
+      description: |
+        One account-scoped event on the `/v1/stream` `orders` channel.
+        `market_id` is the base58 `MarketConfig` PDA. Settlement-related
+        transitions carry `match_id` as a decimal string so JavaScript clients
+        do not lose u64 precision.
+      properties:
+        order_id: { type: string, description: 16-byte order id, hex. }
+        market_id: { type: string, description: Base58 MarketConfig PDA. }
+        match_id:
+          type: string
+          pattern: '^[0-9]+$'
+          description: Present for pending, confirmed-fill, and settlement-failure transitions.
+        server_time_ms: { type: integer, format: uint64 }
+        kind:
+          type: string
+          enum: [pending_settlement, partially_filled, fully_filled, settlement_failed, cancelled, expired]
+        filled_quantity: { type: integer, format: uint64 }
+        new_amount: { type: integer, format: uint64 }
+        new_note_amount: { type: integer, format: uint64 }
+        reason: { type: string }
+        lock_expiry_slot: { type: integer, format: uint64 }
+
+    SettlementStageTimings:
+      type: object
+      description: Millisecond stage timings; absent stages did not complete.
+      properties:
+        lock_ms: { type: integer, format: uint64 }
+        witness_ms: { type: integer, format: uint64 }
+        prove_step_ms: { type: integer, format: uint64 }
+        prove_ms: { type: integer, format: uint64 }
+        verify_ms: { type: integer, format: uint64 }
+        alt_tx_ms: { type: integer, format: uint64 }
+        alt_wait_ms: { type: integer, format: uint64 }
+        parallel_ms: { type: integer, format: uint64 }
+        settle_ms: { type: integer, format: uint64 }
+        close_ms: { type: integer, format: uint64 }
+        total_ms: { type: integer, format: uint64 }
+
+    SettlementBatchMetric:
+      type: object
+      required:
+        - seq
+        - batch_id
+        - market_id
+        - match_ids
+        - active_matches
+        - padded_slots
+        - enqueued_at_ms
+        - started_at_ms
+        - completed_at_ms
+        - queue_wait_ms
+        - prover_backend
+        - witness_backend
+        - settle_concurrency
+        - settle_send_concurrency
+        - timings
+        - outcomes
+        - confirmed_slots
+        - distinct_confirmed_slots
+        - rebroadcasts
+      properties:
+        seq: { type: integer, format: uint64 }
+        batch_id: { type: integer, format: uint64 }
+        market_id: { type: string, description: Base58 MarketConfig PDA. }
+        match_ids:
+          type: array
+          items: { type: string, pattern: '^[0-9]+$' }
+        active_matches: { type: integer, format: uint16 }
+        padded_slots: { type: integer, format: uint16 }
+        enqueued_at_ms: { type: integer, format: uint64 }
+        started_at_ms: { type: integer, format: uint64 }
+        completed_at_ms: { type: integer, format: uint64 }
+        queue_wait_ms: { type: integer, format: uint64 }
+        prover_backend: { type: string }
+        witness_backend: { type: string }
+        prover_device: { type: string }
+        settle_concurrency: { type: integer, format: uint16 }
+        settle_send_concurrency: { type: integer, format: uint16 }
+        timings: { $ref: '#/components/schemas/SettlementStageTimings' }
+        outcomes:
+          type: object
+          required: [confirmed, rejected, ambiguous]
+          properties:
+            confirmed: { type: integer, format: uint64 }
+            rejected: { type: integer, format: uint64 }
+            ambiguous: { type: integer, format: uint64 }
+        confirmed_slots: { type: integer, format: uint16 }
+        distinct_confirmed_slots: { type: integer, format: uint16 }
+        rebroadcasts: { type: integer, format: uint32 }
+        pipeline_failure:
+          type: string
+          description: Stable low-cardinality failure label; raw RPC/provider errors are never retained here.
+
+    SettlementMetrics:
+      type: object
+      required:
+        - boot_session_id
+        - app_id
+        - compose_hash
+        - version
+        - schema_version
+        - generated_at_ms
+        - latest_seq
+        - cursor_gap
+        - counters
+        - queue
+        - histograms
+        - recent_batches
+      description: |
+        Bounded, in-memory, privacy-preserving settlement telemetry. It never
+        includes prices, amounts, order ids, commitments, owners, or witnesses.
+        A `cursor_gap` means the caller fell behind the retained 1,024 records.
+      properties:
+        boot_session_id: { type: string }
+        app_id: { type: string }
+        compose_hash: { type: string }
+        version: { type: string }
+        schema_version: { type: integer, format: uint16 }
+        generated_at_ms: { type: integer, format: uint64 }
+        latest_seq: { type: integer, format: uint64 }
+        oldest_available_seq: { type: integer, format: uint64 }
+        cursor_gap: { type: boolean }
+        counters: { type: object, additionalProperties: { type: integer, format: uint64 } }
+        queue:
+          type: object
+          required: [depth, waiting_batches, running_batches, oldest_batch_age_ms, by_market]
+          properties:
+            depth: { type: integer, format: uint64 }
+            waiting_batches: { type: integer, format: uint64 }
+            running_batches: { type: integer, format: uint64 }
+            oldest_batch_age_ms: { type: integer, format: uint64 }
+            by_market: { type: object, additionalProperties: { type: object } }
+        histograms: { type: object, additionalProperties: { type: object } }
+        recent_batches:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/SettlementBatchMetric' }
+
 # ─────────────────────────────────────────────────────────────────────────────
 # REST endpoints
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1392,6 +1533,39 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+  /admin/metrics/settlement:
+    get:
+      tags: [admin, settlement]
+      summary: Read bounded settlement throughput and latency telemetry.
+      description: |
+        Admin-only. The live account registry is checked on every request, so
+        admin demotion takes effect without waiting for the bearer token to
+        expire. Use `after_seq` for incremental collection.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: after_seq
+          in: query
+          schema: { type: integer, format: uint64 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        '200':
+          description: Settlement metrics snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettlementMetrics' }
+        '403':
+          description: Authenticated account is not an admin.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: The settle scheduler is not wired on this instance.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
 # ─────────────────────────────────────────────────────────────────────────────
 # WebSocket (described inline because OpenAPI 3.1 has no first-class
 # WS surface — AsyncAPI would be cleaner; here we document the wire
@@ -1536,7 +1710,10 @@ x-websocket:
         `pending_settlement` without changing quantities. Its own confirmed Tx D
         then emits `partially_filled` or `fully_filled`; a definitive failure
         emits terminal `settlement_failed` with `reason` and
-        `lock_expiry_slot`. Failed orders are never auto-rebooked.
+        `lock_expiry_slot`. Every event carries the `MarketConfig` PDA and server
+        emission time; settlement events also carry a decimal-string match id.
+        Failed orders are never auto-rebooked.
+      message: { $ref: '#/components/schemas/OrderLifecycleUpdate' }
 
     fills:
       description: |
