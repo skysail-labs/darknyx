@@ -78,14 +78,12 @@ fn one_real_match() -> (MatchPair, NoteOpening, NoteOpening) {
         amount: 1000, // a_amount = quote(1000) + change(0) + fee(0)
         owner_commitment: fr_safe(0x44),
         inner_hash: fr_safe(0x11),
-        nullifier: [0xAA; 32],
     };
     let seller = NoteOpening {
         token_mint: base_mint(),
         amount: 10, // b_amount = base(10) + change(0) + fee(0)
         owner_commitment: fr_safe(0x55),
         inner_hash: fr_safe(0x33),
-        nullifier: [0xBB; 32],
     };
     let note_buyer = buyer.commitment().unwrap();
     let note_seller = seller.commitment().unwrap();

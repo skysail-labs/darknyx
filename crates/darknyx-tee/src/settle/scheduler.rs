@@ -633,14 +633,12 @@ mod tests {
             amount: 1000,
             owner_commitment: fr_safe(0x44),
             inner_hash: fr_safe(0x11),
-            nullifier: [0xAA; 32],
         };
         let seller_open = NoteOpening {
             token_mint: base_mint,
             amount: 10,
             owner_commitment: fr_safe(0x55),
             inner_hash: fr_safe(0x33),
-            nullifier: [0xBB; 32],
         };
         let note_buyer = buyer_open.commitment().unwrap();
         let note_seller = seller_open.commitment().unwrap();

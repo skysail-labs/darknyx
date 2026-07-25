@@ -239,7 +239,7 @@ async fn run_cancel(
     cancel_nonce: u64,
 ) -> CancelOutcome {
     let url = format!("{}/orders/{}", ctx.endpoint, hex::encode(order_id));
-    let body = build_signed_cancel_body(key, order_id, cancel_nonce);
+    let body = build_signed_cancel_body(key, order_id, cancel_nonce, ctx.boot_session_id);
     let start = Instant::now();
     let result = ctx
         .http

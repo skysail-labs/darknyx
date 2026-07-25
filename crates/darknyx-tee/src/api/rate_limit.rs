@@ -25,7 +25,7 @@ use super::state::ApiState;
 /// position-indexed removal); place/modify are the expensive matcher inserts.
 /// Reads + auth ops are nearly free. Mirrors the intent of a maker-friendly
 /// weighted limiter (cancel-heavy market makers aren't penalised).
-fn route_cost(method: &Method, path: &str) -> f64 {
+pub(crate) fn route_cost(method: &Method, path: &str) -> f64 {
     let is_order_subpath = path.starts_with("/orders/");
     match *method {
         // order.place

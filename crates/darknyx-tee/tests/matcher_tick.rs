@@ -115,7 +115,6 @@ fn submit_with_opening(state: &mut tokio::sync::RwLockWriteGuard<'_, MatcherStat
                 amount: order.note_amount,
                 owner_commitment: order.owner_commitment,
                 inner_hash,
-                nullifier: [0; 32],
             },
             order_id: order.order_id,
             expiry_slot: order.expiry_slot,

@@ -28,7 +28,6 @@ Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
 | `keys-parity.test.ts`              | key derivation TS↔Rust                                   |
 | `user-commitment-parity.test.ts`   | user commitment TS↔Rust                                  |
 | `inner-hash-parity.test.ts`        | change/trade/fee `inner_hash` TS↔Rust                    |
-| `change-note-inner-parity.test.ts` | `derive_inner` TS↔Rust                                   |
 | `order-canonical-parity.test.ts`   | order/cancel/topup canonical digest TS↔Rust              |
 | `build-order-parity.test.ts`       | `buildOrder` canonical digest vs Rust fixture            |
 | `valid-input-prover.test.ts`       | VALID_INPUT snarkjs round-trip (needs circuit artifacts) |

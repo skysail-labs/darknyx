@@ -5,11 +5,9 @@
 //!
 //! `cargo test -p darkpool-matcher --test parity`
 
-use darkpool_crypto::note::commitment_from_fields_v2;
 use darkpool_matcher::book::{
     Order, OrderBook, OrderSide, OrderStatus, OrderType, OrderUpdateKind,
 };
-use darkpool_matcher::change_note::{derive_inner, CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER};
 use darkpool_matcher::config::{MatchConfig, OracleSnapshot};
 use darkpool_matcher::{run_batch, run_batch_capped};
 use proptest::prelude::*;
@@ -274,44 +272,27 @@ proptest! {
         prop_assert_eq!(out.matches.len(), 1);
         let m = &out.matches[0];
 
-        let buyer_inner = derive_inner(m.match_id, CHANGE_ROLE_BUYER);
-        let seller_inner = derive_inner(m.match_id, CHANGE_ROLE_SELLER);
-        let expected_e = commitment_from_fields_v2(
-            &cfg.quote_mint,
-            buyer_extra,
-            &bid.owner_commitment,
-            &buyer_inner,
-        )
-        .expect("Fr-safe buyer owner");
-        let expected_f = commitment_from_fields_v2(
-            &cfg.base_mint,
-            seller_extra,
-            &ask.owner_commitment,
-            &seller_inner,
-        )
-        .expect("Fr-safe seller owner");
-
+        // The matcher owns the change AMOUNTS; it cannot own the change
+        // COMMITMENTS. Under CS-03 every user output binds to
+        // `Poseidon3(24, consumed_input_inner, role)`, and the consumed
+        // input's inner hash lives in the enclave opening store, not here.
+        // `run_batch` therefore emits the zero sentinel and the settle
+        // assembler fills both in.
+        //
+        // This used to assert the commitments equalled a SHA-256
+        // `derive_inner(match_id, role)` construction, which the chain has not
+        // accepted since CS-03 — a parity test validating a retired
+        // construction against itself (S-06).
+        //
+        // The N-07 property this test also guarded — outputs bind the
+        // note-proven `owner_commitment`, never the client-asserted
+        // `user_commitment` — now lives where the derivation does:
+        // `darknyx_tee::matcher::interval`, whose tests assert against
+        // `buyer_opening.owner_commitment` / `seller_opening.owner_commitment`.
         prop_assert_eq!(m.buyer_change_amt, buyer_extra);
         prop_assert_eq!(m.seller_change_amt, seller_extra);
-        prop_assert_eq!(m.note_e_commitment, expected_e);
-        prop_assert_eq!(m.note_f_commitment, expected_f);
-
-        let wrong_e = commitment_from_fields_v2(
-            &cfg.quote_mint,
-            buyer_extra,
-            &bid.user_commitment,
-            &buyer_inner,
-        )
-        .expect("Fr-safe buyer metadata");
-        let wrong_f = commitment_from_fields_v2(
-            &cfg.base_mint,
-            seller_extra,
-            &ask.user_commitment,
-            &seller_inner,
-        )
-        .expect("Fr-safe seller metadata");
-        prop_assert_ne!(m.note_e_commitment, wrong_e);
-        prop_assert_ne!(m.note_f_commitment, wrong_f);
+        prop_assert_eq!(m.note_e_commitment, [0u8; 32]);
+        prop_assert_eq!(m.note_f_commitment, [0u8; 32]);
     }
 }
 

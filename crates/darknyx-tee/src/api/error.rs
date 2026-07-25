@@ -15,7 +15,7 @@
 //!
 //! | Range | Class | Examples |
 //! |-------|-------|----------|
-//! | 1000–1099 | request validation (400) | 1001 malformed, 1002 fr_unsafe, 1003 below_collateral, 1004 min_notional, 1009 off_tick |
+//! | 1000–1099 | request validation (400) | 1001 malformed, 1002 fr_unsafe, 1003 below_collateral, 1004 min_notional, 1009 off_tick, 1010 stale_merkle_root, 1011 invalid_input_proof |
 //! | 1100–1199 | auth (401/403) | 1101 unauthorized, 1102 sig_invalid, 1103 not_owner |
 //! | 1200–1299 | conflict (409) | 1201 duplicate, 1202 stale_nonce, 1203 id_in_use, 1204 collateral_in_use |
 //! | 1300–1399 | not found (404) | 1301 not_found |
@@ -92,6 +92,21 @@ impl ApiError {
     /// A non-zero order limit is not an integer multiple of the market tick.
     pub fn off_tick(m: impl Into<String>) -> Self {
         Self::new(1009, StatusCode::BAD_REQUEST, m)
+    }
+    /// The relayed VALID_INPUT proof was built against a Merkle root the shard
+    /// mirror no longer holds (S-02). Such a proof can still be perfectly
+    /// valid — it is simply too old to survive to `lock_note`, so accepting it
+    /// would book an order that is guaranteed to fail settlement and take its
+    /// counterparty's collateral down with it. The client should re-prove
+    /// against a current root.
+    pub fn stale_merkle_root(m: impl Into<String>) -> Self {
+        Self::new(1010, StatusCode::BAD_REQUEST, m)
+    }
+    /// The relayed VALID_INPUT proof does not verify against the declared note
+    /// (S-02). Before this check existed the proof was stored unverified and
+    /// only rejected on-chain, after a match, killing the whole batch.
+    pub fn invalid_input_proof(m: impl Into<String>) -> Self {
+        Self::new(1011, StatusCode::BAD_REQUEST, m)
     }
 
     // 1100–1199 — auth (401/403)

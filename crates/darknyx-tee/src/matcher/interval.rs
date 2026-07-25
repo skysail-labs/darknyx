@@ -371,7 +371,6 @@ impl MatcherState {
                 amount,
                 owner_commitment: prior.opening.owner_commitment,
                 inner_hash,
-                nullifier: [0u8; 32],
             },
             order_id,
             expiry_slot: prior.expiry_slot,
@@ -858,7 +857,6 @@ mod tests {
                     amount: 2_000,
                     owner_commitment: owner,
                     inner_hash: fr_safe(0x33),
-                    nullifier: [0x77u8; 32],
                 },
                 order_id: bid_id,
                 expiry_slot: 1_000_000,
@@ -949,14 +947,12 @@ mod tests {
             amount: 1_000,
             owner_commitment: fr_safe(0x11),
             inner_hash: fr_safe(0x12),
-            nullifier: [0; 32],
         };
         let seller_opening = NoteOpening {
             token_mint: base_mint,
             amount: 10,
             owner_commitment: fr_safe(0x21),
             inner_hash: fr_safe(0x22),
-            nullifier: [0; 32],
         };
         let note_buyer = buyer_opening.commitment().unwrap();
         let note_seller = seller_opening.commitment().unwrap();

@@ -737,6 +737,99 @@ export interface BuildLockNoteParams {
   proof: Groth16OnChainProof;
 }
 
+/** Decoded `NoteLock` account (`programs/vault/src/state.rs::NoteLock`). */
+export interface NoteLockAccount {
+  noteCommitment: Uint8Array;
+  tokenMint: PublicKey;
+  orderId: Uint8Array;
+  /**
+   * Slot at and after which the lock is releasable. The on-chain
+   * `release_lock` compares with `>=`, so the lock is already releasable AT
+   * this slot — settlement must land strictly before it (CS-09).
+   */
+  expirySlot: bigint;
+  lockedBy: PublicKey;
+}
+
+/**
+ * Decode a `NoteLock` account's data.
+ *
+ * Layout is hand-mirrored from the Rust struct, like every other decoder in
+ * this file (there is no Anchor IDL at runtime):
+ *
+ *   disc(8) | note_commitment(32) | token_mint(32) | order_id(16)
+ *          | expiry_slot(u64 LE) | locked_by(32) | bump(1) | _padding(7)
+ *
+ * Returns `null` when the buffer is too short to be a `NoteLock`, so a caller
+ * that reads an unexpected account fails closed rather than misreading an
+ * offset as an expiry.
+ */
+export function parseNoteLock(data: Uint8Array): NoteLockAccount | null {
+  const LEN = 8 + 32 + 32 + 16 + 8 + 32 + 1 + 7;
+  if (data.length < LEN) return null;
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    noteCommitment: data.slice(8, 40),
+    tokenMint: new PublicKey(data.slice(40, 72)),
+    orderId: data.slice(72, 88),
+    expirySlot: dv.getBigUint64(88, true),
+    lockedBy: new PublicKey(data.slice(96, 128)),
+  };
+}
+
+export interface BuildReleaseLockParams {
+  programId: PublicKey;
+  /**
+   * Whoever submits the release. Receives the reclaimed `NoteLock` rent —
+   * the on-chain `close = rent_receiver` has no `has_one` binding to the TEE
+   * key that created the lock, so this is permissionless by design.
+   */
+  rentReceiver: PublicKey;
+  /** 32-byte commitment of the locked note. */
+  noteCommitment: Uint8Array;
+}
+
+/**
+ * Release an EXPIRED `NoteLock`, reclaiming its rent.
+ *
+ * Audit 2026-07-25 S-03: `release_lock` has existed on-chain since the lock
+ * lifecycle landed, but had **no builder in any shipped component** — no SDK
+ * helper, no TEE caller, no script, no test. The 2026-07-20 D-01 analysis of
+ * the settle-failure freeze concluded the recovery path was "`release_lock` +
+ * re-place", which was not implemented anywhere. Meanwhile `withdraw` and
+ * `merge` both reject on the mere EXISTENCE of a lock account, expired or
+ * not, so a note left locked by any failed settle was unspendable,
+ * unmergeable, and unreleasable through every shipped interface — recovery
+ * meant hand-assembling an Anchor discriminator.
+ *
+ * The on-chain handler requires `clock.slot >= lock.expiry_slot` (inclusive at
+ * the boundary — CS-09 relies on settlement landing strictly before it), and
+ * fails `LockNotExpired` otherwise.
+ *
+ *   data = disc(8) || note_commitment(32)
+ *
+ *   accounts:
+ *     [0] rent_receiver (signer, mut — receives the reclaimed rent)
+ *     [1] note_lock     (mut, closed)
+ */
+export function buildReleaseLockInstruction(
+  p: BuildReleaseLockParams,
+): TransactionInstruction {
+  const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
+  const data = cat(
+    anchorDiscriminator("release_lock"),
+    fixed32(p.noteCommitment),
+  );
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.rentReceiver, isSigner: true, isWritable: true },
+      { pubkey: noteLock, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from(data),
+  });
+}
+
 /**
  * v3 wire format (matches `programs/vault/src/instructions/lock_note.rs`):
  *
@@ -861,11 +954,7 @@ export function buildVerifyMatchBatchInstruction(
   }
   const [marker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
   const [vaultConfig] = vaultConfigPda(p.programId);
-  const [marketConfig] = marketConfigPda(
-    p.programId,
-    p.baseMint,
-    p.quoteMint,
-  );
+  const [marketConfig] = marketConfigPda(p.programId, p.baseMint, p.quoteMint);
 
   const data = cat(
     anchorDiscriminator("verify_match_batch"),

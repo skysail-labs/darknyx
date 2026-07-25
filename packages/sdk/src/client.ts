@@ -15,7 +15,11 @@ import {
   resolveMasterSeed,
 } from "./keys/key-generators.js";
 import type { IDarkPoolZkProverSuite } from "./zk/prover-suite.js";
-import { consumedNotePda, noteLockPda } from "./idl/vault-client.js";
+import {
+  consumedNotePda,
+  noteLockPda,
+  parseNoteLock,
+} from "./idl/vault-client.js";
 
 export interface DarkPoolClientConfig {
   programId: PublicKey;
@@ -38,6 +42,21 @@ export type NoteStatus = "active" | "locked" | "consumed" | "unknown";
 
 export interface NoteStatusInfo {
   status: NoteStatus;
+  /**
+   * Only set when `status === "locked"`: the slot at and after which the lock
+   * can be released with `buildReleaseLockInstruction`.
+   */
+  lockExpirySlot?: bigint;
+  /**
+   * Only set when `status === "locked"` and a current slot was resolvable:
+   * whether the lock is already past its expiry, i.e. whether calling
+   * `release_lock` would succeed right now.
+   *
+   * Audit 2026-07-25 S-03: this distinction was invisible before. A note left
+   * locked by a failed settle looked identical to one locked by a live order,
+   * and nothing in any shipped component could release either.
+   */
+  lockReleasable?: boolean;
 }
 
 export class DarkPoolClient {
@@ -86,8 +105,7 @@ export class DarkPoolClient {
         this.tradingOffset,
       ),
       ownerBlinding:
-        this.ownerBlinding ??
-        deriveOwnerCommitmentBlinding(this.resolvedSeed),
+        this.ownerBlinding ?? deriveOwnerCommitmentBlinding(this.resolvedSeed),
     };
   }
 
@@ -107,7 +125,27 @@ export class DarkPoolClient {
       if (consumedInfo !== null) return { status: "consumed" };
       const lockInfo =
         await this.providers.accountInfoProvider.getAccountInfo(locked);
-      if (lockInfo !== null) return { status: "locked" };
+      if (lockInfo !== null) {
+        // Report WHETHER the lock is still effective, not merely that one
+        // exists (S-03). An expired lock is recoverable with `release_lock`;
+        // reporting both identically is what made the freeze look permanent.
+        const parsed = lockInfo.data ? parseNoteLock(lockInfo.data) : null;
+        if (parsed === null) return { status: "locked" };
+        let releasable: boolean | undefined;
+        try {
+          const slot = await this.connectionProvider.connection.getSlot();
+          releasable = BigInt(slot) >= parsed.expirySlot;
+        } catch {
+          // Slot unavailable — still report the expiry so the caller can
+          // decide, but don't guess at releasability.
+          releasable = undefined;
+        }
+        return {
+          status: "locked",
+          lockExpirySlot: parsed.expirySlot,
+          lockReleasable: releasable,
+        };
+      }
       return { status: "active" };
     } catch {
       return { status: "unknown" };
