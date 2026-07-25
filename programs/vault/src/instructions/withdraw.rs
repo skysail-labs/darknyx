@@ -116,18 +116,17 @@ pub fn withdraw_handler(
     // written near the bottom of the handler, alongside the nullifier.
 
     // ----- Layer 1: note-lock guard -----
-    {
-        let info = &ctx.accounts.note_lock_slot;
-        if info.owner == ctx.program_id {
-            // Check expiry — lock is effective only until expiry_slot.
-            let data = info.try_borrow_data()?;
-            // Anchor prefixes 8-byte discriminator; then fields laid out by `#[account]`.
-            // For the guard we only need the expiry_slot — it's safer to reject any
-            // initialized lock and require the user to call `release_lock` first.
-            let _ = data;
-            return err!(VaultError::NoteAlreadyLocked);
-        }
-    }
+    //
+    // S-03: rejects only a LIVE lock. This used to reject any initialized lock
+    // account, expired or not, while nothing shipped could call `release_lock`
+    // — so one failed settle made a note permanently unwithdrawable.
+    require!(
+        !crate::state::note_lock_is_live(
+            &ctx.accounts.note_lock_slot.to_account_info(),
+            Clock::get()?.slot
+        )?,
+        VaultError::NoteAlreadyLocked
+    );
 
     // ----- Merkle root must be recent (in THIS shard's ring) -----
     require!(
@@ -137,7 +136,8 @@ pub fn withdraw_handler(
 
     // ----- Verify ZK proof -----
     // VALID_SPEND public signals (in circuit declaration order):
-    //   [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, noteCommitment]
+    //   [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, recipient[0],
+    //    recipient[1]] plus the noteCommitment OUTPUT
     //
     // Wire order matches circuit.sym (circom places outputs before inputs):
     //   wire 1: noteCommitment (signal output — first in IC sum)

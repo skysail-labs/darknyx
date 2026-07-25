@@ -95,12 +95,29 @@ pub fn merge_handler<'info>(
         VaultError::MergeAccountMismatch
     );
     let (consumed_accounts, note_lock_accounts) = ctx.remaining_accounts.split_at(active_len);
+    // S-11: active inputs must be pairwise DISTINCT. Two identical active
+    // commitments would make the circuit's `outputAmount` double-count one
+    // note. That is currently unreachable — the second
+    // `create_consumed_note_pda` sees the account already created, and the
+    // System Program independently rejects a duplicate `create_account` — but
+    // the whole guarantee resting on one runtime behaviour, with no in-circuit
+    // backstop and no negative test, is not a place to leave value
+    // conservation. K <= 4, so the O(K^2) scan is free.
+    for (i, a) in active_commitments.iter().enumerate() {
+        for b in active_commitments.iter().skip(i + 1) {
+            require!(a != b, VaultError::DuplicateMergeInput);
+        }
+    }
+    let now_slot = Clock::get()?.slot;
     for (commitment, note_lock) in active_commitments.iter().zip(note_lock_accounts) {
         let (expected, _) =
             Pubkey::find_program_address(&[NoteLock::SEED, commitment.as_ref()], &crate::ID);
         require_keys_eq!(note_lock.key(), expected, VaultError::MergeAccountMismatch);
+        // S-03: only a LIVE lock blocks the merge (N-04's intent — stop an
+        // owner merging a live order's collateral and griefing the
+        // counterparty — is preserved; an EXPIRED lock no longer bricks it).
         require!(
-            note_lock.owner != ctx.program_id,
+            !crate::state::note_lock_is_live(note_lock, now_slot)?,
             VaultError::NoteAlreadyLocked
         );
     }

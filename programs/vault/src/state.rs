@@ -276,6 +276,44 @@ pub struct NoteLock {
 
 impl NoteLock {
     pub const SEED: &'static [u8] = b"note_lock";
+
+    /// Byte offset of `expiry_slot` in the account data:
+    /// disc(8) + note_commitment(32) + token_mint(32) + order_id(16).
+    pub const EXPIRY_SLOT_OFFSET: usize = 8 + 32 + 32 + 16;
+}
+
+/// Whether a `NoteLock` PDA is still EFFECTIVE — i.e. whether it should block
+/// a spend of the note it pins (S-03).
+///
+/// `withdraw` and `merge` used to reject on the mere EXISTENCE of this account,
+/// expired or not. `withdraw` even borrowed the data and threw it away
+/// (`let _ = data;`) with a comment saying it was "safer to reject any
+/// initialized lock and require the user to call `release_lock` first" — but
+/// nothing in any shipped component could call `release_lock`, so a note left
+/// locked by a failed settle was unspendable, unmergeable and unreleasable
+/// through every available interface. `MAX_LOCK_TTL_SLOTS` was documented as a
+/// bounded censorship window; in practice it was unbounded.
+///
+/// Reading the expiry the account already carries makes the window real again.
+/// The comparison mirrors `release_lock`'s `clock.slot >= expiry_slot`: a lock
+/// is dead AT its expiry, which is the CS-09 boundary settlement is required to
+/// land strictly before.
+///
+/// Fails CLOSED — an account that is program-owned but too short to parse is
+/// treated as live rather than assumed absent.
+pub fn note_lock_is_live(info: &AccountInfo<'_>, now_slot: u64) -> Result<bool> {
+    if info.owner != &crate::ID {
+        return Ok(false); // no lock at all
+    }
+    let data = info.try_borrow_data()?;
+    let end = NoteLock::EXPIRY_SLOT_OFFSET + 8;
+    if data.len() < end {
+        // Program-owned but unparseable: refuse to treat it as absent.
+        return Ok(true);
+    }
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(&data[NoteLock::EXPIRY_SLOT_OFFSET..end]);
+    Ok(now_slot < u64::from_le_bytes(buf))
 }
 
 /// v2 — per-mint live-note accounting (the "outstanding" counter).
