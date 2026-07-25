@@ -201,6 +201,49 @@ Every remediation PR must record:
 
 ---
 
+## Devnet + CVM validation run — 2026-07-25
+
+Program `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` (devnet, upgraded in
+place), CVM `app_9ca3cded…db637` on node **prod9**, image
+`ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-70`
+(`sha256:7a310fe2e99c95505732b0709843d181796cef837df549e6788ea83a74db9be6`),
+`compose_hash=1ec96e587c0ecdf75a36a7db696f9f0aa21a85174690d1ed6dcce11953aa83ae`.
+
+| Step | Evidence |
+|---|---|
+| Vault upgrade | `GHALqaENZForLfHiwqhShTdfwiP997JyAn1BDSfEhfZxXkWLmqkL3Cz6LqZgJQZRTWUYHPn4rvkGCrTew8MTpjz`, slot 478688292 |
+| Tree reset (mandatory — S-01 rotated `vk_valid_spend`) | all K=4 shards to `leaf_count=0`, verified by direct account read |
+| **S-01** VALID_SPEND with recipient bound | `devnet-deposit-withdraw` PASS. Withdraw `21nZD34zBdtHN2UtCyfbmuibACmgRAxUfcFPviTvPLpM9mqT1vYtoJpjtC9kfFQ1YfUa2VWxyE9iV7Pz7p7Hnrxb` — a real 8-public-input proof verified on-chain against the rotated VK |
+| **PF-04** `NullifierEntry` dropped | same withdraw tx carries **13** account keys (11 declared + vault + ComputeBudget); the nullifier slot is gone. 148,018 CU |
+| **S-03(C)** merge honours lock expiry | `devnet-merge` PASS — deposit×2 → VALID_MERGE(K=2) → VALID_SPEND withdraw, 5,000,000 tokens round-tripped |
+| Leaf-index read path | `devnet-leaf-index` PASS |
+| Merkle mirror cold-boot | `applied=0 total_leaves=0 shards=4` — empty, so the mirror could not mask a stale root |
+| **S-03(B)** lock sweeper | boot log `lock sweeper spawned (expiry-gated NoteLock rent reclamation)` |
+| **S-02** intake VALID_INPUT verify | live (gated on `settle_enabled`, and the boot log shows `settle pipeline ENABLED`). Order submit **331 ms buyer / 332 ms seller**, end to end including network — see the cost note below |
+| **F-05** regression | over-cap expiry still rejected at intake (596 ms step) |
+| Flagship | `cvm-settle-e2e` **PASS** in 45.9 s, on-chain `leaf_count 2 → 7` (+5: note_c/d + buyer change + base & quote fee notes) |
+| Settle pipeline | `lock_ms=1321 prove_ms=2286 verify_ms=1301 alt_tx_ms=962 alt_wait_ms=818 parallel_ms=3588 settle_ms=11317 total_ms=14951` |
+| Prover health | `witness_ms=281 prove_step_ms=1958` against the prod9 baseline 219/1967 — no PERF-INV-01 regression. Host probe `singlethread_mops_per_s=380.1`, `nr_throttled=0` |
+| CVM stopped | confirmed `stopped` in `phala cvms list`; CPU CVM (`gpus=0`), so the GPU carve-out does not apply |
+
+**S-02's measured intake cost.** The 331/332 ms figures are the whole
+`POST /orders` round trip from a laptop to prod9, not the verification alone, so
+they bound the added cost from above rather than isolating it. The Groth16
+verify is a fixed 4-public-input pairing check with no network or disk in it;
+the honest read is that S-02 did not move intake latency into a range anyone
+would notice, and a tighter number needs in-enclave instrumentation rather than
+a wall-clock client measurement.
+
+**One real defect was found by this run.** `devnet-merge.test.ts` still built
+the pre-S-01 VALID_SPEND witness with no `recipient` input, so witness
+generation failed outright. Both devnet tests are env-gated
+(`RUN_DEVNET_DW` / `RUN_DEVNET_MERGE`), so the offline gate cannot reach either
+— a circuit signature change can only surface on a real devnet run. Fixed in
+`18f3ce2`; the merge path passes on the retry. This is the concrete argument
+against treating the offline gate as sufficient for circuit changes.
+
+---
+
 ## Backfill — 2026-07-20 `D-01…D-09` pass
 
 `docs/audit-2026-07-20-full-protocol-review.md` is cited as prior art by the
