@@ -41,6 +41,11 @@ template ValidSpend(merkleDepth) {
     signal input  nullifier;
     signal input  tokenMint[2];     // [lo_u128, hi_u128]
     signal input  amount;
+    // Destination the withdrawn SPL tokens must land in, as [lo_u128, hi_u128]
+    // halves of the token-account pubkey (a 256-bit key does not fit one
+    // BN254 Fr element — same split as tokenMint). See the binding constraint
+    // below; audit 2026-07-25 S-01.
+    signal input  recipient[2];
     signal output noteCommitment;   // exposed so on-chain ix can bind to proof
 
     // ----- Private witnesses -----
@@ -91,8 +96,50 @@ template ValidSpend(merkleDepth) {
     nullifierHash.inputs[1] <== spendingKey;
     nullifierHash.inputs[2] <== innerHash;
     nullifier === nullifierHash.out;
+
+    // ── Recipient binding (S-01) ────────────────────────────────────────────
+    //
+    // WHY THIS EXISTS. Before it, a VALID_SPEND proof authorised "destroy this
+    // note for this amount of this mint" and said NOTHING about where the money
+    // goes; the vault sent it wherever the instruction's account list pointed.
+    // The tuple (note_commitment, nullifier, merkle_root, amount, proof) was
+    // therefore a BEARER INSTRUMENT — possession was authorisation, and the
+    // legitimate owner held no cryptographic advantage over anyone else holding
+    // the same bytes. Exploitable by front-running, and — needing no privileged
+    // network position at all — by replaying any withdraw transaction that
+    // LANDS AND REVERTS, since a reverted tx publishes the full proof in the
+    // ledger permanently while creating neither guard PDA.
+    //
+    // WHY A DUMMY SQUARE. Declaring a public input is not enough. A signal that
+    // appears in no constraint has a zero QAP polynomial, so its IC point does
+    // not contribute to the verifier's `vk_x` accumulation and ANY value would
+    // satisfy the pairing — the binding would be vacuous. Multiplying it by
+    // itself forces it into the constraint system at a cost of one constraint
+    // each. This is the standard Tornado-class construction.
+    //
+    // The squares are intentionally unused afterwards; `<==` both assigns and
+    // constrains, which is the whole point.
+    signal recipientLoSquare;
+    signal recipientHiSquare;
+    recipientLoSquare <== recipient[0] * recipient[0];
+    recipientHiSquare <== recipient[1] * recipient[1];
 }
 
 // Depth 20 → 2^20 ≈ 1M notes.
-// Public signals order: merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, noteCommitment
-component main { public [merkleRoot, nullifier, tokenMint, amount] } = ValidSpend(20);
+//
+// PUBLIC SIGNAL ORDER (circom emits the OUTPUT first, then public inputs in
+// TEMPLATE DECLARATION order — not in the order of the `public [...]` list):
+//
+//   0 noteCommitment  (output)
+//   1 merkleRoot
+//   2 nullifier
+//   3 tokenMint[0]  (lo)
+//   4 tokenMint[1]  (hi)
+//   5 amount
+//   6 recipient[0]  (lo)
+//   7 recipient[1]  (hi)
+//
+// `withdraw.rs` builds its public-input array in exactly this order and
+// `zk_spend_roundtrip.rs` pins it. Reordering the declarations above silently
+// permutes what the on-chain verifier checks.
+component main { public [merkleRoot, nullifier, tokenMint, amount, recipient] } = ValidSpend(20);

@@ -161,6 +161,14 @@ fn valid_spend_roundtrip() {
         0x00, 0x00,
     ];
     let [mint_lo, mint_hi] = pubkey_to_fr_pair(&mint_bytes);
+    // S-01: the destination token account is a PUBLIC input, so the proof only
+    // authorises tokens landing here.
+    let dest_bytes: [u8; 32] = [
+        0x0d, 0xe5, 0x11, 0x77, 0x2a, 0x4c, 0x93, 0x18, 0x6b, 0x22, 0xf0, 0x81, 0x3e, 0x5a, 0xc7,
+        0x64, 0x99, 0x10, 0xab, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+    ];
+    let [dest_lo, dest_hi] = pubkey_to_fr_pair(&dest_bytes);
     let amount_u64: u64 = 1_234_567;
     let amount_fr = u64_to_fr(amount_u64);
 
@@ -225,12 +233,15 @@ fn valid_spend_roundtrip() {
            \"ownerCommitmentBlinding\": \"{ocb}\",\n\
            \"innerHash\": \"{ih}\",\n\
            \"merklePath\": [{sibs}],\n\
-           \"merkleIndices\": [{idxs}]\n\
+           \"merkleIndices\": [{idxs}],\n\
+           \"recipient\": [\"{dlo}\", \"{dhi}\"]\n\
          }}",
         mr = fr_to_dec(&Fr::from_be_bytes_mod_order(&witness_root)),
         nl = fr_to_dec(&nullifier),
         mlo = fr_to_dec(&mint_lo),
         mhi = fr_to_dec(&mint_hi),
+        dlo = fr_to_dec(&dest_lo),
+        dhi = fr_to_dec(&dest_hi),
         amt = amount_u64,
         sk = fr_to_dec(&spending_key),
         ocb = fr_to_dec(&owner_commit_blinding),
@@ -290,13 +301,18 @@ fn valid_spend_roundtrip() {
         b[24..32].copy_from_slice(&amount_u64.to_be_bytes());
         b
     };
-    let public_inputs: [[u8; 32]; 6] = [
+    // Order mirrors `withdraw.rs` exactly, which in turn mirrors the circom
+    // public-signal order (output first, then public inputs in template
+    // declaration order).
+    let public_inputs: [[u8; 32]; 8] = [
         note_commitment_bytes,
         witness_root,
         fr_to_be_bytes(&nullifier),
         fr_to_be_bytes(&mint_lo),
         fr_to_be_bytes(&mint_hi),
         amount_be32,
+        fr_to_be_bytes(&dest_lo),
+        fr_to_be_bytes(&dest_hi),
     ];
 
     let vk = make_vk(
@@ -306,32 +322,54 @@ fn valid_spend_roundtrip() {
         &VALID_SPEND_DELTA_G2,
         &VALID_SPEND_IC,
     );
-    verify_groth16_proof::<6>(&vk, &proof, &public_inputs)
+    verify_groth16_proof::<8>(&vk, &proof, &public_inputs)
         .expect("VALID_SPEND proof verification failed");
 
     // ----- Negative: mutated proof must be rejected (ZK soundness) -----
     let mut tampered = proof.clone();
     tampered.pi_c[0] ^= 0x01;
-    let res = verify_groth16_proof::<6>(&vk, &tampered, &public_inputs);
+    let res = verify_groth16_proof::<8>(&vk, &tampered, &public_inputs);
     assert!(res.is_err(), "mutated proof must not verify");
 
     // ----- Negative: wrong public input (amount, index 5) must be rejected -----
     let mut bad_inputs = public_inputs;
     bad_inputs[5][31] ^= 0x01;
-    let res2 = verify_groth16_proof::<6>(&vk, &proof, &bad_inputs);
+    let res2 = verify_groth16_proof::<8>(&vk, &proof, &bad_inputs);
     assert!(res2.is_err(), "mutated amount must not verify");
 
     // ----- Negative: stale Merkle root (index 1) must be rejected -----
     let mut stale_inputs = public_inputs;
     stale_inputs[1][0] ^= 0x01;
-    let res3 = verify_groth16_proof::<6>(&vk, &proof, &stale_inputs);
+    let res3 = verify_groth16_proof::<8>(&vk, &proof, &stale_inputs);
     assert!(res3.is_err(), "stale Merkle root must not verify");
 
     // ----- Negative: wrong note_commitment (index 0) must be rejected -----
     let mut bad_nc = public_inputs;
     bad_nc[0][0] ^= 0x01;
-    let res4 = verify_groth16_proof::<6>(&vk, &proof, &bad_nc);
+    let res4 = verify_groth16_proof::<8>(&vk, &proof, &bad_nc);
     assert!(res4.is_err(), "tampered note_commitment must not verify");
+
+    // ----- S-01: substituted destination must be rejected -----
+    //
+    // THE finding this circuit revision exists for. Before the recipient was
+    // bound, this exact substitution succeeded: an observer copied a valid
+    // proof and its five arguments verbatim, swapped in their own token
+    // account, and the vault paid them. Both halves are checked because a
+    // pubkey spans two field elements, and binding only one would leave 128
+    // bits free.
+    let mut redirected_lo = public_inputs;
+    redirected_lo[6][31] ^= 0x01;
+    assert!(
+        verify_groth16_proof::<8>(&vk, &proof, &redirected_lo).is_err(),
+        "a proof must not verify against a different destination (lo half)"
+    );
+
+    let mut redirected_hi = public_inputs;
+    redirected_hi[7][31] ^= 0x01;
+    assert!(
+        verify_groth16_proof::<8>(&vk, &proof, &redirected_hi).is_err(),
+        "a proof must not verify against a different destination (hi half)"
+    );
 }
 
 // ----- Same proof parsing helpers as zk_roundtrip.rs -----

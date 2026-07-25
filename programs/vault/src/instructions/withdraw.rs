@@ -161,13 +161,28 @@ pub fn withdraw_handler(
     // submitting a proof for a different, already-nullified note.
     let mint_bytes = ctx.accounts.token_mint.key().to_bytes();
     let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
-    let public_inputs: [[u8; 32]; 6] = [
+    // S-01: bind the DESTINATION into the proof. Without this the tuple
+    // (note_commitment, nullifier, merkle_root, amount, proof) was a bearer
+    // instrument — the proof authorised destroying the note but said nothing
+    // about where the money went, so whoever held those bytes first decided
+    // the destination. Exploitable by front-running, and (needing no
+    // privileged position at all) by replaying any withdraw that LANDS AND
+    // REVERTS: a reverted tx publishes the proof in the ledger permanently
+    // while creating neither guard PDA, leaving the note spendable.
+    //
+    // A 256-bit pubkey does not fit one BN254 Fr element, so it splits into
+    // lo/hi halves exactly like the mint — hence 8 public inputs, not 7.
+    let dest_bytes = ctx.accounts.destination_token_account.key().to_bytes();
+    let [dest_lo, dest_hi] = pubkey_pair_be32(&dest_bytes);
+    let public_inputs: [[u8; 32]; 8] = [
         note_commitment,
         merkle_root,
         nullifier,
         mint_lo,
         mint_hi,
         u64_be32(amount),
+        dest_lo,
+        dest_hi,
     ];
 
     let vk = make_vk(
@@ -177,7 +192,7 @@ pub fn withdraw_handler(
         &VALID_SPEND_DELTA_G2,
         &VALID_SPEND_IC,
     );
-    verify_groth16_proof::<6>(&vk, &proof, &public_inputs)?;
+    verify_groth16_proof::<8>(&vk, &proof, &public_inputs)?;
 
     // ----- v2 solvency check (must come BEFORE state mutation) -----
     require!(

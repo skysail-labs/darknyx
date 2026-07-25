@@ -34,6 +34,16 @@ export interface SpendInputs {
   innerHash: bigint;
   merklePath: bigint[]; // length 20
   merkleIndices: number[]; // length 20, 0 or 1
+  /**
+   * Destination token account, split into [lo, hi] 128-bit halves — the
+   * account the withdrawn SPL tokens must land in.
+   *
+   * PUBLIC and proof-bound (S-01). Before this existed the proof authorised
+   * destroying a note but said nothing about where the money went, making the
+   * proof tuple a bearer instrument. A proof generated for one destination
+   * will not verify when submitted with another.
+   */
+  recipient: [bigint, bigint];
 }
 
 /** VALID_DEPOSIT witness + public values. The owner and inner stay private. */
