@@ -84,16 +84,6 @@ pub struct Withdraw<'info> {
     /// CHECK: validated manually in the handler.
     pub note_lock_slot: UncheckedAccount<'info>,
 
-    /// Nullifier PDA. If already initialized, the withdrawal is a double-spend.
-    #[account(
-        init,
-        payer = payer,
-        space = 8 + size_of::<NullifierEntry>(),
-        seeds = [NullifierEntry::SEED, nullifier.as_ref()],
-        bump,
-    )]
-    pub nullifier_entry: AccountLoader<'info, NullifierEntry>,
-
     /// v2 — per-mint outstanding-notes counter for this token. MUST exist
     /// (i.e. deposit() must have been called for this mint at least once,
     /// or there's nothing to withdraw).
@@ -200,15 +190,17 @@ pub fn withdraw_handler(
         VaultError::InsufficientOutstanding
     );
 
-    // ----- Mark nullifier as spent -----
-    let slot = Clock::get()?.slot;
-    let n = &mut ctx.accounts.nullifier_entry.load_init()?;
-    n.nullifier = nullifier;
-    n.spent_slot = slot;
-    n.bump = ctx.bumps.nullifier_entry;
-    n._padding = [0u8; 7];
-
     // ----- Mark the note consumed (commitment-keyed) -----
+    //
+    // PF-04: this is now the ONLY guard withdraw allocates. The second,
+    // nullifier-keyed `NullifierEntry` was removed — it had zero readers
+    // anywhere (no instruction, SDK query, indexer table, daemon logic), and
+    // it was worse than redundant: `nullifier = Poseidon3(3, sk, inner)` is
+    // amount- AND mint-independent, so two distinct notes of one owner sharing
+    // an `inner_hash` collide on it and the second legitimate withdraw is
+    // bricked. `note_commitment` is a circuit-bound public OUTPUT of
+    // VALID_SPEND, so the commitment-keyed guard is complete on its own.
+    let slot = Clock::get()?.slot;
     // The shared consume-once guard with TEE settle. `match_id` is the all-zero
     // sentinel — there is no match on the withdraw path.
     let c = &mut ctx.accounts.consumed_note.load_init()?;

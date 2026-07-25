@@ -197,6 +197,40 @@ pub struct NullifierEntry {
     pub _padding: [u8; 7],
 }
 
+/// PDA marking a note commitment that has already been DEPOSITED (S-05).
+///
+/// Existence => that exact commitment is already a leaf, so a second deposit of
+/// it must be rejected.
+///
+/// Without this, two deposits sharing a commitment both moved tokens in and
+/// both incremented `outstanding`, but only ONE could ever be withdrawn — the
+/// second collides on the consume-once guard. The vault ends up permanently
+/// over-collateralised (so no solvency alarm fires) and the user's second
+/// deposit is silently unrecoverable.
+///
+/// That is reachable by accident, not just by malice, and it is the DEFAULT
+/// failure mode rather than an exotic one: `recovery_nonce =
+/// deriveBlindingFactor(seed, depositIndex)` is fully deterministic, and
+/// `depositIndex` is a caller-supplied parameter the SDK persists NOWHERE — so
+/// a seed-only restore restarts at 0 and re-derives a byte-identical
+/// commitment for the same (mint, amount).
+///
+/// Binding the tree position into the commitment instead would make duplicates
+/// impossible for free, but the leaf index is only known at execution time, so
+/// any concurrent deposit would invalidate the proof. This account is the
+/// version that does not trade liveness for it.
+#[account(zero_copy)]
+pub struct DepositedNoteEntry {
+    pub note_commitment: [u8; 32],
+    pub deposited_slot: u64,
+    pub bump: u8,
+    pub _padding: [u8; 7],
+}
+
+impl DepositedNoteEntry {
+    pub const SEED: &'static [u8] = b"deposited_note";
+}
+
 impl NullifierEntry {
     pub const SEED: &'static [u8] = b"nullifier";
 }

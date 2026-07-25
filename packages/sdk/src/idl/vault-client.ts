@@ -38,6 +38,7 @@ import {
   NULLIFIER_SEED,
   NOTE_LOCK_SEED,
   CONSUMED_NOTE_SEED,
+  DEPOSITED_NOTE_SEED,
   VAULT_TOKEN_SEED,
   OUTSTANDING_MINT_SEED,
   BATCH_VALIDITY_MARKER_SEED,
@@ -173,6 +174,17 @@ export function noteLockPda(
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [NOTE_LOCK_SEED, fixed32(noteCommitment)],
+    programId,
+  );
+}
+
+/** S-05 deposit-once guard PDA. */
+export function depositedNotePda(
+  programId: PublicKey,
+  noteCommitment: Uint8Array,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [DEPOSITED_NOTE_SEED, fixed32(noteCommitment)],
     programId,
   );
 }
@@ -655,6 +667,7 @@ export function buildDepositInstruction(
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
   const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
+  const [depositedNote] = depositedNotePda(p.programId, p.noteCommitment);
 
   const data = cat(
     anchorDiscriminator("deposit"),
@@ -682,6 +695,9 @@ export function buildDepositInstruction(
       { pubkey: p.depositorTokenAccount, isSigner: false, isWritable: true },
       { pubkey: vaultTokenAcct, isSigner: false, isWritable: true },
       { pubkey: outstandingMint, isSigner: false, isWritable: true },
+      // S-05 deposit-once guard — `init`, so writable. Declared after
+      // outstanding_mint in the Rust Accounts struct; the order is positional.
+      { pubkey: depositedNote, isSigner: false, isWritable: true },
       { pubkey: p.tokenProgramId, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: rentSysvar, isSigner: false, isWritable: false },
@@ -887,7 +903,6 @@ export function buildWithdrawInstruction(
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
   const [consumedNote] = consumedNotePda(p.programId, p.noteCommitment);
   const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
-  const [nullifierEntry] = nullifierEntryPda(p.programId, p.nullifier);
   const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
 
   const data = cat(
@@ -915,7 +930,9 @@ export function buildWithdrawInstruction(
       // consume-once guard shared with TEE settle) → writable.
       { pubkey: consumedNote, isSigner: false, isWritable: true },
       { pubkey: noteLock, isSigner: false, isWritable: false },
-      { pubkey: nullifierEntry, isSigner: false, isWritable: true },
+      // PF-04: the nullifier-keyed guard was removed — `consumed_note` above
+      // is the complete double-spend guard, since `note_commitment` is a
+      // circuit-bound public output of VALID_SPEND.
       { pubkey: outstandingMint, isSigner: false, isWritable: true },
       { pubkey: p.tokenProgramId, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },

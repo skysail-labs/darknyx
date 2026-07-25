@@ -28,6 +28,11 @@ fn vault_token_pda(program_id: &Pubkey, mint: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[b"vault_token", mint.as_ref()], program_id).0
 }
 
+/// S-05 deposit-once guard PDA.
+fn deposited_note_pda(program_id: &Pubkey, note_commitment: &[u8; 32]) -> Pubkey {
+    Pubkey::find_program_address(&[b"deposited_note", note_commitment], program_id).0
+}
+
 fn outstanding_mint_pda(program_id: &Pubkey, mint: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[b"outstanding_mint", mint.as_ref()], program_id).0
 }
@@ -89,7 +94,11 @@ fn valid_deposit_proof(
         r_owner = common::fr_to_dec(&opening.r_owner),
     );
     let build = common::repo_root().join("circuits/build/valid_deposit");
-    let tmp = std::env::temp_dir().join("darknyx_valid_deposit_litesvm");
+    // Unique per invocation: this file has more than one test and cargo runs
+    // them on parallel threads, so a shared scratch dir races on proof.json.
+    static PROVE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = PROVE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!("darknyx_valid_deposit_litesvm_{seq}"));
     let (proof, public) = common::snarkjs_fullprove(&input, &build, &tmp);
     let [mint_lo_bytes, mint_hi_bytes] = pubkey_pair_be32(&mint.to_bytes());
     let mut amount_bytes = [0u8; 32];
@@ -133,6 +142,11 @@ struct DepositTxArgs<'a> {
 }
 
 fn deposit_tx(args: DepositTxArgs<'_>) -> Transaction {
+    // The guard PDA is keyed on the commitment as it appears ON THE WIRE, which
+    // is what the on-chain `#[instruction(...)]` seed sees — not the opening's
+    // value, so the wire-tamper cases still derive the account the program
+    // expects and fail on the proof rather than on a seed mismatch.
+    let wire_commitment = args.wire_commitment.unwrap_or(args.opening.commitment);
     let (vault_config, _) = vault_config_pda(&args.h.vault_id);
     let (tree, _) = merkle_tree_pda(&args.h.vault_id, 0);
     let mut data = common::anchor_disc("deposit").to_vec();
@@ -156,6 +170,10 @@ fn deposit_tx(args: DepositTxArgs<'_>) -> Transaction {
             AccountMeta::new(args.depositor_token, false),
             AccountMeta::new(vault_token_pda(&args.h.vault_id, &args.mint), false),
             AccountMeta::new(outstanding_mint_pda(&args.h.vault_id, &args.mint), false),
+            AccountMeta::new(
+                deposited_note_pda(&args.h.vault_id, &wire_commitment),
+                false,
+            ),
             AccountMeta::new_readonly(spl_token_id(), false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
             AccountMeta::new_readonly(rent_sysvar_id(), false),
@@ -304,5 +322,91 @@ fn valid_deposit_meets_size_and_cu_gates_and_invalid_proof_is_atomic() {
             opening.recovery_nonce,
         ])
         .unwrap(),
+    );
+}
+
+/// S-05 (audit 2026-07-25): the same note commitment cannot be deposited twice.
+///
+/// Before the `DepositedNoteEntry` guard, both deposits moved tokens in and both
+/// incremented `outstanding`, but only ONE could ever be withdrawn — the second
+/// collides on the commitment-keyed consume-once guard. The vault ends up
+/// permanently over-collateralised, so the solvency invariant stays happy and
+/// nothing alarms; the user's second deposit is just silently unrecoverable.
+///
+/// This is reachable by accident, not only by malice, and it is the DEFAULT
+/// failure mode: `recovery_nonce = deriveBlindingFactor(seed, depositIndex)` is
+/// deterministic and `depositIndex` is a caller-supplied value the SDK persists
+/// nowhere, so a seed-only restore restarts at 0 and re-derives a byte-identical
+/// commitment for the same (mint, amount).
+#[test]
+fn duplicate_commitment_deposit_is_rejected() {
+    let mut h = Harness::setup();
+    let depositor = Keypair::new();
+    h.svm
+        .airdrop(&depositor.pubkey(), 10_000_000_000)
+        .expect("fund depositor");
+    let mint = create_spl_mint(&mut h, 6);
+    let amount = 5_015_000u64;
+    // Fund for two full deposits so the SECOND failing is attributable to the
+    // guard rather than to an insufficient balance.
+    let depositor_token = create_spl_token_account(&mut h, &mint, &depositor.pubkey(), amount * 4);
+    let opening = opening(&mint, amount);
+    let proof = valid_deposit_proof(&mint, amount, &opening);
+
+    let first = deposit_tx(DepositTxArgs {
+        h: &h,
+        depositor: &depositor,
+        depositor_token,
+        mint,
+        amount,
+        opening: &opening,
+        proof: &proof,
+        wire_commitment: None,
+        wire_recovery_nonce: None,
+    });
+    h.svm.send_transaction(first).expect("first deposit lands");
+    assert_eq!(tree_leaf_count(&h, 0), 1);
+    let vault_token = vault_token_pda(&h.vault_id, &mint);
+    assert_eq!(token_amount(&h, &vault_token), amount);
+
+    // Advance the blockhash so the second transaction is distinct at the
+    // SIGNATURE level. Without this litesvm short-circuits with
+    // `AlreadyProcessed` and the program never runs — the test would pass
+    // without proving anything about the guard.
+    h.svm.expire_blockhash();
+
+    // Same commitment, same valid proof — only the blockhash differs.
+    let second = deposit_tx(DepositTxArgs {
+        h: &h,
+        depositor: &depositor,
+        depositor_token,
+        mint,
+        amount,
+        opening: &opening,
+        proof: &proof,
+        wire_commitment: None,
+        wire_recovery_nonce: None,
+    });
+    let err = h
+        .svm
+        .send_transaction(second)
+        .expect_err("a duplicate commitment must not be depositable twice");
+    let logs = format!("{err:?}");
+    assert!(
+        logs.contains("already in use") || logs.contains("custom program error"),
+        "expected the deposit-once guard to reject the duplicate; got: {logs}"
+    );
+
+    // And it must fail ATOMICALLY: no second leaf, no extra custody, no
+    // inflated outstanding counter.
+    assert_eq!(
+        tree_leaf_count(&h, 0),
+        1,
+        "the rejected duplicate must not have appended a leaf"
+    );
+    assert_eq!(
+        token_amount(&h, &vault_token),
+        amount,
+        "the rejected duplicate must not have moved tokens"
     );
 }

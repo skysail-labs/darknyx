@@ -172,6 +172,11 @@ pub fn consumed_note_pda(program_id: &Pubkey, commitment: &[u8; 32]) -> (Pubkey,
     Pubkey::find_program_address(&[b"consumed_note", commitment.as_ref()], program_id)
 }
 
+/// S-05 deposit-once guard PDA.
+pub fn deposited_note_pda(program_id: &Pubkey, note_commitment: &[u8; 32]) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"deposited_note", note_commitment], program_id)
+}
+
 pub fn nullifier_pda(program_id: &Pubkey, nullifier: &[u8; 32]) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[b"nullifier", nullifier.as_ref()], program_id)
 }
@@ -1943,6 +1948,7 @@ pub fn deposit_note(
             AccountMeta::new(depositor_ta, false),
             AccountMeta::new(vault_token, false),
             AccountMeta::new(outstanding, false),
+            AccountMeta::new(deposited_note_pda(&h.vault_id, &commitment).0, false),
             AccountMeta::new_readonly(spl_token_id(), false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
             AccountMeta::new_readonly(rent_sysvar_id(), false),
@@ -2071,14 +2077,13 @@ pub fn build_withdraw_tx(
     payer: &Keypair,
     destination_ta: &Pubkey,
 ) -> Transaction {
-    let proof = build_valid_spend_proof(note);
+    let proof = build_valid_spend_proof(note, destination_ta);
 
     let (vault_pda, _) = vault_config_pda(&h.vault_id);
     let (tree_pda, _) = merkle_tree_pda(&h.vault_id, note.tree_id);
     let (vault_token, _) = vault_token_pda(h, &note.mint);
     let (consumed, _) = consumed_note_pda(&h.vault_id, &note.commitment);
     let (note_lock, _) = note_lock_pda(&h.vault_id, &note.commitment);
-    let (null_entry, _) = nullifier_pda(&h.vault_id, &note.nullifier);
     let (outstanding, _) = outstanding_mint_pda(h, &note.mint);
 
     // withdraw(tree_id, note_commitment, nullifier, merkle_root, amount, proof)
@@ -2104,7 +2109,6 @@ pub fn build_withdraw_tx(
             AccountMeta::new(*destination_ta, false),
             AccountMeta::new(consumed, false),
             AccountMeta::new_readonly(note_lock, false),
-            AccountMeta::new(null_entry, false),
             AccountMeta::new(outstanding, false),
             AccountMeta::new_readonly(spl_token_id(), false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
@@ -2120,12 +2124,18 @@ pub fn build_withdraw_tx(
 
 // ── snarkjs VALID_SPEND proof generation (lifted from zk_spend_roundtrip.rs) ──
 
-fn build_valid_spend_proof(note: &DepositedNote) -> vault::zk::verifier::Groth16Proof {
+/// `destination_ta` is a PUBLIC input of VALID_SPEND (S-01), so the proof is
+/// only valid for a withdraw crediting that exact token account.
+fn build_valid_spend_proof(
+    note: &DepositedNote,
+    destination_ta: &Pubkey,
+) -> vault::zk::verifier::Groth16Proof {
     use darkpool_crypto::field::pubkey_to_fr_pair;
     use std::fs;
     use std::process::Command;
 
     let root = repo_root();
+    let [dest_lo, dest_hi] = pubkey_to_fr_pair(&destination_ta.to_bytes());
     let build = root.join("circuits/build/valid_spend");
     let wasm = build.join("circuit_js/circuit.wasm");
     let zkey = build.join("circuit_final.zkey");
@@ -2167,12 +2177,15 @@ fn build_valid_spend_proof(note: &DepositedNote) -> vault::zk::verifier::Groth16
            \"ownerCommitmentBlinding\": \"{ocb}\",\n\
            \"innerHash\": \"{ih}\",\n\
            \"merklePath\": [{sibs}],\n\
-           \"merkleIndices\": [{idxs}]\n\
+           \"merkleIndices\": [{idxs}],\n\
+           \"recipient\": [\"{dlo}\", \"{dhi}\"]\n\
          }}",
         mr = fr_to_dec(&Fr::from_be_bytes_mod_order(&note.merkle_root)),
         nl = fr_to_dec(&Fr::from_be_bytes_mod_order(&note.nullifier)),
         mlo = fr_to_dec(&mint_lo),
         mhi = fr_to_dec(&mint_hi),
+        dlo = fr_to_dec(&dest_lo),
+        dhi = fr_to_dec(&dest_hi),
         amt = note.amount,
         sk = fr_to_dec(&note.secret.spending_key),
         ocb = fr_to_dec(&note.secret.r_owner),
