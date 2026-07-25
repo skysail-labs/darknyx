@@ -378,8 +378,6 @@ fn run_partitioned_page(
                 p_star,
                 oracle.twap,
                 current_slot,
-                &config.base_mint,
-                &config.quote_mint,
                 config.price_scale,
                 config.fee_rate_bps as u64,
                 start_match_id,

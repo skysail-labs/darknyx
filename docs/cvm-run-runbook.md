@@ -58,10 +58,20 @@ git tag tee-v3-hardening-<N+1> && git push origin tee-v3-hardening-<N+1>
 gh run watch "$(gh run list --repo skysail-labs/darknyx --limit 1 --json databaseId -q '.[0].databaseId')" \
   --repo skysail-labs/darknyx --exit-status
 # 4. confirm the manifest landed (want 200):
+#    The Accept header MUST include the single-manifest media types. CI builds
+#    linux/amd64 ONLY, so the tag resolves to an image manifest, NOT an OCI
+#    index — asking for the index alone returns 404 on a perfectly good push
+#    and reads exactly like a failed build.
 TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/darknyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" \
-  -H "Accept: application/vnd.oci.image.index.v1+json" \
+  -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json" \
   "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N+1>"
+
+# Cross-check the digest against the one CI logged ("pushing manifest for …@sha256:…"):
+curl -sI -H "Authorization: Bearer $TOK" \
+  -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N+1>" \
+  | grep -i docker-content-digest
 ```
 
 If only env/regime changed (no code), skip §1 — an env-only `phala deploy -e` is

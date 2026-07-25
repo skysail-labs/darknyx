@@ -238,17 +238,20 @@ pub fn build_signed_cancel_body(
     key: &SigningKey,
     order_id: [u8; 16],
     cancel_nonce: u64,
+    session_id: [u8; 32],
 ) -> serde_json::Value {
     let trading_key = key.verifying_key().to_bytes();
     let cancel = CancelCanonical {
         order_id,
         trading_key,
         cancel_nonce,
+        session_id,
     };
     let sig = key.sign(&cancel.digest());
     serde_json::json!({
         "trading_key": hex::encode(trading_key),
         "cancel_nonce": cancel_nonce,
+        "session_id": hex::encode(session_id),
         "trading_key_signature": hex::encode(sig.to_bytes()),
     })
 }

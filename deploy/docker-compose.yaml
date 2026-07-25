@@ -22,7 +22,7 @@ services:
     # digest once we set up the build pipeline. Local builds during
     # Phase 1 use `phala docker build` + `phala docker push` to push
     # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-69
+    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-70
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:

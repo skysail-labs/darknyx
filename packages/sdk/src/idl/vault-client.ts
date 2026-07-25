@@ -38,6 +38,7 @@ import {
   NULLIFIER_SEED,
   NOTE_LOCK_SEED,
   CONSUMED_NOTE_SEED,
+  DEPOSITED_NOTE_SEED,
   VAULT_TOKEN_SEED,
   OUTSTANDING_MINT_SEED,
   BATCH_VALIDITY_MARKER_SEED,
@@ -173,6 +174,17 @@ export function noteLockPda(
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [NOTE_LOCK_SEED, fixed32(noteCommitment)],
+    programId,
+  );
+}
+
+/** S-05 deposit-once guard PDA. */
+export function depositedNotePda(
+  programId: PublicKey,
+  noteCommitment: Uint8Array,
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [DEPOSITED_NOTE_SEED, fixed32(noteCommitment)],
     programId,
   );
 }
@@ -655,6 +667,7 @@ export function buildDepositInstruction(
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
   const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
+  const [depositedNote] = depositedNotePda(p.programId, p.noteCommitment);
 
   const data = cat(
     anchorDiscriminator("deposit"),
@@ -682,6 +695,9 @@ export function buildDepositInstruction(
       { pubkey: p.depositorTokenAccount, isSigner: false, isWritable: true },
       { pubkey: vaultTokenAcct, isSigner: false, isWritable: true },
       { pubkey: outstandingMint, isSigner: false, isWritable: true },
+      // S-05 deposit-once guard — `init`, so writable. Declared after
+      // outstanding_mint in the Rust Accounts struct; the order is positional.
+      { pubkey: depositedNote, isSigner: false, isWritable: true },
       { pubkey: p.tokenProgramId, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       { pubkey: rentSysvar, isSigner: false, isWritable: false },
@@ -735,6 +751,99 @@ export interface BuildLockNoteParams {
   merkleRoot: Uint8Array;
   /** v2: VALID_INPUT Groth16 proof. */
   proof: Groth16OnChainProof;
+}
+
+/** Decoded `NoteLock` account (`programs/vault/src/state.rs::NoteLock`). */
+export interface NoteLockAccount {
+  noteCommitment: Uint8Array;
+  tokenMint: PublicKey;
+  orderId: Uint8Array;
+  /**
+   * Slot at and after which the lock is releasable. The on-chain
+   * `release_lock` compares with `>=`, so the lock is already releasable AT
+   * this slot — settlement must land strictly before it (CS-09).
+   */
+  expirySlot: bigint;
+  lockedBy: PublicKey;
+}
+
+/**
+ * Decode a `NoteLock` account's data.
+ *
+ * Layout is hand-mirrored from the Rust struct, like every other decoder in
+ * this file (there is no Anchor IDL at runtime):
+ *
+ *   disc(8) | note_commitment(32) | token_mint(32) | order_id(16)
+ *          | expiry_slot(u64 LE) | locked_by(32) | bump(1) | _padding(7)
+ *
+ * Returns `null` when the buffer is too short to be a `NoteLock`, so a caller
+ * that reads an unexpected account fails closed rather than misreading an
+ * offset as an expiry.
+ */
+export function parseNoteLock(data: Uint8Array): NoteLockAccount | null {
+  const LEN = 8 + 32 + 32 + 16 + 8 + 32 + 1 + 7;
+  if (data.length < LEN) return null;
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    noteCommitment: data.slice(8, 40),
+    tokenMint: new PublicKey(data.slice(40, 72)),
+    orderId: data.slice(72, 88),
+    expirySlot: dv.getBigUint64(88, true),
+    lockedBy: new PublicKey(data.slice(96, 128)),
+  };
+}
+
+export interface BuildReleaseLockParams {
+  programId: PublicKey;
+  /**
+   * Whoever submits the release. Receives the reclaimed `NoteLock` rent —
+   * the on-chain `close = rent_receiver` has no `has_one` binding to the TEE
+   * key that created the lock, so this is permissionless by design.
+   */
+  rentReceiver: PublicKey;
+  /** 32-byte commitment of the locked note. */
+  noteCommitment: Uint8Array;
+}
+
+/**
+ * Release an EXPIRED `NoteLock`, reclaiming its rent.
+ *
+ * Audit 2026-07-25 S-03: `release_lock` has existed on-chain since the lock
+ * lifecycle landed, but had **no builder in any shipped component** — no SDK
+ * helper, no TEE caller, no script, no test. The 2026-07-20 D-01 analysis of
+ * the settle-failure freeze concluded the recovery path was "`release_lock` +
+ * re-place", which was not implemented anywhere. Meanwhile `withdraw` and
+ * `merge` both reject on the mere EXISTENCE of a lock account, expired or
+ * not, so a note left locked by any failed settle was unspendable,
+ * unmergeable, and unreleasable through every shipped interface — recovery
+ * meant hand-assembling an Anchor discriminator.
+ *
+ * The on-chain handler requires `clock.slot >= lock.expiry_slot` (inclusive at
+ * the boundary — CS-09 relies on settlement landing strictly before it), and
+ * fails `LockNotExpired` otherwise.
+ *
+ *   data = disc(8) || note_commitment(32)
+ *
+ *   accounts:
+ *     [0] rent_receiver (signer, mut — receives the reclaimed rent)
+ *     [1] note_lock     (mut, closed)
+ */
+export function buildReleaseLockInstruction(
+  p: BuildReleaseLockParams,
+): TransactionInstruction {
+  const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
+  const data = cat(
+    anchorDiscriminator("release_lock"),
+    fixed32(p.noteCommitment),
+  );
+  return new TransactionInstruction({
+    programId: p.programId,
+    keys: [
+      { pubkey: p.rentReceiver, isSigner: true, isWritable: true },
+      { pubkey: noteLock, isSigner: false, isWritable: true },
+    ],
+    data: Buffer.from(data),
+  });
 }
 
 /**
@@ -794,7 +903,6 @@ export function buildWithdrawInstruction(
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
   const [consumedNote] = consumedNotePda(p.programId, p.noteCommitment);
   const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
-  const [nullifierEntry] = nullifierEntryPda(p.programId, p.nullifier);
   const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
 
   const data = cat(
@@ -822,7 +930,9 @@ export function buildWithdrawInstruction(
       // consume-once guard shared with TEE settle) → writable.
       { pubkey: consumedNote, isSigner: false, isWritable: true },
       { pubkey: noteLock, isSigner: false, isWritable: false },
-      { pubkey: nullifierEntry, isSigner: false, isWritable: true },
+      // PF-04: the nullifier-keyed guard was removed — `consumed_note` above
+      // is the complete double-spend guard, since `note_commitment` is a
+      // circuit-bound public output of VALID_SPEND.
       { pubkey: outstandingMint, isSigner: false, isWritable: true },
       { pubkey: p.tokenProgramId, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -848,8 +958,6 @@ export interface BuildVerifyMatchBatchParams {
   quoteMint: PublicKey;
   /** Merkle root over the N=16 per-slot leaves — public input 1. */
   merkleRoot: Uint8Array;
-  /** Slot past which the marker becomes claimable as stale. */
-  expirySlot: bigint;
   proof: Groth16OnChainProof;
 }
 
@@ -861,16 +969,15 @@ export function buildVerifyMatchBatchInstruction(
   }
   const [marker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
   const [vaultConfig] = vaultConfigPda(p.programId);
-  const [marketConfig] = marketConfigPda(
-    p.programId,
-    p.baseMint,
-    p.quoteMint,
-  );
+  const [marketConfig] = marketConfigPda(p.programId, p.baseMint, p.quoteMint);
 
+  // S-04: no expiry_slot argument. It used to be caller-supplied and bounded
+  // only to (slot, slot + 300], which — with an unauthenticated payer and an
+  // `init` marker — let an observer replay this proof with a 1-slot TTL and
+  // kill every settle in the batch. The program derives the TTL now.
   const data = cat(
     anchorDiscriminator("verify_match_batch"),
     fixed32(p.merkleRoot),
-    u64LE(p.expirySlot),
     serializeProof(p.proof),
   );
 

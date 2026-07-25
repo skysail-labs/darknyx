@@ -41,6 +41,7 @@ pub mod close_marker;
 pub mod ed25519;
 pub mod fill_recovery;
 pub mod lock_note;
+pub mod lock_sweep;
 pub mod marker_sweep;
 pub mod metrics;
 pub mod payload;
@@ -68,6 +69,9 @@ pub use close_marker::{build_close_marker_ix, CLOSE_MARKER_DISCRIMINATOR};
 pub use ed25519::{build_ed25519_verify_ix, ED25519_PROGRAM_ID};
 pub use job::{BatchId, MatchIdx, SettleJob, SettleJobId, SettleJobStage, SettlementOutcome};
 pub use lock_note::{build_lock_note_ix, Groth16ProofBytes, LockNoteArgs};
+pub use lock_sweep::{
+    build_release_lock_ix, spawn_lock_sweeper, LOCK_SWEEP_INTERVAL, LOCK_SWEEP_MAX_PER_TX,
+};
 pub use marker_sweep::{spawn_marker_sweeper, MARKER_SWEEP_INTERVAL, MARKER_SWEEP_MAX_PER_TX};
 pub use metrics::{
     emit_batch_record, BatchMetricsCompletion, SettlementBatchRecord, SettlementMetricsSnapshot,

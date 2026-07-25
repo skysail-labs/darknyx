@@ -26,4 +26,4 @@ pub use auth::{
 };
 // Pending settle-marker roots (close = Tx E, swept asynchronously off the
 // settle critical path — see `settle::marker_sweep`).
-pub use markers::{markers_db_path, PendingMarkers, MARKERS_DB_FILE};
+pub use markers::{markers_db_path, PendingMarkers, PendingSet, LOCKS_DB_FILE, MARKERS_DB_FILE};

@@ -16,12 +16,10 @@ use std::collections::BTreeMap;
 use sha2::{Digest, Sha256};
 
 use crate::book::{Order, OrderSide, OrderType, OrderUpdate, OrderUpdateKind};
-use crate::change_note;
 use crate::config::MatchConfig;
 use crate::error::MatchError;
 use crate::fee::FeeBucket;
 use crate::match_result::{MatchPair, MatchStatus, RELOCK_ORDER_ID_NONE};
-use darkpool_crypto::note::commitment_from_fields_v2;
 
 // ─────── Constants ──────────────────────────────────────────────────────────
 
@@ -332,8 +330,6 @@ pub(crate) fn generate_matches(
     p_star: u64,
     pyth_twap: u64,
     now_slot: u64,
-    base_mint: &[u8; 32],
-    quote_mint: &[u8; 32],
     price_scale: u64,
     fee_rate_bps: u64,
     start_match_id: u64,
@@ -516,30 +512,21 @@ pub(crate) fn generate_matches(
         // Change-note commitments bind to the identity proven by the input
         // note opening. `user_commitment` is client-asserted metadata and can
         // differ; settlement reconstructs outputs from `owner_commitment`.
-        let note_e_commitment = if buyer_change_amt > 0 {
-            let inner = change_note::derive_inner(match_id, change_note::CHANGE_ROLE_BUYER);
-            commitment_from_fields_v2(
-                quote_mint,
-                buyer_change_amt,
-                &bids[bi].owner_commitment,
-                &inner,
-            )
-            .map_err(|_| MatchError::Internal("Poseidon failed for buyer change note"))?
-        } else {
-            [0u8; 32]
-        };
-        let note_f_commitment = if seller_change_amt > 0 {
-            let inner = change_note::derive_inner(match_id, change_note::CHANGE_ROLE_SELLER);
-            commitment_from_fields_v2(
-                base_mint,
-                seller_change_amt,
-                &asks[ai].owner_commitment,
-                &inner,
-            )
-            .map_err(|_| MatchError::Internal("Poseidon failed for seller change note"))?
-        } else {
-            [0u8; 32]
-        };
+        // Change-note commitments are NOT derivable here. The shipped circuit
+        // binds every user output to `Poseidon3(24, consumed_input_inner,
+        // role)` (CS-03), and the consumed input's inner hash is opaque to the
+        // pure matcher — it lives in the enclave's opening store. The settle
+        // assembler therefore computes both commitments and overwrites these
+        // fields (`darknyx-tee/src/matcher/interval.rs`).
+        //
+        // They used to be filled in with the RETIRED v2 SHA-256 construction
+        // (`change_note::derive_inner`), which produced values the chain would
+        // never create. That was not merely dead: the assembler's overwrite is
+        // conditional on its Poseidon derivation succeeding, so an error there
+        // left the stale SHA value in the payload rather than failing. Emitting
+        // the zero sentinel makes "not yet derived" explicit and unusable.
+        let note_e_commitment = [0u8; 32];
+        let note_f_commitment = [0u8; 32];
 
         let b_remaining_after = bids[bi].amount.saturating_sub(crossable);
         let a_remaining_after = asks[ai].amount.saturating_sub(crossable);
@@ -1131,8 +1118,6 @@ mod tests {
             /* p_star */ 1,
             /* pyth_twap */ 1,
             /* now_slot */ 0,
-            &base_mint,
-            &quote_mint,
             price_scale,
             /* fee_rate_bps */ 0,
             /* start_match_id */ 0,

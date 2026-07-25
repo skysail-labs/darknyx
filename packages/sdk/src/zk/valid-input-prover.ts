@@ -307,6 +307,13 @@ export async function proveAndBuildOrder(
     baseUrl: string;
     token: string;
     prover: ValidInputProver;
+    /**
+     * Needed by the VALID_INPUT prover as a circuit private witness, NOT by
+     * `buildOrder`. It moved here when the order body stopped carrying a
+     * nullifier (S-09): assembling and signing an order no longer requires the
+     * spending key at all, only proving does.
+     */
+    spendingKey: bigint;
     ownerCommitmentBlinding: bigint;
     tokenMint: Uint8Array;
     treeId?: number;

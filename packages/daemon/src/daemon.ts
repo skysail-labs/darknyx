@@ -39,10 +39,7 @@ import type { DaemonConfig } from "./config.js";
 import { DaemonStore } from "./store.js";
 import { Keystore } from "./keystore.js";
 import { LifecycleEngine } from "./lifecycle-engine.js";
-import {
-  DaemonActionExecutor,
-  type MergeRunner,
-} from "./action-executor.js";
+import { DaemonActionExecutor, type MergeRunner } from "./action-executor.js";
 import { FillsListener, type SubscribeFillsFn } from "./fills-listener.js";
 import {
   OrdersListener,
@@ -516,7 +513,8 @@ export class Daemon {
   ): Promise<{ orderId: string; arrivalSlot: number }> {
     this.assertTradingEnabled();
     const seedIndex = this.nextIndex++;
-    if (!this.bootSessionId) throw new Error("daemon has not fetched the CVM boot session");
+    if (!this.bootSessionId)
+      throw new Error("daemon has not fetched the CVM boot session");
     const { request, orderId } = await buildPlaceRequest({
       keystore: this.keystore,
       note,
@@ -634,11 +632,19 @@ export class Daemon {
   async cancelOrder(orderIdHex: string): Promise<void> {
     const order = this.store.getOrder(orderIdHex);
     if (!order) throw new Error(`unknown order ${orderIdHex}`);
+    // S-07: the cancel signature is scoped to a boot session, so refuse to
+    // sign one before the handshake has produced it — same guard placement
+    // uses. Without this a cancel could be signed against a null session.
+    if (!this.bootSessionId)
+      throw new Error("daemon has not fetched the CVM boot session");
     const idx = order.seedIndex;
     const cancel = await buildCancel({
       orderId: fromHex(orderIdHex),
       tradingKey: this.keystore.tradingPublicKey(idx),
       cancelNonce: BigInt(Date.now()),
+      // S-07: scopes the cancel signature to this CVM boot, so a captured
+      // body cannot kill a re-placed order after a restart.
+      sessionId: this.bootSessionId,
       sign: (d) => this.keystore.signWithTradingKey(idx, d),
     });
     await this.placer.cancel(orderIdHex, cancel);

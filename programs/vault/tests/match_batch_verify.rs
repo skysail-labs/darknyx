@@ -77,17 +77,20 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
     // Marker absent before verify.
     assert!(!batch_validity_marker_exists(&h, &root));
 
-    // expiry ∈ (clock.slot, slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS=300];
-    // litesvm boots at slot 0, so 200 sits safely inside the window.
-    let ix = build_verify_match_batch_ix(
-        &h,
-        &h.tee.pubkey(),
-        &base_mint,
-        &quote_mint,
-        &root,
-        200,
-        &proof,
-    );
+    // S-04: the marker TTL is derived on-chain, so there is no expiry argument
+    // for a caller (or a replayer) to choose.
+    //
+    // Warp off slot 0 FIRST. litesvm boots at slot 0, where
+    // `clock.slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS` and a bare
+    // `MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS` are the same number — so a test
+    // pinned at slot 0 passes even against a handler that ignores the clock
+    // entirely and writes a constant. That is precisely the pre-S-04 shape of
+    // this field, which makes a slot-0 assertion blind to the regression it is
+    // supposed to catch.
+    const EXEC_SLOT: u64 = 4_242;
+    h.svm.warp_to_slot(EXEC_SLOT);
+    let ix =
+        build_verify_match_batch_ix(&h, &h.tee.pubkey(), &base_mint, &quote_mint, &root, &proof);
     let tx = Transaction::new(
         &[&h.tee],
         Message::new(&[ix], Some(&h.tee.pubkey())),
@@ -121,6 +124,30 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
         batch_validity_marker_exists(&h, &root),
         "verify_match_batch must create the marker after accepting the proof"
     );
+
+    // S-04: the TTL written into the marker is DERIVED from the execution slot,
+    // not taken from a caller argument.
+    //
+    // BatchValidityMarker: disc(8) | payer(32) | expiry_slot(u64) | bump(1)
+    let (marker_pda, _) = batch_validity_marker_pda(&h, &root);
+    let data = h.svm.get_account(&marker_pda).expect("marker exists").data;
+    let expiry = u64::from_le_bytes(data[40..48].try_into().unwrap());
+    let expected = EXEC_SLOT + vault::state::MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS;
+    assert_eq!(
+        expiry,
+        expected,
+        "marker expiry must be exec_slot ({EXEC_SLOT}) + \
+         MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS ({}), derived on-chain rather than \
+         caller-supplied",
+        vault::state::MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS
+    );
+    // And prove the slot actually participates — a constant-writing handler
+    // would land on the TTL alone.
+    assert_ne!(
+        expiry,
+        vault::state::MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS,
+        "expiry equals the bare TTL — the handler is ignoring clock.slot"
+    );
 }
 
 #[test]
@@ -131,15 +158,8 @@ fn tampered_proof_rejected_no_marker() {
     let (base_mint, quote_mint) = fixture_mints();
     seed_market_config(&mut h, &base_mint, &quote_mint, 1, true);
 
-    let ix = build_verify_match_batch_ix(
-        &h,
-        &h.tee.pubkey(),
-        &base_mint,
-        &quote_mint,
-        &root,
-        200,
-        &proof,
-    );
+    let ix =
+        build_verify_match_batch_ix(&h, &h.tee.pubkey(), &base_mint, &quote_mint, &root, &proof);
     let tx = Transaction::new(
         &[&h.tee],
         Message::new(&[ix], Some(&h.tee.pubkey())),
@@ -163,15 +183,8 @@ fn disabled_market_rejected_before_marker_creation() {
     let (base_mint, quote_mint) = fixture_mints();
     seed_market_config(&mut h, &base_mint, &quote_mint, 1, false);
 
-    let ix = build_verify_match_batch_ix(
-        &h,
-        &h.tee.pubkey(),
-        &base_mint,
-        &quote_mint,
-        &root,
-        200,
-        &proof,
-    );
+    let ix =
+        build_verify_match_batch_ix(&h, &h.tee.pubkey(), &base_mint, &quote_mint, &root, &proof);
     let tx = Transaction::new(
         &[&h.tee],
         Message::new(&[ix], Some(&h.tee.pubkey())),
@@ -193,15 +206,8 @@ fn proof_bound_to_different_price_scale_rejected() {
     // The fixture proves scale=1. A governed scale change must invalidate it.
     seed_market_config(&mut h, &base_mint, &quote_mint, 2, true);
 
-    let ix = build_verify_match_batch_ix(
-        &h,
-        &h.tee.pubkey(),
-        &base_mint,
-        &quote_mint,
-        &root,
-        200,
-        &proof,
-    );
+    let ix =
+        build_verify_match_batch_ix(&h, &h.tee.pubkey(), &base_mint, &quote_mint, &root, &proof);
     let tx = Transaction::new(
         &[&h.tee],
         Message::new(&[ix], Some(&h.tee.pubkey())),
@@ -224,15 +230,8 @@ fn proof_bound_to_different_vault_config_rejected() {
     let (base_mint, quote_mint) = fixture_mints();
     seed_market_config(&mut h, &base_mint, &quote_mint, 1, true);
 
-    let ix = build_verify_match_batch_ix(
-        &h,
-        &h.tee.pubkey(),
-        &base_mint,
-        &quote_mint,
-        &root,
-        200,
-        &proof,
-    );
+    let ix =
+        build_verify_match_batch_ix(&h, &h.tee.pubkey(), &base_mint, &quote_mint, &root, &proof);
     let tx = Transaction::new(
         &[&h.tee],
         Message::new(&[ix], Some(&h.tee.pubkey())),
@@ -243,4 +242,48 @@ fn proof_bound_to_different_vault_config_rejected() {
         "a proof for a different governed fee/owner config must be rejected"
     );
     assert!(!batch_validity_marker_exists(&h, &root));
+}
+
+/// S-04 (audit 2026-07-25): a replayer cannot choose the marker's TTL.
+///
+/// `expiry_slot` used to be a caller argument, bounded only to
+/// `(clock.slot, clock.slot + 300]`. Paired with a deliberately
+/// unauthenticated `payer` — "anyone can push a valid proof" is a real
+/// liveness property, letting a third party unstick a batch whose TEE key ran
+/// out of SOL — and an `init` marker that lets exactly ONE party set the TTL
+/// per root, that handed any observer a lever:
+///
+///   1. observe the TEE's verify transaction,
+///   2. replay the SAME proof and root with `expiry_slot = clock.slot + 1`,
+///      landing first,
+///   3. the TEE's own verify then fails on the `init` collision, and all N
+///      settles fail `BatchValidityMarkerExpired`,
+///   4. meanwhile the 2N `lock_note` transactions have already landed, so up
+///      to 32 users' notes stay pinned for the full lock TTL.
+///
+/// Cost to the griefer: one transaction fee.
+///
+/// The TTL is derived on-chain now, so a replay is indistinguishable from the
+/// original submission and simply loses the `init` race — it can no longer
+/// choose a short window. This test pins that the instruction carries no
+/// caller-controlled expiry at all: the wire body is exactly root + proof.
+#[test]
+fn verify_ix_carries_no_caller_chosen_expiry() {
+    let h = Harness::setup();
+    let (proof, root) = fixture();
+    let (base_mint, quote_mint) = fixture_mints();
+
+    let ix =
+        build_verify_match_batch_ix(&h, &h.tee.pubkey(), &base_mint, &quote_mint, &root, &proof);
+
+    // 8-byte discriminator + 32-byte root + 256-byte proof, and nothing else.
+    // A regression that re-adds an expiry argument grows this by 8.
+    assert_eq!(
+        ix.data.len(),
+        8 + 32 + 256,
+        "verify_match_batch must take only (merkle_root, proof) — a \
+         caller-supplied marker TTL is the S-04 griefing lever"
+    );
+    assert_eq!(&ix.data[8..40], &root[..]);
+    assert_eq!(&ix.data[40..], &proof[..]);
 }

@@ -84,16 +84,6 @@ pub struct Withdraw<'info> {
     /// CHECK: validated manually in the handler.
     pub note_lock_slot: UncheckedAccount<'info>,
 
-    /// Nullifier PDA. If already initialized, the withdrawal is a double-spend.
-    #[account(
-        init,
-        payer = payer,
-        space = 8 + size_of::<NullifierEntry>(),
-        seeds = [NullifierEntry::SEED, nullifier.as_ref()],
-        bump,
-    )]
-    pub nullifier_entry: AccountLoader<'info, NullifierEntry>,
-
     /// v2 — per-mint outstanding-notes counter for this token. MUST exist
     /// (i.e. deposit() must have been called for this mint at least once,
     /// or there's nothing to withdraw).
@@ -126,18 +116,17 @@ pub fn withdraw_handler(
     // written near the bottom of the handler, alongside the nullifier.
 
     // ----- Layer 1: note-lock guard -----
-    {
-        let info = &ctx.accounts.note_lock_slot;
-        if info.owner == ctx.program_id {
-            // Check expiry — lock is effective only until expiry_slot.
-            let data = info.try_borrow_data()?;
-            // Anchor prefixes 8-byte discriminator; then fields laid out by `#[account]`.
-            // For the guard we only need the expiry_slot — it's safer to reject any
-            // initialized lock and require the user to call `release_lock` first.
-            let _ = data;
-            return err!(VaultError::NoteAlreadyLocked);
-        }
-    }
+    //
+    // S-03: rejects only a LIVE lock. This used to reject any initialized lock
+    // account, expired or not, while nothing shipped could call `release_lock`
+    // — so one failed settle made a note permanently unwithdrawable.
+    require!(
+        !crate::state::note_lock_is_live(
+            &ctx.accounts.note_lock_slot.to_account_info(),
+            Clock::get()?.slot
+        )?,
+        VaultError::NoteAlreadyLocked
+    );
 
     // ----- Merkle root must be recent (in THIS shard's ring) -----
     require!(
@@ -147,7 +136,8 @@ pub fn withdraw_handler(
 
     // ----- Verify ZK proof -----
     // VALID_SPEND public signals (in circuit declaration order):
-    //   [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, noteCommitment]
+    //   [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, recipient[0],
+    //    recipient[1]] plus the noteCommitment OUTPUT
     //
     // Wire order matches circuit.sym (circom places outputs before inputs):
     //   wire 1: noteCommitment (signal output — first in IC sum)
@@ -156,18 +146,35 @@ pub fn withdraw_handler(
     //   wire 4: tokenMint[0]
     //   wire 5: tokenMint[1]
     //   wire 6: amount
+    //   wire 7: recipient[0]  (dest_lo — low 128 bits of the destination ATA)
+    //   wire 8: recipient[1]  (dest_hi — high 128 bits)
     // Binding noteCommitment as wire 1 prevents the "arbitrary note_commitment
     // bypass" attack where a caller supplies an un-nullified commitment while
     // submitting a proof for a different, already-nullified note.
     let mint_bytes = ctx.accounts.token_mint.key().to_bytes();
     let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
-    let public_inputs: [[u8; 32]; 6] = [
+    // S-01: bind the DESTINATION into the proof. Without this the tuple
+    // (note_commitment, nullifier, merkle_root, amount, proof) was a bearer
+    // instrument — the proof authorised destroying the note but said nothing
+    // about where the money went, so whoever held those bytes first decided
+    // the destination. Exploitable by front-running, and (needing no
+    // privileged position at all) by replaying any withdraw that LANDS AND
+    // REVERTS: a reverted tx publishes the proof in the ledger permanently
+    // while creating neither guard PDA, leaving the note spendable.
+    //
+    // A 256-bit pubkey does not fit one BN254 Fr element, so it splits into
+    // lo/hi halves exactly like the mint — hence 8 public inputs, not 7.
+    let dest_bytes = ctx.accounts.destination_token_account.key().to_bytes();
+    let [dest_lo, dest_hi] = pubkey_pair_be32(&dest_bytes);
+    let public_inputs: [[u8; 32]; 8] = [
         note_commitment,
         merkle_root,
         nullifier,
         mint_lo,
         mint_hi,
         u64_be32(amount),
+        dest_lo,
+        dest_hi,
     ];
 
     let vk = make_vk(
@@ -177,7 +184,7 @@ pub fn withdraw_handler(
         &VALID_SPEND_DELTA_G2,
         &VALID_SPEND_IC,
     );
-    verify_groth16_proof::<6>(&vk, &proof, &public_inputs)?;
+    verify_groth16_proof::<8>(&vk, &proof, &public_inputs)?;
 
     // ----- v2 solvency check (must come BEFORE state mutation) -----
     require!(
@@ -185,15 +192,17 @@ pub fn withdraw_handler(
         VaultError::InsufficientOutstanding
     );
 
-    // ----- Mark nullifier as spent -----
-    let slot = Clock::get()?.slot;
-    let n = &mut ctx.accounts.nullifier_entry.load_init()?;
-    n.nullifier = nullifier;
-    n.spent_slot = slot;
-    n.bump = ctx.bumps.nullifier_entry;
-    n._padding = [0u8; 7];
-
     // ----- Mark the note consumed (commitment-keyed) -----
+    //
+    // PF-04: this is now the ONLY guard withdraw allocates. The second,
+    // nullifier-keyed `NullifierEntry` was removed — it had zero readers
+    // anywhere (no instruction, SDK query, indexer table, daemon logic), and
+    // it was worse than redundant: `nullifier = Poseidon3(3, sk, inner)` is
+    // amount- AND mint-independent, so two distinct notes of one owner sharing
+    // an `inner_hash` collide on it and the second legitimate withdraw is
+    // bricked. `note_commitment` is a circuit-bound public OUTPUT of
+    // VALID_SPEND, so the commitment-keyed guard is complete on its own.
+    let slot = Clock::get()?.slot;
     // The shared consume-once guard with TEE settle. `match_id` is the all-zero
     // sentinel — there is no match on the withdraw path.
     let c = &mut ctx.accounts.consumed_note.load_init()?;

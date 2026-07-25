@@ -359,7 +359,6 @@ components:
         - trading_key_signature
         - owner_commitment
         - note_inner_hash
-        - nullifier
         - merkle_root
         - valid_input_proof
         - viewing_pubkey
@@ -442,13 +441,6 @@ components:
           description: |
             32-byte hex — the collateral note's amount-independent
             `inner_hash`, which anchors both its commitment and nullifier.
-        nullifier:
-          type: string
-          description: |
-            32-byte hex — `Poseidon3(DOMAIN_NULL=3, spending_key,
-            inner_hash)`, precomputed client-side (the spending key never
-            enters the TEE). Retained in the request but absent from settlement
-            payload v9; Tx D replay protection is commitment-keyed.
         merkle_root:
           type: string
           description: |
@@ -503,10 +495,11 @@ components:
 
     CancelOrderRequest:
       type: object
-      required: [trading_key, cancel_nonce, trading_key_signature]
+      required: [trading_key, cancel_nonce, session_id, trading_key_signature]
       properties:
         trading_key: { type: string, description: 32-byte Ed25519 pubkey, hex. }
         cancel_nonce: { type: integer, format: uint64 }
+        session_id: { type: string, description: 32-byte hex boot session from /info; bound into the cancel signature so a captured body cannot be replayed in a later boot. }
         trading_key_signature: { type: string, description: 64-byte canonical cancel signature, hex. }
 
     CancelOrderResponse:
@@ -1684,7 +1677,7 @@ x-websocket:
           order_id: { type: string }
           params:
             type: object
-            required: [trading_key, cancel_nonce, trading_key_signature]
+            required: [trading_key, cancel_nonce, session_id, trading_key_signature]
             properties:
               trading_key: { type: string }
               cancel_nonce: { type: integer }

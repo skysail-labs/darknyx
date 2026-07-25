@@ -40,9 +40,14 @@ pub struct LockNote<'info> {
     #[account(mut)]
     pub tee_authority: Signer<'info>,
 
+    // PF-02: read the stored bump instead of re-deriving it. A bare `bump`
+    // makes Anchor run `find_program_address`, which averages ~1.4 hash
+    // attempts; every other handler (withdraw, deposit, merge, settle) already
+    // uses the stored value. This path runs 2N times per batch, so it was the
+    // single cheapest CU win in the audit.
     #[account(
         seeds = [VaultConfig::SEED],
-        bump,
+        bump = vault_config.load()?.bump,
     )]
     pub vault_config: AccountLoader<'info, VaultConfig>,
 

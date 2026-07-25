@@ -26,7 +26,6 @@ import {
   bn254ToBE32,
   deriveViewingEncKeypair,
 } from "../keys/key-generators.js";
-import { nullifierV2 } from "../utxo/note.js";
 import { isContributoryX25519PublicKey } from "../keys/fill-encryption.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
@@ -58,8 +57,6 @@ export interface BuildOrderArgs {
   // ── identity / keys ──
   /** Master seed (derives the default viewing-encryption key). */
   masterSeed: Uint8Array;
-  /** Spending key (derives this order's note nullifier). */
-  spendingKey: bigint;
   /** The note's owner commitment (a BN254 Fr bigint). */
   ownerCommitment: bigint;
   /** 32-byte user commitment (bytes); top byte must be zero (Fr-safe). */
@@ -118,7 +115,6 @@ export interface PlaceOrderRequest {
   trading_key_signature: string;
   owner_commitment: string;
   note_inner_hash: string;
-  nullifier: string;
   merkle_root: string;
   valid_input_proof: string;
   collateral_amount: number;
@@ -198,8 +194,6 @@ export async function buildOrder(
   if (signature.length !== 64)
     throw new Error("sign() must return a 64-byte Ed25519 signature");
 
-  const nullifier = await nullifierV2(args.spendingKey, args.note.innerHash);
-
   return {
     symbol: args.symbol,
     side: sideTag(args.side),
@@ -216,7 +210,6 @@ export async function buildOrder(
     trading_key_signature: toHex(signature),
     owner_commitment: toHex(bn254ToBE32(args.ownerCommitment)),
     note_inner_hash: toHex(bn254ToBE32(args.note.innerHash)),
-    nullifier: toHex(nullifier),
     merkle_root: toHex(args.validInput.merkleRoot),
     valid_input_proof: toHex(args.validInput.proofBytes),
     collateral_amount: u64(collateralAmount, "collateral_amount"),

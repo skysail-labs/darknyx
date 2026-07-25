@@ -74,6 +74,16 @@ export interface CancelCanonical {
   /** 32 bytes — must match the order's trading key. */
   tradingKey: Uint8Array;
   cancelNonce: bigint;
+  /**
+   * 32 bytes — the CVM boot session this cancel is scoped to (S-07).
+   *
+   * Without it a captured cancel signature stayed valid forever, in any boot
+   * session. Since `order_id`s are deterministic HD values clients re-derive
+   * by design, a stored cancel body could kill a legitimately re-placed order
+   * after a restart, and anyone who ever handled that body kept the ability
+   * indefinitely.
+   */
+  sessionId: Uint8Array;
 }
 
 export class CanonicalError extends Error {
@@ -195,6 +205,7 @@ export function orderCanonicalDigest(o: OrderCanonical): Uint8Array {
  *   17..33      order_id      : [u8; 16]
  *   33..65      trading_key   : [u8; 32]
  *   65..73      cancel_nonce  : u64 LE
+ *   73..105     session_id    : [u8; 32]
  * ```
  */
 export function cancelCanonicalBytes(c: CancelCanonical): Uint8Array {
@@ -208,7 +219,18 @@ export function cancelCanonicalBytes(c: CancelCanonical): Uint8Array {
       `tradingKey must be 32 bytes; got ${c.tradingKey.length}`,
     );
   }
-  return concat([CANCEL_DOMAIN, c.orderId, c.tradingKey, u64LE(c.cancelNonce)]);
+  if (c.sessionId.length !== 32) {
+    throw new CanonicalError(
+      `sessionId must be 32 bytes; got ${c.sessionId.length}`,
+    );
+  }
+  return concat([
+    CANCEL_DOMAIN,
+    c.orderId,
+    c.tradingKey,
+    u64LE(c.cancelNonce),
+    c.sessionId,
+  ]);
 }
 
 export function cancelCanonicalDigest(c: CancelCanonical): Uint8Array {

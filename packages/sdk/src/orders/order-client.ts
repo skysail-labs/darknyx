@@ -54,6 +54,8 @@ export interface ModifyOrderResponse {
 export interface CancelOrderRequest {
   trading_key: string;
   cancel_nonce: number;
+  /** 32-byte hex boot session the cancel signature is scoped to (S-07). */
+  session_id: string;
   trading_key_signature: string;
 }
 
@@ -153,21 +155,28 @@ export async function getOrder(
 
 /**
  * Build a signed cancel body for `orderId`. Signs `CancelCanonical{ orderId,
- * tradingKey, cancelNonce }` via the provided {@link OrderSigner}.
+ * tradingKey, cancelNonce, sessionId }` via the provided {@link OrderSigner}.
+ *
+ * `sessionId` (from `GET /info`) scopes the signature to one CVM boot, so a
+ * captured cancel body cannot kill a re-placed order after a restart (S-07).
  */
 export async function buildCancel(args: {
   orderId: Uint8Array;
   tradingKey: Uint8Array;
   cancelNonce: bigint;
+  sessionId: Uint8Array;
   sign: OrderSigner;
 }): Promise<CancelOrderRequest> {
   if (args.orderId.length !== 16) throw new Error("orderId must be 16 bytes");
   if (args.tradingKey.length !== 32)
     throw new Error("tradingKey must be 32 bytes");
+  if (args.sessionId.length !== 32)
+    throw new Error("sessionId must be 32 bytes");
   const digest = cancelCanonicalDigest({
     orderId: args.orderId,
     tradingKey: args.tradingKey,
     cancelNonce: args.cancelNonce,
+    sessionId: args.sessionId,
   });
   const sig = await args.sign(digest);
   if (sig.length !== 64)
@@ -175,6 +184,7 @@ export async function buildCancel(args: {
   return {
     trading_key: toHex(args.tradingKey),
     cancel_nonce: Number(args.cancelNonce),
+    session_id: toHex(args.sessionId),
     trading_key_signature: toHex(sig),
   };
 }

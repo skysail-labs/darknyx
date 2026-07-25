@@ -103,6 +103,7 @@ through a Phala CVM (`cvm-settle-e2e`).
 | TEE clears at a bad price | **TEE-trusted (accepted design decision)** — price fairness (limit compliance + the oracle band) is enforced inside the attested enclave by the `darkpool-matcher`, NOT by the proof. `VALID_MATCH_BATCH` binds `quote = floor(base·price/price_scale)` with a constrained remainder, conservation, ranges, market identity, and exact fees, but not the signed limits or oracle band. This is a *deliberate* trade-off, not an oversight — see **"Accepted design decision — price fairness is TEE-trusted"** below for the full rationale + compensating controls. |
 | TEE clears off-tick / under min size / outside the circuit-breaker band (U-01) | **TEE-trusted** — `MarketConfig.tick_size`, `min_order_size`, and `circuit_breaker_bps` are governance-set rules the in-TEE matcher honours, but they are **not** `VALID_MATCH_BATCH` public inputs or leaf-bound. Only market identity + `price_scale` + conservation + the exact fee are proof-enforced. Same trust class as price fairness above; do not describe tick/min/breaker as on-chain-enforced. |
 | TEE writes garbage on-chain fill-recovery ciphertext (U-04) | **TEE-trusted** — `MatchResultPayload.fill_recovery` is opaque and signed but never validated on-chain; the AEAD protects confidentiality, not correctness. A compromised TEE could sign a conserved settle whose recovery blob is unusable, stranding a client that relies solely on chain recovery. Redundancy: the live `/v1/stream` fills channel + history backfill (chain recovery is last-resort). |
+| TEE re-locks a note against an order the user never placed (S-08) | **TEE-trusted — and the boundary is WIDER than "bounded by the order size".** A `VALID_INPUT` proof binds only `(merkle_root, note_commitment, token_mint)`; `order_id` and `expiry_slot` are unconstrained `lock_note` arguments carried alongside it. So a proof authorises **the note, not the order**, for as long as its root stays in the shard's 64-root window. An authorised-but-compromised TEE key can retain a relayed proof and re-lock that note against an arbitrary `order_id` — including one the user believes they cancelled. U-02 closed the *consumed*-note case (a settled or withdrawn note can no longer be re-locked); this is the *unconsumed* case, which U-02 does not cover. Practical bound is therefore the **note** size, not the order size. Intake verification (S-02) does not change this: the adversary here is the enclave itself. Binding `order_id` in-circuit would fix it but forces the client to prove **per order** rather than per note, and client-side proving is already the placement-latency bottleneck — deliberately declined; see the 2026-07-25 tracker. |
 | TEE-binary substitution | **Open** — `tee_pubkeys` are software Ed25519 keys. Production must pin them to an attested enclave. |
 | Trusted-setup ceremony soundness | **Open** — all six Groth16 circuits use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
 | Aggregate trade analytics from settle txs | **By design** — match volume + clearing price are public per settled batch. |
@@ -575,11 +576,24 @@ and finalized chain history without an indexer.
 - Empty subtree roots `zero_subtree_roots[i] = Poseidon2^i(0)` are
   precomputed and stored in `VaultConfig` so that the "right path" append
   algorithm only needs the rightmost filled node per level.
-- Root history: a **ring buffer of the last 32 roots** in
-  `VaultConfig.roots[32]`. A withdraw proof's `merkle_root` may reference
-  the current root or any of the previous 32. This is the standard
-  Tornado-style window to avoid griefing legitimate withdraws via racing
-  deposits. With ~400 ms slots this gives roughly **2 minutes of freshness**.
+- Root history: a **ring buffer of the last 64 roots**, in the per-shard
+  `MerkleTree.roots[ROOT_HISTORY_SIZE]` (`state.rs`) — NOT in `VaultConfig`,
+  which the tree state was split out of when sharding landed. A proof's
+  `merkle_root` may reference the shard's current root or any of the previous
+  64. This is the standard Tornado-style window to avoid griefing legitimate
+  withdraws via racing deposits.
+
+  **Freshness is measured in appending INSTRUCTIONS, not slots.** One
+  `push_root` covers a whole `append_leaves` batch of up to `MAX_BATCH_APPEND`
+  leaves, so the window spans 64 deposit/settle instructions on that shard —
+  which is a duration set by traffic, not by slot time. Under sustained load it
+  can be tens of seconds; on a quiet shard, much longer. A client deciding
+  whether to re-prove should check membership (`MerkleTree::contains_root`)
+  rather than reason from elapsed time.
+
+  The TEE mirrors this window in `MerkleMirror::contains_root` to reject a
+  stale proof at order intake (S-02), deliberately sized larger than the
+  on-chain ring so the intake check can only ever be permissive.
 
 ### Storage trick (sharded across K trees)
 
@@ -1452,17 +1466,28 @@ Handler walkthrough:
      its rent is the job of `close_batch_validity_marker` at or after expiry
      (Step 9.5).
 
-5. **Conservation law** (existing):
-   - `lock_a.amount == quote_amount + buyer_change_amt + buyer_fee_amt`
-   - `lock_b.amount == base_amount + seller_change_amt + seller_fee_amt`
-   - Both via `u64::checked_add` (so any overflow throws).
+5. **Conservation law** — enforced IN-CIRCUIT ONLY, not on-chain.
 
-6. **Change-note structural binding** (existing):
-   - `has_e = (note_e_commitment != [0;32])` must equal `(buyer_change_amt > 0)`
-   - `has_f = (note_f_commitment != [0;32])` must equal `(seller_change_amt > 0)`
-   - This prevents the TEE from claiming change without committing to a
-     leaf, or vice versa.
-   - Re-lock requires its corresponding change note exists.
+   > ⚠️ **This step used to describe on-chain checks
+   > (`lock_a.amount == quote_amount + buyer_change_amt + buyer_fee_amt`,
+   > both via `u64::checked_add`). Those checks NO LONGER EXIST.** Amounts
+   > left both the settle payload and `NoteLock` in v7 / P3b (amount privacy),
+   > so the handler has no plaintext amounts left to add up.
+   >
+   > `VALID_MATCH_BATCH` is now the **sole** conservation guarantor. That is
+   > the coupling which makes the Phase-2 trusted-setup ceremony a hard
+   > mainnet blocker rather than a best practice: with the on-chain plaintext
+   > backstop gone, a recovered trapdoor mints value with **zero** on-chain
+   > check. See §13.1 and the `N-18` release gate.
+
+6. **Change-note structural binding.**
+
+   > ⚠️ The `has_e == (buyer_change_amt > 0)` equality this step used to
+   > describe is likewise gone with the plaintext amounts. The handler still
+   > derives `has_e` / `has_f` from `note_e_commitment != [0;32]`, but only to
+   > gate the re-lock — see the comment above
+   > `tee_forced_settle_batched.rs`'s relock block. The circuit binds the
+   > change amounts to their commitments.
 
 7. **Consumed-note allocation**: `ConsumedNoteEntry` PDAs at
    `[b"consumed_note", note_a_commitment]` and `[b"consumed_note", note_b_commitment]`.
@@ -2019,8 +2044,10 @@ state transition.
   invariant.
 - `withdraw(mint, amount)`: assert outstanding ≥ amount → outstanding -=
   amount → SPL transfer out → re-assert invariant.
-- `tee_forced_settle`: net-zero change. Conservation per-side guarantees
-  that for each mint involved, Σ inputs = Σ outputs.
+- `tee_forced_settle`: net-zero change. Σ inputs = Σ outputs per mint — but
+  note the MECHANISM is now the circuit alone. The on-chain per-side
+  conservation check this once relied on was removed with the plaintext
+  amounts (see §8 step 5).
 
 **What it catches that nothing else does**: a malicious TEE attempting to
 create output notes with a fake mint (one that the protocol doesn't hold

@@ -463,3 +463,93 @@ fn merge_rejects_all_dummy_transport_before_tree_append() {
     assert!(h.svm.send_transaction(tx).is_err());
     assert_eq!(tree_leaf_count(&h, 0), 0);
 }
+
+/// S-11(A) (audit 2026-07-25): active merge inputs must be pairwise distinct.
+///
+/// The circuit's per-slot loop does not constrain distinctness, so two active
+/// slots carrying identical `(amount, innerHash)` would make `outputAmount`
+/// double-count one note. Today that is unreachable — the second
+/// `create_consumed_note_pda` sees the account already created, and the System
+/// Program independently rejects a duplicate `create_account` — but the entire
+/// guarantee rested on one runtime behaviour with no in-circuit backstop and no
+/// negative test. This pins an explicit in-program check.
+///
+/// The duplicate scan runs BEFORE proof verification, so a valid proof over a
+/// duplicated list is enough to exercise it.
+#[test]
+fn merge_rejects_duplicate_active_inputs() {
+    let (proof, _public_inputs, output, root, _mlo, _mhi, commitments) = prove_merge(2, 2);
+
+    let mut h = Harness::setup();
+    assert_eq!(install_merge_input_tree(&mut h, &commitments), root);
+
+    let duplicated = [commitments[0], commitments[0]];
+    let ix = build_merge_ix(&h, &proof, &duplicated, output, root);
+    let tx = Transaction::new(
+        &[&h.trader],
+        Message::new(&[ix], Some(&h.trader.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    assert!(
+        h.svm.send_transaction(tx).is_err(),
+        "merge must reject a duplicated active input"
+    );
+    // Rejected before any state mutation.
+    assert_eq!(tree_leaf_count(&h, 0), 2);
+    assert!(!consumed_note_exists(&h, &commitments[0]));
+}
+
+/// S-03(C) (audit 2026-07-25): an EXPIRED NoteLock must not block a merge.
+///
+/// `merge` used to reject on the mere existence of the lock account. Combined
+/// with `release_lock` having no caller in any shipped component (S-03), a note
+/// left locked by a failed settle was unmergeable forever — `MAX_LOCK_TTL_SLOTS`
+/// was documented as a bounded censorship window but was in practice unbounded.
+///
+/// The comparison mirrors `release_lock`'s `slot >= expiry_slot`: the lock is
+/// dead AT its expiry, the CS-09 boundary settlement must land strictly before.
+#[test]
+fn merge_allows_an_input_whose_lock_has_expired() {
+    let (proof, _public_inputs, output, root, _mlo, _mhi, commitments) = prove_merge(2, 2);
+
+    let mut h = Harness::setup();
+    assert_eq!(install_merge_input_tree(&mut h, &commitments), root);
+
+    let expiry = 5_000u64;
+    seed_note_lock(&mut h, &commitments[0], &[0x44u8; 16], expiry, 0);
+
+    // Still live one slot before expiry: the guard must hold.
+    h.svm.warp_to_slot(expiry - 1);
+    let live_ix = build_merge_ix(&h, &proof, &commitments, output, root);
+    let live_tx = Transaction::new(
+        &[&h.trader],
+        Message::new(&[live_ix], Some(&h.trader.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    assert!(
+        h.svm.send_transaction(live_tx).is_err(),
+        "a lock that has not yet expired must still block the merge (N-04)"
+    );
+    assert!(!consumed_note_exists(&h, &commitments[0]));
+
+    // At expiry the lock is dead and the merge proceeds — without anyone having
+    // had to call release_lock first.
+    //
+    // `expire_blockhash` makes the second transaction distinct at the SIGNATURE
+    // level; otherwise it is byte-identical to the one above and litesvm
+    // short-circuits with `AlreadyProcessed` without running the program.
+    h.svm.warp_to_slot(expiry);
+    h.svm.expire_blockhash();
+    let expired_ix = build_merge_ix(&h, &proof, &commitments, output, root);
+    let expired_tx = Transaction::new(
+        &[&h.trader],
+        Message::new(&[expired_ix], Some(&h.trader.pubkey())),
+        h.svm.latest_blockhash(),
+    );
+    h.svm
+        .send_transaction(expired_tx)
+        .expect("an expired lock must not block the merge");
+    assert_eq!(tree_leaf_count(&h, 0), 3);
+    assert!(consumed_note_exists(&h, &commitments[0]));
+    assert!(consumed_note_exists(&h, &commitments[1]));
+}

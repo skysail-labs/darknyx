@@ -36,7 +36,7 @@ const FIXTURE_DIGEST_HEX =
   "7a47d4c4dd854c36f394bfa3b6694f5c9b57b0e33da01cbda7c766cb6c757906";
 
 const CANCEL_FIXTURE_DIGEST_HEX =
-  "0ede450bdd837821997c7d1353aa6cbccf2ddebd564c7c874014f561b0feefa7";
+  "3063a2f1f4a0f71aed1587ca7bd55dd82b78d0b9148e7ac08bbec25b20298f2c";
 
 // ─── Fixtures — same numeric inputs as the Rust `fixture()` fn ──────────────
 
@@ -63,6 +63,7 @@ function cancelFixture(): CancelCanonical {
     orderId: new Uint8Array(16).fill(0x11),
     tradingKey: new Uint8Array(32).fill(0x55),
     cancelNonce: 7n,
+    sessionId: new Uint8Array(32).fill(0x66),
   };
 }
 
@@ -113,10 +114,7 @@ describe("order canonical encoder — Rust parity", () => {
       (o) => (o.viewingPubkey = new Uint8Array(32).fill(0x45)),
       "viewingPubkey",
     );
-    perturb(
-      (o) => (o.sessionId = new Uint8Array(32).fill(0x67)),
-      "sessionId",
-    );
+    perturb((o) => (o.sessionId = new Uint8Array(32).fill(0x67)), "sessionId");
   });
 
   test("symbol over SYMBOL_MAX_LEN is rejected", () => {
@@ -152,9 +150,7 @@ describe("order canonical encoder — Rust parity", () => {
       /viewingPubkey must be 32 bytes/,
     );
     const o5 = { ...fixture(), sessionId: new Uint8Array(33) };
-    expect(() => orderCanonicalBytes(o5)).toThrow(
-      /sessionId must be 32 bytes/,
-    );
+    expect(() => orderCanonicalBytes(o5)).toThrow(/sessionId must be 32 bytes/);
   });
 
   test("domain tag is the first 12 bytes", () => {
@@ -180,6 +176,7 @@ describe("cancel canonical encoder — Rust parity", () => {
       orderId: order.orderId,
       tradingKey: new Uint8Array(32),
       cancelNonce: 0n,
+      sessionId: new Uint8Array(32),
     };
     expect(toHex(orderCanonicalDigest(order))).not.toBe(
       toHex(cancelCanonicalDigest(cancel)),

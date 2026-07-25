@@ -4,6 +4,7 @@ use crate::state::*;
 use crate::zk::{verifier::make_vk, verify_groth16_proof, vk_valid_deposit::*, Groth16Proof};
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
+use std::mem::size_of;
 
 #[derive(Accounts)]
 #[instruction(tree_id: u8, amount: u64, note_commitment: [u8; 32], recovery_nonce: [u8; 32], proof: Groth16Proof)]
@@ -58,6 +59,23 @@ pub struct Deposit<'info> {
         bump,
     )]
     pub outstanding_mint: Account<'info, OutstandingMint>,
+
+    /// S-05 deposit-once guard, commitment-keyed. `init` makes a duplicate
+    /// commitment structurally impossible and fails LOUDLY at the point of the
+    /// mistake, rather than silently accepting tokens for a note that can never
+    /// be withdrawn.
+    ///
+    /// Rent- and CPI-neutral in aggregate: `withdraw` stopped allocating its
+    /// redundant `NullifierEntry` (PF-04) in the same change, and the two
+    /// accounts are the same size.
+    #[account(
+        init,
+        payer = depositor,
+        space = 8 + size_of::<DepositedNoteEntry>(),
+        seeds = [DepositedNoteEntry::SEED, note_commitment.as_ref()],
+        bump,
+    )]
+    pub deposited_note: AccountLoader<'info, DepositedNoteEntry>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,

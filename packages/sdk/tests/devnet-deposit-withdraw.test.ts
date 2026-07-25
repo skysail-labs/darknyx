@@ -208,6 +208,9 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
     const w = await tree.witness(leafIndex);
     const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
     const nulli = await nullifierV2(spendingKey, innerHash);
+    // S-01: the destination is a public input, so the proof only authorises
+    // this exact token account.
+    const [destLo, destHi] = pubkeyToFrPair(ata.toBytes());
     const { proof } = snarkjsFullProve(
       {
         merkleRoot: be32ToDec(w.root),
@@ -219,6 +222,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
         innerHash: innerHash.toString(),
         merklePath: w.siblings.map((s) => be32ToDec(s)),
         merkleIndices: w.indices.map((i) => i.toString()),
+        recipient: [destLo.toString(), destHi.toString()],
       },
       {
         circuitWasmPath: SPEND_WASM,

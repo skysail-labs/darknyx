@@ -13,6 +13,8 @@ export const MERKLE_TREE_SEED = enc("merkle_tree");
 export const WALLET_SEED = enc("wallet");
 export const NULLIFIER_SEED = enc("nullifier");
 export const CONSUMED_NOTE_SEED = enc("consumed_note");
+/** S-05 deposit-once guard: `[b"deposited_note", note_commitment]`. */
+export const DEPOSITED_NOTE_SEED = enc("deposited_note");
 export const NOTE_LOCK_SEED = enc("note_lock");
 export const VAULT_TOKEN_SEED = enc("vault_token");
 export const OUTSTANDING_MINT_SEED = enc("outstanding_mint");

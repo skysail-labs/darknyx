@@ -10,14 +10,19 @@
 language: en-US
 
 # Crypto + on-chain money: correctness, byte-equality, and safety beat style.
+# NOTE: CodeRabbit caps this field at 250 characters and REJECTS THE WHOLE FILE
+# if it is longer — silently falling back to default settings, which is how it
+# sat broken. Keep it short and check the length before editing.
+#
+# The per-area invariants this used to enumerate (cross-language byte-equality,
+# BN254 Fr safety, conservation/replay, the 1232-byte budget, circuit/VK
+# lockstep, secret handling) live in `reviews.path_instructions` below, which is
+# where they belong: scoped to the files they apply to, with no length cap.
 tone_instructions: >-
-  This is a pre-mainnet privacy darkpool handling on-chain funds and ZK
-  proofs. Prioritize correctness and safety: cross-language byte-equality of
-  cryptographic primitives, BN254 field-element safety, on-chain conservation
-  and replay protection, the 1232-byte transaction-size budget, circuit/VK
-  lockstep, and never leaking secrets. Flag genuine bugs and security issues
-  precisely; verify a claim against the actual code (and CLAUDE.md /
-  CRYPTOGRAPHY.md invariants) before raising it, and keep pure-style nits brief.
+  Pre-mainnet privacy darkpool holding real funds. Prioritize correctness over
+  style. Verify every claim against the actual code and the CLAUDE.md /
+  CRYPTOGRAPHY.md invariants before raising it, and state the concrete failure.
+  Keep style nits brief.
 
 reviews:
   # Assertive: this codebase has subtle invariants where a missed bug is

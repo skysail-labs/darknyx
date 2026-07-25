@@ -197,6 +197,40 @@ pub struct NullifierEntry {
     pub _padding: [u8; 7],
 }
 
+/// PDA marking a note commitment that has already been DEPOSITED (S-05).
+///
+/// Existence => that exact commitment is already a leaf, so a second deposit of
+/// it must be rejected.
+///
+/// Without this, two deposits sharing a commitment both moved tokens in and
+/// both incremented `outstanding`, but only ONE could ever be withdrawn — the
+/// second collides on the consume-once guard. The vault ends up permanently
+/// over-collateralised (so no solvency alarm fires) and the user's second
+/// deposit is silently unrecoverable.
+///
+/// That is reachable by accident, not just by malice, and it is the DEFAULT
+/// failure mode rather than an exotic one: `recovery_nonce =
+/// deriveBlindingFactor(seed, depositIndex)` is fully deterministic, and
+/// `depositIndex` is a caller-supplied parameter the SDK persists NOWHERE — so
+/// a seed-only restore restarts at 0 and re-derives a byte-identical
+/// commitment for the same (mint, amount).
+///
+/// Binding the tree position into the commitment instead would make duplicates
+/// impossible for free, but the leaf index is only known at execution time, so
+/// any concurrent deposit would invalidate the proof. This account is the
+/// version that does not trade liveness for it.
+#[account(zero_copy)]
+pub struct DepositedNoteEntry {
+    pub note_commitment: [u8; 32],
+    pub deposited_slot: u64,
+    pub bump: u8,
+    pub _padding: [u8; 7],
+}
+
+impl DepositedNoteEntry {
+    pub const SEED: &'static [u8] = b"deposited_note";
+}
+
 impl NullifierEntry {
     pub const SEED: &'static [u8] = b"nullifier";
 }
@@ -242,6 +276,62 @@ pub struct NoteLock {
 
 impl NoteLock {
     pub const SEED: &'static [u8] = b"note_lock";
+
+    /// Byte offset of `expiry_slot` in the account DATA (discriminator
+    /// included): disc(8) + note_commitment(32) + token_mint(32) + order_id(16).
+    ///
+    /// `note_lock_is_live` slices the raw account bytes at this offset, so a
+    /// field reordering that moved `expiry_slot` would not fail to compile —
+    /// it would silently start reading eight bytes of `token_mint` as a slot
+    /// number and mis-classify every lock's liveness. The assertion below ties
+    /// the constant to the real `#[repr(C)]` layout so that becomes a build
+    /// error instead.
+    pub const EXPIRY_SLOT_OFFSET: usize = 8 + 32 + 32 + 16;
+}
+
+/// Compile-time drift guard for [`NoteLock::EXPIRY_SLOT_OFFSET`].
+///
+/// `#[account(zero_copy)]` implies `#[repr(C)]`, so `offset_of!` reports the
+/// true in-memory (and therefore on-wire) position of the field. Adding the
+/// 8-byte Anchor discriminator gives the offset within the account data.
+const _: () = assert!(
+    NoteLock::EXPIRY_SLOT_OFFSET == 8 + core::mem::offset_of!(NoteLock, expiry_slot),
+    "NoteLock::EXPIRY_SLOT_OFFSET no longer matches the struct layout — \
+     note_lock_is_live would read the wrong bytes"
+);
+
+/// Whether a `NoteLock` PDA is still EFFECTIVE — i.e. whether it should block
+/// a spend of the note it pins (S-03).
+///
+/// `withdraw` and `merge` used to reject on the mere EXISTENCE of this account,
+/// expired or not. `withdraw` even borrowed the data and threw it away
+/// (`let _ = data;`) with a comment saying it was "safer to reject any
+/// initialized lock and require the user to call `release_lock` first" — but
+/// nothing in any shipped component could call `release_lock`, so a note left
+/// locked by a failed settle was unspendable, unmergeable and unreleasable
+/// through every available interface. `MAX_LOCK_TTL_SLOTS` was documented as a
+/// bounded censorship window; in practice it was unbounded.
+///
+/// Reading the expiry the account already carries makes the window real again.
+/// The comparison mirrors `release_lock`'s `clock.slot >= expiry_slot`: a lock
+/// is dead AT its expiry, which is the CS-09 boundary settlement is required to
+/// land strictly before.
+///
+/// Fails CLOSED — an account that is program-owned but too short to parse is
+/// treated as live rather than assumed absent.
+pub fn note_lock_is_live(info: &AccountInfo<'_>, now_slot: u64) -> Result<bool> {
+    if info.owner != &crate::ID {
+        return Ok(false); // no lock at all
+    }
+    let data = info.try_borrow_data()?;
+    let end = NoteLock::EXPIRY_SLOT_OFFSET + 8;
+    if data.len() < end {
+        // Program-owned but unparseable: refuse to treat it as absent.
+        return Ok(true);
+    }
+    let mut buf = [0u8; 8];
+    buf.copy_from_slice(&data[NoteLock::EXPIRY_SLOT_OFFSET..end]);
+    Ok(now_slot < u64::from_le_bytes(buf))
 }
 
 /// v2 — per-mint live-note accounting (the "outstanding" counter).

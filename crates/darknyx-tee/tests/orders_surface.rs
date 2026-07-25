@@ -100,7 +100,6 @@ struct PlaceOrderBuilder {
     // override the emitted JSON directly.
     owner_commitment: [u8; 32],
     note_inner_hash: [u8; 32],
-    nullifier: [u8; 32],
     viewing_pubkey: [u8; 32],
     session_id: [u8; 32],
     /// Over-collateralization: when set, the collateral note carries this
@@ -143,7 +142,6 @@ impl PlaceOrderBuilder {
             arrival_nonce: 1,
             owner_commitment: fr_safe(0x44),
             note_inner_hash: fr_safe(0x55),
-            nullifier: [0x77; 32],
             viewing_pubkey: darkpool_crypto::ephemeral_public(&[0x21; 32]),
             session_id: [0x5A; 32],
             collateral_amount: None,
@@ -187,7 +185,6 @@ impl PlaceOrderBuilder {
             amount: self.effective_collateral(),
             owner_commitment: self.owner_commitment,
             inner_hash: self.note_inner_hash,
-            nullifier: self.nullifier,
         }
     }
 
@@ -240,7 +237,6 @@ impl PlaceOrderBuilder {
             "trading_key_signature": hex::encode(sig.to_bytes()),
             "owner_commitment": hex::encode(self.owner_commitment),
             "note_inner_hash": hex::encode(self.note_inner_hash),
-            "nullifier": hex::encode(self.nullifier),
             // VALID_INPUT proof relay (4g.7c). Intake stores these
             // opaquely (on-chain lock_note verifies the proof), so
             // dummy bytes are fine for the orders-surface tests.
@@ -307,17 +303,22 @@ async fn read_json(resp: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&body).unwrap()
 }
 
+/// Matches `ApiState::for_tests()`'s boot session and the PlaceOrderBuilder.
+const TEST_SESSION_ID: [u8; 32] = [0x5A; 32];
+
 fn cancel_body(key: &SigningKey, order_id: [u8; 16], cancel_nonce: u64) -> serde_json::Value {
     let trading_key = key.verifying_key().to_bytes();
     let cancel = CancelCanonical {
         order_id,
         trading_key,
         cancel_nonce,
+        session_id: TEST_SESSION_ID,
     };
     let sig = key.sign(&cancel.digest());
     json!({
         "trading_key": hex::encode(trading_key),
         "cancel_nonce": cancel_nonce,
+        "session_id": hex::encode(TEST_SESSION_ID),
         "trading_key_signature": hex::encode(sig.to_bytes()),
     })
 }
@@ -420,7 +421,6 @@ async fn place_populates_opening_store_keyed_by_commitment_and_cancel_clears_it(
             .expect("opening stored under the collateral note commitment");
         assert_eq!(rec.order_id, b.order_id);
         assert_eq!(rec.expiry_slot, b.expiry_slot);
-        assert_eq!(rec.opening.nullifier, b.nullifier);
     }
 
     let c = cancel(
@@ -1082,6 +1082,7 @@ fn modify_body(
         order_id: old_id,
         trading_key,
         cancel_nonce,
+        session_id: TEST_SESSION_ID,
     };
     let sig = key.sign(&cancel.digest());
     json!({
@@ -1341,4 +1342,203 @@ async fn success_responses_also_carry_a_request_id_header() {
         j.get("code").is_none(),
         "success body must not be enveloped"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S-02 (audit 2026-07-25) — intake verifies the relayed VALID_INPUT proof.
+//
+// Before this, `merkle_root` and `valid_input_proof` were decoded, stored, and
+// handed to `lock_note` at settle time without ever being checked. Any
+// credentialed client could book an order backed by a wholly fabricated note:
+// the matcher would cross it against a real resting order, the honest side's
+// lock would land, the fake side's would be rejected on-chain, and the batch
+// would die — pinning an innocent counterparty's note under a NoteLock for up
+// to MAX_LOCK_TTL_SLOTS at zero cost to the attacker.
+//
+// The checks are gated on `settle_enabled` because that is the same switch
+// deciding whether these proofs ever reach the chain; the third test pins that
+// the placeholder/loadgen path (stub proofs by design) is unaffected.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A state that can actually settle — the configuration where an unverified
+/// proof does real damage.
+fn settling_state() -> Arc<ApiState> {
+    Arc::new(ApiState::for_tests().with_settle_enabled(true))
+}
+
+#[tokio::test]
+async fn place_rejects_stale_merkle_root_when_settlement_is_live() {
+    // The builder's synthetic root was never in this mirror, so the cheap
+    // recency check must reject before any pairing work happens.
+    let app = app_from(settling_state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let body = PlaceOrderBuilder::new().sign(&key);
+
+    let resp = place(&app, &bearer, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let j = read_json(resp).await;
+    assert_eq!(
+        j["code"], 1010,
+        "an unknown merkle_root must surface as stale_merkle_root, got: {j}"
+    );
+}
+
+#[tokio::test]
+async fn place_rejects_stub_valid_input_proof_when_settlement_is_live() {
+    // Give the mirror a real root so the recency gate passes and the PROOF
+    // check is the thing under test. The all-zero stub proof the test harness
+    // (and the loadgen) sends must not verify.
+    let state = settling_state();
+    let known_root = {
+        let mirror = state.merkle_mirror(0);
+        let mut m = mirror.write().await;
+        let mut leaf = [0u8; 32];
+        leaf[31] = 0x11;
+        leaf[1] = 0x5A; // Fr-safe
+        m.append_leaf(leaf).expect("seed the mirror");
+        m.root()
+    };
+
+    let app = app_from(state);
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let mut body = PlaceOrderBuilder::new().sign(&key);
+    // `merkle_root` is not part of the signed canonical body, so overriding it
+    // after signing leaves the trading-key signature valid.
+    body["merkle_root"] = json!(hex::encode(known_root));
+
+    let resp = place(&app, &bearer, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let j = read_json(resp).await;
+    assert_eq!(
+        j["code"], 1011,
+        "a stub proof over a known root must surface as invalid_input_proof, got: {j}"
+    );
+}
+
+#[tokio::test]
+async fn place_accepts_stub_proof_when_settlement_is_disabled() {
+    // Placeholder/loadgen mode (U-09): no live settle driver, so the relayed
+    // proof can never produce a lock_note and verifying it would only reject
+    // traffic that is harmless by construction. This pins that the S-02 gate
+    // did not break the loadgen regime.
+    let app = app_from(state()); // for_tests() => settle_enabled == false
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let body = PlaceOrderBuilder::new().sign(&key);
+
+    let resp = place(&app, &bearer, body).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::ACCEPTED,
+        "stub proofs must still be accepted when settlement is disabled"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S-07 (audit 2026-07-25) — cancel signatures are scoped and non-replayable.
+//
+// `OrderCanonical` was hardened with a boot session + monotonic nonce by
+// CS-11; `CancelCanonical` was not. A captured cancel signature was therefore
+// valid FOREVER, in ANY boot session, for its (order_id, trading_key,
+// cancel_nonce) triple. Because order_ids are deterministic HD values clients
+// are expected to re-derive, a stored cancel body could kill a legitimately
+// re-placed order after a CVM restart — and anyone who ever handled that body
+// (a logging proxy, a compromised client host, an operator's request logs, a
+// backup) kept that ability indefinitely.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn cancel_from_a_different_boot_session_is_rejected() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+    let b = PlaceOrderBuilder::new();
+    let body = b.sign(&key);
+    assert_eq!(
+        place(&app, &bearer, body).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    // A cancel signed against a DIFFERENT boot session — the captured-body
+    // scenario, replayed after a restart.
+    let trading_key = key.verifying_key().to_bytes();
+    let foreign_session = [0xA7u8; 32];
+    let foreign_cancel = CancelCanonical {
+        order_id: b.order_id,
+        trading_key,
+        cancel_nonce: 1,
+        session_id: foreign_session,
+    };
+    let sig = key.sign(&foreign_cancel.digest());
+    let body = json!({
+        "trading_key": hex::encode(trading_key),
+        "cancel_nonce": 1,
+        "session_id": hex::encode(foreign_session),
+        "trading_key_signature": hex::encode(sig.to_bytes()),
+    });
+
+    let resp = cancel(&app, &bearer, &hex::encode(b.order_id), body).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "a cancel bound to another boot session must not be honoured"
+    );
+    let j = read_json(resp).await;
+    assert_eq!(j["code"], 1205, "expected stale_session, got: {j}");
+}
+
+#[tokio::test]
+async fn cancel_nonce_must_strictly_increase_per_trading_key() {
+    let app = app_from(state());
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    // First order + cancel at nonce 5.
+    let b1 = PlaceOrderBuilder::new();
+    assert_eq!(
+        place(&app, &bearer, b1.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+    let c1 = cancel(
+        &app,
+        &bearer,
+        &hex::encode(b1.order_id),
+        cancel_body(&key, b1.order_id, 5),
+    )
+    .await;
+    assert_eq!(c1.status(), StatusCode::OK);
+
+    // A second order, then a REPLAY of the same nonce. Session binding alone
+    // would not stop this — it is the monotonic nonce that does.
+    let mut b2 = PlaceOrderBuilder::new();
+    b2.order_id = [0xC2; 16];
+    b2.arrival_nonce = b1.arrival_nonce + 1;
+    assert_eq!(
+        place(&app, &bearer, b2.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+    let replay = cancel(
+        &app,
+        &bearer,
+        &hex::encode(b2.order_id),
+        cancel_body(&key, b2.order_id, 5),
+    )
+    .await;
+    assert_eq!(
+        replay.status(),
+        StatusCode::CONFLICT,
+        "a reused cancel_nonce must be rejected"
+    );
+
+    // A strictly greater nonce still works.
+    let ok = cancel(
+        &app,
+        &bearer,
+        &hex::encode(b2.order_id),
+        cancel_body(&key, b2.order_id, 6),
+    )
+    .await;
+    assert_eq!(ok.status(), StatusCode::OK);
 }
