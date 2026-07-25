@@ -152,7 +152,7 @@ fn deposit_tx(args: DepositTxArgs<'_>) -> Transaction {
     let mut data = common::anchor_disc("deposit").to_vec();
     data.push(0);
     data.extend_from_slice(&args.amount.to_le_bytes());
-    data.extend_from_slice(&args.wire_commitment.unwrap_or(args.opening.commitment));
+    data.extend_from_slice(&wire_commitment);
     data.extend_from_slice(
         &args
             .wire_recovery_nonce

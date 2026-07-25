@@ -277,10 +277,28 @@ pub struct NoteLock {
 impl NoteLock {
     pub const SEED: &'static [u8] = b"note_lock";
 
-    /// Byte offset of `expiry_slot` in the account data:
-    /// disc(8) + note_commitment(32) + token_mint(32) + order_id(16).
+    /// Byte offset of `expiry_slot` in the account DATA (discriminator
+    /// included): disc(8) + note_commitment(32) + token_mint(32) + order_id(16).
+    ///
+    /// `note_lock_is_live` slices the raw account bytes at this offset, so a
+    /// field reordering that moved `expiry_slot` would not fail to compile —
+    /// it would silently start reading eight bytes of `token_mint` as a slot
+    /// number and mis-classify every lock's liveness. The assertion below ties
+    /// the constant to the real `#[repr(C)]` layout so that becomes a build
+    /// error instead.
     pub const EXPIRY_SLOT_OFFSET: usize = 8 + 32 + 32 + 16;
 }
+
+/// Compile-time drift guard for [`NoteLock::EXPIRY_SLOT_OFFSET`].
+///
+/// `#[account(zero_copy)]` implies `#[repr(C)]`, so `offset_of!` reports the
+/// true in-memory (and therefore on-wire) position of the field. Adding the
+/// 8-byte Anchor discriminator gives the offset within the account data.
+const _: () = assert!(
+    NoteLock::EXPIRY_SLOT_OFFSET == 8 + core::mem::offset_of!(NoteLock, expiry_slot),
+    "NoteLock::EXPIRY_SLOT_OFFSET no longer matches the struct layout — \
+     note_lock_is_live would read the wrong bytes"
+);
 
 /// Whether a `NoteLock` PDA is still EFFECTIVE — i.e. whether it should block
 /// a spend of the note it pins (S-03).

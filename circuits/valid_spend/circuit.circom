@@ -15,8 +15,11 @@ include "../templates/merkle.circom";
 //      instruction can bind the caller-supplied note_commitment to this proof,
 //      closing the "arbitrary note_commitment bypass" vulnerability.
 //
-// Public inputs/outputs (in order passed to verifier):
-//   merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, noteCommitment
+// Public inputs/outputs: EIGHT signals, with `noteCommitment` FIRST (it is an
+// output, and circom emits outputs ahead of inputs). The canonical, numbered
+// ordering lives beside the `component main` declaration at the bottom of this
+// file — see it there rather than trusting a second copy here, because a
+// duplicate list is exactly what went stale when S-01 added `recipient`.
 //
 // Private witnesses:
 //   spendingKey, ownerCommitmentBlinding, innerHash,

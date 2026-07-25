@@ -146,6 +146,8 @@ pub fn withdraw_handler(
     //   wire 4: tokenMint[0]
     //   wire 5: tokenMint[1]
     //   wire 6: amount
+    //   wire 7: recipient[0]  (dest_lo — low 128 bits of the destination ATA)
+    //   wire 8: recipient[1]  (dest_hi — high 128 bits)
     // Binding noteCommitment as wire 1 prevents the "arbitrary note_commitment
     // bypass" attack where a caller supplies an un-nullified commitment while
     // submitting a proof for a different, already-nullified note.

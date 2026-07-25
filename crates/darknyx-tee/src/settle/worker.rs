@@ -474,14 +474,17 @@ async fn run_batch_settle_inner(
         //
         // Rent reclamation only: S-03(C) made `withdraw`/`merge` honour the
         // expiry, so a stranded lock blocks nothing regardless of this.
-        for m in inputs.matches.iter() {
+        // A closed channel is a per-BATCH condition, not a per-commitment one,
+        // so the label breaks all the way out — otherwise a shut-down sweeper
+        // logs the same warning once per match (up to N=16) every batch.
+        'register: for m in inputs.matches.iter() {
             for commitment in [m.payload.note_a_commitment, m.payload.note_b_commitment] {
                 if ctx.lock_sweep_tx.send(commitment).is_err() {
                     tracing::warn!(
                         batch_id,
                         "lock sweeper channel closed; lock rent reclaim deferred to next boot"
                     );
-                    break;
+                    break 'register;
                 }
             }
         }

@@ -79,6 +79,16 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
 
     // S-04: the marker TTL is derived on-chain, so there is no expiry argument
     // for a caller (or a replayer) to choose.
+    //
+    // Warp off slot 0 FIRST. litesvm boots at slot 0, where
+    // `clock.slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS` and a bare
+    // `MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS` are the same number — so a test
+    // pinned at slot 0 passes even against a handler that ignores the clock
+    // entirely and writes a constant. That is precisely the pre-S-04 shape of
+    // this field, which makes a slot-0 assertion blind to the regression it is
+    // supposed to catch.
+    const EXEC_SLOT: u64 = 4_242;
+    h.svm.warp_to_slot(EXEC_SLOT);
     let ix =
         build_verify_match_batch_ix(&h, &h.tee.pubkey(), &base_mint, &quote_mint, &root, &proof);
     let tx = Transaction::new(
@@ -116,16 +126,27 @@ fn real_n16_proof_accepted_onchain_creates_marker() {
     );
 
     // S-04: the TTL written into the marker is DERIVED from the execution slot,
-    // not taken from a caller argument. litesvm boots at slot 0, so the derived
-    // value is exactly MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS.
+    // not taken from a caller argument.
     //
     // BatchValidityMarker: disc(8) | payer(32) | expiry_slot(u64) | bump(1)
     let (marker_pda, _) = batch_validity_marker_pda(&h, &root);
     let data = h.svm.get_account(&marker_pda).expect("marker exists").data;
     let expiry = u64::from_le_bytes(data[40..48].try_into().unwrap());
+    let expected = EXEC_SLOT + vault::state::MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS;
     assert_eq!(
-        expiry, 300,
-        "marker expiry must be exec_slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS,          derived on-chain rather than caller-supplied"
+        expiry,
+        expected,
+        "marker expiry must be exec_slot ({EXEC_SLOT}) + \
+         MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS ({}), derived on-chain rather than \
+         caller-supplied",
+        vault::state::MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS
+    );
+    // And prove the slot actually participates — a constant-writing handler
+    // would land on the TTL alone.
+    assert_ne!(
+        expiry,
+        vault::state::MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS,
+        "expiry equals the bare TTL — the handler is ignoring clock.slot"
     );
 }
 

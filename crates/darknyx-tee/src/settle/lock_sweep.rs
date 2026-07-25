@@ -27,9 +27,10 @@
 //! Both sweepers keep their own snapshot file so a corrupt or version-skewed
 //! snapshot of one cannot take the other down.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use solana_keypair::Keypair;
 use solana_signer::Signer;
@@ -55,6 +56,27 @@ pub const LOCK_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 /// fee payer) is ~900 B — comfortably under the 1232-byte cap, pinned by
 /// `max_per_tx_fits_the_transaction_budget`.
 pub const LOCK_SWEEP_MAX_PER_TX: usize = 10;
+
+/// How long a freshly registered commitment is immune to the "lock account is
+/// absent, so it must already be released" rule.
+///
+/// The worker registers commitments OPTIMISTICALLY, before the `lock_note`
+/// transaction is even sent (see `worker.rs`'s `lock_branch`). So for the first
+/// second or two of a commitment's life the lock PDA genuinely does not exist
+/// yet, and an unguarded sweep would read `Ok(None)`, conclude the lock was
+/// already released, and drop the entry permanently. The lock then lands with
+/// nothing tracking it — and if that batch's settle later fails, its rent is
+/// never reclaimed, which is the one thing this sweeper exists to prevent.
+///
+/// The window is real: locks confirm in ~1.3 s against a 30 s sweep interval,
+/// so absent a grace period roughly one batch in twenty is exposed.
+///
+/// Sized well above the observed confirmation time (and above Tx D's ~10 s
+/// worst case with rebroadcasts) because the cost of being generous is one
+/// extra `getAccountInfo` per young entry per tick, while the cost of being
+/// stingy is silently leaked rent. Entries restored from disk are NOT given
+/// the grace — a lock recorded in a previous boot resolved long ago.
+const LOCK_REGISTRATION_GRACE: Duration = Duration::from_secs(90);
 
 /// Anchor account layout:
 /// discriminator(8) || note_commitment(32) || token_mint(32) || order_id(16)
@@ -153,17 +175,27 @@ async fn run(
     let mut ticker = tokio::time::interval(LOCK_SWEEP_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    // In-memory only, and deliberately so: it exists to distinguish "this lock
+    // has not been created YET" from "this lock is already gone", which is a
+    // question that only has meaning within the boot that registered it. On
+    // restart the map is empty and every disk-restored entry is treated as
+    // mature, which is the correct reading.
+    let mut registered_at: HashMap<[u8; 32], Instant> = HashMap::new();
+
     loop {
         tokio::select! {
             recv = rx.recv() => match recv {
-                Some(commitment) => pending.add(commitment),
+                Some(commitment) => {
+                    pending.add(commitment);
+                    registered_at.entry(commitment).or_insert_with(Instant::now);
+                }
                 None => {
-                    sweep(&rpc, &keypair, &mut pending, confirm_timeout).await;
+                    sweep(&rpc, &keypair, &mut pending, &mut registered_at, confirm_timeout).await;
                     return;
                 }
             },
             _ = ticker.tick() => {
-                sweep(&rpc, &keypair, &mut pending, confirm_timeout).await;
+                sweep(&rpc, &keypair, &mut pending, &mut registered_at, confirm_timeout).await;
             }
         }
     }
@@ -175,6 +207,7 @@ async fn sweep(
     rpc: &SolanaRpcClient,
     keypair: &Arc<Keypair>,
     pending: &mut PendingSet,
+    registered_at: &mut HashMap<[u8; 32], Instant>,
     confirm_timeout: Duration,
 ) {
     let commitments = pending.all();
@@ -196,9 +229,29 @@ async fn sweep(
     for commitment in commitments {
         let (lock_pda, _) = note_lock_pda(&commitment);
         match rpc.get_account_info(&lock_pda).await {
-            // Already gone: settled (the settle closes it), withdrawn, or
-            // released by someone else. Nothing to do.
-            Ok(None) => pending.remove(&commitment),
+            // Absent. Usually that means gone-for-good: settled (the settle
+            // closes it), withdrawn, or released by someone else.
+            //
+            // But it ALSO means "not created yet" for a commitment registered
+            // moments ago, because registration is optimistic and precedes the
+            // lock transaction. Dropping one of those is unrecoverable — the
+            // lock lands untracked and its rent is never reclaimed. So young
+            // entries are retained and re-checked next tick.
+            Ok(None) => {
+                let young = registered_at
+                    .get(&commitment)
+                    .is_some_and(|t| t.elapsed() < LOCK_REGISTRATION_GRACE);
+                if young {
+                    tracing::debug!(
+                        lock = %lock_pda,
+                        "note-lock absent but registration is recent; \
+                         assuming the lock tx is still in flight"
+                    );
+                } else {
+                    pending.remove(&commitment);
+                    registered_at.remove(&commitment);
+                }
+            }
             Ok(Some(account)) => match lock_expiry_slot(&account) {
                 Some(expiry_slot) if lock_has_expired(current_slot, expiry_slot) => {
                     expired.push(commitment)
@@ -232,6 +285,7 @@ async fn sweep(
                     Ok(()) => {
                         for c in chunk {
                             pending.remove(c);
+                            registered_at.remove(c);
                         }
                         tracing::debug!(n = chunk.len(), %sig, "released expired note locks");
                     }

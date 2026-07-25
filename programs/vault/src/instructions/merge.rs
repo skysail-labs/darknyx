@@ -56,8 +56,10 @@ pub struct Merge<'info> {
     pub system_program: Program<'info, System>,
     // `remaining_accounts` contains two same-length runs, each in active
     // input-commitment order: first the writable, uninitialised
-    // ConsumedNoteEntry PDAs; then the read-only NoteLock PDAs that must be
-    // absent. Dummy zero commitments contribute no accounts.
+    // ConsumedNoteEntry PDAs; then the read-only NoteLock PDAs, which may be
+    // absent OR present-but-expired — only a LIVE lock blocks the merge, as
+    // decided by `note_lock_is_live` (S-03). Dummy zero commitments contribute
+    // no accounts.
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -180,7 +182,9 @@ pub fn merge_handler<'info>(
     // The proof binds inactive slots to a zero input-commitment, so a padded slot
     // creates no PDA. `remaining_accounts` holds exactly one PDA per non-zero
     // input commitment, in order.
-    let spent_slot = Clock::get()?.slot;
+    // Reuse the slot already read for the lock-liveness check — same
+    // transaction, therefore the same slot, and one fewer sysvar read.
+    let spent_slot = now_slot;
     for (commitment, ai) in active_commitments.iter().zip(consumed_accounts) {
         create_consumed_note_pda(
             ai,
