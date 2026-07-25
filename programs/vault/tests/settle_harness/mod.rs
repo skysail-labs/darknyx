@@ -507,9 +507,9 @@ pub fn make_pending_seed(
     trading_key: [u8; 32],
     slot_idx: u8,
     side: u8,
+    expiry_slot: u64,
     price_limit: u64,
     amount: u64,
-    expiry_slot: u64,
 ) -> PendingSeed {
     let mut collateral_note = [0u8; 32];
     collateral_note[0] = side;
@@ -1546,15 +1546,14 @@ pub fn build_verify_match_batch_ix(
     base_mint: &Pubkey,
     quote_mint: &Pubkey,
     merkle_root: &[u8; 32],
-    expiry_slot: u64,
     proof_bytes: &[u8; 256],
 ) -> Instruction {
+    // S-04: no expiry_slot argument — the program derives the marker TTL.
     let (marker_pda, _) = batch_validity_marker_pda(h, merkle_root);
     let (vault_pda, _) = vault_config_pda(&h.vault_id);
     let (market_pda, _) = test_market_config_pda(&h.vault_id, base_mint, quote_mint);
     let mut data = anchor_disc("verify_match_batch").to_vec();
     data.extend_from_slice(merkle_root);
-    data.extend_from_slice(&expiry_slot.to_le_bytes());
     data.extend_from_slice(proof_bytes);
     Instruction {
         program_id: h.vault_id,

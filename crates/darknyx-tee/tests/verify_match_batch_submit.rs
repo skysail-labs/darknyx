@@ -83,7 +83,6 @@ fn keypair() -> Keypair {
 fn args() -> VerifyMatchBatchArgs {
     VerifyMatchBatchArgs {
         merkle_root: [0xAB; 32],
-        expiry_slot: 1_000_000,
         proof: Groth16ProofBytes {
             pi_a: [0x11; 64],
             pi_b: [0x22; 128],

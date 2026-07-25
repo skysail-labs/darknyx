@@ -528,12 +528,18 @@ async fn run_batch_settle_inner(
         // BatchValidityMarker expiry is bounded on BOTH sides by
         // verify_match_batch.rs: it must be (a) strictly in the future AND
         // (b) within MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS (= 300) of the
-        // on-chain clock. Stamp it from a slot fetched FRESH here, not from
-        // `inputs.expiry_slot` (which the scheduler computes from the
-        // background slot poller's cached value — if that lags/stalls the
-        // lower bound reverts). The margin must stay UNDER 300; 250 leaves
-        // ~50 slots of headroom against the cap and ~200 slots (~80 s) of
-        // settle runway after verify lands.
+        // on-chain clock.
+        //
+        // S-04: this value is NO LONGER SENT — the program derives the marker's
+        // TTL as `exec_slot + 300` so a replayer cannot choose a short one. We
+        // still compute it locally because `settlement_deadline` needs to know
+        // when to stop redriving.
+        //
+        // Keeping the 250 margin makes our local figure a deliberate
+        // UNDER-estimate of the real on-chain expiry (`exec_slot + 300`, where
+        // `exec_slot >= marker_slot`). That is the safe direction: the worker
+        // gives up slightly EARLY rather than redriving a settle past a marker
+        // that has actually expired.
         const MARKER_EXPIRY_MARGIN_SLOTS: u64 = 250;
         let marker_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
         let marker_expiry_slot = marker_slot.saturating_add(MARKER_EXPIRY_MARGIN_SLOTS);
@@ -543,7 +549,6 @@ async fn run_batch_settle_inner(
             &inputs.witnesses[0].quote_mint,
             VerifyMatchBatchArgs {
                 merkle_root,
-                expiry_slot: marker_expiry_slot,
                 proof: proof_bytes,
             },
         );

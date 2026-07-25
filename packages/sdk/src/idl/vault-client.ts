@@ -958,8 +958,6 @@ export interface BuildVerifyMatchBatchParams {
   quoteMint: PublicKey;
   /** Merkle root over the N=16 per-slot leaves — public input 1. */
   merkleRoot: Uint8Array;
-  /** Slot past which the marker becomes claimable as stale. */
-  expirySlot: bigint;
   proof: Groth16OnChainProof;
 }
 
@@ -973,10 +971,13 @@ export function buildVerifyMatchBatchInstruction(
   const [vaultConfig] = vaultConfigPda(p.programId);
   const [marketConfig] = marketConfigPda(p.programId, p.baseMint, p.quoteMint);
 
+  // S-04: no expiry_slot argument. It used to be caller-supplied and bounded
+  // only to (slot, slot + 300], which — with an unauthenticated payer and an
+  // `init` marker — let an observer replay this proof with a 1-slot TTL and
+  // kill every settle in the batch. The program derives the TTL now.
   const data = cat(
     anchorDiscriminator("verify_match_batch"),
     fixed32(p.merkleRoot),
-    u64LE(p.expirySlot),
     serializeProof(p.proof),
   );
 
