@@ -17,21 +17,21 @@ use super::state::ApiState;
 /// Spawn the router task. No-op (returns without spawning) when there is no
 /// matcher (isolated test state) — there are no memos to route.
 pub fn spawn_fills_router(state: Arc<ApiState>) {
-    let Some(matcher) = state.matcher.clone() else {
-        return;
-    };
-    tokio::spawn(async move {
-        let mut rx = matcher.read().await.subscribe_fills();
-        loop {
-            match rx.recv().await {
-                Ok(memo) => {
-                    state.route_fill(&memo).await;
+    for matcher in state.all_matchers() {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut rx = matcher.read().await.subscribe_fills();
+            loop {
+                match rx.recv().await {
+                    Ok(memo) => {
+                        state.route_fill(&memo).await;
+                    }
+                    Err(RecvError::Lagged(skipped)) => {
+                        tracing::warn!(skipped, "fills router lagged on matcher broadcast");
+                    }
+                    Err(RecvError::Closed) => break,
                 }
-                Err(RecvError::Lagged(skipped)) => {
-                    tracing::warn!(skipped, "fills router lagged on matcher broadcast");
-                }
-                Err(RecvError::Closed) => break,
             }
-        }
-    });
+        });
+    }
 }

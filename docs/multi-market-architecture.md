@@ -1,10 +1,10 @@
 # Multi-market architecture — one CVM per market, or N markets per CVM?
 
-> **Status: OPEN DECISION, deliberately deferred (2026-07-20).** Nothing here is
-> implemented. This doc exists so the decision does not have to be re-derived:
-> it records what the code does today, the two hard constraints that bound the
-> answer, the tradeoffs, and the tentative lean. Revisit before adding the
-> **second** trading pair.
+> **Status: OPTION B IMPLEMENTED (2026-07-26).** One CVM may serve up to 16
+> independently routed market books. The cross-CVM cluster/discovery design is
+> deliberately deferred because the vault still authorizes one global TEE
+> signer set. This document is both the decision record and the operating
+> contract for deciding when a CVM is full.
 >
 > Companion to [`throughput-roadmap.md`](./throughput-roadmap.md) (deferred
 > perf work). That doc is gated on platform capability; this one is gated on a
@@ -14,8 +14,7 @@
 
 ## 1. The question
 
-Today Darknyx runs exactly one market (SOL/USDC). When we add a second pair
-(say WBTC/USDC), do we:
+Darknyx chose between:
 
 * **Option A** — run a **separate CVM per market** (one TEE per pair), or
 * **Option B** — run **N order books inside one CVM**, emitting one settle
@@ -23,14 +22,15 @@ Today Darknyx runs exactly one market (SOL/USDC). When we add a second pair
 
 ---
 
-## 2. What is implemented today: one market per CVM
+## 2. What is implemented: isolated books in one CVM
 
-| Anchor | What it shows |
+| Anchor | As-built behavior |
 |---|---|
-| `crates/darknyx-tee/src/config.rs` (`base_mint`, `quote_mint`, `governed_market`) | Singular mints from `DARKNYX_TEE_BASE_MINT` / `_QUOTE_MINT`; `governed_market` is true only when BOTH are set |
-| `crates/darknyx-tee/src/matcher/interval.rs::MatcherState` | A **single** `book: OrderBook`, plus singular `base_mint`, `quote_mint`, `price_scale`, `fee_rate_bps` |
-| `crates/darknyx-tee/src/api/instruments.rs` (module doc) | States it outright: *"one market per `MatcherDriver` for now"* |
-| `crates/darknyx-tee/src/main.rs` (instruments construction) | `instruments` is a hardcoded **one-element** `vec![...]` |
+| `config.rs::MarketSpec` | Strict `DARKNYX_TEE_MARKETS_JSON`, 1–16 entries, unique symbols and ordered mint pairs |
+| `main.rs` | One `MatcherState`, `MatcherDriver`, and match channel per market |
+| `ApiState::matchers` | Boot-static symbol→matcher registry; enclave-only order-id→symbol routing for later cancel/get/modify |
+| settle schedulers | One receiver per market, one shared prover/ALT pool/signer set, one CVM-wide batch-concurrency semaphore |
+| `/instruments` | Lists every configured, finalized governed market |
 
 The on-chain program, by contrast, is **already market-agnostic**:
 
@@ -42,29 +42,28 @@ The on-chain program, by contrast, is **already market-agnostic**:
 * `VaultConfig` holds only the global knobs (fee rate, protocol owner,
   `tee_pubkeys`, `num_trees`).
 
-**So the vault already supports many markets. The single-market assumption lives
-entirely in the TEE binary.**
+The vault and TEE now both support multiple markets without an on-chain program
+change.
 
-### 2.1 What `GET /instruments` actually returns (and a live bug)
+### 2.1 Configuration
 
-The response *shape* is a list (`Vec<Instrument>`), and `GET /instruments/{symbol}`
-does a lookup by symbol — the API was designed for many markets. But the list is
-populated at boot with one entry whose **symbol is a string literal**:
+Governed multi-market deploys provide a JSON array through encrypted env:
 
-```rust
-let instruments = vec![InstrumentInfo {
-    symbol: "SOL-USDC".to_string(),   // hardcoded
-    base_mint: settle_base_mint,      // from config
-    quote_mint: settle_quote_mint,
-    ...
-}];
+```json
+[
+  {
+    "symbol": "SOL-USDC",
+    "base_mint": "<base58>",
+    "quote_mint": "<base58>",
+    "oracle_feed_id": "<64 hex chars>"
+  }
+]
 ```
 
-**Bug, independent of this decision:** the symbol does not track the configured
-mints. Deploy a WBTC market and `/instruments` still advertises `"SOL-USDC"`
-while returning WBTC's mints — breaking any client that keys off `symbol`. Fix
-by deriving the symbol from the mints (or making it a config var). Worth doing
-now regardless of which option we pick.
+The singular mint/symbol/feed envs remain a one-market devnet/loadgen
+compatibility path. JSON may not be mixed with the singular mint envs. Every
+governed market PDA is fetched at finalized commitment before intake starts;
+missing, malformed, or disabled entries fail boot.
 
 ---
 
@@ -120,15 +119,15 @@ to avoid this — which is the same coupling as §3.2 from the other direction.
 | **On-chain signer model** | Fights `keys.len() == num_trees`; needs shard-range split or a vault change | ✅ One signer set, unchanged |
 | **Client UX / trust** | N gateways, N attestations to verify, N auth sessions | ✅ One venue, one attested identity, one session |
 | **`/instruments`** | One entry per endpoint; cross-market discovery is client-side | ✅ A real list — matches the API shape already built |
-| **Shard contention** | CVMs contend on shared trees unless ranges are split | ✅ One settle scheduler owns all shards |
+| **Shard contention** | CVMs contend on shared trees unless ranges are split | ✅ One CVM-wide settle resource pool owns all shards |
 | **Blast radius** | ✅ A bug/halt in one market can't touch another | Shared fate — one bug halts all markets |
-| **Proving capacity** | ✅ Naturally parallel (separate machines) | Serialized unless per-market settle queues |
+| **Proving capacity** | ✅ Naturally parallel (separate machines) | Per-market queues share one explicitly bounded proof budget |
 | **Cost** | N billable CVMs, N attestation/funding/ALT/mirror stacks | ✅ One stack |
 | **Per-market governance** | ✅ Native (`MarketConfig.enabled` per pair) | Also fine — same per-pair PDA |
 
 ---
 
-## 5. Tentative lean: Option B (multi-market in one CVM)
+## 5. Decision: Option B (multi-market in one CVM)
 
 Two reasons dominate:
 
@@ -143,61 +142,77 @@ Two reasons dominate:
    shard-range configuration or an on-chain change — whereas Option B needs **no
    on-chain change at all**.
 
-The genuine cost of Option B is **shared blast radius** and **serialized
-proving**. Blast radius is mitigable with per-market kill switches
-(`MarketConfig.enabled` is already per-pair and read at boot) and by keeping
-per-market matcher state isolated. Proving is the one to measure — see §7.
+The genuine cost of Option B is **shared blast radius** and a shared proving
+budget. Each oracle failure skips only its own matcher tick; finalized global
+governance/signature drift or any configured `MarketConfig` drift conservatively
+pauses new trading venue-wide. Cancels and settlement reconciliation continue.
 
 ---
 
-## 6. What Option B would take (sketch, not a plan)
+## 6. Routing and isolation invariants
 
-**No on-chain program change.** `MarketConfig` is already per-pair; custody is
-already per-mint.
-
-TEE side:
-
-* `MatcherState` → `HashMap<MarketId, OrderBook>`; make `price_scale`,
-  `fee_rate_bps`, fee buckets, and `next_match_id` per-market.
-* **Intake** routes by market and picks the collateral mint from *that* market
-  (bid → quote, ask → base) when re-deriving/verifying the note commitment.
-* **Matcher tick** runs per market (each has its own clearing price + oracle
-  band → the per-market Pyth feed id already exists as `DARKNYX_TEE_FEED_IDS`).
-* **Settle assembler** groups matches by market and emits **one batch per
-  market** — the circuit already requires this, so it becomes a grouping key,
-  not new proof machinery. Per-market settle queues so a slow market doesn't
-  head-of-line-block another.
-* **Boot** reads a `MarketConfig` per configured pair (today: one fetch) and
-  refuses any explicitly disabled market — logic already exists, just needs to
-  loop.
-* **Config** `DARKNYX_TEE_BASE_MINT`/`_QUOTE_MINT` → a list of pairs.
-* **`/instruments`** becomes genuinely multi-entry (and fixes §2.1).
+1. Placement resolves the signed canonical `symbol` before commitment/opening
+   verification and writes only that market's book.
+2. The accepted-intake boundary records an enclave-only
+   `order_id → market symbol` join. Cancel, get, modify, account aggregation,
+   and cancel-on-disconnect use that join; callers cannot redirect an existing
+   order by supplying another symbol.
+3. Modify may replace only within the original market. Moving a resting order
+   between markets requires cancel + a fresh signed placement.
+4. Every matcher has its own book, openings, match counter, feed, and output
+   channel. A `RunBatchOutput` therefore has exactly one mint pair by
+   construction.
+5. Settle drivers share expensive/common infrastructure but retain their
+   market-specific assembly config and matcher state. One venue-wide semaphore
+   bounds whole batches across all market queues.
+6. Account and stream routers aggregate all matcher broadcasts without exposing
+   the private account/order/market joins.
 
 ---
 
-## 7. Open questions to resolve before committing
+## 7. Capacity admission: when this CVM is full
 
-1. **Proving throughput under N markets.** Measured today on prod9:
-   `witness ≈ 297 ms`, `prove_step ≈ 2214 ms` per batch. N markets ⇒ N batches
-   per tick. Does a per-market queue hold up at target volume, or does proving
-   become the wall? This interacts directly with the **🟢 GPU-proving gate** in
-   `throughput-roadmap.md` — re-measure once GPU TEE is available.
-2. **Shard allocation.** Do all markets share the K shards, or does each market
-   get a shard range? Sharing maximizes utilization; splitting isolates failure
-   and simplifies a later migration to Option A.
-3. **Per-market pause semantics.** If one market's oracle goes stale or its
-   breaker trips, does the CVM keep serving the others? (It should — but the
-   degraded-mode signaling in `/system/status` currently describes one venue.)
-4. **Blast-radius policy.** Is shared fate acceptable for high-value pairs, or
-   do we eventually want tiering (majors in one CVM, long-tail in another)?
-   Note this is a *hybrid* of A and B and inherits §3.2's constraint.
-5. **Symbol scheme.** Canonical symbol derivation from mints (registry? on-chain
-   metadata? operator config?) — needed by §2.1 regardless.
+The static 16-market parser cap is a safety bound, not an operating target. Add
+one market at a time and repeat the C1 CPU baseline (then the same GPU matrix)
+with representative traffic on every active book. Admit the next market only
+while all of these hold for a sustained 15-minute window:
+
+* settlement throughput is at least 20% above offered matched-pair throughput;
+* oldest queued batch is below one matcher interval (2 seconds) at p95 and below
+  two intervals at p99;
+* submit-to-finalized user latency stays within the product SLO (record p50,
+  p95, and p99, not just averages);
+* the configured venue-wide proof concurrency does not regress p95 total batch
+  latency by more than 10% versus the prior admitted market count;
+* CPU effective utilization remains below 70%, memory below 70%, no cgroup
+  throttling/OOM, and RPC 429/5xx plus ambiguous-settlement outcomes remain
+  below 0.1%;
+* each market retains at least 20% measured proof/CU/transaction-size capacity
+  margin where the metric applies.
+
+If any hard resource threshold holds for two consecutive windows, stop admitting
+markets. If latency/queue thresholds hold after concurrency and RPC tuning,
+split the venue only after the on-chain cluster authorization work below lands.
 
 ---
 
-## 8. Immediate, decision-independent action
+## 8. Cross-CVM discovery (deferred, security-gated)
 
-Fix the hardcoded `"SOL-USDC"` symbol in `main.rs` so `/instruments` reports a
-symbol consistent with the configured mints. This is a correctness bug today and
-is required by either option.
+Do not copy endpoint tables among CVMs and do not trust a website-hosted mutable
+list. Before a second TEE cluster:
+
+1. change the vault authorization model from one global K-key set to explicit
+   cluster/shard-range authorization;
+2. publish a finalized on-chain registry generation plus the SHA-256 hash of a
+   canonical signed venue manifest;
+3. serve that content-addressed manifest from untrusted mirrors (the website,
+   GitHub/IPFS, and optionally each CVM);
+4. let the daemon verify the finalized hash and governance signature, then
+   attest the selected endpoint and cross-check its full signer set plus each
+   advertised `MarketConfig`;
+5. cache last-known-good manifests with monotonic generations and reject
+   rollback, split-view, unknown-compose, or signer mismatch.
+
+Inside one multi-market CVM none of this endpoint switching is needed:
+`GET /instruments` is authoritative for the already-attested session, and the
+daemon selects a symbol on the same `/v1/stream`.

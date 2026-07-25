@@ -210,6 +210,7 @@ pub struct CancelOrderResponse {
 #[derive(Debug, Serialize)]
 pub struct OrderStatusResponse {
     pub order_id: String,
+    pub symbol: String,
     pub side: &'static str,
     pub order_type: &'static str,
     pub status: &'static str,
@@ -253,13 +254,17 @@ fn verify_sig(
     })
 }
 
-fn matcher_or_503(
+fn matcher_for_symbol_or_503(
     state: &ApiState,
-) -> Result<&Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>, (StatusCode, String)> {
-    state.matcher.as_ref().ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "matcher state not initialised on this instance".to_string(),
-    ))
+    symbol: &str,
+) -> Result<Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>, ApiError> {
+    state.matcher_for_symbol(symbol).ok_or_else(|| {
+        if state.all_matchers().is_empty() {
+            ApiError::degraded("matcher state not initialised on this instance")
+        } else {
+            ApiError::malformed(format!("unknown market symbol {symbol:?}"))
+        }
+    })
 }
 
 /// Compute the order's inclusion commitment exactly as the matcher
@@ -762,7 +767,11 @@ pub async fn place_core(
     );
     drop(replay);
     state
-        .record_order_owner(order_id_hex.clone(), account_id.to_string())
+        .record_order_route(
+            order_id_hex.clone(),
+            account_id.to_string(),
+            req.symbol.clone(),
+        )
         .await;
 
     Ok(PlaceOrderResponse {
@@ -777,8 +786,8 @@ pub async fn place_order(
     Extension(auth): Extension<Authorized>,
     Json(req): Json<PlaceOrderRequest>,
 ) -> Result<(StatusCode, Json<PlaceOrderResponse>), ApiError> {
-    let matcher = matcher_or_503(&state)?;
-    let resp = place_core(&state, matcher, &req, &auth.account_id).await?;
+    let matcher = matcher_for_symbol_or_503(&state, &req.symbol)?;
+    let resp = place_core(&state, &matcher, &req, &auth.account_id).await?;
     Ok((StatusCode::ACCEPTED, Json(resp)))
 }
 
@@ -792,7 +801,7 @@ pub async fn place_order(
 /// orders-channel subscribers still see the order leave, and bounds the
 /// `order_owner` map. Shared by every cancel path.
 async fn announce_cancel(state: &ApiState, order_id_hex: &str) {
-    let market_id = match &state.matcher {
+    let market_id = match state.matcher_for_order(order_id_hex).await {
         Some(matcher) => matcher.read().await.market_id(),
         None => "unconfigured".to_string(),
     };
@@ -906,12 +915,21 @@ pub async fn cancel_resting_unchecked(
 
 pub async fn cancel_order(
     State(state): State<Arc<ApiState>>,
-    Extension(_auth): Extension<Authorized>,
+    Extension(auth): Extension<Authorized>,
     Path(order_id_hex): Path<String>,
     Json(req): Json<CancelOrderRequest>,
 ) -> Result<Json<CancelOrderResponse>, ApiError> {
-    let matcher = matcher_or_503(&state)?;
-    let resp = cancel_core(&state, matcher, &order_id_hex, &req).await?;
+    if !state
+        .account_owns_order(&order_id_hex, &auth.account_id)
+        .await
+    {
+        return Err(ApiError::not_found("order not found"));
+    }
+    let matcher = state
+        .matcher_for_order(&order_id_hex)
+        .await
+        .ok_or_else(|| ApiError::not_found("order not found"))?;
+    let resp = cancel_core(&state, &matcher, &order_id_hex, &req).await?;
     Ok(Json(resp))
 }
 
@@ -975,6 +993,14 @@ pub async fn modify_core(
         session_id,
     };
     verify_sig(&cancel.digest(), &trading_key, &cancel_signature)?;
+
+    if let Some(old_symbol) = state.order_market_symbol(old_order_id_hex).await {
+        if old_symbol != req.replacement.symbol {
+            return Err(ApiError::malformed(
+                "modify cannot move an order between markets; cancel and place a fresh order",
+            ));
+        }
+    }
 
     // Verify + build the replacement (its own canonical sig, collateral, opening)
     // OUTSIDE the lock — the Poseidon/Ed25519 work doesn't block a tick.
@@ -1072,7 +1098,11 @@ pub async fn modify_core(
         announce_cancel(state, old_order_id_hex).await;
     }
     state
-        .record_order_owner(new_order_id_hex.clone(), account_id.to_string())
+        .record_order_route(
+            new_order_id_hex.clone(),
+            account_id.to_string(),
+            req.replacement.symbol.clone(),
+        )
         .await;
 
     Ok(ModifyOrderResponse {
@@ -1089,8 +1119,17 @@ pub async fn modify_order(
     Path(old_order_id_hex): Path<String>,
     Json(req): Json<ModifyOrderRequest>,
 ) -> Result<Json<ModifyOrderResponse>, ApiError> {
-    let matcher = matcher_or_503(&state)?;
-    let resp = modify_core(&state, matcher, &old_order_id_hex, &req, &auth.account_id).await?;
+    if !state
+        .account_owns_order(&old_order_id_hex, &auth.account_id)
+        .await
+    {
+        return Err(ApiError::not_found("order not found"));
+    }
+    let matcher = state
+        .matcher_for_order(&old_order_id_hex)
+        .await
+        .ok_or_else(|| ApiError::not_found("order not found"))?;
+    let resp = modify_core(&state, &matcher, &old_order_id_hex, &req, &auth.account_id).await?;
     Ok(Json(resp))
 }
 
@@ -1107,7 +1146,6 @@ pub async fn get_order(
     Extension(auth): Extension<Authorized>,
     Path(order_id_hex): Path<String>,
 ) -> Result<Json<OrderStatusResponse>, ApiError> {
-    let matcher = matcher_or_503(&state)?;
     let order_id: [u8; 16] = decode_hex(&order_id_hex, "order_id (path)")?;
     let canonical_order_id = hex::encode(order_id);
 
@@ -1121,6 +1159,13 @@ pub async fn get_order(
     {
         return Err(ApiError::not_found("order not found"));
     }
+    let symbol = state
+        .order_market_symbol(&canonical_order_id)
+        .await
+        .ok_or_else(|| ApiError::not_found("order not found"))?;
+    let matcher = state
+        .matcher_for_symbol(&symbol)
+        .ok_or_else(|| ApiError::not_found("order not found"))?;
 
     let st = matcher.read().await;
     let order = st
@@ -1130,6 +1175,7 @@ pub async fn get_order(
 
     Ok(Json(OrderStatusResponse {
         order_id: canonical_order_id,
+        symbol,
         side: match order.side {
             OrderSide::Bid => "bid",
             OrderSide::Ask => "ask",

@@ -531,6 +531,7 @@ components:
       description: The `GET /orders/{order_id}` status body.
       required:
         - order_id
+        - symbol
         - side
         - order_type
         - status
@@ -543,6 +544,9 @@ components:
         order_id:
           type: string
           description: 16-byte order id, hex (the one supplied at placement).
+        symbol:
+          type: string
+          description: Canonical instrument symbol selecting the isolated market book.
         side: { type: string, enum: [bid, ask] }
         order_type: { type: string, enum: [limit, ioc, fok] }
         status:
@@ -583,7 +587,7 @@ components:
         account_id: { type: string }
         open_orders:
           type: array
-          description: The caller's orders still resting in the book.
+          description: The caller's orders still resting across all market books.
           items: { $ref: '#/components/schemas/Order' }
 
     AccountSettings:

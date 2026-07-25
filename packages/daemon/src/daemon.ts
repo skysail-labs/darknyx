@@ -532,6 +532,7 @@ export class Daemon {
     const managed = newManagedOrder({
       orderId: orderIdHex,
       seedIndex,
+      symbol: intent.symbol,
       side: intent.side === OrderSide.Bid ? "bid" : "ask",
       priceRaw: intent.policy.priceLimit,
       sizeRaw: intent.amount,

@@ -171,6 +171,14 @@ pub struct ApiState {
     /// long-running `MatcherDriver`'s state on every production
     /// boot.
     pub matcher: Option<Arc<RwLock<MatcherState>>>,
+    /// Boot-static matcher registry keyed by canonical instrument symbol.
+    /// Each entry owns a completely independent book/opening store/counters,
+    /// so orders from different markets can never enter the same proof batch.
+    ///
+    /// `matcher` above remains the primary-market alias for compatibility with
+    /// isolated tests and older internal helpers. New request routing MUST use
+    /// [`Self::matcher_for_symbol`] / [`Self::matcher_for_order`].
+    pub matchers: HashMap<String, Arc<RwLock<MatcherState>>>,
     /// Fail-closed switch shared with the matcher driver. Governance drift or a
     /// finalized RPC read failure pauses place/modify + matching while cancels
     /// and settlement reconciliation remain available.
@@ -218,6 +226,11 @@ pub struct ApiState {
     /// in-memory in the enclave and NEVER persisted off-TEE — the off-TEE
     /// indexer is account-agnostic by design.
     pub order_owner: Arc<RwLock<HashMap<String, String>>>,
+    /// `order_id (hex) → canonical market symbol`. Like `order_owner`, this is
+    /// enclave-only routing state and is never persisted or exposed. It lets
+    /// cancel/get/modify route to the same isolated book selected at placement
+    /// without adding a symbol to those wire requests.
+    pub order_market: Arc<RwLock<HashMap<String, String>>>,
     /// Bounded routing-only cache for terminal orders. The fill and order
     /// routers are independent tasks, so a terminal order update can race the
     /// final change memo. Archiving here preserves that memo without keeping a
@@ -453,6 +466,7 @@ impl ApiState {
             // a separate construction path. Until then the orders
             // handlers see `None` and return 503.
             matcher: None,
+            matchers: HashMap::new(),
             trading_gate: TradingGate::default(),
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             oracle: None,
@@ -460,6 +474,7 @@ impl ApiState {
             settle_enabled: false,
             solana_rpc: None,
             order_owner: Arc::new(RwLock::new(HashMap::new())),
+            order_market: Arc::new(RwLock::new(HashMap::new())),
             recent_order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
@@ -532,10 +547,71 @@ impl ApiState {
         current_slot: Arc<std::sync::atomic::AtomicU64>,
         oracle: OracleCache,
     ) -> Self {
+        let symbol = self
+            .instruments
+            .first()
+            .map(|instrument| instrument.symbol.clone())
+            .unwrap_or_else(|| "SOL-USDC".to_string());
+        self.matchers.clear();
+        self.matchers.insert(symbol, matcher.clone());
         self.matcher = Some(matcher);
         self.current_slot = current_slot;
         self.oracle = Some(oracle);
         self
+    }
+
+    /// Attach every independently-owned market matcher in one operation.
+    /// Symbols are a boot-time routing table: duplicates are rejected by the
+    /// caller/config parser before this builder is reached.
+    pub fn with_market_runtimes(
+        mut self,
+        matchers: HashMap<String, Arc<RwLock<MatcherState>>>,
+        current_slot: Arc<std::sync::atomic::AtomicU64>,
+        oracle: OracleCache,
+    ) -> Self {
+        self.matcher = self
+            .instruments
+            .first()
+            .and_then(|instrument| matchers.get(&instrument.symbol))
+            .cloned()
+            .or_else(|| matchers.values().next().cloned());
+        self.matchers = matchers;
+        self.current_slot = current_slot;
+        self.oracle = Some(oracle);
+        self
+    }
+
+    /// Resolve a placement/replace symbol to its isolated matcher.
+    pub fn matcher_for_symbol(&self, symbol: &str) -> Option<Arc<RwLock<MatcherState>>> {
+        // `matcher = None` is the explicit degraded/test kill switch retained
+        // for compatibility; do not route around it through the registry.
+        self.matcher.as_ref()?;
+        self.matchers.get(symbol).cloned().or_else(|| {
+            // Compatibility for test states constructed before instruments are
+            // replaced: the primary alias is valid only for the advertised
+            // primary symbol.
+            self.instruments
+                .first()
+                .filter(|instrument| instrument.symbol == symbol)
+                .and_then(|_| self.matcher.clone())
+        })
+    }
+
+    /// Resolve an existing order to the matcher selected at placement.
+    pub async fn matcher_for_order(&self, order_id: &str) -> Option<Arc<RwLock<MatcherState>>> {
+        let symbol = self.order_market.read().await.get(order_id).cloned()?;
+        self.matcher_for_symbol(&symbol)
+    }
+
+    /// Snapshot every matcher for router/account aggregation tasks.
+    pub fn all_matchers(&self) -> Vec<Arc<RwLock<MatcherState>>> {
+        if self.matcher.is_none() {
+            Vec::new()
+        } else if self.matchers.is_empty() {
+            self.matcher.iter().cloned().collect()
+        } else {
+            self.matchers.values().cloned().collect()
+        }
     }
 
     /// Attach the shared [`SettleSchedulerState`]. Called once by
@@ -564,6 +640,15 @@ impl ApiState {
     /// Set the tradable instruments served by `GET /instruments`.
     /// Called once by `main.rs` from the market `MatchConfig`.
     pub fn with_instruments(mut self, instruments: Vec<InstrumentInfo>) -> Self {
+        // The legacy single-runtime builder may run before instruments are
+        // attached. Re-key that one matcher to the configured symbol so even a
+        // non-SOL deployment cannot advertise one symbol and route another.
+        if self.matchers.len() == 1 && instruments.len() == 1 {
+            if let Some(matcher) = self.matcher.clone() {
+                self.matchers.clear();
+                self.matchers.insert(instruments[0].symbol.clone(), matcher);
+            }
+        }
         self.instruments = instruments;
         self
     }
@@ -574,6 +659,7 @@ impl ApiState {
     /// `TEST_JWT_SECRET` + the single seeded account from
     /// [`super::auth::test_registry`].
     pub fn for_tests() -> Self {
+        let matcher = Arc::new(RwLock::new(MatcherState::new()));
         Self {
             app_info: BootAppInfo::stub(),
             boot_session_id: [0x5A; 32],
@@ -607,7 +693,8 @@ impl ApiState {
                     .to_string(),
             }],
             merkle_mirrors: new_shard_mirrors(1),
-            matcher: Some(Arc::new(RwLock::new(MatcherState::new()))),
+            matcher: Some(matcher.clone()),
+            matchers: HashMap::from([("SOL-USDC".to_string(), matcher)]),
             trading_gate: TradingGate::default(),
             // Tests that exercise expiry need to bump this; the
             // default starting slot is 1 so an order with
@@ -625,6 +712,7 @@ impl ApiState {
             // `with_solana_rpc(...)`.
             solana_rpc: None,
             order_owner: Arc::new(RwLock::new(HashMap::new())),
+            order_market: Arc::new(RwLock::new(HashMap::new())),
             recent_order_owner: Arc::new(RwLock::new(HashMap::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
@@ -639,6 +727,19 @@ impl ApiState {
     /// Record `order_id → account_id` at accepted intake. Idempotent.
     pub async fn record_order_owner(&self, order_id: String, account_id: String) {
         self.order_owner.write().await.insert(order_id, account_id);
+    }
+
+    /// Record both private routing joins at the accepted-intake boundary.
+    pub async fn record_order_route(&self, order_id: String, account_id: String, symbol: String) {
+        self.order_owner
+            .write()
+            .await
+            .insert(order_id.clone(), account_id);
+        self.order_market.write().await.insert(order_id, symbol);
+    }
+
+    pub async fn order_market_symbol(&self, order_id: &str) -> Option<String> {
+        self.order_market.read().await.get(order_id).cloned()
     }
 
     /// Return whether `order_id` belongs to `account_id`. Callers deliberately
@@ -669,12 +770,14 @@ impl ApiState {
             recent.insert(order_id.to_string(), account);
         }
         self.order_owner.write().await.remove(order_id);
+        self.order_market.write().await.remove(order_id);
     }
 
     /// Drop all owner routing for an explicitly cancelled order.
     pub async fn forget_order(&self, order_id: &str) {
         self.order_owner.write().await.remove(order_id);
         self.recent_order_owner.write().await.remove(order_id);
+        self.order_market.write().await.remove(order_id);
     }
 
     /// Get-or-create the caller account's fill-memo channel and subscribe. A
@@ -1153,5 +1256,55 @@ mod persist_tests {
             replay.last_arrival_nonce.contains_key(&fresh_key),
             "the just-written mark must survive its own prune"
         );
+    }
+
+    #[tokio::test]
+    async fn market_registry_routes_orders_without_crossing_books() {
+        let sol = Arc::new(RwLock::new(
+            MatcherState::new().with_market([1; 32], [2; 32]),
+        ));
+        let btc = Arc::new(RwLock::new(
+            MatcherState::new().with_market([3; 32], [2; 32]),
+        ));
+        let state = ApiState::for_tests()
+            .with_instruments(vec![
+                InstrumentInfo {
+                    symbol: "SOL-USDC".to_string(),
+                    base_mint: [1; 32],
+                    quote_mint: [2; 32],
+                    tick_size: 1,
+                    min_order_size: 1,
+                    oracle_feed_id: "aa".repeat(32),
+                },
+                InstrumentInfo {
+                    symbol: "BTC-USDC".to_string(),
+                    base_mint: [3; 32],
+                    quote_mint: [2; 32],
+                    tick_size: 1,
+                    min_order_size: 1,
+                    oracle_feed_id: "bb".repeat(32),
+                },
+            ])
+            .with_market_runtimes(
+                HashMap::from([
+                    ("SOL-USDC".to_string(), sol.clone()),
+                    ("BTC-USDC".to_string(), btc.clone()),
+                ]),
+                Arc::new(std::sync::atomic::AtomicU64::new(1)),
+                OracleCache::new(),
+            );
+
+        state
+            .record_order_route(
+                "btc-order".to_string(),
+                "alice".to_string(),
+                "BTC-USDC".to_string(),
+            )
+            .await;
+
+        let routed = state.matcher_for_order("btc-order").await.unwrap();
+        assert!(Arc::ptr_eq(&routed, &btc));
+        assert!(!Arc::ptr_eq(&routed, &sol));
+        assert!(state.matcher_for_symbol("UNKNOWN").is_none());
     }
 }

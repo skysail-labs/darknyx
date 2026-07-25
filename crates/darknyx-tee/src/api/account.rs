@@ -25,6 +25,8 @@ use super::state::ApiState;
 #[derive(Debug, Serialize)]
 pub struct OpenOrder {
     pub order_id: String,
+    /// Canonical `/instruments` symbol selecting the isolated market book.
+    pub symbol: String,
     pub side: &'static str,
     pub order_type: &'static str,
     pub status: &'static str,
@@ -60,43 +62,48 @@ pub async fn get_account(
     };
 
     let mut open_orders = Vec::new();
-    if let Some(matcher) = state.matcher.as_ref() {
+    for oid_hex in order_ids {
+        let Ok(bytes) = hex::decode(&oid_hex) else {
+            continue;
+        };
+        let Ok(oid): Result<[u8; 16], _> = bytes.as_slice().try_into() else {
+            continue;
+        };
+        let Some(symbol) = state.order_market_symbol(&oid_hex).await else {
+            continue;
+        };
+        let Some(matcher) = state.matcher_for_symbol(&symbol) else {
+            continue;
+        };
         let st = matcher.read().await;
-        for oid_hex in order_ids {
-            let Ok(bytes) = hex::decode(&oid_hex) else {
-                continue;
-            };
-            let Ok(oid): Result<[u8; 16], _> = bytes.as_slice().try_into() else {
-                continue;
-            };
-            // Only orders still in the book (a terminal order's owner mapping is
-            // dropped, but guard anyway).
-            if let Some(o) = st.book().get(&oid) {
-                open_orders.push(OpenOrder {
-                    order_id: oid_hex,
-                    side: match o.side {
-                        OrderSide::Bid => "bid",
-                        OrderSide::Ask => "ask",
-                    },
-                    order_type: match o.order_type {
-                        OrderType::Limit => "limit",
-                        OrderType::Ioc => "ioc",
-                        OrderType::Fok => "fok",
-                    },
-                    status: match o.status {
-                        OrderStatus::Empty => "empty",
-                        OrderStatus::Pending => "pending",
-                        OrderStatus::Matched => "pending_settlement",
-                        OrderStatus::Expired => "expired",
-                        OrderStatus::Cancelled => "cancelled",
-                    },
-                    amount: o.amount,
-                    filled_quantity: o.filled_quantity,
-                    price_limit: o.price_limit,
-                    expiry_slot: o.expiry_slot,
-                    arrival_slot: o.arrival_slot,
-                });
-            }
+        // Only orders still in the selected market's book (a terminal
+        // order's routing entries are dropped, but guard anyway).
+        if let Some(o) = st.book().get(&oid) {
+            open_orders.push(OpenOrder {
+                order_id: oid_hex,
+                symbol,
+                side: match o.side {
+                    OrderSide::Bid => "bid",
+                    OrderSide::Ask => "ask",
+                },
+                order_type: match o.order_type {
+                    OrderType::Limit => "limit",
+                    OrderType::Ioc => "ioc",
+                    OrderType::Fok => "fok",
+                },
+                status: match o.status {
+                    OrderStatus::Empty => "empty",
+                    OrderStatus::Pending => "pending",
+                    OrderStatus::Matched => "pending_settlement",
+                    OrderStatus::Expired => "expired",
+                    OrderStatus::Cancelled => "cancelled",
+                },
+                amount: o.amount,
+                filled_quantity: o.filled_quantity,
+                price_limit: o.price_limit,
+                expiry_slot: o.expiry_slot,
+                arrival_slot: o.arrival_slot,
+            });
         }
     }
 

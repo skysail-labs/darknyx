@@ -221,6 +221,7 @@ export function startControlServer(
 
 interface OrderJson {
   order_id: string;
+  symbol: string;
   side: string;
   phase: string;
   price: string;
@@ -232,6 +233,7 @@ interface OrderJson {
 function serializeOrder(o: ManagedOrder): OrderJson {
   return {
     order_id: o.orderId,
+    symbol: o.symbol,
     side: o.side,
     phase: o.phase,
     price: o.priceRaw.toString(),

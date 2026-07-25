@@ -130,29 +130,29 @@ fn to_msg(u: &OrderLifecycleEvent) -> (String, OrderUpdateMsg, bool) {
 
 /// Spawn the order-update router. No-op in matcher-less test state.
 pub fn spawn_order_router(state: Arc<ApiState>) {
-    let Some(matcher) = state.matcher.clone() else {
-        return;
-    };
-    tokio::spawn(async move {
-        let mut rx = matcher.read().await.subscribe_order_updates();
-        loop {
-            match rx.recv().await {
-                Ok(update) => {
-                    let (order_id, msg, terminal) = to_msg(&update);
-                    state.route_order_update(&order_id, &msg).await;
-                    // Archive before removing the live ownership entry so the
-                    // independent fills router cannot observe a routing gap.
-                    if terminal {
-                        state.archive_order_owner(&order_id).await;
+    for matcher in state.all_matchers() {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut rx = matcher.read().await.subscribe_order_updates();
+            loop {
+                match rx.recv().await {
+                    Ok(update) => {
+                        let (order_id, msg, terminal) = to_msg(&update);
+                        state.route_order_update(&order_id, &msg).await;
+                        // Archive before removing the live ownership entry so the
+                        // independent fills router cannot observe a routing gap.
+                        if terminal {
+                            state.archive_order_owner(&order_id).await;
+                        }
                     }
+                    Err(RecvError::Lagged(skipped)) => {
+                        tracing::warn!(skipped, "order router lagged on matcher broadcast");
+                    }
+                    Err(RecvError::Closed) => break,
                 }
-                Err(RecvError::Lagged(skipped)) => {
-                    tracing::warn!(skipped, "order router lagged on matcher broadcast");
-                }
-                Err(RecvError::Closed) => break,
             }
-        }
-    });
+        });
+    }
 }
 
 #[cfg(test)]

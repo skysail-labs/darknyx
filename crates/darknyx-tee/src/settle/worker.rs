@@ -101,6 +101,7 @@ pub struct BatchSettlementReport {
 }
 
 /// Shared context the worker holds across a batch.
+#[derive(Clone)]
 pub struct SettleWorkerCtx {
     pub rpc: SolanaRpcClient,
     /// The K per-shard TEE keypairs (one fee-payer + `tee_authority` per

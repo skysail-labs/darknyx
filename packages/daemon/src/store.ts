@@ -40,6 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_notes_order ON notes (order_id);
 CREATE TABLE IF NOT EXISTS orders (
   order_id            TEXT PRIMARY KEY,
   seed_index          INTEGER NOT NULL,
+  symbol              TEXT NOT NULL,
   side                TEXT NOT NULL,
   price_raw           TEXT NOT NULL,
   size_raw            TEXT NOT NULL,
@@ -69,6 +70,7 @@ interface NoteRow {
 interface OrderRow {
   order_id: string;
   seed_index: number;
+  symbol: string;
   side: string;
   price_raw: string;
   size_raw: string;
@@ -102,6 +104,7 @@ function rowToOrder(r: OrderRow): ManagedOrder {
   return {
     orderId: r.order_id,
     seedIndex: r.seed_index,
+    symbol: r.symbol,
     side: r.side as Side,
     priceRaw: BigInt(r.price_raw),
     sizeRaw: BigInt(r.size_raw),
@@ -153,6 +156,11 @@ export class DaemonStore implements NoteStore {
     ) {
       this.db.exec(
         "ALTER TABLE orders ADD COLUMN settlement_unlock_slot INTEGER",
+      );
+    }
+    if (!orderColumns.some((column) => column.name === "symbol")) {
+      this.db.exec(
+        "ALTER TABLE orders ADD COLUMN symbol TEXT NOT NULL DEFAULT 'UNKNOWN'",
       );
     }
   }
@@ -219,13 +227,14 @@ export class DaemonStore implements NoteStore {
     this.db
       .prepare(
         `INSERT INTO orders
-           (order_id, seed_index, side, price_raw, size_raw, phase,
+           (order_id, seed_index, symbol, side, price_raw, size_raw, phase,
             merge_in_flight, pending_change_notes, collateral_commitment,
             settlement_failure_reason, settlement_unlock_slot, created_at,
             updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(order_id) DO UPDATE SET
            seed_index = excluded.seed_index,
+           symbol = excluded.symbol,
            side = excluded.side,
            price_raw = excluded.price_raw,
            size_raw = excluded.size_raw,
@@ -240,6 +249,7 @@ export class DaemonStore implements NoteStore {
       .run(
         o.orderId,
         o.seedIndex,
+        o.symbol ?? "UNKNOWN",
         o.side,
         o.priceRaw.toString(),
         o.sizeRaw.toString(),
