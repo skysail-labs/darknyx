@@ -16,6 +16,18 @@ export interface TeeReadOptions {
   fetchImpl?: typeof fetch;
 }
 
+export interface TeeInstrument {
+  symbol: string;
+  base_mint: string;
+  quote_mint: string;
+  tick_size: string;
+  min_order_size: string;
+  oracle: {
+    type: "pyth_pull_v2";
+    pubkey: string;
+  };
+}
+
 export class TeeReadClient {
   constructor(private readonly opts: TeeReadOptions) {}
 
@@ -33,12 +45,14 @@ export class TeeReadClient {
     return this.get("/account");
   }
   /** `GET /instruments` — tradable markets + their mints/tick/min-size. */
-  instruments(): Promise<unknown> {
-    return this.get("/instruments");
+  instruments(): Promise<TeeInstrument[]> {
+    return this.get("/instruments") as Promise<TeeInstrument[]>;
   }
   /** `GET /instruments/{symbol}` — one market. */
-  instrument(symbol: string): Promise<unknown> {
-    return this.get(`/instruments/${encodeURIComponent(symbol)}`);
+  instrument(symbol: string): Promise<TeeInstrument> {
+    return this.get(
+      `/instruments/${encodeURIComponent(symbol)}`,
+    ) as Promise<TeeInstrument>;
   }
   /** `GET /settlement/status/{batchId}` — a settle batch's per-job progress. */
   settlementStatus(batchId: string | number): Promise<unknown> {

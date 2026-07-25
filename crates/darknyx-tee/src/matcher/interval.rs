@@ -581,9 +581,8 @@ impl MatcherState {
     }
 }
 
-/// Configuration for one matching tick loop. One driver per market
-/// in production — for v2 we run a single market while we shake
-/// the design down.
+/// Configuration for one matching tick loop. Production creates one driver per
+/// configured market and shares only the venue-wide settlement resources.
 pub struct DriverConfig {
     /// `MatchConfig` passed to `darkpool_matcher::run_batch(...)`.
     /// Constructed from the on-chain `MarketConfig` + the v2

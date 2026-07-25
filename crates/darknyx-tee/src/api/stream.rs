@@ -57,10 +57,8 @@ use super::orders::{
     PlaceOrderResponse,
 };
 use super::state::{ApiState, OrderUpdateMsg};
-use crate::matcher::{FillMemo, MatcherState};
+use crate::matcher::FillMemo;
 use crate::merkle::TreeAppendEvent;
-
-type Matcher = Arc<tokio::sync::RwLock<MatcherState>>;
 
 /// A client → server frame, internally tagged by `op`.
 #[derive(Debug, Deserialize)]
@@ -276,7 +274,6 @@ async fn opt_recv<T: Clone>(rx: &mut Option<Receiver<T>>) -> Result<T, RecvError
 }
 
 async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
-    let matcher = state.matcher.clone();
     let mut s = Session::default();
     let mut seq: u64 = 0;
     let mut last_activity = Instant::now();
@@ -288,7 +285,7 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
             inbound = socket.recv() => match inbound {
                 Some(Ok(Message::Text(txt))) => {
                     last_activity = Instant::now();
-                    let action = handle_frame(&state, &matcher, &mut s, &txt).await;
+                    let action = handle_frame(&state, &mut s, &txt).await;
                     let (frames, close) = match action {
                         Action::Reply(f) => (f, false),
                         Action::Close => (Vec::new(), true),
@@ -359,19 +356,19 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
 
     // Socket closed. Tear down the session's still-resting orders if asked.
     if let (true, Some(account)) = (s.cancel_on_disconnect, s.authed.as_ref()) {
-        if let Some(matcher) = matcher.as_ref() {
-            if !s.session_orders.is_empty() {
-                let mut cancelled = 0usize;
-                for oid in &s.session_orders {
-                    if cancel_resting_unchecked(&state, matcher, oid).await {
+        if !s.session_orders.is_empty() {
+            let mut cancelled = 0usize;
+            for oid in &s.session_orders {
+                if let Some(matcher) = state.matcher_for_order(oid).await {
+                    if cancel_resting_unchecked(&state, &matcher, oid).await {
                         cancelled += 1;
                     }
                 }
-                tracing::info!(
-                    account = %account, tracked = s.session_orders.len(), cancelled,
-                    "/v1/stream closed: cancel-on-disconnect swept the session's resting orders"
-                );
             }
+            tracing::info!(
+                account = %account, tracked = s.session_orders.len(), cancelled,
+                "/v1/stream closed: cancel-on-disconnect swept the session's resting orders"
+            );
         }
     }
 }
@@ -427,12 +424,7 @@ async fn push_or_close<T: Serialize + Clone>(
 }
 
 /// Parse + dispatch one text frame.
-async fn handle_frame(
-    state: &ApiState,
-    matcher: &Option<Matcher>,
-    s: &mut Session,
-    txt: &str,
-) -> Action {
+async fn handle_frame(state: &ApiState, s: &mut Session, txt: &str) -> Action {
     let req: StreamRequest = match serde_json::from_str(txt) {
         Ok(r) => r,
         Err(e) => {
@@ -504,7 +496,7 @@ async fn handle_frame(
             if let Some(e) = order_rate_guard(state, s, request_id.clone(), 1.0).await {
                 return Action::Reply(vec![e]);
             }
-            Action::Reply(vec![place(state, matcher, s, request_id, &params).await])
+            Action::Reply(vec![place(state, s, request_id, &params).await])
         }
         StreamRequest::Cancel {
             request_id,
@@ -514,9 +506,7 @@ async fn handle_frame(
             if let Some(e) = order_rate_guard(state, s, request_id.clone(), 0.2).await {
                 return Action::Reply(vec![e]);
             }
-            Action::Reply(vec![
-                cancel(state, matcher, s, request_id, &order_id, &params).await,
-            ])
+            Action::Reply(vec![cancel(state, s, request_id, &order_id, &params).await])
         }
         StreamRequest::Modify {
             request_id,
@@ -526,9 +516,7 @@ async fn handle_frame(
             if let Some(e) = order_rate_guard(state, s, request_id.clone(), 1.2).await {
                 return Action::Reply(vec![e]);
             }
-            Action::Reply(vec![
-                modify(state, matcher, s, request_id, &order_id, &params).await,
-            ])
+            Action::Reply(vec![modify(state, s, request_id, &order_id, &params).await])
         }
 
         StreamRequest::AccountInfo { request_id } => {
@@ -648,12 +636,8 @@ async fn subscribe(
     out
 }
 
-/// Resolve the matcher + login gate shared by the three order ops.
-fn order_guard<'a>(
-    matcher: &'a Option<Matcher>,
-    s: &Session,
-    request_id: &Option<String>,
-) -> Result<(&'a Matcher, String), StreamResponse> {
+/// Resolve the login gate shared by the three order ops.
+fn order_guard(s: &Session, request_id: &Option<String>) -> Result<String, StreamResponse> {
     let Some(account) = s.authed.clone() else {
         return Err(StreamResponse::error(
             request_id.clone(),
@@ -661,28 +645,31 @@ fn order_guard<'a>(
             "login required",
         ));
     };
-    let Some(matcher) = matcher.as_ref() else {
-        return Err(StreamResponse::error(
-            request_id.clone(),
-            5001,
-            "matcher state not initialised on this instance",
-        ));
-    };
-    Ok((matcher, account))
+    Ok(account)
 }
 
 async fn place(
     state: &ApiState,
-    matcher: &Option<Matcher>,
     s: &mut Session,
     request_id: Option<String>,
     params: &PlaceOrderRequest,
 ) -> StreamResponse {
-    let (matcher, account) = match order_guard(matcher, s, &request_id) {
+    let account = match order_guard(s, &request_id) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    match place_core(state, matcher, params, &account).await {
+    let Some(matcher) = state.matcher_for_symbol(&params.symbol) else {
+        return if state.all_matchers().is_empty() {
+            StreamResponse::error(
+                request_id,
+                5001,
+                "matcher state not initialised on this instance",
+            )
+        } else {
+            StreamResponse::error(request_id, 1001, "unknown market symbol")
+        };
+    };
+    match place_core(state, &matcher, params, &account).await {
         Ok(result) => {
             s.session_orders.insert(result.order_id.clone());
             StreamResponse::Place { request_id, result }
@@ -693,17 +680,22 @@ async fn place(
 
 async fn cancel(
     state: &ApiState,
-    matcher: &Option<Matcher>,
     s: &mut Session,
     request_id: Option<String>,
     order_id: &str,
     params: &CancelOrderRequest,
 ) -> StreamResponse {
-    let (matcher, _account) = match order_guard(matcher, s, &request_id) {
+    let account = match order_guard(s, &request_id) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    match cancel_core(state, matcher, order_id, params).await {
+    if !state.account_owns_order(order_id, &account).await {
+        return StreamResponse::error(request_id, 1301, "order not found");
+    }
+    let Some(matcher) = state.matcher_for_order(order_id).await else {
+        return StreamResponse::error(request_id, 1301, "order not found");
+    };
+    match cancel_core(state, &matcher, order_id, params).await {
         Ok(result) => {
             s.session_orders.remove(order_id);
             StreamResponse::Cancel { request_id, result }
@@ -714,17 +706,22 @@ async fn cancel(
 
 async fn modify(
     state: &ApiState,
-    matcher: &Option<Matcher>,
     s: &mut Session,
     request_id: Option<String>,
     order_id: &str,
     params: &ModifyOrderRequest,
 ) -> StreamResponse {
-    let (matcher, account) = match order_guard(matcher, s, &request_id) {
+    let account = match order_guard(s, &request_id) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    match modify_core(state, matcher, order_id, params, &account).await {
+    if !state.account_owns_order(order_id, &account).await {
+        return StreamResponse::error(request_id, 1301, "order not found");
+    }
+    let Some(matcher) = state.matcher_for_order(order_id).await else {
+        return StreamResponse::error(request_id, 1301, "order not found");
+    };
+    match modify_core(state, &matcher, order_id, params, &account).await {
         Ok(result) => {
             // Old id left the book; the (possibly same) new id now rests.
             s.session_orders.remove(order_id);

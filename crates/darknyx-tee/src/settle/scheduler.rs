@@ -146,6 +146,7 @@ impl SettleSchedulerState {
 
 /// Static per-market context the settle driver needs that a single
 /// `RunBatchOutput` doesn't carry.
+#[derive(Clone)]
 pub struct SettleDriverConfig {
     /// Same random boot id advertised by `/info` and bound into order
     /// signatures; also domains the 16-byte settlement identifiers.
@@ -187,6 +188,9 @@ pub struct SettleScheduler {
     /// `None` is enqueue-only. `Arc` so each batch's pipeline runs in its own
     /// spawned task (bounded concurrency from [`SettleDriverConfig`]).
     settle: Option<Arc<SettleDriver>>,
+    /// Optional venue-wide limit shared by every per-market scheduler.
+    /// Without this, N market receivers would each admit C proof pipelines.
+    shared_semaphore: Option<Arc<Semaphore>>,
 }
 
 impl SettleScheduler {
@@ -197,7 +201,7 @@ impl SettleScheduler {
         rx: mpsc::Receiver<RunBatchOutput>,
     ) -> (JoinHandle<()>, Arc<RwLock<SettleSchedulerState>>) {
         let state = Arc::new(RwLock::new(SettleSchedulerState::default()));
-        let handle = Self::spawn_inner(rx, state.clone(), None);
+        let handle = Self::spawn_inner(rx, state.clone(), None, None);
         (handle, state)
     }
 
@@ -211,18 +215,32 @@ impl SettleScheduler {
         state: Arc<RwLock<SettleSchedulerState>>,
         driver: Option<SettleDriver>,
     ) -> JoinHandle<()> {
-        Self::spawn_inner(rx, state, driver)
+        Self::spawn_inner(rx, state, driver, None)
+    }
+
+    /// Multi-market variant: independent market receivers/drivers share one
+    /// venue-wide batch semaphore, so `SETTLE_BATCH_CONCURRENCY=C` means C
+    /// proofs across the whole CVM rather than C per market.
+    pub fn spawn_with_shared_limit(
+        rx: mpsc::Receiver<RunBatchOutput>,
+        state: Arc<RwLock<SettleSchedulerState>>,
+        driver: Option<SettleDriver>,
+        semaphore: Arc<Semaphore>,
+    ) -> JoinHandle<()> {
+        Self::spawn_inner(rx, state, driver, Some(semaphore))
     }
 
     fn spawn_inner(
         rx: mpsc::Receiver<RunBatchOutput>,
         state: Arc<RwLock<SettleSchedulerState>>,
         settle: Option<SettleDriver>,
+        shared_semaphore: Option<Arc<Semaphore>>,
     ) -> JoinHandle<()> {
         let scheduler = Self {
             rx,
             state,
             settle: settle.map(Arc::new),
+            shared_semaphore,
         };
         tokio::spawn(scheduler.run())
     }
@@ -252,7 +270,10 @@ impl SettleScheduler {
         // `acquire` — back-pressuring the matcher channel rather than fanning
         // out unbounded work. The JoinSet lets us drain in-flight batches when
         // the channel closes (so a shutdown — and tests — wait for completion).
-        let semaphore = Arc::new(Semaphore::new(settle_concurrency));
+        let semaphore = self
+            .shared_semaphore
+            .clone()
+            .unwrap_or_else(|| Arc::new(Semaphore::new(settle_concurrency)));
         let mut tasks: JoinSet<()> = JoinSet::new();
 
         while let Some(output) = self.rx.recv().await {

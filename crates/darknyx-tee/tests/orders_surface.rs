@@ -20,6 +20,7 @@
 //!
 //! Run with: `cargo test -p darknyx-tee --test orders_surface`
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -438,6 +439,85 @@ async fn place_populates_opening_store_keyed_by_commitment_and_cancel_clears_it(
             "cancel must drop the in-enclave opening"
         );
     }
+}
+
+#[tokio::test]
+async fn symbols_route_to_independent_market_books() {
+    let sol = Arc::new(tokio::sync::RwLock::new(MatcherState::new()));
+    let btc = Arc::new(tokio::sync::RwLock::new(MatcherState::new()));
+    let api = ApiState::for_tests()
+        .with_instruments(vec![
+            InstrumentInfo {
+                symbol: "SOL-USDC".to_string(),
+                base_mint: [0; 32],
+                quote_mint: [0; 32],
+                tick_size: 1,
+                min_order_size: 0,
+                oracle_feed_id: "aa".repeat(32),
+            },
+            InstrumentInfo {
+                symbol: "BTC-USDC".to_string(),
+                base_mint: [0; 32],
+                quote_mint: [0; 32],
+                tick_size: 1,
+                min_order_size: 0,
+                oracle_feed_id: "bb".repeat(32),
+            },
+        ])
+        .with_market_runtimes(
+            HashMap::from([
+                ("SOL-USDC".to_string(), sol.clone()),
+                ("BTC-USDC".to_string(), btc.clone()),
+            ]),
+            Arc::new(AtomicU64::new(1)),
+            OracleCache::new(),
+        );
+    let app = app_from(Arc::new(api));
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    let sol_order = PlaceOrderBuilder::new();
+    assert_eq!(
+        place(&app, &bearer, sol_order.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    let mut btc_order = PlaceOrderBuilder::new();
+    btc_order.symbol = b"BTC-USDC".to_vec();
+    btc_order.order_id[0] = 0xBB;
+    btc_order.arrival_nonce = 2;
+    assert_eq!(
+        place(&app, &bearer, btc_order.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    assert_eq!(sol.read().await.book().len(), 1);
+    assert_eq!(btc.read().await.book().len(), 1);
+    assert!(sol.read().await.book().get(&btc_order.order_id).is_none());
+    assert!(btc.read().await.book().get(&sol_order.order_id).is_none());
+
+    let mut cross_market_replacement = PlaceOrderBuilder::new();
+    cross_market_replacement.symbol = b"BTC-USDC".to_vec();
+    cross_market_replacement.order_id[0] = 0xCC;
+    cross_market_replacement.arrival_nonce = 3;
+    let response = modify(
+        &app,
+        &bearer,
+        &hex::encode(sol_order.order_id),
+        modify_body(
+            &key,
+            sol_order.order_id,
+            1,
+            cross_market_replacement.sign(&key),
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        sol.read().await.book().len(),
+        1,
+        "cross-market modify must leave the original resting"
+    );
 }
 
 // ─── POST /orders — input validation ────────────────────────────────────────
@@ -964,6 +1044,46 @@ async fn cancel_returns_404_for_unknown_order() {
 }
 
 #[tokio::test]
+async fn cancel_returns_the_same_404_for_foreign_and_unknown_orders() {
+    let app = app_from(state());
+    let owner_bearer = fresh_bearer();
+    let foreign_bearer = bearer_for("foreign-account", "foreign-cancel-jti");
+    let key = fresh_signing_key();
+    let order = PlaceOrderBuilder::new();
+    let order_id_hex = hex::encode(order.order_id);
+
+    assert_eq!(
+        place(&app, &owner_bearer, order.sign(&key)).await.status(),
+        StatusCode::ACCEPTED
+    );
+
+    let foreign = cancel(
+        &app,
+        &foreign_bearer,
+        &order_id_hex,
+        cancel_body(&key, order.order_id, 1),
+    )
+    .await;
+    let unknown_id = [0xCC; 16];
+    let unknown = cancel(
+        &app,
+        &foreign_bearer,
+        &hex::encode(unknown_id),
+        cancel_body(&key, unknown_id, 1),
+    )
+    .await;
+
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert_eq!(read_json(foreign).await, read_json(unknown).await);
+    assert_eq!(
+        get_order(&app, &owner_bearer, &order_id_hex).await.status(),
+        StatusCode::OK,
+        "a foreign cancel must not mutate the owner's order"
+    );
+}
+
+#[tokio::test]
 async fn cancel_rejects_missing_bearer_with_401() {
     let app = app_from(state());
     let key = fresh_signing_key();
@@ -1221,6 +1341,54 @@ async fn modify_non_owner_is_forbidden() {
             .await
             .status(),
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn modify_returns_the_same_404_for_foreign_and_unknown_orders() {
+    let app = app_from(state());
+    let owner_bearer = fresh_bearer();
+    let foreign_bearer = bearer_for("foreign-account", "foreign-modify-jti");
+    let key = fresh_signing_key();
+    let original = PlaceOrderBuilder::new();
+    let original_id_hex = hex::encode(original.order_id);
+
+    assert_eq!(
+        place(&app, &owner_bearer, original.sign(&key))
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let mut replacement = PlaceOrderBuilder::new();
+    replacement.order_id = [0xDD; 16];
+    replacement.arrival_nonce = 2;
+    let foreign = modify(
+        &app,
+        &foreign_bearer,
+        &original_id_hex,
+        modify_body(&key, original.order_id, 1, replacement.sign(&key)),
+    )
+    .await;
+
+    let unknown_id = [0xCC; 16];
+    let unknown = modify(
+        &app,
+        &foreign_bearer,
+        &hex::encode(unknown_id),
+        modify_body(&key, unknown_id, 1, replacement.sign(&key)),
+    )
+    .await;
+
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert_eq!(read_json(foreign).await, read_json(unknown).await);
+    assert_eq!(
+        get_order(&app, &owner_bearer, &original_id_hex)
+            .await
+            .status(),
+        StatusCode::OK,
+        "a foreign modify must not mutate the owner's order"
     );
 }
 

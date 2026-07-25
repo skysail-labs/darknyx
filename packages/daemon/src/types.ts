@@ -49,6 +49,8 @@ export interface ManagedOrder {
   orderId: string;
   /** Master-seed order index used to derive `orderId` + its trading key. */
   seedIndex: number;
+  /** Canonical `/instruments` symbol of the isolated market book. */
+  symbol: string;
   side: Side;
   /** Strategy-supplied price/size (raw integer units) — for reporting only. */
   priceRaw: bigint;
@@ -74,6 +76,8 @@ export interface ManagedOrder {
 export function newManagedOrder(args: {
   orderId: string;
   seedIndex: number;
+  /** Defaults only for migration of pre-multi-market local records/tests. */
+  symbol?: string;
   side: Side;
   priceRaw: bigint;
   sizeRaw: bigint;
@@ -85,6 +89,7 @@ export function newManagedOrder(args: {
   return {
     orderId: args.orderId,
     seedIndex: args.seedIndex,
+    symbol: args.symbol ?? "UNKNOWN",
     side: args.side,
     priceRaw: args.priceRaw,
     sizeRaw: args.sizeRaw,

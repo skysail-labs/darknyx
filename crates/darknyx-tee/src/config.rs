@@ -5,13 +5,42 @@
 //! `vault_config.tee_pubkey` on Solana. See
 //! `docs/tee-architecture.md` §11.
 
-use anyhow::{bail, Result};
+use std::collections::HashSet;
+
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
 
 use crate::api::auth::{TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE};
+
+pub const MAX_MARKETS_PER_CVM: usize = 16;
+
+/// One independently routed order book inside the CVM. Market economics are
+/// replaced from the finalized on-chain `MarketConfig` at governed boot; this
+/// only identifies the pair, API symbol, and oracle feed to fetch.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct MarketSpec {
+    pub symbol: String,
+    pub base_mint: [u8; 32],
+    pub quote_mint: [u8; 32],
+    pub oracle_feed_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MarketSpecJson {
+    symbol: String,
+    base_mint: String,
+    quote_mint: String,
+    oracle_feed_id: String,
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Phase 1 stub: fields are read once the api/settle modules wire in.
 pub struct Config {
+    /// Boot-static market routing table. `DARKNYX_TEE_MARKETS_JSON` is the
+    /// preferred governed multi-market input. The legacy singular envs are
+    /// parsed into a one-entry table for devnet/loadgen compatibility.
+    pub markets: Vec<MarketSpec>,
     /// HTTP listen address. Defaults to 0.0.0.0:8080 inside the
     /// CVM; dstack-ingress fronts this on :443.
     pub http_bind: String,
@@ -38,8 +67,8 @@ pub struct Config {
     /// dev-machine boots without network access skip oracle sync
     /// entirely and the matcher's tick simply no-ops (stale oracle
     /// is treated as "skip cycle"). Production sets one feed per
-    /// market via `DARKNYX_TEE_FEED_IDS`. Each entry is the
-    /// 64-char-hex Pyth feed id.
+    /// market via `DARKNYX_TEE_MARKETS_JSON`; the singular compatibility path
+    /// uses `DARKNYX_TEE_FEED_IDS`. Each entry is a 64-char-hex Pyth feed id.
     pub feed_ids: Vec<String>,
 
     /// Merkle cold-boot floor slot. `getSignaturesForAddress` history
@@ -62,10 +91,8 @@ pub struct Config {
     /// Market quote mint (32 bytes). BID-side openings verify against
     /// this. From `DARKNYX_TEE_QUOTE_MINT` (base58).
     pub quote_mint: [u8; 32],
-    /// `true` only when BOTH market mint env vars were supplied. This selects
-    /// the governed real-settlement mode. When both are omitted, the process is
-    /// in the documented placeholder-mint loadgen mode and settlement stays
-    /// disabled; supplying only one mint is rejected as a configuration error.
+    /// `true` when strict multi-market JSON is present or both singular market
+    /// mint env vars were supplied. This selects governed real settlement.
     pub governed_market: bool,
     /// Canonical API/order symbol for the configured mint pair.
     /// `DARKNYX_TEE_MARKET_SYMBOL`, default `SOL-USDC`.
@@ -172,6 +199,77 @@ fn parse_mint_env(var: &str, default: [u8; 32]) -> Result<[u8; 32]> {
         }
         _ => Err(anyhow::anyhow!("{var}: invalid mint (need 32-byte base58)")),
     }
+}
+
+fn parse_mint_value(field: &str, value: &str) -> Result<[u8; 32]> {
+    let bytes = bs58::decode(value.trim())
+        .into_vec()
+        .with_context(|| format!("{field}: invalid base58 mint"))?;
+    bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{field}: invalid mint (need 32-byte base58)"))
+}
+
+fn validate_symbol(symbol: &str, field: &str) -> Result<()> {
+    if symbol.is_empty()
+        || symbol.len() > darkpool_matcher::order_canonical::SYMBOL_MAX_LEN
+        || !symbol
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'/'))
+    {
+        bail!(
+            "{field} must be 1..={} ASCII market bytes ([A-Za-z0-9_/-])",
+            darkpool_matcher::order_canonical::SYMBOL_MAX_LEN
+        );
+    }
+    Ok(())
+}
+
+fn validate_feed_id(feed: &str, field: &str) -> Result<()> {
+    let feed = feed.strip_prefix("0x").unwrap_or(feed);
+    if feed.len() != 64 || !feed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("{field} must be a 32-byte hex Pyth feed id");
+    }
+    Ok(())
+}
+
+fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
+    let rows: Vec<MarketSpecJson> =
+        serde_json::from_str(raw).context("DARKNYX_TEE_MARKETS_JSON: invalid JSON")?;
+    if rows.is_empty() || rows.len() > MAX_MARKETS_PER_CVM {
+        bail!("DARKNYX_TEE_MARKETS_JSON must contain 1..={MAX_MARKETS_PER_CVM} markets");
+    }
+
+    let mut symbols = HashSet::new();
+    let mut pairs = HashSet::new();
+    let mut markets = Vec::with_capacity(rows.len());
+    for (index, row) in rows.into_iter().enumerate() {
+        let prefix = format!("DARKNYX_TEE_MARKETS_JSON[{index}]");
+        validate_symbol(&row.symbol, &format!("{prefix}.symbol"))?;
+        validate_feed_id(&row.oracle_feed_id, &format!("{prefix}.oracle_feed_id"))?;
+        let base_mint = parse_mint_value(&format!("{prefix}.base_mint"), &row.base_mint)?;
+        let quote_mint = parse_mint_value(&format!("{prefix}.quote_mint"), &row.quote_mint)?;
+        if base_mint == quote_mint {
+            bail!("{prefix}: base_mint and quote_mint must differ");
+        }
+        if !symbols.insert(row.symbol.clone()) {
+            bail!("{prefix}: duplicate symbol {:?}", row.symbol);
+        }
+        if !pairs.insert((base_mint, quote_mint)) {
+            bail!("{prefix}: duplicate ordered mint pair");
+        }
+        markets.push(MarketSpec {
+            symbol: row.symbol,
+            base_mint,
+            quote_mint,
+            oracle_feed_id: row
+                .oracle_feed_id
+                .strip_prefix("0x")
+                .unwrap_or(&row.oracle_feed_id)
+                .to_ascii_lowercase(),
+        });
+    }
+    Ok(markets)
 }
 
 /// Parse a 32-byte hex value (optional `0x` prefix) from an env var —
@@ -307,7 +405,7 @@ fn validate_auth_mode(dstack_socket: Option<&str>, allow_test_auth: bool) -> Res
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let feed_ids = std::env::var("DARKNYX_TEE_FEED_IDS")
+        let legacy_feed_ids: Vec<String> = std::env::var("DARKNYX_TEE_FEED_IDS")
             .ok()
             .map(|s| {
                 s.split(',')
@@ -329,16 +427,46 @@ impl Config {
             bail!("DARKNYX_TEE_BASE_MINT and DARKNYX_TEE_QUOTE_MINT must be supplied together");
         }
         let market_symbol = env_string_or("DARKNYX_TEE_MARKET_SYMBOL", "SOL-USDC");
-        if market_symbol.is_empty()
-            || market_symbol.len() > darkpool_matcher::order_canonical::SYMBOL_MAX_LEN
-        {
+        validate_symbol(&market_symbol, "DARKNYX_TEE_MARKET_SYMBOL")?;
+        let base_mint = parse_mint_env("DARKNYX_TEE_BASE_MINT", default_base_mint())?;
+        let quote_mint = parse_mint_env("DARKNYX_TEE_QUOTE_MINT", default_quote_mint())?;
+
+        let markets_json = env_nonempty("DARKNYX_TEE_MARKETS_JSON");
+        if markets_json.is_some() && (base_mint_set || quote_mint_set) {
             bail!(
-                "DARKNYX_TEE_MARKET_SYMBOL must be 1..={} bytes",
-                darkpool_matcher::order_canonical::SYMBOL_MAX_LEN
+                "DARKNYX_TEE_MARKETS_JSON cannot be mixed with the legacy \
+                 DARKNYX_TEE_BASE_MINT/QUOTE_MINT envs"
             );
         }
+        let markets = match markets_json {
+            Some(raw) => parse_markets_json(&raw)?,
+            None => {
+                let oracle_feed_id = legacy_feed_ids.first().cloned().unwrap_or_default();
+                if !oracle_feed_id.is_empty() {
+                    validate_feed_id(&oracle_feed_id, "DARKNYX_TEE_FEED_IDS[0]")?;
+                }
+                vec![MarketSpec {
+                    symbol: market_symbol.clone(),
+                    base_mint,
+                    quote_mint,
+                    oracle_feed_id,
+                }]
+            }
+        };
+        let mut seen_feeds = HashSet::new();
+        let feed_ids = markets
+            .iter()
+            .map(|market| market.oracle_feed_id.clone())
+            .filter(|feed| !feed.is_empty() && seen_feeds.insert(feed.clone()))
+            .collect();
+        let governed_market =
+            env_nonempty("DARKNYX_TEE_MARKETS_JSON").is_some() || (base_mint_set && quote_mint_set);
+        let primary = markets
+            .first()
+            .expect("market parser guarantees at least one entry");
 
         Ok(Self {
+            markets: markets.clone(),
             http_bind: env_string_or("DARKNYX_TEE_HTTP_BIND", "0.0.0.0:8080"),
             // Empty (compose `${VAR}` with no value) → the default, NOT a
             // literal empty URL that breaks every RPC call.
@@ -350,10 +478,10 @@ impl Config {
             allow_test_auth,
             feed_ids,
             sync_from_slot: parse_u64_env("DARKNYX_TEE_SYNC_FROM_SLOT", 0)?,
-            base_mint: parse_mint_env("DARKNYX_TEE_BASE_MINT", default_base_mint())?,
-            quote_mint: parse_mint_env("DARKNYX_TEE_QUOTE_MINT", default_quote_mint())?,
-            governed_market: base_mint_set && quote_mint_set,
-            market_symbol,
+            base_mint: primary.base_mint,
+            quote_mint: primary.quote_mint,
+            governed_market,
+            market_symbol: primary.symbol.clone(),
             tick_size: parse_u64_env("DARKNYX_TEE_TICK_SIZE", 1)?,
             min_order_size: parse_u64_env("DARKNYX_TEE_MIN_ORDER_SIZE", 0)?,
             settle_lookup_table: parse_pubkey_env("DARKNYX_TEE_SETTLE_LOOKUP_TABLE")?,
@@ -379,6 +507,35 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multi_market_json_is_strict_and_deduplicated() {
+        let mint_a = bs58::encode([1u8; 32]).into_string();
+        let mint_b = bs58::encode([2u8; 32]).into_string();
+        let mint_c = bs58::encode([3u8; 32]).into_string();
+        let feed = "ab".repeat(32);
+        let raw = format!(
+            r#"[
+                {{"symbol":"SOL-USDC","base_mint":"{mint_a}","quote_mint":"{mint_b}","oracle_feed_id":"{feed}"}},
+                {{"symbol":"BTC-USDC","base_mint":"{mint_c}","quote_mint":"{mint_b}","oracle_feed_id":"0x{feed}"}}
+            ]"#
+        );
+        let parsed = parse_markets_json(&raw).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[1].symbol, "BTC-USDC");
+        assert_eq!(parsed[1].oracle_feed_id, feed);
+
+        let duplicate = format!(
+            r#"[
+                {{"symbol":"SOL-USDC","base_mint":"{mint_a}","quote_mint":"{mint_b}","oracle_feed_id":"{feed}"}},
+                {{"symbol":"SOL-USDC","base_mint":"{mint_c}","quote_mint":"{mint_b}","oracle_feed_id":"{feed}"}}
+            ]"#
+        );
+        assert!(parse_markets_json(&duplicate)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate symbol"));
+    }
 
     #[test]
     fn test_auth_requires_an_explicit_simulator_endpoint() {

@@ -9,16 +9,15 @@
 //!   3. Dstack handshake (PR 4a) → derive Ed25519 signer +
 //!      JWT secret + capture app_id / instance_id / compose_hash /
 //!      MRTD.
-//!   4. Construct shared runtime (matcher state, oracle cache,
-//!      current_slot, matches channel).
+//!   4. Construct the boot-static market registry (one isolated matcher,
+//!      driver, and output channel per configured pair).
 //!   5. Spawn long-running tokio tasks:
-//!      - `MatcherDriver` (PR 4c) — ticks every `BATCH_MS`.
-//!      - `oracle_sync` (PR 4b) — refreshes the cache from Hermes.
-//!      - Settle-output drainer — placeholder until PR 4f wires
-//!        the real settle scheduler.
-//!   6. Thread the shared matcher state into `ApiState` via
-//!      `with_matcher_runtime` so the orders handlers (PR 4e.3) can
-//!      read + write the same book the driver does.
+//!      - one `MatcherDriver` per market — ticks every `BATCH_MS`;
+//!      - one shared `oracle_sync` — refreshes every configured Hermes feed;
+//!      - one settlement scheduler per market, sharing the prover, ALT pool,
+//!        signer set, and venue-wide batch-concurrency budget.
+//!   6. Thread the matcher registry into `ApiState` so signed symbols route
+//!      placements and existing-order operations return to the same book.
 //!   7. Bind the configured HTTP socket + `axum::serve(...)` until
 //!      Ctrl-C / listener drop.
 //!
@@ -26,6 +25,7 @@
 //! The test-only `ApiState::for_tests()` fallback is available solely when
 //! `DARKNYX_TEE_ALLOW_TEST_AUTH=1` and `DSTACK_SIMULATOR_ENDPOINT` are both set.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ use darknyx_tee::solana_rpc::{Commitment, SolanaRpcClient};
 use darkpool_matcher::config::MatchConfig;
 use darkpool_matcher::match_result::RunBatchOutput;
 use dstack_sdk::dstack_client::DstackClient;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, RwLock, Semaphore};
 use tokio::task::JoinHandle;
 use tracing_subscriber::EnvFilter;
 
@@ -195,33 +195,42 @@ async fn main() -> Result<()> {
     let boot_session_id = api_state.boot_session_id;
     let trading_gate = api_state.trading_gate.clone();
 
-    // ─── 2. Shared runtime ───────────────────────────────────────────
-    // Build the match config up front so its mints can seed the
-    // shared MatcherState — the order intake needs them to verify
-    // each input-note opening against the signed commitment (4g.7a).
-    let mut match_config = dev_match_config(&cfg);
+    // ─── 2. Shared multi-market runtime ──────────────────────────────
+    // Each configured pair gets an independent MatcherState/driver/channel.
+    // The oracle cache, slot clock, signer set, prover, ALT pool, and global
+    // settle concurrency budget remain venue-wide shared resources.
+    let mut match_configs = cfg
+        .markets
+        .iter()
+        .map(|market| dev_match_config(&cfg, market))
+        .collect::<Vec<_>>();
     // In a real-settlement boot, finalized on-chain governance is mandatory.
     // VALID_MATCH_BATCH already binds the mint pair, price scale, exact fee, and
     // protocol owner; using env fallbacks for any of them would make every proof
     // fail. Tick/min/breaker remain TEE policy, but come from the same governed
     // snapshot. Placeholder-mint loadgen mode is deliberately settlement-disabled.
-    let governance_snapshot = if tee_signer_pubkey.is_some() && cfg.governed_market {
-        let snapshot = read_governance_snapshot(&cfg)
+    let governance_snapshots = if tee_signer_pubkey.is_some() && cfg.governed_market {
+        let snapshots = read_governance_snapshots(&cfg)
             .await
             .context("finalized on-chain governance unavailable; refusing real-market startup")?;
-        apply_governance_snapshot(&mut match_config, &snapshot);
+        for (match_config, snapshot) in match_configs.iter_mut().zip(&snapshots) {
+            apply_governance_snapshot(match_config, snapshot);
+        }
 
         let derived_keys = tee_signer_pubkeys
             .as_deref()
             .expect("real signer boot carries the derived key set");
-        if !snapshot.authorizes_exact_signer_set(derived_keys) {
+        if !snapshots
+            .iter()
+            .all(|snapshot| snapshot.authorizes_exact_signer_set(derived_keys))
+        {
             trading_gate.pause();
             tracing::warn!(
                 "derived TEE signer set is not the finalized on-chain authorized set; \
                  trading starts PAUSED until governance rotation completes"
             );
         }
-        Some(snapshot)
+        Some(snapshots)
     } else {
         if tee_signer_pubkey.is_some() {
             tracing::warn!(
@@ -231,39 +240,21 @@ async fn main() -> Result<()> {
         }
         None
     };
-    tracing::info!(
-        fee_rate_bps = match_config.fee_rate_bps,
-        protocol_owner_set = (match_config.protocol_owner_commitment != [0u8; 32]),
-        "matcher fee config (fee notes mint when fee_rate_bps > 0)"
-    );
-    // Fees on but no owner set ⇒ fee notes mint to the zero owner and are
-    // unclaimable. Flag the misconfiguration loudly (don't hard-fail: a
-    // fee-free or throwaway dev run is legitimate).
-    if match_config.fee_rate_bps > 0 && match_config.protocol_owner_commitment == [0u8; 32] {
-        tracing::warn!(
-            "fee_rate_bps > 0 but DARKNYX_TEE_PROTOCOL_OWNER_COMMITMENT is unset — protocol \
-             fee notes will mint to a ZERO owner and be UNCLAIMABLE; set the owner \
-             commitment, or set DARKNYX_TEE_FEE_RATE_BPS=0"
+    for (market, match_config) in cfg.markets.iter().zip(&match_configs) {
+        tracing::info!(
+            symbol = %market.symbol,
+            fee_rate_bps = match_config.fee_rate_bps,
+            protocol_owner_set = (match_config.protocol_owner_commitment != [0u8; 32]),
+            "matcher fee config"
         );
+        if match_config.fee_rate_bps > 0 && match_config.protocol_owner_commitment == [0u8; 32] {
+            tracing::warn!(
+                symbol = %market.symbol,
+                "fee_rate_bps > 0 but protocol owner is unset; fee notes are unclaimable"
+            );
+        }
     }
-    // Capture the values the settle driver needs before `match_config`
-    // is moved into the matcher driver below ([u8; 32] is Copy).
-    let settle_base_mint = match_config.base_mint;
-    let settle_quote_mint = match_config.quote_mint;
-    let settle_protocol_owner = match_config.protocol_owner_commitment;
-    // The finalized fee rate the settle driver feeds the circuit's exact-fee
-    // public input — must equal what the matcher charges.
-    let settle_fee_rate_bps = match_config.fee_rate_bps as u64;
-    let settle_price_scale = match_config.price_scale;
-    // Also for the /instruments metadata (captured before the move).
-    let market_tick_size = match_config.tick_size;
-    let market_min_order_size = match_config.min_order_size;
-    let matcher_state = Arc::new(RwLock::new(
-        MatcherState::new()
-            .with_market(match_config.base_mint, match_config.quote_mint)
-            .with_price_scale(match_config.price_scale)
-            .with_fee_rate_bps(match_config.fee_rate_bps),
-    ));
+
     let oracle = OracleCache::new();
     let current_slot = Arc::new(AtomicU64::new(1));
     // Compute-unit price bid (micro-lamports/CU) the settle worker prepends to
@@ -271,39 +262,57 @@ async fn main() -> Result<()> {
     // getRecentPrioritizationFees; starts at 0 (no bid until the first poll).
     let current_priority_fee = Arc::new(AtomicU64::new(0));
 
-    // Matches channel — capacity 1024 is plenty: the matcher
-    // produces at most one `RunBatchOutput` per tick (default
-    // 2 s); the drainer (or future settle scheduler) reads
-    // continuously. If we ever block here, the matcher's `tick()`
-    // returns Err and shuts down — which is the right behaviour
-    // when the settle path is unhealthy.
-    let (matches_tx, matches_rx) = mpsc::channel::<RunBatchOutput>(1024);
-
-    // ─── 3. Spawn matcher driver ──────────────────────────────────────
-    let driver = MatcherDriver {
-        state: matcher_state.clone(),
-        oracle: oracle.clone(),
-        current_slot: current_slot.clone(),
-        matches_tx,
-        trading_gate: trading_gate.clone(),
-        cfg: DriverConfig {
-            match_config,
-            // First configured feed drives this single-market
-            // build. PR 4g+ will spawn one driver per market.
-            feed_id: cfg
-                .feed_ids
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "no-feed-configured".to_string()),
-            batch_ms: 2000,
-            max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
-            // Page each tick into ≤N-match batches matching the N=16
-            // VALID_MATCH_BATCH settle circuit.
-            max_matches_per_batch: PRODUCTION_BATCH_N,
-        },
-    };
-    let _driver_handle = driver.spawn();
-    tracing::info!("matcher driver spawned (BATCH_MS=2000)");
+    // ─── 3. Spawn one isolated matcher driver per market ──────────────
+    let mut runtimes = Vec::with_capacity(match_configs.len());
+    for (market, match_config) in cfg.markets.iter().cloned().zip(match_configs) {
+        let matcher_state = Arc::new(RwLock::new(
+            MatcherState::new()
+                .with_market(match_config.base_mint, match_config.quote_mint)
+                .with_price_scale(match_config.price_scale)
+                .with_fee_rate_bps(match_config.fee_rate_bps),
+        ));
+        let settle_cfg = SettleDriverConfig {
+            boot_session_id,
+            base_mint: match_config.base_mint,
+            quote_mint: match_config.quote_mint,
+            protocol_owner_commitment: match_config.protocol_owner_commitment,
+            fee_rate_bps: match_config.fee_rate_bps as u64,
+            price_scale: match_config.price_scale,
+            circuit_n: PRODUCTION_BATCH_N,
+            settle_batch_concurrency: cfg.settle_batch_concurrency as usize,
+        };
+        let tick_size = match_config.tick_size;
+        let min_order_size = match_config.min_order_size;
+        let (matches_tx, matches_rx) = mpsc::channel::<RunBatchOutput>(1024);
+        MatcherDriver {
+            state: matcher_state.clone(),
+            oracle: oracle.clone(),
+            current_slot: current_slot.clone(),
+            matches_tx,
+            trading_gate: trading_gate.clone(),
+            cfg: DriverConfig {
+                match_config,
+                feed_id: if market.oracle_feed_id.is_empty() {
+                    "no-feed-configured".to_string()
+                } else {
+                    market.oracle_feed_id.clone()
+                },
+                batch_ms: 2000,
+                max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+                max_matches_per_batch: PRODUCTION_BATCH_N,
+            },
+        }
+        .spawn();
+        tracing::info!(symbol = %market.symbol, "matcher driver spawned (BATCH_MS=2000)");
+        runtimes.push((
+            market,
+            matcher_state,
+            Some(matches_rx),
+            settle_cfg,
+            tick_size,
+            min_order_size,
+        ));
+    }
 
     // ─── 4. Spawn oracle sync if feeds configured ─────────────────────
     let _oracle_handle: Option<JoinHandle<()>> = if cfg.feed_ids.is_empty() {
@@ -336,7 +345,7 @@ async fn main() -> Result<()> {
     // Missing any dependency (explicit simulator test mode, prover zkey absent in a
     // local dev run) → enqueue-only, logged below.
     let settle_state = Arc::new(RwLock::new(SettleSchedulerState::default()));
-    let settle_driver: Option<SettleDriver> = if !cfg.governed_market {
+    let settle_template: Option<SettleDriver> = if !cfg.governed_market {
         None
     } else {
         match settle_signer {
@@ -345,18 +354,19 @@ async fn main() -> Result<()> {
                 // Vecs the worker holds (tee_keypairs[j] pairs with signing_keys[j]).
                 let (tee_keypairs, signing_keys): (Vec<_>, Vec<_>) =
                     shard_signers.into_iter().unzip();
+                let primary = &runtimes[0];
                 let driver = build_settle_driver(
                     &cfg,
                     tee_keypairs,
                     signing_keys,
                     settle_state.clone(),
-                    matcher_state.clone(),
+                    primary.1.clone(),
                     current_priority_fee.clone(),
-                    settle_base_mint,
-                    settle_quote_mint,
-                    settle_protocol_owner,
-                    settle_fee_rate_bps,
-                    settle_price_scale,
+                    primary.3.base_mint,
+                    primary.3.quote_mint,
+                    primary.3.protocol_owner_commitment,
+                    primary.3.fee_rate_bps,
+                    primary.3.price_scale,
                     boot_session_id,
                 );
                 driver
@@ -383,13 +393,33 @@ async fn main() -> Result<()> {
             }
         }
     };
-    let settle_enabled = settle_driver.is_some();
+    let settle_enabled = settle_template.is_some();
     if cfg.governed_market && tee_signer_pubkey.is_some() && !settle_enabled {
         trading_gate.pause();
         tracing::warn!("governed real-market settle driver is unavailable; trading starts PAUSED");
     }
-    let _scheduler_handle =
-        SettleScheduler::spawn_with_settle(matches_rx, settle_state.clone(), settle_driver);
+    let shared_ctx = settle_template.as_ref().map(|driver| driver.ctx.clone());
+    let global_settle_limit = Arc::new(Semaphore::new(
+        cfg.settle_batch_concurrency.clamp(1, 8) as usize
+    ));
+    for (_, matcher, matches_rx, settle_cfg, _, _) in &mut runtimes {
+        let driver = match (&settle_template, &shared_ctx) {
+            (Some(_), Some(ctx)) => Some(SettleDriver {
+                ctx: ctx.clone(),
+                matcher_state: matcher.clone(),
+                cfg: settle_cfg.clone(),
+            }),
+            _ => None,
+        };
+        SettleScheduler::spawn_with_shared_limit(
+            matches_rx
+                .take()
+                .expect("each market receiver is attached exactly once"),
+            settle_state.clone(),
+            driver,
+            global_settle_limit.clone(),
+        );
+    }
 
     // ─── 6. Attach a Solana RPC client to ApiState for visibility ─────
     // (The settle driver owns its OWN client; this one only backs
@@ -407,19 +437,28 @@ async fn main() -> Result<()> {
     };
 
     // ─── 7. Attach matcher + settle state + instruments to ApiState ───
-    let instruments = vec![darknyx_tee::api::instruments::InstrumentInfo {
-        symbol: cfg.market_symbol.clone(),
-        base_mint: settle_base_mint,
-        quote_mint: settle_quote_mint,
-        tick_size: market_tick_size,
-        min_order_size: market_min_order_size,
-        oracle_feed_id: cfg.feed_ids.first().cloned().unwrap_or_default(),
-    }];
+    let instruments = runtimes
+        .iter()
+        .map(|(market, _, _, settle_cfg, tick_size, min_order_size)| {
+            darknyx_tee::api::instruments::InstrumentInfo {
+                symbol: market.symbol.clone(),
+                base_mint: settle_cfg.base_mint,
+                quote_mint: settle_cfg.quote_mint,
+                tick_size: *tick_size,
+                min_order_size: *min_order_size,
+                oracle_feed_id: market.oracle_feed_id.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let matchers = runtimes
+        .iter()
+        .map(|(market, matcher, ..)| (market.symbol.clone(), matcher.clone()))
+        .collect::<HashMap<_, _>>();
     let api_state = api_state
-        .with_matcher_runtime(matcher_state, current_slot, oracle.clone())
+        .with_instruments(instruments)
+        .with_market_runtimes(matchers, current_slot, oracle.clone())
         .with_settle_state(settle_state)
-        .with_settle_enabled(settle_enabled)
-        .with_instruments(instruments);
+        .with_settle_enabled(settle_enabled);
 
     let api_state = Arc::new(api_state);
 
@@ -429,7 +468,7 @@ async fn main() -> Result<()> {
     // settlement reconciliation keep running. Parameter changes require a restart
     // so every immutable matcher/prover/settler snapshot is adopted atomically;
     // a signer rotation can resume in place once the derived set is authorized.
-    let _governance_monitor = match (governance_snapshot, tee_signer_pubkeys) {
+    let _governance_monitor = match (governance_snapshots, tee_signer_pubkeys) {
         (Some(expected), Some(derived_keys)) => Some(spawn_governance_monitor(
             cfg.clone(),
             expected,
@@ -857,7 +896,10 @@ fn build_settle_driver(
 ///     (`100_000` = 1000% drift band)
 ///   - `batch_ms = 2000`          (D5 default)
 ///   - `fee_rate_bps`             from Config (DARKNYX_TEE_FEE_RATE_BPS, default 30)
-fn dev_match_config(cfg: &darknyx_tee::config::Config) -> MatchConfig {
+fn dev_match_config(
+    cfg: &darknyx_tee::config::Config,
+    market: &darknyx_tee::config::MarketSpec,
+) -> MatchConfig {
     // Mints + tick + min + fee come from Config (env-overridable) so a
     // real settle can point the matcher at the on-chain mints the
     // deposited notes use AND charge a real protocol fee (so fee notes
@@ -866,8 +908,8 @@ fn dev_match_config(cfg: &darknyx_tee::config::Config) -> MatchConfig {
     // remaining fields are dev defaults (circuit breaker effectively
     // disabled, 2 s batch).
     MatchConfig {
-        base_mint: cfg.base_mint,
-        quote_mint: cfg.quote_mint,
+        base_mint: market.base_mint,
+        quote_mint: market.quote_mint,
         price_scale: 100_000_000,
         tick_size: cfg.tick_size,
         min_order_size: cfg.min_order_size,
@@ -987,7 +1029,8 @@ async fn read_on_chain_vault_config(
 }
 
 async fn read_on_chain_market_config(
-    cfg: &darknyx_tee::config::Config,
+    base_mint: &[u8; 32],
+    quote_mint: &[u8; 32],
     rpc: &SolanaRpcClient,
 ) -> Result<
     Option<darknyx_tee::solana_rpc::market_config::OnChainMarketConfig>,
@@ -996,7 +1039,7 @@ async fn read_on_chain_market_config(
     use darknyx_tee::settle::vault::{market_config_pda, vault_program_id};
     use darknyx_tee::solana_rpc::market_config::parse_market_config;
 
-    let (market_pda, _) = market_config_pda(&cfg.base_mint, &cfg.quote_mint);
+    let (market_pda, _) = market_config_pda(base_mint, quote_mint);
     let Some(account) = rpc.get_account_info(&market_pda).await? else {
         return Ok(None);
     };
@@ -1006,20 +1049,33 @@ async fn read_on_chain_market_config(
     Ok(parse_market_config(&account.data))
 }
 
-async fn read_governance_snapshot(
+async fn read_governance_snapshots(
     cfg: &darknyx_tee::config::Config,
-) -> anyhow::Result<GovernanceSnapshot> {
+) -> anyhow::Result<Vec<GovernanceSnapshot>> {
     let rpc = SolanaRpcClient::new(&cfg.solana_rpc_url)?.with_commitment(Commitment::Finalized);
     let vault = read_on_chain_vault_config(&rpc)
         .await?
         .context("VaultConfig missing, wrong-owner, or malformed")?;
-    let market = read_on_chain_market_config(cfg, &rpc)
-        .await?
-        .context("MarketConfig missing, wrong-owner, or malformed")?;
-
-    let snapshot = GovernanceSnapshot { vault, market };
-    snapshot.validate_for_market(&cfg.base_mint, &cfg.quote_mint, cfg.num_trees)?;
-    Ok(snapshot)
+    let mut snapshots = Vec::with_capacity(cfg.markets.len());
+    for configured in &cfg.markets {
+        let market =
+            read_on_chain_market_config(&configured.base_mint, &configured.quote_mint, &rpc)
+                .await?
+                .with_context(|| {
+                    format!(
+                        "MarketConfig for {} missing, wrong-owner, or malformed",
+                        configured.symbol
+                    )
+                })?;
+        let snapshot = GovernanceSnapshot { vault, market };
+        snapshot.validate_for_market(
+            &configured.base_mint,
+            &configured.quote_mint,
+            cfg.num_trees,
+        )?;
+        snapshots.push(snapshot);
+    }
+    Ok(snapshots)
 }
 
 fn apply_governance_snapshot(config: &mut MatchConfig, snapshot: &GovernanceSnapshot) {
@@ -1066,7 +1122,7 @@ fn apply_governance_snapshot(config: &mut MatchConfig, snapshot: &GovernanceSnap
 
 fn spawn_governance_monitor(
     cfg: darknyx_tee::config::Config,
-    expected: GovernanceSnapshot,
+    expected: Vec<GovernanceSnapshot>,
     derived_keys: Vec<[u8; 32]>,
     settle_enabled: bool,
     trading_gate: TradingGate,
@@ -1074,11 +1130,22 @@ fn spawn_governance_monitor(
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(GOVERNANCE_REFRESH_INTERVAL).await;
-            match read_governance_snapshot(&cfg).await {
+            match read_governance_snapshots(&cfg).await {
                 Ok(current) => {
-                    let params_match = current.runtime_params_match(&expected);
-                    let signers_match = current.authorizes_exact_signer_set(&derived_keys);
-                    if current.permits_trading(&expected, &derived_keys, settle_enabled) {
+                    let same_len = current.len() == expected.len();
+                    let params_match = same_len
+                        && current
+                            .iter()
+                            .zip(&expected)
+                            .all(|(now, boot)| now.runtime_params_match(boot));
+                    let signers_match = current
+                        .iter()
+                        .all(|snapshot| snapshot.authorizes_exact_signer_set(&derived_keys));
+                    let markets_permit = same_len
+                        && current.iter().zip(&expected).all(|(now, boot)| {
+                            now.permits_trading(boot, &derived_keys, settle_enabled)
+                        });
+                    if markets_permit {
                         if trading_gate.resume() {
                             tracing::info!(
                                 "finalized governance matches the boot snapshot and signer set; \
