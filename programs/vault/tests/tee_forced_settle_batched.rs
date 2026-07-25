@@ -332,8 +332,16 @@ fn cu_profile_worst_case_settle() {
     // (crates/darknyx-tee/src/settle/pipeline.rs). Post-CU-1 the worst case is far
     // below the old ~165k; the sentinel guards a regression that would erode
     // the headroom a lowered limit relies on.
+    //
+    // PF-01 (audit 2026-07-25) measured 81,178 -> 79,786 here by reading the
+    // two NoteLock accounts' STORED bumps instead of making Anchor run
+    // `find_program_address`. That is ~700 CU per account, NOT the 3-5k the
+    // audit estimated — the estimate assumed the marker's explicit
+    // `find_program_address` was swapped too, which it was not (see the
+    // account struct). Tightened to 85_000 so the win cannot silently erode;
+    // re-measure and re-set together if the settle path changes shape.
     assert!(
-        meta.compute_units_consumed < 110_000,
+        meta.compute_units_consumed < 85_000,
         "settle worst-case CU {} regressed; re-measure + re-check darknyx-tee \
          SETTLE_COMPUTE_UNIT_LIMIT margin",
         meta.compute_units_consumed

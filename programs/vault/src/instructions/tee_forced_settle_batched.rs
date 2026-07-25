@@ -190,10 +190,15 @@ pub struct TeeForcedSettleBatched<'info> {
     )]
     pub merkle_tree: AccountLoader<'info, MerkleTree>,
 
+    // PF-01: both locks store their own bump (`state.rs::NoteLock.bump`,
+    // written by `lock_note` and `create_relock_pda`), so read it rather than
+    // making Anchor search. `consumed_a`/`consumed_b` below deliberately keep
+    // the bare `bump` — they are `init` and store nothing to read back, so
+    // the search there is genuine.
     #[account(
         mut,
         seeds = [NoteLock::SEED, payload.note_a_commitment.as_ref()],
-        bump,
+        bump = note_lock_a.load()?.bump,
         close = tee_authority,
     )]
     pub note_lock_a: AccountLoader<'info, NoteLock>,
@@ -201,7 +206,7 @@ pub struct TeeForcedSettleBatched<'info> {
     #[account(
         mut,
         seeds = [NoteLock::SEED, payload.note_b_commitment.as_ref()],
-        bump,
+        bump = note_lock_b.load()?.bump,
         close = tee_authority,
     )]
     pub note_lock_b: AccountLoader<'info, NoteLock>,
