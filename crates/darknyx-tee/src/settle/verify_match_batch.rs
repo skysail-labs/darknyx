@@ -11,10 +11,14 @@
 //!
 //! Args (Borsh, declaration order):
 //!   1. `merkle_root: [u8; 32]`  — the batch root (first public input)
-//!   2. `expiry_slot: u64`       — marker TTL; must be in
-//!      `(current_slot, current_slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS]`
-//!   3. `proof: Groth16Proof`    — 256 bytes (pi_a 64 + pi_b 128 +
+//!   2. `proof: Groth16Proof`    — 256 bytes (pi_a 64 + pi_b 128 +
 //!      pi_c 64), produced by the 4g.4b prover
+//!
+//! The marker TTL is NOT an argument (S-04). It used to be, bounded only to
+//! `(current_slot, current_slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS]`, which
+//! let anyone replaying this proof pick a 1-slot TTL, win the `init`, and kill
+//! every settle in the batch while the locks were already down. The program
+//! derives it now.
 //!
 //! Accounts (positional, mirror `VerifyMatchBatch<'info>`):
 //!   `[0]` payer            — signer + writable (the TEE keypair;
@@ -52,13 +56,12 @@ pub static VERIFY_MATCH_BATCH_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|
 #[derive(Clone, Debug, BorshSerialize)]
 pub struct VerifyMatchBatchArgs {
     pub merkle_root: [u8; 32],
-    pub expiry_slot: u64,
     pub proof: Groth16ProofBytes,
 }
 
 impl VerifyMatchBatchArgs {
-    /// Borsh-encoded width: 32 + 8 + 256 = 296 bytes.
-    pub const WIRE_LEN: usize = 32 + 8 + Groth16ProofBytes::WIRE_LEN;
+    /// Borsh-encoded width: 32 + 256 = 288 bytes.
+    pub const WIRE_LEN: usize = 32 + Groth16ProofBytes::WIRE_LEN;
 }
 
 /// Build the `verify_match_batch` instruction. `payer` is the TEE
@@ -110,7 +113,6 @@ mod tests {
     fn dummy_args() -> VerifyMatchBatchArgs {
         VerifyMatchBatchArgs {
             merkle_root: [0xAB; 32],
-            expiry_slot: 1_000_000,
             proof: dummy_proof(),
         }
     }
@@ -138,9 +140,10 @@ mod tests {
         let (base, quote) = mints();
         let ix = build_verify_match_batch_ix(&dummy_payer(), &base, &quote, dummy_args());
         assert_eq!(&ix.data[..8], &*VERIFY_MATCH_BATCH_DISCRIMINATOR);
-        // 8 disc + 32 root + 8 expiry + 256 proof = 304.
+        // 8 disc + 32 root + 256 proof = 296. S-04 removed the 8-byte
+        // caller-supplied expiry; a regression that re-adds it grows this.
         assert_eq!(ix.data.len(), 8 + VerifyMatchBatchArgs::WIRE_LEN);
-        assert_eq!(ix.data.len(), 304);
+        assert_eq!(ix.data.len(), 296);
     }
 
     #[test]
@@ -149,11 +152,11 @@ mod tests {
         let ix = build_verify_match_batch_ix(&dummy_payer(), &base, &quote, dummy_args());
         let body = &ix.data[8..];
         assert_eq!(&body[0..32], &[0xAB; 32]); // merkle_root
-        assert_eq!(&body[32..40], &1_000_000u64.to_le_bytes()); // expiry_slot
-        assert_eq!(&body[40..104], &[0x11; 64]); // pi_a
-        assert_eq!(&body[104..232], &[0x22; 128]); // pi_b
-        assert_eq!(&body[232..296], &[0x33; 64]); // pi_c
-        assert_eq!(body.len(), 296);
+                                               // S-04: no expiry_slot on the wire — the program derives the TTL.
+        assert_eq!(&body[32..96], &[0x11; 64]); // pi_a
+        assert_eq!(&body[96..224], &[0x22; 128]); // pi_b
+        assert_eq!(&body[224..288], &[0x33; 64]); // pi_c
+        assert_eq!(body.len(), 288);
     }
 
     #[test]

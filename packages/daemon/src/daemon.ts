@@ -632,6 +632,11 @@ export class Daemon {
   async cancelOrder(orderIdHex: string): Promise<void> {
     const order = this.store.getOrder(orderIdHex);
     if (!order) throw new Error(`unknown order ${orderIdHex}`);
+    // S-07: the cancel signature is scoped to a boot session, so refuse to
+    // sign one before the handshake has produced it — same guard placement
+    // uses. Without this a cancel could be signed against a null session.
+    if (!this.bootSessionId)
+      throw new Error("daemon has not fetched the CVM boot session");
     const idx = order.seedIndex;
     const cancel = await buildCancel({
       orderId: fromHex(orderIdHex),

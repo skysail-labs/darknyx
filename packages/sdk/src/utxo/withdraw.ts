@@ -128,6 +128,12 @@ export function getWithdrawFunction({
     let proof;
     try {
       const [mintLo, mintHi] = pubkeyPairBE(params.tokenMint);
+      // S-01: the destination is a PUBLIC input, so the proof is only valid
+      // for this exact token account. Changing the destination after proving
+      // invalidates the proof rather than redirecting the funds.
+      const [destLo, destHi] = pubkeyPairBE(
+        params.destinationTokenAccount.toBytes(),
+      );
       proof = await client.zkProver.spend.prove({
         merkleRoot: uint8ArrayToBigIntBE(mProof.root),
         nullifier: uint8ArrayToBigIntBE(nullifierBytes),
@@ -138,6 +144,7 @@ export function getWithdrawFunction({
         innerHash: params.notePlaintext.innerHash,
         merklePath: mProof.siblings.map(uint8ArrayToBigIntBE),
         merkleIndices: mProof.pathIndices,
+        recipient: [destLo, destHi],
       });
     } catch (e) {
       throw new DarkPoolError("proof-generation", (e as Error).message, e);

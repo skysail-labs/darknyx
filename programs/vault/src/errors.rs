@@ -123,4 +123,6 @@ pub enum VaultError {
     MarketDisabled,
     #[msg("Merge must contain at least one active positive input")]
     EmptyMerge,
+    #[msg("Merge inputs must be pairwise distinct")]
+    DuplicateMergeInput,
 }

@@ -565,10 +565,16 @@ jobs:
           cargo test -p vault \
             --test zk_roundtrip \
             --test zk_spend_roundtrip \
-            --test merge_verify \
             --test merkle_host \
             --test merkle_fuzz \
             -- --nocapture
+          # NOTE: `merge_verify` is deliberately NOT here. It began as a pure
+          # host round-trip target, but it now also drives litesvm (the merge
+          # rejection paths), which needs `target/deploy/vault.so` — an
+          # artefact this job neither depends on nor downloads. It runs in
+          # `vault-litesvm` instead, which has the .so AND the circuit
+          # artefacts AND npm/snarkjs. Adding a litesvm test to a target
+          # listed here fails with "vault binary missing", not a build error.
 
   # ------------------------------------------------------------------
   # Phase 3 — vault litesvm tests.
@@ -637,6 +643,7 @@ jobs:
             --test tee_forced_settle_batched \
             --test match_batch_verify \
             --test lock_note_consumed_guard \
+            --test merge_verify \
             -- --nocapture
 
   # ------------------------------------------------------------------

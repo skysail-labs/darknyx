@@ -776,6 +776,7 @@ mod tests {
             settle_send_concurrency: 8,
             // Throwaway sender (rx dropped) — enqueue is a best-effort no-op here.
             marker_sweep_tx: tokio::sync::mpsc::unbounded_channel().0,
+            lock_sweep_tx: tokio::sync::mpsc::unbounded_channel().0,
         };
         let driver = SettleDriver {
             ctx,

@@ -251,10 +251,9 @@ pub mod vault {
     pub fn verify_match_batch(
         ctx: Context<VerifyMatchBatch>,
         merkle_root: [u8; 32],
-        expiry_slot: u64,
         proof: Groth16Proof,
     ) -> Result<()> {
-        verify_match_batch::verify_match_batch_handler(ctx, merkle_root, expiry_slot, proof)
+        verify_match_batch::verify_match_batch_handler(ctx, merkle_root, proof)
     }
 
     /// v3.5 — atomic TEE-forced settlement. Reads the batch's

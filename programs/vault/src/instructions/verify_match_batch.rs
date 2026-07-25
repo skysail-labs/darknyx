@@ -33,7 +33,7 @@ use anchor_lang::prelude::*;
 use darkpool_crypto::match_config_digest;
 
 #[derive(Accounts)]
-#[instruction(merkle_root: [u8; 32], expiry_slot: u64, proof: Groth16Proof)]
+#[instruction(merkle_root: [u8; 32], proof: Groth16Proof)]
 pub struct VerifyMatchBatch<'info> {
     /// Anyone can pay rent / submit the proof. Authorization is the proof itself —
     /// a forged proof simply fails Groth16 verification and no marker is created.
@@ -77,18 +77,29 @@ pub struct VerifyMatchBatch<'info> {
 pub fn verify_match_batch_handler(
     ctx: Context<VerifyMatchBatch>,
     merkle_root: [u8; 32],
-    expiry_slot: u64,
     proof: Groth16Proof,
 ) -> Result<()> {
     let clock = Clock::get()?;
-    require!(expiry_slot > clock.slot, VaultError::InvalidMarkerExpiry);
-    require!(
-        expiry_slot
-            <= clock
-                .slot
-                .saturating_add(MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS),
-        VaultError::InvalidMarkerExpiry
-    );
+    // S-04: the TTL is DERIVED, never supplied.
+    //
+    // `expiry_slot` used to be a caller argument bounded only to
+    // `(clock.slot, clock.slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS]`. Paired
+    // with a deliberately unauthenticated `payer` ("anyone can push a valid
+    // proof" — a real liveness property worth keeping) and an `init` marker
+    // that lets exactly ONE party set the TTL per root, that handed any
+    // observer a lever the design never meant to expose: replay the SAME proof
+    // and root with `expiry_slot = clock.slot + 1`, land first, and the TEE's
+    // own verify then fails on the `init` collision while all N settles in the
+    // batch fail `BatchValidityMarkerExpired`. Meanwhile the 2N `lock_note`
+    // transactions have already landed, so up to 32 users' notes are pinned for
+    // the full lock TTL. Cost to the griefer: one transaction fee.
+    //
+    // Deriving it removes the degree of freedom entirely — nothing in the
+    // protocol ever needed a caller-chosen TTL, and the constant was already
+    // the ceiling. This is strictly LESS code than the two bounds it replaces.
+    let expiry_slot = clock
+        .slot
+        .saturating_add(MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS);
 
     // Public inputs, in circuit order: [root, config_digest]. The digest is
     // recomputed from authoritative accounts, never accepted from the prover.

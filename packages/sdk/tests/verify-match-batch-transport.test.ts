@@ -26,7 +26,6 @@ describe("verify_match_batch v3 transport", () => {
       baseMint,
       quoteMint,
       merkleRoot: root,
-      expirySlot: 123n,
       proof: {
         piA: filled(64, 0x11),
         piB: filled(128, 0x22),
@@ -34,7 +33,11 @@ describe("verify_match_batch v3 transport", () => {
       },
     });
 
-    expect(ix.data).toHaveLength(304);
+    // S-04: 8 disc + 32 root + 256 proof. The 8-byte caller-supplied
+    // `expiry_slot` is gone — it let an observer replay this proof with a
+    // 1-slot marker TTL and kill every settle in the batch. A regression that
+    // re-adds it grows this back to 304.
+    expect(ix.data).toHaveLength(296);
     expect(ix.keys).toEqual([
       { pubkey: payer, isSigner: true, isWritable: true },
       {

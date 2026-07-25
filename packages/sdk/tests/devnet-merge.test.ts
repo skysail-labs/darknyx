@@ -278,6 +278,12 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     const w = await tree.witness(mergedLeaf);
     const [mintLo, mintHi] = pubkeyToFrPair(mint.toBytes());
     const mergedNull = await nullifierV2(spendingKey, mergeRes.outputInnerHash);
+    // S-01: the destination is a public input, so the proof only authorises a
+    // withdraw into this exact token account. Must be the same `ata` the
+    // withdraw ix passes as `destinationTokenAccount` below, or the on-chain
+    // verify fails — and if it is omitted entirely, witness generation fails
+    // before that with a missing-input-signal error.
+    const [destLo, destHi] = pubkeyToFrPair(ata.toBytes());
     const { proof } = await t.step("VALID_SPEND prove (snarkjs)", async () =>
       snarkjsFullProve(
         {
@@ -290,6 +296,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
           innerHash: mergeRes.outputInnerHash.toString(),
           merklePath: w.siblings.map((s) => be32ToDec(s)),
           merkleIndices: w.indices.map((i) => i.toString()),
+          recipient: [destLo.toString(), destHi.toString()],
         },
         {
           circuitWasmPath: SPEND_WASM,
