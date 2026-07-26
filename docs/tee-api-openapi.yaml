@@ -1023,6 +1023,12 @@ paths:
         Enforcement happens at token validation against the live account
         record, so suspension does not wait for outstanding tokens to expire.
 
+        Refused with 409 if the target is the only enabled admin: that would
+        put every administrative route out of reach, including the enable that
+        would reverse it, and a restart does not recover because the bootstrap
+        seed only fires when its api_key is absent — not when the account it
+        finds is suspended.
+
         Idempotent.
       security: [{ BearerAuth: [] }]
       parameters:
@@ -1045,6 +1051,12 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '404':
           description: No account with this api_key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: |
+            The target is the only enabled admin. Enable another admin first.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

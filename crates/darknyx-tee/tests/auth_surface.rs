@@ -821,3 +821,95 @@ async fn bulk_invalidation_cutoff_never_moves_backwards() {
         );
     }
 }
+
+// ─────── Admin lockout guard ────────────────────────────────────────────────
+
+/// Register an account with admin rights and return its token.
+async fn app_with_admin(app: &Router, key: &str) -> String {
+    let admin = get_token(app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+    let resp = post_with_bearer(
+        app,
+        "/admin/accounts",
+        &admin,
+        json!({ "api_key": key, "api_secret": "s", "passphrase": "p", "is_admin": true }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    get_token(app, key, "s", "p").await
+}
+
+/// Suspending the only enabled admin is refused.
+///
+/// It would otherwise put every administrative route out of reach — including
+/// the enable that reverses it — and a restart does not recover, because the
+/// bootstrap seed only fires when its api_key is ABSENT, not when the account
+/// it finds is suspended. Recovery would mean redeploying with a different
+/// bootstrap key or wiping state, which is the outcome this endpoint exists to
+/// make unnecessary.
+#[tokio::test]
+async fn cannot_suspend_the_last_enabled_admin() {
+    let app = public_app();
+
+    let resp = admin_post(&app, &format!("/admin/accounts/{TEST_API_KEY}/disable")).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "suspending the only admin must be refused"
+    );
+
+    // And it really is still usable — the refusal was not partially applied.
+    let token = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &token, json!({})).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+/// With a second admin present the suspension is allowed — the guard bounds the
+/// dangerous case without blocking the ordinary one.
+#[tokio::test]
+async fn a_redundant_admin_can_be_suspended() {
+    let app = public_app();
+    let _ = app_with_admin(&app, "admin-two").await;
+
+    // Two enabled admins: suspending either is fine.
+    let resp = admin_post(&app, "/admin/accounts/admin-two/disable").await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Now only one remains, so the guard engages again.
+    let resp = admin_post(&app, &format!("/admin/accounts/{TEST_API_KEY}/disable")).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "the last remaining enabled admin is still protected"
+    );
+}
+
+/// Non-admin accounts are unaffected by the guard, even as the only member.
+#[tokio::test]
+async fn the_guard_does_not_block_suspending_a_member() {
+    let app = public_app();
+    let _ = app_with_member(&app, "carol").await;
+    let resp = admin_post(&app, "/admin/accounts/carol/disable").await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+/// Bulk token invalidation is NOT guarded, deliberately: the credentials still
+/// work, so the last admin simply authenticates again.
+#[tokio::test]
+async fn the_last_admin_may_still_invalidate_its_own_tokens() {
+    let app = public_app();
+    let resp = admin_post(
+        &app,
+        &format!("/admin/accounts/{TEST_API_KEY}/revoke-tokens"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    let token = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &token, json!({})).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::NO_CONTENT,
+        "the last admin recovers by re-authenticating"
+    );
+}

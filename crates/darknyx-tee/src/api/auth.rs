@@ -321,6 +321,20 @@ impl AccountRegistry {
         }
     }
 
+    /// How many accounts are both admins and not suspended.
+    ///
+    /// Used to refuse a suspension that would leave nobody able to reach the
+    /// administrative routes. Callers MUST read this and apply the resulting
+    /// mutation while holding the same write guard — counting under a read lock
+    /// and then mutating under a write lock would let two concurrent
+    /// suspensions each observe two admins and both proceed, leaving zero.
+    pub fn enabled_admin_count(&self) -> usize {
+        self.by_api_key
+            .values()
+            .filter(|c| c.is_admin && !c.disabled)
+            .count()
+    }
+
     /// Refuse every token for this account issued before `cutoff` (unix
     /// seconds). Returns `true` if the account existed.
     ///
@@ -940,11 +954,38 @@ async fn set_account_disabled(
     disabled: bool,
     authorized: &Authorized,
 ) -> Result<StatusCode, super::error::ApiError> {
-    let updated = state.accounts.write().await.set_disabled(api_key, disabled);
-    if !updated {
-        return Err(super::error::ApiError::not_found(format!(
-            "no account with api_key '{api_key}'"
-        )));
+    {
+        // ONE write guard spans the check and the mutation. Splitting them —
+        // counting under a read lock, then mutating under a write lock — would
+        // let two concurrent suspensions each see two enabled admins and both
+        // proceed, leaving none.
+        let mut registry = state.accounts.write().await;
+
+        let target = registry.lookup(api_key).ok_or_else(|| {
+            super::error::ApiError::not_found(format!("no account with api_key '{api_key}'"))
+        })?;
+
+        // Refuse to suspend the last account that can still reach these
+        // routes. Without this guard one call locks every administrative
+        // action out of reach, INCLUDING the enable that would undo it — and a
+        // restart does not recover, because the bootstrap seed only fires when
+        // its api_key is absent from the registry, not when the account it
+        // finds is suspended. The remedy would be redeploying with a different
+        // bootstrap key or wiping the state volume: exactly the
+        // redeploy-the-enclave outcome this endpoint exists to make
+        // unnecessary.
+        //
+        // Only suspension is guarded. Bulk token invalidation is safe on the
+        // last admin, because the credentials still work and they simply
+        // authenticate again.
+        if disabled && target.is_admin && !target.disabled && registry.enabled_admin_count() <= 1 {
+            return Err(super::error::ApiError::would_orphan_admin(
+                "refusing to suspend the only enabled admin account — no one \
+                 would be able to reverse it; enable another admin first",
+            ));
+        }
+
+        registry.set_disabled(api_key, disabled);
     }
     state.persist_auth().await;
     tracing::warn!(

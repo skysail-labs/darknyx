@@ -1383,6 +1383,17 @@ anyone mint operational credentials.
   Note the division of labour. `/revoke-tokens` answers a leaked *token*; it
   does not help if the *credentials* leaked, because their holder can simply
   authenticate again. That case needs `/disable`.
+
+  Suspending the **only enabled admin** is refused (409). It would put every
+  administrative route out of reach including the `enable` that reverses it,
+  and a restart does not recover: the bootstrap seed fires only when its
+  `api_key` is *absent* from the registry, not when the account it finds is
+  suspended, so recovery would mean redeploying with a different bootstrap key
+  or wiping the state volume — the redeploy-the-enclave outcome these endpoints
+  exist to make unnecessary. The check and the mutation share one write guard,
+  or two concurrent suspensions could each observe two admins and both proceed.
+  `/revoke-tokens` is deliberately *not* guarded this way: the last admin's
+  credentials still work, so it simply authenticates again.
 - **Authentication cost control.** Credential verification runs argon2id
   deliberately slowly, which makes `/auth/token` the one public route that can
   be made to do real work. Three things bound it: an unrecognised `api_key` is
