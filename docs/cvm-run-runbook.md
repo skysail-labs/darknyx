@@ -309,19 +309,20 @@ a stable host benchmark.
 
 > ### ⚠️ ONE fresh tree per leaf-count test — do NOT run the whole bucket in one shot
 >
-> Every `cvm-*` leaf-count test (`cvm-settle-e2e`, `cvm-multimatch-settle`,
-> `cvm-self-trade`, `cvm-merge-then-order`) **deposits into the single shared
-> on-chain Merkle tree and asserts an absolute leaf_count from an EMPTY start**
+> Every `cvm-*` leaf-count test (`cvm-settle-e2e`,
+> `cvm-multimatch-settle`, `cvm-multi-market-settle`, `cvm-self-trade`,
+> `cvm-merge-then-order`) **deposits into the single shared on-chain Merkle
+> tree and asserts an absolute leaf_count from an EMPTY start**
 > (`cvm-multimatch-settle` literally asserts `startCount === 0` — "trees not
 > empty — reset the merkle trees first"). So:
 >
-> * **They cannot share a tree.** The 2nd test in a run sees the 1st's leaves and
+> - **They cannot share a tree.** The 2nd test in a run sees the 1st's leaves and
 >   fails the empty-start check — this is by design, not a flake.
-> * **A mid-run reset does NOT rescue it**: the CVM's Merkle mirror is
+> - **A mid-run reset does NOT rescue it**: the CVM's Merkle mirror is
 >   append-only and can't rewind, so resetting the on-chain tree under a running
 >   CVM desyncs the mirror. A fresh tree needs a reset **+ a CVM cold-boot**
 >   (an env-only `phala deploy` restart, §3–§4).
-> * The `cvm` vitest project is pinned to `fileParallelism: false`
+> - The `cvm` vitest project is pinned to `fileParallelism: false`
 >   (`packages/sdk/vitest.config.ts`) so a bucket run at least fails
 >   deterministically with the "reset first" message instead of a race — but
 >   that only removes the race, it does NOT make the bucket pass.
@@ -352,6 +353,62 @@ cross-owner settle), `cvm-api-surface` (error envelope + x-request-id,
 /system/status, /time, rate-limit 429, min_notional, idempotency, /account +
 settings, `/v1/stream` login/sequence + legacy-route deletion). **Re-run after every
 image bump.**
+
+### 5.1 Focused two-market correctness rehearsal
+
+This is not a routine image-bump gate. Run it when changing the multi-market
+configuration, routing, governance monitor, or shared settlement resources. It
+creates/reuses a second test-only base mint and governed `MarketConfig`, then
+boots exactly two markets at C2:
+
+```sh
+set -a
+. packages/sdk/.env
+set +a
+
+# Creates/reuses the second market and writes public, gitignored fixture data.
+ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+  node scripts/setup-second-devnet-market.mjs
+
+# The harness needs an empty on-chain tree and an empty cold-boot mirror.
+ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+  node scripts/reset-merkle-tree.mjs
+
+# Generates fresh auth credentials and a sourceable, mode-0600 encrypted-env
+# input. It deliberately selects native + rapidsnark + C2.
+node scripts/prepare-multi-market-cvm-env.mjs
+
+phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml \
+  -e .devnet/darknyx-multimarket-deploy.env --wait
+```
+
+Verify the boot log contains two adopted enabled `MarketConfig` accounts, two
+matcher drivers, `native witness generator ENABLED`, C2 schedulers, and a
+zero-leaf cold boot. Then source the same fresh credentials and run:
+
+```sh
+set -a
+. .devnet/darknyx-multimarket-deploy.env
+set +a
+export SOLANA_RPC_URL="$DARKNYX_TEE_SOLANA_RPC_URL"
+
+(
+  cd packages/sdk
+  RUN_CVM_E2E=1 DARKNYX_TEE_GATEWAY="$GW" \
+    FUNDER_KEYPAIR="$HOME/.config/solana/id.json" \
+    ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
+    DARKNYX_CVM_SETTLE_TIMEOUT_MS=300000 \
+    ../../node_modules/.bin/vitest run --project cvm \
+      tests/cvm-multi-market-settle.test.ts
+)
+```
+
+The test verifies one endpoint/two instruments, cross-market modify rejection,
+original-book cancel routing, simultaneous real settlement on both market
+PDAs, the `pending_settlement` lifecycle, and venue-wide pause/resume when one
+governed market is disabled/restored. Record both `settlement benchmark record`
+log lines; one pass is a correctness result, not the sustained capacity test
+defined in [`multi-market-architecture.md`](multi-market-architecture.md) §7.
 
 The loadgen needs the placeholder-mint regime (omit the mint vars, §3) — see
 `crates/darknyx-tee-loadgen/BENCHMARK.md`.
@@ -395,6 +452,13 @@ It bills while running.
 ```sh
 phala cvms stop "$CVM"   # preserves app_id / signer / volume; halts billing
 unset DARKNYX_TEE_API_KEY DARKNYX_TEE_API_SECRET DARKNYX_TEE_PASSPHRASE
+
+# If §5.1 was run, securely remove its sourceable secret bundle.
+if command -v shred >/dev/null 2>&1; then
+  shred -u .devnet/darknyx-multimarket-deploy.env
+else
+  rm -P .devnet/darknyx-multimarket-deploy.env
+fi
 ```
 
 **Never leave a billable CVM up.** The no-CVM half of devnet validation
