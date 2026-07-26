@@ -29,7 +29,7 @@
 //!   file deserialises to `None` — the caller falls back to the env
 //!   bootstrap admin. We never panic on a bad snapshot.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -47,7 +47,23 @@ pub const DEFAULT_STATE_DIR: &str = "/var/lib/darknyx-tee";
 /// Bumped whenever the on-disk layout of [`AuthSnapshot`] changes in a
 /// non-backward-compatible way. A snapshot with a different version is
 /// treated as absent (best-effort) rather than mis-decoded.
-const SNAPSHOT_VERSION: u32 = 1;
+///
+/// The encoding is bincode: positional and NOT self-describing. There is no
+/// field-name framing, so `#[serde(default)]` on a newly added field does not
+/// make an older payload decodable — it simply runs out of bytes. Every field
+/// added anywhere in this struct or in [`ApiCredentials`] therefore requires a
+/// bump here.
+///
+/// v2 added account suspension + per-account token invalidation to
+/// `ApiCredentials`, and gave each revoked token id its expiry.
+///
+/// ⚠️ A BUMP DISCARDS THE EXISTING FILE. That is acceptable only while the
+/// registry holds nothing but the bootstrap admin, which is re-seeded from the
+/// deploy environment on every boot — true during development, when no account
+/// has ever been registered through the API. Once real accounts exist, dropping
+/// them is data loss and the NEXT change must decode the old version and
+/// migrate it forward instead of bumping past it.
+const SNAPSHOT_VERSION: u32 = 2;
 
 /// The persisted Layer-A auth state. Serialised with `bincode`.
 ///
@@ -59,17 +75,21 @@ const SNAPSHOT_VERSION: u32 = 1;
 pub struct AuthSnapshot {
     pub version: u32,
     pub accounts: Vec<ApiCredentials>,
-    pub revoked_jtis: Vec<String>,
+    /// Revoked token ids paired with the expiry of the token each one belongs
+    /// to (unix seconds). The expiry is what allows an entry to be dropped once
+    /// the token would be refused as expired anyway — without it this list only
+    /// ever grew, across every restart, for the life of the deployment.
+    pub revoked_jtis: Vec<(String, u64)>,
 }
 
 impl AuthSnapshot {
-    /// Build a snapshot from live state. `revoked_jtis` is collected
-    /// into a `Vec` for a stable wire shape.
-    pub fn new(accounts: Vec<ApiCredentials>, revoked: &HashSet<String>) -> Self {
+    /// Build a snapshot from live state. `revoked` is flattened into a
+    /// `Vec` for a stable wire shape.
+    pub fn new(accounts: Vec<ApiCredentials>, revoked: &HashMap<String, u64>) -> Self {
         Self {
             version: SNAPSHOT_VERSION,
             accounts,
-            revoked_jtis: revoked.iter().cloned().collect(),
+            revoked_jtis: revoked.iter().map(|(k, v)| (k.clone(), *v)).collect(),
         }
     }
 }
@@ -148,6 +168,7 @@ pub fn save_auth_snapshot(path: &Path, snapshot: &AuthSnapshot) -> std::io::Resu
 mod tests {
     use super::*;
     use crate::api::auth::ApiCredentials;
+    use std::collections::HashSet;
 
     fn sample_creds(key: &str, admin: bool) -> ApiCredentials {
         ApiCredentials::from_plaintext(key, "secret", "pass", admin).expect("hash")
@@ -158,9 +179,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = accounts_db_path(dir.path());
 
-        let mut revoked = HashSet::new();
-        revoked.insert("jti-abc".to_string());
-        revoked.insert("jti-def".to_string());
+        let mut revoked = HashMap::new();
+        revoked.insert("jti-abc".to_string(), 1_900_000_000);
+        revoked.insert("jti-def".to_string(), 1_900_000_001);
         let snap = AuthSnapshot::new(
             vec![sample_creds("admin", true), sample_creds("bob", false)],
             &revoked,
@@ -221,7 +242,7 @@ mod tests {
     fn save_is_atomic_no_tmp_left_behind() {
         let dir = tempfile::tempdir().unwrap();
         let path = accounts_db_path(dir.path());
-        let snap = AuthSnapshot::new(vec![sample_creds("admin", true)], &HashSet::new());
+        let snap = AuthSnapshot::new(vec![sample_creds("admin", true)], &HashMap::new());
         save_auth_snapshot(&path, &snap).unwrap();
         // The temp sibling must not survive a successful save.
         assert!(!path.with_extension("db.tmp").exists());

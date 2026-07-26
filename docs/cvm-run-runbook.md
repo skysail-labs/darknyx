@@ -31,6 +31,15 @@ image** — deploying the old tag runs stale code.
    and export the same values for the CVM harness/loadgen. The public
    `darknyx-test-*` fixtures are rejected by a production boot.
 
+   > **Reusing an api_key with a NEW secret does not rotate it.** The recipe
+   > below generates a fresh random `api_key` per deploy, so boot sees a key it
+   > has never stored and simply adds the account — which works, and is why a
+   > long-lived CVM accumulates one stale admin account per deploy. But if you
+   > pin the api_key and change only the secret or passphrase, the persisted
+   > registry wins and the env values are ignored. Boot logs a warning when it
+   > detects exactly that; rotate through the account API, or clear the state
+   > volume so the environment re-seeds.
+
 4. **The nvm shim can shadow `node`.** If `_load_nvm` recursion errors appear,
    invoke `node`/`phala` by absolute path, e.g.
    `/Users/<you>/.nvm/versions/node/<ver>/bin/{node,phala}`.

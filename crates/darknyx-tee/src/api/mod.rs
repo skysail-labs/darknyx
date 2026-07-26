@@ -155,6 +155,22 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // further admin-gated inside the handler (see auth.rs).
         .route("/auth/token/revoke", post(auth::revoke_token_handler))
         .route("/admin/accounts", post(auth::register_account_handler))
+        // Account suspension + bulk token invalidation. Admin-gated inside the
+        // handlers, same as `/admin/accounts`. Enforcement lives in
+        // `auth::validate_token`, not in a middleware, so it covers the
+        // streaming transport as well as HTTP.
+        .route(
+            "/admin/accounts/:api_key/disable",
+            post(auth::disable_account_handler),
+        )
+        .route(
+            "/admin/accounts/:api_key/enable",
+            post(auth::enable_account_handler),
+        )
+        .route(
+            "/admin/accounts/:api_key/revoke-tokens",
+            post(auth::revoke_account_tokens_handler),
+        )
         .route(
             "/admin/metrics/settlement",
             get(metrics::get_settlement_metrics),

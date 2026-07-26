@@ -15,7 +15,7 @@
 //! change for the lifetime of the CVM, so we pull them once and
 //! hand them to every `/info` request from memory.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,7 +27,8 @@ use serde::Serialize;
 use tokio::sync::{broadcast, Mutex, RwLock, Semaphore};
 
 use super::auth::{
-    test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_API_KEY, TEST_JWT_SECRET,
+    now_unix_seconds, test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_API_KEY,
+    TEST_JWT_SECRET,
 };
 use super::instruments::InstrumentInfo;
 use crate::keys::ed25519::DerivedSigner;
@@ -126,18 +127,31 @@ pub struct ApiState {
     /// the bootstrap admin from `DARKNYX_TEE_API_*` env via
     /// `AccountRegistry::from_env_bootstrap`; tests seed `test_registry()`.
     pub accounts: Arc<RwLock<AccountRegistry>>,
-    /// Denylist of revoked JWT `jti`s. `POST /auth/token/revoke`
-    /// inserts; `bearer_middleware` rejects any token whose `jti` is
-    /// present. Persisted to `accounts.db` alongside the registry
-    /// (Phase 1b) so revocations survive a restart.
-    pub revoked_jtis: Arc<RwLock<HashSet<String>>>,
+    /// Denylist of revoked JWT `jti`s, each mapped to the expiry of the token
+    /// it belongs to (unix seconds). `POST /auth/token/revoke` inserts;
+    /// `auth::validate_token` rejects any token whose `jti` is present.
+    /// Persisted to `accounts.db` alongside the registry so revocations survive
+    /// a restart.
+    ///
+    /// Entries are dropped once that expiry passes, which is what keeps the map
+    /// bounded. Expiry — rather than a size cap — is the right eviction rule
+    /// here because it is *complete*: a revoked token only needs denying until
+    /// it would be refused for being expired anyway, so nothing is lost by
+    /// forgetting it afterwards. A capped map would instead have to evict
+    /// entries that are still live, silently un-revoking tokens.
+    pub revoked_jtis: Arc<RwLock<HashMap<String, u64>>>,
     /// Concurrency limiter for Argon2id work. `/auth/token` (public,
     /// unauthenticated) and `/admin/accounts` run Argon2id, which costs
     /// ~19 MiB + tens of ms of CPU per hash. The handlers offload it to
     /// `spawn_blocking` (so the async reactor isn't blocked) and acquire
-    /// a permit here first, so an unauthenticated `/auth/token` flood
-    /// can't spawn unbounded heavy jobs and exhaust the small CVM's RAM
-    /// (1 vCPU / 2 GB) — excess requests queue on the semaphore instead.
+    /// a permit here first, so a `/auth/token` flood can't spawn unbounded
+    /// heavy jobs and exhaust the small CVM's RAM.
+    ///
+    /// Permits are taken with `try_acquire`, NOT awaited: excess requests are
+    /// refused with `503` rather than queued. Awaiting bounded how much ran at
+    /// once but not how much was WAITING, so a burst could pile up a backlog
+    /// that outlived any useful client timeout and still had to be worked
+    /// through, stalling the matcher and settle worker sharing this runtime.
     pub argon2_limiter: Arc<Semaphore>,
     /// Directory the auth snapshot (`accounts.db`) is read from at boot
     /// and written to after each registry/denylist mutation. `None`
@@ -672,7 +686,7 @@ impl ApiState {
             version: env!("CARGO_PKG_VERSION"),
             jwt_secret: TEST_JWT_SECRET,
             accounts: Arc::new(RwLock::new(test_registry())),
-            revoked_jtis: Arc::new(RwLock::new(HashSet::new())),
+            revoked_jtis: Arc::new(RwLock::new(HashMap::new())),
             argon2_limiter: Arc::new(Semaphore::new(argon2_permits())),
             // Persistence disabled in tests — they assert on in-memory
             // behaviour and must not touch the host filesystem. Tests
@@ -972,26 +986,34 @@ impl ApiState {
     /// pure env bootstrap, identical to the Phase-1a behaviour.
     fn load_or_seed_auth(
         state_dir: Option<&std::path::Path>,
-    ) -> (AccountRegistry, HashSet<String>) {
+    ) -> (AccountRegistry, HashMap<String, u64>) {
         let Some(dir) = state_dir else {
-            return (AccountRegistry::from_env_bootstrap(), HashSet::new());
+            return (AccountRegistry::from_env_bootstrap(), HashMap::new());
         };
 
         let path = persistence::accounts_db_path(dir);
         let (mut registry, revoked) = match persistence::load_auth_snapshot(&path) {
             Some(snap) => {
+                let loaded = snap.revoked_jtis.len();
+                // Drop revocations whose tokens have since expired. Without a
+                // prune here a long-lived deployment would carry every
+                // revocation it ever made across every restart, forever.
+                let now = now_unix_seconds();
+                let revoked: HashMap<String, u64> = snap
+                    .revoked_jtis
+                    .into_iter()
+                    .filter(|(_, exp)| *exp > now)
+                    .collect();
                 tracing::info!(
                     accounts = snap.accounts.len(),
-                    revoked = snap.revoked_jtis.len(),
+                    revoked = revoked.len(),
+                    revoked_expired_dropped = loaded - revoked.len(),
                     path = %path.display(),
                     "loaded auth snapshot"
                 );
-                (
-                    AccountRegistry::from_snapshot(snap.accounts),
-                    snap.revoked_jtis.into_iter().collect::<HashSet<_>>(),
-                )
+                (AccountRegistry::from_snapshot(snap.accounts), revoked)
             }
-            None => (AccountRegistry::new(), HashSet::new()),
+            None => (AccountRegistry::new(), HashMap::new()),
         };
 
         // Older compose revisions seeded a public test account into the
@@ -1045,6 +1067,10 @@ mod persist_tests {
     use super::*;
     use crate::api::auth::ApiCredentials;
 
+    /// Far enough ahead that the load-time prune keeps the entry, so a test
+    /// about durability is not accidentally testing expiry.
+    const FAR_FUTURE_EXPIRY: u64 = 4_000_000_000;
+
     /// A registration that's persisted is recovered by a subsequent
     /// boot-load from the same directory — the core Phase-1b
     /// durability guarantee. Drives `persist_auth` (write) +
@@ -1065,7 +1091,12 @@ mod persist_tests {
                 cancel_on_disconnect_default: true,
             },
         ));
-        st.revoked_jtis.write().await.insert("jti-xyz".to_string());
+        // Far-future expiry so the load-time prune keeps it; an already-expired
+        // entry is SUPPOSED to be dropped, which the next test covers.
+        st.revoked_jtis
+            .write()
+            .await
+            .insert("jti-xyz".to_string(), FAR_FUTURE_EXPIRY);
         st.persist_auth().await;
 
         // Simulate a restart: load the snapshot from the same dir.
@@ -1083,7 +1114,7 @@ mod persist_tests {
         assert!(reloaded.lookup(crate::api::auth::TEST_API_KEY).is_none());
         assert!(reloaded.lookup("bob").is_some());
         // The revocation survived too.
-        assert!(revoked.contains("jti-xyz"));
+        assert!(revoked.contains_key("jti-xyz"));
     }
 
     /// No snapshot + persistence disabled ⇒ falls back to the env
@@ -1103,7 +1134,7 @@ mod persist_tests {
     fn existing_snapshot_is_loaded() {
         let dir = tempfile::tempdir().unwrap();
         let creds = ApiCredentials::from_plaintext("carol", "s", "p", true).expect("hash");
-        let snap = persistence::AuthSnapshot::new(vec![creds], &HashSet::new());
+        let snap = persistence::AuthSnapshot::new(vec![creds], &HashMap::new());
         persistence::save_auth_snapshot(&persistence::accounts_db_path(dir.path()), &snap).unwrap();
 
         let (registry, _) = ApiState::load_or_seed_auth(Some(dir.path()));
