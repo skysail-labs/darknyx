@@ -58,6 +58,29 @@ use super::state::ApiState;
 /// Default bearer token TTL — 1 hour. Configurable per `ApiState`.
 pub const DEFAULT_JWT_TTL_SECONDS: u64 = 3600;
 
+/// Seconds past `exp` for which a token is still honoured.
+///
+/// Zero, deliberately. `jsonwebtoken`'s `Validation::default()` ships **60**,
+/// which is meant to absorb clock skew between separate issuer and verifier
+/// hosts. Here they are the same process, so there is no skew to absorb and the
+/// allowance only weakens the guarantee: it made an expired token usable for a
+/// further minute, and — because the revocation denylist evicts an entry once
+/// that entry's `exp` has passed — it made a REVOKED token usable again inside
+/// the same window, once any later revocation triggered a prune.
+///
+/// [`token_validation`] and the denylist prune below both derive from this
+/// constant so the two cannot drift apart. Raising it re-opens that window
+/// unless the prune margin follows, which it now does automatically.
+pub const TOKEN_EXPIRY_LEEWAY_SECONDS: u64 = 0;
+
+/// The `Validation` every token check uses. Pinned rather than
+/// `Validation::default()` — see [`TOKEN_EXPIRY_LEEWAY_SECONDS`].
+fn token_validation() -> Validation {
+    let mut v = Validation::default();
+    v.leeway = TOKEN_EXPIRY_LEEWAY_SECONDS;
+    v
+}
+
 /// JWT claim shape. `sub` is the `account_id` (which equals
 /// `api_key` for now — they'll diverge if we ever support multiple
 /// API keys per account). `iat` / `exp` are unix-seconds. `jti` is a
@@ -704,7 +727,7 @@ pub async fn validate_token(
     let claims = decode::<Claims>(
         token,
         &DecodingKey::from_secret(&state.jwt_secret),
-        &Validation::default(),
+        &token_validation(),
     )
     .map_err(|e| (StatusCode::UNAUTHORIZED, format!("invalid token: {e}")))?
     .claims;
@@ -782,8 +805,12 @@ pub async fn revoke_token_handler(
         // already reached that point. Pruning on write means the list is
         // bounded by revocations within one token lifetime rather than by every
         // revocation ever made.
-        let now = now_unix_seconds();
-        revoked.retain(|_, exp| *exp > now);
+        // Keep an entry for as long as the token could still be ACCEPTED,
+        // which is `exp` plus the validation leeway — not merely until `exp`.
+        // Dropping it at `exp` while the verifier still honours the token
+        // inside the leeway un-revokes it for exactly that long.
+        let cutoff = now_unix_seconds().saturating_sub(TOKEN_EXPIRY_LEEWAY_SECONDS);
+        revoked.retain(|_, exp| *exp > cutoff);
         revoked.insert(authorized.jti, authorized.exp);
     }
     // Persist the denylist so the revocation survives a restart
