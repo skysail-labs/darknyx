@@ -913,3 +913,64 @@ async fn the_last_admin_may_still_invalidate_its_own_tokens() {
         "the last admin recovers by re-authenticating"
     );
 }
+
+/// A token past `exp` is refused outright — no grace period.
+///
+/// `Validation::default()` ships `leeway: 60`, meant to absorb clock skew
+/// between separate issuer and verifier hosts. Here they are the same process,
+/// so the allowance bought nothing and cost two things: an expired token stayed
+/// usable for another minute, and a REVOKED token could come back to life,
+/// because the denylist drops an entry once its `exp` has passed while the
+/// verifier still honoured the token inside the leeway.
+#[tokio::test]
+async fn a_token_past_expiry_is_refused_with_no_leeway() {
+    let app = public_app();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = Claims {
+        sub: TEST_API_KEY.to_string(),
+        iat: now - 120,
+        exp: now - 10,
+        jti: "leeway-probe".to_string(),
+    };
+    let expired = jsonwebtoken::encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(&TEST_JWT_SECRET),
+    )
+    .unwrap();
+
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &expired, json!({})).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "a token past exp must be refused; the default 60s leeway is disabled"
+    );
+}
+
+/// A revoked token stays revoked for as long as it remains decodable, even as
+/// later revocations prune the denylist around it.
+#[tokio::test]
+async fn revocation_survives_later_denylist_pruning() {
+    let app = public_app();
+    let victim = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &victim, json!({})).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Several more revocations, each of which prunes the denylist.
+    for _ in 0..3 {
+        let other = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+        let resp = post_with_bearer(&app, "/auth/token/revoke", &other, json!({})).await;
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &victim, json!({})).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "pruning must not evict an entry whose token can still be decoded"
+    );
+}
