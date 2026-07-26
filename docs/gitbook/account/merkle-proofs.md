@@ -49,7 +49,7 @@ GET /tree/root?tree_id=0
 | Field | Type | Description |
 |---|---|---|
 | `tree_id` | integer | Which shard this root is for (echoes the request; default `0`). |
-| `merkle_root` | string | Current root of the shard, hex. Equals the on-chain root (or a recent root still in the shard's ring buffer). |
+| `merkle_root` | string | The shard's current root, hex. It should equal the finalized on-chain `MerkleTree.current_root`; historical accepted roots are not returned here. |
 | `leaf_count` | integer | Number of leaves in this shard. |
 | `on_chain_slot` | integer | Solana slot at which the engine last synced this shard from chain. |
 
@@ -95,12 +95,17 @@ withdrawal.
 {% hint style="warning" %}
 **Roots age out**
 
-A proof is generated against a specific root. The on-chain program keeps a
-bounded ring buffer of recent roots, so a proof must be *used* (locked for
-settlement or withdrawn against) while its root is still in that window. A
-long-resting order can outlive its proof root. If the eventual lock rejects that
-stale root, the settlement is terminal; rebuild the proof against a current root
-and submit a fresh signed order after the collateral unlocks.
+A proof is generated against a specific root. Each shard accepts its current
+root plus a 64-entry history. Freshness is measured in **append instructions on
+that shard**, not seconds or Solana slots; one instruction can append several
+leaves, so elapsed time is not a reliable estimate.
+
+On a settlement-enabled venue, intake checks the engine's recent-root mirror and
+rejects an already-stale order with `1010` before booking it. The on-chain check
+remains authoritative: the mirror is deliberately permissive, and enough new
+appends between acceptance and lock can still age a root out. If that race makes
+settlement terminal, rebuild the proof against a current root and submit a fresh
+signed order after any live lock expires.
 {% endhint %}
 
 ## GET /tree/leaves

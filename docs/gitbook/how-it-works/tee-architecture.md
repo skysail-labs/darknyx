@@ -92,15 +92,22 @@ multisig control as launch requirements rather than optional operational polish.
 
 A committee can distribute trust, but adds coordination, latency, and a collusion
 threshold. Darknyx currently chooses one confidential matching service with multiple
-shard signers derived inside it. The product tradeoff is straightforward:
+shard signers derived inside it. That service can host several isolated market
+books behind the same attested endpoint. The product tradeoff is straightforward:
 
 - faster private matching and a simpler client protocol;
-- one attested software release to evaluate;
-- a concentrated liveness boundary and dependence on TDX security.
+- one attested software release and signer set to evaluate across the venue;
+- one login and streaming session across supported markets; and
+- a concentrated liveness boundary and shared capacity across those markets.
 
 The result is not “trustless matching.” It is a narrower, inspectable trust model:
 trust the measured matcher for ordering and price policy; verify Solana and the
 proof system for custody and settlement validity.
+
+Each market still has its own governed mint pair, oracle policy, and order book,
+and one proof batch can contain only one market. A finalized governance or signer
+mismatch pauses new trading venue-wide while cancellation and settlement
+reconciliation continue. See [Multi-Market Venue](./multi-market.md).
 
 ## What an integrator should verify
 

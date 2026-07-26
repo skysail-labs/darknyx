@@ -12,6 +12,7 @@
 
 * [Trade Flow](how-it-works/trade-flow.md)
 * [Confidential VM Architecture](how-it-works/tee-architecture.md)
+* [Multi-Market Venue](how-it-works/multi-market.md)
 * [Privacy & Attestation](how-it-works/privacy-and-attestation.md)
 * [Shielded Pool](how-it-works/shielded-pool.md)
 * [Settlement](how-it-works/settlement.md)

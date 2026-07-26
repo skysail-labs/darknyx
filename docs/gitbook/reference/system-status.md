@@ -46,16 +46,22 @@ Public, with no authentication.
 
 ## When degradation occurs
 
-The venue is `degraded` when a core subsystem is not available, for example, the
-matching tick is not running, or the settlement pipeline is not wired. While
-degraded, order submission may fail with `503 Service Unavailable`.
+The venue is `degraded` when a core subsystem is unavailable: the matching tick
+is not running, the settlement pipeline is not wired, or the finalized
+governance/signer view no longer matches the boot-approved configuration. On a
+multi-market venue, a governed-market mismatch pauses new trading venue-wide
+rather than leaving some books running against uncertain authority.
+
+While degraded, new place and modify operations fail closed with `503 Service
+Unavailable`. Cancels, authenticated reads, and reconciliation continue so a
+trader can reduce risk and the engine can resolve already-pending settlements.
 
 ## How it manifests
 
 | Surface | Behavior under degradation |
 |---|---|
-| REST order management | May return `503`; reads (`/instruments`, `/transparency`, `/tree/*`) generally remain available. |
-| WebSocket trading | An `order.place` / `order.cancel` / `order.modify` frame may return an `error` with `code: 503`. |
+| REST order management | New place/modify may return HTTP `503` with stable code `5001`; cancel remains available. Reads (`/instruments`, `/transparency`, `/tree/*`) generally remain available. |
+| WebSocket trading | `order.place` / `order.modify` may return an `error` with `code: 5001`; cancellation remains available. |
 | `/health` | Still returns `200` (the gateway process is up), which is why `/system/status` is the better readiness signal for a trading client. |
 
 ## Best practices

@@ -5,8 +5,9 @@ description: "List supported markets and read their mints, raw protocol units, a
 
 # Get Instruments
 
-The instrument endpoints are public. They describe the market metadata captured
-when the confidential matcher booted.
+The instrument endpoints are public. They describe every governed market
+available through the currently connected, attested venue. One confidential VM
+can expose several independently routed books through this single list.
 
 ## List instruments
 
@@ -38,7 +39,8 @@ The response is a JSON **array**, not an object envelope:
 GET /instruments/{symbol}
 ```
 
-Returns the same object shape or `404` when the symbol is not configured.
+Returns the same object shape or `404` when the symbol is not configured on this
+venue. Use the returned `symbol` unchanged in signed order requests.
 
 ## Fields
 
@@ -71,8 +73,21 @@ described in [Privacy & Attestation](../how-it-works/privacy-and-attestation.md)
 The current REST object does not expose `circuit_breaker_bps`; read the finalized
 on-chain `MarketConfig` when that value is required for independent monitoring.
 
+## One endpoint, several books
+
+All instruments in the array share the same gateway, bearer-token session, and
+attestation identity. The signed `symbol` selects one isolated book; cancels,
+reads, and streams stay on the same connection. A match proof never mixes
+symbols, and an atomic modify cannot move an order between markets—cancel and
+place a fresh order when changing pairs.
+
+See [Multi-Market Venue](../how-it-works/multi-market.md) for the isolation and
+shared-capacity model.
+
 ## Cache semantics
 
 Instrument metadata is a boot-time snapshot. Cache it for a connected session,
 then refresh after a reconnect or engine restart. Governance can update market
-configuration on-chain; a new engine boot reads the current configuration.
+configuration on-chain. The venue continuously checks its finalized governed
+view and pauses new trading on drift; reconnect and refresh reference data after
+the operator deploys the approved configuration.

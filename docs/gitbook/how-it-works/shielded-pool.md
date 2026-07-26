@@ -72,9 +72,11 @@ spend note ──► publish nullifier(note)
 Settlement payload v9 does not publish input nullifiers. Instead, lock and
 settlement instructions derive PDAs from the input commitments; a second attempt
 collides with the existing lock or `ConsumedNoteEntry`. Merge uses the same
-commitment-keyed consume guard and proves every corresponding lock is absent. In
-every path, replay prevention is enforced on-chain rather than left to the
-matcher.
+commitment-keyed consume guard and rejects every input with a live lock. Deposit
+also rejects a commitment that has already been appended, so repeating a
+deterministic deposit cannot move in a second amount that the same commitment
+could never spend. In every path, replay prevention is enforced on-chain rather
+than left to the matcher.
 
 ## The amount-independent inner hash
 
@@ -114,7 +116,9 @@ single call, leaving you one larger spendable note to back a bigger order.
 ```text
  deposit ──► note appended to the tree (SPENDABLE)
                 │
- place order ──► note pinned by a per-order lock (LOCKED)
+ place order ──► note reserved inside the venue while resting
+                │
+ private match ► on-chain note lock created (PENDING SETTLEMENT)
                 │
  settle ──────► input commitment marked consumed; outputs appended:
                   • your filled asset (a new note)
@@ -124,9 +128,16 @@ single call, leaving you one larger spendable note to back a bigger order.
  withdraw ────► note nullified; tokens released to your wallet
 ```
 
-Every transition is gated on-chain by a distinct record (a wallet entry, a
-withdrawal nullifier, a consumed-note marker, a note lock), so a note can never be used twice
-regardless of what the engine does. See [Deposit](../account/deposit.md) and
+The resting reservation prevents one venue session from booking the same
+commitment into two live orders. Once a match begins, the on-chain lock prevents
+the note from being withdrawn, merged, or settled elsewhere while that
+settlement may still land. At lock expiry it stops blocking use; cleanup of the
+expired account is separate from spendability.
+
+Every value-moving transition is gated on-chain by a distinct record (a wallet
+entry, duplicate-deposit guard, withdrawal nullifier, consumed-note marker, or
+live note lock), so a note can never be spent twice regardless of what the
+engine does. See [Deposit](../account/deposit.md) and
 [Withdraw](../account/withdraw.md) for the on-ramp and off-ramp,
 [Account Model](../account/account-model.md) for how you reconstruct your spendable
 set, and [Settlement](./settlement.md) for the on-chain spend pipeline.

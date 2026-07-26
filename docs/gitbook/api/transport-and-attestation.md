@@ -78,7 +78,7 @@ GET /info
 | `compose_hash` | Self-reported SHA-256 of the deployment manifest. Useful for display; the authoritative value comes from the quote-bound event log. |
 | `tee_pubkey` | Primary (shard-0) Ed25519 settlement signer, kept as a convenience field. |
 | `tee_pubkeys` | Full ordered signer set, one per tree shard. Verify the entire set against finalized `VaultConfig.tee_pubkeys`. |
-| `boot_session_id` | Fresh process-boot id signed into every canonical order, preventing cross-restart replay. |
+| `boot_session_id` | Fresh process-boot id signed into every canonical place and cancel intent, preventing cross-restart replay. |
 | `version` | Build version tag of the engine. |
 
 ### GET /attestation

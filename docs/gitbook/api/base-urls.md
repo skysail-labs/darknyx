@@ -58,11 +58,11 @@ carries `x-request-id` for support correlation.
 |---|---|
 | `400 Bad Request` | Malformed input: bad hex, wrong field width, a field that fails a field-element safety check, a zero order id. |
 | `401 Unauthorized` | Missing or invalid bearer token. |
-| `403 Forbidden` | The trading-key signature did not verify, or the caller does not own the order. |
+| `403 Forbidden` | The trading-key signature did not verify, the caller does not own the order, the route requires admin, or the account is suspended. |
 | `404 Not Found` | No such order / batch / instrument. |
 | `409 Conflict` | Duplicate order id, or a replay-protection nonce that did not advance. |
 | `429 Too Many Requests` | Rate limited. Back off and retry. |
-| `503 Service Unavailable` | A required subsystem (matching or settlement) is not available; see `/system/status`. |
+| `503 Service Unavailable` | New trading is paused because a required subsystem or finalized governance view is unavailable, or credential verification is momentarily at capacity. |
 
 See [Error Codes](../reference/error-codes.md) for the full catalogue of conditions
 per status.

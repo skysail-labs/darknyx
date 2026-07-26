@@ -68,6 +68,11 @@ reconcile after reconnecting.
 | `GET` | `/tree/leaves` | bearer | Paginated leaf read |
 | `GET` | `/transparency` | public | Proof-of-reserves + engine identity + stats |
 | `GET` | `/settlement/status/{batch_id}` | bearer | On-chain settlement status of a batch |
+| `POST` | `/admin/accounts` | admin bearer | Provision an API account |
+| `POST` | `/admin/accounts/{api_key}/disable` | admin bearer | Suspend an account immediately |
+| `POST` | `/admin/accounts/{api_key}/enable` | admin bearer | Reinstate a suspended account |
+| `POST` | `/admin/accounts/{api_key}/revoke-tokens` | admin bearer | Invalidate the account's current tokens |
+| `GET` | `/admin/metrics/settlement` | admin bearer | Bounded settlement queue, throughput, and latency telemetry |
 | `GET` | `/system/status` | public | Liveness / degraded-mode snapshot |
 | `GET` | `/time` | public | Server slot + unix time |
 | `GET` | `/attestation` | public | TDX attestation quote |
@@ -121,9 +126,11 @@ for you from your keys and a deposited note. Hand-building the body is possible
 
 ## Rate limits
 
-Read endpoints and authenticated order management are subject to operational
-rate limiting at the venue. Design clients to back off on `429` responses and to
-prefer the shared `/v1/stream` session for high-frequency order management,
-since one authenticated connection avoids per-request setup. See
+Credential verification and authenticated order management have separate,
+per-account limits. Cache bearer tokens for their lifetime, back off on `429`
+(order-operation responses include `Retry-After`; authentication errors include
+an approximate delay in the message), and prefer the shared `/v1/stream`
+session for high-frequency order management. Authentication can also return a
+short-lived `503` when expensive credential verification is at capacity. See
 [System Status](../reference/system-status.md) for how the venue signals
 degradation.

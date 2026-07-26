@@ -54,7 +54,7 @@ reply echoes so a client can correlate responses on the multiplexed socket.
 | `login` | `request_id?`, `token`, `cancel_on_disconnect?` | establishes or refreshes session auth |
 | `subscribe` | `request_id?`, `channels` | subscribes to `orders`, `fills`, or `tree` |
 | `order.place` | `request_id?`, `params` (a full [Place Order](../orders/place-order.md) body) | `POST /orders` |
-| `order.cancel` | `request_id?`, `order_id`, `params` (`trading_key`, `cancel_nonce`, `trading_key_signature`) | `DELETE /orders/{id}` |
+| `order.cancel` | `request_id?`, `order_id`, `params` (`trading_key`, `cancel_nonce`, `session_id`, `trading_key_signature`) | `DELETE /orders/{id}` |
 | `order.modify` | `request_id?`, `order_id`, `params` (a [Modify Order](../orders/modify-order.md) body) | `PUT /orders/{id}` |
 | `ping` | `request_id?` | none |
 

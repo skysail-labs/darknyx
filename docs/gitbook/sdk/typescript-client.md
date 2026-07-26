@@ -249,7 +249,13 @@ try {
 }
 
 // Cancel + modify use the same socket; build the bodies with buildCancel / buildOrder.
-const cancel = await buildCancel({ orderId, tradingKey: trading.publicKey, cancelNonce: 1n, sign });
+const cancel = await buildCancel({
+  orderId,
+  tradingKey: trading.publicKey,
+  cancelNonce: 1n,
+  sessionId: Uint8Array.from(Buffer.from(info.boot_session_id, "hex")),
+  sign,
+});
 await trader.cancel(hex(orderId), cancel);
 ```
 

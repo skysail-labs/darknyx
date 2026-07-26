@@ -21,17 +21,19 @@ wall-clock time.
 | May it rest? | `order_type` | `limit` rests; `ioc` and `fok` execute immediately and never rest. |
 | How long may it rest? | `expiry_slot` | The slot past which a resting order auto-expires. |
 
-Every order carries an `expiry_slot`, bounded by the market's maximum so a note
-cannot be locked forever. A resting order is swept when the chain passes that
-slot.
+Every order carries an `expiry_slot`, bounded by the protocol's maximum so a
+note cannot be locked forever. The current ceiling is 4,500 slots (roughly 30
+minutes at 400 ms slots). A resting order is swept when the chain passes its
+expiry.
 
 ## Available behaviors
 
 ### GTC: Good-til-Cancelled
 
-A **limit** order with a far-future `expiry_slot`. It rests until it fills, you
-cancel it, or it eventually hits its (distant) expiry. This is the standard
-resting order.
+A **limit** order whose `expiry_slot` is at the venue's allowed horizon. It
+rests until it fills, you cancel it, or it reaches that bounded expiry. This is
+“good until cancelled” within the protocol's maximum order lifetime, not an
+indefinite order.
 
 ### GTT: Good-til-Time
 
@@ -49,19 +51,20 @@ emitted on the [Orders Channel](../websocket/orders-channel.md).
 
 ### IOC: Immediate-or-Cancel
 
-An `ioc` order. Fills what it can in its arrival batch, cancels the rest. Never
-rests, so `expiry_slot` is moot for it.
+An `ioc` order. Fills what it can in its arrival batch, cancels the rest. It
+never rests, but its `expiry_slot` must still leave enough time for the match
+and settlement pipeline.
 
 ### FOK: Fill-or-Kill
 
-A `fok` order. Fills its whole size in its arrival batch or is dropped. Never
-rests and never partially fills.
+A `fok` order. Fills its whole size in its arrival batch or is dropped. It never
+rests and never partially fills, but still carries a settlement-safe expiry.
 
 ## Summary
 
 | TIF | Expressed as | Rests? |
 |---|---|---|
-| GTC | `limit` + far `expiry_slot` | Yes, until fill / cancel / expiry |
+| GTC | `limit` + maximum allowed `expiry_slot` | Yes, until fill / cancel / bounded expiry |
 | GTT | `limit` + deadline-derived `expiry_slot` | Yes, until the deadline slot |
 | IOC | `ioc` | No |
 | FOK | `fok` | No |

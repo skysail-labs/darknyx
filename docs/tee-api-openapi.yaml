@@ -19,6 +19,8 @@ openapi: 3.1.0
 #     settlement confirms. Per-match outcomes are independent; definitive
 #     failures are terminal and ambiguous results remain reserved while
 #     reconciling. Marker close is asynchronous cleanup after expiry.
+#   * Markets: one attested venue may serve several isolated books. The signed
+#     order symbol selects one book; proof batches never mix markets.
 #   * Tree state: the TEE mirrors each `MerkleTree[tree_id].current_root`
 #     + the full per-shard leaf set in-memory (K mirrors under
 #     tree-sharding). `/tree/*` is a convenience mirror; correctness-critical
@@ -32,10 +34,11 @@ openapi: 3.1.0
 
 info:
   title: Darknyx TEE API
-  version: 4.0.0
+  version: 4.1.0
   description: |
     Public + authenticated REST and WebSocket API for the Darknyx dark pool
-    TEE matching layer. Pairs with the v2 on-chain custody program
+    TEE matching layer. One attested endpoint may expose several independently
+    routed spot markets. Pairs with the v2 on-chain custody program
     (vault, program ID `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`).
   contact:
     name: Darknyx engineering
@@ -56,7 +59,7 @@ tags:
   - name: auth
     description: OAuth2 client-credentials and bearer-token lifecycle.
   - name: admin
-    description: Admin-gated account provisioning (register new API accounts).
+    description: Admin-gated account provisioning, suspension, and token invalidation.
   - name: attestation
     description: |
       TEE attestation quote retrieval + RA-TLS evidence bundle. Verify
@@ -92,7 +95,16 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Short-lived (≤ 1h) bearer token from POST /auth/token.
+      description: |
+        Short-lived (≤ 1h) bearer token from POST /auth/token.
+
+        Expiry is EXACT — there is no grace period past `expires_in`, on REST
+        or on the streaming transport. Refresh on a margin.
+
+        A structurally valid, unexpired token is still refused when it has been
+        revoked (401), when the operator has invalidated the tokens the account
+        was holding (401), or when the account is suspended (403). Suspension
+        also blocks issuing a new one, so re-authenticating does not clear it.
 
   # ───── Shared schemas ──────────────────────────────────────────────────────
 
@@ -113,6 +125,11 @@ components:
             Stable numeric error code. Ranges: 1000–1099 request validation,
             1100–1199 auth, 1200–1299 conflict, 1300–1399 not found, 1400–1499
             rate limit, 5000+ server. See the Error Codes reference.
+
+            One exception to the ranges: `1402` is returned with HTTP 503, not
+            429. It signals that credential verification is momentarily at
+            capacity and was refused rather than queued. Branch on the numeric
+            code rather than inferring the status from its range.
           example: 1102
         message:
           type: string
@@ -146,7 +163,7 @@ components:
           enum: [Bearer]
         expires_in:
           type: integer
-          description: Seconds from issue time.
+          description: Seconds from issue time. Expiry is exact; there is no validation leeway.
         account_id:
           type: string
           description: Stable per-account identifier.
@@ -169,7 +186,7 @@ components:
         is_admin:
           type: boolean
           default: false
-          description: Whether the new account may itself register further accounts.
+          description: Whether the new account may use the account-administration and settlement-metrics routes.
 
     RegisterAccountResponse:
       type: object
@@ -249,9 +266,9 @@ components:
           type: string
           pattern: '^[0-9a-fA-F]{64}$'
           description: |
-            Fresh 32-byte process-boot session id, hex. Every canonical order
-            signature binds this value, so requests prepared before a CVM
-            restart cannot be replayed into the new process.
+            Fresh 32-byte process-boot session id, hex. Every canonical place
+            and cancel intent binds this value, so requests prepared before a
+            CVM restart cannot be replayed into the new process.
         tcb_info:
           type: object
           required: [mrtd]
@@ -310,10 +327,15 @@ components:
 
     Instrument:
       type: object
+      description: |
+        One isolated market served by this attested venue. Every returned
+        instrument shares the same gateway/session identity but has its own
+        governed mint pair, book, oracle, and proof batches.
       required: [symbol, base_mint, quote_mint, tick_size, min_order_size, oracle]
       properties:
         symbol:
           type: string
+          description: Canonical symbol signed into an order and used for book routing.
           example: "SOL-USDC"
         base_mint:
           type: string
@@ -329,6 +351,7 @@ components:
           description: Raw integer minimum amount in the base mint's smallest units.
         oracle:
           type: object
+          required: [type, pubkey]
           properties:
             type: { type: string, enum: [pyth_pull_v2] }
             pubkey: { type: string, description: Pyth feed identifier (typically 32-byte hex). }
@@ -336,7 +359,8 @@ components:
     PlaceOrderRequest:
       type: object
       description: |
-        The canonical-order v2 body (`darknyx-order-v4` signature domain). All
+        The canonical-order v2 wire schema (`darknyx-order-v4` signature
+        domain). All
         32/64/16-byte fields are
         hex-encoded strings; all numeric fields are JSON integers (u64).
         The trading-key signature covers the canonical encoding of the
@@ -396,7 +420,8 @@ components:
           format: uint64
           description: |
             Solana slot past which this order auto-expires. Bounded by the
-            per-market max expiry to prevent permanent collateral lock.
+            protocol maximum (currently 4,500 slots) to prevent an unbounded
+            collateral-lock window.
         order_id:
           type: string
           description: 16-byte client-chosen id, hex. Must be unique + non-zero.
@@ -404,13 +429,17 @@ components:
           type: string
           description: |
             32-byte hex — Poseidon6 commitment to the collateral note this
-            order is backed by. Note must exist on-chain (in the Merkle
-            tree) AND be lockable (no existing NoteLock PDA).
+            order is backed by. The opening and VALID_INPUT proof are checked
+            at intake on a settlement-enabled venue. The commitment can reserve
+            at most one live or settlement-pending order in this venue; the
+            on-chain lock remains the final authority at settlement.
         user_commitment:
           type: string
           description: |
-            32-byte hex — binds the order's output notes to the correct
-            owner on-chain. Top byte must be zero (BN254 Fr safety).
+            32-byte hex — intended output-owner identity signed into the order.
+            Top byte must be zero (BN254 Fr safety). Current settlement derives
+            the actual output owner from the verified, note-bound
+            `owner_commitment` rather than trusting this client assertion.
         arrival_nonce:
           type: integer
           format: uint64
@@ -445,16 +474,20 @@ components:
           type: string
           description: |
             32-byte hex — the merkle root the `valid_input_proof` was
-            generated against. Relayed into `lock_note` (settle Tx A);
-            must still be in the vault's root ring buffer at lock time.
+            generated against. A settlement-enabled venue checks its recent-root
+            mirror before accepting the order; `lock_note` checks the
+            authoritative on-chain window again at settlement.
         valid_input_proof:
           type: string
           description: |
             256-byte hex (`pi_a ‖ pi_b ‖ pi_c`) — the per-note VALID_INPUT
             Groth16 proof that gates `lock_note`. The TEE cannot generate
             it (needs the spending key + merkle witness), so the client
-            supplies it; the matcher relays it unverified (on-chain
-            `lock_note` verifies it).
+            supplies it. A settlement-enabled venue verifies it at intake
+            against `(merkle_root, note_commitment, collateral mint)`;
+            on-chain `lock_note` verifies it again. Enqueue-only simulator /
+            load-test deployments do not settle and may deliberately accept
+            stub proofs.
         collateral_amount:
           type: integer
           format: uint64
@@ -605,7 +638,7 @@ components:
 
     TreeRoot:
       type: object
-      required: [merkle_root, leaf_count, on_chain_slot]
+      required: [tree_id, merkle_root, leaf_count, on_chain_slot]
       properties:
         tree_id:
           type: integer
@@ -616,9 +649,10 @@ components:
         merkle_root:
           type: string
           description: |
-            Current Merkle root of shard `tree_id`, hex-encoded. Must
-            equal on-chain `MerkleTree[tree_id].current_root` (or be
-            present in that shard's 32-root ring buffer).
+            Current Merkle root of shard `tree_id`, hex-encoded. It should
+            equal finalized on-chain `MerkleTree[tree_id].current_root`.
+            Historical roots accepted through the on-chain 64-entry history
+            are not returned by this endpoint.
         leaf_count:
           type: integer
           description: Leaf count of this shard.
@@ -916,7 +950,8 @@ paths:
 
         Credential verification is deliberately expensive, so the service
         bounds how much of it runs at once and REFUSES excess requests (503)
-        rather than queueing them. Both 429 and 503 carry `Retry-After`.
+        rather than queueing them. A 429 message includes an approximate retry
+        delay; use a short jittered retry for 503.
       requestBody:
         required: true
         content:
@@ -940,15 +975,15 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '429':
           description: |
-            This account's authentication allowance is exhausted. Retry after
-            the interval in `Retry-After`.
+            This account's authentication allowance is exhausted. The message
+            includes an approximate retry delay.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
         '503':
           description: |
             Credential verification is at capacity. Shed rather than queued, so
-            this clears quickly; retry after `Retry-After`.
+            this clears quickly; use a short jittered retry.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -965,6 +1000,11 @@ paths:
         '204': { description: Revoked. }
         '401':
           description: Token already invalid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The account is suspended.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -985,7 +1025,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/RegisterAccountRequest' }
       responses:
-        '202':
+        '201':
           description: Account registered.
           content:
             application/json:
@@ -1247,6 +1287,10 @@ paths:
     get:
       tags: [instruments]
       summary: List all tradable instruments.
+      description: |
+        Returns every independently routed market served by this one attested
+        venue. The array may contain multiple pairs; all use the same gateway,
+        bearer session, and `/v1/stream` connection.
       responses:
         '200':
           description: All markets.
@@ -1260,6 +1304,9 @@ paths:
     get:
       tags: [instruments]
       summary: Single instrument detail.
+      description: |
+        Returns one configured market. Use its canonical symbol unchanged in
+        signed order requests.
       parameters:
         - name: symbol
           in: path
@@ -1283,6 +1330,11 @@ paths:
     post:
       tags: [orders]
       summary: Place a new order.
+      description: |
+        Routes the signed symbol to one market book, checks the note opening,
+        recent proof root, and VALID_INPUT proof before booking on a
+        settlement-enabled venue, then reserves the collateral commitment
+        inside this venue.
       security: [{ BearerAuth: [] }]
       requestBody:
         required: true
@@ -1296,14 +1348,38 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PlaceOrderResponse' }
         '400':
-          description: Validation error (bad signature, mint mismatch, etc.).
+          description: |
+            Validation error, including malformed fields, off-tick price,
+            opening mismatch, stale proof root (1010), or invalid VALID_INPUT
+            proof (1011).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Account suspended or trading-key signature invalid.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
         '409':
           description: |
             Conflict — the referenced note_commitment is already
-            locked by another order or has been spent.
+            reserved by another live or settlement-pending order, the order id
+            is in use, or a replay/session nonce is stale.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: Per-account order-operation limit exceeded. Includes Retry-After.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: New trading is paused because a required subsystem or finalized governance view is unavailable.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -1331,6 +1407,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a
+            token invalidated by the operator.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
     delete:
       tags: [orders]
       summary: Cancel an open order.
@@ -1351,8 +1438,28 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CancelOrderResponse' }
+        '400':
+          description: Malformed id, key, session, or signature encoding.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Account suspended, signature invalid, or trading key does not own the order.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '404':
           description: Order doesn't exist or is already terminal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: The cancel nonce did not advance or the boot session is stale.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -1370,8 +1477,11 @@ paths:
         it is the same id, a reprice in place), so there is no window where the
         caller has neither order. The replacement carries its own note +
         VALID_INPUT proof (it may reuse the old note while the root is still in
-        the 64-root window) — no new signed message type; it composes the
-        existing cancel + order canonical bodies.
+        the recent-root window) — no new signed message type; it composes the
+        existing cancel + order canonical bodies. The replacement must use the
+        original order's symbol: moving between isolated market books requires
+        cancel + a fresh placement. Its session_id also scopes the embedded
+        cancel signature to the current boot.
       security: [{ BearerAuth: [] }]
       parameters:
         - name: order_id
@@ -1390,8 +1500,22 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ModifyOrderResponse' }
+        '400':
+          description: |
+            Malformed request, cross-market replacement, or replacement
+            place-order validation failure.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '403':
-          description: The booked order is not owned by this trading_key.
+          description: |
+            Account suspended, or the booked order is not owned by this
+            trading_key.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -1401,7 +1525,12 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
         '409':
-          description: The replacement order_id is already booked.
+          description: The replacement order_id is already booked, or a nonce/session is stale.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: New trading became paused while the replacement was verified; the original order is unchanged.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -1424,6 +1553,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Account' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a
+            token invalidated by the operator.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /account/settings:
     get:
@@ -1436,6 +1576,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AccountSettings' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a
+            token invalidated by the operator.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
     put:
       tags: [account]
       summary: Replace the caller's account settings.
@@ -1455,6 +1606,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AccountSettings' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a
+            token invalidated by the operator.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   # ───── tree ────────────────────────────────────────────────────────────────
 
@@ -1527,6 +1689,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a
+            token invalidated by the operator.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /tree/leaves:
     get:
@@ -1567,6 +1740,17 @@ paths:
                         leaf_index: { type: integer }
                         value: { type: string }
                   merkle_root: { type: string }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a
+            token invalidated by the operator.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   # ───── system ──────────────────────────────────────────────────────────────
 
@@ -1598,7 +1782,9 @@ paths:
         TEE's current Solana slot. `degraded` is `true` whenever the
         matcher or the settle pipeline is down, including a fail-closed pause
         caused by unavailable or changed finalized governance, so clients can
-        back off before they hit a write failure.
+        back off before they hit a write failure. On a multi-market venue,
+        governed-market drift pauses new trading across every book. Cancels,
+        reads, and pending-settlement reconciliation continue.
       responses:
         '200':
           description: Engine status snapshot.
@@ -1682,6 +1868,17 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token, or a
+            token invalidated by the operator.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The account is suspended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /admin/metrics/settlement:
     get:
@@ -1705,6 +1902,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SettlementMetrics' }
+        '401':
+          description: Missing / invalid / expired / revoked bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '403':
           description: Authenticated account is not an admin.
           content:
@@ -1731,7 +1933,8 @@ x-websocket:
     Authenticate IN-BAND with `op: login` carrying a bearer token from
     POST /auth/token, then subscribe to channels. Bearer tokens never appear
     in the URL. The order.place/cancel/modify ops dispatch to the same intake
-    core as the REST path.
+    core as the REST path. One session can trade every market returned by
+    `/instruments`; each signed symbol routes to one isolated book.
 
     Served channels are `orders`, `fills` (per-account), and `tree` (global
     leaf-appends). Account snapshots and settlement status remain REST reads.
@@ -1754,6 +1957,7 @@ x-websocket:
         required: [op, token]
         properties:
           op: { type: string, enum: [login] }
+          request_id: { type: string, description: Optional client correlation id echoed in the response. }
           token: { type: string, description: Bearer token from POST /auth/token. }
           cancel_on_disconnect:
             type: boolean
@@ -1769,6 +1973,7 @@ x-websocket:
         required: [op]
         properties:
           op: { type: string, enum: [logout] }
+          request_id: { type: string, description: Optional client correlation id echoed in the response. }
 
     ping:
       description: Heartbeat (client → server).
@@ -1777,6 +1982,7 @@ x-websocket:
         required: [op]
         properties:
           op: { type: string, enum: [ping] }
+          request_id: { type: string, description: Optional client correlation id echoed in the response. }
 
     subscribe:
       description: Subscribe to one or more channels.
@@ -1785,6 +1991,7 @@ x-websocket:
         required: [op, channels]
         properties:
           op: { type: string, enum: [subscribe] }
+          request_id: { type: string, description: Optional client correlation id echoed in the response. }
           channels:
             type: array
             items:
@@ -1798,6 +2005,7 @@ x-websocket:
         required: [op, channels]
         properties:
           op: { type: string, enum: [unsubscribe] }
+          request_id: { type: string, description: Optional client correlation id echoed in the response. }
           channels:
             type: array
             items: { type: string }
@@ -1810,20 +2018,20 @@ x-websocket:
         on the `orders` channel.
       message:
         type: object
-        required: [op, request_id, params]
+        required: [op, params]
         properties:
           op: { type: string, enum: [order.place] }
-          request_id: { type: string, description: Echoed in the response. }
+          request_id: { type: string, description: Optional client correlation id echoed in the response. }
           params: { $ref: '#/components/schemas/PlaceOrderRequest' }
 
     order.cancel:
-      description: Cancel an open order.
+      description: Cancel an open order with a nonce- and boot-session-bound signature.
       message:
         type: object
-        required: [op, request_id, order_id, params]
+        required: [op, order_id, params]
         properties:
           op: { type: string, enum: [order.cancel] }
-          request_id: { type: string }
+          request_id: { type: string, description: Optional client correlation id echoed in the response. }
           order_id: { type: string }
           params:
             type: object
@@ -1831,18 +2039,20 @@ x-websocket:
             properties:
               trading_key: { type: string }
               cancel_nonce: { type: integer }
+              session_id: { type: string, description: Current 32-byte /info.boot_session_id, hex. }
               trading_key_signature: { type: string }
 
     order.modify:
       description: |
         Atomic cancel + replace (same as PUT /orders/{order_id}): cancel the
         OLD order and rest a fully-signed replacement under one matcher lock.
+        The replacement must remain in the original market.
       message:
         type: object
-        required: [op, request_id, order_id, params]
+        required: [op, order_id, params]
         properties:
           op: { type: string, enum: [order.modify] }
-          request_id: { type: string }
+          request_id: { type: string, description: Optional client correlation id echoed in the response. }
           order_id: { type: string, description: The OLD order id (hex) to replace. }
           params:
             type: object

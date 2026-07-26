@@ -53,17 +53,22 @@ Codes are grouped by class. The HTTP status is derived from the class.
 | `1006` | 400 | The note opening does not re-derive the signed `note_commitment`. |
 | `1007` | 400 | `expiry_slot` exceeds the maximum lock lifetime. |
 | `1008` | 400 | The X25519 viewing key is low-order or otherwise non-contributory. |
-| `1101` | 401 | Missing / invalid / expired / revoked token, or bad credentials. |
+| `1009` | 400 | A non-zero price limit is not an integer multiple of the market tick. |
+| `1010` | 400 | The `merkle_root` your collateral proof was built against is no longer in the venue's recent-root window. Re-prove against a current root and resubmit. |
+| `1011` | 400 | The collateral proof did not verify. |
+| `1101` | 401 | Missing / invalid / expired / revoked token, or bad credentials. Also returned when an operator has invalidated the tokens an account was holding. |
 | `1102` | 403 | The trading-key signature did not verify. |
 | `1103` | 403 | The trading key does not own the targeted order. |
-| `1150` | 403 | Forbidden (e.g. admin-only route). |
+| `1150` | 403 | Forbidden: an admin-only route, or **the account is suspended**. A suspended account also gets `403` from `POST /auth/token`, so re-authenticating does not clear it. |
 | `1201` | 409 | Duplicate order id (a different order already holds it). |
 | `1202` | 409 | A replay-protection nonce did not advance. |
 | `1203` | 409 | A modify's replacement id is already booked. |
 | `1204` | 409 | The collateral note commitment is already reserved by a live or settlement-pending order. |
 | `1205` | 409 | The order targets a stale or unrelated CVM boot session. |
+| `1206` | 409 | An administrative change was refused because it would leave the venue with no enabled admin account. |
 | `1301` | 404 | No such order / batch / instrument / note. |
-| `1401` | 429 | Rate limited; back off and retry. |
+| `1401` | 429 | Rate limited; back off and retry. Order-operation responses include `Retry-After`; authentication messages include an approximate delay. Authentication is per-account, so this reflects your own usage rather than someone else's. |
+| `1402` | 503 | Credential verification is momentarily at capacity. Shed rather than queued, so it clears quickly—use a short, jittered retry. |
 | `5001` | 503 | A required subsystem (matching / settlement) is unavailable. |
 | `5000` | 500 | Internal error. |
 
@@ -75,22 +80,37 @@ Codes are stable: branch on the number, not the message text (which may change).
 |---|---|---|
 | `400 Bad Request` | Malformed input | Invalid hex; wrong field width; a non-canonical field element; zero `order_id`; zero-price bid; invalid viewing key; excessive expiry; bad opening; or insufficient collateral. |
 | `401 Unauthorized` | Auth | Missing bearer token; expired or revoked token; invalid credentials on `POST /auth/token`. |
-| `403 Forbidden` | Ownership | The trading-key signature did not verify over the canonical body, or the trading key does not own the order being cancelled or modified. |
+| `403 Forbidden` | Ownership or account state | The trading-key signature did not verify over the canonical body; the trading key does not own the order being cancelled or modified; or the account is suspended. |
 | `404 Not Found` | Missing resource | No such order (already filled / expired / cancelled), batch, or instrument. |
 | `409 Conflict` | State conflict | Duplicate `order_id`; stale arrival nonce or boot session; collateral already reserved; or a modify whose replacement id is already booked. |
-| `429 Too Many Requests` | Rate limit | Operational rate limit exceeded; back off and retry. |
-| `503 Service Unavailable` | Subsystem down | Matching or settlement is not available; see [`/system/status`](./system-status.md). |
+| `429 Too Many Requests` | Rate limit | Operational rate limit exceeded; back off and retry. Order operations and authentication are metered separately, and both are per-account. |
+| `503 Service Unavailable` | Subsystem down, or auth at capacity | Matching or settlement is not available (see [`/system/status`](./system-status.md)); or credential verification is momentarily saturated (`1402`). |
 
 ## Conditions by endpoint
 
 ### Authentication
-- `401`: bad credentials (`POST /auth/token`), or a missing / expired / revoked
-  token on an authenticated request.
+- `401`: bad credentials (`POST /auth/token`); a missing, expired, or revoked
+  token on an authenticated request; or a token an operator invalidated. Token
+  expiry is **exact** — there is no grace period past `expires_in`.
+- `403` (`1150`): the account is suspended. Returned both on authenticated
+  requests and on `POST /auth/token`, so re-authenticating does not clear it.
+  Not retryable.
+- `429` (`1401`): this account's authentication allowance is exhausted. An
+  unrecognised `api_key` is refused before any verification work, so it consumes
+  no allowance.
+- `503` (`1402`): verification is at capacity; requests are refused rather than
+  queued. Retry after a short, jittered delay.
+
+Authenticate **once per token lifetime**, not once per action — a client that
+caches its token for the `expires_in` window will not meet these limits.
 
 ### Place order
 - `400`: malformed fields, a failed field-element check, a zero order id, a bid
-  with zero price, an opening that does not match the signed commitment, or
-  collateral below the required (nominal + fee) floor.
+  with zero price, an off-tick non-zero price, an opening that does not match the
+  signed commitment, or collateral below the required (nominal + fee) floor.
+- `400` (`1010` / `1011`): the collateral proof was rejected **at intake** —
+  either its Merkle root has aged out of the recent-root window, or the proof
+  itself did not verify. Rebuild against a current root and resubmit.
 - `403`: the trading-key signature does not verify.
 - `409`: the `order_id` is already in the book, or the collateral commitment is
   reserved by another live/pending order.
@@ -98,6 +118,7 @@ Codes are stable: branch on the number, not the message text (which may change).
 ### Cancel / modify
 - `403`: signature does not verify, or the key does not own the order.
 - `404`: the order is not resting (filled / expired / cancelled).
+- `409`: cancel nonce or boot session is stale.
 - `409` (modify): the replacement `order_id` is already booked.
 
 ### Reads (orders, settlement, tree)
@@ -105,17 +126,30 @@ Codes are stable: branch on the number, not the message text (which may change).
 - `404`: unknown order / batch / note. `GET /orders/{id}` intentionally returns
   this same response for a foreign account's order.
 
+{% hint style="success" %}
+**A rejected order is better than an accepted one that cannot settle**
+
+Collateral proofs are verified when the order is submitted, not when it
+settles. An order whose proof is stale or invalid is refused immediately with
+`1010` / `1011` and costs you nothing.
+
+Previously such an order was booked, matched, and only rejected on-chain — at
+which point the whole batch failed, taking an honest counterparty's collateral
+down with it into a locked state neither of you chose. Seeing these codes means
+that no longer happens: rebuild the proof against a current root and resubmit.
+{% endhint %}
+
 ## Handling errors
 
 | Status | Recommended client behavior |
 |---|---|
 | `400` | A bug in request construction; fix and do not blindly retry. |
 | `401` | Refresh the bearer token and retry once. |
-| `403` | Check you signed with the correct trading key over the correct canonical body. |
+| `403` | For `1102`/`1103`, check the trading key and canonical body. For `1150 account disabled`, stop retrying and contact the operator. |
 | `404` (on cancel/modify) | Treat as "no longer resting"; reconcile via `GET /orders/{id}` or the orders stream. |
 | `409` | For a duplicate order id, use a fresh id; for a stale nonce, advance it. |
 | `429` | Back off with jitter; prefer one shared `/v1/stream` session for high-frequency management. |
-| `503` | Poll `/system/status`; resume when matching/settlement is available. |
+| `503` | For `1402`, retry authentication after a short jittered delay. For `5001`, poll `/system/status` and resume new trading when the venue is ready. |
 
 {% hint style="success" %}
 **Make cancels idempotent in your logic**

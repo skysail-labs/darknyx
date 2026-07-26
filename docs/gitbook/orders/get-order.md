@@ -38,6 +38,7 @@ curl -s "$GATEWAY/orders/$ORDER_ID" \
 ```json
 {
   "order_id": "aa00000000000000000000000000000001",
+  "symbol": "SOL-USDC",
   "side": "bid",
   "order_type": "limit",
   "status": "pending",
@@ -54,6 +55,7 @@ curl -s "$GATEWAY/orders/$ORDER_ID" \
 | Field | Type | Description |
 |---|---|---|
 | `order_id` | string | The order id. |
+| `symbol` | string | The isolated market book this order belongs to. |
 | `side` | string | `"bid"` or `"ask"`. |
 | `order_type` | string | `"limit"`, `"ioc"`, or `"fok"`. |
 | `status` | string | Usually `pending` or `pending_settlement` for a live tracked order. Terminal lifecycle is delivered on the orders stream and may already have aged out of this read. |
