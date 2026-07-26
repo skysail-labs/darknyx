@@ -2,8 +2,9 @@
 
 This is the closure ledger for
 [`docs/audit-2026-07-25-withdraw-intake-boundary-review.md`](audit-2026-07-25-withdraw-intake-boundary-review.md)
-(soundness `S-01…S-12`, performance `PF-01…PF-07`) plus the `AU-01…AU-05`
-authentication findings surfaced while validating S-02.
+(soundness `S-01…S-12`, performance `PF-01…PF-07`) plus the `AU-01…AU-07`
+authentication findings — `AU-01…AU-05` surfaced while validating S-02, and
+`AU-06…AU-07` from the follow-up complete pass of `api/auth.rs` on 2026-07-26.
 
 It follows the conventions of
 [`docs/security-remediation-tracker.md`](security-remediation-tracker.md): a
@@ -52,17 +53,24 @@ backfill row at the end of this document.
 |---|---|---|---|---|---|
 | PF-01 | Perf-Nit | Vault | `remediation/audit-2026-07-25-vault` | Settle reads stored bumps for both `NoteLock` accounts and derives the marker with `create_program_address`; litesvm CU trace shows the reduction against the 115,000 limit | **Validated** — devnet settle 2026-07-25 |
 | PF-02 | Perf-Nit | Vault | `remediation/audit-2026-07-25-vault` | `lock_note` reads `vault_config.bump` from account data rather than re-deriving; CU trace per lock transaction | **Validated** — devnet settle 2026-07-25 |
-| PF-03 | Perf-Nit | — | — | Deferred: narrowing `fill_recovery` to `[u8; 120]` reclaims 8 of 123 spare bytes but requires a canonical-hash bump and cross-language fixture regeneration. **Re-entry condition:** the next change that already bumps `MatchResultPayload`. Note the audit's claim that this rides S-01's ceremony is incorrect — different circuit, different hash | Deferred |
+| PF-03 | Perf-Nit | — | — | **Deferral CONFIRMED 2026-07-26.** Verified real: the field is `[u8; 128]` (`settle/payload.rs`), and Tx D sits at 1109 B with 123 B headroom, so narrowing to 120 would take it to 131 B. But 8 bytes of 1232 costs a canonical-hash bump plus cross-language fixture regeneration in Rust AND TypeScript. Not worth it standalone. **Re-entry condition:** the next change that already bumps `MatchResultPayload`. The audit's claim that this rides S-01's ceremony is incorrect — different circuit, different hash | Deferred |
 | PF-04 | Perf-Nit | Vault + SDK | `remediation/audit-2026-07-25-vault` | `withdraw` allocates one guard PDA, not two. `NullifierEntry` (zero readers repo-wide) is removed, eliminating the latent brick where two notes sharing an `inner_hash` collide on a mint- and amount-independent nullifier. Shipped in the same commit as S-05, which it funds | **Validated** — devnet withdraw carries 13 account keys, not 14 |
-| PF-05 | Perf-Nit | — | — | Deferred pending measurement. The audit asserts the intake mutex is the ~27 ord/s ceiling while §5.9 records that no measurements were taken. **Re-entry condition:** a loadgen profile attributing intake latency to lock contention rather than to compute | Deferred |
-| PF-06 | Perf-Nit | — | — | Deferred: `Arc<OrderOpening>` instead of a 256-byte deep clone. **Re-entry condition:** the next change that touches `matcher/openings.rs` | Deferred |
-| PF-07 | Perf-Nit | — | — | Deferred: scaling the settle CU request to the actual leaf count raises the per-block writable-account ceiling. Not a bottleneck at ~1 settle/s. **Re-entry condition:** the tree-sharding throughput work | Deferred |
+| PF-05 | Perf-Nit | — | — | **PREMISE DISPROVED 2026-07-26 — no work required.** The audit asserted the intake mutex is the ~27 ord/s ceiling. Read against the code: the global `submission_replay` lock (`orders.rs:729–768`) holds only two HashMap gets, an atomic gate read, `commit_order`, and the replay record — microseconds. The expensive work is deliberately OUTSIDE it; the VALID_INPUT verify sits at `orders.rs:585`, the lock is taken at 729. 27 ord/s implies ~37 ms serialized per order and nothing in that section costs that. The historical loadgen figure was client-bound, not server-bound. **Separately noted:** `try_consume_rate` takes a GLOBAL WRITE lock on `rate_buckets` for every request including read-only routes (`state.rs:900`). Its critical section is tiny and it is not a bottleneck today, but it is the only unconditional global write lock on the hot path and is the credible version of this finding if throughput ever binds | **Closed** — premise disproved |
+| PF-06 | Perf-Nit | — | — | **MEASURED, NOT WORTH DOING 2026-07-26.** `OrderOpening` is **456 bytes** (not the 256 the audit cited — that is the embedded proof alone) and a clone costs **28.6 ns** (1M iterations, `black_box`ed, release). At ~32 copies per N=16 batch that is **~0.9 µs against a ~2.2 s prove**, about 0.00004% of the batch. An `Arc` would add indirection and lifetime coupling to save nothing measurable | **Won't Fix** — measured negligible |
+| PF-07 | Perf-Nit | — | — | **Deferral CONFIRMED 2026-07-26, mechanism quantified.** Real: settle requests `SETTLE_COMPUTE_UNIT_LIMIT = 115_000` (`settle/pipeline.rs:109`) while consuming ~79,786 measured, so 31% of the per-writable-account block ceiling (12M CU) is wasted — 104 vs 150 settles per block against one writable account. That ceiling is roughly 250x above the current ~1 settle/s. **Re-entry condition:** the tree-sharding throughput work, which is what would raise concurrent settles against a shared account | Deferred |
 
 ## Authentication findings — surfaced during S-02 validation
 
 The audit deferred `api/auth.rs` (§5.3) while noting that bearer auth is the
 only gate in front of S-02. Reviewing it produced these. AU-01 is material to
 S-02: it removes the rate bound the audit's blast-radius reasoning assumes.
+
+`AU-01…AU-05` came out of a **partial** read taken while validating something
+else. `AU-06` and `AU-07` come from the **complete** pass of that file
+(2026-07-26), commissioned precisely because a partial read is not evidence of
+absence. That pass found one live vulnerability — and it was one this
+remediation effort had itself introduced, which is the argument for auditing a
+surface after changing it rather than only before.
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
@@ -71,6 +79,8 @@ S-02: it removes the rate bound the audit's blast-radius reasoning assumes.
 | AU-03 | Low ops | TEE | `hardening/enclave-auth-controls` | Env-based admin credential rotation is a no-op once `accounts.db` exists (`ensure_admin` inserts only when the `api_key` is absent). Either honour an env change or document that rotation is API-only. **Re-entry condition:** operational runbook work before mainnet | **Closed** — live-enclave validated 2026-07-26: redeploying the same api_key with a new secret logs the divergence warning and the original secret still authenticates, so the stored registry is provably authoritative |
 | AU-04 | Low | TEE | `hardening/enclave-auth-controls` | The `jti` revocation denylist has no expiry-based eviction and grows without bound — the same class as S-10. Fold into S-10's bounded-map work if cheap, else track. **Re-entry condition:** S-10 implementation | **Closed** — each entry carries its token expiry, pruned on write and at boot; the v2 snapshot round-tripped a restart (`revoked_expired_dropped` reported at boot) |
 | AU-05 | Low | TEE + ops | `hardening/enclave-auth-controls` | `POST /auth/token` has no in-process rate limit; the router comment defers to a reverse-proxy limit that does not exist in this repo. The argon2 semaphore bounds concurrency and RAM, not request rate. **Re-entry condition:** ingress configuration before mainnet | **Closed** — unknown keys refused before hashing, per-account login bucket (bounded by registered accounts; an outsider cannot throttle a real account), and permits taken without waiting so excess is shed not queued |
+| AU-06 | **Medium** | TEE | `hardening/token-expiry-leeway` (PR #72) | A revoked token stays refused for as long as it is still decodable. `Validation::default()` carries `leeway: 60`, so a token was accepted until `exp + 60`, while the AU-04 denylist prune drops an entry once `exp` has passed — between those two moments a REVOKED token was off the denylist AND still decodable, and any later revocation triggered the prune. Demonstrated with a failing test (revoked token returned 204 where 401 was required) before the fix. Leeway pinned to 0 and the prune margin derived from the same constant, so raising one widens the other. **Regression introduced by AU-04 in this same effort** | **Code complete** — PR #72, offline gate green |
+| AU-07 | Medium | TEE + ops | — | An unauthenticated client cannot hold enclave resources indefinitely. `/v1/stream` upgrades unauthenticated by design (login is in-band) and closes after 60 s idle, but ANY frame — including a transport `ping` — refreshes the idle timer, and there is no cap on concurrent connections, so sockets can be held open indefinitely at near-zero attacker cost. Not fixed in the auth pass: the mitigation is partly at ingress, and the in-process half needs a connection cap chosen against real client behaviour rather than guessed. **Largest remaining item on this surface** | Open |
 
 ---
 
@@ -134,16 +144,25 @@ not blocked by it.
 
 ## Measured, replacing estimates
 
-Both columns are the **same workload**: one `tee_forced_settle_batched` at the
-N=16 worst case, measured by the litesvm CU trace. Stating that explicitly
-because an estimate and a measurement taken at different N are not a comparison,
-and the two numbers below are far enough apart to invite that misreading.
+For the first three rows both columns are the **same workload**: one
+`tee_forced_settle_batched` at the N=16 worst case, measured by the litesvm CU
+trace. Stating that explicitly because an estimate and a measurement taken at
+different N are not a comparison, and the PF-01 numbers are far enough apart to
+invite that misreading.
 
-| Change | Estimated (per settle, N=16 worst case) | **Measured** (same) |
+The rows below the rule are from the 2026-07-26 follow-up pass and are **not**
+that workload — each names its own, because a table of numbers with an implied
+shared denominator is how the misreading starts.
+
+| Change | Estimated | **Measured** |
 |---|---|---|
 | PF-01 + PF-02 stored bumps, combined | 3–5k CU | **−1,392 CU** (81,178 → 79,786) |
 | S-05 + PF-04 net rent | ~0 | **0** — 56 B and one init CPI out of withdraw, the same in to deposit |
 | S-04 Tx B size | −8 B | **−8 B** (304 → 296) |
+| — *follow-up pass, own workloads* | — | — |
+| PF-06 `OrderOpening` clone | "256-byte deep clone" | **456 B struct, 28.6 ns/clone** (1M iters, black_box, release) — ~0.9 µs per N=16 batch |
+| PF-07 settle CU over-request | unquantified | **115,000 requested vs ~79,786 used** = 31% of the 12M per-writable-account block ceiling; 104 vs 150 settles/block |
+| S-02 intake verify | "adds latency to intake" | **2.49 ms** isolated (500 iters, release). The 331 ms order-submit figure reported earlier is a laptop→prod9 round trip, NOT this |
 
 The 3–5k estimate was written as a combined PF-01 + PF-02 figure, but its bulk
 sat in PF-01, and PF-01 fell short because that figure assumed the marker's
@@ -250,6 +269,56 @@ against treating the offline gate as sufficient for circuit changes.
 
 ---
 
+## Follow-up pass — `api/auth.rs` + deferred performance, 2026-07-26
+
+Commissioned because `AU-01…AU-05` came out of a partial read, and because four
+performance items had been deferred on reasoning rather than measurement.
+
+### The auth surface
+
+One live vulnerability (`AU-06`), and **this effort had introduced it**. The
+revocation-list pruning added for `AU-04` evicts an entry once that entry's
+`exp` passes, while `Validation::default()` honours a token until `exp + 60`.
+Between those two moments a revoked token was off the denylist and still
+decodable, and any later revocation triggered the prune. It was demonstrated
+with a failing test — the revoked token returning `204` where `401` was
+required — before being fixed, rather than asserted from reading.
+
+The lesson worth keeping is not the library default. It is that a change which
+bounds a data structure can silently weaken a security property enforced
+somewhere else, and only a pass over the whole surface *after* the change finds
+it.
+
+One issue was found and deliberately **not** fixed (`AU-07`): the mitigation is
+partly at ingress, and the in-process half needs a connection cap chosen
+against real client behaviour rather than guessed at the end of an audit.
+
+Checked and clean: algorithm confusion (HS256 pinned, no `alg` trust),
+credential-verification timing (the non-short-circuit `&` keeps both argon2
+verifies unconditional), privilege escalation through `/account/settings` (it
+can only reach `AccountSettings`), the admin-lockout guard's TOCTOU (count and
+mutation share one write guard), and secrets in logs.
+
+### The deferred performance items
+
+All four deferrals hold, but for materially different reasons than recorded,
+and two are now closed rather than deferred:
+
+| ID | Was | Now | Why |
+|---|---|---|---|
+| PF-03 | Deferred | Deferred (confirmed) | Real, but 8 bytes of 1232 against a three-language lockstep change |
+| PF-05 | Deferred pending measurement | **Closed — premise disproved** | The expensive work is outside the lock; the cited ceiling was client-bound |
+| PF-06 | Deferred | **Won't Fix** | Measured at 28.6 ns/clone — 0.00004% of a batch |
+| PF-07 | Deferred | Deferred (confirmed, quantified) | Real 31% waste against a ceiling ~250x above current throughput |
+
+The pattern across all four: every one named a **real mechanism**, and three had
+an effect too small to act on. Only measurement separates those — which is why
+"deferred pending measurement" was the right disposition for PF-05, and why
+acting on the audit's estimate would have meant optimising a lock that was never
+the constraint.
+
+---
+
 ## Backfill — 2026-07-20 `D-01…D-09` pass
 
 `docs/audit-2026-07-20-full-protocol-review.md` is cited as prior art by the
@@ -272,6 +341,13 @@ dispositioned.
   **sole** conservation guarantor. A recovered trapdoor mints value with zero
   on-chain check. This makes the Phase-2 ceremony a hard blocker rather than a
   best practice, and it must be stated as such in the ceremony's scope.
+- **`AU-07` (unauthenticated socket hold) is the one open finding on the auth
+  surface** and should be closed before an account is issued outside the
+  operating team, alongside whatever ingress limiting fronts the gateway.
+- `api/auth.rs` has now had a **complete** pass (2026-07-26), so it is no longer
+  in the uncommissioned list below. `settle/worker.rs` crash recovery and
+  `oracle/*` still are.
+
 - Deferred review surfaces from §5 that remain uncommissioned, in priority order:
   `api/auth.rs` (partially covered here by AU-01…AU-05), `settle/worker.rs`
   crash recovery interleaved with partial-batch failure, and `oracle/*`.
