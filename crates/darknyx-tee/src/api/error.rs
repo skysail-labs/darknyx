@@ -149,6 +149,11 @@ impl ApiError {
     pub fn stale_session(m: impl Into<String>) -> Self {
         Self::new(1205, StatusCode::CONFLICT, m)
     }
+    /// The mutation would leave the service with no enabled admin account,
+    /// locking every administrative route out of reach.
+    pub fn would_orphan_admin(m: impl Into<String>) -> Self {
+        Self::new(1206, StatusCode::CONFLICT, m)
+    }
 
     // 1300–1399 — not found (404)
     pub fn not_found(m: impl Into<String>) -> Self {

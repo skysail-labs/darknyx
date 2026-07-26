@@ -44,7 +44,7 @@ use argon2::password_hash::{
 use argon2::Argon2;
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Path, State},
     http::{Request, StatusCode},
     middleware::Next,
     response::Response,
@@ -139,11 +139,35 @@ pub struct ApiCredentials {
     pub secret_hash: String,
     pub passphrase_hash: String,
     pub is_admin: bool,
-    /// Per-account preferences. `#[serde(default)]` so snapshots written before
-    /// this field existed still deserialize (older `accounts.db` files have no
-    /// `settings` key → `AccountSettings::default()`).
+    /// Per-account preferences.
+    ///
+    /// NOTE: `#[serde(default)]` does NOT make this backward compatible with an
+    /// older snapshot, contrary to what this comment used to claim. The
+    /// snapshot format is bincode, which is positional and not
+    /// self-describing — there is no "missing key" for a default to fill in, so
+    /// a shorter payload simply fails to decode. Compatibility across a field
+    /// addition comes from `SNAPSHOT_VERSION` in `crate::persistence::auth`,
+    /// not from this attribute.
     #[serde(default)]
     pub settings: AccountSettings,
+    /// Whether the account is suspended. A suspended account is refused at
+    /// token validation, so every token it already holds stops working at once
+    /// — on every transport — and it cannot obtain a new one.
+    ///
+    /// This is the only mechanism that stops a compromised account short of
+    /// redeploying the enclave.
+    #[serde(default)]
+    pub disabled: bool,
+    /// Unix seconds. Any token whose `iat` is older than this is refused.
+    ///
+    /// Invalidates every outstanding token for the account in one write,
+    /// without suspending it — the response to a suspected token leak on an
+    /// account that is otherwise in good standing. A single timestamp does this
+    /// for an unbounded number of tokens; the alternative, recording every
+    /// issued token id so they could be revoked individually, would mean
+    /// unbounded state for a bounded need.
+    #[serde(default)]
+    pub tokens_valid_from: u64,
 }
 
 /// Per-account, mutable preferences served by `GET`/`PUT /account/settings`.
@@ -179,6 +203,8 @@ impl ApiCredentials {
             passphrase_hash: hash_secret(passphrase)?,
             is_admin,
             settings: AccountSettings::default(),
+            disabled: false,
+            tokens_valid_from: 0,
         })
     }
 
@@ -279,6 +305,51 @@ impl AccountRegistry {
         }
     }
 
+    /// Suspend or reinstate an account. Returns `true` if the account existed
+    /// (and was updated). The caller persists the registry afterwards.
+    ///
+    /// Suspension takes effect on the next request rather than at the next
+    /// token expiry, because token validation re-reads the registry instead of
+    /// trusting the claims in an already-issued token.
+    pub fn set_disabled(&mut self, api_key: &str, disabled: bool) -> bool {
+        match self.by_api_key.get_mut(api_key) {
+            Some(creds) => {
+                creds.disabled = disabled;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// How many accounts are both admins and not suspended.
+    ///
+    /// Used to refuse a suspension that would leave nobody able to reach the
+    /// administrative routes. Callers MUST read this and apply the resulting
+    /// mutation while holding the same write guard — counting under a read lock
+    /// and then mutating under a write lock would let two concurrent
+    /// suspensions each observe two admins and both proceed, leaving zero.
+    pub fn enabled_admin_count(&self) -> usize {
+        self.by_api_key
+            .values()
+            .filter(|c| c.is_admin && !c.disabled)
+            .count()
+    }
+
+    /// Refuse every token for this account issued before `cutoff` (unix
+    /// seconds). Returns `true` if the account existed.
+    ///
+    /// Monotonic: a cutoff older than the stored one is ignored, so a late or
+    /// replayed request cannot reinstate tokens an earlier call invalidated.
+    pub fn invalidate_tokens_before(&mut self, api_key: &str, cutoff: u64) -> bool {
+        match self.by_api_key.get_mut(api_key) {
+            Some(creds) => {
+                creds.tokens_valid_from = creds.tokens_valid_from.max(cutoff);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Number of registered accounts. Used by the boot path to decide
     /// whether a loaded snapshot was non-empty.
     pub fn len(&self) -> usize {
@@ -360,7 +431,46 @@ impl AccountRegistry {
                 );
                 self.register(creds)
             }
-            _ => false,
+            Some(_) => {
+                // The key is already present, so nothing is seeded. If the
+                // operator ALSO changed the secret or passphrase in the deploy
+                // environment, that change is silently not applied — the
+                // persisted account keeps its old credentials. Say so, loudly,
+                // rather than letting a rotation appear to have worked.
+                self.warn_if_env_credentials_differ();
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Compare the deploy environment's bootstrap credentials against what is
+    /// actually stored, and warn when they have diverged.
+    ///
+    /// The stored registry stays authoritative on purpose. Letting the
+    /// environment win on every boot would mean a stale environment silently
+    /// REVERTING a rotation that was correctly performed through the API — a
+    /// worse failure than the one being reported here, because it looks like
+    /// nothing happened at all.
+    fn warn_if_env_credentials_differ(&self) {
+        let (Ok(api_key), Ok(api_secret), Ok(passphrase)) = (
+            std::env::var("DARKNYX_TEE_API_KEY"),
+            std::env::var("DARKNYX_TEE_API_SECRET"),
+            std::env::var("DARKNYX_TEE_PASSPHRASE"),
+        ) else {
+            return;
+        };
+        let Some(stored) = self.lookup(&api_key) else {
+            return;
+        };
+        if !stored.verify_credentials(&api_secret, &passphrase) {
+            tracing::warn!(
+                %api_key,
+                "BOOTSTRAP auth: the api_secret/passphrase in the deploy environment DIFFER \
+                 from the persisted account and were NOT applied — the stored credentials \
+                 remain in force. Rotate through the account API, or clear the state volume \
+                 to re-seed from the environment."
+            );
         }
     }
 }
@@ -395,7 +505,27 @@ fn env_admin_credentials() -> Option<ApiCredentials> {
     }
 }
 
-fn now_unix_seconds() -> u64 {
+/// Prefix for an account's LOGIN rate bucket, keeping it distinct from the
+/// bucket the same account spends on trading requests. Without the prefix a
+/// client that authenticates often would eat into its own order allowance.
+const LOGIN_RATE_KEY_PREFIX: &str = "login:";
+
+/// Bucket weight charged per authentication attempt.
+///
+/// Much heavier than any trading route (order placement is 1.0) because a login
+/// runs two argon2 verifies — the most expensive work this service will do on
+/// behalf of a single request — while a legitimate client authenticates once
+/// per token lifetime rather than once per action.
+///
+/// Against `RATE_CAPACITY` 40 / `RATE_REFILL_PER_SEC` 20 this allows a burst of
+/// 5 authentications and 2.5/second sustained, per account. Sizing matters more
+/// than it looks: at a cost of 4.0 the sustained allowance (5/second) exceeded
+/// what an account could actually drive through argon2, so the limit could
+/// never engage — a limiter that cannot bind is worse than none, because it
+/// reads as protection.
+const LOGIN_RATE_COST: f64 = 8.0;
+
+pub(crate) fn now_unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -429,11 +559,46 @@ pub async fn token_handler(
 ) -> Result<Json<TokenResponse>, super::error::ApiError> {
     // Clone the stored creds out of the read lock so the (CPU-bound)
     // argon2 verify runs without holding the registry lock.
+    //
+    // This lookup is also the first line of defence for everything below it: an
+    // unrecognised api_key is refused HERE, before any hashing, so a caller who
+    // holds no valid key cannot make this endpoint do expensive work at all.
+    //
+    // It does mean an unknown key is refused measurably faster than a known
+    // one, which is a timing oracle for which keys exist. Deliberately not
+    // equalised: keys are 128-bit random, so enumeration is infeasible and
+    // hashing a dummy on the unknown path would hand back the amplification
+    // this ordering removes.
     let creds = {
         let registry = state.accounts.read().await;
         registry.lookup(&req.api_key).cloned()
     }
     .ok_or((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()))?;
+
+    // A suspended account cannot mint new tokens. `validate_token` independently
+    // refuses the ones it already holds.
+    if creds.disabled {
+        return Err(super::error::ApiError::forbidden("account disabled"));
+    }
+
+    // Charge the login to the account's own bucket.
+    //
+    // Keyed on the account we just resolved, which is what makes this safe: the
+    // bucket map is bounded by the number of registered accounts, so it cannot
+    // be grown by a caller inventing keys. Keying on a submitted api_key or on
+    // a source address would let an attacker allocate map entries without
+    // limit, trading this endpoint's CPU cost for unbounded memory. Keying on
+    // the account also confines the damage — an account that hammers login
+    // throttles only itself, whereas one shared bucket would let it deny
+    // service to everyone.
+    //
+    // The prefix keeps login spend out of the account's trading allowance.
+    let login_bucket = format!("{LOGIN_RATE_KEY_PREFIX}{}", creds.api_key);
+    if let Err(retry_after) = state.try_consume_rate(&login_bucket, LOGIN_RATE_COST).await {
+        return Err(super::error::ApiError::rate_limited(format!(
+            "too many authentication attempts; retry in ~{retry_after:.2}s"
+        )));
+    }
 
     // Argon2id verify is CPU-bound + ~19 MiB per hash. Run it off the
     // async reactor (spawn_blocking) and behind the concurrency limiter
@@ -441,10 +606,17 @@ pub async fn token_handler(
     // or exhaust the small CVM's RAM. The permit is held for the whole
     // verify, bounding concurrent Argon2 jobs.
     let verified = {
-        let _permit = state.argon2_limiter.acquire().await.map_err(|_| {
-            (
+        // Refuse rather than wait. Awaiting a permit bounds how many hashes run
+        // at once but not how many are QUEUED, so a burst used to accumulate an
+        // arbitrarily deep backlog: callers waited far past any useful timeout,
+        // and the work still had to be done, starving the matcher and settle
+        // worker that share this runtime. Shedding immediately keeps the
+        // backlog at zero and makes the failure legible to the client.
+        let _permit = state.argon2_limiter.try_acquire().map_err(|_| {
+            super::error::ApiError::new(
+                1402,
                 StatusCode::SERVICE_UNAVAILABLE,
-                "auth limiter closed".to_string(),
+                "authentication is at capacity; retry shortly",
             )
         })?;
         let creds = creds.clone();
@@ -540,8 +712,41 @@ pub async fn validate_token(
     // Revocation check: a `jti` on the denylist (added by
     // `POST /auth/token/revoke`) is rejected even though the signature
     // + expiry are still valid.
-    if state.revoked_jtis.read().await.contains(&claims.jti) {
+    if state.revoked_jtis.read().await.contains_key(&claims.jti) {
         return Err(super::error::ApiError::unauthorized("token revoked"));
+    }
+
+    // Account-state checks, deliberately here rather than in
+    // `bearer_middleware`: this function is the ONE place both transports
+    // converge — the HTTP middleware and the `/v1/stream` login frame — so a
+    // check placed here cannot be bypassed by choosing a different transport.
+    // A check added to the HTTP middleware alone silently would not apply to
+    // the WebSocket, which is exactly how the WebSocket once escaped the
+    // per-account rate limiter.
+    //
+    // The registry is re-read on every request rather than trusting the signed
+    // claims, matching how `register_account_handler` re-checks `is_admin`: it
+    // is what lets a suspension take effect immediately instead of after the
+    // longest outstanding token expires.
+    {
+        let registry = state.accounts.read().await;
+        let creds = registry.lookup(&claims.sub).ok_or_else(|| {
+            // The account was removed after this token was issued.
+            super::error::ApiError::unauthorized("account no longer exists")
+        })?;
+        if creds.disabled {
+            return Err(super::error::ApiError::forbidden("account disabled"));
+        }
+        // Inclusive: a token issued in the SAME second as the cutoff is
+        // refused. `iat` has one-second resolution, so a token minted moments
+        // before an invalidation request carries the same timestamp as the
+        // cutoff and cannot be distinguished from one minted moments after.
+        // Refusing both fails closed; the cost is that the account's own
+        // re-authentication may need one retry a second later, which a client
+        // handles far more gracefully than a stolen token surviving.
+        if claims.iat <= creds.tokens_valid_from {
+            return Err(super::error::ApiError::unauthorized("token superseded"));
+        }
     }
 
     Ok(Authorized {
@@ -570,7 +775,17 @@ pub async fn revoke_token_handler(
     State(state): State<Arc<ApiState>>,
     axum::Extension(authorized): axum::Extension<Authorized>,
 ) -> StatusCode {
-    state.revoked_jtis.write().await.insert(authorized.jti);
+    {
+        let mut revoked = state.revoked_jtis.write().await;
+        // Record the token's own expiry so this entry can be forgotten once the
+        // token would be refused as expired anyway, and drop any that have
+        // already reached that point. Pruning on write means the list is
+        // bounded by revocations within one token lifetime rather than by every
+        // revocation ever made.
+        let now = now_unix_seconds();
+        revoked.retain(|_, exp| *exp > now);
+        revoked.insert(authorized.jti, authorized.exp);
+    }
     // Persist the denylist so the revocation survives a restart
     // (best-effort — see ApiState::persist_auth).
     state.persist_auth().await;
@@ -619,10 +834,14 @@ pub async fn register_account_handler(
     // it). Admin-gated, so lower risk than /auth/token, but the same
     // offload keeps a slow hash from blocking the runtime.
     let creds = {
-        let _permit = state.argon2_limiter.acquire().await.map_err(|_| {
-            (
+        // Shed rather than queue, for the same reason as the login path: an
+        // awaited permit bounds concurrency but not backlog. Admin-gated, so
+        // the exposure is smaller, but the runtime it would stall is shared.
+        let _permit = state.argon2_limiter.try_acquire().map_err(|_| {
+            super::error::ApiError::new(
+                1402,
                 StatusCode::SERVICE_UNAVAILABLE,
-                "auth limiter closed".to_string(),
+                "authentication is at capacity; retry shortly",
             )
         })?;
         let api_key = req.api_key.clone();
@@ -671,6 +890,156 @@ pub async fn register_account_handler(
             is_admin: req.is_admin,
         }),
     ))
+}
+
+/// Admin gate shared by the account-administration handlers.
+///
+/// Checked against the LIVE registry rather than a claim in the caller's token,
+/// so revoking an operator's admin rights (or suspending them outright) takes
+/// effect on their next request instead of when their current token expires.
+async fn require_admin(
+    state: &ApiState,
+    authorized: &Authorized,
+) -> Result<(), super::error::ApiError> {
+    let is_admin = {
+        let registry = state.accounts.read().await;
+        registry
+            .lookup(&authorized.account_id)
+            .map(|c| c.is_admin)
+            .unwrap_or(false)
+    };
+    if is_admin {
+        Ok(())
+    } else {
+        Err(super::error::ApiError::forbidden(
+            "admin privileges required",
+        ))
+    }
+}
+
+/// `POST /admin/accounts/{api_key}/disable` — suspend an account.
+///
+/// Every token the account currently holds stops being accepted immediately,
+/// across HTTP and the streaming transport alike, and it cannot obtain a new
+/// one. This is the response to a leaked or misused credential; before it
+/// existed the only remedy was redeploying the enclave.
+///
+/// Idempotent. `404` if the account does not exist, `403` for a non-admin
+/// caller.
+pub async fn disable_account_handler(
+    State(state): State<Arc<ApiState>>,
+    axum::Extension(authorized): axum::Extension<Authorized>,
+    Path(api_key): Path<String>,
+) -> Result<StatusCode, super::error::ApiError> {
+    require_admin(&state, &authorized).await?;
+    set_account_disabled(&state, &api_key, true, &authorized).await
+}
+
+/// `POST /admin/accounts/{api_key}/enable` — reinstate a suspended account.
+///
+/// Does NOT revive tokens issued before the suspension if they were separately
+/// invalidated; it only clears the suspension itself.
+pub async fn enable_account_handler(
+    State(state): State<Arc<ApiState>>,
+    axum::Extension(authorized): axum::Extension<Authorized>,
+    Path(api_key): Path<String>,
+) -> Result<StatusCode, super::error::ApiError> {
+    require_admin(&state, &authorized).await?;
+    set_account_disabled(&state, &api_key, false, &authorized).await
+}
+
+async fn set_account_disabled(
+    state: &ApiState,
+    api_key: &str,
+    disabled: bool,
+    authorized: &Authorized,
+) -> Result<StatusCode, super::error::ApiError> {
+    {
+        // ONE write guard spans the check and the mutation. Splitting them —
+        // counting under a read lock, then mutating under a write lock — would
+        // let two concurrent suspensions each see two enabled admins and both
+        // proceed, leaving none.
+        let mut registry = state.accounts.write().await;
+
+        let target = registry.lookup(api_key).ok_or_else(|| {
+            super::error::ApiError::not_found(format!("no account with api_key '{api_key}'"))
+        })?;
+
+        // Refuse to suspend the last account that can still reach these
+        // routes. Without this guard one call locks every administrative
+        // action out of reach, INCLUDING the enable that would undo it — and a
+        // restart does not recover, because the bootstrap seed only fires when
+        // its api_key is absent from the registry, not when the account it
+        // finds is suspended. The remedy would be redeploying with a different
+        // bootstrap key or wiping the state volume: exactly the
+        // redeploy-the-enclave outcome this endpoint exists to make
+        // unnecessary.
+        //
+        // Only suspension is guarded. Bulk token invalidation is safe on the
+        // last admin, because the credentials still work and they simply
+        // authenticate again.
+        if disabled && target.is_admin && !target.disabled && registry.enabled_admin_count() <= 1 {
+            return Err(super::error::ApiError::would_orphan_admin(
+                "refusing to suspend the only enabled admin account — no one \
+                 would be able to reverse it; enable another admin first",
+            ));
+        }
+
+        registry.set_disabled(api_key, disabled);
+    }
+    state.persist_auth().await;
+    tracing::warn!(
+        target_account = %api_key,
+        by = %authorized.account_id,
+        disabled,
+        "account suspension state changed"
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /admin/accounts/{api_key}/revoke-tokens` — invalidate every token
+/// currently held by an account, without suspending the account itself.
+///
+/// For a suspected token leak on an account that is otherwise in good standing:
+/// the holder authenticates again and carries on, while anything issued earlier
+/// stops working. Recorded as a single cutoff timestamp, so the cost does not
+/// grow with the number of tokens outstanding.
+pub async fn revoke_account_tokens_handler(
+    State(state): State<Arc<ApiState>>,
+    axum::Extension(authorized): axum::Extension<Authorized>,
+    Path(api_key): Path<String>,
+) -> Result<StatusCode, super::error::ApiError> {
+    require_admin(&state, &authorized).await?;
+
+    // `validate_token` compares INCLUSIVELY against this, so every token
+    // issued up to and including the current second is refused and the account
+    // can authenticate again from the next second. See the comparison there for
+    // why the boundary fails closed.
+    //
+    // Note what this endpoint does and does not answer. It addresses a leaked
+    // TOKEN, not leaked CREDENTIALS: the holder of a stolen token cannot mint a
+    // replacement, so cutting off everything issued so far is sufficient. If
+    // the credentials themselves are compromised the holder simply
+    // authenticates again, and only suspension stops them.
+    let cutoff = now_unix_seconds();
+    let updated = state
+        .accounts
+        .write()
+        .await
+        .invalidate_tokens_before(api_key.as_str(), cutoff);
+    if !updated {
+        return Err(super::error::ApiError::not_found(format!(
+            "no account with api_key '{api_key}'"
+        )));
+    }
+    state.persist_auth().await;
+    tracing::warn!(
+        target_account = %api_key,
+        by = %authorized.account_id,
+        cutoff,
+        "invalidated all outstanding tokens for account"
+    );
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

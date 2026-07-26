@@ -908,8 +908,15 @@ paths:
       tags: [auth]
       summary: Exchange long-lived credentials for a short-lived bearer token.
       description: |
-        OAuth2 client_credentials grant. Issue rate is rate-limited
-        per api_key.
+        OAuth2 client_credentials grant. Issue rate is rate-limited per
+        api_key: an account that exhausts its own allowance is throttled
+        without affecting any other account, and an unrecognised api_key is
+        rejected before any credential hashing, so it consumes no allowance at
+        all.
+
+        Credential verification is deliberately expensive, so the service
+        bounds how much of it runs at once and REFUSES excess requests (503)
+        rather than queueing them. Both 429 and 503 carry `Retry-After`.
       requestBody:
         required: true
         content:
@@ -926,8 +933,22 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: The account exists but is suspended.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '429':
-          description: Rate limited.
+          description: |
+            This account's authentication allowance is exhausted. Retry after
+            the interval in `Retry-After`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '503':
+          description: |
+            Credential verification is at capacity. Shed rather than queued, so
+            this clears quickly; retry after `Retry-After`.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -986,6 +1007,131 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '409':
           description: An account with this api_key already exists.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/accounts/{api_key}/disable:
+    post:
+      tags: [admin]
+      summary: Suspend an account (admin only).
+      description: |
+        Suspends the account immediately. Every bearer token it currently holds
+        stops being accepted on the next request — on HTTP and on the streaming
+        socket alike — and it cannot obtain a new one until re-enabled.
+
+        Enforcement happens at token validation against the live account
+        record, so suspension does not wait for outstanding tokens to expire.
+
+        Refused with 409 if the target is the only enabled admin: that would
+        put every administrative route out of reach, including the enable that
+        would reverse it, and a restart does not recover because the bootstrap
+        seed only fires when its api_key is absent — not when the account it
+        finds is suspended.
+
+        Idempotent.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: api_key
+          required: true
+          schema: { type: string }
+          description: The api_key identifying the account to suspend.
+      responses:
+        '204': { description: Account suspended. }
+        '401':
+          description: Missing / invalid / revoked bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Caller is authenticated but not an admin.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: No account with this api_key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: |
+            The target is the only enabled admin. Enable another admin first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/accounts/{api_key}/enable:
+    post:
+      tags: [admin]
+      summary: Reinstate a suspended account (admin only).
+      description: |
+        Clears a suspension. Does not revive tokens that were separately
+        invalidated via `/admin/accounts/{api_key}/revoke-tokens`.
+
+        Idempotent.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: api_key
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Account reinstated. }
+        '401':
+          description: Missing / invalid / revoked bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Caller is authenticated but not an admin.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: No account with this api_key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/accounts/{api_key}/revoke-tokens:
+    post:
+      tags: [admin]
+      summary: Invalidate every token currently held by an account (admin only).
+      description: |
+        Refuses every bearer token issued to the account up to and including
+        the current second, WITHOUT suspending the account. Intended for a
+        suspected token leak on an account that is otherwise in good standing:
+        the holder authenticates again and continues, while anything issued
+        earlier stops working.
+
+        Because issuance timestamps have one-second resolution and the cutoff
+        is inclusive, a client that re-authenticates in the same second may
+        need one retry.
+
+        If the CREDENTIALS are believed compromised rather than a token, this
+        is not sufficient on its own — the holder can simply authenticate
+        again. Use `/admin/accounts/{api_key}/disable`.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: path
+          name: api_key
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Outstanding tokens invalidated. }
+        '401':
+          description: Missing / invalid / revoked bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Caller is authenticated but not an admin.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: No account with this api_key.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

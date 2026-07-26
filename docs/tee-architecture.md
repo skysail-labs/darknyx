@@ -1335,6 +1335,15 @@ anyone mint operational credentials.
   creds after first boot requires the API or a snapshot wipe. If the
   env vars are unset and no snapshot exists, the registry is empty and
   auth rejects everything.
+
+  Because the stored registry wins, **changing the secret or passphrase in the
+  deploy environment does nothing** once a snapshot exists. Boot detects that
+  case — it verifies the environment values against the stored hashes — and
+  logs a prominent warning that they were not applied, rather than letting a
+  rotation appear to have succeeded. The environment is deliberately not made
+  authoritative: it would then win on *every* boot, so a stale environment
+  would silently revert a rotation correctly performed through the API, which
+  is a worse and much quieter failure.
   The production boot rejects the public `darknyx-test-*` fixtures. Test-state
   fallback requires both `DARKNYX_TEE_ALLOW_TEST_AUTH=1` and an explicit
   `DSTACK_SIMULATOR_ENDPOINT`; the production compose sets neither flag nor
@@ -1346,9 +1355,54 @@ anyone mint operational credentials.
   expire. A duplicate `api_key` is rejected (409) — registration never
   silently overwrites existing credentials.
 - **Revocation.** Each issued JWT carries a random `jti`.
-  `POST /auth/token/revoke` denylists the calling token's `jti`; the
-  bearer middleware rejects any denylisted token even while its
-  signature + `exp` are still valid.
+  `POST /auth/token/revoke` denylists the calling token's `jti`; token
+  validation rejects any denylisted token even while its signature + `exp` are
+  still valid. Each denylist entry records the expiry of the token it belongs
+  to and is dropped once that passes, so the list is bounded by the revocations
+  made within one token lifetime rather than growing for the life of the
+  deployment. Expiry-based eviction is *complete* here — a revoked token only
+  needs denying until it would be refused as expired anyway — which is why
+  there is no size cap; a cap would have to evict entries that are still live,
+  silently un-revoking tokens.
+- **Suspension.** `POST /admin/accounts/{api_key}/disable` (admin-gated)
+  suspends an account: every token it holds stops being accepted on the next
+  request, and it cannot mint a new one. `/enable` reverses it.
+  `/revoke-tokens` invalidates everything issued so far *without* suspending,
+  for a suspected token leak on an account that is otherwise in good standing;
+  it records a single cutoff timestamp rather than enumerating token ids, and
+  the comparison is inclusive at one-second resolution, so a client
+  re-authenticating in the same second may need one retry.
+
+  Both are enforced in `auth::validate_token`, the one function the HTTP
+  bearer middleware and the `/v1/stream` login frame both authenticate
+  through — NOT in the HTTP middleware, which would leave the socket
+  unprotected. The registry is re-read per request for the same reason the
+  admin check is: so a change takes effect immediately instead of at the next
+  token expiry.
+
+  Note the division of labour. `/revoke-tokens` answers a leaked *token*; it
+  does not help if the *credentials* leaked, because their holder can simply
+  authenticate again. That case needs `/disable`.
+
+  Suspending the **only enabled admin** is refused (409). It would put every
+  administrative route out of reach including the `enable` that reverses it,
+  and a restart does not recover: the bootstrap seed fires only when its
+  `api_key` is *absent* from the registry, not when the account it finds is
+  suspended, so recovery would mean redeploying with a different bootstrap key
+  or wiping the state volume — the redeploy-the-enclave outcome these endpoints
+  exist to make unnecessary. The check and the mutation share one write guard,
+  or two concurrent suspensions could each observe two admins and both proceed.
+  `/revoke-tokens` is deliberately *not* guarded this way: the last admin's
+  credentials still work, so it simply authenticates again.
+- **Authentication cost control.** Credential verification runs argon2id
+  deliberately slowly, which makes `/auth/token` the one public route that can
+  be made to do real work. Three things bound it: an unrecognised `api_key` is
+  refused before any hashing; each attempt is charged to the *account's own*
+  rate bucket, so an abusive account throttles only itself and the bucket map
+  stays bounded by the number of registered accounts; and permits for the
+  hashing pool are taken without waiting, so excess requests are refused (503)
+  instead of accumulating a backlog that would outlive any client timeout and
+  still have to be worked through, stalling the matcher sharing that runtime.
 - **Persistence (Phase 1b, live).** The registry + revocation denylist
   are persisted to `accounts.db` under `DARKNYX_TEE_STATE_DIR` (default
   `/var/lib/darknyx-tee`, the dstack LUKS mount — see §8). It's

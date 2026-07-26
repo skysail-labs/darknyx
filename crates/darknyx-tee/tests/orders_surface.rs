@@ -28,7 +28,7 @@ use axum::{
     http::{Request, StatusCode},
     Router,
 };
-use darknyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
+use darknyx_tee::api::auth::{ApiCredentials, Claims, TEST_API_KEY, TEST_JWT_SECRET};
 use darknyx_tee::api::instruments::InstrumentInfo;
 use darknyx_tee::api::{build_router, ApiState};
 use darknyx_tee::matcher::openings::NoteOpening;
@@ -56,6 +56,26 @@ fn app_from(state: Arc<ApiState>) -> Router {
 
 fn fresh_bearer() -> String {
     bearer_for(TEST_API_KEY, "test-jti")
+}
+
+/// The account id the ownership-privacy tests authenticate as when acting as
+/// "somebody else".
+const FOREIGN_ACCOUNT: &str = "foreign-account";
+
+/// State with a SECOND registered account, for tests that need a caller who is
+/// authenticated but is not the order's owner.
+///
+/// Token validation resolves the caller against the live registry, so an
+/// identity has to actually exist for its token to be accepted — in production
+/// one can only be minted through `POST /auth/token`, which requires the
+/// account. Minting a token for an unregistered id is not a case that can
+/// occur, and it is refused before any handler runs.
+async fn state_with_foreign_account() -> Arc<ApiState> {
+    let st = state();
+    let creds = ApiCredentials::from_plaintext(FOREIGN_ACCOUNT, "foreign-s", "foreign-p", false)
+        .expect("hash foreign account");
+    st.accounts.write().await.register(creds);
+    st
 }
 
 fn bearer_for(account_id: &str, jti: &str) -> String {
@@ -1045,9 +1065,9 @@ async fn cancel_returns_404_for_unknown_order() {
 
 #[tokio::test]
 async fn cancel_returns_the_same_404_for_foreign_and_unknown_orders() {
-    let app = app_from(state());
+    let app = app_from(state_with_foreign_account().await);
     let owner_bearer = fresh_bearer();
-    let foreign_bearer = bearer_for("foreign-account", "foreign-cancel-jti");
+    let foreign_bearer = bearer_for(FOREIGN_ACCOUNT, "foreign-cancel-jti");
     let key = fresh_signing_key();
     let order = PlaceOrderBuilder::new();
     let order_id_hex = hex::encode(order.order_id);
@@ -1120,9 +1140,9 @@ async fn get_returns_404_when_not_in_book() {
 
 #[tokio::test]
 async fn get_returns_the_same_404_for_foreign_and_unknown_orders() {
-    let app = app_from(state());
+    let app = app_from(state_with_foreign_account().await);
     let owner_bearer = fresh_bearer();
-    let foreign_bearer = bearer_for("foreign-account", "foreign-jti");
+    let foreign_bearer = bearer_for(FOREIGN_ACCOUNT, "foreign-jti");
     let key = fresh_signing_key();
     let order = PlaceOrderBuilder::new();
     let order_id_hex = hex::encode(order.order_id);
@@ -1346,9 +1366,9 @@ async fn modify_non_owner_is_forbidden() {
 
 #[tokio::test]
 async fn modify_returns_the_same_404_for_foreign_and_unknown_orders() {
-    let app = app_from(state());
+    let app = app_from(state_with_foreign_account().await);
     let owner_bearer = fresh_bearer();
-    let foreign_bearer = bearer_for("foreign-account", "foreign-modify-jti");
+    let foreign_bearer = bearer_for(FOREIGN_ACCOUNT, "foreign-modify-jti");
     let key = fresh_signing_key();
     let original = PlaceOrderBuilder::new();
     let original_id_hex = hex::encode(original.order_id);

@@ -470,3 +470,446 @@ async fn non_admin_cannot_register() {
     .await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+// ─────── Account suspension + bulk token invalidation ───────────────────────
+
+/// Register a non-admin account and return an app + that account's token.
+async fn app_with_member(app: &Router, key: &str) -> String {
+    let admin = get_token(app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+    let resp = post_with_bearer(
+        app,
+        "/admin/accounts",
+        &admin,
+        json!({ "api_key": key, "api_secret": "s", "passphrase": "p" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    get_token(app, key, "s", "p").await
+}
+
+async fn admin_post(app: &Router, uri: &str) -> Response {
+    let admin = get_token(app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+    post_with_bearer(app, uri, &admin, json!({})).await
+}
+
+/// The core guarantee: a token that was valid a moment ago stops working the
+/// instant its account is suspended — without waiting for the token to expire.
+#[tokio::test]
+async fn suspension_invalidates_an_already_issued_token() {
+    let app = public_app();
+    let member = app_with_member(&app, "mallory").await;
+
+    // The token works before suspension.
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &member, json!({})).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Re-authenticate (the previous token was just revoked by that call) and
+    // then suspend the account.
+    let member = get_token(&app, "mallory", "s", "p").await;
+    assert_eq!(
+        admin_post(&app, "/admin/accounts/mallory/disable")
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    // The SAME token is now refused, though its signature and expiry are intact.
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &member, json!({})).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// Suspension also closes the front door: no new token can be minted.
+#[tokio::test]
+async fn suspended_account_cannot_obtain_a_new_token() {
+    let app = public_app();
+    let _ = app_with_member(&app, "mallory").await;
+    admin_post(&app, "/admin/accounts/mallory/disable").await;
+
+    let resp = token_request(
+        &app,
+        json!({ "api_key": "mallory", "api_secret": "s", "passphrase": "p" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn enable_restores_a_suspended_account() {
+    let app = public_app();
+    let _ = app_with_member(&app, "mallory").await;
+    admin_post(&app, "/admin/accounts/mallory/disable").await;
+    assert_eq!(
+        admin_post(&app, "/admin/accounts/mallory/enable")
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let token = get_token(&app, "mallory", "s", "p").await;
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &token, json!({})).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+/// Bulk invalidation refuses everything issued earlier while leaving the
+/// account able to authenticate again — the response to a suspected token leak
+/// on an account that is otherwise in good standing.
+#[tokio::test]
+async fn bulk_invalidation_refuses_old_tokens_but_not_new_ones() {
+    let app = public_app();
+    let old = app_with_member(&app, "mallory").await;
+
+    assert_eq!(
+        admin_post(&app, "/admin/accounts/mallory/revoke-tokens")
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &old, json!({})).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "a token issued at or before the cutoff must be refused"
+    );
+
+    // The account itself is untouched: it can authenticate and carry on.
+    //
+    // Waiting past the one-second boundary is not incidental to the test — it
+    // IS the contract. `iat` has one-second resolution and the comparison is
+    // inclusive, so a token minted in the same second as the invalidation is
+    // deliberately refused too. A client that re-authenticates instantly may
+    // need one retry.
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    let fresh = get_token(&app, "mallory", "s", "p").await;
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &fresh, json!({})).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn account_administration_is_admin_only() {
+    let app = public_app();
+    let member = app_with_member(&app, "carol").await;
+
+    for uri in [
+        "/admin/accounts/carol/disable",
+        "/admin/accounts/carol/enable",
+        "/admin/accounts/carol/revoke-tokens",
+    ] {
+        let resp = post_with_bearer(&app, uri, &member, json!({})).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "{uri} must reject a non-admin caller"
+        );
+    }
+}
+
+#[tokio::test]
+async fn administering_an_unknown_account_is_404() {
+    let app = public_app();
+    let resp = admin_post(&app, "/admin/accounts/nobody/disable").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+// ─────── Authentication rate limiting + load shedding ───────────────────────
+
+/// Authentication is charged to the account's own login bucket.
+///
+/// The bucket is drained directly rather than by looping real logins: argon2
+/// makes each attempt slow enough that a loop races the refill, so a
+/// wall-clock test would be inherently flaky. Draining the exact key the
+/// handler charges also asserts the thing worth asserting — that login spends
+/// from the account's *login* bucket, not from something else.
+#[tokio::test]
+async fn repeated_logins_are_rate_limited_per_account() {
+    let st = state();
+    let app = build_router(st.clone());
+
+    // Set up the second account BEFORE draining anything — registering it needs
+    // an admin token, which would itself be refused once the bucket is empty.
+    let _ = app_with_member(&app, "quiet").await;
+
+    // Empty the admin account's login bucket.
+    let bucket = format!("login:{TEST_API_KEY}");
+    while st.try_consume_rate(&bucket, 1.0).await.is_ok() {}
+
+    let resp = token_request(
+        &app,
+        json!({
+            "api_key": TEST_API_KEY,
+            "api_secret": TEST_API_SECRET,
+            "passphrase": TEST_PASSPHRASE,
+        }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "authentication must be charged to the account's login bucket"
+    );
+
+    // The OTHER account is unaffected: the limit is per-account, so a noisy
+    // client cannot lock anybody else out.
+    let resp = token_request(
+        &app,
+        json!({ "api_key": "quiet", "api_secret": "s", "passphrase": "p" }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "one account exhausting its login bucket must not affect another"
+    );
+}
+
+/// The load-bearing case: an outsider hammering the login endpoint with a key
+/// that does not exist must NOT be able to throttle a real account.
+///
+/// This is what makes the limiter safe to key on the account rather than on a
+/// caller-supplied value. A shared bucket, or one keyed on the submitted
+/// api_key, would let anyone deny service to everyone else — the second by also
+/// growing the bucket map without bound.
+#[tokio::test]
+async fn unknown_credentials_cannot_throttle_a_real_account() {
+    let app = public_app();
+
+    for i in 0..200 {
+        let resp = token_request(
+            &app,
+            json!({
+                "api_key": format!("does-not-exist-{i}"),
+                "api_secret": "x",
+                "passphrase": "y",
+            }),
+        )
+        .await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "an unknown api_key is refused outright"
+        );
+    }
+
+    // The legitimate account still authenticates on its first attempt.
+    let token = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+    assert!(!token.is_empty());
+}
+
+/// With every hashing permit held, authentication is refused immediately
+/// instead of queueing behind the in-flight work.
+#[tokio::test]
+async fn login_sheds_load_when_the_hash_limiter_is_saturated() {
+    let st = state();
+    let app = build_router(st.clone());
+
+    // Hold every permit for the duration of the request under test.
+    let held = st
+        .argon2_limiter
+        .clone()
+        .acquire_many_owned(st.argon2_limiter.available_permits() as u32)
+        .await
+        .expect("permits available");
+
+    let resp = token_request(
+        &app,
+        json!({
+            "api_key": TEST_API_KEY,
+            "api_secret": TEST_API_SECRET,
+            "passphrase": TEST_PASSPHRASE,
+        }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a saturated hash limiter must shed, not queue"
+    );
+
+    drop(held);
+
+    // Capacity restored — the same request now succeeds.
+    let resp = token_request(
+        &app,
+        json!({
+            "api_key": TEST_API_KEY,
+            "api_secret": TEST_API_SECRET,
+            "passphrase": TEST_PASSPHRASE,
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+// ─────── The shared validation entry point ──────────────────────────────────
+
+/// Suspension is enforced in `validate_token`, which is the one function BOTH
+/// transports authenticate through: the HTTP bearer middleware and the
+/// `/v1/stream` login frame (`api/stream.rs`) each call it.
+///
+/// Driving it directly is what makes the streaming transport covered here. The
+/// enforcement deliberately does not live in the HTTP middleware, because a
+/// check placed there applies to HTTP alone — which is precisely how the
+/// socket once escaped the per-account rate limiter. This test pins the
+/// property at the point both paths share.
+///
+/// It does not, however, prove that the socket handler still routes through
+/// this function; that would need a full WebSocket handshake harness, which
+/// does not exist in this crate yet.
+#[tokio::test]
+async fn shared_validation_entry_point_enforces_suspension() {
+    use darknyx_tee::api::auth::validate_token;
+
+    let st = state();
+    let app = build_router(st.clone());
+    let token = app_with_member(&app, "mallory").await;
+
+    // Accepted while the account is in good standing.
+    let authorized = validate_token(&st, &token)
+        .await
+        .expect("a healthy account validates");
+    assert_eq!(authorized.account_id, "mallory");
+
+    // Suspend, then the same token no longer validates — on ANY transport.
+    assert!(st.accounts.write().await.set_disabled("mallory", true));
+    let err = validate_token(&st, &token)
+        .await
+        .expect_err("a suspended account must not validate");
+    assert_eq!(err.status, StatusCode::FORBIDDEN);
+}
+
+/// Bulk invalidation is enforced at the same shared point.
+#[tokio::test]
+async fn shared_validation_entry_point_enforces_bulk_invalidation() {
+    use darknyx_tee::api::auth::validate_token;
+
+    let st = state();
+    let app = build_router(st.clone());
+    let token = app_with_member(&app, "mallory").await;
+
+    let cutoff = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert!(st
+        .accounts
+        .write()
+        .await
+        .invalidate_tokens_before("mallory", cutoff));
+
+    let err = validate_token(&st, &token)
+        .await
+        .expect_err("a token at or before the cutoff must not validate");
+    assert_eq!(err.status, StatusCode::UNAUTHORIZED);
+}
+
+/// The cutoff only moves forward, so a stale or replayed request cannot
+/// reinstate tokens an earlier invalidation already refused.
+#[tokio::test]
+async fn bulk_invalidation_cutoff_never_moves_backwards() {
+    let st = state();
+    let app = build_router(st.clone());
+    let _ = app_with_member(&app, "mallory").await;
+
+    {
+        let mut reg = st.accounts.write().await;
+        assert!(reg.invalidate_tokens_before("mallory", 5_000));
+        // An older cutoff must be ignored, not applied.
+        assert!(reg.invalidate_tokens_before("mallory", 1_000));
+        assert_eq!(
+            reg.lookup("mallory").expect("account").tokens_valid_from,
+            5_000
+        );
+    }
+}
+
+// ─────── Admin lockout guard ────────────────────────────────────────────────
+
+/// Register an account with admin rights and return its token.
+async fn app_with_admin(app: &Router, key: &str) -> String {
+    let admin = get_token(app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+    let resp = post_with_bearer(
+        app,
+        "/admin/accounts",
+        &admin,
+        json!({ "api_key": key, "api_secret": "s", "passphrase": "p", "is_admin": true }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    get_token(app, key, "s", "p").await
+}
+
+/// Suspending the only enabled admin is refused.
+///
+/// It would otherwise put every administrative route out of reach — including
+/// the enable that reverses it — and a restart does not recover, because the
+/// bootstrap seed only fires when its api_key is ABSENT, not when the account
+/// it finds is suspended. Recovery would mean redeploying with a different
+/// bootstrap key or wiping state, which is the outcome this endpoint exists to
+/// make unnecessary.
+#[tokio::test]
+async fn cannot_suspend_the_last_enabled_admin() {
+    let app = public_app();
+
+    let resp = admin_post(&app, &format!("/admin/accounts/{TEST_API_KEY}/disable")).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "suspending the only admin must be refused"
+    );
+
+    // And it really is still usable — the refusal was not partially applied.
+    let token = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &token, json!({})).await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+/// With a second admin present the suspension is allowed — the guard bounds the
+/// dangerous case without blocking the ordinary one.
+#[tokio::test]
+async fn a_redundant_admin_can_be_suspended() {
+    let app = public_app();
+    let _ = app_with_admin(&app, "admin-two").await;
+
+    // Two enabled admins: suspending either is fine.
+    let resp = admin_post(&app, "/admin/accounts/admin-two/disable").await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Now only one remains, so the guard engages again.
+    let resp = admin_post(&app, &format!("/admin/accounts/{TEST_API_KEY}/disable")).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "the last remaining enabled admin is still protected"
+    );
+}
+
+/// Non-admin accounts are unaffected by the guard, even as the only member.
+#[tokio::test]
+async fn the_guard_does_not_block_suspending_a_member() {
+    let app = public_app();
+    let _ = app_with_member(&app, "carol").await;
+    let resp = admin_post(&app, "/admin/accounts/carol/disable").await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+/// Bulk token invalidation is NOT guarded, deliberately: the credentials still
+/// work, so the last admin simply authenticates again.
+#[tokio::test]
+async fn the_last_admin_may_still_invalidate_its_own_tokens() {
+    let app = public_app();
+    let resp = admin_post(
+        &app,
+        &format!("/admin/accounts/{TEST_API_KEY}/revoke-tokens"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    let token = get_token(&app, TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE).await;
+    let resp = post_with_bearer(&app, "/auth/token/revoke", &token, json!({})).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::NO_CONTENT,
+        "the last admin recovers by re-authenticating"
+    );
+}
