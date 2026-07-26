@@ -74,8 +74,8 @@ A **market order** is an **IOC with a price cap**:
 - A market **ask** is an IOC with `price_limit = 0`, selling into any clearing
   price.
 
-Because it is IOC, the residual auto-cancels; a market order never rests and never
-pins a note in the book.
+Because it is IOC, the residual auto-cancels; a market order never leaves a
+residual resting order.
 
 ### All-or-None (resting)
 

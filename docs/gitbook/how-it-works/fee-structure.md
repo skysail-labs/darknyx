@@ -29,8 +29,8 @@ Two principles define how it is applied:
 - **Both legs pay.** The bid and the ask each pay a fee on their own side of the
   trade. There is no maker rebate or taker surcharge, because a batch auction has
   no maker/taker roles (see [Clearing Price](../trading-concepts/clearing-price.md)).
-- **The fee is pre-funded.** An order must lock enough collateral to cover *both*
-  its nominal cost *and* its own fee. The required collateral is:
+- **The fee is pre-funded.** An order must reserve enough note value to cover
+  *both* its nominal cost *and* its own fee. The required collateral is:
 
 ```text
 required collateral = nominal cost + fee

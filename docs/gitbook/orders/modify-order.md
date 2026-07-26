@@ -55,7 +55,12 @@ happens whole, or nothing changes.
 The trading key that signs the cancel **must** be the key that signs the
 replacement. The replacement may reuse the old order's note and proof while that
 proof's root is still in the on-chain root window, or it may point at a different
-note; it is a normal place-order body either way.
+note; it is a normal place-order body either way. Its `session_id` also scopes
+the embedded cancel signature to the current boot.
+
+The replacement must keep the original order's `symbol`. Atomic modify is an
+operation inside one isolated market book; it cannot move intent between pairs.
+To change markets, cancel the old order and place a fresh signed order.
 
 ### Reprice in place
 
@@ -116,4 +121,4 @@ the same lock; no batch can clear between the two.
 | Missing or invalid bearer token | `401` |
 | A signature does not verify, or the caller does not own the old order | `403` |
 | The old order does not exist | `404` |
-| The replacement's `order_id` is already booked | `409` |
+| The replacement's `order_id` is already booked, or a nonce/session is stale | `409` |

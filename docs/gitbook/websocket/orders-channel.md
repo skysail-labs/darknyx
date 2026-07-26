@@ -34,6 +34,9 @@ Each message is a JSON object describing one state transition:
 {
   "seq": 12,
   "order_id": "aa00000000000000000000000000000001",
+  "market_id": "DZyMmY4a6QEmh2xvmhUQwYcxbphtfJxwcvYSEdLobBEo",
+  "match_id": "42",
+  "server_time_ms": 1784271002880,
   "kind": "partially_filled",
   "filled_quantity": 3000000,
   "new_amount": 7000000,
@@ -45,6 +48,9 @@ Each message is a JSON object describing one state transition:
 |---|---|---|---|
 | `seq` | integer | always | Per-connection monotonic sequence, starting at 1. A gap means missed events. |
 | `order_id` | string | always | The 16-byte order id, hex. |
+| `market_id` | string | always | Base58 on-chain `MarketConfig` PDA identifying the order's market. |
+| `match_id` | string | settlement events | Per-market match id encoded as a decimal string to preserve u64 precision. |
+| `server_time_ms` | integer | always | Venue emission time in Unix milliseconds. |
 | `kind` | string | always | `pending_settlement`, `partially_filled`, `fully_filled`, `settlement_failed`, `cancelled`, or `expired`. |
 | `filled_quantity` | integer | on fills | Cumulative filled quantity. |
 | `new_amount` | integer | on partial fill | The residual base amount still resting. |

@@ -58,7 +58,7 @@ wire contract is unambiguous.
 | `amount` | integer | Yes | Order size in base units. |
 | `price_limit` | integer | Conditional | Worst acceptable price, in quote units per base. Required for a bid; an ask may use `0` to accept any clearing price. |
 | `min_fill_size` | integer | No | Reject fills smaller than this. Set equal to `amount` for all-or-none. Default `0` (any partial fill). See [Execution Attributes](../trading-concepts/execution-attributes.md). |
-| `expiry_slot` | integer | Yes | Solana slot past which the order auto-expires. Bounded by the market's max expiry. See [Time in Force](../trading-concepts/time-in-force.md). |
+| `expiry_slot` | integer | Yes | Solana slot past which the order auto-expires. Bounded by the protocol's maximum order lifetime (currently 4,500 slots). See [Time in Force](../trading-concepts/time-in-force.md). |
 | `order_id` | string | Yes | A client-chosen 16-byte id, hex. Must be unique and non-zero. The SDK can derive ids deterministically from your seed (`deriveOrderId`), so you can reconcile or recover your order set on a fresh device. |
 | `arrival_nonce` | integer | Yes | A strictly increasing u64 per trading key. Exact byte-identical idempotent retries are handled before this replay check. |
 
@@ -66,14 +66,13 @@ wire contract is unambiguous.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `note_commitment` | string | Yes | 32-byte hex. The commitment of the collateral note backing this order. The note must exist in the tree and be lockable (not already locked). |
+| `note_commitment` | string | Yes | 32-byte hex. The commitment of the collateral note backing this order. It is signed into the order and can back at most one live or settlement-pending order in this venue. |
 | `collateral_amount` | integer | No | The value the collateral note actually carries, when it exceeds the order's nominal cost. Lets you point a large note at a small order and receive the surplus back as a change note. Omit for exact collateral. |
 | `owner_commitment` | string | Yes | 32-byte hex. The collateral note's owner commitment, part of the secret opening the in-enclave prover re-derives the commitment from. Distinct from `user_commitment`. Held in enclave memory only. |
 | `note_inner_hash` | string | Yes | 32-byte hex. The note's amount-independent inner hash (an opening field that anchors both the commitment and the nullifier). |
-| `user_commitment` | string | Yes | 32-byte hex. Binds the order's output notes to the correct owner on-chain. |
-| `nullifier` | string | Yes | 32-byte hex. Precomputed client-side (it needs the spending key, which never enters the enclave). Retained by the current order schema but absent from settlement payload v9; Tx D replay protection is commitment-keyed. |
-| `merkle_root` | string | Yes | 32-byte hex. The tree root the input proof was generated against. Must still be in the on-chain root window at settlement time. |
-| `valid_input_proof` | string | Yes | 256-byte hex. The zero-knowledge proof that the collateral note is in the tree and spendable. The engine relays it unverified; the on-chain program verifies it at lock time. |
+| `user_commitment` | string | Yes | 32-byte hex. The intended output-owner identity signed into the order. Current settlement derives the actual output owner from the verified, note-bound `owner_commitment`; the SDK supplies the wallet's consistent value for both roles. |
+| `merkle_root` | string | Yes | 32-byte hex. The tree root the input proof was generated against. Checked against the venue's recent-root window **at intake** (`1010` if it has aged out) and against the on-chain root window again at settlement time. |
+| `valid_input_proof` | string | Yes | 256-byte hex. The zero-knowledge proof that the collateral note is in the tree and spendable. **Verified at intake**, before the order is accepted — an invalid proof is refused with `1011` rather than booked. The on-chain program verifies it again at lock time. |
 | `tree_id` | integer | No | Merkle-tree shard containing the collateral note. Defaults to `0`; a wrong shard causes the on-chain lock to fail. |
 
 ### Recovery and replay binding
@@ -88,7 +87,7 @@ wire contract is unambiguous.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `trading_key` | string | Yes | 32-byte hex. The Ed25519 public key that owns this order. |
-| `trading_key_signature` | string | Yes | 64-byte hex. Signature over the canonical v3 encoding, including every economic field, `viewing_pubkey`, `session_id`, and `arrival_nonce`. |
+| `trading_key_signature` | string | Yes | 64-byte hex. Ed25519 signature over the SHA-256 digest of the fixed canonical body. The current domain is `darknyx-order-v4`; it includes every economic field, `viewing_pubkey`, `session_id`, and `arrival_nonce`. |
 
 ## Example
 
@@ -113,7 +112,6 @@ curl -s -X POST "$GATEWAY/orders" \
     "trading_key_signature": "…",
     "owner_commitment": "…",
     "note_inner_hash": "…",
-    "nullifier": "…",
     "merkle_root": "…",
     "valid_input_proof": "…",
     "viewing_pubkey": "…",
@@ -184,9 +182,12 @@ Every order is verified before it enters the book. A non-`202` response carries 
 | A bid has a positive price limit | `400` | 1005 |
 | The note opening re-derives the signed `note_commitment` | `400` | 1006 |
 | The collateral covers the order's nominal cost plus its own fee | `400` | 1003 |
+| Every non-zero price limit is a multiple of the market tick | `400` | 1009 |
 | The trading-key signature verifies over the canonical body | `403` | 1102 |
 | The viewing key is contributory | `400` | 1008 |
 | `expiry_slot` fits within the maximum on-chain lock lifetime | `400` | 1007 |
+| The proof root is still in the venue's recent-root window | `400` | 1010 |
+| The VALID_INPUT proof verifies against the declared commitment and collateral mint | `400` | 1011 |
 | The signed session matches this boot | `409` | 1205 |
 | The `order_id` is not reused for a different order | `409` | 1201 |
 | The nonce is strictly greater than the last accepted nonce for this trading key | `409` | 1202 |

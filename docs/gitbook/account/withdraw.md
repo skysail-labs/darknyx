@@ -18,13 +18,33 @@ reveal which deposit the value came from.
 ## What a withdrawal does
 
 A withdrawal is a zero-knowledge spend (see [Shielded Pool](../how-it-works/shielded-pool.md)).
-You produce a proof that the note exists under a recent Merkle root and that you
-own it; the vault program verifies the proof, publishes the note's nullifier, and
-releases the tokens to your destination token account. Like a deposit, it is a
-direct **on-chain** action and does not involve the matching engine.
+You produce a proof that the note exists under a recent Merkle root, that you
+own it, **and that it is being paid to one specific destination**; the vault
+program verifies the proof, publishes the note's nullifier, and releases the
+tokens to that account. Like a deposit, it is a direct **on-chain** action and
+does not involve the matching engine.
 
 You need the note's plaintext (which you hold locally) and its Merkle leaf index.
 The SDK assembles the proof and the transaction.
+
+{% hint style="warning" %}
+**The proof is bound to the destination account**
+
+The destination token account is a public input to the withdrawal proof, so a
+proof authorises paying *that* account and nothing else. Submitting it with a
+substituted destination fails verification.
+
+This matters because a withdrawal transaction is public the moment it reaches
+the network — including one that lands and then **reverts**. A reverted
+transaction still publishes its proof in the ledger permanently while creating
+none of the guard accounts, leaving the note spendable. Without destination
+binding, anyone who read those bytes could have resubmitted the same proof and
+redirected the payment to themselves.
+
+Practically: build the proof for the exact account you intend to receive the
+tokens. Reusing a proof against a different destination will not work, and does
+not need to.
+{% endhint %}
 
 ## Using the SDK
 
@@ -67,3 +87,21 @@ window. The SDK reads a current root when it builds the proof; if a withdrawal
 fails as stale, rebuild it against the latest root and resubmit. See
 [Merkle Proofs](./merkle-proofs.md).
 {% endhint %}
+
+## A note involved in an order
+
+A resting order reserves its collateral commitment **inside the venue**, but
+does not create an on-chain lock merely by being accepted. Cancel the resting
+order before withdrawing the note so the venue cannot later match an order whose
+collateral you have removed.
+
+Once an order is matched and becomes `pending_settlement`, the engine creates a
+commitment-keyed **on-chain lock**. A live lock blocks withdrawal while the
+settlement may still land. It carries an expiry, and at that slot it stops
+blocking withdrawal or merge automatically—even if the expired lock account has
+not yet been closed.
+
+The permissionless release instruction and the engine's sweeper only close an
+**expired** lock and reclaim its rent; neither can release a live lock early. If
+a withdrawal fails because of a lock, check its expiry and wait for that
+bounded settlement window.

@@ -72,26 +72,35 @@ A note moves through a small set of states, each enforced on-chain by a distinct
 record so a note can never be used twice:
 
 ```text
- deposit            place order            settle / withdraw
-   │                    │                        │
-   ▼                    ▼                        ▼
- SPENDABLE  ───────►  LOCKED  ───────►  CONSUMED (and new notes created)
- (in tree,           (pinned by a       (withdrawal nullifier or commitment-
-  no consume record)  per-note lock)     keyed guard prevents reuse)
+ deposit ──► SPENDABLE ──► merge / withdraw ───────────────► CONSUMED
+                 │
+                 └─► accepted order ─► VENUE-RESERVED
+                                            │
+                                            └─► matched ─► ON-CHAIN LOCKED
+                                                                    │
+                                                                    └─► settle
+                                                                         │
+                                                                         ▼
+                                                                      CONSUMED
 ```
 
 - **Spendable.** The note has an inclusion path in a recent Merkle root and no
   applicable consume record exists. You can back an order with it or
   withdraw it.
-- **Locked.** An order references it as collateral; a per-order lock pins it
-  between match and settlement so it cannot be double-committed.
+- **Venue-reserved.** A resting order references the note. The enclave prevents
+  the same commitment from backing another live or settlement-pending order in
+  this venue, but no on-chain lock exists merely because the order is resting.
+- **On-chain locked.** A private match has entered settlement. A live
+  commitment-keyed lock temporarily blocks withdrawal, merge, or another
+  settlement. At its expiry it stops blocking use even before the expired
+  account is swept.
 - **Consumed.** Settlement/merge has created a commitment-keyed consumed-note
   entry, or withdrawal has published its nullifier. Its value now lives in freshly created output notes (a change
   note for the unfilled remainder, the traded asset, and so on), each a new
   spendable note you own.
 
-Because every touched note produces an on-chain record that blocks a second
-touch, double-spends are impossible regardless of what the engine does.
+Because every value-moving path checks its on-chain replay guard, double-spends
+are impossible regardless of what the engine does.
 
 ## Recovering your notes
 

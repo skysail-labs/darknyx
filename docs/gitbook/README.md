@@ -5,13 +5,13 @@ description: "Darknyx — a privacy-preserving darkpool on Solana. API, SDK, and
 # Introduction
 
 **Darknyx** is a privacy-preserving CLOB-style darkpool on Solana. Order intent
-is matched and settled inside an Intel TDX confidential VM; per-trade amounts and
-the execution price stay hidden on-chain, and balances are encrypted UTXO notes
-committed to an on-chain Merkle tree.
+is matched inside an Intel TDX confidential VM and settled atomically on Solana;
+per-trade amounts and the execution price stay hidden on-chain, and balances are
+shielded UTXO-style notes committed to on-chain Merkle-tree shards.
 
 This portal is the reference documentation for trading the venue: the API
 surface, the TypeScript SDK, the account and settlement model, and the protocol
-internals.
+trust model.
 
 ## Start here
 

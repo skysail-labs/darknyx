@@ -1,5 +1,5 @@
 ---
-description: "Two orders signed by the same trading key never match each other, preventing accidental wash trades."
+description: "How Darknyx prevents accidental self-matches using note-bound owner identity plus trading-key equality."
 ---
 
 
@@ -8,25 +8,31 @@ description: "Two orders signed by the same trading key never match each other, 
 {% hint style="info" %}
 **TL;DR**
 
-Orders signed by the **same trading key** never match each other. If your bid and
-your ask would cross in a batch, the engine skips that self-pair and matches each
-against other traders instead. This prevents accidental wash trading.
+Orders backed by notes with the same **owner commitment** never match each other,
+even when they use different trading keys. Trading-key equality is checked as a
+second guard. If your bid and ask cross, the engine skips that self-pair and
+keeps both eligible against other traders.
 {% endhint %}
 
 ## The rule
 
-The matching engine identifies an order's owner by its **trading key**. When two
-crossing orders in a batch share the same trading key, the engine does not pair
-them; it skips the self-pair and continues matching each order against other
-counterparties.
+The primary identity is the collateral note's **owner commitment**. The enclave
+re-derives the signed note commitment from its opening at intake, so a caller
+cannot simply claim a different owner for a note they do not control. The normal
+SDK derives one wallet-level owner commitment and reuses it across that wallet's
+notes.
+
+The matcher also compares trading keys. A self-pair is skipped if **either** the
+note-bound owner commitment or the trading key matches.
 
 ```text
-your bid  ⨯  your ask     →  skipped (same trading key)
-your bid  ✓  other ask    →  eligible to match
-other bid ✓  your ask     →  eligible to match
+same wallet, same key       →  skipped
+same wallet, different keys →  skipped
+different owners            →  eligible to match
 ```
 
-The result: every execution you receive is against a *different trading key*.
+Skipped orders are not automatically cancelled. They remain eligible to match
+with a different owner in the same batch or a later tick.
 
 ## Why a single behavior
 
@@ -35,19 +41,23 @@ resting side, cancel the incoming side, cancel both) because there is a maker an
 a taker to choose between. A Darknyx batch has no maker/taker ordering: all crossing
 orders clear together at one price (see [Clearing Price](./clearing-price.md)). There
 is no "resting vs. incoming" side to pick, so the honest behavior is a single
-rule, **two orders from one key never match each other**, and the orders remain
-available to match against everyone else in the same batch.
+rule, **two orders from one note owner never match each other**, and the orders
+remain available to match against everyone else.
 
 ## What it protects
 
 - **No accidental wash trades.** A market maker quoting both sides cannot
-  accidentally trade with itself and manufacture fake volume or churn fees.
-- **Cleaner execution records.** Every fill is against a distinct trading key.
+  accidentally trade two notes from the same wallet, even when strategies use
+  separate trading keys.
+- **Cleaner execution records.** Every fill is against a distinct note owner.
 
 ## What it is not
 
-Self-trade prevention is scoped to the **trading key**, which is the cryptographic
-order identity. Two *different* trading keys, even if operated by the same
-account or the same person, are distinct counterparties and may match. If you
-want strict no-self-matching across a fleet, sign the orders you want mutually
-excluded with the same trading key.
+This is not proof of unique human identity. A user can deliberately create a
+second wallet identity—or rotate the owner blinding used for new notes—and the
+two owner commitments will look like distinct counterparties. Preventing that
+kind of pseudonymous wash trading requires an identity or surveillance policy
+outside the matching rule.
+
+The protection is therefore strong against accidental self-matching within the
+normal wallet model, not a Sybil-resistance claim.

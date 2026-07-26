@@ -40,7 +40,7 @@ order is a `limit` with an expiry; an immediate order is `ioc` or `fok`. See
 | `limit` | Required, the worst acceptable price. |
 | `ioc` (bid) | Required, the price cap (a "market bid" is an IOC with a cap). |
 | `ioc` (ask) | Optional; `0` accepts any clearing price (a "market ask"). |
-| `fok` | Required, the whole order must clear at this price or better. |
+| `fok` | Required. A bid needs a positive cap; an ask may use `0` as an unrestricted floor. |
 
 A bid always needs a positive `price_limit` (a buy at price zero is meaningless,
 and the collateral must cover the worst case). An ask may set `price_limit = 0` to
@@ -60,9 +60,9 @@ after they execute.
 
 | Intent | Type | Price | `min_fill_size` | Expiry |
 |---|---|---|---|---|
-| Resting bid at a price (GTC) | `limit` | required | `0` | far |
+| Resting bid at a price (GTC) | `limit` | required | `0` | maximum allowed horizon |
 | Resting bid, good for 10 min (GTT) | `limit` | required | `0` | deadline slot |
-| Resting bid, fill-whole-or-wait (AON) | `limit` | required | `= amount` | far |
+| Resting bid, fill-whole-or-wait (AON) | `limit` | required | `= amount` | maximum allowed horizon |
 | Cross now up to a cap (market bid) | `ioc` | cap | `0` | n/a |
 | Sell now at any price (market ask) | `ioc` | `0` | `0` | n/a |
-| Immediate, whole, or nothing | `fok` | required | n/a | n/a |
+| Immediate, whole, or nothing | `fok` | bid cap or ask floor (`0` allowed) | n/a | n/a |

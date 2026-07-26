@@ -82,9 +82,11 @@ Darknyx is three layers that compose into one trust chain.
   double-spends, the Groth16 verifier, and the atomic batched-settlement path.
 - **Matching (the CVM).** The engine accepts orders over an authenticated
   HTTPS/WebSocket surface, enforces limits and an oracle circuit-breaker policy,
-  clears crossing orders at one price per batch, proves the resulting value
-  movement, and submits settlement to Solana. Your order never becomes a Solana
-  transaction; the enclave settles the *result*.
+  routes each signed symbol to an isolated market book, clears crossing orders
+  at one price per market batch, proves the resulting value movement, and
+  submits settlement to Solana. Several pairs can share one endpoint and one
+  attestation session, but their books and proof batches never mix. Your order
+  never becomes a Solana transaction; the enclave settles the *result*.
 - **Client (the SDK).** Your software builds the collateral note, generates the
   zero-knowledge input proof, signs the order with your trading key, and (if you
   want the full guarantee) verifies the running enclave against an expected
@@ -118,3 +120,5 @@ margin, funding) simply are not part of the model.
   response conventions.
 - [Trade Flow](../how-it-works/trade-flow.md): the end-to-end lifecycle of an
   order, from submission to on-chain settlement.
+- [Multi-Market Venue](../how-it-works/multi-market.md): how several isolated
+  books share one attested endpoint.

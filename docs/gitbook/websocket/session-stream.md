@@ -67,7 +67,8 @@ reply; later state changes arrive on the `orders` channel.
 ```json
 { "op": "order.place",  "request_id": "r1", "params": { /* a Place Order body */ } }
 { "op": "order.cancel", "request_id": "r2", "order_id": "aa00…01",
-  "params": { "trading_key": "…", "cancel_nonce": 2, "trading_key_signature": "…" } }
+  "params": { "trading_key": "…", "cancel_nonce": 2, "session_id": "…",
+    "trading_key_signature": "…" } }
 { "op": "order.modify", "request_id": "r3", "order_id": "aa00…01",
   "params": { "cancel_signature": "…", "cancel_nonce": 2,
     "replacement": { /* a Place Order body */ } } }

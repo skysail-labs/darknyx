@@ -54,6 +54,26 @@ The configured prover suite generates VALID_DEPOSIT locally. The SDK submits the
 transaction and reads the emitted tree shard and leaf index so the resulting
 note can immediately back an order, merge, or withdrawal.
 
+{% hint style="warning" %}
+**`depositIndex` must advance, and the chain now enforces it**
+
+`depositIndex` feeds the note's recovery nonce, which is fully deterministic
+from your seed. Two deposits of the **same mint and amount** at the **same
+index** therefore produce a byte-identical note commitment — and the vault
+rejects the second one outright.
+
+That rejection is deliberate and it is protecting you. A duplicate commitment
+used to be accepted: both deposits moved tokens in, but only one could ever be
+withdrawn, because the consume-once guard is keyed on the commitment. The
+second deposit's tokens were silently unrecoverable, and because the vault was
+over-collateralised rather than under, no solvency alarm fired.
+
+The realistic way to hit this is not malice but a **seed-only restore**: nothing
+on-chain records how far your `depositIndex` has advanced, so a client rebuilt
+from the seed alone restarts at `0`. Persist the index alongside your note
+store, or scan forward for the first unused one before depositing.
+{% endhint %}
+
 ## Recovery
 
 Deposits are recoverable from the encrypted master-seed backup plus finalized
