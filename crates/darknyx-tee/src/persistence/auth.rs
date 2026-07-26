@@ -50,12 +50,22 @@ pub const DEFAULT_STATE_DIR: &str = "/var/lib/darknyx-tee";
 ///
 /// The encoding is bincode: positional and NOT self-describing. There is no
 /// field-name framing, so `#[serde(default)]` on a newly added field does not
-/// make an older payload decodable — it simply runs out of bytes. Every field
-/// added anywhere in this struct or in [`ApiCredentials`] therefore requires a
-/// bump here.
+/// make an older payload decodable. Every field added anywhere in this struct
+/// or in [`ApiCredentials`] therefore requires a bump here.
 ///
 /// v2 added account suspension + per-account token invalidation to
 /// `ApiCredentials`, and gave each revoked token id its expiry.
+///
+/// **This constant does less than it appears to.** `version` is checked AFTER
+/// the payload has been deserialised, so a field added to a NESTED struct
+/// derails the decode long before the version is read: the v1→v2 upgrade was
+/// observed on a live enclave failing as
+/// `invalid u8 while decoding bool, expected 0 or 1, found 40`, not as a
+/// version mismatch. The outcome is the same only because
+/// [`load_auth_snapshot`] maps every decode error to `None`. Anyone adding a
+/// real migration must therefore read the version from the leading bytes
+/// BEFORE attempting a typed decode — dispatching on `snapshot.version` will
+/// never be reached for this class of change.
 ///
 /// ⚠️ A BUMP DISCARDS THE EXISTING FILE. That is acceptable only while the
 /// registry holds nothing but the bootstrap admin, which is re-seeded from the
