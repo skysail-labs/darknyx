@@ -20,32 +20,32 @@ Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
 
 ## local — pure unit / parity / prover / wire-format (no network, no env gate)
 
-| File                               | Asserts                                                  |
-| ---------------------------------- | -------------------------------------------------------- |
-| `poseidon-parity.test.ts`          | Poseidon arities TS↔Rust byte-equality                   |
-| `note-commitment-parity.test.ts`   | v2 note commitment TS↔Rust                               |
-| `nullifier-parity.test.ts`         | v2 nullifier TS↔Rust                                     |
-| `keys-parity.test.ts`              | key derivation TS↔Rust                                   |
-| `user-commitment-parity.test.ts`   | user commitment TS↔Rust                                  |
-| `inner-hash-parity.test.ts`        | change/trade/fee `inner_hash` TS↔Rust                    |
-| `order-canonical-parity.test.ts`   | order/cancel/topup canonical digest TS↔Rust              |
-| `build-order-parity.test.ts`       | `buildOrder` canonical digest vs Rust fixture            |
-| `valid-input-prover.test.ts`       | VALID_INPUT snarkjs round-trip (needs circuit artifacts) |
-| `merge-prover.test.ts`             | VALID_MERGE snarkjs round-trip (needs artifacts)         |
-| `match-batch-prototype.test.ts`    | N=2/4 match-batch proof + leaf-byte assert               |
-| `deposit-transport.test.ts`        | deposit ix wire/discriminator/Borsh                      |
-| `withdraw-transport.test.ts`       | VALID_SPEND withdraw ix wire format                      |
-| `settle-builder-batched.test.ts`   | batched settle payload + canonical hash                  |
-| `settlement-watcher.test.ts`       | `TradeSettled` event decode                              |
-| `settle-memo-integrity.test.ts`    | Vuln-4 client change-note memo guard                     |
-| `order-builders.test.ts`           | ExecutionPolicy / order builder helpers                  |
-| `order-canonical-parity.test.ts`   | (see above)                                              |
-| `order-id.test.ts`                 | deterministic HD order_id derivation                     |
-| `order-submission.test.ts`         | order-client / trading-ws-client submit path             |
-| `leaf-index.test.ts`               | `leafIndexFromLogs` / `noteCreatedFromLogs` pure parsing |
-| `wallet.test.ts`                   | wallet/note-store behaviour                              |
-| `helpers/merkle-shadow.test.ts`    | in-memory Merkle shadow witness                          |
-| `helpers/snarkjs-prover.test.ts`   | snarkjs prover helper                                    |
+| File                             | Asserts                                                  |
+| -------------------------------- | -------------------------------------------------------- |
+| `poseidon-parity.test.ts`        | Poseidon arities TS↔Rust byte-equality                   |
+| `note-commitment-parity.test.ts` | v2 note commitment TS↔Rust                               |
+| `nullifier-parity.test.ts`       | v2 nullifier TS↔Rust                                     |
+| `keys-parity.test.ts`            | key derivation TS↔Rust                                   |
+| `user-commitment-parity.test.ts` | user commitment TS↔Rust                                  |
+| `inner-hash-parity.test.ts`      | change/trade/fee `inner_hash` TS↔Rust                    |
+| `order-canonical-parity.test.ts` | order/cancel/topup canonical digest TS↔Rust              |
+| `build-order-parity.test.ts`     | `buildOrder` canonical digest vs Rust fixture            |
+| `valid-input-prover.test.ts`     | VALID_INPUT snarkjs round-trip (needs circuit artifacts) |
+| `merge-prover.test.ts`           | VALID_MERGE snarkjs round-trip (needs artifacts)         |
+| `match-batch-prototype.test.ts`  | N=2/4 match-batch proof + leaf-byte assert               |
+| `deposit-transport.test.ts`      | deposit ix wire/discriminator/Borsh                      |
+| `withdraw-transport.test.ts`     | VALID_SPEND withdraw ix wire format                      |
+| `settle-builder-batched.test.ts` | batched settle payload + canonical hash                  |
+| `settlement-watcher.test.ts`     | `TradeSettled` event decode                              |
+| `settle-memo-integrity.test.ts`  | Vuln-4 client change-note memo guard                     |
+| `order-builders.test.ts`         | ExecutionPolicy / order builder helpers                  |
+| `order-canonical-parity.test.ts` | (see above)                                              |
+| `order-id.test.ts`               | deterministic HD order_id derivation                     |
+| `order-submission.test.ts`       | order-client / trading-ws-client submit path             |
+| `leaf-index.test.ts`             | `leafIndexFromLogs` / `noteCreatedFromLogs` pure parsing |
+| `wallet.test.ts`                 | wallet/note-store behaviour                              |
+| `helpers/merkle-shadow.test.ts`  | in-memory Merkle shadow witness                          |
+| `helpers/snarkjs-prover.test.ts` | snarkjs prover helper                                    |
 
 ## devnet — needs a devnet RPC (Helius) + `.devnet/` foundation
 
@@ -58,11 +58,12 @@ Secrets/config (Helius key, CVM gateway, RUN\_\* flags) load from a gitignored
 
 ## cvm — needs a RUNNING Phala CVM gateway + devnet (`RUN_CVM_E2E=1` + `DARKNYX_TEE_GATEWAY`)
 
-| File                            | Asserts                                                                                                                                                   |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cvm-settle-e2e.test.ts`        | deposit 2 real notes → crossing bid+ask → CVM matches + settles → leaf_count +5 (shard-aware)                                                             |
-| `cvm-multimatch-settle.test.ts` | N crossing pairs settle across K shards (shard-aware)                                                                                                     |
-| `cvm-merge-then-order.test.ts`  | deposit 2 → merge → `buildOrder` off merged note → CVM accepts/settles                                                                                    |
-| `cvm-api-surface.test.ts`       | error envelope + X-Request-Id, /system/status, /time, rate-limit 429, /account(+settings), `/v1/stream` in-band login + sequencing, legacy-route deletion |
+| File                              | Asserts                                                                                                                                                   |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cvm-settle-e2e.test.ts`          | deposit 2 real notes → crossing bid+ask → CVM matches + settles → leaf_count +5 (shard-aware)                                                             |
+| `cvm-multimatch-settle.test.ts`   | N crossing pairs settle across K shards (shard-aware)                                                                                                     |
+| `cvm-multi-market-settle.test.ts` | two governed markets share one endpoint/settle plane while books, routing, and cross-market modify remain isolated; one disabled market pauses the venue  |
+| `cvm-merge-then-order.test.ts`    | deposit 2 → merge → `buildOrder` off merged note → CVM accepts/settles                                                                                    |
+| `cvm-api-surface.test.ts`         | error envelope + X-Request-Id, /system/status, /time, rate-limit 429, /account(+settings), `/v1/stream` in-band login + sequencing, legacy-route deletion |
 
 See `docs/cvm-run-runbook.md` for the full CVM bring-up (build→deploy→rotate→fund→reset→test→stop).
