@@ -16,6 +16,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use darknyx_tee::api::{build_router, ApiState};
+use darknyx_tee::matcher::TradingPauseReason;
 use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
@@ -23,6 +24,8 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn debug_oracle_seed_writes_into_cache() {
     let state = ApiState::for_tests();
+    state.trading_gate.pause_for(TradingPauseReason::Oracle);
+    let trading_gate = state.trading_gate.clone();
     // `for_tests()` seeds `oracle: Some(OracleCache::new())` so the
     // handler should accept; pull a clone of the same cache so we
     // can verify the write end-to-end.
@@ -63,6 +66,41 @@ async fn debug_oracle_seed_writes_into_cache() {
         cached.last_updated_ms > 0,
         "upsert should stamp last_updated_ms to now()"
     );
+    assert!(
+        trading_gate.is_open(),
+        "a fresh debug seed should clear the Oracle pause"
+    );
+}
+
+#[tokio::test]
+async fn debug_oracle_seed_does_not_clear_governance_pause() {
+    let state = ApiState::for_tests();
+    state.trading_gate.pause_for(TradingPauseReason::Governance);
+    state.trading_gate.pause_for(TradingPauseReason::Oracle);
+    let trading_gate = state.trading_gate.clone();
+    let app = build_router(Arc::new(state));
+
+    let body = json!({
+        "feed_id": "ef0d8b6fdac3e4cba65d8c1be8ea3b6b88c1d4e2c9d4d9b5e1d4a8e9f0a1b2c3",
+        "twap": 150_000_000u64,
+        "exponent": -8,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/__debug/oracle/seed")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(trading_gate.is_paused_for(TradingPauseReason::Governance));
+    assert!(!trading_gate.is_paused_for(TradingPauseReason::Oracle));
+    assert!(!trading_gate.is_open());
 }
 
 #[tokio::test]

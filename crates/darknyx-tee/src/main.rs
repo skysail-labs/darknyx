@@ -33,12 +33,13 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use darknyx_tee::matcher::{
-    DriverConfig, MatcherDriver, MatcherState, TradingGate, DEFAULT_MAX_ORACLE_AGE_MS,
+    DriverConfig, MatcherDriver, MatcherState, TradingGate, TradingPauseReason,
+    DEFAULT_MAX_ORACLE_AGE_MS, DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
 };
 use darknyx_tee::merkle::{MerkleSync, MerkleSyncConfig};
-use darknyx_tee::oracle::cache::OracleCache;
+use darknyx_tee::oracle::cache::{FreshnessPolicy, OracleCache, OracleUnits};
 use darknyx_tee::oracle::hermes::HermesClient;
-use darknyx_tee::oracle::sync::{spawn_oracle_sync, SyncConfig};
+use darknyx_tee::oracle::sync::{spawn_oracle_sync, MarketOracleBinding, SyncConfig};
 #[cfg(feature = "icicle")]
 use darknyx_tee::prover::IcicleMatchBatchProver;
 #[cfg(feature = "rapidsnark")]
@@ -240,6 +241,39 @@ async fn main() -> Result<()> {
         }
         None
     };
+    let market_oracle_units = cfg
+        .markets
+        .iter()
+        .enumerate()
+        .map(|(index, _market)| {
+            let (base_decimals, quote_decimals) = governance_snapshots
+                .as_ref()
+                .map(|snapshots| {
+                    (
+                        snapshots[index].market.base_decimals,
+                        snapshots[index].market.quote_decimals,
+                    )
+                })
+                // Placeholder/loadgen mints are both modeled with six decimals;
+                // scale=1e8 then preserves the familiar Pyth -8 mantissa.
+                .unwrap_or((6, 6));
+            OracleUnits {
+                base_decimals,
+                quote_decimals,
+                price_scale: match_configs[index].price_scale,
+            }
+        })
+        .collect::<Vec<_>>();
+    let oracle_bindings = cfg
+        .markets
+        .iter()
+        .zip(&market_oracle_units)
+        .filter(|(market, _)| !market.oracle_feed_id.is_empty())
+        .map(|(market, units)| MarketOracleBinding {
+            feed_id: market.oracle_feed_id.clone(),
+            units: *units,
+        })
+        .collect::<Vec<_>>();
     for (market, match_config) in cfg.markets.iter().zip(&match_configs) {
         tracing::info!(
             symbol = %market.symbol,
@@ -256,6 +290,15 @@ async fn main() -> Result<()> {
     }
 
     let oracle = OracleCache::new();
+    if !cfg.feed_ids.is_empty() {
+        trading_gate.pause_for(TradingPauseReason::Oracle);
+        tracing::info!(
+            profile = cfg.pyth_trust_profile.as_str(),
+            endpoint = cfg.hermes_endpoint,
+            api_key_configured = cfg.pyth_api_key.is_some(),
+            "trading starts PAUSED until the first authenticated, fresh oracle batch"
+        );
+    }
     let current_slot = Arc::new(AtomicU64::new(1));
     // Compute-unit price bid (micro-lamports/CU) the settle worker prepends to
     // every settle-path tx. Refreshed by the priority-fee poller (7e) from
@@ -264,7 +307,9 @@ async fn main() -> Result<()> {
 
     // ─── 3. Spawn one isolated matcher driver per market ──────────────
     let mut runtimes = Vec::with_capacity(match_configs.len());
-    for (market, match_config) in cfg.markets.iter().cloned().zip(match_configs) {
+    for (market_index, (market, match_config)) in
+        cfg.markets.iter().cloned().zip(match_configs).enumerate()
+    {
         let matcher_state = Arc::new(RwLock::new(
             MatcherState::new()
                 .with_market(match_config.base_mint, match_config.quote_mint)
@@ -299,11 +344,17 @@ async fn main() -> Result<()> {
                 },
                 batch_ms: 2000,
                 max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+                max_oracle_future_skew_ms: DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+                oracle_units: market_oracle_units[market_index],
                 max_matches_per_batch: PRODUCTION_BATCH_N,
             },
         }
         .spawn();
-        tracing::info!(symbol = %market.symbol, "matcher driver spawned (BATCH_MS=2000)");
+        tracing::info!(
+            symbol = %market.symbol,
+            market_index,
+            "matcher driver spawned (BATCH_MS=2000)"
+        );
         runtimes.push((
             market,
             matcher_state,
@@ -323,16 +374,30 @@ async fn main() -> Result<()> {
         );
         None
     } else {
-        let client = HermesClient::new()?;
+        let client = HermesClient::with_endpoint_and_token(
+            &cfg.hermes_endpoint,
+            cfg.pyth_api_key.as_ref().map(|secret| secret.expose()),
+        )?;
         let handle = spawn_oracle_sync(
             oracle.clone(),
             client,
             SyncConfig {
                 feed_ids: cfg.feed_ids.clone(),
+                market_bindings: oracle_bindings,
+                trust_profile: cfg.pyth_trust_profile,
+                freshness: FreshnessPolicy {
+                    max_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+                    max_future_skew_ms: DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+                },
                 interval: Duration::from_secs(1),
             },
+            trading_gate.clone(),
         );
-        tracing::info!(feed_count = cfg.feed_ids.len(), "oracle sync task spawned");
+        tracing::info!(
+            feed_count = cfg.feed_ids.len(),
+            profile = cfg.pyth_trust_profile.as_str(),
+            "batched oracle sync task spawned"
+        );
         Some(handle)
     };
 

@@ -59,14 +59,13 @@ image** — deploying the old tag runs stale code.
 ## 1. Build a new image (only if code/compose/circuits changed)
 
 ```sh
-# 1. bump the tag the compose pins:
-#    deploy/docker-compose.yaml → image: …darknyx-tee:tee-v3-hardening-<N+1>
-# 2. commit, then tag + push (the tag carries your commits):
+# 1. commit the source state, then tag + push it:
 git tag tee-v3-hardening-<N+1> && git push origin tee-v3-hardening-<N+1>
-# 3. watch CI (lives on skysail-labs/darknyx; origin redirects there):
+# 2. watch the required image build (this is deployment production, not a
+#    substitute for the local pre-PR validation gate):
 gh run watch "$(gh run list --repo skysail-labs/darknyx --limit 1 --json databaseId -q '.[0].databaseId')" \
   --repo skysail-labs/darknyx --exit-status
-# 4. confirm the manifest landed (want 200):
+# 3. confirm the manifest landed (want 200):
 #    The Accept header MUST include the single-manifest media types. CI builds
 #    linux/amd64 ONLY, so the tag resolves to an image manifest, NOT an OCI
 #    index — asking for the index alone returns 404 on a perfectly good push
@@ -76,11 +75,17 @@ curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" \
   -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json" \
   "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N+1>"
 
-# Cross-check the digest against the one CI logged ("pushing manifest for …@sha256:…"):
+# 4. resolve and record the immutable digest. Cross-check it against the one
+#    the image build logged ("pushing manifest for …@sha256:…"):
 curl -sI -H "Authorization: Bearer $TOK" \
   -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
   "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N+1>" \
   | grep -i docker-content-digest
+
+# 5. pin deploy/docker-compose.yaml to the returned immutable identity:
+#    image: ghcr.io/skysail-labs/darknyx-tee@sha256:<digest>
+# Commit the digest pin and record source SHA + tag + digest together in the
+# remediation/release evidence. Never deploy a mutable tag.
 ```
 
 If only env/regime changed (no code), skip §1 — an env-only `phala deploy -e` is
@@ -120,6 +125,9 @@ umask 077
 export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
 export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
 export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
+# Obtain this bearer credential from Pyth/Douro Labs. It is required by the
+# upgraded Hermes endpoint and must stay only in this encrypted env file.
+test -n "$DARKNYX_TEE_PYTH_API_KEY"
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
@@ -131,6 +139,7 @@ cat > .devnet/darknyx-deploy.env <<EOF
 DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
 DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
 DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
+DARKNYX_TEE_PYTH_API_KEY=$DARKNYX_TEE_PYTH_API_KEY
 DARKNYX_TEE_SOLANA_RPC_URL=$SOLANA_RPC_URL
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen (placeholder-mint) regime
@@ -151,7 +160,10 @@ the CVM requires finalized, well-formed `VaultConfig` and `MarketConfig` account
 it will not fall back to env market/fee values.
 
 > Keep the three credential variables exported in the shell that runs the CVM
-> tests/loadgen; live harnesses now fail fast when they are missing.
+> tests/loadgen, and keep the Pyth bearer credential available for deployment.
+> The API/auth harness credentials fail fast when missing. Missing or invalid
+> Pyth auth leaves the independent oracle pause reason set: place/modify and
+> matching remain closed while cancel and settlement reconciliation continue.
 > In real-market mode, the CVM and e2e harness must use the finalized on-chain
 > fee rate (the CVM ignores the fee/owner env defaults after adopting governance).
 > In placeholder-loadgen mode, `DARKNYX_TEE_FEE_RATE_BPS` (default 30) must equal

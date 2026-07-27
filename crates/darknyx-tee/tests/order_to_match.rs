@@ -36,8 +36,9 @@ use darknyx_tee::api::{build_router, ApiState};
 use darknyx_tee::matcher::openings::NoteOpening;
 use darknyx_tee::matcher::{
     DriverConfig, MatcherDriver, MatcherState, TradingGate, DEFAULT_MAX_ORACLE_AGE_MS,
+    DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
 };
-use darknyx_tee::oracle::cache::{CachedPrice, OracleCache};
+use darknyx_tee::oracle::{CachedPrice, OracleCache, OracleUnits, TrustProfile};
 use darkpool_matcher::book::{OrderSide, OrderType};
 use darkpool_matcher::config::MatchConfig;
 use darkpool_matcher::order_canonical::OrderCanonical;
@@ -209,18 +210,20 @@ async fn http_submit_two_crossing_orders_produces_match() {
 
     // 2. Seed the oracle. The matcher's freshness window
     //    (DEFAULT_MAX_ORACLE_AGE_MS = 5_000) reads
-    //    `last_updated_ms` against the cache's monotonic clock;
-    //    `upsert` stamps it to "now" so the entry is trivially
+    //    `last_updated_ms` against the cache's wall clock;
+    //    `seed_unverified` stamps it to "now" so the entry is trivially
     //    fresh. Price is wide enough that both orders sit inside
     //    the circuit-breaker band.
     oracle
-        .upsert(
+        .seed_unverified(
             FEED_ID.to_string(),
             CachedPrice {
                 twap: 150_000_000,
                 confidence: 0,
                 exponent: -8,
                 publish_time_ms: 0,
+                vaa_sequence: 1,
+                trust_profile: TrustProfile::RouterQuorumV1,
                 last_updated_ms: 0,
                 vaa: Vec::new(),
             },
@@ -240,6 +243,12 @@ async fn http_submit_two_crossing_orders_produces_match() {
             feed_id: FEED_ID.to_string(),
             batch_ms: 1000,
             max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+            max_oracle_future_skew_ms: DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+            oracle_units: OracleUnits {
+                base_decimals: 6,
+                quote_decimals: 6,
+                price_scale: 100_000_000,
+            },
             max_matches_per_batch: 16,
         },
     };
@@ -379,13 +388,15 @@ async fn http_submit_without_crossing_produces_no_match() {
     let app = build_router(Arc::new(api_state));
 
     oracle
-        .upsert(
+        .seed_unverified(
             FEED_ID.to_string(),
             CachedPrice {
                 twap: 150_000_000,
                 confidence: 0,
                 exponent: -8,
                 publish_time_ms: 0,
+                vaa_sequence: 2,
+                trust_profile: TrustProfile::RouterQuorumV1,
                 last_updated_ms: 0,
                 vaa: Vec::new(),
             },
@@ -403,6 +414,12 @@ async fn http_submit_without_crossing_produces_no_match() {
             feed_id: FEED_ID.to_string(),
             batch_ms: 1000,
             max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+            max_oracle_future_skew_ms: DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+            oracle_units: OracleUnits {
+                base_decimals: 6,
+                quote_decimals: 6,
+                price_scale: 100_000_000,
+            },
             max_matches_per_batch: 16,
         },
     };

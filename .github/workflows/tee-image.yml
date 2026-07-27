@@ -65,7 +65,7 @@ on:
         default: false
     outputs:
       image:
-        description: "Full ghcr image ref that was built + pushed"
+        description: "Immutable ghcr image ref that was built + pushed"
         value: ${{ jobs.build-push.outputs.image }}
 
 permissions:
@@ -76,7 +76,7 @@ jobs:
   build-push:
     runs-on: ubuntu-latest
     outputs:
-      image: ${{ steps.ref.outputs.image }}
+      image: ${{ steps.immutable.outputs.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -187,6 +187,7 @@ jobs:
                  circuits/build/match_batch_n16/circuit_cpp/circuit.dat
 
       - name: Build + push (linux/amd64)
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -227,6 +228,16 @@ jobs:
             type=registry,ref=${{ steps.ref.outputs.cache }},mode=max
             type=gha,mode=max
 
+      - name: Bind immutable image identity
+        id: immutable
+        env:
+          TAGGED_IMAGE: ${{ steps.ref.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          test -n "$DIGEST"
+          case "$DIGEST" in sha256:*) ;; *) echo "::error::Unexpected image digest: $DIGEST"; exit 1 ;; esac
+          echo "image=${TAGGED_IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
       # CI-spike gate for the CUDA image — validates the GPU image is well-formed
       # WITHOUT a GPU: the icicle backend .so shipped, and the binary's dynamic
       # links resolve (frontend .so via LD_LIBRARY_PATH). We ldd the BINARY only —
@@ -234,8 +245,14 @@ jobs:
       # by the nvidia runtime at deploy), so it is NOT resolvable here by design.
       - name: Verify CUDA image (no GPU)
         if: steps.ref.outputs.enable_cuda == '1'
+        env:
+          # Verify the IMMUTABLE tag@digest, not the bare tag. Pulling by tag
+          # would re-resolve the name and could validate a different artifact
+          # than the digest this job publishes and the compose pins — exactly the
+          # tag-vs-digest substitution the digest pin exists to prevent. Verify
+          # the bytes that ship.
+          IMG: ${{ steps.immutable.outputs.image }}
         run: |
-          IMG="${{ steps.ref.outputs.image }}"
           docker pull "$IMG"
           echo "=== icicle CUDA backend .so shipped under /opt/icicle/lib/backend ==="
           docker run --rm --entrypoint sh "$IMG" -c 'ls -R /opt/icicle/lib/backend'
@@ -249,6 +266,13 @@ jobs:
             'if ldd /opt/darknyx/darknyx-tee | grep -i "not found"; then echo "UNRESOLVED LIBS"; exit 1; fi; echo "all binary libs resolved"'
 
       - name: Emit pull command
+        env:
+          # Via env, not inline interpolation: these values derive from the git
+          # tag name / dispatch input, and a tag containing shell metacharacters
+          # would otherwise be parsed as syntax by the runner shell.
+          TAGGED_IMAGE: ${{ steps.ref.outputs.image }}
+          IMMUTABLE_IMAGE: ${{ steps.immutable.outputs.image }}
         run: |
-          echo "Pushed: ${{ steps.ref.outputs.image }}"
-          echo "Pull/deploy: set deploy/docker-compose.yaml image: to the line above."
+          printf 'Build label: %s\n' "$TAGGED_IMAGE"
+          printf 'Immutable deploy identity: %s\n' "$IMMUTABLE_IMAGE"
+          printf 'Pull/deploy: pin compose image: to the immutable line above.\n'

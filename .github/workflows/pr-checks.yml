@@ -128,6 +128,9 @@ jobs:
       - name: icicle CUDA-arch env consistency
         run: bash scripts/check-icicle-cuda-arch-env.sh
 
+      - name: CVM compose image identities are immutable
+        run: bash scripts/check-compose-image-digests.sh
+
       # Pinned to match rust-toolchain.toml. Bump both together.
       - name: Install Rust 1.89.0
         uses: dtolnay/rust-toolchain@1.89.0

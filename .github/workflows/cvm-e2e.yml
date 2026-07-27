@@ -39,7 +39,7 @@
 #      numTrees=1 the multi-key concat is only unit-tested.
 #   3. Base64 the admin + funder devnet keypairs into `DEVNET_ADMIN_KEYPAIR_B64`
 #      and `DEVNET_FUNDER_KEYPAIR_B64`.
-#   4. Add secrets `PHALA_CLOUD_API_KEY` and `HELIUS_API_KEY`.
+#   4. Add secrets `PHALA_CLOUD_API_KEY`, `HELIUS_API_KEY`, and `PYTH_API_KEY`.
 # The K shard signers are deterministic per app_id; this workflow re-rotates +
 # tops up their funding every run (idempotent), so a changed image (new
 # compose_hash → new signers) is handled automatically.
@@ -54,7 +54,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Override the darknyx-tee image tag to deploy (default: whatever deploy/docker-compose.yaml pins)"
+        description: "Override with an immutable ghcr.io/...@sha256:... image ref"
         required: false
         type: string
 
@@ -92,6 +92,7 @@ jobs:
     timeout-minutes: 50
     env:
       HELIUS_RPC: "https://devnet.helius-rpc.com/?api-key=${{ secrets.HELIUS_API_KEY }}"
+      PYTH_API_KEY: ${{ secrets.PYTH_API_KEY }}
       CVM: ${{ vars.DARKNYX_NIGHTLY_CVM_ID }}
     steps:
       - uses: actions/checkout@v5
@@ -173,6 +174,7 @@ jobs:
           FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
           {
             echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+            echo "DARKNYX_TEE_PYTH_API_KEY=$PYTH_API_KEY"
             echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
             echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
             echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
@@ -183,12 +185,27 @@ jobs:
           } > /tmp/darknyx.env
 
       - name: Select the image to deploy (built-from-main, or the dispatch override)
+        env:
+          # Via env, not inline interpolation — `image_tag` is free-form dispatch
+          # input and would otherwise be parsed as shell syntax by the runner.
+          DISPATCH_IMAGE: ${{ inputs.image_tag }}
+          BUILT_IMAGE: ${{ needs.build-image.outputs.image }}
         run: |
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            sed -i "s#\(image: ghcr.io/skysail-labs/darknyx-tee:\).*#\1${{ inputs.image_tag }}#" deploy/docker-compose.yaml
+          if [ -n "$DISPATCH_IMAGE" ]; then
+            IMAGE="$DISPATCH_IMAGE"
           else
-            sed -i "s#image: ghcr.io/skysail-labs/darknyx-tee:.*#image: ${{ needs.build-image.outputs.image }}#" deploy/docker-compose.yaml
+            IMAGE="$BUILT_IMAGE"
           fi
+          # Full-shape match, not a prefix glob: `@sha256:*` would accept a
+          # truncated or trailing-garbage digest, and this value is substituted
+          # straight into the compose that compose_hash measures.
+          case "$IMAGE" in
+            ghcr.io/skysail-labs/darknyx-tee@sha256:*) ;;
+            *) echo "::error::CVM deploy requires an immutable ghcr @sha256 image: $IMAGE"; exit 1 ;;
+          esac
+          printf '%s' "$IMAGE" | grep -qE '^ghcr\.io/skysail-labs/darknyx-tee@sha256:[0-9a-f]{64}$' \
+            || { echo "::error::malformed image digest: $IMAGE"; exit 1; }
+          sed -i -E "s#^    image: ghcr.io/skysail-labs/darknyx-tee.*#    image: $IMAGE#" deploy/docker-compose.yaml
           grep -E 'image: ghcr' deploy/docker-compose.yaml
 
       # ── initial bring-up (re-pulls the image + derives signers) ──
@@ -314,6 +331,7 @@ jobs:
             FLOOR=$(node -e "const{Connection}=require('@solana/web3.js');(async()=>{process.stdout.write(String(await new Connection(process.env.HELIUS_RPC).getSlot('confirmed')))})()")
             {
               echo "DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS_RPC"
+              echo "DARKNYX_TEE_PYTH_API_KEY=$PYTH_API_KEY"
               echo "DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR"
               echo "DARKNYX_TEE_BASE_MINT=$(jq -r .baseMint.pubkey .devnet/e2e-config.json)"
               echo "DARKNYX_TEE_QUOTE_MINT=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)"
@@ -327,7 +345,11 @@ jobs:
               echo "$OUT" | grep -q "already in progress" || break
               echo "deploy busy — retry $d in 20s"; sleep 20
             done
-            rm -f /tmp/darknyx.env
+            # Same secure-erase as the initial deploy — this file carries the
+            # Helius and Pyth credentials, and this helper rewrites it once per
+            # tree-consuming test, so a plain rm would leave the most-written
+            # secret file on the runner as recoverable blocks.
+            shred -u /tmp/darknyx.env 2>/dev/null || rm -f /tmp/darknyx.env
             for i in $(seq 1 40); do curl -fsS "$GATEWAY/info" -o /tmp/info.json 2>/dev/null && break; sleep 6; done
           }
           FAILED=""
@@ -351,7 +373,8 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          rm -f /tmp/darknyx.env packages/sdk/.env
+          shred -u /tmp/darknyx.env 2>/dev/null || rm -f /tmp/darknyx.env
+          shred -u packages/sdk/.env 2>/dev/null || rm -f packages/sdk/.env
           if [ -n "$CVM" ]; then
             phala cvms stop "$CVM" || echo "::warning::phala cvms stop failed — VERIFY MANUALLY in the dashboard"
           fi

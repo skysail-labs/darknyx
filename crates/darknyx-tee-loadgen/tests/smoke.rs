@@ -23,8 +23,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use darknyx_tee::api::{build_router, ApiState};
-use darknyx_tee::matcher::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
-use darknyx_tee::oracle::OracleCache;
+use darknyx_tee::matcher::{
+    DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS,
+    DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+};
+use darknyx_tee::oracle::{OracleCache, OracleUnits};
 use darknyx_tee_loadgen::config::{AuthMode, RunConfig, Scenario};
 use darknyx_tee_loadgen::run_load_gen;
 use darkpool_matcher::config::MatchConfig;
@@ -76,6 +79,12 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
             // matching cycles during the 5-second run window.
             batch_ms: 300,
             max_oracle_age_ms: DEFAULT_MAX_ORACLE_AGE_MS,
+            max_oracle_future_skew_ms: DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+            oracle_units: OracleUnits {
+                base_decimals: 6,
+                quote_decimals: 6,
+                price_scale: match_config.price_scale,
+            },
             max_matches_per_batch: 16,
         },
     };

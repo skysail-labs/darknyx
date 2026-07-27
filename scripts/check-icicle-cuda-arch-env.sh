@@ -20,12 +20,26 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DOCKERFILE="$ROOT/deploy/Dockerfile"
-BUILD_RS="$ROOT/third_party/icicle-snark/wrappers/rust/icicle-runtime/build.rs"
+WRAPPERS="$ROOT/third_party/icicle-snark/wrappers/rust"
 
-if [ ! -f "$BUILD_RS" ]; then
-  echo "SKIP: $BUILD_RS not present (submodule not checked out)."
+if [ ! -d "$WRAPPERS" ]; then
+  echo "SKIP: $WRAPPERS not present (submodule not checked out)."
   echo "      Run: git submodule update --init --recursive third_party/icicle-snark"
   exit 0
+fi
+
+# EVERY build script that drives its own cmake CUDA backend must read the same
+# var — they are independent cmake invocations, so one straggler is enough to
+# fail the image build. Checking only icicle-runtime is what let the 2026-07-27
+# `-cuda` failure through: the runtime read DARKNYX_ICICLE_CUDA_ARCH while
+# icicle-bn254 still read only the deprecated NYX_ICICLE_CUDA_ARCH spelling, and
+# this guard — inspecting just the runtime — reported the pairing as correct.
+BUILD_SCRIPTS="$(grep -rl 'CUDA_BACKEND' "$WRAPPERS" --include=build.rs | sort)"
+
+if [ -z "$BUILD_SCRIPTS" ]; then
+  echo "FAIL: no icicle build.rs under $WRAPPERS references CUDA_BACKEND."
+  echo "      The submodule layout changed; this guard needs updating."
+  exit 1
 fi
 
 # The var the Dockerfile forwards into the icicle-cuda cargo build, e.g.
@@ -39,28 +53,42 @@ if [ -z "$DOCKER_VAR" ]; then
   exit 1
 fi
 
-# Every name the pinned build.rs reads via env::var("...").
-READ_VARS="$(grep -oE 'env::var\("[A-Z_]*ICICLE_CUDA_ARCH"\)' "$BUILD_RS" \
-  | sed -E 's/env::var\("([A-Z_]+)"\)/\1/' | sort -u)"
+failed=0
+for build_rs in $BUILD_SCRIPTS; do
+  rel="${build_rs#"$ROOT"/}"
 
-if [ -z "$READ_VARS" ]; then
-  echo "FAIL: the pinned icicle-snark build.rs reads no *ICICLE_CUDA_ARCH var."
-  echo "      The submodule pointer may predate the CUDA-arch patch."
-  exit 1
-fi
+  # Every name this build.rs reads via env::var("...").
+  READ_VARS="$(grep -oE 'env::var\("[A-Z_]*ICICLE_CUDA_ARCH"\)' "$build_rs" \
+    | sed -E 's/env::var\("([A-Z_]+)"\)/\1/' | sort -u)"
 
-if ! printf '%s\n' "$READ_VARS" | grep -qx "$DOCKER_VAR"; then
-  echo "FAIL: CUDA-arch env var drift between the Dockerfile and the pinned submodule."
-  echo "  deploy/Dockerfile forwards : $DOCKER_VAR"
-  echo "  pinned build.rs reads      : $(printf '%s' "$READ_VARS" | tr '\n' ' ')"
+  if [ -z "$READ_VARS" ]; then
+    echo "FAIL: $rel reads no *ICICLE_CUDA_ARCH var."
+    echo "      The submodule pointer may predate the CUDA-arch patch."
+    failed=1
+    continue
+  fi
+
+  if ! printf '%s\n' "$READ_VARS" | grep -qx "$DOCKER_VAR"; then
+    echo "FAIL: CUDA-arch env var drift between the Dockerfile and the pinned submodule."
+    echo "  deploy/Dockerfile forwards : $DOCKER_VAR"
+    echo "  $rel reads : $(printf '%s' "$READ_VARS" | tr '\n' ' ')"
+    failed=1
+    continue
+  fi
+
+  echo "ok: $rel reads $DOCKER_VAR"
+done
+
+if [ "$failed" -ne 0 ]; then
   echo
   echo "  Effect if shipped: the value is silently dropped, cmake falls back to"
   echo "  CUDA_ARCHITECTURES=native, probes for a GPU the builder lacks, and the"
   echo "  -cuda image build fails late with 'no GPU was detected'."
   echo
-  echo "  Fix: align the names, or bump third_party/icicle-snark to a commit whose"
-  echo "  build.rs reads $DOCKER_VAR."
+  echo "  Fix: align the names in EVERY listed build script, or bump"
+  echo "  third_party/icicle-snark to a commit whose build scripts all read"
+  echo "  $DOCKER_VAR."
   exit 1
 fi
 
-echo "icicle CUDA-arch env check passed: Dockerfile forwards $DOCKER_VAR; pinned build.rs reads it."
+echo "icicle CUDA-arch env check passed: Dockerfile forwards $DOCKER_VAR; every CUDA build script reads it."

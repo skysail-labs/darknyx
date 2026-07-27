@@ -801,8 +801,10 @@ mod tests {
             let oracle = OracleSnapshot {
                 twap: price,
                 confidence: 0,
-                exponent: 0,
-                publish_slot: 1,
+                publish_time_ms: 1,
+                observed_at_ms: 1,
+                max_age_ms: 5_000,
+                max_future_skew_ms: 1_000,
             };
             let output = run_batch(
                 &OrderBook {

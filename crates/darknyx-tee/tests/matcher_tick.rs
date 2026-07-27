@@ -21,8 +21,9 @@ use std::sync::Arc;
 
 use darknyx_tee::matcher::{
     DriverConfig, MatcherDriver, MatcherState, NoteOpening, OrderOpening, TradingGate,
+    TradingPauseReason, DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
 };
-use darknyx_tee::oracle::{cache::CachedPrice, OracleCache};
+use darknyx_tee::oracle::{CachedPrice, OracleCache, OracleUnits, TrustProfile};
 use darknyx_tee::settle::Groth16ProofBytes;
 use darkpool_matcher::{
     book::{Order, OrderSide, OrderStatus, OrderType},
@@ -134,14 +135,18 @@ fn submit_with_opening(state: &mut tokio::sync::RwLockWriteGuard<'_, MatcherStat
 
 async fn seed_oracle(cache: &OracleCache, twap: u64) {
     cache
-        .upsert(
+        .seed_unverified(
             FEED_ID.to_string(),
             CachedPrice {
                 twap,
                 confidence: 0,
-                exponent: -8,
+                // With equal token decimals and price_scale=100 this preserves
+                // the toy matcher prices exactly.
+                exponent: -2,
                 publish_time_ms: 0,
-                last_updated_ms: 0, // upsert stamps it
+                vaa_sequence: 1,
+                trust_profile: TrustProfile::RouterQuorumV1,
+                last_updated_ms: 0, // seed_unverified stamps it
                 vaa: Vec::new(),
             },
         )
@@ -165,6 +170,12 @@ fn mk_driver(
             feed_id: FEED_ID.to_string(),
             batch_ms: 1000,
             max_oracle_age_ms: darknyx_tee::matcher::DEFAULT_MAX_ORACLE_AGE_MS,
+            max_oracle_future_skew_ms: DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+            oracle_units: OracleUnits {
+                base_decimals: 6,
+                quote_decimals: 6,
+                price_scale: 100,
+            },
             max_matches_per_batch: 16,
         },
     }
@@ -286,6 +297,12 @@ async fn tick_pages_oversized_match_set_into_capped_batches() {
             feed_id: FEED_ID.to_string(),
             batch_ms: 1000,
             max_oracle_age_ms: darknyx_tee::matcher::DEFAULT_MAX_ORACLE_AGE_MS,
+            max_oracle_future_skew_ms: DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+            oracle_units: OracleUnits {
+                base_decimals: 6,
+                quote_decimals: 6,
+                price_scale: 100,
+            },
             max_matches_per_batch: 2,
         },
     };
@@ -339,6 +356,7 @@ async fn tick_skips_when_oracle_missing() {
     );
 
     let driver = mk_driver(state.clone(), oracle, current_slot, tx);
+    let gate = driver.trading_gate.clone();
     driver.tick().await.expect("tick");
 
     assert!(matches!(
@@ -346,6 +364,7 @@ async fn tick_skips_when_oracle_missing() {
         Err(mpsc::error::TryRecvError::Empty)
     ));
     assert_eq!(state.read().await.book().len(), 2, "book unchanged");
+    assert!(gate.is_paused_for(TradingPauseReason::Oracle));
 }
 
 /// Empty book → no tick output.

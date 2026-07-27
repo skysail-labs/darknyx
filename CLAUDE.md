@@ -239,6 +239,7 @@ RUN_DEVNET_E2E=1 \
 ```sh
 set -e
 cargo fmt --all && cargo fmt --all -- --check       # CI fails on one un-fmt'd line
+bash scripts/check-compose-image-digests.sh          # CPU/GPU compose must use @sha256
 cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin  # litesvm + devnet deploy need it (F-01/F-02: OFF by default for mainnet)
 cargo build --examples -p darkpool-crypto           # parity tests shell out to these
 cargo clippy --workspace --all-targets -- -D warnings
@@ -303,23 +304,41 @@ form (`app_<id>`).
 
 The `tee-image` GitHub workflow builds `linux/amd64` and pushes to
 `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-<N>` (registry-cached, ~4–5 min).
-**Always bump the tag for a code change** — `phala deploy` only re-pulls on
-a changed tag; a same-tag deploy reuses the cached image (you'd test stale
-code).
+**Always build under a fresh tag for a code change, then deploy its resolved
+digest.** Reusing a tag risks building or measuring stale content; deploying
+`@sha256:<digest>` makes the attested compose bind the exact image.
 
 ```sh
-# 1. bump the tag the compose pins:
-#    deploy/docker-compose.yaml → image: ...darknyx-tee:tee-v3-hardening-<N+1>
-# 2. commit, then tag + push (the tag carries your commits):
-git tag tee-v3-hardening-<N+1> && git push origin tee-v3-hardening-<N+1>
-# 3. watch it (CI lives on skysail-labs/darknyx; origin redirects there):
-gh run watch "$(gh run list --repo skysail-labs/darknyx --limit 1 --json databaseId -q '.[0].databaseId')" --repo skysail-labs/darknyx --exit-status
-# 4. confirm it landed (want 200):
+TAG=tee-v3-hardening-<N+1>
+# 1. commit, then tag + push the exact source state:
+git tag "$TAG" && git push origin "$TAG"
+# 2. watch THE run for tee-image.yml on THIS tag. Do NOT take `--limit 1` off the
+#    repo-wide list: any other workflow (pr-checks, a scheduled sweeper) can land
+#    in between, and you would then watch — and green-light — an unrelated run.
+RUN=$(gh run list --repo skysail-labs/darknyx --workflow tee-image.yml \
+        --branch "$TAG" --limit 1 --json databaseId -q '.[0].databaseId')
+test -n "$RUN" || { echo "no tee-image run for $TAG yet"; exit 1; }
+gh run watch "$RUN" --repo skysail-labs/darknyx --exit-status
+# 3. resolve Docker-Content-Digest, FAILING CLOSED. A missing tag returns a
+#    non-200 with no digest header; printing the headers and eyeballing them is
+#    how a compose ends up pinned to an image that was never built.
 TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/darknyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" \
-  -H "Accept: application/vnd.oci.image.index.v1+json" \
-  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N+1>"
+HDRS=$(curl -sI -o /dev/null -w '%{http_code}' -D /dev/stderr \
+  -H "Authorization: Bearer $TOK" \
+  -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/$TAG" 2>/tmp/hdrs)
+test "$HDRS" = 200 || { echo "manifest for $TAG not found (HTTP $HDRS)"; exit 1; }
+DIGEST=$(tr -d '\r' < /tmp/hdrs | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')
+echo "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$' \
+  || { echo "malformed or absent digest: '$DIGEST'"; exit 1; }
+echo "pin this: ghcr.io/skysail-labs/darknyx-tee@$DIGEST"
+# 4. pin compose to that digest and commit it. `scripts/check-compose-image-digests.sh`
+#    enforces the shape on every PR.
 ```
+
+The tag is a build label and audit cross-reference only. Deployment compose
+must use `@sha256:<digest>` so the attested `compose_hash` binds immutable image
+content.
 
 ### 3.2 The encrypted env (`-e` file) — and the REGIME you're deploying
 
@@ -349,6 +368,7 @@ HELIUS="https://devnet.helius-rpc.com/?api-key=<key>"
 export DARKNYX_TEE_API_KEY="darknyx-$(openssl rand -hex 16)"
 export DARKNYX_TEE_API_SECRET="$(openssl rand -hex 32)"
 export DARKNYX_TEE_PASSPHRASE="$(openssl rand -base64 32 | tr -d '\n')"
+test -n "$DARKNYX_TEE_PYTH_API_KEY"  # upgraded authenticated Hermes credential
 BASE=$(jq -r .baseMint.pubkey  .devnet/e2e-config.json)
 QUOTE=$(jq -r .quoteMint.pubkey .devnet/e2e-config.json)
 ALT=$(jq -r .settleLookupTable  .devnet/e2e-config.json)
@@ -360,6 +380,7 @@ cat > .devnet/darknyx-deploy.env <<EOF
 DARKNYX_TEE_API_KEY=$DARKNYX_TEE_API_KEY
 DARKNYX_TEE_API_SECRET=$DARKNYX_TEE_API_SECRET
 DARKNYX_TEE_PASSPHRASE=$DARKNYX_TEE_PASSPHRASE
+DARKNYX_TEE_PYTH_API_KEY=$DARKNYX_TEE_PYTH_API_KEY
 DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE          # OMIT these two lines for the loadgen regime

@@ -24,7 +24,8 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 
 use super::state::ApiState;
-use crate::oracle::CachedPrice;
+use crate::matcher::TradingPauseReason;
+use crate::oracle::{vaa::TrustProfile, CachedPrice};
 
 #[derive(Debug, Deserialize)]
 pub struct OracleSeedRequest {
@@ -61,14 +62,16 @@ pub async fn seed_oracle(
     ))?;
 
     oracle
-        .upsert(
+        .seed_unverified(
             req.feed_id,
             CachedPrice {
                 twap: req.twap,
                 confidence: req.confidence,
                 exponent: req.exponent,
                 publish_time_ms: 0,
-                // `upsert` stamps this to `now_ms()` before insert,
+                vaa_sequence: 0,
+                trust_profile: TrustProfile::LegacyWormholeV1,
+                // `seed_unverified` stamps this to `now_ms()` before insert,
                 // so the entry is fresh by construction. The matcher's
                 // freshness check then passes for the configured
                 // `max_oracle_age_ms` window.
@@ -83,6 +86,11 @@ pub async fn seed_oracle(
             },
         )
         .await;
+
+    // Debug/load-test parity with the authenticated sync path: a freshly seeded
+    // oracle makes the market healthy again. Clear only the Oracle bit so this
+    // feature-gated helper can never override an independent governance pause.
+    state.trading_gate.resume_for(TradingPauseReason::Oracle);
 
     Ok(StatusCode::OK)
 }

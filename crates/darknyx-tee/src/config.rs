@@ -11,8 +11,25 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::api::auth::{TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE};
+use crate::oracle::hermes::{DEFAULT_HERMES_ENDPOINT, UPGRADED_HERMES_ENDPOINT};
+use crate::oracle::vaa::TrustProfile;
 
 pub const MAX_MARKETS_PER_CVM: usize = 16;
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct SecretString(String);
+
+impl SecretString {
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
+}
 
 /// One independently routed order book inside the CVM. Market economics are
 /// replaced from the finalized on-chain `MarketConfig` at governed boot; this
@@ -70,6 +87,15 @@ pub struct Config {
     /// market via `DARKNYX_TEE_MARKETS_JSON`; the singular compatibility path
     /// uses `DARKNYX_TEE_FEED_IDS`. Each entry is a 64-char-hex Pyth feed id.
     pub feed_ids: Vec<String>,
+    /// Complete signer/emitter/quorum profile for the Pyth payload generation.
+    /// This is explicit and versioned; it is never selected from VAA fields.
+    pub pyth_trust_profile: TrustProfile,
+    /// Hermes base URL. The router profile defaults to the upgraded authenticated
+    /// endpoint; the legacy profile defaults to the pre-cutover endpoint.
+    pub hermes_endpoint: String,
+    /// Bearer credential supplied only through encrypted deployment env. Its
+    /// `Debug` implementation is redacted.
+    pub pyth_api_key: Option<SecretString>,
 
     /// Merkle cold-boot floor slot. `getSignaturesForAddress` history
     /// below this slot is ignored, so the sync only replays leaves from
@@ -179,6 +205,25 @@ fn env_string_or(var: &str, default: &str) -> String {
         Ok(s) if !s.trim().is_empty() => s.trim().to_string(),
         _ => default.to_string(),
     }
+}
+
+fn validate_hermes_endpoint(endpoint: &str) -> Result<()> {
+    let parsed =
+        reqwest::Url::parse(endpoint).context("DARKNYX_TEE_HERMES_ENDPOINT is not a URL")?;
+    let loopback = matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "::1"));
+    if parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback) {
+        bail!("DARKNYX_TEE_HERMES_ENDPOINT must use HTTPS (HTTP is allowed only on loopback)");
+    }
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        bail!(
+            "DARKNYX_TEE_HERMES_ENDPOINT must not contain credentials, query parameters, or a fragment"
+        );
+    }
+    Ok(())
 }
 
 /// Parse a 32-byte mint from a base58 env var. Unset/empty → `default`;
@@ -414,6 +459,17 @@ impl Config {
                     .collect()
             })
             .unwrap_or_default();
+        let pyth_trust_profile =
+            env_string_or("DARKNYX_TEE_PYTH_TRUST_PROFILE", TrustProfile::LEGACY_NAME)
+                .parse::<TrustProfile>()
+                .context("DARKNYX_TEE_PYTH_TRUST_PROFILE")?;
+        let default_hermes_endpoint = match pyth_trust_profile {
+            TrustProfile::LegacyWormholeV1 => DEFAULT_HERMES_ENDPOINT,
+            TrustProfile::RouterQuorumV1 => UPGRADED_HERMES_ENDPOINT,
+        };
+        let hermes_endpoint = env_string_or("DARKNYX_TEE_HERMES_ENDPOINT", default_hermes_endpoint);
+        validate_hermes_endpoint(&hermes_endpoint)?;
+        let pyth_api_key = env_nonempty("DARKNYX_TEE_PYTH_API_KEY").map(SecretString);
 
         let dstack_socket = std::env::var("DSTACK_SIMULATOR_ENDPOINT")
             .ok()
@@ -477,6 +533,9 @@ impl Config {
             dstack_socket,
             allow_test_auth,
             feed_ids,
+            pyth_trust_profile,
+            hermes_endpoint,
+            pyth_api_key,
             sync_from_slot: parse_u64_env("DARKNYX_TEE_SYNC_FROM_SLOT", 0)?,
             base_mint: primary.base_mint,
             quote_mint: primary.quote_mint,
@@ -572,5 +631,22 @@ mod tests {
             "DARKNYX_TEE_API_KEY",
             "fresh-production-key"
         ));
+    }
+
+    #[test]
+    fn pyth_api_key_debug_is_redacted() {
+        let secret = SecretString("never-print-this".into());
+        assert_eq!(secret.expose(), "never-print-this");
+        assert_eq!(format!("{secret:?}"), "[REDACTED]");
+        assert!(!format!("{secret:?}").contains(secret.expose()));
+    }
+
+    #[test]
+    fn hermes_endpoint_rejects_secret_bearing_or_plaintext_remote_urls() {
+        validate_hermes_endpoint("https://pyth.example/hermes").unwrap();
+        validate_hermes_endpoint("http://127.0.0.1:8080").unwrap();
+        assert!(validate_hermes_endpoint("http://pyth.example/hermes").is_err());
+        assert!(validate_hermes_endpoint("https://key@pyth.example/hermes").is_err());
+        assert!(validate_hermes_endpoint("https://pyth.example/hermes?key=secret").is_err());
     }
 }

@@ -9,6 +9,7 @@ use darkpool_matcher::book::{
     Order, OrderBook, OrderSide, OrderStatus, OrderType, OrderUpdateKind,
 };
 use darkpool_matcher::config::{MatchConfig, OracleSnapshot};
+use darkpool_matcher::error::MatchError;
 use darkpool_matcher::{run_batch, run_batch_capped};
 use proptest::prelude::*;
 
@@ -118,13 +119,45 @@ fn oracle(twap: u64) -> OracleSnapshot {
     OracleSnapshot {
         twap,
         confidence: 0,
-        exponent: 0,
-        publish_slot: 1,
+        publish_time_ms: 1,
+        observed_at_ms: 1,
+        max_age_ms: 5_000,
+        max_future_skew_ms: 1_000,
     }
 }
 
 fn book_of(orders: Vec<Order>) -> OrderBook {
     OrderBook { orders }
+}
+
+#[test]
+fn direct_matcher_rejects_signed_stale_oracle() {
+    let stale = OracleSnapshot {
+        twap: 100,
+        confidence: 0,
+        publish_time_ms: 1_000,
+        observed_at_ms: 6_001,
+        max_age_ms: 5_000,
+        max_future_skew_ms: 1_000,
+    };
+    let error = run_batch(&book_of(Vec::new()), &stale, &config(10_000, 0), 42, 0)
+        .expect_err("a caller cannot bypass signed-time freshness");
+    assert!(matches!(error, MatchError::OracleStale { .. }));
+}
+
+#[test]
+fn direct_matcher_rejects_future_dated_oracle() {
+    let future = OracleSnapshot {
+        twap: 100,
+        confidence: 0,
+        publish_time_ms: 2_001,
+        observed_at_ms: 1_000,
+        max_age_ms: 5_000,
+        max_future_skew_ms: 1_000,
+    };
+    let error = run_batch(&book_of(Vec::new()), &future, &config(10_000, 0), 42, 0)
+        .expect_err("a caller cannot bypass future-skew validation");
+    assert!(matches!(error, MatchError::OracleStale { .. }));
 }
 
 // ─────── Scenario 1: uniform clearing price ─────────────────────────────────

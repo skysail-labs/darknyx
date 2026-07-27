@@ -18,15 +18,26 @@
 #   phala deploy -n darknyx-gpu -c deploy/docker-compose.gpu.yaml -e /tmp/darknyx.env \
 #     -t h200.small --kms phala --wait
 # Then confirm CC mode:  phala ssh -- nvidia-smi conf-compute -q   # ConfComputeMode : ON
-# STOP after the session: phala cvms stop <app_id>   (H200 is ~$3.50/hr)
+# NEVER stop an on-demand GPU CVM: the fixed window is prepaid, and stopping
+# permanently deallocates the GPU. Leave it running until the window expires.
+# This differs intentionally from the stop-after-use rule for billable CPU CVMs.
 
 services:
   darknyx-tee:
     # The ICICLE CUDA image (built by tee-image.yml with ENABLE_CUDA=1 — a
-    # `-cuda`-suffixed tag). Bump per image iteration.
-    # -68-cuda is BUILT + on ghcr and is the image that passed the first real
-    # H200 settle (2026-07-21). The earlier -63-cuda tag was never built.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-69-cuda
+    # `-cuda`-suffixed tag), pinned by IMMUTABLE DIGEST for the same reason as
+    # the CPU compose: compose_hash hashes this text, so a mutable tag lets the
+    # measured enclave's code change underneath an unchanged measurement.
+    #
+    # This previously pointed at tee-v3-hardening-69-cuda, a tag that did not
+    # exist in GHCR at all — the `-cuda` build had been failing since the
+    # DARKNYX_ICICLE_CUDA_ARCH rename (see 05c86ef), so no image was ever
+    # published under it. A GPU deploy would have failed at image pull.
+    #
+    # Source tag for audit cross-reference: tee-v3-hardening-74-cuda (05c86ef),
+    # the first green `-cuda` build after that fix. Enforced by
+    # scripts/check-compose-image-digests.sh.
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:1001d5a0ae45d86c624c265c3598b490f7b511aa3349faa1c2ea03d29d367854
     restart: unless-stopped
 
     # Device-node permissions. The image drops to `USER darknyx` (non-root) but
@@ -59,6 +70,9 @@ services:
       DARKNYX_TEE_LOG: "info,darknyx_tee::settle=debug,darknyx_tee::oracle=info,darknyx_tee::merkle=info"
       DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"
       DARKNYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+      DARKNYX_TEE_PYTH_TRUST_PROFILE: "router-quorum-v1"
+      DARKNYX_TEE_HERMES_ENDPOINT: "https://pyth.dourolabs.app/hermes"
+      DARKNYX_TEE_PYTH_API_KEY: ${DARKNYX_TEE_PYTH_API_KEY}
       DARKNYX_TEE_STATE_DIR: "/var/lib/darknyx-tee"
 
       # BOOTSTRAP admin from the encrypted deploy env. Public test credentials

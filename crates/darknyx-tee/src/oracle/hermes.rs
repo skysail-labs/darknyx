@@ -34,12 +34,14 @@
 
 use anyhow::Result;
 use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 /// Default Hermes endpoint. Override via `HermesClient::with_endpoint`
 /// if we need to point at hermes-beta.pyth.network or a
 /// self-hosted mirror.
 pub const DEFAULT_HERMES_ENDPOINT: &str = "https://hermes.pyth.network";
+pub const UPGRADED_HERMES_ENDPOINT: &str = "https://pyth.dourolabs.app/hermes";
 
 #[derive(Debug, thiserror::Error)]
 pub enum HermesError {
@@ -49,12 +51,8 @@ pub enum HermesError {
         #[source]
         source: reqwest::Error,
     },
-    #[error("Hermes returned HTTP {status} for {url}: {body}")]
-    Status {
-        url: String,
-        status: u16,
-        body: String,
-    },
+    #[error("Hermes returned HTTP {status} for {url}")]
+    Status { url: String, status: u16 },
     #[error("Hermes response JSON parse failed for {url}: {source}")]
     Json {
         url: String,
@@ -63,23 +61,23 @@ pub enum HermesError {
     },
     #[error("Hermes returned no parsed price for feed {feed_id}")]
     MissingParsed { feed_id: String },
-    #[error("Hermes returned no VAA binary data for feed {feed_id}")]
-    MissingVaa { feed_id: String },
+    #[error("Hermes returned {actual} binary payloads; expected exactly one batched accumulator")]
+    BinaryPayloadCount { actual: usize },
+    #[error("Hermes binary encoding {0:?} is unsupported (expected hex)")]
+    UnsupportedEncoding(String),
+    #[error("Hermes returned duplicate parsed price for feed {feed_id}")]
+    DuplicateParsed { feed_id: String },
     #[error("invalid hex in Hermes VAA binary: {0}")]
     InvalidHex(#[from] hex::FromHexError),
-    #[error("Pyth EMA price was non-positive ({0}) — refusing to cache")]
-    NonPositivePrice(i64),
+    #[error("Pyth EMA price for {feed_id} was non-positive ({price}) — refusing to cache")]
+    NonPositivePrice { feed_id: String, price: i64 },
+    #[error("no Pyth feed ids supplied")]
+    EmptyRequest,
 }
 
 #[derive(Debug, Clone)]
 pub struct HermesPriceUpdate {
     pub feed_id: String,
-    /// Raw `AccumulatorUpdateData` (PNAU) bytes from `binary.data[0]` — the
-    /// **trusted** price source. The caller (`sync.rs`) verifies the VAA
-    /// guardian signatures, extracts the guardian-signed Merkle root, proves
-    /// the price message's inclusion under it, and decodes the price from
-    /// THIS binary — not from the JSON fields below (C-05 / A-2).
-    pub accumulator: Vec<u8>,
     /// EMA price as reported by Hermes's JSON `parsed[]`. Used **only** as a
     /// cross-check against the binary-proven value; never cached directly. A
     /// malicious/buggy Hermes could put a fabricated value here, so it is not
@@ -92,10 +90,18 @@ pub struct HermesPriceUpdate {
     pub json_publish_time_ms: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct HermesBatchUpdate {
+    /// One `AccumulatorUpdateData` envelope containing every requested feed.
+    pub accumulator: Vec<u8>,
+    pub prices: HashMap<String, HermesPriceUpdate>,
+}
+
 #[derive(Clone)]
 pub struct HermesClient {
     endpoint: String,
     http: reqwest::Client,
+    access_token: Option<String>,
 }
 
 impl HermesClient {
@@ -104,6 +110,13 @@ impl HermesClient {
     }
 
     pub fn with_endpoint(endpoint: &str) -> Result<Self, reqwest::Error> {
+        Self::with_endpoint_and_token(endpoint, None)
+    }
+
+    pub fn with_endpoint_and_token(
+        endpoint: &str,
+        access_token: Option<&str>,
+    ) -> Result<Self, reqwest::Error> {
         let http = reqwest::Client::builder()
             // Reasonable timeouts. Hermes responds in 10-200 ms typically;
             // 5 s is generous enough for slow network days.
@@ -113,20 +126,18 @@ impl HermesClient {
         Ok(Self {
             endpoint: endpoint.trim_end_matches('/').to_string(),
             http,
+            access_token: access_token.map(ToOwned::to_owned),
         })
     }
 
-    /// Fetch the latest price + VAA for a single feed id (hex).
-    pub async fn fetch(&self, feed_id: &str) -> Result<HermesPriceUpdate, HermesError> {
-        let url = format!(
-            "{}/v2/updates/price/latest?ids[]={}",
-            self.endpoint, feed_id
-        );
-
+    /// Fetch one accumulator containing every configured feed. This is one
+    /// authenticated HTTP request regardless of market count.
+    pub async fn fetch_many(&self, feed_ids: &[String]) -> Result<HermesBatchUpdate, HermesError> {
+        let request = self.build_request(feed_ids)?;
+        let url = request.url().to_string();
         let resp = self
             .http
-            .get(&url)
-            .send()
+            .execute(request)
             .await
             .map_err(|source| HermesError::Http {
                 url: url.clone(),
@@ -135,11 +146,9 @@ impl HermesClient {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(HermesError::Status {
                 url: url.clone(),
                 status: status.as_u16(),
-                body,
             });
         }
 
@@ -153,55 +162,97 @@ impl HermesClient {
                 source,
             })?;
 
+        self.parse_response(feed_ids, parsed, &url)
+    }
+
+    fn build_request(&self, feed_ids: &[String]) -> Result<reqwest::Request, HermesError> {
+        if feed_ids.is_empty() {
+            return Err(HermesError::EmptyRequest);
+        }
+        let url = format!("{}/v2/updates/price/latest", self.endpoint);
+        let query = feed_ids
+            .iter()
+            .map(|feed_id| ("ids[]", feed_id.as_str()))
+            .collect::<Vec<_>>();
+
+        let mut request = self.http.get(&url).query(&query);
+        if let Some(token) = &self.access_token {
+            request = request.bearer_auth(token);
+        }
+        request
+            .build()
+            .map_err(|source| HermesError::Http { url, source })
+    }
+
+    fn parse_response(
+        &self,
+        feed_ids: &[String],
+        parsed: RawResponse,
+        url: &str,
+    ) -> Result<HermesBatchUpdate, HermesError> {
         // Keep the raw `AccumulatorUpdateData` (PNAU) bytes intact. Hermes
-        // returns hex strings in `binary.data[]`; we take the first one
-        // (single-feed queries have one). `sync.rs` parses + verifies it: it
+        // returns hex strings in `binary.data[]`; the batched request must
+        // return exactly one envelope. `sync.rs` parses + verifies it: it
         // extracts the VAA, checks the guardian signatures, proves the price
         // message's Merkle inclusion under the guardian-signed root, and
         // decodes the price from the binary. This is the C-05 fix — we no
         // longer trust the JSON `parsed[]` price as the source.
-        let accum_hex =
-            parsed
-                .binary
-                .data
-                .into_iter()
-                .next()
-                .ok_or_else(|| HermesError::MissingVaa {
-                    feed_id: feed_id.to_string(),
-                })?;
+        if !parsed.binary.encoding.eq_ignore_ascii_case("hex") {
+            return Err(HermesError::UnsupportedEncoding(parsed.binary.encoding));
+        }
+        if parsed.binary.data.len() != 1 {
+            return Err(HermesError::BinaryPayloadCount {
+                actual: parsed.binary.data.len(),
+            });
+        }
+        let accum_hex = parsed.binary.data.into_iter().next().unwrap();
         let accumulator = hex::decode(accum_hex)?;
 
-        // The JSON `parsed[]` entry is kept ONLY as a cross-check against the
-        // binary-proven value (`sync.rs` rejects a JSON-vs-binary mismatch).
-        let raw_entry = parsed
-            .parsed
-            .into_iter()
-            .find(|p| p.id.eq_ignore_ascii_case(feed_id))
-            .ok_or_else(|| HermesError::MissingParsed {
-                feed_id: feed_id.to_string(),
-            })?;
-
-        // Pyth's `price` field is a string-encoded i64 ("Pyth-native" fixed
-        // point per `expo`). The EMA shares the same scaling.
-        let raw_price: i64 = raw_entry
-            .ema_price
-            .price
-            .parse()
-            .map_err(|_| HermesError::Json {
-                url: url.clone(),
-                source: serde::de::Error::custom("ema_price.price not a valid i64"),
-            })?;
-        if raw_price <= 0 {
-            return Err(HermesError::NonPositivePrice(raw_price));
+        let requested = feed_ids
+            .iter()
+            .map(|feed| feed.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        let mut prices = HashMap::with_capacity(feed_ids.len());
+        for raw_entry in parsed.parsed {
+            let feed_id = raw_entry.id.to_ascii_lowercase();
+            if !requested.contains(&feed_id) {
+                continue;
+            }
+            let raw_price: i64 =
+                raw_entry
+                    .ema_price
+                    .price
+                    .parse()
+                    .map_err(|_| HermesError::Json {
+                        url: url.to_string(),
+                        source: serde::de::Error::custom("ema_price.price not a valid i64"),
+                    })?;
+            if raw_price <= 0 {
+                return Err(HermesError::NonPositivePrice {
+                    feed_id,
+                    price: raw_price,
+                });
+            }
+            let update = HermesPriceUpdate {
+                feed_id: feed_id.clone(),
+                json_ema_price: raw_price as u64,
+                json_exponent: raw_entry.ema_price.expo,
+                json_publish_time_ms: raw_entry.ema_price.publish_time.saturating_mul(1000),
+            };
+            if prices.insert(feed_id.clone(), update).is_some() {
+                return Err(HermesError::DuplicateParsed { feed_id });
+            }
         }
-
-        Ok(HermesPriceUpdate {
-            feed_id: raw_entry.id,
+        for feed_id in feed_ids {
+            if !prices.contains_key(&feed_id.to_ascii_lowercase()) {
+                return Err(HermesError::MissingParsed {
+                    feed_id: feed_id.clone(),
+                });
+            }
+        }
+        Ok(HermesBatchUpdate {
             accumulator,
-            json_ema_price: raw_price as u64,
-            json_exponent: raw_entry.ema_price.expo,
-            // Hermes returns publish_time as seconds; convert to ms.
-            json_publish_time_ms: raw_entry.ema_price.publish_time * 1000,
+            prices,
         })
     }
 }
@@ -216,7 +267,6 @@ struct RawResponse {
 
 #[derive(Debug, Deserialize)]
 struct RawBinary {
-    #[allow(dead_code)]
     encoding: String,
     data: Vec<String>,
 }
@@ -239,4 +289,67 @@ struct RawPrice {
 
 // The `AccumulatorUpdateData` (PNAU) wrapper is parsed + Merkle-verified in
 // `oracle::accumulator` (owned there so the wire format lives in one place);
-// `fetch` above returns the raw bytes untouched.
+// `fetch_many` above returns the raw bytes untouched.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::AUTHORIZATION;
+
+    #[test]
+    fn fetch_many_builds_one_authenticated_request_for_all_feeds() {
+        let first = "aa".repeat(32);
+        let second = "bb".repeat(32);
+        let client = HermesClient::with_endpoint_and_token(
+            "https://pyth.example/hermes",
+            Some("private-token"),
+        )
+        .unwrap();
+        let request = client
+            .build_request(&[first.clone(), second.clone()])
+            .unwrap();
+        let query = request.url().query_pairs().collect::<Vec<_>>();
+        assert_eq!(
+            query
+                .iter()
+                .filter(|(name, _)| name.as_ref() == "ids[]")
+                .count(),
+            2,
+            "one request carries both repeated ids[] query parameters"
+        );
+        assert_eq!(query[0].1, first);
+        assert_eq!(query[1].1, second);
+        assert_eq!(request.headers()[AUTHORIZATION], "Bearer private-token");
+
+        let body = format!(
+            r#"{{
+                "binary": {{"encoding":"hex","data":["00"]}},
+                "parsed": [
+                    {{"id":"{first}","ema_price":{{"price":"100","expo":-8,"publish_time":10}}}},
+                    {{"id":"{second}","ema_price":{{"price":"200","expo":-8,"publish_time":11}}}}
+                ]
+            }}"#
+        );
+        let parsed = serde_json::from_str(&body).unwrap();
+        let update = client
+            .parse_response(
+                &[first.clone(), second.clone()],
+                parsed,
+                request.url().as_str(),
+            )
+            .unwrap();
+        assert_eq!(update.accumulator, vec![0]);
+        assert_eq!(update.prices.len(), 2);
+    }
+
+    #[test]
+    fn status_error_never_echoes_bearer_token() {
+        let error = HermesError::Status {
+            url: "https://pyth.example/hermes/v2/updates/price/latest".into(),
+            status: 401,
+        };
+        let rendered = error.to_string();
+        assert!(rendered.contains("401"));
+        assert!(!rendered.contains("do-not-log-me"));
+    }
+}

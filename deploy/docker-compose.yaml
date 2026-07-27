@@ -18,11 +18,18 @@ services:
   # The main darknyx-tee binary — matcher, prover, settle scheduler,
   # indexer, API server. See crates/darknyx-tee/ + docs/tee-architecture.md.
   darknyx-tee:
-    # TODO(phase 1): replace with a pinned ghcr.io/<org>/darknyx-tee@sha256:...
-    # digest once we set up the build pipeline. Local builds during
-    # Phase 1 use `phala docker build` + `phala docker push` to push
-    # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-72
+    # Pinned by IMMUTABLE DIGEST, never by tag. `compose_hash` hashes this
+    # file's text, so a mutable tag would bind only "run whatever is at that
+    # tag" — anyone able to re-point it changes the code the enclave runs while
+    # RTMR3, the governance allowlist entry, and every client's expected
+    # compose_hash stay byte-identical, and attestation still passes. The digest
+    # makes compose_hash transitively bind the exact image bytes, which is what
+    # the measurement is already assumed to mean.
+    #
+    # Source tag for audit cross-reference: tee-v3-hardening-74 (commit 05c86ef).
+    # The tag is a build label only; the digest is the deployed identity.
+    # Enforced on every PR by scripts/check-compose-image-digests.sh.
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:dddf0116363e8ab9112bc09a7cf97558f00f2306016094ba6bcb917a64253ad3
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
@@ -51,14 +58,17 @@ services:
       DARKNYX_TEE_LOG: "info,darknyx_tee::settle=debug,darknyx_tee::oracle=info,darknyx_tee::merkle=info"
       DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"
 
-      # Real Pyth Hermes feed for the matcher's oracle. This is the
-      # canonical SOL/USD mainnet feed id (see crates/darknyx-tee/src/oracle/
-      # cache.rs). One feed only: the oracle-sync polls Hermes once per
-      # feed every 1 s (main.rs), and Pyth's free public Hermes caps at
-      # 10 req / 10 s per IP — one feed sits right at that edge, and the
-      # matcher's 5 s staleness window (DEFAULT_MAX_ORACLE_AGE_MS) absorbs
-      # the occasional 429. Do NOT add a second feed here for the bench.
+      # Real Pyth feed for the matcher's oracle. Every configured feed is
+      # requested in ONE authenticated Hermes batch per refresh. The explicit
+      # profile pins the complete upgraded router signer set, quorum, and Pyth
+      # emitter; the TEE never infers a trust profile from the payload.
       DARKNYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
+      DARKNYX_TEE_PYTH_TRUST_PROFILE: "router-quorum-v1"
+      DARKNYX_TEE_HERMES_ENDPOINT: "https://pyth.dourolabs.app/hermes"
+      # Upgraded Hermes bearer credential. Supplied through the encrypted
+      # deploy env; missing/invalid auth leaves the oracle pause reason set, so
+      # cancellation/reconciliation continue while new trading stays closed.
+      DARKNYX_TEE_PYTH_API_KEY: ${DARKNYX_TEE_PYTH_API_KEY}
 
       # State directory for the auth snapshot (accounts.db). Points at
       # the persistent volume mounted above so registrations + token
@@ -81,7 +91,7 @@ services:
       # unset var interpolates empty → the app falls back to its
       # default (public devnet RPC / no sync floor).
       #
-      # Solana RPC the matcher oracle (no) + the Merkle sync (yes) use.
+      # Solana RPC the Merkle sync and settlement pipeline use.
       # MUST be a private RPC (Helius); the public devnet RPC 429s on
       # the sync's getSignaturesForAddress. DO NOT hardcode a key here.
       DARKNYX_TEE_SOLANA_RPC_URL: ${DARKNYX_TEE_SOLANA_RPC_URL}
