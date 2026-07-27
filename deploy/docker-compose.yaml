@@ -18,11 +18,18 @@ services:
   # The main darknyx-tee binary — matcher, prover, settle scheduler,
   # indexer, API server. See crates/darknyx-tee/ + docs/tee-architecture.md.
   darknyx-tee:
-    # TODO(phase 1): replace with a pinned ghcr.io/<org>/darknyx-tee@sha256:...
-    # digest once we set up the build pipeline. Local builds during
-    # Phase 1 use `phala docker build` + `phala docker push` to push
-    # to Phala's image registry directly.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-72
+    # Pinned by IMMUTABLE DIGEST, never by tag. `compose_hash` hashes this
+    # file's text, so a mutable tag would bind only "run whatever is at that
+    # tag" — anyone able to re-point it changes the code the enclave runs while
+    # RTMR3, the governance allowlist entry, and every client's expected
+    # compose_hash stay byte-identical, and attestation still passes. The digest
+    # makes compose_hash transitively bind the exact image bytes, which is what
+    # the measurement is already assumed to mean.
+    #
+    # Source tag for audit cross-reference: tee-v3-hardening-74 (commit 05c86ef).
+    # The tag is a build label only; the digest is the deployed identity.
+    # Enforced on every PR by scripts/check-compose-image-digests.sh.
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:dddf0116363e8ab9112bc09a7cf97558f00f2306016094ba6bcb917a64253ad3
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:

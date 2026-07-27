@@ -25,11 +25,19 @@
 services:
   darknyx-tee:
     # The ICICLE CUDA image (built by tee-image.yml with ENABLE_CUDA=1 — a
-    # `-cuda`-suffixed tag). Bump per image iteration.
-    # The release workflow builds this source under a fresh `-cuda` tag; deploy
-    # only the digest resolved from that build. The tag is an audit label, not
-    # the deployed identity.
-    image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-69-cuda
+    # `-cuda`-suffixed tag), pinned by IMMUTABLE DIGEST for the same reason as
+    # the CPU compose: compose_hash hashes this text, so a mutable tag lets the
+    # measured enclave's code change underneath an unchanged measurement.
+    #
+    # This previously pointed at tee-v3-hardening-69-cuda, a tag that did not
+    # exist in GHCR at all — the `-cuda` build had been failing since the
+    # DARKNYX_ICICLE_CUDA_ARCH rename (see 05c86ef), so no image was ever
+    # published under it. A GPU deploy would have failed at image pull.
+    #
+    # Source tag for audit cross-reference: tee-v3-hardening-74-cuda (05c86ef),
+    # the first green `-cuda` build after that fix. Enforced by
+    # scripts/check-compose-image-digests.sh.
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:1001d5a0ae45d86c624c265c3598b490f7b511aa3349faa1c2ea03d29d367854
     restart: unless-stopped
 
     # Device-node permissions. The image drops to `USER darknyx` (non-root) but
