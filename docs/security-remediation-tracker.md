@@ -11,6 +11,16 @@ requires merged code and the evidence named in the row. Mainnet process gates
 remain open until their external evidence exists even if supporting code and
 runbooks have landed.
 
+## Later audit trackers
+
+The 2026-07-25 TEE, infrastructure, oracle, and client-daemon review is tracked
+in its dedicated
+[`audit-2026-07-25-tee-infra-daemon-remediation-tracker.md`](audit-2026-07-25-tee-infra-daemon-remediation-tracker.md).
+That document is canonical for `T-01…T-16`, `PF-08…PF-10`, and its additional
+release-readiness deliverables. T-05 is an explicitly accepted `Won't Fix`
+risk, and AU-07 remains canonically owned by the earlier July 25 tracker while
+being a required transport-remediation dependency there.
+
 ## Cryptography and systems findings
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
