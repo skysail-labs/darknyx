@@ -81,6 +81,14 @@ oracle CPU p50/p95 was **not** captured: refresh timing logs at `debug` and the
 compose pins `darknyx_tee::oracle=info`. That measurement remains outstanding
 for `Closed` and needs either a debug-level run or an exported counter.
 
+**Evidence-vintage caveat.** This run predates the two oracle-cache fixes made
+during slice-1 review (conflicting-replay false positive + the retimed local-
+arrival test). The captured evidence remains valid — neither the fail-closed boot
+path nor the settle path exercises the same-publish-second case — but the image
+digest pinned in the compose is the one tested, and merged source now differs
+from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
+`compose_hash` regardless, so no extra ceremony is incurred by deferring it.
+
 ## Validation provenance
 
 - The audit addendum revalidated the earlier remediation suite at
