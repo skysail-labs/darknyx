@@ -1,494 +1,400 @@
 # Darknyx Darkpool — Architecture
 
-Darknyx (aka **darknyx**) is a privacy-preserving CLOB-style darkpool on
-Solana. Order intent (side, price, amount, the note backing it) never
-appears on-chain, and **per-trade amounts + the execution price are hidden
-at settlement too** — the on-chain settle tx carries only note commitments,
-no plaintext amounts (see *Settlement amount privacy* below). Matching and
-settlement run **inside an Intel TDX confidential VM (a "CVM") on Phala
-Cloud**.
+> As-built system map for contributors. Read
+> [`../CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md) for the note/circuit/wire details,
+> [`tee-architecture.md`](tee-architecture.md) for the CVM internals, and
+> [`tee-api-openapi.yaml`](tee-api-openapi.yaml) for the API contract.
+>
+> **Last reviewed:** 2026-07-26.
 
-This doc is the system-level map. For the cryptography see
-[`CRYPTOGRAPHY.md`](../CRYPTOGRAPHY.md); for the agent build/deploy/test
-contract see [`CLAUDE.md`](../CLAUDE.md); for commands see
-[`scripts/dev-commands.md`](../scripts/dev-commands.md).
+Darknyx is a privacy-preserving, CLOB-style darkpool on Solana. Users keep
+custody through shielded notes and client-generated Groth16 proofs. Hidden
+order intake, uniform-price matching, match proving, and settlement
+orchestration run inside an attested Intel TDX confidential VM (CVM). The
+Solana vault is the sole custody and settlement authority.
 
----
+There is no on-chain order book, MagicBlock/Ephemeral Rollup path, or
+`matching_engine` program.
 
 ## System overview
 
-Three layers, three trust boundaries:
+```text
+Client / daemon
+  keys + VALID_DEPOSIT / VALID_INPUT / VALID_SPEND / VALID_MERGE proofs
+  canonical order/cancel signatures
+  TDX attestation + finalized-governance verification
+                         │ authenticated HTTPS + /v1/stream
+                         ▼
+Intel TDX CVM (crates/darknyx-tee)
+  1..16 configured markets, one book + 2 s matcher driver per symbol
+  proof verification at intake, collateral reservation, Pyth guardrails
+  N=16 VALID_MATCH_BATCH proving
+  K Merkle mirrors + K dstack-derived settle signers
+  lock → verify → ALT → settle → expiry-gated sweep
+                         │ signed Solana transactions
+                         ▼
+Solana vault (programs/vault)
+  SPL custody + per-mint outstanding accounting
+  K append-only Merkle-tree shards
+  VALID_* Groth16 verifiers
+  commitment-keyed deposit/consume guards + bounded locks
+  one enabled MarketConfig per mint pair
+```
 
-| Layer | Tech | Owns |
+The trust split is deliberate:
+
+| Layer | Enforces | Trust boundary |
 |---|---|---|
-| **L1 (Solana)** | `programs/vault` (Anchor 0.32) | Custody, the incremental note Merkle tree, the nullifier / consumed-note / lock PDA sets, the Groth16 verifier, atomic batched settlement |
-| **TEE (CVM)** | `crates/darknyx-tee` in a TDX CVM on Phala | Hidden order intake (`POST /orders`), uniform-clearing-price matching, consumed-input-derived outputs, the settle pipeline, Merkle mirrors, and auth'd HTTP/WS |
-| **Client** | `packages/sdk` (TypeScript) + snarkjs | Key derivation, VALID_DEPOSIT/VALID_INPUT proof generation, deterministic output recovery helpers, ix builders, `POST` to the CVM |
+| `vault` | Custody, proof verification, note conservation, exact fees, market identity/price scale, consume-once, TTLs | Solana program + Groth16 soundness |
+| CVM | Order confidentiality, signature/session/nonce policy, uniform-price fairness, limit/tick/min/breaker rules, liveness | Attested code and governance-approved measurement |
+| client/daemon | Seed custody, proofs, intent signatures, fill/recovery validation, strict attestation refresh | User device |
 
-```
-  ┌──────────────┐  deposit + proof (L1)    ┌────────────────────┐
-  │  User wallet ├────────────────────────► │  vault::deposit    │  note → Merkle tree
-  │  (browser)   │                          └────────────────────┘
-  └──────┬───────┘
-         │  POST /orders   (TLS to the CVM; auth'd; carries a VALID_INPUT proof
-         │  ★ side / price / amount / note_commitment NEVER touch any L1 tx
-         ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │  TEE / CVM (crates/darknyx-tee)                                  │
-  │   • intake: verify trading-key sig + the note opening        │
-  │   • match:  uniform clearing price (darkpool-matcher)        │
-  │   • settle pipeline, signed by the enclave's Ed25519 key:    │
-  └─────────────────────────────────────────────────────────────┘
-         │  drives the vault settle ixs directly on L1 (per batch, ≤ N=16 matches)
-         ▼
-  Tx A  vault::lock_note ×2 / match            ── VALID_INPUT proof per input note;
-        sent CONCURRENTLY (bounded), fee-payer round-robined across the K shard keys
-  Tx B  vault::verify_match_batch              ── ONE VALID_MATCH_BATCH Groth16 (≤16)
-        (writes ONE BatchValidityMarker keyed by the batch merkle_root)
-  Tx C  per-batch Address Lookup Table (create + CHUNKED extend, fired concurrently;
-        canonical address order re-read from chain) holding the settle-derivable PDAs
-  Tx D  vault::tee_forced_settle_batched / match ── Ed25519 + marker check + depth-4
-        Merkle inclusion proof; appends note_c (buyer BASE) + note_d (seller QUOTE)
-        + note_e/f (change, on partial fill) + base/quote fee notes to merkle_tree[tree_id].
-        Each match round-robins (shard key[j], merkle_tree[j]) so the leader co-includes
-        the batch's Tx D's in ONE block. v0 + stacked ALTs.
-  Tx E  vault::close_batch_validity_marker     ── ONCE at/after marker expiry; reclaims rent
-         │
-         │  withdraw (L1, VALID_SPEND proof)
-         ▼
-  SPL tokens released to the user wallet
-```
-
-There is **no on-chain CLOB and no MagicBlock Ephemeral Rollup** — the
-in-CVM matcher replaced them. The only on-chain program is `vault`.
-
----
+The proof prevents a malicious CVM from inflating value, changing the asset
+pair, misrouting output ownership, or selecting arbitrary output randomness.
+Price fairness remains TEE-trusted: the circuit proves scaled floor arithmetic
+and conservation, but not order-limit signatures or the Pyth band.
 
 ## Project layout
 
-```
-darknyx-monorepo/
-├── programs/vault/                  # The ONLY on-chain program (Anchor 0.32)
-│   ├── src/
-│   │   ├── lib.rs                    # #[program] entrypoints
-│   │   ├── state.rs                  # VaultConfig (global authorities/fees), MarketConfig
-│   │   │                             #   (mint pair/scale/bounds), MerkleTree (per-shard tree
-│   │   │                             #   state), WalletEntry, NullifierEntry,
-│   │   │                             #   ConsumedNoteEntry, NoteLock, OutstandingMint,
-│   │   │                             #   BatchValidityMarker
-│   │   ├── merkle.rs                 # Incremental Poseidon Merkle tree (depth 20), per shard
-│   │   ├── instructions/
-│   │   │   ├── initialize.rs                  # Upgrade-authority init; distinct operations admin
-│   │   │   ├── initialize_market.rs           # Create governed mint-pair MarketConfig
-│   │   │   ├── update_market_config.rs        # Operations-admin parameters + kill switch
-│   │   │   ├── initialize_tree.rs             # Create one MerkleTree shard [tree_id]
-│   │   │   ├── create_wallet.rs               # VALID_WALLET_CREATE proof → WalletEntry
-│   │   │   ├── deposit.rs                      # Pull SPL → append note to merkle_tree[id] + outstanding[mint]++
-│   │   │   ├── lock_note.rs                    # TEE-only, VALID_INPUT-gated pin of an input note
-│   │   │   ├── merge.rs                        # VALID_MERGE(K=2/4): consolidate K notes → 1 (in-pool)
-│   │   │   ├── release_lock.rs                 # Release an expired NoteLock
-│   │   │   ├── verify_match_batch.rs           # VALID_MATCH_BATCH (N=16) → BatchValidityMarker
-│   │   │   ├── tee_forced_settle_batched.rs    # Ed25519 + marker + depth-4 Merkle; the settle
-│   │   │   ├── tee_forced_settle.rs            # SHARED: MatchResultPayload + canonical hash +
-│   │   │   │                                   #   verify_tee_signature + create_relock_pda
-│   │   │   ├── close_batch_validity_marker.rs  # Reclaim the 1:N marker's rent after the batch
-│   │   │   ├── withdraw.rs                     # VALID_SPEND proof → outstanding[mint]-- → SPL out
-│   │   │   ├── set_protocol_config.rs          # Admin: protocol-owner commitment / fee bps
-│   │   │   ├── set_tee_pubkey.rs               # Admin: install the K authorized TEE signers (Vec)
-│   │   │   ├── rotate_root_key.rs              # Admin: rotate the permission-group root key
-│   │   │   ├── close_vault_config.rs           # DEVNET-ONLY: close VaultConfig for a layout migration
-│   │   │   └── reset_merkle_tree.rs            # DEVNET-ONLY: per-shard tree wipe for tests
-│   │   └── zk/                                 # Embedded Groth16 verifier-key consts
-│   │       ├── verifier.rs  vk_valid_wallet_create.rs  vk_valid_spend.rs
-│   │       ├── vk_valid_input.rs  vk_match_batch_n16.rs
-│   │       ├── vk_valid_merge_k2.rs  vk_valid_merge_k4.rs
-│   └── tests/                                  # litesvm integration (loads vault.so)
-│       ├── settle_harness/                     # shared harness (K-shard aware) for the settle tests
-│       ├── tee_forced_settle_batched.rs        # 1:N marker + sharding (distinct-shard / multi-key / per-shard reset)
-│       ├── match_batch_verify.rs               # real N=16 proof → on-chain verify
-│       ├── merge_verify.rs                      # VALID_MERGE(K=2/4) verify roundtrip
-│       ├── zk_roundtrip.rs  zk_spend_roundtrip.rs  merkle_host.rs
-│       └── initialize_governance.rs  market_config.rs  set_protocol_config.rs
-│           set_tee_pubkey.rs  user_commitment_registration.rs
-│
-├── crates/
-│   ├── darkpool-crypto/              # Host-side Poseidon / note / nullifier / keys
-│   │                                 #   (byte-identical to the TS SDK, parity-tested)
-│   ├── darkpool-matcher/             # The matching algorithm (single source of truth) +
-│   │                                 #   order/cancel canonical signing +
-│   │                                 #   change_note::derive_inner
-│   ├── darknyx-tee/                      # The in-CVM engine (see below)
-│   └── darknyx-tee-loadgen/              # Host binary: load-tests the CVM's /orders intake
-│
-├── circuits/                        # circom + snarkjs Groth16 circuits
-│   ├── valid_wallet_create/  valid_spend/  valid_input/
-│   ├── match_batch_n16/ (+ n2, n4 dev/test instances)
-│   ├── templates/                    # parameterised templates (MatchBatch(N), etc.)
-│   └── build/                        # .wasm + circuit_final.zkey (.zkey committed)
-│
-├── packages/sdk/                    # TypeScript client (the integration surface)
-├── deploy/docker-compose.yaml       # The CVM image + env reference
-├── dstack/                          # dstack SDK + simulator (local TEE dev)
-└── docs/                            # this file, tee-architecture, attestation-flow, the OpenAPI
+```text
+programs/vault/                 only on-chain program
+  src/state.rs                  VaultConfig, MarketConfig, MerkleTree, guards
+  src/instructions/             deposit, lock, verify, settle, merge, withdraw
+  src/zk/                       Groth16 verifier + committed VK constants
+  tests/                        litesvm circuit/account/settlement tests
+
+circuits/
+  valid_wallet_create/
+  valid_deposit/
+  valid_spend/
+  valid_input/
+  valid_merge_k2/ valid_merge_k4/
+  match_batch_n2/ n4/ n16/
+  templates/                    parameterized shared circuit components
+  build/                        generated wasm, zkeys, verification keys
+
+crates/darkpool-crypto/         Rust Poseidon/note/nullifier/key primitives
+crates/darkpool-matcher/        canonical orders + matching source of truth
+crates/darknyx-tee/             in-CVM API, books, prover, mirrors, settlement
+crates/darknyx-tee-loadgen/     authenticated intake/settlement load driver
+
+packages/sdk/                   TypeScript keys, provers, transport, recovery
+packages/daemon/                non-custodial reference trading daemon
+packages/indexer/               optional by-order-id commitment locator
+
+deploy/                         CPU/GPU compose manifests
+docs/gitbook/                   public documentation source of truth
+docs/                           internal architecture, audit, and runbooks
+scripts/                        build, parity, deploy, reset, rotation helpers
 ```
 
-### `crates/darknyx-tee` (the in-CVM engine)
+`apps/demo` is retired and is not an integration target.
 
-```
-src/
-├── boot.rs        # dstack handshake → derive the shard-0 Ed25519 signer; cold-boot the mirrors
-├── config.rs      # env-driven config (num_trees, prover backend, send concurrency), fail-fast
-├── api/           # axum HTTP/WS: REST endpoints + the sole /v1/stream socket
-├── keys/          # dstack-derived key material (K shard signers at darknyx/ed25519-signer/v2/{i})
-├── matcher/       # the order book + the interval driver (tick → match → page → settle);
-│                  #   input-inner-derived continuations + fill memos
-├── merkle/        # K per-shard Merkle mirrors (cold-boot sync + live poll, routed by tree_id)
-├── oracle/        # Pyth Hermes price feed
-├── prover/        # in-enclave Groth16 prover (VALID_MATCH_BATCH, N=16) — ark | rapidsnark backend
-├── settle/        # the settle pipeline: lock → prove → verify → ALT → settle → close;
-│                  #   K fee-payer round-robin + the rolling per-batch ALT pool
-├── persistence/   # the encrypted state volume (auth snapshot, etc.)
-└── solana_rpc/    # the RPC client (Helius on devnet)
+## Notes, keys, and recovery
+
+Every note uses the v2 amount-independent inner:
+
+```text
+commitment = Poseidon6(2, mint_lo, mint_hi, amount,
+                       owner_commitment, inner_hash)
+nullifier  = Poseidon3(3, spending_key, inner_hash)
 ```
 
----
+`owner_commitment = Poseidon3(1, spending_key, r_owner)` is wallet-wide but
+private throughout deposit, spend, merge, order lock, and settlement. The
+deposit signer and gross SPL amount remain public; VALID_DEPOSIT hides the
+owner and inner while binding the public mint, amount, commitment, and recovery
+nonce.
 
-## Privacy architecture
+The SDK supports only a securely generated 64-byte CSPRNG master seed. A
+versioned encrypted backup/import format preserves custody across devices;
+wallet-signature-derived seeds are not supported.
 
-### What is hidden, what is public
+Recovery is seed plus chain:
 
-| Hidden (never on-chain) | Public (on-chain) |
+- deposit openings derive from the public recovery nonce;
+- trade and continuation outputs derive from consumed input inners;
+- merge outputs derive from the active input commitments/bitmap;
+- each settlement carries a 128-byte X25519/ChaCha20-Poly1305 recovery
+  envelope for both sides' trade/change amounts.
+
+Live `/v1/stream` fills are the low-latency delivery path. The chain is the
+durable recovery source. `packages/indexer` can locate settlement commitments
+by deterministic order ID, but it is optional and has no daemon dependency.
+
+See [`fills-history-architecture.md`](fills-history-architecture.md).
+
+## Vault and account model
+
+### Global and market governance
+
+`VaultConfig` is global and read-only on the settle hot path. It contains:
+
+- a distinct operations admin and protocol root key;
+- a fixed `[Pubkey; 16]` signer array plus `num_tee_keys`;
+- `num_trees` and the shared empty-subtree roots;
+- the protocol fee owner commitment and fee rate.
+
+Initialization requires non-default root/signer keys and
+`num_tee_keys == num_trees`. Production governance is intended to split
+operations (3-of-5 Squads) from root/upgrade authority (cold 4-of-7 Squads).
+
+Each mint pair has a `MarketConfig` PDA containing:
+
+- base/quote mint and decimals;
+- nonzero fixed-point `price_scale`;
+- tick size, minimum order size, circuit-breaker band, and enabled flag.
+
+The proof-bound governed digest covers fee rate, protocol owner, both mints,
+and price scale. Tick/minimum/breaker compliance is enforced by the attested
+matcher, not by the circuit. A disabled market cannot verify new batches.
+
+### Sharded Merkle state
+
+The vault has K independent depth-20 `MerkleTree` PDAs, each with:
+
+- 1,048,576-leaf capacity;
+- a current root;
+- a 64-entry recent-root ring;
+- the incremental right path.
+
+Deposits choose a `tree_id`; settlement outputs round-robin across K trees.
+Separate tree accounts and fee-payer signers remove two Solana write conflicts
+that otherwise serialize settlement. Proofs always bind one specific shard
+root.
+
+### PDA reference
+
+| Account | Seeds | Purpose |
+|---|---|---|
+| `VaultConfig` | `[b"vault_config"]` | global authorities, signers, fee config, shard count |
+| `MarketConfig` | `[b"market_config", base_mint, quote_mint]` | one governed market |
+| `MerkleTree` | `[b"merkle_tree", tree_id]` | one append-only note tree shard |
+| `WalletEntry` | `[b"wallet", user_commitment]` | registered public wallet commitment |
+| `DepositedNoteEntry` | `[b"deposited_note", note_commitment]` | strict deposit-once guard |
+| `ConsumedNoteEntry` | `[b"consumed_note", note_commitment]` | shared settle/withdraw consume-once guard |
+| `NoteLock` | `[b"note_lock", note_commitment]` | bounded order lock; amount remains private |
+| `OutstandingMint` | `[b"outstanding_mint", mint]` | live-note liability counter |
+| `BatchValidityMarker` | `[b"batch_validity", batch_root]` | one verified N=16 batch |
+| vault token account | `[b"vault_token", mint]` | SPL custody for one mint |
+
+`NullifierEntry` remains as a legacy state type but no current instruction
+allocates it. Commitment-keyed `ConsumedNoteEntry` is the active shared guard.
+
+## Circuit boundaries
+
+| Circuit | Public signals | What it proves |
+|---|---:|---|
+| VALID_WALLET_CREATE | 1 | knowledge of the root/spending/viewing keys behind `user_commitment` |
+| VALID_DEPOSIT | 5 | recoverable note construction for public mint/amount/nonce without exposing owner/inner |
+| VALID_SPEND | 8 | note opening, ownership, inclusion, nullifier, public amount/mint, and exact destination account |
+| VALID_INPUT | 4 | owned positive-u64 note with a public commitment/mint at a recent root |
+| VALID_MERGE K=2/K=4 | 6/8 | active positive same-owner/same-mint inputs sum to one derived output |
+| VALID_MATCH_BATCH N=16 | 2 | up to 16 matches under one market/config digest and Poseidon batch root |
+
+VALID_MATCH_BATCH derives:
+
+- user-output inners from consumed input inners;
+- per-match base/quote fee inners from consumed commitments;
+- `quote = floor(base × clearing_price / price_scale)` with a bounded
+  remainder;
+- all output commitments and a commitment-only Poseidon11 leaf per slot.
+
+Only N=16 is wired on-chain. N=2/N=4 are development instances.
+
+## End-to-end flow
+
+### 1. Deposit
+
+The client derives a recoverable opening and creates VALID_DEPOSIT. `deposit`:
+
+1. verifies the five public signals;
+2. initializes `DepositedNoteEntry` so an identical commitment cannot be
+   deposited twice;
+3. transfers SPL tokens into the vault;
+4. appends the commitment to the chosen tree;
+5. increments `OutstandingMint`.
+
+The instruction is atomic. The chain sees the signer, mint, gross amount,
+commitment, and recovery nonce, but not the wallet-wide owner or note inner.
+
+### 2. Place an order
+
+The client fetches `/info` and `/time`, verifies attestation/governance, builds
+a VALID_INPUT proof, and signs canonical order v4. The signed intent includes
+the symbol, economics, 16-byte order ID, collateral commitment,
+`user_commitment`, strictly increasing arrival nonce, contributory X25519
+viewing key, and 32-byte boot session ID.
+
+The CVM:
+
+- authenticates the account;
+- verifies the canonical Ed25519 signature;
+- checks session, nonce, market rules, collateral opening, and root recency;
+- verifies VALID_INPUT before reserving the collateral commitment;
+- books the order in the requested market.
+
+Each commitment can back at most one live/pending order across the venue.
+Ownership failures are indistinguishable 404 responses. Exact idempotent
+retries succeed before nonce monotonicity is enforced.
+
+### 3. Match
+
+Every configured market has an independent book and a 2,000 ms frequent-batch
+driver. It uses price-level aggregates and reusable prefix/suffix demand curves
+while preserving FIFO, tie-breaking, IOC/FOK/AON, self-trade prevention, and
+one fill per order per tick.
+
+The oracle/tick/minimum/circuit-breaker checks are TEE-enforced. Zero-limit
+market asks remain eligible but are excluded from price candidates.
+
+Matched quantities are reserved as `pending_settlement`; the public book and
+fill stream are not committed optimistically.
+
+### 4. Settle
+
+Each market emits proof batches containing at most 16 matches. A proof never
+mixes markets even when one CVM serves several.
+
+```text
+Tx A: two independent VALID_INPUT-backed lock_note transactions per match
+Tx B: one VALID_MATCH_BATCH verify transaction per batch
+Tx C: per-batch ALT create/extend
+Tx D: one Ed25519-authenticated atomic settle transaction per active match
+Tx E: marker sweep at/after its on-chain-derived expiry
+```
+
+`verify_match_batch` derives marker expiry as `current_slot + 300`; the relayer
+cannot shorten it. Tx D reads the shared marker without mutating it, validates
+the slot's depth-4 Poseidon inclusion proof, requires both input locks to be
+unexpired, initializes two `ConsumedNoteEntry` accounts, appends user/change
+and per-match fee commitments, and atomically relocks continuation notes.
+
+Tx D outcomes are collected independently at the RPC client's configured
+commitment (Confirmed for the settlement hot path):
+
+- `confirmed`: commit only that match's book quantities and emit fills;
+- `ambiguous`: retain pending state and reconcile signatures/consumed PDAs;
+- `rejected`: emit `settlement_failed` with reason and lock expiry.
+
+Failed orders are terminal and never auto-rebooked. The user submits a fresh
+signed order after unlock. Expired lock and marker accounts are swept
+asynchronously; expiry makes them non-blocking but does not erase them.
+
+### 5. Withdraw or merge
+
+VALID_SPEND binds the exact destination token account. `withdraw` rejects a
+live lock, permits an expired lock, initializes the shared
+`ConsumedNoteEntry`, decrements outstanding liability, and transfers SPL
+tokens atomically.
+
+VALID_MERGE consolidates two to four live notes without leaving the pool. It
+requires positive active inputs, proves lock accounts absent/non-live, and
+derives the output inner from the active commitments and bitmap. K=2/K=4
+merges can be chained.
+
+## Multi-market CVMs
+
+`DARKNYX_TEE_MARKETS_JSON` configures 1..16 boot-static markets. The singular
+base/quote env path remains for a one-market deployment, but it cannot be mixed
+with the JSON table.
+
+One CVM shares:
+
+- attestation and authentication;
+- K signer keys and Merkle mirrors;
+- oracle cache and prover artifacts;
+- ALT pool, RPC client, and a venue-wide settlement concurrency semaphore.
+
+Each market has its own symbol, mint pair, matcher state, lifecycle publisher,
+and scheduler. `/instruments` is the authoritative list for that CVM.
+Cross-market modify is rejected; clients cancel and place a fresh order.
+
+Because `VaultConfig.tee_pubkeys` is a single global set, the current vault
+assumes one authorized TEE cluster rather than several independently attested
+CVMs. Cross-CVM discovery/routing is therefore deferred; clients should not
+trust an endpoint registry copied between CVMs. See
+[`multi-market-architecture.md`](multi-market-architecture.md).
+
+The 16-market parser cap is a safety ceiling, not a sizing target. Stop adding
+markets before any of these measured gates is crossed:
+
+- settlement queue wait p95 ≥ 2 s or p99 ≥ 4 s;
+- p95 end-to-end settlement latency regresses by more than 10%;
+- confirmed throughput loses the required 20% headroom over offered load;
+- sustained CPU or memory exceeds 70%;
+- RPC/ambiguous/definitive-settlement error rate exceeds 0.1%.
+
+## API, streams, and attestation
+
+The OpenAPI source of truth is [`tee-api-openapi.yaml`](tee-api-openapi.yaml).
+The only WebSocket is `/v1/stream`; clients log in and subscribe to:
+
+- `orders` for lifecycle updates;
+- `fills` for per-account private fill memos;
+- `tree` for Merkle progress.
+
+The stream preserves sequence-gap detection, token refresh, reconnect, and
+cancel-on-disconnect. Retired `/ws/fills`, `/ws/orders`, and `/ws/trading`
+endpoints do not exist.
+
+Strict clients:
+
+1. verify the DCAP quote and replay RTMR3;
+2. pin compose hash/MRTD;
+3. verify the quoted K signer set;
+4. read finalized `VaultConfig` and `MarketConfig` accounts;
+5. require exact key/config agreement.
+
+The daemon refreshes finalized governance every minute, pauses new
+place/modify immediately on mismatch, and pauses after five minutes without a
+successful finalized refresh. Cancellation and reconciliation remain
+available. On-chain DCAP verification is deferred.
+
+## Security and recovery boundaries
+
+- TDX protects order/witness confidentiality only when the measured image and
+  hardware mode are verified.
+- A CUDA prover receives private amounts, prices, owner commitments, and
+  openings. Production GPU proving therefore requires NVIDIA Confidential
+  Computing mode and GPU attestation bound into the CVM trust decision.
+- The Groth16 development zkeys are deterministic and are not mainnet-safe.
+- Market fairness is attested-code trust; custody/conservation is circuit/L1
+  enforcement.
+- Network metadata and deposit/withdraw boundaries remain observable.
+- The off-TEE indexer is not trusted for custody or note reconstruction.
+
+## Validation and deployment
+
+The authoritative commands are in [`../CLAUDE.md`](../CLAUDE.md) and
+[`../scripts/dev-commands.md`](../scripts/dev-commands.md).
+
+For code that changes the vault, circuits, or TEE:
+
+1. run the full local formatting, SBF, clippy, Rust, TypeScript, SDK, and
+   indexer gates that are reasonable for the touched surface;
+2. regenerate circuit source/zkey/VK/fixtures atomically when a circuit changes;
+3. upgrade devnet and reset tree state after a circuit/VK migration;
+4. rebuild/tag/redeploy the CVM image for TEE or embedded-prover changes;
+5. run each leaf-count CVM test against its own reset + cold boot.
+
+The flagship real-settle test is `cvm-settle-e2e`. Additional live gates cover
+multi-match, self-trade, merge-then-order, multi-market, API, and attestation.
+The load generator measures intake and settlement telemetry but synthetic
+placeholder orders are not a substitute for real proof-backed settlement.
+
+Stop billable CPU CVMs after the required window. Never stop an on-demand GPU
+CVM: Phala deallocates it permanently and forfeits the remaining prepaid
+window. Use [`cvm-run-runbook.md`](cvm-run-runbook.md) and
+[`gpu-tee-runbook.md`](gpu-tee-runbook.md) verbatim.
+
+## Deployed program
+
+| Network | Vault program |
 |---|---|
-| Order side / price / amount (intent) | Note commitments (Poseidon hashes) as Merkle leaves |
-| **Per-trade amount + the execution price** (at settlement) | Nullifiers of consumed notes (unlinkable to the owner) |
-| Which note backs an order | Gross SPL amounts entering (`deposit`) / leaving (`withdraw`) the vault |
-| The owner of a note + the match graph | The TEE's settle txs — note commitments only, **no plaintext amounts or price** |
+| devnet | `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` |
 
-A note's **commitment** is `Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi,
-amount, owner_commitment, inner_hash)` — a hash that reveals nothing. Its
-**nullifier** is `Poseidon3(DOMAIN_NULL, spending_key, inner_hash)`,
-unlinkable to the commitment or the owner. See `CRYPTOGRAPHY.md` §4–§5.
-
-At deposit, `VALID_DEPOSIT` proves that the public commitment binds the public
-mint/gross amount and a seed-derived recovery nonce to a privately derived
-owner and inner hash. L1 still sees the funding signer and gross transfer, but
-does not see the wallet-wide `owner_commitment`; one deposit therefore no
-longer clusters every note owned by that shielded identity.
-
-### Settlement amount privacy (amounts off-chain, via the fill memo)
-
-The settle tx used to reveal each trade's amounts + the clearing price in
-plaintext — alpha/MEV exposure that dark-pool peers (Renegade, GoDarkDEX) also
-close. Those are now gone from L1; the proof is the sole binder:
-
-* **The circuit guarantees soundness over PRIVATE amounts.** `VALID_MATCH_BATCH`
-  already proved conservation; it now also **range-checks every amount**
-  (`Num2Bits(64)`) and enforces the **exact protocol fee in-circuit**
-  (`fee_rate_bps` is in the governed-config digest that `verify_match_batch`
-  recomputes from authoritative accounts). The per-match Merkle leaf is
-  **commitment-only** — `Poseidon11` over `active`, the six note commitments,
-  the two per-match fee-note commitments, and `batch_slot`, hashing no amounts.
-* **The settle ix + event carry no amounts.** `MatchResultPayload` dropped its
-  seven amount/price fields in v7, gained the 128-byte recovery ciphertext in
-  v8, then dropped two vestigial nullifiers in v9 (552 → 488 bytes). The
-  `TradeSettled` event dropped the amounts too. Note commitments bind the
-  amounts; the chain never sees them.
-* **Recovery data is private.** The settle payload retains a 128-byte
-  X25519-ECIES envelope containing each side's encrypted `(trade, change)`
-  tuple. VALID_MATCH_BATCH v3 derives output inners from the consumed opening;
-  the SDK accepts outputs only after re-deriving inners and commitments
-  byte-for-byte. `recoverNotesFromChain` bootstraps seed-owned deposits and
-  reconstructs trade, continuation, and merge outputs with event leaf positions.
-* **The off-TEE indexer is a commitment LOCATOR + opaque ciphertext store.** With
-  plaintext amounts gone from the payload + event, `packages/indexer` decodes the
-  settle ix to locate commitments AND surface the opaque `fill_recovery`
-  ciphertext (it can't decrypt it); the client decrypts that to recover both
-  spendable outputs, including exact fills.
-
-See `CRYPTOGRAPHY.md` §7.5 (the circuit + the commitment-only leaf) and §9 (the
-payload), and [`fills-history-architecture.md`](fills-history-architecture.md).
-
-### Why a TEE/CVM (not an on-chain CLOB)?
-
-A public on-chain order book would leak every order. Earlier designs used
-a MagicBlock Ephemeral Rollup to hide intent; that has been replaced by an
-Intel TDX confidential VM:
-
-* **Order intent never lands in any transaction.** Clients `POST /orders`
-  over TLS directly to the enclave. The book lives in enclave memory; only
-  the *settlement* touches L1 — and since amount-privacy it references only
-  note commitments, no plaintext trade amounts or price.
-* **The enclave is attestable.** Clients verify a TDX quote
-  (`verifyTeeAttestation()`) binding the running code's measurement
-  (`compose_hash` / MRTD) to a governance-approved set before trusting it
-  with order data — see [`tee-attestation-flow.md`](tee-architecture.md).
-* **The vault trusts only attested signers.** Every TEE-authority ix
-  (`lock_note`, `tee_forced_settle_batched`, …) checks the caller against
-  `VaultConfig.tee_pubkeys` (the K registered shard keys), installed from the
-  CVM's dstack-derived signer set via the admin `set_tee_pubkey(Vec<Pubkey>)` ix.
-
-The client's guard against a *misbehaving* TEE is the **settle-memo
-integrity check** (`sdk/src/orders/fill-memo.ts`): the client resolves the
-reported consumed commitment from its own note store, derives the output
-inner from that opening and role, and rejects any output commitment mismatch.
-
----
-
-## Component walkthrough
-
-### `programs/vault` — custody + Merkle tree + ZK + settlement
-
-The single on-chain program. Holds the SPL token accounts, **K sharded
-incremental Merkle trees** of note commitments (each depth 20, Poseidon2, in
-its own `MerkleTree[tree_id]` account — the global `VaultConfig` keeps only the
-tree-independent config + the shared `zero_subtree_roots`), and the replay-guard
-PDA sets. Verifies the Groth16 circuits on-chain (`VALID_WALLET_CREATE`,
-`VALID_DEPOSIT`, `VALID_SPEND`, `VALID_INPUT`, `VALID_MATCH_BATCH`,
-`VALID_MERGE`) via the
-embedded `groth16-solana` verifier. The settle path
-(`lock_note → verify_match_batch → tee_forced_settle_batched → close`) is
-TEE-authority-gated (any of the K registered `tee_pubkeys`) and processes up to
-N=16 matches per batch under one read-only `BatchValidityMarker`. Each settle
-appends its output notes to `merkle_tree[tree_id]`; rotating the output shard per
-match and keeping dummy relock destinations read-only is what lets the leader
-co-include a batch's settles in one block. Marker rent is swept only at or after
-expiry. Also home to
-the in-pool **`merge`** ix (`VALID_MERGE(K=2/4)`): consolidate K fragmented
-notes into one so an order can exceed any single note. Every active input has a
-positive u64 amount and must have no live `NoteLock` PDA; the circuit rejects
-all-dummy merges and derives the output inner as
-`Poseidon6(26, c0, c1, c2, c3, active_bitmap)` from the public consumed-note
-commitments.
-
-### `crates/darknyx-tee` — the in-CVM engine
-
-Runs inside the TDX CVM. On boot it does the dstack handshake (deriving its
-**K shard Ed25519 signers** + cold-booting the K Merkle mirrors), loads the
-N=16 proving key (`ark` or `rapidsnark` backend per `DARKNYX_TEE_PROVER`), and
-starts: the matcher interval driver (tick → match → page into ≤16 batches →
-enqueue settle), the settle scheduler (assembles + drives each batch through
-lock→prove→verify→ALT→settle→close), the oracle sync, the slot poller, the
-priority-fee poller, and the HTTP/WS server. The locks (Tx A), the per-batch
-ALT extends (Tx C), and the settle Tx D's are each fired **concurrently** within
-a batch; the settle Tx D's round-robin the K shard keys (each is fee-payer +
-`tee_authority` + Ed25519 settle-signer for its shard). Their N=16 inclusion
-paths come from one retained 15-node internal tree build, and one shrinking
-batched status poll drives all pending Tx D signatures; confirmed signatures
-are removed before the next poll and only overdue pending transactions are
-rebroadcast.
-
-Matching is **finality-gated per match**. The interval driver first marks both
-orders `pending_settlement` without changing quantities or publishing a fill.
-Each Tx D initial send and confirmation result is gathered independently. A
-confirmed match commits its book update and recovery memo immediately, even if
-a sibling is still ambiguous. Ambiguous results reconcile both atomic
-`ConsumedNoteEntry` PDAs and redrive with fresh blockhashes while the marker and
-both input locks remain valid. A definitive rejection removes the orders,
-emits terminal `settlement_failed(reason, lock_expiry_slot)`, retains their
-collateral reservation until unlock, and never silently rebooks them.
-
-### `crates/darkpool-crypto` — host-side crypto
-
-Poseidon, note commitment, nullifier, key derivation, user commitment, the
-field-element split for mints, and commitment-derived merge output inners.
-**Byte-identical to the TS SDK** — every
-primitive has a parity test (`packages/sdk/tests/*-parity.test.ts`) that
-shells out to example binaries and compares fixtures. Changing a Poseidon
-arity / domain tag here without mirroring it in TS breaks the parity test.
-
-### `crates/darkpool-matcher` — the matching algorithm
-
-`run_batch` / `run_batch_capped` is the single source of truth for
-uniform-clearing-price matching (price-time priority, circuit breaker, FIFO
-tie-break, per-side fee-inclusive collateral, both fee notes). Production ticks
-use `PreparedMatchTick`: one frozen book snapshot is partitioned and sorted
-once, then mutable price-level totals feed a suffix-demand/prefix-supply sweep
-for every ≤16-match page. Reserving or cancelling an order removes its original
-quantity from those totals in O(log levels); orders arriving during paging wait
-for the next tick. Also home to
-`order_canonical.rs` (the order/cancel signing contract, including the viewing
-key, boot session, and arrival nonce,
-parity-tested against the TS SDK) and `change_note::derive_inner` (the
-amount-independent `inner_hash` derivation, triple-ported to TS + the
-on-chain hashers).
-
-### `circuits/` — the ZK circuits
-
-| Circuit | Proves | Verified |
-|---|---|---|
-| `VALID_WALLET_CREATE` | a well-formed user commitment | on-chain (`create_wallet`) |
-| `VALID_DEPOSIT` | a recoverable note commitment for the public mint + gross amount, with owner and inner private | client prove → on-chain (`deposit`) |
-| `VALID_SPEND` | knowledge of a note's opening + its Merkle inclusion + correct nullifier | on-chain (`withdraw`) |
-| `VALID_INPUT` | a note's opening + inclusion with a private positive-u64 amount (gates `lock_note`) | on-chain (`lock_note`) |
-| `VALID_MATCH_BATCH` (N=16) | conservation + 64-bit range-checks + the exact in-circuit fee over PRIVATE amounts, + correct output-note construction for ≤16 matches, hashed into one **commitment-only** batch Merkle root | in-enclave prove → on-chain `verify_match_batch` |
-| `VALID_MERGE` (K=2/4) | positive active input notes (same owner+mint, each included) consolidate into one output whose inner is derived from consumed commitments; all-dummy witnesses are impossible | on-chain (`merge`) |
-
-(`MatchBatch(N)` is also instantiated at N=2/4 for dev/test only.) The
-in-enclave `VALID_MATCH_BATCH` prover has two interchangeable backends — `ark`
-(ark-circom, default) and `rapidsnark` (C++ FFI, ~1.4× on 8 vCPU) — selected
-by `DARKNYX_TEE_PROVER` on the SAME image. Witness gen is ark-circom either way.
-
-### `packages/sdk` — TypeScript client
-
-Key derivation, note construction (`noteCommitmentV2` / `nullifierV2`),
-deposit/withdraw flows, VALID_DEPOSIT + VALID_INPUT prover wrappers, match-output derivation,
-order canonical signing, and the hand-coded `vault-client.ts`
-(every discriminator + Borsh layout, no Anchor IDL runtime).
-
----
-
-## End-to-end flow (one trade)
-
-1. **Key gen (off-chain).** Client derives spending / viewing / trading keys
-   + `user_commitment` from its master seed.
-2. **`create_wallet` (L1).** Register the user commitment (VALID_WALLET_CREATE).
-3. **`deposit` (L1).** Generate VALID_DEPOSIT locally; the vault verifies the
-   hidden owner/inner construction before pulling SPL, appending the commitment,
-   and incrementing `outstanding[mint]`.
-4. **`POST /orders` (CVM).** Client builds a VALID_INPUT proof for its note,
-   fetches the current `/info.boot_session_id`, signs the economic fields,
-   contributory X25519 viewing key, session, and nonce, then posts to the CVM.
-   Intake verifies the signature + note opening, rejects stale sessions and
-   non-increasing per-trading-key nonces, then books it.
-5. **Match + reserve (CVM).** The interval tick freezes one book snapshot,
-   builds reusable price-level demand/supply curves, and pages crossing pairs at
-   a uniform clearing price. It derives any proof-bound continuation commitment
-   and marks both orders `pending_settlement` without applying quantities or
-   fills; orders submitted during paging enter the next tick.
-6. **Settle (CVM → L1).** The settle pipeline drives Tx A–E (above) on L1: the
-   matched output notes (note_c/d), any change notes (note_e/f), and the
-   base+quote protocol fee notes are appended to the tree. Each confirmed Tx D
-   independently commits its order updates; ambiguous matches stay reserved and
-   redrive, while definitive failures are terminal and require a fresh order.
-7. **Private recovery.** The on-chain `fill_recovery` envelope carries encrypted
-   `(trade, change)` amounts. Confirmed instructions/events plus the seed rebuild
-   deposit, trade/change, continuation, and merge notes without live history.
-8. **`withdraw` (L1).** Client spends an output note via a VALID_SPEND proof;
-   the nullifier is recorded; SPL leaves the vault.
-
----
-
-## Account / PDA reference (vault)
-
-| PDA | Seeds | Purpose |
-|---|---|---|
-| `VaultConfig` | `[b"vault_config"]` | Global singleton: `tee_pubkeys[16]` + `num_tee_keys`, `num_trees`, `zero_subtree_roots`, admin, root key, protocol-owner commitment, fee bps. Read-only on the settle hot path (no tree state). |
-| `MarketConfig` | `[b"market_config", base_mint, quote_mint]` | One enabled/paused market: immutable mint identity + decimals and operations-admin-governed price scale, tick, minimum size, and circuit-breaker bound. |
-| `MerkleTree` | `[b"merkle_tree", &[tree_id]]` | **Per-shard** (K of them): `leaf_count` (offset 8), `current_root` (offset 16), the 64-root ring, the depth-20 right-path. Settles to different shards write distinct accounts. |
-| `WalletEntry` | `[b"wallet", user_commitment]` | Registered user commitment (1:1; `init` = replay guard) |
-| `NullifierEntry` | `[b"nullifier", nullifier]` | A VALID_SPEND / merge-consumed note |
-| `ConsumedNoteEntry` | `[b"consumed_note", note_commitment]` | A TEE-settle-consumed input note |
-| `NoteLock` | `[b"note_lock", note_commitment]` | The pin between match and settle (TTL-bounded) |
-| `OutstandingMint` | `[b"outstanding_mint", mint]` | Per-mint solvency counter (`deposit++`, `withdraw--`; `merge` is value-preserving → unchanged) |
-| `BatchValidityMarker` | `[b"batch_validity", batch_merkle_root]` | **1:N** — one per batch, written by `verify_match_batch`, read-only in Tx D, closable only at/after expiry |
-
-Plus the per-mint `vault_token_account` PDAs (the actual SPL custody) and a
-rolling per-batch Address Lookup Table (managed by the settle worker) holding
-the payload-derivable settle PDAs — the note-lock, consumed-note, and marker
-accounts — so each Tx D references them by 1-byte index. The K
-`MerkleTree` PDAs live in the static settle ALT alongside `vault_config` +
-sysvar + system program.
-
----
-
-## Security model
-
-* **Custody soundness.** The vault releases SPL only against a valid
-  VALID_SPEND proof of an unspent note, or a TEE-authority settle. The
-  `outstanding[mint] ≤ vault_token_account.amount` check in `withdraw` is the
-  solvency net.
-* **Replay protection.** The `init` constraint on the per-leaf PDAs
-  (`NullifierEntry`, `ConsumedNoteEntry`, `NoteLock`, `WalletEntry`) makes a
-  second touch fail. The `BatchValidityMarker` binds a batch's matches to one
-  verified proof.
-* **TEE trust.** The vault trusts only the keys in `VaultConfig.tee_pubkeys`.
-  Clients verify the enclave's TDX attestation before sending order data. A
-  strict daemon also matches the quote-bound key set to a finalized on-chain
-  `VaultConfig` at startup and every minute; mismatch pauses new trading
-  immediately, and five minutes without a successful finalized refresh pauses
-  it for staleness while cancellation and reconciliation continue. Merkle roots
-  returned by the TEE are checked against the finalized on-chain shard root ring
-  before the daemon proves an order or merge. A misbehaving TEE **cannot**
-  inflate value or drain the vault (conservation +
-  64-bit range checks are proof-enforced), cannot learn spending keys (they never
-  enter it), and cannot substitute note data undetected (the client's settle-memo
-  integrity check). It **can**, by accepted design decision, clear a match at an
-  unfair price — **execution-price fairness is TEE-trusted**, not proof-enforced:
-  bounded to the victim's order size, detectable post-hoc via the fill memo, and
-  anchored by enclave attestation. Full rationale + the alternatives we rejected:
-  `CRYPTOGRAPHY.md` §2 "Accepted design decision — price fairness is TEE-trusted."
-* **Privacy.** Order intent never leaves the enclave except as settlement
-  referencing already-public note commitments.
-
-The `/v1/stream` fills channel is **per-account routed** (each order's memo goes only
-to its owner's channel) and **self-healing**: a memo that arrives while no
-client is attached is not lost — output amounts ride the settle ix encrypted
-on-chain, so the client recovers them on reconnect from the indexer/chain
-(`recoverFillFromChain`) — see
-[`fills-history-architecture.md`](fills-history-architecture.md). Known gap:
-settle-under-load is bounded by RPC capacity (Helius 429s), not the matcher.
-
-### Building a production client (the recoverability contract)
-
-A production client (browser/mobile wallet) wires three SDK entry points so a
-user's notes survive a CVM redeploy and remain recoverable on a replacement
-device with an authenticated backup:
-
-1. **Random seed + encrypted backup.** `resolveMasterSeed` generates a 64-byte
-   CSPRNG seed and persists it through the client's secure `MasterSeedStorage`.
-   Export a portable, versioned AES-256-GCM/scrypt envelope with
-   `exportEncryptedMasterSeed`, store its passphrase separately, and restore it
-   with `importEncryptedMasterSeed`. Wallet-message signatures are deliberately
-   not a Darknyx spend authority.
-2. **Proof-bound deposits.** `getDepositFunction` derives a pseudorandom public
-   recovery nonce and hidden `Poseidon3(27, owner, nonce)` inner, generates
-   VALID_DEPOSIT locally, and submits only the commitment + nonce. Cold recovery
-   derives the owner from the restored seed and reconstructs the opening.
-3. **Viewing-encryption key + boot session on every order.** Send
-   `deriveViewingEncKeypair(seed).publicKey` as the order's `viewing_pubkey`
-   (`buildOrder` defaults to it) and the current 32-byte session from `/info`.
-   Both are signed. The TEE rejects low-order X25519 points and encrypts each
-   fill's private recovery data to the signed key on-chain.
-4. **Recover on reconnect or a replacement device.** `startFillsSync` backfills
-   locator rows and decrypts+self-verifies trade/change outputs via
-   `recoverFillFromChain`. For a full cold restore, `recoverNotesFromChain`
-   scans finalized vault history and rebuilds deposits, fills, continuations,
-   and merges to a fixed point. Offline coverage lives in
-   `packages/sdk/tests/cold-recovery.test.ts` and the cross-package indexer test.
-
-NOTE: treat the SDK functions above + that e2e test as the reference for the
-real client's custody + recovery contract.
-
----
-
-## Deployment runbook
-
-The authoritative step-by-step is in [`scripts/dev-commands.md`](../scripts/dev-commands.md)
-and [`CLAUDE.md §2–§3`](../CLAUDE.md). Summary:
-
-1. **Host setup** — `npm install`; `bash scripts/download-ptau.sh`;
-   `bash scripts/build-circuits.sh`; `cargo build --examples -p darkpool-crypto`.
-2. **Build + deploy the vault** — `cargo build-sbf --manifest-path
-   programs/vault/Cargo.toml`; `bash scripts/deploy-devnet.sh` (idempotent
-   upgrade; needs ≥ 5 devnet SOL).
-3. **Devnet state** — `vitest run tests/devnet-setup.test.ts` (`RUN_DEVNET_E2E=1`,
-   `DARKNYX_NUM_TREES=K`) creates mints + the K `MerkleTree` shards + the K-tree
-   static settle ALT + protocol config + resets every shard, writing
-   `.devnet/e2e-config.json` (incl. `numTrees` + `merkleTreePdas[]`). A tree
-   reset is mandatory after any circuit/VK change or note-model migration; a
-   `VaultConfig` layout change needs `close-vault-config.mjs` first (§4.4).
-4. **Build + deploy the CVM** — bump the image tag, push it (CI → ghcr),
-   `phala deploy -e <env>` (`DARKNYX_TEE_NUM_TREES=K` matching), register the CVM's
-   K shard signers (`rotate-tee-pubkey.mjs <K0..Kn>`), fund each
-   (`fund-tee-keys.mjs`). Mind the mint regime (real-mint for `cvm-settle-e2e`,
-   placeholder for the loadgen) — see `CLAUDE.md §3`.
-5. **Validate** — `cvm-settle-e2e` (real settle through the CVM),
-   `cvm-multimatch-settle` (settle-throughput / co-inclusion profile),
-   `devnet-deposit-withdraw` + `devnet-merge` (no-CVM vault crypto), the loadgen
-   (intake throughput). **Stop the CVM after** (it bills).
-
-## Deployed program ids (devnet)
-
-* vault: `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx`
-
-(The matching_engine program id is retired — the program was deleted.)
+Mainnet launch remains gated on remediation closure, an external circuit audit
+with no unresolved Critical/High findings, a public Phase-2 ceremony, split
+Squads rehearsal, recovery drills, reproducible artifact verification, and
+post-ceremony CVM settlement evidence.
