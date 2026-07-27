@@ -185,16 +185,26 @@ jobs:
           } > /tmp/darknyx.env
 
       - name: Select the image to deploy (built-from-main, or the dispatch override)
+        env:
+          # Via env, not inline interpolation — `image_tag` is free-form dispatch
+          # input and would otherwise be parsed as shell syntax by the runner.
+          DISPATCH_IMAGE: ${{ inputs.image_tag }}
+          BUILT_IMAGE: ${{ needs.build-image.outputs.image }}
         run: |
-          if [ -n "${{ inputs.image_tag }}" ]; then
-            IMAGE="${{ inputs.image_tag }}"
+          if [ -n "$DISPATCH_IMAGE" ]; then
+            IMAGE="$DISPATCH_IMAGE"
           else
-            IMAGE="${{ needs.build-image.outputs.image }}"
+            IMAGE="$BUILT_IMAGE"
           fi
+          # Full-shape match, not a prefix glob: `@sha256:*` would accept a
+          # truncated or trailing-garbage digest, and this value is substituted
+          # straight into the compose that compose_hash measures.
           case "$IMAGE" in
             ghcr.io/skysail-labs/darknyx-tee@sha256:*) ;;
             *) echo "::error::CVM deploy requires an immutable ghcr @sha256 image: $IMAGE"; exit 1 ;;
           esac
+          printf '%s' "$IMAGE" | grep -qE '^ghcr\.io/skysail-labs/darknyx-tee@sha256:[0-9a-f]{64}$' \
+            || { echo "::error::malformed image digest: $IMAGE"; exit 1; }
           sed -i -E "s#^    image: ghcr.io/skysail-labs/darknyx-tee.*#    image: $IMAGE#" deploy/docker-compose.yaml
           grep -E 'image: ghcr' deploy/docker-compose.yaml
 
@@ -335,7 +345,11 @@ jobs:
               echo "$OUT" | grep -q "already in progress" || break
               echo "deploy busy — retry $d in 20s"; sleep 20
             done
-            rm -f /tmp/darknyx.env
+            # Same secure-erase as the initial deploy — this file carries the
+            # Helius and Pyth credentials, and this helper rewrites it once per
+            # tree-consuming test, so a plain rm would leave the most-written
+            # secret file on the runner as recoverable blocks.
+            shred -u /tmp/darknyx.env 2>/dev/null || rm -f /tmp/darknyx.env
             for i in $(seq 1 40); do curl -fsS "$GATEWAY/info" -o /tmp/info.json 2>/dev/null && break; sleep 6; done
           }
           FAILED=""
@@ -359,7 +373,8 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
         run: |
-          rm -f /tmp/darknyx.env packages/sdk/.env
+          shred -u /tmp/darknyx.env 2>/dev/null || rm -f /tmp/darknyx.env
+          shred -u packages/sdk/.env 2>/dev/null || rm -f packages/sdk/.env
           if [ -n "$CVM" ]; then
             phala cvms stop "$CVM" || echo "::warning::phala cvms stop failed — VERIFY MANUALLY in the dashboard"
           fi

@@ -374,16 +374,27 @@ a `tee-v3-hardening-N` **git tag**. It builds linux/amd64 and pushes to
 layer cache** (`:buildcache`), so a fresh tag builds in ~4–5 min.
 
 ```sh
+TAG=tee-v3-hardening-<N>
 # 1. Commit, then use a fresh tag to trigger the exact source build:
-git tag tee-v3-hardening-<N> && git push origin tee-v3-hardening-<N>
-# 2. Watch it (repo: skysail-labs/darknyx):
-gh run watch "$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status
-# 3. Resolve the immutable digest:
+git tag "$TAG" && git push origin "$TAG"
+# 2. Watch THE tee-image run for THIS tag — not the repo's latest run, which can
+#    be pr-checks or a scheduled sweeper that happened to start after your push.
+RUN=$(gh run list --repo skysail-labs/darknyx --workflow tee-image.yml \
+        --branch "$TAG" --limit 1 --json databaseId -q '.[0].databaseId')
+test -n "$RUN" || { echo "no tee-image run for $TAG yet"; exit 1; }
+gh run watch "$RUN" --repo skysail-labs/darknyx --exit-status
+# 3. Resolve the immutable digest, failing closed on a missing/short digest —
+#    `grep`ing the headers succeeds silently when the tag was never published.
 TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/darknyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-curl -sI -H "Authorization: Bearer $TOK" \
+CODE=$(curl -sI -o /dev/null -w '%{http_code}' -D /tmp/hdrs \
+  -H "Authorization: Bearer $TOK" \
   -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
-  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N>" \
-  | grep -i docker-content-digest
+  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/$TAG")
+test "$CODE" = 200 || { echo "manifest for $TAG not found (HTTP $CODE)"; exit 1; }
+DIGEST=$(tr -d '\r' < /tmp/hdrs | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')
+echo "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$' \
+  || { echo "malformed or absent digest: '$DIGEST'"; exit 1; }
+echo "pin this: ghcr.io/skysail-labs/darknyx-tee@$DIGEST"
 # 4. Pin deploy/docker-compose.yaml to:
 #    image: ghcr.io/skysail-labs/darknyx-tee@sha256:<digest>
 ```

@@ -204,9 +204,23 @@ impl OracleCache {
                     sequence: entry.vaa_sequence,
                 });
             }
-            if entry.publish_time_ms == previous.publish_time_ms {
-                let exact = entry.vaa_sequence == previous.vaa_sequence
-                    && entry.twap == previous.twap
+            // `(publish_time_ms, vaa_sequence)` identifies the message. Two
+            // payloads carrying that SAME pair but different authenticated
+            // content means the source served us two different messages under
+            // one identity — that is the conflict worth rejecting.
+            //
+            // A shared `publish_time_ms` with a STRICTLY NEWER sequence is not a
+            // conflict: Pyth's publish_time is second-granular while Pythnet
+            // aggregates sub-second, so consecutive genuine aggregates routinely
+            // share a publish second while carrying a new sequence and a moved
+            // price. Rejecting those made a normal Pyth cadence look like an
+            // attack and failed the whole refresh. Note the insert predicate
+            // below already skips only on BOTH fields matching — the two
+            // predicates disagreed, and this one was the wrong half.
+            if entry.publish_time_ms == previous.publish_time_ms
+                && entry.vaa_sequence == previous.vaa_sequence
+            {
+                let exact = entry.twap == previous.twap
                     && entry.confidence == previous.confidence
                     && entry.exponent == previous.exponent
                     && entry.trust_profile == previous.trust_profile;
@@ -518,13 +532,25 @@ mod tests {
 
     #[tokio::test]
     async fn exact_replay_does_not_refresh_local_arrival() {
+        // The timings are chosen so the assertion can ONLY pass if local arrival
+        // was left alone. Publish at 101_000 (within the 1_000 ms future-skew
+        // allowance) but first observe at 100_000, then exact-replay at 103_000.
+        // Reading at 105_500: signed age is 4_500 (fresh, under the 5_000 cap)
+        // while local age is 5_500 (stale). If the replay had refreshed local
+        // arrival to 103_000 the local age would be 2_500 and the snapshot would
+        // succeed, failing this test.
+        //
+        // The previous version read at 105_001 with publish == first-arrival, so
+        // BOTH clocks were stale and the assertion accepted either error. It
+        // passed whether or not local arrival was refreshed — it could not fail
+        // for the reason it exists.
         let cache = OracleCache::new();
         cache
-            .apply_verified_batch_at(vec![(FEED.into(), entry(100_000, 10))], policy(), 100_000)
+            .apply_verified_batch_at(vec![(FEED.into(), entry(101_000, 10))], policy(), 100_000)
             .await
             .unwrap();
         let report = cache
-            .apply_verified_batch_at(vec![(FEED.into(), entry(100_000, 10))], policy(), 104_000)
+            .apply_verified_batch_at(vec![(FEED.into(), entry(101_000, 10))], policy(), 103_000)
             .await
             .unwrap();
         assert_eq!(report.replayed, 1);
@@ -534,9 +560,50 @@ mod tests {
             quote_decimals: 6,
             price_scale: 100_000_000,
         };
+        assert!(
+            matches!(
+                cache.snapshot_at(FEED, policy(), units, 105_500).await,
+                Err(OracleCacheError::LocalStale { .. })
+            ),
+            "expected LocalStale — signed freshness is still valid here, so \
+             anything else means the exact replay refreshed local arrival"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_publish_second_with_a_newer_sequence_is_accepted() {
+        // Pyth's publish_time is second-granular while Pythnet aggregates
+        // sub-second, so consecutive genuine updates routinely share a publish
+        // second while carrying a new sequence and a moved price. That is normal
+        // cadence, not a conflicting replay.
+        let cache = OracleCache::new();
+        cache
+            .apply_verified_batch_at(vec![(FEED.into(), entry(100_000, 10))], policy(), 100_000)
+            .await
+            .unwrap();
+
+        let mut moved = entry(100_000, 11);
+        moved.twap = 15_500_000_000;
+        let report = cache
+            .apply_verified_batch_at(vec![(FEED.into(), moved)], policy(), 100_400)
+            .await
+            .expect("same publish second with a newer sequence must be accepted");
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.replayed, 0);
+
+        let stored = cache.get(FEED).await.expect("entry present");
+        assert_eq!(stored.twap, 15_500_000_000, "the newer price must win");
+        assert_eq!(stored.vaa_sequence, 11);
+
+        // The genuine conflict — same publish_time AND same sequence, different
+        // authenticated content — is still rejected.
+        let mut forged = entry(100_000, 11);
+        forged.twap = 99_000_000_000;
         assert!(matches!(
-            cache.snapshot_at(FEED, policy(), units, 105_001).await,
-            Err(OracleCacheError::SignedStale { .. }) | Err(OracleCacheError::LocalStale { .. })
+            cache
+                .apply_verified_batch_at(vec![(FEED.into(), forged)], policy(), 100_500)
+                .await,
+            Err(OracleCacheError::ConflictingReplay { .. })
         ));
     }
 

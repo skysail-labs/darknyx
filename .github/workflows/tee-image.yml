@@ -245,8 +245,14 @@ jobs:
       # by the nvidia runtime at deploy), so it is NOT resolvable here by design.
       - name: Verify CUDA image (no GPU)
         if: steps.ref.outputs.enable_cuda == '1'
+        env:
+          # Verify the IMMUTABLE tag@digest, not the bare tag. Pulling by tag
+          # would re-resolve the name and could validate a different artifact
+          # than the digest this job publishes and the compose pins — exactly the
+          # tag-vs-digest substitution the digest pin exists to prevent. Verify
+          # the bytes that ship.
+          IMG: ${{ steps.immutable.outputs.image }}
         run: |
-          IMG="${{ steps.ref.outputs.image }}"
           docker pull "$IMG"
           echo "=== icicle CUDA backend .so shipped under /opt/icicle/lib/backend ==="
           docker run --rm --entrypoint sh "$IMG" -c 'ls -R /opt/icicle/lib/backend'
@@ -260,7 +266,13 @@ jobs:
             'if ldd /opt/darknyx/darknyx-tee | grep -i "not found"; then echo "UNRESOLVED LIBS"; exit 1; fi; echo "all binary libs resolved"'
 
       - name: Emit pull command
+        env:
+          # Via env, not inline interpolation: these values derive from the git
+          # tag name / dispatch input, and a tag containing shell metacharacters
+          # would otherwise be parsed as syntax by the runner shell.
+          TAGGED_IMAGE: ${{ steps.ref.outputs.image }}
+          IMMUTABLE_IMAGE: ${{ steps.immutable.outputs.image }}
         run: |
-          echo "Build label: ${{ steps.ref.outputs.image }}"
-          echo "Immutable deploy identity: ${{ steps.immutable.outputs.image }}"
-          echo "Pull/deploy: pin compose image: to the immutable line above."
+          printf 'Build label: %s\n' "$TAGGED_IMAGE"
+          printf 'Immutable deploy identity: %s\n' "$IMMUTABLE_IMAGE"
+          printf 'Pull/deploy: pin compose image: to the immutable line above.\n'

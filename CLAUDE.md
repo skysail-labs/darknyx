@@ -309,17 +309,31 @@ digest.** Reusing a tag risks building or measuring stale content; deploying
 `@sha256:<digest>` makes the attested compose bind the exact image.
 
 ```sh
+TAG=tee-v3-hardening-<N+1>
 # 1. commit, then tag + push the exact source state:
-git tag tee-v3-hardening-<N+1> && git push origin tee-v3-hardening-<N+1>
-# 2. watch the required image build:
-gh run watch "$(gh run list --repo skysail-labs/darknyx --limit 1 --json databaseId -q '.[0].databaseId')" --repo skysail-labs/darknyx --exit-status
-# 3. confirm it landed (want 200) and resolve Docker-Content-Digest:
+git tag "$TAG" && git push origin "$TAG"
+# 2. watch THE run for tee-image.yml on THIS tag. Do NOT take `--limit 1` off the
+#    repo-wide list: any other workflow (pr-checks, a scheduled sweeper) can land
+#    in between, and you would then watch — and green-light — an unrelated run.
+RUN=$(gh run list --repo skysail-labs/darknyx --workflow tee-image.yml \
+        --branch "$TAG" --limit 1 --json databaseId -q '.[0].databaseId')
+test -n "$RUN" || { echo "no tee-image run for $TAG yet"; exit 1; }
+gh run watch "$RUN" --repo skysail-labs/darknyx --exit-status
+# 3. resolve Docker-Content-Digest, FAILING CLOSED. A missing tag returns a
+#    non-200 with no digest header; printing the headers and eyeballing them is
+#    how a compose ends up pinned to an image that was never built.
 TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/darknyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-curl -sI -H "Authorization: Bearer $TOK" \
+HDRS=$(curl -sI -o /dev/null -w '%{http_code}' -D /dev/stderr \
+  -H "Authorization: Bearer $TOK" \
   -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
-  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N+1>"
-# 4. pin compose to the immutable result and commit it:
-#    image: ghcr.io/skysail-labs/darknyx-tee@sha256:<digest>
+  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/$TAG" 2>/tmp/hdrs)
+test "$HDRS" = 200 || { echo "manifest for $TAG not found (HTTP $HDRS)"; exit 1; }
+DIGEST=$(tr -d '\r' < /tmp/hdrs | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')
+echo "$DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$' \
+  || { echo "malformed or absent digest: '$DIGEST'"; exit 1; }
+echo "pin this: ghcr.io/skysail-labs/darknyx-tee@$DIGEST"
+# 4. pin compose to that digest and commit it. `scripts/check-compose-image-digests.sh`
+#    enforces the shape on every PR.
 ```
 
 The tag is a build label and audit cross-reference only. Deployment compose

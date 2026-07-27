@@ -2,7 +2,7 @@
 
 This is the canonical closure ledger for
 [`audit-2026-07-25-tee-infra-daemon-review.md`](audit-2026-07-25-tee-infra-daemon-review.md).
-It covers `T-01…T-16` and `PF-08…PF-10`, plus the release-readiness gaps
+It covers `T-01…T-18` and `PF-08…PF-10`, plus the release-readiness gaps
 confirmed while evaluating the audit. The earlier
 [`audit-2026-07-25-remediation-tracker.md`](audit-2026-07-25-remediation-tracker.md)
 remains canonical for `S-`, `PF-01…PF-07`, and `AU-` findings; this tracker
@@ -55,13 +55,13 @@ the first stop for an agent resuming the work.
 | Active slice | `remediation/tee-oracle-trust` — live evidence complete |
 | Active branch / PR | `remediation/tee-oracle-trust` @ `e0fe368` / PR open |
 | Next slice | `remediation/local-assurance` |
-| Live state | **CVM stopped; billing halted.** `nightly-test-cvm` (`app_9ca3cded…c14db637`, CPU, `gpus=0`, node prod9) ran the oracle image and was stopped after evidence capture. Devnet mutated: all 4 Merkle shards reset, `tee_pubkeys` rotated to this CVM's 4-shard set, each funded to 2 SOL. Images pinned by digest — CPU `sha256:dddf0116…53ad3` (tag `tee-v3-hardening-74`), GPU `sha256:1001d5a0…67854` (tag `tee-v3-hardening-74-cuda`). The previously referenced `tee-v3-hardening-69-cuda` never existed in GHCR. |
+| Live state | **CVM stopped; billing halted.** `nightly-test-cvm` (`app_9ca3cded…c14db637`, CPU, `gpus=0`, node prod9) ran the oracle image and was stopped after evidence capture. Devnet mutated: all 4 Merkle shards reset, `tee_pubkeys` rotated to this CVM's 4-shard set, each funded to 2 SOL. Images pinned by digest — CPU `sha256:dddf0116363e8ab9112bc09a7cf97558f00f2306016094ba6bcb917a64253ad3` (tag `tee-v3-hardening-74`), GPU `sha256:1001d5a0ae45d86c624c265c3598b490f7b511aa3349faa1c2ea03d29d367854` (tag `tee-v3-hardening-74-cuda`). The previously referenced `tee-v3-hardening-69-cuda` never existed in GHCR. |
 | Last updated | 2026-07-27 |
 
 ### Slice 1 live evidence — 2026-07-27
 
 Captured against `nightly-test-cvm` running the digest-pinned image
-`@sha256:dddf0116…53ad3` (verified via `phala ps`, so the deployed identity is
+`@sha256:dddf0116363e8ab9112bc09a7cf97558f00f2306016094ba6bcb917a64253ad3` (verified via `phala ps`, so the deployed identity is
 the pinned digest and not a tag).
 
 | Evidence | Result |
@@ -121,6 +121,8 @@ for `Closed` and needs either a debug-level run or an exported counter.
 | T-14 | Low | Vault + TEE + SDK | `remediation/tee-bounds-cleanup` | The retired `NullifierEntry`, seeds, PDA helpers, comments, and public exports are absent across the program, TEE, SDK, scripts, and docs. The commitment-keyed consumed/deposit guards remain untouched. | Open |
 | T-15 | Low | Vault tests + tracker | `remediation/local-assurance` | LiteSVM covers live-lock withdraw rejection, expiry-boundary withdraw success, and `release_lock → withdraw` including rent return. The earlier S-03 row names only evidence that exists. | Open |
 | T-16 | Medium | TEE oracle + matcher + market config | `remediation/tee-oracle-trust` | Pyth-native price/exponent values are converted with checked integer arithmetic into the governed atomic base/quote price units before circuit-breaker comparison or collateral math. The invariant includes base decimals, quote decimals, exponent, and `price_scale`; unequal-decimal markets, exponent changes, unrepresentable scales, rounding, and overflow fail closed. | Code complete |
+| T-17 | Medium | TEE matcher + API | `remediation/multi-market-isolation` | `TradingPauseReason::Oracle` is scoped per market, not venue-wide. One market's stale or unauthenticated feed pauses only that market, and a healthy market's tick cannot clear another's oracle pause. A mixed configuration where some markets have no `oracle_feed_id` while `feed_ids` is non-empty is rejected at boot rather than silently sharing gate state. | Open |
+| T-18 | Medium | Release engineering | `remediation/local-assurance` | A failure in the `Detect changed paths` job cannot leave the aggregate `pr-checks success` check green. The aggregate gate must fail (not pass) when any prerequisite job fails or is skipped due to an upstream failure, so a broken paths filter cannot silently disable the entire PR gate. | Open |
 
 ## Performance findings
 
@@ -242,7 +244,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | Order | Slice | Findings / deliverables | Prerequisite | Status / PR | Compatibility and rollout | Required evidence before `Closed` |
 |---|---|---|---|---|---|---|
 | 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | Code complete / PR open | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
-| 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15 | Slice 1 closed | Open / — | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
+| 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Open / — | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
 | 3 | `remediation/tee-transport-integrity` | T-03, DEP-AU-07; enforce T-04 for new ingress image | Slice 2 code complete | Open / — | Compose hash and transport endpoint change; digest-pinned ingress image; governance/client pin rotation required. | Local compose validation, connection-cap tests, immutable ingress digest, real CVM HTTPS/WSS/API/attestation checks, plaintext-port negative, signer rotation and compose-hash evidence. |
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Open / — | New versioned encrypted journal; no public wire change unless terminal restart reasons are surfaced. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | Open / — | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
@@ -362,8 +364,8 @@ Commands run and exact results:
   cvm-settle-e2e (RUN_CVM_E2E=1)                  -> 1 passed (41.6 s)
 Live state: nightly-test-cvm app_9ca3cded105f16923afb0e3f62537882c14db637,
   CPU (gpus=0), node prod9, STOPPED after evidence capture.
-  Image: ghcr.io/skysail-labs/darknyx-tee@sha256:dddf0116…53ad3
-    (tag tee-v3-hardening-74; GPU tee-v3-hardening-74-cuda @ sha256:1001d5a0…67854)
+  Image: ghcr.io/skysail-labs/darknyx-tee@sha256:dddf0116363e8ab9112bc09a7cf97558f00f2306016094ba6bcb917a64253ad3
+    (tag tee-v3-hardening-74; GPU tee-v3-hardening-74-cuda @ sha256:1001d5a0ae45d86c624c265c3598b490f7b511aa3349faa1c2ea03d29d367854)
   Signer set (all funded to 2 SOL, registered in vault_config.tee_pubkeys):
     0 4F9aTxW18pxBYFTnqXi8P82FUY4255RQDCkysZyoSMRX
     1 8x4QTRcmYnvALeLpqn5DVQ968nNTPfFvFosBqSh3Q6s2
@@ -381,3 +383,44 @@ Exact next action: merge the slice-1 PR, then start slice 2
   CVM. Note the tree is freshly reset, so the next leaf-count CVM test can run
   without another reset if it goes first.
 ```
+
+## Findings raised during slice-1 review — 2026-07-27
+
+Automated review of the slice-1 PR surfaced two issues in code the slice itself
+introduced. Both were validated against the tree before being accepted, and both
+were fixed in the same PR:
+
+- **Conflicting-replay false positive.** The batch validator treated *any*
+  entry sharing a `publish_time_ms` with the cached one as a conflict unless the
+  sequence also matched. Pyth's `publish_time` is second-granular while Pythnet
+  aggregates sub-second, so consecutive genuine updates routinely share a publish
+  second with a new sequence and a moved price — normal cadence was classified as
+  an attack and failed the whole refresh. The insert predicate immediately below
+  already skipped only on *both* fields matching, so the two predicates
+  disagreed; the conflict check was the wrong half. Now only an identical
+  `(publish_time_ms, vaa_sequence)` pair with differing authenticated content is
+  a conflict. Regression test:
+  `same_publish_second_with_a_newer_sequence_is_accepted`.
+- **A test that could not fail for its stated reason.**
+  `exact_replay_does_not_refresh_local_arrival` read at a moment when signed and
+  local clocks were *both* stale and accepted either error, so it passed whether
+  or not the replay refreshed local arrival. Retimed so signed freshness is still
+  valid while local arrival is stale, and it now asserts `LocalStale`
+  specifically. Same class as T-12.
+
+Two further findings were validated as real but deliberately **not** fixed here,
+because both are larger than this slice and neither is reachable in the current
+single-market deployment:
+
+- **T-17 — venue-wide oracle pause.** `TradingGate` is one shared
+  `Arc<AtomicU8>` of reason bits, cloned into every market driver, so
+  `TradingPauseReason::Oracle` is global: one market's stale feed pauses all
+  markets, and a healthy market's tick clears the bit for a still-stale one.
+  Latent today (one configured market), real for multi-market. Fixing it means
+  per-market pause state, which touches the multi-market model — see
+  `docs/multi-market-architecture.md`.
+- **T-18 — the aggregate CI gate can pass while nothing runs.** Observed live on
+  this PR: `Detect changed paths` failed, every real job reported `skipping`, and
+  `pr-checks success` still reported **pass** in 3 s. A merge rule keyed on that
+  check would have merged with zero tests executed. Same shape as T-11/T-12, and
+  more dangerous, because it is the top-level check. Filed into slice 2.
