@@ -31,8 +31,9 @@ fi
 # EVERY build script that drives its own cmake CUDA backend must read the same
 # var — they are independent cmake invocations, so one straggler is enough to
 # fail the image build. Checking only icicle-runtime is what let the 2026-07-27
-# `-cuda` failure through: the runtime read DARKNYX_*, icicle-bn254 still read
-# only NYX_*, and this guard reported the pairing as correct.
+# `-cuda` failure through: the runtime read DARKNYX_ICICLE_CUDA_ARCH while
+# icicle-bn254 still read only the deprecated NYX_ICICLE_CUDA_ARCH spelling, and
+# this guard — inspecting just the runtime — reported the pairing as correct.
 BUILD_SCRIPTS="$(grep -rl 'CUDA_BACKEND' "$WRAPPERS" --include=build.rs | sort)"
 
 if [ -z "$BUILD_SCRIPTS" ]; then
