@@ -67,15 +67,14 @@ pub struct OracleSnapshot {
     /// negative TWAPs as stale and refuses to compute a clearing
     /// price.
     pub twap: u64,
-    /// Pyth confidence interval, same units as `twap`. Currently
-    /// informational; reserved for later VALID_PRICE binding work.
+    /// Pyth confidence interval converted into the same units as `twap`.
+    /// Currently informational; reserved for later VALID_PRICE binding work.
     pub confidence: u64,
-    /// Negative power of 10. Informational at matcher layer —
-    /// the on-chain ix and the matcher use the same fixed-point
-    /// scale that the rest of the system has agreed on.
-    pub exponent: i32,
-    /// Publish-time slot from Pyth. The matcher rejects oracle
-    /// snapshots older than its `current_slot` by more than a
-    /// configurable freshness budget (PR-2 wiring).
-    pub publish_slot: u64,
+    /// Signed Pyth publish time plus the local observation/policy captured by
+    /// the TEE. The pure matcher checks these fields itself so a caller cannot
+    /// bypass freshness by fabricating `publish_slot = current_slot`.
+    pub publish_time_ms: u64,
+    pub observed_at_ms: u64,
+    pub max_age_ms: u64,
+    pub max_future_skew_ms: u64,
 }

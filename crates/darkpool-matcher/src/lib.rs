@@ -213,11 +213,17 @@ impl PreparedMatchTick {
     }
 }
 
-fn validate_oracle(oracle: &OracleSnapshot, current_slot: u64) -> Result<(), MatchError> {
-    if oracle.twap == 0 {
+fn validate_oracle(oracle: &OracleSnapshot, _current_slot: u64) -> Result<(), MatchError> {
+    let future_limit = oracle
+        .observed_at_ms
+        .saturating_add(oracle.max_future_skew_ms);
+    let stale = oracle.twap == 0
+        || oracle.publish_time_ms > future_limit
+        || oracle.observed_at_ms.saturating_sub(oracle.publish_time_ms) > oracle.max_age_ms;
+    if stale {
         return Err(MatchError::OracleStale {
-            publish: oracle.publish_slot,
-            now: current_slot,
+            publish_ms: oracle.publish_time_ms,
+            observed_ms: oracle.observed_at_ms,
         });
     }
     Ok(())
@@ -231,7 +237,7 @@ fn validate_oracle(oracle: &OracleSnapshot, current_slot: u64) -> Result<(), Mat
 ///
 /// Steps:
 ///
-///   1. Validate the oracle is non-zero (else refuse to clear).
+///   1. Validate the oracle is non-zero and signed-time fresh.
 ///   2. Partition the book into bids / asks / expired / below-min,
 ///      collect inclusion-leaf commitments.
 ///   3. Sort bids descending-by-price (FIFO at ties), asks

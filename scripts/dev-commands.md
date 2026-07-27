@@ -374,22 +374,23 @@ a `tee-v3-hardening-N` **git tag**. It builds linux/amd64 and pushes to
 layer cache** (`:buildcache`), so a fresh tag builds in ~4–5 min.
 
 ```sh
-# 1. Bump the image tag the compose pins:
-#    deploy/docker-compose.yaml  →  image: ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-<N>
-# 2. Commit, then tag + push to trigger the build:
+# 1. Commit, then use a fresh tag to trigger the exact source build:
 git tag tee-v3-hardening-<N> && git push origin tee-v3-hardening-<N>
-# 3. Watch it (repo: skysail-labs/darknyx):
+# 2. Watch it (repo: skysail-labs/darknyx):
 gh run watch "$(gh run list --limit 1 --json databaseId -q '.[0].databaseId')" --exit-status
-# 4. Confirm it landed in ghcr:
+# 3. Resolve the immutable digest:
 TOK=$(curl -s "https://ghcr.io/token?scope=repository:skysail-labs/darknyx-tee:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOK" \
-  -H "Accept: application/vnd.oci.image.index.v1+json" \
-  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N>"   # want 200
+curl -sI -H "Authorization: Bearer $TOK" \
+  -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+  "https://ghcr.io/v2/skysail-labs/darknyx-tee/manifests/tee-v3-hardening-<N>" \
+  | grep -i docker-content-digest
+# 4. Pin deploy/docker-compose.yaml to:
+#    image: ghcr.io/skysail-labs/darknyx-tee@sha256:<digest>
 ```
 
-> **Always bump the tag** for a code change. `phala deploy --cvm-id` WITH a
-> bumped tag re-pulls; a same-tag update reuses the cached image (you'd test
-> stale code). Compose env-only changes (`-e`) take effect without a rebuild.
+> **Always use a fresh build tag and deploy the resolved digest** for a code
+> change. Tags are audit labels, not deployment identities. Compose env-only
+> changes (`-e`) take effect without a rebuild.
 
 ### 5.2 Deploy / start / stop a CVM
 
@@ -398,7 +399,7 @@ phala cvms list                                   # find the CVM id + app id
 CVM=34fbcace-899b-4fa0-a008-d257f80d6592           # the dev CVM (example)
 
 phala cvms start "$CVM"                            # resume a stopped CVM
-phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx.env   # update (re-pull on tag bump)
+phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e /tmp/darknyx.env   # update (compose pins immutable digest)
 phala cvms stop  "$CVM"                            # stop (preserves app_id/signer/volume; stops billing)
 phala cvms logs  "$CVM" 2>&1 | tail -40            # logs
 phala cvms get   "$CVM"                            # status / app id
@@ -429,6 +430,7 @@ OWNER=$(jq -r .protocol.ownerCommitmentHex .devnet/e2e-config.json)
 FLOOR=$(solana slot --url "$HELIUS")              # cold-boot floor (so the sync rebuilds the CURRENT tree)
 cat > /tmp/darknyx.env <<EOF
 DARKNYX_TEE_SOLANA_RPC_URL=$HELIUS
+DARKNYX_TEE_PYTH_API_KEY=$DARKNYX_TEE_PYTH_API_KEY
 DARKNYX_TEE_SYNC_FROM_SLOT=$FLOOR
 DARKNYX_TEE_BASE_MINT=$BASE
 DARKNYX_TEE_QUOTE_MINT=$QUOTE
@@ -450,6 +452,9 @@ Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 | Var | Used by | Notes |
 |---|---|---|
 | `DARKNYX_TEE_SOLANA_RPC_URL` | Merkle sync + settle txs | **Helius** (public devnet 429s). Empty → public devnet default. |
+| `DARKNYX_TEE_PYTH_TRUST_PROFILE` | oracle trust root | Strict versioned profile: `legacy-wormhole-v1` or `router-quorum-v1`. Production compose selects the upgraded router 3-of-5 profile; no profile is inferred from a VAA. |
+| `DARKNYX_TEE_HERMES_ENDPOINT` | oracle transport | Profile-dependent default. Production compose pins `https://pyth.dourolabs.app/hermes`. |
+| `DARKNYX_TEE_PYTH_API_KEY` | authenticated Hermes | Bearer credential supplied only through encrypted deploy env. Missing/invalid auth keeps new trading paused; never log or commit it. |
 | `DARKNYX_TEE_SYNC_FROM_SLOT` | Merkle cold-boot floor | Set to the current slot (or a reset slot) so the mirror rebuilds the live tree, not pre-reset leaves. |
 | `DARKNYX_TEE_BASE_MINT` / `_QUOTE_MINT` | order intake | base58; supply both or neither. **Omit both → placeholder dev mints with settlement disabled** (loadgen regime). Real e2e settle MUST set the `e2e-config` mints and have finalized `VaultConfig` + `MarketConfig` available. |
 | `DARKNYX_TEE_MARKET_SYMBOL` | API + signed order routing | Display/canonical order symbol for the configured mint pair (default `SOL-USDC`; 1–32 bytes). |
@@ -461,7 +466,7 @@ Every CVM env var (`crates/darknyx-tee/src/config.rs`):
 | `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` | settle worker | max settle Tx D's (+ lock txs + ALT extends) fired CONCURRENTLY (default 16). Lets the leader co-include them in one block. |
 | `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY` | settle scheduler | whole batches driven concurrently across the **entire CVM** (not per market; 1..=8, default 1). Raise only under the benchmark methodology; CPU proof contention can erase the IO overlap. |
 | `DARKNYX_TEE_PROVER` | prover | `ark` (default) \| `rapidsnark`. The image ships both (`--features rapidsnark`); flip to A/B prove on the SAME image (no rebuild). |
-| `DARKNYX_TEE_FEED_IDS` | oracle | Legacy one-market comma-separated Pyth ids. Multi-market deploys take each feed from `DARKNYX_TEE_MARKETS_JSON`. |
+| `DARKNYX_TEE_FEED_IDS` | oracle | Legacy one-market comma-separated Pyth ids. Multi-market deploys take each feed from `DARKNYX_TEE_MARKETS_JSON`; all unique feeds share one authenticated Hermes batch request per refresh. |
 
 A **malformed** (non-empty) value now **fails startup** (config fail-fast);
 an **empty** `${VAR}` falls back to the default.

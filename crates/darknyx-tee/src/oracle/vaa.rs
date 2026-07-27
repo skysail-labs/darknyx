@@ -1,5 +1,5 @@
-//! Wormhole VAA (Verifiable Action Approval) parser + guardian
-//! signature verification.
+//! Pyth VAA (Verifiable Action Approval) parser + signer-profile
+//! verification.
 //!
 //! A VAA is the cryptographic primitive Pyth uses to sign price
 //! attestations. Structure:
@@ -28,8 +28,14 @@
 //! double-keccak256'd (Wormhole's signing scheme is keccak256 of
 //! the body, then ECDSA-signed); for each signature, recover the
 //! 20-byte Ethereum-style address via ecrecover and check it
-//! matches the guardian at the given index. Quorum is 13/19 for
-//! mainnet set 7 (see `MAINNET_GUARDIAN_SET_INDEX`).
+//! matches the signer at the given index. The complete trust
+//! profile is selected by deployment configuration; it is never
+//! inferred from attacker-controlled VAA fields:
+//!
+//! * `legacy-wormhole-v1`: Wormhole mainnet set 7, quorum 13/19,
+//!   legacy Pythnet emitter.
+//! * `router-quorum-v1`: Pyth Core's 2026 router set 0, quorum 3/5,
+//!   upgraded `Pythnet...` emitter.
 //!
 //! **NOT verified at this layer** (but verified one layer up): the
 //! Pyth-internal Merkle-proof inclusion of a specific price feed
@@ -41,6 +47,8 @@
 //! C-05 / A-2 gap where the price was taken from Hermes's untrusted
 //! JSON `parsed[]` instead of the guardian-signed binary. See
 //! `docs/oracle-accumulator-notes.md` for the confirmed wire spec.
+
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
@@ -66,8 +74,8 @@ use sha3::{Digest, Keccak256};
 /// different set are rejected.
 pub const MAINNET_GUARDIAN_SET_INDEX: u32 = 7;
 
-/// Number of valid signatures required for a VAA to be accepted.
-pub const QUORUM: usize = 13;
+/// Number of valid signatures required for a legacy VAA to be accepted.
+pub const LEGACY_QUORUM: usize = 13;
 
 /// 20-byte Ethereum-style addresses (keccak256(pubkey)[12..]) of
 /// the 19 guardians in mainnet set 7. Indices 7, 14, 18 differ from set 6.
@@ -93,6 +101,100 @@ pub const MAINNET_GUARDIANS: [[u8; 20]; 19] = [
     hex_lit!("7899cEAB1DC961Dae9defDB7A4f521269a5448FC"),
     hex_lit!("61D9800f9FCb4160FB0C6cf3A0902592bAC2B434"), // set 7: was 6FbEBc89…
 ];
+
+/// Pyth receiver-approved legacy data source: chain 26 (Pythnet) and the
+/// emitter configured in the deployed `rec5...` Solana receiver.
+pub const PYTHNET_CHAIN_ID: u16 = 26;
+pub const LEGACY_PYTH_EMITTER: [u8; 32] =
+    hex_lit!("e101faedac5851e32b9b23b5f9411a8c2bac4aae3ed4dd7b811dd1a72ea4aa71");
+
+// ─────── Pyth Core upgraded router set 0 ────────────────────────────────
+//
+// The upgraded Solana receiver (`rec2...`) is configured with
+// `minimum_signatures = 3`, data source `(chain=26,
+// emitter="PythnetPythnetPythnetPythnetPyth")`, and upgraded Wormhole
+// program `HDw2...`. Its guardian-set-0 PDA contains the five addresses
+// below. Captured from finalized public Solana accounts on 2026-07-27:
+//
+//   receiver config: H3R4M45f2gyqp6geVUruapzZdyxpgGZ96UnWkDM3ndye
+//   guardian set 0:  CJHmJw4FuvLTUfPsYepyVCQkUR8qv1AtZbkwsS36hEcd
+//
+// Pyth's upgrade guide identifies this profile as five independent routers
+// with a 3-of-5 quorum. A live upgraded push VAA is pinned by
+// `tests/fixtures/sol_usd_router_vaa.hex`.
+
+pub const ROUTER_GUARDIAN_SET_INDEX: u32 = 0;
+pub const ROUTER_QUORUM: usize = 3;
+
+#[rustfmt::skip]
+pub const PYTH_CORE_ROUTERS: [[u8; 20]; 5] = [
+    hex_lit!("41534bb176e461a3fb30479400f210549ecce638"),
+    hex_lit!("6502987b62f21cab7eb5ccd8f0173084b60d5b41"),
+    hex_lit!("44a3e8f6a382412cf6bb90a3f8106e68977476c9"),
+    hex_lit!("d9d7d4529577864352c9a6539a48238fcd447052"),
+    hex_lit!("1663a5a822336ece48559b1dfb1e93a017a7dac3"),
+];
+
+pub const ROUTER_PYTH_EMITTER: [u8; 32] = *b"PythnetPythnetPythnetPythnetPyth";
+
+/// Complete, versioned signer/emitter profile selected at boot.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TrustProfile {
+    LegacyWormholeV1,
+    RouterQuorumV1,
+}
+
+impl TrustProfile {
+    pub const LEGACY_NAME: &'static str = "legacy-wormhole-v1";
+    pub const ROUTER_NAME: &'static str = "router-quorum-v1";
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyWormholeV1 => Self::LEGACY_NAME,
+            Self::RouterQuorumV1 => Self::ROUTER_NAME,
+        }
+    }
+
+    fn signer_config(self) -> SignerConfig {
+        match self {
+            Self::LegacyWormholeV1 => SignerConfig {
+                set_index: MAINNET_GUARDIAN_SET_INDEX,
+                signers: &MAINNET_GUARDIANS,
+                quorum: LEGACY_QUORUM,
+                emitter_chain: PYTHNET_CHAIN_ID,
+                emitter_address: LEGACY_PYTH_EMITTER,
+            },
+            Self::RouterQuorumV1 => SignerConfig {
+                set_index: ROUTER_GUARDIAN_SET_INDEX,
+                signers: &PYTH_CORE_ROUTERS,
+                quorum: ROUTER_QUORUM,
+                emitter_chain: PYTHNET_CHAIN_ID,
+                emitter_address: ROUTER_PYTH_EMITTER,
+            },
+        }
+    }
+}
+
+impl FromStr for TrustProfile {
+    type Err = VaaError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            Self::LEGACY_NAME => Ok(Self::LegacyWormholeV1),
+            Self::ROUTER_NAME => Ok(Self::RouterQuorumV1),
+            other => Err(VaaError::UnknownTrustProfile(other.to_string())),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SignerConfig {
+    set_index: u32,
+    signers: &'static [[u8; 20]],
+    quorum: usize,
+    emitter_chain: u16,
+    emitter_address: [u8; 32],
+}
 
 // Compile-time hex literal helper. Avoids a runtime hex::decode
 // allocation per entry.
@@ -127,6 +229,8 @@ const fn hex_nibble(b: u8) -> u8 {
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaaError {
+    #[error("unknown Pyth trust profile {0:?}")]
+    UnknownTrustProfile(String),
     #[error("VAA shorter than minimum header (6 bytes), got {0}")]
     TooShort(usize),
     #[error("unsupported VAA version {0} (expected 1)")]
@@ -166,6 +270,16 @@ pub enum VaaError {
     DuplicateGuardian(u8),
     #[error("signature_indices not strictly increasing — got {prev} then {next}")]
     SignaturesUnordered { prev: u8, next: u8 },
+    #[error(
+        "VAA emitter mismatch: expected chain {expected_chain} address {expected_address:x?}, \
+         got chain {actual_chain} address {actual_address:x?}"
+    )]
+    WrongEmitter {
+        expected_chain: u16,
+        expected_address: [u8; 32],
+        actual_chain: u16,
+        actual_address: [u8; 32],
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -290,12 +404,13 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedVaa<'_>, VaaError> {
 /// 3. For each signature: ecrecover the public key, derive the
 ///    20-byte Ethereum-style address, compare to
 ///    `guardians[guardian_idx]`. Reject duplicate guardian_idx.
-/// 4. Accept iff at least `QUORUM` signatures verified against
+/// 4. Accept iff at least `required_quorum` signatures verified against
 ///    distinct guardians.
 pub fn verify_signatures(
     vaa: &ParsedVaa<'_>,
     guardians: &[[u8; 20]],
     trusted_set_index: u32,
+    required_quorum: usize,
 ) -> Result<(), VaaError> {
     if vaa.guardian_set_index != trusted_set_index {
         return Err(VaaError::WrongGuardianSet {
@@ -364,23 +479,52 @@ pub fn verify_signatures(
         valid += 1;
     }
 
-    if valid < QUORUM {
+    if valid < required_quorum {
         return Err(VaaError::BelowQuorum {
             valid,
-            required: QUORUM,
+            required: required_quorum,
             set_size: guardians.len(),
         });
     }
     Ok(())
 }
 
-/// Convenience wrapper: parse + verify against the trusted mainnet
-/// set. Returns the parsed VAA on success.
-pub fn verify(bytes: &[u8]) -> Result<ParsedVaa<'_>> {
+/// Verify that a signer-authenticated VAA came from the exact Pyth data source
+/// approved by the selected profile. Kept separate so tests can prove a valid
+/// signed envelope does not make emitter identity optional.
+pub fn verify_emitter(
+    vaa: &ParsedVaa<'_>,
+    expected_chain: u16,
+    expected_address: [u8; 32],
+) -> Result<(), VaaError> {
+    if vaa.emitter_chain_id != expected_chain || vaa.emitter_address != expected_address {
+        return Err(VaaError::WrongEmitter {
+            expected_chain,
+            expected_address,
+            actual_chain: vaa.emitter_chain_id,
+            actual_address: vaa.emitter_address,
+        });
+    }
+    Ok(())
+}
+
+/// Parse and verify against one explicitly selected, complete Pyth profile.
+/// Signer set, quorum, emitter chain, and emitter address all have to match.
+pub fn verify_for_profile(bytes: &[u8], profile: TrustProfile) -> Result<ParsedVaa<'_>> {
     let vaa = parse(bytes).context("VAA parse failed")?;
-    verify_signatures(&vaa, &MAINNET_GUARDIANS, MAINNET_GUARDIAN_SET_INDEX)
-        .context("VAA guardian signature verification failed")?;
+    let cfg = profile.signer_config();
+    verify_signatures(&vaa, cfg.signers, cfg.set_index, cfg.quorum)
+        .with_context(|| format!("VAA signature verification failed for {}", profile.as_str()))?;
+    verify_emitter(&vaa, cfg.emitter_chain, cfg.emitter_address)
+        .with_context(|| format!("VAA emitter verification failed for {}", profile.as_str()))?;
     Ok(vaa)
+}
+
+/// Legacy convenience wrapper retained for callers/tests that explicitly
+/// exercise the pre-upgrade fixture. Production sync uses
+/// [`verify_for_profile`] with the boot-selected profile.
+pub fn verify(bytes: &[u8]) -> Result<ParsedVaa<'_>> {
+    verify_for_profile(bytes, TrustProfile::LegacyWormholeV1)
 }
 
 // ─────── Self-tests (no fixtures needed) ────────────────────────────────────
@@ -394,9 +538,29 @@ mod tests {
         // Documented as constants but worth pinning by test: if
         // anyone changes one without the other, this catches it.
         assert_eq!(MAINNET_GUARDIANS.len(), 19);
-        assert_eq!(QUORUM, 13);
+        assert_eq!(LEGACY_QUORUM, 13);
         // floor(2 * 19 / 3) + 1 = 13
-        assert_eq!(QUORUM, (2 * MAINNET_GUARDIANS.len() / 3) + 1);
+        assert_eq!(LEGACY_QUORUM, (2 * MAINNET_GUARDIANS.len() / 3) + 1);
+    }
+
+    #[test]
+    fn upgraded_quorum_is_three_of_five() {
+        assert_eq!(PYTH_CORE_ROUTERS.len(), 5);
+        assert_eq!(ROUTER_QUORUM, 3);
+        assert_eq!(ROUTER_PYTH_EMITTER, *b"PythnetPythnetPythnetPythnetPyth");
+    }
+
+    #[test]
+    fn trust_profile_names_are_strict_and_versioned() {
+        assert_eq!(
+            TrustProfile::from_str(TrustProfile::LEGACY_NAME).unwrap(),
+            TrustProfile::LegacyWormholeV1
+        );
+        assert_eq!(
+            TrustProfile::from_str(TrustProfile::ROUTER_NAME).unwrap(),
+            TrustProfile::RouterQuorumV1
+        );
+        assert!(TrustProfile::from_str("router").is_err());
     }
 
     #[test]

@@ -66,10 +66,10 @@ fn fixture_parses_cleanly() {
     // Set 7 has 19 guardians, quorum is 13. Hermes typically
     // includes exactly the quorum count.
     assert!(
-        parsed.signature_count as usize >= vaa::QUORUM,
+        parsed.signature_count as usize >= vaa::LEGACY_QUORUM,
         "signature_count {} below quorum {}",
         parsed.signature_count,
-        vaa::QUORUM
+        vaa::LEGACY_QUORUM
     );
     // Pyth's Wormhole emitter chain id is 26 (PythNet).
     assert_eq!(
@@ -79,6 +79,96 @@ fn fixture_parses_cleanly() {
     // payload starts with PNAU-inner magic "AUWV" then
     // accumulator details. Just check it's non-empty.
     assert!(!parsed.payload.is_empty(), "payload should be non-empty");
+}
+
+fn router_fixture() -> Vec<u8> {
+    hex::decode(include_str!("fixtures/sol_usd_router_vaa.hex").trim())
+        .expect("router VAA fixture is valid hex")
+}
+
+#[test]
+fn upgraded_fixture_verifies_only_under_router_profile() {
+    let bytes = router_fixture();
+    let parsed = vaa::verify_for_profile(&bytes, vaa::TrustProfile::RouterQuorumV1)
+        .expect("upgraded 3-of-5 VAA verifies");
+    assert_eq!(parsed.guardian_set_index, vaa::ROUTER_GUARDIAN_SET_INDEX);
+    assert_eq!(parsed.signature_count as usize, vaa::ROUTER_QUORUM);
+    assert_eq!(parsed.emitter_chain_id, vaa::PYTHNET_CHAIN_ID);
+    assert_eq!(parsed.emitter_address, vaa::ROUTER_PYTH_EMITTER);
+
+    let err = vaa::verify_for_profile(&bytes, vaa::TrustProfile::LegacyWormholeV1)
+        .expect_err("upgraded VAA must not verify under legacy profile");
+    assert!(format!("{err:#}").contains("guardian set"));
+}
+
+#[test]
+fn legacy_fixture_is_rejected_under_router_profile() {
+    let bytes = extract_vaa(FIXTURE);
+    let err = vaa::verify_for_profile(&bytes, vaa::TrustProfile::RouterQuorumV1)
+        .expect_err("legacy VAA must not verify under router profile");
+    assert!(format!("{err:#}").contains("guardian set"));
+}
+
+#[test]
+fn valid_signatures_with_wrong_emitter_are_rejected() {
+    let bytes = router_fixture();
+    let parsed = vaa::parse(&bytes).expect("parse");
+    vaa::verify_signatures(
+        &parsed,
+        &vaa::PYTH_CORE_ROUTERS,
+        vaa::ROUTER_GUARDIAN_SET_INDEX,
+        vaa::ROUTER_QUORUM,
+    )
+    .expect("authentic router signatures verify");
+
+    let err = vaa::verify_emitter(&parsed, vaa::PYTHNET_CHAIN_ID, vaa::LEGACY_PYTH_EMITTER)
+        .expect_err("signer-authenticated VAA from another emitter must be rejected");
+    assert!(matches!(err, vaa::VaaError::WrongEmitter { .. }));
+    assert_ne!(vaa::LEGACY_PYTH_EMITTER, vaa::ROUTER_PYTH_EMITTER);
+}
+
+#[test]
+fn upgraded_fixture_rejects_wrong_signers_and_insufficient_quorum() {
+    let bytes = router_fixture();
+    let parsed = vaa::parse(&bytes).expect("parse");
+
+    let wrong_signers = vaa::verify_signatures(
+        &parsed,
+        &vaa::MAINNET_GUARDIANS,
+        vaa::ROUTER_GUARDIAN_SET_INDEX,
+        vaa::ROUTER_QUORUM,
+    )
+    .expect_err("router signatures must not verify against another signer table");
+    assert!(matches!(
+        wrong_signers,
+        vaa::VaaError::SignatureMismatch { .. }
+    ));
+
+    let below_quorum = vaa::verify_signatures(
+        &parsed,
+        &vaa::PYTH_CORE_ROUTERS,
+        vaa::ROUTER_GUARDIAN_SET_INDEX,
+        vaa::ROUTER_QUORUM + 1,
+    )
+    .expect_err("three signatures cannot satisfy a four-signature policy");
+    assert!(matches!(below_quorum, vaa::VaaError::BelowQuorum { .. }));
+}
+
+#[test]
+fn trust_profile_names_are_strict_and_versioned() {
+    assert_eq!(
+        vaa::TrustProfile::LEGACY_NAME
+            .parse::<vaa::TrustProfile>()
+            .unwrap(),
+        vaa::TrustProfile::LegacyWormholeV1
+    );
+    assert_eq!(
+        vaa::TrustProfile::ROUTER_NAME
+            .parse::<vaa::TrustProfile>()
+            .unwrap(),
+        vaa::TrustProfile::RouterQuorumV1
+    );
+    assert!("router".parse::<vaa::TrustProfile>().is_err());
 }
 
 #[test]
@@ -115,7 +205,8 @@ fn flipped_body_byte_breaks_signatures() {
         msg.contains("does not match guardian")
             || msg.contains("Below")
             || msg.contains("ecrecover")
-            || msg.contains("guardian signature verification"),
+            || msg.contains("guardian signature verification")
+            || msg.contains("signature verification failed"),
         "expected sig-rejection error, got: {msg}"
     );
 }

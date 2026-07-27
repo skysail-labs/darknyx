@@ -61,8 +61,12 @@ floating-point numbers.
 ## Oracle and circuit breaker
 
 The attested matcher reads the configured oracle and refuses clearing prices
-outside its configured circuit-breaker band. It also enforces every trader's
-limit and the uniform-clearing selection rule.
+outside its configured circuit-breaker band. Signed oracle publish time,
+replay ordering, and market-unit conversion are checked before that comparison.
+If the authenticated oracle becomes stale or invalid, new order placement,
+modification, and matching pause while cancellation and settlement recovery
+remain available. The matcher also enforces every trader's limit and the
+uniform-clearing selection rule.
 
 Those market-policy checks are **not** re-executed inside VALID_MATCH_BATCH. The
 settlement proof binds the market mints and `price_scale`, proves scaled floor

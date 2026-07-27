@@ -14,7 +14,13 @@ pub mod sync;
 pub mod vaa;
 
 pub use accumulator::{AccumulatorError, AccumulatorUpdate, PriceFeedMessage, PriceUpdate};
-pub use cache::{CachedPrice, OracleCache, OracleSnapshot};
-pub use hermes::{HermesClient, HermesError, HermesPriceUpdate};
-pub use sync::{spawn_oracle_sync, SyncConfig};
-pub use vaa::{verify as verify_vaa, ParsedVaa, VaaError};
+pub use cache::{
+    BatchApplyReport, CachedPrice, FreshnessPolicy, OracleCache, OracleCacheError, OracleSnapshot,
+    OracleUnits, UnitConversionError,
+};
+pub use hermes::{
+    HermesBatchUpdate, HermesClient, HermesError, HermesPriceUpdate, DEFAULT_HERMES_ENDPOINT,
+    UPGRADED_HERMES_ENDPOINT,
+};
+pub use sync::{spawn_oracle_sync, MarketOracleBinding, SyncConfig};
+pub use vaa::{verify as verify_vaa, verify_for_profile, ParsedVaa, TrustProfile, VaaError};

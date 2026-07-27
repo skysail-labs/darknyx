@@ -248,10 +248,26 @@ account/session setting served through `/v1/stream`.
 
 ## 6. Oracle model
 
-Each market names a Pyth feed. A shared sync task fetches Hermes accumulator
-updates, verifies the Wormhole VAA/guardian signatures, and updates an
-in-memory cache. Stale or invalid oracle data causes the matcher to skip the
-cycle.
+Each market names a Pyth feed. A shared sync task fetches all unique feeds in
+one authenticated Hermes accumulator request. Deployment selects a complete,
+versioned trust profile—legacy Wormhole 13-of-19 or upgraded Pyth router
+3-of-5—and verification binds the exact signer set, quorum, Pyth emitter, and
+Merkle-included price message. Profiles cannot be mixed or inferred from an
+incoming VAA.
+
+The cache preserves the signed Pyth publish time and VAA sequence. It rejects
+stale, future-dated, replay-conflicting, or non-monotonic batches atomically;
+an exact replay cannot refresh local health. The raw Pyth mantissa/exponent is
+converted with checked integer arithmetic into each governed market's atomic
+base/quote units and `price_scale` before circuit-breaker comparison. Both
+signed freshness and local refresh health are checked again at the matcher
+boundary.
+
+Oracle failure sets an independent fail-closed trading-gate reason. New
+place/modify and matching pause, while cancellation and settlement
+reconciliation continue. Recovery of governance health cannot clear an oracle
+pause (or vice versa); only a fresh, fully verified batch for every configured
+market clears the oracle reason.
 
 The oracle, signed limits, tick size, minimum size, and circuit-breaker band are
 not VALID_MATCH_BATCH inputs. They are attested-matcher policy. The proof binds:

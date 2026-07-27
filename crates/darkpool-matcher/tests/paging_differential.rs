@@ -89,8 +89,10 @@ fn oracle() -> OracleSnapshot {
     OracleSnapshot {
         twap: 100,
         confidence: 1,
-        exponent: -2,
-        publish_slot: CURRENT_SLOT,
+        publish_time_ms: 1_000,
+        observed_at_ms: 1_000,
+        max_age_ms: 5_000,
+        max_future_skew_ms: 1_000,
     }
 }
 

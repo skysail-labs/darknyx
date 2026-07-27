@@ -9,8 +9,8 @@ pub enum MatchError {
         bps: u16,
     },
 
-    #[error("oracle stale: publish_slot={publish} now={now}")]
-    OracleStale { publish: u64, now: u64 },
+    #[error("oracle stale: publish_time_ms={publish_ms} observed_at_ms={observed_ms}")]
+    OracleStale { publish_ms: u64, observed_ms: u64 },
 
     #[error("min_fill_size violation on order {order_id}: filled={filled} min={min}")]
     MinFillViolation {

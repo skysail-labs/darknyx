@@ -40,7 +40,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time;
 
-use crate::oracle::cache::OracleCache;
+use crate::oracle::cache::{FreshnessPolicy, OracleCache, OracleUnits};
 use crate::settle::vault::market_config_pda;
 
 use super::book::OrderBook;
@@ -50,11 +50,12 @@ use super::lifecycle::{OrderLifecycleEvent, OrderLifecycleKind};
 use super::openings::{NoteOpening, OrderOpening};
 
 /// Maximum age of an oracle cache entry the matcher will accept.
-/// Default 5 seconds — same order as the batch tick. If the
-/// `oracle_sync` task is healthy this is comfortably stale;
-/// during a Hermes outage matching ticks no-op and orders queue
-/// in the book.
+/// Default 5 seconds — same order as the batch tick. If the `oracle_sync` task
+/// is healthy this is comfortably stale; during an outage the independent
+/// oracle reason pauses new intake and matching while cancellation and
+/// reconciliation remain available.
 pub const DEFAULT_MAX_ORACLE_AGE_MS: u64 = 5_000;
+pub const DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS: u64 = 1_000;
 
 /// Shared mutable state the driver and order submitters touch.
 ///
@@ -598,6 +599,10 @@ pub struct DriverConfig {
     pub batch_ms: u64,
     /// Maximum age for a cached oracle entry to be used.
     pub max_oracle_age_ms: u64,
+    /// Maximum accepted signed timestamp lead over the TEE wall clock.
+    pub max_oracle_future_skew_ms: u64,
+    /// Governed atomic-unit conversion for this market.
+    pub oracle_units: OracleUnits,
     /// Max matches the matcher emits per settle batch — the N of the
     /// VALID_MATCH_BATCH circuit (production: `PRODUCTION_BATCH_N` = 16).
     /// A tick that clears more than this is paged into multiple ≤N
@@ -670,16 +675,23 @@ impl MatcherDriver {
         // Read the oracle. If it's missing or too stale, log + skip
         // this tick — we don't want to clear against a price that
         // may have drifted in the meantime.
+        let freshness = FreshnessPolicy {
+            max_age_ms: self.cfg.max_oracle_age_ms,
+            max_future_skew_ms: self.cfg.max_oracle_future_skew_ms,
+        };
         let oracle = match self
             .oracle
-            .snapshot(&self.cfg.feed_id, self.cfg.max_oracle_age_ms, now_slot)
+            .snapshot(&self.cfg.feed_id, freshness, self.cfg.oracle_units)
             .await
         {
-            Some(s) => MatcherOracleSnapshot::from(s).0,
-            None => {
-                tracing::debug!(
+            Ok(s) => MatcherOracleSnapshot::from(s).0,
+            Err(error) => {
+                self.trading_gate
+                    .pause_for(super::gate::TradingPauseReason::Oracle);
+                tracing::warn!(
                     feed_id = self.cfg.feed_id,
-                    "oracle stale or missing — skipping matching tick"
+                    error = %error,
+                    "oracle invalid, stale, or missing — trading PAUSED"
                 );
                 return Ok(());
             }
@@ -834,8 +846,10 @@ impl From<crate::oracle::cache::OracleSnapshot> for MatcherOracleSnapshot {
         Self(OracleSnapshot {
             twap: value.twap,
             confidence: value.confidence,
-            exponent: value.exponent,
-            publish_slot: value.publish_slot,
+            publish_time_ms: value.publish_time_ms,
+            observed_at_ms: value.observed_at_ms,
+            max_age_ms: value.max_age_ms,
+            max_future_skew_ms: value.max_future_skew_ms,
         })
     }
 }

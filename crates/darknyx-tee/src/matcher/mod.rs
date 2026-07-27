@@ -14,7 +14,10 @@ pub mod selftrade;
 
 pub use book::{BookError, OrderBook};
 pub use fills::FillMemo;
-pub use gate::TradingGate;
-pub use interval::{DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS};
+pub use gate::{TradingGate, TradingPauseReason};
+pub use interval::{
+    DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS,
+    DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
+};
 pub use lifecycle::{OrderLifecycleEvent, OrderLifecycleKind};
 pub use openings::{NoteOpening, OpeningError, OpeningStore, OrderOpening};

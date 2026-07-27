@@ -107,7 +107,10 @@ proof system for custody and settlement validity.
 Each market still has its own governed mint pair, oracle policy, and order book,
 and one proof batch can contain only one market. A finalized governance or signer
 mismatch pauses new trading venue-wide while cancellation and settlement
-reconciliation continue. See [Multi-Market Venue](./multi-market.md).
+reconciliation continue. Authenticated-oracle staleness or replay failure uses
+the same fail-closed behavior through an independent pause reason, so recovery
+of one subsystem cannot accidentally clear the other. See
+[Multi-Market Venue](./multi-market.md).
 
 ## What an integrator should verify
 
