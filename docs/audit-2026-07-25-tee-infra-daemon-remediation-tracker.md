@@ -52,11 +52,34 @@ the first stop for an agent resuming the work.
 |---|---|
 | Last verified `main` | `96e870e` |
 | Last merged remediation PR | #76 — tracker baseline |
-| Active slice | `remediation/tee-oracle-trust` |
-| Active branch / PR | `remediation/tee-oracle-trust` / not opened |
-| Next slice | `remediation/local-assurance` after oracle live evidence closes |
-| Live state | No CVM/devnet mutation yet. Public GHCR lookup confirmed CPU tag `tee-v3-hardening-72` exists at `sha256:a21cc2…fdf485`, H200-validated GPU tag `tee-v3-hardening-68-cuda` exists at `sha256:699fc6…b9d572`, and the stale compose tag `tee-v3-hardening-69-cuda` does not exist. |
+| Active slice | `remediation/tee-oracle-trust` — live evidence complete |
+| Active branch / PR | `remediation/tee-oracle-trust` @ `e0fe368` / PR open |
+| Next slice | `remediation/local-assurance` |
+| Live state | **CVM stopped; billing halted.** `nightly-test-cvm` (`app_9ca3cded…c14db637`, CPU, `gpus=0`, node prod9) ran the oracle image and was stopped after evidence capture. Devnet mutated: all 4 Merkle shards reset, `tee_pubkeys` rotated to this CVM's 4-shard set, each funded to 2 SOL. Images pinned by digest — CPU `sha256:dddf0116…53ad3` (tag `tee-v3-hardening-74`), GPU `sha256:1001d5a0…67854` (tag `tee-v3-hardening-74-cuda`). The previously referenced `tee-v3-hardening-69-cuda` never existed in GHCR. |
 | Last updated | 2026-07-27 |
+
+### Slice 1 live evidence — 2026-07-27
+
+Captured against `nightly-test-cvm` running the digest-pinned image
+`@sha256:dddf0116…53ad3` (verified via `phala ps`, so the deployed identity is
+the pinned digest and not a tag).
+
+| Evidence | Result |
+|---|---|
+| Fail-closed oracle gate | Boot logged `trading starts PAUSED until the first authenticated, fresh oracle batch` (`profile=router-quorum-v1`, `api_key_configured=true`), then `oracle trust/freshness recovered; trading RESUMED` **483 ms** later. Trading is closed until a guardian-verified, authenticated, fresh batch arrives — not open-by-default. |
+| Upgraded Pyth profile against live Hermes | `https://pyth.dourolabs.app/hermes` with the bearer credential; `router-quorum-v1` verified a real mainnet VAA. No profile inferred from payload. |
+| Batched refresh | `batched oracle sync task spawned feed_count=1 profile="router-quorum-v1"` — one request per refresh cycle. |
+| Credential hygiene | `loaded config (solana_rpc_url redacted to host) rpc_host=devnet.helius-rpc.com`. No RPC key, Hermes key, or bootstrap secret in any log line. Values ride the encrypted deploy env, so none enter `compose_hash`. |
+| Merkle cold boot | `merkle cold-boot: vault has no transaction history in range yet` — correct empty start after the 4-shard reset. |
+| Real crossing settle | `cvm-settle-e2e` **passed** (41.6 s). Settle tx `5hFc91SKoknazB95LkPdfTEQqr54Lh8U13pvu5wFo4qWCnPLPaYyxFPr4yMqx1SnhUw3NRTXfdcCMXtGpZSwd3f4`, confirmed slot `479364510`, `confirmed=1 rejected=0 ambiguous=0 pipeline_failed=false`. |
+| Settle pipeline cost | `total_ms=14573` — lock 1929, prove 2417 (witness 227 native + prove step 2173), verify 1197, ALT 2303 + wait 1044, settle 10911, close 0. Backend `rapidsnark`, device CPU, `settle_concurrency=1`. |
+
+**Baseline note.** These are the slice's first-commit baseline numbers on prod9
+(prod5 host contention is what skewed the earlier PERF-INV-01 readings, so
+prod9 is the like-for-like reference for future comparisons). Per-refresh
+oracle CPU p50/p95 was **not** captured: refresh timing logs at `debug` and the
+compose pins `darknyx_tee::oracle=info`. That measurement remains outstanding
+for `Closed` and needs either a debug-level run or an exported counter.
 
 ## Validation provenance
 
@@ -82,10 +105,10 @@ the first stop for an agent resuming the work.
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
-| T-01 | High | TEE oracle | `remediation/tee-oracle-trust` | Only an explicitly versioned Pyth emitter/signer profile is accepted. A guardian-signed non-Pyth message, wrong emitter, wrong signer set, or insufficient quorum is rejected by fixture tests before its root reaches the cache. | In progress |
-| T-02 | High | TEE oracle + matcher | `remediation/tee-oracle-trust` | Freshness uses signed publish time and local arrival health; feed state rejects stale, replayed, or non-monotonic updates. `OracleCache::snapshot` no longer fabricates `publish_slot = slot_now`, and `darkpool_matcher::validate_oracle` enforces the freshness data it reports instead of checking only `twap != 0`. Clock-skew, direct-matcher bypass, and out-of-order boundary tests pin the policy. | In progress |
+| T-01 | High | TEE oracle | `remediation/tee-oracle-trust` | Only an explicitly versioned Pyth emitter/signer profile is accepted. A guardian-signed non-Pyth message, wrong emitter, wrong signer set, or insufficient quorum is rejected by fixture tests before its root reaches the cache. | Code complete |
+| T-02 | High | TEE oracle + matcher | `remediation/tee-oracle-trust` | Freshness uses signed publish time and local arrival health; feed state rejects stale, replayed, or non-monotonic updates. `OracleCache::snapshot` no longer fabricates `publish_slot = slot_now`, and `darkpool_matcher::validate_oracle` enforces the freshness data it reports instead of checking only `twap != 0`. Clock-skew, direct-matcher bypass, and out-of-order boundary tests pin the policy. | Code complete |
 | T-03 | High | TEE + infrastructure + SDK | `remediation/tee-transport-integrity` | TLS terminates inside the CVM boundary through the supported `dstack-ingress` path; the public route cannot reach plaintext port 8080. A real-CVM test proves HTTPS/WSS, attestation, auth, reconnect, and streaming through the encrypted path. | Open |
-| T-04 | High | Release engineering + infrastructure | `remediation/tee-oracle-trust`, then enforced for `remediation/tee-transport-integrity` | The existing CPU/GPU images are pinned by immutable digest in the oracle slice, which already changes the image and compose. Every image introduced later, including ingress, must be digest-pinned before that slice can merge. Release evidence maps source/tag/digest/compose hash, so substituting a tag cannot preserve an accepted measurement. | In progress |
+| T-04 | High | Release engineering + infrastructure | `remediation/tee-oracle-trust`, then enforced for `remediation/tee-transport-integrity` | The existing CPU/GPU images are pinned by immutable digest in the oracle slice, which already changes the image and compose. Every image introduced later, including ingress, must be digest-pinned before that slice can merge. Release evidence maps source/tag/digest/compose hash, so substituting a tag cannot preserve an accepted measurement. | Code complete |
 | T-05 | Medium | — | — | Owner accepted the residual append-only-mirror availability risk on 2026-07-27. Confirmed commitment plus on-chain root validation is considered sufficient for the current product; a rollback can stall witness service but cannot authorize custody loss. No code, test, infrastructure, or follow-up task is authorized. | **Won't Fix — accepted risk** |
 | T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | Open |
 | T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | Open |
@@ -97,7 +120,7 @@ the first stop for an agent resuming the work.
 | T-13 | Low | Vault tests + build tooling | `remediation/local-assurance` | All LiteSVM loaders share one SBF artifact guard backed by a build manifest/source fingerprint, not a fragile per-test mtime check. A changed vault source or build configuration makes tests fail until `cargo build-sbf` refreshes the artifact and manifest. | Open |
 | T-14 | Low | Vault + TEE + SDK | `remediation/tee-bounds-cleanup` | The retired `NullifierEntry`, seeds, PDA helpers, comments, and public exports are absent across the program, TEE, SDK, scripts, and docs. The commitment-keyed consumed/deposit guards remain untouched. | Open |
 | T-15 | Low | Vault tests + tracker | `remediation/local-assurance` | LiteSVM covers live-lock withdraw rejection, expiry-boundary withdraw success, and `release_lock → withdraw` including rent return. The earlier S-03 row names only evidence that exists. | Open |
-| T-16 | Medium | TEE oracle + matcher + market config | `remediation/tee-oracle-trust` | Pyth-native price/exponent values are converted with checked integer arithmetic into the governed atomic base/quote price units before circuit-breaker comparison or collateral math. The invariant includes base decimals, quote decimals, exponent, and `price_scale`; unequal-decimal markets, exponent changes, unrepresentable scales, rounding, and overflow fail closed. | In progress |
+| T-16 | Medium | TEE oracle + matcher + market config | `remediation/tee-oracle-trust` | Pyth-native price/exponent values are converted with checked integer arithmetic into the governed atomic base/quote price units before circuit-breaker comparison or collateral math. The invariant includes base decimals, quote decimals, exponent, and `price_scale`; unequal-decimal markets, exponent changes, unrepresentable scales, rounding, and overflow fail closed. | Code complete |
 
 ## Performance findings
 
@@ -114,8 +137,8 @@ turning the accepted fixes into a cutover-safe implementation.
 
 | ID | Owner | Planned remediation slice | Required evidence | Status |
 |---|---|---|---|---|
-| RD-01 | TEE oracle + operations | `remediation/tee-oracle-trust` | A versioned legacy/upgraded Pyth trust profile supports the 2026-08-18 cutover without a fail-open fallback. Hermes API credentials are encrypted deployment inputs, never logged, and missing/invalid auth pauses new trading. Legacy 13-of-19 and upgraded 3-of-5 fixtures are both explicit; no quorum is guessed from payload data. | In progress |
-| RD-03 | Operations docs | `remediation/tee-oracle-trust` | `deploy/docker-compose.gpu.yaml` no longer instructs operators to stop an H200. GPU and CPU lifecycle comments agree with `AGENTS.md` and `docs/gpu-tee-runbook.md`. | In progress |
+| RD-01 | TEE oracle + operations | `remediation/tee-oracle-trust` | A versioned legacy/upgraded Pyth trust profile supports the 2026-08-18 cutover without a fail-open fallback. Hermes API credentials are encrypted deployment inputs, never logged, and missing/invalid auth pauses new trading. Legacy 13-of-19 and upgraded 3-of-5 fixtures are both explicit; no quorum is guessed from payload data. | Code complete |
+| RD-03 | Operations docs | `remediation/tee-oracle-trust` | `deploy/docker-compose.gpu.yaml` no longer instructs operators to stop an H200. GPU and CPU lifecycle comments agree with `AGENTS.md` and `docs/gpu-tee-runbook.md`. | Code complete |
 | DEP-AU-07 | TEE + ingress | `remediation/tee-transport-integrity` | The canonical AU-07 row remains in the earlier tracker. Before public exposure, enforce global and per-account/peer connection caps, bound unauthenticated login time, and prove a ping-only client cannot hold resources indefinitely. Update both trackers with the same PR and evidence. | Open — canonical row linked |
 
 ## Recorded implementation decisions
@@ -218,7 +241,7 @@ turning the accepted fixes into a cutover-safe implementation.
 
 | Order | Slice | Findings / deliverables | Prerequisite | Status / PR | Compatibility and rollout | Required evidence before `Closed` |
 |---|---|---|---|---|---|---|
-| 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | In progress / not opened | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
+| 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | Code complete / PR open | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
 | 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15 | Slice 1 closed | Open / — | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
 | 3 | `remediation/tee-transport-integrity` | T-03, DEP-AU-07; enforce T-04 for new ingress image | Slice 2 code complete | Open / — | Compose hash and transport endpoint change; digest-pinned ingress image; governance/client pin rotation required. | Local compose validation, connection-cap tests, immutable ingress digest, real CVM HTTPS/WSS/API/attestation checks, plaintext-port negative, signer rotation and compose-hash evidence. |
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Open / — | New versioned encrypted journal; no public wire change unless terminal restart reasons are surfaced. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
@@ -306,4 +329,55 @@ compose hash, signer set, program deployment):
 Evidence still missing:
 Blockers:
 Exact next action:
+```
+
+## Agent handoff — 2026-07-27
+
+```text
+Last merged PR / main SHA: #76 / 96e870e
+Active branch / HEAD: remediation/tee-oracle-trust / e0fe368
+Dirty or untracked files preserved: yes — third_party/rapidsnark and
+  icicle-snark benchmark/*.json working-tree edits left untouched; all
+  pre-existing untracked docs/dirs (audit_1/, dstack/, phala-docs/, etc.)
+  unmodified. Only build.rs was staged inside the submodule.
+Active slice and finding IDs: slice 1 — T-01, T-02, T-04, T-16, RD-01, RD-03
+Invariant and compatibility decisions:
+  - Oracle acceptance is one fail-closed contract: versioned trust profile
+    (emitter + signer set + quorum) AND signed-publish-time freshness. Trading
+    starts paused and reopens only after an authenticated verified batch.
+  - Both compose images pinned by digest; compose_hash now transitively binds
+    image bytes. No circuit or on-chain format change, so no tree migration
+    beyond the routine reset.
+Commands run and exact results:
+  cargo fmt --all -- --check                      -> clean
+  cargo clippy --workspace --all-targets -D warn  -> zero warnings
+  cargo test --workspace                          -> 302 passed, 0 failed, 1 ignored
+                                                     (+ all integration suites green)
+  tsc -p packages/sdk | packages/indexer          -> both clean
+  vitest packages/sdk                             -> 270 passed, 24 skipped
+  vitest packages/indexer                         -> 20 passed
+  vitest packages/daemon                          -> 147 passed, 2 skipped
+  bash scripts/check-icicle-cuda-arch-env.sh      -> both build scripts OK
+  bash scripts/check-compose-image-digests.sh     -> both composes OK
+  cvm-settle-e2e (RUN_CVM_E2E=1)                  -> 1 passed (41.6 s)
+Live state: nightly-test-cvm app_9ca3cded105f16923afb0e3f62537882c14db637,
+  CPU (gpus=0), node prod9, STOPPED after evidence capture.
+  Image: ghcr.io/skysail-labs/darknyx-tee@sha256:dddf0116…53ad3
+    (tag tee-v3-hardening-74; GPU tee-v3-hardening-74-cuda @ sha256:1001d5a0…67854)
+  Signer set (all funded to 2 SOL, registered in vault_config.tee_pubkeys):
+    0 4F9aTxW18pxBYFTnqXi8P82FUY4255RQDCkysZyoSMRX
+    1 8x4QTRcmYnvALeLpqn5DVQ968nNTPfFvFosBqSh3Q6s2
+    2 2TAuvsUu4SqsdPP1Y7oLTJjcezAFLsqMjmtTn6Tc7wFk
+    3 C3fNnmb7DJ3Xbb7AmM284UHzuJRZsgicFsyTEvE9V6EX
+  Program C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx unchanged (not redeployed).
+  All 4 Merkle shards reset; tree is at a fresh empty start.
+Evidence still missing:
+  - Per-refresh oracle CPU p50/p95 (refresh timing logs at debug; compose pins
+    darknyx_tee::oracle=info). Needed for the cost table before Closed.
+  - Requests-per-refresh for N>1 feeds — only the 1-feed case was exercised.
+Blockers: none. Slice 1 needs merge + the two measurements above to reach Closed.
+Exact next action: merge the slice-1 PR, then start slice 2
+  (remediation/local-assurance: T-08, T-11, T-12, T-13, T-15). Slice 2 needs no
+  CVM. Note the tree is freshly reset, so the next leaf-count CVM test can run
+  without another reset if it goes first.
 ```
