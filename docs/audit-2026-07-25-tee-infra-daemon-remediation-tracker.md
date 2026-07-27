@@ -50,10 +50,10 @@ the first stop for an agent resuming the work.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `96e870e` |
-| Last merged remediation PR | #76 — tracker baseline |
-| Active slice | `remediation/tee-oracle-trust` — live evidence complete |
-| Active branch / PR | `remediation/tee-oracle-trust` @ `e0fe368` / PR open |
+| Last verified `main` | `e2b13b5` |
+| Last merged remediation PR | #77 — slice 1 (`tee-oracle-trust`), merged 2026-07-27 |
+| Active slice | none — slice 1 merged; slice 2 not started |
+| Active branch / PR | merged and deleted (PR #77) |
 | Next slice | `remediation/local-assurance` |
 | Live state | **CVM stopped; billing halted.** `nightly-test-cvm` (`app_9ca3cded…c14db637`, CPU, `gpus=0`, node prod9) ran the oracle image and was stopped after evidence capture. Devnet mutated: all 4 Merkle shards reset, `tee_pubkeys` rotated to this CVM's 4-shard set, each funded to 2 SOL. Images pinned by digest — CPU `sha256:dddf0116363e8ab9112bc09a7cf97558f00f2306016094ba6bcb917a64253ad3` (tag `tee-v3-hardening-74`), GPU `sha256:1001d5a0ae45d86c624c265c3598b490f7b511aa3349faa1c2ea03d29d367854` (tag `tee-v3-hardening-74-cuda`). The previously referenced `tee-v3-hardening-69-cuda` never existed in GHCR. |
 | Last updated | 2026-07-27 |
@@ -148,7 +148,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | ID | Owner | Planned remediation slice | Required evidence | Status |
 |---|---|---|---|---|
 | RD-01 | TEE oracle + operations | `remediation/tee-oracle-trust` | A versioned legacy/upgraded Pyth trust profile supports the 2026-08-18 cutover without a fail-open fallback. Hermes API credentials are encrypted deployment inputs, never logged, and missing/invalid auth pauses new trading. Legacy 13-of-19 and upgraded 3-of-5 fixtures are both explicit; no quorum is guessed from payload data. | Code complete |
-| RD-03 | Operations docs | `remediation/tee-oracle-trust` | `deploy/docker-compose.gpu.yaml` no longer instructs operators to stop an H200. GPU and CPU lifecycle comments agree with `AGENTS.md` and `docs/gpu-tee-runbook.md`. | Code complete |
+| RD-03 | Operations docs | `remediation/tee-oracle-trust` | `deploy/docker-compose.gpu.yaml` no longer instructs operators to stop an H200. GPU and CPU lifecycle comments agree with `AGENTS.md` and `docs/gpu-tee-runbook.md`. | Closed |
 | DEP-AU-07 | TEE + ingress | `remediation/tee-transport-integrity` | The canonical AU-07 row remains in the earlier tracker. Before public exposure, enforce global and per-account/peer connection caps, bound unauthenticated login time, and prove a ping-only client cannot hold resources indefinitely. Update both trackers with the same PR and evidence. | Open — canonical row linked |
 
 ## Recorded implementation decisions
@@ -432,3 +432,35 @@ single-market deployment:
   `pr-checks success` still reported **pass** in 3 s. A merge rule keyed on that
   check would have merged with zero tests executed. Same shape as T-11/T-12, and
   more dangerous, because it is the top-level check. Filed into slice 2.
+
+## Slice-1 closure status — why rows are not yet `Closed`
+
+PR #77 merged as `e2b13b5` on 2026-07-27. Code is merged and the live evidence
+in the table above was captured, so `T-01`, `T-02`, `T-04`, `T-16`, and `RD-01`
+are at `Code complete`. `RD-03` is `Closed` — it is a documentation correction
+with no measurement obligation.
+
+The remaining rows are held short of `Closed` by the cost table's **mandatory
+closing measurement**, which is only partly satisfied:
+
+| Required measurement | Status |
+|---|---|
+| Time from last good update to matcher/intake pause | Partial — boot-to-resume measured at 483 ms; the pause direction was not timed |
+| Oracle refresh CPU and p50/p95 duration | **Not captured** — refresh timing logs at `debug`, compose pins `darknyx_tee::oracle=info` |
+| Requests per refresh for 1 and N feeds | **Not captured** — only the 1-feed case ran |
+| Conversion benchmark, equal vs unequal decimals | **Not captured** — correctness is unit-tested, cost is not benchmarked |
+
+`T-04` additionally stays open by design: its row makes digest pinning a standing
+release invariant, so it closes only once the ingress image introduced in slice 3
+is also pinned.
+
+Capturing the missing three requires a CVM run, and the evidence-vintage caveat
+above already requires a rebuild-and-re-pin before the next one. Both obligations
+should be discharged together rather than spending two CVM windows.
+
+**Prerequisite tension to resolve.** Slice 2 (`remediation/local-assurance`)
+lists its prerequisite as "Slice 1 closed", which the above blocks. Slice 2 is
+CI/test/build tooling with no dependency on oracle measurements or a CVM, so the
+sequencing intent is satisfied by slice 1 being *code complete and merged*. Either
+relax that prerequisite to "Slice 1 code complete", or schedule the measurement
+CVM run first. This is an owner decision and is deliberately not taken here.
