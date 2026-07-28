@@ -62,8 +62,15 @@ for file in "${files[@]}"; do
     continue
   fi
 
-  # Every `image:` value, comments and inline trailing comments stripped.
-  mapfile -t images < <(sed -nE 's#^[[:space:]]*image:[[:space:]]+([^[:space:]#]+).*$#\1#p' "$file")
+  # Every `image:` value, comments and inline trailing comments stripped, then
+  # surrounding YAML quotes removed. `image: "repo@sha256:…"` is valid Compose
+  # and the quotes are not part of the value; without this the check would
+  # reject a correctly-pinned image and send someone hunting for a
+  # supply-chain problem that does not exist.
+  mapfile -t images < <(
+    sed -nE 's#^[[:space:]]*image:[[:space:]]+([^[:space:]#]+).*$#\1#p' "$file" \
+      | sed -E 's#^"(.*)"$#\1#; s#^'"'"'(.*)'"'"'$#\1#'
+  )
 
   if [[ "${#images[@]}" -eq 0 ]]; then
     echo "ERROR: $file declares no image — a deployment compose with no image is" >&2

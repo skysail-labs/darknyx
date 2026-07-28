@@ -1943,6 +1943,13 @@ x-websocket:
     which reaches this service over a mutually attested tunnel. Verify
     `/attestation` before sending private order intent.
 
+    Two limits on what that verification proves today: it covers THIS service's
+    image measurement and not the gateway's, and it does not authenticate the
+    TLS session it was fetched over — nothing binds the quote to the connection's
+    certificate. Binding them requires terminating TLS inside this service with
+    an attestation-bound certificate, which is tracked and gated ahead of
+    external users (T-03), and has not shipped.
+
     Heartbeat: client sends `op: ping` every ≤30s; server
     responds with `op: pong`. Server drops sessions silent for >60s.
 

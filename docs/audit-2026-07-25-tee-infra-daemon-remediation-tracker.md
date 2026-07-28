@@ -508,6 +508,44 @@ directly could not have produced the bug and could not detect its return.
 | Mutation: second image digest-pinned from an unapproved repo | digest guard **rejects** |
 | Compose restored byte-identical after mutation | confirmed via `git diff` |
 
+### Findings raised during slice-3 review
+
+Automated review of this PR raised five items. Four were valid and fixed here:
+
+- **The paths-filter fix was incomplete.** I added `deploy/**` and the guard
+  scripts but not `.github/workflows/pr-checks.yml` itself, so an edit weakening
+  a guard's invocation — or the filter — still would not have run the guards.
+  The `deps` filter already listed the workflow for the dependency gate; the
+  deployment guards needed the same. Fixed. Same defect as the one this slice
+  documented, one level up.
+- **A status contradiction I introduced.** The canonical AU-07 row's body said
+  "Closed 2026-07-28" while its status column said `Code complete`. The status
+  column was right; the body is now consistent with it.
+- **`bearer auth` listed as a traffic-analysis mitigation** in the
+  `CRYPTOGRAPHY.md` non-goals table. It is not one — it gates access and does
+  nothing for timing, size, or frequency. Pre-existing wording that this slice
+  should not have carried forward while correcting the row beside it. Now states
+  plainly that the threat is unmitigated.
+- **The digest guard rejected a validly-quoted image.** `image: "repo@sha256:…"`
+  is legal Compose, and the parser captured the quotes into the value, so a
+  correctly-pinned image failed the digest regex. Fail-closed rather than
+  fail-open, but it would have sent someone hunting a supply-chain problem that
+  did not exist. Quotes are now stripped; re-verified that a quoted MUTABLE tag
+  is still rejected, so the fix removes a false positive without widening what
+  passes.
+
+One was partly valid and partly a misread. The reviewer asked that a
+"certificate-binding claim" at `transport-and-attestation.md` L65-70 be removed —
+that range is the new warning callout, which already states the binding does NOT
+exist, so there was nothing to remove. Its other half was right and is fixed: the
+OpenAPI is the authoritative wire contract and now carries the same caveat, that
+verifying `/attestation` covers this service's measurement only and does not
+authenticate the TLS session it arrived over.
+
+Skipped: extending the digest guard to parse inline YAML mappings. Compose files
+do not express service images that way, and a full YAML parse in a bash CI guard
+buys no coverage for real inputs.
+
 ### Status
 
 `DEP-AU-07` is at `Code complete`, moving to `Closed` when the hosted CI run
