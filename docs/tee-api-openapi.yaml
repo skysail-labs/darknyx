@@ -1060,7 +1060,7 @@ paths:
         for it in any runbook. It only helps when someone chooses to stop; a
         crash or an involuntary host migration gets none of it.
       tags: [admin]
-      security: [{ bearerAuth: [] }]
+      security: [{ BearerAuth: [] }]
       responses:
         '200':
           description: Current drain state.
@@ -1088,7 +1088,7 @@ paths:
         Idempotent: repeating the request pauses once and reports truthfully.
         Poll `GET /admin/drain` until `safe_to_stop` is true before stopping.
       tags: [admin]
-      security: [{ bearerAuth: [] }]
+      security: [{ BearerAuth: [] }]
       responses:
         '200':
           description: Drain requested; state after the request.
@@ -1112,7 +1112,7 @@ paths:
         pause set while draining stays set, so cancelling a redeploy cannot
         re-open a venue some other condition independently closed.
       tags: [admin]
-      security: [{ bearerAuth: [] }]
+      security: [{ BearerAuth: [] }]
       responses:
         '200':
           description: Drain abandoned; state after the request.

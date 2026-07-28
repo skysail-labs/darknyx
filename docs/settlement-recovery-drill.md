@@ -300,8 +300,13 @@ Worth closing when the tooling allows.
    an interruption at the first journal write.
 2. **No p50/p95 for journal writes.** Would need a timing histogram around
    `SettleJournal::record`, emitted at `info`. Cheap to add; not yet done.
-3. **`AlreadySettled` is untested live.** Requires killing after Tx D confirms but
+3. **A journal write failure is now fail-closed, and that path is untested live.**
+   A settle whose signature cannot be journaled is skipped and retried rather
+   than sent, so a disk fault degrades throughput instead of creating orphans.
+   Unit-tested (`a_settle_is_not_sent_when_its_signature_cannot_be_journaled`);
+   reproducing it on a CVM would need an induced volume fault.
+4. **`AlreadySettled` is untested live.** Requires killing after Tx D confirms but
    before the outcome is recorded — a window of milliseconds, so it needs (1).
-4. **Multi-match batches untested.** Every run used a single match. A 16-match
+5. **Multi-match batches untested.** Every run used a single match. A 16-match
    batch would exercise the snapshot rewrite at ~26 KiB and partial-batch
    recovery, where some matches settled and others did not.

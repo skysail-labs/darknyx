@@ -436,9 +436,6 @@ mod tests {
             batch_root: Some([0xAB; 32]),
             lock_expiry_slot: expiry,
             marker_expiry_slot: Some(1_000),
-            lock_buyer_sig: None,
-            lock_seller_sig: None,
-            verify_sig: None,
             settle_sig: settle_sig.map(str::to_string),
             updated_at_ms: 0,
         }

@@ -25,8 +25,9 @@
 //! the chain about, so it cannot distinguish "never sent" from "sent and
 //! landed".
 //!
-//! So every durable transition is written BEFORE its side effect, and the
-//! signature is journaled BEFORE submission rather than after. That is possible
+//! So every durable transition is written BEFORE its side effect, and the settle
+//! signature is journaled BEFORE submission rather than after. (Only the settle
+//! signature: it is the one whose orphan is unrecoverable.) That is possible
 //! because a Solana transaction's signature is fully determined once it is
 //! signed, which happens before it is sent. The invariant we get:
 //!
@@ -162,10 +163,15 @@ pub struct JournalEntry {
     /// reads the marker. Recovery that considered only the lock would authorise
     /// redrives that revert on the marker check.
     pub marker_expiry_slot: Option<u64>,
-    /// Signatures, each written BEFORE its transaction is submitted.
-    pub lock_buyer_sig: Option<String>,
-    pub lock_seller_sig: Option<String>,
-    pub verify_sig: Option<String>,
+    /// The settle transaction's signature, written BEFORE the transaction is
+    /// submitted.
+    ///
+    /// Only the SETTLE signature is journaled. Lock and verify signatures were
+    /// once fields here and were never written — dead weight in an on-disk
+    /// schema, which is worse than dead code because it invites a reader to
+    /// believe recovery consults them. Recovery does not need them: the
+    /// consumed-note PDAs decide whether a settle landed, and a lock or verify
+    /// that did not land simply leaves nothing to reconcile.
     pub settle_sig: Option<String>,
     /// Unix ms of the last durable write, for staleness reporting on boot.
     pub updated_at_ms: u64,
@@ -461,9 +467,6 @@ mod tests {
             batch_root: Some([0xAB; 32]),
             lock_expiry_slot: 1_000,
             marker_expiry_slot: Some(1_000),
-            lock_buyer_sig: None,
-            lock_seller_sig: None,
-            verify_sig: None,
             settle_sig: None,
             updated_at_ms: 0,
         }

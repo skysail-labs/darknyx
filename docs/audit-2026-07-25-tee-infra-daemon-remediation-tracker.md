@@ -254,7 +254,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | Code complete / PR open | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
 | 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Closed / PR #79 | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
 | 3 | `remediation/tee-transport-integrity` | DEP-AU-07; T-04 enforcement; transport documentation correction. **T-03 deferred** | Slice 2 closed | Closed / PR #80 | **No compose change, no compose-hash rotation, no CVM, no ceremony.** Connection caps are code defaults; the digest guard is CI-only; the documentation corrections are text. Wire-visible additions only: a `503` on an over-capacity `/v1/stream` upgrade and error code `4290` on an over-cap login, both documented in the OpenAPI. | Real-socket connection-cap tests incl. the ping-only hold and its mutation test; digest-guard mutation test in both failure directions; OpenAPI parse; the standard local gate. |
-| 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Closed / PR #81 | New versioned encrypted journal; no public wire change unless terminal restart reasons are surfaced. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
+| 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Closed / PR #81 | New versioned journal, Borsh-serialized in plaintext and protected ONLY by the dstack-sealed LUKS volume — there is no authenticated encryption at the `JournalSnapshot` boundary, and the row must not imply one. Adds `/admin/drain` (admin-gated) and error code `4290`; no other public wire change. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | Open / — | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | Open / — | Versioned local keystore migration; v1 read/migrate only, all new writes v2. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
 | 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09 | Slice 6 closed | Open / — | SDK removal of dead exports; bounded internal FFI behavior. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep. No CVM required. |
@@ -768,6 +768,58 @@ The mirror replays from `DARKNYX_TEE_SYNC_FROM_SLOT`, so a reset must be followe
 by an env-only redeploy carrying a floor captured *after* the reset. Observed
 mid-drill as on-chain `leaf_count=0` against a mirror reporting 7.
 
+### Second review pass — slice 4
+
+A follow-up review raised twelve items. Seven were already fixed in `3a93570`;
+five were still open and are fixed here.
+
+**One of my earlier "fixes" had not landed.** The gate test still asserted that a
+governance resume cannot open a draining gate *without ever pausing governance* —
+so `resume()` returned `false` because the bit was never set, and the assertion
+proved nothing. The edit had targeted a string that changed underneath it and I
+did not verify the result. Third instance of this defect class in the slice, and
+the second time in code written to fix it.
+
+Genuinely new and still open:
+
+- **A failed journal write did not stop the send.** `journal_settle_attempt`
+  logged an error and returned; the transaction went out regardless. That defeats
+  the entire write-ahead ordering — a settle on the network whose signature never
+  reached disk is exactly the unrecoverable orphan the design exists to prevent.
+  It now returns a bool, a `None` signature is treated as failure, and only
+  successfully-journaled matches reach the send pass. A disk fault now costs
+  throughput (retry next round while the marker and locks are valid) instead of
+  reconcilability. Pinned by
+  `a_settle_is_not_sent_when_its_signature_cannot_be_journaled`.
+- **Cleanup keyed differently from the write.** The journal was written under
+  `MatchSettleInputs::match_index` and retired under the loop position. Equal
+  today; a leak waiting for the first refactor that separates them, and a leaked
+  entry looks like an in-flight settlement forever. Both are now passed
+  explicitly.
+- **Three dead fields in the on-disk schema.** `lock_buyer_sig`,
+  `lock_seller_sig`, and `verify_sig` were declared and never written — worse than
+  dead code, because a reader assumes recovery consults them. Removed; the module
+  doc now promises only the settle signature, which is the one whose orphan is
+  unrecoverable.
+- **The tracker claimed an "encrypted journal".** There is no authenticated
+  encryption at the `JournalSnapshot` boundary; the file is Borsh plaintext
+  protected only by the dstack-sealed LUKS volume. Corrected — the row must not
+  imply a property the code does not provide.
+- **Three OpenAPI operations referenced an undefined `bearerAuth`.** The declared
+  scheme is `BearerAuth`. A generated client would have emitted unauthenticated
+  requests against `/admin/drain`. Fixed, with a parse-time check that every
+  `security` reference resolves.
+
+Also added on review: a drain test that places a **real signed order** and
+asserts the book is actually empty afterwards. It is the only coverage of the
+cancellation loop in `begin_drain`, which snapshots ids under a read guard and
+cancels under a write guard — holding one across the other would deadlock, and no
+amount of testing the drain helpers in isolation would reveal it.
+
+Skipped: seeding `batch_id` above the highest recovered value. The recovery pass
+already drains the journal, so no recovered key can survive to collide; adding a
+second mechanism for the same invariant would mean two things to keep in step.
+
 ### Status
 
 `T-06` is **`Closed`**. Code merged in PR #81 and the live obligations discharged by the 2026-07-28 drill above. The drill is repeatable — [`settlement-recovery-drill.md`](settlement-recovery-drill.md) carries the procedure, the pass criteria, and the traps — so a future settle-pipeline or persistence change can re-establish this evidence rather than re-derive how.
@@ -793,8 +845,21 @@ redeploy, confirm a clean boot → capture the measurements → stop the CVM aft
 confirming `resource.gpus` is 0.
 
 **The risk to plan around:** the kill must be *hard* and land mid-pipeline. A
-graceful stop drains cleanly and proves nothing. The ALT-activation wait is the
-longest phase and the most reliable moment to hit.
+graceful stop drains cleanly and proves nothing.
+
+**Post-window, non-optional.** Stop the CVM only after confirming `gpus: 0` —
+stopping a GPU CVM deallocates it permanently and forfeits the prepaid window.
+Securely delete every deployment secret bundle (`shred -u`, or `rm -P` on macOS)
+and unset the exported credential variables; the deploy env carries the Helius
+key and the bootstrap admin secret.
+
+**Rollback.** Reverting the slice restores memory-only settle state. The journal
+file is additive and simply ignored by an older binary, so no migration or wipe
+is needed; `/admin/drain` and the `Drain` pause bit disappear with it. A rollback
+does NOT invalidate settled trades, locks, or markers — nothing on-chain depends
+on the journal. The only loss is the ability to reconcile an in-flight settlement
+across a restart, which returns the deployment to the pre-slice behaviour the
+lock sweeper already backstops.
 
 
 ## Agent handoff template

@@ -310,9 +310,6 @@ fn journal_entry_for(
         // Unknown until `verify_match_batch` lands; filled in at the settle
         // write point below.
         marker_expiry_slot: None,
-        lock_buyer_sig: None,
-        lock_seller_sig: None,
-        verify_sig: None,
         settle_sig: None,
         updated_at_ms: 0,
     }
@@ -348,16 +345,41 @@ async fn journal_batch_start(ctx: &SettleWorkerCtx, inputs: &BatchSettleInputs, 
 /// crash still leaves recovery able to name the transaction and ask the chain
 /// whether it landed. Called with the signature read back from the already-signed
 /// wire bytes.
+/// Record a settle transaction's signature BEFORE it is sent.
+///
+/// Returns `true` only when the signature is now durable. A `false` return MUST
+/// stop the caller from sending: submitting a transaction whose signature is not
+/// on disk creates exactly the orphan the write-ahead ordering exists to
+/// prevent — recovery could not even name it to ask the chain about. Skipping
+/// the match costs one settle attempt, which the next round retries while the
+/// marker and locks are still valid; sending it costs the ability to reconcile.
 async fn journal_settle_attempt(
     ctx: &SettleWorkerCtx,
     batch_id: u64,
     match_idx: u8,
     signature: Option<String>,
     marker_expiry_slot: u64,
-) {
+) -> bool {
+    // No signature means the wire bytes could not be parsed back. Recording a
+    // `Settling` entry with `settle_sig: None` would be worse than recording
+    // nothing: recovery would see an in-flight settle it cannot identify.
+    if signature.is_none() {
+        tracing::error!(
+            batch_id,
+            match_idx,
+            "could not read the settle signature from the signed transaction; \
+             refusing to send an unjournalable settle"
+        );
+        return false;
+    }
     let mut j = ctx.journal.lock().await;
     let Some(mut entry) = j.get(batch_id, match_idx).cloned() else {
-        return;
+        tracing::error!(
+            batch_id,
+            match_idx,
+            "no journal entry for this match at settle time; refusing to send"
+        );
+        return false;
     };
     entry.stage = JournalStage::Settling;
     entry.settle_sig = signature;
@@ -367,10 +389,12 @@ async fn journal_settle_attempt(
     if let Err(e) = j.record(entry) {
         tracing::error!(
             batch_id, match_idx, error = %e,
-            "settle-signature journal write failed BEFORE send; a crash now leaves \
-             this transaction unreconcilable"
+            "settle-signature journal write failed BEFORE send; skipping this \
+             match rather than sending a transaction recovery could not name"
         );
+        return false;
     }
+    true
 }
 
 /// Drop a match's journal entry once its outcome is terminal.
@@ -378,10 +402,19 @@ async fn journal_forget(ctx: &SettleWorkerCtx, batch_id: u64, match_idx: u8) {
     ctx.journal.lock().await.forget(batch_id, match_idx);
 }
 
+/// Finalize one match's outcome.
+///
+/// `match_idx` is the position in `results` and the batch's job ids;
+/// `journal_key` is the key the journal entry was WRITTEN under
+/// (`MatchSettleInputs::match_index`). They are passed separately rather than
+/// reusing one for both: they are equal today, and cleanup that silently depends
+/// on that is one refactor away from leaking entries that then look like
+/// in-flight settlements forever.
 async fn record_final_outcome(
     ctx: &SettleWorkerCtx,
     batch_id: u64,
     match_idx: usize,
+    journal_key: u8,
     outcome: SettlementOutcome,
     results: &mut [Option<SettlementOutcome>],
     outcome_tx: Option<&mpsc::UnboundedSender<MatchSettlementResult>>,
@@ -421,7 +454,7 @@ async fn record_final_outcome(
         outcome,
         SettlementOutcome::Confirmed { .. } | SettlementOutcome::Rejected { .. }
     ) {
-        journal_forget(ctx, batch_id, match_idx as u8).await;
+        journal_forget(ctx, batch_id, journal_key).await;
     }
 
     results[match_idx] = Some(outcome.clone());
@@ -989,7 +1022,16 @@ async fn run_batch_settle_inner(
                     }
                 }
             };
-            record_final_outcome(ctx, batch_id, idx, outcome, &mut results, outcome_tx).await;
+            record_final_outcome(
+                ctx,
+                batch_id,
+                idx,
+                inputs.matches[idx].match_index,
+                outcome,
+                &mut results,
+                outcome_tx,
+            )
+            .await;
         }
         if active.is_empty() {
             break;
@@ -1034,6 +1076,7 @@ async fn run_batch_settle_inner(
                         ctx,
                         batch_id,
                         idx,
+                        inputs.matches[idx].match_index,
                         SettlementOutcome::Rejected {
                             reason: format!("cannot construct settle transaction: {error}"),
                         },
@@ -1053,16 +1096,26 @@ async fn run_batch_settle_inner(
         // out of the wire bytes costs nothing and closes the one crash window
         // that recovery cannot otherwise reason about: a settle that reached the
         // network with no local record naming it.
-        for (idx, tx_b64) in &txs {
-            journal_settle_attempt(
+        let mut journaled: Vec<(usize, String)> = Vec::with_capacity(txs.len());
+        for (idx, tx_b64) in txs {
+            if journal_settle_attempt(
                 ctx,
                 batch_id,
-                inputs.matches[*idx].match_index,
-                first_signature_b58(tx_b64),
+                inputs.matches[idx].match_index,
+                first_signature_b58(&tx_b64),
                 marker_expiry_slot,
             )
-            .await;
+            .await
+            {
+                journaled.push((idx, tx_b64));
+            }
         }
+        if journaled.is_empty() {
+            // Nothing could be journaled; retry next round while the marker and
+            // locks are still valid rather than send blind.
+            continue;
+        }
+        let txs = journaled;
 
         let round = send_and_confirm_many_with_rebroadcast(
             &ctx.rpc,
@@ -1180,7 +1233,16 @@ async fn run_batch_settle_inner(
                 }
             };
             if let Some(outcome) = resolved {
-                record_final_outcome(ctx, batch_id, idx, outcome, &mut results, outcome_tx).await;
+                record_final_outcome(
+                    ctx,
+                    batch_id,
+                    idx,
+                    inputs.matches[idx].match_index,
+                    outcome,
+                    &mut results,
+                    outcome_tx,
+                )
+                .await;
             }
         }
 
@@ -1206,6 +1268,7 @@ async fn run_batch_settle_inner(
                 ctx,
                 batch_id,
                 idx,
+                inputs.matches[idx].match_index,
                 SettlementOutcome::Ambiguous {
                     reason: "settlement result missing after reconciliation".to_string(),
                 },
@@ -2174,6 +2237,47 @@ mod tests {
                 .load(std::sync::atomic::Ordering::SeqCst),
             "no send observed a journaled settle signature on disk — the signature is \
              being written AFTER the send, which leaves an unrecoverable orphan"
+        );
+    }
+
+    /// Write-ahead is only a guarantee if a FAILED journal write stops the send.
+    /// A transaction on the network whose signature never reached disk is the
+    /// orphan the whole design exists to prevent, so the settle must be skipped
+    /// and retried rather than sent blind.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_settle_is_not_sent_when_its_signature_cannot_be_journaled() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = spawn_mock_rpc().await;
+        let state = Arc::new(RwLock::new(SettleSchedulerState::default()));
+        seed_jobs(&state, 0, 1).await;
+        let ctx = ctx_with_journal(url, state.clone(), 1, dir.path());
+
+        // No entry exists for this key, so the settle write point cannot attach
+        // a signature to anything — exactly the state a lost journal produces.
+        assert!(
+            !journal_settle_attempt(&ctx, 99, 0, Some("sig".into()), 1_000).await,
+            "an absent journal entry must refuse the send"
+        );
+
+        // A missing signature is refused for the same reason: a `Settling` entry
+        // with `settle_sig: None` would be an in-flight settle recovery could
+        // never identify.
+        let entry = journal_entry_for(
+            0,
+            &two_match_inputs().matches[0],
+            [0xAB; 32],
+            JournalStage::Locking,
+        );
+        ctx.journal.lock().await.record(entry).unwrap();
+        assert!(
+            !journal_settle_attempt(&ctx, 0, 0, None, 1_000).await,
+            "an unreadable signature must refuse the send"
+        );
+        let j = ctx.journal.lock().await;
+        assert_eq!(
+            j.get(0, 0).unwrap().stage,
+            JournalStage::Locking,
+            "a refused attempt must not advance the entry to Settling"
         );
     }
 

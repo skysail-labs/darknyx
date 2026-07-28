@@ -143,9 +143,6 @@ mod tests {
                 batch_root: Some([0xAB; 32]),
                 lock_expiry_slot: 1_000,
                 marker_expiry_slot: Some(1_000),
-                lock_buyer_sig: None,
-                lock_seller_sig: None,
-                verify_sig: None,
                 settle_sig: None,
                 updated_at_ms: 0,
             })

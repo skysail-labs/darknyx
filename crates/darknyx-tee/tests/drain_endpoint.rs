@@ -17,7 +17,12 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use darknyx_tee::api::auth::{TEST_API_KEY, TEST_API_SECRET, TEST_PASSPHRASE};
+use darknyx_tee::api::orders::{place_core, PlaceOrderRequest};
 use darknyx_tee::api::{build_router, ApiState};
+use darknyx_tee::matcher::openings::NoteOpening;
+use darkpool_matcher::book::{OrderSide, OrderType};
+use darkpool_matcher::order_canonical::OrderCanonical;
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -163,4 +168,109 @@ async fn a_non_persistent_journal_is_disclosed_to_the_operator() {
         caveat.contains("not persistent"),
         "the caveat should name the problem; got: {caveat}"
     );
+}
+
+// ─────── the cancellation path, with a real resting order ───────────────────
+
+fn fr_safe(b: u8) -> [u8; 32] {
+    let mut v = [b; 32];
+    v[0] = 0;
+    v
+}
+
+/// A fully-signed order, mirroring the `ws_trading` builder (zeroed test market,
+/// exact collateral, zero fee).
+fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
+    let salt = order_id[15];
+    let amount = 10_000_000u64;
+    let price_limit = 150_000_000u64;
+    let note_amount = amount.saturating_mul(price_limit).max(1);
+    let owner_commitment = fr_safe(0x44);
+    let note_inner_hash = fr_safe(0x55u8.wrapping_add(salt));
+    let user_commitment = fr_safe(0x33);
+    let viewing_pubkey = darkpool_crypto::ephemeral_public(&[0x21; 32]);
+    let session_id = [0x5A; 32];
+    let opening = NoteOpening {
+        token_mint: [0u8; 32],
+        amount: note_amount,
+        owner_commitment,
+        inner_hash: note_inner_hash,
+    };
+    let note_commitment = opening.commitment().expect("Fr-safe opening");
+    let canonical = OrderCanonical {
+        symbol: b"SOL-USDC",
+        side: OrderSide::Bid,
+        order_type: OrderType::Limit,
+        amount,
+        price_limit,
+        min_fill_size: 0,
+        expiry_slot: 4_000,
+        order_id,
+        note_commitment,
+        user_commitment,
+        arrival_nonce: u64::from(salt),
+        viewing_pubkey,
+        session_id,
+    };
+    let sig = key.sign(&canonical.digest().unwrap());
+    serde_json::from_value(json!({
+        "symbol": "SOL-USDC", "side": "bid", "order_type": "limit",
+        "amount": amount, "price_limit": price_limit, "min_fill_size": 0,
+        "expiry_slot": 4_000,
+        "order_id": hex::encode(order_id),
+        "note_commitment": hex::encode(note_commitment),
+        "user_commitment": hex::encode(user_commitment),
+        "arrival_nonce": u64::from(salt),
+        "trading_key": hex::encode(key.verifying_key().to_bytes()),
+        "trading_key_signature": hex::encode(sig.to_bytes()),
+        "owner_commitment": hex::encode(owner_commitment),
+        "note_inner_hash": hex::encode(note_inner_hash),
+        "merkle_root": hex::encode([0xDDu8; 32]),
+        "valid_input_proof": hex::encode([0u8; 256]),
+        "collateral_amount": serde_json::Value::Null,
+        "viewing_pubkey": hex::encode(viewing_pubkey),
+        "session_id": hex::encode(session_id),
+    }))
+    .expect("valid PlaceOrderRequest")
+}
+
+/// Drain must actually empty the book, not merely report a count.
+///
+/// This is the only test that drives the cancellation LOOP in `begin_drain`.
+/// That loop snapshots order ids under a read guard and then cancels under a
+/// write guard — holding the read guard across the cancels would deadlock, and
+/// no amount of testing the drain helpers in isolation would reveal it.
+#[tokio::test]
+async fn draining_cancels_a_real_resting_order() {
+    let state = Arc::new(ApiState::for_tests());
+    let t = token(Arc::clone(&state)).await;
+
+    let key = SigningKey::from_bytes(&[0x77; 32]);
+    let mut order_id = [0u8; 16];
+    order_id[0] = 0xAA;
+    order_id[15] = 1;
+    let matcher = state
+        .matcher_for_symbol("SOL-USDC")
+        .expect("test state has a matcher");
+    place_core(&state, &matcher, &signed_order(&key, order_id), "acct-test")
+        .await
+        .expect("order accepted");
+    assert_eq!(
+        matcher.read().await.book().len(),
+        1,
+        "precondition: one order resting"
+    );
+
+    let (status, body) = call(Arc::clone(&state), "POST", Some(&t)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["cancelled_resting"], 1,
+        "drain must report the order it cancelled, got: {body}"
+    );
+    assert_eq!(
+        matcher.read().await.book().len(),
+        0,
+        "the book must actually be empty — a reported count is not a cancellation"
+    );
+    assert_eq!(body["safe_to_stop"], true);
 }

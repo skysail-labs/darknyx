@@ -92,11 +92,19 @@ mod tests {
     #[test]
     fn a_drain_is_not_cleared_by_governance_or_oracle_recovery() {
         let gate = TradingGate::default();
+        // Governance must actually be PAUSED first. Without this, `resume()`
+        // returns false merely because the bit was never set, and the assertion
+        // below passes without exercising the independence it claims to check.
+        assert!(gate.pause_for(TradingPauseReason::Governance));
         assert!(gate.pause_for(TradingPauseReason::Drain));
         assert!(gate.pause_for(TradingPauseReason::Oracle));
         assert!(
             !gate.resume(),
-            "governance resume must not open a draining gate"
+            "a REAL governance resume must not open a draining gate"
+        );
+        assert!(
+            !gate.is_paused_for(TradingPauseReason::Governance),
+            "the governance bit did clear — it just did not open the gate"
         );
         // `resume_for` reports whether the WHOLE gate opened, not whether the
         // bit cleared — so it is correctly `false` here with the drain still set.
