@@ -38,6 +38,7 @@ pub mod alt;
 pub mod alt_pool;
 pub mod assemble;
 pub mod close_marker;
+pub mod drain;
 pub mod ed25519;
 pub mod fill_recovery;
 pub mod lock_note;

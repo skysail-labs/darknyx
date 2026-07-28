@@ -294,6 +294,11 @@ pub struct ApiState {
     /// [`crate::api::conn_limit`] for why the login bound is absolute and why
     /// there is deliberately no per-IP cap.
     pub stream_conns: Arc<ConnectionRegistry>,
+
+    // ── In-flight settlement journal (T-06) ─────────────────────
+    /// Shared with the settle worker. The API reads it to answer
+    /// "is it safe to stop?" — the durable in-flight count, not a timer.
+    pub settle_journal: Arc<tokio::sync::Mutex<crate::persistence::journal::SettleJournal>>,
 }
 
 /// What an accepted order records for idempotent-retry detection:
@@ -506,6 +511,9 @@ impl ApiState {
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
             stream_conns: ConnectionRegistry::new(ConnectionLimits::from_env()),
+            settle_journal: Arc::new(tokio::sync::Mutex::new(
+                crate::persistence::journal::SettleJournal::in_memory(),
+            )),
         }
     }
 
@@ -662,6 +670,18 @@ impl ApiState {
         self
     }
 
+    /// Share the settle worker's journal so `/admin/drain` answers "is it safe
+    /// to stop?" from the SAME durable state the worker writes and a restart
+    /// would read. Reporting from a separate copy would let the endpoint say
+    /// "drained" while the worker still held work.
+    pub fn with_settle_journal(
+        mut self,
+        journal: Arc<tokio::sync::Mutex<crate::persistence::journal::SettleJournal>>,
+    ) -> Self {
+        self.settle_journal = journal;
+        self
+    }
+
     /// Replace the `/v1/stream` connection limits.
     ///
     /// Exists for tests: the production defaults (512 sockets, a 10 s login
@@ -756,6 +776,9 @@ impl ApiState {
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
             stream_conns: ConnectionRegistry::new(ConnectionLimits::default()),
+            settle_journal: Arc::new(tokio::sync::Mutex::new(
+                crate::persistence::journal::SettleJournal::in_memory(),
+            )),
         }
     }
 

@@ -14,6 +14,7 @@ pub mod auth;
 pub mod conn_limit;
 #[cfg(feature = "debug_endpoints")]
 pub mod debug;
+pub mod drain;
 pub mod error;
 pub mod fills_router;
 pub mod health;
@@ -156,6 +157,14 @@ pub fn build_protected_router(state: Arc<ApiState>) -> Router<Arc<ApiState>> {
         // further admin-gated inside the handler (see auth.rs).
         .route("/auth/token/revoke", post(auth::revoke_token_handler))
         .route("/admin/accounts", post(auth::register_account_handler))
+        // Planned-stop control (T-06). `GET` answers "is it safe to stop the
+        // CVM?" from the settle journal — the same state a restart would read.
+        .route(
+            "/admin/drain",
+            get(drain::get_drain)
+                .post(drain::begin_drain)
+                .delete(drain::cancel_drain),
+        )
         // Account suspension + bulk token invalidation. Admin-gated inside the
         // handlers, same as `/admin/accounts`. Enforcement lives in
         // `auth::validate_token`, not in a middleware, so it covers the

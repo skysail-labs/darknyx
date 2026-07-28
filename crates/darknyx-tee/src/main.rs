@@ -520,6 +520,12 @@ async fn main() -> Result<()> {
         .iter()
         .map(|(market, matcher, ..)| (market.symbol.clone(), matcher.clone()))
         .collect::<HashMap<_, _>>();
+    // Share the settle worker's journal with the API so `/admin/drain` reports
+    // readiness from the same durable in-flight set the worker maintains.
+    let api_state = match settle_template.as_ref() {
+        Some(driver) => api_state.with_settle_journal(driver.ctx.journal.clone()),
+        None => api_state,
+    };
     let api_state = api_state
         .with_instruments(instruments)
         .with_market_runtimes(matchers, current_slot, oracle.clone())
