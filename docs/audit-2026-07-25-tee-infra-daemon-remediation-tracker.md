@@ -55,7 +55,7 @@ the first stop for an agent resuming the work.
 | Active slice | none — slice 4 closed. |
 | Active branch / PR | merged (PR #81) |
 | Next slice | `remediation/order-canonical-next` (slice 5) — T-07 + PF-10 |
-| Live state | **No CVM running; billing halted** after the slice-4 drill. Image `sha256:59e2932f…7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570`). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
+| Live state | **No CVM running; billing halted** after the slice-4 drill. Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
 | Last updated | 2026-07-28 (slice 4 closed) |
 
 ### Slice 1 live evidence — 2026-07-27
@@ -271,7 +271,7 @@ hardening changes make it impossible to reconstruct.
 | `local-assurance` | No protocol runtime cost; longer local/hosted validation. | Wall time and peak disk for the TEE, artifact-required, SBF, dependency, and complete local gates. |
 | `tee-transport-integrity` (as shipped) | Connection accounting adds one atomic compare-and-swap per upgrade and one map update per login — not measurable against network cost. No TLS work shipped, so no handshake, latency, or image-size delta. | None required: the change adds no per-request work on any hot path. The caps' behaviour is pinned by tests rather than by a timing measurement. |
 | `tee-transport-integrity` (deferred T-03 transport work) | TLS termination adds handshake cost, request latency, memory per socket, and image size. | Cold/warm HTTP p50/p95, WebSocket connect/login/reconnect p50/p95, RSS per 1/100/limit sockets, CPU under ping-only abuse, and image-size delta. Capture in the CVM window that ships the transport change. |
-| `settlement-recovery` | Measured 2026-07-28: settle `total_ms=14210` with the journal enabled against slice-1 baselines of 14573 / 15310 — **below run-to-run noise** on a network-bound settle. ~1684 B journalled per match (~26 KiB per transition for a full 16-match batch). Restart→reconciled **436 ms**. | Captured; see [`settlement-recovery-drill.md`](settlement-recovery-drill.md) §6. Per-transition write p50/p95 is **not** captured — no per-write instrumentation exists and a handful of samples are not percentiles; the aggregate above is recorded as a proxy, and the gap is listed in the drill's §7. |
+| `settlement-recovery` | Observed 2026-07-28: settle `total_ms=14210` with the journal enabled, within the spread of the two pre-journal runs (14573 / 15310). Three samples across differing network conditions show the journal is not visible at this resolution — they do not establish that its cost is negligible. ~1684 B journalled per match (~26 KiB per transition for a 16-match batch). Restart→reconciled **436 ms**. | **Partially captured — WAIVER REQUIRED.** End-to-end timing, bytes/match, and restart-to-reconciled are measured ([`settlement-recovery-drill.md`](settlement-recovery-drill.md) §6). **Per-durable-transition write p50/p95 is NOT captured** and this row lists it as mandatory: no instrumentation exists around `SettleJournal::record`. T-06 is `Closed` on the owner's acceptance that the end-to-end figure is a sufficient proxy for a write that is invisible against a ~14 s network-bound settle. If that waiver is not granted, T-06 returns to `Code complete` until the histogram is added and a drill captures it. |
 | `order-canonical-next` | Removes one dead 32-byte field plus JSON hex/serialization work; no proving or on-chain cost. | Canonical preimage bytes, REST/WS request bytes, serialized order size, and placement p50/p95 before/after. |
 | `daemon-keystore-v2` | Deliberately increases unlock CPU/RAM; no trading hot-path cost after unlock. | v1/v2 unlock p50/p95, peak RSS, wrong-passphrase cost, migration duration, and resulting file size on supported client classes. |
 | `tee-bounds-cleanup` | Dead-state deletion is neutral/smaller; bounded FFI retries only affect error paths. | Binary/SDK bundle delta, normal-prove p50/p95 unchanged, and adversarial retry count/allocation ceiling. |
@@ -820,9 +820,44 @@ Skipped: seeding `batch_id` above the highest recovered value. The recovery pass
 already drains the journal, so no recovered key can survive to collide; adding a
 second mechanism for the same invariant would mean two things to keep in step.
 
+### Third review pass — slice 4
+
+Twelve more items; two were duplicates already fixed, several were documentation
+accuracy, and **one was a real defect in my own previous fix**.
+
+- **Recovery retired `Indeterminate` entries.** The retire-all introduced last
+  pass to kill the `batch_id` collision went too far: an indeterminate entry is
+  precisely the case a human must inspect, and discarding it destroyed the only
+  evidence at the moment it mattered *and* cleared the `/admin/drain` in-flight
+  count, letting `safe_to_stop` go true with a settlement genuinely unresolved.
+  Now only resolved actions are retired.
+  That reinstates the collision risk for retained entries, so the
+  `batch_id` seeding I skipped last pass — on the reasoning that retire-all made
+  it unnecessary — is now implemented and tested
+  (`SettleSchedulerState::seed_next_batch_id`). The reasoning for skipping it was
+  only sound because of the behaviour that turned out to be wrong.
+- **The evidence claimed more than three samples support.** "Below run-to-run
+  noise" was a conclusion; `14210` against `14573 / 15310` supports only "not
+  visible at this resolution". Reworded in both the tracker and the drill.
+- **T-06 was `Closed` with a mandatory measurement missing.** Per-durable-
+  transition write p50/p95 is listed as mandatory in the cost table and was never
+  captured — no instrumentation exists around `SettleJournal::record`. Rather
+  than let that sit unremarked under a `Closed` row, it is now an **explicitly
+  recorded waiver**: T-06 is Closed on the owner's acceptance that the end-to-end
+  figure is a sufficient proxy, and returns to `Code complete` if that acceptance
+  is not given. Adding the histogram is the first task before the next drill.
+- **Abbreviated image digests.** `sha256:59e2932f…7bbfda` identifies nothing;
+  both records now carry the full 64-hex digest, with the tag and commit marked
+  as cross-references rather than identity.
+- Markdown: a blockquote split by blank lines (MD028) in the runbook, fenced
+  output blocks without a language in the drill, and a `SOLANA_RPC_URL` that step
+  1a set inline and step 1b then expanded empty.
+
+Skipped: nothing. Every item in this pass was either valid or already fixed.
+
 ### Status
 
-`T-06` is **`Closed`**. Code merged in PR #81 and the live obligations discharged by the 2026-07-28 drill above. The drill is repeatable — [`settlement-recovery-drill.md`](settlement-recovery-drill.md) carries the procedure, the pass criteria, and the traps — so a future settle-pipeline or persistence change can re-establish this evidence rather than re-derive how.
+`T-06` is **`Closed`**, with one explicitly recorded waiver: per-durable-transition write p50/p95 was not captured (see the cost table row — the measurement is listed as mandatory and no instrumentation exists for it). Every other live obligation was discharged by the 2026-07-28 drill above, and the code merged in PR #81. The drill is repeatable — [`settlement-recovery-drill.md`](settlement-recovery-drill.md) carries the procedure, the pass criteria, and the traps — so a future settle-pipeline or persistence change can re-establish this evidence rather than re-derive how.
 
 Superseded window plan (kept for provenance):
 

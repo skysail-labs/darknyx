@@ -57,6 +57,20 @@ pub struct SettleSchedulerState {
 }
 
 impl SettleSchedulerState {
+    /// Ensure the next assigned `batch_id` is at least `min`.
+    ///
+    /// `next_batch_id` starts at 0 in every process, so the journal key
+    /// `(batch_id, match_idx)` is boot-relative. Recovery preserves entries it
+    /// could not resolve, and without this the first new batch would be batch 0
+    /// and would overwrite exactly the records an operator was asked to inspect.
+    /// Seeding above the highest recovered id makes the collision impossible
+    /// rather than unlikely.
+    pub fn seed_next_batch_id(&mut self, min: BatchId) {
+        if self.next_batch_id < min {
+            self.next_batch_id = min;
+        }
+    }
+
     pub fn batch_count(&self) -> usize {
         self.by_batch.len()
     }
@@ -510,6 +524,31 @@ async fn fail_batch(
 
 #[cfg(test)]
 mod tests {
+
+    /// Recovery keeps entries it could not resolve, and `batch_id` restarts at 0
+    /// every process — so without seeding, the first new batch would overwrite
+    /// exactly the records held back for an operator.
+    #[test]
+    fn seeding_prevents_a_new_batch_from_reusing_a_recovered_id() {
+        let mut st = SettleSchedulerState::default();
+        assert_eq!(st.next_batch_id(), 0, "a fresh process starts at 0");
+
+        let mut st = SettleSchedulerState::default();
+        st.seed_next_batch_id(5); // highest recovered batch_id was 4
+        assert_eq!(st.next_batch_id(), 5, "must not reissue a retained id");
+        assert_eq!(st.next_batch_id(), 6);
+    }
+
+    /// Seeding must never move the counter backwards — that would reintroduce
+    /// the collision it exists to prevent.
+    #[test]
+    fn seeding_never_rewinds_the_counter() {
+        let mut st = SettleSchedulerState::default();
+        st.seed_next_batch_id(10);
+        let _ = st.next_batch_id(); // 10
+        st.seed_next_batch_id(3);
+        assert_eq!(st.next_batch_id(), 11, "a lower seed must be ignored");
+    }
     use super::*;
     use darkpool_matcher::match_result::{MatchPair, MatchStatus};
     use std::sync::atomic::AtomicU64;

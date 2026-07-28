@@ -113,9 +113,13 @@ deploy env is shredded immediately after use.
 ### Step 1 — fresh tree, matching mirror
 
 ```bash
+# Export once — the floor capture below needs it too. Setting it inline on the
+# reset command alone leaves it unset for 1b, and the curl then posts to an
+# empty URL.
+export SOLANA_RPC_URL="$HELIUS"
+
 # 1a. reset on-chain
-SOLANA_RPC_URL="$HELIUS" ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
-  node scripts/reset-merkle-tree.mjs
+ADMIN_KEYPAIR=.devnet/keypairs/admin.json node scripts/reset-merkle-tree.mjs
 
 # 1b. capture a floor AFTER the reset, then env-only redeploy (see §2.2)
 FLOOR=$(curl -s "$SOLANA_RPC_URL" -X POST -H 'content-type: application/json' \
@@ -207,7 +211,7 @@ Check it against the leaf count, never against the log's own confidence.
 
 ## 6. Results — 2026-07-28
 
-Image `ghcr.io/skysail-labs/darknyx-tee@sha256:59e2932f…7bbfda`
+Image `ghcr.io/skysail-labs/darknyx-tee@sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda`
 (tag `tee-v3-hardening-76`, commit `3a93570`).
 CVM `nightly-test-cvm` = `app_9ca3cded105f16923afb0e3f62537882c14db637`,
 `tdx.xlarge`, `gpus: 0`, node prod9. Program
@@ -226,14 +230,14 @@ state dir. The caveat appears only for a non-persistent journal.
 
 ### Interruption (assertion 3)
 
-```
+```text
 shard 0: leaf_count=2   shard 1..3: leaf_count=0
 TOTAL=2   (7 would mean the settle landed)
 ```
 
 ### Recovery (assertions 4–8)
 
-```
+```text
 INFO lock sweeper: replaying un-released note locks from disk n=2
 WARN settle recovery: lock window closed; collateral returns via the lock sweeper
        batch_id=0 match_idx=0 expired_at_slot=0
@@ -252,7 +256,7 @@ Post-recovery: `in_flight_settlements: 0`.
 
 ### Drain (assertions 9–11)
 
-```
+```text
 POST   → {"draining":true, "in_flight_settlements":0,"safe_to_stop":true}
 GET    → {"draining":true, "in_flight_settlements":0,"safe_to_stop":true}
 DELETE → {"draining":false,"in_flight_settlements":0,"safe_to_stop":false}
@@ -268,16 +272,19 @@ clean cycle.
 | Metric | Value | Note |
 |---|---|---|
 | Settle end-to-end, journal enabled | `total_ms=14210` | lock 1162, prove 2226, verify 1173, ALT 1300 + wait 462, settle 10762 |
-| Slice-1 baselines (pre-journal) | 14573 / 15310 | The journal's cost is **below the run-to-run noise** of a network-bound settle |
+| Slice-1 baselines (pre-journal) | 14573 / 15310 | The journalled run is **within the spread of the two prior runs**. Three samples across different network conditions cannot establish that the journal's cost is negligible — only that it is not visible at this resolution. Stated as an observation, not a conclusion. |
 | Restart → reconciled | **436 ms** | `20:21:46.195` sweeper spawn → `.631` recovery complete |
 | Journal bytes per match | **~1684 B** | payload 488 + 2×378 lock inputs + 440 scalars/signatures/timestamp |
 | Full 16-match batch | **~26 KiB** | rewritten per durable transition (snapshot, not append) |
 
 ### Honest limitations of this run
 
-* **Per-transition write p50/p95 was not captured.** There is no per-write
-  instrumentation, and a handful of samples are not percentiles. The aggregate
-  above is a proxy: the journal is invisible against settle latency.
+* **Per-transition write p50/p95 was not captured.** The cost table lists this
+  as a *mandatory* closing measurement, and it is missing: no instrumentation
+  exists around `SettleJournal::record`, and three end-to-end samples are not
+  percentiles. T-06's `Closed` status therefore rests on an **explicitly recorded
+  waiver** (see the tracker's cost-table row), not on complete evidence. The
+  instrumentation is the first thing to add before the next drill.
 * **The `Settling`-stage recovery path was not exercised.** The kill necessarily
   lands at the first journal write, so the entry was at `Locking`. The
   `AlreadySettled` and `Indeterminate` branches remain covered by unit tests only.

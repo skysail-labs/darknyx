@@ -1018,11 +1018,38 @@ async fn build_settle_driver(
             // registration above now owns its locks: this build has no
             // automatic redrive, so nothing else was going to act on the record.
             // If a redrive path is added, this must become selective.
+            //
+            // INDETERMINATE ENTRIES ARE DELIBERATELY KEPT. They are the case a
+            // human must look at, so discarding them would destroy the only
+            // evidence at exactly the moment it matters — and would clear the
+            // `/admin/drain` in-flight count, letting `safe_to_stop` go true
+            // while a settlement is genuinely unresolved.
+            let mut kept: Vec<(u64, u8)> = Vec::new();
             {
                 let mut j = settle_journal.lock().await;
-                for (entry, _) in &decisions {
+                for (entry, action) in &decisions {
+                    if matches!(
+                        action,
+                        darknyx_tee::settle::recover::RecoveryAction::Indeterminate { .. }
+                    ) {
+                        kept.push((entry.batch_id, entry.match_idx));
+                        continue;
+                    }
                     j.forget(entry.batch_id, entry.match_idx);
                 }
+            }
+            // Anything kept must survive the next batch. `batch_id` restarts at
+            // 0 each process, so without this seeding the first new batch would
+            // overwrite the very records held back for inspection.
+            if let Some(max_kept) = kept.iter().map(|(b, _)| *b).max() {
+                settle_state.write().await.seed_next_batch_id(max_kept + 1);
+                tracing::error!(
+                    kept = kept.len(),
+                    next_batch_id_seeded_to = max_kept + 1,
+                    "settle recovery: INDETERMINATE entries retained for inspection; \
+                     they still count as in-flight, so `safe_to_stop` stays false \
+                     until an operator resolves them"
+                );
             }
             tracing::warn!(
                 total = summary.total(),
@@ -1031,8 +1058,8 @@ async fn build_settle_driver(
                 release_expired = summary.release_expired,
                 indeterminate = summary.indeterminate,
                 needs_operator = summary.needs_operator(),
-                "settle journal recovery complete; entries retired (locks now owned \
-                 by the sweeper)"
+                "settle journal recovery complete; resolved entries retired (locks \
+                 owned by the sweeper), indeterminate entries retained"
             );
         }
         darknyx_tee::persistence::journal::JournalLoad::Damaged { reason } => {
