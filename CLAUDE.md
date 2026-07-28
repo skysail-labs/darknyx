@@ -258,11 +258,22 @@ bash scripts/build-vault-sbf.sh devnet-admin        # NOT a bare build-sbf: writ
                                                     #   stale .so can't be validated silently
 cargo build --examples -p darkpool-crypto           # parity tests shell out to these
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace                              # unit + litesvm integration
+bash scripts/check-no-doctests.sh                   # nextest skips doctests; this
+                                                    #   fails if one ever appears
+cargo nextest run --workspace                       # unit + litesvm integration.
+                                                    #   ~41% faster than `cargo test`
+                                                    #   (266s -> 156s on 8 cores).
+                                                    #   `cargo test --workspace` is
+                                                    #   equivalent and still correct.
+                                                    #   Without nextest, substitute
+                                                    #   `cargo test` in BOTH this line
+                                                    #   and the artifact-required one
+                                                    #   below, and skip the doctest
+                                                    #   guard (cargo test runs them).
 # T-12: needs circuit artifacts — §2.1's `bash scripts/build-circuits.sh` must have run.
 # Under this flag a missing .wasm/.r1cs/.zkey is a hard FAILURE, not a silent skip,
 # so a proof-backed test can never report success without proving.
-REQUIRE_CIRCUIT_ARTIFACTS=1 cargo test -p darknyx-tee --tests
+REQUIRE_CIRCUIT_ARTIFACTS=1 cargo nextest run -p darknyx-tee --tests   # or `cargo test`
 bash scripts/check-dependency-audits.sh             # cargo audit + npm audit vs the recorded baseline
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit
 ./node_modules/.bin/tsc -p packages/indexer/tsconfig.json --noEmit
@@ -272,10 +283,21 @@ bash scripts/check-dependency-audits.sh             # cargo audit + npm audit vs
 echo "ALL GREEN — safe to push"
 ```
 
-`cargo test --workspace` already includes `darknyx-tee`; the extra
+`cargo nextest run --workspace` already includes `darknyx-tee`; the extra
 `REQUIRE_CIRCUIT_ARTIFACTS=1` line re-runs its integration tests in
 artifact-required mode, where a missing circuit artifact FAILS instead of
 silently skipping the proof-backed intake tests.
+
+**Why nextest, and the one thing it does not do.** It runs each test in its own
+process and parallelises across the ~48 test binaries, where `cargo test` runs
+them one binary at a time — measured 266 s → 156 s on 8 cores. It does **not**
+run doctests. The workspace has none, and `scripts/check-no-doctests.sh` fails
+the gate if one is ever added, so the omission cannot become a silent gap. CI
+still runs `cargo test`: nextest's advantage comes from spare cores, so it is
+much smaller on a 2-core runner. Install with
+`cargo install cargo-nextest --locked`; `.config/nextest.toml` caps
+`test-threads` because ~50 tests each load a proving key (the N=16 key is 97 MB)
+and process-per-test would otherwise multiply peak memory.
 
 Expected: ~workspace Rust tests pass; ~94 SDK tests pass + a few env-gated
 ones skip (they need `RUN_DEVNET_E2E=1` / `RUN_CVM_E2E=1` / `RUN_DEVNET_DW=1`

@@ -1,0 +1,47 @@
+# cargo-nextest configuration.
+#
+# nextest is the FAST path for the local gate; `cargo test` remains correct and
+# is what CI runs today. Measured 2026-07-28 on 8 cores, already-compiled:
+#   cargo test --workspace        266.1 s
+#   cargo nextest run --workspace 155.6 s   (-41%)
+#
+# The win is cross-BINARY parallelism — `cargo test` already threads within a
+# binary but runs the ~48 binaries one after another. That also means the
+# advantage shrinks with core count: on a 2-core CI runner expect far less than
+# 41%, which is why CI has not switched.
+#
+# COVERAGE CAVEAT: nextest does not run doctests. The workspace currently has
+# ZERO executable doctests (`cargo test --workspace --doc` → 0 tests), so
+# nothing is lost. `scripts/check-no-doctests.sh` fails the gate if that ever
+# stops being true, so a doctest cannot be added and silently skipped.
+
+[profile.default]
+# Deliberately NOT setting `test-threads`. Its default is already "num-cpus",
+# and — importantly — that means *logical* CPUs, not physical cores, so pinning
+# it here would be a no-op that also reads as a memory bound it does not provide.
+# Memory is bounded by `threads-required` on the heavy tests below, which is the
+# mechanism actually designed for it.
+
+# Surface a test that has become pathologically slow rather than letting it hide
+# inside a green run. This only WARNS at the period; `terminate-after` bounds a
+# genuine hang so one wedged test cannot hold the run to the job timeout.
+slow-timeout = { period = "30s", terminate-after = 8 }
+
+[[profile.default.overrides]]
+# Proof-generating tests: legitimately slow AND memory-heavy.
+#
+# `threads-required = 4` is the load-bearing setting. Each of these shells out to
+# snarkjs and loads a proving key — `match_batch_n16/circuit_final.zkey` alone is
+# 97 MB — and nextest runs every test in its OWN PROCESS, so the working set
+# multiplies by concurrency rather than being shared as it is under `cargo test`.
+# Charging each one four slots caps concurrent proving at cpus/4 and keeps peak
+# RSS bounded, at the cost of some parallelism on exactly the tests that would
+# otherwise fight for memory bandwidth anyway.
+#
+# The filter names `user_commitment_registration` explicitly: it proves via
+# snarkjs like the others but its name matches none of the generic patterns, so
+# without it that test would trip the 30 s slow warning every run and train
+# everyone to ignore the warning.
+filter = 'test(/prove|n16|roundtrip|user_commitment_registration|deposit_with_proof|merge_verify/)'
+threads-required = 4
+slow-timeout = { period = "120s", terminate-after = 4 }

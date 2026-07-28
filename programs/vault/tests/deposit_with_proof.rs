@@ -94,11 +94,18 @@ fn valid_deposit_proof(
         r_owner = common::fr_to_dec(&opening.r_owner),
     );
     let build = common::repo_root().join("circuits/build/valid_deposit");
-    // Unique per invocation: this file has more than one test and cargo runs
-    // them on parallel threads, so a shared scratch dir races on proof.json.
+    // Unique per invocation AND per process. The counter alone is only unique
+    // within one process — enough for `cargo test`, which runs a file's tests as
+    // threads, but NOT for a per-test-process runner like `cargo nextest`, where
+    // every test starts the counter at 0 and two of them then share a scratch
+    // dir and race on proof.json. The pid closes that gap and also makes two
+    // concurrent local runs safe.
     static PROVE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let seq = PROVE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!("darknyx_valid_deposit_litesvm_{seq}"));
+    let tmp = std::env::temp_dir().join(format!(
+        "darknyx_valid_deposit_litesvm_{}_{seq}",
+        std::process::id()
+    ));
     let (proof, public) = common::snarkjs_fullprove(&input, &build, &tmp);
     let [mint_lo_bytes, mint_hi_bytes] = pubkey_pair_be32(&mint.to_bytes());
     let mut amount_bytes = [0u8; 32];

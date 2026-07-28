@@ -207,7 +207,12 @@ fn valid_spend_roundtrip() {
     let nullifier = poseidon_hash(&[Fr::from(3u64), spending_key, inner_hash]).unwrap();
 
     // ----- Write snarkjs input.json -----
-    let tmp = std::env::temp_dir().join("darknyx_spend_roundtrip");
+    // Per-process scratch dir. A FIXED name is safe only while exactly one
+    // test ever uses it in one process; it breaks silently the moment a second
+    // test is added here, or under a per-test-process runner like
+    // `cargo nextest`, where two processes would share the path and clobber each
+    // other's proof.json. Matches the pid convention in merge_verify.rs.
+    let tmp = std::env::temp_dir().join(format!("darknyx_spend_roundtrip_{}", std::process::id()));
     fs::create_dir_all(&tmp).unwrap();
     let input_path = tmp.join("input.json");
     let proof_path = tmp.join("proof.json");
