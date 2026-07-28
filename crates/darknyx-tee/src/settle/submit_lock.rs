@@ -26,6 +26,7 @@
 //! unification rationale (PR 4g.3 walk-back).
 
 use base64::Engine as _;
+use borsh::{BorshDeserialize, BorshSerialize};
 use solana_address::Address;
 use solana_hash::Hash;
 use solana_keypair::Keypair;
@@ -42,7 +43,7 @@ use crate::solana_rpc::{RpcError, SolanaRpcClient};
 /// or order-derived; `merkle_root` + `proof` are the user-supplied
 /// VALID_INPUT inputs the TEE relays (see 4g.3 doc on the proof
 /// integration gap).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct LockSideInputs {
     /// The Merkle-tree shard this input note lives in (its home tree). Selects
     /// the `merkle_tree` account whose recent-roots ring `lock_note` checks
