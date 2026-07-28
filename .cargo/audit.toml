@@ -1,0 +1,61 @@
+# cargo-audit configuration — T-08.
+#
+# Every entry below is an INDIVIDUALLY TRIAGED advisory with the reachability
+# analysis that justified accepting it, not a blanket suppression. The point of
+# a dependency gate is to make the next advisory visible; a wildcard ignore
+# would defeat that on day one. If an entry's justification stops holding —
+# a dev-only crate becomes a runtime dep, a lockfile-only crate enters the build
+# graph — remove the line and fix the dependency.
+#
+# Re-derive the analysis with:
+#   cargo tree --workspace -i <crate>@<version>
+#
+# Reviewed 2026-07-28 against Cargo.lock at commit f94d4a2.
+
+[advisories]
+ignore = [
+  # ── Dev/test-only: reachable ONLY through litesvm's dev-dependency chain ──
+  # cargo tree -i ed25519-dalek@1.0.1:
+  #   ed25519-dalek 1.0.1 <- agave-precompiles 4.0.0 <- litesvm 0.13.0
+  #     <- vault [dev-dependencies]
+  # litesvm is the LiteSVM test harness. It is not linked into `vault.so`, the
+  # darknyx-tee binary, or anything deployed. An attack on the double-public-key
+  # signing oracle would require an adversary inside our own test process.
+  # Fix is upstream (agave-precompiles must move to ed25519-dalek 2.x); we
+  # cannot force it without forking litesvm's dependency tree.
+  "RUSTSEC-2022-0093", # ed25519-dalek 1.0.1 — double public key signing oracle
+
+  # Same chain, one level deeper:
+  #   curve25519-dalek 3.2.0 <- ed25519-dalek 1.0.1 <- ... <- vault [dev-deps]
+  # Timing variability in Scalar29::sub/Scalar52::sub. Test-only, and the
+  # threat model (local timing side channel) has no meaning in a test harness.
+  "RUSTSEC-2024-0344", # curve25519-dalek 3.2.0 — timing variability in Scalar sub
+
+  # ── Lockfile-only: present in Cargo.lock, absent from every build graph ──
+  # `cargo tree --workspace -i quinn-proto@0.11.14` prints "nothing to print",
+  # i.e. no workspace member reaches it. It is a resolution artifact, so the
+  # remote memory-exhaustion path is not compiled into anything we ship.
+  # Recheck this one whenever a Solana crate is bumped — if QUIC transport is
+  # ever pulled in for real, this becomes live and must be fixed, not ignored.
+  "RUSTSEC-2026-0185", # quinn-proto 0.11.14 — remote memory exhaustion (7.5 high)
+
+  # ── Reachable, but not the code that handles our logs ──
+  # cargo tree -i tracing-subscriber@0.2.25:
+  #   tracing-subscriber 0.2.25 <- ark-relations 0.5.1 <- ark-circom
+  #     <- darknyx-tee
+  # So it IS compiled into the TEE binary. The advisory is ANSI-escape log
+  # poisoning from logging untrusted input. Our logging is initialised from the
+  # WORKSPACE tracing-subscriber 0.3 (Cargo.toml:120, installed at
+  # crates/darknyx-tee/src/main.rs:726); the 0.2.25 copy is ark-relations'
+  # internal constraint-system tracing, which we never install as the global
+  # subscriber and never feed user input to. Order intent is additionally never
+  # logged by policy.
+  # Revisit if ark-circom/ark-relations is bumped or if anything starts routing
+  # request data through ark-relations' tracing.
+  "RUSTSEC-2025-0055", # tracing-subscriber 0.2.25 — ANSI escape log poisoning
+]
+
+# Unmaintained/yanked crates surface as warnings rather than errors. They are
+# deliberately NOT ignored: they should stay visible so the list is a standing
+# nudge to migrate, and they do not fail the gate.
+informational_warnings = ["unmaintained", "unsound", "notice"]

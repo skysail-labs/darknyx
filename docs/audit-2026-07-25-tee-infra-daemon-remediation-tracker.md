@@ -50,13 +50,13 @@ the first stop for an agent resuming the work.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `e2b13b5` (+ closure PR #78) |
-| Last merged remediation PR | #77 — slice 1 (`tee-oracle-trust`), merged 2026-07-27 |
-| Active slice | slice 1 closing (PR #78); slice 2 next |
-| Active branch / PR | `remediation/oracle-slice-closure` / PR #78 |
-| Next slice | `remediation/local-assurance` |
-| Live state | **CVM stopped; billing halted.** `nightly-test-cvm` (`app_9ca3cded…c14db637`, CPU, `gpus=0`, node prod9) ran the oracle image and was stopped after evidence capture. Devnet mutated: all 4 Merkle shards reset, `tee_pubkeys` rotated to this CVM's 4-shard set, each funded to 2 SOL. Images pinned by digest — CPU `sha256:dddf0116363e8ab9112bc09a7cf97558f00f2306016094ba6bcb917a64253ad3` (tag `tee-v3-hardening-74`), GPU `sha256:1001d5a0ae45d86c624c265c3598b490f7b511aa3349faa1c2ea03d29d367854` (tag `tee-v3-hardening-74-cuda`). The previously referenced `tee-v3-hardening-69-cuda` never existed in GHCR. |
-| Last updated | 2026-07-27 |
+| Last verified `main` | `c6ab3e1` (slice 1 closed; PR #77 + #78 merged) |
+| Last merged remediation PR | #78 — slice 1 closure, merged 2026-07-27 |
+| Active slice | `remediation/local-assurance` (slice 2) |
+| Active branch / PR | `remediation/local-assurance` / PR pending |
+| Next slice | `remediation/tee-transport-integrity` (slice 3) |
+| Live state | **No CVM running; billing halted.** Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
+| Last updated | 2026-07-28 |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -120,17 +120,17 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 | T-05 | Medium | — | — | Owner accepted the residual append-only-mirror availability risk on 2026-07-27. Confirmed commitment plus on-chain root validation is considered sufficient for the current product; a rollback can stall witness service but cannot authorize custody loss. No code, test, infrastructure, or follow-up task is authorized. | **Won't Fix — accepted risk** |
 | T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | Open |
 | T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | Open |
-| T-08 | Medium | Release engineering | `remediation/local-assurance` | Rust and production Node dependencies have locally reproducible vulnerability gates; GitHub Actions use full immutable SHAs and minimum permissions. Findings are triaged rather than hidden by blanket ignores. | Open |
+| T-08 | Medium | Release engineering | `remediation/local-assurance` | Rust and production Node dependencies have locally reproducible vulnerability gates; GitHub Actions use full immutable SHAs and minimum permissions. Findings are triaged rather than hidden by blanket ignores. | Code complete |
 | T-09 | Low | Daemon custody | `remediation/daemon-keystore-v2` | New keystores use the fixed v2 scrypt profile `N=2^17, r=8, p=1` with explicit memory bounds. KATs, wrong-passphrase, and resource-bound tests pin the profile. | Open |
 | T-10 | Low | Daemon custody | `remediation/daemon-keystore-v2` | Unauthenticated file fields cannot select weaker KDF work. Version/profile, lengths, and AAD are strict; v1 files migrate through decrypt-validate-atomic-reseal without destructive partial writes. | Open |
-| T-11 | Medium | Release engineering + TEE | `remediation/local-assurance` | The complete `darknyx-tee` suite is an explicit local pre-PR gate now and a dedicated hosted job once artifact quota resumes. Slow artifact-backed tests remain separately identifiable. | Open |
-| T-12 | Medium | TEE tests + circuits | `remediation/local-assurance` | Artifact-required mode fails loudly when circuit artifacts are absent; no positive proof test can report success without proving. Casual local mode may skip only when the required-mode flag is absent and must report the skip. | Open |
-| T-13 | Low | Vault tests + build tooling | `remediation/local-assurance` | All LiteSVM loaders share one SBF artifact guard backed by a build manifest/source fingerprint, not a fragile per-test mtime check. A changed vault source or build configuration makes tests fail until `cargo build-sbf` refreshes the artifact and manifest. | Open |
+| T-11 | Medium | Release engineering + TEE | `remediation/local-assurance` | The complete `darknyx-tee` suite is an explicit local pre-PR gate now and a dedicated hosted job once artifact quota resumes. Slow artifact-backed tests remain separately identifiable. | Code complete |
+| T-12 | Medium | TEE tests + circuits | `remediation/local-assurance` | Artifact-required mode fails loudly when circuit artifacts are absent; no positive proof test can report success without proving. Casual local mode may skip only when the required-mode flag is absent and must report the skip. | Code complete |
+| T-13 | Low | Vault tests + build tooling | `remediation/local-assurance` | All LiteSVM loaders share one SBF artifact guard backed by a build manifest/source fingerprint, not a fragile per-test mtime check. A changed vault source or build configuration makes tests fail until `cargo build-sbf` refreshes the artifact and manifest. | Code complete |
 | T-14 | Low | Vault + TEE + SDK | `remediation/tee-bounds-cleanup` | The retired `NullifierEntry`, seeds, PDA helpers, comments, and public exports are absent across the program, TEE, SDK, scripts, and docs. The commitment-keyed consumed/deposit guards remain untouched. | Open |
-| T-15 | Low | Vault tests + tracker | `remediation/local-assurance` | LiteSVM covers live-lock withdraw rejection, expiry-boundary withdraw success, and `release_lock → withdraw` including rent return. The earlier S-03 row names only evidence that exists. | Open |
+| T-15 | Low | Vault tests + tracker | `remediation/local-assurance` | LiteSVM covers live-lock withdraw rejection, expiry-boundary withdraw success, and `release_lock → withdraw` including rent return. The earlier S-03 row names only evidence that exists. | Code complete |
 | T-16 | Medium | TEE oracle + matcher + market config | `remediation/tee-oracle-trust` | Pyth-native price/exponent values are converted with checked integer arithmetic into the governed atomic base/quote price units before circuit-breaker comparison or collateral math. The invariant includes base decimals, quote decimals, exponent, and `price_scale`; unequal-decimal markets, exponent changes, unrepresentable scales, rounding, and overflow fail closed. | Closed |
 | T-17 | Medium | TEE matcher + API | `remediation/multi-market-isolation` | `TradingPauseReason::Oracle` is scoped per market, not venue-wide. One market's stale or unauthenticated feed pauses only that market, and a healthy market's tick cannot clear another's oracle pause. A mixed configuration where some markets have no `oracle_feed_id` while `feed_ids` is non-empty is rejected at boot rather than silently sharing gate state. | Open |
-| T-18 | Medium | Release engineering | `remediation/local-assurance` | A failure in the `Detect changed paths` job cannot leave the aggregate `pr-checks success` check green. The aggregate gate must fail (not pass) when any prerequisite job fails or is skipped due to an upstream failure, so a broken paths filter cannot silently disable the entire PR gate. | Open |
+| T-18 | Medium | Release engineering | `remediation/local-assurance` | A failure in the `Detect changed paths` job cannot leave the aggregate `pr-checks success` check green. The aggregate gate must fail (not pass) when any prerequisite job fails or is skipped due to an upstream failure, so a broken paths filter cannot silently disable the entire PR gate. | Code complete |
 
 ## Performance findings
 
@@ -252,7 +252,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | Order | Slice | Findings / deliverables | Prerequisite | Status / PR | Compatibility and rollout | Required evidence before `Closed` |
 |---|---|---|---|---|---|---|
 | 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | Code complete / PR open | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
-| 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Open / — | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
+| 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Code complete / PR pending | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
 | 3 | `remediation/tee-transport-integrity` | T-03, DEP-AU-07; enforce T-04 for new ingress image | Slice 2 code complete | Open / — | Compose hash and transport endpoint change; digest-pinned ingress image; governance/client pin rotation required. | Local compose validation, connection-cap tests, immutable ingress digest, real CVM HTTPS/WSS/API/attestation checks, plaintext-port negative, signer rotation and compose-hash evidence. |
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Open / — | New versioned encrypted journal; no public wire change unless terminal restart reasons are surfaced. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | Open / — | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
@@ -283,7 +283,7 @@ They do not create duplicate finding ownership.
 
 | ID | Required correction | Closure dependency | Status |
 |---|---|---|---|
-| CT-01 | Qualify S-03's claimed withdraw/release-lock LiteSVM evidence until it exists, then attach the T-15 tests. | T-15 | Open |
+| CT-01 | Qualify S-03's claimed withdraw/release-lock LiteSVM evidence until it exists, then attach the T-15 tests. | T-15 | Ready — attach `programs/vault/tests/withdraw_lock_lifecycle.rs` (3 tests) when slice 2 merges |
 | CT-02 | Remove shipped S-03(B) lock sweeping from `Declined` and record its existing implementation/tests/live evidence. | Documentation correction | Open |
 | CT-03 | Move AU-06 from `Code complete` to `Closed`; PR #72 merged as `19ae2a4`. | Documentation correction | Open |
 | CT-04 | Delete the release-gate bullet that still lists the completed `api/auth.rs` pass as uncommissioned. | Documentation correction | Open |
@@ -543,3 +543,87 @@ measurement their rows and the cost table require. `RD-03` closed in #77.
 standing release invariant, not a one-time cleanup, so it closes only once slice
 3's ingress image is also pinned. Both current images are digest-pinned and the
 release record above maps source → tag → digest → live container.
+
+## Slice 2 evidence — `remediation/local-assurance`, 2026-07-28
+
+No CVM and no devnet mutation: this slice is CI, test, and build tooling.
+
+### The shape of the slice
+
+T-11, T-12, T-13 and T-18 are one defect wearing four hats — **a gate that
+reports success without checking anything**. Each is worse than an absent gate,
+because each converts "not verified" into a positive signal that a human or a
+branch-protection rule then trusts.
+
+| ID | What was actually happening | Verified by |
+|---|---|---|
+| T-18 | `ci-success` listed `changes` in `needs` but never read its result. Every other job's `if:` reads `needs.changes.outputs.*`, so a failing `changes` skipped all nine — and `skipped` was accepted as "not relevant". Observed live on PR #77: **`pr-checks success` reported pass in 3 s with zero tests run.** | `changes` result now checked and `skipped` not accepted for it; YAML parse confirms wiring |
+| T-11 | **No workflow ran `cargo test -p darknyx-tee`.** 799 tests (305 lib + 494 integration) — matcher, settle, Merkle mirror, oracle, HTTP/auth, and every Phase A / `AU-` regression test — were local-gate-only | new `tee` job; 305 + 494 pass locally |
+| T-12 | S-02's positive test returned early when circuit artifacts were absent (two of three are gitignored) and reported PASSED without proving | hid `circuit.r1cs`: required mode **fails**, default mode skips. 18.73 s proving vs 0.00 s skipping |
+| T-13 | `target/deploy/vault.so` is tracked by no test dependency, so the suite validated whatever binary was on disk. Bit this repo on 2026-07-27 | 4 failure modes + a real source edit; see below |
+
+### T-13 — why a fingerprint and not a timestamp
+
+An mtime check answers "was this written after the source?", which is wrong in
+both directions: `git checkout` and `touch` move mtimes without changing code,
+and a rebuild with a **different feature set** leaves a *newer* artifact that is
+still the wrong binary — `devnet-admin` on/off changes which instructions exist
+at all. `scripts/vault-sbf-fingerprint.sh` is the single definition, re-run by
+the tests rather than reimplemented, so the build and check sides cannot drift.
+
+Verified: hand-edited fingerprint → STALE; features without `devnet-admin` →
+rejected at load; missing manifest → refused; and a real one-line edit to
+`programs/vault/src/lib.rs` changed the fingerprint and made all 6 tests refuse,
+with revert restoring green.
+
+### T-15 — mutation-tested, not just green
+
+Three new LiteSVM tests in `programs/vault/tests/withdraw_lock_lifecycle.rs`:
+live-lock rejection (asserting the **specific** `NoteAlreadyLocked` error, since
+a bare `is_err()` would pass for any failure), expiry-boundary success with no
+release call, and `release_lock` → rent refunded → withdraw succeeds.
+
+Reverting `withdraw.rs` to the pre-S-03 reject-on-existence behaviour and
+rebuilding made `withdraw_succeeds_at_the_expiry_boundary_without_a_release`
+**FAIL** while the other two correctly still passed. The tests discriminate the
+regression they exist for, rather than merely passing.
+
+Also wired two orphaned targets into CI: `initialize_governance` and
+`market_config` are integration tests, so `cargo test -p vault --lib` never
+reached them and no job listed them.
+
+### T-08 — triaged, not suppressed
+
+All four Rust advisories are accepted individually in `.cargo/audit.toml`, each
+with its `cargo tree -i` analysis:
+
+| Advisory | Crate | Disposition |
+|---|---|---|
+| RUSTSEC-2022-0093 | ed25519-dalek 1.0.1 | dev-only: `litesvm [dev-dependencies]` → not linked into any deployed artifact |
+| RUSTSEC-2024-0344 | curve25519-dalek 3.2.0 | same chain, one level deeper |
+| RUSTSEC-2026-0185 | quinn-proto 0.11.14 | lockfile-only — `cargo tree` reaches it from no workspace member |
+| RUSTSEC-2025-0055 | tracing-subscriber 0.2.25 | compiled in via ark-relations, but our logging installs the workspace 0.3; the 0.2 copy is never the global subscriber |
+
+The npm production tree carries a **pre-existing backlog of 9 advisories**,
+recorded in `audit-baseline/npm-production.txt`. Blanket-ignoring would defeat
+the gate on day one; failing on the whole backlog would teach everyone to bypass
+it. So the baseline is visible, diffable, and expected to shrink — anything not
+in it fails. Verified by deleting one line: the gate failed naming
+`GHSA-3gc7-fjrx-p6mg bigint-buffer high`.
+
+**Owed, and deliberately not claimed as done:** the 9 npm advisories are
+*recorded*, not *triaged*. Each still needs the reachability analysis the Rust
+side got. `bigint-buffer → @solana/buffer-layout-utils → @solana/spl-token` is
+the one in a genuine production chain and should be looked at first.
+
+All 56 action references across the 7 workflows are now pinned to full commit
+SHAs with the tag kept as a trailing comment. Note `dtolnay/rust-toolchain@1.89.0`
+resolved to a **branch**, not a tag — branches move by design, so it needed
+pinning more than the rest, not less.
+
+### Status
+
+T-08, T-11, T-12, T-13, T-15, T-18 → `Code complete`. They reach `Closed` when
+this merges and one hosted run of the new `tee` and `deps-audit` jobs succeeds —
+T-11's row requires exactly that, and claiming closure from a local run would
+repeat the mistake the slice exists to fix.

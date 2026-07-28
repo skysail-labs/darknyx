@@ -247,7 +247,7 @@ jobs:
     steps:
       # For issue_comment, github.ref is the default branch — we need
       # the PR's head SHA explicitly. preflight resolved it for us.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ needs.preflight.outputs.sha }}
 
@@ -287,7 +287,7 @@ jobs:
       # node script so we don't have to install solana CLI just for
       # this. Threshold is 0.05 SOL = 50_000_000 lamports.
       - name: Install Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '20'
           cache: npm
@@ -365,14 +365,14 @@ jobs:
       # circom version + PTAU filename.
       - name: Cache circom binary
         id: cache-circom
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.cargo/bin/circom
           key: circom-${{ runner.os }}-v2.2.2
 
       - name: Install Rust 1.89.0 (only if circom needs building)
         if: steps.cache-circom.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@1.89.0
+        uses: dtolnay/rust-toolchain@451ce45ce31d200b52705aadd15ce75018b006de # 1.89.0 (a BRANCH upstream, so it moves — pin it)
 
       - name: Install circom 2.2.2 (cache miss only)
         if: steps.cache-circom.outputs.cache-hit != 'true'
@@ -383,7 +383,7 @@ jobs:
 
       - name: Cache PTAU file
         id: cache-ptau
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: scripts/ptau/powersOfTau28_hez_final_16.ptau
           key: ptau-hez-final-16

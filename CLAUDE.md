@@ -240,16 +240,28 @@ RUN_DEVNET_E2E=1 \
 set -e
 cargo fmt --all && cargo fmt --all -- --check       # CI fails on one un-fmt'd line
 bash scripts/check-compose-image-digests.sh          # CPU/GPU compose must use @sha256
-cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin  # litesvm + devnet deploy need it (F-01/F-02: OFF by default for mainnet)
+bash scripts/check-icicle-cuda-arch-env.sh           # every CUDA build.rs reads the var the Dockerfile forwards
+bash scripts/check-brand-namespace.sh                # no stale pre-Darknyx namespaces
+bash scripts/build-vault-sbf.sh devnet-admin        # NOT a bare build-sbf: writes the fingerprint
+                                                    #   manifest the litesvm suite checks (T-13), so a
+                                                    #   stale .so can't be validated silently
 cargo build --examples -p darkpool-crypto           # parity tests shell out to these
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                              # unit + litesvm integration
+REQUIRE_CIRCUIT_ARTIFACTS=1 cargo test -p darknyx-tee --tests   # T-12: missing artifacts FAIL, never skip
+bash scripts/check-dependency-audits.sh             # cargo audit + npm audit vs the recorded baseline
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit
 ./node_modules/.bin/tsc -p packages/indexer/tsconfig.json --noEmit
 ( cd packages/sdk && ../../node_modules/.bin/vitest run )   # devnet/CVM tests auto-skip
 ( cd packages/indexer && ../../node_modules/.bin/vitest run ) # fills indexer; DB tests need Node 22+ (node:sqlite)
+( cd packages/daemon && ../../node_modules/.bin/vitest run ) # market-maker daemon
 echo "ALL GREEN — safe to push"
 ```
+
+`cargo test --workspace` already includes `darknyx-tee`; the extra
+`REQUIRE_CIRCUIT_ARTIFACTS=1` line re-runs its integration tests in
+artifact-required mode, where a missing circuit artifact FAILS instead of
+silently skipping the proof-backed intake tests.
 
 Expected: ~workspace Rust tests pass; ~94 SDK tests pass + a few env-gated
 ones skip (they need `RUN_DEVNET_E2E=1` / `RUN_CVM_E2E=1` / `RUN_DEVNET_DW=1`
