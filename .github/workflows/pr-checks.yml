@@ -249,6 +249,7 @@ jobs:
           path: |
             circuits/build/*/circuit_js/circuit.wasm
             circuits/build/*/circuit_final.zkey
+            circuits/build/*/circuit.r1cs
           if-no-files-found: error
           retention-days: 1
 
@@ -693,7 +694,11 @@ jobs:
         run: npm ci
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked --version ^0.21
+        # ^0.22, not ^0.21: the RustSec DB now carries CVSS 4.0 entries and 0.21
+        # dies parsing them ("unsupported CVSS version: 4.0"). Keep this at or
+        # above the version CLAUDE.md §2.5 runs locally — a gate that passes
+        # locally and fails hosted for a TOOL reason teaches people to ignore it.
+        run: cargo install cargo-audit --locked --version ^0.22
 
       - name: Record tool versions (audit evidence)
         run: |

@@ -34,17 +34,35 @@ failed=0
 
 echo "── cargo audit ────────────────────────────────────────────────"
 if ! command -v cargo-audit >/dev/null 2>&1 && ! cargo audit --version >/dev/null 2>&1; then
-  echo "SKIP: cargo-audit not installed (cargo install cargo-audit --locked)"
+  echo "::error::cargo-audit is not installed — the Rust half of this gate did NOT run."
+  echo "  Install: cargo install cargo-audit --locked --version ^0.22"
+  failed=1
 else
-  if cargo audit --quiet; then
+  echo "tool: $(cargo audit --version 2>&1)"
+  CARGO_OUT="$(mktemp)"
+  if cargo audit --quiet >"$CARGO_OUT" 2>&1; then
     echo "cargo audit: OK (triaged advisories in .cargo/audit.toml)"
+  elif grep -qiE "error loading advisory database|unsupported CVSS version|failed to fetch" "$CARGO_OUT"; then
+    # A tool/database failure is NOT a finding. Reporting it as one sends the
+    # reader hunting for a vulnerability that does not exist, and — worse — the
+    # inverse mistake would be to treat it as a pass. Distinguish the two
+    # explicitly: "could not check" still fails the gate, but says so.
+    # (Seen for real: cargo-audit 0.21 cannot parse the CVSS 4.0 entries the
+    # RustSec DB now ships, so the whole run aborted before auditing anything.)
+    echo "::error::cargo audit COULD NOT RUN — this is a tool/database failure,"
+    echo "  not a vulnerability finding. Nothing was audited."
+    sed 's/^/    /' "$CARGO_OUT" | head -12
+    echo "  Usually means cargo-audit is too old for the current advisory DB."
+    failed=1
   else
     echo "::error::cargo audit found an UNTRIAGED advisory."
+    sed 's/^/    /' "$CARGO_OUT" | tail -20
     echo "  Fix the dependency, or add it to .cargo/audit.toml WITH the"
     echo "  \`cargo tree --workspace -i <crate>@<version>\` analysis that"
     echo "  justifies accepting it. Do not add a bare ignore line."
     failed=1
   fi
+  rm -f "$CARGO_OUT"
 fi
 
 echo
