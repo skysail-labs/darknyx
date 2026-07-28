@@ -279,7 +279,12 @@ jobs:
           # ignoring the compiler version or the JS lockfile would happily serve
           # artefacts built by a different toolchain. `circom-2.2.2` is the
           # version pinned in the install step below; bump both together.
-          key: circuit-build-${{ runner.os }}-circom-2.2.2-${{ hashFiles('circuits/*/circuit.circom', 'circuits/templates/*.circom', 'circuits/build/*/circuit_final.zkey', 'scripts/ci-build-circuits.sh', 'package-lock.json') }}
+          #
+          # `circuits/**/*.circom` rather than a per-directory glob: the narrower
+          # form happened to cover all 12 sources today, but a new helper or
+          # include added beside a circuit would silently fall outside it and the
+          # cache would then serve artefacts built from different sources.
+          key: circuit-build-${{ runner.os }}-circom-2.2.2-${{ hashFiles('circuits/**/*.circom', 'circuits/build/*/circuit_final.zkey', 'scripts/ci-build-circuits.sh', 'package-lock.json') }}
 
       - name: Build circuits (wasm only; zkeys from repo)
         if: steps.cache-circuit-build.outputs.cache-hit != 'true'
