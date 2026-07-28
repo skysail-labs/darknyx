@@ -838,6 +838,9 @@ mod tests {
             // Throwaway sender (rx dropped) — enqueue is a best-effort no-op here.
             marker_sweep_tx: tokio::sync::mpsc::unbounded_channel().0,
             lock_sweep_tx: tokio::sync::mpsc::unbounded_channel().0,
+            journal: Arc::new(tokio::sync::Mutex::new(
+                crate::persistence::journal::SettleJournal::in_memory(),
+            )),
         };
         let driver = SettleDriver {
             ctx,

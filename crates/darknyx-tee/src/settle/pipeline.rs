@@ -213,6 +213,23 @@ pub fn build_settle_v0_tx_b64(
     Ok(base64::engine::general_purpose::STANDARD.encode(&wire))
 }
 
+/// Base58 of a signed transaction's first signature, read back from its wire
+/// form.
+///
+/// The settle journal must record a transaction's signature BEFORE the
+/// transaction is sent — a signature written afterwards is exactly the record
+/// that goes missing in the crash window that matters, leaving an orphan the
+/// enclave cannot ask the chain about. That is possible only because the
+/// signature is fully determined at signing time, which this reads back out of
+/// the already-signed bytes rather than recomputing.
+pub fn first_signature_b58(tx_b64: &str) -> Option<String> {
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(tx_b64)
+        .ok()?;
+    let tx: VersionedTransaction = bincode::deserialize(&raw).ok()?;
+    tx.signatures.first().map(|s| s.to_string())
+}
+
 /// Solana's hard transaction-size cap (raw wire bytes).
 const SOLANA_TX_SIZE_CAP: usize = 1232;
 
@@ -370,5 +387,47 @@ mod tests {
             .decode(&b64)
             .unwrap();
         assert!(!decoded.is_empty());
+    }
+
+    #[test]
+    fn first_signature_matches_the_signed_transaction() {
+        let kp = Keypair::new_from_array([0x42; 32]);
+        let p = payload();
+        let root = [0xAB; 32];
+        let proof = [[0x01; 32]; 4];
+        let ed_ix = build_ed25519_verify_ix(&[0xAA; 32], &[0xBB; 64], &p.canonical_hash());
+        let settle_ix = build_settle_batched_ix(&kp.pubkey(), 0, &p, 0, &proof, &root);
+        let static_alt = alt_account(Address::new_from_array([0x44; 32]), static_alt_addresses(4));
+        let alt = alt_account(
+            Address::new_from_array([0x55; 32]),
+            per_batch_alt_addresses(&p, &root),
+        );
+        let bh = Hash::new_from_array([0x01; 32]);
+        let tx = build_settle_v0_tx(
+            &kp,
+            ed_ix.clone(),
+            settle_ix.clone(),
+            &[static_alt.clone(), alt.clone()],
+            bh,
+        )
+        .unwrap();
+        let b64 = build_settle_v0_tx_b64(&kp, ed_ix, settle_ix, &[static_alt, alt], bh).unwrap();
+
+        // The journal records THIS string before the send; recovery later asks
+        // the chain about it. If the two ever disagreed, every recovered entry
+        // would name a transaction that does not exist.
+        assert_eq!(
+            first_signature_b58(&b64).expect("signature readable from wire bytes"),
+            tx.signatures[0].to_string(),
+        );
+    }
+
+    #[test]
+    fn first_signature_of_garbage_is_none_not_a_panic() {
+        assert!(first_signature_b58("not base64 !!").is_none());
+        assert!(
+            first_signature_b58("aGVsbG8=").is_none(),
+            "valid b64, not a tx"
+        );
     }
 }

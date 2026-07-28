@@ -210,6 +210,140 @@ pub fn is_redrivable(entry: &JournalEntry) -> bool {
     !matches!(entry.stage, JournalStage::Prepared) && entry.batch_root.is_some()
 }
 
+// ── Boot-time reconciliation against a live RPC ─────────────────────────────
+
+/// Chain facts gathered up front, so the decision table stays a pure function.
+///
+/// Querying first and deciding second is deliberate: it keeps [`decide`] free of
+/// I/O and therefore exhaustively testable, and it means every entry in one boot
+/// is judged against a single consistent view rather than a view that drifts as
+/// the pass runs.
+struct GatheredChain {
+    consumed: std::collections::HashMap<(u64, u8), ConsumedState>,
+    confirmed: std::collections::HashMap<String, bool>,
+    slot: u64,
+}
+
+impl ChainView for GatheredChain {
+    fn consumed_state(&self, _a: &[u8; 32], _b: &[u8; 32]) -> ConsumedState {
+        // Unused: `decide` is driven through `keyed` below, which resolves per
+        // entry. Kept to satisfy the trait for the gathered view.
+        ConsumedState::Inconsistent
+    }
+    fn signature_confirmed(&self, signature: &str) -> Option<bool> {
+        self.confirmed.get(signature).copied()
+    }
+    fn current_slot(&self) -> u64 {
+        self.slot
+    }
+}
+
+/// A per-entry view that answers `consumed_state` from the gathered map.
+struct EntryChain<'a> {
+    inner: &'a GatheredChain,
+    key: (u64, u8),
+}
+
+impl ChainView for EntryChain<'_> {
+    fn consumed_state(&self, _a: &[u8; 32], _b: &[u8; 32]) -> ConsumedState {
+        self.inner
+            .consumed
+            .get(&self.key)
+            .copied()
+            // A missing gather result means the RPC failed for this entry. That
+            // is not evidence of anything, so it must not read as "nothing was
+            // consumed" — which would authorise a redrive.
+            .unwrap_or(ConsumedState::Inconsistent)
+    }
+    fn signature_confirmed(&self, s: &str) -> Option<bool> {
+        self.inner.signature_confirmed(s)
+    }
+    fn current_slot(&self) -> u64 {
+        self.inner.current_slot()
+    }
+}
+
+/// Query the chain for every journaled entry, then classify them.
+pub async fn reconcile_at_boot(
+    rpc: &crate::solana_rpc::SolanaRpcClient,
+    entries: &[JournalEntry],
+) -> (Vec<(JournalEntry, RecoveryAction)>, RecoverySummary) {
+    use crate::settle::vault::{consumed_note_pda, vault_program_id};
+
+    // `getLatestBlockhash` carries the context slot, so this needs no extra
+    // round trip. A failure yields slot 0, which makes every deadline comparison
+    // read as "still inside the window" — the conservative direction: recovery
+    // proposes a redrive that the chain will simply reject if the lock has in
+    // fact expired, rather than releasing a lock that is still live.
+    let slot = rpc
+        .get_latest_blockhash()
+        .await
+        .map(|bh| bh.context_slot)
+        .unwrap_or(0);
+    let vault = vault_program_id();
+    let mut consumed = std::collections::HashMap::new();
+    let mut confirmed = std::collections::HashMap::new();
+
+    for e in entries {
+        let (a_pda, _) = consumed_note_pda(&e.payload.note_a_commitment);
+        let (b_pda, _) = consumed_note_pda(&e.payload.note_b_commitment);
+        let a = rpc.get_account_info(&a_pda).await;
+        let b = rpc.get_account_info(&b_pda).await;
+        let state = match (a, b) {
+            (Ok(a), Ok(b)) => {
+                let a_ok = a.as_ref().is_some_and(|acc| acc.owner == vault);
+                let b_ok = b.as_ref().is_some_and(|acc| acc.owner == vault);
+                match (a_ok, b_ok) {
+                    (true, true) => ConsumedState::BothConsumed,
+                    (false, false) => ConsumedState::NeitherConsumed,
+                    _ => ConsumedState::Inconsistent,
+                }
+            }
+            // An RPC error is not a chain fact. Reporting it as Inconsistent
+            // routes the entry to an operator instead of letting a transient
+            // outage authorise a redrive.
+            _ => ConsumedState::Inconsistent,
+        };
+        consumed.insert((e.batch_id, e.match_idx), state);
+
+        // Signature status is a WEAK signal here and is treated as one. The RPC
+        // keeps only the recent ~150 slots without `searchTransactionHistory`,
+        // so after any restart worth recovering from the status is usually
+        // absent — which is exactly why the consumed PDAs above are the
+        // authority and a missing status resolves to `None` rather than `false`.
+        if let Some(sig) = e.settle_sig.as_deref() {
+            if let Ok(statuses) = rpc.get_signature_statuses(&[sig.to_string()]).await {
+                if let Some(Some(st)) = statuses.first() {
+                    confirmed.insert(sig.to_string(), st.err.is_none());
+                }
+            }
+        }
+    }
+
+    let gathered = GatheredChain {
+        consumed,
+        confirmed,
+        slot,
+    };
+    let mut summary = RecoverySummary::default();
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        let view = EntryChain {
+            inner: &gathered,
+            key: (e.batch_id, e.match_idx),
+        };
+        let action = decide(e, &view);
+        match &action {
+            RecoveryAction::AlreadySettled { .. } => summary.already_settled += 1,
+            RecoveryAction::Redrive { .. } => summary.redrive += 1,
+            RecoveryAction::ReleaseExpired { .. } => summary.release_expired += 1,
+            RecoveryAction::Indeterminate { .. } => summary.indeterminate += 1,
+        }
+        out.push((e.clone(), action));
+    }
+    (out, summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

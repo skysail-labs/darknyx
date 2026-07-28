@@ -433,7 +433,8 @@ async fn main() -> Result<()> {
                     primary.3.fee_rate_bps,
                     primary.3.price_scale,
                     boot_session_id,
-                );
+                )
+                .await;
                 driver
                     .map(|d| {
                         tracing::info!(
@@ -759,7 +760,7 @@ async fn derive_jwt_secret(client: &DstackClient) -> anyhow::Result<[u8; 32]> {
 /// `/circuits/build`; set `DARKNYX_TEE_CIRCUITS_DIR` to point at a local
 /// `circuits/build` for dev runs.
 #[allow(clippy::too_many_arguments)]
-fn build_settle_driver(
+async fn build_settle_driver(
     cfg: &darknyx_tee::config::Config,
     tee_keypairs: Vec<solana_keypair::Keypair>,
     signing_keys: Vec<ed25519_dalek::SigningKey>,
@@ -916,6 +917,107 @@ fn build_settle_driver(
     );
     tracing::info!("lock sweeper spawned (expiry-gated NoteLock rent reclamation)");
 
+    // ── T-06: recover in-flight settlements before serving anything ─────────
+    //
+    // Runs BEFORE the worker context exists, so no new batch can be started
+    // while the previous run's state is still unresolved.
+    let (settle_journal, journal_load) = darknyx_tee::persistence::journal::SettleJournal::open(
+        darknyx_tee::persistence::state_dir_from_env().as_deref(),
+    );
+    match &journal_load {
+        darknyx_tee::persistence::journal::JournalLoad::Fresh => {
+            tracing::info!("settle journal: clean start, nothing in flight");
+        }
+        darknyx_tee::persistence::journal::JournalLoad::Recovered(entries)
+            if entries.is_empty() =>
+        {
+            tracing::info!("settle journal: present and empty, nothing in flight");
+        }
+        darknyx_tee::persistence::journal::JournalLoad::Recovered(entries) => {
+            let (decisions, summary) =
+                darknyx_tee::settle::recover::reconcile_at_boot(&rpc, entries).await;
+            for (entry, action) in &decisions {
+                match action {
+                    darknyx_tee::settle::recover::RecoveryAction::AlreadySettled {
+                        reconciled_from_consumed_pdas,
+                    } => tracing::info!(
+                        batch_id = entry.batch_id,
+                        match_idx = entry.match_idx,
+                        reconciled_from_consumed_pdas,
+                        "settle recovery: already settled before restart"
+                    ),
+                    darknyx_tee::settle::recover::RecoveryAction::Redrive { deadline_slot } => {
+                        tracing::warn!(
+                            batch_id = entry.batch_id,
+                            match_idx = entry.match_idx,
+                            deadline_slot,
+                            redrivable = darknyx_tee::settle::recover::is_redrivable(entry),
+                            "settle recovery: unsettled inside the lock window"
+                        )
+                    }
+                    darknyx_tee::settle::recover::RecoveryAction::ReleaseExpired {
+                        expired_at_slot,
+                    } => tracing::warn!(
+                        batch_id = entry.batch_id,
+                        match_idx = entry.match_idx,
+                        expired_at_slot,
+                        "settle recovery: lock window closed; collateral returns via the \
+                         lock sweeper"
+                    ),
+                    darknyx_tee::settle::recover::RecoveryAction::Indeterminate { reason } => {
+                        tracing::error!(
+                            batch_id = entry.batch_id,
+                            match_idx = entry.match_idx,
+                            reason = %reason,
+                            "settle recovery: INDETERMINATE — operator required; neither \
+                             redriven nor declared settled"
+                        )
+                    }
+                }
+            }
+            // Register every unsettled input note with the lock sweeper so the
+            // collateral is released at expiry even when this boot cannot
+            // redrive. Without this the recovered entries would be observed and
+            // then forgotten, which is the original bug with extra steps.
+            for (entry, action) in &decisions {
+                if matches!(
+                    action,
+                    darknyx_tee::settle::recover::RecoveryAction::Redrive { .. }
+                        | darknyx_tee::settle::recover::RecoveryAction::ReleaseExpired { .. }
+                ) {
+                    for c in [
+                        entry.payload.note_a_commitment,
+                        entry.payload.note_b_commitment,
+                    ] {
+                        let _ = lock_sweep_tx.send(c);
+                    }
+                }
+            }
+            tracing::warn!(
+                total = summary.total(),
+                already_settled = summary.already_settled,
+                redrive = summary.redrive,
+                release_expired = summary.release_expired,
+                indeterminate = summary.indeterminate,
+                needs_operator = summary.needs_operator(),
+                "settle journal recovery complete"
+            );
+        }
+        darknyx_tee::persistence::journal::JournalLoad::Damaged { reason } => {
+            // Deliberately loud and deliberately NOT fatal. Settlements may have
+            // been in flight and their record is gone, so an operator must look;
+            // but refusing to boot would also refuse to run the lock sweeper,
+            // which is the mechanism that returns the very collateral at risk.
+            tracing::error!(
+                reason = %reason,
+                "settle journal DAMAGED — in-flight settlements may exist with no local \
+                 record. Locks still release at expiry via the sweeper, but early redrive \
+                 is impossible for this boot. Investigate before trusting settle state."
+            );
+        }
+    }
+    let settle_journal = Arc::new(tokio::sync::Mutex::new(settle_journal));
+
     let ctx = SettleWorkerCtx {
         rpc,
         tee_keypairs,
@@ -932,6 +1034,7 @@ fn build_settle_driver(
         settle_batch_concurrency: cfg.settle_batch_concurrency as usize,
         marker_sweep_tx,
         lock_sweep_tx,
+        journal: settle_journal.clone(),
     };
 
     Ok(SettleDriver {
