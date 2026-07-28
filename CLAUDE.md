@@ -264,12 +264,16 @@ cargo nextest run --workspace                       # unit + litesvm integration
                                                     #   ~41% faster than `cargo test`
                                                     #   (266s -> 156s on 8 cores).
                                                     #   `cargo test --workspace` is
-                                                    #   equivalent and still correct —
-                                                    #   use it if nextest is absent.
+                                                    #   equivalent and still correct.
+                                                    #   Without nextest, substitute
+                                                    #   `cargo test` in BOTH this line
+                                                    #   and the artifact-required one
+                                                    #   below, and skip the doctest
+                                                    #   guard (cargo test runs them).
 # T-12: needs circuit artifacts — §2.1's `bash scripts/build-circuits.sh` must have run.
 # Under this flag a missing .wasm/.r1cs/.zkey is a hard FAILURE, not a silent skip,
 # so a proof-backed test can never report success without proving.
-REQUIRE_CIRCUIT_ARTIFACTS=1 cargo nextest run -p darknyx-tee --tests
+REQUIRE_CIRCUIT_ARTIFACTS=1 cargo nextest run -p darknyx-tee --tests   # or `cargo test`
 bash scripts/check-dependency-audits.sh             # cargo audit + npm audit vs the recorded baseline
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit
 ./node_modules/.bin/tsc -p packages/indexer/tsconfig.json --noEmit

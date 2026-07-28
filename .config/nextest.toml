@@ -1,7 +1,7 @@
 # cargo-nextest configuration.
 #
 # nextest is the FAST path for the local gate; `cargo test` remains correct and
-# is what CI runs today. Measured 2026-07-29 on 8 cores, already-compiled:
+# is what CI runs today. Measured 2026-07-28 on 8 cores, already-compiled:
 #   cargo test --workspace        266.1 s
 #   cargo nextest run --workspace 155.6 s   (-41%)
 #
@@ -16,24 +16,32 @@
 # stops being true, so a doctest cannot be added and silently skipped.
 
 [profile.default]
-# Each test is its own PROCESS, so anything the test loads is loaded per test
-# rather than once per binary. Around 50 tests in this workspace load Groth16
-# proving keys, and `match_batch_n16/circuit_final.zkey` alone is 97 MB — enough
-# concurrent copies will exhaust a small runner. Capping at the physical core
-# count keeps peak RSS bounded to roughly (cores x working set) instead of
-# (nextest's default oversubscription x working set).
-test-threads = "num-cpus"
+# Deliberately NOT setting `test-threads`. Its default is already "num-cpus",
+# and — importantly — that means *logical* CPUs, not physical cores, so pinning
+# it here would be a no-op that also reads as a memory bound it does not provide.
+# Memory is bounded by `threads-required` on the heavy tests below, which is the
+# mechanism actually designed for it.
 
 # Surface a test that has become pathologically slow rather than letting it hide
-# inside a green run. This only WARNS at the period; it does not fail.
+# inside a green run. This only WARNS at the period; `terminate-after` bounds a
+# genuine hang so one wedged test cannot hold the run to the job timeout.
 slow-timeout = { period = "30s", terminate-after = 8 }
 
-# A test that hangs would otherwise hold the whole run to the job timeout.
-# 8 x 30 s = 4 min ceiling, comfortably above the slowest real test (the N=16
-# proving round-trip, ~39 s) while still bounding a genuine hang.
-
 [[profile.default.overrides]]
-# The proof-generation tests are legitimately slow and memory-heavy; do not let
-# the slow-test warning cry wolf on them every run.
-filter = 'test(/prove|n16|roundtrip/)'
+# Proof-generating tests: legitimately slow AND memory-heavy.
+#
+# `threads-required = 4` is the load-bearing setting. Each of these shells out to
+# snarkjs and loads a proving key — `match_batch_n16/circuit_final.zkey` alone is
+# 97 MB — and nextest runs every test in its OWN PROCESS, so the working set
+# multiplies by concurrency rather than being shared as it is under `cargo test`.
+# Charging each one four slots caps concurrent proving at cpus/4 and keeps peak
+# RSS bounded, at the cost of some parallelism on exactly the tests that would
+# otherwise fight for memory bandwidth anyway.
+#
+# The filter names `user_commitment_registration` explicitly: it proves via
+# snarkjs like the others but its name matches none of the generic patterns, so
+# without it that test would trip the 30 s slow warning every run and train
+# everyone to ignore the warning.
+filter = 'test(/prove|n16|roundtrip|user_commitment_registration|deposit_with_proof|merge_verify/)'
+threads-required = 4
 slow-timeout = { period = "120s", terminate-after = 4 }
