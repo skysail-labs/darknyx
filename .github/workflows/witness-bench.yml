@@ -23,17 +23,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # No step pushes to git (npm/circom/cargo only), so don't leave the
           # write-capable token in .git/config (mirrors tee-image.yml).
           persist-credentials: false
 
       - name: Install Rust 1.89.0 (for circom build)
-        uses: dtolnay/rust-toolchain@1.89.0
+        uses: dtolnay/rust-toolchain@451ce45ce31d200b52705aadd15ce75018b006de # 1.89.0 (a BRANCH upstream, so it moves — pin it)
 
       - name: Install Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '20'
           cache: npm
@@ -48,7 +48,7 @@ jobs:
 
       - name: Cache circom binary
         id: cache-circom
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.cargo/bin/circom
           key: circom-${{ runner.os }}-v2.2.2

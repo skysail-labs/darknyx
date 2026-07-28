@@ -9,6 +9,7 @@
 //! seats TWO real matches at slots 0 and 1, both settling against
 //! the SAME `BatchValidityMarker`.
 
+mod common;
 mod settle_harness;
 
 use anchor_lang::prelude::Clock;

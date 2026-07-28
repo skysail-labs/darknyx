@@ -46,7 +46,7 @@ const SYSTEM_PROGRAM_ID: Pubkey = solana_system_interface::program::ID;
 const VAULT_PROGRAM_ID_BYTES: &str = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
 
 fn program_so_path() -> PathBuf {
-    common::repo_root().join("target/deploy/vault.so")
+    common::vault_program_so()
 }
 
 #[derive(BorshSerialize)]

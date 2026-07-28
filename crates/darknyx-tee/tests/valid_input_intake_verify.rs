@@ -49,17 +49,42 @@ struct Fixture {
 
 /// Build a real note, put it in a mirror-backed tree, and prove VALID_INPUT
 /// over it. Returns `None` when the circuit artifacts are not built.
+///
+/// **Artifact-required mode.** With `REQUIRE_CIRCUIT_ARTIFACTS=1` a missing
+/// artifact is a hard failure instead of a skip. CI and any release gate set it.
+///
+/// Why this matters: two of the three artifacts (`circuit.r1cs` and
+/// `circuit_js/`) are gitignored, so a fresh checkout has them absent by
+/// default. Without the flag the positive test — the one asserting a REAL
+/// VALID_INPUT proof is accepted at intake, which is the whole point of the
+/// S-02 remediation — returned early and reported PASSED without proving
+/// anything. A test that silently becomes a no-op on the machines most likely
+/// to lack artifacts is worse than no test: it reports coverage it does not
+/// have. Skipping stays available for a casual local run, but it must be
+/// explicit and it must announce itself.
 fn prove_fixture() -> Option<Fixture> {
     let build = repo_root().join("circuits/build/valid_input");
     let wasm = build.join("circuit_js/circuit.wasm");
     let r1cs = build.join("circuit.r1cs");
     let zkey = build.join("circuit_final.zkey");
     if !wasm.exists() || !r1cs.exists() || !zkey.exists() {
-        eprintln!(
-            "SKIP: valid_input circuit artifacts missing under {} — run \
+        let required = std::env::var("REQUIRE_CIRCUIT_ARTIFACTS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let detail = format!(
+            "valid_input circuit artifacts missing under {} (wasm={} r1cs={} zkey={}) — run \
              `bash scripts/build-circuits.sh`",
-            build.display()
+            build.display(),
+            wasm.exists(),
+            r1cs.exists(),
+            zkey.exists(),
         );
+        assert!(
+            !required,
+            "REQUIRE_CIRCUIT_ARTIFACTS=1 but {detail}. This test cannot pass without \
+             actually proving; refusing to report success."
+        );
+        eprintln!("SKIP: {detail}");
         return None;
     }
 

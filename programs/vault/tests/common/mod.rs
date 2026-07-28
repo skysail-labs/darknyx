@@ -19,6 +19,101 @@ pub fn repo_root() -> PathBuf {
     p
 }
 
+/// Path to the compiled BPF program, verified to match the current vault
+/// source. **Every LiteSVM test must load through this**, not by joining
+/// `target/deploy/vault.so` itself.
+///
+/// The failure this prevents is silent and total: `target/deploy/vault.so` is a
+/// build artifact that no test dependency tracks, so `cargo test` happily runs
+/// the entire suite against a binary compiled from *older* source. Every
+/// assertion still passes — against the wrong program. It bit this repo during
+/// the 2026-07-27 audit-verification pass, where the suite ran green against an
+/// artifact older than ten vault source files.
+///
+/// The guard is a **content fingerprint**, not an mtime comparison. A timestamp
+/// answers "was this written after the source?", which is wrong in both
+/// directions: `git checkout` and `touch` move mtimes without changing code, and
+/// a rebuild with a *different feature set* leaves a newer artifact that is
+/// still the wrong binary (`devnet-admin` on/off changes which instructions
+/// exist). `scripts/vault-sbf-fingerprint.sh` is the single definition, re-run
+/// here rather than reimplemented, so the build side and the check side cannot
+/// drift.
+pub fn vault_program_so() -> PathBuf {
+    let root = repo_root();
+    let so = root.join("target/deploy/vault.so");
+    assert!(
+        so.exists(),
+        "{} is missing — run `bash scripts/build-vault-sbf.sh`",
+        so.display()
+    );
+
+    let manifest = so.with_extension("so.fingerprint");
+    let recorded = fs::read_to_string(&manifest).unwrap_or_else(|_| {
+        panic!(
+            "\n\n{} has no fingerprint manifest at {}.\n\
+             The artifact exists but nothing records which source built it, so this \
+             suite cannot tell whether it is validating the current program.\n\
+             Fix: bash scripts/build-vault-sbf.sh\n",
+            so.display(),
+            manifest.display()
+        )
+    });
+
+    let mut features = None;
+    let mut recorded_fp = None;
+    for line in recorded.lines() {
+        if let Some(v) = line.strip_prefix("features=") {
+            features = Some(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("fingerprint=") {
+            recorded_fp = Some(v.trim().to_string());
+        }
+    }
+    let (features, recorded_fp) = match (features, recorded_fp) {
+        (Some(f), Some(p)) => (f, p),
+        _ => panic!(
+            "\n\n{} is malformed (want `features=` and `fingerprint=` lines).\n\
+             Fix: bash scripts/build-vault-sbf.sh\n",
+            manifest.display()
+        ),
+    };
+
+    // The suite exercises `reset_merkle_tree` / `close_vault_config`, which only
+    // exist under `devnet-admin` (F-01/F-02 keep them out of a mainnet build).
+    // Catch that at load with a clear message rather than as a baffling
+    // instruction-not-found failure deep inside a test.
+    assert!(
+        features.split(',').any(|f| f.trim() == "devnet-admin"),
+        "\n\ntarget/deploy/vault.so was built with features '{features}', which omits \
+         `devnet-admin`. The LiteSVM suite needs the dev/devnet admin instructions.\n\
+         Fix: bash scripts/build-vault-sbf.sh\n"
+    );
+
+    // Re-run the single fingerprint definition rather than duplicating it here,
+    // so the build side and the check side cannot drift apart.
+    let out = Command::new("bash")
+        .arg(root.join("scripts/vault-sbf-fingerprint.sh"))
+        .arg(&features)
+        .current_dir(&root)
+        .output()
+        .expect("failed to run scripts/vault-sbf-fingerprint.sh");
+    assert!(
+        out.status.success(),
+        "vault-sbf-fingerprint.sh failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let current = String::from_utf8_lossy(&out.stdout).trim().to_string();
+
+    assert_eq!(
+        recorded_fp, current,
+        "\n\ntarget/deploy/vault.so is STALE — built from different vault source than \
+         the tree you are testing.\n  recorded: {recorded_fp}\n  current:  {current}\n\
+         Every LiteSVM assertion below would have passed against the wrong binary.\n\
+         Fix: bash scripts/build-vault-sbf.sh\n"
+    );
+
+    so
+}
+
 pub fn fr_to_dec(fr: &Fr) -> String {
     let bi = fr.into_bigint();
     let bytes = bi.to_bytes_be();

@@ -30,8 +30,14 @@ pub fn repo_root() -> PathBuf {
     p
 }
 
+/// Defer to the ONE staleness guard in `common` rather than reimplementing it —
+/// a second copy of the check is how the two drift until one silently stops
+/// guarding. Every test binary that pulls in this harness therefore also
+/// declares `mod common;` (path-including `common/mod.rs` from here instead
+/// would load the same file as a module twice in the tests that declare both,
+/// which rustc rejects).
 pub fn vault_so_path() -> PathBuf {
-    repo_root().join("target/deploy/vault.so")
+    crate::common::vault_program_so()
 }
 
 pub fn anchor_disc(name: &str) -> [u8; 8] {

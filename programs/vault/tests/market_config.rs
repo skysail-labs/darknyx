@@ -1,5 +1,6 @@
 //! Governed MarketConfig initialization/update regressions.
 
+mod common;
 mod settle_harness;
 
 use borsh::BorshSerialize;
