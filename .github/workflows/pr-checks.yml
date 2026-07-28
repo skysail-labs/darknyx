@@ -224,9 +224,13 @@ jobs:
       needs.changes.outputs.rust == 'true'
     timeout-minutes: 25
     steps:
+      # NO `submodules: recursive` here, deliberately. Other jobs need the
+      # icicle-snark submodule because cargo must resolve the darknyx-tee
+      # workspace; this job never runs cargo against the workspace — it compiles
+      # circom circuits and installs the circom binary from a SEPARATE clone in
+      # /tmp. Cloning the submodule cost ~20 s of a ~60 s job, which is more than
+      # the circuit build it wraps.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          submodules: recursive  # darknyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Install Rust 1.89.0 (for circom build)
         uses: dtolnay/rust-toolchain@451ce45ce31d200b52705aadd15ce75018b006de # 1.89.0 (a BRANCH upstream, so it moves — pin it)
