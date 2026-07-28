@@ -11,6 +11,7 @@
 pub mod account;
 pub mod attestation;
 pub mod auth;
+pub mod conn_limit;
 #[cfg(feature = "debug_endpoints")]
 pub mod debug;
 pub mod error;

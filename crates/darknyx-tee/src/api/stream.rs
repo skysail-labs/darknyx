@@ -44,13 +44,15 @@ use axum::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    response::Response,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::{error::RecvError, Receiver};
 use tokio::time::{interval, Duration, Instant, MissedTickBehavior};
 
 use super::auth::validate_token;
+use super::conn_limit::{AccountSlotGuard, ConnectionGuard};
 use super::orders::{
     cancel_core, cancel_resting_unchecked, modify_core, place_core, CancelOrderRequest,
     CancelOrderResponse, ModifyOrderRequest, ModifyOrderResponse, PlaceOrderRequest,
@@ -227,16 +229,38 @@ struct Session {
     /// Order ids placed on THIS socket and not yet known-terminal (drives
     /// cancel-on-disconnect).
     session_orders: HashSet<String>,
+    /// Held from a successful `login` until the socket closes, occupying one of
+    /// the account's slots. `Drop` releases it, so every exit path — clean
+    /// close, transport error, or panic — frees the slot.
+    account_slot: Option<AccountSlotGuard>,
     sub_orders: Option<Receiver<OrderUpdateMsg>>,
     sub_fills: Option<Receiver<FillMemo>>,
     sub_tree: Option<Receiver<TreeAppendEvent>>,
 }
 
-/// `GET /v1/stream` — upgrade unconditionally; auth happens in-band via
-/// `op: login`. Mounted on the PUBLIC router (no header bearer middleware),
-/// like the other WS routes.
+/// `GET /v1/stream` — auth happens in-band via `op: login`. Mounted on the
+/// PUBLIC router (no header bearer middleware), like the other WS routes.
+///
+/// The venue-wide connection slot is reserved BEFORE the upgrade so a socket at
+/// capacity is refused with a plain `503` the client can read, rather than
+/// upgraded and then closed — which costs both sides a handshake and gives the
+/// client a close code where an HTTP status is clearer. The guard moves into the
+/// connection task, so the slot is held for exactly the socket's lifetime.
 pub async fn stream_ws(State(state): State<Arc<ApiState>>, ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(move |socket| handle_stream(socket, state))
+    let Some(conn) = state.stream_conns.try_acquire() else {
+        tracing::warn!(
+            live = state.stream_conns.live_total(),
+            max = state.stream_conns.limits().max_total,
+            "/v1/stream refused: venue connection cap reached"
+        );
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "5")],
+            "stream connection capacity reached",
+        )
+            .into_response();
+    };
+    ws.on_upgrade(move |socket| handle_stream(socket, state, conn))
 }
 
 /// Serialize a reply and inject the connection-global monotonic sequence.
@@ -273,10 +297,16 @@ async fn opt_recv<T: Clone>(rx: &mut Option<Receiver<T>>) -> Result<T, RecvError
     }
 }
 
-async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
+async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>, conn: ConnectionGuard) {
     let mut s = Session::default();
     let mut seq: u64 = 0;
     let mut last_activity = Instant::now();
+    // Fixed at accept and never moved. While the socket is unauthenticated this
+    // is the ONLY thing that can close it, so an anonymous peer cannot extend
+    // its own stay by sending traffic — see `conn_limit` for why the bound is
+    // absolute rather than idle-based.
+    let opened_at = Instant::now();
+    let login_deadline = conn.limits().login_deadline;
     let mut lifecycle_tick = interval(Duration::from_secs(1));
     lifecycle_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
@@ -285,7 +315,7 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
             inbound = socket.recv() => match inbound {
                 Some(Ok(Message::Text(txt))) => {
                     last_activity = Instant::now();
-                    let action = handle_frame(&state, &mut s, &txt).await;
+                    let action = handle_frame(&state, &mut s, &conn, &txt).await;
                     let (frames, close) = match action {
                         Action::Reply(f) => (f, false),
                         Action::Close => (Vec::new(), true),
@@ -324,6 +354,21 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>) {
             }
 
             _ = lifecycle_tick.tick() => {
+                // Unauthenticated sockets die on the absolute deadline. Checked
+                // before the idle timer because a ping-only peer keeps
+                // `last_activity` fresh forever — that combination is exactly
+                // the AU-07 hold, and the idle timer alone never fires on it.
+                if s.authed.is_none() && opened_at.elapsed() >= login_deadline {
+                    tracing::debug!(
+                        deadline_secs = login_deadline.as_secs(),
+                        "/v1/stream closed: no login within the unauthenticated window"
+                    );
+                    let _ = socket.send(Message::Close(Some(CloseFrame {
+                        code: 1008,
+                        reason: "login required within the unauthenticated window".into(),
+                    }))).await;
+                    break;
+                }
                 if last_activity.elapsed() > Duration::from_secs(60) {
                     let _ = socket.send(Message::Close(Some(CloseFrame {
                         code: 1008,
@@ -424,7 +469,12 @@ async fn push_or_close<T: Serialize + Clone>(
 }
 
 /// Parse + dispatch one text frame.
-async fn handle_frame(state: &ApiState, s: &mut Session, txt: &str) -> Action {
+async fn handle_frame(
+    state: &ApiState,
+    s: &mut Session,
+    conn: &ConnectionGuard,
+    txt: &str,
+) -> Action {
     let req: StreamRequest = match serde_json::from_str(txt) {
         Ok(r) => r,
         Err(e) => {
@@ -447,7 +497,7 @@ async fn handle_frame(state: &ApiState, s: &mut Session, txt: &str) -> Action {
             token,
             cancel_on_disconnect,
         } => Action::Reply(vec![
-            login(state, s, request_id, &token, cancel_on_disconnect).await,
+            login(state, s, conn, request_id, &token, cancel_on_disconnect).await,
         ]),
 
         StreamRequest::Logout { .. } => Action::Close,
@@ -541,6 +591,7 @@ async fn handle_frame(state: &ApiState, s: &mut Session, txt: &str) -> Action {
 async fn login(
     state: &ApiState,
     s: &mut Session,
+    conn: &ConnectionGuard,
     request_id: Option<String>,
     token: &str,
     cancel_on_disconnect: Option<bool>,
@@ -559,6 +610,29 @@ async fn login(
                 4030,
                 "cannot switch account on an authenticated socket; open a new one",
             );
+        }
+    }
+    // Claim one of the account's slots on the FIRST successful login. A
+    // re-login (token refresh) on an already-attributed socket must not take a
+    // second slot — that would let a client exhaust its own cap by renewing.
+    if s.account_slot.is_none() {
+        match conn.attribute(&account_id) {
+            Some(slot) => s.account_slot = Some(slot),
+            None => {
+                tracing::warn!(
+                    account = %account_id,
+                    max = conn.limits().max_per_account,
+                    "/v1/stream login refused: account connection cap reached"
+                );
+                return StreamResponse::error(
+                    request_id,
+                    4290,
+                    format!(
+                        "account connection limit reached ({} concurrent streams); close an existing stream first",
+                        conn.limits().max_per_account
+                    ),
+                );
+            }
         }
     }
     let previous_exp = s.token_exp;

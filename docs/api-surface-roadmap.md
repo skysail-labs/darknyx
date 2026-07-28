@@ -16,7 +16,7 @@ GoDark and Darknyx are both "Solana dark pools," but they are **different produc
 | Instrument | **Perpetual futures** (positions, leverage 5–10×, funding, liquidation) | **Spot** |
 | Settlement | Encrypted commitments + margin accounting | **ZK notes (UTXO)** — every order is collateralized by *one deposited note*, locked with a `VALID_INPUT` proof |
 | Matching | **Continuous CLOB**, price–time priority, MPC-held book | **Frequent batch auction**, *uniform clearing price* anchored to a Pyth oracle TWAP |
-| Transport trust | Separate gateway → MPC committee (needs app-layer crypto between them) | **Single attested enclave** — the endpoint the client talks to *is* the matcher (RA-TLS terminates inside the TEE) |
+| Transport trust | Separate gateway → MPC committee (needs app-layer crypto between them) | **Two attested hops, no untrusted one** — TLS terminates at the dstack gateway (itself a TDX CVM), which reaches the matcher over a mutually attested WireGuard tunnel. In-enclave RA-TLS is NOT shipped; earlier revisions of this table claimed it was. See T-03 in `audit-2026-07-25-tee-infra-daemon-remediation-tracker.md`. |
 
 Two facts flow from this and gate the whole roadmap:
 
@@ -95,9 +95,12 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
   fixed price. Our **uniform clearing is already oracle-anchored**, so the "fair mid" peg
   chases is native to every batch — we get the benefit without the order type.
 - **Session-layer WS encryption** (AES-GCM `session.setup`/rekey) — GoDark needs it because
-  their gateway sits *outside* the MPC trust zone. Our RA-TLS terminates *inside* the attested
-  enclave, so TLS-to-enclave already gives confidentiality to the trust boundary (which is why
-  our OpenAPI *removed* `session.setup`). A simpler, arguably stronger posture — not a gap.
+  their gateway sits *outside* the MPC trust zone — ordinary software on an ordinary host. Ours
+  terminates at a gateway that is itself an attested TDX CVM and tunnels to the enclave over
+  mutual attestation, so no unprotected hop sees plaintext (which is why our OpenAPI *removed*
+  `session.setup`). Still a stronger posture, but state it accurately: the client currently pins
+  the engine's measurement and not the gateway's, and the TLS session is not bound to the quote.
+  Closing that is T-03, gated ahead of external users.
 - **Perp primitives** (positions / leverage / funding / TP-SL / liquidation) — a different
   product.
 
@@ -142,6 +145,6 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
 - **Input-derived continuations** — partial fills deterministically derive and
   re-lock the residual from the consumed input without a client round-trip.
 - **Note-merge** for collateral consolidation.
-- **Single attested hop** (RA-TLS to the enclave) vs gateway-then-committee.
+- **No unprotected hop** (attested gateway → mutually attested tunnel → enclave) vs gateway-then-committee.
 - **`/transparency`** proof-of-reserves (per-mint outstanding vs vault balance) — public and
   unauthenticated.

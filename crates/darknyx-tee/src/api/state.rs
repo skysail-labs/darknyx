@@ -30,6 +30,7 @@ use super::auth::{
     now_unix_seconds, test_registry, AccountRegistry, DEFAULT_JWT_TTL_SECONDS, TEST_API_KEY,
     TEST_JWT_SECRET,
 };
+use super::conn_limit::{ConnectionLimits, ConnectionRegistry};
 use super::instruments::InstrumentInfo;
 use crate::keys::ed25519::DerivedSigner;
 use crate::matcher::{FillMemo, MatcherState, TradingGate};
@@ -284,6 +285,15 @@ pub struct ApiState {
     /// via [`Self::subscribe_tree_appends`]. The `Sender` is held so the
     /// channel survives periods with zero subscribers (sends then no-op).
     pub tree_appends: broadcast::Sender<TreeAppendEvent>,
+
+    // ── /v1/stream connection accounting (AU-07) ────────────────
+    /// Global + per-account caps on concurrent `/v1/stream` sockets, and the
+    /// bounded window a socket may stay unauthenticated. `/v1/stream` upgrades
+    /// before login by design, so without this an anonymous peer could hold
+    /// sockets open indefinitely and without limit. See
+    /// [`crate::api::conn_limit`] for why the login bound is absolute and why
+    /// there is deliberately no per-IP cap.
+    pub stream_conns: Arc<ConnectionRegistry>,
 }
 
 /// What an accepted order records for idempotent-retry detection:
@@ -495,6 +505,7 @@ impl ApiState {
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
+            stream_conns: ConnectionRegistry::new(ConnectionLimits::from_env()),
         }
     }
 
@@ -651,6 +662,17 @@ impl ApiState {
         self
     }
 
+    /// Replace the `/v1/stream` connection limits.
+    ///
+    /// Exists for tests: the production defaults (512 sockets, a 10 s login
+    /// window) would make a cap test allocate hundreds of sockets and a deadline
+    /// test sleep for ten seconds. Overriding them lets the same code paths be
+    /// driven at values a test can reach in milliseconds.
+    pub fn with_stream_limits(mut self, limits: ConnectionLimits) -> Self {
+        self.stream_conns = ConnectionRegistry::new(limits);
+        self
+    }
+
     /// Set the tradable instruments served by `GET /instruments`.
     /// Called once by `main.rs` from the market `MatchConfig`.
     pub fn with_instruments(mut self, instruments: Vec<InstrumentInfo>) -> Self {
@@ -733,6 +755,7 @@ impl ApiState {
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
+            stream_conns: ConnectionRegistry::new(ConnectionLimits::default()),
         }
     }
 

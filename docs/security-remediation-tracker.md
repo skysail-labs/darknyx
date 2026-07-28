@@ -1506,3 +1506,18 @@ Every remediation PR must record:
 - The external circuit audit, Phase-2 ceremony, split-governance rehearsal,
   recovery drill, transaction/CU headroom measurements, and live CVM evidence
   must all be attached before N-18/N-19 and the release gate can close.
+- **Transport integrity (T-03) must close before external users or real-value
+  deposits.** TLS terminates at the dstack gateway, not in the Darknyx binary.
+  The gateway is itself an attested TDX CVM tunnelling to our CVM over mutually
+  attested WireGuard, so no unprotected hop carries plaintext — but clients
+  currently pin our measurement and not the gateway's, and the verified quote is
+  not bound to the TLS session it arrived over. Deferred 2026-07-28 because the
+  correct fix depends on whether browser clients ever enter scope: programmatic
+  clients want in-enclave RA-TLS (no DNS, but a breaking `report_data` change);
+  browsers force a CA-issued certificate via dstack-ingress (needs a domain on a
+  supported DNS provider). Both options, their costs, the DNS migration
+  playbook, the resume triggers, and the CVM-window/ceremony sequence are
+  recorded in the slice-3 section of
+  [`audit-2026-07-25-tee-infra-daemon-remediation-tracker.md`](audit-2026-07-25-tee-infra-daemon-remediation-tracker.md).
+  The user-facing documentation was corrected in the same change; do not let it
+  drift back to claiming in-enclave TLS before the code provides it.

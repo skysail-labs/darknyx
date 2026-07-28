@@ -109,7 +109,8 @@ through a Phala CVM (`cvm-settle-e2e`).
 | TEE-binary substitution | **Client-enforced, governance-trusted on-chain** — clients verify the TDX quote, replay RTMR3, pin the compose hash/MRTD, and require the quoted K signer set to equal finalized `VaultConfig.tee_pubkeys`. The chain does not verify DCAP itself; multisig-gated rotation remains the accepted on-chain trust boundary. |
 | Trusted-setup ceremony soundness | **Open** — all six Groth16 circuit families use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
 | Aggregate trade analytics from settle txs | **Substantially hidden** — settlement publishes commitments and opaque recovery ciphertext, not plaintext trade amounts or clearing prices. Timing, participant activity at deposit/withdraw boundaries, and transaction/account metadata remain observable. |
-| Network-level traffic analysis | Partially mitigated by TLS to the CVM + bearer auth; not fully eliminated. |
+| Network-level traffic analysis | Partially mitigated by TLS + bearer auth; not fully eliminated. See the transport row below for where TLS actually terminates. |
+| Order intent in transit (T-03) | **Trusted to a SECOND enclave we do not govern.** The `darknyx-tee` binary terminates no TLS: it serves plaintext HTTP on `0.0.0.0:8080` and the dstack gateway terminates TLS in front of it. The gateway is itself an Intel TDX CVM that mutually attests with ours and carries traffic over WireGuard, so the *host operator* cannot read order flow — the frequently-stated "the operator sees plaintext" version of this gap is wrong. What is true, and is the actual exposure: (a) clients verify **our** MRTD and compose hash but nothing pins the **gateway's** measurement, so Phala can change that code with no Darknyx governance event; and (b) nothing binds the TLS session a client verifies a quote *over* to the quote's identity, so a party holding a valid certificate for the gateway domain can front a different backend. Deferred to a mainnet gate with a recorded trigger — see `docs/audit-2026-07-25-tee-infra-daemon-remediation-tracker.md` (T-03) and the mainnet gates in `docs/security-remediation-tracker.md`. |
 
 ### Accepted design decision — price fairness is TEE-trusted
 
@@ -1240,8 +1241,13 @@ nonce lets a replacement device reconstruct the hidden inner from seed + chain.
 
 ### Step 4 — Order submission (`POST /orders` → the CVM)
 
-Alice submits her order over TLS directly to the enclave's HTTP surface —
-it never touches any L1 transaction. The request body carries the order
+Alice submits her order over TLS to the CVM's HTTP surface — it never
+touches any L1 transaction. **TLS terminates at the dstack gateway, not in
+the `darknyx-tee` process**, which serves plaintext HTTP behind it; the
+gateway is a separate attested TDX CVM reached over WireGuard. Earlier
+revisions of this document said "directly to the enclave", which the
+deployment has never done. The residual exposure and its mainnet gate are the
+transport row in the non-goals table above (T-03). The request body carries the order
 intent (`side`, `price_limit`, `amount`, `note_commitment`,
 `user_commitment`, `expiry_slot`, `arrival_nonce`), a required contributory
 X25519 `viewing_pubkey`, the current 32-byte `/info.boot_session_id`, the input-note opening
@@ -1778,7 +1784,7 @@ DEPOSIT (L1)
     │  appended to Merkle tree
     │  outstanding[mint] += amount
     ▼
-POST /orders (TLS to the CVM, NOT visible on L1)
+POST /orders (TLS to the dstack gateway → WireGuard → CVM; NOT visible on L1)
     │  trading_key signs the order canonical
     │  intake verifies sig + note opening; books in enclave memory
     ▼
