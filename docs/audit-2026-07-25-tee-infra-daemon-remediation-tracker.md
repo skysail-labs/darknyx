@@ -50,10 +50,10 @@ the first stop for an agent resuming the work.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `e2b13b5` |
+| Last verified `main` | `e2b13b5` (+ closure PR #78) |
 | Last merged remediation PR | #77 — slice 1 (`tee-oracle-trust`), merged 2026-07-27 |
-| Active slice | none — slice 1 merged; slice 2 not started |
-| Active branch / PR | merged and deleted (PR #77) |
+| Active slice | slice 1 closing (PR #78); slice 2 next |
+| Active branch / PR | `remediation/oracle-slice-closure` / PR #78 |
 | Next slice | `remediation/local-assurance` |
 | Live state | **CVM stopped; billing halted.** `nightly-test-cvm` (`app_9ca3cded…c14db637`, CPU, `gpus=0`, node prod9) ran the oracle image and was stopped after evidence capture. Devnet mutated: all 4 Merkle shards reset, `tee_pubkeys` rotated to this CVM's 4-shard set, each funded to 2 SOL. Images pinned by digest — CPU `sha256:dddf0116363e8ab9112bc09a7cf97558f00f2306016094ba6bcb917a64253ad3` (tag `tee-v3-hardening-74`), GPU `sha256:1001d5a0ae45d86c624c265c3598b490f7b511aa3349faa1c2ea03d29d367854` (tag `tee-v3-hardening-74-cuda`). The previously referenced `tee-v3-hardening-69-cuda` never existed in GHCR. |
 | Last updated | 2026-07-27 |
@@ -113,8 +113,8 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
-| T-01 | High | TEE oracle | `remediation/tee-oracle-trust` | Only an explicitly versioned Pyth emitter/signer profile is accepted. A guardian-signed non-Pyth message, wrong emitter, wrong signer set, or insufficient quorum is rejected by fixture tests before its root reaches the cache. | Code complete |
-| T-02 | High | TEE oracle + matcher | `remediation/tee-oracle-trust` | Freshness uses signed publish time and local arrival health; feed state rejects stale, replayed, or non-monotonic updates. `OracleCache::snapshot` no longer fabricates `publish_slot = slot_now`, and `darkpool_matcher::validate_oracle` enforces the freshness data it reports instead of checking only `twap != 0`. Clock-skew, direct-matcher bypass, and out-of-order boundary tests pin the policy. | Code complete |
+| T-01 | High | TEE oracle | `remediation/tee-oracle-trust` | Only an explicitly versioned Pyth emitter/signer profile is accepted. A guardian-signed non-Pyth message, wrong emitter, wrong signer set, or insufficient quorum is rejected by fixture tests before its root reaches the cache. | Closed |
+| T-02 | High | TEE oracle + matcher | `remediation/tee-oracle-trust` | Freshness uses signed publish time and local arrival health; feed state rejects stale, replayed, or non-monotonic updates. `OracleCache::snapshot` no longer fabricates `publish_slot = slot_now`, and `darkpool_matcher::validate_oracle` enforces the freshness data it reports instead of checking only `twap != 0`. Clock-skew, direct-matcher bypass, and out-of-order boundary tests pin the policy. | Closed |
 | T-03 | High | TEE + infrastructure + SDK | `remediation/tee-transport-integrity` | TLS terminates inside the CVM boundary through the supported `dstack-ingress` path; the public route cannot reach plaintext port 8080. A real-CVM test proves HTTPS/WSS, attestation, auth, reconnect, and streaming through the encrypted path. | Open |
 | T-04 | High | Release engineering + infrastructure | `remediation/tee-oracle-trust`, then enforced for `remediation/tee-transport-integrity` | The existing CPU/GPU images are pinned by immutable digest in the oracle slice, which already changes the image and compose. Every image introduced later, including ingress, must be digest-pinned before that slice can merge. Release evidence maps source/tag/digest/compose hash, so substituting a tag cannot preserve an accepted measurement. | Code complete |
 | T-05 | Medium | — | — | Owner accepted the residual append-only-mirror availability risk on 2026-07-27. Confirmed commitment plus on-chain root validation is considered sufficient for the current product; a rollback can stall witness service but cannot authorize custody loss. No code, test, infrastructure, or follow-up task is authorized. | **Won't Fix — accepted risk** |
@@ -128,7 +128,7 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 | T-13 | Low | Vault tests + build tooling | `remediation/local-assurance` | All LiteSVM loaders share one SBF artifact guard backed by a build manifest/source fingerprint, not a fragile per-test mtime check. A changed vault source or build configuration makes tests fail until `cargo build-sbf` refreshes the artifact and manifest. | Open |
 | T-14 | Low | Vault + TEE + SDK | `remediation/tee-bounds-cleanup` | The retired `NullifierEntry`, seeds, PDA helpers, comments, and public exports are absent across the program, TEE, SDK, scripts, and docs. The commitment-keyed consumed/deposit guards remain untouched. | Open |
 | T-15 | Low | Vault tests + tracker | `remediation/local-assurance` | LiteSVM covers live-lock withdraw rejection, expiry-boundary withdraw success, and `release_lock → withdraw` including rent return. The earlier S-03 row names only evidence that exists. | Open |
-| T-16 | Medium | TEE oracle + matcher + market config | `remediation/tee-oracle-trust` | Pyth-native price/exponent values are converted with checked integer arithmetic into the governed atomic base/quote price units before circuit-breaker comparison or collateral math. The invariant includes base decimals, quote decimals, exponent, and `price_scale`; unequal-decimal markets, exponent changes, unrepresentable scales, rounding, and overflow fail closed. | Code complete |
+| T-16 | Medium | TEE oracle + matcher + market config | `remediation/tee-oracle-trust` | Pyth-native price/exponent values are converted with checked integer arithmetic into the governed atomic base/quote price units before circuit-breaker comparison or collateral math. The invariant includes base decimals, quote decimals, exponent, and `price_scale`; unequal-decimal markets, exponent changes, unrepresentable scales, rounding, and overflow fail closed. | Closed |
 | T-17 | Medium | TEE matcher + API | `remediation/multi-market-isolation` | `TradingPauseReason::Oracle` is scoped per market, not venue-wide. One market's stale or unauthenticated feed pauses only that market, and a healthy market's tick cannot clear another's oracle pause. A mixed configuration where some markets have no `oracle_feed_id` while `feed_ids` is non-empty is rejected at boot rather than silently sharing gate state. | Open |
 | T-18 | Medium | Release engineering | `remediation/local-assurance` | A failure in the `Detect changed paths` job cannot leave the aggregate `pr-checks success` check green. The aggregate gate must fail (not pass) when any prerequisite job fails or is skipped due to an upstream failure, so a broken paths filter cannot silently disable the entire PR gate. | Open |
 
@@ -147,7 +147,7 @@ turning the accepted fixes into a cutover-safe implementation.
 
 | ID | Owner | Planned remediation slice | Required evidence | Status |
 |---|---|---|---|---|
-| RD-01 | TEE oracle + operations | `remediation/tee-oracle-trust` | A versioned legacy/upgraded Pyth trust profile supports the 2026-08-18 cutover without a fail-open fallback. Hermes API credentials are encrypted deployment inputs, never logged, and missing/invalid auth pauses new trading. Legacy 13-of-19 and upgraded 3-of-5 fixtures are both explicit; no quorum is guessed from payload data. | Code complete |
+| RD-01 | TEE oracle + operations | `remediation/tee-oracle-trust` | A versioned legacy/upgraded Pyth trust profile supports the 2026-08-18 cutover without a fail-open fallback. Hermes API credentials are encrypted deployment inputs, never logged, and missing/invalid auth pauses new trading. Legacy 13-of-19 and upgraded 3-of-5 fixtures are both explicit; no quorum is guessed from payload data. | Closed |
 | RD-03 | Operations docs | `remediation/tee-oracle-trust` | `deploy/docker-compose.gpu.yaml` no longer instructs operators to stop an H200. GPU and CPU lifecycle comments agree with `AGENTS.md` and `docs/gpu-tee-runbook.md`. | Closed |
 | DEP-AU-07 | TEE + ingress | `remediation/tee-transport-integrity` | The canonical AU-07 row remains in the earlier tracker. Before public exposure, enforce global and per-account/peer connection caps, bound unauthenticated login time, and prove a ping-only client cannot hold resources indefinitely. Update both trackers with the same PR and evidence. | Open — canonical row linked |
 
@@ -464,3 +464,82 @@ CI/test/build tooling with no dependency on oracle measurements or a CVM, so the
 sequencing intent is satisfied by slice 1 being *code complete and merged*. Either
 relax that prerequisite to "Slice 1 code complete", or schedule the measurement
 CVM run first. This is an owner decision and is deliberately not taken here.
+
+## Slice 1 closing measurements — 2026-07-28
+
+Captured in a single CVM window on `nightly-test-cvm` (`app_9ca3cded…c14db637`,
+CPU, `gpus=0`, prod9), running an image rebuilt from **merged** source
+(`tee-v3-hardening-75`, commit `5d11188`) —
+`@sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339`,
+confirmed live via `phala ps`. This **discharges the evidence-vintage caveat**:
+the digest now pinned in the compose is the image that was measured and settled
+against. The rebuild was necessary rather than ceremonial — the new digest
+differs from `tee-v3-hardening-74`'s, because the review fixes changed the binary.
+
+### Oracle refresh cost (live)
+
+| Config | Samples | min | p50 | p90 | p95 | p99 | max | mean |
+|---|---|---|---|---|---|---|---|---|
+| 1 feed (SOL-USDC) | 144 | 91 | **99** | 244 | **246** | 287 | 377 | 124.3 |
+| 2 feeds (SOL-USDC + BTC-USDC) | 160 | 91 | **98** | 245 | **250** | 288 | 392 | 124.8 |
+
+All values milliseconds, at the 1 s refresh cadence.
+
+**Requests per refresh: `hermes_requests=1` on every one of the 304 samples, at
+both 1 and 2 feeds.** The batching invariant holds, and the latency numbers show
+why it matters: doubling the feed count moved p50 by −1 ms and the mean by
++0.5 ms — both inside run-to-run noise. A second market costs essentially nothing
+per refresh because it rides the same request. Refresh duration is dominated by
+the Hermes round trip, not by per-feed verification work.
+
+### Conversion cost (host, release, 1M iterations after warmup)
+
+| Path | Cost |
+|---|---|
+| Equal decimals | ~8.1 ns/op |
+| Unequal decimals | ~15.9 ns/op |
+
+Unequal decimals costs ~2x — the extra `10^(e+q-b)` scaling step. Against a p50
+refresh of 99 ms, conversion is ~7 orders of magnitude smaller, so the checked
+integer arithmetic introduced for T-16 is not a matcher-path cost.
+
+### Time from last good update to pause
+
+Pinned deterministically by `pause_threshold_is_exactly_max_age` rather than
+timed on the CVM: the sync loop pauses on the first cycle whose post-refresh
+snapshot is unhealthy, so the bound is `max_age_ms` + at most one tick interval.
+The test asserts healthy at exactly `max_age_ms` and unhealthy one millisecond
+later. This is stricter than a wall-clock observation — it cannot be confounded
+by Hermes latency or host scheduling, and it fails if the window is ever widened.
+The recovery direction was observed live at **398 ms** from boot (`trading starts
+PAUSED` → `trading RESUMED`), with both markets adopted and both matcher drivers
+spawned.
+
+### Re-validated settle
+
+`cvm-settle-e2e` passed (45.1 s) against the merged-source image. Tx D confirmed
+at slot `479390196`, `confirmed=1 rejected=0 ambiguous=0`. Pipeline
+`total_ms=15310` — lock 1543, prove 2240, verify 1363, ALT 1254 + wait 796,
+settle 11661, close 0. Within noise of the pre-fix run (`14573`); the settle
+send dominates and is network-bound.
+
+### Image identity
+
+| Variant | Tag | Digest |
+|---|---|---|
+| CPU | `tee-v3-hardening-75` | `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` |
+| GPU | `tee-v3-hardening-75-cuda` | `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` |
+
+Signer set unchanged from the earlier run (same `app_id`), so the existing
+`tee_pubkeys` rotation and funding remained valid; no re-rotation was needed.
+CVM **stopped** after capture; billing halted.
+
+### Resulting status
+
+`T-01`, `T-02`, `T-16`, and `RD-01` move to **`Closed`** — merged code plus every
+measurement their rows and the cost table require. `RD-03` closed in #77.
+
+`T-04` deliberately remains **`Code complete`**: its row makes digest pinning a
+standing release invariant, not a one-time cleanup, so it closes only once slice
+3's ingress image is also pinned. Both current images are digest-pinned and the
+release record above maps source → tag → digest → live container.

@@ -34,10 +34,9 @@ services:
     # DARKNYX_ICICLE_CUDA_ARCH rename (see 05c86ef), so no image was ever
     # published under it. A GPU deploy would have failed at image pull.
     #
-    # Source tag for audit cross-reference: tee-v3-hardening-74-cuda (05c86ef),
-    # the first green `-cuda` build after that fix. Enforced by
+    # Source tag for audit cross-reference: tee-v3-hardening-75-cuda (5d11188), rebuilt from merged source. Enforced by
     # scripts/check-compose-image-digests.sh.
-    image: ghcr.io/skysail-labs/darknyx-tee@sha256:1001d5a0ae45d86c624c265c3598b490f7b511aa3349faa1c2ea03d29d367854
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66
     restart: unless-stopped
 
     # Device-node permissions. The image drops to `USER darknyx` (non-root) but
