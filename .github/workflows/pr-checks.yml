@@ -490,8 +490,13 @@ jobs:
       - name: cargo build-sbf — vault (mainnet build; compile-guards F-01/F-02 + F-03)
         run: cargo build-sbf --manifest-path programs/vault/Cargo.toml
 
+      # Via the wrapper, not a bare build-sbf: it records a fingerprint manifest
+      # beside the .so recording which source and feature set produced it. The
+      # LiteSVM jobs download both and refuse to run if they disagree, so a
+      # cached or mismatched artifact can no longer be validated silently
+      # (T-13).
       - name: cargo build-sbf — vault (devnet build for the litesvm suite)
-        run: cargo build-sbf --manifest-path programs/vault/Cargo.toml --features devnet-admin
+        run: bash scripts/build-vault-sbf.sh devnet-admin
 
       - name: Sanity-check .so size (must be > 100 KB)
         shell: bash
@@ -511,6 +516,7 @@ jobs:
           name: sbf-programs
           path: |
             target/deploy/vault.so
+            target/deploy/vault.so.fingerprint
           if-no-files-found: error
           retention-days: 1
 
@@ -650,6 +656,65 @@ jobs:
             -- --nocapture
 
   # ------------------------------------------------------------------
+  # Phase 3 — the in-enclave binary's own suite.
+  #
+  # Until this existed NO workflow ran `cargo test -p darknyx-tee`. The four
+  # `cargo test` invocations across all seven workflows covered only
+  # darkpool-crypto and vault, so the ~290 tests guarding the matcher, settle
+  # pipeline, continuation derivation, Merkle mirror, oracle trust/freshness,
+  # and the HTTP/auth surface — including every Phase A and `AU-` regression
+  # test from the audit remediations — were local-gate-only. A regression in
+  # any of them reached `main` with CI green (T-11).
+  #
+  # REQUIRE_CIRCUIT_ARTIFACTS=1 turns a missing circuit artifact into a hard
+  # failure rather than a silent skip, so the proof-backed intake tests cannot
+  # report success without proving (T-12). That is why this job depends on
+  # `circuits` and downloads its artefacts.
+  # ------------------------------------------------------------------
+  tee:
+    name: TEE — matcher, settle, oracle, auth (darknyx-tee)
+    runs-on: ubuntu-latest
+    needs: [changes, circuits]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.rust == 'true' ||
+        needs.changes.outputs.circuits == 'true'
+      ) &&
+      needs.circuits.result != 'failure'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive  # icicle-snark is a path dep of darknyx-tee
+
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Cache cargo registry + target/
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pr-checks-rust
+
+      - name: Download circuit build artefacts
+        uses: actions/download-artifact@v7
+        with:
+          name: circuit-build
+          path: circuits/build
+
+      # Split from the artifact-backed tests below so a slow proving test is
+      # separately identifiable in the job log rather than hidden inside one
+      # opaque invocation.
+      - name: darknyx-tee lib tests (fast)
+        run: cargo test -p darknyx-tee --lib
+
+      - name: darknyx-tee integration tests (artifact-required)
+        env:
+          # A missing circuit artifact must FAIL here, never skip. See T-12.
+          REQUIRE_CIRCUIT_ARTIFACTS: "1"
+        run: cargo test -p darknyx-tee --tests -- --nocapture
+
+  # ------------------------------------------------------------------
   # Aggregator. Branch protection should require ONLY this status check.
   # The individual job results are visible in the PR UI for debugging.
   # Note: dashes in job names require bracket lookup in the `needs`
@@ -667,6 +732,7 @@ jobs:
       - sbf-build
       - vault-zk
       - vault-litesvm
+      - tee
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -695,7 +761,8 @@ jobs:
             needs.consistency.result != 'success' ||
             (needs['sbf-build'].result != 'success' && needs['sbf-build'].result != 'skipped') ||
             (needs['vault-zk'].result != 'success' && needs['vault-zk'].result != 'skipped') ||
-            (needs['vault-litesvm'].result != 'success' && needs['vault-litesvm'].result != 'skipped')
+            (needs['vault-litesvm'].result != 'success' && needs['vault-litesvm'].result != 'skipped') ||
+            (needs.tee.result != 'success' && needs.tee.result != 'skipped')
           }}
         run: |
           echo "changes:                  ${{ needs.changes.result }}"
@@ -707,6 +774,7 @@ jobs:
           echo "sbf-build:                ${{ needs['sbf-build'].result }}"
           echo "vault-zk:                 ${{ needs['vault-zk'].result }}"
           echo "vault-litesvm:            ${{ needs['vault-litesvm'].result }}"
+          echo "tee:                      ${{ needs.tee.result }}"
           echo "::error::One or more required jobs failed."
           exit 1
       - name: All required checks passed
