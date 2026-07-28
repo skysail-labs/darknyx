@@ -29,7 +29,7 @@ const VAULT_PROGRAM_ID_BYTES: &str = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVW
 const TEE_PUBKEY_OFFSET: usize = 8 + 32;
 
 fn program_so_path() -> PathBuf {
-    common::repo_root().join("target/deploy/vault.so")
+    common::vault_program_so()
 }
 
 fn vault_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {

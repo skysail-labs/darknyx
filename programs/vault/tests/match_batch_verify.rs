@@ -21,6 +21,7 @@
 //!
 //! Requires `target/deploy/vault.so` (run `cargo build-sbf`).
 
+mod common;
 mod settle_harness;
 
 use settle_harness::*;

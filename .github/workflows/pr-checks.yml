@@ -671,11 +671,23 @@ jobs:
     if: always()
     steps:
       - name: Verify all required jobs passed
-        # 'skipped' is acceptable — it means the paths filter determined
-        # that job was not relevant to this change. 'failure' and
-        # 'cancelled' are hard failures.
+        # 'skipped' is acceptable for the path-filtered jobs — it means the
+        # filter determined that job was not relevant to this change. 'failure'
+        # and 'cancelled' are hard failures.
+        #
+        # `changes` MUST be checked explicitly, and must NOT accept 'skipped'.
+        # Every other job's `if:` reads `needs.changes.outputs.*`, so when
+        # `changes` fails they all skip — and 'skipped' was being read as "not
+        # relevant" when it actually meant "we never found out". The result was
+        # an aggregate gate that reported success in ~3 s with zero tests
+        # executed, which is exactly what a branch-protection rule keys on.
+        # Observed live on PR #77: the namespace guard inside `changes` failed,
+        # all nine jobs skipped, and `pr-checks success` still reported pass.
+        # A filter that did not succeed cannot license any conclusion about the
+        # jobs it gates.
         if: >-
           ${{
+            needs.changes.result != 'success' ||
             (needs.rust.result != 'success' && needs.rust.result != 'skipped') ||
             (needs.circuits.result != 'success' && needs.circuits.result != 'skipped') ||
             (needs.sdk.result != 'success' && needs.sdk.result != 'skipped') ||
@@ -686,6 +698,7 @@ jobs:
             (needs['vault-litesvm'].result != 'success' && needs['vault-litesvm'].result != 'skipped')
           }}
         run: |
+          echo "changes:                  ${{ needs.changes.result }}"
           echo "rust:                     ${{ needs.rust.result }}"
           echo "circuits:                 ${{ needs.circuits.result }}"
           echo "sdk:                      ${{ needs.sdk.result }}"

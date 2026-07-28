@@ -10,6 +10,7 @@
 //! and fails later at `InvalidProof` — proving the guard keys exactly on
 //! consumed-ness.
 
+mod common;
 mod settle_harness;
 
 use settle_harness::*;
