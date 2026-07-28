@@ -636,6 +636,35 @@ components:
             login frame's explicit `cancel_on_disconnect` value overrides it.
           default: false
 
+    DrainStatus:
+      type: object
+      required: [draining, cancelled_resting, in_flight_settlements, safe_to_stop]
+      properties:
+        draining:
+          type: boolean
+          description: Whether a planned stop has been requested on this instance.
+        cancelled_resting:
+          type: integer
+          description: |
+            Resting orders cancelled by THIS request. Always 0 on a `GET`.
+        in_flight_settlements:
+          type: integer
+          description: |
+            Settlements still recorded in the write-ahead journal. Zero is a
+            precondition for `safe_to_stop`.
+        safe_to_stop:
+          type: boolean
+          description: |
+            True only when trading is closed AND no settlement is in flight.
+            Stopping the CVM while this is false risks work the journal would
+            have to reconcile on the next boot.
+        caveat:
+          type: string
+          description: |
+            Present when the journal is not persistent (no state dir configured).
+            The readiness answer then concerns this process's memory only, and a
+            restart would recover nothing regardless of draining.
+
     TreeRoot:
       type: object
       required: [tree_id, merkle_root, leaf_count, on_chain_slot]
@@ -1010,6 +1039,96 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
 
   # ───── admin ─────────────────────────────────────────────────────────────────
+
+  /admin/drain:
+    get:
+      summary: Is it safe to stop this CVM?
+      description: |
+        Operator control for a PLANNED stop (redeploy, env change, shutdown).
+        Admin-gated.
+
+        `safe_to_stop` is computed from the in-flight settlement journal — the
+        same durable state a restart would read — and never from elapsed time. A
+        timer-based answer would grant permission to stop mid-settlement, which
+        is exactly what the journal exists to survive.
+
+        It requires BOTH conditions: trading closed AND nothing in flight. An
+        empty journal on its own means nothing, because the next matcher tick can
+        enqueue a settlement.
+
+        Draining is NOT crash recovery and must not be described as a substitute
+        for it in any runbook. It only helps when someone chooses to stop; a
+        crash or an involuntary host migration gets none of it.
+      tags: [admin]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Current drain state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DrainStatus' }
+        '401':
+          description: Missing / invalid bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Authenticated account is not an admin.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    post:
+      summary: Begin draining
+      description: |
+        Closes new trading and cancels every resting order, so clients are told
+        explicitly instead of finding an empty book after the redeploy. Resting
+        collateral is NOT locked on-chain at this stage, so this frees nothing
+        and costs a re-place.
+
+        Idempotent: repeating the request pauses once and reports truthfully.
+        Poll `GET /admin/drain` until `safe_to_stop` is true before stopping.
+      tags: [admin]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Drain requested; state after the request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DrainStatus' }
+        '401':
+          description: Missing / invalid bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Authenticated account is not an admin.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      summary: Abandon the drain
+      description: |
+        Re-opens trading. Clears ONLY the drain reason — an oracle or governance
+        pause set while draining stays set, so cancelling a redeploy cannot
+        re-open a venue some other condition independently closed.
+      tags: [admin]
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200':
+          description: Drain abandoned; state after the request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DrainStatus' }
+        '401':
+          description: Missing / invalid bearer token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Authenticated account is not an admin.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /admin/accounts:
     post:

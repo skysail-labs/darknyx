@@ -924,6 +924,15 @@ pub async fn register_account_handler(
 /// Checked against the LIVE registry rather than a claim in the caller's token,
 /// so revoking an operator's admin rights (or suspending them outright) takes
 /// effect on their next request instead of when their current token expires.
+/// Public wrapper so sibling admin handlers in other modules share the ONE
+/// admin check rather than each re-deriving it from the registry.
+pub(crate) async fn require_admin_pub(
+    state: &ApiState,
+    authorized: &Authorized,
+) -> Result<(), super::error::ApiError> {
+    require_admin(state, authorized).await
+}
+
 async fn require_admin(
     state: &ApiState,
     authorized: &Authorized,

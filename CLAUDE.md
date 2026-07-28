@@ -116,6 +116,16 @@ You will not write correct code here without the mental model. Required:
   daemon uses live streams instead) — the durable amount source is the chain.
   Read the top-of-doc as-built deltas; the lower half is the superseded original
   decision record.
+* **[`docs/settlement-recovery-drill.md`](docs/settlement-recovery-drill.md)** —
+  how to prove on a real CVM that an interrupted settlement recovers and a
+  planned stop leaves nothing behind (T-06). **Use this instead of improvising**
+  whenever the settle pipeline, the journal schema, or the persistence layer
+  changes. It carries the two traps that cost attempts: `phala cvms stop` is an
+  API request the container outlives, so it cannot land inside the ~10 s settle
+  phase and the kill must be triggered off the journal's own `/admin/drain`
+  reading; and a tree reset does NOT empty the Merkle mirror, which replays from
+  `DARKNYX_TEE_SYNC_FROM_SLOT` and needs an env-only redeploy with a post-reset
+  floor.
 * **[`docs/throughput-roadmap.md`](docs/throughput-roadmap.md)** — the log of
   settle/throughput optimizations deliberately DEFERRED behind platform gates
   (🟢 GPU proving, 🔵 Alpenglow finality) + 🟡 real volume, with the measured
@@ -137,6 +147,7 @@ By domain, additionally:
 | `crates/darkpool-crypto` | The matching `*-parity.test.ts` under `packages/sdk/tests/`. **Every host-side primitive has a byte-equality contract with TS.** |
 | `crates/darkpool-matcher` | `tests/parity.rs` + `change_note_parity.rs` + `order_canonical.rs`'s tests. The matcher's `run_batch`/`run_batch_capped` is the single source of truth. A change to `change_note::derive_inner` triggers a triple-port (matcher Rust ↔ TS in `e2e-helpers.ts` ↔ the on-chain hashers). |
 | `crates/darknyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). |
+| The settle pipeline / journal / persistence | `docs/settlement-recovery-drill.md` — the crash-recovery + drain drill and its pass criteria. Re-run it when any of these change. |
 | The SDK | The corresponding `tests/*-transport.test.ts` / parity test. `idl/vault-client.ts` hand-codes every discriminator + Borsh layout (no Anchor IDL runtime) — keep it in sync with the on-chain structs by hand. |
 | Settlement plumbing | `CRYPTOGRAPHY.md` §9 (size analysis + ALT story). The 1232-byte cap is tight — see [§6](#6-the-1232-byte-transaction-size-budget). |
 

@@ -34,7 +34,7 @@
 
 use std::sync::LazyLock;
 
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use sha2::{Digest, Sha256};
 use solana_address::Address;
 use solana_instruction::{AccountMeta, Instruction};
@@ -58,7 +58,7 @@ pub static LOCK_NOTE_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
 /// total. The order matches snarkjs' / ark-circom's output so the
 /// SDK's `groth16-format.ts` produces bytes the TEE can pass
 /// through verbatim.
-#[derive(Clone, Debug, BorshSerialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct Groth16ProofBytes {
     pub pi_a: [u8; 64],
     pub pi_b: [u8; 128],
