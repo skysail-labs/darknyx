@@ -154,9 +154,17 @@ fn release_lock_refunds_rent_and_unblocks_withdraw() {
         h.svm.latest_blockhash(),
     );
     h.svm.warp_to_slot(expiry - 1);
+    // Pin the SPECIFIC rejection, as with the live-lock withdraw above: a bare
+    // is_err() would keep passing if this started failing for an unrelated
+    // reason (bad accounts, wrong discriminator) long after the guard was gone.
+    let early_err = h
+        .svm
+        .send_transaction(early_tx)
+        .expect_err("release_lock before expiry must fail");
+    let early_log = format!("{:?}", early_err.meta.logs);
     assert!(
-        h.svm.send_transaction(early_tx).is_err(),
-        "release_lock before expiry must fail (LockNotExpired)"
+        early_log.contains("LockNotExpired"),
+        "expected LockNotExpired, got: {early_log}"
     );
 
     // At expiry, release succeeds and the rent lands with the caller.
@@ -177,10 +185,18 @@ fn release_lock_refunds_rent_and_unblocks_withdraw() {
         h.svm.get_account(&lock_pda).is_none_or(|a| a.lamports == 0),
         "release_lock must close the NoteLock PDA"
     );
+    // Assert the refund is the FULL lock rent, not merely "went up". A bare
+    // `after > before` would still pass on a partial refund. The tx fee is
+    // subtracted from the same balance, so bound it rather than pinning an
+    // exact litesvm fee schedule — that would break spuriously if the fee model
+    // ever changes, without catching anything extra.
+    const MAX_TX_FEE_LAMPORTS: u64 = 10_000;
     let after = h.svm.get_account(&depositor.pubkey()).unwrap().lamports;
+    let credited = after.saturating_sub(before);
     assert!(
-        after > before,
-        "rent must be refunded to the caller: before={before} after={after}"
+        credited >= lock_rent.saturating_sub(MAX_TX_FEE_LAMPORTS),
+        "expected the full NoteLock rent back (rent={lock_rent}, credited={credited}, \
+         before={before}, after={after})"
     );
 
     // And the note is now withdrawable.

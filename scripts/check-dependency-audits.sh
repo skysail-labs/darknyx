@@ -71,21 +71,49 @@ BASELINE="audit-baseline/npm-production.txt"
 CURRENT="$(mktemp)"
 trap 'rm -f "$CURRENT"' EXIT
 
-npm audit --omit=dev --json 2>/dev/null | python3 -c "
-import json,sys
+# The parser exits NON-ZERO when it cannot read npm's report, and the shell
+# checks that. Previously it swallowed the error and emitted nothing, which the
+# `comm` below then read as "no new advisories" — a silent PASS whenever npm
+# errored, was offline, or changed its JSON shape. That is the same fail-open
+# this slice exists to remove: an unparseable report means the check did not
+# run, not that it found nothing. Note a genuinely EMPTY report is legitimate
+# (zero vulnerabilities), so absence of rows cannot itself be the error signal —
+# the exit code has to carry it.
+NPM_RAW="$(mktemp)"
+npm audit --omit=dev --json > "$NPM_RAW" 2>/dev/null || true   # npm exits non-zero when findings exist
+python3 - "$NPM_RAW" > "$CURRENT" <<'PY'
+import json, sys
 try:
-    d=json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-rows=set()
-for name,v in d.get('vulnerabilities',{}).items():
-    for via in v.get('via',[]):
-        if isinstance(via,dict) and via.get('url'):
-            rows.add(f\"{via['url'].rsplit('/',1)[-1]} {name} {v['severity']}\")
-print('\n'.join(sorted(rows)))
-" > "$CURRENT"
+    with open(sys.argv[1]) as fh:
+        d = json.load(fh)
+except Exception as e:
+    print(f"could not parse npm audit output: {e}", file=sys.stderr)
+    sys.exit(3)
+if not isinstance(d, dict) or "vulnerabilities" not in d:
+    print("npm audit output has no 'vulnerabilities' key", file=sys.stderr)
+    sys.exit(3)
+rows = set()
+for name, v in d["vulnerabilities"].items():
+    for via in v.get("via", []):
+        if isinstance(via, dict) and via.get("url"):
+            rows.add(f"{via['url'].rsplit('/', 1)[-1]} {name} {v['severity']}")
+print("\n".join(sorted(rows)))
+PY
+NPM_PARSE=$?
+rm -f "$NPM_RAW"
+if [ "$NPM_PARSE" -ne 0 ]; then
+  echo "::error::npm audit COULD NOT BE READ — the npm half of this gate did NOT run."
+  echo "  Nothing was compared against the baseline. Check npm connectivity and"
+  echo "  that \`npm ci\` has populated node_modules."
+  failed=1
+  NPM_USABLE=0   # nothing trustworthy to compare against the baseline
+else
+  NPM_USABLE=1
+fi
 
-if [ ! -f "$BASELINE" ]; then
+if [ "$NPM_USABLE" -ne 1 ]; then
+  : # already reported above; do not also claim a baseline problem
+elif [ ! -f "$BASELINE" ]; then
   echo "::error::$BASELINE is missing — cannot tell new findings from known ones."
   failed=1
 else

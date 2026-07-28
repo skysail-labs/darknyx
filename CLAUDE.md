@@ -248,7 +248,10 @@ bash scripts/build-vault-sbf.sh devnet-admin        # NOT a bare build-sbf: writ
 cargo build --examples -p darkpool-crypto           # parity tests shell out to these
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                              # unit + litesvm integration
-REQUIRE_CIRCUIT_ARTIFACTS=1 cargo test -p darknyx-tee --tests   # T-12: missing artifacts FAIL, never skip
+# T-12: needs circuit artifacts — §2.1's `bash scripts/build-circuits.sh` must have run.
+# Under this flag a missing .wasm/.r1cs/.zkey is a hard FAILURE, not a silent skip,
+# so a proof-backed test can never report success without proving.
+REQUIRE_CIRCUIT_ARTIFACTS=1 cargo test -p darknyx-tee --tests
 bash scripts/check-dependency-audits.sh             # cargo audit + npm audit vs the recorded baseline
 ./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit
 ./node_modules/.bin/tsc -p packages/indexer/tsconfig.json --noEmit

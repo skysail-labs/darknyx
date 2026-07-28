@@ -75,6 +75,7 @@ jobs:
       circuits: ${{ steps.filter.outputs.circuits }}
       sdk: ${{ steps.filter.outputs.sdk }}
       indexer: ${{ steps.filter.outputs.indexer }}
+      deps: ${{ steps.filter.outputs.deps }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -105,6 +106,15 @@ jobs:
               - 'packages/sdk/src/settlement/**'
               - 'package.json'
               - 'package-lock.json'
+            # The dependency gate's OWN controls. Without this a PR that only
+            # touches .cargo/audit.toml (adding an ignore) or the npm baseline
+            # (adding a suppression) would not run deps-audit at all — a change
+            # that weakens the gate escaping the gate. Same class as T-18.
+            deps:
+              - '.cargo/audit.toml'
+              - 'audit-baseline/**'
+              - 'scripts/check-dependency-audits.sh'
+              - '.github/workflows/pr-checks.yml'
 
   rust:
     name: Rust — fmt, clippy, unit tests, examples
@@ -676,7 +686,8 @@ jobs:
       github.event_name == 'push' ||
       needs.changes.outputs.rust == 'true' ||
       needs.changes.outputs.sdk == 'true' ||
-      needs.changes.outputs.indexer == 'true'
+      needs.changes.outputs.indexer == 'true' ||
+      needs.changes.outputs.deps == 'true'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
