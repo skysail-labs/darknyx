@@ -52,11 +52,11 @@ the first stop for an agent resuming the work.
 |---|---|
 | Last verified `main` | `f7a1530` (slice 2 closed; PR #79 merged) |
 | Last merged remediation PR | #80 — slice 3 (`tee-transport-integrity`), merged 2026-07-28 |
-| Active slice | none — slice 3 closed. Its scope was reduced to DEP-AU-07 + T-04 enforcement + the transport documentation correction; T-03's transport work is deferred to a mainnet gate (see the slice-3 section). |
-| Active branch / PR | merged (PR #80) |
-| Next slice | `remediation/settlement-recovery` (slice 4) |
-| Live state | **No CVM running; billing halted — slice 3 as scoped needs none.** Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-28 (slice 3 closed) |
+| Active slice | slice 4 (`remediation/settlement-recovery`, T-06) — local work complete; awaiting a CPU-CVM window for live evidence. |
+| Active branch / PR | `remediation/settlement-recovery` |
+| Next slice | `remediation/order-canonical-next` (slice 5), after slice 4's CVM evidence |
+| Live state | **No CVM running; billing halted. Slice 4 NEEDS one** — a restart mid-settlement is the one thing no local test can prove. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
+| Last updated | 2026-07-28 (slice 4 code complete) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -118,7 +118,7 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 | T-03 | High | TEE + infrastructure + SDK | `remediation/tee-transport-integrity` (transport work deferred) | **Rationale corrected 2026-07-28.** The finding's stated basis — "order intent is plaintext at the operator's gateway" — is wrong: the dstack gateway is itself an attested TDX CVM that mutually attests with our CVM and tunnels over WireGuard, so no unprotected hop carries plaintext. The real, still-valid exposure is narrower: (a) clients pin our measurement but not the gateway's, so that component can change with no Darknyx governance event, and (b) nothing binds the verified quote to the TLS session it was fetched over, so a party holding a valid gateway-domain certificate can front a different backend. Invariant to close: TLS terminates inside the Darknyx enclave with an attestation-bound certificate the client verifies, and the public route cannot reach plaintext 8080. | **Deferred — mainnet gate** (see the slice-3 section for the trigger, both costed options, and the DNS migration playbook) |
 | T-04 | High | Release engineering + infrastructure | `remediation/tee-oracle-trust`, then enforced for `remediation/tee-transport-integrity` | The existing CPU/GPU images are pinned by immutable digest in the oracle slice, which already changes the image and compose. Every image introduced later, including ingress, must be digest-pinned before that slice can merge. Release evidence maps source/tag/digest/compose hash, so substituting a tag cannot preserve an accepted measurement. | Code complete — enforcement generalised in slice 3: `scripts/check-compose-image-digests.sh` now checks EVERY image in EVERY compose against an explicit repository allowlist, instead of asserting a single hardcoded image. An ingress (or any other) service added later fails the gate until it is digest-pinned AND its repository is deliberately approved. Verified by mutating a compose in both directions. |
 | T-05 | Medium | — | — | Owner accepted the residual append-only-mirror availability risk on 2026-07-27. Confirmed commitment plus on-chain root validation is considered sufficient for the current product; a rollback can stall witness service but cannot authorize custody loss. No code, test, infrastructure, or follow-up task is authorized. | **Won't Fix — accepted risk** |
-| T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | Open |
+| T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | Code complete — journal, boot reconciliation, and drain merged and unit/integration tested. Held short of `Closed` by the live evidence its row and the cost table require: a CPU-CVM restart mid-settlement, and the journal/settle/restart measurements. |
 | T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | Open |
 | T-08 | Medium | Release engineering | `remediation/local-assurance` | Rust and production Node dependencies have locally reproducible vulnerability gates; GitHub Actions use full immutable SHAs and minimum permissions. Findings are triaged rather than hidden by blanket ignores. | Closed |
 | T-09 | Low | Daemon custody | `remediation/daemon-keystore-v2` | New keystores use the fixed v2 scrypt profile `N=2^17, r=8, p=1` with explicit memory bounds. KATs, wrong-passphrase, and resource-bound tests pin the profile. | Open |
@@ -254,7 +254,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | Code complete / PR open | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
 | 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Closed / PR #79 | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
 | 3 | `remediation/tee-transport-integrity` | DEP-AU-07; T-04 enforcement; transport documentation correction. **T-03 deferred** | Slice 2 closed | Closed / PR #80 | **No compose change, no compose-hash rotation, no CVM, no ceremony.** Connection caps are code defaults; the digest guard is CI-only; the documentation corrections are text. Wire-visible additions only: a `503` on an over-capacity `/v1/stream` upgrade and error code `4290` on an over-cap login, both documented in the OpenAPI. | Real-socket connection-cap tests incl. the ping-only hold and its mutation test; digest-guard mutation test in both failure directions; OpenAPI parse; the standard local gate. |
-| 4 | `remediation/settlement-recovery` | T-06 | Slice 3 code complete (relaxed from "closed": slice 3 no longer closes T-03, and settlement recovery has no transport dependency) | Open / — | New versioned encrypted journal; no public wire change unless terminal restart reasons are surfaced. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
+| 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Code complete / PR open | New versioned encrypted journal; no public wire change unless terminal restart reasons are surfaced. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | Open / — | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | Open / — | Versioned local keystore migration; v1 read/migrate only, all new writes v2. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
 | 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09 | Slice 6 closed | Open / — | SDK removal of dead exports; bounded internal FFI behavior. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep. No CVM required. |
@@ -557,6 +557,147 @@ complete` as a standing release invariant, now with an enforcement gate that
 actually inspects every image. `T-03` moves to `Deferred — mainnet gate` with the
 trigger above; it is also recorded in the mainnet gates of
 [`security-remediation-tracker.md`](security-remediation-tracker.md).
+
+## Slice 4 evidence — `remediation/settlement-recovery`, 2026-07-28
+
+### What was actually broken
+
+`OpeningStore` and the settle pipeline's state were memory-only. The asymmetry is
+what makes it a funds problem rather than an inconvenience: **an on-chain
+`NoteLock` survives a restart and the enclave's ability to use or release it does
+not.** After a redeploy — the documented way to roll an image or change env — the
+enclave has no record it locked those notes, so affected users' collateral stays
+frozen until expiry with no fill, no cancel, and no way to re-place, because the
+surviving lock blocks a fresh `lock_note`.
+
+### Write-ahead ordering is the design, not an implementation detail
+
+Recording state *after* a side effect is worthless for recovery: the window that
+matters is between "we sent something" and "we wrote down that we sent it". So
+the settle signature is journaled **before** submission — possible because a
+Solana signature is fully determined once the transaction is signed, and read back
+out of the already-signed wire bytes. The invariant recovery depends on:
+
+> If a transaction reached the network, its signature is already on disk.
+
+Three write points: before the batch's first transaction (payload, both sides'
+lock inputs including the relayed `VALID_INPUT` proof, batch root, deadline);
+before the settle send (the signature); and on a terminal outcome (retire).
+`Ambiguous` and `Pending` deliberately do NOT retire — those are exactly the
+states a restart must reconcile.
+
+The redrive deadline is the **earlier** of the two locks' expiries. Redrive is
+only safe while both are live; the later one would authorise retrying a settle
+whose buyer lock had already been swept.
+
+### Durability gap found in the existing helpers
+
+`persistence::auth` and `persistence::markers` write tmp → `fsync` → `rename`,
+which makes the *contents* durable but not the *rename* — the directory entry
+lives in the parent's metadata, so a crash can roll the file back to its previous
+version. For rent bookkeeping that costs a sweep; for this journal it would make
+recovery act on stale truth, so the journal also fsyncs the parent directory.
+Recorded as a deliberate difference. **The older helpers are worth upgrading
+separately and are not touched here.**
+
+### Reconciliation trusts the chain, not the journal
+
+The journal records *intent*; only the chain says what took effect.
+Consumed-note PDAs are the authority because Tx D creates both atomically — the
+same reasoning `worker::reconcile_consumed_pdas` already applies in-process, so
+the two agree by construction rather than coincidence.
+
+Two things discovered while wiring, both of which change behaviour:
+
+- **Signature status is nearly useless at boot.** Without
+  `searchTransactionHistory` the RPC keeps only ~150 slots, so after any restart
+  worth recovering from the status is usually absent. A missing status resolves to
+  `None`, not `false`, and falls through to the PDA check.
+- **An RPC error is not a chain fact.** It resolves to `Inconsistent`, not
+  `NeitherConsumed`, so a transient outage routes an entry to an operator instead
+  of authorising a redrive. The convenient default was the dangerous one.
+
+Exactly one PDA present is never inferred either way, and a signature reading
+confirmed while neither note is consumed is reported as contradictory rather than
+resolved to the convenient half.
+
+Recovery registers every unsettled input note with the lock sweeper. Without
+that, recovered entries would be observed and then forgotten — the original bug
+with extra steps.
+
+A damaged journal is loud and **non-fatal**: refusing to boot would also refuse to
+run the lock sweeper, which is the mechanism that returns the collateral at risk.
+"Nothing was in flight" and "the record is gone" are reported as different things.
+
+### Drain (option C)
+
+`GET|POST|DELETE /admin/drain`, admin-gated and documented in the OpenAPI.
+`safe_to_stop` requires BOTH trading closed and nothing in flight, computed from
+the journal rather than a timer — a timer would grant permission to stop
+mid-settlement. Drain is its own pause reason, so a governance resume cannot
+un-drain a CVM being taken down and an oracle recovery cannot re-open trading into
+a draining enclave.
+
+Resting orders are cancelled going down but not restored coming up. Not a
+contradiction: a resting order is memory-only and its collateral is not locked
+on-chain, so losing one costs a re-place and freezes nothing, while restoring a
+signed intent after an arbitrary gap would re-book at a price chosen under
+conditions that no longer hold.
+
+The status discloses a non-persistent journal. A bare `safe_to_stop: true` there
+would be technically true and practically misleading.
+
+**Drain is not crash recovery** and the module says so at the top. If the two are
+conflated the journal gets quietly weakened on the argument that "we drain before
+redeploys anyway".
+
+### Tests, and the mutations that make them mean something
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | 722 passed, 0 failed |
+| Journal unit tests (durability, corrupt, truncated, version skew, round-trip) | 11 passed |
+| Recovery decision table (every branch incl. both contradiction cases) | 11 passed |
+| Pipeline wiring tests | 3 passed |
+| Drain unit + endpoint tests | 6 + 6 passed |
+| Mutation: settle signature journaled AFTER the send | wiring test **fails** — "the signature is being written AFTER the send" |
+| Mutation: `safe_to_stop` ignores in-flight settlements | drain test **fails** — "must wait for in-flight settlements" |
+
+The ordering test proves "before the send" **without a timing race**: the mock RPC
+reads the journal from disk inside its own `sendTransaction` handler and reports
+what it saw. Asserting after the run cannot distinguish "written before" from
+"written after", which is the entire distinction that makes recovery possible.
+
+One test was corrected rather than the code: `resume_for` reports whether the
+WHOLE gate opened, not whether a bit cleared, so an early assertion misread the
+API. The gate was right.
+
+### Status — and what the CVM window must produce
+
+`T-06` is **`Code complete`**. The remaining obligations are live-only:
+
+| Required evidence | Why local tests cannot supply it |
+|---|---|
+| CPU-CVM restart mid-settlement | The whole finding is about a real process dying with real on-chain locks outstanding |
+| Drain → redeploy → clean boot | Proves the planned path leaves zero recovery work |
+| Journal write p50/p95 per durable transition | Cost table |
+| Bytes written per match | Cost table |
+| End-to-end settle p50/p95 vs the no-journal baseline | Cost table |
+| Restart-to-reconciled duration | Cost table |
+
+**Window plan.** Pre-window and off the clock: merge, build a fresh tag, resolve
+and pin its digest, allowlist the new `compose_hash`. No attestation-contract
+change and no signer rotation is expected — dstack derives keys per `app_id`, and
+slice 1 confirmed the set survives a digest change. In one window: reset the tree
+→ deploy → baseline `cvm-settle-e2e` → **hard-kill mid-settlement and verify
+recovery classified and resolved the entry rather than stranding it** → drain,
+redeploy, confirm a clean boot → capture the measurements → stop the CVM after
+confirming `resource.gpus` is 0.
+
+**The risk to plan around:** the kill must be *hard* and land mid-pipeline. A
+graceful stop drains cleanly and proves nothing. The ALT-activation wait is the
+longest phase and the most reliable moment to hit.
+
 
 ## Agent handoff template
 
