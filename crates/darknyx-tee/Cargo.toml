@@ -183,6 +183,16 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 rand = { workspace = true }
 # Phase 1b — persistence tests write snapshots to a throwaway dir.
 tempfile = "3"
+# WebSocket CLIENT for the /v1/stream connection-limit tests (AU-07). The
+# unauthenticated-window and ping-only-hold behaviours live inside the socket
+# loop, so proving them needs a real client speaking the real framing — a
+# harness that called the handler directly would be asserting on a fake. Pinned
+# to the version axum's `ws` feature already resolves, so this adds no crate to
+# the dependency graph that the binary did not already build.
+tokio-tungstenite = "0.24"
+# `SinkExt`/`StreamExt` for driving that client socket. Already in the graph via
+# tokio-tungstenite and axum; named here so the test can import the traits.
+futures-util = "0.3"
 
 [features]
 default = []

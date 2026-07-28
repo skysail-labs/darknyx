@@ -92,6 +92,23 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
+              # The `rust` job also hosts two cheap deployment guards, so this
+              # filter must cover THEIR inputs — otherwise the guard does not run
+              # on precisely the change it exists to catch. Before this, a PR
+              # that only edited deploy/docker-compose.yaml (say, replacing a
+              # digest with a mutable tag — the exact T-04 supply-chain hole) or
+              # that only weakened a guard script would match no filter, skip the
+              # `rust` job, and merge with the compose gate never executed. Same
+              # class as T-18: a gate that reports nothing because it never ran.
+              - 'deploy/**'
+              - 'Dockerfile*'
+              - 'scripts/check-compose-image-digests.sh'
+              - 'scripts/check-icicle-cuda-arch-env.sh'
+              # And the workflow itself, so an edit that weakens a guard's
+              # invocation — or this very filter — runs the guards it affects.
+              # `deps` already lists this file for the dependency gate; the
+              # deployment guards need the same protection.
+              - '.github/workflows/pr-checks.yml'
             circuits:
               - 'circuits/**'
               - 'scripts/ci-build-circuits.sh'

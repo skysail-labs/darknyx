@@ -50,13 +50,13 @@ the first stop for an agent resuming the work.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `c6ab3e1` (slice 1 closed; PR #77 + #78 merged) |
-| Last merged remediation PR | #79 — slice 2 (`local-assurance`), merged 2026-07-28 |
-| Active slice | none — slice 2 closed; slice 3 not started |
-| Active branch / PR | merged (PR #79) |
-| Next slice | `remediation/tee-transport-integrity` (slice 3) |
-| Live state | **No CVM running; billing halted.** Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-28 |
+| Last verified `main` | `f7a1530` (slice 2 closed; PR #79 merged) |
+| Last merged remediation PR | #80 — slice 3 (`tee-transport-integrity`), merged 2026-07-28 |
+| Active slice | none — slice 3 closed. Its scope was reduced to DEP-AU-07 + T-04 enforcement + the transport documentation correction; T-03's transport work is deferred to a mainnet gate (see the slice-3 section). |
+| Active branch / PR | merged (PR #80) |
+| Next slice | `remediation/settlement-recovery` (slice 4) |
+| Live state | **No CVM running; billing halted — slice 3 as scoped needs none.** Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
+| Last updated | 2026-07-28 (slice 3 closed) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -115,8 +115,8 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 |---|---|---|---|---|---|
 | T-01 | High | TEE oracle | `remediation/tee-oracle-trust` | Only an explicitly versioned Pyth emitter/signer profile is accepted. A guardian-signed non-Pyth message, wrong emitter, wrong signer set, or insufficient quorum is rejected by fixture tests before its root reaches the cache. | Closed |
 | T-02 | High | TEE oracle + matcher | `remediation/tee-oracle-trust` | Freshness uses signed publish time and local arrival health; feed state rejects stale, replayed, or non-monotonic updates. `OracleCache::snapshot` no longer fabricates `publish_slot = slot_now`, and `darkpool_matcher::validate_oracle` enforces the freshness data it reports instead of checking only `twap != 0`. Clock-skew, direct-matcher bypass, and out-of-order boundary tests pin the policy. | Closed |
-| T-03 | High | TEE + infrastructure + SDK | `remediation/tee-transport-integrity` | TLS terminates inside the CVM boundary through the supported `dstack-ingress` path; the public route cannot reach plaintext port 8080. A real-CVM test proves HTTPS/WSS, attestation, auth, reconnect, and streaming through the encrypted path. | Open |
-| T-04 | High | Release engineering + infrastructure | `remediation/tee-oracle-trust`, then enforced for `remediation/tee-transport-integrity` | The existing CPU/GPU images are pinned by immutable digest in the oracle slice, which already changes the image and compose. Every image introduced later, including ingress, must be digest-pinned before that slice can merge. Release evidence maps source/tag/digest/compose hash, so substituting a tag cannot preserve an accepted measurement. | Code complete |
+| T-03 | High | TEE + infrastructure + SDK | `remediation/tee-transport-integrity` (transport work deferred) | **Rationale corrected 2026-07-28.** The finding's stated basis — "order intent is plaintext at the operator's gateway" — is wrong: the dstack gateway is itself an attested TDX CVM that mutually attests with our CVM and tunnels over WireGuard, so no unprotected hop carries plaintext. The real, still-valid exposure is narrower: (a) clients pin our measurement but not the gateway's, so that component can change with no Darknyx governance event, and (b) nothing binds the verified quote to the TLS session it was fetched over, so a party holding a valid gateway-domain certificate can front a different backend. Invariant to close: TLS terminates inside the Darknyx enclave with an attestation-bound certificate the client verifies, and the public route cannot reach plaintext 8080. | **Deferred — mainnet gate** (see the slice-3 section for the trigger, both costed options, and the DNS migration playbook) |
+| T-04 | High | Release engineering + infrastructure | `remediation/tee-oracle-trust`, then enforced for `remediation/tee-transport-integrity` | The existing CPU/GPU images are pinned by immutable digest in the oracle slice, which already changes the image and compose. Every image introduced later, including ingress, must be digest-pinned before that slice can merge. Release evidence maps source/tag/digest/compose hash, so substituting a tag cannot preserve an accepted measurement. | Code complete — enforcement generalised in slice 3: `scripts/check-compose-image-digests.sh` now checks EVERY image in EVERY compose against an explicit repository allowlist, instead of asserting a single hardcoded image. An ingress (or any other) service added later fails the gate until it is digest-pinned AND its repository is deliberately approved. Verified by mutating a compose in both directions. |
 | T-05 | Medium | — | — | Owner accepted the residual append-only-mirror availability risk on 2026-07-27. Confirmed commitment plus on-chain root validation is considered sufficient for the current product; a rollback can stall witness service but cannot authorize custody loss. No code, test, infrastructure, or follow-up task is authorized. | **Won't Fix — accepted risk** |
 | T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | Open |
 | T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | Open |
@@ -149,7 +149,7 @@ turning the accepted fixes into a cutover-safe implementation.
 |---|---|---|---|---|
 | RD-01 | TEE oracle + operations | `remediation/tee-oracle-trust` | A versioned legacy/upgraded Pyth trust profile supports the 2026-08-18 cutover without a fail-open fallback. Hermes API credentials are encrypted deployment inputs, never logged, and missing/invalid auth pauses new trading. Legacy 13-of-19 and upgraded 3-of-5 fixtures are both explicit; no quorum is guessed from payload data. | Closed |
 | RD-03 | Operations docs | `remediation/tee-oracle-trust` | `deploy/docker-compose.gpu.yaml` no longer instructs operators to stop an H200. GPU and CPU lifecycle comments agree with `AGENTS.md` and `docs/gpu-tee-runbook.md`. | Closed |
-| DEP-AU-07 | TEE + ingress | `remediation/tee-transport-integrity` | The canonical AU-07 row remains in the earlier tracker. Before public exposure, enforce global and per-account/peer connection caps, bound unauthenticated login time, and prove a ping-only client cannot hold resources indefinitely. Update both trackers with the same PR and evidence. | Open — canonical row linked |
+| DEP-AU-07 | TEE | `remediation/tee-transport-integrity` | The canonical AU-07 row remains in the earlier tracker. Global and per-account connection caps enforced; the unauthenticated login window is now ABSOLUTE (no frame extends it), closing the ping-only hold. **Per-peer caps are deliberately NOT implemented** — behind the gateway every connection shares one apparent source address, so an IP-keyed cap would bound the whole venue while constraining no individual attacker; rationale recorded in `crates/darknyx-tee/src/api/conn_limit.rs`. Proven with a real bound server and a real WebSocket client (`tests/stream_conn_limits.rs`), and mutation-tested: disabling the deadline fails both ping tests. All 7 socket tests executed in the hosted `TEE` job (run `30336791498`, 6m26s), confirmed by name in the log rather than inferred from a green tick. | Closed |
 
 ## Recorded implementation decisions
 
@@ -253,8 +253,8 @@ turning the accepted fixes into a cutover-safe implementation.
 |---|---|---|---|---|---|---|
 | 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | Code complete / PR open | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
 | 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Closed / PR #79 | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
-| 3 | `remediation/tee-transport-integrity` | T-03, DEP-AU-07; enforce T-04 for new ingress image | Slice 2 code complete | Open / — | Compose hash and transport endpoint change; digest-pinned ingress image; governance/client pin rotation required. | Local compose validation, connection-cap tests, immutable ingress digest, real CVM HTTPS/WSS/API/attestation checks, plaintext-port negative, signer rotation and compose-hash evidence. |
-| 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Open / — | New versioned encrypted journal; no public wire change unless terminal restart reasons are surfaced. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
+| 3 | `remediation/tee-transport-integrity` | DEP-AU-07; T-04 enforcement; transport documentation correction. **T-03 deferred** | Slice 2 closed | Closed / PR #80 | **No compose change, no compose-hash rotation, no CVM, no ceremony.** Connection caps are code defaults; the digest guard is CI-only; the documentation corrections are text. Wire-visible additions only: a `503` on an over-capacity `/v1/stream` upgrade and error code `4290` on an over-cap login, both documented in the OpenAPI. | Real-socket connection-cap tests incl. the ping-only hold and its mutation test; digest-guard mutation test in both failure directions; OpenAPI parse; the standard local gate. |
+| 4 | `remediation/settlement-recovery` | T-06 | Slice 3 code complete (relaxed from "closed": slice 3 no longer closes T-03, and settlement recovery has no transport dependency) | Open / — | New versioned encrypted journal; no public wire change unless terminal restart reasons are surfaced. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | Open / — | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | Open / — | Versioned local keystore migration; v1 read/migrate only, all new writes v2. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
 | 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09 | Slice 6 closed | Open / — | SDK removal of dead exports; bounded internal FFI behavior. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep. No CVM required. |
@@ -269,7 +269,8 @@ hardening changes make it impossible to reconstruct.
 |---|---|---|
 | `tee-oracle-trust` | Checked unit conversion and signature-profile selection add negligible per-update CPU; batched feeds should reduce Hermes requests. Auth/freshness failure intentionally pauses matching and, after the explicit gate closes, place/modify. | Oracle refresh CPU and p50/p95 duration; requests per refresh for 1 and N feeds; conversion benchmark for equal/unequal decimals; time from last good update to matcher and intake pause. |
 | `local-assurance` | No protocol runtime cost; longer local/hosted validation. | Wall time and peak disk for the TEE, artifact-required, SBF, dependency, and complete local gates. |
-| `tee-transport-integrity` | TLS and connection accounting add handshake cost, request latency, memory per socket, and image size. | Cold/warm HTTP p50/p95, WebSocket connect/login/reconnect p50/p95, RSS per 1/100/limit sockets, CPU under ping-only abuse, and image-size delta. |
+| `tee-transport-integrity` (as shipped) | Connection accounting adds one atomic compare-and-swap per upgrade and one map update per login — not measurable against network cost. No TLS work shipped, so no handshake, latency, or image-size delta. | None required: the change adds no per-request work on any hot path. The caps' behaviour is pinned by tests rather than by a timing measurement. |
+| `tee-transport-integrity` (deferred T-03 transport work) | TLS termination adds handshake cost, request latency, memory per socket, and image size. | Cold/warm HTTP p50/p95, WebSocket connect/login/reconnect p50/p95, RSS per 1/100/limit sockets, CPU under ping-only abuse, and image-size delta. Capture in the CVM window that ships the transport change. |
 | `settlement-recovery` | Synchronous write-ahead journal adds durable-write latency and encrypted-disk traffic to settlement transitions. | Same-box no-journal baseline and journal p50/p95 per durable transition; end-to-end settle p50/p95; steady-state matched-pairs/s; bytes written per match; restart-to-reconciled duration. |
 | `order-canonical-next` | Removes one dead 32-byte field plus JSON hex/serialization work; no proving or on-chain cost. | Canonical preimage bytes, REST/WS request bytes, serialized order size, and placement p50/p95 before/after. |
 | `daemon-keystore-v2` | Deliberately increases unlock CPU/RAM; no trading hot-path cost after unlock. | v1/v2 unlock p50/p95, peak RSS, wrong-passphrase cost, migration duration, and resulting file size on supported client classes. |
@@ -324,6 +325,238 @@ Every remediation PR must add a section to this tracker containing:
   ceremony, split-governance rehearsal, recovery drill, deployed-program/image
   verification, and all gates in
   [`security-remediation-tracker.md`](security-remediation-tracker.md).
+
+## Slice 3 — `remediation/tee-transport-integrity`, 2026-07-28
+
+### What shipped, and why T-03's transport work did not
+
+The slice was scoped down deliberately. Three of its four parts had no dependency
+on the transport decision and shipped: the connection bounds (DEP-AU-07), the
+generalised image-digest gate (T-04 enforcement), and the documentation
+correction. The transport change itself is deferred to a mainnet gate.
+
+**The audit's rationale for T-03 was wrong and the correction changes the fix.**
+The finding says TLS terminating at the Phala gateway puts order intent "in the
+operator's process memory in cleartext". It does not. Per
+`phala-docs/phala-cloud/networking/security.mdx`, the gateway runs inside its own
+Intel TDX CVM, mutually attests with our CVM before any traffic flows, and
+carries it over WireGuard. The host operator cannot read gateway memory any more
+than they can read ours. What survives is narrower and still worth fixing: the
+client pins one measurement out of two, and the verified quote is not bound to
+the TLS session it arrived over.
+
+**The correct fix depends on a product decision that has not been made.** If
+clients stay programmatic (SDK + daemon), in-enclave RA-TLS with a self-signed,
+attestation-verified certificate is strictly right and needs no DNS at all. If a
+browser-facing client ever enters scope, browsers reject self-signed certificates
+regardless of attestation, forcing a CA-issued certificate, ACME, a DNS API, and
+the ingress sidecar. Building either now is a bet on that decision, and the wrong
+bet is discarded work.
+
+**Deferral is consistent with this tracker's own gating.** The release gates
+already place T-03 before external users or real-value deposits, not before
+merge. The deployment is devnet-only with no external users. What is NOT
+deferrable, and shipped here, is the documentation: `CRYPTOGRAPHY.md`, the
+attestation flow, the API roadmap, and four pages of the **published** GitBook
+portal all asserted that TLS terminates inside the Darknyx enclave, with
+`docs/gitbook/api/transport-and-attestation.md` going as far as "the TLS
+certificate Darknyx serves is bound to a key the enclave generated and holds".
+That is a false security claim in user-facing material. The audit called this
+option D and "mandatory immediately" if the real fix would not land first.
+
+### Trigger to resume T-03
+
+Take the transport work when ANY of these becomes true:
+
+1. the first external user, or any real-value deposit, is in prospect;
+2. a browser-based client enters scope (forces the ingress path); or
+3. the gateway's measurement becomes something we must pin contractually.
+
+### The two options, costed against the constraint each actually hits
+
+| | A — in-enclave RA-TLS | B — dstack-ingress sidecar |
+|---|---|---|
+| Transport | Self-signed cert, key from dstack `get_key()`, reached through the gateway's `s`-suffix TLS passthrough (`<app-id>-<port>s.dstack-…`) | Let's Encrypt cert on a custom domain, TLS terminated by the sidecar inside the CVM |
+| External prerequisites | **None** | A domain whose DNS is hosted at Cloudflare, Linode, or Namecheap, plus a DNS API token and `CERTBOT_EMAIL` as new encrypted secrets |
+| Attestation contract | **Breaking.** `report_data` is fully allocated — `[0..32]` caller nonce, `[32..64]` `SHA-256(signer set)`. Binding the certificate means extending the attested value to `SHA-256(pk_0 ‖ … ‖ pk_{K-1} ‖ spki)`, moving the SDK and daemon in lockstep | Unchanged; the sidecar publishes its own quote at `/evidences/` |
+| Trust boundary | The Darknyx binary's own measurement | The CVM, via a third-party image we do not build but must add to `compose_hash` |
+| Browser clients | Rejected (self-signed) | Supported |
+| Iteration hazard | None | Let's Encrypt allows **5 certificates per identifier set per week** — enough to lock out a redeploy loop mid-window |
+
+Note the tracker's earlier recorded decision ("ship the supported
+`dstack-ingress` sidecar first") predates two facts: the domain prerequisite, and
+that `report_data` has no free space. Neither option is obviously cheaper; A is
+less infrastructure and more code, B the reverse.
+
+### DNS migration playbook (prerequisite for option B only)
+
+The current domain is registered at GoDaddy, which is not one of the three
+providers dstack-ingress can drive and whose own DNS API is restricted. Only DNS
+*hosting* needs to move; the registrar can stay. Roughly half a day plus
+propagation:
+
+1. **Inventory the existing zone** — every A/AAAA/CNAME/MX/TXT record, especially
+   SPF, DKIM, DMARC, and any domain-verification TXT records.
+2. **Add the domain at the new provider.** Auto-import catches most records and
+   routinely misses MX and TXT. Diff against the inventory by hand; this is where
+   the outages come from.
+3. **Lower TTLs at the registrar** to ~300 s a day or two before the cutover so
+   rollback is fast.
+4. **Repoint the nameservers.**
+5. **Verify before declaring done.** Propagation takes hours (worst case ~48 h)
+   and **email is the highest-risk casualty** — send and receive a test message.
+6. **Then** configure the sidecar: a token scoped to that zone only,
+   `DOMAIN=api.<domain>`, `SET_CAA=true`. Use a **subdomain, never the apex** —
+   Cloudflare overrides apex CAA records, which silently breaks domain
+   attestation.
+
+Because the project's main website runs on this domain, step 4 has real blast
+radius. It is independent of Darknyx and can be done at any time.
+
+### When T-03 does resume: the window and ceremony
+
+Recorded now so it is not re-derived under time pressure.
+
+**Signer rotation is expected to be a no-op.** Slice 1 changed `compose_hash`
+(new image digest) and the signer set was unchanged — dstack derives the keys per
+`app_id`. Plan to *verify* the set against `vault_config.tee_pubkeys`, with
+rotation and re-funding as the contingency, not the default path.
+
+**Window sequence.** Pre-window and off the clock: merge the code, edit the
+compose, resolve and pin the digest, compute `compose_hash` locally, and
+allowlist it in the Phala dashboard. Then, in one window: reset the tree first so
+the mirror cold-boots empty → deploy with the env file (`umask 077`, shredded
+after) → confirm boot, certificate issuance, and the signer set → capture
+evidence → stop the CVM after confirming `resource.gpus` is 0.
+
+**Evidence to capture:** HTTPS and WSS end to end; attestation still verifying;
+the **plaintext-port negative** (`https://<app>-8080.dstack-…` must stop
+routing); cap enforcement under a ping-only client; the deferred cost-table row
+above; and one `cvm-settle-e2e` to prove no regression.
+
+**On the ceremony, state it accurately.** `docs/tee-attestation-flow.md` §5
+describes a 3-of-5 Squads ceremony with independent human verifiers. Devnet has
+one admin keypair. What a devnet window can execute is the *mechanics* —
+allowlist, deploy, verify the quote against the new `compose_hash`, confirm
+signers, update the client pin — as a **rehearsal**. It does not produce
+governance evidence, and should not be recorded as though it did. The real
+ceremony remains a mainnet gate.
+
+### DEP-AU-07 — what was actually wrong
+
+`/v1/stream` upgrades unauthenticated by design, and nothing bounded that state.
+The specific defect: `stream.rs` refreshed the idle timer on **any** frame,
+including a transport `Ping`, so a client that never logged in held a socket
+indefinitely by pinging. The 60 s idle timeout could never fire on it.
+
+The fix splits the two phases rather than making pings inert:
+
+* **Unauthenticated** — an ABSOLUTE 10 s window from socket open that no frame
+  extends. This is the only phase an anonymous peer controls.
+* **Authenticated** — the pre-existing idle timeout, still refreshed by any
+  frame. A market maker resting no orders is a legitimate idle session and must
+  not be disconnected; the counter-test
+  `an_authenticated_socket_survives_past_the_login_deadline` pins that, because a
+  fix that simply stopped pings from counting would break real clients while
+  passing the attack tests.
+
+Plus a venue-wide cap (refused pre-upgrade with `503` + `Retry-After`) and a
+per-account cap (refused at login with code `4290`). Both hand out RAII guards:
+a counter released at one tidy exit point leaks a slot on every early return,
+error, or panic, which turns a cap into a slow self-inflicted outage.
+
+**Per-peer caps are deliberately absent.** Traffic arrives through the gateway's
+WireGuard tunnel, so every connection shares one apparent source address. An
+IP-keyed cap would bound the entire venue at the per-IP limit while constraining
+no individual attacker — defence in appearance, outage in function. A trustworthy
+client address needs a proxy inside the CVM boundary setting a forwarded-for
+header we control end to end, which is the ingress path, which is deferred with
+T-03. Recorded in `conn_limit.rs` so it is not later mistaken for an oversight.
+
+### A second gate found not running at all
+
+Wiring the generalised digest guard surfaced a live hole in the CI paths filter.
+The two deployment guards (`check-compose-image-digests.sh` and
+`check-icicle-cuda-arch-env.sh`) run inside the `rust` job, but the `rust` filter
+matched only `programs/**`, `crates/**`, `Cargo.*`, and `rust-toolchain.toml`.
+
+So a pull request that touched **only** `deploy/docker-compose.yaml` — for
+instance replacing a digest with a mutable tag, which is exactly the T-04
+supply-chain hole the guard exists to catch — matched no filter, skipped the
+`rust` job, and merged with the compose gate never executed. The same held for a
+PR that weakened a guard script itself.
+
+Fixed by extending the `rust` filter to cover `deploy/**`, `Dockerfile*`, and
+both guard scripts. This is the third instance in three slices of the same
+underlying defect: **a gate that reports success because it never ran**. Worth
+stating as a rule — when adding a gate, check that the filter which decides
+whether it runs includes the gate's own inputs, not just the code it guards.
+
+### Tests, and the mutation checks that make them mean something
+
+`crates/darknyx-tee/tests/stream_conn_limits.rs` drives a **real bound server and
+a real WebSocket client**. That is not ceremony: the defect was that a
+*transport* ping refreshed the timer, and a transport ping never appears in the
+application frame enum the handler matches on. A test calling `handle_frame`
+directly could not have produced the bug and could not detect its return.
+
+| Check | Result |
+|---|---|
+| 7 socket tests + 7 registry unit tests | pass |
+| Mutation: disable the login deadline | both ping tests **fail**, other five stay green |
+| Mutation: second compose image pinned by tag | digest guard **rejects** |
+| Mutation: second image digest-pinned from an unapproved repo | digest guard **rejects** |
+| Compose restored byte-identical after mutation | confirmed via `git diff` |
+
+### Findings raised during slice-3 review
+
+Automated review of this PR raised five items. Four were valid and fixed here:
+
+- **The paths-filter fix was incomplete.** I added `deploy/**` and the guard
+  scripts but not `.github/workflows/pr-checks.yml` itself, so an edit weakening
+  a guard's invocation — or the filter — still would not have run the guards.
+  The `deps` filter already listed the workflow for the dependency gate; the
+  deployment guards needed the same. Fixed. Same defect as the one this slice
+  documented, one level up.
+- **A status contradiction I introduced.** The canonical AU-07 row's body said
+  "Closed 2026-07-28" while its status column said `Code complete`. The status
+  column was right; the body is now consistent with it.
+- **`bearer auth` listed as a traffic-analysis mitigation** in the
+  `CRYPTOGRAPHY.md` non-goals table. It is not one — it gates access and does
+  nothing for timing, size, or frequency. Pre-existing wording that this slice
+  should not have carried forward while correcting the row beside it. Now states
+  plainly that the threat is unmitigated.
+- **The digest guard rejected a validly-quoted image.** `image: "repo@sha256:…"`
+  is legal Compose, and the parser captured the quotes into the value, so a
+  correctly-pinned image failed the digest regex. Fail-closed rather than
+  fail-open, but it would have sent someone hunting a supply-chain problem that
+  did not exist. Quotes are now stripped; re-verified that a quoted MUTABLE tag
+  is still rejected, so the fix removes a false positive without widening what
+  passes.
+
+One was partly valid and partly a misread. The reviewer asked that a
+"certificate-binding claim" at `transport-and-attestation.md` L65-70 be removed —
+that range is the new warning callout, which already states the binding does NOT
+exist, so there was nothing to remove. Its other half was right and is fixed: the
+OpenAPI is the authoritative wire contract and now carries the same caveat, that
+verifying `/attestation` covers this service's measurement only and does not
+authenticate the TLS session it arrived over.
+
+Skipped: extending the digest guard to parse inline YAML mappings. Compose files
+do not express service images that way, and a full YAML parse in a bash CI guard
+buys no coverage for real inputs.
+
+### Status
+
+`DEP-AU-07` is **`Closed`**. Hosted run `30336791498` is green on every job
+(`Vercel` excluded — a stale integration the owner is removing; `Indexer`
+correctly skipped, no indexer paths changed). The seven socket tests and both
+deployment guards were verified BY NAME in the job logs, not inferred from the
+aggregate tick — the habit T-18 exists to enforce. `T-04` stays `Code
+complete` as a standing release invariant, now with an enforcement gate that
+actually inspects every image. `T-03` moves to `Deferred — mainnet gate` with the
+trigger above; it is also recorded in the mainnet gates of
+[`security-remediation-tracker.md`](security-remediation-tracker.md).
 
 ## Agent handoff template
 
@@ -390,6 +623,52 @@ Exact next action: merge the slice-1 PR, then start slice 2
   (remediation/local-assurance: T-08, T-11, T-12, T-13, T-15). Slice 2 needs no
   CVM. Note the tree is freshly reset, so the next leaf-count CVM test can run
   without another reset if it goes first.
+```
+
+## Agent handoff — 2026-07-28 (slice 3 closed)
+
+```text
+Last merged PR / main SHA: #80 / see main after merge
+Active branch / HEAD: merged; no active remediation branch
+Dirty or untracked files preserved: yes — third_party/{icicle-snark,rapidsnark}
+  working-tree edits untouched; every pre-existing untracked path (audit_1/,
+  dstack/, phala-docs/, circuits/build/*/verification_key.json, the .docx, etc.)
+  left exactly as found and never staged.
+Active slice and finding IDs: slice 3 — DEP-AU-07 (Closed), T-04 (Code complete,
+  standing invariant), T-03 (Deferred — mainnet gate)
+Invariant and compatibility decisions:
+  - Unauthenticated /v1/stream sockets get an ABSOLUTE 10 s window no frame
+    extends; authenticated sockets keep the idle timeout so legitimate quiet
+    sessions survive. Venue + per-account caps via RAII guards.
+  - Per-peer caps deliberately omitted: one apparent source address behind the
+    gateway makes an IP-keyed cap a venue-wide outage with no attacker cost.
+  - Every image in every compose must be digest-pinned AND from an allowlisted
+    repository. Adding a repository is the deliberate approval step.
+  - No compose change, so no compose_hash rotation and no ceremony.
+Commands run and exact results:
+  cargo fmt --check / clippy -D warnings          -> clean / zero warnings
+  cargo test --workspace                          -> 617 passed, 0 failed
+  REQUIRE_CIRCUIT_ARTIFACTS=1 cargo test -p darknyx-tee --tests -> green
+  cargo test -p darknyx-tee --test stream_conn_limits -> 7 passed
+  check-dependency-audits.sh                      -> PASSED, no new advisories
+  tsc sdk+indexer; vitest sdk 270 / daemon 147 / indexer 20 -> all pass
+  hosted CI run 30336791498                       -> every job green
+  mutation: deadline disabled -> 2 ping tests FAIL (as required)
+  mutation: tagged image / unapproved repo -> guard REJECTS both
+  mutation: quoted valid image -> ACCEPTED; quoted tag -> still REJECTED
+Live state: NO CVM used or started; billing untouched. Devnet unchanged —
+  no deploy, no tree reset, no signer rotation. Images still pinned at CPU
+  sha256:98f61dc3… / GPU sha256:eda803e3…; tree still fresh from slice 1.
+Evidence still missing: none for this slice. The transport cost-table row
+  (HTTP/WS p50/p95, RSS per socket, image-size delta) is deferred WITH T-03 and
+  should be captured in the CVM window that ships the transport change.
+Blockers: none.
+Exact next action: start slice 4 (`remediation/settlement-recovery`, T-06).
+  Its prerequisite was relaxed to "slice 3 code complete" and slice 3 is now
+  closed, so it is unblocked. Slice 4 needs NO CVM for its unit/crash-point
+  work; a CPU-CVM restart mid-settlement is required before it can close.
+  Do NOT reopen T-05. Do NOT start T-03's transport work without the product
+  decision on browser clients — the trigger list is in the slice-3 section.
 ```
 
 ## Findings raised during slice-1 review — 2026-07-27

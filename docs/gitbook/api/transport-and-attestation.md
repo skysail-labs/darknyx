@@ -8,41 +8,66 @@ description: "How HTTPS reaches the confidential VM and how a client verifies th
 {% hint style="info" %}
 **TL;DR**
 
-TLS terminates **inside the attested enclave**, with a certificate whose private
-key is generated in the VM and never leaves it. There is no separate gateway in
-the trust path and no in-band session-encryption envelope to negotiate. The TLS
-channel already reaches the measured code. Clients can **verify** they are
-talking to the real engine by checking the attestation quote against an expected
-image measurement.
+TLS terminates at the **dstack gateway**, which is itself an attested TDX
+confidential VM, and reaches the Darknyx engine over an encrypted, mutually
+attested tunnel. No ordinary server or cloud operator sees your order intent —
+but the trust path spans two enclaves, and today your client verifies the
+measurement of only one of them. There is no in-band session-encryption envelope
+to negotiate. Clients **verify** they are talking to the real engine by checking
+the attestation quote against an expected image measurement.
 {% endhint %}
 
 ## The trust boundary
 
-On many private venues, your connection terminates at a gateway or load balancer
-that sits *outside* the system's trust zone, and a separate in-band encryption
-handshake is layered inside TLS to defend against that gateway. Darknyx does not have
-that gap.
+On many private venues your connection terminates at a gateway or load balancer
+running as ordinary software, outside any hardware-protected boundary, and a
+separate in-band encryption handshake is layered inside TLS to defend against it.
+Darknyx does not have that gap — but the reason is more specific than "TLS
+terminates at the engine", and it is worth stating precisely.
 
-The TLS certificate Darknyx serves is bound to a key the enclave generated and holds.
-TLS therefore terminates *inside* the confidential VM, the same boundary that
-runs the matching engine. There is no intermediate hop that sees plaintext, so
-there is no need for a second encryption layer:
+TLS terminates at the **dstack gateway**. The gateway is not a conventional load
+balancer: it runs inside its own Intel TDX confidential VM, generates its
+certificate key inside that VM, and establishes a WireGuard tunnel to the Darknyx
+CVM only after the two mutually verify each other's attestation. Plaintext order
+intent therefore exists only inside hardware-protected memory, on both hops:
 
 ```text
-        TLS (key generated inside the enclave, never exported)
-client ───────────────────────────────────────────────► ┌───────────────┐
-                                                         │  Confidential │
-                  plaintext exists ONLY here ──────────► │  VM (enclave) │
-                                                         └───────────────┘
-        no gateway / load balancer in the trust path
+        TLS (key generated inside the gateway's TEE)
+client ──────────────────────────────► ┌─────────────┐   WireGuard,   ┌───────────────┐
+                                        │   dstack    │  mutually      │  Darknyx      │
+                     plaintext here ──► │  gateway    │  attested ───► │  CVM (engine) │
+                                        │  (TDX CVM)  │                └───────────────┘
+                                        └─────────────┘
+        no untrusted hop — but two measured boundaries, not one
 ```
 
 What this gives you:
 
-- **Confidentiality and integrity to the enclave.** Order intent is encrypted on
-  the wire and decrypted only inside the measured code.
+- **Confidentiality from the infrastructure operator.** Neither the host OS nor
+  the platform operator can read order intent at either hop; TDX memory
+  encryption prevents it.
 - **No extra handshake.** You use ordinary HTTPS and `wss://`; there is no
   `session.setup`, key-exchange, or rekey step to implement.
+
+{% hint style="warning" %}
+**What this does not yet give you**
+
+Two limits are worth knowing before you rely on the transport for anything of
+real value:
+
+- **You pin one measurement, not two.** The verification below covers the
+  Darknyx engine's image. Nothing in it covers the *gateway's* image, so that
+  component can change without any Darknyx governance event.
+- **The TLS session is not bound to the quote.** You fetch and verify a quote
+  *over* a TLS connection, but nothing cryptographically ties that connection's
+  certificate to the quote you verified.
+
+Closing both means terminating TLS inside the Darknyx enclave itself with an
+attestation-bound certificate. That work is tracked and gated ahead of external
+users and real-value deposits; it has not shipped. Earlier revisions of this page
+described it as though it had. Until it does, treat the transport as protected
+from the operator but resting on a second enclave you are not yet pinning.
+{% endhint %}
 
 ## Verifying the engine
 

@@ -8,18 +8,22 @@ description: "Where the Darknyx API lives, the common request and response conve
 {% hint style="info" %}
 **TL;DR**
 
-Every endpoint, REST and WebSocket, is served by the **same enclave gateway**
-over RA-TLS. There is no separate gateway tier in the trust path: TLS terminates
-inside the attested VM. Use the gateway origin for HTTPS and the same origin
-(swap the scheme to `wss://`) for WebSocket.
+Every endpoint, REST and WebSocket, is served over HTTPS from the **same
+origin**. TLS terminates at the dstack gateway — itself an attested confidential
+VM — which reaches the Darknyx engine over a mutually attested encrypted tunnel.
+Use the gateway origin for HTTPS and the same origin (swap the scheme to
+`wss://`) for WebSocket.
 {% endhint %}
 
 ## The gateway
 
-Darknyx is served directly by the confidential VM behind a TLS endpoint whose
-certificate key is generated inside the enclave and never leaves it (see
-[Transport & Attestation](./transport-and-attestation.md)). A single origin serves
-everything:
+Darknyx is reached through the dstack gateway, whose TLS certificate key is
+generated inside its own confidential VM. Traffic continues to the Darknyx CVM
+over a WireGuard tunnel established only after both sides verify each other's
+attestation — so the path is protected from the infrastructure operator end to
+end, across two measured boundaries rather than one. See
+[Transport & Attestation](./transport-and-attestation.md) for what that does and
+does not guarantee. A single origin serves everything:
 
 ```text
 HTTPS    https://<gateway-host>

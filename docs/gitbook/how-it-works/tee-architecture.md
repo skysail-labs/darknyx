@@ -27,8 +27,11 @@ Darknyx uses a confidential VM as the private execution environment:
 
 - encrypted memory limits what the host and infrastructure operator can inspect;
 - a hardware-signed quote identifies the software measurement and boot state;
-- TLS terminates inside the confidential deployment, so order intent is encrypted
-  up to the measured service;
+- TLS terminates at the dstack gateway, itself a confidential VM, which forwards
+  to the measured service over a mutually attested encrypted tunnel — so order
+  intent is never exposed to the infrastructure operator, though the path spans
+  two measured boundaries rather than one (see
+  [Transport & Attestation](../api/transport-and-attestation.md));
 - the service derives an ordered set of settlement signers, one per Merkle shard.
 
 This preserves the familiar order-entry experience while keeping custody and

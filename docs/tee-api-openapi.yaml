@@ -1939,11 +1939,36 @@ x-websocket:
     Served channels are `orders`, `fills` (per-account), and `tree` (global
     leaf-appends). Account snapshots and settlement status remain REST reads.
 
-    TLS terminates inside the confidential deployment. Verify `/evidences/*`
-    and `/attestation` before sending private order intent.
+    TLS terminates at the dstack gateway — itself an attested confidential VM —
+    which reaches this service over a mutually attested tunnel. Verify
+    `/attestation` before sending private order intent.
+
+    Two limits on what that verification proves today: it covers THIS service's
+    image measurement and not the gateway's, and it does not authenticate the
+    TLS session it was fetched over — nothing binds the quote to the connection's
+    certificate. Binding them requires terminating TLS inside this service with
+    an attestation-bound certificate, which is tracked and gated ahead of
+    external users (T-03), and has not shipped.
 
     Heartbeat: client sends `op: ping` every ≤30s; server
     responds with `op: pong`. Server drops sessions silent for >60s.
+
+    CONNECTION BOUNDS: the socket upgrades before you authenticate, so three
+    limits apply.
+
+      * **Unauthenticated window.** A socket that has not completed `login`
+        within 10 seconds of connecting is closed with code 1008. This window is
+        ABSOLUTE — pings and other frames do not extend it. Send `op: login`
+        first, then heartbeat.
+      * **Venue capacity.** When the service is at its concurrent-socket limit
+        the upgrade is refused with HTTP **503** and a `Retry-After` header,
+        before the WebSocket handshake completes. Retry with backoff.
+      * **Per-account concurrency.** A `login` that would exceed the account's
+        concurrent-stream limit is refused with error code **4290**; the socket
+        stays open but unauthenticated (and so is subject to the window above).
+        Close an existing stream and retry. Re-issuing `login` on an
+        already-authenticated socket to refresh a token does NOT consume an
+        additional slot.
 
   client_ops:
 

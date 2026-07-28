@@ -597,7 +597,11 @@ What we do NOT trust:
 
 - The cloud provider (GCP / Phala's hardware operator) — TDX
   hardware encryption prevents memory snooping.
-- The network — RA-TLS terminates inside the enclave.
+- The network — TLS terminates at the dstack gateway, itself an attested TDX
+  CVM that reaches this enclave over a mutually attested WireGuard tunnel, so no
+  unprotected hop carries plaintext. **In-enclave RA-TLS is not shipped** (T-03);
+  until it is, this line trusts the gateway's measurement, which no client
+  currently pins, and the TLS session is not bound to the quote.
 - An individual multisig signer — 3-of-5 threshold.
 - An individual KMS node — Phala's KMS uses multiple nodes (MPC
   capable).
