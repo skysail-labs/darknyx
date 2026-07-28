@@ -263,8 +263,44 @@ jobs:
       # and match the Rust VK constants in programs/vault/src/zk/vk_*.rs.
       # To update after a circuit change: run build-circuits.sh locally,
       # regenerate Rust VKs with parse-vk-to-rust.js, commit both.
+      # Circuit sources change rarely, but this job runs on every Rust PR (see
+      # the `if:` above) and gates the TEE job — so an uncached rebuild sits on
+      # the critical path of every slice. Keyed on the circom sources, the
+      # templates, the committed proving keys, and the build script itself: any
+      # of those changing must rebuild, nothing else should.
+      - name: Cache built circuit artefacts
+        id: cache-circuit-build
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: circuits/build
+          key: circuit-build-${{ runner.os }}-${{ hashFiles('circuits/*/circuit.circom', 'circuits/templates/*.circom', 'circuits/build/*/circuit_final.zkey', 'scripts/ci-build-circuits.sh') }}
+
       - name: Build circuits (wasm only; zkeys from repo)
+        if: steps.cache-circuit-build.outputs.cache-hit != 'true'
         run: bash scripts/ci-build-circuits.sh
+
+      # A cache hit must still produce everything downstream consumes. Checked
+      # explicitly rather than trusted: a partial restore would let the TEE job
+      # start and fail deep inside a proof test instead of here.
+      - name: Verify restored artefacts are complete
+        if: steps.cache-circuit-build.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          missing=0
+          for d in circuits/build/*/; do
+            name=$(basename "$d")
+            for f in circuit_js/circuit.wasm circuit_final.zkey circuit.r1cs; do
+              if [ ! -f "$d$f" ]; then
+                echo "MISSING $d$f" >&2
+                missing=1
+              fi
+            done
+          done
+          test "$missing" = 0 || {
+            echo "restored circuit cache is incomplete — rebuilding is safer than proceeding" >&2
+            exit 1
+          }
+          echo "restored circuit artefacts complete"
 
       # Upload the build output for the sdk job. Only the artefacts the
       # prover tests actually consume: `.wasm` and `.zkey`. We don't
@@ -784,13 +820,12 @@ jobs:
           name: circuit-build
           path: circuits/build
 
-      # Split from the artifact-backed tests below so a slow proving test is
-      # separately identifiable in the job log rather than hidden inside one
-      # opaque invocation.
-      - name: darknyx-tee lib tests (fast)
-        run: cargo test -p darknyx-tee --lib
-
-      - name: darknyx-tee integration tests (artifact-required)
+      # NOTE: there is deliberately no separate `--lib` step. `cargo test
+      # --tests` already builds and runs the lib unit-test target, so a split
+      # step re-ran all ~353 of them a second time (~25 s of pure duplication,
+      # visible as two identical "353 passed" lines in the job log). The lib
+      # tests are still individually identifiable in the output below.
+      - name: darknyx-tee lib + integration tests (artifact-required)
         env:
           # A missing circuit artifact must FAIL here, never skip. See T-12.
           REQUIRE_CIRCUIT_ARTIFACTS: "1"

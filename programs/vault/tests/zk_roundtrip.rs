@@ -107,7 +107,12 @@ fn valid_wallet_create_roundtrip() {
     let user_commitment = poseidon_hash(&[Fr::from(14u64), leaf_root, viewing_hash]).unwrap();
 
     // Write input.json for snarkjs (all values decimal strings).
-    let tmp = std::env::temp_dir().join("darknyx_wc_roundtrip");
+    // Per-process scratch dir. A FIXED name is safe only while exactly one
+    // test ever uses it in one process; it breaks silently the moment a second
+    // test is added here, or under a per-test-process runner like
+    // `cargo nextest`, where two processes would share the path and clobber each
+    // other's proof.json. Matches the pid convention in merge_verify.rs.
+    let tmp = std::env::temp_dir().join(format!("darknyx_wc_roundtrip_{}", std::process::id()));
     fs::create_dir_all(&tmp).unwrap();
     let input_path = tmp.join("input.json");
     let _witness_path = tmp.join("witness.wtns");

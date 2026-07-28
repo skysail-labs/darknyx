@@ -215,6 +215,19 @@ bincode                  = "1"
 # in half while keeping full debuginfo for our own workspace crates, so
 # backtraces through Darknyx code are unaffected. (See README / dev-commands
 # for the periodic `cargo clean`/`cargo-sweep` GC story.)
+[profile.dev]
+# Workspace crates build ~48 test binaries across the repo, and full debug info
+# (rustc's `debug = 2` default) dominates both codegen and link time for every
+# one of them. Line tables keep panic backtraces and test-failure locations —
+# everything a test run actually consumes — and drop only the DWARF a
+# step-debugger would want.
+#
+# Measured 2026-07-29: incremental rebuild + link of all test binaries after
+# touching one source file, 19.35s -> 6.94s (-64%). If you need full debug info
+# for a debugger session, override locally with
+# `CARGO_PROFILE_DEV_DEBUG=2 cargo test ...` rather than editing this.
+debug = "line-tables-only"
+
 [profile.dev.package."*"]
 debug = false
 

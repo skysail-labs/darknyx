@@ -170,7 +170,15 @@ fn test_user_commitment_registration() {
     );
     let root = common::repo_root();
     let build = root.join("circuits/build/valid_wallet_create");
-    let tmp = std::env::temp_dir().join("darknyx_user_commit_registration");
+    // Per-process scratch dir. A FIXED name is safe only while exactly one
+    // test ever uses it in one process; it breaks silently the moment a second
+    // test is added here, or under a per-test-process runner like
+    // `cargo nextest`, where two processes would share the path and clobber each
+    // other's proof.json. Matches the pid convention in merge_verify.rs.
+    let tmp = std::env::temp_dir().join(format!(
+        "darknyx_user_commit_registration_{}",
+        std::process::id()
+    ));
     let (proof, public_inputs) = common::snarkjs_fullprove(&input_json, &build, &tmp);
     assert_eq!(public_inputs.len(), 1);
     let commitment_bytes: [u8; 32] = fr_to_be_bytes(&uc);

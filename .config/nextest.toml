@@ -1,0 +1,39 @@
+# cargo-nextest configuration.
+#
+# nextest is the FAST path for the local gate; `cargo test` remains correct and
+# is what CI runs today. Measured 2026-07-29 on 8 cores, already-compiled:
+#   cargo test --workspace        266.1 s
+#   cargo nextest run --workspace 155.6 s   (-41%)
+#
+# The win is cross-BINARY parallelism — `cargo test` already threads within a
+# binary but runs the ~48 binaries one after another. That also means the
+# advantage shrinks with core count: on a 2-core CI runner expect far less than
+# 41%, which is why CI has not switched.
+#
+# COVERAGE CAVEAT: nextest does not run doctests. The workspace currently has
+# ZERO executable doctests (`cargo test --workspace --doc` → 0 tests), so
+# nothing is lost. `scripts/check-no-doctests.sh` fails the gate if that ever
+# stops being true, so a doctest cannot be added and silently skipped.
+
+[profile.default]
+# Each test is its own PROCESS, so anything the test loads is loaded per test
+# rather than once per binary. Around 50 tests in this workspace load Groth16
+# proving keys, and `match_batch_n16/circuit_final.zkey` alone is 97 MB — enough
+# concurrent copies will exhaust a small runner. Capping at the physical core
+# count keeps peak RSS bounded to roughly (cores x working set) instead of
+# (nextest's default oversubscription x working set).
+test-threads = "num-cpus"
+
+# Surface a test that has become pathologically slow rather than letting it hide
+# inside a green run. This only WARNS at the period; it does not fail.
+slow-timeout = { period = "30s", terminate-after = 8 }
+
+# A test that hangs would otherwise hold the whole run to the job timeout.
+# 8 x 30 s = 4 min ceiling, comfortably above the slowest real test (the N=16
+# proving round-trip, ~39 s) while still bounding a genuine hang.
+
+[[profile.default.overrides]]
+# The proof-generation tests are legitimately slow and memory-heavy; do not let
+# the slow-test warning cry wolf on them every run.
+filter = 'test(/prove|n16|roundtrip/)'
+slow-timeout = { period = "120s", terminate-after = 4 }
