@@ -51,12 +51,12 @@ the first stop for an agent resuming the work.
 | Field | Current value |
 |---|---|
 | Last verified `main` | `f7a1530` (slice 2 closed; PR #79 merged) |
-| Last merged remediation PR | #79 — slice 2 (`local-assurance`), merged 2026-07-28 |
-| Active slice | slice 3 (`remediation/tee-transport-integrity`) — **scope reduced**: DEP-AU-07 + T-04 enforcement + the transport documentation correction. T-03's transport work is deferred to a mainnet gate; see the slice-3 section. |
-| Active branch / PR | `remediation/tee-transport-integrity` |
+| Last merged remediation PR | #80 — slice 3 (`tee-transport-integrity`), merged 2026-07-28 |
+| Active slice | none — slice 3 closed. Its scope was reduced to DEP-AU-07 + T-04 enforcement + the transport documentation correction; T-03's transport work is deferred to a mainnet gate (see the slice-3 section). |
+| Active branch / PR | merged (PR #80) |
 | Next slice | `remediation/settlement-recovery` (slice 4) |
 | Live state | **No CVM running; billing halted — slice 3 as scoped needs none.** Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-28 (slice 3 in progress) |
+| Last updated | 2026-07-28 (slice 3 closed) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -149,7 +149,7 @@ turning the accepted fixes into a cutover-safe implementation.
 |---|---|---|---|---|
 | RD-01 | TEE oracle + operations | `remediation/tee-oracle-trust` | A versioned legacy/upgraded Pyth trust profile supports the 2026-08-18 cutover without a fail-open fallback. Hermes API credentials are encrypted deployment inputs, never logged, and missing/invalid auth pauses new trading. Legacy 13-of-19 and upgraded 3-of-5 fixtures are both explicit; no quorum is guessed from payload data. | Closed |
 | RD-03 | Operations docs | `remediation/tee-oracle-trust` | `deploy/docker-compose.gpu.yaml` no longer instructs operators to stop an H200. GPU and CPU lifecycle comments agree with `AGENTS.md` and `docs/gpu-tee-runbook.md`. | Closed |
-| DEP-AU-07 | TEE | `remediation/tee-transport-integrity` | The canonical AU-07 row remains in the earlier tracker. Global and per-account connection caps enforced; the unauthenticated login window is now ABSOLUTE (no frame extends it), closing the ping-only hold. **Per-peer caps are deliberately NOT implemented** — behind the gateway every connection shares one apparent source address, so an IP-keyed cap would bound the whole venue while constraining no individual attacker; rationale recorded in `crates/darknyx-tee/src/api/conn_limit.rs`. Proven with a real bound server and a real WebSocket client (`tests/stream_conn_limits.rs`), and mutation-tested: disabling the deadline fails both ping tests. | Code complete — awaiting hosted CI |
+| DEP-AU-07 | TEE | `remediation/tee-transport-integrity` | The canonical AU-07 row remains in the earlier tracker. Global and per-account connection caps enforced; the unauthenticated login window is now ABSOLUTE (no frame extends it), closing the ping-only hold. **Per-peer caps are deliberately NOT implemented** — behind the gateway every connection shares one apparent source address, so an IP-keyed cap would bound the whole venue while constraining no individual attacker; rationale recorded in `crates/darknyx-tee/src/api/conn_limit.rs`. Proven with a real bound server and a real WebSocket client (`tests/stream_conn_limits.rs`), and mutation-tested: disabling the deadline fails both ping tests. All 7 socket tests executed in the hosted `TEE` job (run `30336791498`, 6m26s), confirmed by name in the log rather than inferred from a green tick. | Closed |
 
 ## Recorded implementation decisions
 
@@ -253,7 +253,7 @@ turning the accepted fixes into a cutover-safe implementation.
 |---|---|---|---|---|---|---|
 | 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | Code complete / PR open | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
 | 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Closed / PR #79 | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
-| 3 | `remediation/tee-transport-integrity` | DEP-AU-07; T-04 enforcement; transport documentation correction. **T-03 deferred** | Slice 2 closed | In progress / — | **No compose change, no compose-hash rotation, no CVM, no ceremony.** Connection caps are code defaults; the digest guard is CI-only; the documentation corrections are text. Wire-visible additions only: a `503` on an over-capacity `/v1/stream` upgrade and error code `4290` on an over-cap login, both documented in the OpenAPI. | Real-socket connection-cap tests incl. the ping-only hold and its mutation test; digest-guard mutation test in both failure directions; OpenAPI parse; the standard local gate. |
+| 3 | `remediation/tee-transport-integrity` | DEP-AU-07; T-04 enforcement; transport documentation correction. **T-03 deferred** | Slice 2 closed | Closed / PR #80 | **No compose change, no compose-hash rotation, no CVM, no ceremony.** Connection caps are code defaults; the digest guard is CI-only; the documentation corrections are text. Wire-visible additions only: a `503` on an over-capacity `/v1/stream` upgrade and error code `4290` on an over-cap login, both documented in the OpenAPI. | Real-socket connection-cap tests incl. the ping-only hold and its mutation test; digest-guard mutation test in both failure directions; OpenAPI parse; the standard local gate. |
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 code complete (relaxed from "closed": slice 3 no longer closes T-03, and settlement recovery has no transport dependency) | Open / — | New versioned encrypted journal; no public wire change unless terminal restart reasons are surfaced. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | Open / — | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | Open / — | Versioned local keystore migration; v1 read/migrate only, all new writes v2. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
@@ -548,8 +548,11 @@ buys no coverage for real inputs.
 
 ### Status
 
-`DEP-AU-07` is at `Code complete`, moving to `Closed` when the hosted CI run
-passes — the same discipline slice 2 applied to T-11. `T-04` stays `Code
+`DEP-AU-07` is **`Closed`**. Hosted run `30336791498` is green on every job
+(`Vercel` excluded — a stale integration the owner is removing; `Indexer`
+correctly skipped, no indexer paths changed). The seven socket tests and both
+deployment guards were verified BY NAME in the job logs, not inferred from the
+aggregate tick — the habit T-18 exists to enforce. `T-04` stays `Code
 complete` as a standing release invariant, now with an enforcement gate that
 actually inspects every image. `T-03` moves to `Deferred — mainnet gate` with the
 trigger above; it is also recorded in the mainnet gates of
@@ -620,6 +623,52 @@ Exact next action: merge the slice-1 PR, then start slice 2
   (remediation/local-assurance: T-08, T-11, T-12, T-13, T-15). Slice 2 needs no
   CVM. Note the tree is freshly reset, so the next leaf-count CVM test can run
   without another reset if it goes first.
+```
+
+## Agent handoff — 2026-07-28 (slice 3 closed)
+
+```text
+Last merged PR / main SHA: #80 / see main after merge
+Active branch / HEAD: merged; no active remediation branch
+Dirty or untracked files preserved: yes — third_party/{icicle-snark,rapidsnark}
+  working-tree edits untouched; every pre-existing untracked path (audit_1/,
+  dstack/, phala-docs/, circuits/build/*/verification_key.json, the .docx, etc.)
+  left exactly as found and never staged.
+Active slice and finding IDs: slice 3 — DEP-AU-07 (Closed), T-04 (Code complete,
+  standing invariant), T-03 (Deferred — mainnet gate)
+Invariant and compatibility decisions:
+  - Unauthenticated /v1/stream sockets get an ABSOLUTE 10 s window no frame
+    extends; authenticated sockets keep the idle timeout so legitimate quiet
+    sessions survive. Venue + per-account caps via RAII guards.
+  - Per-peer caps deliberately omitted: one apparent source address behind the
+    gateway makes an IP-keyed cap a venue-wide outage with no attacker cost.
+  - Every image in every compose must be digest-pinned AND from an allowlisted
+    repository. Adding a repository is the deliberate approval step.
+  - No compose change, so no compose_hash rotation and no ceremony.
+Commands run and exact results:
+  cargo fmt --check / clippy -D warnings          -> clean / zero warnings
+  cargo test --workspace                          -> 617 passed, 0 failed
+  REQUIRE_CIRCUIT_ARTIFACTS=1 cargo test -p darknyx-tee --tests -> green
+  cargo test -p darknyx-tee --test stream_conn_limits -> 7 passed
+  check-dependency-audits.sh                      -> PASSED, no new advisories
+  tsc sdk+indexer; vitest sdk 270 / daemon 147 / indexer 20 -> all pass
+  hosted CI run 30336791498                       -> every job green
+  mutation: deadline disabled -> 2 ping tests FAIL (as required)
+  mutation: tagged image / unapproved repo -> guard REJECTS both
+  mutation: quoted valid image -> ACCEPTED; quoted tag -> still REJECTED
+Live state: NO CVM used or started; billing untouched. Devnet unchanged —
+  no deploy, no tree reset, no signer rotation. Images still pinned at CPU
+  sha256:98f61dc3… / GPU sha256:eda803e3…; tree still fresh from slice 1.
+Evidence still missing: none for this slice. The transport cost-table row
+  (HTTP/WS p50/p95, RSS per socket, image-size delta) is deferred WITH T-03 and
+  should be captured in the CVM window that ships the transport change.
+Blockers: none.
+Exact next action: start slice 4 (`remediation/settlement-recovery`, T-06).
+  Its prerequisite was relaxed to "slice 3 code complete" and slice 3 is now
+  closed, so it is unblocked. Slice 4 needs NO CVM for its unit/crash-point
+  work; a CPU-CVM restart mid-settlement is required before it can close.
+  Do NOT reopen T-05. Do NOT start T-03's transport work without the product
+  decision on browser clients — the trigger list is in the slice-3 section.
 ```
 
 ## Findings raised during slice-1 review — 2026-07-27
