@@ -142,13 +142,26 @@ pub struct JournalEntry {
     /// collateral frozen behind a lock the enclave can no longer use.
     pub buyer_lock: LockSideInputs,
     pub seller_lock: LockSideInputs,
-    /// Position within the batch — selects the Merkle inclusion path.
-    pub match_index: u8,
     /// Batch Merkle root — derives the `BatchValidityMarker` PDA.
+    ///
+    /// `match_idx` above doubles as the position-in-batch that selects the
+    /// Merkle inclusion path; they were previously two fields holding the same
+    /// value, which is a redundant invariant an on-disk schema should not
+    /// encode. If the two ever need to differ, add the second field back
+    /// deliberately rather than letting them drift.
     pub batch_root: Option<[u8; 32]>,
     /// Slot after which the notes' locks expire and are permissionlessly
-    /// releasable. Bounds how long recovery may redrive.
+    /// releasable.
     pub lock_expiry_slot: u64,
+    /// `BatchValidityMarker` expiry, known only once `verify_match_batch`
+    /// lands. `None` means verify never landed, so no marker PDA exists and
+    /// there is nothing a redrive could settle against.
+    ///
+    /// This is the BINDING bound, not the lock expiry: the marker TTL is 300
+    /// slots (~2 min) against the lock's ~30 min, and `tee_forced_settle_batched`
+    /// reads the marker. Recovery that considered only the lock would authorise
+    /// redrives that revert on the marker check.
+    pub marker_expiry_slot: Option<u64>,
     /// Signatures, each written BEFORE its transaction is submitted.
     pub lock_buyer_sig: Option<String>,
     pub lock_seller_sig: Option<String>,
@@ -220,6 +233,26 @@ impl SettleJournal {
         };
         let path = dir.join(JOURNAL_DB_FILE);
         let load = read_snapshot(&path);
+        // A damaged file is the only thing an operator has to investigate with,
+        // and the very next batch would rename a fresh snapshot over it. Move it
+        // aside first so the new journal starts clean WITHOUT destroying the
+        // evidence that just paged someone — including the partially-decodable
+        // bytes of the realistic power-loss case.
+        if let JournalLoad::Damaged { .. } = &load {
+            let aside = dir.join(format!("{JOURNAL_DB_FILE}.damaged-{}", now_unix_ms()));
+            match std::fs::rename(&path, &aside) {
+                Ok(()) => tracing::error!(
+                    preserved = %aside.display(),
+                    "damaged settle journal moved aside for investigation"
+                ),
+                Err(e) => tracing::error!(
+                    error = %e,
+                    path = %path.display(),
+                    "could not preserve the damaged settle journal; the next write \
+                     will overwrite it"
+                ),
+            }
+        }
         let entries = match &load {
             JournalLoad::Recovered(v) => v.iter().map(|e| (e.key(), e.clone())).collect(),
             _ => BTreeMap::new(),
@@ -425,9 +458,9 @@ mod tests {
             payload: payload(match_idx),
             buyer_lock: lock_side(0xA1, 0x01),
             seller_lock: lock_side(0xB1, 0x02),
-            match_index: match_idx,
             batch_root: Some([0xAB; 32]),
             lock_expiry_slot: 1_000,
+            marker_expiry_slot: Some(1_000),
             lock_buyer_sig: None,
             lock_seller_sig: None,
             verify_sig: None,
@@ -600,6 +633,41 @@ mod tests {
             }
             other => panic!("expected Damaged, got {other:?}"),
         }
+    }
+
+    /// A damaged journal is the only artefact an operator has to investigate
+    /// with, and the very next batch would rename a fresh snapshot over it.
+    #[test]
+    fn a_damaged_journal_is_preserved_instead_of_being_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(JOURNAL_DB_FILE);
+        std::fs::write(&path, b"corrupt bytes worth keeping").unwrap();
+
+        let (mut j, load) = SettleJournal::open(Some(dir.path()));
+        assert!(matches!(load, JournalLoad::Damaged { .. }));
+
+        // The next write must not destroy the evidence.
+        j.record(entry(1, 0, JournalStage::Prepared)).unwrap();
+
+        let preserved: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".damaged-"))
+            .collect();
+        assert_eq!(
+            preserved.len(),
+            1,
+            "the corrupt file must be moved aside, found: {preserved:?}"
+        );
+        let kept = std::fs::read(dir.path().join(&preserved[0])).unwrap();
+        assert_eq!(
+            kept, b"corrupt bytes worth keeping",
+            "the preserved copy must be the original bytes, not a rewrite"
+        );
+        // And the live journal is usable again.
+        let (reopened, _) = SettleJournal::open(Some(dir.path()));
+        assert_eq!(reopened.len(), 1);
     }
 
     #[test]

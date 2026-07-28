@@ -672,6 +672,56 @@ One test was corrected rather than the code: `resume_for` reports whether the
 WHOLE gate opened, not whether a bit cleared, so an early assertion misread the
 API. The gate was right.
 
+### Findings raised during slice-4 review
+
+Automated review raised seven items and **all seven were valid**. Two would have
+made the CVM window produce misleading evidence, which is the strongest argument
+yet for running review before spending a window rather than after.
+
+- **`batch_id` is boot-relative, so a new batch would overwrite recovered
+  entries.** The scheduler assigns `batch_id` from 0 on every process start, so
+  the journal key `(batch_id, match_idx)` does not survive a restart: the first
+  new batch after recovery is batch 0 and `journal_batch_start` would overwrite
+  the recovered batch-0 records — destroying a record while a settle may still be
+  outstanding. Fixed by draining the journal at the end of the recovery pass,
+  which removes the collision rather than papering over it.
+- **Recovered entries were classified and logged but never retired.** An
+  `AlreadySettled` entry — the common case — stayed on disk forever, so
+  `/admin/drain` counted it as in-flight and `safe_to_stop` would never again
+  become true on any instance that had ever recovered. Same fix.
+- **The redrive deadline used the lock expiry alone.** The binding bound is the
+  `BatchValidityMarker`, whose TTL is 300 slots (~2 min) against the lock's
+  ~30 min, and which `tee_forced_settle_batched` reads. By the time a CVM has
+  restarted the marker is usually dead while the lock is still live, so recovery
+  would have classified as `Redrive` batches whose every redrive reverts. Now
+  journals `marker_expiry_slot` and takes the min, mirroring
+  `worker::settlement_deadline`. `None` (verify never landed) means no marker PDA
+  exists and nothing to redrive against.
+- **A damaged journal kept a live path, so the next write destroyed the
+  evidence.** The boot logs "investigate before trusting settle state" and then
+  the next batch renamed a fresh snapshot over the corrupt file — including the
+  partially-decodable bytes of the realistic power-loss case. Now moved aside as
+  `settle_journal.db.damaged-<ts>` before the new journal starts.
+- **`match_idx` and `match_index` held the same value with different meanings**,
+  permanently encoding a redundant invariant into an on-disk schema. Dropped.
+- **`GatheredChain` implemented `ChainView` with a stub** answering
+  `Inconsistent` for every input. Any future `decide(e, &gathered)` would have
+  compiled and silently routed the whole journal to an operator. The impl is gone;
+  `EntryChain` is the only `ChainView`.
+- **A gate test passed without exercising its claim.** It asserted that a
+  governance resume cannot open a draining gate, but never paused governance — so
+  `resume()` returned `false` because the bit was never set, not because the drain
+  blocked it. Same defect class this remediation keeps finding, this time in code
+  written during it.
+
+`is_redrivable` is now folded into `decide` rather than left to each caller, and
+the `Redrive` log states plainly that **this build performs no automatic
+redrive** — the previous wording read as though a resubmission were coming.
+
+Four new tests pin the fixes: a dead marker releasing while the lock is live, an
+entry that never verified, an unrebuildable entry released by `decide` itself,
+and a damaged journal preserved rather than overwritten.
+
 ### Status — and what the CVM window must produce
 
 `T-06` is **`Code complete`**. The remaining obligations are live-only:

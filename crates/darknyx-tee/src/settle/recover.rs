@@ -133,14 +133,31 @@ pub fn decide(entry: &JournalEntry, chain: &impl ChainView) -> RecoveryAction {
                     };
                 }
             }
+            // The BINDING deadline is the earlier of the marker expiry and the
+            // two locks — mirroring `worker::settlement_deadline`, because Tx D
+            // reads the marker. The marker TTL is 300 slots (~2 min) against the
+            // lock's ~30 min, so considering only the lock would classify as
+            // `Redrive` a batch whose marker died long before the CVM finished
+            // restarting, and every redrive it authorised would revert.
+            //
+            // No marker expiry at all means `verify_match_batch` never landed,
+            // so no marker PDA exists and there is nothing to settle against.
+            let deadline = match entry.marker_expiry_slot {
+                Some(marker) => marker.min(entry.lock_expiry_slot),
+                None => 0,
+            };
             let now = chain.current_slot();
-            if now < entry.lock_expiry_slot {
+            // `is_redrivable` folded in here rather than left to each caller to
+            // remember: an entry with no batch root cannot be rebuilt, and a
+            // caller that forgot to ask would redrive in a loop that can never
+            // succeed.
+            if now < deadline && is_redrivable(entry) {
                 RecoveryAction::Redrive {
-                    deadline_slot: entry.lock_expiry_slot,
+                    deadline_slot: deadline,
                 }
             } else {
                 RecoveryAction::ReleaseExpired {
-                    expired_at_slot: entry.lock_expiry_slot,
+                    expired_at_slot: deadline,
                 }
             }
         }
@@ -224,12 +241,12 @@ struct GatheredChain {
     slot: u64,
 }
 
-impl ChainView for GatheredChain {
-    fn consumed_state(&self, _a: &[u8; 32], _b: &[u8; 32]) -> ConsumedState {
-        // Unused: `decide` is driven through `keyed` below, which resolves per
-        // entry. Kept to satisfy the trait for the gathered view.
-        ConsumedState::Inconsistent
-    }
+impl GatheredChain {
+    // Deliberately NOT a `ChainView`. An impl here would need a
+    // `consumed_state` that cannot answer per entry, and the only honest stub
+    // returns `Inconsistent` for everything — which would compile fine at any
+    // future `decide(e, &gathered)` call site and silently route the entire
+    // journal to an operator. `EntryChain` is the only `ChainView`.
     fn signature_confirmed(&self, signature: &str) -> Option<bool> {
         self.confirmed.get(signature).copied()
     }
@@ -416,9 +433,9 @@ mod tests {
             payload: payload(),
             buyer_lock: lock_side(0xA1),
             seller_lock: lock_side(0xB1),
-            match_index: 0,
             batch_root: Some([0xAB; 32]),
             lock_expiry_slot: expiry,
+            marker_expiry_slot: Some(1_000),
             lock_buyer_sig: None,
             lock_seller_sig: None,
             verify_sig: None,
@@ -541,6 +558,65 @@ mod tests {
             RecoveryAction::Redrive {
                 deadline_slot: 1_000
             }
+        );
+    }
+
+    /// THE finding CodeRabbit caught: the marker expiry, not the lock, is the
+    /// binding bound. The marker TTL is 300 slots (~2 min) against the lock's
+    /// ~30 min, so by the time a CVM has restarted the marker is usually dead
+    /// while the lock is still live. Classifying on the lock alone would
+    /// authorise redrives that revert on the marker check.
+    #[test]
+    fn a_dead_marker_releases_even_while_the_lock_is_still_live() {
+        let chain = FakeChain {
+            consumed: ConsumedState::NeitherConsumed,
+            sig_confirmed: None,
+            slot: 900,
+        };
+        let mut e = entry(JournalStage::Settling, None, 100_000);
+        e.marker_expiry_slot = Some(800); // marker died at 800; lock lives to 100_000
+        assert_eq!(
+            decide(&e, &chain),
+            RecoveryAction::ReleaseExpired {
+                expired_at_slot: 800
+            },
+            "the marker is the binding bound; a live lock does not make a dead \
+             batch settleable"
+        );
+    }
+
+    /// No marker expiry means `verify_match_batch` never landed, so no marker
+    /// PDA exists and there is nothing for a redrive to settle against.
+    #[test]
+    fn an_entry_that_never_verified_is_never_redrivable() {
+        let chain = FakeChain {
+            consumed: ConsumedState::NeitherConsumed,
+            sig_confirmed: None,
+            slot: 1,
+        };
+        let mut e = entry(JournalStage::Locking, None, 100_000);
+        e.marker_expiry_slot = None;
+        assert!(
+            matches!(decide(&e, &chain), RecoveryAction::ReleaseExpired { .. }),
+            "without a marker there is nothing to redrive against"
+        );
+    }
+
+    /// `is_redrivable` is folded into `decide`, so a caller cannot forget to ask
+    /// and send recovery into a redrive loop that can never succeed.
+    #[test]
+    fn an_entry_without_a_batch_root_is_released_by_decide_itself() {
+        let chain = FakeChain {
+            consumed: ConsumedState::NeitherConsumed,
+            sig_confirmed: None,
+            slot: 1,
+        };
+        let mut e = entry(JournalStage::Settling, None, 100_000);
+        e.marker_expiry_slot = Some(100_000);
+        e.batch_root = None;
+        assert!(
+            matches!(decide(&e, &chain), RecoveryAction::ReleaseExpired { .. }),
+            "decide must not classify an unrebuildable entry as Redrive"
         );
     }
 

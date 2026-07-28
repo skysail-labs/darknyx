@@ -305,9 +305,11 @@ fn journal_entry_for(
         payload: m.payload.clone(),
         buyer_lock: m.buyer_lock.clone(),
         seller_lock: m.seller_lock.clone(),
-        match_index: m.match_index,
         batch_root: Some(batch_root),
         lock_expiry_slot: m.buyer_lock.expiry_slot.min(m.seller_lock.expiry_slot),
+        // Unknown until `verify_match_batch` lands; filled in at the settle
+        // write point below.
+        marker_expiry_slot: None,
         lock_buyer_sig: None,
         lock_seller_sig: None,
         verify_sig: None,
@@ -351,6 +353,7 @@ async fn journal_settle_attempt(
     batch_id: u64,
     match_idx: u8,
     signature: Option<String>,
+    marker_expiry_slot: u64,
 ) {
     let mut j = ctx.journal.lock().await;
     let Some(mut entry) = j.get(batch_id, match_idx).cloned() else {
@@ -358,6 +361,9 @@ async fn journal_settle_attempt(
     };
     entry.stage = JournalStage::Settling;
     entry.settle_sig = signature;
+    // Now known (verify landed) and it is the binding redrive bound — the
+    // marker TTL is ~300 slots against the lock's ~30 min.
+    entry.marker_expiry_slot = Some(marker_expiry_slot);
     if let Err(e) = j.record(entry) {
         tracing::error!(
             batch_id, match_idx, error = %e,
@@ -1053,6 +1059,7 @@ async fn run_batch_settle_inner(
                 batch_id,
                 inputs.matches[*idx].match_index,
                 first_signature_b58(tx_b64),
+                marker_expiry_slot,
             )
             .await;
         }

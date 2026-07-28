@@ -930,6 +930,7 @@ async fn build_settle_driver(
     let (settle_journal, journal_load) = darknyx_tee::persistence::journal::SettleJournal::open(
         darknyx_tee::persistence::state_dir_from_env().as_deref(),
     );
+    let settle_journal = Arc::new(tokio::sync::Mutex::new(settle_journal));
     match &journal_load {
         darknyx_tee::persistence::journal::JournalLoad::Fresh => {
             tracing::info!("settle journal: clean start, nothing in flight");
@@ -957,8 +958,9 @@ async fn build_settle_driver(
                             batch_id = entry.batch_id,
                             match_idx = entry.match_idx,
                             deadline_slot,
-                            redrivable = darknyx_tee::settle::recover::is_redrivable(entry),
-                            "settle recovery: unsettled inside the lock window"
+                            "settle recovery: still settleable, but NO AUTOMATIC REDRIVE in \
+                             this build — the locks are handed to the sweeper and released \
+                             at expiry. Do not wait for a resubmission."
                         )
                     }
                     darknyx_tee::settle::recover::RecoveryAction::ReleaseExpired {
@@ -999,6 +1001,29 @@ async fn build_settle_driver(
                     }
                 }
             }
+            // Retire every classified entry.
+            //
+            // Two reasons, both load-bearing. First, `batch_id` is assigned by
+            // the scheduler from 0 on every process start, so the journal key
+            // `(batch_id, match_idx)` is BOOT-RELATIVE: the first new batch
+            // after this restart is batch 0 and would overwrite recovered
+            // batch-0 entries, destroying a record while a settle may still be
+            // outstanding. Draining the journal here removes the collision
+            // entirely rather than papering over it. Second, an entry left
+            // behind is counted as in-flight by `/admin/drain`, so
+            // `safe_to_stop` would never again become true on any instance that
+            // has ever recovered.
+            //
+            // Retiring an UNSETTLED entry is safe only because the sweeper
+            // registration above now owns its locks: this build has no
+            // automatic redrive, so nothing else was going to act on the record.
+            // If a redrive path is added, this must become selective.
+            {
+                let mut j = settle_journal.lock().await;
+                for (entry, _) in &decisions {
+                    j.forget(entry.batch_id, entry.match_idx);
+                }
+            }
             tracing::warn!(
                 total = summary.total(),
                 already_settled = summary.already_settled,
@@ -1006,7 +1031,8 @@ async fn build_settle_driver(
                 release_expired = summary.release_expired,
                 indeterminate = summary.indeterminate,
                 needs_operator = summary.needs_operator(),
-                "settle journal recovery complete"
+                "settle journal recovery complete; entries retired (locks now owned \
+                 by the sweeper)"
             );
         }
         darknyx_tee::persistence::journal::JournalLoad::Damaged { reason } => {
@@ -1022,7 +1048,6 @@ async fn build_settle_driver(
             );
         }
     }
-    let settle_journal = Arc::new(tokio::sync::Mutex::new(settle_journal));
 
     let ctx = SettleWorkerCtx {
         rpc,
