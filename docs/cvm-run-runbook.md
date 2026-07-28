@@ -1,5 +1,13 @@
 # CVM run runbook — build → deploy → rotate → fund → reset → test → STOP
 
+> **Testing crash recovery or drain?** Use
+> [`settlement-recovery-drill.md`](settlement-recovery-drill.md) instead of
+> improvising. It carries the timing trap (`phala cvms stop` is slower than the
+> ~10 s settle phase, so the kill must be triggered off the journal itself), the
+> reset trap (a tree reset does NOT empty the Merkle mirror without a fresh
+> `DARKNYX_TEE_SYNC_FROM_SLOT`), and the pass criteria.
+
+
 > The copy-paste runbook for a full Phala CVM validation cycle. CLAUDE.md §3
 > is the conceptual version; this is the operational checklist with the exact
 > commands and the gotchas that have each cost a wasted deploy. Read §0 first.
