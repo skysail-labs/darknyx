@@ -55,7 +55,15 @@ services:
       # privacy leak.
       # Keep the settle pipeline at debug but quiet the 1/sec oracle-sync
       # + merkle-poll DEBUG spam so settle errors aren't buried.
-      DARKNYX_TEE_LOG: "info,darknyx_tee::settle=debug,darknyx_tee::oracle=info,darknyx_tee::merkle=info"
+      #
+      # Overridable through the ENCRYPTED deploy env so a diagnostic run (e.g.
+      # raising darknyx_tee::oracle to debug to sample per-refresh timings) does
+      # NOT require editing this file. Editing it would change compose_hash and
+      # drag a governance allowlist entry, client pin update, and signer rotation
+      # behind a temporary log-level change. Only the `${VAR}` reference is in
+      # compose_hash; the value never is. Unset/empty falls back to this default,
+      # so production stays quiet by default.
+      DARKNYX_TEE_LOG: ${DARKNYX_TEE_LOG:-info,darknyx_tee::settle=debug,darknyx_tee::oracle=info,darknyx_tee::merkle=info}
       DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"
 
       # Real Pyth feed for the matcher's oracle. Every configured feed is

@@ -607,6 +607,86 @@ mod tests {
         ));
     }
 
+    /// Pins the staleness threshold that drives the matcher's oracle pause.
+    ///
+    /// The sync loop pauses trading on the first cycle whose post-refresh
+    /// snapshot is unhealthy, so "time from the last good update to pause" is
+    /// exactly this threshold plus at most one tick interval. Measuring that
+    /// bound here is strictly better than timing it on a live CVM: it is
+    /// deterministic, it cannot be confounded by Hermes latency or host
+    /// scheduling, and it fails if anyone widens the window by accident.
+    #[tokio::test]
+    async fn pause_threshold_is_exactly_max_age() {
+        let units = OracleUnits {
+            base_decimals: 6,
+            quote_decimals: 6,
+            price_scale: 100_000_000,
+        };
+        let cache = OracleCache::new();
+        cache
+            .apply_verified_batch_at(vec![(FEED.into(), entry(100_000, 10))], policy(), 100_000)
+            .await
+            .unwrap();
+
+        let max_age = policy().max_age_ms;
+        cache
+            .snapshot_at(FEED, policy(), units, 100_000 + max_age)
+            .await
+            .expect("still healthy at exactly max_age_ms — the boundary is inclusive");
+        assert!(
+            cache
+                .snapshot_at(FEED, policy(), units, 100_000 + max_age + 1)
+                .await
+                .is_err(),
+            "one millisecond past max_age_ms must be unhealthy — this is the edge \
+             the sync loop turns into TradingPauseReason::Oracle"
+        );
+    }
+
+    /// Cost of the T-16 unit conversion on the matcher path, equal vs unequal
+    /// decimals. Env-gated (`RUN_ORACLE_BENCH=1`) so it reports rather than
+    /// asserts — a wall-clock threshold in CI would be flaky on shared runners.
+    #[test]
+    fn oracle_conversion_benchmark() {
+        if std::env::var("RUN_ORACLE_BENCH").is_err() {
+            eprintln!("SKIP oracle_conversion_benchmark (set RUN_ORACLE_BENCH=1)");
+            return;
+        }
+        const ITERS: u32 = 1_000_000;
+        let equal = OracleUnits {
+            base_decimals: 6,
+            quote_decimals: 6,
+            price_scale: 100_000_000,
+        };
+        let unequal = OracleUnits {
+            base_decimals: 9,
+            quote_decimals: 6,
+            price_scale: 100_000_000_000,
+        };
+        for (label, units) in [("equal decimals", equal), ("unequal decimals", unequal)] {
+            // Warm up so the first sample does not carry page-in cost.
+            for _ in 0..10_000 {
+                let _ = convert_pyth_to_market_units(15_000_000_000, -8, units, true);
+            }
+            let started = std::time::Instant::now();
+            let mut acc = 0u128;
+            for i in 0..ITERS {
+                let raw = 15_000_000_000u64 + u64::from(i % 1_000);
+                acc = acc.wrapping_add(
+                    convert_pyth_to_market_units(raw, -8, units, true).unwrap() as u128
+                );
+            }
+            let elapsed = started.elapsed();
+            // Consume `acc` so the loop cannot be optimised away.
+            assert!(acc > 0);
+            eprintln!(
+                "oracle conversion [{label}]: {ITERS} iters in {:?} => {:.1} ns/op",
+                elapsed,
+                elapsed.as_nanos() as f64 / f64::from(ITERS)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn rejected_multi_feed_batch_is_atomic() {
         let cache = OracleCache::new();
