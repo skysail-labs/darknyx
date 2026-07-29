@@ -51,13 +51,13 @@ the first stop for an agent resuming the work.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `729da51` (slice-6 closure PR #87 merged 2026-07-29) |
-| Last merged remediation PR | #87 — slice-6 documentation closure, merge commit `729da51`, merged 2026-07-29. |
-| Active slice | slice 7 — T-14 + PF-09 and unused legacy settle-harness fixture cleanup |
-| Active branch / PR | `remediation/tee-bounds-cleanup` / PR not opened yet |
-| Next slice | `remediation/multi-market-isolation` (T-17) after slice 7 closes |
+| Last verified `main` | `923a992` (slice-7 implementation PR #88 merged 2026-07-29) |
+| Last merged remediation PR | #88 — slice-7 T-14/PF-09 implementation, merge commit `923a992`, merged 2026-07-29. |
+| Active slice | none — slice 7 closed; tracker-only closure update in progress |
+| Active branch / PR | `remediation/tee-bounds-cleanup-close` / PR not opened yet |
+| Next slice | `remediation/multi-market-isolation` (T-17) |
 | Live state | **No CVM running; billing halted** after the slice-5 validation window (2026-07-29). Image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436` on `nightly-test-cvm` (CPU, prod9). Devnet tree left freshly reset from the final `cvm-merge-then-order` cycle, holding only that test's leaves. Signer set unchanged; all four shards funded. PRIOR (slice 4): Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-29 (slice 7 implementation and controlled measurements complete; local/hosted closure gates pending) |
+| Last updated | 2026-07-29 (slice 7 merged and closed; tracker-only closure update in progress) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -182,7 +182,7 @@ and live-path invariant it owns is satisfied; the earlier phrase
 | T-11 | Medium | Release engineering + TEE | `remediation/local-assurance` | The complete `darknyx-tee` suite is an explicit local pre-PR gate now and a dedicated hosted job once artifact quota resumes. Slow artifact-backed tests remain separately identifiable. | Closed |
 | T-12 | Medium | TEE tests + circuits | `remediation/local-assurance` | Artifact-required mode fails loudly when circuit artifacts are absent; no positive proof test can report success without proving. Casual local mode may skip only when the required-mode flag is absent and must report the skip. | Closed |
 | T-13 | Low | Vault tests + build tooling | `remediation/local-assurance` | All LiteSVM loaders share one SBF artifact guard backed by a build manifest/source fingerprint, not a fragile per-test mtime check. A changed vault source or build configuration makes tests fail until `cargo build-sbf` refreshes the artifact and manifest. | Closed |
-| T-14 | Low | Vault + TEE + SDK | `remediation/tee-bounds-cleanup` | The retired `NullifierEntry`, seeds, PDA helpers, comments, and public exports are absent across the program, TEE, SDK, scripts, and docs. The commitment-keyed consumed/deposit guards remain untouched. | **Code complete** — dead program/TEE/SDK surfaces and the self-contained legacy order fixtures are removed; deletion sweep and full local gate pass. Hosted PR/CodeRabbit evidence and merge remain. |
+| T-14 | Low | Vault + TEE + SDK | `remediation/tee-bounds-cleanup` | The retired `NullifierEntry`, seeds, PDA helpers, comments, and public exports are absent across the program, TEE, SDK, scripts, and docs. The commitment-keyed consumed/deposit guards remain untouched. | **Closed** — dead program/TEE/SDK surfaces and the self-contained legacy order fixtures were removed in PR #88; deletion sweep, full local gate, hosted CI, and CodeRabbit passed. |
 | T-15 | Low | Vault tests + tracker | `remediation/local-assurance` | LiteSVM covers live-lock withdraw rejection, expiry-boundary withdraw success, and `release_lock → withdraw` including rent return. The earlier S-03 row names only evidence that exists. | Closed |
 | T-16 | Medium | TEE oracle + matcher + market config | `remediation/tee-oracle-trust` | Pyth-native price/exponent values are converted with checked integer arithmetic into the governed atomic base/quote price units before circuit-breaker comparison or collateral math. The invariant includes base decimals, quote decimals, exponent, and `price_scale`; unequal-decimal markets, exponent changes, unrepresentable scales, rounding, and overflow fail closed. | Closed |
 | T-17 | Medium | TEE matcher + API | `remediation/multi-market-isolation` | `TradingPauseReason::Oracle` is scoped per market, not venue-wide. One market's stale or unauthenticated feed pauses only that market, and a healthy market's tick cannot clear another's oracle pause. A mixed configuration where some markets have no `oracle_feed_id` while `feed_ids` is non-empty is rejected at boot rather than silently sharing gate state. | Open |
@@ -193,7 +193,7 @@ and live-path invariant it owns is satisfied; the earlier phrase
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
 | PF-08 | Perf-Nit | Daemon | — | Repeated trading-key derivation is real but not established as material. Reopen only when an intake/daemon profile identifies it as a material contributor to CPU or placement latency; then derive once per unlocked keystore session rather than add an unbounded cache. | Deferred |
-| PF-09 | Perf-Nit | TEE prover | `remediation/tee-bounds-cleanup` | Rapidsnark `SHORT_BUFFER` handling has bounded retries, checked growth, and a maximum output/error buffer. A malicious or broken native prover cannot loop or allocate without bound. | **Code complete** — 3-attempt/64-KiB output ceilings, checked native lengths, eight adversarial boundary tests, real native roundtrip, controlled latency measurements, and full local gate pass. Hosted PR/CodeRabbit evidence and merge remain. |
+| PF-09 | Perf-Nit | TEE prover | `remediation/tee-bounds-cleanup` | Rapidsnark `SHORT_BUFFER` handling has bounded retries, checked growth, and a maximum output/error buffer. A malicious or broken native prover cannot loop or allocate without bound. | **Closed** — PR #88 merged 3-attempt/64-KiB output ceilings and checked native lengths; eight adversarial tests, real native roundtrip, controlled latency measurements, full local gate, hosted CI, and CodeRabbit passed. |
 | PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a live-surface stale-reference sweep. | **Closed** — signed canonical body `203 + S` → `171 + S` bytes (−32; 211 B → 179 B, −15.2% at `SOL-USDC`); one 32-byte field gone from `Order`, `OrderSnapshot`, and `PlaceOrderRequest`, two from `MatchPair`. OpenAPI `required` list and schema verified against the Rust struct by script (20 fields each way, zero drift). Live protocol/API/docs references are clean. The 2026-07-29 revalidation found unused legacy `PendingOrder`/`DarkCLOB` helpers in `programs/vault/tests/settle_harness/mod.rs`; they are not constructed by tests or production and are assigned to slice 7's dead-code sweep. Format-safe: the journal serializes `MatchResultPayload`, which never carried the field. **Live-measured 2026-07-29**: settle `total_ms=14523`, between the two prior samples (14573 / 14210) — the removal costs nothing measurable against a network-bound settle. |
 
 ## Additional release-readiness deliverables
@@ -313,7 +313,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Closed / PR #81 | New versioned journal, Borsh-serialized in plaintext and protected ONLY by the dstack-sealed LUKS volume — there is no authenticated encryption at the `JournalSnapshot` boundary, and the row must not imply one. Adds `/admin/drain` (admin-gated) and error code `4290`; no other public wire change. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | **Closed** / PR #84 | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | **Closed / PR #86** | Versioned local keystore migration; v1 read/migrate only, all new writes v2. Existing v1 files are replaced only after authenticated decryption, semantic validation, and a durable same-directory write. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
-| 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09; unused legacy settle-harness order fixtures found in slice-5 revalidation | Slice 6 closed | **Code complete** / PR not opened | SDK removal of dead exports; bounded internal FFI behavior; removal of the unused `PendingOrder`/`DarkCLOB` fixture helpers in `programs/vault/tests/settle_harness/mod.rs`. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep including canonical order v4/v5 concepts. No CVM required. |
+| 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09; unused legacy settle-harness order fixtures found in slice-5 revalidation | Slice 6 closed | **Closed / PR #88** | SDK removal of dead exports; bounded internal FFI behavior; removal of the unused `PendingOrder`/`DarkCLOB` fixture helpers in `programs/vault/tests/settle_harness/mod.rs`. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep including canonical order v4/v5 concepts. No CVM required. |
 
 ## Cost to the protocol
 
@@ -344,7 +344,7 @@ They do not create duplicate finding ownership.
 | CT-02 | Remove shipped S-03(B) lock sweeping from `Declined` and record its existing implementation/tests/live evidence. | Documentation correction | Open |
 | CT-03 | Move AU-06 from `Code complete` to `Closed`; PR #72 merged as `19ae2a4`. | Documentation correction | Open |
 | CT-04 | Delete the release-gate bullet that still lists the completed `api/auth.rs` pass as uncommissioned. | Documentation correction | Open |
-| CT-05 | Annotate PF-04 with T-14 follow-through; the on-chain removal is valid, but its dead public helpers remain until T-14 closes. | T-14 | Open |
+| CT-05 | Annotate PF-04 with T-14 follow-through; the on-chain removal is valid, but its dead public helpers remain until T-14 closes. | T-14 | Satisfied — PR #88 removed the retired account type and remaining program/TEE/SDK seeds, PDA helpers, and public exports; the earlier tracker now records the follow-through |
 
 ## Pull request evidence template
 
@@ -1446,13 +1446,26 @@ Completed full local gate:
 
 The networked dependency-audit helper was not run locally because the execution
 environment refused to disclose private dependency metadata to third-party
-advisory services. No dependency manifest changed; the hosted dependency job
-must still pass before merge.
+advisory services. No dependency manifest changed; hosted run `30483162257`
+executed the real `cargo audit + npm audit` job and passed.
 
-T-14 and PF-09 are `Code complete`; hosted PR/CodeRabbit evidence and merge are
-still pending. Rollback is source-only: revert the PR and rebuild the
-TEE/SDK/program artifacts. It does not invalidate notes, orders, proofs,
-accounts, journals, keys, signatures, compose hashes, or devnet state.
+Hosted final-head evidence on PR #88:
+
+- aggregate `pr-checks success`: pass;
+- circuits, Rust fmt/clippy/unit/examples, SBF mainnet+devnet builds, SDK,
+  TypeScript, daemon, Vault ZK, Vault LiteSVM, artifact-required TEE, and
+  dependency-audit jobs: pass;
+- indexer: correctly skipped because no indexer path changed; its local Vitest
+  suite passed 20/20;
+- CodeRabbit Pro Plus, assertive profile, run
+  `58ca049f-9ed8-4fef-99dc-84f1b8a2909f`: all 24 changed files selected,
+  circuit/VK and cross-language parity checks passed, **no actionable or inline
+  comments generated**.
+
+PR #88 merged as `923a992` on 2026-07-29. T-14, PF-09, and slice 7 are
+`Closed`. Rollback is source-only: revert the PR and rebuild the TEE/SDK/program
+artifacts. It does not invalidate notes, orders, proofs, accounts, journals,
+keys, signatures, compose hashes, or devnet state.
 
 ## Agent handoff template
 
@@ -1468,6 +1481,44 @@ compose hash, signer set, program deployment):
 Evidence still missing:
 Blockers:
 Exact next action:
+```
+
+## Agent handoff — 2026-07-29 (slice 7 closed)
+
+```text
+Last merged PR / main SHA: #88 / 923a992
+Active branch / HEAD: remediation/tee-bounds-cleanup-close / 923a992 plus this
+  tracker-only closure update
+Dirty or untracked files preserved: yes — modified third_party/icicle-snark and
+  third_party/rapidsnark submodules plus every pre-existing untracked path were
+  left untouched and are not part of slice 7.
+Active slice and finding IDs: none — slice 7 T-14/PF-09 Closed
+Invariant and compatibility decisions:
+  - Native proof output is bounded to 3 attempts, 64 KiB proof, 64 KiB public,
+    and a fixed 1 KiB error buffer, with checked native sizes.
+  - NullifierEntry and every dead program/TEE/SDK derivation surface are gone;
+    commitment-keyed DepositedNoteEntry/ConsumedNoteEntry guards are unchanged.
+  - No circuit, VK/zkey, instruction, account, transaction, canonical order,
+    OpenAPI, journal, key, or devnet migration. No CVM was required.
+Commands run and exact results:
+  cargo nextest run --workspace                       -> 732 passed, 3 skipped
+  REQUIRE_CIRCUIT_ARTIFACTS=1 cargo nextest run
+    -p darknyx-tee --tests                            -> 556 passed, 1 skipped
+  affected vault LiteSVM                              -> 25 passed
+  fake-native rapidsnark boundary tests               -> 8 passed
+  native N=2 rapidsnark roundtrip                     -> 2 passed
+  SDK / daemon / indexer Vitest                       -> 270 / 156 / 20 passed
+  SDK / daemon / indexer test-inclusive tsc           -> pass
+  hosted run 30483162257, including dependency audit  -> pass
+  CodeRabbit assertive review                         -> no actionable comments
+Live state: no CVM running; no devnet, signer, compose, image, circuit, or
+  program state changed. Slice 7 requires no CVM.
+Evidence still missing: none for slice 7.
+Blockers: none.
+Exact next action: start slice 8, remediation/multi-market-isolation (T-17),
+  from the latest main after this closure PR merges. Read
+  docs/multi-market-architecture.md and the T-17 audit/tracker anchors first.
+  Do not stage the dirty submodules or unrelated untracked files.
 ```
 
 ## Agent handoff — 2026-07-29 (slice 6 closed)
