@@ -29,7 +29,8 @@ openapi: 3.1.0
 #   * Transparency: `/transparency` is an unauthenticated convenience snapshot;
 #     clients independently verify its chain-derived and attestation fields.
 #
-# Versioning: this is the canonical-order-v2 / settlement-payload-v9 contract.
+# Versioning: this is the canonical-order-v5 / settlement-payload-v9 contract.
+# (order v5 dropped the dead `user_commitment` — audit 2026-07-25 T-07/PF-10.)
 # ─────────────────────────────────────────────────────────────────────────────
 
 info:
@@ -359,10 +360,9 @@ components:
     PlaceOrderRequest:
       type: object
       description: |
-        The canonical-order wire schema (`darknyx-order-v5` signature
-        domain). All
-        32/64/16-byte fields are
-        hex-encoded strings; all numeric fields are JSON integers (u64).
+        The canonical-order wire schema (`darknyx-order-v5` signature domain).
+        All 32/64/16-byte fields are hex-encoded strings; all numeric fields are
+        JSON integers (u64).
         The trading-key signature covers the canonical encoding of the
         economic fields, `viewing_pubkey`, `session_id`, and `arrival_nonce`;
         the opening fields (`owner_commitment`, `note_inner_hash`) are pinned
