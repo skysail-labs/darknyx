@@ -275,8 +275,12 @@ cargo nextest run --workspace                       # unit + litesvm integration
 # so a proof-backed test can never report success without proving.
 REQUIRE_CIRCUIT_ARTIFACTS=1 cargo nextest run -p darknyx-tee --tests   # or `cargo test`
 bash scripts/check-dependency-audits.sh             # cargo audit + npm audit vs the recorded baseline
-./node_modules/.bin/tsc -p packages/sdk/tsconfig.json --noEmit
-./node_modules/.bin/tsc -p packages/indexer/tsconfig.json --noEmit
+# Typecheck with the TESTS-INCLUSIVE config. The build tsconfig includes only
+# `src/`, so `-p packages/<pkg>/tsconfig.json` never sees tests/ — which is how
+# 23 type errors sat on main unnoticed. CI runs exactly these three lines.
+./node_modules/.bin/tsc -p packages/sdk/tsconfig.test.json --noEmit
+./node_modules/.bin/tsc -p packages/daemon/tsconfig.test.json --noEmit
+./node_modules/.bin/tsc -p packages/indexer/tsconfig.test.json --noEmit
 ( cd packages/sdk && ../../node_modules/.bin/vitest run )   # devnet/CVM tests auto-skip
 ( cd packages/indexer && ../../node_modules/.bin/vitest run ) # fills indexer; DB tests need Node 22+ (node:sqlite)
 ( cd packages/daemon && ../../node_modules/.bin/vitest run ) # market-maker daemon

@@ -75,6 +75,8 @@ jobs:
       circuits: ${{ steps.filter.outputs.circuits }}
       sdk: ${{ steps.filter.outputs.sdk }}
       indexer: ${{ steps.filter.outputs.indexer }}
+      daemon: ${{ steps.filter.outputs.daemon }}
+      ts: ${{ steps.filter.outputs.ts }}
       deps: ${{ steps.filter.outputs.deps }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -123,6 +125,22 @@ jobs:
               - 'packages/sdk/src/settlement/**'
               - 'package.json'
               - 'package-lock.json'
+            daemon:
+              - 'packages/daemon/**'
+              - 'packages/sdk/src/**'
+              - 'package.json'
+              - 'package-lock.json'
+            # Any TypeScript, anywhere, plus the configs that decide HOW it is
+            # checked. The tsconfigs are listed deliberately: a PR that narrows
+            # an `include` or flips `strict` would otherwise skip the very job
+            # that would have caught it — the T-18 class of gate that never runs
+            # on the change it exists to catch.
+            ts:
+              - 'packages/**'
+              - 'tsconfig.json'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/pr-checks.yml'
             # The dependency gate's OWN controls. Without this a PR that only
             # touches .cargo/audit.toml (adding an ignore) or the npm baseline
             # (adding a suppression) would not run deps-audit at all — a change
@@ -421,6 +439,131 @@ jobs:
       # / change-note flows still auto-skip via `RUN_*` env-var checks.
       - name: vitest run (parity, transport, provers, devnet-skipped)
         run: node node_modules/vitest/vitest.mjs run --root packages/sdk
+
+  typecheck:
+    name: TypeScript — tsc --noEmit (src + tests)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.ts == 'true'
+      )
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: npm ci (root, with workspaces)
+        run: npm ci
+
+      # WHY THIS JOB EXISTS
+      #
+      # Until it was added, `tsc` appeared NOWHERE in any workflow. The sdk /
+      # indexer jobs run vitest, and vitest STRIPS types rather than checking
+      # them, so no TypeScript type error was caught by CI at all — the
+      # `tsc --noEmit` lines in CLAUDE.md §2.5 were local-only and depended on a
+      # developer running them by hand.
+      #
+      # Worse, each package's build tsconfig includes only `src/`, so even the
+      # local gate never saw `tests/`. Test files were checked by NOTHING: 23
+      # real type errors were sitting on main when this job was written,
+      # including a cancel body missing the S-07 `session_id` and a daemon
+      # `proveAndBuildOrder` call missing `sessionId` entirely — the latter
+      # meaning that env-gated test could not have placed an order at all.
+      #
+      # `tsconfig.test.json` is the tests-inclusive, emit-free variant. It must
+      # be used here rather than the build config, or this job reproduces the
+      # exact blind spot it exists to remove.
+      # `@darknyx/sdk` resolves through its package.json `types: dist/index.d.ts`,
+      # and `npm ci` does NOT build workspace packages. Without this step the
+      # daemon typecheck fails with ~69 "Cannot find module '@darknyx/sdk'"
+      # errors plus the implicit-any cascade they cause.
+      #
+      # This was missed locally because a stale `packages/sdk/dist` from an
+      # earlier build was already on disk — the checker passed against an
+      # artefact CI never has. Verified since by deleting every dist/ and
+      # tsbuildinfo and re-running this exact sequence from clean.
+      #
+      # Building rather than path-mapping to sdk/src is deliberate: it checks the
+      # daemon against the DECLARATIONS it actually consumes, so a declaration
+      # emit that breaks is caught here too.
+      - name: Build the SDK (daemon/indexer typecheck against its declarations)
+        run: |
+          node node_modules/typescript/bin/tsc -p packages/sdk/tsconfig.json
+          test -f packages/sdk/dist/index.d.ts \
+            || { echo "::error::sdk build produced no dist/index.d.ts"; exit 1; }
+
+      - name: tsc --noEmit (sdk, tests included)
+        run: node node_modules/typescript/bin/tsc -p packages/sdk/tsconfig.test.json --noEmit
+
+      - name: tsc --noEmit (daemon, tests included)
+        run: node node_modules/typescript/bin/tsc -p packages/daemon/tsconfig.test.json --noEmit
+
+      - name: tsc --noEmit (indexer, tests included)
+        run: node node_modules/typescript/bin/tsc -p packages/indexer/tsconfig.test.json --noEmit
+
+      # Guard the guard: assert each tsconfig.test.json actually includes
+      # `tests/`. Without this, narrowing an `include` would silently restore
+      # the blind spot while this job kept reporting success — the T-18 pattern
+      # this whole slice keeps finding.
+      - name: Verify each typecheck config really covers tests/
+        run: |
+          set -euo pipefail
+          fail=0
+          for pkg in sdk daemon indexer; do
+            cfg="packages/$pkg/tsconfig.test.json"
+            test -f "$cfg" || { echo "::error::$cfg is missing"; fail=1; continue; }
+            if ! grep -q '"tests/\*\*/\*"' "$cfg"; then
+              echo "::error::$cfg no longer includes tests/**/* — the typecheck would skip test files"
+              fail=1
+            fi
+            # And prove tsc really loaded a test file, rather than matching a
+            # pattern that resolves to nothing.
+            n=$(node node_modules/typescript/bin/tsc -p "$cfg" --listFiles --noEmit \
+                  | grep -c "/packages/$pkg/tests/" || true)
+            if [ "$n" -eq 0 ]; then
+              echo "::error::$cfg matched ZERO files under packages/$pkg/tests/"
+              fail=1
+            else
+              echo "$pkg: $n test files typechecked"
+            fi
+          done
+          exit $fail
+
+  daemon:
+    name: Daemon — keystore, lifecycle, attestation (vitest)
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.daemon == 'true'
+      )
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: npm ci (root, with workspaces)
+        run: npm ci
+
+      # packages/daemon had NO CI job at all until this one. Its ~147 tests —
+      # covering the non-custodial keystore that holds user spending keys,
+      # attestation gating, and the order lifecycle — had never run in CI.
+      # Live-CVM flows stay env-gated and self-skip.
+      - name: vitest run (daemon)
+        run: node node_modules/vitest/vitest.mjs run --root packages/daemon
 
   indexer:
     name: Indexer — decode parity + db/server (vitest)
@@ -891,6 +1034,8 @@ jobs:
       - circuits
       - sdk
       - indexer
+      - typecheck
+      - daemon
       - consistency
       - sbf-build
       - vault-zk
@@ -922,6 +1067,8 @@ jobs:
             (needs.circuits.result != 'success' && needs.circuits.result != 'skipped') ||
             (needs.sdk.result != 'success' && needs.sdk.result != 'skipped') ||
             (needs.indexer.result != 'success' && needs.indexer.result != 'skipped') ||
+            (needs.typecheck.result != 'success' && needs.typecheck.result != 'skipped') ||
+            (needs.daemon.result != 'success' && needs.daemon.result != 'skipped') ||
             needs.consistency.result != 'success' ||
             (needs['sbf-build'].result != 'success' && needs['sbf-build'].result != 'skipped') ||
             (needs['vault-zk'].result != 'success' && needs['vault-zk'].result != 'skipped') ||
@@ -935,6 +1082,8 @@ jobs:
           echo "circuits:                 ${{ needs.circuits.result }}"
           echo "sdk:                      ${{ needs.sdk.result }}"
           echo "indexer:                  ${{ needs.indexer.result }}"
+          echo "typecheck:                ${{ needs.typecheck.result }}"
+          echo "daemon:                   ${{ needs.daemon.result }}"
           echo "consistency:              ${{ needs.consistency.result }}"
           echo "sbf-build:                ${{ needs['sbf-build'].result }}"
           echo "vault-zk:                 ${{ needs['vault-zk'].result }}"

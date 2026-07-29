@@ -154,6 +154,27 @@ async function authToken(): Promise<string> {
   return ((await r.json()) as { access_token: string }).access_token;
 }
 
+/**
+ * The CVM's current boot session id, hex.
+ *
+ * Every order signature is scoped to it (CS-11 / S-07): intake rejects a body
+ * carrying any other value with `stale_session`, so a test that omits it cannot
+ * place an order at all. This test did omit it — `sessionId` is required by
+ * `BuildOrderArgs` and was simply absent — which nothing caught, because test
+ * files were never typechecked and this file is env-gated on
+ * RUN_CVM_DAEMON_LIFECYCLE=1.
+ */
+async function bootSessionId(): Promise<Uint8Array> {
+  const r = await fetch(`${GATEWAY}/info`);
+  expect(r.status, "/info failed").toBe(200);
+  const info = (await r.json()) as { boot_session_id: string };
+  expect(
+    info.boot_session_id,
+    "/info must advertise a 32-byte hex boot_session_id",
+  ).toMatch(/^[0-9a-fA-F]{64}$/);
+  return Uint8Array.from(Buffer.from(info.boot_session_id, "hex"));
+}
+
 /** Poll /tree/inclusion until the TEE mirror has the leaf (after a deposit). */
 async function waitForLeaf(commitment: string, token: string): Promise<void> {
   const deadline = Date.now() + 90_000;
@@ -236,6 +257,7 @@ maybe(
         masterSeed: ks.masterSeed,
         spendingKey: ks.spendingKey,
         ownerCommitment: note.ownerCommitment,
+        sessionId: await bootSessionId(),
         tradingKey: ks.tradingPublicKey(0),
         sign: (d) => ks.signWithTradingKey(0, d),
         note: {

@@ -473,7 +473,6 @@ describe("Daemon — attestation gate", () => {
     let fillsClosed = false;
     let ordersClosed = false;
     const prover = vi.fn();
-    const anchorPoster = { post: vi.fn(async () => {}) };
     const mergeRunner = { run: vi.fn(async () => 1) };
     const placer = {
       place: vi.fn(),
@@ -502,7 +501,6 @@ describe("Daemon — attestation gate", () => {
       })) as never,
       verifyAttestation: async () => verifiedIdentity(),
       onchainTeePubkeys: async () => onchain,
-      anchorPoster,
       mergeRunner,
       verifyRoot: false,
     });
@@ -555,7 +553,12 @@ describe("Daemon — attestation gate", () => {
       type: "fill",
       producedChangeNote: true,
     });
-    expect(anchorPoster.post).not.toHaveBeenCalled();
+    // A `expect(anchorPoster.post).not.toHaveBeenCalled()` assertion lived here.
+    // It was VACUOUS: `anchorPoster` is not a field of `DaemonDeps` (continuation
+    // anchors were removed when VALID_MATCH_BATCH began deriving every output
+    // inner from the consumed input inner), so the daemon never received the
+    // mock and the negative assertion could never fail. Removed rather than
+    // repaired — there is no anchor poster left to assert about.
 
     await daemon.cancelOrder(orderId);
     expect(placer.cancel).toHaveBeenCalledOnce();

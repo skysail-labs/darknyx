@@ -1002,29 +1002,40 @@ gates — `crates/darknyx-tee/tests/valid_input_intake_verify.rs`, the sole file
 that reads the variable: **2 passed, 0 skipped**, i.e. the proof-backed tests
 really proved rather than silently skipping.
 
-### Pre-existing defect found while validating (NOT caused by this slice)
+### RETRACTED — the "nextest hang" reported here was an observation error
 
-`cargo nextest run -p darknyx-tee --tests` — the exact line in CLAUDE.md §2.5 —
-**hangs reproducibly at 497/556** with the runner at 0% CPU and no child test
-processes alive. Observed four times.
+An earlier revision of this section claimed
+`cargo nextest run -p darknyx-tee --tests` hangs at 497/556. **That finding is
+wrong and is retracted.** Re-run on a quiet machine: **556 tests, 556 passed,
+92.1 s, exit 0.**
 
-It is not this slice's doing and not the env var's:
+How the false finding was produced, because the method matters more than the
+conclusion:
 
-- It reproduces identically **on `main` at `6a00f59`**, with the branch checked
-  out and rebuilt (control run performed specifically to settle this).
-- It reproduces **without** `REQUIRE_CIRCUIT_ARTIFACTS=1`.
-- The same tests pass under `cargo nextest run --workspace` (732 passed), so no
-  individual test is broken — only this target selection wedges.
+1. **The evidence was a bad probe.** "Runner alive, zero children, 0% CPU" came
+   from `ps aux | grep -E "[d]arknyx-tee-|[s]narkjs|[n]ode"` and
+   `pgrep -f nextest`. Those match the nextest SUPERVISOR — correctly idle,
+   because supervising is not compute — and can never match a test binary, which
+   lives at `target/debug/deps/<test_name>-<hash>`. Probing again at the same
+   497/556 point with the right pattern shows two `prover_roundtrip` processes
+   at ~96% CPU each. There were always children; the probe could not see them.
+2. **The environment was degraded, not the runner.** Those observations were
+   taken with 1.1–3.4 GB free (ENOSPC was hit twice, badly enough that tool
+   output could not be written) and with a second `cargo nextest run
+   --workspace` executing concurrently — two cargo processes contend on the
+   build lock.
+3. **The "control experiment" confirmed nothing.** Reproducing the same
+   behaviour on `main` felt like proof the defect predated the slice. It only
+   showed the same degraded environment produced the same symptom. Agreement
+   between two runs of a bad probe is not corroboration.
 
-The shape (runner alive, zero children, `slow-timeout`'s `terminate-after`
-never firing) points at a test leaving an orphaned child holding the stdout
-pipe, so nextest waits on an EOF that never arrives. `--workspace` interleaves
-enough other binaries to mask it.
+Nothing needs fixing. The CLAUDE.md §2.5 gate line is correct as written, and no
+workaround is required.
 
-Not fixed here — it is unrelated to T-07/PF-10 and folding an unrelated runner
-fix into a canonical-format change would make both harder to review. Filed as a
-follow-up; until it is fixed, use `cargo nextest run --workspace` plus a
-targeted `--test valid_input_intake_verify` for the artifact-required check.
+Lesson kept deliberately: **before reporting a hang, prove the process is not
+working** — check for children by their real path (`target/debug/deps/`), check
+free disk, and check for a concurrent build holding the cargo lock. A negative
+result from an unvalidated probe is not evidence.
 
 ### Second pre-existing defect found while validating: TypeScript is never typechecked in CI
 

@@ -4,14 +4,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RootVerifier, DepositParams } from "@darknyx/sdk";
 import { PublicKey } from "@solana/web3.js";
 
-import { Daemon, type DaemonEvent } from "../src/daemon.js";
+import { Daemon, type DaemonEvent, type DaemonDeps } from "../src/daemon.js";
 import { DaemonStore } from "../src/store.js";
 import { Keystore, type AccountIdentity } from "../src/keystore.js";
 import { DEFAULT_THRESHOLDS } from "../src/order-lifecycle.js";
 import type { DaemonConfig } from "../src/config.js";
 import type { OrderPlacer } from "../src/order-placer.js";
+import type { ManagedOrder } from "../src/types.js";
 import {
   limitPolicy,
   OrderSide,
@@ -42,6 +44,12 @@ const config = (): DaemonConfig => ({
   dbPath: ":memory:",
   controlPort: 0,
   keystorePath: "x",
+  // Required by DaemonConfig. The fixture predates these fields and nothing
+  // caught the omission, because test files were never typechecked.
+  // `verifyAttestation: false` in mkDaemon() is what actually disables the
+  // attestation path here; these just satisfy the config shape.
+  attestationStrict: false,
+  attestOnchainCheck: false,
   thresholds: DEFAULT_THRESHOLDS,
   programId: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
 });
@@ -131,7 +139,7 @@ beforeEach(() => {
 afterEach(() => store.close());
 
 function mkDaemon(
-  extra: Partial<Parameters<typeof Daemon.prototype.constructor>[0]> = {},
+  extra: Partial<DaemonDeps> = {},
 ) {
   return new Daemon({
     config: config(),
@@ -149,7 +157,7 @@ function mkDaemon(
 }
 
 async function readyDaemon(
-  extra: Partial<Parameters<typeof Daemon.prototype.constructor>[0]> = {},
+  extra: Partial<DaemonDeps> = {},
 ): Promise<Daemon> {
   const daemon = mkDaemon(extra);
   await daemon.start();
@@ -194,7 +202,7 @@ describe("Daemon — placeOrder", () => {
   });
 
   it("runs the root-ring verifier before proving a placement", async () => {
-    const verifyRoot = vi.fn(async () => {});
+    const verifyRoot = vi.fn<RootVerifier>(async () => {});
     const daemon = await readyDaemon({ verifyRoot });
     await daemon.placeOrder(
       {
@@ -338,8 +346,12 @@ describe("Daemon — deposit", () => {
   const MINT = new Uint8Array(32).fill(9);
 
   it("calls the deposit fn, stores the minted note, returns it", async () => {
+    // Typed with the REAL DepositParams, not a two-field structural stand-in.
+    // With the narrow inline type, `mock.calls[0][0]` did not carry
+    // `depositIndex`, and the assertion below had to cast to reach it — a cast
+    // that quietly asserted nothing about what the daemon actually passed.
     const depositFn = vi.fn(
-      async (params: { tokenMint: Uint8Array; amount: bigint }) => ({
+      async (params: DepositParams) => ({
         signature: "depsig",
         leafIndex: 42n,
         noteCommitment: new Uint8Array(32).fill(0xcd),
@@ -364,8 +376,7 @@ describe("Daemon — deposit", () => {
 
     expect(depositFn).toHaveBeenCalledOnce();
     expect(
-      typeof (depositFn.mock.calls[0][0] as { depositIndex: bigint })
-        .depositIndex,
+      typeof depositFn.mock.calls[0][0].depositIndex,
     ).toBe("bigint");
     expect(out.leafIndex).toBe(42n);
     const stored = store.get(out.commitment)!;
@@ -403,6 +414,8 @@ describe("Daemon — note-lifecycle hygiene (rolling residual)", () => {
   const openMgr = (orderId: string): ManagedOrder => ({
     orderId,
     seedIndex: 0,
+    // Required by ManagedOrder since isolated market books landed.
+    symbol: "SOL-USDC",
     side: "bid",
     priceRaw: 1n,
     sizeRaw: 1n,
