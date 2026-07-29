@@ -50,13 +50,13 @@ the first stop for an agent resuming the work.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `6a00f59` (ops PR #83 merged 2026-07-28) |
-| Last merged remediation PR | #81 — slice 4 (`settlement-recovery`), merged 2026-07-28. Ops PRs #82 + #83 merged after it (`main` `6a00f59`). |
-| Active slice | none — slice 5 closed 2026-07-29 (T-07 + PF-10 live-validated on `nightly-test-cvm`). |
-| Active branch / PR | PR #84 — CI green + all six CVM tests passed; ready to merge |
-| Next slice | after 5: `remediation/daemon-keystore-v2` (T-09 + T-10) |
+| Last verified `main` | `f7ad8c2` (PR #85 merged 2026-07-29) |
+| Last merged remediation PR | #84 — slice 5 (`order-canonical-next`), merged as `f250791` on 2026-07-29. Follow-up PR #85 fixed the TypeScript gate and is included in the revalidation baseline. |
+| Active slice | slice 6 — `daemon-keystore-v2` (T-09 + T-10), code and local evidence complete; merge pending. |
+| Active branch / PR | `remediation/daemon-keystore-v2` / PR #86 |
+| Next slice | after slice 6 merges: `remediation/tee-bounds-cleanup` (T-14 + PF-09, plus the unused legacy settle-harness fixture cleanup recorded below) |
 | Live state | **No CVM running; billing halted** after the slice-5 validation window (2026-07-29). Image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436` on `nightly-test-cvm` (CPU, prod9). Devnet tree left freshly reset from the final `cvm-merge-then-order` cycle, holding only that test's leaves. Signer set unchanged; all four shards funded. PRIOR (slice 4): Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-29 (slice 5 CLOSED — CVM-validated) |
+| Last updated | 2026-07-29 (slices 1–5 independently revalidated; slice 6 locally code-complete) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -95,8 +95,10 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
   `30f1b6b` on 2026-07-27.
 - This implementation plan and disposition ledger were checked against
   `main` at `8137ab881d18636c83bf551465f0b816c53778ad` on 2026-07-27.
-- The current Pyth integration hard-codes the legacy 13-of-19 Wormhole trust
-  profile and calls Hermes without an authenticated, versioned cutover path.
+- At the audit baseline, the Pyth integration hard-coded the legacy 13-of-19
+  Wormhole trust profile and called Hermes without an authenticated, versioned
+  cutover path. Slice 1 replaced that behaviour; the statement is retained as
+  historical provenance, not current architecture.
 - Pyth's current primary-source migration guidance says Pyth Core moves to
   five routers with a 3-of-5 quorum and that Hermes authentication becomes
   mandatory on 2026-08-18:
@@ -106,6 +108,59 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
   [upgraded trust model](https://docs.pyth.network/price-feeds/core/upgrade/how-it-works).
 - The audit findings and agreed remediation decisions were re-read rather than
   inferred from the status labels in the earlier tracker.
+- Slices 1–5 were independently revalidated against merged `main` at
+  `f7ad8c2` on 2026-07-29. The exact code, test, and residual findings are
+  recorded in the revalidation section below.
+
+## Slices 1–5 independent revalidation — 2026-07-29
+
+This pass did not infer correctness from merged PR status. It re-read the
+finding invariants, followed each changed boundary in the merged code, and
+re-ran the relevant local suites from `main` at `f7ad8c2`.
+
+| Slice | Revalidated boundary | Result |
+|---|---|---|
+| 1 — oracle trust | Versioned trust profiles, authenticated batched Hermes intake, signed-time freshness, matcher-side enforcement, atomic-unit conversion, digest-pinned CPU/GPU compose | Invariants present; digest and CUDA-env guards pass. The recorded live CVM evidence remains the required evidence for the network/attestation path. |
+| 2 — local assurance | Aggregate CI dependency wiring, dependency-audit script, required circuit-artifact mode, shared SBF fingerprint, withdraw/lock lifecycle | Source wiring is intact. The SBF guard correctly rejected a stale binary, `build-vault-sbf.sh devnet-admin` refreshed it, and `withdraw_lock_lifecycle` then passed 3/3. |
+| 3 — transport integrity | Absolute unauthenticated login deadline, venue/account caps, general compose digest guard, corrected user-facing transport claims | Invariants present and covered by the complete TEE suite. T-03 remains deliberately deferred under its recorded mainnet/external-user trigger; this is not an unimplemented part of the shipped cap work. |
+| 4 — settlement recovery | Write-ahead journal ordering, chain/PDA reconciliation, indeterminate retention, batch-id seeding, damaged-journal preservation, drain gate | Invariants present and covered by the complete TEE suite. The earlier CPU-CVM crash/drain drill remains the live evidence; no persistence or settle code changed in this pass. |
+| 5 — canonical order v5 | Rust/TS layout and domain parity, removed live wire field, raw daemon commitment, OpenAPI/client compatibility | Live protocol surfaces are clean and the focused SDK canonical tests pass 23/23. The prior six-test CVM run remains valid because no order/TEE/on-chain code changed after its merged baseline. |
+
+Commands and exact results:
+
+- `cargo nextest run -p darknyx-tee -p darkpool-matcher --no-fail-fast`:
+  **607 passed, 3 skipped**.
+- `cargo test -p vault --test withdraw_lock_lifecycle` after the deliberately
+  stale SBF guard fired and `bash scripts/build-vault-sbf.sh devnet-admin`
+  refreshed the fingerprint: **3 passed**.
+- daemon TypeScript test-config typecheck: pass; pre-slice daemon suite:
+  **147 passed, 2 environment-gated skipped**.
+- focused SDK canonical/order tests: **23 passed**.
+- `check-compose-image-digests`, `check-icicle-cuda-arch-env`, and
+  `check-no-doctests`: pass.
+
+The combined Rust run first encountered `ENOSPC` with only 132 MiB free. After a
+package-scoped `cargo clean -p darknyx-tee -p darkpool-matcher` reclaimed
+9.0 GiB, a sandboxed retry reached a loopback-bind denial and the same command
+then passed outside that network sandbox. Neither failure was a product-test
+failure.
+
+The dependency audit was not re-run in this pass: the local sandbox could not
+write Cargo's advisory database, and approval for the networked npm audit was
+denied because it would disclose private dependency metadata. Slice 2 therefore
+continues to rely on its already-recorded dependency evidence; this pass does
+not claim fresh audit output.
+
+One residual was found in slice 5's evidence wording. Live and public protocol
+surfaces are free of the retired field, but
+`programs/vault/tests/settle_harness/mod.rs` still contains unused legacy
+`PendingOrder`/`DarkCLOB` fixture helpers carrying an order-level
+`user_commitment`. No test or production path constructs them. Deleting that
+dead fixture belongs with slice 7's repository/deletion sweep, not this
+keystore slice. A stale `scripts/dev-commands.md` reference to canonical order
+v4 was corrected here. PF-10 remains `Closed`: the wire, heap, signature-domain,
+and live-path invariant it owns is satisfied; the earlier phrase
+"repository-wide sweep clean" is narrowed accordingly.
 
 ---
 
@@ -121,8 +176,8 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 | T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | **Closed** — journal, boot reconciliation, and drain merged; live crash-recovery drill passed on `nightly-test-cvm` 2026-07-28 (interruption confirmed on-chain, recovery classified correctly, entries retired, drain lifecycle exercised). Procedure + results: [`settlement-recovery-drill.md`](settlement-recovery-drill.md). |
 | T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | **Closed** — field removed from `OrderCanonical`/`Order`/`OrderSnapshot`/`MatchPair`/`PlaceOrderRequest` + the TS mirrors; the `[0] != 0` intake check and error code 1002 retired; the daemon's `uc[0] = 0` zeroing deleted so `userCommitment()` is again the raw `create_wallet` output. `ORDER_DOMAIN` v4→v5, both pinned digests regenerated from the layout spec independently of either encoder. **Live-validated 2026-07-29**: all six CVM tests passed on the v5 body, incl. two real on-chain settles (`confirmed=1 rejected=0 ambiguous=0`). |
 | T-08 | Medium | Release engineering | `remediation/local-assurance` | Rust and production Node dependencies have locally reproducible vulnerability gates; GitHub Actions use full immutable SHAs and minimum permissions. Findings are triaged rather than hidden by blanket ignores. | Closed |
-| T-09 | Low | Daemon custody | `remediation/daemon-keystore-v2` | New keystores use the fixed v2 scrypt profile `N=2^17, r=8, p=1` with explicit memory bounds. KATs, wrong-passphrase, and resource-bound tests pin the profile. | Open |
-| T-10 | Low | Daemon custody | `remediation/daemon-keystore-v2` | Unauthenticated file fields cannot select weaker KDF work. Version/profile, lengths, and AAD are strict; v1 files migrate through decrypt-validate-atomic-reseal without destructive partial writes. | Open |
+| T-09 | Low | Daemon custody | `remediation/daemon-keystore-v2` | New keystores use the fixed v2 scrypt profile `N=2^17, r=8, p=1` with explicit memory bounds. KATs, wrong-passphrase, and resource-bound tests pin the profile. | **Code complete** — fixed profile, explicit 256 MiB ceiling, pinned full-envelope KAT, wrong-passphrase and resource-bound tests pass; merge pending. |
+| T-10 | Low | Daemon custody | `remediation/daemon-keystore-v2` | Unauthenticated file fields cannot select weaker KDF work. Version/profile, lengths, and AAD are strict; v1 files migrate through decrypt-validate-atomic-reseal without destructive partial writes. | **Code complete** — exact v1/v2 schemas, bounded decode, metadata AAD, semantic plaintext validation, and atomic migration are implemented and tested; merge pending. |
 | T-11 | Medium | Release engineering + TEE | `remediation/local-assurance` | The complete `darknyx-tee` suite is an explicit local pre-PR gate now and a dedicated hosted job once artifact quota resumes. Slow artifact-backed tests remain separately identifiable. | Closed |
 | T-12 | Medium | TEE tests + circuits | `remediation/local-assurance` | Artifact-required mode fails loudly when circuit artifacts are absent; no positive proof test can report success without proving. Casual local mode may skip only when the required-mode flag is absent and must report the skip. | Closed |
 | T-13 | Low | Vault tests + build tooling | `remediation/local-assurance` | All LiteSVM loaders share one SBF artifact guard backed by a build manifest/source fingerprint, not a fragile per-test mtime check. A changed vault source or build configuration makes tests fail until `cargo build-sbf` refreshes the artifact and manifest. | Closed |
@@ -138,7 +193,7 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 |---|---|---|---|---|---|
 | PF-08 | Perf-Nit | Daemon | — | Repeated trading-key derivation is real but not established as material. Reopen only when an intake/daemon profile identifies it as a material contributor to CPU or placement latency; then derive once per unlocked keystore session rather than add an unbounded cache. | Deferred |
 | PF-09 | Perf-Nit | TEE prover | `remediation/tee-bounds-cleanup` | Rapidsnark `SHORT_BUFFER` handling has bounded retries, checked growth, and a maximum output/error buffer. A malicious or broken native prover cannot loop or allocate without bound. | Open |
-| PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a repository-wide stale-reference sweep. | **Closed** — signed canonical body `203 + S` → `171 + S` bytes (−32; 211 B → 179 B, −15.2% at `SOL-USDC`); one 32-byte field gone from `Order`, `OrderSnapshot`, and `PlaceOrderRequest`, two from `MatchPair`. OpenAPI `required` list and schema verified against the Rust struct by script (20 fields each way, zero drift). Stale-reference sweep clean **on the second pass** — the first claimed clean while missing four sites, because it grepped `order-v4` and `user_commitment` and so skipped prose "order v4" (CRYPTOGRAPHY.md x2) and the retired error code by number (two GitBook pages). Sweep by CONCEPT, not just by identifier. Format-safe: the journal serializes `MatchResultPayload`, which never carried the field. **Live-measured 2026-07-29**: settle `total_ms=14523`, between the two prior samples (14573 / 14210) — the removal costs nothing measurable against a network-bound settle. |
+| PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a live-surface stale-reference sweep. | **Closed** — signed canonical body `203 + S` → `171 + S` bytes (−32; 211 B → 179 B, −15.2% at `SOL-USDC`); one 32-byte field gone from `Order`, `OrderSnapshot`, and `PlaceOrderRequest`, two from `MatchPair`. OpenAPI `required` list and schema verified against the Rust struct by script (20 fields each way, zero drift). Live protocol/API/docs references are clean. The 2026-07-29 revalidation found unused legacy `PendingOrder`/`DarkCLOB` helpers in `programs/vault/tests/settle_harness/mod.rs`; they are not constructed by tests or production and are assigned to slice 7's dead-code sweep. Format-safe: the journal serializes `MatchResultPayload`, which never carried the field. **Live-measured 2026-07-29**: settle `total_ms=14523`, between the two prior samples (14573 / 14210) — the removal costs nothing measurable against a network-bound settle. |
 
 ## Additional release-readiness deliverables
 
@@ -251,13 +306,13 @@ turning the accepted fixes into a cutover-safe implementation.
 
 | Order | Slice | Findings / deliverables | Prerequisite | Status / PR | Compatibility and rollout | Required evidence before `Closed` |
 |---|---|---|---|---|---|---|
-| 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | Code complete / PR open | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
+| 1 | `remediation/tee-oracle-trust` | T-01, T-02, T-04, T-16, RD-01, RD-03 | Tracker baseline merged | Closed / PR #77, except standing T-04 remains Code complete until the deferred ingress image exists to pin | TEE oracle, matcher, config, and compose change; new image, encrypted Pyth credential, digest-pinned CPU/GPU images, compose-hash/client-pin/signer rotation. No circuit or on-chain format change. The hazardous GPU stop instruction is corrected while its compose is already changing. | Legacy and upgraded oracle fixture adversarial suite; unequal-decimal/exponent/overflow conversion tests; direct-matcher stale bypass rejection; local TEE gate; digest evidence; upgraded Hermes smoke; real-mint CVM cold boot and controlled crossing settle; stale/replay/auth failure pauses; secrets absent from logs and compose hash. |
 | 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Closed / PR #79 | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
 | 3 | `remediation/tee-transport-integrity` | DEP-AU-07; T-04 enforcement; transport documentation correction. **T-03 deferred** | Slice 2 closed | Closed / PR #80 | **No compose change, no compose-hash rotation, no CVM, no ceremony.** Connection caps are code defaults; the digest guard is CI-only; the documentation corrections are text. Wire-visible additions only: a `503` on an over-capacity `/v1/stream` upgrade and error code `4290` on an over-cap login, both documented in the OpenAPI. | Real-socket connection-cap tests incl. the ping-only hold and its mutation test; digest-guard mutation test in both failure directions; OpenAPI parse; the standard local gate. |
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Closed / PR #81 | New versioned journal, Borsh-serialized in plaintext and protected ONLY by the dstack-sealed LUKS volume — there is no authenticated encryption at the `JournalSnapshot` boundary, and the row must not imply one. Adds `/admin/drain` (admin-gated) and error code `4290`; no other public wire change. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | **Closed** / PR #84 | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
-| 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | Open / — | Versioned local keystore migration; v1 read/migrate only, all new writes v2. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
-| 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09 | Slice 6 closed | Open / — | SDK removal of dead exports; bounded internal FFI behavior. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep. No CVM required. |
+| 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | **Code complete / PR #86** | Versioned local keystore migration; v1 read/migrate only, all new writes v2. Existing v1 files are replaced only after authenticated decryption, semantic validation, and a durable same-directory write. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
+| 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09; unused legacy settle-harness order fixtures found in slice-5 revalidation | Slice 6 closed | Open / — | SDK removal of dead exports; bounded internal FFI behavior; removal of the unused `PendingOrder`/`DarkCLOB` fixture helpers in `programs/vault/tests/settle_harness/mod.rs`. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep including canonical order v4/v5 concepts. No CVM required. |
 
 ## Cost to the protocol
 
@@ -273,7 +328,7 @@ hardening changes make it impossible to reconstruct.
 | `tee-transport-integrity` (deferred T-03 transport work) | TLS termination adds handshake cost, request latency, memory per socket, and image size. | Cold/warm HTTP p50/p95, WebSocket connect/login/reconnect p50/p95, RSS per 1/100/limit sockets, CPU under ping-only abuse, and image-size delta. Capture in the CVM window that ships the transport change. |
 | `settlement-recovery` | Observed 2026-07-28: settle `total_ms=14210` with the journal enabled, within the spread of the two pre-journal runs (14573 / 15310). Three samples across differing network conditions show the journal is not visible at this resolution — they do not establish that its cost is negligible. ~1684 B journalled per match (~26 KiB per transition for a 16-match batch). Restart→reconciled **436 ms**. | **Partially captured — WAIVER ACCEPTED by the owner 2026-07-29.** End-to-end timing, bytes/match, and restart-to-reconciled are measured ([`settlement-recovery-drill.md`](settlement-recovery-drill.md) §6). **Per-durable-transition write p50/p95 is NOT captured** — no instrumentation exists around `SettleJournal::record`. Accepted on the reasoning that the histogram and the end-to-end figure answer the SAME question (did adding an `fsync` slow settlement?), and the end-to-end figure answers it on the path that reaches a user: the journal-enabled run was the fastest of the three samples (14210 vs 14573 / 15310), so an `fsync` slow enough to matter would already be visible. Residual, stated plainly: three samples support "not visible at this resolution", not "negligible". Add the histogram if the settle path ever becomes CPU- rather than network-bound (e.g. GPU proving lands), because the proxy's whole validity rests on ~14 s of network time dominating. |
 | `order-canonical-next` | Removes one dead 32-byte field plus JSON hex/serialization work; no proving or on-chain cost. | Canonical preimage bytes, REST/WS request bytes, serialized order size, and placement p50/p95 before/after. |
-| `daemon-keystore-v2` | Deliberately increases unlock CPU/RAM; no trading hot-path cost after unlock. | v1/v2 unlock p50/p95, peak RSS, wrong-passphrase cost, migration duration, and resulting file size on supported client classes. |
+| `daemon-keystore-v2` | Deliberately increases unlock CPU/RAM; no trading hot-path cost after unlock. Apple M3/16 GiB measurement: v1 p50/p95 23.22/23.80 ms and 130.14 MiB process peak RSS; v2 203.76/248.25 ms and 247.27 MiB; wrong password 213.23/316.95 ms; migration 237.48/281.19 ms and 261.30 MiB; file 727→760 B. | Captured for the currently supported macOS arm64 development/client class; repeat on any newly supported materially lower-memory client before release. Full method and caveats are in the slice-6 evidence section. |
 | `tee-bounds-cleanup` | Dead-state deletion is neutral/smaller; bounded FFI retries only affect error paths. | Binary/SDK bundle delta, normal-prove p50/p95 unchanged, and adversarial retry count/allocation ceiling. |
 
 ## Cross-tracker corrections
@@ -1154,6 +1209,119 @@ pass. It was re-run with the correct flag and passed 5/5. Same lesson as
 T-11/T-12/T-13/T-18 — a skip is not a pass, and per-file env gates must be
 checked individually, not assumed uniform.
 
+## Slice 6 evidence — `remediation/daemon-keystore-v2`, 2026-07-29
+
+### Format and threat boundary
+
+New daemon keystores are always written as v2:
+
+```text
+version=2
+kdf=scrypt
+profile=scrypt-n17-r8-p1-v1
+cipher=aes-256-gcm
+salt=16 bytes
+iv=12 bytes
+ciphertext=1..8192 bytes
+tag=16 bytes
+```
+
+The file carries no caller-selectable `n`, `r`, or `p`. Version 2 maps to the
+single compiled profile `N=2^17, r=8, p=1` with `maxmem=256 MiB`; the algorithm
+needs approximately 128 MiB and the explicit ceiling prevents runtime defaults
+or an untrusted header from selecting startup work. The entire file is bounded
+to 32 KiB before JSON parsing, every object has an exact key set, and every
+binary field must be canonical lowercase hex of the expected length.
+
+AES-GCM AAD is a binary, unambiguous concatenation of the v2 domain, KDF,
+profile, cipher, raw salt, and raw IV. Ciphertext is authenticated by GCM
+itself. Altering any accepted header value therefore either fails strict schema
+selection before the KDF or fails authentication after deriving the one
+permitted key. Derived key buffers are zeroed on both seal and open paths.
+
+The v1 reader accepts exactly what the old writer emitted:
+`version=1`, `scrypt`, `N=2^14`, `r=8`, `p=1`, and the legacy field set. A
+hostile `N=2^30`, `r`, `p`, extra field, malformed length, or oversized file is
+rejected before scrypt. A valid v1 file is decrypted and its identity is
+semantically validated (64-byte seed, 32-byte root key, canonical BN254 field
+elements) before migration. The v2 replacement is written to a mode-0600
+same-directory temporary file, file-synced, atomically renamed, and
+directory-synced. A wrong password, invalid plaintext, or pre-rename failure
+leaves the original v1 bytes untouched; no partial keystore is exposed.
+
+### Tests
+
+`packages/daemon/tests/keystore.test.ts` now pins:
+
+- a full deterministic v2 envelope KAT, including ciphertext and tag;
+- v2 roundtrip, exact profile, absence of `n/r/p`, mode 0600, file sync plus
+  directory sync, wrong-password immutability, header/AAD tamper rejection,
+  unknown fields, malformed lengths, and the 32 KiB pre-parse bound;
+- v1 correct-password migration followed by an independent v2 reopen;
+- wrong-password and semantically invalid v1 plaintext leaving the original
+  file byte-identical;
+- hostile legacy KDF parameters rejected before work selection;
+- a simulated rename interruption leaving v1 intact and no temporary file;
+- encrypted seed backup/import recovering the same identity and producing a
+  v2 keystore.
+
+No CVM, Solana program, circuit, canonical order, OpenAPI, or network interface
+changes. This is local daemon custody only, so the tracker correctly requires
+no billable CVM run.
+
+Local gate:
+
+- daemon test-config typecheck: pass;
+- daemon production build: pass;
+- daemon Vitest: **156 passed, 2 environment-gated skipped**;
+- targeted Prettier check, namespace guard, and `git diff --check`: pass.
+
+No dependency manifest changed. The dependency audit was not repeated for this
+slice for the sandbox/privacy reason recorded in the slices 1–5 revalidation;
+the already-merged baseline remains unchanged.
+
+### Measured unlock cost
+
+Measured on Node v26.5.0, macOS arm64, Apple M3 (8 logical CPUs), 16 GiB RAM.
+Percentiles use nearest rank. The v1 and v2 unlock sets contain 20 samples after
+one warmup; wrong-password and migration sets contain 10 samples. Each process
+was isolated so peak RSS is attributable to that mode. Migration includes
+legacy decrypt, semantic validation, v2 KDF/seal, file sync, rename, and
+directory sync.
+
+| Operation | Samples | p50 | p95 | min–max | Process RSS baseline → peak | Resulting file |
+|---|---:|---:|---:|---:|---:|---:|
+| v1 legacy unlock baseline | 20 | 23.22 ms | 23.80 ms | 22.73–24.00 ms | 113.61 → 130.14 MiB | 727 B |
+| v2 unlock | 20 | 203.76 ms | 248.25 ms | 197.40–386.23 ms | 113.58 → 247.27 MiB | 760 B |
+| v2 wrong password | 10 | 213.23 ms | 316.95 ms | 205.39–316.95 ms | 113.94 → 242.67 MiB | unchanged |
+| v1→v2 migration | 10 | 237.48 ms | 281.19 ms | 231.72–281.19 ms | 112.98 → 261.30 MiB | 760 B |
+
+The intended cost is roughly 8.8× at p50 versus the legacy unlock and about
+134 MiB of additional process peak over the measured baseline. It is paid once
+per daemon unlock, not per order or trade. A wrong password deliberately pays
+the same class of cost as a correct one, so the stronger offline resistance is
+not bypassed by an invalid attempt. Repeat these measurements before supporting
+a materially lower-memory client class; 16 GiB macOS arm64 is the only client
+class claimed by this evidence.
+
+### Compatibility and rollback
+
+- Valid v1 files migrate transparently on first successful unlock. New writes
+  and migrated files are v2 only.
+- An older daemon cannot open a migrated v2 file. Rollback therefore requires
+  restoring the master seed from the independently encrypted version-2 seed
+  backup and creating a legacy keystore with the old binary; it does not
+  require a chain, note, order, or CVM migration.
+- A failed unlock never migrates. A migration interrupted before rename leaves
+  v1 intact; after the atomic rename the visible file is complete v2.
+- The keystore contains the custody root secret. Operators must verify their
+  encrypted seed backup before deliberately rolling back or deleting either
+  file.
+
+T-09 and T-10 are `Code complete` until this branch merges. Once merged, the
+tests and measurements above satisfy every evidence item named by slice 6 and
+both rows can move to `Closed`.
+
 ## Agent handoff template
 
 ```text
@@ -1168,6 +1336,44 @@ compose hash, signer set, program deployment):
 Evidence still missing:
 Blockers:
 Exact next action:
+```
+
+## Agent handoff — 2026-07-29 (slice 6 code complete)
+
+```text
+Last merged PR / main SHA: #85 / f7ad8c2
+Active branch / HEAD: remediation/daemon-keystore-v2 / a849f02, PR #86, plus
+  this tracker-only PR-identity update
+Dirty or untracked files preserved: yes — modified third_party/icicle-snark and
+  third_party/rapidsnark submodules plus every pre-existing untracked path were
+  left untouched and are not part of slice 6.
+Active slice and finding IDs: slice 6 — T-09, T-10 (Code complete; merge pending)
+Invariant and compatibility decisions:
+  - New writes use only keystore v2 / scrypt N=2^17,r=8,p=1 with a 256 MiB
+    max-memory ceiling; the JSON file cannot select KDF work.
+  - Exact schema + bounded decode + AES-GCM AAD protect the header. V1 is
+    read/migrate-only and is replaced only after authenticated decrypt,
+    semantic validation, file fsync, atomic rename, and directory fsync.
+  - Old binaries cannot read a migrated v2 file. The independent encrypted
+    seed backup is the rollback/recovery path; no chain or CVM migration.
+Commands run and exact results:
+  cargo nextest run -p darknyx-tee -p darkpool-matcher --no-fail-fast
+                                                    -> 607 passed, 3 skipped
+  bash scripts/build-vault-sbf.sh devnet-admin      -> pass
+  cargo test -p vault --test withdraw_lock_lifecycle -> 3 passed
+  tsc -p packages/daemon/tsconfig.test.json --noEmit -> pass
+  vitest packages/daemon                            -> 156 passed, 2 skipped
+  npm run build (packages/daemon)                   -> pass
+  prettier --check affected TS; brand guard; diff check -> pass
+Live state: no CVM running; no devnet, signer, compose, image, circuit, or
+  program state changed. Slice 6 requires no CVM.
+Evidence still missing: PR #86 merge only. All local correctness and cost
+  evidence required by the slice is recorded above.
+Blockers: none. Dependency audit not repeated because the networked check was
+  denied on private-metadata grounds; no dependency manifest changed.
+Exact next action: commit only the five slice-6 files, push/open the PR, merge
+  after reviewing the local evidence, then mark T-09/T-10 Closed and begin
+  slice 7. Do not stage the dirty submodules or unrelated untracked files.
 ```
 
 ## Agent handoff — 2026-07-27

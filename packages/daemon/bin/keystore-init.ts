@@ -29,7 +29,10 @@
 
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { PublicKey } from "@solana/web3.js";
-import { exportEncryptedMasterSeed, importEncryptedMasterSeed } from "@darknyx/sdk";
+import {
+  exportEncryptedMasterSeed,
+  importEncryptedMasterSeed,
+} from "@darknyx/sdk";
 
 import {
   Keystore,
@@ -114,7 +117,7 @@ async function main(): Promise<void> {
   console.log(`keystore written: ${out} (encrypted, 0600)`);
   console.log(
     backupOut
-      ? `encrypted seed backup written: ${backupOut} (version 1, 0600)`
+      ? `encrypted seed backup written: ${backupOut} (version 2, 0600)`
       : `seed restored from encrypted backup: ${importBackup}`,
   );
   console.log("");
