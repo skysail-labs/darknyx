@@ -317,15 +317,23 @@ fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
     Ok(markets)
 }
 
-fn validate_market_oracle_coverage(markets: &[MarketSpec]) -> Result<()> {
-    let configured = markets
+/// Defense-in-depth for future config constructors.
+///
+/// Strict JSON validates every feed before it builds a `MarketSpec`, while the
+/// legacy compatibility path can create exactly one oracle-free loadgen market.
+/// Consequently only malformed direct/test data can violate this today. Keep
+/// the invariant explicit so a future constructor cannot silently introduce an
+/// oracle-free book into a multi-market venue.
+fn validate_market_oracle_invariant(markets: &[MarketSpec]) -> Result<()> {
+    let missing = markets
         .iter()
-        .filter(|market| !market.oracle_feed_id.is_empty())
+        .filter(|market| market.oracle_feed_id.is_empty())
         .count();
-    if configured != 0 && configured != markets.len() {
+    if markets.len() > 1 && missing != 0 {
         bail!(
-            "oracle configuration must cover every market or none; configured {configured} of {}",
-            markets.len()
+            "internal market configuration invariant: every multi-market entry must have \
+             oracle_feed_id; {missing} of {} are missing one",
+            markets.len(),
         );
     }
     Ok(())
@@ -529,7 +537,7 @@ impl Config {
                 }]
             }
         };
-        validate_market_oracle_coverage(&markets)?;
+        validate_market_oracle_invariant(&markets)?;
         let mut seen_feeds = HashSet::new();
         let feed_ids = markets
             .iter()
@@ -629,8 +637,8 @@ mod tests {
     }
 
     #[test]
-    fn mixed_market_oracle_coverage_is_rejected() {
-        let markets = vec![
+    fn direct_multi_market_data_cannot_bypass_required_oracle_feeds() {
+        let mixed = vec![
             MarketSpec {
                 symbol: "SOL-USDC".to_string(),
                 base_mint: [1; 32],
@@ -644,9 +652,29 @@ mod tests {
                 oracle_feed_id: String::new(),
             },
         ];
-        let error = validate_market_oracle_coverage(&markets)
+        let error = validate_market_oracle_invariant(&mixed)
             .expect_err("partial oracle coverage must fail closed at boot");
-        assert!(error.to_string().contains("configured 1 of 2"));
+        assert!(error
+            .to_string()
+            .contains("every multi-market entry must have oracle_feed_id"));
+
+        let oracle_free = mixed
+            .into_iter()
+            .map(|mut market| {
+                market.oracle_feed_id.clear();
+                market
+            })
+            .collect::<Vec<_>>();
+        validate_market_oracle_invariant(&oracle_free)
+            .expect_err("an all-oracle-free multi-market venue is unsupported");
+
+        validate_market_oracle_invariant(&[MarketSpec {
+            symbol: "LOADGEN".to_string(),
+            base_mint: [1; 32],
+            quote_mint: [2; 32],
+            oracle_feed_id: String::new(),
+        }])
+        .expect("the singular legacy loadgen path remains oracle-optional");
     }
 
     #[test]

@@ -649,17 +649,52 @@ impl ApiState {
 
     /// Attach the exact per-market gates shared with the corresponding matcher
     /// drivers and oracle bindings. Production calls this after constructing
-    /// all runtimes; tests that omit it receive isolated gates from
-    /// [`Self::with_market_runtimes`].
-    pub fn with_market_trading_gates(mut self, gates: HashMap<String, TradingGate>) -> Self {
-        if let Some(primary) = self
+    /// all runtimes. A partial map is reconciled against the active symbols:
+    /// exact supplied gates survive, missing active symbols receive isolated
+    /// gates sharing the same venue layer, and stale/unknown entries are
+    /// discarded.
+    pub fn with_market_trading_gates(mut self, mut gates: HashMap<String, TradingGate>) -> Self {
+        let active_symbols = if self.matchers.is_empty() {
+            self.instruments
+                .iter()
+                .map(|instrument| instrument.symbol.clone())
+                .collect::<Vec<_>>()
+        } else {
+            self.matchers.keys().cloned().collect::<Vec<_>>()
+        };
+        let primary_symbol = self
             .instruments
-            .first()
-            .and_then(|instrument| gates.get(&instrument.symbol))
-        {
-            self.trading_gate = primary.clone();
+            .iter()
+            .map(|instrument| &instrument.symbol)
+            .find(|symbol| active_symbols.contains(symbol))
+            .cloned()
+            .or_else(|| active_symbols.first().cloned());
+
+        if let Some(primary) = primary_symbol.as_ref() {
+            if let Some(exact_primary) = gates.get(primary) {
+                self.trading_gate = exact_primary.clone();
+            } else if let Some(existing_market) =
+                active_symbols.iter().find_map(|symbol| gates.get(symbol))
+            {
+                // Share the supplied venue layer, but never reuse another
+                // market's oracle layer for the missing primary.
+                self.trading_gate = existing_market.fork_market();
+            }
         }
-        self.market_trading_gates = gates;
+
+        self.market_trading_gates = active_symbols
+            .into_iter()
+            .map(|symbol| {
+                let gate = gates.remove(&symbol).unwrap_or_else(|| {
+                    if Some(&symbol) == primary_symbol.as_ref() {
+                        self.trading_gate.clone()
+                    } else {
+                        self.trading_gate.fork_market()
+                    }
+                });
+                (symbol, gate)
+            })
+            .collect();
         self
     }
 
@@ -1479,5 +1514,72 @@ mod persist_tests {
         assert!(Arc::ptr_eq(&routed, &btc));
         assert!(!Arc::ptr_eq(&routed, &sol));
         assert!(state.matcher_for_symbol("UNKNOWN").is_none());
+    }
+
+    #[test]
+    fn partial_market_gate_registry_preserves_exact_and_rebuilds_missing_gates() {
+        let sol_matcher = Arc::new(RwLock::new(MatcherState::new()));
+        let btc_matcher = Arc::new(RwLock::new(MatcherState::new()));
+        let exact_sol = TradingGate::default();
+        exact_sol.pause_for(crate::matcher::TradingPauseReason::Oracle);
+        let stale = TradingGate::default();
+
+        let state = ApiState::for_tests()
+            .with_instruments(vec![
+                InstrumentInfo {
+                    symbol: "SOL-USDC".to_string(),
+                    base_mint: [1; 32],
+                    quote_mint: [2; 32],
+                    tick_size: 1,
+                    min_order_size: 1,
+                    oracle_feed_id: "aa".repeat(32),
+                },
+                InstrumentInfo {
+                    symbol: "BTC-USDC".to_string(),
+                    base_mint: [3; 32],
+                    quote_mint: [2; 32],
+                    tick_size: 1,
+                    min_order_size: 1,
+                    oracle_feed_id: "bb".repeat(32),
+                },
+            ])
+            .with_market_runtimes(
+                HashMap::from([
+                    ("SOL-USDC".to_string(), sol_matcher),
+                    ("BTC-USDC".to_string(), btc_matcher),
+                ]),
+                Arc::new(std::sync::atomic::AtomicU64::new(1)),
+                OracleCache::new(),
+            )
+            .with_market_trading_gates(HashMap::from([
+                ("SOL-USDC".to_string(), exact_sol.clone()),
+                ("STALE".to_string(), stale),
+            ]));
+
+        assert_eq!(state.market_trading_gates.len(), 2);
+        assert!(state.trading_gate_for_symbol("STALE").is_none());
+        assert!(
+            !state.trading_gate_for_symbol("SOL-USDC").unwrap().is_open(),
+            "the exact supplied SOL oracle pause must survive reconciliation"
+        );
+        assert!(
+            state.trading_gate_for_symbol("BTC-USDC").unwrap().is_open(),
+            "the missing BTC gate must be rebuilt with an independent oracle layer"
+        );
+        state
+            .trading_gate_for_symbol("BTC-USDC")
+            .unwrap()
+            .pause_for(crate::matcher::TradingPauseReason::Oracle);
+        assert_eq!(state.resume_oracle_for_feed(&"bb".repeat(32)), 1);
+        assert!(
+            state.trading_gate_for_symbol("BTC-USDC").unwrap().is_open(),
+            "feed recovery must resolve the rebuilt BTC gate"
+        );
+
+        exact_sol.pause_for(crate::matcher::TradingPauseReason::Governance);
+        assert!(
+            !state.trading_gate_for_symbol("BTC-USDC").unwrap().is_open(),
+            "the rebuilt BTC gate must share the supplied venue layer"
+        );
     }
 }

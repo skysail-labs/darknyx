@@ -56,8 +56,8 @@ the first stop for an agent resuming the work.
 | Active slice | slice 8 — T-17 multi-market oracle isolation |
 | Active branch / PR | `remediation/multi-market-isolation` / PR #90 |
 | Next slice | none after T-17; T-03 remains explicitly deferred to its mainnet/external-user trigger |
-| Live state | **No CVM running; billing halted** after the slice-5 validation window (2026-07-29). Image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436` on `nightly-test-cvm` (CPU, prod9). Devnet tree left freshly reset from the final `cvm-merge-then-order` cycle, holding only that test's leaves. Signer set unchanged; all four shards funded. PRIOR (slice 4): Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-30 (slice 8 T-17 code complete locally; hosted and live evidence pending) |
+| Live state | **No CVM running; billing halted** after the slice-8 isolation/recovery spot-check (2026-07-30). `nightly-test-cvm` was verified CPU-only (`tdx.xlarge`, prod9, 8 vCPU, `gpus=0`) and ran image `tee-v3-hardening-78` @ `sha256:5ae02ce5c9686770289a7c0e036b4f7819ec6a85c427657fc47d240322ff93c2`, compose hash `7c89a6c3afe75a7fcbf98c200b1a7cc2b5bb39b7ae2862c8e479b1b3d8045e49`. Both real oracle feeds were restored before shutdown. No order was accepted and no proof/settlement ran; tree, program, and signer state are unchanged. The mode-0600 deploy env was securely deleted. PRIOR (slice 5): image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436`; devnet tree holds only the final `cvm-merge-then-order` test's leaves. Signer set unchanged; all four shards funded. |
+| Last updated | 2026-07-30 (slice 8 review fixes validated locally; final-head hosted/dependency checks, digest-pinned CVM evidence, and PR #90 merge pending) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -185,7 +185,7 @@ and live-path invariant it owns is satisfied; the earlier phrase
 | T-14 | Low | Vault + TEE + SDK | `remediation/tee-bounds-cleanup` | The retired `NullifierEntry`, seeds, PDA helpers, comments, and public exports are absent across the program, TEE, SDK, scripts, and docs. The commitment-keyed consumed/deposit guards remain untouched. | **Closed** — dead program/TEE/SDK surfaces and the self-contained legacy order fixtures were removed in PR #88; deletion sweep, full local gate, hosted CI, and CodeRabbit passed. |
 | T-15 | Low | Vault tests + tracker | `remediation/local-assurance` | LiteSVM covers live-lock withdraw rejection, expiry-boundary withdraw success, and `release_lock → withdraw` including rent return. The earlier S-03 row names only evidence that exists. | Closed |
 | T-16 | Medium | TEE oracle + matcher + market config | `remediation/tee-oracle-trust` | Pyth-native price/exponent values are converted with checked integer arithmetic into the governed atomic base/quote price units before circuit-breaker comparison or collateral math. The invariant includes base decimals, quote decimals, exponent, and `price_scale`; unequal-decimal markets, exponent changes, unrepresentable scales, rounding, and overflow fail closed. | Closed |
-| T-17 | Medium | TEE matcher + API | `remediation/multi-market-isolation` | `TradingPauseReason::Oracle` is scoped per market, not venue-wide. One market's stale or unauthenticated feed pauses only that market, and a healthy market's tick cannot clear another's oracle pause. A mixed configuration where some markets have no `oracle_feed_id` while `feed_ids` is non-empty is rejected at boot rather than silently sharing gate state. | **Code complete — local evidence**. Layered venue/market gates, concurrent per-feed failure fallback, market-routed intake/debug checks, strict config, and dynamic `/instruments[].trading_enabled` pass the local gates. Hosted CI/review, digest-pinned CVM boot/API evidence, merge, and tracker closure remain. |
+| T-17 | Medium | TEE matcher + API | `remediation/multi-market-isolation` | `TradingPauseReason::Oracle` is scoped per market, not venue-wide. One market's stale or unauthenticated feed pauses only that market, and a healthy market's tick cannot clear another's oracle pause. Every multi-market entry requires an `oracle_feed_id`; only the singular legacy loadgen path may be oracle-free. | **Code complete — closure evidence pending**. Layered venue/market gates, concurrent per-feed failure fallback, market-routed intake/debug checks, strict config, dynamic `/instruments[].trading_enabled`, and review regressions pass locally. The final-head hosted CI/dependency audit, mandatory digest-pinned CPU-CVM isolation/recovery evidence, and PR #90 merge remain required before this row becomes `Closed`. |
 | T-18 | Medium | Release engineering | `remediation/local-assurance` | A failure in the `Detect changed paths` job cannot leave the aggregate `pr-checks success` check green. The aggregate gate must fail (not pass) when any prerequisite job fails or is skipped due to an upstream failure, so a broken paths filter cannot silently disable the entire PR gate. | Closed |
 
 ## Performance findings
@@ -314,7 +314,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | **Closed** / PR #84 | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | **Closed / PR #86** | Versioned local keystore migration; v1 read/migrate only, all new writes v2. Existing v1 files are replaced only after authenticated decryption, semantic validation, and a durable same-directory write. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
 | 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09; unused legacy settle-harness order fixtures found in slice-5 revalidation | Slice 6 closed | **Closed / PR #88** | SDK removal of dead exports; bounded internal FFI behavior; removal of the unused `PendingOrder`/`DarkCLOB` fixture helpers in `programs/vault/tests/settle_harness/mod.rs`. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep including canonical order v4/v5 concepts. No CVM required. |
-| 8 | `remediation/multi-market-isolation` | T-17 | Slice 7 closed | **Closed / PR #90** | Additive `/instruments[].trading_enabled` field; no canonical order, circuit, verifier key, account, transaction, journal, key, or devnet migration. TEE image/compose measurement changes because runtime source changes. | Mixed-feed boot rejection; shared-governance/isolated-oracle gate tests; stale/healthy two-market matcher and intake tests; batched-success plus per-feed-failure sync tests; OpenAPI/docs/daemon type parity; full local/hosted TEE gates; digest-pinned two-market CPU-CVM isolation and recovery spot-check. |
+| 8 | `remediation/multi-market-isolation` | T-17 | Slice 7 closed | **Code complete / PR #90 — closure evidence pending** | Additive `/instruments[].trading_enabled` field; no canonical order, circuit, verifier key, account, transaction, journal, key, or devnet migration. TEE image/compose measurement changes because runtime source changes. | Mixed-feed boot rejection; shared-governance/isolated-oracle gate tests; stale/healthy two-market matcher and intake tests; batched-success plus per-feed-failure sync tests; OpenAPI/docs/daemon type parity; full local/hosted TEE gates and dependency audit; **mandatory final-source digest-pinned** two-market CPU-CVM isolation and recovery spot-check. |
 
 ## Cost to the protocol
 
@@ -1548,8 +1548,9 @@ market gate would have hidden the production isolation invariant.
 
 The local dependency-audit wrapper could not run because the execution policy
 refused to send private dependency metadata to external advisory services. No
-dependency manifest or lockfile changed; the hosted dependency job remains
-required before closure.
+dependency manifest or lockfile changed. Hosted run `30492199064` passed the
+dependency job in 3m20s for the pre-review head; the job must pass again on the
+final review-fix head before closure.
 
 No circuit, zkey/VK, canonical order, on-chain instruction/account/transaction,
 journal, key derivation, program deployment, tree, signer, or devnet state
@@ -1599,7 +1600,12 @@ state changed. The existing second MarketConfig was reused without modification.
 
 The instance type was checked again immediately before shutdown (`gpus=0`).
 The CVM is confirmed **stopped**, billing is halted, and the mode-0600
-ephemeral deployment env was securely deleted. T-17 and slice 8 are `Closed`.
+ephemeral deployment env was securely deleted. This remains valid pre-review
+evidence, but the review fixes modify TEE source: a final-source image and
+digest-pinned isolation/recovery spot-check are mandatory before closure. T-17
+and slice 8 remain `Code complete`; final-head hosted checks, refreshed CVM
+evidence, and PR #90 merge are pending. The separate mainnet gates—including
+external circuit-audit and ceremony evidence—remain open and unchanged.
 
 ## Agent handoff template
 

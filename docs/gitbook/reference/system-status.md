@@ -55,9 +55,13 @@ failure is narrower: it pauses only markets bound to the affected feed. In that
 partial state `degraded` is true, `matcher_running` can remain true, and each
 `/instruments` entry reports its own `trading_enabled` value.
 
-While degraded, new place and modify operations fail closed with `503 Service
-Unavailable`. Cancels, authenticated reads, and reconciliation continue so a
-trader can reduce risk and the engine can resolve already-pending settlements.
+Under a venue-wide readiness failure, new place and modify operations fail
+closed with `503 Service Unavailable` for every market. Under market-local
+oracle degradation, only place/modify for the affected market fails; a healthy
+symbol whose own `trading_enabled` remains true can continue even while the
+venue-level `degraded` summary is true. Cancels, authenticated reads, and
+reconciliation continue so a trader can reduce risk and the engine can resolve
+already-pending settlements.
 
 ## How it manifests
 
@@ -71,10 +75,14 @@ trader can reduce risk and the engine can resolve already-pending settlements.
 
 - **Use both readiness levels.** Check `/system/status` for venue health, then
   the chosen `/instruments/{symbol}` entry's `trading_enabled` value. Always
-  handle a racing `503` from place/modify.
+  handle a racing `503` from place/modify. Do not block a healthy symbol merely
+  because another market makes the venue-level `degraded` summary true.
 - **Use it, not `/health`, for readiness.** `/health` answers "is the process
   up"; `/system/status` answers "can I trade right now."
-- **Back off and poll.** On a `503`, poll `/system/status` plus the requested
-  instrument and resume when both venue and market readiness recover.
+- **Back off and poll.** On a `503`, refresh `/system/status` plus the requested
+  instrument. Resume that symbol when its own `trading_enabled` is true; do not
+  wait for `degraded=false` when only another market remains paused. A
+  venue-wide failure keeps every instrument disabled until global readiness
+  recovers.
 - **Surface it.** It is public and leaks nothing, so it is safe to show on a status
   page or wire into client-side health checks.

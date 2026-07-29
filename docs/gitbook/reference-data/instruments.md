@@ -95,8 +95,10 @@ shared-capacity model.
 
 ## Cache semantics
 
-Instrument metadata is a boot-time snapshot. Cache it for a connected session,
-then refresh after a reconnect or engine restart. Governance can update market
-configuration on-chain. The venue continuously checks its finalized governed
-view and pauses new trading on drift; reconnect and refresh reference data after
-the operator deploys the approved configuration.
+Static instrument metadata—symbol, mints, tick/minimum sizes, and oracle
+identity—is a boot-time snapshot and may be cached for a connected session.
+`trading_enabled` is dynamic readiness, not reference metadata: refresh it after
+status changes, reconnects, and a racing place/modify `503`. Governance can
+update market configuration on-chain. The venue continuously checks its
+finalized governed view and pauses new trading on drift; reconnect and refresh
+the static fields after the operator deploys the approved configuration.

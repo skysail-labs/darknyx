@@ -174,10 +174,10 @@ rejected because a replacement would change the collateral mint and proof
 context; clients cancel and place a fresh order.
 
 Any configured market missing/disabled at finalized governance refresh, any
-signer/config mismatch, or an untrustworthy refresh state pauses **new trading
-venue-wide**. Cancellation, outcome reconciliation, and cleanup continue.
-Oracle failures are scoped to markets bound to the affected feed; healthy
-markets continue.
+signer/config mismatch, or an untrustworthy finalized governance/configuration
+refresh state pauses **new trading venue-wide**. Cancellation, outcome
+reconciliation, and cleanup continue. Hermes/oracle refresh failures are scoped
+to markets bound to the affected feed; healthy markets continue.
 
 The current on-chain `VaultConfig.tee_pubkeys` is global, so one vault assumes
 one authorized TEE cluster. A multi-CVM endpoint registry and seamless
