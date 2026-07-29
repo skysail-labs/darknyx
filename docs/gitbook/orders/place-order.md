@@ -68,7 +68,7 @@ wire contract is unambiguous.
 |---|---|---|---|
 | `note_commitment` | string | Yes | 32-byte hex. The commitment of the collateral note backing this order. It is signed into the order and can back at most one live or settlement-pending order in this venue. |
 | `collateral_amount` | integer | No | The value the collateral note actually carries, when it exceeds the order's nominal cost. Lets you point a large note at a small order and receive the surplus back as a change note. Omit for exact collateral. |
-| `owner_commitment` | string | Yes | 32-byte hex. The collateral note's owner commitment, part of the secret opening the in-enclave prover re-derives the commitment from. This is the only owner identity an order carries, and the one settlement derives output notes back to. Held in enclave memory only. |
+| `owner_commitment` | string | Yes | 32-byte hex. The collateral note's owner commitment, part of the secret opening the in-enclave prover re-derives the commitment from. This is the only note-bound owner identity an order carries, and the one settlement derives output notes back to. Held in enclave memory only. |
 | `note_inner_hash` | string | Yes | 32-byte hex. The note's amount-independent inner hash (an opening field that anchors both the commitment and the nullifier). |
 | `merkle_root` | string | Yes | 32-byte hex. The tree root the input proof was generated against. Checked against the venue's recent-root window **at intake** (`1010` if it has aged out) and against the on-chain root window again at settlement time. |
 | `valid_input_proof` | string | Yes | 256-byte hex. The zero-knowledge proof that the collateral note is in the tree and spendable. **Verified at intake**, before the order is accepted — an invalid proof is refused with `1011` rather than booked. The on-chain program verifies it again at lock time. |
@@ -175,7 +175,6 @@ Every order is verified before it enters the book. A non-`202` response carries 
 | Check | Status | Code |
 |---|---|---|
 | Well-formed fields (hex widths, non-zero `order_id`) | `400` | 1001 |
-| Hashed fields are canonical field elements | `400` | 1002 |
 | Order amount meets the market minimum | `400` | 1004 |
 | A bid has a positive price limit | `400` | 1005 |
 | The note opening re-derives the signed `note_commitment` | `400` | 1006 |

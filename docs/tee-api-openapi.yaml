@@ -455,9 +455,10 @@ components:
             `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Part of the
             input-note opening the in-TEE VALID_MATCH_BATCH prover needs
             (the circuit re-derives `note_commitment` from the opening).
-            This is the ONLY owner identity an order carries, and the one
-            settlement derives output notes back to. Verified against the
-            signed `note_commitment` at intake. Held in enclave memory only.
+            This is the only NOTE-BOUND owner identity an order carries, and
+            the one settlement derives output notes back to. Verified against
+            the signed `note_commitment` at intake. Held in enclave memory
+            only.
 
             A separate, client-asserted `user_commitment` was also required
             until audit 2026-07-25 (T-07 / PF-10); it was read by nothing and

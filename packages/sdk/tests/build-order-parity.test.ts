@@ -52,7 +52,6 @@ describe("buildOrder", () => {
 
     const body = await buildOrder({
       masterSeed,
-      spendingKey,
       ownerCommitment: ownerCommit,
       tradingKey: kp.publicKey,
       sign: (d) => nacl.sign.detached(d, kp.secretKey),
@@ -121,7 +120,6 @@ describe("buildOrder", () => {
     await expect(
       buildOrder({
         masterSeed: new Uint8Array(64),
-        spendingKey: 1n,
         ownerCommitment: 1n,
         tradingKey: kp.publicKey,
         sign: (d) => nacl.sign.detached(d, kp.secretKey),

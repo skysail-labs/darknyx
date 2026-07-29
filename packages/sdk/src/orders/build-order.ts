@@ -59,9 +59,10 @@ export interface BuildOrderArgs {
   masterSeed: Uint8Array;
   /**
    * The note's owner commitment (a BN254 Fr bigint). Intake re-derives
-   * `note_commitment` from it, so this is the only owner identity an order
-   * carries. A separate, unverified `userCommitment` rode alongside it until
-   * audit 2026-07-25 (T-07 / PF-10); nothing read it.
+   * `note_commitment` from it, so this is the only note-bound owner identity an
+   * order carries — the only one intake verifies. A separate, unverified
+   * `userCommitment` rode alongside it until audit 2026-07-25 (T-07 / PF-10);
+   * nothing read it.
    */
   ownerCommitment: bigint;
   /** 32-byte Ed25519 trading public key (bytes). */

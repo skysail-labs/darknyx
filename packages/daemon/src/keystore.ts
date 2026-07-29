@@ -128,13 +128,17 @@ export class Keystore {
    *  `WalletEntry` is registered under on-chain. The order path does NOT send
    *  it — see `build-place-request.ts`.
    *
-   *  It used to be returned with its top byte forced to 0, to satisfy a TEE
-   *  intake rule that rejected any `user_commitment` whose top byte was
-   *  non-zero. Audit 2026-07-25 (T-07) removed that rule — it was not
-   *  Fr-safety (the BN254 modulus begins `0x30`, so `0x00..=0x30` are all
-   *  valid) and it guarded a hash that no longer happened. The zeroing had made
-   *  this value un-matchable against any registered `WalletEntry`, which is the
-   *  one thing it exists for. */
+   *  Canonicality is guaranteed by the field reduction inside
+   *  `userCommitmentFromKeys` — the Poseidon output IS a BN254 element — not by
+   *  any property of the leading byte. A first-byte bound is not a sufficient
+   *  test at the modulus boundary, where the remaining 31 bytes still decide.
+   *
+   *  This is worth stating because the value used to be returned with its top
+   *  byte forced to 0, to satisfy a TEE intake rule that rejected any
+   *  `user_commitment` whose top byte was non-zero. Audit 2026-07-25 (T-07)
+   *  removed that rule: it was not Fr-safety, and it guarded a hash that no
+   *  longer happened. The zeroing had made this value un-matchable against any
+   *  registered `WalletEntry`, which is the one thing it exists for. */
   async userCommitment(): Promise<Uint8Array> {
     return userCommitmentFromKeys({
       rootKeyPubkey: this.identity.rootKeyPubkey,

@@ -1274,7 +1274,7 @@ key and break long-term linkage. **Why it's private:** order intent lives only
 in enclave memory; L1 observers see deposits + settled outputs, never the
 resting book. The anonymity set is every order in the book that didn't settle.
 
-**Tests:** `tests/order-canonical-parity.test.ts` (the canonical order v4 wire,
+**Tests:** `tests/order-canonical-parity.test.ts` (the canonical order v5 wire,
 byte-equal
 to Rust) + `crates/darknyx-tee/tests/{orders_surface,valid_input_intake_verify}.rs`
 (intake: sig / opening / proof / session / viewing-key / nonce validation).
@@ -2460,7 +2460,7 @@ manual when hosted artifact capacity is unavailable.
 program) + the multi-market in-CVM matcher/settler (`crates/darknyx-tee`),
 validated end-to-end on devnet through Phala CPU and H200 CVMs. v2
 `inner_hash` note model, VALID_DEPOSIT privacy, recipient-bound withdrawals,
-proof-verified intake, consumed-input-derived outputs, and canonical order v4.
+proof-verified intake, consumed-input-derived outputs, and canonical order v5.
 The `matching_engine` / MagicBlock-ER /
 PER path and the standalone `VALID_CREATE` / `VALID_PRICE` circuits have been
 removed.*

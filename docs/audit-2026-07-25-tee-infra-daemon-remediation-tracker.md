@@ -50,10 +50,10 @@ the first stop for an agent resuming the work.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `f7a1530` (slice 2 closed; PR #79 merged) |
+| Last verified `main` | `6a00f59` (ops PR #83 merged 2026-07-28) |
 | Last merged remediation PR | #81 — slice 4 (`settlement-recovery`), merged 2026-07-28. Ops PRs #82 + #83 merged after it (`main` `6a00f59`). |
 | Active slice | **5 — `remediation/order-canonical-next` (T-07 + PF-10). Code complete locally; needs the fresh-tree real-mint CVM settle.** |
-| Active branch / PR | `remediation/order-canonical-next` — not yet opened |
+| Active branch / PR | `remediation/order-canonical-next` — **PR #84 open**, all gates green |
 | Next slice | after 5: `remediation/daemon-keystore-v2` (T-09 + T-10) |
 | Live state | **No CVM running; billing halted** after the slice-4 drill. Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
 | Last updated | 2026-07-29 (slice 5 code complete) |
@@ -138,7 +138,7 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 |---|---|---|---|---|---|
 | PF-08 | Perf-Nit | Daemon | — | Repeated trading-key derivation is real but not established as material. Reopen only when an intake/daemon profile identifies it as a material contributor to CPU or placement latency; then derive once per unlocked keystore session rather than add an unbounded cache. | Deferred |
 | PF-09 | Perf-Nit | TEE prover | `remediation/tee-bounds-cleanup` | Rapidsnark `SHORT_BUFFER` handling has bounded retries, checked growth, and a maximum output/error buffer. A malicious or broken native prover cannot loop or allocate without bound. | Open |
-| PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a repository-wide stale-reference sweep. | **Code complete** — signed canonical body `203 + S` → `171 + S` bytes (−32; 211 B → 179 B, −15.2% at `SOL-USDC`); one 32-byte field gone from `Order`, `OrderSnapshot`, and `PlaceOrderRequest`, two from `MatchPair`. OpenAPI `required` list and schema updated; stale-reference sweep clean. Format-safe: the journal serializes `MatchResultPayload`, which never carried the field. |
+| PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a repository-wide stale-reference sweep. | **Code complete** — signed canonical body `203 + S` → `171 + S` bytes (−32; 211 B → 179 B, −15.2% at `SOL-USDC`); one 32-byte field gone from `Order`, `OrderSnapshot`, and `PlaceOrderRequest`, two from `MatchPair`. OpenAPI `required` list and schema verified against the Rust struct by script (20 fields each way, zero drift). Stale-reference sweep clean **on the second pass** — the first claimed clean while missing four sites, because it grepped `order-v4` and `user_commitment` and so skipped prose "order v4" (CRYPTOGRAPHY.md x2) and the retired error code by number (two GitBook pages). Sweep by CONCEPT, not just by identifier. Format-safe: the journal serializes `MatchResultPayload`, which never carried the field. |
 
 ## Additional release-readiness deliverables
 
@@ -970,7 +970,7 @@ that `user_commitment` vacated.
 |---|---|---|
 | `place_rejects_non_fr_safe_user_commitment` | asserted the defective check fired | replaced by `place_accepts_an_fr_safe_owner_commitment_with_a_non_zero_top_byte` — sets `owner_commitment = [0x2F; 32]` (a canonical element the old rule's logic would have refused) and asserts **202 + present in the book** |
 | `error_responses_use_the_structured_envelope...` | drove the envelope via code 1002 | re-pointed at the all-zero `order_id` → 1001. What is under test is the envelope, not the validation that produced it |
-| `keystore.test.ts` top-byte assertion | `expect(uc[0]).toBe(0)` — pinned the corruption | `expect(uc[0]).toBeLessThanOrEqual(0x30)` — pins genuine Fr-canonicality instead |
+| `keystore.test.ts` top-byte assertion | `expect(uc[0]).toBe(0)` — pinned the corruption | asserts the value equals the **unmodified** `userCommitmentFromKeys` output, plus full-width `< BN254_R`. A top-byte bound would NOT regress: the fixture's real top byte is `0x18`, and both `0x18` and a corrupted `0x00` satisfy `<= 0x30`. Mutation-tested — reintroducing `uc[0] = 0` fails it |
 | `build-order-parity` | asserted `body.user_commitment` matched | asserts `body` has **no** `user_commitment` property |
 
 Error code **1002 is retired, not recycled** — the constructor is deleted and the
@@ -989,7 +989,7 @@ rather than silently meaning something new.
 
 ### Local validation
 
-`cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+`cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
 `check-compose-image-digests`, `check-icicle-cuda-arch-env`,
 `check-brand-namespace`, `check-no-doctests`, `check-dependency-audits`,
 `build-vault-sbf.sh devnet-admin`, `cargo nextest run --workspace`
@@ -1025,6 +1025,25 @@ Not fixed here — it is unrelated to T-07/PF-10 and folding an unrelated runner
 fix into a canonical-format change would make both harder to review. Filed as a
 follow-up; until it is fixed, use `cargo nextest run --workspace` plus a
 targeted `--test valid_input_intake_verify` for the artifact-required check.
+
+### Rollback effects
+
+Reverting v5 → v4 is a code revert plus a redeploy; there is no data migration
+in either direction, which is the main thing an operator needs to know.
+
+| Surface | Effect of reverting |
+|---|---|
+| Settle journal on disk | **No migration.** `JournalEntry` wraps `MatchResultPayload`, which never carried `user_commitment`. A journal written under v5 replays correctly under v4 and vice-versa. |
+| On-chain instruction data | **No migration.** Tx D's payload is unchanged; no vault redeploy, no tree reset. |
+| Circuits / proving keys | Untouched. `match_batch_*` does not see this field. |
+| In-memory resting orders | Discarded — they die with the process on any redeploy, as they already do on every image roll. |
+| Signatures in flight | A v5-signed body fails signature verification against a v4 build (different `ORDER_DOMAIN`), so it is rejected with a 403 rather than mis-parsed. That is the domain tag doing its job in both directions. |
+| Boot session | A redeploy rotates `boot_session_id` anyway, so every pre-restart order signature is already stale independent of this change. |
+
+Operationally: a drain is good hygiene before the redeploy (it cancels resting
+orders and confirms nothing is mid-settle), but it is **not required for
+correctness here** — the journal survives the version change untouched, so a
+crash-revert reconciles the same way a crash-restart does.
 
 ### Still open
 
@@ -1068,7 +1087,7 @@ Invariant and compatibility decisions:
     beyond the routine reset.
 Commands run and exact results:
   cargo fmt --all -- --check                      -> clean
-  cargo clippy --workspace --all-targets -D warn  -> zero warnings
+  cargo clippy --workspace --all-targets -- -D warnings -> zero warnings
   cargo test --workspace                          -> 302 passed, 0 failed, 1 ignored
                                                      (+ all integration suites green)
   tsc -p packages/sdk | packages/indexer          -> both clean
