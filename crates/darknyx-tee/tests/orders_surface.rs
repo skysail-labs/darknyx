@@ -9,7 +9,8 @@
 //!   - Happy path: place → 202; the matcher's book contains the
 //!     order (via GET status).
 //!   - 400 on malformed hex / wrong-width fields / oversize symbol /
-//!     non-BN254-Fr-safe user_commitment / zero order_id.
+//!     zero order_id.
+//!   - 202 on an Fr-safe `owner_commitment` with a non-zero top byte (T-07).
 //!   - 403 on signature mismatch (wrong trading_key sigs the body).
 //!   - 409 on duplicate order_id submission.
 //!   - 401 on missing / invalid bearer.
@@ -113,7 +114,6 @@ struct PlaceOrderBuilder {
     min_fill_size: u64,
     expiry_slot: u64,
     order_id: [u8; 16],
-    user_commitment: [u8; 32],
     arrival_nonce: u64,
     // Input-note opening (4g.7a). The note_commitment is DERIVED from
     // these via NoteOpening::commitment() so the handler's intake
@@ -152,13 +152,6 @@ impl PlaceOrderBuilder {
                 o[0] = 0xAA;
                 o[15] = 1;
                 o
-            },
-            // BN254 Fr-safe: top byte zero. The handler rejects
-            // non-zero top byte even before signature verification.
-            user_commitment: {
-                let mut u = [0x33; 32];
-                u[0] = 0;
-                u
             },
             arrival_nonce: 1,
             owner_commitment: fr_safe(0x44),
@@ -229,7 +222,6 @@ impl PlaceOrderBuilder {
             expiry_slot: self.expiry_slot,
             order_id: self.order_id,
             note_commitment,
-            user_commitment: self.user_commitment,
             arrival_nonce: self.arrival_nonce,
             viewing_pubkey: self.viewing_pubkey,
             session_id: self.session_id,
@@ -252,7 +244,6 @@ impl PlaceOrderBuilder {
             "expiry_slot": self.expiry_slot,
             "order_id": hex::encode(self.order_id),
             "note_commitment": hex::encode(note_commitment),
-            "user_commitment": hex::encode(self.user_commitment),
             "arrival_nonce": self.arrival_nonce,
             "trading_key": hex::encode(trading_key),
             "trading_key_signature": hex::encode(sig.to_bytes()),
@@ -649,24 +640,41 @@ async fn place_rejects_expiry_beyond_lock_ttl_cap() {
     assert_eq!(get_resp.status(), StatusCode::NOT_FOUND);
 }
 
+/// T-07 regression, stated as the property that was BROKEN rather than the
+/// check that was deleted.
+///
+/// Intake used to reject any order whose `user_commitment` had a non-zero top
+/// byte, calling it "BN254 Fr safety". That is not what Fr-safety means: the
+/// modulus begins `0x30`, so a canonical element's top byte is anything in
+/// `0x00..=0x30`. Requiring exactly `0x00` rejected ~98% of legitimate values,
+/// and the field was not hashed by anything anyway.
+///
+/// `owner_commitment` IS hashed (`NoteOpening::verify_commitment`), so it is the
+/// honest test of the same band: a top byte of `0x2F` is comfortably below the
+/// modulus and must be ACCEPTED. Under the old rule the analogous value was a
+/// 400. Asserting acceptance — not the absence of an error string — is what
+/// proves the band actually reopened.
 #[tokio::test]
-async fn place_rejects_non_fr_safe_user_commitment() {
+async fn place_accepts_an_fr_safe_owner_commitment_with_a_non_zero_top_byte() {
     let app = app_from(state());
     let bearer = fresh_bearer();
     let key = fresh_signing_key();
     let mut b = PlaceOrderBuilder::new();
-    b.user_commitment = [0xFF; 32]; // top byte non-zero
+    // 0x2F2F..2F < 0x3064...01 (the BN254 scalar modulus), so this is a
+    // canonical field element that the pre-T-07 top-byte rule would have
+    // rejected out of hand.
+    b.owner_commitment = [0x2F; 32];
     let resp = place(&app, &bearer, b.sign(&key)).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    // Body is plain text via axum's (StatusCode, String) responder.
-    // Spot-check the reason explains the constraint so future
-    // refactors don't silently swap the error message.
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let body_str = std::str::from_utf8(&body).unwrap();
-    assert!(
-        body_str.contains("BN254 Fr") || body_str.contains("top byte"),
-        "400 body should explain the Fr-safety constraint; got: {body_str}"
+    assert_eq!(
+        resp.status(),
+        StatusCode::ACCEPTED,
+        "a canonical Fr element with a non-zero top byte must be accepted"
     );
+
+    // And it really booked — a 202 that did not reach the book would be the
+    // same class of "passes without doing anything" this audit keeps finding.
+    let get_resp = get_order(&app, &bearer, &hex::encode(b.order_id)).await;
+    assert_eq!(get_resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -1469,10 +1477,16 @@ async fn error_responses_use_the_structured_envelope_with_a_numeric_code() {
     let bearer = fresh_bearer();
     let key = fresh_signing_key();
 
-    // A bid with a non-Fr-safe user_commitment (top byte set) → 400 with the
-    // `fr_unsafe` code (1002) and the message preserved in the JSON body.
+    // A bid with the reserved all-zero order_id → 400 with the `malformed`
+    // code (1001) and the message preserved in the JSON body.
+    //
+    // This used to drive the envelope with a non-Fr-safe `user_commitment`
+    // (code 1002). T-07 deleted that check and the field; 1002 is retired.
+    // Re-pointed at a live 400 rather than deleted, because what is under test
+    // here is the ENVELOPE — numeric code, message passthrough, request-id
+    // correlation — not the particular validation that produced it.
     let mut b = PlaceOrderBuilder::new();
-    b.user_commitment = [0x33; 32]; // top byte != 0 → BN254 Fr unsafe
+    b.order_id = [0u8; 16]; // reserved RELOCK_ORDER_ID_NONE sentinel
     let resp = place(&app, &bearer, b.sign(&key)).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     // Every response carries a correlation id.
@@ -1481,9 +1495,9 @@ async fn error_responses_use_the_structured_envelope_with_a_numeric_code() {
         "x-request-id header missing on error"
     );
     let j = read_json(resp).await;
-    assert_eq!(j["code"], 1002, "fr_unsafe numeric code");
+    assert_eq!(j["code"], 1001, "malformed numeric code");
     assert!(
-        j["message"].as_str().unwrap().contains("BN254 Fr"),
+        j["message"].as_str().unwrap().contains("all-zero"),
         "message text preserved in the envelope: {j}"
     );
 }

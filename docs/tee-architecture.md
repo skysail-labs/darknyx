@@ -185,11 +185,11 @@ cross-CVM routing are deliberately deferred; see
 
 ### Canonical intent
 
-The current order domain is `darknyx-order-v4`. The canonical bytes sign:
+The current order domain is `darknyx-order-v5`. The canonical bytes sign:
 
 - symbol, side, type, amount, limit, minimum fill, and expiry;
 - 16-byte deterministic order ID;
-- collateral note commitment and public `user_commitment`;
+- collateral note commitment;
 - strictly increasing arrival nonce;
 - 32-byte contributory X25519 viewing pubkey;
 - 32-byte boot session ID.

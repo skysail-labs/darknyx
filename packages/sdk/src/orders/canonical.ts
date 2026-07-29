@@ -17,8 +17,15 @@
 
 import { createHash } from "node:crypto";
 
+/**
+ * `v5` drops the order-level `user_commitment` (audit 2026-07-25 T-07 / PF-10):
+ * the field was signed but read by nothing — output notes bind the consumed
+ * note opening's `owner_commitment`. The tag moves with the layout so a body of
+ * one shape can never verify as the other. Mirrors
+ * `crates/darkpool-matcher/src/order_canonical.rs::ORDER_DOMAIN`.
+ */
 export const ORDER_DOMAIN: Uint8Array = new TextEncoder().encode(
-  "darknyx-order-v4",
+  "darknyx-order-v5",
 );
 export const CANCEL_DOMAIN: Uint8Array = new TextEncoder().encode(
   "darknyx-cancel-v2",
@@ -59,8 +66,6 @@ export interface OrderCanonical {
   orderId: Uint8Array;
   /** 32 bytes. */
   noteCommitment: Uint8Array;
-  /** 32 bytes. */
-  userCommitment: Uint8Array;
   arrivalNonce: bigint;
   /** 32-byte X25519 viewing-encryption public key. */
   viewingPubkey: Uint8Array;
@@ -120,7 +125,7 @@ function concat(parts: Uint8Array[]): Uint8Array {
  * `S` = symbol bytes length):
  *
  * ```
- *   0..16        ORDER_DOMAIN              ("darknyx-order-v4")
+ *   0..16        ORDER_DOMAIN              ("darknyx-order-v5")
  *   16..17       symbol_len : u8
  *   17..17+S     symbol bytes
  *   +0..+1       side       : u8           (0 = bid, 1 = ask)
@@ -131,13 +136,12 @@ function concat(parts: Uint8Array[]): Uint8Array {
  *   +26..+34     expiry_slot   : u64 LE
  *   +34..+50     order_id        : [u8; 16]
  *   +50..+82     note_commitment : [u8; 32]
- *   +82..+114    user_commitment : [u8; 32]
- *   +114..+122   arrival_nonce : u64 LE
- *   +122..+154   viewing_pubkey : [u8; 32]
- *   +154..+186   session_id : [u8; 32]
+ *   +82..+90     arrival_nonce : u64 LE
+ *   +90..+122    viewing_pubkey : [u8; 32]
+ *   +122..+154   session_id : [u8; 32]
  * ```
  *
- * Total length: `203 + S` bytes.
+ * Total length: `171 + S` bytes (v4 was `203 + S`).
  */
 export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
   if (o.symbol.length > SYMBOL_MAX_LEN) {
@@ -153,11 +157,6 @@ export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
   if (o.noteCommitment.length !== 32) {
     throw new CanonicalError(
       `noteCommitment must be 32 bytes; got ${o.noteCommitment.length}`,
-    );
-  }
-  if (o.userCommitment.length !== 32) {
-    throw new CanonicalError(
-      `userCommitment must be 32 bytes; got ${o.userCommitment.length}`,
     );
   }
   if (o.viewingPubkey.length !== 32) {
@@ -183,7 +182,6 @@ export function orderCanonicalBytes(o: OrderCanonical): Uint8Array {
     u64LE(o.expirySlot),
     o.orderId,
     o.noteCommitment,
-    o.userCommitment,
     u64LE(o.arrivalNonce),
     o.viewingPubkey,
     o.sessionId,

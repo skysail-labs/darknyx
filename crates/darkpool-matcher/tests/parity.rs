@@ -26,8 +26,11 @@ fn pseed(idx: u8, side_u8: u8, price: u64, amount: u64, expiry: u64) -> Order {
     collateral_note[9..17].copy_from_slice(&price.to_le_bytes());
     collateral_note[10] = idx; // overriden in pseed() helper
 
-    let mut user_commitment = tk;
-    user_commitment[0] = 0; // Fr safety
+    // Derived owner identity, keyed on idx like `tk`, so a same-idx self-pair
+    // shares it and distinct traders differ. Top byte zeroed only to keep it a
+    // plausible Poseidon output; the matcher never hashes it.
+    let mut owner_commitment = tk;
+    owner_commitment[0] = 0;
 
     let mut order_id = [0u8; 16];
     order_id[0] = side_u8.wrapping_add(1);
@@ -61,10 +64,7 @@ fn pseed(idx: u8, side_u8: u8, price: u64, amount: u64, expiry: u64) -> Order {
         min_fill_qty: 0,
         note_amount: amount.saturating_mul(price).max(amount).max(1),
         collateral_note,
-        user_commitment,
-        // Same derived owner identity as user_commitment (both keyed on idx), so
-        // a same-idx self-pair shares it and distinct traders differ.
-        owner_commitment: user_commitment,
+        owner_commitment,
         order_id,
         order_inclusion_commitment: oic,
     }
@@ -284,11 +284,9 @@ proptest! {
         let mut bid = pseed(0, 0, price, amount, 1_000_000);
         let mut ask = pseed(1, 1, price, amount, 1_000_000);
 
-        // Model the production distinction: `user_commitment` is signed
-        // metadata, while `owner_commitment` is pinned to the consumed note.
-        bid.user_commitment = fr_safe(0x10, salt);
+        // `owner_commitment` is the note-pinned identity — since T-07 it is
+        // the only owner identity an order carries.
         bid.owner_commitment = fr_safe(0x20, salt);
-        ask.user_commitment = fr_safe(0x30, salt);
         ask.owner_commitment = fr_safe(0x40, salt);
         bid.note_amount = amount * price + buyer_extra;
         ask.note_amount = amount + seller_extra;
@@ -318,9 +316,8 @@ proptest! {
         // construction against itself (S-06).
         //
         // The N-07 property this test also guarded — outputs bind the
-        // note-proven `owner_commitment`, never the client-asserted
-        // `user_commitment` — now lives where the derivation does:
-        // `darknyx_tee::matcher::interval`, whose tests assert against
+        // note-proven `owner_commitment` — now lives where the derivation
+        // does: `darknyx_tee::matcher::interval`, whose tests assert against
         // `buyer_opening.owner_commitment` / `seller_opening.owner_commitment`.
         prop_assert_eq!(m.buyer_change_amt, buyer_extra);
         prop_assert_eq!(m.seller_change_amt, seller_extra);
@@ -853,26 +850,23 @@ fn stp_skips_self_ask_but_fills_against_other_trader() {
 #[test]
 fn stp_same_owner_two_trading_keys_never_matches() {
     // The case a trading_key-only check MISSES: one user trading under TWO
-    // trading keys (free offset rotation) shares ONE owner identity
-    // (`user_commitment`). pseed(1) and pseed(2) have DIFFERENT trading keys; we
-    // force both orders onto a single non-zero `user_commitment` so only the
-    // owner check can stop the wash.
+    // trading keys (free offset rotation) shares ONE note-bound owner identity.
+    // pseed(1) and pseed(2) have DIFFERENT trading keys; we force both orders
+    // onto a single `owner_commitment` so only the owner check can stop the
+    // wash.
     let mut bid = pseed(1, 0, 150, 10, 1_000_000); // trading_key from idx 1
     let mut ask = pseed(2, 1, 140, 10, 1_000_000); // DIFFERENT trading_key (idx 2)
     assert_ne!(
         bid.trading_key, ask.trading_key,
-        "precondition: the two trading keys must differ"
+        "precondition: the two trading keys must differ, so a trading_key-only \
+         check would let this pair match"
     );
-    // Force ONE shared owner identity; leave trading_key + user_commitment
-    // distinct so only the note-bound owner_commitment check can stop the wash.
+    // Force ONE shared owner identity; leave trading_key distinct so only the
+    // note-bound owner_commitment check can stop the wash.
     let mut owner = [0x07u8; 32];
     owner[0] = 0; // Fr safety (a real owner_commitment is a Poseidon output)
     bid.owner_commitment = owner;
     ask.owner_commitment = owner;
-    assert_ne!(
-        bid.user_commitment, ask.user_commitment,
-        "precondition: only owner_commitment should be shared"
-    );
 
     let book = book_of(vec![bid, ask]);
     let out = run_batch(&book, &oracle(145), &config(100_000, 0), 16, 0).expect("matcher");

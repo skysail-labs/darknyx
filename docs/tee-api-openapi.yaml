@@ -29,7 +29,8 @@ openapi: 3.1.0
 #   * Transparency: `/transparency` is an unauthenticated convenience snapshot;
 #     clients independently verify its chain-derived and attestation fields.
 #
-# Versioning: this is the canonical-order-v2 / settlement-payload-v9 contract.
+# Versioning: this is the canonical-order-v5 / settlement-payload-v9 contract.
+# (order v5 dropped the dead `user_commitment` — audit 2026-07-25 T-07/PF-10.)
 # ─────────────────────────────────────────────────────────────────────────────
 
 info:
@@ -359,10 +360,9 @@ components:
     PlaceOrderRequest:
       type: object
       description: |
-        The canonical-order v2 wire schema (`darknyx-order-v4` signature
-        domain). All
-        32/64/16-byte fields are
-        hex-encoded strings; all numeric fields are JSON integers (u64).
+        The canonical-order wire schema (`darknyx-order-v5` signature domain).
+        All 32/64/16-byte fields are hex-encoded strings; all numeric fields are
+        JSON integers (u64).
         The trading-key signature covers the canonical encoding of the
         economic fields, `viewing_pubkey`, `session_id`, and `arrival_nonce`;
         the opening fields (`owner_commitment`, `note_inner_hash`) are pinned
@@ -377,7 +377,6 @@ components:
         - expiry_slot
         - order_id
         - note_commitment
-        - user_commitment
         - arrival_nonce
         - trading_key
         - trading_key_signature
@@ -433,13 +432,6 @@ components:
             at intake on a settlement-enabled venue. The commitment can reserve
             at most one live or settlement-pending order in this venue; the
             on-chain lock remains the final authority at settlement.
-        user_commitment:
-          type: string
-          description: |
-            32-byte hex — intended output-owner identity signed into the order.
-            Top byte must be zero (BN254 Fr safety). Current settlement derives
-            the actual output owner from the verified, note-bound
-            `owner_commitment` rather than trusting this client assertion.
         arrival_nonce:
           type: integer
           format: uint64
@@ -463,8 +455,14 @@ components:
             `Poseidon3(DOMAIN_OWNER=1, spending_key, r_owner)`. Part of the
             input-note opening the in-TEE VALID_MATCH_BATCH prover needs
             (the circuit re-derives `note_commitment` from the opening).
-            Distinct from `user_commitment`. Verified against the signed
-            `note_commitment` at intake. Held in enclave memory only.
+            This is the only NOTE-BOUND owner identity an order carries, and
+            the one settlement derives output notes back to. Verified against
+            the signed `note_commitment` at intake. Held in enclave memory
+            only.
+
+            A separate, client-asserted `user_commitment` was also required
+            until audit 2026-07-25 (T-07 / PF-10); it was read by nothing and
+            has been removed from the request and the signed canonical body.
         note_inner_hash:
           type: string
           description: |

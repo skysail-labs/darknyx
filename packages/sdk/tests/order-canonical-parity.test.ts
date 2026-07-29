@@ -32,8 +32,11 @@ import {
 
 // ─── Pinned hex digests — must match the Rust constants ─────────────────────
 
+// v5 value (T-07 removed the 32-byte `user_commitment` at +82). Derived from
+// the layout spec independently of both encoders, so this pin is a real
+// cross-check and not a record of what the code happened to emit.
 const FIXTURE_DIGEST_HEX =
-  "7a47d4c4dd854c36f394bfa3b6694f5c9b57b0e33da01cbda7c766cb6c757906";
+  "d304e770f8f3fb706c7bb2bc6959002d9030b512f896f3fb518ba1ae4bd2b975";
 
 const CANCEL_FIXTURE_DIGEST_HEX =
   "3063a2f1f4a0f71aed1587ca7bd55dd82b78d0b9148e7ac08bbec25b20298f2c";
@@ -51,7 +54,6 @@ function fixture(): OrderCanonical {
     expirySlot: 320_145_000n,
     orderId: new Uint8Array(16).fill(0x11),
     noteCommitment: new Uint8Array(32).fill(0x22),
-    userCommitment: new Uint8Array(32).fill(0x33),
     arrivalNonce: 42n,
     viewingPubkey: new Uint8Array(32).fill(0x44),
     sessionId: new Uint8Array(32).fill(0x66),
@@ -77,9 +79,9 @@ describe("order canonical encoder — Rust parity", () => {
     expect(actual).toBe(FIXTURE_DIGEST_HEX);
   });
 
-  test("fixture byte length is 203 + symbol.length", () => {
+  test("fixture byte length is 171 + symbol.length", () => {
     const bytes = orderCanonicalBytes(fixture());
-    expect(bytes.length).toBe(203 + "SOL-USDC".length);
+    expect(bytes.length).toBe(171 + "SOL-USDC".length);
   });
 
   test("each field perturbation changes the digest", () => {
@@ -105,10 +107,6 @@ describe("order canonical encoder — Rust parity", () => {
       (o) => (o.noteCommitment = new Uint8Array(32).fill(0x23)),
       "noteCommitment",
     );
-    perturb(
-      (o) => (o.userCommitment = new Uint8Array(32).fill(0x34)),
-      "userCommitment",
-    );
     perturb((o) => (o.arrivalNonce = 43n), "arrivalNonce");
     perturb(
       (o) => (o.viewingPubkey = new Uint8Array(32).fill(0x45)),
@@ -131,18 +129,13 @@ describe("order canonical encoder — Rust parity", () => {
     expect(withSymbol).not.toBe(withoutSymbol);
   });
 
-  test("wrong-width orderId / noteCommitment / userCommitment rejected", () => {
+  test("wrong-width orderId / noteCommitment rejected", () => {
     const o1 = { ...fixture(), orderId: new Uint8Array(15) };
     expect(() => orderCanonicalBytes(o1)).toThrow(/orderId must be 16 bytes/);
 
     const o2 = { ...fixture(), noteCommitment: new Uint8Array(31) };
     expect(() => orderCanonicalBytes(o2)).toThrow(
       /noteCommitment must be 32 bytes/,
-    );
-
-    const o3 = { ...fixture(), userCommitment: new Uint8Array(33) };
-    expect(() => orderCanonicalBytes(o3)).toThrow(
-      /userCommitment must be 32 bytes/,
     );
 
     const o4 = { ...fixture(), viewingPubkey: new Uint8Array(31) };

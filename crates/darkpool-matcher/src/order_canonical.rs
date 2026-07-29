@@ -20,14 +20,20 @@ use sha2::{Digest, Sha256};
 /// the canonical bytes so an `OrderCanonical` and a `CancelCanonical`
 /// with the same `order_id` can never collide on digest.
 ///
-/// `v4` is the clean Darknyx namespace cutover. The preceding v3 body removed
-/// continuation anchors after VALID_MATCH_BATCH began deriving every output
-/// inner from the
-/// removed after VALID_MATCH_BATCH began deriving every output inner from the
-/// consumed input inner. The signed body now binds the required X25519 viewing
-/// key and the CVM's 32-byte boot session id. Old v2 signatures are therefore
-/// invalid by construction.
-pub const ORDER_DOMAIN: &[u8] = b"darknyx-order-v4";
+/// `v5` drops the order-level `user_commitment` (audit 2026-07-25 T-07 / PF-10).
+/// That field was signed, carried through four structs, and read by nothing:
+/// output-note construction binds the consumed note opening's
+/// `owner_commitment`, never this. Intake also gated it on `[0] == 0` in the
+/// name of "BN254 Fr safety", which is not what Fr-safety means — the modulus
+/// begins `0x30`, so a canonical element's top byte is any of `0x00..=0x30` —
+/// and it guarded a Poseidon call that no longer happens.
+///
+/// The tag moves with the layout so a body of one shape can never verify as
+/// the other. `v4` was the Darknyx namespace cutover; v3 removed continuation
+/// anchors once VALID_MATCH_BATCH began deriving every output inner from the
+/// consumed input inner, and bound the required X25519 viewing key plus the
+/// CVM's 32-byte boot session id.
+pub const ORDER_DOMAIN: &[u8] = b"darknyx-order-v5";
 
 /// Domain-separation tag for order cancel. See [`ORDER_DOMAIN`].
 pub const CANCEL_DOMAIN: &[u8] = b"darknyx-cancel-v2";
@@ -69,7 +75,6 @@ pub struct OrderCanonical<'a> {
     /// [`crate::book::Order::order_id`].
     pub order_id: [u8; 16],
     pub note_commitment: [u8; 32],
-    pub user_commitment: [u8; 32],
     /// Client-supplied monotonic counter, scoped per trading key.
     /// Used by the TEE to reject submit-replay.
     pub arrival_nonce: u64,
@@ -86,7 +91,7 @@ impl<'a> OrderCanonical<'a> {
     /// running totals; `S` = symbol bytes length):
     ///
     /// ```text
-    ///   0..16        ORDER_DOMAIN              ("darknyx-order-v4")
+    ///   0..16        ORDER_DOMAIN              ("darknyx-order-v5")
     ///   16..17       symbol_len : u8
     ///   17..17+S     symbol bytes
     ///   +0..+1       side       : u8           (0 = bid, 1 = ask)
@@ -97,20 +102,20 @@ impl<'a> OrderCanonical<'a> {
     ///   +26..+34     expiry_slot   : u64 LE
     ///   +34..+50     order_id        : [u8; 16]
     ///   +50..+82     note_commitment : [u8; 32]
-    ///   +82..+114    user_commitment : [u8; 32]
-    ///   +114..+122   arrival_nonce : u64 LE
-    ///   +122..+154   viewing_pubkey : [u8; 32]
-    ///   +154..+186   session_id : [u8; 32]
+    ///   +82..+90     arrival_nonce : u64 LE
+    ///   +90..+122    viewing_pubkey : [u8; 32]
+    ///   +122..+154   session_id : [u8; 32]
     /// ```
     ///
-    /// Total length: `203 + S` bytes.
+    /// Total length: `171 + S` bytes (v4 was `203 + S`; the 32-byte
+    /// `user_commitment` at `+82` is gone — see [`ORDER_DOMAIN`]).
     pub fn to_bytes(&self) -> Result<Vec<u8>, CanonicalError> {
         if self.symbol.len() > SYMBOL_MAX_LEN {
             return Err(CanonicalError::SymbolTooLong(self.symbol.len()));
         }
         let symbol_len = self.symbol.len() as u8;
 
-        let mut buf = Vec::with_capacity(ORDER_DOMAIN.len() + 1 + self.symbol.len() + 186);
+        let mut buf = Vec::with_capacity(ORDER_DOMAIN.len() + 1 + self.symbol.len() + 154);
         buf.extend_from_slice(ORDER_DOMAIN);
         buf.push(symbol_len);
         buf.extend_from_slice(self.symbol);
@@ -122,7 +127,6 @@ impl<'a> OrderCanonical<'a> {
         buf.extend_from_slice(&self.expiry_slot.to_le_bytes());
         buf.extend_from_slice(&self.order_id);
         buf.extend_from_slice(&self.note_commitment);
-        buf.extend_from_slice(&self.user_commitment);
         buf.extend_from_slice(&self.arrival_nonce.to_le_bytes());
         buf.extend_from_slice(&self.viewing_pubkey);
         buf.extend_from_slice(&self.session_id);
@@ -201,8 +205,14 @@ mod tests {
     ///
     /// If you intentionally change the layout, regenerate this hex
     /// AND the TS-side fixture in the same commit.
+    ///
+    /// v5 value (T-07 removed `user_commitment`). It was derived from the
+    /// LAYOUT SPEC independently, not copied out of a failing assertion — a pin
+    /// refreshed by pasting back whatever the encoder just produced tests only
+    /// that the encoder is deterministic, which is the one thing that was never
+    /// in doubt. The v4 value was `7a47d4c4…`.
     const FIXTURE_DIGEST_HEX: &str =
-        "7a47d4c4dd854c36f394bfa3b6694f5c9b57b0e33da01cbda7c766cb6c757906";
+        "d304e770f8f3fb706c7bb2bc6959002d9030b512f896f3fb518ba1ae4bd2b975";
 
     /// Pinned cancel-fixture digest. Same parity rule applies.
     const CANCEL_FIXTURE_DIGEST_HEX: &str =
@@ -219,7 +229,6 @@ mod tests {
             expiry_slot: 320_145_000,
             order_id: [0x11; 16],
             note_commitment: [0x22; 32],
-            user_commitment: [0x33; 32],
             arrival_nonce: 42,
             viewing_pubkey: [0x44; 32],
             session_id: [0x66; 32],
@@ -246,9 +255,41 @@ mod tests {
     }
 
     #[test]
-    fn fixture_length_is_203_plus_symbol() {
+    fn fixture_length_is_171_plus_symbol() {
         let bytes = fixture().to_bytes().unwrap();
-        assert_eq!(bytes.len(), 203 + 8); // SOL-USDC = 8 bytes
+        assert_eq!(bytes.len(), 171 + 8); // SOL-USDC = 8 bytes
+    }
+
+    /// The v5 body must be exactly 32 bytes shorter than v4 — the width of the
+    /// removed `user_commitment`. Asserting the DELTA, not just the absolute
+    /// length, is what catches a "removal" that silently left padding behind or
+    /// dropped the wrong field: a wrong-field removal keeps the total correct
+    /// while changing the meaning of every byte after `+82`.
+    #[test]
+    fn v5_body_is_exactly_one_commitment_shorter_than_v4() {
+        const V4_LEN_WITHOUT_SYMBOL: usize = 203;
+        let bytes = fixture().to_bytes().unwrap();
+        assert_eq!(
+            V4_LEN_WITHOUT_SYMBOL - (bytes.len() - 8),
+            32,
+            "v5 should drop exactly the 32-byte user_commitment",
+        );
+    }
+
+    /// `arrival_nonce` must now start where `user_commitment` used to, at
+    /// `+82`. The digest pin above would catch a shift too, but only as an
+    /// opaque hex mismatch; this names the field that moved so a future layout
+    /// edit fails with a readable reason.
+    #[test]
+    fn arrival_nonce_occupies_the_slot_user_commitment_vacated() {
+        let bytes = fixture().to_bytes().unwrap();
+        // ORDER_DOMAIN (16) + symbol_len (1) + "SOL-USDC" (8) = 25, then +82.
+        let off = ORDER_DOMAIN.len() + 1 + 8 + 82;
+        assert_eq!(
+            &bytes[off..off + 8],
+            &42u64.to_le_bytes(),
+            "arrival_nonce must be encoded at the old user_commitment offset",
+        );
     }
 
     #[test]
@@ -299,7 +340,6 @@ mod tests {
         perturb!(expiry_slot = 320_145_001);
         perturb!(order_id = [0x12; 16]);
         perturb!(note_commitment = [0x23; 32]);
-        perturb!(user_commitment = [0x34; 32]);
         perturb!(arrival_nonce = 43);
         perturb!(viewing_pubkey = [0x45; 32]);
         perturb!(session_id = [0x67; 32]);

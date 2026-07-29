@@ -336,11 +336,25 @@ mod tests {
         let mut oid = [0u8; 16];
         oid[0] = idx;
         oid[15] = 1; // never zero
-                     // user_commitment top byte must be 0 — the matcher
-                     // Poseidon-hashes it during change-note construction and
-                     // requires BN254-Fr-safe inputs. Matches the on-chain
-                     // `make_pending_seed`'s `user_commitment[0] = 0` step.
-        let user_commitment = {
+
+        // `owner_commitment` IS Poseidon-hashed (the matcher derives change notes
+        // back to it), so it must be BN254-Fr-safe. Zeroing the top byte makes the
+        // value < 2^248 < the modulus, which is a SOUND WAY TO CONSTRUCT one.
+        //
+        // Note the asymmetry, because it is easy to get backwards: a zero top byte
+        // *constructs* a canonical element, but `x[0] <= 0x30` does NOT *prove* one
+        // (at the boundary the remaining 31 bytes decide). Constructing this way is
+        // fine; asserting canonicality this way is not — see
+        // `packages/daemon/tests/keystore.test.ts`, which compares the full width.
+        //
+        // The `^ 0xab` keeps this distinct from `collateral_note` (`[idx; 32]`) and
+        // `trading_key` for the same `idx`, so a test cannot pass by conflating
+        // them. Inlined rather than calling an `fr_safe` helper because there is no
+        // shared one to call: 19 files each define their own private copy of the
+        // identical four lines, and the only `pub` one lives in the vault crate's
+        // test harness, which this crate cannot link. Using "the helper" here would
+        // mean adding a 20th copy for zero behavioural change.
+        let owner_commitment = {
             let mut u = [idx ^ 0xab; 32];
             u[0] = 0;
             u
@@ -359,8 +373,7 @@ mod tests {
             min_fill_qty: 0,
             note_amount: amount.saturating_mul(price).max(amount).max(1),
             collateral_note: [idx; 32],
-            user_commitment,
-            owner_commitment: user_commitment, // same owner identity, keyed on idx
+            owner_commitment, // keyed on idx, so distinct traders differ
             order_id: oid,
             order_inclusion_commitment: [idx ^ 0xcd; 32],
         }

@@ -39,11 +39,10 @@ fn mk_order(side: OrderSide, idx: u8, price: u64, amount: u64) -> Order {
     let mut oid = [0u8; 16];
     oid[0] = idx;
     oid[15] = 1;
-    // user_commitment must be BN254-Fr-safe (top byte < 0x30) because
-    // the matcher's change-note construction Poseidon-hashes it. The
-    // on-chain `make_pending_seed` enforces this by zeroing byte 0;
-    // we do the same here.
-    let user_commitment = {
+    // `owner_commitment` must be BN254-Fr-safe (top byte <= 0x30) because the
+    // matcher's change-note construction Poseidon-hashes it. Zeroing byte 0 is
+    // the cheap way to guarantee that for a synthetic value.
+    let owner_commitment = {
         let mut u = [idx ^ 0xab; 32];
         u[0] = 0;
         u
@@ -62,8 +61,7 @@ fn mk_order(side: OrderSide, idx: u8, price: u64, amount: u64) -> Order {
         min_fill_qty: 0,
         note_amount: amount.saturating_mul(price).max(amount).max(1),
         collateral_note: [idx; 32],
-        user_commitment,
-        owner_commitment: user_commitment, // same owner identity, keyed on idx
+        owner_commitment, // keyed on idx, so distinct traders differ
         order_id: oid,
         order_inclusion_commitment: [idx ^ 0xcd; 32],
     }
@@ -190,7 +188,7 @@ fn mk_driver(
 /// Uses `try_recv` (not `recv().await`) so the test fails fast
 /// if `tick()` returns Ok but didn't push a match — the
 /// historical failure mode was a silent matcher error (e.g.
-/// non-Fr-safe `user_commitment`) that `tick()` swallowed as a
+/// a non-Fr-safe `owner_commitment`) that `tick()` swallowed as a
 /// `warn!` log. Asserting synchronous channel state surfaces
 /// that immediately.
 #[tokio::test]

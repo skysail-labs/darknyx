@@ -4,9 +4,9 @@
 //! two orders from the same OWNER are never matched against each other (a wash
 //! trade / no-op settle). The owner identity is the order's note-BOUND
 //! `owner_commitment` (`Poseidon2(spending_key, r_owner)`): intake pins it to the
-//! collateral note via `verify_commitment`, so — unlike the client-asserted
-//! `user_commitment` — a *settling* wash cannot lie about it (the only way to
-//! present two different owners is two genuinely different note owners). It is
+//! collateral note via `verify_commitment`, so a *settling* wash cannot lie
+//! about it (the only way to present two different owners is two genuinely
+//! different note owners). It is
 //! reused across all of a user's notes, so the skip catches the case a
 //! `trading_key`-only check missed: one user trading under two trading keys (the
 //! trading key is freely re-derived by `offset` and is deliberately NOT part of

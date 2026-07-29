@@ -46,7 +46,7 @@ Codes are grouped by class. The HTTP status is derived from the class.
 |---|---|---|
 | `1000` | 400 | Generic bad request. |
 | `1001` | 400 | Malformed input: bad hex, wrong width, zero/illegal id, or invalid field combination. |
-| `1002` | 400 | A hashed field is not a canonical field element (BN254 Fr-unsafe). |
+| `1002` | — | **Retired.** Rejected a `user_commitment` whose top byte was non-zero — a field that no longer exists, behind a rule that was not Fr-safety (audit 2026-07-25, T-07). Never reused, so a stale reference reads as "gone". Canonicality of the values that ARE hashed is enforced by the opening re-derivation and surfaces as `1006`. |
 | `1003` | 400 | Collateral below the order's nominal cost + fee. |
 | `1004` | 400 | Order amount below the market minimum. |
 | `1005` | 400 | A bid with a zero price limit. |

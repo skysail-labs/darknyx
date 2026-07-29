@@ -33,11 +33,9 @@ import {
 
 import {
   deriveSpendingKey,
-  deriveMasterViewingKey,
   deriveBlindingFactor,
   bn254ToBE32,
 } from "../../src/keys/key-generators.js";
-import { userCommitmentFromKeys } from "../../src/keys/user-commitment.js";
 import {
   ownerCommitment,
   noteCommitmentV2,
@@ -216,7 +214,6 @@ export interface Persona {
   spendingKey: bigint;
   ownerBlinding: bigint;
   ownerCommit: bigint;
-  userCommitment: Uint8Array; // 32B BE
 }
 
 export async function makePersona(
@@ -236,20 +233,11 @@ export async function makePersona(
       (seed0 + i * 7 + Number((RUN_SALT >> BigInt(i % 53)) & 0xffn)) & 0xff;
   }
   const spendingKey = deriveSpendingKey(masterSeed);
-  const viewingKey = deriveMasterViewingKey(masterSeed);
   const ownerBlinding = BigInt(seed0) + 0xfeedn;
   const ownerCommit = await ownerCommitment(spendingKey, ownerBlinding);
-  const userCommitment = await userCommitmentFromKeys({
-    rootKeyPubkey: payer.publicKey.toBytes(),
-    spendingKey,
-    viewingKey,
-    r0: BigInt(seed0) + 1n,
-    r1: BigInt(seed0) + 2n,
-    r2: BigInt(seed0) + 3n,
-  });
-  // Intake requires the top byte to be exactly 0 (it Poseidon-hashes this when
-  // constructing change notes). Zero it to pass the stricter intake check.
-  userCommitment[0] = 0;
+  // A `userCommitment` used to live here, zeroed in its top byte to satisfy an
+  // intake check that audit 2026-07-25 (T-07) found both wrong and guarding
+  // nothing. `ownerCommit` is the identity intake actually verifies.
   return {
     name,
     payer,
@@ -258,7 +246,6 @@ export async function makePersona(
     spendingKey,
     ownerBlinding,
     ownerCommit,
-    userCommitment,
   };
 }
 

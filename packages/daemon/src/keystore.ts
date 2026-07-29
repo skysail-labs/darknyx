@@ -124,14 +124,23 @@ export class Keystore {
 
   /** The account's 32-byte big-endian user commitment (Poseidon — async).
    *
-   *  The top byte is forced to 0: TEE intake requires it (it Poseidon-hashes
-   *  this when constructing change notes, and rejects a non-zero top byte), and
-   *  the matcher reconstructs change-note owners from the same zeroed value — so
-   *  client + TEE must agree. Mirrors the validated cvm-harness persona. (The
-   *  zeroing means this value is NOT a raw create_wallet Poseidon output; the
-   *  daemon's trade path never registers a wallet, matching cvm-settle-e2e.) */
+   *  This is the genuine `create_wallet` Poseidon output: the identity a
+   *  `WalletEntry` is registered under on-chain. The order path does NOT send
+   *  it — see `build-place-request.ts`.
+   *
+   *  Canonicality is guaranteed by the field reduction inside
+   *  `userCommitmentFromKeys` — the Poseidon output IS a BN254 element — not by
+   *  any property of the leading byte. A first-byte bound is not a sufficient
+   *  test at the modulus boundary, where the remaining 31 bytes still decide.
+   *
+   *  This is worth stating because the value used to be returned with its top
+   *  byte forced to 0, to satisfy a TEE intake rule that rejected any
+   *  `user_commitment` whose top byte was non-zero. Audit 2026-07-25 (T-07)
+   *  removed that rule: it was not Fr-safety, and it guarded a hash that no
+   *  longer happened. The zeroing had made this value un-matchable against any
+   *  registered `WalletEntry`, which is the one thing it exists for. */
   async userCommitment(): Promise<Uint8Array> {
-    const uc = await userCommitmentFromKeys({
+    return userCommitmentFromKeys({
       rootKeyPubkey: this.identity.rootKeyPubkey,
       spendingKey: this.spend,
       viewingKey: this.view,
@@ -139,8 +148,6 @@ export class Keystore {
       r1: this.identity.r1,
       r2: this.identity.r2,
     });
-    uc[0] = 0;
-    return uc;
   }
 
   /** The Ed25519 keypair for the order at `index` (deterministic from the seed).

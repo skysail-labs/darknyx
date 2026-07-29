@@ -65,10 +65,6 @@ pub struct PlaceOrderRequest {
     pub order_id: String,
     /// 32-byte Poseidon6 commitment of the collateral note, hex.
     pub note_commitment: String,
-    /// 32-byte Poseidon2(spending_key, r_owner), hex. Top byte must
-    /// be zero (BN254 Fr safety — the matcher Poseidon-hashes this
-    /// during change-note construction).
-    pub user_commitment: String,
     pub arrival_nonce: u64,
     /// 32-byte Ed25519 pubkey of the submitter, hex.
     pub trading_key: String,
@@ -83,8 +79,12 @@ pub struct PlaceOrderRequest {
     // they're cryptographically pinned without expanding the signed
     // canonical body) and held in enclave memory only. See
     // `crate::matcher::openings`.
-    /// 32-byte note owner commitment `Poseidon3(1, spending_key,
-    /// r_owner)`, hex. NOT the same as `user_commitment`.
+    /// 32-byte note owner commitment `Poseidon3(1, spending_key, r_owner)`,
+    /// hex. Intake re-derives `note_commitment` from it, so it is the only
+    /// note-bound owner identity an order carries — the only one intake
+    /// verifies, and the one output notes derive back to. A separate,
+    /// unverified `user_commitment` also rode the wire until audit 2026-07-25
+    /// (T-07 / PF-10); nothing read it.
     pub owner_commitment: String,
     /// 32-byte v2 note `inner_hash`, hex (replaces the old note_nonce +
     /// note_blinding pair). Anchors both the commitment and the nullifier.
@@ -337,7 +337,6 @@ async fn prepare_order(
     // 1. Decode hex inputs.
     let order_id: [u8; 16] = decode_hex(&req.order_id, "order_id")?;
     let note_commitment: [u8; 32] = decode_hex(&req.note_commitment, "note_commitment")?;
-    let user_commitment: [u8; 32] = decode_hex(&req.user_commitment, "user_commitment")?;
     let trading_key: [u8; 32] = decode_hex(&req.trading_key, "trading_key")?;
     let signature: [u8; 64] = decode_hex(&req.trading_key_signature, "trading_key_signature")?;
     let owner_commitment: [u8; 32] = decode_hex(&req.owner_commitment, "owner_commitment")?;
@@ -372,15 +371,6 @@ async fn prepare_order(
             "symbol length {} exceeds SYMBOL_MAX_LEN ({SYMBOL_MAX_LEN})",
             req.symbol.len()
         )));
-    }
-    if user_commitment[0] != 0 {
-        // BN254 Fr-safety. Matcher Poseidon-hashes this during
-        // change-note construction; non-zero top byte means
-        // light-poseidon's `hash_bytes_be` will fail at tick time.
-        // Reject early at intake.
-        return Err(ApiError::fr_unsafe(
-            "user_commitment top byte must be zero (BN254 Fr safety)",
-        ));
     }
     // Governed intake policy. Resolve the symbol once, then enforce its minimum
     // size and tick before the expensive Ed25519 verify. There is one market in
@@ -425,7 +415,6 @@ async fn prepare_order(
         expiry_slot: req.expiry_slot,
         order_id,
         note_commitment,
-        user_commitment,
         arrival_nonce: req.arrival_nonce,
         viewing_pubkey,
         session_id,
@@ -605,7 +594,6 @@ async fn prepare_order(
         min_fill_qty: req.min_fill_size,
         note_amount,
         collateral_note: note_commitment,
-        user_commitment,
         // The owner_commitment was just pinned to `note_commitment` by
         // `verify_commitment` above, so the matcher's self-trade check keys on a
         // value the caller cannot spoof for a note they don't own.

@@ -50,13 +50,13 @@ the first stop for an agent resuming the work.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `f7a1530` (slice 2 closed; PR #79 merged) |
-| Last merged remediation PR | #81 — slice 4 (`settlement-recovery`), merged 2026-07-28 |
-| Active slice | none — slice 4 closed. |
-| Active branch / PR | merged (PR #81) |
-| Next slice | `remediation/order-canonical-next` (slice 5) — T-07 + PF-10 |
-| Live state | **No CVM running; billing halted** after the slice-4 drill. Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-28 (slice 4 closed) |
+| Last verified `main` | `6a00f59` (ops PR #83 merged 2026-07-28) |
+| Last merged remediation PR | #81 — slice 4 (`settlement-recovery`), merged 2026-07-28. Ops PRs #82 + #83 merged after it (`main` `6a00f59`). |
+| Active slice | none — slice 5 closed 2026-07-29 (T-07 + PF-10 live-validated on `nightly-test-cvm`). |
+| Active branch / PR | PR #84 — CI green + all six CVM tests passed; ready to merge |
+| Next slice | after 5: `remediation/daemon-keystore-v2` (T-09 + T-10) |
+| Live state | **No CVM running; billing halted** after the slice-5 validation window (2026-07-29). Image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436` on `nightly-test-cvm` (CPU, prod9). Devnet tree left freshly reset from the final `cvm-merge-then-order` cycle, holding only that test's leaves. Signer set unchanged; all four shards funded. PRIOR (slice 4): Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
+| Last updated | 2026-07-29 (slice 5 CLOSED — CVM-validated) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -119,7 +119,7 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 | T-04 | High | Release engineering + infrastructure | `remediation/tee-oracle-trust`, then enforced for `remediation/tee-transport-integrity` | The existing CPU/GPU images are pinned by immutable digest in the oracle slice, which already changes the image and compose. Every image introduced later, including ingress, must be digest-pinned before that slice can merge. Release evidence maps source/tag/digest/compose hash, so substituting a tag cannot preserve an accepted measurement. | Code complete — enforcement generalised in slice 3: `scripts/check-compose-image-digests.sh` now checks EVERY image in EVERY compose against an explicit repository allowlist, instead of asserting a single hardcoded image. An ingress (or any other) service added later fails the gate until it is digest-pinned AND its repository is deliberately approved. Verified by mutating a compose in both directions. |
 | T-05 | Medium | — | — | Owner accepted the residual append-only-mirror availability risk on 2026-07-27. Confirmed commitment plus on-chain root validation is considered sufficient for the current product; a rollback can stall witness service but cannot authorize custody loss. No code, test, infrastructure, or follow-up task is authorized. | **Won't Fix — accepted risk** |
 | T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | **Closed** — journal, boot reconciliation, and drain merged; live crash-recovery drill passed on `nightly-test-cvm` 2026-07-28 (interruption confirmed on-chain, recovery classified correctly, entries retired, drain lifecycle exercised). Procedure + results: [`settlement-recovery-drill.md`](settlement-recovery-drill.md). |
-| T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | Open |
+| T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | **Closed** — field removed from `OrderCanonical`/`Order`/`OrderSnapshot`/`MatchPair`/`PlaceOrderRequest` + the TS mirrors; the `[0] != 0` intake check and error code 1002 retired; the daemon's `uc[0] = 0` zeroing deleted so `userCommitment()` is again the raw `create_wallet` output. `ORDER_DOMAIN` v4→v5, both pinned digests regenerated from the layout spec independently of either encoder. **Live-validated 2026-07-29**: all six CVM tests passed on the v5 body, incl. two real on-chain settles (`confirmed=1 rejected=0 ambiguous=0`). |
 | T-08 | Medium | Release engineering | `remediation/local-assurance` | Rust and production Node dependencies have locally reproducible vulnerability gates; GitHub Actions use full immutable SHAs and minimum permissions. Findings are triaged rather than hidden by blanket ignores. | Closed |
 | T-09 | Low | Daemon custody | `remediation/daemon-keystore-v2` | New keystores use the fixed v2 scrypt profile `N=2^17, r=8, p=1` with explicit memory bounds. KATs, wrong-passphrase, and resource-bound tests pin the profile. | Open |
 | T-10 | Low | Daemon custody | `remediation/daemon-keystore-v2` | Unauthenticated file fields cannot select weaker KDF work. Version/profile, lengths, and AAD are strict; v1 files migrate through decrypt-validate-atomic-reseal without destructive partial writes. | Open |
@@ -138,7 +138,7 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 |---|---|---|---|---|---|
 | PF-08 | Perf-Nit | Daemon | — | Repeated trading-key derivation is real but not established as material. Reopen only when an intake/daemon profile identifies it as a material contributor to CPU or placement latency; then derive once per unlocked keystore session rather than add an unbounded cache. | Deferred |
 | PF-09 | Perf-Nit | TEE prover | `remediation/tee-bounds-cleanup` | Rapidsnark `SHORT_BUFFER` handling has bounded retries, checked growth, and a maximum output/error buffer. A malicious or broken native prover cannot loop or allocate without bound. | Open |
-| PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a repository-wide stale-reference sweep. | Open |
+| PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a repository-wide stale-reference sweep. | **Closed** — signed canonical body `203 + S` → `171 + S` bytes (−32; 211 B → 179 B, −15.2% at `SOL-USDC`); one 32-byte field gone from `Order`, `OrderSnapshot`, and `PlaceOrderRequest`, two from `MatchPair`. OpenAPI `required` list and schema verified against the Rust struct by script (20 fields each way, zero drift). Stale-reference sweep clean **on the second pass** — the first claimed clean while missing four sites, because it grepped `order-v4` and `user_commitment` and so skipped prose "order v4" (CRYPTOGRAPHY.md x2) and the retired error code by number (two GitBook pages). Sweep by CONCEPT, not just by identifier. Format-safe: the journal serializes `MatchResultPayload`, which never carried the field. **Live-measured 2026-07-29**: settle `total_ms=14523`, between the two prior samples (14573 / 14210) — the removal costs nothing measurable against a network-bound settle. |
 
 ## Additional release-readiness deliverables
 
@@ -255,7 +255,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Closed / PR #79 | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
 | 3 | `remediation/tee-transport-integrity` | DEP-AU-07; T-04 enforcement; transport documentation correction. **T-03 deferred** | Slice 2 closed | Closed / PR #80 | **No compose change, no compose-hash rotation, no CVM, no ceremony.** Connection caps are code defaults; the digest guard is CI-only; the documentation corrections are text. Wire-visible additions only: a `503` on an over-capacity `/v1/stream` upgrade and error code `4290` on an over-cap login, both documented in the OpenAPI. | Real-socket connection-cap tests incl. the ping-only hold and its mutation test; digest-guard mutation test in both failure directions; OpenAPI parse; the standard local gate. |
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Closed / PR #81 | New versioned journal, Borsh-serialized in plaintext and protected ONLY by the dstack-sealed LUKS volume — there is no authenticated encryption at the `JournalSnapshot` boundary, and the row must not imply one. Adds `/admin/drain` (admin-gated) and error code `4290`; no other public wire change. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
-| 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | Open / — | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
+| 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | **Closed** / PR #84 | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | Open / — | Versioned local keystore migration; v1 read/migrate only, all new writes v2. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
 | 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09 | Slice 6 closed | Open / — | SDK removal of dead exports; bounded internal FFI behavior. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep. No CVM required. |
 
@@ -271,7 +271,7 @@ hardening changes make it impossible to reconstruct.
 | `local-assurance` | No protocol runtime cost; longer local/hosted validation. | Wall time and peak disk for the TEE, artifact-required, SBF, dependency, and complete local gates. |
 | `tee-transport-integrity` (as shipped) | Connection accounting adds one atomic compare-and-swap per upgrade and one map update per login — not measurable against network cost. No TLS work shipped, so no handshake, latency, or image-size delta. | None required: the change adds no per-request work on any hot path. The caps' behaviour is pinned by tests rather than by a timing measurement. |
 | `tee-transport-integrity` (deferred T-03 transport work) | TLS termination adds handshake cost, request latency, memory per socket, and image size. | Cold/warm HTTP p50/p95, WebSocket connect/login/reconnect p50/p95, RSS per 1/100/limit sockets, CPU under ping-only abuse, and image-size delta. Capture in the CVM window that ships the transport change. |
-| `settlement-recovery` | Observed 2026-07-28: settle `total_ms=14210` with the journal enabled, within the spread of the two pre-journal runs (14573 / 15310). Three samples across differing network conditions show the journal is not visible at this resolution — they do not establish that its cost is negligible. ~1684 B journalled per match (~26 KiB per transition for a 16-match batch). Restart→reconciled **436 ms**. | **Partially captured — WAIVER REQUIRED.** End-to-end timing, bytes/match, and restart-to-reconciled are measured ([`settlement-recovery-drill.md`](settlement-recovery-drill.md) §6). **Per-durable-transition write p50/p95 is NOT captured** and this row lists it as mandatory: no instrumentation exists around `SettleJournal::record`. T-06 is `Closed` on the owner's acceptance that the end-to-end figure is a sufficient proxy for a write that is invisible against a ~14 s network-bound settle. If that waiver is not granted, T-06 returns to `Code complete` until the histogram is added and a drill captures it. |
+| `settlement-recovery` | Observed 2026-07-28: settle `total_ms=14210` with the journal enabled, within the spread of the two pre-journal runs (14573 / 15310). Three samples across differing network conditions show the journal is not visible at this resolution — they do not establish that its cost is negligible. ~1684 B journalled per match (~26 KiB per transition for a 16-match batch). Restart→reconciled **436 ms**. | **Partially captured — WAIVER ACCEPTED by the owner 2026-07-29.** End-to-end timing, bytes/match, and restart-to-reconciled are measured ([`settlement-recovery-drill.md`](settlement-recovery-drill.md) §6). **Per-durable-transition write p50/p95 is NOT captured** — no instrumentation exists around `SettleJournal::record`. Accepted on the reasoning that the histogram and the end-to-end figure answer the SAME question (did adding an `fsync` slow settlement?), and the end-to-end figure answers it on the path that reaches a user: the journal-enabled run was the fastest of the three samples (14210 vs 14573 / 15310), so an `fsync` slow enough to matter would already be visible. Residual, stated plainly: three samples support "not visible at this resolution", not "negligible". Add the histogram if the settle path ever becomes CPU- rather than network-bound (e.g. GPU proving lands), because the proxy's whole validity rests on ~14 s of network time dominating. |
 | `order-canonical-next` | Removes one dead 32-byte field plus JSON hex/serialization work; no proving or on-chain cost. | Canonical preimage bytes, REST/WS request bytes, serialized order size, and placement p50/p95 before/after. |
 | `daemon-keystore-v2` | Deliberately increases unlock CPU/RAM; no trading hot-path cost after unlock. | v1/v2 unlock p50/p95, peak RSS, wrong-passphrase cost, migration duration, and resulting file size on supported client classes. |
 | `tee-bounds-cleanup` | Dead-state deletion is neutral/smaller; bounded FFI retries only affect error paths. | Binary/SDK bundle delta, normal-prove p50/p95 unchanged, and adversarial retry count/allocation ceiling. |
@@ -844,8 +844,8 @@ accuracy, and **one was a real defect in my own previous fix**.
   captured — no instrumentation exists around `SettleJournal::record`. Rather
   than let that sit unremarked under a `Closed` row, it is now an **explicitly
   recorded waiver**: T-06 is Closed on the owner's acceptance that the end-to-end
-  figure is a sufficient proxy, and returns to `Code complete` if that acceptance
-  is not given. Adding the histogram is the first task before the next drill.
+  figure is a sufficient proxy. **Accepted 2026-07-29.** The rationale and the
+  condition that would invalidate it are in the cost-table row.
 - **Abbreviated image digests.** `sha256:59e2932f…7bbfda` identifies nothing;
   both records now carry the full 64-hex digest, with the tag and commit marked
   as cross-references rather than identity.
@@ -857,7 +857,7 @@ Skipped: nothing. Every item in this pass was either valid or already fixed.
 
 ### Status
 
-`T-06` is **`Closed`**, with one explicitly recorded waiver: per-durable-transition write p50/p95 was not captured (see the cost table row — the measurement is listed as mandatory and no instrumentation exists for it). Every other live obligation was discharged by the 2026-07-28 drill above, and the code merged in PR #81. The drill is repeatable — [`settlement-recovery-drill.md`](settlement-recovery-drill.md) carries the procedure, the pass criteria, and the traps — so a future settle-pipeline or persistence change can re-establish this evidence rather than re-derive how.
+`T-06` is **`Closed`**, with one explicitly recorded waiver, **accepted by the owner on 2026-07-29**: per-durable-transition write p50/p95 was not captured (see the cost table row for the rationale and for the condition — a CPU-bound settle path — that would require revisiting it). The waiver covers a PERFORMANCE measurement only. The open *correctness* gap is separate and still stands: the drill only ever exercised the `Locking`-stage journal entry, so `AlreadySettled` and `Indeterminate` remain unit-tested only, because `phala cvms stop` cannot land inside the ~10 s settle window — reaching them needs `phala ssh` + `docker kill` and development-mode SSH keys. Every other live obligation was discharged by the 2026-07-28 drill above, and the code merged in PR #81. The drill is repeatable — [`settlement-recovery-drill.md`](settlement-recovery-drill.md) carries the procedure, the pass criteria, and the traps — so a future settle-pipeline or persistence change can re-establish this evidence rather than re-derive how.
 
 Superseded window plan (kept for provenance):
 
@@ -897,6 +897,252 @@ across a restart, which returns the deployment to the pre-slice behaviour the
 lock sweeper already backstops.
 
 
+## Slice 5 evidence — `remediation/order-canonical-next`, 2026-07-29
+
+### What was actually broken
+
+Three defects stacked on one field. Intake rejected any order whose
+`user_commitment` had a non-zero top byte, justified in the code as "BN254
+Fr-safety":
+
+1. **The justification was false at HEAD.** The comment claimed "the matcher
+   Poseidon-hashes this during change-note construction". It does not — v3
+   output inners derive from the consumed input inner and `owner_commitment`.
+   A repo-wide grep confirms `user_commitment` was never passed to Poseidon.
+2. **The check was wrong on its own terms.** Fr-safety means "below the BN254
+   scalar modulus". That modulus begins `0x30`, so a canonical element's top
+   byte is any of `0x00..=0x30` — 49 values. Demanding exactly `0x00` rejected
+   roughly **98%** of legitimate field elements.
+3. **The client hid it by corrupting data.** `packages/daemon/src/keystore.ts`
+   computed the real commitment and then did `uc[0] = 0`. Its own comment
+   conceded the result: "this value is NOT a raw `create_wallet` Poseidon
+   output" — so it could never match a `WalletEntry` registered on-chain, which
+   is the one thing the value exists for.
+
+### Why removal, not repair
+
+Option B (fix the comparison, keep the field) was cheaper and was considered.
+It was rejected because it leaves a field that nothing reads while *looking*
+like a binding — the exact shape that let defect 1 persist. An unverified
+identity field next to a verified one (`owner_commitment`) is worse than no
+field, because a future reader reasonably assumes the signed one is load-bearing.
+
+`owner_commitment` already carries the property the order needs, and carries it
+honestly: intake re-derives `note_commitment` from it via `verify_commitment`,
+so a caller cannot assert an owner for a note they do not own.
+
+### Format-safety check performed before touching `MatchPair`
+
+`MatchPair` derives Borsh and its doc claims it mirrors an on-chain struct, so
+removing two fields from it needed proof it is not a persisted or wire type:
+
+- The settle payload is `MatchResultPayload`, a separate struct that has never
+  held a `user_commitment`.
+- `JournalEntry.payload` (slice 4) is that same `MatchResultPayload` — the
+  journal comment states the choice explicitly.
+- `user_commitment_buyer` / `_seller` appear only in struct-literal
+  construction; no read site exists anywhere in the workspace.
+
+So the on-disk journal format and the on-chain instruction data are both
+unchanged by this slice. Only the signed canonical body changes.
+
+### Pinning the new digests honestly
+
+`ORDER_DOMAIN` moves `darknyx-order-v4` → `v5`, which changes both fixture
+digests. The replacement value was computed **from the layout spec in an
+independent script**, then compared against what the Rust encoder produced —
+not copied out of the failing assertion. Refreshing a pin by pasting back the
+encoder's own output tests only that the encoder is deterministic, which was
+never in question; it would have accepted a wrong-field removal silently.
+
+Both encoders and the independent computation agree on
+`d304e770f8f3fb706c7bb2bc6959002d9030b512f896f3fb518ba1ae4bd2b975`.
+
+Two structural tests were added next to the digest pin, because a digest
+mismatch is an opaque failure: one asserts the body shrank by **exactly** 32
+bytes (a wrong-field removal keeps the total right while changing the meaning of
+every later byte), and one asserts `arrival_nonce` now occupies the `+82` offset
+that `user_commitment` vacated.
+
+### Test changes, and why they are not just deletions
+
+| Test | Before | After |
+|---|---|---|
+| `place_rejects_non_fr_safe_user_commitment` | asserted the defective check fired | replaced by `place_accepts_an_fr_safe_owner_commitment_with_a_non_zero_top_byte` — sets `owner_commitment = [0x2F; 32]` (a canonical element the old rule's logic would have refused) and asserts **202 + present in the book** |
+| `error_responses_use_the_structured_envelope...` | drove the envelope via code 1002 | re-pointed at the all-zero `order_id` → 1001. What is under test is the envelope, not the validation that produced it |
+| `keystore.test.ts` top-byte assertion | `expect(uc[0]).toBe(0)` — pinned the corruption | asserts the value equals the **unmodified** `userCommitmentFromKeys` output, plus full-width `< BN254_R`. A top-byte bound would NOT regress: the fixture's real top byte is `0x18`, and both `0x18` and a corrupted `0x00` satisfy `<= 0x30`. Mutation-tested — reintroducing `uc[0] = 0` fails it |
+| `build-order-parity` | asserted `body.user_commitment` matched | asserts `body` has **no** `user_commitment` property |
+
+Error code **1002 is retired, not recycled** — the constructor is deleted and the
+number reserved in the catalogue comment, so a stale reference reads as "gone"
+rather than silently meaning something new.
+
+### Measured effect (PF-10)
+
+| | v4 | v5 | Δ |
+|---|---|---|---|
+| Signed canonical body (`SOL-USDC`) | 211 B | 179 B | **−32 B (−15.2%)** |
+| Body excluding symbol | `203 + S` | `171 + S` | −32 B |
+| 32-byte fields in `Order` / `OrderSnapshot` | — | — | −1 each |
+| 32-byte fields in `MatchPair` | — | — | −2 |
+| `PlaceOrderRequest` JSON fields | — | — | −1 (−64 hex chars on the wire) |
+
+### Local validation
+
+`cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`check-compose-image-digests`, `check-icicle-cuda-arch-env`,
+`check-brand-namespace`, `check-no-doctests`, `check-dependency-audits`,
+`build-vault-sbf.sh devnet-admin`, `cargo nextest run --workspace`
+(**732 passed, 3 skipped**), SDK vitest (270 passed), daemon vitest (147
+passed), indexer vitest (20 passed), `tsc --noEmit` for sdk/daemon/indexer, and
+OpenAPI YAML parse.
+
+`REQUIRE_CIRCUIT_ARTIFACTS=1` was verified against the only binary the flag
+gates — `crates/darknyx-tee/tests/valid_input_intake_verify.rs`, the sole file
+that reads the variable: **2 passed, 0 skipped**, i.e. the proof-backed tests
+really proved rather than silently skipping.
+
+### Pre-existing defect found while validating (NOT caused by this slice)
+
+`cargo nextest run -p darknyx-tee --tests` — the exact line in CLAUDE.md §2.5 —
+**hangs reproducibly at 497/556** with the runner at 0% CPU and no child test
+processes alive. Observed four times.
+
+It is not this slice's doing and not the env var's:
+
+- It reproduces identically **on `main` at `6a00f59`**, with the branch checked
+  out and rebuilt (control run performed specifically to settle this).
+- It reproduces **without** `REQUIRE_CIRCUIT_ARTIFACTS=1`.
+- The same tests pass under `cargo nextest run --workspace` (732 passed), so no
+  individual test is broken — only this target selection wedges.
+
+The shape (runner alive, zero children, `slow-timeout`'s `terminate-after`
+never firing) points at a test leaving an orphaned child holding the stdout
+pipe, so nextest waits on an EOF that never arrives. `--workspace` interleaves
+enough other binaries to mask it.
+
+Not fixed here — it is unrelated to T-07/PF-10 and folding an unrelated runner
+fix into a canonical-format change would make both harder to review. Filed as a
+follow-up; until it is fixed, use `cargo nextest run --workspace` plus a
+targeted `--test valid_input_intake_verify` for the artifact-required check.
+
+### Second pre-existing defect found while validating: TypeScript is never typechecked in CI
+
+Chasing a review finding on `build-order-parity.test.ts` turned up a gate gap
+worth its own row.
+
+**`tsc` does not appear in any workflow.** `grep -rn "tsc" .github/workflows/`
+returns nothing. The `SDK`, `daemon`, and `indexer` CI jobs run `vitest` only,
+and vitest STRIPS types rather than checking them. The `tsc --noEmit` lines in
+CLAUDE.md §2.5 are local-only, so TypeScript type safety depends entirely on a
+developer running the local gate by hand.
+
+Compounding it: `packages/sdk/tsconfig.json` has `"include": ["src/**/*"]`. So
+even the local gate never sees `tests/`. Test files are checked by **nothing**.
+
+Measured against the root `tsconfig.json`'s own options (`--strict
+--skipLibCheck --esModuleInterop --resolveJsonModule --module esnext --target
+es2022 --moduleResolution bundler --lib ES2022,DOM`):
+
+| Package | Test files | Type errors |
+|---|---|---|
+| `packages/sdk` | 65 | 3 |
+| `packages/daemon` | 22 | 19 |
+| `packages/indexer` | 4 | 1 |
+| **Total** | **91** | **23** |
+
+These are pre-existing and present on `main`. One of them —
+`spendingKey` passed to `buildOrder`, which `BuildOrderArgs` does not
+accept — was reported against this PR as if it were new; it is not, and it is
+fixed here because the file was already being edited. The other 22 are untouched.
+
+This is the same class as T-11/T-12/T-13/T-18: a gate that reports success
+without checking the thing it appears to check. Not fixed here — adding a
+typecheck job would surface 22 unrelated errors and turn a canonical-format
+change into a repo-wide cleanup. Filed for a follow-up slice; the fix is a CI
+`tsc --noEmit` step plus a tests-inclusive tsconfig per package.
+
+### Rollback effects
+
+Reverting v5 → v4 is a code revert plus a redeploy; there is no data migration
+in either direction, which is the main thing an operator needs to know.
+
+| Surface | Effect of reverting |
+|---|---|
+| Settle journal on disk | **No migration.** `JournalEntry` wraps `MatchResultPayload`, which never carried `user_commitment`. A journal written under v5 replays correctly under v4 and vice-versa. |
+| On-chain instruction data | **No migration.** Tx D's payload is unchanged; no vault redeploy, no tree reset. |
+| Circuits / proving keys | Untouched. `match_batch_*` does not see this field. |
+| In-memory resting orders | Discarded — they die with the process on any redeploy, as they already do on every image roll. |
+| Signatures in flight | A v5-signed body fails signature verification against a v4 build (different `ORDER_DOMAIN`), so it is rejected with a 403 rather than mis-parsed. That is the domain tag doing its job in both directions. |
+| Boot session | A redeploy rotates `boot_session_id` anyway, so every pre-restart order signature is already stale independent of this change. |
+
+Operationally: a drain is good hygiene before the redeploy (it cancels resting
+orders and confirms nothing is mid-settle), but it is **not required for
+correctness here** — the journal survives the version change untouched, so a
+crash-revert reconciles the same way a crash-restart does.
+
+### Live CVM evidence — 2026-07-29
+
+Captured on `nightly-test-cvm` (CPU, `tdx.xlarge`, `gpus=0`, node prod9) running
+image `tee-v3-hardening-77` @
+`sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436`. The
+digest was resolved from the registry fail-closed AND cross-checked against the
+value the build itself bound (`Bind immutable image identity` step), so the
+attested `compose_hash` binds content that was verified twice from independent
+sources. Real-mint regime; all four shard signers confirmed REGISTERED in
+`vault_config` and funded (~2 SOL each).
+
+**Every CVM test passed on the v5 canonical body:**
+
+| Test | Result | Notes |
+|---|---|---|
+| `cvm-settle-e2e` | **PASS** 45.4 s | real crossing pair matched AND settled |
+| `cvm-api-surface` | **PASS** 10 tests | the wire schema this slice changed |
+| `cvm-attestation-e2e` | **PASS** 5 tests | |
+| `cvm-multimatch-settle` | **PASS** 57.8 s | |
+| `cvm-self-trade` | **PASS** 69.6 s | STP on the note-bound owner identity |
+| `cvm-merge-then-order` | **PASS** 44.9 s | merge → order on the new body |
+
+Each leaf-count test ran on its own freshly-reset tree **plus** an env-only
+cold-boot redeploy (the Merkle mirror is append-only and cannot rewind), with a
+post-reset `DARKNYX_TEE_SYNC_FROM_SLOT` floor each time. Boot logged
+`merkle cold-boot complete applied=0 total_leaves=0 shards=4` — the correct
+empty start.
+
+Settles confirmed on-chain:
+
+| Test | Settle signature | Slot | Outcome |
+|---|---|---|---|
+| `cvm-settle-e2e` | `4sx415ofNZYRGyD4c3XfvcW3MQ99bExQLgUN4PU7UKezPNtUJt2EUMWgY2TT7eY7utiE4pPPXV2NYcxKjQVYh64y` | 479704088 | `confirmed=1 rejected=0 ambiguous=0 pipeline_failed=false` |
+| `cvm-merge-then-order` | `4G9CtpFXrpCgjdHbJhGCJkGyiXghPVNpomaaiRvQXyAoCt5asuMkvrXJmkSsFW25DDjSt79t3uVLoyvWr3Z3UChS` | 479706278 | `confirmed=1 rejected=0 ambiguous=0 pipeline_failed=false` |
+
+**Cost of the v5 body: none measurable.** Settle `total_ms=14523`
+(lock 1214, prove 2218 — witness 289 native + prove step 1885 — verify 1283,
+ALT 890 + wait 780, settle 10968, close 0), backend `rapidsnark`, device CPU,
+`settle_concurrency=1`. That sits between the two prior samples on the same path
+(slice-1 `14573`, slice-4 `14210`), so removing 32 signed bytes is invisible
+against a ~14 s network-bound settle — as expected, and stated as "not visible
+at this resolution" rather than "faster", since three samples do not support a
+stronger claim.
+
+Also re-confirmed incidentally: the fail-closed oracle gate still works —
+`trading starts PAUSED until the first authenticated, fresh oracle batch`
+(`profile=router-quorum-v1`, `api_key_configured=true`) then
+`oracle trust/freshness recovered; trading RESUMED` 310 ms later.
+
+**CVM stopped after the window; billing halted.** GPU check performed
+immediately before stopping (`gpus=0`, `tdx.xlarge`) per the standing rule that
+an on-demand GPU CVM must never be stopped.
+
+#### One thing that nearly became false evidence
+
+`cvm-attestation-e2e` **silently skipped** on its first invocation: it gates on
+`RUN_CVM_ATTEST=1`, not the `RUN_CVM_E2E=1` used by the other CVM tests. The
+run reported `1 passed | 1 skipped` and would have been easy to record as a
+pass. It was re-run with the correct flag and passed 5/5. Same lesson as
+T-11/T-12/T-13/T-18 — a skip is not a pass, and per-file env gates must be
+checked individually, not assumed uniform.
+
 ## Agent handoff template
 
 ```text
@@ -932,7 +1178,7 @@ Invariant and compatibility decisions:
     beyond the routine reset.
 Commands run and exact results:
   cargo fmt --all -- --check                      -> clean
-  cargo clippy --workspace --all-targets -D warn  -> zero warnings
+  cargo clippy --workspace --all-targets -- -D warnings -> zero warnings
   cargo test --workspace                          -> 302 passed, 0 failed, 1 ignored
                                                      (+ all integration suites green)
   tsc -p packages/sdk | packages/indexer          -> both clean

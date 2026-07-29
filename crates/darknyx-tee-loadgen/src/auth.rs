@@ -107,8 +107,6 @@ pub fn build_signed_place_body(
     collateral_surplus_bps: u16,
     boot_session_id: [u8; 32],
 ) -> serde_json::Value {
-    let user_commitment = synthesised_user_commitment(key);
-
     // Build a synthetic input-note opening + the matching commitment so
     // the order passes the TEE intake's opening verification (4g.7a/c):
     // intake recomputes `commitment_from_fields_v2(mint, note_amount,
@@ -185,7 +183,6 @@ pub fn build_signed_place_body(
         expiry_slot,
         order_id,
         note_commitment,
-        user_commitment,
         arrival_nonce,
         viewing_pubkey,
         session_id: boot_session_id,
@@ -207,7 +204,6 @@ pub fn build_signed_place_body(
         "expiry_slot": expiry_slot,
         "order_id": hex::encode(order_id),
         "note_commitment": hex::encode(note_commitment),
-        "user_commitment": hex::encode(user_commitment),
         "arrival_nonce": arrival_nonce,
         "trading_key": hex::encode(trading_key),
         "trading_key_signature": hex::encode(sig.to_bytes()),
@@ -259,16 +255,20 @@ pub fn build_signed_cancel_body(
 // ─── Synthesised commitments ────────────────────────────────────────────────
 //
 // The loadgen doesn't have real on-chain notes backing its orders.
-// We need 32-byte note_commitment / user_commitment values that:
-//   1. Pass intake validation (BN254 Fr-safe — top byte = 0 for
-//      user_commitment, which the matcher Poseidon-hashes).
+// We need 32-byte opening fields that:
+//   1. Pass intake validation. `owner_commitment` and `inner_hash` are
+//      Poseidon-hashed by `verify_commitment`, so they must be BN254-Fr-safe;
+//      zeroing the top byte is the cheap way to guarantee it.
 //   2. Are deterministic per (trader, order_id) so reruns produce
 //      the same byte stream + the matcher's change-note Poseidon
 //      hashes are reproducible.
 //
-// note_commitment doesn't need to be Fr-safe (the matcher doesn't
-// hash it directly — only `user_commitment` goes into Poseidon in
-// the change-note construction).
+// `note_commitment` is DERIVED from the opening, so it inherits Fr-safety
+// rather than needing its own guard.
+//
+// A `synthesised_user_commitment` helper lived here until audit 2026-07-25
+// (T-07): it zeroed the top byte to satisfy an intake check that was itself
+// wrong, for a field nothing read. Both are gone.
 
 /// Deterministic, BN254-Fr-safe (top byte 0) 32-byte field for the
 /// synthetic note opening, distinct per (order_id, tag). Fr-safe so
@@ -280,13 +280,5 @@ fn fr_safe_opening_field(order_id: &[u8; 16], tag: u8) -> [u8; 32] {
         *b = order_id[i % 16] ^ tag ^ (i as u8);
     }
     out[0] = 0; // < 2^248 < Fr modulus
-    out
-}
-
-fn synthesised_user_commitment(key: &SigningKey) -> [u8; 32] {
-    // Use the trading pubkey as the seed — distinct per trader.
-    // Zero the top byte for Fr-safety.
-    let mut out = key.verifying_key().to_bytes();
-    out[0] = 0;
     out
 }

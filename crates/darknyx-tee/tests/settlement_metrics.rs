@@ -41,8 +41,6 @@ fn dummy_match(match_id: u64) -> MatchPair {
         note_f_commitment: [0; 32],
         owner_buyer: [0x55; 32],
         owner_seller: [0x66; 32],
-        user_commitment_buyer: [0x77; 32],
-        user_commitment_seller: [0x88; 32],
         buyer_note_value: 100,
         seller_note_value: 10,
         base_amt: 10,

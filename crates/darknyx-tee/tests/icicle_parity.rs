@@ -98,8 +98,6 @@ fn one_real_match() -> (MatchPair, NoteOpening, NoteOpening) {
         note_f_commitment: [0; 32],
         owner_buyer: [0x77; 32],
         owner_seller: [0x88; 32],
-        user_commitment_buyer: [0x99; 32],
-        user_commitment_seller: [0xAA; 32],
         buyer_note_value: 1000,
         seller_note_value: 10,
         base_amt: 10,

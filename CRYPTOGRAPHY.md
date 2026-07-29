@@ -1249,7 +1249,7 @@ revisions of this document said "directly to the enclave", which the
 deployment has never done. The residual exposure and its mainnet gate are the
 transport row in the non-goals table above (T-03). The request body carries the order
 intent (`side`, `price_limit`, `amount`, `note_commitment`,
-`user_commitment`, `expiry_slot`, `arrival_nonce`), a required contributory
+`expiry_slot`, `arrival_nonce`), a required contributory
 X25519 `viewing_pubkey`, the current 32-byte `/info.boot_session_id`, the input-note opening
 (`owner_commitment`, `note_inner_hash`, `merkle_root`) + a
 relayed **VALID_INPUT** Groth16 proof.
@@ -1274,7 +1274,7 @@ key and break long-term linkage. **Why it's private:** order intent lives only
 in enclave memory; L1 observers see deposits + settled outputs, never the
 resting book. The anonymity set is every order in the book that didn't settle.
 
-**Tests:** `tests/order-canonical-parity.test.ts` (the canonical order v4 wire,
+**Tests:** `tests/order-canonical-parity.test.ts` (the canonical order v5 wire,
 byte-equal
 to Rust) + `crates/darknyx-tee/tests/{orders_surface,valid_input_intake_verify}.rs`
 (intake: sig / opening / proof / session / viewing-key / nonce validation).
@@ -2460,7 +2460,7 @@ manual when hosted artifact capacity is unavailable.
 program) + the multi-market in-CVM matcher/settler (`crates/darknyx-tee`),
 validated end-to-end on devnet through Phala CPU and H200 CVMs. v2
 `inner_hash` note model, VALID_DEPOSIT privacy, recipient-bound withdrawals,
-proof-verified intake, consumed-input-derived outputs, and canonical order v4.
+proof-verified intake, consumed-input-derived outputs, and canonical order v5.
 The `matching_engine` / MagicBlock-ER /
 PER path and the standalone `VALID_CREATE` / `VALID_PRICE` circuits have been
 removed.*

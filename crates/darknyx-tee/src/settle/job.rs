@@ -244,8 +244,6 @@ mod tests {
             note_f_commitment: [0x44; 32],
             owner_buyer: [0x55; 32],
             owner_seller: [0x66; 32],
-            user_commitment_buyer: [0x77; 32],
-            user_commitment_seller: [0x88; 32],
             buyer_note_value: 100,
             seller_note_value: 10,
             base_amt: 10,

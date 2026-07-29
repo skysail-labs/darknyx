@@ -9,7 +9,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import nacl from "tweetnacl";
-import { exportEncryptedMasterSeed, importEncryptedMasterSeed } from "@darknyx/sdk";
+import {
+  exportEncryptedMasterSeed,
+  importEncryptedMasterSeed,
+  userCommitmentFromKeys,
+} from "@darknyx/sdk";
 
 import {
   Keystore,
@@ -62,7 +66,33 @@ describe("Keystore — derivation", () => {
     expect(oc1).toBe(oc2); // deterministic
     const uc = await ks.userCommitment();
     expect(uc).toHaveLength(32);
-    expect(uc[0], "intake requires user_commitment top byte = 0").toBe(0);
+
+    // T-07 regression. The keystore used to return this value with its top byte
+    // forced to zero, which made it un-matchable against any registered
+    // WalletEntry. Pin the property that actually matters: the keystore returns
+    // the derivation UNMODIFIED.
+    //
+    // Asserting a top-byte bound instead would not regress. `uc[0] <= 0x30` is
+    // satisfied by a zeroed byte too, so the old corrupting behaviour would sail
+    // through — and for this fixture the honest answer is that we do not control
+    // what the top byte is. Comparing against the raw derivation catches the
+    // mutation whatever the byte happens to be.
+    const raw = await userCommitmentFromKeys({
+      rootKeyPubkey: identity().rootKeyPubkey,
+      spendingKey: ks.spendingKey,
+      viewingKey: ks.viewingKey,
+      r0: 1n,
+      r1: 2n,
+      r2: 3n,
+    });
+    expect(uc).toEqual(raw);
+
+    // And it is a canonical BN254 element — checked against the modulus, not by
+    // a first-byte heuristic, which is not sufficient at the boundary.
+    const BN254_R =
+      21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+    const asInt = uc.reduce((acc, byte) => (acc << 8n) | BigInt(byte), 0n);
+    expect(asInt).toBeLessThan(BN254_R);
   });
 
   it("derives distinct per-order trading keys; signatures verify", () => {

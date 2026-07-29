@@ -221,10 +221,10 @@ commitment, and recovery nonce, but not the wallet-wide owner or note inner.
 ### 2. Place an order
 
 The client fetches `/info` and `/time`, verifies attestation/governance, builds
-a VALID_INPUT proof, and signs canonical order v4. The signed intent includes
-the symbol, economics, 16-byte order ID, collateral commitment,
-`user_commitment`, strictly increasing arrival nonce, contributory X25519
-viewing key, and 32-byte boot session ID.
+a VALID_INPUT proof, and signs canonical order v5. The signed intent includes
+the symbol, economics, 16-byte order ID, collateral commitment, strictly
+increasing arrival nonce, contributory X25519 viewing key, and 32-byte boot
+session ID.
 
 The CVM:
 
