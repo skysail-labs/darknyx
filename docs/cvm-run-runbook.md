@@ -169,8 +169,9 @@ it will not fall back to env market/fee values.
 > Keep the three credential variables exported in the shell that runs the CVM
 > tests/loadgen, and keep the Pyth bearer credential available for deployment.
 > The API/auth harness credentials fail fast when missing. Missing or invalid
-> Pyth auth leaves the independent oracle pause reason set: place/modify and
-> matching remain closed while cancel and settlement reconciliation continue.
+> Pyth auth leaves the affected market's independent oracle pause reason set:
+> place/modify and matching remain closed for markets bound to that feed while
+> healthy markets, cancel, and settlement reconciliation continue.
 > In real-market mode, the CVM and e2e harness must use the finalized on-chain
 > fee rate (the CVM ignores the fee/owner env defaults after adopting governance).
 > In placeholder-loadgen mode, `DARKNYX_TEE_FEE_RATE_BPS` (default 30) must equal
@@ -434,9 +435,11 @@ export SOLANA_RPC_URL="$DARKNYX_TEE_SOLANA_RPC_URL"
 The test verifies one endpoint/two instruments, cross-market modify rejection,
 original-book cancel routing, simultaneous real settlement on both market
 PDAs, the `pending_settlement` lifecycle, and venue-wide pause/resume when one
-governed market is disabled/restored. Record both `settlement benchmark record`
-log lines; one pass is a correctness result, not the sustained capacity test
-defined in [`multi-market-architecture.md`](multi-market-architecture.md) §7.
+governed market is disabled/restored. That is the global governance gate; a
+market-local oracle failure must leave the other market tradable and is covered
+by the T-17 regression suite. Record both `settlement benchmark record` log
+lines; one pass is a correctness result, not the sustained capacity test defined
+in [`multi-market-architecture.md`](multi-market-architecture.md) §7.
 
 The loadgen needs the placeholder-mint regime (omit the mint vars, §3) — see
 `crates/darknyx-tee-loadgen/BENCHMARK.md`.

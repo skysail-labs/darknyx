@@ -307,7 +307,9 @@ One CVM shares:
 - ALT pool, RPC client, and a venue-wide settlement concurrency semaphore.
 
 Each market has its own symbol, mint pair, matcher state, lifecycle publisher,
-and scheduler. `/instruments` is the authoritative list for that CVM.
+and scheduler. Oracle pause state is also per market; governance and drain
+reasons remain venue-wide. `/instruments` is the authoritative list for that
+CVM and exposes current `trading_enabled` readiness per symbol.
 Cross-market modify is rejected; clients cancel and place a fresh order.
 
 Because `VaultConfig.tee_pubkeys` is a single global set, the current vault

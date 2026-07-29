@@ -531,6 +531,63 @@ async fn symbols_route_to_independent_market_books() {
     );
 }
 
+#[tokio::test]
+async fn oracle_pause_rejects_only_the_affected_market() {
+    let sol = Arc::new(tokio::sync::RwLock::new(MatcherState::new()));
+    let btc = Arc::new(tokio::sync::RwLock::new(MatcherState::new()));
+    let api = ApiState::for_tests()
+        .with_instruments(vec![
+            InstrumentInfo {
+                symbol: "SOL-USDC".to_string(),
+                base_mint: [0; 32],
+                quote_mint: [0; 32],
+                tick_size: 1,
+                min_order_size: 0,
+                oracle_feed_id: "aa".repeat(32),
+            },
+            InstrumentInfo {
+                symbol: "BTC-USDC".to_string(),
+                base_mint: [0; 32],
+                quote_mint: [0; 32],
+                tick_size: 1,
+                min_order_size: 0,
+                oracle_feed_id: "bb".repeat(32),
+            },
+        ])
+        .with_market_runtimes(
+            HashMap::from([
+                ("SOL-USDC".to_string(), sol.clone()),
+                ("BTC-USDC".to_string(), btc.clone()),
+            ]),
+            Arc::new(AtomicU64::new(1)),
+            OracleCache::new(),
+        );
+    let sol_gate = api.trading_gate_for_symbol("SOL-USDC").expect("SOL gate");
+    let btc_gate = api.trading_gate_for_symbol("BTC-USDC").expect("BTC gate");
+    sol_gate.pause_for(darknyx_tee::matcher::TradingPauseReason::Oracle);
+    assert!(btc_gate.is_open(), "BTC must remain tradable");
+
+    let app = app_from(Arc::new(api));
+    let bearer = fresh_bearer();
+    let key = fresh_signing_key();
+
+    let sol_order = PlaceOrderBuilder::new();
+    let response = place(&app, &bearer, sol_order.sign(&key)).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(sol.read().await.book().len(), 0);
+
+    let mut btc_order = PlaceOrderBuilder::new();
+    btc_order.symbol = b"BTC-USDC".to_vec();
+    btc_order.order_id[0] = 0xBC;
+    let response = place(&app, &bearer, btc_order.sign(&key)).await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(btc.read().await.book().len(), 1);
+    assert!(
+        sol_gate.is_paused_for(darknyx_tee::matcher::TradingPauseReason::Oracle),
+        "healthy BTC intake cannot clear the SOL oracle pause"
+    );
+}
+
 // ─── POST /orders — input validation ────────────────────────────────────────
 
 #[tokio::test]

@@ -22,6 +22,8 @@ export interface TeeInstrument {
   quote_mint: string;
   tick_size: string;
   min_order_size: string;
+  /** Current market-local readiness for new place/modify/match operations. */
+  trading_enabled: boolean;
   oracle: {
     type: "pyth_pull_v2";
     pubkey: string;

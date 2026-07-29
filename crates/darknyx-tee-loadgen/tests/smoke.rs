@@ -22,7 +22,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 
-use darknyx_tee::api::{build_router, ApiState};
+use darknyx_tee::api::{build_router, instruments::InstrumentInfo, ApiState};
 use darknyx_tee::matcher::{
     DriverConfig, MatcherDriver, MatcherState, DEFAULT_MAX_ORACLE_AGE_MS,
     DEFAULT_MAX_ORACLE_FUTURE_SKEW_MS,
@@ -57,11 +57,16 @@ async fn loadgen_drives_real_tee_and_produces_matches() {
     let current_slot = Arc::new(AtomicU64::new(1));
     let (matches_tx, mut matches_rx) = mpsc::channel::<RunBatchOutput>(64);
 
-    let api_state = ApiState::for_tests().with_matcher_runtime(
-        matcher_state.clone(),
-        current_slot.clone(),
-        oracle.clone(),
-    );
+    let api_state = ApiState::for_tests()
+        .with_instruments(vec![InstrumentInfo {
+            symbol: "SOL-USDC".to_string(),
+            base_mint: match_config.base_mint,
+            quote_mint: match_config.quote_mint,
+            tick_size: match_config.tick_size,
+            min_order_size: match_config.min_order_size,
+            oracle_feed_id: FEED_ID.to_string(),
+        }])
+        .with_matcher_runtime(matcher_state.clone(), current_slot.clone(), oracle.clone());
     let trading_gate = api_state.trading_gate.clone();
     let app = build_router(Arc::new(api_state));
 

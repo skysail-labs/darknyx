@@ -30,10 +30,13 @@ pub struct SystemStatus {
 }
 
 pub async fn get_status(State(state): State<Arc<ApiState>>) -> Json<SystemStatus> {
-    let matcher_running = !state.all_matchers().is_empty() && state.trading_gate.is_open();
+    let matcher_running = !state.all_matchers().is_empty() && state.any_market_open();
+    let all_markets_ready = state.all_markets_open();
     let settle_enabled = state.settle_enabled;
     Json(SystemStatus {
-        degraded: !(matcher_running && settle_enabled),
+        // Partial oracle degradation remains visible even while another market
+        // is healthy enough for `matcher_running=true`.
+        degraded: !(all_markets_ready && settle_enabled),
         matcher_running,
         settle_enabled,
         oracle_configured: state.oracle.is_some(),
@@ -59,4 +62,67 @@ pub async fn get_time(State(state): State<Arc<ApiState>>) -> Json<ServerTime> {
         slot: state.current_slot.load(Ordering::Relaxed),
         unix_ms,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::instruments::InstrumentInfo;
+    use crate::matcher::{MatcherState, TradingPauseReason};
+    use crate::oracle::OracleCache;
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicU64;
+    use tokio::sync::RwLock;
+
+    #[tokio::test]
+    async fn partial_market_pause_is_available_but_degraded() {
+        let state = ApiState::for_tests()
+            .with_instruments(vec![
+                InstrumentInfo {
+                    symbol: "SOL-USDC".to_string(),
+                    base_mint: [1; 32],
+                    quote_mint: [2; 32],
+                    tick_size: 1,
+                    min_order_size: 1,
+                    oracle_feed_id: "aa".repeat(32),
+                },
+                InstrumentInfo {
+                    symbol: "BTC-USDC".to_string(),
+                    base_mint: [3; 32],
+                    quote_mint: [2; 32],
+                    tick_size: 1,
+                    min_order_size: 1,
+                    oracle_feed_id: "bb".repeat(32),
+                },
+            ])
+            .with_market_runtimes(
+                HashMap::from([
+                    (
+                        "SOL-USDC".to_string(),
+                        Arc::new(RwLock::new(MatcherState::new())),
+                    ),
+                    (
+                        "BTC-USDC".to_string(),
+                        Arc::new(RwLock::new(MatcherState::new())),
+                    ),
+                ]),
+                Arc::new(AtomicU64::new(1)),
+                OracleCache::new(),
+            )
+            .with_settle_enabled(true);
+        state
+            .trading_gate_for_symbol("SOL-USDC")
+            .unwrap()
+            .pause_for(TradingPauseReason::Oracle);
+
+        let Json(status) = get_status(State(Arc::new(state))).await;
+        assert!(
+            status.matcher_running,
+            "the healthy BTC market remains available"
+        );
+        assert!(
+            status.degraded,
+            "partial oracle failure remains visible to operators and clients"
+        );
+    }
 }

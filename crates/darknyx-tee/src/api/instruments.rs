@@ -50,17 +50,21 @@ pub struct Instrument {
     pub quote_mint: String,
     pub tick_size: String,
     pub min_order_size: String,
+    /// Current fail-closed readiness for new place/modify/match operations on
+    /// this market. Cancellation, reads, and reconciliation remain available.
+    pub trading_enabled: bool,
     pub oracle: OracleInfo,
 }
 
-impl From<&InstrumentInfo> for Instrument {
-    fn from(i: &InstrumentInfo) -> Self {
+impl Instrument {
+    fn from_info(i: &InstrumentInfo, trading_enabled: bool) -> Self {
         Instrument {
             symbol: i.symbol.clone(),
             base_mint: bs58::encode(i.base_mint).into_string(),
             quote_mint: bs58::encode(i.quote_mint).into_string(),
             tick_size: i.tick_size.to_string(),
             min_order_size: i.min_order_size.to_string(),
+            trading_enabled,
             oracle: OracleInfo {
                 kind: "pyth_pull_v2".to_string(),
                 pubkey: i.oracle_feed_id.clone(),
@@ -71,7 +75,18 @@ impl From<&InstrumentInfo> for Instrument {
 
 /// `GET /instruments` — public.
 pub async fn list_instruments(State(state): State<Arc<ApiState>>) -> Json<Vec<Instrument>> {
-    Json(state.instruments.iter().map(Instrument::from).collect())
+    Json(
+        state
+            .instruments
+            .iter()
+            .map(|info| {
+                let enabled = state
+                    .trading_gate_for_symbol(&info.symbol)
+                    .is_some_and(|gate| gate.is_open());
+                Instrument::from_info(info, enabled)
+            })
+            .collect(),
+    )
 }
 
 /// `GET /instruments/{symbol}` — public. 404 if the symbol is unknown.
@@ -83,6 +98,11 @@ pub async fn get_instrument(
         .instruments
         .iter()
         .find(|i| i.symbol == symbol)
-        .map(|i| Json(Instrument::from(i)))
+        .map(|i| {
+            let enabled = state
+                .trading_gate_for_symbol(&i.symbol)
+                .is_some_and(|gate| gate.is_open());
+            Json(Instrument::from_info(i, enabled))
+        })
         .ok_or_else(|| super::error::ApiError::not_found(format!("unknown instrument '{symbol}'")))
 }

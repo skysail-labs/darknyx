@@ -32,6 +32,7 @@ use darkpool_matcher::{
 use tokio::sync::{mpsc, RwLock};
 
 const FEED_ID: &str = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
+const OTHER_FEED_ID: &str = "aa0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
 
 fn mk_order(side: OrderSide, idx: u8, price: u64, amount: u64) -> Order {
     let mut tk = [0u8; 32];
@@ -363,6 +364,44 @@ async fn tick_skips_when_oracle_missing() {
     ));
     assert_eq!(state.read().await.book().len(), 2, "book unchanged");
     assert!(gate.is_paused_for(TradingPauseReason::Oracle));
+}
+
+#[tokio::test]
+async fn healthy_market_tick_cannot_clear_another_markets_oracle_pause() {
+    let oracle = OracleCache::new();
+    seed_oracle(&oracle, 100).await;
+    let current_slot = Arc::new(AtomicU64::new(1));
+    let sol_gate = TradingGate::default();
+    let btc_gate = sol_gate.fork_market();
+
+    let (sol_tx, _sol_rx) = mpsc::channel(1);
+    let mut stale_sol = mk_driver(
+        Arc::new(RwLock::new(mk_state())),
+        oracle.clone(),
+        current_slot.clone(),
+        sol_tx,
+    );
+    stale_sol.trading_gate = sol_gate.clone();
+    stale_sol.cfg.feed_id = OTHER_FEED_ID.to_string();
+    stale_sol.tick().await.expect("stale SOL tick");
+    assert!(sol_gate.is_paused_for(TradingPauseReason::Oracle));
+    assert!(btc_gate.is_open());
+
+    let (btc_tx, _btc_rx) = mpsc::channel(1);
+    let mut healthy_btc = mk_driver(
+        Arc::new(RwLock::new(mk_state())),
+        oracle,
+        current_slot,
+        btc_tx,
+    );
+    healthy_btc.trading_gate = btc_gate.clone();
+    healthy_btc.tick().await.expect("healthy BTC tick");
+
+    assert!(btc_gate.is_open());
+    assert!(
+        sol_gate.is_paused_for(TradingPauseReason::Oracle),
+        "a healthy market tick has no authority over another market's gate"
+    );
 }
 
 /// Empty book → no tick output.

@@ -37,8 +37,8 @@ Public, with no authentication.
 
 | Field | Type | Description |
 |---|---|---|
-| `degraded` | boolean | `true` when matching **or** settlement is unavailable. The one flag to gate trading on. |
-| `matcher_running` | boolean | The matching tick is running (orders can be accepted and matched). |
+| `degraded` | boolean | `true` when settlement is unavailable, global readiness fails, or at least one market is paused. |
+| `matcher_running` | boolean | At least one market can currently accept and match orders. |
 | `settle_enabled` | boolean | The on-chain settlement pipeline is wired (matches will settle). |
 | `oracle_configured` | boolean | A price oracle is attached (the clearing-price reference). |
 | `current_slot` | integer | The engine's current view of the Solana slot. |
@@ -50,7 +50,10 @@ The venue is `degraded` when a core subsystem is unavailable: the matching tick
 is not running, the settlement pipeline is not wired, or the finalized
 governance/signer view no longer matches the boot-approved configuration. On a
 multi-market venue, a governed-market mismatch pauses new trading venue-wide
-rather than leaving some books running against uncertain authority.
+rather than leaving some books running against uncertain authority. An oracle
+failure is narrower: it pauses only markets bound to the affected feed. In that
+partial state `degraded` is true, `matcher_running` can remain true, and each
+`/instruments` entry reports its own `trading_enabled` value.
 
 While degraded, new place and modify operations fail closed with `503 Service
 Unavailable`. Cancels, authenticated reads, and reconciliation continue so a
@@ -66,11 +69,12 @@ trader can reduce risk and the engine can resolve already-pending settlements.
 
 ## Best practices
 
-- **Gate trading on `degraded`.** Check `/system/status` before a burst of order
-  activity and pause when `degraded` is `true`.
+- **Use both readiness levels.** Check `/system/status` for venue health, then
+  the chosen `/instruments/{symbol}` entry's `trading_enabled` value. Always
+  handle a racing `503` from place/modify.
 - **Use it, not `/health`, for readiness.** `/health` answers "is the process
   up"; `/system/status` answers "can I trade right now."
-- **Back off and poll.** On a `503`, poll `/system/status` and resume when matching
-  and settlement are both available again.
+- **Back off and poll.** On a `503`, poll `/system/status` plus the requested
+  instrument and resume when both venue and market readiness recover.
 - **Surface it.** It is public and leaks nothing, so it is safe to show on a status
   page or wire into client-side health checks.

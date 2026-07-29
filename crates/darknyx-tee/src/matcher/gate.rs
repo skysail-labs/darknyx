@@ -1,10 +1,10 @@
-//! Shared fail-closed gate for new trading.
+//! Layered fail-closed gate for new trading.
 //!
 //! Governance monitoring can pause intake and matching without stopping
-//! cancellation or settlement reconciliation. The gate is one atomic reason
-//! bitmask: the public API exposes only ready/degraded, while the detailed
-//! cause stays in operator logs. Reasons are independent bits, so recovery of
-//! one subsystem cannot accidentally clear another subsystem's pause.
+//! cancellation or settlement reconciliation. Governance and drain reasons are
+//! shared by every market in the venue; oracle health is local to one market.
+//! Recovery of one subsystem or one feed cannot accidentally clear another
+//! subsystem's or market's pause.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -24,20 +24,39 @@ pub enum TradingPauseReason {
 
 #[derive(Clone, Debug)]
 pub struct TradingGate {
-    reasons: Arc<AtomicU8>,
+    /// Reasons that must close every market in the CVM.
+    venue_reasons: Arc<AtomicU8>,
+    /// Reasons scoped to this one market. Today only the oracle bit belongs
+    /// here; keeping the storage separate prevents a healthy feed from clearing
+    /// another market's stale-feed pause.
+    market_reasons: Arc<AtomicU8>,
 }
 
 impl Default for TradingGate {
     fn default() -> Self {
         Self {
-            reasons: Arc::new(AtomicU8::new(0)),
+            venue_reasons: Arc::new(AtomicU8::new(0)),
+            market_reasons: Arc::new(AtomicU8::new(0)),
         }
     }
 }
 
 impl TradingGate {
+    /// Create another market gate in the same venue.
+    ///
+    /// Governance/drain state is shared, while oracle state starts independent.
+    /// Ordinary [`Clone`] keeps both layers shared and is used by the API,
+    /// matcher driver, and oracle binding for the *same* market.
+    pub fn fork_market(&self) -> Self {
+        Self {
+            venue_reasons: self.venue_reasons.clone(),
+            market_reasons: Arc::new(AtomicU8::new(0)),
+        }
+    }
+
     pub fn is_open(&self) -> bool {
-        self.reasons.load(Ordering::Acquire) == 0
+        self.venue_reasons.load(Ordering::Acquire) == 0
+            && self.market_reasons.load(Ordering::Acquire) == 0
     }
 
     /// Governance-compatible convenience wrapper.
@@ -55,19 +74,26 @@ impl TradingGate {
     /// the reason bit.
     pub fn pause_for(&self, reason: TradingPauseReason) -> bool {
         let bit = reason as u8;
-        self.reasons.fetch_or(bit, Ordering::AcqRel) & bit == 0
+        self.reasons_for(reason).fetch_or(bit, Ordering::AcqRel) & bit == 0
     }
 
     /// Clear one independent pause reason. Returns `true` only when this call
     /// transitions the complete gate from paused to open.
     pub fn resume_for(&self, reason: TradingPauseReason) -> bool {
         let bit = reason as u8;
-        let previous = self.reasons.fetch_and(!bit, Ordering::AcqRel);
-        previous & bit != 0 && previous & !bit == 0
+        let previous = self.reasons_for(reason).fetch_and(!bit, Ordering::AcqRel);
+        previous & bit != 0 && self.is_open()
     }
 
     pub fn is_paused_for(&self, reason: TradingPauseReason) -> bool {
-        self.reasons.load(Ordering::Acquire) & reason as u8 != 0
+        self.reasons_for(reason).load(Ordering::Acquire) & reason as u8 != 0
+    }
+
+    fn reasons_for(&self, reason: TradingPauseReason) -> &AtomicU8 {
+        match reason {
+            TradingPauseReason::Oracle => &self.market_reasons,
+            TradingPauseReason::Governance | TradingPauseReason::Drain => &self.venue_reasons,
+        }
     }
 }
 
@@ -132,5 +158,43 @@ mod tests {
         assert!(gate.is_paused_for(TradingPauseReason::Oracle));
         assert!(gate.resume_for(TradingPauseReason::Oracle));
         assert!(gate.is_open());
+    }
+
+    #[test]
+    fn market_forks_share_venue_reasons_but_isolate_oracles() {
+        assert_eq!(
+            std::mem::size_of::<TradingGate>(),
+            2 * std::mem::size_of::<Arc<AtomicU8>>(),
+            "a gate is exactly two Arc handles: venue and market"
+        );
+        let sol = TradingGate::default();
+        let btc = sol.fork_market();
+
+        assert!(sol.pause_for(TradingPauseReason::Oracle));
+        assert!(!sol.is_open());
+        assert!(
+            btc.is_open(),
+            "SOL oracle failure must not pause the BTC market"
+        );
+
+        assert!(btc.pause_for(TradingPauseReason::Governance));
+        assert!(!sol.is_open());
+        assert!(!btc.is_open());
+        assert!(sol.is_paused_for(TradingPauseReason::Governance));
+        assert!(btc.is_paused_for(TradingPauseReason::Governance));
+
+        assert!(
+            !sol.resume(),
+            "SOL remains closed for its independent oracle reason"
+        );
+        assert!(
+            btc.is_open(),
+            "clearing shared governance re-opens a healthy market"
+        );
+        assert!(!sol.is_open());
+
+        assert!(sol.resume_for(TradingPauseReason::Oracle));
+        assert!(sol.is_open());
+        assert!(btc.is_open());
     }
 }

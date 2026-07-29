@@ -317,6 +317,20 @@ fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
     Ok(markets)
 }
 
+fn validate_market_oracle_coverage(markets: &[MarketSpec]) -> Result<()> {
+    let configured = markets
+        .iter()
+        .filter(|market| !market.oracle_feed_id.is_empty())
+        .count();
+    if configured != 0 && configured != markets.len() {
+        bail!(
+            "oracle configuration must cover every market or none; configured {configured} of {}",
+            markets.len()
+        );
+    }
+    Ok(())
+}
+
 /// Parse a 32-byte hex value (optional `0x` prefix) from an env var —
 /// for commitments (raw field elements, not base58). Unset/empty →
 /// `default`; non-empty malformed → `Err`.
@@ -497,6 +511,12 @@ impl Config {
         let markets = match markets_json {
             Some(raw) => parse_markets_json(&raw)?,
             None => {
+                if legacy_feed_ids.len() > 1 {
+                    bail!(
+                        "DARKNYX_TEE_FEED_IDS accepts at most one feed in the singular-market \
+                         compatibility path; use DARKNYX_TEE_MARKETS_JSON for multiple markets"
+                    );
+                }
                 let oracle_feed_id = legacy_feed_ids.first().cloned().unwrap_or_default();
                 if !oracle_feed_id.is_empty() {
                     validate_feed_id(&oracle_feed_id, "DARKNYX_TEE_FEED_IDS[0]")?;
@@ -509,6 +529,7 @@ impl Config {
                 }]
             }
         };
+        validate_market_oracle_coverage(&markets)?;
         let mut seen_feeds = HashSet::new();
         let feed_ids = markets
             .iter()
@@ -594,6 +615,38 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("duplicate symbol"));
+
+        let missing_feed = format!(
+            r#"[
+                {{"symbol":"SOL-USDC","base_mint":"{mint_a}","quote_mint":"{mint_b}","oracle_feed_id":"{feed}"}},
+                {{"symbol":"BTC-USDC","base_mint":"{mint_c}","quote_mint":"{mint_b}"}}
+            ]"#
+        );
+        assert!(
+            parse_markets_json(&missing_feed).is_err(),
+            "every strict multi-market row must name its own oracle feed"
+        );
+    }
+
+    #[test]
+    fn mixed_market_oracle_coverage_is_rejected() {
+        let markets = vec![
+            MarketSpec {
+                symbol: "SOL-USDC".to_string(),
+                base_mint: [1; 32],
+                quote_mint: [2; 32],
+                oracle_feed_id: "aa".repeat(32),
+            },
+            MarketSpec {
+                symbol: "BTC-USDC".to_string(),
+                base_mint: [3; 32],
+                quote_mint: [2; 32],
+                oracle_feed_id: String::new(),
+            },
+        ];
+        let error = validate_market_oracle_coverage(&markets)
+            .expect_err("partial oracle coverage must fail closed at boot");
+        assert!(error.to_string().contains("configured 1 of 2"));
     }
 
     #[test]

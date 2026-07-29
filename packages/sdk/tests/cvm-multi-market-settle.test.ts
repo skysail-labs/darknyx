@@ -232,6 +232,7 @@ maybeDescribe(
         symbol: string;
         base_mint: string;
         quote_mint: string;
+        trading_enabled: boolean;
       }[];
       expect(instruments.map((instrument) => instrument.symbol).sort()).toEqual(
         cfg.markets.map((market) => market.symbol).sort(),
@@ -242,6 +243,7 @@ maybeDescribe(
             symbol: market.symbol,
             base_mint: market.baseMint.pubkey,
             quote_mint: market.quoteMint.pubkey,
+            trading_enabled: true,
           }),
         );
       }

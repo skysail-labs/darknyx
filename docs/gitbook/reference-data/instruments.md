@@ -25,6 +25,7 @@ The response is a JSON **array**, not an object envelope:
     "quote_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     "tick_size": "1000",
     "min_order_size": "10000000",
+    "trading_enabled": true,
     "oracle": {
       "type": "pyth_pull_v2",
       "pubkey": "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"
@@ -51,6 +52,7 @@ venue. Use the returned `symbol` unchanged in signed order requests.
 | `quote_mint` | string | Quote SPL mint, base58. |
 | `tick_size` | string | Raw integer price increment in protocol price units. |
 | `min_order_size` | string | Raw integer minimum base amount in smallest token units. |
+| `trading_enabled` | boolean | Current readiness for new placement, modification, and matching on this market. Cancellation and settlement recovery remain available when false. |
 | `oracle.type` | string | Oracle adapter used by the matcher. |
 | `oracle.pubkey` | string | Pyth feed identifier. Despite the wire name, this value may be a 32-byte hex feed id rather than a base58 Solana account. |
 
@@ -64,9 +66,12 @@ The attested matcher reads the configured oracle and refuses clearing prices
 outside its configured circuit-breaker band. Signed oracle publish time,
 replay ordering, and market-unit conversion are checked before that comparison.
 If the authenticated oracle becomes stale or invalid, new order placement,
-modification, and matching pause while cancellation and settlement recovery
-remain available. The matcher also enforces every trader's limit and the
-uniform-clearing selection rule.
+modification, and matching pause only for markets bound to that feed while
+healthy markets continue. The response then reports `trading_enabled: false`
+for the affected market. Cancellation and settlement recovery remain
+available. Order writes still recheck readiness and may race this public
+snapshot with a fail-closed `503`. The matcher also enforces every trader's
+limit and the uniform-clearing selection rule.
 
 Those market-policy checks are **not** re-executed inside VALID_MATCH_BATCH. The
 settlement proof binds the market mints and `price_scale`, proves scaled floor

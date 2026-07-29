@@ -24,7 +24,6 @@ use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 
 use super::state::ApiState;
-use crate::matcher::TradingPauseReason;
 use crate::oracle::{vaa::TrustProfile, CachedPrice};
 
 #[derive(Debug, Deserialize)]
@@ -61,9 +60,10 @@ pub async fn seed_oracle(
         "oracle cache not initialised on this instance".to_string(),
     ))?;
 
+    let feed_id = req.feed_id;
     oracle
         .seed_unverified(
-            req.feed_id,
+            feed_id.clone(),
             CachedPrice {
                 twap: req.twap,
                 confidence: req.confidence,
@@ -88,9 +88,10 @@ pub async fn seed_oracle(
         .await;
 
     // Debug/load-test parity with the authenticated sync path: a freshly seeded
-    // oracle makes the market healthy again. Clear only the Oracle bit so this
-    // feature-gated helper can never override an independent governance pause.
-    state.trading_gate.resume_for(TradingPauseReason::Oracle);
+    // oracle makes only markets bound to this feed healthy again. The helper
+    // cannot clear another feed's pause or an independent venue-wide
+    // governance/drain reason.
+    state.resume_oracle_for_feed(&feed_id);
 
     Ok(StatusCode::OK)
 }

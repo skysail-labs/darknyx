@@ -120,7 +120,7 @@ to avoid this — which is the same coupling as §3.2 from the other direction.
 | **Client UX / trust**     | N gateways, N attestations to verify, N auth sessions                       | ✅ One venue, one attested identity, one session            |
 | **`/instruments`**        | One entry per endpoint; cross-market discovery is client-side               | ✅ A real list — matches the API shape already built        |
 | **Shard contention**      | CVMs contend on shared trees unless ranges are split                        | ✅ One CVM-wide settle resource pool owns all shards        |
-| **Blast radius**          | ✅ A bug/halt in one market can't touch another                             | Shared fate — one bug halts all markets                     |
+| **Blast radius**          | ✅ A bug/halt in one market can't touch another                             | Global governance/runtime failure is shared; oracle health is isolated per market |
 | **Proving capacity**      | ✅ Naturally parallel (separate machines)                                   | Per-market queues share one explicitly bounded proof budget |
 | **Cost**                  | N billable CVMs, N attestation/funding/ALT/mirror stacks                    | ✅ One stack                                                |
 | **Per-market governance** | ✅ Native (`MarketConfig.enabled` per pair)                                 | Also fine — same per-pair PDA                               |
@@ -142,10 +142,12 @@ Two reasons dominate:
    shard-range configuration or an on-chain change — whereas Option B needs **no
    on-chain change at all**.
 
-The genuine cost of Option B is **shared blast radius** and a shared proving
-budget. Each oracle failure skips only its own matcher tick; finalized global
-governance/signature drift or any configured `MarketConfig` drift conservatively
-pauses new trading venue-wide. Cancels and settlement reconciliation continue.
+The genuine cost of Option B is a shared proving budget and **shared global
+blast radius**. Oracle health is market-local: a stale, missing, replayed, or
+unauthenticated feed pauses only markets bound to that feed. Finalized global
+governance/signature drift or any configured `MarketConfig` drift
+conservatively pauses new trading venue-wide. Cancels and settlement
+reconciliation continue.
 
 ---
 
@@ -167,6 +169,11 @@ pauses new trading venue-wide. Cancels and settlement reconciliation continue.
    bounds whole batches across all market queues.
 6. Account and stream routers aggregate all matcher broadcasts without exposing
    the private account/order/market joins.
+7. Governance and drain gate reasons are venue-wide, while oracle reasons are
+   per market. Normal oracle refresh remains one batched Hermes request; a
+   failed batch falls back to bounded per-feed refreshes so one bad feed cannot
+   starve healthy caches. `/instruments[].trading_enabled` exposes the
+   market-local snapshot, and order intake rechecks it before mutation.
 
 ---
 
@@ -272,7 +279,8 @@ pause/resume cadence, so it is not a settlement-latency metric.
 Disabling only BTC-USDC caused the finalized governance monitor to pause the
 venue-wide trading gate; restoring the exact boot snapshot resumed it, leaving
 the final status healthy. This confirms the deliberately conservative
-shared-fate policy in §5.
+**governance** shared-fate policy in §5; oracle failures now use the narrower
+per-market gate described in §6.
 
 **Interpretation:** the architecture and isolation invariants passed on a real
 CVM and real devnet settlement. C2 also exposed expected CPU contention: the

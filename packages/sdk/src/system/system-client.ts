@@ -9,8 +9,9 @@
 
 /** Wire shape of `GET /system/status` (mirrors `darknyx_tee::api::system::SystemStatus`). */
 export interface SystemStatus {
-  /** `true` when matching OR the settle pipeline is down. */
+  /** `true` when any market is paused or global matching/settlement readiness is down. */
   degraded: boolean;
+  /** `true` when at least one configured market can still trade. */
   matcher_running: boolean;
   settle_enabled: boolean;
   oracle_configured: boolean;

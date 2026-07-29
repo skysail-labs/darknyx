@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time;
 
 use crate::matcher::{TradingGate, TradingPauseReason};
@@ -25,10 +25,13 @@ use crate::oracle::{
     vaa::{self, TrustProfile},
 };
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct MarketOracleBinding {
+    pub symbol: String,
     pub feed_id: String,
     pub units: OracleUnits,
+    /// Exact gate shared with this market's matcher and API route.
+    pub trading_gate: TradingGate,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +70,6 @@ pub fn spawn_oracle_sync(
     cache: OracleCache,
     client: HermesClient,
     cfg: SyncConfig,
-    trading_gate: TradingGate,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = time::interval(cfg.interval);
@@ -79,31 +81,7 @@ pub fn spawn_oracle_sync(
             let started = Instant::now();
             match refresh_batch(&client, &cache, &cfg).await {
                 Ok((accepted, replayed)) => {
-                    let mut healthy = true;
-                    for binding in &cfg.market_bindings {
-                        if let Err(error) = cache
-                            .snapshot(&binding.feed_id, cfg.freshness, binding.units)
-                            .await
-                        {
-                            healthy = false;
-                            tracing::warn!(
-                                feed_id = binding.feed_id,
-                                error = %error,
-                                "oracle sync: post-refresh market snapshot unhealthy"
-                            );
-                            break;
-                        }
-                    }
-                    if healthy {
-                        if trading_gate.resume_for(TradingPauseReason::Oracle) {
-                            tracing::info!(
-                                profile = cfg.trust_profile.as_str(),
-                                "oracle trust/freshness recovered; trading RESUMED"
-                            );
-                        }
-                    } else {
-                        trading_gate.pause_for(TradingPauseReason::Oracle);
-                    }
+                    reconcile_market_health(&cache, &cfg).await;
                     tracing::debug!(
                         profile = cfg.trust_profile.as_str(),
                         feed_count = cfg.feed_ids.len(),
@@ -114,20 +92,133 @@ pub fn spawn_oracle_sync(
                         "oracle sync: batch refresh complete"
                     );
                 }
-                Err(error) => {
-                    let transitioned = trading_gate.pause_for(TradingPauseReason::Oracle);
+                Err(batch_error) => {
                     tracing::warn!(
                         profile = cfg.trust_profile.as_str(),
                         feed_count = cfg.feed_ids.len(),
                         refresh_ms = started.elapsed().as_millis() as u64,
-                        newly_paused = transitioned,
-                        error = %error,
-                        "oracle sync: batch refresh failed; trading PAUSED"
+                        error = %batch_error,
+                        "oracle sync: batch refresh failed; retrying each feed independently"
                     );
+                    // Normal operation remains one authenticated request. The
+                    // per-feed path is only for failures: it prevents one
+                    // missing, malformed, or unauthenticated feed from starving
+                    // every other market's cache while preserving fail-closed
+                    // behavior for the affected feed. Run these requests
+                    // concurrently so one 5 s timeout cannot serially hold up
+                    // every healthy market (the configured feed count is
+                    // already boot-bounded).
+                    let mut refreshes = JoinSet::new();
+                    for feed_id in &cfg.feed_ids {
+                        let feed_cfg = config_for_feed(&cfg, feed_id);
+                        let client = client.clone();
+                        let cache = cache.clone();
+                        let feed_id = feed_id.clone();
+                        refreshes.spawn(async move {
+                            let result = refresh_batch(&client, &cache, &feed_cfg).await;
+                            (feed_id, feed_cfg, result)
+                        });
+                    }
+                    while let Some(joined) = refreshes.join_next().await {
+                        let Ok((feed_id, feed_cfg, result)) = joined else {
+                            // A task panic/cancellation is an internal sync
+                            // failure rather than an attributable feed failure.
+                            // Fail closed across the venue; the next normal
+                            // cycle can recover each market independently.
+                            for binding in &cfg.market_bindings {
+                                binding.trading_gate.pause_for(TradingPauseReason::Oracle);
+                            }
+                            tracing::error!(
+                                profile = cfg.trust_profile.as_str(),
+                                "oracle sync: isolated refresh task failed; all markets PAUSED"
+                            );
+                            continue;
+                        };
+                        match result {
+                            Ok((accepted, replayed)) => {
+                                reconcile_market_health(&cache, &feed_cfg).await;
+                                tracing::debug!(
+                                    profile = cfg.trust_profile.as_str(),
+                                    feed_id = feed_id,
+                                    accepted,
+                                    replayed,
+                                    "oracle sync: isolated feed refresh recovered"
+                                );
+                            }
+                            Err(error) => {
+                                pause_feed_markets(&cfg, &feed_id);
+                                tracing::warn!(
+                                    profile = cfg.trust_profile.as_str(),
+                                    feed_id = feed_id,
+                                    error = %error,
+                                    "oracle sync: isolated feed refresh failed; affected markets PAUSED"
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
     })
+}
+
+fn config_for_feed(cfg: &SyncConfig, feed_id: &str) -> SyncConfig {
+    SyncConfig {
+        feed_ids: vec![feed_id.to_string()],
+        market_bindings: cfg
+            .market_bindings
+            .iter()
+            .filter(|binding| binding.feed_id.eq_ignore_ascii_case(feed_id))
+            .cloned()
+            .collect(),
+        trust_profile: cfg.trust_profile,
+        freshness: cfg.freshness,
+        interval: cfg.interval,
+    }
+}
+
+fn pause_feed_markets(cfg: &SyncConfig, feed_id: &str) {
+    for binding in cfg
+        .market_bindings
+        .iter()
+        .filter(|binding| binding.feed_id.eq_ignore_ascii_case(feed_id))
+    {
+        binding.trading_gate.pause_for(TradingPauseReason::Oracle);
+    }
+}
+
+async fn reconcile_market_health(cache: &OracleCache, cfg: &SyncConfig) {
+    for binding in &cfg.market_bindings {
+        match cache
+            .snapshot(&binding.feed_id, cfg.freshness, binding.units)
+            .await
+        {
+            Ok(_) => {
+                let was_paused = binding
+                    .trading_gate
+                    .is_paused_for(TradingPauseReason::Oracle);
+                binding.trading_gate.resume_for(TradingPauseReason::Oracle);
+                if was_paused {
+                    tracing::info!(
+                        symbol = binding.symbol,
+                        feed_id = binding.feed_id,
+                        profile = cfg.trust_profile.as_str(),
+                        "oracle trust/freshness recovered; market trading RESUMED"
+                    );
+                }
+            }
+            Err(error) => {
+                let transitioned = binding.trading_gate.pause_for(TradingPauseReason::Oracle);
+                tracing::warn!(
+                    symbol = binding.symbol,
+                    feed_id = binding.feed_id,
+                    newly_paused = transitioned,
+                    error = %error,
+                    "oracle sync: market snapshot unhealthy; market trading PAUSED"
+                );
+            }
+        }
+    }
 }
 
 /// One all-or-nothing refresh cycle.
@@ -280,20 +371,35 @@ async fn apply_batch_update_at(
 mod tests {
     use super::*;
     use crate::oracle::hermes::HermesPriceUpdate;
+    use axum::{
+        extract::{RawQuery, State},
+        http::StatusCode,
+        routing::get,
+        Json, Router,
+    };
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::net::TcpListener;
+    use tokio::sync::Notify;
 
     const FEED: &str = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
+    const OTHER_FEED: &str = "aa0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
     const FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/sol_usd_accumulator.bin");
 
     fn config() -> SyncConfig {
+        let gate = TradingGate::default();
         SyncConfig {
             feed_ids: vec![FEED.into()],
             market_bindings: vec![MarketOracleBinding {
+                symbol: "SOL-USDC".to_string(),
                 feed_id: FEED.into(),
                 units: OracleUnits {
                     base_decimals: 6,
                     quote_decimals: 6,
                     price_scale: 100_000_000,
                 },
+                trading_gate: gate,
             }],
             trust_profile: TrustProfile::LegacyWormholeV1,
             freshness: FreshnessPolicy {
@@ -327,6 +433,52 @@ mod tests {
 
     fn fixture_publish_ms() -> u64 {
         (fixture_message().publish_time as u64) * 1_000
+    }
+
+    #[derive(Clone)]
+    struct HermesStub {
+        good_response: Value,
+        batch_requests: Arc<AtomicUsize>,
+        good_requests: Arc<AtomicUsize>,
+        bad_requests: Arc<AtomicUsize>,
+        release_bad: Arc<Notify>,
+    }
+
+    async fn isolated_hermes_stub(
+        State(stub): State<HermesStub>,
+        RawQuery(query): RawQuery,
+    ) -> (StatusCode, Json<Value>) {
+        let query = query.unwrap_or_default();
+        let asks_for_good = query.contains(FEED);
+        let asks_for_bad = query.contains(OTHER_FEED);
+        match (asks_for_good, asks_for_bad) {
+            (true, true) => {
+                stub.batch_requests.fetch_add(1, Ordering::SeqCst);
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"error":"one feed unavailable"})),
+                )
+            }
+            (true, false) => {
+                stub.good_requests.fetch_add(1, Ordering::SeqCst);
+                (StatusCode::OK, Json(stub.good_response))
+            }
+            (false, true) => {
+                stub.bad_requests.fetch_add(1, Ordering::SeqCst);
+                // Hold the failed feed open until the test observes that the
+                // healthy feed already resumed. A serial fallback deadlocks
+                // here and makes the assertion time out.
+                stub.release_bad.notified().await;
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"error":"feed unavailable"})),
+                )
+            }
+            (false, false) => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"unexpected query"})),
+            ),
+        }
     }
 
     #[tokio::test]
@@ -379,5 +531,170 @@ mod tests {
         .expect_err("signed staleness must reject the whole refresh");
         assert!(stale.to_string().contains("stale"));
         assert_eq!(stale_cache.feed_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn market_health_and_feed_failures_are_isolated() {
+        let sol_gate = TradingGate::default();
+        let btc_gate = sol_gate.fork_market();
+        sol_gate.pause_for(TradingPauseReason::Oracle);
+        btc_gate.pause_for(TradingPauseReason::Oracle);
+        let units = OracleUnits {
+            base_decimals: 6,
+            quote_decimals: 6,
+            price_scale: 100_000_000,
+        };
+        let cfg = SyncConfig {
+            feed_ids: vec![FEED.into(), OTHER_FEED.into()],
+            market_bindings: vec![
+                MarketOracleBinding {
+                    symbol: "SOL-USDC".to_string(),
+                    feed_id: FEED.into(),
+                    units,
+                    trading_gate: sol_gate.clone(),
+                },
+                MarketOracleBinding {
+                    symbol: "BTC-USDC".to_string(),
+                    feed_id: OTHER_FEED.into(),
+                    units,
+                    trading_gate: btc_gate.clone(),
+                },
+            ],
+            ..SyncConfig::default()
+        };
+        let cache = OracleCache::new();
+        cache
+            .seed_unverified(
+                OTHER_FEED.to_string(),
+                CachedPrice {
+                    twap: 7_471_749_900,
+                    confidence: 0,
+                    exponent: -8,
+                    publish_time_ms: 0,
+                    vaa_sequence: 1,
+                    trust_profile: TrustProfile::LegacyWormholeV1,
+                    last_updated_ms: 0,
+                    vaa: Vec::new(),
+                },
+            )
+            .await;
+
+        reconcile_market_health(&cache, &cfg).await;
+        assert!(
+            sol_gate.is_paused_for(TradingPauseReason::Oracle),
+            "missing SOL feed remains fail-closed"
+        );
+        assert!(
+            btc_gate.is_open(),
+            "fresh BTC feed resumes only the BTC market"
+        );
+
+        pause_feed_markets(&cfg, FEED);
+        assert!(
+            btc_gate.is_open(),
+            "a failed SOL fallback must not pause BTC"
+        );
+        pause_feed_markets(&cfg, OTHER_FEED);
+        assert!(
+            btc_gate.is_paused_for(TradingPauseReason::Oracle),
+            "the failed BTC fallback pauses its own market"
+        );
+
+        let sol_only = config_for_feed(&cfg, FEED);
+        assert_eq!(sol_only.feed_ids, vec![FEED.to_string()]);
+        assert_eq!(sol_only.market_bindings.len(), 1);
+        assert_eq!(sol_only.market_bindings[0].symbol, "SOL-USDC");
+    }
+
+    #[tokio::test]
+    async fn failed_batch_retries_feeds_concurrently_and_resumes_only_the_healthy_market() {
+        let message = fixture_message();
+        let stub = HermesStub {
+            good_response: json!({
+                "binary": {
+                    "encoding": "hex",
+                    "data": [hex::encode(FIXTURE)],
+                },
+                "parsed": [{
+                    "id": FEED,
+                    "ema_price": {
+                        "price": message.ema_price.to_string(),
+                        "expo": message.exponent,
+                        "publish_time": message.publish_time,
+                    },
+                }],
+            }),
+            batch_requests: Arc::new(AtomicUsize::new(0)),
+            good_requests: Arc::new(AtomicUsize::new(0)),
+            bad_requests: Arc::new(AtomicUsize::new(0)),
+            release_bad: Arc::new(Notify::new()),
+        };
+        let app = Router::new()
+            .route("/v2/updates/price/latest", get(isolated_hermes_stub))
+            .with_state(stub.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let sol_gate = TradingGate::default();
+        let btc_gate = sol_gate.fork_market();
+        sol_gate.pause_for(TradingPauseReason::Oracle);
+        btc_gate.pause_for(TradingPauseReason::Oracle);
+        let units = OracleUnits {
+            base_decimals: 6,
+            quote_decimals: 6,
+            price_scale: 100_000_000,
+        };
+        let sync = spawn_oracle_sync(
+            OracleCache::new(),
+            HermesClient::with_endpoint(&endpoint).unwrap(),
+            SyncConfig {
+                feed_ids: vec![FEED.into(), OTHER_FEED.into()],
+                market_bindings: vec![
+                    MarketOracleBinding {
+                        symbol: "SOL-USDC".to_string(),
+                        feed_id: FEED.into(),
+                        units,
+                        trading_gate: sol_gate.clone(),
+                    },
+                    MarketOracleBinding {
+                        symbol: "BTC-USDC".to_string(),
+                        feed_id: OTHER_FEED.into(),
+                        units,
+                        trading_gate: btc_gate.clone(),
+                    },
+                ],
+                trust_profile: TrustProfile::LegacyWormholeV1,
+                freshness: FreshnessPolicy {
+                    // The signed fixture is intentionally historical. This test
+                    // exercises request/failure isolation, while the freshness
+                    // boundary has its own fixed-time tests above.
+                    max_age_ms: u64::MAX,
+                    max_future_skew_ms: 1_000,
+                },
+                interval: Duration::from_secs(3_600),
+            },
+        );
+
+        time::timeout(Duration::from_secs(2), async {
+            while !sol_gate.is_open() || stub.bad_requests.load(Ordering::SeqCst) != 1 {
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("healthy market should resume without waiting for failed feed");
+        assert!(
+            btc_gate.is_paused_for(TradingPauseReason::Oracle),
+            "failed feed's market remains paused"
+        );
+        assert_eq!(stub.batch_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(stub.good_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(stub.bad_requests.load(Ordering::SeqCst), 1);
+
+        stub.release_bad.notify_one();
+        sync.abort();
+        server.abort();
     }
 }
