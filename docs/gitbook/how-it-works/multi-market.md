@@ -63,6 +63,12 @@ Cancels and settlement reconciliation continue during that pause. This is a
 fail-closed safety choice: the venue does not keep accepting private intent when
 its authority or governed market view is uncertain.
 
+Oracle health is isolated more narrowly. A stale, missing, replayed, or
+unauthenticated feed pauses only the markets bound to that feed; healthy books
+continue using the same attested session. `GET /instruments` exposes a dynamic
+`trading_enabled` flag per market, while order writes recheck the gate to close
+snapshot races.
+
 ## Capacity and future scaling
 
 The number of pairs a machine can serve is a measured capacity decision, not a

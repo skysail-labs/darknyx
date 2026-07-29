@@ -169,12 +169,15 @@ Within one batch, `DARKNYX_TEE_SETTLE_SEND_CONCURRENCY` controls concurrent Tx D
 sends (default 16).
 
 `/instruments` lists the boot-static markets and their finalized governed
-economics. Cross-market modify is rejected because a replacement would change
-the collateral mint and proof context; clients cancel and place a fresh order.
+economics plus dynamic `trading_enabled` readiness. Cross-market modify is
+rejected because a replacement would change the collateral mint and proof
+context; clients cancel and place a fresh order.
 
 Any configured market missing/disabled at finalized governance refresh, any
-signer/config mismatch, or an untrustworthy refresh state pauses **new trading
-venue-wide**. Cancellation, outcome reconciliation, and cleanup continue.
+signer/config mismatch, or an untrustworthy finalized governance/configuration
+refresh state pauses **new trading venue-wide**. Cancellation, outcome
+reconciliation, and cleanup continue. Hermes/oracle refresh failures are scoped
+to markets bound to the affected feed; healthy markets continue.
 
 The current on-chain `VaultConfig.tee_pubkeys` is global, so one vault assumes
 one authorized TEE cluster. A multi-CVM endpoint registry and seamless
@@ -263,11 +266,14 @@ base/quote units and `price_scale` before circuit-breaker comparison. Both
 signed freshness and local refresh health are checked again at the matcher
 boundary.
 
-Oracle failure sets an independent fail-closed trading-gate reason. New
-place/modify and matching pause, while cancellation and settlement
+Oracle failure sets an independent, market-local fail-closed trading-gate
+reason. New place/modify and matching pause only for markets bound to the
+affected feed, while healthy markets, cancellation, and settlement
 reconciliation continue. Recovery of governance health cannot clear an oracle
-pause (or vice versa); only a fresh, fully verified batch for every configured
-market clears the oracle reason.
+pause (or vice versa), and a healthy market cannot clear another's oracle
+reason. Normal refresh uses one authenticated batched Hermes request; if it
+fails, a bounded per-feed fallback isolates a bad feed while preserving strict
+verification on every accepted update.
 
 The oracle, signed limits, tick size, minimum size, and circuit-breaker band are
 not VALID_MATCH_BATCH inputs. They are attested-matcher policy. The proof binds:

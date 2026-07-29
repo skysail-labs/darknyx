@@ -264,14 +264,26 @@ async fn main() -> Result<()> {
             }
         })
         .collect::<Vec<_>>();
+    let market_trading_gates = (0..cfg.markets.len())
+        .map(|index| {
+            if index == 0 {
+                trading_gate.clone()
+            } else {
+                trading_gate.fork_market()
+            }
+        })
+        .collect::<Vec<_>>();
     let oracle_bindings = cfg
         .markets
         .iter()
         .zip(&market_oracle_units)
-        .filter(|(market, _)| !market.oracle_feed_id.is_empty())
-        .map(|(market, units)| MarketOracleBinding {
+        .zip(&market_trading_gates)
+        .filter(|((market, _), _)| !market.oracle_feed_id.is_empty())
+        .map(|((market, units), market_gate)| MarketOracleBinding {
+            symbol: market.symbol.clone(),
             feed_id: market.oracle_feed_id.clone(),
             units: *units,
+            trading_gate: market_gate.clone(),
         })
         .collect::<Vec<_>>();
     for (market, match_config) in cfg.markets.iter().zip(&match_configs) {
@@ -291,7 +303,9 @@ async fn main() -> Result<()> {
 
     let oracle = OracleCache::new();
     if !cfg.feed_ids.is_empty() {
-        trading_gate.pause_for(TradingPauseReason::Oracle);
+        for market_gate in &market_trading_gates {
+            market_gate.pause_for(TradingPauseReason::Oracle);
+        }
         tracing::info!(
             profile = cfg.pyth_trust_profile.as_str(),
             endpoint = cfg.hermes_endpoint,
@@ -334,7 +348,7 @@ async fn main() -> Result<()> {
             oracle: oracle.clone(),
             current_slot: current_slot.clone(),
             matches_tx,
-            trading_gate: trading_gate.clone(),
+            trading_gate: market_trading_gates[market_index].clone(),
             cfg: DriverConfig {
                 match_config,
                 feed_id: if market.oracle_feed_id.is_empty() {
@@ -391,7 +405,6 @@ async fn main() -> Result<()> {
                 },
                 interval: Duration::from_secs(1),
             },
-            trading_gate.clone(),
         );
         tracing::info!(
             feed_count = cfg.feed_ids.len(),
@@ -520,6 +533,12 @@ async fn main() -> Result<()> {
         .iter()
         .map(|(market, matcher, ..)| (market.symbol.clone(), matcher.clone()))
         .collect::<HashMap<_, _>>();
+    let market_gates = cfg
+        .markets
+        .iter()
+        .zip(&market_trading_gates)
+        .map(|(market, gate)| (market.symbol.clone(), gate.clone()))
+        .collect::<HashMap<_, _>>();
     // Share the settle worker's journal with the API so `/admin/drain` reports
     // readiness from the same durable in-flight set the worker maintains.
     let api_state = match settle_template.as_ref() {
@@ -529,6 +548,7 @@ async fn main() -> Result<()> {
     let api_state = api_state
         .with_instruments(instruments)
         .with_market_runtimes(matchers, current_slot, oracle.clone())
+        .with_market_trading_gates(market_gates)
         .with_settle_state(settle_state)
         .with_settle_enabled(settle_enabled);
 

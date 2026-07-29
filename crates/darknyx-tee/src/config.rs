@@ -317,6 +317,28 @@ fn parse_markets_json(raw: &str) -> Result<Vec<MarketSpec>> {
     Ok(markets)
 }
 
+/// Defense-in-depth for future config constructors.
+///
+/// Strict JSON validates every feed before it builds a `MarketSpec`, while the
+/// legacy compatibility path can create exactly one oracle-free loadgen market.
+/// Consequently only malformed direct/test data can violate this today. Keep
+/// the invariant explicit so a future constructor cannot silently introduce an
+/// oracle-free book into a multi-market venue.
+fn validate_market_oracle_invariant(markets: &[MarketSpec]) -> Result<()> {
+    let missing = markets
+        .iter()
+        .filter(|market| market.oracle_feed_id.is_empty())
+        .count();
+    if markets.len() > 1 && missing != 0 {
+        bail!(
+            "internal market configuration invariant: every multi-market entry must have \
+             oracle_feed_id; {missing} of {} are missing one",
+            markets.len(),
+        );
+    }
+    Ok(())
+}
+
 /// Parse a 32-byte hex value (optional `0x` prefix) from an env var —
 /// for commitments (raw field elements, not base58). Unset/empty →
 /// `default`; non-empty malformed → `Err`.
@@ -497,6 +519,12 @@ impl Config {
         let markets = match markets_json {
             Some(raw) => parse_markets_json(&raw)?,
             None => {
+                if legacy_feed_ids.len() > 1 {
+                    bail!(
+                        "DARKNYX_TEE_FEED_IDS accepts at most one feed in the singular-market \
+                         compatibility path; use DARKNYX_TEE_MARKETS_JSON for multiple markets"
+                    );
+                }
                 let oracle_feed_id = legacy_feed_ids.first().cloned().unwrap_or_default();
                 if !oracle_feed_id.is_empty() {
                     validate_feed_id(&oracle_feed_id, "DARKNYX_TEE_FEED_IDS[0]")?;
@@ -509,6 +537,7 @@ impl Config {
                 }]
             }
         };
+        validate_market_oracle_invariant(&markets)?;
         let mut seen_feeds = HashSet::new();
         let feed_ids = markets
             .iter()
@@ -594,6 +623,58 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("duplicate symbol"));
+
+        let missing_feed = format!(
+            r#"[
+                {{"symbol":"SOL-USDC","base_mint":"{mint_a}","quote_mint":"{mint_b}","oracle_feed_id":"{feed}"}},
+                {{"symbol":"BTC-USDC","base_mint":"{mint_c}","quote_mint":"{mint_b}"}}
+            ]"#
+        );
+        assert!(
+            parse_markets_json(&missing_feed).is_err(),
+            "every strict multi-market row must name its own oracle feed"
+        );
+    }
+
+    #[test]
+    fn direct_multi_market_data_cannot_bypass_required_oracle_feeds() {
+        let mixed = vec![
+            MarketSpec {
+                symbol: "SOL-USDC".to_string(),
+                base_mint: [1; 32],
+                quote_mint: [2; 32],
+                oracle_feed_id: "aa".repeat(32),
+            },
+            MarketSpec {
+                symbol: "BTC-USDC".to_string(),
+                base_mint: [3; 32],
+                quote_mint: [2; 32],
+                oracle_feed_id: String::new(),
+            },
+        ];
+        let error = validate_market_oracle_invariant(&mixed)
+            .expect_err("partial oracle coverage must fail closed at boot");
+        assert!(error
+            .to_string()
+            .contains("every multi-market entry must have oracle_feed_id"));
+
+        let oracle_free = mixed
+            .into_iter()
+            .map(|mut market| {
+                market.oracle_feed_id.clear();
+                market
+            })
+            .collect::<Vec<_>>();
+        validate_market_oracle_invariant(&oracle_free)
+            .expect_err("an all-oracle-free multi-market venue is unsupported");
+
+        validate_market_oracle_invariant(&[MarketSpec {
+            symbol: "LOADGEN".to_string(),
+            base_mint: [1; 32],
+            quote_mint: [2; 32],
+            oracle_feed_id: String::new(),
+        }])
+        .expect("the singular legacy loadgen path remains oracle-optional");
     }
 
     #[test]

@@ -194,10 +194,15 @@ pub struct ApiState {
     /// isolated tests and older internal helpers. New request routing MUST use
     /// [`Self::matcher_for_symbol`] / [`Self::matcher_for_order`].
     pub matchers: HashMap<String, Arc<RwLock<MatcherState>>>,
-    /// Fail-closed switch shared with the matcher driver. Governance drift or a
-    /// finalized RPC read failure pauses place/modify + matching while cancels
-    /// and settlement reconciliation remain available.
+    /// Primary-market alias for the layered trading gate. Governance and drain
+    /// reasons are venue-wide; the oracle reason on this alias belongs only to
+    /// the primary market.
     pub trading_gate: TradingGate,
+    /// Boot-static symbol → layered gate registry. Every value shares the same
+    /// venue-wide governance/drain state but owns an independent oracle state.
+    /// Order intake must resolve through this map so one stale feed cannot
+    /// reject placement or modification on another market.
+    pub market_trading_gates: HashMap<String, TradingGate>,
     /// Monotonic counter the orders handler reads to stamp
     /// `arrival_slot` on incoming orders before they land in the
     /// book. Driven by a separate Solana-RPC poller in production
@@ -467,6 +472,7 @@ impl ApiState {
         let (registry, revoked) = Self::load_or_seed_auth(state_dir.as_deref());
         let mut boot_session_id = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut boot_session_id);
+        let trading_gate = TradingGate::default();
         Self {
             app_info,
             boot_session_id,
@@ -496,7 +502,8 @@ impl ApiState {
             // handlers see `None` and return 503.
             matcher: None,
             matchers: HashMap::new(),
-            trading_gate: TradingGate::default(),
+            trading_gate,
+            market_trading_gates: HashMap::new(),
             current_slot: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             oracle: None,
             settle_state: None,
@@ -586,7 +593,10 @@ impl ApiState {
             .map(|instrument| instrument.symbol.clone())
             .unwrap_or_else(|| "SOL-USDC".to_string());
         self.matchers.clear();
-        self.matchers.insert(symbol, matcher.clone());
+        self.matchers.insert(symbol.clone(), matcher.clone());
+        self.market_trading_gates.clear();
+        self.market_trading_gates
+            .insert(symbol, self.trading_gate.clone());
         self.matcher = Some(matcher);
         self.current_slot = current_slot;
         self.oracle = Some(oracle);
@@ -609,8 +619,82 @@ impl ApiState {
             .cloned()
             .or_else(|| matchers.values().next().cloned());
         self.matchers = matchers;
+        if self.market_trading_gates.len() != self.matchers.len()
+            || self
+                .matchers
+                .keys()
+                .any(|symbol| !self.market_trading_gates.contains_key(symbol))
+        {
+            let primary_symbol = self
+                .instruments
+                .first()
+                .map(|instrument| instrument.symbol.as_str());
+            self.market_trading_gates = self
+                .matchers
+                .keys()
+                .map(|symbol| {
+                    let gate = if Some(symbol.as_str()) == primary_symbol {
+                        self.trading_gate.clone()
+                    } else {
+                        self.trading_gate.fork_market()
+                    };
+                    (symbol.clone(), gate)
+                })
+                .collect();
+        }
         self.current_slot = current_slot;
         self.oracle = Some(oracle);
+        self
+    }
+
+    /// Attach the exact per-market gates shared with the corresponding matcher
+    /// drivers and oracle bindings. Production calls this after constructing
+    /// all runtimes. A partial map is reconciled against the active symbols:
+    /// exact supplied gates survive, missing active symbols receive isolated
+    /// gates sharing the same venue layer, and stale/unknown entries are
+    /// discarded.
+    pub fn with_market_trading_gates(mut self, mut gates: HashMap<String, TradingGate>) -> Self {
+        let active_symbols = if self.matchers.is_empty() {
+            self.instruments
+                .iter()
+                .map(|instrument| instrument.symbol.clone())
+                .collect::<Vec<_>>()
+        } else {
+            self.matchers.keys().cloned().collect::<Vec<_>>()
+        };
+        let primary_symbol = self
+            .instruments
+            .iter()
+            .map(|instrument| &instrument.symbol)
+            .find(|symbol| active_symbols.contains(symbol))
+            .cloned()
+            .or_else(|| active_symbols.first().cloned());
+
+        if let Some(primary) = primary_symbol.as_ref() {
+            if let Some(exact_primary) = gates.get(primary) {
+                self.trading_gate = exact_primary.clone();
+            } else if let Some(existing_market) =
+                active_symbols.iter().find_map(|symbol| gates.get(symbol))
+            {
+                // Share the supplied venue layer, but never reuse another
+                // market's oracle layer for the missing primary.
+                self.trading_gate = existing_market.fork_market();
+            }
+        }
+
+        self.market_trading_gates = active_symbols
+            .into_iter()
+            .map(|symbol| {
+                let gate = gates.remove(&symbol).unwrap_or_else(|| {
+                    if Some(&symbol) == primary_symbol.as_ref() {
+                        self.trading_gate.clone()
+                    } else {
+                        self.trading_gate.fork_market()
+                    }
+                });
+                (symbol, gate)
+            })
+            .collect();
         self
     }
 
@@ -628,6 +712,48 @@ impl ApiState {
                 .filter(|instrument| instrument.symbol == symbol)
                 .and_then(|_| self.matcher.clone())
         })
+    }
+
+    /// Resolve the fail-closed gate for one signed market symbol.
+    pub fn trading_gate_for_symbol(&self, symbol: &str) -> Option<TradingGate> {
+        self.market_trading_gates.get(symbol).cloned().or_else(|| {
+            self.instruments
+                .first()
+                .filter(|instrument| instrument.symbol == symbol)
+                .map(|_| self.trading_gate.clone())
+        })
+    }
+
+    /// True when at least one configured matcher can accept and match new
+    /// orders. A partially paused multi-market venue remains available.
+    pub fn any_market_open(&self) -> bool {
+        !self.market_trading_gates.is_empty()
+            && self.market_trading_gates.values().any(TradingGate::is_open)
+    }
+
+    /// True only when every configured matcher can accept and match new orders.
+    /// Used to report partial oracle degradation without changing the public
+    /// status schema.
+    pub fn all_markets_open(&self) -> bool {
+        !self.market_trading_gates.is_empty()
+            && self.market_trading_gates.values().all(TradingGate::is_open)
+    }
+
+    /// Clear only the oracle reason for markets bound to `feed_id`.
+    ///
+    /// The feature-gated debug seeder uses this to mirror the authenticated
+    /// sync path without granting one seeded feed authority over every book.
+    pub fn resume_oracle_for_feed(&self, feed_id: &str) -> usize {
+        let mut resumed = 0;
+        for instrument in &self.instruments {
+            if instrument.oracle_feed_id.eq_ignore_ascii_case(feed_id) {
+                if let Some(gate) = self.market_trading_gates.get(&instrument.symbol) {
+                    gate.resume_for(crate::matcher::TradingPauseReason::Oracle);
+                    resumed += 1;
+                }
+            }
+        }
+        resumed
     }
 
     /// Resolve an existing order to the matcher selected at placement.
@@ -704,6 +830,9 @@ impl ApiState {
                 self.matchers.clear();
                 self.matchers.insert(instruments[0].symbol.clone(), matcher);
             }
+            self.market_trading_gates.clear();
+            self.market_trading_gates
+                .insert(instruments[0].symbol.clone(), self.trading_gate.clone());
         }
         self.instruments = instruments;
         self
@@ -716,6 +845,7 @@ impl ApiState {
     /// [`super::auth::test_registry`].
     pub fn for_tests() -> Self {
         let matcher = Arc::new(RwLock::new(MatcherState::new()));
+        let trading_gate = TradingGate::default();
         Self {
             app_info: BootAppInfo::stub(),
             boot_session_id: [0x5A; 32],
@@ -751,7 +881,8 @@ impl ApiState {
             merkle_mirrors: new_shard_mirrors(1),
             matcher: Some(matcher.clone()),
             matchers: HashMap::from([("SOL-USDC".to_string(), matcher)]),
-            trading_gate: TradingGate::default(),
+            trading_gate: trading_gate.clone(),
+            market_trading_gates: HashMap::from([("SOL-USDC".to_string(), trading_gate)]),
             // Tests that exercise expiry need to bump this; the
             // default starting slot is 1 so an order with
             // `expiry_slot = 1_000_000` (the test default) lives
@@ -1383,5 +1514,72 @@ mod persist_tests {
         assert!(Arc::ptr_eq(&routed, &btc));
         assert!(!Arc::ptr_eq(&routed, &sol));
         assert!(state.matcher_for_symbol("UNKNOWN").is_none());
+    }
+
+    #[test]
+    fn partial_market_gate_registry_preserves_exact_and_rebuilds_missing_gates() {
+        let sol_matcher = Arc::new(RwLock::new(MatcherState::new()));
+        let btc_matcher = Arc::new(RwLock::new(MatcherState::new()));
+        let exact_sol = TradingGate::default();
+        exact_sol.pause_for(crate::matcher::TradingPauseReason::Oracle);
+        let stale = TradingGate::default();
+
+        let state = ApiState::for_tests()
+            .with_instruments(vec![
+                InstrumentInfo {
+                    symbol: "SOL-USDC".to_string(),
+                    base_mint: [1; 32],
+                    quote_mint: [2; 32],
+                    tick_size: 1,
+                    min_order_size: 1,
+                    oracle_feed_id: "aa".repeat(32),
+                },
+                InstrumentInfo {
+                    symbol: "BTC-USDC".to_string(),
+                    base_mint: [3; 32],
+                    quote_mint: [2; 32],
+                    tick_size: 1,
+                    min_order_size: 1,
+                    oracle_feed_id: "bb".repeat(32),
+                },
+            ])
+            .with_market_runtimes(
+                HashMap::from([
+                    ("SOL-USDC".to_string(), sol_matcher),
+                    ("BTC-USDC".to_string(), btc_matcher),
+                ]),
+                Arc::new(std::sync::atomic::AtomicU64::new(1)),
+                OracleCache::new(),
+            )
+            .with_market_trading_gates(HashMap::from([
+                ("SOL-USDC".to_string(), exact_sol.clone()),
+                ("STALE".to_string(), stale),
+            ]));
+
+        assert_eq!(state.market_trading_gates.len(), 2);
+        assert!(state.trading_gate_for_symbol("STALE").is_none());
+        assert!(
+            !state.trading_gate_for_symbol("SOL-USDC").unwrap().is_open(),
+            "the exact supplied SOL oracle pause must survive reconciliation"
+        );
+        assert!(
+            state.trading_gate_for_symbol("BTC-USDC").unwrap().is_open(),
+            "the missing BTC gate must be rebuilt with an independent oracle layer"
+        );
+        state
+            .trading_gate_for_symbol("BTC-USDC")
+            .unwrap()
+            .pause_for(crate::matcher::TradingPauseReason::Oracle);
+        assert_eq!(state.resume_oracle_for_feed(&"bb".repeat(32)), 1);
+        assert!(
+            state.trading_gate_for_symbol("BTC-USDC").unwrap().is_open(),
+            "feed recovery must resolve the rebuilt BTC gate"
+        );
+
+        exact_sol.pause_for(crate::matcher::TradingPauseReason::Governance);
+        assert!(
+            !state.trading_gate_for_symbol("BTC-USDC").unwrap().is_open(),
+            "the rebuilt BTC gate must share the supplied venue layer"
+        );
     }
 }

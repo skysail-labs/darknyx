@@ -22,10 +22,16 @@ const OUTPUT_PATH = resolve(
   ".devnet/darknyx-multimarket-deploy.env",
 );
 const RPC = process.env.SOLANA_RPC_URL?.trim();
+const PYTH_API_KEY = process.env.DARKNYX_TEE_PYTH_API_KEY?.trim();
 
 if (!RPC) {
   throw new Error(
     "SOLANA_RPC_URL is required; use the private devnet endpoint from packages/sdk/.env",
+  );
+}
+if (!PYTH_API_KEY) {
+  throw new Error(
+    "DARKNYX_TEE_PYTH_API_KEY is required for the authenticated Hermes endpoint",
   );
 }
 if (!existsSync(CONFIG_PATH)) {
@@ -61,6 +67,7 @@ const lines = [
   envLine("DARKNYX_TEE_API_KEY", `darknyx-${randomBytes(16).toString("hex")}`),
   envLine("DARKNYX_TEE_API_SECRET", randomBytes(32).toString("hex")),
   envLine("DARKNYX_TEE_PASSPHRASE", randomBytes(32).toString("hex")),
+  envLine("DARKNYX_TEE_PYTH_API_KEY", PYTH_API_KEY),
   envLine("DARKNYX_TEE_SOLANA_RPC_URL", RPC),
   envLine("DARKNYX_TEE_SYNC_FROM_SLOT", floor),
   envLine("DARKNYX_TEE_BASE_MINT", ""),

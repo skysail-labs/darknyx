@@ -328,9 +328,13 @@ async fn prepare_order(
     matcher: &Arc<tokio::sync::RwLock<crate::matcher::MatcherState>>,
     req: &PlaceOrderRequest,
 ) -> Result<PreparedOrder, ApiError> {
-    if !state.trading_gate.is_open() {
+    if !state
+        .trading_gate_for_symbol(&req.symbol)
+        .is_some_and(|gate| gate.is_open())
+    {
         return Err(ApiError::degraded(
-            "new trading is paused while finalized on-chain governance is unavailable or changed",
+            "new trading is paused for this market while oracle or finalized governance \
+             readiness is unavailable",
         ));
     }
 
@@ -373,9 +377,8 @@ async fn prepare_order(
         )));
     }
     // Governed intake policy. Resolve the symbol once, then enforce its minimum
-    // size and tick before the expensive Ed25519 verify. There is one market in
-    // the current process, so accepting an unlisted symbol would silently route
-    // it into that market's book.
+    // size and tick before the expensive Ed25519 verify. Accepting an unlisted
+    // symbol would bypass the boot-static market/gate registry.
     let instrument = state
         .instruments
         .iter()
@@ -734,9 +737,13 @@ pub async fn place_core(
             )));
         }
     }
-    if !state.trading_gate.is_open() {
+    if !state
+        .trading_gate_for_symbol(&req.symbol)
+        .is_some_and(|gate| gate.is_open())
+    {
         return Err(ApiError::degraded(
-            "new trading paused while the order was being verified; retry after readiness recovers",
+            "new trading paused for this market while the order was being verified; \
+             retry after readiness recovers",
         ));
     }
 
@@ -1024,9 +1031,13 @@ pub async fn modify_core(
             )));
         }
     }
-    if !state.trading_gate.is_open() {
+    if !state
+        .trading_gate_for_symbol(&req.replacement.symbol)
+        .is_some_and(|gate| gate.is_open())
+    {
         return Err(ApiError::degraded(
-            "new trading paused while the replacement was being verified; original order unchanged",
+            "new trading paused for this market while the replacement was being verified; \
+             original order unchanged",
         ));
     }
 

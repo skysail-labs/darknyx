@@ -29,7 +29,8 @@ pathological book clearing arbitrarily far from the reference.
 
 Oracle updates are authenticated and replay-ordered, and their signed publish
 time must remain fresh. An unhealthy oracle pauses new placement, modification,
-and matching without blocking cancellation or settlement recovery.
+and matching for markets bound to that feed without blocking healthy markets,
+cancellation, or settlement recovery.
 
 This is an **attested matching-policy guarantee**. The settlement circuit does
 not receive the oracle observation or re-run the limit book, so clients rely on

@@ -629,8 +629,9 @@ pub struct MatcherDriver {
     pub oracle: OracleCache,
     pub current_slot: Arc<AtomicU64>,
     pub matches_tx: mpsc::Sender<RunBatchOutput>,
-    /// Shared fail-closed governance gate. A paused tick is a no-op; existing
-    /// settlement jobs continue in the independent scheduler.
+    /// Layered fail-closed gate for this market. Governance/drain state is
+    /// venue-wide; oracle state is market-local. A paused tick is a no-op;
+    /// existing settlement jobs continue in the independent scheduler.
     pub trading_gate: TradingGate,
     pub cfg: DriverConfig,
 }

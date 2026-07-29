@@ -13,6 +13,7 @@ use axum::{
 };
 use darknyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
 use darknyx_tee::api::{build_router, ApiState};
+use darknyx_tee::matcher::TradingPauseReason;
 use http_body_util::BodyExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use tower::ServiceExt;
@@ -67,6 +68,7 @@ async fn instruments_list_is_public() {
     // Mints render as base58 strings; sizes as decimal strings.
     assert!(arr[0]["base_mint"].as_str().is_some());
     assert_eq!(arr[0]["tick_size"], "1");
+    assert_eq!(arr[0]["trading_enabled"], true);
     assert_eq!(arr[0]["oracle"]["type"], "pyth_pull_v2");
 }
 
@@ -77,6 +79,19 @@ async fn instrument_detail_by_symbol() {
     let body = read_json(resp).await;
     assert_eq!(body["symbol"], "SOL-USDC");
     assert_eq!(body["min_order_size"], "0");
+}
+
+#[tokio::test]
+async fn instrument_reports_its_market_local_pause() {
+    let state = ApiState::for_tests();
+    state
+        .trading_gate_for_symbol("SOL-USDC")
+        .unwrap()
+        .pause_for(TradingPauseReason::Oracle);
+    let app = build_router(Arc::new(state));
+    let response = get(&app, "/instruments/SOL-USDC", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(read_json(response).await["trading_enabled"], false);
 }
 
 #[tokio::test]
