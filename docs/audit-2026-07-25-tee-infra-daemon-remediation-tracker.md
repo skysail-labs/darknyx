@@ -53,11 +53,11 @@ the first stop for an agent resuming the work.
 |---|---|
 | Last verified `main` | `923a992` (slice-7 implementation PR #88 merged 2026-07-29) |
 | Last merged remediation PR | #88 — slice-7 T-14/PF-09 implementation, merge commit `923a992`, merged 2026-07-29. |
-| Active slice | none — slice 7 closed; tracker-only closure update in progress |
-| Active branch / PR | `remediation/tee-bounds-cleanup-close` / PR not opened yet |
+| Active slice | none — slice 7 closed |
+| Active branch / PR | `remediation/tee-bounds-cleanup-close` / tracker-only closure PR #89 |
 | Next slice | `remediation/multi-market-isolation` (T-17) |
 | Live state | **No CVM running; billing halted** after the slice-5 validation window (2026-07-29). Image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436` on `nightly-test-cvm` (CPU, prod9). Devnet tree left freshly reset from the final `cvm-merge-then-order` cycle, holding only that test's leaves. Signer set unchanged; all four shards funded. PRIOR (slice 4): Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-29 (slice 7 merged and closed; tracker-only closure update in progress) |
+| Last updated | 2026-07-30 (slice 7 merged and closed; tracker-only closure recorded in PR #89) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -1487,8 +1487,8 @@ Exact next action:
 
 ```text
 Last merged PR / main SHA: #88 / 923a992
-Active branch / HEAD: remediation/tee-bounds-cleanup-close / 923a992 plus this
-  tracker-only closure update
+Active branch / HEAD: remediation/tee-bounds-cleanup-close / tracker-only
+  closure PR #89
 Dirty or untracked files preserved: yes — modified third_party/icicle-snark and
   third_party/rapidsnark submodules plus every pre-existing untracked path were
   left untouched and are not part of slice 7.
