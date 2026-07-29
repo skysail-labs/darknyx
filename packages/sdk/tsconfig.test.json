@@ -12,6 +12,10 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    // `incremental` is inherited true from the root config; with an inherited
+    // `outDir` that made this checker write a .tsbuildinfo INTO dist/, which is
+    // build output it has no business touching. A checker must not emit.
+    "incremental": false,
     "composite": false,
     "declaration": false,
     "declarationMap": false,

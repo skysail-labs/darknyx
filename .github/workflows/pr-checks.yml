@@ -480,6 +480,25 @@ jobs:
       # `tsconfig.test.json` is the tests-inclusive, emit-free variant. It must
       # be used here rather than the build config, or this job reproduces the
       # exact blind spot it exists to remove.
+      # `@darknyx/sdk` resolves through its package.json `types: dist/index.d.ts`,
+      # and `npm ci` does NOT build workspace packages. Without this step the
+      # daemon typecheck fails with ~69 "Cannot find module '@darknyx/sdk'"
+      # errors plus the implicit-any cascade they cause.
+      #
+      # This was missed locally because a stale `packages/sdk/dist` from an
+      # earlier build was already on disk — the checker passed against an
+      # artefact CI never has. Verified since by deleting every dist/ and
+      # tsbuildinfo and re-running this exact sequence from clean.
+      #
+      # Building rather than path-mapping to sdk/src is deliberate: it checks the
+      # daemon against the DECLARATIONS it actually consumes, so a declaration
+      # emit that breaks is caught here too.
+      - name: Build the SDK (daemon/indexer typecheck against its declarations)
+        run: |
+          node node_modules/typescript/bin/tsc -p packages/sdk/tsconfig.json
+          test -f packages/sdk/dist/index.d.ts \
+            || { echo "::error::sdk build produced no dist/index.d.ts"; exit 1; }
+
       - name: tsc --noEmit (sdk, tests included)
         run: node node_modules/typescript/bin/tsc -p packages/sdk/tsconfig.test.json --noEmit
 
