@@ -1560,7 +1560,9 @@ before closure. Exact source `c0f06fc` was built successfully by
 image is
 `sha256:5ae02ce5c9686770289a7c0e036b4f7819ec6a85c427657fc47d240322ff93c2`.
 The CPU compose is pinned to that digest. No CVM has been started for this
-slice yet.
+slice yet. The focused multi-market env generator now also requires and carries
+the authenticated Hermes credential into the encrypted deployment env; it
+cannot silently produce a deployment where every oracle gate remains paused.
 
 ## Agent handoff template
 

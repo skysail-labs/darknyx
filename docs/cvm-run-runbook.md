@@ -394,6 +394,9 @@ boots exactly two markets at C2:
 set -a
 . packages/sdk/.env
 set +a
+# Export the private Hermes credential from its local secret store; the
+# generator fails closed rather than producing an oracle-paused deployment.
+test -n "$DARKNYX_TEE_PYTH_API_KEY"
 
 # Creates/reuses the second market and writes public, gitignored fixture data.
 ADMIN_KEYPAIR=.devnet/keypairs/admin.json \
