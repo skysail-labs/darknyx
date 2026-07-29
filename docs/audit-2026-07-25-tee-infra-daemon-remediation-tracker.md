@@ -1555,7 +1555,12 @@ No circuit, zkey/VK, canonical order, on-chain instruction/account/transaction,
 journal, key derivation, program deployment, tree, signer, or devnet state
 changes. Because the production TEE boot path and HTTP response changed, the
 repository workflow still requires a digest-pinned two-market CVM spot-check
-before closure. No CVM has been started for this slice yet.
+before closure. Exact source `c0f06fc` was built successfully by
+`tee-image` run `30488988373` as tag `tee-v3-hardening-78`; the immutable CPU
+image is
+`sha256:5ae02ce5c9686770289a7c0e036b4f7819ec6a85c427657fc47d240322ff93c2`.
+The CPU compose is pinned to that digest. No CVM has been started for this
+slice yet.
 
 ## Agent handoff template
 
