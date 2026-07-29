@@ -31,9 +31,10 @@ An agent continuing this remediation must:
    them into a remediation commit.
 5. Use a `remediation/<topic>` branch and update this tracker in the same PR as
    the implementation. Do not add model-generated trailers to commit messages.
-6. Run the reasonable equivalents of affected CI gates locally. The
-   organization artifact quota and CodeRabbit review are currently unavailable;
-   do not wait for either or claim that they ran.
+6. Run the reasonable equivalents of affected CI gates locally before pushing.
+   GitHub Actions and CodeRabbit are available again as of 2026-07-29: wait for
+   both on every remediation PR, inspect their actual output, and do not infer a
+   review from a green aggregate status.
 7. Use a billable CVM only when the slice's evidence table requires it. Stop a
    CPU CVM when evidence is complete. **Never stop a prepaid on-demand GPU
    CVM.**
@@ -50,13 +51,13 @@ the first stop for an agent resuming the work.
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `6f16f6f` (slice-6 PR #86 merged 2026-07-29; this closure update is documentation-only) |
-| Last merged remediation PR | #86 — slice 6 (`daemon-keystore-v2`), merge commit `6f16f6f`, merged 2026-07-29. |
-| Active slice | none — slice 6 closed 2026-07-29 (T-09 + T-10). |
-| Active branch / PR | none after this documentation-only closure update lands |
-| Next slice | `remediation/tee-bounds-cleanup` (T-14 + PF-09, plus the unused legacy settle-harness fixture cleanup recorded below) |
+| Last verified `main` | `729da51` (slice-6 closure PR #87 merged 2026-07-29) |
+| Last merged remediation PR | #87 — slice-6 documentation closure, merge commit `729da51`, merged 2026-07-29. |
+| Active slice | slice 7 — T-14 + PF-09 and unused legacy settle-harness fixture cleanup |
+| Active branch / PR | `remediation/tee-bounds-cleanup` / PR not opened yet |
+| Next slice | `remediation/multi-market-isolation` (T-17) after slice 7 closes |
 | Live state | **No CVM running; billing halted** after the slice-5 validation window (2026-07-29). Image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436` on `nightly-test-cvm` (CPU, prod9). Devnet tree left freshly reset from the final `cvm-merge-then-order` cycle, holding only that test's leaves. Signer set unchanged; all four shards funded. PRIOR (slice 4): Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-29 (slices 1–5 independently revalidated; slice 6 CLOSED) |
+| Last updated | 2026-07-29 (slice 7 implementation and controlled measurements complete; local/hosted closure gates pending) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -181,7 +182,7 @@ and live-path invariant it owns is satisfied; the earlier phrase
 | T-11 | Medium | Release engineering + TEE | `remediation/local-assurance` | The complete `darknyx-tee` suite is an explicit local pre-PR gate now and a dedicated hosted job once artifact quota resumes. Slow artifact-backed tests remain separately identifiable. | Closed |
 | T-12 | Medium | TEE tests + circuits | `remediation/local-assurance` | Artifact-required mode fails loudly when circuit artifacts are absent; no positive proof test can report success without proving. Casual local mode may skip only when the required-mode flag is absent and must report the skip. | Closed |
 | T-13 | Low | Vault tests + build tooling | `remediation/local-assurance` | All LiteSVM loaders share one SBF artifact guard backed by a build manifest/source fingerprint, not a fragile per-test mtime check. A changed vault source or build configuration makes tests fail until `cargo build-sbf` refreshes the artifact and manifest. | Closed |
-| T-14 | Low | Vault + TEE + SDK | `remediation/tee-bounds-cleanup` | The retired `NullifierEntry`, seeds, PDA helpers, comments, and public exports are absent across the program, TEE, SDK, scripts, and docs. The commitment-keyed consumed/deposit guards remain untouched. | Open |
+| T-14 | Low | Vault + TEE + SDK | `remediation/tee-bounds-cleanup` | The retired `NullifierEntry`, seeds, PDA helpers, comments, and public exports are absent across the program, TEE, SDK, scripts, and docs. The commitment-keyed consumed/deposit guards remain untouched. | **Code complete** — dead program/TEE/SDK surfaces and the self-contained legacy order fixtures are removed; deletion sweep and full local gate pass. Hosted PR/CodeRabbit evidence and merge remain. |
 | T-15 | Low | Vault tests + tracker | `remediation/local-assurance` | LiteSVM covers live-lock withdraw rejection, expiry-boundary withdraw success, and `release_lock → withdraw` including rent return. The earlier S-03 row names only evidence that exists. | Closed |
 | T-16 | Medium | TEE oracle + matcher + market config | `remediation/tee-oracle-trust` | Pyth-native price/exponent values are converted with checked integer arithmetic into the governed atomic base/quote price units before circuit-breaker comparison or collateral math. The invariant includes base decimals, quote decimals, exponent, and `price_scale`; unequal-decimal markets, exponent changes, unrepresentable scales, rounding, and overflow fail closed. | Closed |
 | T-17 | Medium | TEE matcher + API | `remediation/multi-market-isolation` | `TradingPauseReason::Oracle` is scoped per market, not venue-wide. One market's stale or unauthenticated feed pauses only that market, and a healthy market's tick cannot clear another's oracle pause. A mixed configuration where some markets have no `oracle_feed_id` while `feed_ids` is non-empty is rejected at boot rather than silently sharing gate state. | Open |
@@ -192,7 +193,7 @@ and live-path invariant it owns is satisfied; the earlier phrase
 | ID | Severity | Owner | Planned remediation slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
 | PF-08 | Perf-Nit | Daemon | — | Repeated trading-key derivation is real but not established as material. Reopen only when an intake/daemon profile identifies it as a material contributor to CPU or placement latency; then derive once per unlocked keystore session rather than add an unbounded cache. | Deferred |
-| PF-09 | Perf-Nit | TEE prover | `remediation/tee-bounds-cleanup` | Rapidsnark `SHORT_BUFFER` handling has bounded retries, checked growth, and a maximum output/error buffer. A malicious or broken native prover cannot loop or allocate without bound. | Open |
+| PF-09 | Perf-Nit | TEE prover | `remediation/tee-bounds-cleanup` | Rapidsnark `SHORT_BUFFER` handling has bounded retries, checked growth, and a maximum output/error buffer. A malicious or broken native prover cannot loop or allocate without bound. | **Code complete** — 3-attempt/64-KiB output ceilings, checked native lengths, eight adversarial boundary tests, real native roundtrip, controlled latency measurements, and full local gate pass. Hosted PR/CodeRabbit evidence and merge remain. |
 | PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a live-surface stale-reference sweep. | **Closed** — signed canonical body `203 + S` → `171 + S` bytes (−32; 211 B → 179 B, −15.2% at `SOL-USDC`); one 32-byte field gone from `Order`, `OrderSnapshot`, and `PlaceOrderRequest`, two from `MatchPair`. OpenAPI `required` list and schema verified against the Rust struct by script (20 fields each way, zero drift). Live protocol/API/docs references are clean. The 2026-07-29 revalidation found unused legacy `PendingOrder`/`DarkCLOB` helpers in `programs/vault/tests/settle_harness/mod.rs`; they are not constructed by tests or production and are assigned to slice 7's dead-code sweep. Format-safe: the journal serializes `MatchResultPayload`, which never carried the field. **Live-measured 2026-07-29**: settle `total_ms=14523`, between the two prior samples (14573 / 14210) — the removal costs nothing measurable against a network-bound settle. |
 
 ## Additional release-readiness deliverables
@@ -312,7 +313,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Closed / PR #81 | New versioned journal, Borsh-serialized in plaintext and protected ONLY by the dstack-sealed LUKS volume — there is no authenticated encryption at the `JournalSnapshot` boundary, and the row must not imply one. Adds `/admin/drain` (admin-gated) and error code `4290`; no other public wire change. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | **Closed** / PR #84 | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | **Closed / PR #86** | Versioned local keystore migration; v1 read/migrate only, all new writes v2. Existing v1 files are replaced only after authenticated decryption, semantic validation, and a durable same-directory write. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
-| 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09; unused legacy settle-harness order fixtures found in slice-5 revalidation | Slice 6 closed | Open / — | SDK removal of dead exports; bounded internal FFI behavior; removal of the unused `PendingOrder`/`DarkCLOB` fixture helpers in `programs/vault/tests/settle_harness/mod.rs`. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep including canonical order v4/v5 concepts. No CVM required. |
+| 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09; unused legacy settle-harness order fixtures found in slice-5 revalidation | Slice 6 closed | **Code complete** / PR not opened | SDK removal of dead exports; bounded internal FFI behavior; removal of the unused `PendingOrder`/`DarkCLOB` fixture helpers in `programs/vault/tests/settle_harness/mod.rs`. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep including canonical order v4/v5 concepts. No CVM required. |
 
 ## Cost to the protocol
 
@@ -1328,6 +1329,130 @@ Hosted final-head evidence on PR #86:
   The green status context is therefore not counted as review evidence.
 
 PR #86 merged as `6f16f6f`; T-09 and T-10 are `Closed`.
+
+## Slice 7 evidence — `remediation/tee-bounds-cleanup`, 2026-07-29
+
+### PF-09 — bounded native-prover output
+
+The rapidsnark wrapper no longer trusts `groth16_prover_prove` to make progress
+or to return allocation-safe lengths. Its native boundary now enforces all of
+the following before allocating or slicing:
+
+- at most **3** native prove attempts;
+- a fixed **1 KiB** error buffer;
+- **64 KiB** maxima for each of the proof JSON and public-signal JSON buffers;
+- checked `u64 → usize` conversion for every native size;
+- rejection of an oversized initial proof-size hint before the first output
+  allocation;
+- rejection of `SHORT_BUFFER` without a strictly larger required buffer;
+- rejection of successful lengths beyond the buffers supplied to native code.
+
+The maximum live Rust-owned output allocation for one attempt is therefore
+**132,096 bytes**: 65,536 proof + 65,536 public signals + 1,024 error. A retry
+replaces those buffers; it cannot create a fourth attempt or request an
+allocation above either 64 KiB ceiling. These ceilings are deliberately
+generous relative to every supported Groth16 JSON output and affect only a
+broken/native-error path.
+
+Eight fake-native boundary tests cover normal success, selective growth, zero
+progress, `u64::MAX`, excessive initial hints, retry exhaustion, success lengths
+beyond capacity, and preservation of a native error message. The real native
+roundtrip also passes against the N=2 fixture and committed proving key.
+
+### T-14 and legacy fixture removal
+
+The retired `NullifierEntry` account type and its program, TEE, SDK, harness,
+script, and current-documentation seeds/helpers are gone. The live
+commitment-keyed `ConsumedNoteEntry` and `DepositedNoteEntry` guards are
+unchanged. This deletes source-level dead state only: no deployed account is
+read or migrated, and there is no instruction, canonical order, circuit,
+proving-key, verifier-key, or transaction-layout change.
+
+The same sweep removed the self-contained `PendingOrder` / `DarkCLOB` /
+on-chain-matcher fixture layer from `programs/vault/tests/settle_harness/mod.rs`
+(677 deleted lines). Those helpers could not exercise the current architecture:
+the only matcher is in the TEE and the only on-chain program is `vault`.
+Historical audit records retain their original terminology as evidence.
+
+The deletion/stale-reference sweep found no live `NullifierEntry`,
+`NULLIFIER_SEED`, `nullifierEntryPda`, `nullifier_pda`, `PendingOrder`,
+`DarkCLOB`, `SubmitOrderArgs`, `ME_PROGRAM_ID`, or `.me_id` surface outside
+historical findings. Canonical order v5 remains the current contract; no active
+v4 fixture was found.
+
+### Roundtrip-test correction discovered during validation
+
+The native witness generator exposed two stale assumptions in
+`rapidsnark_roundtrip`: it expected the pre-hashing one-public-input circuit and
+constructed both dummy slots with `batch_slot=0`. The current circuit exposes
+`[merkle_root, config_digest]`, and C-08 requires slot 1 to carry
+`batch_slot=1`. The test now verifies both public inputs and compares the full
+public vector across ark and rapidsnark. This is a test-fixture repair, not a
+circuit or proof-format change.
+
+### Measured effect
+
+Measurements used the same Apple M3 host, N=2 Wasmer witness generator,
+rapidsnark static library, zkey, release profile, and workload on both source
+states. The baseline ran from a detached worktree at `729da51`; the candidate
+ran from this branch. Each prove set contains 40 samples and reports nearest-rank
+percentiles.
+
+| Measurement | Before | After | Delta / interpretation |
+|---|---:|---:|---|
+| Witness p50 / p95 | 59 / 61 ms | 60 / 62 ms | +1 ms / +1 ms; host noise |
+| Native prove p50 / p95 | 353 / 407 ms | 361 / 397 ms | +2.3% / -2.5%; no material normal-path regression |
+| Native prove min–max | 329–506 ms | 329–402 ms | candidate remains inside baseline spread |
+| `target/deploy/vault.so` | 597,184 B | 597,184 B | unchanged |
+| Rapidsnark-enabled release TEE binary | 22,947,664 B | 22,947,664 B | unchanged |
+| SDK `dist/` | 618,583 B | 617,846 B | -737 B |
+| Affected SDK IDL JS + declarations | 45,975 B | 45,586 B | -389 B |
+
+No CVM or devnet run is required: PF-09 is an internal host/native error
+boundary, T-14 removes unused source interfaces, and neither changes the image
+contract, circuit, verifier, on-chain instruction, persisted live state, or
+network surface.
+
+### Validation and rollback
+
+Completed targeted checks:
+
+- `RAPIDSNARK_LIB_DIR=… RAPIDSNARK_GMP_LIB_DIR=… cargo test -p darknyx-tee
+  --features rapidsnark prover::rapidsnark_sys::tests --lib` — **8 passed**;
+- the same native-library environment plus
+  `REQUIRE_CIRCUIT_ARTIFACTS=1 DARKNYX_TEE_WITNESS=native cargo test
+  -p darknyx-tee --features rapidsnark --test rapidsnark_roundtrip
+  -- --nocapture` — **2 passed**;
+- `cargo test -p vault --tests --no-run` — all vault test targets compile;
+- `bash scripts/build-vault-sbf.sh devnet-admin` — pass; fingerprint refreshed;
+- SDK production build and test-inclusive TypeScript compile — pass;
+- `git diff --check` — pass.
+
+Completed full local gate:
+
+- formatting, compose-digest, CUDA-env, brand-namespace, doctest, and deletion
+  guards — pass;
+- `cargo build --examples -p darkpool-crypto` and
+  `cargo clippy --workspace --all-targets -- -D warnings` — pass;
+- `cargo nextest run --workspace` — **732 passed, 3 skipped**. The first
+  sandboxed attempt was denied permission to bind one localhost RPC fixture;
+  the identical unrestricted run passed 732/732;
+- `REQUIRE_CIRCUIT_ARTIFACTS=1 cargo nextest run -p darknyx-tee --tests` —
+  **556 passed, 1 skipped**, including the real N=2 match-batch and VALID_INPUT
+  proof-backed tests;
+- SDK Vitest — **270 passed, 24 environment-gated skipped**; daemon Vitest —
+  **156 passed, 2 skipped**; indexer Vitest — **20 passed**;
+- SDK, daemon, and indexer test-inclusive TypeScript compiles — pass.
+
+The networked dependency-audit helper was not run locally because the execution
+environment refused to disclose private dependency metadata to third-party
+advisory services. No dependency manifest changed; the hosted dependency job
+must still pass before merge.
+
+T-14 and PF-09 are `Code complete`; hosted PR/CodeRabbit evidence and merge are
+still pending. Rollback is source-only: revert the PR and rebuild the
+TEE/SDK/program artifacts. It does not invalidate notes, orders, proofs,
+accounts, journals, keys, signatures, compose hashes, or devnet state.
 
 ## Agent handoff template
 

@@ -92,12 +92,12 @@ fn settle_rejects_at_or_after_either_input_lock_expiry() {
 // Regression — withdraw→settle double-spend is CLOSED (the consume-guard fix).
 //
 // Before the fix a withdrawn note left NO commitment-keyed consume guard:
-// `withdraw` only inited `NullifierEntry[nullifier]` + *read* (never wrote)
-// `ConsumedNoteEntry[commitment]`, while settle consumes a note by its
-// COMMITMENT (`consumed_a`). A TEE-chosen nullifier used to ride the settle
-// payload and could avoid colliding with the withdraw's real one, so the same
-// note paid out twice. (A litesvm PoC confirmed this reproduces on the pre-fix
-// code before the fix landed.)
+// `withdraw` only initialized a separate nullifier-keyed PDA and merely read
+// (never wrote) `ConsumedNoteEntry[commitment]`, while settle consumes a note
+// by its COMMITMENT (`consumed_a`). A TEE-chosen nullifier used to ride the
+// settle payload and could avoid colliding with the withdraw's real one, so the
+// same note paid out twice. (A litesvm PoC confirmed this reproduces on the
+// pre-fix code before the fix landed.)
 //
 // The fix: `withdraw` now ALSO inits `ConsumedNoteEntry[commitment]`, making
 // the commitment-keyed entry the single trustless consume-once guard shared by
@@ -217,14 +217,6 @@ fn settle_then_withdraw_double_spend_is_blocked() {
         .send_transaction(build_settle_batched_tx(&h, 0, &p, 0, &proof, &root))
         .expect("settle consuming X succeeds");
     assert!(consumed_note_exists(&h, &note.commitment));
-
-    // FREEZE-VECTOR CHECK: the settle wrote NO NullifierEntry — so a compromised
-    // TEE can no longer pre-claim a victim's future withdraw nullifier via the
-    // settle path. Payload v9 cannot carry an alternate nullifier at all.
-    assert!(
-        !nullifier_exists(&h, &note.nullifier),
-        "settle must not write a NullifierEntry (freeze vector removed)",
-    );
 
     // ── Now withdrawing the already-consumed X must REVERT ──
     let dest = create_spl_token_account(&mut h, &mint, &depositor.pubkey(), 0);

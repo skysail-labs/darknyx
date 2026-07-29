@@ -257,8 +257,8 @@ mod tests {
         let root = [0xAB; 32];
 
         // Single match: note_lock_a, note_lock_b, (note_lock_e==f deduped to 1),
-        // consumed_a, consumed_b, marker = 6 distinct. (The two nullifier PDAs
-        // were dropped with the vault's nullifier_entry accounts.)
+        // consumed_a, consumed_b, marker = 6 distinct. The retired
+        // nullifier-keyed accounts are not part of settlement.
         let p0 = dummy_payload();
         let single = batch_alt_addresses([&p0], &root);
         assert_eq!(single.len(), 6);
@@ -414,7 +414,7 @@ mod tests {
     fn per_batch_alt_has_seven_addresses() {
         let addrs = per_batch_alt_addresses(&dummy_payload(), &[0xAB; 32]);
         // 4 locks (a,b,e,f — e/f duplicated for an exact fill, not deduped here)
-        // + 2 consumed + marker = 7. (The 2 nullifier PDAs were removed.)
+        // + 2 consumed + marker = 7.
         assert_eq!(addrs.len(), 7);
         // Marker is last; matches the standalone PDA.
         assert_eq!(addrs[6], batch_validity_marker_pda(&[0xAB; 32]).0);

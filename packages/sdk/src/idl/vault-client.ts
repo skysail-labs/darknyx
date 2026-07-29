@@ -35,7 +35,6 @@ import {
   MARKET_CONFIG_SEED,
   MERKLE_TREE_SEED,
   WALLET_SEED,
-  NULLIFIER_SEED,
   NOTE_LOCK_SEED,
   CONSUMED_NOTE_SEED,
   DEPOSITED_NOTE_SEED,
@@ -154,16 +153,6 @@ export function walletEntryPda(
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [WALLET_SEED, fixed32(commitment)],
-    programId,
-  );
-}
-
-export function nullifierEntryPda(
-  programId: PublicKey,
-  nullifier: Uint8Array,
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [NULLIFIER_SEED, fixed32(nullifier)],
     programId,
   );
 }

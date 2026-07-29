@@ -297,10 +297,10 @@ pub async fn run_real_settle(p: RealSettleParams) -> Result<()> {
         ));
     }
 
-    // Salt the personas' keys so the v2 nullifiers are fresh each run (a fixed
-    // key collides the settle's NullifierEntry PDA on re-run).
-    // Nanosecond resolution so two runs started within the same second get
-    // distinct salts (as_secs() collided → nullifier-PDA replay on re-run).
+    // Salt persona keys so commitments are fresh each run. Tree reset does not
+    // clear deposited/consumed-note replay guards, so an exact commitment
+    // replay would collide on a later run. Nanosecond resolution keeps closely
+    // spaced runs distinct.
     let salt = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -747,16 +747,12 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
         // DISJOINT BIT FIELDS are load-bearing. Each note's seed is
         // `seed_base ^ tag`, where `tag` is a small per-order constant
         // (`0x1` bid, `0x2`/merge, `0x10+j` partial-fill asks, and the merge
-        // inner-hash tags up to `0x3900`). The nullifier is
-        // `nullifier_v2(spending_key, inner_hash)` and BOTH derive only from
-        // the seed — it ignores mint + amount. So if two orders in different
-        // instances resolve to the same seed, a base-ask and a quote-bid with
-        // different commitments still share a nullifier → the 2nd to settle
-        // dies `NullifierEntry already in use` (custom 0). The old
-        // `(salt<<20) ^ (inst<<4)` let `inst<<4` (bits 4-11) overlap the tag
-        // bits, so e.g. inst=0 ask j=1 (`S^0x11`) collided with inst=1 bid
-        // (`(S^0x10)^0x1 = S^0x11`). Lay salt / inst / tag in non-overlapping
-        // fields: tag in bits 0-15 (≤ 0x3900), inst in bits 16-31, salt above.
+        // inner-hash tags up to `0x3900`). The old `(salt<<20) ^ (inst<<4)`
+        // let `inst<<4` (bits 4-11) overlap the tag bits, so e.g. inst=0 ask
+        // j=1 (`S^0x11`) collided with inst=1 bid (`(S^0x10)^0x1 = S^0x11`).
+        // Keep salt / instance / tag in non-overlapping fields so recovery
+        // derivations and exact note commitments remain unique: tag in bits
+        // 0-15 (≤ 0x3900), instance in bits 16-31, salt above.
         let seed_base = ((salt & 0xFFFF_FFFF) << 32) ^ ((inst as u64) << 16);
 
         // Helper to mint + deposit one note, returning (persona, note).

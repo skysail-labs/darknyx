@@ -740,11 +740,12 @@ but `light-poseidon`'s `hash_bytes_be` rejects values ≥ the modulus →
 
 ### 8.1 Per-leaf PDAs are the replay-protection backbone
 
-Every touched note produces a PDA whose existence locks out a second touch:
-`WalletEntry` (registered user commitment), `NullifierEntry` (VALID_SPEND
-consume), `ConsumedNoteEntry` (TEE-settle consume), `NoteLock` (the pin
-between match and settle). **The `init` constraint is the replay guard —
-don't change it to `init_if_needed` without thinking about replay.**
+Durable note transitions use PDAs whose existence locks out replay:
+`WalletEntry` registers a user commitment, `DepositedNoteEntry` prevents an
+exact commitment from being deposited twice, `ConsumedNoteEntry` is the shared
+withdraw/settle/merge consume-once guard, and `NoteLock` pins an input between
+match and settlement. **The `init` constraint is the replay guard — don't
+change it to `init_if_needed` without thinking about replay.**
 
 ### 8.2 `BatchValidityMarker` is 1:N. Do NOT close it per-match.
 
