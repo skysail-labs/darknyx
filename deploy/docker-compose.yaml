@@ -26,7 +26,7 @@ services:
     # makes compose_hash transitively bind the exact image bytes, which is what
     # the measurement is already assumed to mean.
     #
-    # Source tag for audit cross-reference: tee-v3-hardening-76 (commit 3a93570, slice-4 settlement journal).
+    # Source tag for audit cross-reference: tee-v3-hardening-77 (commit fac9357, slice-5 order-canonical v5).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
     image: ghcr.io/skysail-labs/darknyx-tee@sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436
