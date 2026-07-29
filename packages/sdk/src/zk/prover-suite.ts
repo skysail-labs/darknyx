@@ -98,29 +98,35 @@ export interface IDarkPoolZkProverSuite {
  * typecheck passes while making it impossible to accidentally submit a
  * no-op proof.
  */
+/// Each field is annotated with the interface's own member type rather than
+/// letting TypeScript infer it. Without the annotation the inferred field type
+/// is the NARROW `() => Promise<…>` of the throwing stub, which satisfies
+/// `implements` (a 0-arg fn is assignable to a 1-arg signature) but makes the
+/// field un-substitutable: assigning a real `(inputs: DepositInputs) => …`
+/// prover fails to typecheck, which is exactly what tests do.
 export class UnimplementedProverSuite implements IDarkPoolZkProverSuite {
   private readonly reason: string;
   constructor(reason = "wire up packages/web-zk-prover in Phase 3") {
     this.reason = reason;
   }
-  walletCreate = {
+  walletCreate: IDarkPoolZkProverSuite["walletCreate"] = {
     prove: async (): Promise<Groth16ProofBytes> => {
       throw new Error(
         `UnimplementedProverSuite.walletCreate.prove: ${this.reason}`,
       );
     },
   };
-  deposit = {
+  deposit: IDarkPoolZkProverSuite["deposit"] = {
     prove: async (): Promise<Groth16ProofBytes> => {
       throw new Error(`UnimplementedProverSuite.deposit.prove: ${this.reason}`);
     },
   };
-  spend = {
+  spend: IDarkPoolZkProverSuite["spend"] = {
     prove: async (): Promise<Groth16ProofBytes> => {
       throw new Error(`UnimplementedProverSuite.spend.prove: ${this.reason}`);
     },
   };
-  merge = {
+  merge: IDarkPoolZkProverSuite["merge"] = {
     prove: async (): Promise<Groth16ProofBytes> => {
       throw new Error(`UnimplementedProverSuite.merge.prove: ${this.reason}`);
     },

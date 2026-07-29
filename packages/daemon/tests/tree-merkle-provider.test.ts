@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import type { RootVerifier } from "@darknyx/sdk";
 
 import {
   TreeLeavesMerkleProvider,
@@ -96,7 +97,7 @@ describe("TreeLeavesMerkleProvider", () => {
 
   it("verifies the reconstructed snapshot root against the on-chain ring", async () => {
     const leaves = [leafHex(7), leafHex(8)];
-    const verifyRoot = vi.fn(async () => {});
+    const verifyRoot = vi.fn<RootVerifier>(async () => {});
     const provider = new TreeLeavesMerkleProvider({
       fetcher: fakeFetcher(leaves, 500),
       verifyRoot,

@@ -8,6 +8,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import type { RootVerifier } from "@darknyx/sdk";
 
 import { buildPlaceRequest } from "../src/build-place-request.js";
 import { Keystore, type AccountIdentity } from "../src/keystore.js";
@@ -66,7 +67,7 @@ describe("buildPlaceRequest", () => {
   it("assembles a signed body keyed to the HD order id + trading key", async () => {
     const ks = keystore();
     const seedIndex = 4;
-    const verifyRoot = vi.fn(async () => {});
+    const verifyRoot = vi.fn<RootVerifier>(async () => {});
 
     const { request, orderId } = await buildPlaceRequest({
       keystore: ks,

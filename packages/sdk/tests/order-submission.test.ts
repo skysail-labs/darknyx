@@ -222,6 +222,10 @@ describe("TradingClient (/v1/stream session)", () => {
     const cancelP = client.cancel("ab", {
       trading_key: "00",
       cancel_nonce: 1,
+      // Required since S-07: a cancel signature is scoped to a boot session.
+      // The test body omitted it and nothing caught that, because test files
+      // were never typechecked.
+      session_id: "00".repeat(32),
       trading_key_signature: "00",
     });
     await flushMicrotasks();

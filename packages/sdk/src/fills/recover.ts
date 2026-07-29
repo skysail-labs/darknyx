@@ -62,8 +62,21 @@ function optionalLeafIndex(value: string | null | undefined): bigint | undefined
   return BigInt(value);
 }
 
+/**
+ * What chain recovery actually needs from a fill.
+ *
+ * Deliberately NOT `IndexerFill`: that type additionally requires `signature`
+ * and `slot`, which are transaction-identity fields this path never reads. The
+ * over-broad parameter meant a fill decoded straight from an instruction (the
+ * indexer's `SettleFill`, which has no signature/slot of its own) could not be
+ * passed without a cast — even though recovery works on it perfectly. Narrowing
+ * to what is used keeps direct-from-chain recovery a first-class caller rather
+ * than something that has to lie to the type system.
+ */
+export type RecoverableFill = Omit<IndexerFill, "signature" | "slot">;
+
 async function verifyInput(
-  fill: IndexerFill,
+  fill: RecoverableFill,
   candidates: Iterable<StoredNote>,
 ): Promise<{ note: StoredNote; commitment: Uint8Array } | null> {
   const expected = fromHexExact(fill.inputNoteCommitment, 32);
@@ -120,7 +133,7 @@ async function recoverOutput(opts: {
 
 /** Recover and self-verify the trade note plus optional continuation note. */
 export async function recoverFillFromChain(
-  fill: IndexerFill,
+  fill: RecoverableFill,
   params: RecoverParams,
 ): Promise<RecoveredFillOutputs | null> {
   if (!fill.ephemeralPubkey || !fill.outputEnc) return null;
