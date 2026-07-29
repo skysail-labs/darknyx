@@ -53,7 +53,7 @@ the first stop for an agent resuming the work.
 | Last verified `main` | `f7ad8c2` (PR #85 merged 2026-07-29) |
 | Last merged remediation PR | #84 — slice 5 (`order-canonical-next`), merged as `f250791` on 2026-07-29. Follow-up PR #85 fixed the TypeScript gate and is included in the revalidation baseline. |
 | Active slice | slice 6 — `daemon-keystore-v2` (T-09 + T-10), code and local evidence complete; merge pending. |
-| Active branch / PR | `remediation/daemon-keystore-v2` at base `f7ad8c2`; no PR yet |
+| Active branch / PR | `remediation/daemon-keystore-v2` / PR #86 |
 | Next slice | after slice 6 merges: `remediation/tee-bounds-cleanup` (T-14 + PF-09, plus the unused legacy settle-harness fixture cleanup recorded below) |
 | Live state | **No CVM running; billing halted** after the slice-5 validation window (2026-07-29). Image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436` on `nightly-test-cvm` (CPU, prod9). Devnet tree left freshly reset from the final `cvm-merge-then-order` cycle, holding only that test's leaves. Signer set unchanged; all four shards funded. PRIOR (slice 4): Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
 | Last updated | 2026-07-29 (slices 1–5 independently revalidated; slice 6 locally code-complete) |
@@ -311,7 +311,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | 3 | `remediation/tee-transport-integrity` | DEP-AU-07; T-04 enforcement; transport documentation correction. **T-03 deferred** | Slice 2 closed | Closed / PR #80 | **No compose change, no compose-hash rotation, no CVM, no ceremony.** Connection caps are code defaults; the digest guard is CI-only; the documentation corrections are text. Wire-visible additions only: a `503` on an over-capacity `/v1/stream` upgrade and error code `4290` on an over-cap login, both documented in the OpenAPI. | Real-socket connection-cap tests incl. the ping-only hold and its mutation test; digest-guard mutation test in both failure directions; OpenAPI parse; the standard local gate. |
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Closed / PR #81 | New versioned journal, Borsh-serialized in plaintext and protected ONLY by the dstack-sealed LUKS volume — there is no authenticated encryption at the `JournalSnapshot` boundary, and the row must not imply one. Adds `/admin/drain` (admin-gated) and error code `4290`; no other public wire change. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | **Closed** / PR #84 | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
-| 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | **Code complete / PR pending** | Versioned local keystore migration; v1 read/migrate only, all new writes v2. Existing v1 files are replaced only after authenticated decryption, semantic validation, and a durable same-directory write. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
+| 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | **Code complete / PR #86** | Versioned local keystore migration; v1 read/migrate only, all new writes v2. Existing v1 files are replaced only after authenticated decryption, semantic validation, and a durable same-directory write. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
 | 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09; unused legacy settle-harness order fixtures found in slice-5 revalidation | Slice 6 closed | Open / — | SDK removal of dead exports; bounded internal FFI behavior; removal of the unused `PendingOrder`/`DarkCLOB` fixture helpers in `programs/vault/tests/settle_harness/mod.rs`. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep including canonical order v4/v5 concepts. No CVM required. |
 
 ## Cost to the protocol
@@ -1342,8 +1342,8 @@ Exact next action:
 
 ```text
 Last merged PR / main SHA: #85 / f7ad8c2
-Active branch / HEAD: remediation/daemon-keystore-v2 / f7ad8c2 plus uncommitted
-  slice-6 changes
+Active branch / HEAD: remediation/daemon-keystore-v2 / a849f02, PR #86, plus
+  this tracker-only PR-identity update
 Dirty or untracked files preserved: yes — modified third_party/icicle-snark and
   third_party/rapidsnark submodules plus every pre-existing untracked path were
   left untouched and are not part of slice 6.
@@ -1367,7 +1367,7 @@ Commands run and exact results:
   prettier --check affected TS; brand guard; diff check -> pass
 Live state: no CVM running; no devnet, signer, compose, image, circuit, or
   program state changed. Slice 6 requires no CVM.
-Evidence still missing: merge/PR identity only. All local correctness and cost
+Evidence still missing: PR #86 merge only. All local correctness and cost
   evidence required by the slice is recorded above.
 Blockers: none. Dependency audit not repeated because the networked check was
   denied on private-metadata grounds; no dependency manifest changed.
