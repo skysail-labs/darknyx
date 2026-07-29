@@ -314,7 +314,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | **Closed** / PR #84 | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | **Closed / PR #86** | Versioned local keystore migration; v1 read/migrate only, all new writes v2. Existing v1 files are replaced only after authenticated decryption, semantic validation, and a durable same-directory write. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
 | 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09; unused legacy settle-harness order fixtures found in slice-5 revalidation | Slice 6 closed | **Closed / PR #88** | SDK removal of dead exports; bounded internal FFI behavior; removal of the unused `PendingOrder`/`DarkCLOB` fixture helpers in `programs/vault/tests/settle_harness/mod.rs`. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep including canonical order v4/v5 concepts. No CVM required. |
-| 8 | `remediation/multi-market-isolation` | T-17 | Slice 7 closed | **Code complete locally** / PR #90 | Additive `/instruments[].trading_enabled` field; no canonical order, circuit, verifier key, account, transaction, journal, key, or devnet migration. TEE image/compose measurement changes because runtime source changes. | Mixed-feed boot rejection; shared-governance/isolated-oracle gate tests; stale/healthy two-market matcher and intake tests; batched-success plus per-feed-failure sync tests; OpenAPI/docs/daemon type parity; full local/hosted TEE gates. A digest-pinned two-market CVM boot/API spot-check remains before closure. |
+| 8 | `remediation/multi-market-isolation` | T-17 | Slice 7 closed | **Closed / PR #90** | Additive `/instruments[].trading_enabled` field; no canonical order, circuit, verifier key, account, transaction, journal, key, or devnet migration. TEE image/compose measurement changes because runtime source changes. | Mixed-feed boot rejection; shared-governance/isolated-oracle gate tests; stale/healthy two-market matcher and intake tests; batched-success plus per-feed-failure sync tests; OpenAPI/docs/daemon type parity; full local/hosted TEE gates; digest-pinned two-market CPU-CVM isolation and recovery spot-check. |
 
 ## Cost to the protocol
 
@@ -1559,10 +1559,47 @@ before closure. Exact source `c0f06fc` was built successfully by
 `tee-image` run `30488988373` as tag `tee-v3-hardening-78`; the immutable CPU
 image is
 `sha256:5ae02ce5c9686770289a7c0e036b4f7819ec6a85c427657fc47d240322ff93c2`.
-The CPU compose is pinned to that digest. No CVM has been started for this
-slice yet. The focused multi-market env generator now also requires and carries
-the authenticated Hermes credential into the encrypted deployment env; it
-cannot silently produce a deployment where every oracle gate remains paused.
+The CPU compose is pinned to that digest. The focused multi-market env generator
+also requires and carries the authenticated Hermes credential into the
+encrypted deployment env; it cannot silently produce a deployment where every
+oracle gate remains paused.
+
+### Live CPU-CVM evidence
+
+The focused rehearsal ran on `nightly-test-cvm`
+(`app_9ca3cded105f16923afb0e3f62537882c14db637`), a `tdx.xlarge`
+Phala `prod9` instance with 8 vCPU and **0 GPUs**. The running container
+reported the exact pinned image digest above and compose hash
+`7c89a6c3afe75a7fcbf98c200b1a7cc2b5bb39b7ae2862c8e479b1b3d8045e49`.
+Boot adopted both finalized enabled MarketConfigs, derived the four governed
+shard signers, spawned two matcher drivers, enabled native witness generation,
+loaded the rapidsnark N=16 proving key, attached two C2 settle schedulers, and
+cold-booted all four Merkle mirrors with zero replayed leaves.
+
+For the isolation leg, SOL-USDC kept its real authenticated Pyth feed while
+BTC-USDC was assigned a syntactically valid but unavailable 32-byte feed ID.
+The two-feed Hermes request returned 404, triggering the bounded per-feed
+fallback. The real SOL update verified and resumed only SOL-USDC; the unavailable
+BTC feed remained paused. The public surfaces reported:
+
+- `/instruments`: SOL-USDC `trading_enabled=true`, BTC-USDC
+  `trading_enabled=false`;
+- `/system/status`: `degraded=true`, `matcher_running=true`,
+  `settle_enabled=true`;
+- an authenticated dummy SOL-USDC placement reached ordinary validation and
+  returned HTTP 400 / code 1008, while the same BTC-USDC placement was rejected
+  at its market gate with HTTP 503 / code 5001.
+
+The CVM was then redeployed with both real feeds. Both instruments reported
+`trading_enabled=true`, and `/system/status` reported `degraded=false`,
+`matcher_running=true`, and `settle_enabled=true`. This was deliberately a
+boot/API isolation spot-check rather than a settlement benchmark: no order was
+accepted, no proof or settlement transaction ran, and no tree/program/signer
+state changed. The existing second MarketConfig was reused without modification.
+
+The instance type was checked again immediately before shutdown (`gpus=0`).
+The CVM is confirmed **stopped**, billing is halted, and the mode-0600
+ephemeral deployment env was securely deleted. T-17 and slice 8 are `Closed`.
 
 ## Agent handoff template
 
