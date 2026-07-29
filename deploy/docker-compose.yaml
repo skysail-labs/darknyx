@@ -29,7 +29,7 @@ services:
     # Source tag for audit cross-reference: tee-v3-hardening-76 (commit 3a93570, slice-4 settlement journal).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
-    image: ghcr.io/skysail-labs/darknyx-tee@sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
