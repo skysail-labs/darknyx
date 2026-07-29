@@ -25,7 +25,7 @@ cd /path/to/repo/root
 >    `node scripts/reset-merkle-tree.mjs` (§4.5 / §9.2), then redeploy the BPF
 >    (the circuits + `vk_*.rs` changed — `cargo build-sbf` + `deploy-devnet.sh`).
 > 2. **The `POST /orders` body changed.** `note_nonce` + `note_blinding` became
->    `note_inner_hash`; canonical order v2 (`darknyx-order-v4` domain) removes
+>    `note_inner_hash`; canonical order v5 (`darknyx-order-v5` domain) removes
 >    `anchors`, requires a signed contributory X25519 `viewing_pubkey`, and
 >    requires the signed 32-byte `/info.boot_session_id`. After exact-body
 >    idempotency, `arrival_nonce` must strictly increase per trading key. The

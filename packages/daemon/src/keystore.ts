@@ -22,7 +22,8 @@ import {
   randomBytes,
   scryptSync,
 } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import fs from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import nacl from "tweetnacl";
 import {
@@ -38,8 +39,6 @@ import {
 } from "@darknyx/sdk";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
-const fromHex = (h: string): Uint8Array =>
-  Uint8Array.from(Buffer.from(h, "hex"));
 
 /**
  * Account-blinding domain. The owner/user-commitment blindings derive from the
@@ -169,17 +168,15 @@ export class Keystore {
   signWithTradingKey(index: number, digest: Uint8Array): Uint8Array {
     return nacl.sign.detached(digest, this.tradingKeypair(index).secretKey);
   }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Encrypted-at-rest persistence (AES-256-GCM under a scrypt-stretched passphrase)
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface KeystoreFile {
+interface KeystoreFileV1 {
   version: 1;
   kdf: "scrypt";
-  /** scrypt params. */
   n: number;
   r: number;
   p: number;
@@ -189,7 +186,104 @@ interface KeystoreFile {
   tag: string; // hex (16-byte GCM auth tag)
 }
 
-const SCRYPT = { n: 16384, r: 8, p: 1 } as const;
+interface KeystoreFileV2 {
+  version: 2;
+  kdf: "scrypt";
+  profile: "scrypt-n17-r8-p1-v1";
+  cipher: "aes-256-gcm";
+  salt: string; // lowercase hex, 16 bytes
+  iv: string; // lowercase hex, 12 bytes
+  ciphertext: string; // lowercase hex
+  tag: string; // lowercase hex, 16 bytes
+}
+
+const LEGACY_SCRYPT = {
+  N: 1 << 14,
+  r: 8,
+  p: 1,
+  maxmem: 32 * 1024 * 1024,
+} as const;
+const V2_SCRYPT = {
+  N: 1 << 17,
+  r: 8,
+  p: 1,
+  // Node rejects a valid N=2^17/r=8 invocation unless maxmem exceeds the
+  // algorithm's ~128 MiB working set. Keep the ceiling explicit so neither a
+  // runtime default nor an untrusted file field controls the allocation.
+  maxmem: 256 * 1024 * 1024,
+} as const;
+const V2_KDF_PROFILE = "scrypt-n17-r8-p1-v1" as const;
+const V2_CIPHER = "aes-256-gcm" as const;
+const V2_AAD_DOMAIN = Buffer.from("darknyx-daemon-keystore/v2\0", "utf8");
+const MAX_KEYSTORE_FILE_BYTES = 32 * 1024;
+const MAX_CIPHERTEXT_BYTES = 8 * 1024;
+const BN254_SCALAR_MODULUS =
+  21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+type JsonObject = Record<string, unknown>;
+
+function asObject(value: unknown, label: string): JsonObject {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return value as JsonObject;
+}
+
+function requireExactKeys(
+  value: JsonObject,
+  expected: readonly string[],
+  label: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  if (
+    actual.length !== wanted.length ||
+    actual.some((key, index) => key !== wanted[index])
+  ) {
+    throw new Error(`${label} has unknown or missing fields`);
+  }
+}
+
+function decodeFixedHex(
+  value: unknown,
+  field: string,
+  byteLength: number,
+): Buffer {
+  if (
+    typeof value !== "string" ||
+    value.length !== byteLength * 2 ||
+    !/^[0-9a-f]+$/.test(value)
+  ) {
+    throw new Error(`${field} must be ${byteLength} bytes of lowercase hex`);
+  }
+  return Buffer.from(value, "hex");
+}
+
+function decodeCiphertext(value: unknown): Buffer {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length % 2 !== 0 ||
+    value.length > MAX_CIPHERTEXT_BYTES * 2 ||
+    !/^[0-9a-f]+$/.test(value)
+  ) {
+    throw new Error(
+      `ciphertext must be 1..${MAX_CIPHERTEXT_BYTES} bytes of lowercase hex`,
+    );
+  }
+  return Buffer.from(value, "hex");
+}
+
+function parseFieldDecimal(value: unknown, field: string): bigint {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error(`${field} must be a canonical unsigned decimal integer`);
+  }
+  const parsed = BigInt(value);
+  if (parsed >= BN254_SCALAR_MODULUS) {
+    throw new Error(`${field} must be a canonical BN254 scalar`);
+  }
+  return parsed;
+}
 
 function serializeIdentity(id: AccountIdentity): string {
   return JSON.stringify({
@@ -203,79 +297,268 @@ function serializeIdentity(id: AccountIdentity): string {
 }
 
 function deserializeIdentity(json: string): AccountIdentity {
-  const o = JSON.parse(json) as Record<string, string>;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error("keystore plaintext is not valid JSON");
+  }
+  const o = asObject(parsed, "keystore identity");
+  requireExactKeys(
+    o,
+    ["seed", "ownerBlinding", "r0", "r1", "r2", "rootKeyPubkey"],
+    "keystore identity",
+  );
   return {
-    masterSeed: fromHex(o.seed),
-    ownerBlinding: BigInt(o.ownerBlinding),
-    r0: BigInt(o.r0),
-    r1: BigInt(o.r1),
-    r2: BigInt(o.r2),
-    rootKeyPubkey: fromHex(o.rootKeyPubkey),
+    masterSeed: Uint8Array.from(decodeFixedHex(o.seed, "seed", 64)),
+    ownerBlinding: parseFieldDecimal(o.ownerBlinding, "ownerBlinding"),
+    r0: parseFieldDecimal(o.r0, "r0"),
+    r1: parseFieldDecimal(o.r1, "r1"),
+    r2: parseFieldDecimal(o.r2, "r2"),
+    rootKeyPubkey: Uint8Array.from(
+      decodeFixedHex(o.rootKeyPubkey, "rootKeyPubkey", 32),
+    ),
   };
 }
 
-function deriveKey(passphrase: string, salt: Buffer): Buffer {
+function deriveV2Key(passphrase: string, salt: Buffer): Buffer {
   return scryptSync(passphrase, salt, 32, {
-    N: SCRYPT.n,
-    r: SCRYPT.r,
-    p: SCRYPT.p,
+    ...V2_SCRYPT,
   });
 }
 
-/** Seal an identity to disk under `passphrase`. Writes `0600`. */
+function deriveLegacyKey(passphrase: string, salt: Buffer): Buffer {
+  return scryptSync(passphrase, salt, 32, {
+    ...LEGACY_SCRYPT,
+  });
+}
+
+function v2Aad(salt: Buffer, iv: Buffer): Buffer {
+  return Buffer.concat([
+    V2_AAD_DOMAIN,
+    Buffer.from("scrypt\0", "utf8"),
+    Buffer.from(`${V2_KDF_PROFILE}\0`, "utf8"),
+    Buffer.from(`${V2_CIPHER}\0`, "utf8"),
+    salt,
+    iv,
+  ]);
+}
+
+function sealV2(
+  identity: AccountIdentity,
+  passphrase: string,
+  salt = randomBytes(16),
+  iv = randomBytes(12),
+): KeystoreFileV2 {
+  const validated = deserializeIdentity(serializeIdentity(identity));
+  new Keystore(validated);
+  const key = deriveV2Key(passphrase, salt);
+  try {
+    const cipher = createCipheriv(V2_CIPHER, key, iv);
+    cipher.setAAD(v2Aad(salt, iv));
+    const plaintext = Buffer.from(serializeIdentity(validated), "utf8");
+    const ciphertext = Buffer.concat([
+      cipher.update(plaintext),
+      cipher.final(),
+    ]);
+    const tag = cipher.getAuthTag();
+    return {
+      version: 2,
+      kdf: "scrypt",
+      profile: V2_KDF_PROFILE,
+      cipher: V2_CIPHER,
+      salt: salt.toString("hex"),
+      iv: iv.toString("hex"),
+      ciphertext: ciphertext.toString("hex"),
+      tag: tag.toString("hex"),
+    };
+  } finally {
+    key.fill(0);
+  }
+}
+
+function atomicReplace(path: string, contents: string): void {
+  const directory = dirname(path);
+  const tempPath = join(
+    directory,
+    `.${basename(path)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
+  );
+  let fd: number | undefined;
+  let directoryFd: number | undefined;
+  try {
+    fd = fs.openSync(tempPath, "wx", 0o600);
+    fs.writeFileSync(fd, contents, "utf8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(tempPath, path);
+    // Persist the rename itself, not only the new file's bytes. Darknyx
+    // supports POSIX daemon hosts (macOS/Linux), where syncing the containing
+    // directory makes the atomic replacement survive a power loss.
+    directoryFd = fs.openSync(directory, "r");
+    fs.fsyncSync(directoryFd);
+    fs.closeSync(directoryFd);
+    directoryFd = undefined;
+  } catch (error) {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Preserve the original failure.
+      }
+    }
+    if (directoryFd !== undefined) {
+      try {
+        fs.closeSync(directoryFd);
+      } catch {
+        // Preserve the original failure.
+      }
+    }
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // The temp may not have been created, or rename may already have
+      // atomically installed it. No partial file is ever exposed at `path`.
+    }
+    throw error;
+  }
+}
+
+function parseFile(path: string): JsonObject {
+  const stat = fs.statSync(path);
+  if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_KEYSTORE_FILE_BYTES) {
+    throw new Error(
+      `keystore file must be 1..${MAX_KEYSTORE_FILE_BYTES} bytes`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path, "utf8"));
+  } catch {
+    throw new Error("keystore file is not valid JSON");
+  }
+  return asObject(parsed, "keystore file");
+}
+
+function decryptIdentity(
+  key: Buffer,
+  iv: Buffer,
+  ciphertext: Buffer,
+  tag: Buffer,
+  aad?: Buffer,
+): AccountIdentity {
+  try {
+    const decipher = createDecipheriv(V2_CIPHER, key, iv);
+    if (aad) {
+      decipher.setAAD(aad);
+    }
+    decipher.setAuthTag(tag);
+    let plaintext: Buffer;
+    try {
+      plaintext = Buffer.concat([
+        decipher.update(ciphertext),
+        decipher.final(),
+      ]);
+    } catch {
+      throw new Error(
+        "keystore decrypt failed (wrong passphrase or corrupt file)",
+      );
+    }
+    const identity = deserializeIdentity(plaintext.toString("utf8"));
+    // Constructor validation is part of the migration boundary: never replace
+    // a legacy file until the decrypted identity is demonstrably usable.
+    new Keystore(identity);
+    return identity;
+  } finally {
+    key.fill(0);
+  }
+}
+
+function openV2(file: JsonObject, passphrase: string): AccountIdentity {
+  requireExactKeys(
+    file,
+    ["version", "kdf", "profile", "cipher", "salt", "iv", "ciphertext", "tag"],
+    "keystore v2",
+  );
+  if (
+    file.version !== 2 ||
+    file.kdf !== "scrypt" ||
+    file.profile !== V2_KDF_PROFILE ||
+    file.cipher !== V2_CIPHER
+  ) {
+    throw new Error("unsupported keystore v2 profile");
+  }
+  const salt = decodeFixedHex(file.salt, "salt", 16);
+  const iv = decodeFixedHex(file.iv, "iv", 12);
+  const ciphertext = decodeCiphertext(file.ciphertext);
+  const tag = decodeFixedHex(file.tag, "tag", 16);
+  return decryptIdentity(
+    deriveV2Key(passphrase, salt),
+    iv,
+    ciphertext,
+    tag,
+    v2Aad(salt, iv),
+  );
+}
+
+function openV1(file: JsonObject, passphrase: string): AccountIdentity {
+  requireExactKeys(
+    file,
+    ["version", "kdf", "n", "r", "p", "salt", "iv", "ciphertext", "tag"],
+    "keystore v1",
+  );
+  if (
+    file.version !== 1 ||
+    file.kdf !== "scrypt" ||
+    file.n !== LEGACY_SCRYPT.N ||
+    file.r !== LEGACY_SCRYPT.r ||
+    file.p !== LEGACY_SCRYPT.p
+  ) {
+    throw new Error("unsupported keystore v1 profile");
+  }
+  const salt = decodeFixedHex(file.salt, "salt", 16);
+  const iv = decodeFixedHex(file.iv, "iv", 12);
+  const ciphertext = decodeCiphertext(file.ciphertext);
+  const tag = decodeFixedHex(file.tag, "tag", 16);
+  return decryptIdentity(
+    deriveLegacyKey(passphrase, salt),
+    iv,
+    ciphertext,
+    tag,
+  );
+}
+
+/** Seal an identity to disk under `passphrase` using the fixed v2 profile. */
 export function saveKeystore(
   identity: AccountIdentity,
   path: string,
   passphrase: string,
 ): void {
-  const salt = randomBytes(16);
-  const iv = randomBytes(12);
-  const key = deriveKey(passphrase, salt);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const plaintext = Buffer.from(serializeIdentity(identity), "utf8");
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  const file: KeystoreFile = {
-    version: 1,
-    kdf: "scrypt",
-    n: SCRYPT.n,
-    r: SCRYPT.r,
-    p: SCRYPT.p,
-    salt: salt.toString("hex"),
-    iv: iv.toString("hex"),
-    ciphertext: ciphertext.toString("hex"),
-    tag: tag.toString("hex"),
-  };
-  writeFileSync(path, JSON.stringify(file), { mode: 0o600 });
+  atomicReplace(path, JSON.stringify(sealV2(identity, passphrase)));
 }
 
-/** Open a sealed keystore. Throws if the passphrase is wrong (GCM tag fails). */
+/**
+ * Open a sealed keystore.
+ *
+ * V2 files use the fixed N=2^17/r=8/p=1 profile and authenticated header.
+ * A valid v1 file is decrypted with the only profile the old writer emitted,
+ * fully validated, then atomically replaced with v2 before this returns.
+ */
 export function loadKeystore(path: string, passphrase: string): Keystore {
-  const file = JSON.parse(readFileSync(path, "utf8")) as KeystoreFile;
-  if (file.version !== 1 || file.kdf !== "scrypt") {
-    throw new Error("unsupported keystore file");
+  const file = parseFile(path);
+  if (file.version === 2) {
+    return new Keystore(openV2(file, passphrase));
   }
-  const key = scryptSync(passphrase, Buffer.from(file.salt, "hex"), 32, {
-    N: file.n,
-    r: file.r,
-    p: file.p,
-  });
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    key,
-    Buffer.from(file.iv, "hex"),
-  );
-  decipher.setAuthTag(Buffer.from(file.tag, "hex"));
-  let plaintext: Buffer;
-  try {
-    plaintext = Buffer.concat([
-      decipher.update(Buffer.from(file.ciphertext, "hex")),
-      decipher.final(),
-    ]);
-  } catch {
-    throw new Error(
-      "keystore decrypt failed (wrong passphrase or corrupt file)",
-    );
+  if (file.version === 1) {
+    const identity = openV1(file, passphrase);
+    try {
+      atomicReplace(path, JSON.stringify(sealV2(identity, passphrase)));
+    } catch {
+      throw new Error(
+        "keystore v1 decrypted but atomic migration to v2 failed; no partial file was exposed",
+      );
+    }
+    return new Keystore(identity);
   }
-  return new Keystore(deserializeIdentity(plaintext.toString("utf8")));
+  throw new Error("unsupported keystore file version");
 }
