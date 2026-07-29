@@ -991,9 +991,40 @@ rather than silently meaning something new.
 
 `cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
 `check-compose-image-digests`, `check-icicle-cuda-arch-env`,
-`check-brand-namespace`, `check-no-doctests`, `build-vault-sbf.sh devnet-admin`,
-`cargo nextest run --workspace`, SDK vitest (270 passed), daemon vitest (147
-passed), `tsc --noEmit` for sdk/daemon/indexer, and OpenAPI YAML parse.
+`check-brand-namespace`, `check-no-doctests`, `check-dependency-audits`,
+`build-vault-sbf.sh devnet-admin`, `cargo nextest run --workspace`
+(**732 passed, 3 skipped**), SDK vitest (270 passed), daemon vitest (147
+passed), indexer vitest (20 passed), `tsc --noEmit` for sdk/daemon/indexer, and
+OpenAPI YAML parse.
+
+`REQUIRE_CIRCUIT_ARTIFACTS=1` was verified against the only binary the flag
+gates — `crates/darknyx-tee/tests/valid_input_intake_verify.rs`, the sole file
+that reads the variable: **2 passed, 0 skipped**, i.e. the proof-backed tests
+really proved rather than silently skipping.
+
+### Pre-existing defect found while validating (NOT caused by this slice)
+
+`cargo nextest run -p darknyx-tee --tests` — the exact line in CLAUDE.md §2.5 —
+**hangs reproducibly at 497/556** with the runner at 0% CPU and no child test
+processes alive. Observed four times.
+
+It is not this slice's doing and not the env var's:
+
+- It reproduces identically **on `main` at `6a00f59`**, with the branch checked
+  out and rebuilt (control run performed specifically to settle this).
+- It reproduces **without** `REQUIRE_CIRCUIT_ARTIFACTS=1`.
+- The same tests pass under `cargo nextest run --workspace` (732 passed), so no
+  individual test is broken — only this target selection wedges.
+
+The shape (runner alive, zero children, `slow-timeout`'s `terminate-after`
+never firing) points at a test leaving an orphaned child holding the stdout
+pipe, so nextest waits on an EOF that never arrives. `--workspace` interleaves
+enough other binaries to mask it.
+
+Not fixed here — it is unrelated to T-07/PF-10 and folding an unrelated runner
+fix into a canonical-format change would make both harder to review. Filed as a
+follow-up; until it is fixed, use `cargo nextest run --workspace` plus a
+targeted `--test valid_input_intake_verify` for the artifact-required check.
 
 ### Still open
 
