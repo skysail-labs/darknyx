@@ -1026,6 +1026,42 @@ fix into a canonical-format change would make both harder to review. Filed as a
 follow-up; until it is fixed, use `cargo nextest run --workspace` plus a
 targeted `--test valid_input_intake_verify` for the artifact-required check.
 
+### Second pre-existing defect found while validating: TypeScript is never typechecked in CI
+
+Chasing a review finding on `build-order-parity.test.ts` turned up a gate gap
+worth its own row.
+
+**`tsc` does not appear in any workflow.** `grep -rn "tsc" .github/workflows/`
+returns nothing. The `SDK`, `daemon`, and `indexer` CI jobs run `vitest` only,
+and vitest STRIPS types rather than checking them. The `tsc --noEmit` lines in
+CLAUDE.md §2.5 are local-only, so TypeScript type safety depends entirely on a
+developer running the local gate by hand.
+
+Compounding it: `packages/sdk/tsconfig.json` has `"include": ["src/**/*"]`. So
+even the local gate never sees `tests/`. Test files are checked by **nothing**.
+
+Measured against the root `tsconfig.json`'s own options (`--strict
+--skipLibCheck --esModuleInterop --resolveJsonModule --module esnext --target
+es2022 --moduleResolution bundler --lib ES2022,DOM`):
+
+| Package | Test files | Type errors |
+|---|---|---|
+| `packages/sdk` | 65 | 3 |
+| `packages/daemon` | 22 | 19 |
+| `packages/indexer` | 4 | 1 |
+| **Total** | **91** | **23** |
+
+These are pre-existing and present on `main`. One of them —
+`spendingKey` passed to `buildOrder`, which `BuildOrderArgs` does not
+accept — was reported against this PR as if it were new; it is not, and it is
+fixed here because the file was already being edited. The other 22 are untouched.
+
+This is the same class as T-11/T-12/T-13/T-18: a gate that reports success
+without checking the thing it appears to check. Not fixed here — adding a
+typecheck job would surface 22 unrelated errors and turn a canonical-format
+change into a repo-wide cleanup. Filed for a follow-up slice; the fix is a CI
+`tsc --noEmit` step plus a tests-inclusive tsconfig per package.
+
 ### Rollback effects
 
 Reverting v5 → v4 is a code revert plus a redeploy; there is no data migration
