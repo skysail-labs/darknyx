@@ -66,7 +66,7 @@ pub struct Deposit<'info> {
     /// be withdrawn.
     ///
     /// Rent- and CPI-neutral in aggregate: `withdraw` stopped allocating its
-    /// redundant `NullifierEntry` (PF-04) in the same change, and the two
+    /// redundant nullifier-keyed guard (PF-04) in the same change, and the two
     /// accounts are the same size.
     #[account(
         init,

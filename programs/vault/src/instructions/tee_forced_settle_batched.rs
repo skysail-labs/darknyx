@@ -229,7 +229,7 @@ pub struct TeeForcedSettleBatched<'info> {
     )]
     pub consumed_b: AccountLoader<'info, ConsumedNoteEntry>,
 
-    // NOTE: the two per-match `NullifierEntry` inits were removed here. The
+    // NOTE: the two per-match nullifier-keyed inits were removed here. The
     // TEE-supplied nullifiers were unconstrained (no nullifier signal in
     // VALID_MATCH_BATCH; `compute_match_leaf` binds only the note commitments
     // + batch_slot), so writing them served no soundness purpose

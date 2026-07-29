@@ -13,12 +13,11 @@
 //!   * roots_head     := 0
 //!   * current_root   := empty_root(zero_subtree_roots)
 //!
-//! Nullifiers, wallets, deposits-in-flight, and fee accumulators are
-//! NOT wiped; they're separate PDAs. That's intentional: already-minted
-//! WalletEntry / NullifierEntry PDAs remain valid records, and the
-//! tree-reset only affects the set of ACCEPTED inclusion roots going
-//! forward. A future VALID_SPEND whose witness pre-dates the reset will
-//! simply fail `contains_root`, which is the correct behaviour.
+//! Wallet registrations, deposit/consume guards, locks, validity markers, and
+//! mint liabilities are NOT wiped; they're separate PDAs. The tree reset only
+//! affects the set of accepted inclusion roots going forward. A future
+//! VALID_SPEND whose witness pre-dates the reset simply fails `contains_root`,
+//! which is the correct behaviour.
 
 use anchor_lang::prelude::*;
 

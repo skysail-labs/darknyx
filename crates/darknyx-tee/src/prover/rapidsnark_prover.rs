@@ -162,8 +162,8 @@ impl RapidsnarkMatchBatchProver {
         };
         // Drift guard: the wasmer path checks the circuit's public input inside
         // `build_circom_and_check`; the native path doesn't see the in-circuit
-        // root, so assert the PROOF's public input (merkle_root) equals our
-        // off-circuit root here. Cheap + a strict correctness check either way.
+        // public vector, so assert the PROOF's root + config digest equal our
+        // off-circuit values here. Cheap + a strict correctness check either way.
         assert_public_inputs(&public_json, &public.public_inputs_be)?;
         let proof = parse_snarkjs_proof(&proof_json)?;
         let prove_step_ms = t_p.elapsed().as_millis();

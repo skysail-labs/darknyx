@@ -182,10 +182,9 @@ Every state-transitioning instruction maintains:
    via an init-time PDA collision. Keying the guard on the commitment (public +
    circuit-bound) rather than the nullifier is what makes this symmetric: the
    nullifier is TEE-supplied and unconstrained at settle, so it could never be
-   relied on cross-path. Neither `withdraw` nor settle writes a
-   `NullifierEntry` any more — the type survives in `state.rs` but nothing
-   allocates it. `withdraw` additionally refuses while a `NoteLock` is **live**;
-   an expired lock does not block.
+   relied on cross-path. The retired nullifier-keyed account was removed from
+   both the instruction surface and state model. `withdraw` additionally
+   refuses while a `NoteLock` is **live**; an expired lock does not block.
 5. **Bounded TTL**: every `NoteLock` and `BatchValidityMarker` has an
    `expiry_slot ≤ clock.slot + MAX_*_TTL_SLOTS`. No state hangs forever.
 
@@ -1493,7 +1492,7 @@ Post-sharding `vault_config` is **read-only** and the writable tree state is
 > their vestigial payload fields are **removed**. Those TEE-supplied values were
 > unconstrained (no nullifier signal in VALID_MATCH_BATCH; the leaf binds only
 > commitments + `batch_slot`), so writing them provided no soundness — and it enabled a
-> griefing **freeze**: a compromised TEE could `init` a `NullifierEntry` at a
+> griefing **freeze**: a compromised TEE could initialize a nullifier-keyed PDA at a
 > victim's future withdraw nullifier, permanently blocking that withdraw —
 > because at the time `withdraw` allocated a nullifier-keyed entry of its own,
 > which would then collide. The commitment-keyed `consumed_a/b` are the real
@@ -1579,7 +1578,7 @@ Handler walkthrough:
    (and vice-versa). The commitment is public AND circuit-bound, unlike the
    nullifier, which is why it — not the nullifier — is the trustless guard.
 
-8. **(removed)** — the per-match `NullifierEntry` writes and payload nullifier
+8. **(removed)** — the per-match nullifier-keyed writes and payload nullifier
    fields were deleted. See the note under the account table above. Payload v9
    bumps the canonical signature domain, so no older signed layout is accepted.
 
@@ -1744,8 +1743,8 @@ Handler:
    it were less, the TEE created a phantom note for this mint and the counter
    rejects the withdraw before the SPL transfer-out.)
 6. Write the `consumed_note` entry from step 2. This is the **only** guard
-   withdraw allocates. The second, nullifier-keyed `NullifierEntry` was removed:
-   it had zero readers anywhere in the repo, and it was worse than redundant —
+   withdraw allocates. The second, nullifier-keyed guard was removed: it had
+   zero readers anywhere in the repo, and it was worse than redundant —
    `nullifier = Poseidon3(3, sk, inner)` is amount- and mint-independent, so two
    distinct notes of one owner sharing an `inner_hash` collide on it and the
    second legitimate withdraw was bricked.
@@ -2179,8 +2178,8 @@ twice."
 
 A second `withdraw` of the same note is stopped by layer 2, not by a separate
 nullifier-keyed guard: `ConsumedNoteEntry` is shared between withdraw and settle,
-which is what makes the protection symmetric across the two paths. The former
-`NullifierEntry` is no longer allocated by anything (see §8 step 10).
+which is what makes the protection symmetric across the two paths. The obsolete
+account type and its client derivation helpers have been deleted.
 
 All four use Anchor's strict `init` constraint. It is **not**
 `init_if_needed`: any attempt to initialize an already-existing PDA fails

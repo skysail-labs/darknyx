@@ -33,9 +33,6 @@ pub const NOTE_LOCK_SEED: &[u8] = b"note_lock";
 /// Vault `ConsumedNoteEntry::SEED` — mirrors `programs/vault/src/state.rs`.
 pub const CONSUMED_NOTE_SEED: &[u8] = b"consumed_note";
 
-/// Vault `NullifierEntry::SEED` — mirrors `programs/vault/src/state.rs`.
-pub const NULLIFIER_SEED: &[u8] = b"nullifier";
-
 /// Vault `BatchValidityMarker::SEED` — mirrors `programs/vault/src/state.rs`.
 pub const BATCH_VALIDITY_SEED: &[u8] = b"batch_validity";
 
@@ -90,11 +87,6 @@ pub fn note_lock_pda(note_commitment: &[u8; 32]) -> (Address, u8) {
 /// out a second settle of the same note (replay protection).
 pub fn consumed_note_pda(note_commitment: &[u8; 32]) -> (Address, u8) {
     Address::find_program_address(&[CONSUMED_NOTE_SEED, note_commitment], &vault_program_id())
-}
-
-/// PDA: `nullifier` entry. Seeds = `[b"nullifier", nullifier]`.
-pub fn nullifier_pda(nullifier: &[u8; 32]) -> (Address, u8) {
-    Address::find_program_address(&[NULLIFIER_SEED, nullifier], &vault_program_id())
 }
 
 /// PDA: `batch_validity` marker. Seeds = `[b"batch_validity",

@@ -11,7 +11,6 @@ export const MARKET_CONFIG_SEED = enc("market_config");
 /** Per-shard `MerkleTree` account seed: `[b"merkle_tree", &[tree_id]]`. */
 export const MERKLE_TREE_SEED = enc("merkle_tree");
 export const WALLET_SEED = enc("wallet");
-export const NULLIFIER_SEED = enc("nullifier");
 export const CONSUMED_NOTE_SEED = enc("consumed_note");
 /** S-05 deposit-once guard: `[b"deposited_note", note_commitment]`. */
 export const DEPOSITED_NOTE_SEED = enc("deposited_note");

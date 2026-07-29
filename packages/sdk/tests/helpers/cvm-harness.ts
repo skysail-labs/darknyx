@@ -97,10 +97,9 @@ export const PASSPHRASE = cvmCredential(
 /** Protocol fee bps — MUST match the CVM's DARKNYX_TEE_FEE_RATE_BPS (default 30). */
 export const FEE_RATE_BPS = BigInt(process.env.DARKNYX_CVM_FEE_RATE_BPS ?? "30");
 
-/** Per-run salt so persona seed-derived keys (and the amount-independent v2
- *  nullifiers) are fresh each run — a fixed seed would collide the settle's
- *  NullifierEntry PDA ("Allocate: account already in use") on a 2nd run since
- *  reset_merkle_tree clears the tree but NOT those PDAs. */
+/** Per-run salt so persona seed-derived commitments are fresh each run — a
+ * fixed seed can reproduce a deposited/consumed-note PDA on a second run,
+ * because reset_merkle_tree clears roots but not those replay guards. */
 export const RUN_SALT = BigInt(
   process.env.DARKNYX_CVM_RUN_SALT ?? String(Date.now()),
 );

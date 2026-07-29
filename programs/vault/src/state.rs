@@ -188,15 +188,6 @@ impl WalletEntry {
     pub const SEED: &'static [u8] = b"wallet";
 }
 
-/// PDA marking a spent nullifier. Existence of the PDA => nullifier consumed.
-#[account(zero_copy)]
-pub struct NullifierEntry {
-    pub nullifier: [u8; 32],
-    pub spent_slot: u64,
-    pub bump: u8,
-    pub _padding: [u8; 7],
-}
-
 /// PDA marking a note commitment that has already been DEPOSITED (S-05).
 ///
 /// Existence => that exact commitment is already a leaf, so a second deposit of
@@ -229,10 +220,6 @@ pub struct DepositedNoteEntry {
 
 impl DepositedNoteEntry {
     pub const SEED: &'static [u8] = b"deposited_note";
-}
-
-impl NullifierEntry {
-    pub const SEED: &'static [u8] = b"nullifier";
 }
 
 /// PDA marking a note commitment consumed by TEE-forced settlement.

@@ -10,11 +10,11 @@
 //! same total). Replay is guarded by the per-input `ConsumedNoteEntry` PDA
 //! (commitment-keyed) — created manually here (fails if it already exists), the
 //! SAME consume-once guard `withdraw` + TEE settle use. This closes C-01 (audit):
-//! merge previously keyed a `NullifierEntry`, a guard DISJOINT from settle's
-//! commitment-keyed `ConsumedNoteEntry`, so the same note could be consumed once
-//! by merge and once by settle (double-spend). Dummy padding slots emit a public
-//! input-commitment of 0 (the circuit binds them inactive), so they create no PDA
-//! and can't smuggle a spend.
+//! merge previously keyed a separate nullifier-based guard, disjoint from
+//! settle's commitment-keyed `ConsumedNoteEntry`, so the same note could be
+//! consumed once by merge and once by settle (double-spend). Dummy padding
+//! slots emit a public input-commitment of 0 (the circuit binds them inactive),
+//! so they create no PDA and can't smuggle a spend.
 
 use crate::errors::VaultError;
 use crate::merkle::append_leaf;
@@ -40,7 +40,7 @@ fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
 #[derive(Accounts)]
 #[instruction(tree_id: u8)]
 pub struct Merge<'info> {
-    /// Any signer pays rent for the new nullifier PDAs + output leaf. Authority
+    /// Any signer pays rent for the new consumed-note PDAs + output leaf. Authority
     /// is the ZK proof.
     #[account(mut)]
     pub payer: Signer<'info>,

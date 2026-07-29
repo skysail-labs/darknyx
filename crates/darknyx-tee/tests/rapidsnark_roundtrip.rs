@@ -4,9 +4,9 @@
 //! → `.wtns` → rapidsnark FFI) and verifies the resulting proof against the
 //! zkey's own VK in-ark — the load-bearing check that the witness `.wtns`
 //! serialization + the snarkjs-JSON→ark-proof parse are correct. Also asserts
-//! cross-backend parity: ark and rapidsnark produce the SAME public input
-//! (the batch Merkle root) for the same batch (the proofs themselves differ —
-//! Groth16 is randomized).
+//! cross-backend parity: ark and rapidsnark produce the SAME two public inputs
+//! (batch Merkle root + governed-config digest) for the same batch (the proofs
+//! themselves differ — Groth16 is randomized).
 //!
 //! Gated TWICE: only built with `--features rapidsnark` (needs the static libs
 //! linked via $RAPIDSNARK_LIB_DIR), and only runs when the match_batch_n2
@@ -56,19 +56,28 @@ async fn rapidsnark_proves_and_verifies_n2() {
     // The ark prover gives us the zkey VK to verify against (same zkey).
     let ark = ArkMatchBatchProver::load(&build_dir, 2).expect("load ark n2 prover (for the VK)");
 
-    let slots = vec![dummy_slot(), dummy_slot()];
+    // C-08 binds every slot's `batch_slot` to its array index. This test
+    // constructs the vector directly rather than through `pad_batch`, so set
+    // the second dummy's index explicitly.
+    let mut slots = vec![dummy_slot(), dummy_slot()];
+    slots[1].batch_slot = 1;
 
     // 1. Prove with rapidsnark (raw ark Proof + public inputs).
     let (proof, public) = rs
         .prove_to_ark(&slots)
         .expect("rapidsnark prove n2 dummy batch");
-    assert_eq!(public.public_inputs_be.len(), 1);
+    assert_eq!(public.public_inputs_be.len(), 2);
     assert_eq!(public.public_inputs_be[0], public.merkle_root);
+    assert_eq!(public.public_inputs_be[1], public.config_digest);
 
     // 2. Verify the rapidsnark proof against the zkey VK, in-ark. If the .wtns
     //    serialization or the snarkjs-JSON parse were wrong, this fails.
     let pvk = prepare_verifying_key(ark.verifying_key());
-    let public_fr = vec![Fr::from_be_bytes_mod_order(&public.merkle_root)];
+    let public_fr: Vec<Fr> = public
+        .public_inputs_be
+        .iter()
+        .map(|value| Fr::from_be_bytes_mod_order(value))
+        .collect();
     let verified =
         Groth16::<Bn254>::verify_proof(&pvk, &proof, &public_fr).expect("verify_proof call");
     assert!(
@@ -77,12 +86,12 @@ async fn rapidsnark_proves_and_verifies_n2() {
     );
 
     // 3. Cross-backend parity: ark proves the same batch to the SAME public
-    //    input (the merkle root). (Proofs differ — randomized — so we compare
-    //    the public input, not the proof bytes.)
+    //    inputs. Proofs differ (Groth16 is randomized), so compare the public
+    //    vector rather than proof bytes.
     let (_ark_proof, ark_public) = ark.prove_ark(&slots).expect("ark prove n2 dummy batch");
     assert_eq!(
-        ark_public.merkle_root, public.merkle_root,
-        "ark and rapidsnark disagree on the batch Merkle root"
+        ark_public.public_inputs_be, public.public_inputs_be,
+        "ark and rapidsnark disagree on the public inputs"
     );
 
     // 4. The on-chain byte conversion produces a well-formed 256-byte proof.

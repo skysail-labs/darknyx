@@ -5,8 +5,8 @@
  *   merged note → assert the consolidated tokens round-trip.
  *
  * This is the full-ix integration the verify roundtrip can't cover: it proves the
- * merge actually creates the input nullifier PDAs, appends ONE output leaf, and
- * that the merged note is a real, spendable leaf.
+ * merge actually creates the input consumed-note PDAs, appends ONE output leaf,
+ * and that the merged note is a real, spendable leaf.
  *
  * Gate: RUN_DEVNET_MERGE=1 + a vault deployed with the merge ix + the built merge
  * circuits. Uses .devnet/keypairs/admin.json + .devnet/e2e-config.json.

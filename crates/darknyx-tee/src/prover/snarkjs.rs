@@ -10,8 +10,8 @@
 //!     SAME representation `ArkMatchBatchProver` produces, so the single
 //!     [`super::convert::proof_to_onchain_bytes`] converter applies to all three
 //!     backends).
-//!   - [`assert_public_inputs`] — the native path's drift guard over all eight
-//!     circuit public inputs.
+//!   - [`assert_public_inputs`] — the native path's drift guard over both
+//!     compressed circuit public inputs.
 //!
 //! Keeping these in one place means a proof-format fix (e.g. a Fq2 limb-order
 //! correction) lands once for every backend, and the n16 parity test guards them.
@@ -113,7 +113,7 @@ pub(crate) fn native_witness_wtns(bin: &Path, input_json: &str) -> Result<Vec<u8
     std::fs::read(&out_path).map_err(|e| ProverError::WitnessGen(format!("read .wtns: {e}")))
 }
 
-/// Assert all eight proof public inputs (computed root plus governed config)
+/// Assert both proof public inputs (computed root plus governed-config digest)
 /// equal the off-circuit vector. snarkjs-format backends return the
 /// public inputs as a JSON array of decimal strings; the root is Fr-safe so it
 /// fits 32 BE bytes. This is the native witness path's equivalent of the wasmer

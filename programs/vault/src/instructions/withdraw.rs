@@ -195,9 +195,9 @@ pub fn withdraw_handler(
     // ----- Mark the note consumed (commitment-keyed) -----
     //
     // PF-04: this is now the ONLY guard withdraw allocates. The second,
-    // nullifier-keyed `NullifierEntry` was removed — it had zero readers
-    // anywhere (no instruction, SDK query, indexer table, daemon logic), and
-    // it was worse than redundant: `nullifier = Poseidon3(3, sk, inner)` is
+    // nullifier-keyed guard was removed — it had zero readers anywhere (no
+    // instruction, SDK query, indexer table, daemon logic), and it was worse
+    // than redundant: `nullifier = Poseidon3(3, sk, inner)` is
     // amount- AND mint-independent, so two distinct notes of one owner sharing
     // an `inner_hash` collide on it and the second legitimate withdraw is
     // bricked. `note_commitment` is a circuit-bound public OUTPUT of

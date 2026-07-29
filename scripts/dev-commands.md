@@ -773,7 +773,7 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | Settle: `InvalidMarkerExpiry (6018)` | marker expiry outside `clock.slot < e <= clock.slot+300` | margin is 250 in the worker; ensure the CVM's RPC slot is fresh (slot poller) |
 | Settle: `<slot> is not a recent slot` (CreateLookupTable) | ALT `recent_slot` ahead of the simulating replica | the worker backs off 32 slots; transient — retry |
 | Settle: `did not confirm … [None]` | ALT not active yet, or tx dropped | the worker waits a slot + rebroadcasts; a hard timeout now errors `AltNotActive` (retryable) |
-| Settle: `Transaction too large: …` (settle Tx D) | settle v0 tx > 1232 B | ensure `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` is set (static ALT stacked). The per-batch ALT now also hoists the consumed/nullifier PDAs; the worker logs the inline-account breakdown on overflow. |
+| Settle: `Transaction too large: …` (settle Tx D) | settle v0 tx > 1232 B | ensure `DARKNYX_TEE_SETTLE_LOOKUP_TABLE` is set (static ALT stacked). The per-batch ALT also hoists the consumed-note PDAs; the worker logs the inline-account breakdown on overflow. |
 | Settle: `Transaction too large: …5224 B…` (ALT extend) | per-batch ALT extend not chunked for a big batch | fixed: extends chunk at ≤25 addr/tx + fire concurrently (image ≥ `tee-v3-hardening-26`) |
 | Settle stage ~13s wall despite co-inclusion | per-batch ALT activation finality wait (Tx D rebroadcasts until the freshly-extended ALT is loadable) | inherent pre-Alpenglow; concurrent extends collapse it to ONE activation window |
 | All ixs fail `ConstraintSeeds (2006)` after a redeploy | old-layout `VaultConfig` PDA (size/offset mismatch) | `node scripts/close-vault-config.mjs` then `devnet-setup` (§4.4) |

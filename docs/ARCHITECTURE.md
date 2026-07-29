@@ -178,8 +178,8 @@ root.
 | `BatchValidityMarker` | `[b"batch_validity", batch_root]` | one verified N=16 batch |
 | vault token account | `[b"vault_token", mint]` | SPL custody for one mint |
 
-`NullifierEntry` remains as a legacy state type but no current instruction
-allocates it. Commitment-keyed `ConsumedNoteEntry` is the active shared guard.
+The obsolete nullifier-keyed account type and its client derivation helpers are
+removed. Commitment-keyed `ConsumedNoteEntry` is the active shared guard.
 
 ## Circuit boundaries
 
