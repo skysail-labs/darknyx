@@ -92,15 +92,19 @@ pub struct Order {
     /// Poseidon6 commitment of the collateral note. Rotates on
     /// partial-fill re-lock to the change-note commitment.
     pub collateral_note: [u8; 32],
-    /// `Poseidon2(spending_key, r_owner)` — used to derive change
-    /// notes back to the same owner.
-    pub user_commitment: [u8; 32],
     /// The owner identity BOUND to this order's collateral note: intake
     /// re-derives `collateral_note` from `(mint, amount, owner_commitment,
-    /// inner_hash)` and rejects a mismatch (`verify_commitment`), so unlike the
-    /// client-asserted `user_commitment` this cannot be spoofed for a note the
-    /// caller doesn't own. Reused across all of a user's notes, so it's the
-    /// identity the self-trade check keys on (see `algorithm::generate_matches`).
+    /// inner_hash)` and rejects a mismatch (`verify_commitment`), so it cannot
+    /// be spoofed for a note the caller doesn't own. Reused across all of a
+    /// user's notes, so it's the identity the self-trade check keys on (see
+    /// `algorithm::generate_matches`) and the one output notes derive back to.
+    ///
+    /// This is the ONLY owner identity the matcher carries. A separate
+    /// client-asserted `user_commitment` rode alongside it until audit
+    /// 2026-07-25 (T-07 / PF-10); nothing ever read it. If you are about to
+    /// re-add a caller-supplied identity here, make it something intake
+    /// verifies — an unverified one is worse than none, because it reads as a
+    /// binding.
     pub owner_commitment: [u8; 32],
     /// Client-supplied 16-byte id. Used by cancel-by-id, by the
     /// `NoteLock` PDA seed at settle time, and by the matcher's

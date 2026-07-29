@@ -98,7 +98,6 @@ describe("proveAndBuildOrder", () => {
     });
 
     const kp = nacl.sign.keyPair();
-    const userCommitment = new Uint8Array(32); // top byte 0 = Fr-safe
 
     // Stub prover: echoes back a fixed proof + the witness root.
     const prover: ValidInputProver = async (p) => ({
@@ -127,7 +126,6 @@ describe("proveAndBuildOrder", () => {
       masterSeed: new Uint8Array(64).fill(5),
       spendingKey,
       ownerCommitment: owner,
-      userCommitment,
       tradingKey: kp.publicKey,
       sign: (d) => nacl.sign.detached(d, kp.secretKey),
       note: { commitment, innerHash, amount },

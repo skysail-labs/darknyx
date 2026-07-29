@@ -37,7 +37,6 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
     let note_amount = amount.saturating_mul(price_limit).max(1); // bid floor, no fee
     let owner_commitment = fr_safe(0x44);
     let note_inner_hash = fr_safe(0x55u8.wrapping_add(salt));
-    let user_commitment = fr_safe(0x33);
     let viewing_pubkey = darkpool_crypto::ephemeral_public(&[0x21; 32]);
     let session_id = [0x5A; 32];
     let arrival_nonce = u64::from(salt);
@@ -60,7 +59,6 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
         expiry_slot: 4_000,
         order_id,
         note_commitment,
-        user_commitment,
         arrival_nonce,
         viewing_pubkey,
         session_id,
@@ -77,7 +75,6 @@ fn signed_order(key: &SigningKey, order_id: [u8; 16]) -> PlaceOrderRequest {
         "expiry_slot": 4_000,
         "order_id": hex::encode(order_id),
         "note_commitment": hex::encode(note_commitment),
-        "user_commitment": hex::encode(user_commitment),
         "arrival_nonce": arrival_nonce,
         "trading_key": hex::encode(key.verifying_key().to_bytes()),
         "trading_key_signature": hex::encode(sig.to_bytes()),

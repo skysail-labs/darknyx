@@ -57,10 +57,13 @@ export interface BuildOrderArgs {
   // ── identity / keys ──
   /** Master seed (derives the default viewing-encryption key). */
   masterSeed: Uint8Array;
-  /** The note's owner commitment (a BN254 Fr bigint). */
+  /**
+   * The note's owner commitment (a BN254 Fr bigint). Intake re-derives
+   * `note_commitment` from it, so this is the only owner identity an order
+   * carries. A separate, unverified `userCommitment` rode alongside it until
+   * audit 2026-07-25 (T-07 / PF-10); nothing read it.
+   */
   ownerCommitment: bigint;
-  /** 32-byte user commitment (bytes); top byte must be zero (Fr-safe). */
-  userCommitment: Uint8Array;
   /** 32-byte Ed25519 trading public key (bytes). */
   tradingKey: Uint8Array;
   /** Detached Ed25519 signer over the canonical digest. */
@@ -109,7 +112,6 @@ export interface PlaceOrderRequest {
   expiry_slot: number;
   order_id: string;
   note_commitment: string;
-  user_commitment: string;
   arrival_nonce: number;
   trading_key: string;
   trading_key_signature: string;
@@ -151,8 +153,6 @@ export async function buildOrder(
   if (args.orderId.length !== 16) throw new Error("orderId must be 16 bytes");
   if (args.tradingKey.length !== 32)
     throw new Error("tradingKey must be 32 bytes");
-  if (args.userCommitment.length !== 32)
-    throw new Error("userCommitment must be 32 bytes");
   if (args.note.commitment.length !== 32)
     throw new Error("note.commitment must be 32 bytes");
   if (args.validInput.merkleRoot.length !== 32)
@@ -173,7 +173,7 @@ export async function buildOrder(
   if (!isContributoryX25519PublicKey(viewingPubkey))
     throw new Error("viewingPubkey is a non-contributory X25519 point");
 
-  // The signed v3 canonical digest — byte-identical to the matcher's encoder.
+  // The signed v5 canonical digest — byte-identical to the matcher's encoder.
   const digest = orderCanonicalDigest({
     symbol: new TextEncoder().encode(args.symbol),
     side: args.side,
@@ -184,7 +184,6 @@ export async function buildOrder(
     expirySlot: args.policy.expirySlot,
     orderId: args.orderId,
     noteCommitment: args.note.commitment,
-    userCommitment: args.userCommitment,
     arrivalNonce,
     viewingPubkey,
     sessionId: args.sessionId,
@@ -204,7 +203,6 @@ export async function buildOrder(
     expiry_slot: u64(args.policy.expirySlot, "expiry_slot"),
     order_id: toHex(args.orderId),
     note_commitment: toHex(args.note.commitment),
-    user_commitment: toHex(args.userCommitment),
     arrival_nonce: u64(arrivalNonce, "arrival_nonce"),
     trading_key: toHex(args.tradingKey),
     trading_key_signature: toHex(signature),

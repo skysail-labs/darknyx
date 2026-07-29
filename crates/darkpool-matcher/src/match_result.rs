@@ -51,12 +51,12 @@ pub struct MatchPair {
     pub owner_buyer: [u8; 32],
     /// Trading key of the ASK-side order.
     pub owner_seller: [u8; 32],
-    /// Buyer's signed user-commitment metadata. Output-note construction
-    /// does not trust this field; it binds to the consumed note opening's
-    /// `owner_commitment`.
-    pub user_commitment_buyer: [u8; 32],
-    /// Seller's signed user-commitment metadata (symmetric to above).
-    pub user_commitment_seller: [u8; 32],
+    // A `user_commitment_buyer` / `_seller` pair sat here until audit
+    // 2026-07-25 (T-07 / PF-10). Both were written by `generate_matches` and
+    // read by nothing: output-note construction binds the consumed note
+    // opening's `owner_commitment`, and the settle payload never carried them.
+    // Removing them is format-safe — `MatchPair` is not the journaled or
+    // on-chain type (`MatchResultPayload` is, and never held these).
 
     // ─── Input note values (for conservation) ──────────────────────
     /// Full value of the buyer's input note, quote units.

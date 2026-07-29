@@ -22,7 +22,7 @@ Cross-language consumers must use the current domains byte-for-byte:
 
 | Contract | Current domain |
 |---|---|
-| Order signature | `darknyx-order-v4` |
+| Order signature | `darknyx-order-v5` |
 | Cancel signature | `darknyx-cancel-v2` |
 | Settlement signature | `darknyx-match-v10` |
 | Settlement ID | `darknyx-settlement-id-v2` |

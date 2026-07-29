@@ -62,7 +62,11 @@ describe("Keystore — derivation", () => {
     expect(oc1).toBe(oc2); // deterministic
     const uc = await ks.userCommitment();
     expect(uc).toHaveLength(32);
-    expect(uc[0], "intake requires user_commitment top byte = 0").toBe(0);
+    // T-07: no longer top-byte-zeroed. It is the raw `create_wallet` Poseidon
+    // output — the value a WalletEntry is registered under — so it must be a
+    // canonical BN254 element (top byte <= 0x30) and NOT be truncated to fit a
+    // check that no longer exists.
+    expect(uc[0]!).toBeLessThanOrEqual(0x30);
   });
 
   it("derives distinct per-order trading keys; signatures verify", () => {

@@ -122,7 +122,6 @@ pub(crate) struct OrderSnapshot {
     pub min_fill_qty: u64,
     pub note_amount: u64,
     pub collateral_note: [u8; 32],
-    pub user_commitment: [u8; 32],
     /// Note-bound owner identity (see `book::Order::owner_commitment`) — the
     /// self-trade key.
     pub owner_commitment: [u8; 32],
@@ -154,7 +153,6 @@ impl OrderSnapshot {
             min_fill_qty: o.min_fill_qty,
             note_amount: o.note_amount,
             collateral_note: o.collateral_note,
-            user_commitment: o.user_commitment,
             owner_commitment: o.owner_commitment,
             trading_key: o.trading_key,
             order_id: o.order_id,
@@ -380,10 +378,10 @@ pub(crate) fn generate_matches(
         // Self-trade prevention: never match two orders from the same owner — a
         // wash trade that would waste a settle on a no-op. Keyed on the
         // note-BOUND `owner_commitment` (`Poseidon2(spending_key, r_owner)`):
-        // intake pins it to the collateral note via `verify_commitment`, so —
-        // unlike the client-asserted `user_commitment` — a settling wash CANNOT
-        // lie about it (the only way to present two different `owner_commitment`s
-        // is two genuinely different note owners). It is reused across all of a
+        // intake pins it to the collateral note via `verify_commitment`, so a
+        // settling wash CANNOT lie about it (the only way to present two
+        // different `owner_commitment`s is two genuinely different note
+        // owners). It is reused across all of a
         // user's notes, so it catches the case a `trading_key`-only check misses:
         // one user trading under TWO trading keys (the trading key is freely
         // re-derived by `offset` and is deliberately NOT part of the owner). The
@@ -510,8 +508,8 @@ pub(crate) fn generate_matches(
         let match_id = next_match_id;
 
         // Change-note commitments bind to the identity proven by the input
-        // note opening. `user_commitment` is client-asserted metadata and can
-        // differ; settlement reconstructs outputs from `owner_commitment`.
+        // note opening: settlement reconstructs outputs from
+        // `owner_commitment`.
         // Change-note commitments are NOT derivable here. The shipped circuit
         // binds every user output to `Poseidon3(24, consumed_input_inner,
         // role)` (CS-03), and the consumed input's inner hash is opaque to the
@@ -556,8 +554,6 @@ pub(crate) fn generate_matches(
             note_f_commitment,
             owner_buyer: bids[bi].trading_key,
             owner_seller: asks[ai].trading_key,
-            user_commitment_buyer: bids[bi].user_commitment,
-            user_commitment_seller: asks[ai].user_commitment,
             buyer_note_value: bids[bi].note_amount,
             seller_note_value: asks[ai].note_amount,
             base_amt: crossable,
@@ -897,7 +893,6 @@ mod tests {
             min_fill_qty: 0,
             note_amount: amount.saturating_mul(price).max(1),
             collateral_note: [0; 32],
-            user_commitment: [0; 32],
             owner_commitment: [0; 32],
             trading_key: [0; 32],
             order_id: [0; 16],

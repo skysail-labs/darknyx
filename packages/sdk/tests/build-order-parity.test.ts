@@ -42,11 +42,6 @@ describe("buildOrder", () => {
       innerHash,
       amount,
     };
-    const userCommitment = (() => {
-      const v = new Uint8Array(32).fill(0x33);
-      v[0] = 0; // BN254 Fr-safe top byte
-      return v;
-    })();
     const orderId = new Uint8Array(16);
     orderId[0] = 0xaa;
     orderId[15] = 1;
@@ -59,7 +54,6 @@ describe("buildOrder", () => {
       masterSeed,
       spendingKey,
       ownerCommitment: ownerCommit,
-      userCommitment,
       tradingKey: kp.publicKey,
       sign: (d) => nacl.sign.detached(d, kp.secretKey),
       note,
@@ -84,7 +78,8 @@ describe("buildOrder", () => {
     expect(body.arrival_nonce).toBe(1);
     expect(body.order_id).toBe(toHex(orderId));
     expect(body.note_commitment).toBe(toHex(note.commitment));
-    expect(body.user_commitment).toBe(toHex(userCommitment));
+    // T-07: the wire carries no order-level user_commitment any more.
+    expect(body).not.toHaveProperty("user_commitment");
     expect(body.trading_key).toBe(toHex(kp.publicKey));
     expect(body.merkle_root).toBe("dd".repeat(32));
     expect(body.valid_input_proof).toBe("00".repeat(256));
@@ -108,7 +103,6 @@ describe("buildOrder", () => {
       expirySlot: policy.expirySlot,
       orderId,
       noteCommitment: note.commitment,
-      userCommitment,
       arrivalNonce: 1n,
       viewingPubkey,
       sessionId,
@@ -129,7 +123,6 @@ describe("buildOrder", () => {
         masterSeed: new Uint8Array(64),
         spendingKey: 1n,
         ownerCommitment: 1n,
-        userCommitment: new Uint8Array(32),
         tradingKey: kp.publicKey,
         sign: (d) => nacl.sign.detached(d, kp.secretKey),
         note: {

@@ -51,12 +51,12 @@ the first stop for an agent resuming the work.
 | Field | Current value |
 |---|---|
 | Last verified `main` | `f7a1530` (slice 2 closed; PR #79 merged) |
-| Last merged remediation PR | #81 — slice 4 (`settlement-recovery`), merged 2026-07-28 |
-| Active slice | none — slice 4 closed. |
-| Active branch / PR | merged (PR #81) |
-| Next slice | `remediation/order-canonical-next` (slice 5) — T-07 + PF-10 |
+| Last merged remediation PR | #81 — slice 4 (`settlement-recovery`), merged 2026-07-28. Ops PRs #82 + #83 merged after it (`main` `6a00f59`). |
+| Active slice | **5 — `remediation/order-canonical-next` (T-07 + PF-10). Code complete locally; needs the fresh-tree real-mint CVM settle.** |
+| Active branch / PR | `remediation/order-canonical-next` — not yet opened |
+| Next slice | after 5: `remediation/daemon-keystore-v2` (T-09 + T-10) |
 | Live state | **No CVM running; billing halted** after the slice-4 drill. Image `sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda` (tag `tee-v3-hardening-76`, commit `3a93570` — the tag and commit are cross-references only; the digest is the identity). Signer set unchanged; all four shards funded. Devnet tree holds the drill's 2 deposit leaves. Slice 2 is CI/test/build tooling and required no CVM or devnet mutation. Images pinned by digest from the merged-source rebuild — CPU `sha256:98f61dc3bbbf505e501b2d208618ce2a601e1a443ae73b63f90ae053ebfbe339` (tag `tee-v3-hardening-75`), GPU `sha256:eda803e3c16cc6a4443444857b560a3dcf4f6e3126c0545a31cf81e30b3dcf66` (tag `tee-v3-hardening-75-cuda`). Devnet tree left freshly reset from the slice-1 closure run. |
-| Last updated | 2026-07-28 (slice 4 closed) |
+| Last updated | 2026-07-29 (slice 5 code complete) |
 
 ### Slice 1 live evidence — 2026-07-27
 
@@ -119,7 +119,7 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 | T-04 | High | Release engineering + infrastructure | `remediation/tee-oracle-trust`, then enforced for `remediation/tee-transport-integrity` | The existing CPU/GPU images are pinned by immutable digest in the oracle slice, which already changes the image and compose. Every image introduced later, including ingress, must be digest-pinned before that slice can merge. Release evidence maps source/tag/digest/compose hash, so substituting a tag cannot preserve an accepted measurement. | Code complete — enforcement generalised in slice 3: `scripts/check-compose-image-digests.sh` now checks EVERY image in EVERY compose against an explicit repository allowlist, instead of asserting a single hardcoded image. An ingress (or any other) service added later fails the gate until it is digest-pinned AND its repository is deliberately approved. Verified by mutating a compose in both directions. |
 | T-05 | Medium | — | — | Owner accepted the residual append-only-mirror availability risk on 2026-07-27. Confirmed commitment plus on-chain root validation is considered sufficient for the current product; a rollback can stall witness service but cannot authorize custody loss. No code, test, infrastructure, or follow-up task is authorized. | **Won't Fix — accepted risk** |
 | T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | **Closed** — journal, boot reconciliation, and drain merged; live crash-recovery drill passed on `nightly-test-cvm` 2026-07-28 (interruption confirmed on-chain, recovery classified correctly, entries retired, drain lifecycle exercised). Procedure + results: [`settlement-recovery-drill.md`](settlement-recovery-drill.md). |
-| T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | Open |
+| T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | **Code complete** — field removed from `OrderCanonical`/`Order`/`OrderSnapshot`/`MatchPair`/`PlaceOrderRequest` + the TS mirrors; the `[0] != 0` intake check and error code 1002 retired; the daemon's `uc[0] = 0` zeroing deleted so `userCommitment()` is again the raw `create_wallet` output. `ORDER_DOMAIN` v4→v5, both pinned digests regenerated from the layout spec independently of either encoder. Awaiting the fresh-tree real-mint CVM settle. |
 | T-08 | Medium | Release engineering | `remediation/local-assurance` | Rust and production Node dependencies have locally reproducible vulnerability gates; GitHub Actions use full immutable SHAs and minimum permissions. Findings are triaged rather than hidden by blanket ignores. | Closed |
 | T-09 | Low | Daemon custody | `remediation/daemon-keystore-v2` | New keystores use the fixed v2 scrypt profile `N=2^17, r=8, p=1` with explicit memory bounds. KATs, wrong-passphrase, and resource-bound tests pin the profile. | Open |
 | T-10 | Low | Daemon custody | `remediation/daemon-keystore-v2` | Unauthenticated file fields cannot select weaker KDF work. Version/profile, lengths, and AAD are strict; v1 files migrate through decrypt-validate-atomic-reseal without destructive partial writes. | Open |
@@ -138,7 +138,7 @@ from it. Rebuild and re-pin before the next CVM run; slice 3 rotates
 |---|---|---|---|---|---|
 | PF-08 | Perf-Nit | Daemon | — | Repeated trading-key derivation is real but not established as material. Reopen only when an intake/daemon profile identifies it as a material contributor to CPU or placement latency; then derive once per unlocked keystore session rather than add an unbounded cache. | Deferred |
 | PF-09 | Perf-Nit | TEE prover | `remediation/tee-bounds-cleanup` | Rapidsnark `SHORT_BUFFER` handling has bounded retries, checked growth, and a maximum output/error buffer. A malicious or broken native prover cannot loop or allocate without bound. | Open |
-| PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a repository-wide stale-reference sweep. | Open |
+| PF-10 | Perf-Nit | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The dead order-level `user_commitment` field consumes no wire, heap, serialization, or signature-domain space. Removal is proven by Rust/TS parity, API schema checks, and a repository-wide stale-reference sweep. | **Code complete** — signed canonical body `203 + S` → `171 + S` bytes (−32; 211 B → 179 B, −15.2% at `SOL-USDC`); one 32-byte field gone from `Order`, `OrderSnapshot`, and `PlaceOrderRequest`, two from `MatchPair`. OpenAPI `required` list and schema updated; stale-reference sweep clean. Format-safe: the journal serializes `MatchResultPayload`, which never carried the field. |
 
 ## Additional release-readiness deliverables
 
@@ -255,7 +255,7 @@ turning the accepted fixes into a cutover-safe implementation.
 | 2 | `remediation/local-assurance` | T-08, T-11, T-12, T-13, T-15, T-18 | Slice 1 closed | Closed / PR #79 | CI/test/build tooling plus LiteSVM tests; no protocol wire change. | Format/clippy/workspace/TEE tests, artifact-required negative, stale-SBF negative, named withdraw/release-lock LiteSVM tests, dependency reports, workflow/action-pin inspection. T-11 remains `Code complete` until a hosted run is available. |
 | 3 | `remediation/tee-transport-integrity` | DEP-AU-07; T-04 enforcement; transport documentation correction. **T-03 deferred** | Slice 2 closed | Closed / PR #80 | **No compose change, no compose-hash rotation, no CVM, no ceremony.** Connection caps are code defaults; the digest guard is CI-only; the documentation corrections are text. Wire-visible additions only: a `503` on an over-capacity `/v1/stream` upgrade and error code `4290` on an over-cap login, both documented in the OpenAPI. | Real-socket connection-cap tests incl. the ping-only hold and its mutation test; digest-guard mutation test in both failure directions; OpenAPI parse; the standard local gate. |
 | 4 | `remediation/settlement-recovery` | T-06 | Slice 3 closed | Closed / PR #81 | New versioned journal, Borsh-serialized in plaintext and protected ONLY by the dstack-sealed LUKS volume — there is no authenticated encryption at the `JournalSnapshot` boundary, and the row must not imply one. Adds `/admin/drain` (admin-gated) and error code `4290`; no other public wire change. | Unit crash points at every durable transition, corrupt/truncated journal failure, finalized-chain reconciliation cases, CPU-CVM restart mid-settlement, lock expiry/release, and daemon terminal/resubmit behavior. |
-| 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | Open / — | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
+| 5 | `remediation/order-canonical-next` | T-07, PF-10 | Slice 4 closed, or external-integration trigger documented | Code complete / branch `remediation/order-canonical-next` | Canonical signature and order wire break; old orders intentionally invalid. No circuit, note, or vault account change. | Rust/TS fixed-vector parity, REST/stream/daemon/loadgen tests, OpenAPI validation, repository stale-reference sweep, fresh-tree real-mint CVM settle. |
 | 6 | `remediation/daemon-keystore-v2` | T-09, T-10 | Slice 5 closed | Open / — | Versioned local keystore migration; v1 read/migrate only, all new writes v2. | Fixed KATs, wrong password, hostile headers/lengths, max-memory enforcement, interrupted migration, v1→v2 roundtrip, backup/import recovery. No CVM required. |
 | 7 | `remediation/tee-bounds-cleanup` | T-14, PF-09 | Slice 6 closed | Open / — | SDK removal of dead exports; bounded internal FFI behavior. No live account or circuit migration. | Deletion checklist, SDK type/tests, workspace/TEE tests, bounded FFI adversarial sequences, docs/script stale-reference sweep. No CVM required. |
 
@@ -896,6 +896,111 @@ on the journal. The only loss is the ability to reconcile an in-flight settlemen
 across a restart, which returns the deployment to the pre-slice behaviour the
 lock sweeper already backstops.
 
+
+## Slice 5 evidence — `remediation/order-canonical-next`, 2026-07-29
+
+### What was actually broken
+
+Three defects stacked on one field. Intake rejected any order whose
+`user_commitment` had a non-zero top byte, justified in the code as "BN254
+Fr-safety":
+
+1. **The justification was false at HEAD.** The comment claimed "the matcher
+   Poseidon-hashes this during change-note construction". It does not — v3
+   output inners derive from the consumed input inner and `owner_commitment`.
+   A repo-wide grep confirms `user_commitment` was never passed to Poseidon.
+2. **The check was wrong on its own terms.** Fr-safety means "below the BN254
+   scalar modulus". That modulus begins `0x30`, so a canonical element's top
+   byte is any of `0x00..=0x30` — 49 values. Demanding exactly `0x00` rejected
+   roughly **98%** of legitimate field elements.
+3. **The client hid it by corrupting data.** `packages/daemon/src/keystore.ts`
+   computed the real commitment and then did `uc[0] = 0`. Its own comment
+   conceded the result: "this value is NOT a raw `create_wallet` Poseidon
+   output" — so it could never match a `WalletEntry` registered on-chain, which
+   is the one thing the value exists for.
+
+### Why removal, not repair
+
+Option B (fix the comparison, keep the field) was cheaper and was considered.
+It was rejected because it leaves a field that nothing reads while *looking*
+like a binding — the exact shape that let defect 1 persist. An unverified
+identity field next to a verified one (`owner_commitment`) is worse than no
+field, because a future reader reasonably assumes the signed one is load-bearing.
+
+`owner_commitment` already carries the property the order needs, and carries it
+honestly: intake re-derives `note_commitment` from it via `verify_commitment`,
+so a caller cannot assert an owner for a note they do not own.
+
+### Format-safety check performed before touching `MatchPair`
+
+`MatchPair` derives Borsh and its doc claims it mirrors an on-chain struct, so
+removing two fields from it needed proof it is not a persisted or wire type:
+
+- The settle payload is `MatchResultPayload`, a separate struct that has never
+  held a `user_commitment`.
+- `JournalEntry.payload` (slice 4) is that same `MatchResultPayload` — the
+  journal comment states the choice explicitly.
+- `user_commitment_buyer` / `_seller` appear only in struct-literal
+  construction; no read site exists anywhere in the workspace.
+
+So the on-disk journal format and the on-chain instruction data are both
+unchanged by this slice. Only the signed canonical body changes.
+
+### Pinning the new digests honestly
+
+`ORDER_DOMAIN` moves `darknyx-order-v4` → `v5`, which changes both fixture
+digests. The replacement value was computed **from the layout spec in an
+independent script**, then compared against what the Rust encoder produced —
+not copied out of the failing assertion. Refreshing a pin by pasting back the
+encoder's own output tests only that the encoder is deterministic, which was
+never in question; it would have accepted a wrong-field removal silently.
+
+Both encoders and the independent computation agree on
+`d304e770f8f3fb706c7bb2bc6959002d9030b512f896f3fb518ba1ae4bd2b975`.
+
+Two structural tests were added next to the digest pin, because a digest
+mismatch is an opaque failure: one asserts the body shrank by **exactly** 32
+bytes (a wrong-field removal keeps the total right while changing the meaning of
+every later byte), and one asserts `arrival_nonce` now occupies the `+82` offset
+that `user_commitment` vacated.
+
+### Test changes, and why they are not just deletions
+
+| Test | Before | After |
+|---|---|---|
+| `place_rejects_non_fr_safe_user_commitment` | asserted the defective check fired | replaced by `place_accepts_an_fr_safe_owner_commitment_with_a_non_zero_top_byte` — sets `owner_commitment = [0x2F; 32]` (a canonical element the old rule's logic would have refused) and asserts **202 + present in the book** |
+| `error_responses_use_the_structured_envelope...` | drove the envelope via code 1002 | re-pointed at the all-zero `order_id` → 1001. What is under test is the envelope, not the validation that produced it |
+| `keystore.test.ts` top-byte assertion | `expect(uc[0]).toBe(0)` — pinned the corruption | `expect(uc[0]).toBeLessThanOrEqual(0x30)` — pins genuine Fr-canonicality instead |
+| `build-order-parity` | asserted `body.user_commitment` matched | asserts `body` has **no** `user_commitment` property |
+
+Error code **1002 is retired, not recycled** — the constructor is deleted and the
+number reserved in the catalogue comment, so a stale reference reads as "gone"
+rather than silently meaning something new.
+
+### Measured effect (PF-10)
+
+| | v4 | v5 | Δ |
+|---|---|---|---|
+| Signed canonical body (`SOL-USDC`) | 211 B | 179 B | **−32 B (−15.2%)** |
+| Body excluding symbol | `203 + S` | `171 + S` | −32 B |
+| 32-byte fields in `Order` / `OrderSnapshot` | — | — | −1 each |
+| 32-byte fields in `MatchPair` | — | — | −2 |
+| `PlaceOrderRequest` JSON fields | — | — | −1 (−64 hex chars on the wire) |
+
+### Local validation
+
+`cargo fmt --check`, `clippy --workspace --all-targets -D warnings`,
+`check-compose-image-digests`, `check-icicle-cuda-arch-env`,
+`check-brand-namespace`, `check-no-doctests`, `build-vault-sbf.sh devnet-admin`,
+`cargo nextest run --workspace`, SDK vitest (270 passed), daemon vitest (147
+passed), `tsc --noEmit` for sdk/daemon/indexer, and OpenAPI YAML parse.
+
+### Still open
+
+The fresh-tree real-mint CVM settle. Both T-07 and PF-10 stay `Code complete`
+until it runs — this slice changes the bytes a real client signs, and only a
+live settle proves the SDK, the daemon, and the in-enclave intake agree on the
+v5 body end to end.
 
 ## Agent handoff template
 

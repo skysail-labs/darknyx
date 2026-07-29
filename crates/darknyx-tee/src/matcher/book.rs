@@ -336,11 +336,11 @@ mod tests {
         let mut oid = [0u8; 16];
         oid[0] = idx;
         oid[15] = 1; // never zero
-                     // user_commitment top byte must be 0 — the matcher
-                     // Poseidon-hashes it during change-note construction and
-                     // requires BN254-Fr-safe inputs. Matches the on-chain
-                     // `make_pending_seed`'s `user_commitment[0] = 0` step.
-        let user_commitment = {
+                     // `owner_commitment` IS Poseidon-hashed (the matcher derives
+                     // change notes back to it), so it must be BN254-Fr-safe.
+                     // Zeroing the top byte is the cheap way to guarantee that
+                     // for a synthetic value; a real one is a Poseidon output.
+        let owner_commitment = {
             let mut u = [idx ^ 0xab; 32];
             u[0] = 0;
             u
@@ -359,8 +359,7 @@ mod tests {
             min_fill_qty: 0,
             note_amount: amount.saturating_mul(price).max(amount).max(1),
             collateral_note: [idx; 32],
-            user_commitment,
-            owner_commitment: user_commitment, // same owner identity, keyed on idx
+            owner_commitment, // keyed on idx, so distinct traders differ
             order_id: oid,
             order_inclusion_commitment: [idx ^ 0xcd; 32],
         }

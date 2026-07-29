@@ -1249,7 +1249,7 @@ revisions of this document said "directly to the enclave", which the
 deployment has never done. The residual exposure and its mainnet gate are the
 transport row in the non-goals table above (T-03). The request body carries the order
 intent (`side`, `price_limit`, `amount`, `note_commitment`,
-`user_commitment`, `expiry_slot`, `arrival_nonce`), a required contributory
+`expiry_slot`, `arrival_nonce`), a required contributory
 X25519 `viewing_pubkey`, the current 32-byte `/info.boot_session_id`, the input-note opening
 (`owner_commitment`, `note_inner_hash`, `merkle_root`) + a
 relayed **VALID_INPUT** Groth16 proof.

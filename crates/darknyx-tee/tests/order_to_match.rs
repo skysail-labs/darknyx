@@ -89,14 +89,13 @@ fn sign_order(
     // Distinct owner identity per trader: self-trade prevention keys on the
     // note-bound `owner_commitment` (verified at intake against `note_commitment`),
     // so two genuinely different traders must carry different owners to cross.
-    // Derive it from the trading key so each generated key is a distinct owner;
-    // `user_commitment` tracks it (a wallet's notes share one owner).
+    // Derive it from the trading key so each generated key is a distinct owner
+    // (a wallet's notes share one owner).
     let owner_commitment = {
         let mut u = key.verifying_key().to_bytes();
         u[0] = 0; // BN254 Fr-safe
         u
     };
-    let user_commitment = owner_commitment;
 
     // Input-note opening (4g.7a). The matcher (MatcherState::new() →
     // zeroed mints in this test) verifies the opening against the
@@ -134,7 +133,6 @@ fn sign_order(
         expiry_slot: 4_000,
         order_id,
         note_commitment,
-        user_commitment,
         arrival_nonce,
         viewing_pubkey,
         session_id,
@@ -153,7 +151,6 @@ fn sign_order(
         "expiry_slot": 4_000u64,
         "order_id": hex::encode(order_id),
         "note_commitment": hex::encode(note_commitment),
-        "user_commitment": hex::encode(user_commitment),
         "arrival_nonce": arrival_nonce,
         "trading_key": hex::encode(trading_key),
         "trading_key_signature": hex::encode(sig.to_bytes()),

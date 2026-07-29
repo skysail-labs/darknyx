@@ -236,7 +236,6 @@ maybe(
         masterSeed: ks.masterSeed,
         spendingKey: ks.spendingKey,
         ownerCommitment: note.ownerCommitment,
-        userCommitment: await ks.userCommitment(),
         tradingKey: ks.tradingPublicKey(0),
         sign: (d) => ks.signWithTradingKey(0, d),
         note: {

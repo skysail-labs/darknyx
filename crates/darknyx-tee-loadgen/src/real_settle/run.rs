@@ -195,7 +195,6 @@ struct Persona {
     owner_blinding: Fr,
     owner_commit: [u8; 32],
     trading: SigningKey,
-    user_commitment: [u8; 32],
 }
 
 impl Persona {
@@ -207,14 +206,11 @@ impl Persona {
         let mut tseed = [0u8; 32];
         tseed[..8].copy_from_slice(&seed.to_le_bytes());
         let trading = SigningKey::from_bytes(&tseed);
-        let mut user_commitment = trading.verifying_key().to_bytes();
-        user_commitment[0] = 0; // Fr-safe + intake's top-byte-zero requirement
         Ok(Self {
             spending_key,
             owner_blinding,
             owner_commit,
             trading,
-            user_commitment,
         })
     }
 }
@@ -245,7 +241,6 @@ fn build_order_body(
         expiry_slot,
         order_id,
         note_commitment: note.commitment,
-        user_commitment: p.user_commitment,
         arrival_nonce: 1,
         viewing_pubkey,
         session_id: boot_session_id,
@@ -268,7 +263,6 @@ fn build_order_body(
         "expiry_slot": expiry_slot,
         "order_id": hex::encode(order_id),
         "note_commitment": hex::encode(note.commitment),
-        "user_commitment": hex::encode(p.user_commitment),
         "arrival_nonce": 1u64,
         "trading_key": hex::encode(p.trading.verifying_key().to_bytes()),
         "trading_key_signature": hex::encode(sig.to_bytes()),

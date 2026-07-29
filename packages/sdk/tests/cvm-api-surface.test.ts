@@ -62,7 +62,6 @@ maybeDescribe("CVM API/WS surface (Phase 1–5 hardening)", () => {
       expiry_slot: 1,
       order_id: "0102030405060708090a0b0c0d0e0f10",
       note_commitment: z32,
-      user_commitment: z32,
       arrival_nonce: 1,
       trading_key: z32,
       trading_key_signature: "00".repeat(64),

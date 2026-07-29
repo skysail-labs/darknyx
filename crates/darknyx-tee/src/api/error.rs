@@ -15,7 +15,7 @@
 //!
 //! | Range | Class | Examples |
 //! |-------|-------|----------|
-//! | 1000–1099 | request validation (400) | 1001 malformed, 1002 fr_unsafe, 1003 below_collateral, 1004 min_notional, 1009 off_tick, 1010 stale_merkle_root, 1011 invalid_input_proof |
+//! | 1000–1099 | request validation (400) | 1001 malformed, 1002 RETIRED (was fr_unsafe — see below), 1003 below_collateral, 1004 min_notional, 1009 off_tick, 1010 stale_merkle_root, 1011 invalid_input_proof |
 //! | 1100–1199 | auth (401/403) | 1101 unauthorized, 1102 sig_invalid, 1103 not_owner |
 //! | 1200–1299 | conflict (409) | 1201 duplicate, 1202 stale_nonce, 1203 id_in_use, 1204 collateral_in_use |
 //! | 1300–1399 | not found (404) | 1301 not_found |
@@ -59,10 +59,21 @@ impl ApiError {
     pub fn malformed(m: impl Into<String>) -> Self {
         Self::new(1001, StatusCode::BAD_REQUEST, m)
     }
-    /// A value that must be a canonical BN254 field element is not.
-    pub fn fr_unsafe(m: impl Into<String>) -> Self {
-        Self::new(1002, StatusCode::BAD_REQUEST, m)
-    }
+    // 1002 (`fr_unsafe`) is RETIRED. Leave the number unused rather than
+    // recycling it, so a stale reference to it reads as "gone" and not as some
+    // unrelated new condition.
+    //
+    // Its only emitter rejected `user_commitment` whose top byte was non-zero,
+    // which audit 2026-07-25 (T-07) found wrong twice over: the field was hashed
+    // by nothing, and "top byte == 0" is not Fr-safety anyway (the BN254 modulus
+    // begins `0x30`, so a valid element's top byte is any of `0x00..=0x30` — the
+    // check rejected ~98% of legitimate values). The field is gone entirely.
+    //
+    // Fr-safety on the values that ARE hashed is enforced where the hashing
+    // happens: `NoteOpening::verify_commitment` Poseidon-hashes `owner_commitment`
+    // and `inner_hash`, so a non-canonical element fails there and surfaces as
+    // `bad_opening` (1006) — a check that cannot drift out of sync with the
+    // hash it guards, because it *is* the hash.
     /// The collateral note does not cover the order's nominal cost + fee.
     pub fn below_collateral(m: impl Into<String>) -> Self {
         Self::new(1003, StatusCode::BAD_REQUEST, m)

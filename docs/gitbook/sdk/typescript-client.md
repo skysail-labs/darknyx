@@ -174,7 +174,6 @@ const order = await proveAndBuildOrder({
   masterSeed,
   spendingKey,
   ownerCommitment,
-  userCommitment,
   tradingKey: trading.publicKey,
   sign: (digest) => nacl.sign.detached(digest, trading.secretKey),
   note,                         // { commitment, innerHash, amount }

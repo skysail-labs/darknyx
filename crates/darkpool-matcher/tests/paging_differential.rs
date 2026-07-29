@@ -64,7 +64,6 @@ fn order(
         min_fill_qty,
         note_amount,
         collateral_note: fr_safe(3, index),
-        user_commitment: fr_safe(4, index),
         owner_commitment,
         order_id,
         order_inclusion_commitment: fr_safe(5, index),
