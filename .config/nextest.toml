@@ -28,20 +28,31 @@
 slow-timeout = { period = "30s", terminate-after = 8 }
 
 [[profile.default.overrides]]
-# Proof-generating tests: legitimately slow AND memory-heavy.
+# MEMORY cap. These binaries shell out to snarkjs or load a Groth16 proving key
+# (`match_batch_n16/circuit_final.zkey` alone is 97 MB). nextest runs every test
+# in its OWN process, so that working set multiplies by concurrency instead of
+# being shared as under `cargo test`. Four slots each caps concurrent provers at
+# cpus/4 and bounds peak RSS.
 #
-# `threads-required = 4` is the load-bearing setting. Each of these shells out to
-# snarkjs and loads a proving key — `match_batch_n16/circuit_final.zkey` alone is
-# 97 MB — and nextest runs every test in its OWN PROCESS, so the working set
-# multiplies by concurrency rather than being shared as it is under `cargo test`.
-# Charging each one four slots caps concurrent proving at cpus/4 and keeps peak
-# RSS bounded, at the cost of some parallelism on exactly the tests that would
-# otherwise fight for memory bandwidth anyway.
-#
-# The filter names `user_commitment_registration` explicitly: it proves via
-# snarkjs like the others but its name matches none of the generic patterns, so
-# without it that test would trip the 30 s slow warning every run and train
-# everyone to ignore the warning.
-filter = 'test(/prove|n16|roundtrip|user_commitment_registration|deposit_with_proof|merge_verify/)'
+# `binary(...)`, not `test(...)`: these are test-BINARY names. An earlier
+# revision listed `deposit_with_proof` and `merge_verify` inside a `test(/.../)`
+# pattern, which matches test NAMES — so both matched nothing and the two
+# heaviest proving binaries silently got no cap. Verified with
+# `cargo nextest list -E '<filter>'`, not assumed.
+filter = 'binary(prover_roundtrip) + binary(n16_assemble_prove_verify) + binary(prove_throughput_bench) + binary(valid_input_intake_verify) + binary(rapidsnark_roundtrip) + binary(match_batch_verify) + binary(zk_roundtrip) + binary(zk_spend_roundtrip) + binary(deposit_with_proof) + binary(merge_verify) + binary(user_commitment_registration)'
 threads-required = 4
+slow-timeout = { period = "120s", terminate-after = 4 }
+
+[[profile.default.overrides]]
+# SLOW but not memory-heavy: long Poseidon loops and a loadgen smoke run, no
+# proving key. They need the timeout raised so they do not warn on every run —
+# `merkle_host` alone takes ~60s and is the slowest thing in the suite — but
+# they must NOT take four slots each, which would throttle the run for no
+# memory benefit.
+#
+# Chosen from measured durations in a full run, not from name patterns. An
+# earlier revision guessed with a loose `prove` substring, which over-matched
+# trivial `prover::*` unit tests (charging 4 slots to a 1 ms test) while missing
+# every binary listed here.
+filter = 'binary(merkle_host) + binary(merkle_fuzz) + binary(smoke)'
 slow-timeout = { period = "120s", terminate-after = 4 }

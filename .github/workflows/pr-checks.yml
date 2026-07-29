@@ -224,9 +224,13 @@ jobs:
       needs.changes.outputs.rust == 'true'
     timeout-minutes: 25
     steps:
+      # NO `submodules: recursive` here, deliberately. Other jobs need the
+      # icicle-snark submodule because cargo must resolve the darknyx-tee
+      # workspace; this job never runs cargo against the workspace — it compiles
+      # circom circuits and installs the circom binary from a SEPARATE clone in
+      # /tmp. Cloning the submodule cost ~20 s of a ~60 s job, which is more than
+      # the circuit build it wraps.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          submodules: recursive  # darknyx-tee's icicle-snark path dep is a git submodule; cargo workspace resolution needs its Cargo.toml
 
       - name: Install Rust 1.89.0 (for circom build)
         uses: dtolnay/rust-toolchain@451ce45ce31d200b52705aadd15ce75018b006de # 1.89.0 (a BRANCH upstream, so it moves — pin it)
@@ -279,7 +283,12 @@ jobs:
           # ignoring the compiler version or the JS lockfile would happily serve
           # artefacts built by a different toolchain. `circom-2.2.2` is the
           # version pinned in the install step below; bump both together.
-          key: circuit-build-${{ runner.os }}-circom-2.2.2-${{ hashFiles('circuits/*/circuit.circom', 'circuits/templates/*.circom', 'circuits/build/*/circuit_final.zkey', 'scripts/ci-build-circuits.sh', 'package-lock.json') }}
+          #
+          # `circuits/**/*.circom` rather than a per-directory glob: the narrower
+          # form happened to cover all 12 sources today, but a new helper or
+          # include added beside a circuit would silently fall outside it and the
+          # cache would then serve artefacts built from different sources.
+          key: circuit-build-${{ runner.os }}-circom-2.2.2-${{ hashFiles('circuits/**/*.circom', 'circuits/build/*/circuit_final.zkey', 'scripts/ci-build-circuits.sh', 'package-lock.json') }}
 
       - name: Build circuits (wasm only; zkeys from repo)
         if: steps.cache-circuit-build.outputs.cache-hit != 'true'
@@ -288,25 +297,56 @@ jobs:
       # A cache hit must still produce everything downstream consumes. Checked
       # explicitly rather than trusted: a partial restore would let the TEE job
       # start and fail deep inside a proof test instead of here.
+      #
+      # The expected set is DERIVED FROM THE BUILD SCRIPT, not hardcoded here.
+      # `ci-build-circuits.sh` deliberately compiles only the client circuits —
+      # `match_batch_n2/n4/n16` need pot18 (~288 MB) and are excluded, so those
+      # directories legitimately carry the committed `circuit_final.zkey` and
+      # nothing else. An earlier revision demanded wasm+r1cs from EVERY directory
+      # and so asserted an invariant CI never satisfies: it could only ever fail,
+      # and did on the first real cache hit. Reading the same source of truth the
+      # build reads keeps the two from drifting again.
       - name: Verify restored artefacts are complete
         if: steps.cache-circuit-build.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
+          # Read into an ARRAY rather than relying on unquoted word-splitting:
+          # correct in bash, but silently a single blob in shells that do not
+          # split (zsh), which made a local rehearsal of this check produce
+          # nonsense. Explicit beats shell-dependent.
+          mapfile -t built < <(grep -E '^build_wasm [a-z0-9_]+' scripts/ci-build-circuits.sh | awk '{print $2}')
+          test "${#built[@]}" -gt 0 || {
+            echo "could not read the built-circuit list from scripts/ci-build-circuits.sh" >&2
+            echo "(the script's shape changed; this check cannot verify anything) " >&2
+            exit 1
+          }
           missing=0
-          for d in circuits/build/*/; do
-            name=$(basename "$d")
-            for f in circuit_js/circuit.wasm circuit_final.zkey circuit.r1cs; do
-              if [ ! -f "$d$f" ]; then
-                echo "MISSING $d$f" >&2
+          # Circuits the script compiles must have wasm + r1cs + zkey.
+          for name in "${built[@]}"; do
+            for f in circuit_js/circuit.wasm circuit.r1cs circuit_final.zkey; do
+              if [ ! -f "circuits/build/$name/$f" ]; then
+                echo "MISSING circuits/build/$name/$f" >&2
                 missing=1
               fi
             done
+          done
+          # Every other directory must still carry its committed proving key —
+          # the SDK match-batch prover tests consume it directly.
+          for d in circuits/build/*/; do
+            name=$(basename "$d")
+            skip=0
+            for b in "${built[@]}"; do [ "$b" = "$name" ] && skip=1; done
+            [ "$skip" = 1 ] && continue
+            if [ ! -f "$d/circuit_final.zkey" ]; then
+              echo "MISSING $d/circuit_final.zkey" >&2
+              missing=1
+            fi
           done
           test "$missing" = 0 || {
             echo "restored circuit cache is incomplete — rebuilding is safer than proceeding" >&2
             exit 1
           }
-          echo "restored circuit artefacts complete"
+          echo "restored circuit artefacts complete (built: ${built[*]})"
 
       # Upload the build output for the sdk job. Only the artefacts the
       # prover tests actually consume: `.wasm` and `.zkey`. We don't
