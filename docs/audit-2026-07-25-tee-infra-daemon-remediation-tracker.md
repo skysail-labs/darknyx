@@ -59,9 +59,9 @@ the first stop for an agent resuming the work.
 | Last merged remediation PR | #90 — slice-8 multi-market oracle isolation, merge commit `d69248b`, merged 2026-07-31. |
 | Active slice | none |
 | Active branch / PR | none |
-| Next slice | D-04 program-upgrade monitoring, then independent A-3 layout assurance, in [`audit-residual-backlog.md`](audit-residual-backlog.md); T-03 remains explicitly deferred to its mainnet/external-user trigger |
+| Next slice | DEP-01 `ruint` advisory remediation first, then D-04 program-upgrade monitoring and independent A-3 layout assurance, in [`audit-residual-backlog.md`](audit-residual-backlog.md); T-03 remains explicitly deferred to its mainnet/external-user trigger |
 | Live state | **No CVM running; billing halted** after the final-source slice-8 isolation/recovery spot-check (2026-07-30). `nightly-test-cvm` was verified CPU-only (`tdx.xlarge`, prod9, 8 vCPU, `gpus=0`) and ran image `tee-v3-hardening-79` @ `sha256:eb4987ea06a2c9d59952526a36ff34dc730f454e630c59a4b5fb6eee20cdb4f9`, compose hash `03d2d99ac660ca307f3f96f4769f47b887032d288a0f76d74c51d01e276c3764`. Both real oracle feeds were restored before shutdown. No order was accepted and no proof/settlement ran; tree, program, and signer state are unchanged. The mode-0600 deploy env was securely deleted. PRIOR (slice 5): image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436`; devnet tree holds only the final `cvm-merge-then-order` test's leaves. Signer set unchanged; all four shards funded. |
-| Last updated | 2026-07-31 (slice 8 merged and tracker reconciled into the canonical residual backlog) |
+| Last updated | 2026-07-31 (slice 8 merged; trackers reconciled; fresh dependency scan surfaced DEP-01 in the canonical residual backlog) |
 
 ### Slice 1 live evidence — 2026-07-27
 
