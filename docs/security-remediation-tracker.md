@@ -13,6 +13,11 @@ runbooks have landed.
 
 ## Later audit trackers
 
+The canonical entry point for **all work that still remains**, including
+external gates, measurement-gated work, and accepted risks, is
+[`audit-residual-backlog.md`](audit-residual-backlog.md). This tracker remains
+the evidence ledger for its finding family.
+
 The 2026-07-25 TEE, infrastructure, oracle, and client-daemon review is tracked
 in its dedicated
 [`audit-2026-07-25-tee-infra-daemon-remediation-tracker.md`](audit-2026-07-25-tee-infra-daemon-remediation-tracker.md).
