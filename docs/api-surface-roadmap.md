@@ -32,13 +32,13 @@ Two facts flow from this and gate the whole roadmap:
 |---|---|---|---|
 | Auth (bearer) | `POST /auth/token`, `/revoke` | ✅ | — |
 | Place / Cancel / Get order | ✅ | ✅ `POST /orders`, `DELETE`/`GET /orders/:id` | — |
-| **Modify order** | `op: order.modify` | ❌ | **add — Tier 2 (A5)** |
+| **Modify order** | `op: order.modify` | ✅ REST + `/v1/stream` | **✅ done (Tier 2, A5)** |
 | Mass-quote (batch cancel-replace) | `POST /orders/mass-quote` (Prime/Apex) | ❌ | **shelved** (§5) |
 | Settlement status | ✅ | ✅ `/settlement/status/:batch` | — |
 | Account / Instruments | ✅ | ✅ | — |
 | Transparency / proof-of-reserves | (stats) | ✅ `/transparency` (we're ahead) | — |
-| **System/degraded status** | `/system-status` | ❌ | **add — Tier 1 (A4)** |
-| **Server time** | "Server Time" | ❌ | **add — Tier 1 (A2, `/time`)** |
+| **System/degraded status** | `/system-status` | ✅ `/system/status` plus per-instrument `trading_enabled` | **✅ done (Tier 1, A4; T-17 market isolation)** |
+| **Server time** | "Server Time" | ✅ `/time` | **✅ done (Tier 1, A2)** |
 | Positions / tiers / referrals | ✅ (perp) | N/A | not a gap |
 
 ## 2. WebSocket
@@ -51,10 +51,10 @@ Two facts flow from this and gate the whole roadmap:
 | External market data | `/ws/gomarket` | ❌ (oracle is internal) | not planned |
 | Fills | (part of orders) | ✅ `/v1/stream` `fills` channel (per-account, Vuln-4 integrity check) | — |
 
-**The biggest gap:** the matcher *already computes* `OrderUpdate`s (FullyFilled /
-PartiallyFilled / Cancelled / Expired, `darkpool-matcher/src/book.rs`) and **drops them**
-after mutating the book. Clients today only see fills + poll `GET /orders/:id`. Streaming
-those updates reuses the existing per-account `fills_router` fan-out almost verbatim.
+The matcher-produced `OrderUpdate`s (FullyFilled / PartiallyFilled / Cancelled /
+Expired, `darkpool-matcher/src/book.rs`) are now delivered on the authenticated
+per-account `/v1/stream` `orders` channel. Clients no longer need to infer every
+lifecycle transition by polling `GET /orders/:id`.
 
 ## 3. Order types & execution attributes
 
@@ -62,11 +62,11 @@ those updates reuses the existing per-account `fills_router` fan-out almost verb
 |---|---|---|---|
 | Limit / IOC / FOK | ✅ | ✅ `OrderType::{Limit, Ioc, Fok}` | — |
 | GTC | ✅ | ✅ (Limit rests) | — |
-| GTT / GTD (time expiry) | ✅ | ✅ via `expiry_slot` | **SDK sugar — Tier 1 (A2)** |
+| GTT / GTD (time expiry) | ✅ | ✅ via `expiry_slot` + SDK builder | **✅ done (Tier 1, A2)** |
 | Min-fill size | ✅ | ✅ `min_fill_qty` | — |
-| **All-or-None (resting)** | ✅ | ⚠️ implicit: `min_fill_qty == amount` (already honored, `algorithm.rs:303-310`) | **SDK helper + doc — Tier 1 (A2)** |
-| **Market** | ✅ | ⚠️ ≈ IOC at a `price_limit` cap | **SDK sugar — Tier 1 (A2)** |
-| **Self-trade prevention** | 3 modes | ❌ **stub** (`matcher/selftrade.rs` TODO) — self-pairs can wash-trade | **implement baseline — Tier 1 (A3)** |
+| **All-or-None (resting)** | ✅ | ✅ `min_fill_qty == amount` + SDK helper | **✅ done (Tier 1, A2)** |
+| **Market** | ✅ | ✅ IOC with a required price cap | **✅ done (Tier 1, A2)** |
+| **Self-trade prevention** | 3 modes | ✅ owner-commitment baseline appropriate to a batch auction | **✅ done (Tier 1, A3)** |
 | Peg-to-mid/bid/ask | ✅ | ❌ | **shelved** (§5) |
 | Post-only | ✅ | ❌ | **shelved** (§5 — semantic mismatch) |
 | Reduce-only / TP-SL | ✅ (perp) | N/A | not a gap |
