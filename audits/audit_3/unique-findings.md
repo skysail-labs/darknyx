@@ -1,10 +1,19 @@
+<!-- audit-record -->
+> **Audit:** Unique-findings pass  
+> **Date:** 2026-07-18  
+> **Engagement:** `audits/audit_3/`  
+> **ID prefix:** `U-`  
+> **Cross-audit status:** see [`residual-backlog.md`](../residual-backlog.md) — the canonical index of what is still open.
+
+---
+
 # Unique findings — 2026-07-18 cryptography/systems pass
 
 > **Purpose.** Delta inventory: vulnerabilities and efficiency notes from the
 > 2026-07-16/18 defensive self-audit that are **not already tracked** in
-> [`audit-2026-07-14-cryptography-systems-review.md`](./audit-2026-07-14-cryptography-systems-review.md)
+> [`cryptography-systems-review.md`](cryptography-systems-review.md)
 > (CS-01…CS-14, P-01…P-04) or
-> [`audit-2026-07-14-followup-sweep.md`](./audit-2026-07-14-followup-sweep.md)
+> [`followup-sweep.md`](followup-sweep.md)
 > (N-01…N-19 and closed prior art).
 >
 > **Method.** Each candidate from that pass was compared by **failure mode**,

@@ -1,3 +1,12 @@
+<!-- audit-record -->
+> **Audit:** Closure tracker  
+> **Date:** 2026-07-14 → ongoing  
+> **Engagement:** `audits/audit_3/`  
+> **ID prefix:** `CS-`, `P-`, `N-`, `U-`  
+> **Cross-audit status:** see [`residual-backlog.md`](../residual-backlog.md) — the canonical index of what is still open.
+
+---
+
 # Darknyx security remediation tracker
 
 This is the closure ledger for the independently validated findings in the
@@ -15,12 +24,12 @@ runbooks have landed.
 
 The canonical entry point for **all work that still remains**, including
 external gates, measurement-gated work, and accepted risks, is
-[`audit-residual-backlog.md`](audit-residual-backlog.md). This tracker remains
+[`../residual-backlog.md`](../residual-backlog.md). This tracker remains
 the evidence ledger for its finding family.
 
 The 2026-07-25 TEE, infrastructure, oracle, and client-daemon review is tracked
 in its dedicated
-[`audit-2026-07-25-tee-infra-daemon-remediation-tracker.md`](audit-2026-07-25-tee-infra-daemon-remediation-tracker.md).
+[`../audit_6/tracker.md`](../audit_6/tracker.md).
 That document is canonical for `T-01…T-16`, `PF-08…PF-10`, and its additional
 release-readiness deliverables. T-05 is an explicitly accepted `Won't Fix`
 risk, and AU-07 remains canonically owned by the earlier July 25 tracker while
@@ -81,7 +90,7 @@ being a required transport-remediation dependency there.
 ## Unique findings — 2026-07-18 delta pass
 
 Delta backlog from the 2026-07-18 defensive self-audit
-(`docs/audit-2026-07-18-unique-findings.md`), remediated first on
+(`audits/audit_3/unique-findings.md`), remediated first on
 `remediation/audit-2026-07-18-unique` and then revalidated/followed up on
 `remediation/audit-2026-07-18-residuals`. All were validated genuine against
 the relevant `main` before fixing.
@@ -1523,6 +1532,6 @@ Every remediation PR must record:
   supported DNS provider). Both options, their costs, the DNS migration
   playbook, the resume triggers, and the CVM-window/ceremony sequence are
   recorded in the slice-3 section of
-  [`audit-2026-07-25-tee-infra-daemon-remediation-tracker.md`](audit-2026-07-25-tee-infra-daemon-remediation-tracker.md).
+  [`../audit_6/tracker.md`](../audit_6/tracker.md).
   The user-facing documentation was corrected in the same change; do not let it
   drift back to claiming in-enclave TLS before the code provides it.

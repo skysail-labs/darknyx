@@ -1,7 +1,16 @@
+<!-- audit-record -->
+> **Audit:** TEE, infrastructure + daemon review  
+> **Date:** 2026-07-25  
+> **Engagement:** `audits/audit_6/`  
+> **ID prefix:** `T-`, `PF-08…PF-10`  
+> **Cross-audit status:** see [`residual-backlog.md`](../residual-backlog.md) — the canonical index of what is still open.
+
+---
+
 # Darknyx TEE infrastructure, oracle, and client-daemon review — 2026-07-25 (pass 2)
 
 > **Scope.** Second pass, covering the surfaces the same-day
-> `audit-2026-07-25-withdraw-intake-boundary-review.md` §5 listed as **not
+> `../audit_5/withdraw-intake-boundary-review.md` §5 listed as **not
 > audited**: the oracle stack (`oracle/*`), the auth surface (`api/auth.rs`),
 > prover FFI (`prover/rapidsnark_sys.rs`), persistence, the Merkle mirror/sync,
 > the Solana RPC client, stream/rate-limit transports, deployment
@@ -13,7 +22,7 @@
 > `C-` (07-12), `F-` (audit_1).
 >
 > **Addendum 2026-07-27 — `T-11…T-15` (§7).** A verification pass over
-> `docs/audit-2026-07-25-remediation-tracker.md` confirmed every `S-`/`PF-`/`AU-`
+> `audits/audit_5/tracker.md` confirmed every `S-`/`PF-`/`AU-`
 > fix is genuinely implemented and passing, and surfaced five **assurance** gaps:
 > the remediation tests exist but several of them are not durably gated. These
 > are recorded here rather than in the tracker because they are defects in the
@@ -979,7 +988,7 @@ durably gated. See §7.
 
 ## 7. Verification-pass addendum — 2026-07-27
 
-A pass over `docs/audit-2026-07-25-remediation-tracker.md` to confirm the rows
+A pass over `audits/audit_5/tracker.md` to confirm the rows
 marked complete are actually complete. Each finding was re-derived from the
 code rather than read from the tracker prose, then the full gate was run.
 
@@ -1247,7 +1256,7 @@ the tracker row.
 
 ### 7.2 Tracker record corrections
 
-Bookkeeping in `docs/audit-2026-07-25-remediation-tracker.md`, separate from the
+Bookkeeping in `audits/audit_5/tracker.md`, separate from the
 findings above. Each was verified against the code or the merge history.
 
 | # | Row | Says | Actually | Action |
