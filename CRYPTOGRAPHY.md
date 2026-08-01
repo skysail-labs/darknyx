@@ -1421,7 +1421,11 @@ Handler:
    the supplied market enabled with a nonzero scale, recompute
    `Poseidon8(28, fee, owner, base_lo, base_hi, quote_lo, quote_hi, scale)`, and
    verify the Groth16 over `[root, config_digest]` against
-   `vk_match_batch_n16` via `verify_groth16_proof::<2>`. Binding the governed
+   `vk_match_batch_n16` via `verify_groth16_proof::<2>`. Note the asymmetry:
+   this is the ONLY settle-path instruction that reads `MarketConfig`, so
+   disabling a market blocks new batches here while `tee_forced_settle_batched`
+   keeps settling ones already verified, until their marker expires. See
+   [`docs/governance.md`](docs/governance.md) §7. Binding the governed
    preimage here is what makes the circuit's exact-fee, fee-note, mint, and
    scaled-price constraints enforce the protocol's actual config.
 3. Init `BatchValidityMarker { payer, derived_expiry_slot, bump }`.

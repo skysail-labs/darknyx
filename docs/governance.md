@@ -33,6 +33,13 @@ custody; `admin` → rotate the TEE signer to an attacker-controlled key). A
 single leaked key = game over. Split quorums separate frequent operations from
 the colder authority that can replace code or the protocol root.
 
+The operations admin also holds the **market kill switch**
+(`update_market_config` → `enabled = false`). Read **§7** before reaching for it
+during an incident: it stops the market being *admitted to and matched*, but an
+already-verified batch keeps settling until its marker expires (≤ 300 slots).
+That bound is deliberate — aborting mid-flight would strand collateral the batch
+has already locked on-chain.
+
 ---
 
 ## 1. What each authority can actually do
@@ -191,7 +198,57 @@ rotation.
 
 ---
 
-## 7. Threat coverage summary
+## 7. What the market kill switch actually promises
+
+`update_market_config` can set `MarketConfig.enabled = false`. It is the fastest
+governance lever available, so it is worth stating precisely what it does and
+does not stop — the semantics are load-bearing during an incident, and until now
+they were unwritten.
+
+**`disabled` means "stop admitting and matching". It does not mean "stop
+settling".**
+
+Three layers respond, on three different timescales:
+
+| Layer | Effect of `enabled = false` | Timing |
+|---|---|---|
+| TEE governance monitor (`main.rs::spawn_governance_monitor`) | Any `MarketConfig` drift — including `enabled` — fails `permits_trading`, so the trading gate pauses. New place/modify and matching stop; cancel and reconciliation stay available. | Within one refresh, ≤ `GOVERNANCE_REFRESH_INTERVAL` (60 s) |
+| `verify_match_batch` | `require!(market.enabled, VaultError::MarketDisabled)`. No **new** batch can be admitted on-chain, whatever the TEE believes. | Immediate, next slot |
+| `tee_forced_settle_batched` | Reads **no** `MarketConfig` at all. Batches already verified before the flip keep settling. | Until the batch's marker expires — bounded by `MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS` = **300 slots** (~2 min) |
+
+So the worst-case window between disabling a market and the last possible
+settlement on it is the remaining life of any already-written
+`BatchValidityMarker`: at most 300 slots, and normally far less because the
+settle worker drives a batch through within seconds of verifying it.
+
+**This is deliberate, not an oversight.** By the time `verify_match_batch` has
+succeeded, that batch's inputs are already pinned on-chain: `NoteLock` PDAs are
+held, the `BatchValidityMarker` is written, and the notes are unspendable through
+`withdraw` or `merge` until they expire. Aborting settlement at that point would
+not protect anyone — it would strand real user collateral in a locked state with
+no path to release before `MAX_LOCK_TTL_SLOTS`, converting a governance pause
+into a user-funds freeze. Letting an already-verified batch complete returns the
+collateral to its owners as outputs, which is the outcome a disable is trying to
+reach in the first place.
+
+**Operationally**, this means a disable is a clean stop for *new* risk and a
+short, bounded drain for *existing* risk. If an incident requires that in-flight
+batches never land, `enabled = false` is not the tool — the marker window has to
+run out, or the TEE signer set has to be rotated out of
+`vault_config.tee_pubkeys` so the settle transaction can no longer be authorized
+at all. Rotation is the harder lever and the one that actually stops a settle
+mid-flight; it also strands the locked collateral until expiry, which is why it
+is the incident-only option.
+
+> Reopen this as a code item only if governance decides in-flight batches must
+> abort. That would require `tee_forced_settle_batched` to take and check
+> `MarketConfig`, which costs an account in the settle transaction — see
+> `CRYPTOGRAPHY.md` §9, where Tx D has ~123 bytes of headroom — and an explicit
+> decision about what happens to the collateral it leaves locked.
+
+---
+
+## 8. Threat coverage summary
 
 | Threat | Single-key (today, devnet) | Multisig (F-10 target) |
 |---|---|---|
