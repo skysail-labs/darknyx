@@ -1,7 +1,7 @@
 # audit_2 — validated residual backlog (2026-07-14)
 
 > **What this is.** An independent re-verification of the follow-up sweep
-> [`docs/audit-2026-07-14-followup-sweep.md`](../docs/audit-2026-07-14-followup-sweep.md)
+> [`audits/audit_3/followup-sweep.md`](../audit_3/followup-sweep.md)
 > against the actual code on `main` (tip `24fbf18`, after PR #30–#37). Every new
 > finding **N-01…N-19** and every "Closed" remediation claim was checked at its
 > code anchor — code is ground truth, not the sweep's prose. This file is the
@@ -260,7 +260,7 @@ Mirrors the sweep's §5; not blockers for the backlog above:
 
 ---
 
-*Compiled 2026-07-14 by re-verifying `docs/audit-2026-07-14-followup-sweep.md`
+*Compiled 2026-07-14 by re-verifying `audits/audit_3/followup-sweep.md`
 against `main@24fbf18`. This is a defensive self-audit of first-party code for
 remediation planning — not a third-party formal audit certificate. Append
 `Closed YYYY-MM-DD / PR #NN` under each finding as it lands.*

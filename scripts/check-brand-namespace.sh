@@ -12,10 +12,7 @@ set -euo pipefail
 # the GPU runbook. The negative lookahead allows exactly that token and nothing
 # else — `nyx-anything-else` is still rejected. See docs/brand-namespace.md.
 if matches=$(git grep -nI -P '\b(?:Nyx|NYX|nyx)(?!_ICICLE_CUDA_ARCH)' -- \
-  ':!audit_1/**' \
-  ':!audit_2/**' \
-  ':!docs/audit-*.md' \
-  ':!docs/security-remediation-tracker.md' \
+  ':!audits/**' \
   ':!docs/brand-namespace.md' \
   ':!packages/sdk/tests/fixtures/dstack-eventlog.json' \
   ':!.gitmodules' \

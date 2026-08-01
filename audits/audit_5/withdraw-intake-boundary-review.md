@@ -1,3 +1,12 @@
+<!-- audit-record -->
+> **Audit:** Withdraw + intake boundary review  
+> **Date:** 2026-07-25  
+> **Engagement:** `audits/audit_5/`  
+> **ID prefix:** `S-`, `PF-01…PF-07`  
+> **Cross-audit status:** see [`residual-backlog.md`](../residual-backlog.md) — the canonical index of what is still open.
+
+---
+
 # Darknyx cryptography, systems, and performance review — 2026-07-25
 
 > **Scope.** Defensive, first-party pre-mainnet review of the devnet-stage

@@ -1,7 +1,16 @@
+<!-- audit-record -->
+> **Audit:** Follow-up sweep  
+> **Date:** 2026-07-14  
+> **Engagement:** `audits/audit_3/`  
+> **ID prefix:** `CS-`/`N-`/`P-` re-verification  
+> **Cross-audit status:** see [`residual-backlog.md`](../residual-backlog.md) — the canonical index of what is still open.
+
+---
+
 # Audit follow-up sweep — 2026-07-14
 
 > **Purpose.** Verify remediation of every item in
-> [`audit-2026-07-12-findings-inventory.md`](./audit-2026-07-12-findings-inventory.md)
+> [`findings-inventory.md`](findings-inventory.md)
 > against current `main`, then deep-audit surfaces that the July-12 pass
 > **explicitly left unreviewed** (inventory Part C). Produce a new residual
 > backlog for mainnet readiness.

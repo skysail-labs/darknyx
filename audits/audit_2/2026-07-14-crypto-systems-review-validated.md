@@ -1,7 +1,7 @@
 # audit_2 — cryptography/systems review, validated (2026-07-14)
 
 > **What this is.** An independent re-verification of
-> [`docs/audit-2026-07-14-cryptography-systems-review.md`](../docs/audit-2026-07-14-cryptography-systems-review.md)
+> [`audits/audit_3/cryptography-systems-review.md`](../audit_3/cryptography-systems-review.md)
 > against the code on `main@24fbf18`. Every finding (CS-01…CS-14, P-01…P-04)
 > was checked at its anchor — code is ground truth, not the report's prose.
 >
@@ -269,7 +269,7 @@ Companion to [`2026-07-14-validated-residual-backlog.md`](./2026-07-14-validated
 
 ---
 
-*Compiled 2026-07-14 by re-verifying `docs/audit-2026-07-14-cryptography-systems-review.md`
+*Compiled 2026-07-14 by re-verifying `audits/audit_3/cryptography-systems-review.md`
 against `main@24fbf18`. Defensive self-audit for remediation planning — not a
 third-party formal audit certificate. Append `Closed YYYY-MM-DD / PR #NN` as each
 lands.*

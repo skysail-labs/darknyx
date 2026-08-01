@@ -1,3 +1,12 @@
+<!-- audit-record -->
+> **Audit:** Full-protocol deep dive  
+> **Date:** 2026-07-20  
+> **Engagement:** `audits/audit_4/`  
+> **ID prefix:** `D-`  
+> **Cross-audit status:** see [`residual-backlog.md`](../residual-backlog.md) — the canonical index of what is still open.
+
+---
+
 # Full-protocol deep dive — 2026-07-20
 
 > **Scope.** First-party defensive review of the current Darknyx stack on
@@ -48,7 +57,7 @@ shape for proof-bound parameters.
 |---|---|
 | CS-01…CS-03 class (aggregate fees, free mints, free inners) | Remediated (per-match fees, 8 PIs, derived inners) |
 | C-01…C-05, C-08, N-03, N-04, N-05 IDOR, etc. | Closed per July-14 follow-up + later PRs |
-| U-01…U-10 | Closed / Won't Fix as documented in `audit-2026-07-18-unique-findings.md` |
+| U-01…U-10 | Closed / Won't Fix as documented in `../audit_3/unique-findings.md` |
 | Exact fee (C-04), oracle accumulator (C-05) | Present |
 | Price fairness / limit / TWAP band in-circuit | **Accepted TEE-trust** (CRYPTOGRAPHY.md) |
 | Dev Groth16 setup, no on-chain DCAP, single-sig admin | **Process open** N-18 / N-19 / F-04 — not re-derived |

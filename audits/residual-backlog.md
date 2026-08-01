@@ -1,0 +1,583 @@
+# Darknyx residual audit and release backlog
+
+**As of:** 2026-08-02
+
+**Validated against:** `main` @ `d69248b` (PR #90 merged), plus the 2026-08-01
+client-attestation pass and the 2026-08-02 un-audited-surface sweep
+
+This is the canonical entry point for work that remains after the Darknyx
+security, protocol, TEE, infrastructure, daemon, and performance reviews. It
+does not replace the evidence-rich source trackers: those remain the closure
+ledgers for their finding families. This document answers the narrower
+question: **what still needs action, what is deliberately waiting on a trigger,
+and what has been accepted and must not be reopened without new evidence?**
+
+When this index and an older audit's original status disagree, use the newest
+validated tracker for that finding family and then this index. An `Open` label
+in an original point-in-time report is not proof that the issue still exists.
+
+## Sources reconciled
+
+This pass reconciled the tracked July 14 cryptography/systems review and
+independent validation, the July 18 unique-finding pass, the July 20
+full-protocol deep dive, both July 25 reviews, both July 25 remediation
+trackers, the August 1 client-attestation review, the August 2 un-audited-surface
+sweep, and the central security tracker. It also swept the throughput, GPU,
+multi-market, and public-API
+roadmaps so conditional engineering was not mistaken for an unresolved
+vulnerability.
+
+**Layout note (2026-08-02).** All audit material now lives under `audits/`, one
+directory per engagement, with dates recorded inside each document's
+`audit-record` header rather than in filenames. See
+[`README.md`](README.md) for the layout and how to build a tracker, and
+[`AUDIT_AGENT_ONBOARDING.md`](AUDIT_AGENT_ONBOARDING.md) for the next audit.
+
+Historical reports remain immutable point-in-time evidence. Their superseding
+ledgers are:
+
+- [`audit_3/tracker.md`](audit_3/tracker.md) for
+  `CS-`, `P-`, `N-`, and `U-` findings;
+- [`audit_5/tracker.md`](audit_5/tracker.md)
+  for `S-`, `PF-01…PF-07`, and `AU-` findings;
+- [`audit_6/tracker.md`](audit_6/tracker.md)
+  for `T-`, `PF-08…PF-10`, and related release deliverables;
+- [`audit_7/client-attestation-review.md`](audit_7/client-attestation-review.md)
+  for `CA-` findings and for the repository-wide un-audited surface inventory;
+- [`audit_7/unaudited-surface-sweep.md`](audit_7/unaudited-surface-sweep.md)
+  for `SW-` findings and the post-sweep coverage/carry-forward map;
+- this document for the formerly orphaned `A-3` and `D-01…D-09`
+  dispositions and for the cross-tracker residual view.
+
+Shelved product features such as mass quote, peg orders, and post-only are not
+audit findings and are intentionally left in
+[`api-surface-roadmap.md`](../docs/api-surface-roadmap.md), not mixed into this
+security backlog.
+
+## Status meanings
+
+- **Open:** actionable now; the required invariant or evidence is missing.
+- **External gate:** supporting repository work may be ready, but independent
+  people, governance, ceremony, or deployment evidence is still required.
+- **Measurement-gated:** the mechanism is real, but changing production without
+  the named measurement would be speculative.
+- **Deferred:** intentionally waits for a concrete platform or product trigger.
+- **Accepted risk / Won't Fix:** no work is authorized under the present threat
+  model. Reopen only if the recorded assumption changes or new evidence changes
+  the risk.
+- **Closed / Refuted:** retained here only when an old report would otherwise
+  send a future agent toward obsolete work.
+
+## Executive answer
+
+**Three unresolved high-priority code-remediation findings remain: `SW-07`
+(Critical), `CA-01` (Critical), and `SW-01` (High).**
+
+`SW-07` is the most urgent. The Merkle-mirror sync decodes Anchor events from a
+transaction's logs without attributing them to the vault program, so **any
+program can forge a leaf** into the enclave's mirror for the price of one
+transaction — permanently corrupting the root that `/tree/inclusion`, S-02
+intake checks, and `/tree/leaves` all depend on, and halting both intake and
+settlement with no in-band recovery. Divergence is detected but explicitly
+non-fatal.
+
+`SW-01` is a **live credential exposure**: the Solana RPC client formats its own
+endpoint — which carries the Helius API key as a query parameter — into the error
+it raises on any non-success HTTP status, and that string reaches a settle job's
+`failed_reason`, which `GET /settlement/status/{batch_id}` serves to any
+authenticated account. **Treat the currently-provisioned Helius key as disclosed
+and rotate it.** Found by the 2026-08-02 sweep of previously unread surfaces.
+
+**`CA-01`.** The
+2026-08-01 client-attestation pass — the first to read
+`packages/sdk/src/tee/verify-core.ts` rather than infer it from the daemon's
+call pattern — found that compose-hash measurement pinning is bypassable by an
+operator who controls the gateway response. Until it ships, the attestation
+guarantee that underpins every accepted trust boundary in `CRYPTOGRAPHY.md` §2
+does not hold, and "compromised TEE" means *running modified code* rather than
+*breaking TDX*. It is ~1.5 days, needs no ceremony, CVM, or vault redeploy.
+
+Four mainnet/external-use gates remain: the independent circuit audit, public
+Phase-2 ceremony, split-governance rehearsal, and the T-03 session-bound
+transport decision/implementation.
+
+Besides the three above, the directly actionable items are **DEP-01**, a newly published
+RustSec advisory that now fails the dependency gate; **D-04**, which should
+pause trading when the deployed vault program is upgraded underneath a running
+CVM; and the older **A-3**, which still lacks a generated or cross-crate guard
+for hand-mirrored on-chain account layouts. **D-02** and **D-03** remain real
+liveness/capacity questions, but their next correct step is instrumentation and
+representative measurement, not an immediate TTL or account-layout change.
+
+**Read the structural classes first.** The 34 `SW-` findings and 16 `PF-` items
+collapse into **twelve recurring classes** (see the section below). Most of the
+engineering value is in fixing each class once across all its sites rather than
+closing rows individually — and in eight of the twelve, a file in this repo
+already implements the correct pattern, so the fix is "copy the neighbour"
+rather than a design exercise. The per-finding table that follows is the
+reference; the class table is the plan.
+
+**On unreviewed code.** The August 2 sweep cleared most of that backlog:
+`settle/worker.rs`, `settle/scheduler.rs`, `matcher/interval.rs`,
+`oracle/accumulator.rs` and `sync.rs`, the VAA quorum path, `merkle/mirror.rs`
+and `events.rs`, `solana_rpc/client.rs`, `config.rs`/`boot.rs`, the fills/orders
+routing, the SDK recovery path, the `prover/` encoders and FFI boundary, and —
+in the daemon slice — `daemon.ts`, `store.ts`, the lifecycle reducer and engine,
+both stream listeners, the settlement tracker, the merge runner, `keystore.ts`,
+`attestation.ts` and `control-api.ts`, and the client order-signing path read
+as one cluster against the TEE intake it is signed against, and the SDK's key
+derivation, fill encryption, seed-backup envelope, hand-coded on-chain wire
+layer and client proving/witness path have now been read. It produced one
+Critical (SW-07), one High (SW-01), twenty-eight smaller findings, and sixteen
+performance items — which together with CA-01 vindicates the premise: **every
+surface deferred on the reasoning that its callers looked correct has held a
+real finding when actually read.**
+
+Four items from those later slices are worth pulling forward. **SW-21**: an
+out-of-range `tree_id` — a field deliberately left out of the signed body —
+passes intake because `merkle_mirror` saturates to shard 0 instead of failing,
+then guarantees a `lock_note` failure at settle. Settlement is two-sided, so the
+counterparty's leg dies with it, which makes this a free and repeatable way to
+pick an honest maker off the book and ensure their fill never settles. One line
+fixes it. **SW-19**: the
+daemon's control plane is unauthenticated by default — `DARKNYX_DAEMON_CONTROL_TOKEN`
+is unset with no warning, and the auth check sits inside `if (controlToken)` —
+while exposing `POST /orders` and `POST /deposit`. Loopback binding does not stop
+the operator's browser: the body is parsed regardless of `Content-Type`, making a
+cross-origin `text/plain` POST a preflight-free CORS simple request, and with no
+`Host` check DNS rebinding makes `/notes`, `/balances` and the credential-bearing
+`/tee/*` proxy readable too. **SW-14**: the
+enclave writes the full private match witness — the amounts and owner
+commitments that amount-privacy P1b removed from the leaf and the settle payload
+— in plaintext to `/tmp` on every batch, because the default native circom
+witness generator is a subprocess that takes file paths. `/tmp` is the
+container's writable layer, not the single LUKS-encrypted volume the compose
+provisions for state, and the cleanup does not survive a crash. A `tmpfs` mount
+fixes it in fifteen minutes with no code change; land that regardless of the
+severity question. **SW-11**: the daemon has no reconciliation path after a
+stream gap or a restart, though four module comments describe one — the SDK's
+1011 lag signal is dropped because `daemon.ts` never passes `onResync`, and fill
+memos are the only in-band delivery of a change note's opening, so a lag
+disconnect silently strands residual notes in a UTXO view the daemon reports as
+complete. A one-hour mitigation (surface it and pause) is available ahead of the
+real fix. **Reinforced by the Batch M read**: `settle/recover.rs:34-42` records
+that the enclave deliberately does not restore resting orders — correctly, since
+an order is a signed intent bound to a nonce and boot session — on the stated
+premise that *"the daemon observes the terminal/restart state and submits a fresh
+signed order."* The daemon does not observe it. The two halves of the recovery
+contract do not meet, so SW-11 is the missing counterpart to a deliberate
+enclave-side decision rather than an isolated client bug.
+
+What remains unread is smaller and further from attacker-reachable input: the
+`packages/indexer`, the
+wider SDK, and the loadgen. The post-sweep carry-forward list is §4 of the
+August 2 sweep; the performance items are §2b; and §5 now records the three
+questions that reading the repository cannot answer — the most consequential
+being whether a dstack container overlay is on encrypted storage, which decides
+SW-14's severity.
+
+Everything else below is either conditional performance work, a future
+multi-cluster/GPU decision, or an explicitly accepted risk.
+
+## Structural classes — fix these as patterns, not as tickets
+
+The 34 `SW-` findings and 16 `PF-` items are not 50 independent defects. They
+collapse into **twelve recurring classes**, and most of the engineering value is
+in fixing each class once across all its sites rather than closing rows
+one at a time. Where a class has an in-repo counter-example — a file that already
+does it correctly — that file is named, because "copy the neighbour" is cheaper
+and safer than designing a fix.
+
+Classes are ordered by the severity of their worst member.
+
+### C1 — Unscoped event decoders (provenance, not parsing)
+
+| | |
+|---|---|
+| **Members** | **SW-07 (Critical)**, SW-24 (Low, 3 sites), **CA-01 (Critical)** |
+| **Root cause** | A decoder accepts input whose *origin* was never established. `"Program data: "` is `sol_log_data` output that any program can emit; a dstack event payload is only authoritative when its `event_type` says so. |
+| **Sites** | `merkle/events.rs:181-250`; `sdk/utxo/leaf-index.ts:54-80` and `:88-110`; `sdk/fills/chain-history.ts:77-80`; `sdk/tee/verify-core.ts:196-203`. |
+| **Counter-example in repo** | `sdk/fills/chain-history.ts:208-218` scopes **instruction** data correctly (`keys[ci.programIdIndex].equals(programId)`) — one function away from a decoder that does not. |
+| **Shared fix** | Track `Program <id> invoke`/`success` nesting and accept only vault-frame events; pass the program id into every decoder. For CA-01, check `event_type == DSTACK_RUNTIME_EVENT_TYPE` before trusting a payload-derived digest. |
+| **Why together** | One property, one test harness, four decoders. `audit_7/fuzzing-plan.md` Phase 1 is written against exactly this property and should ship with the fix as its acceptance criterion. Closing it in Rust while leaving TypeScript is how a pattern survives its own remediation. |
+| **Cost** | ~4 days for the class vs ~5.5 filed separately, and it removes both open Criticals. |
+
+### C2 — Gap occurred, nobody was told
+
+| | |
+|---|---|
+| **Members** | SW-11 (Medium), **SW-31 (Medium)** |
+| **Root cause** | Message loss is detected at one boundary and silently dropped at another. The 1011 resync contract covers a *slow client*; a slow **server-side router** drops upstream of the per-account channel, so no signal is ever generated. The daemon then discards even the signals that do arrive. |
+| **Sites** | `api/{fills_router.rs:29-31, order_router.rs:148-150}`; `daemon.ts:454-476` (no `onResync`). |
+| **Cheapest fix (found in Batch U)** | Move the sequence origin upstream. `sdk/orders/trading-ws-client.ts:203-218` **already** enforces continuity and fires `onSequenceGap`; it fails only because `stream.rs:267-273` stamps `seq` at socket-send time. Carrying a per-channel origin counter makes the existing client detector work with **no client change at all**. |
+| **Why together** | They are two halves of one contract. `settle/recover.rs:34-42` deliberately does not restore resting orders *on the stated premise* that the daemon observes restart state — which SW-11 shows it does not. Fixing one half alone leaves the contract broken. |
+| **Cost** | ~2 days combined (origin counter + daemon `onResync` wiring + reconcile), vs ~4 filed separately. |
+
+### C3 — Unbounded retention and eviction order
+
+| | |
+|---|---|
+| **Members** | SW-08 (Medium), SW-29 (Medium), SW-04 (Low), plus SW-31's `order_owner` leak |
+| **Root cause** | Two distinct habits: maps that are never pruned, and one map that prunes in *arbitrary* order (`keys().next()` on a `HashMap`). |
+| **Counter-examples in repo** | Insertion-ordered FIFO done right in `settle/metrics.rs:474-478` (`VecDeque::pop_front`) and in `submission_replay` (fixed under S-10). **Three correct implementations against one wrong.** |
+| **Shared fix** | A retention pass: prune on terminal transition (the `orders` channel already carries `fully_filled`/`expired`/`cancelled`), cap what remains, and standardise on insertion-ordered eviction. Never evict `Ambiguous`/`Pending` settle jobs — restart reconciliation is keyed to them. |
+| **Why together** | Same review question at every site ("what removes an entry, and in what order?"), same soak test to prove it (`job_count()`/`session_orders` plateau under sustained load). |
+| **Cost** | ~2.5 days for the class vs ~3.5 separately. |
+
+### C4 — Sequential per-account RPC
+
+| | |
+|---|---|
+| **Members** | PF-27 (**recovery critical path**), PF-20, PF-14 |
+| **Root cause** | An `await`ed single-account read inside a `for` loop, where `getMultipleAccounts` batches 100 per call. |
+| **Sites** | `settle/recover.rs:304-308,332` (boot, up to **3N** round-trips before the enclave resumes settling); `settle/lock_sweep.rs:229-231`; `daemon/settlement-tracker.ts:64-79`; `api/transparency.rs:167-172`. |
+| **Counter-example in repo** | `settle/submit.rs:408-425` already passes the whole slice to one `get_signature_statuses`. |
+| **Shared fix** | Batch through `getMultipleAccounts`; collapse signature checks into the slice call that already exists. No decision logic changes — `recover::decide()` is pure over `ConsumedState`. |
+| **Why together** | One idiom, four sites, one benchmark. PF-27's recovery half should be measured against `settlement-recovery-drill.md`'s existing end-to-end timings. |
+| **Cost** | ~1.5 days for all four. |
+
+### C5 — Detail leaking through free-form error strings
+
+| | |
+|---|---|
+| **Members** | **SW-01 (High)**, SW-20 (Low) |
+| **Root cause** | `api/error.rs` gives every constructor `m: impl Into<String>` rendered verbatim into `{code, message}`; the daemon's control API echoes `err.message` the same way. The `code` half is already a stable closed set. |
+| **Shared fix** | Keep the codes, close the messages: a fixed label plus a correlation id at both API boundaries, with detail going to logs. Add a redacted `Display` for the RPC endpoint so the credential cannot re-enter by another route. |
+| **Why together** | Same defect on both sides of the wire, and one regression test shape covers both: **no `api-key` substring may appear in any response body**. |
+| **Cost** | ~2 days combined. **Rotate the Helius key immediately and independently — it needs no code.** |
+
+### C6 — Comment-versus-code drift
+
+| | |
+|---|---|
+| **Members** | SW-30 (Info, 4 instances) plus the doc half of SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28 — **eight instances** |
+| **Root cause** | Module docs describe intended, retired, or planned behaviour as current: a promised eviction never built, a "keys never leave here" getter used at five call sites, `interval.rs` naming a function the enclave does not call, `canonical_payload_hash` called "shared" when it has four implementations, a revocation denylist described as in-memory after persistence landed. |
+| **Shared fix** | One doc-accuracy pass over module headers, done *after* the code fixes land so the two are corrected together rather than twice. |
+| **Why together** | This is the single most reliable finding-generator in the sweep — several code findings were located *because* a comment claimed something the code did not do. Treat the docs as an audit surface. |
+| **Cost** | ~1 day as a pass, versus being rediscovered by the next audit. |
+
+### C7 — Private witness confidentiality
+
+| | |
+|---|---|
+| **Members** | SW-14 (Medium; High if the container overlay is unencrypted), SW-32 (Medium, pre-merge PR #65) |
+| **Root cause** | The `.wtns`/`input.json` encodes the amounts and owner commitments that amount-privacy (P1b) removed from the leaf and payload — and it crosses two boundaries TDX does not cover: the container filesystem, and GPU device memory. |
+| **Shared fix** | A `tmpfs` mount plus `TMPDIR` covers **all three prover backends at once** (they share `snarkjs.rs::native_witness_wtns`). Require positive confidential-compute evidence before ICICLE accepts `CUDA`, failing closed. |
+| **Why together** | One witness, two escape routes, one owner. SW-32 is a merge condition on PR #65; landing SW-14's mount first means the GPU path inherits the fix. |
+| **Cost** | ~15 min (tmpfs) + ~0.5 day (CC gate). |
+
+### C8 — Work not validated before it is paid for
+
+| | |
+|---|---|
+| **Members** | SW-15 (Info, enclave), SW-26 (Low, SDK) |
+| **Root cause** | Prover output is trusted locally and only checked on-chain, so a backend or witness-assembly bug surfaces as `InvalidProof (6000)` — the exact signature CLAUDE.md §5 documents for a *circuit/VK lockstep* failure, sending the debugger to the wrong place. |
+| **Counter-examples in repo** | `prover/ark_prover.rs:249-270` and `prover/snarkjs.rs:121-153` both guard; `sdk/utxo/deposit.ts:164-171` guards **twice**. |
+| **Shared fix** | Validate curve points locally in the enclave; lift the deposit public-input check into `merge.ts` and `withdraw.ts` behind one shared helper so a fourth prove path cannot skip it. |
+| **Cost** | ~1 day combined. |
+
+### C9 — Unconstrained free fields
+
+| | |
+|---|---|
+| **Members** | SW-21 (Medium) |
+| **Root cause** | A field excluded from the signed body for good reason, then not range-checked at intake — combined with a saturating accessor (`merkle_mirror` falls back to shard 0) that hides the out-of-range case. |
+| **Precedent** | **S-04**, already fixed in `verify_match_batch.rs:82-99`: a free `expiry_slot` let any observer fail all N settles while 2N locks were already placed, for one transaction fee. The remedy chosen there was to *remove the degree of freedom*, not to authenticate the submitter — *"strictly LESS code than the two bounds it replaces."* |
+| **Shared fix** | Range-check at intake; make `merkle_mirror` return `Option` so the silent shard-0 fallback cannot bite a future caller. Do **not** add the field to the signed encoding — that is a lockstep change for what one line fixes. |
+| **Cost** | ~1 h + ~0.5 day for the accessor. |
+
+### C10 — Raw account reads without owner/discriminator checks
+
+| | |
+|---|---|
+| **Members** | SW-05 (Low) |
+| **Counter-examples in repo** | `settle/lock_sweep.rs:129-134`, `tee_forced_settle_batched.rs:367-377`, and the daemon's governance read (`daemon.ts:80-93` + `sdk/tee/vault-config.ts:39-75`) **all** check owner + discriminator + length. Three correct against one. |
+| **Shared fix** | Copy the neighbour: owner, discriminator, exact length, before parsing. |
+| **Cost** | ~0.5 day. |
+
+### C11 — Client crypto hygiene
+
+| | |
+|---|---|
+| **Members** | SW-16 (Low), SW-22 (Low), SW-23 (Info) |
+| **Root cause** | Three independent softenings of client-side custody: no file-mode check and no passphrase floor on the keystore, a backup KDF 8× weaker than the keystore protecting the same seed, and TypeScript silently reducing out-of-range field elements where Rust deliberately rejects them. |
+| **Counter-examples in repo** | `sdk/keys/master-seed-backup.ts:45-51` already enforces a 12-character passphrase floor on export *and* import — the exact guard the keystore lacks. `darkpool-crypto/src/field.rs:23-40` implements strict in-field semantics **explicitly for cross-env parity**. |
+| **Shared fix** | One client-custody slice: mode check + passphrase floor + narrowed seed getter, backup to N=2¹⁷ behind a `version: 3` envelope, and range-checks in `poseidonHashBytesBE`/`bytesToBigIntBE` with the suite's **first negative parity test**. |
+| **Cost** | ~1.5 days combined. |
+
+### C12 — Client data-access efficiency
+
+| | |
+|---|---|
+| **Members** | PF-18…PF-26 |
+| **Root cause** | Repeated full-table scans, per-call statement preparation, per-witness tree rebuilds, redundant key derivation, and an unbounded SSE buffer — all in the market maker's quoting hot path. |
+| **Counter-example in repo** | `prover/leaf.rs:119-122` already solved the tree-rebuild problem in Rust (`BatchMerklePaths`, with `internal_hash_count()` exposed to regression-test it); the daemon's `LocalMerkleTree` is the same shape awaiting the same fix. |
+| **Shared fix** | One daemon performance slice: SQL-side predicates behind indexes, a prepared-statement cache, level-retaining Merkle build, keypair reuse, SSE backpressure. |
+| **Cost** | ~3 days as a slice; individually they will never be scheduled. |
+
+### How to sequence the classes
+
+1. **C1** — removes both open Criticals and ships the fuzz property with them.
+2. **C5** — the High, plus rotate the Helius key *today*, independently.
+3. **C7** — 15 minutes of it (the `tmpfs`) is the best value in the whole list.
+4. **C9**, **C2** — cheap, and C2 has a fix that costs less than the finding suggested.
+5. **C3**, **C4** — retention and RPC batching; C4 shortens crash recovery.
+6. **C8**, **C10**, **C11**, **C12** — hygiene slices, each self-contained.
+7. **C6 last**, deliberately: correct the docs *after* the code moves, so both are fixed once.
+
+**Two items sit outside the classes and must not be lost in them:** the external
+circuit audit (**F-04**) — a clean generalist read is not an assurance artifact —
+and the fact that **nothing here is fixed yet**. Several of these fixes need a
+CVM run to verify, not merely a green local gate.
+
+## Release and external-use gates
+
+| ID             | Owner                            | Required outcome                                                                                                                                                                                                                                                                            | Status / trigger                                                                                                                                             | Closure evidence                                                                                                                                                                                                                                                  |
+| -------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-04 / C-07    | ZK + independent auditor         | Independent review of the final circuit source and artifacts has no unresolved Critical/High finding. Freeze the source only after all code remediation is complete.                                                                                                                        | **External gate — Open**                                                                                                                                     | Published report, exact source/artifact hashes, findings dispositions, and auditor sign-off.                                                                                                                                                                      |
+| N-18           | ZK + governance                  | Run a public Phase-2 ceremony for every production Groth16 zkey with at least five independent contributors, transcript and artifact hashes, final random beacon, reproducible verification, auditor artifact sign-off, and a post-ceremony CVM settlement.                                 | **External gate — Open**                                                                                                                                     | Ceremony transcript, contributor evidence, beacon, `snarkjs zkey verify`, regenerated VKs, auditor sign-off, and live settle evidence.                                                                                                                            |
+| N-19           | Governance + operations          | Rehearse split Squads control: cold 4-of-7 owns upgrade/root authority; operations 3-of-5 is `VaultConfig.admin`; every TEE-key rotation is independently attestation-verified.                                                                                                             | **External gate — In progress**                                                                                                                              | Rehearsal transaction set, authority/account inspection, attestation records, recovery/rotation drill, and signer runbook.                                                                                                                                        |
+| T-03           | TEE + SDK + infrastructure       | Bind the verified enclave identity to the client transport session and govern every component that can terminate or forward the connection. The original “plaintext operator gateway” premise was disproved; the residual is unpinned gateway measurement plus no quote-to-session binding. | **Deferred mainnet/external-user gate.** Re-enter before issuing access outside the operating team, accepting real value, or committing to a browser client. | One of the two costed designs in the TEE tracker: in-enclave RA-TLS for programmatic clients, or attested ingress with governed DNS/certificate handling for browsers; latency/RSS measurements, client negative tests, image pin, attestation, and CVM ceremony. |
+| Release bundle | Release engineering + governance | Build without `devnet-admin`; prove destructive instructions absent; independently verify deployed program hash and all authorities; attach recovery drill, transaction-size/CU headroom, dependency audit, and final CVM evidence.                                                         | **External gate — Open until the production candidate exists.**                                                                                              | Reproducible production build and hashes, deployed-program inspection, authority inventory, closed trackers, recovery evidence, and signed release checklist.                                                                                                     |
+
+Source: [`audit_3/tracker.md`](audit_3/tracker.md)
+and
+[`audit_6/tracker.md`](audit_6/tracker.md).
+
+## Actionable and measurement-gated residual findings
+
+| ID     | Severity                                       | Owner                             | Current invariant / next implementation                                                                                                                                                                                                                                                                                                                 | Status and closure evidence                                                                                                                                                                                                                                                                                                                      |
+| ------ | ---------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CA-01 | **Critical** | SDK + daemon attestation | Restore compose-hash measurement binding. `composeHashFromEventLog` (`packages/sdk/src/tee/verify-core.ts:196-203`) selects the compose-hash event on `imr` + `event` name only. dstack derives an event's RTMR digest from its payload **only** when `event_type == DSTACK_RUNTIME_EVENT_TYPE` (`dstack/cc-eventlog/src/tdx.rs:69-75`); on any other type the digest is taken verbatim, so the payload is unauthenticated. An operator re-types the genuine compose-hash entry, supplies the original computed digest, and swaps the payload for the pinned value: RTMR3 replay still matches and the client accepts a malicious build. Fix: require the runtime event type and exactly one match, and reject entries carrying both a `digest` and an `event_payload` (structurally impossible per `TdxEvent::stripped()`). | **Open — actionable now, no ceremony/CVM/redeploy.** Three regression tests: re-typed compose-hash rejected, duplicate compose-hash rejected, both-fields entry rejected. Construct them by mutating the existing real-CVM fixture. SDK and daemon ship together; bump any pinned client version. ~1.5 days. Detail: [`audit_7/client-attestation-review.md`](audit_7/client-attestation-review.md). |
+| SW-07 | **Critical** | TEE Merkle sync | Scope event decoding to the vault program. `merkle/events.rs:181-250` accepts any `Program data:` line in a transaction's `logMessages` with no program attribution, and `sync.rs:216-225` sources those transactions by *address reference*, not invocation. An attacker reads `leaf_count` from the public `/tree/root`, emits a forged `NoteCreated` from their own program at that index in a transaction naming the vault address, and `apply_leaves` appends an arbitrary value as a genuine leaf. The mirror is append-only with no rewind; `/tree/inclusion`, S-02 intake root checks, and `/tree/leaves` are all built on the corrupted root, halting intake and settlement. `reconcile` detects divergence but is "never fatal" — one latched WARN, misattributed to a devnet `reset_merkle_tree`, and it keeps serving. | **Open — highest priority.** Fix: track `Program <id> invoke/success` scope and accept only vault-emitted events (or derive leaf values from vault instruction data); **plus** make `ReconcileState::Diverged` stop serving tree reads and pause trading via the shared gate. Tests: forged event from a foreign program ignored; nested-CPI scope; divergence halts reads. ~3.5 days + a CVM spot-check. Detail: [`audit_7/unaudited-surface-sweep.md`](audit_7/unaudited-surface-sweep.md). |
+| SW-01 | **High** | TEE RPC + API | Stop the RPC credential reaching an error string. `solana_rpc/client.rs:804-810` formats `self.endpoint` — the full `DARKNYX_TEE_SOLANA_RPC_URL`, including `?api-key=<secret>` — into `RpcError::Schema` on any non-success, non-429 HTTP status. It propagates via `WorkerError::Rpc` → `fail_all` → `SettleJobStage::Failed{reason}` → `JobStatus.failed_reason`, which `GET /settlement/status/{batch_id}` serves to any authenticated account. The slice-1 redaction covers the config-load path only. Fix: a redacted display form (scheme+host) used at every format site, **plus** a closed-set `failed_reason` at the API boundary so the next secret cannot use the same channel. | **Open — actionable now, ~1.5 days.** Tests: no `api-key` substring in any formatted `RpcError`; `JobStatus` serializes only labels. **Rotate the provisioned Helius key** — assume disclosed. Detail: [`audit_7/unaudited-surface-sweep.md`](audit_7/unaudited-surface-sweep.md). |
+| SW-02 | Medium | TEE API | Bound unauthenticated upstream work. `rate_limit_middleware` is applied only inside `build_protected_router` (`api/mod.rs:110-118`), so the public router is unlimited — while `/transparency` issues `2 × N_mints` uncached Solana RPC calls per request and `/attestation` triggers a TDX quote per request. AU-05 already established that the "reverse-proxy rate limit" the router comment defers to does not exist in this repo. | **Open.** Venue-wide bucket on the public router (per-peer keying is useless behind the gateway — see `conn_limit.rs`) plus a 400 ms–2 s cache on `/transparency`. Document the new `429` + `Retry-After` in the OpenAPI. ~1 day. |
+| SW-03 | Medium | TEE settlement | Bound the settle round loop. `settle/worker.rs:973-984` `continue`s without draining `unresolved` when `get_latest_blockhash` fails, and the `settlement_deadline` bound is evaluated from that same call — so it is unreachable exactly when RPC is failing. A sustained outage yields a non-terminating batch holding a `settle_batch_concurrency` slot with no terminal outcome. Restart recovery is unaffected; a running enclave does not self-heal. | **Open.** Derive an absolute wall-clock deadline at entry and break regardless of RPC health; fail remaining matches to the lock sweeper. Test with a permanently-failing RPC asserting termination. ~0.5 day. |
+| SW-08 | Medium | TEE settlement | Implement the settle-job eviction the module doc has promised since "PR 4g.6" and never delivered. `SettleSchedulerState.jobs`/`by_batch` (`settle/scheduler.rs:43-57`) retain every match ever settled for the process lifetime — no prune, retain, or cap exists anywhere; `update`'s "evicted" return path is dead. Each job holds a full `MatchPair` (6 × 32-byte commitments/keys + amounts) plus five base58 signatures, ~800 B, so ~70 MB/day at 1 match/s and ~550 MB/day at 8. The adjacent `metrics` field's own doc (`:53-56`) states the contrast explicitly: it is capped and "never retains order ids, commitments, amounts, prices or proof witnesses" — unlike `jobs`. | **Open.** Fix: (B) drop `match_pair` on transition to a terminal outcome — `JobStatus` never serializes it — then (A) evict terminal jobs on a TTL/last-N-batches basis with **insertion-ordered** eviction (not `keys().next()`, see SW-04). Must never evict `Ambiguous`/`Pending`: those are what restart reconciliation and the T-06 journal are keyed to. TTL must exceed the marker/lock window. Tests: terminal evicted after TTL, ambiguous never evicted, `by_batch` shrinks with `jobs`, soak asserts `job_count()` plateaus. ~1 day. |
+| SW-11 | Medium | Daemon (client) | Give the daemon a reconciliation path. `daemon.ts:454-476` constructs both stream listeners **without** `onResync`, so the SDK's 1011 "lagged past the buffer" signal (`sdk/orders/trading-ws-client.ts:324,363`) is raised and discarded — even though `fills-listener.ts:51-53` and `orders-listener.ts:27-28` both document re-backfill as the orchestrator's duty. A `FillMemo` is the only in-band delivery of a change note's opening, so notes minted during a gap never enter the store: `balances()` under-reports, and an order that filled inside the gap stays `open` so `lockedCommitments()` keeps excluding its collateral. Restart is not recovery either — `start():450-451` restores only `nextIndex`; `store.ts:281-291` `listActiveOrders()` ("the set to resume after a restart") **has no production caller**, and its SQL terminal set omits `'expired'` present in `types.ts:36-42`. A crash mid-merge leaves `mergeInFlight = true` persisted, permanently disabling that order's auto-merge. | **Open.** Land the ~1 h mitigation now: wire `onResync` → `emitError` + `pauseTrading`, and clear `mergeInFlight` at boot. Then the real fix (~2–3 days): a reconcile routine used by both the gap and the boot path — SDK recovery-v3 rescan for missed openings, `GET /orders/:id` per non-terminal order — plus the `'expired'` fix and widening `tests/store.test.ts:132` to all five terminal phases. Test via the existing `subscribeFn` seam. Detail: [`audit_7/unaudited-surface-sweep.md`](audit_7/unaudited-surface-sweep.md). |
+| SW-14 | Medium (**High** if the container overlay is unencrypted) | TEE prover / deploy | Stop writing the private match witness to unencrypted storage. `prover/snarkjs.rs:78-94` writes `input.json` to `std::env::temp_dir()` — `/tmp`, the container's writable layer — for the native circom witness generator, which `rapidsnark_prover.rs:68-93` makes the **default** (wasmer is only the fallback when the binary is missing). `ark_prover.rs:389-421` shows the contents: `a_owner_commit`, `b_owner_commit`, `a_amount`, `b_amount`, `a_inner`, `b_inner`, `clearing_price`, `price_remainder`, and every per-slot amount — the values amount-privacy P1b removed from the leaf and the settle payload. `deploy/docker-compose.yaml:41-49,177-182` provisions exactly one LUKS-encrypted volume (`darknyx_state:/var/lib/darknyx-tee`); there is no `tmpfs`, no `TMPDIR`, and no `VOLUME` anywhere. The `Cleanup` guard unlinks on every return path but not on SIGKILL/OOM/CVM crash — the case the recovery drill deliberately induces. | **Open — land the cheap fix immediately.** Add a size-bounded `tmpfs` and point `TMPDIR` at it: ~15 min, no code change, fixes at-rest and crash-residue together. Stronger follow-up: feed the generator via `/dev/fd` or a pipe so nothing is materialized (the `.wtns` bytes already never need a file — `serialize_wtns` is in-memory and `groth16_prover_prove` takes a buffer). **Severity depends on an open question**: whether a dstack container overlay sits on encrypted storage — §5 of the sweep doc. Do not block the `tmpfs` fix on that answer. |
+| SW-15 | Info | TEE prover | Validate prover-backend output locally. `prover/snarkjs.rs:52-58` builds `G1Affine`/`G2Affine` with `new_unchecked` (no on-curve, no subgroup check) and `fq_dec` uses `from_le_bytes_mod_order`, which reduces an out-of-range value instead of rejecting it. Not a soundness hole — the source is the enclave's own rapidsnark/icicle backend, the public inputs are separately guarded by `assert_public_inputs`, and a bad point fails closed on-chain. The cost is attribution: a backend defect surfaces as `InvalidProof (6000)` from Tx B after a ~2 s prove, blamed on the circuit. | **Open — defence in depth.** Use checked constructors or add `is_on_curve()` + `is_in_correct_subgroup_assuming_on_curve()`, and reject `≥ p` in `fq_dec`. Microseconds against a multi-second prove. Worth doing before the icicle/GPU backend (PR #65) goes live, since that is exactly when an encoding bug would appear. ~1 h. |
+| SW-19 | Medium | Daemon (client) | Make the daemon's control plane secure by default. `bin/daemon.ts:287` takes `controlToken` from `DARKNYX_DAEMON_CONTROL_TOKEN`, which is **unset by default with no warning**, and `control-api.ts:88-93` puts the entire auth check inside `if (controlToken)` — so the shipped default is an unauthenticated local server exposing `POST /orders` (spends a real note) and `POST /deposit` (moves funds on-chain). Loopback binding stops other hosts, not the operator's browser: `readJson:68-73` parses the body regardless of `Content-Type`, so a cross-origin `POST` with `text/plain` is a CORS *simple request* — no preflight, side effect lands. With no `Host`/`Origin`/`Sec-Fetch-Site` check (`:94-96`), DNS rebinding additionally makes every `GET` readable, including `/notes`, `/balances`, and the `/tee/*` proxy that the daemon services with the operator's own gateway bearer token. The module doc at `:18-19` ("set it whenever the host isn't single-tenant") frames the threat as other users on the box, steering operators away from the browser vector on exactly the machines where it applies. | **Open.** Require the token; when unset, generate one at boot, write it `0600` beside the DB and print the path (the Jupyter pattern) — a cross-origin page cannot read a file. Add `Origin`/`Sec-Fetch-Site` and `Host` allowlisting, and require `Content-Type: application/json` on mutating routes, as defence in depth. Correct the module doc in the same change. Tests: cross-origin `text/plain` POST rejected before `mapPlace`; `Host: evil.example.com` rejected. ~0.5 day. Not reachable on a headless server with no browser, but the code cannot assume that and the docs currently encourage the vulnerable configuration. |
+| SW-20 | Low | Daemon (client) | Control-server input and error hygiene, four items. (1) `control-api.ts:68-73` `readJson` accumulates the body with **no size cap** — unauthenticated memory exhaustion under SW-19's default. (2) `:79-81` returns `err.message` verbatim to the caller; the daemon holds `DARKNYX_DAEMON_RPC_URL` with the Helius key in its query string, and transport-level Solana client failures typically embed the request URL — **SW-01's twin on the client side**, exiting through a server that by default has no auth. (3) `:90` compares the bearer token with `!==`, which short-circuits on first difference. (4) `tee-read.ts:60-62` interpolates `batchId` into the path unencoded while its sibling `instrument:54-58` uses `encodeURIComponent`; no exploit was constructible — `new URL()` normalizes `../` out of `pathname` before the `/tee/` test, and percent-encoded traversal stays encoded and matches no axum route — but the only thing separating the two is incidental normalization nothing documents as load-bearing. | **Open.** Cap `readJson` at 64 KB with a 413; return a fixed error label plus a correlation id and log the detail; use `crypto.timingSafeEqual`; add `encodeURIComponent`. Include a test asserting no `api-key` substring can appear in any control-API response body — the same assertion SW-01's fix needs on the TEE side. ~0.5 day. |
+| SW-21 | Medium | TEE intake | Range-check `tree_id` at intake. It is deliberately excluded from the signed canonical body (`api/orders.rs:127-135`, confirmed against `sdk/orders/canonical.ts:146-189`) on the stated grounds that *"the proof's `merkle_root` + the shard's recent-roots ring already bind the note; a wrong `tree_id` only self-harms."* True for an **in-range** wrong shard — the root is checked against that shard's ring and misses. False for an **out-of-range** one, because `api/state.rs:530-534` `merkle_mirror` saturates: `.get(tree_id).unwrap_or(&self.merkle_mirrors[0])`. So `tree_id = 200` on a note genuinely in shard 0 is validated against shard 0, **accepted**, persisted on the opening (`:618`, `:664`), and reaches `merkle_tree_pda(200)` at settle (`settle/lock_note.rs:131`) — an address with no account. `lock_note` fails, and because settlement is two-sided the **counterparty's leg fails with it**. The counterparty is an honest resting order whose price and size the attacker chose, so this is a cheap, deterministic, repeatable way to select a maker and guarantee their fill does not settle. Intake has no `num_mirror_shards()`/`num_trees` check anywhere. | **Open.** Fix: reject `req.tree_id as usize >= state.num_mirror_shards()` in `prepare_order` before any other work — one line, restoring exactly the property the inline comment already claims, at the cheapest point in the pipeline. Also worth making `merkle_mirror` return `Option` so the silent shard-0 fallback cannot bite a future caller (~0.5 day, separate). Do **not** add `tree_id` to the signed body: that is a lockstep change across `canonical.ts`, `order_canonical.rs` and the pinned parity fixtures to fix what a range check fixes for free. **In-repo precedent (Batch Q)**: `verify_match_batch.rs:82-99` records **S-04**, structurally the same defect — a free field (`expiry_slot`) that let any observer land first and fail all N settles while 2N `lock_note` txs had already pinned up to 32 users' notes, for one transaction fee. The fix chosen there was *not* to authenticate the submitter (which would have cost a deliberate liveness property) but to **derive the value and remove the degree of freedom**, noted as *"strictly LESS code than the two bounds it replaces."* Same class, same remedy: constrain at intake. Test: place with an out-of-range `tree_id` and assert intake rejects. ~1 h. |
+| SW-22 | Low | SDK keys | Raise the master-seed backup KDF to match the keystore holding the same secret. `sdk/keys/master-seed-backup.ts:22` uses scrypt **N=2¹⁴**; `daemon/src/keystore.ts:206-214` uses **N=2¹⁷** and calls 2¹⁴ `LEGACY_SCRYPT`, kept only to migrate v1 files. Both protect the same 64-byte master seed, but the exposure profile runs backwards: the keystore is an operational file on a running host, while the backup is the artifact *designed* to be portable and offline — the copy that reaches a USB stick, a password manager or cloud storage, survives for the life of the account, and can be attacked offline with no rate limit. | **Open.** Bump to N=2¹⁷ behind a `version: 3` envelope, keeping v2 readable exactly as the keystore keeps v1 readable (`keystore.ts:547-563` is the pattern to copy). Keep KDF parameters pinned by exact match (`:132-144`) rather than making `n` variable — a version bump is the right mechanism. ~0.5 day. **Pair with SW-16(c)**: this file already enforces a 12-character passphrase floor on export *and* import, which is precisely the guard the daemon keystore lacks — the fix can be lifted directly. |
+| SW-23 | Info | SDK ↔ Rust contract | Make out-of-range Poseidon inputs fail in both languages. `sdk/utxo/note.ts:32-40` wraps every input in circomlibjs `p.F.e(i)`, which **reduces** a value ≥ the BN254 modulus; `light-poseidon` on the Rust side **rejects** it (`PoseidonFailed 6030`). `noteCommitmentV2`/`nullifierV2` (`:91-115`) and `match-output.ts:14-19` pass values through unchecked; `bn254ToBE32` range-checks only on the way out. This is the hazard CLAUDE.md §7.2 names as "the silent killer". No live exploit path — every value reaching these functions is a u64 or a Poseidon output, and `recover.ts` fails closed by recomputing and comparing — but the two languages disagree about *where a bug surfaces*, so the parity suite can pass on valid vectors while diverging on invalid ones. | **Open — defence in depth.** Range-check against `BN254_R` in `poseidonHashBytesBE` and `bytesToBigIntBE`, throwing rather than reducing. **Reinforced by the Batch P read**: `darkpool-crypto/src/field.rs:23-40` implements the strict check deliberately and says why — *"ark-ff `from_be_bytes_mod_order` never fails — it silently reduces. We want strict 'in-field' semantics **for cross-env parity**, so check first."* Strictness is therefore a stated cross-language contract, which makes the TypeScript side's silent reduction a deviation from a design goal rather than a defensible difference. Add a **negative parity test** asserting both implementations reject the same out-of-range vector; the suite currently has no negative cases. ~2 h. |
+| SW-24 | Low | SDK | Scope the client-side event decoder to the vault program. `sdk/utxo/leaf-index.ts:54-80` (`noteCreatedFromLogs`) and `:88-110` (`leafIndexFromLogs`) take any `"Program data: "` line matching an Anchor event discriminator, with **no program attribution** — the identical construction to `merkle/events.rs:181-250`, which is **SW-07 (Critical)**. Client-side severity is far lower and the reason is structural, not incidental: the SDK reads logs of its **own just-submitted transaction**, so the realistic attacker is a hostile RPC returning fabricated `logMessages`, and a forged `leaf_index` only makes the client's own note look unspendable (the Merkle path will not fold to a root containing the commitment, so VALID_SPEND fails to prove). Fails closed, self-inflicted, recoverable via an honest RPC. | **Open — ship WITH SW-07.** The point is pattern consistency: closing an unscoped decoder in Rust while leaving the same construction in TypeScript is how a defect survives its own remediation, and the SDK has the program id at every call site. Track `Program <id> invoke`/`success` nesting and accept only vault-frame events; or read the leaf index from account state instead of logs, as `settlement-tracker.ts:12-16` already prefers for this class of reason. **Three sites, not one** (Batch Z): `utxo/leaf-index.ts:54-80` and `:88-110`, plus `fills/chain-history.ts:77-80` — the last feeding `cold-recovery.ts`, the disaster-recovery path a user runs *after* losing local state, fed by the same address-indexed `getSignaturesForAddress(programId)` source SW-07 exploits. That same file scopes **instruction** data correctly (`:208-218`), so the check exists one function away from where it is missing. The SW-07 fuzz/property target (`audit_7/fuzzing-plan.md` Tier A) applies unchanged. ~0.5 day. |
+| SW-25 | Info | SDK | Delete four dead PDA seed constants. `sdk/idl/seeds.ts:25-28` still declares `DARK_CLOB_SEED`, `MATCHING_CONFIG_SEED`, `BATCH_RESULTS_SEED` and `PENDING_ORDER_SEED` — the seeds of the deleted `matching_engine` program. Verified unused across `packages/sdk/src`, `packages/sdk/tests`, `packages/daemon/src` and `packages/indexer/src`. CLAUDE.md §0 explicitly instructs that surviving references to that program are stale and must be fixed. No functional risk; the cost is that `seeds.ts` claims to mirror the on-chain seed set (nine constants in `state.rs`) and carries four with no counterpart. | **Open — housekeeping.** Delete the four. Keep `VAULT_TOKEN_SEED`: it is live but absent from the `state.rs` `SEED` list because `withdraw.rs:50` declares `b"vault_token"` inline in the account constraint. ~15 min. |
+| SW-26 | Low | SDK | Validate prover public signals on every prove path, not just deposit. `sdk/zk/valid-deposit-prover.ts:62-70` and again `sdk/utxo/deposit.ts:164-171` compare `publicInputs` against a locally computed vector and throw; `sdk/utxo/merge.ts` and `sdk/utxo/withdraw.ts` contain **no such check**, and `daemon/src/merge-prover.ts:68-82` returns them unvalidated. The on-chain verifier builds its public inputs from the *instruction arguments*, so a witness-assembly bug fails closed — but only after a full client-side snarkjs proof, a submitted tx and its fees, and then as **`InvalidProof (6000)`**. That is the exact signature CLAUDE.md §5 documents for a circuit/VK lockstep failure, so the bug presents as the repo's most-documented foot-gun and sends the debugger to regenerate `.zkey`/`vk_*.rs` for an unrelated cause. Both enclave backends already guard (`ark_prover.rs:249-270`, `snarkjs.rs:121-153`). | **Open — defence in depth + diagnosability.** Lift the deposit pattern into `merge.ts` and `withdraw.ts` (the expected values are already in hand where the instruction is built), and factor it into a shared helper so a fourth prove path cannot skip it. ~0.5 day. Client-side counterpart of **SW-15**. |
+| SW-27 | Low *(test tooling)* | Loadgen | Segment the loadgen's latency histogram by outcome. `loadgen/src/trader.rs:158,185-186` records `elapsed_us` for **every** `SubmitOutcome` — `Ok`, 4xx, 429, 5xx and `NetworkError` alike — and `report.rs:77-86` prints the resulting P50/P95/P99 with no qualifier. An intake rejection is fast (it fails before matcher work), so a rejection-heavy run reports a *better* latency distribution than a healthy one — and CLAUDE.md §3.2 documents in bold the configuration that produces exactly that: the wrong mint regime yields **100% 4xx**. The report then shows a healthy P99 beside a 0% success rate. `NetworkError` compounds it from the other side by folding timeouts into the tail. Audited for measurement honesty only; credential/DoS/input-validation questions are deliberately out of scope for a harness we point at our own CVM. | **Open — small.** (1) Record only `Ok` into the headline stream, or keep per-outcome histograms and print accepted/rejected as separate rows (~30 min — this is the part that matters). (2) Footnote the latency table: percentiles cover *issued* requests only, so treat them as optimistic when the already-reported achieved/target ratio is below ~95% (`trader.rs:75-76` uses `MissedTickBehavior::Delay`, so the harness throttles itself when the server slows — coordinated omission). (3) Optionally state in the report header that synthetic orders carry stub proofs, so the run exercises intake and matcher paging but **not** settlement; that is in CLAUDE.md §3.4 but the markdown report is what gets pasted into perf discussions. |
+| SW-28 | Low | Matcher | Stop `run_batch`'s chaining path emitting a zero-sentinel collateral note, and fix the docs that point at it. `algorithm.rs:505-517` writes `[0u8;32]` into a partially-filled order's `collateral_note` — deliberately, so an underived change-note commitment is "explicit and unusable" — and `:584-592` assigns it into the live snapshot. In the **non**-`single_fill_per_order` branch (`:603-612`) the relocked order stays at its index, so a second fill emits a `MatchPair` with `note_buyer == [0u8;32]` (`:551-552`): a commitment with no opening that the tree can never contain. Production is unaffected — `PreparedMatchTick::next_page` (`lib.rs:163-176`) passes `true`, verified — but `run_batch` is `pub` and passes `false` (`lib.rs:267-283`). The trap is the documentation: `darknyx-tee/src/matcher/interval.rs:7,14` both state the tick *"Calls `darkpool_matcher::run_batch(...)`"*, which it does not, so anyone auditing the matcher from the enclave inward lands on the wrong function and reasons about chaining semantics production never uses. | **Open — latent.** Cheapest: guard the chaining branch against re-matching an order whose `collateral_note` is the sentinel (converts a silently-invalid match into no match). Better, if nothing needs chaining: have `run_batch` delegate with `true`, or delete the wrapper. Either way correct `interval.rs:7,14` to name `PreparedMatchTick::next_page`. Add the missing regression test: two asks partially filling one bid via `run_batch`, assert the second `MatchPair` has a non-zero buyer note. ~2 h. |
+| SW-29 | Medium | TEE API | Prune the stream session's order set, and sweep it under one lock. `api/stream.rs:231` `session_orders: HashSet<String>` is inserted on place (`:748`) and removed only on explicit cancel/modify (`:774`, `:801-802`) — **never when an order fills or expires**, which for a market maker is most of them. At 50 orders/s over 12 h that is ~2.16 M entries (~170 MB at ~80 B/entry) for a single socket. Worse, the disconnect sweep (`:403-417`) calls `cancel_resting_unchecked` per id, and `orders.rs:890-909` takes `matcher.write().await` **before** discovering the order is already gone — so one client's disconnect fires N matcher write-lock acquisitions against the lock the matcher tick needs, serializing matching for **every other trader**. Not adversarial: the reference daemon sets `cancelOnDisconnect: true` by default (`order-placer.ts:142`), so a routine restart after a long session is the trigger. Same retention family as SW-08, with a venue-wide liveness effect SW-08 lacks. | **Open.** (A) Prune on terminal transitions — the session already receives this account's `orders` channel carrying `fully_filled`/`expired`/`cancelled`, so the signal is already in the same task. (B) At disconnect take the matcher write lock **once** and cancel all still-resting session orders in one critical section. Do both: A bounds memory, B bounds the blast radius. Avoid capping-with-eviction as a primary fix — it silently drops cancel-on-disconnect coverage, and see SW-04 on arbitrary eviction order. ~1 day total. |
+| SW-30 | Info | Docs | Correct the `canonical_payload_hash` lockstep entry and two stale module headers. CLAUDE.md §7.1 calls the function *"(shared)"*; it is in fact **four independent implementations** — `vault/instructions/tee_forced_settle.rs:245-277`, `darknyx-tee/src/settle/payload.rs:52`, `vault/tests/settle_harness/mod.rs:367`, and `sdk/settlement/settle-builder.ts`. The duplication is correct and unavoidable (the enclave cannot depend on the vault BPF crate) and is mitigated by a drift assertion at `payload.rs:170` plus the pinned `canonical_payload_hash_fixed_vector`; the construction itself is sound (all fields fixed-size so the `hashv` concatenation is unambiguous, domain tag bumped per layout change). The risk is purely that an author reading §7.1 edits one place and the TS mirror and misses two. Also stale: `darkpool-crypto/src/poseidon.rs:78-84`, whose test comment describes the **retired v1** arity-7 note commitment (`nonce + blindingR`) rather than the live Poseidon6 `inner_hash` form; and `darknyx-tee/src/keys/mod.rs`, which says *"Phase 1: stub. Phase 2 will…"* about functionality `keys/ed25519.rs` fully implements. | **Open — documentation only, no code change.** Name all four implementations in §7.1 alongside the pinning test. Fix or rename the poseidon test comment. Delete the "Phase 1: stub" paragraph. ~1 h. **Eighth instance of the comment-versus-code pattern in this sweep** (SW-07, SW-08, SW-10, SW-12, SW-16, SW-19, SW-28, SW-30) — a single doc-accuracy pass over module headers would find the remainder more cheaply than the next audit will. |
+| SW-31 | Medium | TEE API | Propagate server-side fan-out lag to clients. `api/fills_router.rs:29-31` and `api/order_router.rs:148-150` handle `RecvError::Lagged` by logging and continuing — the skipped messages are **never routed to any client and no client is told**. The 1011 resync contract (`api/stream.rs:449-464`, correctly implemented) protects only against a *slow client*; when the server's own router falls behind the capacity-1024 matcher broadcast (`matcher/interval.rs:108-109`) the drop happens upstream of the per-account channels, so the socket stays healthy and the signal is never generated. Fills are the worse half: a `FillMemo` is the only in-band delivery of a change note's opening, so a dropped memo strands a spendable note with no indication — strictly worse than SW-11, where a signal existed and the client ignored it. Order updates additionally leak `order_owner` entries, since the same `Ok(...)` arm is what calls `archive_order_owner`. Bursts are structural (a 16-match tick, mass expiry, and especially **SW-29's cancel-on-disconnect sweep**, which emits one update per swept order). | **Open.** **(A′, preferred — found in Batch U)** The SDK client *already* enforces sequence continuity (`sdk/orders/trading-ws-client.ts:203-218`: rejects a missing/invalid `seq`, fires `onSequenceGap`, errors on discontinuity). It does not catch router loss only because `stream.rs:267-273` stamps `seq` at **socket-send time**, so an upstream drop consumes no sequence number and the stream stays contiguous. Carry a per-channel origin counter from the matcher broadcast through the routers and the existing detector works with **no client change at all** — strictly less code than (A), and it still catches loss when a session reconnects between the drop and any sweep. (A) On router `Lagged`, close affected sessions with the existing 1011 resync frame; ~1 day. (B) Cut `archive_order_owner`'s four lock acquisitions per terminal update (`state.rs:950-965`) down to one and hoist the archive off the receive path, raising the lag threshold; ~0.5 day, and it also reduces SW-29's blast radius, so take it in the same slice. Do **not** just raise the broadcast capacity — that moves the cliff and loses more when it is hit. |
+| SW-32 | Medium *(pre-merge)* | GPU prover | Enforce confidential compute before ICICLE accepts CUDA. `prover/icicle_prover.rs:114-120` reads `DARKNYX_TEE_ICICLE_DEVICE`, defaults to `CPU`, and passes it through **unvalidated** — while the comment directly above states CUDA *"requires a confidential-GPU TEE."* No CC-mode / `nvtrust` / GPU-attestation check exists anywhere in the crate. The `.wtns` handed to `groth16_prove` encodes the full private witness (per-slot amounts, both owner commitments, clearing price), so CUDA moves it into GPU device memory — encrypted and attested on a confidential GPU, host-readable on an ordinary one. The TDX confidentiality guarantee therefore ends at the accelerator boundary, held only by a hand-set env var. `:36` also imports `native_witness_wtns`, so this backend inherits **SW-14** unchanged. | **Open — merge condition on PR #65**, not live today (behind the `icicle` feature, PR unmerged, default `CPU`). Require positive evidence of confidential compute at prover load — driver CC mode or the platform GPU attestation in `docs/gpu-tee-runbook.md` — and **fail closed**: an unavailable check must reject CUDA, not fall through. Land it *with* the feature rather than retrofitting after a GPU is in production. Pairs with SW-14's `tmpfs` fix, which covers all three backends at once via the shared `native_witness_wtns`. ~0.5 day. |
+| SW-33 | Info | Build / CI | Make the debug-endpoint exclusion explicit and testable. `api/debug.rs:1-9` exposes an unauthenticated `POST /__debug/oracle/seed` that writes straight into the `OracleCache`, bypassing Hermes+VAA — and its own doc says the feature *"MUST be off in production."* It is off: `Cargo.toml:198` has `default = []`, the loadgen requests it only under `[dev-dependencies]`, and **`resolver = "2"`** means dev-dependency features are not unified into normal builds — so even `cargo build --workspace --release` leaves it out. Under resolver v1 that same command **would** ship it. The security boundary therefore rests on one word in the root `Cargo.toml` with no comment marking it load-bearing, no comment at the loadgen dev-dependency, and no CI assertion — while the analogous on-chain case (`--features devnet-admin`) is documented in CLAUDE.md §2.3 precisely because audit_1 treated that shape as F-01/F-02. | **Open — hygiene, no code change.** Add `scripts/check-no-debug-endpoints.sh` to the §2.5 gate asserting no `/__debug/` route in the built binary (mirroring `check-compose-image-digests.sh`), plus one-line comments at `resolver = "2"` and the loadgen dev-dependency naming what each protects. ~1 h. |
+| SW-34 | Info *(test tooling)* | Loadgen | Wire or delete `settlement_benchmark.rs`. It is a complete, tested markdown report generator (throughput, packing, co-inclusion, rebroadcasts, client proof rate) with **no production data path** — the only construction of a `BatchMetric` anywhere in the crate is its own test fixture (`:404-411`), and `real_settle/`, `run.rs` and `main.rs` never reference it. Tests pass against synthetic data, so CI gives no signal. Latent trap for whoever wires it: `packing = 100 * active / padded` (`:182-188`) is correct only if `padded_slots` means **total** slots (the fixture sets 16 with `active_matches: 1`), but the field *name* reads as "slots that are padding" — under which a fully packed 16/16 batch hits the `padded == 0` guard and reports **0% packing**, and a 12/16 batch reports **300%**. `docs/throughput-roadmap.md` reasons against exactly this number. | **Open — test tooling.** Wire it to `real_settle/` or delete it; a tested renderer with no data source misleads either way. If wiring: rename to `total_slots` (or store `padding_slots` and compute `active / (active + padding)`) and assert `active_matches <= padded_slots`, which would have caught the ambiguity the first time it was populated. ~2 h. |
+| SW-04 | Low | TEE API | Insertion-ordered eviction for `recent_order_owner` (`api/state.rs:955-962`), which still uses the `keys().next()` arbitrary eviction S-10 fixed in `submission_replay`. Fails closed (no cross-account delivery) but can silently drop a live fill memo from the low-latency path. | **Open.** Eviction-order test; sweep for a third instance of the pattern. ~0.5 day. |
+| SW-05 | Low | TEE API | Add owner + Anchor-discriminator validation to `/transparency`'s raw account reads (`api/transparency.rs:96-132`), matching the F-08 checks the vault applies to its own raw marker read. Not currently exploitable (PDA-derived addresses); worth closing because the endpoint publishes a solvency claim and `stale` should mean what its documentation says. | **Open — defence in depth.** ~0.5 day. |
+| SW-12 | Low | Daemon (client) | Stop auto-merge selecting notes with a live on-chain `NoteLock`. `merge-runner.ts:126-131` `isMergeable` excludes only phases `pending`/`open`, so a residual in `pending_settlement` or `filled` — precisely the window in which Tx D holds a live lock — qualifies. The vault rejects it (`merge.rs:110-124`, the N-04/S-03 guard), so this is **not** a double-spend; the cost is a wasted VALID_MERGE proof plus a failed tx per attempt, and because `selectBatch:106-120` is deterministic first-mint-group-wins it re-picks the same doomed batch until lock expiry, head-of-line-blocking every other mergeable note. The doc comment at `:122-125` states the correct rule; the predicate implements a different one. | **Open.** Invert the predicate to "mergeable only when the owning order is in `TERMINAL_PHASES`", which covers both windows; optionally let `selectBatch` fall through to the next mint group. Test: a note whose order is `pending_settlement` is excluded when a *different* order's fill triggers the merge. ~2 h. |
+| SW-13 | Low | Daemon (client) | Reconcile `pendingChangeNotes` with account-level consolidation. `merge-runner.ts:75-104` selects and returns a count of notes across **all** orders, `action-executor.ts:28` turns it into `merge-confirmed{consumed}`, and `order-lifecycle.ts:151-157` subtracts it from the single order that triggered the intent. The trigger order under-counts (clamped at 0, hiding its own residual); every other affected order over-counts permanently, sitting above `mergeThreshold` and firing a no-op merge intent on each subsequent transition. Merges still pick correct inputs — `selectBatch` reads the store, not the counter — but the figure is surfaced to operators via `listOrders()`/control API as if it were live. | **Open.** Preferred: make it account-level and derive it (`SELECT COUNT(*) FROM notes WHERE order_id IS NOT NULL AND leaf_index IS NOT NULL`), which also self-corrects after an SW-11 gap. Alternative: return consumed commitments and fan out one `merge-confirmed` per affected order. ~0.5 day. |
+| SW-16 | Low | Daemon (client) | Tighten the keystore's custody edges. Three gaps, all one-directional: (1) `keystore.ts:2` claims *"Keys NEVER leave here"*, but `:106-108`'s public `masterSeed` getter hands the 64-byte root secret to five call sites (`daemon.ts:459`, `build-place-request.ts:82,86`, `merge-client.ts:62`, `daemon-client.ts:69`, `fills-listener.ts:70`) — in-process, so the posture is unchanged and `:16` states the real boundary correctly, but the headline sentence is what a reader trusts when deciding where to look; (2) every write path sets `0600` and says so, while `parseFile:427-441` checks size and file-type but **not mode**, so a keystore restored `0644` from a backup loads silently — the OpenSSH refusal case; (3) no passphrase length or entropy floor anywhere, which is where (2) lands, since the strong scrypt profile (N=2^17) still only buys time against a short passphrase. The init CLI already enforces that the backup and keystore passphrases differ, so this class was on the authors' minds. | **Open.** (a) Correct the doc, or better, replace the raw getter with the specific derivations each consumer needs so the seed genuinely does not leave; (b) reject/warn on `stat.mode & 0o077` in `parseFile`; (c) enforce a minimum passphrase length inside `saveKeystore`, not only in the CLI, so a programmatic caller cannot bypass it. ~0.5 day for all three with tests. The v2 sealing cryptography itself is clean — KDF-parameter injection, header substitution, version downgrade, nonce reuse, and parser abuse were each checked and are closed; see §3 of the sweep doc so they are not re-audited. |
+| SW-17 | Low | Daemon (client) | Bound the attestation client's reads of the untrusted gateway. `attestation.ts:82-102` `getJson` has no `AbortSignal` and no response-size limit, on the one module whose stated premise (`:4-6`) is that the peer may be *"a normal server that fabricates JSON"*: a stalling gateway hangs `daemon.start():421` forever with no diagnostic, and `res.json()` will buffer an arbitrarily large `event_log` that `parseEventLog` → `replayEventLogRtmr` then walks. Validation is also asymmetric — `fetchInfo:120-122` checks `boot_session_id` is 64 hex chars, while `fetchAttestation:144-155` checks none of `quote`/`event_log`/`report_data`/`tee_pubkey`, so a missing `quote` yields a raw `TypeError` from `fromHex` instead of a typed `AttestationError`, escaping the `AttestationFailure` taxonomy the daemon's pause logic keys on. Note this cannot make a gateway *pass* attestation — DCAP verification and the `report_data` binding are unaffected. | **Open.** Add `AbortSignal.timeout(...)` plus a byte cap to `getJson`, and validate the four attestation fields the way `fetchInfo` already validates its one (`report_data` exactly 64 bytes of hex, `tee_pubkey` base58, `event_log` non-empty and within the cap). Tests: a never-resolving `fetchImpl` rejects on time; an oversized `event_log` is rejected; a missing `quote` yields a typed failure. ~0.5 day. |
+| SW-18 | Info | TEE attestation / daemon | Either attest `boot_session_id` or document that it is not attested. `api/attestation.rs:105-107` builds `report_data = nonce ‖ SHA-256(signer set)`; the boot session is not in it. `attestation.ts:189,248` nonetheless reads it from `/info` and returns it inside `AttestationResult` — the object stamped `dcapVerified: true`, whose every other field is DCAP-derived or quote-bound — and `daemon.ts:429` signs it into every order and cancel as the S-07 session scope. Ceiling is low: the TEE validates the session at intake, so a gateway serving a wrong value causes rejections (a DoS it could achieve by not answering) and cannot produce acceptance of a stale session. The structural point is that S-07's scoping rests on a field attestation does not cover. | **Open — documentation fix preferred.** Cheap: state in `AttestationResult` that `bootSessionId` is transport-supplied and outside `dcapVerified`. Expensive and only if the threat model changes: extend the `report_data` right half to `SHA-256(signer set ‖ boot_session_id)` — **a lockstep change** across `api/attestation.rs`, `verify-core.ts`, and every client. ~1 h for the doc fix. |
+| SW-06 | Info | TEE API | `Reserves.merkle_root` is shard 0's root while `leaf_count` is the all-shard sum (`api/transparency.rs:144-155`). Correct in the code comment, misleading as adjacent public fields. Rename or return a per-shard array. | **Open — wire change**, coordinate with OpenAPI + consumers. ~0.5 day. |
+| DEP-01 | Medium (DoS; reachability not yet established) | TEE + supply chain                | Remove `ruint 1.18.0`, affected by `RUSTSEC-2026-0220`, from the production TEE graph. It is pulled through `dstack-sdk → alloy-primitives`; Darknyx does not call it directly, but it is compiled into `darknyx-tee`, and the fixed `>=1.20.0` release is available. Do not suppress the advisory.                                                     | **Open — newly surfaced 2026-07-31.** `cargo audit` against advisory DB `bd347a5` fails with one vulnerability. Prefer a lockfile-compatible transitive bump, then run the dependency gate, full TEE/workspace tests, dstack boot/key/attestation tests, rebuild the digest-pinned image, and perform a focused CVM boot/attestation spot-check. |
+| D-04   | Medium                                         | TEE + operations                  | At boot, record the finalized upgradeable-loader `ProgramData` identity and last-upgrade slot for the configured vault program. Monitor it alongside `VaultConfig`/`MarketConfig`; any change pauses new place/modify/matching while cancel, reconciliation, and safe recovery remain available. Resume only after a compatible, attested CVM redeploy. | **Open — actionable now.** Unit/RPC fixture tests for unchanged, upgraded, missing, and malformed ProgramData; boot fail-closed test; pause/resume policy docs; real CVM spot-check because the boot/governance path changes.                                                                                                                    |
+| A-3    | Low                                            | Vault + TEE + SDK build assurance | Generate one account-layout fixture from the actual vault structs, or compile a shared cross-crate layout assertion, so TEE/SDK offsets and account lengths cannot agree with their own literals while disagreeing with `VaultConfig`/`MerkleTree`. Keep strict length/discriminator rejection.                                                         | **Open — actionable hardening.** A mutation that inserts/reorders a field must fail the cross-language gate. Cover every hand-parsed field used for governance, sharding, fee/protocol-owner binding, and Merkle root/leaf count. No wire or account migration is required unless the test exposes existing drift.                               |
+| D-02   | Medium                                         | TEE settlement + operations       | Export the remaining marker runway at first Tx D and at every retry/terminal outcome. Alert before the conservative local deadline. Do not raise the current local `+250`-slot margin or split pages until degraded-RPC data shows expiry pressure.                                                                                                     | **Measurement-gated.** Close after a sustained settlement run records runway p50/p95/p99/min, expiry-related failures, retry age, RPC 429/5xx, and ambiguous outcomes; tune only if the evidence breaches the settlement SLO.                                                                                                                    |
+| D-03   | Medium                                         | Vault + SDK + TEE capacity        | Measure roots produced per shard under representative deposit/settle traffic against the 64-root on-chain ring and representative browser/mobile proving latency. Choose among a larger ring/account migration, bounded auto-reprove, or documented admission limits only after calculating the measured expiry budget.                                 | **Measurement-gated.** Close when the slow-client proving SLO retains a documented safety margin at admitted per-shard load, with a stale-root recovery test. Any ring-size change requires account-layout migration, SBF/devnet/CVM evidence, and a clean rollout.                                                                              |
+
+| DOC-01 | Info (governance semantics) | Vault + governance docs | Record what the market kill switch promises. `tee_forced_settle_batched` reads no `MarketConfig`, so a market disabled through `update_market_config` continues settling its already-verified in-flight batches for the remainder of the marker window (~300 slots); `verify_match_batch` checks `market.enabled`, so no *new* batch is admitted. This is almost certainly the correct behaviour — cancelling in flight would strand collateral already locked on-chain — but it is currently an unwritten semantic, recorded only in a prior audit's carry-forward list. | **Open — documentation only, no code change expected.** One paragraph in [`governance.md`](../docs/governance.md) or `CRYPTOGRAPHY.md` §2 stating that "disabled" means *stops admitting and matching*, not *stops settling*, with the in-flight bound named. Reopen as a code item only if governance decides in-flight batches must abort. |
+
+The code anchors are
+`crates/darknyx-tee/src/main.rs::spawn_governance_monitor`,
+`crates/darknyx-tee/src/settle/worker.rs`'s conservative marker deadline, and
+`programs/vault/src/state.rs::ROOT_HISTORY_SIZE`. A-3 originates in
+[`audit_2/READINESS.md`](audit_2/READINESS.md); its current anchors are
+`crates/darknyx-tee/src/solana_rpc/vault_config.rs`,
+`crates/darknyx-tee/src/merkle/sync.rs`, and
+`packages/sdk/src/tee/vault-config.ts`.
+
+## Deferred and conditional engineering backlog
+
+These items are not current vulnerabilities. Pull one into an implementation
+slice only when its trigger is demonstrably true.
+
+| ID / source             | Owner                       | Deferred work                                                                                                                 | Re-entry condition and required decision                                                                                                                                                                                                                           |
+| ----------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PF-03                   | Vault + TEE + SDK           | Narrow the 128-byte recovery field by eight bytes.                                                                            | Only with the next change that already bumps `MatchResultPayload`, its canonical signature domain, and Rust/TS/on-chain vectors. Do not spend a standalone three-language migration for 8 bytes.                                                                   |
+| PF-07                   | Vault + settlement          | Lower the static settle CU request from 115,000 toward measured use.                                                          | Tree sharding has landed, so the old trigger is obsolete. Re-enter only when per-shard block-CU pressure or real settle-bound volume makes packing material; remeasure the worst case and keep at least 20% CU margin before changing the limit.                   |
+| PF-08                   | Daemon custody              | Avoid repeated trading-key derivation.                                                                                        | Only if a daemon/intake profile identifies derivation as material. Then derive once per unlocked keystore session; do not add an unbounded cache or extend key lifetime beyond that session.                                                                       |
+| FUZZ-01                 | TEE oracle + merkle         | Stand up the property/fuzz suite in [`audit_7/fuzzing-plan.md`](audit_7/fuzzing-plan.md). Phase 1 (the SW-07 provenance property) ships **with** the SW-07 fix as its acceptance criterion, ~1 day. Phase 2 (proptest properties on the PR gate: Merkle inclusion soundness, VAA quorum integrity, mirror monotonicity, plus a reference tree builder) ~4 days. Phase 3 (`cargo fuzz` nightly over the PNAU/VAA parsers, seeded from the committed Hermes fixtures) ~3 days. | **Open.** Phase 1 is not independently schedulable — it is part of SW-07. Phase 2 before Phase 3 if only one is funded: it runs every PR, needs no nightly toolchain, and targets the bug class this repo has actually produced. Each property must be mutation-tested (shown to fail against a deliberately broken implementation) before it counts as evidence. |
+| PF-12                   | TEE settlement              | Batch the settle-journal writes. `persistence/journal.rs:303-347` — `record()` re-serializes **every** in-flight entry and does a full tmp→fsync→rename→fsync(dir) snapshot, and `settle/worker.rs` calls it once per match in three separate loops. One N=16 batch costs ~48 flushes, ~96 fsyncs, and ~408 entry-serializations (quadratic in batch size) where 3 flushes would do. | Add a deferred-flush API (`record_many` / a `JournalTxn` guard flushing on drop) and use it for the three per-match loops. No on-disk format change. **This is the concrete answer to the T-06 measurement waiver**, which accepted the missing per-transition histogram because settle is network-bound — true for the 1–2 match batches measured, but the cost is quadratic and GPU proving removes the ~2.2 s masking it. Capture the histogram after the count drops from 48 to 3. ~1 day. |
+| PF-13…PF-17            | TEE settlement / API / oracle | Smaller efficiency items from the same pass: ALT activation wait polls `getLatestBlockhash` up to 30×/batch against the quota SW-02 exposes (`worker.rs:899-915`); `/transparency` issues `2 × N_mints` reads fully sequentially (`transparency.rs:167-172`, fix with the SW-02 cache); the N=16 witness set is deep-cloned per batch for `spawn_blocking` (`worker.rs:721-723`); `record_final_outcome` takes the scheduler write lock per match (`worker.rs:429-448`); the oracle's requested-feed map is hex-decoded every refresh (`sync.rs:254-264`). | **Open — opportunistic.** Each is under half a day; take them when the owning file is next touched. Detail in §2b of [`audit_7/unaudited-surface-sweep.md`](audit_7/unaudited-surface-sweep.md). |
+| PF-20…PF-26            | Daemon + SDK (client)             | Daemon data-access efficiency, all in the quoting hot path. **PF-20** (the material one): `settlement-tracker.ts:64-79` resolves leaf indices with one *sequential* awaited HTTP round-trip per pending note, after a full `SELECT * FROM notes` it filters in JS, and never gives up on a note that will never resolve — so the dead set grows monotonically. A note is unspendable until its leaf resolves (`note-select.ts:30-32`, `merge-runner.ts:127`), so this directly throttles re-quote rate; at P=20 and 150 ms RTT a pass consumes 3 s of its 5 s interval and the (correct) `running` guard then drops ticks. **PF-21**: each `placeOrder` materializes the note table three times (`daemon.ts:587-593` + `:599-614`, two `list()` plus a `listOrders()`), filtering and sorting in JS. **PF-22**: `merge-runner.ts:126-131` calls `getOrder` per note inside a `filter` — N+1, and with PF-19 each is a fresh `prepare()`. **PF-23**: every order op calls both `tradingPublicKey(idx)` and `signWithTradingKey(idx, …)` (`build-place-request.ts:89-90`, `daemon.ts:644-649`), and each re-runs `nacl.sign.keyPair.fromSeed` (`keystore.ts:154-160`) — three Ed25519 scalar multiplications per order where one is needed, in pure-JS tweetnacl, synchronously on the event loop. | **Open — opportunistic, but PF-20 first.** PF-20: push the predicate into SQL behind a partial index, bounded concurrency (8), per-note exponential backoff with quarantine after N attempts (quarantined notes are exactly what an SW-11 reconcile should be handed). ~0.5 day. PF-21 needs `amount` stored zero-padded or as integers before SQL comparison/ordering works — then best-fit selection is one indexed query; keep the pure `selectCollateralNote` for unit tests. PF-22: preload the order map once per `selectBatch`. ~1 day for both; composes with PF-19. PF-23: return the keypair once per call site or memoize a small bounded LRU — note the tradeoff explicitly, since a cache retains expanded secret keys, though the seed they derive from is already resident by design; ~2 h. PF-26: `daemon/src/merkle-tree.ts:86-130` rebuilds the entire padded tree per `witness()` call and shares nothing with `root()`, so a K=4 auto-merge costs five full constructions (~2n awaited circomlibjs Poseidon calls each) where one would do — the identical waste `prover/leaf.rs:119-122` already fixed in Rust with `BatchMerklePaths` ("the prior per-index helper rebuilt the whole tree 16 times"); port that shape and carry the same hash-count assertion (~0.5 day). PF-25: `sdk/keys/key-generators.ts:251-263` `bytepad` reallocates and full-copies once per padding byte — up to 135 allocations to append 135 zeros, twice per `darknyxShakeKdfV1` call, on the per-note recovery-scan path; compute the padded length once (~15 min, output bytes unchanged so the fixed vectors still pin it). PF-24: the control API's SSE stream (`control-api.ts:190-201`) ignores `res.write` backpressure, so a strategy that stops reading makes the daemon buffer every fill and order transition without bound — apply the same "you lagged, resynchronize" contract the TEE already uses for its own subscribers; ~2 h. Detail in §2b of [`audit_7/unaudited-surface-sweep.md`](audit_7/unaudited-surface-sweep.md). |
+| PF-27                   | TEE settlement              | Batch the sequential per-account RPC reads in `settle/lock_sweep.rs:229-231` (one `get_account_info` per pending lock, every tick) and — the one that matters — `settle/recover.rs:304-308,332` (**two** account reads plus a signature-status call **per journal entry, at boot**). The recovery loop is on the cold-start critical path: the enclave cannot resume settling until reconciliation finishes, so N surviving entries cost up to **3N sequential round-trips** — roughly 22 s of extra downtime at 50 entries and 150 ms latency, on top of proving-key load and Merkle cold-boot. **Fourth instance of this pattern** in the sweep (PF-14 `/transparency`, PF-20 the daemon tracker, and both of these). | **Open.** Use `getMultipleAccounts` (100 per call) for both loops and collapse the signature checks into the single `get_signature_statuses` call it already accepts a slice for. `decide()` is pure over `ConsumedState` and is untouched, so the audited decision logic does not change. Measure against `docs/settlement-recovery-drill.md`'s existing end-to-end timings rather than assuming the gain. ~0.5 day. |
+| PF-11                   | TEE API                     | Remove the global write lock on the request rate limiter. `try_consume_rate` (`crates/darknyx-tee/src/api/state.rs:900`) takes a **global write lock** on `rate_buckets` for every request, including read-only routes. Its critical section is tiny and it is not a bottleneck today, but it is the only unconditional global write lock on the hot path. Surfaced while disproving PF-05's original premise; recorded here so it is not lost inside a closed tracker row. | Only when measured intake or read-route throughput binds. Then shard the bucket map by account key, or move to a per-account lock, and re-measure against the same workload. Do not pre-emptively restructure a lock that no profile has identified. |
+| THR-01 / roadmap item 1 | TEE settlement              | Raise batch concurrency above one.                                                                                            | Same-box ICICLE-CUDA C1/C2/C4 must increase confirmed-match throughput without breaching queue/latency/error thresholds. CPU C2 was 3.3% slower than C1, so CPU remains at one and needs no C4 run.                                                                |
+| THR-02 / item 2         | TEE settlement              | Add per-worker/per-shard ALT pools.                                                                                           | Only if GPU measurements show `alt_wait_ms`/Tx-C serialization is a material bottleneck. Prefer deleting ALTs when transaction v1 becomes available.                                                                                                               |
+| THR-03 / item 3         | TEE settlement              | Relax sequential Tx D confirmation dependencies.                                                                              | Prefer Alpenglow. A manual dependency tracker is justified only if pre-Alpenglow production data shows this latency dominates enough to pay for the added recovery complexity.                                                                                     |
+| THR-04 / item 4         | Matcher + scheduler         | Coalesce a trailing partial batch for a bounded wait.                                                                         | Sustained real volume must show a settle queue dominated by underfilled pages. Preserve the one-snapshot, one-fill-per-order, and continuation-ordering invariants.                                                                                                |
+| THR-05 / item 6         | ZK + vault + browser SDK    | Compress VALID_INPUT public inputs.                                                                                           | Representative browser/device measurements must justify adding approximately 5.38% combined client proving time in exchange for 9,709 CU per lock, and block packing must be an observed constraint.                                                               |
+| THR-06 / item 7         | TEE + SDK                   | Move Tx D to transaction v1 and delete ALT creation/pooling/warmup.                                                           | SIMD-0296/0385 must be active and supported by Solana client crates plus the production RPC. Land as a deletion/cutover, not a speculative dual path.                                                                                                              |
+| UX-PROVE                | SDK/product                 | Address approximately 40-second browser VALID_INPUT proving.                                                                  | Decide between in-browser proving, delegated proving with an explicitly changed trust/privacy model, or a faster proof system after representative browser measurements. This is a product/architecture decision, not a settlement-CU tweak.                       |
+| GPU-PERF                | TEE prover + performance    | Obtain a valid GPU speed/throughput number.                                                                                   | On the next H100/H200 window, run same-box rapidsnark CPU, ICICLE CPU, and ICICLE-CUDA C1/C2/C4; exclude warmup, use at least eight measured batches, and capture cgroup/GPU/host/RPC identity.                                                                    |
+| GPU-TRUST               | TEE + SDK security          | Verify confidential-compute mode and bind NVIDIA evidence to the same nonce as the TDX quote; remove diagnostic `user: root`. | Required only if GPU proving is selected for production, but then it is a hard privacy gate because the GPU receives private witness data. Add `video`/`render` access, drop root, and implement dual TDX/NVIDIA verification before real order intent.            |
+| MM-CAPACITY             | TEE + operations            | Determine the safe number of active markets per CVM.                                                                          | Add one market at a time and run the sustained 15-minute admission matrix in the multi-market architecture. Stop when its throughput, queue, latency, CPU/memory, RPC/error, or 20% headroom threshold is breached.                                                |
+| MM-DISCOVERY            | Vault + daemon + governance | Support more than one independently attested CVM cluster.                                                                     | First change the on-chain one-cluster signer model. Then finalize a registry generation and content hash on chain and verify a signed, content-addressed venue manifest in the daemon. Do not use a mutable website list or cross-copy endpoint tables among CVMs. |
+
+Detailed methods and thresholds live in
+[`throughput-roadmap.md`](../docs/throughput-roadmap.md),
+[`gpu-tee-runbook.md`](../docs/gpu-tee-runbook.md), and
+[`multi-market-architecture.md`](../docs/multi-market-architecture.md).
+
+## Accepted risks and deliberate non-work
+
+| ID / assumption      | Disposition                                                                                                                                                                                                                                                        | Re-entry condition                                                                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| T-05                 | **Won't Fix.** Confirmed-commitment mirror rollback is accepted as an availability risk, not a custody-authority path. The owner explicitly declined further work.                                                                                                 | Reopen only if the commitment model or accepted Solana finality assumption changes. Do not fold unrelated mirror features into T-05.                            |
+| U-07                 | **Won't Fix.** Full Ed25519 instruction scanning is intentional and bounded by the TEE-built transaction's instruction count.                                                                                                                                      | New evidence of material CU/transaction pressure or a correctness-safe bounded alternative.                                                                     |
+| PF-06                | **Won't Fix.** `OrderOpening` cloning measured about 0.9 microseconds per N=16 batch.                                                                                                                                                                              | A new profile contradicts the existing measurement by making it material.                                                                                       |
+| D-09                 | **Accepted.** Permissionless expired-lock cleanup may award rent to the cleaner; this enables the shipped TEE lock sweeper and does not move note value.                                                                                                           | Governance chooses a different rent-beneficiary policy.                                                                                                         |
+| S-02(C)              | **Declined after recovery revalidation.** A failed commitment reservation remains terminal until its recorded lock expiry; immediate release or auto-rebook could race an ambiguous on-chain lock/settle. The daemon may submit a fresh signed order after expiry. | A new chain primitive makes landed-lock attribution and atomic safe reuse possible, or measured lock-failure UX justifies a separately audited recovery design. |
+| Price/limit fairness | **Accepted trust boundary.** Asset identity, scaled arithmetic, conservation, fees, and recoverability are circuit-enforced; matching fairness and oracle-policy execution remain TEE-trusted.                                                                     | Threat model changes to require trustless price/limit fairness.                                                                                                 |
+| On-chain DCAP        | **Deferred trust-model choice.** Strict client attestation plus multisig-gated key rotation is the accepted model; on-chain quote verification is not currently required.                                                                                          | Client verification or governance rotation can no longer meet the launch trust model, or a practical on-chain verifier becomes an explicit product requirement. |
+| S-08(B), S-11(B)     | **Declined.** Do not bind each order into VALID_INPUT or add in-circuit merge ordering solely for already-documented Low/unreachable cases. Existing client proving and the on-chain distinct-input check are the chosen tradeoffs.                                | Circuit opens for a related redesign and the incremental cost can be measured.                                                                                  |
+
+## July-20 deep-dive disposition backfill
+
+This closes the aggregate “D-01…D-09 untriaged” row left in the July-25 tracker.
+
+**Re-verified against HEAD during the August 2 sweep.** Each disposition below
+was checked against current code rather than carried forward on trust. Seven
+hold as written; **three are refined** — see the notes after the table. The
+evidence is now first-hand: `lock_sweep.rs` and `recover.rs` were read in Batch
+L/M, `valid_deposit/circuit.circom` and `deposit.rs` in the circuits batch,
+`auth.rs`/`persistence` in Batch J, and the D-03/D-04/D-05 constants were
+grepped directly.
+
+| ID   | Final disposition        | Evidence / successor                                                                                                                                                                                                                                                                |
+| ---- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D-01 | **Closed enclave-side — see refinement 1.** | Corroborated at HEAD: `spawn_lock_sweeper` is wired (`main.rs:937`), and `lock_sweep.rs:12-17` records that S-03(C) made `withdraw`/`merge` reject only a **live** lock, so *"a stranded lock no longer blocks anything once its expiry passes"* — demoting the sweeper from liveness recovery to rent reclamation. Non-rebooking is deliberate and documented (`recover.rs:34-42`). **But its stated client-side premise does not hold — see refinement 1.** |
+| D-02 | **Measurement-gated.**   | Conservative deadline and ambiguous redrive exist; marker-runway telemetry/evidence remains as specified above.                                                                                                                                                                     |
+| D-03 | **Measurement-gated.**   | The on-chain ring remains 64; the mirror correctly keeps a permissive 512 entries because it observes flattened leaves. Capacity/browser evidence remains as specified above.                                                                                                       |
+| D-04 | **Open.**                | The finalized governance monitor still rereads configuration but does not pin/monitor the vault ProgramData upgrade slot.                                                                                                                                                           |
+| D-05 | **Accepted with a documented rotation procedure — see refinement 2.** | T-01/RD-01 did ship versioned trust profiles and fail-closed refresh. But `oracle/vaa.rs:75` still hardcodes `MAINNET_GUARDIAN_SET_INDEX = 7`, with `:69` instructing *"When Wormhole next rotates: bump MAINNET_GUARDIAN_SET_INDEX, replace this…"*. The availability risk D-05 described — matching halts until a new image ships — is **unchanged**; what changed is that the response is a normal governed release rather than an emergency. |
+| D-06 | **Refuted — verified.**  | The observation is factually accurate (`valid_deposit/circuit.circom` range-checks the mint halves and amount but feeds `recoveryNonce` raw into Poseidon), and the refutation still holds: a circom public-input signal **is** an Fr element, so `≥ r` is not representable; `deposit.rs:98-116` derives every public input on-chain and the verifier enforces canonical encoding; and `Num2Bits(254)` would not prove `< r` since 2²⁵⁴ > r. |
+| D-07 | **Closed — verified.**   | AU-04 made revoked JTIs durable; confirmed at `persistence/auth.rs:92` and `api/state.rs:1174-1180`, with the prune deriving from `TOKEN_EXPIRY_LEEWAY_SECONDS` (`auth.rs:812-813`). Note the source comment at `auth.rs:793-796` **still claims the denylist is memory-only** — folded into **SW-30** as its fourth stale-doc instance. |
+| D-08 | **Mostly closed — see refinement 3.** | T-17's per-instrument `trading_enabled` is live (`api/instruments.rs:55-67`) and is arguably a better answer than the single global bit D-08 asked for. The **pause-reason** half did not ship: no `pause_reason` appears in `api/info.rs` or `api/system.rs`. |
+| D-09 | **Accepted risk.**       | Permissionless expiry cleanup is intentional, documented, and used by the lock sweeper; no custody loss results.                                                                                                                                                                    |
+
+**Refinement 1 — D-01's recovery contract has a broken half.** The enclave
+deliberately does not restore resting orders, on the premise stated at
+`settle/recover.rs:34-42` that *"the daemon observes the terminal/restart state
+and submits a fresh signed order once the note is usable again."* **SW-11
+establishes the daemon does not observe it** — it drops the SDK's `onResync`
+signal and has no boot reconciliation. D-01 is therefore correctly closed on the
+enclave side while the client half it depends on is missing. Fixing SW-11 is
+what actually completes D-01; until then, "definitive failures are terminal and
+the client re-places" is aspirational.
+
+**Refinement 2 — D-05 should not be listed as closed.** The mitigation is
+procedural, not structural: a guardian rotation still halts matching until an
+image ships. Track it as an accepted risk with a named runbook and a monitor on
+the guardian-set index, which is what D-05 originally asked for and what the
+`vaa.rs` comment assumes an operator will do.
+
+**Refinement 3 — D-08's pause-reason surface is still missing.** Per-instrument
+`trading_enabled` covers the "can I trade this market" question well. It does
+not answer "why is the venue paused," which is what an operator needs when the
+governance monitor or a settle-driver failure trips the gate (`main.rs:476-479`).
+Cheap to add alongside **C6**'s documentation pass.
+
+**Net:** of the nine July-20 findings, **D-02, D-03 and D-04 remain genuinely
+open** (two measurement-gated, one directly actionable), **D-05 is an accepted
+risk rather than closed**, **D-08 is partially delivered**, and D-01/D-06/D-07/
+D-09 are closed, refuted or accepted as recorded — with D-01 contingent on
+SW-11.
+
+## Recommended execution order
+
+1. Fix **SW-07**. Unauthenticated, one transaction, permanent venue halt, no
+   in-band recovery. Ship the fail-closed half (divergence stops tree reads and
+   pauses trading) even if the scope fix lands separately.
+2. **Rotate the Helius key and fix SW-01.** A live credential exposure reachable
+   by any authenticated trader; rotation is independent of the code fix.
+3. Fix **CA-01**. It is ~1.5 days with no ceremony or CVM, and until it ships
+   the client cannot distinguish the audited build from any enclave the operator
+   controls. Ship CA-02 and CA-03 in the same PR — same file, same class of
+   defect.
+4. Fix **SW-02** and **SW-03** together. They compose with SW-01 into an
+   unauthenticated → RPC-exhaustion → credential-disclosure chain, and both are
+   under a day each.
+5. Land the **SW-14** `tmpfs` mount. Fifteen minutes, no code change, and it
+   stops the enclave writing plaintext trade amounts to a non-encrypted path on
+   every batch. Independent of the disk-layout question that sets its severity.
+6. Fix **SW-19**. Make the control token mandatory (generate and write one
+   at boot when unset) and add `Origin`/`Host`/`Content-Type` checks — half a
+   day to close a default-insecure local server that can place orders and
+   deposit funds. Correct the module doc in the same change; its
+   "single-tenant host" guidance is what makes the insecure setup look fine.
+7. Fix **SW-21** — a one-line range check on `tree_id` in `prepare_order`.
+   It removes a free, repeatable way for any account to select a maker on the
+   book and guarantee their fill does not settle.
+8. Fix **DEP-01** in a separate dependency/image slice; it now makes the
+   required dependency audit fail and must not be baseline-suppressed.
+9. Implement **D-04** and **A-3** as focused, independent hardening slices.
+   A-3 is cheap and needs no CVM unless it exposes real drift; D-04 changes the
+   boot/governance path and does.
+10. Land the **SW-11 mitigation** (~1 h: wire `onResync` to pause + surface, clear
+   `mergeInFlight` at boot) so the daemon can no longer lose sight of notes
+   silently, and schedule the reconcile routine. Take **SW-12** (~2 h) and
+   **SW-13** in the same daemon slice — same files, and PF-20…PF-22 sit in them
+   too.
+11. Clear **SW-04**, **SW-05**, **SW-06** as hygiene, with a sweep for any third
+   instance of the arbitrary-eviction pattern.
+12. **Continue the un-audited-surface carry-forward** in §4 of the August 2
+   sweep — the `prover/` encoders and the remaining daemon surface, with
+   the repo-wide gap analysis now recorded in §4 of the August 2 sweep. The
+   circuits and `darkpool-matcher/algorithm.rs` are **done and clean** (§3);
+   `api/stream.rs`, `api/auth.rs`, the API routing layer, `darknyx-tee/keys/`,
+   `settle/{payload,assemble,lock_sweep,submit_lock,alt,recover}.rs`,
+   `oracle/{cache,hermes}.rs`, `matcher/{openings,book}.rs`, `darkpool-crypto/`,
+   `vault/{verify_match_batch,lock_note,merkle}.rs`, `api/{auth,orders,debug}.rs`,
+   `sdk/settlement/`, the stream client, `scripts/`, and `main.rs` +
+   `persistence/` are **done** (SW-29/SW-30/SW-31; the rest clean). Batch R (`icicle_prover.rs`, CI workflows, gate scripts) is **done**
+   (SW-32). The measured gap list from §4 of the sweep is now closed except for
+   the deliberately descoped `packages/indexer`, the loadgen's `real_settle/`
+   half, and the admin/governance vault instructions covered by audit_1. Remaining, all lower
+   risk: `settle/{lock_note,alt}.rs`, the rest of `darkpool-crypto`, a
+   `vault/instructions` re-read against post-sharding changes, and the CI
+   workflows / remaining ops scripts.
+   `packages/indexer` is descoped by the owner; the loadgen's `real_settle/`
+   half is unread and should get the measurement lens if its numbers are quoted. Then commission a fuzz harness for
+   `oracle::accumulator::parse` and `oracle::vaa::parse`: both read clean
+   statically, which is exactly where static review is weakest.
+13. Add **D-02** runway metrics and collect **D-03** root-production plus
+    browser-proving evidence during the next representative capacity run.
+14. Clear the two bookkeeping items — **DOC-01** (kill-switch semantics) and
+    **CA-04** (populate `EXPECTED_COMPOSE_HASH` with the release bundle).
+15. Make the **T-03** client/transport product decision before any external
+    account or real-value launch.
+16. Complete the external circuit audit, freeze artifacts, run **N-18**, then
+    rehearse **N-19** and the production release bundle.
+17. Pull GPU, transaction-v1, higher concurrency, and cross-CVM work only when
+    their gates lift. Their runbooks are already concrete enough for a new agent
+    to resume without re-deriving the architecture.
+
+## Continuation directive for agents
+
+Before starting a residual item:
+
+1. read this row and its linked source document;
+2. revalidate the failure mode against current `main`;
+3. move only that row to `In progress` and record the branch/PR in the source
+   tracker if it has one;
+4. preserve the stated compatibility boundary and cost measurement;
+5. attach exact local, hosted, devnet, and CVM evidence required by the row;
+6. move a row only as far as the evidence supports;
+7. update this index and the owning source tracker in the same closing PR.
+
+Do not reopen an accepted-risk row, implement a measurement-gated change before
+measuring it, or use an original audit's stale status without checking its
+newer tracker.

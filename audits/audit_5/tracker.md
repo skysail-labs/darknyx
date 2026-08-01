@@ -1,13 +1,22 @@
+<!-- audit-record -->
+> **Audit:** Closure tracker  
+> **Date:** 2026-07-25 → ongoing  
+> **Engagement:** `audits/audit_5/`  
+> **ID prefix:** `S-`, `PF-01…PF-07`, `AU-`  
+> **Cross-audit status:** see [`residual-backlog.md`](../residual-backlog.md) — the canonical index of what is still open.
+
+---
+
 # Darknyx remediation tracker — 2026-07-25 review
 
 This is the closure ledger for
-[`docs/audit-2026-07-25-withdraw-intake-boundary-review.md`](audit-2026-07-25-withdraw-intake-boundary-review.md)
+[`audits/audit_5/withdraw-intake-boundary-review.md`](withdraw-intake-boundary-review.md)
 (soundness `S-01…S-12`, performance `PF-01…PF-07`) plus the `AU-01…AU-07`
 authentication findings — `AU-01…AU-05` surfaced while validating S-02, and
 `AU-06…AU-07` from the follow-up complete pass of `api/auth.rs` on 2026-07-26.
 
 It follows the conventions of
-[`docs/security-remediation-tracker.md`](security-remediation-tracker.md): a
+[`audits/audit_3/tracker.md`](../audit_3/tracker.md): a
 finding is not closed by code alone. The closing PR must link the invariant
 restored, wire/circuit impact, tests, devnet/CVM evidence where applicable, the
 measured cost-to-protocol delta, and rollback instructions.
@@ -17,7 +26,7 @@ and `Won't Fix`. `Closed` requires merged code and the evidence named in the row
 `Deferred` requires a recorded reason and a re-entry condition.
 
 For the consolidated view of work that still remains across every audit, use
-[`audit-residual-backlog.md`](audit-residual-backlog.md). This document remains
+[`../residual-backlog.md`](../residual-backlog.md). This document remains
 the evidence ledger for `S-01…S-12`, `PF-01…PF-07`, and `AU-01…AU-07`.
 
 ## Validation provenance
@@ -84,7 +93,7 @@ surface after changing it rather than only before.
 | AU-04 | Low | TEE | `hardening/enclave-auth-controls` | The `jti` revocation denylist has no expiry-based eviction and grows without bound — the same class as S-10. Fold into S-10's bounded-map work if cheap, else track. **Re-entry condition:** S-10 implementation | **Closed** — each entry carries its token expiry, pruned on write and at boot; the v2 snapshot round-tripped a restart (`revoked_expired_dropped` reported at boot) |
 | AU-05 | Low | TEE + ops | `hardening/enclave-auth-controls` | `POST /auth/token` has no in-process rate limit; the router comment defers to a reverse-proxy limit that does not exist in this repo. The argon2 semaphore bounds concurrency and RAM, not request rate. **Re-entry condition:** ingress configuration before mainnet | **Closed** — unknown keys refused before hashing, per-account login bucket (bounded by registered accounts; an outsider cannot throttle a real account), and permits taken without waiting so excess is shed not queued |
 | AU-06 | **Medium** | TEE | `hardening/token-expiry-leeway` (PR #72) | A revoked token stays refused for as long as it is still decodable. `Validation::default()` carries `leeway: 60`, so a token was accepted until `exp + 60`, while the AU-04 denylist prune drops an entry once `exp` has passed — between those two moments a REVOKED token was off the denylist AND still decodable, and any later revocation triggered the prune. Demonstrated with a failing test (revoked token returned 204 where 401 was required) before the fix. Leeway pinned to 0 and the prune margin derived from the same constant, so raising one widens the other. **Regression introduced by AU-04 in this same effort** | **Closed** — PR #72 merged as `19ae2a4`; offline and hosted gates green |
-| AU-07 | Medium | TEE + ops | — | An unauthenticated client cannot hold enclave resources indefinitely. `/v1/stream` upgrades unauthenticated by design (login is in-band) and closes after 60 s idle, but ANY frame — including a transport `ping` — refreshes the idle timer, and there is no cap on concurrent connections, so sockets can be held open indefinitely at near-zero attacker cost. Not fixed in the auth pass: the mitigation is partly at ingress, and the in-process half needs a connection cap chosen against real client behaviour rather than guessed. **Closed 2026-07-28** — the in-process half: an ABSOLUTE 10 s unauthenticated-login window that no frame extends (the ping-only hold), plus venue-wide and per-account concurrency caps. No usable client-behaviour measurement existed, so the limits are stated as bounds sized to protect a small CVM and cheap to re-tune, rather than presented as derived numbers. Per-peer caps are deliberately omitted — behind the gateway every connection shares one apparent source address, so an IP-keyed cap would bound the venue while constraining no attacker. Proven against a real socket in `crates/darknyx-tee/tests/stream_conn_limits.rs`, mutation-tested, and executed in hosted CI (PR #80, run `30336791498`). Detail: DEP-AU-07 in `audit-2026-07-25-tee-infra-daemon-remediation-tracker.md`. | Closed |
+| AU-07 | Medium | TEE + ops | — | An unauthenticated client cannot hold enclave resources indefinitely. `/v1/stream` upgrades unauthenticated by design (login is in-band) and closes after 60 s idle, but ANY frame — including a transport `ping` — refreshes the idle timer, and there is no cap on concurrent connections, so sockets can be held open indefinitely at near-zero attacker cost. Not fixed in the auth pass: the mitigation is partly at ingress, and the in-process half needs a connection cap chosen against real client behaviour rather than guessed. **Closed 2026-07-28** — the in-process half: an ABSOLUTE 10 s unauthenticated-login window that no frame extends (the ping-only hold), plus venue-wide and per-account concurrency caps. No usable client-behaviour measurement existed, so the limits are stated as bounds sized to protect a small CVM and cheap to re-tune, rather than presented as derived numbers. Per-peer caps are deliberately omitted — behind the gateway every connection shares one apparent source address, so an IP-keyed cap would bound the venue while constraining no attacker. Proven against a real socket in `crates/darknyx-tee/tests/stream_conn_limits.rs`, mutation-tested, and executed in hosted CI (PR #80, run `30336791498`). Detail: DEP-AU-07 in `../audit_6/tracker.md`. | Closed |
 
 ---
 
@@ -332,12 +341,12 @@ the constraint.
 
 ## Backfill — 2026-07-20 `D-01…D-09` pass
 
-`docs/audit-2026-07-20-full-protocol-review.md` is cited as prior art by the
+`audits/audit_4/full-protocol-review.md` is cited as prior art by the
 2026-07-25 review (S-03 sharpens D-01/D-09; S-08 relates to D-03; AU-02 relates
 to D-07). The aggregate untriaged row is replaced by the validated
 per-finding dispositions below; the consolidated requirements and evidence
 triggers live in
-[`audit-residual-backlog.md`](audit-residual-backlog.md).
+[`../residual-backlog.md`](../residual-backlog.md).
 
 | ID | Validated disposition on 2026-07-31 | Status |
 |---|---|---|

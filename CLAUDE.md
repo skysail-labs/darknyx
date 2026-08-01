@@ -126,6 +126,15 @@ You will not write correct code here without the mental model. Required:
   reading; and a tree reset does NOT empty the Merkle mirror, which replays from
   `DARKNYX_TEE_SYNC_FROM_SLOT` and needs an env-only redeploy with a post-reset
   floor.
+* **[`audits/`](audits/)** — every security/performance engagement, its
+  findings, and its closure tracker. **[`audits/residual-backlog.md`](audits/residual-backlog.md)**
+  is the canonical index of what is still open across all of them (with the
+  recurring structural classes worth fixing as patterns);
+  **[`audits/AUDIT_AGENT_ONBOARDING.md`](audits/AUDIT_AGENT_ONBOARDING.md)**
+  seeds the next auditing agent, and **[`audits/README.md`](audits/README.md)**
+  tells an implementing agent how to build a tracker. Findings documents are
+  immutable point-in-time evidence — status moves in the tracker and the
+  backlog, never by editing the report.
 * **[`docs/throughput-roadmap.md`](docs/throughput-roadmap.md)** — the log of
   settle/throughput optimizations deliberately DEFERRED behind platform gates
   (🟢 GPU proving, 🔵 Alpenglow finality) + 🟡 real volume, with the measured

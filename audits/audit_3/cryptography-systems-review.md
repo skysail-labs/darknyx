@@ -1,3 +1,12 @@
+<!-- audit-record -->
+> **Audit:** Cryptography + systems review  
+> **Date:** 2026-07-14  
+> **Engagement:** `audits/audit_3/`  
+> **ID prefix:** `CS-`, `N-`, `P-`  
+> **Cross-audit status:** see [`residual-backlog.md`](../residual-backlog.md) — the canonical index of what is still open.
+
+---
+
 # Nyx cryptography and systems audit - 2026-07-14
 
 > **Scope.** Defensive, first-party review of the devnet-stage Nyx vault,

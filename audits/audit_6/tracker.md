@@ -1,10 +1,19 @@
+<!-- audit-record -->
+> **Audit:** Closure tracker  
+> **Date:** 2026-07-25 → ongoing  
+> **Engagement:** `audits/audit_6/`  
+> **ID prefix:** `T-`, `PF-08…PF-10`  
+> **Cross-audit status:** see [`residual-backlog.md`](../residual-backlog.md) — the canonical index of what is still open.
+
+---
+
 # Darknyx TEE, infrastructure, and daemon remediation tracker
 
 This is the canonical closure ledger for
-[`audit-2026-07-25-tee-infra-daemon-review.md`](audit-2026-07-25-tee-infra-daemon-review.md).
+[`tee-infra-daemon-review.md`](tee-infra-daemon-review.md).
 It covers `T-01…T-18` and `PF-08…PF-10`, plus the release-readiness gaps
 confirmed while evaluating the audit. The earlier
-[`audit-2026-07-25-remediation-tracker.md`](audit-2026-07-25-remediation-tracker.md)
+[`../audit_5/tracker.md`](../audit_5/tracker.md)
 remains canonical for `S-`, `PF-01…PF-07`, and `AU-` findings; this tracker
 links dependencies into it rather than copying their ownership.
 
@@ -18,7 +27,7 @@ row. `Deferred` requires a reason and re-entry condition. `Won't Fix` records
 an explicit accepted risk and is not a synonym for forgotten work.
 
 For the consolidated view of work that still remains across every audit, use
-[`audit-residual-backlog.md`](audit-residual-backlog.md). This document remains
+[`../residual-backlog.md`](../residual-backlog.md). This document remains
 the evidence ledger for the TEE/infrastructure/daemon finding family.
 
 ## Continuation directive for agents
@@ -59,7 +68,7 @@ the first stop for an agent resuming the work.
 | Last merged remediation PR | #90 — slice-8 multi-market oracle isolation, merge commit `d69248b`, merged 2026-07-31. |
 | Active slice | none |
 | Active branch / PR | none |
-| Next slice | DEP-01 `ruint` advisory remediation first, then D-04 program-upgrade monitoring and independent A-3 layout assurance, in [`audit-residual-backlog.md`](audit-residual-backlog.md); T-03 remains explicitly deferred to its mainnet/external-user trigger |
+| Next slice | DEP-01 `ruint` advisory remediation first, then D-04 program-upgrade monitoring and independent A-3 layout assurance, in [`../residual-backlog.md`](../residual-backlog.md); T-03 remains explicitly deferred to its mainnet/external-user trigger |
 | Live state | **No CVM running; billing halted** after the final-source slice-8 isolation/recovery spot-check (2026-07-30). `nightly-test-cvm` was verified CPU-only (`tdx.xlarge`, prod9, 8 vCPU, `gpus=0`) and ran image `tee-v3-hardening-79` @ `sha256:eb4987ea06a2c9d59952526a36ff34dc730f454e630c59a4b5fb6eee20cdb4f9`, compose hash `03d2d99ac660ca307f3f96f4769f47b887032d288a0f76d74c51d01e276c3764`. Both real oracle feeds were restored before shutdown. No order was accepted and no proof/settlement ran; tree, program, and signer state are unchanged. The mode-0600 deploy env was securely deleted. PRIOR (slice 5): image `tee-v3-hardening-77` @ `sha256:5358ac5bad79cd55c5f7d185bddaafed29fa646d51be3b0ba70b2bc812906436`; devnet tree holds only the final `cvm-merge-then-order` test's leaves. Signer set unchanged; all four shards funded. |
 | Last updated | 2026-07-31 (slice 8 merged; trackers reconciled; fresh dependency scan surfaced DEP-01 in the canonical residual backlog) |
 
@@ -178,7 +187,7 @@ and live-path invariant it owns is satisfied; the earlier phrase
 | T-03 | High | TEE + infrastructure + SDK | `remediation/tee-transport-integrity` (transport work deferred) | **Rationale corrected 2026-07-28.** The finding's stated basis — "order intent is plaintext at the operator's gateway" — is wrong: the dstack gateway is itself an attested TDX CVM that mutually attests with our CVM and tunnels over WireGuard, so no unprotected hop carries plaintext. The real, still-valid exposure is narrower: (a) clients pin our measurement but not the gateway's, so that component can change with no Darknyx governance event, and (b) nothing binds the verified quote to the TLS session it was fetched over, so a party holding a valid gateway-domain certificate can front a different backend. Invariant to close: TLS terminates inside the Darknyx enclave with an attestation-bound certificate the client verifies, and the public route cannot reach plaintext 8080. | **Deferred — mainnet gate** (see the slice-3 section for the trigger, both costed options, and the DNS migration playbook) |
 | T-04 | High | Release engineering + infrastructure | `remediation/tee-oracle-trust`, then enforced for `remediation/tee-transport-integrity` | The existing CPU/GPU images are pinned by immutable digest in the oracle slice, which already changes the image and compose. Every image introduced later, including ingress, must be digest-pinned before that slice can merge. Release evidence maps source/tag/digest/compose hash, so substituting a tag cannot preserve an accepted measurement. | Code complete — enforcement generalised in slice 3: `scripts/check-compose-image-digests.sh` now checks EVERY image in EVERY compose against an explicit repository allowlist, instead of asserting a single hardcoded image. An ingress (or any other) service added later fails the gate until it is digest-pinned AND its repository is deliberately approved. Verified by mutating a compose in both directions. |
 | T-05 | Medium | — | — | Owner accepted the residual append-only-mirror availability risk on 2026-07-27. Confirmed commitment plus on-chain root validation is considered sufficient for the current product; a rollback can stall witness service but cannot authorize custody loss. No code, test, infrastructure, or follow-up task is authorized. | **Won't Fix — accepted risk** |
-| T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | **Closed** — journal, boot reconciliation, and drain merged; live crash-recovery drill passed on `nightly-test-cvm` 2026-07-28 (interruption confirmed on-chain, recovery classified correctly, entries retired, drain lifecycle exercised). Procedure + results: [`settlement-recovery-drill.md`](settlement-recovery-drill.md). |
+| T-06 | Medium | TEE settlement + daemon | `remediation/settlement-recovery` | Every side effect in an in-flight settlement is synchronously journaled before submission, then reconciled against signatures, marker/lock/consumed PDAs, and chain state after restart. Resting orders are not resurrected; the daemon submits a fresh signed order when appropriate. | **Closed** — journal, boot reconciliation, and drain merged; live crash-recovery drill passed on `nightly-test-cvm` 2026-07-28 (interruption confirmed on-chain, recovery classified correctly, entries retired, drain lifecycle exercised). Procedure + results: [`settlement-recovery-drill.md`](../../docs/settlement-recovery-drill.md). |
 | T-07 | Medium | Matcher + TEE + SDK + daemon | `remediation/order-canonical-next` | The unused order-level `user_commitment` and the daemon's corrupting workaround are removed across Rust/TS wire and canonical types. Global wallet owner/user-commitment cryptography remains intact. Canonical domains and fixed parity vectors move atomically. | **Closed** — field removed from `OrderCanonical`/`Order`/`OrderSnapshot`/`MatchPair`/`PlaceOrderRequest` + the TS mirrors; the `[0] != 0` intake check and error code 1002 retired; the daemon's `uc[0] = 0` zeroing deleted so `userCommitment()` is again the raw `create_wallet` output. `ORDER_DOMAIN` v4→v5, both pinned digests regenerated from the layout spec independently of either encoder. **Live-validated 2026-07-29**: all six CVM tests passed on the v5 body, incl. two real on-chain settles (`confirmed=1 rejected=0 ambiguous=0`). |
 | T-08 | Medium | Release engineering | `remediation/local-assurance` | Rust and production Node dependencies have locally reproducible vulnerability gates; GitHub Actions use full immutable SHAs and minimum permissions. Findings are triaged rather than hidden by blanket ignores. | Closed |
 | T-09 | Low | Daemon custody | `remediation/daemon-keystore-v2` | New keystores use the fixed v2 scrypt profile `N=2^17, r=8, p=1` with explicit memory bounds. KATs, wrong-passphrase, and resource-bound tests pin the profile. | **Closed** — fixed profile, explicit 256 MiB ceiling, pinned full-envelope KAT, wrong-passphrase and resource-bound tests merged in PR #86; local and hosted daemon/typecheck gates passed. |
@@ -332,7 +341,7 @@ hardening changes make it impossible to reconstruct.
 | `local-assurance` | No protocol runtime cost; longer local/hosted validation. | Wall time and peak disk for the TEE, artifact-required, SBF, dependency, and complete local gates. |
 | `tee-transport-integrity` (as shipped) | Connection accounting adds one atomic compare-and-swap per upgrade and one map update per login — not measurable against network cost. No TLS work shipped, so no handshake, latency, or image-size delta. | None required: the change adds no per-request work on any hot path. The caps' behaviour is pinned by tests rather than by a timing measurement. |
 | `tee-transport-integrity` (deferred T-03 transport work) | TLS termination adds handshake cost, request latency, memory per socket, and image size. | Cold/warm HTTP p50/p95, WebSocket connect/login/reconnect p50/p95, RSS per 1/100/limit sockets, CPU under ping-only abuse, and image-size delta. Capture in the CVM window that ships the transport change. |
-| `settlement-recovery` | Observed 2026-07-28: settle `total_ms=14210` with the journal enabled, within the spread of the two pre-journal runs (14573 / 15310). Three samples across differing network conditions show the journal is not visible at this resolution — they do not establish that its cost is negligible. ~1684 B journalled per match (~26 KiB per transition for a 16-match batch). Restart→reconciled **436 ms**. | **Partially captured — WAIVER ACCEPTED by the owner 2026-07-29.** End-to-end timing, bytes/match, and restart-to-reconciled are measured ([`settlement-recovery-drill.md`](settlement-recovery-drill.md) §6). **Per-durable-transition write p50/p95 is NOT captured** — no instrumentation exists around `SettleJournal::record`. Accepted on the reasoning that the histogram and the end-to-end figure answer the SAME question (did adding an `fsync` slow settlement?), and the end-to-end figure answers it on the path that reaches a user: the journal-enabled run was the fastest of the three samples (14210 vs 14573 / 15310), so an `fsync` slow enough to matter would already be visible. Residual, stated plainly: three samples support "not visible at this resolution", not "negligible". Add the histogram if the settle path ever becomes CPU- rather than network-bound (e.g. GPU proving lands), because the proxy's whole validity rests on ~14 s of network time dominating. |
+| `settlement-recovery` | Observed 2026-07-28: settle `total_ms=14210` with the journal enabled, within the spread of the two pre-journal runs (14573 / 15310). Three samples across differing network conditions show the journal is not visible at this resolution — they do not establish that its cost is negligible. ~1684 B journalled per match (~26 KiB per transition for a 16-match batch). Restart→reconciled **436 ms**. | **Partially captured — WAIVER ACCEPTED by the owner 2026-07-29.** End-to-end timing, bytes/match, and restart-to-reconciled are measured ([`settlement-recovery-drill.md`](../../docs/settlement-recovery-drill.md) §6). **Per-durable-transition write p50/p95 is NOT captured** — no instrumentation exists around `SettleJournal::record`. Accepted on the reasoning that the histogram and the end-to-end figure answer the SAME question (did adding an `fsync` slow settlement?), and the end-to-end figure answers it on the path that reaches a user: the journal-enabled run was the fastest of the three samples (14210 vs 14573 / 15310), so an `fsync` slow enough to matter would already be visible. Residual, stated plainly: three samples support "not visible at this resolution", not "negligible". Add the histogram if the settle path ever becomes CPU- rather than network-bound (e.g. GPU proving lands), because the proxy's whole validity rests on ~14 s of network time dominating. |
 | `order-canonical-next` | Removes one dead 32-byte field plus JSON hex/serialization work; no proving or on-chain cost. | Canonical preimage bytes, REST/WS request bytes, serialized order size, and placement p50/p95 before/after. |
 | `daemon-keystore-v2` | Deliberately increases unlock CPU/RAM; no trading hot-path cost after unlock. Apple M3/16 GiB measurement: v1 p50/p95 23.22/23.80 ms and 130.14 MiB process peak RSS; v2 203.76/248.25 ms and 247.27 MiB; wrong password 213.23/316.95 ms; migration 237.48/281.19 ms and 261.30 MiB; file 727→760 B. | Captured for the currently supported macOS arm64 development/client class; repeat on any newly supported materially lower-memory client before release. Full method and caveats are in the slice-6 evidence section. |
 | `tee-bounds-cleanup` | Dead-state deletion is neutral/smaller; bounded FFI retries only affect error paths. | Binary/SDK bundle delta, normal-prove p50/p95 unchanged, and adversarial retry count/allocation ceiling. |
@@ -341,7 +350,7 @@ hardening changes make it impossible to reconstruct.
 ## Cross-tracker corrections
 
 These rows correct evidence bookkeeping in
-[`audit-2026-07-25-remediation-tracker.md`](audit-2026-07-25-remediation-tracker.md).
+[`../audit_5/tracker.md`](../audit_5/tracker.md).
 They do not create duplicate finding ownership.
 
 | ID | Required correction | Closure dependency | Status |
@@ -386,7 +395,7 @@ Every remediation PR must add a section to this tracker containing:
 - Mainnet still requires the existing external circuit audit, Phase-2
   ceremony, split-governance rehearsal, recovery drill, deployed-program/image
   verification, and all gates in
-  [`security-remediation-tracker.md`](security-remediation-tracker.md).
+  [`../audit_3/tracker.md`](../audit_3/tracker.md).
 
 ## Slice 3 — `remediation/tee-transport-integrity`, 2026-07-28
 
@@ -618,7 +627,7 @@ aggregate tick — the habit T-18 exists to enforce. `T-04` stays `Code
 complete` as a standing release invariant, now with an enforcement gate that
 actually inspects every image. `T-03` moves to `Deferred — mainnet gate` with the
 trigger above; it is also recorded in the mainnet gates of
-[`security-remediation-tracker.md`](security-remediation-tracker.md).
+[`../audit_3/tracker.md`](../audit_3/tracker.md).
 
 ## Slice 4 evidence — `remediation/settlement-recovery`, 2026-07-28
 
@@ -787,7 +796,7 @@ and a damaged journal preserved rather than overwritten.
 ### Live evidence — crash-recovery drill, 2026-07-28
 
 Full procedure, traps, and raw results:
-[`settlement-recovery-drill.md`](settlement-recovery-drill.md). Summary:
+[`settlement-recovery-drill.md`](../../docs/settlement-recovery-drill.md). Summary:
 
 | Assertion | Result |
 |---|---|
@@ -919,7 +928,7 @@ Skipped: nothing. Every item in this pass was either valid or already fixed.
 
 ### Status
 
-`T-06` is **`Closed`**, with one explicitly recorded waiver, **accepted by the owner on 2026-07-29**: per-durable-transition write p50/p95 was not captured (see the cost table row for the rationale and for the condition — a CPU-bound settle path — that would require revisiting it). The waiver covers a PERFORMANCE measurement only. The open *correctness* gap is separate and still stands: the drill only ever exercised the `Locking`-stage journal entry, so `AlreadySettled` and `Indeterminate` remain unit-tested only, because `phala cvms stop` cannot land inside the ~10 s settle window — reaching them needs `phala ssh` + `docker kill` and development-mode SSH keys. Every other live obligation was discharged by the 2026-07-28 drill above, and the code merged in PR #81. The drill is repeatable — [`settlement-recovery-drill.md`](settlement-recovery-drill.md) carries the procedure, the pass criteria, and the traps — so a future settle-pipeline or persistence change can re-establish this evidence rather than re-derive how.
+`T-06` is **`Closed`**, with one explicitly recorded waiver, **accepted by the owner on 2026-07-29**: per-durable-transition write p50/p95 was not captured (see the cost table row for the rationale and for the condition — a CPU-bound settle path — that would require revisiting it). The waiver covers a PERFORMANCE measurement only. The open *correctness* gap is separate and still stands: the drill only ever exercised the `Locking`-stage journal entry, so `AlreadySettled` and `Indeterminate` remain unit-tested only, because `phala cvms stop` cannot land inside the ~10 s settle window — reaching them needs `phala ssh` + `docker kill` and development-mode SSH keys. Every other live obligation was discharged by the 2026-07-28 drill above, and the code merged in PR #81. The drill is repeatable — [`settlement-recovery-drill.md`](../../docs/settlement-recovery-drill.md) carries the procedure, the pass criteria, and the traps — so a future settle-pipeline or persistence change can re-establish this evidence rather than re-derive how.
 
 Superseded window plan (kept for provenance):
 
