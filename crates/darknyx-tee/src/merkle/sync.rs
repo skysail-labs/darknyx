@@ -506,6 +506,17 @@ pub fn parse_merkle_tree_root(data: &[u8]) -> Option<(u64, [u8; 32])> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A-3 — the mirror's whole notion of chain truth is these two offsets: a
+    /// wrong `leaf_count` or `current_root` makes reconcile compare garbage and
+    /// silently mark a healthy mirror diverged (or a diverged one healthy).
+    #[test]
+    fn tree_offsets_match_the_generated_layout() {
+        use crate::test_layout::offset;
+        const A: &str = "MerkleTree";
+        assert_eq!(TREE_LEAF_COUNT_OFFSET, offset(A, "leaf_count"));
+        assert_eq!(TREE_CURRENT_ROOT_OFFSET, offset(A, "current_root"));
+    }
     use super::*;
 
     fn fr_safe(seed: u8) -> [u8; 32] {

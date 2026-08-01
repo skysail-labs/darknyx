@@ -65,6 +65,24 @@ pub fn parse_market_config(data: &[u8]) -> Option<OnChainMarketConfig> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A-3 — pin every hand-written `MarketConfig` offset to the fixture
+    /// generated from the real struct. `MarketConfig` is Borsh, not zero-copy,
+    /// so its offsets are accumulated field sizes; the fixture's own probe test
+    /// proves that accumulation against the real serializer.
+    #[test]
+    fn offsets_match_the_generated_market_layout() {
+        use crate::test_layout::{account_len, offset};
+        const A: &str = "MarketConfig";
+        assert_eq!(BASE_MINT_OFFSET, offset(A, "base_mint"));
+        assert_eq!(QUOTE_MINT_OFFSET, offset(A, "quote_mint"));
+        assert_eq!(PRICE_SCALE_OFFSET, offset(A, "price_scale"));
+        assert_eq!(TICK_SIZE_OFFSET, offset(A, "tick_size"));
+        assert_eq!(MIN_ORDER_SIZE_OFFSET, offset(A, "min_order_size"));
+        assert_eq!(CIRCUIT_BREAKER_BPS_OFFSET, offset(A, "circuit_breaker_bps"));
+        assert_eq!(BASE_DECIMALS_OFFSET, offset(A, "base_decimals"));
+        assert_eq!(MARKET_CONFIG_ACCOUNT_LEN, account_len(A));
+    }
     use super::*;
 
     fn fixture() -> Vec<u8> {

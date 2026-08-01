@@ -20,6 +20,11 @@ pub mod settle;
 pub mod solana_rpc;
 pub mod verify;
 
+/// A-3 — test-only reader for the vault's generated account-layout fixture.
+/// Not compiled into the enclave binary.
+#[cfg(test)]
+pub mod test_layout;
+
 // Supplies the `__rust_probestack` symbol that wasmer 4.4 (via
 // ark-circom, in `prover`) references but Rust 1.91 no longer exports.
 // No Rust items — just a `global_asm!` definition, x86_64-linux only.

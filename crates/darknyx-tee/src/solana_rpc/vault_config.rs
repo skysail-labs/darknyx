@@ -107,15 +107,28 @@ pub fn parse_fee_rate_bps(data: &[u8]) -> Option<u16> {
 mod tests {
     use super::*;
 
+    /// A-3 — assert every offset against the fixture GENERATED from the real
+    /// `VaultConfig` struct, not against a literal.
+    ///
+    /// This test used to read `assert_eq!(FEE_RATE_BPS_OFFSET, 1256)`. That is a
+    /// statement about the constant, not about the program: inserting a field
+    /// into `VaultConfig` leaves the constant, the literal, and this assertion
+    /// all agreeing with each other while the parser reads the wrong bytes off a
+    /// real account. Comparing against `programs/vault/account-layout.json`
+    /// makes the struct the authority.
     #[test]
-    fn offsets_match_vault_layout() {
-        // Pin the offsets against the hand-computed layout above; if the
-        // on-chain struct grows a field before these, this and the doc
-        // comment must move together. Total account data = 1264 bytes.
-        assert_eq!(FEE_RATE_BPS_OFFSET, 1256);
-        assert_eq!(PROTOCOL_OWNER_COMMITMENT_OFFSET, 1224);
-        assert_eq!(NUM_TEE_KEYS_OFFSET, 1258);
-        assert_eq!(NUM_TREES_OFFSET, 1259);
+    fn offsets_match_the_generated_vault_layout() {
+        use crate::test_layout::{account_len, offset};
+        const A: &str = "VaultConfig";
+        assert_eq!(TEE_PUBKEYS_OFFSET, offset(A, "tee_pubkeys"));
+        assert_eq!(
+            PROTOCOL_OWNER_COMMITMENT_OFFSET,
+            offset(A, "protocol_owner_commitment")
+        );
+        assert_eq!(FEE_RATE_BPS_OFFSET, offset(A, "fee_rate_bps"));
+        assert_eq!(NUM_TEE_KEYS_OFFSET, offset(A, "num_tee_keys"));
+        assert_eq!(NUM_TREES_OFFSET, offset(A, "num_trees"));
+        assert_eq!(VAULT_CONFIG_ACCOUNT_LEN, account_len(A));
     }
 
     #[test]
