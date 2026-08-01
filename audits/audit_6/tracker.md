@@ -68,9 +68,9 @@ the first stop for an agent resuming the work.
 | Last merged remediation PR | #90 — slice-8 multi-market oracle isolation, merge commit `d69248b`, merged 2026-07-31. |
 | Active slice | none |
 | Active branch / PR | none |
-| Next slice | **DEP-01 closed 2026-08-01 (PR #93).** Next: D-04 program-upgrade monitoring, then independent A-3 layout assurance, in [`../residual-backlog.md`](../residual-backlog.md); T-03 remains explicitly deferred to its mainnet/external-user trigger |
+| Next slice | **DEP-01 (PR #93) and A-3 (PR #94) closed 2026-08-01.** Next: D-04 program-upgrade monitoring, in [`../residual-backlog.md`](../residual-backlog.md); `D-02`/`D-03` stay measurement-gated and T-03 remains explicitly deferred to its mainnet/external-user trigger |
 | Live state | **No CVM running; billing halted** after the 2026-08-01 DEP-01 boot/attestation spot-check. `nightly-test-cvm` (CPU, `gpus=0`, prod9) ran image `tee-v3-hardening-80` @ `sha256:4e7266ddc9d85ff168e83e4f14a0117ff037e7db065a0d04e01c1e515105cb1c`, compose hash `2aea40e45262bd46681f076486142eb631a167ebebc02d661e0664f7cc536118`, mrtd `f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077`. Stateless check: no order accepted, no proof or settlement ran, tree/program/signer state unchanged and NOT reset. All four shard signers re-derived identically, so no rotation or refunding was needed. `cvm-attestation-e2e` 5/5 passed. The mode-0600 deploy env was securely deleted. |
-| Last updated | 2026-08-01 (DEP-01 closed: ruint 1.20.0, image 80 pinned, CVM boot/attestation spot-check passed) |
+| Last updated | 2026-08-01 (DEP-01 closed: ruint 1.20.0, image 80 pinned, CVM boot/attestation spot-check passed; A-3 closed: generated account-layout fixture, mutation-tested across TEE + SDK, no CVM needed) |
 
 ### Slice 1 live evidence — 2026-07-27
 
