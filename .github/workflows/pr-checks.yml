@@ -829,6 +829,7 @@ jobs:
             --test zk_spend_roundtrip \
             --test merkle_host \
             --test merkle_fuzz \
+            --test account_layout_fixture \
             -- --nocapture
           # NOTE: `merge_verify` is deliberately NOT here. It began as a pure
           # host round-trip target, but it now also drives litesvm (the merge

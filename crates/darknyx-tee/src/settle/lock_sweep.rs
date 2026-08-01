@@ -301,6 +301,16 @@ async fn sweep(
 
 #[cfg(test)]
 mod tests {
+
+    /// A-3 — same shape as the marker sweeper: a wrong offset here releases
+    /// live locks or strands expired ones. The vault carries its own
+    /// compile-time `offset_of!` guard for this field; this pins the TEE's
+    /// independent copy to the same generated source.
+    #[test]
+    fn lock_offset_matches_the_generated_layout() {
+        use crate::test_layout::offset;
+        assert_eq!(LOCK_EXPIRY_OFFSET, offset("NoteLock", "expiry_slot"));
+    }
     use super::*;
 
     fn lock_account(

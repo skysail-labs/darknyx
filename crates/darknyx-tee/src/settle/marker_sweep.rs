@@ -204,6 +204,18 @@ async fn sweep(
 
 #[cfg(test)]
 mod tests {
+
+    /// A-3 — the sweeper decides whether to reclaim rent by reading this
+    /// offset. Point it at the wrong bytes and it either closes live markers or
+    /// never closes stale ones.
+    #[test]
+    fn marker_offset_matches_the_generated_layout() {
+        use crate::test_layout::offset;
+        assert_eq!(
+            MARKER_EXPIRY_OFFSET,
+            offset("BatchValidityMarker", "expiry_slot")
+        );
+    }
     use super::*;
 
     // Distinct roots → distinct marker PDAs (sanity for the pack-by-root logic).

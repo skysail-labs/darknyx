@@ -1,0 +1,51 @@
+{
+  "_generated_by": "programs/vault/tests/account_layout_fixture.rs(UPDATE_LAYOUT_FIXTURE=1 cargo test -p vault --test account_layout_fixture)",
+  "_note": "Offsets INCLUDE the 8-byte Anchor discriminator. Derived from the structs, never hand-written. Consumers assert against this file.",
+  "accounts": {
+    "VaultConfig": {
+      "account_len": 1264,
+      "admin": { "offset": 8, "size": 32 },
+      "tee_pubkeys": { "offset": 40, "size": 512 },
+      "root_key": { "offset": 552, "size": 32 },
+      "zero_subtree_roots": { "offset": 584, "size": 640 },
+      "protocol_owner_commitment": { "offset": 1224, "size": 32 },
+      "fee_rate_bps": { "offset": 1256, "size": 2 },
+      "num_tee_keys": { "offset": 1258, "size": 1 },
+      "num_trees": { "offset": 1259, "size": 1 },
+      "bump": { "offset": 1260, "size": 1 }
+    },
+    "MerkleTree": {
+      "account_len": 2744,
+      "leaf_count": { "offset": 8, "size": 8 },
+      "current_root": { "offset": 16, "size": 32 },
+      "roots": { "offset": 48, "size": 2048 },
+      "right_path": { "offset": 2096, "size": 640 },
+      "roots_head": { "offset": 2736, "size": 1 },
+      "tree_id": { "offset": 2737, "size": 1 },
+      "bump": { "offset": 2738, "size": 1 }
+    },
+    "NoteLock": {
+      "account_len": 136,
+      "expiry_slot": { "offset": 88, "size": 8 }
+    },
+    "MarketConfig": {
+      "account_len": 108,
+      "base_mint": { "offset": 8, "size": 32 },
+      "quote_mint": { "offset": 40, "size": 32 },
+      "price_scale": { "offset": 72, "size": 8 },
+      "tick_size": { "offset": 80, "size": 8 },
+      "min_order_size": { "offset": 88, "size": 8 },
+      "circuit_breaker_bps": { "offset": 96, "size": 8 },
+      "base_decimals": { "offset": 104, "size": 1 },
+      "quote_decimals": { "offset": 105, "size": 1 },
+      "enabled": { "offset": 106, "size": 1 },
+      "bump": { "offset": 107, "size": 1 }
+    },
+    "BatchValidityMarker": {
+      "account_len": 49,
+      "payer": { "offset": 8, "size": 32 },
+      "expiry_slot": { "offset": 40, "size": 8 },
+      "bump": { "offset": 48, "size": 1 }
+    }
+  }
+}
