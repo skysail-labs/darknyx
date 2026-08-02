@@ -296,7 +296,7 @@ maybeDescribe(
           ),
         );
         const mergedLeaf = Number(
-          await readNoteMergedLeafIndex(conn, mergeSig),
+          await readNoteMergedLeafIndex(conn, mergeSig, vaultProgramId),
         );
         expect(mergedLeaf, "merge output appended at leaf 3").toBe(3);
         await shadow.append(mergeRes.outputCommitmentBE);

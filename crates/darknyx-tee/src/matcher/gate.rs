@@ -20,6 +20,14 @@ pub enum TradingPauseReason {
     /// silently un-drain a CVM that is being taken down, and an oracle recovery
     /// must not re-open trading into a draining enclave.
     Drain = 1 << 2,
+    /// A Merkle mirror shard's root disagrees with its on-chain `MerkleTree`.
+    ///
+    /// Venue-wide rather than per-market: the shards are a property of the
+    /// vault, not of any one book, and intake's root check reads them for every
+    /// market. Accepting orders against a mirror that holds a root the chain
+    /// never had produces proofs `lock_note` will reject — after a match, with
+    /// an honest counterparty's collateral already locked.
+    MerkleDivergence = 1 << 3,
 }
 
 #[derive(Clone, Debug)]
@@ -92,7 +100,9 @@ impl TradingGate {
     fn reasons_for(&self, reason: TradingPauseReason) -> &AtomicU8 {
         match reason {
             TradingPauseReason::Oracle => &self.market_reasons,
-            TradingPauseReason::Governance | TradingPauseReason::Drain => &self.venue_reasons,
+            TradingPauseReason::Governance
+            | TradingPauseReason::Drain
+            | TradingPauseReason::MerkleDivergence => &self.venue_reasons,
         }
     }
 }

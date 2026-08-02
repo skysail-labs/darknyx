@@ -146,6 +146,18 @@ pub struct MerkleMirror {
     /// [`MerkleMirror::contains_root`]. Starts EMPTY rather than zero-filled,
     /// so an unpopulated slot can never accidentally match an all-zero root.
     recent_roots: VecDeque<[u8; 32]>,
+    /// Whether this shard's root has been observed to disagree with its
+    /// on-chain `MerkleTree` — set by `super::sync`'s reconcile, cleared when
+    /// the shard matches the chain again.
+    ///
+    /// A diverged mirror holds a root the chain never had, so every derived
+    /// answer is wrong in a way the client cannot detect: an inclusion path
+    /// folds to a root `lock_note` will reject, and `contains_root` starts
+    /// refusing the genuine roots honest clients prove against. Divergence was
+    /// previously advisory — one latched WARN while the endpoints kept serving.
+    /// It now fails closed at the read sites (`api::tree`) and pauses new
+    /// trading, matching how oracle degradation is already handled.
+    diverged: bool,
 }
 
 impl Default for MerkleMirror {
@@ -173,7 +185,21 @@ impl MerkleMirror {
             index_by_commitment: HashMap::new(),
             on_chain_slot: 0,
             recent_roots: VecDeque::new(),
+            diverged: false,
         }
+    }
+
+    /// Whether this shard is known to disagree with its on-chain `MerkleTree`.
+    ///
+    /// Read by the `/tree/*` handlers, which refuse to serve while it holds —
+    /// a stale answer is recoverable, a confidently wrong one is not.
+    pub fn is_diverged(&self) -> bool {
+        self.diverged
+    }
+
+    /// Record this shard's reconcile verdict. Called only by `super::sync`.
+    pub fn set_diverged(&mut self, diverged: bool) {
+        self.diverged = diverged;
     }
 
     /// Value of the node at (`level`, `pos`), or `None` if that position

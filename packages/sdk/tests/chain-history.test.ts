@@ -9,6 +9,9 @@
 
 import { describe, it, expect } from "vitest";
 import { PublicKey, type Connection } from "@solana/web3.js";
+
+/** Stand-in vault program id; only its base58 form matters here. */
+const PROGRAM_ID = new PublicKey(new Uint8Array(32).fill(0x51));
 import {
   serializePayload,
   type MatchResultPayload,
@@ -120,9 +123,11 @@ describe("backfillHistoryFromChain", () => {
     ];
 
     const res = await backfillHistoryFromChain({
-      // connection/programId are unused when `scan` is injected.
+      // `connection` is unused when `scan` is injected. `programId` still is:
+      // it scopes the `TradeSettled` log decode to the vault, so an event
+      // emitted by any other program in the same tx is not read.
       connection: undefined as unknown as Connection,
-      programId: undefined as unknown as PublicKey,
+      programId: PROGRAM_ID,
       masterSeed: SEED,
       scan,
     });

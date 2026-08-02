@@ -32,6 +32,7 @@ import {
 } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 import { anchorDiscriminator } from "../idl/vault-client.js";
+import { programEventPayloads } from "../idl/log-scope.js";
 import { deriveOrderId } from "../keys/key-generators.js";
 import type { IndexerFill, BackfillResult } from "./history.js";
 
@@ -68,19 +69,24 @@ export interface TradeSettledLeaves {
   changeSeller: bigint | null;
 }
 
-/** Decode every Anchor `TradeSettled` event in a transaction's logs. */
+/**
+ * Decode every vault-emitted Anchor `TradeSettled` event in a transaction's
+ * logs.
+ *
+ * Scoped to `programId`: `Program data:` is `sol_log_data`, callable by any
+ * program, so an unscoped scan reads whatever else the transaction invoked.
+ * This function feeds `cold-recovery.ts` — the path a user runs *after* losing
+ * local state — off `getSignaturesForAddress(programId)`, which returns
+ * transactions that merely REFERENCE the vault. `extractVaultIxDatas` below
+ * already scopes the instruction half by program id; this is the log half.
+ */
 export function decodeTradeSettledLeaves(
   logs: readonly string[],
+  programId: PublicKey | string,
 ): Map<string, TradeSettledLeaves> {
   const out = new Map<string, TradeSettledLeaves>();
-  for (const line of logs) {
-    if (!line.startsWith("Program data: ")) continue;
-    let bytes: Buffer;
-    try {
-      bytes = Buffer.from(line.slice("Program data: ".length).trim(), "base64");
-    } catch {
-      continue;
-    }
+  const vault = typeof programId === "string" ? programId : programId.toBase58();
+  for (const bytes of programEventPayloads(logs, vault)) {
     if (bytes.length < 8 + 1 + 16 + 6 * 8) continue;
     if (
       !Buffer.from(bytes.subarray(0, 8)).equals(
@@ -291,7 +297,10 @@ export async function backfillHistoryFromChain(
   // Index the decoded fills by order id (one client-side pass over history).
   const byOrder = new Map<string, IndexerFill[]>();
   for (const tx of txs) {
-    const leavesByMatch = decodeTradeSettledLeaves(tx.logMessages ?? []);
+    const leavesByMatch = decodeTradeSettledLeaves(
+      tx.logMessages ?? [],
+      opts.programId,
+    );
     for (const ixData of tx.ixDatas) {
       const rawFills = decodeSettleFills(ixData, tx.signature, tx.slot);
       const fillLeaves = rawFills?.[0]

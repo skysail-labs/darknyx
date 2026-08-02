@@ -14,10 +14,28 @@
  * `leafIndexFromLogs` is a pure function over `meta.logMessages` so it can be
  * unit-tested with a synthetic log line (mirrors `indexer/src/watcher.ts`'s
  * `extractFills`).
+ *
+ * Both decoders below are scoped to the vault program via
+ * `programEventPayloads` — `Program data:` is not a vault-private channel, and
+ * a decoder that only prefix-matches it will read any program's events. See
+ * `idl/log-scope.ts` for why that matters more in the enclave than it does
+ * here, and why it is closed in both.
  */
 
 import { createHash } from "node:crypto";
-import type { Connection, TransactionSignature } from "@solana/web3.js";
+import type {
+  Connection,
+  PublicKey,
+  TransactionSignature,
+} from "@solana/web3.js";
+
+import { programEventPayloads } from "../idl/log-scope.js";
+
+/** The vault program, however the caller happens to hold it. */
+export type ProgramIdLike = PublicKey | string;
+
+const base58 = (id: ProgramIdLike): string =>
+  typeof id === "string" ? id : id.toBase58();
 
 /** Anchor event discriminator: `sha256("event:<Name>")[..8]`. */
 function eventDiscriminator(name: string): Uint8Array {
@@ -36,7 +54,6 @@ const NOTE_MERGED_DISC = eventDiscriminator("NoteMerged");
 const NOTE_CREATED_LEAF_OFFSET = 1;
 const NOTE_MERGED_LEAF_OFFSET = 1 + 32 + 32 + 1; // 66
 
-const PROGRAM_DATA_PREFIX = "Program data: ";
 
 /** A `NoteCreated` event's shard + position: which tree the deposit landed in
  *  and the leaf index within it. Both are needed to build a per-shard witness
@@ -51,18 +68,11 @@ export interface NoteCreatedLeaf {
  * return its `(tree_id, leaf_index)`, or `null` if absent. The event body is
  * `tree_id(u8) ‖ leaf_index(u64) ‖ commitment(32) ‖ …` after the 8-byte disc.
  */
-export function noteCreatedFromLogs(logs: string[]): NoteCreatedLeaf | null {
-  for (const line of logs) {
-    if (!line.startsWith(PROGRAM_DATA_PREFIX)) continue;
-    let bytes: Buffer;
-    try {
-      bytes = Buffer.from(
-        line.slice(PROGRAM_DATA_PREFIX.length).trim(),
-        "base64",
-      );
-    } catch {
-      continue;
-    }
+export function noteCreatedFromLogs(
+  logs: string[],
+  programId: ProgramIdLike,
+): NoteCreatedLeaf | null {
+  for (const bytes of programEventPayloads(logs, base58(programId))) {
     if (bytes.length < 8 + 1 + 8) continue;
     let matches = true;
     for (let i = 0; i < 8; i++) {
@@ -88,18 +98,9 @@ export function leafIndexFromLogs(
   logs: string[],
   disc: Uint8Array,
   leafOffset: number,
+  programId: ProgramIdLike,
 ): bigint | null {
-  for (const line of logs) {
-    if (!line.startsWith(PROGRAM_DATA_PREFIX)) continue;
-    let bytes: Buffer;
-    try {
-      bytes = Buffer.from(
-        line.slice(PROGRAM_DATA_PREFIX.length).trim(),
-        "base64",
-      );
-    } catch {
-      continue;
-    }
+  for (const bytes of programEventPayloads(logs, base58(programId))) {
     if (bytes.length < 8 + leafOffset + 8) continue;
     let matches = true;
     for (let i = 0; i < 8; i++) {
@@ -120,6 +121,7 @@ async function fetchLeafIndex(
   disc: Uint8Array,
   leafOffset: number,
   eventName: string,
+  programId: ProgramIdLike,
 ): Promise<bigint> {
   const tx = await conn.getTransaction(signature, {
     commitment: "confirmed",
@@ -130,10 +132,15 @@ async function fetchLeafIndex(
       `leaf-index: getTransaction returned null for ${signature} (not yet confirmed?)`,
     );
   }
-  const idx = leafIndexFromLogs(tx.meta?.logMessages ?? [], disc, leafOffset);
+  const idx = leafIndexFromLogs(
+    tx.meta?.logMessages ?? [],
+    disc,
+    leafOffset,
+    programId,
+  );
   if (idx === null) {
     throw new Error(
-      `leaf-index: no ${eventName} event found in tx ${signature}`,
+      `leaf-index: no vault-emitted ${eventName} event found in tx ${signature}`,
     );
   }
   return idx;
@@ -143,6 +150,7 @@ async function fetchLeafIndex(
 export function readNoteCreatedLeafIndex(
   conn: Connection,
   signature: TransactionSignature,
+  programId: ProgramIdLike,
 ): Promise<bigint> {
   return fetchLeafIndex(
     conn,
@@ -150,6 +158,7 @@ export function readNoteCreatedLeafIndex(
     NOTE_CREATED_DISC,
     NOTE_CREATED_LEAF_OFFSET,
     "NoteCreated",
+    programId,
   );
 }
 
@@ -158,6 +167,7 @@ export function readNoteCreatedLeafIndex(
 export async function readNoteCreated(
   conn: Connection,
   signature: TransactionSignature,
+  programId: ProgramIdLike,
 ): Promise<NoteCreatedLeaf> {
   const tx = await conn.getTransaction(signature, {
     commitment: "confirmed",
@@ -168,10 +178,10 @@ export async function readNoteCreated(
       `leaf-index: getTransaction returned null for ${signature} (not yet confirmed?)`,
     );
   }
-  const found = noteCreatedFromLogs(tx.meta?.logMessages ?? []);
+  const found = noteCreatedFromLogs(tx.meta?.logMessages ?? [], programId);
   if (found === null) {
     throw new Error(
-      `leaf-index: no NoteCreated event found in tx ${signature}`,
+      `leaf-index: no vault-emitted NoteCreated event found in tx ${signature}`,
     );
   }
   return found;
@@ -181,6 +191,7 @@ export async function readNoteCreated(
 export function readNoteMergedLeafIndex(
   conn: Connection,
   signature: TransactionSignature,
+  programId: ProgramIdLike,
 ): Promise<bigint> {
   return fetchLeafIndex(
     conn,
@@ -188,5 +199,6 @@ export function readNoteMergedLeafIndex(
     NOTE_MERGED_DISC,
     NOTE_MERGED_LEAF_OFFSET,
     "NoteMerged",
+    programId,
   );
 }

@@ -20,6 +20,29 @@
 //! decoded bytes are `discriminator(8) || borsh(fields)`, and the event
 //! discriminator is `sha256("event:<Name>")[..8]`.
 //!
+//! ## Provenance: `Program data:` is not a vault-private channel
+//!
+//! `Program data:` is the output of `sol_log_data`, which **any** Solana
+//! program can call — Anchor's `emit!` is only a wrapper around it. A
+//! transaction's `meta.logMessages` interleaves the logs of every program it
+//! invokes, and the sync sources transactions by *address reference*
+//! (`getTransactionsForAddress`), which returns transactions that merely name
+//! the vault among their account keys — not only those that invoke it.
+//!
+//! Decoding that combined stream without attribution let anyone forge a leaf:
+//! read the public `leaf_count` from `/tree/root`, emit a `NoteCreated` at that
+//! index from a program of your own in a transaction naming the vault, and the
+//! mirror appends an arbitrary value as a genuine leaf. The mirror is
+//! append-only with no rewind, so `/tree/inclusion`, the intake root check, and
+//! `/tree/leaves` are all built on a root the chain never had — a permanent
+//! venue halt for the price of one transaction.
+//!
+//! Solana logs *do* carry program scope: `Program <id> invoke [n]` opens a
+//! frame and `Program <id> success` / `failed` closes it. [`LogScope`] tracks
+//! that stack, and a `Program data:` line is decoded only while the vault is
+//! the **innermost** active program. Absent or malformed brackets mean no leaf
+//! is accepted — fail closed.
+//!
 //! This module is pure decoding — the RPC fetch + ordering + applying
 //! to the mirror lives in [`super::sync`] (the sync task feeds the
 //! `(logs, settle_ix_data)` it pulled from each transaction in here).
@@ -150,6 +173,12 @@ const NO_LEAF: u64 = u64::MAX;
 /// instruction's data. Returns `None` if the data isn't a settle ix
 /// (wrong/short discriminator) or the payload bytes don't decode.
 ///
+/// The discriminator is a *shape* check, not an authenticity one — any program
+/// can be handed 8 chosen bytes followed by a chosen payload. **The caller must
+/// select the instruction by `program_id`** (`super::sync::apply_address_txs`
+/// does); otherwise a forged `TradeSettled` event and an attacker instruction
+/// supply the two halves of a fabricated leaf between them.
+///
 /// ix data layout: `disc(8) || tree_id(1) || Borsh(payload, 488) ||
 /// match_index(1) || 4×32 siblings` (see
 /// `settle_batched::build_settle_batched_ix`). Post-sharding the payload
@@ -167,27 +196,122 @@ pub fn decode_settle_payload(ix_data: &[u8]) -> Option<MatchResultPayload> {
     MatchResultPayload::try_from_slice(payload_bytes).ok()
 }
 
+/// What one log line means to the scope tracker.
+enum LogLine<'a> {
+    /// `Program <id> invoke [n]` — opens a frame for `<id>`.
+    Invoke(&'a str),
+    /// `Program <id> success` / `Program <id> failed: …` /
+    /// `Program failed to complete: …` — closes the innermost frame.
+    Exit,
+    /// `Program data: <base64>` — an event emitted by whichever program owns
+    /// the innermost open frame.
+    Data(&'a str),
+    /// Anything else: `Program log:`, compute-unit accounting, `Log truncated`,
+    /// or a line from outside this vocabulary.
+    Other,
+}
+
+/// Classify one log line.
+///
+/// `Program log:` and `Program return:` are checked and discarded **before**
+/// the scope-marker patterns on purpose. Their payload is attacker-controlled
+/// text — a program can `msg!("Program <vault> invoke [1]")` — and a matcher
+/// that reached the `invoke`/`success` patterns first would let that text open
+/// a vault frame. (An attacker cannot forge a whole *array element*: a log with
+/// an embedded newline is still one entry, and we classify per entry.)
+fn classify(line: &str) -> LogLine<'_> {
+    if let Some(b64) = line.strip_prefix("Program data: ") {
+        return LogLine::Data(b64);
+    }
+    if line.starts_with("Program log:") || line.starts_with("Program return:") {
+        return LogLine::Other;
+    }
+    let Some(rest) = line.strip_prefix("Program ") else {
+        return LogLine::Other;
+    };
+    // `Program failed to complete: …` aborts the innermost program and, unlike
+    // every other exit line, carries no program id.
+    if rest.starts_with("failed to complete") {
+        return LogLine::Exit;
+    }
+    match rest.split_once(' ') {
+        // `invoke [n]` — the depth marker is redundant with our own stack
+        // depth, so it is not parsed.
+        Some((id, tail)) if tail.starts_with("invoke [") => LogLine::Invoke(id),
+        Some((_, tail)) if tail == "success" || tail.starts_with("failed") => LogLine::Exit,
+        _ => LogLine::Other,
+    }
+}
+
+/// The stack of currently-executing programs, innermost last.
+///
+/// Solana brackets every invocation, including CPIs at any depth, so replaying
+/// the bracket lines reconstructs exactly which program emitted each
+/// `Program data:` line.
+#[derive(Default)]
+struct LogScope<'a> {
+    stack: Vec<&'a str>,
+}
+
+impl<'a> LogScope<'a> {
+    fn enter(&mut self, program_id: &'a str) {
+        self.stack.push(program_id);
+    }
+
+    fn exit(&mut self) {
+        self.stack.pop();
+    }
+
+    /// Whether `program_id` owns the innermost open frame — i.e. whether it is
+    /// the program that emitted the line being classified.
+    ///
+    /// An empty stack yields `false`, so logs whose brackets are missing or
+    /// truncated contribute no leaves rather than being trusted.
+    fn innermost_is(&self, program_id: &str) -> bool {
+        self.stack.last() == Some(&program_id)
+    }
+}
+
 /// Extract every leaf appended by one transaction.
 ///
-/// `logs` are the transaction's `meta.logMessages`; `settle_ix_data` is
-/// the data of the `tee_forced_settle_batched` instruction in that same
-/// transaction (if any), needed to recover settle leaf values. The
-/// caller sorts the combined results across all transactions by
-/// `leaf_index` before applying to the mirror.
+/// `vault_program_id` is the base58 vault address; **only events emitted inside
+/// a vault frame are decoded** (see the module header — without this, any
+/// program can forge a leaf into the mirror). `logs` are the transaction's
+/// `meta.logMessages`; `settle_ix_data` is the data of the
+/// `tee_forced_settle_batched` instruction in that same transaction (if any),
+/// needed to recover settle leaf values — the caller must have already
+/// confirmed that instruction belongs to the vault. The caller sorts the
+/// combined results across all transactions by `leaf_index` before applying to
+/// the mirror.
 ///
 /// A `TradeSettled` event with no decodable settle payload yields no
 /// settle leaves (logged by the caller) rather than guessing — a
 /// mismatch would corrupt the mirror root.
 pub fn extract_appended_leaves(
+    vault_program_id: &str,
     logs: &[String],
     settle_ix_data: Option<&[u8]>,
 ) -> Vec<AppendedLeaf> {
     let settle_payload = settle_ix_data.and_then(decode_settle_payload);
     let mut out = Vec::new();
+    let mut scope = LogScope::default();
 
     for line in logs {
-        let Some(b64) = line.strip_prefix("Program data: ") else {
-            continue;
+        let b64 = match classify(line) {
+            LogLine::Invoke(id) => {
+                scope.enter(id);
+                continue;
+            }
+            LogLine::Exit => {
+                scope.exit();
+                continue;
+            }
+            LogLine::Other => continue,
+            // The provenance check. A byte-identical event emitted by any other
+            // program — at top level or nested under the vault via CPI — falls
+            // here and is dropped.
+            LogLine::Data(b64) if scope.innermost_is(vault_program_id) => b64,
+            LogLine::Data(_) => continue,
         };
         let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64.trim()) else {
             continue;
@@ -255,6 +379,12 @@ mod tests {
     use crate::settle::settle_batched::build_settle_batched_ix;
     use borsh::BorshSerialize;
 
+    /// The vault, and a program that is not the vault. Both are shaped like
+    /// real base58 addresses so the scope parser sees what it sees in
+    /// production.
+    const VAULT: &str = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
+    const ATTACKER: &str = "AttackerPRoGram11111111111111111111111111111";
+
     /// Re-encode an event the way Anchor's `emit!` logs it:
     /// `Program data: base64(discriminator(8) || borsh(fields))`.
     fn event_log_line(disc: &[u8; 8], body: &[u8]) -> String {
@@ -264,6 +394,23 @@ mod tests {
             "Program data: {}",
             base64::engine::general_purpose::STANDARD.encode(&bytes)
         )
+    }
+
+    /// Bracket `lines` in `program`'s invocation frame, the way the runtime
+    /// does. `depth` is 1 for a top-level instruction, 2+ for a CPI.
+    fn scoped(program: &str, depth: u8, lines: &[String]) -> Vec<String> {
+        let mut out = vec![format!("Program {program} invoke [{depth}]")];
+        out.extend(lines.iter().cloned());
+        out.push(format!(
+            "Program {program} consumed 4242 of 200000 compute units"
+        ));
+        out.push(format!("Program {program} success"));
+        out
+    }
+
+    /// The common case: one top-level vault instruction emitting `lines`.
+    fn vault_tx(lines: &[String]) -> Vec<String> {
+        scoped(VAULT, 1, lines)
     }
 
     fn fr_safe(seed: u8) -> [u8; 32] {
@@ -367,7 +514,7 @@ mod tests {
             new_root: fr_safe(0x33),
         };
         let line = event_log_line(&NOTE_CREATED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
-        let leaves = extract_appended_leaves(&[line], None);
+        let leaves = extract_appended_leaves(VAULT, &vault_tx(&[line]), None);
         assert_eq!(leaves.len(), 1);
         assert_eq!(leaves[0].leaf_index, 7);
         assert_eq!(leaves[0].value, commitment);
@@ -387,7 +534,7 @@ mod tests {
             new_root: fr_safe(0x44),
         };
         let line = event_log_line(&NOTE_MERGED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
-        let leaves = extract_appended_leaves(&[line], None);
+        let leaves = extract_appended_leaves(VAULT, &vault_tx(&[line]), None);
         assert_eq!(
             leaves,
             vec![AppendedLeaf {
@@ -428,7 +575,7 @@ mod tests {
             &fr_safe(0xAB),
         );
 
-        let leaves = extract_appended_leaves(&[line], Some(&ix.data));
+        let leaves = extract_appended_leaves(VAULT, &vault_tx(&[line]), Some(&ix.data));
         assert_eq!(leaves.len(), 6);
         // Index ↔ value pairing by name.
         assert_eq!(
@@ -507,7 +654,7 @@ mod tests {
             &[[0x01; 32]; 4],
             &fr_safe(0xAB),
         );
-        let leaves = extract_appended_leaves(&[line], Some(&ix.data));
+        let leaves = extract_appended_leaves(VAULT, &vault_tx(&[line]), Some(&ix.data));
         assert_eq!(leaves.len(), 2);
         assert_eq!(leaves[0].leaf_index, 4);
         assert_eq!(leaves[1].leaf_index, 5);
@@ -531,7 +678,7 @@ mod tests {
         };
         let line = event_log_line(&TRADE_SETTLED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
         // No settle ix data → can't recover values → no leaves.
-        assert!(extract_appended_leaves(&[line], None).is_empty());
+        assert!(extract_appended_leaves(VAULT, &vault_tx(&[line]), None).is_empty());
     }
 
     #[test]
@@ -541,7 +688,7 @@ mod tests {
             "Program 11111111111111111111111111111111 invoke [1]".to_string(),
             "Program data: !!!not-base64!!!".to_string(),
         ];
-        assert!(extract_appended_leaves(&logs, None).is_empty());
+        assert!(extract_appended_leaves(VAULT, &logs, None).is_empty());
     }
 
     #[test]
@@ -551,5 +698,171 @@ mod tests {
         assert!(decode_settle_payload(&data).is_none());
         // Too short.
         assert!(decode_settle_payload(&[0u8; 4]).is_none());
+    }
+
+    // ── Provenance ──────────────────────────────────────────────────────
+    // `Program data:` is `sol_log_data`, which any program can call, and the
+    // sync sources transactions by ADDRESS REFERENCE — so a transaction that
+    // merely names the vault among its account keys reaches this decoder.
+    // Every test below forges an event that is byte-identical to a genuine one
+    // and differs ONLY in which program emitted it.
+
+    /// Build a `NoteCreated` log line for `leaf_index` with `commitment`.
+    fn note_created_line(leaf_index: u64, commitment: [u8; 32]) -> String {
+        let wire = NoteCreatedWire {
+            tree_id: 0,
+            leaf_index,
+            commitment,
+            token_mint: [0x9e; 32],
+            amount: 1_000,
+            new_root: fr_safe(0x33),
+        };
+        event_log_line(&NOTE_CREATED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap())
+    }
+
+    #[test]
+    fn a_foreign_program_cannot_forge_a_leaf() {
+        let genuine = fr_safe(0x42);
+        let forged = fr_safe(0x66);
+        // One transaction, two top-level instructions: the vault's real deposit
+        // and the attacker's own program emitting an identical event.
+        let mut logs = vault_tx(&[note_created_line(7, genuine)]);
+        logs.extend(scoped(ATTACKER, 1, &[note_created_line(8, forged)]));
+
+        let leaves = extract_appended_leaves(VAULT, &logs, None);
+        assert_eq!(
+            leaves,
+            vec![AppendedLeaf {
+                tree_id: 0,
+                leaf_index: 7,
+                value: genuine,
+            }],
+            "only the vault-scoped event may become a leaf"
+        );
+    }
+
+    #[test]
+    fn a_forged_event_alone_yields_no_leaf() {
+        // The actual attack: no vault instruction at all, the vault merely named
+        // in the account keys so the tx lands in its address history.
+        let logs = scoped(ATTACKER, 1, &[note_created_line(0, fr_safe(0x66))]);
+        assert!(
+            extract_appended_leaves(VAULT, &logs, None).is_empty(),
+            "a transaction that never invoked the vault appends nothing"
+        );
+    }
+
+    #[test]
+    fn a_cpi_callee_cannot_emit_a_vault_leaf() {
+        // The vault is on the stack, but a program it CPI'd into is innermost —
+        // that inner frame's events are not the vault's.
+        let genuine = fr_safe(0x42);
+        let mut inner = scoped(ATTACKER, 2, &[note_created_line(9, fr_safe(0x66))]);
+        // ...and the vault emits its own event after the CPI returns.
+        inner.push(note_created_line(7, genuine));
+        let logs = vault_tx(&inner);
+
+        let leaves = extract_appended_leaves(VAULT, &logs, None);
+        assert_eq!(
+            leaves,
+            vec![AppendedLeaf {
+                tree_id: 0,
+                leaf_index: 7,
+                value: genuine,
+            }],
+            "the CPI frame must close and hand scope back to the vault"
+        );
+    }
+
+    #[test]
+    fn the_vault_is_still_read_when_it_is_the_cpi_callee() {
+        // Mirror of the case above: scope tracking must not be a "depth == 1"
+        // shortcut. A vault frame nested under another program is still a vault
+        // frame — a future relayer or router would produce exactly this shape.
+        let genuine = fr_safe(0x42);
+        let inner = scoped(VAULT, 2, &[note_created_line(7, genuine)]);
+        let logs = scoped(ATTACKER, 1, &inner);
+        assert_eq!(extract_appended_leaves(VAULT, &logs, None).len(), 1);
+    }
+
+    #[test]
+    fn program_log_text_cannot_forge_a_scope_marker() {
+        // `msg!` content is attacker-controlled. If the classifier matched the
+        // invoke pattern before discarding `Program log:`, this would open a
+        // vault frame from inside the attacker's own instruction.
+        let logs = scoped(
+            ATTACKER,
+            1,
+            &[
+                format!("Program log: Program {VAULT} invoke [1]"),
+                note_created_line(0, fr_safe(0x66)),
+                format!("Program log: Program {VAULT} success"),
+            ],
+        );
+        assert!(extract_appended_leaves(VAULT, &logs, None).is_empty());
+    }
+
+    #[test]
+    fn an_unbracketed_event_is_not_trusted() {
+        // Truncated or malformed logs leave no open frame. Fail closed: a
+        // missing leaf is a recoverable sync gap, a wrong leaf is permanent.
+        let logs = vec![note_created_line(0, fr_safe(0x42))];
+        assert!(extract_appended_leaves(VAULT, &logs, None).is_empty());
+    }
+
+    #[test]
+    fn a_failed_cpi_frame_still_closes() {
+        // Exit lines come in three shapes; all must pop, or scope leaks into
+        // the vault's remaining lines and swallows a genuine leaf.
+        for exit in [
+            format!("Program {ATTACKER} failed: custom program error: 0x1"),
+            "Program failed to complete: exceeded CUs".to_string(),
+            format!("Program {ATTACKER} success"),
+        ] {
+            let logs = vec![
+                format!("Program {VAULT} invoke [1]"),
+                format!("Program {ATTACKER} invoke [2]"),
+                exit.clone(),
+                note_created_line(7, fr_safe(0x42)),
+                format!("Program {VAULT} success"),
+            ];
+            assert_eq!(
+                extract_appended_leaves(VAULT, &logs, None).len(),
+                1,
+                "exit line {exit:?} must close the inner frame"
+            );
+        }
+    }
+
+    #[test]
+    fn a_forged_trade_settled_needs_both_halves_and_gets_neither() {
+        // The second path: the event supplies indices, the settle instruction
+        // supplies values. Even handed a payload (as it would be if the ix
+        // filter were missing), an attacker-scoped event yields nothing.
+        let payload = sample_payload();
+        let wire = TradeSettledWire {
+            tree_id: 0,
+            match_id: payload.match_id,
+            note_c_leaf: 0,
+            note_d_leaf: 1,
+            note_e_leaf: NO_LEAF,
+            note_f_leaf: NO_LEAF,
+            note_fee_base_leaf: NO_LEAF,
+            note_fee_quote_leaf: NO_LEAF,
+            buyer_relock_active: false,
+            seller_relock_active: false,
+            new_root: fr_safe(0x55),
+        };
+        let line = event_log_line(&TRADE_SETTLED_DISCRIMINATOR, &borsh::to_vec(&wire).unwrap());
+        let ix = build_settle_batched_ix(
+            &solana_address::Address::new_from_array([0x42; 32]),
+            0,
+            &payload,
+            0,
+            &[[0x01; 32]; 4],
+            &fr_safe(0xAB),
+        );
+        let logs = scoped(ATTACKER, 1, &[line]);
+        assert!(extract_appended_leaves(VAULT, &logs, Some(&ix.data)).is_empty());
     }
 }

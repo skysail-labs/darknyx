@@ -239,7 +239,7 @@ export async function recoverNotesFromChain(
   }
 
   const settlements = txs.flatMap((tx) => {
-    const leaves = decodeTradeSettledLeaves(tx.logMessages ?? []);
+    const leaves = decodeTradeSettledLeaves(tx.logMessages ?? [], opts.programId);
     return tx.ixDatas.flatMap((data) => {
       const initial = decodeSettleFills(data, tx.signature, tx.slot);
       if (!initial) return [];
