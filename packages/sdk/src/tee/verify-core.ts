@@ -192,14 +192,86 @@ export function replayEventLogRtmr(
   return mr.toString("hex");
 }
 
-/** The compose hash recorded in the RTMR3 event log, or `undefined` if absent. */
+/**
+ * The compose hash recorded in the RTMR3 event log, or `undefined` if absent or
+ * ambiguous.
+ *
+ * ## Why `event_type` is part of the match, not decoration
+ *
+ * The measurement chain authenticates `event_payload` **only for runtime
+ * events**. {@link eventDigest} computes their RTMR contribution *from* the
+ * payload; for every other event type the digest is taken verbatim out of the
+ * log and the payload is never hashed into anything — it is inert, attacker-
+ * writable filler.
+ *
+ * Matching on `imr` + `event` alone therefore read a field the proof did not
+ * cover, and the log's own name for that field made it look covered. An
+ * operator running a malicious build could take their genuine runtime event:
+ *
+ *     { imr:3, event_type:0x08000001, digest:"", event:"compose-hash",
+ *       event_payload:H_evil }
+ *
+ * compute its contribution `D` themselves (no secret required), and serve a
+ * doctored log entry:
+ *
+ *     { imr:3, event_type:1, digest:D, event:"compose-hash",
+ *       event_payload:H_good }
+ *
+ * `eventDigest` takes the verbatim branch and returns a byte-identical `D`, so
+ * the RTMR3 replay still matches the genuine quote and this function returned
+ * the pinned `H_good`. Every other check passed legitimately — real hardware,
+ * real Intel signature, correct MRTD (which is the shared dstack-OS
+ * measurement and does not distinguish builds). **No collision or preimage was
+ * needed**; the entry reproduced the same digest bytes through a different code
+ * path.
+ *
+ * Requiring the runtime type restores the invariant that the payload read is
+ * the payload hashed. Requiring **exactly one** match closes the variant where
+ * a second, genuine-looking entry is appended and `find` returns whichever came
+ * first: absent or ambiguous both mean "refuse", never "pick one".
+ */
 export function composeHashFromEventLog(
   eventLog: EventLogEntry[],
 ): string | undefined {
-  const ev = eventLog.find(
-    (e) => e.imr === 3 && e.event === COMPOSE_HASH_EVENT,
+  const matches = eventLog.filter(
+    (e) =>
+      e.imr === 3 &&
+      e.event === COMPOSE_HASH_EVENT &&
+      e.event_type === DSTACK_RUNTIME_EVENT_TYPE,
   );
-  return ev ? normHex(ev.event_payload) : undefined;
+  if (matches.length !== 1) return undefined;
+  return normHex(matches[0].event_payload);
+}
+
+/**
+ * Whether any entry is structurally impossible in a genuine dstack log.
+ *
+ * Defence in depth for the class {@link composeHashFromEventLog} closes one
+ * instance of. dstack's `TdxEvent::stripped()` is what serializes these
+ * entries, and it is exclusive by construction: a runtime event's `digest` is
+ * emptied (the verifier recomputes it), and a non-runtime event's
+ * `event_payload` is emptied (nothing hashes it). The real-CVM fixture bears
+ * this out — every entry has exactly one of the two populated.
+ *
+ * An entry carrying **both** is a log no honest node produced. It is precisely
+ * the shape the compose-hash attack needs: a verbatim `digest` to reproduce the
+ * measurement, plus a payload for the client to misread. Rejecting it also
+ * catches variants aimed at other runtime events (`app-id`, `key-provider`)
+ * without coupling us to an upstream list of event names that can drift.
+ *
+ * The check is deliberately **type-independent**. Keying it on
+ * `event_type === DSTACK_RUNTIME_EVENT_TYPE` would miss the attack entirely:
+ * the forged entry is re-typed to a NON-runtime type, which is the whole
+ * mechanism. The invariant is "at most one of the two fields is populated",
+ * whichever type claims it.
+ */
+export function hasImpossibleEventLogEntry(
+  eventLog: EventLogEntry[],
+): boolean {
+  return eventLog.some(
+    (e) =>
+      normHex(e.digest ?? "") !== "" && normHex(e.event_payload ?? "") !== "",
+  );
 }
 
 /**
@@ -289,11 +361,22 @@ export function verifyReportAgainstExpected(
     return "pin_required";
   }
 
-  // 4. Event log must replay to the attested RTMR3 (proves it is THIS quote's
+  // 4. Reject structurally impossible entries BEFORE the replay. An entry
+  //    carrying both a verbatim `digest` and an `event_payload` cannot come
+  //    from dstack's `TdxEvent::stripped()`, and is the shape that lets a
+  //    doctored entry reproduce a genuine digest while carrying a payload the
+  //    measurement never covered. Replaying it would succeed — that is the
+  //    point — so the check has to come first.
+  if (hasImpossibleEventLogEntry(eventLog)) return "event_log_invalid";
+
+  // 5. Event log must replay to the attested RTMR3 (proves it is THIS quote's
   //    log), then the compose hash is read from that now-trusted log.
   const replayed = replayEventLogRtmr(eventLog, 3);
   if (replayed !== normHex(report.rtmr3)) return "event_log_invalid";
 
+  // `composeHashFromEventLog` requires the runtime event type, so this reads a
+  // payload RTMR3 actually hashed — not merely one that sits in a log which
+  // replays correctly.
   const composeHash = composeHashFromEventLog(eventLog);
   if (expected.composeHash) {
     if (!composeHash || composeHash !== normHex(expected.composeHash)) {
@@ -301,12 +384,12 @@ export function verifyReportAgainstExpected(
     }
   }
 
-  // 5. Optional MRTD pin (dstack-OS image) against the verified quote's MRTD.
+  // 6. Optional MRTD pin (dstack-OS image) against the verified quote's MRTD.
   if (expected.mrtd && normHex(expected.mrtd) !== normHex(report.mrtd)) {
     return "mrtd_mismatch";
   }
 
-  // 6. tee_pubkey pin — the key that signs settle payloads.
+  // 7. tee_pubkey pin — the key that signs settle payloads.
   if (expected.teePubkey && expected.teePubkey !== teePubkeyBase58) {
     return "pubkey_mismatch";
   }

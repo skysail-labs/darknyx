@@ -237,11 +237,22 @@ export async function verifyAttestation(
       throw new AttestationError(`attestation rejected: ${fail}`, fail);
     }
 
+    // No `?? info.composeHash` fallback. It was unreachable on this path — the
+    // strict check above already required a non-undefined, pin-matching
+    // log-derived hash — but it modelled the SELF-REPORTED value as an
+    // acceptable substitute for the attested one, which is the exact
+    // substitution attestation exists to reject.
     const composeHash = composeHashFromEventLog(eventLog);
+    if (!composeHash) {
+      throw new AttestationError(
+        "compose hash absent from the verified event log after a passing strict check",
+        "event_log_invalid",
+      );
+    }
     return {
       teePubkey: att.teePubkey,
       teePubkeys,
-      composeHash: composeHash ?? info.composeHash,
+      composeHash,
       mrtd: report.mrtd,
       quote: att.quote,
       dcapVerified: true,

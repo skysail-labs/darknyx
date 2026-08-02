@@ -6,6 +6,7 @@ import {
   type EventLogEntry,
   type QuoteVerifier,
   type VerifiedQuoteReport,
+  DSTACK_RUNTIME_EVENT_TYPE,
   replayEventLogRtmr,
   verifyTeeAttestation,
 } from "../src/index.js";
@@ -22,18 +23,27 @@ const KEYSET_HASH = createHash("sha256")
   .update(Buffer.concat([teeKp.publicKey.toBytes(), kp1.publicKey.toBytes()]))
   .digest();
 
+// dstack RUNTIME events — empty `digest` (the verifier computes it from the
+// event + payload), payload populated. This is the only event type whose
+// payload the RTMR actually covers, and it matches the real-CVM fixture in
+// `fixtures/dstack-eventlog.json`.
+//
+// These entries used to be `event_type: 1` with BOTH `digest` and
+// `event_payload` set — the shape dstack's `TdxEvent::stripped()` cannot emit,
+// and precisely the one CA-01 exploits to serve a pinned compose hash the
+// measurement never covered. The suite's happy path was a forged log.
 const EVENT_LOG: EventLogEntry[] = [
   {
     imr: 3,
-    event_type: 1,
-    digest: createHash("sha384").update("app").digest("hex"),
+    event_type: DSTACK_RUNTIME_EVENT_TYPE,
+    digest: "",
     event: "app-id",
-    event_payload: "app",
+    event_payload: "a99d",
   },
   {
     imr: 3,
-    event_type: 1,
-    digest: createHash("sha384").update("ch").digest("hex"),
+    event_type: DSTACK_RUNTIME_EVENT_TYPE,
+    digest: "",
     event: "compose-hash",
     event_payload: COMPOSE,
   },
@@ -95,6 +105,7 @@ describe("verifyTeeAttestation (SDK / browser)", () => {
     const r = await verifyTeeAttestation(BASE, COMPOSE, {
       quoteVerifier: goodVerifier(),
       fetchImpl: fakeFetch(),
+      expectedTeePubkey: TEE_B58,
     });
     expect(r.teePubkey).toBe(TEE_B58);
     expect(r.teePubkeys).toEqual(KEYS);
@@ -108,6 +119,7 @@ describe("verifyTeeAttestation (SDK / browser)", () => {
       verifyTeeAttestation(BASE, "", {
         quoteVerifier: goodVerifier(),
         fetchImpl: fakeFetch(),
+        expectedTeePubkey: TEE_B58,
       }),
     ).rejects.toMatchObject({ kind: "pin_required" });
   });
@@ -119,6 +131,7 @@ describe("verifyTeeAttestation (SDK / browser)", () => {
           throw new Error("bad quote");
         },
         fetchImpl: fakeFetch(),
+        expectedTeePubkey: TEE_B58,
       }),
     ).rejects.toBeInstanceOf(Error);
   });
@@ -128,7 +141,47 @@ describe("verifyTeeAttestation (SDK / browser)", () => {
       verifyTeeAttestation(BASE, "deadbeef", {
         quoteVerifier: goodVerifier(),
         fetchImpl: fakeFetch(),
+        expectedTeePubkey: TEE_B58,
       }),
     ).rejects.toMatchObject({ kind: "compose_mismatch" });
+  });
+
+  // CA-02. `expectedTeePubkey` used to default to `att.tee_pubkey`, so step 7
+  // compared the attested key against itself — a comparison that cannot fail —
+  // and the `??` also guaranteed `expected.teePubkey` was present, making
+  // strict mode's `pin_required` unreachable for the pubkey half. Strict mode
+  // advertised two governance pins and enforced one.
+  it("refuses strict verification with no tee_pubkey pin supplied", async () => {
+    await expect(
+      verifyTeeAttestation(BASE, COMPOSE, {
+        quoteVerifier: goodVerifier(),
+        fetchImpl: fakeFetch(),
+        // expectedTeePubkey deliberately omitted
+      }),
+    ).rejects.toMatchObject({ kind: "pin_required" });
+  });
+
+  it("rejects a tee_pubkey that is not the one the caller pinned", async () => {
+    await expect(
+      verifyTeeAttestation(BASE, COMPOSE, {
+        quoteVerifier: goodVerifier(),
+        fetchImpl: fakeFetch(),
+        expectedTeePubkey: Keypair.generate().publicKey.toBase58(),
+      }),
+    ).rejects.toMatchObject({ kind: "pubkey_mismatch" });
+  });
+
+  // CA-03. `composeHashFromEventLog(eventLog) ?? info.compose_hash` presented
+  // the SELF-REPORTED value as an acceptable substitute for the attested one.
+  // Unreachable on the strict path, but it is the substitution this module
+  // exists to reject, so a divergent /info must not be able to influence the
+  // returned value.
+  it("returns the ATTESTED compose hash, never the self-reported one", async () => {
+    const r = await verifyTeeAttestation(BASE, COMPOSE, {
+      quoteVerifier: goodVerifier(),
+      fetchImpl: fakeFetch({ composeHash: "ffffffffffff" }),
+      expectedTeePubkey: TEE_B58,
+    });
+    expect(r.composeHash).toBe(COMPOSE);
   });
 });
