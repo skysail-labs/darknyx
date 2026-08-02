@@ -64,21 +64,20 @@ async fn main() -> Result<()> {
     tracing::info!("darknyx-tee starting");
 
     let cfg = darknyx_tee::config::Config::from_env()?;
-    // Don't log the full Config: `solana_rpc_url` may embed an API key
-    // (some providers put it in the path / userinfo). Log the safe
-    // fields + the RPC host only (scheme, path, and any user:pass@
-    // stripped).
-    let rpc_host = cfg
-        .solana_rpc_url
-        .split("://")
-        .nth(1)
-        .unwrap_or(&cfg.solana_rpc_url)
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .rsplit('@')
-        .next()
-        .unwrap_or("");
+    // Don't log the full Config: `solana_rpc_url` embeds an API key (Helius
+    // puts it in the query string).
+    //
+    // This used to hand-split the string: take everything after `://`, cut at
+    // the first `/`, drop anything before `@`. That silently leaked whenever
+    // the URL had no path separator before the query —
+    // `https://host?api-key=SECRET` has no `/` to cut at, so the whole query
+    // survived into the log. CLAUDE.md §3.2 documents the form WITH the
+    // slash, but nothing enforced it.
+    //
+    // `redact_endpoint` rebuilds `scheme://host[:port]` from parsed
+    // components instead, so it cannot be defeated by a URL shape nobody
+    // anticipated (SW-01).
+    let rpc_host = darknyx_tee::solana_rpc::redact_endpoint(&cfg.solana_rpc_url);
     tracing::info!(
         http_bind = %cfg.http_bind,
         rpc_host = %rpc_host,

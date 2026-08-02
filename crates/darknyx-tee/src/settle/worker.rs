@@ -44,7 +44,7 @@ use super::alt::{
 };
 use super::alt_pool::{AltPlan, AltPool};
 use super::ed25519::build_ed25519_verify_ix;
-use super::job::{SettleJobId, SettleJobStage, SettlementOutcome};
+use super::job::{SettleFailureKind, SettleJobId, SettleJobStage, SettlementOutcome};
 use super::metrics::{
     emit_batch_record, BatchMetricsCompletion, SettlementOutcomeCounts, SettlementStageTimings,
 };
@@ -222,6 +222,22 @@ pub enum WorkerError {
     AltNotActive(u64),
 }
 
+/// Map a worker failure to the closed-set label a client is allowed to see.
+///
+/// Matches on the VARIANT, never on the rendered message — a message reworded
+/// later must not silently reclassify a failure (SW-01).
+impl From<&WorkerError> for SettleFailureKind {
+    fn from(e: &WorkerError) -> Self {
+        match e {
+            WorkerError::Rpc(_) => Self::Rpc,
+            WorkerError::Prover(_) | WorkerError::ProverPanic(_) => Self::Prover,
+            WorkerError::Leaf(_) => Self::Leaf,
+            WorkerError::AltNotActive(_) => Self::AltNotActive,
+            WorkerError::Mismatch(_, _) => Self::Internal,
+        }
+    }
+}
+
 impl SettleWorkerCtx {
     /// The PRIMARY TEE keypair (`tee_keypairs[0]`) — pays the per-batch
     /// lock/verify/ALT/close txs.
@@ -252,7 +268,13 @@ impl SettleWorkerCtx {
         }
     }
 
-    async fn fail_all(&self, batch_id: u64, n: usize, reason: impl Into<String>) {
+    async fn fail_all(
+        &self,
+        batch_id: u64,
+        n: usize,
+        failure: SettleFailureKind,
+        reason: impl Into<String>,
+    ) {
         let reason = reason.into();
         let mut st = self.settle_state.write().await;
         for idx in 0..n {
@@ -265,7 +287,7 @@ impl SettleWorkerCtx {
                     j.outcome,
                     SettlementOutcome::Pending | SettlementOutcome::Ambiguous { .. }
                 ) {
-                    j.fail(reason.clone());
+                    j.fail(failure, reason.clone());
                 }
             });
         }
@@ -436,7 +458,10 @@ async fn record_final_outcome(
                     job.transition(SettleJobStage::Done);
                 }
                 SettlementOutcome::Rejected { reason } => {
+                    // A definitive on-chain/deadline rejection, not an
+                    // infrastructure fault.
                     job.transition(SettleJobStage::Failed {
+                        failure: SettleFailureKind::Rejected,
                         reason: reason.clone(),
                     });
                 }
@@ -541,7 +566,11 @@ async fn run_batch_settle_with_outcomes(
 
     let result = run_batch_settle_inner(ctx, &inputs, outcome_tx.as_ref()).await;
     if let Err(e) = &result {
-        ctx.fail_all(batch_id, n, format!("{e}")).await;
+        // Kind from the error VARIANT, not from its message text — see
+        // `SettleFailureKind`. `format!("{e}")` stays as the operator-facing
+        // detail and is never served to a client.
+        ctx.fail_all(batch_id, n, SettleFailureKind::from(e), format!("{e}"))
+            .await;
         let record = ctx.settle_state.write().await.metrics_mut().fail_batch(
             batch_id,
             ctx.settle_batch_concurrency,
@@ -2007,7 +2036,13 @@ mod tests {
             .unwrap();
         assert!(job.stage.is_terminal());
         match &job.stage {
-            SettleJobStage::Failed { reason } => assert!(reason.contains("boom")),
+            SettleJobStage::Failed { failure, reason } => {
+                assert!(reason.contains("boom"), "operator detail is retained");
+                // The client-facing label is derived from the WorkerError
+                // variant, so a prover fault reads as one.
+                assert_eq!(*failure, SettleFailureKind::Prover);
+                assert_eq!(failure.label(), "prover_failed");
+            }
             other => panic!("expected Failed, got {other:?}"),
         }
         // Locking happened (it precedes proving); proving failed, so
