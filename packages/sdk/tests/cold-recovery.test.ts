@@ -66,6 +66,20 @@ function event(name: string, ...body: Uint8Array[]): string {
   return `Program data: ${Buffer.from(cat(disc, ...body)).toString("base64")}`;
 }
 
+/**
+ * Bracket event lines in the vault's invocation frame, the way the runtime
+ * logs them. The decoder attributes `Program data:` to the innermost open
+ * program, so a bare event line — which these fixtures used to be — belongs to
+ * nobody and is correctly ignored.
+ */
+function vaultLogs(...lines: string[]): string[] {
+  return [
+    `Program ${PROGRAM_ID.toBase58()} invoke [1]`,
+    ...lines,
+    `Program ${PROGRAM_ID.toBase58()} success`,
+  ];
+}
+
 function noteCreatedLog(opts: {
   treeId: number;
   leaf: bigint;
@@ -176,9 +190,9 @@ describe("recoverNotesFromChain", () => {
           },
         }).data,
       ],
-      logMessages: [
+      logMessages: vaultLogs(
         noteCreatedLog({ treeId: 0, leaf, commitment, mint, amount }),
-      ],
+      ),
     });
 
     const tradeInner = be32ToBig(
@@ -241,7 +255,7 @@ describe("recoverNotesFromChain", () => {
           new Uint8Array(129),
         ),
       ],
-      logMessages: [tradeSettledLog(matchId)],
+      logMessages: vaultLogs(tradeSettledLog(matchId)),
     };
 
     const mergeInputs = [baseDeposit, trade];
@@ -272,7 +286,7 @@ describe("recoverNotesFromChain", () => {
           },
         }).data,
       ],
-      logMessages: [noteMergedLog(merged, BASE_MINT)],
+      logMessages: vaultLogs(noteMergedLog(merged, BASE_MINT)),
     };
 
     // Intentionally reverse the scan: the recovery fixed-point must not rely

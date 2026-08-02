@@ -122,11 +122,21 @@ pub struct RpcSignatureInfo {
 /// Merkle sync needs).
 #[derive(Debug, Clone)]
 pub struct RpcInstruction {
-    /// Program that owns the instruction, resolved from the message's
-    /// static account keys via `programIdIndex`. Empty if the index
-    /// refers to an ALT-loaded address (the sync identifies the settle
-    /// instruction by its data discriminator, not the program id, so
-    /// this is best-effort metadata for logging).
+    /// Program that owns the instruction, base58, resolved from the message's
+    /// static account keys via `programIdIndex`.
+    ///
+    /// **Load-bearing, not best-effort.** `merkle::sync::settle_ix_data`
+    /// requires it to match the vault; without that, an attacker's instruction
+    /// whose data merely starts with the settle discriminator supplies the leaf
+    /// VALUES for a forged `TradeSettled` event.
+    ///
+    /// Reliably populated: Solana sanitizes `program_id_index` against the
+    /// **static** account keys, so a program id is never resolved through an
+    /// address lookup table — including in the v0 settle transactions, whose
+    /// other accounts do come from ALTs. (An earlier comment here claimed the
+    /// opposite and was the stated reason the field went unused.) Empty only if
+    /// the RPC returns an out-of-range index, which no honest node does and
+    /// which fails the vault comparison anyway.
     pub program_id: String,
     /// Instruction data, base58-decoded.
     pub data: Vec<u8>,

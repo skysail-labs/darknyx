@@ -11,6 +11,23 @@ import {
   noteCreatedFromLogs,
 } from "../src/utxo/leaf-index.js";
 
+/** The vault, and a program that is not the vault. */
+const VAULT = "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx";
+const ATTACKER = "AttackerPRoGram11111111111111111111111111111";
+
+/** Bracket `lines` in `program`'s invocation frame, the way the runtime does. */
+function scoped(program: string, depth: number, lines: string[]): string[] {
+  return [
+    `Program ${program} invoke [${depth}]`,
+    ...lines,
+    `Program ${program} consumed 4242 of 200000 compute units`,
+    `Program ${program} success`,
+  ];
+}
+
+/** The common case: one top-level vault instruction emitting `lines`. */
+const vaultTx = (lines: string[]) => scoped(VAULT, 1, lines);
+
 function disc(name: string): Uint8Array {
   return new Uint8Array(
     createHash("sha256").update(`event:${name}`).digest().subarray(0, 8),
@@ -40,7 +57,9 @@ describe("leafIndexFromLogs", () => {
       NOTE_CREATED_OFF,
       42n,
     );
-    expect(leafIndexFromLogs([line], NOTE_CREATED, NOTE_CREATED_OFF)).toBe(42n);
+    expect(
+      leafIndexFromLogs(vaultTx([line]), NOTE_CREATED, NOTE_CREATED_OFF, VAULT),
+    ).toBe(42n);
   });
 
   it("reads NoteMerged leaf_index (different body offset)", () => {
@@ -50,7 +69,9 @@ describe("leafIndexFromLogs", () => {
       NOTE_MERGED_OFF,
       1000n,
     );
-    expect(leafIndexFromLogs([line], NOTE_MERGED, NOTE_MERGED_OFF)).toBe(1000n);
+    expect(
+      leafIndexFromLogs(vaultTx([line]), NOTE_MERGED, NOTE_MERGED_OFF, VAULT),
+    ).toBe(1000n);
   });
 
   it("returns null when no matching event is present", () => {
@@ -62,25 +83,25 @@ describe("leafIndexFromLogs", () => {
     );
     // Looking for NoteCreated, only a NoteMerged line present.
     expect(
-      leafIndexFromLogs([other], NOTE_CREATED, NOTE_CREATED_OFF),
+      leafIndexFromLogs(vaultTx([other]), NOTE_CREATED, NOTE_CREATED_OFF, VAULT),
     ).toBeNull();
   });
 
   it("ignores non-event log lines and picks the matching one", () => {
-    const logs = [
-      "Program C63v… invoke [1]",
+    const logs = vaultTx([
       "Program log: Instruction: Deposit",
       logLine(NOTE_CREATED, 1 + 8 + 32 + 32 + 8 + 32, NOTE_CREATED_OFF, 5n),
-      "Program C63v… success",
-    ];
-    expect(leafIndexFromLogs(logs, NOTE_CREATED, NOTE_CREATED_OFF)).toBe(5n);
+    ]);
+    expect(leafIndexFromLogs(logs, NOTE_CREATED, NOTE_CREATED_OFF, VAULT)).toBe(
+      5n,
+    );
   });
 
   it("returns null on a truncated event body", () => {
     // disc present but body too short to hold the leaf_index.
     const short = `Program data: ${Buffer.concat([Buffer.from(NOTE_CREATED), Buffer.alloc(4)]).toString("base64")}`;
     expect(
-      leafIndexFromLogs([short], NOTE_CREATED, NOTE_CREATED_OFF),
+      leafIndexFromLogs(vaultTx([short]), NOTE_CREATED, NOTE_CREATED_OFF, VAULT),
     ).toBeNull();
   });
 });
@@ -95,15 +116,89 @@ describe("noteCreatedFromLogs", () => {
   }
 
   it("reads (tree_id, leaf_index) from a NoteCreated event", () => {
-    expect(noteCreatedFromLogs([noteCreatedLine(3, 17n)])).toEqual({
+    expect(
+      noteCreatedFromLogs(vaultTx([noteCreatedLine(3, 17n)]), VAULT),
+    ).toEqual({ treeId: 3, leafIndex: 17n });
+  });
+
+  it("returns null when no NoteCreated event is present", () => {
+    expect(
+      noteCreatedFromLogs(vaultTx(["Program log: Instruction: Deposit"]), VAULT),
+    ).toBeNull();
+  });
+});
+
+// ── Provenance (SW-24) ──────────────────────────────────────────────────
+//
+// `Program data:` is `sol_log_data`, callable by any program, and these
+// decoders read the logs of a transaction fetched by signature. The realistic
+// attacker is a hostile RPC returning fabricated `logMessages`; a forged
+// leaf_index makes the client's own note look unspendable. Same construction
+// the enclave's Merkle sync had, where it was a Critical.
+describe("event provenance", () => {
+  function noteCreatedLine(treeId: number, leafIndex: bigint): string {
+    const body = Buffer.alloc(1 + 8 + 32 + 32 + 8 + 32, 0);
+    body.writeUInt8(treeId, 0);
+    body.writeBigUInt64LE(leafIndex, NOTE_CREATED_OFF);
+    return `Program data: ${Buffer.concat([Buffer.from(NOTE_CREATED), body]).toString("base64")}`;
+  }
+
+  it("ignores a byte-identical event emitted by another program", () => {
+    const logs = [
+      ...scoped(ATTACKER, 1, [noteCreatedLine(0, 999n)]),
+      ...vaultTx([noteCreatedLine(3, 17n)]),
+    ];
+    expect(noteCreatedFromLogs(logs, VAULT)).toEqual({
       treeId: 3,
       leafIndex: 17n,
     });
   });
 
-  it("returns null when no NoteCreated event is present", () => {
+  it("returns null when only a foreign program emitted the event", () => {
+    const logs = scoped(ATTACKER, 1, [noteCreatedLine(0, 999n)]);
+    expect(noteCreatedFromLogs(logs, VAULT)).toBeNull();
     expect(
-      noteCreatedFromLogs(["Program log: Instruction: Deposit"]),
+      leafIndexFromLogs(logs, NOTE_CREATED, NOTE_CREATED_OFF, VAULT),
     ).toBeNull();
+  });
+
+  it("ignores an event from a program the vault CPI'd into", () => {
+    const logs = vaultTx([
+      ...scoped(ATTACKER, 2, [noteCreatedLine(0, 999n)]),
+      noteCreatedLine(3, 17n),
+    ]);
+    expect(noteCreatedFromLogs(logs, VAULT)).toEqual({
+      treeId: 3,
+      leafIndex: 17n,
+    });
+  });
+
+  it("still reads the vault when it is itself the CPI callee", () => {
+    // Scope tracking must not degenerate into a "depth === 1" check.
+    const logs = scoped(
+      ATTACKER,
+      1,
+      scoped(VAULT, 2, [noteCreatedLine(3, 17n)]),
+    );
+    expect(noteCreatedFromLogs(logs, VAULT)).toEqual({
+      treeId: 3,
+      leafIndex: 17n,
+    });
+  });
+
+  it("does not let program log TEXT forge a scope marker", () => {
+    // `msg!` content is program-controlled. If the invoke pattern were matched
+    // before `Program log:` was discarded, this would open a vault frame.
+    const logs = scoped(ATTACKER, 1, [
+      `Program log: Program ${VAULT} invoke [1]`,
+      noteCreatedLine(0, 999n),
+    ]);
+    expect(noteCreatedFromLogs(logs, VAULT)).toBeNull();
+  });
+
+  it("does not trust an unbracketed event", () => {
+    // Truncated logs leave no open frame. A missing index throws a clear error
+    // the caller handles; a forged one silently strands the note.
+    expect(noteCreatedFromLogs([noteCreatedLine(3, 17n)], VAULT)).toBeNull();
   });
 });

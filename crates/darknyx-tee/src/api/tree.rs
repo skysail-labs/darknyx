@@ -16,6 +16,13 @@
 //! `VaultConfig.current_root` (it lags a sync interval); these are a
 //! fast convenience path, not a trust layer — clients verify against
 //! Solana directly when they need certainty.
+//!
+//! **All three fail closed on a diverged shard** (`503`). Lagging the chain is
+//! the normal, safe state and is served without comment; holding a root the
+//! chain never had is not. An inclusion path from a diverged mirror folds to a
+//! root `lock_note` rejects, so the client burns a proof and a transaction to
+//! learn what the enclave already knew. Refusing is the honest answer, and it
+//! is what makes the divergence visible to a caller who never reads the logs.
 
 use std::sync::Arc;
 
@@ -26,6 +33,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::error::ApiError;
 use super::state::ApiState;
 use crate::merkle::MERKLE_DEPTH;
 
@@ -103,18 +111,35 @@ fn parse_hex32(s: &str) -> Result<[u8; 32], (StatusCode, String)> {
     })
 }
 
+/// `503` if this shard's mirror is known to disagree with the chain.
+///
+/// Every `/tree/*` read goes through here. The mirror is append-only with no
+/// rewind, so divergence does not clear on its own — it holds until the shard
+/// reconciles (or the CVM cold-boots past it), and until then no answer derived
+/// from it is safe to hand a client.
+fn reject_if_diverged(mirror: &crate::merkle::MerkleMirror, tree_id: u8) -> Result<(), ApiError> {
+    if mirror.is_diverged() {
+        return Err(ApiError::merkle_diverged(format!(
+            "tree {tree_id} mirror diverged from on-chain state; read the tree from Solana \
+             directly. Proofs built against this mirror would be rejected by lock_note."
+        )));
+    }
+    Ok(())
+}
+
 /// `GET /tree/root?tree_id=` — public. Defaults to shard 0.
 pub async fn get_root(
     State(state): State<Arc<ApiState>>,
     Query(q): Query<TreeIdQuery>,
-) -> Json<TreeRootResponse> {
+) -> Result<Json<TreeRootResponse>, ApiError> {
     let mirror = state.merkle_mirror(q.tree_id as usize).read().await;
-    Json(TreeRootResponse {
+    reject_if_diverged(&mirror, q.tree_id)?;
+    Ok(Json(TreeRootResponse {
         tree_id: q.tree_id,
         merkle_root: hex::encode(mirror.root()),
         leaf_count: mirror.leaf_count(),
         on_chain_slot: mirror.on_chain_slot(),
-    })
+    }))
 }
 
 /// `GET /tree/inclusion?commitment=…` — bearer.
@@ -129,6 +154,7 @@ pub async fn get_inclusion(
 
     let proof = {
         let mirror = state.merkle_mirror(q.tree_id as usize).read().await;
+        reject_if_diverged(&mirror, q.tree_id)?;
         mirror.inclusion_proof(&commitment).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -165,6 +191,7 @@ pub async fn get_leaves(
     // mirror). Clients page with successive `from`.
     let capped_to = q.to.min(q.from.saturating_add(MAX_LEAF_PAGE));
     let mirror = state.merkle_mirror(q.tree_id as usize).read().await;
+    reject_if_diverged(&mirror, q.tree_id)?;
     let (start, leaves) = mirror.leaves_range(q.from, capped_to);
     Ok(Json(LeavesResponse {
         leaves: leaves

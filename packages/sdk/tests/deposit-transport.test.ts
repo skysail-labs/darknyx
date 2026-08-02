@@ -109,7 +109,16 @@ function makeClient(
   const conn: SolanaConnectionProvider = {
     connection: {
       getTransaction: async () => ({
-        meta: { logMessages: [noteCreatedLog(EVENT_LEAF_INDEX)] },
+        meta: {
+          // Bracketed in the vault's own frame: the decoder attributes
+          // `Program data:` to the innermost open program, so a bare event
+          // line belongs to no program and is ignored.
+          logMessages: [
+            `Program ${PROGRAM_ID.toBase58()} invoke [1]`,
+            noteCreatedLog(EVENT_LEAF_INDEX),
+            `Program ${PROGRAM_ID.toBase58()} success`,
+          ],
+        },
       }),
     } as never,
     perRpcUrl: "http://stub",

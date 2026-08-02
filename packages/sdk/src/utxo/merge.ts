@@ -249,6 +249,7 @@ export function getMergeFunction({
     const outputLeafIndex = await readNoteMergedLeafIndex(
       client.connectionProvider.connection,
       signature,
+      client.programId,
     );
 
     const outputNote: StoredNote = {
