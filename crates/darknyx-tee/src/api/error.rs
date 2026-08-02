@@ -20,7 +20,7 @@
 //! | 1200–1299 | conflict (409) | 1201 duplicate, 1202 stale_nonce, 1203 id_in_use, 1204 collateral_in_use |
 //! | 1300–1399 | not found (404) | 1301 not_found |
 //! | 1400–1499 | rate limit (429) | 1401 rate_limited |
-//! | 5000+ | server | 5000 internal, 5001 degraded |
+//! | 5000+ | server | 5000 internal, 5001 degraded, 5002 merkle_diverged |
 
 use axum::{
     extract::Request,
@@ -183,6 +183,16 @@ impl ApiError {
     /// A required subsystem (matching / settlement) is unavailable.
     pub fn degraded(m: impl Into<String>) -> Self {
         Self::new(5001, StatusCode::SERVICE_UNAVAILABLE, m)
+    }
+    /// The shard's Merkle mirror disagrees with its on-chain `MerkleTree`, so
+    /// `/tree/*` refuses to answer from it.
+    ///
+    /// Distinct from [`Self::degraded`] on purpose: "matching is down, retry
+    /// later" and "this tree view is not the chain's, do not build a proof
+    /// against it" call for different client behaviour. A caller seeing this
+    /// should read the tree from Solana directly rather than retry.
+    pub fn merkle_diverged(m: impl Into<String>) -> Self {
+        Self::new(5002, StatusCode::SERVICE_UNAVAILABLE, m)
     }
 }
 

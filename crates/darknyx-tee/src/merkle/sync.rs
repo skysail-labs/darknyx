@@ -28,6 +28,7 @@ use tokio::sync::RwLock;
 use super::events::extract_appended_leaves;
 use super::mirror::{MerkleMirror, MirrorError};
 use super::{AppendedLeaf, TreeAppendEvent};
+use crate::matcher::{TradingGate, TradingPauseReason};
 use crate::settle::settle_batched::SETTLE_BATCHED_DISCRIMINATOR;
 use crate::solana_rpc::{RpcAddressTx, RpcError, SolanaRpcClient, TxSortOrder};
 
@@ -100,6 +101,9 @@ pub struct MerkleSync {
     /// once on divergence (not every ~2s poll) and logs once on recovery.
     /// Indexed by `tree_id`; length == `mirrors.len()`.
     diverged: Vec<bool>,
+    /// Venue-wide trading gate, paused while any shard's mirror disagrees with
+    /// its on-chain `MerkleTree`. `None` in tests that construct a bare sync.
+    trading_gate: Option<TradingGate>,
     /// Optional live `tree`-channel publisher. Every NEWLY applied leaf is
     /// broadcast here so the multiplexed `/v1/stream` `tree` channel can push
     /// leaf-append events. `None` (the default) disables it. A send with no
@@ -130,8 +134,20 @@ impl MerkleSync {
             cfg,
             last_slot: 0,
             diverged,
+            trading_gate: None,
             tree_tx: None,
         }
+    }
+
+    /// Attach the venue-wide trading gate, so a shard whose mirror disagrees
+    /// with the chain pauses new place/modify/matching until it recovers.
+    ///
+    /// Cancellation, settlement reconciliation, and drain stay available: the
+    /// gate only closes new trading, and `MerkleDivergence` is independent of
+    /// every other pause reason.
+    pub fn with_trading_gate(mut self, gate: TradingGate) -> Self {
+        self.trading_gate = Some(gate);
+        self
     }
 
     /// Attach a live `tree`-channel publisher: every newly applied leaf is
@@ -245,16 +261,14 @@ impl MerkleSync {
     async fn apply_address_txs(&self, txs: &[RpcAddressTx]) -> Result<usize, SyncError> {
         let mut leaves: Vec<AppendedLeaf> = Vec::new();
         let mut max_slot = 0u64;
+        let vault_id = self.vault_program_id.to_string();
         for tx in txs {
             if tx.err.is_some() {
                 continue; // defensive — `status: succeeded` already excludes reverts
             }
-            let settle_ix_data = tx
-                .instructions
-                .iter()
-                .map(|ix| ix.data.as_slice())
-                .find(|d| d.len() >= 8 && d[..8] == *SETTLE_BATCHED_DISCRIMINATOR);
-            let mut tx_leaves = extract_appended_leaves(&tx.log_messages, settle_ix_data);
+            let settle_ix_data = settle_ix_data(&vault_id, tx);
+            let mut tx_leaves =
+                extract_appended_leaves(&vault_id, &tx.log_messages, settle_ix_data);
             if !tx_leaves.is_empty() {
                 max_slot = max_slot.max(tx.slot);
                 leaves.append(&mut tx_leaves);
@@ -304,13 +318,21 @@ impl MerkleSync {
     /// * **Behind** (`chain_count > mirror_count`): the mirror is mid-catch-up
     ///   (normal sync lag). `debug` — the next poll applies the new leaves.
     /// * **Diverged** (`mirror_count > chain_count`, or equal counts with
-    ///   different roots): the mirror holds leaves no longer on chain — i.e. an
-    ///   on-chain `reset_merkle_tree` ran underneath it (a DEVNET op; production
-    ///   never resets). The append-only mirror can't roll back from the event
-    ///   stream (a reset emits no event), so it stays stale until the CVM is
-    ///   restarted (or `DARKNYX_TEE_SYNC_FROM_SLOT` is bumped past the reset). WARN
-    ///   ONCE per shard (latched in `self.diverged`) so this doesn't flood the
-    ///   log every poll.
+    ///   different roots): the mirror holds a root the chain never had. **Fails
+    ///   closed** — the shard is flagged, `/tree/*` stops serving it, and new
+    ///   trading pauses venue-wide until it reconciles again. WARN ONCE per
+    ///   shard (latched in `self.diverged`) so this doesn't flood the log every
+    ///   poll.
+    ///
+    ///   Two causes, and the response has to be safe for both. The benign one
+    ///   is an on-chain `reset_merkle_tree` underneath a running mirror (a
+    ///   DEVNET op; production never resets), which the append-only mirror
+    ///   can't roll back from — a reset emits no event — so it needs a CVM
+    ///   restart or a `DARKNYX_TEE_SYNC_FROM_SLOT` bump past the reset. The
+    ///   hostile one is a poisoned mirror. **This code cannot tell them apart**,
+    ///   and the previous version assumed the benign one and kept serving.
+    ///   Serving inclusion paths that fold to a root `lock_note` will reject is
+    ///   worse than serving nothing, so divergence now stops rather than warns.
     async fn reconcile(&mut self) {
         for tree_id in 0..self.merkle_tree_pdas.len() {
             let tree_pda = self.merkle_tree_pdas[tree_id];
@@ -344,9 +366,11 @@ impl MerkleSync {
                         tracing::info!(
                             tree_id,
                             leaf_count = chain_count,
-                            "merkle reconcile RECOVERED — shard mirror matches chain again"
+                            "merkle reconcile RECOVERED — shard mirror matches chain again; \
+                             /tree/* serving resumes"
                         );
                         self.diverged[tree_id] = false;
+                        self.mirrors[tree_id].write().await.set_diverged(false);
                     } else {
                         tracing::debug!(tree_id, leaf_count = chain_count, "merkle reconcile OK");
                     }
@@ -361,29 +385,71 @@ impl MerkleSync {
                     );
                 }
                 ReconcileState::Diverged => {
+                    // Flag on EVERY diverged poll, not just the transition: the
+                    // WARN is latched, the safety state is not. A mirror that
+                    // was somehow cleared while still disagreeing must be
+                    // re-flagged rather than silently resume serving.
+                    self.mirrors[tree_id].write().await.set_diverged(true);
                     if !self.diverged[tree_id] {
-                        // Mirror AHEAD of chain (or equal count, different root):
-                        // it holds leaves the chain no longer has → an on-chain
-                        // reset ran underneath us. Warn ONCE; the append-only
-                        // mirror needs a restart to re-cold-boot post-reset.
-                        tracing::warn!(
+                        tracing::error!(
                             tree_id,
                             mirror_leaves = mirror_count,
                             chain_leaves = chain_count,
                             mirror_root = %hex::encode(mirror_root),
                             chain_root = %hex::encode(chain_root),
-                            "merkle reconcile DIVERGED — shard mirror holds leaves no longer on \
-                             chain (on-chain reset_merkle_tree underneath the mirror?). \
-                             Append-only mirror can't roll back; restart the CVM or bump \
-                             DARKNYX_TEE_SYNC_FROM_SLOT past the reset. (DEVNET only — production \
-                             never resets.) Suppressing until recovered."
+                            "merkle reconcile DIVERGED — shard mirror holds a root the chain does \
+                             not. FAILING CLOSED: /tree/* stops serving this shard and new \
+                             trading is paused venue-wide (cancel + settlement recovery stay \
+                             open). Causes: an on-chain reset_merkle_tree underneath the mirror \
+                             (a DEVNET op), or leaves applied from a source that was not the \
+                             vault. The append-only mirror cannot roll back — restart the CVM \
+                             with DARKNYX_TEE_SYNC_FROM_SLOT past the divergence to re-cold-boot. \
+                             Suppressing this log until recovered."
                         );
                         self.diverged[tree_id] = true;
                     }
                 }
             }
         }
+
+        // One venue-wide verdict over all shards: pause while ANY shard
+        // disagrees, resume only when every one of them is clean again.
+        if let Some(gate) = &self.trading_gate {
+            let any_diverged = self.diverged.iter().any(|d| *d);
+            if any_diverged {
+                if gate.pause_for(TradingPauseReason::MerkleDivergence) {
+                    tracing::error!("trading PAUSED — merkle mirror diverged from chain");
+                }
+            } else if gate.is_paused_for(TradingPauseReason::MerkleDivergence) {
+                gate.resume_for(TradingPauseReason::MerkleDivergence);
+                tracing::info!("trading RESUMED — every merkle shard matches chain again");
+            }
+        }
     }
+}
+
+/// The data of `tx`'s `tee_forced_settle_batched` instruction, or `None`.
+///
+/// **Both** conditions are load-bearing. The discriminator alone is a shape
+/// check anyone can satisfy: paired with a forged `TradeSettled` event it
+/// supplies the leaf VALUES for indices the event names, so an attacker could
+/// fabricate a whole settle from their own program. Matching `program_id`
+/// makes the payload attributable by construction.
+///
+/// `program_id` is reliably populated here: Solana sanitizes a message's
+/// `program_id_index` against the **static** account keys, so a program id can
+/// never be resolved through an address lookup table — including in the v0
+/// settle transactions, which do use ALTs for their other accounts.
+///
+/// Top-level instructions only, matching what the RPC client parses. The settle
+/// is always a top-level instruction (the enclave builds and sends it), so a
+/// vault CPI'd from another program is out of scope and would not be counted.
+fn settle_ix_data<'a>(vault_program_id: &str, tx: &'a RpcAddressTx) -> Option<&'a [u8]> {
+    tx.instructions
+        .iter()
+        .filter(|ix| ix.program_id == vault_program_id)
+        .map(|ix| ix.data.as_slice())
+        .find(|d| d.len() >= 8 && d[..8] == *SETTLE_BATCHED_DISCRIMINATOR)
 }
 
 /// Aggregate outcome of one [`MerkleSync::scan_and_apply`] pass.
@@ -687,7 +753,10 @@ mod tests {
             base64::engine::general_purpose::STANDARD.encode(&event)
         );
 
-        // One gTFA page: a single deposit tx, no next page.
+        // One gTFA page: a single deposit tx, no next page. The event must be
+        // bracketed in the vault's own invocation frame — an unscoped
+        // `Program data:` line is not attributable and is no longer decoded.
+        let vault = Address::new_from_array([1u8; 32]);
         let page = Arc::new(json!({
             "data": [{
                 "slot": 100,
@@ -695,7 +764,14 @@ mod tests {
                     "signatures": ["sig1"],
                     "message": { "accountKeys": [], "instructions": [] }
                 },
-                "meta": { "logMessages": [log_line], "err": null }
+                "meta": {
+                    "logMessages": [
+                        format!("Program {vault} invoke [1]"),
+                        log_line,
+                        format!("Program {vault} success"),
+                    ],
+                    "err": null,
+                },
             }],
             "paginationToken": Value::Null
         }));
@@ -725,7 +801,7 @@ mod tests {
         let mut sync = MerkleSync::new(
             rpc,
             vec![mirror.clone()],
-            Address::new_from_array([1u8; 32]),
+            vault,
             vec![Address::new_from_array([2u8; 32])],
             MerkleSyncConfig::default(),
         );
@@ -738,6 +814,170 @@ mod tests {
         let m = mirror.read().await;
         assert_eq!(m.leaf_count(), 1);
         assert_eq!(m.leaf_index_of(&commitment), Some(0));
+    }
+
+    /// The instruction half of the provenance fix.
+    ///
+    /// `TradeSettled` carries leaf INDICES; the VALUES come from the settle
+    /// instruction's payload. Locating that instruction by discriminator alone
+    /// let an attacker supply both halves: a forged event plus an instruction
+    /// to their own program whose data merely begins with the settle
+    /// discriminator. `program_id` — which the RPC client already returns — is
+    /// what makes the payload attributable.
+    #[test]
+    fn a_settle_payload_is_only_read_from_a_vault_instruction() {
+        use crate::solana_rpc::RpcInstruction;
+
+        let vault = Address::new_from_array([1u8; 32]).to_string();
+        let attacker = Address::new_from_array([9u8; 32]).to_string();
+
+        // Well-formed settle ix data: discriminator + tree_id + payload.
+        let mut data = SETTLE_BATCHED_DISCRIMINATOR.to_vec();
+        data.push(0u8);
+        data.extend_from_slice(&[0u8; 512]);
+
+        let tx = |program_id: &str| RpcAddressTx {
+            signature: "sig".into(),
+            slot: 1,
+            err: None,
+            log_messages: Vec::new(),
+            instructions: vec![RpcInstruction {
+                program_id: program_id.to_string(),
+                data: data.clone(),
+            }],
+        };
+
+        assert!(
+            settle_ix_data(&vault, &tx(&vault)).is_some(),
+            "the vault's own settle instruction is still found"
+        );
+        assert!(
+            settle_ix_data(&vault, &tx(&attacker)).is_none(),
+            "byte-identical data from another program supplies no leaf values"
+        );
+    }
+
+    /// Reconcile must ACT on divergence, not just log it.
+    ///
+    /// Before this, `Diverged` produced one latched WARN while `/tree/*` kept
+    /// serving and trading stayed open — the enclave detected the corruption
+    /// and continued handing out inclusion paths built on it. The two
+    /// assertions here are the whole point of the change.
+    #[tokio::test]
+    async fn divergence_flags_the_mirror_and_pauses_trading() {
+        use axum::{routing::post, Json, Router};
+        use base64::Engine as _;
+        use serde_json::{json, Value};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // Serialized `MerkleTree` account data for a given count + root.
+        fn tree_account(count: u64, root: [u8; 32]) -> String {
+            let mut data = vec![0u8; TREE_CURRENT_ROOT_OFFSET + 32];
+            data[TREE_LEAF_COUNT_OFFSET..TREE_LEAF_COUNT_OFFSET + 8]
+                .copy_from_slice(&count.to_le_bytes());
+            data[TREE_CURRENT_ROOT_OFFSET..TREE_CURRENT_ROOT_OFFSET + 32].copy_from_slice(&root);
+            base64::engine::general_purpose::STANDARD.encode(&data)
+        }
+
+        // The mirror holds one leaf. The chain reports an EMPTY tree, so the
+        // mirror is ahead — exactly the shape a poisoned leaf produces.
+        let mirror = Arc::new(RwLock::new(MerkleMirror::new()));
+        mirror.write().await.append_leaf(fr_safe(0xAB)).unwrap();
+        let mirror_root = mirror.read().await.root();
+
+        // Flipping this makes the mock agree with the mirror, so the same code
+        // path is exercised for recovery.
+        let healthy = Arc::new(AtomicBool::new(false));
+
+        async fn handle(
+            axum::extract::State(state): axum::extract::State<(Arc<AtomicBool>, [u8; 32])>,
+            Json(req): Json<Value>,
+        ) -> Json<Value> {
+            let (healthy, mirror_root) = state;
+            let id = req.get("id").cloned().unwrap_or(json!(1));
+            let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            let result = match method {
+                "getTransactionsForAddress" => json!({ "data": [], "paginationToken": null }),
+                "getAccountInfo" => {
+                    let data = if healthy.load(Ordering::SeqCst) {
+                        tree_account(1, mirror_root)
+                    } else {
+                        tree_account(0, [0u8; 32])
+                    };
+                    json!({
+                        "context": { "slot": 100 },
+                        "value": {
+                            "lamports": 1u64,
+                            "owner": "11111111111111111111111111111111",
+                            "data": [data, "base64"],
+                            "executable": false,
+                            "rentEpoch": 0u64,
+                        }
+                    })
+                }
+                _ => json!(null),
+            };
+            Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+        }
+
+        let app = Router::new()
+            .route("/", post(handle))
+            .with_state((healthy.clone(), mirror_root));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let gate = TradingGate::default();
+        let mut sync = MerkleSync::new(
+            SolanaRpcClient::new(format!("http://{addr}")).unwrap(),
+            vec![mirror.clone()],
+            Address::new_from_array([1u8; 32]),
+            vec![Address::new_from_array([2u8; 32])],
+            MerkleSyncConfig::default(),
+        )
+        .with_trading_gate(gate.clone());
+
+        assert!(gate.is_open(), "healthy at the start");
+
+        sync.reconcile().await;
+        assert!(
+            mirror.read().await.is_diverged(),
+            "the shard must be flagged so /tree/* stops serving it"
+        );
+        assert!(
+            gate.is_paused_for(TradingPauseReason::MerkleDivergence),
+            "new trading must pause while the mirror disagrees with the chain"
+        );
+        assert!(!gate.is_open());
+
+        // A second diverged poll must not un-flag anything (the WARN latches;
+        // the safety state does not).
+        sync.reconcile().await;
+        assert!(mirror.read().await.is_diverged());
+        assert!(!gate.is_open());
+
+        // Chain catches up and agrees → both must clear, or a transient
+        // divergence would strand the venue closed forever.
+        healthy.store(true, Ordering::SeqCst);
+        sync.reconcile().await;
+        assert!(!mirror.read().await.is_diverged());
+        assert!(gate.is_open(), "recovery re-opens trading");
+    }
+
+    /// The divergence pause must not be collateral damage from an unrelated
+    /// resume, and must not itself un-pause another subsystem.
+    #[test]
+    fn merkle_divergence_is_independent_of_the_other_pause_reasons() {
+        let gate = TradingGate::default();
+        assert!(gate.pause_for(TradingPauseReason::MerkleDivergence));
+        assert!(gate.pause_for(TradingPauseReason::Governance));
+        assert!(
+            !gate.resume(),
+            "a governance resume must not re-open trading onto a diverged mirror"
+        );
+        assert!(gate.is_paused_for(TradingPauseReason::MerkleDivergence));
+        assert!(gate.resume_for(TradingPauseReason::MerkleDivergence));
+        assert!(gate.is_open());
     }
 
     #[test]

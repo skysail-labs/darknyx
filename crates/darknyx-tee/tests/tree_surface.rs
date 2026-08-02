@@ -15,8 +15,10 @@ use axum::{
 };
 use darknyx_tee::api::auth::{Claims, TEST_API_KEY, TEST_JWT_SECRET};
 use darknyx_tee::api::{build_router, ApiState};
+use darknyx_tee::merkle::MerkleMirror;
 use http_body_util::BodyExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
+use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 /// A BN254-Fr-safe 32-byte leaf (top byte zero).
@@ -165,4 +167,85 @@ async fn leaves_inverted_range_400() {
     let (app, _) = app_with_leaves(3).await;
     let resp = get(&app, "/tree/leaves?from=3&to=1", Some(&bearer())).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+// ── Fail-closed on a diverged mirror ────────────────────────────────────
+//
+// A mirror that disagrees with its on-chain `MerkleTree` holds a root the
+// chain never had. Every answer derived from it is confidently wrong: an
+// inclusion path folds to a root `lock_note` rejects, and a client cannot
+// tell that from a good one until it has already spent a proof and a
+// transaction. Divergence used to be one latched WARN with the endpoints
+// still serving; these pin that it now stops.
+
+/// Seed `n` leaves, then flag the shard the way `merkle::sync::reconcile`
+/// does when it finds the mirror disagreeing with the chain.
+async fn app_with_diverged_mirror(n: u8) -> axum::Router {
+    let state = Arc::new(ApiState::for_tests());
+    {
+        let mut mirror = state.merkle_mirror(0).write().await;
+        for i in 1..=n {
+            mirror.append_leaf(fr_safe(i)).unwrap();
+        }
+        mirror.set_diverged(true);
+    }
+    build_router(state)
+}
+
+#[tokio::test]
+async fn a_diverged_shard_refuses_every_tree_read() {
+    let app = app_with_diverged_mirror(5).await;
+    let target = hex::encode(fr_safe(3));
+    for (uri, token) in [
+        ("/tree/root".to_string(), None),
+        (
+            format!("/tree/inclusion?commitment={target}"),
+            Some(bearer()),
+        ),
+        ("/tree/leaves?from=0&to=3".to_string(), Some(bearer())),
+    ] {
+        let resp = get(&app, &uri, token.as_deref()).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{uri} must fail closed while the shard is diverged"
+        );
+        // A distinct code from 5001 `degraded`: this is not "retry later",
+        // it is "do not trust this view — read the tree from Solana".
+        assert_eq!(read_json(resp).await["code"], 5002);
+    }
+}
+
+#[tokio::test]
+async fn a_healthy_shard_is_unaffected_by_another_shards_divergence() {
+    // Shards are independent trees. Flagging one must not take down reads of
+    // the others, or one poisoned shard becomes a whole-venue read outage.
+    //
+    // `for_tests()` builds a SINGLE shard, so the second one is added here on
+    // purpose — an `if num_mirror_shards() < 2 { return }` guard would make
+    // this test pass without ever exercising the isolation it claims to check.
+    let mut state = ApiState::for_tests();
+    state
+        .merkle_mirrors
+        .push(Arc::new(RwLock::new(MerkleMirror::new())));
+    let state = Arc::new(state);
+    assert_eq!(state.num_mirror_shards(), 2);
+
+    state.merkle_mirror(0).write().await.set_diverged(true);
+    state
+        .merkle_mirror(1)
+        .write()
+        .await
+        .append_leaf(fr_safe(9))
+        .unwrap();
+    let app = build_router(state);
+
+    assert_eq!(
+        get(&app, "/tree/root?tree_id=0", None).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        get(&app, "/tree/root?tree_id=1", None).await.status(),
+        StatusCode::OK
+    );
 }

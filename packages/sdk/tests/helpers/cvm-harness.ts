@@ -364,7 +364,7 @@ export class CvmHarness {
       ),
       [p.payer],
     );
-    const recovered = await readNoteCreated(this.conn, sig);
+    const recovered = await readNoteCreated(this.conn, sig, this.vaultProgramId);
     await this.shadows[recovered.treeId].append(commitment);
     console.log(
       `  · ${p.name} deposited shard ${recovered.treeId} leaf ${recovered.leafIndex} (${sig.slice(0, 8)}…)`,

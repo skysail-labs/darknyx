@@ -200,6 +200,7 @@ export function getDepositFunction({
     const leafIndex = await readNoteCreatedLeafIndex(
       client.connectionProvider.connection,
       signature,
+      client.programId,
     );
 
     return {
