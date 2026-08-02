@@ -233,7 +233,7 @@ describe("Keystore — encrypted at rest", () => {
     const path = tmpFile();
     const id = identity();
     const fsync = vi.spyOn(fs, "fsyncSync");
-    saveKeystore(id, path, "correct horse");
+    saveKeystore(id, path, "correct horse battery");
     // One sync persists the temp file's bytes; the second persists the
     // same-directory rename that makes it the live keystore.
     expect(fsync).toHaveBeenCalledTimes(2);
@@ -249,7 +249,7 @@ describe("Keystore — encrypted at rest", () => {
     expect(file).not.toHaveProperty("p");
     expect(fs.statSync(path).mode & 0o777).toBe(0o600);
 
-    const ks = loadKeystore(path, "correct horse");
+    const ks = loadKeystore(path, "correct horse battery");
     // same identity → same derived material
     expect(ks.spendingKey).toBe(new Keystore(id).spendingKey);
     expect(Buffer.from(ks.tradingPublicKey(3))).toEqual(
@@ -261,7 +261,7 @@ describe("Keystore — encrypted at rest", () => {
 
   it("rejects a wrong passphrase (GCM auth tag fails)", () => {
     const path = tmpFile();
-    saveKeystore(identity(), path, "right");
+    saveKeystore(identity(), path, "right-passphrase-01");
     const before = fs.readFileSync(path);
     expect(() => loadKeystore(path, "wrong")).toThrow(/decrypt failed/);
     expect(fs.readFileSync(path)).toEqual(before);
@@ -298,7 +298,7 @@ describe("Keystore — encrypted at rest", () => {
 
   it("does not rewrite v1 when the passphrase is wrong", () => {
     const path = tmpFile();
-    writeLegacyV1(path, "right");
+    writeLegacyV1(path, "right-passphrase-01");
     const before = fs.readFileSync(path);
     expect(() => loadKeystore(path, "wrong")).toThrow(/decrypt failed/);
     expect(fs.readFileSync(path)).toEqual(before);
@@ -311,23 +311,23 @@ describe("Keystore — encrypted at rest", () => {
       ...JSON.parse(serializeIdentityForV1(identity())),
       seed: "00",
     };
-    writeLegacyV1(path, "right", identity(), JSON.stringify(malformed));
+    writeLegacyV1(path, "right-passphrase-01", identity(), JSON.stringify(malformed));
     const before = fs.readFileSync(path);
 
-    expect(() => loadKeystore(path, "right")).toThrow(/seed must be 64 bytes/);
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(/seed must be 64 bytes/);
     expect(fs.readFileSync(path)).toEqual(before);
     expect(readFileObject(path).version).toBe(1);
   });
 
   it("rejects hostile v1 KDF fields before they can select work", () => {
     const path = tmpFile();
-    writeLegacyV1(path, "right");
+    writeLegacyV1(path, "right-passphrase-01");
     const file = readFileObject(path);
     file.n = 2 ** 30;
     writeFileObject(path, file);
     const before = fs.readFileSync(path);
 
-    expect(() => loadKeystore(path, "right")).toThrow(
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
       /unsupported keystore v1 profile/,
     );
     expect(fs.readFileSync(path)).toEqual(before);
@@ -335,13 +335,13 @@ describe("Keystore — encrypted at rest", () => {
 
   it("leaves the original v1 intact when the atomic rename is interrupted", () => {
     const path = tmpFile();
-    writeLegacyV1(path, "right");
+    writeLegacyV1(path, "right-passphrase-01");
     const before = fs.readFileSync(path);
     vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
       throw new Error("simulated interruption");
     });
 
-    expect(() => loadKeystore(path, "right")).toThrow(
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
       /atomic migration to v2 failed/,
     );
     expect(fs.readFileSync(path)).toEqual(before);
@@ -352,45 +352,77 @@ describe("Keystore — encrypted at rest", () => {
 
   it("strictly rejects unknown fields, profiles, and encoded lengths", () => {
     const path = tmpFile();
-    saveKeystore(identity(), path, "right");
+    saveKeystore(identity(), path, "right-passphrase-01");
 
     const withUnknown = readFileObject(path);
     withUnknown.n = 1;
     writeFileObject(path, withUnknown);
-    expect(() => loadKeystore(path, "right")).toThrow(
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
       /unknown or missing fields/,
     );
 
-    saveKeystore(identity(), path, "right");
+    saveKeystore(identity(), path, "right-passphrase-01");
     const wrongProfile = readFileObject(path);
     wrongProfile.profile = "scrypt-n14-r8-p1-v1";
     writeFileObject(path, wrongProfile);
-    expect(() => loadKeystore(path, "right")).toThrow(
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
       /unsupported keystore v2 profile/,
     );
 
-    saveKeystore(identity(), path, "right");
+    saveKeystore(identity(), path, "right-passphrase-01");
     const shortSalt = readFileObject(path);
     shortSalt.salt = "00";
     writeFileObject(path, shortSalt);
-    expect(() => loadKeystore(path, "right")).toThrow(/salt must be 16 bytes/);
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(/salt must be 16 bytes/);
   });
 
   it("authenticates the v2 header and rejects tampering", () => {
     const path = tmpFile();
-    saveKeystore(identity(), path, "right");
+    saveKeystore(identity(), path, "right-passphrase-01");
     const file = readFileObject(path);
     const iv = file.iv as string;
     file.iv = `${iv.slice(0, -2)}${iv.endsWith("00") ? "01" : "00"}`;
     writeFileObject(path, file);
-    expect(() => loadKeystore(path, "right")).toThrow(/decrypt failed/);
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(/decrypt failed/);
   });
 
   it("rejects an oversized file before parsing or deriving a key", () => {
     const path = tmpFile();
     fs.writeFileSync(path, "x".repeat(32 * 1024 + 1), { mode: 0o600 });
-    expect(() => loadKeystore(path, "right")).toThrow(
+    expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
       /keystore file must be 1\.\.32768 bytes/,
     );
+  });
+});
+
+// ── SW-16: custody edges ────────────────────────────────────────────────
+describe("keystore custody edges (SW-16)", () => {
+  it("refuses a keystore that is group- or world-accessible", () => {
+    // Every write path creates this 0600 and says so, but nothing checked it on
+    // READ — so a keystore restored 0644 from a backup loaded silently. This is
+    // OpenSSH's refusal case: the file is only as private as its mode, and the
+    // moment to notice is before it is decrypted.
+    const path = tmpFile();
+    saveKeystore(identity(), path, "right-passphrase-01");
+
+    for (const mode of [0o644, 0o640, 0o604]) {
+      fs.chmodSync(path, mode);
+      expect(() => loadKeystore(path, "right-passphrase-01")).toThrow(
+        /group\/world-accessible/,
+      );
+    }
+
+    // ...and 0600 still loads.
+    fs.chmodSync(path, 0o600);
+    expect(loadKeystore(path, "right-passphrase-01")).toBeTruthy();
+  });
+
+  it("refuses to seal under a passphrase short enough to enumerate", () => {
+    // A strong KDF profile buys TIME against a weak secret, not immunity: at
+    // N=2^17 a short passphrase is still enumerable, and this file is exactly
+    // what an attacker walks off with.
+    expect(() =>
+      saveKeystore(identity(), tmpFile(), "hunter2"),
+    ).toThrow(/at least 12 characters/);
   });
 });

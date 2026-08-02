@@ -23,8 +23,10 @@ function openOrder(overrides: Partial<ManagedOrder> = {}): ManagedOrder {
 }
 
 describe("DaemonActionExecutor — merge", () => {
-  it("delegates to the runner and reports the consumed count", async () => {
-    const runner: MergeRunner = { run: vi.fn(async () => 3) };
+  it("delegates to the runner and reports the order\u2019s remaining residuals", async () => {
+    const runner: MergeRunner = {
+      run: vi.fn(async () => ({ consumed: 3, remaining: 2 })),
+    };
     const executor = new DaemonActionExecutor({ merge: runner });
 
     const event = await executor.merge(
@@ -32,7 +34,9 @@ describe("DaemonActionExecutor — merge", () => {
       { type: "merge", orderId: ORDER_ID, noteCount: 4 },
     );
 
-    expect(event).toEqual({ type: "merge-confirmed", consumed: 3 });
+    // The event carries the trigger order's REMAINING residuals, not the
+    // account-wide consumed count (SW-13).
+    expect(event).toEqual({ type: "merge-confirmed", remaining: 2 });
     expect(runner.run).toHaveBeenCalledWith(expect.any(Object), 4);
   });
 

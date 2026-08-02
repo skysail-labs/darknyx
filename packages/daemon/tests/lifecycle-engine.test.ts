@@ -35,7 +35,7 @@ class FakeExecutor implements ActionExecutor {
   constructor(
     private readonly result: LifecycleEvent = {
       type: "merge-confirmed",
-      consumed: 4,
+      remaining: 4,
     },
   ) {}
 
@@ -68,7 +68,7 @@ describe("LifecycleEngine — dispatch + persistence", () => {
 });
 
 describe("LifecycleEngine — auto-merge loop", () => {
-  it("fires at the threshold and draws down residuals on confirm", async () => {
+  it("fires at the threshold and adopts the reported residual count", async () => {
     const executor = new FakeExecutor();
     const engine = new LifecycleEngine(store, executor);
     engine.register(openOrder({ pendingChangeNotes: 3 }));
@@ -81,7 +81,9 @@ describe("LifecycleEngine — auto-merge loop", () => {
 
     expect(executor.mergeCalls).toHaveLength(1);
     const order = store.getOrder("ab".repeat(8))!;
-    expect(order.pendingChangeNotes).toBe(0);
+    // The fake executor reports `remaining: 4`, and the count is now SET from
+    // that store-derived value rather than subtracted (SW-13).
+    expect(order.pendingChangeNotes).toBe(4);
     expect(order.mergeInFlight).toBe(false);
   });
 

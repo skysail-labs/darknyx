@@ -1,5 +1,16 @@
 /**
- * Keystore — the daemon's on-device crypto identity. Keys NEVER leave here.
+ * Keystore — the daemon's on-device crypto identity.
+ *
+ * **The trust boundary is the PROCESS, not this module** (SW-16). The headline
+ * used to read "Keys NEVER leave here", which is the sentence a reader believes
+ * when deciding where to look for key handling — and it is not true: the public
+ * `masterSeed` getter hands the 64-byte root secret to five call sites
+ * (`daemon.ts`, `build-place-request.ts` x2, `merge-client.ts`,
+ * `daemon-client.ts`, `fills-listener.ts`). All in-process, so the security
+ * posture is exactly what the AT REST note below describes — but a reader
+ * auditing "where can the seed go" would have stopped at this file and missed
+ * them. The accurate statement is the one further down: keys never leave the
+ * process, and the passphrase-sealed file is what protects them at rest.
  *
  * Holds the account's {@link AccountIdentity} (the 64-byte master seed + the
  * blinding/`r`-values + root-key pubkey that pin the owner + user commitments)
@@ -431,6 +442,22 @@ function parseFile(path: string): JsonObject {
       `keystore file must be 1..${MAX_KEYSTORE_FILE_BYTES} bytes`,
     );
   }
+  // Every write path creates this `0600` and says so, but nothing checked it on
+  // READ — so a keystore restored `0644` from a backup, or copied through a
+  // permissive umask, loaded silently (SW-16). This is OpenSSH's refusal case,
+  // and for the same reason: the file is only as private as its mode, and the
+  // moment to notice is before it is decrypted.
+  //
+  // Group/other bits only. Owner-executable is odd but harmless, and Windows
+  // reports modes that would false-positive a stricter check.
+  const mode = stat.mode & 0o077;
+  if (mode !== 0) {
+    throw new Error(
+      `keystore ${path} is group/world-accessible (mode ${(stat.mode & 0o777)
+        .toString(8)
+        .padStart(3, "0")}); run: chmod 600 ${path}`,
+    );
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(path, "utf8"));
@@ -529,11 +556,36 @@ function openV1(file: JsonObject, passphrase: string): AccountIdentity {
 }
 
 /** Seal an identity to disk under `passphrase` using the fixed v2 profile. */
+/**
+ * Minimum passphrase length (SW-16).
+ *
+ * A strong KDF profile buys TIME against a weak secret, not immunity: at
+ * N=2^17 a short or dictionary passphrase is still enumerable, and this file is
+ * exactly the artifact an attacker walks off with. A length floor is the
+ * cheapest control that changes the arithmetic; it is not a substitute for a
+ * good passphrase, which is why the message says so.
+ *
+ * Deliberately a floor and not an entropy estimator: entropy scoring on
+ * human-chosen strings is unreliable enough that it mostly teaches users to
+ * defeat it.
+ */
+export const MIN_KEYSTORE_PASSPHRASE_LENGTH = 12;
+
+function assertUsablePassphrase(passphrase: string): void {
+  if (passphrase.length < MIN_KEYSTORE_PASSPHRASE_LENGTH) {
+    throw new Error(
+      `keystore passphrase must be at least ${MIN_KEYSTORE_PASSPHRASE_LENGTH} characters ` +
+        "— the scrypt profile slows an attacker down, it does not make a short passphrase safe",
+    );
+  }
+}
+
 export function saveKeystore(
   identity: AccountIdentity,
   path: string,
   passphrase: string,
 ): void {
+  assertUsablePassphrase(passphrase);
   atomicReplace(path, JSON.stringify(sealV2(identity, passphrase)));
 }
 

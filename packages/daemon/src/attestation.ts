@@ -79,26 +79,74 @@ export interface AttestationResult {
   bootSessionId: string;
 }
 
+/**
+ * Bound every read of the gateway (SW-17).
+ *
+ * This is the one module whose stated premise is that the peer may be "a normal
+ * server that fabricates JSON" — it is the code deciding whether to trust the
+ * gateway at all, so it must not assume the gateway is well-behaved while
+ * asking that question. Two limits, both absent before:
+ *
+ * * **A deadline.** Without one, a gateway that accepts the connection and then
+ *   stalls hangs `Daemon.start()` forever, with no diagnostic and no timeout to
+ *   distinguish "slow" from "hung".
+ * * **A size cap.** `res.json()` buffers whatever arrives, and the `event_log`
+ *   it returns is then walked by `parseEventLog` -> `replayEventLogRtmr`. An
+ *   unbounded body is memory exhaustion before a single measurement is checked.
+ */
+const ATTESTATION_TIMEOUT_MS = 15_000;
+/** Generous for a real quote + event log (the observed CVM log is ~30 entries). */
+const ATTESTATION_MAX_BYTES = 4 * 1024 * 1024;
+
 async function getJson<T>(
   url: string,
   token: string,
   fetchImpl: typeof fetch,
 ): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ATTESTATION_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetchImpl(url, {
       headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal,
     });
   } catch (e) {
+    const aborted = controller.signal.aborted;
     throw new AttestationError(
-      `attestation fetch failed: ${e instanceof Error ? e.message : e}`,
+      aborted
+        ? `attestation fetch timed out after ${ATTESTATION_TIMEOUT_MS}ms`
+        : `attestation fetch failed: ${e instanceof Error ? e.message : e}`,
       "fetch",
     );
+  } finally {
+    clearTimeout(timer);
   }
   if (!res.ok) {
     throw new AttestationError(`${url} → ${res.status}`, "fetch");
   }
-  return (await res.json()) as T;
+
+  // Trust `content-length` only to reject early; a lying or absent header is
+  // still caught by measuring the body we actually read.
+  const declared = Number(res.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > ATTESTATION_MAX_BYTES) {
+    throw new AttestationError(
+      `attestation response too large (${declared} bytes)`,
+      "malformed",
+    );
+  }
+  const text = await res.text();
+  if (text.length > ATTESTATION_MAX_BYTES) {
+    throw new AttestationError(
+      `attestation response too large (${text.length} bytes)`,
+      "malformed",
+    );
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new AttestationError("attestation response is not JSON", "malformed");
+  }
 }
 
 export async function fetchInfo(

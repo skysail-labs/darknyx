@@ -10,8 +10,18 @@ import type { LifecycleAction, LifecycleEvent } from "./order-lifecycle.js";
 type MergeAction = Extract<LifecycleAction, { type: "merge" }>;
 
 /** Consolidates up to `noteCount` residual change notes for an order on-chain. */
+/** What one consolidation did. */
+export interface MergeOutcome {
+  /** Notes consolidated across the WHOLE account — selection is account-level. */
+  consumed: number;
+  /** The TRIGGER order's unspent residuals afterwards, read from the store.
+   *  Reported separately because `consumed` spans many orders and subtracting
+   *  it from one of them is what drifted (SW-13). */
+  remaining: number;
+}
+
 export interface MergeRunner {
-  run(order: ManagedOrder, noteCount: number): Promise<number>;
+  run(order: ManagedOrder, noteCount: number): Promise<MergeOutcome>;
 }
 
 export interface ActionExecutorDeps {
@@ -25,7 +35,7 @@ export class DaemonActionExecutor implements ActionExecutor {
     order: ManagedOrder,
     action: MergeAction,
   ): Promise<LifecycleEvent> {
-    const consumed = await this.deps.merge.run(order, action.noteCount);
-    return { type: "merge-confirmed", consumed };
+    const { remaining } = await this.deps.merge.run(order, action.noteCount);
+    return { type: "merge-confirmed", remaining };
   }
 }

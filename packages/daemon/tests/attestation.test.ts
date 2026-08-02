@@ -533,7 +533,9 @@ describe("Daemon — attestation gate", () => {
     let fillsClosed = false;
     let ordersClosed = false;
     const prover = vi.fn();
-    const mergeRunner = { run: vi.fn(async () => 1) };
+    const mergeRunner = {
+      run: vi.fn(async () => ({ consumed: 1, remaining: 0 })),
+    };
     const placer = {
       place: vi.fn(),
       cancel: vi.fn(async (orderId: string) => ({

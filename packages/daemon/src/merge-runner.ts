@@ -22,9 +22,9 @@
 import { PublicKey } from "@solana/web3.js";
 import type { MergeParams, MergeReceipt, StoredNote } from "@darknyx/sdk";
 
-import type { MergeRunner } from "./action-executor.js";
+import type { MergeOutcome, MergeRunner } from "./action-executor.js";
 import type { DaemonStore } from "./store.js";
-import type { ManagedOrder } from "./types.js";
+import { TERMINAL_PHASES, type ManagedOrder } from "./types.js";
 
 const fromHex = (h: string): Uint8Array =>
   Uint8Array.from(Buffer.from(h, "hex"));
@@ -72,7 +72,10 @@ export function createMergeRunner(args: {
 export class DaemonMergeRunner implements MergeRunner {
   constructor(private readonly opts: DaemonMergeRunnerOptions) {}
 
-  async run(_order: ManagedOrder, _noteCount: number): Promise<number> {
+  async run(
+    _order: ManagedOrder,
+    _noteCount: number,
+  ): Promise<MergeOutcome> {
     // Selection is ACCOUNT-level cross-mint, not per-order: v3 continuations
     // keep one ROLLING residual per order (each partial fill consumes
     // the prior + rebuilds it), so a single order never has ≥2 spendable
@@ -80,7 +83,7 @@ export class DaemonMergeRunner implements MergeRunner {
     // terminated orders + deposit notes, accumulated across orders + same-mint.
     // The `order` arg is just the trigger; we scan the whole store.
     const batch = this.selectBatch();
-    if (!batch) return 0;
+    if (!batch) return { consumed: 0, remaining: _order.pendingChangeNotes };
 
     const params: MergeParams = {
       payer: this.opts.payer,
@@ -100,7 +103,43 @@ export class DaemonMergeRunner implements MergeRunner {
     // Prune the consumed inputs + store the consolidated output.
     for (const c of receipt.spentCommitments) this.opts.store.delete(c);
     this.opts.store.put(receipt.outputNote);
-    return batch.length;
+
+    // Reconcile every order the batch touched, from the store (SW-13).
+    //
+    // Selection is ACCOUNT-level, so `batch.length` counts notes across many
+    // orders. It used to be subtracted from the single TRIGGER order, which
+    // under-counted there (clamped at 0, hiding its own residual) and left
+    // every other affected order over-counting permanently — parked above
+    // `mergeThreshold`, firing a no-op merge intent on every subsequent tick.
+    //
+    // The store is the authority for "how many unspent change notes does this
+    // order still have", so the count is DERIVED rather than tracked
+    // incrementally. That removes the drift class, not just this instance.
+    const touched = new Set(
+      batch.map((n) => n.orderId).filter((id): id is string => id !== undefined),
+    );
+    for (const orderId of touched) {
+      const o = this.opts.store.getOrder(orderId);
+      if (!o) continue;
+      const remaining = this.opts.store
+        .notesByOrder(orderId)
+        .filter((n) => n.leafIndex !== undefined).length;
+      if (remaining !== o.pendingChangeNotes) {
+        this.opts.store.putOrder({
+          ...o,
+          pendingChangeNotes: remaining,
+          updatedAt: Date.now(),
+        });
+      }
+    }
+
+    return {
+      consumed: batch.length,
+      // The trigger order's authoritative count, for the lifecycle event.
+      remaining: this.opts.store
+        .notesByOrder(_order.orderId)
+        .filter((n) => n.leafIndex !== undefined).length,
+    };
   }
 
   /** First mintable batch of 2..4 same-mint SPENDABLE notes (cross-order). */
@@ -119,14 +158,29 @@ export class DaemonMergeRunner implements MergeRunner {
     return undefined;
   }
 
-  /** A note is mergeable iff its leaf is resolved AND it isn't a re-locked
-   *  rolling residual — i.e. a deposit note (no orderId) or a change note whose
-   *  order has gone terminal (its final residual is released). A change note of
-   *  a still-open order is re-locked for continuation, so it's NOT spendable. */
+  /**
+   * A note is mergeable iff its leaf is resolved AND nothing on-chain still
+   * holds it.
+   *
+   * A deposit note (no `orderId`) is free. A change note is free only once its
+   * order has reached a TERMINAL phase — at which point the final residual is
+   * released.
+   *
+   * This previously excluded only `pending` and `open`, which let a residual in
+   * `pending_settlement` or `filled` qualify — precisely the window in which
+   * Tx D holds a live `NoteLock` (SW-12). The vault rejects the merge
+   * (`merge.rs`'s N-04/S-03 guard), so it was never a double-spend; the cost
+   * was a wasted VALID_MERGE proof and a failed transaction per attempt, and
+   * because `selectBatch` is deterministic first-mint-group-wins it re-picked
+   * the same note every tick — a stuck loop, not a one-off.
+   *
+   * Keyed on `TERMINAL_PHASES` so a newly added phase is excluded by default
+   * rather than silently becoming spendable.
+   */
   private isMergeable(n: StoredNote): boolean {
     if (n.leafIndex === undefined) return false;
     if (n.orderId === undefined) return true; // deposit note
     const o = this.opts.store.getOrder(n.orderId);
-    return !o || (o.phase !== "pending" && o.phase !== "open");
+    return !o || TERMINAL_PHASES.has(o.phase);
   }
 }

@@ -216,15 +216,19 @@ describe("reduceOrder — auto-merge", () => {
     expect(actions.filter((a) => a.type === "merge")).toHaveLength(0);
   });
 
-  it("merge-confirmed draws down the residual count + clears the latch", () => {
+  it("merge-confirmed SETS the residual count from the store + clears the latch", () => {
+    // `remaining` is what the store says this order still holds AFTER the
+    // merge — set, not subtracted. Subtracting an account-wide consumed count
+    // from one order under-counted the trigger and permanently over-counted
+    // every other affected order (SW-13).
     const o = freshOpen({ pendingChangeNotes: 4, mergeInFlight: true });
     const { order } = reduceOrder(
       o,
-      { type: "merge-confirmed", consumed: 4 },
+      { type: "merge-confirmed", remaining: 1 },
       DEFAULT_THRESHOLDS,
       T0,
     );
-    expect(order.pendingChangeNotes).toBe(0);
+    expect(order.pendingChangeNotes).toBe(1);
     expect(order.mergeInFlight).toBe(false);
   });
 
