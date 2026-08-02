@@ -275,6 +275,18 @@ pub struct ApiState {
     /// `429` when the bucket is empty. Mirrors the `argon2_limiter` intent
     /// (protect the small CVM) but per-account + weighted. Created lazily.
     pub rate_buckets: Arc<RwLock<HashMap<String, TokenBucket>>>,
+    /// Venue-wide bucket for the UNAUTHENTICATED public router (SW-02). There is
+    /// no account to key on there, and no usable client address — see
+    /// [`PUBLIC_RATE_CAPACITY`].
+    pub public_rate_bucket: Arc<tokio::sync::Mutex<TokenBucket>>,
+    /// Short-TTL cache for `/transparency`'s on-chain reserve reads (SW-02).
+    /// `None` until the first read populates it.
+    pub reserve_cache: Arc<tokio::sync::Mutex<Option<super::transparency::ReserveCache>>>,
+    /// TTL for [`Self::reserve_cache`]. A field rather than a bare constant so a
+    /// test can pin cache behaviour deterministically: the production value is
+    /// ~one slot, which is close enough to a test's own runtime that asserting
+    /// "these N requests were all served from cache" would otherwise be a race.
+    pub reserve_cache_ttl: std::time::Duration,
 
     // ── Idempotency + nonce replay protection ───────────────────
     /// One lock makes exact-idempotency and strict per-trading-key nonce checks
@@ -354,21 +366,63 @@ impl TokenBucket {
         }
     }
 
+    /// A bucket with an explicit capacity — used for the venue-wide public
+    /// bucket, which is sized very differently from a per-account one.
+    fn with_capacity(capacity: f64) -> Self {
+        Self {
+            tokens: capacity,
+            last_refill: Instant::now(),
+        }
+    }
+
     /// Refill for elapsed time, then try to spend `cost`. On success returns
     /// `Ok(())`; on insufficient tokens returns `Err(retry_after_secs)`.
     fn try_spend(&mut self, cost: f64) -> Result<(), f64> {
+        self.try_spend_with(cost, RATE_CAPACITY, RATE_REFILL_PER_SEC)
+    }
+
+    /// As [`Self::try_spend`] but against explicit bucket parameters, so one
+    /// implementation serves both the per-account and the venue-wide bucket.
+    fn try_spend_with(&mut self, cost: f64, capacity: f64, refill_per_sec: f64) -> Result<(), f64> {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();
-        self.tokens = (self.tokens + elapsed * RATE_REFILL_PER_SEC).min(RATE_CAPACITY);
+        self.tokens = (self.tokens + elapsed * refill_per_sec).min(capacity);
         self.last_refill = now;
         if self.tokens >= cost {
             self.tokens -= cost;
             Ok(())
         } else {
-            Err(((cost - self.tokens) / RATE_REFILL_PER_SEC).max(0.001))
+            Err(((cost - self.tokens) / refill_per_sec).max(0.001))
         }
     }
 }
+
+/// Burst size for the venue-wide PUBLIC bucket.
+///
+/// SW-02: the public router had no rate limit at all, and two of its routes do
+/// real work per request — `/attestation` generates a TDX quote (uncacheable,
+/// because the caller's nonce is the point) and `/transparency` issued
+/// `2 x N_mints` Solana RPC calls against the same quota the settle pipeline
+/// depends on. An unauthenticated flood converted cheap HTTP into metered
+/// upstream consumption.
+///
+/// One venue-wide bucket rather than per-peer: client traffic arrives through
+/// the dstack gateway over a WireGuard tunnel, so every connection shares one
+/// apparent source address. `conn_limit.rs` records the same reasoning for its
+/// connection caps — a per-IP key there "would read as defence and function as
+/// an outage".
+pub const PUBLIC_RATE_CAPACITY: f64 = 200.0;
+/// Sustained refill for the public bucket, in tokens/sec. With the weights in
+/// `api::rate_limit::public_route_cost` this allows ~10 attestations/sec, ~50
+/// `/transparency` requests/sec, or ~1000 in-memory reads/sec sustained — far
+/// above honest polling, while bounding the amplification.
+///
+/// `/auth/token` is **not** metered by this bucket at all: it is exempt at cost
+/// `0.0` so that junk credentials cannot exhaust a shared allowance and lock
+/// every real account out of logging in. Its bounding comes from the
+/// per-account login bucket (AU-05) and the argon2 semaphore, both of which can
+/// tell callers apart — this one cannot. See `public_route_cost`.
+pub const PUBLIC_RATE_REFILL_PER_SEC: f64 = 100.0;
 
 /// Wire form of a `darkpool_matcher::book::OrderUpdate` streamed on the `orders` channel.
 /// `kind` is the lifecycle tag; the numeric fields are present only for the
@@ -515,6 +569,11 @@ impl ApiState {
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
+            public_rate_bucket: Arc::new(tokio::sync::Mutex::new(TokenBucket::with_capacity(
+                PUBLIC_RATE_CAPACITY,
+            ))),
+            reserve_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            reserve_cache_ttl: super::transparency::RESERVE_CACHE_TTL,
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
             stream_conns: ConnectionRegistry::new(ConnectionLimits::from_env()),
@@ -904,6 +963,11 @@ impl ApiState {
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
+            public_rate_bucket: Arc::new(tokio::sync::Mutex::new(TokenBucket::with_capacity(
+                PUBLIC_RATE_CAPACITY,
+            ))),
+            reserve_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            reserve_cache_ttl: super::transparency::RESERVE_CACHE_TTL,
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
             stream_conns: ConnectionRegistry::new(ConnectionLimits::default()),
@@ -1080,6 +1144,16 @@ impl ApiState {
             .entry(account_id.to_string())
             .or_insert_with(TokenBucket::new)
             .try_spend(cost)
+    }
+
+    /// Spend from the venue-wide PUBLIC bucket (SW-02). `Err` carries the
+    /// retry-after hint in seconds.
+    pub async fn try_consume_public_rate(&self, cost: f64) -> Result<(), f64> {
+        self.public_rate_bucket.lock().await.try_spend_with(
+            cost,
+            PUBLIC_RATE_CAPACITY,
+            PUBLIC_RATE_REFILL_PER_SEC,
+        )
     }
 
     /// Record an accepted canonical body while the caller holds

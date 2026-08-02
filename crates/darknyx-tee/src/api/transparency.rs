@@ -20,6 +20,7 @@
 //! the mirror + identity + stats are still served.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::{extract::State, Json};
 use serde::Serialize;
@@ -28,12 +29,42 @@ use super::state::ApiState;
 use crate::settle::vault::{outstanding_mint_pda, vault_token_account_pda};
 use crate::solana_rpc::SolanaRpcClient;
 
+/// How long a reserve snapshot is reused before the chain is read again.
+///
+/// SW-02: this route is **public and unauthenticated** and issued
+/// `2 x N_mints` Solana RPC calls on **every** request, against the same
+/// provider quota the settle pipeline depends on. That turned cheap HTTP into
+/// metered upstream consumption — and exhausting that quota is the first link
+/// in the chain the sweep describes (settle failures -> SW-03's unbounded loop
+/// -> SW-01's credential in an error string).
+///
+/// The underlying values change at most once per slot (~400 ms), so a TTL at
+/// roughly one slot removes the amplification entirely without making the
+/// answer meaningfully staler than it already was: the response was never
+/// atomic across mints, and a client that needs a point-in-time guarantee reads
+/// the two accounts from Solana itself, which the module header already tells
+/// it to do.
+pub const RESERVE_CACHE_TTL: Duration = Duration::from_millis(400);
+
+/// Cached reserve snapshot: the rendered per-mint rows plus when they were read.
+#[derive(Debug, Clone)]
+pub struct ReserveCache {
+    per_mint: Vec<PerMintReserve>,
+    read_at: Instant,
+}
+
+impl ReserveCache {
+    fn is_fresh(&self, ttl: Duration) -> bool {
+        self.read_at.elapsed() < ttl
+    }
+}
+
 /// SPL `TokenAccount.amount` lives at byte 64 (mint@0 + owner@32).
 const SPL_AMOUNT_OFFSET: usize = 64;
 /// `OutstandingMint.outstanding` lives at byte 40 (8 disc + 32 mint).
 const OUTSTANDING_OFFSET: usize = 8 + 32;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PerMintReserve {
     pub mint: String,
     /// Sum of un-spent note value for this mint (decimal string).
@@ -93,6 +124,42 @@ fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
 /// (mint never deposited) is a TRUE 0; an RPC error or malformed account
 /// reads as 0 too (logged) so the endpoint still renders, but sets
 /// `stale` so a consumer can tell that 0 apart from a real zero.
+/// Reserves for `mints`, reusing a snapshot no older than [`RESERVE_CACHE_TTL`].
+///
+/// Concurrency note: the lock is held across the RPC reads on purpose. Under a
+/// flood that is exactly the desired behaviour — the first request in a window
+/// does the work and the rest wait for it and share the result, so N concurrent
+/// requests cost ONE round of RPC rather than N. Holding a `tokio::Mutex` across
+/// an await is safe (it is not the std mutex), and the alternative — dropping
+/// the lock to read, then re-acquiring — reintroduces the stampede this exists
+/// to prevent.
+async fn read_reserves_cached(state: &Arc<ApiState>, mints: &[[u8; 32]]) -> Vec<PerMintReserve> {
+    let Some(rpc) = &state.solana_rpc else {
+        // No RPC wired (isolated tests): serve the rest of the response with
+        // empty reserves, as the module header promises.
+        return Vec::new();
+    };
+
+    let mut cache = state.reserve_cache.lock().await;
+    if let Some(cached) = cache.as_ref() {
+        // A mint-set change (a market added at boot) must not serve a snapshot
+        // that is missing rows.
+        if cached.is_fresh(state.reserve_cache_ttl) && cached.per_mint.len() == mints.len() {
+            return cached.per_mint.clone();
+        }
+    }
+
+    let mut per_mint = Vec::with_capacity(mints.len());
+    for mint in mints {
+        per_mint.push(read_reserve(rpc, mint).await);
+    }
+    *cache = Some(ReserveCache {
+        per_mint: per_mint.clone(),
+        read_at: Instant::now(),
+    });
+    per_mint
+}
+
 async fn read_reserve(rpc: &SolanaRpcClient, mint: &[u8; 32]) -> PerMintReserve {
     let (om_pda, _) = outstanding_mint_pda(mint);
     let (vt_pda, _) = vault_token_account_pda(mint);
@@ -164,12 +231,7 @@ pub async fn get_transparency(State(state): State<Arc<ApiState>>) -> Json<Transp
         }
     }
 
-    let mut per_mint = Vec::new();
-    if let Some(rpc) = &state.solana_rpc {
-        for mint in &mints {
-            per_mint.push(read_reserve(rpc, mint).await);
-        }
-    }
+    let per_mint = read_reserves_cached(&state, &mints).await;
 
     let tee = TeeIdentity {
         app_id: state.app_info.app_id.clone(),

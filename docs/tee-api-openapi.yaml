@@ -91,6 +91,35 @@ tags:
 # ─────────────────────────────────────────────────────────────────────────────
 
 components:
+  responses:
+    PublicRateLimited:
+      description: |
+        The venue-wide public-route allowance is exhausted (SW-02). Every
+        unauthenticated route shares one weighted bucket: client traffic reaches
+        the enclave through the dstack gateway, so all requests present the same
+        source address and a per-caller limit here would bound the venue rather
+        than any individual caller.
+
+        Weights follow real cost — `/attestation` (a TDX quote per request,
+        uncacheable because the caller's nonce is the point) is the heaviest,
+        `/transparency` is moderate, and in-memory reads are ~100x lighter.
+        Honest polling sits far inside the budget.
+
+        `POST /auth/token` is deliberately EXEMPT from this bucket and cannot
+        return this response: metering it venue-wide would let junk credentials
+        exhaust a shared allowance and lock every real account out of
+        authenticating. Its own `429`, documented on that operation, comes from
+        the per-account login bucket instead.
+
+        `Retry-After` carries the back-off in seconds.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
   securitySchemes:
     BearerAuth:
       type: http
@@ -1359,6 +1388,7 @@ paths:
             quote with all-zero reportData[0..32]. Always supply a
             fresh nonce for live verification (replay protection).
       responses:
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
           description: Current quote.
           content:
@@ -1375,6 +1405,7 @@ paths:
         compose hash here is a convenience value; security-sensitive clients
         verify the measured event log returned by `/attestation`.
       responses:
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
           description: Application info.
           content:
@@ -1441,6 +1472,7 @@ paths:
         venue. The array may contain multiple pairs; all use the same gateway,
         bearer session, and `/v1/stream` connection.
       responses:
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
           description: All markets.
           content:
@@ -1462,6 +1494,7 @@ paths:
           required: true
           schema: { type: string }
       responses:
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
           description: Instrument detail.
           content:
@@ -1793,6 +1826,7 @@ paths:
           schema: { type: integer, default: 0 }
           description: Which Merkle shard to read (0..num_trees-1). Default 0.
       responses:
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
           description: Tree root snapshot.
           content:
@@ -1908,6 +1942,7 @@ paths:
       tags: [system]
       summary: Process liveness and uptime.
       responses:
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
           description: The API process is serving requests.
           content:
@@ -1937,6 +1972,7 @@ paths:
         readiness. Cancels, reads, and pending-settlement reconciliation
         continue.
       responses:
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
           description: Engine status snapshot.
           content:
@@ -1970,6 +2006,7 @@ paths:
         convert a wall-clock GTT (good-till-time) expiry into an
         `expiry_slot` without running their own RPC.
       responses:
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
           description: Server time snapshot.
           content:
@@ -1990,6 +2027,7 @@ paths:
         Public solvency snapshot + engine identity + aggregate stats.
         Unauthenticated.
       responses:
+        '429': { $ref: '#/components/responses/PublicRateLimited' }
         '200':
           description: Transparency snapshot.
           content:
@@ -2091,6 +2129,12 @@ x-websocket:
 
     Served channels are `orders`, `fills` (per-account), and `tree` (global
     leaf-appends). Account snapshots and settlement status remain REST reads.
+
+    The UPGRADE request is on the public router, so it shares the venue-wide
+    public allowance and can be refused with `429` + `Retry-After` before the
+    socket is established (see `components.responses.PublicRateLimited`). Once
+    upgraded, the session is bounded by the per-account limits and the
+    connection caps instead.
 
     TLS terminates at the dstack gateway — itself an attested confidential VM —
     which reaches this service over a mutually attested tunnel. Verify
