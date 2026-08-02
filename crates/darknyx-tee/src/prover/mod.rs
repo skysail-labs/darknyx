@@ -52,6 +52,9 @@ mod rapidsnark_sys;
 #[cfg(feature = "icicle")]
 pub mod icicle_prover;
 
+// Witness scratch-dir selection (SW-14). Always compiled — see the module doc.
+pub(crate) mod scratch;
+
 // Snarkjs-format proof helpers shared by the rapidsnark + icicle backends.
 #[cfg(any(feature = "rapidsnark", feature = "icicle"))]
 mod snarkjs;

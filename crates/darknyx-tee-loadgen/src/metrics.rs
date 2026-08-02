@@ -19,7 +19,18 @@ use tokio::sync::Mutex;
 /// One `Histogram<u64>` per latency stream + atomic counters for
 /// the lock-free totals. Wrapped in `Arc<...>` by the run driver.
 pub struct RunMetrics {
+    /// Latency of ACCEPTED submits only.
+    ///
+    /// SW-27: this recorded every outcome — `Ok`, 4xx, 429, 5xx and network
+    /// errors alike — and the report printed the resulting P50/P95/P99 with no
+    /// qualifier. An intake rejection is fast, because it fails before any
+    /// matcher work, so a rejection-heavy run reported *better* percentiles than
+    /// a healthy one. The number moved the wrong way under exactly the
+    /// conditions you would be measuring.
     pub submit_latency_us: Mutex<Histogram<u64>>,
+    /// Latency of REJECTED submits, kept separately rather than discarded — a
+    /// rejection storm has its own shape worth seeing.
+    pub submit_latency_rejected_us: Mutex<Histogram<u64>>,
     pub cancel_latency_us: Mutex<Histogram<u64>>,
     pub match_latency_us: Mutex<Histogram<u64>>,
 
@@ -47,6 +58,7 @@ impl RunMetrics {
             || Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("valid hist bounds");
         Arc::new(Self {
             submit_latency_us: Mutex::new(new_hist()),
+            submit_latency_rejected_us: Mutex::new(new_hist()),
             cancel_latency_us: Mutex::new(new_hist()),
             match_latency_us: Mutex::new(new_hist()),
             submits_total: AtomicU64::new(0),
@@ -67,12 +79,16 @@ impl RunMetrics {
     // value makes `record` return Err, which — discarded — would
     // silently DROP the sample and bias the tail (P99) downward.
     // Clamping records it at the max bucket instead.
-    pub async fn record_submit_latency_us(&self, us: u64) {
-        let _ = self
-            .submit_latency_us
-            .lock()
-            .await
-            .record(us.clamp(1, 60_000_000));
+    /// Record a submit's latency into the histogram matching its OUTCOME
+    /// (SW-27). Accepted and rejected submits measure different things and must
+    /// not share a percentile.
+    pub async fn record_submit_latency_us(&self, us: u64, outcome: SubmitOutcome) {
+        let hist = if matches!(outcome, SubmitOutcome::Ok) {
+            &self.submit_latency_us
+        } else {
+            &self.submit_latency_rejected_us
+        };
+        let _ = hist.lock().await.record(us.clamp(1, 60_000_000));
     }
 
     pub async fn record_cancel_latency_us(&self, us: u64) {

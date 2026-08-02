@@ -34,6 +34,101 @@ use super::convert::proof_to_onchain_bytes;
 use super::groth16::{ProofWithInputs, Prover, ProverError, ProverTimings};
 use super::inputs::{build_batch_public_inputs, BatchPublicInputs};
 use super::snarkjs::{assert_public_inputs, native_witness_wtns, parse_snarkjs_proof};
+
+/// Escape hatch for benchmarking on a NON-confidential GPU. Never production.
+const ALLOW_INSECURE_GPU: &str = "DARKNYX_TEE_ICICLE_ALLOW_INSECURE_GPU";
+
+/// Refuse CUDA unless the GPU is provably in confidential-compute mode (SW-32).
+///
+/// # Why this is a hard gate and not a warning
+///
+/// The `.wtns` handed to `groth16_prove` encodes the **full private witness** —
+/// every per-slot `base_amount` / `quote_amount`, both owner commitments, the
+/// change and fee amounts, and the clearing price. Those are exactly the values
+/// the amount-privacy work (P1b/P3b) exists to keep off-chain.
+///
+/// Selecting CUDA moves that witness into GPU device memory. On a
+/// confidential-compute GPU it is encrypted and attested; on an ordinary one it
+/// is plainly readable by the host driver. So TDX's confidentiality guarantee
+/// ends at the accelerator boundary, and before this it was held by nothing but
+/// an environment variable set by hand — the requirement was written in the
+/// comment directly above the code that ignored it.
+///
+/// # Fail closed
+///
+/// An unavailable or unparseable check REJECTS CUDA rather than falling
+/// through to it. "We could not determine whether the GPU protects this data"
+/// and "the GPU protects this data" must not be the same outcome; getting that
+/// backwards is how a check becomes decoration.
+fn authorize_cuda() -> Result<(), ProverError> {
+    match confidential_compute_state() {
+        CcState::On => {
+            tracing::info!("icicle CUDA authorized — GPU confidential compute is ON");
+            Ok(())
+        }
+        state => {
+            // Deliberate, loud, and separately named: the CUDA parity gate
+            // (`tests/icicle_cuda_parity.rs`) runs on commodity H100/H200 boxes
+            // that have no CC mode, and that measurement is worth keeping
+            // cheap. It must never be reachable by accident, so it is its own
+            // variable rather than a value of the device variable, and it says
+            // "INSECURE" in the name.
+            if std::env::var(ALLOW_INSECURE_GPU).is_ok_and(|v| v == "1") {
+                tracing::error!(
+                    ?state,
+                    "{ALLOW_INSECURE_GPU}=1 — proving on a GPU that is NOT in \
+                     confidential-compute mode. The private match witness \
+                     (trade amounts, owner commitments, clearing price) is \
+                     readable by the host. BENCHMARKING ONLY."
+                );
+                return Ok(());
+            }
+            Err(ProverError::Io(format!(
+                "refusing DARKNYX_TEE_ICICLE_DEVICE=CUDA: GPU confidential compute is {state:?}. \
+                 The prover witness carries plaintext trade amounts and owner commitments, which \
+                 a non-confidential GPU exposes to the host. Set {ALLOW_INSECURE_GPU}=1 ONLY for \
+                 benchmarking on hardware that holds no real order flow."
+            )))
+        }
+    }
+}
+
+/// What we could establish about the GPU's confidential-compute mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CcState {
+    /// Confidential compute is enabled.
+    On,
+    /// The driver answered and reported it disabled.
+    Off,
+    /// We could not ask — no `nvidia-smi`, an error, or output we cannot parse.
+    /// Treated exactly like `Off`; see `authorize_cuda`.
+    Unknown,
+}
+
+/// Probe the driver for confidential-compute mode.
+///
+/// `nvidia-smi conf-compute -f` is the documented query and is present in any
+/// image that can run CUDA at all. Parsing its text is not elegant, but the
+/// alternative is an NVML binding for one boolean, and a wrong answer here
+/// fails closed rather than silently permitting.
+fn confidential_compute_state() -> CcState {
+    let out = match std::process::Command::new("nvidia-smi")
+        .args(["conf-compute", "-f"])
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        _ => return CcState::Unknown,
+    };
+    let text = String::from_utf8_lossy(&out.stdout).to_ascii_uppercase();
+    // Observed shape: "CC status: ON".
+    if text.contains("ON") && !text.contains("OFF") {
+        CcState::On
+    } else if text.contains("OFF") {
+        CcState::Off
+    } else {
+        CcState::Unknown
+    }
+}
 use super::witness::MatchSlotWitness;
 use super::wtns::serialize_wtns;
 
@@ -118,6 +213,11 @@ impl IcicleMatchBatchProver {
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "CPU".to_string());
+
+        // SW-32: the requirement above was written down and never checked.
+        if device.eq_ignore_ascii_case("CUDA") {
+            authorize_cuda()?;
+        }
 
         // Spawn the dedicated thread that owns the !Send CacheManager.
         let (job_tx, job_rx) = channel::<ProveJob>();

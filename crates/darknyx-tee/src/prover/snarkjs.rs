@@ -57,6 +57,40 @@ pub(crate) fn parse_snarkjs_proof(json: &str) -> Result<Proof<Bn254>, ProverErro
     );
     let c = G1Affine::new_unchecked(fq_dec(&p.pi_c[0])?, fq_dec(&p.pi_c[1])?);
 
+    // Validate what `new_unchecked` skipped (SW-15).
+    //
+    // Not a soundness hole: the bytes come from the enclave's own rapidsnark or
+    // icicle backend, and a malformed point would fail the on-chain pairing
+    // anyway. But that failure arrives as `InvalidProof (6000)` from the vault —
+    // a message that names the circuit, not the backend that produced garbage —
+    // after the settle transaction has been built, signed and paid for. Checking
+    // here turns a confusing on-chain rejection into a local error that names
+    // the prover.
+    //
+    // On-curve AND in-subgroup: a point can satisfy the curve equation while
+    // living in a small-order subgroup, and only the second check excludes that.
+    for (label, ok) in [
+        (
+            "pi_a",
+            a.is_on_curve() && a.is_in_correct_subgroup_assuming_on_curve(),
+        ),
+        (
+            "pi_b",
+            b.is_on_curve() && b.is_in_correct_subgroup_assuming_on_curve(),
+        ),
+        (
+            "pi_c",
+            c.is_on_curve() && c.is_in_correct_subgroup_assuming_on_curve(),
+        ),
+    ] {
+        if !ok {
+            return Err(ProverError::Prove(format!(
+                "prover backend returned a {label} point that is not a valid \
+                 BN254 group element (off-curve or wrong subgroup)"
+            )));
+        }
+    }
+
     Ok(Proof { a, b, c })
 }
 
@@ -77,7 +111,8 @@ static WTNS_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 /// keeps concurrent calls isolated regardless.
 pub(crate) fn native_witness_wtns(bin: &Path, input_json: &str) -> Result<Vec<u8>, ProverError> {
     let seq = WTNS_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("darknyx-wtns-{}-{seq}", std::process::id()));
+    let dir = super::scratch::witness_scratch_base()
+        .join(format!("darknyx-wtns-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir)
         .map_err(|e| ProverError::WitnessGen(format!("create wtns tmp dir: {e}")))?;
     struct Cleanup(PathBuf);

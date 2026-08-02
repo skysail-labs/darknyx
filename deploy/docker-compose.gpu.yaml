@@ -65,7 +65,16 @@ services:
       - /var/run/dstack.sock:/var/run/dstack.sock
       - darknyx_state:/var/lib/darknyx-tee
 
+    # RAM-backed scratch for the prover witness (SW-14). This matters MORE on
+    # the GPU path than the CPU one: the same `input.json` that must not reach
+    # storage is also what gets copied into GPU device memory, which SW-32 now
+    # refuses to do unless the GPU is in confidential-compute mode.
+    tmpfs:
+      - /witness:size=256m,mode=0700,noexec,nosuid
+
     environment:
+      # Scratch for the prover witness — the tmpfs above (SW-14).
+      DARKNYX_TEE_WITNESS_DIR: /witness
       DARKNYX_TEE_LOG: "info,darknyx_tee::settle=debug,darknyx_tee::oracle=info,darknyx_tee::merkle=info"
       DARKNYX_TEE_HTTP_BIND: "0.0.0.0:8080"
       DARKNYX_TEE_FEED_IDS: "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d"

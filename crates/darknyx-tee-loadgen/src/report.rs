@@ -18,6 +18,7 @@ pub struct ReportInputs<'a> {
 pub async fn render_markdown(inputs: ReportInputs<'_>) -> String {
     let counters = inputs.metrics.snapshot_counters();
     let submit_hist = inputs.metrics.submit_latency_us.lock().await;
+    let submit_rej_hist = inputs.metrics.submit_latency_rejected_us.lock().await;
     let cancel_hist = inputs.metrics.cancel_latency_us.lock().await;
     let _match_hist = inputs.metrics.match_latency_us.lock().await;
 
@@ -77,7 +78,14 @@ pub async fn render_markdown(inputs: ReportInputs<'_>) -> String {
     let _ = writeln!(out, "## Latency (ms)\n");
     let _ = writeln!(out, "| Stream | count | P50 | P95 | P99 | P99.9 | max |");
     let _ = writeln!(out, "|---|---|---|---|---|---|---|");
-    write_hist_row(&mut out, "submit", &submit_hist);
+    // Segmented by outcome (SW-27). These used to be one histogram over every
+    // outcome, printed unqualified — and since an intake rejection fails before
+    // any matcher work, a rejection-heavy run showed BETTER percentiles than a
+    // healthy one. `submit (accepted)` is the number that means what the row
+    // label implies; the rejected row is kept because a rejection storm has its
+    // own shape worth seeing.
+    write_hist_row(&mut out, "submit (accepted)", &submit_hist);
+    write_hist_row(&mut out, "submit (rejected)", &submit_rej_hist);
     write_hist_row(&mut out, "cancel", &cancel_hist);
     // submit→match latency, populated by the sampled `GET /orders/{id}` poller
     // (`trader::spawn_match_poll`, gated on `--poll-orders`). Reports `count=0`
