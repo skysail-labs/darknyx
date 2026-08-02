@@ -15,8 +15,40 @@
  *   GET  /balances               → { balances }
  *   GET  /stream                 → text/event-stream of DaemonEvent
  *
- * SECURITY: bind to loopback. An optional bearer token (`controlToken`) gates
- * every route — set it whenever the host isn't single-tenant.
+ * # SECURITY
+ *
+ * Binding to loopback stops other HOSTS. It does not stop the operator's own
+ * BROWSER, and that is the vector this surface has to defend (SW-19).
+ *
+ * Any page the operator visits can `POST` to `http://127.0.0.1:<port>`. With
+ * `Content-Type: text/plain` that is a CORS *simple request* — no preflight —
+ * and a body that is JSON but mislabelled parses exactly like a legitimate
+ * call. The attacker cannot read the response and does not need to: `POST
+ * /orders` spends a real note and `POST /deposit` moves funds on-chain. The
+ * stronger variant is DNS rebinding: a domain resolving to `127.0.0.1` is
+ * same-origin, which makes every `GET` readable too — `/notes`, `/balances`,
+ * `/orders`, and the `/tee/*` proxy the daemon services with the operator's own
+ * gateway credential. For a privacy protocol, an attacker reading the
+ * operator's complete note set and order flow is a first-class failure.
+ *
+ * The previous guidance here — "set a token whenever the host isn't
+ * single-tenant" — framed the threat as other USERS on the machine, so an
+ * operator on their own workstation correctly concluded they needed no token.
+ * That is precisely the machine with a browser on it. The advice pointed away
+ * from the risk, so the token is no longer optional:
+ *
+ * 1. **A bearer token is REQUIRED.** `bin/daemon.ts` generates one at boot when
+ *    `DARKNYX_DAEMON_CONTROL_TOKEN` is unset, writes it `0600` beside the DB,
+ *    and prints the path — the pattern Jupyter and similar local servers use.
+ *    A cross-origin page cannot read that file, which is what defeats rebinding
+ *    as well as CSRF.
+ * 2. **Browser-originated requests are rejected** on `Origin` / `Referer` /
+ *    `Sec-Fetch-Site`, and `Host` must be loopback. A browser cannot forge
+ *    these; a non-browser local client never sends them.
+ * 3. **Mutations require `Content-Type: application/json`**, which is not a
+ *    simple content type and therefore forces a preflight.
+ *
+ * Each is bypassable alone and they are layered deliberately.
  *
  * The `POST /orders` body is the strategy's intent + the note to spend; mapping
  * it to the SDK `OrderIntent` (policy/side) is the caller's job via `mapPlace`,
@@ -24,6 +56,7 @@
  */
 
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 
 import type { Daemon, DaemonEvent } from "./daemon.js";
 import type { OrderIntent } from "./build-place-request.js";
@@ -52,8 +85,11 @@ export interface ControlApiOptions {
   mapPlace: PlaceMapper;
   /** Maps the `POST /deposit` body → DepositRequest (optional; 404 without it). */
   mapDeposit?: DepositMapper;
-  /** Optional bearer token gating every route. */
-  controlToken?: string;
+  /** Bearer token gating every route. **Required** — see the module header.
+   *  `bin/daemon.ts` generates and persists one when the env var is unset. */
+  controlToken: string;
+  /** Port the server is bound to, for `Host` validation. */
+  port?: number;
 }
 
 function send(res: http.ServerResponse, status: number, body: unknown): void {
@@ -65,19 +101,98 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(buf);
 }
 
+/** Largest control-plane request body. Generous for an order or deposit intent,
+ *  and bounded so a local client cannot stream gigabytes into memory before any
+ *  handler runs (SW-20). */
+const MAX_BODY_BYTES = 256 * 1024;
+
+class BodyTooLarge extends Error {}
+
 async function readJson(req: http.IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
+  let total = 0;
+  for await (const c of req) {
+    const buf = c as Buffer;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) throw new BodyTooLarge("request body too large");
+    chunks.push(buf);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   return raw ? JSON.parse(raw) : {};
+}
+
+/**
+ * Constant-time bearer comparison (SW-20).
+ *
+ * `!==` on strings short-circuits at the first differing byte. Over loopback
+ * there is no network jitter to mask that, and `timingSafeEqual` costs nothing.
+ * Lengths are compared first because `timingSafeEqual` throws on a mismatch —
+ * that leaks only the length, which the file's `0600` mode already protects.
+ */
+function bearerMatches(header: string | undefined, token: string): boolean {
+  if (!header) return false;
+  const expected = Buffer.from(`Bearer ${token}`);
+  const got = Buffer.from(header);
+  if (got.length !== expected.length) return false;
+  return timingSafeEqual(got, expected);
+}
+
+/**
+ * Reject anything a browser originated (SW-19).
+ *
+ * A browser always attaches `Origin` to a cross-origin request and always sets
+ * `Sec-Fetch-Site`; neither can be forged by page script. A legitimate local
+ * client (curl, a strategy process) sends neither. `Host` must be loopback so a
+ * rebound DNS name cannot present itself as same-origin.
+ *
+ * Returns a refusal reason, or `null` when the request may proceed.
+ */
+function browserRefusal(
+  req: http.IncomingMessage,
+  port: number | undefined,
+): string | null {
+  const h = req.headers;
+  if (h.origin) return "origin_not_allowed";
+  if (h.referer) return "referer_not_allowed";
+  const site = h["sec-fetch-site"];
+  if (typeof site === "string" && site !== "same-origin" && site !== "none") {
+    return "cross_site_not_allowed";
+  }
+  const host = (h.host ?? "").toLowerCase();
+  const hostname = host.replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
+  const loopback =
+    hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+  if (!loopback) return "host_not_loopback";
+  if (port !== undefined && host.includes(":")) {
+    const declared = Number(host.slice(host.lastIndexOf(":") + 1));
+    if (Number.isFinite(declared) && declared !== port) return "host_bad_port";
+  }
+  return null;
 }
 
 export function createControlServer(opts: ControlApiOptions): http.Server {
   const { daemon, mapPlace, mapDeposit, controlToken } = opts;
 
+  if (!controlToken) {
+    // Not a warning. A default-insecure local server that moves value is the
+    // whole of SW-19; `bin/daemon.ts` generates a token rather than omitting it.
+    throw new Error(
+      "controlToken is required — the control plane places orders and moves funds",
+    );
+  }
+
   return http.createServer((req, res) => {
     void handle(req, res).catch((err) => {
-      send(res, 400, { error: err instanceof Error ? err.message : "error" });
+      if (err instanceof BodyTooLarge) {
+        return send(res, 413, { error: "body_too_large" });
+      }
+      // Closed-set label, detail to the log (SW-20, and the same defect class
+      // as SW-01 server-side). The daemon holds DARKNYX_DAEMON_RPC_URL, whose
+      // Helius key rides in the query string, and a Solana transport error
+      // typically embeds the request URL in its message. That must not be
+      // echoed to an HTTP caller.
+      console.error("[control] request failed:", err);
+      send(res, 400, { error: "bad_request" });
     });
   });
 
@@ -85,15 +200,31 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
-    if (controlToken) {
-      const auth = req.headers.authorization;
-      if (auth !== `Bearer ${controlToken}`) {
-        return send(res, 401, { error: "unauthorized" });
-      }
+    // Ordered cheapest-first, and before auth so a browser probe cannot even
+    // learn whether a token is valid.
+    const refusal = browserRefusal(req, opts.port);
+    if (refusal) return send(res, 403, { error: refusal });
+
+    if (!bearerMatches(req.headers.authorization, controlToken)) {
+      return send(res, 401, { error: "unauthorized" });
     }
+
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
     const method = req.method ?? "GET";
+
+    // A mutation must not be a CORS *simple request*. `application/json` is not
+    // a simple content type, so requiring it forces a preflight that a
+    // cross-origin page cannot satisfy (SW-19).
+    if (method !== "GET" && method !== "HEAD") {
+      const ct = String(req.headers["content-type"] ?? "")
+        .split(";")[0]
+        .trim()
+        .toLowerCase();
+      if (ct !== "application/json") {
+        return send(res, 415, { error: "content_type_must_be_application_json" });
+      }
+    }
 
     if (method === "GET" && path === "/health") {
       const trust = daemon.getTrustStatus();

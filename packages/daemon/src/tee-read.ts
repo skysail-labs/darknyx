@@ -89,7 +89,9 @@ export class TeeReadClient {
 
   /** `GET /settlement/status/{batchId}` — a settle batch's per-job progress. */
   settlementStatus(batchId: string | number): Promise<unknown> {
-    return this.get(`/settlement/status/${batchId}`);
+    // Encoded like its `instrument` sibling. `control-api.ts` feeds this an
+    // arbitrary caller-controlled path segment (SW-20).
+    return this.get(`/settlement/status/${encodeURIComponent(String(batchId))}`);
   }
   /** `GET /system/status` — node health. */
   systemStatus(): Promise<unknown> {
