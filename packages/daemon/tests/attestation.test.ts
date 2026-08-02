@@ -406,6 +406,9 @@ describe("Daemon — attestation gate", () => {
         throw new AttestationError("bad", "binding");
       },
       verifyRoot: false,
+      // This suite has no CVM behind it; boot reconciliation (SW-11) is
+      // covered in daemon.test.ts / reconcile.test.ts.
+      reconcileOnStart: false,
     });
     await expect(daemon.start()).rejects.toThrow(/bad/);
     expect(daemon.getAttestation()).toBeNull();
@@ -432,6 +435,9 @@ describe("Daemon — attestation gate", () => {
       // on-chain governance set matches the attested set → passes.
       onchainTeePubkeys: async () => [TEE_PUBKEY_B58],
       verifyRoot: false,
+      // This suite has no CVM behind it; boot reconciliation (SW-11) is
+      // covered in daemon.test.ts / reconcile.test.ts.
+      reconcileOnStart: false,
     });
     await daemon.start();
     expect(daemon.getAttestation()?.teePubkey).toBe(TEE_PUBKEY_B58);
@@ -466,6 +472,9 @@ describe("Daemon — attestation gate", () => {
         Keypair.generate().publicKey.toBase58(),
       ],
       verifyRoot: false,
+      // This suite has no CVM behind it; boot reconciliation (SW-11) is
+      // covered in daemon.test.ts / reconcile.test.ts.
+      reconcileOnStart: false,
     });
     await expect(daemon.start()).rejects.toMatchObject({
       kind: "pubkey_mismatch",
@@ -521,6 +530,9 @@ describe("Daemon — attestation gate", () => {
       subscribeOrders: (() => ({ close() {} })) as never,
       verifyAttestation: attest,
       verifyRoot: false,
+      // This suite has no CVM behind it; boot reconciliation (SW-11) is
+      // covered in daemon.test.ts / reconcile.test.ts.
+      reconcileOnStart: false,
     });
     await expect(daemon.start()).rejects.toThrow(
       /strict attestation requires the finalized on-chain TEE-key check/,
@@ -533,7 +545,9 @@ describe("Daemon — attestation gate", () => {
     let fillsClosed = false;
     let ordersClosed = false;
     const prover = vi.fn();
-    const mergeRunner = { run: vi.fn(async () => 1) };
+    const mergeRunner = {
+      run: vi.fn(async () => ({ consumed: 1, remaining: 0 })),
+    };
     const placer = {
       place: vi.fn(),
       cancel: vi.fn(async (orderId: string) => ({
@@ -563,6 +577,9 @@ describe("Daemon — attestation gate", () => {
       onchainTeePubkeys: async () => onchain,
       mergeRunner,
       verifyRoot: false,
+      // This suite has no CVM behind it; boot reconciliation (SW-11) is
+      // covered in daemon.test.ts / reconcile.test.ts.
+      reconcileOnStart: false,
     });
     await daemon.start();
 
@@ -649,6 +666,9 @@ describe("Daemon — attestation gate", () => {
         return [TEE_PUBKEY_B58];
       },
       verifyRoot: false,
+      // This suite has no CVM behind it; boot reconciliation (SW-11) is
+      // covered in daemon.test.ts / reconcile.test.ts.
+      reconcileOnStart: false,
       now: () => now,
       teeKeyStaleMs: 300_000,
     });
@@ -697,6 +717,9 @@ describe("Daemon — attestation gate", () => {
       verifyAttestation: async () => verifiedIdentity(),
       onchainTeePubkeys: reader,
       verifyRoot: false,
+      // This suite has no CVM behind it; boot reconciliation (SW-11) is
+      // covered in daemon.test.ts / reconcile.test.ts.
+      reconcileOnStart: false,
     });
     try {
       await daemon.start();

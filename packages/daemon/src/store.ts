@@ -18,6 +18,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { NoteStore, StoredNote } from "@darknyx/sdk";
 
+import { TERMINAL_PHASES } from "./types.js";
 import type { ManagedOrder, OrderPhase, Side } from "./types.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
@@ -279,14 +280,26 @@ export class DaemonStore implements NoteStore {
   }
 
   /** Non-terminal orders — the set to resume after a restart. */
+  /**
+   * Non-terminal orders — the set to resume and reconcile after a restart.
+   *
+   * The terminal set is DERIVED from `TERMINAL_PHASES` rather than written out
+   * in the SQL. It used to be a hand-written list that omitted `'expired'`, so
+   * this query resumed expired orders as live; the test that appeared to cover
+   * it exercised only two of the five phases, so neither the omission nor the
+   * divergence was caught (SW-11). Building the placeholders from the shared
+   * constant makes the two physically unable to drift.
+   */
   listActiveOrders(): ManagedOrder[] {
+    const terminal = [...TERMINAL_PHASES];
+    const placeholders = terminal.map(() => "?").join(", ");
     const rows = this.db
       .prepare(
         `SELECT * FROM orders
-          WHERE phase NOT IN ('cancelled', 'rejected', 'settlement_failed', 'closed')
+          WHERE phase NOT IN (${placeholders})
           ORDER BY created_at ASC`,
       )
-      .all() as unknown as OrderRow[];
+      .all(...terminal) as unknown as OrderRow[];
     return rows.map(rowToOrder);
   }
 

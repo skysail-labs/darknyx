@@ -61,6 +61,7 @@ import {
 } from "./settlement-tracker.js";
 import { selectCollateralNote, type CollateralRequest } from "./note-select.js";
 import { TeeReadClient } from "./tee-read.js";
+import { reconcile, type ReconcileResult } from "./reconcile.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
@@ -110,7 +111,13 @@ export interface Balance {
  *  streams, cancellation, and settlement reconciliation alive. */
 export interface DaemonTrustStatus {
   tradingEnabled: boolean;
+  /** The effective reason placement is refused — trust OR reconciliation. */
   pauseReason: string | null;
+  /** A reconciliation is running right now. */
+  reconciling: boolean;
+  /** Set while the last reconciliation is known not to have completed cleanly;
+   *  cleared only by a later error-free one. */
+  reconcileFailureReason: string | null;
   lastFinalizedKeyRefreshMs: number | null;
   onchainKeyMonitoring: boolean;
 }
@@ -160,6 +167,10 @@ export interface DaemonDeps {
   now?: () => number;
   /** Settlement-tracker poll interval (ms) for resolving change-note leaves. */
   settlementPollMs?: number;
+  /** Reconcile local state against the CVM + chain during `start()` (SW-11).
+   *  Defaults to `true`; isolated unit suites that stand up no CVM pass
+   *  `false`. */
+  reconcileOnStart?: boolean;
   /** Seam for the tracker's `/tree/inclusion` fetch (tests). */
   fetchInclusion?: FetchInclusionFn;
   /** SDK deposit fn (`getDepositFunction({ client })`). Enables `deposit`. */
@@ -196,6 +207,34 @@ export class Daemon {
   private expectedTeePubkeys: string[] | null = null;
   private lastFinalizedKeyRefreshMs: number | null = null;
   private tradingPauseReason: string | null = null;
+  /**
+   * Set while a reconciliation is running (SW-11). Deliberately separate from
+   * `tradingPauseReason`: `resumeTrading()` clears that field unconditionally,
+   * so reusing it here would silently clear an outstanding TRUST pause when the
+   * reconcile finished. Independent reasons, same lesson as the enclave's
+   * `TradingPauseReason` bitset.
+   */
+  private reconciling = false;
+  /** Guards against a second reconcile starting while one is in flight. */
+  private reconcileInFlight: Promise<ReconcileResult> | null = null;
+  /**
+   * Set when a reconciliation could not complete cleanly; cleared only by a
+   * later error-free one.
+   *
+   * A failed reconcile means local state is UNVERIFIED, not merely stale.
+   * Resuming placement then risks spending collateral the chain has already
+   * consumed, so the pause has to outlive the attempt that failed — which is
+   * why this is its own field and not `tradingPauseReason`: the trust-refresh
+   * path calls `resumeTrading()`, which clears that one unconditionally and
+   * would silently re-open trading onto unverified state.
+   */
+  private reconcileFailureReason: string | null = null;
+  /**
+   * Whether `start()` reconciles. On by default; the unit suites construct a
+   * daemon with no CVM or RPC behind it and assert on `start()` itself, so they
+   * opt out rather than every one of them growing a mock chain.
+   */
+  private readonly reconcileOnStart: boolean;
   private teeKeyRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private teeKeyRefreshInFlight = false;
 
@@ -262,6 +301,7 @@ export class Daemon {
       this.tradingPauseReason = "attestation has not completed";
     }
     this.settlementPollMs = deps.settlementPollMs;
+    this.reconcileOnStart = deps.reconcileOnStart ?? true;
     this.fetchInclusion = deps.fetchInclusion;
     this.depositFn = deps.depositFn;
     this.depositor = deps.depositor;
@@ -315,6 +355,96 @@ export class Daemon {
     );
   }
 
+  /**
+   * Re-derive local state from the CVM and the chain (SW-11).
+   *
+   * Entry points: a `1011` stream close on either channel, and boot. Both leave
+   * the daemon in the same condition — an unknown amount of missed state — so
+   * they run the same routine.
+   *
+   * Placement is paused for the duration. Cancellation is deliberately NOT
+   * paused: cancelling a stale order is always safe and is exactly what an
+   * operator wants available while state is uncertain.
+   *
+   * Concurrent calls share one run. Both channels can fault together, and two
+   * overlapping chain scans would double the RPC cost to reach the same answer.
+   *
+   * **Never rejects.** The listener callbacks are synchronous and cannot await,
+   * so a rejecting promise here becomes an unhandled rejection — which Node
+   * turns into process exit by default. That would crash the daemon in exactly
+   * the situation this method exists to survive. Failures are reported through
+   * `errors` on the result and the event stream instead, so both call sites are
+   * safe by construction rather than by remembering to attach a `.catch()`.
+   */
+  async reconcileNow(reason: string): Promise<ReconcileResult> {
+    if (this.reconcileInFlight) return this.reconcileInFlight;
+
+    // Set BEFORE the body runs. An async IIFE executes synchronously up to its
+    // first `await`, and the body's first act is a synchronous `emitError` — so
+    // a subscriber whose handler re-enters `reconcileNow` (a retry, a control
+    // route) would have seen `reconcileInFlight` still null and started a
+    // SECOND scan, which is exactly the duplication the sharing exists to
+    // prevent. `reconciling` is set here for the same reason: placement must be
+    // refused from the instant this is called, not one microtask later.
+    this.reconciling = true;
+
+    const run = (async (): Promise<ReconcileResult> => {
+      // Yield once so the assignment below lands before the body proceeds.
+      await Promise.resolve();
+      // Surface it: silent drift is the failure mode this exists to end, so an
+      // operator learns from the event stream, not from a balance that quietly
+      // stopped growing.
+      this.emitError("reconcile", new Error(`reconciling — ${reason}`));
+      try {
+        const markets = await this.tee.instruments();
+        const market = markets[0];
+        if (!market) throw new Error("/instruments returned no market");
+        const result = await reconcile({
+          store: this.store,
+          reads: this.tee,
+          rpcUrl: this.config.rpcUrl,
+          programId: this.config.programId,
+          masterSeed: this.keystore.masterSeed,
+          baseMint: new PublicKey(market.base_mint).toBytes(),
+          quoteMint: new PublicKey(market.quote_mint).toBytes(),
+          log: (m) => console.log(m),
+        });
+        console.log(
+          `[daemon] reconcile done (${reason}): rephased=${result.ordersRephased} ` +
+            `unknown=${result.ordersUnknown} merge_latches_cleared=${result.mergeLatchesCleared} ` +
+            `notes_recovered=${result.notesRecovered} errors=${result.errors.length}`,
+        );
+        for (const e of result.errors) {
+          this.emitError("reconcile", new Error(e));
+        }
+        // Only an ERROR-FREE reconcile clears the latch. A partial one leaves
+        // some slice of local state unverified, and placing against state we
+        // know we could not confirm is how a daemon spends collateral the chain
+        // has already consumed.
+        this.reconcileFailureReason =
+          result.errors.length > 0 ? result.errors[0] : null;
+        return result;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        this.reconcileFailureReason = message;
+        this.emitError("reconcile", new Error(`reconcile failed: ${message}`));
+        return {
+          ordersRephased: 0,
+          ordersUnknown: 0,
+          mergeLatchesCleared: 0,
+          notesRecovered: 0,
+          errors: [message],
+        };
+      } finally {
+        this.reconciling = false;
+        this.reconcileInFlight = null;
+      }
+    })();
+
+    this.reconcileInFlight = run;
+    return run;
+  }
+
   private pauseTrading(reason: string): void {
     if (this.tradingPauseReason === reason) return;
     this.tradingPauseReason = reason;
@@ -341,6 +471,17 @@ export class Daemon {
 
   private assertTradingEnabled(): void {
     this.pauseIfFinalizedKeysStale();
+    if (this.reconciling) {
+      throw new Error(
+        "trading paused: reconciling local state after a stream gap or restart",
+      );
+    }
+    if (this.reconcileFailureReason) {
+      throw new Error(
+        `trading paused: last reconciliation did not complete (${this.reconcileFailureReason}) — ` +
+          "local state is unverified; call reconcileNow() once the CVM/RPC is reachable",
+      );
+    }
     if (this.tradingPauseReason) {
       throw new Error(`trading paused: ${this.tradingPauseReason}`);
     }
@@ -450,6 +591,7 @@ export class Daemon {
     this.started = true;
     this.nextIndex = this.store.maxSeedIndex() + 1;
 
+
     const ownerCommitment = await this.keystore.ownerCommitment();
     this.fills = new FillsListener({
       engine: this.engine,
@@ -464,6 +606,9 @@ export class Daemon {
         this.pruneConsumedInput(note);
         this.emit({ type: "fill", note });
       },
+      // A 1011 close means the server buffered past us: the fills we missed
+      // carried the ONLY in-band copy of their notes' openings (SW-11).
+      onResync: (reason) => void this.reconcileNow(`fills gap: ${reason}`),
       onError: (e) => this.emitError("fills", e),
     });
     this.orders = new OrdersListener({
@@ -472,6 +617,7 @@ export class Daemon {
       token: this.config.token,
       streamClient: this.streamClient,
       subscribeFn: this.subscribeOrdersFn,
+      onResync: (reason) => void this.reconcileNow(`orders gap: ${reason}`),
       onError: (e) => this.emitError("orders", e),
     });
     this.tracker = new SettlementTracker({
@@ -491,6 +637,23 @@ export class Daemon {
     this.orders.start();
     this.tracker.start();
     if (this.config.attestOnchainCheck) this.startTeeKeyRefresh();
+
+    // Reconcile at boot as well as on a gap (SW-11). A restart across any
+    // transition leaves exactly the same desync a mid-session gap does: the
+    // live tails above reopen at "now", so anything that happened while the
+    // process was down is invisible, and persisted orders were never checked
+    // against the CVM. `start()` previously did neither, which is why a restart
+    // made the desync permanent rather than curing it.
+    //
+    // Awaited: placement is gated on `reconciling`, so returning from `start()`
+    // with it still running would just make the first `placeOrder` throw. A
+    // failure here is surfaced and does not prevent the daemon running — a
+    // daemon that boots degraded and says so beats one that refuses to boot.
+    if (this.reconcileOnStart) {
+      // Cannot throw — see `reconcileNow`. A daemon that boots degraded and
+      // says so beats one that refuses to boot.
+      await this.reconcileNow("startup");
+    }
   }
 
   stop(): void {
@@ -672,9 +835,24 @@ export class Daemon {
 
   getTrustStatus(): DaemonTrustStatus {
     this.pauseIfFinalizedKeysStale();
+    // Report every reason placement can be refused, not just the trust one.
+    // `tradingEnabled` used to be derived from `tradingPauseReason` alone, so
+    // `/health` would have advertised trading as enabled while `placeOrder`
+    // threw — the reconciliation pauses are independent fields precisely
+    // because a trust resume must not clear them.
+    const pauseReason =
+      this.tradingPauseReason ??
+      (this.reconciling
+        ? "reconciling local state after a stream gap or restart"
+        : null) ??
+      (this.reconcileFailureReason
+        ? `last reconciliation did not complete (${this.reconcileFailureReason}); local state is unverified`
+        : null);
     return {
-      tradingEnabled: this.tradingPauseReason === null,
-      pauseReason: this.tradingPauseReason,
+      tradingEnabled: pauseReason === null,
+      pauseReason,
+      reconciling: this.reconciling,
+      reconcileFailureReason: this.reconcileFailureReason,
       lastFinalizedKeyRefreshMs: this.lastFinalizedKeyRefreshMs,
       onchainKeyMonitoring: this.expectedTeePubkeys !== null,
     };

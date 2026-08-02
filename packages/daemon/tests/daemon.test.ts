@@ -152,6 +152,9 @@ function mkDaemon(
     subscribeOrders: capture().fn as never,
     verifyAttestation: false, // attestation covered in attestation.test.ts
     verifyRoot: false, // on-chain root gate has dedicated SDK/daemon tests
+    // These suites stand up no CVM and no RPC; boot reconciliation (SW-11) has
+    // its own coverage in reconcile.test.ts.
+    reconcileOnStart: false,
     ...extra,
   });
 }
@@ -449,6 +452,140 @@ describe("Daemon — note-lifecycle hygiene (rolling residual)", () => {
     expect(store.get("c0")).toBeUndefined();
     expect(store.get("c1")).toBeUndefined();
     expect(store.get("c2")).toBeDefined(); // latest kept
+    daemon.stop();
+  });
+});
+
+describe("daemon wiring", () => {
+  it("a fills resync triggers reconciliation and pauses placement", async () => {
+    // The signal existed and both listeners forwarded it; the daemon simply
+    // never passed a handler, so it was discarded at the top of the stack.
+    // Driving the real seam proves the wiring rather than inspecting source.
+    const fills = capture<{ onResync?: (r: string) => void }>();
+    const daemon = mkDaemon({ subscribeFills: fills.fn as never });
+    await daemon.start();
+
+    const events: DaemonEvent[] = [];
+    daemon.subscribe((e) => events.push(e));
+
+    expect(fills.cap.opts?.onResync, "the daemon must hand down onResync").toBeTypeOf(
+      "function",
+    );
+
+    // Fire the 1011 signal the SDK raises on a buffer overrun.
+    fills.cap.opts!.onResync!("buffer overrun");
+
+    // Placement is refused while state is being re-derived — silent drift is
+    // the failure mode this exists to end.
+    await expect(
+      daemon.placeOrder(
+        {
+          symbol: "SOL-USDC",
+          side: OrderSide.Bid,
+          policy: limitPolicy({ priceLimit: 100n }),
+          amount: 500n,
+        },
+        note,
+      ),
+    ).rejects.toThrow(/reconcil/i);
+
+    // And the operator hears about it.
+    expect(
+      events.some(
+        (e) =>
+          e.type === "error" &&
+          e.context === "reconcile" &&
+          /reconciling/i.test(e.message),
+      ),
+      "the operator must hear about it — silent drift is the failure mode this ends",
+    ).toBe(true);
+
+    daemon.stop();
+  });
+  it("a failing reconcile never produces an unhandled rejection", async () => {
+    // The listener callbacks are synchronous and cannot await, so `onResync`
+    // discards the promise. If `reconcileNow` could reject, that becomes an
+    // unhandled rejection — which Node turns into process exit by default,
+    // crashing the daemon in exactly the situation the feature exists to
+    // survive. (This harness has no CVM behind it, so the reconcile below
+    // genuinely fails; that is the point.)
+    //
+    // It also cost a CI run: `vitest` reported "178 passed" while exiting 1 on
+    // the unhandled rejection, and a grep for the pass count hid it.
+    const fills = capture<{ onResync?: (r: string) => void }>();
+    const daemon = mkDaemon({ subscribeFills: fills.fn as never });
+    await daemon.start();
+
+    const rejections: unknown[] = [];
+    const onUnhandled = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      fills.cap.opts!.onResync!("buffer overrun");
+      // Give the discarded promise a turn to settle and the rejection a turn
+      // to reach the loop.
+      await new Promise((r) => setTimeout(r, 50));
+      // Asserted while the listener is still attached, so a late rejection
+      // cannot slip through after it is detached.
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+
+    // ...and the failure is still reported, not swallowed.
+    const result = await daemon.reconcileNow("direct");
+    expect(result.errors.length).toBeGreaterThan(0);
+
+    daemon.stop();
+  });
+  it("a failed reconcile keeps placement paused until a clean one runs", async () => {
+    // A failed reconcile means local state is UNVERIFIED, not merely stale.
+    // Resuming placement then risks spending collateral the chain has already
+    // consumed, so the pause must outlive the attempt that failed.
+    const daemon = mkDaemon();
+    await daemon.start();
+
+    const result = await daemon.reconcileNow("gap");
+    expect(result.errors.length).toBeGreaterThan(0);
+
+    // The transient `reconciling` flag has cleared…
+    expect(daemon.getTrustStatus().reconciling).toBe(false);
+    // …but the failure latch has not.
+    expect(daemon.getTrustStatus().reconcileFailureReason).toBeTruthy();
+    expect(daemon.getTrustStatus().tradingEnabled).toBe(false);
+    await expect(
+      daemon.placeOrder(
+        {
+          symbol: "SOL-USDC",
+          side: OrderSide.Bid,
+          policy: limitPolicy({ priceLimit: 100n }),
+          amount: 500n,
+        },
+        note,
+      ),
+    ).rejects.toThrow(/unverified/);
+
+    daemon.stop();
+  });
+
+  it("a re-entrant call during the opening emit shares the one run", async () => {
+    // The body's first act is a synchronous `emitError`. If `reconcileInFlight`
+    // were assigned only after the IIFE was created, a subscriber that
+    // re-entered here would have seen `null` and started a SECOND chain scan —
+    // the duplication the sharing exists to prevent.
+    const daemon = mkDaemon();
+    await daemon.start();
+
+    let reentrant: Promise<unknown> | null = null;
+    daemon.subscribe((e) => {
+      if (e.type === "error" && e.context === "reconcile" && !reentrant) {
+        reentrant = daemon.reconcileNow("re-entrant");
+      }
+    });
+
+    const first = await daemon.reconcileNow("gap");
+    expect(reentrant, "the emit must have re-entered").not.toBeNull();
+    expect(await reentrant).toBe(first);
+
     daemon.stop();
   });
 });

@@ -7,7 +7,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DaemonStore } from "../src/store.js";
-import { newManagedOrder, type ManagedOrder } from "../src/types.js";
+import {
+  newManagedOrder,
+  TERMINAL_PHASES,
+  type ManagedOrder,
+} from "../src/types.js";
 import type { StoredNote } from "@darknyx/sdk";
 
 let store: DaemonStore;
@@ -129,11 +133,23 @@ describe("DaemonStore — managed orders", () => {
     expect(store.listOrders()).toHaveLength(1);
   });
 
-  it("listActiveOrders excludes terminal phases", () => {
-    store.putOrder({ ...mk("33".repeat(8), 2), phase: "open" });
-    store.putOrder({ ...mk("44".repeat(8), 3), phase: "closed" });
-    store.putOrder({ ...mk("55".repeat(8), 4), phase: "rejected" });
-    store.putOrder({ ...mk("66".repeat(8), 5), phase: "pending" });
+  it("listActiveOrders excludes EVERY terminal phase", () => {
+    // Widened deliberately. This previously exercised only `closed` and
+    // `rejected`, so it passed while the SQL omitted `'expired'` — the query
+    // resumed expired orders as live and nothing noticed (SW-11). Driving the
+    // fixture off TERMINAL_PHASES means a newly added phase fails here rather
+    // than silently becoming resumable.
+    let seed = 2;
+    for (const phase of TERMINAL_PHASES) {
+      store.putOrder({
+        ...mk(String(seed).padStart(2, "0").repeat(8), seed),
+        phase,
+      });
+      seed += 1;
+    }
+    store.putOrder({ ...mk("aa".repeat(8), 90), phase: "open" });
+    store.putOrder({ ...mk("bb".repeat(8), 91), phase: "pending" });
+
     const active = store.listActiveOrders();
     expect(active.map((o) => o.phase).sort()).toEqual(["open", "pending"]);
   });

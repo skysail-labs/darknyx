@@ -40,7 +40,7 @@ function openOrder(overrides: Partial<ManagedOrder> = {}): ManagedOrder {
 }
 
 const noopExecutor = {
-  merge: async () => ({ type: "merge-confirmed" as const, consumed: 0 }),
+  merge: async () => ({ type: "merge-confirmed" as const, remaining: 0 }),
 };
 
 function captureSubscribe() {

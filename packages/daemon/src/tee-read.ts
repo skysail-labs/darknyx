@@ -30,6 +30,15 @@ export interface TeeInstrument {
   };
 }
 
+/** The subset of `GET /orders/{id}` the reconciler reads. */
+export interface TeeOrderStatus {
+  order_id: string;
+  /** Server-side lifecycle phase — the authority after a gap. */
+  status?: string;
+  filled_amount?: string | number;
+  [k: string]: unknown;
+}
+
 export class TeeReadClient {
   constructor(private readonly opts: TeeReadOptions) {}
 
@@ -56,9 +65,33 @@ export class TeeReadClient {
       `/instruments/${encodeURIComponent(symbol)}`,
     ) as Promise<TeeInstrument>;
   }
+  /**
+   * `GET /orders/{orderId}` — one order's authoritative server-side state.
+   *
+   * The reconciliation path's source of truth for phase (SW-11): after a stream
+   * gap or a restart the daemon's local phase can be arbitrarily stale, and the
+   * `orders` channel is a notifier, not a durable log.
+   *
+   * `null` when the order is unknown to the CVM — either it never landed or it
+   * has aged out of the server's retention. Distinguished from a transport
+   * failure, which throws, so a caller can tell "gone" from "cannot tell".
+   */
+  async order(orderId: string): Promise<TeeOrderStatus | null> {
+    const f = this.opts.fetchImpl ?? fetch;
+    const path = `/orders/${encodeURIComponent(orderId)}`;
+    const res = await f(new URL(path, this.opts.gatewayUrl).toString(), {
+      headers: { authorization: `Bearer ${this.opts.token}` },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`${path} → ${res.status}`);
+    return (await res.json()) as TeeOrderStatus;
+  }
+
   /** `GET /settlement/status/{batchId}` — a settle batch's per-job progress. */
   settlementStatus(batchId: string | number): Promise<unknown> {
-    return this.get(`/settlement/status/${batchId}`);
+    // Encoded like its `instrument` sibling. `control-api.ts` feeds this an
+    // arbitrary caller-controlled path segment (SW-20).
+    return this.get(`/settlement/status/${encodeURIComponent(String(batchId))}`);
   }
   /** `GET /system/status` — node health. */
   systemStatus(): Promise<unknown> {

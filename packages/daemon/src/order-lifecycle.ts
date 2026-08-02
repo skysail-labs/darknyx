@@ -55,7 +55,10 @@ export type LifecycleEvent =
    *  meaning — the terminal `filled` comes from the orders channel. */
   | { type: "fill"; producedChangeNote: boolean }
   // ── action outcomes ──
-  | { type: "merge-confirmed"; consumed: number }
+  /** `remaining` is the trigger order's residual count AFTER the merge, read
+   *  from the store. It replaced a cross-order `consumed` that was subtracted
+   *  from one order and therefore drifted in both directions (SW-13). */
+  | { type: "merge-confirmed"; remaining: number }
   | { type: "merge-failed" }
   /** Settlement reconciled + residuals consolidated → terminal `closed`. */
   | { type: "closed" };
@@ -149,10 +152,9 @@ export function reduceOrder(
     }
 
     case "merge-confirmed":
-      next.pendingChangeNotes = Math.max(
-        0,
-        order.pendingChangeNotes - event.consumed,
-      );
+      // SET, never subtract: the runner reconciles from the store, which is the
+      // authority for this order's unspent residuals.
+      next.pendingChangeNotes = Math.max(0, event.remaining);
       next.mergeInFlight = false;
       break;
 

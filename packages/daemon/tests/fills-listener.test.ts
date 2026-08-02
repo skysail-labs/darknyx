@@ -67,7 +67,7 @@ describe("FillsListener", () => {
   it("subscribes with the gateway/token/account material", () => {
     const { captured, fn } = captureSubscribe();
     const engine = new LifecycleEngine(store, {
-      merge: async () => ({ type: "merge-confirmed", consumed: 0 }),
+      merge: async () => ({ type: "merge-confirmed", remaining: 0 }),
     });
     engine.register(openOrder());
 
@@ -92,7 +92,7 @@ describe("FillsListener", () => {
   it("dispatches a fill event per change note and counts residuals", async () => {
     const { captured, fn } = captureSubscribe();
     const engine = new LifecycleEngine(store, {
-      merge: async () => ({ type: "merge-confirmed", consumed: 0 }),
+      merge: async () => ({ type: "merge-confirmed", remaining: 0 }),
     });
     engine.register(openOrder());
 
@@ -121,7 +121,7 @@ describe("FillsListener", () => {
   it("an unknown-order fill surfaces an error but does not throw out of the handler", async () => {
     const { captured, fn } = captureSubscribe();
     const engine = new LifecycleEngine(store, {
-      merge: async () => ({ type: "merge-confirmed", consumed: 0 }),
+      merge: async () => ({ type: "merge-confirmed", remaining: 0 }),
     });
     // NOTE: no order registered.
     const onError = vi.fn();
@@ -148,7 +148,7 @@ describe("FillsListener", () => {
   it("passes resync/close through", () => {
     const { captured, fn } = captureSubscribe();
     const engine = new LifecycleEngine(store, {
-      merge: async () => ({ type: "merge-confirmed", consumed: 0 }),
+      merge: async () => ({ type: "merge-confirmed", remaining: 0 }),
     });
     const onResync = vi.fn();
     const onClose = vi.fn();

@@ -17,7 +17,8 @@
  *   node dist/bin/daemon.js
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import {
@@ -98,6 +99,44 @@ function loadKeypair(path: string): Keypair {
   const bytes = JSON.parse(readFileSync(path, "utf8")) as number[];
   return Keypair.fromSecretKey(Uint8Array.from(bytes));
 }
+
+/**
+ * The control-plane bearer token (SW-19).
+ *
+ * Required, never optional: this surface places orders and moves funds, and a
+ * default-insecure local server is reachable from any page the operator's
+ * browser visits. When `DARKNYX_DAEMON_CONTROL_TOKEN` is unset we generate one
+ * and persist it `0600` beside the database, then print the path — the pattern
+ * Jupyter and similar local servers use. A cross-origin page cannot read that
+ * file, which is what defeats DNS rebinding as well as CSRF.
+ *
+ * Persisted rather than regenerated per boot so a strategy process does not
+ * have to be restarted alongside the daemon.
+ */
+function resolveControlToken(dbPath: string): string {
+  const fromEnv = process.env.DARKNYX_DAEMON_CONTROL_TOKEN;
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
+
+  const tokenPath = `${dbPath}.control-token`;
+  try {
+    const existing = readFileSync(tokenPath, "utf8").trim();
+    if (existing.length > 0) {
+      console.log(`[daemon] control token: ${tokenPath}`);
+      return existing;
+    }
+  } catch {
+    // Not yet created — fall through and mint one.
+  }
+  const token = randomBytes(32).toString("hex");
+  writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
+  chmodSync(tokenPath, 0o600); // umask can loosen the create mode
+  console.log(
+    `[daemon] generated a control token at ${tokenPath} (mode 0600). ` +
+      "Set DARKNYX_DAEMON_CONTROL_TOKEN to supply your own.",
+  );
+  return token;
+}
+
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -284,7 +323,7 @@ async function main(): Promise<void> {
       daemon,
       mapPlace,
       mapDeposit,
-      controlToken: process.env.DARKNYX_DAEMON_CONTROL_TOKEN,
+      controlToken: resolveControlToken(config.dbPath),
     },
     config.controlPort,
   );

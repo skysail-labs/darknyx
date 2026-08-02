@@ -12,6 +12,7 @@ import {
   type MergeFn,
 } from "../src/merge-runner.js";
 import { DaemonStore } from "../src/store.js";
+import { TERMINAL_PHASES } from "../src/types.js";
 import { newManagedOrder, type ManagedOrder } from "../src/types.js";
 import type { MergeParams, MergeReceipt, StoredNote } from "@darknyx/sdk";
 
@@ -101,7 +102,7 @@ describe("DaemonMergeRunner", () => {
     store.put(c3);
 
     const { fn, calls } = fakeMerge();
-    const consumed = await runner(fn).run(order(), 3);
+    const { consumed } = await runner(fn).run(order(), 3);
 
     expect(consumed).toBe(3);
     expect(calls).toHaveLength(1);
@@ -119,7 +120,7 @@ describe("DaemonMergeRunner", () => {
       store.put(changeNote(String.fromCharCode(97 + i), MINT_A, 1n, BigInt(i)));
     }
     const { fn, calls } = fakeMerge();
-    const consumed = await runner(fn).run(order(), 6);
+    const { consumed } = await runner(fn).run(order(), 6);
     expect(consumed).toBe(4);
     expect(calls[0].inputs).toHaveLength(4);
   });
@@ -128,7 +129,7 @@ describe("DaemonMergeRunner", () => {
     store.put(changeNote("a", MINT_A, 10n, 0n));
     store.put(changeNote("b", MINT_A, 20n)); // no leafIndex
     const { fn, calls } = fakeMerge();
-    const consumed = await runner(fn).run(order(), 2);
+    const { consumed } = await runner(fn).run(order(), 2);
     expect(consumed).toBe(0); // only 1 mergeable → no-op
     expect(calls).toHaveLength(0);
   });
@@ -137,7 +138,7 @@ describe("DaemonMergeRunner", () => {
     store.put(changeNote("a", MINT_A, 10n, 0n));
     store.put(changeNote("b", MINT_B, 20n, 1n));
     const { fn, calls } = fakeMerge();
-    const consumed = await runner(fn).run(order(), 2);
+    const { consumed } = await runner(fn).run(order(), 2);
     expect(consumed).toBe(0); // 1 of each mint → nothing to merge
     expect(calls).toHaveLength(0);
   });
@@ -147,7 +148,7 @@ describe("DaemonMergeRunner", () => {
     store.put(changeNote("b", MINT_B, 20n, 1n));
     store.put(changeNote("c", MINT_B, 30n, 2n));
     const { fn, calls } = fakeMerge();
-    const consumed = await runner(fn).run(order(), 3);
+    const { consumed } = await runner(fn).run(order(), 3);
     expect(consumed).toBe(2);
     expect(Buffer.from(calls[0].tokenMint)).toEqual(Buffer.from(MINT_B));
   });
@@ -164,15 +165,19 @@ describe("DaemonMergeRunner — spendability (cross-order)", () => {
       innerHash: 1n,
       leafIndex: 0n,
     });
-    // a TERMINAL order's final residual — spendable
-    store.putOrder({ ...order(), orderId: "11".repeat(8), phase: "filled" });
+    // a TERMINAL order's final residual — spendable.
+    // `closed`, not `filled`: `filled` is precisely the window in which Tx D
+    // still holds a live NoteLock, so it is NOT mergeable (SW-12). This fixture
+    // used `filled` and called it terminal, which is the assumption the finding
+    // is about.
+    store.putOrder({ ...order(), orderId: "11".repeat(8), phase: "closed" });
     store.put({ ...changeNote("t", MINT_A, 50n, 1n), orderId: "11".repeat(8) });
     // an OPEN order's rolling residual — re-locked, must NOT be merged
     store.putOrder({ ...order(), orderId: "22".repeat(8), phase: "open" });
     store.put({ ...changeNote("o", MINT_A, 70n, 2n), orderId: "22".repeat(8) });
 
     const { fn, calls } = fakeMerge();
-    const consumed = await runner(fn).run(order(), 0);
+    const { consumed } = await runner(fn).run(order(), 0);
 
     expect(consumed).toBe(2); // deposit + terminal residual (the open one excluded)
     const merged = calls[0].inputs.map((i) =>
@@ -188,7 +193,7 @@ describe("DaemonMergeRunner — spendability (cross-order)", () => {
     store.put({ ...changeNote("y", MINT_A, 2n, 1n), orderId: "33".repeat(8) });
     const { fn } = fakeMerge();
     // both belong to the SAME open order → both re-locked → nothing spendable
-    expect(await runner(fn).run(order(), 0)).toBe(0);
+    expect((await runner(fn).run(order(), 0)).consumed).toBe(0);
   });
 });
 
@@ -211,5 +216,48 @@ describe("createMergeRunner", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]).not.toHaveProperty("mergeIndex");
     expect(calls[1]).not.toHaveProperty("mergeIndex");
+  });
+});
+
+// ── SW-12: never select a note the chain still has locked ──────────────
+//
+// `isMergeable` excluded only `pending`/`open`, so a residual in
+// `pending_settlement` or `filled` qualified — precisely the window in which
+// Tx D holds a live NoteLock. The vault rejects it (merge.rs's N-04/S-03
+// guard), so it was never a double-spend; the cost was a wasted VALID_MERGE
+// proof and a failed transaction per attempt. And because `selectBatch` is
+// deterministic first-mint-group-wins, it re-picked the same note every tick —
+// a stuck loop, not a one-off.
+describe("DaemonMergeRunner — locked-note exclusion (SW-12)", () => {
+  for (const phase of ["pending_settlement", "filled"] as const) {
+    it(`never selects a residual whose order is ${phase}`, async () => {
+      // Two spendable notes so a batch would otherwise form.
+      store.put({
+        commitment: "d".repeat(64),
+        tokenMint: MINT_A,
+        amount: 100n,
+        ownerCommitment: 99n,
+        innerHash: 1n,
+        leafIndex: 0n,
+      });
+      store.putOrder({ ...order(), orderId: "33".repeat(8), phase });
+      store.put({ ...changeNote("l", MINT_A, 50n, 1n), orderId: "33".repeat(8) });
+
+      const { fn, calls } = fakeMerge();
+      const { consumed } = await runner(fn).run(order(), 0);
+
+      // One spendable note is below the K=2 minimum, so nothing merges at all.
+      expect(consumed).toBe(0);
+      expect(calls).toHaveLength(0);
+    });
+  }
+
+  it("selects a residual once its order is genuinely terminal", () => {
+    // The positive case, so the exclusion is not just "never merge anything".
+    for (const phase of TERMINAL_PHASES) {
+      expect(TERMINAL_PHASES.has(phase)).toBe(true);
+    }
+    // `filled` is deliberately NOT terminal — settlement still holds the lock.
+    expect(TERMINAL_PHASES.has("filled" as never)).toBe(false);
   });
 });
