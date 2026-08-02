@@ -9,6 +9,27 @@
 //!   3. Schema — the response shape doesn't match what we expect.
 //!      This is a bug on either side; we surface enough context
 //!      to debug.
+//!
+//! ## No RPC URL in an error string (SW-01)
+//!
+//! `DARKNYX_TEE_SOLANA_RPC_URL` carries its credential **in the URL**
+//! (`https://devnet.helius-rpc.com/?api-key=<secret>`) — that is Helius' standard
+//! auth, so unlike the Hermes endpoint we cannot forbid query parameters. The
+//! URL must therefore never reach a formatted error: these errors propagate
+//! through `WorkerError` into a settle job's failure reason, which
+//! `GET /settlement/status/{batch_id}` serves to any authenticated account.
+//!
+//! Two independent paths had to be closed, and the transport one is the
+//! likelier to fire:
+//!
+//! * **Schema** — the client used to interpolate `self.endpoint` verbatim. It
+//!   now formats a scheme+host display form (`SolanaRpcClient::endpoint_host`).
+//! * **Network** — `reqwest::Error`'s own `Display` embeds the request URL
+//!   (`error sending request for url (https://…?api-key=…)`), so a connect
+//!   timeout, DNS failure, TLS error, or request timeout leaked the credential
+//!   with no help from our formatting at all. The `From` impl below strips it
+//!   with `without_url()`. **Do not restore `#[from]` here** — the derive would
+//!   silently reinstate the leak.
 
 use thiserror::Error;
 
@@ -16,8 +37,10 @@ use thiserror::Error;
 pub enum RpcError {
     /// Network / TLS / DNS / timeout failure. The transport never
     /// completed.
+    ///
+    /// Constructed only through the `From` impl below, which strips the URL.
     #[error("network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(reqwest::Error),
 
     /// Response body couldn't be parsed as JSON. Includes the raw
     /// bytes for debugging (truncated to 512 chars to keep logs
@@ -54,4 +77,63 @@ pub enum RpcError {
     /// hands back a wrong-length seed.
     #[error("malformed key material: {0}")]
     KeyMaterial(String),
+}
+
+/// Strip the request URL out of every transport error.
+///
+/// Hand-written on purpose. `#[from]` would derive an identity conversion and
+/// re-open SW-01's second leak path: `reqwest::Error`'s `Display` renders as
+/// `error sending request for url (<the full URL>)`, and our RPC URL carries
+/// `?api-key=<secret>`. `without_url()` drops the URL and keeps the cause, so
+/// operators still see "connect timeout" / "dns error" / the TLS failure —
+/// which is the part that is actually diagnostic.
+impl From<reqwest::Error> for RpcError {
+    fn from(e: reqwest::Error) -> Self {
+        RpcError::Network(e.without_url())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The credential lives in the URL, so a transport error that renders the
+    /// URL discloses it. This is SW-01's *second* path — not the one the
+    /// finding named, and the likelier of the two to fire, because a connect
+    /// timeout, DNS failure, TLS error, or request timeout all reach it while
+    /// the HTTP-status path needs the server to answer at all.
+    #[tokio::test]
+    async fn a_transport_error_does_not_render_the_url() {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(50))
+            .build()
+            .unwrap();
+        // TEST-NET-1 (RFC 5737) — reserved for documentation, never routable,
+        // so this fails at connect without depending on the sandbox's DNS.
+        let raw = client
+            .post("https://192.0.2.1/?api-key=SUPERSECRET")
+            .json(&serde_json::json!({ "jsonrpc": "2.0" }))
+            .send()
+            .await
+            .expect_err("connect to a reserved address must fail");
+
+        // Establishes that the guard is doing the work: reqwest's own Display
+        // DOES carry the secret. Without this the assertion below could pass
+        // for an unrelated reason and the test would prove nothing.
+        assert!(
+            format!("{raw}").contains("SUPERSECRET"),
+            "precondition: reqwest embeds the URL, so the conversion must strip it"
+        );
+
+        let converted: RpcError = raw.into();
+        let rendered = format!("{converted}");
+        assert!(
+            !rendered.contains("SUPERSECRET"),
+            "RpcError must not disclose the API key: {rendered}"
+        );
+        assert!(
+            !rendered.contains("192.0.2.1"),
+            "without_url() drops the host too: {rendered}"
+        );
+    }
 }

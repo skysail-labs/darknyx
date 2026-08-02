@@ -31,7 +31,9 @@ use tokio::task::{JoinHandle, JoinSet};
 pub(crate) const DEFAULT_SETTLE_CONCURRENCY: usize = 1;
 
 use super::assemble::{assemble_batch, BatchAssemblyParams};
-use super::job::{BatchId, JobStatus, MatchIdx, SettleJob, SettleJobId, SettlementOutcome};
+use super::job::{
+    BatchId, JobStatus, MatchIdx, SettleFailureKind, SettleJob, SettleJobId, SettlementOutcome,
+};
 use super::metrics::{SettlementMetricsSnapshot, SettlementMetricsState};
 use super::vault::market_config_pda;
 use super::worker::{run_batch_settle_streaming, MatchSettlementResult, SettleWorkerCtx};
@@ -423,6 +425,9 @@ async fn drive_batch(
                 driver.cfg.settle_batch_concurrency,
                 driver.ctx.settle_send_concurrency,
                 "assembly_error".to_string(),
+                // Batch assembly is our own code — nothing here is a client's
+                // fault or an upstream fault.
+                SettleFailureKind::Internal,
                 format!("assembly: {e}"),
             )
             .await;
@@ -502,6 +507,7 @@ async fn fail_batch(
     settle_batch_concurrency: usize,
     settle_send_concurrency: usize,
     metrics_failure: String,
+    job_failure: SettleFailureKind,
     job_reason: String,
 ) {
     let mut state = state.write().await;
@@ -510,7 +516,7 @@ async fn fail_batch(
             batch_id,
             match_idx: idx as u8,
         };
-        state.update(&id, |j| j.fail(job_reason.clone()));
+        state.update(&id, |j| j.fail(job_failure, job_reason.clone()));
     }
     if let Some(record) = state.metrics_mut().fail_batch(
         batch_id,
@@ -931,8 +937,8 @@ mod tests {
                         done = true;
                         break;
                     }
-                    super::super::job::SettleJobStage::Failed { reason } => {
-                        panic!("settle job failed: {reason}");
+                    super::super::job::SettleJobStage::Failed { failure, reason } => {
+                        panic!("settle job failed ({failure:?}): {reason}");
                     }
                     _ => {}
                 }

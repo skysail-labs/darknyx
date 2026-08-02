@@ -32,6 +32,7 @@ pub mod error;
 pub mod market_config;
 pub mod vault_config;
 
+pub use client::redact_endpoint;
 pub use client::{
     AddressTxPage, BlockhashWithSlot, Commitment, PrioritizationFee, RpcAccountInfo, RpcAddressTx,
     RpcInstruction, RpcSignatureInfo, RpcSignatureStatus, RpcSimulationResult, RpcTransaction,

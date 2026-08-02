@@ -250,9 +250,46 @@ struct RpcContext {
 #[derive(Clone)]
 pub struct SolanaRpcClient {
     http: reqwest::Client,
+    /// The real endpoint, credential and all. **Never format this** — see
+    /// [`Self::endpoint_host`].
     endpoint: String,
+    /// Scheme + host (+ port) of `endpoint`, with userinfo, path, query, and
+    /// fragment removed. This is the only form that may appear in an error or
+    /// a log line.
+    endpoint_host: String,
     commitment: Commitment,
     next_id: Arc<AtomicU64>,
+}
+
+/// Reduce an RPC URL to `scheme://host[:port]`.
+///
+/// `DARKNYX_TEE_SOLANA_RPC_URL` carries its credential as a query parameter
+/// (`https://devnet.helius-rpc.com/?api-key=<secret>`) because that is Helius'
+/// standard auth — we cannot forbid it the way `validate_hermes_endpoint`
+/// forbids credentials in the Hermes URL. So the credential-bearing parts are
+/// dropped here instead, and only this form is ever formatted.
+///
+/// Deliberately allowlist-shaped: it rebuilds the string from parsed
+/// components rather than trying to strip the secret out of the original. A
+/// blocklist ("remove everything after `?`") would keep working right up until
+/// a provider moves the key into the path or the userinfo.
+///
+/// An unparseable URL yields `"<redacted-endpoint>"` rather than the input —
+/// failing closed, because a URL we cannot parse is one whose secret we cannot
+/// locate.
+pub fn redact_endpoint(endpoint: &str) -> String {
+    // `reqwest::Url` is the re-exported `url` crate — the same parser
+    // `config::validate_hermes_endpoint` uses, and no new dependency.
+    match reqwest::Url::parse(endpoint) {
+        Ok(u) => match u.host_str() {
+            Some(host) => match u.port() {
+                Some(port) => format!("{}://{host}:{port}", u.scheme()),
+                None => format!("{}://{host}", u.scheme()),
+            },
+            None => "<redacted-endpoint>".to_string(),
+        },
+        Err(_) => "<redacted-endpoint>".to_string(),
+    }
 }
 
 impl SolanaRpcClient {
@@ -268,9 +305,11 @@ impl SolanaRpcClient {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()?;
+        let endpoint = endpoint.into();
         Ok(Self {
+            endpoint_host: redact_endpoint(&endpoint),
             http,
-            endpoint: endpoint.into(),
+            endpoint,
             commitment: Commitment::default(),
             next_id: Arc::new(AtomicU64::new(1)),
         })
@@ -281,8 +320,16 @@ impl SolanaRpcClient {
         self
     }
 
+    /// The real endpoint, credential included. For issuing requests only —
+    /// **never** put this in an error, a log line, or an API response.
     pub fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+
+    /// `scheme://host[:port]` — the only form safe to format. Use this
+    /// everywhere the endpoint would otherwise appear in text.
+    pub fn endpoint_host(&self) -> &str {
+        &self.endpoint_host
     }
 
     pub fn commitment(&self) -> Commitment {
@@ -812,9 +859,11 @@ impl SolanaRpcClient {
                 continue;
             }
             if !status.is_success() {
+                // Host only — `self.endpoint` carries `?api-key=<secret>` and
+                // this string reaches a settle job's failure reason (SW-01).
                 return Err(RpcError::Schema(format!(
                     "HTTP {status} from {endpoint}: {body}",
-                    endpoint = self.endpoint,
+                    endpoint = self.endpoint_host,
                     body = preview(&bytes)
                 )));
             }
@@ -880,6 +929,94 @@ fn decode_b58_32(s: &str, label: &str) -> Result<[u8; 32], RpcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── SW-01: the RPC URL carries the credential, so it must never be
+    //    formatted. These pin the redaction itself; the HTTP-status path that
+    //    consumes it is covered by `http_error_reports_host_only`, and the
+    //    transport path by `solana_rpc::error`'s test.
+
+    #[test]
+    fn redaction_keeps_only_scheme_and_host() {
+        // The shape CLAUDE.md §3.2 actually provisions.
+        assert_eq!(
+            redact_endpoint("https://devnet.helius-rpc.com/?api-key=SUPERSECRET"),
+            "https://devnet.helius-rpc.com"
+        );
+        // No path separator before the query — the shape that defeated the
+        // previous hand-rolled `split('/')` redaction in main.rs.
+        assert_eq!(
+            redact_endpoint("https://devnet.helius-rpc.com?api-key=SUPERSECRET"),
+            "https://devnet.helius-rpc.com"
+        );
+        // Credential in the userinfo instead.
+        assert_eq!(
+            redact_endpoint("https://user:SUPERSECRET@rpc.example.com/v1"),
+            "https://rpc.example.com"
+        );
+        // Credential in the path.
+        assert_eq!(
+            redact_endpoint("https://rpc.example.com/SUPERSECRET/rpc"),
+            "https://rpc.example.com"
+        );
+        // A non-default port is diagnostic and carries nothing secret.
+        assert_eq!(
+            redact_endpoint("http://127.0.0.1:8899/?api-key=SUPERSECRET"),
+            "http://127.0.0.1:8899"
+        );
+    }
+
+    #[test]
+    fn redaction_fails_closed_on_an_unparseable_url() {
+        // A URL we cannot parse is one whose secret we cannot locate, so we
+        // must not echo the input back on the assumption it is harmless.
+        for weird in ["not a url at all", "", "://?api-key=SUPERSECRET"] {
+            let out = redact_endpoint(weird);
+            assert_eq!(out, "<redacted-endpoint>", "input {weird:?}");
+            assert!(!out.contains("SUPERSECRET"));
+        }
+    }
+
+    #[test]
+    fn a_constructed_client_exposes_only_the_redacted_host() {
+        let c = SolanaRpcClient::new("https://devnet.helius-rpc.com/?api-key=SUPERSECRET").unwrap();
+        // The real endpoint is still available for issuing requests…
+        assert!(c.endpoint().contains("SUPERSECRET"));
+        // …but the form intended for text carries nothing.
+        assert_eq!(c.endpoint_host(), "https://devnet.helius-rpc.com");
+        assert!(!c.endpoint_host().contains("SUPERSECRET"));
+    }
+
+    #[tokio::test]
+    async fn http_error_reports_host_only() {
+        // A server that answers 503 drives the `!status.is_success()` branch —
+        // the exact site SW-01 anchors on.
+        use axum::{routing::post, Router};
+        let app = Router::new().route(
+            "/",
+            post(|| async { (axum::http::StatusCode::SERVICE_UNAVAILABLE, "upstream down") }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let client = SolanaRpcClient::new(format!("http://{addr}/?api-key=SUPERSECRET")).unwrap();
+        let err = client
+            .get_latest_blockhash()
+            .await
+            .expect_err("503 must surface as an error");
+
+        let rendered = format!("{err}");
+        assert!(
+            !rendered.contains("SUPERSECRET"),
+            "the API key must not reach the error string: {rendered}"
+        );
+        // Still useful to an operator: status + host + body preview.
+        assert!(rendered.contains("503"), "status retained: {rendered}");
+        assert!(
+            rendered.contains(&addr.ip().to_string()),
+            "host retained: {rendered}"
+        );
+    }
 
     #[test]
     fn envelope_serialises_with_required_fields() {

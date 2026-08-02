@@ -59,10 +59,67 @@ pub enum SettleJobStage {
     /// Tx D confirmed for this match. Marker close is asynchronous rent
     /// bookkeeping and is not part of settlement finality.
     Done,
-    /// Terminal error. The stage that failed is implied by the
-    /// signatures filled in so far (`lock_buyer_sig=Some` +
-    /// everything after `None` = failed at Verifying, etc.).
-    Failed { reason: String },
+    /// Terminal error.
+    ///
+    /// `failure` is the closed-set label served to clients; `reason` is the full
+    /// diagnostic text and stays **inside the enclave** — see
+    /// [`SettleFailureKind`] and [`JobStatus::failed_reason`]. The stage that
+    /// failed is implied by the signatures filled in so far
+    /// (`lock_buyer_sig=Some` + everything after `None` = failed at Verifying).
+    Failed {
+        /// Renamed from `kind` because this enum serializes with
+        /// `#[serde(tag = "kind")]` and the field would collide with the tag.
+        failure: SettleFailureKind,
+        reason: String,
+    },
+}
+
+/// What class of thing went wrong, as a closed set.
+///
+/// SW-01: a settle failure's free-form text used to be serialized straight into
+/// `GET /settlement/status/{batch_id}`, which any authenticated account may
+/// poll. That text is built from internal errors, and one of them interpolated
+/// the RPC endpoint — credential included.
+///
+/// Redacting that endpoint (see `solana_rpc::redact_endpoint`) fixes the leak
+/// that existed. This type fixes the *channel*: a fixed set of labels cannot
+/// carry whatever the next internal error happens to embed. It restores the
+/// premise `api/settlement.rs` was written against — "the response leaks only
+/// stage labels + tx signatures".
+///
+/// Derived from the typed error variant, never by matching on message text —
+/// string classification would rot the first time an error message is reworded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettleFailureKind {
+    /// Solana RPC transport, HTTP status, or malformed response.
+    Rpc,
+    /// Groth16 witness generation or proving failed, including a panic.
+    Prover,
+    /// Merkle leaf/path resolution failed for one of the batch's inputs.
+    Leaf,
+    /// The per-batch address lookup table never became active.
+    AltNotActive,
+    /// The settlement was definitively rejected on-chain, or its window
+    /// expired — a real outcome, not an infrastructure fault.
+    Rejected,
+    /// An invariant inside the settle pipeline did not hold.
+    Internal,
+}
+
+impl SettleFailureKind {
+    /// The stable string served to clients. Values are part of the wire
+    /// contract in `docs/tee-api-openapi.yaml` — add, don't rename.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rpc => "rpc_unavailable",
+            Self::Prover => "prover_failed",
+            Self::Leaf => "leaf_resolution_failed",
+            Self::AltNotActive => "alt_not_active",
+            Self::Rejected => "settlement_rejected",
+            Self::Internal => "internal_error",
+        }
+    }
 }
 
 /// Per-match settlement result. This is intentionally independent from the
@@ -161,14 +218,14 @@ impl SettleJob {
         self.last_transition_at = SystemTime::now();
     }
 
-    /// Convenience: mark the job failed with a reason. Equivalent
-    /// to `transition(SettleJobStage::Failed { reason })`.
-    pub fn fail(&mut self, reason: impl Into<String>) {
+    /// Mark the job failed. `kind` is what a client sees; `reason` is the
+    /// operator-facing detail and never leaves the enclave.
+    pub fn fail(&mut self, failure: SettleFailureKind, reason: impl Into<String>) {
         let reason = reason.into();
         self.outcome = SettlementOutcome::Rejected {
             reason: reason.clone(),
         };
-        self.transition(SettleJobStage::Failed { reason });
+        self.transition(SettleJobStage::Failed { failure, reason });
     }
 }
 
@@ -183,10 +240,19 @@ pub struct JobStatus {
     pub batch_id: BatchId,
     pub match_idx: MatchIdx,
     pub stage: &'static str,
-    pub outcome: SettlementOutcome,
-    /// Present only when stage = "failed".
+    /// Sanitised view of the internal [`SettlementOutcome`] — same wire shape,
+    /// closed-set reasons.
+    pub outcome: OutcomeStatus,
+    /// Present only when stage = "failed". A [`SettleFailureKind`] label, NOT
+    /// the internal diagnostic text.
+    ///
+    /// This endpoint is readable by **any** authenticated account, so the field
+    /// must not be able to carry whatever an internal error happened to format
+    /// into itself. It once carried the RPC endpoint, credential and all
+    /// (SW-01). `&'static str` makes that structurally impossible: there is no
+    /// runtime string to smuggle anything through.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub failed_reason: Option<String>,
+    pub failed_reason: Option<&'static str>,
     pub created_at_ms: u64,
     pub last_transition_at_ms: u64,
     /// Confirmed on-chain tx signatures, populated as stages complete.
@@ -203,17 +269,69 @@ pub struct JobStatus {
     pub close_sig: Option<String>,
 }
 
+/// The outcome as served to a client: identical wire shape to
+/// [`SettlementOutcome`] (same serde tag, same field names) but the free-form
+/// `reason` is replaced by a closed-set label.
+///
+/// See [`JobStatus`] for why. Kept as a separate type rather than sanitising
+/// `SettlementOutcome` in place so the internal value keeps its full detail for
+/// operator logs and reconciliation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OutcomeStatus {
+    Pending,
+    Confirmed {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        slot: Option<u64>,
+        reconciled_from_consumed_pdas: bool,
+    },
+    Rejected {
+        reason: &'static str,
+    },
+    Ambiguous {
+        reason: &'static str,
+    },
+}
+
+impl From<&SettlementOutcome> for OutcomeStatus {
+    fn from(o: &SettlementOutcome) -> Self {
+        match o {
+            SettlementOutcome::Pending => Self::Pending,
+            SettlementOutcome::Confirmed {
+                signature,
+                slot,
+                reconciled_from_consumed_pdas,
+            } => Self::Confirmed {
+                signature: signature.clone(),
+                slot: *slot,
+                reconciled_from_consumed_pdas: *reconciled_from_consumed_pdas,
+            },
+            // The internal `reason` is discarded on purpose — it is built with
+            // `format!("…: {error}")` at several sites, and those errors reach
+            // in from the RPC client.
+            SettlementOutcome::Rejected { .. } => Self::Rejected {
+                reason: "settlement_rejected",
+            },
+            SettlementOutcome::Ambiguous { .. } => Self::Ambiguous {
+                reason: "reconciliation_pending",
+            },
+        }
+    }
+}
+
 impl From<&SettleJob> for JobStatus {
     fn from(job: &SettleJob) -> Self {
         let failed_reason = match &job.stage {
-            SettleJobStage::Failed { reason } => Some(reason.clone()),
+            SettleJobStage::Failed { failure, .. } => Some(failure.label()),
             _ => None,
         };
         Self {
             batch_id: job.id.batch_id,
             match_idx: job.id.match_idx,
             stage: job.stage.label(),
-            outcome: job.outcome.clone(),
+            outcome: OutcomeStatus::from(&job.outcome),
             failed_reason,
             created_at_ms: to_unix_ms(job.created_at),
             last_transition_at_ms: to_unix_ms(job.last_transition_at),
@@ -304,10 +422,13 @@ mod tests {
             },
             dummy_match(),
         );
-        job.fail("blockhash not found");
+        job.fail(SettleFailureKind::Rpc, "blockhash not found");
         assert!(job.stage.is_terminal());
         match &job.stage {
-            SettleJobStage::Failed { reason } => assert_eq!(reason, "blockhash not found"),
+            SettleJobStage::Failed { failure, reason } => {
+                assert_eq!(reason, "blockhash not found");
+                assert_eq!(*failure, SettleFailureKind::Rpc);
+            }
             other => panic!("expected Failed, got {other:?}"),
         }
     }
@@ -326,6 +447,7 @@ mod tests {
         assert_eq!(SettleJobStage::Done.label(), "done");
         assert_eq!(
             SettleJobStage::Failed {
+                failure: SettleFailureKind::Internal,
                 reason: "x".to_string()
             }
             .label(),
@@ -353,5 +475,140 @@ mod tests {
         assert!(json.contains("\"stage\":\"queued\""));
         assert!(json.contains("\"batch_id\":7"));
         assert!(json.contains("\"match_idx\":3"));
+    }
+
+    // ── SW-01: `GET /settlement/status/{batch_id}` is readable by ANY
+    //    authenticated account, so the response must carry only closed-set
+    //    labels. It used to serialize the internal failure text, and one
+    //    internal error interpolated the RPC endpoint — credential included.
+
+    /// Every label a client can observe. Adding a variant without adding it
+    /// here fails to compile, so the wire contract cannot drift silently.
+    fn all_kinds() -> [SettleFailureKind; 6] {
+        [
+            SettleFailureKind::Rpc,
+            SettleFailureKind::Prover,
+            SettleFailureKind::Leaf,
+            SettleFailureKind::AltNotActive,
+            SettleFailureKind::Rejected,
+            SettleFailureKind::Internal,
+        ]
+    }
+
+    #[test]
+    fn failure_labels_are_stable_and_carry_no_detail() {
+        // Part of the wire contract in docs/tee-api-openapi.yaml.
+        assert_eq!(SettleFailureKind::Rpc.label(), "rpc_unavailable");
+        assert_eq!(SettleFailureKind::Prover.label(), "prover_failed");
+        assert_eq!(SettleFailureKind::Leaf.label(), "leaf_resolution_failed");
+        assert_eq!(SettleFailureKind::AltNotActive.label(), "alt_not_active");
+        assert_eq!(SettleFailureKind::Rejected.label(), "settlement_rejected");
+        assert_eq!(SettleFailureKind::Internal.label(), "internal_error");
+    }
+
+    #[test]
+    fn a_failed_job_serialises_the_label_never_the_detail() {
+        // The exact string SW-01 describes: an RPC error carrying the endpoint.
+        const LEAKY: &str =
+            "rpc: HTTP 503 from https://devnet.helius-rpc.com/?api-key=SUPERSECRET: upstream down";
+
+        for kind in all_kinds() {
+            let mut job = SettleJob::new(
+                SettleJobId {
+                    batch_id: 1,
+                    match_idx: 0,
+                },
+                dummy_match(),
+            );
+            job.fail(kind, LEAKY);
+
+            // The detail is retained INSIDE the enclave for operator logs…
+            match &job.stage {
+                SettleJobStage::Failed { reason, .. } => assert_eq!(reason, LEAKY),
+                other => panic!("expected Failed, got {other:?}"),
+            }
+
+            // …and cannot cross the API boundary.
+            let json = serde_json::to_string(&JobStatus::from(&job)).unwrap();
+            assert!(
+                !json.contains("SUPERSECRET"),
+                "{kind:?}: credential reached the wire: {json}"
+            );
+            assert!(
+                !json.contains("api-key"),
+                "{kind:?}: query string reached the wire: {json}"
+            );
+            assert!(
+                !json.contains("helius"),
+                "{kind:?}: endpoint host reached the wire: {json}"
+            );
+            assert!(
+                json.contains(&format!("\"failed_reason\":\"{}\"", kind.label())),
+                "{kind:?}: expected the closed-set label: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rejected_outcome_serialises_a_label_never_the_detail() {
+        // The second channel through the same endpoint: `outcome.reason`.
+        // Several sites build it as `format!("…: {error}")`, and those errors
+        // come from the RPC client.
+        let mut job = SettleJob::new(
+            SettleJobId {
+                batch_id: 2,
+                match_idx: 0,
+            },
+            dummy_match(),
+        );
+        job.outcome = SettlementOutcome::Rejected {
+            reason: "cannot construct settle transaction: network error at \
+                     https://devnet.helius-rpc.com/?api-key=SUPERSECRET"
+                .to_string(),
+        };
+        let json = serde_json::to_string(&JobStatus::from(&job)).unwrap();
+        assert!(!json.contains("SUPERSECRET"), "{json}");
+        assert!(json.contains("\"kind\":\"rejected\""), "{json}");
+        assert!(
+            json.contains("\"reason\":\"settlement_rejected\""),
+            "{json}"
+        );
+
+        // Ambiguous shares the channel and the treatment.
+        job.outcome = SettlementOutcome::Ambiguous {
+            reason: "reconciliation failed: https://x/?api-key=SUPERSECRET".to_string(),
+        };
+        let json = serde_json::to_string(&JobStatus::from(&job)).unwrap();
+        assert!(!json.contains("SUPERSECRET"), "{json}");
+        assert!(
+            json.contains("\"reason\":\"reconciliation_pending\""),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_confirmed_outcome_still_carries_its_signature_and_slot() {
+        // The sanitised view must not cost clients the fields they use — a
+        // confirmed settle is exactly what they poll for.
+        let mut job = SettleJob::new(
+            SettleJobId {
+                batch_id: 3,
+                match_idx: 1,
+            },
+            dummy_match(),
+        );
+        job.outcome = SettlementOutcome::Confirmed {
+            signature: Some("5xSig".to_string()),
+            slot: Some(1234),
+            reconciled_from_consumed_pdas: true,
+        };
+        let json = serde_json::to_string(&JobStatus::from(&job)).unwrap();
+        assert!(json.contains("\"kind\":\"confirmed\""), "{json}");
+        assert!(json.contains("\"signature\":\"5xSig\""), "{json}");
+        assert!(json.contains("\"slot\":1234"), "{json}");
+        assert!(
+            json.contains("\"reconciled_from_consumed_pdas\":true"),
+            "{json}"
+        );
     }
 }

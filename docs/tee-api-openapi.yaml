@@ -810,8 +810,33 @@ components:
                   signature: { type: string }
                   slot: { type: integer, format: uint64 }
                   reconciled_from_consumed_pdas: { type: boolean }
-                  reason: { type: string }
-              failed_reason: { type: string }
+                  reason:
+                    type: string
+                    enum: [settlement_rejected, reconciliation_pending]
+                    description: |
+                      A closed-set label, not free-form text. Present only on
+                      `rejected` / `ambiguous`. The detailed diagnostic stays
+                      inside the enclave: this endpoint is readable by any
+                      authenticated account, and internal error text is built by
+                      interpolating errors that reach in from the RPC client
+                      (SW-01).
+              failed_reason:
+                type: string
+                enum:
+                  [
+                    rpc_unavailable,
+                    prover_failed,
+                    leaf_resolution_failed,
+                    alt_not_active,
+                    settlement_rejected,
+                    internal_error,
+                  ]
+                description: |
+                  Present only when `stage` is `failed`. A closed-set label
+                  identifying the CLASS of failure, never the internal message.
+                  Which pipeline step failed is implied by the signature fields
+                  populated so far. Labels are append-only — a new failure class
+                  adds a value, existing ones are never renamed.
               created_at_ms: { type: integer, format: uint64 }
               last_transition_at_ms: { type: integer, format: uint64 }
               lock_buyer_sig: { type: string }
