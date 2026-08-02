@@ -350,6 +350,13 @@ export class Daemon {
    *
    * Concurrent calls share one run. Both channels can fault together, and two
    * overlapping chain scans would double the RPC cost to reach the same answer.
+   *
+   * **Never rejects.** The listener callbacks are synchronous and cannot await,
+   * so a rejecting promise here becomes an unhandled rejection — which Node
+   * turns into process exit by default. That would crash the daemon in exactly
+   * the situation this method exists to survive. Failures are reported through
+   * `errors` on the result and the event stream instead, so both call sites are
+   * safe by construction rather than by remembering to attach a `.catch()`.
    */
   async reconcileNow(reason: string): Promise<ReconcileResult> {
     if (this.reconcileInFlight) return this.reconcileInFlight;
@@ -383,6 +390,16 @@ export class Daemon {
           this.emitError("reconcile", new Error(e));
         }
         return result;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        this.emitError("reconcile", new Error(`reconcile failed: ${message}`));
+        return {
+          ordersRephased: 0,
+          ordersUnknown: 0,
+          mergeLatchesCleared: 0,
+          notesRecovered: 0,
+          errors: [message],
+        };
       } finally {
         this.reconciling = false;
         this.reconcileInFlight = null;
@@ -592,11 +609,9 @@ export class Daemon {
     // failure here is surfaced and does not prevent the daemon running — a
     // daemon that boots degraded and says so beats one that refuses to boot.
     if (this.reconcileOnStart) {
-      try {
-        await this.reconcileNow("startup");
-      } catch (e) {
-        this.emitError("reconcile", e instanceof Error ? e : new Error(String(e)));
-      }
+      // Cannot throw — see `reconcileNow`. A daemon that boots degraded and
+      // says so beats one that refuses to boot.
+      await this.reconcileNow("startup");
     }
   }
 

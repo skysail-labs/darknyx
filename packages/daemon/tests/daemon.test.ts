@@ -502,4 +502,36 @@ describe("daemon wiring", () => {
 
     daemon.stop();
   });
+  it("a failing reconcile never produces an unhandled rejection", async () => {
+    // The listener callbacks are synchronous and cannot await, so `onResync`
+    // discards the promise. If `reconcileNow` could reject, that becomes an
+    // unhandled rejection — which Node turns into process exit by default,
+    // crashing the daemon in exactly the situation the feature exists to
+    // survive. (This harness has no CVM behind it, so the reconcile below
+    // genuinely fails; that is the point.)
+    //
+    // It also cost a CI run: `vitest` reported "178 passed" while exiting 1 on
+    // the unhandled rejection, and a grep for the pass count hid it.
+    const fills = capture<{ onResync?: (r: string) => void }>();
+    const daemon = mkDaemon({ subscribeFills: fills.fn as never });
+    await daemon.start();
+
+    const rejections: unknown[] = [];
+    const onUnhandled = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      fills.cap.opts!.onResync!("buffer overrun");
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+
+    expect(rejections).toEqual([]);
+
+    // ...and the failure is still reported, not swallowed.
+    const result = await daemon.reconcileNow("direct");
+    expect(result.errors.length).toBeGreaterThan(0);
+
+    daemon.stop();
+  });
 });
