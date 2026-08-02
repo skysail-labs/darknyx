@@ -521,16 +521,70 @@ describe("daemon wiring", () => {
     process.on("unhandledRejection", onUnhandled);
     try {
       fills.cap.opts!.onResync!("buffer overrun");
+      // Give the discarded promise a turn to settle and the rejection a turn
+      // to reach the loop.
       await new Promise((r) => setTimeout(r, 50));
+      // Asserted while the listener is still attached, so a late rejection
+      // cannot slip through after it is detached.
+      expect(rejections).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
 
-    expect(rejections).toEqual([]);
-
     // ...and the failure is still reported, not swallowed.
     const result = await daemon.reconcileNow("direct");
     expect(result.errors.length).toBeGreaterThan(0);
+
+    daemon.stop();
+  });
+  it("a failed reconcile keeps placement paused until a clean one runs", async () => {
+    // A failed reconcile means local state is UNVERIFIED, not merely stale.
+    // Resuming placement then risks spending collateral the chain has already
+    // consumed, so the pause must outlive the attempt that failed.
+    const daemon = mkDaemon();
+    await daemon.start();
+
+    const result = await daemon.reconcileNow("gap");
+    expect(result.errors.length).toBeGreaterThan(0);
+
+    // The transient `reconciling` flag has cleared…
+    expect(daemon.getTrustStatus().reconciling).toBe(false);
+    // …but the failure latch has not.
+    expect(daemon.getTrustStatus().reconcileFailureReason).toBeTruthy();
+    expect(daemon.getTrustStatus().tradingEnabled).toBe(false);
+    await expect(
+      daemon.placeOrder(
+        {
+          symbol: "SOL-USDC",
+          side: OrderSide.Bid,
+          policy: limitPolicy({ priceLimit: 100n }),
+          amount: 500n,
+        },
+        note,
+      ),
+    ).rejects.toThrow(/unverified/);
+
+    daemon.stop();
+  });
+
+  it("a re-entrant call during the opening emit shares the one run", async () => {
+    // The body's first act is a synchronous `emitError`. If `reconcileInFlight`
+    // were assigned only after the IIFE was created, a subscriber that
+    // re-entered here would have seen `null` and started a SECOND chain scan —
+    // the duplication the sharing exists to prevent.
+    const daemon = mkDaemon();
+    await daemon.start();
+
+    let reentrant: Promise<unknown> | null = null;
+    daemon.subscribe((e) => {
+      if (e.type === "error" && e.context === "reconcile" && !reentrant) {
+        reentrant = daemon.reconcileNow("re-entrant");
+      }
+    });
+
+    const first = await daemon.reconcileNow("gap");
+    expect(reentrant, "the emit must have re-entered").not.toBeNull();
+    expect(await reentrant).toBe(first);
 
     daemon.stop();
   });

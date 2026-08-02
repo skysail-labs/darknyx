@@ -111,7 +111,13 @@ export interface Balance {
  *  streams, cancellation, and settlement reconciliation alive. */
 export interface DaemonTrustStatus {
   tradingEnabled: boolean;
+  /** The effective reason placement is refused — trust OR reconciliation. */
   pauseReason: string | null;
+  /** A reconciliation is running right now. */
+  reconciling: boolean;
+  /** Set while the last reconciliation is known not to have completed cleanly;
+   *  cleared only by a later error-free one. */
+  reconcileFailureReason: string | null;
   lastFinalizedKeyRefreshMs: number | null;
   onchainKeyMonitoring: boolean;
 }
@@ -211,6 +217,18 @@ export class Daemon {
   private reconciling = false;
   /** Guards against a second reconcile starting while one is in flight. */
   private reconcileInFlight: Promise<ReconcileResult> | null = null;
+  /**
+   * Set when a reconciliation could not complete cleanly; cleared only by a
+   * later error-free one.
+   *
+   * A failed reconcile means local state is UNVERIFIED, not merely stale.
+   * Resuming placement then risks spending collateral the chain has already
+   * consumed, so the pause has to outlive the attempt that failed — which is
+   * why this is its own field and not `tradingPauseReason`: the trust-refresh
+   * path calls `resumeTrading()`, which clears that one unconditionally and
+   * would silently re-open trading onto unverified state.
+   */
+  private reconcileFailureReason: string | null = null;
   /**
    * Whether `start()` reconciles. On by default; the unit suites construct a
    * daemon with no CVM or RPC behind it and assert on `start()` itself, so they
@@ -361,8 +379,18 @@ export class Daemon {
   async reconcileNow(reason: string): Promise<ReconcileResult> {
     if (this.reconcileInFlight) return this.reconcileInFlight;
 
+    // Set BEFORE the body runs. An async IIFE executes synchronously up to its
+    // first `await`, and the body's first act is a synchronous `emitError` — so
+    // a subscriber whose handler re-enters `reconcileNow` (a retry, a control
+    // route) would have seen `reconcileInFlight` still null and started a
+    // SECOND scan, which is exactly the duplication the sharing exists to
+    // prevent. `reconciling` is set here for the same reason: placement must be
+    // refused from the instant this is called, not one microtask later.
+    this.reconciling = true;
+
     const run = (async (): Promise<ReconcileResult> => {
-      this.reconciling = true;
+      // Yield once so the assignment below lands before the body proceeds.
+      await Promise.resolve();
       // Surface it: silent drift is the failure mode this exists to end, so an
       // operator learns from the event stream, not from a balance that quietly
       // stopped growing.
@@ -389,9 +417,16 @@ export class Daemon {
         for (const e of result.errors) {
           this.emitError("reconcile", new Error(e));
         }
+        // Only an ERROR-FREE reconcile clears the latch. A partial one leaves
+        // some slice of local state unverified, and placing against state we
+        // know we could not confirm is how a daemon spends collateral the chain
+        // has already consumed.
+        this.reconcileFailureReason =
+          result.errors.length > 0 ? result.errors[0] : null;
         return result;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
+        this.reconcileFailureReason = message;
         this.emitError("reconcile", new Error(`reconcile failed: ${message}`));
         return {
           ordersRephased: 0,
@@ -439,6 +474,12 @@ export class Daemon {
     if (this.reconciling) {
       throw new Error(
         "trading paused: reconciling local state after a stream gap or restart",
+      );
+    }
+    if (this.reconcileFailureReason) {
+      throw new Error(
+        `trading paused: last reconciliation did not complete (${this.reconcileFailureReason}) — ` +
+          "local state is unverified; call reconcileNow() once the CVM/RPC is reachable",
       );
     }
     if (this.tradingPauseReason) {
@@ -794,9 +835,24 @@ export class Daemon {
 
   getTrustStatus(): DaemonTrustStatus {
     this.pauseIfFinalizedKeysStale();
+    // Report every reason placement can be refused, not just the trust one.
+    // `tradingEnabled` used to be derived from `tradingPauseReason` alone, so
+    // `/health` would have advertised trading as enabled while `placeOrder`
+    // threw — the reconciliation pauses are independent fields precisely
+    // because a trust resume must not clear them.
+    const pauseReason =
+      this.tradingPauseReason ??
+      (this.reconciling
+        ? "reconciling local state after a stream gap or restart"
+        : null) ??
+      (this.reconcileFailureReason
+        ? `last reconciliation did not complete (${this.reconcileFailureReason}); local state is unverified`
+        : null);
     return {
-      tradingEnabled: this.tradingPauseReason === null,
-      pauseReason: this.tradingPauseReason,
+      tradingEnabled: pauseReason === null,
+      pauseReason,
+      reconciling: this.reconciling,
+      reconcileFailureReason: this.reconcileFailureReason,
       lastFinalizedKeyRefreshMs: this.lastFinalizedKeyRefreshMs,
       onchainKeyMonitoring: this.expectedTeePubkeys !== null,
     };
