@@ -93,15 +93,46 @@ gate("live CVM attestation (real DCAP)", () => {
   });
 
   it("verifyTeeAttestation passes with the quote-derived pin", async () => {
-    // Bootstrap the pin, then run the full public entrypoint against it.
+    // Bootstrap the compose-hash pin, then run the full public entrypoint.
     const boot = await fetchAttestation(Uint8Array.from(randomBytes(32)));
     const composeHash = composeHashFromEventLog(parseEventLog(boot.event_log));
+    expect(
+      composeHash,
+      "compose-hash must come from a RUNTIME event — a non-runtime entry carries an unauthenticated payload",
+    ).toBeTruthy();
+
+    // The signer pin comes from ON-CHAIN vault_config, never from the gateway.
+    // It used to be omitted here, and `verifyTeeAttestation` filled it with the
+    // attested key — so this assertion passed while comparing that key against
+    // itself. Sourcing it from the chain is the whole point of the pin.
+    if (!RPC) {
+      console.warn("[cvm-attest] SOLANA_RPC_URL unset — skipping strict verify");
+      return;
+    }
+    const conn = new Connection(RPC, "confirmed");
+    const [pda] = vaultConfigPda(new PublicKey(PROGRAM_ID));
+    const acct = await conn.getAccountInfo(pda);
+    expect(acct, "vault_config account exists").not.toBeNull();
+    const onchainKeys = vaultConfigTeePubkeys(acct!.data);
+
     const r = await verifyTeeAttestation(GATEWAY, composeHash!, {
       token: TOKEN,
+      expectedTeePubkey: onchainKeys[0],
     });
     expect(r.composeHash).toBe(composeHash);
     expect(r.teePubkeys.length).toBeGreaterThanOrEqual(1);
     expect(r.teePubkeys[0]).toBe(r.teePubkey);
+    expect(r.teePubkey).toBe(onchainKeys[0]);
+  });
+
+  it("refuses strict verification with no on-chain signer pin", async () => {
+    // CA-02, against a live enclave: omitting the pin must now fail closed
+    // rather than silently comparing the attested key with itself.
+    const boot = await fetchAttestation(Uint8Array.from(randomBytes(32)));
+    const composeHash = composeHashFromEventLog(parseEventLog(boot.event_log));
+    await expect(
+      verifyTeeAttestation(GATEWAY, composeHash!, { token: TOKEN }),
+    ).rejects.toMatchObject({ kind: "pin_required" });
   });
 
   it("rejects a tampered quote", async () => {
