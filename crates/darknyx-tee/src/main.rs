@@ -1111,6 +1111,7 @@ async fn build_settle_driver(
         )),
         settle_state,
         confirm_timeout: Duration::from_secs(60),
+        redrive_budget: darknyx_tee::settle::worker::REDRIVE_WALL_CLOCK_BUDGET,
         current_priority_fee: current_priority_fee.clone(),
         settle_send_concurrency: cfg.settle_send_concurrency as usize,
         settle_batch_concurrency: cfg.settle_batch_concurrency as usize,

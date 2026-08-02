@@ -1359,6 +1359,23 @@ paths:
             quote with all-zero reportData[0..32]. Always supply a
             fresh nonce for live verification (replay protection).
       responses:
+        '429':
+          description: |
+            The venue-wide public-route allowance is exhausted (SW-02). Every
+            unauthenticated route shares one bucket: client traffic reaches the
+            enclave through the dstack gateway, so all requests present the same
+            source address and a per-caller limit here would bound the venue
+            rather than any individual caller. Weighted by real cost —
+            `/attestation` (a TDX quote per request) is the heaviest, in-memory
+            reads are ~100x lighter. Honest polling is far inside the budget.
+            `Retry-After` carries the back-off in seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '200':
           description: Current quote.
           content:
@@ -1990,6 +2007,23 @@ paths:
         Public solvency snapshot + engine identity + aggregate stats.
         Unauthenticated.
       responses:
+        '429':
+          description: |
+            The venue-wide public-route allowance is exhausted (SW-02). Every
+            unauthenticated route shares one bucket: client traffic reaches the
+            enclave through the dstack gateway, so all requests present the same
+            source address and a per-caller limit here would bound the venue
+            rather than any individual caller. Weighted by real cost —
+            `/attestation` (a TDX quote per request) is the heaviest, in-memory
+            reads are ~100x lighter. Honest polling is far inside the budget.
+            `Retry-After` carries the back-off in seconds.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema: { type: integer }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '200':
           description: Transparency snapshot.
           content:

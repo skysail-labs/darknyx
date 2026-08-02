@@ -112,6 +112,15 @@ pub fn build_router(state: Arc<ApiState>) -> Router {
     // Stamp every response (success, error, and 404 fallback) with an
     // `x-request-id` correlation header. Layered on the merged router so it
     // wraps the whole surface.
+    // SW-02: bound the UNAUTHENTICATED surface. `route_layer` (not `layer`) so
+    // the limiter runs only on declared public routes and never on the 404
+    // fallback — otherwise an unknown path would consume budget and, worse,
+    // report `429` instead of `404`.
+    let public = public.route_layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        rate_limit::public_rate_limit_middleware,
+    ));
+
     public
         .merge(protected)
         .layer(axum::middleware::from_fn(error::request_id_middleware))

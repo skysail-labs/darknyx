@@ -136,6 +136,14 @@ pub struct SettleWorkerCtx {
     pub settle_state: Arc<RwLock<SettleSchedulerState>>,
     /// Per-leg confirmation timeout.
     pub confirm_timeout: Duration,
+    /// Wall-clock ceiling on the per-batch redrive loop — see
+    /// [`REDRIVE_WALL_CLOCK_BUDGET`], which is the production value.
+    ///
+    /// A field rather than a bare constant so a test can prove the bound
+    /// actually fires without waiting it out: the loop uses `std::time::Instant`
+    /// (the Solana clients are not on tokio's clock), so `tokio::time::pause`
+    /// cannot advance it.
+    pub redrive_budget: Duration,
     /// Current compute-unit price bid (micro-lamports/CU), refreshed by the
     /// priority-fee poller (main.rs) from `getRecentPrioritizationFees`. Read
     /// once per batch; prepended as a `SetComputeUnitPrice` ix on every
@@ -524,6 +532,37 @@ async fn reconcile_consumed_pdas(
     })
 }
 
+/// How far ahead of the marker-creation slot we treat the batch marker as
+/// valid. A deliberate UNDER-estimate of the real on-chain expiry
+/// (`exec_slot + MAX_BATCH_VALIDITY_MARKER_TTL_SLOTS`, where
+/// `exec_slot >= marker_slot`), so the worker gives up slightly early rather
+/// than redriving past a marker that has actually expired.
+const MARKER_EXPIRY_MARGIN_SLOTS: u64 = 250;
+
+/// Nominal Solana slot time. Used ONLY to convert the slot-denominated redrive
+/// window into a wall-clock backstop (SW-03) — never for anything the chain
+/// validates. An inaccurate value here makes the backstop fire early or late,
+/// which is a liveness trade-off, not a correctness one.
+const NOMINAL_SLOT_MS: u64 = 400;
+
+/// Wall-clock ceiling on the redrive loop, measured from the moment the loop is
+/// entered.
+///
+/// SW-03: every other exit from that loop is bounded by
+/// [`settlement_deadline`], which is evaluated against `bh.context_slot` — and
+/// obtaining `bh` requires a SUCCESSFUL `get_latest_blockhash`. So the bound was
+/// unreachable in exactly the condition that triggers the error path, and a
+/// sustained RPC outage span the batch task at one iteration per second forever:
+/// no terminal outcome, journal entries never retired, orders left reserved, and
+/// a `settle_batch_concurrency` slot held until the enclave was restarted.
+///
+/// This bound deliberately does NOT depend on the failing dependency. It is
+/// generous — the loop is entered well after the marker was created, so the real
+/// remaining window is shorter — because the slot check remains the primary
+/// bound on the healthy path and this must never cut a healthy redrive short.
+pub const REDRIVE_WALL_CLOCK_BUDGET: Duration =
+    Duration::from_millis(MARKER_EXPIRY_MARGIN_SLOTS * NOMINAL_SLOT_MS);
+
 fn settlement_deadline(match_inputs: &MatchSettleInputs, marker_expiry_slot: u64) -> u64 {
     marker_expiry_slot
         .min(match_inputs.buyer_lock.expiry_slot)
@@ -773,7 +812,6 @@ async fn run_batch_settle_inner(
         // `exec_slot >= marker_slot`). That is the safe direction: the worker
         // gives up slightly EARLY rather than redriving a settle past a marker
         // that has actually expired.
-        const MARKER_EXPIRY_MARGIN_SLOTS: u64 = 250;
         let marker_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
         let marker_expiry_slot = marker_slot.saturating_add(MARKER_EXPIRY_MARGIN_SLOTS);
         let verify_ix = build_verify_match_batch_ix(
@@ -999,7 +1037,36 @@ async fn run_batch_settle_inner(
     let mut last_signatures: Vec<Option<String>> = vec![None; n];
     let mut slots: Vec<u64> = Vec::with_capacity(n);
     let mut rebroadcasts = 0u32;
+    // SW-03. See `REDRIVE_WALL_CLOCK_BUDGET`: this bound must not depend on the
+    // RPC, because the RPC failing is what makes the slot-based bound
+    // unreachable.
+    let redrive_deadline = Instant::now() + ctx.redrive_budget;
     while !unresolved.is_empty() {
+        if Instant::now() >= redrive_deadline {
+            // The marker window cannot still be open, and we have been unable
+            // to establish what happened. Ambiguous is the honest outcome:
+            // a send may well have landed before the outage and we simply
+            // cannot read it. Leaving them Ambiguous keeps the journal entries
+            // for restart reconciliation, and the lock sweeper reclaims the
+            // collateral at expiry as designed — whereas spinning here would
+            // hold a settle-concurrency slot until the enclave was restarted.
+            tracing::error!(
+                batch_id,
+                unresolved = unresolved.len(),
+                budget_s = ctx.redrive_budget.as_secs(),
+                "settle redrive hit its wall-clock bound (RPC unreachable?); \
+                 abandoning the loop with the remaining matches AMBIGUOUS — \
+                 they reconcile from the journal on restart"
+            );
+            let reason = format!(
+                "redrive abandoned after {}s without a readable settlement window",
+                ctx.redrive_budget.as_secs()
+            );
+            for &idx in &unresolved {
+                ctx.mark_ambiguous(batch_id, idx, reason.clone()).await;
+            }
+            break;
+        }
         let bh = match ctx.rpc.get_latest_blockhash().await {
             Ok(bh) => bh,
             Err(error) => {
@@ -1022,6 +1089,17 @@ async fn run_batch_settle_inner(
                 continue;
             }
             let outcome = loop {
+                // The same wall clock bounds this inner loop. It had NO bound
+                // of any kind — not even an unreachable one — and it is reached
+                // precisely when the window has already expired, so a failing
+                // RPC pinned it here permanently.
+                if Instant::now() >= redrive_deadline {
+                    break SettlementOutcome::Ambiguous {
+                        reason: "consumed-note reconciliation unavailable before the \
+                                 redrive deadline"
+                            .to_string(),
+                    };
+                }
                 match reconcile_consumed_pdas(&ctx.rpc, &inputs.matches[idx]).await {
                     Ok(ConsumedPdaState::BothConsumed) => {
                         break SettlementOutcome::Confirmed {
@@ -1707,6 +1785,7 @@ mod tests {
             alt_pool: Arc::new(tokio::sync::Mutex::new(AltPool::new())),
             settle_state: state,
             confirm_timeout: Duration::from_secs(5),
+            redrive_budget: Duration::from_secs(30),
             current_priority_fee: Arc::new(AtomicU64::new(0)),
             settle_send_concurrency: 8,
             settle_batch_concurrency: 1,
@@ -1829,6 +1908,183 @@ mod tests {
             .ok()?;
         let tx: solana_transaction::Transaction = bincode::deserialize(&wire).ok()?;
         tx.message.account_keys.first().copied()
+    }
+
+    /// Whether a base64 transaction is v0 (the settle Tx D's; the lock, verify
+    /// and ALT transactions are all legacy).
+    fn is_v0_tx(tx_b64: &str) -> bool {
+        use base64::Engine as _;
+        use solana_transaction::versioned::VersionedTransaction;
+        base64::engine::general_purpose::STANDARD
+            .decode(tx_b64)
+            .ok()
+            .and_then(|wire| bincode::deserialize::<VersionedTransaction>(&wire).ok())
+            .is_some_and(|tx| matches!(tx.message, solana_message::VersionedMessage::V0(_)))
+    }
+
+    /// A mock RPC that can be switched into permanent `getLatestBlockhash`
+    /// failure mid-run, and never confirms a signature — so the redrive loop
+    /// keeps every match unresolved and then loses its ability to read the
+    /// settlement window. Exactly SW-03's condition.
+    async fn spawn_failing_blockhash_rpc() -> (String, Arc<std::sync::atomic::AtomicBool>) {
+        use axum::{
+            extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router,
+        };
+        use serde_json::{json, Value};
+        use std::sync::atomic::AtomicBool;
+
+        async fn handle(
+            State((fail, counter)): State<(Arc<std::sync::atomic::AtomicBool>, Arc<AtomicU64>)>,
+            Json(req): Json<Value>,
+        ) -> axum::response::Response {
+            let id = req.get("id").cloned().unwrap_or(json!(1));
+            let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            if method == "getLatestBlockhash" && fail.load(Ordering::SeqCst) {
+                // The shape `client.rs` turns into `RpcError::Schema` — a
+                // provider 503 or an exhausted quota, per SW-02's chain.
+                return (StatusCode::SERVICE_UNAVAILABLE, "upstream down").into_response();
+            }
+            let result = match method {
+                "getLatestBlockhash" => {
+                    let slot = 1000 + counter.fetch_add(1, Ordering::SeqCst);
+                    json!({
+                        "context": { "slot": slot },
+                        "value": {
+                            "blockhash": bs58::encode([7u8; 32]).into_string(),
+                            "lastValidBlockHeight": 2000u64,
+                        }
+                    })
+                }
+                "sendTransaction" => {
+                    // Trip the outage the moment the SETTLE tx enters flight.
+                    // The settle Tx D's are the only v0 transactions in the
+                    // pipeline (locks/verify/ALT are legacy), so this is an
+                    // exact, race-free trigger: the pre-loop phases have all
+                    // completed, and the redrive loop is about to poll for a
+                    // confirmation it will never get.
+                    //
+                    // An earlier version flipped the switch from a task watching
+                    // for stage == Settling. That raced — under nextest the
+                    // settle confirmed in 21 ms and the loop exited normally, so
+                    // the test passed while exercising nothing. The elapsed-time
+                    // assertion in the test caught it.
+                    if let Some(b64) = req["params"][0].as_str() {
+                        if is_v0_tx(b64) {
+                            fail.store(true, Ordering::SeqCst);
+                        }
+                    }
+                    let nth = counter.fetch_add(1, Ordering::SeqCst);
+                    let mut sig = [0u8; 64];
+                    sig[..8].copy_from_slice(&nth.to_le_bytes());
+                    json!(bs58::encode(sig).into_string())
+                }
+                // Healthy until the switch, so the lock/verify/ALT phases
+                // complete and the batch actually REACHES the redrive loop.
+                // After it, nothing confirms — every match stays unresolved and
+                // the loop keeps redriving, which is what puts it at the mercy
+                // of `getLatestBlockhash`.
+                "getSignatureStatuses" => {
+                    let want = req
+                        .get("params")
+                        .and_then(|p| p.get(0))
+                        .and_then(|s| s.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(1);
+                    let down = fail.load(Ordering::SeqCst);
+                    let value: Vec<Value> = (0..want)
+                        .map(|_| {
+                            if down {
+                                Value::Null
+                            } else {
+                                json!({ "confirmationStatus": "confirmed", "err": null })
+                            }
+                        })
+                        .collect();
+                    json!({ "context": { "slot": 1000 }, "value": value })
+                }
+                "getAccountInfo" => json!({ "context": { "slot": 1000 }, "value": null }),
+                other => json!({ "error": format!("unexpected method {other}") }),
+            };
+            Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
+        }
+
+        let fail = Arc::new(AtomicBool::new(false));
+        let state = (fail.clone(), Arc::new(AtomicU64::new(0)));
+        let app = Router::new().route("/", post(handle)).with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://{addr}"), fail)
+    }
+
+    /// SW-03 — a sustained RPC outage must not pin the batch task forever.
+    ///
+    /// Every other exit from the redrive loop is bounded by
+    /// `settlement_deadline`, which is evaluated against `bh.context_slot` — and
+    /// getting `bh` needs a SUCCESSFUL `get_latest_blockhash`. So the bound was
+    /// unreachable in precisely the condition that triggers the error path, and
+    /// the task spun at one iteration per second indefinitely: no terminal
+    /// outcome, journal entries never retired, orders left reserved, and a
+    /// settle-concurrency slot held until the enclave was restarted.
+    ///
+    /// Without the wall-clock bound this test HANGS rather than fails, which is
+    /// the point: the assertion is that it returns at all.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sustained_rpc_outage_terminates_the_redrive_loop() {
+        let (url, fail) = spawn_failing_blockhash_rpc().await;
+        let state = Arc::new(RwLock::new(SettleSchedulerState::default()));
+        seed_jobs(&state, 0, 1).await;
+        let mut ctx = ctx_for(url, state.clone(), 1);
+        ctx.confirm_timeout = Duration::from_millis(300);
+        // Production is 100 s; the bound is a ctx field precisely so this can
+        // prove it fires without waiting that out.
+        ctx.redrive_budget = Duration::from_secs(3);
+
+        let inputs = BatchSettleInputs {
+            batch_id: 0,
+            matches: vec![MatchSettleInputs {
+                payload: payload(0xA0),
+                buyer_lock: lock_inputs(0x01),
+                seller_lock: lock_inputs(0x02),
+                match_index: 0,
+            }],
+            witnesses: vec![dummy_slot()],
+        };
+
+        // The mock cuts the RPC itself, the moment the settle tx is sent — see
+        // `spawn_failing_blockhash_rpc`. No watcher task, so no race.
+        let _ = &fail;
+
+        // Generous relative to the 3 s budget, tiny relative to "forever".
+        let started = Instant::now();
+        let report = tokio::time::timeout(Duration::from_secs(60), run_batch_settle(&ctx, inputs))
+            .await
+            .expect("SW-03: the redrive loop must terminate on a sustained RPC outage")
+            .expect("batch settle returns a report rather than erroring");
+        let elapsed = started.elapsed();
+
+        // Guards against a VACUOUS pass: if the settle happened to confirm
+        // before the RPC was cut, the loop would exit normally and this test
+        // would prove nothing about the bound. Reaching the budget shows the
+        // loop really did spin against a dead RPC and was stopped by the clock.
+        assert!(
+            elapsed >= ctx.redrive_budget,
+            "loop exited before the wall-clock bound ({elapsed:?} < {:?}) — \
+             the outage path was not exercised",
+            ctx.redrive_budget
+        );
+
+        // Terminating is the fix; the outcome must also be honest. We could not
+        // read the chain, so "rejected" would be a lie — a send may have landed.
+        assert_eq!(report.outcomes.len(), 1);
+        assert!(
+            matches!(
+                report.outcomes[0].outcome,
+                SettlementOutcome::Ambiguous { .. }
+            ),
+            "expected Ambiguous, got {:?}",
+            report.outcomes[0].outcome
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
