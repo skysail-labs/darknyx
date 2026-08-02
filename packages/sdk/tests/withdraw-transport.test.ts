@@ -18,6 +18,8 @@ import {
 import type { Buffer as NodeBuffer } from "node:buffer";
 
 import { getWithdrawFunction } from "../src/utxo/withdraw.js";
+import { noteCommitmentV2 } from "../src/utxo/note.js";
+import { bn254ToBE32 } from "../src/keys/key-generators.js";
 import type {
   AccountInfoProvider,
   MerkleProofProvider,
@@ -48,6 +50,8 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
       throw new Error("not used in withdraw test");
     },
   };
+  /** Set by a test to the commitment the SDK will compute locally (SW-26). */
+  expectedNoteCommitment: Uint8Array | null = null;
   spend = {
     prove: async (inputs: SpendInputs) => {
       this.capturedSpendInputs.push(inputs);
@@ -55,7 +59,21 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
         piA: new Uint8Array(64).fill(0xaa),
         piB: new Uint8Array(128).fill(0xbb),
         piC: new Uint8Array(64).fill(0xcc),
-        publicInputs: [],
+        // Public signals are now validated on every prove path (SW-26), so the
+        // stub has to produce the real vector rather than `[]`. Order mirrors
+        // `programs/vault/src/instructions/withdraw.rs`.
+        publicInputs: [
+          // The note commitment is computed by the CIRCUIT, not passed in, so
+          // the stub echoes what the caller set on `expectedNoteCommitment`.
+          this.expectedNoteCommitment ?? new Uint8Array(32),
+          bn254ToBE32(inputs.merkleRoot),
+          bn254ToBE32(inputs.nullifier),
+          bn254ToBE32(inputs.tokenMint[0]),
+          bn254ToBE32(inputs.tokenMint[1]),
+          bn254ToBE32(inputs.amount),
+          bn254ToBE32(inputs.recipient[0]),
+          bn254ToBE32(inputs.recipient[1]),
+        ],
       };
     },
   };
@@ -139,6 +157,9 @@ describe("getWithdrawFunction", () => {
       ownerCommitment: 3n,
       innerHash: 9n,
     };
+    // Public signals are validated on every prove path now (SW-26), so the
+    // stub must return the vector the SDK computes locally.
+    prover.expectedNoteCommitment = await noteCommitmentV2(notePlaintext);
 
     const receipt = await getWithdrawFunction({ client })({
       payer: new PublicKey(mintBytes),

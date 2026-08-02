@@ -147,21 +147,26 @@ describe("Note commitment parity — v2 (TS vs Rust)", () => {
   // mod-reduces). This test pins the current behaviour so any future change is
   // intentional.
   ait(
-    "Rust strictly rejects out-of-field inputs; TS silently reduces",
+    "BOTH languages reject an out-of-field input (SW-23)",
     async () => {
       // 0x33 * (256^32 - 1) / 255 ≈ 0.2 * 2^256, just above BN254 r.
       const outOfFieldHex = "33".repeat(32);
       const mintHex = "01".repeat(32);
 
-      // TS path silently reduces and produces a hash without throwing.
-      const tsOK = await noteCommitmentV2({
-        tokenMint: bytesFromHex32(mintHex),
-        amount: 1n,
-        ownerCommitment: bigintFromHex32(outOfFieldHex),
-        innerHash: 1n,
-      });
-      expect(tsOK).toBeInstanceOf(Uint8Array);
-      expect(tsOK.length).toBe(32);
+      // This test used to be named "Rust strictly rejects out-of-field inputs;
+      // TS silently reduces" and ASSERTED that divergence: circomlibjs'
+      // `p.F.e()` reduced mod r and returned a hash, while Rust errored. So the
+      // same input produced a value on one side and a failure on the other, in
+      // exactly the primitive CLAUDE.md §7 pins byte-for-byte — and the test
+      // documented it as expected rather than flagging it. TS now rejects too.
+      await expect(
+        noteCommitmentV2({
+          tokenMint: bytesFromHex32(mintHex),
+          amount: 1n,
+          ownerCommitment: bigintFromHex32(outOfFieldHex),
+          innerHash: 1n,
+        }),
+      ).rejects.toThrow(/outside \[0, BN254_r\)/);
 
       // Rust path rejects with NotInField.
       const res = spawnSync(

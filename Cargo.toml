@@ -1,4 +1,11 @@
 [workspace]
+# LOAD-BEARING, not a routine build setting: resolver v2 does NOT unify features
+# requested only by dev-dependencies into normal builds. `darknyx-tee-loadgen`
+# asks for `darknyx-tee/debug_endpoints` as a dev-dependency, and that feature
+# exposes an UNAUTHENTICATED `POST /__debug/oracle/seed` which writes straight
+# into the OracleCache, bypassing Hermes + VAA. Under resolver v1 a plain
+# `cargo build --workspace --release` would enable it and ship that endpoint
+# inside the enclave. Enforced by `scripts/check-no-debug-endpoints.sh` (SW-33).
 resolver = "2"
 members = [
     "programs/vault",

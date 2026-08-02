@@ -22,7 +22,8 @@ export const OUTSTANDING_MINT_SEED = enc("outstanding_mint");
 // `BatchValidityMarker` (one per batch, keyed by Merkle root).
 export const BATCH_VALIDITY_MARKER_SEED = enc("batch_validity");
 
-export const DARK_CLOB_SEED = enc("dark_clob");
-export const MATCHING_CONFIG_SEED = enc("matching_config");
-export const BATCH_RESULTS_SEED = enc("batch_results");
-export const PENDING_ORDER_SEED = enc("pending_order");
+// `dark_clob`, `matching_config`, `batch_results` and `pending_order` were the
+// seeds of the deleted `matching_engine` program and are gone (SW-25). CLAUDE.md
+// §0 is explicit that a surviving reference to that program is stale and should
+// be removed rather than preserved — leaving PDA seeds for a program that no
+// longer exists invites someone to derive an address nothing will ever own.

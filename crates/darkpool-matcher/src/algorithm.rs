@@ -13,6 +13,14 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
+/// The "not yet derived" collateral-note sentinel.
+///
+/// A partially-filled order's real change-note commitment is not derivable in
+/// the matcher — the settle assembler computes it. Writing zeroes makes that
+/// state explicit and unusable rather than plausible-looking, and the chaining
+/// branch treats it as a stop condition (SW-28).
+const ZERO_COMMITMENT: [u8; 32] = [0u8; 32];
+
 use sha2::{Digest, Sha256};
 
 use crate::book::{Order, OrderSide, OrderType, OrderUpdate, OrderUpdateKind};
@@ -523,8 +531,8 @@ pub(crate) fn generate_matches(
         // conditional on its Poseidon derivation succeeding, so an error there
         // left the stale SHA value in the payload rather than failing. Emitting
         // the zero sentinel makes "not yet derived" explicit and unusable.
-        let note_e_commitment = [0u8; 32];
-        let note_f_commitment = [0u8; 32];
+        let note_e_commitment = ZERO_COMMITMENT;
+        let note_f_commitment = ZERO_COMMITMENT;
 
         let b_remaining_after = bids[bi].amount.saturating_sub(crossable);
         let a_remaining_after = asks[ai].amount.saturating_sub(crossable);
@@ -602,13 +610,32 @@ pub(crate) fn generate_matches(
             bi += 1;
             ai += 1;
         } else {
-            // Default (on-chain) behaviour: advance whichever side filled
-            // entirely; a partially-filled side stays to match the next
-            // counterparty (intra-batch relock chain).
-            if b_remaining_after == 0 {
+            // Chaining behaviour: advance whichever side filled entirely; a
+            // partially-filled side stays to match the next counterparty
+            // (intra-batch relock chain).
+            //
+            // SW-28: a partially-filled order has just had its
+            // `collateral_note` replaced by the ZERO SENTINEL above — the real
+            // change-note commitment is not derivable here, and the sentinel
+            // exists to make "not yet derived" explicit and unusable. Leaving
+            // such an order in play meant the next `MatchPair` took
+            // `note_buyer`/`note_seller = [0u8; 32]`: a commitment no opening
+            // exists for and the tree can never contain. The value deliberately
+            // made unusable was then consumed as a match input.
+            //
+            // So the sentinel is also the stop condition. Advancing past the
+            // order converts a silently-invalid match into no match, which is
+            // the safe direction — the order is simply matched in a later batch,
+            // once the assembler has derived its real change note.
+            //
+            // Not reachable from the enclave, which goes through
+            // `PreparedMatchTick::next_page` (`single_fill_per_order: true`);
+            // this guards the `run_batch` wrapper, whose callers are tests and
+            // legacy code.
+            if b_remaining_after == 0 || bids[bi].collateral_note == ZERO_COMMITMENT {
                 bi += 1;
             }
-            if a_remaining_after == 0 {
+            if a_remaining_after == 0 || asks[ai].collateral_note == ZERO_COMMITMENT {
                 ai += 1;
             }
         }

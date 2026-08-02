@@ -398,10 +398,20 @@ fn capped_bounds_fill_count_at_n() {
 // The in-TEE matcher (run_batch_capped single_fill_per_order=true) caps
 // each order to ONE fill per batch, so a large order does NOT chain
 // against multiple counterparties — chaining would consume change notes
-// (note_e) the TEE can't nullify (no spending key). One 30-bid vs three
-// 10-asks at P*=100: default chains → 3 fills; single-fill → 1 fill
-// (the bid's residual relocks on-chain and leaves the in-TEE book to
-// await client re-submission).
+// (note_e) the TEE can't nullify (no spending key).
+//
+// SW-28: this test used to assert that the DEFAULT path chained the 30-bid
+// across all three asks — 3 fills. That is the very thing the comment above
+// says must not happen, and it was worse than "consumes a note the TEE cannot
+// nullify": a partially-filled order has its `collateral_note` replaced by the
+// ZERO SENTINEL, so fills 2 and 3 carried `note_buyer = [0u8; 32]`, a
+// commitment no opening exists for and the tree can never contain. The test
+// counted matches and never looked at the notes, so it pinned the defect.
+//
+// The chaining branch now treats the sentinel as a stop condition, which makes
+// both modes cap at one fill per order. `single_fill_per_order` still differs in
+// HOW it stops (it advances both pointers), so the parameter is not vestigial —
+// but a caller can no longer obtain a chained, invalid second fill from either.
 #[test]
 fn single_fill_mode_caps_one_fill_per_order() {
     let seeds = || {
@@ -413,13 +423,19 @@ fn single_fill_mode_caps_one_fill_per_order() {
         ]
     };
 
-    // Default (on-chain) chains the 30-bid across all three asks.
+    // The default path stops at the first fill too, because the relocked bid's
+    // collateral note is the sentinel and re-matching it would emit a match
+    // against a commitment that does not exist.
     let chained =
         run_batch(&book_of(seeds()), &oracle(100), &config(100_000, 0), 1, 0).expect("default");
     assert_eq!(
         chained.matches.len(),
-        3,
-        "default chains the 30-bid across the three 10-asks"
+        1,
+        "chaining must stop at the zero-sentinel collateral note (SW-28)"
+    );
+    assert_ne!(
+        chained.matches[0].note_buyer, [0u8; 32],
+        "the one emitted match must still carry a real collateral note"
     );
 
     // Single-fill (in-TEE) caps the bid to one fill; residual relocks.

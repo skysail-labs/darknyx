@@ -12,6 +12,8 @@ import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, nullifierV2 as computeNullifierV2 } from "./note.js";
+import { assertPublicInputs } from "../zk/assert-public-inputs.js";
+import { bn254ToBE32 } from "../keys/key-generators.js";
 import { buildWithdrawInstruction } from "../idl/vault-client.js";
 
 /** SPL Token program id (classic). */
@@ -146,6 +148,28 @@ export function getWithdrawFunction({
         merkleIndices: mProof.pathIndices,
         recipient: [destLo, destHi],
       });
+
+      // Validate the prover's public signals against a locally computed vector
+      // (SW-26). Order mirrors
+      // `programs/vault/src/instructions/withdraw.rs`:
+      //   [note_commitment, merkle_root, nullifier, mint_lo, mint_hi,
+      //    amount, dest_lo, dest_hi]
+      //
+      // The destination halves matter most here. S-01 made the recipient a
+      // public input precisely so a proof cannot be redirected — but that only
+      // binds on-chain. Checking it here means a prover that proved for a
+      // DIFFERENT destination is caught before the caller signs and sends,
+      // rather than after the fee is spent.
+      assertPublicInputs("VALID_SPEND", proof.publicInputs, [
+        commitment,
+        mProof.root,
+        nullifierBytes,
+        bn254ToBE32(mintLo),
+        bn254ToBE32(mintHi),
+        bn254ToBE32(params.amount),
+        bn254ToBE32(destLo),
+        bn254ToBE32(destHi),
+      ]);
     } catch (e) {
       throw new DarkPoolError("proof-generation", (e as Error).message, e);
     }

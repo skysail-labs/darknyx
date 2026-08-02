@@ -84,6 +84,8 @@ jobs:
           fetch-depth: 0
       - name: Reject stale pre-Darknyx namespaces
         run: bash scripts/check-brand-namespace.sh
+      - name: Debug endpoints must stay off by default
+        run: bash scripts/check-no-debug-endpoints.sh
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
         with:
