@@ -17,7 +17,7 @@
 //!   brief write locks.
 //!
 //! Retention: jobs accumulate forever in 4g.1. PR 4g.6 adds an
-//! eviction policy (keep last N batches, or last T minutes).
+//! eviction policy: see `MAX_RETAINED_BATCHES` (SW-08).
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -29,6 +29,24 @@ use tokio::task::{JoinHandle, JoinSet};
 /// Conservative production default. Cross-batch pipelining is opt-in through
 /// `DARKNYX_TEE_SETTLE_BATCH_CONCURRENCY` and remains bounded to eight.
 pub(crate) const DEFAULT_SETTLE_CONCURRENCY: usize = 1;
+
+/// How many settled batches stay queryable through
+/// `GET /settlement/status/{batch_id}`.
+///
+/// SW-08: the module doc promised this eviction "in PR 4g.6" and it was never
+/// written — `jobs` and `by_batch` retained every match the process had ever
+/// settled, and `update`'s "evicted" return path was dead code. Each job holds
+/// a full `MatchPair` (six 32-byte commitments plus amounts) and up to five
+/// base58 signatures, so retention grew without bound for the process lifetime
+/// while holding exactly the per-trade detail the enclave is supposed to keep
+/// least of.
+///
+/// A batch count rather than a wall-clock window: it is deterministic, it does
+/// not need a timer, and it bounds memory directly (which is what was
+/// unbounded). 64 batches is far more than any client polls — the endpoint is
+/// used to follow a settle that just happened — and its 404 path already
+/// documents eviction as an expected outcome.
+pub(crate) const MAX_RETAINED_BATCHES: usize = 64;
 
 use super::assemble::{assemble_batch, BatchAssemblyParams};
 use super::job::{
@@ -43,8 +61,8 @@ use crate::matcher::MatcherState;
 /// `Default` because it's trivially constructible.
 #[derive(Default)]
 pub struct SettleSchedulerState {
-    /// All jobs the scheduler has ever seen, keyed by id.
-    /// 4g.6 evicts terminal jobs older than N seconds.
+    /// Retained jobs, keyed by id. Bounded by [`MAX_RETAINED_BATCHES`] — see
+    /// [`SettleSchedulerState::prune_retained_batches`].
     jobs: HashMap<SettleJobId, SettleJob>,
     /// Per-batch index — ordered set of `match_idx` values for
     /// each batch_id. `BTreeSet` so iteration order is stable.
@@ -141,11 +159,67 @@ impl SettleSchedulerState {
         let match_idx = job.id.match_idx;
         self.jobs.insert(job.id, job);
         self.by_batch.entry(batch_id).or_default().insert(match_idx);
+        self.prune_retained_batches();
+    }
+
+    /// Drop the oldest batches beyond [`MAX_RETAINED_BATCHES`] (SW-08).
+    ///
+    /// **Only fully-terminal batches are evictable.** A batch with any job
+    /// still in flight is kept regardless of age: `update` returns `false` for
+    /// a missing job, and a stage worker that lost its record mid-settle would
+    /// silently stop recording signatures for a settlement that is still
+    /// happening. Retention is a memory bound, not a deadline.
+    ///
+    /// Batch ids are assigned monotonically, so "oldest" is "smallest" and a
+    /// `BTreeSet` of the keys gives the eviction order directly.
+    fn prune_retained_batches(&mut self) {
+        if self.by_batch.len() <= MAX_RETAINED_BATCHES {
+            return;
+        }
+        let terminal_batches: Vec<BatchId> = {
+            let mut ids: Vec<BatchId> = self.by_batch.keys().copied().collect();
+            ids.sort_unstable();
+            ids.into_iter()
+                .filter(|bid| self.batch_is_terminal(*bid))
+                .collect()
+        };
+        let excess = self.by_batch.len().saturating_sub(MAX_RETAINED_BATCHES);
+        for batch_id in terminal_batches.into_iter().take(excess) {
+            if let Some(indices) = self.by_batch.remove(&batch_id) {
+                for idx in indices {
+                    self.jobs.remove(&SettleJobId {
+                        batch_id,
+                        match_idx: idx,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Whether every job in `batch_id` has reached a terminal stage.
+    fn batch_is_terminal(&self, batch_id: BatchId) -> bool {
+        self.by_batch.get(&batch_id).is_some_and(|indices| {
+            indices.iter().all(|idx| {
+                self.jobs
+                    .get(&SettleJobId {
+                        batch_id,
+                        match_idx: *idx,
+                    })
+                    .is_some_and(|j| j.stage.is_terminal())
+            })
+        })
+    }
+
+    /// Number of retained batches — for tests and the metrics surface.
+    pub fn retained_batches(&self) -> usize {
+        self.by_batch.len()
     }
 
     /// Mutate a job in place — used by stage workers to advance
     /// the stage / record tx sigs. Returns false if the job has
-    /// been evicted (4g.6) and the worker should drop its handle.
+    /// been evicted (retention, see `MAX_RETAINED_BATCHES`) and the worker
+    /// should drop its handle. A batch is only evictable once every job in it
+    /// is terminal, so this cannot fire mid-settle.
     pub fn update<F>(&mut self, id: &SettleJobId, f: F) -> bool
     where
         F: FnOnce(&mut SettleJob),
@@ -534,6 +608,68 @@ mod tests {
     /// Recovery keeps entries it could not resolve, and `batch_id` restarts at 0
     /// every process — so without seeding, the first new batch would overwrite
     /// exactly the records held back for an operator.
+    /// SW-08 — retention must be bounded, and must never drop a live batch.
+    #[test]
+    fn retention_evicts_the_oldest_terminal_batches_only() {
+        let mut st = SettleSchedulerState::default();
+
+        // Fill well past the cap with batches that all reach a terminal stage.
+        for batch_id in 0..(MAX_RETAINED_BATCHES as u64 + 20) {
+            let id = SettleJobId {
+                batch_id,
+                match_idx: 0,
+            };
+            let mut job = SettleJob::new(id, dummy_match(1));
+            job.transition(super::super::job::SettleJobStage::Done);
+            st.insert(job);
+        }
+        assert!(
+            st.retained_batches() <= MAX_RETAINED_BATCHES,
+            "retention must be bounded; got {}",
+            st.retained_batches()
+        );
+        // The oldest are the ones that went.
+        assert!(st.status_for_batch(0).is_none(), "oldest batch evicted");
+        let newest = MAX_RETAINED_BATCHES as u64 + 19;
+        assert!(
+            st.status_for_batch(newest).is_some(),
+            "newest batch retained"
+        );
+    }
+
+    #[test]
+    fn retention_never_evicts_a_batch_that_is_still_settling() {
+        // A stage worker whose record vanished mid-settle would silently stop
+        // recording signatures for a settlement that is still happening.
+        // Retention is a memory bound, not a deadline.
+        let mut st = SettleSchedulerState::default();
+
+        // Batch 0 stays in flight (Queued is not terminal).
+        st.insert(SettleJob::new(
+            SettleJobId {
+                batch_id: 0,
+                match_idx: 0,
+            },
+            dummy_match(1),
+        ));
+        for batch_id in 1..(MAX_RETAINED_BATCHES as u64 + 20) {
+            let mut job = SettleJob::new(
+                SettleJobId {
+                    batch_id,
+                    match_idx: 0,
+                },
+                dummy_match(1),
+            );
+            job.transition(super::super::job::SettleJobStage::Done);
+            st.insert(job);
+        }
+
+        assert!(
+            st.status_for_batch(0).is_some(),
+            "an in-flight batch must survive retention regardless of age"
+        );
+    }
+
     #[test]
     fn seeding_prevents_a_new_batch_from_reusing_a_recovered_id() {
         let mut st = SettleSchedulerState::default();

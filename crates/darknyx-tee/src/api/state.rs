@@ -256,6 +256,15 @@ pub struct ApiState {
     /// final change memo. Archiving here preserves that memo without keeping a
     /// terminal order visible through authenticated order lookup.
     recent_order_owner: Arc<RwLock<HashMap<String, String>>>,
+    /// Insertion order for [`Self::recent_order_owner`], oldest first (SW-04).
+    ///
+    /// The cache previously evicted `keys().next()` — an ARBITRARY entry under
+    /// `HashMap`'s iteration order, the same defect S-10 fixed in
+    /// `submission_replay`. It fails closed (a dropped entry means no delivery,
+    /// never a cross-account one), but the entry it drops can be a live fill
+    /// memo's only routing record, taking that memo off the low-latency path
+    /// for no reason while older, colder entries survive.
+    recent_order_owner_order: Arc<RwLock<VecDeque<String>>>,
     /// `account_id → per-account fill-memo broadcast`. Created lazily when an
     /// account subscribes to `fills` on `/v1/stream`. The fills router fans the matcher's global
     /// broadcast into these per-account channels, so a subscriber sees ONLY
@@ -279,6 +288,19 @@ pub struct ApiState {
     /// no account to key on there, and no usable client address — see
     /// [`PUBLIC_RATE_CAPACITY`].
     pub public_rate_bucket: Arc<tokio::sync::Mutex<TokenBucket>>,
+    /// Bumped whenever a SERVER-SIDE fan-out router loses messages (SW-31).
+    ///
+    /// The per-client `push_or_close` path already closes a slow socket with
+    /// 1011 so it reopens and re-derives. That protects against a slow CLIENT.
+    /// When the server's own router falls behind the matcher broadcast, the
+    /// skipped messages are gone before any per-account channel sees them — no
+    /// client is slow, so no client is closed, and every connected session
+    /// silently holds an incomplete view.
+    ///
+    /// A broadcast lag cannot say WHICH accounts lost WHICH messages, so the
+    /// only honest signal is to tell everyone: sessions observe this counter
+    /// and close 1011, reusing the resync contract clients already implement.
+    pub resync_epoch: Arc<std::sync::atomic::AtomicU64>,
     /// Short-TTL cache for `/transparency`'s on-chain reserve reads (SW-02).
     /// `None` until the first read populates it.
     pub reserve_cache: Arc<tokio::sync::Mutex<Option<super::transparency::ReserveCache>>>,
@@ -566,6 +588,7 @@ impl ApiState {
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             order_market: Arc::new(RwLock::new(HashMap::new())),
             recent_order_owner: Arc::new(RwLock::new(HashMap::new())),
+            recent_order_owner_order: Arc::new(RwLock::new(VecDeque::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
@@ -574,6 +597,7 @@ impl ApiState {
             ))),
             reserve_cache: Arc::new(tokio::sync::Mutex::new(None)),
             reserve_cache_ttl: super::transparency::RESERVE_CACHE_TTL,
+            resync_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
             stream_conns: ConnectionRegistry::new(ConnectionLimits::from_env()),
@@ -960,6 +984,7 @@ impl ApiState {
             order_owner: Arc::new(RwLock::new(HashMap::new())),
             order_market: Arc::new(RwLock::new(HashMap::new())),
             recent_order_owner: Arc::new(RwLock::new(HashMap::new())),
+            recent_order_owner_order: Arc::new(RwLock::new(VecDeque::new())),
             fills_routes: Arc::new(RwLock::new(HashMap::new())),
             order_routes: Arc::new(RwLock::new(HashMap::new())),
             rate_buckets: Arc::new(RwLock::new(HashMap::new())),
@@ -968,6 +993,7 @@ impl ApiState {
             ))),
             reserve_cache: Arc::new(tokio::sync::Mutex::new(None)),
             reserve_cache_ttl: super::transparency::RESERVE_CACHE_TTL,
+            resync_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
             stream_conns: ConnectionRegistry::new(ConnectionLimits::default()),
@@ -1017,10 +1043,18 @@ impl ApiState {
 
         {
             let mut recent = self.recent_order_owner.write().await;
-            if recent.len() >= RECENT_ORDER_OWNER_CAP && !recent.contains_key(order_id) {
-                if let Some(evicted) = recent.keys().next().cloned() {
-                    recent.remove(&evicted);
+            let mut order = self.recent_order_owner_order.write().await;
+            if !recent.contains_key(order_id) {
+                // Evict the OLDEST, not an arbitrary one (SW-04).
+                while recent.len() >= RECENT_ORDER_OWNER_CAP {
+                    match order.pop_front() {
+                        Some(oldest) => {
+                            recent.remove(&oldest);
+                        }
+                        None => break,
+                    }
                 }
+                order.push_back(order_id.to_string());
             }
             recent.insert(order_id.to_string(), account);
         }
@@ -1032,6 +1066,10 @@ impl ApiState {
     pub async fn forget_order(&self, order_id: &str) {
         self.order_owner.write().await.remove(order_id);
         self.recent_order_owner.write().await.remove(order_id);
+        self.recent_order_owner_order
+            .write()
+            .await
+            .retain(|id| id != order_id);
         self.order_market.write().await.remove(order_id);
     }
 
@@ -1655,5 +1693,44 @@ mod persist_tests {
             !state.trading_gate_for_symbol("BTC-USDC").unwrap().is_open(),
             "the rebuilt BTC gate must share the supplied venue layer"
         );
+    }
+
+    /// SW-04 — the terminal-order routing cache must evict the OLDEST entry.
+    ///
+    /// It used `keys().next()`, an arbitrary pick under `HashMap` iteration
+    /// order — the same defect S-10 fixed in `submission_replay`. It fails
+    /// closed (a dropped entry means no delivery, never a cross-account one),
+    /// but the entry it drops can be a live fill memo's only routing record,
+    /// taking that memo off the low-latency path while older, colder entries
+    /// survive.
+    #[tokio::test]
+    async fn recent_order_owner_evicts_in_insertion_order() {
+        let st = ApiState::for_tests();
+        // Fill past the cap; each order needs a live owner first, since
+        // `archive_order_owner` reads it before moving the entry.
+        for i in 0..(RECENT_ORDER_OWNER_CAP + 5) {
+            let oid = format!("order-{i:06}");
+            st.order_owner
+                .write()
+                .await
+                .insert(oid.clone(), format!("acct-{i}"));
+            st.archive_order_owner(&oid).await;
+        }
+
+        let recent = st.recent_order_owner.read().await;
+        assert!(recent.len() <= RECENT_ORDER_OWNER_CAP);
+        // The five oldest went, and only those.
+        for i in 0..5 {
+            assert!(
+                !recent.contains_key(&format!("order-{i:06}")),
+                "order-{i:06} is among the oldest and must have been evicted"
+            );
+        }
+        for i in 5..(RECENT_ORDER_OWNER_CAP + 5) {
+            assert!(
+                recent.contains_key(&format!("order-{i:06}")),
+                "order-{i:06} is newer than the cap and must survive"
+            );
+        }
     }
 }
