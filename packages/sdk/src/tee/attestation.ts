@@ -53,8 +53,17 @@ export interface TeeAttestation {
 }
 
 export interface VerifyTeeAttestationOptions {
-  /** Out-of-band expected shard-0 signer (e.g. from on-chain `vault_config`).
-   *  If omitted, the attested key is used (compose-hash is the real anchor). */
+  /** Out-of-band expected shard-0 signer, sourced from on-chain
+   *  `vault_config.tee_pubkeys` — **required**, because this is a strict-mode
+   *  verification and a pin the caller does not supply is not a pin.
+   *
+   *  This used to fall back to the attested key when omitted, which made step 7
+   *  compare that key against itself: a comparison that could never fail, in a
+   *  mode whose `pin_required` guard the same fallback also made unreachable.
+   *  Nothing was exploitable — `report_data` binds the whole K-shard set to the
+   *  quote, so no key can be substituted — but strict mode read as though it
+   *  enforced two governance pins while enforcing one. Omitting it now returns
+   *  `pin_required` rather than silently passing. */
   expectedTeePubkey?: string;
   /** Optional MRTD (dstack-OS) pin. */
   expectedMrtd?: string;
@@ -163,7 +172,8 @@ export async function verifyTeeAttestation(
   const eventLog = parseEventLog(att.event_log);
   const expected: ExpectedMeasurements = {
     composeHash: expectedComposeHash,
-    teePubkey: opts.expectedTeePubkey ?? att.tee_pubkey,
+    // No `?? att.tee_pubkey` — that compared the attested key against itself.
+    teePubkey: opts.expectedTeePubkey,
     mrtd: opts.expectedMrtd,
   };
   const fail = verifyReportAgainstExpected({
@@ -178,7 +188,17 @@ export async function verifyTeeAttestation(
   });
   if (fail) throw new AttestationError(`attestation rejected: ${fail}`, fail);
 
-  const composeHash = composeHashFromEventLog(eventLog) ?? info.compose_hash;
+  // No `?? info.compose_hash` fallback. It was unreachable — the strict check
+  // above already required a non-undefined, pin-matching log-derived hash — but
+  // it modelled the SELF-REPORTED value as an acceptable substitute for the
+  // attested one, which is the exact substitution this module exists to reject.
+  const composeHash = composeHashFromEventLog(eventLog);
+  if (!composeHash) {
+    throw new AttestationError(
+      "compose hash absent from the verified event log after a passing strict check",
+      "event_log_invalid",
+    );
+  }
   return {
     teePubkey: att.tee_pubkey,
     teePubkeys,

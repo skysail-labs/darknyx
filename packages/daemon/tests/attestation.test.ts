@@ -19,6 +19,7 @@ import {
   type EventLogEntry,
   type StoredNote,
   type VerifiedQuoteReport,
+  DSTACK_RUNTIME_EVENT_TYPE,
   replayEventLogRtmr,
 } from "@darknyx/sdk";
 import {
@@ -46,6 +47,15 @@ const COMPOSE = "c0ffeec0ffee";
 const MRTD = "aa".repeat(48);
 
 // An event log whose RTMR3 we can reproduce, carrying the compose-hash event.
+//
+// The RTMR3 entries are dstack RUNTIME events: empty `digest` (the verifier
+// COMPUTES it from the event + payload), payload populated. Only a runtime
+// event's payload is covered by the measurement.
+//
+// They used to be `event_type: 1` with BOTH fields set — the shape dstack's
+// `TdxEvent::stripped()` cannot produce, and the one CA-01 exploits to present
+// a pinned compose hash the RTMR never covered. The daemon's happy path was a
+// forged log, mirroring the same defect in the SDK suite.
 const EVENT_LOG: EventLogEntry[] = [
   {
     imr: 0,
@@ -56,15 +66,15 @@ const EVENT_LOG: EventLogEntry[] = [
   },
   {
     imr: 3,
-    event_type: 1,
-    digest: createHash("sha384").update("app").digest("hex"),
+    event_type: DSTACK_RUNTIME_EVENT_TYPE,
+    digest: "",
     event: "app-id",
-    event_payload: "app",
+    event_payload: "a99d",
   },
   {
     imr: 3,
-    event_type: 1,
-    digest: createHash("sha384").update("ch").digest("hex"),
+    event_type: DSTACK_RUNTIME_EVENT_TYPE,
+    digest: "",
     event: "compose-hash",
     event_payload: COMPOSE,
   },
@@ -80,6 +90,8 @@ function attestFetch(
     bindWrongKey?: boolean;
     staleNonce?: boolean;
     bootSessionId?: string;
+    /** Override the served event log (CA-01 forgery cases). */
+    eventLog?: EventLogEntry[];
   } = {},
 ): typeof fetch {
   const composeHash = opts.composeHash ?? COMPOSE;
@@ -100,7 +112,7 @@ function attestFetch(
       return new Response(
         JSON.stringify({
           quote: rd.toString("hex"),
-          event_log: JSON.stringify(EVENT_LOG),
+          event_log: JSON.stringify(opts.eventLog ?? EVENT_LOG),
           report_data: rd.toString("hex"),
           tee_pubkey: teePubkey,
         }),
@@ -241,6 +253,54 @@ describe("verifyAttestation — strict DCAP", () => {
         expected: { composeHash: "deadbeef", teePubkey: TEE_PUBKEY_B58 },
       }),
     ).rejects.toMatchObject({ kind: "compose_mismatch" });
+  });
+
+  // CA-01 — the daemon shares the SDK's verification core, so the measurement
+  // forgery must be refused here too. An operator running a build whose real
+  // compose hash is H_evil re-types the genuine runtime event to a non-runtime
+  // type and supplies its original computed digest: the RTMR3 replay still
+  // matches, but the payload the client reads becomes the pinned H_good.
+  it("rejects a compose-hash event re-typed off the runtime path", async () => {
+    const genuine = EVENT_LOG.find((e) => e.event === "compose-hash")!;
+    const t = Buffer.alloc(4);
+    t.writeUInt32LE(DSTACK_RUNTIME_EVENT_TYPE >>> 0, 0);
+    const computed = createHash("sha384")
+      .update(
+        Buffer.concat([
+          t,
+          Buffer.from(":"),
+          Buffer.from(genuine.event, "utf8"),
+          Buffer.from(":"),
+          Buffer.from(genuine.event_payload, "hex"),
+        ]),
+      )
+      .digest("hex");
+
+    const doctored: EventLogEntry[] = EVENT_LOG.map((e) =>
+      e.event === "compose-hash"
+        ? {
+            imr: 3,
+            event_type: 1, // ← off the runtime path
+            digest: computed, // ← same RTMR contribution
+            event: "compose-hash",
+            event_payload: "ab".repeat(32), // ← what the client would read
+          }
+        : e,
+    );
+    // The forgery is only interesting because the replay still matches.
+    expect(replayEventLogRtmr(doctored, 3)).toBe(
+      replayEventLogRtmr(EVENT_LOG, 3),
+    );
+
+    await expect(
+      verifyAttestation({
+        gatewayUrl: GW,
+        token: TOKEN,
+        fetchImpl: attestFetch({ eventLog: doctored }),
+        quoteVerifier: goodVerifier(),
+        expected: { composeHash: "ab".repeat(32), teePubkey: TEE_PUBKEY_B58 },
+      }),
+    ).rejects.toMatchObject({ kind: "event_log_invalid" });
   });
 
   it("rejects an attacker-bound report_data even with matching pins", async () => {
