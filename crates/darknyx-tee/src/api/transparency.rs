@@ -44,7 +44,7 @@ use crate::solana_rpc::SolanaRpcClient;
 /// atomic across mints, and a client that needs a point-in-time guarantee reads
 /// the two accounts from Solana itself, which the module header already tells
 /// it to do.
-const RESERVE_CACHE_TTL: Duration = Duration::from_millis(400);
+pub const RESERVE_CACHE_TTL: Duration = Duration::from_millis(400);
 
 /// Cached reserve snapshot: the rendered per-mint rows plus when they were read.
 #[derive(Debug, Clone)]
@@ -54,8 +54,8 @@ pub struct ReserveCache {
 }
 
 impl ReserveCache {
-    fn is_fresh(&self) -> bool {
-        self.read_at.elapsed() < RESERVE_CACHE_TTL
+    fn is_fresh(&self, ttl: Duration) -> bool {
+        self.read_at.elapsed() < ttl
     }
 }
 
@@ -144,7 +144,7 @@ async fn read_reserves_cached(state: &Arc<ApiState>, mints: &[[u8; 32]]) -> Vec<
     if let Some(cached) = cache.as_ref() {
         // A mint-set change (a market added at boot) must not serve a snapshot
         // that is missing rows.
-        if cached.is_fresh() && cached.per_mint.len() == mints.len() {
+        if cached.is_fresh(state.reserve_cache_ttl) && cached.per_mint.len() == mints.len() {
             return cached.per_mint.clone();
         }
     }

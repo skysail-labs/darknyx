@@ -282,6 +282,11 @@ pub struct ApiState {
     /// Short-TTL cache for `/transparency`'s on-chain reserve reads (SW-02).
     /// `None` until the first read populates it.
     pub reserve_cache: Arc<tokio::sync::Mutex<Option<super::transparency::ReserveCache>>>,
+    /// TTL for [`Self::reserve_cache`]. A field rather than a bare constant so a
+    /// test can pin cache behaviour deterministically: the production value is
+    /// ~one slot, which is close enough to a test's own runtime that asserting
+    /// "these N requests were all served from cache" would otherwise be a race.
+    pub reserve_cache_ttl: std::time::Duration,
 
     // ── Idempotency + nonce replay protection ───────────────────
     /// One lock makes exact-idempotency and strict per-trading-key nonce checks
@@ -409,8 +414,14 @@ impl TokenBucket {
 pub const PUBLIC_RATE_CAPACITY: f64 = 200.0;
 /// Sustained refill for the public bucket, in tokens/sec. With the weights in
 /// `api::rate_limit::public_route_cost` this allows ~10 attestations/sec, ~50
-/// transparency or token requests/sec, or ~1000 in-memory reads/sec sustained —
-/// far above honest polling, while bounding the amplification.
+/// `/transparency` requests/sec, or ~1000 in-memory reads/sec sustained — far
+/// above honest polling, while bounding the amplification.
+///
+/// `/auth/token` is **not** metered by this bucket at all: it is exempt at cost
+/// `0.0` so that junk credentials cannot exhaust a shared allowance and lock
+/// every real account out of logging in. Its bounding comes from the
+/// per-account login bucket (AU-05) and the argon2 semaphore, both of which can
+/// tell callers apart — this one cannot. See `public_route_cost`.
 pub const PUBLIC_RATE_REFILL_PER_SEC: f64 = 100.0;
 
 /// Wire form of a `darkpool_matcher::book::OrderUpdate` streamed on the `orders` channel.
@@ -562,6 +573,7 @@ impl ApiState {
                 PUBLIC_RATE_CAPACITY,
             ))),
             reserve_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            reserve_cache_ttl: super::transparency::RESERVE_CACHE_TTL,
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
             stream_conns: ConnectionRegistry::new(ConnectionLimits::from_env()),
@@ -955,6 +967,7 @@ impl ApiState {
                 PUBLIC_RATE_CAPACITY,
             ))),
             reserve_cache: Arc::new(tokio::sync::Mutex::new(None)),
+            reserve_cache_ttl: super::transparency::RESERVE_CACHE_TTL,
             submission_replay: Arc::new(Mutex::new(SubmissionReplayState::default())),
             tree_appends: broadcast::channel(TREE_CHANNEL_CAP).0,
             stream_conns: ConnectionRegistry::new(ConnectionLimits::default()),

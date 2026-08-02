@@ -6,6 +6,7 @@
 //! Run with: `cargo test -p darknyx-tee --test transparency_surface`
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     body::Body,
@@ -171,6 +172,11 @@ async fn repeated_transparency_reads_hit_the_chain_once_per_ttl() {
     let (url, calls) = spawn_counting_rpc().await;
     let mut state = ApiState::for_tests();
     state.solana_rpc = Some(SolanaRpcClient::new(url).unwrap());
+    // Pin the TTL well beyond this test's own runtime. The production value is
+    // ~one slot (400 ms) and the test itself takes ~0.5 s, so asserting "all of
+    // these were served from cache" against the real TTL would be a race on a
+    // loaded runner — a flaky test, or worse a silently vacuous one.
+    state.reserve_cache_ttl = Duration::from_secs(3600);
     // One market → two distinct mints → 2 accounts × 2 reads = 4 RPC calls per
     // UNCACHED render (outstanding + vault balance for each mint).
     let mut market = state
@@ -207,5 +213,44 @@ async fn repeated_transparency_reads_hit_the_chain_once_per_ttl() {
         calls.load(Ordering::SeqCst),
         after_first,
         "25 further requests inside the TTL must not touch the chain again"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_reserve_cache_reads_the_chain_again() {
+    use darknyx_tee::solana_rpc::SolanaRpcClient;
+    use std::sync::atomic::Ordering;
+
+    // The other half of the contract: the cache must not pin a stale answer.
+    // A zero TTL makes every entry expired on inspection, which is exact —
+    // no sleeping, no timing assumptions.
+    let (url, calls) = spawn_counting_rpc().await;
+    let mut state = ApiState::for_tests();
+    state.solana_rpc = Some(SolanaRpcClient::new(url).unwrap());
+    state.reserve_cache_ttl = Duration::ZERO;
+    let mut market = state
+        .instruments
+        .first()
+        .cloned()
+        .expect("for_tests seeds one placeholder instrument");
+    market.base_mint = fr_safe(0xB1);
+    market.quote_mint = fr_safe(0x9E);
+    state.instruments = vec![market];
+    let app = build_router(Arc::new(state));
+
+    assert_eq!(
+        get_public(&app, "/transparency").await.status(),
+        StatusCode::OK
+    );
+    let after_first = calls.load(Ordering::SeqCst);
+    assert!(after_first > 0);
+
+    assert_eq!(
+        get_public(&app, "/transparency").await.status(),
+        StatusCode::OK
+    );
+    assert!(
+        calls.load(Ordering::SeqCst) > after_first,
+        "an expired entry must be refreshed, not served"
     );
 }
