@@ -75,10 +75,17 @@ mod tests {
     }
 
     #[test]
-    fn poseidon_7_arity_matches_note_commitment_use() {
-        // Note commitment uses arity 7: domain_tag + tokenMint[lo] + tokenMint[hi]
-        // + amount + ownerCommitment + nonce + blindingR.
-        let inputs = (0..7).map(|i| Fr::from((i + 1) as u64)).collect::<Vec<_>>();
+    fn poseidon_6_arity_matches_note_commitment_use() {
+        // The live v2 note commitment is arity 6:
+        //   Poseidon6(DOMAIN_NOTE, mint_lo, mint_hi, amount,
+        //             owner_commitment, inner_hash)
+        //
+        // This asserted arity 7 and described the RETIRED v1 form
+        // (`… + nonce + blindingR`), which the v2 `inner_hash` refactor
+        // replaced (SW-30). It still passed, because it only checks that
+        // Poseidon accepts that many inputs — so it read as pinning the
+        // commitment's shape while pinning nothing about it.
+        let inputs = (0..6).map(|i| Fr::from((i + 1) as u64)).collect::<Vec<_>>();
         let h = poseidon_hash(&inputs).unwrap();
         assert_ne!(h, Fr::zero());
     }

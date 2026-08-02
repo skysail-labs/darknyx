@@ -719,9 +719,22 @@ check fails, or proofs don't verify.
 | User commitment | `darkpool-crypto/src/user_commitment.rs` | `sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |
 | Merge output inner | `darkpool-crypto/src/merge.rs::merge_output_inner_hash` | `sdk/src/utxo/merge.ts::deriveMergeOutputInnerHash` | `merge-inner-parity.test.ts` + `merge-prover.test.ts` |
 | Order/cancel canonical | `darkpool-matcher/src/order_canonical.rs` | `sdk/src/orders/canonical.ts` | `order-canonical-parity.test.ts` |
-| Canonical payload hash | `vault::tee_forced_settle.rs::canonical_payload_hash` (shared) + `darknyx-tee/src/settle/payload.rs` | `sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | Rust fixed-vector unit + `settle-builder-batched.test.ts` |
+| Canonical payload hash — **FOUR independent implementations, not one shared** (see note below) | `vault::tee_forced_settle.rs::canonical_payload_hash` · `darknyx-tee/src/settle/payload.rs::canonical_hash` · `vault/tests/settle_harness/mod.rs::canonical_payload_hash` | `sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | `canonical_payload_hash_fixed_vector` (on-chain) + the drift assertion in `payload.rs` + `settle-builder-batched.test.ts` |
 | Match leaf hash | `tee_forced_settle_batched.rs::compute_match_leaf` | `tests/helpers/match-batch-prover.ts::computeBatchLeaf` | `match-batch-prototype.test.ts` leaf-byte assert |
 | Anchor discriminator | Anchor macro `sha256("global:<name>")[..8]` | `sdk/src/idl/vault-client.ts` | every `*-transport.test.ts` |
+
+> **On the canonical payload hash (SW-30).** This row used to read
+> `canonical_payload_hash` "(shared)", which suggests one Rust function both the
+> vault and the enclave call. There are **four**: the on-chain one, the
+> enclave's, the litesvm harness's, and the TS mirror. The duplication is
+> correct and unavoidable — the enclave deliberately does not depend on the
+> vault BPF crate — and the construction is sound (every field is fixed-size, so
+> the `hashv` concatenation is unambiguous, and the domain tag is bumped per
+> layout change). It is also guarded: the on-chain
+> `canonical_payload_hash_fixed_vector` and the enclave's drift assertion in
+> `payload.rs` both pin the same vector. The risk the old wording created was
+> narrower and real: an author reading "(shared)" edits the vault copy and the
+> TS mirror, and misses the other two.
 
 **Change a hash arity / domain tag / field order in ONE language → change
 both, then re-run the parity test.** A Rust-only change fails the parity
