@@ -152,6 +152,9 @@ function mkDaemon(
     subscribeOrders: capture().fn as never,
     verifyAttestation: false, // attestation covered in attestation.test.ts
     verifyRoot: false, // on-chain root gate has dedicated SDK/daemon tests
+    // These suites stand up no CVM and no RPC; boot reconciliation (SW-11) has
+    // its own coverage in reconcile.test.ts.
+    reconcileOnStart: false,
     ...extra,
   });
 }
@@ -449,6 +452,54 @@ describe("Daemon — note-lifecycle hygiene (rolling residual)", () => {
     expect(store.get("c0")).toBeUndefined();
     expect(store.get("c1")).toBeUndefined();
     expect(store.get("c2")).toBeDefined(); // latest kept
+    daemon.stop();
+  });
+});
+
+describe("daemon wiring", () => {
+  it("a fills resync triggers reconciliation and pauses placement", async () => {
+    // The signal existed and both listeners forwarded it; the daemon simply
+    // never passed a handler, so it was discarded at the top of the stack.
+    // Driving the real seam proves the wiring rather than inspecting source.
+    const fills = capture<{ onResync?: (r: string) => void }>();
+    const daemon = mkDaemon({ subscribeFills: fills.fn as never });
+    await daemon.start();
+
+    const events: DaemonEvent[] = [];
+    daemon.subscribe((e) => events.push(e));
+
+    expect(fills.cap.opts?.onResync, "the daemon must hand down onResync").toBeTypeOf(
+      "function",
+    );
+
+    // Fire the 1011 signal the SDK raises on a buffer overrun.
+    fills.cap.opts!.onResync!("buffer overrun");
+
+    // Placement is refused while state is being re-derived — silent drift is
+    // the failure mode this exists to end.
+    await expect(
+      daemon.placeOrder(
+        {
+          symbol: "SOL-USDC",
+          side: OrderSide.Bid,
+          policy: limitPolicy({ priceLimit: 100n }),
+          amount: 500n,
+        },
+        note,
+      ),
+    ).rejects.toThrow(/reconcil/i);
+
+    // And the operator hears about it.
+    expect(
+      events.some(
+        (e) =>
+          e.type === "error" &&
+          e.context === "reconcile" &&
+          /reconciling/i.test(e.message),
+      ),
+      "the operator must hear about it — silent drift is the failure mode this ends",
+    ).toBe(true);
+
     daemon.stop();
   });
 });
