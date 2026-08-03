@@ -224,13 +224,28 @@ impl SettleSchedulerState {
     where
         F: FnOnce(&mut SettleJob),
     {
-        match self.jobs.get_mut(id) {
+        let found = match self.jobs.get_mut(id) {
             Some(job) => {
                 f(job);
                 true
             }
             None => false,
+        };
+        if found {
+            // Prune HERE too, not only at insert. Eviction requires a batch to
+            // be terminal, and a batch becomes terminal in `update`, not in
+            // `insert` — so pruning only on insert leaves the map over the cap
+            // for as long as no new batch arrives. That is the quiet-venue
+            // case: settle activity stops, the last batches all reach `Done`,
+            // and nothing reclaims them until the next batch is enqueued.
+            // Bounded and non-growing, but the bound should hold at rest, not
+            // only under load.
+            //
+            // Cheap: `prune_retained_batches` returns immediately while at or
+            // under the cap, which is every call on the hot path.
+            self.prune_retained_batches();
         }
+        found
     }
 }
 
@@ -667,6 +682,68 @@ mod tests {
         assert!(
             st.status_for_batch(0).is_some(),
             "an in-flight batch must survive retention regardless of age"
+        );
+    }
+
+    /// Retention must also hold when the venue goes QUIET.
+    ///
+    /// Eviction requires a batch to be terminal, and a batch becomes terminal
+    /// in `update`, never in `insert`. So with pruning wired only into `insert`,
+    /// enqueueing past the cap while every batch is still in flight retains
+    /// them all (correctly — they are live), and then draining them to `Done`
+    /// leaves the map permanently over the cap until some *future* batch is
+    /// enqueued. On an idle venue that never comes.
+    ///
+    /// This is the shape the insert-only tests cannot see, because both of them
+    /// transition each job to its terminal stage BEFORE inserting it, so their
+    /// batches are already terminal by the time `insert` prunes.
+    #[test]
+    fn retention_reclaims_terminal_batches_without_a_further_insert() {
+        let mut st = SettleSchedulerState::default();
+        let overshoot = 20u64;
+        let total = MAX_RETAINED_BATCHES as u64 + overshoot;
+
+        // Enqueue past the cap with every job still QUEUED — nothing is
+        // evictable yet, so all of them are legitimately retained.
+        for batch_id in 0..total {
+            st.insert(SettleJob::new(
+                SettleJobId {
+                    batch_id,
+                    match_idx: 0,
+                },
+                dummy_match(1),
+            ));
+        }
+        assert_eq!(
+            st.retained_batches(),
+            total as usize,
+            "in-flight batches must never be evicted, so all are held here"
+        );
+
+        // Now drain them, oldest first, with NO further inserts.
+        for batch_id in 0..total {
+            let id = SettleJobId {
+                batch_id,
+                match_idx: 0,
+            };
+            assert!(
+                st.update(&id, |job| job
+                    .transition(super::super::job::SettleJobStage::Done)),
+                "batch {batch_id} must still be present to transition"
+            );
+        }
+
+        assert!(
+            st.retained_batches() <= MAX_RETAINED_BATCHES,
+            "once terminal, retention must be reclaimed without waiting for the \
+             next insert; got {} > {MAX_RETAINED_BATCHES}",
+            st.retained_batches()
+        );
+        // And it is still the OLDEST that went.
+        assert!(st.status_for_batch(0).is_none(), "oldest batch evicted");
+        assert!(
+            st.status_for_batch(total - 1).is_some(),
+            "newest batch retained"
         );
     }
 

@@ -566,7 +566,12 @@ SW-11.
    instance of the arbitrary-eviction pattern.
 12. **Continue the un-audited-surface carry-forward** in §4 of the August 2
    sweep — the `prover/` encoders and the remaining daemon surface, with
-   the repo-wide gap analysis now recorded in §4 of the August 2 sweep. The
+   the repo-wide gap analysis now recorded in §4 of the August 2 sweep.
+   **"Done" below means the surface has been READ, not that the findings it
+   produced are fixed** — a parenthesised ID is the finding that batch
+   yielded, and its remediation status lives only in its own row above.
+   (Reviewers have read "done (SW-32)" as a completion claim about SW-32;
+   it is not, and the same applies to every ID in this paragraph.) The
    circuits and `darkpool-matcher/algorithm.rs` are **done and clean** (§3);
    `api/stream.rs`, `api/auth.rs`, the API routing layer, `darknyx-tee/keys/`,
    `settle/{payload,assemble,lock_sweep,submit_lock,alt,recover}.rs`,
