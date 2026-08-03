@@ -356,11 +356,26 @@ conceptual summary.
 
 ### 3.0 Tooling
 
-The `phala` CLI is a Node binary; if a broken nvm shim shadows `node`,
-invoke it (and `node`) by absolute path:
-`/Users/<you>/.nvm/versions/node/<ver>/bin/{node,phala}`. `phala cvms list`
-shows the CVM (`app_id`, name, status). `--cvm-id` accepts the `app_id`
-form (`app_<id>`).
+The `phala` CLI is a Node binary. **Resolve both binaries before you start —
+do not assume a path:**
+
+```sh
+command -v phala            # e.g. /opt/homebrew/bin/phala (brew) OR an nvm bin dir
+command -v node
+```
+
+A broken nvm lazy-load shim can shadow `node` in a non-interactive shell; the
+signature is `command not found: _load_nvm` followed by
+`maximum nested function level reached`. When that happens, invoke `node` (and
+`phala`, since it is a Node binary) by the **absolute path `command -v`
+reported**. On the 2026-08 dev box both are `/opt/homebrew/bin/{node,phala}`;
+an earlier revision of this file hardcoded an `~/.nvm/versions/node/<ver>/bin/`
+path that no longer exists, which is why the instruction is now "resolve it"
+rather than a literal path. Note also that GNU `timeout` is not present on
+macOS.
+
+`phala cvms list` shows the CVM (`app_id`, name, status). `--cvm-id` accepts the
+`app_id` form (`app_<id>`).
 
 ### 3.1 Build a new image (tag → CI → ghcr)
 
@@ -465,8 +480,17 @@ collateral; a mismatch → every synthetic note fails `verify_commitment`).
 
 ### 3.3 Deploy + rotate the signer + fund it
 
+> **Never hardcode an `app_id` or a gateway host from this file.** CVMs are
+> deleted and re-provisioned; the `app_634b2ab4…` id this section used to name
+> was gone by 2026-08-04, and the gateway's node suffix (`prod5` / `prod9` / …)
+> is assigned per CVM — the wrong one simply times out with HTTP 000, which
+> reads like a dead enclave rather than a wrong URL. Discover both, every run.
+> (As of 2026-08-04 the CPU CVM in use is **`nightly-test-cvm`**, fronted by
+> `prod9`. Treat that as a starting point for the lookup, not a constant.)
+
 ```sh
-CVM=app_634b2ab4c250466311f0cf09f772b6fd60b5be11   # phala cvms list
+CVM=$(phala cvms list | awk '/<your-cvm-name>/ {print $1}')   # phala cvms list
+test -n "$CVM" || { echo "no such CVM — check the name"; exit 1; }
 phala deploy --cvm-id "$CVM" -c deploy/docker-compose.yaml -e .devnet/darknyx-deploy.env --wait
 if command -v shred >/dev/null 2>&1; then
   shred -u .devnet/darknyx-deploy.env
@@ -475,7 +499,14 @@ else
 fi
 test ! -e .devnet/darknyx-deploy.env
 
-GW="https://<app_id>-8080.dstack-pha-prod5.phala.network"
+# Probe for the node that actually fronts this CVM — the suffix is per-CVM.
+for n in prod9 prod5 prod7; do
+  U="https://$CVM-8080.dstack-pha-$n.phala.network"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$U/info")" = 200 ] \
+    && { GW="$U"; break; }
+done
+test -n "$GW" || { echo "no gateway answered — is the CVM running?"; exit 1; }
+echo "GW=$GW"
 curl -s "$GW/info" | jq -r .tee_pubkey          # the PRIMARY (shard-0) Ed25519 signer
 phala ps "$CVM"                                 # find the container name (normally dstack-darknyx-tee-1)
 phala logs dstack-darknyx-tee-1 --cvm-id "$CVM" --stderr -n 40

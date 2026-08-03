@@ -47,9 +47,12 @@ image** — deploying the old tag runs stale code.
    > detects exactly that; rotate through the account API, or clear the state
    > volume so the environment re-seeds.
 
-4. **The nvm shim can shadow `node`.** If `_load_nvm` recursion errors appear,
-   invoke `node`/`phala` by absolute path, e.g.
-   `/Users/<you>/.nvm/versions/node/<ver>/bin/{node,phala}`.
+4. **The nvm shim can shadow `node`.** If `_load_nvm` recursion errors appear
+   (followed by `maximum nested function level reached`), invoke `node`/`phala`
+   by the absolute path **`command -v` reports** — resolve it, do not copy one
+   from a doc. On the 2026-08 dev box both are `/opt/homebrew/bin/{node,phala}`;
+   this file previously named an `~/.nvm/versions/node/<ver>/bin/` path that no
+   longer exists. GNU `timeout` is also absent on macOS.
 
 5. **Two mutually-exclusive mint regimes (§3).** Real-mint for
    `cvm-settle-e2e`/`cvm-multimatch`/`cvm-api-surface`/`cvm-merge-then-order`;
@@ -194,7 +197,14 @@ else
 fi
 test ! -e .devnet/darknyx-deploy.env
 
-GW="https://<app_id>-8080.dstack-pha-prod5.phala.network"
+# The gateway's node suffix is assigned PER CVM — probe, never hardcode. A wrong
+# suffix returns HTTP 000, which reads like a dead enclave rather than a bad URL.
+for n in prod9 prod5 prod7; do
+  U="https://$CVM-8080.dstack-pha-$n.phala.network"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$U/info")" = 200 ] \
+    && { GW="$U"; break; }
+done
+test -n "$GW" || { echo "no gateway answered — is the CVM running?"; exit 1; }
 phala ps "$CVM"                     # find the darknyx-tee container name (normally dstack-darknyx-tee-1)
 phala logs dstack-darknyx-tee-1 --cvm-id "$CVM" --stderr -n 60
 # Watch for: proving key load, "merkle cold-boot complete … shards=K",

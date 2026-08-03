@@ -45,13 +45,15 @@ GPU** (commit `0400776` + the `git`/`libatomic1` fixups):
 (§10.4, and note §10.5 — most of it does not need a *confidential* GPU) and the **2b GPU
 attestation** work (§6). **Do NOT end the session by stopping the CVM — see §7.**
 
-**Tooling note:** an nvm `node`/`phala` shim can shadow the real binary — if so, point these at the
-absolute nvm path for YOUR node version (find it with `ls "$HOME/.nvm/versions/node"`):
+**Tooling note:** an nvm `node`/`phala` shim can shadow the real binary (the tell is
+`command not found: _load_nvm`, then `maximum nested function level reached`). Resolve the real
+paths rather than assuming an install layout — the binaries may come from Homebrew or from nvm:
 ```
-NVM_BIN="$HOME/.nvm/versions/node/<your-version>/bin"   # e.g. v24.2.0
-PHALA="$NVM_BIN/phala"
-NODE="$NVM_BIN/node"
+PHALA="$(command -v phala)"   # /opt/homebrew/bin/phala on the 2026-08 dev box
+NODE="$(command -v node)"     # /opt/homebrew/bin/node
 ```
+If `command -v` returns the shim itself, fall back to an explicit install path
+(`ls /opt/homebrew/bin/node "$HOME/.nvm/versions/node"`). GNU `timeout` is not present on macOS.
 
 ---
 
