@@ -301,7 +301,7 @@ impl WriteStats {
 }
 
 /// A point-in-time view of the journal's durable-write cost.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct JournalWriteStats {
     pub count: u64,
     pub p50_us: u64,

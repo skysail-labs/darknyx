@@ -243,7 +243,7 @@ against the leaf count, not against the log's own confidence.
 |---|---|---|
 | Settle end-to-end (baseline) | `total_ms=13365` | lock 2474, prove 2251 (witness 276 + prove_step 1944), verify 1834, ALT 1245 + wait 1075, settle 9226 |
 | Prior runs | 14210 / 14573 / 15310 | This run is the fastest of four, on prod9. Still three-to-four samples across differing network conditions — an observation, not a trend. |
-| **Journal durable write** | **p50 8212 µs / 6353 µs** | **Two runs, ONE SAMPLE EACH — see the caveat below. Not yet a percentile.** |
+| **Journal durable write** | **p50 8212 µs / 6353 µs** | **Two runs, ONE SAMPLE EACH — not a percentile. Cause and fix below; the next run reads it from `/admin/drain`.** |
 | Recovery | classified 1 entry, `needs_operator=false` | PF-27's batched reconciliation, first live run |
 
 ### The p50/p95 waiver is NOT yet retired
@@ -263,12 +263,24 @@ also the least representative (cold page cache). They are a useful order of
 magnitude — ~6–8 ms for tmp → fsync → rename → fsync(dir) on the LUKS volume —
 and nothing more.
 
-**To retire the waiver**, the emitter needs a second trigger alongside the time
-throttle: emit when N new samples have accumulated since the last emission (8 is
-enough), or expose the snapshot on `/admin/metrics/settlement` so it can be read
-at any point rather than waited for. `SettleJournal::write_stats()` already
-returns the snapshot, so the second option is wiring, not design. Until then
-this row stays waived.
+**FIXED 2026-08-04 — read it from `/admin/drain` on the next run.** The status
+response now carries `journal_write_us`:
+
+```json
+{"draining":false,"in_flight_settlements":1,"safe_to_stop":false,
+ "journal_write_us":{"count":4,"p50_us":6800,"p95_us":8200,"max_us":8212}}
+```
+
+Read-on-demand has no throttle window, so it does not care that a settle's
+writes arrive in a burst. The drill ALREADY polls this endpoint to find its kill
+moment ([§3](#3-the-trigger-that-works-the-journal-reports-on-itself)), so
+capture the body there — that is the distribution at the instant of the
+interruption — and read it again after recovery. The field is absent, not
+zeroed, before the first successful write.
+
+The throttled log line is unchanged and still useful as an ambient signal; it is
+simply no longer the only way to get the number. Retire this row once a run
+records a `count` above 1.
 
 ---
 
