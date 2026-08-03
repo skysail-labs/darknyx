@@ -663,9 +663,19 @@ jobs:
     name: SBF — cargo build-sbf
     runs-on: ubuntu-latest
     needs: [changes]
+    # MUST stay a superset of `vault-litesvm`'s condition below. That job
+    # downloads this job's `sbf-programs` artifact, so any input that starts
+    # litesvm has to start this too — otherwise litesvm runs with no artifact
+    # to download and dies at the download step with a message that names the
+    # artifact rather than the missing build.
+    #
+    # `circuits` is the one that bit: its path filter includes
+    # `package-lock.json`, so a dependency bump sets circuits=true, rust=false.
+    # This job skipped, litesvm ran, and every deps-only PR failed.
     if: >-
       github.event_name == 'push' ||
-      needs.changes.outputs.rust == 'true'
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.circuits == 'true'
     timeout-minutes: 25
     env:
       # Match the developer's local Agave install. v2.x bundles
@@ -859,7 +869,7 @@ jobs:
         needs.changes.outputs.rust == 'true' ||
         needs.changes.outputs.circuits == 'true'
       ) &&
-      needs['sbf-build'].result != 'failure' &&
+      needs['sbf-build'].result == 'success' &&
       needs.circuits.result != 'failure'
     timeout-minutes: 20
     steps:
