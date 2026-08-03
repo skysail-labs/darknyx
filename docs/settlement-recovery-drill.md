@@ -279,12 +279,13 @@ clean cycle.
 
 ### Honest limitations of this run
 
-* **Per-transition write p50/p95 was not captured.** The cost table lists this
-  as a *mandatory* closing measurement, and it is missing: no instrumentation
-  exists around `SettleJournal::record`, and three end-to-end samples are not
-  percentiles. T-06's `Closed` status therefore rests on an **explicitly recorded
-  waiver** (see the tracker's cost-table row), not on complete evidence. The
-  instrumentation is the first thing to add before the next drill.
+* **Per-transition write p50/p95 was not captured** *(in THIS 2026-07-28 run —
+  the instrumentation landed 2026-08-03; see §7.2)*. The cost table lists it as a
+  *mandatory* closing measurement and it was missing: no instrumentation existed
+  around `SettleJournal::record`, and three end-to-end samples are not
+  percentiles. T-06's `Closed` status therefore rested on an **explicitly
+  recorded waiver** (see the tracker's cost-table row). The next drill run
+  should capture the emitted p50/p95 and retire that waiver.
 * **The `Settling`-stage recovery path was not exercised.** The kill necessarily
   lands at the first journal write, so the entry was at `Locking`. The
   `AlreadySettled` and `Indeterminate` branches remain covered by unit tests only.
@@ -305,8 +306,25 @@ Worth closing when the tooling allows.
    `phala ssh` + `docker kill` would allow targeting any stage, but needs
    development-mode SSH keys on the CVM. Until then the drill can only exercise
    an interruption at the first journal write.
-2. **No p50/p95 for journal writes.** Would need a timing histogram around
-   `SettleJournal::record`, emitted at `info`. Cheap to add; not yet done.
+2. ~~**No p50/p95 for journal writes.**~~ **INSTRUMENTED 2026-08-03.**
+   `SettleJournal::record` now times the flush (tmp → fsync → rename →
+   fsync(dir) — the part the settle waits on) and emits at `info`:
+
+   ```
+   settle-journal durable write cost writes=N entries=M p50_us=.. p95_us=.. max_us=..
+   ```
+
+   Throttled to one line per 10 s, but the FIRST write always emits, so a run
+   interrupted after a handful of writes still yields a number. Grab it with the
+   `journal` grep in step 4 and record it in the measurements table; that closes
+   T-06's waived cost-table row.
+
+   Read the numbers with two caveats: only `record` is sampled (`forget` /
+   `forget_batch` flush after the outcome is known and only shrink the file, so
+   folding them in would understate the write-ahead cost that is actually on the
+   critical path); and failed writes are deliberately NOT sampled, so a disk
+   fault shows up as a stalled `writes` counter plus the fail-closed skip, never
+   as a suspiciously fast p50.
 3. **A journal write failure is now fail-closed, and that path is untested live.**
    A settle whose signature cannot be journaled is skipped and retried rather
    than sent, so a disk fault degrades throughput instead of creating orphans.
