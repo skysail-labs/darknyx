@@ -371,6 +371,18 @@ pub async fn reconcile_at_boot(
     //
     // `getSignatureStatuses` already takes a slice, so the per-entry loop was
     // paying a round trip per signature for an API that never needed one.
+    //
+    // No length check here, unlike `get_multiple_accounts` — the asymmetry is
+    // deliberate. `zip` pairs positionally, so a short response still pairs the
+    // signatures it DID return correctly and simply records fewer; a missing
+    // status then reads as `None`, which is the documented weak-signal
+    // behaviour above and defers to the consumed PDAs. A length check also
+    // would not catch the case that could actually mislead — statuses returned
+    // in a different ORDER, which is equal-length. And `get_signature_statuses`
+    // cannot be tightened client-side without regressing the settle path:
+    // `submit_lock.rs` deliberately tolerates a short array via `.get()`,
+    // treating a missing entry as "not yet confirmed" so its confirm loop keeps
+    // polling instead of failing.
     let sigs: Vec<String> = entries
         .iter()
         .filter_map(|e| e.settle_sig.as_deref().map(str::to_string))

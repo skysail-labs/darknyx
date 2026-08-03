@@ -245,16 +245,24 @@ async fn sweep(
         }
     }
 
-    // `zip` TRUNCATES, so a short `reads` would silently drop the tail of
-    // `commitments` — those locks would never be swept and their rent never
-    // reclaimed, with no error anywhere. Every chunk above extends by exactly
-    // `chunk.len()` on both the success and failure paths, so this holds by
-    // construction; the assertion is here so a future edit to that loop cannot
-    // break it quietly.
+    // `zip` TRUNCATES, so a short `reads` would skip the tail of `commitments`
+    // this tick. That is self-healing, NOT a leak: the skipped commitments are
+    // only ever removed from `pending` by the arms below, so they are still
+    // there on the next tick and get examined then. (An earlier version of this
+    // comment claimed the rent was never reclaimed; that was wrong, and it is
+    // why the check is a `debug_assert` rather than a hard one.)
+    //
+    // Deliberately NOT `assert_eq!`. Every chunk above extends by exactly
+    // `chunk.len()` on both the success and failure paths, so this cannot fire;
+    // and if it somehow did, a panic here is strictly worse than the thing it
+    // guards. `sweep` runs inside the task spawned by `spawn_lock_sweeper`,
+    // whose `JoinHandle` is dropped at the call site in `main.rs` — so a panic
+    // kills lock reclamation for the process lifetime, silently, in exchange
+    // for preventing a one-tick delay that resolves itself.
     debug_assert_eq!(
         reads.len(),
         commitments.len(),
-        "one read per pending lock, or zip drops the tail"
+        "one read per pending lock, or zip skips the tail"
     );
     let mut expired: Vec<[u8; 32]> = Vec::with_capacity(commitments.len());
     for (commitment, read) in commitments.into_iter().zip(reads) {
