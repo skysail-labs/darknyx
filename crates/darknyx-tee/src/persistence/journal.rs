@@ -284,11 +284,16 @@ impl WriteStats {
     }
 
     /// True at most once per [`WRITE_SUMMARY_EVERY`], and only with new data.
-    fn should_emit(&mut self, now: Instant) -> bool {
+    ///
+    /// `emitted_at` must be the time of the EMISSION DECISION, not the start of
+    /// the work being measured — stamping `last_emit` with a pre-flush instant
+    /// leaves the throttle already expired after any flush longer than the
+    /// interval.
+    fn should_emit(&mut self, emitted_at: Instant) -> bool {
         match self.last_emit {
-            Some(t) if now.duration_since(t) < WRITE_SUMMARY_EVERY => false,
+            Some(t) if emitted_at.duration_since(t) < WRITE_SUMMARY_EVERY => false,
             _ => {
-                self.last_emit = Some(now);
+                self.last_emit = Some(emitted_at);
                 true
             }
         }
@@ -404,7 +409,18 @@ impl SettleJournal {
         // settle waits on before it may submit.
         let started = Instant::now();
         let result = self.flush();
-        let elapsed_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        // ONE timestamp taken after the flush, used for both the duration and
+        // the throttle. Passing `started` to `should_emit` was wrong: it stamps
+        // `last_emit` with a time from BEFORE the write, so a flush that took
+        // longer than the interval — exactly the degraded-storage case the
+        // summary exists to reveal — would leave the throttle already expired
+        // and let the next write emit immediately, breaking the documented
+        // one-line-per-interval bound precisely when logs matter most.
+        let finished = Instant::now();
+        let elapsed_us = finished
+            .duration_since(started)
+            .as_micros()
+            .min(u64::MAX as u128) as u64;
 
         // A FAILED write is not a sample of what a write costs — it may have
         // aborted early — and counting it would pull the distribution toward
@@ -413,7 +429,7 @@ impl SettleJournal {
         // reason not to submit.
         if result.is_ok() {
             self.write_stats.record(elapsed_us);
-            if self.write_stats.should_emit(started) {
+            if self.write_stats.should_emit(finished) {
                 if let Some((p50, p95)) = self.write_stats.percentiles() {
                     tracing::info!(
                         writes = self.write_stats.count,
