@@ -31,7 +31,7 @@ services:
     # diverged Merkle mirror now fails closed instead of serving).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
-    image: ghcr.io/skysail-labs/darknyx-tee@sha256:ea1836feda3464fd07d5990f24dcb0339ef484e2cf0d26410784c10c4cb75f90
+    image: ghcr.io/skysail-labs/darknyx-tee@sha256:066b70cc5787e8259d1272b69073e645a83ba8bf7f79d9d9f672b8b60272d0f6
     restart: unless-stopped
 
     # /var/run/dstack.sock gives the container access to:
