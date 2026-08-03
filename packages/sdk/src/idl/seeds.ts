@@ -22,7 +22,8 @@ export const OUTSTANDING_MINT_SEED = enc("outstanding_mint");
 // `BatchValidityMarker` (one per batch, keyed by Merkle root).
 export const BATCH_VALIDITY_MARKER_SEED = enc("batch_validity");
 
-export const DARK_CLOB_SEED = enc("dark_clob");
-export const MATCHING_CONFIG_SEED = enc("matching_config");
-export const BATCH_RESULTS_SEED = enc("batch_results");
-export const PENDING_ORDER_SEED = enc("pending_order");
+// A seed belongs here only while `programs/vault/src/state.rs` still declares
+// it (SW-25). If one looks "missing", check there before adding it back: a seed
+// with no owning program derives an address nothing will ever own, and the
+// mistake surfaces far away as `AccountNotFound` / `ConstraintSeeds (2006)`
+// rather than at build time.

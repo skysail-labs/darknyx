@@ -48,9 +48,22 @@ async fn transparency_is_public_and_reports_mirror_and_identity() {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    // Reserves: mirror root (64-hex) + leaf_count from the mirror.
-    assert_eq!(v["reserves"]["merkle_root"].as_str().unwrap().len(), 64);
-    assert_eq!(v["reserves"]["leaf_count"], 2);
+    // Reserves: per-shard roots + counts, plus the explicitly-named totals.
+    //
+    // The old assertions read `merkle_root` and `leaf_count` as a matched pair.
+    // They never were: the root was shard 0's while the count was the all-shard
+    // SUM, so a consumer folding one against the other got a root the tree
+    // never had (SW-06). The names now say which is which.
+    assert_eq!(
+        v["reserves"]["shard0_merkle_root"].as_str().unwrap().len(),
+        64
+    );
+    assert_eq!(v["reserves"]["total_leaf_count"], 2);
+    let shards = v["reserves"]["shards"].as_array().unwrap();
+    assert_eq!(shards.len(), 1, "for_tests builds a single shard");
+    assert_eq!(shards[0]["tree_id"], 0);
+    assert_eq!(shards[0]["leaf_count"], 2);
+    assert_eq!(shards[0]["merkle_root"].as_str().unwrap().len(), 64);
     // No RPC client in test mode → per_mint reserves empty.
     assert_eq!(v["reserves"]["per_mint"].as_array().unwrap().len(), 0);
 
@@ -253,4 +266,63 @@ async fn an_expired_reserve_cache_reads_the_chain_again() {
         calls.load(Ordering::SeqCst) > after_first,
         "an expired entry must be refreshed, not served"
     );
+}
+
+/// SW-05 — `/transparency` publishes a solvency claim, so a read that is not
+/// provably from the vault's own account must report `stale`, not a fabricated
+/// zero. The addresses are PDA-derived so this is not currently exploitable;
+/// the point is that `stale` should mean what its documentation says.
+#[tokio::test]
+async fn reserves_are_stale_when_an_account_is_not_the_vaults() {
+    use darknyx_tee::solana_rpc::SolanaRpcClient;
+
+    // A mock that returns a well-formed account owned by SOMEONE ELSE, with
+    // enough bytes to satisfy the offset reads.
+    async fn spawn_foreign_owner_rpc() -> String {
+        use axum::{routing::post, Json, Router};
+        use base64::Engine as _;
+        use serde_json::{json, Value};
+
+        async fn handle(Json(req): Json<Value>) -> Json<Value> {
+            let id = req.get("id").cloned().unwrap_or(json!(1));
+            let data = base64::engine::general_purpose::STANDARD.encode(vec![7u8; 200]);
+            Json(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "context": { "slot": 1 },
+                    "value": {
+                        "lamports": 1u64,
+                        // Not the vault, not the token program.
+                        "owner": "11111111111111111111111111111111",
+                        "data": [data, "base64"],
+                        "executable": false,
+                        "rentEpoch": 0u64,
+                    }
+                },
+            }))
+        }
+        let app = Router::new().route("/", post(handle));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    let mut state = ApiState::for_tests();
+    state.solana_rpc = Some(SolanaRpcClient::new(spawn_foreign_owner_rpc().await).unwrap());
+    let app = build_router(Arc::new(state));
+
+    let resp = get_public(&app, "/transparency").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let per_mint = v["reserves"]["per_mint"].as_array().unwrap();
+    assert!(!per_mint.is_empty(), "the placeholder market has mints");
+    for row in per_mint {
+        assert_eq!(
+            row["stale"], true,
+            "a foreign-owned account must read as stale, not as a real 0: {row}"
+        );
+    }
 }

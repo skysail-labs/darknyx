@@ -27,7 +27,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { existsSync } from "node:fs";
 
-import { noteCommitmentV2 } from "../src/utxo/note.js";
+import {
+  noteCommitmentV2,
+  nullifierV2,
+  ownerCommitment,
+} from "../src/utxo/note.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -147,21 +151,26 @@ describe("Note commitment parity — v2 (TS vs Rust)", () => {
   // mod-reduces). This test pins the current behaviour so any future change is
   // intentional.
   ait(
-    "Rust strictly rejects out-of-field inputs; TS silently reduces",
+    "BOTH languages reject an out-of-field input (SW-23)",
     async () => {
       // 0x33 * (256^32 - 1) / 255 ≈ 0.2 * 2^256, just above BN254 r.
       const outOfFieldHex = "33".repeat(32);
       const mintHex = "01".repeat(32);
 
-      // TS path silently reduces and produces a hash without throwing.
-      const tsOK = await noteCommitmentV2({
-        tokenMint: bytesFromHex32(mintHex),
-        amount: 1n,
-        ownerCommitment: bigintFromHex32(outOfFieldHex),
-        innerHash: 1n,
-      });
-      expect(tsOK).toBeInstanceOf(Uint8Array);
-      expect(tsOK.length).toBe(32);
+      // This test used to be named "Rust strictly rejects out-of-field inputs;
+      // TS silently reduces" and ASSERTED that divergence: circomlibjs'
+      // `p.F.e()` reduced mod r and returned a hash, while Rust errored. So the
+      // same input produced a value on one side and a failure on the other, in
+      // exactly the primitive CLAUDE.md §7 pins byte-for-byte — and the test
+      // documented it as expected rather than flagging it. TS now rejects too.
+      await expect(
+        noteCommitmentV2({
+          tokenMint: bytesFromHex32(mintHex),
+          amount: 1n,
+          ownerCommitment: bigintFromHex32(outOfFieldHex),
+          innerHash: 1n,
+        }),
+      ).rejects.toThrow(/outside \[0, BN254_r\)/);
 
       // Rust path rejects with NotInField.
       const res = spawnSync(
@@ -173,6 +182,33 @@ describe("Note commitment parity — v2 (TS vs Rust)", () => {
       expect(res.stderr).toContain("NotInField");
     },
   );
+
+  // The REDUCING helpers have their own boundary, and it is not the same one.
+  //
+  // `ownerCommitment` and `nullifierV2` deliberately reduce their spending-key
+  // input mod r, because Rust reduces there too (`Fr::from_be_bytes_mod_order`)
+  // — that asymmetry is the whole subtlety of SW-23 and is pinned by
+  // `nullifier-parity.test.ts`. But Rust reduces BYTES, which cannot be
+  // negative, so a negative bigint has no Rust counterpart at all. Wrapping it
+  // (`((v % r) + r) % r`) invented one: `-1n` became a perfectly valid-looking
+  // `r - 1` commitment that the Rust side could never derive.
+  it("rejects a negative spending key rather than wrapping it into the field", async () => {
+    await expect(ownerCommitment(-1n, 1n)).rejects.toThrow(/negative/);
+    await expect(nullifierV2(-1n, 1n)).rejects.toThrow(/negative/);
+  });
+
+  it("still reduces a legitimately oversized (256-bit) spending key", async () => {
+    // The guard must not become "reject everything out of range" — that would
+    // break the real derivation path, where a 256-bit key is reduced on BOTH
+    // sides. Rejecting here would be a divergence, not a fix.
+    const oversized = (1n << 255n) + 7n;
+    await expect(ownerCommitment(oversized, 1n)).resolves.toEqual(
+      expect.any(BigInt),
+    );
+    await expect(nullifierV2(oversized, 1n)).resolves.toBeInstanceOf(
+      Uint8Array,
+    );
+  });
 
   ait("matches on amount = 0 and large u64", async () => {
     const mintHex = "ff".repeat(16) + "00".repeat(16); // mixed high/low halves

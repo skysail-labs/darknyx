@@ -48,7 +48,24 @@ export interface TeeAttestation {
   mrtd: string;
   /** Raw hex quote, for an out-of-band audit. */
   quote: string;
-  /** 32-byte boot-session id to bind into order signatures. */
+  /**
+   * 32-byte boot-session id, hex — the S-07 session scope signed into every
+   * order and cancel.
+   *
+   * **NOT ATTESTED (SW-18).** Every other field on this object is either
+   * DCAP-derived or quote-bound; this one is read from the unauthenticated
+   * `/info` and simply carried alongside `dcapVerified: true`. The quote's
+   * `report_data` is `nonce ‖ SHA-256(signer_set)` and is FULL at 64 bytes, so
+   * there is no room to bind the session without changing what `report_data`
+   * commits to (the reason T-03 stayed deferred).
+   *
+   * The ceiling is low and worth stating so nobody over-reacts to this comment:
+   * the TEE validates the session at intake, so a gateway serving a WRONG value
+   * causes rejections — a denial of service it could achieve by simply not
+   * answering — and cannot cause a STALE session to be accepted. The structural
+   * point is only that S-07's scoping rests on a field attestation does not
+   * cover, and a reader should not infer otherwise from its neighbours.
+   */
   bootSessionId: string;
 }
 

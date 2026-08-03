@@ -4,14 +4,21 @@
 //!     state the daemon writes to as orders arrive.
 //!   - `OracleCache` (this crate, `oracle/cache.rs`) — populated
 //!     by the `oracle_sync` background task.
-//!   - `darkpool_matcher::run_batch(...)` — the pure algorithm,
-//!     same crate the on-chain ix calls.
+//!   - `darkpool_matcher::PreparedMatchTick::next_page(...)` — the pure
+//!     algorithm, same crate the on-chain ix calls.
+//!
+//!     NOT `run_batch`, which these lines used to name (SW-28). The two differ
+//!     in `single_fill_per_order`: `next_page` passes `true`, so a
+//!     partially-filled order is relocked and NOT re-matched within the batch,
+//!     while `run_batch` chains. A reader auditing the matcher from the enclave
+//!     inward landed on the wrong function and reasoned about chaining
+//!     semantics the enclave never uses.
 //!
 //! Every `BATCH_MS` (default 2 s, per D5), the driver:
 //!   1. Sweeps the book of expired orders (cheap range-scan on
 //!      the per-expiry-slot index).
 //!   2. Snapshots the book + the oracle cache.
-//!   3. Calls `darkpool_matcher::run_batch(...)`.
+//!   3. Calls `darkpool_matcher::PreparedMatchTick::next_page(...)`.
 //!   4. Reserves matched orders as `pending_settlement` without changing
 //!      quantities or publishing fills.
 //!   5. Ships the `RunBatchOutput` to the settle scheduler. Each order update
@@ -750,7 +757,7 @@ impl MatcherDriver {
                         error = %e,
                         orders_in_snapshot = prepared.snapshot_len(),
                         page,
-                        "matcher run_batch failed; ending tick"
+                        "matcher next_page failed; ending tick"
                     );
                     break;
                 }

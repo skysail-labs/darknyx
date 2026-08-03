@@ -19,7 +19,18 @@ use tokio::sync::Mutex;
 /// One `Histogram<u64>` per latency stream + atomic counters for
 /// the lock-free totals. Wrapped in `Arc<...>` by the run driver.
 pub struct RunMetrics {
+    /// Latency of ACCEPTED submits only.
+    ///
+    /// SW-27: this recorded every outcome — `Ok`, 4xx, 429, 5xx and network
+    /// errors alike — and the report printed the resulting P50/P95/P99 with no
+    /// qualifier. An intake rejection is fast, because it fails before any
+    /// matcher work, so a rejection-heavy run reported *better* percentiles than
+    /// a healthy one. The number moved the wrong way under exactly the
+    /// conditions you would be measuring.
     pub submit_latency_us: Mutex<Histogram<u64>>,
+    /// Latency of REJECTED submits, kept separately rather than discarded — a
+    /// rejection storm has its own shape worth seeing.
+    pub submit_latency_rejected_us: Mutex<Histogram<u64>>,
     pub cancel_latency_us: Mutex<Histogram<u64>>,
     pub match_latency_us: Mutex<Histogram<u64>>,
 
@@ -47,6 +58,7 @@ impl RunMetrics {
             || Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("valid hist bounds");
         Arc::new(Self {
             submit_latency_us: Mutex::new(new_hist()),
+            submit_latency_rejected_us: Mutex::new(new_hist()),
             cancel_latency_us: Mutex::new(new_hist()),
             match_latency_us: Mutex::new(new_hist()),
             submits_total: AtomicU64::new(0),
@@ -67,12 +79,16 @@ impl RunMetrics {
     // value makes `record` return Err, which — discarded — would
     // silently DROP the sample and bias the tail (P99) downward.
     // Clamping records it at the max bucket instead.
-    pub async fn record_submit_latency_us(&self, us: u64) {
-        let _ = self
-            .submit_latency_us
-            .lock()
-            .await
-            .record(us.clamp(1, 60_000_000));
+    /// Record a submit's latency into the histogram matching its OUTCOME
+    /// (SW-27). Accepted and rejected submits measure different things and must
+    /// not share a percentile.
+    pub async fn record_submit_latency_us(&self, us: u64, outcome: SubmitOutcome) {
+        let hist = if matches!(outcome, SubmitOutcome::Ok) {
+            &self.submit_latency_us
+        } else {
+            &self.submit_latency_rejected_us
+        };
+        let _ = hist.lock().await.record(us.clamp(1, 60_000_000));
     }
 
     pub async fn record_cancel_latency_us(&self, us: u64) {
@@ -174,5 +190,100 @@ impl CounterSnapshot {
             return 0.0;
         }
         self.submits_ok as f64 / self.submits_total as f64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SW-27 — accepted and rejected submits must not share a histogram.
+    ///
+    /// They measure different things: a rejection fails at intake, before any
+    /// matcher work, so it is systematically FASTER. Pooled, a rejection-heavy
+    /// run reported BETTER percentiles than a healthy one — the number moved
+    /// the wrong way under exactly the conditions being measured, which is
+    /// worse than having no number.
+    ///
+    /// One sample in each, at values far enough apart that a leak in either
+    /// direction changes the other's max.
+    #[tokio::test]
+    async fn each_outcome_lands_in_its_own_histogram() {
+        let m = RunMetrics::new();
+        m.record_submit_latency_us(1_000, SubmitOutcome::Ok).await;
+        m.record_submit_latency_us(9_000, SubmitOutcome::Status4xx)
+            .await;
+
+        let accepted = m.submit_latency_us.lock().await;
+        let rejected = m.submit_latency_rejected_us.lock().await;
+        assert_eq!(accepted.len(), 1, "accepted histogram holds its one sample");
+        assert_eq!(rejected.len(), 1, "rejected histogram holds its one sample");
+        // `count_at`, not `max()`: HDR reports a bucket's highest equivalent
+        // value, so `max()` on a 9_000 sample is 9_007 and an equality
+        // assertion there would be pinning quantization, not routing.
+        assert_eq!(accepted.count_at(1_000), 1, "accept recorded in its own");
+        assert_eq!(
+            accepted.count_at(9_000),
+            0,
+            "rejection must NOT appear here"
+        );
+        assert_eq!(rejected.count_at(9_000), 1, "rejection recorded in its own");
+        assert_eq!(rejected.count_at(1_000), 0, "accept must NOT appear here");
+    }
+
+    /// Every non-Ok outcome is a rejection, not just `Status4xx`. A `match` arm
+    /// added later that forgot one would silently pollute the accepted
+    /// percentiles again.
+    #[tokio::test]
+    async fn every_non_ok_outcome_counts_as_rejected() {
+        let m = RunMetrics::new();
+        for outcome in [
+            SubmitOutcome::Status4xx,
+            SubmitOutcome::RateLimited,
+            SubmitOutcome::Status5xx,
+            SubmitOutcome::NetworkError,
+        ] {
+            m.record_submit_latency_us(5_000, outcome).await;
+        }
+        assert_eq!(m.submit_latency_us.lock().await.len(), 0);
+        assert_eq!(m.submit_latency_rejected_us.lock().await.len(), 4);
+    }
+
+    /// The split has to reach the REPORT, not just the histograms — an operator
+    /// reads the rendered table, and an unlabelled "submit" row is what made
+    /// the pooled number misleading in the first place.
+    #[tokio::test]
+    async fn the_report_labels_both_submit_rows() {
+        use crate::config::RunConfig;
+        use crate::report::{render_markdown, ReportInputs};
+        use clap::Parser;
+
+        let cfg = RunConfig::parse_from([
+            "darknyx-tee-loadgen",
+            "--endpoint",
+            "http://127.0.0.1:8080",
+            "--oracle-twap",
+            "100",
+        ]);
+        let m = RunMetrics::new();
+        m.record_submit_latency_us(1_000, SubmitOutcome::Ok).await;
+        m.record_submit_latency_us(9_000, SubmitOutcome::Status4xx)
+            .await;
+
+        let out = render_markdown(ReportInputs {
+            cfg: &cfg,
+            metrics: &m,
+            elapsed: std::time::Duration::from_secs(1),
+        })
+        .await;
+
+        assert!(
+            out.contains("submit (accepted)"),
+            "report must label the accepted row"
+        );
+        assert!(
+            out.contains("submit (rejected)"),
+            "report must label the rejected row"
+        );
     }
 }

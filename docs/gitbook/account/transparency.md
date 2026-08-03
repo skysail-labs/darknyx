@@ -34,8 +34,12 @@ Public, with no authentication.
 ```json
 {
   "reserves": {
-    "merkle_root": "…",
-    "leaf_count": 4096,
+    "shards": [
+      { "tree_id": 0, "merkle_root": "…", "leaf_count": 1024 },
+      { "tree_id": 1, "merkle_root": "…", "leaf_count": 1024 }
+    ],
+    "shard0_merkle_root": "…",
+    "total_leaf_count": 4096,
     "per_mint": [
       {
         "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
@@ -62,8 +66,9 @@ Public, with no authentication.
 
 | Field | Type | Description |
 |---|---|---|
-| `reserves.merkle_root` | string | Shard 0's Merkle root. There is no single global root; read every shard through `/tree/root`. |
-| `reserves.leaf_count` | integer | Total note commitments across all shards. |
+| `reserves.shards[]` | array | One entry per shard: `tree_id`, that shard's `merkle_root`, and the `leaf_count` **under that root**. There is no single global root, so this is the only lossless form — prefer it. |
+| `reserves.shard0_merkle_root` | string | Shard 0's root, kept for pre-sharding consumers. |
+| `reserves.total_leaf_count` | integer | Total note commitments across **all** shards — not the count under `shard0_merkle_root`. |
 | `per_mint[].mint` | string | The SPL mint, base58. |
 | `per_mint[].outstanding` | string | Sum of unspent note value for this mint in smallest token units, the venue's liability. |
 | `per_mint[].vault_balance` | string | Actual SPL balance held in the vault in smallest token units, the assets. |

@@ -750,17 +750,36 @@ components:
       properties:
         reserves:
           type: object
-          required: [merkle_root, leaf_count, per_mint]
+          required: [shards, shard0_merkle_root, total_leaf_count, per_mint]
           properties:
-            merkle_root:
+            shards:
+              type: array
+              description: |
+                Per-shard root + leaf count. There is no single global root —
+                each shard has its own — so this is the only lossless form.
+
+                This replaces a bare `merkle_root` (shard 0's) that sat beside a
+                `leaf_count` (the all-shard SUM). Both were documented, but as
+                adjacent fields they read as a matched pair, and folding the
+                count against that root yields a root the tree never had
+                (SW-06).
+              items:
+                type: object
+                required: [tree_id, merkle_root, leaf_count]
+                properties:
+                  tree_id: { type: integer }
+                  merkle_root: { type: string }
+                  leaf_count: { type: integer }
+            shard0_merkle_root:
               type: string
               description: |
-                Shard-0 root. Under tree-sharding each
-                shard has its own root; read per-shard via
-                `/tree/root?tree_id=`.
-            leaf_count:
+                Shard 0's root, kept for pre-sharding consumers. Prefer
+                `shards`.
+            total_leaf_count:
               type: integer
-              description: Total leaves SUMMED across all `num_trees` shards.
+              description: |
+                Total leaves SUMMED across all `num_trees` shards — NOT the leaf
+                count under `shard0_merkle_root`.
             per_mint:
               type: array
               items:

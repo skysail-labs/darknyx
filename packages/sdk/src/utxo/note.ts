@@ -22,11 +22,69 @@
  */
 
 import { buildPoseidon } from "circomlibjs";
-import { bn254ToBE32 } from "../keys/key-generators.js";
+import { BN254_R, bn254ToBE32 } from "../keys/key-generators.js";
 
 type PoseidonFn = ((inputs: bigint[]) => Uint8Array) & {
   F: { toObject: (x: Uint8Array) => bigint };
 };
+
+/**
+ * Reject a value the Rust side would reject (SW-23).
+ *
+ * circomlibjs' `p.F.e(i)` **reduces** anything >= the BN254 modulus. Rust does
+ * one of two things depending on the input, and TypeScript has to match each:
+ *
+ * * `fr_from_be_bytes` **rejects** out-of-range (`PoseidonFailed 6030`). That
+ *   is the rule for values that are already field elements — `inner_hash`,
+ *   `owner_commitment`, mint halves, amounts. TypeScript silently reduced them,
+ *   so the same input produced a hash on one side and an error on the other, in
+ *   exactly the primitive CLAUDE.md §7 pins byte-for-byte. That is what this
+ *   guards.
+ * * `Fr::from_be_bytes_mod_order` **reduces** — used deliberately for the
+ *   256-bit spending key. Reduction there is the matching behaviour, not a
+ *   divergence, and `nullifier-parity.test.ts` pins it. So this must NOT be
+ *   applied blanket inside the Poseidon wrapper; doing that broke that test,
+ *   which is how the distinction surfaced.
+ *
+ * `bn254ToBE32` already range-checks on the way OUT; the asymmetry was only on
+ * the way in. Matching Rust means failing rather than reducing, because a silent
+ * reduction changes which note is being committed to.
+ */
+function assertInField(label: string, value: bigint): bigint {
+  if (value < 0n || value >= BN254_R) {
+    throw new Error(
+      `${label} is outside [0, BN254_r) — circomlibjs would silently reduce it ` +
+        "while the Rust side rejects it, so the two would disagree on the hash",
+    );
+  }
+  return value;
+}
+
+/**
+ * Reduce mod r, matching Rust's `Fr::from_be_bytes_mod_order`.
+ *
+ * NEGATIVES ARE REJECTED, not wrapped. Rust reduces *bytes*, so a negative has
+ * no counterpart there — `((v % r) + r) % r` was inventing a mapping the pinned
+ * side cannot express, silently turning `-1n` into a perfectly valid-looking
+ * `r - 1` commitment. That is the same silent-reduction failure SW-23 is about,
+ * on a different axis: reduction is correct for a 256-bit key that Rust also
+ * reduces, and wrong for an input Rust could never have received.
+ *
+ * Every in-repo caller passes the output of `beToBigInt` over 32 bytes, which
+ * is non-negative by construction, so this rejects only a caller that hand-built
+ * a signed value — a bug, and one worth surfacing at the call rather than as a
+ * commitment nobody can open.
+ */
+function toField(value: bigint): bigint {
+  if (value < 0n) {
+    throw new Error(
+      "field input is negative — Rust reduces bytes and has no negative to " +
+        "match, so wrapping it here would produce a commitment the Rust side " +
+        "could never derive",
+    );
+  }
+  return value % BN254_R;
+}
 
 let cached: PoseidonFn | null = null;
 async function getPoseidon(): Promise<PoseidonFn> {
@@ -39,10 +97,12 @@ async function getPoseidon(): Promise<PoseidonFn> {
   return fn;
 }
 
-/** Hash an array of field elements (each in [0, BN254_r)) -> 32-byte BE result. */
+/** Hash an array of field elements (each in [0, BN254_r)) -> 32-byte BE result.
+ *  Out-of-range inputs are REJECTED, matching `fr_from_be_bytes` (SW-23). */
 export async function poseidonHashBytesBE(
   inputs: bigint[],
 ): Promise<Uint8Array> {
+  inputs.forEach((v, i) => assertInField(`poseidon input ${i}`, v));
   const p = await getPoseidon();
   const packed = p(inputs);
   // circomlibjs returns a Montgomery-form Uint8Array. Convert to canonical bigint.
@@ -72,7 +132,10 @@ export async function ownerCommitment(
   blinding: bigint,
 ): Promise<bigint> {
   const p = await getPoseidon();
-  const packed = p([DOMAIN_OWNER, spendingKey, blinding]);
+  // Both inputs are derived key material that Rust parses with
+  // `Fr::from_be_bytes_mod_order` (`owner_commitment` takes `&Fr`), so reduction
+  // is the matching behaviour here — the same distinction as `nullifierV2`.
+  const packed = p([DOMAIN_OWNER, toField(spendingKey), toField(blinding)]);
   return p.F.toObject(packed);
 }
 
@@ -110,6 +173,13 @@ export async function nullifierV2(
   innerHash: bigint,
 ): Promise<Uint8Array> {
   const p = await getPoseidon();
-  const packed = p([DOMAIN_NULL, spendingKey, innerHash]);
+  // The spending key is REDUCED on both sides — Rust's helper uses
+  // `Fr::from_be_bytes_mod_order`. `inner_hash` is already a field element and
+  // Rust rejects it out of range, so it is checked rather than reduced.
+  const packed = p([
+    DOMAIN_NULL,
+    toField(spendingKey),
+    assertInField("nullifier inner_hash", innerHash),
+  ]);
   return bn254ToBE32(p.F.toObject(packed));
 }

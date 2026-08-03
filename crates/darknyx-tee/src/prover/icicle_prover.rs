@@ -31,9 +31,69 @@ use icicle_snark::{groth16_prove, CacheManager};
 
 use super::ark_prover::{build_circom_and_check, circom_input_json, load_circom_cfg};
 use super::convert::proof_to_onchain_bytes;
+use super::gpu_cc::{confidential_compute_state, CcState};
 use super::groth16::{ProofWithInputs, Prover, ProverError, ProverTimings};
 use super::inputs::{build_batch_public_inputs, BatchPublicInputs};
 use super::snarkjs::{assert_public_inputs, native_witness_wtns, parse_snarkjs_proof};
+
+/// Escape hatch for benchmarking on a NON-confidential GPU. Never production.
+const ALLOW_INSECURE_GPU: &str = "DARKNYX_TEE_ICICLE_ALLOW_INSECURE_GPU";
+
+/// Refuse CUDA unless the GPU is provably in confidential-compute mode (SW-32).
+///
+/// # Why this is a hard gate and not a warning
+///
+/// The `.wtns` handed to `groth16_prove` encodes the **full private witness** —
+/// every per-slot `base_amount` / `quote_amount`, both owner commitments, the
+/// change and fee amounts, and the clearing price. Those are exactly the values
+/// the amount-privacy work (P1b/P3b) exists to keep off-chain.
+///
+/// Selecting CUDA moves that witness into GPU device memory. On a
+/// confidential-compute GPU it is encrypted and attested; on an ordinary one it
+/// is plainly readable by the host driver. So TDX's confidentiality guarantee
+/// ends at the accelerator boundary, and before this it was held by nothing but
+/// an environment variable set by hand — the requirement was written in the
+/// comment directly above the code that ignored it.
+///
+/// # Fail closed
+///
+/// An unavailable or unparseable check REJECTS CUDA rather than falling
+/// through to it. "We could not determine whether the GPU protects this data"
+/// and "the GPU protects this data" must not be the same outcome; getting that
+/// backwards is how a check becomes decoration.
+fn authorize_cuda() -> Result<(), ProverError> {
+    match confidential_compute_state() {
+        CcState::On => {
+            tracing::info!("icicle CUDA authorized — GPU confidential compute is ON");
+            Ok(())
+        }
+        state => {
+            // Deliberate, loud, and separately named: the CUDA parity gate
+            // (`tests/icicle_cuda_parity.rs`) runs on commodity H100/H200 boxes
+            // that have no CC mode, and that measurement is worth keeping
+            // cheap. It must never be reachable by accident, so it is its own
+            // variable rather than a value of the device variable, and it says
+            // "INSECURE" in the name.
+            if std::env::var(ALLOW_INSECURE_GPU).is_ok_and(|v| v == "1") {
+                tracing::error!(
+                    ?state,
+                    "{ALLOW_INSECURE_GPU}=1 — proving on a GPU that is NOT in \
+                     confidential-compute mode. The private match witness \
+                     (trade amounts, owner commitments, clearing price) is \
+                     readable by the host. BENCHMARKING ONLY."
+                );
+                return Ok(());
+            }
+            Err(ProverError::Io(format!(
+                "refusing DARKNYX_TEE_ICICLE_DEVICE=CUDA: GPU confidential compute is {state:?}. \
+                 The prover witness carries plaintext trade amounts and owner commitments, which \
+                 a non-confidential GPU exposes to the host. Set {ALLOW_INSECURE_GPU}=1 ONLY for \
+                 benchmarking on hardware that holds no real order flow."
+            )))
+        }
+    }
+}
+
 use super::witness::MatchSlotWitness;
 use super::wtns::serialize_wtns;
 
@@ -118,6 +178,11 @@ impl IcicleMatchBatchProver {
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "CPU".to_string());
+
+        // SW-32: the requirement above was written down and never checked.
+        if device.eq_ignore_ascii_case("CUDA") {
+            authorize_cuda()?;
+        }
 
         // Spawn the dedicated thread that owns the !Send CacheManager.
         let (job_tx, job_rx) = channel::<ProveJob>();

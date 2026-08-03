@@ -22,6 +22,7 @@ import type { StoredNote } from "./note-store.js";
 import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, ownerCommitment } from "./note.js";
 import { bn254ToBE32, deriveBlindingFactor } from "../keys/key-generators.js";
+import { assertPublicInputs } from "../zk/assert-public-inputs.js";
 import { buildDepositInstruction, merkleTreePda } from "../idl/vault-client.js";
 import { readNoteCreatedLeafIndex } from "./leaf-index.js";
 import { deriveDepositInnerHash } from "./deposit-inner.js";
@@ -161,14 +162,7 @@ export function getDepositFunction({
         bn254ToBE32(params.amount),
         recoveryNonceBytes,
       ];
-      if (
-        proof.publicInputs.length !== expectedPublic.length ||
-        proof.publicInputs.some(
-          (value, index) => !bytesEqual(value, expectedPublic[index]),
-        )
-      ) {
-        throw new Error("VALID_DEPOSIT prover returned unexpected public inputs");
-      }
+      assertPublicInputs("VALID_DEPOSIT", proof.publicInputs, expectedPublic);
     } catch (e) {
       throw new DarkPoolError("proof-generation", (e as Error).message, e);
     }

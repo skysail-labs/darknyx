@@ -7,7 +7,7 @@
 //! vault's actual SPL `vault_balance`. The v2 solvency invariant is
 //! `vault_balance >= outstanding`; anyone can verify it here without
 //! trusting the TEE (and can re-derive both directly from Solana). The
-//! Merkle `merkle_root` + `leaf_count` come from the in-memory mirror.
+//! Merkle shard roots + counts come from the in-memory mirror.
 //!
 //! `tee` carries the engine's attestation IDENTITY (app/compose/mrtd +
 //! signer pubkey) — enough to tie this response to a measured image;
@@ -25,9 +25,18 @@ use std::time::{Duration, Instant};
 use axum::{extract::State, Json};
 use serde::Serialize;
 
+use sha2::{Digest, Sha256};
+use solana_address::Address;
+use std::sync::LazyLock;
+
 use super::state::ApiState;
-use crate::settle::vault::{outstanding_mint_pda, vault_token_account_pda};
+use crate::settle::vault::{outstanding_mint_pda, vault_program_id, vault_token_account_pda};
 use crate::solana_rpc::SolanaRpcClient;
+
+/// SPL Token program — the owner every vault token account must have.
+fn spl_token_program_id() -> Address {
+    Address::from_str_const("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+}
 
 /// How long a reserve snapshot is reused before the chain is read again.
 ///
@@ -80,10 +89,30 @@ pub struct PerMintReserve {
     pub stale: bool,
 }
 
-#[derive(Debug, Serialize)]
-pub struct Reserves {
+/// One shard's mirror state.
+#[derive(Debug, Clone, Serialize)]
+pub struct ShardRoot {
+    pub tree_id: u8,
     pub merkle_root: String,
     pub leaf_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Reserves {
+    /// Per-shard roots + counts. There is no single global root — each shard
+    /// has its own — so this is the only lossless form.
+    ///
+    /// SW-06: this used to be a bare `merkle_root` (shard 0's) sitting beside a
+    /// `leaf_count` (the all-shard SUM). The code comment said so, but as two
+    /// adjacent public fields they read as a matched pair, and a consumer that
+    /// folded the count against that root would get a root the tree never had.
+    /// The names now say which is which.
+    pub shards: Vec<ShardRoot>,
+    /// Shard 0's root, kept for pre-sharding consumers. Prefer `shards`.
+    pub shard0_merkle_root: String,
+    /// Total notes across ALL shards — not the leaf count under
+    /// `shard0_merkle_root`.
+    pub total_leaf_count: u64,
     pub per_mint: Vec<PerMintReserve>,
 }
 
@@ -160,12 +189,59 @@ async fn read_reserves_cached(state: &Arc<ApiState>, mints: &[[u8; 32]]) -> Vec<
     per_mint
 }
 
+/// `sha256("account:OutstandingMint")[..8]`.
+static OUTSTANDING_MINT_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
+    let hash = Sha256::digest(b"account:OutstandingMint");
+    let mut d = [0u8; 8];
+    d.copy_from_slice(&hash[..8]);
+    d
+});
+
+/// Whether an account really is the vault-owned Anchor account we think it is
+/// (SW-05).
+///
+/// The addresses here are PDA-derived, so this is not currently exploitable —
+/// but the endpoint publishes a **solvency claim**, and `stale` is documented
+/// to mean "these numbers are unknown, do not read the 0 as a healthy empty
+/// reserve". Reading offsets out of whatever bytes came back, without checking
+/// the account is the vault's and carries the right discriminator, is how a 0
+/// from some other account would be published as a real balance. This is the
+/// same F-08 check the vault applies to its own raw marker reads.
+fn owned_and_tagged(
+    acc: &crate::solana_rpc::RpcAccountInfo,
+    expected_discriminator: Option<&[u8; 8]>,
+    expected_owner: &Address,
+) -> bool {
+    if acc.owner != *expected_owner {
+        return false;
+    }
+    match expected_discriminator {
+        Some(d) => acc.data.len() >= 8 && &acc.data[..8] == d.as_slice(),
+        // SPL token accounts carry no Anchor discriminator; ownership by the
+        // token program plus the fixed layout is the whole check available.
+        None => true,
+    }
+}
+
 async fn read_reserve(rpc: &SolanaRpcClient, mint: &[u8; 32]) -> PerMintReserve {
     let (om_pda, _) = outstanding_mint_pda(mint);
     let (vt_pda, _) = vault_token_account_pda(mint);
 
     let mut stale = false;
     let outstanding = match rpc.get_account_info(&om_pda).await {
+        Ok(Some(acc))
+            if !owned_and_tagged(
+                &acc,
+                Some(&OUTSTANDING_MINT_DISCRIMINATOR),
+                &vault_program_id(),
+            ) =>
+        {
+            tracing::warn!(
+                "transparency: outstanding_mint is not a vault-owned OutstandingMint account"
+            );
+            stale = true;
+            0
+        }
         Ok(Some(acc)) => match read_u64_le(&acc.data, OUTSTANDING_OFFSET) {
             Some(v) => v,
             None => {
@@ -182,6 +258,11 @@ async fn read_reserve(rpc: &SolanaRpcClient, mint: &[u8; 32]) -> PerMintReserve 
         }
     };
     let vault_balance = match rpc.get_account_info(&vt_pda).await {
+        Ok(Some(acc)) if !owned_and_tagged(&acc, None, &spl_token_program_id()) => {
+            tracing::warn!("transparency: vault_token_account is not SPL-token-owned");
+            stale = true;
+            0
+        }
         Ok(Some(acc)) => match read_u64_le(&acc.data, SPL_AMOUNT_OFFSET) {
             Some(v) => v,
             None => {
@@ -212,13 +293,24 @@ pub async fn get_transparency(State(state): State<Arc<ApiState>>) -> Json<Transp
     // `leaf_count` is the SUM across all shard mirrors (total notes in the
     // pool); `merkle_root` is shard 0's root (there is no single global root —
     // each shard has its own; clients fetch per-shard roots via /tree/root).
-    let (merkle_root, leaf_count) = {
-        let root = hex::encode(state.merkle_mirror(0).read().await.root());
+    let (shards, shard0_merkle_root, total_leaf_count) = {
+        let mut shards = Vec::with_capacity(state.merkle_mirrors.len());
         let mut total = 0u64;
-        for shard in &state.merkle_mirrors {
-            total += shard.read().await.leaf_count();
+        for (tree_id, shard) in state.merkle_mirrors.iter().enumerate() {
+            let m = shard.read().await;
+            let count = m.leaf_count();
+            total += count;
+            shards.push(ShardRoot {
+                tree_id: tree_id as u8,
+                merkle_root: hex::encode(m.root()),
+                leaf_count: count,
+            });
         }
-        (root, total)
+        let shard0 = shards
+            .first()
+            .map(|s| s.merkle_root.clone())
+            .unwrap_or_default();
+        (shards, shard0, total)
     };
 
     // Unique market mints across all instruments.
@@ -256,8 +348,9 @@ pub async fn get_transparency(State(state): State<Arc<ApiState>>) -> Json<Transp
 
     Json(TransparencySnapshot {
         reserves: Reserves {
-            merkle_root,
-            leaf_count,
+            shards,
+            shard0_merkle_root,
+            total_leaf_count,
             per_mint,
         },
         tee,

@@ -100,6 +100,13 @@ real-settle-chain = [
 [dev-dependencies]
 # Smoke test needs to drive darknyx-tee in-process with the feature
 # on so it can seed the oracle via the debug endpoint.
+#
+# THE `[dev-dependencies]` PLACEMENT IS LOAD-BEARING (SW-33). `debug_endpoints`
+# exposes an unauthenticated oracle-write route. It stays out of production
+# builds only because this edge is a DEV dependency and the workspace is on
+# resolver v2, which does not unify dev-only feature requests into normal
+# builds. Moving this line into `[dependencies]` ships that route in the
+# enclave. Enforced by `scripts/check-no-debug-endpoints.sh`.
 darknyx-tee = { path = "../darknyx-tee", features = ["debug_endpoints"] }
 darkpool-matcher = { path = "../darkpool-matcher" }
 tokio   = { workspace = true, features = ["full", "test-util"] }

@@ -18,6 +18,8 @@ import {
 import type { Buffer as NodeBuffer } from "node:buffer";
 
 import { getWithdrawFunction } from "../src/utxo/withdraw.js";
+import { noteCommitmentV2 } from "../src/utxo/note.js";
+import { bn254ToBE32 } from "../src/keys/key-generators.js";
 import type {
   AccountInfoProvider,
   MerkleProofProvider,
@@ -48,15 +50,39 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
       throw new Error("not used in withdraw test");
     },
   };
+  /** Set by a test to the commitment the SDK will compute locally (SW-26). */
+  expectedNoteCommitment: Uint8Array | null = null;
+  /**
+   * Set by a test to corrupt the otherwise-correct public signals, so the SW-26
+   * check is exercised with everything else about the withdraw unchanged.
+   */
+  corruptPublicInputs: ((v: Uint8Array[]) => Uint8Array[]) | null = null;
   spend = {
     prove: async (inputs: SpendInputs) => {
       this.capturedSpendInputs.push(inputs);
-      return {
+      const proof = {
         piA: new Uint8Array(64).fill(0xaa),
         piB: new Uint8Array(128).fill(0xbb),
         piC: new Uint8Array(64).fill(0xcc),
-        publicInputs: [],
+        // Public signals are now validated on every prove path (SW-26), so the
+        // stub has to produce the real vector rather than `[]`. Order mirrors
+        // `programs/vault/src/instructions/withdraw.rs`.
+        publicInputs: [
+          // The note commitment is computed by the CIRCUIT, not passed in, so
+          // the stub echoes what the caller set on `expectedNoteCommitment`.
+          this.expectedNoteCommitment ?? new Uint8Array(32),
+          bn254ToBE32(inputs.merkleRoot),
+          bn254ToBE32(inputs.nullifier),
+          bn254ToBE32(inputs.tokenMint[0]),
+          bn254ToBE32(inputs.tokenMint[1]),
+          bn254ToBE32(inputs.amount),
+          bn254ToBE32(inputs.recipient[0]),
+          bn254ToBE32(inputs.recipient[1]),
+        ],
       };
+      return this.corruptPublicInputs
+        ? { ...proof, publicInputs: this.corruptPublicInputs(proof.publicInputs) }
+        : proof;
     },
   };
   merge = {
@@ -139,6 +165,9 @@ describe("getWithdrawFunction", () => {
       ownerCommitment: 3n,
       innerHash: 9n,
     };
+    // Public signals are validated on every prove path now (SW-26), so the
+    // stub must return the vector the SDK computes locally.
+    prover.expectedNoteCommitment = await noteCommitmentV2(notePlaintext);
 
     const receipt = await getWithdrawFunction({ client })({
       payer: new PublicKey(mintBytes),
@@ -191,6 +220,71 @@ describe("getWithdrawFunction", () => {
     expect(d[tailStart]).toBe(0xaa);
     expect(d[tailStart + 64]).toBe(0xbb);
     expect(d[tailStart + 64 + 128]).toBe(0xcc);
+  });
+
+  // SW-26: the on-chain verifier rebuilds its public inputs from the
+  // INSTRUCTION data, never from the proof, so a prover that returns signals
+  // for a different statement yields a transaction that fails on-chain as
+  // `InvalidProof (6000)` — after the fee is spent, far from the cause. The
+  // prover is injectable (`client.zkProver`) and the daemon's runs in a
+  // separate process, so this is a real shape rather than a theoretical one.
+  //
+  // Both cases assert the transaction is NEVER SENT. Asserting only that the
+  // call rejects would pass even if the send happened first and the throw came
+  // afterwards, which is the failure that costs money.
+  describe("public-signal validation before send", () => {
+    async function withdrawWith(
+      corrupt: (v: Uint8Array[]) => Uint8Array[],
+    ): Promise<{ error: Error | null; sent: TransactionInstruction[] }> {
+      const ixs: TransactionInstruction[] = [];
+      const providers = makeProviders(ixs);
+      const prover = new FakeProverSuite();
+      const client = makeClient(providers, prover);
+
+      const mintBytes = new Uint8Array(32);
+      for (let i = 0; i < 32; i++) mintBytes[i] = i + 1;
+      const notePlaintext = {
+        tokenMint: mintBytes,
+        amount: 250_000n,
+        ownerCommitment: 3n,
+        innerHash: 9n,
+      };
+      prover.expectedNoteCommitment = await noteCommitmentV2(notePlaintext);
+      prover.corruptPublicInputs = corrupt;
+
+      let error: Error | null = null;
+      try {
+        await getWithdrawFunction({ client })({
+          payer: new PublicKey(mintBytes),
+          tokenMint: mintBytes,
+          amount: 250_000n,
+          destinationTokenAccount: new PublicKey(mintBytes),
+          notePlaintext,
+          leafIndex: 3n,
+        });
+      } catch (e) {
+        error = e as Error;
+      }
+      return { error, sent: ixs };
+    }
+
+    it("refuses a public-input vector of the wrong length", async () => {
+      const { error, sent } = await withdrawWith((v) => v.slice(0, v.length - 1));
+      expect(error?.message).toMatch(/public inputs/i);
+      expect(sent).toHaveLength(0);
+    });
+
+    it("refuses a vector whose element disagrees with the local value", async () => {
+      // Same length, one element changed — the case a length check alone
+      // cannot see, and the one that corresponds to proving a different note.
+      const { error, sent } = await withdrawWith((v) => {
+        const out = v.map((x) => Uint8Array.from(x));
+        out[1] = new Uint8Array(32).fill(0x7f); // merkle_root
+        return out;
+      });
+      expect(error?.message).toMatch(/public inputs/i);
+      expect(sent).toHaveLength(0);
+    });
   });
 
   it("rejects partial withdrawals", async () => {

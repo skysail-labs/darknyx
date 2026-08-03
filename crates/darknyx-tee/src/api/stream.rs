@@ -195,6 +195,19 @@ impl StreamResponse {
 /// Unauthenticated frames are let through here and rejected by the `*_core`
 /// login check immediately after — there is no account to charge, and
 /// pre-login frames are already bounded by the socket's own limits.
+/// Order-lifecycle kinds after which the order can no longer rest on the book,
+/// so cancel-on-disconnect has nothing left to cancel.
+///
+/// `pending_settlement` and `partially_filled` are deliberately NOT terminal:
+/// the first still has collateral committed, and the second leaves a remainder
+/// resting that a disconnect must still sweep.
+fn is_terminal_order_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "fully_filled" | "cancelled" | "expired" | "settlement_failed"
+    )
+}
+
 async fn order_rate_guard(
     state: &ApiState,
     s: &Session,
@@ -307,6 +320,10 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>, conn: Connec
     // absolute rather than idle-based.
     let opened_at = Instant::now();
     let login_deadline = conn.limits().login_deadline;
+    // Baseline for the server-side fan-out lag signal (SW-31).
+    let opened_at_epoch = state
+        .resync_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
     let mut lifecycle_tick = interval(Duration::from_secs(1));
     lifecycle_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
@@ -344,6 +361,18 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>, conn: Connec
             },
 
             r = opt_recv(&mut s.sub_orders) => {
+                // Retire the order from the cancel-on-disconnect set the moment
+                // it leaves the book (SW-29). It was inserted on place and
+                // removed only on an explicit cancel/modify — never on a fill
+                // or an expiry, which for a market maker is most of them, so
+                // the set grew for the life of the socket while holding order
+                // ids the enclave has no further use for. The disconnect sweep
+                // then walked every one of them.
+                if let Ok(update) = &r {
+                    if is_terminal_order_kind(update.kind) {
+                        s.session_orders.remove(&update.order_id);
+                    }
+                }
                 if push_or_close(&mut socket, "orders", r, &mut seq).await { break; }
             }
             r = opt_recv(&mut s.sub_fills) => {
@@ -354,6 +383,26 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<ApiState>, conn: Connec
             }
 
             _ = lifecycle_tick.tick() => {
+                // A SERVER-side fan-out lag lost messages before any per-account
+                // channel saw them, so this socket is not slow and would never
+                // be closed by `push_or_close` — it would just hold a silently
+                // incomplete view (SW-31). The router cannot say which accounts
+                // lost what, so every session resyncs.
+                let epoch = state.resync_epoch.load(std::sync::atomic::Ordering::Acquire);
+                if epoch != opened_at_epoch {
+                    tracing::warn!(
+                        opened_at_epoch, epoch,
+                        "/v1/stream: server fan-out lagged; closing for resync"
+                    );
+                    let _ = socket
+                        .send(Message::Close(Some(CloseFrame {
+                            code: 1011,
+                            reason: "server fan-out lagged — reopen to resync".into(),
+                        })))
+                        .await;
+                    break;
+                }
+
                 // Unauthenticated sockets die on the absolute deadline. Checked
                 // before the idle timer because a ping-only peer keeps
                 // `last_activity` fresh forever — that combination is exactly

@@ -154,7 +154,7 @@ By domain, additionally:
 | A circom circuit | `CRYPTOGRAPHY.md` §7, then the circuit + its `vk_*.rs` + its `*-prover.test.ts`. **See [§5](#5-touching-circuits-the-failure-mode-thats-bitten-us) — the disaster section.** |
 | A `vault` instruction | `CRYPTOGRAPHY.md` §8, `programs/vault/src/state.rs` (PDA layout), the litesvm test in `programs/vault/tests/`. |
 | `crates/darkpool-crypto` | The matching `*-parity.test.ts` under `packages/sdk/tests/`. **Every host-side primitive has a byte-equality contract with TS.** |
-| `crates/darkpool-matcher` | `tests/parity.rs` + `change_note_parity.rs` + `order_canonical.rs`'s tests. The matcher's `run_batch`/`run_batch_capped` is the single source of truth. A change to `change_note::derive_inner` triggers a triple-port (matcher Rust ↔ TS in `e2e-helpers.ts` ↔ the on-chain hashers). |
+| `crates/darkpool-matcher` | `tests/parity.rs` + `change_note_parity.rs` + `order_canonical.rs`'s tests. The matcher algorithm is the single source of truth. **The enclave calls `PreparedMatchTick::next_page` (`single_fill_per_order: true`), NOT `run_batch`** — `run_batch` chains partial fills within a batch and exists for tests and legacy callers (SW-28); naming both here read as an endorsement of an entry point production does not use. A change to `change_note::derive_inner` triggers a triple-port (matcher Rust ↔ TS in `e2e-helpers.ts` ↔ the on-chain hashers). |
 | `crates/darknyx-tee` (the in-TEE binary) | `docs/tee-architecture.md` (§11 auth model, §13 the iterate/spot-check/ceremony dev loop), `docs/tee-attestation-flow.md`, `docs/tee-api-openapi.yaml`. See [§4 of this file](#4-tee-development-workflow--iterate--spot-check--ceremony). |
 | The settle pipeline / journal / persistence | `docs/settlement-recovery-drill.md` — the crash-recovery + drain drill and its pass criteria. Re-run it when any of these change. |
 | The SDK | The corresponding `tests/*-transport.test.ts` / parity test. `idl/vault-client.ts` hand-codes every discriminator + Borsh layout (no Anchor IDL runtime) — keep it in sync with the on-chain structs by hand. |
@@ -267,6 +267,7 @@ bash scripts/build-vault-sbf.sh devnet-admin        # NOT a bare build-sbf: writ
                                                     #   stale .so can't be validated silently
 cargo build --examples -p darkpool-crypto           # parity tests shell out to these
 cargo clippy --workspace --all-targets -- -D warnings
+bash scripts/check-no-debug-endpoints.sh            # /__debug must stay off by default (SW-33)
 bash scripts/check-no-doctests.sh                   # nextest skips doctests; this
                                                     #   fails if one ever appears
 cargo nextest run --workspace                       # unit + litesvm integration.
@@ -718,9 +719,22 @@ check fails, or proofs don't verify.
 | User commitment | `darkpool-crypto/src/user_commitment.rs` | `sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |
 | Merge output inner | `darkpool-crypto/src/merge.rs::merge_output_inner_hash` | `sdk/src/utxo/merge.ts::deriveMergeOutputInnerHash` | `merge-inner-parity.test.ts` + `merge-prover.test.ts` |
 | Order/cancel canonical | `darkpool-matcher/src/order_canonical.rs` | `sdk/src/orders/canonical.ts` | `order-canonical-parity.test.ts` |
-| Canonical payload hash | `vault::tee_forced_settle.rs::canonical_payload_hash` (shared) + `darknyx-tee/src/settle/payload.rs` | `sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | Rust fixed-vector unit + `settle-builder-batched.test.ts` |
+| Canonical payload hash — **FOUR independent implementations, not one shared** (see note below) | `vault::tee_forced_settle.rs::canonical_payload_hash` · `darknyx-tee/src/settle/payload.rs::canonical_hash` · `vault/tests/settle_harness/mod.rs::canonical_payload_hash` | `sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | `canonical_payload_hash_fixed_vector` (on-chain) + the drift assertion in `payload.rs` + `settle-builder-batched.test.ts` |
 | Match leaf hash | `tee_forced_settle_batched.rs::compute_match_leaf` | `tests/helpers/match-batch-prover.ts::computeBatchLeaf` | `match-batch-prototype.test.ts` leaf-byte assert |
 | Anchor discriminator | Anchor macro `sha256("global:<name>")[..8]` | `sdk/src/idl/vault-client.ts` | every `*-transport.test.ts` |
+
+> **On the canonical payload hash (SW-30).** This row used to read
+> `canonical_payload_hash` "(shared)", which suggests one Rust function both the
+> vault and the enclave call. There are **four**: the on-chain one, the
+> enclave's, the litesvm harness's, and the TS mirror. The duplication is
+> correct and unavoidable — the enclave deliberately does not depend on the
+> vault BPF crate — and the construction is sound (every field is fixed-size, so
+> the `hashv` concatenation is unambiguous, and the domain tag is bumped per
+> layout change). It is also guarded: the on-chain
+> `canonical_payload_hash_fixed_vector` and the enclave's drift assertion in
+> `payload.rs` both pin the same vector. The risk the old wording created was
+> narrower and real: an author reading "(shared)" edits the vault copy and the
+> TS mirror, and misses the other two.
 
 **Change a hash arity / domain tag / field order in ONE language → change
 both, then re-run the parity test.** A Rust-only change fails the parity

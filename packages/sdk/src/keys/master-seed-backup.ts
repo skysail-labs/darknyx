@@ -19,7 +19,36 @@ import { MASTER_SEED_BYTES } from "./key-generators.js";
 export const MASTER_SEED_BACKUP_FORMAT = "darknyx-master-seed-backup" as const;
 export const MASTER_SEED_BACKUP_VERSION = 2 as const;
 
-const KDF = { name: "scrypt", n: 16_384, r: 8, p: 1 } as const;
+/**
+ * Write-side KDF profile.
+ *
+ * SW-22: this was `n: 16_384` (2^14) while `daemon/src/keystore.ts` uses 2^17
+ * and calls 2^14 `LEGACY_SCRYPT`, kept only to migrate v1 files. Both protect
+ * the SAME 64-byte master seed, and the exposure profile ran backwards: the
+ * keystore is an operational file on a running host, while this is the portable
+ * offline backup — the artifact most likely to be copied to another machine,
+ * synced to cloud storage, or printed. The more-exposed copy had the weaker KDF.
+ */
+const KDF = { name: "scrypt", n: 131_072, r: 8, p: 1 } as const;
+
+/**
+ * Profiles accepted when READING. Older backups were written at 2^14 and must
+ * keep opening.
+ *
+ * An allowlist, not "trust `kdf.n` from the file": an attacker-supplied backup
+ * could otherwise name an enormous `n` (a memory-exhaustion trigger on the
+ * machine doing the restore) or a trivially small one, and the file's own
+ * fields are not authenticated until after the KDF has already run.
+ */
+const ACCEPTED_KDF_N: readonly number[] = [16_384, 131_072];
+
+/**
+ * scrypt's working set is ~`128 * N * r` bytes: 128 MiB at N=2^17, r=8. Node
+ * rejects the call unless `maxmem` clears that, and leaving it to the default
+ * would make a valid invocation fail. Explicit so neither a runtime default nor
+ * an untrusted file field controls the allocation.
+ */
+const KDF_MAXMEM = 256 * 1024 * 1024;
 const CIPHER = "aes-256-gcm" as const;
 const AAD = Buffer.from("darknyx/master-seed-backup/v2", "utf8");
 const MIN_PASSPHRASE_LENGTH = 12;
@@ -29,7 +58,13 @@ export interface EncryptedMasterSeedBackupV2 {
   version: typeof MASTER_SEED_BACKUP_VERSION;
   kdf: {
     name: typeof KDF.name;
-    n: typeof KDF.n;
+    /**
+     * scrypt cost. This type describes a file that may have been written by an
+     * OLDER version, so it is the accepted set, not the current write value —
+     * pinning it to `typeof KDF.n` would make a legacy backup fail to typecheck
+     * as well as to open. Validated at runtime against `ACCEPTED_KDF_N`.
+     */
+    n: 16_384 | 131_072;
     r: typeof KDF.r;
     p: typeof KDF.p;
     salt: string;
@@ -61,12 +96,16 @@ function decodeHex(value: unknown, bytes: number, label: string): Buffer {
   return Buffer.from(value, "hex");
 }
 
-function deriveBackupKey(passphrase: string, salt: Buffer): Buffer {
+function deriveBackupKey(
+  passphrase: string,
+  salt: Buffer,
+  n: number = KDF.n,
+): Buffer {
   return scryptSync(passphrase, salt, 32, {
-    N: KDF.n,
+    N: n,
     r: KDF.r,
     p: KDF.p,
-    maxmem: 64 * 1024 * 1024,
+    maxmem: KDF_MAXMEM,
   });
 }
 
@@ -134,7 +173,7 @@ function parseBackup(
     backup.version !== MASTER_SEED_BACKUP_VERSION ||
     !kdf ||
     kdf.name !== KDF.name ||
-    kdf.n !== KDF.n ||
+    !ACCEPTED_KDF_N.includes(kdf.n) ||
     kdf.r !== KDF.r ||
     kdf.p !== KDF.p ||
     !cipher ||
@@ -160,7 +199,9 @@ export function importEncryptedMasterSeed(
     "backup ciphertext",
   );
   const tag = decodeHex(backup.cipher.tag, 16, "backup authentication tag");
-  const key = deriveBackupKey(passphrase, salt);
+  // Derive at the profile the FILE was written with (validated against
+  // `ACCEPTED_KDF_N` above), so backups written before the raise still open.
+  const key = deriveBackupKey(passphrase, salt, backup.kdf.n);
   let plaintext: Buffer | null = null;
   try {
     const decipher = createDecipheriv(CIPHER, key, iv);

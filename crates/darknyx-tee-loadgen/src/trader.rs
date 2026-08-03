@@ -183,7 +183,9 @@ async fn run_submit(ctx: &TraderCtx, body: &serde_json::Value) -> SubmitOutcome 
         Err(_) => SubmitOutcome::NetworkError,
     };
     ctx.metrics.note_submit(outcome);
-    ctx.metrics.record_submit_latency_us(elapsed_us).await;
+    ctx.metrics
+        .record_submit_latency_us(elapsed_us, outcome)
+        .await;
     outcome
 }
 

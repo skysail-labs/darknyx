@@ -52,8 +52,22 @@ mod rapidsnark_sys;
 #[cfg(feature = "icicle")]
 pub mod icicle_prover;
 
+// GPU confidential-compute gate (SW-32). Always compiled — see the module doc.
+pub(crate) mod gpu_cc;
+
+// Witness scratch-dir selection (SW-14). Always compiled — see the module doc.
+pub(crate) mod scratch;
+
 // Snarkjs-format proof helpers shared by the rapidsnark + icicle backends.
-#[cfg(any(feature = "rapidsnark", feature = "icicle"))]
+//
+// Always compiled, for the same reason as `scratch` above: this module holds
+// the SW-15 group-element validation, and gating it behind the backend features
+// would mean its tests never run — `rapidsnark` does not build without a native
+// library present, and neither feature is in the default gate. A validation
+// whose tests only execute in an environment nobody builds locally is not
+// validated. The dead-code allow is scoped to exactly the configuration where
+// the callers are absent, so a real regression in a backend build still fails.
+#[cfg_attr(not(any(feature = "rapidsnark", feature = "icicle")), allow(dead_code))]
 mod snarkjs;
 
 pub use ark_prover::ArkMatchBatchProver;

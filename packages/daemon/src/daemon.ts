@@ -567,6 +567,11 @@ export class Daemon {
         fetchImpl: this.fetchImpl,
         strict: this.config.attestationStrict,
       });
+      // NOT quote-bound (SW-18): this comes from the unauthenticated `/info`
+      // even on the attested path, because the quote's 64-byte `report_data` is
+      // already full with `nonce ‖ SHA-256(signer_set)`. A wrong value gets
+      // orders rejected at intake — a DoS the gateway could achieve by not
+      // answering — but cannot make a STALE session accepted.
       this.bootSessionId = fromHex(this.attestationResult.bootSessionId);
       if (this.config.attestOnchainCheck) {
         this.expectedTeePubkeys = [...this.attestationResult.teePubkeys];

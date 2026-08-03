@@ -22,6 +22,8 @@ import {
   pubkeyToFrPair,
 } from "./note.js";
 import { buildMergeInstruction } from "../idl/vault-client.js";
+import { assertPublicInputs } from "../zk/assert-public-inputs.js";
+import { bn254ToBE32 } from "../keys/key-generators.js";
 import { readNoteMergedLeafIndex } from "./leaf-index.js";
 import type { StoredNote } from "./note-store.js";
 
@@ -213,6 +215,28 @@ export function getMergeFunction({
         merklePath,
         merkleIndices,
       });
+      // Validate the prover's public signals against a locally computed
+      // vector (SW-26). `valid-deposit-prover.ts` and `utxo/deposit.ts` both
+      // do this; merge and withdraw did not.
+      //
+      // The on-chain verifier rebuilds its public inputs from the INSTRUCTION
+      // data, so a prover returning signals for different values yields a proof
+      // that fails on-chain — a wasted transaction and a confusing
+      // `InvalidProof (6000)` far from the cause. More to the point, an
+      // untrusted or swapped prover is exactly what this catches: the caller
+      // asked to merge specific notes, and this is the only place that
+      // confirms the proof is about those notes before it is submitted.
+      //
+      // Order mirrors `programs/vault/src/instructions/merge.rs`:
+      //   [output_commitment, input_commitments[0..k], merkle_root, mint_lo, mint_hi]
+      const expectedPublic: Uint8Array[] = [
+        outputCommitment,
+        ...inputCommitmentBytes,
+        merkleRoot,
+        bn254ToBE32(mintLo),
+        bn254ToBE32(mintHi),
+      ];
+      assertPublicInputs("VALID_MERGE", proof.publicInputs, expectedPublic);
     } catch (e) {
       throw new DarkPoolError("proof-generation", (e as Error).message, e);
     }

@@ -563,6 +563,21 @@ async fn prepare_order(
     //     verifies — which is the direction that matters, since S-02's harm is
     //     entirely on-chain.
     if state.settle_enabled {
+        // Range-check the shard (SW-21). `tree_id` is deliberately outside the
+        // signed canonical body on the grounds that a wrong shard only
+        // self-harms — the proof's root is checked against that shard's ring
+        // and misses. That holds for an IN-RANGE wrong shard. It does not hold
+        // out of range: `merkle_mirror` CLAMPS to shard 0, so an out-of-range
+        // id silently validates the root against a shard the caller did not
+        // name, and the order is booked carrying a `tree_id` the settle path
+        // cannot use.
+        let shards = state.num_mirror_shards();
+        if usize::from(req.tree_id) >= shards {
+            return Err(ApiError::malformed(format!(
+                "tree_id {} is out of range; this venue has {} shard(s)",
+                req.tree_id, shards
+            )));
+        }
         let mirror = state.merkle_mirror(req.tree_id as usize);
         let known_root = mirror.read().await.contains_root(&lock_merkle_root);
         if !known_root {

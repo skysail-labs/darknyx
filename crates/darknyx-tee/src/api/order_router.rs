@@ -146,7 +146,19 @@ pub fn spawn_order_router(state: Arc<ApiState>) {
                         }
                     }
                     Err(RecvError::Lagged(skipped)) => {
-                        tracing::warn!(skipped, "order router lagged on matcher broadcast");
+                        // The messages are gone before any per-account channel
+                        // saw them, so no client is slow and none would be
+                        // closed — every connected session would silently hold
+                        // an incomplete view (SW-31). Bump the epoch so the
+                        // sessions close 1011 and re-derive from the chain.
+                        tracing::error!(
+                            skipped,
+                            "order router lagged on the matcher broadcast; \
+                             signalling every session to resync"
+                        );
+                        state
+                            .resync_epoch
+                            .fetch_add(1, std::sync::atomic::Ordering::Release);
                     }
                     Err(RecvError::Closed) => break,
                 }

@@ -50,7 +50,35 @@ services:
       # docs/tee-architecture.md §8 + §11.6.
       - darknyx_state:/var/lib/darknyx-tee
 
+    # RAM-backed scratch for the prover's witness (SW-14). `input.json` carries
+    # the PRIVATE witness — per-slot trade amounts, both owner commitments, the
+    # clearing price — i.e. exactly what amount-privacy (P1b/P3b) took off-chain.
+    # It used to land in the container's writable overlay via `temp_dir()`.
+    #
+    # That overlay IS encrypted at rest (dstack bind-mounts Docker's data-root
+    # onto the LUKS data disk), which is why the finding is Medium and not High.
+    # But that is a property of the host image established two layers away, and
+    # a tmpfs keeps the bytes in guest RAM — which TDX encrypts in hardware —
+    # so they never reach storage at all. `noexec,nosuid` because nothing here
+    # is ever executed.
+    #
+    # `uid`/`gid` are NOT optional. A tmpfs mounts root-owned, and this service
+    # runs as `darknyx` (the image drops privileges at `USER darknyx`), so
+    # `mode=0700` alone makes the mount unwritable by the only process that
+    # needs it: `create_dir_all` under /witness returns EACCES and EVERY settle
+    # proof fails. This is the same trap deploy/Dockerfile already documents for
+    # the `darknyx_state` named volume, which it solves with a pre-`USER` chown
+    # — not available here, because the tmpfs is mounted at container start and
+    # shadows whatever the image put at that path.
+    #
+    # 1100 must stay in lockstep with `useradd -u 1100 -g 1100 darknyx` in
+    # deploy/Dockerfile. Numeric because a mount option cannot resolve a name.
+    tmpfs:
+      - /witness:size=256m,mode=0700,uid=1100,gid=1100,noexec,nosuid
+
     environment:
+      # Scratch for the prover witness — the tmpfs above (SW-14).
+      DARKNYX_TEE_WITNESS_DIR: /witness
       # Logs are visible in `phala logs --cvm-id darknyx-tee-spike`.
       # In production we'd ship to a remote sink — but the logs
       # must be careful: any plaintext order intent in logs is a
