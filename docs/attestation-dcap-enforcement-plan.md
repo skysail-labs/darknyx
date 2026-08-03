@@ -18,14 +18,16 @@ It sat here as a 538-line forward-looking plan whose premise had become false.
 It stated that the daemon *"**optionally** calls an injected `QuoteVerifier` for
 Intel DCAP — **never constructed in the stock binary**"*, that the SDK had
 *"**No** `tee/` module, **no** `verifyTeeAttestation`, **no**
-`EXPECTED_COMPOSE_HASH`"*, and it addressed `crates/nyx-*` paths and `NYX_*`
-variables from before the Darknyx rename.
+`EXPECTED_COMPOSE_HASH`"*, and it addressed crate paths and environment-variable
+prefixes from before the Darknyx rename (see
+[`brand-namespace.md`](./brand-namespace.md) for the translation table).
 
 Every one of those is false today, and false in the **dangerous direction**. A
 security document that *understates* what is implemented invites someone to
 rebuild shipped work — or, worse, to reason about mainnet readiness as though a
 live control were absent. CLAUDE.md §0 also requires surviving pre-rename
-`nyx-*` references to be fixed rather than preserved.
+references to be fixed rather than preserved — and `check-brand-namespace.sh`
+enforces that, so the old names cannot be quoted here even to describe them.
 
 Its acceptance checklist is satisfied too, so leaving it as an open plan made a
 closed gap look open.
