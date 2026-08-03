@@ -69,8 +69,14 @@ services:
     # the GPU path than the CPU one: the same `input.json` that must not reach
     # storage is also what gets copied into GPU device memory, which SW-32 now
     # refuses to do unless the GPU is in confidential-compute mode.
+    #
+    # `uid`/`gid` match deploy/Dockerfile's `useradd -u 1100 -g 1100 darknyx`.
+    # This service currently runs as root (see the TODO above), for which they
+    # are redundant — root ignores the mode bits. They are set anyway so that
+    # dropping `user: root`, which is the stated intent, does not silently make
+    # /witness unwritable and fail every proof with EACCES.
     tmpfs:
-      - /witness:size=256m,mode=0700,noexec,nosuid
+      - /witness:size=256m,mode=0700,uid=1100,gid=1100,noexec,nosuid
 
     environment:
       # Scratch for the prover witness — the tmpfs above (SW-14).

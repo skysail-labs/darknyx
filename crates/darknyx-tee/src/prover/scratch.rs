@@ -69,6 +69,31 @@ pub(crate) fn witness_scratch_base() -> PathBuf {
     tmp
 }
 
+/// Create a directory that only the current user can enter, applying the mode
+/// AT CREATION (SW-14).
+///
+/// The base is usually `/dev/shm`, which is world-writable (1777) and shared by
+/// every process in the container, so this per-run directory is the only thing
+/// between `input.json` and any other uid in the namespace. A plain
+/// `create_dir_all` applies `0777 & ~umask` — typically 0755, world-readable —
+/// and a `set_permissions` afterwards would still leave a window in which the
+/// directory is permissive while the witness is being written into it.
+///
+/// Unix-only mode; elsewhere this is a plain `create_dir_all`, which is
+/// acceptable because the deployed target is Linux and the fallback path
+/// already warns.
+#[cfg_attr(not(any(feature = "rapidsnark", feature = "icicle")), allow(dead_code))]
+pub(crate) fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,6 +122,31 @@ mod tests {
             // elsewhere.
             assert!(base.is_dir(), "fallback scratch dir must exist");
         }
+    }
+
+    /// The witness directory must be 0700 the moment it exists.
+    ///
+    /// `/dev/shm` is 1777 and shared by every process in the container, so the
+    /// default `0777 & ~umask` (0755 on a normal box) would leave the private
+    /// witness world-readable to any other uid in that namespace.
+    #[cfg(unix)]
+    #[test]
+    fn a_created_scratch_dir_is_private_to_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "darknyx-private-dir-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+        create_private_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(
+            mode, 0o700,
+            "witness scratch dir must be owner-only; got {mode:o}"
+        );
     }
 
     #[test]

@@ -44,6 +44,11 @@
 //!   --features icicle-cuda --test icicle_cuda_parity -- --nocapture
 //! ```
 //!
+//! The test sets `DARKNYX_TEE_ICICLE_ALLOW_INSECURE_GPU=1` itself — SW-32 makes
+//! `IcicleMatchBatchProver::load` refuse CUDA unless the driver reports
+//! confidential compute, which commodity benchmark GPUs do not have. Nothing to
+//! set on the command line; see the comment at the call.
+//!
 //! ⚠️ **Privacy note.** The witness carries the PRIVATE trade data (amounts,
 //! clearing price, owner commitments, inners). Proving on a GPU moves that
 //! across the CPU↔GPU boundary, so production GPU proving requires a
@@ -171,6 +176,14 @@ async fn icicle_cuda_proves_and_verifies_n16() {
     // 0. Select CUDA BEFORE `load` — the device is resolved once there. Setting
     //    it later would silently prove on CPU and report a false pass.
     std::env::set_var("DARKNYX_TEE_ICICLE_DEVICE", "CUDA");
+    // SW-32 made `load` REFUSE CUDA unless the driver reports confidential
+    // compute, and it fails closed — so without this the gate would stop
+    // running on exactly the commodity H100/H200 boxes it is meant for (no CC
+    // mode), and the refusal would look like a CUDA failure. This measurement
+    // is correctness parity on a fixture, not real order flow, so proving on a
+    // host-readable GPU is the intended trade here. It is a separate variable
+    // from the device precisely so it has to be opted into in this one place.
+    std::env::set_var("DARKNYX_TEE_ICICLE_ALLOW_INSECURE_GPU", "1");
 
     // 1. Assemble one real match + pad to N=16 (same witness path as ark/CPU).
     let (m, buyer, seller) = one_real_match();

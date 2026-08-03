@@ -31,6 +31,7 @@ use icicle_snark::{groth16_prove, CacheManager};
 
 use super::ark_prover::{build_circom_and_check, circom_input_json, load_circom_cfg};
 use super::convert::proof_to_onchain_bytes;
+use super::gpu_cc::{confidential_compute_state, CcState};
 use super::groth16::{ProofWithInputs, Prover, ProverError, ProverTimings};
 use super::inputs::{build_batch_public_inputs, BatchPublicInputs};
 use super::snarkjs::{assert_public_inputs, native_witness_wtns, parse_snarkjs_proof};
@@ -93,42 +94,6 @@ fn authorize_cuda() -> Result<(), ProverError> {
     }
 }
 
-/// What we could establish about the GPU's confidential-compute mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CcState {
-    /// Confidential compute is enabled.
-    On,
-    /// The driver answered and reported it disabled.
-    Off,
-    /// We could not ask — no `nvidia-smi`, an error, or output we cannot parse.
-    /// Treated exactly like `Off`; see `authorize_cuda`.
-    Unknown,
-}
-
-/// Probe the driver for confidential-compute mode.
-///
-/// `nvidia-smi conf-compute -f` is the documented query and is present in any
-/// image that can run CUDA at all. Parsing its text is not elegant, but the
-/// alternative is an NVML binding for one boolean, and a wrong answer here
-/// fails closed rather than silently permitting.
-fn confidential_compute_state() -> CcState {
-    let out = match std::process::Command::new("nvidia-smi")
-        .args(["conf-compute", "-f"])
-        .output()
-    {
-        Ok(out) if out.status.success() => out,
-        _ => return CcState::Unknown,
-    };
-    let text = String::from_utf8_lossy(&out.stdout).to_ascii_uppercase();
-    // Observed shape: "CC status: ON".
-    if text.contains("ON") && !text.contains("OFF") {
-        CcState::On
-    } else if text.contains("OFF") {
-        CcState::Off
-    } else {
-        CcState::Unknown
-    }
-}
 use super::witness::MatchSlotWitness;
 use super::wtns::serialize_wtns;
 

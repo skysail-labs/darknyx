@@ -61,8 +61,20 @@ services:
     # a tmpfs keeps the bytes in guest RAM — which TDX encrypts in hardware —
     # so they never reach storage at all. `noexec,nosuid` because nothing here
     # is ever executed.
+    #
+    # `uid`/`gid` are NOT optional. A tmpfs mounts root-owned, and this service
+    # runs as `darknyx` (the image drops privileges at `USER darknyx`), so
+    # `mode=0700` alone makes the mount unwritable by the only process that
+    # needs it: `create_dir_all` under /witness returns EACCES and EVERY settle
+    # proof fails. This is the same trap deploy/Dockerfile already documents for
+    # the `darknyx_state` named volume, which it solves with a pre-`USER` chown
+    # — not available here, because the tmpfs is mounted at container start and
+    # shadows whatever the image put at that path.
+    #
+    # 1100 must stay in lockstep with `useradd -u 1100 -g 1100 darknyx` in
+    # deploy/Dockerfile. Numeric because a mount option cannot resolve a name.
     tmpfs:
-      - /witness:size=256m,mode=0700,noexec,nosuid
+      - /witness:size=256m,mode=0700,uid=1100,gid=1100,noexec,nosuid
 
     environment:
       # Scratch for the prover witness — the tmpfs above (SW-14).
