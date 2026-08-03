@@ -1,5 +1,6 @@
 /** Versioned encrypted seed-backup envelope — real scrypt + AES-256-GCM. */
 
+import { createCipheriv, randomBytes, scryptSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -12,6 +13,56 @@ import {
 
 const PASSPHRASE = "correct horse battery staple";
 const seed = () => Uint8Array.from({ length: 64 }, (_, index) => index);
+
+/**
+ * Produce a backup encrypted at the RETIRED 2^14 scrypt profile.
+ *
+ * Written out longhand rather than by calling the exporter, because the
+ * exporter no longer can — it writes 2^17 only, which is the point of SW-22.
+ * A test-only encrypt hook on the module would be the alternative, but that
+ * widens the shipped surface to serve a test; the format is four fields and
+ * mirroring it here keeps the production module closed.
+ *
+ * If this drifts from `exportEncryptedMasterSeed`, the round-trip below fails
+ * loudly rather than silently testing a format nothing writes.
+ */
+function legacyBackupFixture(
+  masterSeed: Uint8Array,
+  passphrase: string,
+): EncryptedMasterSeedBackupV2 {
+  const LEGACY_N = 16_384;
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = scryptSync(passphrase, salt, 32, {
+    N: LEGACY_N,
+    r: 8,
+    p: 1,
+    maxmem: 256 * 1024 * 1024,
+  });
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from("darknyx/master-seed-backup/v2", "utf8"));
+  const ciphertext = Buffer.concat([
+    cipher.update(Buffer.from(masterSeed)),
+    cipher.final(),
+  ]);
+  return {
+    format: MASTER_SEED_BACKUP_FORMAT,
+    version: MASTER_SEED_BACKUP_VERSION,
+    kdf: {
+      name: "scrypt",
+      n: LEGACY_N,
+      r: 8,
+      p: 1,
+      salt: salt.toString("hex"),
+    },
+    cipher: {
+      name: "aes-256-gcm",
+      iv: iv.toString("hex"),
+      ciphertext: ciphertext.toString("hex"),
+      tag: cipher.getAuthTag().toString("hex"),
+    },
+  };
+}
 
 describe("encrypted master-seed backup v2", () => {
   it("round-trips from both the object and serialized JSON", () => {
@@ -104,17 +155,33 @@ describe("master-seed backup KDF (SW-22)", () => {
     expect(backup.kdf.n).toBe(131_072);
   });
 
-  it("still opens a backup written at the old 2^14 profile", () => {
+  it("still opens a backup genuinely written at the old 2^14 profile", () => {
     // Raising the write side must not strand existing backups — this is a
     // recovery artifact, so a file that stops opening is lost funds.
-    const legacy = {
-      ...exportEncryptedMasterSeed(seed(), PASSPHRASE),
-    };
-    // Re-encrypt at the legacy profile by hand is overkill; instead assert the
-    // reader ACCEPTS the legacy parameter rather than pinning one value.
+    //
+    // This test used to take an n=2^17 backup, rewrite `kdf.n` to 16_384, and
+    // assert decryption THREW ("wrong key, not unsupported-kdf"). That proves
+    // the reader passes `kdf.n` through to scrypt, and nothing else — it does
+    // not prove a real legacy file opens, which is the property that matters.
+    // Concretely, changing the reader back to `deriveBackupKey(passphrase,
+    // salt)` — always 2^17, ignoring the file — kept that assertion passing
+    // while making every existing 2^14 backup permanently unopenable. So the
+    // test asserted a symptom of the fix and would have stayed green through
+    // its removal. It needs real legacy ciphertext.
+    const legacy = legacyBackupFixture(seed(), PASSPHRASE);
+    expect(legacy.kdf.n).toBe(16_384);
+
+    const restored = importEncryptedMasterSeed(legacy, PASSPHRASE);
+    expect(Buffer.from(restored)).toEqual(Buffer.from(seed()));
+  });
+
+  it("rejects a legacy-profile backup under the wrong passphrase", () => {
+    // The round-trip above must not be passing because authentication is weak;
+    // the same fixture has to fail closed on a bad passphrase.
+    const legacy = legacyBackupFixture(seed(), PASSPHRASE);
     expect(() =>
-      importEncryptedMasterSeed({ ...legacy, kdf: { ...legacy.kdf, n: 16_384 } }, PASSPHRASE),
-    ).toThrow(/decrypt|authentication/i); // wrong key, NOT "unsupported kdf"
+      importEncryptedMasterSeed(legacy, "wrong-passphrase-long-enough"),
+    ).toThrow(/decrypt failed/i);
   });
 
   it("refuses a KDF parameter outside the accepted set", () => {

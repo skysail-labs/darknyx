@@ -6,10 +6,18 @@
 //! derived" explicit and unusable rather than plausible-looking.
 //!
 //! `run_batch` passes `single_fill_per_order: false`, so a partially-filled
-//! order STAYS at its index to match the next counterparty. Combined, the next
-//! `MatchPair` took `note_buyer`/`note_seller = [0u8; 32]` — a commitment no
-//! opening exists for and the tree can never contain. The value deliberately
-//! made unusable was then consumed as a match input.
+//! order STAYS at its index to match the next counterparty.
+//!
+//! BEFORE SW-28 those two facts composed into the defect: the next `MatchPair`
+//! took `note_buyer`/`note_seller = [0u8; 32]` — a commitment no opening exists
+//! for and the tree can never contain. The value deliberately made unusable was
+//! then consumed as a match input.
+//!
+//! `algorithm.rs` now advances past an order whose `collateral_note` is
+//! `ZERO_COMMITMENT`, alongside the existing "fully filled" condition, so a
+//! relocked order leaves the book instead of being re-matched on a placeholder.
+//! The assertions below are the guard on that, not a description of what the
+//! code does today.
 //!
 //! The enclave never reaches this: it goes through
 //! `PreparedMatchTick::next_page` (`single_fill_per_order: true`). Two comments

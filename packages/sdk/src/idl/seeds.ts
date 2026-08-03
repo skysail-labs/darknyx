@@ -22,8 +22,8 @@ export const OUTSTANDING_MINT_SEED = enc("outstanding_mint");
 // `BatchValidityMarker` (one per batch, keyed by Merkle root).
 export const BATCH_VALIDITY_MARKER_SEED = enc("batch_validity");
 
-// `dark_clob`, `matching_config`, `batch_results` and `pending_order` were the
-// seeds of the deleted `matching_engine` program and are gone (SW-25). CLAUDE.md
-// §0 is explicit that a surviving reference to that program is stale and should
-// be removed rather than preserved — leaving PDA seeds for a program that no
-// longer exists invites someone to derive an address nothing will ever own.
+// A seed belongs here only while `programs/vault/src/state.rs` still declares
+// it (SW-25). If one looks "missing", check there before adding it back: a seed
+// with no owning program derives an address nothing will ever own, and the
+// mistake surfaces far away as `AccountNotFound` / `ConstraintSeeds (2006)`
+// rather than at build time.

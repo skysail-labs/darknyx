@@ -757,7 +757,7 @@ impl MatcherDriver {
                         error = %e,
                         orders_in_snapshot = prepared.snapshot_len(),
                         page,
-                        "matcher run_batch failed; ending tick"
+                        "matcher next_page failed; ending tick"
                     );
                     break;
                 }

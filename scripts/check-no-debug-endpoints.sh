@@ -60,8 +60,27 @@ import os, re, sys
 # legitimate needs `[features]` here — and `full = ["debug_endpoints"]` in a
 # features table WOULD be a real offender, since `--features full` would then
 # enable the endpoint.
-SAFE_SECTIONS = {"dev-dependencies"}
+SAFE_SECTION = "dev-dependencies"
 hits = []
+
+
+def is_safe_section(header):
+    """True for a dev-dependency table in any of its spellings.
+
+    `[dev-dependencies]`, the per-crate `[dev-dependencies.darknyx-tee]` (the
+    idiomatic place to write `features = ["debug_endpoints"]`), and both
+    target-specific forms `[target.'cfg(unix)'.dev-dependencies][.crate]`.
+
+    Matching on the LAST dotted segment handled only the first and third: a
+    per-crate subtable ends in the crate name, so a legitimate manifest would
+    have been reported as an offender. `[dependencies.foo]` stays unsafe
+    because no segment is `dev-dependencies`, which is the distinction that
+    matters — quotes are stripped so a quoted cfg predicate cannot smuggle one
+    in.
+    """
+    return any(
+        seg.strip().strip("'\"") == SAFE_SECTION for seg in header.split(".")
+    )
 
 for root, dirs, files in os.walk("."):
     dirs[:] = [d for d in dirs if d not in {"target", "node_modules", ".git"}]
@@ -70,10 +89,18 @@ for root, dirs, files in os.walk("."):
         if path.endswith("scripts/check-no-debug-endpoints.sh"):
             continue
         is_toml = name == "Cargo.toml"
+        # A cargo config can enable the feature through an alias
+        # (`[alias] tee = "run --features debug_endpoints"`), which is a normal
+        # build wearing a short name and defeats checks 1 and 2 exactly as a
+        # Dockerfile flag would. It has no dependency tables, so nothing in it
+        # is ever safe — scanned with section awareness OFF.
+        is_cargo_cfg = name in ("config.toml", "config") and os.path.basename(
+            root
+        ) in (".cargo", "cargo")
         is_other = name.startswith("Dockerfile") or name.endswith(
             (".yml", ".yaml", ".sh")
         )
-        if not (is_toml or is_other):
+        if not (is_toml or is_cargo_cfg or is_other):
             continue
         try:
             lines = open(path, encoding="utf-8", errors="ignore").read().splitlines()
@@ -85,8 +112,7 @@ for root, dirs, files in os.walk("."):
             if is_toml:
                 m = re.match(r"\s*\[([^\]]+)\]", line)
                 if m:
-                    # `[target.'cfg(..)'.dev-dependencies]` counts as dev too.
-                    section = m.group(1).split(".")[-1].strip("'\"")
+                    section = m.group(1)
             if "debug_endpoints" not in line:
                 continue
             stripped = line.strip()
@@ -95,7 +121,7 @@ for root, dirs, files in os.walk("."):
             # The feature's own declaration.
             if re.match(r"debug_endpoints\s*=\s*\[", stripped):
                 continue
-            if is_toml and section in SAFE_SECTIONS:
+            if is_toml and is_safe_section(section):
                 continue
             hits.append(f"{path}:{n}: {stripped}")
 

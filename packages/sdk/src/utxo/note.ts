@@ -60,9 +60,30 @@ function assertInField(label: string, value: bigint): bigint {
   return value;
 }
 
-/** Reduce mod r, matching Rust's `Fr::from_be_bytes_mod_order`. */
+/**
+ * Reduce mod r, matching Rust's `Fr::from_be_bytes_mod_order`.
+ *
+ * NEGATIVES ARE REJECTED, not wrapped. Rust reduces *bytes*, so a negative has
+ * no counterpart there — `((v % r) + r) % r` was inventing a mapping the pinned
+ * side cannot express, silently turning `-1n` into a perfectly valid-looking
+ * `r - 1` commitment. That is the same silent-reduction failure SW-23 is about,
+ * on a different axis: reduction is correct for a 256-bit key that Rust also
+ * reduces, and wrong for an input Rust could never have received.
+ *
+ * Every in-repo caller passes the output of `beToBigInt` over 32 bytes, which
+ * is non-negative by construction, so this rejects only a caller that hand-built
+ * a signed value — a bug, and one worth surfacing at the call rather than as a
+ * commitment nobody can open.
+ */
 function toField(value: bigint): bigint {
-  return ((value % BN254_R) + BN254_R) % BN254_R;
+  if (value < 0n) {
+    throw new Error(
+      "field input is negative — Rust reduces bytes and has no negative to " +
+        "match, so wrapping it here would produce a commitment the Rust side " +
+        "could never derive",
+    );
+  }
+  return value % BN254_R;
 }
 
 let cached: PoseidonFn | null = null;
