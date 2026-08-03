@@ -225,10 +225,49 @@ async fn sweep(
         }
     };
 
+    // One batched read per 100 pending locks instead of one per lock (PF-27).
+    // This runs every tick, so the sequential form's cost scaled with the number
+    // of outstanding locks on a fixed interval.
+    //
+    // A failed chunk yields `Err` for each of its commitments, which lands in
+    // the existing `Err` arm below: retained and retried next tick. That is the
+    // same conservative outcome the per-lock form had, applied to a chunk.
+    let pdas: Vec<_> = commitments.iter().map(|c| note_lock_pda(c).0).collect();
+    let mut reads: Vec<Result<Option<crate::solana_rpc::RpcAccountInfo>, String>> =
+        Vec::with_capacity(pdas.len());
+    for chunk in pdas.chunks(crate::solana_rpc::MAX_MULTIPLE_ACCOUNTS) {
+        match rpc.get_multiple_accounts(chunk).await {
+            Ok(accounts) => reads.extend(accounts.into_iter().map(Ok)),
+            Err(e) => {
+                let msg = e.to_string();
+                reads.extend(std::iter::repeat_n(Err(msg), chunk.len()));
+            }
+        }
+    }
+
+    // `zip` TRUNCATES, so a short `reads` would skip the tail of `commitments`
+    // this tick. That is self-healing, NOT a leak: the skipped commitments are
+    // only ever removed from `pending` by the arms below, so they are still
+    // there on the next tick and get examined then. (An earlier version of this
+    // comment claimed the rent was never reclaimed; that was wrong, and it is
+    // why the check is a `debug_assert` rather than a hard one.)
+    //
+    // Deliberately NOT `assert_eq!`. Every chunk above extends by exactly
+    // `chunk.len()` on both the success and failure paths, so this cannot fire;
+    // and if it somehow did, a panic here is strictly worse than the thing it
+    // guards. `sweep` runs inside the task spawned by `spawn_lock_sweeper`,
+    // whose `JoinHandle` is dropped at the call site in `main.rs` — so a panic
+    // kills lock reclamation for the process lifetime, silently, in exchange
+    // for preventing a one-tick delay that resolves itself.
+    debug_assert_eq!(
+        reads.len(),
+        commitments.len(),
+        "one read per pending lock, or zip skips the tail"
+    );
     let mut expired: Vec<[u8; 32]> = Vec::with_capacity(commitments.len());
-    for commitment in commitments {
-        let (lock_pda, _) = note_lock_pda(&commitment);
-        match rpc.get_account_info(&lock_pda).await {
+    for (commitment, read) in commitments.into_iter().zip(reads) {
+        let lock_pda = note_lock_pda(&commitment).0;
+        match read {
             // Absent. Usually that means gone-for-good: settled (the settle
             // closes it), withdrawn, or released by someone else.
             //

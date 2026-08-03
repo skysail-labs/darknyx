@@ -36,6 +36,6 @@ pub use client::redact_endpoint;
 pub use client::{
     AddressTxPage, BlockhashWithSlot, Commitment, PrioritizationFee, RpcAccountInfo, RpcAddressTx,
     RpcInstruction, RpcSignatureInfo, RpcSignatureStatus, RpcSimulationResult, RpcTransaction,
-    SolanaRpcClient, TxSortOrder,
+    SolanaRpcClient, TxSortOrder, MAX_MULTIPLE_ACCOUNTS,
 };
 pub use error::RpcError;
