@@ -225,10 +225,41 @@ async fn sweep(
         }
     };
 
+    // One batched read per 100 pending locks instead of one per lock (PF-27).
+    // This runs every tick, so the sequential form's cost scaled with the number
+    // of outstanding locks on a fixed interval.
+    //
+    // A failed chunk yields `Err` for each of its commitments, which lands in
+    // the existing `Err` arm below: retained and retried next tick. That is the
+    // same conservative outcome the per-lock form had, applied to a chunk.
+    let pdas: Vec<_> = commitments.iter().map(|c| note_lock_pda(c).0).collect();
+    let mut reads: Vec<Result<Option<crate::solana_rpc::RpcAccountInfo>, String>> =
+        Vec::with_capacity(pdas.len());
+    for chunk in pdas.chunks(crate::solana_rpc::MAX_MULTIPLE_ACCOUNTS) {
+        match rpc.get_multiple_accounts(chunk).await {
+            Ok(accounts) => reads.extend(accounts.into_iter().map(Ok)),
+            Err(e) => {
+                let msg = e.to_string();
+                reads.extend(std::iter::repeat_n(Err(msg), chunk.len()));
+            }
+        }
+    }
+
+    // `zip` TRUNCATES, so a short `reads` would silently drop the tail of
+    // `commitments` — those locks would never be swept and their rent never
+    // reclaimed, with no error anywhere. Every chunk above extends by exactly
+    // `chunk.len()` on both the success and failure paths, so this holds by
+    // construction; the assertion is here so a future edit to that loop cannot
+    // break it quietly.
+    debug_assert_eq!(
+        reads.len(),
+        commitments.len(),
+        "one read per pending lock, or zip drops the tail"
+    );
     let mut expired: Vec<[u8; 32]> = Vec::with_capacity(commitments.len());
-    for commitment in commitments {
-        let (lock_pda, _) = note_lock_pda(&commitment);
-        match rpc.get_account_info(&lock_pda).await {
+    for (commitment, read) in commitments.into_iter().zip(reads) {
+        let lock_pda = note_lock_pda(&commitment).0;
+        match read {
             // Absent. Usually that means gone-for-good: settled (the settle
             // closes it), withdrawn, or released by someone else.
             //

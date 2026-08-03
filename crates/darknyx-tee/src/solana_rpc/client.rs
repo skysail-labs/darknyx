@@ -89,6 +89,43 @@ pub struct RpcAccountInfo {
     pub rent_epoch: u64,
 }
 
+/// Solana's `getMultipleAccounts` caps a single request at 100 keys.
+pub const MAX_MULTIPLE_ACCOUNTS: usize = 100;
+
+/// The wire shape of one account, shared by `getAccountInfo` and
+/// `getMultipleAccounts` so the two cannot decode differently. They previously
+/// could not drift because only one existed; now that there are two, one
+/// definition is what keeps a batched read byte-identical to the single read it
+/// replaces.
+#[derive(Deserialize)]
+struct RawAccount {
+    lamports: u64,
+    owner: String,
+    data: Vec<String>, // [base64_data, "base64"]
+    executable: bool,
+    #[serde(rename = "rentEpoch")]
+    rent_epoch: u64,
+}
+
+fn decode_account(i: RawAccount) -> Result<RpcAccountInfo, RpcError> {
+    use base64::Engine as _;
+    let data_b64 = i.data.first().cloned().unwrap_or_default();
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(&data_b64)
+        .map_err(|e| RpcError::Schema(format!("account data base64: {e}")))?;
+    let owner: Address = i
+        .owner
+        .parse()
+        .map_err(|e| RpcError::Schema(format!("account owner is not a valid address: {e}")))?;
+    Ok(RpcAccountInfo {
+        lamports: i.lamports,
+        owner,
+        data,
+        executable: i.executable,
+        rent_epoch: i.rent_epoch,
+    })
+}
+
 /// Result of `simulateTransaction`. We extract a minimal subset —
 /// enough to decide "was this tx going to succeed if sent?".
 #[derive(Debug, Clone)]
@@ -472,40 +509,61 @@ impl SolanaRpcClient {
         &self,
         address: &Address,
     ) -> Result<Option<RpcAccountInfo>, RpcError> {
-        #[derive(Deserialize)]
-        struct Inner {
-            lamports: u64,
-            owner: String,
-            data: Vec<String>, // [base64_data, "base64"]
-            executable: bool,
-            #[serde(rename = "rentEpoch")]
-            rent_epoch: u64,
-        }
         let params = serde_json::json!([
             address.to_string(),
             { "encoding": "base64", "commitment": self.commitment }
         ]);
-        let resp: RpcContextValue<Option<Inner>> = self.call("getAccountInfo", params).await?;
-        match resp.value {
-            None => Ok(None),
-            Some(i) => {
-                use base64::Engine as _;
-                let data_b64 = i.data.first().cloned().unwrap_or_default();
-                let data = base64::engine::general_purpose::STANDARD
-                    .decode(&data_b64)
-                    .map_err(|e| RpcError::Schema(format!("account data base64: {e}")))?;
-                let owner: Address = i.owner.parse().map_err(|e| {
-                    RpcError::Schema(format!("account owner is not a valid address: {e}"))
-                })?;
-                Ok(Some(RpcAccountInfo {
-                    lamports: i.lamports,
-                    owner,
-                    data,
-                    executable: i.executable,
-                    rent_epoch: i.rent_epoch,
-                }))
-            }
+        let resp: RpcContextValue<Option<RawAccount>> = self.call("getAccountInfo", params).await?;
+        resp.value.map(decode_account).transpose()
+    }
+
+    /// `getMultipleAccounts` — one round trip for up to
+    /// [`MAX_MULTIPLE_ACCOUNTS`] addresses (PF-27).
+    ///
+    /// The result is positional: element `i` corresponds to `addresses[i]`, and
+    /// a missing account is `None` in place, exactly as `get_account_info`
+    /// returns `None`. Callers depend on that alignment to map results back to
+    /// their inputs, so this returns an error rather than a short vector if the
+    /// RPC ever returns a different length — a silently truncated response
+    /// would shift every subsequent account onto the wrong address, and for the
+    /// recovery loop that means classifying one entry's consumed-state from
+    /// another entry's PDA.
+    ///
+    /// Chunking is the CALLER's job: an over-long request is an error here
+    /// rather than a silent split, because a caller that needs more than one
+    /// chunk also needs to decide what a partial failure means.
+    pub async fn get_multiple_accounts(
+        &self,
+        addresses: &[Address],
+    ) -> Result<Vec<Option<RpcAccountInfo>>, RpcError> {
+        if addresses.is_empty() {
+            return Ok(Vec::new());
         }
+        if addresses.len() > MAX_MULTIPLE_ACCOUNTS {
+            return Err(RpcError::Schema(format!(
+                "getMultipleAccounts accepts at most {MAX_MULTIPLE_ACCOUNTS} addresses, got {}",
+                addresses.len()
+            )));
+        }
+        let keys: Vec<String> = addresses.iter().map(|a| a.to_string()).collect();
+        let params = serde_json::json!([
+            keys,
+            { "encoding": "base64", "commitment": self.commitment }
+        ]);
+        let resp: RpcContextValue<Vec<Option<RawAccount>>> =
+            self.call("getMultipleAccounts", params).await?;
+        if resp.value.len() != addresses.len() {
+            return Err(RpcError::Schema(format!(
+                "getMultipleAccounts returned {} entries for {} addresses; \
+                 results are positional and cannot be realigned",
+                resp.value.len(),
+                addresses.len()
+            )));
+        }
+        resp.value
+            .into_iter()
+            .map(|opt| opt.map(decode_account).transpose())
+            .collect()
     }
 
     /// `getSignaturesForAddress` — transaction signatures touching
@@ -1143,5 +1201,162 @@ mod tests {
             // status:succeeded is filtered server-side.
             assert!(tx.err.is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod multiple_accounts_tests {
+    use super::*;
+
+    /// Serve one canned JSON-RPC response so the REAL `get_multiple_accounts`
+    /// path is exercised, guard included.
+    async fn serve_once(value: serde_json::Value) -> String {
+        use axum::routing::post;
+        let app = axum::Router::new().route(
+            "/",
+            post(move || {
+                let v = value.clone();
+                async move {
+                    axum::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": { "context": { "slot": 1 }, "value": v },
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        format!("http://{addr}/")
+    }
+
+    fn addrs(n: usize) -> Vec<Address> {
+        // Distinct, valid addresses; the values do not matter, only the count.
+        (0..n)
+            .map(|i| {
+                let mut b = [0u8; 32];
+                b[0] = (i + 1) as u8;
+                Address::new_from_array(b)
+            })
+            .collect()
+    }
+
+    /// PF-27 — `getMultipleAccounts` results are POSITIONAL, and every caller
+    /// maps them back to inputs by index.
+    ///
+    /// A short response is therefore not a partial success: it shifts every
+    /// subsequent account onto the wrong address. In `recover.rs` that means
+    /// classifying one journal entry's consumed-state from another entry's PDA,
+    /// which can turn `NeitherConsumed` into `BothConsumed` and authorise — or
+    /// suppress — a redrive on evidence about a different match. The client
+    /// refuses rather than return a realignable-looking vector.
+    #[tokio::test]
+    async fn a_short_response_is_an_error_not_a_short_vector() {
+        // Two addresses requested, one returned.
+        let url = serve_once(serde_json::json!([null])).await;
+        let rpc = SolanaRpcClient::new(url).unwrap();
+        let err = rpc
+            .get_multiple_accounts(&addrs(2))
+            .await
+            .expect_err("a truncated response must not be accepted");
+        assert!(
+            format!("{err}").contains("positional"),
+            "the error must say why realignment is impossible, got: {err}"
+        );
+    }
+
+    /// The same guard in the other direction — a response with MORE entries
+    /// than requested is equally unmappable.
+    #[tokio::test]
+    async fn an_overlong_response_is_also_rejected() {
+        let url = serve_once(serde_json::json!([null, null, null])).await;
+        let rpc = SolanaRpcClient::new(url).unwrap();
+        assert!(rpc.get_multiple_accounts(&addrs(2)).await.is_err());
+    }
+
+    /// A matching-length response IS accepted, positions intact — without this
+    /// the two assertions above could be passing because everything fails.
+    #[tokio::test]
+    async fn a_matching_response_is_accepted_with_positions_intact() {
+        let url = serve_once(serde_json::json!([
+            null,
+            {
+                "lamports": 5u64,
+                "owner": "11111111111111111111111111111111",
+                "data": ["AQID", "base64"],
+                "executable": false,
+                "rentEpoch": 0u64,
+            }
+        ]))
+        .await;
+        let rpc = SolanaRpcClient::new(url).unwrap();
+        let got = rpc.get_multiple_accounts(&addrs(2)).await.unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(got[0].is_none(), "absent account stays at index 0");
+        assert_eq!(got[1].as_ref().unwrap().data, vec![1, 2, 3]);
+    }
+
+    /// Over the RPC's own cap, the client refuses rather than silently
+    /// splitting: a caller needing more than one chunk also needs to decide
+    /// what a partial failure means, and both call sites do so explicitly.
+    #[tokio::test]
+    async fn an_oversized_request_is_refused_rather_than_split() {
+        let url = serve_once(serde_json::json!([])).await;
+        let rpc = SolanaRpcClient::new(url).unwrap();
+        let err = rpc
+            .get_multiple_accounts(&addrs(MAX_MULTIPLE_ACCOUNTS + 1))
+            .await
+            .expect_err("over the cap must be an error");
+        assert!(format!("{err}").contains("at most"), "got: {err}");
+    }
+
+    /// Both read paths must decode identically — a batched read replacing a
+    /// single read is only safe if the bytes come out the same.
+    #[test]
+    fn batch_and_single_decode_the_same_account() {
+        let account = serde_json::json!({
+            "lamports": 42u64,
+            "owner": "11111111111111111111111111111111",
+            "data": ["AQID", "base64"],
+            "executable": false,
+            "rentEpoch": 7u64,
+        });
+        let one: RawAccount = serde_json::from_value(account.clone()).unwrap();
+        let many: Vec<Option<RawAccount>> =
+            serde_json::from_value(serde_json::json!([account])).unwrap();
+
+        let a = decode_account(one).unwrap();
+        let b = decode_account(many.into_iter().next().unwrap().unwrap()).unwrap();
+        assert_eq!(a.lamports, b.lamports);
+        assert_eq!(a.owner, b.owner);
+        assert_eq!(a.data, b.data, "base64 payload must decode identically");
+        assert_eq!(a.data, vec![1, 2, 3]);
+        assert_eq!(a.rent_epoch, b.rent_epoch);
+    }
+
+    /// An absent account is `None` IN PLACE, not a gap — otherwise positional
+    /// mapping breaks precisely when some accounts do not exist, which is the
+    /// normal case for consumed-note PDAs before a settle lands.
+    #[test]
+    fn absent_accounts_hold_their_position() {
+        let value: Vec<Option<RawAccount>> = serde_json::from_value(serde_json::json!([
+            null,
+            {
+                "lamports": 1u64,
+                "owner": "11111111111111111111111111111111",
+                "data": ["", "base64"],
+                "executable": false,
+                "rentEpoch": 0u64,
+            },
+            null
+        ]))
+        .unwrap();
+        assert_eq!(value.len(), 3);
+        assert!(value[0].is_none(), "absent stays at index 0");
+        assert!(value[1].is_some(), "present stays at index 1");
+        assert!(value[2].is_none(), "absent stays at index 2");
     }
 }

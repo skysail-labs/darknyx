@@ -301,13 +301,52 @@ pub async fn reconcile_at_boot(
     let mut consumed = std::collections::HashMap::new();
     let mut confirmed = std::collections::HashMap::new();
 
+    // BATCHED, because this is the cold-start critical path (PF-27). The
+    // enclave cannot resume settling until reconciliation finishes, and the
+    // per-entry form cost up to 3N sequential round trips — ~22 s of extra
+    // downtime at 50 entries and 150 ms latency, on top of proving-key load and
+    // Merkle cold-boot. Two account reads plus a signature status per entry
+    // become ceil(2N/100) + 1 requests.
+    //
+    // The classification below is UNCHANGED, including the error handling: an
+    // RPC failure still yields `Inconsistent` for every affected entry, so a
+    // transient outage routes to an operator rather than authorising a redrive.
+    // The only difference is that one failed request now marks a whole chunk
+    // instead of one entry — strictly the conservative direction.
+    let mut pdas: Vec<solana_address::Address> = Vec::with_capacity(entries.len() * 2);
     for e in entries {
-        let (a_pda, _) = consumed_note_pda(&e.payload.note_a_commitment);
-        let (b_pda, _) = consumed_note_pda(&e.payload.note_b_commitment);
-        let a = rpc.get_account_info(&a_pda).await;
-        let b = rpc.get_account_info(&b_pda).await;
-        let state = match (a, b) {
-            (Ok(a), Ok(b)) => {
+        pdas.push(consumed_note_pda(&e.payload.note_a_commitment).0);
+        pdas.push(consumed_note_pda(&e.payload.note_b_commitment).0);
+    }
+
+    // `None` here means "we could not establish this account's state", which is
+    // deliberately NOT the same as the RPC's `None` for "account absent" — the
+    // latter is a chain fact meaning not-consumed. Conflating them would let an
+    // RPC outage read as NeitherConsumed and authorise a redrive of a
+    // settlement that may already have landed.
+    let mut fetched: Vec<Option<Option<crate::solana_rpc::RpcAccountInfo>>> =
+        Vec::with_capacity(pdas.len());
+    for chunk in pdas.chunks(crate::solana_rpc::MAX_MULTIPLE_ACCOUNTS) {
+        match rpc.get_multiple_accounts(chunk).await {
+            Ok(accounts) => fetched.extend(accounts.into_iter().map(Some)),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    n = chunk.len(),
+                    "recovery consumed-PDA batch read failed; \
+                     those entries resolve to Inconsistent"
+                );
+                fetched.extend(std::iter::repeat_n(None, chunk.len()));
+            }
+        }
+    }
+
+    for (i, e) in entries.iter().enumerate() {
+        // Positional: entry i owns pdas[2i] (note A) and pdas[2i+1] (note B).
+        // `get_multiple_accounts` rejects a length mismatch, so this indexing
+        // cannot silently read another entry's account.
+        let state = match (&fetched[2 * i], &fetched[2 * i + 1]) {
+            (Some(a), Some(b)) => {
                 let a_ok = a.as_ref().is_some_and(|acc| acc.owner == vault);
                 let b_ok = b.as_ref().is_some_and(|acc| acc.owner == vault);
                 match (a_ok, b_ok) {
@@ -322,17 +361,41 @@ pub async fn reconcile_at_boot(
             _ => ConsumedState::Inconsistent,
         };
         consumed.insert((e.batch_id, e.match_idx), state);
+    }
 
-        // Signature status is a WEAK signal here and is treated as one. The RPC
-        // keeps only the recent ~150 slots without `searchTransactionHistory`,
-        // so after any restart worth recovering from the status is usually
-        // absent — which is exactly why the consumed PDAs above are the
-        // authority and a missing status resolves to `None` rather than `false`.
-        if let Some(sig) = e.settle_sig.as_deref() {
-            if let Ok(statuses) = rpc.get_signature_statuses(&[sig.to_string()]).await {
-                if let Some(Some(st)) = statuses.first() {
-                    confirmed.insert(sig.to_string(), st.err.is_none());
+    // Signature status is a WEAK signal here and is treated as one. The RPC
+    // keeps only the recent ~150 slots without `searchTransactionHistory`, so
+    // after any restart worth recovering from the status is usually absent —
+    // which is exactly why the consumed PDAs above are the authority and a
+    // missing status resolves to `None` rather than `false`.
+    //
+    // `getSignatureStatuses` already takes a slice, so the per-entry loop was
+    // paying a round trip per signature for an API that never needed one.
+    let sigs: Vec<String> = entries
+        .iter()
+        .filter_map(|e| e.settle_sig.as_deref().map(str::to_string))
+        .collect();
+    if !sigs.is_empty() {
+        // The RPC caps this at 256 signatures per call.
+        const MAX_SIGNATURE_STATUSES: usize = 256;
+        for chunk in sigs.chunks(MAX_SIGNATURE_STATUSES) {
+            match rpc.get_signature_statuses(chunk).await {
+                Ok(statuses) => {
+                    for (sig, st) in chunk.iter().zip(statuses) {
+                        if let Some(st) = st {
+                            confirmed.insert(sig.clone(), st.err.is_none());
+                        }
+                    }
                 }
+                // Absent stays absent: `confirmed` is a weak hint and the
+                // consumed PDAs are authoritative, so a failed status read
+                // must not become a `false`.
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    n = chunk.len(),
+                    "recovery signature-status batch read failed; \
+                     treating those signatures as unknown"
+                ),
             }
         }
     }
@@ -439,6 +502,91 @@ mod tests {
             settle_sig: settle_sig.map(str::to_string),
             updated_at_ms: 0,
         }
+    }
+
+    /// PF-27 — reconciliation must cost a CONSTANT number of round trips, not
+    /// one per journal entry.
+    ///
+    /// This is the cold-start critical path: the enclave cannot resume settling
+    /// until reconciliation finishes, so the old per-entry form (two account
+    /// reads plus a signature status each) cost up to 3N sequential round trips
+    /// — roughly 22 s of extra downtime at 50 entries and 150 ms latency.
+    ///
+    /// The assertion COUNTS requests against a stub RPC rather than timing
+    /// anything, because a wall-clock threshold on a shared CI box is a flake
+    /// generator and would not say WHY it regressed. 40 entries here: the old
+    /// code would issue ~120 requests, the batched form needs
+    /// 1 blockhash + ceil(80/100) accounts + 1 signature-statuses = 3.
+    #[tokio::test]
+    async fn reconciliation_round_trips_do_not_scale_with_entry_count() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc as StdArc;
+
+        let hits = StdArc::new(AtomicUsize::new(0));
+        let seen = StdArc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (h, sn) = (StdArc::clone(&hits), StdArc::clone(&seen));
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(move |body: axum::Json<serde_json::Value>| {
+                let h = StdArc::clone(&h);
+                let sn = StdArc::clone(&sn);
+                async move {
+                    h.fetch_add(1, Ordering::SeqCst);
+                    let method = body.0["method"].as_str().unwrap_or_default().to_string();
+                    let n = body.0["params"][0].as_array().map(|a| a.len()).unwrap_or(0);
+                    sn.lock().unwrap().push(method.clone());
+                    let result = match method.as_str() {
+                        "getLatestBlockhash" => serde_json::json!({
+                            "context": { "slot": 500 },
+                            "value": {
+                                "blockhash": "11111111111111111111111111111111",
+                                "lastValidBlockHeight": 1000u64,
+                            }
+                        }),
+                        // Positional and length-matched, as the client requires.
+                        "getMultipleAccounts" => serde_json::json!({
+                            "context": { "slot": 500 },
+                            "value": vec![serde_json::Value::Null; n],
+                        }),
+                        "getSignatureStatuses" => serde_json::json!({
+                            "context": { "slot": 500 },
+                            "value": vec![serde_json::Value::Null; n],
+                        }),
+                        _ => serde_json::json!(null),
+                    };
+                    axum::Json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": 1, "result": result
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let rpc = crate::solana_rpc::SolanaRpcClient::new(format!("http://{addr}/")).unwrap();
+        let entries: Vec<JournalEntry> = (0..40)
+            .map(|i| {
+                let mut e = entry(JournalStage::Settling, Some("sig"), 10_000);
+                e.match_idx = i;
+                e
+            })
+            .collect();
+
+        let (out, _summary) = reconcile_at_boot(&rpc, &entries).await;
+        assert_eq!(out.len(), entries.len(), "every entry must be classified");
+
+        let n = hits.load(Ordering::SeqCst);
+        assert!(
+            n <= 8,
+            "reconciliation issued {n} RPC requests for {} entries — it must be \
+             batched, not per-entry (methods: {:?})",
+            entries.len(),
+            seen.lock().unwrap()
+        );
     }
 
     #[test]
