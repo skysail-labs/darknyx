@@ -416,11 +416,13 @@ phala cvms logs  "$CVM" 2>&1 | tail -40            # logs
 phala cvms get   "$CVM"                            # status / app id
 ```
 
-Gateway URL (no custom domain yet): `https://<app_id>-8080.dstack-pha-prod5.phala.network`.
+Gateway URL (no custom domain yet): `https://<app_id>-8080.dstack-pha-<node>.phala.network`,
+where `<node>` is assigned PER CVM (`prod9`, `prod5`, …). Probe it; a wrong
+suffix returns HTTP 000, which looks like a dead enclave rather than a bad URL.
 For the dev CVM:
 
 ```sh
-GW="https://634b2ab4c250466311f0cf09f772b6fd60b5be11-8080.dstack-pha-prod5.phala.network"
+GW="https://$CVM-8080.dstack-pha-$NODE.phala.network"   # resolve $CVM + $NODE first
 curl -s "$GW/info" | jq .                          # signer (tee_pubkey), app_id, RTMRs
 ```
 
@@ -525,7 +527,7 @@ grows.
 
 ```sh
 HELIUS="https://devnet.helius-rpc.com/?api-key=<YOUR_KEY>"
-GW="https://634b2ab4c250466311f0cf09f772b6fd60b5be11-8080.dstack-pha-prod5.phala.network"
+GW="https://$CVM-8080.dstack-pha-$NODE.phala.network"   # resolve $CVM + $NODE first
 
 # 1. Fresh devnet state (mints + settle ALT + reset + e2e-config.json):  §4.4
 # 2. CVM deployed with the REAL mints + fee 30 + owner + Helius + sync floor:  §5.1–5.3
@@ -783,7 +785,7 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | `phala deploy` didn't pick up code changes | same image tag (cached) | bump `tee-v3-hardening-N`, push the tag, rebuild (§5.1) |
 | Auth: 401 after a CVM restart | runtime-registered account lost (persistence volume perms) | use the env bootstrap admin; check `DARKNYX_TEE_STATE_DIR` is a writable volume |
 | `solana transfer`/faucet rate-limited | devnet faucet 429 | use a pre-funded local wallet; fund the CVM signer via `solana transfer` (not airdrop) |
-| `npm`/`node` not found in a non-interactive shell | nvm lazy-load shim | use the full path, e.g. `~/.nvm/versions/node/<v>/bin/node` |
+| `npm`/`node` not found in a non-interactive shell (`_load_nvm`, then `maximum nested function level reached`) | nvm lazy-load shim | use the absolute path `command -v node` reports — `/opt/homebrew/bin/node` on the 2026-08 box. Resolve it; do not copy a path from a doc |
 
 ---
 
@@ -794,7 +796,7 @@ the CVM e2e harness asserting `tree not empty`. Wipes `leaf_count` /
 | Vault program id | `C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx` |
 | Matching-engine program id (retiring) | `6EasFxo6RCWrK4KAwcdUJqL4KjReLC3rtah8EtHgHSqe` |
 | CVM image | `ghcr.io/skysail-labs/darknyx-tee:tee-v3-hardening-<N>` (built by the `tee-image` workflow on a `tee-v3-hardening-*` tag; GH repo `skysail-labs/darknyx`) |
-| Gateway URL form | `https://<app_id>-8080.dstack-pha-prod5.phala.network` |
+| Gateway URL form | `https://<app_id>-8080.dstack-pha-<node>.phala.network` — `<node>` is per-CVM; probe it |
 | Pyth Hermes SOL/USD feed id | `ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d` |
 | Placeholder dev mints | base `[1,0…,0xb1]`, quote `[1,0…,0x9e]` (loadgen regime) |
 | Test keypair dir (gitignored) | `.devnet/keypairs/` |

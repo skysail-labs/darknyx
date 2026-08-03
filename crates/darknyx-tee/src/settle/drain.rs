@@ -40,7 +40,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::matcher::{TradingGate, TradingPauseReason};
-use crate::persistence::journal::SettleJournal;
+use crate::persistence::journal::{JournalWriteStats, SettleJournal};
 
 /// A point-in-time view of the drain.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -55,6 +55,23 @@ pub struct DrainStatus {
     /// True when trading is closed AND nothing is still settling. Only then does
     /// stopping the CVM risk nothing that the journal would have to recover.
     pub safe_to_stop: bool,
+    /// Durable-write cost for this process's journal, in microseconds
+    /// (T-06's cost-table row).
+    ///
+    /// Exposed HERE, on an endpoint, rather than left to the log emitter alone.
+    /// The log summary is throttled to one line per interval, and a single-match
+    /// settle performs all of its journal writes inside one window — they all
+    /// precede the long settle wait — so the only line it ever produces reads
+    /// `writes=1`, which is a sample and not a percentile. That is exactly what
+    /// the 2026-08-04 drill hit. A read-on-demand field has no such window: the
+    /// drill already polls this endpoint to find its kill moment, so it now
+    /// captures the distribution at the same instant, and after recovery too.
+    ///
+    /// `None` before the first successful write — distinct from a zeroed
+    /// struct, because "not measured" and "measured as zero" must not render
+    /// identically to whoever reads this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub journal_write_us: Option<JournalWriteStats>,
     /// Present when the journal is not persistent — the readiness answer is then
     /// about this process's memory only, and a restart would recover nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,9 +101,12 @@ pub async fn status(
     journal: &Arc<tokio::sync::Mutex<SettleJournal>>,
     cancelled_resting: usize,
 ) -> DrainStatus {
-    let (in_flight, persistent) = {
+    // One lock acquisition for all three reads — a second lock would let the
+    // reported write stats belong to a different instant than the in-flight
+    // count they are printed beside.
+    let (in_flight, persistent, journal_write_us) = {
         let j = journal.lock().await;
-        (j.len(), j.is_persistent())
+        (j.len(), j.is_persistent(), j.write_stats())
     };
     let draining = gate.is_paused_for(TradingPauseReason::Drain);
     DrainStatus {
@@ -96,6 +116,7 @@ pub async fn status(
         // Both conditions, not either. A quiet journal while trading is still
         // open means nothing: a match could be enqueued in the next tick.
         safe_to_stop: draining && in_flight == 0,
+        journal_write_us,
         caveat: (!persistent).then(|| {
             "settle journal is not persistent (no state dir configured); this instance \
              cannot recover in-flight settlements across a restart regardless of drain"
@@ -105,14 +126,14 @@ pub async fn status(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::persistence::journal::{JournalEntry, JournalStage};
     use crate::settle::lock_note::Groth16ProofBytes;
     use crate::settle::payload::MatchResultPayload;
     use crate::settle::submit_lock::LockSideInputs;
 
-    fn journal(entries: usize) -> Arc<tokio::sync::Mutex<SettleJournal>> {
+    pub(super) fn journal(entries: usize) -> Arc<tokio::sync::Mutex<SettleJournal>> {
         let mut j = SettleJournal::in_memory();
         for idx in 0..entries {
             j.record(JournalEntry {
@@ -236,5 +257,51 @@ mod tests {
         assert!(s.safe_to_stop);
         let caveat = s.caveat.expect("non-persistent journal must be disclosed");
         assert!(caveat.contains("not persistent"), "got: {caveat}");
+    }
+}
+
+#[cfg(test)]
+mod write_stats_exposure_tests {
+    use super::*;
+    // Reuse the sibling module's fixture rather than a second copy: the point
+    // is that the stats come from a real `record` path, and two fixtures would
+    // let them drift.
+    use super::tests::journal;
+
+    fn gate() -> TradingGate {
+        TradingGate::default()
+    }
+
+    /// T-06 — the write-cost row must be readable ON DEMAND, not only when the
+    /// throttled log emitter happens to fire.
+    ///
+    /// The 2026-08-04 drill is the motivating case: a single-match settle does
+    /// all four journal writes inside one 10 s throttle window, so the only log
+    /// line it produces reads `writes=1`. The drill already polls this endpoint
+    /// to find its kill moment, so surfacing the stats here captures the
+    /// distribution at that exact instant instead.
+    #[tokio::test]
+    async fn drain_status_carries_the_journal_write_cost() {
+        let journal = journal(5);
+        let s = status(&gate(), &journal, 0).await;
+        let w = s.journal_write_us.expect("write cost must be reported");
+        assert_eq!(w.count, 5, "every write counts, not just the emitted ones");
+        assert!(w.p95_us >= w.p50_us && w.max_us >= w.p95_us);
+    }
+
+    /// Before any write there is no measurement, and that must be absent from
+    /// the JSON rather than rendered as zeros — an operator reading
+    /// `p50_us: 0` would conclude the journal is free.
+    #[tokio::test]
+    async fn an_unwritten_journal_reports_no_measurement_rather_than_zeros() {
+        let journal = journal(0);
+        let s = status(&gate(), &journal, 0).await;
+        assert!(s.journal_write_us.is_none());
+
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            !json.contains("journal_write_us"),
+            "an absent measurement must be omitted, not zeroed: {json}"
+        );
     }
 }

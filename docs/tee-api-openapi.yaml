@@ -692,6 +692,36 @@ components:
             True only when trading is closed AND no settlement is in flight.
             Stopping the CVM while this is false risks work the journal would
             have to reconcile on the next boot.
+        journal_write_us:
+          type: object
+          description: |
+            Durable-write cost of this process's settle journal, in
+            microseconds — the tmp-write, fsync, rename, fsync-directory
+            sequence a settle waits on before it may submit (T-06).
+
+            OMITTED entirely before the first successful write. That is
+            deliberate and distinct from a zeroed object: "not measured" and
+            "measured as zero" must not render identically, or a reader
+            concludes the journal is free.
+
+            Only successful `record` calls are sampled. A failed flush may have
+            aborted early, so counting it would report a faster journal exactly
+            when the disk is degraded.
+          required: [count, p50_us, p95_us, max_us]
+          properties:
+            count:
+              type: integer
+              description: |
+                LIFETIME successful writes, not the size of the retained sample
+                window — the two diverge past the window bound.
+            p50_us: { type: integer, description: Median over the retained window. }
+            p95_us: { type: integer, description: 95th percentile over the retained window. }
+            max_us:
+              type: integer
+              description: |
+                LIFETIME slowest write. Kept outside the window, because the
+                slowest write is the one an operator most wants and exactly the
+                one a moving window forgets.
         caveat:
           type: string
           description: |

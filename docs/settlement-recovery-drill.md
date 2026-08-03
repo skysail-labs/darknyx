@@ -209,7 +209,82 @@ Check it against the leaf count, never against the log's own confidence.
 
 ---
 
-## 6. Results — 2026-07-28
+## 6. Results — 2026-08-04
+
+Build under test: `main @ e19fa5d`, image `tee-v3-hardening-82`
+(`sha256:066b70cc…`), CVM `app_9ca3cded…` (`nightly-test-cvm`, CPU, `gpus: 0`),
+gateway on **prod9**. Re-run because PF-27 rewrote `reconcile_at_boot` into a
+batched form and the journal write-cost instrumentation had just landed.
+
+**All 11 pass criteria hold.**
+
+| # | Assertion | Observed |
+|---|---|---|
+| 1 | `in_flight_settlements` > 0 mid-flight | `{"draining":false,"cancelled_resting":0,"in_flight_settlements":1,"safe_to_stop":false}` |
+| 2 | `safe_to_stop` false while in flight | same body |
+| 3 | Interruption confirmed by CHAIN | shard leaf counts `2/0/0/0`, **total 2** (deposits only, not 7) |
+| 4 | Non-empty journal, recovery runs | `settle journal recovery complete …` |
+| 5 | Classification matches chain reality | `release_expired=1`, `already_settled=0`, `redrive=0` — consistent with total 2 |
+| 6 | `needs_operator=false` | recovery summary line |
+| 7 | Entries retired | `in_flight_settlements: 0` |
+| 8 | Locks handed to the sweeper | `lock sweeper: replaying un-released note locks from disk n=2` |
+| 9 | Drain closes trading | POST → `draining:true, safe_to_stop:true` |
+| 10 | Abandoning reopens | DELETE → `draining:false` |
+| 11 | Drained redeploy boots clean | `settle journal: present and empty, nothing in flight` |
+
+Assertion 5 is the one that matters, and it held for the documented reason: the
+kill lands at the first journal write, so the entry sits at `Locking` with no
+marker expiry, and `ReleaseExpired` is the correct classification. Checked
+against the leaf count, not against the log's own confidence.
+
+### Measurements
+
+| Metric | Value | Note |
+|---|---|---|
+| Settle end-to-end (baseline) | `total_ms=13365` | lock 2474, prove 2251 (witness 276 + prove_step 1944), verify 1834, ALT 1245 + wait 1075, settle 9226 |
+| Prior runs | 14210 / 14573 / 15310 | This run is the fastest of four, on prod9. Still three-to-four samples across differing network conditions — an observation, not a trend. |
+| **Journal durable write** | **p50 8212 µs / 6353 µs** | **Two runs, ONE SAMPLE EACH — not a percentile. Cause and fix below; the next run reads it from `/admin/drain`.** |
+| Recovery | classified 1 entry, `needs_operator=false` | PF-27's batched reconciliation, first live run |
+
+### The p50/p95 waiver is NOT yet retired
+
+The instrumentation works and fires, but it does not yet produce a percentile,
+and the reason is a real limitation of how it was built:
+
+**Bursty writes under-report.** The summary is throttled to one line per 10 s
+with the first write always emitting. A single-match settle performs its journal
+writes (`Prepared` → `Locking` → `Verifying` → `Settling`) inside one 10 s window
+— they all precede the ~9 s settle wait — so the only emission is the first, at
+`writes=1`. Samples 2..n are recorded and never reported unless a later write
+falls outside the window.
+
+So the numbers above are single samples of the FIRST write of each run, which is
+also the least representative (cold page cache). They are a useful order of
+magnitude — ~6–8 ms for tmp → fsync → rename → fsync(dir) on the LUKS volume —
+and nothing more.
+
+**FIXED 2026-08-04 — read it from `/admin/drain` on the next run.** The status
+response now carries `journal_write_us`:
+
+```json
+{"draining":false,"in_flight_settlements":1,"safe_to_stop":false,
+ "journal_write_us":{"count":4,"p50_us":6800,"p95_us":8200,"max_us":8212}}
+```
+
+Read-on-demand has no throttle window, so it does not care that a settle's
+writes arrive in a burst. The drill ALREADY polls this endpoint to find its kill
+moment ([§3](#3-the-trigger-that-works-the-journal-reports-on-itself)), so
+capture the body there — that is the distribution at the instant of the
+interruption — and read it again after recovery. The field is absent, not
+zeroed, before the first successful write.
+
+The throttled log line is unchanged and still useful as an ambient signal; it is
+simply no longer the only way to get the number. Retire this row once a run
+records a `count` above 1.
+
+---
+
+## 6b. Results — 2026-07-28
 
 Image `ghcr.io/skysail-labs/darknyx-tee@sha256:59e2932f40da51675fd6a9d854715d1fd6681a824f2fc4c8e75c4907ee7bbfda`
 (tag `tee-v3-hardening-76`, commit `3a93570`).

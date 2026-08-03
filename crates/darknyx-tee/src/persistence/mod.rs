@@ -34,4 +34,6 @@ pub use auth::{
 // settle critical path — see `settle::marker_sweep`).
 pub use markers::{markers_db_path, PendingMarkers, PendingSet, LOCKS_DB_FILE, MARKERS_DB_FILE};
 // In-flight settlement journal (T-06) — durable across restart/redeploy.
-pub use journal::{JournalEntry, JournalLoad, JournalStage, SettleJournal, JOURNAL_DB_FILE};
+pub use journal::{
+    JournalEntry, JournalLoad, JournalStage, JournalWriteStats, SettleJournal, JOURNAL_DB_FILE,
+};
