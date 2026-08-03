@@ -1,9 +1,7 @@
 GHSA-3gc7-fjrx-p6mg bigint-buffer high
-GHSA-3jxr-9vmj-r5cp brace-expansion high
 GHSA-58qx-3vcg-4xpx ws high
 GHSA-848j-6mx2-7j84 elliptic low
 GHSA-96hv-2xvq-fx4p ws high
-GHSA-mh99-v99m-4gvg brace-expansion high
 GHSA-ph9p-34f9-6g65 tmp high
 GHSA-qpx9-hpmf-5gmw underscore high
 GHSA-w5hq-g745-h8pq uuid moderate
