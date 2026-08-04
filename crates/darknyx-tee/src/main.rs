@@ -1017,11 +1017,11 @@ async fn build_settle_driver(
                     darknyx_tee::settle::recover::RecoveryAction::Redrive { .. }
                         | darknyx_tee::settle::recover::RecoveryAction::ReleaseExpired { .. }
                 ) {
-                    for c in [
-                        entry.payload.note_a_commitment,
-                        entry.payload.note_b_commitment,
-                    ] {
-                        let _ = lock_sweep_tx.send(c);
+                    // The sweeper derives NoteLock PDAs, so it must receive
+                    // TAGS. Sending commitments would make it look for locks at
+                    // addresses that never existed and silently reclaim nothing.
+                    for tag in [entry.payload.note_a_use_tag, entry.payload.note_b_use_tag] {
+                        let _ = lock_sweep_tx.send(tag);
                     }
                 }
             }

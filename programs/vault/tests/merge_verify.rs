@@ -108,6 +108,10 @@ fn prove_merge(
     [u8; 32],
     [u8; 32],
     [u8; 32],
+    // Leaf values (into the Merkle tree), then the public consume handles
+    // (into the merge ix and the note locks). Two lists on purpose: the tree
+    // still stores commitments, only the handles became tags.
+    Vec<[u8; 32]>,
     Vec<[u8; 32]>,
 ) {
     assert!(num_real >= 1 && num_real <= k);
@@ -146,9 +150,14 @@ fn prove_merge(
     let mut is_active = vec![];
     let mut amount_s = vec![];
     let mut inner_s = vec![];
-    // C-01: the K input note commitments are the circuit's PUBLIC OUTPUTS —
-    // active slots emit their real commitment (BE32), dummies emit 0. These are
-    // what merge.rs consumes as commitment-keyed ConsumedNoteEntry guards.
+    // C-01: the K input handles are the circuit's PUBLIC OUTPUTS — active slots
+    // emit their note-use TAG (BE32), dummies emit 0. These are what merge.rs
+    // consumes as tag-keyed ConsumedNoteEntry guards.
+    //
+    // `input_commitments` (the leaf values) is still needed separately: the
+    // merged note's inner hash is defined over consumed COMMITMENTS, and that
+    // derivation is KAT-pinned on both host sides.
+    let mut input_use_tags: Vec<[u8; 32]> = vec![];
     let mut input_commitments: Vec<[u8; 32]> = vec![];
     let mut paths: Vec<Vec<String>> = vec![];
     let mut indices: Vec<Vec<String>> = vec![];
@@ -160,6 +169,10 @@ fn prove_merge(
             amount_s.push(amounts[i].to_string());
             inner_s.push(fr_to_dec(&inners[i]));
             input_commitments.push(commitments[i]);
+            input_use_tags.push(
+                darkpool_crypto::note_use_tag(&commitments[i], &fr_to_be_bytes(&inners[i]))
+                    .unwrap(),
+            );
             paths.push(
                 sib.iter()
                     .map(|s| fr_to_dec(&Fr::from_be_bytes_mod_order(s)))
@@ -171,6 +184,7 @@ fn prove_merge(
             amount_s.push("0".to_string());
             inner_s.push("0".to_string());
             input_commitments.push([0u8; 32]);
+            input_use_tags.push([0u8; 32]);
             paths.push(vec!["0".to_string(); TREE_DEPTH]);
             indices.push(vec!["0".to_string(); TREE_DEPTH]);
         }
@@ -257,6 +271,7 @@ fn prove_merge(
         fr_to_be_bytes(&mint_lo),
         fr_to_be_bytes(&mint_hi),
         input_commitments,
+        input_use_tags,
     )
 }
 
@@ -330,7 +345,7 @@ fn build_merge_ix(
 
 #[test]
 fn merge_k2_verifies_and_public_order_matches() {
-    let (proof, public_inputs, out_c, root, mlo, mhi, ics) = prove_merge(2, 2);
+    let (proof, public_inputs, out_c, root, mlo, mhi, _leaves, ics) = prove_merge(2, 2);
 
     // Public-signal order (must match merge.rs — C-01, outputs first):
     //   [outputCommitment, inputCommitments[0], inputCommitments[1], merkleRoot, mint_lo, mint_hi]
@@ -362,7 +377,7 @@ fn merge_k2_verifies_and_public_order_matches() {
 #[test]
 fn merge_k4_padded_verifies() {
     // 2 real notes + 2 dummy slots.
-    let (proof, public_inputs, out_c, root, _mlo, _mhi, ics) = prove_merge(4, 2);
+    let (proof, public_inputs, out_c, root, _mlo, _mhi, _leaves, ics) = prove_merge(4, 2);
     // Order (C-01): [outputCommitment, inputCommitments[0..3], merkleRoot, mint_lo, mint_hi]
     assert_eq!(public_inputs.len(), 8);
     assert_eq!(public_inputs[0], out_c);
@@ -406,12 +421,12 @@ fn merge_rejects_tampered_proof() {
 
 #[test]
 fn merge_rejects_locked_input_before_consuming_any_note() {
-    let (proof, _public_inputs, output, root, _mlo, _mhi, commitments) = prove_merge(2, 2);
+    let (proof, _public_inputs, output, root, _mlo, _mhi, leaves, tags) = prove_merge(2, 2);
 
     let mut locked = Harness::setup();
-    assert_eq!(install_merge_input_tree(&mut locked, &commitments), root);
-    seed_note_lock(&mut locked, &commitments[0], &[0x44u8; 16], 1_000_000, 0);
-    let locked_ix = build_merge_ix(&locked, &proof, &commitments, output, root);
+    assert_eq!(install_merge_input_tree(&mut locked, &leaves), root);
+    seed_note_lock(&mut locked, &tags[0], &[0x44u8; 16], 1_000_000, 0);
+    let locked_ix = build_merge_ix(&locked, &proof, &tags, output, root);
     let locked_tx = Transaction::new(
         &[&locked.trader],
         Message::new(&[locked_ix], Some(&locked.trader.pubkey())),
@@ -422,15 +437,15 @@ fn merge_rejects_locked_input_before_consuming_any_note() {
         "merge must reject when any active input has a NoteLock"
     );
     assert_eq!(tree_leaf_count(&locked, 0), 2);
-    assert!(!consumed_note_exists(&locked, &commitments[0]));
-    assert!(!consumed_note_exists(&locked, &commitments[1]));
+    assert!(!consumed_note_exists(&locked, &tags[0]));
+    assert!(!consumed_note_exists(&locked, &tags[1]));
 
     // The same proof and inputs succeed when both required NoteLock PDAs are
     // absent, proving the negative result above is the lifecycle guard rather
     // than a malformed proof/root/account layout.
     let mut unlocked = Harness::setup();
-    assert_eq!(install_merge_input_tree(&mut unlocked, &commitments), root);
-    let unlocked_ix = build_merge_ix(&unlocked, &proof, &commitments, output, root);
+    assert_eq!(install_merge_input_tree(&mut unlocked, &leaves), root);
+    let unlocked_ix = build_merge_ix(&unlocked, &proof, &tags, output, root);
     let unlocked_tx = Transaction::new(
         &[&unlocked.trader],
         Message::new(&[unlocked_ix], Some(&unlocked.trader.pubkey())),
@@ -441,8 +456,8 @@ fn merge_rejects_locked_input_before_consuming_any_note() {
         .send_transaction(unlocked_tx)
         .expect("merge without locks must succeed");
     assert_eq!(tree_leaf_count(&unlocked, 0), 3);
-    assert!(consumed_note_exists(&unlocked, &commitments[0]));
-    assert!(consumed_note_exists(&unlocked, &commitments[1]));
+    assert!(consumed_note_exists(&unlocked, &tags[0]));
+    assert!(consumed_note_exists(&unlocked, &tags[1]));
 }
 
 #[test]
@@ -478,12 +493,14 @@ fn merge_rejects_all_dummy_transport_before_tree_append() {
 /// duplicated list is enough to exercise it.
 #[test]
 fn merge_rejects_duplicate_active_inputs() {
-    let (proof, _public_inputs, output, root, _mlo, _mhi, commitments) = prove_merge(2, 2);
+    let (proof, _public_inputs, output, root, _mlo, _mhi, leaves, tags) = prove_merge(2, 2);
 
     let mut h = Harness::setup();
-    assert_eq!(install_merge_input_tree(&mut h, &commitments), root);
+    assert_eq!(install_merge_input_tree(&mut h, &leaves), root);
 
-    let duplicated = [commitments[0], commitments[0]];
+    // S-11: two identical active HANDLES. The guard keys on what the ix
+    // carries, which is now the tag.
+    let duplicated = [tags[0], tags[0]];
     let ix = build_merge_ix(&h, &proof, &duplicated, output, root);
     let tx = Transaction::new(
         &[&h.trader],
@@ -496,7 +513,7 @@ fn merge_rejects_duplicate_active_inputs() {
     );
     // Rejected before any state mutation.
     assert_eq!(tree_leaf_count(&h, 0), 2);
-    assert!(!consumed_note_exists(&h, &commitments[0]));
+    assert!(!consumed_note_exists(&h, &tags[0]));
 }
 
 /// S-03(C) (audit 2026-07-25): an EXPIRED NoteLock must not block a merge.
@@ -510,17 +527,17 @@ fn merge_rejects_duplicate_active_inputs() {
 /// dead AT its expiry, the CS-09 boundary settlement must land strictly before.
 #[test]
 fn merge_allows_an_input_whose_lock_has_expired() {
-    let (proof, _public_inputs, output, root, _mlo, _mhi, commitments) = prove_merge(2, 2);
+    let (proof, _public_inputs, output, root, _mlo, _mhi, leaves, tags) = prove_merge(2, 2);
 
     let mut h = Harness::setup();
-    assert_eq!(install_merge_input_tree(&mut h, &commitments), root);
+    assert_eq!(install_merge_input_tree(&mut h, &leaves), root);
 
     let expiry = 5_000u64;
-    seed_note_lock(&mut h, &commitments[0], &[0x44u8; 16], expiry, 0);
+    seed_note_lock(&mut h, &tags[0], &[0x44u8; 16], expiry, 0);
 
     // Still live one slot before expiry: the guard must hold.
     h.svm.warp_to_slot(expiry - 1);
-    let live_ix = build_merge_ix(&h, &proof, &commitments, output, root);
+    let live_ix = build_merge_ix(&h, &proof, &tags, output, root);
     let live_tx = Transaction::new(
         &[&h.trader],
         Message::new(&[live_ix], Some(&h.trader.pubkey())),
@@ -530,7 +547,7 @@ fn merge_allows_an_input_whose_lock_has_expired() {
         h.svm.send_transaction(live_tx).is_err(),
         "a lock that has not yet expired must still block the merge (N-04)"
     );
-    assert!(!consumed_note_exists(&h, &commitments[0]));
+    assert!(!consumed_note_exists(&h, &tags[0]));
 
     // At expiry the lock is dead and the merge proceeds — without anyone having
     // had to call release_lock first.
@@ -540,7 +557,7 @@ fn merge_allows_an_input_whose_lock_has_expired() {
     // short-circuits with `AlreadyProcessed` without running the program.
     h.svm.warp_to_slot(expiry);
     h.svm.expire_blockhash();
-    let expired_ix = build_merge_ix(&h, &proof, &commitments, output, root);
+    let expired_ix = build_merge_ix(&h, &proof, &tags, output, root);
     let expired_tx = Transaction::new(
         &[&h.trader],
         Message::new(&[expired_ix], Some(&h.trader.pubkey())),
@@ -550,6 +567,6 @@ fn merge_allows_an_input_whose_lock_has_expired() {
         .send_transaction(expired_tx)
         .expect("an expired lock must not block the merge");
     assert_eq!(tree_leaf_count(&h, 0), 3);
-    assert!(consumed_note_exists(&h, &commitments[0]));
-    assert!(consumed_note_exists(&h, &commitments[1]));
+    assert!(consumed_note_exists(&h, &tags[0]));
+    assert!(consumed_note_exists(&h, &tags[1]));
 }

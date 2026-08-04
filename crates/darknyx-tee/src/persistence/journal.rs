@@ -85,9 +85,19 @@ pub const JOURNAL_DB_FILE: &str = "settle_journal.db";
 
 /// Bumped on any non-backward-compatible change to [`JournalSnapshot`].
 ///
+/// v1 -> v2 (2026-08): `MatchResultPayload` replaced its two consumed
+/// commitments with note-use TAGS and grew by the two relock tags (488 -> 552
+/// bytes), and `LockSideInputs` follows. A v1 entry decoded as v2 would
+/// misattribute every field after the change.
+///
+/// OPERATIONAL CONSEQUENCE: a version mismatch is `Damaged`, NOT "start empty"
+/// (deliberately — see [`JournalLoad`]). So an enclave upgraded across this
+/// bump with entries still in flight demands an operator. **Drain before
+/// upgrading**: `POST /admin/drain`, wait for `safe_to_stop`, then deploy.
+///
 /// A version mismatch is NOT treated as "start empty" the way the best-effort
 /// bookkeeping snapshots are — see [`JournalLoad`].
-const JOURNAL_VERSION: u32 = 1;
+const JOURNAL_VERSION: u32 = 2;
 
 /// Where a job had got to when it was last journaled. Deliberately a small
 /// closed enum rather than a reuse of `SettleJobStage`: this is an on-disk
@@ -578,7 +588,7 @@ pub(super) mod tests {
     fn lock_side(note: u8, order: u8) -> LockSideInputs {
         LockSideInputs {
             tree_id: 2,
-            note_commitment: [note; 32],
+            note_use_tag: [note; 32],
             order_id: [order; 16],
             expiry_slot: 1_000,
             token_mint: [0x0F; 32],
@@ -591,8 +601,8 @@ pub(super) mod tests {
     fn payload(match_id: u8) -> MatchResultPayload {
         MatchResultPayload {
             match_id: [match_id; 16],
-            note_a_commitment: [0xA1; 32],
-            note_b_commitment: [0xB1; 32],
+            note_a_use_tag: [0xA1; 32],
+            note_b_use_tag: [0xB1; 32],
             note_c_commitment: [0xC1; 32],
             note_d_commitment: [0xD1; 32],
             note_e_commitment: [0xE1; 32],
@@ -605,6 +615,8 @@ pub(super) mod tests {
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
+            note_e_use_tag: [0u8; 32],
+            note_f_use_tag: [0u8; 32],
             batch_slot: 7,
             fill_recovery: [0u8; 128],
         }
@@ -654,7 +666,7 @@ pub(super) mod tests {
         let e = j.get(7, 2).expect("entry recovered");
         assert_eq!(e.stage, JournalStage::Settling);
         assert_eq!(e.settle_sig.as_deref(), Some("sig-abc"));
-        assert_eq!(e.payload.note_a_commitment, [0xA1; 32]);
+        assert_eq!(e.payload.note_a_use_tag, [0xA1; 32]);
     }
 
     /// THE load-bearing property: a signature written before submission is on
@@ -689,10 +701,10 @@ pub(super) mod tests {
         }
         let (j, _) = SettleJournal::open(Some(dir.path()));
         let e = j.get(4, 0).unwrap();
-        assert_eq!(e.buyer_lock.note_commitment, [0xA1; 32]);
+        assert_eq!(e.buyer_lock.note_use_tag, [0xA1; 32]);
         assert_eq!(e.buyer_lock.order_id, [0x01; 16]);
         assert_eq!(e.buyer_lock.tree_id, 2);
-        assert_eq!(e.seller_lock.note_commitment, [0xB1; 32]);
+        assert_eq!(e.seller_lock.note_use_tag, [0xB1; 32]);
         assert_eq!(
             e.buyer_lock.proof.pi_b,
             proof().pi_b,

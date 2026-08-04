@@ -142,8 +142,8 @@ pub(super) mod tests {
                 stage: JournalStage::Settling,
                 payload: MatchResultPayload {
                     match_id: [0x11; 16],
-                    note_a_commitment: [0xA1; 32],
-                    note_b_commitment: [0xB1; 32],
+                    note_a_use_tag: [0xA1; 32],
+                    note_b_use_tag: [0xB1; 32],
                     note_c_commitment: [0xC1; 32],
                     note_d_commitment: [0xD1; 32],
                     note_e_commitment: [0xE1; 32],
@@ -156,6 +156,8 @@ pub(super) mod tests {
                     buyer_relock_expiry: 0,
                     seller_relock_order_id: [0; 16],
                     seller_relock_expiry: 0,
+                    note_e_use_tag: [0u8; 32],
+                    note_f_use_tag: [0u8; 32],
                     batch_slot: 7,
                     fill_recovery: [0u8; 128],
                 },
@@ -175,7 +177,7 @@ pub(super) mod tests {
     fn lock(note: u8) -> LockSideInputs {
         LockSideInputs {
             tree_id: 0,
-            note_commitment: [note; 32],
+            note_use_tag: [note; 32],
             order_id: [note; 16],
             expiry_slot: 1_000,
             token_mint: [0x0F; 32],

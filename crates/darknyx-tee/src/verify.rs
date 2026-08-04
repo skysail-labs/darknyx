@@ -98,11 +98,14 @@ fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
 pub fn verify_valid_input(
     proof: &Groth16ProofBytes,
     merkle_root: &[u8; 32],
-    note_commitment: &[u8; 32],
+    note_use_tag: &[u8; 32],
     token_mint: &[u8; 32],
 ) -> Result<(), VerifyError> {
     let [mint_lo, mint_hi] = pubkey_pair_be32(token_mint);
-    let public_inputs: [[u8; 32]; 4] = [*merkle_root, *note_commitment, mint_lo, mint_hi];
+    // Public input 1 is the TAG, matching valid_input/circuit.circom and the
+    // on-chain `lock_note`. The commitment is recomputed INSIDE the circuit from
+    // the private opening and never appears here.
+    let public_inputs: [[u8; 32]; 4] = [*merkle_root, *note_use_tag, mint_lo, mint_hi];
 
     let vk = Groth16Verifyingkey {
         nr_pubinputs: vk::VALID_INPUT_IC.len().saturating_sub(1),

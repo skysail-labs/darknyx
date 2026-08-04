@@ -38,7 +38,7 @@ use super::pipeline::{budget_ixs, LOCK_COMPUTE_UNIT_LIMIT};
 use crate::solana_rpc::{RpcError, SolanaRpcClient};
 
 /// Per-side inputs the TEE needs to construct one `lock_note` ix.
-/// `note_commitment` typically comes from the `MatchPair` the matcher emitted;
+/// `note_use_tag` typically comes from the `MatchPair` the matcher emitted;
 /// `token_mint` + `expiry_slot` are config-
 /// or order-derived; `merkle_root` + `proof` are the user-supplied
 /// VALID_INPUT inputs the TEE relays (see 4g.3 doc on the proof
@@ -51,7 +51,7 @@ pub struct LockSideInputs {
     /// a relocked continuation's home tree is the shard the prior settle
     /// appended its change note to.
     pub tree_id: u8,
-    pub note_commitment: [u8; 32],
+    pub note_use_tag: [u8; 32],
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
     pub token_mint: [u8; 32],
@@ -69,7 +69,7 @@ impl From<LockSideInputs> for LockNoteArgs {
     fn from(s: LockSideInputs) -> Self {
         Self {
             tree_id: s.tree_id,
-            note_commitment: s.note_commitment,
+            note_use_tag: s.note_use_tag,
             order_id: s.order_id,
             expiry_slot: s.expiry_slot,
             token_mint: s.token_mint,
@@ -290,7 +290,7 @@ mod tests {
     fn dummy_buyer_inputs() -> LockSideInputs {
         LockSideInputs {
             tree_id: 0,
-            note_commitment: [0xAA; 32],
+            note_use_tag: [0xAA; 32],
             order_id: [0xBB; 16],
             expiry_slot: 1_000_000,
             token_mint: [0xCC; 32],
@@ -303,7 +303,7 @@ mod tests {
     fn dummy_seller_inputs() -> LockSideInputs {
         LockSideInputs {
             tree_id: 0,
-            note_commitment: [0x55; 32],
+            note_use_tag: [0x55; 32],
             order_id: [0x66; 16],
             expiry_slot: 1_000_000,
             token_mint: [0x77; 32],
@@ -317,7 +317,7 @@ mod tests {
     fn lock_side_inputs_into_args_round_trips() {
         let buyer = dummy_buyer_inputs();
         let args: LockNoteArgs = buyer.clone().into();
-        assert_eq!(args.note_commitment, buyer.note_commitment);
+        assert_eq!(args.note_use_tag, buyer.note_use_tag);
         assert_eq!(args.order_id, buyer.order_id);
         assert_eq!(args.expiry_slot, buyer.expiry_slot);
         assert_eq!(args.token_mint, buyer.token_mint);
@@ -328,7 +328,7 @@ mod tests {
     fn buyer_and_seller_inputs_produce_distinct_note_locks() {
         let buyer: LockNoteArgs = dummy_buyer_inputs().into();
         let seller: LockNoteArgs = dummy_seller_inputs().into();
-        assert_ne!(buyer.note_commitment, seller.note_commitment);
+        assert_ne!(buyer.note_use_tag, seller.note_use_tag);
         // The PDA derivation is what makes these distinct on-chain;
         // verifying the input commitments differ is the test layer
         // assertion we can make without a runtime.

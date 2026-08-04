@@ -276,8 +276,8 @@ mod tests {
     fn payload() -> MatchResultPayload {
         MatchResultPayload {
             match_id: [0x11; 16],
-            note_a_commitment: [0xA1; 32],
-            note_b_commitment: [0xB1; 32],
+            note_a_use_tag: [0xA1; 32],
+            note_b_use_tag: [0xB1; 32],
             note_c_commitment: [0xC1; 32],
             note_d_commitment: [0xD1; 32],
             note_e_commitment: [0xE1; 32],
@@ -290,6 +290,8 @@ mod tests {
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
+            note_e_use_tag: [0u8; 32],
+            note_f_use_tag: [0u8; 32],
             batch_slot: 7,
             // Worst case for the size guard below: a full 128-byte recovery
             // bundle (Borsh encodes [u8;128] as 128 bytes regardless of content,
@@ -329,13 +331,26 @@ mod tests {
 
         // This is the worst case: distinct change notes, all accounts present,
         // a full recovery bundle, four tree shards in the static ALT, and both
-        // production ALTs. Payload v9 removes 64 vestigial nullifier bytes.
-        // Pin both the target size and the resulting Solana packet headroom.
+        // production ALTs.
+        //
+        // BUDGET HISTORY. Payload v9 removed 64 vestigial nullifier bytes and
+        // this sat at 1109 with a 1120 guard. Payload v11 spends 64 of that back
+        // on `note_e_use_tag` / `note_f_use_tag` — the relock PDAs need the tag
+        // while the leaf append needs the commitment, and neither derives from
+        // the other without the private inner. So: 1173 of the 1232 Solana cap,
+        // 59 bytes of real headroom.
+        //
+        // The guard is deliberately set just above the measured size, not at the
+        // hard cap. Anything that grows Tx D by more than a handful of bytes —
+        // one more account, one more payload field — should fail HERE, with a
+        // number, rather than as a `TransactionTooLarge` on devnet. At 59 bytes
+        // remaining there is room for roughly one more 32-byte field and nothing
+        // else; the next addition needs a byte back from somewhere.
         let wire = bincode::serialize(&tx).unwrap();
-        const MAX_TX_D_WIRE_LEN: usize = 1120;
-        const MIN_TX_D_HEADROOM: usize = 112;
+        const MAX_TX_D_WIRE_LEN: usize = 1180;
+        const MIN_TX_D_HEADROOM: usize = 52;
         eprintln!(
-            "TX_D_WIRE_SIZE_V9 bytes={} headroom={}",
+            "TX_D_WIRE_SIZE_V11 bytes={} headroom={}",
             wire.len(),
             SOLANA_TX_SIZE_CAP - wire.len()
         );

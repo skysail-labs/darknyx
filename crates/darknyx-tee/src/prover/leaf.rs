@@ -33,7 +33,7 @@
 //! on-chain handler can re-derive it via `solana_poseidon::hashv`; keep it
 //! ≤ 12 (CLAUDE.md §5.3).
 
-use darkpool_crypto::{poseidon_hash_bytes, CryptoError};
+use darkpool_crypto::{note_use_tag, poseidon_hash_bytes, CryptoError};
 
 use super::witness::{u64_to_be32, u8_tag_to_be32, MatchSlotWitness};
 
@@ -43,6 +43,14 @@ pub const DOMAIN_BATCH_ROOT: u8 = 22;
 /// overlap with the old two-stage leaf (the retired DOMAIN_LEAF_INNER=20 /
 /// DOMAIN_LEAF_TOP=21 tags, removed when the leaf collapsed to one Poseidon11).
 pub const DOMAIN_LEAF_V2: u8 = 23;
+
+/// Leaf tag v3. The consumed slots now carry note-use TAGS instead of
+/// commitments, so the leaf construction changed and needs its own domain.
+pub const DOMAIN_LEAF_V3: u8 = 31;
+
+/// Folds the two relock tags into one leaf field. Binding them separately
+/// would make the leaf 13 inputs against light-poseidon's 12 cap.
+pub const DOMAIN_RELOCK_DIGEST: u8 = 30;
 /// The production circuit is instantiated at N=16. Smaller powers of two are
 /// used by unit/integration tests and share this implementation.
 pub const MAX_BATCH_LEAVES: usize = 16;
@@ -73,11 +81,33 @@ pub enum LeafError {
 /// leave the settle payload). The two fee-note commitments are included so the
 /// every match's atomic on-chain append of them is proof-backed.
 pub fn compute_batch_leaf(slot: &MatchSlotWitness) -> Result<[u8; 32], LeafError> {
+    // The consumed slots contribute their TAGS. The witness still carries the
+    // commitments — the circuit needs them as private signals to bind amount,
+    // owner and mint — so the tags are derived here exactly as the circuit
+    // derives them, from (commitment, inner).
+    let tag_a = note_use_tag(&slot.note_a_commitment, &slot.a_inner)?;
+    let tag_b = note_use_tag(&slot.note_b_commitment, &slot.b_inner)?;
+
+    // Masked like their commitments: no change note means no tag.
+    let tag_e = if slot.note_e_commitment == [0u8; 32] {
+        [0u8; 32]
+    } else {
+        note_use_tag(&slot.note_e_commitment, &slot.e_inner)?
+    };
+    let tag_f = if slot.note_f_commitment == [0u8; 32] {
+        [0u8; 32]
+    } else {
+        note_use_tag(&slot.note_f_commitment, &slot.f_inner)?
+    };
+
+    let relock_digest = poseidon_hash_bytes(&[u8_tag_to_be32(DOMAIN_RELOCK_DIGEST), tag_e, tag_f])?;
+
+    // TWELVE inputs — exactly at the light-poseidon cap.
     let leaf = poseidon_hash_bytes(&[
-        u8_tag_to_be32(DOMAIN_LEAF_V2),
+        u8_tag_to_be32(DOMAIN_LEAF_V3),
         u64_to_be32(u64::from(slot.is_active)),
-        slot.note_a_commitment,
-        slot.note_b_commitment,
+        tag_a,
+        tag_b,
         slot.note_c_commitment,
         slot.note_d_commitment,
         slot.note_e_commitment,
@@ -85,6 +115,7 @@ pub fn compute_batch_leaf(slot: &MatchSlotWitness) -> Result<[u8; 32], LeafError
         slot.note_fee_base_commitment,
         slot.note_fee_quote_commitment,
         u64_to_be32(slot.batch_slot),
+        relock_digest,
     ])?;
     Ok(leaf)
 }
@@ -260,7 +291,7 @@ mod tests {
     /// this module's tag/arity ordering has drifted from the
     /// circuit (would silently break VALID_MATCH_BATCH on-chain).
     /// Either way: fail loud, fix at the source.
-    const DUMMY_LEAF_HEX: &str = "11a820f978145dacd319f64f0fa544500ea5d0069ff25d9015fb01f1b3edd35c";
+    const DUMMY_LEAF_HEX: &str = "0e1b8809192502587b54de32e7f6fe4616d162ac03c57b759e0e4e8f25b84ce3";
 
     #[test]
     fn dummy_slot_leaf_is_pinned() {
@@ -283,7 +314,7 @@ mod tests {
     fn batch_root_of_two_identical_dummies_is_pinned() {
         let leaf = compute_batch_leaf(&dummy_slot()).unwrap();
         let root = compute_batch_root(&[leaf, leaf]).unwrap();
-        let want = "1c078cbfb951f80d3773c82adb49bd4339cbf5e1b08b18fe6cb87763b2b0fd5b";
+        let want = "2cb3ac8407415d956dfefed2ae513e45f7439cfb5bbeba035a4a30758ed0b922";
         // Pin the value byte-for-byte so a future Poseidon refactor
         // surfaces here. (The prior literal was a dead pin —
         // `let _ = want` with no assertion — and had drifted from the
