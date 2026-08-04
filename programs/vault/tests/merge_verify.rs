@@ -24,8 +24,8 @@ use vault::zk::verify_groth16_proof;
 
 use settle_harness::{
     anchor_disc, consumed_note_exists, consumed_note_pda, merkle_tree_pda, note_lock_pda,
-    seed_note_lock, tree_current_root, tree_leaf_count, vault_config_pda, Harness, Pubkey,
-    SYSTEM_PROGRAM_ID,
+    seed_consumed_note, seed_note_lock, tree_current_root, tree_leaf_count, vault_config_pda,
+    Harness, Pubkey, SYSTEM_PROGRAM_ID,
 };
 use solana_instruction::{AccountMeta, Instruction};
 use solana_message::Message;
@@ -458,6 +458,66 @@ fn merge_rejects_locked_input_before_consuming_any_note() {
     assert_eq!(tree_leaf_count(&unlocked, 0), 3);
     assert!(consumed_note_exists(&unlocked, &tags[0]));
     assert!(consumed_note_exists(&unlocked, &tags[1]));
+}
+
+/// Cross-path consume-once under the tag namespace (plan test #4).
+///
+/// The migration's sharpest failure mode is PARTIAL adoption: settle consumes a
+/// note under its tag, but merge (or withdraw) still keys on the commitment, so
+/// the guard PDAs live in two namespaces and the same note spends twice. The
+/// settle/withdraw direction is covered in `tee_forced_settle_batched.rs`; this
+/// is the merge direction.
+///
+/// It also pins the direction of the fix rather than merely "some rejection":
+/// the entry is seeded at the TAG address and the merge must fail, while an
+/// entry at the COMMITMENT address must NOT block it — proving merge really
+/// moved namespace instead of coincidentally rejecting.
+#[test]
+fn merge_rejects_an_input_already_consumed_by_a_settle() {
+    let (proof, _public_inputs, output, root, _mlo, _mhi, leaves, tags) = prove_merge(2, 2);
+
+    // A settle consumed input 0 — the only trace it leaves is this PDA.
+    let mut consumed = Harness::setup();
+    assert_eq!(install_merge_input_tree(&mut consumed, &leaves), root);
+    seed_consumed_note(&mut consumed, &tags[0]);
+    let ix = build_merge_ix(&consumed, &proof, &tags, output, root);
+    let tx = Transaction::new(
+        &[&consumed.trader],
+        Message::new(&[ix], Some(&consumed.trader.pubkey())),
+        consumed.svm.latest_blockhash(),
+    );
+    assert!(
+        consumed.svm.send_transaction(tx).is_err(),
+        "merge must reject an input a settle already consumed under its tag"
+    );
+    assert_eq!(tree_leaf_count(&consumed, 0), 2, "no output leaf appended");
+    assert!(!consumed_note_exists(&consumed, &tags[1]));
+
+    // Same proof, same inputs, but the entry sits at the COMMITMENT address.
+    // Under the old scheme that would have blocked the merge; under tags it is
+    // simply an unrelated account, so the merge proceeds.
+    let mut stale_namespace = Harness::setup();
+    assert_eq!(
+        install_merge_input_tree(&mut stale_namespace, &leaves),
+        root
+    );
+    assert_ne!(
+        leaves[0], tags[0],
+        "precondition: the leaf and its handle are different values"
+    );
+    seed_consumed_note(&mut stale_namespace, &leaves[0]);
+    let ix = build_merge_ix(&stale_namespace, &proof, &tags, output, root);
+    let tx = Transaction::new(
+        &[&stale_namespace.trader],
+        Message::new(&[ix], Some(&stale_namespace.trader.pubkey())),
+        stale_namespace.svm.latest_blockhash(),
+    );
+    stale_namespace
+        .svm
+        .send_transaction(tx)
+        .expect("a commitment-keyed entry is not the guard any more");
+    assert_eq!(tree_leaf_count(&stale_namespace, 0), 3);
+    assert!(consumed_note_exists(&stale_namespace, &tags[0]));
 }
 
 #[test]

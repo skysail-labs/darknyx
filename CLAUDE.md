@@ -84,6 +84,24 @@ VALID_MATCH_BATCH v3 derives user-output inners as
 output randomness and lets the matcher rotate partial-fill residuals without a
 client roundtrip or anchor-dependent liveness.
 
+**The public handle is the note-use TAG, not the commitment.**
+
+```
+note_use_tag = Poseidon3(DOMAIN_NOTE_USE = 29, commitment, inner_hash)
+```
+
+The commitment reaches the chain exactly once — as a Merkle leaf. `lock_note`,
+`withdraw`, `merge`, and the settle payload's consumed inputs all key on the
+tag, so a chain observer can no longer follow a note from deposit to withdrawal
+by string-matching 32 bytes. **Both are `[u8; 32]`, so confusing them compiles,
+derives a plausible-looking PDA, and fails only on-chain as `AccountNotFound` /
+`ConstraintSeeds` — check which namespace a value is in before passing it.**
+Deposit inners gained a seed-derived `note_secret`
+(`Poseidon4(27, owner_commitment, recovery_nonce, note_secret)`) so one leaked
+wallet-wide owner commitment cannot recompute a user's whole tag history.
+Full rationale, and an exact statement of what is and is not unlinkable, in
+**[`CRYPTOGRAPHY.md` §2.1](CRYPTOGRAPHY.md)**.
+
 > **There is no legacy CLOB / MagicBlock-ER / `matching_engine` program
 > anymore.** It was deleted. If you find a reference to `matching_engine`,
 > `run_batch`, `submit_order` (on-chain), PER sessions, or ER delegation
@@ -679,12 +697,14 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
   so no split is needed. **Keep it ≤ 12** — re-introducing bound fields (e.g.
   plaintext amounts) would force the old two-stage Poseidon12+Poseidon9 split
   back (that's why it used to be two-stage).
-* **Domain tags.** `DOMAIN_LEAF_V2 = 23` (the active leaf tag),
+* **Domain tags.** `DOMAIN_LEAF_V3 = 31` (the active leaf tag),
+  `DOMAIN_RELOCK_DIGEST = 30`, `DOMAIN_NOTE_USE = 29`,
   `DOMAIN_MATCH_OUTPUT_INNER = 24`, `DOMAIN_MATCH_FEE_INNER = 25`,
   `DOMAIN_DEPOSIT_INNER = 27`, `DOMAIN_MATCH_CONFIG = 28`,
   `DOMAIN_BATCH_ROOT = 22`, `DOMAIN_NOTE = 2`, `DOMAIN_NULL = 3` — each
   appears in Rust + TS + circom; keep them in lockstep. (`DOMAIN_LEAF_INNER =
-  20` / `DOMAIN_LEAF_TOP = 21` are the **retired** two-stage-leaf tags — dead
+  20` / `DOMAIN_LEAF_TOP = 21` are the **retired** two-stage-leaf tags, and
+  `DOMAIN_LEAF_V2 = 23` is the retired Poseidon11 commitment-only leaf — dead
   constants, no longer hashed.)
 * **Parameterised N.** `MatchBatch(N)` is instantiated at N=2/4/16. Only
   N=16 is wired on-chain (`vk_match_batch_n16.rs`); N=2/4 are dev/test.
@@ -754,14 +774,16 @@ check fails, or proofs don't verify.
 | Poseidon arities | `darkpool-crypto/src/poseidon.rs` | `sdk/src/zk/poseidon.ts` | `poseidon-parity.test.ts` |
 | Note commitment (v2) | `darkpool-crypto/src/note.rs::commitment_from_fields_v2` | `sdk/src/utxo/note.ts::noteCommitmentV2` | `note-commitment-parity.test.ts` |
 | Nullifier (v2) | `darkpool-crypto/src/nullifier.rs` | `sdk/src/utxo/note.ts::nullifierV2` | `nullifier-parity.test.ts` |
-| Deposit inner | `darkpool-crypto/src/deposit.rs::deposit_inner_hash` | `sdk/src/utxo/deposit-inner.ts::deriveDepositInnerHash` | `deposit-inner-parity.test.ts` + `valid-deposit-prover.test.ts` |
+| **Note-use tag** | `darkpool-crypto/src/note_use.rs::note_use_tag` | `sdk/src/utxo/note-use.ts::deriveNoteUseTag` | `note-use-tag-parity.test.ts` |
+| Deposit inner (arity **4**) | `darkpool-crypto/src/deposit.rs::deposit_inner_hash` | `sdk/src/utxo/deposit-inner.ts::deriveDepositInnerHash` | `deposit-inner-parity.test.ts` + `valid-deposit-prover.test.ts` |
+| Note secret | `darkpool-crypto/src/keys.rs::derive_note_secret` | `sdk/src/keys/key-generators.ts::deriveNoteSecret` | `keys-parity.test.ts` |
 | `inner_hash` (change/trade/fee) | `darkpool-matcher/src/change_note.rs::derive_inner` | `tests/helpers/e2e-helpers.ts::deriveInner` | `change-note-inner-parity.test.ts` + `inner-hash-parity.test.ts` |
 | Key derivation | `darkpool-crypto/src/keys.rs` | `sdk/src/keys/key-generators.ts` | `keys-parity.test.ts` |
 | User commitment | `darkpool-crypto/src/user_commitment.rs` | `sdk/src/keys/user-commitment.ts` | `user-commitment-parity.test.ts` |
 | Merge output inner | `darkpool-crypto/src/merge.rs::merge_output_inner_hash` | `sdk/src/utxo/merge.ts::deriveMergeOutputInnerHash` | `merge-inner-parity.test.ts` + `merge-prover.test.ts` |
 | Order/cancel canonical | `darkpool-matcher/src/order_canonical.rs` | `sdk/src/orders/canonical.ts` | `order-canonical-parity.test.ts` |
 | Canonical payload hash — **FOUR independent implementations, not one shared** (see note below) | `vault::tee_forced_settle.rs::canonical_payload_hash` · `darknyx-tee/src/settle/payload.rs::canonical_hash` · `vault/tests/settle_harness/mod.rs::canonical_payload_hash` | `sdk/src/settlement/settle-builder.ts::canonicalPayloadHash` | `canonical_payload_hash_fixed_vector` (on-chain) + the drift assertion in `payload.rs` + `settle-builder-batched.test.ts` |
-| Match leaf hash | `tee_forced_settle_batched.rs::compute_match_leaf` | `tests/helpers/match-batch-prover.ts::computeBatchLeaf` | `match-batch-prototype.test.ts` leaf-byte assert |
+| Match leaf hash (v3, 12 inputs) | `tee_forced_settle_batched.rs::compute_match_leaf` · `darknyx-tee/src/prover/leaf.rs` | `tests/helpers/match-batch-prover.ts::computeBatchLeaf` | `match-batch-prototype.test.ts` (a drift fails `merkle_root === merkle.root` inside the circuit) |
 | Anchor discriminator | Anchor macro `sha256("global:<name>")[..8]` | `sdk/src/idl/vault-client.ts` | every `*-transport.test.ts` |
 
 > **On the canonical payload hash (SW-30).** This row used to read
@@ -849,6 +871,8 @@ this — only the integration tests do, with `AccountNotFound` /
 | Added a vault PDA without the SDK | integration test `AccountNotFound` / `ConstraintSeeds` | add the SEED + `xxxPda()` to the SDK; update every `build*Ix` (§8.3) |
 | Added an account to a settle ix without the ALT | `TransactionTooLarge` | add it to the static ALT (re-run devnet-setup) or the per-batch ALT (§6) |
 | Raw `[0xA0u8; 32]` for a Poseidon-hashed field | `PoseidonFailed (6030)` / `InvalidBatchBinding` | `fr_safe(seed, salt)` or any Poseidon output (§7.2) |
+| Passed a `commitment` where a `note_use_tag` was wanted (or vice versa) | Compiles; on-chain `AccountNotFound` / `ConstraintSeeds (2006)` at a PDA that looks fine | Both are `[u8;32]`. Leaves + `DepositedNoteEntry` = commitments; `NoteLock` + `ConsumedNoteEntry` + settle inputs = tags (`CRYPTOGRAPHY.md` §2.1) |
+| Upgraded a running CVM across the journal v1→v2 bump without draining | Boot reports the journal `Damaged` and demands an operator | `POST /admin/drain`, confirm `safe_to_stop`, THEN redeploy |
 | Forgot the tree reset after a wipe/migration | `StaleMerkleRoot (6004)` on first withdraw | §2.4 |
 | Loadgen run is 100% 4xx | CVM is in the wrong mint regime | match the regime: real mints for `cvm-settle-e2e`, omit mints for loadgen (§3.2) |
 | `phala cvms start` on a code change | CVM runs stale code | bump the tag + `phala deploy` re-pulls (§3.1) |

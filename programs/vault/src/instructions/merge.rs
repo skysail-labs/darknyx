@@ -85,7 +85,7 @@ pub fn merge_handler<'info>(
     // for every active input before proof verification or state mutation.
     let active_tags: Vec<&[u8; 32]> = input_use_tags
         .iter()
-        .filter(|commitment| **commitment != [0u8; 32])
+        .filter(|tag| **tag != [0u8; 32])
         .collect();
     let active_len = active_tags.len();
     // N-14 defense-in-depth: reject the all-dummy transport before proof work

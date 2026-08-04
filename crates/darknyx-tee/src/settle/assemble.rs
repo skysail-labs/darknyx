@@ -758,6 +758,84 @@ mod tests {
         assert_ne!(p.note_fee_quote_commitment, [0u8; 32]);
     }
 
+    /// Zero-slot safety (plan edge case #4/#10).
+    ///
+    /// `Poseidon3(29, 0, 0)` is a perfectly VALID field element, so a naive
+    /// "always derive the tag" would publish a non-zero relock tag for a side
+    /// that has no change note. The on-chain settle would then derive a
+    /// `NoteLock` PDA for a note that does not exist and try to write it.
+    /// Both the assembler and the circuit mask on the commitment being zero;
+    /// this pins the assembler half. Mutation-tested by removing the mask.
+    #[test]
+    fn an_exact_fill_publishes_no_relock_tag() {
+        let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
+        let (_, p) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
+
+        assert_eq!(p.note_e_commitment, ZERO32, "precondition: exact fill");
+        assert_eq!(p.note_f_commitment, ZERO32, "precondition: exact fill");
+        assert_eq!(
+            p.note_e_use_tag, ZERO32,
+            "an exact fill must publish a ZERO relock tag, not Poseidon3(29, 0, 0)"
+        );
+        assert_eq!(p.note_f_use_tag, ZERO32);
+
+        // And the value that must NOT appear: had the mask been dropped, this
+        // is what would have been published.
+        assert_ne!(
+            note_use_tag(&ZERO32, &ZERO32).unwrap(),
+            ZERO32,
+            "the unmasked derivation is non-zero, which is why the mask matters"
+        );
+    }
+
+    /// The relock tag must be the tag OF the change note, not something
+    /// adjacent. Both are `[u8; 32]`, so a mix-up compiles and only fails
+    /// on-chain as a missing account.
+    #[test]
+    fn a_partial_fill_publishes_the_change_notes_own_tag() {
+        let (m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
+        let (w, p) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
+
+        assert_eq!(
+            p.note_e_use_tag,
+            note_use_tag(&p.note_e_commitment, &w.e_inner).unwrap(),
+        );
+        assert_ne!(p.note_e_use_tag, ZERO32);
+        // Distinct from the commitment it is derived from — otherwise the whole
+        // construction is a no-op.
+        assert_ne!(p.note_e_use_tag, p.note_e_commitment);
+        // Seller filled exactly, so its slot stays masked.
+        assert_eq!(p.note_f_use_tag, ZERO32);
+    }
+
+    /// The substitution attack the `Poseidon3(29, commitment, inner)` shape
+    /// exists to prevent (plan test #1/#3).
+    ///
+    /// A tag over `inner_hash` ALONE would be identical for two notes that
+    /// share an inner but differ in amount. At settle the input commitment is
+    /// only a private witness, so a prover could pair a real lock with an
+    /// inflated amount and the chain could not tell. Feeding the commitment in
+    /// is what binds it: the same opening at a different amount produces a
+    /// different handle, so it simply will not find the lock.
+    #[test]
+    fn the_published_input_tag_moves_with_the_amount() {
+        let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
+        let (_, honest) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
+
+        let mut inflated = buyer.clone();
+        inflated.amount = buyer.amount * 10;
+        assert_eq!(
+            inflated.inner_hash, buyer.inner_hash,
+            "the attack keeps the inner and moves only the amount"
+        );
+
+        let forged = note_use_tag(&inflated.commitment().unwrap(), &inflated.inner_hash).unwrap();
+        assert_ne!(
+            forged, honest.note_a_use_tag,
+            "an inflated amount must NOT reproduce the locked note's handle"
+        );
+    }
+
     #[test]
     fn randomized_assembler_outputs_use_consumed_openings() {
         let mut rng = StdRng::seed_from_u64(0x004e_5958_2d4e_3037);

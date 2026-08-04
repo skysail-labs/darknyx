@@ -14,6 +14,7 @@
 
 1. [Executive summary](#1-executive-summary)
 2. [Threat model + invariants](#2-threat-model--invariants)
+   - [2.1 Note-use tags — unlinking a note's lifecycle](#21-note-use-tags--unlinking-a-notes-lifecycle)
 3. [Cryptographic primitives](#3-cryptographic-primitives)
 4. [The key model](#4-the-key-model)
 5. [The note system](#5-the-note-system)
@@ -87,15 +88,15 @@ through a Phala CVM (`cvm-settle-e2e`).
 | Adversary | Attack vector | Defender |
 |---|---|---|
 | Anonymous L1 observer | Front-running of unmatched orders | Order intent never on L1 (lives in the CVM) |
-| Anonymous L1 observer | Linking deposits to withdrawals | Poseidon-commitment Merkle tree; Groth16 hides spending key |
+| Anonymous L1 observer | Linking a note's deposit → lock → settle → withdraw | **Note-use tags** (§2.1): the commitment appears on chain exactly once, at leaf creation; every consumption path keys on `Poseidon3(29, commitment, inner_hash)` instead |
 | L1 anyone | Replay of TEE-signed settlement | `ConsumedNoteEntry` + `BatchValidityMarker` PDAs (init-time PDA collision) |
 | L1 anyone | Withdraw without ownership proof | `VALID_SPEND` Groth16 verified on-chain |
-| Compromised TEE | Phantom-lock a fake note commitment | `VALID_INPUT` proof at lock time (v2) |
+| Compromised TEE | Phantom-lock a note the user does not own | `VALID_INPUT` proof at lock time (v2); the tag it publishes is provably the tag of a real leaf |
 | Compromised TEE | Forever-lock a real note (censorship) | `MAX_LOCK_TTL_SLOTS` cap (v2) |
 | Compromised TEE | Misroute output legs / mis-mint outputs | `VALID_MATCH_BATCH` proof at verify_match_batch time |
 | Compromised TEE | Over-claim SPL pool via fake outputs | `outstanding[mint]` counter (v2) |
-| Anyone | Double-withdraw the same note | `ConsumedNoteEntry` PDA (commitment-keyed; shared with TEE settle) |
-| A user, by accident | Deposit the same commitment twice, stranding the second | `DepositedNoteEntry` PDA (commitment-keyed `init`) |
+| Anyone | Double-withdraw the same note | `ConsumedNoteEntry` PDA (**tag**-keyed; shared with TEE settle + merge) |
+| A user, by accident | Deposit the same commitment twice, stranding the second | `DepositedNoteEntry` PDA (commitment-keyed `init` — this one stays a commitment; it guards leaf CREATION, and a depositor has no tag yet) |
 | Anyone | Double-spend via lock + withdraw race | A **live** `NoteLock` PDA blocks withdraw; an expired one does not |
 
 ### Explicit non-goals (yet)
@@ -105,7 +106,7 @@ through a Phala CVM (`cvm-settle-e2e`).
 | TEE clears at a bad price | **TEE-trusted (accepted design decision)** — price fairness (limit compliance + the oracle band) is enforced inside the attested enclave by the `darkpool-matcher`, NOT by the proof. `VALID_MATCH_BATCH` binds `quote = floor(base·price/price_scale)` with a constrained remainder, conservation, ranges, market identity, and exact fees, but not the signed limits or oracle band. This is a *deliberate* trade-off, not an oversight — see **"Accepted design decision — price fairness is TEE-trusted"** below for the full rationale + compensating controls. |
 | TEE clears off-tick / under min size / outside the circuit-breaker band (U-01) | **TEE-trusted** — `MarketConfig.tick_size`, `min_order_size`, and `circuit_breaker_bps` are governance-set rules the in-TEE matcher honours, but they are **not** `VALID_MATCH_BATCH` public inputs or leaf-bound. Only market identity + `price_scale` + conservation + the exact fee are proof-enforced. Same trust class as price fairness above; do not describe tick/min/breaker as on-chain-enforced. |
 | TEE writes garbage on-chain fill-recovery ciphertext (U-04) | **TEE-trusted** — `MatchResultPayload.fill_recovery` is opaque and signed but never validated on-chain; the AEAD protects confidentiality, not correctness. A compromised TEE could sign a conserved settle whose recovery blob is unusable, stranding a client that relies solely on chain recovery. Redundancy: the live `/v1/stream` fills channel + history backfill (chain recovery is last-resort). |
-| TEE re-locks a note against an order the user never placed (S-08) | **TEE-trusted — and the boundary is WIDER than "bounded by the order size".** A `VALID_INPUT` proof binds only `(merkle_root, note_commitment, token_mint)`; `order_id` and `expiry_slot` are unconstrained `lock_note` arguments carried alongside it. So a proof authorises **the note, not the order**, for as long as its root stays in the shard's 64-root window. An authorised-but-compromised TEE key can retain a relayed proof and re-lock that note against an arbitrary `order_id` — including one the user believes they cancelled. U-02 closed the *consumed*-note case (a settled or withdrawn note can no longer be re-locked); this is the *unconsumed* case, which U-02 does not cover. Practical bound is therefore the **note** size, not the order size. Intake verification (S-02) does not change this: the adversary here is the enclave itself. Binding `order_id` in-circuit would fix it but forces the client to prove **per order** rather than per note, and client-side proving is already the placement-latency bottleneck — deliberately declined; see the 2026-07-25 tracker. |
+| TEE re-locks a note against an order the user never placed (S-08) | **TEE-trusted — and the boundary is WIDER than "bounded by the order size".** A `VALID_INPUT` proof binds only `(merkle_root, note_use_tag, token_mint)`; `order_id` and `expiry_slot` are unconstrained `lock_note` arguments carried alongside it. So a proof authorises **the note, not the order**, for as long as its root stays in the shard's 64-root window. An authorised-but-compromised TEE key can retain a relayed proof and re-lock that note against an arbitrary `order_id` — including one the user believes they cancelled. U-02 closed the *consumed*-note case (a settled or withdrawn note can no longer be re-locked); this is the *unconsumed* case, which U-02 does not cover. Practical bound is therefore the **note** size, not the order size. Intake verification (S-02) does not change this: the adversary here is the enclave itself. Binding `order_id` in-circuit would fix it but forces the client to prove **per order** rather than per note, and client-side proving is already the placement-latency bottleneck — deliberately declined; see the 2026-07-25 tracker. |
 | TEE-binary substitution | **Client-enforced, governance-trusted on-chain** — clients verify the TDX quote, replay RTMR3, pin the compose hash/MRTD, and require the quoted K signer set to equal finalized `VaultConfig.tee_pubkeys`. The chain does not verify DCAP itself; multisig-gated rotation remains the accepted on-chain trust boundary. |
 | Trusted-setup ceremony soundness | **Open** — all six Groth16 circuit families use a deterministic dev contribution. Real Phase-2 MPC required for mainnet. |
 | Aggregate trade analytics from settle txs | **Substantially hidden** — settlement publishes commitments and opaque recovery ciphertext, not plaintext trade amounts or clearing prices. Timing, participant activity at deposit/withdraw boundaries, and transaction/account metadata remain observable. |
@@ -175,18 +176,80 @@ Every state-transitioning instruction maintains:
 3. **Mint binding**: `lock.token_mint` is cryptographically pinned to the
    Merkle leaf via `VALID_INPUT`; recorded in the lock PDA; propagated into
    change-note relocks; bound into the `VALID_MATCH_BATCH` slot leaf.
-4. **Single-spend per note**: a note's `commitment` can be consumed by
-   `tee_forced_settle_batched` OR spent by `withdraw`, but not both, in either
-   order. BOTH paths `init` the SAME commitment-keyed `ConsumedNoteEntry`
-   (`[b"consumed_note", commitment]`), so whichever runs first blocks the other
-   via an init-time PDA collision. Keying the guard on the commitment (public +
-   circuit-bound) rather than the nullifier is what makes this symmetric: the
-   nullifier is TEE-supplied and unconstrained at settle, so it could never be
-   relied on cross-path. The retired nullifier-keyed account was removed from
-   both the instruction surface and state model. `withdraw` additionally
-   refuses while a `NoteLock` is **live**; an expired lock does not block.
+4. **Single-spend per note**: a note's `note_use_tag` can be consumed by
+   `tee_forced_settle_batched`, spent by `withdraw`, OR folded by `merge` — but
+   only once, in any order. All three `init` the SAME tag-keyed
+   `ConsumedNoteEntry` (`[b"consumed_note", note_use_tag]`), so whichever runs
+   first blocks the others via an init-time PDA collision. Keying the guard on
+   a value that is public AND circuit-bound (rather than the nullifier) is what
+   makes this symmetric: the nullifier is TEE-supplied and unconstrained at
+   settle, so it could never be relied on cross-path. The retired
+   nullifier-keyed account was removed from both the instruction surface and
+   state model. `withdraw` additionally refuses while a `NoteLock` is **live**;
+   an expired lock does not block.
+
+   > The guard used to key on the `commitment`. Moving it to the tag is what
+   > makes §2.1 possible, and it is why **every** consumption path had to
+   > migrate in one change: a single path left on commitments would put the two
+   > guards in different namespaces and let one note spend twice.
 5. **Bounded TTL**: every `NoteLock` and `BatchValidityMarker` has an
    `expiry_slot ≤ clock.slot + MAX_*_TTL_SLOTS`. No state hangs forever.
+
+### 2.1 Note-use tags — unlinking a note's lifecycle
+
+`note_commitment` used to play two roles at once: the Merkle-leaf **identity**
+of a note, and the public **handle** every consumption path keyed on. Because
+the same 32 bytes appeared at deposit, at `lock_note`, in the settle payload,
+and at `withdraw`, an observer reconstructed a note's entire lineage by string
+matching — and that lineage is rooted at a public depositor with a public gross
+amount. Unlike a classic shielded pool, no spend published an unlinkable
+nullifier on the trading path.
+
+The commitment now appears **exactly once**, when the note is created as a
+leaf. Everything downstream references
+
+```
+note_use_tag = Poseidon3(DOMAIN_NOTE_USE = 29, note_commitment, inner_hash)
+```
+
+**Why the commitment is an input, not just `inner_hash`.** The commitment is
+what binds a note's fields together
+(`Poseidon6(2, mint_lo, mint_hi, amount, owner_commitment, inner_hash)`). A tag
+over `inner_hash` alone would leave amount, owner and mint unbound at settle —
+where the input commitment is only a private witness — so a prover could pair a
+real lock with an inflated amount, reopening exactly the hole `VALID_INPUT`
+closes. Feeding `C` in restores the binding.
+(`crates/darkpool-crypto/src/note_use.rs`; guarded by
+`the_published_input_tag_moves_with_the_amount` and the TS parity suite.)
+
+**Why it is unlinkable.** An observer holds the commitment — it is a public
+leaf — but not `inner_hash`, which is private to the owner and the enclave. For
+a *deposit* note that inner is
+`Poseidon4(27, owner_commitment, recovery_nonce, note_secret)`, where the nonce
+is a public instruction argument and `owner_commitment` is wallet-wide and
+reused. `note_secret` is the seed-derived per-note entropy that keeps one
+leaked owner commitment from recomputing every tag a wallet ever produced,
+retroactively. Output inners chain from consumed input inners
+(`Poseidon3(24, input_inner, role)`), so every descendant inherits it.
+
+**Where the commitment deliberately stays.** Merkle leaves; `DepositedNoteEntry`
+(it guards leaf creation, and a depositor has no tag yet); the merge OUTPUT;
+`note_c..note_f` in the settle payload (the handler appends them as leaves);
+`NoteCreated` / `NoteMerged` events; and the in-enclave opening store. The
+settle payload is therefore deliberately **mixed** — inputs are handles,
+outputs are identities.
+
+**What this does NOT hide.** Gross deposit and withdrawal amounts, the
+depositor's signer, the withdrawal recipient, the mint, and lock/settle timing
+all remain public. Those are properties of a transparent chain, not of this
+design; amount correlation would need denominations or split-on-deposit, which
+is a separate product decision. The claim is narrow and exact: **a chain
+observer cannot tell which leaf a lock, settle, merge, or withdraw refers to.**
+
+**Migration.** Consume-once changed namespace, so every historically spent note
+has a `ConsumedNoteEntry` at its commitment and none at its tag — the entire
+historical spent set would become re-spendable. **A tree reset is mandatory**,
+for this reason rather than because leaves changed (they did not).
 
 ---
 
@@ -869,7 +932,7 @@ This is critical for the lock-then-match-then-settle flow:
 - If the order doesn't match, the lock expires and the note remains
   spendable. No nullifier was burned.
 - If the order does match, `tee_forced_settle` consumes the note via
-  `ConsumedNoteEntry` (which is keyed by `note_commitment`, not by
+  `ConsumedNoteEntry` (which is keyed by `note_use_tag`, not by
   nullifier). The user's eventual `VALID_SPEND`-based withdraw of this same
   note would fail at the `consumed_note_slot` guard, so no double-spend
   risk.
@@ -1335,7 +1398,7 @@ Accounts:
 - `tee_authority` (signer ∈ `vault_config.tee_pubkeys`)
 - `vault_config` (ro — read for the authorized-signer check)
 - `merkle_tree[tree_id]` (ro — root recency check on the shard the note lives in)
-- `note_lock` (PDA at `[b"note_lock", note_commitment]`, **init**)
+- `note_lock` (PDA at `[b"note_lock", note_use_tag]`, **init**)
 - `system_program`
 
 `tree_id` is the leading routing argument under tree sharding; there is no
@@ -1356,7 +1419,7 @@ Handler steps (v3):
    enforces `amount ∈ [1, 2^64-1]` and binds it into `note_commitment`.
 6. Write the lock:
    ```rust
-   lock.note_commitment = note_commitment;
+   lock.note_use_tag = note_use_tag;
    lock.token_mint      = token_mint;          // v2 NEW
    lock.order_id        = order_id;
    lock.expiry_slot     = expiry_slot;
@@ -1728,7 +1791,7 @@ Handler:
 
 1. `amount > 0`.
 2. **Layer-3 guard (an `init`)**: the `consumed_note` account is `init`'d at
-   `[b"consumed_note", note_commitment]`. If the note was already consumed —
+   `[b"consumed_note", note_use_tag]`. If the note was already consumed —
    by a prior `withdraw` OR by `tee_forced_settle_batched` (which `init`s the
    SAME PDA) — the init collides and the withdraw reverts. This closes the
    double-spend in BOTH directions (the old code only *read* this PDA, so it
@@ -2175,8 +2238,8 @@ twice."
 
 | Layer | PDA | Seed | What it stops |
 |---|---|---|---|
-| 1 | `NoteLock` | `[b"note_lock", note_commitment]` | Second `lock_note` on the same commitment while the first is live |
-| 2 | `ConsumedNoteEntry` | `[b"consumed_note", note_commitment]` | A second settle or withdraw consuming the same note |
+| 1 | `NoteLock` | `[b"note_lock", note_use_tag]` | Second `lock_note` on the same note while the first is live |
+| 2 | `ConsumedNoteEntry` | `[b"consumed_note", note_use_tag]` | A second settle, withdraw, or merge consuming the same note |
 | 3 | `DepositedNoteEntry` | `[b"deposited_note", note_commitment]` | Second `deposit` of the same commitment (which would strand the second one's value) |
 | 4 | `BatchValidityMarker` | `[b"batch_validity", merkle_root]` | Second `verify_match_batch` for the same batch (via init collision) |
 
