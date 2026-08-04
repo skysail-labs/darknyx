@@ -93,7 +93,11 @@ function loadKp(rel: string): Keypair {
 d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
   it("deposits a v2 note and withdraws it via VALID_SPEND, round-tripping the tokens", async () => {
     const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-    const conn = new Connection(cfg.l1RpcUrl, "confirmed");
+    // A locally exported private RPC must override the snapshot embedded in
+    // e2e-config. Provider credentials rotate more often than the devnet
+    // mints/config, and the runbook explicitly supplies this override.
+    const rpcUrl = process.env.SOLANA_RPC_URL ?? cfg.l1RpcUrl;
+    const conn = new Connection(rpcUrl, "confirmed");
     const admin = loadKp(".devnet/keypairs/admin.json");
 
     const mint = new PublicKey(cfg.baseMint.pubkey);
