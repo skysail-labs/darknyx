@@ -251,6 +251,11 @@ jobs:
       # /tmp. Cloning the submodule cost ~20 s of a ~60 s job, which is more than
       # the circuit build it wraps.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # The pot19 N=16 proving key exceeds GitHub's regular blob limit and
+          # is stored in LFS. The circuit artefact uploaded below must contain
+          # the real zkey, never its pointer file.
+          lfs: true
 
       - name: Install Rust 1.89.0 (for circom build)
         uses: dtolnay/rust-toolchain@451ce45ce31d200b52705aadd15ce75018b006de # 1.89.0 (a BRANCH upstream, so it moves — pin it)

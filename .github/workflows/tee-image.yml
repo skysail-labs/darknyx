@@ -81,6 +81,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          # N=16 moved to pot19 and its 130 MB proving key is stored in Git LFS.
+          # Without this, checkout leaves a ~130-byte pointer in place and the
+          # image silently ships an unusable proving key.
+          lfs: true
           # third_party/rapidsnark + its nested deps (ffiasm/json/circom_runtime)
           # — the Dockerfile builds rapidsnark's static libs from this source.
           submodules: recursive
