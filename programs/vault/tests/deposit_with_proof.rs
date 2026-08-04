@@ -48,6 +48,9 @@ struct DepositOpening {
     spending_key: Fr,
     r_owner: Fr,
     recovery_nonce: Fr,
+    /// Seed-derived in the real client; deterministic here. A PRIVATE
+    /// VALID_DEPOSIT witness — see darkpool-crypto/src/deposit.rs.
+    note_secret: Fr,
     inner_hash: Fr,
     owner_commitment: Fr,
     commitment: [u8; 32],
@@ -57,10 +60,19 @@ fn opening(mint: &Pubkey, amount: u64) -> DepositOpening {
     let spending_key = fr_from_uniform_bytes(&[0x31; 32]);
     let r_owner = fr_from_uniform_bytes(&[0x42; 32]);
     let recovery_nonce = fr_from_uniform_bytes(&[0x53; 32]);
+    let note_secret = fr_from_uniform_bytes(&[0x64; 32]);
     let owner_commitment =
         poseidon_hash(&[Fr::from(1u64), spending_key, r_owner]).expect("owner hash");
-    let inner_hash = poseidon_hash(&[Fr::from(27u64), owner_commitment, recovery_nonce])
-        .expect("deposit inner hash");
+    // Poseidon4 now — the fourth input keeps the inner (and the note-use tag
+    // derived from it) from being a function of public data plus the
+    // wallet-wide owner commitment.
+    let inner_hash = poseidon_hash(&[
+        Fr::from(27u64),
+        owner_commitment,
+        recovery_nonce,
+        note_secret,
+    ])
+    .expect("deposit inner hash");
     let commitment = commitment_from_fields_v2(
         &mint.to_bytes(),
         amount,
@@ -72,6 +84,7 @@ fn opening(mint: &Pubkey, amount: u64) -> DepositOpening {
         spending_key,
         r_owner,
         recovery_nonce,
+        note_secret,
         inner_hash,
         owner_commitment,
         commitment,
@@ -85,13 +98,14 @@ fn valid_deposit_proof(
 ) -> vault::zk::Groth16Proof {
     let [mint_lo, mint_hi] = pubkey_to_fr_pair(&mint.to_bytes());
     let input = format!(
-        "{{\n  \"noteCommitment\": \"{commitment}\",\n  \"tokenMint\": [\"{mint_lo}\", \"{mint_hi}\"],\n  \"amount\": \"{amount}\",\n  \"recoveryNonce\": \"{nonce}\",\n  \"spendingKey\": \"{spending}\",\n  \"ownerCommitmentBlinding\": \"{r_owner}\"\n}}",
+        "{{\n  \"noteCommitment\": \"{commitment}\",\n  \"tokenMint\": [\"{mint_lo}\", \"{mint_hi}\"],\n  \"amount\": \"{amount}\",\n  \"recoveryNonce\": \"{nonce}\",\n  \"spendingKey\": \"{spending}\",\n  \"ownerCommitmentBlinding\": \"{r_owner}\",\n  \"noteSecret\": \"{note_secret}\"\n}}",
         commitment = common::fr_to_dec(&Fr::from_be_bytes_mod_order(&opening.commitment)),
         mint_lo = common::fr_to_dec(&mint_lo),
         mint_hi = common::fr_to_dec(&mint_hi),
         nonce = common::fr_to_dec(&opening.recovery_nonce),
         spending = common::fr_to_dec(&opening.spending_key),
         r_owner = common::fr_to_dec(&opening.r_owner),
+        note_secret = common::fr_to_dec(&opening.note_secret),
     );
     let build = common::repo_root().join("circuits/build/valid_deposit");
     // Unique per invocation AND per process. The counter alone is only unique
@@ -321,12 +335,15 @@ fn valid_deposit_meets_size_and_cu_gates_and_invalid_proof_is_atomic() {
     assert_eq!(token_amount(&h, &wrong_mint_token), amount);
 
     // Pin the hidden opening construction used by the successful commitment.
+    // Poseidon4 since the note secret joined it — a 3-input pin here would go
+    // green against a circuit that had silently dropped the fourth input.
     assert_eq!(
         opening.inner_hash,
         poseidon_hash(&[
             Fr::from(27u64),
             opening.owner_commitment,
             opening.recovery_nonce,
+            opening.note_secret,
         ])
         .unwrap(),
     );

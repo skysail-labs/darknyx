@@ -49,8 +49,14 @@ use anchor_lang::prelude::*;
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct MatchResultPayload {
     pub match_id: [u8; 16],
-    pub note_a_commitment: [u8; 32],
-    pub note_b_commitment: [u8; 32],
+    /// The CONSUMED inputs, as note-use TAGS rather than commitments. These key
+    /// the `NoteLock` and `ConsumedNoteEntry` PDAs, and republishing the
+    /// commitments here would relink both inputs to their Merkle leaves —
+    /// undoing the unlinkability for every note that ever trades.
+    pub note_a_use_tag: [u8; 32],
+    pub note_b_use_tag: [u8; 32],
+    /// The OUTPUTS stay commitments: they are appended to the tree as new
+    /// leaves, so the handler needs the leaf value itself.
     pub note_c_commitment: [u8; 32],
     pub note_d_commitment: [u8; 32],
     pub note_e_commitment: [u8; 32],
@@ -76,6 +82,19 @@ pub struct MatchResultPayload {
     pub buyer_relock_expiry: u64,
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
+    /// Use tags for the change notes this settle creates and immediately
+    /// RE-LOCKS. Needed in addition to `note_e/f_commitment` — the commitment is
+    /// the leaf value, the tag is the `NoteLock` PDA seed, and the handler has
+    /// no way to derive one from the other (that needs the private inner hash).
+    ///
+    /// These are the +64 bytes the tag migration costs on this payload. They are
+    /// bound by the batch leaf via `relock_digest`, because the in-settle relock
+    /// takes no proof of its own: an unconstrained tag here would let the
+    /// enclave lock an arbitrary note, bounded only by MAX_LOCK_TTL_SLOTS.
+    ///
+    /// `[0u8; 32]` when that side has no change, mirroring the commitment.
+    pub note_e_use_tag: [u8; 32],
+    pub note_f_use_tag: [u8; 32],
     pub batch_slot: u64,
     /// Recovery v3: the per-fill X25519-ECIES bundle
     /// `ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "DNYXREC3"`.
@@ -105,7 +124,9 @@ pub struct MatchResultPayload {
     // removed the two vestigial nullifiers: commitment-keyed
     // `ConsumedNoteEntry` PDAs are the sole settle/withdraw replay guard. The
     // Darknyx namespace cutover retains that layout and bumps the signed
-    // domain to v10.
+    // domain to v10. v11 replaces the two consumed commitments with note-use
+    // TAGS and appends `note_e_use_tag` / `note_f_use_tag` for the relock PDAs
+    // (488 -> 552 bytes).
     //
     // v3.1 note: `price_proof` and `price_commitment` had previously been
     // factored out into a preceding `verify_valid_price` ix; that path was
@@ -130,7 +151,7 @@ pub struct MatchResultPayload {
 
 /// Manually create a NoteLock PDA so the settlement tx can atomically
 /// re-lock a change note against the continuing order. The seeds MUST be
-/// `[NoteLock::SEED, note_commitment]` — this is what `cancel_order` /
+/// `[NoteLock::SEED, note_use_tag]` — this is what `cancel_order` /
 /// `release_lock` will look up. Returns an error if the account is
 /// non-empty (a prior lock still exists for this commitment).
 #[allow(clippy::too_many_arguments)]
@@ -138,7 +159,7 @@ pub(crate) fn create_relock_pda<'info>(
     note_lock_ai: &UncheckedAccount<'info>,
     payer: &Signer<'info>,
     system_program: &Program<'info, System>,
-    note_commitment: &[u8; 32],
+    note_use_tag: &[u8; 32],
     token_mint: &Pubkey,
     order_id: &[u8; 16],
     expiry_slot: u64,
@@ -147,7 +168,7 @@ pub(crate) fn create_relock_pda<'info>(
     use core::mem::size_of;
 
     let (expected_pda, bump) =
-        Pubkey::find_program_address(&[NoteLock::SEED, note_commitment.as_ref()], &crate::ID);
+        Pubkey::find_program_address(&[NoteLock::SEED, note_use_tag.as_ref()], &crate::ID);
     require_keys_eq!(note_lock_ai.key(), expected_pda, VaultError::Unauthorized);
     require!(
         note_lock_ai.data_is_empty() && note_lock_ai.lamports() == 0,
@@ -174,7 +195,7 @@ pub(crate) fn create_relock_pda<'info>(
     let space = 8 + size_of::<NoteLock>();
     let lamports = Rent::get()?.minimum_balance(space);
     let bump_arr = [bump];
-    let seeds: &[&[u8]] = &[NoteLock::SEED, note_commitment.as_ref(), &bump_arr];
+    let seeds: &[&[u8]] = &[NoteLock::SEED, note_use_tag.as_ref(), &bump_arr];
     let signer_seeds = &[seeds];
 
     let cpi_ctx = CpiContext::new_with_signer(
@@ -195,7 +216,7 @@ pub(crate) fn create_relock_pda<'info>(
         data[..8].copy_from_slice(disc);
         let (_head, body) = data.split_at_mut(8);
         let lock: &mut NoteLock = bytemuck::from_bytes_mut(body);
-        lock.note_commitment = *note_commitment;
+        lock.note_use_tag = *note_use_tag;
         // CRITICAL: populate token_mint. A later batch that consumes this
         // relocked note reads `note_lock.token_mint` to recompute the
         // batch-binding leaf (`compute_match_leaf`); a zero mint there →
@@ -254,11 +275,13 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         // commitments. v8: encrypted output recovery appended the
         // 128-byte `fill_recovery` ciphertext bundle. v9 removed the two
         // vestigial nullifiers. v10 is the clean Darknyx namespace cutover.
-        // Bumping the tag invalidates every signature over an older domain.
-        b"darknyx-match-v10",
+        // v11 swaps the consumed commitments for note-use TAGS and appends the
+        // two relock tags. Bumping the tag invalidates every signature over an
+        // older domain.
+        b"darknyx-match-v11",
         p.match_id.as_ref(),
-        p.note_a_commitment.as_ref(),
-        p.note_b_commitment.as_ref(),
+        p.note_a_use_tag.as_ref(),
+        p.note_b_use_tag.as_ref(),
         p.note_c_commitment.as_ref(),
         p.note_d_commitment.as_ref(),
         p.note_e_commitment.as_ref(),
@@ -271,6 +294,8 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
         &buyer_relock_exp,
         p.seller_relock_order_id.as_ref(),
         &seller_relock_exp,
+        p.note_e_use_tag.as_ref(),
+        p.note_f_use_tag.as_ref(),
         &slot,
         p.fill_recovery.as_ref(), // v8: encrypted output-recovery bundle
     ])
@@ -378,14 +403,17 @@ mod tests {
     /// catch it at compile time.
     #[test]
     fn canonical_payload_hash_fixed_vector() {
+        // A WITH-CHANGE payload, so the vector binds note_e/f and their relock
+        // tags. The previous fixture zeroed them (an exact fill), which meant a
+        // regression that dropped a field from the hash could not move it.
         let p = MatchResultPayload {
             match_id: [0x11u8; 16],
-            note_a_commitment: [0xA1u8; 32],
-            note_b_commitment: [0xB1u8; 32],
+            note_a_use_tag: [0xA1u8; 32],
+            note_b_use_tag: [0xB1u8; 32],
             note_c_commitment: [0xC1u8; 32],
             note_d_commitment: [0xD1u8; 32],
-            note_e_commitment: [0u8; 32],
-            note_f_commitment: [0u8; 32],
+            note_e_commitment: [0xE1u8; 32],
+            note_f_commitment: [0xF1u8; 32],
             order_id_a: [0x01u8; 16],
             order_id_b: [0x02u8; 16],
             note_fee_base_commitment: [0u8; 32],
@@ -394,6 +422,8 @@ mod tests {
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0u8; 16],
             seller_relock_expiry: 0,
+            note_e_use_tag: [0xEAu8; 32],
+            note_f_use_tag: [0xFAu8; 32],
             batch_slot: 0,
             fill_recovery: [0u8; 128],
         };
@@ -402,9 +432,9 @@ mod tests {
         // `[hash_cross_env_parity]`. When the payload shape changes, update
         // BOTH sides — any divergence breaks the TEE signature verification.
         let expected: [u8; 32] = [
-            0x8F, 0x79, 0xC1, 0xCD, 0x05, 0xD1, 0x5B, 0x0B, 0xCF, 0xA8, 0x03, 0x9A, 0x74, 0x39,
-            0x72, 0x77, 0xA3, 0xCF, 0x6E, 0x4E, 0x62, 0xA8, 0x98, 0xC5, 0x9F, 0x07, 0xAA, 0x3D,
-            0xF0, 0x8D, 0x53, 0xD7,
+            0xC7, 0xFF, 0x67, 0xAC, 0xDA, 0x24, 0x5D, 0x16, 0x4C, 0x12, 0x48, 0xDC, 0x51, 0xDC,
+            0x2D, 0x97, 0x05, 0x2C, 0x3A, 0xBE, 0x76, 0x96, 0x41, 0x3D, 0x54, 0xE6, 0x53, 0x6E,
+            0xD0, 0x15, 0x6D, 0x45,
         ];
         if hash != expected {
             panic!("canonical_payload_hash drifted — got {:02X?}", hash);

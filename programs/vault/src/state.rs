@@ -222,10 +222,20 @@ impl DepositedNoteEntry {
     pub const SEED: &'static [u8] = b"deposited_note";
 }
 
-/// PDA marking a note commitment consumed by TEE-forced settlement.
+/// PDA marking a note consumed, keyed by its NOTE-USE TAG.
+///
+/// The tag, not the commitment: the commitment is a public Merkle leaf, so
+/// keying the consume guard on it republished the leaf's identity at every
+/// spend and let an observer follow a note from deposit to withdrawal. The tag
+/// is `Poseidon3(29, note_commitment, inner_hash)` and is unlinkable to the leaf
+/// without the private inner. See crates/darkpool-crypto/src/note_use.rs.
+///
+/// EVERY consume path must key on the same handle — settle, withdraw and merge.
+/// A path left on commitments would let one note be consumed once under each
+/// scheme, which is a double-spend; that is why the migration lands atomically.
 #[account(zero_copy)]
 pub struct ConsumedNoteEntry {
-    pub note_commitment: [u8; 32],
+    pub note_use_tag: [u8; 32],
     pub match_id: [u8; 16],
     pub consumed_slot: u64,
     pub bump: u8,
@@ -252,7 +262,9 @@ impl ConsumedNoteEntry {
 ///     recompute the batch-binding leaf + to stamp continuation re-locks.
 #[account(zero_copy)]
 pub struct NoteLock {
-    pub note_commitment: [u8; 32],
+    /// The note-use tag this lock pins. NOT the commitment — see
+    /// `ConsumedNoteEntry` above for why the public handle moved.
+    pub note_use_tag: [u8; 32],
     pub token_mint: Pubkey,
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
@@ -265,7 +277,9 @@ impl NoteLock {
     pub const SEED: &'static [u8] = b"note_lock";
 
     /// Byte offset of `expiry_slot` in the account DATA (discriminator
-    /// included): disc(8) + note_commitment(32) + token_mint(32) + order_id(16).
+    /// included): disc(8) + note_use_tag(32) + token_mint(32) + order_id(16).
+    /// The tag is the same width as the commitment it replaced, so the offset
+    /// is unchanged and `lock_sweep`'s raw-byte parser needs no new constant.
     ///
     /// `note_lock_is_live` slices the raw account bytes at this offset, so a
     /// field reordering that moved `expiry_slot` would not fail to compile —

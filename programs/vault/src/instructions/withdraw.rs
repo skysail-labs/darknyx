@@ -23,7 +23,7 @@ fn u64_be32(v: u64) -> [u8; 32] {
 }
 
 #[derive(Accounts)]
-#[instruction(tree_id: u8, note_commitment: [u8; 32], nullifier: [u8; 32], merkle_root: [u8; 32], amount: u64, proof: Groth16Proof)]
+#[instruction(tree_id: u8, note_use_tag: [u8; 32], nullifier: [u8; 32], merkle_root: [u8; 32], amount: u64, proof: Groth16Proof)]
 pub struct Withdraw<'info> {
     /// Any signer may pay the rent. Authorization is via ZK proof.
     #[account(mut)]
@@ -71,14 +71,14 @@ pub struct Withdraw<'info> {
         init,
         payer = payer,
         space = 8 + size_of::<ConsumedNoteEntry>(),
-        seeds = [ConsumedNoteEntry::SEED, note_commitment.as_ref()],
+        seeds = [ConsumedNoteEntry::SEED, note_use_tag.as_ref()],
         bump,
     )]
     pub consumed_note: AccountLoader<'info, ConsumedNoteEntry>,
 
     /// Same pattern for note lock — must not be initialized.
     #[account(
-        seeds = [NoteLock::SEED, note_commitment.as_ref()],
+        seeds = [NoteLock::SEED, note_use_tag.as_ref()],
         bump,
     )]
     /// CHECK: validated manually in the handler.
@@ -102,7 +102,7 @@ pub struct Withdraw<'info> {
 pub fn withdraw_handler(
     ctx: Context<Withdraw>,
     _tree_id: u8,
-    note_commitment: [u8; 32],
+    note_use_tag: [u8; 32],
     nullifier: [u8; 32],
     merkle_root: [u8; 32],
     amount: u64,
@@ -137,10 +137,10 @@ pub fn withdraw_handler(
     // ----- Verify ZK proof -----
     // VALID_SPEND public signals (in circuit declaration order):
     //   [merkleRoot, nullifier, tokenMint[0], tokenMint[1], amount, recipient[0],
-    //    recipient[1]] plus the noteCommitment OUTPUT
+    //    recipient[1]] plus the noteUseTag OUTPUT
     //
     // Wire order matches circuit.sym (circom places outputs before inputs):
-    //   wire 1: noteCommitment (signal output — first in IC sum)
+    //   wire 1: noteUseTag (signal output — first in IC sum)
     //   wire 2: merkleRoot
     //   wire 3: nullifier
     //   wire 4: tokenMint[0]
@@ -148,13 +148,15 @@ pub fn withdraw_handler(
     //   wire 6: amount
     //   wire 7: recipient[0]  (dest_lo — low 128 bits of the destination ATA)
     //   wire 8: recipient[1]  (dest_hi — high 128 bits)
-    // Binding noteCommitment as wire 1 prevents the "arbitrary note_commitment
-    // bypass" attack where a caller supplies an un-nullified commitment while
-    // submitting a proof for a different, already-nullified note.
+    // Binding noteUseTag as wire 1 prevents the "arbitrary handle bypass" attack
+    // where a caller supplies an un-consumed handle while submitting a proof for
+    // a different, already-consumed note. The TAG rather than the commitment:
+    // publishing the commitment here would relink this withdrawal to the note's
+    // Merkle leaf, and thus to its deposit and every trade it passed through.
     let mint_bytes = ctx.accounts.token_mint.key().to_bytes();
     let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
     // S-01: bind the DESTINATION into the proof. Without this the tuple
-    // (note_commitment, nullifier, merkle_root, amount, proof) was a bearer
+    // (note_use_tag, nullifier, merkle_root, amount, proof) was a bearer
     // instrument — the proof authorised destroying the note but said nothing
     // about where the money went, so whoever held those bytes first decided
     // the destination. Exploitable by front-running, and (needing no
@@ -167,7 +169,7 @@ pub fn withdraw_handler(
     let dest_bytes = ctx.accounts.destination_token_account.key().to_bytes();
     let [dest_lo, dest_hi] = pubkey_pair_be32(&dest_bytes);
     let public_inputs: [[u8; 32]; 8] = [
-        note_commitment,
+        note_use_tag,
         merkle_root,
         nullifier,
         mint_lo,
@@ -200,13 +202,13 @@ pub fn withdraw_handler(
     // than redundant: `nullifier = Poseidon3(3, sk, inner)` is
     // amount- AND mint-independent, so two distinct notes of one owner sharing
     // an `inner_hash` collide on it and the second legitimate withdraw is
-    // bricked. `note_commitment` is a circuit-bound public OUTPUT of
-    // VALID_SPEND, so the commitment-keyed guard is complete on its own.
+    // bricked. `note_use_tag` is a circuit-bound public OUTPUT of
+    // VALID_SPEND, so the tag-keyed guard is complete on its own.
     let slot = Clock::get()?.slot;
     // The shared consume-once guard with TEE settle. `match_id` is the all-zero
     // sentinel — there is no match on the withdraw path.
     let c = &mut ctx.accounts.consumed_note.load_init()?;
-    c.note_commitment = note_commitment;
+    c.note_use_tag = note_use_tag;
     c.match_id = [0u8; 16];
     c.consumed_slot = slot;
     c.bump = ctx.bumps.consumed_note;
@@ -249,7 +251,7 @@ pub fn withdraw_handler(
 
     emit!(Withdrawn {
         nullifier,
-        note_commitment,
+        note_use_tag,
         token_mint: ctx.accounts.token_mint.key(),
         amount,
     });
@@ -260,7 +262,7 @@ pub fn withdraw_handler(
 #[event]
 pub struct Withdrawn {
     pub nullifier: [u8; 32],
-    pub note_commitment: [u8; 32],
+    pub note_use_tag: [u8; 32],
     pub token_mint: Pubkey,
     pub amount: u64,
 }
