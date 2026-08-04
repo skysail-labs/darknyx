@@ -51,18 +51,18 @@ pub const LOCK_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 ///
 /// Solana dedups account keys across a transaction's instructions, so the
 /// signer is counted ONCE and each extra release adds only its own lock PDA:
-/// 32 B key + 40 B data (8 disc + 32 commitment) + ~5 B framing = ~77 B.
+/// 32 B key + 40 B data (8 disc + 32 tag) + ~5 B framing = ~77 B.
 /// Ten of those plus ~128 B of fixed overhead (signature, header, blockhash,
 /// fee payer) is ~900 B — comfortably under the 1232-byte cap, pinned by
 /// `max_per_tx_fits_the_transaction_budget`.
 pub const LOCK_SWEEP_MAX_PER_TX: usize = 10;
 
-/// How long a freshly registered commitment is immune to the "lock account is
+/// How long a freshly registered tag is immune to the "lock account is
 /// absent, so it must already be released" rule.
 ///
-/// The worker registers commitments OPTIMISTICALLY, before the `lock_note`
+/// The worker registers tags OPTIMISTICALLY, before the `lock_note`
 /// transaction is even sent (see `worker.rs`'s `lock_branch`). So for the first
-/// second or two of a commitment's life the lock PDA genuinely does not exist
+/// second or two of a tag's life the lock PDA genuinely does not exist
 /// yet, and an unguarded sweep would read `Ok(None)`, conclude the lock was
 /// already released, and drop the entry permanently. The lock then lands with
 /// nothing tracking it — and if that batch's settle later fails, its rent is
@@ -79,7 +79,7 @@ pub const LOCK_SWEEP_MAX_PER_TX: usize = 10;
 const LOCK_REGISTRATION_GRACE: Duration = Duration::from_secs(90);
 
 /// Anchor account layout:
-/// discriminator(8) || note_commitment(32) || token_mint(32) || order_id(16)
+/// discriminator(8) || note_use_tag(32) || token_mint(32) || order_id(16)
 /// || expiry_slot(8 LE) || locked_by(32) || bump(1) || _padding(7).
 /// Mirrors `programs/vault/src/state.rs::NoteLock`.
 const LOCK_EXPIRY_OFFSET: usize = 8 + 32 + 32 + 16;
@@ -101,19 +101,19 @@ static RELEASE_LOCK_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
     discriminator
 });
 
-/// `release_lock(note_commitment)`.
+/// `release_lock(note_use_tag)`.
 ///
 /// Accounts, mirroring `ReleaseLock<'info>`:
 ///   `[0]` `rent_receiver` — signer + writable; receives the reclaimed rent.
 ///   `[1]` `note_lock`     — writable (closed).
 pub fn build_release_lock_ix(
     rent_receiver: &solana_pubkey::Pubkey,
-    note_commitment: &[u8; 32],
+    note_use_tag: &[u8; 32],
 ) -> Instruction {
-    let (lock_pda, _) = note_lock_pda(note_commitment);
+    let (lock_pda, _) = note_lock_pda(note_use_tag);
     let mut data = Vec::with_capacity(8 + 32);
     data.extend_from_slice(&*RELEASE_LOCK_DISCRIMINATOR);
-    data.extend_from_slice(note_commitment);
+    data.extend_from_slice(note_use_tag);
     Instruction {
         program_id: vault_program_id(),
         accounts: vec![
@@ -185,9 +185,9 @@ async fn run(
     loop {
         tokio::select! {
             recv = rx.recv() => match recv {
-                Some(commitment) => {
-                    pending.add(commitment);
-                    registered_at.entry(commitment).or_insert_with(Instant::now);
+                Some(tag) => {
+                    pending.add(tag);
+                    registered_at.entry(tag).or_insert_with(Instant::now);
                 }
                 None => {
                     sweep(&rpc, &keypair, &mut pending, &mut registered_at, confirm_timeout).await;
@@ -210,8 +210,8 @@ async fn sweep(
     registered_at: &mut HashMap<[u8; 32], Instant>,
     confirm_timeout: Duration,
 ) {
-    let commitments = pending.all();
-    if commitments.is_empty() {
+    let tags = pending.all();
+    if tags.is_empty() {
         return;
     }
 
@@ -229,10 +229,10 @@ async fn sweep(
     // This runs every tick, so the sequential form's cost scaled with the number
     // of outstanding locks on a fixed interval.
     //
-    // A failed chunk yields `Err` for each of its commitments, which lands in
+    // A failed chunk yields `Err` for each of its tags, which lands in
     // the existing `Err` arm below: retained and retried next tick. That is the
     // same conservative outcome the per-lock form had, applied to a chunk.
-    let pdas: Vec<_> = commitments.iter().map(|c| note_lock_pda(c).0).collect();
+    let pdas: Vec<_> = tags.iter().map(|tag| note_lock_pda(tag).0).collect();
     let mut reads: Vec<Result<Option<crate::solana_rpc::RpcAccountInfo>, String>> =
         Vec::with_capacity(pdas.len());
     for chunk in pdas.chunks(crate::solana_rpc::MAX_MULTIPLE_ACCOUNTS) {
@@ -245,8 +245,8 @@ async fn sweep(
         }
     }
 
-    // `zip` TRUNCATES, so a short `reads` would skip the tail of `commitments`
-    // this tick. That is self-healing, NOT a leak: the skipped commitments are
+    // `zip` TRUNCATES, so a short `reads` would skip the tail of `tags`
+    // this tick. That is self-healing, NOT a leak: the skipped tags are
     // only ever removed from `pending` by the arms below, so they are still
     // there on the next tick and get examined then. (An earlier version of this
     // comment claimed the rent was never reclaimed; that was wrong, and it is
@@ -261,24 +261,24 @@ async fn sweep(
     // for preventing a one-tick delay that resolves itself.
     debug_assert_eq!(
         reads.len(),
-        commitments.len(),
+        tags.len(),
         "one read per pending lock, or zip skips the tail"
     );
-    let mut expired: Vec<[u8; 32]> = Vec::with_capacity(commitments.len());
-    for (commitment, read) in commitments.into_iter().zip(reads) {
-        let lock_pda = note_lock_pda(&commitment).0;
+    let mut expired: Vec<[u8; 32]> = Vec::with_capacity(tags.len());
+    for (tag, read) in tags.into_iter().zip(reads) {
+        let lock_pda = note_lock_pda(&tag).0;
         match read {
             // Absent. Usually that means gone-for-good: settled (the settle
             // closes it), withdrawn, or released by someone else.
             //
-            // But it ALSO means "not created yet" for a commitment registered
+            // But it ALSO means "not created yet" for a tag registered
             // moments ago, because registration is optimistic and precedes the
             // lock transaction. Dropping one of those is unrecoverable — the
             // lock lands untracked and its rent is never reclaimed. So young
             // entries are retained and re-checked next tick.
             Ok(None) => {
                 let young = registered_at
-                    .get(&commitment)
+                    .get(&tag)
                     .is_some_and(|t| t.elapsed() < LOCK_REGISTRATION_GRACE);
                 if young {
                     tracing::debug!(
@@ -287,13 +287,13 @@ async fn sweep(
                          assuming the lock tx is still in flight"
                     );
                 } else {
-                    pending.remove(&commitment);
-                    registered_at.remove(&commitment);
+                    pending.remove(&tag);
+                    registered_at.remove(&tag);
                 }
             }
             Ok(Some(account)) => match lock_expiry_slot(&account) {
                 Some(expiry_slot) if lock_has_expired(current_slot, expiry_slot) => {
-                    expired.push(commitment)
+                    expired.push(tag)
                 }
                 Some(_) => {}
                 None => tracing::warn!(

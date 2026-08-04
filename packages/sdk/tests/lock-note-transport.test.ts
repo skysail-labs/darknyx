@@ -22,7 +22,7 @@ describe("lock_note v3 amount-private transport", () => {
       programId: PROGRAM_ID,
       treeId: 3,
       teeAuthority: Keypair.generate().publicKey,
-      noteCommitment: filled(32, 0x11),
+      noteUseTag: filled(32, 0x11),
       orderId: filled(16, 0x22),
       expirySlot: 0x0102_0304_0506_0708n,
       tokenMint: mint,
@@ -47,12 +47,12 @@ describe("lock_note v3 amount-private transport", () => {
 
   it("pins the account order incl. the U-02 consumed_note guard", () => {
     const teeAuthority = Keypair.generate().publicKey;
-    const noteCommitment = filled(32, 0x11);
+    const noteUseTag = filled(32, 0x11);
     const ix = buildLockNoteInstruction({
       programId: PROGRAM_ID,
       treeId: 3,
       teeAuthority,
-      noteCommitment,
+      noteUseTag,
       orderId: filled(16, 0x22),
       expirySlot: 1n,
       tokenMint: new PublicKey(filled(32, 0x44)),
@@ -65,13 +65,13 @@ describe("lock_note v3 amount-private transport", () => {
     expect(ix.keys[0].pubkey.equals(teeAuthority)).toBe(true);
     expect(ix.keys[1].pubkey.equals(vaultConfigPda(PROGRAM_ID)[0])).toBe(true);
     expect(ix.keys[2].pubkey.equals(merkleTreePda(PROGRAM_ID, 3)[0])).toBe(true);
-    expect(ix.keys[3].pubkey.equals(noteLockPda(PROGRAM_ID, noteCommitment)[0])).toBe(
+    expect(ix.keys[3].pubkey.equals(noteLockPda(PROGRAM_ID, noteUseTag)[0])).toBe(
       true,
     );
     expect(ix.keys[3].isWritable).toBe(true);
     // [4] consumed_note — read-only must-be-absent guard.
     expect(
-      ix.keys[4].pubkey.equals(consumedNotePda(PROGRAM_ID, noteCommitment)[0]),
+      ix.keys[4].pubkey.equals(consumedNotePda(PROGRAM_ID, noteUseTag)[0]),
     ).toBe(true);
     expect(ix.keys[4].isWritable).toBe(false);
     expect(ix.keys[5].pubkey.equals(SystemProgram.programId)).toBe(true);

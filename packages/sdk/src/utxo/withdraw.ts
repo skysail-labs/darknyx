@@ -12,6 +12,7 @@ import type { DarkPoolClient } from "../client.js";
 import type { TransactionCallbacks } from "../providers.js";
 import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, nullifierV2 as computeNullifierV2 } from "./note.js";
+import { deriveNoteUseTag } from "./note-use.js";
 import { assertPublicInputs } from "../zk/assert-public-inputs.js";
 import { bn254ToBE32 } from "../keys/key-generators.js";
 import { buildWithdrawInstruction } from "../idl/vault-client.js";
@@ -119,6 +120,14 @@ export function getWithdrawFunction({
     // --- Stage: note-build ---
     await params.callbacks?.pre?.("note-build");
     const commitment = await noteCommitmentV2(params.notePlaintext);
+    // The public handle. The commitment below stays local: it anchors the
+    // Merkle proof inside the circuit and feeds this derivation, but the
+    // withdraw instruction never carries it, so a withdrawal cannot be linked
+    // back to the deposit that created the leaf.
+    const noteUseTag = await deriveNoteUseTag(
+      commitment,
+      bn254ToBE32(params.notePlaintext.innerHash),
+    );
     const nullifierBytes = await computeNullifierV2(
       spendingKey,
       params.notePlaintext.innerHash,
@@ -152,7 +161,7 @@ export function getWithdrawFunction({
       // Validate the prover's public signals against a locally computed vector
       // (SW-26). Order mirrors
       // `programs/vault/src/instructions/withdraw.rs`:
-      //   [note_commitment, merkle_root, nullifier, mint_lo, mint_hi,
+      //   [note_use_tag, merkle_root, nullifier, mint_lo, mint_hi,
       //    amount, dest_lo, dest_hi]
       //
       // The destination halves matter most here. S-01 made the recipient a
@@ -161,7 +170,7 @@ export function getWithdrawFunction({
       // DIFFERENT destination is caught before the caller signs and sends,
       // rather than after the fee is spent.
       assertPublicInputs("VALID_SPEND", proof.publicInputs, [
-        commitment,
+        noteUseTag,
         mProof.root,
         nullifierBytes,
         bn254ToBE32(mintLo),
@@ -184,7 +193,7 @@ export function getWithdrawFunction({
       tokenMint: tokenMintPk,
       destinationTokenAccount: params.destinationTokenAccount,
       tokenProgramId: params.tokenProgramId ?? TOKEN_PROGRAM_ID,
-      noteCommitment: commitment,
+      noteUseTag,
       nullifier: nullifierBytes,
       merkleRoot: mProof.root,
       amount: params.amount,

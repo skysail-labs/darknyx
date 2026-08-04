@@ -96,7 +96,9 @@ order before withdrawing the note so the venue cannot later match an order whose
 collateral you have removed.
 
 Once an order is matched and becomes `pending_settlement`, the engine creates a
-commitment-keyed **on-chain lock**. A live lock blocks withdrawal while the
+note-use-tag-keyed **on-chain lock**. The tag is proof-bound to the note but
+cannot be matched to its public Merkle leaf without the private opening. A live
+lock blocks withdrawal while the
 settlement may still land. It carries an expiry, and at that slot it stops
 blocking withdrawal or merge automatically—even if the expired lock account has
 not yet been closed.

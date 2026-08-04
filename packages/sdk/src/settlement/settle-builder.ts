@@ -69,13 +69,23 @@ export const ZERO_PROOF: Groth16Proof = {
  *  removed — they're proven in-circuit + bound by the note commitments, and
  *  putting them in the (public, on-chain) settle ix leaked every trade size.
  *  The canonical-hash domain bumped `v6`→`v7`. Settlement payload v9 removed
- *  the two unused nullifiers; commitment-keyed consumed-note PDAs are the
- *  replay guard shared by settlement and withdrawal. The Darknyx namespace
- *  cutover retains the 488-byte layout and signs it under v10. */
+ *  the two unused nullifiers. The Darknyx namespace
+ *  cutover retains the 488-byte layout and signs it under v10. v11 replaces the
+ *  two consumed commitments with note-use TAGS, makes tag-keyed consumed-note
+ *  PDAs the replay guard shared by settlement/withdrawal/merge, and appends the
+ *  two relock tags (488 -> 552 bytes, domain v11).
+ *
+ *  The payload is deliberately MIXED: inputs are handles, outputs are
+ *  identities. Republishing a consumed commitment here would relink both inputs
+ *  to their Merkle leaves and undo the unlinkability for every note that ever
+ *  trades; the outputs must be commitments because the handler appends them as
+ *  leaves. */
 export interface MatchResultPayload {
   matchId: Uint8Array; // [u8; 16]
-  noteAcommitment: Uint8Array; // [u8; 32]
-  noteBcommitment: Uint8Array;
+  /** CONSUMED inputs — note-use tags, not commitments. */
+  noteAuseTag: Uint8Array; // [u8; 32]
+  noteBuseTag: Uint8Array;
+  /** OUTPUTS — commitments; these become Merkle leaves. */
   noteCcommitment: Uint8Array;
   noteDcommitment: Uint8Array;
   noteEcommitment: Uint8Array; // [0;32] when no buyer change
@@ -91,6 +101,15 @@ export interface MatchResultPayload {
   buyerRelockExpiry: bigint;
   sellerRelockOrderId: Uint8Array;
   sellerRelockExpiry: bigint;
+  /**
+   * Tags for the change notes this settle creates and immediately RE-LOCKS.
+   * Needed *in addition to* `noteE/Fcommitment`: the commitment is the leaf
+   * value, the tag is the NoteLock PDA seed, and neither derives from the
+   * other without the private inner hash. `[0;32]` when that side has no
+   * change, mirroring the commitment.
+   */
+  noteEuseTag: Uint8Array;
+  noteFuseTag: Uint8Array;
   batchSlot: bigint;
   /** Durable output recovery v3: `ephemeral_pubkey(32) ‖ buyer_enc(44) ‖
    * seller_enc(44) ‖ "DNYXREC3"`. Each side encrypts `(trade, change)`; an
@@ -128,8 +147,8 @@ function cat(...parts: Uint8Array[]): Uint8Array {
 export function serializePayload(p: MatchResultPayload): Uint8Array {
   return cat(
     fixed(p.matchId, 16),
-    fixed(p.noteAcommitment, 32),
-    fixed(p.noteBcommitment, 32),
+    fixed(p.noteAuseTag, 32),
+    fixed(p.noteBuseTag, 32),
     fixed(p.noteCcommitment, 32),
     fixed(p.noteDcommitment, 32),
     fixed(p.noteEcommitment, 32),
@@ -142,6 +161,8 @@ export function serializePayload(p: MatchResultPayload): Uint8Array {
     u64LE(p.buyerRelockExpiry),
     fixed(p.sellerRelockOrderId, 16),
     u64LE(p.sellerRelockExpiry),
+    fixed(p.noteEuseTag, 32),
+    fixed(p.noteFuseTag, 32),
     u64LE(p.batchSlot),
     // Amount-privacy (P3b): the seven plaintext amount fields were removed
     // from the payload (proven in-circuit + bound by the note commitments).
@@ -165,10 +186,14 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   // v8 appended the 128-byte fill_recovery field (repacked internally in v2).
   // v9: removed the two vestigial nullifiers.
   // v10: clean Darknyx namespace cutover; wire fields remain unchanged.
-  h.update(Buffer.from("darknyx-match-v10"));
+  // v11: consumed commitments become note-use tags and the two relock tags are
+  // appended. The hash order is NOT the Borsh order — the fee commitments sit
+  // ahead of the order ids here — so both were changed independently against
+  // `tee_forced_settle::canonical_payload_hash`.
+  h.update(Buffer.from("darknyx-match-v11"));
   h.update(fixed(p.matchId, 16));
-  h.update(fixed(p.noteAcommitment, 32));
-  h.update(fixed(p.noteBcommitment, 32));
+  h.update(fixed(p.noteAuseTag, 32));
+  h.update(fixed(p.noteBuseTag, 32));
   h.update(fixed(p.noteCcommitment, 32));
   h.update(fixed(p.noteDcommitment, 32));
   h.update(fixed(p.noteEcommitment, 32));
@@ -181,6 +206,8 @@ export function canonicalPayloadHash(p: MatchResultPayload): Uint8Array {
   h.update(u64LE(p.buyerRelockExpiry));
   h.update(fixed(p.sellerRelockOrderId, 16));
   h.update(u64LE(p.sellerRelockExpiry));
+  h.update(fixed(p.noteEuseTag, 32));
+  h.update(fixed(p.noteFuseTag, 32));
   h.update(u64LE(p.batchSlot));
   h.update(fixed(p.fillRecovery, 128)); // v8: encrypted output-recovery bundle
   return new Uint8Array(h.digest());
@@ -283,8 +310,8 @@ export interface BuildSettleBatchedIxParams {
  *  11  system_program
  *
  * The two per-match `nullifier_entry` accounts and their payload fields are
- * removed. The commitment-keyed `consumed_a/b` PDAs are the replay guard shared
- * with withdrawal.
+ * removed. The tag-keyed `consumed_a/b` PDAs are the replay guard shared with
+ * withdrawal and merge.
  *
  * ix data = disc(8) || tree_id(1) || payload(Borsh) || match_index(1) || 4×32 siblings.
  */
@@ -321,12 +348,15 @@ export function buildSettleBatchedIx(
 
   const [vaultConfig] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
-  const [lockA] = noteLockPda(p.programId, p.payload.noteAcommitment);
-  const [lockB] = noteLockPda(p.programId, p.payload.noteBcommitment);
-  const [consumedA] = consumedNotePda(p.programId, p.payload.noteAcommitment);
-  const [consumedB] = consumedNotePda(p.programId, p.payload.noteBcommitment);
-  const [lockE] = noteLockPda(p.programId, p.payload.noteEcommitment);
-  const [lockF] = noteLockPda(p.programId, p.payload.noteFcommitment);
+  const [lockA] = noteLockPda(p.programId, p.payload.noteAuseTag);
+  const [lockB] = noteLockPda(p.programId, p.payload.noteBuseTag);
+  const [consumedA] = consumedNotePda(p.programId, p.payload.noteAuseTag);
+  const [consumedB] = consumedNotePda(p.programId, p.payload.noteBuseTag);
+  // The relock locks are seeded on the TAGS, not the change commitments the
+  // adjacent fields carry. An exact fill leaves both zero, and the encoder
+  // dedups the two identical PDAs into one account slot (CLAUDE.md §6).
+  const [lockE] = noteLockPda(p.programId, p.payload.noteEuseTag);
+  const [lockF] = noteLockPda(p.programId, p.payload.noteFuseTag);
   const [batchMarker] = batchValidityMarkerPda(p.programId, p.merkleRoot);
   const buyerRelock = p.payload.buyerRelockOrderId.some((x) => x !== 0);
   const sellerRelock = p.payload.sellerRelockOrderId.some((x) => x !== 0);
@@ -433,8 +463,8 @@ export function buildCloseBatchValidityMarkerIx(
  *  not written anywhere. */
 export function exactFillPayload(args: {
   matchId: Uint8Array;
-  noteAcommitment: Uint8Array;
-  noteBcommitment: Uint8Array;
+  noteAuseTag: Uint8Array;
+  noteBuseTag: Uint8Array;
   noteCcommitment: Uint8Array;
   noteDcommitment: Uint8Array;
   orderIdA: Uint8Array;
@@ -446,12 +476,14 @@ export function exactFillPayload(args: {
 }): MatchResultPayload {
   return {
     matchId: args.matchId,
-    noteAcommitment: args.noteAcommitment,
-    noteBcommitment: args.noteBcommitment,
+    noteAuseTag: args.noteAuseTag,
+    noteBuseTag: args.noteBuseTag,
     noteCcommitment: args.noteCcommitment,
     noteDcommitment: args.noteDcommitment,
     noteEcommitment: ZERO_COMMITMENT,
     noteFcommitment: ZERO_COMMITMENT,
+    noteEuseTag: ZERO_COMMITMENT,
+    noteFuseTag: ZERO_COMMITMENT,
     orderIdA: args.orderIdA,
     orderIdB: args.orderIdB,
     noteFeeBaseCommitment: ZERO_COMMITMENT,

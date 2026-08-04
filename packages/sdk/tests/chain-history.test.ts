@@ -49,12 +49,14 @@ const sellerEnc = fill(44, 0x00); // no seller viewing key
 
 const payload: MatchResultPayload = {
   matchId: fill(16, 0x01),
-  noteAcommitment: fill(32, 0xa1),
-  noteBcommitment: fill(32, 0xa2),
+  noteAuseTag: fill(32, 0xa1),
+  noteBuseTag: fill(32, 0xa2),
   noteCcommitment: fill(32, 0xa3),
   noteDcommitment: fill(32, 0xa4),
   noteEcommitment: noteE,
   noteFcommitment: fill(32, 0x00), // seller change zero ⇒ exact fill
+  noteEuseTag: fill(32, 0xe6), // buyer relock handle
+  noteFuseTag: fill(32, 0x00), // seller exact ⇒ no relock
   orderIdA,
   orderIdB,
   noteFeeBaseCommitment: fill(32, 0xf1),
@@ -72,7 +74,7 @@ const payload: MatchResultPayload = {
   ),
 };
 
-// Realistic ix data: disc(8) ‖ tree_id(1) ‖ payload(488) ‖ match_index(1) ‖ siblings(128).
+// Realistic ix data: disc(8) ‖ tree_id(1) ‖ payload(552) ‖ match_index(1) ‖ siblings(128).
 const ixData = cat(
   anchorDiscriminator("tee_forced_settle_batched"),
   new Uint8Array([0]), // tree_id
@@ -89,7 +91,7 @@ describe("decodeSettleFills", () => {
 
     expect(buyer.orderId).toBe(hex(orderIdA));
     expect(buyer.side).toBe("buyer");
-    expect(buyer.inputNoteCommitment).toBe(hex(payload.noteAcommitment));
+    expect(buyer.inputNoteUseTag).toBe(hex(payload.noteAuseTag));
     expect(buyer.tradeNoteCommitment).toBe(hex(payload.noteCcommitment));
     expect(buyer.isPartialFill).toBe(true);
     expect(buyer.changeNoteCommitment).toBe(hex(noteE));

@@ -332,6 +332,21 @@ second cold boot measured 187.4 Mops/s under the same unlimited, zero-throttle
 cgroup; preserve such per-boot variance instead of treating one 100-ms probe as
 a stable host benchmark.
 
+Image-83 note-use-tag/pot19 capture (2026-08-04): the N=16 circuit grew to
+285,401 constraints and crossed the pot18 capacity, so this image carries the
+pot19 proving key. On a healthy prod9 `tdx.xlarge` placement (model `06/af` at
+2,400 MHz, unlimited `cpu.max`, zero `nr_throttled`, 355.9 Mops/s), the cold
+`cvm-settle-e2e` proof measured `witness_ms=383`, `prove_step_ms=2975`, and
+aggregate `prove_ms=3386`; total settle-pipeline time was 14,435 ms. Relative to
+the image-65 sample above, those proof phases increased 74.9%, 51.2%, and 52.9%,
+respectively, while total pipeline time increased only 0.8% because devnet
+confirmation remained dominant. A separately reset and cold-booted
+`cvm-merge-then-order` corroborated the range at `witness_ms=367`,
+`prove_step_ms=3090`, aggregate `prove_ms=3516`, and 14,882 ms total pipeline.
+These are two cold single-proof samples, not steady-state percentiles; preserve
+the ranges (367–383 ms witness, 2,975–3,090 ms prove step) until a multimatch
+run provides warm repeated proofs on one boot.
+
 - Healthy CPU metadata and expected proof timing: continue the planned CVM
   validation window.
 - Slow auth/proof with throttling or a reduced cpuset: stop validation, restart

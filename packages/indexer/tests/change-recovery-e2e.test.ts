@@ -14,6 +14,7 @@ import {
   MATCH_ROLE_TRADE_BUYER,
 } from "../../sdk/src/utxo/match-output.js";
 import { noteCommitmentV2 } from "../../sdk/src/utxo/note.js";
+import { deriveNoteUseTag } from "../../sdk/src/utxo/note-use.js";
 import type { StoredNote } from "../../sdk/src/utxo/note-store.js";
 import {
   exactFillPayload,
@@ -103,8 +104,10 @@ describe("recovery v3 cross-package e2e", () => {
     );
     const payload = exactFillPayload({
       matchId: fill(16, 0x11),
-      noteAcommitment: inputCommitment,
-      noteBcommitment: fill(32, 0x12),
+      // The settle carries the input's HANDLE; recovery inverts it against the
+      // caller's own notes.
+      noteAuseTag: await deriveNoteUseTag(inputCommitment, bn254ToBE32(0x1234n)),
+      noteBuseTag: fill(32, 0x12),
       noteCcommitment: trade,
       noteDcommitment: fill(32, 0x13),
       orderIdA: fill(16, 0xaa),
@@ -121,7 +124,9 @@ describe("recovery v3 cross-package e2e", () => {
     );
 
     const buyer = decodeSettleIxData(ix)!.find((row) => row.side === "buyer")!;
-    expect(buyer.inputNoteCommitment).toBe(hex(inputCommitment));
+    expect(buyer.inputNoteUseTag).toBe(
+      hex(await deriveNoteUseTag(inputCommitment, bn254ToBE32(0x1234n))),
+    );
     expect(buyer.tradeNoteCommitment).toBe(hex(trade));
     expect(buyer.outputEnc).toBe(hex(buyerEnc));
 
@@ -140,8 +145,8 @@ describe("recovery v3 cross-package e2e", () => {
   it("rejects a legacy recovery layout without the v2 trailer", () => {
     const payload = exactFillPayload({
       matchId: fill(16, 1),
-      noteAcommitment: fill(32, 2),
-      noteBcommitment: fill(32, 3),
+      noteAuseTag: fill(32, 2),
+      noteBuseTag: fill(32, 3),
       noteCcommitment: fill(32, 4),
       noteDcommitment: fill(32, 5),
       orderIdA: fill(16, 6),

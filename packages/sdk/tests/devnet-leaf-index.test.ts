@@ -92,7 +92,8 @@ async function onChainLeafCount(
 d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
   it("getDepositFunction + getMergeFunction store the ACTUAL on-chain leaf index", async () => {
     const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
-    const conn = new Connection(cfg.l1RpcUrl, "confirmed");
+    const rpcUrl = process.env.SOLANA_RPC_URL ?? cfg.l1RpcUrl;
+    const conn = new Connection(rpcUrl, "confirmed");
     const admin = loadKp(".devnet/keypairs/admin.json");
     const mint = new PublicKey(cfg.baseMint.pubkey);
     const ata = await getAssociatedTokenAddress(mint, admin.publicKey);
@@ -129,7 +130,7 @@ d("devnet leaf-index (high-level deposit + merge read the event index)", () => {
           store: async () => {},
         },
       },
-      connectionProvider: { connection: conn, perRpcUrl: cfg.l1RpcUrl },
+      connectionProvider: { connection: conn, perRpcUrl: rpcUrl },
       ownerCommitmentBlinding: ownerBlinding,
       providers: {
         accountInfoProvider: {

@@ -281,10 +281,7 @@ maybeDescribe(
                 programId: vaultProgramId,
                 treeId: 0,
                 payer: seller.payer.publicKey,
-                inputCommitments: [
-                  sellerNote0.commitment,
-                  sellerNote1.commitment,
-                ],
+                inputUseTags: mergeRes.inputUseTagsBE,
                 outputCommitment: mergeRes.outputCommitmentBE,
                 tokenMint: baseMint,
                 merkleRoot: root,

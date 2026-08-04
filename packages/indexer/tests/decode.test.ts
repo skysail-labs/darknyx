@@ -27,12 +27,14 @@ function makePayload(
 ): MatchResultPayload {
   return {
     matchId: fill(16, 0x11),
-    noteAcommitment: fill(32, 0xa),
-    noteBcommitment: fill(32, 0xb),
+    noteAuseTag: fill(32, 0xa),
+    noteBuseTag: fill(32, 0xb),
     noteCcommitment: fill(32, 0xc),
     noteDcommitment: fill(32, 0xd),
     noteEcommitment: fill(32, 0xee),
     noteFcommitment: fill(32, 0xff),
+    noteEuseTag: fill(32, 0xe1),
+    noteFuseTag: fill(32, 0xf1),
     orderIdA: fill(16, 0xaa),
     orderIdB: fill(16, 0xbb),
     noteFeeBaseCommitment: fill(32, 0),
@@ -71,7 +73,12 @@ describe("MatchResultPayload decode", () => {
     expect(p.matchId).toBe(hexN(0x11, 16));
     expect(p.orderIdA).toBe(hexN(0xaa, 16));
     expect(p.orderIdB).toBe(hexN(0xbb, 16));
-    expect(p.noteAcommitment).toBe(hexN(0x0a, 32));
+    expect(p.noteAuseTag).toBe(hexN(0x0a, 32));
+    // The two relock tags sit BETWEEN seller_relock_expiry and batch_slot, so a
+    // decoder that missed them would still read batch_slot at the old offset
+    // and silently return 0 — hence pinning them and batch_slot together.
+    expect(p.noteEuseTag).toBe(hexN(0xe1, 32));
+    expect(p.noteFuseTag).toBe(hexN(0xf1, 32));
     expect(p.noteCcommitment).toBe(hexN(0x0c, 32));
     expect(p.noteEcommitment).toBe(hexN(0xee, 32));
     expect(p.noteFcommitment).toBe(hexN(0xff, 32));

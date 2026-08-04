@@ -24,6 +24,7 @@ import {
 import { buildMergeInstruction } from "../idl/vault-client.js";
 import { assertPublicInputs } from "../zk/assert-public-inputs.js";
 import { bn254ToBE32 } from "../keys/key-generators.js";
+import { deriveNoteUseTag } from "./note-use.js";
 import { readNoteMergedLeafIndex } from "./leaf-index.js";
 import type { StoredNote } from "./note-store.js";
 
@@ -161,11 +162,19 @@ export function getMergeFunction({
     const innerHash: bigint[] = [];
     const merklePath: bigint[][] = [];
     const merkleIndices: number[][] = [];
-    // The K public input commitments the circuit binds: the real note commitment
-    // for active slots, all-zero for dummies. These key the on-chain
-    // ConsumedNoteEntry guard (C-01); active slots equal the circuit's
-    // internally-computed commitment, so the on-chain proof check agrees.
+    // Two parallel K-slot vectors that must NOT be confused:
+    //
+    //   inputCommitmentBytes — private. Anchors each Merkle membership proof
+    //     and feeds `deriveMergeOutputInnerHash`, which the circuit computes
+    //     over commitments (`maskedCommitment[i]` in valid_merge.circom).
+    //     Never leaves the client.
+    //   inputUseTagBytes — the K PUBLIC outputs the circuit binds, and what
+    //     keys the on-chain ConsumedNoteEntry guard (C-01).
+    //
+    // Both are zero for a dummy slot: the circuit masks the tag by isActive,
+    // so `inputUseTags[i] === 0` for a pad, matching the zero here.
     const inputCommitmentBytes: Uint8Array[] = [];
+    const inputUseTagBytes: Uint8Array[] = [];
     const zero32 = new Uint8Array(32);
 
     for (let i = 0; i < k; i++) {
@@ -177,6 +186,9 @@ export function getMergeFunction({
         merklePath.push(proofs[i].siblings.map(u8ToBigBE));
         merkleIndices.push(proofs[i].pathIndices);
         inputCommitmentBytes.push(inp.commitment);
+        inputUseTagBytes.push(
+          await deriveNoteUseTag(inp.commitment, bn254ToBE32(inp.innerHash)),
+        );
       } else {
         isActive.push(0);
         amount.push(0n);
@@ -184,6 +196,7 @@ export function getMergeFunction({
         merklePath.push(Array.from({ length: 20 }, () => 0n));
         merkleIndices.push(Array.from({ length: 20 }, () => 0));
         inputCommitmentBytes.push(zero32);
+        inputUseTagBytes.push(zero32);
       }
     }
 
@@ -228,10 +241,10 @@ export function getMergeFunction({
       // confirms the proof is about those notes before it is submitted.
       //
       // Order mirrors `programs/vault/src/instructions/merge.rs`:
-      //   [output_commitment, input_commitments[0..k], merkle_root, mint_lo, mint_hi]
+      //   [output_commitment, input_use_tags[0..k], merkle_root, mint_lo, mint_hi]
       const expectedPublic: Uint8Array[] = [
         outputCommitment,
-        ...inputCommitmentBytes,
+        ...inputUseTagBytes,
         merkleRoot,
         bn254ToBE32(mintLo),
         bn254ToBE32(mintHi),
@@ -249,7 +262,7 @@ export function getMergeFunction({
       programId: client.programId,
       treeId,
       payer: params.payer,
-      inputCommitments: inputCommitmentBytes,
+      inputUseTags: inputUseTagBytes,
       outputCommitment,
       tokenMint: new PublicKey(params.tokenMint),
       merkleRoot,

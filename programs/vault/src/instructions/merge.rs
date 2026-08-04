@@ -8,12 +8,12 @@
 //! Conservation: K notes consumed + 1 minted, same mint, same total ⇒ the
 //! per-mint `OutstandingMint` counter is UNCHANGED (the pool owes the user the
 //! same total). Replay is guarded by the per-input `ConsumedNoteEntry` PDA
-//! (commitment-keyed) — created manually here (fails if it already exists), the
+//! (tag-keyed) — created manually here (fails if it already exists), the
 //! SAME consume-once guard `withdraw` + TEE settle use. This closes C-01 (audit):
 //! merge previously keyed a separate nullifier-based guard, disjoint from
-//! settle's commitment-keyed `ConsumedNoteEntry`, so the same note could be
+//! settle's old commitment-keyed `ConsumedNoteEntry`, so the same note could be
 //! consumed once by merge and once by settle (double-spend). Dummy padding
-//! slots emit a public input-commitment of 0 (the circuit binds them inactive),
+//! slots emit a public input use tag of 0 (the circuit binds them inactive),
 //! so they create no PDA and can't smuggle a spend.
 
 use crate::errors::VaultError;
@@ -55,10 +55,10 @@ pub struct Merge<'info> {
 
     pub system_program: Program<'info, System>,
     // `remaining_accounts` contains two same-length runs, each in active
-    // input-commitment order: first the writable, uninitialised
+    // input-use-tag order: first the writable, uninitialised
     // ConsumedNoteEntry PDAs; then the read-only NoteLock PDAs, which may be
     // absent OR present-but-expired — only a LIVE lock blocks the merge, as
-    // decided by `note_lock_is_live` (S-03). Dummy zero commitments contribute
+    // decided by `note_lock_is_live` (S-03). Dummy zero tags contribute
     // no accounts.
 }
 
@@ -66,7 +66,7 @@ pub struct Merge<'info> {
 pub fn merge_handler<'info>(
     ctx: Context<'info, Merge<'info>>,
     tree_id: u8,
-    input_commitments: Vec<[u8; 32]>,
+    input_use_tags: Vec<[u8; 32]>,
     output_commitment: [u8; 32],
     token_mint: Pubkey,
     merkle_root: [u8; 32],
@@ -74,20 +74,20 @@ pub fn merge_handler<'info>(
     proof: Groth16Proof,
 ) -> Result<()> {
     require!(
-        (k == 2 || k == 4) && input_commitments.len() == k as usize,
+        (k == 2 || k == 4) && input_use_tags.len() == k as usize,
         VaultError::InvalidMergeK
     );
 
-    // N-04: merge and settlement share the commitment-keyed consume guard, but
+    // N-04: merge and settlement share the TAG-keyed consume guard, but
     // merge must also respect the order pin. Otherwise an owner can merge a
     // live order's input, making its later settle fail and griefing the
     // counterparty until lock expiry. Require exactly one absent NoteLock PDA
     // for every active input before proof verification or state mutation.
-    let active_commitments: Vec<&[u8; 32]> = input_commitments
+    let active_tags: Vec<&[u8; 32]> = input_use_tags
         .iter()
-        .filter(|commitment| **commitment != [0u8; 32])
+        .filter(|tag| **tag != [0u8; 32])
         .collect();
-    let active_len = active_commitments.len();
+    let active_len = active_tags.len();
     // N-14 defense-in-depth: reject the all-dummy transport before proof work
     // or a tree append. The circuit independently requires at least one active,
     // positive input and a positive output amount.
@@ -98,22 +98,22 @@ pub fn merge_handler<'info>(
     );
     let (consumed_accounts, note_lock_accounts) = ctx.remaining_accounts.split_at(active_len);
     // S-11: active inputs must be pairwise DISTINCT. Two identical active
-    // commitments would make the circuit's `outputAmount` double-count one
+    // tags would make the circuit's `outputAmount` double-count one
     // note. That is currently unreachable — the second
     // `create_consumed_note_pda` sees the account already created, and the
     // System Program independently rejects a duplicate `create_account` — but
     // the whole guarantee resting on one runtime behaviour, with no in-circuit
     // backstop and no negative test, is not a place to leave value
     // conservation. K <= 4, so the O(K^2) scan is free.
-    for (i, a) in active_commitments.iter().enumerate() {
-        for b in active_commitments.iter().skip(i + 1) {
+    for (i, a) in active_tags.iter().enumerate() {
+        for b in active_tags.iter().skip(i + 1) {
             require!(a != b, VaultError::DuplicateMergeInput);
         }
     }
     let now_slot = Clock::get()?.slot;
-    for (commitment, note_lock) in active_commitments.iter().zip(note_lock_accounts) {
+    for (tag, note_lock) in active_tags.iter().zip(note_lock_accounts) {
         let (expected, _) =
-            Pubkey::find_program_address(&[NoteLock::SEED, commitment.as_ref()], &crate::ID);
+            Pubkey::find_program_address(&[NoteLock::SEED, tag.as_ref()], &crate::ID);
         require_keys_eq!(note_lock.key(), expected, VaultError::MergeAccountMismatch);
         // S-03: only a LIVE lock blocks the merge (N-04's intent — stop an
         // owner merging a live order's collateral and griefing the
@@ -132,16 +132,16 @@ pub fn merge_handler<'info>(
 
     // ----- Verify the VALID_MERGE proof (VK chosen by K) -----
     // Public signals (snarkjs order: outputs first, then public inputs):
-    //   [outputCommitment, inputCommitments[0..K-1], merkleRoot, mint_lo, mint_hi]
-    // (C-01: the input commitments are now PUBLIC outputs, right after
+    //   [outputCommitment, inputUseTags[0..K-1], merkleRoot, mint_lo, mint_hi]
+    // (C-01: the input tags are PUBLIC outputs, right after
     // outputCommitment, replacing the trailing nullifiers.)
     let [mint_lo, mint_hi] = pubkey_pair_be32(&token_mint.to_bytes());
     match k {
         2 => {
             let pi: [[u8; 32]; 6] = [
                 output_commitment,
-                input_commitments[0],
-                input_commitments[1],
+                input_use_tags[0],
+                input_use_tags[1],
                 merkle_root,
                 mint_lo,
                 mint_hi,
@@ -158,10 +158,10 @@ pub fn merge_handler<'info>(
         4 => {
             let pi: [[u8; 32]; 8] = [
                 output_commitment,
-                input_commitments[0],
-                input_commitments[1],
-                input_commitments[2],
-                input_commitments[3],
+                input_use_tags[0],
+                input_use_tags[1],
+                input_use_tags[2],
+                input_use_tags[3],
                 merkle_root,
                 mint_lo,
                 mint_hi,
@@ -185,7 +185,7 @@ pub fn merge_handler<'info>(
     // Reuse the slot already read for the lock-liveness check — same
     // transaction, therefore the same slot, and one fewer sysvar read.
     let spent_slot = now_slot;
-    for (commitment, ai) in active_commitments.iter().zip(consumed_accounts) {
+    for (commitment, ai) in active_tags.iter().zip(consumed_accounts) {
         create_consumed_note_pda(
             ai,
             &ctx.accounts.payer,
@@ -231,11 +231,11 @@ fn create_consumed_note_pda<'info>(
     ai: &AccountInfo<'info>,
     payer: &Signer<'info>,
     system_program: &Program<'info, System>,
-    note_commitment: &[u8; 32],
+    note_use_tag: &[u8; 32],
     consumed_slot: u64,
 ) -> Result<()> {
     let (expected, bump) = Pubkey::find_program_address(
-        &[ConsumedNoteEntry::SEED, note_commitment.as_ref()],
+        &[ConsumedNoteEntry::SEED, note_use_tag.as_ref()],
         &crate::ID,
     );
     require_keys_eq!(ai.key(), expected, VaultError::MergeAccountMismatch);
@@ -247,7 +247,7 @@ fn create_consumed_note_pda<'info>(
     let space = 8 + size_of::<ConsumedNoteEntry>();
     let lamports = Rent::get()?.minimum_balance(space);
     let bump_arr = [bump];
-    let seeds: &[&[u8]] = &[ConsumedNoteEntry::SEED, note_commitment.as_ref(), &bump_arr];
+    let seeds: &[&[u8]] = &[ConsumedNoteEntry::SEED, note_use_tag.as_ref(), &bump_arr];
     let signer_seeds = &[seeds];
 
     system_program::create_account(
@@ -268,7 +268,7 @@ fn create_consumed_note_pda<'info>(
     data[..8].copy_from_slice(ConsumedNoteEntry::DISCRIMINATOR);
     let (_head, body) = data.split_at_mut(8);
     let c: &mut ConsumedNoteEntry = bytemuck::from_bytes_mut(body);
-    c.note_commitment = *note_commitment;
+    c.note_use_tag = *note_use_tag;
     c.match_id = [0u8; 16];
     c.consumed_slot = consumed_slot;
     c.bump = bump;

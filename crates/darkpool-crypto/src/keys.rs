@@ -51,6 +51,10 @@ const INFO_VIEWING: &[u8] = b"darkpool_viewing_key_v1";
 const INFO_TRADING: &[u8] = b"darkpool_trading_key_v1";
 const INFO_ROOT: &[u8] = b"darkpool_root_key_v1";
 const INFO_BLINDING: &[u8] = b"note_blinding_v1";
+/// Domain string for the per-note deposit secret. Distinct from every other
+/// `INFO_*` so a note secret can never collide with a key derived for another
+/// purpose from the same master seed.
+const INFO_NOTE_SECRET: &[u8] = b"darknyx/note-secret/v1";
 
 /// The raw master seed (64 bytes, cryptographically random or wallet-derived).
 #[derive(Clone)]
@@ -168,6 +172,26 @@ pub fn derive_blinding_factor(seed: &MasterSeed, counter: u64) -> Fr {
     info.extend_from_slice(INFO_BLINDING);
     info.extend_from_slice(&counter.to_le_bytes());
     let bytes = darknyx_shake_kdf_v1(seed.as_bytes(), &info, &[], 64);
+    fr_from_uniform_bytes(&bytes)
+}
+
+/// Derive the per-note secret that enters a deposit's inner hash.
+///
+/// Keyed on the deposit's PUBLIC `recovery_nonce` rather than a counter, for two
+/// reasons: cold recovery reads the nonce straight out of the deposit
+/// instruction (so nothing extra has to be persisted or scanned for), and the
+/// nonce is already unique per deposit, so the secret inherits that uniqueness
+/// without a separate monotonic source that a restart could reset.
+///
+/// This is what stops [`crate::deposit::deposit_inner_hash`] — and therefore the
+/// public note-use tag derived from it — being a function of on-chain data plus
+/// one wallet-wide value. See that module for the full argument.
+///
+/// Returns an `Fr` so the caller cannot accidentally feed a non-canonical
+/// 32-byte value into Poseidon; `fr_from_uniform_bytes` reduces 64 bytes, which
+/// is the standard way to land uniformly in the field.
+pub fn derive_note_secret(seed: &MasterSeed, recovery_nonce: &[u8; 32]) -> Fr {
+    let bytes = darknyx_shake_kdf_v1(seed.as_bytes(), INFO_NOTE_SECRET, recovery_nonce, 64);
     fr_from_uniform_bytes(&bytes)
 }
 
@@ -335,5 +359,17 @@ mod tests {
             let r = derive_blinding_factor(&s, i);
             assert!(set.insert(r), "collision at counter {i}");
         }
+    }
+
+    #[test]
+    fn note_secret_known_answer_is_frozen_and_nonce_bound() {
+        let s = fixed_seed();
+        let nonce = [0xa5; 32];
+        let actual = derive_note_secret(&s, &nonce);
+        assert_eq!(
+            hex::encode(crate::field::fr_to_be_bytes(&actual)),
+            "19e0beec56a80bee42960ad7779fc50cefacaeff1c31e5c26ccf76bafcc9c51c"
+        );
+        assert_ne!(actual, derive_note_secret(&s, &[0xa4; 32]));
     }
 }

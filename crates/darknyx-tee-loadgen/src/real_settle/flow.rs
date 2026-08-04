@@ -58,6 +58,16 @@ pub struct RealSettleHarness {
     num_trees: u8,
 }
 
+/// Deterministic stand-in for the client's seed-derived note secret.
+///
+/// Poseidon over the public nonce with a distinct domain, so the result is
+/// Fr-safe by construction and varies per deposit — the two properties the
+/// circuit needs. It is NOT secret, and must never be used outside the rig.
+fn synthetic_note_secret(recovery_nonce: &[u8; 32]) -> [u8; 32] {
+    darkpool_crypto::poseidon_hash_bytes(&[[0u8; 32], *recovery_nonce])
+        .expect("synthetic note secret is field-safe")
+}
+
 impl RealSettleHarness {
     /// `circuits_build_dir` resolves the valid_input artifacts; `num_trees` is
     /// the on-chain shard count (e2e-config `numTrees`).
@@ -131,12 +141,21 @@ impl RealSettleHarness {
         tree_id: u8,
     ) -> R<DepositedNote> {
         let mint_addr = solana_address::Address::new_from_array(mint);
+        // Synthetic per-note secret, derived here rather than threaded through
+        // every call site. The real client derives this from the master seed
+        // keyed on the public recovery nonce (see
+        // `darkpool_crypto::derive_note_secret`); this rig has no seed and only
+        // needs a value that varies per note and stays Fr-safe. Crypto fidelity
+        // for the deposit path is covered by the SDK parity tests and the
+        // devnet deposit/withdraw gate, not here.
+        let note_secret = synthetic_note_secret(recovery_nonce);
         let deposit = self.deposit_prover.prove(
             spending_key,
             owner_blinding,
             &mint,
             amount,
             recovery_nonce,
+            &note_secret,
         )?;
         let ix = vault::build_deposit_ix(
             tree_id,

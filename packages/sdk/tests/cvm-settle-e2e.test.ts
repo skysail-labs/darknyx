@@ -71,6 +71,7 @@ import {
 import { fetchOrderFills } from "../src/fills/history.js";
 import { recoverNotesFromChain } from "../src/fills/cold-recovery.js";
 import { recoverFillFromChain } from "../src/fills/recover.js";
+import { decodeSettleFills } from "../src/fills/chain-history.js";
 import {
   subscribeFills,
   type FillsSubscription,
@@ -658,6 +659,87 @@ maybeDescribe(
             `  !! settle-timeline probe failed: ${(e as Error).message}`,
           );
         }
+
+        // The protocol-level privacy assertion for note-use tags. Find THIS
+        // match's settle instruction by its signed order ids, then inspect the
+        // serialized transaction rather than trusting the decoder's field
+        // names: consumed Merkle commitments must be absent, while the output
+        // commitments carried by Tx D must remain present.
+        await t.step("note-use unlinkability (settle wire)", async () => {
+          const infoRes = await gwFetch(`${GATEWAY}/info`);
+          expect(infoRes.status).toBe(200);
+          const info = (await infoRes.json()) as { tee_pubkey?: string };
+          expect(info.tee_pubkey).toBeTruthy();
+
+          const timeline = await fetchSettleTimeline(
+            conn,
+            new PublicKey(info.tee_pubkey!),
+            { limit: 20, vaultProgramId: cfg.vaultProgramId },
+          );
+          let matched:
+            | { wire: Buffer; outputs: Uint8Array[]; signature: string }
+            | undefined;
+          for (const row of timeline
+            .filter((r) => r.stage === "tee_forced_settle_batched")
+            .reverse()) {
+            const tx = await conn.getTransaction(row.signature, {
+              maxSupportedTransactionVersion: 0,
+              commitment: "confirmed",
+            });
+            if (!tx) continue;
+            const message = tx.transaction.message;
+            const keys = message.getAccountKeys({
+              accountKeysFromLookups: tx.meta?.loadedAddresses ?? undefined,
+            });
+            for (const ix of message.compiledInstructions) {
+              if (
+                keys.get(ix.programIdIndex)?.toBase58() !== cfg.vaultProgramId
+              ) {
+                continue;
+              }
+              const fills = decodeSettleFills(ix.data, row.signature, row.slot);
+              if (
+                !fills ||
+                !fills.some((f) => f.orderId === buyerOrder.order_id) ||
+                !fills.some((f) => f.orderId === sellerOrder.order_id)
+              ) {
+                continue;
+              }
+              matched = {
+                // The message is the observer-visible signed payload. It
+                // contains every instruction byte (where the old commitments
+                // leaked) without adding nondeterministic signature bytes.
+                wire: Buffer.from(message.serialize()),
+                outputs: fills.map((f) =>
+                  Uint8Array.from(Buffer.from(f.tradeNoteCommitment, "hex")),
+                ),
+                signature: row.signature,
+              };
+              break;
+            }
+            if (matched) break;
+          }
+
+          expect(matched, "could not locate this match's Tx D").toBeTruthy();
+          for (const inputCommitment of [
+            buyerNote.commitment,
+            sellerNote.commitment,
+          ]) {
+            expect(
+              matched!.wire.includes(Buffer.from(inputCommitment)),
+              "a consumed Merkle commitment leaked into Tx D",
+            ).toBe(false);
+          }
+          for (const outputCommitment of matched!.outputs) {
+            expect(
+              matched!.wire.includes(Buffer.from(outputCommitment)),
+              "an output commitment expected in Tx D was absent",
+            ).toBe(true);
+          }
+          console.log(
+            `  · unlinkability OK — inputs absent, outputs present in Tx D ${matched!.signature}`,
+          );
+        });
 
         // Permanent recovery backstop: scan finalized vault history from before
         // the deposits, identify only notes owned by the buyer seed, decrypt the

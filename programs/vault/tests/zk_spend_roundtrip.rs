@@ -7,7 +7,9 @@
 //!   2. Owner commitment: Poseidon3(DOMAIN_OWNER=1, sk, r_owner)
 //!   3. Note commitment: Poseidon6(DOMAIN_NOTE=2, mint_lo, mint_hi, amt, owner, inner_hash)
 //!   4. Nullifier:       Poseidon3(DOMAIN_NULL=3,  sk, inner_hash)
-//!   5. noteCommitment is the 6th public input/output (index 5).
+//!   5. noteUseTag = Poseidon3(DOMAIN_NOTE_USE=29, commitment, inner_hash) is
+//!      the circuit's public output at wire index 0 — the commitment itself is
+//!      now a private intermediate and never appears in a public signal.
 //!   6. snarkjs Groth16 proof generation.
 //!   7. `groth16-solana` verification producing `Ok(())`.
 //!
@@ -191,6 +193,10 @@ fn valid_spend_roundtrip() {
     .unwrap();
     let note_commitment_bytes = fr_to_be_bytes(&note_commitment);
 
+    // note_use_tag = Poseidon3(DOMAIN_NOTE_USE=29, note_commitment, inner_hash).
+    // This, not the commitment, is what `withdraw` keys the consume guard on.
+    let note_use_tag = poseidon_hash(&[Fr::from(29u64), note_commitment, inner_hash]).unwrap();
+
     // ----- Build an on-chain-style Merkle tree with this as the only leaf -----
     let (mut tree, zsr) = fresh_tree();
     let root_bytes = append_leaf(&mut tree, &zsr, note_commitment_bytes).unwrap();
@@ -293,7 +299,7 @@ fn valid_spend_roundtrip() {
     };
 
     // Public signal wire order (from circuit.sym — circom places outputs before inputs):
-    //   wire 1: noteCommitment  (signal output — appears first)
+    //   wire 1: noteUseTag      (signal output — appears first)
     //   wire 2: merkleRoot
     //   wire 3: nullifier
     //   wire 4: tokenMint[0]
@@ -310,7 +316,7 @@ fn valid_spend_roundtrip() {
     // public-signal order (output first, then public inputs in template
     // declaration order).
     let public_inputs: [[u8; 32]; 8] = [
-        note_commitment_bytes,
+        fr_to_be_bytes(&note_use_tag),
         witness_root,
         fr_to_be_bytes(&nullifier),
         fr_to_be_bytes(&mint_lo),
@@ -348,11 +354,11 @@ fn valid_spend_roundtrip() {
     let res3 = verify_groth16_proof::<8>(&vk, &proof, &stale_inputs);
     assert!(res3.is_err(), "stale Merkle root must not verify");
 
-    // ----- Negative: wrong note_commitment (index 0) must be rejected -----
+    // ----- Negative: wrong note_use_tag (index 0) must be rejected -----
     let mut bad_nc = public_inputs;
     bad_nc[0][0] ^= 0x01;
     let res4 = verify_groth16_proof::<8>(&vk, &proof, &bad_nc);
-    assert!(res4.is_err(), "tampered note_commitment must not verify");
+    assert!(res4.is_err(), "tampered note_use_tag must not verify");
 
     // ----- S-01: substituted destination must be rejected -----
     //

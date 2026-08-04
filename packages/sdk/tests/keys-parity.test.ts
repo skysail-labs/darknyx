@@ -18,6 +18,7 @@ import {
   deriveRootKey,
   deriveTradingKeyAtOffset,
   deriveBlindingFactor,
+  deriveNoteSecret,
   darknyxShakeKdfV1,
   bn254ToBE32,
   MASTER_SEED_BYTES,
@@ -132,6 +133,26 @@ describe("key derivation parity", () => {
     const rustHex = runRustHelper("blinding", [
       Buffer.from(s).toString("hex"),
       "5",
+    ])!;
+    expect(tsHex).toBe(rustHex);
+  });
+
+  it("per-note secret has a fixed KAT and matches Rust", () => {
+    const s = fixedSeed();
+    const nonce = new Uint8Array(32).fill(0xa5);
+    const tsHex = Buffer.from(bn254ToBE32(deriveNoteSecret(s, nonce))).toString(
+      "hex",
+    );
+    expect(tsHex).toBe(
+      "19e0beec56a80bee42960ad7779fc50cefacaeff1c31e5c26ccf76bafcc9c51c",
+    );
+    expect(deriveNoteSecret(s, nonce)).not.toBe(
+      deriveNoteSecret(s, new Uint8Array(32).fill(0xa4)),
+    );
+    if (!helperAvailable) return;
+    const rustHex = runRustHelper("note-secret", [
+      Buffer.from(s).toString("hex"),
+      Buffer.from(nonce).toString("hex"),
     ])!;
     expect(tsHex).toBe(rustHex);
   });

@@ -282,8 +282,8 @@ pub fn compute_budget_ix(cu: u32) -> Instruction {
 #[derive(BorshSerialize, Clone)]
 pub struct MatchResultPayload {
     pub match_id: [u8; 16],
-    pub note_a_commitment: [u8; 32],
-    pub note_b_commitment: [u8; 32],
+    pub note_a_use_tag: [u8; 32],
+    pub note_b_use_tag: [u8; 32],
     pub note_c_commitment: [u8; 32],
     pub note_d_commitment: [u8; 32],
     pub note_e_commitment: [u8; 32],
@@ -296,6 +296,8 @@ pub struct MatchResultPayload {
     pub buyer_relock_expiry: u64,
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
+    pub note_e_use_tag: [u8; 32],
+    pub note_f_use_tag: [u8; 32],
     pub batch_slot: u64,
     // Amount-privacy (P3b): the seven plaintext amount fields (base/quote/
     // buyer_change/seller_change/buyer_fee/seller_fee/clearing_price) were
@@ -339,8 +341,8 @@ impl MatchResultPayload {
     ) -> Self {
         Self {
             match_id,
-            note_a_commitment: note_a,
-            note_b_commitment: note_b,
+            note_a_use_tag: note_a,
+            note_b_use_tag: note_b,
             note_c_commitment: note_c,
             note_d_commitment: note_d,
             note_e_commitment: [0u8; 32],
@@ -353,6 +355,8 @@ impl MatchResultPayload {
             buyer_relock_expiry: 0,
             seller_relock_order_id: RELOCK_ORDER_ID_NONE,
             seller_relock_expiry: 0,
+            note_e_use_tag: [0u8; 32],
+            note_f_use_tag: [0u8; 32],
             batch_slot: 0,
             fill_recovery: [0u8; 128],
         }
@@ -364,10 +368,10 @@ impl MatchResultPayload {
 pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    h.update(b"darknyx-match-v10");
+    h.update(b"darknyx-match-v11");
     h.update(p.match_id);
-    h.update(p.note_a_commitment);
-    h.update(p.note_b_commitment);
+    h.update(p.note_a_use_tag);
+    h.update(p.note_b_use_tag);
     h.update(p.note_c_commitment);
     h.update(p.note_d_commitment);
     h.update(p.note_e_commitment);
@@ -380,6 +384,8 @@ pub fn canonical_payload_hash(p: &MatchResultPayload) -> [u8; 32] {
     h.update(p.buyer_relock_expiry.to_le_bytes());
     h.update(p.seller_relock_order_id);
     h.update(p.seller_relock_expiry.to_le_bytes());
+    h.update(p.note_e_use_tag);
+    h.update(p.note_f_use_tag);
     h.update(p.batch_slot.to_le_bytes());
     h.update(p.fill_recovery); // v8: encrypted output-recovery bundle
     let out = h.finalize();
@@ -701,8 +707,8 @@ fn to_onchain_payload(
     use vault::instructions::tee_forced_settle::MatchResultPayload as OnP;
     OnP {
         match_id: p.match_id,
-        note_a_commitment: p.note_a_commitment,
-        note_b_commitment: p.note_b_commitment,
+        note_a_use_tag: p.note_a_use_tag,
+        note_b_use_tag: p.note_b_use_tag,
         note_c_commitment: p.note_c_commitment,
         note_d_commitment: p.note_d_commitment,
         note_e_commitment: p.note_e_commitment,
@@ -715,6 +721,8 @@ fn to_onchain_payload(
         buyer_relock_expiry: p.buyer_relock_expiry,
         seller_relock_order_id: p.seller_relock_order_id,
         seller_relock_expiry: p.seller_relock_expiry,
+        note_e_use_tag: p.note_e_use_tag,
+        note_f_use_tag: p.note_f_use_tag,
         batch_slot: p.batch_slot,
         fill_recovery: p.fill_recovery,
     }
@@ -813,12 +821,15 @@ pub fn build_settle_batched_ix_for(
 ) -> Instruction {
     let (vault_pda, _) = vault_config_pda(&h.vault_id);
     let (tree_pda, _) = merkle_tree_pda(&h.vault_id, tree_id);
-    let (lock_a, _) = note_lock_pda(&h.vault_id, &payload.note_a_commitment);
-    let (lock_b, _) = note_lock_pda(&h.vault_id, &payload.note_b_commitment);
-    let (consumed_a, _) = consumed_note_pda(&h.vault_id, &payload.note_a_commitment);
-    let (consumed_b, _) = consumed_note_pda(&h.vault_id, &payload.note_b_commitment);
-    let (lock_e, _) = note_lock_pda(&h.vault_id, &payload.note_e_commitment);
-    let (lock_f, _) = note_lock_pda(&h.vault_id, &payload.note_f_commitment);
+    let (lock_a, _) = note_lock_pda(&h.vault_id, &payload.note_a_use_tag);
+    let (lock_b, _) = note_lock_pda(&h.vault_id, &payload.note_b_use_tag);
+    let (consumed_a, _) = consumed_note_pda(&h.vault_id, &payload.note_a_use_tag);
+    let (consumed_b, _) = consumed_note_pda(&h.vault_id, &payload.note_b_use_tag);
+    // The relock PDAs are seeded with the TAGS, not the commitments. Both are
+    // [u8;32], so getting this wrong compiles and then fails on-chain as an
+    // opaque `Unauthorized` from create_relock_pda's address check.
+    let (lock_e, _) = note_lock_pda(&h.vault_id, &payload.note_e_use_tag);
+    let (lock_f, _) = note_lock_pda(&h.vault_id, &payload.note_f_use_tag);
 
     let instructions_sysvar: Pubkey = Pubkey::from([
         // Sysvar1nstructions1111111111111111111111111
@@ -1020,7 +1031,7 @@ pub fn seed_marker_and_build_settle_batched_tx(
     h: &mut Harness,
     p: &MatchResultPayload,
 ) -> Transaction {
-    let mint = read_note_lock_mint(h, &p.note_a_commitment);
+    let mint = read_note_lock_mint(h, &p.note_a_use_tag);
     let leaf = compute_match_leaf_for(p, &mint, &mint);
     let mut leaves = [[0u8; 32]; 16];
     leaves[0] = leaf;
@@ -1039,7 +1050,7 @@ pub fn seed_marker_and_build_settle_batched_ix(
     h: &mut Harness,
     p: &MatchResultPayload,
 ) -> Instruction {
-    let mint = read_note_lock_mint(h, &p.note_a_commitment);
+    let mint = read_note_lock_mint(h, &p.note_a_use_tag);
     let leaf = compute_match_leaf_for(p, &mint, &mint);
     let mut leaves = [[0u8; 32]; 16];
     leaves[0] = leaf;
@@ -1179,6 +1190,10 @@ pub struct NoteSecret {
     pub spending_key: Fr,
     pub r_owner: Fr,
     pub recovery_nonce: Fr,
+    /// Seed-derived in the real client; a deterministic stand-in here. It is a
+    /// PRIVATE VALID_DEPOSIT witness and the reason the deposit inner is not a
+    /// function of on-chain data plus the wallet-wide owner commitment.
+    pub note_secret: Fr,
     pub inner_hash: Fr,
     pub owner_commitment: Fr,
 }
@@ -1190,13 +1205,22 @@ impl NoteSecret {
         let spending_key = fr_from_uniform_bytes(&[sk_seed; 32]);
         let r_owner = fr_from_uniform_bytes(&[r_owner_seed; 32]);
         let recovery_nonce = fr_from_uniform_bytes(&[inner_seed; 32]);
+        let note_secret = fr_from_uniform_bytes(&[inner_seed ^ 0x5A; 32]);
         let owner_commitment = poseidon_hash(&[Fr::from(1u64), spending_key, r_owner]).unwrap();
-        let inner_hash =
-            poseidon_hash(&[Fr::from(27u64), owner_commitment, recovery_nonce]).unwrap();
+        // Poseidon4 now — see darkpool-crypto/src/deposit.rs for why the
+        // fourth input exists.
+        let inner_hash = poseidon_hash(&[
+            Fr::from(27u64),
+            owner_commitment,
+            recovery_nonce,
+            note_secret,
+        ])
+        .unwrap();
         Self {
             spending_key,
             r_owner,
             recovery_nonce,
+            note_secret,
             inner_hash,
             owner_commitment,
         }
@@ -1208,6 +1232,12 @@ impl NoteSecret {
 /// single-leaf Merkle witness + root).
 pub struct DepositedNote {
     pub commitment: [u8; 32],
+    /// The PUBLIC consume handle: `Poseidon3(29, commitment, inner_hash)`.
+    /// Every consume path — settle, withdraw, merge — must key on THIS, not on
+    /// the commitment. A path left on the commitment would let the same note be
+    /// consumed once under each scheme, which is a double-spend; the two
+    /// cross-path tests in `tee_forced_settle_batched.rs` are what catch that.
+    pub use_tag: [u8; 32],
     pub nullifier: [u8; 32],
     pub amount: u64,
     pub mint: Pubkey,
@@ -1304,8 +1334,15 @@ pub fn deposit_note(
         "witness root diverged from the on-chain post-deposit root",
     );
 
+    let use_tag = darkpool_crypto::note_use_tag(
+        &commitment,
+        &darkpool_crypto::fr_to_be_bytes(&secret.inner_hash),
+    )
+    .expect("note-use tag is field-safe");
+
     DepositedNote {
         commitment,
+        use_tag,
         nullifier,
         amount,
         mint: *mint,
@@ -1348,7 +1385,8 @@ fn build_valid_deposit_proof(
            \"amount\": \"{amount}\",\n\
            \"recoveryNonce\": \"{nonce}\",\n\
            \"spendingKey\": \"{spending}\",\n\
-           \"ownerCommitmentBlinding\": \"{r_owner}\"\n\
+           \"ownerCommitmentBlinding\": \"{r_owner}\",\n\
+           \"noteSecret\": \"{note_secret}\"\n\
          }}",
         commitment = fr_to_dec(&Fr::from_be_bytes_mod_order(commitment)),
         mint_lo = fr_to_dec(&mint_lo),
@@ -1356,6 +1394,7 @@ fn build_valid_deposit_proof(
         nonce = fr_to_dec(&secret.recovery_nonce),
         spending = fr_to_dec(&secret.spending_key),
         r_owner = fr_to_dec(&secret.r_owner),
+        note_secret = fr_to_dec(&secret.note_secret),
     );
     let tag: String = commitment[..6].iter().map(|b| format!("{b:02x}")).collect();
     let tmp = std::env::temp_dir().join(format!("darknyx_valid_deposit_{tag}"));
@@ -1416,14 +1455,14 @@ pub fn build_withdraw_tx(
     let (vault_pda, _) = vault_config_pda(&h.vault_id);
     let (tree_pda, _) = merkle_tree_pda(&h.vault_id, note.tree_id);
     let (vault_token, _) = vault_token_pda(h, &note.mint);
-    let (consumed, _) = consumed_note_pda(&h.vault_id, &note.commitment);
-    let (note_lock, _) = note_lock_pda(&h.vault_id, &note.commitment);
+    let (consumed, _) = consumed_note_pda(&h.vault_id, &note.use_tag);
+    let (note_lock, _) = note_lock_pda(&h.vault_id, &note.use_tag);
     let (outstanding, _) = outstanding_mint_pda(h, &note.mint);
 
-    // withdraw(tree_id, note_commitment, nullifier, merkle_root, amount, proof)
+    // withdraw(tree_id, note_use_tag, nullifier, merkle_root, amount, proof)
     let mut data = anchor_disc("withdraw").to_vec();
     data.push(note.tree_id);
-    data.extend_from_slice(&note.commitment);
+    data.extend_from_slice(&note.use_tag);
     data.extend_from_slice(&note.nullifier);
     data.extend_from_slice(&note.merkle_root);
     data.extend_from_slice(&note.amount.to_le_bytes());

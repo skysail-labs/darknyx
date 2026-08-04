@@ -14,12 +14,12 @@
 //! Args (after the 8-byte discriminator):
 //!   - `tree_id: u8`                  — which `merkle_tree` shard the
 //!     output notes append to (post-sharding; first arg)
-//!   - `payload: MatchResultPayload`  — 488-byte Borsh ([`super::payload`])
+//!   - `payload: MatchResultPayload`  — 552-byte Borsh ([`super::payload`])
 //!   - `match_index: u8`              — position in the batch (0..15)
 //!   - `merkle_proof: [[u8;32]; 4]`   — 128 contiguous bytes, the
 //!     depth-4 inclusion path (leaf-level sibling first)
 //!
-//! ix data total = 8 + 1 + 488 + 1 + 128 = 626 bytes.
+//! ix data total = 8 + 1 + 552 + 1 + 128 = 690 bytes.
 //!
 //! `merkle_root` is NOT in the ix data — it only derives the
 //! `batch_validity_marker` PDA address. The handler recomputes the
@@ -80,18 +80,22 @@ pub fn build_settle_batched_ix(
     let program_id = vault_program_id();
     let (vault_config, _) = vault_config_pda();
     let (merkle_tree, _) = merkle_tree_pda(tree_id);
-    let (lock_a, _) = note_lock_pda(&payload.note_a_commitment);
-    let (lock_b, _) = note_lock_pda(&payload.note_b_commitment);
-    let (consumed_a, _) = consumed_note_pda(&payload.note_a_commitment);
-    let (consumed_b, _) = consumed_note_pda(&payload.note_b_commitment);
-    let (lock_e, _) = note_lock_pda(&payload.note_e_commitment);
-    let (lock_f, _) = note_lock_pda(&payload.note_f_commitment);
+    let (lock_a, _) = note_lock_pda(&payload.note_a_use_tag);
+    let (lock_b, _) = note_lock_pda(&payload.note_b_use_tag);
+    let (consumed_a, _) = consumed_note_pda(&payload.note_a_use_tag);
+    let (consumed_b, _) = consumed_note_pda(&payload.note_b_use_tag);
+    // Change-note leaves stay commitments, but their re-lock PDAs are keyed by
+    // the circuit-bound use tags. Both fields are `[u8; 32]`, so accidentally
+    // using the commitment compiles and only fails on chain when the vault
+    // re-derives `[NoteLock::SEED, note_{e,f}_use_tag]`.
+    let (lock_e, _) = note_lock_pda(&payload.note_e_use_tag);
+    let (lock_f, _) = note_lock_pda(&payload.note_f_use_tag);
     let (marker, _) = batch_validity_marker_pda(merkle_root);
 
     // Account order MUST match TeeForcedSettleBatched<'info>. Post-sharding:
     // vault_config is READ-ONLY (key/owner/zsr source) and the writable tree
     // state moved to `merkle_tree` (slot 2). The two per-match nullifier_entry
-    // accounts were REMOVED (the commitment-keyed consumed_a/b are now the sole
+    // accounts were REMOVED (the tag-keyed consumed_a/b are now the sole
     // consume-once guard — see the vault handler). The vestigial nullifier
     // fields left the v9 payload entirely.
     let accounts = vec![
@@ -146,12 +150,12 @@ pub fn per_batch_alt_addresses(
     merkle_root: &[u8; 32],
 ) -> Vec<Address> {
     vec![
-        note_lock_pda(&payload.note_a_commitment).0,
-        note_lock_pda(&payload.note_b_commitment).0,
-        note_lock_pda(&payload.note_e_commitment).0,
-        note_lock_pda(&payload.note_f_commitment).0,
-        consumed_note_pda(&payload.note_a_commitment).0,
-        consumed_note_pda(&payload.note_b_commitment).0,
+        note_lock_pda(&payload.note_a_use_tag).0,
+        note_lock_pda(&payload.note_b_use_tag).0,
+        note_lock_pda(&payload.note_e_use_tag).0,
+        note_lock_pda(&payload.note_f_use_tag).0,
+        consumed_note_pda(&payload.note_a_use_tag).0,
+        consumed_note_pda(&payload.note_b_use_tag).0,
         batch_validity_marker_pda(merkle_root).0,
     ]
 }
@@ -179,16 +183,16 @@ pub fn batch_alt_addresses<'a>(
         }
     };
     for p in payloads {
-        push(note_lock_pda(&p.note_a_commitment).0);
-        push(note_lock_pda(&p.note_b_commitment).0);
-        push(note_lock_pda(&p.note_e_commitment).0);
-        push(note_lock_pda(&p.note_f_commitment).0);
+        push(note_lock_pda(&p.note_a_use_tag).0);
+        push(note_lock_pda(&p.note_b_use_tag).0);
+        push(note_lock_pda(&p.note_e_use_tag).0);
+        push(note_lock_pda(&p.note_f_use_tag).0);
         // consumed-note entries for both inputs — Tx D inits these, and
         // ALT-referencing them (vs inline) is what gives the change-note /
         // sharded settle tx its headroom under the 1232-byte cap. (The
         // nullifier entries that used to live here were dropped.)
-        push(consumed_note_pda(&p.note_a_commitment).0);
-        push(consumed_note_pda(&p.note_b_commitment).0);
+        push(consumed_note_pda(&p.note_a_use_tag).0);
+        push(consumed_note_pda(&p.note_b_use_tag).0);
     }
     push(batch_validity_marker_pda(merkle_root).0);
     out
@@ -221,8 +225,8 @@ mod tests {
     fn dummy_payload() -> MatchResultPayload {
         MatchResultPayload {
             match_id: [0x11; 16],
-            note_a_commitment: [0xA1; 32],
-            note_b_commitment: [0xB1; 32],
+            note_a_use_tag: [0xA1; 32],
+            note_b_use_tag: [0xB1; 32],
             note_c_commitment: [0xC1; 32],
             note_d_commitment: [0xD1; 32],
             note_e_commitment: [0; 32],
@@ -235,6 +239,8 @@ mod tests {
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
+            note_e_use_tag: [0u8; 32],
+            note_f_use_tag: [0u8; 32],
             batch_slot: 0,
             fill_recovery: [0u8; 128],
         }
@@ -262,22 +268,22 @@ mod tests {
         let p0 = dummy_payload();
         let single = batch_alt_addresses([&p0], &root);
         assert_eq!(single.len(), 6);
-        assert!(single.contains(&note_lock_pda(&p0.note_a_commitment).0));
-        assert!(single.contains(&consumed_note_pda(&p0.note_a_commitment).0));
+        assert!(single.contains(&note_lock_pda(&p0.note_a_use_tag).0));
+        assert!(single.contains(&consumed_note_pda(&p0.note_a_use_tag).0));
         assert!(single.contains(&batch_validity_marker_pda(&root).0));
 
         // Two DISTINCT matches (distinct notes): each adds its a/b locks +
         // consumed; the all-zero note_lock_e/f and the marker stay shared
         // across the batch.
         let mut p1 = dummy_payload();
-        p1.note_a_commitment = [0xA2; 32];
-        p1.note_b_commitment = [0xB2; 32];
+        p1.note_a_use_tag = [0xA2; 32];
+        p1.note_b_use_tag = [0xB2; 32];
         let multi = batch_alt_addresses([&p0, &p1], &root);
         // p0: a,b locks + consumed_a,b + (e/f shared 1) = 5
         // p1: a,b locks + consumed_a,b = 4 (e/f shared) → 9 + marker = 10.
         assert_eq!(multi.len(), 10);
-        assert!(multi.contains(&note_lock_pda(&p1.note_a_commitment).0));
-        assert!(multi.contains(&consumed_note_pda(&p1.note_a_commitment).0));
+        assert!(multi.contains(&note_lock_pda(&p1.note_a_use_tag).0));
+        assert!(multi.contains(&consumed_note_pda(&p1.note_a_use_tag).0));
         // Exactly one marker.
         let marker = batch_validity_marker_pda(&root).0;
         assert_eq!(multi.iter().filter(|a| **a == marker).count(), 1);
@@ -303,10 +309,10 @@ mod tests {
     fn ix_data_total_length() {
         let ix =
             build_settle_batched_ix(&dummy_tee(), 0, &dummy_payload(), 3, &proof(), &[0xAB; 32]);
-        // 8 disc + 1 tree_id + 488 payload (v9 removed two nullifiers)
-        // + 1 match_index + 128 siblings = 626.
-        assert_eq!(ix.data.len(), 8 + 1 + 488 + 1 + 128);
-        assert_eq!(ix.data.len(), 626);
+        // 8 disc + 1 tree_id + 552 payload (v11 added the two relock tags)
+        // + 1 match_index + 128 siblings = 690.
+        assert_eq!(ix.data.len(), 8 + 1 + 552 + 1 + 128);
+        assert_eq!(ix.data.len(), 690);
     }
 
     #[test]
@@ -314,14 +320,15 @@ mod tests {
         let ix =
             build_settle_batched_ix(&dummy_tee(), 5, &dummy_payload(), 7, &proof(), &[0xAB; 32]);
         assert_eq!(&ix.data[..8], &*SETTLE_BATCHED_DISCRIMINATOR);
-        // tree_id at 8; payload occupies [9, 497); match_index at 497;
-        // siblings [498, 626).
+        // tree_id at 8; payload occupies [9, 561); match_index at 561;
+        // siblings [562, 690). Every offset past the payload moved by exactly
+        // 64 — the same shift the SDK, indexer and merkle::events decoders take.
         assert_eq!(ix.data[8], 5); // tree_id
-        assert_eq!(ix.data[497], 7); // match_index
-        assert_eq!(&ix.data[498..530], &[0x01; 32]); // sibling 0
-        assert_eq!(&ix.data[530..562], &[0x02; 32]); // sibling 1
-        assert_eq!(&ix.data[562..594], &[0x03; 32]);
-        assert_eq!(&ix.data[594..626], &[0x04; 32]);
+        assert_eq!(ix.data[561], 7); // match_index
+        assert_eq!(&ix.data[562..594], &[0x01; 32]); // sibling 0
+        assert_eq!(&ix.data[594..626], &[0x02; 32]); // sibling 1
+        assert_eq!(&ix.data[626..658], &[0x03; 32]);
+        assert_eq!(&ix.data[658..690], &[0x04; 32]);
     }
 
     #[test]
@@ -377,11 +384,36 @@ mod tests {
     }
 
     #[test]
+    fn change_relock_accounts_and_alt_use_tags_not_commitments() {
+        let mut p = dummy_payload();
+        p.note_e_commitment = [0xE1; 32];
+        p.note_f_commitment = [0xF1; 32];
+        p.note_e_use_tag = [0xE2; 32];
+        p.note_f_use_tag = [0xF2; 32];
+        p.buyer_relock_order_id = [0x31; 16];
+        p.seller_relock_order_id = [0x32; 16];
+
+        let ix = build_settle_batched_ix(&dummy_tee(), 0, &p, 0, &proof(), &[0xAB; 32]);
+        assert_eq!(ix.accounts[7].pubkey, note_lock_pda(&p.note_e_use_tag).0);
+        assert_eq!(ix.accounts[8].pubkey, note_lock_pda(&p.note_f_use_tag).0);
+        assert_ne!(ix.accounts[7].pubkey, note_lock_pda(&p.note_e_commitment).0);
+        assert_ne!(ix.accounts[8].pubkey, note_lock_pda(&p.note_f_commitment).0);
+        assert!(ix.accounts[7].is_writable);
+        assert!(ix.accounts[8].is_writable);
+
+        let alt = per_batch_alt_addresses(&p, &[0xAB; 32]);
+        assert!(alt.contains(&note_lock_pda(&p.note_e_use_tag).0));
+        assert!(alt.contains(&note_lock_pda(&p.note_f_use_tag).0));
+        assert!(!alt.contains(&note_lock_pda(&p.note_e_commitment).0));
+        assert!(!alt.contains(&note_lock_pda(&p.note_f_commitment).0));
+    }
+
+    #[test]
     fn distinct_shard_settles_share_no_writable_accounts() {
         let p0 = dummy_payload();
         let mut p1 = dummy_payload();
-        p1.note_a_commitment = [0xA2; 32];
-        p1.note_b_commitment = [0xB2; 32];
+        p1.note_a_use_tag = [0xA2; 32];
+        p1.note_b_use_tag = [0xB2; 32];
         p1.note_c_commitment = [0xC2; 32];
         p1.note_d_commitment = [0xD2; 32];
         let ix0 = build_settle_batched_ix(&dummy_addr(0xE0), 0, &p0, 0, &proof(), &[0xAB; 32]);

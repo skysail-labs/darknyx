@@ -37,7 +37,7 @@ Solana vault (programs/vault)
   SPL custody + per-mint outstanding accounting
   K append-only Merkle-tree shards
   VALID_* Groth16 verifiers
-  commitment-keyed deposit/consume guards + bounded locks
+  commitment-keyed deposit guard + tag-keyed consume guards/locks
   one enabled MarketConfig per mint pair
 ```
 

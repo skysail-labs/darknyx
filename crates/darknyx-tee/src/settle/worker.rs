@@ -507,7 +507,7 @@ enum ConsumedPdaState {
 }
 
 /// Reconcile a Tx D independently from its RPC signature status. Tx D creates
-/// both commitment-keyed consumed-note PDAs atomically, so both vault-owned
+/// both tag-keyed consumed-note PDAs atomically, so both vault-owned
 /// accounts existing is durable proof that the match settled; neither means a
 /// redrive is still safe while the marker/locks are valid. Exactly one can only
 /// be an inconsistent RPC view or external consumption of one input and must
@@ -516,8 +516,8 @@ async fn reconcile_consumed_pdas(
     rpc: &SolanaRpcClient,
     match_inputs: &MatchSettleInputs,
 ) -> Result<ConsumedPdaState, RpcError> {
-    let (buyer, _) = consumed_note_pda(&match_inputs.payload.note_a_commitment);
-    let (seller, _) = consumed_note_pda(&match_inputs.payload.note_b_commitment);
+    let (buyer, _) = consumed_note_pda(&match_inputs.payload.note_a_use_tag);
+    let (seller, _) = consumed_note_pda(&match_inputs.payload.note_b_use_tag);
     let buyer = rpc.get_account_info(&buyer).await?;
     let seller = rpc.get_account_info(&seller).await?;
     let vault = vault_program_id();
@@ -710,12 +710,12 @@ async fn run_batch_settle_inner(
         //
         // Rent reclamation only: S-03(C) made `withdraw`/`merge` honour the
         // expiry, so a stranded lock blocks nothing regardless of this.
-        // A closed channel is a per-BATCH condition, not a per-commitment one,
+        // A closed channel is a per-BATCH condition, not a per-tag one,
         // so the label breaks all the way out — otherwise a shut-down sweeper
         // logs the same warning once per match (up to N=16) every batch.
         'register: for m in inputs.matches.iter() {
-            for commitment in [m.payload.note_a_commitment, m.payload.note_b_commitment] {
-                if ctx.lock_sweep_tx.send(commitment).is_err() {
+            for tag in [m.payload.note_a_use_tag, m.payload.note_b_use_tag] {
+                if ctx.lock_sweep_tx.send(tag).is_err() {
                     tracing::warn!(
                         batch_id,
                         "lock sweeper channel closed; lock rent reclaim deferred to next boot"
@@ -1694,7 +1694,7 @@ mod tests {
     fn lock_inputs(seed: u8) -> LockSideInputs {
         LockSideInputs {
             tree_id: 0,
-            note_commitment: [seed; 32],
+            note_use_tag: [seed; 32],
             order_id: [seed; 16],
             expiry_slot: 2000,
             token_mint: [0xCC; 32],
@@ -1707,8 +1707,8 @@ mod tests {
     fn payload(seed: u8) -> MatchResultPayload {
         MatchResultPayload {
             match_id: [seed; 16],
-            note_a_commitment: [seed; 32],
-            note_b_commitment: [seed.wrapping_add(1); 32],
+            note_a_use_tag: [seed; 32],
+            note_b_use_tag: [seed.wrapping_add(1); 32],
             note_c_commitment: [seed.wrapping_add(2); 32],
             note_d_commitment: [seed.wrapping_add(3); 32],
             note_e_commitment: [0; 32],
@@ -1721,6 +1721,8 @@ mod tests {
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
+            note_e_use_tag: [0u8; 32],
+            note_f_use_tag: [0u8; 32],
             batch_slot: 7,
             fill_recovery: [0u8; 128],
         }
@@ -1846,8 +1848,8 @@ mod tests {
             seller_lock: lock_inputs(0x02),
             match_index: 0,
         };
-        let buyer = consumed_note_pda(&match_inputs.payload.note_a_commitment).0;
-        let seller = consumed_note_pda(&match_inputs.payload.note_b_commitment).0;
+        let buyer = consumed_note_pda(&match_inputs.payload.note_a_use_tag).0;
+        let seller = consumed_note_pda(&match_inputs.payload.note_b_use_tag).0;
 
         for (existing, expected) in [
             (vec![buyer, seller], ConsumedPdaState::BothConsumed),
@@ -2389,8 +2391,8 @@ mod tests {
             "the batch root must be recorded — it derives the marker PDA a redrive needs"
         );
         assert_eq!(
-            e.buyer_lock.note_commitment,
-            lock_inputs(0x01).note_commitment,
+            e.buyer_lock.note_use_tag,
+            lock_inputs(0x01).note_use_tag,
             "the buyer's lock inputs must survive; without them the lock cannot be reissued"
         );
         assert_eq!(

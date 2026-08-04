@@ -18,6 +18,12 @@ const INFO_VIEWING = new TextEncoder().encode("darkpool_viewing_key_v1");
 const INFO_TRADING = new TextEncoder().encode("darkpool_trading_key_v1");
 const INFO_ROOT = new TextEncoder().encode("darkpool_root_key_v1");
 const INFO_BLINDING = new TextEncoder().encode("note_blinding_v1");
+/**
+ * Domain string for the per-note deposit secret. Distinct from every other
+ * `INFO_*` so a note secret can never collide with a key derived for another
+ * purpose from the same master seed.
+ */
+const INFO_NOTE_SECRET = new TextEncoder().encode("darknyx/note-secret/v1");
 const INFO_ORDER_ID = new TextEncoder().encode("darknyx-order-id-v2");
 const INFO_VIEWING_ENC = new TextEncoder().encode("darknyx-viewing-enc-v2");
 
@@ -130,6 +136,30 @@ export function deriveTradingKeyAtOffset(
 
 export function deriveRootKey(seed: Uint8Array): Ed25519RawKeypair {
   return { secretKey: hkdfExpand(seed, INFO_ROOT, 32) };
+}
+
+/**
+ * Derive the per-note secret that enters a deposit's inner hash.
+ *
+ * Keyed on the deposit's PUBLIC `recoveryNonce` rather than a counter: cold
+ * recovery reads the nonce straight out of the deposit instruction, so nothing
+ * extra has to be persisted, and the nonce is already unique per deposit so the
+ * secret inherits that uniqueness without a monotonic source a restart could
+ * reset.
+ *
+ * This is what stops `deriveDepositInnerHash` — and the public note-use tag
+ * derived from it — being a function of on-chain data plus one wallet-wide
+ * value. Mirror of `darkpool_crypto::derive_note_secret`.
+ */
+export function deriveNoteSecret(
+  seed: Uint8Array,
+  recoveryNonce: Uint8Array,
+): bigint {
+  if (recoveryNonce.length !== 32) {
+    throw new Error("recoveryNonce must be 32 bytes");
+  }
+  const okm = darknyxShakeKdfV1(seed, INFO_NOTE_SECRET, recoveryNonce, 64);
+  return reduceMod(okm);
 }
 
 /**

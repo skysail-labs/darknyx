@@ -54,6 +54,16 @@ export interface DepositInputs {
   recoveryNonce: bigint;
   spendingKey: bigint;
   ownerCommitmentBlinding: bigint;
+  /**
+   * Seed-derived per-note entropy (`deriveNoteSecret`), PRIVATE. The public
+   * input count is unchanged at 5 — this only enters the inner hash.
+   *
+   * Without it the deposit inner would be `Poseidon(27, owner_commitment,
+   * recovery_nonce)` over a PUBLIC nonce and a wallet-wide owner commitment,
+   * so one leaked owner commitment would recompute every note-use tag the
+   * wallet ever produced, retroactively.
+   */
+  noteSecret: bigint;
 }
 
 /** VALID_MERGE(K) witness — K input slots (dummy-padded) → one summed output note. */

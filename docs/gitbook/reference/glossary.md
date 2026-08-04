@@ -81,10 +81,15 @@ The hash that represents a note on-chain. Opaque from the outside; only the owne
 can recognize and value it.
 
 ### Nullifier
-A unique value published by a withdrawal, preventing the same secret opening
-from being withdrawn twice without revealing its commitment. Settlement and
-merge instead use commitment-keyed consumed-note guards. See
+A unique proof output derived from the spending key and a note's private inner
+hash. The shared on-chain double-spend guard is the unlinkable note-use tag used
+by withdrawal, settlement, and merge. See
 [Shielded Pool](../how-it-works/shielded-pool.md).
+
+### Note-use tag
+The deterministic, circuit-derived public handle used when a note is locked or
+consumed: `Hash(note commitment, private inner hash)`. It addresses the shared
+lock/consume PDAs without revealing which Merkle leaf is being used.
 
 ### Order id
 A client-chosen 16-byte identifier for an order, supplied at placement and used on

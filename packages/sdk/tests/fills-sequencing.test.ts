@@ -145,7 +145,7 @@ describe("backfill then tail", () => {
           matchId: "ab".repeat(8),
           signature: "sig1",
           slot: 500,
-          inputNoteCommitment: "11".repeat(32),
+          inputNoteUseTag: "11".repeat(32),
           tradeNoteCommitment: "22".repeat(32),
           isPartialFill: true,
           changeNoteCommitment: commitment,

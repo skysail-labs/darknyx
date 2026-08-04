@@ -33,6 +33,7 @@ export function nodeValidDepositProver(
         spendingKey: inputs.spendingKey.toString(),
         ownerCommitmentBlinding:
           inputs.ownerCommitmentBlinding.toString(),
+        noteSecret: inputs.noteSecret.toString(),
       };
       const specifier = "snarkjs";
       const snarkjs = (await import(specifier)) as unknown as {

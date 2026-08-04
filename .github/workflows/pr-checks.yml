@@ -251,6 +251,11 @@ jobs:
       # /tmp. Cloning the submodule cost ~20 s of a ~60 s job, which is more than
       # the circuit build it wraps.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # The pot19 N=16 proving key exceeds GitHub's regular blob limit and
+          # is stored in LFS. The circuit artefact uploaded below must contain
+          # the real zkey, never its pointer file.
+          lfs: true
 
       - name: Install Rust 1.89.0 (for circom build)
         uses: dtolnay/rust-toolchain@451ce45ce31d200b52705aadd15ce75018b006de # 1.89.0 (a BRANCH upstream, so it moves — pin it)
@@ -319,13 +324,10 @@ jobs:
       # start and fail deep inside a proof test instead of here.
       #
       # The expected set is DERIVED FROM THE BUILD SCRIPT, not hardcoded here.
-      # `ci-build-circuits.sh` deliberately compiles only the client circuits —
-      # `match_batch_n2/n4/n16` need pot18 (~288 MB) and are excluded, so those
-      # directories legitimately carry the committed `circuit_final.zkey` and
-      # nothing else. An earlier revision demanded wasm+r1cs from EVERY directory
-      # and so asserted an invariant CI never satisfies: it could only ever fail,
-      # and did on the first real cache hit. Reading the same source of truth the
-      # build reads keeps the two from drifting again.
+      # `ci-build-circuits.sh` compiles every deployed/client and match-batch
+      # source to fresh wasm+r1cs while reusing committed zkeys; compilation
+      # itself needs no PTAU. Reading the same source of truth the build reads
+      # keeps this cache check from drifting again.
       - name: Verify restored artefacts are complete
         if: steps.cache-circuit-build.outputs.cache-hit == 'true'
         run: |
@@ -350,8 +352,8 @@ jobs:
               fi
             done
           done
-          # Every other directory must still carry its committed proving key —
-          # the SDK match-batch prover tests consume it directly.
+          # Any future directory not yet wired into the script must still carry
+          # its committed proving key.
           for d in circuits/build/*/; do
             name=$(basename "$d")
             skip=0
@@ -910,6 +912,12 @@ jobs:
         # Incl. the settle-regression suite migrated from matching_engine:
         # tee_forced_settle_batched (1:N BatchValidityMarker lifecycle) +
         # match_batch_verify (real N=16 proof → on-chain verify_match_batch).
+        #
+        # `deposit_with_proof` was in NO CI list at all — it drives a real
+        # VALID_DEPOSIT proof through litesvm and is the only gate on the
+        # deposit circuit's public-signal order, so it belongs here (it needs
+        # both vault.so and the circuit artefacts, which is why it cannot live
+        # in the proof-only job).
         run: |
           cargo test -p vault \
             --test set_protocol_config \
@@ -920,6 +928,7 @@ jobs:
             --test lock_note_consumed_guard \
             --test merge_verify \
             --test withdraw_lock_lifecycle \
+            --test deposit_with_proof \
             --test initialize_governance \
             --test market_config \
             -- --nocapture

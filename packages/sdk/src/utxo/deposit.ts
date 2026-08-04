@@ -21,7 +21,9 @@ import type { TransactionCallbacks } from "../providers.js";
 import type { StoredNote } from "./note-store.js";
 import { DarkPoolError } from "../errors.js";
 import { noteCommitmentV2, ownerCommitment } from "./note.js";
-import { bn254ToBE32, deriveBlindingFactor } from "../keys/key-generators.js";
+import { bn254ToBE32, deriveBlindingFactor,
+  deriveNoteSecret,
+} from "../keys/key-generators.js";
 import { assertPublicInputs } from "../zk/assert-public-inputs.js";
 import { buildDepositInstruction, merkleTreePda } from "../idl/vault-client.js";
 import { readNoteCreatedLeafIndex } from "./leaf-index.js";
@@ -129,9 +131,17 @@ export function getDepositFunction({
     const owner = await ownerCommitment(spendingKey, ownerBlinding);
     const ownerBytes = bn254ToBE32(owner);
     const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
+    // The per-note secret is keyed on the PUBLIC recovery nonce, so cold
+    // recovery re-derives it from seed + chain with nothing extra persisted.
+    // It is what stops the inner — and the note-use tag derived from it — being
+    // a function of on-chain data plus one wallet-wide owner commitment.
+    const noteSecretBytes = bn254ToBE32(
+      deriveNoteSecret(masterSeed, recoveryNonceBytes),
+    );
     const innerBytes = await deriveDepositInnerHash(
       ownerBytes,
       recoveryNonceBytes,
+      noteSecretBytes,
     );
     const innerHash = bytesToBigIntBE(innerBytes);
 
@@ -154,6 +164,7 @@ export function getDepositFunction({
         recoveryNonce,
         spendingKey,
         ownerCommitmentBlinding: ownerBlinding,
+        noteSecret: bytesToBigIntBE(noteSecretBytes),
       });
       const expectedPublic = [
         commitment,

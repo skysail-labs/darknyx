@@ -1,7 +1,7 @@
 //! In-enclave input-note opening store.
 //!
 //! The VALID_MATCH_BATCH circuit opens each input note — it
-//! re-derives `note_a_commitment` from the note's full opening
+//! re-derives `note_a_use_tag` from the note's full opening
 //! (`amount`, `owner_commitment`, `inner_hash`) and asserts
 //! equality (`circuits/templates/match_batch.circom`, `hashA`). So
 //! the in-TEE prover needs those secret fields, which the

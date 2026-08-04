@@ -77,16 +77,17 @@ pub fn merkle_tree_pda(tree_id: u8) -> (Address, u8) {
 }
 
 /// PDA: `note_lock` for the given note commitment. Seeds =
-/// `[b"note_lock", note_commitment]`. One per note.
-pub fn note_lock_pda(note_commitment: &[u8; 32]) -> (Address, u8) {
-    Address::find_program_address(&[NOTE_LOCK_SEED, note_commitment], &vault_program_id())
+/// `[b"note_lock", note_use_tag]`. One per note. The TAG, not the
+/// commitment — see darkpool-crypto/src/note_use.rs.
+pub fn note_lock_pda(note_use_tag: &[u8; 32]) -> (Address, u8) {
+    Address::find_program_address(&[NOTE_LOCK_SEED, note_use_tag], &vault_program_id())
 }
 
 /// PDA: `consumed_note` for a settle-consumed note commitment.
-/// Seeds = `[b"consumed_note", note_commitment]`. Allocation locks
+/// Seeds = `[b"consumed_note", note_use_tag]`. Allocation locks
 /// out a second settle of the same note (replay protection).
-pub fn consumed_note_pda(note_commitment: &[u8; 32]) -> (Address, u8) {
-    Address::find_program_address(&[CONSUMED_NOTE_SEED, note_commitment], &vault_program_id())
+pub fn consumed_note_pda(note_use_tag: &[u8; 32]) -> (Address, u8) {
+    Address::find_program_address(&[CONSUMED_NOTE_SEED, note_use_tag], &vault_program_id())
 }
 
 /// PDA: `batch_validity` marker. Seeds = `[b"batch_validity",

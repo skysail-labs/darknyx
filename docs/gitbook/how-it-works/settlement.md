@@ -45,7 +45,7 @@ verify one batch proof on-chain
 | Stage | User-visible meaning |
 |---|---|
 | **Reserved** | The matched quantity is unavailable for another match, but the book has not yet committed a fill. |
-| **Locked** | On-chain commitment-keyed locks prevent either input from being reused while settlement is in flight. |
+| **Locked** | On-chain note-use-tag-keyed locks prevent either input from being reused without revealing which Merkle leaves are in flight. |
 | **Proof verified** | One batch proof authorizes its active matches until the batch marker expires. |
 | **Per-match settle** | Every match is atomic and independent of the others in the batch. One failure does not hide the results of the rest. |
 | **Cleanup** | The shared batch marker is read-only during settlement and can be closed only after expiry. Cleanup is not part of trade finality. |

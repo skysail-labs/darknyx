@@ -183,7 +183,7 @@ const NO_LEAF: u64 = u64::MAX;
 /// match_index(1) || 4×32 siblings` (see
 /// `settle_batched::build_settle_batched_ix`). Post-sharding the payload
 /// starts at offset 9 (disc + the 1-byte `tree_id`). The width is
-/// `MatchResultPayload::WIRE_LEN` (payload v9 removed two nullifiers).
+/// `MatchResultPayload::WIRE_LEN` (payload v11 adds note-use/relock tags).
 pub fn decode_settle_payload(ix_data: &[u8]) -> Option<MatchResultPayload> {
     const PAYLOAD_START: usize = 8 + 1; // disc + tree_id
     if ix_data.len() < PAYLOAD_START + MatchResultPayload::WIRE_LEN {
@@ -459,8 +459,8 @@ mod tests {
     fn sample_payload() -> MatchResultPayload {
         MatchResultPayload {
             match_id: [0x11; 16],
-            note_a_commitment: fr_safe(0xA1),
-            note_b_commitment: fr_safe(0xB1),
+            note_a_use_tag: fr_safe(0xA1),
+            note_b_use_tag: fr_safe(0xB1),
             note_c_commitment: fr_safe(0xC1),
             note_d_commitment: fr_safe(0xD1),
             note_e_commitment: fr_safe(0xE1),
@@ -473,6 +473,8 @@ mod tests {
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
+            note_e_use_tag: [0u8; 32],
+            note_f_use_tag: [0u8; 32],
             batch_slot: 7,
             fill_recovery: [0u8; 128],
         }

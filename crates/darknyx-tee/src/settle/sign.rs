@@ -41,8 +41,8 @@ mod tests {
     fn dummy_payload() -> MatchResultPayload {
         MatchResultPayload {
             match_id: [0x11; 16],
-            note_a_commitment: [0xA1; 32],
-            note_b_commitment: [0xB1; 32],
+            note_a_use_tag: [0xA1; 32],
+            note_b_use_tag: [0xB1; 32],
             note_c_commitment: [0xC1; 32],
             note_d_commitment: [0xD1; 32],
             note_e_commitment: [0; 32],
@@ -55,6 +55,8 @@ mod tests {
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
+            note_e_use_tag: [0u8; 32],
+            note_f_use_tag: [0u8; 32],
             batch_slot: 0,
             fill_recovery: [0u8; 128],
         }

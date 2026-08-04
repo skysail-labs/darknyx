@@ -18,7 +18,7 @@ fn pubkey_pair_be32(pk: &[u8; 32]) -> [[u8; 32]; 2] {
 #[derive(Accounts)]
 #[instruction(
     tree_id: u8,
-    note_commitment: [u8; 32],
+    note_use_tag: [u8; 32],
     order_id: [u8; 16],
     expiry_slot: u64,
     token_mint: Pubkey,
@@ -31,12 +31,12 @@ pub struct LockNote<'info> {
     /// only a registered TEE key can lock notes.
     ///
     /// NOTE: even with the registered key gate, the TEE could previously
-    /// "lock" any 32-byte commitment whether or not it actually existed in
+    /// "lock" any 32-byte handle whether or not it actually existed in
     /// the Merkle tree, with any amount it wanted (see §4.1 of the v2
     /// migration brief). The VALID_INPUT proof closes that hole — the TEE
     /// now must relay a user-generated ZK proof attesting that the
-    /// commitment exists in the tree with the declared mint and a private,
-    /// positive, range-constrained amount.
+    /// tag is derived from a commitment that exists in the tree with the
+    /// declared mint and a private, positive, range-constrained amount.
     #[account(mut)]
     pub tee_authority: Signer<'info>,
 
@@ -63,12 +63,12 @@ pub struct LockNote<'info> {
         init,
         payer = tee_authority,
         space = 8 + size_of::<NoteLock>(),
-        seeds = [NoteLock::SEED, note_commitment.as_ref()],
+        seeds = [NoteLock::SEED, note_use_tag.as_ref()],
         bump,
     )]
     pub note_lock: AccountLoader<'info, NoteLock>,
 
-    /// U-02 consume-once guard. The commitment-keyed `ConsumedNoteEntry` for
+    /// U-02 consume-once guard. The tag-keyed `ConsumedNoteEntry` for
     /// this note MUST be ABSENT: a note already settled
     /// (`tee_forced_settle_batched::consumed_a/b`) or withdrawn
     /// (`withdraw::consumed_note`) has this PDA initialized, and a retained
@@ -79,7 +79,7 @@ pub struct LockNote<'info> {
     /// CHECK: seeds pin the address; the handler rejects a already-initialized
     /// (program-owned) account.
     #[account(
-        seeds = [ConsumedNoteEntry::SEED, note_commitment.as_ref()],
+        seeds = [ConsumedNoteEntry::SEED, note_use_tag.as_ref()],
         bump,
     )]
     pub consumed_note: UncheckedAccount<'info>,
@@ -91,7 +91,7 @@ pub struct LockNote<'info> {
 pub fn lock_note_handler(
     ctx: Context<LockNote>,
     _tree_id: u8,
-    note_commitment: [u8; 32],
+    note_use_tag: [u8; 32],
     order_id: [u8; 16],
     expiry_slot: u64,
     token_mint: Pubkey,
@@ -115,7 +115,7 @@ pub fn lock_note_handler(
         );
     }
 
-    // U-02: reject re-locking an already-consumed note. If the commitment-keyed
+    // U-02: reject re-locking an already-consumed note. If the tag-keyed
     // `ConsumedNoteEntry` exists (program-owned), the note was settled or
     // withdrawn; the Merkle leaf survives, so a still-valid VALID_INPUT proof
     // would otherwise pass below. Cheap check first — mirror of the inverted
@@ -134,12 +134,12 @@ pub fn lock_note_handler(
         VaultError::InvalidExpirySlot
     );
     // VALID_INPUT public inputs, in the order declared by the circom
-    // `component main { public [merkleRoot, noteCommitment, tokenMint] }`.
+    // `component main { public [merkleRoot, noteUseTag, tokenMint] }`.
     // `tokenMint[2]` expands as two entries (`lo`, `hi`) — four total. Amount
     // remains a private positive u64 witness constrained inside the proof.
     let mint_bytes = token_mint.to_bytes();
     let [mint_lo, mint_hi] = pubkey_pair_be32(&mint_bytes);
-    let public_inputs: [[u8; 32]; 4] = [merkle_root, note_commitment, mint_lo, mint_hi];
+    let public_inputs: [[u8; 32]; 4] = [merkle_root, note_use_tag, mint_lo, mint_hi];
 
     let vk = make_vk(
         &VALID_INPUT_ALPHA_G1,
@@ -153,7 +153,7 @@ pub fn lock_note_handler(
     // Proof verified — every field of the lock is now cryptographically bound
     // to a real Merkle leaf owned by the proof generator. Write the lock.
     let lock = &mut ctx.accounts.note_lock.load_init()?;
-    lock.note_commitment = note_commitment;
+    lock.note_use_tag = note_use_tag;
     lock.token_mint = token_mint;
     lock.order_id = order_id;
     lock.expiry_slot = expiry_slot;
@@ -162,7 +162,7 @@ pub fn lock_note_handler(
     lock._padding = [0u8; 7];
 
     emit!(NoteLocked {
-        note_commitment,
+        note_use_tag,
         token_mint,
         order_id,
         expiry_slot,
@@ -170,9 +170,12 @@ pub fn lock_note_handler(
     Ok(())
 }
 
+/// A note was locked. Carries the TAG, not the commitment — publishing the
+/// commitment in an event would relink the lock to the note's Merkle leaf and
+/// undo the point of the tag.
 #[event]
 pub struct NoteLocked {
-    pub note_commitment: [u8; 32],
+    pub note_use_tag: [u8; 32],
     pub token_mint: Pubkey,
     pub order_id: [u8; 16],
     pub expiry_slot: u64,

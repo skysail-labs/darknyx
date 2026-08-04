@@ -33,7 +33,7 @@
 //! unit-testable without a matcher tick or a real proof.
 
 use darkpool_crypto::note::commitment_from_fields_v2;
-use darkpool_crypto::{match_fee_inner_hash, match_output_inner_hash};
+use darkpool_crypto::{match_fee_inner_hash, match_output_inner_hash, note_use_tag};
 use darkpool_matcher::change_note::{
     CHANGE_ROLE_BUYER, CHANGE_ROLE_SELLER, FEE_ROLE_BASE, FEE_ROLE_QUOTE, TRADE_ROLE_BUYER,
     TRADE_ROLE_SELLER,
@@ -282,6 +282,11 @@ pub fn assemble_match(
     };
 
     let witness = MatchSlotWitness {
+        // The WITNESS carries COMMITMENTS — they are the circuit's private
+        // signals, and they are what bind amount, owner and mint. The tags are
+        // derived from them (here and in-circuit); only the PAYLOAD publishes
+        // tags. Conflating the two breaks witness generation silently, because
+        // the JSON keys must match the circuit's signal names.
         note_a_commitment: m.note_buyer,
         note_b_commitment: m.note_seller,
         note_c_commitment: note_c,
@@ -321,10 +326,32 @@ pub fn assemble_match(
         fee_quote_inner,
     };
 
+    // ── 5b. The public consume handles. Derived from the (commitment, inner)
+    // pair the enclave already holds, so the enclave needs no new input — and
+    // the same derivation runs in-circuit, so a mismatch fails the leaf binding
+    // rather than settling something the proof did not authorise.
+    let note_a_use_tag = note_use_tag(&m.note_buyer, &inp.buyer_opening.inner_hash)
+        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+    let note_b_use_tag = note_use_tag(&m.note_seller, &inp.seller_opening.inner_hash)
+        .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+    // Change-note tags, masked to zero exactly like their commitments: a side
+    // with no change has no note, so it must publish no tag — otherwise the
+    // settle would derive a relock PDA for a note that does not exist.
+    let note_e_use_tag = if note_e == ZERO32 {
+        ZERO32
+    } else {
+        note_use_tag(&note_e, &e_inner).map_err(|e| AssembleError::Crypto(e.to_string()))?
+    };
+    let note_f_use_tag = if note_f == ZERO32 {
+        ZERO32
+    } else {
+        note_use_tag(&note_f, &f_inner).map_err(|e| AssembleError::Crypto(e.to_string()))?
+    };
+
     let payload = MatchResultPayload {
         match_id: inp.settlement_id,
-        note_a_commitment: m.note_buyer,
-        note_b_commitment: m.note_seller,
+        note_a_use_tag,
+        note_b_use_tag,
         note_c_commitment: note_c,
         note_d_commitment: note_d,
         note_e_commitment: note_e,
@@ -343,6 +370,8 @@ pub fn assemble_match(
         buyer_relock_expiry: m.buyer_relock_expiry,
         seller_relock_order_id: m.seller_relock_order_id,
         seller_relock_expiry: m.seller_relock_expiry,
+        note_e_use_tag,
+        note_f_use_tag,
         // C-08: on-chain settle asserts `payload.batch_slot == match_index`,
         // so this MUST be the batch index (matches the leaf witness above).
         batch_slot: inp.slot_index,
@@ -437,8 +466,16 @@ pub fn assemble_batch(
             price_scale: params.price_scale,
         })?;
 
-        let buyer_lock = lock_inputs(m.note_buyer, &buyer);
-        let seller_lock = lock_inputs(m.note_seller, &seller);
+        // The lock_note ix is keyed on the TAG, so derive it from each side's
+        // (commitment, inner) — the same derivation the payload and the circuit
+        // use. Passing the commitment here would lock at an address the settle
+        // then fails to find.
+        let buyer_tag = note_use_tag(&m.note_buyer, &buyer.opening.inner_hash)
+            .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+        let seller_tag = note_use_tag(&m.note_seller, &seller.opening.inner_hash)
+            .map_err(|e| AssembleError::Crypto(e.to_string()))?;
+        let buyer_lock = lock_inputs(buyer_tag, &buyer);
+        let seller_lock = lock_inputs(seller_tag, &seller);
 
         // Durable output recovery: encrypt both private output amounts to the
         // order's viewing key. Buyer plaintext is (trade base, change quote);
@@ -482,7 +519,7 @@ pub fn assemble_batch(
 /// Build the `lock_note` (Tx A) inputs for one input note from its
 /// stored record — the VALID_INPUT proof + root the client relayed.
 fn lock_inputs(
-    note_commitment: [u8; 32],
+    note_use_tag: [u8; 32],
     rec: &crate::matcher::openings::OrderOpening,
 ) -> LockSideInputs {
     LockSideInputs {
@@ -492,7 +529,7 @@ fn lock_inputs(
         // shards. Irrelevant for a relocked continuation (`already_locked`
         // below skips lock_note entirely).
         tree_id: rec.tree_id,
-        note_commitment,
+        note_use_tag,
         order_id: rec.order_id,
         expiry_slot: rec.expiry_slot,
         token_mint: rec.opening.token_mint,
@@ -672,7 +709,7 @@ mod tests {
     #[test]
     fn note_a_and_b_reconstruct_from_openings() {
         // The whole point: the witness must be PROVABLE, i.e.
-        // note_a_commitment == Poseidon7(opening). scenario() builds
+        // note_a_use_tag == Poseidon7(opening). scenario() builds
         // the MatchPair commitments from the openings, so they must
         // round-trip through commitment_from_fields.
         let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
@@ -719,6 +756,84 @@ mod tests {
         assert_eq!(w.buyer_fee_amt, 50);
         assert_eq!(p.note_fee_base_commitment, [0u8; 32]);
         assert_ne!(p.note_fee_quote_commitment, [0u8; 32]);
+    }
+
+    /// Zero-slot safety (plan edge case #4/#10).
+    ///
+    /// `Poseidon3(29, 0, 0)` is a perfectly VALID field element, so a naive
+    /// "always derive the tag" would publish a non-zero relock tag for a side
+    /// that has no change note. The on-chain settle would then derive a
+    /// `NoteLock` PDA for a note that does not exist and try to write it.
+    /// Both the assembler and the circuit mask on the commitment being zero;
+    /// this pins the assembler half. Mutation-tested by removing the mask.
+    #[test]
+    fn an_exact_fill_publishes_no_relock_tag() {
+        let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
+        let (_, p) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
+
+        assert_eq!(p.note_e_commitment, ZERO32, "precondition: exact fill");
+        assert_eq!(p.note_f_commitment, ZERO32, "precondition: exact fill");
+        assert_eq!(
+            p.note_e_use_tag, ZERO32,
+            "an exact fill must publish a ZERO relock tag, not Poseidon3(29, 0, 0)"
+        );
+        assert_eq!(p.note_f_use_tag, ZERO32);
+
+        // And the value that must NOT appear: had the mask been dropped, this
+        // is what would have been published.
+        assert_ne!(
+            note_use_tag(&ZERO32, &ZERO32).unwrap(),
+            ZERO32,
+            "the unmasked derivation is non-zero, which is why the mask matters"
+        );
+    }
+
+    /// The relock tag must be the tag OF the change note, not something
+    /// adjacent. Both are `[u8; 32]`, so a mix-up compiles and only fails
+    /// on-chain as a missing account.
+    #[test]
+    fn a_partial_fill_publishes_the_change_notes_own_tag() {
+        let (m, buyer, seller) = scenario(10, 1000, 150, 0, 50, 0);
+        let (w, p) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
+
+        assert_eq!(
+            p.note_e_use_tag,
+            note_use_tag(&p.note_e_commitment, &w.e_inner).unwrap(),
+        );
+        assert_ne!(p.note_e_use_tag, ZERO32);
+        // Distinct from the commitment it is derived from — otherwise the whole
+        // construction is a no-op.
+        assert_ne!(p.note_e_use_tag, p.note_e_commitment);
+        // Seller filled exactly, so its slot stays masked.
+        assert_eq!(p.note_f_use_tag, ZERO32);
+    }
+
+    /// The substitution attack the `Poseidon3(29, commitment, inner)` shape
+    /// exists to prevent (plan test #1/#3).
+    ///
+    /// A tag over `inner_hash` ALONE would be identical for two notes that
+    /// share an inner but differ in amount. At settle the input commitment is
+    /// only a private witness, so a prover could pair a real lock with an
+    /// inflated amount and the chain could not tell. Feeding the commitment in
+    /// is what binds it: the same opening at a different amount produces a
+    /// different handle, so it simply will not find the lock.
+    #[test]
+    fn the_published_input_tag_moves_with_the_amount() {
+        let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
+        let (_, honest) = assemble_match(inputs(&m, &buyer, &seller)).unwrap();
+
+        let mut inflated = buyer.clone();
+        inflated.amount = buyer.amount * 10;
+        assert_eq!(
+            inflated.inner_hash, buyer.inner_hash,
+            "the attack keeps the inner and moves only the amount"
+        );
+
+        let forged = note_use_tag(&inflated.commitment().unwrap(), &inflated.inner_hash).unwrap();
+        assert_ne!(
+            forged, honest.note_a_use_tag,
+            "an inflated amount must NOT reproduce the locked note's handle"
+        );
     }
 
     #[test]
@@ -1005,8 +1120,11 @@ mod tests {
     #[test]
     fn assemble_batch_resolves_openings_and_pads_to_n() {
         let (m, buyer, seller) = scenario(10, 1000, 0, 0, 0, 0);
+        let buyer_inner = buyer.inner_hash;
+        let seller_inner = seller.inner_hash;
         let mut store = OpeningStore::new();
-        // Keyed by collateral commitment = note_buyer / note_seller.
+        // The STORE stays commitment-keyed — it is in-enclave, and the enclave
+        // holds both halves. Only what reaches the chain becomes a tag.
         store.insert(m.note_buyer, order_rec(buyer, [0x01; 16]));
         store.insert(m.note_seller, order_rec(seller, [0x02; 16]));
 
@@ -1021,12 +1139,21 @@ mod tests {
 
         let ms = &bsi.matches[0];
         assert_eq!(ms.match_index, 0);
-        // Lock inputs resolved from the stored records.
-        assert_eq!(ms.buyer_lock.note_commitment, m.note_buyer);
+        // Lock inputs resolved from the stored records. The lock carries the
+        // TAG, not the commitment — asserting the commitment here would pass
+        // against a build that locked at the wrong address, which is the whole
+        // failure mode the tag migration has to avoid.
+        let expect_buyer_tag = note_use_tag(&m.note_buyer, &buyer_inner).unwrap();
+        let expect_seller_tag = note_use_tag(&m.note_seller, &seller_inner).unwrap();
+        assert_ne!(
+            expect_buyer_tag, m.note_buyer,
+            "the tag must differ from the commitment, or this test proves nothing"
+        );
+        assert_eq!(ms.buyer_lock.note_use_tag, expect_buyer_tag);
         assert_eq!(ms.buyer_lock.order_id, [0x01; 16]);
         assert_eq!(ms.buyer_lock.token_mint, quote_mint());
         assert_eq!(ms.buyer_lock.expiry_slot, 999);
-        assert_eq!(ms.seller_lock.note_commitment, m.note_seller);
+        assert_eq!(ms.seller_lock.note_use_tag, expect_seller_tag);
         assert_eq!(ms.seller_lock.token_mint, base_mint());
         // Payload carries the resolved order ids.
         assert_eq!(ms.payload.order_id_a, [0x01; 16]);

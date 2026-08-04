@@ -44,6 +44,7 @@ struct Fixture {
     proof_bytes: darknyx_tee::settle::Groth16ProofBytes,
     merkle_root: [u8; 32],
     note_commitment: [u8; 32],
+    note_use_tag: [u8; 32],
     token_mint: [u8; 32],
 }
 
@@ -140,7 +141,9 @@ fn prove_fixture() -> Option<Fixture> {
 
     let [mint_lo, mint_hi] = darkpool_crypto::field::pubkey_to_fr_pair(&token_mint);
     builder.push_input("merkleRoot", be32_to_bigint(&merkle_root));
-    builder.push_input("noteCommitment", be32_to_bigint(&note_commitment));
+    let note_use_tag =
+        darkpool_crypto::note_use_tag(&note_commitment, &inner_hash).expect("note-use tag");
+    builder.push_input("noteUseTag", be32_to_bigint(&note_use_tag));
     builder.push_input(
         "tokenMint",
         be32_to_bigint(&darkpool_crypto::field::fr_to_be_bytes(&mint_lo)),
@@ -172,7 +175,7 @@ fn prove_fixture() -> Option<Fixture> {
     );
 
     // Pin the PUBLIC-SIGNAL ORDER contract. `lock_note` (and therefore
-    // `verify_valid_input`) hard-codes `[merkleRoot, noteCommitment, mint_lo,
+    // `verify_valid_input`) hard-codes `[merkleRoot, noteUseTag, mint_lo,
     // mint_hi]`; circom decides that order from the template's declaration
     // order, not from the `public [...]` list. If a future circuit edit
     // reorders those declarations, the on-chain verifier silently starts
@@ -182,14 +185,14 @@ fn prove_fixture() -> Option<Fixture> {
         .expect("circuit has public inputs");
     let expected_publics: Vec<Fr> = vec![
         darkpool_crypto::field::fr_from_be_bytes(&merkle_root).unwrap(),
-        darkpool_crypto::field::fr_from_be_bytes(&note_commitment).unwrap(),
+        darkpool_crypto::field::fr_from_be_bytes(&note_use_tag).unwrap(),
         mint_lo,
         mint_hi,
     ];
     assert_eq!(
         circuit_publics, expected_publics,
         "VALID_INPUT public-signal order changed; lock_note.rs and \
-         darknyx_tee::verify both assume [merkleRoot, noteCommitment, mint_lo, mint_hi]"
+         darknyx_tee::verify both assume [merkleRoot, noteUseTag, mint_lo, mint_hi]"
     );
 
     // ----- Prove -----
@@ -217,6 +220,7 @@ fn prove_fixture() -> Option<Fixture> {
         proof_bytes: proof_to_onchain_bytes(&proof),
         merkle_root,
         note_commitment,
+        note_use_tag,
         token_mint,
     })
 }
@@ -228,7 +232,7 @@ async fn real_valid_input_proof_is_accepted_at_intake() {
     verify_valid_input(
         &f.proof_bytes,
         &f.merkle_root,
-        &f.note_commitment,
+        &f.note_use_tag,
         &f.token_mint,
     )
     .expect(
@@ -256,12 +260,7 @@ async fn proof_is_rejected_when_the_declared_note_does_not_match() {
     let mut other_root = f.merkle_root;
     other_root[31] ^= 0x01;
     assert_eq!(
-        verify_valid_input(
-            &f.proof_bytes,
-            &other_root,
-            &f.note_commitment,
-            &f.token_mint
-        ),
+        verify_valid_input(&f.proof_bytes, &other_root, &f.note_use_tag, &f.token_mint),
         Err(VerifyError::Invalid)
     );
 
@@ -270,12 +269,7 @@ async fn proof_is_rejected_when_the_declared_note_does_not_match() {
     let mut other_mint = f.token_mint;
     other_mint[0] ^= 0x01;
     assert_eq!(
-        verify_valid_input(
-            &f.proof_bytes,
-            &f.merkle_root,
-            &f.note_commitment,
-            &other_mint
-        ),
+        verify_valid_input(&f.proof_bytes, &f.merkle_root, &f.note_use_tag, &other_mint),
         Err(VerifyError::Invalid)
     );
 }

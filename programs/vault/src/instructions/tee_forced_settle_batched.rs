@@ -9,9 +9,9 @@
 //! The handler:
 //!   1. Verifies the TEE Ed25519 signature over canonical_payload_hash
 //!      (identical to the per-match flow).
-//!   2. Recomputes the per-slot leaf from the payload's note commitments
-//!      (single commitment-only Poseidon11 — must byte-match the
-//!      circuit's `MatchSlot` template).
+//!   2. Recomputes the per-slot leaf from consumed/relock note-use tags plus
+//!      created commitments (arity-12 — must byte-match the circuit's
+//!      `MatchSlot` template).
 //!   3. Walks a fixed-depth-4 Merkle inclusion path (N=16) using the
 //!      provided sibling hashes + match_index.
 //!   4. Asserts the BatchValidityMarker PDA exists at the
@@ -92,14 +92,14 @@ fn u64_be32(v: u64) -> [u8; 32] {
 /// Compute the per-slot leaf hash. MUST byte-match `template MatchSlot()` in
 /// `circuits/templates/match_batch.circom`:
 ///
-///   leaf = Poseidon11(DOMAIN_LEAF_V2=23, active=1,
-///                     note_a, note_b, note_c, note_d, note_e, note_f,
-///                     note_fee_base, note_fee_quote, batch_slot)
+///   relock_digest = Poseidon3(DOMAIN_RELOCK_DIGEST=30, tag_e, tag_f)
+///   leaf = Poseidon12(DOMAIN_LEAF_V3=31, active=1,
+///                     tag_a, tag_b, note_c, note_d, note_e, note_f,
+///                     note_fee_base, note_fee_quote, batch_slot, relock_digest)
 ///
-/// Commitment-only (amount-privacy, P1b): the note commitments bind the
-/// amounts/mints/price transitively (each is a Poseidon6 of its
-/// mint+amount+owner+inner), so the leaf no longer hashes — and the payload
-/// no longer needs to carry — the plaintext amounts. The two fee-note
+/// Amount-private: the leaf binds consumed identities through their tags and
+/// created identities through their commitments, so it no longer hashes — and
+/// the payload no longer needs to carry — plaintext amounts. The two fee-note
 /// commitments are bound here so THIS match's fee-note append is proof-backed:
 /// fees are PER-MATCH (each active MatchSlot derives its own
 /// `note_fee_base/quote` from that match's consumed commitments), so every
@@ -109,14 +109,28 @@ fn u64_be32(v: u64) -> [u8; 32] {
 // without running the full `verify_match_batch` Groth16 verifier (see
 // `programs/vault/tests/tee_forced_settle_batched.rs`).
 pub fn compute_match_leaf(payload: &MatchResultPayload) -> Result<[u8; 32]> {
-    let domain = u64_be32(23); // DOMAIN_LEAF_V2
+    let domain = u64_be32(31); // DOMAIN_LEAF_V3
     let batch_slot = u64_be32(payload.batch_slot);
 
+    // The two relock tags are folded into ONE field. Binding them separately
+    // would make the leaf 13 inputs against light-poseidon's cap of 12
+    // (MAX_X5_LEN = 13) and force the retired two-stage Poseidon12+Poseidon9
+    // split back. They must be bound at all because the in-settle relock takes
+    // no proof of its own — an unconstrained tag would let an authorized TEE
+    // lock an arbitrary note, bounded only by MAX_LOCK_TTL_SLOTS.
+    let relock_digest = poseidon_n(&[
+        &u64_be32(30), // DOMAIN_RELOCK_DIGEST
+        payload.note_e_use_tag.as_ref(),
+        payload.note_f_use_tag.as_ref(),
+    ])?;
+
+    // TWELVE inputs — EXACTLY at the cap. Adding any further field forces the
+    // two-stage split; `leaf_arity_is_at_the_poseidon_cap` pins this.
     let leaf = poseidon_n(&[
         &domain,
         &u64_be32(1), // Tx D can only settle an active proof slot.
-        payload.note_a_commitment.as_ref(),
-        payload.note_b_commitment.as_ref(),
+        payload.note_a_use_tag.as_ref(),
+        payload.note_b_use_tag.as_ref(),
         payload.note_c_commitment.as_ref(),
         payload.note_d_commitment.as_ref(),
         payload.note_e_commitment.as_ref(),
@@ -124,6 +138,7 @@ pub fn compute_match_leaf(payload: &MatchResultPayload) -> Result<[u8; 32]> {
         payload.note_fee_base_commitment.as_ref(),
         payload.note_fee_quote_commitment.as_ref(),
         &batch_slot,
+        relock_digest.as_ref(),
     ])?;
 
     Ok(leaf)
@@ -197,7 +212,7 @@ pub struct TeeForcedSettleBatched<'info> {
     // the search there is genuine.
     #[account(
         mut,
-        seeds = [NoteLock::SEED, payload.note_a_commitment.as_ref()],
+        seeds = [NoteLock::SEED, payload.note_a_use_tag.as_ref()],
         bump = note_lock_a.load()?.bump,
         close = tee_authority,
     )]
@@ -205,7 +220,7 @@ pub struct TeeForcedSettleBatched<'info> {
 
     #[account(
         mut,
-        seeds = [NoteLock::SEED, payload.note_b_commitment.as_ref()],
+        seeds = [NoteLock::SEED, payload.note_b_use_tag.as_ref()],
         bump = note_lock_b.load()?.bump,
         close = tee_authority,
     )]
@@ -215,7 +230,7 @@ pub struct TeeForcedSettleBatched<'info> {
         init,
         payer = tee_authority,
         space = 8 + size_of::<ConsumedNoteEntry>(),
-        seeds = [ConsumedNoteEntry::SEED, payload.note_a_commitment.as_ref()],
+        seeds = [ConsumedNoteEntry::SEED, payload.note_a_use_tag.as_ref()],
         bump,
     )]
     pub consumed_a: AccountLoader<'info, ConsumedNoteEntry>,
@@ -224,18 +239,18 @@ pub struct TeeForcedSettleBatched<'info> {
         init,
         payer = tee_authority,
         space = 8 + size_of::<ConsumedNoteEntry>(),
-        seeds = [ConsumedNoteEntry::SEED, payload.note_b_commitment.as_ref()],
+        seeds = [ConsumedNoteEntry::SEED, payload.note_b_use_tag.as_ref()],
         bump,
     )]
     pub consumed_b: AccountLoader<'info, ConsumedNoteEntry>,
 
     // NOTE: the two per-match nullifier-keyed inits were removed here. The
     // TEE-supplied nullifiers were unconstrained (no nullifier signal in
-    // VALID_MATCH_BATCH; `compute_match_leaf` binds only the note commitments
-    // + batch_slot), so writing them served no soundness purpose
+    // VALID_MATCH_BATCH; `compute_match_leaf` binds the consumed use tags,
+    // output commitments + batch_slot), so writing them served no soundness purpose
     // and enabled a griefing freeze (a compromised TEE could pre-claim a
     // victim's future withdraw nullifier) while leaving the real double-spend
-    // guard to the commitment-keyed `consumed_a/b` above (which `withdraw` now
+    // guard to the tag-keyed `consumed_a/b` above (which `withdraw` now
     // also writes). Dropping them also reclaimed 2 `init` CPIs + 2 accounts off
     // Tx D. Settlement payload v9 removes the now-vestigial nullifier fields
     // from the signed instruction data too, restoring another 64 bytes of
@@ -450,21 +465,21 @@ pub fn tee_forced_settle_batched_handler(
 
     // Mark consumed notes.
     let ca = &mut ctx.accounts.consumed_a.load_init()?;
-    ca.note_commitment = payload.note_a_commitment;
+    ca.note_use_tag = payload.note_a_use_tag;
     ca.match_id = payload.match_id;
     ca.consumed_slot = clock.slot;
     ca.bump = ctx.bumps.consumed_a;
     ca._padding = [0u8; 7];
 
     let cb = &mut ctx.accounts.consumed_b.load_init()?;
-    cb.note_commitment = payload.note_b_commitment;
+    cb.note_use_tag = payload.note_b_use_tag;
     cb.match_id = payload.match_id;
     cb.consumed_slot = clock.slot;
     cb.bump = ctx.bumps.consumed_b;
     cb._padding = [0u8; 7];
 
     // (Nullifier writes removed — see the account-struct note above. The
-    // commitment-keyed `consumed_a/b` are the consume-once guard.)
+    // tag-keyed `consumed_a/b` are the consume-once guard.)
 
     // Append output leaves to THIS shard: note_c, note_d, note_e (if any),
     // note_f (if any), then the two batch fee notes (base, quote) if any.
@@ -549,7 +564,11 @@ pub fn tee_forced_settle_batched_handler(
             &ctx.accounts.note_lock_e,
             &ctx.accounts.tee_authority,
             &ctx.accounts.system_program,
-            &payload.note_e_commitment,
+            // The TAG, not the commitment. Both are 32 bytes so this compiles
+            // either way — passing the commitment would silently create every
+            // relock at the wrong address, and the note would then be
+            // unspendable because its later consume looks for NoteLock[tag].
+            &payload.note_e_use_tag,
             &lock_a_mint, // note_e is the buyer's change → QUOTE
             &payload.buyer_relock_order_id,
             payload.buyer_relock_expiry,
@@ -560,7 +579,7 @@ pub fn tee_forced_settle_batched_handler(
             &ctx.accounts.note_lock_f,
             &ctx.accounts.tee_authority,
             &ctx.accounts.system_program,
-            &payload.note_f_commitment,
+            &payload.note_f_use_tag,
             &lock_b_mint, // note_f is the seller's change → BASE
             &payload.seller_relock_order_id,
             payload.seller_relock_expiry,
@@ -591,4 +610,122 @@ pub fn tee_forced_settle_batched_handler(
         new_root,
     });
     Ok(())
+}
+
+#[cfg(test)]
+#[cfg(not(target_os = "solana"))]
+mod leaf_arity_tests {
+    use super::*;
+
+    /// A 32-byte value that is guaranteed < the BN254 modulus.
+    ///
+    /// `[0xEAu8; 32]` is NOT — it is ~0.91 * 2^256, well above the field, and
+    /// `light-poseidon` rejects it as `InvalidBatchBinding` rather than
+    /// reducing. That is CLAUDE.md §7.2's documented trap, and the first draft
+    /// of these tests walked straight into it. Zeroing the top byte keeps the
+    /// value comfortably in range while staying distinguishable.
+    fn fr_safe(byte: u8) -> [u8; 32] {
+        let mut v = [byte; 32];
+        v[0] = 0;
+        v
+    }
+
+    fn payload_with(tag_e: [u8; 32], tag_f: [u8; 32]) -> MatchResultPayload {
+        MatchResultPayload {
+            match_id: [0x11u8; 16],
+            note_a_use_tag: fr_safe(0xA1),
+            note_b_use_tag: fr_safe(0xB1),
+            note_c_commitment: fr_safe(0xC1),
+            note_d_commitment: fr_safe(0xD1),
+            note_e_commitment: fr_safe(0xE1),
+            note_f_commitment: fr_safe(0xF1),
+            order_id_a: [0x01u8; 16],
+            order_id_b: [0x02u8; 16],
+            note_fee_base_commitment: [0u8; 32],
+            note_fee_quote_commitment: [0u8; 32],
+            buyer_relock_order_id: [0u8; 16],
+            buyer_relock_expiry: 0,
+            seller_relock_order_id: [0u8; 16],
+            seller_relock_expiry: 0,
+            note_e_use_tag: tag_e,
+            note_f_use_tag: tag_f,
+            batch_slot: 7,
+            fill_recovery: [0u8; 128],
+        }
+    }
+
+    /// The leaf sits at EXACTLY the `light-poseidon` width cap.
+    ///
+    /// `MAX_X5_LEN = 13` means at most 12 inputs. The leaf uses all 12, which is
+    /// only possible because the two relock tags are folded into one
+    /// `relock_digest` field — binding them separately needs 13 and would force
+    /// the retired two-stage Poseidon12+Poseidon9 split back.
+    ///
+    /// This constructs the same 12-input hash `compute_match_leaf` does and
+    /// asserts they agree, then shows 13 inputs is rejected outright. Adding a
+    /// field to the leaf therefore fails HERE, at the arity, rather than as an
+    /// opaque `InvalidBatchBinding` from a devnet settle.
+    #[test]
+    fn leaf_arity_is_at_the_poseidon_cap() {
+        let p = payload_with(fr_safe(0xEA), fr_safe(0xFA));
+
+        let relock_digest = poseidon_n(&[
+            &u64_be32(30),
+            p.note_e_use_tag.as_ref(),
+            p.note_f_use_tag.as_ref(),
+        ])
+        .expect("relock digest hashes");
+
+        let twelve: [&[u8]; 12] = [
+            &u64_be32(31),
+            &u64_be32(1),
+            p.note_a_use_tag.as_ref(),
+            p.note_b_use_tag.as_ref(),
+            p.note_c_commitment.as_ref(),
+            p.note_d_commitment.as_ref(),
+            p.note_e_commitment.as_ref(),
+            p.note_f_commitment.as_ref(),
+            p.note_fee_base_commitment.as_ref(),
+            p.note_fee_quote_commitment.as_ref(),
+            &u64_be32(p.batch_slot),
+            relock_digest.as_ref(),
+        ];
+        assert_eq!(twelve.len(), 12, "the leaf must use exactly 12 inputs");
+        assert_eq!(
+            poseidon_n(&twelve).expect("12 inputs is at the cap"),
+            compute_match_leaf(&p).expect("leaf computes"),
+            "compute_match_leaf must hash exactly these twelve fields in this order"
+        );
+
+        // One more input is over the cap and cannot be hashed at all.
+        let mut thirteen: Vec<&[u8]> = twelve.to_vec();
+        thirteen.push(p.match_id.as_ref());
+        assert!(
+            poseidon_n(&thirteen).is_err(),
+            "13 inputs must be rejected — adding a leaf field forces the \
+             two-stage split back, and this is where that has to be noticed"
+        );
+    }
+
+    /// The relock tags are BOUND by the leaf.
+    ///
+    /// They have to be: the in-settle relock takes no proof of its own, so an
+    /// unconstrained tag would let an authorized TEE create a `NoteLock` on an
+    /// arbitrary note — censorship bounded only by `MAX_LOCK_TTL_SLOTS`.
+    /// Changing either tag must change the leaf, which makes the batch Merkle
+    /// proof fail against the marker root.
+    #[test]
+    fn changing_a_relock_tag_changes_the_leaf() {
+        let base = compute_match_leaf(&payload_with(fr_safe(0xEA), fr_safe(0xFA))).unwrap();
+        assert_ne!(
+            base,
+            compute_match_leaf(&payload_with(fr_safe(0xEB), fr_safe(0xFA))).unwrap(),
+            "note_e_use_tag must be bound by the leaf"
+        );
+        assert_ne!(
+            base,
+            compute_match_leaf(&payload_with(fr_safe(0xEA), fr_safe(0xFB))).unwrap(),
+            "note_f_use_tag must be bound by the leaf"
+        );
+    }
 }

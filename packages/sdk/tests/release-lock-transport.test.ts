@@ -39,11 +39,11 @@ function commitment(fill: number): Uint8Array {
 
 describe("buildReleaseLockInstruction", () => {
   it("emits disc(8) || note_commitment(32) with no other args", () => {
-    const noteCommitment = commitment(0x42);
+    const noteUseTag = commitment(0x42);
     const ix = buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
-      noteCommitment,
+      noteUseTag,
     });
 
     expect(ix.programId.equals(PROGRAM_ID)).toBe(true);
@@ -51,17 +51,17 @@ describe("buildReleaseLockInstruction", () => {
     expect(new Uint8Array(ix.data.subarray(0, 8))).toEqual(
       anchorDiscriminator("release_lock"),
     );
-    expect(new Uint8Array(ix.data.subarray(8, 40))).toEqual(noteCommitment);
+    expect(new Uint8Array(ix.data.subarray(8, 40))).toEqual(noteUseTag);
   });
 
   it("passes exactly [rent_receiver(signer,mut), note_lock(mut)]", () => {
-    const noteCommitment = commitment(0x07);
+    const noteUseTag = commitment(0x07);
     const ix = buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
-      noteCommitment,
+      noteUseTag,
     });
-    const [expectedLock] = noteLockPda(PROGRAM_ID, noteCommitment);
+    const [expectedLock] = noteLockPda(PROGRAM_ID, noteUseTag);
 
     expect(ix.keys.length).toBe(2);
     // The rent receiver signs and is credited the reclaimed rent — the
@@ -80,12 +80,12 @@ describe("buildReleaseLockInstruction", () => {
     const a = buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
-      noteCommitment: commitment(1),
+      noteUseTag: commitment(1),
     });
     const b = buildReleaseLockInstruction({
       programId: PROGRAM_ID,
       rentReceiver: RENT_RECEIVER,
-      noteCommitment: commitment(2),
+      noteUseTag: commitment(2),
     });
     expect(a.keys[1].pubkey.equals(b.keys[1].pubkey)).toBe(false);
   });
@@ -108,7 +108,7 @@ describe("parseNoteLock", () => {
     const parsed = parseNoteLock(encodeNoteLock(123_456_789n));
     expect(parsed).not.toBeNull();
     expect(parsed!.expirySlot).toBe(123_456_789n);
-    expect(parsed!.noteCommitment).toEqual(commitment(0xaa));
+    expect(parsed!.noteUseTag).toEqual(commitment(0xaa));
     expect(parsed!.orderId).toEqual(new Uint8Array(16).fill(0xcc));
   });
 

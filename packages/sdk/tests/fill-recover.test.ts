@@ -16,6 +16,7 @@ import {
   MATCH_ROLE_TRADE_SELLER,
 } from "../src/utxo/match-output.js";
 import { noteCommitmentV2 } from "../src/utxo/note.js";
+import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import {
   recoverChangeFromChain,
   recoverFillFromChain,
@@ -115,7 +116,12 @@ async function makeFill(opts: {
     matchId: "55".repeat(16),
     signature: "00",
     slot: 500,
-    inputNoteCommitment: opts.input.commitment,
+    inputNoteUseTag: hex(
+      await deriveNoteUseTag(
+        Uint8Array.from(Buffer.from(opts.input.commitment, "hex")),
+        bn254ToBE32(opts.input.innerHash),
+      ),
+    ),
     tradeNoteCommitment: hex(trade),
     isPartialFill: change !== null,
     changeNoteCommitment: change ? hex(change) : null,
@@ -178,7 +184,7 @@ describe("recoverFillFromChain recovery v3", () => {
       trade: 400n,
       change: 250n,
     });
-    fill.inputNoteCommitment = fill.inputNoteCommitment.toUpperCase();
+    fill.inputNoteUseTag = fill.inputNoteUseTag.toUpperCase();
     fill.tradeNoteCommitment = fill.tradeNoteCommitment.toUpperCase();
     fill.changeNoteCommitment = fill.changeNoteCommitment!.toUpperCase();
     const outputs = await recoverFillFromChain(fill, params([input]));

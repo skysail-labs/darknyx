@@ -13,6 +13,7 @@ import {
 import {
   bn254ToBE32,
   deriveBlindingFactor,
+  deriveNoteSecret,
   deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
   deriveViewingEncKeypair,
@@ -26,6 +27,7 @@ import {
   MATCH_ROLE_TRADE_BUYER,
 } from "../src/utxo/match-output.js";
 import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
+import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import { deriveMergeOutputInnerHash } from "../src/utxo/merge.js";
 import { noteCommitmentV2, ownerCommitment } from "../src/utxo/note.js";
 import {
@@ -145,11 +147,21 @@ describe("recoverNotesFromChain", () => {
     const ownerBytes = bn254ToBE32(owner);
     const quoteNonce = deriveBlindingFactor(SEED, 0n);
     const baseNonce = deriveBlindingFactor(SEED, 1n);
+    const quoteNonceBytes = bn254ToBE32(quoteNonce);
+    const baseNonceBytes = bn254ToBE32(baseNonce);
     const quoteInner = be32ToBig(
-      await deriveDepositInnerHash(ownerBytes, bn254ToBE32(quoteNonce)),
+      await deriveDepositInnerHash(
+        ownerBytes,
+        quoteNonceBytes,
+        bn254ToBE32(deriveNoteSecret(SEED, quoteNonceBytes)),
+      ),
     );
     const baseInner = be32ToBig(
-      await deriveDepositInnerHash(ownerBytes, bn254ToBE32(baseNonce)),
+      await deriveDepositInnerHash(
+        ownerBytes,
+        baseNonceBytes,
+        bn254ToBE32(deriveNoteSecret(SEED, baseNonceBytes)),
+      ),
     );
     const quoteDeposit = await noteCommitmentV2({
       tokenMint: QUOTE_MINT,
@@ -235,8 +247,14 @@ describe("recoverNotesFromChain", () => {
     const matchId = bytes(16, 0x61);
     const payload = exactFillPayload({
       matchId,
-      noteAcommitment: quoteDeposit,
-      noteBcommitment: bytes(32, 0x62),
+      // The settle publishes the buyer input's HANDLE. Recovery must find its
+      // way back to `quoteDeposit` by deriving tags over the notes it holds —
+      // the commitment appears nowhere in this instruction.
+      noteAuseTag: await deriveNoteUseTag(
+        quoteDeposit,
+        bn254ToBE32(quoteInner),
+      ),
+      noteBuseTag: bytes(32, 0x62),
       noteCcommitment: trade,
       noteDcommitment: bytes(32, 0x63),
       orderIdA: bytes(16, 0x64),
@@ -258,7 +276,14 @@ describe("recoverNotesFromChain", () => {
       logMessages: vaultLogs(tradeSettledLog(matchId)),
     };
 
+    // The merge consumes the base deposit and the trade output. Its ix carries
+    // only their tags; `deriveMergeOutputInnerHash` still runs over the
+    // COMMITMENTS, which recovery must reconstruct by inverting the tags.
     const mergeInputs = [baseDeposit, trade];
+    const mergeInputTags = [
+      await deriveNoteUseTag(baseDeposit, bn254ToBE32(baseInner)),
+      await deriveNoteUseTag(trade, bn254ToBE32(tradeInner)),
+    ];
     const mergeInner = await deriveMergeOutputInnerHash(mergeInputs);
     const merged = await noteCommitmentV2({
       tokenMint: BASE_MINT,
@@ -274,7 +299,7 @@ describe("recoverNotesFromChain", () => {
           programId: PROGRAM_ID,
           treeId: 0,
           payer: PAYER,
-          inputCommitments: mergeInputs,
+          inputUseTags: mergeInputTags,
           outputCommitment: merged,
           tokenMint: new PublicKey(BASE_MINT),
           merkleRoot: bytes(32, 0),

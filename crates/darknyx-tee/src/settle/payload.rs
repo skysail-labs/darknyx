@@ -2,7 +2,7 @@
 //! of a CLAUDE.md §6 byte-equality contract.
 //!
 //! This Rust port MUST produce, for any payload:
-//!   - the SAME 488-byte Borsh serialization as the on-chain
+//!   - the SAME 552-byte Borsh serialization as the on-chain
 //!     `vault::instructions::tee_forced_settle::MatchResultPayload`
 //!     (AnchorSerialize) and the SDK's
 //!     `settle-builder.ts::serializePayload`;
@@ -26,8 +26,9 @@
 //! `v7`→`v8` (424→552 bytes). Settlement payload v9 removed the two
 //! vestigial nullifiers, shrinking the wire shape to 488 bytes. Recovery v3
 //! repacks those same 128 bytes with two u64s per side. The clean Darknyx
-//! namespace cutover keeps the 488-byte layout but bumps the signature domain
-//! to v10, invalidating every development-era signature.
+//! namespace cutover kept the 488-byte layout but bumped the signature domain
+//! to v10. Note-use tags then replaced the two consumed commitments and added
+//! two relock tags, yielding the 552-byte v11 layout.
 //!
 //! ## Two distinct field orderings (do not conflate)
 //!
@@ -35,7 +36,7 @@
 //!   fee-note fields `note_fee_base_commitment` + `note_fee_quote_commitment`
 //!   right after `order_id_b`.
 //! - **Canonical hash**: the same hand-ordered concatenation, domain-tagged
-//!   `b"darknyx-match-v10"`.
+//!   `b"darknyx-match-v11"`.
 //!
 //! Both orderings are reproduced verbatim below from the on-chain
 //! source + the SDK.
@@ -48,8 +49,10 @@ use sha2::{Digest, Sha256};
 /// `v6`→`v7` when amount-privacy (P3b) dropped the seven plaintext amounts;
 /// `v7`→`v8` when output recovery appended the 128-byte `fill_recovery` field;
 /// `v8`→`v9` when the two unused nullifiers left the settle payload; and
-/// `v9`→`v10` for the clean Darknyx namespace cutover.
-pub const CANONICAL_DOMAIN: &[u8] = b"darknyx-match-v10";
+/// `v9`→`v10` for the clean Darknyx namespace cutover; and `v10`→`v11` when the
+/// consumed commitments became note-use TAGS and the two relock tags were
+/// appended (488 → 552 bytes).
+pub const CANONICAL_DOMAIN: &[u8] = b"darknyx-match-v11";
 
 /// Settle payload. Field order is the on-chain struct's declaration order —
 /// `#[derive(BorshSerialize)]` then produces byte-identical output to
@@ -61,8 +64,12 @@ pub const CANONICAL_DOMAIN: &[u8] = b"darknyx-match-v10";
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 pub struct MatchResultPayload {
     pub match_id: [u8; 16],
-    pub note_a_commitment: [u8; 32],
-    pub note_b_commitment: [u8; 32],
+    /// CONSUMED inputs, as note-use tags. These seed the `NoteLock` and
+    /// `ConsumedNoteEntry` PDAs; republishing the commitments here would relink
+    /// both inputs to their Merkle leaves.
+    pub note_a_use_tag: [u8; 32],
+    pub note_b_use_tag: [u8; 32],
+    /// OUTPUTS stay commitments — they are appended as new leaves.
     pub note_c_commitment: [u8; 32],
     pub note_d_commitment: [u8; 32],
     pub note_e_commitment: [u8; 32],
@@ -75,6 +82,12 @@ pub struct MatchResultPayload {
     pub buyer_relock_expiry: u64,
     pub seller_relock_order_id: [u8; 16],
     pub seller_relock_expiry: u64,
+    /// Tags for the change notes this settle creates and immediately re-locks.
+    /// Needed ALONGSIDE `note_e/f_commitment`: the commitment is the leaf value,
+    /// the tag is the `NoteLock` seed, and neither derives from the other
+    /// without the private inner hash. `[0u8; 32]` when that side has no change.
+    pub note_e_use_tag: [u8; 32],
+    pub note_f_use_tag: [u8; 32],
     pub batch_slot: u64,
     /// Recovery v3: the per-fill X25519-ECIES bundle
     /// `ephemeral_pubkey(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "DNYXREC3"`
@@ -86,9 +99,13 @@ pub struct MatchResultPayload {
 
 impl MatchResultPayload {
     /// Total Borsh-encoded width: 16 + 6×32 + 2×16 +
-    /// 2×32 (base+quote fee notes) + 16 + 8 + 16 + 8 + 8 + 128
-    /// (fill_recovery) = 488 bytes.
-    pub const WIRE_LEN: usize = 488;
+    /// 2×32 (base+quote fee notes) + 16 + 8 + 16 + 8 + 2×32 (relock tags)
+    /// + 8 + 128 (fill_recovery) = 552 bytes.
+    ///
+    /// Was 488. The +64 is the two relock tags; it eats into Tx D's headroom
+    /// against the 1232-byte cap, which `tx_d_stays_within_the_size_budget`
+    /// asserts rather than leaving to chance.
+    pub const WIRE_LEN: usize = 552;
 
     /// Borsh serialization — the bytes that go into the
     /// `tee_forced_settle_batched` ix data. Byte-identical to the
@@ -105,8 +122,8 @@ impl MatchResultPayload {
         let mut h = Sha256::new();
         h.update(CANONICAL_DOMAIN);
         h.update(self.match_id);
-        h.update(self.note_a_commitment);
-        h.update(self.note_b_commitment);
+        h.update(self.note_a_use_tag);
+        h.update(self.note_b_use_tag);
         h.update(self.note_c_commitment);
         h.update(self.note_d_commitment);
         h.update(self.note_e_commitment);
@@ -119,6 +136,8 @@ impl MatchResultPayload {
         h.update(self.buyer_relock_expiry.to_le_bytes());
         h.update(self.seller_relock_order_id);
         h.update(self.seller_relock_expiry.to_le_bytes());
+        h.update(self.note_e_use_tag);
+        h.update(self.note_f_use_tag);
         h.update(self.batch_slot.to_le_bytes());
         h.update(self.fill_recovery); // v8: encrypted output-recovery bundle
         h.finalize().into()
@@ -135,12 +154,12 @@ mod tests {
     fn fixed_vector_payload() -> MatchResultPayload {
         MatchResultPayload {
             match_id: [0x11; 16],
-            note_a_commitment: [0xA1; 32],
-            note_b_commitment: [0xB1; 32],
+            note_a_use_tag: [0xA1; 32],
+            note_b_use_tag: [0xB1; 32],
             note_c_commitment: [0xC1; 32],
             note_d_commitment: [0xD1; 32],
-            note_e_commitment: [0; 32],
-            note_f_commitment: [0; 32],
+            note_e_commitment: [0xE1; 32],
+            note_f_commitment: [0xF1; 32],
             order_id_a: [0x01; 16],
             order_id_b: [0x02; 16],
             note_fee_base_commitment: [0; 32],
@@ -149,6 +168,8 @@ mod tests {
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
+            note_e_use_tag: [0xEA; 32],
+            note_f_use_tag: [0xFA; 32],
             batch_slot: 0,
             fill_recovery: [0; 128],
         }
@@ -160,9 +181,9 @@ mod tests {
     #[test]
     fn canonical_hash_matches_onchain_fixed_vector() {
         let expected: [u8; 32] = [
-            0x8F, 0x79, 0xC1, 0xCD, 0x05, 0xD1, 0x5B, 0x0B, 0xCF, 0xA8, 0x03, 0x9A, 0x74, 0x39,
-            0x72, 0x77, 0xA3, 0xCF, 0x6E, 0x4E, 0x62, 0xA8, 0x98, 0xC5, 0x9F, 0x07, 0xAA, 0x3D,
-            0xF0, 0x8D, 0x53, 0xD7,
+            0xC7, 0xFF, 0x67, 0xAC, 0xDA, 0x24, 0x5D, 0x16, 0x4C, 0x12, 0x48, 0xDC, 0x51, 0xDC,
+            0x2D, 0x97, 0x05, 0x2C, 0x3A, 0xBE, 0x76, 0x96, 0x41, 0x3D, 0x54, 0xE6, 0x53, 0x6E,
+            0xD0, 0x15, 0x6D, 0x45,
         ];
         let got = fixed_vector_payload().canonical_hash();
         assert_eq!(
@@ -172,12 +193,16 @@ mod tests {
     }
 
     #[test]
-    fn borsh_serialization_is_488_bytes() {
+    fn borsh_serialization_is_552_bytes() {
         let bytes = fixed_vector_payload().serialize();
         assert_eq!(bytes.len(), MatchResultPayload::WIRE_LEN);
-        assert_eq!(bytes.len(), 488);
-        // The appended fill_recovery field occupies the last 128 bytes.
-        assert_eq!(&bytes[360..488], &[0u8; 128]);
+        assert_eq!(bytes.len(), 552);
+        // The appended fill_recovery field still occupies the LAST 128 bytes;
+        // the two relock tags sit ahead of batch_slot, so the offset moved by
+        // exactly 64. Three independent decoders read this layout by offset
+        // (the SDK's chain-history, the indexer, and merkle::events), so the
+        // shift has to be asserted here rather than discovered downstream.
+        assert_eq!(&bytes[424..552], &[0u8; 128]);
     }
 
     #[test]
@@ -232,7 +257,7 @@ mod tests {
             }};
         }
         perturb!(match_id = [0x12; 16]);
-        perturb!(note_a_commitment = [0xA2; 32]);
+        perturb!(note_a_use_tag = [0xA2; 32]);
         perturb!(order_id_b = [0x03; 16]);
         perturb!(note_fee_base_commitment = [0x77; 32]);
         perturb!(batch_slot = 1);

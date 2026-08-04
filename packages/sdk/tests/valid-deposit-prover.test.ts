@@ -37,6 +37,9 @@ suite("VALID_DEPOSIT prover", () => {
   const spendingKey = 123456789n;
   const ownerBlinding = 987654321n;
   const recoveryNonce = 112233445566778899n;
+  // Stands in for `deriveNoteSecret(seed, recoveryNonce)`; the circuit only
+  // requires it be a field element, not that it came from a seed.
+  const noteSecret = 998877665544332211n;
   const mint = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
   const amount = 5_015_000n;
 
@@ -45,6 +48,7 @@ suite("VALID_DEPOSIT prover", () => {
     const inner = await deriveDepositInnerHash(
       bn254ToBE32(owner),
       bn254ToBE32(recoveryNonce),
+      bn254ToBE32(noteSecret),
     );
     const commitment = await noteCommitmentV2({
       tokenMint: mint,
@@ -60,6 +64,7 @@ suite("VALID_DEPOSIT prover", () => {
       recoveryNonce,
       spendingKey,
       ownerCommitmentBlinding: ownerBlinding,
+      noteSecret,
     };
   }
 
@@ -101,6 +106,10 @@ suite("VALID_DEPOSIT prover", () => {
         ...witness,
         ownerCommitmentBlinding: witness.ownerCommitmentBlinding + 1n,
       },
+      // The arity-4 input. Perturbing it must break the commitment binding
+      // just like every other opening field — otherwise it is decorative and
+      // the entropy hardening buys nothing.
+      { ...witness, noteSecret: witness.noteSecret + 1n },
     ];
     for (const invalid of altered) {
       await expect(prover.prove(invalid)).rejects.toThrow();

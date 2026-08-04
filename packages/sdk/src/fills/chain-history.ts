@@ -45,14 +45,15 @@ const TRADE_SETTLED_DISCRIMINATOR = new Uint8Array(
     .subarray(0, 8),
 );
 
-/** Borsh `MatchResultPayload` length (v9, 488 B). Mirrors decode.ts::PAYLOAD_LEN. */
-const PAYLOAD_LEN = 488;
-/** ix data = disc(8) ‖ tree_id(u8) ‖ payload(488) ‖ match_index(1) ‖ siblings(128).
+/** Borsh `MatchResultPayload` length (v11, 552 B). Mirrors decode.ts::PAYLOAD_LEN. */
+const PAYLOAD_LEN = 552;
+/** ix data = disc(8) ‖ tree_id(u8) ‖ payload(552) ‖ match_index(1) ‖ siblings(128).
  *  The payload starts AFTER the discriminator AND the leading `tree_id` byte. */
 const PAYLOAD_OFFSET = 8 + 1;
-/** `fill_recovery` v3 starts at 360 within the payload:
+/** `fill_recovery` v3 starts at 424 within the v11 payload (the two appended
+ *  relock tags pushed it 64 bytes later):
  *  eph(32) ‖ buyer_enc(44) ‖ seller_enc(44) ‖ "DNYXREC3". */
-const FILL_RECOVERY_OFFSET = 360;
+const FILL_RECOVERY_OFFSET = 424;
 const RECOVERY_V3_TRAILER = Buffer.from("DNYXREC3", "ascii");
 
 const ZERO32 = "0".repeat(64);
@@ -130,16 +131,18 @@ export function decodeSettleFills(
   const v = new DataView(p.buffer, p.byteOffset, p.byteLength);
 
   const matchId = hex(p.subarray(0, 16));
-  // Six 32-byte note commitments precede the order ids in payload v9.
-  const noteA = hex(p.subarray(16, 48)); // buyer input (quote)
-  const noteB = hex(p.subarray(48, 80)); // seller input (base)
+  // Six 32-byte note fields precede the order ids. In v11 the first two are
+  // input note-use TAGS, not commitments — they will not match any Merkle leaf,
+  // which is the whole point. The last four remain output commitments.
+  const tagA = hex(p.subarray(16, 48)); // buyer input handle (quote)
+  const tagB = hex(p.subarray(48, 80)); // seller input handle (base)
   const noteC = hex(p.subarray(80, 112)); // buyer trade output (base)
   const noteD = hex(p.subarray(112, 144)); // seller trade output (quote)
   const noteE = hex(p.subarray(144, 176)); // buyer change ([0;32] = exact fill)
   const noteF = hex(p.subarray(176, 208)); // seller change
   const orderIdA = hex(p.subarray(208, 224)); // buyer
   const orderIdB = hex(p.subarray(224, 240)); // seller
-  const batchSlot = v.getBigUint64(352, true).toString();
+  const batchSlot = v.getBigUint64(416, true).toString();
 
   const r = FILL_RECOVERY_OFFSET;
   const recoveryV3 = Buffer.from(p.subarray(r + 120, r + 128)).equals(
@@ -162,7 +165,7 @@ export function decodeSettleFills(
       matchId,
       signature,
       slot,
-      inputNoteCommitment: noteA,
+      inputNoteUseTag: tagA,
       tradeNoteCommitment: noteC,
       isPartialFill: !buyerExact,
       changeNoteCommitment: buyerExact ? null : noteE,
@@ -178,7 +181,7 @@ export function decodeSettleFills(
       matchId,
       signature,
       slot,
-      inputNoteCommitment: noteB,
+      inputNoteUseTag: tagB,
       tradeNoteCommitment: noteD,
       isPartialFill: !sellerExact,
       changeNoteCommitment: sellerExact ? null : noteF,

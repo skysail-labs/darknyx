@@ -10,7 +10,7 @@
 //! A transaction signature can be unknown for reasons that have nothing to do
 //! with whether it landed: the RPC dropped it from its status cache, the node is
 //! behind, the send never left the enclave. `tee_forced_settle_batched` creates
-//! BOTH commitment-keyed consumed-note PDAs atomically, so their existence is
+//! BOTH tag-keyed consumed-note PDAs atomically, so their existence is
 //! durable, node-independent proof that the match settled. That is the same
 //! reasoning the in-process ambiguity path already uses
 //! (`worker::reconcile_consumed_pdas`); recovery applies it to a journal entry
@@ -100,8 +100,8 @@ pub trait ChainView {
 /// `NeitherConsumed` one. A signature that reads confirmed while neither PDA
 /// exists is contradictory and is reported as such rather than believed.
 pub fn decide(entry: &JournalEntry, chain: &impl ChainView) -> RecoveryAction {
-    let note_a = entry.payload.note_a_commitment;
-    let note_b = entry.payload.note_b_commitment;
+    let note_a = entry.payload.note_a_use_tag;
+    let note_b = entry.payload.note_b_use_tag;
 
     match chain.consumed_state(&note_a, &note_b) {
         ConsumedState::BothConsumed => {
@@ -315,8 +315,8 @@ pub async fn reconcile_at_boot(
     // instead of one entry — strictly the conservative direction.
     let mut pdas: Vec<solana_address::Address> = Vec::with_capacity(entries.len() * 2);
     for e in entries {
-        pdas.push(consumed_note_pda(&e.payload.note_a_commitment).0);
-        pdas.push(consumed_note_pda(&e.payload.note_b_commitment).0);
+        pdas.push(consumed_note_pda(&e.payload.note_a_use_tag).0);
+        pdas.push(consumed_note_pda(&e.payload.note_b_use_tag).0);
     }
 
     // `None` here means "we could not establish this account's state", which is
@@ -464,7 +464,7 @@ mod tests {
     fn lock_side(note: u8) -> LockSideInputs {
         LockSideInputs {
             tree_id: 0,
-            note_commitment: [note; 32],
+            note_use_tag: [note; 32],
             order_id: [note; 16],
             expiry_slot: 1_000,
             token_mint: [0x0F; 32],
@@ -481,8 +481,8 @@ mod tests {
     fn payload() -> MatchResultPayload {
         MatchResultPayload {
             match_id: [0x11; 16],
-            note_a_commitment: [0xA1; 32],
-            note_b_commitment: [0xB1; 32],
+            note_a_use_tag: [0xA1; 32],
+            note_b_use_tag: [0xB1; 32],
             note_c_commitment: [0xC1; 32],
             note_d_commitment: [0xD1; 32],
             note_e_commitment: [0xE1; 32],
@@ -495,6 +495,8 @@ mod tests {
             buyer_relock_expiry: 0,
             seller_relock_order_id: [0; 16],
             seller_relock_expiry: 0,
+            note_e_use_tag: [0u8; 32],
+            note_f_use_tag: [0u8; 32],
             batch_slot: 7,
             fill_recovery: [0u8; 128],
         }

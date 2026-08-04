@@ -35,6 +35,13 @@ template ValidDeposit() {
     // ----- Private -----
     signal input spendingKey;
     signal input ownerCommitmentBlinding;
+    // Seed-derived, keyed on the PUBLIC recoveryNonce so cold recovery can
+    // rebuild it from seed + chain with nothing persisted. Without it the inner
+    // hash — and therefore the note-use tag derived from it downstream — would
+    // be a function of on-chain data plus the wallet-wide ownerCommitment, so
+    // one leaked value would recompute a user's whole history. See
+    // crates/darkpool-crypto/src/deposit.rs.
+    signal input noteSecret;
 
     // Mint halves are semantic u128 values, not arbitrary Fr elements.
     component mintLoBits = Num2Bits(128);
@@ -55,10 +62,13 @@ template ValidDeposit() {
     ownerHash.inputs[1] <== spendingKey;
     ownerHash.inputs[2] <== ownerCommitmentBlinding;
 
-    component innerHash = Poseidon(3);
+    // Arity 4, tag unchanged at 27 — Poseidon is a different permutation per
+    // arity, so the 3-input and 4-input forms cannot collide under one tag.
+    component innerHash = Poseidon(4);
     innerHash.inputs[0] <== 27; // DOMAIN_DEPOSIT_INNER
     innerHash.inputs[1] <== ownerHash.out;
     innerHash.inputs[2] <== recoveryNonce;
+    innerHash.inputs[3] <== noteSecret;
 
     component noteHash = Poseidon(6);
     noteHash.inputs[0] <== 2;   // DOMAIN_NOTE

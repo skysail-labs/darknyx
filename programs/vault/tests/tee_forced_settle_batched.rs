@@ -66,9 +66,9 @@ fn settle_rejects_at_or_after_either_input_lock_expiry() {
             now
         };
         if expire_a {
-            seed_note_lock(&mut h, &p.note_a_commitment, &p.order_id_a, expiry, 0);
+            seed_note_lock(&mut h, &p.note_a_use_tag, &p.order_id_a, expiry, 0);
         } else {
-            seed_note_lock(&mut h, &p.note_b_commitment, &p.order_id_b, expiry, 0);
+            seed_note_lock(&mut h, &p.note_b_use_tag, &p.order_id_b, expiry, 0);
         }
 
         let before = tree_leaf_count(&h, 0);
@@ -80,10 +80,10 @@ fn settle_rejects_at_or_after_either_input_lock_expiry() {
             if expire_a { "A" } else { "B" }
         );
         assert_eq!(tree_leaf_count(&h, 0), before);
-        assert!(!consumed_note_exists(&h, &p.note_a_commitment));
-        assert!(!consumed_note_exists(&h, &p.note_b_commitment));
-        assert!(note_lock_exists(&h, &p.note_a_commitment));
-        assert!(note_lock_exists(&h, &p.note_b_commitment));
+        assert!(!consumed_note_exists(&h, &p.note_a_use_tag));
+        assert!(!consumed_note_exists(&h, &p.note_b_use_tag));
+        assert!(note_lock_exists(&h, &p.note_a_use_tag));
+        assert!(note_lock_exists(&h, &p.note_b_use_tag));
         assert!(batch_validity_marker_exists(&h, &root));
     }
 }
@@ -125,10 +125,11 @@ fn withdraw_then_settle_double_spend_is_blocked() {
         .send_transaction(wtx)
         .expect("withdraw of X must succeed");
 
-    // THE FIX: withdraw wrote the commitment-keyed consume guard for X.
+    // THE FIX: withdraw wrote the TAG-keyed consume guard for X. Settle and
+    // withdraw must agree on the handle, or each could consume X once.
     assert!(
-        consumed_note_exists(&h, &note.commitment),
-        "withdraw must init ConsumedNoteEntry[X] (the shared consume-once guard)",
+        consumed_note_exists(&h, &note.use_tag),
+        "withdraw must init ConsumedNoteEntry[tag(X)] (the shared consume-once guard)",
     );
 
     // ── A malicious matcher now tries to settle a batch CONSUMING withdrawn X ──
@@ -137,11 +138,11 @@ fn withdraw_then_settle_double_spend_is_blocked() {
     let note_b = fr_safe(0xB0, 0x01);
     let oid_a = [0x10u8; 16];
     let oid_b = [0x11u8; 16];
-    seed_note_lock(&mut h, &note.commitment, &oid_a, 1_000_000, 5_000);
+    seed_note_lock(&mut h, &note.use_tag, &oid_a, 1_000_000, 5_000);
     seed_note_lock(&mut h, &note_b, &oid_b, 1_000_000, 100);
     let p = MatchResultPayload::exact_fill(
         [0xE0u8; 16],
-        note.commitment,
+        note.use_tag,
         note_b,
         fr_safe(0xC0, 0x01),
         fr_safe(0xD0, 0x01),
@@ -150,7 +151,7 @@ fn withdraw_then_settle_double_spend_is_blocked() {
         100,
         5_000,
     );
-    let m = read_note_lock_mint(&h, &note.commitment);
+    let m = read_note_lock_mint(&h, &note.use_tag);
     let leaf = compute_match_leaf_for(&p, &m, &m);
     let mut leaves = [[0u8; 32]; 16];
     leaves[0] = leaf;
@@ -194,11 +195,11 @@ fn settle_then_withdraw_double_spend_is_blocked() {
     let note_b = fr_safe(0xB0, 0x02);
     let oid_a = [0x20u8; 16];
     let oid_b = [0x21u8; 16];
-    seed_note_lock(&mut h, &note.commitment, &oid_a, 1_000_000, 5_000);
+    seed_note_lock(&mut h, &note.use_tag, &oid_a, 1_000_000, 5_000);
     seed_note_lock(&mut h, &note_b, &oid_b, 1_000_000, 100);
     let p = MatchResultPayload::exact_fill(
         [0xE0u8; 16],
-        note.commitment,
+        note.use_tag,
         note_b,
         fr_safe(0xC0, 0x02),
         fr_safe(0xD0, 0x02),
@@ -207,7 +208,7 @@ fn settle_then_withdraw_double_spend_is_blocked() {
         100,
         5_000,
     );
-    let m = read_note_lock_mint(&h, &note.commitment);
+    let m = read_note_lock_mint(&h, &note.use_tag);
     let leaf = compute_match_leaf_for(&p, &m, &m);
     let mut leaves = [[0u8; 32]; 16];
     leaves[0] = leaf;
@@ -216,7 +217,7 @@ fn settle_then_withdraw_double_spend_is_blocked() {
     h.svm
         .send_transaction(build_settle_batched_tx(&h, 0, &p, 0, &proof, &root))
         .expect("settle consuming X succeeds");
-    assert!(consumed_note_exists(&h, &note.commitment));
+    assert!(consumed_note_exists(&h, &note.use_tag));
 
     // ── Now withdrawing the already-consumed X must REVERT ──
     let dest = create_spl_token_account(&mut h, &mint, &depositor.pubkey(), 0);
@@ -251,7 +252,7 @@ fn settle_rejects_marker_with_tampered_discriminator() {
         "settle must reject a marker whose Anchor discriminator was tampered",
     );
     assert!(
-        !consumed_note_exists(&h, &p.note_a_commitment),
+        !consumed_note_exists(&h, &p.note_a_use_tag),
         "the rejected settle must not have consumed its input note",
     );
 }
@@ -291,6 +292,12 @@ fn cu_profile_worst_case_settle() {
     );
     p.note_e_commitment = fr_safe(0xE5, 0x77);
     p.note_f_commitment = fr_safe(0xF5, 0x77);
+    // Distinct relock tags. Leaving both at [0;32] makes the two relock PDAs
+    // collide on one address, which surfaces as `NoteAlreadyLocked` on the
+    // second create — the same dedup that is CORRECT for an exact fill (where
+    // neither side relocks) and wrong here.
+    p.note_e_use_tag = fr_safe(0xE6, 0x77);
+    p.note_f_use_tag = fr_safe(0xF6, 0x77);
     p.note_fee_base_commitment = fr_safe(0xFB, 0x77);
     p.note_fee_quote_commitment = fr_safe(0xFC, 0x77);
     // BOTH continuation re-locks fire too — note_lock_e/f are freshly init'd by
@@ -342,8 +349,8 @@ fn cu_profile_worst_case_settle() {
     // All six leaves landed.
     assert_eq!(vault_leaf_count(&h), before + 6);
     // Both continuation re-locks were created.
-    assert!(note_lock_exists(&h, &p.note_e_commitment));
-    assert!(note_lock_exists(&h, &p.note_f_commitment));
+    assert!(note_lock_exists(&h, &p.note_e_use_tag));
+    assert!(note_lock_exists(&h, &p.note_f_use_tag));
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +388,12 @@ fn settle_rejects_relock_expiry_beyond_ttl_cap() {
     );
     p.note_e_commitment = fr_safe(0xE5, 0x78);
     p.note_f_commitment = fr_safe(0xF5, 0x78);
+    // Distinct relock tags. Leaving both at [0;32] makes the two relock PDAs
+    // collide on one address, which surfaces as `NoteAlreadyLocked` on the
+    // second create — the same dedup that is CORRECT for an exact fill (where
+    // neither side relocks) and wrong here.
+    p.note_e_use_tag = fr_safe(0xE6, 0x78);
+    p.note_f_use_tag = fr_safe(0xF6, 0x78);
     p.note_fee_base_commitment = fr_safe(0xFB, 0x78);
     p.note_fee_quote_commitment = fr_safe(0xFC, 0x78);
     p.buyer_relock_order_id = [0x33u8; 16];
@@ -406,15 +419,15 @@ fn settle_rejects_relock_expiry_beyond_ttl_cap() {
     // Atomic revert: the input note must stay unconsumed and NEITHER re-lock
     // (over-cap buyer, within-cap seller) may have been created.
     assert!(
-        !consumed_note_exists(&h, &p.note_a_commitment),
+        !consumed_note_exists(&h, &p.note_a_use_tag),
         "rejected settle must not consume its input note",
     );
     assert!(
-        !note_lock_exists(&h, &p.note_e_commitment),
+        !note_lock_exists(&h, &p.note_e_use_tag),
         "rejected settle must not create the over-cap buyer re-lock",
     );
     assert!(
-        !note_lock_exists(&h, &p.note_f_commitment),
+        !note_lock_exists(&h, &p.note_f_use_tag),
         "rejected settle must roll back the within-cap seller re-lock too (atomicity)",
     );
 }
@@ -593,7 +606,12 @@ fn test_relocked_note_consumable_across_second_batch() {
     // ── Batch 0: buyer partially fills, mints + re-locks note_e ──
     let note_a0 = fr_safe(0xA0, 0x11);
     let note_b0 = fr_safe(0xB0, 0x11);
-    let note_e = fr_safe(0xE5, 0x11); // the buyer's continuation note
+    let note_e = fr_safe(0xE5, 0x11); // the buyer's continuation note (leaf value)
+                                      // Its PUBLIC handle. Distinct from the commitment on purpose: the relock
+                                      // PDA is seeded with the TAG, and passing the commitment instead would put
+                                      // every relock at the wrong address — the note would then be unspendable,
+                                      // because batch 1 below looks for NoteLock[tag].
+    let note_e_tag = fr_safe(0xE6, 0x11);
     let oid_a0 = [0x10u8; 16];
     let oid_b0 = [0x11u8; 16];
     let oid_relock = [0x30u8; 16]; // the order note_e continues under
@@ -613,6 +631,7 @@ fn test_relocked_note_consumable_across_second_batch() {
         5_000,
     );
     p0.note_e_commitment = note_e;
+    p0.note_e_use_tag = note_e_tag;
     p0.buyer_relock_order_id = oid_relock;
     // Within `MAX_LOCK_TTL_SLOTS` of genesis slot 0 — the re-lock path now caps
     // this (C-02). The input-lock + marker seeds above stay far-future (they're
@@ -626,9 +645,17 @@ fn test_relocked_note_consumable_across_second_batch() {
 
     // THE FIX: the re-lock must exist AND carry the note's real mint. Pre-fix
     // this was Pubkey::default() and the assertion (and batch 1) would fail.
-    assert!(note_lock_exists(&h, &note_e), "note_e re-lock must exist");
+    assert!(
+        note_lock_exists(&h, &note_e_tag),
+        "note_e re-lock must exist AT THE TAG ADDRESS"
+    );
+    assert!(
+        !note_lock_exists(&h, &note_e),
+        "the relock must NOT be created at the commitment address — that is the \
+         silent wrong-address bug the tag migration has to avoid"
+    );
     assert_eq!(
-        read_note_lock_mint(&h, &note_e),
+        read_note_lock_mint(&h, &note_e_tag),
         h.test_mint,
         "re-lock must populate token_mint — a zero mint here breaks the next \
          batch's leaf↔marker binding",
@@ -645,7 +672,7 @@ fn test_relocked_note_consumable_across_second_batch() {
     // re-lock's order_id (oid_relock) — the continuation keeps the same order.
     let p1 = MatchResultPayload::exact_fill(
         [0xE1u8; 16],
-        note_e,
+        note_e_tag,
         note_b1,
         fr_safe(0xC1, 0x22),
         fr_safe(0xD1, 0x22),
@@ -671,12 +698,14 @@ fn test_relocked_note_consumable_across_second_batch() {
     );
 
     // note_e consumed, its re-lock closed, the two output leaves appended.
+    // Both keyed on the TAG — the relock created NoteLock[tag] in batch 0, so
+    // batch 1 must consume and close that same address.
     assert!(
-        consumed_note_exists(&h, &note_e),
-        "note_e consumed in batch 1"
+        consumed_note_exists(&h, &note_e_tag),
+        "note_e consumed in batch 1 (at its tag)"
     );
     assert!(
-        !note_lock_exists(&h, &note_e),
+        !note_lock_exists(&h, &note_e_tag),
         "note_e re-lock closed on consume"
     );
     assert_eq!(
@@ -895,7 +924,7 @@ fn test_settle_signed_by_registered_key_succeeds_unregistered_fails() {
     h.svm
         .send_transaction(tx_ok)
         .expect("settle signed by a registered key must succeed");
-    assert!(consumed_note_exists(&h, &p_ok.note_a_commitment));
+    assert!(consumed_note_exists(&h, &p_ok.note_a_use_tag));
 
     // A settle signed by an UNREGISTERED key is rejected (`is_authorized_tee`
     // fails before any state mutation).
@@ -911,7 +940,7 @@ fn test_settle_signed_by_registered_key_succeeds_unregistered_fails() {
         "settle signed by an unregistered key must be rejected",
     );
     assert!(
-        !consumed_note_exists(&h, &p_bad.note_a_commitment),
+        !consumed_note_exists(&h, &p_bad.note_a_use_tag),
         "the rejected settle must not have consumed its input note",
     );
 }

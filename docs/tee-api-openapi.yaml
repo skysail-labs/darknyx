@@ -518,7 +518,8 @@ components:
             Groth16 proof that gates `lock_note`. The TEE cannot generate
             it (needs the spending key + merkle witness), so the client
             supplies it. A settlement-enabled venue verifies it at intake
-            against `(merkle_root, note_commitment, collateral mint)`;
+            against `(merkle_root, note_use_tag, collateral mint)`, deriving
+            the tag from the supplied commitment + private inner hash;
             on-chain `lock_note` verifies it again. Enqueue-only simulator /
             load-test deployments do not settle and may deliberately accept
             stub proofs.

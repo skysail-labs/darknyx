@@ -532,6 +532,19 @@ async fn prepare_order(
         ApiError::bad_opening(format!("note opening does not match note_commitment: {e}"))
     })?;
 
+    // The public consume handle, needed only to check the relayed VALID_INPUT
+    // proof against the value `lock_note` will use as its PDA seed. Derived
+    // AFTER `verify_commitment`, so the opening is already known
+    // self-consistent — a tag is only meaningful for a commitment that really
+    // is this opening's.
+    //
+    // Deliberately NOT carried on `PreparedOrder`: the settle assembler
+    // re-derives tags from each opening it resolves, and the `OpeningStore`
+    // stays commitment-keyed because it never leaves the enclave. Storing a
+    // second copy of a derived value is how the two drift.
+    let note_use_tag = darkpool_crypto::note_use_tag(&note_commitment, &note_inner_hash)
+        .map_err(|e| ApiError::bad_opening(format!("note-use tag not field-safe: {e}")))?;
+
     // 4d. Verify the RELAYED VALID_INPUT proof (audit 2026-07-25, S-02).
     //
     //     `verify_commitment` above only proves the opening is self-consistent
@@ -592,7 +605,7 @@ async fn prepare_order(
         crate::verify::verify_valid_input(
             &valid_input_proof,
             &lock_merkle_root,
-            &note_commitment,
+            &note_use_tag,
             &token_mint,
         )
         .map_err(|e| ApiError::invalid_input_proof(e.to_string()))?;

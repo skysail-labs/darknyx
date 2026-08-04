@@ -120,7 +120,7 @@ fn dummy_proof() -> Groth16ProofBytes {
 fn buyer_inputs() -> LockSideInputs {
     LockSideInputs {
         tree_id: 0,
-        note_commitment: [0xAA; 32],
+        note_use_tag: [0xAA; 32],
         order_id: [0xBB; 16],
         expiry_slot: 1_000_000,
         token_mint: [0xCC; 32],
@@ -133,7 +133,7 @@ fn buyer_inputs() -> LockSideInputs {
 fn seller_inputs() -> LockSideInputs {
     LockSideInputs {
         tree_id: 0,
-        note_commitment: [0x55; 32],
+        note_use_tag: [0x55; 32],
         order_id: [0x66; 16],
         expiry_slot: 1_000_000,
         token_mint: [0x77; 32],

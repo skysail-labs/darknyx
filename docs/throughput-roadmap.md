@@ -243,7 +243,7 @@ away. **No on-chain program or circuit change** — the vault is indifferent to 
 - **Tx C (per-batch ALT create/extend) — DELETED.** No ALT ⇒ nothing to create or warm.
 - **Tx D (`tee_forced_settle_batched`) — v0+2-ALT → v1+inline.** The ~13–15 accounts (`tee_authority`,
   `vault_config`, `merkle_tree`, `note_lock_a/b/e/f`, `consumed_a/b`, `batch_validity_marker`,
-  `system_program`, `instructions_sysvar`) go inline: ~1109 B (ALT-compressed) → ~1.4–1.6 KB inline,
+  `system_program`, `instructions_sysvar`) go inline: ~1173 B (ALT-compressed) → ~1.4–1.6 KB inline,
   comfortably under 4096 (worst-case 6-leaf + 2-relock included, so no "most cases" risk for us). The CU
   limit moves from a prepended `ComputeBudget` ix to the v1 header mask.
 - **Tx A (lock ×2), Tx B (verify), Tx E (marker close) — unchanged.** Already ALT-free and <1232;

@@ -5,11 +5,12 @@
 //!   target/debug/examples/derive-keys trading  <seed_hex> <offset>
 //!   target/debug/examples/derive-keys root     <seed_hex>
 //!   target/debug/examples/derive-keys blinding <seed_hex> <counter>
+//!   target/debug/examples/derive-keys note-secret <seed_hex> <recovery_nonce_hex>
 
 use darkpool_crypto::field::fr_to_be_bytes;
 use darkpool_crypto::keys::{
-    derive_blinding_factor, derive_master_viewing_key, derive_root_key, derive_spending_key,
-    derive_trading_key_at_offset, MasterSeed, MASTER_SEED_BYTES,
+    derive_blinding_factor, derive_master_viewing_key, derive_note_secret, derive_root_key,
+    derive_spending_key, derive_trading_key_at_offset, MasterSeed, MASTER_SEED_BYTES,
 };
 
 fn parse_seed(h: &str) -> MasterSeed {
@@ -40,6 +41,13 @@ fn main() {
         "blinding" => {
             let ctr: u64 = args[3].parse().expect("counter u64");
             hex::encode(fr_to_be_bytes(&derive_blinding_factor(&seed, ctr)))
+        }
+        "note-secret" => {
+            let bytes = hex::decode(&args[3]).expect("recovery nonce hex parse");
+            let recovery_nonce: [u8; 32] = bytes
+                .try_into()
+                .expect("recovery nonce must be exactly 32 bytes");
+            hex::encode(fr_to_be_bytes(&derive_note_secret(&seed, &recovery_nonce)))
         }
         other => {
             eprintln!("unknown command: {other}");

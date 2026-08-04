@@ -36,16 +36,16 @@ use solana_message::Message;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
-/// `release_lock(note_commitment)` — any signer may call it after expiry and
+/// `release_lock(note_use_tag)` — any signer may call it after expiry and
 /// receives the PDA's rent.
 fn build_release_lock_ix(
     h: &Harness,
-    note_commitment: &[u8; 32],
+    note_use_tag: &[u8; 32],
     rent_receiver: &Pubkey,
 ) -> Instruction {
-    let (note_lock, _) = note_lock_pda(&h.vault_id, note_commitment);
+    let (note_lock, _) = note_lock_pda(&h.vault_id, note_use_tag);
     let mut data = anchor_disc("release_lock").to_vec();
-    data.extend_from_slice(note_commitment);
+    data.extend_from_slice(note_use_tag);
     Instruction {
         program_id: h.vault_id,
         accounts: vec![
@@ -79,7 +79,7 @@ fn withdraw_is_rejected_while_the_lock_is_live() {
     let (note, depositor, dest) = deposit_one(&mut h);
 
     let expiry = 5_000u64;
-    seed_note_lock(&mut h, &note.commitment, &[0x77u8; 16], expiry, 0);
+    seed_note_lock(&mut h, &note.use_tag, &[0x77u8; 16], expiry, 0);
 
     h.svm.warp_to_slot(expiry - 1);
     let tx = build_withdraw_tx(&h, &note, &depositor, &dest);
@@ -96,7 +96,7 @@ fn withdraw_is_rejected_while_the_lock_is_live() {
         "expected the live-lock guard to reject, got: {log}"
     );
     assert!(
-        !consumed_note_exists(&h, &note.commitment),
+        !consumed_note_exists(&h, &note.use_tag),
         "a rejected withdraw must not have consumed the note"
     );
 }
@@ -111,7 +111,7 @@ fn withdraw_succeeds_at_the_expiry_boundary_without_a_release() {
     let (note, depositor, dest) = deposit_one(&mut h);
 
     let expiry = 5_000u64;
-    seed_note_lock(&mut h, &note.commitment, &[0x77u8; 16], expiry, 0);
+    seed_note_lock(&mut h, &note.use_tag, &[0x77u8; 16], expiry, 0);
 
     // Exactly AT expiry — the boundary, mirroring release_lock's `>=`.
     h.svm.warp_to_slot(expiry);
@@ -122,7 +122,7 @@ fn withdraw_succeeds_at_the_expiry_boundary_without_a_release() {
         .expect("an expired lock must not block withdraw");
 
     assert!(
-        consumed_note_exists(&h, &note.commitment),
+        consumed_note_exists(&h, &note.use_tag),
         "a successful withdraw must init the commitment-keyed consume guard"
     );
 }
@@ -136,8 +136,8 @@ fn release_lock_refunds_rent_and_unblocks_withdraw() {
     let (note, depositor, dest) = deposit_one(&mut h);
 
     let expiry = 5_000u64;
-    seed_note_lock(&mut h, &note.commitment, &[0x77u8; 16], expiry, 0);
-    let (lock_pda, _) = note_lock_pda(&h.vault_id, &note.commitment);
+    seed_note_lock(&mut h, &note.use_tag, &[0x77u8; 16], expiry, 0);
+    let (lock_pda, _) = note_lock_pda(&h.vault_id, &note.use_tag);
     let lock_rent = h
         .svm
         .get_account(&lock_pda)
@@ -147,7 +147,7 @@ fn release_lock_refunds_rent_and_unblocks_withdraw() {
 
     // Before expiry the release is refused — otherwise anyone could cancel a
     // live settle reservation out from under the matcher.
-    let early_ix = build_release_lock_ix(&h, &note.commitment, &depositor.pubkey());
+    let early_ix = build_release_lock_ix(&h, &note.use_tag, &depositor.pubkey());
     let early_tx = Transaction::new(
         &[&depositor],
         Message::new(&[early_ix], Some(&depositor.pubkey())),
@@ -171,7 +171,7 @@ fn release_lock_refunds_rent_and_unblocks_withdraw() {
     h.svm.warp_to_slot(expiry);
     h.svm.expire_blockhash();
     let before = h.svm.get_account(&depositor.pubkey()).unwrap().lamports;
-    let ix = build_release_lock_ix(&h, &note.commitment, &depositor.pubkey());
+    let ix = build_release_lock_ix(&h, &note.use_tag, &depositor.pubkey());
     let tx = Transaction::new(
         &[&depositor],
         Message::new(&[ix], Some(&depositor.pubkey())),
@@ -205,5 +205,5 @@ fn release_lock_refunds_rent_and_unblocks_withdraw() {
     h.svm
         .send_transaction(wtx)
         .expect("withdraw must succeed after release_lock");
-    assert!(consumed_note_exists(&h, &note.commitment));
+    assert!(consumed_note_exists(&h, &note.use_tag));
 }

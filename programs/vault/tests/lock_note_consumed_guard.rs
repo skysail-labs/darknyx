@@ -1,11 +1,11 @@
-//! U-02 — `lock_note` must reject a commitment that has already been consumed
-//! (settled or withdrawn). The commitment-keyed `ConsumedNoteEntry` is the
+//! U-02 — `lock_note` must reject a note-use tag that has already been consumed
+//! (settled or withdrawn). The tag-keyed `ConsumedNoteEntry` is the
 //! shared consume-once guard; a note whose entry exists but whose Merkle leaf
 //! survives could otherwise be re-locked by an authorized TEE holding a stale
 //! VALID_INPUT proof (rent waste + stuck state).
 //!
 //! The guard fires BEFORE Groth16 verification, so this differential test needs
-//! no real proof: with an identical dummy proof, a consumed commitment is
+//! no real proof: with an identical dummy proof, a consumed tag is
 //! rejected `NoteAlreadyConsumed` while an unconsumed one gets PAST the guard
 //! and fails later at `InvalidProof` — proving the guard keys exactly on
 //! consumed-ness.
@@ -19,7 +19,7 @@ use solana_message::Message;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
-/// Build a `lock_note` ix for `note_commitment`, signed by the authorized TEE
+/// Build a `lock_note` ix for `note_use_tag`, signed by the authorized TEE
 /// key, with a syntactically-sized but invalid dummy proof and a recent root
 /// (so the handler reaches the U-02 guard / proof verification rather than
 /// tripping the auth or root-recency check first).

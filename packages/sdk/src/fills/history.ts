@@ -35,8 +35,14 @@ export interface IndexerFill {
   /** Finalized Solana transaction slot. This, not `batchSlot`, is the
    * incremental history cursor. */
   slot: number;
-  /** Exact consumed input and always-present trade output commitments. */
-  inputNoteCommitment: string;
+  /**
+   * The consumed input's note-use TAG — `Poseidon3(29, commitment, inner)`,
+   * not the commitment. It does not appear as a Merkle leaf and cannot be
+   * matched against a note store by string equality; a holder derives the tag
+   * for each note it owns and matches on that (see `recover.ts`).
+   */
+  inputNoteUseTag: string;
+  /** The trade output's commitment — this one IS a leaf. */
   tradeNoteCommitment: string;
   /** `true` when this side received a change note (partial fill). */
   isPartialFill: boolean;

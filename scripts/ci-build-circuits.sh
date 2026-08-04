@@ -46,15 +46,15 @@ build_wasm valid_input
 # In-pool note merge (K=2/4) — wasm only; committed circuit_final.zkey.
 build_wasm valid_merge_k2
 build_wasm valid_merge_k4
-# v3.1 valid_create + valid_price were removed in Phase 1c-hard
-# (subsumed by the v3.5 batched-validity circuit). The N=16 batched
-# circuit isn't wired into this CI step yet — it needs pot18, which
-# would balloon the runner's PTAU cache by ~288 MB. The on-chain
-# vault still embeds vk_match_batch_n16.rs (committed VK consts)
-# so on-chain verification works regardless; the SDK match-batch
-# prover tests run against the committed `circuits/build/match_batch_n16/`
-# artifacts that are gitignore-exempted under the existing
-# `!**/circuit_final.zkey` rule.
+# Match-batch compilation itself needs no PTAU: CI compiles fresh wasm/r1cs and
+# pairs them with the committed zkeys just like the client circuits above. This
+# is security-critical after a match-circuit change; excluding these targets
+# lets malformed or stale source pass while prover tests silently skip because
+# no wasm exists on a clean runner. The local ceremony still uses pot16/pot18/
+# pot19 for N=2/4/16 respectively in `build-circuits.sh`.
+build_wasm match_batch_n2
+build_wasm match_batch_n4
+build_wasm match_batch_n16
 
 echo ""
 echo "CI circuit build complete. Wasm compiled fresh; zkeys from committed artifacts."

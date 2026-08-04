@@ -11,7 +11,7 @@
 //!   - 7 instruction-data args, Anchor-style (8-byte discriminator
 //!     + Borsh-encoded args in declaration order):
 //!       1. `tree_id: u8` (post-sharding: selects the `merkle_tree` account)
-//!       2. `note_commitment: [u8; 32]`
+//!       2. `note_use_tag: [u8; 32]`
 //!       3. `order_id: [u8; 16]`
 //!       4. `expiry_slot: u64`
 //!       5. `token_mint: Pubkey` (32 bytes)
@@ -91,7 +91,7 @@ pub struct LockNoteArgs {
     /// serializes in declaration order) — selects the `merkle_tree` account
     /// whose recent-roots ring the handler checks `merkle_root` against.
     pub tree_id: u8,
-    pub note_commitment: [u8; 32],
+    pub note_use_tag: [u8; 32],
     pub order_id: [u8; 16],
     pub expiry_slot: u64,
     /// `token_mint` is the 32-byte Solana mint pubkey, NOT the
@@ -121,16 +121,16 @@ impl LockNoteArgs {
 ///   - `[2]` `merkle_tree`: read-only PDA, seeds=[b"merkle_tree",
 ///     &[tree_id]] — the shard whose recent-roots ring is checked.
 ///   - `[3]` `note_lock`: writable PDA (init), seeds=[b"note_lock",
-///     note_commitment].
+///     note_use_tag].
 ///   - `[4]` `consumed_note`: read-only PDA (U-02 consume-once guard — must be
-///     ABSENT), seeds=[b"consumed_note", note_commitment].
+///     ABSENT), seeds=[b"consumed_note", note_use_tag].
 ///   - `[5]` `system_program`: read-only.
 pub fn build_lock_note_ix(tee_authority: &Address, args: LockNoteArgs) -> Instruction {
     let program_id = vault_program_id();
     let (vault_cfg_pda, _) = vault_config_pda();
     let (merkle_tree, _) = merkle_tree_pda(args.tree_id);
-    let (note_lock_pda_addr, _) = note_lock_pda(&args.note_commitment);
-    let (consumed_note_pda_addr, _) = consumed_note_pda(&args.note_commitment);
+    let (note_lock_pda_addr, _) = note_lock_pda(&args.note_use_tag);
+    let (consumed_note_pda_addr, _) = consumed_note_pda(&args.note_use_tag);
 
     let accounts = vec![
         AccountMeta::new(*tee_authority, true), // signer + writable
@@ -160,7 +160,7 @@ mod tests {
     fn dummy_args() -> LockNoteArgs {
         LockNoteArgs {
             tree_id: 0,
-            note_commitment: [0xAA; 32],
+            note_use_tag: [0xAA; 32],
             order_id: [0xBB; 16],
             expiry_slot: 1_000_000,
             token_mint: [0xCC; 32],
@@ -222,7 +222,7 @@ mod tests {
         // tree_id (u8) — first arg
         assert_eq!(body[off], 0);
         off += 1;
-        // note_commitment
+        // note_use_tag
         assert_eq!(&body[off..off + 32], &[0xAA; 32]);
         off += 32;
         // order_id
@@ -288,14 +288,14 @@ mod tests {
     }
 
     #[test]
-    fn note_lock_pda_varies_with_note_commitment() {
+    fn note_lock_pda_varies_with_note_use_tag() {
         // Different note → different note_lock PDA. The on-chain
         // ix init constraint relies on this; a builder bug that
         // hashed a constant seed would collide at runtime with
         // a confusing `AccountAlreadyInitialized` error.
         let tee = dummy_tee_authority();
         let mut args2 = dummy_args();
-        args2.note_commitment = [0x11; 32];
+        args2.note_use_tag = [0x11; 32];
         let ix1 = build_lock_note_ix(&tee, dummy_args());
         let ix2 = build_lock_note_ix(&tee, args2);
         // note_lock is at [3] post-sharding (merkle_tree inserted at [2]).

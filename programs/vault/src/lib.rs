@@ -121,7 +121,7 @@ pub mod vault {
     pub fn withdraw(
         ctx: Context<Withdraw>,
         tree_id: u8,
-        note_commitment: [u8; 32],
+        note_use_tag: [u8; 32],
         nullifier: [u8; 32],
         merkle_root: [u8; 32],
         amount: u64,
@@ -130,7 +130,7 @@ pub mod vault {
         withdraw::withdraw_handler(
             ctx,
             tree_id,
-            note_commitment,
+            note_use_tag,
             nullifier,
             merkle_root,
             amount,
@@ -140,13 +140,13 @@ pub mod vault {
 
     /// Merge K input notes (K=2 or 4) into ONE output note of their sum, using a
     /// VALID_MERGE proof. In-pool consolidation — no external transfer. The K
-    /// non-zero input commitments' consume/lock PDAs are passed as
+    /// non-zero input use tags' consume/lock PDAs are passed as
     /// remaining_accounts.
     #[allow(clippy::too_many_arguments)]
     pub fn merge<'info>(
         ctx: Context<'info, Merge<'info>>,
         tree_id: u8,
-        input_commitments: Vec<[u8; 32]>,
+        input_use_tags: Vec<[u8; 32]>,
         output_commitment: [u8; 32],
         token_mint: Pubkey,
         merkle_root: [u8; 32],
@@ -156,7 +156,7 @@ pub mod vault {
         merge::merge_handler(
             ctx,
             tree_id,
-            input_commitments,
+            input_use_tags,
             output_commitment,
             token_mint,
             merkle_root,
@@ -172,7 +172,7 @@ pub mod vault {
     pub fn lock_note(
         ctx: Context<LockNote>,
         tree_id: u8,
-        note_commitment: [u8; 32],
+        note_use_tag: [u8; 32],
         order_id: [u8; 16],
         expiry_slot: u64,
         token_mint: Pubkey,
@@ -182,7 +182,7 @@ pub mod vault {
         lock_note::lock_note_handler(
             ctx,
             tree_id,
-            note_commitment,
+            note_use_tag,
             order_id,
             expiry_slot,
             token_mint,
@@ -192,8 +192,8 @@ pub mod vault {
     }
 
     /// Release an expired note lock.
-    pub fn release_lock(ctx: Context<ReleaseLock>, note_commitment: [u8; 32]) -> Result<()> {
-        release_lock::release_lock_handler(ctx, note_commitment)
+    pub fn release_lock(ctx: Context<ReleaseLock>, note_use_tag: [u8; 32]) -> Result<()> {
+        release_lock::release_lock_handler(ctx, note_use_tag)
     }
 
     /// Post-deployment governance setter for the protocol-fee fields of

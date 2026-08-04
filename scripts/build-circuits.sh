@@ -20,9 +20,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/circuits/build"
 PTAU16="$ROOT/scripts/ptau/powersOfTau28_hez_final_16.ptau"
 PTAU18="$ROOT/scripts/ptau/powersOfTau28_hez_final_18.ptau"
+PTAU19="$ROOT/scripts/ptau/powersOfTau28_hez_final_19.ptau"
 SNARKJS="$ROOT/node_modules/.bin/snarkjs"
 
-if [ ! -f "$PTAU16" ] || [ ! -f "$PTAU18" ]; then
+if [ ! -f "$PTAU16" ] || [ ! -f "$PTAU18" ] || [ ! -f "$PTAU19" ]; then
     echo "[build] ptau not found; running download-ptau.sh"
     bash "$ROOT/scripts/download-ptau.sh"
 fi
@@ -102,9 +103,20 @@ build_circuit valid_merge_k2
 build_circuit valid_merge_k4
 # VALID_MATCH_BATCH v3. N=2/4 are host-test circuits and do not have on-chain
 # Rust verifier modules. N=16 is the deployed verifier and requires pot18.
+#
+# CEREMONY SIZES MOVED WITH THE NOTE-USE TAGS. Deriving four Poseidon3 tags
+# per slot plus the relock digest grew the match circuit ~22%:
+#
+#   N=4   58,993 -> 71,837    (pot16 ceiling 65,536)  => pot16 -> pot18
+#   N=16 234,025 -> 285,401   (pot18 ceiling 262,144) => pot18 -> pot19
+#
+# snarkjs needs a domain of next_power_of_2(total constraints), so N=16 at
+# 285,401 needs 2^19. Note the baseline was already at 234,025 against a
+# 262,144 ceiling — 11% headroom — which was nowhere documented; any circuit
+# addition of this size would have hit it.
 build_circuit match_batch_n2 "$PTAU16" no
-build_circuit match_batch_n4 "$PTAU16" no
-build_circuit match_batch_n16 "$PTAU18" yes
+build_circuit match_batch_n4 "$PTAU18" no
+build_circuit match_batch_n16 "$PTAU19" yes
 
 echo ""
 echo "All circuits built. Artifacts in $BUILD_DIR/"
