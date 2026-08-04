@@ -139,10 +139,6 @@ export function deriveRootKey(seed: Uint8Array): Ed25519RawKeypair {
 }
 
 /**
- * Derive the blinding factor for the note at a given Merkle insertion counter.
- * Matches `darkpool_crypto::keys::derive_blinding_factor`.
- */
-/**
  * Derive the per-note secret that enters a deposit's inner hash.
  *
  * Keyed on the deposit's PUBLIC `recoveryNonce` rather than a counter: cold
@@ -166,6 +162,10 @@ export function deriveNoteSecret(
   return reduceMod(okm);
 }
 
+/**
+ * Derive the blinding factor for the note at a given Merkle insertion counter.
+ * Matches `darkpool_crypto::keys::derive_blinding_factor`.
+ */
 export function deriveBlindingFactor(
   seed: Uint8Array,
   counter: bigint,

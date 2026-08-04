@@ -52,14 +52,39 @@ export class FillsDb {
   constructor(path: string) {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
+
+    // v11 changes the consumed-input column's MEANING from a Merkle-leaf
+    // commitment to an unlinkable use tag. SQLite cannot drop the retired
+    // `input_note_commitment TEXT NOT NULL` column in place; simply adding the
+    // tag column leaves that old NOT NULL constraint active, so every new
+    // insert (which correctly has no input commitment) fails.
+    //
+    // This database is a rebuildable locator cache, and no honest migration can
+    // derive a tag from a legacy commitment without the private inner hash.
+    // Drop only the incompatible fills table and recreate it below. Preserve
+    // the cursor: legacy rows are intentionally invalidated by the clean v11
+    // cutover, while ingestion continues from the last scanned signature.
+    const existing = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fills'")
+      .get();
+    if (existing) {
+      const columns = this.db.prepare("PRAGMA table_info(fills)").all() as Array<{
+        name: string;
+      }>;
+      const names = new Set(columns.map((column) => column.name));
+      // Drop on the retired column itself, not merely on absence of the new
+      // one. An intermediate v11 build added `input_note_use_tag` while leaving
+      // the old NOT NULL column behind; a later boot must repair that halfway
+      // schema too.
+      if (names.has("input_note_commitment")) {
+        this.db.exec("DROP TABLE fills; DROP INDEX IF EXISTS idx_fills_order;");
+      }
+    }
+
     this.db.exec(SCHEMA);
     // Rebuildable locator DBs created before recovery v3 may still exist. Add
     // the new columns without pretending legacy rows are recoverable.
     for (const statement of [
-      // v11: the input column changed MEANING, not just name — it now holds a
-      // tag. A legacy row's commitment would never match a tag lookup, and the
-      // DB is a rebuildable locator, so old rows are simply left behind under
-      // the retired column rather than migrated.
       "ALTER TABLE fills ADD COLUMN input_note_use_tag TEXT",
       "ALTER TABLE fills ADD COLUMN trade_note_commitment TEXT",
       "ALTER TABLE fills ADD COLUMN output_enc TEXT",

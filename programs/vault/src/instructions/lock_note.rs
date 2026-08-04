@@ -31,12 +31,12 @@ pub struct LockNote<'info> {
     /// only a registered TEE key can lock notes.
     ///
     /// NOTE: even with the registered key gate, the TEE could previously
-    /// "lock" any 32-byte commitment whether or not it actually existed in
+    /// "lock" any 32-byte handle whether or not it actually existed in
     /// the Merkle tree, with any amount it wanted (see §4.1 of the v2
     /// migration brief). The VALID_INPUT proof closes that hole — the TEE
     /// now must relay a user-generated ZK proof attesting that the
-    /// commitment exists in the tree with the declared mint and a private,
-    /// positive, range-constrained amount.
+    /// tag is derived from a commitment that exists in the tree with the
+    /// declared mint and a private, positive, range-constrained amount.
     #[account(mut)]
     pub tee_authority: Signer<'info>,
 
@@ -68,7 +68,7 @@ pub struct LockNote<'info> {
     )]
     pub note_lock: AccountLoader<'info, NoteLock>,
 
-    /// U-02 consume-once guard. The commitment-keyed `ConsumedNoteEntry` for
+    /// U-02 consume-once guard. The tag-keyed `ConsumedNoteEntry` for
     /// this note MUST be ABSENT: a note already settled
     /// (`tee_forced_settle_batched::consumed_a/b`) or withdrawn
     /// (`withdraw::consumed_note`) has this PDA initialized, and a retained
@@ -134,7 +134,7 @@ pub fn lock_note_handler(
         VaultError::InvalidExpirySlot
     );
     // VALID_INPUT public inputs, in the order declared by the circom
-    // `component main { public [merkleRoot, noteCommitment, tokenMint] }`.
+    // `component main { public [merkleRoot, noteUseTag, tokenMint] }`.
     // `tokenMint[2]` expands as two entries (`lo`, `hi`) — four total. Amount
     // remains a private positive u64 witness constrained inside the proof.
     let mint_bytes = token_mint.to_bytes();

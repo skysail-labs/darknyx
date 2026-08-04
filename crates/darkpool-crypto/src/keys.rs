@@ -360,4 +360,16 @@ mod tests {
             assert!(set.insert(r), "collision at counter {i}");
         }
     }
+
+    #[test]
+    fn note_secret_known_answer_is_frozen_and_nonce_bound() {
+        let s = fixed_seed();
+        let nonce = [0xa5; 32];
+        let actual = derive_note_secret(&s, &nonce);
+        assert_eq!(
+            hex::encode(crate::field::fr_to_be_bytes(&actual)),
+            "19e0beec56a80bee42960ad7779fc50cefacaeff1c31e5c26ccf76bafcc9c51c"
+        );
+        assert_ne!(actual, derive_note_secret(&s, &[0xa4; 32]));
+    }
 }

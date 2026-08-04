@@ -58,15 +58,16 @@ pub struct Withdraw<'info> {
     )]
     pub destination_token_account: Account<'info, TokenAccount>,
 
-    /// Consume-once guard. `init` makes the commitment-keyed `ConsumedNoteEntry`
+    /// Consume-once guard. `init` makes the tag-keyed `ConsumedNoteEntry`
     /// the single trustless double-spend guard SHARED with TEE settle
     /// (`tee_forced_settle_batched::consumed_a/b`): a note withdrawn here can no
     /// longer be consumed by a later settle (that settle's `consumed_a` init
     /// collides on this PDA), and a settle-consumed note can no longer be
-    /// withdrawn (this init collides). Keying on the note COMMITMENT — which is
-    /// public AND circuit-bound — closes the gap that keying on the nullifier
-    /// left open: the settle's nullifier is TEE-supplied + unconstrained, so it
-    /// could never be relied on to block a cross-path double-spend.
+    /// withdrawn (this init collides). The tag is circuit-bound to the private
+    /// opening and its Merkle-leaf commitment, while not republishing that leaf.
+    /// This closes the former nullifier-keyed cross-path gap: the settle's
+    /// nullifier was TEE-supplied + unconstrained and could not serve as a
+    /// shared consume-once handle.
     #[account(
         init,
         payer = payer,
@@ -112,7 +113,7 @@ pub fn withdraw_handler(
 
     // ----- Layer 3: consumed-notes guard -----
     // Enforced by the `consumed_note` `init` constraint (a second withdraw OR a
-    // prior settle-consume of this commitment makes the init fail). The entry is
+    // prior settle-consume of this tag makes the init fail). The entry is
     // written near the bottom of the handler, alongside the nullifier.
 
     // ----- Layer 1: note-lock guard -----
@@ -194,7 +195,7 @@ pub fn withdraw_handler(
         VaultError::InsufficientOutstanding
     );
 
-    // ----- Mark the note consumed (commitment-keyed) -----
+    // ----- Mark the note consumed (tag-keyed) -----
     //
     // PF-04: this is now the ONLY guard withdraw allocates. The second,
     // nullifier-keyed guard was removed — it had zero readers anywhere (no

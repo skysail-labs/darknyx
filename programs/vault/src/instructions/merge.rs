@@ -8,12 +8,12 @@
 //! Conservation: K notes consumed + 1 minted, same mint, same total ⇒ the
 //! per-mint `OutstandingMint` counter is UNCHANGED (the pool owes the user the
 //! same total). Replay is guarded by the per-input `ConsumedNoteEntry` PDA
-//! (commitment-keyed) — created manually here (fails if it already exists), the
+//! (tag-keyed) — created manually here (fails if it already exists), the
 //! SAME consume-once guard `withdraw` + TEE settle use. This closes C-01 (audit):
 //! merge previously keyed a separate nullifier-based guard, disjoint from
-//! settle's commitment-keyed `ConsumedNoteEntry`, so the same note could be
+//! settle's old commitment-keyed `ConsumedNoteEntry`, so the same note could be
 //! consumed once by merge and once by settle (double-spend). Dummy padding
-//! slots emit a public input-commitment of 0 (the circuit binds them inactive),
+//! slots emit a public input use tag of 0 (the circuit binds them inactive),
 //! so they create no PDA and can't smuggle a spend.
 
 use crate::errors::VaultError;
@@ -55,7 +55,7 @@ pub struct Merge<'info> {
 
     pub system_program: Program<'info, System>,
     // `remaining_accounts` contains two same-length runs, each in active
-    // input-commitment order: first the writable, uninitialised
+    // input-use-tag order: first the writable, uninitialised
     // ConsumedNoteEntry PDAs; then the read-only NoteLock PDAs, which may be
     // absent OR present-but-expired — only a LIVE lock blocks the merge, as
     // decided by `note_lock_is_live` (S-03). Dummy zero tags contribute
@@ -132,8 +132,8 @@ pub fn merge_handler<'info>(
 
     // ----- Verify the VALID_MERGE proof (VK chosen by K) -----
     // Public signals (snarkjs order: outputs first, then public inputs):
-    //   [outputCommitment, inputCommitments[0..K-1], merkleRoot, mint_lo, mint_hi]
-    // (C-01: the input commitments are now PUBLIC outputs, right after
+    //   [outputCommitment, inputUseTags[0..K-1], merkleRoot, mint_lo, mint_hi]
+    // (C-01: the input tags are PUBLIC outputs, right after
     // outputCommitment, replacing the trailing nullifiers.)
     let [mint_lo, mint_hi] = pubkey_pair_be32(&token_mint.to_bytes());
     match k {

@@ -10,7 +10,7 @@
 //! A transaction signature can be unknown for reasons that have nothing to do
 //! with whether it landed: the RPC dropped it from its status cache, the node is
 //! behind, the send never left the enclave. `tee_forced_settle_batched` creates
-//! BOTH commitment-keyed consumed-note PDAs atomically, so their existence is
+//! BOTH tag-keyed consumed-note PDAs atomically, so their existence is
 //! durable, node-independent proof that the match settled. That is the same
 //! reasoning the in-process ambiguity path already uses
 //! (`worker::reconcile_consumed_pdas`); recovery applies it to a journal entry

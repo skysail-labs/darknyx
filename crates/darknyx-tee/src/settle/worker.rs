@@ -507,7 +507,7 @@ enum ConsumedPdaState {
 }
 
 /// Reconcile a Tx D independently from its RPC signature status. Tx D creates
-/// both commitment-keyed consumed-note PDAs atomically, so both vault-owned
+/// both tag-keyed consumed-note PDAs atomically, so both vault-owned
 /// accounts existing is durable proof that the match settled; neither means a
 /// redrive is still safe while the marker/locks are valid. Exactly one can only
 /// be an inconsistent RPC view or external consumption of one input and must
@@ -710,12 +710,12 @@ async fn run_batch_settle_inner(
         //
         // Rent reclamation only: S-03(C) made `withdraw`/`merge` honour the
         // expiry, so a stranded lock blocks nothing regardless of this.
-        // A closed channel is a per-BATCH condition, not a per-commitment one,
+        // A closed channel is a per-BATCH condition, not a per-tag one,
         // so the label breaks all the way out — otherwise a shut-down sweeper
         // logs the same warning once per match (up to N=16) every batch.
         'register: for m in inputs.matches.iter() {
-            for commitment in [m.payload.note_a_use_tag, m.payload.note_b_use_tag] {
-                if ctx.lock_sweep_tx.send(commitment).is_err() {
+            for tag in [m.payload.note_a_use_tag, m.payload.note_b_use_tag] {
+                if ctx.lock_sweep_tx.send(tag).is_err() {
                     tracing::warn!(
                         batch_id,
                         "lock sweeper channel closed; lock rent reclaim deferred to next boot"

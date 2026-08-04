@@ -319,13 +319,10 @@ jobs:
       # start and fail deep inside a proof test instead of here.
       #
       # The expected set is DERIVED FROM THE BUILD SCRIPT, not hardcoded here.
-      # `ci-build-circuits.sh` deliberately compiles only the client circuits —
-      # `match_batch_n2/n4/n16` need pot18 (~288 MB) and are excluded, so those
-      # directories legitimately carry the committed `circuit_final.zkey` and
-      # nothing else. An earlier revision demanded wasm+r1cs from EVERY directory
-      # and so asserted an invariant CI never satisfies: it could only ever fail,
-      # and did on the first real cache hit. Reading the same source of truth the
-      # build reads keeps the two from drifting again.
+      # `ci-build-circuits.sh` compiles every deployed/client and match-batch
+      # source to fresh wasm+r1cs while reusing committed zkeys; compilation
+      # itself needs no PTAU. Reading the same source of truth the build reads
+      # keeps this cache check from drifting again.
       - name: Verify restored artefacts are complete
         if: steps.cache-circuit-build.outputs.cache-hit == 'true'
         run: |
@@ -350,8 +347,8 @@ jobs:
               fi
             done
           done
-          # Every other directory must still carry its committed proving key —
-          # the SDK match-batch prover tests consume it directly.
+          # Any future directory not yet wired into the script must still carry
+          # its committed proving key.
           for d in circuits/build/*/; do
             name=$(basename "$d")
             skip=0

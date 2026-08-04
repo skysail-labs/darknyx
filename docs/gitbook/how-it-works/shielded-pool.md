@@ -9,10 +9,10 @@ description: "How balances are held as shielded notes, accumulated in Merkle-tre
 **TL;DR**
 
 Your balance on Darknyx is a set of **notes**, UTXO-style values committed on-chain
-as Poseidon hashes. Commitments live in Merkle-tree shards. Withdrawals use
-unlinkable nullifiers; TEE settlement and merges use commitment-keyed consumed
-records. Zero-knowledge proofs enforce valid state transitions without exposing
-shielded note openings.
+as Poseidon hashes. Commitments live in Merkle-tree shards. Every use publishes
+an unlinkable, circuit-derived note-use tag and all consumption paths share the
+same tag-keyed replay guard. Zero-knowledge proofs enforce valid state
+transitions without exposing shielded note openings.
 {% endhint %}
 
 ## Notes, not balances
@@ -53,26 +53,27 @@ commitments. You read roots and inclusion paths through the
 
 ## Replay guards prevent double-spends
 
-A commitment proves a note *exists*. A **nullifier** lets a private withdrawal
-prove that the same secret opening has not already been spent. It is computed so
-that:
+A commitment proves a note *exists*. A withdrawal proof also derives a
+**nullifier** from the spending key and private inner hash. The shared on-chain
+consume-once handle, however, is the note-use tag:
 
-- it is **unlinkable** to the note commitment (publishing it does not reveal which
-  note was spent), yet
-- it is **deterministic**: spending the same note twice produces the same
-  nullifier, and the second spend is rejected because the nullifier already
-  exists.
+- `note_use_tag = Hash(note_commitment, inner_hash)` is **unlinkable** to the
+  public leaf without the private inner hash, and
+- it is **deterministic**: every lock, settle, merge, or withdrawal of the same
+  note addresses the same `ConsumedNoteEntry`, so the second use collides.
 
 ```text
-spend note ──► publish nullifier(note)
+use note ──► publish note-use tag
                      │
-   try to spend it again ──► same nullifier already on-chain ──► rejected
+   try to use it again ──► same consumed-note PDA already exists ──► rejected
 ```
 
-Settlement payload v9 does not publish input nullifiers. Instead, lock and
-settlement instructions derive PDAs from the input commitments; a second attempt
-collides with the existing lock or `ConsumedNoteEntry`. Merge uses the same
-commitment-keyed consume guard and rejects every input with a live lock. Deposit
+Settlement payload v11 publishes neither input nullifiers nor input commitments.
+Instead, the zero-knowledge circuits derive unlinkable note-use tags from each
+commitment and its private inner hash; lock, settlement, withdrawal, and merge
+derive their PDAs from those tags. A second attempt collides with the existing
+lock or shared `ConsumedNoteEntry`, while an observer cannot string-match the
+handle to its Merkle leaf. Deposit
 also rejects a commitment that has already been appended, so repeating a
 deterministic deposit cannot move in a second amount that the same commitment
 could never spend. In every path, replay prevention is enforced on-chain rather
@@ -107,7 +108,7 @@ plaintext; a withdrawal necessarily reveals its transferred amount.
 An order is backed by a single note, so to trade more than any one note holds you
 first **merge** several notes of the same token into one. A merge is a
 zero-knowledge operation against the pool, like a spend: it consumes its input
-notes (creating commitment-keyed consume records) and appends one output note carrying their
+notes (creating tag-keyed consume records) and appends one output note carrying their
 combined value, proven so nothing is created or destroyed. The SDK exposes it as a
 single call, leaving you one larger spendable note to back a bigger order.
 
@@ -120,12 +121,12 @@ single call, leaving you one larger spendable note to back a bigger order.
                 │
  private match ► on-chain note lock created (PENDING SETTLEMENT)
                 │
- settle ──────► input commitment marked consumed; outputs appended:
+ settle ──────► input note-use tag marked consumed; outputs appended:
                   • your filled asset (a new note)
                   • a change note for any unfilled remainder
                   • fee notes
                 │
- withdraw ────► note nullified; tokens released to your wallet
+ withdraw ────► note-use tag consumed; tokens released to your wallet
 ```
 
 The resting reservation prevents one venue session from booking the same

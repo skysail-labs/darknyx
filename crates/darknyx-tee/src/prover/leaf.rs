@@ -74,12 +74,12 @@ pub enum LeafError {
 /// Compute one slot's leaf. Identical bytes as the circuit's
 /// `template MatchSlot()` output.
 ///
-/// Commitment-only (amount-privacy, P1b): `Poseidon11(DOMAIN_LEAF_V2,
-/// is_active, note_a..note_f, note_fee_base, note_fee_quote, batch_slot)`. The
-/// amounts/mints/price the old two-stage leaf hashed are bound transitively
-/// through the note commitments, so they no longer appear in the leaf (and can
-/// leave the settle payload). The two fee-note commitments are included so the
-/// every match's atomic on-chain append of them is proof-backed.
+/// Amount-private and input-unlinkable: `Poseidon12(DOMAIN_LEAF_V3, is_active,
+/// tag_a, tag_b, note_c..note_f, note_fee_base, note_fee_quote, batch_slot,
+/// relock_digest)`. Amounts/mints/price remain bound transitively through the
+/// privately witnessed commitments; consumed leaves are represented only by
+/// note-use tags. The fee-note commitments make each match's atomic append
+/// proof-backed, while the relock digest binds both change-note tags.
 pub fn compute_batch_leaf(slot: &MatchSlotWitness) -> Result<[u8; 32], LeafError> {
     // The consumed slots contribute their TAGS. The witness still carries the
     // commitments — the circuit needs them as private signals to bind amount,

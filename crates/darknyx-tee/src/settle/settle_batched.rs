@@ -14,12 +14,12 @@
 //! Args (after the 8-byte discriminator):
 //!   - `tree_id: u8`                  — which `merkle_tree` shard the
 //!     output notes append to (post-sharding; first arg)
-//!   - `payload: MatchResultPayload`  — 488-byte Borsh ([`super::payload`])
+//!   - `payload: MatchResultPayload`  — 552-byte Borsh ([`super::payload`])
 //!   - `match_index: u8`              — position in the batch (0..15)
 //!   - `merkle_proof: [[u8;32]; 4]`   — 128 contiguous bytes, the
 //!     depth-4 inclusion path (leaf-level sibling first)
 //!
-//! ix data total = 8 + 1 + 488 + 1 + 128 = 626 bytes.
+//! ix data total = 8 + 1 + 552 + 1 + 128 = 690 bytes.
 //!
 //! `merkle_root` is NOT in the ix data — it only derives the
 //! `batch_validity_marker` PDA address. The handler recomputes the
@@ -84,14 +84,18 @@ pub fn build_settle_batched_ix(
     let (lock_b, _) = note_lock_pda(&payload.note_b_use_tag);
     let (consumed_a, _) = consumed_note_pda(&payload.note_a_use_tag);
     let (consumed_b, _) = consumed_note_pda(&payload.note_b_use_tag);
-    let (lock_e, _) = note_lock_pda(&payload.note_e_commitment);
-    let (lock_f, _) = note_lock_pda(&payload.note_f_commitment);
+    // Change-note leaves stay commitments, but their re-lock PDAs are keyed by
+    // the circuit-bound use tags. Both fields are `[u8; 32]`, so accidentally
+    // using the commitment compiles and only fails on chain when the vault
+    // re-derives `[NoteLock::SEED, note_{e,f}_use_tag]`.
+    let (lock_e, _) = note_lock_pda(&payload.note_e_use_tag);
+    let (lock_f, _) = note_lock_pda(&payload.note_f_use_tag);
     let (marker, _) = batch_validity_marker_pda(merkle_root);
 
     // Account order MUST match TeeForcedSettleBatched<'info>. Post-sharding:
     // vault_config is READ-ONLY (key/owner/zsr source) and the writable tree
     // state moved to `merkle_tree` (slot 2). The two per-match nullifier_entry
-    // accounts were REMOVED (the commitment-keyed consumed_a/b are now the sole
+    // accounts were REMOVED (the tag-keyed consumed_a/b are now the sole
     // consume-once guard — see the vault handler). The vestigial nullifier
     // fields left the v9 payload entirely.
     let accounts = vec![
@@ -148,8 +152,8 @@ pub fn per_batch_alt_addresses(
     vec![
         note_lock_pda(&payload.note_a_use_tag).0,
         note_lock_pda(&payload.note_b_use_tag).0,
-        note_lock_pda(&payload.note_e_commitment).0,
-        note_lock_pda(&payload.note_f_commitment).0,
+        note_lock_pda(&payload.note_e_use_tag).0,
+        note_lock_pda(&payload.note_f_use_tag).0,
         consumed_note_pda(&payload.note_a_use_tag).0,
         consumed_note_pda(&payload.note_b_use_tag).0,
         batch_validity_marker_pda(merkle_root).0,
@@ -181,8 +185,8 @@ pub fn batch_alt_addresses<'a>(
     for p in payloads {
         push(note_lock_pda(&p.note_a_use_tag).0);
         push(note_lock_pda(&p.note_b_use_tag).0);
-        push(note_lock_pda(&p.note_e_commitment).0);
-        push(note_lock_pda(&p.note_f_commitment).0);
+        push(note_lock_pda(&p.note_e_use_tag).0);
+        push(note_lock_pda(&p.note_f_use_tag).0);
         // consumed-note entries for both inputs — Tx D inits these, and
         // ALT-referencing them (vs inline) is what gives the change-note /
         // sharded settle tx its headroom under the 1232-byte cap. (The
@@ -377,6 +381,31 @@ mod tests {
         assert_eq!(ix.accounts[7].pubkey, ix.accounts[8].pubkey);
         assert!(!ix.accounts[7].is_writable);
         assert!(!ix.accounts[8].is_writable);
+    }
+
+    #[test]
+    fn change_relock_accounts_and_alt_use_tags_not_commitments() {
+        let mut p = dummy_payload();
+        p.note_e_commitment = [0xE1; 32];
+        p.note_f_commitment = [0xF1; 32];
+        p.note_e_use_tag = [0xE2; 32];
+        p.note_f_use_tag = [0xF2; 32];
+        p.buyer_relock_order_id = [0x31; 16];
+        p.seller_relock_order_id = [0x32; 16];
+
+        let ix = build_settle_batched_ix(&dummy_tee(), 0, &p, 0, &proof(), &[0xAB; 32]);
+        assert_eq!(ix.accounts[7].pubkey, note_lock_pda(&p.note_e_use_tag).0);
+        assert_eq!(ix.accounts[8].pubkey, note_lock_pda(&p.note_f_use_tag).0);
+        assert_ne!(ix.accounts[7].pubkey, note_lock_pda(&p.note_e_commitment).0);
+        assert_ne!(ix.accounts[8].pubkey, note_lock_pda(&p.note_f_commitment).0);
+        assert!(ix.accounts[7].is_writable);
+        assert!(ix.accounts[8].is_writable);
+
+        let alt = per_batch_alt_addresses(&p, &[0xAB; 32]);
+        assert!(alt.contains(&note_lock_pda(&p.note_e_use_tag).0));
+        assert!(alt.contains(&note_lock_pda(&p.note_f_use_tag).0));
+        assert!(!alt.contains(&note_lock_pda(&p.note_e_commitment).0));
+        assert!(!alt.contains(&note_lock_pda(&p.note_f_commitment).0));
     }
 
     #[test]

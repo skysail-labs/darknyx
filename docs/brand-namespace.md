@@ -24,7 +24,8 @@ Cross-language consumers must use the current domains byte-for-byte:
 |---|---|
 | Order signature | `darknyx-order-v5` |
 | Cancel signature | `darknyx-cancel-v2` |
-| Settlement signature | `darknyx-match-v10` |
+| Settlement signature | `darknyx-match-v11` |
+| Note secret | `darknyx/note-secret/v1` |
 | Settlement ID | `darknyx-settlement-id-v2` |
 | Match-derived inner | `darknyx-change-inner-v2` |
 | Fill encryption | `darknyx-fill-enc-v3` |

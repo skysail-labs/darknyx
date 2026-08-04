@@ -3,10 +3,10 @@
 > **⚠️ SUPERSEDED — IMPLEMENTED (P0→P7 shipped + devnet/CVM-validated).** This is a
 > historical design doc; the "Status: PROPOSED / today / future-tense plan" text below
 > describes the *before* state and was accurate as of 2026-06-20. The work has since
-> landed: the leaf is a single commitment-only `Poseidon11(DOMAIN_LEAF_V2=23, …)` with
-> an activation bit, the
+> landed. The current leaf is an arity-12 `Poseidon12(DOMAIN_LEAF_V3=31, …)`
+> that binds consumed/relock note-use tags plus created commitments, the
 > 7 plaintext amounts are gone from `MatchResultPayload` (canonical tag now
-> `darknyx-match-v10` after the later dead-nullifier removal), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
+> `darknyx-match-v11` after the later unlinkable-note-use migration), the 6 `Num2Bits(64)` range checks + in-circuit fee floor + fee-note
 > binding are in the circuit, and `verify_match_batch` takes two public inputs
 > `[root, config_digest]`; the digest is recomputed on-chain over fee rate,
 > protocol owner, mint halves, and price scale.

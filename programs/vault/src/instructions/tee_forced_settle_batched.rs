@@ -9,9 +9,9 @@
 //! The handler:
 //!   1. Verifies the TEE Ed25519 signature over canonical_payload_hash
 //!      (identical to the per-match flow).
-//!   2. Recomputes the per-slot leaf from the payload's note commitments
-//!      (single commitment-only Poseidon11 — must byte-match the
-//!      circuit's `MatchSlot` template).
+//!   2. Recomputes the per-slot leaf from consumed/relock note-use tags plus
+//!      created commitments (arity-12 — must byte-match the circuit's
+//!      `MatchSlot` template).
 //!   3. Walks a fixed-depth-4 Merkle inclusion path (N=16) using the
 //!      provided sibling hashes + match_index.
 //!   4. Asserts the BatchValidityMarker PDA exists at the
@@ -92,14 +92,14 @@ fn u64_be32(v: u64) -> [u8; 32] {
 /// Compute the per-slot leaf hash. MUST byte-match `template MatchSlot()` in
 /// `circuits/templates/match_batch.circom`:
 ///
-///   leaf = Poseidon11(DOMAIN_LEAF_V2=23, active=1,
+///   relock_digest = Poseidon3(DOMAIN_RELOCK_DIGEST=30, tag_e, tag_f)
+///   leaf = Poseidon12(DOMAIN_LEAF_V3=31, active=1,
 ///                     tag_a, tag_b, note_c, note_d, note_e, note_f,
 ///                     note_fee_base, note_fee_quote, batch_slot, relock_digest)
 ///
-/// Commitment-only (amount-privacy, P1b): the note commitments bind the
-/// amounts/mints/price transitively (each is a Poseidon6 of its
-/// mint+amount+owner+inner), so the leaf no longer hashes — and the payload
-/// no longer needs to carry — the plaintext amounts. The two fee-note
+/// Amount-private: the leaf binds consumed identities through their tags and
+/// created identities through their commitments, so it no longer hashes — and
+/// the payload no longer needs to carry — plaintext amounts. The two fee-note
 /// commitments are bound here so THIS match's fee-note append is proof-backed:
 /// fees are PER-MATCH (each active MatchSlot derives its own
 /// `note_fee_base/quote` from that match's consumed commitments), so every
@@ -250,7 +250,7 @@ pub struct TeeForcedSettleBatched<'info> {
     // output commitments + batch_slot), so writing them served no soundness purpose
     // and enabled a griefing freeze (a compromised TEE could pre-claim a
     // victim's future withdraw nullifier) while leaving the real double-spend
-    // guard to the commitment-keyed `consumed_a/b` above (which `withdraw` now
+    // guard to the tag-keyed `consumed_a/b` above (which `withdraw` now
     // also writes). Dropping them also reclaimed 2 `init` CPIs + 2 accounts off
     // Tx D. Settlement payload v9 removes the now-vestigial nullifier fields
     // from the signed instruction data too, restoring another 64 bytes of
@@ -479,7 +479,7 @@ pub fn tee_forced_settle_batched_handler(
     cb._padding = [0u8; 7];
 
     // (Nullifier writes removed — see the account-struct note above. The
-    // commitment-keyed `consumed_a/b` are the consume-once guard.)
+    // tag-keyed `consumed_a/b` are the consume-once guard.)
 
     // Append output leaves to THIS shard: note_c, note_d, note_e (if any),
     // note_f (if any), then the two batch fee notes (base, quote) if any.

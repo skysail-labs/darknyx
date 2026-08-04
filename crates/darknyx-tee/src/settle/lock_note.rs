@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn note_lock_pda_varies_with_note_commitment() {
+    fn note_lock_pda_varies_with_note_use_tag() {
         // Different note → different note_lock PDA. The on-chain
         // ix init constraint relies on this; a builder bug that
         // hashed a constant seed would collide at runtime with

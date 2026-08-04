@@ -951,8 +951,6 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                     .await?;
                 let ih0 = n0.inner_hash;
                 let ih1 = n1.inner_hash;
-                let c0 = n0.commitment;
-                let c1 = n1.commitment;
                 // Merge-prove + submit the merge ix.
                 let mp = merge_prover
                     .as_ref()
@@ -981,7 +979,7 @@ pub async fn run_real_settle_load(p: RealSettleParams) -> Result<()> {
                 let merge_ix = super::vault::build_merge_ix(
                     shard,
                     &admin.pubkey(),
-                    &[c0, c1],
+                    &mproof.input_use_tags,
                     &mproof.output_commitment,
                     &base,
                     &w0.root,

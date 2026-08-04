@@ -304,14 +304,14 @@ E  sweep the marker only at/after its derived expiry
 Important properties:
 
 - `lock_note` re-verifies VALID_INPUT, caps order/lock lifetime to 4,500 slots,
-  and refuses a commitment already consumed.
+  and refuses a note-use tag already consumed.
 - `verify_match_batch` accepts any payer because the proof is authorization.
   Marker expiry is derived on-chain as `current_slot + 300`, so a competing
   relayer cannot shorten it.
-- Tx D verifies the Ed25519 canonical v10 digest, recomputes a Poseidon11 slot
+- Tx D verifies the Ed25519 canonical v11 digest, recomputes the Poseidon12 v3 slot
   leaf, walks the depth-4 batch path, and reads (never mutates) the marker.
 - Tx D rejects at or after either input-lock expiry or marker expiry.
-- Both settle and withdraw initialize the same commitment-keyed
+- Settle, withdraw, and merge initialize the same tag-keyed
   `ConsumedNoteEntry`.
 - Output inners and fee inners are derived in-circuit from consumed inputs.
 - The 128-byte recovery envelope is signed but opaque to L1.

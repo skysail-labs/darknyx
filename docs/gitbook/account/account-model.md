@@ -91,11 +91,11 @@ record so a note can never be used twice:
   the same commitment from backing another live or settlement-pending order in
   this venue, but no on-chain lock exists merely because the order is resting.
 - **On-chain locked.** A private match has entered settlement. A live
-  commitment-keyed lock temporarily blocks withdrawal, merge, or another
+  note-use-tag-keyed lock temporarily blocks withdrawal, merge, or another
   settlement. At its expiry it stops blocking use even before the expired
   account is swept.
-- **Consumed.** Settlement/merge has created a commitment-keyed consumed-note
-  entry, or withdrawal has published its nullifier. Its value now lives in freshly created output notes (a change
+- **Consumed.** Settlement, merge, or withdrawal has created the shared
+  tag-keyed consumed-note entry. Its value now lives in freshly created output notes (a change
   note for the unfilled remainder, the traded asset, and so on), each a new
   spendable note you own.
 

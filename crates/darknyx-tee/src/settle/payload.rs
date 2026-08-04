@@ -2,7 +2,7 @@
 //! of a CLAUDE.md §6 byte-equality contract.
 //!
 //! This Rust port MUST produce, for any payload:
-//!   - the SAME 488-byte Borsh serialization as the on-chain
+//!   - the SAME 552-byte Borsh serialization as the on-chain
 //!     `vault::instructions::tee_forced_settle::MatchResultPayload`
 //!     (AnchorSerialize) and the SDK's
 //!     `settle-builder.ts::serializePayload`;
@@ -26,8 +26,9 @@
 //! `v7`→`v8` (424→552 bytes). Settlement payload v9 removed the two
 //! vestigial nullifiers, shrinking the wire shape to 488 bytes. Recovery v3
 //! repacks those same 128 bytes with two u64s per side. The clean Darknyx
-//! namespace cutover keeps the 488-byte layout but bumps the signature domain
-//! to v10, invalidating every development-era signature.
+//! namespace cutover kept the 488-byte layout but bumped the signature domain
+//! to v10. Note-use tags then replaced the two consumed commitments and added
+//! two relock tags, yielding the 552-byte v11 layout.
 //!
 //! ## Two distinct field orderings (do not conflate)
 //!
@@ -35,7 +36,7 @@
 //!   fee-note fields `note_fee_base_commitment` + `note_fee_quote_commitment`
 //!   right after `order_id_b`.
 //! - **Canonical hash**: the same hand-ordered concatenation, domain-tagged
-//!   `b"darknyx-match-v10"`.
+//!   `b"darknyx-match-v11"`.
 //!
 //! Both orderings are reproduced verbatim below from the on-chain
 //! source + the SDK.

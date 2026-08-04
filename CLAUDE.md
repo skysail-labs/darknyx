@@ -689,14 +689,14 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
 ### 5.3 Specific traps
 
 * **Leaf-hash arity cap.** `light-poseidon` (on-chain) caps Poseidon at 12
-  inputs (`MAX_X5_LEN = 13`). The leaf is a **single `Poseidon11`** —
-  `Poseidon11(DOMAIN_LEAF_V2=23, active, note_a..note_f, note_fee_base,
-  note_fee_quote, batch_slot)` — **commitment-only** (amount-privacy P1b): the
-  six note commitments + two fee notes bind the amounts/mints/price
-  transitively, so the leaf no longer hashes plaintext amounts. 11 inputs ≤ 12,
-  so no split is needed. **Keep it ≤ 12** — re-introducing bound fields (e.g.
-  plaintext amounts) would force the old two-stage Poseidon12+Poseidon9 split
-  back (that's why it used to be two-stage).
+  inputs (`MAX_X5_LEN = 13`). The active leaf uses that entire budget:
+  `Poseidon12(DOMAIN_LEAF_V3=31, active, tag_a, tag_b, note_c..note_f,
+  note_fee_base, note_fee_quote, batch_slot, relock_digest)`, where
+  `relock_digest = Poseidon3(DOMAIN_RELOCK_DIGEST=30, tag_e, tag_f)`. Input
+  and relock tags bind the private note identities without republishing their
+  commitments; output and fee commitments still bind amounts/mints/price
+  transitively. **There is no spare input.** Any new leaf field forces the
+  retired two-stage Poseidon12+Poseidon9 construction back.
 * **Domain tags.** `DOMAIN_LEAF_V3 = 31` (the active leaf tag),
   `DOMAIN_RELOCK_DIGEST = 30`, `DOMAIN_NOTE_USE = 29`,
   `DOMAIN_MATCH_OUTPUT_INNER = 24`, `DOMAIN_MATCH_FEE_INNER = 25`,
@@ -736,7 +736,7 @@ Solana caps a tx at 1232 bytes. The settle path is right at the edge:
 | lock_note buyer/seller (two Tx A) | <800 B each | >430 B each |
 | verify_match_batch (Tx B) | ~640 B | comfortable |
 | per-batch ALT create+extend (Tx C) | ~250 B | comfortable |
-| tee_forced_settle_batched (Tx D, v0 + 2 ALTs) | **1109 B** | **123 B** |
+| tee_forced_settle_batched (Tx D, v0 + 2 ALTs) | **1173 B** | **59 B** |
 | close_batch_validity_marker (Tx E) | ~250 B | comfortable |
 
 Anything that adds bytes to the settle path — a new account, an extra ix
@@ -816,9 +816,9 @@ but `light-poseidon`'s `hash_bytes_be` rejects values ≥ the modulus →
   256-bit pubkey can't fit one Fr element.
 * **Owner commitments + nullifiers are Poseidon outputs** → Fr-safe by
   construction. Intake Fr-validates the order's consumed input `inner_hash`.
-  Match/merge output inners are Poseidon-derived. The nullifier is used by the withdraw path;
-  payload v9 removed it from Tx D because settlement replay protection is
-  commitment-keyed.
+  Match/merge output inners are Poseidon-derived. The nullifier is used by the
+  withdraw proof; payload v9 removed it from Tx D, and v11 keys settlement
+  replay protection on circuit-bound note-use tags.
 
 ---
 

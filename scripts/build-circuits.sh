@@ -23,7 +23,7 @@ PTAU18="$ROOT/scripts/ptau/powersOfTau28_hez_final_18.ptau"
 PTAU19="$ROOT/scripts/ptau/powersOfTau28_hez_final_19.ptau"
 SNARKJS="$ROOT/node_modules/.bin/snarkjs"
 
-if [ ! -f "$PTAU16" ] || [ ! -f "$PTAU18" ]; then
+if [ ! -f "$PTAU16" ] || [ ! -f "$PTAU18" ] || [ ! -f "$PTAU19" ]; then
     echo "[build] ptau not found; running download-ptau.sh"
     bash "$ROOT/scripts/download-ptau.sh"
 fi

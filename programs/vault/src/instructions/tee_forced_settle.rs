@@ -121,10 +121,10 @@ pub struct MatchResultPayload {
     // settlement-domain v6 → v7 for this layout change, then v7 → v8 when
     // encrypted output recovery
     // appended the `fill_recovery` field above. Settlement payload v9 then
-    // removed the two vestigial nullifiers: commitment-keyed
-    // `ConsumedNoteEntry` PDAs are the sole settle/withdraw replay guard. The
-    // Darknyx namespace cutover retains that layout and bumps the signed
-    // domain to v10. v11 replaces the two consumed commitments with note-use
+    // removed the two vestigial nullifiers. The Darknyx namespace cutover
+    // retained that layout and bumped the signed domain to v10. v11 makes
+    // tag-keyed `ConsumedNoteEntry` PDAs the sole settle/withdraw replay guard,
+    // replaces the two consumed commitments with note-use
     // TAGS and appends `note_e_use_tag` / `note_f_use_tag` for the relock PDAs
     // (488 -> 552 bytes).
     //

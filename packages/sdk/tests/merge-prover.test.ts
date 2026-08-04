@@ -103,9 +103,9 @@ maybe("VALID_MERGE circuit", () => {
     });
 
     expect(r.outputAmount).toBe(500n);
-    // Order (C-01): [outputCommitment, inputCommitments[0], inputCommitments[1], merkleRoot, mint_lo, mint_hi]
+    // Order (C-01): [outputCommitment, inputUseTags[0], inputUseTags[1], merkleRoot, mint_lo, mint_hi]
     expect(hex(r.publicInputsBE[0])).toBe(hex(r.outputCommitmentBE)); // output (signal 0)
-    expect(be32ToBigInt(r.publicInputsBE[1])).not.toBe(0n); // active input commitment
+    expect(be32ToBigInt(r.publicInputsBE[1])).not.toBe(0n); // active input tag
     expect(be32ToBigInt(r.publicInputsBE[2])).not.toBe(0n);
     expect(hex(r.publicInputsBE[3])).toBe(hex(root)); // merkleRoot
   }, 120_000);
@@ -128,9 +128,9 @@ maybe("VALID_MERGE circuit", () => {
     });
 
     expect(r.outputAmount).toBe(350n);
-    // Order (C-01): [outputCommitment, inputCommitments[0..3], merkleRoot, mint_lo, mint_hi]
+    // Order (C-01): [outputCommitment, inputUseTags[0..3], merkleRoot, mint_lo, mint_hi]
     expect(hex(r.publicInputsBE[0])).toBe(hex(r.outputCommitmentBE));
-    // The two dummy slots' public input-commitments (signals 3,4) are zero.
+    // The two dummy slots' public input-use tags (signals 3,4) are zero.
     expect(be32ToBigInt(r.publicInputsBE[3])).toBe(0n);
     expect(be32ToBigInt(r.publicInputsBE[4])).toBe(0n);
     expect(hex(r.publicInputsBE[5])).toBe(hex(root)); // merkleRoot

@@ -69,11 +69,11 @@ export const ZERO_PROOF: Groth16Proof = {
  *  removed — they're proven in-circuit + bound by the note commitments, and
  *  putting them in the (public, on-chain) settle ix leaked every trade size.
  *  The canonical-hash domain bumped `v6`→`v7`. Settlement payload v9 removed
- *  the two unused nullifiers; commitment-keyed consumed-note PDAs are the
- *  replay guard shared by settlement and withdrawal. The Darknyx namespace
+ *  the two unused nullifiers. The Darknyx namespace
  *  cutover retains the 488-byte layout and signs it under v10. v11 replaces the
- *  two consumed commitments with note-use TAGS and appends the two relock tags
- *  (488 -> 552 bytes, domain v11).
+ *  two consumed commitments with note-use TAGS, makes tag-keyed consumed-note
+ *  PDAs the replay guard shared by settlement/withdrawal/merge, and appends the
+ *  two relock tags (488 -> 552 bytes, domain v11).
  *
  *  The payload is deliberately MIXED: inputs are handles, outputs are
  *  identities. Republishing a consumed commitment here would relink both inputs
@@ -310,8 +310,8 @@ export interface BuildSettleBatchedIxParams {
  *  11  system_program
  *
  * The two per-match `nullifier_entry` accounts and their payload fields are
- * removed. The commitment-keyed `consumed_a/b` PDAs are the replay guard shared
- * with withdrawal.
+ * removed. The tag-keyed `consumed_a/b` PDAs are the replay guard shared with
+ * withdrawal and merge.
  *
  * ix data = disc(8) || tree_id(1) || payload(Borsh) || match_index(1) || 4×32 siblings.
  */

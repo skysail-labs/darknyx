@@ -348,17 +348,11 @@ fn merge_k2_verifies_and_public_order_matches() {
     let (proof, public_inputs, out_c, root, mlo, mhi, _leaves, ics) = prove_merge(2, 2);
 
     // Public-signal order (must match merge.rs — C-01, outputs first):
-    //   [outputCommitment, inputCommitments[0], inputCommitments[1], merkleRoot, mint_lo, mint_hi]
+    //   [outputCommitment, inputUseTags[0], inputUseTags[1], merkleRoot, mint_lo, mint_hi]
     assert_eq!(public_inputs.len(), 6);
     assert_eq!(public_inputs[0], out_c, "signal 0 must be outputCommitment");
-    assert_eq!(
-        public_inputs[1], ics[0],
-        "signal 1 must be inputCommitments[0]"
-    );
-    assert_eq!(
-        public_inputs[2], ics[1],
-        "signal 2 must be inputCommitments[1]"
-    );
+    assert_eq!(public_inputs[1], ics[0], "signal 1 must be inputUseTags[0]");
+    assert_eq!(public_inputs[2], ics[1], "signal 2 must be inputUseTags[1]");
     assert_eq!(public_inputs[3], root, "signal 3 must be merkleRoot");
     assert_eq!(public_inputs[4], mlo);
     assert_eq!(public_inputs[5], mhi);
@@ -378,12 +372,12 @@ fn merge_k2_verifies_and_public_order_matches() {
 fn merge_k4_padded_verifies() {
     // 2 real notes + 2 dummy slots.
     let (proof, public_inputs, out_c, root, _mlo, _mhi, _leaves, ics) = prove_merge(4, 2);
-    // Order (C-01): [outputCommitment, inputCommitments[0..3], merkleRoot, mint_lo, mint_hi]
+    // Order (C-01): [outputCommitment, inputUseTags[0..3], merkleRoot, mint_lo, mint_hi]
     assert_eq!(public_inputs.len(), 8);
     assert_eq!(public_inputs[0], out_c);
     assert_eq!(public_inputs[1], ics[0]);
     assert_eq!(public_inputs[2], ics[1]);
-    // Dummy slots' public input-commitments are zero.
+    // Dummy slots' public input-use tags are zero.
     assert_eq!(ics[2], [0u8; 32]);
     assert_eq!(ics[3], [0u8; 32]);
     assert_eq!(public_inputs[3], [0u8; 32]);

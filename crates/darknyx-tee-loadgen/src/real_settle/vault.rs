@@ -63,11 +63,11 @@ pub fn outstanding_mint_pda(mint: &Address) -> Address {
     )
     .0
 }
-pub fn consumed_note_pda(commitment: &[u8; 32]) -> Address {
-    Address::find_program_address(&[CONSUMED_NOTE_SEED, commitment], &vault_program_id()).0
+pub fn consumed_note_pda(note_use_tag: &[u8; 32]) -> Address {
+    Address::find_program_address(&[CONSUMED_NOTE_SEED, note_use_tag], &vault_program_id()).0
 }
-pub fn note_lock_pda(commitment: &[u8; 32]) -> Address {
-    Address::find_program_address(&[NOTE_LOCK_SEED, commitment], &vault_program_id()).0
+pub fn note_lock_pda(note_use_tag: &[u8; 32]) -> Address {
+    Address::find_program_address(&[NOTE_LOCK_SEED, note_use_tag], &vault_program_id()).0
 }
 
 /// The associated token account for `owner` + `mint` under the SPL ATA program:
@@ -139,15 +139,15 @@ pub fn build_deposit_ix(
 }
 
 /// Build the vault `merge` ix (VALID_MERGE K=2/4). Mirrors the SDK's
-/// `buildMergeInstruction`: data = disc(8) ‖ tree_id(1) ‖ Borsh-Vec<commitments>
+/// `buildMergeInstruction`: data = disc(8) ‖ tree_id(1) ‖ Borsh-Vec<use tags>
 /// (u32 LE len ‖ k×32) ‖ output_commitment(32) ‖ token_mint(32) ‖ merkle_root(32)
 /// ‖ k(1) ‖ proof(256); accounts = payer, vault_config, merkle_tree[tree_id],
 /// system, then one ConsumedNoteEntry PDA and one absent NoteLock PDA per
-/// non-zero input commitment.
+/// non-zero input tag. The input commitments stay private inside VALID_MERGE.
 pub fn build_merge_ix(
     tree_id: u8,
     payer: &Address,
-    input_commitments: &[[u8; 32]],
+    input_use_tags: &[[u8; 32]],
     output_commitment: &[u8; 32],
     token_mint: &Address,
     merkle_root: &[u8; 32],
@@ -157,9 +157,9 @@ pub fn build_merge_ix(
     let mut data = Vec::new();
     data.extend_from_slice(&anchor_discriminator("merge"));
     data.push(tree_id);
-    data.extend_from_slice(&(input_commitments.len() as u32).to_le_bytes());
-    for commitment in input_commitments {
-        data.extend_from_slice(commitment);
+    data.extend_from_slice(&(input_use_tags.len() as u32).to_le_bytes());
+    for tag in input_use_tags {
+        data.extend_from_slice(tag);
     }
     data.extend_from_slice(output_commitment);
     data.extend_from_slice(&token_mint.to_bytes());
@@ -173,14 +173,14 @@ pub fn build_merge_ix(
         AccountMeta::new(merkle_tree_pda(tree_id), false),
         AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
     ];
-    let active = input_commitments
+    let active = input_use_tags
         .iter()
-        .filter(|commitment| commitment.iter().any(|&b| b != 0));
-    for commitment in active.clone() {
-        accounts.push(AccountMeta::new(consumed_note_pda(commitment), false));
+        .filter(|tag| tag.iter().any(|&b| b != 0));
+    for tag in active.clone() {
+        accounts.push(AccountMeta::new(consumed_note_pda(tag), false));
     }
-    for commitment in active {
-        accounts.push(AccountMeta::new_readonly(note_lock_pda(commitment), false));
+    for tag in active {
+        accounts.push(AccountMeta::new_readonly(note_lock_pda(tag), false));
     }
 
     Instruction {

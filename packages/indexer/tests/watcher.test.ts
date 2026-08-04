@@ -5,6 +5,7 @@
  */
 
 import { createRequire } from "node:module";
+import { DatabaseSync } from "node:sqlite";
 import { describe, it, expect, afterEach } from "vitest";
 import { PublicKey, type Connection } from "@solana/web3.js";
 import { tmpdir } from "node:os";
@@ -117,6 +118,48 @@ describe("watcher extractFills", () => {
 });
 
 describe.skipIf(!HAS_SQLITE)("db + server", () => {
+  it("recreates a pre-v11 commitment-keyed fills table before inserting tags", () => {
+    const path = dbPath();
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE fills (
+        order_id TEXT NOT NULL,
+        side TEXT NOT NULL,
+        match_id TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        slot INTEGER NOT NULL,
+        is_partial_fill INTEGER NOT NULL,
+        input_note_commitment TEXT NOT NULL,
+        change_note_commitment TEXT,
+        batch_slot TEXT NOT NULL,
+        ephemeral_pubkey TEXT,
+        created_at INTEGER NOT NULL,
+        input_note_use_tag TEXT,
+        PRIMARY KEY (signature, match_id, side)
+      );
+      CREATE INDEX idx_fills_order ON fills (order_id, slot);
+      CREATE TABLE cursor (
+        id INTEGER PRIMARY KEY CHECK (id = 0),
+        last_signature TEXT,
+        last_slot INTEGER
+      );
+      INSERT INTO cursor (id, last_signature, last_slot)
+      VALUES (0, 'legacy-tip', 41);
+    `);
+    legacy.close();
+
+    const db = new FillsDb(path);
+    dbs.push(db);
+    const fills = extractFills(VAULT, gtfaTx());
+    expect(() => db.upsertFills("sig-v11", 42, fills)).not.toThrow();
+    expect(db.getFillsByOrder(hexN(0xaa, 16))).toHaveLength(1);
+    expect(db.getCursor()).toEqual({
+      lastSignature: "legacy-tip",
+      lastSlot: 41,
+    });
+    rmSync(path, { force: true });
+  });
+
   it("stores fills idempotently and serves them by order_id", async () => {
     const path = dbPath();
     const db = new FillsDb(path);
