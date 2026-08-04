@@ -11,11 +11,13 @@ include "../templates/merkle.circom";
 //   2. Prover knows the spending key that owns the note.
 //   3. Nullifier is correctly derived from (spendingKey, innerHash).
 //   4. Amount is in [0, 2^64) — enforced by Num2Bits(64).
-//   5. noteCommitment is exposed as a public output so the on-chain withdraw
-//      instruction can bind the caller-supplied note_commitment to this proof,
-//      closing the "arbitrary note_commitment bypass" vulnerability.
+//   5. noteUseTag is exposed as a public output so the on-chain withdraw
+//      instruction can bind the caller-supplied handle to this proof, closing
+//      the "arbitrary note_commitment bypass" vulnerability. The tag, not the
+//      commitment: publishing the commitment here would relink the withdrawal
+//      to the note's Merkle leaf and to every earlier use of that note.
 //
-// Public inputs/outputs: EIGHT signals, with `noteCommitment` FIRST (it is an
+// Public inputs/outputs: EIGHT signals, with `noteUseTag` FIRST (it is an
 // output, and circom emits outputs ahead of inputs). The canonical, numbered
 // ordering lives beside the `component main` declaration at the bottom of this
 // file — see it there rather than trusting a second copy here, because a
@@ -32,6 +34,7 @@ include "../templates/merkle.circom";
 //   DOMAIN_OWNER  = 1   (owner_commitment = Poseidon3(DOMAIN_OWNER, sk, r_owner))
 //   DOMAIN_NOTE   = 2   (noteCommitment   = Poseidon6(DOMAIN_NOTE,  mint_lo, mint_hi, amount, owner, innerHash))
 //   DOMAIN_NULL   = 3   (nullifier        = Poseidon3(DOMAIN_NULL,  sk, innerHash))
+//   DOMAIN_NOTE_USE = 29 (noteUseTag      = Poseidon3(29, noteCommitment, innerHash))
 //
 // v2 change: the per-note (nonce, blindingR) pair collapses into a single
 // `innerHash`, and the nullifier anchors on `innerHash` (amount-independent)
@@ -49,7 +52,11 @@ template ValidSpend(merkleDepth) {
     // BN254 Fr element — same split as tokenMint). See the binding constraint
     // below; audit 2026-07-25 S-01.
     signal input  recipient[2];
-    signal output noteCommitment;   // exposed so on-chain ix can bind to proof
+    // The public handle the withdraw instruction binds to. NOT the commitment:
+    // publishing that would relink the note to its Merkle leaf and undo the
+    // unlinkability the tag exists for. The commitment is still computed below
+    // and still anchors the Merkle proof — it just stays inside the circuit.
+    signal output noteUseTag;
 
     // ----- Private witnesses -----
     signal input spendingKey;
@@ -82,7 +89,19 @@ template ValidSpend(merkleDepth) {
     noteHash.inputs[3] <== amount;
     noteHash.inputs[4] <== ownerCommit;
     noteHash.inputs[5] <== innerHash;
+    signal noteCommitment;
     noteCommitment <== noteHash.out;
+
+    // ── noteUseTag = Poseidon(DOMAIN_NOTE_USE, noteCommitment, innerHash) ────
+    //
+    // The commitment is an input, not just innerHash: it is what binds amount,
+    // owner and mint, so a tag over the inner alone would leave those
+    // unconstrained wherever the commitment is private.
+    component useTagHash = Poseidon(3);
+    useTagHash.inputs[0] <== 29;   // DOMAIN_NOTE_USE
+    useTagHash.inputs[1] <== noteCommitment;
+    useTagHash.inputs[2] <== innerHash;
+    noteUseTag <== useTagHash.out;
 
     // ── Merkle inclusion ─────────────────────────────────────────────────────
     component merkle = MerkleTreeChecker(merkleDepth);
@@ -133,7 +152,7 @@ template ValidSpend(merkleDepth) {
 // PUBLIC SIGNAL ORDER (circom emits the OUTPUT first, then public inputs in
 // TEMPLATE DECLARATION order — not in the order of the `public [...]` list):
 //
-//   0 noteCommitment  (output)
+//   0 noteUseTag  (output)
 //   1 merkleRoot
 //   2 nullifier
 //   3 tokenMint[0]  (lo)

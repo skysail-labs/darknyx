@@ -52,17 +52,23 @@ template MerkleTreeChecker(depth) {
 //   - No nullifier is computed or revealed. The note is not being SPENT here,
 //     only locked. Nullification happens later in tee_forced_settle (via
 //     ConsumedNoteEntry PDAs) or in withdraw (via NullifierEntry PDAs).
-//   - `noteCommitment` is now a PUBLIC input. The on-chain `lock_note`
-//     instruction uses it as the seed for the NoteLock PDA, so it must agree
-//     with the proof. (In VALID_SPEND it's a private intermediate.)
+//   - The public handle is `noteUseTag`, not the commitment. The on-chain
+//     `lock_note` instruction seeds the NoteLock PDA with it, so it must agree
+//     with the proof. The commitment stays a private intermediate here, as it
+//     already was in VALID_SPEND.
 //
 // The mint + merkle_root leak at lock time. The amount and owner_commitment stay
 // private; settlement conservation is proven separately by VALID_MATCH_BATCH.
 //
-// Public inputs:  merkleRoot, noteCommitment, tokenMint[2] (lo|hi 128-bit
+// Public inputs:  merkleRoot, noteUseTag, tokenMint[2] (lo|hi 128-bit
 //                 halves of the Solana mint pubkey)
 // Private inputs: amount, spendingKey, ownerCommitmentBlinding, innerHash,
 //                 merklePath[depth], merkleIndices[depth]
+//
+// The note commitment is NOT public. It is recomputed inside the circuit from
+// the private opening, anchors the Merkle proof, and feeds the tag — but a chain
+// observer sees only the tag, which they cannot link back to the leaf without
+// innerHash. Rationale: crates/darkpool-crypto/src/note_use.rs.
 //
 // v2 change: (nonce, blindingR) collapse into a single `innerHash`; the
 // commitment becomes Poseidon6. Mirrors VALID_SPEND v2 +
@@ -70,7 +76,7 @@ template MerkleTreeChecker(depth) {
 template ValidInput(merkleDepth) {
     // ----- Public -----
     signal input merkleRoot;
-    signal input noteCommitment;
+    signal input noteUseTag;
     signal input tokenMint[2];   // [lo_u128, hi_u128]
 
     // ----- Private -----
@@ -100,6 +106,11 @@ template ValidInput(merkleDepth) {
 
     // noteCommitment = Poseidon6(DOMAIN_NOTE=2, mint_lo, mint_hi, amount, owner, innerHash)
     // Domain tag matches crates/darkpool-crypto/src/note.rs::DOMAIN_NOTE.
+    //
+    // PRIVATE now. It used to be the public input the chain keyed the lock on,
+    // which is exactly what made a note's lineage followable: the same 32 bytes
+    // appeared at deposit, lock, settle and withdraw. It is still computed here
+    // and still anchors the Merkle proof — it just never leaves the circuit.
     component noteHash = Poseidon(6);
     noteHash.inputs[0] <== 2;   // DOMAIN_NOTE
     noteHash.inputs[1] <== tokenMint[0];
@@ -107,7 +118,21 @@ template ValidInput(merkleDepth) {
     noteHash.inputs[3] <== amount;
     noteHash.inputs[4] <== ownerCommitment;
     noteHash.inputs[5] <== innerHash;
-    noteCommitment === noteHash.out;
+    signal noteCommitment;
+    noteCommitment <== noteHash.out;
+
+    // noteUseTag = Poseidon3(DOMAIN_NOTE_USE=29, noteCommitment, innerHash)
+    // Domain tag matches crates/darkpool-crypto/src/note_use.rs::DOMAIN_NOTE_USE.
+    //
+    // The commitment is an input, not just innerHash. It is what binds amount,
+    // owner and mint together, so a tag over innerHash alone would leave those
+    // unconstrained at settle — where the input commitment is only a private
+    // witness — and let a real lock be paired with an inflated amount.
+    component tagHash = Poseidon(3);
+    tagHash.inputs[0] <== 29;   // DOMAIN_NOTE_USE
+    tagHash.inputs[1] <== noteCommitment;
+    tagHash.inputs[2] <== innerHash;
+    noteUseTag === tagHash.out;
 
     // Constraint: note is in the Merkle tree at merkleRoot.
     component merkle = MerkleTreeChecker(merkleDepth);
@@ -120,4 +145,4 @@ template ValidInput(merkleDepth) {
 }
 
 // Tree depth 20 — must match programs/vault/src/state.rs::MERKLE_DEPTH.
-component main { public [merkleRoot, noteCommitment, tokenMint] } = ValidInput(20);
+component main { public [merkleRoot, noteUseTag, tokenMint] } = ValidInput(20);

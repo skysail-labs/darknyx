@@ -30,13 +30,14 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 //                    automatically; the build script picks the right
 //                    one per circuit instantiation.
 //
-// Leaf-hash arity (single Poseidon11, commitment-only — amount-privacy P1b):
+// Leaf-hash arity (single Poseidon12 — amount-privacy P1b + note unlinkability):
 //   The on-chain Poseidon implementation is `light-poseidon`, which
 //   caps Poseidon arity at 12 inputs (its `MAX_X5_LEN = 13` limit).
-//   The leaf binds only the 6 note commitments + 2 fee-note commitments
-//   + active bit + batch_slot + a domain tag = 11 inputs ≤ 12, so a SINGLE
-//   Poseidon(11)
-//   fits — no two-stage split needed. The note commitments are each a
+//   The leaf binds 2 consumed USE TAGS + 4 output commitments + 2 fee-note
+//   commitments + active bit + batch_slot + relock digest + a domain tag
+//   = 12 inputs, EXACTLY at the cap. The relock digest exists precisely to
+//   stay there: binding tag_e and tag_f separately would need 13.
+//   The commitments are each a
 //   Poseidon6 of (mint, amount, owner, inner), so they bind the
 //   amounts/mints/price transitively; the leaf no longer hashes the
 //   plaintext amounts the old two-stage (Poseidon12→Poseidon9) leaf did,
@@ -57,12 +58,19 @@ include "../../node_modules/circomlib/circuits/bitify.circom";
 // on-chain leaf walker in
 // `programs/vault/src/instructions/tee_forced_settle_batched.rs`):
 //   DOMAIN_NOTE       =  2   (note commitment Poseidon6 v2 — inner_hash)
-//   DOMAIN_LEAF_V2    = 23   (single Poseidon(11) commitment-only leaf)
+//   DOMAIN_LEAF_V3    = 31   (single Poseidon(12) leaf: consumed slots carry
+//                             USE TAGS, output slots carry commitments)
 //   DOMAIN_OUTPUT_INNER = 24 (output inner from consumed input inner + role)
 //   DOMAIN_FEE_INNER    = 25 (fee inner from consumed input commitment + role)
 //   DOMAIN_BATCH_ROOT = 22   (Merkle internal node, Poseidon(3))
 //   DOMAIN_MATCH_CONFIG = 28 (governed config digest, Poseidon(8))
-//   (DOMAIN_LEAF_INNER=20 / DOMAIN_LEAF_TOP=21 = the retired two-stage leaf.)
+//   DOMAIN_NOTE_USE   = 29   (public consume handle, Poseidon3(29, commitment,
+//                             inner_hash) — see darkpool-crypto/src/note_use.rs)
+//   DOMAIN_RELOCK_DIGEST = 30 (Poseidon3(30, tag_e, tag_f); folds the two
+//                             relock tags into one leaf field to stay at the
+//                             12-input Poseidon cap)
+//   (DOMAIN_LEAF_INNER=20 / DOMAIN_LEAF_TOP=21 = the retired two-stage leaf.
+//    DOMAIN_LEAF_V2=23 = the retired Poseidon(11) commitment-only leaf.)
 
 // ----------------------------------------------------------------------------
 // MatchSlot — per-slot constraints + leaf hash. Output: `leaf`.
@@ -221,6 +229,57 @@ template MatchSlot() {
     signal expectedNoteF;
     expectedNoteF <== (1 - sellerChangeIsZero.out) * hashF.out;
     is_active * (note_f_commitment - expectedNoteF) === 0;
+
+    // ─────────────────────────────────────────────────────────────────
+    // Note-use tags — the PUBLIC handles that replaced note commitments
+    // wherever a note is locked or consumed on chain.
+    //
+    //   tag = Poseidon3(DOMAIN_NOTE_USE=29, note_commitment, inner_hash)
+    //
+    // The commitment is an input, not just the inner. Above, each input
+    // commitment is only constrained as `is_active * (note_x - hash.out) === 0`
+    // and is otherwise a PRIVATE witness — so the published handle is the sole
+    // anchor tying amount / owner / mint to the note that was actually locked.
+    // A tag over `inner_hash` alone would leave `a_amount` free: a prover could
+    // pair a real lock with an inflated amount, satisfy every constraint here,
+    // and mint value on the outputs.
+    //
+    // a/b are the CONSUMED inputs. e/f are the change notes this settle creates
+    // and immediately RE-LOCKS for the continuation order — that relock takes no
+    // proof of its own, so its tag has to be bound here or the enclave could
+    // lock an arbitrary note (censorship, bounded only by MAX_LOCK_TTL_SLOTS).
+    // ─────────────────────────────────────────────────────────────────
+
+    component tagA = Poseidon(3);
+    tagA.inputs[0] <== 29;   // DOMAIN_NOTE_USE
+    tagA.inputs[1] <== note_a_commitment;
+    tagA.inputs[2] <== a_inner;
+    signal note_a_use_tag;
+    note_a_use_tag <== tagA.out;
+
+    component tagB = Poseidon(3);
+    tagB.inputs[0] <== 29;
+    tagB.inputs[1] <== note_b_commitment;
+    tagB.inputs[2] <== b_inner;
+    signal note_b_use_tag;
+    note_b_use_tag <== tagB.out;
+
+    // e/f are masked exactly like their commitments: a slot with no change has
+    // note_e_commitment = 0, and must publish tag 0 too, so the on-chain settle
+    // never derives a relock PDA for a note that does not exist.
+    component tagE = Poseidon(3);
+    tagE.inputs[0] <== 29;
+    tagE.inputs[1] <== hashE.out;
+    tagE.inputs[2] <== eInnerHash.out;
+    signal note_e_use_tag;
+    note_e_use_tag <== (1 - buyerChangeIsZero.out) * tagE.out;
+
+    component tagF = Poseidon(3);
+    tagF.inputs[0] <== 29;
+    tagF.inputs[1] <== hashF.out;
+    tagF.inputs[2] <== fInnerHash.out;
+    signal note_f_use_tag;
+    note_f_use_tag <== (1 - sellerChangeIsZero.out) * tagF.out;
 
     // ─────────────────────────────────────────────────────────────────
     // VALID_PRICE constraints — range checks + headline mul check.
@@ -410,22 +469,37 @@ template MatchSlot() {
     // on-chain handler recompute the leaf from the (amount-free) settle
     // payload, so the amounts can leave the payload entirely (P3).
     //
-    // Single Poseidon11 (1 domain + active + 8 commitments + batch_slot = 11 ≤ 12,
-    // the light-poseidon width cap), so no two-stage split is needed. The two
-    // fee-note commitments are included so every match's atomic fee-note append
-    // is bound by the proof.
+    // The CONSUMED slots bind their use TAGS, not their commitments — that is
+    // what stops the settle republishing the two values an observer would use to
+    // link the inputs back to their Merkle leaves. c/d/e/f stay commitments
+    // because they are appended to the tree as new leaves, so the leaf value is
+    // what the handler needs.
     //
-    //   leaf = Poseidon11(DOMAIN_LEAF_V2=23, active,
-    //                     note_a, note_b, note_c, note_d, note_e, note_f,
+    // The two relock tags are folded into ONE field rather than added as two.
+    // Twelve is the light-poseidon width cap (MAX_X5_LEN = 13); binding them
+    // separately would need 13 and force the retired two-stage
+    // Poseidon12+Poseidon9 split back. This lands at exactly 12.
+    //
+    //   relock_digest = Poseidon3(DOMAIN_RELOCK_DIGEST=30, tag_e, tag_f)
+    //   leaf = Poseidon12(DOMAIN_LEAF_V3=31, active,
+    //                     tag_a, tag_b, note_c, note_d, note_e, note_f,
     //                     note_fee_base, note_fee_quote,
-    //                     batch_slot)
+    //                     batch_slot, relock_digest)
+    //
+    // >>> THIS CONSUMES THE LAST SLOT. Adding any further leaf field forces the
+    // >>> two-stage split back. `compute_match_leaf` on chain asserts the arity.
     // ─────────────────────────────────────────────────────────────────
 
-    component leafH = Poseidon(11);
-    leafH.inputs[0] <== 23;   // DOMAIN_LEAF_V2
+    component relockDigest = Poseidon(3);
+    relockDigest.inputs[0] <== 30;   // DOMAIN_RELOCK_DIGEST
+    relockDigest.inputs[1] <== note_e_use_tag;
+    relockDigest.inputs[2] <== note_f_use_tag;
+
+    component leafH = Poseidon(12);
+    leafH.inputs[0] <== 31;   // DOMAIN_LEAF_V3
     leafH.inputs[1] <== is_active;
-    leafH.inputs[2] <== note_a_commitment;
-    leafH.inputs[3] <== note_b_commitment;
+    leafH.inputs[2] <== note_a_use_tag;
+    leafH.inputs[3] <== note_b_use_tag;
     leafH.inputs[4] <== note_c_commitment;
     leafH.inputs[5] <== note_d_commitment;
     leafH.inputs[6] <== note_e_commitment;
@@ -433,6 +507,7 @@ template MatchSlot() {
     leafH.inputs[8] <== note_fee_base_commitment;
     leafH.inputs[9] <== note_fee_quote_commitment;
     leafH.inputs[10] <== batch_slot;
+    leafH.inputs[11] <== relockDigest.out;
 
     leaf <== leafH.out;
 }

@@ -23,20 +23,26 @@ include "./merkle.circom";
 // (amount, innerHash, Merkle path).
 //
 // Domain tags (match VALID_SPEND / darkpool-crypto):
-//   DOMAIN_OWNER = 1, DOMAIN_NOTE = 2.
+//   DOMAIN_OWNER = 1, DOMAIN_NOTE = 2, DOMAIN_NOTE_USE = 29.
 //
 // Public signals (snarkjs order: outputs first, then public inputs):
-//   outputCommitment, inputCommitments[0..K-1], merkleRoot, tokenMint[0], tokenMint[1]
-//   → NR = 4 + K  (K=2 → 6, K=4 → 8).
+//   outputCommitment, inputUseTags[0..K-1], merkleRoot, tokenMint[0], tokenMint[1]
+//   → NR = 4 + K  (K=2 → 6, K=4 → 8).  Unchanged by the tag migration: a tag
+//   occupies exactly the slot its commitment did.
 //
-// C-01 (audit): the K input-note commitments are PUBLIC outputs (dummy slots
-// emit 0) so the on-chain merge inits a commitment-keyed `ConsumedNoteEntry`
-// per active input — the SAME consume-once guard `withdraw` + settle use.
-// Previously merge exposed per-input NULLIFIERS and keyed a `NullifierEntry`, a
-// guard disjoint from settle's `ConsumedNoteEntry`, so the same note could be
-// consumed once by merge and once by settle (double-spend). The nullifier is
-// unnecessary here: ownership is proven by the owner-bound note commitment's
-// Merkle membership, and double-spend is now guarded on the commitment.
+// `outputCommitment` stays a COMMITMENT — it is appended to the Merkle tree as
+// a new leaf, so it has to be the leaf value. Only the CONSUMED handles become
+// tags. That asymmetry is the shape of the whole change: a commitment appears
+// once, when its note is created, and never again.
+//
+// C-01 (audit): the K consumed handles are PUBLIC outputs (dummy slots emit 0)
+// so the on-chain merge inits a `ConsumedNoteEntry` per active input — the SAME
+// consume-once guard `withdraw` + settle use. Previously merge exposed per-input
+// NULLIFIERS and keyed a `NullifierEntry`, a guard disjoint from settle's
+// `ConsumedNoteEntry`, so the same note could be consumed once by merge and once
+// by settle (double-spend). That guard must key on the same handle everywhere,
+// which is why the tag migration has to land across settle, withdraw and merge
+// in one change — a lagging path reopens exactly this hole.
 
 template ValidMerge(K, merkleDepth) {
     // ----- Public inputs -----
@@ -45,7 +51,14 @@ template ValidMerge(K, merkleDepth) {
 
     // ----- Public outputs -----
     signal output outputCommitment;      // the merged note (= sum of active inputs)
-    signal output inputCommitments[K];   // active slots: the note commitment; dummy slots: 0
+    // Active slots: the consumed note's USE TAG; dummy slots: 0.
+    //
+    // This used to publish the input commitments themselves, which is what let
+    // an observer follow a note from its leaf into the merge that consumed it.
+    // The commitments are still computed below — they anchor the Merkle proofs
+    // and still feed the merged note's inner hash — they are simply no longer
+    // public.
+    signal output inputUseTags[K];
 
     // ----- Private witnesses -----
     signal input spendingKey;             // shared owner
@@ -67,9 +80,16 @@ template ValidMerge(K, merkleDepth) {
     component amtBits[K];
     component amountIsZero[K];
     component noteHash[K];
+    component useTagHash[K];
     component rootFromLeaf[K];
 
     signal computedNote[K];
+    // Masked commitment per slot (0 on dummy slots). PRIVATE: it feeds the
+    // merged note's inner hash, which is defined over consumed COMMITMENTS and
+    // is pinned by `merge_output_inner_hash` on the Rust and TS sides. Keeping
+    // that derivation on commitments rather than tags is deliberate — it keeps
+    // the change confined to what is published.
+    signal maskedCommitment[K];
     signal computedRoot[K];
     signal contrib[K];
     signal sumAcc[K + 1];
@@ -113,10 +133,20 @@ template ValidMerge(K, merkleDepth) {
         computedRoot[i] <== rootFromLeaf[i].root;
         isActive[i] * (computedRoot[i] - merkleRoot) === 0;
 
-        // C-01: PUBLIC input commitment. Active slot → the real note commitment
-        // (a non-zero Poseidon6 output the on-chain guard consumes); dummy slot
-        // → 0 (skipped on-chain, mirroring the old zero-nullifier convention).
-        inputCommitments[i] <== isActive[i] * computedNote[i];
+        maskedCommitment[i] <== isActive[i] * computedNote[i];
+
+        // useTag = Poseidon3(DOMAIN_NOTE_USE=29, noteCommitment, innerHash).
+        // The commitment is an input, not just the inner: it is what binds
+        // amount, owner and mint to the slot.
+        useTagHash[i] = Poseidon(3);
+        useTagHash[i].inputs[0] <== 29;   // DOMAIN_NOTE_USE
+        useTagHash[i].inputs[1] <== computedNote[i];
+        useTagHash[i].inputs[2] <== innerHash[i];
+
+        // C-01: PUBLIC handle. Active slot → the real note's use tag (a non-zero
+        // Poseidon3 output the on-chain guard consumes); dummy slot → 0 (skipped
+        // on-chain, mirroring the old zero-nullifier convention).
+        inputUseTags[i] <== isActive[i] * useTagHash[i].out;
 
         // Sum only active amounts.
         contrib[i] <== isActive[i] * amount[i];
@@ -147,7 +177,7 @@ template ValidMerge(K, merkleDepth) {
     outputInner.inputs[0] <== 26;
     for (var i = 0; i < 4; i++) {
         if (i < K) {
-            outputInner.inputs[i + 1] <== inputCommitments[i];
+            outputInner.inputs[i + 1] <== maskedCommitment[i];
         } else {
             outputInner.inputs[i + 1] <== 0;
         }

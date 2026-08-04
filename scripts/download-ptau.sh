@@ -7,10 +7,13 @@
 #                     per-circuit ZK proofs (valid_input / valid_spend /
 #                     valid_wallet_create) and the dev/test batched
 #                     instances (N=2, N=4).
-#   - pot18 (~288 MB) needed by the v3.5 batched validity circuit at
-#                     N=16 — total constraints (non-linear + linear)
-#                     reach ~163k, which requires a domain of size
-#                     2^18 = 262,144 in the snarkjs setup.
+#   - pot18 (~288 MB) needed by the batched validity circuit at N=4, and
+#                     formerly at N=16.
+#   - pot19 (~576 MB) needed by the DEPLOYED batched validity circuit at
+#                     N=16. The note-use tags grew it from 234,025 to
+#                     285,401 total constraints; snarkjs needs a domain of
+#                     next_power_of_2(total), so 2^18 = 262,144 no longer
+#                     covers it and 2^19 = 524,288 does.
 #
 # SHA-256 pinning: the digests below are the bytes that were used to
 # generate the committed `circuits/build/*/circuit_final.zkey` artifacts
@@ -35,11 +38,19 @@ mkdir -p "$PTAU_DIR"
 declare -A PTAU_SHA256=(
     ["powersOfTau28_hez_final_16.ptau"]="1c401abb57c9ce531370f3015c3e75c0892e0f32b8b1e94ace0f6682d9695922"
     ["powersOfTau28_hez_final_18.ptau"]="e970efa7774da80101e0ac336d083ef3339855c98112539338d706b2b89ac694"
+    # pot19 added 2026-08-04 with the note-use tags. UNLIKE the two above,
+    # this digest was computed from the file this repo downloaded rather than
+    # inherited from a prior pinned artifact set — so on its own it proves
+    # only that later downloads match the first one. Cross-check it against
+    # an independent publication of the Hermez ceremony hashes before this
+    # reaches mainnet; see CRYPTOGRAPHY.md §13 on the ceremony generally.
+    ["powersOfTau28_hez_final_19.ptau"]="3f428d1a407e4704ef906960e000b03089e5e6ec29bf65b07bb5e3de005f4700"
 )
 
 declare -a PTAU_FILES=(
     "powersOfTau28_hez_final_16.ptau"
     "powersOfTau28_hez_final_18.ptau"
+    "powersOfTau28_hez_final_19.ptau"
 )
 
 # Pick a SHA-256 tool. macOS ships `shasum`, Linux usually has
@@ -87,6 +98,7 @@ for PTAU_FILE in "${PTAU_FILES[@]}"; do
     case "$PTAU_FILE" in
         *_16.ptau) SIZE="~72 MB"  ;;
         *_18.ptau) SIZE="~288 MB" ;;
+        *_19.ptau) SIZE="~576 MB" ;;
         *)         SIZE="(unknown size)" ;;
     esac
     echo "[ptau] downloading $PTAU_FILE ($SIZE) ..."
@@ -98,7 +110,7 @@ done
 echo ""
 echo "[ptau] All ceremony files verified. Pinning is supply-chain-safe."
 echo "[ptau]"
-echo "[ptau] NOTE: pot16 / pot18 still use the public Hermez ceremony — fine for"
+echo "[ptau] NOTE: pot16 / pot18 / pot19 still use the public Hermez ceremony — fine"
 echo "[ptau] testnet, but mainnet should host its own MPC contribution or run a"
 echo "[ptau] new phase-2 ceremony with at least 3 independent contributors. See"
 echo "[ptau] CRYPTOGRAPHY.md §13 + ARCHITECTURE.md \"What is NOT yet shipped\"."

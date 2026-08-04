@@ -170,7 +170,8 @@ Everything runs from the repo root.
 
 ```sh
 npm install                                        # SDK + snarkjs + circomlib
-bash scripts/download-ptau.sh                      # pot16 (~80 MB) + pot18 (~288 MB)
+bash scripts/download-ptau.sh                      # pot16 (~72 MB) + pot18 (~288 MB)
+                                                   #   + pot19 (~576 MB, N=16)
 bash scripts/build-circuits.sh                     # compile all 9 circom circuits;
                                                    #   regenerates vk_*.rs Rust consts
 cargo build --examples -p darkpool-crypto          # TS↔Rust parity helper binaries
@@ -686,9 +687,18 @@ with the circuit's `MatchSlot()` template + `match-batch-prover.ts::computeBatch
   20` / `DOMAIN_LEAF_TOP = 21` are the **retired** two-stage-leaf tags — dead
   constants, no longer hashed.)
 * **Parameterised N.** `MatchBatch(N)` is instantiated at N=2/4/16. Only
-  N=16 is wired on-chain (`vk_match_batch_n16.rs`); N=2/4 are dev/test. The
-  N=16 proving key needs `pot18` (~288 MB) — don't edit `download-ptau.sh`
-  to skip it.
+  N=16 is wired on-chain (`vk_match_batch_n16.rs`); N=2/4 are dev/test.
+  **N=16 needs `pot19` (~576 MB) and N=2/4 need pot16/pot18** — don't edit
+  `download-ptau.sh` to skip them.
+* **Ceremony headroom is the constraint nobody records.** snarkjs needs a
+  domain of `next_power_of_2(total constraints)`, so each circuit sits under a
+  hard ceiling. The note-use tags (2026-08) grew the match circuit ~22% and
+  pushed N=16 from 234,025 to 285,401 constraints, straight through the
+  2^18 = 262,144 ceiling — N=16 moved pot18 → pot19 and N=4 moved pot16 →
+  pot18. The proving key went 97 MB → 130 MB with it, which lands in the CVM
+  image and its load time. **Before adding constraints, check the headroom:**
+  `circom <circuit> --r1cs -o /tmp` prints non-linear + linear; their sum must
+  stay under the current ceremony's 2^k.
 * **The committed N=16 proof fixture** lives at
   `programs/vault/tests/fixtures/match_batch_n16_proof.bin`; regenerate it
   with `RUN_N16_PROVE=1 DUMP_N16_FIXTURE=1 cargo test -p darknyx-tee --test
