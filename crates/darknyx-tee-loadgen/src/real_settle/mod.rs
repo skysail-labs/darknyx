@@ -443,6 +443,7 @@ impl ValidDepositProver {
         token_mint: &[u8; 32],
         amount: u64,
         recovery_nonce: &[u8; 32],
+        note_secret: &[u8; 32],
     ) -> Result<ValidDepositProof, RealSettleError> {
         let generated = self.prove_ark(
             spending_key,
@@ -450,6 +451,7 @@ impl ValidDepositProver {
             token_mint,
             amount,
             recovery_nonce,
+            note_secret,
         )?;
         Ok(ValidDepositProof {
             proof_bytes: proof_to_onchain_bytes(&generated.proof),
@@ -466,6 +468,7 @@ impl ValidDepositProver {
         token_mint: &[u8; 32],
         amount: u64,
         recovery_nonce: &[u8; 32],
+        note_secret: &[u8; 32],
     ) -> Result<GeneratedDepositProof, RealSettleError> {
         if amount == 0 {
             return Err(RealSettleError::Prove(
@@ -474,7 +477,7 @@ impl ValidDepositProver {
         }
         let owner = owner_commitment(spending_key, owner_blinding)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
-        let inner_hash = deposit_inner_hash(&owner, recovery_nonce)
+        let inner_hash = deposit_inner_hash(&owner, recovery_nonce, note_secret)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
         let note_commitment = commitment_from_fields_v2(token_mint, amount, &owner, &inner_hash)
             .map_err(|e| RealSettleError::Crypto(e.to_string()))?;
@@ -485,6 +488,7 @@ impl ValidDepositProver {
             "tokenMint": decimal_array([fr_to_bigint(&mint_lo), fr_to_bigint(&mint_hi)]),
             "amount": decimal_u64(amount),
             "recoveryNonce": decimal_be32(recovery_nonce),
+            "noteSecret": decimal_be32(note_secret),
             "spendingKey": decimal_fr(spending_key),
             "ownerCommitmentBlinding": decimal_fr(owner_blinding),
         }))
@@ -871,6 +875,7 @@ mod tests {
         let spending_key = Fr::from(12_345u64);
         let owner_blinding = Fr::from(67_890u64);
         let recovery_nonce = fr_to_be_bytes(&Fr::from(2468u64));
+        let note_secret = fr_to_be_bytes(&Fr::from(1357u64));
         let mut token_mint = [0u8; 32];
         token_mint[0] = 1;
         token_mint[31] = 0xb1;
@@ -883,12 +888,13 @@ mod tests {
                 &token_mint,
                 amount,
                 &recovery_nonce,
+                &note_secret,
             )
             .expect("prove");
         let owner = owner_commitment(&spending_key, &owner_blinding).unwrap();
         assert_eq!(
             generated.inner_hash,
-            deposit_inner_hash(&owner, &recovery_nonce).unwrap()
+            deposit_inner_hash(&owner, &recovery_nonce, &note_secret).unwrap()
         );
         assert_eq!(
             generated.note_commitment,
@@ -994,6 +1000,10 @@ mod tests {
 
         for nonce in 1..=160u64 {
             let recovery_nonce = fr_to_be_bytes(&Fr::from(nonce));
+            // Synthetic per-note secret. The real client derives this from the
+            // master seed keyed on the public nonce; the harness only needs it
+            // to vary with the note.
+            let note_secret = fr_to_be_bytes(&Fr::from(nonce + 1_000_000));
             final_deposit = Some(
                 deposit_prover
                     .prove(
@@ -1002,6 +1012,7 @@ mod tests {
                         &token_mint,
                         amount,
                         &recovery_nonce,
+                        &note_secret,
                     )
                     .unwrap_or_else(|e| panic!("deposit proof {nonce} failed: {e}")),
             );

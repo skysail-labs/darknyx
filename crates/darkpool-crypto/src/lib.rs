@@ -29,6 +29,7 @@ pub mod match_config;
 pub mod match_output;
 pub mod merge;
 pub mod note;
+pub mod note_use;
 pub mod nullifier;
 pub mod poseidon;
 pub mod price_commitment;
@@ -47,8 +48,8 @@ pub use fill_encryption::{
 };
 #[cfg(not(target_os = "solana"))]
 pub use keys::{
-    darknyx_shake_kdf_v1, derive_blinding_factor, derive_master_viewing_key, derive_spending_key,
-    derive_trading_key_at_offset, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
+    darknyx_shake_kdf_v1, derive_blinding_factor, derive_master_viewing_key, derive_note_secret,
+    derive_spending_key, derive_trading_key_at_offset, KeyBundle, MasterSeed, MASTER_SEED_BYTES,
 };
 pub use match_config::{match_config_digest, DOMAIN_MATCH_CONFIG};
 pub use match_output::{
@@ -57,6 +58,7 @@ pub use match_output::{
 };
 pub use merge::{merge_output_inner_hash, DOMAIN_MERGE_INNER};
 pub use note::{commitment_from_fields_v2, NoteCommitment, NOTE_COMMITMENT_BYTES};
+pub use note_use::{note_use_tag, DOMAIN_NOTE_USE};
 pub use nullifier::{nullifier_v2, Nullifier, NULLIFIER_BYTES};
 pub use poseidon::{poseidon_hash, poseidon_hash_bytes};
 pub use price_commitment::price_commitment;

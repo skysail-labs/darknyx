@@ -16,6 +16,7 @@ import {
   bn254ToBE32,
   deriveOwnerCommitmentBlinding,
   deriveSpendingKey,
+  deriveNoteSecret,
 } from "../keys/key-generators.js";
 import { deriveMergeOutputInnerHash } from "../utxo/merge.js";
 import { deriveDepositInnerHash } from "../utxo/deposit-inner.js";
@@ -213,9 +214,13 @@ export async function recoverNotesFromChain(
 
   const deposits = txs.flatMap(decodeDeposits);
   for (const deposit of deposits) {
+    // Re-derive the per-note secret from seed + the PUBLIC nonce recorded in
+    // the deposit instruction. This is the whole reason the secret is keyed on
+    // the nonce rather than a counter: cold recovery needs no persisted state.
     const innerBytes = await deriveDepositInnerHash(
       ownerBytes,
       deposit.recoveryNonce,
+      bn254ToBE32(deriveNoteSecret(opts.masterSeed, deposit.recoveryNonce)),
     );
     const innerHash = be32ToBig(innerBytes);
     const commitment = await noteCommitmentV2({

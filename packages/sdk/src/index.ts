@@ -8,6 +8,7 @@ export * from "./keys/user-commitment.js";
 export * from "./utxo/note.js";
 export * from "./utxo/deposit.js";
 export * from "./utxo/deposit-inner.js";
+export * from "./utxo/note-use.js";
 export * from "./utxo/withdraw.js";
 export * from "./utxo/note-store.js";
 export * from "./utxo/merge.js";
