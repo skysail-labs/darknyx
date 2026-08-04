@@ -164,6 +164,7 @@ export function getDepositFunction({
         recoveryNonce,
         spendingKey,
         ownerCommitmentBlinding: ownerBlinding,
+        noteSecret: bytesToBigIntBE(noteSecretBytes),
       });
       const expectedPublic = [
         commitment,

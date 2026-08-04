@@ -37,6 +37,7 @@ import {
   deriveSpendingKey,
   bn254ToBE32,
   deriveBlindingFactor,
+  deriveNoteSecret,
 } from "../src/keys/key-generators.js";
 import {
   noteCommitmentV2,
@@ -56,6 +57,7 @@ import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { be32ToDec, be32ToBigInt, StepTimer } from "./helpers/e2e-helpers.js";
 import { proveValidMerge } from "./helpers/merge-prover.js";
 import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
+import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -164,10 +166,12 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     }[] = [];
     for (const [i, amount] of [A0, A1].entries()) {
       const recoveryNonce = deriveBlindingFactor(masterSeed, BigInt(i));
+      const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
       const innerHash = be32ToBigInt(
         await deriveDepositInnerHash(
           bn254ToBE32(owner),
-          bn254ToBE32(recoveryNonce),
+          recoveryNonceBytes,
+          bn254ToBE32(deriveNoteSecret(masterSeed, recoveryNonceBytes)),
         ),
       );
       const commitment = await noteCommitmentV2({
@@ -184,6 +188,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
         recoveryNonce,
         spendingKey,
         ownerCommitmentBlinding: ownerBlinding,
+        noteSecret: deriveNoteSecret(masterSeed, recoveryNonceBytes),
       });
       await t.step(`deposit note ${i}`, () =>
         sendAndConfirmTransaction(
@@ -252,7 +257,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
             programId: VAULT_ID,
             treeId: 0,
             payer: admin.publicKey,
-            inputCommitments: [notes[0].commitment, notes[1].commitment],
+            inputUseTags: mergeRes.inputUseTagsBE,
             outputCommitment: mergeRes.outputCommitmentBE,
             tokenMint: mint,
             merkleRoot: root,
@@ -307,6 +312,10 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
     );
 
     const balBefore = (await getAccount(conn, ata)).amount;
+    const mergedUseTag = await deriveNoteUseTag(
+      mergeRes.outputCommitmentBE,
+      bn254ToBE32(mergeRes.outputInnerHash),
+    );
     await t.step("withdraw ix submit + confirm", () =>
       sendAndConfirmTransaction(
         conn,
@@ -319,7 +328,7 @@ d("devnet merge → withdraw (isolated, no CVM)", () => {
             tokenMint: mint,
             destinationTokenAccount: ata,
             tokenProgramId: TOKEN_PROGRAM_ID,
-            noteCommitment: mergeRes.outputCommitmentBE,
+            noteUseTag: mergedUseTag,
             nullifier: mergedNull,
             merkleRoot: w.root,
             amount: SUM,

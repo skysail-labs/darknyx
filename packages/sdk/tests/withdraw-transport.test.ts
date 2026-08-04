@@ -18,6 +18,7 @@ import {
 import type { Buffer as NodeBuffer } from "node:buffer";
 
 import { getWithdrawFunction } from "../src/utxo/withdraw.js";
+import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import { noteCommitmentV2 } from "../src/utxo/note.js";
 import { bn254ToBE32 } from "../src/keys/key-generators.js";
 import type {
@@ -50,8 +51,8 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
       throw new Error("not used in withdraw test");
     },
   };
-  /** Set by a test to the commitment the SDK will compute locally (SW-26). */
-  expectedNoteCommitment: Uint8Array | null = null;
+  /** Set by a test to the note-use TAG the SDK will compute locally (SW-26). */
+  expectedNoteUseTag: Uint8Array | null = null;
   /**
    * Set by a test to corrupt the otherwise-correct public signals, so the SW-26
    * check is exercised with everything else about the withdraw unchanged.
@@ -68,9 +69,10 @@ class FakeProverSuite implements IDarkPoolZkProverSuite {
         // stub has to produce the real vector rather than `[]`. Order mirrors
         // `programs/vault/src/instructions/withdraw.rs`.
         publicInputs: [
-          // The note commitment is computed by the CIRCUIT, not passed in, so
-          // the stub echoes what the caller set on `expectedNoteCommitment`.
-          this.expectedNoteCommitment ?? new Uint8Array(32),
+          // VALID_SPEND's wire-0 output is the note-use tag; the commitment is
+          // a private intermediate the circuit never publishes. Both are
+          // computed inside the circuit, so the stub echoes what the caller set.
+          this.expectedNoteUseTag ?? new Uint8Array(32),
           bn254ToBE32(inputs.merkleRoot),
           bn254ToBE32(inputs.nullifier),
           bn254ToBE32(inputs.tokenMint[0]),
@@ -167,7 +169,10 @@ describe("getWithdrawFunction", () => {
     };
     // Public signals are validated on every prove path now (SW-26), so the
     // stub must return the vector the SDK computes locally.
-    prover.expectedNoteCommitment = await noteCommitmentV2(notePlaintext);
+    prover.expectedNoteUseTag = await deriveNoteUseTag(
+      await noteCommitmentV2(notePlaintext),
+      bn254ToBE32(notePlaintext.innerHash),
+    );
 
     const receipt = await getWithdrawFunction({ client })({
       payer: new PublicKey(mintBytes),
@@ -249,7 +254,10 @@ describe("getWithdrawFunction", () => {
         ownerCommitment: 3n,
         innerHash: 9n,
       };
-      prover.expectedNoteCommitment = await noteCommitmentV2(notePlaintext);
+      prover.expectedNoteUseTag = await deriveNoteUseTag(
+      await noteCommitmentV2(notePlaintext),
+      bn254ToBE32(notePlaintext.innerHash),
+    );
       prover.corruptPublicInputs = corrupt;
 
       let error: Error | null = null;

@@ -21,6 +21,8 @@
  *  only leaf indices + relock flags + root; a client reconstructs its own
  *  amounts from the per-account FillMemo (`fills` on `/v1/stream`). */
 export interface TradeSettledEvent {
+  /** The Merkle-tree shard the output notes were appended to. */
+  treeId: number;
   matchId: Uint8Array;
   noteCleaf: bigint;
   noteDleaf: bigint;
@@ -93,6 +95,7 @@ export function sellerNotification(ev: TradeSettledEvent): MatchNotification {
  *  `programs/vault/src/instructions/tee_forced_settle.rs::TradeSettled`.
  *
  *  Layout (Borsh) — amount-privacy (P3b) dropped the amount/price fields:
+ *    1   tree_id      <- the shard the outputs landed in; LEADS the event
  *    16  match_id
  *    8   note_c_leaf
  *    8   note_d_leaf
@@ -105,8 +108,14 @@ export function sellerNotification(ev: TradeSettledEvent): MatchNotification {
  *    32  new_root
  */
 export function decodeTradeSettled(eventData: Uint8Array): TradeSettledEvent {
-  // 16 (match_id) + 6 u64 leaf indices + 2 bools + 32 root.
-  const expected = 16 + 8 * 6 + 1 + 1 + 32;
+  // 1 (tree_id) + 16 (match_id) + 6 u64 leaf indices + 2 bools + 32 root.
+  //
+  // The leading `tree_id` byte was missed when tree sharding added it: this
+  // expected 98 bytes against a 99-byte event, so every decode threw. It went
+  // unnoticed because nothing in production calls this — `chain-history.ts`
+  // has its own decoder and gets the offset right. Fixed here rather than left
+  // as a trap for the first caller.
+  const expected = 1 + 16 + 8 * 6 + 1 + 1 + 32;
   if (eventData.length !== expected) {
     throw new Error(
       `TradeSettled event length mismatch: got ${eventData.length}, expected ${expected}`,
@@ -118,6 +127,8 @@ export function decodeTradeSettled(eventData: Uint8Array): TradeSettledEvent {
     eventData.byteLength,
   );
   let off = 0;
+  const treeId = eventData[off];
+  off += 1;
   const matchId = eventData.slice(off, off + 16);
   off += 16;
   const noteCleaf = dv.getBigUint64(off, true);
@@ -138,6 +149,7 @@ export function decodeTradeSettled(eventData: Uint8Array): TradeSettledEvent {
   off += 1;
   const newRoot = eventData.slice(off, off + 32);
   return {
+    treeId,
     matchId,
     noteCleaf,
     noteDleaf,

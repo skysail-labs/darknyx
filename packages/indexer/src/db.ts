@@ -17,9 +17,10 @@ export interface FillRow extends SettleFill {
 
 // Amount-privacy (P3b): the on-chain settle ix no longer carries amounts, so
 // the indexer stores commitments + a partial-fill flag only (no change_amount /
-// clearing_price columns). Recovery v3 stores the exact consumed/trade/change
-// commitments plus an opaque `(trade, change)` ciphertext; only the order
-// owner's viewing key can decrypt it.
+// clearing_price columns). Recovery v3 stores the consumed input's note-use TAG
+// (v11 — the settle ix no longer carries the consumed commitment), the exact
+// trade/change commitments, and an opaque `(trade, change)` ciphertext; only the
+// order owner's viewing key can decrypt it.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS fills (
   order_id              TEXT    NOT NULL,
@@ -28,7 +29,7 @@ CREATE TABLE IF NOT EXISTS fills (
   signature             TEXT    NOT NULL,
   slot                  INTEGER NOT NULL,
   is_partial_fill       INTEGER NOT NULL,
-  input_note_commitment TEXT    NOT NULL,
+  input_note_use_tag    TEXT    NOT NULL,
   trade_note_commitment TEXT    NOT NULL,
   change_note_commitment TEXT,
   batch_slot            TEXT    NOT NULL,
@@ -55,7 +56,11 @@ export class FillsDb {
     // Rebuildable locator DBs created before recovery v3 may still exist. Add
     // the new columns without pretending legacy rows are recoverable.
     for (const statement of [
-      "ALTER TABLE fills ADD COLUMN input_note_commitment TEXT",
+      // v11: the input column changed MEANING, not just name — it now holds a
+      // tag. A legacy row's commitment would never match a tag lookup, and the
+      // DB is a rebuildable locator, so old rows are simply left behind under
+      // the retired column rather than migrated.
+      "ALTER TABLE fills ADD COLUMN input_note_use_tag TEXT",
       "ALTER TABLE fills ADD COLUMN trade_note_commitment TEXT",
       "ALTER TABLE fills ADD COLUMN output_enc TEXT",
     ]) {
@@ -72,7 +77,7 @@ export class FillsDb {
     const stmt = this.db.prepare(
       `INSERT OR IGNORE INTO fills
         (order_id, side, match_id, signature, slot, is_partial_fill,
-         input_note_commitment, trade_note_commitment, change_note_commitment,
+         input_note_use_tag, trade_note_commitment, change_note_commitment,
          batch_slot, ephemeral_pubkey, output_enc, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
@@ -85,7 +90,7 @@ export class FillsDb {
         signature,
         slot,
         f.isPartialFill ? 1 : 0,
-        f.inputNoteCommitment,
+        f.inputNoteUseTag,
         f.tradeNoteCommitment,
         f.changeNoteCommitment,
         f.batchSlot,
@@ -101,11 +106,11 @@ export class FillsDb {
     const rows = this.db
       .prepare(
         `SELECT order_id, side, match_id, signature, slot, is_partial_fill,
-                input_note_commitment, trade_note_commitment,
+                input_note_use_tag, trade_note_commitment,
                 change_note_commitment, batch_slot, ephemeral_pubkey, output_enc
            FROM fills
           WHERE order_id = ? AND slot >= ?
-            AND input_note_commitment IS NOT NULL
+            AND input_note_use_tag IS NOT NULL
             AND trade_note_commitment IS NOT NULL
           ORDER BY slot ASC, side ASC`,
       )
@@ -117,7 +122,7 @@ export class FillsDb {
       signature: r.signature as string,
       slot: r.slot as number,
       isPartialFill: (r.is_partial_fill as number) === 1,
-      inputNoteCommitment: r.input_note_commitment as string,
+      inputNoteUseTag: r.input_note_use_tag as string,
       tradeNoteCommitment: r.trade_note_commitment as string,
       changeNoteCommitment: (r.change_note_commitment as string | null) ?? null,
       batchSlot: r.batch_slot as string,

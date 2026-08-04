@@ -16,6 +16,8 @@ import {
   pubkeyToFrPair,
 } from "../../src/utxo/note.js";
 import { deriveMergeOutputInnerHash } from "../../src/utxo/merge.js";
+import { deriveNoteUseTag } from "../../src/utxo/note-use.js";
+import { bn254ToBE32 } from "../../src/keys/key-generators.js";
 import { be32ToDec } from "./e2e-helpers.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";
 
@@ -44,8 +46,15 @@ export interface MergeProveParams {
 
 export interface MergeProveResult {
   proof: Groth16OnChainProof;
-  /** [outputCommitment, inputCommitments[0..k-1], merkleRoot, mint_lo, mint_hi] (32B BE each). */
+  /** [outputCommitment, inputUseTags[0..k-1], merkleRoot, mint_lo, mint_hi] (32B BE each). */
   publicInputsBE: Uint8Array[];
+  /**
+   * The K input note-use TAGS in slot order (zero for dummy slots) — what the
+   * merge instruction carries and what the ConsumedNoteEntry PDAs key on.
+   * Returned so callers cannot accidentally pass the commitments, which are
+   * the same width and would derive plausible-but-wrong PDAs.
+   */
+  inputUseTagsBE: Uint8Array[];
   /** The merged-note commitment (32B BE). */
   outputCommitmentBE: Uint8Array;
   /** Commitment-derived merged-note inner hash. */
@@ -111,6 +120,16 @@ export async function proveValidMerge(
     }
   }
 
+  // The circuit masks an inactive slot's tag to zero, so a pad slot's tag is
+  // literally 0 rather than Poseidon3(29, 0, 0).
+  const inputUseTagsBE = await Promise.all(
+    inputCommitments.map((commitment, i) =>
+      slots[i]
+        ? deriveNoteUseTag(commitment, bn254ToBE32(slots[i]!.innerHash))
+        : Promise.resolve(new Uint8Array(32)),
+    ),
+  );
+
   const outputInnerHash = await deriveMergeOutputInnerHash(inputCommitments);
   const outputCommitmentBE = await noteCommitmentV2({
     tokenMint: args.tokenMint,
@@ -143,6 +162,7 @@ export async function proveValidMerge(
   return {
     proof,
     publicInputsBE,
+    inputUseTagsBE,
     outputCommitmentBE,
     outputInnerHash,
     outputAmount: sum,

@@ -15,13 +15,13 @@
  * trade + change amounts from the encrypted recovery tuple; partial-fill is
  * signalled by change-note presence.
  *
- * BYTE-LAYOUT CONTRACT: the 488-byte payload mirrors
+ * BYTE-LAYOUT CONTRACT: the 552-byte payload mirrors
  * `programs/vault/src/instructions/tee_forced_settle.rs::MatchResultPayload`
  * and the TS encoder `@darknyx/sdk` `settle-builder.ts::serializePayload`. The
  * `decode.test.ts` round-trips against that encoder so the two can't drift.
  *
  * One settle ix = ONE match (one payload). A batch is N such ixs sharing a
- * marker. ix data = disc(8) ‖ tree_id(1) ‖ payload(488) ‖ match_index(1) ‖
+ * marker. ix data = disc(8) ‖ tree_id(1) ‖ payload(552) ‖ match_index(1) ‖
  * siblings(128).
  */
 
@@ -38,8 +38,10 @@ export const SETTLE_IX_NAME = "tee_forced_settle_batched";
 export const SETTLE_DISCRIMINATOR = anchorDiscriminator(SETTLE_IX_NAME);
 
 /** Borsh-serialized `MatchResultPayload` is exactly this many bytes.
- *  v9 removed two vestigial nullifiers from v8's 552-byte layout → 488. */
-export const PAYLOAD_LEN = 488;
+ *  v9 removed two vestigial nullifiers from v8's 552-byte layout → 488.
+ *  v11 swapped the two consumed commitments for note-use TAGS and appended
+ *  `note_e_use_tag` / `note_f_use_tag` → 552 again, with different contents. */
+export const PAYLOAD_LEN = 552;
 
 const ZERO32 = "0".repeat(64);
 
@@ -54,14 +56,23 @@ const u64 = (v: DataView, off: number) => v.getBigUint64(off, true);
  *  which the indexer stores but cannot decrypt. */
 export interface MatchPayload {
   matchId: string;
-  noteAcommitment: string; // buyer input (quote)
-  noteBcommitment: string; // seller input (base)
+  /**
+   * The consumed inputs, as note-use TAGS. These are NOT Merkle leaves and
+   * will not match any commitment the indexer saw at deposit — that is the
+   * point of the construction. Anyone joining on these to a leaf is holding a
+   * pre-v11 assumption.
+   */
+  noteAuseTag: string; // buyer input handle (quote note)
+  noteBuseTag: string; // seller input handle (base note)
   noteCcommitment: string; // buyer trade output (base)
   noteDcommitment: string; // seller trade output (quote)
   orderIdA: string;
   orderIdB: string;
   noteEcommitment: string; // buyer change note ([0;32] = exact fill)
   noteFcommitment: string; // seller change note ([0;32] = exact fill)
+  /** Relock handles for the change notes above ([0;32] = exact fill). */
+  noteEuseTag: string;
+  noteFuseTag: string;
   batchSlot: bigint;
   /** Shared ephemeral X25519 pubkey, hex — `null` when there's no recovery
    *  ciphertext (all-zero bundle). */
@@ -72,8 +83,9 @@ export interface MatchPayload {
   sellerEnc: string | null;
 }
 
-/** Offsets into the 128-byte fill_recovery bundle (which itself starts at 360). */
-const FILL_RECOVERY_OFFSET = 360;
+/** Offsets into the 128-byte fill_recovery bundle (which itself starts at 424
+ *  in v11 — the two appended relock tags pushed it 64 bytes later). */
+const FILL_RECOVERY_OFFSET = 424;
 const RECOVERY_V3_TRAILER = Buffer.from("DNYXREC3", "ascii");
 const isZero = (b: Uint8Array) => b.every((x) => x === 0);
 const hexOrNull = (b: Uint8Array) => (isZero(b) ? null : hex(b));
@@ -96,9 +108,10 @@ export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
   const recoveryV3 = Buffer.from(trailer).equals(RECOVERY_V3_TRAILER);
   return {
     matchId: hex(payload.subarray(0, 16)),
-    // Six 32-byte note commitments precede the order ids in payload v9.
-    noteAcommitment: hex(payload.subarray(16, 48)),
-    noteBcommitment: hex(payload.subarray(48, 80)),
+    // Six 32-byte note fields precede the order ids: the first two are input
+    // TAGS (v11), the last four are output commitments.
+    noteAuseTag: hex(payload.subarray(16, 48)),
+    noteBuseTag: hex(payload.subarray(48, 80)),
     noteCcommitment: hex(payload.subarray(80, 112)),
     noteDcommitment: hex(payload.subarray(112, 144)),
     noteEcommitment: hex(payload.subarray(144, 176)),
@@ -108,8 +121,11 @@ export function decodeMatchPayload(payload: Uint8Array): MatchPayload {
     // After order_id_b: note_fee_base (240..272) + note_fee_quote (272..304) +
     // buyer_relock_order_id (304..320) + buyer_relock_expiry (320..328) +
     // seller_relock_order_id (328..344) + seller_relock_expiry (344..352) +
-    // batch_slot (352..360) + fill_recovery (360..488).
-    batchSlot: u64(v, 352),
+    // note_e_use_tag (352..384) + note_f_use_tag (384..416) +
+    // batch_slot (416..424) + fill_recovery (424..552).
+    noteEuseTag: hex(payload.subarray(352, 384)),
+    noteFuseTag: hex(payload.subarray(384, 416)),
+    batchSlot: u64(v, 416),
     ephemeralPubkey: recoveryV3 ? hexOrNull(eph) : null,
     buyerEnc: recoveryV3 ? hexOrNull(payload.subarray(r + 32, r + 76)) : null,
     sellerEnc: recoveryV3 ? hexOrNull(payload.subarray(r + 76, r + 120)) : null,
@@ -125,8 +141,11 @@ export interface SettleFill {
   orderId: string;
   side: "buyer" | "seller";
   matchId: string;
-  /** Consumed input and always-present trade output commitments. */
-  inputNoteCommitment: string;
+  /**
+   * The consumed input's note-use TAG (not a commitment — see `MatchPayload`)
+   * and the always-present trade output's commitment.
+   */
+  inputNoteUseTag: string;
   tradeNoteCommitment: string;
   /** `true` when this side received a change note (partial fill). */
   isPartialFill: boolean;
@@ -148,7 +167,7 @@ export function payloadToFills(p: MatchPayload): SettleFill[] {
       orderId: p.orderIdA,
       side: "buyer",
       matchId: p.matchId,
-      inputNoteCommitment: p.noteAcommitment,
+      inputNoteUseTag: p.noteAuseTag,
       tradeNoteCommitment: p.noteCcommitment,
       isPartialFill: !buyerExact,
       changeNoteCommitment: buyerExact ? null : p.noteEcommitment,
@@ -160,7 +179,7 @@ export function payloadToFills(p: MatchPayload): SettleFill[] {
       orderId: p.orderIdB,
       side: "seller",
       matchId: p.matchId,
-      inputNoteCommitment: p.noteBcommitment,
+      inputNoteUseTag: p.noteBuseTag,
       tradeNoteCommitment: p.noteDcommitment,
       isPartialFill: !sellerExact,
       changeNoteCommitment: sellerExact ? null : p.noteFcommitment,

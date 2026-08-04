@@ -23,6 +23,8 @@ import { type Groth16OnChainProof } from "../../src/idl/vault-client.js";
 import { noteCommitmentV2, pubkeyToFrPair } from "../../src/utxo/note.js";
 import { be32ToDec } from "./e2e-helpers.js";
 import { snarkjsFullProve } from "./snarkjs-prover.js";
+import { deriveNoteUseTag } from "../../src/utxo/note-use.js";
+import { bn254ToBE32 } from "../../src/keys/key-generators.js";
 
 /** Where the compiled VALID_INPUT artefacts live, relative to the repo root. */
 const WASM_REL = "circuits/build/valid_input/circuit_js/circuit.wasm";
@@ -61,13 +63,16 @@ export interface ValidInputProveResult {
   /**
    * Public inputs in the EXACT byte layout the on-chain verifier consumes,
    * in circuit-declaration order:
-   *   [merkleRoot, noteCommitment, tokenMint_lo, tokenMint_hi]
+   *   [merkleRoot, noteUseTag, tokenMint_lo, tokenMint_hi]
    * Each 32 bytes BE. Returned for assertion / debugging convenience.
    */
   publicInputsBE: Uint8Array[];
-  /** The computed note commitment (32 bytes BE) — useful for the caller
-   *  to wire into `buildLockNoteInstruction` without re-computing. */
+  /** The computed note commitment (32 bytes BE). PRIVATE to the circuit now —
+   *  returned only so a caller can check the leaf it built. */
   noteCommitmentBE: Uint8Array;
+  /** The note-use tag (32 bytes BE) — what `buildLockNoteInstruction` takes,
+   *  and public input 1 of the proof. */
+  noteUseTagBE: Uint8Array;
 }
 
 /**
@@ -111,11 +116,18 @@ export async function proveValidInput(
     innerHash: args.innerHash,
   });
 
+  const useTagBE = await deriveNoteUseTag(
+    commitmentBE,
+    bn254ToBE32(args.innerHash),
+  );
+
   const [mintLo, mintHi] = pubkeyToFrPair(args.tokenMint);
 
   const inputs: Record<string, string | string[]> = {
     merkleRoot: be32ToDec(args.merkleRootBE),
-    noteCommitment: be32ToDec(commitmentBE),
+    // The circuit's public handle. `noteCommitment` is now an INTERNAL signal
+    // there, so passing it would be rejected as an unknown input.
+    noteUseTag: be32ToDec(useTagBE),
     tokenMint: [mintLo.toString(), mintHi.toString()],
     amount: args.amount.toString(),
     spendingKey: args.spendingKey.toString(),
@@ -135,5 +147,6 @@ export async function proveValidInput(
     proof,
     publicInputsBE,
     noteCommitmentBE: commitmentBE,
+    noteUseTagBE: useTagBE,
   };
 }

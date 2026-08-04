@@ -21,6 +21,7 @@ import {
 import { deriveMergeOutputInnerHash } from "../utxo/merge.js";
 import { deriveDepositInnerHash } from "../utxo/deposit-inner.js";
 import { noteCommitmentV2, ownerCommitment } from "../utxo/note.js";
+import { deriveNoteUseTag } from "../utxo/note-use.js";
 import type { StoredNote } from "../utxo/note-store.js";
 import {
   decodeSettleFills,
@@ -47,6 +48,13 @@ const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex");
 const same = (a: Uint8Array, b: Uint8Array): boolean =>
   Buffer.from(a).equals(Buffer.from(b));
 const isZero = (b: Uint8Array): boolean => b.every((x) => x === 0);
+const ZERO32_BYTES = new Uint8Array(32);
+
+/** Parse a 32-byte hex string, or `null` if it is not exactly that. */
+function fromHex(value: string): Uint8Array | null {
+  if (!/^[0-9a-fA-F]{64}$/.test(value)) return null;
+  return Uint8Array.from(Buffer.from(value, "hex"));
+}
 
 function be32ToBig(bytes: Uint8Array): bigint {
   let out = 0n;
@@ -122,12 +130,17 @@ export function decodeDeposits(tx: RawSettleTx): DepositRecoveryRecord[] {
 export interface MergeRecoveryRecord {
   treeId: number;
   leafIndex: bigint;
-  inputCommitments: Uint8Array[];
+  /**
+   * The K input slots as they appear on the wire: note-use TAGS, zero for pad
+   * slots. Recovery must invert these against notes it already holds — the
+   * commitments the merge consumed are not on chain anywhere.
+   */
+  inputUseTags: Uint8Array[];
   outputCommitment: Uint8Array;
   tokenMint: Uint8Array;
 }
 
-/** Decode merge commitments + exact output leaf position. */
+/** Decode merge input handles + exact output leaf position. */
 export function decodeMerges(tx: RawSettleTx): MergeRecoveryRecord[] {
   const events = eventBodies(tx.logMessages ?? [], NOTE_MERGED_DISC)
     .filter((body) => body.length >= 1 + 32 + 32 + 1 + 8)
@@ -144,18 +157,16 @@ export function decodeMerges(tx: RawSettleTx): MergeRecoveryRecord[] {
     const treeId = data[8];
     const k = view.getUint32(9, true);
     if (k !== 2 && k !== 4) continue;
-    const commitmentsEnd = 13 + k * 32;
-    if (data.length < commitmentsEnd + 64) continue;
-    const inputCommitments = Array.from({ length: k }, (_, index) =>
-      Uint8Array.from(
-        data.subarray(13 + index * 32, 13 + (index + 1) * 32),
-      ),
+    const tagsEnd = 13 + k * 32;
+    if (data.length < tagsEnd + 64) continue;
+    const inputUseTags = Array.from({ length: k }, (_, index) =>
+      Uint8Array.from(data.subarray(13 + index * 32, 13 + (index + 1) * 32)),
     );
     const outputCommitment = Uint8Array.from(
-      data.subarray(commitmentsEnd, commitmentsEnd + 32),
+      data.subarray(tagsEnd, tagsEnd + 32),
     );
     const tokenMint = Uint8Array.from(
-      data.subarray(commitmentsEnd + 32, commitmentsEnd + 64),
+      data.subarray(tagsEnd + 32, tagsEnd + 64),
     );
     const event = events.find(
       (candidate) =>
@@ -163,7 +174,7 @@ export function decodeMerges(tx: RawSettleTx): MergeRecoveryRecord[] {
         same(candidate.outputCommitment, outputCommitment) &&
         same(candidate.tokenMint, tokenMint),
     );
-    if (event) out.push({ ...event, inputCommitments });
+    if (event) out.push({ ...event, inputUseTags });
   }
   return out;
 }
@@ -254,11 +265,36 @@ export async function recoverNotesFromChain(
   });
   const merges = txs.flatMap(decodeMerges);
 
+  /**
+   * Invert the tag namespace: `tag -> the held note that produces it`.
+   *
+   * A merge instruction publishes only handles, so recovery cannot look a
+   * consumed note up by commitment any more. It has to walk the notes it has
+   * already reconstructed, derive each one's tag, and match. Rebuilt at the top
+   * of every fixed-point pass because `notes` grows as settlements resolve, and
+   * a merge whose input was itself a trade output is only resolvable once that
+   * output exists.
+   */
+  const buildTagIndex = async (): Promise<Map<string, StoredNote>> => {
+    const index = new Map<string, StoredNote>();
+    for (const note of notes.values()) {
+      const commitment = fromHex(note.commitment);
+      if (!commitment) continue;
+      const tag = await deriveNoteUseTag(
+        commitment,
+        bn254ToBE32(note.innerHash),
+      );
+      index.set(hex(tag), note);
+    }
+    return index;
+  };
+
   // Output derivations form a commitment DAG. Iterate to a fixed point so RPC
   // scan ordering within a slot cannot strand a merge/continuation chain.
   let progressed = true;
   while (progressed) {
     progressed = false;
+    const tagIndex = await buildTagIndex();
     for (const fill of settlements) {
       if (notes.has(fill.tradeNoteCommitment)) continue;
       const result = await recoverFillFromChain(fill, {
@@ -279,10 +315,26 @@ export async function recoverNotesFromChain(
     for (const merge of merges) {
       const outputHex = hex(merge.outputCommitment);
       if (notes.has(outputHex)) continue;
-      const active = merge.inputCommitments.filter((c) => !isZero(c));
-      const inputs = active.map((c) => notes.get(hex(c)));
-      if (inputs.some((note) => !note)) continue;
-      const resolved = inputs as StoredNote[];
+      // `null` marks a genuine pad slot; a MISSING active slot means we do not
+      // hold that note yet, which defers this merge to a later pass rather than
+      // dropping it.
+      const slots: (StoredNote | null)[] = [];
+      let unresolved = false;
+      for (const tag of merge.inputUseTags) {
+        if (isZero(tag)) {
+          slots.push(null);
+          continue;
+        }
+        const note = tagIndex.get(hex(tag));
+        if (!note) {
+          unresolved = true;
+          break;
+        }
+        slots.push(note);
+      }
+      if (unresolved) continue;
+      const resolved = slots.filter((slot): slot is StoredNote => slot !== null);
+      if (resolved.length === 0) continue;
       if (
         resolved.some(
           (note) =>
@@ -293,9 +345,13 @@ export async function recoverNotesFromChain(
         continue;
       }
       const amount = resolved.reduce((sum, note) => sum + note.amount, 0n);
-      const innerHash = await deriveMergeOutputInnerHash(
-        merge.inputCommitments,
+      // The circuit derives the output inner over input COMMITMENTS (they stay
+      // private witnesses there), so rebuild that vector in slot order from the
+      // notes the tags resolved to — zero for the pad slots.
+      const inputCommitments = slots.map((slot) =>
+        slot === null ? ZERO32_BYTES : (fromHex(slot.commitment) ?? ZERO32_BYTES),
       );
+      const innerHash = await deriveMergeOutputInnerHash(inputCommitments);
       const commitment = await noteCommitmentV2({
         tokenMint: merge.tokenMint,
         amount,
@@ -317,19 +373,24 @@ export async function recoverNotesFromChain(
     }
   }
 
+  const finalTagIndex = await buildTagIndex();
   return {
     notes: [...notes.values()],
     recovered,
+    // "Unresolved" means: we hold the input but failed to reconstruct the
+    // output — a real gap. A settlement or merge whose input we never held is
+    // someone else's and is not counted. Both now test membership through the
+    // tag index rather than by commitment lookup.
     unresolvedSettlements: settlements.filter(
       (fill) =>
-        notes.has(fill.inputNoteCommitment) &&
+        finalTagIndex.has(fill.inputNoteUseTag.toLowerCase()) &&
         !notes.has(fill.tradeNoteCommitment),
     ).length,
     unresolvedMerges: merges.filter(
       (merge) =>
-        merge.inputCommitments
-          .filter((commitment) => !isZero(commitment))
-          .every((commitment) => notes.has(hex(commitment))) &&
+        merge.inputUseTags
+          .filter((tag) => !isZero(tag))
+          .every((tag) => finalTagIndex.has(hex(tag))) &&
         !notes.has(hex(merge.outputCommitment)),
     ).length,
   };

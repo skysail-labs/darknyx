@@ -34,6 +34,7 @@ import {
   deriveSpendingKey,
   bn254ToBE32,
   deriveBlindingFactor,
+  deriveNoteSecret,
 } from "../src/keys/key-generators.js";
 import {
   noteCommitmentV2,
@@ -52,6 +53,7 @@ import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
 import { be32ToBigInt, be32ToDec } from "./helpers/e2e-helpers.js";
 import { deriveDepositInnerHash } from "../src/utxo/deposit-inner.js";
+import { deriveNoteUseTag } from "../src/utxo/note-use.js";
 import { nodeValidDepositProver } from "../src/zk/valid-deposit-prover.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -144,10 +146,12 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
 
     // ── 2. mint + deposit the v2 note ──
     const recoveryNonce = deriveBlindingFactor(masterSeed, BigInt(leafIndex));
+    const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
     const innerHash = be32ToBigInt(
       await deriveDepositInnerHash(
         bn254ToBE32(ownerCommit),
-        bn254ToBE32(recoveryNonce),
+        recoveryNonceBytes,
+        bn254ToBE32(deriveNoteSecret(masterSeed, recoveryNonceBytes)),
       ),
     );
     const commitment = await noteCommitmentV2({
@@ -167,6 +171,7 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
       recoveryNonce,
       spendingKey,
       ownerCommitmentBlinding: ownerBlinding,
+      noteSecret: deriveNoteSecret(masterSeed, recoveryNonceBytes),
     });
 
     const balBefore = await getAccount(conn, ata)
@@ -243,7 +248,9 @@ d("devnet v2 deposit → withdraw (isolated, no settle)", () => {
           tokenMint: mint,
           destinationTokenAccount: ata,
           tokenProgramId: TOKEN_PROGRAM_ID,
-          noteCommitment: commitment,
+          // VALID_SPEND's public output 0 is now the tag; the commitment
+          // stays a private intermediate inside the proof.
+          noteUseTag: await deriveNoteUseTag(commitment, bn254ToBE32(innerHash)),
           nullifier: nulli,
           merkleRoot: w.root,
           amount: AMOUNT,

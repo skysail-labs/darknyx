@@ -43,12 +43,14 @@ const hexN = (b: number, len: number) =>
 function payload(): MatchResultPayload {
   return {
     matchId: fill(16, 0x11),
-    noteAcommitment: fill(32, 0xa),
-    noteBcommitment: fill(32, 0xb),
+    noteAuseTag: fill(32, 0xa),
+    noteBuseTag: fill(32, 0xb),
     noteCcommitment: fill(32, 0xc),
     noteDcommitment: fill(32, 0xd),
     noteEcommitment: fill(32, 0xee),
     noteFcommitment: fill(32, 0xff),
+    noteEuseTag: fill(32, 0xe1),
+    noteFuseTag: fill(32, 0xf1),
     orderIdA: fill(16, 0xaa),
     orderIdB: fill(16, 0xbb),
     noteFeeBaseCommitment: fill(32, 0),

@@ -157,17 +157,28 @@ export function walletEntryPda(
   );
 }
 
+/**
+ * A lock is keyed on the note-use TAG, not the commitment — the tag is what
+ * `lock_note` takes and what VALID_INPUT publishes. Passing a commitment here
+ * compiles (both are `Uint8Array`) and derives a real-looking address that no
+ * instruction will ever write, so the failure surfaces on-chain as
+ * `AccountNotFound`. See `utxo/note-use.ts`.
+ */
 export function noteLockPda(
   programId: PublicKey,
-  noteCommitment: Uint8Array,
+  noteUseTag: Uint8Array,
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
-    [NOTE_LOCK_SEED, fixed32(noteCommitment)],
+    [NOTE_LOCK_SEED, fixed32(noteUseTag)],
     programId,
   );
 }
 
-/** S-05 deposit-once guard PDA. */
+/**
+ * S-05 deposit-once guard PDA — the one guard that stays COMMITMENT-keyed.
+ * It guards leaf CREATION, and the leaf is the commitment; a deposit has no
+ * tag to key on because the depositor's inner hash is private at that point.
+ */
 export function depositedNotePda(
   programId: PublicKey,
   noteCommitment: Uint8Array,
@@ -178,12 +189,13 @@ export function depositedNotePda(
   );
 }
 
+/** Consume-once guard, shared by withdraw / settle / merge — tag-keyed. */
 export function consumedNotePda(
   programId: PublicKey,
-  noteCommitment: Uint8Array,
+  noteUseTag: Uint8Array,
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
-    [CONSUMED_NOTE_SEED, fixed32(noteCommitment)],
+    [CONSUMED_NOTE_SEED, fixed32(noteUseTag)],
     programId,
   );
 }
@@ -703,7 +715,11 @@ export interface BuildWithdrawParams {
   tokenMint: PublicKey;
   destinationTokenAccount: PublicKey;
   tokenProgramId: PublicKey;
-  noteCommitment: Uint8Array;
+  /**
+   * The note-use tag, which is VALID_SPEND's public output at wire 0 — NOT
+   * the commitment. Derive it with `deriveNoteUseTag(commitment, innerHash)`.
+   */
+  noteUseTag: Uint8Array;
   nullifier: Uint8Array;
   merkleRoot: Uint8Array;
   amount: bigint;
@@ -723,7 +739,8 @@ export interface BuildLockNoteParams {
   treeId: number;
   /** Must be one of `vault_config.tee_pubkeys`. Pays the rent for the new PDA. */
   teeAuthority: PublicKey;
-  noteCommitment: Uint8Array;
+  /** VALID_INPUT's public input 1. The commitment stays inside the proof. */
+  noteUseTag: Uint8Array;
   /** 16-byte order id used for `tee_forced_settle` cross-check. */
   orderId: Uint8Array;
   expirySlot: bigint;
@@ -744,7 +761,7 @@ export interface BuildLockNoteParams {
 
 /** Decoded `NoteLock` account (`programs/vault/src/state.rs::NoteLock`). */
 export interface NoteLockAccount {
-  noteCommitment: Uint8Array;
+  noteUseTag: Uint8Array;
   tokenMint: PublicKey;
   orderId: Uint8Array;
   /**
@@ -762,7 +779,7 @@ export interface NoteLockAccount {
  * Layout is hand-mirrored from the Rust struct, like every other decoder in
  * this file (there is no Anchor IDL at runtime):
  *
- *   disc(8) | note_commitment(32) | token_mint(32) | order_id(16)
+ *   disc(8) | note_use_tag(32) | token_mint(32) | order_id(16)
  *          | expiry_slot(u64 LE) | locked_by(32) | bump(1) | _padding(7)
  *
  * Returns `null` when the buffer is too short to be a `NoteLock`, so a caller
@@ -774,7 +791,7 @@ export function parseNoteLock(data: Uint8Array): NoteLockAccount | null {
   if (data.length < LEN) return null;
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
   return {
-    noteCommitment: data.slice(8, 40),
+    noteUseTag: data.slice(8, 40),
     tokenMint: new PublicKey(data.slice(40, 72)),
     orderId: data.slice(72, 88),
     expirySlot: dv.getBigUint64(88, true),
@@ -790,8 +807,8 @@ export interface BuildReleaseLockParams {
    * key that created the lock, so this is permissionless by design.
    */
   rentReceiver: PublicKey;
-  /** 32-byte commitment of the locked note. */
-  noteCommitment: Uint8Array;
+  /** 32-byte note-use tag the lock is seeded on. */
+  noteUseTag: Uint8Array;
 }
 
 /**
@@ -811,7 +828,7 @@ export interface BuildReleaseLockParams {
  * the boundary — CS-09 relies on settlement landing strictly before it), and
  * fails `LockNotExpired` otherwise.
  *
- *   data = disc(8) || note_commitment(32)
+ *   data = disc(8) || note_use_tag(32)
  *
  *   accounts:
  *     [0] rent_receiver (signer, mut — receives the reclaimed rent)
@@ -820,11 +837,8 @@ export interface BuildReleaseLockParams {
 export function buildReleaseLockInstruction(
   p: BuildReleaseLockParams,
 ): TransactionInstruction {
-  const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
-  const data = cat(
-    anchorDiscriminator("release_lock"),
-    fixed32(p.noteCommitment),
-  );
+  const [noteLock] = noteLockPda(p.programId, p.noteUseTag);
+  const data = cat(anchorDiscriminator("release_lock"), fixed32(p.noteUseTag));
   return new TransactionInstruction({
     programId: p.programId,
     keys: [
@@ -838,7 +852,7 @@ export function buildReleaseLockInstruction(
 /**
  * v3 wire format (matches `programs/vault/src/instructions/lock_note.rs`):
  *
- *   data = disc(8) || tree_id(1) || note_commitment(32) || order_id(16)
+ *   data = disc(8) || tree_id(1) || note_use_tag(32) || order_id(16)
  *        || expiry_slot(u64 LE) || token_mint(32)
  *        || merkle_root(32) || pi_a(64) || pi_b(128) || pi_c(64)
  *
@@ -855,15 +869,15 @@ export function buildLockNoteInstruction(
 ): TransactionInstruction {
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
-  const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
-  const [consumedNote] = consumedNotePda(p.programId, p.noteCommitment);
+  const [noteLock] = noteLockPda(p.programId, p.noteUseTag);
+  const [consumedNote] = consumedNotePda(p.programId, p.noteUseTag);
   if (p.orderId.length !== 16) {
     throw new Error(`orderId must be 16 bytes, got ${p.orderId.length}`);
   }
   const data = cat(
     anchorDiscriminator("lock_note"),
     new Uint8Array([p.treeId & 0xff]),
-    fixed32(p.noteCommitment),
+    fixed32(p.noteUseTag),
     new Uint8Array(p.orderId),
     u64LE(p.expirySlot),
     p.tokenMint.toBytes(),
@@ -890,14 +904,14 @@ export function buildWithdrawInstruction(
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const [vaultTokenAcct] = vaultTokenAccountPda(p.programId, p.tokenMint);
-  const [consumedNote] = consumedNotePda(p.programId, p.noteCommitment);
-  const [noteLock] = noteLockPda(p.programId, p.noteCommitment);
+  const [consumedNote] = consumedNotePda(p.programId, p.noteUseTag);
+  const [noteLock] = noteLockPda(p.programId, p.noteUseTag);
   const [outstandingMint] = outstandingMintPda(p.programId, p.tokenMint);
 
   const data = cat(
     anchorDiscriminator("withdraw"),
     new Uint8Array([p.treeId & 0xff]),
-    fixed32(p.noteCommitment),
+    fixed32(p.noteUseTag),
     fixed32(p.nullifier),
     fixed32(p.merkleRoot),
     u64LE(p.amount),
@@ -915,12 +929,12 @@ export function buildWithdrawInstruction(
       { pubkey: p.tokenMint, isSigner: false, isWritable: false },
       { pubkey: vaultTokenAcct, isSigner: false, isWritable: true },
       { pubkey: p.destinationTokenAccount, isSigner: false, isWritable: true },
-      // consumed_note is now `init`'d by withdraw (the commitment-keyed
+      // consumed_note is now `init`'d by withdraw (the tag-keyed
       // consume-once guard shared with TEE settle) → writable.
       { pubkey: consumedNote, isSigner: false, isWritable: true },
       { pubkey: noteLock, isSigner: false, isWritable: false },
       // PF-04: the nullifier-keyed guard was removed — `consumed_note` above
-      // is the complete double-spend guard, since `note_commitment` is a
+      // is the complete double-spend guard, since `note_use_tag` is a
       // circuit-bound public output of VALID_SPEND.
       { pubkey: outstandingMint, isSigner: false, isWritable: true },
       { pubkey: p.tokenProgramId, isSigner: false, isWritable: false },
@@ -985,8 +999,9 @@ export function buildVerifyMatchBatchInstruction(
 
 // ---------------------------------------------------------------------------
 // merge — in-pool note consolidation (VALID_MERGE K=2/4). Consumes K input
-// notes (their commitment-keyed ConsumedNoteEntry PDAs — C-01), appends ONE
-// summed output leaf. No transfer.
+// notes (their tag-keyed ConsumedNoteEntry PDAs — C-01), appends ONE summed
+// output leaf, whose LEAF is a commitment. Inputs are handles, the output is
+// an identity: the two namespaces meet here and must not be swapped.
 // ---------------------------------------------------------------------------
 
 export interface BuildMergeParams {
@@ -995,11 +1010,14 @@ export interface BuildMergeParams {
   treeId: number;
   payer: PublicKey;
   /**
-   * K input note commitments in circuit order — the real commitment for active
-   * slots, all-zero for dummy pad slots (C-01: these are the VALID_MERGE public
+   * K input note-use TAGS in circuit order — the real tag for active slots,
+   * all-zero for dummy pad slots (C-01: these are the VALID_MERGE public
    * outputs the circuit binds; each active one gets a ConsumedNoteEntry).
+   *
+   * The circuit still derives the output inner from the input COMMITMENTS,
+   * but those stay private witnesses; only the tags surface on the wire.
    */
-  inputCommitments: Uint8Array[];
+  inputUseTags: Uint8Array[];
   outputCommitment: Uint8Array;
   tokenMint: PublicKey;
   merkleRoot: Uint8Array;
@@ -1011,7 +1029,7 @@ export interface BuildMergeParams {
  * Wire format (matches `programs/vault/src/instructions/merge.rs`):
  *
  *   data = disc(8) || tree_id(1)
- *        || input_commitments(Vec<[u8;32]>: u32 LE len ++ len*32)
+ *        || input_use_tags(Vec<[u8;32]>: u32 LE len ++ len*32)
  *        || output_commitment(32) || token_mint(32) || merkle_root(32)
  *        || k(u8) || pi_a(64) || pi_b(128) || pi_c(64)
  *
@@ -1026,34 +1044,29 @@ export interface BuildMergeParams {
 export function buildMergeInstruction(
   p: BuildMergeParams,
 ): TransactionInstruction {
-  if ((p.k !== 2 && p.k !== 4) || p.inputCommitments.length !== p.k) {
-    throw new Error("merge k must be 2 or 4 and match commitment slot count");
+  if ((p.k !== 2 && p.k !== 4) || p.inputUseTags.length !== p.k) {
+    throw new Error("merge k must be 2 or 4 and match the tag slot count");
   }
   const [vaultPda] = vaultConfigPda(p.programId);
   const [merkleTree] = merkleTreePda(p.programId, p.treeId);
   const isZero = (b: Uint8Array) => b.every((x) => x === 0);
-  const activeCommitments = p.inputCommitments.filter((c) => !isZero(c));
-  if (activeCommitments.length === 0) {
-    throw new Error("merge must contain at least one active commitment");
+  const activeTags = p.inputUseTags.filter((t) => !isZero(t));
+  if (activeTags.length === 0) {
+    throw new Error("merge must contain at least one active input");
   }
-  const consumedPdas = activeCommitments.map(
-    (c) => consumedNotePda(p.programId, c)[0],
+  const consumedPdas = activeTags.map(
+    (t) => consumedNotePda(p.programId, t)[0],
   );
-  const noteLockPdas = activeCommitments.map(
-    (c) => noteLockPda(p.programId, c)[0],
-  );
+  const noteLockPdas = activeTags.map((t) => noteLockPda(p.programId, t)[0]);
 
   const lenLE = new Uint8Array(4);
-  new DataView(lenLE.buffer).setUint32(0, p.inputCommitments.length, true);
-  const commitmentsBytes = cat(
-    lenLE,
-    ...p.inputCommitments.map((c) => fixed32(c)),
-  );
+  new DataView(lenLE.buffer).setUint32(0, p.inputUseTags.length, true);
+  const tagsBytes = cat(lenLE, ...p.inputUseTags.map((t) => fixed32(t)));
 
   const data = cat(
     anchorDiscriminator("merge"),
     new Uint8Array([p.treeId & 0xff]),
-    commitmentsBytes,
+    tagsBytes,
     fixed32(p.outputCommitment),
     p.tokenMint.toBytes(),
     fixed32(p.merkleRoot),

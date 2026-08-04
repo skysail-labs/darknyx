@@ -22,7 +22,7 @@
  * longer hashes them (the old two-stage Poseidon12+Poseidon9 leaf, tags
  * 20/21, is retired).
  *
- *   leaf = Poseidon11(DOMAIN_LEAF_V2=23, active,
+ *   leaf = Poseidon12(DOMAIN_LEAF_V3=31, active,
  *                     note_a, note_b, note_c, note_d, note_e, note_f,
  *                     note_fee_base, note_fee_quote,
  *                     batch_slot)
@@ -45,6 +45,16 @@ const DOMAIN_BATCH_ROOT = 22n;
 // Commitment-only leaf (amount-privacy, P1b). Replaces the old two-stage
 // leaf's DOMAIN_LEAF_INNER=20 / DOMAIN_LEAF_TOP=21.
 const DOMAIN_LEAF_V2 = 23n;
+/** `Poseidon3(29, note_commitment, inner_hash)` — the public consume handle. */
+const DOMAIN_NOTE_USE = 29n;
+/** `Poseidon3(30, tag_e, tag_f)` — folds the two relock tags into one leaf slot. */
+const DOMAIN_RELOCK_DIGEST = 30n;
+/** The Poseidon(12) leaf that replaced the Poseidon(11) commitment-only one. */
+const DOMAIN_LEAF_V3 = 31n;
+/** `Poseidon3(24, consumed_input_inner, role)` — output inner derivation. */
+const DOMAIN_MATCH_OUTPUT_INNER = 24n;
+const ROLE_CHANGE_BUYER = 0xb1n;
+const ROLE_CHANGE_SELLER = 0x5en;
 
 type PoseidonFn = ((inputs: bigint[]) => Uint8Array) & {
   F: { toObject: (x: Uint8Array) => bigint };
@@ -234,25 +244,58 @@ export async function computeBatchLeaf(
   slot: MatchSlotWitness,
 ): Promise<Uint8Array> {
   const p = await getPoseidon();
-  // Commitment-only leaf (amount-privacy, P1b): Poseidon11(DOMAIN_LEAF_V2,
-  // active, note_a..note_f, note_fee_base, note_fee_quote, batch_slot). The
-  // amounts/mints/price are bound transitively via the note commitments, so
-  // they leave the leaf.
-  const leaf = p.F.toObject(
-    p([
-      DOMAIN_LEAF_V2,
-      slot.isActive ? 1n : 0n,
-      bigintFromBE32(slot.noteAcommitment),
-      bigintFromBE32(slot.noteBcommitment),
-      bigintFromBE32(slot.noteCcommitment),
-      bigintFromBE32(slot.noteDcommitment),
-      bigintFromBE32(slot.noteEcommitment),
-      bigintFromBE32(slot.noteFcommitment),
-      bigintFromBE32(slot.noteFeeBaseCommitment),
-      bigintFromBE32(slot.noteFeeQuoteCommitment),
-      slot.batchSlot,
-    ]),
-  );
+  const hash = (inputs: bigint[]): bigint => p.F.toObject(p(inputs));
+  const tag = (commitment: bigint, inner: bigint): bigint =>
+    hash([DOMAIN_NOTE_USE, commitment, inner]);
+
+  // The two CONSUMED inputs enter the leaf as tags, not commitments — a leaf
+  // carrying the commitments would put them right back on chain via the batch
+  // root, defeating the point.
+  const tagA = tag(bigintFromBE32(slot.noteAcommitment), slot.aInner);
+  const tagB = tag(bigintFromBE32(slot.noteBcommitment), slot.bInner);
+
+  // The relock tags are masked exactly like their commitments: a slot with no
+  // change publishes tag 0, so the on-chain settle never derives a relock PDA
+  // for a note that does not exist. The circuit masks
+  // `(1 - changeIsZero) * Poseidon3(29, hashE.out, eInner)`; because
+  // note_e_commitment is itself masked to 0 in that case, testing the
+  // commitment for zero here reproduces it.
+  const eCommit = bigintFromBE32(slot.noteEcommitment);
+  const fCommit = bigintFromBE32(slot.noteFcommitment);
+  const tagE =
+    eCommit === 0n
+      ? 0n
+      : tag(
+          eCommit,
+          hash([DOMAIN_MATCH_OUTPUT_INNER, slot.aInner, ROLE_CHANGE_BUYER]),
+        );
+  const tagF =
+    fCommit === 0n
+      ? 0n
+      : tag(
+          fCommit,
+          hash([DOMAIN_MATCH_OUTPUT_INNER, slot.bInner, ROLE_CHANGE_SELLER]),
+        );
+
+  // Poseidon12(DOMAIN_LEAF_V3, active, tag_a, tag_b, note_c..note_f,
+  // note_fee_base, note_fee_quote, batch_slot, relock_digest). Binding the two
+  // relock tags as separate fields would need 13 inputs, one over
+  // light-poseidon's cap; the digest lands it at exactly 12.
+  const relockDigest = hash([DOMAIN_RELOCK_DIGEST, tagE, tagF]);
+  const leaf = hash([
+    DOMAIN_LEAF_V3,
+    slot.isActive ? 1n : 0n,
+    tagA,
+    tagB,
+    bigintFromBE32(slot.noteCcommitment),
+    bigintFromBE32(slot.noteDcommitment),
+    eCommit,
+    fCommit,
+    bigintFromBE32(slot.noteFeeBaseCommitment),
+    bigintFromBE32(slot.noteFeeQuoteCommitment),
+    slot.batchSlot,
+    relockDigest,
+  ]);
   return bn254ToBE32(leaf);
 }
 

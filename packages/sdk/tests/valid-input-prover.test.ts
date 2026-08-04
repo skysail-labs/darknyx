@@ -80,8 +80,9 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       expect(result.proof.piB.length).toBe(128);
       expect(result.proof.piC.length).toBe(64);
 
-      // Four public inputs in circuit-declaration order. Amount is private:
-      //   [merkleRoot, noteCommitment, tokenMint_lo, tokenMint_hi]
+      // Four public inputs in circuit-declaration order. Amount AND the note
+      // commitment are private:
+      //   [merkleRoot, noteUseTag, tokenMint_lo, tokenMint_hi]
       expect(result.publicInputsBE.length).toBe(4);
       for (const pi of result.publicInputsBE) expect(pi.length).toBe(32);
 
@@ -95,8 +96,13 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
         Buffer.from(witness.root).toString("hex"),
       );
 
-      // Sanity: public input 1 is the note commitment.
+      // Public input 1 is the note-use TAG, and specifically NOT the
+      // commitment — republishing the commitment here is what made a note's
+      // lock linkable to its deposit leaf.
       expect(Buffer.from(result.publicInputsBE[1]).toString("hex")).toBe(
+        Buffer.from(result.noteUseTagBE).toString("hex"),
+      );
+      expect(Buffer.from(result.publicInputsBE[1]).toString("hex")).not.toBe(
         Buffer.from(noteCommitBE).toString("hex"),
       );
 

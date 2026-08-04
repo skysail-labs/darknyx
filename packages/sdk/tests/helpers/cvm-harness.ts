@@ -34,6 +34,7 @@ import {
 import {
   deriveSpendingKey,
   deriveBlindingFactor,
+  deriveNoteSecret,
   bn254ToBE32,
 } from "../../src/keys/key-generators.js";
 import {
@@ -323,10 +324,12 @@ export class CvmHarness {
       p.masterSeed,
       BigInt(nonceIndex),
     );
+    const recoveryNonceBytes = bn254ToBE32(recoveryNonce);
     const innerHash = be32ToBigInt(
       await deriveDepositInnerHash(
         bn254ToBE32(p.ownerCommit),
-        bn254ToBE32(recoveryNonce),
+        recoveryNonceBytes,
+        bn254ToBE32(deriveNoteSecret(p.masterSeed, recoveryNonceBytes)),
       ),
     );
     const commitment = await noteCommitmentV2({
@@ -343,6 +346,7 @@ export class CvmHarness {
       recoveryNonce,
       spendingKey: p.spendingKey,
       ownerCommitmentBlinding: p.ownerBlinding,
+      noteSecret: deriveNoteSecret(p.masterSeed, recoveryNonceBytes),
     });
     const ix = buildDepositInstruction({
       programId: this.vaultProgramId,

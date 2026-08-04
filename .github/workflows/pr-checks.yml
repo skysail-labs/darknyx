@@ -910,6 +910,12 @@ jobs:
         # Incl. the settle-regression suite migrated from matching_engine:
         # tee_forced_settle_batched (1:N BatchValidityMarker lifecycle) +
         # match_batch_verify (real N=16 proof → on-chain verify_match_batch).
+        #
+        # `deposit_with_proof` was in NO CI list at all — it drives a real
+        # VALID_DEPOSIT proof through litesvm and is the only gate on the
+        # deposit circuit's public-signal order, so it belongs here (it needs
+        # both vault.so and the circuit artefacts, which is why it cannot live
+        # in the proof-only job).
         run: |
           cargo test -p vault \
             --test set_protocol_config \
@@ -920,6 +926,7 @@ jobs:
             --test lock_note_consumed_guard \
             --test merge_verify \
             --test withdraw_lock_lifecycle \
+            --test deposit_with_proof \
             --test initialize_governance \
             --test market_config \
             -- --nocapture

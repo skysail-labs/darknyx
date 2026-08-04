@@ -23,6 +23,7 @@ import {
   MATCH_ROLE_TRADE_SELLER,
 } from "../utxo/match-output.js";
 import { noteCommitmentV2 } from "../utxo/note.js";
+import { deriveNoteUseTag } from "../utxo/note-use.js";
 import type { StoredNote } from "../utxo/note-store.js";
 import type { IndexerFill } from "./history.js";
 
@@ -75,22 +76,39 @@ function optionalLeafIndex(value: string | null | undefined): bigint | undefined
  */
 export type RecoverableFill = Omit<IndexerFill, "signature" | "slot">;
 
+/**
+ * Resolve which of the caller's notes a fill consumed.
+ *
+ * The chain no longer publishes the consumed commitment, so this inverts: for
+ * each candidate note the caller already holds, recompute its commitment from
+ * the full opening, derive `Poseidon3(29, commitment, inner)`, and compare
+ * that to the tag on the fill. Only the note's owner can run this search —
+ * which is exactly the unlinkability property, seen from the inside.
+ *
+ * It is also strictly stronger than the string match it replaces: a candidate
+ * matches only if its ENTIRE opening (mint, amount, owner, inner) reproduces
+ * the tag, so a note store row with a stale amount can no longer satisfy it.
+ *
+ * Cost is O(candidates) Poseidon pairs per fill rather than O(1) string
+ * compares. The caller passes only its own unspent notes, so the set is small;
+ * if it ever is not, the fix is a client-side tag index, not re-publishing the
+ * commitment.
+ */
 async function verifyInput(
   fill: RecoverableFill,
   candidates: Iterable<StoredNote>,
 ): Promise<{ note: StoredNote; commitment: Uint8Array } | null> {
-  const expected = fromHexExact(fill.inputNoteCommitment, 32);
-  if (!expected) return null;
-  const expectedHex = toHex(expected);
+  const expectedTag = fromHexExact(fill.inputNoteUseTag, 32);
+  if (!expectedTag) return null;
   for (const note of candidates) {
-    if (note.commitment.toLowerCase() !== expectedHex) continue;
     const recomputed = await noteCommitmentV2({
       tokenMint: note.tokenMint,
       amount: note.amount,
       ownerCommitment: note.ownerCommitment,
       innerHash: note.innerHash,
     });
-    if (sameBytes(recomputed, expected)) return { note, commitment: expected };
+    const tag = await deriveNoteUseTag(recomputed, bn254ToBE32(note.innerHash));
+    if (sameBytes(tag, expectedTag)) return { note, commitment: recomputed };
   }
   return null;
 }

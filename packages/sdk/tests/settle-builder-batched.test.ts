@@ -9,12 +9,12 @@
  *   1. Account ordering matches `TeeForcedSettleBatched<'info>`
  *      (14 accounts, merkle_tree at slot 2, batch_validity_marker at slot 12).
  *   2. Data starts with `sha256("global:tee_forced_settle_batched")[..8]`.
- *   3. `ix.data` length = 8 (disc) + 1 (tree_id) + 488 (Borsh payload)
+ *   3. `ix.data` length = 8 (disc) + 1 (tree_id) + 552 (Borsh payload)
  *                       + 1 (matchIndex u8) + 128 (4 × 32-byte siblings)
  *                       = 626 bytes.
  *   4. The 4 Merkle siblings are encoded contiguously with NO length
  *      prefix (Anchor's `[[u8; 32]; 4]` wire shape).
- *   5. The match-index byte lives at offset `8 + 1 + 488` and reflects the
+ *   5. The match-index byte lives at offset `8 + 1 + 552` and reflects the
  *      caller-supplied value.
  *   6. Account slot 12 (`batch_validity_marker`) is the PDA derived
  *      from `[b"batch_validity", merkleRoot]` under the program id.
@@ -64,8 +64,8 @@ function filled(len: number, v: number): Uint8Array {
 function exactFillFixture(): MatchResultPayload {
   return exactFillPayload({
     matchId: filled(16, 0x11),
-    noteAcommitment: filled(32, 0xa1),
-    noteBcommitment: filled(32, 0xb1),
+    noteAuseTag: filled(32, 0xa1),
+    noteBuseTag: filled(32, 0xb1),
     noteCcommitment: filled(32, 0xc1),
     noteDcommitment: filled(32, 0xd1),
     orderIdA: filled(16, 0x01),
@@ -83,10 +83,10 @@ function fourSiblings(): [Uint8Array, Uint8Array, Uint8Array, Uint8Array] {
 }
 
 describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
-  it("[hash_cross_env_parity] payload v9 canonical hash matches Rust and on-chain", () => {
+  it("[hash_cross_env_parity] payload v11 canonical hash matches Rust and on-chain", () => {
     expect(
       Buffer.from(canonicalPayloadHash(exactFillFixture())).toString("hex"),
-    ).toBe("8f79c1cd05d15b0bcfa8039a74397277a3cf6e4e62a898c59f07aa3df08d53d7");
+    ).toBe("039828e122696147495ba9df91daae71cc5289657ad7ec66c74659d0d00d8f65");
   });
 
   it("[settle_batched_accounts_layout] account ordering matches TeeForcedSettleBatched", () => {
@@ -138,8 +138,8 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const payload0 = exactFillFixture();
     const payload1: MatchResultPayload = {
       ...exactFillFixture(),
-      noteAcommitment: filled(32, 0xa2),
-      noteBcommitment: filled(32, 0xb2),
+      noteAuseTag: filled(32, 0xa2),
+      noteBuseTag: filled(32, 0xb2),
       noteCcommitment: filled(32, 0xc2),
       noteDcommitment: filled(32, 0xd2),
     };
@@ -202,12 +202,12 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xf0),
     });
-    // 488-byte v9 Borsh payload — v8's 552 minus two unused nullifiers.
+    // 552-byte v11 Borsh payload — v9's 552 plus the two relock tags.
     const payloadBytes = serializePayload(payload);
-    expect(payloadBytes.length).toBe(488);
-    // 8 disc + tree_id + 488 payload + match_index + 4 × 32 siblings.
-    expect(ix.data.length).toBe(8 + 1 + 488 + 1 + 128);
-    expect(ix.data.length).toBe(626);
+    expect(payloadBytes.length).toBe(552);
+    // 8 disc + tree_id + 552 payload + match_index + 4 × 32 siblings.
+    expect(ix.data.length).toBe(8 + 1 + 552 + 1 + 128);
+    expect(ix.data.length).toBe(690);
   });
 
   it("[settle_batched_siblings_encoding] 4 siblings encoded contiguously without a length prefix", () => {
@@ -224,7 +224,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     });
     const buf = new Uint8Array(ix.data);
     // Siblings start right after disc + payload + 1-byte match_index.
-    const siblingsOffset = 8 + 1 + 488 + 1;
+    const siblingsOffset = 8 + 1 + 552 + 1;
     for (let i = 0; i < 4; i++) {
       const slice = buf.slice(
         siblingsOffset + i * 32,
@@ -250,7 +250,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const ix0 = buildSettleBatchedIx({ ...args, matchIndex: 0 });
     const ix7 = buildSettleBatchedIx({ ...args, matchIndex: 7 });
     const ix15 = buildSettleBatchedIx({ ...args, matchIndex: 15 });
-    const off = 8 + 1 + 488;
+    const off = 8 + 1 + 552;
     expect(ix0.data[off]).toBe(0);
     expect(ix7.data[off]).toBe(7);
     expect(ix15.data[off]).toBe(15);
@@ -291,14 +291,16 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     );
   });
 
-  it("[settle_batched_lock_e_f_pdas] note_lock_e / note_lock_f derive from payload commitments", () => {
+  it("[settle_batched_lock_e_f_pdas] note_lock_e / note_lock_f derive from the relock TAGS, not the change commitments", () => {
     const tee = Keypair.generate();
 
-    // Exact-fill: noteE / noteF both zero → both locks derive from
-    // ZERO_COMMITMENT and therefore collide on the same PDA.
+    // Exact-fill: noteE / noteF tags both zero → both locks derive from
+    // ZERO_COMMITMENT and therefore collide on the same PDA. That dedup is
+    // worth 32 bytes of a now-59-byte Tx D headroom, so it is asserted, not
+    // assumed (CLAUDE.md §6).
     const exact = exactFillFixture();
-    expect(exact.noteEcommitment).toEqual(ZERO_COMMITMENT);
-    expect(exact.noteFcommitment).toEqual(ZERO_COMMITMENT);
+    expect(exact.noteEuseTag).toEqual(ZERO_COMMITMENT);
+    expect(exact.noteFuseTag).toEqual(ZERO_COMMITMENT);
     const ixExact = buildSettleBatchedIx({
       programId: PROGRAM_ID,
       treeId: 0,
@@ -314,10 +316,13 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     expect(ixExact.keys[7].isWritable).toBe(false);
     expect(ixExact.keys[8].isWritable).toBe(false);
 
-    // Change-note variant: noteE non-zero → lock_e diverges from lock_f.
+    // Change-note variant: the buyer's relock TAG is non-zero → lock_e
+    // diverges from lock_f. Note the commitment moves too, as it does in a
+    // real settle; the assertions below pin that only the TAG is load-bearing.
     const withChange: MatchResultPayload = {
       ...exact,
       noteEcommitment: filled(32, 0xe2),
+      noteEuseTag: filled(32, 0xe3),
     };
     const ixChange = buildSettleBatchedIx({
       programId: PROGRAM_ID,
@@ -328,11 +333,31 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
       merkleProof: fourSiblings(),
       merkleRoot: filled(32, 0xf0),
     });
-    const [lockE] = noteLockPda(PROGRAM_ID, withChange.noteEcommitment);
+    const [lockE] = noteLockPda(PROGRAM_ID, withChange.noteEuseTag);
     expect(ixChange.keys[7].pubkey.toBase58()).toBe(lockE.toBase58());
     expect(ixChange.keys[7].pubkey.toBase58()).not.toBe(
       ixChange.keys[8].pubkey.toBase58(),
     );
+
+    // THE confusion this whole layer is exposed to: both fields are 32 bytes,
+    // so seeding the lock from the change COMMITMENT compiles, derives a
+    // plausible address, and fails only on-chain as a missing account. Two
+    // assertions pin the direction:
+    //   (a) the commitment's address is NOT the one the builder emitted, and
+    //   (b) changing only the commitment leaves the lock address fixed.
+    const [wrongLock] = noteLockPda(PROGRAM_ID, withChange.noteEcommitment);
+    expect(ixChange.keys[7].pubkey.toBase58()).not.toBe(wrongLock.toBase58());
+
+    const movedCommitment = buildSettleBatchedIx({
+      programId: PROGRAM_ID,
+      treeId: 0,
+      teeAuthority: tee.publicKey,
+      payload: { ...withChange, noteEcommitment: filled(32, 0xe9) },
+      matchIndex: 0,
+      merkleProof: fourSiblings(),
+      merkleRoot: filled(32, 0xf0),
+    });
+    expect(movedCommitment.keys[7].pubkey.toBase58()).toBe(lockE.toBase58());
     // A change note is not necessarily continued as an order. Without a
     // relock id its destination PDA remains read-only.
     expect(ixChange.keys[7].isWritable).toBe(false);
@@ -545,6 +570,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     const relock: MatchResultPayload = {
       ...base,
       noteEcommitment: filled(32, 0xe2),
+      noteEuseTag: filled(32, 0xe3),
       buyerRelockOrderId: filled(16, 0xab),
       buyerRelockExpiry: 1_234_567n,
     };
@@ -561,7 +587,7 @@ describe("v3.5 — settle-builder-batched: buildSettleBatchedIx", () => {
     });
     expect(ix.keys[7].isWritable).toBe(true);
     expect(ix.keys[8].isWritable).toBe(false);
-    const payloadBytes = new Uint8Array(ix.data).slice(9, 9 + 488);
+    const payloadBytes = new Uint8Array(ix.data).slice(9, 9 + 552);
     expect(payloadBytes).toEqual(serializePayload(relock));
   });
 });

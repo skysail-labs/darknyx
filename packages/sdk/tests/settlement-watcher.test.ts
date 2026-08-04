@@ -25,6 +25,7 @@ function u64LE(v: bigint): Uint8Array {
 
 function encodeEvent(ev: TradeSettledEvent): Uint8Array {
   const parts: Uint8Array[] = [
+    new Uint8Array([ev.treeId]),
     ev.matchId,
     u64LE(ev.noteCleaf),
     u64LE(ev.noteDleaf),
@@ -48,6 +49,7 @@ function encodeEvent(ev: TradeSettledEvent): Uint8Array {
 
 function baseEvent(): TradeSettledEvent {
   return {
+    treeId: 2,
     matchId: new Uint8Array(16).fill(0x11),
     noteCleaf: 0n,
     noteDleaf: 1n,
@@ -62,9 +64,24 @@ function baseEvent(): TradeSettledEvent {
 }
 
 describe("settlement-watcher: decodeTradeSettled", () => {
+  /**
+   * `encodeEvent` is a mirror of the decoder, so a round-trip stays green even
+   * if BOTH drift from the on-chain struct — which is exactly how this decoder
+   * sat at 98 bytes against a 99-byte event without any test noticing. Pin the
+   * absolute size against `TradeSettled` in
+   * `programs/vault/src/instructions/tee_forced_settle.rs`, independently of
+   * the mirror.
+   */
+  it("[decode_size_pin] the event body is exactly 99 bytes", () => {
+    // tree_id(1) + match_id(16) + 6×u64 leaf(48) + 2 bools(2) + new_root(32).
+    expect(encodeEvent(baseEvent()).length).toBe(99);
+    expect(() => decodeTradeSettled(new Uint8Array(98))).toThrow(/mismatch/);
+  });
+
   it("[decode_roundtrip_exact_fill] encoded event roundtrips cleanly", () => {
     const ev = baseEvent();
     const back = decodeTradeSettled(encodeEvent(ev));
+    expect(back.treeId).toBe(2);
     expect(back.matchId).toEqual(ev.matchId);
     expect(back.noteCleaf).toBe(0n);
     expect(back.noteDleaf).toBe(1n);
