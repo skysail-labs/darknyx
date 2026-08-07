@@ -56,14 +56,14 @@ An agent continuing this remediation must:
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `f132f0098a1de286b1469a8bc9e3604c92a5ce61` (2026-08-07), merge of slice 1 PR #115. |
-| Last merged remediation PR | PR #115, slice 1 (`PF-12…PF-17`), merge commit `f132f00`. |
-| Active slice | Slice 2 — daemon durability/data access (`SW-10`, `PF-18…PF-23`), code and local validation complete; review/merge owed. |
-| Active branch / PR | `remediation/audit7-daemon-data` / PR #116. |
-| Next slice | Slice 3 — bounded client work (`PF-24…PF-26`). |
+| Last verified `main` | `f6f04fab2720aca1a93ae2865ecf65dd67906a14` (2026-08-07), merge of slice 2 PR #116. |
+| Last merged remediation PR | PR #116, slice 2 (`SW-10`, `PF-18…PF-23`), merge commit `f6f04fa`. |
+| Active slice | Slice 3 — bounded client work (`PF-24…PF-26`), code and local validation complete; review/merge owed. |
+| Active branch / PR | `remediation/audit7-client-bounds` / PR not opened yet. |
+| Next slice | Release assurance and final tracker closure after slice 3 merges. |
 | Live state | CPU CVM `nightly-test-cvm` was drained and confirmed **stopped** after the 2026-08-07 validation. No live environment is assumed for the next slice. |
-| Hosted state | PR #116 opened; CI and CodeRabbit must complete before merge. |
-| Last updated | 2026-08-07 — slice 1 closed; slice 2 code and local validation complete on `remediation/audit7-daemon-data`. |
+| Hosted state | Slice 2 PR #116 merged after CI and CodeRabbit review; slice 3 has not been pushed. |
+| Last updated | 2026-08-07 — slice 2 closed; slice 3 code and local validation complete on `remediation/audit7-client-bounds`. |
 
 ## Revalidation disposition
 
@@ -80,7 +80,7 @@ An agent continuing this remediation must:
 | SW-07 | Critical | TEE Merkle sync + SDK | Only vault-scoped events/instructions can mutate mirrors; divergence fails closed for reads and trading. Requires live healthy-mirror evidence. | **Closed** — PR #97, merge `679ffb0`, digest-pinned CPU-CVM root parity and API evidence recorded in the residual backlog. |
 | SW-08 | Medium | TEE settlement | Terminal scheduler jobs and retained sensitive match state are deterministically bounded; active/ambiguous jobs are not evicted. | **Closed** — merged `d9048f6` + review follow-up `04846b6`. |
 | SW-09 | Info | Matcher + TEE | Pure matcher emits an explicit zero sentinel, never a retired change-note commitment; failure cannot publish an inconsistent memo. | **Closed** — merged `54204fe`; current matcher no longer calls the retired derivation and commit-time derivation fails before memo publication. |
-| SW-10 | Low | Daemon | Loss of the rebuildable SQLite cache must not restart an already-used deterministic order-id/trading-key sequence at zero. | **Code complete** — a master-seed-authenticated, mode-0600 sidecar atomically reserves and fsyncs each HD index before proof/signing. Persistent daemons require it; an empty/lost DB cannot silently initialize zero. Reserve/reopen, tamper, wrong-seed, and no-rollback tests pass. Close after review and merge. |
+| SW-10 | Low | Daemon | Loss of the rebuildable SQLite cache must not restart an already-used deterministic order-id/trading-key sequence at zero. | **Closed** — PR #116 merged as `f6f04fa`. A master-seed-authenticated, mode-0600 sidecar atomically reserves and fsyncs each HD index before proof/signing. Persistent daemons require it; an empty/lost DB cannot silently initialize zero. Reserve/reopen, tamper, wrong-seed, and no-rollback tests pass. |
 | SW-11 | Medium | Daemon recovery | Startup and every stream gap reconcile order state and seed-plus-chain note recovery; failure is surfaced/latching rather than dropped. | **Closed** — PR #101 (`79bbefd`, follow-ups `09f3b95`/`23abaef`). |
 | SW-12 | Low | Daemon merge | Auto-merge admits only notes with no potentially live order lock. | **Closed** — merged `6420f54`; terminal-phase allowlist remains fail closed. |
 | SW-13 | Low | Daemon accounting | Per-order pending-change count is derived from store truth, never decremented by an account-wide merge delta. | **Closed** — merged `6420f54`. |
@@ -116,15 +116,15 @@ An agent continuing this remediation must:
 | PF-15 | Perf-Nit | TEE prover | Slice 1 | `spawn_blocking` shares immutable N=16 witnesses rather than deep-cloning them. | **Closed** — PR #115 merged as `f132f00`; real N=16 proof evidence complete. |
 | PF-16 | Perf-Nit | TEE scheduler | Slice 1 | Final outcomes for one batch are applied under one scheduler write lock without changing per-match results. | **Closed** — PR #115 merged as `f132f00`; per-match live result evidence complete. |
 | PF-17 | Perf-Nit | TEE oracle | Slice 1 | Config-time feed-id bytes/map are decoded once, not on every refresh; duplicate/missing feed behavior is unchanged. | **Closed** — PR #115 merged as `f132f00`; config and authenticated live-boot evidence complete. |
-| PF-18 | Perf-Nit | Daemon store | Slice 2 | Rebuildable cache tables use documented WAL/NORMAL durability only after SW-10's non-rebuildable sequence state has a separate durable root. | **Code complete** — separate sequence root plus legacy reopen/pragma tests pass. Close after review and merge. |
-| PF-19 | Perf-Nit | Daemon store | Slice 2 | Hot SQL statements are prepared once per store lifetime and finalized with the DB. | **Code complete** — constructor-owned hot statements and prepare-count regression pass. Close after review and merge. |
-| PF-20 | Perf | Daemon tracker | Slice 2 | Pending leaf lookup is SQL-filtered, bounded-concurrent, and retry/backoff bounded; successful resolution remains immediate. | **Code complete** — partial-index query, concurrency 8, exponential backoff, quarantine, and reconciliation re-admission tests pass. Close after review and merge. |
-| PF-21 | Perf-Nit | Daemon placement | Slice 2 | Collateral selection avoids repeated whole-table/order scans while preserving exact best-fit and lock exclusion. | **Code complete** — one indexed u64/FIFO best-fit query preserves both live-lock exclusions. Close after review and merge. |
-| PF-22 | Perf-Nit | Daemon merge | Slice 2 | Merge selection does not issue one order query per candidate note. | **Code complete** — one order map per pass; 12-note query-count regression passes. Close after review and merge. |
-| PF-23 | Perf-Nit | Daemon crypto | Slice 2 | One operation derives one Ed25519 keypair; no unbounded expanded-secret cache is introduced. | **Code complete** — operation-scoped signer and derivation-count tests pass; no cache added. Close after review and merge. |
-| PF-24 | Perf-Nit | Daemon control API | Slice 3 | A stalled SSE client cannot cause unbounded buffering; it is disconnected with an explicit resync contract. | **Open** |
-| PF-25 | Perf-Nit | SDK crypto | Slice 3 | `bytepad` allocates once and remains byte-identical to all KATs/Rust parity. | **Open** |
-| PF-26 | Perf | Daemon Merkle | Slice 3 | One immutable tree build serves root plus every witness; a hash-count regression proves O(n), not O(k×n), work for K inputs. | **Open** |
+| PF-18 | Perf-Nit | Daemon store | Slice 2 | Rebuildable cache tables use documented WAL/NORMAL durability only after SW-10's non-rebuildable sequence state has a separate durable root. | **Closed** — PR #116 merged as `f6f04fa`; separate sequence root plus legacy reopen/pragma tests pass. |
+| PF-19 | Perf-Nit | Daemon store | Slice 2 | Hot SQL statements are prepared once per store lifetime and finalized with the DB. | **Closed** — PR #116 merged as `f6f04fa`; constructor-owned hot statements and prepare-count regression pass. |
+| PF-20 | Perf | Daemon tracker | Slice 2 | Pending leaf lookup is SQL-filtered, bounded-concurrent, and retry/backoff bounded; successful resolution remains immediate. | **Closed** — PR #116 merged as `f6f04fa`; partial-index query, concurrency 8, exponential backoff, quarantine, and reconciliation re-admission tests pass. |
+| PF-21 | Perf-Nit | Daemon placement | Slice 2 | Collateral selection avoids repeated whole-table/order scans while preserving exact best-fit and lock exclusion. | **Closed** — PR #116 merged as `f6f04fa`; one indexed u64/FIFO best-fit query preserves both live-lock exclusions. |
+| PF-22 | Perf-Nit | Daemon merge | Slice 2 | Merge selection does not issue one order query per candidate note. | **Closed** — PR #116 merged as `f6f04fa`; one order map per pass and the 12-note query-count regression pass. |
+| PF-23 | Perf-Nit | Daemon crypto | Slice 2 | One operation derives one Ed25519 keypair; no unbounded expanded-secret cache is introduced. | **Closed** — PR #116 merged as `f6f04fa`; operation-scoped signer and derivation-count tests pass with no cache. |
+| PF-24 | Perf-Nit | Daemon control API | Slice 3 | A stalled SSE client cannot cause unbounded buffering; it is disconnected with an explicit resync contract. | **Code complete** — a false `ServerResponse.write` result immediately unsubscribes the consumer and ends it with one bounded `resync_required` frame. The regression proves no later event is written and cleanup is idempotent. Close after review and merge. |
+| PF-25 | Perf-Nit | SDK crypto | Slice 3 | `bytepad` allocates once and remains byte-identical to all KATs/Rust parity. | **Code complete** — padded length is computed once and one zero-filled buffer is allocated. Direct bytepad shape, fixed KATs, and Rust parity pass. Close after review and merge. |
+| PF-26 | Perf | Daemon Merkle | Slice 3 | One immutable tree build serves root plus every witness; a hash-count regression proves O(n), not O(k×n), work for K inputs. | **Code complete** — the immutable snapshot retains every populated level and serves copied roots/siblings without rehashing. A five-leaf root plus all five witnesses performs exactly 23 build hashes and zero read-time hashes. Close after review and merge. |
 | PF-27 | Perf | TEE recovery | Prior slice | Lock sweep and boot recovery use positional batched account/status reads with fail-closed length checks. | **Closed** — PR #107, commit `67bb473`, request-count regression proves constant-round-trip behavior. |
 
 ## Remediation slices
@@ -217,6 +217,19 @@ above remain the code evidence. PR #115 subsequently merged as `f132f00`, so
 | Key expansion | Placement and cancellation each derive one operation-scoped Ed25519 keypair; counted tests see one expansion per operation and no cache. |
 | Local validation | Daemon test-inclusive typecheck passed; full daemon Vitest: **195 passed, 2 environment-gated skipped**, 0 failed (77/77 suites). SDK test-inclusive typecheck passed; `order-id`, `cold-recovery`, and `chain-history`: **14 passed**. Namespace, Rust format, and diff checks passed. |
 | Live impact | No order body, gateway wire, circuit, on-chain account, or CVM image changed; CVM evidence is not required for this slice. |
+
+PR #116 merged as `f6f04fa` after hosted CI and CodeRabbit review, closing
+`SW-10` and `PF-18…PF-23`.
+
+## Slice 3 implementation evidence — 2026-08-07
+
+| Evidence | Result |
+|---|---|
+| SSE memory bound | `write(false)` unsubscribes immediately, suppresses every subsequent daemon event, and ends with one bounded `resync_required` marker. The test observes exactly the hello plus first event write, one unsubscribe, one end, and idempotent close cleanup. |
+| KDF parity | `bytepad` computes its final multiple-of-width length and allocates once. The direct width-8 vector passes, invalid widths fail closed, and the existing DarknyxShake fixed vectors plus Rust parity remain green. |
+| Merkle work bound | `LocalMerkleTree.fromLeaves` owns the snapshot and builds retained levels once. For five leaves the exact populated-tree hash count is 23; `root()` plus all five witnesses adds zero hashes. Every witness recomputes the same root, and returned buffers cannot mutate the cache. |
+| Local validation | Daemon and SDK test-inclusive typechecks passed. Full daemon Vitest: **198 passed, 2 environment-gated skipped**, 0 failed. Full SDK Vitest: **307 passed, 25 environment-gated skipped**, 0 failed. Focused daemon stream/Merkle/provider suite: **32 passed**; focused SDK key parity: **15 passed**. |
+| Live impact | No TEE, gateway wire, circuit, on-chain account, persistence format, or CVM image changed; CVM/devnet evidence is not required. |
 
 ## Recorded decisions
 

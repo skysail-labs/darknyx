@@ -279,16 +279,15 @@ function encodeString(s: Uint8Array): Uint8Array {
 }
 
 function bytepad(x: Uint8Array, w: number): Uint8Array {
+  if (!Number.isSafeInteger(w) || w <= 0) {
+    throw new Error("bytepad width must be a positive integer");
+  }
   const le = leftEncode(BigInt(w));
-  let out = new Uint8Array(le.length + x.length);
+  const unpaddedLength = le.length + x.length;
+  const paddedLength = Math.ceil(unpaddedLength / w) * w;
+  const out = new Uint8Array(paddedLength);
   out.set(le, 0);
   out.set(x, le.length);
-  while (out.length % w !== 0) {
-    const padded = new Uint8Array(out.length + 1);
-    padded.set(out, 0);
-    padded[out.length] = 0;
-    out = padded;
-  }
   return out;
 }
 
@@ -317,4 +316,4 @@ export function darknyxShakeKdfV1(
   return new Uint8Array(shake.digest());
 }
 
-export const __testing = { hkdfExpand, reduceMod };
+export const __testing = { hkdfExpand, reduceMod, bytepad };
