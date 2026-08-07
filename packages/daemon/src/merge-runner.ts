@@ -72,10 +72,7 @@ export function createMergeRunner(args: {
 export class DaemonMergeRunner implements MergeRunner {
   constructor(private readonly opts: DaemonMergeRunnerOptions) {}
 
-  async run(
-    _order: ManagedOrder,
-    _noteCount: number,
-  ): Promise<MergeOutcome> {
+  async run(_order: ManagedOrder, _noteCount: number): Promise<MergeOutcome> {
     // Selection is ACCOUNT-level cross-mint, not per-order: v3 continuations
     // keep one ROLLING residual per order (each partial fill consumes
     // the prior + rebuilds it), so a single order never has ≥2 spendable
@@ -116,7 +113,9 @@ export class DaemonMergeRunner implements MergeRunner {
     // order still have", so the count is DERIVED rather than tracked
     // incrementally. That removes the drift class, not just this instance.
     const touched = new Set(
-      batch.map((n) => n.orderId).filter((id): id is string => id !== undefined),
+      batch
+        .map((n) => n.orderId)
+        .filter((id): id is string => id !== undefined),
     );
     for (const orderId of touched) {
       const o = this.opts.store.getOrder(orderId);
@@ -144,7 +143,14 @@ export class DaemonMergeRunner implements MergeRunner {
 
   /** First mintable batch of 2..4 same-mint SPENDABLE notes (cross-order). */
   private selectBatch(): StoredNote[] | undefined {
-    const spendable = this.opts.store.list().filter((n) => this.isMergeable(n));
+    // One order-table read for the whole selection pass. Looking up each note's
+    // order here used to turn this filter into N+1 SQLite queries.
+    const orders = new Map(
+      this.opts.store.listOrders().map((order) => [order.orderId, order]),
+    );
+    const spendable = this.opts.store
+      .list()
+      .filter((n) => this.isMergeable(n, orders));
     const byMint = new Map<string, StoredNote[]>();
     for (const n of spendable) {
       const k = Buffer.from(n.tokenMint).toString("hex");
@@ -177,10 +183,13 @@ export class DaemonMergeRunner implements MergeRunner {
    * Keyed on `TERMINAL_PHASES` so a newly added phase is excluded by default
    * rather than silently becoming spendable.
    */
-  private isMergeable(n: StoredNote): boolean {
+  private isMergeable(
+    n: StoredNote,
+    orders: ReadonlyMap<string, ManagedOrder>,
+  ): boolean {
     if (n.leafIndex === undefined) return false;
     if (n.orderId === undefined) return true; // deposit note
-    const o = this.opts.store.getOrder(n.orderId);
+    const o = orders.get(n.orderId);
     return !o || TERMINAL_PHASES.has(o.phase);
   }
 }

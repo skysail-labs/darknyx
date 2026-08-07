@@ -374,6 +374,7 @@ describe("Daemon — attestation gate", () => {
     attestOnchainCheck: true,
     programId: "C63vKvysCzX55PKraas4Wc22ijqjGJQdPC1mrzCFVWZx",
     ...overrides,
+    orderSequencePath: overrides.orderSequencePath ?? "x.order-sequence",
   });
 
   const verifiedIdentity = () => ({

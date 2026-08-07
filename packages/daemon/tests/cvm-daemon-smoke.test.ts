@@ -141,6 +141,7 @@ maybe("daemon ↔ live CVM smoke (attest → deposit → place)", () => {
       dbPath: ":memory:",
       controlPort: 0,
       keystorePath: "",
+      orderSequencePath: "",
       thresholds: DEFAULT_THRESHOLDS,
       // Functional smoke — run attestation in dev-partial (nonce+binding+/info),
       // not strict DCAP. Real-DCAP live validation is a separate pinned step

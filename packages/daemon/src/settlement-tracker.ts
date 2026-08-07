@@ -34,15 +34,41 @@ export interface SettlementTrackerOptions {
   pollMs?: number;
   /** Fired when a note's leaf index is resolved. */
   onResolved?: (commitment: string, leafIndex: bigint) => void;
+  /** Fired once when repeated failures quarantine a note for reconciliation. */
+  onQuarantined?: (commitment: string, error: unknown) => void;
   /** Seam for tests; defaults to the SDK `fetchInclusionProof`. */
   fetchInclusion?: FetchInclusionFn;
+  /** Maximum simultaneous inclusion reads. Default 8. */
+  concurrency?: number;
+  /** Attempts before handing a note to reconciliation. Default 8. */
+  maxAttempts?: number;
+  /** Maximum exponential retry delay. Default 5 minutes. */
+  maxBackoffMs?: number;
+  /** Clock seam for deterministic retry tests. */
+  now?: () => number;
+}
+
+interface RetryState {
+  attempts: number;
+  nextAt: number;
+  quarantined: boolean;
 }
 
 export class SettlementTracker {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  private readonly retries = new Map<string, RetryState>();
 
-  constructor(private readonly opts: SettlementTrackerOptions) {}
+  constructor(private readonly opts: SettlementTrackerOptions) {
+    const concurrency = opts.concurrency ?? 8;
+    const maxAttempts = opts.maxAttempts ?? 8;
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 64) {
+      throw new Error("settlement tracker concurrency must be in 1..64");
+    }
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+      throw new Error("settlement tracker maxAttempts must be positive");
+    }
+  }
 
   /** Begin polling. The timer is `unref`'d so it never keeps the process up. */
   start(): void {
@@ -65,13 +91,36 @@ export class SettlementTracker {
     if (this.running) return 0;
     this.running = true;
     try {
-      const pending = this.opts.store
-        .list()
-        .filter((n) => n.orderId !== undefined && n.leafIndex === undefined);
-      let resolved = 0;
-      for (const note of pending) {
-        if (await this.resolveNote(note)) resolved += 1;
+      const now = (this.opts.now ?? Date.now)();
+      const pendingRows = this.opts.store.listPendingLeafNotes();
+      const pendingCommitments = new Set(
+        pendingRows.map((note) => note.commitment),
+      );
+      // Reconciliation or lifecycle pruning may remove a note while it is in
+      // backoff/quarantine. Drop orphan retry state so the map is bounded by
+      // the live pending set rather than historical failures.
+      for (const commitment of this.retries.keys()) {
+        if (!pendingCommitments.has(commitment))
+          this.retries.delete(commitment);
       }
+      const pending = pendingRows.filter((note) => {
+        const retry = this.retries.get(note.commitment);
+        return !retry?.quarantined && (retry?.nextAt ?? 0) <= now;
+      });
+      let resolved = 0;
+      let cursor = 0;
+      const concurrency = Math.max(
+        1,
+        Math.min(this.opts.concurrency ?? 8, pending.length),
+      );
+      await Promise.all(
+        Array.from({ length: concurrency }, async () => {
+          while (cursor < pending.length) {
+            const note = pending[cursor++];
+            if (await this.resolveNote(note)) resolved += 1;
+          }
+        }),
+      );
       return resolved;
     } finally {
       this.running = false;
@@ -94,12 +143,38 @@ export class SettlementTracker {
       );
       const leafIndex = BigInt(witness.leafIndex);
       this.opts.store.put({ ...note, leafIndex });
+      this.retries.delete(note.commitment);
       this.opts.onResolved?.(note.commitment, leafIndex);
       return true;
-    } catch {
-      // Not on-chain yet (or a transient gateway error) — stays pending for the
-      // next pass. Expected for a just-minted change note.
+    } catch (error) {
+      // Not on-chain yet (or a transient gateway error). Retry with bounded
+      // exponential backoff; a permanently impossible note is handed to the
+      // SW-11 reconciliation path instead of consuming work forever.
+      const prior = this.retries.get(note.commitment);
+      const attempts = (prior?.attempts ?? 0) + 1;
+      const maxAttempts = this.opts.maxAttempts ?? 8;
+      const quarantined = attempts >= maxAttempts;
+      const base = this.opts.pollMs ?? 5000;
+      const delay = Math.min(
+        base * 2 ** Math.max(0, attempts - 1),
+        this.opts.maxBackoffMs ?? 5 * 60_000,
+      );
+      this.retries.set(note.commitment, {
+        attempts,
+        nextAt: (this.opts.now ?? Date.now)() + delay,
+        quarantined,
+      });
+      if (quarantined && !prior?.quarantined) {
+        this.opts.onQuarantined?.(note.commitment, error);
+      }
       return false;
+    }
+  }
+
+  /** Re-admit quarantined notes after an explicit, error-free reconciliation. */
+  retryQuarantined(): void {
+    for (const [commitment, state] of this.retries) {
+      if (state.quarantined) this.retries.delete(commitment);
     }
   }
 }

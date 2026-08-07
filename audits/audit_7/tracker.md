@@ -56,14 +56,14 @@ An agent continuing this remediation must:
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `9b2c37dd8c65ac3bd16e1d43ac9da444cb9970ee` (2026-08-07): every SW/PF claim re-anchored against current source; prior remediation commits and residual-backlog evidence inspected. |
-| Last merged remediation PR | PR #107, PF-27 RPC batching, merge commit `71e537d` (subsequent PRs did not reopen its boundary). |
-| Active slice | Slice 1 — TEE settle/API efficiency (`PF-12…PF-17`), code and live validation complete; merge owed. |
-| Active branch / PR | `remediation/audit7-residuals` / PR #115; validation image source `64f01e7`. |
-| Next slice | Slice 2 — daemon durability/data access (`SW-10`, `PF-18…PF-23`), then slice 3 (`PF-24…PF-26`). |
+| Last verified `main` | `f132f0098a1de286b1469a8bc9e3604c92a5ce61` (2026-08-07), merge of slice 1 PR #115. |
+| Last merged remediation PR | PR #115, slice 1 (`PF-12…PF-17`), merge commit `f132f00`. |
+| Active slice | Slice 2 — daemon durability/data access (`SW-10`, `PF-18…PF-23`), code and local validation complete; review/merge owed. |
+| Active branch / PR | `remediation/audit7-daemon-data` / PR #116. |
+| Next slice | Slice 3 — bounded client work (`PF-24…PF-26`). |
 | Live state | CPU CVM `nightly-test-cvm` was drained and confirmed **stopped** after the 2026-08-07 validation. No live environment is assumed for the next slice. |
-| Hosted state | CodeRabbit completed with no inline findings. The circuit build itself passed, but GitHub rejected its artifact upload because the organization storage quota was exhausted; dependent jobs were therefore skipped. Local artifact-required tests remain the applicable code evidence until hosted storage is restored. |
-| Last updated | 2026-08-07 — slice 1 locally and live validated in PR #115; merge is the only remaining closure condition. |
+| Hosted state | PR #116 opened; CI and CodeRabbit must complete before merge. |
+| Last updated | 2026-08-07 — slice 1 closed; slice 2 code and local validation complete on `remediation/audit7-daemon-data`. |
 
 ## Revalidation disposition
 
@@ -80,7 +80,7 @@ An agent continuing this remediation must:
 | SW-07 | Critical | TEE Merkle sync + SDK | Only vault-scoped events/instructions can mutate mirrors; divergence fails closed for reads and trading. Requires live healthy-mirror evidence. | **Closed** — PR #97, merge `679ffb0`, digest-pinned CPU-CVM root parity and API evidence recorded in the residual backlog. |
 | SW-08 | Medium | TEE settlement | Terminal scheduler jobs and retained sensitive match state are deterministically bounded; active/ambiguous jobs are not evicted. | **Closed** — merged `d9048f6` + review follow-up `04846b6`. |
 | SW-09 | Info | Matcher + TEE | Pure matcher emits an explicit zero sentinel, never a retired change-note commitment; failure cannot publish an inconsistent memo. | **Closed** — merged `54204fe`; current matcher no longer calls the retired derivation and commit-time derivation fails before memo publication. |
-| SW-10 | Low | Daemon | Loss of the rebuildable SQLite cache must not restart an already-used deterministic order-id/trading-key sequence at zero. | **Open** — still valid. `start()` sets `nextIndex = maxSeedIndex()+1`; an empty replacement DB returns `-1`, while order intent has no on-chain counter. This row had disappeared from the residual table and is restored by this tracker. |
+| SW-10 | Low | Daemon | Loss of the rebuildable SQLite cache must not restart an already-used deterministic order-id/trading-key sequence at zero. | **Code complete** — a master-seed-authenticated, mode-0600 sidecar atomically reserves and fsyncs each HD index before proof/signing. Persistent daemons require it; an empty/lost DB cannot silently initialize zero. Reserve/reopen, tamper, wrong-seed, and no-rollback tests pass. Close after review and merge. |
 | SW-11 | Medium | Daemon recovery | Startup and every stream gap reconcile order state and seed-plus-chain note recovery; failure is surfaced/latching rather than dropped. | **Closed** — PR #101 (`79bbefd`, follow-ups `09f3b95`/`23abaef`). |
 | SW-12 | Low | Daemon merge | Auto-merge admits only notes with no potentially live order lock. | **Closed** — merged `6420f54`; terminal-phase allowlist remains fail closed. |
 | SW-13 | Low | Daemon accounting | Per-order pending-change count is derived from store truth, never decremented by an account-wide merge delta. | **Closed** — merged `6420f54`. |
@@ -110,18 +110,18 @@ An agent continuing this remediation must:
 
 | ID | Severity | Owner | Planned slice | Invariant / required evidence | Status |
 |---|---|---|---|---|---|
-| PF-12 | Perf | TEE journal | Slice 1 | Each batch transition performs one durable snapshot, not one per match; on-disk v2 format and write-ahead ordering stay unchanged. Unit test counts flushes; recovery drill records write p50/p95 after the reduction. | **Code complete; live complete** — N=16 unit fixture records one durable write. Digest-pinned CPU settle reported two lifecycle writes, `p50=3,665 µs`, `p95=max=4,929 µs`; the recovery/drain drill passed all 11 assertions. Close when PR #115 merges. |
-| PF-13 | Perf-Nit | TEE settlement | Slice 1 | ALT activation waits before first poll and uses bounded backoff, reducing normal/degraded RPC calls without weakening the activation check. | **Code complete; live complete** — first guaranteed-useless poll removed; 12 s ceiling retained. Real settle passed with `alt_tx_ms=1,331`, `alt_wait_ms=683`. Close when PR #115 merges. |
-| PF-14 | Perf-Nit | TEE API | Slice 1 | A transparency cache miss performs independent reserve reads concurrently while preserving owner/discriminator checks and stable response ordering. | **Code complete; evidence complete** — concurrent futures preserve mint order; full HTTP suite passed and the digest-pinned API boot remained healthy. Close when PR #115 merges. |
-| PF-15 | Perf-Nit | TEE prover | Slice 1 | `spawn_blocking` shares immutable N=16 witnesses rather than deep-cloning them. | **Code complete; live complete** — immutable `Arc<[MatchSlotWitness]>` crossed the blocking boundary in a real N=16 proof: native witness 239 ms, rapidsnark step 2,762 ms. Close when PR #115 merges. |
-| PF-16 | Perf-Nit | TEE scheduler | Slice 1 | Final outcomes for one batch are applied under one scheduler write lock without changing per-match results. | **Code complete; live complete** — grouped outcome updates retained one confirmed result and finality-gated book semantics in the real settle. Close when PR #115 merges. |
-| PF-17 | Perf-Nit | TEE oracle | Slice 1 | Config-time feed-id bytes/map are decoded once, not on every refresh; duplicate/missing feed behavior is unchanged. | **Code complete; live complete** — prepared lookup built once at task startup; multiple cold boots authenticated the router-quorum feed and resumed `SOL-USDC`; invalid-config regressions remain green. Close when PR #115 merges. |
-| PF-18 | Perf-Nit | Daemon store | Slice 2 | Rebuildable cache tables use documented WAL/NORMAL durability only after SW-10's non-rebuildable sequence state has a separate durable root. | **Open** — valid and previously missing as an individual backlog row. |
-| PF-19 | Perf-Nit | Daemon store | Slice 2 | Hot SQL statements are prepared once per store lifetime and finalized with the DB. | **Open** — valid and previously missing as an individual backlog row. |
-| PF-20 | Perf | Daemon tracker | Slice 2 | Pending leaf lookup is SQL-filtered, bounded-concurrent, and retry/backoff bounded; successful resolution remains immediate. | **Open** |
-| PF-21 | Perf-Nit | Daemon placement | Slice 2 | Collateral selection avoids repeated whole-table/order scans while preserving exact best-fit and lock exclusion. | **Open** |
-| PF-22 | Perf-Nit | Daemon merge | Slice 2 | Merge selection does not issue one order query per candidate note. | **Open** |
-| PF-23 | Perf-Nit | Daemon crypto | Slice 2 | One operation derives one Ed25519 keypair; no unbounded expanded-secret cache is introduced. | **Open** |
+| PF-12 | Perf | TEE journal | Slice 1 | Each batch transition performs one durable snapshot, not one per match; on-disk v2 format and write-ahead ordering stay unchanged. Unit test counts flushes; recovery drill records write p50/p95 after the reduction. | **Closed** — PR #115 merged as `f132f00`; unit and digest-pinned recovery evidence complete. |
+| PF-13 | Perf-Nit | TEE settlement | Slice 1 | ALT activation waits before first poll and uses bounded backoff, reducing normal/degraded RPC calls without weakening the activation check. | **Closed** — PR #115 merged as `f132f00`; real settle evidence complete. |
+| PF-14 | Perf-Nit | TEE API | Slice 1 | A transparency cache miss performs independent reserve reads concurrently while preserving owner/discriminator checks and stable response ordering. | **Closed** — PR #115 merged as `f132f00`; concurrent ordering and API evidence complete. |
+| PF-15 | Perf-Nit | TEE prover | Slice 1 | `spawn_blocking` shares immutable N=16 witnesses rather than deep-cloning them. | **Closed** — PR #115 merged as `f132f00`; real N=16 proof evidence complete. |
+| PF-16 | Perf-Nit | TEE scheduler | Slice 1 | Final outcomes for one batch are applied under one scheduler write lock without changing per-match results. | **Closed** — PR #115 merged as `f132f00`; per-match live result evidence complete. |
+| PF-17 | Perf-Nit | TEE oracle | Slice 1 | Config-time feed-id bytes/map are decoded once, not on every refresh; duplicate/missing feed behavior is unchanged. | **Closed** — PR #115 merged as `f132f00`; config and authenticated live-boot evidence complete. |
+| PF-18 | Perf-Nit | Daemon store | Slice 2 | Rebuildable cache tables use documented WAL/NORMAL durability only after SW-10's non-rebuildable sequence state has a separate durable root. | **Code complete** — separate sequence root plus legacy reopen/pragma tests pass. Close after review and merge. |
+| PF-19 | Perf-Nit | Daemon store | Slice 2 | Hot SQL statements are prepared once per store lifetime and finalized with the DB. | **Code complete** — constructor-owned hot statements and prepare-count regression pass. Close after review and merge. |
+| PF-20 | Perf | Daemon tracker | Slice 2 | Pending leaf lookup is SQL-filtered, bounded-concurrent, and retry/backoff bounded; successful resolution remains immediate. | **Code complete** — partial-index query, concurrency 8, exponential backoff, quarantine, and reconciliation re-admission tests pass. Close after review and merge. |
+| PF-21 | Perf-Nit | Daemon placement | Slice 2 | Collateral selection avoids repeated whole-table/order scans while preserving exact best-fit and lock exclusion. | **Code complete** — one indexed u64/FIFO best-fit query preserves both live-lock exclusions. Close after review and merge. |
+| PF-22 | Perf-Nit | Daemon merge | Slice 2 | Merge selection does not issue one order query per candidate note. | **Code complete** — one order map per pass; 12-note query-count regression passes. Close after review and merge. |
+| PF-23 | Perf-Nit | Daemon crypto | Slice 2 | One operation derives one Ed25519 keypair; no unbounded expanded-secret cache is introduced. | **Code complete** — operation-scoped signer and derivation-count tests pass; no cache added. Close after review and merge. |
 | PF-24 | Perf-Nit | Daemon control API | Slice 3 | A stalled SSE client cannot cause unbounded buffering; it is disconnected with an explicit resync contract. | **Open** |
 | PF-25 | Perf-Nit | SDK crypto | Slice 3 | `bytepad` allocates once and remains byte-identical to all KATs/Rust parity. | **Open** |
 | PF-26 | Perf | Daemon Merkle | Slice 3 | One immutable tree build serves root plus every witness; a hash-count regression proves O(n), not O(k×n), work for K inputs. | **Open** |
@@ -203,8 +203,20 @@ endpoint; boot logs redacted it to `https://devnet.helius-rpc.com`.
 Hosted review is complete with no CodeRabbit inline findings. GitHub compiled the
 circuit bundle successfully, but organization artifact quota rejected the
 upload and mechanically skipped downstream jobs. Local artifact-required tests
-above remain the code evidence. Slice 1 rows remain `Code complete` solely
-because this tracker's closure rule requires PR #115 to merge.
+above remain the code evidence. PR #115 subsequently merged as `f132f00`, so
+`PF-12…PF-17` are closed.
+
+## Slice 2 implementation evidence — 2026-08-07
+
+| Evidence | Result |
+|---|---|
+| SW-10 durable allocation | `DurableOrderSequence` HMAC-authenticates `next_index` and reserves via temp write, file fsync, atomic rename, and directory fsync before proof/signing. Persistent daemons require the mode-0600 sidecar; an empty/lost DB cannot silently initialize zero. Reserve/reopen, tamper, wrong-seed, failure-gap, and no-rollback tests pass. |
+| Migration/recovery | Nonempty legacy DBs may initialize from `max(seed_index)+1`; empty recovery requires explicit `DARKNYX_DAEMON_SEQUENCE_INIT`. New keystores create the sidecar and seed-backup import requires `--sequence-start`. Existing order canonical bytes and seed-plus-chain note recovery are unchanged. |
+| Store hot paths | WAL/NORMAL is enabled after sequence separation. Statements are prepared once. One indexed fixed-width-u64 query preserves best-fit/FIFO and both live-order exclusions. Legacy backfill/reopen, pragma, prepare-count, large-u64, tie, and lock tests pass. |
+| Tracker and merge bounds | Twenty pending notes peak at exactly 8 inclusion reads with no full-table scan. Backoff/quarantine/reconcile re-admission is deterministic and orphan state is pruned. Merge loads one order map; the 12-candidate test sees one list query and one post-merge accounting lookup. |
+| Key expansion | Placement and cancellation each derive one operation-scoped Ed25519 keypair; counted tests see one expansion per operation and no cache. |
+| Local validation | Daemon test-inclusive typecheck passed; full daemon Vitest: **195 passed, 2 environment-gated skipped**, 0 failed (77/77 suites). SDK test-inclusive typecheck passed; `order-id`, `cold-recovery`, and `chain-history`: **14 passed**. Namespace, Rust format, and diff checks passed. |
+| Live impact | No order body, gateway wire, circuit, on-chain account, or CVM image changed; CVM evidence is not required for this slice. |
 
 ## Recorded decisions
 

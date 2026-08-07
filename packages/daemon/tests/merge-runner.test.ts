@@ -93,6 +93,22 @@ function runner(fn: MergeFn): DaemonMergeRunner {
 }
 
 describe("DaemonMergeRunner", () => {
+  it("loads the order table once instead of querying once per candidate", async () => {
+    for (let i = 0; i < 12; i++) {
+      store.put(
+        changeNote(i.toString(16).padStart(2, "0"), MINT_A, 1n, BigInt(i)),
+      );
+    }
+    const listOrders = vi.spyOn(store, "listOrders");
+    const getOrder = vi.spyOn(store, "getOrder");
+    const { fn } = fakeMerge();
+    await runner(fn).run(order(), 12);
+    expect(listOrders).toHaveBeenCalledOnce();
+    // One accounting lookup for the single order touched by the selected K=4
+    // batch; never the old twelve lookups during candidate filtering.
+    expect(getOrder).toHaveBeenCalledOnce();
+  });
+
   it("merges a same-mint batch, prunes inputs, stores the output", async () => {
     const c1 = changeNote("a", MINT_A, 10n, 0n);
     const c2 = changeNote("b", MINT_A, 20n, 1n);
@@ -241,7 +257,10 @@ describe("DaemonMergeRunner — locked-note exclusion (SW-12)", () => {
         leafIndex: 0n,
       });
       store.putOrder({ ...order(), orderId: "33".repeat(8), phase });
-      store.put({ ...changeNote("l", MINT_A, 50n, 1n), orderId: "33".repeat(8) });
+      store.put({
+        ...changeNote("l", MINT_A, 50n, 1n),
+        orderId: "33".repeat(8),
+      });
 
       const { fn, calls } = fakeMerge();
       const { consumed } = await runner(fn).run(order(), 0);

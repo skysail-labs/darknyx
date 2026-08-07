@@ -14,6 +14,7 @@ import { DEFAULT_THRESHOLDS } from "../src/order-lifecycle.js";
 import type { DaemonConfig } from "../src/config.js";
 import type { OrderPlacer } from "../src/order-placer.js";
 import type { ManagedOrder } from "../src/types.js";
+import { MemoryOrderSequence } from "../src/order-sequence.js";
 import {
   limitPolicy,
   OrderSide,
@@ -36,6 +37,27 @@ function keystore(): Keystore {
   return new Keystore(id);
 }
 
+class CountingKeystore extends Keystore {
+  derivations = 0;
+
+  protected override tradingKeypair(index: number) {
+    this.derivations += 1;
+    return super.tradingKeypair(index);
+  }
+}
+
+function countingKeystore(): CountingKeystore {
+  const base = keystore();
+  return new CountingKeystore({
+    masterSeed: base.masterSeed,
+    ownerBlinding: base.ownerBlinding,
+    r0: 1n,
+    r1: 2n,
+    r2: 3n,
+    rootKeyPubkey: new Uint8Array(32).fill(4),
+  });
+}
+
 const config = (): DaemonConfig => ({
   gatewayUrl: "https://gw",
   gatewayWsUrl: "wss://gw",
@@ -44,6 +66,7 @@ const config = (): DaemonConfig => ({
   dbPath: ":memory:",
   controlPort: 0,
   keystorePath: "x",
+  orderSequencePath: "x.order-sequence",
   // Required by DaemonConfig. The fixture predates these fields and nothing
   // caught the omission, because test files were never typechecked.
   // `verifyAttestation: false` in mkDaemon() is what actually disables the
@@ -138,13 +161,12 @@ beforeEach(() => {
 });
 afterEach(() => store.close());
 
-function mkDaemon(
-  extra: Partial<DaemonDeps> = {},
-) {
+function mkDaemon(extra: Partial<DaemonDeps> = {}) {
   return new Daemon({
     config: config(),
     keystore: keystore(),
     store,
+    orderSequence: new MemoryOrderSequence(),
     prover: fakeProver,
     placer,
     fetchImpl: fakeFetch(),
@@ -159,9 +181,7 @@ function mkDaemon(
   });
 }
 
-async function readyDaemon(
-  extra: Partial<DaemonDeps> = {},
-): Promise<Daemon> {
+async function readyDaemon(extra: Partial<DaemonDeps> = {}): Promise<Daemon> {
   const daemon = mkDaemon(extra);
   await daemon.start();
   return daemon;
@@ -204,6 +224,27 @@ describe("Daemon — placeOrder", () => {
     expect(new Set(idxs).size).toBe(2);
   });
 
+  it("burns a reserved index when placement fails", async () => {
+    const orderSequence = new MemoryOrderSequence();
+    const daemon = await readyDaemon({ orderSequence });
+    (placer.place as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("gateway unavailable"),
+    );
+    const intent = {
+      symbol: "SOL-USDC",
+      side: OrderSide.Bid,
+      policy: limitPolicy({ priceLimit: 100n }),
+      amount: 500n,
+    };
+    await expect(daemon.placeOrder(intent, note)).rejects.toThrow(
+      /gateway unavailable/,
+    );
+    expect(orderSequence.nextIndex).toBe(1);
+
+    await daemon.placeOrder(intent, note);
+    expect(daemon.listOrders().at(-1)?.seedIndex).toBe(1);
+  });
+
   it("runs the root-ring verifier before proving a placement", async () => {
     const verifyRoot = vi.fn<RootVerifier>(async () => {});
     const daemon = await readyDaemon({ verifyRoot });
@@ -224,6 +265,23 @@ describe("Daemon — placeOrder", () => {
 });
 
 describe("Daemon — cancelOrder", () => {
+  it("derives one keypair for placement and one for cancellation", async () => {
+    const ks = countingKeystore();
+    const daemon = await readyDaemon({ keystore: ks });
+    const { orderId } = await daemon.placeOrder(
+      {
+        symbol: "SOL-USDC",
+        side: OrderSide.Bid,
+        policy: limitPolicy({ priceLimit: 100n }),
+        amount: 500n,
+      },
+      note,
+    );
+    expect(ks.derivations).toBe(1);
+    await daemon.cancelOrder(orderId);
+    expect(ks.derivations).toBe(2);
+  });
+
   it("signs + sends a cancel and drives the order to cancelled", async () => {
     const daemon = await readyDaemon();
     const { orderId } = await daemon.placeOrder(
@@ -353,19 +411,17 @@ describe("Daemon — deposit", () => {
     // With the narrow inline type, `mock.calls[0][0]` did not carry
     // `depositIndex`, and the assertion below had to cast to reach it — a cast
     // that quietly asserted nothing about what the daemon actually passed.
-    const depositFn = vi.fn(
-      async (params: DepositParams) => ({
-        signature: "depsig",
-        leafIndex: 42n,
-        noteCommitment: new Uint8Array(32).fill(0xcd),
-        notePlaintext: {
-          tokenMint: params.tokenMint,
-          amount: params.amount,
-          ownerCommitment: 7n,
-          innerHash: 8n,
-        },
-      }),
-    );
+    const depositFn = vi.fn(async (params: DepositParams) => ({
+      signature: "depsig",
+      leafIndex: 42n,
+      noteCommitment: new Uint8Array(32).fill(0xcd),
+      notePlaintext: {
+        tokenMint: params.tokenMint,
+        amount: params.amount,
+        ownerCommitment: 7n,
+        innerHash: 8n,
+      },
+    }));
     const daemon = mkDaemon({
       depositFn: depositFn as never,
       depositor: PublicKey.default,
@@ -378,9 +434,7 @@ describe("Daemon — deposit", () => {
     });
 
     expect(depositFn).toHaveBeenCalledOnce();
-    expect(
-      typeof depositFn.mock.calls[0][0].depositIndex,
-    ).toBe("bigint");
+    expect(typeof depositFn.mock.calls[0][0].depositIndex).toBe("bigint");
     expect(out.leafIndex).toBe(42n);
     const stored = store.get(out.commitment)!;
     expect(stored.amount).toBe(1000n);
@@ -468,9 +522,10 @@ describe("daemon wiring", () => {
     const events: DaemonEvent[] = [];
     daemon.subscribe((e) => events.push(e));
 
-    expect(fills.cap.opts?.onResync, "the daemon must hand down onResync").toBeTypeOf(
-      "function",
-    );
+    expect(
+      fills.cap.opts?.onResync,
+      "the daemon must hand down onResync",
+    ).toBeTypeOf("function");
 
     // Fire the 1011 signal the SDK raises on a buffer overrun.
     fills.cap.opts!.onResync!("buffer overrun");
