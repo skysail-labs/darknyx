@@ -59,10 +59,10 @@ An agent continuing this remediation must:
 | Last verified `main` | `f6f04fab2720aca1a93ae2865ecf65dd67906a14` (2026-08-07), merge of slice 2 PR #116. |
 | Last merged remediation PR | PR #116, slice 2 (`SW-10`, `PF-18…PF-23`), merge commit `f6f04fa`. |
 | Active slice | Slice 3 — bounded client work (`PF-24…PF-26`), code and local validation complete; review/merge owed. |
-| Active branch / PR | `remediation/audit7-client-bounds` / PR not opened yet. |
+| Active branch / PR | `remediation/audit7-client-bounds` / PR #117. |
 | Next slice | Release assurance and final tracker closure after slice 3 merges. |
 | Live state | CPU CVM `nightly-test-cvm` was drained and confirmed **stopped** after the 2026-08-07 validation. No live environment is assumed for the next slice. |
-| Hosted state | Slice 2 PR #116 merged after CI and CodeRabbit review; slice 3 has not been pushed. |
+| Hosted state | Slice 3 PR #117 is pushed; review follow-up and the replacement CI run are in progress. |
 | Last updated | 2026-08-07 — slice 2 closed; slice 3 code and local validation complete on `remediation/audit7-client-bounds`. |
 
 ## Revalidation disposition
@@ -227,8 +227,8 @@ PR #116 merged as `f6f04fa` after hosted CI and CodeRabbit review, closing
 |---|---|
 | SSE memory bound | `write(false)` unsubscribes immediately, suppresses every subsequent daemon event, and ends with one bounded `resync_required` marker. The test observes exactly the hello plus first event write, one unsubscribe, one end, and idempotent close cleanup. |
 | KDF parity | `bytepad` computes its final multiple-of-width length and allocates once. The direct width-8 vector passes, invalid widths fail closed, and the existing DarknyxShake fixed vectors plus Rust parity remain green. |
-| Merkle work bound | `LocalMerkleTree.fromLeaves` owns the snapshot and builds retained levels once. For five leaves the exact populated-tree hash count is 23; `root()` plus all five witnesses adds zero hashes. Every witness recomputes the same root, and returned buffers cannot mutate the cache. |
-| Local validation | Daemon and SDK test-inclusive typechecks passed. Full daemon Vitest: **198 passed, 2 environment-gated skipped**, 0 failed. Full SDK Vitest: **307 passed, 25 environment-gated skipped**, 0 failed. Focused daemon stream/Merkle/provider suite: **32 passed**; focused SDK key parity: **15 passed**. |
+| Merkle work bound | `LocalMerkleTree.fromLeaves` owns the snapshot, rejects more than `2^20` leaves before hashing, and builds retained levels once. For five leaves the exact populated-tree hash count is 23; `root()` plus all five witnesses adds zero hashes. Every witness recomputes the same root, and defensive-copy tests prove returned roots and siblings cannot mutate the cache. |
+| Local validation | Daemon, SDK, and indexer test-inclusive typechecks passed. Full daemon Vitest: **199 passed, 2 environment-gated skipped**, 0 failed. Full SDK Vitest: **307 passed, 25 environment-gated skipped**, 0 failed. Indexer Vitest: **21 passed**. Focused daemon stream/Merkle/provider suite: **33 passed**; focused SDK key parity after `cargo build --examples -p darkpool-crypto`: **15 passed**. `cargo fmt --all -- --check`, namespace, and diff checks passed. Rust clippy/tests and circuit-artifact tests were not run because no Rust, TEE, circuit, verifier, or on-chain path changed; hosted path detection likewise skipped those jobs. |
 | Live impact | No TEE, gateway wire, circuit, on-chain account, persistence format, or CVM image changed; CVM/devnet evidence is not required. |
 
 ## Recorded decisions

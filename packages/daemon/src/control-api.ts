@@ -377,7 +377,7 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
   }
 }
 
-export const __testing = { streamEvents };
+export const controlApiTesting = { streamEvents };
 
 /** Start listening; resolves with the bound port (port 0 → ephemeral, for tests). */
 export function startControlServer(

@@ -5,7 +5,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { LocalMerkleTree, TREE_DEPTH } from "../src/merkle-tree.js";
+import {
+  LocalMerkleTree,
+  merkleTreeTesting,
+  TREE_DEPTH,
+} from "../src/merkle-tree.js";
 import { poseidonHashBytesBE } from "@darknyx/sdk";
 
 const bytesToBigInt = (x: Uint8Array): bigint => {
@@ -80,15 +84,36 @@ describe("LocalMerkleTree", () => {
   it("owns its snapshot and does not expose mutable cached nodes", async () => {
     const input = [leaf(1), leaf(2)];
     const t = await LocalMerkleTree.fromLeaves(input);
-    const expected = await t.root();
+    const expectedRoot = (await t.root()).slice();
+    const expectedSibling = (await t.witness(0)).siblings[0].slice();
     input[0].fill(0xff);
+
+    const root = await t.root();
     const witness = await t.witness(0);
+    root.fill(0xcc);
     witness.root.fill(0xaa);
     witness.siblings[0].fill(0xbb);
-    expect(Buffer.from(await t.root())).toEqual(Buffer.from(expected));
-    expect(Buffer.from((await t.witness(0)).root)).toEqual(
-      Buffer.from(expected),
+
+    const freshWitness = await t.witness(0);
+    expect(Buffer.from(await t.root())).toEqual(Buffer.from(expectedRoot));
+    expect(Buffer.from(freshWitness.root)).toEqual(Buffer.from(expectedRoot));
+    expect(Buffer.from(freshWitness.siblings[0])).toEqual(
+      Buffer.from(expectedSibling),
     );
+  });
+
+  it("accepts the depth boundary and rejects one leaf beyond it", async () => {
+    expect(() =>
+      merkleTreeTesting.validateLeafCount(merkleTreeTesting.TREE_CAPACITY),
+    ).not.toThrow();
+    expect(() =>
+      merkleTreeTesting.validateLeafCount(merkleTreeTesting.TREE_CAPACITY + 1),
+    ).toThrow(/too many leaves/);
+    await expect(
+      LocalMerkleTree.fromLeaves(
+        new Array<Uint8Array>(merkleTreeTesting.TREE_CAPACITY + 1),
+      ),
+    ).rejects.toThrow(/too many leaves/);
   });
 
   it("returns the precomputed empty root without internal build hashes", async () => {

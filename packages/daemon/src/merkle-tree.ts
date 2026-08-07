@@ -15,6 +15,7 @@
 import { poseidonHashBytesBE } from "@darknyx/sdk";
 
 export const TREE_DEPTH = 20;
+const TREE_CAPACITY = 2 ** TREE_DEPTH;
 
 export interface LocalMerkleWitness {
   root: Uint8Array; // 32B BE
@@ -28,6 +29,14 @@ const bytesToBigInt = (x: Uint8Array): bigint => {
   return BigInt(hex);
 };
 
+const validateLeafCount = (leafCount: number): void => {
+  if (leafCount > TREE_CAPACITY) {
+    throw new Error(
+      `too many leaves for depth-${TREE_DEPTH} tree (max ${TREE_CAPACITY})`,
+    );
+  }
+};
+
 export class LocalMerkleTree {
   private zeroSubtreeRoots: Uint8Array[] = [];
   /** Level 0 is leaves; level TREE_DEPTH contains the single root. */
@@ -38,6 +47,7 @@ export class LocalMerkleTree {
 
   /** Build a tree from an ordered leaf list (index 0 = first appended). */
   static async fromLeaves(leaves: Uint8Array[]): Promise<LocalMerkleTree> {
+    validateLeafCount(leaves.length);
     const owned = leaves.map((leaf, index) => {
       if (leaf.length !== 32) {
         throw new Error(`leaf ${index} must be 32 bytes`);
@@ -129,3 +139,5 @@ export class LocalMerkleTree {
     return { root: await this.root(), siblings, indices };
   }
 }
+
+export const merkleTreeTesting = { TREE_CAPACITY, validateLeafCount };

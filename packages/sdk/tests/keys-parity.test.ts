@@ -77,7 +77,18 @@ describe("key derivation parity", () => {
     const padded = __testing.bytepad(input, 8);
     expect([...padded]).toEqual([1, 8, 1, 2, 3, 4, 5, 0]);
     expect(padded.length % 8).toBe(0);
-    expect(() => __testing.bytepad(input, 0)).toThrow(/positive integer/);
+    for (const invalidWidth of [
+      0,
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
+      expect(() => __testing.bytepad(input, invalidWidth)).toThrow(
+        /positive integer/,
+      );
+    }
   });
 
   it("spending key matches hex when fixed seed", () => {

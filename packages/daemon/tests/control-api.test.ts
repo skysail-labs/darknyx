@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import nodeHttp, { type Server } from "node:http";
 
 import {
-  __testing,
+  controlApiTesting,
   createControlServer,
   startControlServer,
   type PlaceMapper,
@@ -287,7 +287,7 @@ describe("control-api — SSE stream", () => {
       }),
     };
 
-    __testing.streamEvents(response as never, (next) => {
+    controlApiTesting.streamEvents(response as never, (next) => {
       listener = next;
       return unsubscribe;
     });
