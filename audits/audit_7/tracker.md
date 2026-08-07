@@ -56,14 +56,14 @@ An agent continuing this remediation must:
 
 | Field | Current value |
 |---|---|
-| Last verified `main` | `f6f04fab2720aca1a93ae2865ecf65dd67906a14` (2026-08-07), merge of slice 2 PR #116. |
-| Last merged remediation PR | PR #116, slice 2 (`SW-10`, `PF-18…PF-23`), merge commit `f6f04fa`. |
-| Active slice | Slice 3 — bounded client work (`PF-24…PF-26`), code and local validation complete; review/merge owed. |
-| Active branch / PR | `remediation/audit7-client-bounds` / PR #117. |
-| Next slice | Release assurance and final tracker closure after slice 3 merges. |
+| Last verified `main` | `2563223ca285225640329845c4e4fcf31c5974c1` (2026-08-07), merge of slice 3 PR #117. |
+| Last merged remediation PR | PR #117, slice 3 (`PF-24…PF-26`), merge commit `2563223`. |
+| Active slice | None — every scheduled local remediation slice is merged. |
+| Active branch / PR | None. |
+| Next slice | Conditional/external evidence only: SW-32's confidential-GPU closure window, plus the separately tracked release gates and explicitly deferred rows. |
 | Live state | CPU CVM `nightly-test-cvm` was drained and confirmed **stopped** after the 2026-08-07 validation. No live environment is assumed for the next slice. |
-| Hosted state | Slice 3 PR #117 is pushed; review follow-up and the replacement CI run are in progress. |
-| Last updated | 2026-08-07 — slice 2 closed; slice 3 code and local validation complete on `remediation/audit7-client-bounds`. |
+| Hosted state | Slice 3 PR #117 passed required path-scoped CI, addressed the completed CodeRabbit review, and merged. |
+| Last updated | 2026-08-07 — slices 1–3 closed; no scheduled local code slice remains. |
 
 ## Revalidation disposition
 
@@ -122,9 +122,9 @@ An agent continuing this remediation must:
 | PF-21 | Perf-Nit | Daemon placement | Slice 2 | Collateral selection avoids repeated whole-table/order scans while preserving exact best-fit and lock exclusion. | **Closed** — PR #116 merged as `f6f04fa`; one indexed u64/FIFO best-fit query preserves both live-lock exclusions. |
 | PF-22 | Perf-Nit | Daemon merge | Slice 2 | Merge selection does not issue one order query per candidate note. | **Closed** — PR #116 merged as `f6f04fa`; one order map per pass and the 12-note query-count regression pass. |
 | PF-23 | Perf-Nit | Daemon crypto | Slice 2 | One operation derives one Ed25519 keypair; no unbounded expanded-secret cache is introduced. | **Closed** — PR #116 merged as `f6f04fa`; operation-scoped signer and derivation-count tests pass with no cache. |
-| PF-24 | Perf-Nit | Daemon control API | Slice 3 | A stalled SSE client cannot cause unbounded buffering; it is disconnected with an explicit resync contract. | **Code complete** — a false `ServerResponse.write` result immediately unsubscribes the consumer and ends it with one bounded `resync_required` frame. The regression proves no later event is written and cleanup is idempotent. Close after review and merge. |
-| PF-25 | Perf-Nit | SDK crypto | Slice 3 | `bytepad` allocates once and remains byte-identical to all KATs/Rust parity. | **Code complete** — padded length is computed once and one zero-filled buffer is allocated. Direct bytepad shape, fixed KATs, and Rust parity pass. Close after review and merge. |
-| PF-26 | Perf | Daemon Merkle | Slice 3 | One immutable tree build serves root plus every witness; a hash-count regression proves O(n), not O(k×n), work for K inputs. | **Code complete** — the immutable snapshot retains every populated level and serves copied roots/siblings without rehashing. A five-leaf root plus all five witnesses performs exactly 23 build hashes and zero read-time hashes. Close after review and merge. |
+| PF-24 | Perf-Nit | Daemon control API | Slice 3 | A stalled SSE client cannot cause unbounded buffering; it is disconnected with an explicit resync contract. | **Closed** — PR #117 merged as `2563223`. A false `ServerResponse.write` result immediately unsubscribes the consumer and ends it with one bounded `resync_required` frame. The regression proves no later event is written and cleanup is idempotent. |
+| PF-25 | Perf-Nit | SDK crypto | Slice 3 | `bytepad` allocates once and remains byte-identical to all KATs/Rust parity. | **Closed** — PR #117 merged as `2563223`. Padded length is computed once and one zero-filled buffer is allocated; invalid width classes, fixed KATs, and Rust parity pass. |
+| PF-26 | Perf | Daemon Merkle | Slice 3 | One immutable tree build serves root plus every witness; a hash-count regression proves O(n), not O(k×n), work for K inputs. | **Closed** — PR #117 merged as `2563223`. The immutable snapshot retains every populated level, enforces the depth-20 capacity, and serves defensive root/sibling copies without rehashing. A five-leaf root plus all five witnesses performs exactly 23 build hashes and zero read-time hashes. |
 | PF-27 | Perf | TEE recovery | Prior slice | Lock sweep and boot recovery use positional batched account/status reads with fail-closed length checks. | **Closed** — PR #107, commit `67bb473`, request-count regression proves constant-round-trip behavior. |
 
 ## Remediation slices
@@ -230,6 +230,13 @@ PR #116 merged as `f6f04fa` after hosted CI and CodeRabbit review, closing
 | Merkle work bound | `LocalMerkleTree.fromLeaves` owns the snapshot, rejects more than `2^20` leaves before hashing, and builds retained levels once. For five leaves the exact populated-tree hash count is 23; `root()` plus all five witnesses adds zero hashes. Every witness recomputes the same root, and defensive-copy tests prove returned roots and siblings cannot mutate the cache. |
 | Local validation | Daemon, SDK, and indexer test-inclusive typechecks passed. Full daemon Vitest: **199 passed, 2 environment-gated skipped**, 0 failed. Full SDK Vitest: **307 passed, 25 environment-gated skipped**, 0 failed. Indexer Vitest: **21 passed**. Focused daemon stream/Merkle/provider suite: **33 passed**; focused SDK key parity after `cargo build --examples -p darkpool-crypto`: **15 passed**. `cargo fmt --all -- --check`, namespace, and diff checks passed. Rust clippy/tests and circuit-artifact tests were not run because no Rust, TEE, circuit, verifier, or on-chain path changed; hosted path detection likewise skipped those jobs. |
 | Live impact | No TEE, gateway wire, circuit, on-chain account, persistence format, or CVM image changed; CVM/devnet evidence is not required. |
+
+PR #117 merged as `2563223` after the required daemon, SDK, TypeScript,
+dependency, consistency, and aggregate CI gates passed. The completed
+CodeRabbit review raised six comments: the valid tracker/schema/capacity/test
+items were fixed and retested; the request for unrelated Rust clippy/tests and
+circuit-artifact gates was recorded as not applicable because hosted path
+detection skipped those unchanged surfaces. This closes `PF-24…PF-26`.
 
 ## Recorded decisions
 
