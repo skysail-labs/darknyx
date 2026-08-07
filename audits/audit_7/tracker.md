@@ -59,10 +59,11 @@ An agent continuing this remediation must:
 | Last verified `main` | `9b2c37dd8c65ac3bd16e1d43ac9da444cb9970ee` (2026-08-07): every SW/PF claim re-anchored against current source; prior remediation commits and residual-backlog evidence inspected. |
 | Last merged remediation PR | PR #107, PF-27 RPC batching, merge commit `71e537d` (subsequent PRs did not reopen its boundary). |
 | Active slice | Slice 1 — TEE settle/API efficiency (`PF-12…PF-17`), code complete; live evidence owed. |
-| Active branch / PR | `remediation/audit7-residuals` / not opened yet. |
+| Active branch / PR | `remediation/audit7-residuals` / PR #115, head `1fd58cb`. |
 | Next slice | Slice 2 — daemon durability/data access (`SW-10`, `PF-18…PF-23`), then slice 3 (`PF-24…PF-26`). |
 | Live state | No live environment is assumed by this tracker. Discover CVM state before any billed validation. |
-| Last updated | 2026-08-07 — baseline revalidation complete; slice 1 locally green and awaiting hosted/live evidence. |
+| Hosted state | CodeRabbit completed with no inline findings. The circuit build itself passed, but GitHub rejected its artifact upload because the organization storage quota was exhausted; dependent jobs were therefore skipped. Local artifact-required tests remain the applicable code evidence until hosted storage is restored. |
+| Last updated | 2026-08-07 — baseline revalidation complete; slice 1 locally green in PR #115 and awaiting live evidence. |
 
 ## Revalidation disposition
 
