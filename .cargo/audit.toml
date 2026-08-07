@@ -10,7 +10,7 @@
 # Re-derive the analysis with:
 #   cargo tree --workspace -i <crate>@<version>
 #
-# Reviewed 2026-07-28 against Cargo.lock at commit f94d4a2.
+# Reviewed 2026-08-07 against Cargo.lock on PR #115.
 
 [advisories]
 ignore = [
@@ -53,6 +53,23 @@ ignore = [
   # Revisit if ark-circom/ark-relations is bumped or if anything starts routing
   # request data through ark-relations' tracing.
   "RUSTSEC-2025-0055", # tracing-subscriber 0.2.25 — ANSI escape log poisoning
+
+  # ── Reachable type definitions, unreachable archive-deserialization API ──
+  # cargo tree --workspace -i rkyv@0.7.46:
+  #   rkyv 0.7.46 <- Wasmer 4.4 / WASIX 0.28 <- ark-circom 0.5
+  #     <- darknyx-tee
+  # The affected operation is validation/deserialization of an untrusted rkyv
+  # archive containing shared Rc/Arc pointers with conflicting unsized metadata.
+  # Darknyx never accepts or loads a serialized Wasmer module: ark-circom's
+  # WitnessCalculator calls Module::from_file on the committed circuit WASM,
+  # compiling it in-process, and neither Darknyx nor ark-circom calls Wasmer's
+  # Module::deserialize / rkyv from_bytes APIs. Repository search contains no
+  # direct rkyv use. The crate is nevertheless compiled because Wasmer derives
+  # archive traits for its optional serialized-artifact surface. Upstream's only
+  # fix is the incompatible rkyv >=0.8.17 line; remove this acceptance when
+  # ark-circom/Wasmer migrates, or immediately if serialized Wasmer modules are
+  # ever introduced.
+  "RUSTSEC-2026-0235", # rkyv 0.7.46 — shared-pointer archive validation bypass
 ]
 
 # Unmaintained/yanked crates surface as warnings rather than errors. They are
