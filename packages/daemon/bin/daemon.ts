@@ -11,6 +11,7 @@
  *   DARKNYX_DAEMON_API_KEY=<key> DARKNYX_DAEMON_API_SECRET=<secret> \
  *   DARKNYX_DAEMON_API_PASSPHRASE=<passphrase>               \
  *   DARKNYX_DAEMON_KEYSTORE=./darknyx-keystore.json             \
+ *   # one-time recovery only: DARKNYX_DAEMON_SEQUENCE_INIT=<next-index> \
  *   DARKNYX_DAEMON_KEYSTORE_PASSPHRASE=<passphrase>         \
  *   DARKNYX_DAEMON_VI_WASM=circuits/build/valid_input/circuit_js/circuit.wasm \
  *   DARKNYX_DAEMON_VI_ZKEY=circuits/build/valid_input/circuit_final.zkey      \
@@ -33,6 +34,7 @@ import {
 import { loadConfig } from "../src/config.js";
 import { DaemonStore } from "../src/store.js";
 import { loadKeystore } from "../src/keystore.js";
+import { DurableOrderSequence } from "../src/order-sequence.js";
 import { createDaemonClient } from "../src/daemon-client.js";
 import { createMergeClient } from "../src/merge-client.js";
 import { httpLeavesFetcher } from "../src/tree-merkle-provider.js";
@@ -137,7 +139,6 @@ function resolveControlToken(dbPath: string): string {
   return token;
 }
 
-
 async function main(): Promise<void> {
   const config = loadConfig();
   const keystore = loadKeystore(
@@ -145,6 +146,55 @@ async function main(): Promise<void> {
     required("DARKNYX_DAEMON_KEYSTORE_PASSPHRASE"),
   );
   const store = new DaemonStore(config.dbPath);
+  let orderSequence: DurableOrderSequence;
+  try {
+    orderSequence = DurableOrderSequence.open(
+      config.orderSequencePath,
+      keystore.masterSeed,
+    );
+  } catch (error) {
+    const observedNext = store.maxSeedIndex() + 1;
+    const explicitRaw = process.env.DARKNYX_DAEMON_SEQUENCE_INIT;
+    const explicitNext =
+      explicitRaw === undefined || explicitRaw === ""
+        ? undefined
+        : Number(explicitRaw);
+    if (
+      explicitNext !== undefined &&
+      (!Number.isSafeInteger(explicitNext) ||
+        explicitNext < 0 ||
+        explicitNext > 0x1_0000_0000)
+    ) {
+      throw new Error(
+        "DARKNYX_DAEMON_SEQUENCE_INIT must be an integer in 0..4294967296",
+      );
+    }
+    if (
+      !existsSync(config.orderSequencePath) &&
+      (observedNext > 0 || explicitNext !== undefined)
+    ) {
+      // Safe one-time migration: the existing DB proves every lower index was
+      // already allocated. A truly empty/lost DB needs an explicit recovered
+      // high-water mark; silently assuming zero is the bug this closes.
+      const initialNext = Math.max(observedNext, explicitNext ?? 0);
+      orderSequence = DurableOrderSequence.create(
+        config.orderSequencePath,
+        keystore.masterSeed,
+        initialNext,
+      );
+      console.warn(
+        `[daemon] created order-sequence root at ${initialNext}; ` +
+          "remove DARKNYX_DAEMON_SEQUENCE_INIT before the next boot",
+      );
+    } else {
+      throw new Error(
+        `cannot open durable order sequence ${config.orderSequencePath}: ${
+          error instanceof Error ? error.message : error
+        }. Restore it with the keystore, or set DARKNYX_DAEMON_SEQUENCE_INIT once ` +
+          "to a conservative recovered high-water mark; never use zero for an identity that has traded.",
+      );
+    }
+  }
   const prover = nodeValidInputProver({
     wasmPath: required("DARKNYX_DAEMON_VI_WASM"),
     zkeyPath: required("DARKNYX_DAEMON_VI_ZKEY"),
@@ -153,7 +203,8 @@ async function main(): Promise<void> {
   // Direct on-chain actions (deposit, auto-merge) are enabled only when a payer
   // keypair is configured.
   const programId = new PublicKey(config.programId);
-  const circuitsDir = process.env.DARKNYX_DAEMON_CIRCUITS_DIR ?? "circuits/build";
+  const circuitsDir =
+    process.env.DARKNYX_DAEMON_CIRCUITS_DIR ?? "circuits/build";
   let depositFn;
   let depositor;
   let mergeRunner;
@@ -171,10 +222,7 @@ async function main(): Promise<void> {
             circuitsDir,
             "valid_deposit/circuit_js/circuit.wasm",
           ),
-          zkeyPath: resolve(
-            circuitsDir,
-            "valid_deposit/circuit_final.zkey",
-          ),
+          zkeyPath: resolve(circuitsDir, "valid_deposit/circuit_final.zkey"),
         },
       }),
     });
@@ -226,6 +274,7 @@ async function main(): Promise<void> {
     config,
     keystore,
     store,
+    orderSequence,
     prover,
     depositFn,
     depositor,

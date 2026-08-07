@@ -28,6 +28,8 @@ export interface DaemonConfig {
   controlPort: number;
   /** Path to the encrypted master-seed keystore. */
   keystorePath: string;
+  /** Separate authenticated high-water file for order ids/trading keys. */
+  orderSequencePath: string;
   /** Automation thresholds for the lifecycle reducer. */
   thresholds: LifecycleThresholds;
   /** Operator-pinned TEE measurements to enforce on connect (any subset). When
@@ -86,6 +88,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
   const rpcUrl = env.DARKNYX_DAEMON_RPC_URL;
   if (!rpcUrl) throw new Error("DARKNYX_DAEMON_RPC_URL is required");
 
+  const keystorePath = env.DARKNYX_DAEMON_KEYSTORE ?? "./darknyx-keystore.json";
   return {
     gatewayUrl,
     gatewayWsUrl: env.DARKNYX_DAEMON_GATEWAY_WS_URL ?? httpToWs(gatewayUrl),
@@ -97,7 +100,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
       "DARKNYX_DAEMON_CONTROL_PORT",
       DEFAULT_CONTROL_PORT,
     ),
-    keystorePath: env.DARKNYX_DAEMON_KEYSTORE ?? "./darknyx-keystore.json",
+    keystorePath,
+    orderSequencePath:
+      env.DARKNYX_DAEMON_ORDER_SEQUENCE ?? `${keystorePath}.order-sequence`,
     thresholds: {
       mergeThreshold: intFromEnv(
         env,

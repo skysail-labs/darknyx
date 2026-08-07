@@ -12,6 +12,7 @@ export * from "./orders-listener.js";
 export * from "./order-placer.js";
 export * from "./place.js";
 export * from "./keystore.js";
+export * from "./order-sequence.js";
 export * from "./build-place-request.js";
 export * from "./merge-runner.js";
 export * from "./note-select.js";

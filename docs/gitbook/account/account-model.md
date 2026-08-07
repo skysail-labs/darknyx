@@ -122,7 +122,16 @@ securely generated **master seed** and its encrypted backup.
   [Fills Channel](../websocket/fills-channel.md).
 
 The upshot: protect the encrypted seed backup. The engine never becomes your
-custodian; the seed backup + finalized chain are the durable recovery material.
+custodian; the seed backup + finalized chain are the durable recovery material
+for funds and note openings.
+
+If you run the reference market-maker daemon, also back up its adjacent
+`*.order-sequence` file. Orders that never settle do not appear on-chain, so
+their deterministic order-ID/trading-key indices cannot be reconstructed from
+chain history. The daemon advances and fsyncs this authenticated high-water
+file before signing; it refuses a persistent deployment without one rather
+than risk reusing an old key. During seed-backup recovery, pass the latest
+recorded next index to `darknyx-keystore-init --sequence-start`.
 
 ## Trading keys vs. spending keys
 

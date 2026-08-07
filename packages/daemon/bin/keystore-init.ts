@@ -5,7 +5,9 @@
  * Generates a fresh account identity (random 64-byte master seed + the
  * seed-derived owner/user blindings) bound to the operator's root (payer)
  * Solana key, seals it under a passphrase, and writes a separate encrypted,
- * versioned seed backup. Plaintext seed import/export is deliberately absent.
+ * versioned seed backup. It also creates the authenticated order-sequence
+ * sidecar; back that file up with the keystore and restore its latest
+ * `next_index`. Plaintext seed import/export is deliberately absent.
  *
  *   DARKNYX_DAEMON_KEYSTORE_PASSPHRASE=<passphrase> \
  *   DARKNYX_DAEMON_SEED_BACKUP_PASSPHRASE=<distinct-passphrase> \
@@ -18,6 +20,8 @@
  *
  *   --root-key   (required) base58 pubkey of the funding/root wallet.
  *   --out        keystore path (default ./darknyx-keystore.json).
+ *   --sequence-out order-sequence path (default <out>.order-sequence).
+ *   --sequence-start recovered next index; REQUIRED with --import-backup.
  *   --backup-out     encrypted backup destination when generating a new seed.
  *   --import-backup  encrypted backup v2 to restore; mutually exclusive with
  *                    --backup-out.
@@ -40,6 +44,7 @@ import {
   generateAccountIdentity,
   saveKeystore,
 } from "../src/keystore.js";
+import { DurableOrderSequence } from "../src/order-sequence.js";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -53,6 +58,7 @@ async function main(): Promise<void> {
   const rootKeyB58 = arg("root-key");
   if (!rootKeyB58) throw new Error("--root-key <BASE58_PUBKEY> is required");
   const out = arg("out") ?? "./darknyx-keystore.json";
+  const sequenceOut = arg("sequence-out") ?? `${out}.order-sequence`;
   const passphrase = process.env.DARKNYX_DAEMON_KEYSTORE_PASSPHRASE;
   if (!passphrase)
     throw new Error("DARKNYX_DAEMON_KEYSTORE_PASSPHRASE is required");
@@ -74,12 +80,18 @@ async function main(): Promise<void> {
   if (backupOut === out) {
     throw new Error("--backup-out and --out must be different files");
   }
+  if (sequenceOut === out || sequenceOut === backupOut) {
+    throw new Error("--sequence-out must be distinct from keystore and backup");
+  }
 
   if (existsSync(out) && !flag("force")) {
     throw new Error(`${out} exists; pass --force to overwrite`);
   }
   if (backupOut && existsSync(backupOut) && !flag("force")) {
     throw new Error(`${backupOut} exists; pass --force to overwrite`);
+  }
+  if (existsSync(sequenceOut) && !flag("force")) {
+    throw new Error(`${sequenceOut} exists; pass --force to overwrite`);
   }
 
   const rootKeyPubkey = new PublicKey(rootKeyB58).toBytes();
@@ -92,6 +104,24 @@ async function main(): Promise<void> {
   const identity = restoredSeed
     ? deriveAccountIdentity(restoredSeed, rootKeyPubkey)
     : generateAccountIdentity(rootKeyPubkey);
+
+  // A restored seed may have allocated indices that are not discoverable from
+  // chain history (cancelled/unmatched orders never settle). Validate this
+  // before writing any output so a bad recovery command is atomic.
+  const sequenceStartRaw = arg("sequence-start");
+  if (importBackup && sequenceStartRaw === undefined) {
+    throw new Error(
+      "--sequence-start is required with --import-backup; restore the backed-up next index",
+    );
+  }
+  const sequenceStart = Number(sequenceStartRaw ?? "0");
+  if (
+    !Number.isSafeInteger(sequenceStart) ||
+    sequenceStart < 0 ||
+    sequenceStart > 0x1_0000_0000
+  ) {
+    throw new Error("--sequence-start must be an integer in 0..4294967296");
+  }
 
   if (identity.masterSeed.length !== 64) {
     throw new Error("seed must be 64 bytes (128 hex chars)");
@@ -113,8 +143,17 @@ async function main(): Promise<void> {
     chmodSync(backupOut, 0o600);
   }
   saveKeystore(identity, out, passphrase);
+  DurableOrderSequence.create(
+    sequenceOut,
+    identity.masterSeed,
+    sequenceStart,
+    flag("force"),
+  );
 
   console.log(`keystore written: ${out} (encrypted, 0600)`);
+  console.log(
+    `order sequence written: ${sequenceOut} (next index ${sequenceStart}, authenticated, 0600)`,
+  );
   console.log(
     backupOut
       ? `encrypted seed backup written: ${backupOut} (version 2, 0600)`

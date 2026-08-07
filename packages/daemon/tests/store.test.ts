@@ -4,7 +4,11 @@
  * 22+ for `node:sqlite`.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { DaemonStore } from "../src/store.js";
 import {
@@ -21,6 +25,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   store.close();
+  vi.restoreAllMocks();
 });
 
 const depositNote = (suffix: string): StoredNote => ({
@@ -99,6 +104,107 @@ describe("DaemonStore — NoteStore", () => {
       "01".repeat(32),
       "02".repeat(32),
     ]);
+  });
+
+  it("selects exact u64 best-fit in SQL and preserves FIFO ties", () => {
+    const mint = Uint8Array.from([1, 2, 3, 4]);
+    const mk = (commitment: string, amount: bigint): StoredNote => ({
+      ...depositNote(commitment),
+      commitment,
+      tokenMint: mint,
+      amount,
+    });
+    store.put(mk("first", 9_007_199_254_740_994n));
+    store.put(mk("second", 9_007_199_254_740_993n));
+    store.put(mk("tie", 9_007_199_254_740_993n));
+    expect(
+      store.selectCollateral(mint, 9_007_199_254_740_993n)?.commitment,
+    ).toBe("second");
+  });
+
+  it("excludes original collateral and rolling residuals of live orders", () => {
+    const oid = "aa".repeat(8);
+    const original = depositNote("original");
+    const residual = { ...depositNote("residual"), orderId: oid };
+    store.put(original);
+    store.put(residual);
+    store.putOrder({
+      ...newManagedOrder({
+        orderId: oid,
+        seedIndex: 1,
+        side: "bid",
+        priceRaw: 1n,
+        sizeRaw: 1n,
+        collateralCommitment: original.commitment,
+      }),
+      phase: "open",
+    });
+    expect(store.selectCollateral(original.tokenMint, 1n)).toBeUndefined();
+  });
+});
+
+describe("DaemonStore — migration and durability profile", () => {
+  it("prepares hot statements once per store lifetime", () => {
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const local = new DaemonStore(":memory:");
+    const preparedAtBoot = prepare.mock.calls.length;
+    const note = depositNote("prepared");
+    local.put(note);
+    local.get(note.commitment);
+    local.list();
+    local.notesByOrder("none");
+    local.listPendingLeafNotes();
+    local.selectCollateral(note.tokenMint, 1n);
+    local.delete(note.commitment);
+    expect(prepare).toHaveBeenCalledTimes(preparedAtBoot);
+    local.close();
+    prepare.mockRestore();
+  });
+
+  it("backfills the sortable amount key on a legacy database and reopens", () => {
+    store.close();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "darknyx-store-"));
+    const dbPath = path.join(dir, "legacy.sqlite");
+    try {
+      const legacy = new DatabaseSync(dbPath);
+      legacy.exec(`
+        CREATE TABLE notes (
+          commitment TEXT PRIMARY KEY, token_mint TEXT NOT NULL,
+          amount TEXT NOT NULL, owner_commitment TEXT NOT NULL,
+          inner_hash TEXT NOT NULL, leaf_index TEXT, order_id TEXT,
+          consumed_commitment TEXT
+        );
+        CREATE TABLE orders (
+          order_id TEXT PRIMARY KEY, seed_index INTEGER NOT NULL,
+          symbol TEXT NOT NULL, side TEXT NOT NULL, price_raw TEXT NOT NULL,
+          size_raw TEXT NOT NULL, phase TEXT NOT NULL,
+          merge_in_flight INTEGER NOT NULL, pending_change_notes INTEGER NOT NULL,
+          collateral_commitment TEXT, settlement_failure_reason TEXT,
+          settlement_unlock_slot INTEGER, created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO notes VALUES
+          ('legacy', '01020304', '9007199254740993', '1', '2', '3', NULL, NULL);
+      `);
+      legacy.close();
+      store = new DaemonStore(dbPath);
+      expect(
+        store.selectCollateral(
+          Uint8Array.from([1, 2, 3, 4]),
+          9_007_199_254_740_993n,
+        )?.commitment,
+      ).toBe("legacy");
+      const db = (store as unknown as { db: DatabaseSync }).db;
+      expect(
+        (db.prepare("PRAGMA synchronous").get() as { synchronous: number })
+          .synchronous,
+      ).toBe(1); // NORMAL
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true });
+      // afterEach expects an open object; replace with an ephemeral one.
+      store = new DaemonStore(":memory:");
+    }
   });
 });
 

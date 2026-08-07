@@ -27,6 +27,15 @@ dist/
 *-keypair.json
 tests/fixtures/wallets/*.json
 
+# Daemon custody/runtime state (never commit)
+darknyx-keystore.json
+darknyx-seed-backup.json
+*.order-sequence
+*.control-token
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
 # Devnet test fixtures (generated + funded locally; never committed)
 .devnet/
 !.devnet/README.md

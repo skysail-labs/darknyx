@@ -322,6 +322,7 @@ maybe(
         dbPath: ":memory:",
         controlPort: 0,
         keystorePath: "",
+        orderSequencePath: "",
         // tuned: merge at 2 residuals
         thresholds: {
           mergeThreshold: 2,

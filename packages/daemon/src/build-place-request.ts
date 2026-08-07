@@ -80,14 +80,15 @@ export async function buildPlaceRequest(
 ): Promise<BuiltPlaceRequest> {
   const { keystore, note, seedIndex, intent } = args;
   const orderId = deriveOrderId(keystore.masterSeed, seedIndex);
+  const tradingSigner = keystore.tradingSigner(seedIndex);
 
   const request = await proveAndBuildOrder({
     // identity / keys (all on-device)
     masterSeed: keystore.masterSeed,
     spendingKey: keystore.spendingKey,
     ownerCommitment: note.ownerCommitment,
-    tradingKey: keystore.tradingPublicKey(seedIndex),
-    sign: (digest) => keystore.signWithTradingKey(seedIndex, digest),
+    tradingKey: tradingSigner.publicKey,
+    sign: tradingSigner.sign,
     // the note + intent
     note: {
       commitment: fromHex(note.commitment),

@@ -59,9 +59,10 @@ import {
   SettlementTracker,
   type FetchInclusionFn,
 } from "./settlement-tracker.js";
-import { selectCollateralNote, type CollateralRequest } from "./note-select.js";
+import type { CollateralRequest } from "./note-select.js";
 import { TeeReadClient } from "./tee-read.js";
 import { reconcile, type ReconcileResult } from "./reconcile.js";
+import { MemoryOrderSequence, type OrderSequence } from "./order-sequence.js";
 
 const toHex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const fromHex = (h: string): Uint8Array =>
@@ -134,6 +135,8 @@ export interface DaemonDeps {
   config: DaemonConfig;
   keystore: Keystore;
   store: DaemonStore;
+  /** Durable HD-index high-water mark; must outlive the rebuildable DB. */
+  orderSequence?: OrderSequence;
   /** VALID_INPUT prover for order placement (e.g. SDK `nodeValidInputProver`). */
   prover: ValidInputProver;
   // ── injectables (defaults built from config) ──
@@ -183,6 +186,7 @@ export class Daemon {
   private readonly config: DaemonConfig;
   private readonly keystore: Keystore;
   private readonly store: DaemonStore;
+  private readonly orderSequence: OrderSequence;
   private readonly prover: ValidInputProver;
   private readonly engine: LifecycleEngine;
   private readonly placer: OrderPlacer;
@@ -249,13 +253,20 @@ export class Daemon {
   private orders: OrdersListener | null = null;
   private tracker: SettlementTracker | null = null;
   private readonly listeners = new Set<(e: DaemonEvent) => void>();
-  private nextIndex = 0;
   private started = false;
 
   constructor(deps: DaemonDeps) {
     this.config = deps.config;
     this.keystore = deps.keystore;
     this.store = deps.store;
+    if (!deps.orderSequence && !this.store.isEphemeral) {
+      throw new Error(
+        "a durable orderSequence is required when the daemon store is persistent",
+      );
+    }
+    this.orderSequence =
+      deps.orderSequence ??
+      new MemoryOrderSequence(this.store.maxSeedIndex() + 1);
     this.prover = deps.prover;
     this.fetchImpl = deps.fetchImpl;
     this.subscribeFillsFn = deps.subscribeFills;
@@ -423,6 +434,7 @@ export class Daemon {
         // has already consumed.
         this.reconcileFailureReason =
           result.errors.length > 0 ? result.errors[0] : null;
+        if (result.errors.length === 0) this.tracker?.retryQuarantined();
         return result;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -594,8 +606,10 @@ export class Daemon {
     }
 
     this.started = true;
-    this.nextIndex = this.store.maxSeedIndex() + 1;
-
+    // One-time migration safety: an existing DB can advance a newly-created
+    // sequence file, but the DB is never allowed to move the durable root
+    // backwards. Production refuses a missing file before constructing us.
+    this.orderSequence.advanceTo(this.store.maxSeedIndex() + 1);
 
     const ownerCommitment = await this.keystore.ownerCommitment();
     this.fills = new FillsListener({
@@ -636,6 +650,17 @@ export class Daemon {
       onResolved: (commitment) => {
         const note = this.store.get(commitment);
         if (note) this.emit({ type: "fill", note });
+      },
+      onQuarantined: (commitment, error) => {
+        this.emitError(
+          "settlement-tracker",
+          new Error(
+            `quarantined unresolved note ${commitment}: ${
+              error instanceof Error ? error.message : error
+            }`,
+          ),
+        );
+        void this.reconcileNow(`unresolved settlement note ${commitment}`);
       },
     });
     this.fills.start();
@@ -680,9 +705,11 @@ export class Daemon {
     note: StoredNote,
   ): Promise<{ orderId: string; arrivalSlot: number }> {
     this.assertTradingEnabled();
-    const seedIndex = this.nextIndex++;
     if (!this.bootSessionId)
       throw new Error("daemon has not fetched the CVM boot session");
+    // Reserve + fsync BEFORE proving/signing. A failed placement burns an
+    // index (safe); a crash can never reuse one (unsafe).
+    const seedIndex = this.orderSequence.reserve();
     const { request, orderId } = await buildPlaceRequest({
       keystore: this.keystore,
       note,
@@ -753,32 +780,7 @@ export class Daemon {
   /** Pick the best collateral note for a request, excluding notes already
    *  locked by a resting (pending/open) order. `undefined` if none covers. */
   selectNote(req: CollateralRequest): StoredNote | undefined {
-    return selectCollateralNote(
-      this.store.list(),
-      req,
-      this.lockedCommitments(),
-    );
-  }
-
-  /** Commitments locked by orders that still rest (and so can't be re-spent):
-   *  the original collateral note of a pending/open order, AND that order's
-   *  rolling continuation residual (a change note is RE-LOCKED for continuation
-   *  while its order is open — only released when the order goes terminal). */
-  private lockedCommitments(): Set<string> {
-    const openOrderIds = new Set<string>();
-    const locked = new Set<string>();
-    for (const o of this.store.listOrders()) {
-      if (o.phase === "pending" || o.phase === "open") {
-        openOrderIds.add(o.orderId);
-        if (o.collateralCommitment) locked.add(o.collateralCommitment);
-      }
-    }
-    for (const n of this.store.list()) {
-      if (n.orderId !== undefined && openOrderIds.has(n.orderId)) {
-        locked.add(n.commitment);
-      }
-    }
-    return locked;
+    return this.store.selectCollateral(req.mint, req.minAmount);
   }
 
   /** A v3 fill memo names the exact input consumed to derive this output. Drop
@@ -807,14 +809,15 @@ export class Daemon {
     if (!this.bootSessionId)
       throw new Error("daemon has not fetched the CVM boot session");
     const idx = order.seedIndex;
+    const tradingSigner = this.keystore.tradingSigner(idx);
     const cancel = await buildCancel({
       orderId: fromHex(orderIdHex),
-      tradingKey: this.keystore.tradingPublicKey(idx),
+      tradingKey: tradingSigner.publicKey,
       cancelNonce: BigInt(Date.now()),
       // S-07: scopes the cancel signature to this CVM boot, so a captured
       // body cannot kill a re-placed order after a restart.
       sessionId: this.bootSessionId,
-      sign: (d) => this.keystore.signWithTradingKey(idx, d),
+      sign: tradingSigner.sign,
     });
     await this.placer.cancel(orderIdHex, cancel);
     await this.engine.dispatch(orderIdHex, { type: "cancelled" });

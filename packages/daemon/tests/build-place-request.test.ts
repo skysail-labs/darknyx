@@ -34,6 +34,27 @@ function keystore(): Keystore {
   return new Keystore(id);
 }
 
+class CountingKeystore extends Keystore {
+  derivations = 0;
+
+  protected override tradingKeypair(index: number) {
+    this.derivations += 1;
+    return super.tradingKeypair(index);
+  }
+}
+
+function countingKeystore(): CountingKeystore {
+  const base = keystore();
+  return new CountingKeystore({
+    masterSeed: base.masterSeed,
+    ownerBlinding: base.ownerBlinding,
+    r0: 1n,
+    r1: 2n,
+    r2: 3n,
+    rootKeyPubkey: new Uint8Array(32).fill(4),
+  });
+}
+
 const note: StoredNote = {
   commitment: "aa".repeat(32),
   tokenMint: new Uint8Array(32).fill(9),
@@ -128,5 +149,26 @@ describe("buildPlaceRequest", () => {
     const b = await buildPlaceRequest({ ...common, seedIndex: 1 });
     expect(a.request.order_id).not.toBe(b.request.order_id);
     expect(a.request.trading_key).not.toBe(b.request.trading_key);
+  });
+
+  it("expands the trading keypair once for public key plus signature", async () => {
+    const ks = countingKeystore();
+    await buildPlaceRequest({
+      keystore: ks,
+      note,
+      seedIndex: 3,
+      sessionId: new Uint8Array(32).fill(0x5a),
+      intent: {
+        symbol: "SOL-USDC",
+        side: OrderSide.Bid,
+        policy: limitPolicy({ priceLimit: 100n }),
+        amount: 500n,
+      },
+      gatewayUrl: "https://gw",
+      token: "t",
+      prover: fakeProver,
+      fetchImpl: fakeFetch(),
+    });
+    expect(ks.derivations).toBe(1);
   });
 });

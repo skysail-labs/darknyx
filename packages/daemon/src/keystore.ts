@@ -162,7 +162,7 @@ export class Keystore {
 
   /** The Ed25519 keypair for the order at `index` (deterministic from the seed).
    *  `Ed25519RawKeypair` is a 32-byte seed → expand to a nacl keypair. */
-  private tradingKeypair(index: number): nacl.SignKeyPair {
+  protected tradingKeypair(index: number): nacl.SignKeyPair {
     const { secretKey } = deriveTradingKeyAtOffset(
       this.identity.masterSeed,
       BigInt(index),
@@ -178,6 +178,22 @@ export class Keystore {
   /** Detached Ed25519 signature over `digest` with order `index`'s trading key. */
   signWithTradingKey(index: number, digest: Uint8Array): Uint8Array {
     return nacl.sign.detached(digest, this.tradingKeypair(index).secretKey);
+  }
+
+  /**
+   * Derive once for one order operation, without retaining expanded secret
+   * keys beyond the returned closure's lifetime. This removes duplicate
+   * tweetnacl scalar multiplications without introducing an unbounded cache.
+   */
+  tradingSigner(index: number): {
+    publicKey: Uint8Array;
+    sign: (digest: Uint8Array) => Uint8Array;
+  } {
+    const keypair = this.tradingKeypair(index);
+    return {
+      publicKey: keypair.publicKey,
+      sign: (digest) => nacl.sign.detached(digest, keypair.secretKey),
+    };
   }
 }
 

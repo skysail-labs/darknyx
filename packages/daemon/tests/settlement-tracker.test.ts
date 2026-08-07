@@ -108,13 +108,96 @@ describe("SettlementTracker", () => {
     store.put(changeNote("a2".repeat(32)));
     // first pass: only a1 is settled
     const known: Record<string, number> = { ["a1".repeat(32)]: 7 };
-    const t = tracker(fakeInclusion(known));
+    let now = 1_000;
+    const t = new SettlementTracker({
+      store,
+      gatewayUrl: "https://gw",
+      token: "t",
+      fetchInclusion: fakeInclusion(known),
+      pollMs: 100,
+      now: () => now,
+    });
     expect(await t.resolvePending()).toBe(1);
     expect(store.get("a1".repeat(32))!.leafIndex).toBe(7n);
     expect(store.get("a2".repeat(32))!.leafIndex).toBeUndefined();
     // a2 settles → next pass resolves it
     known["a2".repeat(32)] = 8;
+    now += 100;
     expect(await t.resolvePending()).toBe(1);
     expect(store.get("a2".repeat(32))!.leafIndex).toBe(8n);
+  });
+
+  it("caps concurrent inclusion reads at eight", async () => {
+    for (let i = 0; i < 20; i++) {
+      store.put(changeNote(i.toString(16).padStart(2, "0").repeat(32)));
+    }
+    let active = 0;
+    let peak = 0;
+    const fetch = vi.fn(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      active -= 1;
+      throw new Error("not settled");
+    }) as unknown as FetchInclusionFn;
+    const fullScan = vi.spyOn(store, "list");
+    await tracker(fetch).resolvePending();
+    expect(fetch).toHaveBeenCalledTimes(20);
+    expect(peak).toBe(8);
+    expect(fullScan).not.toHaveBeenCalled();
+  });
+
+  it("backs off, quarantines, and re-admits only after reconciliation", async () => {
+    const commitment = "ee".repeat(32);
+    store.put(changeNote(commitment));
+    let now = 0;
+    const quarantined: string[] = [];
+    const fetch = fakeInclusion({});
+    const t = new SettlementTracker({
+      store,
+      gatewayUrl: "https://gw",
+      token: "t",
+      fetchInclusion: fetch,
+      pollMs: 10,
+      maxAttempts: 3,
+      now: () => now,
+      onQuarantined: (c) => quarantined.push(c),
+    });
+
+    expect(await t.resolvePending()).toBe(0); // attempt 1, next at 10
+    await t.resolvePending();
+    expect(fetch).toHaveBeenCalledTimes(1); // no hot-loop before backoff
+    now = 10;
+    await t.resolvePending(); // attempt 2, next at 30
+    now = 30;
+    await t.resolvePending(); // attempt 3 -> quarantine
+    now = 10_000;
+    await t.resolvePending();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(quarantined).toEqual([commitment]);
+
+    t.retryQuarantined();
+    await t.resolvePending();
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("drops retry state when reconciliation removes a pending note", async () => {
+    const commitment = "f1".repeat(32);
+    const fetch = fakeInclusion({});
+    store.put(changeNote(commitment));
+    const t = new SettlementTracker({
+      store,
+      gatewayUrl: "https://gw",
+      token: "t",
+      fetchInclusion: fetch,
+      pollMs: 10_000,
+      now: () => 0,
+    });
+    await t.resolvePending(); // enters long backoff
+    store.delete(commitment);
+    await t.resolvePending(); // prunes orphan retry state
+    store.put(changeNote(commitment));
+    await t.resolvePending(); // immediately eligible again
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
