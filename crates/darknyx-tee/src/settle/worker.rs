@@ -86,7 +86,7 @@ pub struct BatchSettleInputs {
     pub matches: Vec<MatchSettleInputs>,
     /// The padded N-slot witness set fed to the prover. Its leaves
     /// + root drive the per-match Merkle inclusion paths.
-    pub witnesses: Vec<MatchSlotWitness>,
+    pub witnesses: Arc<[MatchSlotWitness]>,
 }
 
 /// Final per-match result returned to the scheduler. The scheduler applies the
@@ -355,17 +355,18 @@ fn journal_entry_for(
 /// is the ability to redrive early.
 async fn journal_batch_start(ctx: &SettleWorkerCtx, inputs: &BatchSettleInputs, root: [u8; 32]) {
     let mut j = ctx.journal.lock().await;
-    for m in inputs.matches.iter() {
-        let entry = journal_entry_for(inputs.batch_id, m, root, JournalStage::Locking);
-        if let Err(e) = j.record(entry) {
-            tracing::error!(
-                batch_id = inputs.batch_id,
-                match_idx = m.match_index,
-                error = %e,
-                "settle journal write failed; this match cannot be redriven after a \
-                 restart (lock sweeper still releases it at expiry)"
-            );
-        }
+    let entries = inputs
+        .matches
+        .iter()
+        .map(|m| journal_entry_for(inputs.batch_id, m, root, JournalStage::Locking));
+    if let Err(e) = j.record_many(entries) {
+        tracing::error!(
+            batch_id = inputs.batch_id,
+            match_count = inputs.matches.len(),
+            error = %e,
+            "settle journal batch write failed; these matches cannot be redriven after a \
+             restart (lock sweeper still releases them at expiry)"
+        );
     }
 }
 
@@ -383,119 +384,135 @@ async fn journal_batch_start(ctx: &SettleWorkerCtx, inputs: &BatchSettleInputs, 
 /// prevent — recovery could not even name it to ask the chain about. Skipping
 /// the match costs one settle attempt, which the next round retries while the
 /// marker and locks are still valid; sending it costs the ability to reconcile.
-async fn journal_settle_attempt(
+async fn journal_settle_attempts(
     ctx: &SettleWorkerCtx,
     batch_id: u64,
-    match_idx: u8,
-    signature: Option<String>,
+    attempts: Vec<(u8, Option<String>)>,
     marker_expiry_slot: u64,
-) -> bool {
-    // No signature means the wire bytes could not be parsed back. Recording a
-    // `Settling` entry with `settle_sig: None` would be worse than recording
-    // nothing: recovery would see an in-flight settle it cannot identify.
-    if signature.is_none() {
-        tracing::error!(
-            batch_id,
-            match_idx,
-            "could not read the settle signature from the signed transaction; \
-             refusing to send an unjournalable settle"
-        );
-        return false;
-    }
+) -> std::collections::HashSet<u8> {
     let mut j = ctx.journal.lock().await;
-    let Some(mut entry) = j.get(batch_id, match_idx).cloned() else {
+    let mut entries = Vec::with_capacity(attempts.len());
+    let mut journaled = std::collections::HashSet::with_capacity(attempts.len());
+    for (match_idx, signature) in attempts {
+        // No signature means the wire bytes could not be parsed back. Recording
+        // `Settling` with no signature would leave recovery unable to identify
+        // the transaction.
+        let Some(signature) = signature else {
+            tracing::error!(
+                batch_id,
+                match_idx,
+                "could not read the settle signature from the signed transaction; \
+                 refusing to send an unjournalable settle"
+            );
+            continue;
+        };
+        let Some(mut entry) = j.get(batch_id, match_idx).cloned() else {
+            tracing::error!(
+                batch_id,
+                match_idx,
+                "no journal entry for this match at settle time; refusing to send"
+            );
+            continue;
+        };
+        entry.stage = JournalStage::Settling;
+        entry.settle_sig = Some(signature);
+        // Now known (verify landed) and it is the binding redrive bound — the
+        // marker TTL is ~300 slots against the lock's ~30 min.
+        entry.marker_expiry_slot = Some(marker_expiry_slot);
+        entries.push(entry);
+        journaled.insert(match_idx);
+    }
+    if entries.is_empty() {
+        return journaled;
+    }
+    if let Err(e) = j.record_many(entries) {
         tracing::error!(
             batch_id,
-            match_idx,
-            "no journal entry for this match at settle time; refusing to send"
+            match_count = journaled.len(),
+            error = %e,
+            "settle-signature journal batch write failed BEFORE send; skipping these \
+             matches rather than sending transactions recovery could not name"
         );
-        return false;
-    };
-    entry.stage = JournalStage::Settling;
-    entry.settle_sig = signature;
-    // Now known (verify landed) and it is the binding redrive bound — the
-    // marker TTL is ~300 slots against the lock's ~30 min.
-    entry.marker_expiry_slot = Some(marker_expiry_slot);
-    if let Err(e) = j.record(entry) {
-        tracing::error!(
-            batch_id, match_idx, error = %e,
-            "settle-signature journal write failed BEFORE send; skipping this \
-             match rather than sending a transaction recovery could not name"
-        );
-        return false;
+        journaled.clear();
     }
-    true
+    journaled
 }
 
-/// Drop a match's journal entry once its outcome is terminal.
-async fn journal_forget(ctx: &SettleWorkerCtx, batch_id: u64, match_idx: u8) {
-    ctx.journal.lock().await.forget(batch_id, match_idx);
-}
-
-/// Finalize one match's outcome.
-///
-/// `match_idx` is the position in `results` and the batch's job ids;
-/// `journal_key` is the key the journal entry was WRITTEN under
-/// (`MatchSettleInputs::match_index`). They are passed separately rather than
-/// reusing one for both: they are equal today, and cleanup that silently depends
-/// on that is one refactor away from leaking entries that then look like
-/// in-flight settlements forever.
-async fn record_final_outcome(
+/// Drop every terminal match in one durable snapshot after the batch finishes.
+async fn journal_forget_terminal(
     ctx: &SettleWorkerCtx,
     batch_id: u64,
-    match_idx: usize,
-    journal_key: u8,
-    outcome: SettlementOutcome,
+    inputs: &[MatchSettleInputs],
+    outcomes: &[SettlementOutcome],
+) {
+    let keys = inputs.iter().zip(outcomes).filter_map(|(input, outcome)| {
+        matches!(
+            outcome,
+            SettlementOutcome::Confirmed { .. } | SettlementOutcome::Rejected { .. }
+        )
+        .then_some((batch_id, input.match_index))
+    });
+    ctx.journal.lock().await.forget_many(keys);
+}
+
+/// Finalize a group of match outcomes under one scheduler write lock.
+///
+/// Network confirmations arrive as a round. Taking the global scheduler lock
+/// once per match needlessly serialized concurrent batches; apply the round as
+/// one state transition while retaining one client event per match (PF-16).
+/// Durable terminal cleanup is separately batched after normalization, so this
+/// path also does not fsync once per match (PF-12).
+async fn record_final_outcomes(
+    ctx: &SettleWorkerCtx,
+    batch_id: u64,
+    updates: Vec<(usize, SettlementOutcome)>,
     results: &mut [Option<SettlementOutcome>],
     outcome_tx: Option<&mpsc::UnboundedSender<MatchSettlementResult>>,
 ) {
-    if results[match_idx].is_some() {
+    let updates: Vec<_> = updates
+        .into_iter()
+        .filter(|(match_idx, _)| results[*match_idx].is_none())
+        .collect();
+    if updates.is_empty() {
         return;
     }
-    let id = SettleJobId {
-        batch_id,
-        match_idx: match_idx as u8,
-    };
     {
         let mut state = ctx.settle_state.write().await;
-        state.update(&id, |job| {
-            job.outcome = outcome.clone();
-            match &outcome {
-                SettlementOutcome::Confirmed { signature, .. } => {
-                    job.settle_sig = signature.clone();
-                    job.transition(SettleJobStage::Done);
+        for (match_idx, outcome) in &updates {
+            let id = SettleJobId {
+                batch_id,
+                match_idx: *match_idx as u8,
+            };
+            state.update(&id, |job| {
+                job.outcome = outcome.clone();
+                match outcome {
+                    SettlementOutcome::Confirmed { signature, .. } => {
+                        job.settle_sig = signature.clone();
+                        job.transition(SettleJobStage::Done);
+                    }
+                    SettlementOutcome::Rejected { reason } => {
+                        // A definitive on-chain/deadline rejection, not an
+                        // infrastructure fault.
+                        job.transition(SettleJobStage::Failed {
+                            failure: SettleFailureKind::Rejected,
+                            reason: reason.clone(),
+                        });
+                    }
+                    SettlementOutcome::Ambiguous { .. } | SettlementOutcome::Pending => {
+                        job.transition(SettleJobStage::Settling);
+                    }
                 }
-                SettlementOutcome::Rejected { reason } => {
-                    // A definitive on-chain/deadline rejection, not an
-                    // infrastructure fault.
-                    job.transition(SettleJobStage::Failed {
-                        failure: SettleFailureKind::Rejected,
-                        reason: reason.clone(),
-                    });
-                }
-                SettlementOutcome::Ambiguous { .. } | SettlementOutcome::Pending => {
-                    job.transition(SettleJobStage::Settling);
-                }
-            }
-        });
+            });
+        }
     }
-    // T-06 WRITE POINT 3 — a terminal outcome retires the journal entry. Kept
-    // for Ambiguous/Pending: those are exactly the states a restart must still
-    // reconcile, so dropping them here would discard the record precisely when
-    // it is needed.
-    if matches!(
-        outcome,
-        SettlementOutcome::Confirmed { .. } | SettlementOutcome::Rejected { .. }
-    ) {
-        journal_forget(ctx, batch_id, journal_key).await;
-    }
-
-    results[match_idx] = Some(outcome.clone());
-    if let Some(tx) = outcome_tx {
-        let _ = tx.send(MatchSettlementResult {
-            match_index: match_idx,
-            outcome,
-        });
+    for (match_idx, outcome) in updates {
+        results[match_idx] = Some(outcome.clone());
+        if let Some(tx) = outcome_tx {
+            let _ = tx.send(MatchSettlementResult {
+                match_index: match_idx,
+                outcome,
+            });
+        }
     }
 }
 
@@ -657,7 +674,7 @@ async fn run_batch_settle_inner(
     // circuit witness against exactly these). Computing them up front lets the
     // per-batch ALT (whose `batch_validity_marker` PDA is seeded by merkle_root)
     // be built CONCURRENTLY with proving instead of waiting for it.
-    let public = build_batch_public_inputs(&inputs.witnesses)
+    let public = build_batch_public_inputs(inputs.witnesses.as_ref())
         .map_err(|e| WorkerError::Prover(format!("public inputs: {e}")))?;
     let merkle_root = public.merkle_root;
     // `build_batch_public_inputs` retained the exact levels it used for this
@@ -787,8 +804,8 @@ async fn run_batch_settle_inner(
     let prove_verify_branch = async {
         let t = Instant::now();
         let prover = ctx.prover.clone();
-        let witnesses = inputs.witnesses.clone();
-        let proof_out = tokio::task::spawn_blocking(move || prover.prove(&witnesses))
+        let witnesses = Arc::clone(&inputs.witnesses);
+        let proof_out = tokio::task::spawn_blocking(move || prover.prove(witnesses.as_ref()))
             .await
             .map_err(|e| WorkerError::ProverPanic(e.to_string()))?
             .map_err(|e| WorkerError::Prover(format!("{e}")))?;
@@ -965,13 +982,31 @@ async fn run_batch_settle_inner(
         // needed here — `per_batch_alt` is already captured.
         let t = Instant::now();
         let alt_landed_slot = ctx.rpc.get_latest_blockhash().await?.context_slot;
+        let activation_deadline = Instant::now() + Duration::from_secs(12);
+        let mut poll_delay = Duration::from_millis(400);
         let mut activated = false;
-        for _ in 0..30 {
+        loop {
+            // A Solana slot cannot advance before time passes. Polling
+            // immediately after the landing read spent one guaranteed-useless
+            // RPC request per batch; sleep first, then back off under degraded
+            // RPC while keeping the original 12-second ceiling (PF-13).
+            let now = Instant::now();
+            if now >= activation_deadline {
+                break;
+            }
+            tokio::time::sleep(std::cmp::min(
+                poll_delay,
+                activation_deadline.duration_since(now),
+            ))
+            .await;
             if ctx.rpc.get_latest_blockhash().await?.context_slot > alt_landed_slot {
                 activated = true;
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(400)).await;
+            if Instant::now() >= activation_deadline {
+                break;
+            }
+            poll_delay = std::cmp::min(poll_delay + poll_delay, Duration::from_secs(2));
         }
         if !activated {
             tracing::error!(
@@ -1083,6 +1118,7 @@ async fn run_batch_settle_inner(
         // PDAs means the prior send landed; neither is a definitive terminal
         // rejection. A read failure stays ambiguous and is retried.
         let mut active = Vec::with_capacity(unresolved.len());
+        let mut expired_outcomes = Vec::new();
         for idx in unresolved.drain(..) {
             if bh.context_slot < settlement_deadline(&inputs.matches[idx], marker_expiry_slot) {
                 active.push(idx);
@@ -1129,17 +1165,9 @@ async fn run_batch_settle_inner(
                     }
                 }
             };
-            record_final_outcome(
-                ctx,
-                batch_id,
-                idx,
-                inputs.matches[idx].match_index,
-                outcome,
-                &mut results,
-                outcome_tx,
-            )
-            .await;
+            expired_outcomes.push((idx, outcome));
         }
+        record_final_outcomes(ctx, batch_id, expired_outcomes, &mut results, outcome_tx).await;
         if active.is_empty() {
             break;
         }
@@ -1147,6 +1175,7 @@ async fn run_batch_settle_inner(
         let blockhash = Hash::new_from_array(bh.blockhash);
         let mut txs: Vec<(usize, String)> = Vec::with_capacity(active.len());
         let mut attempted = Vec::with_capacity(active.len());
+        let mut build_failures = Vec::new();
         for &idx in &active {
             let m = &inputs.matches[idx];
             let built = (|| -> Result<String, WorkerError> {
@@ -1179,21 +1208,16 @@ async fn run_batch_settle_inner(
                     txs.push((idx, tx_b64));
                 }
                 Err(error) => {
-                    record_final_outcome(
-                        ctx,
-                        batch_id,
+                    build_failures.push((
                         idx,
-                        inputs.matches[idx].match_index,
                         SettlementOutcome::Rejected {
                             reason: format!("cannot construct settle transaction: {error}"),
                         },
-                        &mut results,
-                        outcome_tx,
-                    )
-                    .await;
+                    ));
                 }
             }
         }
+        record_final_outcomes(ctx, batch_id, build_failures, &mut results, outcome_tx).await;
         if txs.is_empty() {
             continue;
         }
@@ -1203,20 +1227,20 @@ async fn run_batch_settle_inner(
         // out of the wire bytes costs nothing and closes the one crash window
         // that recovery cannot otherwise reason about: a settle that reached the
         // network with no local record naming it.
-        let mut journaled: Vec<(usize, String)> = Vec::with_capacity(txs.len());
-        for (idx, tx_b64) in txs {
-            if journal_settle_attempt(
-                ctx,
-                batch_id,
-                inputs.matches[idx].match_index,
-                first_signature_b58(&tx_b64),
-                marker_expiry_slot,
-            )
-            .await
-            {
-                journaled.push((idx, tx_b64));
-            }
-        }
+        let attempts = txs
+            .iter()
+            .map(|(idx, tx_b64)| {
+                (
+                    inputs.matches[*idx].match_index,
+                    first_signature_b58(tx_b64),
+                )
+            })
+            .collect();
+        let durable = journal_settle_attempts(ctx, batch_id, attempts, marker_expiry_slot).await;
+        let journaled: Vec<(usize, String)> = txs
+            .into_iter()
+            .filter(|(idx, _)| durable.contains(&inputs.matches[*idx].match_index))
+            .collect();
         if journaled.is_empty() {
             // Nothing could be journaled; retry next round while the marker and
             // locks are still valid rather than send blind.
@@ -1234,6 +1258,7 @@ async fn run_batch_settle_inner(
         .await;
         let mut seen = std::collections::HashSet::with_capacity(round.len());
         let mut retry = Vec::new();
+        let mut round_outcomes = Vec::new();
         for raw in round {
             let idx = raw.transaction_index();
             seen.insert(idx);
@@ -1340,18 +1365,10 @@ async fn run_batch_settle_inner(
                 }
             };
             if let Some(outcome) = resolved {
-                record_final_outcome(
-                    ctx,
-                    batch_id,
-                    idx,
-                    inputs.matches[idx].match_index,
-                    outcome,
-                    &mut results,
-                    outcome_tx,
-                )
-                .await;
+                round_outcomes.push((idx, outcome));
             }
         }
+        record_final_outcomes(ctx, batch_id, round_outcomes, &mut results, outcome_tx).await;
 
         // A panicked send task is not attributable inside the confirmation
         // helper. Preserve every caller index by treating any missing result as
@@ -1369,23 +1386,23 @@ async fn run_batch_settle_inner(
         }
     }
 
-    for idx in 0..results.len() {
-        if results[idx].is_none() {
-            record_final_outcome(
-                ctx,
-                batch_id,
+    let missing = (0..results.len())
+        .filter(|idx| results[*idx].is_none())
+        .map(|idx| {
+            (
                 idx,
-                inputs.matches[idx].match_index,
                 SettlementOutcome::Ambiguous {
                     reason: "settlement result missing after reconciliation".to_string(),
                 },
-                &mut results,
-                outcome_tx,
             )
-            .await;
-        }
-    }
+        })
+        .collect();
+    record_final_outcomes(ctx, batch_id, missing, &mut results, outcome_tx).await;
     let normalized: Vec<SettlementOutcome> = results.into_iter().flatten().collect();
+    // T-06 WRITE POINT 3 — terminal removals are best-effort and recovery-safe
+    // to defer: a crash before this snapshot simply re-examines an already
+    // terminal entry. Flush once for the batch instead of once per match.
+    journal_forget_terminal(ctx, batch_id, &inputs.matches, &normalized).await;
 
     // Co-inclusion factor = matches ÷ distinct_slots. Near n → the leader
     // batched the settles into one/few blocks (the concurrent-send win); near 1
@@ -2050,7 +2067,7 @@ mod tests {
                 seller_lock: lock_inputs(0x02),
                 match_index: 0,
             }],
-            witnesses: vec![dummy_slot()],
+            witnesses: vec![dummy_slot()].into(),
         };
 
         // The mock cuts the RPC itself, the moment the settle tx is sent — see
@@ -2117,7 +2134,7 @@ mod tests {
                     match_index: 1,
                 },
             ],
-            witnesses: vec![dummy_slot(), dummy_slot()],
+            witnesses: vec![dummy_slot(), dummy_slot()].into(),
         };
         run_batch_settle(&ctx, inputs).await.expect("batch settle");
 
@@ -2171,7 +2188,7 @@ mod tests {
                     match_index: 1,
                 },
             ],
-            witnesses: vec![dummy_slot(), dummy_slot()],
+            witnesses: vec![dummy_slot(), dummy_slot()].into(),
         };
 
         run_batch_settle(&ctx, inputs).await.expect("batch settle");
@@ -2224,7 +2241,7 @@ mod tests {
                 seller_lock: lock_inputs(seller_seed),
                 match_index: 0,
             }],
-            witnesses: vec![dummy_slot(), dummy_slot()],
+            witnesses: vec![dummy_slot(), dummy_slot()].into(),
         };
         let (first, second) = tokio::join!(
             run_batch_settle(&ctx, make_inputs(0, 0xA0, 0x01, 0x02)),
@@ -2279,7 +2296,7 @@ mod tests {
                 seller_lock: lock_inputs(0x02),
                 match_index: 0,
             }],
-            witnesses: vec![dummy_slot(), dummy_slot()],
+            witnesses: vec![dummy_slot(), dummy_slot()].into(),
         };
 
         let err = run_batch_settle(&ctx, inputs).await.unwrap_err();
@@ -2342,7 +2359,7 @@ mod tests {
                     match_index: 1,
                 },
             ],
-            witnesses: vec![dummy_slot(), dummy_slot()],
+            witnesses: vec![dummy_slot(), dummy_slot()].into(),
         }
     }
 
@@ -2515,7 +2532,7 @@ mod tests {
                 seller_lock: lock_inputs(0x02),
                 match_index: 0,
             }],
-            witnesses: vec![dummy_slot()],
+            witnesses: vec![dummy_slot()].into(),
         };
         let _ = run_batch_settle(&ctx, inputs).await;
 
@@ -2546,7 +2563,9 @@ mod tests {
         // No entry exists for this key, so the settle write point cannot attach
         // a signature to anything — exactly the state a lost journal produces.
         assert!(
-            !journal_settle_attempt(&ctx, 99, 0, Some("sig".into()), 1_000).await,
+            journal_settle_attempts(&ctx, 99, vec![(0, Some("sig".into()))], 1_000)
+                .await
+                .is_empty(),
             "an absent journal entry must refuse the send"
         );
 
@@ -2561,7 +2580,9 @@ mod tests {
         );
         ctx.journal.lock().await.record(entry).unwrap();
         assert!(
-            !journal_settle_attempt(&ctx, 0, 0, None, 1_000).await,
+            journal_settle_attempts(&ctx, 0, vec![(0, None)], 1_000)
+                .await
+                .is_empty(),
             "an unreadable signature must refuse the send"
         );
         let j = ctx.journal.lock().await;
@@ -2596,7 +2617,7 @@ mod tests {
                 },
             ],
             // Only one witness slot — fewer than the two matches.
-            witnesses: vec![dummy_slot()],
+            witnesses: vec![dummy_slot()].into(),
         };
 
         let err = run_batch_settle(&ctx, inputs).await.unwrap_err();

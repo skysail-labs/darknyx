@@ -414,6 +414,35 @@ impl SettleJournal {
         entry.updated_at_ms = now_unix_ms();
         self.entries.insert(entry.key(), entry);
 
+        self.flush_measured()
+    }
+
+    /// Record or replace a group of entries with one durable snapshot.
+    ///
+    /// Settlement transitions are batch-shaped. Flushing once per match made
+    /// an N=16 transition serialize an ever-growing journal sixteen times and
+    /// issue thirty-two fsyncs. The snapshot is already the atomic unit, so
+    /// inserting the whole transition and flushing once preserves the same
+    /// write-ahead boundary without the O(N²) work (PF-12).
+    pub fn record_many<I>(&mut self, entries: I) -> std::io::Result<()>
+    where
+        I: IntoIterator<Item = JournalEntry>,
+    {
+        let updated_at_ms = now_unix_ms();
+        let mut changed = false;
+        for mut entry in entries {
+            entry.updated_at_ms = updated_at_ms;
+            self.entries.insert(entry.key(), entry);
+            changed = true;
+        }
+        if !changed {
+            return Ok(());
+        }
+
+        self.flush_measured()
+    }
+
+    fn flush_measured(&mut self) -> std::io::Result<()> {
         // Time the FLUSH, not the map insert: the cost being measured is
         // tmp-write → fsync(file) → rename → fsync(dir), which is what the
         // settle waits on before it may submit.
@@ -476,13 +505,24 @@ impl SettleJournal {
     /// is re-examined on the next boot and found already settled, which costs a
     /// reconciliation query and nothing else.
     pub fn forget(&mut self, batch_id: u64, match_idx: u8) {
-        if self.entries.remove(&(batch_id, match_idx)).is_some() {
+        self.forget_many([(batch_id, match_idx)]);
+    }
+
+    /// Drop terminal entries with one best-effort durable snapshot.
+    pub fn forget_many<I>(&mut self, keys: I)
+    where
+        I: IntoIterator<Item = (u64, u8)>,
+    {
+        let mut removed = 0usize;
+        for key in keys {
+            removed += usize::from(self.entries.remove(&key).is_some());
+        }
+        if removed > 0 {
             if let Err(e) = self.flush() {
                 tracing::warn!(
-                    batch_id,
-                    match_idx,
+                    removed,
                     error = %e,
-                    "settle-journal removal failed; entry will be re-reconciled on next boot"
+                    "settle-journal removals failed; entries will be re-reconciled on next boot"
                 );
             }
         }
@@ -726,6 +766,39 @@ pub(super) mod tests {
         assert_eq!(j.len(), 1);
         assert!(j.get(1, 0).is_none());
         assert!(j.get(1, 1).is_some());
+    }
+
+    #[test]
+    fn batch_transition_is_one_durable_write() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let (mut j, _) = SettleJournal::open(Some(dir.path()));
+            j.record_many((0..16).map(|idx| entry(8, idx, JournalStage::Locking)))
+                .unwrap();
+            assert_eq!(j.len(), 16);
+            assert_eq!(
+                j.write_stats().unwrap().count,
+                1,
+                "an N=16 transition must flush one snapshot, not one per match"
+            );
+        }
+        let (j, load) = SettleJournal::open(Some(dir.path()));
+        assert!(matches!(load, JournalLoad::Recovered(entries) if entries.len() == 16));
+        assert_eq!(j.len(), 16);
+    }
+
+    #[test]
+    fn forget_many_removes_one_batch_transition_durably() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let (mut j, _) = SettleJournal::open(Some(dir.path()));
+            j.record_many((0..4).map(|idx| entry(9, idx, JournalStage::Settling)))
+                .unwrap();
+            j.forget_many((0..4).map(|idx| (9, idx)));
+        }
+        let (j, load) = SettleJournal::open(Some(dir.path()));
+        assert!(matches!(load, JournalLoad::Recovered(entries) if entries.is_empty()));
+        assert!(j.is_empty());
     }
 
     #[test]

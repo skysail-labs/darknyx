@@ -173,6 +173,9 @@ icicle-snark  = { path = "../../third_party/icicle-snark", optional = true }
 # and no second verification code path that could drift. It works off-BPF —
 # `programs/vault/tests/zk_roundtrip.rs` already verifies on the host.
 groth16-solana = { workspace = true }
+# Join independent transparency RPC reads; integration tests also use its
+# `SinkExt`/`StreamExt` traits to drive real WebSocket clients.
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
@@ -190,9 +193,6 @@ tempfile = "3"
 # to the version axum's `ws` feature already resolves, so this adds no crate to
 # the dependency graph that the binary did not already build.
 tokio-tungstenite = "0.24"
-# `SinkExt`/`StreamExt` for driving that client socket. Already in the graph via
-# tokio-tungstenite and axum; named here so the test can import the traits.
-futures-util = "0.3"
 
 [features]
 default = []

@@ -72,6 +72,19 @@ pub fn spawn_oracle_sync(
     cfg: SyncConfig,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        // Feed ids are immutable deployment configuration. Decode and
+        // normalize them once, rather than rebuilding the lookup on every
+        // one-second refresh cycle (PF-17).
+        let requested = match requested_feed_map(&cfg.feed_ids) {
+            Ok(requested) => requested,
+            Err(error) => {
+                for binding in &cfg.market_bindings {
+                    binding.trading_gate.pause_for(TradingPauseReason::Oracle);
+                }
+                tracing::error!(error = %error, "oracle sync configuration invalid; markets PAUSED");
+                return;
+            }
+        };
         let mut ticker = time::interval(cfg.interval);
         // Make the first tick fire immediately so the cache is
         // warm before the matching loop starts.
@@ -79,7 +92,7 @@ pub fn spawn_oracle_sync(
         loop {
             ticker.tick().await;
             let started = Instant::now();
-            match refresh_batch(&client, &cache, &cfg).await {
+            match refresh_batch_prepared(&client, &cache, &cfg, &requested).await {
                 Ok((accepted, replayed)) => {
                     reconcile_market_health(&cache, &cfg).await;
                     tracing::debug!(
@@ -227,14 +240,49 @@ async fn refresh_batch(
     cache: &OracleCache,
     cfg: &SyncConfig,
 ) -> anyhow::Result<(usize, usize)> {
-    anyhow::ensure!(!cfg.feed_ids.is_empty(), "oracle feed set is empty");
-    let update = client.fetch_many(&cfg.feed_ids).await?;
-    apply_batch_update_at(cache, cfg, update, now_ms()).await
+    let requested = requested_feed_map(&cfg.feed_ids)?;
+    refresh_batch_prepared(client, cache, cfg, &requested).await
 }
 
+async fn refresh_batch_prepared(
+    client: &HermesClient,
+    cache: &OracleCache,
+    cfg: &SyncConfig,
+    requested: &HashMap<[u8; 32], String>,
+) -> anyhow::Result<(usize, usize)> {
+    anyhow::ensure!(!cfg.feed_ids.is_empty(), "oracle feed set is empty");
+    let update = client.fetch_many(&cfg.feed_ids).await?;
+    apply_batch_update_at_prepared(cache, cfg, requested, update, now_ms()).await
+}
+
+#[cfg(test)]
 async fn apply_batch_update_at(
     cache: &OracleCache,
     cfg: &SyncConfig,
+    update: HermesBatchUpdate,
+    observed_at_ms: u64,
+) -> anyhow::Result<(usize, usize)> {
+    let requested = requested_feed_map(&cfg.feed_ids)?;
+    apply_batch_update_at_prepared(cache, cfg, &requested, update, observed_at_ms).await
+}
+
+fn requested_feed_map(feed_ids: &[String]) -> anyhow::Result<HashMap<[u8; 32], String>> {
+    feed_ids
+        .iter()
+        .map(|feed_id| {
+            let bytes: [u8; 32] = hex::decode(feed_id)
+                .ok()
+                .and_then(|value| value.try_into().ok())
+                .ok_or_else(|| anyhow::anyhow!("feed id {feed_id} is not 32 hex bytes"))?;
+            Ok((bytes, feed_id.to_ascii_lowercase()))
+        })
+        .collect()
+}
+
+async fn apply_batch_update_at_prepared(
+    cache: &OracleCache,
+    cfg: &SyncConfig,
+    requested: &HashMap<[u8; 32], String>,
     update: HermesBatchUpdate,
     observed_at_ms: u64,
 ) -> anyhow::Result<(usize, usize)> {
@@ -251,17 +299,6 @@ async fn apply_batch_update_at(
     let root = accumulator::merkle_root_from_vaa_payload(verified_vaa.payload)
         .map_err(|e| anyhow::anyhow!("Pyth merkle root parse failed: {e}"))?;
 
-    let requested = cfg
-        .feed_ids
-        .iter()
-        .map(|feed_id| {
-            let bytes: [u8; 32] = hex::decode(feed_id)
-                .ok()
-                .and_then(|value| value.try_into().ok())
-                .ok_or_else(|| anyhow::anyhow!("feed id {feed_id} is not 32 hex bytes"))?;
-            Ok((bytes, feed_id.to_ascii_lowercase()))
-        })
-        .collect::<anyhow::Result<HashMap<_, _>>>()?;
     let mut found = HashMap::<String, accumulator::PriceFeedMessage>::new();
     for pu in &parsed.updates {
         let msg = match accumulator::parse_price_feed_message(pu.message) {

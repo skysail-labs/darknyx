@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{extract::State, Json};
+use futures_util::future::join_all;
 use serde::Serialize;
 
 use sha2::{Digest, Sha256};
@@ -178,10 +179,9 @@ async fn read_reserves_cached(state: &Arc<ApiState>, mints: &[[u8; 32]]) -> Vec<
         }
     }
 
-    let mut per_mint = Vec::with_capacity(mints.len());
-    for mint in mints {
-        per_mint.push(read_reserve(rpc, mint).await);
-    }
+    // Preserve caller order while allowing every mint's independent account
+    // reads to share one network-latency window (PF-14).
+    let per_mint = join_all(mints.iter().map(|mint| read_reserve(rpc, mint))).await;
     *cache = Some(ReserveCache {
         per_mint: per_mint.clone(),
         read_at: Instant::now(),
@@ -226,9 +226,11 @@ fn owned_and_tagged(
 async fn read_reserve(rpc: &SolanaRpcClient, mint: &[u8; 32]) -> PerMintReserve {
     let (om_pda, _) = outstanding_mint_pda(mint);
     let (vt_pda, _) = vault_token_account_pda(mint);
+    let (outstanding_account, vault_account) =
+        tokio::join!(rpc.get_account_info(&om_pda), rpc.get_account_info(&vt_pda));
 
     let mut stale = false;
-    let outstanding = match rpc.get_account_info(&om_pda).await {
+    let outstanding = match outstanding_account {
         Ok(Some(acc))
             if !owned_and_tagged(
                 &acc,
@@ -257,7 +259,7 @@ async fn read_reserve(rpc: &SolanaRpcClient, mint: &[u8; 32]) -> PerMintReserve 
             0
         }
     };
-    let vault_balance = match rpc.get_account_info(&vt_pda).await {
+    let vault_balance = match vault_account {
         Ok(Some(acc)) if !owned_and_tagged(&acc, None, &spl_token_program_id()) => {
             tracing::warn!("transparency: vault_token_account is not SPL-token-owned");
             stale = true;
