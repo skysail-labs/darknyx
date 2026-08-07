@@ -59,10 +59,10 @@ An agent continuing this remediation must:
 | Last verified `main` | `f132f0098a1de286b1469a8bc9e3604c92a5ce61` (2026-08-07), merge of slice 1 PR #115. |
 | Last merged remediation PR | PR #115, slice 1 (`PF-12…PF-17`), merge commit `f132f00`. |
 | Active slice | Slice 2 — daemon durability/data access (`SW-10`, `PF-18…PF-23`), code and local validation complete; review/merge owed. |
-| Active branch / PR | `remediation/audit7-daemon-data` / no PR yet. |
+| Active branch / PR | `remediation/audit7-daemon-data` / PR #116. |
 | Next slice | Slice 3 — bounded client work (`PF-24…PF-26`). |
 | Live state | CPU CVM `nightly-test-cvm` was drained and confirmed **stopped** after the 2026-08-07 validation. No live environment is assumed for the next slice. |
-| Hosted state | Slice 2 has not been pushed. CI and CodeRabbit are available and must be inspected before merge. |
+| Hosted state | PR #116 opened; CI and CodeRabbit must complete before merge. |
 | Last updated | 2026-08-07 — slice 1 closed; slice 2 code and local validation complete on `remediation/audit7-daemon-data`. |
 
 ## Revalidation disposition
