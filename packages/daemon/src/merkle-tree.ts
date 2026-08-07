@@ -15,6 +15,7 @@
 import { poseidonHashBytesBE } from "@darknyx/sdk";
 
 export const TREE_DEPTH = 20;
+const TREE_CAPACITY = 2 ** TREE_DEPTH;
 
 export interface LocalMerkleWitness {
   root: Uint8Array; // 32B BE
@@ -28,15 +29,34 @@ const bytesToBigInt = (x: Uint8Array): bigint => {
   return BigInt(hex);
 };
 
+const validateLeafCount = (leafCount: number): void => {
+  if (leafCount > TREE_CAPACITY) {
+    throw new Error(
+      `too many leaves for depth-${TREE_DEPTH} tree (max ${TREE_CAPACITY})`,
+    );
+  }
+};
+
 export class LocalMerkleTree {
   private zeroSubtreeRoots: Uint8Array[] = [];
+  /** Level 0 is leaves; level TREE_DEPTH contains the single root. */
+  private levels: Uint8Array[][] = [];
+  private buildHashCount = 0;
 
   private constructor(private readonly leaves: Uint8Array[]) {}
 
   /** Build a tree from an ordered leaf list (index 0 = first appended). */
   static async fromLeaves(leaves: Uint8Array[]): Promise<LocalMerkleTree> {
-    const t = new LocalMerkleTree(leaves.slice());
+    validateLeafCount(leaves.length);
+    const owned = leaves.map((leaf, index) => {
+      if (leaf.length !== 32) {
+        throw new Error(`leaf ${index} must be 32 bytes`);
+      }
+      return leaf.slice();
+    });
+    const t = new LocalMerkleTree(owned);
     await t.initZero();
+    await t.buildLevels();
     return t;
   }
 
@@ -47,11 +67,30 @@ export class LocalMerkleTree {
   private async initZero(): Promise<void> {
     const z: Uint8Array[] = [];
     let cur: Uint8Array = new Uint8Array(32);
-    for (let i = 0; i < TREE_DEPTH; i++) {
+    for (let i = 0; i <= TREE_DEPTH; i++) {
       z.push(cur);
-      cur = await this.poseidon2(cur, cur);
+      if (i < TREE_DEPTH) cur = await this.poseidon2(cur, cur);
     }
     this.zeroSubtreeRoots = z;
+  }
+
+  /** Build the immutable snapshot once; root/witness only read these levels. */
+  private async buildLevels(): Promise<void> {
+    this.levels = [this.leaves];
+    if (this.leaves.length === 0) return;
+
+    let level = this.leaves;
+    for (let depth = 0; depth < TREE_DEPTH; depth++) {
+      const next: Uint8Array[] = [];
+      for (let i = 0; i < level.length; i += 2) {
+        const right =
+          i + 1 < level.length ? level[i + 1] : this.zeroSubtreeRoots[depth];
+        next.push(await this.poseidon2(level[i], right));
+        this.buildHashCount += 1;
+      }
+      this.levels.push(next);
+      level = next;
+    }
   }
 
   private poseidon2(a: Uint8Array, b: Uint8Array): Promise<Uint8Array> {
@@ -60,23 +99,16 @@ export class LocalMerkleTree {
 
   /** The full-depth root of the current leaf set. */
   async root(): Promise<Uint8Array> {
-    let level: Uint8Array[] = this.leaves.slice();
-    for (let d = 0; d < TREE_DEPTH; d++) {
-      if (level.length === 0) {
-        let z = this.zeroSubtreeRoots[d];
-        for (let e = d; e < TREE_DEPTH; e++) z = await this.poseidon2(z, z);
-        return z;
-      }
-      const next: Uint8Array[] = [];
-      for (let i = 0; i < level.length; i += 2) {
-        const l = level[i];
-        const r =
-          i + 1 < level.length ? level[i + 1] : this.zeroSubtreeRoots[d];
-        next.push(await this.poseidon2(l, r));
-      }
-      level = next;
-    }
-    return level[0];
+    const root =
+      this.leaves.length === 0
+        ? this.zeroSubtreeRoots[TREE_DEPTH]
+        : this.levels[TREE_DEPTH][0];
+    return root.slice();
+  }
+
+  /** Test-visible construction cost; reads must never increase it. */
+  internalHashCount(): number {
+    return this.buildHashCount;
   }
 
   /**
@@ -92,40 +124,20 @@ export class LocalMerkleTree {
     const siblings: Uint8Array[] = new Array(TREE_DEPTH);
     const indices: number[] = new Array(TREE_DEPTH);
 
-    const n = this.leaves.length;
-    let small = 1;
-    let smallDepth = 0;
-    while (small < n) {
-      small <<= 1;
-      smallDepth += 1;
-    }
-    if (smallDepth === 0) smallDepth = 1; // always at least one sibling
-
-    const padded = 1 << smallDepth;
-    let level: Uint8Array[] = this.leaves.slice();
-    while (level.length < padded) level.push(new Uint8Array(32));
-
     let idx = targetIndex;
-    for (let d = 0; d < smallDepth; d++) {
+    for (let d = 0; d < TREE_DEPTH; d++) {
       const siblingIdx = idx ^ 1;
-      siblings[d] = level[siblingIdx];
+      const sibling =
+        siblingIdx < this.levels[d].length
+          ? this.levels[d][siblingIdx]
+          : this.zeroSubtreeRoots[d];
+      siblings[d] = sibling.slice();
       indices[d] = idx & 1;
       idx >>= 1;
-      const next: Uint8Array[] = [];
-      for (let i = 0; i < level.length; i += 2) {
-        next.push(await this.poseidon2(level[i], level[i + 1]));
-      }
-      level = next;
     }
 
-    // The growing tree extends on its right edge → remaining path goes left.
-    let current = level[0];
-    for (let d = smallDepth; d < TREE_DEPTH; d++) {
-      siblings[d] = this.zeroSubtreeRoots[d];
-      indices[d] = 0;
-      current = await this.poseidon2(current, this.zeroSubtreeRoots[d]);
-    }
-
-    return { root: current, siblings, indices };
+    return { root: await this.root(), siblings, indices };
   }
 }
+
+export const merkleTreeTesting = { TREE_CAPACITY, validateLeafCount };

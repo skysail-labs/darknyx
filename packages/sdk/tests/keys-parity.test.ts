@@ -22,6 +22,7 @@ import {
   darknyxShakeKdfV1,
   bn254ToBE32,
   MASTER_SEED_BYTES,
+  __testing,
 } from "../src/keys/key-generators.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -69,6 +70,25 @@ describe("key derivation parity", () => {
     expect(Buffer.from(actual).toString("hex")).toBe(
       "d99fdc876dcd8ca6f4be42b7587b2147a4fd7b4846e1dad32adc3e0e8af63e4d461a0361e83a3acde5e58e878dcbe4fecea8dd60f1fe16b021940aeb1ae810a3",
     );
+  });
+
+  it("bytepad computes the final zero padding in one output", () => {
+    const input = Uint8Array.from([1, 2, 3, 4, 5]);
+    const padded = __testing.bytepad(input, 8);
+    expect([...padded]).toEqual([1, 8, 1, 2, 3, 4, 5, 0]);
+    expect(padded.length % 8).toBe(0);
+    for (const invalidWidth of [
+      0,
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
+      expect(() => __testing.bytepad(input, invalidWidth)).toThrow(
+        /positive integer/,
+      );
+    }
   });
 
   it("spending key matches hex when fixed seed", () => {

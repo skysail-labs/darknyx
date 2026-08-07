@@ -63,6 +63,64 @@ import type { OrderIntent } from "./build-place-request.js";
 import type { ManagedOrder } from "./types.js";
 import type { StoredNote } from "@darknyx/sdk";
 
+type SubscribeEvents = (listener: (event: DaemonEvent) => void) => () => void;
+
+const RESYNC_REQUIRED_FRAME =
+  'event: resync_required\ndata: {"reason":"client_backpressure"}\n\n';
+
+/**
+ * Attach one bounded SSE subscriber.
+ *
+ * `ServerResponse.write(false)` means Node has already buffered the frame up to
+ * its high-water mark. At that point we unsubscribe immediately and end with a
+ * single resync marker. We deliberately do not queue private event history in
+ * the daemon: the client reconnects and reconciles through the normal REST /
+ * chain paths, matching the TEE stream's lagged-client contract.
+ */
+function streamEvents(
+  res: http.ServerResponse,
+  subscribe: SubscribeEvents,
+): void {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  });
+
+  let closed = false;
+  let unsubscribe = (): void => {};
+  const cleanup = (): void => {
+    if (closed) return;
+    closed = true;
+    unsubscribe();
+  };
+  const disconnectLagged = (): void => {
+    if (closed) return;
+    cleanup();
+    if (!res.writableEnded && !res.destroyed) {
+      // One bounded terminal frame; no event queue is retained after this.
+      res.end(RESYNC_REQUIRED_FRAME);
+    }
+  };
+
+  res.on("close", cleanup);
+  res.on("error", cleanup);
+  if (!res.write(": connected\n\n")) {
+    disconnectLagged();
+    return;
+  }
+
+  unsubscribe = subscribe((event) => {
+    if (closed) return;
+    const accepted = res.write(
+      `data: ${JSON.stringify(serializeEvent(event))}\n\n`,
+    );
+    if (!accepted) disconnectLagged();
+  });
+  // Defensive against a subscribe implementation that emits synchronously.
+  if (closed) unsubscribe();
+}
+
 /** Translate a `POST /orders` JSON body into the SDK intent + the note to spend. */
 export type PlaceMapper = (body: unknown) => {
   intent: OrderIntent;
@@ -288,7 +346,7 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
         : send(res, 404, { error: "not attested" });
     }
     if (method === "GET" && path === "/stream") {
-      return streamEvents(res);
+      return streamEvents(res, (listener) => daemon.subscribe(listener));
     }
     // Read-only TEE surface, proxied so the strategy reads everything locally.
     if (method === "GET" && path.startsWith("/tee/")) {
@@ -317,20 +375,9 @@ export function createControlServer(opts: ControlApiOptions): http.Server {
     }
     return send(res, 404, { error: "not found" });
   }
-
-  function streamEvents(res: http.ServerResponse): void {
-    res.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
-    });
-    res.write(": connected\n\n");
-    const unsub = daemon.subscribe((e: DaemonEvent) => {
-      res.write(`data: ${JSON.stringify(serializeEvent(e))}\n\n`);
-    });
-    res.on("close", unsub);
-  }
 }
+
+export const controlApiTesting = { streamEvents };
 
 /** Start listening; resolves with the bound port (port 0 → ephemeral, for tests). */
 export function startControlServer(

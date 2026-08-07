@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import nodeHttp, { type Server } from "node:http";
 
 import {
+  controlApiTesting,
   createControlServer,
   startControlServer,
   type PlaceMapper,
@@ -268,6 +269,37 @@ describe("control-api — SSE stream", () => {
       text + new TextDecoder().decode(more.value ?? new Uint8Array());
     expect(frame).toContain('"type":"order"');
     await reader.cancel();
+  });
+
+  it("disconnects a lagged consumer with one bounded resync marker", () => {
+    let listener: ((event: DaemonEvent) => void) | undefined;
+    const unsubscribe = vi.fn();
+    const handlers = new Map<string, () => void>();
+    const response = {
+      writableEnded: false,
+      destroyed: false,
+      writeHead: vi.fn(),
+      write: vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false),
+      end: vi.fn(),
+      on: vi.fn((name: string, handler: () => void) => {
+        handlers.set(name, handler);
+        return response;
+      }),
+    };
+
+    controlApiTesting.streamEvents(response as never, (next) => {
+      listener = next;
+      return unsubscribe;
+    });
+    listener!({ type: "order", order: ORDER });
+    listener!({ type: "order", order: ORDER });
+
+    expect(response.write).toHaveBeenCalledTimes(2); // hello + first event
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(response.end).toHaveBeenCalledOnce();
+    expect(response.end.mock.calls[0][0]).toContain("resync_required");
+    handlers.get("close")?.();
+    expect(unsubscribe).toHaveBeenCalledOnce(); // idempotent cleanup
   });
 });
 
