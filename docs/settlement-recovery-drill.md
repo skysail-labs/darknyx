@@ -209,7 +209,42 @@ Check it against the leaf count, never against the log's own confidence.
 
 ---
 
-## 6. Results — 2026-08-04
+## 6. Results — 2026-08-07
+
+Build under test: PR #115 at source `64f01e7`, image
+`tee-v3-hardening-84`
+(`sha256:731741d0fe13b08cc6d9a639e855883fc762b66cc492cf02356e5c3eb27b43c3`),
+compose hash `be5ab2d6…`. The CPU CVM was `nightly-test-cvm`
+(`app_9ca3cded…`), prod9 `tdx.xlarge`, `gpus: 0`. All CVM and host-side Solana
+traffic used the private Helius endpoint.
+
+This rerun validates Audit 7 PF-12's batch journal writes and the adjacent
+PF-13…PF-17 settle/API/prover/oracle changes. **All 11 pass criteria hold.**
+
+| # | Assertion | Observed |
+|---|---|---|
+| 1–2 | Journal became live and blocked a safe stop | `in_flight_settlements=1`, `safe_to_stop=false`; first write 4,910 µs. |
+| 3 | Interruption confirmed by chain | shard leaf counts `2/0/0/0`, total 2: deposits only. |
+| 4–6 | Recovery ran and classified against chain reality | one non-empty entry; `release_expired=1`, all other classes zero, `needs_operator=false`. |
+| 7–8 | Entry retired and locks remained recoverable | drain returned `in_flight_settlements=0`; lock sweeper replayed persisted locks. |
+| 9–10 | Drain and abandon lifecycle | POST/GET returned `draining=true`, `safe_to_stop=true`; DELETE returned `draining=false`. |
+| 11 | Clean planned restart | `settle journal: present and empty, nothing in flight`. |
+
+### Measurements
+
+| Metric | Value | Note |
+|---|---|---|
+| Harness baseline | 58.51 s test time | Full deposit, proof generation, intake, match, and settle. |
+| Settle pipeline | `total_ms=13711` | lock 1326; prove 3071; verify 1540; ALT tx/wait 1331/683; settle 9077; three rebroadcasts. |
+| Native witness / rapidsnark | 239 / 2762 ms | CPU, N=16 pot19 circuit. |
+| Journal durable writes | `count=2`, p50 3665 µs, p95/max 4929 µs | Read from `/admin/drain` after the successful settle. This is a real distribution and retires the prior single-sample waiver. |
+| Auth CPU canary | 1797 / 1767 / 1687 / 1560 / 1479 ms | Five sequential token issuances. |
+| Boot CPU context | 163.2–380.8 Mops/s | Every boot: eight 2.4 GHz `06/af` CPUs, unlimited `cpu.max`, zero `nr_throttled`. Phala SSH rejected the local key, so no post-proof `cpu.stat` delta was available. |
+
+The final planned stop rechecked `gpus: 0`, drained with
+`safe_to_stop=true`, and the control plane confirmed the CPU CVM `stopped`.
+
+## 6a. Results — 2026-08-04
 
 Build under test: `main @ e19fa5d`, image `tee-v3-hardening-82`
 (`sha256:066b70cc…`), CVM `app_9ca3cded…` (`nightly-test-cvm`, CPU, `gpus: 0`),
@@ -246,7 +281,7 @@ against the leaf count, not against the log's own confidence.
 | **Journal durable write** | **p50 8212 µs / 6353 µs** | **Two runs, ONE SAMPLE EACH — not a percentile. Cause and fix below; the next run reads it from `/admin/drain`.** |
 | Recovery | classified 1 entry, `needs_operator=false` | PF-27's batched reconciliation, first live run |
 
-### The p50/p95 waiver is NOT yet retired
+### Historical state: the p50/p95 waiver was not yet retired
 
 The instrumentation works and fires, but it does not yet produce a percentile,
 and the reason is a real limitation of how it was built:

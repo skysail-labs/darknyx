@@ -512,7 +512,7 @@ pub fn assemble_batch(
     Ok(BatchSettleInputs {
         batch_id: params.batch_id,
         matches,
-        witnesses,
+        witnesses: witnesses.into(),
     })
 }
 
