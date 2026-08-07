@@ -26,8 +26,8 @@ services:
     # makes compose_hash transitively bind the exact image bytes, which is what
     # the measurement is already assumed to mean.
     #
-    # Source tag for audit cross-reference: tee-v3-hardening-83 (commit 98c666f,
-    # unlinkable note-use tags + journal v2; pot19 N=16 proving key fetched via
+    # Source tag for audit cross-reference: tee-v3-hardening-84 (commit 64f01e7,
+    # Audit 7 settlement-efficiency slice; pot19 N=16 proving key fetched via
     # Git LFS during the image build).
     # The tag is a build label only; the digest is the deployed identity.
     # Enforced on every PR by scripts/check-compose-image-digests.sh.
