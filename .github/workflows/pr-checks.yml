@@ -76,6 +76,7 @@ jobs:
       sdk: ${{ steps.filter.outputs.sdk }}
       indexer: ${{ steps.filter.outputs.indexer }}
       daemon: ${{ steps.filter.outputs.daemon }}
+      browser_custody: ${{ steps.filter.outputs.browser_custody }}
       ts: ${{ steps.filter.outputs.ts }}
       deps: ${{ steps.filter.outputs.deps }}
     steps:
@@ -132,6 +133,12 @@ jobs:
               - 'packages/sdk/src/**'
               - 'package.json'
               - 'package-lock.json'
+            browser_custody:
+              - 'packages/browser-custody-spike/**'
+              - 'package.json'
+              - 'package-lock.json'
+              # A workflow-only weakening must run the job it changes.
+              - '.github/workflows/pr-checks.yml'
             # Any TypeScript, anywhere, plus the configs that decide HOW it is
             # checked. The tsconfigs are listed deliberately: a PR that narrows
             # an `include` or flips `strict` would otherwise skip the very job
@@ -539,6 +546,35 @@ jobs:
             fi
           done
           exit $fail
+
+  browser-custody:
+    name: Browser custody — WebAuthn PRF + recovery
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: >-
+      always() && (
+        github.event_name == 'push' ||
+        needs.changes.outputs.browser_custody == 'true'
+      )
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: npm ci (root, with workspaces)
+        run: npm ci
+
+      # Chrome DevTools supplies one PRF-capable and one deliberately
+      # PRF-incapable virtual authenticator. The test also proves the expected
+      # same-origin attack succeeds after user verification; that negative
+      # result pins the browser threat-model boundary instead of hiding it.
+      - name: WebAuthn PRF vault lifecycle + adversarial boundary
+        run: npm run test:browser-custody
 
   daemon:
     name: Daemon — keystore, lifecycle, attestation (vitest)
@@ -1057,6 +1093,7 @@ jobs:
       - sdk
       - indexer
       - typecheck
+      - browser-custody
       - daemon
       - consistency
       - sbf-build
@@ -1090,6 +1127,7 @@ jobs:
             (needs.sdk.result != 'success' && needs.sdk.result != 'skipped') ||
             (needs.indexer.result != 'success' && needs.indexer.result != 'skipped') ||
             (needs.typecheck.result != 'success' && needs.typecheck.result != 'skipped') ||
+            (needs['browser-custody'].result != 'success' && needs['browser-custody'].result != 'skipped') ||
             (needs.daemon.result != 'success' && needs.daemon.result != 'skipped') ||
             needs.consistency.result != 'success' ||
             (needs['sbf-build'].result != 'success' && needs['sbf-build'].result != 'skipped') ||
@@ -1105,6 +1143,7 @@ jobs:
           echo "sdk:                      ${{ needs.sdk.result }}"
           echo "indexer:                  ${{ needs.indexer.result }}"
           echo "typecheck:                ${{ needs.typecheck.result }}"
+          echo "browser-custody:          ${{ needs['browser-custody'].result }}"
           echo "daemon:                   ${{ needs.daemon.result }}"
           echo "consistency:              ${{ needs.consistency.result }}"
           echo "sbf-build:                ${{ needs['sbf-build'].result }}"

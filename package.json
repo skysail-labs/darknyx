@@ -12,6 +12,7 @@
     "setup:ptau": "bash scripts/download-ptau.sh",
     "test:sdk": "npm -w @darknyx/sdk run test",
     "test:prover": "npm -w @darknyx/client-prover-bench run test",
+    "test:browser-custody": "npm -w @darknyx/browser-custody-spike test",
     "bench:client-prover:node": "npm -w @darknyx/client-prover-bench run bench:node --",
     "bench:client-prover:browser": "npm -w @darknyx/client-prover-bench run bench:browser --",
     "bench:client-prover:native": "npm -w @darknyx/client-prover-bench run bench:native --",

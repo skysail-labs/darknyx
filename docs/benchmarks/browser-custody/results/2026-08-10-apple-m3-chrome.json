@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-08-09T22:33:15.155Z",
+  "completed_at": "2026-08-09T22:33:43.789Z",
+  "chrome_path": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "supported": {
+    "provision_unlock_same_seed": true,
+    "locked_command_rejected": true,
+    "ciphertext_tamper_rejected": true,
+    "inactivity_locked": true,
+    "backup_v2_roundtrip_same_seed": true,
+    "browser_backup_opened_by_node": true,
+    "node_backup_opened_by_browser": true,
+    "backup_export_ms": 13265.47,
+    "backup_import_ms": 13379.32,
+    "indexeddb_contains_plaintext_seed": false,
+    "wrapping_key_extractable": false,
+    "same_origin_attack_succeeded": true,
+    "terminated_worker_rejected": true,
+    "cross_origin_isolated": true,
+    "trusted_types_available": true,
+    "service_worker_registrations": 0,
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+  },
+  "unsupported": {
+    "prf_unsupported_failed_closed": true,
+    "error": "WebAuthn PRF is unavailable on this authenticator"
+  }
+}
