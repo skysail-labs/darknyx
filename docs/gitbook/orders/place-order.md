@@ -72,14 +72,14 @@ wire contract is unambiguous.
 | `note_inner_hash` | string | Yes | 32-byte hex. The note's amount-independent inner hash (an opening field that anchors both the commitment and the nullifier). |
 | `merkle_root` | string | Yes | 32-byte hex. The tree root the input proof was generated against. Checked against the venue's recent-root window **at intake** (`1010` if it has aged out) and against the on-chain root window again at settlement time. |
 | `valid_input_proof` | string | Yes | 256-byte hex. The zero-knowledge proof that the collateral note is in the tree and spendable. **Verified at intake**, before the order is accepted — an invalid proof is refused with `1011` rather than booked. The on-chain program verifies it again at lock time. |
-| `tree_id` | integer | No | Merkle-tree shard containing the collateral note. Defaults to `0`; a wrong shard causes the on-chain lock to fail. |
+| `tree_id` | integer | No | Merkle-tree shard containing the collateral note. Defaults to `0`. Intake rejects an out-of-range shard and checks the proof root against that shard's recent-root window, so a wrong shard is refused before booking. |
 
 ### Recovery and replay binding
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `viewing_pubkey` | string | Yes | 32-byte contributory X25519 public key derived by the SDK. It is signed in the canonical body. Low-order/non-contributory points are rejected before booking. |
-| `session_id` | string | Yes | 32-byte current `/info.boot_session_id`, signed in the canonical body. A CVM restart changes it and invalidates stale orders. |
+| `session_id` | string | Yes | 32-byte current `/info.boot_session_id`, signed in the canonical body. A CVM restart changes it and invalidates stale orders. The value is not quote-bound; a substituted value is rejected by intake rather than weakening replay protection. |
 
 ### Signature
 

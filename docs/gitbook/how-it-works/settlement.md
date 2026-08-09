@@ -30,7 +30,7 @@ the order book, traders' limits, or the match's plaintext price and amount.
 reserve matched orders
         │
         ▼
-lock both input commitments before their expiry
+lock both unlinkable input-use tags before their expiry
         │
         ▼
 verify one batch proof on-chain

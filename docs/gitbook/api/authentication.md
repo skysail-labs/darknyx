@@ -199,7 +199,7 @@ you. The exact field layout for each is on the corresponding endpoint page:
 These require no token:
 
 - `GET /health`, `GET /system/status`, `GET /time`
-- `GET /info`, `GET /attestation`, the `/evidences/*` files
+- `GET /info`, `GET /attestation`, and the gateway-served `/evidences/*` files
 - `GET /instruments`, `GET /instruments/{symbol}`
 - `GET /tree/root`
 - `GET /transparency`
@@ -218,6 +218,8 @@ Accounts are provisioned and managed through admin-only bearer routes:
 | `POST` | `/admin/accounts/{api_key}/disable` | Suspend an account immediately across REST, WebSocket, and new logins. |
 | `POST` | `/admin/accounts/{api_key}/enable` | Reinstate a suspended account. |
 | `POST` | `/admin/accounts/{api_key}/revoke-tokens` | Invalidate all currently issued tokens without disabling new authentication. |
+| `GET` / `POST` / `DELETE` | `/admin/drain` | Inspect, begin, or cancel a planned-stop drain. A safe stop requires trading closed and no in-flight journal work. |
+| `GET` | `/admin/metrics/settlement` | Read bounded, privacy-preserving settlement queue and latency telemetry. |
 
 The venue refuses to disable its last enabled admin account. These routes manage
 API access only; they do not receive spending keys or become a custody authority.

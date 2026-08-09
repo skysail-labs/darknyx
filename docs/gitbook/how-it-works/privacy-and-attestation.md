@@ -8,11 +8,11 @@ description: "What Darknyx hides, what remains public, and how clients verify th
 {% hint style="info" %}
 **TL;DR**
 
-Darknyx keeps order intent inside an attested confidential VM and balances inside
-on-chain commitments. The host operator should not be able to read protected
-memory, but this guarantee depends on Intel TDX and the exact image being run.
-Clients verify the hardware quote, image measurement, and complete on-chain
-settlement-signer set before sending orders.
+Darknyx keeps order intent inside hardware-protected gateway and matcher memory,
+and balances inside on-chain commitments. The host operator should not be able
+to read that protected memory. Clients verify the matcher's hardware quote,
+image measurement, and complete on-chain settlement-signer set before sending
+orders; the current client does not yet pin the separate gateway measurement.
 {% endhint %}
 
 ## Who can see your orders?
@@ -22,7 +22,7 @@ settlement-signer set before sending orders.
 | **Centralized exchange** | The operator | Can front-run, trade against you, or leak data. |
 | **On-chain order book** | The sequencer / validators, and anyone indexing the chain | Reorder, censor, sandwich (MEV); the leak is permanent and public. |
 | **Off-chain dark desk** | The operator | Custody and order intent both exposed to one party. |
-| **Darknyx** | The measured matcher inside protected VM memory | The host and chain do not receive plaintext orders; clients verify the code allowed to read them. |
+| **Darknyx** | A confidential ingress gateway and the measured matcher, both inside protected VM memory | The host and chain do not receive plaintext orders. Clients verify the matcher; the gateway pin is a documented external-use gate. |
 
 The difference from "encrypted on-chain orders" is that on Darknyx your order is
 **never a transaction at all** (see [Trade Flow](./trade-flow.md)). What lands on
@@ -32,7 +32,7 @@ Solana is the settled *result*, with a zero-knowledge proof, never the order.
 
 | Property | What is hidden | Mechanism |
 |---|---|---|
-| **Order privacy** | Side, size, limit price | Order intent exists only inside the attested enclave, never in a tx, log, or account. |
+| **Order privacy** | Side, size, limit price | Order intent stays inside hardware-protected gateway and matcher memory, never in a tx, log, or account. |
 | **Trader privacy** | The link from an order or settled note to your wallet | Orders use a **trading key**. Deposit and withdrawal transfers remain visible, but do not publish the shielded note owner. |
 | **Position privacy** | What you hold | Balances are on-chain **note commitments** (Poseidon hashes) that seal owner, value, and token until you spend them. |
 | **Amount privacy** | The size and price of a settled trade | Settlement publishes only note commitments and a zero-knowledge proof of conservation; the traded amounts and the clearing price never appear on-chain. |
@@ -71,12 +71,20 @@ Verification is a client-side step (the SDK ships a helper). In order, you confi
 ```
 
 - **Step 1** is standard DCAP verification of the hardware quote.
-- **Step 2** derives the trusted compose hash from the DCAP-verified event log
-  (RTMR3) and compares it with a release measurement obtained independently.
-  `/info` and `/transparency` are useful displays, not the root of trust.
+- **Step 2** rejects malformed or ambiguous event logs, requires exactly one
+  runtime-typed compose event, derives the trusted compose hash from the
+  DCAP-verified RTMR3 log, and compares it with a release measurement obtained
+  independently. `/info` and `/transparency` are useful displays, not the root
+  of trust.
 - **Step 3** checks every shard signer, in order. The quote commits to the full
   set; `tee_pubkey` is simply the first member exposed for convenience. The
   client compares the complete set with a finalized on-chain `VaultConfig` read.
+
+The SDK verifies the quote and returns the quote-bound signer set; the client
+still supplies the independently approved compose hash and compares the full
+returned set with finalized on-chain configuration. The reference daemon does
+this comparison automatically and pauses new trading when it becomes stale or
+mismatched.
 
 {% hint style="warning" %}
 **TLS alone is not verification**

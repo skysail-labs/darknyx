@@ -103,7 +103,7 @@ GET /info
 | `compose_hash` | Self-reported SHA-256 of the deployment manifest. Useful for display; the authoritative value comes from the quote-bound event log. |
 | `tee_pubkey` | Primary (shard-0) Ed25519 settlement signer, kept as a convenience field. |
 | `tee_pubkeys` | Full ordered signer set, one per tree shard. Verify the entire set against finalized `VaultConfig.tee_pubkeys`. |
-| `boot_session_id` | Fresh process-boot id signed into every canonical place and cancel intent, preventing cross-restart replay. |
+| `boot_session_id` | Fresh process-boot id signed into every canonical place and cancel intent, preventing cross-restart replay. It is read from `/info`, not bound into the quote. A substituted value causes intake rejection (denial of service); it cannot make the engine accept a stale session. |
 | `version` | Build version tag of the engine. |
 
 ### GET /attestation
@@ -131,15 +131,21 @@ A verifying client confirms, in order:
 
 1. The TDX quote's hardware signature is valid and the platform's trusted
    computing base is current (standard DCAP verification).
-2. Replaying the returned event log reproduces the DCAP-verified quote's RTMR3;
-   the `compose-hash` event then equals the independently pinned release value.
+2. The event log is structurally valid, contains exactly one runtime-typed
+   `compose-hash` event, and has no impossible entry carrying both a supplied
+   digest and a payload. Replaying it reproduces the DCAP-verified quote's
+   RTMR3, and the measured compose hash equals the independently pinned release
+   value.
 3. The quote's `report_data` binds the full ordered signer set advertised by
    `/info`, and that exact set equals a **finalized** on-chain
    `VaultConfig.tee_pubkeys` read.
 
-The SDK ships a helper that runs this chain for you against an expected
-measurement. Only when all three hold should a client trust the channel with
-order intent.
+The SDK's `verifyTeeAttestation` helper performs the DCAP, event-log,
+measurement, nonce, and quote-to-signer-set checks and returns the quote-bound
+signer set. The caller must then compare that full set with a finalized
+`VaultConfig.tee_pubkeys` read; the reference daemon performs both halves and
+refreshes the on-chain comparison continuously. Only when all three checks hold
+should a client trust the channel with order intent.
 
 {% hint style="warning" %}
 **Pin the measurement, not the host**
@@ -150,14 +156,19 @@ A client that connects over TLS but skips attestation has confidentiality to
 Pin a release measurement independently, then verify the quote and event log.
 {% endhint %}
 
-### The TLS certificate is attested too
+### Gateway evidence is a separate trust object
 
-The files under `/evidences/` (`quote.json`, `cert.pem`, and an integrity
-checksum) let a client confirm that the **served TLS certificate** is bound to a
-key held inside the enclave, closing the loop between "I have a TLS channel" and
-"the TLS channel reaches the attested code." A client that verifies this binding
-does not have to take the certificate authority's word for which machine holds
-the key.
+The dstack gateway also serves files under `/evidences/` (`quote.json`,
+`cert.pem`, ACME-account metadata, and an integrity checksum). Those files
+describe the **gateway's** certificate and confidential deployment; they are
+not the Darknyx engine quote returned by `/attestation`.
+
+They are useful when evaluating the ingress deployment, but the current
+Darknyx client flow neither pins the gateway measurement nor cryptographically
+binds its verified engine quote to the TLS session. Fetching the evidence bundle
+therefore does not close the two transport limits described above. Treat engine
+attestation and gateway evidence as separate checks until an attestation-bound
+transport design ships.
 
 ## What attestation does and does not give you
 

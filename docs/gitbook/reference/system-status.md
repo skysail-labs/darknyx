@@ -67,7 +67,7 @@ already-pending settlements.
 
 | Surface | Behavior under degradation |
 |---|---|
-| REST order management | New place/modify may return HTTP `503` with stable code `5001`; cancel remains available. Reads (`/instruments`, `/transparency`, `/tree/*`) generally remain available. |
+| REST order management | New place/modify may return HTTP `503` with stable code `5001`; cancel remains available. Reads (`/instruments`, `/transparency`, `/tree/*`) generally remain available, except a diverged tree shard fails its `/tree/*` reads closed with `5002`. |
 | WebSocket trading | `order.place` / `order.modify` may return an `error` with `code: 5001`; cancellation remains available. |
 | `/health` | Still returns `200` (the gateway process is up), which is why `/system/status` is the better readiness signal for a trading client. |
 

@@ -18,8 +18,11 @@ proofs, but never the order book or a settled trade's plaintext price and size.
 
 Darknyx is a dark pool: an order book where resting orders are not public. Side,
 size, and limit price never appear in a Solana transaction, a log, or an
-account. They live only inside a hardware-isolated enclave whose exact compiled
-code is measured and remotely verifiable.
+account. They cross a hardware-protected ingress gateway and live in the
+hardware-isolated matching engine, whose exact compiled code is measured and
+remotely verifiable. The current client pins the engine rather than the separate
+gateway measurement; see [Transport & Attestation](../api/transport-and-attestation.md)
+for that explicit boundary.
 
 Unlike an off-chain matching desk, Darknyx does not give one ordinary operator both
 custody and readable order flow:
@@ -42,7 +45,7 @@ Darknyx enforces three distinct privacy properties, each by a separate mechanism
 
 | Property | What is hidden | How |
 |---|---|---|
-| **Order privacy** | Side, size, limit price | Order intent exists only inside the attested TEE, never in any Solana tx, log, or account. |
+| **Order privacy** | Side, size, limit price | Order intent stays inside hardware-protected gateway and matcher memory, never in any Solana tx, log, or account. |
 | **Trader privacy** | The link from an order or trade to your wallet | You sign orders with a **trading key**, not your wallet. Deposits and withdrawals retain their unavoidable public transfer boundaries. |
 | **Position privacy** | What you hold | Balances are UTXO-style **notes** stored on-chain as Poseidon hashes. Owner, value, and token are sealed inside the hash until you spend it with a proof. |
 

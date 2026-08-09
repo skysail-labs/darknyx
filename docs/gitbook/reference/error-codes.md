@@ -69,8 +69,9 @@ Codes are grouped by class. The HTTP status is derived from the class.
 | `1301` | 404 | No such order / batch / instrument / note. |
 | `1401` | 429 | Rate limited; back off and retry. Order-operation responses include `Retry-After`; authentication messages include an approximate delay. Authentication is per-account, so this reflects your own usage rather than someone else's. |
 | `1402` | 503 | Credential verification is momentarily at capacity. Shed rather than queued, so it clears quickly—use a short, jittered retry. |
-| `5001` | 503 | A required subsystem (matching / settlement) is unavailable. |
 | `5000` | 500 | Internal error. |
+| `5001` | 503 | A required subsystem (matching / settlement) is unavailable. |
+| `5002` | 503 | The selected Merkle mirror diverges from on-chain state. Do not build a proof from it; read the tree from Solana until the venue cold-resyncs. |
 
 Codes are stable: branch on the number, not the message text (which may change).
 
@@ -84,7 +85,7 @@ Codes are stable: branch on the number, not the message text (which may change).
 | `404 Not Found` | Missing resource | No such order (already filled / expired / cancelled), batch, or instrument. |
 | `409 Conflict` | State conflict | Duplicate `order_id`; stale arrival nonce or boot session; collateral already reserved; or a modify whose replacement id is already booked. |
 | `429 Too Many Requests` | Rate limit | Operational rate limit exceeded; back off and retry. Order operations and authentication are metered separately, and both are per-account. |
-| `503 Service Unavailable` | Subsystem down, or auth at capacity | Matching or settlement is not available (see [`/system/status`](./system-status.md)); or credential verification is momentarily saturated (`1402`). |
+| `503 Service Unavailable` | Subsystem down, unsafe mirror, or auth at capacity | Matching or settlement is not available (see [`/system/status`](./system-status.md)); a tree mirror is unsafe (`5002`); or credential verification is momentarily saturated (`1402`). |
 
 ## Conditions by endpoint
 
@@ -125,6 +126,9 @@ caches its token for the `expires_in` window will not meet these limits.
 - `400`: malformed id / parameter hex.
 - `404`: unknown order / batch / note. `GET /orders/{id}` intentionally returns
   this same response for a foreign account's order.
+- `503` (`5002`, tree only): the mirror disagrees with Solana. Read the selected
+  `MerkleTree` account and leaves from chain; do not keep retrying the unsafe
+  mirror.
 
 {% hint style="success" %}
 **A rejected order is better than an accepted one that cannot settle**
@@ -149,7 +153,7 @@ that no longer happens: rebuild the proof against a current root and resubmit.
 | `404` (on cancel/modify) | Treat as "no longer resting"; reconcile via `GET /orders/{id}` or the orders stream. |
 | `409` | For a duplicate order id, use a fresh id; for a stale nonce, advance it. |
 | `429` | Back off with jitter; prefer one shared `/v1/stream` session for high-frequency management. |
-| `503` | For `1402`, retry authentication after a short jittered delay. For `5001`, poll `/system/status` and resume new trading when the venue is ready. |
+| `503` | For `1402`, retry authentication after a short jittered delay. For `5001`, poll `/system/status` and the target instrument. For `5002`, bypass the mirror and read the tree from Solana until the operator resyncs it. |
 
 {% hint style="success" %}
 **Make cancels idempotent in your logic**

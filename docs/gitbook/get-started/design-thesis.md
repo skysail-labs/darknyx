@@ -17,7 +17,9 @@ Darknyx separates those powers:
   proof-valid deposits, withdrawals, merges, and settlements.
 - **An attested confidential VM matches private orders.** Its code identity and
   complete settlement-signer set are bound into an Intel TDX quote that clients
-  can verify before disclosing intent.
+  can verify before disclosing intent. Ingress crosses a separate confidential
+  gateway whose measurement the current client does not yet pin; that transport
+  boundary is documented explicitly rather than folded into the matcher claim.
 - **The client keeps custody secrets.** Spending and viewing keys remain with the
   trader; the venue receives only the material needed to validate and match an
   order.

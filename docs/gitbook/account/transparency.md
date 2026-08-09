@@ -36,7 +36,9 @@ Public, with no authentication.
   "reserves": {
     "shards": [
       { "tree_id": 0, "merkle_root": "…", "leaf_count": 1024 },
-      { "tree_id": 1, "merkle_root": "…", "leaf_count": 1024 }
+      { "tree_id": 1, "merkle_root": "…", "leaf_count": 1024 },
+      { "tree_id": 2, "merkle_root": "…", "leaf_count": 1024 },
+      { "tree_id": 3, "merkle_root": "…", "leaf_count": 1024 }
     ],
     "shard0_merkle_root": "…",
     "total_leaf_count": 4096,
@@ -56,8 +58,8 @@ Public, with no authentication.
     "signer_pubkey": "…"
   },
   "stats": {
-    "batches": 812,
-    "jobs": 9341
+    "batches": 12,
+    "jobs": 48
   }
 }
 ```
@@ -98,11 +100,12 @@ signer.
 
 | Field | Description |
 |---|---|
-| `stats.batches` | Settlement batches tracked. |
-| `stats.jobs` | Per-match settlement jobs tracked. |
+| `stats.batches` | Settlement batches currently retained by the scheduler. Terminal history is capped; active batches are never evicted. This is not a lifetime counter. |
+| `stats.jobs` | Per-match settlement jobs belonging to those retained batches. This is not a lifetime counter. |
 
-Aggregate operational counters, useful for a public health dashboard. They
-reveal nothing about any individual order.
+Aggregate operational gauges, useful for a public health dashboard. They reveal
+nothing about any individual order; terminal entries age out, so do not sum
+deltas or treat the values as historical volume.
 
 ## How to use it
 

@@ -61,6 +61,11 @@ convenience mirror; a client that wants zero trust in the engine for this value
 can read the on-chain account itself.
 {% endhint %}
 
+If the engine detects that a shard mirror disagrees with Solana, **all three
+tree reads for that shard fail closed with HTTP `503`, code `5002`**. Do not
+retry proofs against that mirror: read the tree from Solana directly until the
+venue has cold-resynced the shard.
+
 ## GET /tree/inclusion
 
 An inclusion proof for a note commitment. Authenticated (bearer).

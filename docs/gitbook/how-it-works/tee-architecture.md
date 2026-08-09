@@ -66,7 +66,7 @@ the shard-0 key is insufficient.
 | Layer | What it contributes | What it does not establish |
 |---|---|---|
 | Intel TDX | Isolation from the host and a signed measurement | That the measured application policy is fair or bug-free |
-| Client attestation | Approval of the measured release, boot freshness, and signer binding | Availability or future behavior after the check becomes stale |
+| Client attestation | Approval of the measured release, fresh quote evidence, and signer binding | Availability or future behavior after the check becomes stale |
 | Solana vault | Custody, replay protection, proof verification, and public state | Confidential order intake or price-time fairness |
 | Settlement proof | Market binding, scaled arithmetic, conservation, fees, and derived outputs | Whether the enclave chose the fairest eligible match or clearing price |
 | Multisig governance | Controlled upgrades, roots, market configuration, and signer rotation | Safety if its quorum approves a malicious configuration |

@@ -23,7 +23,9 @@ GET /settlement/status/{batch_id}
 `batch_id` is an unsigned integer local to the running engine. It is not an
 on-chain identifier and the order-read response does not promise a batch-id
 field. Use this endpoint when an operator or diagnostic response has supplied a
-known batch handle.
+known batch handle. The engine retains a bounded recent window of terminal
+batches, so `404` may mean the handle is unknown **or has aged out**; use the
+orders and fills streams as the trader-facing lifecycle source.
 
 Authenticated with a bearer token:
 

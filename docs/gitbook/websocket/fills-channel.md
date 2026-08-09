@@ -60,6 +60,12 @@ channel is per-account: you only receive memos for orders you placed.
 | `mint` | string | 32-byte hex mint of the change note. |
 | `inner_hash` | string | 32-byte hex inner hash of the change note. |
 
+`consumed_note_commitment` is deliberately present only in this authenticated,
+per-account recovery memo. The public settlement transaction consumes the
+input by its unlinkable note-use tag and does **not** publish the input
+commitment. The memo lets your client locate the private opening it already
+owns without restoring deposit-to-trade linkability to chain observers.
+
 ## Verify before you store
 
 A fill memo is **untrusted input**. Verify it before adding the change note to
