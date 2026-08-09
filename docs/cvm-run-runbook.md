@@ -344,8 +344,28 @@ confirmation remained dominant. A separately reset and cold-booted
 `cvm-merge-then-order` corroborated the range at `witness_ms=367`,
 `prove_step_ms=3090`, aggregate `prove_ms=3516`, and 14,882 ms total pipeline.
 These are two cold single-proof samples, not steady-state percentiles; preserve
-the ranges (367–383 ms witness, 2,975–3,090 ms prove step) until a multimatch
-run provides warm repeated proofs on one boot.
+the ranges (367–383 ms witness, 2,975–3,090 ms prove step) as the IMAGE-83
+figures.
+
+**Superseded for the current image by the 2026-08-09 image-84 multimatch run.**
+`cvm-multimatch-settle` with `DARKNYX_CVM_MATCHES=4` on prod9 measured
+`witness_ms=324`, `prove_step_ms=2761`, aggregate `prove_ms=3153`, and
+`total_ms=12780` — faster than image-83 across every proof phase, consistent
+with the audit-7 settlement-efficiency slice landing in between. Note this is
+still ONE proof: a batch is N=16 with `active_matches=4` and `padded_slots=16`,
+so four matches share a single Groth16. It therefore does NOT yet give warm
+*repeated* proofs on one boot; that needs a run whose matches span several
+matcher ticks. Full stage split: `lock_ms=1629`, `verify_ms=1815`,
+`alt_tx_ms=1202`, `alt_wait_ms=846`, `parallel_ms=4969`, `settle_ms=7789`,
+`close_ms=0`, `rebroadcasts=8`, `distinct_confirmed_slots=2`.
+
+That run's PRIMARY purpose was correctness, not timing. `cvm-settle-e2e` only
+ever lands on shard 0 with one active slot, so until this run nothing had
+exercised the note-use-tag path (VALID_INPUT public input 1) on non-zero shards
+or with several real leaves in one batch Merkle root. Result: leaf counts
+**7/7/7/7 = 28** across all four shards, `confirmed=4`, `rejected=0`,
+`ambiguous=0`, `pipeline_failed=false`. Evidence:
+`.devnet/cvm-multimatch-20260809-image84.txt` (gitignored).
 
 - Healthy CPU metadata and expected proof timing: continue the planned CVM
   validation window.
