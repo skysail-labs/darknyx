@@ -29,6 +29,8 @@ qualification and wallet-extension behavior under COOP/COEP remain separate
 manual gates.
 
 The normal API deliberately exposes no generic `sign(bytes)`, no raw seed, and
-no raw PRF result. `testOnlyFingerprint` and `simulateSameOriginCompromise`
-exist solely to make the spike's positive and adversarial assertions measurable;
-neither belongs in a production client package.
+no raw PRF result. The runner enables the Worker's `testOnly*` commands through
+an explicit harness-only build flag and serves `simulateSameOriginCompromise`
+from a separate adversarial module. They exist solely to make the spike's
+positive and negative assertions measurable; neither belongs in a production
+client package.

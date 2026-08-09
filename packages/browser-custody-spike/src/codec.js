@@ -47,12 +47,16 @@ export function equalBytes(left, right) {
   return different === 0;
 }
 
-export function vaultHeader(credentialId, prfInput, hkdfSalt) {
+export function vaultHeader(credentialIdBase64Url, prfInput, hkdfSalt) {
+  const credentialId = fromBase64Url(credentialIdBase64Url);
+  if (credentialId.length === 0) {
+    throw new Error("credential ID must not be empty");
+  }
   return {
     format: VAULT_FORMAT,
     version: VAULT_VERSION,
     key_source: "webauthn-prf-v1",
-    credential_id: credentialId,
+    credential_id: credentialIdBase64Url,
     prf_input: toBase64Url(prfInput),
     hkdf_salt: toBase64Url(hkdfSalt),
   };

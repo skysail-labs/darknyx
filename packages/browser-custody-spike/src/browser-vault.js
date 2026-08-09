@@ -1,10 +1,4 @@
-import {
-  aadForHeader,
-  fromBase64Url,
-  randomBytes,
-  validateRecord,
-  vaultHeader,
-} from "./codec.js";
+import { randomBytes, validateRecord, vaultHeader } from "./codec.js";
 import { IndexedDbVaultStore } from "./indexeddb-store.js";
 import {
   createPrfCredential,
@@ -28,6 +22,23 @@ function trustedVaultWorkerUrl(workerUrl) {
     },
   );
   return workerUrlPolicy.createScriptURL(workerUrl);
+}
+
+async function createWrappingContext(label) {
+  const credential = await createPrfCredential(label);
+  const hkdfSalt = randomBytes(32);
+  try {
+    return {
+      header: vaultHeader(
+        credential.credentialId,
+        credential.prfInput,
+        hkdfSalt,
+      ),
+      wrappingKey: await deriveWrappingKey(credential.output, hkdfSalt),
+    };
+  } finally {
+    credential.output.fill(0);
+  }
 }
 
 export class BrowserVault {
@@ -56,6 +67,7 @@ export class BrowserVault {
       this.failure = error;
       for (const { reject } of this.pending.values()) reject(error);
       this.pending.clear();
+      this.worker.terminate();
     };
   }
 
@@ -78,15 +90,7 @@ export class BrowserVault {
   async provision(label) {
     if (await this.store.load())
       throw new Error("browser vault is already provisioned");
-    const credential = await createPrfCredential(label);
-    const hkdfSalt = randomBytes(32);
-    const header = vaultHeader(
-      credential.credentialId,
-      credential.prfInput,
-      hkdfSalt,
-    );
-    const wrappingKey = await deriveWrappingKey(credential.output, hkdfSalt);
-    credential.output.fill(0);
+    const { header, wrappingKey } = await createWrappingContext(label);
     const result = await this.request("provision", {
       wrappingKey,
       header,
@@ -103,8 +107,12 @@ export class BrowserVault {
       parsed.record.credential_id,
       parsed.prfInput,
     );
-    const wrappingKey = await deriveWrappingKey(output, parsed.hkdfSalt);
-    output.fill(0);
+    let wrappingKey;
+    try {
+      wrappingKey = await deriveWrappingKey(output, parsed.hkdfSalt);
+    } finally {
+      output.fill(0);
+    }
     await this.request("unlock", {
       wrappingKey,
       record: parsed.record,
@@ -127,15 +135,7 @@ export class BrowserVault {
   async restore(backup, passphrase, label) {
     if (await this.store.load())
       throw new Error("clear the existing vault before restore");
-    const credential = await createPrfCredential(label);
-    const hkdfSalt = randomBytes(32);
-    const header = vaultHeader(
-      credential.credentialId,
-      credential.prfInput,
-      hkdfSalt,
-    );
-    const wrappingKey = await deriveWrappingKey(credential.output, hkdfSalt);
-    credential.output.fill(0);
+    const { header, wrappingKey } = await createWrappingContext(label);
     const result = await this.request("restore", {
       backup,
       passphrase,
@@ -151,6 +151,10 @@ export class BrowserVault {
     return this.request("testOnlyFingerprint");
   }
 
+  async testOnlyMatchesSeed(candidate) {
+    return this.request("testOnlyMatchesSeed", { candidate });
+  }
+
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -159,35 +163,4 @@ export class BrowserVault {
       reject(new Error("browser vault destroyed"));
     this.pending.clear();
   }
-}
-
-/**
- * Adversarial test, deliberately outside BrowserVault.
- *
- * It models arbitrary same-origin JavaScript: read public wrapping metadata and
- * ciphertext from IndexedDB, prompt the credential, then use the PRF output to
- * decrypt directly. A successful result is the limitation the spike is meant
- * to make visible; production code must never expose this helper.
- */
-export async function simulateSameOriginCompromise(record) {
-  const parsed = validateRecord(record);
-  const output = await evaluatePrf(record.credential_id, parsed.prfInput);
-  const wrappingKey = await deriveWrappingKey(output, parsed.hkdfSalt);
-  output.fill(0);
-  const plaintext = new Uint8Array(
-    await crypto.subtle.decrypt(
-      {
-        name: "AES-GCM",
-        iv: fromBase64Url(record.cipher.iv),
-        additionalData: aadForHeader(record),
-      },
-      wrappingKey,
-      fromBase64Url(record.cipher.ciphertext),
-    ),
-  );
-  if (plaintext.length !== 64) {
-    plaintext.fill(0);
-    throw new Error("same-origin attack recovered the wrong plaintext length");
-  }
-  return { plaintext, wrappingKeyExtractable: wrappingKey.extractable };
 }

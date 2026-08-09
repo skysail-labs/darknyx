@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   createCipheriv,
   createDecipheriv,
@@ -11,8 +12,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const sourceRoot = import.meta.dirname;
+const require = createRequire(import.meta.url);
+const sourceRoot = fileURLToPath(new URL(".", import.meta.url));
 const repositoryRoot = resolve(sourceRoot, "../../..");
 const chromeCandidates =
   process.platform === "darwin"
@@ -49,17 +52,21 @@ const assets = new Map(
       ],
       ["/webauthn-prf.js", "webauthn-prf.js", "text/javascript; charset=utf-8"],
       ["/vault-worker.js", "vault-worker.js", "text/javascript; charset=utf-8"],
+      [
+        "/same-origin-attack.js",
+        "same-origin-attack.js",
+        "text/javascript; charset=utf-8",
+      ],
     ].map(async ([url, file, contentType]) => [
       url,
       { body: await readFile(resolve(sourceRoot, file)), contentType },
     ]),
   ),
 );
-const scryptSource = await readFile(
-  resolve(sourceRoot, "../../../node_modules/scrypt-js/scrypt.js"),
-);
+const scryptSource = await readFile(require.resolve("scrypt-js"));
 const vaultWorker = assets.get("/vault-worker.js");
 vaultWorker.body = Buffer.concat([
+  Buffer.from("self.DARKNYX_CUSTODY_SPIKE_TEST = true;\n"),
   scryptSource,
   Buffer.from("\n;\n"),
   vaultWorker.body,
@@ -163,11 +170,25 @@ class CdpClient {
     this.socket = new WebSocket(url);
     this.nextId = 1;
     this.pending = new Map();
+    this.opened = false;
+    this.closing = false;
     this.ready = new Promise((resolvePromise, reject) => {
-      this.socket.onopen = resolvePromise;
-      this.socket.onerror = () =>
-        reject(new Error("CDP WebSocket failed to open"));
+      this.resolveReady = resolvePromise;
+      this.rejectReady = reject;
     });
+    this.socket.onopen = () => {
+      this.opened = true;
+      this.resolveReady();
+    };
+    const fail = (message) => {
+      if (this.closing) return;
+      const error = new Error(message);
+      if (!this.opened) this.rejectReady(error);
+      for (const { reject } of this.pending.values()) reject(error);
+      this.pending.clear();
+    };
+    this.socket.onerror = () => fail("CDP WebSocket failed");
+    this.socket.onclose = () => fail("CDP WebSocket closed unexpectedly");
     this.socket.onmessage = ({ data }) => {
       const message = JSON.parse(
         typeof data === "string" ? data : data.toString(),
@@ -186,18 +207,24 @@ class CdpClient {
     const id = this.nextId++;
     return new Promise((resolvePromise, reject) => {
       this.pending.set(id, { resolve: resolvePromise, reject });
-      this.socket.send(
-        JSON.stringify({
-          id,
-          method,
-          params,
-          ...(sessionId ? { sessionId } : {}),
-        }),
-      );
+      try {
+        this.socket.send(
+          JSON.stringify({
+            id,
+            method,
+            params,
+            ...(sessionId ? { sessionId } : {}),
+          }),
+        );
+      } catch (error) {
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
   close() {
+    this.closing = true;
     this.socket.close();
   }
 }
@@ -219,18 +246,41 @@ async function waitForDevTools(profile) {
   throw new Error("Chrome did not publish DevToolsActivePort");
 }
 
+function waitForChildExit(child, graceMs) {
+  if (child.exitCode !== null) return Promise.resolve(true);
+  return new Promise((resolvePromise) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolvePromise(true);
+    };
+    const timer = setTimeout(() => {
+      child.removeListener("exit", onExit);
+      resolvePromise(false);
+    }, graceMs);
+    child.once("exit", onExit);
+  });
+}
+
+async function terminateChild(child) {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  if (await waitForChildExit(child, 2_000)) return;
+  child.kill("SIGKILL");
+  await waitForChildExit(child, 2_000);
+}
+
 async function runScenario({ hasPrf, scenario }) {
   let finish;
   const resultPromise = new Promise((resolvePromise) => {
     finish = resolvePromise;
   });
-  const server = createServer(async (request, response) => {
+  const handleRequest = async (request, response) => {
     response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     response.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
     response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
     response.setHeader("Content-Security-Policy", CSP);
     response.setHeader("Cache-Control", "no-store");
-    const url = new URL(request.url, "http://127.0.0.1");
+    const url = new URL(request.url, "http://localhost");
     if (request.method === "POST" && url.pathname === "/result") {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
@@ -278,9 +328,20 @@ async function runScenario({ hasPrf, scenario }) {
     }
     response.setHeader("Content-Type", asset.contentType);
     response.end(asset.body);
+  };
+  const server = createServer((request, response) => {
+    void handleRequest(request, response).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!response.headersSent) {
+        response.setHeader("Content-Type", "application/json");
+        response.writeHead(500).end(JSON.stringify({ error: message }));
+      } else if (!response.writableEnded) {
+        response.end();
+      }
+    });
   });
   await new Promise((resolvePromise) =>
-    server.listen(0, "127.0.0.1", resolvePromise),
+    server.listen(0, "localhost", resolvePromise),
   );
   const address = server.address();
   const profile = await mkdtemp(resolve(tmpdir(), "darknyx-custody-chrome-"));
@@ -304,6 +365,13 @@ async function runScenario({ hasPrf, scenario }) {
   let timeout;
   try {
     cdp = new CdpClient(await waitForDevTools(profile));
+    const { product } = await cdp.send("Browser.getVersion");
+    const chromeMajor = Number(/\/(\d+)/.exec(product)?.[1]);
+    if (!Number.isInteger(chromeMajor) || chromeMajor < 113) {
+      throw new Error(
+        `WebAuthn PRF automation requires Chrome/Chromium 113+; detected '${product}'`,
+      );
+    }
     const { targetInfos } = await cdp.send("Target.getTargets");
     const page = targetInfos.find(({ type }) => type === "page");
     if (!page) throw new Error("Chrome exposed no page target");
@@ -351,7 +419,7 @@ async function runScenario({ hasPrf, scenario }) {
     if (!result.ok) {
       throw new Error(`${scenario}: ${result.error ?? JSON.stringify(result)}`);
     }
-    return result.result;
+    return { ...result.result, chrome_product: product };
   } catch (error) {
     throw new Error(
       `${error.message}\nChrome stderr:\n${stderr.slice(-4_000)}`,
@@ -359,13 +427,7 @@ async function runScenario({ hasPrf, scenario }) {
   } finally {
     clearTimeout(timeout);
     cdp?.close();
-    if (child.exitCode === null) {
-      const exited = new Promise((resolvePromise) =>
-        child.once("exit", resolvePromise),
-      );
-      child.kill("SIGTERM");
-      await exited;
-    }
+    await terminateChild(child);
     await new Promise((resolvePromise) => server.close(resolvePromise));
     await rm(profile, { recursive: true, force: true });
   }
@@ -389,17 +451,27 @@ const report = {
   unsupported,
 };
 
+if (process.env.CUSTODY_SPIKE_OUTPUT) {
+  const output = resolve(repositoryRoot, process.env.CUSTODY_SPIKE_OUTPUT);
+  await mkdir(resolve(output, ".."), { recursive: true });
+  await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  process.stderr.write(`wrote ${output}\n`);
+}
+
 const requiredTrue = [
   "provision_unlock_same_seed",
   "locked_command_rejected",
   "ciphertext_tamper_rejected",
   "inactivity_locked",
+  "status_polling_did_not_extend_inactivity",
   "backup_v2_roundtrip_same_seed",
   "browser_backup_opened_by_node",
   "node_backup_opened_by_browser",
   "same_origin_attack_succeeded",
   "terminated_worker_rejected",
   "cross_origin_isolated",
+  "trusted_types_available",
+  "trusted_types_enforced",
 ];
 for (const field of requiredTrue) {
   if (supported[field] !== true)
@@ -412,11 +484,5 @@ if (
   unsupported.prf_unsupported_failed_closed !== true
 ) {
   throw new Error("browser custody acceptance assertion failed");
-}
-if (process.env.CUSTODY_SPIKE_OUTPUT) {
-  const output = resolve(repositoryRoot, process.env.CUSTODY_SPIKE_OUTPUT);
-  await mkdir(resolve(output, ".."), { recursive: true });
-  await writeFile(output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  process.stderr.write(`wrote ${output}\n`);
 }
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

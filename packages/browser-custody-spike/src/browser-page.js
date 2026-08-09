@@ -1,5 +1,7 @@
-import { BrowserVault, simulateSameOriginCompromise } from "./browser-vault.js";
+import { BrowserVault } from "./browser-vault.js";
+import { toBase64Url } from "./codec.js";
 import { IndexedDbVaultStore } from "./indexeddb-store.js";
+import { simulateSameOriginCompromise } from "./same-origin-attack.js";
 
 const status = document.querySelector("#status");
 const config = await fetch("/config.json").then((response) => response.json());
@@ -36,6 +38,17 @@ async function progress(stage) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ stage }),
   });
+}
+
+function trustedTypesAreEnforced() {
+  if (!("trustedTypes" in globalThis)) return false;
+  try {
+    const worker = new Worker("/vault-worker.js");
+    worker.terminate();
+    return false;
+  } catch (error) {
+    return error instanceof TypeError;
+  }
 }
 
 async function runUnsupportedScenario() {
@@ -107,8 +120,14 @@ async function runSupportedScenario() {
   await store.save(firstRecord);
   await vault.unlock();
   await progress("tamper-rejected");
-  await new Promise((resolve) => setTimeout(resolve, inactivityMs + 100));
-  const inactivityLocked = (await vault.status()).state === "locked";
+  const pollingDeadline = performance.now() + inactivityMs + 100;
+  let lastPolledState = "unlocked";
+  while (performance.now() < pollingDeadline) {
+    lastPolledState = (await vault.status()).state;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  lastPolledState = (await vault.status()).state;
+  const inactivityLocked = lastPolledState === "locked";
   vault.destroy();
 
   // Recovery is intentionally a new credential: this proves the portable
@@ -130,23 +149,14 @@ async function runSupportedScenario() {
   const restoredRecord = structuredClone(await store.load());
   await progress("same-origin-attack");
   const attack = await simulateSameOriginCompromise(restoredRecord);
-  const attackFingerprint = await crypto.subtle.digest(
-    "SHA-256",
-    new Uint8Array([
-      ...new TextEncoder().encode("darknyx/browser-vault-spike/fingerprint/v1"),
-      ...attack.plaintext,
-    ]),
-  );
-  const attackFingerprintUrl = bytesToBase64(new Uint8Array(attackFingerprint))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/, "");
   const serializedRecord = JSON.stringify(restoredRecord);
   const plaintextAbsentFromIndexedDb =
     !serializedRecord.includes(bytesToHex(attack.plaintext)) &&
-    !serializedRecord.includes(bytesToBase64(attack.plaintext));
-  const sameOriginAttackSucceeded =
-    attackFingerprintUrl === provisioned.testFingerprint;
+    !serializedRecord.includes(bytesToBase64(attack.plaintext)) &&
+    !serializedRecord.includes(toBase64Url(attack.plaintext));
+  const sameOriginAttackSucceeded = await vault.testOnlyMatchesSeed(
+    attack.plaintext,
+  );
   attack.plaintext.fill(0);
 
   const serviceWorkers =
@@ -167,7 +177,9 @@ async function runSupportedScenario() {
     locked_command_rejected: lockedCommandRejected,
     ciphertext_tamper_rejected: tamperRejected,
     inactivity_locked: inactivityLocked,
+    status_polling_did_not_extend_inactivity: inactivityLocked,
     backup_v2_roundtrip_same_seed:
+      interop.browser_backup_opened_by_node &&
       restored.testFingerprint === provisioned.testFingerprint,
     browser_backup_opened_by_node: interop.browser_backup_opened_by_node,
     node_backup_opened_by_browser:
@@ -180,6 +192,7 @@ async function runSupportedScenario() {
     terminated_worker_rejected: terminatedWorkerRejected,
     cross_origin_isolated: self.crossOriginIsolated,
     trusted_types_available: "trustedTypes" in globalThis,
+    trusted_types_enforced: trustedTypesAreEnforced(),
     service_worker_registrations: serviceWorkers.length,
     user_agent: navigator.userAgent,
   };

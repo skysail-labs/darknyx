@@ -17,6 +17,7 @@ const MIN_PASSPHRASE_LENGTH = 12;
 let seed = null;
 let inactivityTimer = null;
 let configuredInactivityMs = 0;
+let inactivityDeadline = 0;
 
 function randomBytes(length) {
   const value = new Uint8Array(length);
@@ -78,6 +79,7 @@ function aadForHeader(header) {
 function clearSeed(reason = "explicit") {
   if (inactivityTimer) clearTimeout(inactivityTimer);
   inactivityTimer = null;
+  inactivityDeadline = 0;
   seed?.fill(0);
   seed = null;
   if (reason === "inactivity") {
@@ -85,12 +87,28 @@ function clearSeed(reason = "explicit") {
   }
 }
 
-function touch(inactivityMs) {
-  configuredInactivityMs = inactivityMs;
-  if (inactivityTimer) clearTimeout(inactivityTimer);
-  if (Number.isFinite(inactivityMs) && inactivityMs > 0) {
-    inactivityTimer = setTimeout(() => clearSeed("inactivity"), inactivityMs);
+function configureInactivity(inactivityMs) {
+  if (!Number.isFinite(inactivityMs) || inactivityMs <= 0) {
+    throw new Error("inactivity timeout must be a positive number");
   }
+  configuredInactivityMs = inactivityMs;
+}
+
+function armInactivity(inactivityMs = configuredInactivityMs) {
+  if (inactivityTimer) clearTimeout(inactivityTimer);
+  inactivityDeadline = performance.now() + inactivityMs;
+  inactivityTimer = setTimeout(() => clearSeed("inactivity"), inactivityMs);
+}
+
+function rearmUntil(deadline) {
+  if (!seed || deadline <= 0) return;
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) {
+    clearSeed("inactivity");
+    return;
+  }
+  inactivityDeadline = deadline;
+  inactivityTimer = setTimeout(() => clearSeed("inactivity"), remaining);
 }
 
 function requireSeed() {
@@ -274,15 +292,15 @@ async function importBackup(backup, passphrase) {
 const handlers = {
   async provision({ wrappingKey, header, inactivityMs }) {
     clearSeed();
+    configureInactivity(inactivityMs);
     seed = randomBytes(64);
     const cipher = await encryptVault(wrappingKey, header, seed);
-    touch(inactivityMs);
     return { cipher, testFingerprint: await fingerprint(seed) };
   },
   async unlock({ wrappingKey, record, inactivityMs }) {
     clearSeed();
+    configureInactivity(inactivityMs);
     seed = await decryptVault(wrappingKey, record);
-    touch(inactivityMs);
     return { state: "unlocked" };
   },
   async lock() {
@@ -297,30 +315,67 @@ const handlers = {
   },
   async restore({ backup, passphrase, wrappingKey, header, inactivityMs }) {
     clearSeed();
+    configureInactivity(inactivityMs);
     seed = await importBackup(backup, passphrase);
     const cipher = await encryptVault(wrappingKey, header, seed);
-    touch(inactivityMs);
     return { cipher, testFingerprint: await fingerprint(seed) };
-  },
-  async testOnlyFingerprint() {
-    return fingerprint(requireSeed());
   },
 };
 
+if (self.DARKNYX_CUSTODY_SPIKE_TEST === true) {
+  handlers.testOnlyFingerprint = async () => fingerprint(requireSeed());
+  handlers.testOnlyMatchesSeed = async ({ candidate }) => {
+    const currentSeed = requireSeed();
+    const supplied = new Uint8Array(candidate);
+    if (supplied.length !== currentSeed.length) return false;
+    let different = 0;
+    for (let index = 0; index < supplied.length; index += 1) {
+      different |= supplied[index] ^ currentSeed[index];
+    }
+    return different === 0;
+  };
+}
+
+const PASSIVE_COMMANDS = new Set(["status"]);
+
 async function handleMessage(data) {
+  const hasHandler = Object.prototype.hasOwnProperty.call(handlers, data.type);
+  if (!hasHandler) {
+    postMessage({
+      id: data.id,
+      ok: false,
+      error: `unsupported vault command: ${data.type}`,
+    });
+    return;
+  }
+  const passive = PASSIVE_COMMANDS.has(data.type);
+  const previousDeadline = inactivityDeadline;
   try {
     // An authorised command is activity. In particular, backup scrypt can run
     // longer than a deliberately short test timeout; never zero the seed in
     // the middle of an in-flight operation and accidentally encrypt zeros.
+    if (
+      passive &&
+      seed &&
+      previousDeadline > 0 &&
+      performance.now() >= previousDeadline
+    ) {
+      clearSeed("inactivity");
+    }
     if (inactivityTimer) clearTimeout(inactivityTimer);
     inactivityTimer = null;
     const handler = handlers[data.type];
-    if (!handler) throw new Error(`unsupported vault command: ${data.type}`);
     const value = await handler(data.payload);
-    if (seed && data.type !== "lock") touch(configuredInactivityMs);
+    if (seed) {
+      if (passive) rearmUntil(previousDeadline);
+      else if (data.type !== "lock") armInactivity();
+    }
     postMessage({ id: data.id, ok: true, value });
   } catch (error) {
-    if (seed) touch(configuredInactivityMs);
+    if (seed) {
+      if (passive) rearmUntil(previousDeadline);
+      else armInactivity();
+    }
     postMessage({
       id: data.id,
       ok: false,

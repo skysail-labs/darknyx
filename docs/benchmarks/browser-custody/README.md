@@ -33,8 +33,8 @@ The Chrome runner checks:
 - browser-produced backup opened by Node and Node-produced backup opened by the
   browser, preventing a self-consistent format drift;
 - fail-closed behavior when the authenticator does not support WebAuthn PRF;
-- COOP/COEP isolation, Trusted Types, and absence of service-worker
-  registrations in the harness;
+- COOP/COEP isolation, active Trusted Types enforcement, and absence of
+  service-worker registrations in the harness;
 - the deliberate same-origin compromise described above.
 
 Run:

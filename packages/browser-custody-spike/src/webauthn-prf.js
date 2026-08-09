@@ -30,7 +30,10 @@ export async function createPrfCredential(label = "Darknyx account") {
         name: "darknyx-local-vault",
         displayName: label,
       },
-      pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+      pubKeyCredParams: [
+        { type: "public-key", alg: -7 },
+        { type: "public-key", alg: -257 },
+      ],
       timeout: 60_000,
       attestation: "none",
       authenticatorSelection: {

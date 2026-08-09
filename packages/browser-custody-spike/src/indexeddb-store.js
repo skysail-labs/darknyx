@@ -51,16 +51,18 @@ export class IndexedDbVaultStore {
   async save(record) {
     const database = await this.database();
     const transaction = database.transaction(STORE, "readwrite");
-    const committed = transactionDone(transaction);
-    await requestResult(transaction.objectStore(STORE).put(record, RECORD_KEY));
-    await committed;
+    await Promise.all([
+      requestResult(transaction.objectStore(STORE).put(record, RECORD_KEY)),
+      transactionDone(transaction),
+    ]);
   }
 
   async clear() {
     const database = await this.database();
     const transaction = database.transaction(STORE, "readwrite");
-    const committed = transactionDone(transaction);
-    await requestResult(transaction.objectStore(STORE).delete(RECORD_KEY));
-    await committed;
+    await Promise.all([
+      requestResult(transaction.objectStore(STORE).delete(RECORD_KEY)),
+      transactionDone(transaction),
+    ]);
   }
 }
