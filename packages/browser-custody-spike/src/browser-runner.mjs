@@ -429,7 +429,14 @@ async function runScenario({ hasPrf, scenario }) {
     cdp?.close();
     await terminateChild(child);
     await new Promise((resolvePromise) => server.close(resolvePromise));
-    await rm(profile, { recursive: true, force: true });
+    // Chrome can leave a helper process touching its profile for a few
+    // milliseconds after the browser process exits (observed on Linux CI).
+    await rm(profile, {
+      recursive: true,
+      force: true,
+      maxRetries: 8,
+      retryDelay: 100,
+    });
   }
 }
 
