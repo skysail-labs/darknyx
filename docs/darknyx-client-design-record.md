@@ -1,6 +1,8 @@
 # Darknyx Client — design record and implementation plan
 
-> Status: **ACTIVE DESIGN RECORD — Phase 0 benchmark foundation in progress.**
+> Status: **ACTIVE DESIGN RECORD — Phase 0 foundation and Apple M3 baseline
+> complete; physical x86, custody, firm-up, MM-demand, and trader evidence are
+> still open.**
 >
 > Supersedes the August 2026 native-first client notes. Their product
 > decomposition, security boundaries and MM framing are carried forward; their
@@ -22,7 +24,7 @@
 ## 0. How to read this document
 
 - **§1** is the implementation ordering and the argument for it.
-- **§2** separates what is *invariant* from what is *decision-gated*. This is the
+- **§2** separates what is _invariant_ from what is _decision-gated_. This is the
   single most important section: it is why client work can start now despite the
   liquidity record being unstable.
 - **§3** is the architecture, expressed as two planes with a hard interface.
@@ -105,31 +107,31 @@ classified here.
 
 ### 2.1 Invariant under every open question
 
-| Concern | Why it cannot move |
-|---|---|
-| Note model, commitments, nullifiers, inner hashes | Frozen; no new note type (liquidity §11) |
-| `VALID_INPUT` binding `(merkle_root, note_use_tag, token_mint)` | Circuit frozen; the commitment remains the private Merkle leaf |
-| Proof scope: **per note, per root epoch** — not per order, price, side or market | Follows from the binding above |
-| `VALID_MERGE(K)` lock precondition | Circuit + program frozen |
-| Settlement path: `VALID_MATCH_BATCH` + `tee_forced_settle_batched` | Explicitly unchanged (liquidity §6.4, §11) |
-| Continuation re-lock (`buyer_relock_order_id`, `note_lock_e`) | Exists; tier 2 reuses it as-is |
-| 64-root shard window, `MAX_LOCK_TTL_SLOTS = 4,500` semantics | Program constant (`programs/vault/src/state.rs`) |
-| TEE attestation, DCAP + RTMR3 replay + measurement pinning | Independent of matching design |
-| Key derivation and domain separation | Frozen |
-| Chain-derived recovery | Independent of matching design |
+| Concern                                                                          | Why it cannot move                                             |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Note model, commitments, nullifiers, inner hashes                                | Frozen; no new note type (liquidity §11)                       |
+| `VALID_INPUT` binding `(merkle_root, note_use_tag, token_mint)`                  | Circuit frozen; the commitment remains the private Merkle leaf |
+| Proof scope: **per note, per root epoch** — not per order, price, side or market | Follows from the binding above                                 |
+| `VALID_MERGE(K)` lock precondition                                               | Circuit + program frozen                                       |
+| Settlement path: `VALID_MATCH_BATCH` + `tee_forced_settle_batched`               | Explicitly unchanged (liquidity §6.4, §11)                     |
+| Continuation re-lock (`buyer_relock_order_id`, `note_lock_e`)                    | Exists; tier 2 reuses it as-is                                 |
+| 64-root shard window, `MAX_LOCK_TTL_SLOTS = 4,500` semantics                     | Program constant (`programs/vault/src/state.rs`)               |
+| TEE attestation, DCAP + RTMR3 replay + measurement pinning                       | Independent of matching design                                 |
+| Key derivation and domain separation                                             | Frozen                                                         |
+| Chain-derived recovery                                                           | Independent of matching design                                 |
 
 **Everything in this table is Phase 1 scope.** None of it is at risk.
 
 ### 2.2 Decision-gated
 
-| Concern | Gated on |
-|---|---|
-| Trader packaging (browser / desktop app / agent + extension) | D1 |
-| Whether tier 2 is flags-only or has an indication layer | D2 (liquidity §9.2) |
-| Firm-up model and therefore client liveness requirements | D3 |
-| Prover backend and threading model | D4 |
-| Whether the client keeps local reputation/firm-up records | D5 (liquidity §9.3) |
-| Signer model for resting tier-2 orders | D6 |
+| Concern                                                                                        | Gated on                                         |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Trader packaging (browser / desktop app / agent + extension)                                   | D1                                               |
+| Whether tier 2 is flags-only or has an indication layer                                        | D2 (liquidity §9.2)                              |
+| Firm-up model and therefore client liveness requirements                                       | D3                                               |
+| Prover backend and threading model                                                             | D4                                               |
+| Whether the client keeps local reputation/firm-up records                                      | D5 (liquidity §9.3)                              |
+| Signer model for resting tier-2 orders                                                         | D6                                               |
 | Order attribute set (`min_execution_size`, `allow_mm_counterparty`, `residual_policy`, others) | Tier design; **treated as open by construction** |
 
 ### 2.3 The four seams that absorb change
@@ -209,7 +211,7 @@ privately recomputes the commitment and proves its Merkle inclusion. It does
 > every same-mint market that note backs.**
 
 An MM quoting an eight-level ladder on both sides needs proofs proportional to
-its *note count*, not its *quote count*. A trader may reuse one proof across
+its _note count_, not its _quote count_. A trader may reuse one proof across
 candidate or sequential intents. It **cannot** use one note to back multiple
 simultaneous live or pending orders: collateral reservation and on-chain locking
 permit at most one such order per note. This is the enabling primitive for both
@@ -243,15 +245,15 @@ record.
 
 ### 4.1 Investigations (non-benchmark)
 
-| # | Question | Method | Feeds |
-|---|---|---|---|
-| **I1** | Current circuit sizes and artifact identities | Record committed R1CS constraints plus WASM/zkey bytes and SHA-256 for all six client circuits | Everything. Do this on day one. |
-| **I2** | Safe lock lifetime around `MAX_LOCK_TTL_SLOTS = 4,500` | Model the fixed ceiling against prove, submit, finality, and refresh latency | Liquidity §9.1, D2 |
-| **I3** | Is the re-lock pulse legible on-chain? | **Build the classifier.** Simulate a resting order re-locking on a heartbeat; attempt to distinguish it from ordinary activity in devnet traffic | Liquidity §9.1, D2, D6 |
-| **I4** | Can one note back a full ladder? **Resolved: no for simultaneous firm levels.** | One note may serve candidate/sequential intents, but one live/pending reservation per collateral commitment requires inventory per simultaneous firm level | Liquidity §5.5, MM tranche sizing |
-| **I5** | Residual re-proving window **Resolved.** | Settlement can continuation-relock its derived output without a new client proof. A later independent order needs a fresh `VALID_INPUT` after that output leaf enters an accepted root | `residual_reproving` state, D3 |
-| **I6** | Can the client hold a Solana wallet connection under cross-origin isolation? | Test Phantom / wallet-adapter flows with `COOP: same-origin` + `COEP: require-corp` enabled | D1, D4 |
-| **I7** | Would block traders leave software running to hold an order? | **Add as a fourth question** to the liquidity record's §9.4 trader interviews | D1, D2, D6 |
+| #      | Question                                                                        | Method                                                                                                                                                                                 | Feeds                             |
+| ------ | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| **I1** | Current circuit sizes and artifact identities                                   | Record committed R1CS constraints plus WASM/zkey bytes and SHA-256 for all six client circuits                                                                                         | Everything. Do this on day one.   |
+| **I2** | Safe lock lifetime around `MAX_LOCK_TTL_SLOTS = 4,500`                          | Model the fixed ceiling against prove, submit, finality, and refresh latency                                                                                                           | Liquidity §9.1, D2                |
+| **I3** | Is the re-lock pulse legible on-chain?                                          | **Build the classifier.** Simulate a resting order re-locking on a heartbeat; attempt to distinguish it from ordinary activity in devnet traffic                                       | Liquidity §9.1, D2, D6            |
+| **I4** | Can one note back a full ladder? **Resolved: no for simultaneous firm levels.** | One note may serve candidate/sequential intents, but one live/pending reservation per collateral commitment requires inventory per simultaneous firm level                             | Liquidity §5.5, MM tranche sizing |
+| **I5** | Residual re-proving window **Resolved.**                                        | Settlement can continuation-relock its derived output without a new client proof. A later independent order needs a fresh `VALID_INPUT` after that output leaf enters an accepted root | `residual_reproving` state, D3    |
+| **I6** | Can the client hold a Solana wallet connection under cross-origin isolation?    | Test Phantom / wallet-adapter flows with `COOP: same-origin` + `COEP: require-corp` enabled                                                                                            | D1, D4                            |
+| **I7** | Would block traders leave software running to hold an order?                    | **Add as a fourth question** to the liquidity record's §9.4 trader interviews                                                                                                          | D1, D2, D6                        |
 
 I3 and I7 are jointly the single most consequential pieces of work in Phase 0:
 together they decide whether traders need a persistent process at all.
@@ -263,19 +265,19 @@ together they decide whether traders need a persistent process at all.
 
 **Backends:**
 
-| Backend | Purpose |
-|---|---|
-| snarkjs, Node | Baseline; already exists (`nodeValidInputProver`) |
+| Backend                | Purpose                                                      |
+| ---------------------- | ------------------------------------------------------------ |
+| snarkjs, Node          | Baseline; already exists (`nodeValidInputProver`)            |
 | snarkjs, Chrome Worker | Zero-install desktop candidate; UI-thread isolation measured |
-| rapidsnark, native | Native ceiling |
+| rapidsnark, native     | Native ceiling                                               |
 
 **Devices:**
 
-| Class | Rationale |
-|---|---|
-| M-series Mac | Best case; developer machines |
-| Mid x86 laptop, 8 GB | Realistic trader desktop |
-| Linux server-class | MM daemon proxy |
+| Class                | Rationale                     |
+| -------------------- | ----------------------------- |
+| M-series Mac         | Best case; developer machines |
+| Mid x86 laptop, 8 GB | Realistic trader desktop      |
+| Linux server-class   | MM daemon proxy               |
 
 Desktop launch qualification is deliberately first: Apple Silicon plus a
 **physical** mid-range x86 laptop, both on stable Chrome. Mobile/Safari becomes a
@@ -310,19 +312,27 @@ p50, 520.67 ms prove p50, approximately 583 ms combined; see
 generation was not dominant in that run. Phase 0 therefore measures each stage
 instead of assuming which backend work will matter.
 
+The decision-grade Apple M3 pass is now **[MEASURED]** across all six circuits:
+Chrome `VALID_INPUT` was 588.68 / 631.48 / 671.88 ms p50/p95/p99; merge K=4
+was 1,984.94 / 2,070.53 / 2,095.96 ms. All 10 Mbps artifact gates passed, and a
+1,006-proof Chrome soak degraded 5.62% over ten minutes. See
+[`docs/benchmarks/client-proving/results/2026-08-10-apple-m3/README.md`](benchmarks/client-proving/results/2026-08-10-apple-m3/README.md).
+This closes the Apple performance leg only. The physical x86 memory gate and I6
+custody work still block D1; G4/G5 and I3/I7 still block later product choices.
+
 ### 4.3 Proposed gates **[TARGET]**
 
-| # | Gate | Decides |
-|---|---|---|
-| **G1** | `VALID_INPUT` warm p95 ≤ 1,500 ms, browser, mid laptop | Browser viable for tier 1 |
-| **G2** | Desktop Chrome: wallet/deposit p95 ≤ 2 s; spend ≤ 2 s; merge K2 ≤ 5 s; merge K4 ≤ 10 s | Complete trader flow is viable, not merely order placement |
-| **G3** | `VALID_INPUT` warm p99 ≤ 2,500 ms, zero OOM, and no UI-thread stall > 100 ms | Tail UX and Worker isolation |
-| **G4** | Firm-up path p99 ≤ 200 ms (cached-proof retrieval + sign + send, **no proving**) | Tier 2 client-side feasibility |
-| **G5** | Sustained proving throughput ≥ MM refresh demand (§4.4) | MM daemon prover sizing |
-| **G6** | At 10 Mbps: wallet ≤ 6 s, deposit ≤ 7 s, input/spend ≤ 10 s, merge K2 ≤ 18 s, merge K4 ≤ 30 s background | Per-action artifact caching/streaming strategy |
-| **G7** | Zero crash/OOM in the sample; peak x86 RSS < 1.5 GiB; ten-minute thermal degradation < 25% | Ship/no-ship per desktop class |
+| #      | Gate                                                                                                     | Decides                                                    |
+| ------ | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **G1** | `VALID_INPUT` warm p95 ≤ 1,500 ms, browser, mid laptop                                                   | Browser viable for tier 1                                  |
+| **G2** | Desktop Chrome: wallet/deposit p95 ≤ 2 s; spend ≤ 2 s; merge K2 ≤ 5 s; merge K4 ≤ 10 s                   | Complete trader flow is viable, not merely order placement |
+| **G3** | `VALID_INPUT` warm p99 ≤ 2,500 ms, zero OOM, and no UI-thread stall > 100 ms                             | Tail UX and Worker isolation                               |
+| **G4** | Firm-up path p99 ≤ 200 ms (cached-proof retrieval + sign + send, **no proving**)                         | Tier 2 client-side feasibility                             |
+| **G5** | Sustained proving throughput ≥ MM refresh demand (§4.4)                                                  | MM daemon prover sizing                                    |
+| **G6** | At 10 Mbps: wallet ≤ 6 s, deposit ≤ 7 s, input/spend ≤ 10 s, merge K2 ≤ 18 s, merge K4 ≤ 30 s background | Per-action artifact caching/streaming strategy             |
+| **G7** | Zero crash/OOM in the sample; peak x86 RSS < 1.5 GiB; ten-minute thermal degradation < 25%               | Ship/no-ship per desktop class                             |
 
-G4 is a *different measurement* from order submission and must be gated
+G4 is a _different measurement_ from order submission and must be gated
 separately: it is a reactive response to an async push, benchmarked against the
 sub-second firm-up rates the liquidity record cites as the industry reference.
 If pre-proving works (§7.2), G4 is trivially met. If it does not, tier 2 is not
@@ -340,7 +350,7 @@ sustained_demand  =  proofs_per_epoch × refresh_rate
 ```
 
 `max_warm_note_size` is capped by the S-08 mitigation (liquidity §8.4), which
-means the cap *directly sets* the client's proving throughput requirement.
+means the cap _directly sets_ the client's proving throughput requirement.
 Smaller cap → smaller worst case → more notes → more proofs. **Model this jointly
 with the security team; it is one decision, not two.**
 
@@ -360,7 +370,7 @@ the protocol and ceremony surface before the current-client question is
 answered. WebGPU is likewise not a Phase 0 implementation target; only the
 current browser backend is measured.
 
-### 4.6 What Phase 0 does *not* do
+### 4.6 What Phase 0 does _not_ do
 
 It does not decide the architecture. It produces the numbers that let §5 be
 decided. If Phase 0 output cannot change the answer, it is not a measurement
@@ -372,14 +382,14 @@ branch point.
 
 ## 5. Decision register
 
-| ID | Decision | Gated on | Default if unresolved |
-|---|---|---|---|
-| **D1** | Trader packaging | G1–G3, G7, I6, custody review | Evidence branch: embedded Chrome only if performance and custody both pass; otherwise Tauri/native |
-| **D2** | Tier 2 shape: flags-only vs indication layer | Liquidity §9.2 ← I2, I3, I7 | Undecided. **Blocks Phase 4 entirely.** |
-| **D3** | Firm-up model | D2, I5, G4 | Pre-proved-and-held (§7.2) — strictly better than behavioural, cheaper than auto-firm. |
-| **D4** | Prover backend + threading | G1–G7 | Chrome Worker/snarkjs or native Circom+rapidsnark. Backend stays abstract behind the existing injected-prover interface. |
-| **D5** | Local reputation/firm-up record keeping | Liquidity §9.3 | Client keeps its own local record regardless, for self-monitoring and dispute. Cheap and independent of where authoritative state lives. |
-| **D6** | Signer model for resting tier-2 orders | D2, I3, I7 | Unresolved. **See §8.3 — the current external-wallet default does not survive flags-only tier 2.** |
+| ID     | Decision                                     | Gated on                      | Default if unresolved                                                                                                                    |
+| ------ | -------------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **D1** | Trader packaging                             | G1–G3, G7, I6, custody review | Evidence branch: embedded Chrome only if performance and custody both pass; otherwise Tauri/native                                       |
+| **D2** | Tier 2 shape: flags-only vs indication layer | Liquidity §9.2 ← I2, I3, I7   | Undecided. **Blocks Phase 4 entirely.**                                                                                                  |
+| **D3** | Firm-up model                                | D2, I5, G4                    | Pre-proved-and-held (§7.2) — strictly better than behavioural, cheaper than auto-firm.                                                   |
+| **D4** | Prover backend + threading                   | G1–G7                         | Chrome Worker/snarkjs or native Circom+rapidsnark. Backend stays abstract behind the existing injected-prover interface.                 |
+| **D5** | Local reputation/firm-up record keeping      | Liquidity §9.3                | Client keeps its own local record regardless, for self-monitoring and dispute. Cheap and independent of where authoritative state lives. |
+| **D6** | Signer model for resting tier-2 orders       | D2, I3, I7                    | Unresolved. **See §8.3 — the current external-wallet default does not survive flags-only tier 2.**                                       |
 
 ### 5.1 D1 and D2 are coupled decisions
 
@@ -401,7 +411,7 @@ a process that is alive when no screen is open. A browser tab is not.
   requirement; an external-wallet popup does not.
 
 This adds an argument to the liquidity record's §6.6 that it does not currently
-make: the structural anti-last-look mitigation is *also* what makes browser-based
+make: the structural anti-last-look mitigation is _also_ what makes browser-based
 block trading possible. It should be weighed against the §7.3 capital-commitment
 cost, not only against leak prevention.
 
@@ -410,12 +420,12 @@ same three block traders.**
 
 ### 5.2 Packaging tiers mirror protocol tiers
 
-| Protocol tier | Client packaging | Why |
-|---|---|---|
-| Tier 1, ordinary clips | Browser, pre-proved, one proof per note | Small circuits; no liveness requirement; zero-install matters most for adoption |
-| Tier 2 with indications | Browser conditionally viable | No lock heartbeat; local firm-up still needs an awake tab/session signer |
-| Tier 2 flags-only | **Native agent required** | Re-lock heartbeat needs a persistent, jittering, non-popup signer |
-| Market maker | Native daemon, headless | Never in question; MMs already run daemons |
+| Protocol tier           | Client packaging                        | Why                                                                             |
+| ----------------------- | --------------------------------------- | ------------------------------------------------------------------------------- |
+| Tier 1, ordinary clips  | Browser, pre-proved, one proof per note | Small circuits; no liveness requirement; zero-install matters most for adoption |
+| Tier 2 with indications | Browser conditionally viable            | No lock heartbeat; local firm-up still needs an awake tab/session signer        |
+| Tier 2 flags-only       | **Native agent required**               | Re-lock heartbeat needs a persistent, jittering, non-popup signer               |
+| Market maker            | Native daemon, headless                 | Never in question; MMs already run daemons                                      |
 
 ---
 
@@ -424,6 +434,7 @@ same three block traders.**
 All of this is §2.1 material. None of it can be invalidated by D1–D6.
 
 ### 6.1 Secure storage
+
 Note credential, encrypted note database, recovery material, configuration,
 pairing credentials, optional operational signer. Encrypted at rest; OS secure
 storage where available; locked on inactivity; no secrets in logs, crash dumps or
@@ -434,6 +445,7 @@ or a page-scoped store behind WebAuthn-PRF-derived encryption. Build the
 interface first; the three implementations differ below it.
 
 ### 6.2 Chain and tree synchroniser
+
 Poll/subscribe Solana state; reconstruct user note state; verify roots against the
 finalized on-chain ring before proving (`onchainRootVerifier` already exists);
 maintain paths; handle reorg and ambiguous confirmation; invalidate stale
@@ -441,12 +453,14 @@ assumptions. Track root age against the 64-root window as a first-class signal �
 it drives proof refresh scheduling.
 
 ### 6.3 Note manager
+
 Discover and decrypt notes; compute spendable balances; select notes; maintain
 local reservations; prevent local double-use; track consumed / locked / pending /
 recovered states. Reservations must be **soft and revocable**, because tier 1
 quote curves and tier 2 indications both reserve speculatively.
 
-### 6.4 Tranche scheduler *(new — not in the previous document)*
+### 6.4 Tranche scheduler _(new — not in the previous document)_
+
 `VALID_MERGE` requires every active commitment's lock to be absent or expired, so
 consolidation and quoting are mutually exclusive (liquidity §8.3). An active MM
 accrues a change note per fill, so fragmentation is continuous. The previous
@@ -462,6 +476,7 @@ proving time, transaction count, fees and CU, root churn, resulting note
 distribution. Do not assume one K=4 merge beats two K=2 merges.
 
 ### 6.5 Proof manager
+
 Version circuits and artifacts; construct witnesses; prove; **verify locally
 before submission**; cache; refresh before root expiry; expose readiness only.
 
@@ -478,11 +493,13 @@ States: `absent → proving → ready → refreshing → stale`, plus
 `residual_reproving` (see I5) for change notes emerging from settlement.
 
 ### 6.6 Transaction coordinator
+
 Build Solana transactions; route to external wallet or operational signer per
 policy; submit and reconcile; distinguish terminal failure from ambiguous status;
 retry without duplicate effects.
 
 ### 6.7 TEE client
+
 Verify attestation before any sensitive communication; strict by default; refresh
 the finalized governance key set on schedule and pause placement on mismatch;
 maintain stream state; reconcile fill and settlement state. Already largely built
@@ -494,13 +511,14 @@ Closing it requires transport/infrastructure support as well as client
 verification; it is not a client-only patch. The client must consume and enforce
 the selected authenticated endpoint binding once that contract exists.
 
-### 6.8 Fill-quality auditor *(API-gated)*
+### 6.8 Fill-quality auditor _(API-gated)_
+
 Liquidity §8.5 names the client-side memo guard, extended into published per-MM
 execution statistics, as the **only compensating control that scales** against a
 compromised enclave in a standing relationship with a colluding maker.
 
-The previous document verifies proofs *before* submission and audits nothing
-*after*. The desired control checks every fill against the oracle band at the
+The previous document verifies proofs _before_ submission and audits nothing
+_after_. The desired control checks every fill against the oracle band at the
 recorded slot, tracks realised-versus-expected execution, and alerts on
 systematic drift. It is **not implementable from the current fill memo**, which
 does not carry clearing price, oracle snapshot, observation slot, or counterparty
@@ -511,21 +529,24 @@ Because it is the sole defence against that threat class, this belongs in the
 non-negotiables (§9), not in observability.
 
 ### 6.9 Recovery
+
 Chain-derived note reconstruction from seed. Must be testable by the user
-*before* meaningful funds are deposited.
+_before_ meaningful funds are deposited.
 
 ---
 
 ## 7. Decision-gated surface — defer, but leave the seam
 
 ### 7.1 Intent plane
+
 Order intents, cancels, and later quote curves, indications and firm-up
 responses. Built in Phase 3 against whatever tier 1 lands.
 
 **Seam:** one `IntentTransport` interface over REST and `/v1/stream`; versioned
 extensible attribute map; readiness handles only.
 
-### 7.2 Pre-prove-and-hold *(proposed resolution for D3)*
+### 7.2 Pre-prove-and-hold _(proposed resolution for D3)_
+
 Liquidity §6.3 says indications need no proof and no lock — that is the capital
 multiplexing win. §6.6's structural mitigation wants the indication to carry a
 pre-authorised proof. And firm-up latency demands a proof that already exists.
@@ -541,7 +562,7 @@ note-scoped (§3.1), one proof covers indications at every price level across
 every same-mint market. Firm-up becomes "retrieve cached blob, sign, send."
 
 This yields a **third option in liquidity §6.6**, between behavioural policing
-and full auto-firm: the client is *capable* of instant firm-up, the enclave scores
+and full auto-firm: the client is _capable_ of instant firm-up, the enclave scores
 firm-up **latency** as well as firmed-to-indicated size ratio, and a decline is
 visibly a decision rather than a capacity limit. It still requires the client to
 be awake and able to authorise the intent. An external-wallet approval cannot
@@ -550,10 +571,12 @@ signer or a deliberately delegated auto-firm policy. Weaker than auto-firm;
 stronger than scoring alone; commits no capital before firm-up.
 
 ### 7.3 Order attributes
+
 `min_execution_size`, `allow_mm_counterparty`, `residual_policy` and successors.
 Carried as opaque attributes by the core (§2.3 seam 1); surfaced by the UI.
 
 UI notes for when they land:
+
 - **MES** in trader language ("don't fill me in pieces smaller than X"), with the
   per-execution / per-order trade-off stated honestly, since the liquidity record
   itself flags the fill-rate tension. If per-order is ever offered, enforce the
@@ -565,12 +588,15 @@ UI notes for when they land:
   is probably the conservative default for block flow.
 
 ### 7.4 Heartbeat privacy manager
+
 **Only if D2 resolves flags-only.** Re-lock jitter, fee-payer rotation, possible
 relay so the same address does not sign every cycle. Design informed by the I3
 classifier — the mitigation and the measurement are the same work.
 
 ### 7.5 Packaging
+
 Deferred to D1. Candidates, in rough order of preference pending evidence:
+
 1. **Browser, multi-threaded WASM** — zero install; the default unless G1–G3 fail.
 2. **Single signed desktop app (Tauri) bundling UI + native prover** — internal
    IPC, no localhost port, no CORS, no DNS-rebinding surface, no local-network
@@ -602,22 +628,25 @@ model, attestation policy, API, resource isolation, and explicit user consent.
 Carried forward from the previous document, with one correction.
 
 ### 8.1 Two key roles, never collapsed
+
 1. **Note credential** — note ownership, witness construction, recovery,
    protocol-specific derivations. Held by the client core. **Never reaches a web
    page** in any packaging.
 2. **Solana transaction signer** — authorises and pays for on-chain transactions.
 
 ### 8.2 Defaults by participant
-| Profile | Note credential | Solana signer |
-|---|---|---|
-| Human trader | Client core | External wallet (Phantom / hardware / custodian) |
-| Power trader | Client core | External by default; optional scoped session key |
+
+| Profile      | Note credential | Solana signer                                                             |
+| ------------ | --------------- | ------------------------------------------------------------------------- |
+| Human trader | Client core     | External wallet (Phantom / hardware / custodian)                          |
+| Power trader | Client core     | External by default; optional scoped session key                          |
 | Market maker | Headless daemon | Dedicated operational key, HSM or custody adapter, separate from treasury |
-| Development | Local | Test-only keypair |
+| Development  | Local           | Test-only keypair                                                         |
 
 Darknyx must never ask a trader to paste an external wallet seed phrase.
 
 ### 8.3 Correction: the external-wallet default does not survive flags-only tier 2
+
 A resting block order that re-locks on a heartbeat cannot prompt an external
 wallet on every cycle. Under flags-only, either the scoped operational signer
 stops being MM-only and becomes available to block traders, or tier 2 needs
@@ -626,7 +655,7 @@ indications. **This is D6 and it is currently unowned.**
 ### 8.4 Browser key custody, if D1 resolves browser-first
 
 A Worker isolates secrets from the UI thread; it does not isolate them from a
-same-origin compromise. Non-extractable WebCrypto keys can still be *used* by
+same-origin compromise. Non-extractable WebCrypto keys can still be _used_ by
 malicious same-origin code, while witness values and note scalars necessarily
 enter WASM memory. WebAuthn PRF plus ciphertext-only IndexedDB remains worth
 prototyping, with a recovery path, but it is not proof that a pure page is
@@ -670,6 +699,7 @@ IPC; do not bridge secrets over localhost HTTP.
 placeholders with evidence.
 
 ### Trader
+
 - No command line for install or pairing (whatever D1 selects).
 - No manual proving-key download; no manual proof management.
 - Order submission does not wait on proof generation in the normal path.
@@ -678,6 +708,7 @@ placeholders with evidence.
 - `VALID_INPUT` warm p95 within G1/G2 for the target device class.
 
 ### Market maker
+
 - One-command or managed install.
 - Quote engine starts only after inventory and proofs are ready.
 - Proof refresh never blocks the quote loop (structural per §3).
@@ -687,11 +718,13 @@ placeholders with evidence.
 - Restart recovers reservations and settlement state safely.
 
 ### Tier 2 (once D2 resolves)
+
 - Firm-up p99 within G4.
 - Under flags-only: re-lock pulse indistinguishable per the I3 classifier.
 - Under indications: no capital committed before invitation.
 
 ### Observability
+
 Cold and warm proving metrics separated; p50/p95/p99 not means; proof-cache hit
 rate; root-expiry refresh rate; proof queue depth; merge queue depth and tranche
 state; settlement reconciliation status; fill-quality audit deviations;
@@ -701,32 +734,38 @@ signer-policy rejections; version compatibility.
 
 ## 11. Phasing
 
-### Phase 0 — investigate and measure *(blocks everything)*
+### Phase 0 — investigate and measure _(blocks everything)_
+
 I1–I7; the current-circuit benchmark matrix; G1–G7 evaluated.
 **Output: D1, D3, D4 decided on evidence, and the client-side inputs to liquidity
 §9.1/§9.2 delivered.**
 
 ### Phase 1 — invariant core
+
 §6.1–§6.9 against the existing order surface. No tier vocabulary anywhere. Ends
 with a headless client that can deposit, prove, place, cancel, settle, merge,
 recover, and expose the fill-auditor seam — with a warm proof cache and tranche
 rotation. The auditor itself waits for §6.8's API fields.
 
 ### Phase 2 — decision point
+
 Resolve D1, D2, D6 jointly with the liquidity record's §9.2. Same session, same
 evidence, same trader interviews.
 
 ### Phase 3 — intent plane and tier 1
+
 Order attributes; quote curves; MM adapter (soft reservation, capacity, quote
 expiry, fill reporting, external risk integration); packaging per D1. Built in
 step with the matcher work, not after it.
 
 ### Phase 4 — tier 2 client surface
+
 Shape per D2. If indications: pre-prove-and-hold (§7.2), invitation handling,
 residual policy. If flags-only: heartbeat privacy manager (§7.4) and the D6
 signer resolution.
 
 ### Phase 5 — institutional hardening
+
 Enterprise policy, admin configuration, audit logs without secret leakage,
 multi-user isolation, disaster recovery, signed artifact and circuit manifests,
 upgrade/rollback, independent security review, gateway pinning (§6.7) closed.

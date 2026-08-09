@@ -5,6 +5,9 @@ the client proving backend. The harness is
 `packages/client-prover-bench`; it benchmarks the six circuits that execute on a
 client:
 
+Latest reviewed evidence:
+[`2026-08-10 Apple M3 baseline`](results/2026-08-10-apple-m3/README.md).
+
 - `VALID_WALLET_CREATE`
 - `VALID_DEPOSIT`
 - `VALID_INPUT`
