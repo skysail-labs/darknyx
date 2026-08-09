@@ -20,6 +20,22 @@ below it, shows only its own layer, and stays open until explicitly approved.
 | 4. Inventory    | Chain/tree sync, aggregate balances, note manager, proof cache, recovery         | Finalized-root verification, root-expiry refresh, reservation safety, and seed-plus-chain recovery pass                       |
 | 5. Trader shell | Dedicated-origin UI, attestation, external wallet, order/fill lifecycle          | Physical passkey matrix, Phantom under COOP/COEP, CSP/Trusted Types, reconnect/recovery, and adversarial frontend review pass |
 
+## Layer evidence
+
+- **Layer 1 — code complete, review pending:** the platform-neutral contracts
+  and intent coordinator are in the bottom stack PR. Unit and compile-time
+  boundary tests cover proof readiness, authorization, definite rejection, and
+  ambiguous transport outcomes.
+- **Layer 2 — code complete, review pending:** `@darknyx/browser-client` bundles
+  the Worker and pinned scrypt implementation into one static artifact. Its
+  product test runs that bundle in Chrome with PRF-capable and PRF-incapable
+  virtual authenticators. It covers provision/lock/unlock, ciphertext tamper
+  rejection, absolute inactivity despite status polling, backup-v2 recovery
+  across Node and browser implementations, ciphertext-only IndexedDB, CSP,
+  Trusted Types, and fail-closed unsupported-PRF behavior. This is qualification
+  evidence for the implementation mechanism, not the still-open physical-device
+  or hostile-origin launch gates.
+
 No product PR in this stack is auto-merged. If a lower layer changes during
 review, fix that branch and rebase its up-stack dependants. Merge the reviewed
 stack only on explicit owner direction.

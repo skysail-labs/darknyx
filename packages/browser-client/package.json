@@ -1,0 +1,32 @@
+{
+  "name": "@darknyx/browser-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Darknyx browser trader client",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs && tsc -p tsconfig.json --emitDeclarationOnly",
+    "test": "npm run build && vitest run && node tests/browser-runner.mjs",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@darknyx/client-core": "0.1.0",
+    "scrypt-js": "3.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.7"
+  }
+}

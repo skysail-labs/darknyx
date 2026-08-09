@@ -621,6 +621,12 @@ jobs:
       - name: Client-core unit tests
         run: npm run test:client-core
 
+      - name: Typecheck browser-client tests and boundary assertions
+        run: npm -w @darknyx/browser-client run typecheck:tests
+
+      - name: Production browser custody lifecycle
+        run: npm run test:browser-client
+
   daemon:
     name: Daemon — keystore, lifecycle, attestation (vitest)
     runs-on: ubuntu-latest
