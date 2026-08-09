@@ -25,6 +25,9 @@ import { MerkleShadow } from "./helpers/merkle-shadow.js";
 import { be32ToBigInt } from "./helpers/e2e-helpers.js";
 import { proveValidInput } from "./helpers/valid-input-prover.js";
 import { snarkjsFullProve } from "./helpers/snarkjs-prover.js";
+import { nodeValidInputProver } from "../src/zk/valid-input-prover.js";
+import { deriveNoteUseTag } from "../src/utxo/note-use.js";
+import { bn254ToBE32 } from "../src/keys/key-generators.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..", "..");
@@ -39,6 +42,45 @@ const ait = (name: string, fn: () => Promise<void>) =>
   available ? it(name, fn, 60_000) : it.skip(name, fn);
 
 describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
+  ait(
+    "production Node adapter supplies noteUseTag rather than the private commitment",
+    async () => {
+      const spendingKey = 91n;
+      const ownerBlinding = 92n;
+      const innerHash = 93n;
+      const amount = 94n;
+      const tokenMint = Keypair.generate().publicKey.toBytes();
+      const owner = await ownerCommitment(spendingKey, ownerBlinding);
+      const commitment = await noteCommitmentV2({
+        tokenMint,
+        amount,
+        ownerCommitment: owner,
+        innerHash,
+      });
+      const tree = await MerkleShadow.create();
+      await tree.append(commitment);
+      const witness = await tree.witness(0);
+      const prover = nodeValidInputProver({ wasmPath: wasm, zkeyPath: zkey });
+
+      const result = await prover({
+        spendingKey,
+        ownerCommitmentBlinding: ownerBlinding,
+        innerHash,
+        tokenMint,
+        amount,
+        witness: {
+          leafIndex: 0,
+          merkleRoot: witness.root,
+          siblings: witness.siblings.map(be32ToBigInt),
+          pathIndices: witness.indices,
+        },
+      });
+
+      expect(result.proofBytes).toHaveLength(256);
+      expect(result.merkleRoot).toEqual(witness.root);
+    },
+  );
+
   ait(
     "produces a proof whose public inputs match the circuit declaration",
     async () => {
@@ -171,9 +213,13 @@ describe("VALID_INPUT prover (snarkjs end-to-end)", () => {
       await tree.append(commitment);
       const witness = await tree.witness(0);
       const [mintLo, mintHi] = pubkeyToFrPair(tokenMint);
+      const noteUseTag = await deriveNoteUseTag(
+        commitment,
+        bn254ToBE32(innerHash),
+      );
       const inputs = {
         merkleRoot: be32ToBigInt(witness.root).toString(),
-        noteCommitment: be32ToBigInt(commitment).toString(),
+        noteUseTag: be32ToBigInt(noteUseTag).toString(),
         tokenMint: [mintLo.toString(), mintHi.toString()],
         amount: amount.toString(),
         spendingKey: spendingKey.toString(),

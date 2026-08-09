@@ -103,10 +103,10 @@ export interface IDarkPoolZkProverSuite {
 /**
  * Placeholder prover that refuses to produce proofs. Useful when wiring an
  * SDK client that only exercises code paths which never call the prover
- * (or unit tests that replace the relevant member). The real prover lands in
- * `packages/web-zk-prover` in Phase 3 — injecting this stub ensures the
- * typecheck passes while making it impossible to accidentally submit a
- * no-op proof.
+ * (or unit tests that replace the relevant member). The selected
+ * browser/native adapter lands after `packages/client-prover-bench` closes the
+ * Phase-0 gates; injecting this stub ensures the typecheck passes while making
+ * it impossible to accidentally submit a no-op proof.
  */
 /// Each field is annotated with the interface's own member type rather than
 /// letting TypeScript infer it. Without the annotation the inferred field type
@@ -116,7 +116,7 @@ export interface IDarkPoolZkProverSuite {
 /// prover fails to typecheck, which is exactly what tests do.
 export class UnimplementedProverSuite implements IDarkPoolZkProverSuite {
   private readonly reason: string;
-  constructor(reason = "wire up packages/web-zk-prover in Phase 3") {
+  constructor(reason = "wire up the selected client prover adapter") {
     this.reason = reason;
   }
   walletCreate: IDarkPoolZkProverSuite["walletCreate"] = {

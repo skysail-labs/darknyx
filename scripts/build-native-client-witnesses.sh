@@ -10,7 +10,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/circuits/build"
-CIRCUITS=(valid_deposit valid_input valid_merge_k2 valid_merge_k4)
+CIRCUITS=(valid_wallet_create valid_deposit valid_input valid_spend valid_merge_k2 valid_merge_k4)
 HOST="$(uname -s):$(uname -m)"
 
 if ! command -v circom >/dev/null 2>&1; then

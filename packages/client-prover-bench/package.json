@@ -1,0 +1,17 @@
+{
+  "name": "@darknyx/client-prover-bench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reproducible client-side Groth16 proving benchmarks for Darknyx",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "bench:node": "node src/node-runner.mjs",
+    "bench:browser": "node src/browser-runner.mjs",
+    "bench:native": "node src/native-runner.mjs"
+  },
+  "dependencies": {
+    "circomlibjs": "^0.1.7",
+    "snarkjs": "^0.7.5"
+  }
+}
