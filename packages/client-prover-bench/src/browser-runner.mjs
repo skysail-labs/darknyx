@@ -1,9 +1,11 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
+import { promisify } from "node:util";
 
 import {
   artifactMetadata,
@@ -20,7 +22,7 @@ import {
   SCHEMA_VERSION,
   writeReport,
 } from "./report.mjs";
-import { summarizeSamples } from "./stats.mjs";
+import { summarizeSamples, summarizeSoak } from "./stats.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const selected = selectedCircuits(args.circuits);
@@ -47,6 +49,81 @@ const snarkjsBundle = await readFile(
     "../../../node_modules/snarkjs/build/snarkjs.min.js",
   ),
 );
+
+const run = promisify(execFile);
+
+function median(values) {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+async function processTreeRss(rootPid) {
+  if (process.platform === "win32") {
+    const script = [
+      `$root=${rootPid}`,
+      "$rows=Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId",
+      "$ids=[System.Collections.Generic.HashSet[int]]::new()",
+      "$null=$ids.Add($root)",
+      "do {$changed=$false; foreach($row in $rows) {if($ids.Contains([int]$row.ParentProcessId) -and $ids.Add([int]$row.ProcessId)) {$changed=$true}}} while($changed)",
+      "$sum=(Get-Process -Id @($ids) -ErrorAction SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum",
+      "Write-Output ([int64]$sum)",
+    ].join("; ");
+    const { stdout } = await run("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      script,
+    ]);
+    const rssBytes = Number(stdout.trim());
+    return Number.isFinite(rssBytes) ? rssBytes : null;
+  }
+  const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss="]);
+  const rows = stdout
+    .trim()
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/).map(Number))
+    .filter(([pid, ppid, rss]) =>
+      [pid, ppid, rss].every((value) => Number.isFinite(value)),
+    );
+  const tree = new Set([rootPid]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [pid, ppid] of rows) {
+      if (tree.has(ppid) && !tree.has(pid)) {
+        tree.add(pid);
+        changed = true;
+      }
+    }
+  }
+  return (
+    rows
+      .filter(([pid]) => tree.has(pid))
+      .reduce((sum, [, , rssKib]) => sum + rssKib, 0) * 1024
+  );
+}
+
+function summarizeRss(samples) {
+  if (samples.length === 0) return null;
+  const quartileSize = Math.max(1, Math.floor(samples.length / 4));
+  const first = median(
+    samples.slice(0, quartileSize).map(({ rss_bytes }) => rss_bytes),
+  );
+  const last = median(
+    samples.slice(-quartileSize).map(({ rss_bytes }) => rss_bytes),
+  );
+  return {
+    sample_count: samples.length,
+    peak_rss_bytes: Math.max(...samples.map(({ rss_bytes }) => rss_bytes)),
+    first_quartile_median_rss_bytes: first,
+    last_quartile_median_rss_bytes: last,
+    growth_bytes: last - first,
+  };
+}
 
 function sendBuffer(request, response, body, contentType, throttle = false) {
   const range = request.headers.range;
@@ -91,14 +168,22 @@ async function runCircuit(name) {
   );
   const coldRuns = positiveInteger(args.cold_runs, 10, "cold-runs");
   const warmups = positiveInteger(args.warmups, 1, "warmups");
+  const soakSeconds = positiveInteger(args.soak_seconds, 0, "soak-seconds");
+  if (soakSeconds > 0 && warmRuns > 0) {
+    throw new Error(
+      "run a soak separately with --warm-runs 0 so latency sampling remains independent",
+    );
+  }
 
   const launch = async (session) => {
+    let benchmarkPhase = "setup";
     const config = {
       fixture: fixtures[name],
       warmRuns: session.warmRuns,
       coldRuns: session.coldRuns,
       warmups: session.warmups,
       collectMemory: session.collectMemory,
+      soakSeconds: session.soakSeconds,
       urls: {
         wasm: "/artifacts/circuit.wasm",
         zkey: "/artifacts/circuit_final.zkey",
@@ -117,6 +202,14 @@ async function runCircuit(name) {
         const chunks = [];
         for await (const chunk of request) chunks.push(chunk);
         finish(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        response.writeHead(204).end();
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/phase") {
+        const chunks = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const phase = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        if (phase.phase === "soak") benchmarkPhase = "soak";
         response.writeHead(204).end();
         return;
       }
@@ -169,11 +262,34 @@ async function runCircuit(name) {
         "--headless=new",
         "--no-first-run",
         "--disable-background-networking",
+        "--enable-precise-memory-info",
         `--user-data-dir=${profile}`,
         `http://127.0.0.1:${address.port}/`,
       ],
       { stdio: ["ignore", "ignore", "pipe"] },
     );
+    const rssStarted = performance.now();
+    const rssSamples = [];
+    let sampleRss = true;
+    const rssSampler = (async () => {
+      while (sampleRss) {
+        try {
+          const rssBytes = await processTreeRss(child.pid);
+          if (rssBytes !== null) {
+            rssSamples.push({
+              elapsed_ms: Number((performance.now() - rssStarted).toFixed(2)),
+              rss_bytes: rssBytes,
+              phase: benchmarkPhase,
+            });
+          }
+        } catch {
+          // The child may exit between the result POST and the final sample.
+        }
+        await new Promise((resolvePromise) =>
+          setTimeout(resolvePromise, 1_000),
+        );
+      }
+    })();
     let stderr = "";
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
@@ -193,6 +309,8 @@ async function runCircuit(name) {
     });
     const result = await Promise.race([resultPromise, timeout]);
     clearTimeout(timeoutId);
+    sampleRss = false;
+    await rssSampler;
     if (child.exitCode === null) {
       const exited = new Promise((resolvePromise) =>
         child.once("exit", resolvePromise),
@@ -206,6 +324,11 @@ async function runCircuit(name) {
       throw new Error(
         `${result.error}\nChrome stderr:\n${stderr.slice(-4000)}`,
       );
+    result.browser.process_tree_rss = summarizeRss(rssSamples);
+    result.browser.soak_process_tree_rss = summarizeRss(
+      rssSamples.filter(({ phase }) => phase === "soak"),
+    );
+    result.browser.process_tree_rss_samples = rssSamples;
     return result;
   };
 
@@ -213,6 +336,7 @@ async function runCircuit(name) {
     warmups,
     warmRuns,
     coldRuns: 0,
+    soakSeconds,
     collectMemory: true,
   });
   const cold = [];
@@ -222,6 +346,7 @@ async function runCircuit(name) {
       warmups: 0,
       warmRuns: 0,
       coldRuns: 1,
+      soakSeconds: 0,
       collectMemory: false,
     });
     cold.push(...result.cold);
@@ -239,6 +364,27 @@ async function runCircuit(name) {
       summary: summarizeSamples(warmResult.warm),
     },
     cold: { samples: cold, summary: summarizeSamples(cold) },
+    ...(soakSeconds > 0
+      ? {
+          soak: {
+            samples: warmResult.soak,
+            ...summarizeSoak(warmResult.soak, warmResult.soak_elapsed_ms),
+            measured_memory_bytes_before:
+              warmResult.browser.soak_process_tree_rss
+                ?.first_quartile_median_rss_bytes ?? null,
+            measured_memory_bytes_after:
+              warmResult.browser.soak_process_tree_rss
+                ?.last_quartile_median_rss_bytes ?? null,
+            measured_memory_source: "chrome-process-tree-rss",
+            memory_growth_bytes:
+              warmResult.browser.soak_process_tree_rss?.growth_bytes ?? null,
+            peak_memory_bytes:
+              warmResult.browser.process_tree_rss?.peak_rss_bytes ?? null,
+            max_main_thread_stall_ms:
+              warmResult.browser.max_main_thread_stall_ms,
+          },
+        }
+      : {}),
   };
 }
 

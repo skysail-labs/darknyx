@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { summarize, summarizeSamples } from "../src/stats.mjs";
+import { summarize, summarizeSamples, summarizeSoak } from "../src/stats.mjs";
 import { renderMarkdown } from "../src/report.mjs";
 
 test("summarize reports interpolated percentiles and deterministic intervals", () => {
@@ -10,6 +10,23 @@ test("summarize reports interpolated percentiles and deterministic intervals", (
   assert.equal(first.p50.ms, 30);
   assert.equal(first.p95.ms, 48);
   assert.deepEqual(first, second);
+});
+
+test("summarizeSoak records sustained rate and ordered degradation", () => {
+  const samples = [100, 100, 120, 120].map((end_to_end_ms) => ({
+    artifact_load_ms: 0,
+    witness_ms: 40,
+    prove_ms: end_to_end_ms - 40,
+    verify_ms: 0,
+    end_to_end_ms,
+  }));
+  const result = summarizeSoak(samples, 440);
+  assert.equal(result.count, 4);
+  assert.equal(result.proofs_per_second, 9.09);
+  assert.equal(result.first_quartile_e2e_p50_ms, 100);
+  assert.equal(result.last_quartile_e2e_p50_ms, 120);
+  assert.equal(result.degradation_percent, 20);
+  assert.equal(result.summary.end_to_end_ms.count, 4);
 });
 
 test("summarizeSamples omits unavailable stages", () => {

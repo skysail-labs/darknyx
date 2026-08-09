@@ -3,6 +3,17 @@ importScripts("/vendor/snarkjs.js");
 
 const now = () => performance.now();
 
+function waitForSoakStart() {
+  return new Promise((resolve) => {
+    const listener = ({ data }) => {
+      if (data?.type !== "start_soak") return;
+      self.removeEventListener("message", listener);
+      resolve();
+    };
+    self.addEventListener("message", listener);
+  });
+}
+
 async function fetchArtifacts(urls) {
   const started = now();
   await Promise.all([
@@ -61,8 +72,9 @@ async function sample(fixture, urls) {
 }
 
 self.onmessage = async ({ data }) => {
+  if (data?.type === "start_soak") return;
   try {
-    const { fixture, urls, warmups, warmRuns, coldRuns } = data;
+    const { fixture, urls, warmups, warmRuns, coldRuns, soakSeconds } = data;
     for (let index = 0; index < warmups; index += 1) {
       await sample(fixture, urls);
     }
@@ -91,7 +103,30 @@ self.onmessage = async ({ data }) => {
         completed: index + 1,
       });
     }
-    self.postMessage({ type: "complete", warm, cold });
+    const soak = [];
+    if (soakSeconds > 0) {
+      const soakStart = waitForSoakStart();
+      self.postMessage({ type: "soak_ready" });
+      await soakStart;
+    }
+    const soakStarted = now();
+    while (now() - soakStarted < soakSeconds * 1000) {
+      soak.push(await sample(fixture, urls));
+      self.postMessage({
+        type: "progress",
+        mode: "soak",
+        completed: soak.length,
+        elapsed_ms: now() - soakStarted,
+      });
+    }
+    self.postMessage({
+      type: "complete",
+      warm,
+      cold,
+      soak,
+      soak_elapsed_ms: now() - soakStarted,
+      worker_used_js_heap_bytes: performance.memory?.usedJSHeapSize ?? null,
+    });
   } catch (error) {
     self.postMessage({
       type: "error",

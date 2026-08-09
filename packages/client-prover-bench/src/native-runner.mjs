@@ -25,7 +25,7 @@ import {
   SCHEMA_VERSION,
   writeReport,
 } from "./report.mjs";
-import { summarizeSamples } from "./stats.mjs";
+import { summarizeSamples, summarizeSoak } from "./stats.mjs";
 
 const run = promisify(execFile);
 const args = parseArgs(process.argv.slice(2));
@@ -101,6 +101,7 @@ try {
     await requireArtifacts(artifacts, { native: true });
     const runs = positiveInteger(args.runs, CIRCUITS[name].warmRuns, "runs");
     const warmups = positiveInteger(args.warmups, 1, "warmups");
+    const soakSeconds = positiveInteger(args.soak_seconds, 0, "soak-seconds");
     for (let index = 0; index < warmups; index += 1) {
       await sample(name, fixtures[name], `warmup-${index}`);
     }
@@ -110,11 +111,29 @@ try {
       process.stderr.write(`\r${name}: ${index + 1}/${runs}`);
     }
     process.stderr.write("\n");
+    const soak = [];
+    const soakStarted = performance.now();
+    while (performance.now() - soakStarted < soakSeconds * 1000) {
+      soak.push(await sample(name, fixtures[name], `soak-${soak.length}`));
+      process.stderr.write(
+        `\r${name} soak: ${Math.min(soakSeconds, Math.floor((performance.now() - soakStarted) / 1000))}/${soakSeconds}s`,
+      );
+    }
+    const soakElapsedMs = performance.now() - soakStarted;
+    if (soakSeconds > 0) process.stderr.write("\n");
     results[name] = {
       artifacts: await artifactMetadata(artifacts),
       warmups,
       samples,
       summary: summarizeSamples(samples),
+      ...(soakSeconds > 0
+        ? {
+            soak: {
+              samples: soak,
+              ...summarizeSoak(soak, soakElapsedMs),
+            },
+          }
+        : {}),
     };
   }
 } finally {

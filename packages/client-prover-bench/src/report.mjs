@@ -82,6 +82,12 @@ export function renderMarkdown(report) {
           ["warm", result.warm],
           ["cold", result.cold],
         ];
+    if (result.soak?.samples?.length) {
+      modes.push([
+        "soak",
+        { samples: result.soak.samples, summary: result.soak.summary },
+      ]);
+    }
     for (const [mode, values] of modes) {
       if (!values?.samples?.length) continue;
       const summary = values.summary;

@@ -21,7 +21,7 @@ import {
   SCHEMA_VERSION,
   writeReport,
 } from "./report.mjs";
-import { summarizeSamples } from "./stats.mjs";
+import { summarizeSamples, summarizeSoak } from "./stats.mjs";
 
 async function timedSample(name, fixture, scratch, index) {
   const artifacts = circuitArtifacts(name);
@@ -91,6 +91,7 @@ try {
       "warm-runs",
     );
     const warmups = positiveInteger(args.warmups, 1, "warmups");
+    const soakSeconds = positiveInteger(args.soak_seconds, 0, "soak-seconds");
     for (let i = 0; i < warmups; i += 1) {
       await timedSample(name, fixtures[name], scratch, `warmup-${i}`);
     }
@@ -100,14 +101,40 @@ try {
       process.stderr.write(`\r${name}: ${i + 1}/${warmRuns}`);
     }
     process.stderr.write("\n");
+    const soak = [];
+    const soakStarted = performance.now();
+    while (performance.now() - soakStarted < soakSeconds * 1000) {
+      soak.push(
+        await timedSample(name, fixtures[name], scratch, `soak-${soak.length}`),
+      );
+      process.stderr.write(
+        `\r${name} soak: ${Math.min(soakSeconds, Math.floor((performance.now() - soakStarted) / 1000))}/${soakSeconds}s`,
+      );
+    }
+    const soakElapsedMs = performance.now() - soakStarted;
+    if (soakSeconds > 0) process.stderr.write("\n");
     results[name] = {
       artifacts: await artifactMetadata(artifacts),
       warmups,
       samples,
       summary: summarizeSamples(samples),
-      process_high_water_rss_bytes: Math.max(
-        ...samples.map((sample) => sample.process_high_water_rss_bytes),
-      ),
+      process_high_water_rss_bytes:
+        samples.length === 0
+          ? null
+          : Math.max(
+              ...samples.map((sample) => sample.process_high_water_rss_bytes),
+            ),
+      ...(soakSeconds > 0
+        ? {
+            soak: {
+              samples: soak,
+              ...summarizeSoak(soak, soakElapsedMs),
+              process_high_water_rss_bytes: Math.max(
+                ...soak.map((sample) => sample.process_high_water_rss_bytes),
+              ),
+            },
+          }
+        : {}),
     };
   }
 } finally {

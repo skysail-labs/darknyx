@@ -85,3 +85,43 @@ export function summarizeSamples(samples) {
   }
   return result;
 }
+
+export function summarizeSoak(samples, elapsedMs) {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    throw new Error("elapsedMs must be a non-negative finite number");
+  }
+  if (samples.length === 0) {
+    return {
+      count: 0,
+      elapsed_ms: round(elapsedMs),
+      proofs_per_second: 0,
+    };
+  }
+  const quartileSize = Math.max(1, Math.floor(samples.length / 4));
+  const first = samples
+    .slice(0, quartileSize)
+    .map((sample) => sample.end_to_end_ms);
+  const last = samples
+    .slice(-quartileSize)
+    .map((sample) => sample.end_to_end_ms);
+  const firstMedian = quantile(
+    [...first].sort((a, b) => a - b),
+    0.5,
+  );
+  const lastMedian = quantile(
+    [...last].sort((a, b) => a - b),
+    0.5,
+  );
+  const degradation =
+    firstMedian === 0 ? null : (lastMedian / firstMedian - 1) * 100;
+  return {
+    count: samples.length,
+    elapsed_ms: round(elapsedMs),
+    proofs_per_second:
+      elapsedMs === 0 ? null : round(samples.length / (elapsedMs / 1000)),
+    first_quartile_e2e_p50_ms: round(firstMedian),
+    last_quartile_e2e_p50_ms: round(lastMedian),
+    degradation_percent: round(degradation),
+    summary: summarizeSamples(samples),
+  };
+}

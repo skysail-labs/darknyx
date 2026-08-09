@@ -5,6 +5,28 @@
 <script type="module">
   const status = document.querySelector("#status");
   let maxMainThreadStallMs = 0;
+  const config = await fetch("/config.json").then((response) =>
+    response.json(),
+  );
+  async function measureMemory() {
+    if (!config.collectMemory) return null;
+    if (typeof performance.measureUserAgentSpecificMemory === "function") {
+      const bytes = await Promise.race([
+        performance.measureUserAgentSpecificMemory().then(({ bytes }) => bytes),
+        new Promise((resolve) => setTimeout(() => resolve(null), 2_000)),
+      ]);
+      if (bytes !== null) {
+        return { bytes, source: "measureUserAgentSpecificMemory" };
+      }
+    }
+    return performance.memory?.usedJSHeapSize
+      ? {
+          bytes: performance.memory.usedJSHeapSize,
+          source: "performance.memory.usedJSHeapSize",
+        }
+      : null;
+  }
+  const memoryBytesAtBoot = await measureMemory();
   let lastHeartbeat = performance.now();
   const heartbeat = setInterval(() => {
     const current = performance.now();
@@ -14,11 +36,17 @@
     );
     lastHeartbeat = current;
   }, 16);
-  const config = await fetch("/config.json").then((response) =>
-    response.json(),
-  );
   const worker = new Worker("/browser-worker.js");
   worker.onmessage = async ({ data }) => {
+    if (data.type === "soak_ready") {
+      await fetch("/phase", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phase: "soak" }),
+      });
+      worker.postMessage({ type: "start_soak" });
+      return;
+    }
     if (data.type === "progress") {
       status.textContent = `${data.mode} ${data.completed}`;
       return;
@@ -35,16 +63,7 @@
     if (data.type === "complete") {
       clearInterval(heartbeat);
       status.textContent = "complete";
-      let memoryBytes = null;
-      if (
-        config.collectMemory &&
-        typeof performance.measureUserAgentSpecificMemory === "function"
-      ) {
-        memoryBytes = (await performance.measureUserAgentSpecificMemory())
-          .bytes;
-      } else if (config.collectMemory && performance.memory?.usedJSHeapSize) {
-        memoryBytes = performance.memory.usedJSHeapSize;
-      }
+      const memoryBytesAfter = await measureMemory();
       await fetch("/result", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -56,7 +75,10 @@
             device_memory_gib: navigator.deviceMemory ?? null,
             cross_origin_isolated: self.crossOriginIsolated,
             prover_threads: 1,
-            measured_memory_bytes: memoryBytes,
+            measured_memory_bytes_at_boot: memoryBytesAtBoot?.bytes ?? null,
+            measured_memory_source_at_boot: memoryBytesAtBoot?.source ?? null,
+            measured_memory_bytes_after: memoryBytesAfter?.bytes ?? null,
+            measured_memory_source_after: memoryBytesAfter?.source ?? null,
             max_main_thread_stall_ms: maxMainThreadStallMs,
           },
         }),

@@ -50,9 +50,11 @@ one Worker session.
 
 Node's `process_high_water_rss_bytes` is the high-water mark for the whole
 runner, not a per-call allocation. Run one circuit per command when collecting
-its memory gate. Browser `measured_memory_bytes` is the
-cross-origin-isolated origin estimate after proving. The physical x86 report
-must additionally collect OS process RSS.
+its memory gate. The browser runner samples the entire Chrome process tree once
+per second and records peak RSS plus first-to-last-quartile growth. The page
+also attempts origin memory as supplemental evidence, with a bounded fallback
+because Chrome can withhold that API after proof work. The physical x86 report
+must use the process-tree RSS gate.
 
 Apple Silicon native generation uses Circom's portable `--no_asm` C++ output
 and is correctness evidence, not the native performance ceiling. The
@@ -100,18 +102,36 @@ RAPIDSNARK_BIN=/absolute/path/to/prover \
 The definitive x86 result must come from a physical mid-range 8 GiB laptop.
 Virtual machines and Apple-to-x86 emulation do not qualify.
 
+Run the ten-minute stability soak separately so it does not contaminate the
+latency sample. `VALID_INPUT` is the representative frequent action; the runner
+records sustained proof rate, first-to-last-quartile degradation, crashes,
+main-thread stalls in Chrome, and browser memory growth:
+
+```sh
+npm run bench:client-prover:node -- \
+  --circuits input --warm-runs 0 --soak-seconds 600 \
+  --output /tmp/darknyx-node-input-soak.json
+npm run bench:client-prover:browser -- \
+  --circuits input --warm-runs 0 --cold-runs 0 --soak-seconds 600 \
+  --output /tmp/darknyx-chrome-input-soak.json
+RAPIDSNARK_BIN=/absolute/path/to/prover \
+  npm run bench:client-prover:native -- \
+  --circuits input --runs 0 --soak-seconds 600 \
+  --output /tmp/darknyx-native-input-soak.json
+```
+
 ## Desktop decision gates
 
-| Gate | Target |
-|---|---|
-| `VALID_INPUT` warm Chrome | p95 ≤ 1.5 s; p99 ≤ 2.5 s |
-| Wallet/deposit warm Chrome | p95 ≤ 2 s each |
-| Spend warm Chrome | p95 ≤ 2 s |
-| Merge K2 / K4 warm Chrome | p95 ≤ 5 s / 10 s |
-| Reliability | zero OOM/crash in sample; x86 peak RSS < 1.5 GiB |
-| Responsiveness | proof work stays in Worker; UI-thread stall ≤ 100 ms |
-| Thermal soak | degradation < 25% over ten minutes |
-| 10 Mbps artifact fetch | wallet ≤ 6 s, deposit ≤ 7 s, input/spend ≤ 10 s, K2 ≤ 18 s, K4 ≤ 30 s |
+| Gate                       | Target                                                                |
+| -------------------------- | --------------------------------------------------------------------- |
+| `VALID_INPUT` warm Chrome  | p95 ≤ 1.5 s; p99 ≤ 2.5 s                                              |
+| Wallet/deposit warm Chrome | p95 ≤ 2 s each                                                        |
+| Spend warm Chrome          | p95 ≤ 2 s                                                             |
+| Merge K2 / K4 warm Chrome  | p95 ≤ 5 s / 10 s                                                      |
+| Reliability                | zero OOM/crash in sample; x86 peak RSS < 1.5 GiB                      |
+| Responsiveness             | proof work stays in Worker; UI-thread stall ≤ 100 ms                  |
+| Thermal soak               | degradation < 25% over ten minutes                                    |
+| 10 Mbps artifact fetch     | wallet ≤ 6 s, deposit ≤ 7 s, input/spend ≤ 10 s, K2 ≤ 18 s, K4 ≤ 30 s |
 
 Packaging is chosen only after both performance and the browser-custody review:
 
